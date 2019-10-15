@@ -13,3 +13,9 @@
 ```:bash
 $ omf install peco
 ```
+
+### Hyper
+
+```
+$ cd ~/.hyper_plugins && npm i
+```

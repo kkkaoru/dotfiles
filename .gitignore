@@ -1,5 +1,8 @@
 *_history*
-*cache*
 .config/*
 !.config/fish
 !.config/omf
+node_modules
+!.gitkeep
+.hyper_plugins/cache/*
+!.hyper_plugins/cache/.gitkeep
