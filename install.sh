@@ -7,5 +7,6 @@ do
   # NOTE: For Debug
   # echo "$DOTPATH/$f"
   [ "$f" = ".git" ] && continue
+  [ "$f" = ".gitmodules" ] && continue
   ln -snfv "$DOTPATH/$f" "$HOME"/"$f"
 done
