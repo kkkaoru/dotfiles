@@ -6,3 +6,6 @@ node_modules
 !.gitkeep
 .hyper_plugins/cache/*
 !.hyper_plugins/cache/.gitkeep
+.ssh/*
+!.ssh/.gitkeep
+!.ssh/init.sh
