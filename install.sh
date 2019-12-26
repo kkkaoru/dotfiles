@@ -8,5 +8,6 @@ do
   # echo "$DOTPATH/$f"
   [ "$f" = ".git" ] && continue
   [ "$f" = ".gitmodules" ] && continue
-  ln -snfv "$DOTPATH/$f" "$HOME"/"$f"
+  [ ! -L "${HOME}/${f}" ] && continue
+  ln -snfv "$DOTPATH/$f" "$HOME"
 done
