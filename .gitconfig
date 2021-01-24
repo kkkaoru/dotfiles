@@ -8,7 +8,7 @@
 [core]
 	ignorecase = false
 	quotepath = false
-	safecrlf = true
+	safecrlf = false
 	autocrlf = false
 	excludesFile = \"$HOME\"/.gitignore_global
 [difftool "sourcetree"]
