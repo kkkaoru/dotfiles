@@ -5,7 +5,6 @@ DOTPATH=$(cd $(dirname $0); pwd)
 for f in .??*
 do
   [ "$f" = ".git" ] && continue
-  [ "$f" = ".gitmodules" ] && continue
   [ -L "${HOME}/${f}" ] && continue
   # NOTE: For Debug
   # echo "$DOTPATH/$f"
