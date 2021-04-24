@@ -1,21 +1,31 @@
-# Dotfiles
+# Setup with Dotfiles
 
-## TODO Setups
+## Node.js
 
-### anyenv
+Use nodenv from anyenv
 
-### nodenv
-
-### oh-my-fish
-
-#### Plugins
-
-```:bash
-$ omf install peco
-```
-
-### Hyper
+### Setup anyenv
 
 ```
-$ cd ~/.hyper_plugins && npm i
+anyenv install --init
+```
+
+## Install nodenv
+
+```
+anyenv install nodenv
+```
+
+
+## SHELL
+
+Use fish with oh-my-fish
+
+
+### Setup oh-my-fish
+
+[Official install way](curl -L https://get.oh-my.fish | fish)
+
+```
+curl -L https://get.oh-my.fish | fish
 ```
