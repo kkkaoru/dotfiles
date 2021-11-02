@@ -15,8 +15,10 @@ set -x PATH $PATH:$ANDROID_HOME/tools:$ANDROID_HOME/platform-tools $PATH
 
 # Evals
 eval (thefuck --alias | source)
-eval (anyenv init - | source)
 eval (direnv hook fish)
+# Disabled anyenv when use asdf
+# eval (anyenv init - | source)
+source /usr/local/opt/asdf/libexec/asdf.fish
 
 # Aliases
 alias ghq-cd='cd (ghq root)/(ghq list | peco)'
