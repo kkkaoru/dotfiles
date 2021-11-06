@@ -4,21 +4,29 @@ function fish_user_key_bindings
 end
 
 # Envs
-set -x SHELL /usr/local/bin/fish
+# set -x SHELL /usr/local/bin/fish
 set -x LDFLAGS "-L/usr/local/opt/openssl/lib"
 set -x CPPFLAGS "-I/usr/local/opt/openssl/include"
 set -x ANDROID_HOME /usr/local/share/android-sdk
 
 set -x PATH /usr/local/opt/openssl/bin $PATH
-set -x PATH /usr/local/opt/mysql@5.7/bin $PATH
+# set -x PATH /usr/local/opt/mysql@5.7/bin $PATH
 set -x PATH $PATH:$ANDROID_HOME/tools:$ANDROID_HOME/platform-tools $PATH
 
 # Evals
 eval (thefuck --alias | source)
 eval (direnv hook fish)
-# Disabled anyenv when use asdf
+# Disabled anyenv
 # eval (anyenv init - | source)
-source /usr/local/opt/asdf/libexec/asdf.fish
+
+
+# asdf
+# m1 mac
+source /opt/homebrew/opt/asdf/libexec/asdf.fish
+# intel mac
+# source /usr/local/opt/asdf/libexec/asdf.fish
+
+eval (/opt/homebrew/bin/brew shellenv)
 
 # Aliases
 alias ghq-cd='cd (ghq root)/(ghq list | peco)'
