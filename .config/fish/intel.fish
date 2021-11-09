@@ -4,7 +4,7 @@ function fish_user_key_bindings
 end
 
 # Envs
-# set -x SHELL /usr/local/bin/fish
+set -x SHELL /usr/local/bin/fish
 set -x LDFLAGS "-L/usr/local/opt/openssl/lib"
 set -x CPPFLAGS "-I/usr/local/opt/openssl/include"
 set -x ANDROID_HOME /usr/local/share/android-sdk
@@ -26,7 +26,7 @@ eval (direnv hook fish)
 # intel mac
 source /usr/local/opt/asdf/libexec/asdf.fish
 
-eval (/opt/homebrew/bin/brew shellenv)
+# eval (/opt/homebrew/bin/brew shellenv)
 
 # Aliases
 alias ghq-cd='cd (ghq root)/(ghq list | peco)'
