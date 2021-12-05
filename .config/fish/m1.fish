@@ -20,7 +20,7 @@ set -x PATH $PATH:$ANDROID_HOME/tools:$ANDROID_HOME/platform-tools $PATH
 
 # asdf
 # m1 mac
-# source /opt/homebrew/opt/asdf/libexec/asdf.fish
+source /opt/homebrew/opt/asdf/libexec/asdf.fish
 # intel mac
 # source /usr/local/opt/asdf/libexec/asdf.fish
 
