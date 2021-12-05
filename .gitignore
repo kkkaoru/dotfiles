@@ -1,5 +1,6 @@
 *_history*
 .config/*
+!.config/direnv
 !.config/fish
 !.config/omf
 node_modules
