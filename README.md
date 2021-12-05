@@ -1,5 +1,11 @@
 # Setup with Dotfiles
 
+## Create sym links
+
+```sh
+./create-symlinks.sh
+```
+
 ## Node.js
 
 Use nodenv from anyenv
