@@ -1,3 +1,4 @@
+package direnv
 package peco
 theme default
 theme toaster

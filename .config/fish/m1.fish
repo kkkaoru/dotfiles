@@ -14,10 +14,8 @@ set -x PATH /usr/local/opt/openssl/bin $PATH
 set -x PATH $PATH:$ANDROID_HOME/tools:$ANDROID_HOME/platform-tools $PATH
 
 # Evals
-eval (thefuck --alias | source)
-eval (direnv hook fish)
 # Disabled anyenv
-eval (anyenv init - | source)
+# eval (anyenv init - | source)
 
 
 # asdf
