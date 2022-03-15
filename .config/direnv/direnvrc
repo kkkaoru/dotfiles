@@ -1,1 +1,1 @@
-eval (asdf exec direnv hook fish)
+asdf exec direnv hook fish | source
