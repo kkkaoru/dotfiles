@@ -1,4 +1,4 @@
 bind main    R !git rebase -i %(commit)
 bind diff    R !git rebase -i %(commit)
 bind main    ! ?git revert -m 1 %(commit)
-bind status  C !fish -c "npx --silent cz && : || git commit"
+bind status  C !fish -c "git commit"
