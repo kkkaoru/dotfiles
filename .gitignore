@@ -10,4 +10,3 @@ node_modules
 .ssh/*
 !.ssh/.gitkeep
 !.ssh/init.sh
-.config/fish/config.fish
