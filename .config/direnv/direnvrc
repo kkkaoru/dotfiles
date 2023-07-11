@@ -1,1 +1,0 @@
-asdf exec direnv hook fish | source

@@ -6,6 +6,7 @@ source (dirname (status -f))/binds.fish
 source /opt/homebrew/opt/asdf/libexec/asdf.fish
 
 # pnpm
-set -gx PNPM_HOME $HOME/Library/pnpm
-set -gx PATH "$PNPM_HOME" $PATH
+# set -gx PNPM_HOME $HOME/Library/pnpm
+# set -gx PATH "$PNPM_HOME" $PATH
 # pnpm end
+set -gx HOMEBREW_GITHUB_API_TOKEN your_token_here
