@@ -10,3 +10,4 @@ set -gx LDFLAGS -L/usr/local/opt/icu4c/lib
 set -gx CPPFLAGS -I/usr/local/opt/icu4c/include
 set -gx PKG_CONFIG_PATH /usr/local/opt/icu4c/lib/pkgconfig
 set -g fish_user_paths /usr/local/opt/gnu-getopt/bin $fish_user_paths
+# set -x ASDF_GOLANG_MOD_VERSION_ENABLED true
