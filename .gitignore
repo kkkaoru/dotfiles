@@ -3,6 +3,7 @@
 !.config/direnv
 !.config/fish
 !.config/omf
+!.config/mise
 node_modules
 !.gitkeep
 .hyper_plugins/cache/*
