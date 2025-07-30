@@ -1,6 +1,5 @@
 *_history*
 .config/*
-!.config/direnv
 !.config/fish
 !.config/omf
 !.config/mise
@@ -11,3 +10,4 @@ node_modules
 .ssh/*
 !.ssh/.gitkeep
 !.ssh/init.sh
+.env
