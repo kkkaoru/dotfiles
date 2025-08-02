@@ -1,7 +1,7 @@
 [user]
-	name = kaoru.ohtaka
-	email = ockacru+git@gmail.com
-	signingkey = D9CD51C67F0EF53E
+	name = kkk4oru
+	email = kaoru+git@teadea.net
+	signingkey = ADF9EF6C0DBD6E08
 [commit]
 	gpgsign = true
 [merge]
