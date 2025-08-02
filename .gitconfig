@@ -1,6 +1,9 @@
 [user]
 	name = kaoru.ohtaka
 	email = ockacru+git@gmail.com
+	signingkey = D9CD51C67F0EF53E
+[commit]
+	gpgsign = true
 [merge]
 	ff = false
 	tool = vimdiff
