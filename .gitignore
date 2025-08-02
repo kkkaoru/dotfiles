@@ -11,3 +11,10 @@ node_modules
 !.ssh/.gitkeep
 !.ssh/init.sh
 .env
+
+# GPG
+.gnupg/
+*.gpg
+*.asc
+*.key
+*.pem
