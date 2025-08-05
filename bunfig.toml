@@ -1,0 +1,3 @@
+[install]
+# Save exact versions without ^ or ~
+exact = true
