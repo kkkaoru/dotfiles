@@ -1,0 +1,3 @@
+[submodule "serena"]
+	path = serena
+	url = git@github.com:oraios/serena.git

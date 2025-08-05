@@ -1,0 +1,54 @@
+{
+  "mcpServers": {
+    "context7": {
+      "type": "http",
+      "url": "https://mcp.context7.com/mcp"
+    },
+    "brave-search": {
+      "command": "bunx",
+      "args": [
+        "-y",
+        "@brave/brave-search-mcp-server",
+        "--transport",
+        "stdio"
+      ],
+      "env": {
+        "BRAVE_API_KEY": "${BRAVE_API_KEY}",
+        "BRAVE_MCP_TRANSPORT": "stdio"
+      }
+    },
+    "motherduck": {
+      "command": "uvx",
+      "args": [
+        "mcp-server-motherduck",
+        "--db-path",
+        ":memory:"
+      ]
+    },
+    "gemini-cli": {
+      "command": "bunx",
+      "args": ["-y", "gemini-mcp-tool"]
+    },
+    "playwright" : {
+      "command" : "bunx" ,
+      "args" : [
+        "-y",
+        "@playwright/mcp@latest"
+      ]
+    },
+    "serena": {
+        "command": "uv",
+        "args": ["run", "--directory", "${SERENA_PATH}", "serena", "start-mcp-server"],
+        "env": {
+            "SERENA_PATH": "${SERENA_PATH}"
+        }
+    },
+    "deepl": {
+      "command": "bunx",
+      "args": ["deepl-mcp-server"],
+      "env": {
+        "DEEPL_API_KEY": "${DEEPL_API_KEY}"
+      }
+    }
+  }
+}

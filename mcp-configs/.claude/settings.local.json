@@ -1,0 +1,10 @@
+{
+  "enabledMcpjsonServers": [
+    "context7",
+    "brave-search",
+    "motherduck",
+    "gemini-cli",
+    "playwright",
+    "serena"
+  ]
+}
