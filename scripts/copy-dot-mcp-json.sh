@@ -21,7 +21,7 @@
 #   ./copy-dot-mcp-json.sh -c ~/projects/myapp/.mcp.json
 #
 
-DOT_MCP_JSON_PATH="$(cd $(dirname $0); pwd)/../../.mcp.json"
+DOT_MCP_JSON_PATH="$(cd $(dirname $0); pwd)/../.mcp.json"
 TARGET_PATH="$(pwd)/.mcp.json"
 COPY_MODE=false
 DESTINATION=""

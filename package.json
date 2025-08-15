@@ -13,7 +13,12 @@
   "type": "module",
   "dependencies": {
     "@brave/brave-search-mcp-server": "1.3.3",
+    "@modelcontextprotocol/server-filesystem": "2025.7.29",
+    "@modelcontextprotocol/server-memory": "2025.8.4",
     "@playwright/mcp": "0.0.32",
+    "@qwen-code/qwen-code": "0.0.5",
+    "@sasazame/ccresume": "1.0.0",
+    "@upstash/context7-mcp": "1.0.14",
     "deepl-mcp-server": "0.1.3-beta.0",
     "gemini-mcp-tool": "1.1.4"
   }
