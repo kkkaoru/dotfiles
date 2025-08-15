@@ -32,12 +32,16 @@ Please analyze the changes and create atomic commits following these steps:
    - Consider the magnitude of changes
    - Identify if changes are additions, deletions, or modifications
 
-2. **Group related changes** by:
+2. **Continue processing until all changes are committed**:
+   - Keep grouping and committing until `git status --short` shows no staged (M, A, D) or untracked (??) files
+   - After each commit, check if more changes remain
+
+3. **Group related changes** by:
    - Feature/module (based on directory structure)
    - File type (config, scripts, docs, etc.)
    - Logical components
 
-3. **For each group**:
+4. **For each group**:
    - Stage the relevant files using `git add`
    - Create a commit message following Conventional Commits specification:
      - Format: type[optional scope]: description
@@ -57,9 +61,11 @@ Please analyze the changes and create atomic commits following these steps:
      - Use imperative mood in description (e.g., "add" not "added")
      - Add ! after type/scope for breaking changes
    - Make the commit with git commit -m
+   - Check `git status --short` again to see if more changes remain
 
-4. **After all commits**:
-   - Show a summary of created commits
+5. **After all commits are complete**:
+   - Verify that `git status --short` shows no remaining changes
+   - Show a summary of all created commits
    - $ARGUMENTS contains "--push": Push to remote with `git push`
    - Otherwise: Remind user they can push manually
 
@@ -70,6 +76,7 @@ Please analyze the changes and create atomic commits following these steps:
 - Use lowercase for type and scope
 - Use imperative mood in the description
 - Don't commit unrelated changes together
+- Continue committing until all staged and untracked files are processed
 - If there are no changes, inform the user
 
 Arguments provided: $ARGUMENTS
