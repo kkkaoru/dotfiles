@@ -1,8 +1,8 @@
 {
   "mcpServers": {
     "context7": {
-      "type": "http",
-      "url": "https://mcp.context7.com/mcp"
+      "command": "bunx",
+      "args": ["@upstash/context7-mcp"]
     },
     "brave-search": {
       "command": "bunx",
@@ -59,6 +59,14 @@
       },
       "disabled": false,
       "autoApprove": []
+    },
+    "memory": {
+      "command": "bunx",
+      "args": ["@modelcontextprotocol/server-memory"]
+    },
+    "filesystem": {
+      "command": "bunx",
+      "args": ["@modelcontextprotocol/server-filesystem"]
     }
   }
 }
