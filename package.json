@@ -2,21 +2,21 @@
   "name": "mcp-configs",
   "module": "index.ts",
   "devDependencies": {
-    "@google/gemini-cli": "0.1.16",
+    "@google/gemini-cli": "0.1.21",
     "playwright": "1.54.2"
   },
   "peerDependencies": {
     "typescript": "5.9.2",
-    "@types/bun": "1.2.19"
+    "@types/bun": "1.2.20"
   },
   "private": true,
   "type": "module",
   "dependencies": {
-    "@brave/brave-search-mcp-server": "1.3.3",
+    "@brave/brave-search-mcp-server": "1.3.5",
     "@modelcontextprotocol/server-filesystem": "2025.7.29",
     "@modelcontextprotocol/server-memory": "2025.8.4",
-    "@playwright/mcp": "0.0.32",
-    "@qwen-code/qwen-code": "0.0.5",
+    "@playwright/mcp": "0.0.33",
+    "@qwen-code/qwen-code": "0.0.6",
     "@sasazame/ccresume": "1.0.0",
     "@upstash/context7-mcp": "1.0.14",
     "deepl-mcp-server": "0.1.3-beta.0",
