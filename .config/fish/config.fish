@@ -24,3 +24,4 @@ fish_add_path /Users/kaoru/.codeium/windsurf/bin
 # thefuck alias
 thefuck --alias | source
 set -x GPG_TTY (tty)
+mise activate fish | source
