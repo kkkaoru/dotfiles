@@ -1,5 +1,12 @@
 [tools]
-node = "24.0.2"
+node = "latest"
 
 [settings]
 idiomatic_version_file_enable_tools = ["node"]
+
+[alias]
+
+[alias.node]
+
+[alias.node.versions]
+latest = "24.5.0"

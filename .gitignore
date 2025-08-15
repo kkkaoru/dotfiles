@@ -18,3 +18,8 @@ node_modules
 *.asc
 *.key
 *.pem
+
+.claude/*
+!.claude/.gitkeep
+!.claude/settings.json
+!.claude/commands
