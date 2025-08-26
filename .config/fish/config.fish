@@ -25,3 +25,4 @@ fish_add_path /Users/kaoru/.codeium/windsurf/bin
 thefuck --alias | source
 set -x GPG_TTY (tty)
 mise activate fish | source
+set -gx PATH $HOME/.local/bin /opt/homebrew/bin $PATH
