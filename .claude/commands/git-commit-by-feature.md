@@ -8,8 +8,71 @@ description: Intelligently commits changes grouped by feature/component followin
 
 Analyze the current git changes and create organized, meaningful commits grouped by feature or component.
 
-## Commit Message Rules
-@~/.rules/conventional-commits.md
+## Commit Message Rules (Conventional Commits 1.0.0)
+
+### Format
+```
+<type>[optional scope]: <description>
+
+[optional body]
+
+[optional footer(s)]
+```
+
+### Commit Types
+- **feat**: A new feature (correlates with MINOR in Semantic Versioning)
+- **fix**: A bug fix (correlates with PATCH in Semantic Versioning)
+- **build**: Changes that affect the build system or external dependencies
+- **chore**: Maintenance tasks that don't modify src or test files
+- **ci**: Changes to CI configuration files and scripts
+- **docs**: Documentation only changes
+- **style**: Changes that do not affect the meaning of the code (white-space, formatting, missing semi-colons, etc)
+- **refactor**: A code change that neither fixes a bug nor adds a feature
+- **perf**: A code change that improves performance
+- **test**: Adding missing tests or correcting existing tests
+- **revert**: Reverts a previous commit
+
+### Breaking Changes
+- Append `!` after the type/scope for breaking changes (e.g., `feat!:` or `feat(api)!:`)
+- OR include `BREAKING CHANGE:` in the footer
+- Breaking changes correlate with MAJOR in Semantic Versioning
+
+### Scope
+- Optional, provides additional contextual information
+- Must be a noun describing a section of the codebase
+- Contained within parenthesis (e.g., `fix(parser):`)
+
+### Description
+- Short summary of the code changes
+- Use imperative mood (e.g., "add" not "added" or "adds")
+- Don't capitalize the first letter
+- No period at the end
+
+### Examples
+```
+feat: allow provided config object to extend other configs
+```
+
+```
+feat(lang): add Polish language
+```
+
+```
+fix: prevent racing of requests
+
+Introduce a request id and a reference to latest request. Dismiss
+incoming responses other than from latest request.
+```
+
+```
+feat!: send an email to the customer when a product is shipped
+```
+
+```
+chore!: drop support for Node 6
+
+BREAKING CHANGE: use JavaScript features not available in Node 6.
+```
 
 ## Current repository status
 !git status --short
@@ -79,7 +142,7 @@ Please analyze the changes and create atomic commits following these steps:
 - **CRITICAL**: Always prefer MORE commits with SMALLER changes over fewer commits with bundled changes
 - Each commit should do ONE thing and do it well
 - If you're unsure whether to combine changes, DON'T - make separate commits
-- Follow the Conventional Commits specification from .rules/conventional-commits.md
+- Follow the Conventional Commits specification detailed above
 - Each commit should be atomic and contain only related changes
 - Commit messages must use the format: type[optional scope]: description
 - Use lowercase for type and scope
