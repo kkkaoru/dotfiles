@@ -23,3 +23,4 @@ node_modules
 !.claude/.gitkeep
 !.claude/settings.json
 !.claude/commands
+!.claude/commands/*
