@@ -33,18 +33,18 @@ Analyze the current git changes and create organized, meaningful commits grouped
 - **revert**: Reverts a previous commit
 
 ### Breaking Changes
-- Append `!` after the type/scope for breaking changes (e.g., `feat!:` or `feat(api)!:`)
-- OR include `BREAKING CHANGE:` in the footer
+- Append ! after the type/scope for breaking changes - for example: feat! or feat(api)!
+- OR include BREAKING CHANGE: in the footer
 - Breaking changes correlate with MAJOR in Semantic Versioning
 
 ### Scope
 - Optional, provides additional contextual information
 - Must be a noun describing a section of the codebase
-- Contained within parenthesis (e.g., `fix(parser):`)
+- Contained within parenthesis - for example: fix(parser):
 
 ### Description
 - Short summary of the code changes
-- Use imperative mood (e.g., "add" not "added" or "adds")
+- Use imperative mood - use "add" not "added" or "adds"
 - Don't capitalize the first letter
 - No period at the end
 
@@ -115,8 +115,8 @@ Please analyze the changes and create atomic commits following these steps:
    - Create a commit message following Conventional Commits specification:
      - Format: type[optional scope]: description
      - Choose type based on the nature of the specific change:
-       - feat: new features (mostly additions)
-       - fix: bug fixes (balanced additions/deletions)
+       - feat: new features - mostly additions
+       - fix: bug fixes - balanced additions/deletions
        - build: build system or external dependencies
        - chore: maintenance tasks that don't modify src or test files
        - ci: CI configuration files and scripts
@@ -127,7 +127,7 @@ Please analyze the changes and create atomic commits following these steps:
        - test: adding missing tests or correcting existing tests
        - revert: reverts a previous commit
      - Add scope in parentheses if changes are focused on a specific component
-     - Use imperative mood in description (e.g., "add" not "added")
+     - Use imperative mood in description - use "add" not "added"
      - Add ! after type/scope for breaking changes
    - Make the commit with git commit -m
    - Check `git status --short` again to see if more changes remain
