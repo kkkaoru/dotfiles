@@ -3,6 +3,11 @@
 !.config/fish
 !.config/omf
 !.config/mise
+!.config/ghostty
+!.config/gh
+!.config/zed
+.config/zed/{prompts,conversations,themes}
+
 node_modules
 !.gitkeep
 .hyper_plugins/cache/*
