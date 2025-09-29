@@ -6,12 +6,7 @@
     },
     "brave-search": {
       "command": "bunx",
-      "args": [
-        "-y",
-        "@brave/brave-search-mcp-server",
-        "--transport",
-        "stdio"
-      ],
+      "args": ["-y", "@brave/brave-search-mcp-server", "--transport", "stdio"],
       "env": {
         "BRAVE_API_KEY": "${BRAVE_API_KEY}",
         "BRAVE_MCP_TRANSPORT": "stdio"
@@ -19,29 +14,28 @@
     },
     "motherduck": {
       "command": "uvx",
-      "args": [
-        "mcp-server-motherduck",
-        "--db-path",
-        ":memory:"
-      ]
+      "args": ["mcp-server-motherduck", "--db-path", ":memory:"]
     },
     "gemini-cli": {
       "command": "bunx",
       "args": ["-y", "gemini-mcp-tool"]
     },
-    "playwright" : {
-      "command" : "bunx" ,
-      "args" : [
-        "-y",
-        "@playwright/mcp@latest"
-      ]
+    "playwright": {
+      "command": "bunx",
+      "args": ["-y", "@playwright/mcp@latest"]
     },
     "serena": {
-        "command": "uv",
-        "args": ["run", "--directory", "${SERENA_PATH}", "serena", "start-mcp-server"],
-        "env": {
-            "SERENA_PATH": "${SERENA_PATH}"
-        }
+      "command": "uv",
+      "args": [
+        "run",
+        "--directory",
+        "${SERENA_PATH}",
+        "serena",
+        "start-mcp-server"
+      ],
+      "env": {
+        "SERENA_PATH": "${SERENA_PATH}"
+      }
     },
     "deepl": {
       "command": "bunx",
@@ -59,14 +53,6 @@
       },
       "disabled": false,
       "autoApprove": []
-    },
-    "memory": {
-      "command": "bunx",
-      "args": ["@modelcontextprotocol/server-memory"]
-    },
-    "filesystem": {
-      "command": "bunx",
-      "args": ["@modelcontextprotocol/server-filesystem"]
     }
   }
 }
