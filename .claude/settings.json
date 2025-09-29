@@ -1,10 +1,11 @@
 {
-    "$schema": "https://json.schemastore.org/claude-code-settings.json",
-  "enableAllProjectMcpServers": true,
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "permissions": {
     "allow": [],
     "deny": []
   },
+  "model": "sonnet",
+  "enableAllProjectMcpServers": true,
   "feedbackSurveyState": {
     "lastShownTime": 1754085399497
   },
