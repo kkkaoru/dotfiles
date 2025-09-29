@@ -1,3 +1,6 @@
 [submodule "serena"]
 	path = serena
 	url = git@github.com:oraios/serena.git
+[submodule "ghostty-dracula"]
+	path = ghostty-dracula
+	url = https://github.com/dracula/ghostty.git
