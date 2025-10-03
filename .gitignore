@@ -29,3 +29,8 @@ node_modules
 !.claude/settings.json
 !.claude/commands
 !.claude/commands/*
+
+
+.codex/log
+.codex/sessions
+.codex/auth.json
