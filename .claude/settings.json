@@ -4,7 +4,6 @@
     "allow": [],
     "deny": []
   },
-  "model": "sonnet",
   "enableAllProjectMcpServers": true,
   "feedbackSurveyState": {
     "lastShownTime": 1754085399497
@@ -12,5 +11,6 @@
   "mcp": {
     "enabled": true,
     "projectConfig": true
-  }
+  },
+  "alwaysThinkingEnabled": true
 }
