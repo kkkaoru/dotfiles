@@ -5,6 +5,7 @@
     "deny": []
   },
   "enableAllProjectMcpServers": true,
+  "alwaysThinkingEnabled": false,
   "feedbackSurveyState": {
     "lastShownTime": 1754085399497
   },
@@ -12,5 +13,5 @@
     "enabled": true,
     "projectConfig": true
   },
-  "alwaysThinkingEnabled": true
+  "model": "opus"
 }
