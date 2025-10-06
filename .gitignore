@@ -34,3 +34,4 @@ node_modules
 .codex/log
 .codex/sessions
 .codex/auth.json
+.codex/history.jsonl
