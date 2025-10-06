@@ -5,3 +5,6 @@ network_access = true
 
 [tools]
 web_search = true
+
+[projects."/Users/kaoru/ghq/github.com/kkkaoru/keiba"]
+trust_level = "trusted"
