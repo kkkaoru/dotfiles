@@ -17,3 +17,6 @@ env = { "SERENA_PATH" = "${SERENA_PATH}" }
 
 [projects."/Users/kaoru/ghq/github.com/kkkaoru/keiba"]
 trust_level = "trusted"
+
+[projects."/Users/kaoru/dotfiles"]
+trust_level = "trusted"
