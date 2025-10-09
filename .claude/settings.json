@@ -12,6 +12,5 @@
   "mcp": {
     "enabled": true,
     "projectConfig": true
-  },
-  "model": "opus"
+  }
 }
