@@ -6,5 +6,14 @@ network_access = true
 [tools]
 web_search = true
 
+[mcp_servers.context7]
+command = "bunx"
+args = ["@upstash/context7-mcp"]
+
+[mcp_servers.serena]
+command = "uv"
+args = ["run", "--directory", "${SERENA_PATH}", "serena", "start-mcp-server"]
+env = { "SERENA_PATH" = "${SERENA_PATH}" }
+
 [projects."/Users/kaoru/ghq/github.com/kkkaoru/keiba"]
 trust_level = "trusted"
