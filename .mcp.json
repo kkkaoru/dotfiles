@@ -1,58 +1,12 @@
 {
   "mcpServers": {
+    "chrome-devtools": {
+      "command": "bunx",
+      "args": ["chrome-devtools-mcp"]
+    },
     "context7": {
       "command": "bunx",
       "args": ["@upstash/context7-mcp"]
-    },
-    "brave-search": {
-      "command": "bunx",
-      "args": ["-y", "@brave/brave-search-mcp-server", "--transport", "stdio"],
-      "env": {
-        "BRAVE_API_KEY": "${BRAVE_API_KEY}",
-        "BRAVE_MCP_TRANSPORT": "stdio"
-      }
-    },
-    "motherduck": {
-      "command": "uvx",
-      "args": ["mcp-server-motherduck", "--db-path", ":memory:"]
-    },
-    "gemini-cli": {
-      "command": "bunx",
-      "args": ["-y", "gemini-mcp-tool"]
-    },
-    "playwright": {
-      "command": "bunx",
-      "args": ["-y", "@playwright/mcp@latest"]
-    },
-    "serena": {
-      "command": "uv",
-      "args": [
-        "run",
-        "--directory",
-        "${SERENA_PATH}",
-        "serena",
-        "start-mcp-server"
-      ],
-      "env": {
-        "SERENA_PATH": "${SERENA_PATH}"
-      }
-    },
-    "deepl": {
-      "command": "bunx",
-      "args": ["deepl-mcp-server"],
-      "env": {
-        "DEEPL_API_KEY": "${DEEPL_API_KEY}"
-      }
-    },
-    "awslabs.aws-documentation-mcp-server": {
-      "command": "uvx",
-      "args": ["awslabs.aws-documentation-mcp-server@latest"],
-      "env": {
-        "FASTMCP_LOG_LEVEL": "ERROR",
-        "AWS_DOCUMENTATION_PARTITION": "aws"
-      },
-      "disabled": false,
-      "autoApprove": []
     }
   }
 }
