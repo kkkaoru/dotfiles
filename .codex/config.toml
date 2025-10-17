@@ -20,3 +20,6 @@ trust_level = "trusted"
 
 [projects."/Users/kaoru/dotfiles"]
 trust_level = "trusted"
+
+[projects."/Users/kaoru/ghq/github.com/kkkaoru/reverse-proxy"]
+trust_level = "trusted"
