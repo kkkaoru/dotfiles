@@ -54,3 +54,4 @@ adjust-cell-height = "5%"
 # resize-overlay-duration = 4s 200ms
 
 theme = dracula
+macos-option-as-alt = right
