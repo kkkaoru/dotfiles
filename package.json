@@ -15,6 +15,7 @@
     "@brave/brave-search-mcp-server": "2.0.54",
     "@modelcontextprotocol/server-filesystem": "2025.8.21",
     "@modelcontextprotocol/server-memory": "2025.9.25",
+    "@openai/codex": "0.46.0",
     "@playwright/mcp": "0.0.41",
     "@qwen-code/qwen-code": "0.0.14",
     "@sasazame/ccresume": "1.0.0",

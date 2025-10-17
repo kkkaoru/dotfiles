@@ -7,6 +7,7 @@
         "@brave/brave-search-mcp-server": "2.0.54",
         "@modelcontextprotocol/server-filesystem": "2025.8.21",
         "@modelcontextprotocol/server-memory": "2025.9.25",
+        "@openai/codex": "0.46.0",
         "@playwright/mcp": "0.0.41",
         "@qwen-code/qwen-code": "0.0.14",
         "@sasazame/ccresume": "1.0.0",
@@ -113,6 +114,8 @@
     "@modelcontextprotocol/server-filesystem": ["@modelcontextprotocol/server-filesystem@2025.8.21", "", { "dependencies": { "@modelcontextprotocol/sdk": "^1.17.0", "diff": "^5.1.0", "glob": "^10.3.10", "minimatch": "^10.0.1", "zod-to-json-schema": "^3.23.5" }, "bin": { "mcp-server-filesystem": "dist/index.js" } }, "sha512-Kk+E+lAuAQPLhrJlrsboEdwTBxWU0DYfsuELIuP3Nvfn8Kvd72BU6KVjhEa5EjbC4YckQDCxH9VJK47x6psxow=="],
 
     "@modelcontextprotocol/server-memory": ["@modelcontextprotocol/server-memory@2025.9.25", "", { "dependencies": { "@modelcontextprotocol/sdk": "1.0.1" }, "bin": { "mcp-server-memory": "dist/index.js" } }, "sha512-6fdvSeJm8op2Cx736ck9MO8SdbFR+Of04KC/uchXnxvCTI68dJCRaxWuUBf8cv5RKNqGK98vHjRAmadapfnuRg=="],
+
+    "@openai/codex": ["@openai/codex@0.46.0", "", { "bin": { "codex": "bin/codex.js" } }, "sha512-wPyYWfmeh91Ue+OxgBkKZK9ibZMLis4s2Kr5edSlvRQRpkPw1WaFhG+jfHO3rUeRNrxV9hI5HDLlh0Phk+D68Q=="],
 
     "@opentelemetry/api": ["@opentelemetry/api@1.9.0", "", {}, "sha512-3giAOQvZiH5F9bMlMiv8+GSPMeqg0dbaeo58/0SlA9sxSqZhnUtxzX9/2FzyhS9sWQf5S0GJE0AKBrFqjpeYcg=="],
 
