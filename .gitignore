@@ -35,3 +35,4 @@ node_modules
 .codex/sessions
 .codex/auth.json
 .codex/history.jsonl
+!.config/zellij
