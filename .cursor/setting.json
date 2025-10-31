@@ -335,34 +335,7 @@
         "password": true
       }
     ],
-    "servers": {
-      "github": {
-        "command": "docker",
-        "args": [
-          "run",
-          "-i",
-          "--rm",
-          "--env",
-          "GITHUB_PERSONAL_ACCESS_TOKEN",
-          "ghcr.io/github/github-mcp-server"
-        ],
-        "env": {
-          "GITHUB_PERSONAL_ACCESS_TOKEN": "${input:github_token}"
-        }
-      },
-      "playwright": {
-        "command": "npx",
-        "args": [
-          "@playwright/mcp@latest"
-        ]
-      },
-      "google-calendar": {
-        "command": "node",
-        "args": [
-          "/Users/kaoru/ghq/github.com/nspady/google-calendar-mcp/build/index.js"
-        ]
-      }
-    }
+    "servers": {}
   },
   "workbench.editor.pinnedTabsOnSeparateRow": true,
   "terminal.integrated.defaultLocation": "editor",
