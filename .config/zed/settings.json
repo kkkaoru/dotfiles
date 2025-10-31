@@ -28,8 +28,52 @@
     "source.organizeImports.biome": true,
     "source.fixAll.biome": true
   },
-  "terminal": {
-    "font_family": "UDEV Gothic 35NFLG"
+  "languages": {
+    "HTML": {
+      "formatter": { "language_server": { "name": "biome" } },
+      "code_actions_on_format": {
+        "source.fixAll.biome": true,
+        "source.organizeImports.biome": true
+      }
+    },
+    "JavaScript": {
+      "formatter": { "language_server": { "name": "biome" } },
+      "code_actions_on_format": {
+        "source.fixAll.biome": true,
+        "source.organizeImports.biome": true
+      }
+    },
+    "TypeScript": {
+      "formatter": { "language_server": { "name": "biome" } },
+      "code_actions_on_format": {
+        "source.fixAll.biome": true,
+        "source.organizeImports.biome": true
+      }
+    },
+    "TSX": {
+      "formatter": { "language_server": { "name": "biome" } },
+      "code_actions_on_format": {
+        "source.fixAll.biome": true,
+
+        "source.organizeImports.biome": true
+      }
+    }
   },
-  "ui_font_family": "UDEV Gothic 35NFLG"
+  "tab_size": 2,
+  "tabs": {
+    "activate_on_close": "neighbour"
+  },
+  "terminal": {
+    "font_family": "UDEV Gothic 35NFLG",
+    "dock": "right",
+    "minimum_contrast": 0
+  },
+  "ui_font_family": "UDEV Gothic 35NFLG",
+  "use_system_window_tabs": true,
+  "linked_edits": true,
+  "whitespace_map": {
+    "space": "•",
+    "tab": "→"
+  },
+  "prettier": null
 }
