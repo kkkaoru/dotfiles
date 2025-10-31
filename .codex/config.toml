@@ -4,16 +4,11 @@ hide_agent_reasoning = true
 network_access = true
 
 [tools]
-web_search = true
+web_search_request = true
 
 [mcp_servers.context7]
 command = "bunx"
 args = ["@upstash/context7-mcp"]
-
-[mcp_servers.serena]
-command = "uv"
-args = ["run", "--directory", "${SERENA_PATH}", "serena", "start-mcp-server"]
-env = { "SERENA_PATH" = "${SERENA_PATH}" }
 
 [projects."/Users/kaoru/ghq/github.com/kkkaoru/keiba"]
 trust_level = "trusted"
@@ -22,4 +17,7 @@ trust_level = "trusted"
 trust_level = "trusted"
 
 [projects."/Users/kaoru/ghq/github.com/kkkaoru/reverse-proxy"]
+trust_level = "trusted"
+
+[projects."/Users/kaoru"]
 trust_level = "trusted"
