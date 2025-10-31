@@ -45,3 +45,7 @@ node_modules
 .cursor/mcp.json
 .cursor/argv.json
 .cursor/ide_state.json
+.windsurf/extensions/*
+!.windsurf/extensions/extensions.json
+.codeium/windsurf/*
+!.codeium/windsurf/global_workflows
