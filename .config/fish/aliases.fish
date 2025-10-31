@@ -1,5 +1,11 @@
 # Aliases
-alias ghq-cd='cd (ghq root)/(ghq list | peco)'
+function ghq-cd
+    set root (ghq root)
+    set dest (ghq list | fzf --ansi --reverse --height=40%)
+    if test -n "$dest"
+        cd "$root/$dest"
+    end
+end
 # for git
 alias git-checkout-local='bash -c \'git checkout $(git branch | peco)\''
 alias git-branch-clean='git checkout master && git branch --merged | grep -v -e master | xargs git branch -d'
