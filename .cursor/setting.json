@@ -1,0 +1,386 @@
+{
+  "workbench.startupEditor": "newUntitledFile",
+  "javascript.format.enable": false,
+  "prettier.eslintIntegration": true,
+  "explorer.confirmDelete": false,
+  "eslint.autoFixOnSave": true,
+  "explorer.confirmDragAndDrop": false,
+  "javascript.updateImportsOnFileMove.enabled": "always",
+  "editor.minimap.enabled": false,
+  "[NGINX]": {},
+  "editor.fontFamily": "UDEV Gothic 35NFLG",
+  "editor.letterSpacing": 0.5,
+  "editor.lineHeight": 2,
+  "editor.fontLigatures": "'ss01', 'ss02', 'ss03', 'ss04', 'ss05', 'ss06', 'ss07', 'ss08', 'calt', 'dlig'",
+  "typescript.updateImportsOnFileMove.enabled": "always",
+  "sync.gist": "a00f9aa2bb634786aedf7374dc6fb663",
+  "sync.autoUpload": true,
+  "sync.autoDownload": true,
+  "workbench.iconTheme": "vscode-icons",
+  "editor.tabSize": 2,
+  "prettier.printWidth": 120,
+  "prettier.singleQuote": true,
+  "prettier.trailingComma": "all",
+  "prettier.jsxSingleQuote": true,
+  "terminal.integrated.rendererType": "dom",
+  "cSpell.userWords": [
+    "addevent",
+    "Agrias",
+    "anycolor",
+    "asynciterable",
+    "automerge",
+    "autoprefixer",
+    "AVACOM",
+    "avita",
+    "backticks",
+    "bazzite",
+    "beforeend",
+    "bilibili",
+    "bordercolor",
+    "Brotli",
+    "browserslist",
+    "Builtins",
+    "camelcase",
+    "Chihiro",
+    "Chro",
+    "Ckeditor",
+    "CLOUDFRONT",
+    "Cloudinary",
+    "clsx",
+    "codegen",
+    "COGNITO",
+    "Conifier",
+    "connpass",
+    "consola",
+    "corepack",
+    "cors",
+    "Cuculus",
+    "datetime",
+    "davinch",
+    "davinci",
+    "dayjs",
+    "deserialize",
+    "devtool",
+    "dirents",
+    "direnv",
+    "Docbase",
+    "dotenv",
+    "dynamodb",
+    "ecommerce",
+    "egjs",
+    "enduml",
+    "esbuild",
+    "esnext",
+    "FANBOX",
+    "Fanclub",
+    "fanclubs",
+    "Fanfic",
+    "Fastly",
+    "featuredmedia",
+    "Findy",
+    "Firestore",
+    "flatpickr",
+    "gapi",
+    "gemoji",
+    "gitignore",
+    "gitkeep",
+    "gitmessage",
+    "gitmoji",
+    "gmail",
+    "Hoge",
+    "Hono",
+    "hotreload",
+    "howtouse",
+    "Hrmos",
+    "htmlhint",
+    "ichikara",
+    "ichikaraid",
+    "ifrit",
+    "ihcikara",
+    "Imageflux",
+    "Imageresizer",
+    "Imgix",
+    "Interop",
+    "japantour",
+    "Kaisai",
+    "Kakeru",
+    "kaoru",
+    "kkkaoru",
+    "Klleon",
+    "Komoju",
+    "konbini",
+    "kubernetes",
+    "Kuja",
+    "Lapras",
+    "lazyload",
+    "levergacha",
+    "Livedoor",
+    "logit",
+    "luco",
+    "Mahiro",
+    "multibyte",
+    "multipay",
+    "nbsp",
+    "newbadge",
+    "nextjs",
+    "niji",
+    "nijisanji",
+    "noindex",
+    "noopener",
+    "noreferrer",
+    "nosniff",
+    "notionhq",
+    "Noto",
+    "nuxt",
+    "nuxtjs",
+    "ohtaka",
+    "OMIKUJI",
+    "OPENAI",
+    "openapi",
+    "openid",
+    "Parens",
+    "persistedstate",
+    "playsinline",
+    "pnpm",
+    "polyfill",
+    "posthtml",
+    "puml",
+    "pushercom",
+    "Qiita",
+    "Recaptcha",
+    "resave",
+    "Resizer",
+    "ryushen",
+    "sanji",
+    "scripthost",
+    "showinfo",
+    "signin",
+    "signup",
+    "SLEE",
+    "slsw",
+    "snakecase",
+    "startuml",
+    "styl",
+    "stylelint",
+    "stylelintrc",
+    "submodules",
+    "sucolab",
+    "suzuka",
+    "Suzuya",
+    "tailwindcss",
+    "Talentio",
+    "tauri",
+    "testid",
+    "totebag",
+    "twemoji",
+    "Typekit",
+    "typeorm",
+    "unauth",
+    "Underidea",
+    "Utako",
+    "viewports",
+    "vite",
+    "vitest",
+    "vuesax",
+    "vuetify",
+    "vuex",
+    "webapi",
+    "webfontloader",
+    "Webp",
+    "xargs",
+    "Youtube",
+    "Yuffie",
+    "yuki",
+    "yukishiro",
+    "yumeoi",
+    "yuzuki",
+    "zenn",
+    "Zeplin",
+    "Zepp"
+  ],
+  "vsicons.dontShowNewVersionMessage": true,
+  "peacock.favoriteColors": [
+    {
+      "name": "Angular Red",
+      "value": "#b52e31"
+    },
+    {
+      "name": "Auth0 Orange",
+      "value": "#eb5424"
+    },
+    {
+      "name": "Azure Blue",
+      "value": "#007fff"
+    },
+    {
+      "name": "C# Purple",
+      "value": "#68217A"
+    },
+    {
+      "name": "Gatsby Purple",
+      "value": "#639"
+    },
+    {
+      "name": "Go Cyan",
+      "value": "#5dc9e2"
+    },
+    {
+      "name": "Java Blue-Gray",
+      "value": "#557c9b"
+    },
+    {
+      "name": "JavaScript Yellow",
+      "value": "#f9e64f"
+    },
+    {
+      "name": "Mandalorian Blue",
+      "value": "#1857a4"
+    },
+    {
+      "name": "Node Green",
+      "value": "#215732"
+    },
+    {
+      "name": "React Blue",
+      "value": "#00b3e6"
+    },
+    {
+      "name": "Something Different",
+      "value": "#832561"
+    },
+    {
+      "name": "Vue Green",
+      "value": "#42b883"
+    }
+  ],
+  "editor.formatOnSave": true,
+  "[javascript]": {
+    "editor.defaultFormatter": "biomejs.biome"
+  },
+  "[javascriptreact]": {
+    "editor.defaultFormatter": "biomejs.biome"
+  },
+  "[typescript]": {
+    "editor.defaultFormatter": "biomejs.biome"
+  },
+  "[typescriptreact]": {
+    "editor.defaultFormatter": "biomejs.biome"
+  },
+  "editor.codeActionsOnSave": {
+    "quickfix.biome": "explicit",
+    "source.organizeImports.biome": "explicit"
+  },
+  "git.autofetch": true,
+  "liveshare.authenticationProvider": "GitHub",
+  "editor.inlineHints.fontFamily": "UDEV Gothic 35NFLG",
+  "files.associations": {
+    ".htmlhintrc": "json"
+  },
+  "eslint.workingDirectories": [
+    {
+      "mode": "auto"
+    }
+  ],
+  "editor.formatOnPaste": true,
+  "editor.formatOnType": true,
+  "security.workspace.trust.untrustedFiles": "open",
+  "redhat.telemetry.enabled": true,
+  "hediet.vscode-drawio.local-storage": "eyIuZHJhd2lvLWNvbmZpZyI6IntcImxhbmd1YWdlXCI6XCJcIixcImN1c3RvbUZvbnRzXCI6W10sXCJsaWJyYXJpZXNcIjpcImdlbmVyYWxcIixcImN1c3RvbUxpYnJhcmllc1wiOltcIkwuc2NyYXRjaHBhZFwiXSxcInBsdWdpbnNcIjpbXSxcInJlY2VudENvbG9yc1wiOltdLFwiZm9ybWF0V2lkdGhcIjoyNDAsXCJjcmVhdGVUYXJnZXRcIjpmYWxzZSxcInBhZ2VGb3JtYXRcIjp7XCJ4XCI6MCxcInlcIjowLFwid2lkdGhcIjoxMjAwLFwiaGVpZ2h0XCI6MTkyMH0sXCJzZWFyY2hcIjp0cnVlLFwic2hvd1N0YXJ0U2NyZWVuXCI6dHJ1ZSxcImdyaWRDb2xvclwiOlwiI2QwZDBkMFwiLFwiZGFya0dyaWRDb2xvclwiOlwiIzZlNmU2ZVwiLFwiYXV0b3NhdmVcIjp0cnVlLFwicmVzaXplSW1hZ2VzXCI6bnVsbCxcIm9wZW5Db3VudGVyXCI6MCxcInZlcnNpb25cIjoxOCxcInVuaXRcIjoxLFwiaXNSdWxlck9uXCI6ZmFsc2UsXCJ1aVwiOlwiXCJ9In0=",
+  "editor.inlineSuggest.enabled": true,
+  "github.copilot.enable": {
+    "*": "true",
+    "plaintext": true,
+    "markdown": true,
+    "scminput": false,
+    "yaml": false
+  },
+  "svelte.enable-ts-plugin": true,
+  "wallaby.codeLensFeature.runTest": true,
+  "wallaby.alwaysOpenLocalWallabyAppUrl": true,
+  "wallaby.outputInspectorFeature.automaticDisplayDebuggerOverride": "Inherit",
+  "wallaby.outputInspectorFeature.automaticDisplay": "All Values",
+  "editor.bracketPairColorization.enabled": true,
+  "workbench.editor.revealIfOpen": false,
+  "wallaby.startAutomatically": false,
+  "terminal.integrated.defaultProfile.osx": "fish",
+  "githubPullRequests.pullBranch": "never",
+  "[python]": {
+    "editor.formatOnType": true
+  },
+  "typescript.enablePromptUseWorkspaceTsdk": true,
+  "window.zoomLevel": 1,
+  "nxConsole.showNodeVersionOnStartup": false,
+  "hediet.vscode-drawio.resizeImages": null,
+  "vscode-pets.position": "panel",
+  "prisma.showPrismaDataPlatformNotification": false,
+  "github.copilot.editor.enableAutoCompletions": true,
+  "go.toolsManagement.autoUpdate": true,
+  "makefile.configureOnOpen": true,
+  "markdown.marp.enableHtml": true,
+  "markdown-pdf.scale": 2,
+  "roo-cline.allowedCommands": [
+    "npm test",
+    "npm install",
+    "tsc",
+    "git log",
+    "git diff",
+    "git show"
+  ],
+  "mcp": {
+    "inputs": [
+      {
+        "type": "promptString",
+        "id": "github_token",
+        "description": "GitHub Personal Access Token",
+        "password": true
+      }
+    ],
+    "servers": {
+      "github": {
+        "command": "docker",
+        "args": [
+          "run",
+          "-i",
+          "--rm",
+          "--env",
+          "GITHUB_PERSONAL_ACCESS_TOKEN",
+          "ghcr.io/github/github-mcp-server"
+        ],
+        "env": {
+          "GITHUB_PERSONAL_ACCESS_TOKEN": "${input:github_token}"
+        }
+      },
+      "playwright": {
+        "command": "npx",
+        "args": [
+          "@playwright/mcp@latest"
+        ]
+      },
+      "google-calendar": {
+        "command": "node",
+        "args": [
+          "/Users/kaoru/ghq/github.com/nspady/google-calendar-mcp/build/index.js"
+        ]
+      }
+    }
+  },
+  "workbench.editor.pinnedTabsOnSeparateRow": true,
+  "terminal.integrated.defaultLocation": "editor",
+  "cursor.cpp.disabledLanguages": [
+    "scminput",
+    "yaml"
+  ],
+  "workbench.colorTheme": "Dracula Theme",
+  "editor.fontVariations": false,
+  "terminal.integrated.fontFamily": "UDEV Gothic 35NFLG",
+  "cursor.agent_layout_browser_beta_setting": true,
+  "editor.dropIntoEditor.preferences": [],
+  "custom-ui-style.stylesheet": {
+    "*": "font-family: \"UDEV Gothic 35NFLG\" !important;",
+    ".anysphere-markdown-container-root, .markdown-block-code *, .aislash-editor-input, .aislash-editor-input-readonly, .aislash-editor-placeholder, .anysphere.cursor-retrieval, .aiEditorBox-anysphere, .aichat-code-block-anysphere, .composer-code-block-anysphere, .aicmdk-context-code-block-anysphere, .monaco-diff-editor .monaco-editor .view-lines, .monaco-diff-editor .monaco-editor .view-overlays, .monaco-mouse-cursor-text *, .composer-message-codeblock .monaco-editor .view-lines, .composer-message-codeblock .monaco-editor .view-overlays": "line-height: 2 !important;"
+  },
+  "chat.fontSize": 14,
+  "biome.configurationPath": "",
+  "biome.suggestInstallingGlobally": false,
+  "cursor.terminal.usePreviewBox": true
+}

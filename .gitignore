@@ -36,3 +36,12 @@ node_modules
 .codex/auth.json
 .codex/history.jsonl
 !.config/zellij
+
+.cursor/projects
+.cursor/extensions
+.cursor/worktrees
+.cursor/chats
+.cursor/browser-logs
+.cursor/mcp.json
+.cursor/argv.json
+.cursor/ide_state.json
