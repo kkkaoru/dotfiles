@@ -27,4 +27,5 @@ set -x GPG_TTY (tty)
 mise activate fish | source
 set -gx PATH $HOME/.local/bin /opt/homebrew/bin $PATH
 
-
+# Added by Windsurf - Next
+fish_add_path /Users/kaoru/.codeium/windsurf/bin
