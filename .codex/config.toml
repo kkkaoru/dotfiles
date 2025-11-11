@@ -3,7 +3,6 @@ model_reasoning_effort = "medium"
 hide_agent_reasoning = true
 network_access = true
 
-[tools]
 web_search_request = true
 
 [mcp_servers.context7]
