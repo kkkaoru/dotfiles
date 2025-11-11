@@ -7,8 +7,8 @@
   "explorer.confirmDragAndDrop": false,
   "javascript.updateImportsOnFileMove.enabled": "always",
   "editor.minimap.enabled": false,
-  "[NGINX]": {},
   "editor.fontFamily": "UDEV Gothic 35NFLG",
+  "[NGINX]": {},
   "editor.letterSpacing": 0.5,
   "editor.lineHeight": 2,
   "editor.fontLigatures": "'ss01', 'ss02', 'ss03', 'ss04', 'ss05', 'ss06', 'ss07', 'ss08', 'calt', 'dlig'",
@@ -272,7 +272,6 @@
   },
   "git.autofetch": true,
   "liveshare.authenticationProvider": "GitHub",
-  "editor.inlineHints.fontFamily": "UDEV Gothic 35NFLG",
   "files.associations": {
     ".htmlhintrc": "json"
   },
@@ -345,11 +344,10 @@
   ],
   "workbench.colorTheme": "Dracula Theme",
   "editor.fontVariations": false,
-  "terminal.integrated.fontFamily": "UDEV Gothic 35NFLG",
+  "terminal.integrated.fontFamily": "'Menlo', 'Monaco', 'Courier New', monospace",
   "cursor.agent_layout_browser_beta_setting": true,
   "editor.dropIntoEditor.preferences": [],
   "custom-ui-style.stylesheet": {
-    "*": "font-family: \"UDEV Gothic 35NFLG\" !important;",
     ".anysphere-markdown-container-root, .markdown-block-code *, .aislash-editor-input, .aislash-editor-input-readonly, .aislash-editor-placeholder, .anysphere.cursor-retrieval, .aiEditorBox-anysphere, .aichat-code-block-anysphere, .composer-code-block-anysphere, .aicmdk-context-code-block-anysphere, .monaco-diff-editor .monaco-editor .view-lines, .monaco-diff-editor .monaco-editor .view-overlays, .monaco-mouse-cursor-text *, .composer-message-codeblock .monaco-editor .view-lines, .composer-message-codeblock .monaco-editor .view-overlays": "line-height: 2 !important;"
   },
   "chat.fontSize": 14,
