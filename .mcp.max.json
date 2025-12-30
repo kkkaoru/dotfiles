@@ -16,13 +16,9 @@
       "command": "uvx",
       "args": ["mcp-server-motherduck", "--db-path", ":memory:"]
     },
-    "gemini-cli": {
-      "command": "bunx",
-      "args": ["-y", "gemini-mcp-tool"]
-    },
     "playwright": {
       "command": "bunx",
-      "args": ["-y", "@playwright/mcp@latest"]
+      "args": ["@playwright/mcp@latest"]
     },
     "serena": {
       "command": "uv",
@@ -36,23 +32,5 @@
       "env": {
         "SERENA_PATH": "${SERENA_PATH}"
       }
-    },
-    "deepl": {
-      "command": "bunx",
-      "args": ["deepl-mcp-server"],
-      "env": {
-        "DEEPL_API_KEY": "${DEEPL_API_KEY}"
-      }
-    },
-    "awslabs.aws-documentation-mcp-server": {
-      "command": "uvx",
-      "args": ["awslabs.aws-documentation-mcp-server@latest"],
-      "env": {
-        "FASTMCP_LOG_LEVEL": "ERROR",
-        "AWS_DOCUMENTATION_PARTITION": "aws"
-      },
-      "disabled": false,
-      "autoApprove": []
     }
-  }
 }
