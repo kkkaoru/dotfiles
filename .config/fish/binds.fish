@@ -1,7 +1,11 @@
 # history
 function fzf_select_history
-    history | fzf --query="$commandline" | read -l result
-    and commandline -r $result
+    set -l query (commandline)
+    history | fzf --ansi --reverse --height=40% --query="$query" | read -l result
+    if test -n "$result"
+        commandline -r $result
+    end
+    commandline -f repaint
 end
 
 function fish_user_key_bindings
