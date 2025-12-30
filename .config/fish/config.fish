@@ -29,3 +29,12 @@ set -gx PATH $HOME/.local/bin /opt/homebrew/bin $PATH
 
 # Added by Windsurf - Next
 fish_add_path /Users/kaoru/.codeium/windsurf/bin
+
+# Added by Antigravity
+fish_add_path /Users/kaoru/.antigravity/antigravity/bin
+
+# Added by Antigravity
+fish_add_path /Users/kaoru/.antigravity/antigravity/bin
+
+# Added by Windsurf
+fish_add_path /Users/kaoru/.codeium/windsurf/bin
