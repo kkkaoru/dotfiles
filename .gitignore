@@ -49,3 +49,12 @@ node_modules
 !.windsurf/extensions/extensions.json
 .codeium/windsurf/*
 !.codeium/windsurf/global_workflows
+
+!.config/opencode/
+.config/opencode/*
+!.config/opencode/skills/
+
+.codex/models_cache.json
+.codex/tmp/path
+.cursor/ai-tracking
+.cursor/plans
