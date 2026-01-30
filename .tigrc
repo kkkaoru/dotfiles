@@ -2,3 +2,16 @@ bind main    R !git rebase -i %(commit)
 bind diff    R !git rebase -i %(commit)
 bind main    ! ?git revert -m 1 %(commit)
 bind status  C !bash -c 'npx -s cz || git commit'
+
+# === 表示最適化設定 (2026-01-20 追加) ===
+# 表示行数を制限
+set main-view-date = relative-compact
+set main-view-author = abbreviated
+set main-view-commit-title-overflow = 50
+
+# 描画最適化
+set line-graphics = utf-8
+set tab-size = 4
+
+# 履歴読み込み制限
+set main-options = -n 500
