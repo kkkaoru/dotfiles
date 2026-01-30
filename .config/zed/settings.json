@@ -8,20 +8,21 @@
 // command palette (cmd-shift-p / ctrl-shift-p)
 {
   "agent": {
+    "always_allow_tool_actions": true,
     "default_model": {
       "provider": "copilot_chat",
-      "model": "gpt-5-codex"
+      "model": "gpt-5-mini",
     },
-    "model_parameters": []
+    "model_parameters": [],
   },
   "edit_predictions": {
     "mode": "eager",
     "copilot": {
       "proxy": null,
       "proxy_no_verify": null,
-      "enterprise_uri": null
+      "enterprise_uri": null,
     },
-    "enabled_in_text_threads": false
+    "enabled_in_text_threads": false,
   },
   "ui_font_size": 16,
   "buffer_font_size": 14,
@@ -29,58 +30,65 @@
   "theme": {
     "mode": "system",
     "light": "One Light",
-    "dark": "Dracula"
+    "dark": "Dracula",
   },
   "code_actions_on_format": {
     "source.organizeImports.biome": true,
-    "source.fixAll.biome": true
+    "source.fixAll.biome": true,
   },
   "languages": {
     "HTML": {
       "formatter": { "language_server": { "name": "biome" } },
       "code_actions_on_format": {
         "source.fixAll.biome": true,
-        "source.organizeImports.biome": true
-      }
+        "source.organizeImports.biome": true,
+      },
     },
     "JavaScript": {
       "formatter": { "language_server": { "name": "biome" } },
       "code_actions_on_format": {
         "source.fixAll.biome": true,
-        "source.organizeImports.biome": true
-      }
+        "source.organizeImports.biome": true,
+      },
     },
     "TypeScript": {
       "formatter": { "language_server": { "name": "biome" } },
       "code_actions_on_format": {
         "source.fixAll.biome": true,
-        "source.organizeImports.biome": true
-      }
+        "source.organizeImports.biome": true,
+      },
     },
     "TSX": {
       "formatter": { "language_server": { "name": "biome" } },
       "code_actions_on_format": {
         "source.fixAll.biome": true,
 
-        "source.organizeImports.biome": true
-      }
-    }
+        "source.organizeImports.biome": true,
+      },
+    },
   },
   "tab_size": 2,
   "tabs": {
-    "activate_on_close": "neighbour"
+    "activate_on_close": "neighbour",
+  },
+  "lsp": {
+    "typescript-language-server": {
+      "binary": {
+        "path": "~/.bun/bin/typescript-language-server",
+      },
+    },
   },
   "terminal": {
     "font_family": "UDEV Gothic 35NFLG",
     "dock": "right",
-    "minimum_contrast": 0
+    "minimum_contrast": 0,
   },
   "ui_font_family": "UDEV Gothic 35NFLG",
   "use_system_window_tabs": true,
   "linked_edits": true,
   "whitespace_map": {
     "space": "•",
-    "tab": "→"
+    "tab": "→",
   },
-  "prettier": null
+  "prettier": null,
 }
