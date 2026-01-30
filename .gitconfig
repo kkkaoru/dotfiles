@@ -31,3 +31,5 @@
 	prompt = false
 [mergetool]
 	prompt = false
+[maintenance]
+	repo = /Users/kaoru/ghq/github.com/kkkaoru/keiba
