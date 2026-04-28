@@ -58,3 +58,5 @@ node_modules
 .codex/tmp/path
 .cursor/ai-tracking
 .cursor/plans
+
+.config/zed/prompts
