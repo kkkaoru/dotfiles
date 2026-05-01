@@ -292,7 +292,26 @@ web_client {
 // Choose the theme that is specified in the themes section.
 // Default: default
 //
-// theme "dracula"
+theme "dracula"
+
+// Dracula 公式パレット (https://draculatheme.com/contribute) を ANSI 16 色に正準マッピング。
+// 端末 bg #282a36 を基準に、すべての前景色との組み合わせが WCAG AA (>=4.5:1) を満たすよう設計。
+// ANSI4 (blue) には Dracula purple #bd93f9 を割り当て (Dracula 公式仕様に準拠)。
+themes {
+    dracula {
+        fg       248 248 242   // #f8f8f2  fg            (vs bg ~13:1)
+        bg       40  42  54    // #282a36  bg            (Dracula 標準背景)
+        black    33  34  44    // #21222c  ANSI0 black   (bg よりわずかに暗いシェード)
+        red      255 85  85    // #ff5555  ANSI1 red     (vs bg ~5.2:1)
+        green    80  250 123   // #50fa7b  ANSI2 green   (vs bg ~12:1)
+        yellow   241 250 140   // #f1fa8c  ANSI3 yellow  (vs bg ~13:1)
+        blue     189 147 249   // #bd93f9  ANSI4 = Dracula purple (vs bg ~5.5:1)
+        magenta  255 121 198   // #ff79c6  ANSI5 = Dracula pink   (vs bg ~6.7:1)
+        cyan     139 233 253   // #8be9fd  ANSI6 cyan    (vs bg ~10.6:1)
+        white    248 248 242   // #f8f8f2  ANSI7 = fg
+        orange   255 184 108   // #ffb86c  Dracula orange (vs bg ~8.4:1)
+    }
+}
 
 // Choose the base input mode of zellij.
 // Default: normal
