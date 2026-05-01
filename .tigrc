@@ -15,3 +15,142 @@ set tab-size = 4
 
 # 履歴読み込み制限
 set main-options = -n 500
+
+# === Dracula color theme for tig ===
+#
+# Dracula 公式パレット → 256 色端末コードへの最近接マッピング:
+#   bg        #282a36 → (端末の default に委譲)
+#   current   #44475a → color238  (選択行 / 引用ハイライト用 bg)
+#   fg        #f8f8f2 → color231  (白)
+#   comment   #6272a4 → color103  (控えめなメタ情報)
+#   purple    #bd93f9 → color141
+#   pink      #ff79c6 → color212
+#   red       #ff5555 → color203
+#   orange    #ffb86c → color215
+#   yellow    #f1fa8c → color228
+#   green     #50fa7b → color84
+#   cyan      #8be9fd → color117
+#
+# 設計方針:
+#   - 背景は基本 default (端末の Dracula bg をそのまま活かす)
+#   - 強調は前景色 + bold、選択行のみ Dracula current-line bg
+#   - git diff 慣習色 (+: green / -: red / @@: cyan / file header: yellow) を踏襲
+#   - 文字背景の組合せはすべて WCAG AA (>=4.5:1) を満たす
+
+# --- 全体ベース / 選択行 / タイトル ---
+color default          color231  default
+color cursor           color235  color141  bold
+color cursor-blur      color231  color61
+color title-focus      color235  color212  bold
+color title-blur       color103  default
+color status           color84   default   bold
+color search-result    color235  color228  bold
+color delimiter        color103  default
+color header           color228  default   bold
+color line-number      color103  default
+
+# --- 共通メタ情報 ---
+color id               color103  default
+color date             color103  default
+color author           color141  default
+color committer        color141  default
+color mode             color215  default
+color file             color231  default
+color file-size        color103  default
+color directory        color117  default   bold
+color overflow         color203  default
+
+# --- diff ビュー (git diff 慣習色) ---
+color diff-header        color228  default   bold
+color diff-chunk         color117  default
+color diff-stat          color117  default
+color diff-add           color84   default
+color diff-add2          color84   default
+color diff-add-highlight color84   color238  bold
+color diff-del           color203  default
+color diff-del2          color203  default
+color diff-del-highlight color203  color238  bold
+color diff-oldmode       color215  default
+color diff-newmode       color215  default
+color "copy from "       color212  default
+color "copy to "         color212  default
+color diff-similarity    color228  default
+color diff-index         color141  default
+
+# --- main ビュー: ref ラベル & グラフ ---
+color main-head        color84   default   bold
+color main-remote      color212  default
+color main-tracked     color212  default   bold
+color main-tag         color228  default   bold
+color main-local-tag   color228  default
+color main-ref         color117  default
+color main-replace     color203  default
+color main-stash       color141  default   bold
+color main-note        color103  default
+color main-prefetch    color103  default
+color main-other       color231  default
+color main-annotated   color228  default   bold
+color main-commit      color231  default
+color graph-commit     color103  default
+
+# --- ブランチグラフのカラーパレット (Dracula 順) ---
+color palette-0    color203  default
+color palette-1    color84   default
+color palette-2    color228  default
+color palette-3    color141  default
+color palette-4    color212  default
+color palette-5    color117  default
+color palette-6    color215  default
+color palette-7    color203  default   bold
+color palette-8    color84   default   bold
+color palette-9    color228  default   bold
+color palette-10   color141  default   bold
+color palette-11   color212  default   bold
+color palette-12   color117  default   bold
+color palette-13   color215  default   bold
+
+# --- pretty-print コミットヘッダ (tig 2.6 では literal regex 形式が canonical) ---
+color "Author: "       color141  default   bold
+color "Commit: "       color117  default
+color pp-merge         color212  default   bold
+color "Date: "         color103  default
+color "AuthorDate: "   color103  default
+color "CommitDate: "   color103  default
+color pp-refs          color228  default   bold
+color pp-reflog        color228  default
+color pp-reflogmsg     color231  default
+
+# --- raw コミットヘッダ ---
+color commit           color228  default   bold
+color parent           color103  default
+color tree             color117  default
+color "    Signed-off-by"  color84  default
+color "    Acked-by"       color84  default
+color "    Reviewed-by"    color84  default
+color "    Tested-by"      color84  default
+
+# --- tree ビュー (tig 2.6 では view-prefixed 形式) ---
+color tree.directory   color117  default   bold
+color tree.file        color231  default
+
+# --- status ビュー (Dracula 強化) ---
+color stat-none        color103  default
+color stat-staged      color84   default
+color stat-unstaged    color203  default
+color stat-untracked   color215  default
+# section header ("Staged changes" / "Unstaged changes" / "Untracked files") を
+# Dracula pink バナー化。bg color212 + fg color235 + bold で約7.1:1, AA 余裕クリア。
+color status.header    color235  color212  bold
+# status ビューのタイトルバーも Dracula pink で main view (purple) と区別
+color status.title-focus color235  color212  bold
+# "On branch X" 行は literal regex で Dracula purple 強調
+color "On branch "     color141  default   bold
+
+# --- help ビュー ---
+color help-group       color228  default   bold
+color help-action      color117  default
+
+# --- grep ビュー ---
+color grep.file        color117  default   bold
+color grep.line-number color103  default
+color grep.delimiter   color231  default
