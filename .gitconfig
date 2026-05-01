@@ -1,9 +1,6 @@
 [user]
 	name = kkk4oru
 	email = kaoru+git@teadea.net
-	signingkey = ADF9EF6C0DBD6E08
-[commit]
-	gpgsign = true
 [merge]
 	ff = false
 	tool = vimdiff
@@ -31,5 +28,7 @@
 	prompt = false
 [mergetool]
 	prompt = false
-[maintenance]
-	repo = /Users/kaoru/ghq/github.com/kkkaoru/keiba
+; Per-machine overrides (signing key, GPG path, maintenance repos, etc.)
+; This file is intentionally NOT tracked by the dotfiles repo.
+[include]
+	path = ~/.gitconfig.local
