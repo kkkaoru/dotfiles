@@ -4,9 +4,9 @@ node = "24.10"
 [settings]
 idiomatic_version_file_enable_tools = ["node"]
 
-[alias]
+[tool_alias]
 
-[alias.node]
+[tool_alias.node]
 
-[alias.node.versions]
+[tool_alias.node.versions]
 latest = "24.5.0"
