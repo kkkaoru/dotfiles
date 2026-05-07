@@ -1,1 +1,4 @@
+font-family = "UDEV Gothic 35NFLG"
 theme = dracula
+selection-background = #ff79c6
+selection-foreground = #282a36

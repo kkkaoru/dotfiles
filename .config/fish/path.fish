@@ -7,4 +7,6 @@ if test -d ~/dotfiles/scripts
     fish_add_path $HOME/dotfiles/scripts
 end
 
-fish_add_path "/Users/kaoru/.bun/bin"
+if test -d $HOME/.bun/bin
+    fish_add_path $HOME/.bun/bin
+end
