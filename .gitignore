@@ -1,6 +1,7 @@
 *_history*
 .config/*
 !.config/fish
+.config/fish/fish_variables
 !.config/omf
 !.config/mise
 !.config/ghostty
