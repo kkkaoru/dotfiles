@@ -43,6 +43,7 @@ node_modules
 .codex/logs_*.sqlite*
 .codex/memories/
 .codex/models_cache.json
+.codex/config.toml
 .codex/plugins/
 .codex/sessions/
 .codex/shell_snapshots/
