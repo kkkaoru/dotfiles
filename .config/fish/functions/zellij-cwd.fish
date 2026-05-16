@@ -1,8 +1,8 @@
 function zellij-cwd --description "Start a Zellij session named after the current directory path"
     set -l real_pwd (pwd -P)
     set -l dir_name (basename "$real_pwd")
-    set -l safe_dir (string replace -ra '[^A-Za-z0-9._-]+' '_' -- "$dir_name" | string sub -l 24)
-    set -l path_hash (printf '%s' "$real_pwd" | cksum | string split ' ' | head -n 1)
+    set -l safe_dir (string replace -ra '[^A-Za-z0-9._-]+' '_' -- "$dir_name" | string sub -l 10)
+    set -l path_hash (printf '%s' "$real_pwd" | cksum | string split ' ' | head -n 1 | string sub -l 8)
     set -l base_session "$safe_dir-$path_hash"
     set -l usage "Usage: zellij-cwd [NUMBER|new]"
 
