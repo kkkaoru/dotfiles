@@ -369,14 +369,9 @@ themes {
 //
 // theme_dir "/tmp"
 
-// Toggle enabling the mouse mode.
-// On certain configurations, or terminals this could
-// potentially interfere with copying text.
-// Options:
-//   - true (default)
-//   - false
-//
-mouse_mode false
+// Enable mouse interactions such as clicking panes to focus them and clicking
+// tabs in the tab bar to switch tabs.
+mouse_mode true
 
 // Toggle having pane frames around the panes
 // Options:

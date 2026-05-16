@@ -12,7 +12,7 @@ function zellij-cwd --description "Start a Zellij session named after the curren
     end
 
     if test (count $argv) -eq 0
-        command zellij attach "$base_session" --create
+        command zellij attach --create --force-run-commands "$base_session"
         return $status
     end
 
@@ -41,6 +41,6 @@ function zellij-cwd --description "Start a Zellij session named after the curren
                 return 2
             end
 
-            command zellij attach "$base_session-$arg" --create
+            command zellij attach --create --force-run-commands "$base_session-$arg"
     end
 end
