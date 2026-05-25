@@ -23,6 +23,7 @@
   },
   "alwaysThinkingEnabled": true,
   "skipDangerousModePermissionPrompt": true,
+  "agentPushNotifEnabled": true,
   "feedbackSurveyState": {
     "lastShownTime": 1754085399497
   },
@@ -30,5 +31,5 @@
     "enabled": true,
     "projectConfig": true
   },
-  "agentPushNotifEnabled": true
+  "skipAutoPermissionPrompt": true
 }
