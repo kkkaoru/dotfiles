@@ -2,3 +2,8 @@ font-family = "UDEV Gothic 35NFLG"
 theme = dracula
 selection-background = #ff79c6
 selection-foreground = #282a36
+
+# zellij など mouse_mode を有効にする TUI 上でも Shift+ドラッグで
+# ghostty のネイティブ選択（上記の pink 背景）が使えるようにする。
+# false が既定だが、意図を明示するため記述。
+mouse-shift-capture = false
