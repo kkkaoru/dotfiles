@@ -24,12 +24,12 @@
   "alwaysThinkingEnabled": true,
   "skipDangerousModePermissionPrompt": true,
   "agentPushNotifEnabled": true,
+  "skipAutoPermissionPrompt": true,
   "feedbackSurveyState": {
     "lastShownTime": 1754085399497
   },
   "mcp": {
     "enabled": true,
     "projectConfig": true
-  },
-  "skipAutoPermissionPrompt": true
+  }
 }
