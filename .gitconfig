@@ -12,7 +12,7 @@
 	quotepath = false
 	safecrlf = false
 	autocrlf = false
-	excludesFile = \"$HOME\"/.gitignore_global
+	excludesFile = ~/.gitignore_global
 [pager]
 	branch = cat
 [log]
