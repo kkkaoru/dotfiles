@@ -22,6 +22,7 @@
     }
   },
   "alwaysThinkingEnabled": true,
+  "tui": "fullscreen",
   "skipDangerousModePermissionPrompt": true,
   "agentPushNotifEnabled": true,
   "skipAutoPermissionPrompt": true,
@@ -31,5 +32,6 @@
   "mcp": {
     "enabled": true,
     "projectConfig": true
-  }
+  },
+  "model": "claude-opus-4-6[1M]"
 }
