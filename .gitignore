@@ -34,16 +34,19 @@ node_modules
 
 # Codex runtime state/cache
 .codex/.codex-global-state.json*
+.codex/.app-server-state-reconciled-v1
 .codex/.personality_migration
 .codex/.tmp/
 .codex/auth.json
 .codex/cache/
+.codex/chrome-native-hosts-v2.json
 .codex/computer-use/
 .codex/history.jsonl
 .codex/installation_id
 .codex/log/
 .codex/logs_*.sqlite*
 .codex/memories/
+.codex/memories_*.sqlite*
 .codex/models_cache.json
 .codex/config.toml
 .codex/plugins/
