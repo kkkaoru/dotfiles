@@ -33,6 +33,9 @@ node_modules
 !.claude/settings.json
 !.claude/commands
 !.claude/commands/*
+!.claude/hooks/
+.claude/hooks/*
+!.claude/hooks/herdr-agent-state.sh
 
 
 # Codex runtime state/cache

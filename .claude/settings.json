@@ -10,6 +10,20 @@
   "model": "sonnet",
   "advisorModel": "claude-fable-5",
   "enableAllProjectMcpServers": true,
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/hooks/herdr-agent-state.sh\" session",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  },
   "enabledPlugins": {
     "document-skills@anthropic-agent-skills": true,
     "pyright-lsp@claude-plugins-official": true,
