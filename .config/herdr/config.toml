@@ -1,0 +1,7 @@
+onboarding = false
+
+[keys]
+# prefix+h is reserved for a horizontal split; keep left focus available on
+# the corresponding arrow key to avoid a duplicate binding.
+focus_pane_left = "prefix+left"
+split_horizontal = "prefix+h"

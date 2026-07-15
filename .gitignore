@@ -6,6 +6,9 @@
 !.config/mise
 !.config/ghostty
 !.config/gh
+!.config/herdr
+.config/herdr/*
+!.config/herdr/config.toml
 !.config/zed
 .config/zed/{prompts,conversations,themes}
 
