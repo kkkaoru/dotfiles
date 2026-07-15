@@ -3,7 +3,6 @@ function claudex --description 'Run Claude Code with GPT-5.6 Sol through CLIProx
     set -lx ANTHROPIC_AUTH_TOKEN claudex-local
     set -lx CLAUDE_CODE_SUBAGENT_MODEL gpt-5.6-sol
     set -lx CLAUDE_CODE_ALWAYS_ENABLE_EFFORT 1
-    set -lx ENABLE_TOOL_SEARCH false
     set -lx ENABLE_CLAUDEAI_MCP_SERVERS false
 
     if not curl --silent --fail --output /dev/null \
