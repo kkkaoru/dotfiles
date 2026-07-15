@@ -50,6 +50,7 @@ node_modules
 .codex/models_cache.json
 .codex/config.toml
 .codex/plugins/
+.codex/process_manager/
 .codex/rules/
 .codex/archived_sessions/
 .codex/browser/
@@ -66,6 +67,7 @@ node_modules
 .codex/version.json
 !.config/zellij
 
+/.cursor/
 .cursor/projects
 .cursor/extensions
 .cursor/worktrees
