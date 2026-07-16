@@ -7,8 +7,7 @@
     "allow": [],
     "deny": []
   },
-  "model": "sonnet",
-  "advisorModel": "claude-fable-5",
+  "model": "claude-fable-5[1m]",
   "enableAllProjectMcpServers": true,
   "hooks": {
     "SessionStart": [
