@@ -1,51 +1,22 @@
-function claudex --description 'Run Claude Code with GPT-5.6 Sol through CLIProxyAPI'
-    # Keep all proxy and model overrides scoped to this invocation.
-    set -lx ANTHROPIC_BASE_URL http://127.0.0.1:8317
-    set -lx ANTHROPIC_AUTH_TOKEN claudex-local
-    set -lx CLAUDE_CODE_SUBAGENT_MODEL gpt-5.6-sol
-
-    # Enable Claude Code's effort controls for the proxied model.
+function claudex --description 'Run Claude Code with GPT-5.6 Sol through Codex app-server'
+    # Keep user-facing Claude Code policy outside the transport adapter.
     set -lx CLAUDE_CODE_ALWAYS_ENABLE_EFFORT 1
 
-    # Claude.ai connectors cannot authenticate through this proxy. Disabling
-    # their discovery also avoids the expected warning in interactive mode.
-    set -lx ENABLE_CLAUDEAI_MCP_SERVERS false
-
-    # Check both service availability and local API authentication before launch.
-    if not curl --silent --fail --output /dev/null \
-            --header "Authorization: Bearer $ANTHROPIC_AUTH_TOKEN" \
-            "$ANTHROPIC_BASE_URL/v1/models"
-        echo 'claudex: starting CLIProxyAPI...' >&2
-        if not brew services start cliproxyapi >&2
-            echo 'claudex: failed to start CLIProxyAPI' >&2
-            return 1
-        end
-
-        # Allow the Homebrew service up to five seconds to become ready.
-        for attempt in (seq 1 20)
-            if curl --silent --fail --output /dev/null \
-                    --header "Authorization: Bearer $ANTHROPIC_AUTH_TOKEN" \
-                    "$ANTHROPIC_BASE_URL/v1/models"
-                break
-            end
-            sleep 0.25
-        end
-
-        if not curl --silent --fail --output /dev/null \
-                --header "Authorization: Bearer $ANTHROPIC_AUTH_TOKEN" \
-                "$ANTHROPIC_BASE_URL/v1/models"
-            echo 'claudex: CLIProxyAPI did not become ready' >&2
-            return 1
-        end
+    set -l model gpt-5.6-sol
+    if set -q CLAUDEX_MODEL
+        set model $CLAUDEX_MODEL
     end
 
-    # Keep other diagnostics visible if Claude emits the connector warning on stderr.
-    command claude --model gpt-5.6-sol $argv 2>| while read -l line
-        if not string match --quiet -- '*claude.ai connectors are disabled because*' "$line"
-            echo "$line" >&2
-        end
+    set -l adapter_args launch --model "$model"
+    if set -q CLAUDEX_ADAPTER_LISTEN
+        set -a adapter_args --listen "$CLAUDEX_ADAPTER_LISTEN"
+    end
+    if set -q CLAUDEX_SUBSCRIPTION_MAX_PROCESSES
+        set -a adapter_args --subscription-max-processes "$CLAUDEX_SUBSCRIPTION_MAX_PROCESSES"
+    end
+    if set -q CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES
+        set -a adapter_args --subscription-timeout-minutes "$CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES"
     end
 
-    # Return Claude's status instead of the stderr filter's pipeline status.
-    return $pipestatus[1]
+    command "$HOME/.local/bin/claudex-app-server-adapter" $adapter_args -- $argv
 end
