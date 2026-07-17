@@ -6,7 +6,7 @@ use std::{
     path::PathBuf,
     process::{Command, Stdio},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result, bail};
@@ -19,7 +19,9 @@ mod daemon_process;
 use daemon_process::{matches as process_matches, terminate};
 
 const LOCAL_TOKEN: &str = "claudex-local";
-const START_ATTEMPTS: usize = 40;
+const START_TIMEOUT: Duration = Duration::from_secs(10);
+const START_INITIAL_POLL_DELAY: Duration = Duration::from_millis(10);
+const START_MAX_POLL_DELAY: Duration = Duration::from_millis(250);
 
 #[derive(Debug)]
 pub struct AdapterOptions {
@@ -46,7 +48,6 @@ struct Health {
     build_id: String,
     #[serde(default)]
     backend_routes: Vec<String>,
-    model: String,
     subscription_max_processes: usize,
     subscription_timeout_minutes: u64,
 }
@@ -91,7 +92,6 @@ impl ServiceConfig {
             && health.protocol_version == ADAPTER_PROTOCOL_VERSION
             && health.build_id == env!("CLAUDEX_BUILD_ID")
             && health.backend_routes == route_descriptions(&self.options.routes)
-            && health.model == self.options.model
             && health.subscription_max_processes == self.options.subscription_max_processes
             && health.subscription_timeout_minutes == self.options.subscription_timeout_minutes
     }
@@ -305,23 +305,38 @@ fn route_descriptions(routes: &[BackendRoute]) -> Vec<String> {
 }
 
 async fn wait_until_ready(client: &reqwest::Client, config: &ServiceConfig) -> Result<()> {
-    wait_until_ready_with(client, config, START_ATTEMPTS, Duration::from_millis(250)).await
+    wait_until_ready_with(
+        client,
+        config,
+        START_TIMEOUT,
+        START_INITIAL_POLL_DELAY,
+        START_MAX_POLL_DELAY,
+    )
+    .await
 }
 
 async fn wait_until_ready_with(
     client: &reqwest::Client,
     config: &ServiceConfig,
-    attempts: usize,
-    delay: Duration,
+    timeout: Duration,
+    initial_delay: Duration,
+    max_delay: Duration,
 ) -> Result<()> {
-    for _ in 0..attempts {
+    let deadline = Instant::now() + timeout;
+    let mut delay = initial_delay;
+    loop {
         if fetch_health(client, config)
             .await
             .is_some_and(|health| config.matches(&health))
         {
             return Ok(());
         }
-        tokio::time::sleep(delay).await;
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        tokio::time::sleep(delay.min(remaining)).await;
+        delay = delay.saturating_mul(2).min(max_delay);
     }
     bail!(
         "agent adapter failed to start; see {}",
@@ -356,9 +371,12 @@ mod tests {
 
     #[test]
     fn formats_the_listener_and_matches_all_health_settings() {
-        let config = config();
-        assert_eq!(config.base_url(), "http://127.0.0.1:8318");
-        assert!(config.matches(&healthy(&config)));
+        let base_config = config();
+        assert_eq!(base_config.base_url(), "http://127.0.0.1:8318");
+        assert!(base_config.matches(&healthy(&base_config)));
+        let mut alternate_main = config();
+        alternate_main.options.model = "alternate-model".to_owned();
+        assert!(alternate_main.matches(&healthy(&base_config)));
     }
 
     #[test]
@@ -384,7 +402,6 @@ mod tests {
             protocol_version: ADAPTER_PROTOCOL_VERSION,
             build_id: env!("CLAUDEX_BUILD_ID").to_owned(),
             backend_routes: route_descriptions(&config.options.routes),
-            model: config.options.model.clone(),
             subscription_max_processes: 20,
             subscription_timeout_minutes: 120,
         }
@@ -402,9 +419,6 @@ mod tests {
         stale.push(health);
         let mut health = healthy(&config);
         health.build_id = "stale".to_owned();
-        stale.push(health);
-        let mut health = healthy(&config);
-        health.model = "other".to_owned();
         stale.push(health);
         let mut health = healthy(&config);
         health.subscription_max_processes = 7;
@@ -446,7 +460,8 @@ mod tests {
         let error = wait_until_ready_with(
             &reqwest::Client::new(),
             &config,
-            1,
+            Duration::from_millis(1),
+            Duration::from_millis(1),
             Duration::from_millis(1),
         )
         .await
