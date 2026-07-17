@@ -8,6 +8,7 @@ use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
 const MINIMUM_PERCENT: f64 = 95.0;
+const TOTAL_METRICS: [&str; 4] = ["lines", "functions", "regions", "branches"];
 
 pub fn run(root: &Path) -> Result<()> {
     let report = root.join("target/branch-coverage.json");
@@ -68,9 +69,21 @@ pub fn audit_report(root: &Path, report: &Path) -> Result<()> {
     let data = document
         .pointer("/data/0")
         .context("llvm-cov report has no data")?;
-    let branches = coverage_percent(data, "/totals/branches")?;
-    if branches < MINIMUM_PERCENT {
-        bail!("total branch coverage is {branches:.2}%, below {MINIMUM_PERCENT:.0}%");
+    let total_failures = TOTAL_METRICS
+        .iter()
+        .map(|metric| {
+            let coverage = coverage_percent(data, &format!("/totals/{metric}"))?;
+            Ok((coverage < MINIMUM_PERCENT).then(|| format!("{metric}: {coverage:.2}%")))
+        })
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>();
+    if !total_failures.is_empty() {
+        bail!(
+            "total coverage below {MINIMUM_PERCENT:.0}%:\n{}",
+            total_failures.join("\n")
+        );
     }
     let failures = production_line_failures(root, data)?;
     if failures.is_empty() {
@@ -159,7 +172,7 @@ fn coverage_percent(value: &Value, pointer: &str) -> Result<f64> {
 mod tests {
     use std::fs;
 
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     use std::os::unix::process::ExitStatusExt;
 
@@ -193,12 +206,21 @@ mod tests {
         let branches = report_fixture(94.9, 100.0);
         let error = audit_report(branches.path(), &branches.path().join("report.json"))
             .expect_err("low branches");
-        assert!(error.to_string().contains("total branch coverage"));
+        assert!(error.to_string().contains("branches: 94.90%"));
 
         let lines = report_fixture(100.0, 94.9);
         let error =
             audit_report(lines.path(), &lines.path().join("report.json")).expect_err("low lines");
         assert!(error.to_string().contains("src/lib.rs: 94.90%"));
+
+        let functions = report_fixture(100.0, 100.0);
+        let report = functions.path().join("report.json");
+        let mut document: Value =
+            serde_json::from_slice(&fs::read(&report).expect("read report")).expect("JSON");
+        document["data"][0]["totals"]["functions"] = json!({"covered":949,"count":1000});
+        fs::write(&report, serde_json::to_vec(&document).expect("JSON")).expect("write report");
+        let error = audit_report(functions.path(), &report).expect_err("low functions");
+        assert!(error.to_string().contains("functions: 94.90%"));
     }
 
     #[test]
@@ -338,7 +360,12 @@ mod tests {
         let line_covered = (lines * 10.0).round() as u64;
         let report = json!({
             "data":[{
-                "totals":{"branches":{"covered":branch_covered,"count":1000}},
+                "totals":{
+                    "branches":{"covered":branch_covered,"count":1000},
+                    "functions":{"covered":1000,"count":1000},
+                    "regions":{"covered":1000,"count":1000},
+                    "lines":{"covered":1000,"count":1000}
+                },
                 "files":[
                     {
                         "filename":format!("{root}/src/lib.rs"),

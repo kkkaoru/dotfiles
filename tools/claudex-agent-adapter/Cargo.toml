@@ -1,13 +1,13 @@
 [package]
-name = "claudex-app-server-adapter"
+name = "claudex-agent-adapter"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 autobins = false
-default-run = "claudex-app-server-adapter"
+default-run = "claudex-agent-adapter"
 
 [[bin]]
-name = "claudex-app-server-adapter"
+name = "claudex-agent-adapter"
 path = "src/main.rs"
 
 [[bin]]
@@ -17,6 +17,14 @@ path = "tests/fixtures/claude_mock.rs"
 [[bin]]
 name = "codex-mock"
 path = "tests/fixtures/codex_mock.rs"
+
+[[bin]]
+name = "grok-acp-mock"
+path = "tests/fixtures/grok_acp_mock.rs"
+
+[[bin]]
+name = "routing-codex-mock"
+path = "tests/fixtures/routing_codex_mock.rs"
 
 [[bin]]
 name = "coverage-branch"
@@ -39,13 +47,16 @@ too_many_lines = "deny"
 unimplemented = "deny"
 
 [dependencies]
+agent-client-protocol = { version = "=0.10.4", features = ["unstable"] }
 anyhow = "1.0"
+async-trait = "0.1"
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
 reqwest = { version = "0.12", default-features = false, features = ["json"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-tokio = { version = "1.0", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "1.0", features = ["io-std", "io-util", "macros", "net", "process", "rt-multi-thread", "sync", "time"] }
 tokio-stream = "0.1"
+tokio-util = { version = "0.7", features = ["compat"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", default-features = false, features = ["env-filter", "fmt"] }
 uuid = { version = "1.0", features = ["v4"] }

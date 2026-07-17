@@ -1,14 +1,16 @@
 #![cfg_attr(coverage_nightly, feature(coverage_attribute))]
 #![cfg_attr(coverage_nightly, allow(unused_features))]
 
+pub mod agent_backend;
 pub mod anthropic;
 pub mod app_server;
 pub mod build_support;
 pub mod coverage_gate;
+pub mod grok_acp;
 pub mod launcher;
 pub mod runtime;
 
-pub const ADAPTER_PROTOCOL_VERSION: u64 = 3;
+pub const ADAPTER_PROTOCOL_VERSION: u64 = 5;
 
 use std::sync::Arc;
 
@@ -25,15 +27,21 @@ use axum::{
 use serde_json::json;
 
 pub fn http_router(bridge: Arc<Bridge>, model: String, auth_token: Option<String>) -> Router {
-    let health_model = model.clone();
+    let health_model = model;
     let health_bridge = Arc::clone(&bridge);
     let subscription_max_processes = bridge.subscription_max_processes();
     let subscription_timeout_minutes = bridge.subscription_timeout_minutes();
+    let backend_routes = bridge.backend_routes();
+    let models = bridge.routed_models();
     let protected = Router::new()
         .route(
             "/v1/models",
             get(move || async move {
-                Json(json!({"object":"list","data":[{"id":model,"object":"model"}]}))
+                let data = models
+                    .into_iter()
+                    .map(|id| json!({"id":id,"object":"model"}))
+                    .collect::<Vec<_>>();
+                Json(json!({"object":"list","data":data}))
             }),
         )
         .route("/v1/messages", post(messages))
@@ -55,6 +63,8 @@ pub fn http_router(bridge: Arc<Bridge>, model: String, auth_token: Option<String
                         "pid":std::process::id(),
                         "protocol_version":ADAPTER_PROTOCOL_VERSION,
                         "build_id":env!("CLAUDEX_BUILD_ID"),
+                        "backend_routes":backend_routes,
+                        "started_models":health_bridge.started_models(),
                         "model":health_model,
                         "subscription_max_processes":subscription_max_processes,
                         "subscription_timeout_minutes":subscription_timeout_minutes

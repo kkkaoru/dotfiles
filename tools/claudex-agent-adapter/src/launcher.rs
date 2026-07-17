@@ -12,13 +12,14 @@ use std::{
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
-use crate::ADAPTER_PROTOCOL_VERSION;
+use crate::{ADAPTER_PROTOCOL_VERSION, agent_backend::BackendRoute};
 
 const LOCAL_TOKEN: &str = "claudex-local";
 const START_ATTEMPTS: usize = 40;
 
 #[derive(Debug)]
 pub struct AdapterOptions {
+    pub routes: Vec<BackendRoute>,
     pub model: String,
     pub listen: SocketAddr,
     pub subscription_max_processes: usize,
@@ -39,6 +40,8 @@ struct Health {
     pid: Option<u32>,
     protocol_version: u64,
     build_id: String,
+    #[serde(default)]
+    backend_routes: Vec<String>,
     model: String,
     subscription_max_processes: usize,
     subscription_timeout_minutes: u64,
@@ -83,6 +86,7 @@ impl ServiceConfig {
         health.status == "ok"
             && health.protocol_version == ADAPTER_PROTOCOL_VERSION
             && health.build_id == env!("CLAUDEX_BUILD_ID")
+            && health.backend_routes == route_descriptions(&self.options.routes)
             && health.model == self.options.model
             && health.subscription_max_processes == self.options.subscription_max_processes
             && health.subscription_timeout_minutes == self.options.subscription_timeout_minutes
@@ -112,9 +116,11 @@ pub async fn run_claude(options: AdapterOptions, arguments: Vec<OsString>) -> Re
         .env_remove("CLAUDE_CODE_USE_VERTEX")
         .env_remove("CLAUDE_CODE_SUBAGENT_MODEL")
         .env_remove("CLAUDEX_ADAPTER_LISTEN")
-        .env_remove("CLAUDEX_APP_SERVER_PROGRAM")
+        .env_remove("CLAUDEX_BACKEND")
         .env_remove("CLAUDEX_CLAUDE_PROGRAM")
+        .env_remove("CLAUDEX_CODEX_PROGRAM")
         .env_remove("CLAUDEX_COLLABORATOR_MODEL")
+        .env_remove("CLAUDEX_GROK_PROGRAM")
         .env_remove("CLAUDEX_MODEL")
         .env_remove("CLAUDEX_SUBSCRIPTION_MAX_PROCESSES")
         .env_remove("CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES")
@@ -263,17 +269,7 @@ fn start_adapter(config: &ServiceConfig) -> Result<()> {
     let stderr = stdout.try_clone().context("clone adapter log handle")?;
     Command::new("nohup")
         .arg(&config.executable)
-        .args([
-            "serve",
-            "--model",
-            &config.options.model,
-            "--listen",
-            &config.options.listen.to_string(),
-            "--subscription-max-processes",
-            &config.options.subscription_max_processes.to_string(),
-            "--subscription-timeout-minutes",
-            &config.options.subscription_timeout_minutes.to_string(),
-        ])
+        .args(daemon_arguments(&config.options))
         .env("ANTHROPIC_AUTH_TOKEN", &config.token)
         .env_remove("ANTHROPIC_API_KEY")
         .env_remove("ANTHROPIC_BASE_URL")
@@ -293,6 +289,34 @@ fn start_adapter(config: &ServiceConfig) -> Result<()> {
         .spawn()
         .context("start adapter daemon")?;
     Ok(())
+}
+
+fn daemon_arguments(options: &AdapterOptions) -> Vec<OsString> {
+    let mut arguments = vec![
+        "serve".into(),
+        "--model".into(),
+        options.model.clone().into(),
+    ];
+    for route in &options.routes {
+        arguments.push("--backend-route".into());
+        arguments.push(format!("{}={}", route.model, route.backend).into());
+    }
+    arguments.extend([
+        "--listen".into(),
+        options.listen.to_string().into(),
+        "--subscription-max-processes".into(),
+        options.subscription_max_processes.to_string().into(),
+        "--subscription-timeout-minutes".into(),
+        options.subscription_timeout_minutes.to_string().into(),
+    ]);
+    arguments
+}
+
+fn route_descriptions(routes: &[BackendRoute]) -> Vec<String> {
+    routes
+        .iter()
+        .map(|route| format!("{}={}", route.model, route.backend))
+        .collect()
 }
 
 async fn wait_until_ready(client: &reqwest::Client, config: &ServiceConfig) -> Result<()> {
@@ -315,7 +339,7 @@ async fn wait_until_ready_with(
         tokio::time::sleep(delay).await;
     }
     bail!(
-        "app-server adapter failed to start; see {}",
+        "agent adapter failed to start; see {}",
         config.log_path.display()
     )
 }
@@ -324,10 +348,15 @@ async fn wait_until_ready_with(
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
+    use crate::agent_backend::BackendKind;
 
     fn config() -> ServiceConfig {
         ServiceConfig {
             options: AdapterOptions {
+                routes: vec![BackendRoute {
+                    model: "test-model".to_owned(),
+                    backend: BackendKind::CodexAppServer,
+                }],
                 listen: "127.0.0.1:8318".parse().expect("default listen"),
                 model: "test-model".to_owned(),
                 subscription_max_processes: 20,
@@ -368,6 +397,7 @@ mod tests {
             pid: Some(42),
             protocol_version: ADAPTER_PROTOCOL_VERSION,
             build_id: env!("CLAUDEX_BUILD_ID").to_owned(),
+            backend_routes: route_descriptions(&config.options.routes),
             model: config.options.model.clone(),
             subscription_max_processes: 20,
             subscription_timeout_minutes: 120,

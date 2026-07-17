@@ -1,9 +1,25 @@
-# claudex app-server adapter
+# claudex agent adapter
 
-This local Rust service translates the subset of Anthropic's Messages API used
-by Claude Code into the Codex app-server JSON-RPC protocol. It keeps Codex
-threads alive while Claude Code executes dynamic tool calls, then sends Claude
-Code's `tool_result` blocks back to the pending app-server request.
+This local Rust service presents the subset of Anthropic's Messages API used by
+Claude Code and routes it to one of two agent backends:
+
+| `--backend-route MODEL=BACKEND` | Backend protocol | Tool runtime |
+| --- | --- | --- |
+| `codex-app-server` | Codex app-server JSON-RPC | Claude Code tools bridged through Codex |
+| `grok-acp` | Grok Build Agent Client Protocol (ACP) | Grok Build agent tools and permission requests |
+
+Both routes coexist in one daemon without starting either provider process.
+Each configured backend starts lazily on its first model request and remains
+available for reuse for the daemon's lifetime. A model switch or a Claude Code SubAgent request is routed from its Messages API
+`model` value, while models without a backend route retain the existing Claude
+subscription subprocess behavior.
+
+The Codex backend keeps threads alive while Claude Code executes dynamic tool
+calls, then sends Claude Code's `tool_result` blocks back to the pending
+app-server request. The Grok backend launches `grok --model MODEL agent stdio`,
+creates ACP sessions, streams agent message chunks, and selects `AllowOnce` when
+the agent requests permission for a tool. Grok Build therefore owns execution
+of its ACP tools; Claude Code remains the outer conversation UI.
 
 Streaming requests return their HTTP response immediately. Each Codex
 `item/agentMessage/delta` notification is converted to an Anthropic
@@ -11,33 +27,38 @@ Streaming requests return their HTTP response immediately. Each Codex
 Subscription subprocesses likewise use Claude Code's `stream-json` output and
 forward text deltas as they arrive.
 
-The adapter starts `codex app-server` with an isolated `CODEX_HOME`. Only Codex
-authentication is copied into that home; Claude Code remains responsible for
-tools, hooks, MCP servers, skills, approvals, and project instructions.
-`CLAUDEX_APP_SERVER_PROGRAM` and `CLAUDEX_CLAUDE_PROGRAM` are development-only
-executable overrides used by process integration tests.
+For `codex-app-server`, the adapter starts `codex app-server` with an isolated
+`CODEX_HOME`. Only Codex authentication is copied into that home; Claude Code
+remains responsible for tools, hooks, MCP servers, skills, approvals, and
+project instructions. `CLAUDEX_CODEX_PROGRAM`, `CLAUDEX_GROK_PROGRAM`, and
+`CLAUDEX_CLAUDE_PROGRAM` are development-only executable overrides used by
+process integration tests.
 
 Build and install with the current stable Rust toolchain:
 
 ```sh
 env -u RUSTUP_TOOLCHAIN cargo install \
-  --path tools/claudex-app-server-adapter \
+  --path tools/claudex-agent-adapter \
   --root "$HOME/.local" \
-  --bin claudex-app-server-adapter
+  --bin claudex-agent-adapter
 ```
 
 The public CLI uses explicit subcommands:
 
 ```text
-claudex-app-server-adapter launch --model MODEL [ADAPTER OPTIONS] -- [CLAUDE OPTIONS]
-claudex-app-server-adapter ensure --model MODEL [ADAPTER OPTIONS]
-claudex-app-server-adapter serve --model MODEL [ADAPTER OPTIONS]
-claudex-app-server-adapter build-id
+claudex-agent-adapter launch --model MODEL --backend-route MODEL=BACKEND [...] [ADAPTER OPTIONS] -- [CLAUDE OPTIONS]
+claudex-agent-adapter ensure --model MODEL --backend-route MODEL=BACKEND [...] [ADAPTER OPTIONS]
+claudex-agent-adapter serve --model MODEL --backend-route MODEL=BACKEND [...] [ADAPTER OPTIONS]
+claudex-agent-adapter build-id
 ```
 
-Adapter options are `--listen`, `--subscription-max-processes`, and
+Backend values are `codex-app-server` and `grok-acp`. `--backend-route` is
+repeatable, model keys must be unique, and the main `--model` must have a route.
+Omitting all routes preserves the single-model `codex-app-server` default.
+Other adapter options are `--listen`, `--subscription-max-processes`, and
 `--subscription-timeout-minutes`; their defaults are `127.0.0.1:8318`, 20, and
-120. The fish launcher translates optional `CLAUDEX_MODEL`,
+120. The fish launcher configures both routes and translates optional
+`CLAUDEX_MODEL`, `CLAUDEX_CODEX_MODEL`, `CLAUDEX_GROK_MODEL`,
 `CLAUDEX_ADAPTER_LISTEN`, `CLAUDEX_SUBSCRIPTION_MAX_PROCESSES`, and
 `CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES` values into these options. Adapter-private
 variables are removed before Claude Code starts.
@@ -46,8 +67,10 @@ variables are removed before Claude Code starts.
 secrets are exposed in process listings. API routes accept it as either a
 Bearer token or `x-api-key`; `/health` remains public. A non-loopback listener
 requires a non-default token. The main model is a required CLI option and is
-not hard-coded in Rust. Advisor and collaborator model IDs come from Claude
-Code settings.
+not hard-coded in Rust. The fish function currently defaults to `gpt-5.6-sol`
+for `codex-app-server` and the official Grok Build model ID `grok-4.5` for
+`grok-acp`; `CLAUDEX_MODEL` overrides either. Advisor and collaborator model IDs
+come from Claude Code settings.
 
 Each request selects effort independently. An explicit Anthropic
 `output_config.effort` wins; otherwise the adapter rereads Claude Code's
@@ -59,7 +82,10 @@ native Agent schema has no effort field; `mid` is normalized to `medium`, and
 the private field is removed before Claude Code executes the Agent. An
 unspecified Agent effort uses the current Claude Code setting instead. The same
 resolution applies to subscription subprocesses and same-model Codex
-app-server child turns, independently of the parent turn.
+app-server child turns, independently of the parent turn. For Grok ACP, low,
+medium, and high are sent through `session/set_model` metadata as
+`reasoningEffort`; xhigh is normalized to Grok's highest advertised level,
+high.
 
 Requests for the configured main model use the persistent Codex
 app-server. A Claude Code Agent that explicitly requests another model is sent
@@ -98,7 +124,8 @@ removes conflicting provider and adapter variables, launches Claude Code with
 untouched non-model arguments, suppresses only the adapter-specific advisor-rank
 warning, and returns Claude Code's exit status. Claude Code's
 `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` stays in fish because it is harness UI policy,
-not transport configuration. Health checks fail if the child app-server exits.
+not transport configuration. Health checks fail if the selected backend child
+exits.
 
 Set `RUST_LOG=debug` when protocol diagnostics are needed. Debug request logs
 include only sizes, tool counts, streaming mode, and effort configuration—not
@@ -114,13 +141,15 @@ env -u RUSTUP_TOOLCHAIN cargo coverage
 env -u RUSTUP_TOOLCHAIN cargo coverage-branch
 ```
 
-`cargo coverage` enforces at least 95% line coverage both across all `src`
-files and for every individual source file. Mock process fixtures live under
-`tests/fixtures` and are excluded as test infrastructure. `cargo
-coverage-branch` uses the nightly-only Rust branch instrumentation to enforce
-the same line gates and at least 95% aggregate branch coverage. Both coverage
-commands include the Cargo build script; its reusable logic is measured through
-`src/build_support.rs`.
+`cargo coverage` enforces at least 95% aggregate line, function, and region
+coverage, plus at least 95% line coverage for every production source file.
+`cargo coverage-branch` uses nightly-only Rust branch instrumentation and
+enforces at least 95% for all four aggregate metrics: lines, functions,
+regions, and branches. Mock process fixtures under `tests/fixtures` are the only
+test-infrastructure exclusion. The ACP client trait shim has a documented
+nightly LLVM mapping workaround in the source; its delegated application logic
+remains measured. Both coverage commands include the Cargo build script, whose
+reusable logic is measured through `src/build_support.rs`.
 The build also rejects Rust files over 500 lines; Clippy rejects functions over
 80 lines, cognitive complexity over 17, and block nesting deeper than four.
 Build-script logic lives in `src/build_support.rs`, is shared by `build.rs`, and

@@ -149,13 +149,13 @@ impl QueueState {
 }
 
 #[derive(Default)]
-pub(super) struct ThreadEventDispatcher {
+pub(crate) struct ThreadEventDispatcher {
     channels: Arc<Mutex<Registry>>,
     next_id: AtomicU64,
 }
 
 impl ThreadEventDispatcher {
-    pub(super) fn subscribe(&self, thread_id: &str) -> ThreadEvents {
+    pub(crate) fn subscribe(&self, thread_id: &str) -> ThreadEvents {
         let channel_id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let queue = Arc::new(EventQueue::default());
         self.channels
@@ -172,7 +172,7 @@ impl ThreadEventDispatcher {
         }
     }
 
-    pub(super) fn dispatch(&self, event: Value) {
+    pub(crate) fn dispatch(&self, event: Value) {
         let Some(thread_id) = event_thread_id(&event).map(str::to_owned) else {
             tracing::debug!(?event, "ignored app-server event without thread id");
             return;
@@ -193,7 +193,7 @@ impl ThreadEventDispatcher {
         last.push(event, &thread_id);
     }
 
-    pub(super) fn close(&self) {
+    pub(crate) fn close(&self) {
         let queues = self
             .channels
             .lock()

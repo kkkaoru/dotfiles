@@ -125,7 +125,7 @@ async fn ensure_running_replaces_a_protocol_stale_foreign_endpoint() {
 #[test]
 fn ensure_running_rejects_non_loopback_without_a_real_token() {
     let home = launcher_home();
-    let output = Command::new(env!("CARGO_BIN_EXE_claudex-app-server-adapter"))
+    let output = Command::new(env!("CARGO_BIN_EXE_claudex-agent-adapter"))
         .args(["ensure", "--model", "test-main-model"])
         .args(["--listen", "0.0.0.0:8318"])
         .env("HOME", home.path())
@@ -140,15 +140,12 @@ fn ensure_running_rejects_non_loopback_without_a_real_token() {
 async fn ensure_running_connects_through_loopback_for_an_exposed_listener() {
     let home = launcher_home();
     let port = unused_port();
-    let output = Command::new(env!("CARGO_BIN_EXE_claudex-app-server-adapter"))
+    let output = Command::new(env!("CARGO_BIN_EXE_claudex-agent-adapter"))
         .args(["ensure", "--model", "test-main-model"])
         .args(["--listen", &format!("0.0.0.0:{port}")])
         .env("HOME", home.path())
         .env("ANTHROPIC_AUTH_TOKEN", "real-token")
-        .env(
-            "CLAUDEX_APP_SERVER_PROGRAM",
-            env!("CARGO_BIN_EXE_codex-mock"),
-        )
+        .env("CLAUDEX_CODEX_PROGRAM", env!("CARGO_BIN_EXE_codex-mock"))
         .output()
         .expect("run exposed adapter");
     assert!(output.status.success());
@@ -165,7 +162,7 @@ async fn ensure_running_connects_through_loopback_for_an_exposed_listener() {
 
 #[test]
 fn ensure_running_reports_missing_or_invalid_environment() {
-    let binary = env!("CARGO_BIN_EXE_claudex-app-server-adapter");
+    let binary = env!("CARGO_BIN_EXE_claudex-agent-adapter");
     let missing_model = Command::new(binary)
         .arg("ensure")
         .output()
@@ -285,14 +282,11 @@ fn ensure_command(home: &TempDir, port: u16, max_processes: &str) -> Command {
 }
 
 fn common_command(home: &TempDir, _port: u16, _max_processes: &str) -> Command {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_claudex-app-server-adapter"));
+    let mut command = Command::new(env!("CARGO_BIN_EXE_claudex-agent-adapter"));
     command
         .env("HOME", home.path())
         .env("ANTHROPIC_AUTH_TOKEN", "claudex-local")
-        .env(
-            "CLAUDEX_APP_SERVER_PROGRAM",
-            env!("CARGO_BIN_EXE_codex-mock"),
-        );
+        .env("CLAUDEX_CODEX_PROGRAM", env!("CARGO_BIN_EXE_codex-mock"));
     command
 }
 

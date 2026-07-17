@@ -4,8 +4,8 @@ use anyhow::{Context, Result, bail};
 use tracing_subscriber::EnvFilter;
 
 use crate::{
+    agent_backend::{AgentBackend, BackendKind, BackendRoute},
     anthropic::{Bridge, DEFAULT_MAX_PROCESSES, DEFAULT_TIMEOUT_MINUTES},
-    app_server::AppServer,
     http_router,
     launcher::{self, AdapterOptions},
 };
@@ -66,6 +66,7 @@ fn parse_command(mut arguments: VecDeque<OsString>) -> Result<RuntimeCommand> {
 }
 
 fn parse_options(arguments: &mut VecDeque<OsString>) -> Result<AdapterOptions> {
+    let mut routes = Vec::new();
     let mut model = None;
     let mut listen = "127.0.0.1:8318".parse().expect("default listener");
     let mut max_processes = DEFAULT_MAX_PROCESSES;
@@ -76,6 +77,9 @@ fn parse_options(arguments: &mut VecDeque<OsString>) -> Result<AdapterOptions> {
         .map(str::to_owned)
     {
         match option.as_str() {
+            "--backend-route" => {
+                routes.push(option_value(arguments, "--backend-route")?.parse()?);
+            }
             "--model" => model = Some(option_value(arguments, "--model")?),
             "--listen" => {
                 listen = option_value(arguments, "--listen")?
@@ -99,12 +103,35 @@ fn parse_options(arguments: &mut VecDeque<OsString>) -> Result<AdapterOptions> {
         bail!("adapter options must be valid UTF-8");
     }
     validate_limits(max_processes, timeout_minutes)?;
+    let model = model.context("--model is required")?;
+    if routes.is_empty() {
+        routes.push(BackendRoute {
+            model: model.clone(),
+            backend: BackendKind::CodexAppServer,
+        });
+    }
+    validate_routes(&routes, &model)?;
     Ok(AdapterOptions {
-        model: model.context("--model is required")?,
+        routes,
+        model,
         listen,
         subscription_max_processes: max_processes,
         subscription_timeout_minutes: timeout_minutes,
     })
+}
+
+fn validate_routes(routes: &[BackendRoute], model: &str) -> Result<()> {
+    let unique = routes
+        .iter()
+        .map(|route| route.model.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    if unique.len() != routes.len() {
+        bail!("--backend-route models must be unique");
+    }
+    if !unique.contains(model) {
+        bail!("the main --model must have a --backend-route");
+    }
+    Ok(())
 }
 
 fn validate_limits(max_processes: usize, timeout_minutes: u64) -> Result<()> {
@@ -171,24 +198,24 @@ pub async fn serve(options: AdapterOptions) -> Result<()> {
     if !options.listen.ip().is_loopback() & auth_token.is_none() {
         bail!("ANTHROPIC_AUTH_TOKEN is required for a non-loopback listener");
     }
-    let app_server = AppServer::spawn(&options.model).await?;
+    let backend = AgentBackend::spawn_routes(&options.routes);
     let listener = tokio::net::TcpListener::bind(options.listen).await?;
-    serve_on_listener(options, auth_token, app_server, listener).await
+    serve_on_listener(options, auth_token, backend, listener).await
 }
 
 async fn serve_on_listener(
     options: AdapterOptions,
     auth_token: Option<String>,
-    app_server: Arc<AppServer>,
+    backend: Arc<AgentBackend>,
     listener: tokio::net::TcpListener,
 ) -> Result<()> {
-    let bridge = Arc::new(Bridge::new_with_limits(
-        app_server,
+    let bridge = Arc::new(Bridge::new_with_backend_limits(
+        backend,
         options.model.clone(),
         options.subscription_max_processes,
         options.subscription_timeout_minutes,
     )?);
-    tracing::info!(listen = %options.listen, model = %options.model, "claudex app-server adapter is ready");
+    tracing::info!(listen = %options.listen, routes = ?options.routes, model = %options.model, "claudex agent adapter is ready");
     axum::serve(listener, http_router(bridge, options.model, auth_token))
         .await
         .map_err(Into::into)
@@ -210,6 +237,7 @@ mod tests {
     use reqwest::Client;
 
     use super::*;
+    use crate::app_server::AppServer;
 
     #[test]
     fn parses_token_helpers() {
@@ -229,6 +257,26 @@ mod tests {
             (vec!["ensure", "--model", "m", "--"], "unexpected arguments"),
             (vec!["launch", "--model", "m"], "requires `--`"),
             (vec!["serve", "--unknown"], "unknown adapter option"),
+            (
+                vec!["serve", "--model", "m", "--backend-route", "invalid"],
+                "MODEL=BACKEND",
+            ),
+            (
+                vec![
+                    "serve",
+                    "--model",
+                    "m",
+                    "--backend-route",
+                    "m=grok-acp",
+                    "--backend-route",
+                    "m=codex-app-server",
+                ],
+                "must be unique",
+            ),
+            (
+                vec!["serve", "--model", "m", "--backend-route", "other=grok-acp"],
+                "main --model",
+            ),
             (
                 vec!["serve", "--model", "m", "--subscription-max-processes", "0"],
                 "positive integer",
@@ -295,12 +343,17 @@ mod tests {
             .expect("listener");
         let listen = listener.local_addr().expect("listener address");
         let options = AdapterOptions {
+            routes: vec![BackendRoute {
+                model: "model".to_owned(),
+                backend: BackendKind::CodexAppServer,
+            }],
             model: "model".to_owned(),
             listen,
             subscription_max_processes: 2,
             subscription_timeout_minutes: 3,
         };
-        let server = tokio::spawn(serve_on_listener(options, None, app_server, listener));
+        let backend = AgentBackend::codex(app_server);
+        let server = tokio::spawn(serve_on_listener(options, None, backend, listener));
         let health = Client::new()
             .get(format!("http://{listen}/health"))
             .send()
@@ -329,16 +382,33 @@ mod tests {
             .await
             .expect("listener");
         let options = AdapterOptions {
+            routes: vec![BackendRoute {
+                model: "model".to_owned(),
+                backend: BackendKind::CodexAppServer,
+            }],
             model: "model".to_owned(),
             listen: listener.local_addr().expect("listener address"),
             subscription_max_processes: 0,
             subscription_timeout_minutes: 1,
         };
         assert!(
-            serve_on_listener(options, None, app_server, listener)
+            serve_on_listener(options, None, AgentBackend::codex(app_server), listener)
                 .await
                 .is_err()
         );
+
+        let occupied = std::net::TcpListener::bind("127.0.0.1:0").expect("occupied listener");
+        let options = AdapterOptions {
+            routes: vec![BackendRoute {
+                model: "model".to_owned(),
+                backend: BackendKind::CodexAppServer,
+            }],
+            model: "model".to_owned(),
+            listen: occupied.local_addr().expect("occupied address"),
+            subscription_max_processes: 1,
+            subscription_timeout_minutes: 1,
+        };
+        assert!(serve(options).await.is_err());
     }
 
     fn script(root: &std::path::Path, name: &str, body: &str) -> PathBuf {

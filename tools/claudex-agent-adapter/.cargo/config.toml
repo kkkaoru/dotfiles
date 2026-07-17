@@ -2,5 +2,5 @@
 fmt-check = "fmt --all -- --check"
 test-all = "test --all-targets"
 lint = "clippy --all-targets --all-features -- -D warnings -D clippy::excessive_nesting -D clippy::cognitive_complexity"
-coverage = "llvm-cov --all-targets --include-build-script --ignore-filename-regex tests/fixtures/ --fail-under-lines 95 --fail-under-file-lines 95"
+coverage = "llvm-cov --all-targets --include-build-script --ignore-filename-regex tests/fixtures/ --fail-under-lines 95 --fail-under-functions 95 --fail-under-regions 95 --fail-under-file-lines 95"
 coverage-branch = "run --bin coverage-branch"

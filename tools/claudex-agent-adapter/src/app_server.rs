@@ -18,7 +18,7 @@ use tokio::{
     sync::{Mutex, oneshot},
 };
 
-mod events;
+pub(crate) mod events;
 use events::ThreadEventDispatcher;
 pub use events::ThreadEvents;
 
@@ -47,8 +47,7 @@ impl AppServer {
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(&home).join(".codex"));
         let isolated_home = PathBuf::from(home).join(".cache/claudex/codex-home");
-        let program =
-            std::env::var_os("CLAUDEX_APP_SERVER_PROGRAM").unwrap_or_else(|| "codex".into());
+        let program = std::env::var_os("CLAUDEX_CODEX_PROGRAM").unwrap_or_else(|| "codex".into());
         Self::spawn_with_program(model, program, &source_home, &isolated_home).await
     }
 

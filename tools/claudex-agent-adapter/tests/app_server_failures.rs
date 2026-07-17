@@ -1,6 +1,6 @@
 use std::{os::unix::fs::PermissionsExt, path::PathBuf, time::Duration};
 
-use claudex_app_server_adapter::app_server::AppServer;
+use claudex_agent_adapter::app_server::AppServer;
 use serde_json::json;
 
 struct Fixture {

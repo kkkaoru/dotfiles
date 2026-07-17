@@ -38,6 +38,7 @@ impl Bridge {
             advisor_model.as_deref(),
             collaborator_model.as_deref(),
         )?;
+        let signature = format!("{}\0{signature}", self.request_model(request));
         let tool_results = request
             .messages
             .last()
@@ -95,11 +96,7 @@ impl Bridge {
             self.remove_session(&selected.session).await;
             return Err(error);
         }
-        let response_model = if request.model.is_empty() {
-            self.model.clone()
-        } else {
-            request.model.clone()
-        };
+        let response_model = self.request_model(request);
         Ok(ActiveTurn {
             session: selected.session,
             events,
@@ -126,7 +123,7 @@ impl Bridge {
         let mut params = json!({
             "threadId": session.thread_id,
             "input": input,
-            "model": self.model
+            "model": self.request_model(request)
         });
         if let Some(effort) = effort {
             params["effort"] = json!(effort);
@@ -258,7 +255,7 @@ impl Bridge {
         let slot = self.acquire_session_slot().await?;
         let (dynamic_tools, external_tool_names, internal_tools) =
             tool_configuration(request, advisor_model, collaborator_model);
-        let params = thread_start_params(request, &self.model, dynamic_tools);
+        let params = thread_start_params(request, &self.request_model(request), dynamic_tools);
         let result = self.app.request("thread/start", params).await?;
         let session = Arc::new(Session {
             thread_id: response_thread_id(&result)?,

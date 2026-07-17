@@ -1,11 +1,7 @@
 mod support;
 
-use std::{
-    fs,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
-use claudex_app_server_adapter::app_server::AppServer;
 use reqwest::Client;
 use serde_json::{Value, json};
 use support::{Adapter, base_request, post_json};
@@ -493,23 +489,4 @@ async fn routes_non_main_models_to_subscription_with_requested_effort() {
         .expect("read failing subscription stream");
     assert!(failure.contains("event: error"));
     assert!(failure.contains("forced subscription failure"));
-}
-
-#[tokio::test]
-async fn reports_app_server_exit_to_pending_request() {
-    let home = tempfile::tempdir().expect("create temporary home");
-    fs::create_dir(home.path().join("source")).unwrap();
-    fs::write(home.path().join("source/auth.json"), "{}").unwrap();
-    let app = AppServer::spawn_with_program(
-        "test-main-model",
-        env!("CARGO_BIN_EXE_codex-mock"),
-        &home.path().join("source"),
-        &home.path().join("isolated"),
-    )
-    .await
-    .unwrap();
-    let error = app.request("force/exit", json!({})).await.unwrap_err();
-    assert!(error.to_string().contains("app-server exited"));
-    assert!(!app.is_alive());
-    assert!(app.request("after/exit", json!({})).await.is_err());
 }

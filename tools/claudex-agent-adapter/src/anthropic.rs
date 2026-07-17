@@ -21,7 +21,10 @@ use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
 
-use crate::app_server::{AppServer, ThreadEvents};
+use crate::{
+    agent_backend::AgentBackend,
+    app_server::{AppServer, ThreadEvents},
+};
 
 pub use content::{error_response, token_count};
 pub(crate) use subscription::{DEFAULT_MAX_PROCESSES, DEFAULT_TIMEOUT_MINUTES};
@@ -50,7 +53,7 @@ pub struct MessagesRequest {
 }
 
 pub struct Bridge {
-    app: Arc<AppServer>,
+    app: Arc<AgentBackend>,
     model: String,
     advisor_model_override: Option<String>,
     collaborator_model_override: Option<String>,
@@ -119,12 +122,40 @@ impl Bridge {
         self.subscription_timeout.as_secs() / 60
     }
 
+    pub fn backend_routes(&self) -> Vec<String> {
+        self.app.route_descriptions()
+    }
+
+    pub fn routed_models(&self) -> Vec<String> {
+        let models = self.app.models();
+        if models.is_empty() {
+            vec![self.model.clone()]
+        } else {
+            models
+        }
+    }
+
+    pub fn started_models(&self) -> Vec<String> {
+        self.app.started_models()
+    }
+
     pub fn new(app: Arc<AppServer>, model: String) -> Self {
         Self::new_with_subscription_program(app, model, "claude")
     }
 
-    pub(crate) fn new_with_limits(
-        app: Arc<AppServer>,
+    pub fn new_with_backend(app: Arc<AgentBackend>, model: String) -> Self {
+        Self::build(
+            app,
+            model,
+            "claude".into(),
+            None,
+            None,
+            subscription::subscription_limits(),
+        )
+    }
+
+    pub(crate) fn new_with_backend_limits(
+        app: Arc<AgentBackend>,
         model: String,
         max_processes: usize,
         timeout_minutes: u64,
@@ -156,7 +187,7 @@ impl Bridge {
     ) -> Self {
         let subscription_limits = subscription::subscription_limits();
         Self::build(
-            app,
+            AgentBackend::codex(app),
             model,
             subscription_program.into(),
             advisor_model_override,
@@ -166,7 +197,7 @@ impl Bridge {
     }
 
     fn build(
-        app: Arc<AppServer>,
+        app: Arc<AgentBackend>,
         model: String,
         subscription_program: PathBuf,
         advisor_model_override: Option<String>,
@@ -201,7 +232,10 @@ impl Bridge {
     pub async fn messages(self: &Arc<Self>, request: MessagesRequest) -> Result<Response<Body>> {
         trace_request(&request);
         let effort = self.resolve_request_effort(&request);
-        if !request.model.is_empty() && request.model != self.model {
+        if !request.model.is_empty()
+            && request.model != self.model
+            && !self.app.supports_model(&request.model)
+        {
             return self.subscription_messages(request, effort).await;
         }
 
@@ -212,22 +246,24 @@ impl Bridge {
         }
         self.non_streaming_response(turn).await
     }
+
+    fn request_model(&self, request: &MessagesRequest) -> String {
+        if request.model.is_empty() {
+            self.model.clone()
+        } else {
+            request.model.clone()
+        }
+    }
 }
 
 fn trace_request(request: &MessagesRequest) {
-    if !tracing::enabled!(tracing::Level::DEBUG) {
-        return;
-    }
-    let system_bytes = serialized_len(&request.system);
-    let message_bytes = serialized_len(&request.messages);
-    let tool_bytes = serialized_len(&request.tools);
     tracing::debug!(
         request_model = %request.model,
         stream = request.stream,
-        system_bytes,
-        message_bytes,
+        system_bytes = serialized_len(&request.system),
+        message_bytes = serialized_len(&request.messages),
         tool_count = request.tools.len(),
-        tool_bytes,
+        tool_bytes = serialized_len(&request.tools),
         output_config = %request.output_config,
         "received Claude Code Messages request"
     );

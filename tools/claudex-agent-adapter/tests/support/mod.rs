@@ -1,6 +1,6 @@
 use std::{fs, sync::Arc, time::Duration};
 
-use claudex_app_server_adapter::{anthropic::Bridge, app_server::AppServer, http_router};
+use claudex_agent_adapter::{anthropic::Bridge, app_server::AppServer, http_router};
 use reqwest::Client;
 use serde_json::{Value, json};
 use tempfile::TempDir;

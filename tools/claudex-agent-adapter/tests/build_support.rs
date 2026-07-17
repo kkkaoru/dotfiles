@@ -1,6 +1,15 @@
 use std::fs;
 
-use claudex_app_server_adapter::build_support;
+use claudex_agent_adapter::build_support;
+
+#[test]
+fn repository_rust_files_stay_within_the_line_limit() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut files = vec![root.join("build.rs")];
+    build_support::collect_rust_files(&root.join("src"), &mut files);
+    build_support::collect_rust_files(&root.join("tests"), &mut files);
+    build_support::calculate_build_id(&files).expect("audit repository Rust files");
+}
 
 #[test]
 fn discovers_sorted_inputs_and_hashes_content_deterministically() {
