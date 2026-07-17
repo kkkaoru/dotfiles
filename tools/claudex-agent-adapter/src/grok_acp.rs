@@ -19,6 +19,9 @@ use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use crate::app_server::{ThreadEvents, events::ThreadEventDispatcher};
 
+mod plugin;
+mod updates;
+
 enum DriverCommand {
     CreateSession {
         params: Value,
@@ -137,7 +140,12 @@ impl acp::Client for AcpClient {
         &self,
         notification: acp::SessionNotification,
     ) -> acp::Result<()> {
-        dispatch_notification(&self.events, notification);
+        updates::dispatch_notification(&self.events, notification);
+        Ok(())
+    }
+
+    async fn ext_notification(&self, notification: acp::ExtNotification) -> acp::Result<()> {
+        updates::dispatch_extension(&self.events, notification);
         Ok(())
     }
 }
@@ -154,18 +162,6 @@ fn permission_response(request: &acp::RequestPermissionRequest) -> acp::RequestP
             ))
         });
     acp::RequestPermissionResponse::new(outcome)
-}
-
-fn dispatch_notification(events: &ThreadEventDispatcher, notification: acp::SessionNotification) {
-    if let acp::SessionUpdate::AgentMessageChunk(chunk) = notification.update
-        && let acp::ContentBlock::Text(text) = chunk.content
-        && !text.text.is_empty()
-    {
-        events.dispatch(json!({
-            "method":"item/agentMessage/delta",
-            "params":{"threadId":notification.session_id.0,"delta":text.text}
-        }));
-    }
 }
 
 async fn run_driver(
@@ -204,8 +200,14 @@ async fn start_connection(
     cwd: &Path,
     events: Arc<ThreadEventDispatcher>,
 ) -> Result<(acp::ClientSideConnection, tokio::process::Child)> {
-    let mut child = Command::new(program)
-        .args(["--model", model, "agent", "stdio"])
+    let plugin_dir = plugin::prepare(program)?;
+    let mut command = Command::new(program);
+    command.args(["--model", model, "agent"]);
+    if let Some(path) = plugin_dir {
+        command.arg("--plugin-dir").arg(path);
+    }
+    let mut child = command
+        .arg("stdio")
         .current_dir(cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -415,10 +417,14 @@ fn provider_instructions(params: &Value) -> String {
         .get("developerInstructions")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    base.strip_suffix(adapter)
+    let base = base
+        .strip_suffix(adapter)
         .unwrap_or(base)
-        .trim_end_matches(['\n', ' '])
-        .to_owned()
+        .trim_end_matches(['\n', ' ']);
+    if base.is_empty() {
+        return plugin::ROUTING_INSTRUCTIONS.to_owned();
+    }
+    format!("{base}\n\n{}", plugin::ROUTING_INSTRUCTIONS)
 }
 
 fn input_text(input: &Value) -> String {

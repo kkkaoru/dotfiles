@@ -91,12 +91,16 @@ fn assert_trace(trace: &[Value]) {
         |event| event.pointer("/permission_response/outcome/optionId")
             == Some(&json!("allow-once"))
     ));
-    assert!(
-        trace
-            .iter()
-            .any(|event| event.pointer("/prompt/prompt/0/text")
-                == Some(&json!("project policy\n\nuser prompt")))
-    );
+    let prompt = trace
+        .iter()
+        .find_map(|event| {
+            event
+                .pointer("/prompt/prompt/0/text")
+                .and_then(Value::as_str)
+        })
+        .expect("prompt trace");
+    assert!(prompt.starts_with("project policy\n\nGrok SubAgent effort routing:"));
+    assert!(prompt.ends_with("\n\nuser prompt"));
 }
 
 #[tokio::test]

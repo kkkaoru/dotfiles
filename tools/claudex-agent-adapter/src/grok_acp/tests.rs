@@ -3,7 +3,7 @@ use std::sync::Arc;
 use agent_client_protocol::{self as acp, Client as _};
 use serde_json::json;
 
-use super::{AcpClient, dispatch_notification, grok_effort, input_text, provider_instructions};
+use super::{AcpClient, grok_effort, input_text, provider_instructions, updates};
 use crate::app_server::events::ThreadEventDispatcher;
 
 #[test]
@@ -27,8 +27,9 @@ fn removes_codex_only_bridge_instructions() {
         "baseInstructions":"project rules\n\nbackend-only",
         "developerInstructions":"backend-only"
     });
-    assert_eq!(provider_instructions(&params), "project rules");
-    assert_eq!(provider_instructions(&json!({})), "");
+    assert!(provider_instructions(&params).starts_with("project rules\n\n"));
+    assert!(provider_instructions(&params).contains("claudex-medium"));
+    assert!(provider_instructions(&json!({})).contains("claudex-xhigh"));
 }
 
 #[tokio::test]
@@ -79,9 +80,9 @@ async fn ignores_non_agent_non_text_and_empty_notification_chunks() {
             acp::TextContent::new(""),
         ))),
     ] {
-        dispatch_notification(&events, acp::SessionNotification::new("session", update));
+        updates::dispatch_notification(&events, acp::SessionNotification::new("session", update));
     }
-    dispatch_notification(
+    updates::dispatch_notification(
         &events,
         acp::SessionNotification::new(
             "session",

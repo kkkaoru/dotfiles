@@ -1,26 +1,36 @@
-use std::{convert::Infallible, ops::ControlFlow, sync::Arc};
+use std::{ops::ControlFlow, sync::Arc};
 
 use anyhow::{Context, Result, bail};
 use axum::{
     body::{Body, Bytes},
-    http::{Response, StatusCode, header},
+    http::Response,
 };
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
-use tokio_stream::wrappers::ReceiverStream;
 use uuid::Uuid;
 
 use super::{
     ActiveTurn, Bridge, Segment, Session, Usage,
-    content::{anthropic_response, estimated_block_tokens, sse},
+    content::{anthropic_response, estimated_block_tokens, estimated_tokens},
     retention::record_pending_tool,
     stream_batch::{NextEvent, next_event},
     subscription::{SubscriptionOptions, run_subscription_model, subscription_prompt},
 };
-type StreamSender = mpsc::Sender<Result<Bytes, Infallible>>;
+
+mod protocol;
+mod thinking;
+
+#[cfg(test)]
+pub(super) use protocol::tool_use_frames;
+use protocol::{
+    StreamSender, send_stream_completion, send_stream_error, send_tool_use, sse_response,
+};
+pub(super) use protocol::{message_start, send_stream_frame};
+use thinking::ThinkingState;
 
 struct SegmentBuilder {
     blocks: Vec<Value>,
+    thinking: ThinkingState,
     open_text_block: Option<(usize, String)>,
     external_tool_calls: usize,
     usage: Usage,
@@ -159,6 +169,7 @@ impl SegmentBuilder {
     fn new(input_tokens: u64) -> Self {
         Self {
             blocks: Vec::new(),
+            thinking: ThinkingState::default(),
             open_text_block: None,
             external_tool_calls: 0,
             usage: Usage {
@@ -176,8 +187,10 @@ impl SegmentBuilder {
         event: &Value,
         stream: Option<&StreamSender>,
     ) -> Result<ControlFlow<()>> {
+        if self.model_output_event(event, stream).await? {
+            return Ok(ControlFlow::Continue(()));
+        }
         match event.get("method").and_then(Value::as_str) {
-            Some("item/agentMessage/delta") => self.text_delta(event, stream).await?,
             Some("item/tool/call") => {
                 self.tool_call(bridge, session, current_messages, event, stream)
                     .await?;
@@ -190,6 +203,22 @@ impl SegmentBuilder {
         Ok(ControlFlow::Continue(()))
     }
 
+    async fn model_output_event(
+        &mut self,
+        event: &Value,
+        stream: Option<&StreamSender>,
+    ) -> Result<bool> {
+        match event.get("method").and_then(Value::as_str) {
+            Some("item/agentMessage/delta") => self.text_delta(event, stream).await?,
+            Some("item/reasoning/summaryTextDelta") => {
+                self.thinking.delta(event, &mut self.blocks, stream).await?;
+            }
+            Some("item/reasoning/textDelta") => {}
+            _ => return Ok(false),
+        }
+        Ok(true)
+    }
+
     async fn text_delta(&mut self, event: &Value, stream: Option<&StreamSender>) -> Result<()> {
         let Some(delta) = event.pointer("/params/delta").and_then(Value::as_str) else {
             return Ok(());
@@ -197,6 +226,7 @@ impl SegmentBuilder {
         if delta.is_empty() {
             return Ok(());
         }
+        self.thinking.close(&mut self.blocks, stream).await?;
         let index = match &mut self.open_text_block {
             Some((index, text)) => {
                 text.push_str(delta);
@@ -286,7 +316,7 @@ impl SegmentBuilder {
             std::time::Instant::now(),
         )
         .await;
-        self.close_text_block(stream).await?;
+        self.close_open_blocks(stream).await?;
         let block = json!({
             "type": "tool_use",
             "id": tool_use_id,
@@ -314,21 +344,42 @@ impl SegmentBuilder {
         .await
     }
 
+    async fn close_open_blocks(&mut self, stream: Option<&StreamSender>) -> Result<()> {
+        self.thinking.close(&mut self.blocks, stream).await?;
+        self.close_text_block(stream).await
+    }
+
     fn update_usage(&mut self, event: &Value) {
         self.usage.input_tokens = event
             .pointer("/params/tokenUsage/last/inputTokens")
             .and_then(Value::as_u64)
             .unwrap_or(self.usage.input_tokens);
-        self.usage.output_tokens = event
+        if let Some(output_tokens) = event
             .pointer("/params/tokenUsage/last/outputTokens")
             .and_then(Value::as_u64)
-            .unwrap_or(self.usage.output_tokens);
+        {
+            let reasoning_tokens = event
+                .pointer("/params/tokenUsage/last/reasoningOutputTokens")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            self.usage.output_tokens = output_tokens.saturating_add(reasoning_tokens);
+        }
     }
 
     async fn finish(mut self, stream: Option<&StreamSender>) -> Result<Segment> {
-        self.close_text_block(stream).await?;
+        self.close_open_blocks(stream).await?;
         if self.usage.output_tokens == 0 {
-            self.usage.output_tokens = self.blocks.iter().map(estimated_block_tokens).sum();
+            self.usage.output_tokens = self
+                .blocks
+                .iter()
+                .map(|block| {
+                    let thinking = block
+                        .get("thinking")
+                        .and_then(Value::as_str)
+                        .map_or(0, estimated_tokens);
+                    estimated_block_tokens(block).saturating_add(thinking)
+                })
+                .sum();
         }
         let stop_reason = if self.blocks.iter().any(|block| block["type"] == "tool_use") {
             "tool_use"
@@ -392,106 +443,6 @@ async fn commit_transcript(session: &Session, extras: Vec<Value>, segment: &Segm
     let mut transcript = session.transcript.lock().await;
     transcript.extend(extras);
     transcript.push(json!({"role":"assistant","content":segment.blocks}));
-}
-
-pub(super) fn message_start(model: &str, input_tokens: u64) -> String {
-    sse(
-        "message_start",
-        json!({
-            "type":"message_start",
-            "message": {
-                "id":format!("msg_{}", Uuid::new_v4().simple()),
-                "type":"message", "role":"assistant", "model":model,
-                "content":[], "stop_reason":null, "stop_sequence":null,
-                "usage":{"input_tokens":input_tokens,"output_tokens":0}
-            }
-        }),
-    )
-}
-
-fn sse_response(receiver: mpsc::Receiver<Result<Bytes, Infallible>>) -> Response<Body> {
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "text/event-stream")
-        .header(header::CACHE_CONTROL, "no-cache")
-        .header("x-accel-buffering", "no")
-        .body(Body::from_stream(ReceiverStream::new(receiver)))
-        .expect("valid streaming response")
-}
-
-async fn send_stream_completion(sender: &StreamSender, segment: &Segment) {
-    let _ = send_stream_frame(
-        Some(sender),
-        "message_delta",
-        json!({
-            "type":"message_delta",
-            "delta":{"stop_reason":segment.stop_reason,"stop_sequence":null},
-            "usage":{"output_tokens":segment.usage.output_tokens}
-        }),
-    )
-    .await;
-    let _ = send_stream_frame(Some(sender), "message_stop", json!({"type":"message_stop"})).await;
-}
-
-async fn send_stream_error(sender: &StreamSender, error: anyhow::Error) {
-    let _ = send_stream_frame(
-        Some(sender),
-        "error",
-        json!({
-            "type":"error",
-            "error":{"type":"api_error","message":format!("{error:#}")}
-        }),
-    )
-    .await;
-}
-
-pub(super) async fn send_stream_frame(
-    stream: Option<&StreamSender>,
-    event: &str,
-    value: Value,
-) -> Result<()> {
-    if let Some(sender) = stream
-        && sender
-            .send(Ok(Bytes::from(sse(event, value))))
-            .await
-            .is_err()
-    {
-        tracing::debug!(event, "Claude Code closed the streaming response");
-    }
-    Ok(())
-}
-
-async fn send_tool_use(stream: Option<&StreamSender>, index: usize, block: &Value) -> Result<()> {
-    for (event, frame) in tool_use_frames(index, block) {
-        send_stream_frame(stream, event, frame).await?;
-    }
-    Ok(())
-}
-
-pub(super) fn tool_use_frames(index: usize, block: &Value) -> [(&'static str, Value); 3] {
-    [
-        (
-            "content_block_start",
-            json!({
-                "type":"content_block_start", "index":index,
-                "content_block":{"type":"tool_use","id":block["id"],"name":block["name"],"input":{}}
-            }),
-        ),
-        (
-            "content_block_delta",
-            json!({
-                "type":"content_block_delta", "index":index,
-                "delta":{
-                    "type":"input_json_delta",
-                    "partial_json":block["input"].to_string()
-                }
-            }),
-        ),
-        (
-            "content_block_stop",
-            json!({"type":"content_block_stop","index":index}),
-        ),
-    ]
 }
 
 #[cfg(test)]
