@@ -3,12 +3,10 @@ use std::fs;
 use claudex_agent_adapter::build_support;
 
 #[test]
-fn repository_rust_files_stay_within_the_line_limit() {
+fn repository_production_files_stay_within_the_line_limit() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
-    let mut files = vec![root.join("build.rs")];
-    build_support::collect_rust_files(&root.join("src"), &mut files);
-    build_support::collect_rust_files(&root.join("tests"), &mut files);
-    build_support::calculate_build_id(&files).expect("audit repository Rust files");
+    let files = build_support::build_inputs(root);
+    build_support::calculate_build_id(&files).expect("audit production files");
 }
 
 #[test]
@@ -48,12 +46,13 @@ fn includes_only_rust_files_from_source_trees() {
             .iter()
             .any(|path| path.ends_with("tests/ignored.txt"))
     );
-    build_support::calculate_build_id(&inputs).expect("audit all Rust files");
+    inputs.retain(|path| !build_support::is_test_source(path));
+    build_support::calculate_build_id(&inputs).expect("audit production Rust files");
     build_support::emit_build_metadata(root.path());
 }
 
 #[test]
-#[should_panic(expected = "Rust files are limited to 500")]
+#[should_panic(expected = "production Rust files are limited to 500")]
 fn rejects_a_rust_file_over_the_line_limit() {
     let contents = "line\n".repeat(build_support::MAX_RUST_FILE_LINES + 1);
     build_support::enforce_line_limit(std::path::Path::new("large.rs"), contents.as_bytes());
@@ -65,6 +64,25 @@ fn accepts_limit_and_non_newline_terminated_files() {
     build_support::enforce_line_limit(std::path::Path::new("exact.rs"), exact.as_bytes());
     build_support::enforce_line_limit(std::path::Path::new("single.rs"), b"line");
     build_support::enforce_line_limit(std::path::Path::new("empty.rs"), b"");
+}
+
+#[test]
+fn excludes_only_dedicated_test_sources_from_production_inputs() {
+    let root = fixture();
+    let inputs = build_support::build_inputs(root.path());
+    for test_file in [
+        "src/tests.rs",
+        "src/nested/helper_tests.rs",
+        "src/nested/tests/helper.rs",
+    ] {
+        assert!(!inputs.iter().any(|path| path.ends_with(test_file)));
+    }
+    assert!(
+        inputs
+            .iter()
+            .any(|path| path.ends_with("src/test_support.rs"))
+    );
+    build_support::calculate_build_id(&inputs).expect("large test-only files are excluded");
 }
 
 #[test]
@@ -97,12 +115,23 @@ fn fixture() -> tempfile::TempDir {
         fs::write(root.path().join(file), file).expect("write root fixture");
     }
     fs::create_dir_all(root.path().join("src/nested")).expect("create source fixture");
+    fs::create_dir(root.path().join("src/nested/tests")).expect("create unit test fixture");
     fs::create_dir(root.path().join("tests")).expect("create tests fixture");
     fs::write(
         root.path().join("src/nested/module.rs"),
         "fn fixture() {}\n",
     )
     .expect("write source fixture");
+    fs::write(root.path().join("src/test_support.rs"), "fn support() {}\n")
+        .expect("write production lookalike");
+    let large_test = "test line\n".repeat(build_support::MAX_RUST_FILE_LINES + 1);
+    for file in [
+        root.path().join("src/tests.rs"),
+        root.path().join("src/nested/helper_tests.rs"),
+        root.path().join("src/nested/tests/helper.rs"),
+    ] {
+        fs::write(file, &large_test).expect("write excluded unit test source");
+    }
     fs::write(
         root.path().join("tests/check.rs"),
         "#[test] fn check() {}\n",

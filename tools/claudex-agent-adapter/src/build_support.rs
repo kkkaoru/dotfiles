@@ -8,6 +8,7 @@ pub const MAX_RUST_FILE_LINES: usize = 500;
 
 pub fn emit_build_metadata(root: &Path) {
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=src");
     let files = build_inputs(root);
     for file in &files {
         println!(
@@ -30,10 +31,13 @@ pub fn build_inputs(root: &Path) -> Vec<PathBuf> {
     files
 }
 
-fn is_test_source(path: &Path) -> bool {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name == "tests.rs" || name.ends_with("_tests.rs"))
+pub fn is_test_source(path: &Path) -> bool {
+    path.components()
+        .any(|component| component.as_os_str() == "tests")
+        || path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name == "tests.rs" || name.ends_with("_tests.rs"))
 }
 
 pub fn calculate_build_id(files: &[PathBuf]) -> std::io::Result<u64> {
@@ -69,7 +73,7 @@ pub fn enforce_line_limit(path: &Path, contents: &[u8]) {
         + usize::from(contents.last().is_some_and(|byte| *byte != b'\n'));
     assert!(
         line_count <= MAX_RUST_FILE_LINES,
-        "{} has {line_count} lines; Rust files are limited to {MAX_RUST_FILE_LINES}",
+        "{} has {line_count} lines; production Rust files are limited to {MAX_RUST_FILE_LINES}",
         path.display()
     );
 }

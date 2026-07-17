@@ -132,9 +132,7 @@ fn production_file<'a>(root: &Path, file: &'a Value) -> Option<(PathBuf, &'a Val
 }
 
 fn is_test_only_source(path: &Path) -> bool {
-    path.file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name == "tests.rs" || name.ends_with("_tests.rs"))
+    crate::build_support::is_test_source(path)
 }
 
 fn expected_production_files(root: &Path) -> BTreeSet<PathBuf> {

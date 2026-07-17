@@ -151,8 +151,10 @@ ACP client trait shim is the only production exclusion and has a documented
 nightly LLVM mapping workaround in the source; its delegated application logic
 remains measured. Both coverage commands include the Cargo build script, whose
 reusable logic is measured through `src/build_support.rs`.
-The build also rejects Rust files over 500 lines; Clippy rejects functions over
-80 lines, cognitive complexity over 17, and block nesting deeper than four.
+The build also rejects production Rust files over 500 physical lines; dedicated
+`tests.rs`, `*_tests.rs`, and `tests/**` files are exempt. Clippy rejects
+functions over 80 lines, cognitive complexity over 17, and block nesting deeper
+than four.
 Build-script logic lives in `src/build_support.rs`, is shared by `build.rs`, and
 is covered by dedicated integration tests in addition to strict Clippy checks.
 An integration audit rejects local control-flow macros and pins the reviewed
