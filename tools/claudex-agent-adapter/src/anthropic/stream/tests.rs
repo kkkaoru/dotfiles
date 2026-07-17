@@ -1,13 +1,24 @@
-use std::{convert::Infallible, ops::ControlFlow};
+use std::{
+    collections::{HashMap, HashSet},
+    convert::Infallible,
+    ops::ControlFlow,
+    os::unix::fs::PermissionsExt,
+    sync::Arc,
+    time::Instant,
+};
 
 use anyhow::anyhow;
 use axum::body::Bytes;
 use serde_json::{Value, json};
-use tokio::sync::mpsc;
+use tokio::sync::{Mutex, Semaphore, mpsc};
 
 use super::{
     SegmentBuilder, error_flow, message_start, parse_tool_call, send_stream_completion,
     send_stream_error, send_stream_frame, tool_use_frames, turn_flow,
+};
+use crate::{
+    anthropic::{Bridge, Session},
+    app_server::AppServer,
 };
 
 #[tokio::test]
@@ -30,6 +41,7 @@ async fn ignores_missing_and_empty_text_deltas() {
 #[tokio::test]
 async fn joins_text_deltas_and_estimates_usage() {
     let mut builder = SegmentBuilder::new(2);
+    assert!(!builder.has_external_tool_calls());
     for delta in ["hello ", "world"] {
         builder
             .text_delta(&json!({"params":{"delta":delta}}), None)
@@ -44,6 +56,16 @@ async fn joins_text_deltas_and_estimates_usage() {
     assert_eq!(segment.stop_reason, "end_turn");
     assert_eq!(segment.usage.input_tokens, 9);
     assert!(segment.usage.output_tokens > 0);
+}
+
+#[tokio::test]
+async fn defaults_missing_reasoning_usage_to_zero() {
+    let mut builder = SegmentBuilder::new(2);
+    builder.update_usage(&json!({
+        "params":{"tokenUsage":{"last":{"outputTokens":5}}}
+    }));
+    let segment = builder.finish(None).await.expect("usage segment");
+    assert_eq!(segment.usage.output_tokens, 5);
 }
 
 #[tokio::test]
@@ -130,6 +152,26 @@ async fn ignores_malformed_empty_raw_and_late_reasoning() {
     let mut builder = SegmentBuilder::new(1);
     for event in [
         json!({"method":"item/reasoning/summaryTextDelta","params":{}}),
+        json!({
+            "method":"item/reasoning/summaryTextDelta",
+            "params":{"itemId":"reasoning"}
+        }),
+        json!({
+            "method":"item/reasoning/summaryTextDelta",
+            "params":{"itemId":"reasoning","summaryIndex":0}
+        }),
+        json!({
+            "method":"item/reasoning/summaryTextDelta",
+            "params":{"itemId":7,"summaryIndex":0,"delta":"wrong item type"}
+        }),
+        json!({
+            "method":"item/reasoning/summaryTextDelta",
+            "params":{"itemId":"reasoning","summaryIndex":"zero","delta":"wrong index type"}
+        }),
+        json!({
+            "method":"item/reasoning/summaryTextDelta",
+            "params":{"itemId":"reasoning","summaryIndex":0,"delta":7}
+        }),
         json!({
             "method":"item/reasoning/summaryTextDelta",
             "params":{"itemId":"reasoning","summaryIndex":0,"delta":""}
@@ -219,6 +261,56 @@ fn parses_tool_calls_and_reports_each_missing_field() {
         };
         assert!(error.to_string().contains(message));
     }
+}
+
+#[tokio::test]
+async fn rejects_a_malformed_tool_event_before_dispatch() {
+    let root = tempfile::tempdir().expect("tool event fixture");
+    let source = root.path().join("source");
+    std::fs::create_dir(&source).expect("source home");
+    std::fs::write(source.join("auth.json"), "{}").expect("source auth");
+    let program = root.path().join("mock-app-server");
+    std::fs::write(
+        &program,
+        "#!/bin/sh\nread line\nprintf '%s\\n' '{\"id\":1,\"result\":{}}'\nwhile read line; do :; done\n",
+    )
+    .expect("mock app-server");
+    let mut permissions = std::fs::metadata(&program)
+        .expect("mock metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&program, permissions).expect("mock permissions");
+    let app =
+        AppServer::spawn_with_program("main", &program, &source, &root.path().join("isolated"))
+            .await
+            .expect("start mock app-server");
+    let bridge = Bridge::new(app, "main".to_owned());
+    let slots = Arc::new(Semaphore::new(1));
+    let session = Session {
+        thread_id: "thread".to_owned(),
+        signature: "signature".to_owned(),
+        transcript: Mutex::new(Vec::new()),
+        pending_tools: Mutex::new(HashMap::new()),
+        consumed_tool_ids: Mutex::new(HashSet::new()),
+        internal_tools: HashMap::new(),
+        external_tool_names: HashMap::new(),
+        client_user_id: None,
+        gate: Arc::new(Mutex::new(())),
+        last_activity: std::sync::Mutex::new(Instant::now()),
+        pending_since: std::sync::Mutex::new(None),
+        _slot: slots.try_acquire_owned().expect("session slot"),
+    };
+    let error = SegmentBuilder::new(1)
+        .handle_event(
+            &bridge,
+            &session,
+            &[],
+            &json!({"method":"item/tool/call","params":{}}),
+            None,
+        )
+        .await
+        .expect_err("malformed tool event");
+    assert!(error.to_string().contains("callId missing"));
 }
 
 #[test]

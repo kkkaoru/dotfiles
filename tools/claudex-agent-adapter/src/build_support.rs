@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub const MAX_RUST_FILE_LINES: usize = 500;
+pub const MAX_RUST_FILE_LINES: usize = 400;
 
 pub fn emit_build_metadata(root: &Path) {
     println!("cargo:rerun-if-changed=build.rs");
@@ -13,7 +13,9 @@ pub fn emit_build_metadata(root: &Path) {
     for file in &files {
         println!(
             "cargo:rerun-if-changed={}",
-            file.strip_prefix(root).unwrap_or(file).display()
+            file.strip_prefix(root)
+                .expect("build input must be inside the package root")
+                .display()
         );
     }
     let build_id = calculate_build_id(&files)

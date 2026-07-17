@@ -4,8 +4,8 @@ use serde_json::{Value, json};
 use tokio::sync::{Mutex, Semaphore};
 
 use super::{
-    candidate_length, codex_tool_name, dynamic_tool, owns_tool_result, thread_start_params,
-    tool_configuration,
+    candidate_length, codex_tool_name, dynamic_tool, is_better_length, owns_tool_result,
+    thread_start_params, tool_configuration,
 };
 use crate::anthropic::{MessagesRequest, Session};
 
@@ -102,6 +102,7 @@ fn supplies_a_default_dynamic_tool_schema() {
     let tool = json!({"name":"lookup"});
     let dynamic = dynamic_tool(&tool, "lookup").expect("dynamic tool");
     assert_eq!(dynamic["inputSchema"]["type"], "object");
+    assert!(dynamic_tool(&json!({"name": 7}), "invalid").is_none());
     assert_eq!(codex_tool_name("", 0), "cc__0");
 }
 
@@ -136,4 +137,7 @@ fn recognizes_pending_and_consumed_tool_results() {
     assert!(owns_tool_result(&pending, &consumed, "pending"));
     assert!(owns_tool_result(&pending, &consumed, "consumed"));
     assert!(!owns_tool_result(&pending, &consumed, "unknown"));
+    assert!(is_better_length(None, 1));
+    assert!(is_better_length(Some(1), 2));
+    assert!(!is_better_length(Some(2), 1));
 }

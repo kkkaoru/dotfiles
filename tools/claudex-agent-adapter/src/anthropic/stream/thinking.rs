@@ -41,7 +41,7 @@ impl ThinkingState {
             self.start(blocks, item_id, summary_index, stream).await?;
         }
         let open = self.open.as_mut().expect("thinking block just opened");
-        let separator = if open.summary_index != summary_index && !open.text.is_empty() {
+        let separator = if open.summary_index != summary_index {
             "\n\n"
         } else {
             ""

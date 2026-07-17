@@ -1,6 +1,7 @@
-use std::{cell::Cell, fs::OpenOptions, io::Write as _, path::PathBuf};
+use std::{cell::Cell, fs::OpenOptions, io::Write as _, path::PathBuf, sync::Arc};
 
 use agent_client_protocol::{self as acp, Client as _};
+use serde_json::value::RawValue;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::compat::{TokioAsyncReadCompatExt as _, TokioAsyncWriteCompatExt as _};
 
@@ -15,6 +16,7 @@ struct MockAgent {
 
 enum ClientOperation {
     Notify(acp::SessionNotification, oneshot::Sender<()>),
+    Extension(acp::ExtNotification, oneshot::Sender<()>),
     Permission(
         acp::RequestPermissionRequest,
         oneshot::Sender<acp::Result<acp::RequestPermissionResponse>>,
@@ -29,6 +31,10 @@ async fn relay_client_operations(
         match request {
             ClientOperation::Notify(notification, sent) => {
                 let _ = connection.session_notification(notification).await;
+                let _ = sent.send(());
+            }
+            ClientOperation::Extension(notification, sent) => {
+                let _ = connection.ext_notification(notification).await;
                 let _ = sent.send(());
             }
             ClientOperation::Permission(request, response) => {
@@ -65,6 +71,101 @@ impl MockAgent {
             .map_err(|_| acp::Error::internal_error())?;
         received.await.map_err(|_| acp::Error::internal_error())
     }
+
+    async fn notify_extension(&self, method: &str, params: serde_json::Value) -> acp::Result<()> {
+        let raw =
+            RawValue::from_string(params.to_string()).map_err(|_| acp::Error::internal_error())?;
+        let (sent, received) = oneshot::channel();
+        self.operations
+            .send(ClientOperation::Extension(
+                acp::ExtNotification::new(method, Arc::from(raw)),
+                sent,
+            ))
+            .map_err(|_| acp::Error::internal_error())?;
+        received.await.map_err(|_| acp::Error::internal_error())
+    }
+
+    async fn send_coverage_updates(&self, session_id: acp::SessionId) -> acp::Result<()> {
+        for fields in [
+            acp::ToolCallUpdateFields::new(),
+            acp::ToolCallUpdateFields::new().status(acp::ToolCallStatus::Completed),
+            acp::ToolCallUpdateFields::new()
+                .status(acp::ToolCallStatus::Pending)
+                .title("Pending"),
+            acp::ToolCallUpdateFields::new()
+                .status(acp::ToolCallStatus::Completed)
+                .title("Completed search"),
+            acp::ToolCallUpdateFields::new()
+                .status(acp::ToolCallStatus::Failed)
+                .title("Failed search"),
+        ] {
+            self.notify(
+                session_id.clone(),
+                acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new("tool", fields)),
+            )
+            .await?;
+        }
+        for (method, params) in coverage_extensions(&session_id.0) {
+            self.notify_extension(method, params).await?;
+        }
+        Ok(())
+    }
+}
+
+fn coverage_extensions(session_id: &str) -> Vec<(&'static str, serde_json::Value)> {
+    vec![
+        ("unrelated", serde_json::json!({})),
+        ("_x.ai/session/update", serde_json::json!({})),
+        (
+            "_x.ai/session/update",
+            serde_json::json!({"sessionId":session_id}),
+        ),
+        (
+            "_x.ai/session/update",
+            serde_json::json!({"sessionId":session_id,"update":{}}),
+        ),
+        (
+            "_x.ai/session/update",
+            serde_json::json!({"sessionId":session_id,"update":{
+            "sessionUpdate":"subagent_spawned"}}),
+        ),
+        (
+            "_x.ai/session/update",
+            serde_json::json!({"sessionId":session_id,"update":{
+            "sessionUpdate":"subagent_spawned","description":"Research","model":"grok-4.5",
+            "reasoning_effort":"medium"}}),
+        ),
+        (
+            "_x.ai/session/update",
+            serde_json::json!({"sessionId":session_id,"update":{
+            "sessionUpdate":"subagent_finished"}}),
+        ),
+        (
+            "_x.ai/session/update",
+            serde_json::json!({"sessionId":session_id,"update":{
+            "sessionUpdate":"subagent_finished","status":"completed","duration_ms":1250}}),
+        ),
+        (
+            "_x.ai/session/update",
+            serde_json::json!({"sessionId":session_id,"update":{
+            "sessionUpdate":"retry_state"}}),
+        ),
+        (
+            "_x.ai/session/update",
+            serde_json::json!({"sessionId":session_id,"update":{
+            "sessionUpdate":"retry_state","attempt":2,"max_retries":4}}),
+        ),
+        (
+            "_x.ai/session/update",
+            serde_json::json!({"sessionId":session_id,"update":{
+            "sessionUpdate":"turn_completed"}}),
+        ),
+        (
+            "_x.ai/session/update",
+            serde_json::json!({"sessionId":session_id,"update":{
+            "sessionUpdate":"turn_completed","usage":{}}}),
+        ),
+    ]
 }
 
 #[async_trait::async_trait(?Send)]
@@ -74,6 +175,9 @@ impl acp::Agent for MockAgent {
         request: acp::InitializeRequest,
     ) -> acp::Result<acp::InitializeResponse> {
         self.record("initialize", request)?;
+        if self.mode == "fail-initialize" {
+            return Err(acp::Error::internal_error());
+        }
         if self.mode == "bad-version" {
             return Ok(acp::InitializeResponse::new(acp::ProtocolVersion::V0));
         }
@@ -97,6 +201,9 @@ impl acp::Agent for MockAgent {
         request: acp::AuthenticateRequest,
     ) -> acp::Result<acp::AuthenticateResponse> {
         self.record("authenticate", request)?;
+        if self.mode == "fail-auth" {
+            return Err(acp::Error::internal_error());
+        }
         Ok(acp::AuthenticateResponse::default())
     }
 
@@ -105,6 +212,9 @@ impl acp::Agent for MockAgent {
         request: acp::NewSessionRequest,
     ) -> acp::Result<acp::NewSessionResponse> {
         self.record("new_session", request)?;
+        if self.mode == "fail-session" {
+            return Err(acp::Error::internal_error());
+        }
         let next = self.next_session.get() + 1;
         self.next_session.set(next);
         Ok(acp::NewSessionResponse::new(format!("grok-session-{next}")))
@@ -114,6 +224,10 @@ impl acp::Agent for MockAgent {
         self.record("prompt", &request)?;
         if self.mode == "fail-prompt" {
             return Err(acp::Error::internal_error());
+        }
+        if self.mode == "coverage-updates" {
+            self.send_coverage_updates(request.session_id.clone())
+                .await?;
         }
         let permission = acp::RequestPermissionRequest::new(
             request.session_id.clone(),

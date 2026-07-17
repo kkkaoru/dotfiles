@@ -18,10 +18,13 @@ pub(super) fn guidance(tools: &[Value]) -> Option<&'static str> {
 }
 
 pub(super) fn clarify_result(text: &str) -> Cow<'_, str> {
-    if is_teammate_result(text) && !text.contains(RESULT_CLARIFICATION) {
-        return Cow::Owned(format!("{text}\n\n{RESULT_CLARIFICATION}"));
+    if !is_teammate_result(text) {
+        return Cow::Borrowed(text);
     }
-    Cow::Borrowed(text)
+    if text.contains(RESULT_CLARIFICATION) {
+        return Cow::Borrowed(text);
+    }
+    Cow::Owned(format!("{text}\n\n{RESULT_CLARIFICATION}"))
 }
 
 fn is_teammate_result(text: &str) -> bool {
@@ -62,6 +65,8 @@ mod tests {
         assert!(clarified.contains(RESULT_CLARIFICATION));
         assert!(clarified.contains("company-profile@session-123"));
         assert_eq!(clarify_result(&clarified), clarified);
+        let already_clarified = format!("teammate_spawned {RESULT_CLARIFICATION}");
+        assert_eq!(clarify_result(&already_clarified), already_clarified);
         assert_eq!(
             clarify_result("ordinary tool output"),
             "ordinary tool output"

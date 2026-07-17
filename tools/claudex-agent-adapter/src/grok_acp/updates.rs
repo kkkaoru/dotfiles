@@ -5,6 +5,17 @@ use serde_json::{Value, json};
 
 use crate::app_server::events::ThreadEventDispatcher;
 
+pub(super) fn dispatch_error(events: &ThreadEventDispatcher, session_id: &str, message: String) {
+    events.dispatch(json!({
+        "method":"error",
+        "params":{
+            "threadId":session_id,
+            "willRetry":false,
+            "error":{"message":message}
+        }
+    }));
+}
+
 pub(super) fn dispatch_notification(
     events: &ThreadEventDispatcher,
     notification: acp::SessionNotification,
@@ -201,97 +212,4 @@ fn string_field<'a>(value: &'a Value, field: &str, fallback: &'a str) -> &'a str
 }
 
 #[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-
-    use agent_client_protocol::{self as acp};
-    use serde_json::{json, value::RawValue};
-
-    use super::{dispatch_extension, dispatch_notification};
-    use crate::app_server::events::ThreadEventDispatcher;
-
-    #[tokio::test]
-    async fn forwards_thought_and_tool_progress_without_actionable_tool_calls() {
-        let events = ThreadEventDispatcher::default();
-        let receiver = events.subscribe("session");
-        dispatch_notification(
-            &events,
-            acp::SessionNotification::new(
-                "session",
-                acp::SessionUpdate::AgentThoughtChunk(acp::ContentChunk::new("thinking".into())),
-            ),
-        );
-        dispatch_notification(
-            &events,
-            acp::SessionNotification::new(
-                "session",
-                acp::SessionUpdate::ToolCall(acp::ToolCall::new("call", "Search the web")),
-            ),
-        );
-        let thought = receiver.recv().await.unwrap();
-        let tool = receiver.recv().await.unwrap();
-        assert_eq!(thought["method"], "item/reasoning/summaryTextDelta");
-        assert_eq!(thought["params"]["delta"], "thinking");
-        assert_eq!(tool["method"], "item/reasoning/summaryTextDelta");
-        assert!(
-            tool["params"]["delta"]
-                .as_str()
-                .unwrap()
-                .contains("Search the web")
-        );
-    }
-
-    #[tokio::test]
-    async fn forwards_xai_subagent_lifecycle_and_usage() {
-        let events = ThreadEventDispatcher::default();
-        let receiver = events.subscribe("session");
-        for update in [
-            json!({"sessionUpdate":"subagent_spawned","description":"Research AVITA",
-                "model":"grok-4.5","reasoning_effort":"medium"}),
-            json!({"sessionUpdate":"subagent_finished","status":"completed","duration_ms":1250}),
-            json!({"sessionUpdate":"turn_completed","usage":{
-                "inputTokens":10,"outputTokens":20,"reasoningTokens":3
-            }}),
-        ] {
-            let params = json!({"sessionId":"session","update":update});
-            let raw = RawValue::from_string(params.to_string()).unwrap();
-            dispatch_extension(
-                &events,
-                acp::ExtNotification::new("_x.ai/session/update", Arc::from(raw)),
-            );
-        }
-        let lifecycle = receiver.recv().await.unwrap();
-        let usage = receiver.recv().await.unwrap();
-        assert!(
-            lifecycle["params"]["delta"]
-                .as_str()
-                .unwrap()
-                .contains("grok-4.5")
-        );
-        assert!(
-            lifecycle["params"]["delta"]
-                .as_str()
-                .unwrap()
-                .contains("medium effort")
-        );
-        assert!(
-            lifecycle["params"]["delta"]
-                .as_str()
-                .unwrap()
-                .contains("1.2s")
-        );
-        assert_eq!(
-            usage["params"]["tokenUsage"]["last"]["reasoningOutputTokens"],
-            3
-        );
-    }
-
-    #[test]
-    fn ignores_unrelated_or_unstructured_extensions() {
-        let events = ThreadEventDispatcher::default();
-        for (method, payload) in [("other/method", "{}"), ("_x.ai/session/update", "\"text\"")] {
-            let raw = RawValue::from_string(payload.to_owned()).unwrap();
-            dispatch_extension(&events, acp::ExtNotification::new(method, Arc::from(raw)));
-        }
-    }
-}
+mod tests;

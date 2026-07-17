@@ -252,7 +252,7 @@ fn ensure_running_reports_missing_or_invalid_environment() {
 async fn run_claude_forwards_arguments_environment_stderr_and_status() {
     let home = launcher_home();
     let port = unused_port();
-    let claude = home.path().join("claude-mock");
+    let claude = home.path().join("claude");
     fs::write(
         &claude,
         r#"#!/bin/sh
@@ -270,6 +270,11 @@ exit 23
     .expect("write Claude mock");
     fs::set_permissions(&claude, fs::Permissions::from_mode(0o755))
         .expect("make Claude mock executable");
+    let path = format!(
+        "{}:{}",
+        home.path().display(),
+        std::env::var("PATH").expect("PATH")
+    );
 
     let output = common_command(&home, port, "20")
         .args(["launch", "--model", "test-main-model"])
@@ -277,7 +282,7 @@ exit 23
         .args(["--subscription-max-processes", "20"])
         .args(["--subscription-timeout-minutes", "120", "--"])
         .arg("--continue")
-        .env("CLAUDEX_CLAUDE_PROGRAM", &claude)
+        .env("PATH", path)
         .env("CLAUDE_CODE_ALWAYS_ENABLE_EFFORT", "configured-by-fish")
         .env("CLAUDE_CODE_SUBAGENT_MODEL", "wrong-model")
         .env("ANTHROPIC_API_KEY", "must-not-leak")

@@ -11,14 +11,26 @@ the user does not specify a child effort.";
 const EFFORTS: [&str; 4] = ["low", "medium", "high", "xhigh"];
 
 pub(super) fn prepare(program: &OsStr) -> Result<Option<PathBuf>> {
-    if let Some(path) = std::env::var_os("CLAUDEX_GROK_PLUGIN_DIR") {
-        return Ok(Some(PathBuf::from(path)));
+    prepare_with(
+        program,
+        std::env::var_os("CLAUDEX_GROK_PLUGIN_DIR").map(PathBuf::from),
+        std::env::var_os("HOME").map(PathBuf::from),
+    )
+}
+
+fn prepare_with(
+    program: &OsStr,
+    plugin_dir: Option<PathBuf>,
+    home: Option<PathBuf>,
+) -> Result<Option<PathBuf>> {
+    if let Some(path) = plugin_dir {
+        return Ok(Some(path));
     }
     if PathBuf::from(program).file_name() != Some(OsStr::new("grok")) {
         return Ok(None);
     }
-    let home = std::env::var_os("HOME").context("HOME is required for Grok plugin cache")?;
-    let root = PathBuf::from(home).join(".cache/claudex/grok-effort-plugin-v1");
+    let home = home.context("HOME is required for Grok plugin cache")?;
+    let root = home.join(".cache/claudex/grok-effort-plugin-v1");
     let agents = root.join("agents");
     fs::create_dir_all(&agents).context("create Grok effort plugin cache")?;
     for effort in EFFORTS {
@@ -48,22 +60,4 @@ fn profile(effort: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::ffi::OsStr;
-
-    use super::{EFFORTS, ROUTING_INSTRUCTIONS, prepare, profile};
-
-    #[test]
-    fn profiles_define_every_routable_effort() {
-        for effort in EFFORTS {
-            let profile = profile(effort);
-            assert!(profile.contains(&format!("effort: {effort}")));
-            assert!(ROUTING_INSTRUCTIONS.contains(&format!("claudex-{effort}")));
-        }
-    }
-
-    #[test]
-    fn custom_program_does_not_receive_builtin_plugin() {
-        assert_eq!(prepare(OsStr::new("grok-acp-mock")).unwrap(), None);
-    }
-}
+mod tests;

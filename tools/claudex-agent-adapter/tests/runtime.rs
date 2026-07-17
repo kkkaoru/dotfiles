@@ -47,6 +47,7 @@ async fn starts_each_provider_once_only_after_its_first_parallel_request() {
         "--listen",
         &listen,
     ])
+    .current_dir(home.path())
     .env("HOME", home.path())
     .env("ANTHROPIC_AUTH_TOKEN", "runtime-token")
     .env("CLAUDEX_CODEX_PROGRAM", codex)

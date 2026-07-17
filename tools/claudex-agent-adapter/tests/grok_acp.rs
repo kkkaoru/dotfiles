@@ -121,6 +121,21 @@ async fn reports_acp_startup_effort_and_prompt_failures() {
     .await;
     assert!(incompatible.is_err());
 
+    for model in ["fail-initialize", "fail-auth"] {
+        let root = tempfile::tempdir().expect("startup error fixture");
+        let failed = GrokAcp::spawn_with_program(
+            model,
+            env!("CARGO_BIN_EXE_grok-acp-mock"),
+            root.path().to_owned(),
+        )
+        .await;
+        assert!(failed.is_err());
+    }
+
+    let root = tempfile::tempdir().expect("session error fixture");
+    let agent = spawn_mock("fail-session", root.path()).await;
+    assert!(agent.create_session(json!({})).await.is_err());
+
     for (model, effort, expected) in [
         ("fail-effort", Some("high"), "set effort failed"),
         ("fail-prompt", None, "Internal error"),
@@ -149,6 +164,37 @@ async fn reports_acp_startup_effort_and_prompt_failures() {
     let root = tempfile::tempdir().expect("no-auth fixture");
     let agent = spawn_mock("no-auth", root.path()).await;
     assert!(agent.is_alive());
+}
+
+#[tokio::test]
+async fn forwards_grok_tool_subagent_retry_and_usage_updates() {
+    let root = tempfile::tempdir().expect("coverage update fixture");
+    let agent = spawn_mock("coverage-updates", root.path()).await;
+    let response = agent.create_session(json!({})).await.unwrap();
+    let thread_id = response
+        .pointer("/thread/id")
+        .and_then(Value::as_str)
+        .unwrap();
+    let events = agent.subscribe_thread(thread_id);
+    agent
+        .start_turn(json!({"threadId":thread_id,"input":"coverage"}))
+        .await
+        .unwrap();
+
+    let mut received = Vec::new();
+    loop {
+        let event = recv(&events).await;
+        let completed = event["method"] == "turn/completed";
+        received.push(event);
+        if completed {
+            break;
+        }
+    }
+    let combined = received.iter().map(Value::to_string).collect::<String>();
+    assert!(combined.contains("Completed search"));
+    assert!(combined.contains("SubAgent started"));
+    assert!(combined.contains("Retrying provider"));
+    assert!(combined.contains("tokenUsage"));
 }
 
 async fn spawn_mock(model: &str, cwd: &Path) -> std::sync::Arc<GrokAcp> {

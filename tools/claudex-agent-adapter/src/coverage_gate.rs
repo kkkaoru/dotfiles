@@ -1,18 +1,29 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
-    path::{Path, PathBuf},
+    path::Path,
     process::{Command, ExitStatus},
 };
 
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
+mod report;
+#[cfg(test)]
+use report::is_test_only_source;
+use report::{coverage_percent, production_line_failures};
+
 const MINIMUM_PERCENT: f64 = 95.0;
 const TOTAL_METRICS: [&str; 4] = ["lines", "functions", "regions", "branches"];
 
 pub fn run(root: &Path) -> Result<()> {
+    run_with(root, command_status)
+}
+
+fn run_with(
+    root: &Path,
+    mut execute: impl FnMut(&Path, &[String]) -> Result<ExitStatus>,
+) -> Result<()> {
     let report = root.join("target/branch-coverage.json");
-    run_commands(&report, |arguments| command_status(root, arguments))?;
+    run_commands(&report, |arguments| execute(root, arguments))?;
     audit_report(root, &report)
 }
 
@@ -95,76 +106,6 @@ pub fn audit_report(root: &Path, report: &Path) -> Result<()> {
     )
 }
 
-fn production_line_failures(root: &Path, data: &Value) -> Result<Vec<String>> {
-    let reported = data
-        .get("files")
-        .and_then(Value::as_array)
-        .context("llvm-cov report has no files")?
-        .iter()
-        .filter_map(|file| production_file(root, file))
-        .collect::<BTreeMap<_, _>>();
-    let expected = expected_production_files(root);
-    let reported_paths = reported.keys().cloned().collect::<BTreeSet<_>>();
-    let mut failures = expected
-        .difference(&reported_paths)
-        .map(|path| format!("{}: missing from report", path.display()))
-        .chain(
-            reported_paths
-                .difference(&expected)
-                .map(|path| format!("{}: unexpected production file", path.display())),
-        )
-        .collect::<Vec<_>>();
-    for (path, file) in reported {
-        let coverage = coverage_percent(file, "/summary/lines")?;
-        if coverage < MINIMUM_PERCENT {
-            failures.push(format!("{}: {coverage:.2}%", path.display()));
-        }
-    }
-    Ok(failures)
-}
-
-fn production_file<'a>(root: &Path, file: &'a Value) -> Option<(PathBuf, &'a Value)> {
-    let path = PathBuf::from(file.get("filename")?.as_str()?);
-    let relative = path.strip_prefix(root).ok()?;
-    (relative == Path::new("build.rs")
-        || (relative.starts_with("src") && !is_test_only_source(relative)))
-    .then(|| (relative.to_owned(), file))
-}
-
-fn is_test_only_source(path: &Path) -> bool {
-    crate::build_support::is_test_source(path)
-}
-
-fn expected_production_files(root: &Path) -> BTreeSet<PathBuf> {
-    let mut files = Vec::new();
-    crate::build_support::collect_rust_files(&root.join("src"), &mut files);
-    files
-        .into_iter()
-        .filter_map(|path| path.strip_prefix(root).ok().map(Path::to_owned))
-        .filter(|path| !is_test_only_source(path))
-        .chain([PathBuf::from("build.rs")])
-        .collect()
-}
-
-fn coverage_percent(value: &Value, pointer: &str) -> Result<f64> {
-    let coverage = value
-        .pointer(pointer)
-        .with_context(|| format!("llvm-cov report is missing {pointer}"))?;
-    let covered = coverage
-        .get("covered")
-        .and_then(Value::as_u64)
-        .with_context(|| format!("llvm-cov report is missing {pointer}/covered"))?;
-    let count = coverage
-        .get("count")
-        .and_then(Value::as_u64)
-        .with_context(|| format!("llvm-cov report is missing {pointer}/count"))?;
-    Ok(if count == 0 {
-        100.0
-    } else {
-        covered as f64 * 100.0 / count as f64
-    })
-}
-
 #[cfg(test)]
 // Coverage gates measure production code; test implementations are excluded.
 #[cfg_attr(coverage_nightly, coverage(off))]
@@ -177,7 +118,7 @@ mod tests {
 
     use super::{
         audit_report, command_status, coverage_arguments, coverage_percent, is_test_only_source,
-        run_commands,
+        run_commands, run_with,
     };
 
     #[test]
@@ -198,6 +139,26 @@ mod tests {
         let fixture = report_fixture(95.0, 95.0);
         audit_report(fixture.path(), &fixture.path().join("report.json"))
             .expect("passing coverage");
+    }
+
+    #[test]
+    fn runs_the_complete_gate_with_an_injected_command() {
+        let fixture = report_fixture(100.0, 100.0);
+        fs::create_dir(fixture.path().join("target")).expect("target directory");
+        fs::copy(
+            fixture.path().join("report.json"),
+            fixture.path().join("target/branch-coverage.json"),
+        )
+        .expect("branch report");
+        let mut calls = 0;
+        run_with(fixture.path(), |root, arguments| {
+            calls += 1;
+            assert_eq!(root, fixture.path());
+            assert!(!arguments.is_empty());
+            Ok(std::process::ExitStatus::from_raw(0))
+        })
+        .expect("coverage gate");
+        assert_eq!(calls, 2);
     }
 
     #[test]

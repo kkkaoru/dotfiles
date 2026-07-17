@@ -19,7 +19,9 @@ use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use crate::app_server::{ThreadEvents, events::ThreadEventDispatcher};
 
+mod client;
 mod plugin;
+mod prompt;
 mod updates;
 
 enum DriverCommand {
@@ -120,50 +122,6 @@ impl GrokAcp {
     }
 }
 
-struct AcpClient {
-    events: Arc<ThreadEventDispatcher>,
-}
-
-// Rust nightly branch instrumentation currently emits an invalid mapping for
-// async-trait's generated client shim. Stable line coverage still measures it.
-#[cfg_attr(coverage_nightly, coverage(off))]
-#[async_trait::async_trait(?Send)]
-impl acp::Client for AcpClient {
-    async fn request_permission(
-        &self,
-        request: acp::RequestPermissionRequest,
-    ) -> acp::Result<acp::RequestPermissionResponse> {
-        Ok(permission_response(&request))
-    }
-
-    async fn session_notification(
-        &self,
-        notification: acp::SessionNotification,
-    ) -> acp::Result<()> {
-        updates::dispatch_notification(&self.events, notification);
-        Ok(())
-    }
-
-    async fn ext_notification(&self, notification: acp::ExtNotification) -> acp::Result<()> {
-        updates::dispatch_extension(&self.events, notification);
-        Ok(())
-    }
-}
-
-fn permission_response(request: &acp::RequestPermissionRequest) -> acp::RequestPermissionResponse {
-    let outcome = request
-        .options
-        .iter()
-        .find(|option| option.kind == acp::PermissionOptionKind::AllowOnce)
-        .or_else(|| request.options.first())
-        .map_or(acp::RequestPermissionOutcome::Cancelled, |option| {
-            acp::RequestPermissionOutcome::Selected(acp::SelectedPermissionOutcome::new(
-                option.option_id.clone(),
-            ))
-        });
-    acp::RequestPermissionResponse::new(outcome)
-}
-
 async fn run_driver(
     program: OsString,
     model: String,
@@ -225,7 +183,7 @@ async fn start_connection(
         .take()
         .context("Grok ACP stdout is unavailable")?
         .compat();
-    let client = AcpClient { events };
+    let client = client::AcpClient::new(events);
     let (connection, handle_io) =
         acp::ClientSideConnection::new(client, outgoing, incoming, |future| {
             tokio::task::spawn_local(future);
@@ -330,12 +288,12 @@ async fn create_session(
         .new_session(
             acp::NewSessionRequest::new(cwd)
                 .mcp_servers(vec![])
-                .meta(json!({"modelId":model}).as_object().cloned()),
+                .meta(json!({ "modelId": model }).as_object().cloned()),
         )
         .await
         .map_err(|error| anyhow!("Grok ACP session/new failed: {error:?}"))?;
     let session_id = response.session_id.0.to_string();
-    let base = provider_instructions(&params);
+    let base = prompt::provider_instructions(&params);
     if !base.is_empty() {
         instructions.borrow_mut().insert(session_id.clone(), base);
     }
@@ -354,13 +312,13 @@ fn start_turn(
         .and_then(Value::as_str)
         .context("Grok ACP turn is missing threadId")?
         .to_owned();
-    let prompt = input_text(params.get("input").unwrap_or(&Value::Null));
+    let prompt = prompt::input_text(params.get("input").unwrap_or(&Value::Null));
     let prefix = instructions.borrow_mut().remove(&session_id);
     let prompt = prefix.map_or(prompt.clone(), |prefix| format!("{prefix}\n\n{prompt}"));
     let effort = params
         .get("effort")
         .and_then(Value::as_str)
-        .and_then(grok_effort)
+        .and_then(prompt::grok_effort)
         .map(str::to_owned);
     tokio::task::spawn_local(async move {
         let id = acp::SessionId::new(session_id.clone());
@@ -369,7 +327,7 @@ fn start_turn(
             meta.insert("reasoningEffort".to_owned(), Value::String(effort));
             let request = acp::SetSessionModelRequest::new(id.clone(), model).meta(Some(meta));
             if let Err(error) = connection.set_session_model(request).await {
-                dispatch_error(
+                updates::dispatch_error(
                     &events,
                     &session_id,
                     format!("set effort failed: {error:?}"),
@@ -391,66 +349,10 @@ fn start_turn(
                     "params":{"threadId":session_id,"turn":{"status":"completed"}}
                 }));
             }
-            Err(error) => dispatch_error(&events, &session_id, format!("{error:?}")),
+            Err(error) => updates::dispatch_error(&events, &session_id, format!("{error:?}")),
         }
     });
     Ok(())
-}
-
-fn dispatch_error(events: &ThreadEventDispatcher, session_id: &str, message: String) {
-    events.dispatch(json!({
-        "method":"error",
-        "params":{
-            "threadId":session_id,
-            "willRetry":false,
-            "error":{"message":message}
-        }
-    }));
-}
-
-fn provider_instructions(params: &Value) -> String {
-    let base = params
-        .get("baseInstructions")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let adapter = params
-        .get("developerInstructions")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let base = base
-        .strip_suffix(adapter)
-        .unwrap_or(base)
-        .trim_end_matches(['\n', ' ']);
-    if base.is_empty() {
-        return plugin::ROUTING_INSTRUCTIONS.to_owned();
-    }
-    format!("{base}\n\n{}", plugin::ROUTING_INSTRUCTIONS)
-}
-
-fn input_text(input: &Value) -> String {
-    match input {
-        Value::String(text) => text.clone(),
-        Value::Array(items) => items
-            .iter()
-            .filter_map(|item| {
-                item.get("text")
-                    .and_then(Value::as_str)
-                    .or_else(|| item.get("content").and_then(Value::as_str))
-            })
-            .collect::<Vec<_>>()
-            .join("\n"),
-        Value::Null => String::new(),
-        value => value.to_string(),
-    }
-}
-
-fn grok_effort(effort: &str) -> Option<&'static str> {
-    match effort {
-        "low" => Some("low"),
-        "mid" | "medium" => Some("medium"),
-        "high" | "xhigh" | "max" => Some("high"),
-        _ => None,
-    }
 }
 
 #[cfg(test)]

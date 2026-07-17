@@ -52,16 +52,46 @@ fn includes_only_rust_files_from_source_trees() {
 }
 
 #[test]
-#[should_panic(expected = "production Rust files are limited to 500")]
-fn rejects_a_rust_file_over_the_line_limit() {
-    let contents = "line\n".repeat(build_support::MAX_RUST_FILE_LINES + 1);
+fn reports_missing_build_inputs_and_source_directories() {
+    let root = tempfile::tempdir().expect("fixture");
+    fs::create_dir(root.path().join("src")).expect("source directory");
+    let missing = root.path().join("missing.rs");
+    assert!(build_support::calculate_build_id(&[missing]).is_err());
+    assert!(std::panic::catch_unwind(|| build_support::emit_build_metadata(root.path())).is_err());
+    assert!(
+        std::panic::catch_unwind(|| {
+            let mut files = Vec::new();
+            build_support::collect_rust_files(&root.path().join("absent"), &mut files);
+        })
+        .is_err()
+    );
+}
+
+#[test]
+#[should_panic(expected = "has 401 lines; production Rust files are limited to 400")]
+fn rejects_401_line_production_file() {
+    let contents = "line\n".repeat(401);
     build_support::enforce_line_limit(std::path::Path::new("large.rs"), contents.as_bytes());
 }
 
 #[test]
-fn accepts_limit_and_non_newline_terminated_files() {
-    let exact = "line\n".repeat(build_support::MAX_RUST_FILE_LINES);
-    build_support::enforce_line_limit(std::path::Path::new("exact.rs"), exact.as_bytes());
+fn accepts_399_and_400_line_production_files() {
+    let below_limit = "line\n".repeat(399);
+    let at_limit = "line\n".repeat(400);
+    build_support::enforce_line_limit(
+        std::path::Path::new("below-limit.rs"),
+        below_limit.as_bytes(),
+    );
+    build_support::enforce_line_limit(std::path::Path::new("at-limit.rs"), at_limit.as_bytes());
+}
+
+#[test]
+fn accepts_non_newline_terminated_and_empty_files() {
+    let at_limit_without_trailing_newline = format!("{}line", "line\n".repeat(399));
+    build_support::enforce_line_limit(
+        std::path::Path::new("at-limit-no-newline.rs"),
+        at_limit_without_trailing_newline.as_bytes(),
+    );
     build_support::enforce_line_limit(std::path::Path::new("single.rs"), b"line");
     build_support::enforce_line_limit(std::path::Path::new("empty.rs"), b"");
 }
