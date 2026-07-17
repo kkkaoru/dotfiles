@@ -186,6 +186,21 @@ pub(super) fn collect_tool_results(messages: &[Value]) -> Vec<ToolResult> {
         .collect()
 }
 
+pub(super) fn transcript_owns_tool_results(messages: &[Value], results: &[ToolResult]) -> bool {
+    let tool_use_ids = messages
+        .iter()
+        .filter(|message| message.get("role").and_then(Value::as_str) == Some("assistant"))
+        .filter_map(|message| message.get("content").and_then(Value::as_array))
+        .flatten()
+        .filter(|block| block.get("type").and_then(Value::as_str) == Some("tool_use"))
+        .filter_map(|block| block.get("id").and_then(Value::as_str))
+        .collect::<HashSet<_>>();
+    !tool_use_ids.is_empty()
+        && results
+            .iter()
+            .all(|result| tool_use_ids.contains(result.tool_use_id.as_str()))
+}
+
 fn tool_result(block: &Value) -> Option<ToolResult> {
     if block.get("type").and_then(Value::as_str) != Some("tool_result") {
         return None;

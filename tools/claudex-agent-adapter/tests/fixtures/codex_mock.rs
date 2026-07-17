@@ -101,6 +101,10 @@ impl<W: Write> Fixture<W> {
             self.send_interleaved_tools();
         } else if input.contains("TEXT_THEN_TOOL") {
             self.send_text_then_tool();
+        } else if input.contains("RECOVER_ORPHAN_TOOL_RESULT")
+            && input.contains(r#"\"type\":\"tool_result\""#)
+        {
+            self.send_text_and_complete("RECOVERED_ORPHAN_TOOL_RESULT");
         } else if let Some(tool) = requested_tool(input) {
             self.send_tool(tool, input);
         } else {

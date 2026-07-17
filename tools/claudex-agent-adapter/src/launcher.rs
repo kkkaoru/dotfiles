@@ -45,7 +45,8 @@ struct Health {
     status: String,
     pid: Option<u32>,
     protocol_version: u64,
-    build_id: String,
+    #[serde(rename = "build_id")]
+    _build_id: String,
     #[serde(default)]
     backend_routes: Vec<String>,
     subscription_max_processes: usize,
@@ -88,9 +89,10 @@ impl ServiceConfig {
     }
 
     fn matches(&self, health: &Health) -> bool {
+        // The protocol version is the compatibility contract. Replacing a compatible daemon
+        // solely for a build change would discard in-flight Claude tool ownership state.
         health.status == "ok"
             && health.protocol_version == ADAPTER_PROTOCOL_VERSION
-            && health.build_id == env!("CLAUDEX_BUILD_ID")
             && health.backend_routes == route_descriptions(&self.options.routes)
             && health.subscription_max_processes == self.options.subscription_max_processes
             && health.subscription_timeout_minutes == self.options.subscription_timeout_minutes

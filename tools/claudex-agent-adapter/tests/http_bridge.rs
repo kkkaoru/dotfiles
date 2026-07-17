@@ -208,6 +208,47 @@ async fn completes_an_external_tool_round_trip_after_a_signature_change() {
 }
 
 #[tokio::test]
+async fn recovers_a_tool_result_after_adapter_session_loss() {
+    let first_adapter = Adapter::start().await;
+    let client = Client::new();
+    let tools = lookup_tools();
+    let first = post_json(
+        &client,
+        &messages_url(&first_adapter),
+        json!({
+            "model":"test-main-model", "system":"Recovery test", "tools":tools,
+            "messages":[{"role":"user","content":"USE_TOOL RECOVER_ORPHAN_TOOL_RESULT"}]
+        }),
+    )
+    .await;
+    assert_eq!(first["stop_reason"], "tool_use");
+    drop(first_adapter);
+
+    let restarted_adapter = Adapter::start().await;
+    let recovered = post_json(
+        &client,
+        &messages_url(&restarted_adapter),
+        json!({
+            "model":"test-main-model", "system":"Recovery test", "tools":tools,
+            "messages":[
+                {"role":"user","content":"USE_TOOL RECOVER_ORPHAN_TOOL_RESULT"},
+                {"role":"assistant","content":first["content"]},
+                {"role":"user","content":[{
+                    "type":"tool_result", "tool_use_id":first["content"][0]["id"],
+                    "content":"VALUE-42"
+                }]}
+            ]
+        }),
+    )
+    .await;
+    assert_eq!(
+        recovered["content"][0]["text"],
+        "RECOVERED_ORPHAN_TOOL_RESULT"
+    );
+    assert_eq!(recovered["stop_reason"], "end_turn");
+}
+
+#[tokio::test]
 async fn returns_parallel_and_streamed_tool_calls() {
     let adapter = Adapter::start().await;
     let client = Client::new();

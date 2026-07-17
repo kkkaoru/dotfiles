@@ -116,10 +116,12 @@ may run concurrently and each has a 120-minute timeout. Set
 either positive integer independently. Subprocesses are killed if their task is
 dropped.
 
-The adapter's `ensure` command compares the running service's
-protocol, model, limits, and source-derived build ID with the installed binary.
-It restarts a stale service, manages its log and readiness checks, and prints
-the matching base URL. `launch --model MODEL -- ...` scopes Anthropic routing,
+The adapter's `ensure` command compares the running service's protocol, routes,
+and limits with the installed binary. A source-derived build ID remains exposed
+for diagnostics, but a protocol-compatible daemon is preserved across builds so
+in-flight tool ownership is not lost. It restarts an incompatible service,
+manages its log and readiness checks, and prints the matching base URL.
+`launch --model MODEL -- ...` scopes Anthropic routing,
 removes conflicting provider and adapter variables, launches Claude Code with
 untouched non-model arguments, suppresses only the adapter-specific advisor-rank
 warning, and returns Claude Code's exit status. Claude Code's

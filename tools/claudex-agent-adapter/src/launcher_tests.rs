@@ -54,7 +54,7 @@ mod tests {
             status: "ok".to_owned(),
             pid: Some(42),
             protocol_version: ADAPTER_PROTOCOL_VERSION,
-            build_id: env!("CLAUDEX_BUILD_ID").to_owned(),
+            _build_id: env!("CLAUDEX_BUILD_ID").to_owned(),
             backend_routes: route_descriptions(&config.options.routes),
             subscription_max_processes: 20,
             subscription_timeout_minutes: 120,
@@ -72,9 +72,6 @@ mod tests {
         health.protocol_version += 1;
         stale.push(health);
         let mut health = healthy(&config);
-        health.build_id = "stale".to_owned();
-        stale.push(health);
-        let mut health = healthy(&config);
         health.subscription_max_processes = 7;
         stale.push(health);
         let mut health = healthy(&config);
@@ -83,6 +80,10 @@ mod tests {
         for health in stale {
             assert!(!config.matches(&health));
         }
+
+        let mut compatible_build = healthy(&config);
+        compatible_build._build_id = "newer-compatible-build".to_owned();
+        assert!(config.matches(&compatible_build));
     }
 
     #[test]

@@ -97,6 +97,7 @@ struct Usage {
 struct SelectedSession {
     session: Arc<Session>,
     existing_len: usize,
+    recovered: bool,
     gate: tokio::sync::OwnedMutexGuard<()>,
 }
 

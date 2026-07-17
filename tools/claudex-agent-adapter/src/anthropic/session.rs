@@ -4,7 +4,7 @@ use std::{
     time::Instant,
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use serde_json::{Value, json};
 use tokio::sync::Mutex;
 
@@ -12,7 +12,8 @@ use super::{
     ActiveTurn, Bridge, MessagesRequest, SelectedSession, Session,
     content::{
         ToolResult, collect_tool_results, full_transcript_input, matching_transcript_len,
-        request_signature, take_pending_results, user_input_from_messages,
+        request_signature, take_pending_results, transcript_owns_tool_results,
+        user_input_from_messages,
     },
 };
 use crate::app_server::response_thread_id;
@@ -74,9 +75,10 @@ impl Bridge {
         tool_results: Vec<ToolResult>,
     ) -> Result<ActiveTurn> {
         let existing_len = selected.existing_len;
+        let recovered = selected.recovered;
         let extras = request.messages[existing_len..].to_vec();
         let events = self.app.subscribe_thread(&selected.session.thread_id);
-        let start = if tool_results.is_empty() {
+        let start = if tool_results.is_empty() || recovered {
             self.start_model_turn(
                 request,
                 &selected.session,
@@ -148,7 +150,26 @@ impl Bridge {
         tool_results: &[ToolResult],
     ) -> Result<SelectedSession> {
         if !tool_results.is_empty() {
-            return self.select_pending_session(request, tool_results).await;
+            if let Some(selected) = self.select_pending_session(request, tool_results).await? {
+                return Ok(selected);
+            }
+            if !transcript_owns_tool_results(&request.messages, tool_results) {
+                bail!("no active claudex session owns the returned Claude tool_use_id");
+            }
+            tracing::warn!(
+                tool_result_count = tool_results.len(),
+                "recovering Claude tool results after adapter session loss"
+            );
+            let session = self
+                .create_session(request, signature, advisor_model, collaborator_model)
+                .await?;
+            let gate = Arc::clone(&session.gate).lock_owned().await;
+            return Ok(SelectedSession {
+                session,
+                existing_len: 0,
+                recovered: true,
+                gate,
+            });
         }
         if let Some(selected) = self
             .select_matching_session(&signature, &request.messages)
@@ -163,6 +184,7 @@ impl Bridge {
         Ok(SelectedSession {
             session,
             existing_len: 0,
+            recovered: false,
             gate,
         })
     }
@@ -171,11 +193,10 @@ impl Bridge {
         &self,
         request: &MessagesRequest,
         tool_results: &[ToolResult],
-    ) -> Result<SelectedSession> {
-        let session = self
-            .find_result_session(tool_results)
-            .await
-            .context("no active claudex session owns the returned Claude tool_use_id")?;
+    ) -> Result<Option<SelectedSession>> {
+        let Some(session) = self.find_result_session(tool_results).await else {
+            return Ok(None);
+        };
         let gate = Arc::clone(&session.gate).lock_owned().await;
         let pending = session.pending_tools.lock().await;
         let consumed = session.consumed_tool_ids.lock().await;
@@ -188,11 +209,12 @@ impl Bridge {
             bail!("Claude tool results were already consumed by another request");
         }
         touch_session(&session);
-        Ok(SelectedSession {
+        Ok(Some(SelectedSession {
             session,
             existing_len: request.messages.len().saturating_sub(1),
+            recovered: false,
             gate,
-        })
+        }))
     }
 
     async fn select_matching_session(
@@ -207,6 +229,7 @@ impl Bridge {
         Some(SelectedSession {
             session,
             existing_len,
+            recovered: false,
             gate,
         })
     }

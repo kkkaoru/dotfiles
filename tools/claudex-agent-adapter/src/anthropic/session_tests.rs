@@ -5,7 +5,7 @@ use tokio::sync::{Mutex, Semaphore};
 
 use super::{
     candidate_length, codex_tool_name, dynamic_tool, is_better_length, owns_tool_result,
-    thread_start_params, tool_configuration,
+    thread_start_params, tool_configuration, transcript_owns_tool_results,
 };
 use crate::anthropic::{MessagesRequest, Session};
 
@@ -127,6 +127,25 @@ async fn candidate_requires_the_signature_and_matching_transcript() {
         .await,
         None
     );
+}
+
+#[test]
+fn validates_orphan_results_against_assistant_tool_uses() {
+    let messages = vec![json!({
+        "role":"assistant",
+        "content":[{"type":"tool_use","id":"tool-1","name":"Read","input":{}}]
+    })];
+    let result = |id: &str| crate::anthropic::content::ToolResult {
+        tool_use_id: id.to_owned(),
+        content_items: Vec::new(),
+        is_error: false,
+    };
+    assert!(transcript_owns_tool_results(&messages, &[result("tool-1")]));
+    assert!(!transcript_owns_tool_results(
+        &messages,
+        &[result("unknown")]
+    ));
+    assert!(!transcript_owns_tool_results(&[], &[]));
 }
 
 #[test]
