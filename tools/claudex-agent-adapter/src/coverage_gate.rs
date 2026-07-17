@@ -168,6 +168,7 @@ fn coverage_percent(value: &Value, pointer: &str) -> Result<f64> {
 }
 
 #[cfg(test)]
+// Coverage gates measure production code; test implementations are excluded.
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::fs;

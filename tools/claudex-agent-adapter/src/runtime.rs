@@ -230,6 +230,7 @@ fn nonempty_token(token: Option<String>) -> Option<String> {
 }
 
 #[cfg(test)]
+// Coverage gates measure production code; test implementations are excluded.
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::{os::unix::fs::PermissionsExt, path::PathBuf};

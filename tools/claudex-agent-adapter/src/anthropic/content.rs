@@ -299,6 +299,7 @@ pub fn error_response(status: StatusCode, error: anyhow::Error) -> Response<Body
 }
 
 #[cfg(test)]
+// Coverage gates measure production code; test implementations are excluded.
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::{

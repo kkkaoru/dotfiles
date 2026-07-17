@@ -34,6 +34,7 @@ fn classify_event(event: Option<Value>) -> NextEvent {
 }
 
 #[cfg(test)]
+// Coverage gates measure production code; test implementations are excluded.
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::{NextEvent, classify_event};

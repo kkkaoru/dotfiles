@@ -145,8 +145,9 @@ env -u RUSTUP_TOOLCHAIN cargo coverage-branch
 coverage, plus at least 95% line coverage for every production source file.
 `cargo coverage-branch` uses nightly-only Rust branch instrumentation and
 enforces at least 95% for all four aggregate metrics: lines, functions,
-regions, and branches. Mock process fixtures under `tests/fixtures` are the only
-test-infrastructure exclusion. The ACP client trait shim has a documented
+regions, and branches. Test-only modules and mock process fixtures under
+`tests/fixtures` are excluded so the report measures production behavior. The
+ACP client trait shim is the only production exclusion and has a documented
 nightly LLVM mapping workaround in the source; its delegated application logic
 remains measured. Both coverage commands include the Cargo build script, whose
 reusable logic is measured through `src/build_support.rs`.
