@@ -72,6 +72,55 @@ async fn ensure_running_starts_reuses_and_replaces_the_daemon() {
 }
 
 #[tokio::test]
+async fn ensure_running_replaces_the_renamed_legacy_daemon() {
+    let home = launcher_home();
+    let port = unused_port();
+    let current_binary = home.path().join("claudex-agent-adapter");
+    let legacy_binary = home.path().join("claudex-app-server-adapter");
+    for binary in [&current_binary, &legacy_binary] {
+        fs::copy(env!("CARGO_BIN_EXE_claudex-agent-adapter"), binary)
+            .expect("copy adapter under an installed name");
+        fs::set_permissions(binary, fs::Permissions::from_mode(0o755))
+            .expect("make copied adapter executable");
+    }
+
+    let mut legacy = Command::new(&legacy_binary)
+        .args(["serve", "--model", "legacy-model"])
+        .args(["--listen", &format!("127.0.0.1:{port}")])
+        .env("HOME", home.path())
+        .env("ANTHROPIC_AUTH_TOKEN", "claudex-local")
+        .env("CLAUDEX_CODEX_PROGRAM", env!("CARGO_BIN_EXE_codex-mock"))
+        .spawn()
+        .expect("start renamed legacy daemon");
+    let client = Client::new();
+    let base_url = format!("http://127.0.0.1:{port}");
+    let legacy_pid = health(&client, &base_url).await["pid"]
+        .as_u64()
+        .expect("legacy daemon pid");
+
+    let output = Command::new(&current_binary)
+        .args(["ensure", "--model", "test-main-model"])
+        .args(["--listen", &format!("127.0.0.1:{port}")])
+        .args(["--subscription-max-processes", "20"])
+        .args(["--subscription-timeout-minutes", "120"])
+        .env("HOME", home.path())
+        .env("ANTHROPIC_AUTH_TOKEN", "claudex-local")
+        .env("CLAUDEX_CODEX_PROGRAM", env!("CARGO_BIN_EXE_codex-mock"))
+        .output()
+        .expect("replace renamed legacy daemon");
+    if !output.status.success() {
+        let _cleanup = legacy.kill();
+        panic!("{}", String::from_utf8_lossy(&output.stderr));
+    }
+    let _status = legacy.wait().expect("reap renamed legacy daemon");
+    let replacement = health(&client, &base_url).await;
+    assert_eq!(replacement["model"], "test-main-model");
+    assert_ne!(replacement["pid"].as_u64(), Some(legacy_pid));
+    terminate(replacement["pid"].as_u64().expect("replacement daemon pid"));
+    wait_for_exit(&client, &base_url).await;
+}
+
+#[tokio::test]
 async fn ensure_running_replaces_an_unavailable_health_endpoint() {
     let home = launcher_home();
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind stale endpoint");
@@ -302,7 +351,7 @@ fn launcher_home() -> TempDir {
 }
 
 async fn health(client: &Client, base_url: &str) -> Value {
-    for _ in 0..20 {
+    for _ in 0..120 {
         if let Ok(response) = client.get(format!("{base_url}/health")).send().await
             && let Ok(response) = response.error_for_status()
             && let Ok(value) = response.json().await

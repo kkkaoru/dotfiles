@@ -3,7 +3,7 @@ use std::{
     fs::{self, OpenOptions},
     io::{BufRead, BufReader, Write},
     net::SocketAddr,
-    path::{Path, PathBuf},
+    path::PathBuf,
     process::{Command, Stdio},
     thread,
     time::Duration,
@@ -13,6 +13,10 @@ use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
 use crate::{ADAPTER_PROTOCOL_VERSION, agent_backend::BackendRoute};
+
+mod daemon_process;
+
+use daemon_process::{matches as process_matches, terminate};
 
 const LOCAL_TOKEN: &str = "claudex-local";
 const START_ATTEMPTS: usize = 40;
@@ -234,25 +238,6 @@ async fn stop_stale(config: &ServiceConfig, pid: Option<u32>) {
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-}
-
-fn process_matches(pid: u32, executable: &Path) -> bool {
-    let Ok(output) = Command::new("ps")
-        .args(["-p", &pid.to_string(), "-o", "command="])
-        .output()
-    else {
-        return false;
-    };
-    let command = String::from_utf8_lossy(&output.stdout);
-    command.contains(&executable.to_string_lossy().to_string()) && command.contains("serve")
-}
-
-fn terminate(pid: u32) {
-    let _status = Command::new("kill")
-        .arg(pid.to_string())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
 }
 
 fn start_adapter(config: &ServiceConfig) -> Result<()> {
