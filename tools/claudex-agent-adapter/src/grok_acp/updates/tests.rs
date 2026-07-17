@@ -27,6 +27,7 @@ async fn forwards_thought_and_tool_progress_without_actionable_tool_calls() {
     let thought = receiver.recv().await.unwrap();
     let tool = receiver.recv().await.unwrap();
     assert_eq!(thought["method"], "item/reasoning/summaryTextDelta");
+    assert_eq!(thought["params"]["itemId"], "session:reasoning");
     assert_eq!(thought["params"]["delta"], "thinking");
     assert_eq!(tool["method"], "item/reasoning/summaryTextDelta");
     assert!(

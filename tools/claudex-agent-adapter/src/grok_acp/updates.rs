@@ -118,6 +118,7 @@ fn dispatch_delta(
         "method":method,
         "params":{
             "threadId":session_id,
+            "itemId":format!("{session_id}:reasoning"),
             "summaryIndex":summary_index,
             "delta":delta
         }
