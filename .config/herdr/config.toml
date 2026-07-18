@@ -1,5 +1,8 @@
 onboarding = false
 
+[theme]
+name = "dracula"
+
 [keys]
 # prefix+h is reserved for a horizontal split; keep left focus available on
 # the corresponding arrow key to avoid a duplicate binding.

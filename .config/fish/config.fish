@@ -5,6 +5,9 @@ source (dirname (status -f))/envs.fish
 source (dirname (status -f))/binds.fish
 source (dirname (status -f))/path.fish
 
+# Hide command execution time in the right prompt.
+set -g theme_display_cmd_duration no
+
 set -gx HOMEBREW_GITHUB_API_TOKEN your_token_here
 
 # pnpm
