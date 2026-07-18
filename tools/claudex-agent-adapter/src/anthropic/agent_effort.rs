@@ -174,12 +174,21 @@ fn contains_model_id(text: &str, model: &str) -> bool {
             .chars()
             .next_back()
             .is_none_or(|character| !is_model_id_character(character));
-        let after_is_boundary = text[end..]
-            .chars()
-            .next()
-            .is_none_or(|character| !is_model_id_character(character));
+        let after_is_boundary = model_id_ends_at_boundary(&text[end..]);
         before_is_boundary && after_is_boundary
     })
+}
+
+fn model_id_ends_at_boundary(remaining: &str) -> bool {
+    let mut characters = remaining.chars();
+    match characters.next() {
+        None => true,
+        Some(character) if !is_model_id_character(character) => true,
+        Some(character @ ('.' | ':')) => characters
+            .next()
+            .is_none_or(|next| !is_model_id_character(next) || next == character),
+        Some(_) => false,
+    }
 }
 
 fn is_model_id_character(character: char) -> bool {

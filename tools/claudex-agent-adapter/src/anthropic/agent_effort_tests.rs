@@ -288,8 +288,13 @@ mod tests {
                 "parent-model",
             ),
             (
+                "tool-dot-suffix",
+                "Use claude-sonnet-5.1 for this SubAgent",
+                "parent-model",
+            ),
+            (
                 "tool-explicit",
-                "Use claude-sonnet-5 for this SubAgent",
+                "Use claude-sonnet-5.",
                 "claude-sonnet-5",
             ),
         ] {
