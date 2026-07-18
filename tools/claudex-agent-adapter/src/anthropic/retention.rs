@@ -15,13 +15,36 @@ const PENDING_SESSION_TTL: Duration = Duration::from_secs(30 * 60);
 // Thirty minutes covers normal interactive pauses while preventing inactive transcripts from
 // occupying session slots indefinitely. Pending and actively-owned sessions are excluded.
 const IDLE_SESSION_TTL: Duration = Duration::from_secs(30 * 60);
+// Capacity pressure has its own immediate eviction path. Periodic sweeps only reclaim old idle
+// transcripts, so scanning every session on every request wastes work during large Agent bursts.
+pub(super) const SESSION_SWEEP_INTERVAL: Duration = Duration::from_secs(60);
 
 impl Bridge {
     pub(super) async fn sweep_idle_sessions(&self) {
-        let removed = sweep_idle_sessions_at(&self.sessions, Instant::now()).await;
+        self.sweep_idle_sessions_if_due_at(Instant::now()).await;
+    }
+
+    async fn sweep_idle_sessions_if_due_at(&self, now: Instant) -> usize {
+        let due = {
+            let mut next = self
+                .next_session_sweep
+                .lock()
+                .expect("session sweep clock poisoned");
+            if now < *next {
+                false
+            } else {
+                *next = now + SESSION_SWEEP_INTERVAL;
+                true
+            }
+        };
+        if !due {
+            return 0;
+        }
+        let removed = sweep_idle_sessions_at(&self.sessions, now).await;
         if removed > 0 {
             tracing::debug!(removed, "released idle claudex sessions");
         }
+        removed
     }
 
     pub(super) async fn evict_oldest_idle_session(&self) {
@@ -181,13 +204,20 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let app = spawn_app(root.path(), true).await;
         let bridge = Bridge::new(app, "model".to_owned());
-        let idle = session(Instant::now() - IDLE_SESSION_TTL);
+        let sweep_at = *bridge.next_session_sweep.lock().unwrap();
+        let idle = session(sweep_at - IDLE_SESSION_TTL);
         idle.pending_tools.lock().await.clear();
         *idle.pending_since.lock().unwrap() = None;
         bridge.sessions.lock().await.push(idle);
 
-        bridge.sweep_idle_sessions().await;
-        bridge.sweep_idle_sessions().await;
+        assert_eq!(
+            bridge
+                .sweep_idle_sessions_if_due_at(sweep_at - Duration::from_nanos(1))
+                .await,
+            0
+        );
+        assert_eq!(bridge.sweep_idle_sessions_if_due_at(sweep_at).await, 1);
+        assert_eq!(bridge.sweep_idle_sessions_if_due_at(sweep_at).await, 0);
 
         assert!(bridge.sessions.lock().await.is_empty());
     }
@@ -227,7 +257,7 @@ mod tests {
         Arc::new(Session {
             thread_id: "thread".to_owned(),
             model: "main-model".to_owned(),
-            signature: "signature".to_owned(),
+            signature: Arc::from("signature"),
             transcript: Mutex::new(Vec::new()),
             pending_tools: Mutex::new(HashMap::from([("tool".to_owned(), json!(9))])),
             consumed_tool_ids: Mutex::new(Default::default()),

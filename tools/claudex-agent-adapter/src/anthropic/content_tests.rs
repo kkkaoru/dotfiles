@@ -147,7 +147,7 @@ mod tests {
         Session {
             thread_id: "thread".to_owned(),
             model: "main-model".to_owned(),
-            signature: "signature".to_owned(),
+            signature: Arc::from("signature"),
             transcript: Mutex::new(transcript),
             pending_tools: Mutex::new(pending_tools),
             consumed_tool_ids: Mutex::new(consumed_tool_ids),

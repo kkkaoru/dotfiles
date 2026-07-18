@@ -289,7 +289,7 @@ async fn rejects_a_malformed_tool_event_before_dispatch() {
     let session = Session {
         thread_id: "thread".to_owned(),
         model: "main".to_owned(),
-        signature: "signature".to_owned(),
+        signature: Arc::from("signature"),
         transcript: Mutex::new(Vec::new()),
         pending_tools: Mutex::new(HashMap::new()),
         consumed_tool_ids: Mutex::new(HashSet::new()),

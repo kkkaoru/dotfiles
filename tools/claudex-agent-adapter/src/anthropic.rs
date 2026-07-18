@@ -10,8 +10,9 @@ mod team_protocol;
 
 use std::{
     collections::{HashMap, HashSet},
+    hash::{DefaultHasher, Hash, Hasher},
     path::PathBuf,
-    sync::Arc,
+    sync::{Arc, Mutex as StdMutex, Weak},
     time::Instant,
 };
 
@@ -34,6 +35,8 @@ const BRIDGE_INSTRUCTIONS: &str = r"You are the model inside the Claude Code age
 // This accepts large bursts while retaining a finite upper bound for transcript memory; idle
 // sessions are reclaimed both by TTL and immediately at capacity.
 const MAX_SESSIONS: usize = 1_024;
+const MAX_SIGNATURE_BUCKETS: usize = MAX_SESSIONS * 2;
+type SignaturePool = StdMutex<HashMap<u64, Vec<Weak<str>>>>;
 
 #[derive(Debug, Deserialize)]
 pub struct MessagesRequest {
@@ -64,6 +67,8 @@ pub struct Bridge {
     settings_path: Option<PathBuf>,
     sessions: Mutex<Vec<Arc<Session>>>,
     session_slots: Arc<Semaphore>,
+    next_session_sweep: std::sync::Mutex<Instant>,
+    signature_pool: SignaturePool,
     subscription_slots: Arc<Semaphore>,
     subscription_max_processes: usize,
     subscription_timeout: std::time::Duration,
@@ -73,7 +78,7 @@ pub struct Bridge {
 struct Session {
     thread_id: String,
     model: String,
-    signature: String,
+    signature: Arc<str>,
     transcript: Mutex<Vec<Value>>,
     pending_tools: Mutex<HashMap<String, Value>>,
     consumed_tool_ids: Mutex<HashSet<String>>,
@@ -226,6 +231,10 @@ impl Bridge {
             settings_path: subscription::claude_settings_path(),
             sessions: Mutex::new(Vec::new()),
             session_slots: Arc::new(Semaphore::new(MAX_SESSIONS)),
+            next_session_sweep: std::sync::Mutex::new(
+                Instant::now() + retention::SESSION_SWEEP_INTERVAL,
+            ),
+            signature_pool: StdMutex::new(HashMap::new()),
             subscription_slots: Arc::new(Semaphore::new(subscription_limits.max_processes)),
             subscription_max_processes: subscription_limits.max_processes,
             subscription_timeout: subscription_limits.timeout,
@@ -275,9 +284,44 @@ impl Bridge {
             request.model.clone()
         }
     }
+
+    fn intern_signature(&self, signature: String) -> Arc<str> {
+        intern_signature(&self.signature_pool, signature)
+    }
 }
 
-fn trace_request(request: &MessagesRequest) {
+fn intern_signature(pool: &SignaturePool, signature: String) -> Arc<str> {
+    let mut hasher = DefaultHasher::new();
+    signature.hash(&mut hasher);
+    let mut pool = pool.lock().expect("signature pool poisoned");
+    if pool.len() >= MAX_SIGNATURE_BUCKETS {
+        pool.retain(|_, candidates| {
+            candidates.retain(|candidate| candidate.strong_count() > 0);
+            !candidates.is_empty()
+        });
+    }
+    let candidates = pool.entry(hasher.finish()).or_default();
+    let mut matched = None;
+    candidates.retain(|candidate| {
+        let Some(candidate) = candidate.upgrade() else {
+            return false;
+        };
+        if candidate.as_ref() == signature {
+            matched = Some(candidate);
+        }
+        true
+    });
+    matched.unwrap_or_else(|| {
+        let signature = Arc::<str>::from(signature);
+        candidates.push(Arc::downgrade(&signature));
+        signature
+    })
+}
+
+fn trace_request(request: &MessagesRequest) -> bool {
+    if !tracing::enabled!(tracing::Level::DEBUG) {
+        return false;
+    }
     tracing::debug!(
         request_model = %request.model,
         stream = request.stream,
@@ -288,6 +332,7 @@ fn trace_request(request: &MessagesRequest) {
         output_config = %request.output_config,
         "received Claude Code Messages request"
     );
+    true
 }
 
 fn serialized_len(value: &impl serde::Serialize) -> usize {

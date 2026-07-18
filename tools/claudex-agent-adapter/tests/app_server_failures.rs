@@ -128,6 +128,34 @@ read line
 }
 
 #[tokio::test]
+async fn closing_output_reports_a_detached_turn_before_closing_subscribers() {
+    let fixture = Fixture::new(&format!(
+        r"{INITIALIZE}
+read line
+"
+    ));
+    let server = fixture.spawn().await;
+    let events = server.subscribe_thread("detached-close");
+
+    server
+        .request_detached("turn/start", json!({"threadId":"detached-close"}))
+        .await
+        .expect("flush detached request");
+    let event = tokio::time::timeout(Duration::from_secs(1), events.recv())
+        .await
+        .expect("provider exit event")
+        .expect("queued error before close");
+    assert_eq!(event["method"], "error");
+    assert!(
+        event["params"]["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("closed its output")
+    );
+    assert!(events.recv().await.is_none());
+}
+
+#[tokio::test]
 async fn initialization_fails_when_response_channel_closes() {
     let fixture = Fixture::new("read line\n");
     let error = AppServer::spawn_with_program(

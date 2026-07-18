@@ -124,6 +124,40 @@ mod tests {
         assert!(error.to_string().contains("timed out"));
     }
 
+    #[tokio::test]
+    async fn stores_detached_requests_without_a_response_channel() {
+        let root = tempfile::tempdir().expect("create app-server fixture");
+        let source = root.path().join("source");
+        std::fs::create_dir(&source).expect("create source home");
+        std::fs::write(source.join("auth.json"), "{}").expect("write auth");
+        let stalled = script(
+            root.path(),
+            "detached-program",
+            "read line\nprintf '%s\\n' '{\"id\":1,\"result\":{}}'\nwhile read line; do :; done\n",
+        );
+        let server = AppServer::spawn_with_program(
+            "model",
+            &stalled,
+            &source,
+            &root.path().join("detached-home"),
+        )
+        .await
+        .expect("start stalled server");
+
+        server
+            .request_detached("turn/start", json!({"threadId":"thread"}))
+            .await
+            .expect("flush detached request");
+        let pending = server.pending.lock().await;
+        assert_eq!(pending.len(), 1);
+        assert!(matches!(
+            pending.values().next(),
+            Some(PendingResponse::Detached { thread_id }) if thread_id == "thread"
+        ));
+        drop(pending);
+        server.stop("detached request test complete").await;
+    }
+
     fn script(root: &std::path::Path, name: &str, body: &str) -> PathBuf {
         let path = root.join(name);
         std::fs::write(&path, format!("#!/bin/sh\n{body}")).expect("write script");

@@ -27,7 +27,7 @@ fn session(signature: &str, transcript: Vec<Value>) -> Arc<Session> {
     Arc::new(Session {
         thread_id: "thread".to_owned(),
         model: "main-model".to_owned(),
-        signature: signature.to_owned(),
+        signature: Arc::from(signature),
         transcript: Mutex::new(transcript),
         pending_tools: Mutex::new(HashMap::new()),
         consumed_tool_ids: Mutex::new(std::collections::HashSet::new()),
@@ -112,17 +112,22 @@ async fn candidate_requires_the_signature_and_matching_transcript() {
     let first = json!({"role":"user","content":"first"});
     let owner = session("signature", vec![first.clone()]);
     assert_eq!(
-        candidate_length(&owner, "other", std::slice::from_ref(&first)).await,
+        candidate_length(&owner, &Arc::from("other"), std::slice::from_ref(&first)).await,
         None
     );
     assert_eq!(
-        candidate_length(&owner, "signature", std::slice::from_ref(&first)).await,
+        candidate_length(
+            &owner,
+            &Arc::from("signature"),
+            std::slice::from_ref(&first)
+        )
+        .await,
         Some(1)
     );
     assert_eq!(
         candidate_length(
             &owner,
-            "signature",
+            &Arc::from("signature"),
             &[json!({"role":"user","content":"different"})]
         )
         .await,

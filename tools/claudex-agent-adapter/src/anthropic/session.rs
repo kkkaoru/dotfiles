@@ -47,7 +47,8 @@ impl Bridge {
             advisor_model.as_deref(),
             collaborator_model.as_deref(),
         )?;
-        let signature = format!("{}\0{signature}", self.request_model(request));
+        let signature =
+            self.intern_signature(format!("{}\0{signature}", self.request_model(request)));
         let tool_results = request
             .messages
             .last()
@@ -144,7 +145,7 @@ impl Bridge {
     async fn select_session(
         &self,
         request: &MessagesRequest,
-        signature: String,
+        signature: Arc<str>,
         advisor_model: Option<&str>,
         collaborator_model: Option<&str>,
         tool_results: &[ToolResult],
@@ -219,7 +220,7 @@ impl Bridge {
 
     async fn select_matching_session(
         &self,
-        signature: &str,
+        signature: &Arc<str>,
         messages: &[Value],
     ) -> Option<SelectedSession> {
         let (session, _) = self.find_session(signature, messages).await?;
@@ -243,7 +244,7 @@ impl Bridge {
 
     async fn find_session(
         &self,
-        signature: &str,
+        signature: &Arc<str>,
         messages: &[Value],
     ) -> Option<(Arc<Session>, usize)> {
         let sessions = self.sessions.lock().await.clone();
@@ -280,7 +281,7 @@ impl Bridge {
     async fn create_session(
         &self,
         request: &MessagesRequest,
-        signature: String,
+        signature: Arc<str>,
         advisor_model: Option<&str>,
         collaborator_model: Option<&str>,
     ) -> Result<Arc<Session>> {
@@ -376,10 +377,12 @@ fn is_better_length(best: Option<usize>, candidate: usize) -> bool {
 
 async fn candidate_length(
     session: &Arc<Session>,
-    signature: &str,
+    signature: &Arc<str>,
     messages: &[Value],
 ) -> Option<usize> {
-    if session.signature != signature {
+    if !Arc::ptr_eq(&session.signature, signature)
+        && session.signature.as_ref() != signature.as_ref()
+    {
         return None;
     }
     matching_transcript_len(session, messages).await

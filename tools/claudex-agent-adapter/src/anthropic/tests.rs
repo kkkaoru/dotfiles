@@ -8,8 +8,9 @@ use axum::body::to_bytes;
 use serde_json::{Value, json};
 
 use super::{
-    MessagesRequest, Segment, Session, Usage,
+    MessagesRequest, Segment, Session, SignaturePool, Usage,
     content::*,
+    intern_signature,
     retention::{record_pending_tool, sweep_idle_sessions_at, take_oldest_evictable_at},
     session::{codex_tool_name, dynamic_tool, internal_advisor_tool, internal_collaborator_tool},
     stream::send_stream_frame,
@@ -63,7 +64,7 @@ fn test_session_at(
     Arc::new(Session {
         thread_id: "thread-test".to_owned(),
         model: "main-model".to_owned(),
-        signature: "signature".to_owned(),
+        signature: Arc::from("signature"),
         transcript: tokio::sync::Mutex::new(Vec::new()),
         pending_tools: tokio::sync::Mutex::new(pending_tools),
         consumed_tool_ids: tokio::sync::Mutex::new(std::collections::HashSet::new()),
@@ -328,9 +329,32 @@ fn traces_request_metadata_without_prompt_contents() {
         "tools":[{"name":"lookup"}], "output_config":{"effort":"high"}
     }))
     .expect("trace request");
-    let subscriber = tracing_subscriber::fmt()
+    let info_subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::INFO)
+        .with_writer(std::io::sink)
+        .finish();
+    tracing::subscriber::with_default(info_subscriber, || {
+        assert!(!trace_request(&request));
+    });
+    let debug_subscriber = tracing_subscriber::fmt()
         .with_max_level(tracing::Level::DEBUG)
         .with_writer(std::io::sink)
         .finish();
-    tracing::subscriber::with_default(subscriber, || trace_request(&request));
+    tracing::subscriber::with_default(debug_subscriber, || {
+        assert!(trace_request(&request));
+    });
+}
+
+#[test]
+fn shares_live_session_signatures_and_releases_dead_values() {
+    let pool = SignaturePool::default();
+    let first = intern_signature(&pool, "large-shared-signature".to_owned());
+    let shared = intern_signature(&pool, "large-shared-signature".to_owned());
+    assert!(Arc::ptr_eq(&first, &shared));
+
+    drop(first);
+    drop(shared);
+    let replacement = intern_signature(&pool, "large-shared-signature".to_owned());
+    assert_eq!(replacement.as_ref(), "large-shared-signature");
+    assert_eq!(pool.lock().unwrap().values().flatten().count(), 1);
 }

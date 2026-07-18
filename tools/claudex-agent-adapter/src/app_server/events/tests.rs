@@ -19,6 +19,27 @@ fn reasoning_delta(thread_id: &str, index: u64, text: &str) -> Value {
     })
 }
 
+#[test]
+fn counts_encoded_bytes_without_materializing_json() {
+    for value in [
+        json!(null),
+        json!({"plain":"text"}),
+        json!({"escaped":"quote\" newline\n"}),
+        json!({"unicode":"日本語"}),
+    ] {
+        assert_eq!(
+            event_bytes(&value),
+            serde_json::to_vec(&value).unwrap().len()
+        );
+    }
+    for value in ["plain", "quote\" newline\n", "日本語"] {
+        assert_eq!(
+            encoded_string_content_bytes(value),
+            serde_json::to_vec(value).unwrap().len() - 2
+        );
+    }
+}
+
 #[tokio::test]
 async fn isolates_threads_and_fans_out_subscribers() {
     let dispatcher = ThreadEventDispatcher::default();
@@ -200,7 +221,7 @@ async fn dropping_one_subscriber_retains_the_other_and_closes_its_queue() {
     dispatcher.close();
     dispatcher.close();
     assert!(second.recv().await.is_none());
-    second.queue.push(delta("shared", "ignored"), "shared");
+    second.queue.push(delta("shared", "ignored"));
     assert!(second.queue.state.lock().unwrap().events.is_empty());
 }
 
@@ -216,5 +237,5 @@ fn rejects_a_corrupted_coalescible_queue_tail() {
         }]),
         ..QueueState::default()
     };
-    state.append_delta_or_overflow("suffix", "thread");
+    state.append_delta("suffix");
 }

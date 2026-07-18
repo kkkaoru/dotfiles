@@ -21,21 +21,18 @@ use tokio::{
 pub(crate) mod events;
 use events::ThreadEventDispatcher;
 pub use events::ThreadEvents;
+mod pending;
+use pending::{PendingRequest, PendingResponse, await_response};
 
 const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(15);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-
-struct PendingRequest {
-    id: u64,
-    response: oneshot::Receiver<Result<Value, String>>,
-}
 
 /// A persistent JSON-RPC connection to `codex app-server` over JSONL stdio.
 pub struct AppServer {
     stdin: Mutex<ChildStdin>,
     child: Mutex<Child>,
     next_id: AtomicU64,
-    pending: Mutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>,
+    pending: Mutex<HashMap<u64, PendingResponse>>,
     event_dispatcher: ThreadEventDispatcher,
     alive: AtomicBool,
 }
@@ -163,29 +160,30 @@ impl AppServer {
 
     /// Starts a request after flushing it to app-server, but does not delay the
     /// caller while app-server keeps the JSON-RPC response open for the turn.
-    pub async fn request_detached(self: &Arc<Self>, method: &str, params: Value) -> Result<()> {
+    pub async fn request_detached(&self, method: &str, params: Value) -> Result<()> {
         let thread_id = params.get("threadId").cloned().unwrap_or(Value::Null);
-        let request = self.begin_request(method, params).await?;
-        let server = Arc::clone(self);
-        tokio::spawn(async move {
-            if let Err(error) = await_response(request.response).await {
-                server.event_dispatcher.dispatch(json!({
-                    "method":"error",
-                    "params":{
-                        "threadId":thread_id,
-                        "willRetry":false,
-                        "error":{"message":format!("turn/start failed: {error:#}")}
-                    }
-                }));
-            }
-        });
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        self.pending
+            .lock()
+            .await
+            .insert(id, PendingResponse::Detached { thread_id });
+        if let Err(error) = self
+            .write(&json!({ "id": id, "method": method, "params": params }))
+            .await
+        {
+            self.pending.lock().await.remove(&id);
+            return Err(error);
+        }
         Ok(())
     }
 
     async fn begin_request(&self, method: &str, params: Value) -> Result<PendingRequest> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
-        self.pending.lock().await.insert(id, tx);
+        self.pending
+            .lock()
+            .await
+            .insert(id, PendingResponse::Awaited(tx));
         if let Err(error) = self
             .write(&json!({ "id": id, "method": method, "params": params }))
             .await
@@ -287,18 +285,44 @@ impl AppServer {
             tracing::debug!(id, "received response for unknown app-server request");
             return;
         };
-        let response = if let Some(error) = message.get("error") {
-            Err(error.to_string())
-        } else {
-            Ok(message.get("result").cloned().unwrap_or(Value::Null))
-        };
-        let _ = tx.send(response);
+        match tx {
+            PendingResponse::Awaited(tx) => {
+                let response = if let Some(error) = message.get("error") {
+                    Err(error.to_string())
+                } else {
+                    Ok(message.get("result").cloned().unwrap_or(Value::Null))
+                };
+                let _ = tx.send(response);
+            }
+            PendingResponse::Detached { thread_id } => {
+                if let Some(error) = message.get("error") {
+                    self.dispatch_detached_error(thread_id, error);
+                }
+            }
+        }
     }
 
     async fn fail_pending(&self, reason: &str) {
-        for (_, tx) in self.pending.lock().await.drain() {
-            let _ = tx.send(Err(reason.to_owned()));
+        for (_, response) in self.pending.lock().await.drain() {
+            match response {
+                PendingResponse::Awaited(tx) => {
+                    let _ = tx.send(Err(reason.to_owned()));
+                }
+                PendingResponse::Detached { thread_id } => {
+                    self.dispatch_detached_error(thread_id, &reason);
+                }
+            }
         }
+    }
+
+    fn dispatch_detached_error(&self, thread_id: Value, error: &dyn std::fmt::Display) {
+        self.event_dispatcher.dispatch(json!({
+            "method":"error",
+            "params":{
+                "threadId":thread_id,
+                "willRetry":false,
+                "error":{"message":format!("turn/start failed: {error}")}}
+        }));
     }
 }
 
@@ -311,13 +335,6 @@ fn initialize_params() -> Value {
         },
         "capabilities": { "experimentalApi": true }
     })
-}
-
-async fn await_response(rx: oneshot::Receiver<Result<Value, String>>) -> Result<Value> {
-    match rx.await.context("app-server response channel closed")? {
-        Ok(value) => Ok(value),
-        Err(message) => bail!(message),
-    }
 }
 
 fn prepare_isolated_codex_home(
