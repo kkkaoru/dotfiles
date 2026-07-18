@@ -11,7 +11,7 @@ async fn evicts_the_oldest_idle_session_at_capacity() {
     let client = Client::new();
     let url = format!("{}/v1/messages", adapter.base_url);
     // Fill the current hard limit, then prove the next request reuses an idle permit.
-    for index in 0..257 {
+    for index in 0..1_025 {
         let response = post_json(
             &client,
             &url,

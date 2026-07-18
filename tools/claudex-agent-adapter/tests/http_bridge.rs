@@ -33,7 +33,7 @@ async fn authenticates_protected_routes_but_keeps_health_public() {
         .expect("request public health");
     assert!(health.status().is_success());
     let health: Value = health.json().await.expect("decode health response");
-    assert_eq!(health["session_capacity"], 256);
+    assert_eq!(health["session_capacity"], 1_024);
     assert_eq!(health["session_slots_used"], 0);
     assert_eq!(health["subscription_max_processes"], 20);
     assert_eq!(health["subscription_timeout_minutes"], 120);
