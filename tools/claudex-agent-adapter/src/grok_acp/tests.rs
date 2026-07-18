@@ -3,7 +3,10 @@ use std::sync::{Arc, atomic::AtomicBool};
 use agent_client_protocol::{self as acp, Client as _};
 use serde_json::{json, value::RawValue};
 
-use super::{GrokAcp, client::AcpClient, prompt, updates};
+use super::{
+    COMMAND_QUEUE_CAPACITY, DriverCommand, GrokAcp, PreparedTurn, TURN_QUEUE_CAPACITY,
+    client::AcpClient, prompt, updates,
+};
 use crate::app_server::events::ThreadEventDispatcher;
 
 #[test]
@@ -70,7 +73,7 @@ async fn client_accepts_extension_notifications() {
 
 #[tokio::test]
 async fn reports_a_closed_driver_for_each_command_response_type() {
-    let (commands, receiver) = tokio::sync::mpsc::unbounded_channel();
+    let (commands, receiver) = tokio::sync::mpsc::channel(1);
     drop(receiver);
     let agent = GrokAcp {
         commands,
@@ -80,6 +83,51 @@ async fn reports_a_closed_driver_for_each_command_response_type() {
 
     assert!(agent.create_session(json!({})).await.is_err());
     assert!(agent.start_turn(json!({})).await.is_err());
+}
+
+#[tokio::test]
+async fn bounded_queues_apply_backpressure_at_fixed_capacities() {
+    let (commands, mut command_receiver) = tokio::sync::mpsc::channel(COMMAND_QUEUE_CAPACITY);
+    for _ in 0..COMMAND_QUEUE_CAPACITY {
+        let (response, _) = tokio::sync::oneshot::channel();
+        commands
+            .send(DriverCommand::StartTurn {
+                params: json!({}),
+                response,
+            })
+            .await
+            .unwrap();
+    }
+    assert_eq!(commands.capacity(), 0);
+    assert_eq!(command_receiver.len(), COMMAND_QUEUE_CAPACITY);
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(10), commands.reserve())
+            .await
+            .is_err()
+    );
+    command_receiver.recv().await.unwrap();
+    assert!(commands.reserve().await.is_ok());
+
+    let (turns, mut turn_receiver) = tokio::sync::mpsc::channel(TURN_QUEUE_CAPACITY);
+    for index in 0..TURN_QUEUE_CAPACITY {
+        turns
+            .send(PreparedTurn {
+                session_id: format!("session-{index}"),
+                prompt: "prompt".to_owned(),
+                effort: None,
+            })
+            .await
+            .unwrap();
+    }
+    assert_eq!(turns.capacity(), 0);
+    assert_eq!(turn_receiver.len(), TURN_QUEUE_CAPACITY);
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(10), turns.reserve())
+            .await
+            .is_err()
+    );
+    turn_receiver.recv().await.unwrap();
+    assert!(turns.reserve().await.is_ok());
 }
 
 #[tokio::test]

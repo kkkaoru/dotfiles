@@ -40,39 +40,40 @@ pub(super) fn sse_response(receiver: mpsc::Receiver<Result<Bytes, Infallible>>) 
 }
 
 pub(super) async fn send_stream_completion(sender: &StreamSender, segment: &Segment) {
-    let _ = send_stream_frame(
-        Some(sender),
-        "message_delta",
+    let _ = send_stream_frame(Some(sender), "message_delta", || {
         json!({
             "type":"message_delta",
             "delta":{"stop_reason":segment.stop_reason,"stop_sequence":null},
             "usage":{"output_tokens":segment.usage.output_tokens}
-        }),
+        })
+    })
+    .await;
+    let _ = send_stream_frame(
+        Some(sender),
+        "message_stop",
+        || json!({"type":"message_stop"}),
     )
     .await;
-    let _ = send_stream_frame(Some(sender), "message_stop", json!({"type":"message_stop"})).await;
 }
 
 pub(super) async fn send_stream_error(sender: &StreamSender, error: anyhow::Error) {
-    let _ = send_stream_frame(
-        Some(sender),
-        "error",
+    let _ = send_stream_frame(Some(sender), "error", || {
         json!({
             "type":"error",
             "error":{"type":"api_error","message":format!("{error:#}")}
-        }),
-    )
+        })
+    })
     .await;
 }
 
 pub(in crate::anthropic) async fn send_stream_frame(
     stream: Option<&StreamSender>,
     event: &str,
-    value: Value,
+    value: impl FnOnce() -> Value,
 ) -> Result<()> {
     if let Some(sender) = stream
         && sender
-            .send(Ok(Bytes::from(sse(event, value))))
+            .send(Ok(Bytes::from(sse(event, value()))))
             .await
             .is_err()
     {
@@ -86,8 +87,11 @@ pub(super) async fn send_tool_use(
     index: usize,
     block: &Value,
 ) -> Result<()> {
+    let Some(sender) = stream else {
+        return Ok(());
+    };
     for (event, frame) in tool_use_frames(index, block) {
-        send_stream_frame(stream, event, frame).await?;
+        send_stream_frame(Some(sender), event, || frame).await?;
     }
     Ok(())
 }
@@ -119,4 +123,29 @@ pub(in crate::anthropic) fn tool_use_frames(
             json!({"type":"content_block_stop","index":index}),
         ),
     ]
+}
+
+#[cfg(test)]
+mod lazy_tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    use super::*;
+
+    #[tokio::test]
+    async fn absent_stream_does_not_build_frame() {
+        let built = Arc::new(AtomicBool::new(false));
+        let observed = Arc::clone(&built);
+
+        send_stream_frame(None, "ignored", || {
+            observed.store(true, Ordering::Relaxed);
+            json!({})
+        })
+        .await
+        .expect("optional stream");
+
+        assert!(!built.load(Ordering::Relaxed));
+    }
 }

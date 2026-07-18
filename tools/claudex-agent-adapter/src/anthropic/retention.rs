@@ -11,8 +11,19 @@ use super::{Bridge, Session};
 // An abandoned Claude tool request must not reserve a session slot forever.
 // Thirty minutes allows long interactive tool work while bounding leaked slots.
 const PENDING_SESSION_TTL: Duration = Duration::from_secs(30 * 60);
+// A session without pending tools can be reconstructed from Claude Code's next full transcript.
+// Thirty minutes covers normal interactive pauses while preventing inactive transcripts from
+// occupying session slots indefinitely. Pending and actively-owned sessions are excluded.
+const IDLE_SESSION_TTL: Duration = Duration::from_secs(30 * 60);
 
 impl Bridge {
+    pub(super) async fn sweep_idle_sessions(&self) {
+        let removed = sweep_idle_sessions_at(&self.sessions, Instant::now()).await;
+        if removed > 0 {
+            tracing::debug!(removed, "released idle claudex sessions");
+        }
+    }
+
     pub(super) async fn evict_oldest_idle_session(&self) {
         let Some(session) = take_oldest_evictable_at(&self.sessions, Instant::now()).await else {
             return;
@@ -27,6 +38,32 @@ impl Bridge {
             }
         }
     }
+}
+
+pub(super) async fn sweep_idle_sessions_at(
+    sessions: &Mutex<Vec<Arc<Session>>>,
+    now: Instant,
+) -> usize {
+    let mut sessions = sessions.lock().await;
+    let before = sessions.len();
+    let mut index = 0;
+    while index < sessions.len() {
+        if Arc::strong_count(&sessions[index]) != 1 {
+            index += 1;
+            continue;
+        }
+        let pending = sessions[index].pending_tools.lock().await;
+        let idle = pending.is_empty()
+            && now.saturating_duration_since(session_activity(&sessions[index]))
+                >= IDLE_SESSION_TTL;
+        drop(pending);
+        if idle {
+            sessions.remove(index);
+        } else {
+            index += 1;
+        }
+    }
+    before - sessions.len()
 }
 
 pub(super) async fn record_pending_tool(
@@ -119,6 +156,7 @@ fn pending_expired(session: &Session, now: Instant) -> bool {
 mod tests {
     use std::{collections::HashMap, os::unix::fs::PermissionsExt, path::Path};
 
+    use serde_json::json;
     use tokio::sync::Semaphore;
 
     use super::*;
@@ -139,6 +177,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn bridge_sweeps_an_expired_idle_session_during_request_maintenance() {
+        let root = tempfile::tempdir().unwrap();
+        let app = spawn_app(root.path(), true).await;
+        let bridge = Bridge::new(app, "model".to_owned());
+        let idle = session(Instant::now() - IDLE_SESSION_TTL);
+        idle.pending_tools.lock().await.clear();
+        *idle.pending_since.lock().unwrap() = None;
+        bridge.sessions.lock().await.push(idle);
+
+        bridge.sweep_idle_sessions().await;
+        bridge.sweep_idle_sessions().await;
+
+        assert!(bridge.sessions.lock().await.is_empty());
+    }
+
+    #[tokio::test]
     async fn eviction_tolerates_a_closed_app_server() {
         let root = tempfile::tempdir().unwrap();
         let app = spawn_app(root.path(), false).await;
@@ -155,17 +209,17 @@ mod tests {
     #[tokio::test]
     async fn retains_a_newer_candidate_seen_after_the_oldest() {
         let now = Instant::now();
-        let oldest = session(now - PENDING_SESSION_TTL - Duration::from_secs(2));
-        let newer = session(now - PENDING_SESSION_TTL - Duration::from_secs(1));
+        let oldest_activity = now - IDLE_SESSION_TTL - Duration::from_secs(2);
+        let oldest = session(oldest_activity);
+        oldest.pending_tools.lock().await.clear();
+        let newer = session(now - IDLE_SESSION_TTL - Duration::from_secs(1));
+        newer.pending_tools.lock().await.clear();
         let sessions = Mutex::new(vec![Arc::clone(&oldest), newer]);
         drop(oldest);
 
         let evicted = take_oldest_evictable_at(&sessions, now).await.unwrap();
 
-        assert_eq!(
-            *evicted.last_activity.lock().unwrap(),
-            now - PENDING_SESSION_TTL - Duration::from_secs(2)
-        );
+        assert_eq!(*evicted.last_activity.lock().unwrap(), oldest_activity);
     }
 
     fn session(activity: Instant) -> Arc<Session> {

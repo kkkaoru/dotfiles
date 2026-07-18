@@ -227,14 +227,12 @@ pub(super) fn result_output_tokens(result: &Value) -> u64 {
 }
 
 async fn send_text_start(sender: &mpsc::Sender<Result<Bytes, Infallible>>) -> Result<()> {
-    send_stream_frame(
-        Some(sender),
-        "content_block_start",
+    send_stream_frame(Some(sender), "content_block_start", || {
         json!({
             "type":"content_block_start","index":0,
             "content_block":{"type":"text","text":""}
-        }),
-    )
+        })
+    })
     .await
 }
 
@@ -242,14 +240,12 @@ async fn send_text_delta(
     sender: &mpsc::Sender<Result<Bytes, Infallible>>,
     text: &str,
 ) -> Result<()> {
-    send_stream_frame(
-        Some(sender),
-        "content_block_delta",
+    send_stream_frame(Some(sender), "content_block_delta", || {
         json!({
             "type":"content_block_delta","index":0,
             "delta":{"type":"text_delta","text":text}
-        }),
-    )
+        })
+    })
     .await
 }
 
@@ -272,7 +268,7 @@ async fn send_text_finish(
         ),
         ("message_stop", json!({"type":"message_stop"})),
     ] {
-        send_stream_frame(Some(sender), event, frame).await?;
+        send_stream_frame(Some(sender), event, || frame).await?;
     }
     Ok(())
 }
@@ -281,14 +277,12 @@ async fn send_subscription_error(
     sender: &mpsc::Sender<Result<Bytes, Infallible>>,
     error: anyhow::Error,
 ) {
-    let _ = send_stream_frame(
-        Some(sender),
-        "error",
+    let _ = send_stream_frame(Some(sender), "error", || {
         json!({
             "type":"error",
             "error":{"type":"api_error","message":format!("{error:#}")}
-        }),
-    )
+        })
+    })
     .await;
 }
 

@@ -10,6 +10,21 @@ use uuid::Uuid;
 
 use super::{MessagesRequest, Segment, Session};
 
+// Consumed IDs only suppress replays of completed results. A 4,096-entry replay cache is generous
+// for one session while bounding tool-heavy conversations; pending results live in a separate map.
+const MAX_CONSUMED_TOOL_IDS: usize = 4_096;
+
+fn remember_consumed_tool_id(consumed: &mut HashSet<String>, id: String) {
+    if consumed.contains(&id) {
+        return;
+    }
+    if consumed.len() == MAX_CONSUMED_TOOL_IDS {
+        let evicted = consumed.iter().next().cloned().expect("full replay cache");
+        consumed.remove(&evicted);
+    }
+    consumed.insert(id);
+}
+
 pub(super) struct ToolResult {
     pub(super) tool_use_id: String,
     pub(super) content_items: Vec<Value>,
@@ -38,7 +53,7 @@ pub(super) async fn take_pending_results(
         .into_iter()
         .filter_map(|result| {
             pending.remove(&result.tool_use_id).map(|id| {
-                consumed.insert(result.tool_use_id.clone());
+                remember_consumed_tool_id(&mut consumed, result.tool_use_id.clone());
                 (id, result)
             })
         })

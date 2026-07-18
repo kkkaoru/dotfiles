@@ -10,7 +10,7 @@ pub mod grok_acp;
 pub mod launcher;
 pub mod runtime;
 
-pub const ADAPTER_PROTOCOL_VERSION: u64 = 9;
+pub const ADAPTER_PROTOCOL_VERSION: u64 = 10;
 
 use std::sync::Arc;
 
@@ -66,6 +66,8 @@ pub fn http_router(bridge: Arc<Bridge>, model: String, auth_token: Option<String
                         "backend_routes":backend_routes,
                         "started_models":health_bridge.started_models(),
                         "model":health_model,
+                        "session_capacity":health_bridge.session_capacity(),
+                        "session_slots_used":health_bridge.used_session_slots(),
                         "subscription_max_processes":subscription_max_processes,
                         "subscription_timeout_minutes":subscription_timeout_minutes
                     })),

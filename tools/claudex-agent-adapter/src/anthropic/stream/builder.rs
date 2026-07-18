@@ -102,14 +102,12 @@ impl SegmentBuilder {
             }
             None => self.start_text_block(delta, stream).await?,
         };
-        send_stream_frame(
-            stream,
-            "content_block_delta",
+        send_stream_frame(stream, "content_block_delta", || {
             json!({
                 "type":"content_block_delta", "index":index,
                 "delta":{"type":"text_delta","text":delta}
-            }),
-        )
+            })
+        })
         .await
     }
 
@@ -120,14 +118,12 @@ impl SegmentBuilder {
     ) -> Result<usize> {
         let index = self.blocks.len();
         self.blocks.push(json!({"type":"text","text":""}));
-        send_stream_frame(
-            stream,
-            "content_block_start",
+        send_stream_frame(stream, "content_block_start", || {
             json!({
                 "type":"content_block_start", "index":index,
                 "content_block":{"type":"text","text":""}
-            }),
-        )
+            })
+        })
         .await?;
         self.open_text_block = Some((index, delta.to_owned()));
         Ok(index)
@@ -220,7 +216,7 @@ impl SegmentBuilder {
         send_stream_frame(
             stream,
             "content_block_stop",
-            json!({"type":"content_block_stop","index":index}),
+            || json!({"type":"content_block_stop","index":index}),
         )
         .await
     }

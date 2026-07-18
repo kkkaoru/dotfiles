@@ -49,14 +49,12 @@ impl ThinkingState {
         open.summary_index = summary_index;
         open.text.push_str(separator);
         open.text.push_str(delta);
-        send_stream_frame(
-            stream,
-            "content_block_delta",
+        send_stream_frame(stream, "content_block_delta", || {
             json!({
                 "type":"content_block_delta", "index":open.index,
                 "delta":{"type":"thinking_delta","thinking":format!("{separator}{delta}")}
-            }),
-        )
+            })
+        })
         .await
     }
 
@@ -69,14 +67,12 @@ impl ThinkingState {
     ) -> Result<()> {
         let index = blocks.len();
         blocks.push(json!({"type":"thinking","thinking":"","signature":""}));
-        send_stream_frame(
-            stream,
-            "content_block_start",
+        send_stream_frame(stream, "content_block_start", || {
             json!({
                 "type":"content_block_start", "index":index,
                 "content_block":{"type":"thinking","thinking":"","signature":""}
-            }),
-        )
+            })
+        })
         .await?;
         self.open = Some(OpenThinking {
             index,
@@ -98,19 +94,17 @@ impl ThinkingState {
         };
         blocks[open.index]["thinking"] = json!(open.text);
         blocks[open.index]["signature"] = json!(open.signature);
-        send_stream_frame(
-            stream,
-            "content_block_delta",
+        send_stream_frame(stream, "content_block_delta", || {
             json!({
                 "type":"content_block_delta", "index":open.index,
                 "delta":{"type":"signature_delta","signature":blocks[open.index]["signature"]}
-            }),
-        )
+            })
+        })
         .await?;
         send_stream_frame(
             stream,
             "content_block_stop",
-            json!({"type":"content_block_stop","index":open.index}),
+            || json!({"type":"content_block_stop","index":open.index}),
         )
         .await
     }

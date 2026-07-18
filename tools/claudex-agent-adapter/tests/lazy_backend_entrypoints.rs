@@ -1,4 +1,9 @@
-use std::{fs, sync::Arc};
+use std::{
+    fs,
+    os::unix::fs::PermissionsExt as _,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use claudex_agent_adapter::{
     agent_backend::{AgentBackend, BackendKind, BackendRoute},
@@ -9,36 +14,15 @@ use serde_json::json;
 
 #[tokio::test]
 async fn lazy_routes_cover_provider_entry_points_and_failed_startup_state() {
-    let home = tempfile::tempdir().expect("create provider entry-point home");
-    fs::create_dir(home.path().join(".codex")).expect("create Codex home");
-    fs::write(home.path().join(".codex/auth.json"), "{}").expect("write Codex auth");
-
-    // This test binary contains one current-thread test, so no other thread can
-    // read the process environment before these provider overrides are set.
-    unsafe {
-        std::env::set_var("HOME", home.path());
-        std::env::set_var("CLAUDEX_CODEX_PROGRAM", env!("CARGO_BIN_EXE_codex-mock"));
-        std::env::set_var("CLAUDEX_GROK_PROGRAM", env!("CARGO_BIN_EXE_grok-acp-mock"));
-    }
-    std::env::set_current_dir(home.path()).expect("isolate Grok ACP trace output");
+    let (home, codex_spawns) = provider_home();
 
     let backend = AgentBackend::spawn_routes(&[
         route("gpt-model", BackendKind::CodexAppServer),
+        route("gpt-secondary", BackendKind::CodexAppServer),
+        route("gpt-unused", BackendKind::CodexAppServer),
         route("grok-model", BackendKind::GrokAcp),
     ]);
-    assert!(backend.started_models().is_empty());
-    let codex = backend
-        .request("thread/start", json!({"model":"gpt-model"}))
-        .await
-        .expect("start lazy Codex route");
-    let grok = backend
-        .request("thread/start", json!({"model":"grok-model"}))
-        .await
-        .expect("start lazy Grok route");
-    assert!(codex.pointer("/thread/id").is_some());
-    assert!(grok.pointer("/thread/id").is_some());
-    assert_eq!(backend.started_models(), ["gpt-model", "grok-model"]);
-    assert!(backend.is_alive());
+    exercise_initial_provider_routes(&backend, &codex_spawns).await;
 
     assert!(backend.supports_model("gpt-5.6-sol"));
     assert!(backend.supports_model("grok-4.5"));
@@ -46,9 +30,81 @@ async fn lazy_routes_cover_provider_entry_points_and_failed_startup_state() {
     exercise_explicit_subagent_routes(Arc::clone(&backend)).await;
     assert_eq!(
         backend.started_models(),
-        ["gpt-model", "grok-model", "gpt-5.6-sol", "grok-4.5"]
+        [
+            "gpt-model",
+            "gpt-secondary",
+            "grok-model",
+            "gpt-5.6-sol",
+            "grok-4.5"
+        ]
     );
+    assert_single_codex_spawn(&codex_spawns);
 
+    exercise_dynamic_route().await;
+    exercise_failed_route_health().await;
+    drop(home);
+}
+
+fn provider_home() -> (tempfile::TempDir, PathBuf) {
+    let home = tempfile::tempdir().expect("create provider entry-point home");
+    fs::create_dir(home.path().join(".codex")).expect("create Codex home");
+    fs::write(home.path().join(".codex/auth.json"), "{}").expect("write Codex auth");
+    let codex_spawns = home.path().join("codex-spawns");
+    let codex_wrapper = home.path().join("codex-wrapper");
+    fs::write(
+        &codex_wrapper,
+        format!(
+            "#!/bin/sh\nprintf 'spawn\\n' >> \"$HOME/codex-spawns\"\nexec \"{}\" \"$@\"\n",
+            env!("CARGO_BIN_EXE_codex-mock")
+        ),
+    )
+    .expect("write Codex spawn-counting wrapper");
+    fs::set_permissions(&codex_wrapper, fs::Permissions::from_mode(0o755))
+        .expect("make Codex wrapper executable");
+    // This binary contains one current-thread test, so provider overrides cannot race.
+    unsafe {
+        std::env::set_var("HOME", home.path());
+        std::env::set_var("CLAUDEX_CODEX_PROGRAM", &codex_wrapper);
+        std::env::set_var("CLAUDEX_GROK_PROGRAM", env!("CARGO_BIN_EXE_grok-acp-mock"));
+    }
+    std::env::set_current_dir(home.path()).expect("isolate Grok ACP trace output");
+    (home, codex_spawns)
+}
+
+async fn exercise_initial_provider_routes(backend: &Arc<AgentBackend>, codex_spawns: &Path) {
+    assert!(backend.started_models().is_empty());
+    let first_codex = backend.request("thread/start", json!({"model":"gpt-model"}));
+    let second_codex = backend.request("thread/start", json!({"model":"gpt-secondary"}));
+    let (codex, secondary_codex) = tokio::join!(first_codex, second_codex);
+    let codex = codex.expect("start first lazy Codex route");
+    let secondary_codex = secondary_codex.expect("start second lazy Codex route");
+    let grok = backend
+        .request("thread/start", json!({"model":"grok-model"}))
+        .await
+        .expect("start lazy Grok route");
+    assert!(codex.pointer("/thread/id").is_some());
+    assert!(secondary_codex.pointer("/thread/id").is_some());
+    assert!(grok.pointer("/thread/id").is_some());
+    assert_eq!(
+        fs::read_to_string(codex_spawns).expect("read Codex spawn count"),
+        "spawn\n"
+    );
+    assert_eq!(
+        backend.started_models(),
+        ["gpt-model", "gpt-secondary", "grok-model"]
+    );
+    assert!(backend.is_alive());
+}
+
+fn assert_single_codex_spawn(codex_spawns: &Path) {
+    assert_eq!(
+        fs::read_to_string(codex_spawns).expect("re-read Codex spawn count"),
+        "spawn\n",
+        "dynamic GPT routes must reuse the initialized Codex provider"
+    );
+}
+
+async fn exercise_dynamic_route() {
     let dynamic_only = AgentBackend::spawn_routes(&[route("grok-only", BackendKind::GrokAcp)]);
     dynamic_only
         .request("thread/start", json!({"model":"gpt-dynamic-only"}))
@@ -58,7 +114,9 @@ async fn lazy_routes_cover_provider_entry_points_and_failed_startup_state() {
         .respond(json!(999), json!({}))
         .await
         .expect("find the dynamically started Codex backend");
+}
 
+async fn exercise_failed_route_health() {
     let failed = AgentBackend::spawn_routes(&[route("bad-version", BackendKind::GrokAcp)]);
     assert!(
         failed

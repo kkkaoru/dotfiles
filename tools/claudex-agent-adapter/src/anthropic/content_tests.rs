@@ -12,8 +12,8 @@ mod tests {
     use tokio::sync::{Mutex, Semaphore};
 
     use super::{
-        ToolResult, content_text, full_transcript_input, matching_transcript_len,
-        take_pending_results,
+        MAX_CONSUMED_TOOL_IDS, ToolResult, content_text, full_transcript_input,
+        matching_transcript_len, remember_consumed_tool_id, take_pending_results,
     };
     use crate::anthropic::Session;
 
@@ -93,6 +93,20 @@ mod tests {
             .await
             .is_none()
         );
+    }
+
+    #[test]
+    fn bounds_consumed_tool_result_replay_ids() {
+        let mut consumed = HashSet::new();
+        for index in 0..=MAX_CONSUMED_TOOL_IDS {
+            remember_consumed_tool_id(&mut consumed, format!("tool-{index}"));
+        }
+
+        assert_eq!(consumed.len(), MAX_CONSUMED_TOOL_IDS);
+        assert!(consumed.contains(&format!("tool-{MAX_CONSUMED_TOOL_IDS}")));
+
+        remember_consumed_tool_id(&mut consumed, format!("tool-{MAX_CONSUMED_TOOL_IDS}"));
+        assert_eq!(consumed.len(), MAX_CONSUMED_TOOL_IDS);
     }
 
     #[test]

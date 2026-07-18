@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use super::{
     MessagesRequest, Segment, Session, Usage,
     content::*,
-    retention::{drain_cancellation_responses, record_pending_tool, take_oldest_evictable_at},
+    retention::{record_pending_tool, sweep_idle_sessions_at, take_oldest_evictable_at},
     session::{codex_tool_name, dynamic_tool, internal_advisor_tool, internal_collaborator_tool},
     stream::send_stream_frame,
     trace_request,
@@ -20,7 +20,7 @@ use super::{
 async fn tolerates_a_closed_stream_receiver() {
     let (sender, receiver) = tokio::sync::mpsc::channel(1);
     drop(receiver);
-    send_stream_frame(Some(&sender), "test", json!({"ok":true}))
+    send_stream_frame(Some(&sender), "test", || json!({"ok":true}))
         .await
         .expect("closed receiver is not an upstream error");
 }
@@ -78,20 +78,16 @@ fn test_session_at(
 }
 
 #[tokio::test]
-async fn evicts_expired_pending_but_never_active_sessions() {
-    let semaphore = Arc::new(tokio::sync::Semaphore::new(3));
+async fn capacity_eviction_preserves_fresh_pending_and_active_sessions() {
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(2));
     let now = Instant::now();
-    let expired = test_session_at(&semaphore, true, now - Duration::from_secs(31 * 60));
     let active = test_session_at(&semaphore, true, now - Duration::from_secs(31 * 60));
     let active_owner = Arc::clone(&active);
     let fresh_activity = now - Duration::from_secs(29 * 60);
     let fresh = test_session_at(&semaphore, true, fresh_activity);
-    let sessions = tokio::sync::Mutex::new(vec![active, fresh, expired]);
+    let sessions = tokio::sync::Mutex::new(vec![active, fresh]);
 
-    let evicted = take_oldest_evictable_at(&sessions, now)
-        .await
-        .expect("expired pending session should be evicted");
-    let cancellation_responses = drain_cancellation_responses(&evicted).await;
+    assert!(take_oldest_evictable_at(&sessions, now).await.is_none());
 
     let retained = sessions.lock().await;
     assert_eq!(retained.len(), 2);
@@ -105,15 +101,6 @@ async fn evicts_expired_pending_but_never_active_sessions() {
             .iter()
             .any(|session| { *session.last_activity.lock().unwrap() == fresh_activity })
     );
-    assert_eq!(cancellation_responses[0].0, json!(1));
-    assert_eq!(cancellation_responses[0].1["success"], false);
-    assert!(
-        cancellation_responses[0].1["contentItems"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("expired")
-    );
-    assert!(evicted.pending_tools.lock().await.is_empty());
 }
 
 #[tokio::test]
@@ -143,6 +130,37 @@ async fn evicts_the_least_recently_used_idle_session() {
         .await
         .expect("an idle session should be evicted");
     assert_eq!(*evicted.last_activity.lock().unwrap(), older_activity);
+}
+
+#[tokio::test]
+async fn sweeps_only_expired_unowned_sessions_without_pending_tools() {
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(4));
+    let now = Instant::now();
+    let expired = test_session_at(&semaphore, false, now - Duration::from_secs(31 * 60));
+    let active = test_session_at(&semaphore, false, now - Duration::from_secs(31 * 60));
+    let active_owner = Arc::clone(&active);
+    let pending = test_session_at(&semaphore, true, now - Duration::from_secs(60 * 60));
+    let fresh_activity = now - Duration::from_secs(29 * 60);
+    let fresh = test_session_at(&semaphore, false, fresh_activity);
+    let sessions = tokio::sync::Mutex::new(vec![expired, active, pending, fresh]);
+
+    assert_eq!(sweep_idle_sessions_at(&sessions, now).await, 1);
+
+    let retained = sessions.lock().await;
+    assert_eq!(retained.len(), 3);
+    assert!(
+        retained
+            .iter()
+            .any(|session| Arc::ptr_eq(session, &active_owner))
+    );
+    assert!(
+        retained
+            .iter()
+            .any(|session| !session.pending_tools.try_lock().unwrap().is_empty())
+    );
+    assert!(retained.iter().any(|session| {
+        *session.last_activity.lock().expect("session clock") == fresh_activity
+    }));
 }
 
 #[test]

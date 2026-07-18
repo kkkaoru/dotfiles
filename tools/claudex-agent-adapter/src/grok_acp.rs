@@ -14,7 +14,10 @@ use std::{
 use agent_client_protocol::{self as acp, Agent as _};
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Map, Value, json};
-use tokio::{process::Command, sync::oneshot};
+use tokio::{
+    process::Command,
+    sync::{mpsc, oneshot},
+};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use crate::app_server::{ThreadEvents, events::ThreadEventDispatcher};
@@ -23,6 +26,9 @@ mod client;
 mod plugin;
 mod prompt;
 mod updates;
+
+const COMMAND_QUEUE_CAPACITY: usize = 32;
+const TURN_QUEUE_CAPACITY: usize = 8;
 
 enum DriverCommand {
     CreateSession {
@@ -36,7 +42,7 @@ enum DriverCommand {
 }
 
 pub struct GrokAcp {
-    commands: tokio::sync::mpsc::UnboundedSender<DriverCommand>,
+    commands: mpsc::Sender<DriverCommand>,
     events: Arc<ThreadEventDispatcher>,
     alive: Arc<AtomicBool>,
 }
@@ -53,7 +59,7 @@ impl GrokAcp {
         program: impl Into<OsString>,
         cwd: PathBuf,
     ) -> Result<Arc<Self>> {
-        let (command_tx, command_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (command_tx, command_rx) = mpsc::channel(COMMAND_QUEUE_CAPACITY);
         let events = Arc::new(ThreadEventDispatcher::default());
         let alive = Arc::new(AtomicBool::new(true));
         let (ready_tx, ready_rx) = oneshot::channel();
@@ -115,6 +121,7 @@ impl GrokAcp {
         let (response_tx, response_rx) = oneshot::channel();
         self.commands
             .send(command(response_tx))
+            .await
             .map_err(|_| anyhow!("Grok ACP driver is unavailable"))?;
         response_rx
             .await
@@ -126,7 +133,7 @@ async fn run_driver(
     program: OsString,
     model: String,
     cwd: PathBuf,
-    mut commands: tokio::sync::mpsc::UnboundedReceiver<DriverCommand>,
+    mut commands: mpsc::Receiver<DriverCommand>,
     events: Arc<ThreadEventDispatcher>,
     alive: Arc<AtomicBool>,
     ready: oneshot::Sender<Result<()>>,
@@ -253,11 +260,17 @@ async fn drive_commands(
     _child: tokio::process::Child,
     model: &str,
     cwd: &Path,
-    commands: &mut tokio::sync::mpsc::UnboundedReceiver<DriverCommand>,
+    commands: &mut mpsc::Receiver<DriverCommand>,
     events: &Arc<ThreadEventDispatcher>,
 ) {
     let instructions = Rc::new(RefCell::new(HashMap::<String, String>::new()));
-    let turn_gate = Rc::new(tokio::sync::Mutex::new(()));
+    let (turns, turn_receiver) = mpsc::channel(TURN_QUEUE_CAPACITY);
+    let turn_worker = tokio::task::spawn_local(drive_turns(
+        Rc::clone(&connection),
+        model.to_owned(),
+        turn_receiver,
+        Arc::clone(events),
+    ));
     while let Some(command) = commands.recv().await {
         match command {
             DriverCommand::CreateSession { params, response } => {
@@ -265,18 +278,19 @@ async fn drive_commands(
                 let _ = response.send(result);
             }
             DriverCommand::StartTurn { params, response } => {
-                let result = start_turn(
-                    Rc::clone(&connection),
-                    model.to_owned(),
-                    params,
-                    Rc::clone(&instructions),
-                    Rc::clone(&turn_gate),
-                    Arc::clone(events),
-                );
+                let result = match prepare_turn(params, &instructions) {
+                    Ok(turn) => turns
+                        .send(turn)
+                        .await
+                        .map_err(|_| anyhow!("Grok ACP turn worker is unavailable")),
+                    Err(error) => Err(error),
+                };
                 let _ = response.send(result);
             }
         }
     }
+    turn_worker.abort();
+    let _ = turn_worker.await;
 }
 
 async fn create_session(
@@ -302,14 +316,16 @@ async fn create_session(
     Ok(json!({"thread":{"id":session_id}}))
 }
 
-fn start_turn(
-    connection: Rc<acp::ClientSideConnection>,
-    model: String,
+struct PreparedTurn {
+    session_id: String,
+    prompt: String,
+    effort: Option<String>,
+}
+
+fn prepare_turn(
     params: Value,
-    instructions: Rc<RefCell<HashMap<String, String>>>,
-    turn_gate: Rc<tokio::sync::Mutex<()>>,
-    events: Arc<ThreadEventDispatcher>,
-) -> Result<()> {
+    instructions: &Rc<RefCell<HashMap<String, String>>>,
+) -> Result<PreparedTurn> {
     let session_id = params
         .get("threadId")
         .and_then(Value::as_str)
@@ -326,25 +342,38 @@ fn start_turn(
         .and_then(Value::as_str)
         .and_then(prompt::grok_effort)
         .map(str::to_owned);
-    tokio::task::spawn_local(async move {
-        let _turn = turn_gate.lock().await;
-        let id = acp::SessionId::new(session_id.clone());
-        if let Some(effort) = effort {
+    Ok(PreparedTurn {
+        session_id,
+        prompt,
+        effort,
+    })
+}
+
+async fn drive_turns(
+    connection: Rc<acp::ClientSideConnection>,
+    model: String,
+    mut turns: mpsc::Receiver<PreparedTurn>,
+    events: Arc<ThreadEventDispatcher>,
+) {
+    while let Some(turn) = turns.recv().await {
+        let id = acp::SessionId::new(turn.session_id.clone());
+        if let Some(effort) = turn.effort {
             let mut meta = Map::new();
             meta.insert("reasoningEffort".to_owned(), Value::String(effort));
-            let request = acp::SetSessionModelRequest::new(id.clone(), model).meta(Some(meta));
+            let request =
+                acp::SetSessionModelRequest::new(id.clone(), model.clone()).meta(Some(meta));
             if let Err(error) = connection.set_session_model(request).await {
                 updates::dispatch_error(
                     &events,
-                    &session_id,
+                    &turn.session_id,
                     format!("set effort failed: {error:?}"),
                 );
-                return;
+                continue;
             }
         }
         let request = acp::PromptRequest::new(
             id,
-            vec![acp::ContentBlock::Text(acp::TextContent::new(prompt))],
+            vec![acp::ContentBlock::Text(acp::TextContent::new(turn.prompt))],
         );
         match connection.prompt(request).await {
             Ok(_) => {
@@ -353,13 +382,14 @@ fn start_turn(
                 tokio::task::yield_now().await;
                 events.dispatch(json!({
                     "method":"turn/completed",
-                    "params":{"threadId":session_id,"turn":{"status":"completed"}}
+                    "params":{"threadId":turn.session_id,"turn":{"status":"completed"}}
                 }));
             }
-            Err(error) => updates::dispatch_error(&events, &session_id, format!("{error:?}")),
+            Err(error) => {
+                updates::dispatch_error(&events, &turn.session_id, format!("{error:?}"));
+            }
         }
-    });
-    Ok(())
+    }
 }
 
 #[cfg(test)]

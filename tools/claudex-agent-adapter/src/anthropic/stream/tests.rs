@@ -351,7 +351,7 @@ async fn emits_completion_error_and_optional_frames() {
     };
     send_stream_completion(&sender, &segment).await;
     send_stream_error(&sender, anyhow!("boom")).await;
-    send_stream_frame(None, "ignored", json!({}))
+    send_stream_frame(None, "ignored", || json!({}))
         .await
         .expect("optional stream");
     drop(sender);
