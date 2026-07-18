@@ -8,6 +8,10 @@ use crate::{
     grok_acp::GrokAcp,
 };
 
+mod routes;
+
+use routes::RoutedBackends;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BackendKind {
     CodexAppServer,
@@ -64,75 +68,10 @@ impl FromStr for BackendRoute {
     }
 }
 
-pub struct RoutedBackend {
-    model: String,
-    kind: BackendKind,
-    startup: std::sync::OnceLock<tokio::sync::watch::Receiver<StartupState>>,
-}
-
-#[derive(Clone)]
-enum StartupState {
-    Starting,
-    Ready(Result<Arc<AgentBackend>, Arc<str>>),
-}
-
-impl RoutedBackend {
-    async fn get(&self) -> Result<Arc<AgentBackend>> {
-        let mut startup = self.startup_receiver();
-        loop {
-            let state = startup.borrow_and_update().clone();
-            match state {
-                StartupState::Starting => startup
-                    .changed()
-                    .await
-                    .context("backend startup task stopped without a result")?,
-                StartupState::Ready(Ok(backend)) => return Ok(backend),
-                StartupState::Ready(Err(error)) => bail!(error.to_string()),
-            }
-        }
-    }
-
-    fn startup_receiver(&self) -> tokio::sync::watch::Receiver<StartupState> {
-        self.startup
-            .get_or_init(|| {
-                let (sender, receiver) = tokio::sync::watch::channel(StartupState::Starting);
-                let kind = self.kind;
-                let model = self.model.clone();
-                tokio::spawn(async move {
-                    let result = AgentBackend::spawn(kind, &model)
-                        .await
-                        .map_err(|error| Arc::<str>::from(format!("{error:#}")));
-                    sender.send_replace(StartupState::Ready(result));
-                });
-                receiver
-            })
-            .clone()
-    }
-
-    fn ready_backend(&self) -> Option<Arc<AgentBackend>> {
-        let state = self.startup.get()?.borrow().clone();
-        match state {
-            StartupState::Ready(Ok(backend)) => Some(backend),
-            StartupState::Starting | StartupState::Ready(Err(_)) => None,
-        }
-    }
-
-    fn is_alive(&self) -> bool {
-        let Some(startup) = self.startup.get() else {
-            return true;
-        };
-        match startup.borrow().clone() {
-            StartupState::Starting => true,
-            StartupState::Ready(Ok(backend)) => backend.is_alive(),
-            StartupState::Ready(Err(_)) => false,
-        }
-    }
-}
-
 pub enum AgentBackend {
     Codex(Arc<AppServer>),
     Grok(Arc<GrokAcp>),
-    Routed(Vec<RoutedBackend>),
+    Routed(RoutedBackends),
 }
 
 impl AgentBackend {
@@ -146,15 +85,7 @@ impl AgentBackend {
     }
 
     pub fn spawn_routes(routes: &[BackendRoute]) -> Arc<Self> {
-        let backends = routes
-            .iter()
-            .map(|route| RoutedBackend {
-                model: route.model.clone(),
-                kind: route.backend,
-                startup: std::sync::OnceLock::new(),
-            })
-            .collect::<Vec<_>>();
-        Arc::new(Self::Routed(backends))
+        Arc::new(Self::Routed(RoutedBackends::lazy(routes)))
     }
 
     pub fn codex(server: Arc<AppServer>) -> Arc<Self> {
@@ -166,23 +97,7 @@ impl AgentBackend {
     }
 
     pub fn routed(routes: Vec<(String, Arc<Self>)>) -> Arc<Self> {
-        Arc::new(Self::Routed(
-            routes
-                .into_iter()
-                .map(|(model, backend)| {
-                    let kind = backend.kind();
-                    let (sender, receiver) = tokio::sync::watch::channel(StartupState::Starting);
-                    sender.send_replace(StartupState::Ready(Ok(backend)));
-                    let startup = std::sync::OnceLock::new();
-                    assert!(startup.set(receiver).is_ok());
-                    RoutedBackend {
-                        model,
-                        kind,
-                        startup,
-                    }
-                })
-                .collect(),
-        ))
+        Arc::new(Self::Routed(RoutedBackends::ready(routes)))
     }
 
     pub const fn kind(&self) -> BackendKind {
@@ -195,35 +110,28 @@ impl AgentBackend {
 
     pub fn supports_model(&self, model: &str) -> bool {
         match self {
-            Self::Routed(routes) => routes.iter().any(|route| route.model == model),
+            Self::Routed(routes) => routes.supports(model),
             Self::Codex(_) | Self::Grok(_) => false,
         }
     }
 
     pub fn route_descriptions(&self) -> Vec<String> {
         match self {
-            Self::Routed(routes) => routes
-                .iter()
-                .map(|route| format!("{}={}", route.model, route.kind))
-                .collect(),
+            Self::Routed(routes) => routes.descriptions(),
             leaf => vec![leaf.kind().to_string()],
         }
     }
 
     pub fn models(&self) -> Vec<String> {
         match self {
-            Self::Routed(routes) => routes.iter().map(|route| route.model.clone()).collect(),
+            Self::Routed(routes) => routes.models(),
             Self::Codex(_) | Self::Grok(_) => vec![],
         }
     }
 
     pub fn started_models(&self) -> Vec<String> {
         match self {
-            Self::Routed(routes) => routes
-                .iter()
-                .filter(|route| route.ready_backend().is_some())
-                .map(|route| route.model.clone())
-                .collect(),
+            Self::Routed(routes) => routes.started_models(),
             Self::Codex(_) | Self::Grok(_) => vec![],
         }
     }
@@ -234,7 +142,8 @@ impl AgentBackend {
             Self::Grok(agent) => agent.subscribe_thread(thread_id),
             Self::Routed(routes) => {
                 let (index, raw_id) = routed_thread(thread_id);
-                routes[index]
+                routes
+                    .route(index)
                     .ready_backend()
                     .expect("thread route backend must already be initialized")
                     .subscribe_thread(raw_id)
@@ -246,7 +155,7 @@ impl AgentBackend {
         match self {
             Self::Codex(server) => server.is_alive(),
             Self::Grok(agent) => agent.is_alive(),
-            Self::Routed(routes) => routes.iter().all(RoutedBackend::is_alive),
+            Self::Routed(routes) => routes.is_alive(),
         }
     }
 
@@ -260,13 +169,8 @@ impl AgentBackend {
                     .get("model")
                     .and_then(Value::as_str)
                     .unwrap_or_default();
-                let index = routes
-                    .iter()
-                    .position(|route| route.model == model)
-                    .with_context(|| {
-                        format!("no backend route is configured for model `{model}`")
-                    })?;
-                let backend = routes[index].get().await?;
+                let (index, route) = routes.resolve(model)?;
+                let backend = route.get().await?;
                 let mut response = Box::pin(backend.request(method, params)).await?;
                 let raw_id = response
                     .pointer("/thread/id")
@@ -279,7 +183,7 @@ impl AgentBackend {
         }
     }
 
-    pub async fn request_detached(self: &Arc<Self>, method: &str, params: Value) -> Result<()> {
+    pub async fn request_detached(self: &Arc<Self>, method: &str, mut params: Value) -> Result<()> {
         match self.as_ref() {
             Self::Codex(server) => server.request_detached(method, params).await,
             Self::Grok(agent) if method == "turn/start" => agent.start_turn(params).await,
@@ -288,12 +192,12 @@ impl AgentBackend {
                 let thread_id = params
                     .get("threadId")
                     .and_then(Value::as_str)
-                    .context("routed turn omitted threadId")?;
-                let (index, raw_id) = routed_thread(thread_id);
-                let mut routed_params = params.clone();
-                routed_params["threadId"] = json!(raw_id);
-                let backend = routes[index].get().await?;
-                Box::pin(backend.request_detached(method, routed_params)).await
+                    .context("routed turn omitted threadId")?
+                    .to_owned();
+                let (index, raw_id) = routed_thread(&thread_id);
+                params["threadId"] = json!(raw_id);
+                let backend = routes.route(index).get().await?;
+                Box::pin(backend.request_detached(method, params)).await
             }
             Self::Routed(_) => bail!("routed backend does not support request `{method}`"),
         }
@@ -304,14 +208,26 @@ impl AgentBackend {
             Self::Codex(server) => server.respond(id, result).await,
             Self::Grok(_) => bail!("Grok ACP did not request Claude Code tool result {id}"),
             Self::Routed(routes) => {
-                let codex = routes
-                    .iter()
-                    .find(|route| route.kind == BackendKind::CodexAppServer)
-                    .context("no Codex backend can accept a Claude Code tool result")?;
-                let backend = codex
-                    .ready_backend()
+                let backend = routes
+                    .first_ready(BackendKind::CodexAppServer)
                     .context("Codex backend is not initialized for this tool result")?;
                 Box::pin(backend.respond(id, result)).await
+            }
+        }
+    }
+
+    pub async fn respond_for_model(&self, model: &str, id: Value, result: Value) -> Result<()> {
+        match self {
+            Self::Codex(server) => server.respond(id, result).await,
+            Self::Grok(_) => bail!("Grok ACP did not request Claude Code tool result {id}"),
+            Self::Routed(routes) => {
+                let route = routes
+                    .find(model)
+                    .with_context(|| format!("no active backend route for model `{model}`"))?;
+                let backend = route
+                    .ready_backend()
+                    .with_context(|| format!("backend for model `{model}` is not initialized"))?;
+                Box::pin(backend.respond_for_model(model, id, result)).await
             }
         }
     }
@@ -326,7 +242,7 @@ fn routed_thread(thread_id: &str) -> (usize, &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::{AgentBackend, BackendKind, BackendRoute, RoutedBackend, StartupState};
+    use super::{AgentBackend, BackendKind, BackendRoute};
 
     #[test]
     fn parses_and_displays_backend_kinds() {
@@ -359,16 +275,17 @@ mod tests {
         ]);
         assert!(routes.started_models().is_empty());
         assert!(routes.is_alive());
-
-        let (sender, receiver) = tokio::sync::watch::channel(StartupState::Starting);
-        let startup = std::sync::OnceLock::new();
-        startup.set(receiver).ok().unwrap();
-        let starting = AgentBackend::Routed(vec![RoutedBackend {
-            model: "starting".to_owned(),
-            kind: BackendKind::CodexAppServer,
-            startup,
-        }]);
-        assert!(starting.is_alive());
-        drop(sender);
+        for model in ["gpt", "gpt-5.6-sol", "gpt_custom", "grok", "grok-4.5"] {
+            assert!(
+                routes.supports_model(model),
+                "expected inferred route: {model}"
+            );
+        }
+        for model in ["", "GPT-5.6-sol", "Grok-4.5", "claude-unconfigured"] {
+            assert!(
+                !routes.supports_model(model),
+                "unexpected inferred route: {model}"
+            );
+        }
     }
 }

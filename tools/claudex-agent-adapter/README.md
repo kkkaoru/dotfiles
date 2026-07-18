@@ -67,10 +67,10 @@ variables are removed before Claude Code starts.
 secrets are exposed in process listings. API routes accept it as either a
 Bearer token or `x-api-key`; `/health` remains public. A non-loopback listener
 requires a non-default token. The main model is a required CLI option and is
-not hard-coded in Rust. The fish function currently defaults to `gpt-5.6-sol`
-for `codex-app-server` and the official Grok Build model ID `grok-4.5` for
-`grok-acp`; `CLAUDEX_MODEL` overrides either. Advisor and collaborator model IDs
-come from Claude Code settings.
+not hard-coded by claudex. The fish function discovers provider defaults from
+their own configuration files; `CLAUDEX_MODEL` and the provider-specific
+variables override those values. Advisor and collaborator model IDs come from
+Claude Code settings.
 
 Each request selects effort independently. An explicit Anthropic
 `output_config.effort` wins; otherwise the adapter rereads Claude Code's
@@ -98,6 +98,18 @@ built-in, configured MCP, and custom tools available to noninteractive Agents
 without granting tools that the outer harness did not supply. Existing Claude
 Code deny rules still take precedence. The subprocess working directory is
 parsed and canonicalized from Claude Code's request environment section.
+The adapter accepts an arbitrary explicit SubAgent model through its private
+`claudex_model` Agent field, so selection is not limited by Claude Code's native
+Agent model enum. It removes provider model details from the public tool input,
+correlates the child request, and routes the selected ID through the configured
+backend routes. An unconfigured model whose ID starts with `gpt` or `grok` is
+also added lazily and routed to Codex
+app-server or Grok ACP respectively, so SubAgents may select provider models
+that were not named when the daemon started. Other unconfigured model IDs fall
+back to the Claude subscription process. Without an explicit model, the same
+mechanism uses the model of the session that launched the SubAgent. This keeps
+both Claude Code's Agent display and actual routing from claiming a fixed Sonnet
+model for an inherited SubAgent.
 
 Agent Teams remains controlled by Claude Code. The adapter preserves named
 Agent arguments and distinguishes persistent mailbox teammates from regular

@@ -62,6 +62,7 @@ fn test_session_at(
     };
     Arc::new(Session {
         thread_id: "thread-test".to_owned(),
+        model: "main-model".to_owned(),
         signature: "signature".to_owned(),
         transcript: tokio::sync::Mutex::new(Vec::new()),
         pending_tools: tokio::sync::Mutex::new(pending_tools),
@@ -294,7 +295,10 @@ fn extracts_signatures_and_counts() {
             .unwrap()
             .contains("test-advisor")
     );
-    assert!(token_count(&request) > 0);
+    let serialized_bytes = serde_json::to_string(&request.system).unwrap().len()
+        + serde_json::to_string(&request.messages).unwrap().len()
+        + serde_json::to_string(&request.tools).unwrap().len();
+    assert_eq!(token_count(&request), serialized_bytes.div_ceil(4));
     assert_eq!(canonical_value(&json!(5)), json!(5));
 }
 

@@ -29,7 +29,7 @@ use crate::{
 pub use content::{error_response, token_count};
 pub(crate) use subscription::{DEFAULT_MAX_PROCESSES, DEFAULT_TIMEOUT_MINUTES};
 
-const BRIDGE_INSTRUCTIONS: &str = r"You are the model inside the Claude Code agent harness. Claude Code owns all filesystem, shell, web, MCP, planning, approval, and user-interaction operations. Use only the dynamic tools whose names and schemas were supplied by Claude Code. Do not invoke Codex built-in tools. In particular, invoke Claude Code's supplied dynamic Agent tool directly; never substitute a Codex collaboration or spawn-agent tool for it. When the user specifies effort for a SubAgent, set that Agent call's claudex_effort field; map mid to medium. This controls only that SubAgent and must not change the main turn's effort. Omit claudex_effort when the user did not specify it. Return the answer directly when no Claude Code tool is needed. Treat tool output as the result of your own requested call and continue the same task.";
+const BRIDGE_INSTRUCTIONS: &str = r"You are the model inside the Claude Code agent harness. Claude Code owns all filesystem, shell, web, MCP, planning, approval, and user-interaction operations. Use only the dynamic tools whose names and schemas were supplied by Claude Code. Do not invoke Codex built-in tools. In particular, invoke Claude Code's supplied dynamic Agent tool directly; never substitute a Codex collaboration or spawn-agent tool for it. When the user specifies effort for a SubAgent, set that Agent call's claudex_effort field; map mid to medium. This controls only that SubAgent and must not change the main turn's effort. Omit claudex_effort when the user did not specify it. When the user explicitly specifies a SubAgent model, put its exact model ID in claudex_model. Provider models whose IDs begin with gpt or grok are supported. Otherwise omit claudex_model so the SubAgent inherits the current session model. Never infer a default SubAgent model. Return the answer directly when no Claude Code tool is needed. Treat tool output as the result of your own requested call and continue the same task.";
 const MAX_SESSIONS: usize = 64;
 
 #[derive(Debug, Deserialize)]
@@ -69,6 +69,7 @@ pub struct Bridge {
 
 struct Session {
     thread_id: String,
+    model: String,
     signature: String,
     transcript: Mutex<Vec<Value>>,
     pending_tools: Mutex<HashMap<String, Value>>,
@@ -230,9 +231,16 @@ impl Bridge {
         }
     }
 
-    pub async fn messages(self: &Arc<Self>, request: MessagesRequest) -> Result<Response<Body>> {
+    pub async fn messages(
+        self: &Arc<Self>,
+        mut request: MessagesRequest,
+    ) -> Result<Response<Body>> {
         trace_request(&request);
-        let effort = self.resolve_request_effort(&request);
+        let intent = self.agent_efforts.take(&request);
+        if intent.is_subagent {
+            request.model = intent.model_override.unwrap_or_else(|| self.model.clone());
+        }
+        let effort = self.resolve_request_effort(&request, intent.effort);
         if !request.model.is_empty()
             && request.model != self.model
             && !self.app.supports_model(&request.model)

@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, io::Write};
 
 use anyhow::{Result, bail};
 use axum::{
@@ -76,8 +76,38 @@ pub(super) async fn matching_transcript_len(
         && transcript
             .iter()
             .zip(messages)
-            .all(|(left, right)| canonical_value(left) == canonical_value(right)))
+            .all(|(left, right)| canonical_eq(left, right)))
     .then_some(transcript.len())
+}
+
+fn canonical_eq(left: &Value, right: &Value) -> bool {
+    match (left, right) {
+        (Value::Array(left), Value::Array(right)) => {
+            left.len() == right.len()
+                && left
+                    .iter()
+                    .zip(right)
+                    .all(|(left, right)| canonical_eq(left, right))
+        }
+        (Value::Object(left), Value::Object(right)) => {
+            let left_len = left
+                .keys()
+                .filter(|key| key.as_str() != "cache_control")
+                .count();
+            let right_len = right
+                .keys()
+                .filter(|key| key.as_str() != "cache_control")
+                .count();
+            left_len == right_len
+                && left.iter().all(|(key, value)| {
+                    key == "cache_control"
+                        || right
+                            .get(key)
+                            .is_some_and(|right| canonical_eq(value, right))
+                })
+        }
+        _ => left == right,
+    }
 }
 
 pub(super) fn canonical_value(value: &Value) -> Value {
@@ -287,17 +317,30 @@ fn json_response(value: Value) -> Response<Body> {
 }
 
 pub fn token_count(request: &MessagesRequest) -> usize {
-    let system = serde_json::to_string(&request.system)
-        .unwrap_or_default()
-        .len();
-    let messages = serde_json::to_string(&request.messages)
-        .unwrap_or_default()
-        .len();
-    let tools = serde_json::to_string(&request.tools)
-        .unwrap_or_default()
-        .len();
+    let system = serialized_len(&request.system);
+    let messages = serialized_len(&request.messages);
+    let tools = serialized_len(&request.tools);
     // Codex app-server remains authoritative for the real context window and compaction.
     (system + messages + tools).div_ceil(4)
+}
+
+#[derive(Default)]
+struct ByteCounter(usize);
+
+impl Write for ByteCounter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0 += bytes.len();
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn serialized_len(value: &impl serde::Serialize) -> usize {
+    let mut counter = ByteCounter::default();
+    serde_json::to_writer(&mut counter, value).map_or(0, |()| counter.0)
 }
 
 pub fn error_response(status: StatusCode, error: anyhow::Error) -> Response<Body> {

@@ -10,7 +10,7 @@ pub mod grok_acp;
 pub mod launcher;
 pub mod runtime;
 
-pub const ADAPTER_PROTOCOL_VERSION: u64 = 5;
+pub const ADAPTER_PROTOCOL_VERSION: u64 = 7;
 
 use std::sync::Arc;
 
@@ -95,7 +95,7 @@ fn has_token(headers: &HeaderMap, expected: &str) -> bool {
     headers
         .get("x-api-key")
         .is_some_and(|value| value.as_bytes() == expected.as_bytes())
-        | headers
+        || headers
             .get("authorization")
             .is_some_and(|value| value.as_bytes() == format!("Bearer {expected}").as_bytes())
 }

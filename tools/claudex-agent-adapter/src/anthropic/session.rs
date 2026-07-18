@@ -287,10 +287,12 @@ impl Bridge {
         let slot = self.acquire_session_slot().await?;
         let (dynamic_tools, external_tool_names, internal_tools) =
             tool_configuration(request, advisor_model, collaborator_model);
-        let params = thread_start_params(request, &self.request_model(request), dynamic_tools);
+        let model = self.request_model(request);
+        let params = thread_start_params(request, &model, dynamic_tools);
         let result = self.app.request("thread/start", params).await?;
         let session = Arc::new(Session {
             thread_id: response_thread_id(&result)?,
+            model,
             signature,
             transcript: Mutex::new(Vec::new()),
             pending_tools: Mutex::new(HashMap::new()),
@@ -336,7 +338,8 @@ impl Bridge {
         let submitted = !responses.is_empty();
         for (id, result) in responses {
             self.app
-                .respond(
+                .respond_for_model(
+                    &session.model,
                     id,
                     json!({
                         "contentItems": result.content_items,

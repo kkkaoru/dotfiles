@@ -257,6 +257,7 @@ async fn drive_commands(
     events: &Arc<ThreadEventDispatcher>,
 ) {
     let instructions = Rc::new(RefCell::new(HashMap::<String, String>::new()));
+    let turn_gate = Rc::new(tokio::sync::Mutex::new(()));
     while let Some(command) = commands.recv().await {
         match command {
             DriverCommand::CreateSession { params, response } => {
@@ -269,6 +270,7 @@ async fn drive_commands(
                     model.to_owned(),
                     params,
                     Rc::clone(&instructions),
+                    Rc::clone(&turn_gate),
                     Arc::clone(events),
                 );
                 let _ = response.send(result);
@@ -305,6 +307,7 @@ fn start_turn(
     model: String,
     params: Value,
     instructions: Rc<RefCell<HashMap<String, String>>>,
+    turn_gate: Rc<tokio::sync::Mutex<()>>,
     events: Arc<ThreadEventDispatcher>,
 ) -> Result<()> {
     let session_id = params
@@ -314,13 +317,17 @@ fn start_turn(
         .to_owned();
     let prompt = prompt::input_text(params.get("input").unwrap_or(&Value::Null));
     let prefix = instructions.borrow_mut().remove(&session_id);
-    let prompt = prefix.map_or(prompt.clone(), |prefix| format!("{prefix}\n\n{prompt}"));
+    let prompt = match prefix {
+        Some(prefix) => format!("{prefix}\n\n{prompt}"),
+        None => prompt,
+    };
     let effort = params
         .get("effort")
         .and_then(Value::as_str)
         .and_then(prompt::grok_effort)
         .map(str::to_owned);
     tokio::task::spawn_local(async move {
+        let _turn = turn_gate.lock().await;
         let id = acp::SessionId::new(session_id.clone());
         if let Some(effort) = effort {
             let mut meta = Map::new();

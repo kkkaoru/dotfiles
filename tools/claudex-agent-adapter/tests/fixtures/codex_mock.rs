@@ -204,12 +204,21 @@ impl<W: Write> Fixture<W> {
                 "subagent_type":"claude", "model":"sonnet"
             })
         } else if tool.contains("Agent") {
-            json!({
+            let prompt = if input.contains("USE_AGENT_MODEL_GPT_TOOL") {
+                "USE_TOOL"
+            } else {
+                "REPORT_EFFORT SUBSCRIPTION_ROUTE"
+            };
+            let mut arguments = json!({
                 "description":"effort fixture",
-                "prompt":"REPORT_EFFORT SUBSCRIPTION_ROUTE",
+                "prompt":prompt,
                 "subagent_type":"claude", "model":"sonnet",
                 "claudex_effort":requested_agent_effort(input)
-            })
+            });
+            if let Some(model) = requested_agent_model(input) {
+                arguments["claudex_model"] = json!(model);
+            }
+            arguments
         } else {
             json!({"key":"alpha","task":"small task"})
         };
@@ -429,6 +438,18 @@ fn requested_agent_effort(input: &str) -> &'static str {
         .into_iter()
         .find(|effort| input.contains(&format!("EFFORT_{}", effort.to_uppercase())))
         .unwrap_or("mid")
+}
+
+fn requested_agent_model(input: &str) -> Option<&'static str> {
+    if input.contains("USE_AGENT_MODEL_GPT") {
+        Some("gpt-5.6-sol")
+    } else if input.contains("USE_AGENT_MODEL_GROK") {
+        Some("grok-4.5")
+    } else if input.contains("USE_AGENT_MODEL") {
+        Some("claude-opus-4-8")
+    } else {
+        None
+    }
 }
 
 fn main() {

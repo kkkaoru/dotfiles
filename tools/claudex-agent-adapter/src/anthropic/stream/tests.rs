@@ -288,6 +288,7 @@ async fn rejects_a_malformed_tool_event_before_dispatch() {
     let slots = Arc::new(Semaphore::new(1));
     let session = Session {
         thread_id: "thread".to_owned(),
+        model: "main".to_owned(),
         signature: "signature".to_owned(),
         transcript: Mutex::new(Vec::new()),
         pending_tools: Mutex::new(HashMap::new()),

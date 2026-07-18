@@ -8,11 +8,14 @@ const INTENT_TTL: std::time::Duration = std::time::Duration::from_secs(10 * 60);
 const MAX_PENDING_INTENTS: usize = 1_024;
 const CORRELATION_TAG: &str = "claudex-agent-id";
 const ADAPTER_EFFORT: &str = "claudex_effort";
+const ADAPTER_MODEL: &str = "claudex_model";
 
+#[derive(Clone)]
 struct AgentEffortIntent {
     client_user_id: Option<String>,
     prompt: String,
     effort: Option<String>,
+    model_override: String,
     tool_use_id: String,
     created_at: Instant,
 }
@@ -28,12 +31,29 @@ pub(super) enum AgentEffort {
     Explicit(String),
 }
 
+pub(super) struct AgentIntent {
+    pub(super) effort: AgentEffort,
+    pub(super) model_override: Option<String>,
+    pub(super) is_subagent: bool,
+}
+
+impl AgentIntent {
+    fn unmatched(is_subagent: bool) -> Self {
+        Self {
+            effort: AgentEffort::Unmatched,
+            model_override: None,
+            is_subagent,
+        }
+    }
+}
+
 impl AgentEffortIntents {
     pub(super) fn record(
         &self,
         client_user_id: Option<&str>,
         tool_name: &str,
         tool_use_id: String,
+        parent_model: &str,
         arguments: &Value,
     ) {
         let Some(prompt) = agent_prompt(tool_name, arguments) else {
@@ -54,14 +74,17 @@ impl AgentEffortIntents {
             client_user_id: client_user_id.map(str::to_owned),
             prompt: prompt.to_owned(),
             effort,
+            model_override: requested_model(arguments)
+                .unwrap_or(parent_model)
+                .to_owned(),
             tool_use_id,
             created_at: Instant::now(),
         });
     }
 
-    pub(super) fn take(&self, request: &MessagesRequest) -> AgentEffort {
+    pub(super) fn take(&self, request: &MessagesRequest) -> AgentIntent {
         if !is_subagent_request(&request.system) {
-            return AgentEffort::Unmatched;
+            return AgentIntent::unmatched(false);
         }
         let client_user_id = request.metadata.get("user_id").and_then(Value::as_str);
         let mut pending = self.pending.lock().expect("agent effort intents poisoned");
@@ -71,15 +94,21 @@ impl AgentEffortIntents {
                 && (has_correlation_marker(&intent.prompt)
                     || intent.client_user_id.as_deref() == client_user_id)
         }) else {
-            return AgentEffort::Unmatched;
+            return AgentIntent::unmatched(true);
         };
-        match pending
-            .remove(index)
-            .expect("matched agent effort intent")
-            .effort
-        {
+        let intent = if has_correlation_marker(&pending[index].prompt) {
+            pending[index].clone()
+        } else {
+            pending.remove(index).expect("matched agent intent")
+        };
+        let effort = match intent.effort {
             Some(effort) => AgentEffort::Explicit(effort),
             None => AgentEffort::ConfiguredDefault,
+        };
+        AgentIntent {
+            effort,
+            model_override: Some(intent.model_override),
+            is_subagent: true,
         }
     }
 
@@ -102,6 +131,13 @@ fn agent_prompt<'a>(tool_name: &str, arguments: &'a Value) -> Option<&'a str> {
         .flatten()
 }
 
+fn requested_model(arguments: &Value) -> Option<&str> {
+    arguments
+        .get(ADAPTER_MODEL)
+        .and_then(Value::as_str)
+        .filter(|model| !model.is_empty())
+}
+
 pub(super) fn prepare_arguments(
     tool_name: &str,
     tool_use_id: &str,
@@ -115,10 +151,12 @@ pub(super) fn prepare_arguments(
         "{prompt}\n\n<{CORRELATION_TAG}>{tool_use_id}</{CORRELATION_TAG}>"
     ));
     let mut claude_arguments = correlated.clone();
-    claude_arguments
+    let public = claude_arguments
         .as_object_mut()
-        .expect("Agent arguments must be an object")
-        .remove(ADAPTER_EFFORT);
+        .expect("Agent arguments must be an object");
+    public.remove(ADAPTER_EFFORT);
+    public.remove(ADAPTER_MODEL);
+    public.remove("model");
     (Some(correlated), claude_arguments)
 }
 
@@ -142,6 +180,15 @@ pub(super) fn tool_schema(tool_name: &str, mut schema: Value) -> Value {
                 "type":"string",
                 "enum":["low", "medium", "high", "xhigh", "max"],
                 "description":"Effort for this SubAgent only. Use medium when the user says mid."
+            })
+        });
+    properties
+        .entry(ADAPTER_MODEL.to_owned())
+        .or_insert_with(|| {
+            serde_json::json!({
+                "type":"string",
+                "minLength":1,
+                "description":"Exact model ID explicitly requested by the user for this SubAgent. IDs beginning with gpt or grok use the corresponding routed provider. Omit it to inherit the current session model."
             })
         });
     schema

@@ -39,14 +39,15 @@ mod tests {
             Some("session-a"),
             "Agent",
             "tool-a".to_owned(),
+            "main-model",
             &json!({"prompt":"task-a","effort":"high"}),
         );
         assert!(matches!(
-            intents.take(&request("session-a", "task-a", false)),
+            intents.take(&request("session-a", "task-a", false)).effort,
             AgentEffort::Unmatched
         ));
         assert_eq!(
-            explicit(intents.take(&request("session-a", "task-a", true))),
+            explicit(intents.take(&request("session-a", "task-a", true)).effort),
             "high"
         );
     }
@@ -58,30 +59,33 @@ mod tests {
             Some("session-a"),
             "Agent",
             "tool-a1".to_owned(),
+            "main-model",
             &json!({"prompt":"same","effort":"high"}),
         );
         intents.record(
             Some("session-a"),
             "Agent",
             "tool-a2".to_owned(),
+            "main-model",
             &json!({"prompt":"same","effort":"low"}),
         );
         intents.record(
             Some("session-b"),
             "Agent",
             "tool-b".to_owned(),
+            "main-model",
             &json!({"prompt":"same","effort":"medium"}),
         );
         assert_eq!(
-            explicit(intents.take(&request("session-b", "same", true))),
+            explicit(intents.take(&request("session-b", "same", true)).effort),
             "medium"
         );
         assert_eq!(
-            explicit(intents.take(&request("session-a", "same", true))),
+            explicit(intents.take(&request("session-a", "same", true)).effort),
             "high"
         );
         assert_eq!(
-            explicit(intents.take(&request("session-a", "same", true))),
+            explicit(intents.take(&request("session-a", "same", true)).effort),
             "low"
         );
     }
@@ -103,12 +107,14 @@ mod tests {
             Some("outer-session"),
             "Agent",
             "tool-first".to_owned(),
+            "main-model",
             first.as_ref().expect("first intent"),
         );
         intents.record(
             Some("outer-session"),
             "Agent",
             "tool-second".to_owned(),
+            "main-model",
             second.as_ref().expect("second intent"),
         );
         let first = first.expect("first intent");
@@ -116,13 +122,22 @@ mod tests {
         let second_prompt = second["prompt"].as_str().expect("second prompt");
         let first_prompt = first["prompt"].as_str().expect("first prompt");
         assert_eq!(
-            explicit(intents.take(&request_without_user_id(second_prompt))),
+            explicit(intents.take(&request_without_user_id(second_prompt)).effort),
             "low"
         );
         assert_eq!(
-            explicit(intents.take(&request_without_user_id(first_prompt))),
+            explicit(intents.take(&request_without_user_id(first_prompt)).effort),
             "high"
         );
+        assert_eq!(
+            explicit(intents.take(&request_without_user_id(first_prompt)).effort),
+            "high"
+        );
+        intents.remove_tool_results(["tool-first"].into_iter());
+        assert!(matches!(
+            intents.take(&request_without_user_id(first_prompt)).effort,
+            AgentEffort::Unmatched
+        ));
     }
 
     #[test]
@@ -132,10 +147,11 @@ mod tests {
             Some("session"),
             "Agent",
             "tool".to_owned(),
+            "main-model",
             &json!({"prompt":"task"}),
         );
         assert!(matches!(
-            intents.take(&request("session", "task", true)),
+            intents.take(&request("session", "task", true)).effort,
             AgentEffort::ConfiguredDefault
         ));
     }
@@ -147,6 +163,10 @@ mod tests {
             schema["properties"]["claudex_effort"]["enum"],
             json!(["low", "medium", "high", "xhigh", "max"])
         );
+        assert_eq!(
+            schema["properties"]["claudex_model"]["type"],
+            "string"
+        );
         let (internal, public) = prepare_arguments(
             "Agent",
             "tool-mid",
@@ -157,13 +177,61 @@ mod tests {
         assert!(public.get("claudex_effort").is_none());
 
         let intents = AgentEffortIntents::default();
-        intents.record(None, "Agent", "tool-mid".to_owned(), &internal);
+        intents.record(
+            None,
+            "Agent",
+            "tool-mid".to_owned(),
+            "main-model",
+            &internal,
+        );
         assert_eq!(
             explicit(intents.take(&request_without_user_id(
                 internal["prompt"].as_str().expect("correlated prompt")
-            ))),
+            )).effort),
             "medium"
         );
+    }
+
+    #[test]
+    fn resolves_parent_and_arbitrary_explicit_provider_models() {
+        let intents = AgentEffortIntents::default();
+        let (inherited, public) = prepare_arguments(
+            "Agent",
+            "tool-inherited",
+            &json!({"prompt":"inherit","model":"sonnet"}),
+        );
+        let inherited = inherited.expect("inherited model intent");
+        assert!(public.get("model").is_none());
+        intents.record(
+            None,
+            "Agent",
+            "tool-inherited".to_owned(),
+            "parent-model",
+            &inherited,
+        );
+        let intent = intents.take(&request_without_user_id(
+            inherited["prompt"].as_str().expect("inherited prompt"),
+        ));
+        assert_eq!(intent.model_override.as_deref(), Some("parent-model"));
+
+        for model in ["gpt-5.6-sol", "grok-4.5", "claude-opus-4-8"] {
+            let tool_id = format!("tool-{model}");
+            let (explicit, public) = prepare_arguments(
+                "Agent",
+                &tool_id,
+                &json!({
+                    "prompt":model, "model":"sonnet", "claudex_model":model
+                }),
+            );
+            let explicit = explicit.expect("explicit model intent");
+            assert!(public.get("model").is_none());
+            assert!(public.get("claudex_model").is_none());
+            intents.record(None, "Agent", tool_id, "parent-model", &explicit);
+            let intent = intents.take(&request_without_user_id(
+                explicit["prompt"].as_str().expect("explicit prompt"),
+            ));
+            assert_eq!(intent.model_override.as_deref(), Some(model));
+        }
     }
 
     #[test]
@@ -184,20 +252,22 @@ mod tests {
             Some("session"),
             "Read",
             "read".to_owned(),
+            "main-model",
             &json!({"prompt":"ignored"}),
         );
         intents.record(
             Some("session"),
             "Agent",
             "invalid".to_owned(),
+            "main-model",
             &json!({"prompt":"task","claudex_effort":"invalid"}),
         );
         assert!(matches!(
-            intents.take(&request("other", "different", true)),
+            intents.take(&request("other", "different", true)).effort,
             AgentEffort::Unmatched
         ));
         assert!(matches!(
-            intents.take(&request("session", "task", true)),
+            intents.take(&request("session", "task", true)).effort,
             AgentEffort::ConfiguredDefault
         ));
         let (internal, public) = prepare_arguments("Read", "read", &json!({"path":"file"}));
@@ -213,20 +283,21 @@ mod tests {
                 Some("session"),
                 "Agent",
                 format!("tool-{index}"),
+                "main-model",
                 &json!({"prompt":format!("task-{index}")}),
             );
         }
         assert!(matches!(
-            intents.take(&request("session", "task-0", true)),
+            intents.take(&request("session", "task-0", true)).effort,
             AgentEffort::Unmatched
         ));
         intents.remove_tool_results(["tool-1", "missing"].into_iter());
         assert!(matches!(
-            intents.take(&request("session", "task-1", true)),
+            intents.take(&request("session", "task-1", true)).effort,
             AgentEffort::Unmatched
         ));
         assert!(matches!(
-            intents.take(&request("session", "task-2", true)),
+            intents.take(&request("session", "task-2", true)).effort,
             AgentEffort::ConfiguredDefault
         ));
     }
@@ -239,7 +310,10 @@ mod tests {
             json!({"properties":"invalid"})
         );
         let existing = json!({
-            "properties":{"claudex_effort":{"type":"string","const":"high"}}
+            "properties":{
+                "claudex_effort":{"type":"string","const":"high"},
+                "claudex_model":{"type":"string","const":"grok-4.5"}
+            }
         });
         assert_eq!(tool_schema("Agent", existing.clone()), existing);
     }

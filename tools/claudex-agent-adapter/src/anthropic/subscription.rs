@@ -26,7 +26,6 @@ pub(crate) const DEFAULT_MAX_PROCESSES: usize = 20;
 pub(crate) const DEFAULT_TIMEOUT_MINUTES: u64 = 120;
 const MAX_PROCESSES_ENV: &str = "CLAUDEX_SUBSCRIPTION_MAX_PROCESSES";
 const TIMEOUT_MINUTES_ENV: &str = "CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES";
-
 pub(super) struct SubscriptionOptions {
     pub(super) effort: Option<String>,
     pub(super) tools: Vec<String>,
@@ -141,8 +140,12 @@ impl Bridge {
         Ok(anthropic_response(segment, &request.model))
     }
 
-    pub(super) fn resolve_request_effort(&self, request: &MessagesRequest) -> Option<String> {
-        match self.agent_efforts.take(request) {
+    pub(super) fn resolve_request_effort(
+        &self,
+        request: &MessagesRequest,
+        agent_effort: AgentEffort,
+    ) -> Option<String> {
+        match agent_effort {
             AgentEffort::Explicit(effort) => Some(effort),
             AgentEffort::ConfiguredDefault => self.claude_effort(),
             AgentEffort::Unmatched => request_effort(&request.output_config)

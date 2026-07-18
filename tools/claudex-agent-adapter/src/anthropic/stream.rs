@@ -139,6 +139,7 @@ impl Bridge {
         let subscription_slots = Arc::clone(&self.subscription_slots);
         let subscription_timeout = self.subscription_timeout;
         let request_id = call.request_id.clone();
+        let parent_model = session.model.clone();
         tokio::spawn(async move {
             let options = SubscriptionOptions::internal(subscription_slots, subscription_timeout);
             let result = run_subscription_model(&program, &model, &prompt, options).await;
@@ -150,7 +151,10 @@ impl Bridge {
                 "contentItems":[{"type":"inputText","text":text}],
                 "success":success
             });
-            if let Err(error) = app.respond(request_id, response).await {
+            if let Err(error) = app
+                .respond_for_model(&parent_model, request_id, response)
+                .await
+            {
                 tracing::error!(%error, "failed to return internal Claude tool result");
             }
         });

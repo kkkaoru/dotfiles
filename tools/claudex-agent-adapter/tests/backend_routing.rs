@@ -53,6 +53,22 @@ async fn routes_main_and_subagent_models_to_coexisting_backends() {
             .is_err()
     );
     backend.respond(json!(999), json!({})).await.unwrap();
+    backend
+        .respond_for_model("gpt-model", json!(998), json!({}))
+        .await
+        .unwrap();
+    assert!(
+        backend
+            .respond_for_model("unknown", json!(997), json!({}))
+            .await
+            .is_err()
+    );
+    assert!(
+        backend
+            .respond_for_model("grok-model", json!(996), json!({}))
+            .await
+            .is_err()
+    );
     let bridge = Arc::new(Bridge::new_with_backend(
         Arc::clone(&backend),
         "gpt-model".to_owned(),
@@ -117,9 +133,13 @@ async fn isolates_parallel_sessions_across_worker_threads_and_backends() {
             assert_eq!(response_text(&response), expected);
         });
     }
-    while let Some(result) = tasks.join_next().await {
-        result.expect("parallel request task");
-    }
+    tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        while let Some(result) = tasks.join_next().await {
+            result.expect("parallel request task");
+        }
+    })
+    .await
+    .expect("mixed Codex/Grok requests must not hang");
     server.abort();
 }
 

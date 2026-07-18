@@ -26,6 +26,7 @@ fn session(signature: &str, transcript: Vec<Value>) -> Arc<Session> {
     let slots = Arc::new(Semaphore::new(1));
     Arc::new(Session {
         thread_id: "thread".to_owned(),
+        model: "main-model".to_owned(),
         signature: signature.to_owned(),
         transcript: Mutex::new(transcript),
         pending_tools: Mutex::new(HashMap::new()),

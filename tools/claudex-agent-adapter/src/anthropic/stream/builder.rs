@@ -176,6 +176,7 @@ impl SegmentBuilder {
                 session.client_user_id.as_deref(),
                 original_name,
                 tool_use_id.clone(),
+                &session.model,
                 arguments,
             );
         }

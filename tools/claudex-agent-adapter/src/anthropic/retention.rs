@@ -18,7 +18,11 @@ impl Bridge {
             return;
         };
         for (request_id, result) in drain_cancellation_responses(&session).await {
-            if let Err(error) = self.app.respond(request_id, result).await {
+            if let Err(error) = self
+                .app
+                .respond_for_model(&session.model, request_id, result)
+                .await
+            {
                 tracing::warn!(%error, "failed to cancel an expired Claude tool request");
             }
         }
@@ -168,6 +172,7 @@ mod tests {
         let slots = Arc::new(Semaphore::new(1));
         Arc::new(Session {
             thread_id: "thread".to_owned(),
+            model: "main-model".to_owned(),
             signature: "signature".to_owned(),
             transcript: Mutex::new(Vec::new()),
             pending_tools: Mutex::new(HashMap::from([("tool".to_owned(), json!(9))])),

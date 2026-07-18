@@ -19,24 +19,24 @@ mod tests {
 
     #[tokio::test]
     async fn accepts_pending_and_already_consumed_results() {
-        let session = session(
+        let active = session(
             [("pending".to_owned(), json!("call"))].into(),
             ["consumed".to_owned()].into(),
             Vec::new(),
         )
         .await;
         let results = vec![result("pending"), result("consumed")];
-        let responses = take_pending_results(&session, results)
+        let responses = take_pending_results(&active, results)
             .await
             .expect("valid results");
         assert_eq!(responses.len(), 1);
         assert_eq!(responses[0].0, "call");
-        assert!(session.pending_since.lock().expect("clock").is_none());
+        assert!(active.pending_since.lock().expect("clock").is_none());
     }
 
     #[tokio::test]
     async fn rejects_duplicate_unknown_and_mismatched_transcripts() {
-        let session = session(
+        let active = session(
             [
                 ("one".to_owned(), json!("first")),
                 ("two".to_owned(), json!("second")),
@@ -47,26 +47,52 @@ mod tests {
         )
         .await;
         assert!(
-            take_pending_results(&session, vec![result("one"), result("one")])
+            take_pending_results(&active, vec![result("one"), result("one")])
                 .await
                 .is_err()
         );
         assert!(
-            take_pending_results(&session, vec![result("unknown")])
+            take_pending_results(&active, vec![result("unknown")])
                 .await
                 .is_err()
         );
-        let responses = take_pending_results(&session, vec![result("one")])
+        let responses = take_pending_results(&active, vec![result("one")])
             .await
             .expect("one pending result");
         assert_eq!(responses.len(), 1);
-        assert!(session.pending_since.lock().expect("clock").is_some());
+        assert!(active.pending_since.lock().expect("clock").is_some());
         assert!(
-            matching_transcript_len(&session, &[json!({"role":"user","content":"different"})])
+            matching_transcript_len(&active, &[json!({"role":"user","content":"different"})])
                 .await
                 .is_none()
         );
-        assert!(matching_transcript_len(&session, &[]).await.is_none());
+        assert!(matching_transcript_len(&active, &[]).await.is_none());
+
+        let cached = session(
+            HashMap::new(),
+            HashSet::new(),
+            vec![json!({
+                "role":"user",
+                "content":[{"type":"text","text":"same","cache_control":{"type":"ephemeral"}}]
+            })],
+        )
+        .await;
+        assert_eq!(
+            matching_transcript_len(
+                &cached,
+                &[json!({"role":"user","content":[{"type":"text","text":"same"}]})]
+            )
+            .await,
+            Some(1)
+        );
+        assert!(
+            matching_transcript_len(
+                &cached,
+                &[json!({"role":"user","content":[{"type":"text","text":"changed"}]})]
+            )
+            .await
+            .is_none()
+        );
     }
 
     #[test]
@@ -106,6 +132,7 @@ mod tests {
         let semaphore = Arc::new(Semaphore::new(1));
         Session {
             thread_id: "thread".to_owned(),
+            model: "main-model".to_owned(),
             signature: "signature".to_owned(),
             transcript: Mutex::new(transcript),
             pending_tools: Mutex::new(pending_tools),

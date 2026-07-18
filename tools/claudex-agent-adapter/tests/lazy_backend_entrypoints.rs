@@ -17,10 +17,7 @@ async fn lazy_routes_cover_provider_entry_points_and_failed_startup_state() {
     // read the process environment before these provider overrides are set.
     unsafe {
         std::env::set_var("HOME", home.path());
-        std::env::set_var(
-            "CLAUDEX_CODEX_PROGRAM",
-            env!("CARGO_BIN_EXE_routing-codex-mock"),
-        );
+        std::env::set_var("CLAUDEX_CODEX_PROGRAM", env!("CARGO_BIN_EXE_codex-mock"));
         std::env::set_var("CLAUDEX_GROK_PROGRAM", env!("CARGO_BIN_EXE_grok-acp-mock"));
     }
     std::env::set_current_dir(home.path()).expect("isolate Grok ACP trace output");
@@ -42,6 +39,25 @@ async fn lazy_routes_cover_provider_entry_points_and_failed_startup_state() {
     assert!(grok.pointer("/thread/id").is_some());
     assert_eq!(backend.started_models(), ["gpt-model", "grok-model"]);
     assert!(backend.is_alive());
+
+    assert!(backend.supports_model("gpt-5.6-sol"));
+    assert!(backend.supports_model("grok-4.5"));
+    assert!(!backend.supports_model("claude-opus-5"));
+    exercise_explicit_subagent_routes(Arc::clone(&backend)).await;
+    assert_eq!(
+        backend.started_models(),
+        ["gpt-model", "grok-model", "gpt-5.6-sol", "grok-4.5"]
+    );
+
+    let dynamic_only = AgentBackend::spawn_routes(&[route("grok-only", BackendKind::GrokAcp)]);
+    dynamic_only
+        .request("thread/start", json!({"model":"gpt-dynamic-only"}))
+        .await
+        .expect("start an inferred Codex route without a configured Codex route");
+    dynamic_only
+        .respond(json!(999), json!({}))
+        .await
+        .expect("find the dynamically started Codex backend");
 
     let failed = AgentBackend::spawn_routes(&[route("bad-version", BackendKind::GrokAcp)]);
     assert!(
@@ -73,6 +89,109 @@ async fn lazy_routes_cover_provider_entry_points_and_failed_startup_state() {
         "unavailable"
     );
     server.abort();
+}
+
+async fn exercise_explicit_subagent_routes(backend: Arc<AgentBackend>) {
+    let bridge = Arc::new(Bridge::new_with_backend(backend, "gpt-model".to_owned()));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/v1/messages", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        axum::serve(listener, http_router(bridge, "gpt-model".to_owned(), None))
+            .await
+            .unwrap();
+    });
+    for (suffix, selected, expected) in [
+        ("GPT", "gpt-5.6-sol", "medium"),
+        ("GROK", "grok-4.5", "GROK_ACP_STREAM_OK"),
+    ] {
+        let user_id = format!("explicit-{suffix}");
+        let prompt = launch_agent(&url, &user_id, suffix).await;
+        let response = post(
+            &url,
+            json!({
+                "model":"claude-sonnet-5", "system":"cc_is_subagent=true",
+                "metadata":{"user_id":user_id},
+                "messages":[{"role":"user","content":prompt}]
+            }),
+        )
+        .await;
+        assert_eq!(response.pointer("/content/0/text"), Some(&json!(expected)));
+        assert_eq!(response["model"], selected);
+    }
+    exercise_model_specific_tool_round_trip(&url).await;
+    server.abort();
+}
+
+async fn exercise_model_specific_tool_round_trip(url: &str) {
+    let user_id = "explicit-gpt-tool";
+    let prompt = launch_agent(url, user_id, "GPT_TOOL").await;
+    let tools = json!([{
+        "name":"lookup", "input_schema":{"type":"object","properties":{
+            "key":{"type":"string"}
+        }}
+    }]);
+    let first = post(
+        url,
+        json!({
+            "model":"claude-sonnet-5", "system":"cc_is_subagent=true",
+            "metadata":{"user_id":user_id}, "tools":tools,
+            "messages":[{"role":"user","content":prompt}]
+        }),
+    )
+    .await;
+    assert_eq!(first["model"], "gpt-5.6-sol");
+    assert_eq!(first["stop_reason"], "tool_use");
+    let second = post(
+        url,
+        json!({
+            "model":"claude-sonnet-5", "system":"cc_is_subagent=true",
+            "metadata":{"user_id":user_id}, "tools":tools,
+            "messages":[
+                {"role":"user","content":prompt},
+                {"role":"assistant","content":first["content"]},
+                {"role":"user","content":[{
+                    "type":"tool_result", "tool_use_id":first["content"][0]["id"],
+                    "content":"MODEL_ROUTE_OK"
+                }]}
+            ]
+        }),
+    )
+    .await;
+    assert_eq!(second["model"], "gpt-5.6-sol");
+    assert_eq!(second["content"][0]["text"], "MODEL_ROUTE_OK");
+}
+
+async fn launch_agent(url: &str, user_id: &str, suffix: &str) -> String {
+    let response = post(
+        url,
+        json!({
+            "model":"gpt-model", "system":"provider routing test",
+            "metadata":{"user_id":user_id},
+            "tools":[{"name":"Agent","input_schema":{"type":"object"}}],
+            "messages":[{"role":"user","content":format!("USE_AGENT_MODEL_{suffix}")}]
+        }),
+    )
+    .await;
+    assert!(response.pointer("/content/0/input/model").is_none());
+    assert!(response.pointer("/content/0/input/claudex_model").is_none());
+    response["content"][0]["input"]["prompt"]
+        .as_str()
+        .expect("correlated Agent prompt")
+        .to_owned()
+}
+
+async fn post(url: &str, body: serde_json::Value) -> serde_json::Value {
+    reqwest::Client::new()
+        .post(url)
+        .json(&body)
+        .send()
+        .await
+        .expect("send adapter request")
+        .error_for_status()
+        .expect("successful adapter response")
+        .json()
+        .await
+        .expect("decode adapter response")
 }
 
 fn route(model: &str, backend: BackendKind) -> BackendRoute {
