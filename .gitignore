@@ -9,6 +9,9 @@
 !.config/herdr
 .config/herdr/*
 !.config/herdr/config.toml
+!.config/hunk
+.config/hunk/*
+!.config/hunk/config.toml
 !.config/zed
 .config/zed/{prompts,conversations,themes}
 
