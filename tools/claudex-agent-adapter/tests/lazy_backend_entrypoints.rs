@@ -105,7 +105,7 @@ async fn exercise_explicit_subagent_routes(backend: Arc<AgentBackend>) {
         ("GROK", "grok-4.5", "GROK_ACP_STREAM_OK"),
     ] {
         let user_id = format!("explicit-{suffix}");
-        let prompt = launch_agent(&url, &user_id, suffix).await;
+        let prompt = launch_agent(&url, &user_id, suffix, selected).await;
         let response = post(
             &url,
             json!({
@@ -124,7 +124,7 @@ async fn exercise_explicit_subagent_routes(backend: Arc<AgentBackend>) {
 
 async fn exercise_model_specific_tool_round_trip(url: &str) {
     let user_id = "explicit-gpt-tool";
-    let prompt = launch_agent(url, user_id, "GPT_TOOL").await;
+    let prompt = launch_agent(url, user_id, "GPT_TOOL", "gpt-5.6-sol").await;
     let tools = json!([{
         "name":"lookup", "input_schema":{"type":"object","properties":{
             "key":{"type":"string"}
@@ -161,14 +161,15 @@ async fn exercise_model_specific_tool_round_trip(url: &str) {
     assert_eq!(second["content"][0]["text"], "MODEL_ROUTE_OK");
 }
 
-async fn launch_agent(url: &str, user_id: &str, suffix: &str) -> String {
+async fn launch_agent(url: &str, user_id: &str, suffix: &str, selected: &str) -> String {
     let response = post(
         url,
         json!({
             "model":"gpt-model", "system":"provider routing test",
             "metadata":{"user_id":user_id},
             "tools":[{"name":"Agent","input_schema":{"type":"object"}}],
-            "messages":[{"role":"user","content":format!("USE_AGENT_MODEL_{suffix}")}]
+            "messages":[{"role":"user","content":
+                format!("USE_AGENT_MODEL_{suffix} {selected}")}]
         }),
     )
     .await;

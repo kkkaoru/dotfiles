@@ -48,6 +48,7 @@ impl AgentIntent {
 }
 
 impl AgentEffortIntents {
+    #[cfg(test)]
     pub(super) fn record(
         &self,
         client_user_id: Option<&str>,
@@ -55,6 +56,25 @@ impl AgentEffortIntents {
         tool_use_id: String,
         parent_model: &str,
         arguments: &Value,
+    ) {
+        self.record_from_user_messages(
+            client_user_id,
+            tool_name,
+            tool_use_id,
+            parent_model,
+            arguments,
+            &[],
+        );
+    }
+
+    pub(super) fn record_from_user_messages(
+        &self,
+        client_user_id: Option<&str>,
+        tool_name: &str,
+        tool_use_id: String,
+        parent_model: &str,
+        arguments: &Value,
+        user_messages: &[Value],
     ) {
         let Some(prompt) = agent_prompt(tool_name, arguments) else {
             return;
@@ -65,6 +85,17 @@ impl AgentEffortIntents {
             .and_then(Value::as_str)
             .and_then(normalized_effort)
             .map(str::to_owned);
+        let requested_model = requested_model(arguments);
+        let explicit_model = requested_model.filter(|model| {
+            message_texts(user_messages).any(|text| contains_model_id(text, model))
+        });
+        if requested_model.is_some() && explicit_model.is_none() {
+            tracing::debug!(
+                requested_model = requested_model.unwrap_or_default(),
+                %parent_model,
+                "ignored SubAgent model not explicitly present in current user input"
+            );
+        }
         let mut pending = self.pending.lock().expect("agent effort intents poisoned");
         remove_expired(&mut pending);
         if pending.len() == MAX_PENDING_INTENTS {
@@ -74,23 +105,21 @@ impl AgentEffortIntents {
             client_user_id: client_user_id.map(str::to_owned),
             prompt: prompt.to_owned(),
             effort,
-            model_override: requested_model(arguments)
-                .unwrap_or(parent_model)
-                .to_owned(),
+            model_override: explicit_model.unwrap_or(parent_model).to_owned(),
             tool_use_id,
             created_at: Instant::now(),
         });
     }
 
     pub(super) fn take(&self, request: &MessagesRequest) -> AgentIntent {
-        if !is_subagent_request(&request.system) {
+        if !is_subagent_request(request) {
             return AgentIntent::unmatched(false);
         }
         let client_user_id = request.metadata.get("user_id").and_then(Value::as_str);
         let mut pending = self.pending.lock().expect("agent effort intents poisoned");
         remove_expired(&mut pending);
         let Some(index) = pending.iter().position(|intent| {
-            request_contains_prompt(&request.messages, &intent.prompt)
+            request_matches_intent(&request.messages, intent)
                 && (has_correlation_marker(&intent.prompt)
                     || intent.client_user_id.as_deref() == client_user_id)
         }) else {
@@ -136,6 +165,25 @@ fn requested_model(arguments: &Value) -> Option<&str> {
         .get(ADAPTER_MODEL)
         .and_then(Value::as_str)
         .filter(|model| !model.is_empty())
+}
+
+fn contains_model_id(text: &str, model: &str) -> bool {
+    text.match_indices(model).any(|(start, _)| {
+        let end = start + model.len();
+        let before_is_boundary = text[..start]
+            .chars()
+            .next_back()
+            .is_none_or(|character| !is_model_id_character(character));
+        let after_is_boundary = text[end..]
+            .chars()
+            .next()
+            .is_none_or(|character| !is_model_id_character(character));
+        before_is_boundary && after_is_boundary
+    })
+}
+
+fn is_model_id_character(character: char) -> bool {
+    character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.' | ':' | '/')
 }
 
 pub(super) fn prepare_arguments(
@@ -199,16 +247,29 @@ fn normalized_effort(value: &str) -> Option<&str> {
     valid_effort(normalized).then_some(normalized)
 }
 
-fn is_subagent_request(system: &Value) -> bool {
-    value_texts(system).any(|text| text.contains("cc_is_subagent=true"))
+fn is_subagent_request(request: &MessagesRequest) -> bool {
+    value_texts(&request.system).any(|text| text.contains("cc_is_subagent=true"))
+        || request
+            .messages
+            .iter()
+            .filter_map(|message| message.get("content"))
+            .flat_map(value_texts)
+            .any(has_correlation_marker)
 }
 
 fn request_contains_prompt(messages: &[Value], prompt: &str) -> bool {
-    messages.iter().any(|message| {
-        message
-            .get("content")
-            .is_some_and(|content| value_texts(content).any(|text| text == prompt))
-    })
+    message_texts(messages).any(|text| text == prompt)
+}
+
+fn request_matches_intent(messages: &[Value], intent: &AgentEffortIntent) -> bool {
+    if has_correlation_marker(&intent.prompt) {
+        let marker = format!(
+            "<{CORRELATION_TAG}>{}</{CORRELATION_TAG}>",
+            intent.tool_use_id
+        );
+        return message_texts(messages).any(|text| text.contains(&marker));
+    }
+    request_contains_prompt(messages, &intent.prompt)
 }
 
 fn has_correlation_marker(prompt: &str) -> bool {
@@ -223,6 +284,13 @@ fn value_texts(value: &Value) -> impl Iterator<Item = &str> {
         .flatten()
         .filter_map(|block| block.get("text").and_then(Value::as_str));
     direct.chain(blocks)
+}
+
+fn message_texts(messages: &[Value]) -> impl Iterator<Item = &str> {
+    messages
+        .iter()
+        .filter_map(|message| message.get("content"))
+        .flat_map(value_texts)
 }
 
 #[cfg(test)]

@@ -152,14 +152,22 @@ impl SegmentBuilder {
             .get(call.name)
             .map(String::as_str)
             .unwrap_or(call.name);
-        self.external_tool_call(bridge, session, original_name, call, stream)
-            .await
+        self.external_tool_call(
+            bridge,
+            session,
+            current_messages,
+            original_name,
+            call,
+            stream,
+        )
+        .await
     }
 
     async fn external_tool_call(
         &mut self,
         bridge: &Bridge,
         session: &Session,
+        current_messages: &[Value],
         original_name: &str,
         call: ToolCall<'_>,
         stream: Option<&StreamSender>,
@@ -172,12 +180,13 @@ impl SegmentBuilder {
                 call.arguments,
             );
         if let Some(arguments) = intent_arguments.as_ref() {
-            bridge.agent_efforts.record(
+            bridge.agent_efforts.record_from_user_messages(
                 session.client_user_id.as_deref(),
                 original_name,
                 tool_use_id.clone(),
                 &session.model,
                 arguments,
+                current_messages,
             );
         }
         tracing::debug!(call_id = %call.call_id, %tool_use_id, "mapped app-server tool call");

@@ -13,7 +13,7 @@ async fn launch_explicit_effort_agent(
     explicit_model: bool,
 ) -> String {
     let instruction = if explicit_model {
-        "USE_AGENT_MODEL"
+        "USE_AGENT_MODEL claude-opus-4-8"
     } else {
         "USE_AGENT"
     };
@@ -43,6 +43,31 @@ async fn launch_explicit_effort_agent(
         .expect("decorated Agent prompt");
     assert!(correlated_prompt.contains("<claudex-agent-id>toolu_"));
     correlated_prompt.to_owned()
+}
+
+#[tokio::test]
+async fn model_inferred_by_main_model_is_ignored_without_user_authorization() {
+    let adapter = Adapter::start().await;
+    let client = Client::new();
+    let url = format!("{}/v1/messages", adapter.base_url);
+    let user_id = r#"{"session_id":"inferred-model"}"#;
+    let agent = post_json(
+        &client,
+        &url,
+        json!({
+            "model":"test-main-model", "system":"Agent routing regression test",
+            "metadata":{"user_id":user_id},
+            "tools":[{"name":"Agent","input_schema":{"type":"object"}}],
+            "messages":[{"role":"user","content":"USE_AGENT_MODEL"}]
+        }),
+    )
+    .await;
+    let prompt = agent["content"][0]["input"]["prompt"]
+        .as_str()
+        .expect("decorated Agent prompt");
+    let child = child_request(&client, &url, user_id, prompt, "claude-sonnet-5").await;
+    assert_eq!(child["model"], "test-main-model");
+    assert_eq!(child["content"][0]["text"], "medium");
 }
 
 #[tokio::test]
@@ -93,6 +118,7 @@ async fn child_request(
     prompt: &str,
     model: &str,
 ) -> serde_json::Value {
+    let teammate_prompt = format!("<teammate-message>{prompt}</teammate-message>");
     post_json(
         client,
         url,
@@ -103,7 +129,7 @@ async fn child_request(
             "output_config":{"effort":"low"}, "metadata":{"user_id":user_id},
             "messages":[{"role":"user","content":[
                 {"type":"text","text":"fixture context"},
-                {"type":"text","text":prompt}
+                {"type":"text","text":teammate_prompt}
             ]}]
         }),
     )
@@ -150,17 +176,25 @@ async fn agent_without_effort_uses_configured_default_on_same_main_model() {
 async fn unmatched_subagent_ignores_claude_codes_fallback_model() {
     let adapter = Adapter::start().await;
     let client = Client::new();
-    let child = post_json(
-        &client,
-        &format!("{}/v1/messages", adapter.base_url),
-        json!({
-            "model":"claude-opus-4-8",
-            "system":[{"type":"text","text":"cc_is_subagent=true"}],
-            "output_config":{"effort":"low"},
-            "messages":[{"role":"user","content":"REPORT_EFFORT"}]
-        }),
-    )
-    .await;
-    assert_eq!(child["model"], "test-main-model");
-    assert_eq!(child["content"][0]["text"], "low");
+    for (system, prompt) in [
+        ("cc_is_subagent=true", "REPORT_EFFORT"),
+        (
+            "Claude Code current child request",
+            "REPORT_EFFORT\n\n<claudex-agent-id>toolu_background</claudex-agent-id>",
+        ),
+    ] {
+        let child = post_json(
+            &client,
+            &format!("{}/v1/messages", adapter.base_url),
+            json!({
+                "model":"claude-opus-4-8",
+                "system":[{"type":"text","text":system}],
+                "output_config":{"effort":"low"},
+                "messages":[{"role":"user","content":prompt}]
+            }),
+        )
+        .await;
+        assert_eq!(child["model"], "test-main-model");
+        assert_eq!(child["content"][0]["text"], "low");
+    }
 }

@@ -121,8 +121,13 @@ mod tests {
         let second = second.expect("second intent");
         let second_prompt = second["prompt"].as_str().expect("second prompt");
         let first_prompt = first["prompt"].as_str().expect("first prompt");
+        let wrapped_second = format!("<teammate-message>{second_prompt}</teammate-message>");
         assert_eq!(
-            explicit(intents.take(&request_without_user_id(second_prompt)).effort),
+            explicit(
+                intents
+                    .take(&request_without_user_id(&wrapped_second))
+                    .effort
+            ),
             "low"
         );
         assert_eq!(
@@ -154,6 +159,34 @@ mod tests {
             intents.take(&request("session", "task", true)).effort,
             AgentEffort::ConfiguredDefault
         ));
+    }
+
+    #[test]
+    fn correlation_marker_identifies_subagent_without_billing_header() {
+        let intents = AgentEffortIntents::default();
+        let (internal, _) = prepare_arguments(
+            "Agent",
+            "tool-background",
+            &json!({"prompt":"background task"}),
+        );
+        let internal = internal.expect("agent intent");
+        intents.record(
+            None,
+            "Agent",
+            "tool-background".to_owned(),
+            "main-model",
+            &internal,
+        );
+        intents.remove_tool_results(["tool-background"].into_iter());
+
+        let intent = intents.take(&request(
+            "session",
+            internal["prompt"].as_str().expect("correlated prompt"),
+            false,
+        ));
+        assert!(intent.is_subagent);
+        assert!(intent.model_override.is_none());
+        assert!(matches!(intent.effort, AgentEffort::Unmatched));
     }
 
     #[test]
@@ -226,11 +259,62 @@ mod tests {
             let explicit = explicit.expect("explicit model intent");
             assert!(public.get("model").is_none());
             assert!(public.get("claudex_model").is_none());
-            intents.record(None, "Agent", tool_id, "parent-model", &explicit);
+            let user_messages = [json!({
+                "role":"user", "content":format!("Use {model} for this SubAgent")
+            })];
+            intents.record_from_user_messages(
+                None,
+                "Agent",
+                tool_id,
+                "parent-model",
+                &explicit,
+                &user_messages,
+            );
             let intent = intents.take(&request_without_user_id(
                 explicit["prompt"].as_str().expect("explicit prompt"),
             ));
             assert_eq!(intent.model_override.as_deref(), Some(model));
+        }
+    }
+
+    #[test]
+    fn ignores_inferred_model_unless_current_user_input_names_exact_id() {
+        let intents = AgentEffortIntents::default();
+        for (tool_id, user_text, expected) in [
+            ("tool-omitted", "Run the commit command", "parent-model"),
+            (
+                "tool-prefix-only",
+                "Use claude-sonnet-5-newer for this SubAgent",
+                "parent-model",
+            ),
+            (
+                "tool-explicit",
+                "Use claude-sonnet-5 for this SubAgent",
+                "claude-sonnet-5",
+            ),
+        ] {
+            let (arguments, _) = prepare_arguments(
+                "Agent",
+                tool_id,
+                &json!({
+                    "prompt":"analyze changes",
+                    "claudex_model":"claude-sonnet-5"
+                }),
+            );
+            let arguments = arguments.expect("Agent intent");
+            let user_messages = [json!({"role":"user", "content":user_text})];
+            intents.record_from_user_messages(
+                None,
+                "Agent",
+                tool_id.to_owned(),
+                "parent-model",
+                &arguments,
+                &user_messages,
+            );
+            let intent = intents.take(&request_without_user_id(
+                arguments["prompt"].as_str().expect("correlated prompt"),
+            ));
+            assert_eq!(intent.model_override.as_deref(), Some(expected));
         }
     }
 
