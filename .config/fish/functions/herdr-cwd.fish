@@ -1,15 +1,19 @@
 function herdr-cwd --description "Open a Herdr workspace for the current directory path"
-    # Keep Herdr's normal CLI behavior when options or subcommands are supplied.
-    if test (count $argv) -gt 0
-        command herdr $argv
-        return $status
-    end
+    argparse -i 'd/directory-session' -- $argv; or return 2
 
     set -l real_pwd (pwd -P)
     set -l dir_name (basename "$real_pwd")
     set -l safe_dir (string replace -ra '[^A-Za-z0-9._-]+' '_' -- "$dir_name" | string sub -l 10)
     set -l path_hash (printf '%s' "$real_pwd" | cksum | string split ' ' | head -n 1 | string sub -l 8)
     set -l workspace_label "$safe_dir-$path_hash"
+
+    set -q _flag_directory_session; and set -p argv --session "$workspace_label"
+
+    # Keep Herdr's normal CLI behavior when options or subcommands are supplied.
+    if test (count $argv) -gt 0
+        command herdr $argv
+        return $status
+    end
 
     set -l workspace_json (command herdr workspace list 2>/dev/null)
     if test $status -ne 0
