@@ -51,7 +51,7 @@ printf '%s\n' '{{}}'
 printf '%s\n' '{{"id":"not-numeric","result":{{}}}}'
 printf '%s\n' '{{"id":999,"result":{{}}}}'
 read line
-printf '%s\n' '{{"method":"fixture/event","params":{{"threadId":"observed"}}}}'
+printf '%s\n' '{{"method":"turn/completed","params":{{"threadId":"observed","turn":{{"status":"completed"}}}}}}'
 printf '%s\n' '{{"id":2,"result":{{"value":"ok"}}}}'
 read line
 printf '%s\n' '{{"id":3,"error":{{"code":-32000,"message":"forced"}}}}'
@@ -65,7 +65,7 @@ while read line; do :; done
         server.request("fixture/success", json!({})).await.unwrap(),
         json!({"value":"ok"})
     );
-    assert_eq!(events.recv().await.unwrap()["method"], "fixture/event");
+    assert_eq!(events.recv().await.unwrap()["method"], "turn/completed");
     let error = server
         .request("fixture/error", json!({}))
         .await

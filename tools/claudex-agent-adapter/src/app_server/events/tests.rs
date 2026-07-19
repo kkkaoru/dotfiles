@@ -87,7 +87,7 @@ async fn reports_non_coalescible_overflow_explicitly() {
     let events = dispatcher.subscribe("overflow");
     for sequence in 0..=MAX_QUEUED_EVENTS {
         dispatcher.dispatch(json!({
-            "method":"fixture/event",
+            "method":"item/tool/call",
             "params":{"threadId":"overflow","sequence":sequence}
         }));
     }
@@ -126,7 +126,7 @@ async fn caps_coalesced_deltas_and_ignores_later_events() {
     dispatcher.dispatch(delta("coalesced-bytes", "first"));
     dispatcher.dispatch(delta("coalesced-bytes", &"x".repeat(MAX_QUEUED_BYTES)));
     dispatcher.dispatch(json!({
-        "method":"fixture/ignored-after-overflow",
+        "method":"item/tool/call",
         "params":{"threadId":"coalesced-bytes"}
     }));
 
@@ -158,7 +158,7 @@ async fn keeps_nonmatching_or_non_string_deltas_separate() {
             "params":{"threadId":"separate","turnId":"other","itemId":"other","delta":"d"}
         }),
         json!({
-            "method":"fixture/event",
+            "method":"item/tool/call",
             "params":{"threadId":"separate","turnId":"other","itemId":"other","delta":"e"}
         }),
     ];
@@ -185,7 +185,10 @@ async fn keeps_nonmatching_or_non_string_deltas_separate() {
 async fn supports_nested_ids_and_closes_or_cleans_channels() {
     let dispatcher = ThreadEventDispatcher::default();
     let events = dispatcher.subscribe("nested");
-    dispatcher.dispatch(json!({"params":{"turn":{"threadId":"nested"}}}));
+    dispatcher.dispatch(json!({
+        "method":"turn/completed",
+        "params":{"turn":{"threadId":"nested","status":"completed"}}
+    }));
     assert!(events.recv().await.is_some());
     drop(events);
     assert!(dispatcher.channels.lock().unwrap().is_empty());
@@ -194,6 +197,48 @@ async fn supports_nested_ids_and_closes_or_cleans_channels() {
     dispatcher.dispatch(json!({"params":{}}));
     dispatcher.close();
     assert!(events.recv().await.is_none());
+}
+
+#[tokio::test]
+async fn discards_oversized_events_the_bridge_never_consumes() {
+    let dispatcher = ThreadEventDispatcher::default();
+    let events = dispatcher.subscribe("filtered");
+    dispatcher.dispatch(json!({
+        "method":"item/started",
+        "params":{
+            "threadId":"filtered",
+            "item":{"input":"x".repeat(MAX_QUEUED_BYTES * 2)}
+        }
+    }));
+    dispatcher.dispatch(delta("filtered", "answer"));
+
+    assert_eq!(events.recv().await.unwrap()["params"]["delta"], "answer");
+    let state = events.queue.state.lock().unwrap();
+    assert!(!state.overflowed);
+    assert!(state.events.is_empty());
+}
+
+#[test]
+fn accepts_only_events_used_by_the_anthropic_bridge() {
+    for method in [
+        "item/agentMessage/delta",
+        "item/reasoning/summaryTextDelta",
+        "item/tool/call",
+        "thread/tokenUsage/updated",
+        "turn/completed",
+        "error",
+    ] {
+        assert!(is_bridge_event(&json!({"method":method})));
+    }
+    for method in [
+        "thread/started",
+        "turn/started",
+        "item/started",
+        "item/completed",
+        "item/reasoning/textDelta",
+    ] {
+        assert!(!is_bridge_event(&json!({"method":method})));
+    }
 }
 
 #[tokio::test]

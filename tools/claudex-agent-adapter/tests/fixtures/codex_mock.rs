@@ -233,6 +233,15 @@ impl<W: Write> Fixture<W> {
     }
 
     fn send_plain_or_streamed(&mut self, message: &Value, input: &str) {
+        if input.contains("OVERSIZED_IGNORED_EVENT") {
+            self.send(json!({
+                "method":"item/started",
+                "params":{
+                    "threadId":"thread-test",
+                    "item":{"input":"x".repeat(2 * 1024 * 1024)}
+                }
+            }));
+        }
         self.send(json!({
             "method":"fixture/ignored", "params":{"threadId":"thread-test"}
         }));

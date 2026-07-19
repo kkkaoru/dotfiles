@@ -176,6 +176,9 @@ impl ThreadEventDispatcher {
     }
 
     pub(crate) fn dispatch(&self, event: Value) {
+        if !is_bridge_event(&event) {
+            return;
+        }
         let Some(thread_id) = event_thread_id(&event) else {
             tracing::debug!(?event, "ignored app-server event without thread id");
             return;
@@ -272,6 +275,23 @@ fn coalescible_suffix<'a>(last: &Value, next: &'a Value) -> Option<&'a str> {
     }
     last.pointer("/params/delta")?.as_str()?;
     next.pointer("/params/delta")?.as_str()
+}
+
+fn is_bridge_event(event: &Value) -> bool {
+    // App-server lifecycle events can repeat the complete user input and dynamic tool schemas.
+    // The Anthropic bridge ignores them, so admitting them can overflow the queue before the
+    // small output deltas behind them are consumed.
+    matches!(
+        event.get("method").and_then(Value::as_str),
+        Some(
+            "item/agentMessage/delta"
+                | "item/reasoning/summaryTextDelta"
+                | "item/tool/call"
+                | "thread/tokenUsage/updated"
+                | "turn/completed"
+                | "error"
+        )
+    )
 }
 
 fn encoded_string_content_bytes(value: &str) -> usize {

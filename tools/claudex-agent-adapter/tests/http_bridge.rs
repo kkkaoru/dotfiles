@@ -128,6 +128,19 @@ async fn serves_models_counts_plain_messages_and_continuations() {
 }
 
 #[tokio::test]
+async fn ignores_oversized_provider_events_that_the_bridge_does_not_consume() {
+    let adapter = Adapter::start().await;
+    let client = Client::new();
+    let mut request = base_request();
+    request["messages"] = json!([{"role":"user","content":"OVERSIZED_IGNORED_EVENT"}]);
+
+    let response = post_json(&client, &messages_url(&adapter), request).await;
+
+    assert_eq!(response["content"][0]["text"], "OK");
+    assert_eq!(response["stop_reason"], "end_turn");
+}
+
+#[tokio::test]
 async fn streams_text_before_the_turn_completes() {
     let adapter = Adapter::start().await;
     let client = Client::new();
