@@ -66,7 +66,9 @@ pub(super) fn thread_start_params(
         "environments": [],
         "ephemeral": true,
         "approvalPolicy": "never",
-        "sandbox": "read-only",
+        // Codex built-in execution tools remain disabled below. Using workspace-write here
+        // prevents the provider from misrepresenting Claude Code's dynamic tools as read-only.
+        "sandbox": "workspace-write",
         "personality": "none",
         "config": {
             "web_search": "disabled",

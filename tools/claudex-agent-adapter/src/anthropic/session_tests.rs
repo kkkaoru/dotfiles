@@ -72,8 +72,25 @@ fn builds_thread_configuration_for_empty_and_team_system_prompts() {
         .as_str()
         .expect("base instructions");
     assert_eq!(base, empty["developerInstructions"]);
-    assert_eq!(empty["sandbox"], "read-only");
+    assert_eq!(empty["sandbox"], "workspace-write");
     assert_eq!(empty["config"]["features"]["multi_agent"], false);
+    assert_eq!(empty["config"]["features"]["shell_tool"], false);
+    assert_eq!(empty["config"]["features"]["unified_exec"], false);
+    let developer = empty["developerInstructions"]
+        .as_str()
+        .expect("developer instructions");
+    assert!(
+        developer.contains("never infer from it that Claude Code or its Agent tasks are read-only")
+    );
+    assert!(developer.contains("do not copy restrictions from an unrelated earlier task"));
+    assert!(
+        developer.contains("preserve that authority in Agent prompts"),
+        "implementation authority must propagate to SubAgents"
+    );
+    assert!(
+        developer.contains("unless they are explicitly active for the current task"),
+        "explicit current-task restrictions must remain supported"
+    );
 
     let agent = json!({
         "name":"Agent", "description":"spawn",
