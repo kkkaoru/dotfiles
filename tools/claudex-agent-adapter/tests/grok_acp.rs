@@ -197,6 +197,45 @@ async fn forwards_grok_tool_subagent_retry_and_usage_updates() {
     assert!(combined.contains("tokenUsage"));
 }
 
+#[tokio::test]
+async fn streams_two_grok_acp_sessions_concurrently() {
+    let root = tempfile::tempdir().expect("concurrent fixture");
+    let agent = spawn_mock("concurrent-turns", root.path()).await;
+    let first = agent.create_session(json!({})).await.unwrap();
+    let first_id = first.pointer("/thread/id").and_then(Value::as_str).unwrap();
+    let first_events = agent.subscribe_thread(first_id);
+    agent
+        .start_turn(json!({"threadId":first_id,"input":"first"}))
+        .await
+        .unwrap();
+
+    let second = tokio::time::timeout(Duration::from_secs(1), agent.create_session(json!({})))
+        .await
+        .expect("session creation blocked behind an active turn")
+        .unwrap();
+    let second_id = second
+        .pointer("/thread/id")
+        .and_then(Value::as_str)
+        .unwrap();
+    let second_events = agent.subscribe_thread(second_id);
+    agent
+        .start_turn(json!({"threadId":second_id,"input":"second"}))
+        .await
+        .unwrap();
+
+    let (first_stream, second_stream) = tokio::join!(recv(&first_events), recv(&second_events));
+    for event in [first_stream, second_stream] {
+        assert_eq!(
+            event.pointer("/params/delta").and_then(Value::as_str),
+            Some("GROK_ACP_STREAM_OK"),
+            "unexpected concurrent event: {event}"
+        );
+    }
+    let (first_done, second_done) = tokio::join!(recv(&first_events), recv(&second_events));
+    assert_eq!(first_done["method"], "turn/completed");
+    assert_eq!(second_done["method"], "turn/completed");
+}
+
 async fn spawn_mock(model: &str, cwd: &Path) -> std::sync::Arc<GrokAcp> {
     GrokAcp::spawn_with_program(model, env!("CARGO_BIN_EXE_grok-acp-mock"), cwd.to_owned())
         .await

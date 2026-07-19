@@ -2,7 +2,7 @@ use std::{cell::Cell, fs::OpenOptions, io::Write as _, path::PathBuf, sync::Arc}
 
 use agent_client_protocol::{self as acp, Client as _};
 use serde_json::value::RawValue;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{Notify, mpsc, oneshot};
 use tokio_util::compat::{TokioAsyncReadCompatExt as _, TokioAsyncWriteCompatExt as _};
 
 const TRACE_FILE: &str = "grok-acp-mock.jsonl";
@@ -12,6 +12,8 @@ struct MockAgent {
     trace: PathBuf,
     mode: String,
     next_session: Cell<u64>,
+    concurrent_prompts: Cell<usize>,
+    both_prompts_started: Notify,
 }
 
 enum ClientOperation {
@@ -109,6 +111,16 @@ impl MockAgent {
             self.notify_extension(method, params).await?;
         }
         Ok(())
+    }
+
+    async fn wait_for_concurrent_prompt(&self) {
+        let count = self.concurrent_prompts.get() + 1;
+        self.concurrent_prompts.set(count);
+        if count == 1 {
+            self.both_prompts_started.notified().await;
+        } else {
+            self.both_prompts_started.notify_one();
+        }
     }
 }
 
@@ -229,6 +241,9 @@ impl acp::Agent for MockAgent {
             self.send_coverage_updates(request.session_id.clone())
                 .await?;
         }
+        if self.mode == "concurrent-turns" {
+            self.wait_for_concurrent_prompt().await;
+        }
         let permission = acp::RequestPermissionRequest::new(
             request.session_id.clone(),
             acp::ToolCallUpdate::new(
@@ -308,6 +323,8 @@ async fn main() -> acp::Result<()> {
         trace,
         mode,
         next_session: Cell::new(0),
+        concurrent_prompts: Cell::new(0),
+        both_prompts_started: Notify::new(),
     };
     agent.record("arguments", &args)?;
     let local = tokio::task::LocalSet::new();

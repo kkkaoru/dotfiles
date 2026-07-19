@@ -24,13 +24,17 @@ a separate model family, so an explicit route such as
 GitHub Copilot CLI. The Grok backend launches `grok --model MODEL agent stdio`,
 creates ACP sessions, streams agent message chunks, and selects `AllowOnce` when
 either ACP agent requests permission for a tool. The selected ACP provider owns
-execution of its tools; Claude Code remains the outer conversation UI.
+execution of its tools; Claude Code remains the outer conversation UI. Independent
+ACP sessions, including parallel SubAgents, progress concurrently over the shared
+provider connection. Copilot-native SubAgents inherit the model used to launch the
+Copilot ACP server.
 
 Streaming requests return their HTTP response immediately. Each Codex
 `item/agentMessage/delta` notification is converted to an Anthropic
 `content_block_delta` SSE event instead of being buffered until turn completion.
 Subscription subprocesses likewise use Claude Code's `stream-json` output and
-forward text deltas as they arrive.
+forward text deltas as they arrive. Every streaming backend emits SSE comment
+keepalives during provider silence.
 
 For `codex-app-server`, the adapter starts `codex app-server` with an isolated
 `CODEX_HOME`. Only Codex authentication is copied into that home; Claude Code
@@ -121,10 +125,11 @@ also added lazily and routed to Codex
 app-server or Grok ACP respectively, so SubAgents may select provider models
 that were not named when the daemon started. An explicit `copilot-acp` route
 takes precedence over this prefix inference. Other unconfigured model IDs fall
-back to the Claude subscription process. Without an explicit model, the same
-mechanism uses the model of the session that launched the SubAgent. This keeps
-both Claude Code's Agent display and actual routing from claiming a fixed Sonnet
-model for an inherited SubAgent.
+back to the Claude subscription process. Without an explicit model, a matched
+Claude Code child inherits the model of the session that launched it; an
+otherwise-unmatched child request falls back to the configured main model. This
+keeps both Claude Code's Agent display and actual routing from claiming a fixed
+Sonnet model for an inherited SubAgent.
 
 Agent Teams remains controlled by Claude Code. The adapter preserves named
 Agent arguments and distinguishes persistent mailbox teammates from regular

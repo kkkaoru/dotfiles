@@ -11,7 +11,7 @@ pub mod grok_acp;
 pub mod launcher;
 pub mod runtime;
 
-pub const ADAPTER_PROTOCOL_VERSION: u64 = 10;
+pub const ADAPTER_PROTOCOL_VERSION: u64 = 11;
 
 use std::sync::Arc;
 

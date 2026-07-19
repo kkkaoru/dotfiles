@@ -3,7 +3,7 @@ use std::{convert::Infallible, path::Path, path::PathBuf, sync::Arc};
 use anyhow::{Context, Result, anyhow, bail};
 use axum::{
     body::{Body, Bytes},
-    http::{Response, StatusCode, header},
+    http::Response,
 };
 use serde_json::{Value, json};
 use tokio::{
@@ -11,12 +11,11 @@ use tokio::{
     process::Child,
     sync::mpsc,
 };
-use tokio_stream::wrappers::ReceiverStream;
 use uuid::Uuid;
 
 use super::{
     content::{estimated_tokens, sse},
-    stream::send_stream_frame,
+    stream::{send_stream_frame, streaming_sse_response},
     subscription::{
         OutputMode, SubscriptionOptions, acquire_subscription_slot, spawn_subscription,
         subscription_command, validate_subscription_result, write_subscription_prompt,
@@ -40,13 +39,7 @@ pub(super) fn subscription_streaming_response(
     tokio::spawn(run_subscription_stream(
         sender, program, model, prompt, options,
     ));
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "text/event-stream")
-        .header(header::CACHE_CONTROL, "no-cache")
-        .header("x-accel-buffering", "no")
-        .body(Body::from_stream(ReceiverStream::new(receiver)))
-        .expect("valid subscription streaming response")
+    streaming_sse_response(receiver)
 }
 
 pub(super) fn subscription_start_frame(model: &str, input_tokens: u64) -> String {

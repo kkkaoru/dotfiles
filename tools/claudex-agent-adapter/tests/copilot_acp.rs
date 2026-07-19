@@ -1,7 +1,78 @@
-use std::{path::Path, time::Duration};
+use std::{path::Path, sync::Arc, time::Duration};
 
-use claudex_agent_adapter::{agent_backend::AgentBackend, copilot_acp::CopilotAcp};
+use claudex_agent_adapter::{
+    agent_backend::AgentBackend, anthropic::Bridge, copilot_acp::CopilotAcp, http_router,
+};
+use reqwest::Client;
 use serde_json::{Value, json};
+
+#[tokio::test]
+async fn fallback_claude_child_without_override_inherits_main_copilot_acp_route() {
+    const MAIN_MODEL: &str = "gpt-5.6-sol";
+
+    let root = tempfile::tempdir().expect("Copilot ACP child fixture");
+    let agent = CopilotAcp::spawn_with_program(
+        MAIN_MODEL,
+        env!("CARGO_BIN_EXE_grok-acp-mock"),
+        root.path().to_owned(),
+    )
+    .await
+    .expect("start Copilot ACP mock");
+    let backend = AgentBackend::routed(vec![(MAIN_MODEL.to_owned(), AgentBackend::copilot(agent))]);
+    assert_eq!(backend.route_descriptions(), ["gpt-5.6-sol=copilot-acp"]);
+    let bridge = Arc::new(Bridge::new_with_backend(backend, MAIN_MODEL.to_owned()));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind Copilot ACP HTTP router");
+    let address = listener.local_addr().expect("Copilot ACP HTTP address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, http_router(bridge, MAIN_MODEL.to_owned(), None))
+            .await
+            .expect("serve Copilot ACP HTTP router");
+    });
+
+    let response = Client::new()
+        .post(format!("http://{address}/v1/messages"))
+        .json(&json!({
+            "model":"claude-sonnet-5",
+            "max_tokens":128,
+            "system":[{"type":"text","text":"cc_is_subagent=true"}],
+            "messages":[{"role":"user","content":"inherited child prompt"}]
+        }))
+        .send()
+        .await
+        .expect("send Claude Code child request")
+        .error_for_status()
+        .expect("Claude Code child response status")
+        .json::<Value>()
+        .await
+        .expect("decode Claude Code child response");
+    assert_eq!(response["model"], MAIN_MODEL);
+    assert_eq!(response["content"][0]["text"], "GROK_ACP_STREAM_OK");
+    server.abort();
+
+    let trace = read_trace(&root.path().join("grok-acp-mock.jsonl"));
+    assert!(
+        trace.iter().any(|event| {
+            event["arguments"] == json!(["--acp", "--stdio", "--model", MAIN_MODEL])
+        })
+    );
+    assert!(
+        trace.iter().any(|event| {
+            event.pointer("/new_session/_meta/modelId") == Some(&json!(MAIN_MODEL))
+        })
+    );
+    assert!(trace.iter().any(|event| {
+        event
+            .pointer("/prompt/prompt/0/text")
+            .and_then(Value::as_str)
+            .is_some_and(|prompt| prompt.contains("inherited child prompt"))
+    }));
+
+    // Copilot-native SubAgents are created behind this single ACP boundary, not
+    // as new HTTP-routed Claude Code children. Their lifecycle notifications are
+    // emitted by this same Copilot ACP session, so they remain in its provider.
+}
 
 #[tokio::test]
 async fn routes_a_selected_model_through_copilot_cli_acp() {

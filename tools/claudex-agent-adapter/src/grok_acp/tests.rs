@@ -5,7 +5,7 @@ use serde_json::{json, value::RawValue};
 
 use super::{
     COMMAND_QUEUE_CAPACITY, DriverCommand, GrokAcp, PreparedTurn, TURN_QUEUE_CAPACITY,
-    client::AcpClient, prompt, updates,
+    client::AcpClient, prompt, turns::drive_turn_tasks, updates,
 };
 use crate::app_server::events::ThreadEventDispatcher;
 
@@ -85,6 +85,7 @@ async fn reports_a_closed_driver_for_each_command_response_type() {
     drop(receiver);
     let agent = GrokAcp {
         commands,
+        turn_permits: Arc::new(tokio::sync::Semaphore::new(TURN_QUEUE_CAPACITY)),
         events: Arc::new(ThreadEventDispatcher::default()),
         alive: Arc::new(AtomicBool::new(false)),
     };
@@ -101,6 +102,10 @@ async fn bounded_queues_apply_backpressure_at_fixed_capacities() {
         commands
             .send(DriverCommand::StartTurn {
                 params: json!({}),
+                permit: Arc::new(tokio::sync::Semaphore::new(1))
+                    .acquire_owned()
+                    .await
+                    .unwrap(),
                 response,
             })
             .await
@@ -116,6 +121,7 @@ async fn bounded_queues_apply_backpressure_at_fixed_capacities() {
     command_receiver.recv().await.unwrap();
     assert!(commands.reserve().await.is_ok());
 
+    let permits = Arc::new(tokio::sync::Semaphore::new(TURN_QUEUE_CAPACITY));
     let (turns, mut turn_receiver) = tokio::sync::mpsc::channel(TURN_QUEUE_CAPACITY);
     for index in 0..TURN_QUEUE_CAPACITY {
         turns
@@ -123,19 +129,82 @@ async fn bounded_queues_apply_backpressure_at_fixed_capacities() {
                 session_id: format!("session-{index}"),
                 prompt: "prompt".to_owned(),
                 effort: None,
+                _permit: Arc::clone(&permits).acquire_owned().await.unwrap(),
             })
             .await
             .unwrap();
     }
+    assert_eq!(permits.available_permits(), 0);
     assert_eq!(turns.capacity(), 0);
     assert_eq!(turn_receiver.len(), TURN_QUEUE_CAPACITY);
     assert!(
-        tokio::time::timeout(std::time::Duration::from_millis(10), turns.reserve())
-            .await
-            .is_err()
+        tokio::time::timeout(
+            std::time::Duration::from_millis(10),
+            Arc::clone(&permits).acquire_owned(),
+        )
+        .await
+        .is_err()
     );
     turn_receiver.recv().await.unwrap();
-    assert!(turns.reserve().await.is_ok());
+    assert!(Arc::clone(&permits).acquire_owned().await.is_ok());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn turn_worker_runs_local_tasks_concurrently_and_cleans_them_up() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let permits = Arc::new(tokio::sync::Semaphore::new(TURN_QUEUE_CAPACITY));
+            let (turns, receiver) = tokio::sync::mpsc::channel(TURN_QUEUE_CAPACITY);
+            let active = std::rc::Rc::new(std::cell::Cell::new(0));
+            let peak = std::rc::Rc::new(std::cell::Cell::new(0));
+            let both_started = std::rc::Rc::new(tokio::sync::Notify::new());
+            let release = std::rc::Rc::new(tokio::sync::Notify::new());
+            let worker = tokio::task::spawn_local(drive_turn_tasks(receiver, {
+                let active = std::rc::Rc::clone(&active);
+                let peak = std::rc::Rc::clone(&peak);
+                let both_started = std::rc::Rc::clone(&both_started);
+                let release = std::rc::Rc::clone(&release);
+                move |_turn| {
+                    let active = std::rc::Rc::clone(&active);
+                    let peak = std::rc::Rc::clone(&peak);
+                    let both_started = std::rc::Rc::clone(&both_started);
+                    let release = std::rc::Rc::clone(&release);
+                    async move {
+                        let count = active.get() + 1;
+                        active.set(count);
+                        peak.set(peak.get().max(count));
+                        if count == 2 {
+                            both_started.notify_one();
+                        }
+                        release.notified().await;
+                        active.set(active.get() - 1);
+                    }
+                }
+            }));
+            for session_id in ["one", "two"] {
+                turns
+                    .send(PreparedTurn {
+                        session_id: session_id.to_owned(),
+                        prompt: String::new(),
+                        effort: None,
+                        _permit: Arc::clone(&permits).acquire_owned().await.unwrap(),
+                    })
+                    .await
+                    .unwrap();
+            }
+            tokio::time::timeout(std::time::Duration::from_secs(1), both_started.notified())
+                .await
+                .expect("turn tasks did not overlap");
+            assert_eq!(peak.get(), 2);
+            drop(turns);
+            tokio::time::timeout(std::time::Duration::from_secs(1), worker)
+                .await
+                .expect("turn worker did not abort active tasks")
+                .unwrap();
+            assert_eq!(permits.available_permits(), TURN_QUEUE_CAPACITY);
+        })
+        .await;
 }
 
 #[tokio::test]
