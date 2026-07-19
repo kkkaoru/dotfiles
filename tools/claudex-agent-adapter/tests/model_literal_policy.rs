@@ -73,7 +73,12 @@ fn model_literal_detector_covers_provider_and_claude_families() {
     ] {
         assert!(contains_complete_model_id(literal), "missed {literal}");
     }
-    for rule in ["starts_with(\"gpt\")", "starts_with(\"grok\")", "grok-acp"] {
+    for rule in [
+        "starts_with(\"gpt\")",
+        "starts_with(\"grok\")",
+        "grok-acp",
+        "copilot-acp",
+    ] {
         assert!(!contains_complete_model_id(rule), "false positive: {rule}");
     }
 }

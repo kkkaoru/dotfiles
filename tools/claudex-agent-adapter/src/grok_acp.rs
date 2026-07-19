@@ -3,7 +3,6 @@ use std::{
     collections::HashMap,
     ffi::OsString,
     path::{Path, PathBuf},
-    process::Stdio,
     rc::Rc,
     sync::{
         Arc,
@@ -12,23 +11,22 @@ use std::{
 };
 
 use agent_client_protocol::{self as acp, Agent as _};
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow};
 use serde_json::{Map, Value, json};
-use tokio::{
-    process::Command,
-    sync::{mpsc, oneshot},
-};
-use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
+use tokio::sync::{mpsc, oneshot};
 
 use crate::app_server::{ThreadEvents, events::ThreadEventDispatcher};
 
 mod client;
+mod connection;
 mod plugin;
 mod prompt;
 mod updates;
 
 const COMMAND_QUEUE_CAPACITY: usize = 32;
 const TURN_QUEUE_CAPACITY: usize = 8;
+
+use connection::AcpProvider;
 
 enum DriverCommand {
     CreateSession {
@@ -41,6 +39,16 @@ enum DriverCommand {
     },
 }
 
+struct DriverSetup {
+    provider: AcpProvider,
+    program: OsString,
+    model: String,
+    cwd: PathBuf,
+    events: Arc<ThreadEventDispatcher>,
+    alive: Arc<AtomicBool>,
+    ready: oneshot::Sender<Result<()>>,
+}
+
 pub struct GrokAcp {
     commands: mpsc::Sender<DriverCommand>,
     events: Arc<ThreadEventDispatcher>,
@@ -51,10 +59,34 @@ impl GrokAcp {
     pub async fn spawn(model: &str) -> Result<Arc<Self>> {
         let program = std::env::var_os("CLAUDEX_GROK_PROGRAM").unwrap_or_else(|| "grok".into());
         let cwd = std::env::current_dir().context("resolve Grok ACP working directory")?;
-        Self::spawn_with_program(model, program, cwd).await
+        Self::spawn_provider(AcpProvider::Grok, model, program, cwd).await
+    }
+
+    pub async fn spawn_copilot(model: &str) -> Result<Arc<Self>> {
+        let program =
+            std::env::var_os("CLAUDEX_COPILOT_PROGRAM").unwrap_or_else(|| "copilot".into());
+        let cwd = std::env::current_dir().context("resolve Copilot ACP working directory")?;
+        Self::spawn_provider(AcpProvider::Copilot, model, program, cwd).await
     }
 
     pub async fn spawn_with_program(
+        model: &str,
+        program: impl Into<OsString>,
+        cwd: PathBuf,
+    ) -> Result<Arc<Self>> {
+        Self::spawn_provider(AcpProvider::Grok, model, program, cwd).await
+    }
+
+    pub async fn spawn_copilot_with_program(
+        model: &str,
+        program: impl Into<OsString>,
+        cwd: PathBuf,
+    ) -> Result<Arc<Self>> {
+        Self::spawn_provider(AcpProvider::Copilot, model, program, cwd).await
+    }
+
+    async fn spawn_provider(
+        provider: AcpProvider,
         model: &str,
         program: impl Into<OsString>,
         cwd: PathBuf,
@@ -68,27 +100,30 @@ impl GrokAcp {
         let model = model.to_owned();
         let program = program.into();
         std::thread::Builder::new()
-            .name("claudex-grok-acp".to_owned())
+            .name(provider.driver_name().to_owned())
             .spawn(move || {
                 let runtime = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()
-                    .expect("build Grok ACP runtime");
+                    .expect("build ACP runtime");
                 let local = tokio::task::LocalSet::new();
                 runtime.block_on(local.run_until(run_driver(
-                    program,
-                    model,
-                    cwd,
+                    DriverSetup {
+                        provider,
+                        program,
+                        model,
+                        cwd,
+                        events: driver_events,
+                        alive: driver_alive,
+                        ready: ready_tx,
+                    },
                     command_rx,
-                    driver_events,
-                    driver_alive,
-                    ready_tx,
                 )));
             })
-            .context("start Grok ACP driver thread")?;
+            .with_context(|| format!("start {} ACP driver thread", provider.label()))?;
         ready_rx
             .await
-            .context("Grok ACP driver stopped during startup")??;
+            .with_context(|| format!("{} ACP driver stopped during startup", provider.label()))??;
         Ok(Arc::new(Self {
             commands: command_tx,
             events,
@@ -122,140 +157,45 @@ impl GrokAcp {
         self.commands
             .send(command(response_tx))
             .await
-            .map_err(|_| anyhow!("Grok ACP driver is unavailable"))?;
+            .map_err(|_| anyhow!("ACP driver is unavailable"))?;
         response_rx
             .await
-            .context("Grok ACP driver dropped its response")?
+            .context("ACP driver dropped its response")?
     }
 }
 
-async fn run_driver(
-    program: OsString,
-    model: String,
-    cwd: PathBuf,
-    mut commands: mpsc::Receiver<DriverCommand>,
-    events: Arc<ThreadEventDispatcher>,
-    alive: Arc<AtomicBool>,
-    ready: oneshot::Sender<Result<()>>,
-) {
-    let started = start_connection(&program, &model, &cwd, Arc::clone(&events)).await;
-    let Ok((connection, child)) = started else {
-        let _ = ready.send(started.map(|_| ()));
-        alive.store(false, Ordering::Relaxed);
-        events.close();
-        return;
-    };
-    let _ = ready.send(Ok(()));
-    drive_commands(
-        Rc::new(connection),
-        child,
-        &model,
-        &cwd,
-        &mut commands,
-        &events,
+async fn run_driver(setup: DriverSetup, mut commands: mpsc::Receiver<DriverCommand>) {
+    let started = connection::start(
+        setup.provider,
+        &setup.program,
+        &setup.model,
+        &setup.cwd,
+        Arc::clone(&setup.events),
     )
     .await;
-    alive.store(false, Ordering::Relaxed);
-    events.close();
-}
-
-async fn start_connection(
-    program: &OsString,
-    model: &str,
-    cwd: &Path,
-    events: Arc<ThreadEventDispatcher>,
-) -> Result<(acp::ClientSideConnection, tokio::process::Child)> {
-    let plugin_dir = plugin::prepare(program)?;
-    let mut command = Command::new(program);
-    command.args(["--model", model, "agent"]);
-    if let Some(path) = plugin_dir {
-        command.arg("--plugin-dir").arg(path);
-    }
-    let mut child = command
-        .arg("stdio")
-        .current_dir(cwd)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .kill_on_drop(true)
-        .spawn()
-        .context("start `grok agent stdio`")?;
-    let outgoing = child
-        .stdin
-        .take()
-        .context("Grok ACP stdin is unavailable")?
-        .compat_write();
-    let incoming = child
-        .stdout
-        .take()
-        .context("Grok ACP stdout is unavailable")?
-        .compat();
-    let client = client::AcpClient::new(events);
-    let (connection, handle_io) =
-        acp::ClientSideConnection::new(client, outgoing, incoming, |future| {
-            tokio::task::spawn_local(future);
-        });
-    tokio::task::spawn_local(async move {
-        if let Err(error) = handle_io.await {
-            tracing::error!(?error, "Grok ACP I/O stopped");
-        }
-    });
-    initialize(&connection).await?;
-    Ok((connection, child))
-}
-
-async fn initialize(connection: &acp::ClientSideConnection) -> Result<()> {
-    let response = connection
-        .initialize(
-            acp::InitializeRequest::new(acp::ProtocolVersion::V1)
-                .client_info(acp::Implementation::new(
-                    "claudex-agent-adapter",
-                    env!("CARGO_PKG_VERSION"),
-                ))
-                .meta(
-                    json!({
-                        "startupHints": {
-                            "nonInteractive": true,
-                            "skipGitStatus": true,
-                            "skipProjectLayout": true
-                        },
-                        "clientType":"claudex-agent-adapter"
-                    })
-                    .as_object()
-                    .cloned(),
-                ),
-        )
-        .await
-        .map_err(|error| anyhow!("Grok ACP initialize failed: {error:?}"))?;
-    if response.protocol_version != acp::ProtocolVersion::V1 {
-        bail!("Grok ACP selected unsupported protocol version")
-    }
-    let preferred = response
-        .meta
-        .as_ref()
-        .and_then(|meta| meta.get("defaultAuthMethodId"))
-        .and_then(Value::as_str);
-    let method = preferred
-        .and_then(|id| {
-            response
-                .auth_methods
-                .iter()
-                .find(|method| method.id().0.as_ref() == id)
-        })
-        .or_else(|| response.auth_methods.first());
-    if let Some(method) = method {
-        connection
-            .authenticate(
-                acp::AuthenticateRequest::new(method.id().clone())
-                    .meta(json!({"headless":true}).as_object().cloned()),
-            )
-            .await
-            .map_err(|error| anyhow!("Grok ACP authentication failed: {error:?}"))?;
-    }
-    Ok(())
+    let Ok((connection, child)) = started else {
+        let _ = setup.ready.send(started.map(|_| ()));
+        setup.alive.store(false, Ordering::Relaxed);
+        setup.events.close();
+        return;
+    };
+    let _ = setup.ready.send(Ok(()));
+    drive_commands(
+        setup.provider,
+        Rc::new(connection),
+        child,
+        &setup.model,
+        &setup.cwd,
+        &mut commands,
+        &setup.events,
+    )
+    .await;
+    setup.alive.store(false, Ordering::Relaxed);
+    setup.events.close();
 }
 
 async fn drive_commands(
+    provider: AcpProvider,
     connection: Rc<acp::ClientSideConnection>,
     _child: tokio::process::Child,
     model: &str,
@@ -266,6 +206,7 @@ async fn drive_commands(
     let instructions = Rc::new(RefCell::new(HashMap::<String, String>::new()));
     let (turns, turn_receiver) = mpsc::channel(TURN_QUEUE_CAPACITY);
     let turn_worker = tokio::task::spawn_local(drive_turns(
+        provider,
         Rc::clone(&connection),
         model.to_owned(),
         turn_receiver,
@@ -274,15 +215,16 @@ async fn drive_commands(
     while let Some(command) = commands.recv().await {
         match command {
             DriverCommand::CreateSession { params, response } => {
-                let result = create_session(&connection, model, cwd, params, &instructions).await;
+                let result =
+                    create_session(provider, &connection, model, cwd, params, &instructions).await;
                 let _ = response.send(result);
             }
             DriverCommand::StartTurn { params, response } => {
-                let result = match prepare_turn(params, &instructions) {
+                let result = match prepare_turn(provider, params, &instructions) {
                     Ok(turn) => turns
                         .send(turn)
                         .await
-                        .map_err(|_| anyhow!("Grok ACP turn worker is unavailable")),
+                        .map_err(|_| anyhow!("ACP turn worker is unavailable")),
                     Err(error) => Err(error),
                 };
                 let _ = response.send(result);
@@ -294,6 +236,7 @@ async fn drive_commands(
 }
 
 async fn create_session(
+    provider: AcpProvider,
     connection: &acp::ClientSideConnection,
     model: &str,
     cwd: &Path,
@@ -307,9 +250,9 @@ async fn create_session(
                 .meta(json!({ "modelId": model }).as_object().cloned()),
         )
         .await
-        .map_err(|error| anyhow!("Grok ACP session/new failed: {error:?}"))?;
+        .map_err(|error| anyhow!("{} ACP session/new failed: {error:?}", provider.label()))?;
     let session_id = response.session_id.0.to_string();
-    let base = prompt::provider_instructions(&params);
+    let base = prompt::provider_instructions(&params, provider == AcpProvider::Grok);
     if !base.is_empty() {
         instructions.borrow_mut().insert(session_id.clone(), base);
     }
@@ -323,13 +266,14 @@ struct PreparedTurn {
 }
 
 fn prepare_turn(
+    provider: AcpProvider,
     params: Value,
     instructions: &Rc<RefCell<HashMap<String, String>>>,
 ) -> Result<PreparedTurn> {
     let session_id = params
         .get("threadId")
         .and_then(Value::as_str)
-        .context("Grok ACP turn is missing threadId")?
+        .with_context(|| format!("{} ACP turn is missing threadId", provider.label()))?
         .to_owned();
     let prompt = prompt::input_text(params.get("input").unwrap_or(&Value::Null));
     let prefix = instructions.borrow_mut().remove(&session_id);
@@ -340,7 +284,10 @@ fn prepare_turn(
     let effort = params
         .get("effort")
         .and_then(Value::as_str)
-        .and_then(prompt::grok_effort)
+        .and_then(|effort| match provider {
+            AcpProvider::Grok => prompt::grok_effort(effort),
+            AcpProvider::Copilot => prompt::copilot_effort(effort),
+        })
         .map(str::to_owned);
     Ok(PreparedTurn {
         session_id,
@@ -350,6 +297,7 @@ fn prepare_turn(
 }
 
 async fn drive_turns(
+    provider: AcpProvider,
     connection: Rc<acp::ClientSideConnection>,
     model: String,
     mut turns: mpsc::Receiver<PreparedTurn>,
@@ -366,7 +314,7 @@ async fn drive_turns(
                 updates::dispatch_error(
                     &events,
                     &turn.session_id,
-                    format!("set effort failed: {error:?}"),
+                    format!("{} ACP set effort failed: {error:?}", provider.label()),
                 );
                 continue;
             }

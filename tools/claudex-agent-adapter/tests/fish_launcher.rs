@@ -35,6 +35,7 @@ fn fish_launcher_discovers_provider_models_without_pinning_them() {
         .env_remove("CLAUDEX_MODEL")
         .env_remove("CLAUDEX_CODEX_MODEL")
         .env_remove("CLAUDEX_GROK_MODEL")
+        .env_remove("CLAUDEX_BACKEND")
         .output()
         .expect("run fish launcher");
     assert!(
@@ -47,4 +48,25 @@ fn fish_launcher_discovers_provider_models_without_pinning_them() {
     assert!(arguments.contains("--backend-route\ngpt-5.6-test=codex-app-server\n"));
     assert!(arguments.contains("--backend-route\ngrok-4-test=grok-acp\n"));
     assert!(arguments.ends_with("--\nsmoke\n"));
+
+    let output = Command::new("fish")
+        .args([
+            "-c",
+            &format!("source '{}'; claudex copilot-smoke", function.display()),
+        ])
+        .env("HOME", home.path())
+        .env("CLAUDEX_MODEL", "gpt-5.6-test")
+        .env("CLAUDEX_BACKEND", "copilot-acp")
+        .output()
+        .expect("run Copilot ACP fish launcher");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let arguments = String::from_utf8(output.stdout).expect("UTF-8 Copilot arguments");
+    assert!(arguments.contains("--model\ngpt-5.6-test\n"));
+    assert!(arguments.contains("--backend-route\ngpt-5.6-test=copilot-acp\n"));
+    assert!(!arguments.contains("gpt-5.6-test=codex-app-server"));
+    assert!(arguments.ends_with("--\ncopilot-smoke\n"));
 }

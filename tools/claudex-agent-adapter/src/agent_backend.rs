@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 
 use crate::{
     app_server::{AppServer, ThreadEvents},
+    copilot_acp::CopilotAcp,
     grok_acp::GrokAcp,
 };
 
@@ -15,6 +16,7 @@ use routes::RoutedBackends;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BackendKind {
     CodexAppServer,
+    CopilotAcp,
     GrokAcp,
 }
 
@@ -22,6 +24,7 @@ impl BackendKind {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::CodexAppServer => "codex-app-server",
+            Self::CopilotAcp => "copilot-acp",
             Self::GrokAcp => "grok-acp",
         }
     }
@@ -39,8 +42,11 @@ impl FromStr for BackendKind {
     fn from_str(value: &str) -> Result<Self> {
         match value {
             "codex-app-server" => Ok(Self::CodexAppServer),
+            "copilot-acp" => Ok(Self::CopilotAcp),
             "grok-acp" => Ok(Self::GrokAcp),
-            _ => bail!("invalid backend `{value}`; expected codex-app-server or grok-acp"),
+            _ => bail!(
+                "invalid backend `{value}`; expected codex-app-server, copilot-acp, or grok-acp"
+            ),
         }
     }
 }
@@ -70,6 +76,7 @@ impl FromStr for BackendRoute {
 
 pub enum AgentBackend {
     Codex(Arc<AppServer>),
+    Copilot(Arc<CopilotAcp>),
     Grok(Arc<GrokAcp>),
     Routed(RoutedBackends),
 }
@@ -80,6 +87,7 @@ impl AgentBackend {
             BackendKind::CodexAppServer => {
                 Ok(Arc::new(Self::Codex(AppServer::spawn(model).await?)))
             }
+            BackendKind::CopilotAcp => Ok(Arc::new(Self::Copilot(CopilotAcp::spawn(model).await?))),
             BackendKind::GrokAcp => Ok(Arc::new(Self::Grok(GrokAcp::spawn(model).await?))),
         }
     }
@@ -96,6 +104,10 @@ impl AgentBackend {
         Arc::new(Self::Grok(agent))
     }
 
+    pub fn copilot(agent: Arc<CopilotAcp>) -> Arc<Self> {
+        Arc::new(Self::Copilot(agent))
+    }
+
     pub fn routed(routes: Vec<(String, Arc<Self>)>) -> Arc<Self> {
         Arc::new(Self::Routed(RoutedBackends::ready(routes)))
     }
@@ -103,6 +115,7 @@ impl AgentBackend {
     pub const fn kind(&self) -> BackendKind {
         match self {
             Self::Codex(_) => BackendKind::CodexAppServer,
+            Self::Copilot(_) => BackendKind::CopilotAcp,
             Self::Grok(_) => BackendKind::GrokAcp,
             Self::Routed(_) => panic!("a routed backend has no single kind"),
         }
@@ -111,7 +124,7 @@ impl AgentBackend {
     pub fn supports_model(&self, model: &str) -> bool {
         match self {
             Self::Routed(routes) => routes.supports(model),
-            Self::Codex(_) | Self::Grok(_) => false,
+            Self::Codex(_) | Self::Copilot(_) | Self::Grok(_) => false,
         }
     }
 
@@ -125,20 +138,21 @@ impl AgentBackend {
     pub fn models(&self) -> Vec<String> {
         match self {
             Self::Routed(routes) => routes.models(),
-            Self::Codex(_) | Self::Grok(_) => vec![],
+            Self::Codex(_) | Self::Copilot(_) | Self::Grok(_) => vec![],
         }
     }
 
     pub fn started_models(&self) -> Vec<String> {
         match self {
             Self::Routed(routes) => routes.started_models(),
-            Self::Codex(_) | Self::Grok(_) => vec![],
+            Self::Codex(_) | Self::Copilot(_) | Self::Grok(_) => vec![],
         }
     }
 
     pub fn subscribe_thread(&self, thread_id: &str) -> ThreadEvents {
         match self {
             Self::Codex(server) => server.subscribe_thread(thread_id),
+            Self::Copilot(agent) => agent.subscribe_thread(thread_id),
             Self::Grok(agent) => agent.subscribe_thread(thread_id),
             Self::Routed(routes) => {
                 let (index, raw_id) = routed_thread(thread_id);
@@ -154,6 +168,7 @@ impl AgentBackend {
     pub fn is_alive(&self) -> bool {
         match self {
             Self::Codex(server) => server.is_alive(),
+            Self::Copilot(agent) => agent.is_alive(),
             Self::Grok(agent) => agent.is_alive(),
             Self::Routed(routes) => routes.is_alive(),
         }
@@ -162,6 +177,8 @@ impl AgentBackend {
     pub async fn request(&self, method: &str, params: Value) -> Result<Value> {
         match self {
             Self::Codex(server) => server.request(method, params).await,
+            Self::Copilot(agent) if method == "thread/start" => agent.create_session(params).await,
+            Self::Copilot(_) => bail!("Copilot ACP does not support backend request `{method}`"),
             Self::Grok(agent) if method == "thread/start" => agent.create_session(params).await,
             Self::Grok(_) => bail!("Grok ACP does not support backend request `{method}`"),
             Self::Routed(routes) if method == "thread/start" => {
@@ -186,6 +203,8 @@ impl AgentBackend {
     pub async fn request_detached(self: &Arc<Self>, method: &str, mut params: Value) -> Result<()> {
         match self.as_ref() {
             Self::Codex(server) => server.request_detached(method, params).await,
+            Self::Copilot(agent) if method == "turn/start" => agent.start_turn(params).await,
+            Self::Copilot(_) => bail!("Copilot ACP does not support backend request `{method}`"),
             Self::Grok(agent) if method == "turn/start" => agent.start_turn(params).await,
             Self::Grok(_) => bail!("Grok ACP does not support backend request `{method}`"),
             Self::Routed(routes) if method == "turn/start" => {
@@ -206,6 +225,7 @@ impl AgentBackend {
     pub async fn respond(&self, id: Value, result: Value) -> Result<()> {
         match self {
             Self::Codex(server) => server.respond(id, result).await,
+            Self::Copilot(_) => bail!("Copilot ACP did not request Claude Code tool result {id}"),
             Self::Grok(_) => bail!("Grok ACP did not request Claude Code tool result {id}"),
             Self::Routed(routes) => {
                 let backend = routes
@@ -219,6 +239,7 @@ impl AgentBackend {
     pub async fn respond_for_model(&self, model: &str, id: Value, result: Value) -> Result<()> {
         match self {
             Self::Codex(server) => server.respond(id, result).await,
+            Self::Copilot(_) => bail!("Copilot ACP did not request Claude Code tool result {id}"),
             Self::Grok(_) => bail!("Grok ACP did not request Claude Code tool result {id}"),
             Self::Routed(routes) => {
                 let route = routes
@@ -248,6 +269,7 @@ mod tests {
     fn parses_and_displays_backend_kinds() {
         for (input, expected) in [
             ("codex-app-server", BackendKind::CodexAppServer),
+            ("copilot-acp", BackendKind::CopilotAcp),
             ("grok-acp", BackendKind::GrokAcp),
         ] {
             assert_eq!(input.parse::<BackendKind>().unwrap(), expected);
@@ -267,6 +289,10 @@ mod tests {
             BackendRoute {
                 model: "unused-codex".to_owned(),
                 backend: BackendKind::CodexAppServer,
+            },
+            BackendRoute {
+                model: "unused-copilot".to_owned(),
+                backend: BackendKind::CopilotAcp,
             },
             BackendRoute {
                 model: "unused-grok".to_owned(),

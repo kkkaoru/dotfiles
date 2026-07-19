@@ -2,7 +2,7 @@ use serde_json::Value;
 
 use super::plugin;
 
-pub(super) fn provider_instructions(params: &Value) -> String {
+pub(super) fn provider_instructions(params: &Value, include_grok_routing: bool) -> String {
     let base = params
         .get("baseInstructions")
         .and_then(Value::as_str)
@@ -15,10 +15,24 @@ pub(super) fn provider_instructions(params: &Value) -> String {
         .strip_suffix(adapter)
         .unwrap_or(base)
         .trim_end_matches(['\n', ' ']);
+    if !include_grok_routing {
+        return base.to_owned();
+    }
     if base.is_empty() {
         return plugin::ROUTING_INSTRUCTIONS.to_owned();
     }
     format!("{base}\n\n{}", plugin::ROUTING_INSTRUCTIONS)
+}
+
+pub(super) fn copilot_effort(effort: &str) -> Option<&'static str> {
+    match effort {
+        "low" => Some("low"),
+        "mid" | "medium" => Some("medium"),
+        "high" => Some("high"),
+        "xhigh" => Some("xhigh"),
+        "max" => Some("max"),
+        _ => None,
+    }
 }
 
 pub(super) fn input_text(input: &Value) -> String {

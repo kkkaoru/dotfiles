@@ -262,7 +262,7 @@ impl RoutedBackends {
 fn provider_startup(kind: BackendKind, codex_startup: &Arc<BackendStartup>) -> Arc<BackendStartup> {
     match kind {
         BackendKind::CodexAppServer => Arc::clone(codex_startup),
-        BackendKind::GrokAcp => Arc::new(OnceLock::new()),
+        BackendKind::CopilotAcp | BackendKind::GrokAcp => Arc::new(OnceLock::new()),
     }
 }
 
@@ -284,19 +284,24 @@ mod tests {
     use crate::agent_backend::{BackendKind, BackendRoute};
 
     #[test]
-    fn shares_codex_provider_startup_but_keeps_grok_model_specific() {
+    fn shares_codex_startup_but_keeps_acp_servers_model_specific() {
         let routes = RoutedBackends::lazy(&[
             route("gpt-one", BackendKind::CodexAppServer),
             route("gpt-two", BackendKind::CodexAppServer),
+            route("gpt-copilot-one", BackendKind::CopilotAcp),
+            route("gpt-copilot-two", BackendKind::CopilotAcp),
             route("grok-one", BackendKind::GrokAcp),
             route("grok-two", BackendKind::GrokAcp),
         ]);
         let gpt_one = routes.route(0);
         let gpt_two = routes.route(1);
-        let grok_one = routes.route(2);
-        let grok_two = routes.route(3);
+        let copilot_one = routes.route(2);
+        let copilot_two = routes.route(3);
+        let grok_one = routes.route(4);
+        let grok_two = routes.route(5);
 
         assert!(Arc::ptr_eq(&gpt_one.startup, &gpt_two.startup));
+        assert!(!Arc::ptr_eq(&copilot_one.startup, &copilot_two.startup));
         assert!(!Arc::ptr_eq(&grok_one.startup, &grok_two.startup));
 
         let (_, dynamic_gpt) = routes.resolve("gpt-dynamic").unwrap();

@@ -20,6 +20,7 @@ async fn lazy_routes_cover_provider_entry_points_and_failed_startup_state() {
         route("gpt-model", BackendKind::CodexAppServer),
         route("gpt-secondary", BackendKind::CodexAppServer),
         route("gpt-unused", BackendKind::CodexAppServer),
+        route("gpt-copilot", BackendKind::CopilotAcp),
         route("grok-model", BackendKind::GrokAcp),
     ]);
     exercise_initial_provider_routes(&backend, &codex_spawns).await;
@@ -33,6 +34,7 @@ async fn lazy_routes_cover_provider_entry_points_and_failed_startup_state() {
         [
             "gpt-model",
             "gpt-secondary",
+            "gpt-copilot",
             "grok-model",
             "gpt-5.6-sol",
             "grok-4.5"
@@ -65,6 +67,10 @@ fn provider_home() -> (tempfile::TempDir, PathBuf) {
     unsafe {
         std::env::set_var("HOME", home.path());
         std::env::set_var("CLAUDEX_CODEX_PROGRAM", &codex_wrapper);
+        std::env::set_var(
+            "CLAUDEX_COPILOT_PROGRAM",
+            env!("CARGO_BIN_EXE_grok-acp-mock"),
+        );
         std::env::set_var("CLAUDEX_GROK_PROGRAM", env!("CARGO_BIN_EXE_grok-acp-mock"));
     }
     std::env::set_current_dir(home.path()).expect("isolate Grok ACP trace output");
@@ -82,16 +88,21 @@ async fn exercise_initial_provider_routes(backend: &Arc<AgentBackend>, codex_spa
         .request("thread/start", json!({"model":"grok-model"}))
         .await
         .expect("start lazy Grok route");
+    let copilot = backend
+        .request("thread/start", json!({"model":"gpt-copilot"}))
+        .await
+        .expect("start lazy Copilot route");
     assert!(codex.pointer("/thread/id").is_some());
     assert!(secondary_codex.pointer("/thread/id").is_some());
     assert!(grok.pointer("/thread/id").is_some());
+    assert!(copilot.pointer("/thread/id").is_some());
     assert_eq!(
         fs::read_to_string(codex_spawns).expect("read Codex spawn count"),
         "spawn\n"
     );
     assert_eq!(
         backend.started_models(),
-        ["gpt-model", "gpt-secondary", "grok-model"]
+        ["gpt-model", "gpt-secondary", "gpt-copilot", "grok-model"]
     );
     assert!(backend.is_alive());
 }

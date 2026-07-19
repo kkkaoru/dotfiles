@@ -24,11 +24,16 @@ function claudex --description 'Run Claude Code with dynamically routed agent ba
         return 2
     end
 
+    set -l main_backend codex-app-server
+    string match -q 'grok*' "$main_model"; and set main_backend grok-acp
+    set -q CLAUDEX_BACKEND; and set main_backend $CLAUDEX_BACKEND
+
     set -l adapter_args \
         launch \
-        --model "$main_model"
-    test -n "$codex_model"; and set -a adapter_args --backend-route "$codex_model=codex-app-server"
-    test -n "$grok_model"; and set -a adapter_args --backend-route "$grok_model=grok-acp"
+        --model "$main_model" \
+        --backend-route "$main_model=$main_backend"
+    test -n "$codex_model"; and test "$codex_model" != "$main_model"; and set -a adapter_args --backend-route "$codex_model=codex-app-server"
+    test -n "$grok_model"; and test "$grok_model" != "$main_model"; and set -a adapter_args --backend-route "$grok_model=grok-acp"
     set -q CLAUDEX_ADAPTER_LISTEN; and set -a adapter_args --listen "$CLAUDEX_ADAPTER_LISTEN"
     set -q CLAUDEX_SUBSCRIPTION_MAX_PROCESSES; and set -a adapter_args --subscription-max-processes "$CLAUDEX_SUBSCRIPTION_MAX_PROCESSES"
     set -q CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES; and set -a adapter_args --subscription-timeout-minutes "$CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES"

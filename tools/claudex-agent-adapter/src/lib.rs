@@ -5,6 +5,7 @@ pub mod agent_backend;
 pub mod anthropic;
 pub mod app_server;
 pub mod build_support;
+pub mod copilot_acp;
 pub mod coverage_gate;
 pub mod grok_acp;
 pub mod launcher;

@@ -1,14 +1,15 @@
 # claudex agent adapter
 
 This local Rust service presents the subset of Anthropic's Messages API used by
-Claude Code and routes it to one of two agent backends:
+Claude Code and routes it to one of three agent backends:
 
 | `--backend-route MODEL=BACKEND` | Backend protocol | Tool runtime |
 | --- | --- | --- |
 | `codex-app-server` | Codex app-server JSON-RPC | Claude Code tools bridged through Codex |
+| `copilot-acp` | GitHub Copilot CLI Agent Client Protocol (ACP) | Copilot CLI agent tools and permission requests |
 | `grok-acp` | Grok Build Agent Client Protocol (ACP) | Grok Build agent tools and permission requests |
 
-Both routes coexist in one daemon without starting either provider process.
+All routes coexist in one daemon without eagerly starting provider processes.
 Each configured backend starts lazily on its first model request and remains
 available for reuse for the daemon's lifetime. A model switch or a Claude Code SubAgent request is routed from its Messages API
 `model` value, while models without a backend route retain the existing Claude
@@ -16,10 +17,14 @@ subscription subprocess behavior.
 
 The Codex backend keeps threads alive while Claude Code executes dynamic tool
 calls, then sends Claude Code's `tool_result` blocks back to the pending
-app-server request. The Grok backend launches `grok --model MODEL agent stdio`,
+app-server request. The Copilot backend launches
+`copilot --acp --stdio --model MODEL`; Copilot is a backend choice rather than
+a separate model family, so an explicit route such as
+`--backend-route MODEL=copilot-acp` sends that model through the authenticated
+GitHub Copilot CLI. The Grok backend launches `grok --model MODEL agent stdio`,
 creates ACP sessions, streams agent message chunks, and selects `AllowOnce` when
-the agent requests permission for a tool. Grok Build therefore owns execution
-of its ACP tools; Claude Code remains the outer conversation UI.
+either ACP agent requests permission for a tool. The selected ACP provider owns
+execution of its tools; Claude Code remains the outer conversation UI.
 
 Streaming requests return their HTTP response immediately. Each Codex
 `item/agentMessage/delta` notification is converted to an Anthropic
@@ -30,9 +35,9 @@ forward text deltas as they arrive.
 For `codex-app-server`, the adapter starts `codex app-server` with an isolated
 `CODEX_HOME`. Only Codex authentication is copied into that home; Claude Code
 remains responsible for tools, hooks, MCP servers, skills, approvals, and
-project instructions. `CLAUDEX_CODEX_PROGRAM`, `CLAUDEX_GROK_PROGRAM`, and
-`CLAUDEX_CLAUDE_PROGRAM` are development-only executable overrides used by
-process integration tests.
+project instructions. `CLAUDEX_CODEX_PROGRAM`, `CLAUDEX_COPILOT_PROGRAM`,
+`CLAUDEX_GROK_PROGRAM`, and `CLAUDEX_CLAUDE_PROGRAM` are development-only
+executable overrides used by process integration tests.
 
 Build and install with the current stable Rust toolchain:
 
@@ -52,16 +57,24 @@ claudex-agent-adapter serve --model MODEL --backend-route MODEL=BACKEND [...] [A
 claudex-agent-adapter build-id
 ```
 
-Backend values are `codex-app-server` and `grok-acp`. `--backend-route` is
-repeatable, model keys must be unique, and the main `--model` must have a route.
+Backend values are `codex-app-server`, `copilot-acp`, and `grok-acp`.
+`--backend-route` is repeatable, model keys must be unique, and the main
+`--model` must have a route.
 Omitting all routes preserves the single-model `codex-app-server` default.
 Other adapter options are `--listen`, `--subscription-max-processes`, and
 `--subscription-timeout-minutes`; their defaults are `127.0.0.1:8318`, 20, and
-120. The fish launcher configures both routes and translates optional
-`CLAUDEX_MODEL`, `CLAUDEX_CODEX_MODEL`, `CLAUDEX_GROK_MODEL`,
+120. The fish launcher configures provider routes and translates optional
+`CLAUDEX_MODEL`, `CLAUDEX_BACKEND`, `CLAUDEX_CODEX_MODEL`, `CLAUDEX_GROK_MODEL`,
 `CLAUDEX_ADAPTER_LISTEN`, `CLAUDEX_SUBSCRIPTION_MAX_PROCESSES`, and
 `CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES` values into these options. Adapter-private
 variables are removed before Claude Code starts.
+
+For example, this keeps model selection independent from backend selection and
+routes the selected model through GitHub Copilot CLI for the main session:
+
+```fish
+env CLAUDEX_MODEL=MODEL CLAUDEX_BACKEND=copilot-acp claudex
+```
 
 `ANTHROPIC_AUTH_TOKEN` remains an environment variable because command-line
 secrets are exposed in process listings. API routes accept it as either a
@@ -85,7 +98,8 @@ resolution applies to subscription subprocesses and same-model Codex
 app-server child turns, independently of the parent turn. For Grok ACP, low,
 medium, and high are sent through `session/set_model` metadata as
 `reasoningEffort`; xhigh is normalized to Grok's highest advertised level,
-high.
+high. Copilot ACP receives low, medium, high, xhigh, or max through the same ACP
+session-model metadata.
 
 Requests for the configured main model use the persistent Codex
 app-server. A Claude Code Agent that explicitly requests another model is sent
@@ -105,7 +119,8 @@ correlates the child request, and routes the selected ID through the configured
 backend routes. An unconfigured model whose ID starts with `gpt` or `grok` is
 also added lazily and routed to Codex
 app-server or Grok ACP respectively, so SubAgents may select provider models
-that were not named when the daemon started. Other unconfigured model IDs fall
+that were not named when the daemon started. An explicit `copilot-acp` route
+takes precedence over this prefix inference. Other unconfigured model IDs fall
 back to the Claude subscription process. Without an explicit model, the same
 mechanism uses the model of the session that launched the SubAgent. This keeps
 both Claude Code's Agent display and actual routing from claiming a fixed Sonnet

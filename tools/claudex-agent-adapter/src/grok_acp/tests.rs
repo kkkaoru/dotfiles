@@ -20,6 +20,10 @@ fn converts_backend_prompts_and_effort() {
     assert_eq!(prompt::grok_effort("mid"), Some("medium"));
     assert_eq!(prompt::grok_effort("xhigh"), Some("high"));
     assert_eq!(prompt::grok_effort("invalid"), None);
+    assert_eq!(prompt::copilot_effort("mid"), Some("medium"));
+    assert_eq!(prompt::copilot_effort("xhigh"), Some("xhigh"));
+    assert_eq!(prompt::copilot_effort("max"), Some("max"));
+    assert_eq!(prompt::copilot_effort("invalid"), None);
     assert_eq!(prompt::input_text(&serde_json::Value::Null), "");
     assert_eq!(
         prompt::input_text(&json!({"key":"value"})),
@@ -33,9 +37,13 @@ fn removes_codex_only_bridge_instructions() {
         "baseInstructions":"project rules\n\nbackend-only",
         "developerInstructions":"backend-only"
     });
-    assert!(prompt::provider_instructions(&params).starts_with("project rules\n\n"));
-    assert!(prompt::provider_instructions(&params).contains("claudex-medium"));
-    assert!(prompt::provider_instructions(&json!({})).contains("claudex-xhigh"));
+    assert!(prompt::provider_instructions(&params, true).starts_with("project rules\n\n"));
+    assert!(prompt::provider_instructions(&params, true).contains("claudex-medium"));
+    assert!(prompt::provider_instructions(&json!({}), true).contains("claudex-xhigh"));
+    assert_eq!(
+        prompt::provider_instructions(&params, false),
+        "project rules"
+    );
 }
 
 #[tokio::test]
