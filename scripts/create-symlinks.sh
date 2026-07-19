@@ -1,15 +1,9 @@
 #!/bin/bash
 
-SCRIPT_DIR=$(cd $(dirname $0); pwd)
+set -euo pipefail
 
-for f in .??*
-do
-  [ "$f" = ".git" ] && continue
-  [ "$f" = ".tool-versions" ] && continue
-  [ "$f" = ".cursor" ] && continue
-  [ "$f" = ".npmrc" ] && continue
-  [ -L "${HOME}/${f}" ] && continue
-  # NOTE: For Debug
-  # echo "$SCRIPT_DIR/$f"
-  ln -snfv "$SCRIPT_DIR/$f" "$HOME"
-done
+# Prefer repo-root create-symlinks.sh (this file lives in scripts/)
+SCRIPT_DIR=$(cd "$(dirname "$0")" || exit 1; pwd)
+ROOT_DIR=$(cd "${SCRIPT_DIR}/.." || exit 1; pwd)
+
+exec "${ROOT_DIR}/create-symlinks.sh"
