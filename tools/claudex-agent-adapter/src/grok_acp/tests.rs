@@ -152,59 +152,67 @@ async fn bounded_queues_apply_backpressure_at_fixed_capacities() {
 #[tokio::test(flavor = "current_thread")]
 async fn turn_worker_runs_local_tasks_concurrently_and_cleans_them_up() {
     let local = tokio::task::LocalSet::new();
-    local
-        .run_until(async {
-            let permits = Arc::new(tokio::sync::Semaphore::new(TURN_QUEUE_CAPACITY));
-            let (turns, receiver) = tokio::sync::mpsc::channel(TURN_QUEUE_CAPACITY);
-            let active = std::rc::Rc::new(std::cell::Cell::new(0));
-            let peak = std::rc::Rc::new(std::cell::Cell::new(0));
-            let both_started = std::rc::Rc::new(tokio::sync::Notify::new());
-            let release = std::rc::Rc::new(tokio::sync::Notify::new());
-            let worker = tokio::task::spawn_local(drive_turn_tasks(receiver, {
-                let active = std::rc::Rc::clone(&active);
-                let peak = std::rc::Rc::clone(&peak);
-                let both_started = std::rc::Rc::clone(&both_started);
-                let release = std::rc::Rc::clone(&release);
-                move |_turn| {
-                    let active = std::rc::Rc::clone(&active);
-                    let peak = std::rc::Rc::clone(&peak);
-                    let both_started = std::rc::Rc::clone(&both_started);
-                    let release = std::rc::Rc::clone(&release);
-                    async move {
-                        let count = active.get() + 1;
-                        active.set(count);
-                        peak.set(peak.get().max(count));
-                        if count == 2 {
-                            both_started.notify_one();
-                        }
-                        release.notified().await;
-                        active.set(active.get() - 1);
-                    }
-                }
-            }));
-            for session_id in ["one", "two"] {
-                turns
-                    .send(PreparedTurn {
-                        session_id: session_id.to_owned(),
-                        prompt: String::new(),
-                        effort: None,
-                        _permit: Arc::clone(&permits).acquire_owned().await.unwrap(),
-                    })
-                    .await
-                    .unwrap();
-            }
-            tokio::time::timeout(std::time::Duration::from_secs(1), both_started.notified())
-                .await
-                .expect("turn tasks did not overlap");
-            assert_eq!(peak.get(), 2);
-            drop(turns);
-            tokio::time::timeout(std::time::Duration::from_secs(1), worker)
-                .await
-                .expect("turn worker did not abort active tasks")
-                .unwrap();
-            assert_eq!(permits.available_permits(), TURN_QUEUE_CAPACITY);
-        })
-        .await;
+    local.run_until(check_concurrent_turn_worker()).await;
+}
+
+async fn check_concurrent_turn_worker() {
+    let permits = Arc::new(tokio::sync::Semaphore::new(TURN_QUEUE_CAPACITY));
+    let (turns, receiver) = tokio::sync::mpsc::channel(TURN_QUEUE_CAPACITY);
+    let active = std::rc::Rc::new(std::cell::Cell::new(0));
+    let peak = std::rc::Rc::new(std::cell::Cell::new(0));
+    let both_started = std::rc::Rc::new(tokio::sync::Notify::new());
+    let release = std::rc::Rc::new(tokio::sync::Notify::new());
+    let worker = tokio::task::spawn_local(drive_turn_tasks(receiver, {
+        let active = std::rc::Rc::clone(&active);
+        let peak = std::rc::Rc::clone(&peak);
+        let both_started = std::rc::Rc::clone(&both_started);
+        let release = std::rc::Rc::clone(&release);
+        move |_turn| {
+            hold_turn(
+                std::rc::Rc::clone(&active),
+                std::rc::Rc::clone(&peak),
+                std::rc::Rc::clone(&both_started),
+                std::rc::Rc::clone(&release),
+            )
+        }
+    }));
+    for session_id in ["one", "two"] {
+        turns
+            .send(PreparedTurn {
+                session_id: session_id.to_owned(),
+                prompt: String::new(),
+                effort: None,
+                _permit: Arc::clone(&permits).acquire_owned().await.unwrap(),
+            })
+            .await
+            .unwrap();
+    }
+    tokio::time::timeout(std::time::Duration::from_secs(1), both_started.notified())
+        .await
+        .expect("turn tasks did not overlap");
+    assert_eq!(peak.get(), 2);
+    drop(turns);
+    tokio::time::timeout(std::time::Duration::from_secs(1), worker)
+        .await
+        .expect("turn worker did not abort active tasks")
+        .unwrap();
+    assert_eq!(permits.available_permits(), TURN_QUEUE_CAPACITY);
+}
+
+async fn hold_turn(
+    active: std::rc::Rc<std::cell::Cell<usize>>,
+    peak: std::rc::Rc<std::cell::Cell<usize>>,
+    both_started: std::rc::Rc<tokio::sync::Notify>,
+    release: std::rc::Rc<tokio::sync::Notify>,
+) {
+    let count = active.get() + 1;
+    active.set(count);
+    peak.set(peak.get().max(count));
+    if count == 2 {
+        both_started.notify_one();
+    }
+    release.notified().await;
+    active.set(active.get() - 1);
 }
 
 #[tokio::test]
