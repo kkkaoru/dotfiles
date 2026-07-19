@@ -11,10 +11,10 @@ use tokio::sync::Mutex;
 use super::{
     ActiveTurn, Bridge, MessagesRequest, SelectedSession, Session,
     content::{
-        ToolResult, collect_tool_results, full_transcript_input, matching_transcript_len,
-        request_signature, take_pending_results, transcript_owns_tool_results,
-        user_input_from_messages,
+        ToolResult, collect_tool_results, matching_transcript_len, request_signature,
+        take_pending_results, transcript_owns_tool_results,
     },
+    turn_input::{full_transcript_input, user_input_from_messages},
 };
 use crate::app_server::response_thread_id;
 

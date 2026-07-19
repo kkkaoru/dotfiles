@@ -141,6 +141,23 @@ async fn ignores_oversized_provider_events_that_the_bridge_does_not_consume() {
 }
 
 #[tokio::test]
+async fn bounds_reconstructed_history_below_the_app_server_input_limit() {
+    let adapter = Adapter::start().await;
+    let client = Client::new();
+    let mut request = base_request();
+    request["messages"] = json!([
+        {"role":"user","content":format!("old-{}", "x".repeat(550_000))},
+        {"role":"assistant","content":format!("middle-{}", "y".repeat(550_000))},
+        {"role":"user","content":"LATEST_LIMIT_CHECK"}
+    ]);
+
+    let response = post_json(&client, &messages_url(&adapter), request).await;
+
+    assert_eq!(response["content"][0]["text"], "OK");
+    assert_eq!(response["stop_reason"], "end_turn");
+}
+
+#[tokio::test]
 async fn streams_text_before_the_turn_completes() {
     let adapter = Adapter::start().await;
     let client = Client::new();

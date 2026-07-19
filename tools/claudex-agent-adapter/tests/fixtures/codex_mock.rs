@@ -52,10 +52,22 @@ impl<W: Write> Fixture<W> {
     }
 
     fn start_turn(&mut self, message: &Value) {
+        const MAX_INPUT_CHARS: usize = 1_048_576;
         let input = message
             .pointer("/params/input")
             .unwrap_or(&Value::Null)
             .to_string();
+        if input.chars().count() > MAX_INPUT_CHARS {
+            self.send(json!({
+                "id":message["id"],
+                "error":{
+                    "code":-32602,
+                    "data":{"input_error_code":"input_too_large","max_chars":MAX_INPUT_CHARS},
+                    "message":"Input exceeds the maximum length"
+                }
+            }));
+            return;
+        }
         if input.contains("DETACHED_ERROR") {
             self.send(json!({
                 "id":message["id"],

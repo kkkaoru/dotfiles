@@ -12,8 +12,8 @@ mod tests {
     use tokio::sync::{Mutex, Semaphore};
 
     use super::{
-        MAX_CONSUMED_TOOL_IDS, ToolResult, content_text, full_transcript_input,
-        matching_transcript_len, remember_consumed_tool_id, take_pending_results,
+        MAX_CONSUMED_TOOL_IDS, ToolResult, content_text, matching_transcript_len,
+        remember_consumed_tool_id, take_pending_results,
     };
     use crate::anthropic::Session;
 
@@ -119,14 +119,6 @@ mod tests {
                 {"type":"text","text":"kept"}
             ])),
             "kept"
-        );
-        let assistant = json!({"role":"assistant","content":"reply"});
-        let input = full_transcript_input(&[assistant]);
-        assert!(
-            input[0]["text"]
-                .as_str()
-                .expect("transcript")
-                .contains("role-tagged history")
         );
     }
 

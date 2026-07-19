@@ -165,50 +165,6 @@ fn text_block(block: &Value) -> Option<&str> {
         .flatten()
 }
 
-pub(super) fn full_transcript_input(messages: &[Value]) -> Vec<Value> {
-    if messages.len() == 1 && messages[0].get("role").and_then(Value::as_str) == Some("user") {
-        return user_input_from_messages(messages);
-    }
-    vec![json!({
-        "type": "text",
-        "text": format!(
-            "Continue this Claude Code conversation. The role-tagged history follows:\n{}",
-            serde_json::to_string(messages).unwrap_or_default()
-        )
-    })]
-}
-
-pub(super) fn user_input_from_messages(messages: &[Value]) -> Vec<Value> {
-    let mut input = messages
-        .iter()
-        .filter(|message| message.get("role").and_then(Value::as_str) == Some("user"))
-        .flat_map(message_input)
-        .collect::<Vec<_>>();
-    if input.is_empty() {
-        input.push(json!({ "type": "text", "text": "Continue." }));
-    }
-    input
-}
-
-fn message_input(message: &Value) -> Vec<Value> {
-    match message.get("content") {
-        Some(Value::String(text)) => vec![json!({ "type": "text", "text": text })],
-        Some(Value::Array(blocks)) => blocks.iter().filter_map(input_block).collect(),
-        _ => Vec::new(),
-    }
-}
-
-fn input_block(block: &Value) -> Option<Value> {
-    match block.get("type").and_then(Value::as_str) {
-        Some("text") => Some(json!({
-            "type": "text",
-            "text": block.get("text").and_then(Value::as_str).unwrap_or("")
-        })),
-        Some("image") => image_data_url(block).map(|url| json!({ "type": "image", "url": url })),
-        _ => None,
-    }
-}
-
 pub(super) fn image_data_url(block: &Value) -> Option<String> {
     let source = block.get("source")?;
     match source.get("type")?.as_str()? {
@@ -353,7 +309,7 @@ impl Write for ByteCounter {
     }
 }
 
-fn serialized_len(value: &impl serde::Serialize) -> usize {
+pub(super) fn serialized_len(value: &impl serde::Serialize) -> usize {
     let mut counter = ByteCounter::default();
     serde_json::to_writer(&mut counter, value).map_or(0, |()| counter.0)
 }
