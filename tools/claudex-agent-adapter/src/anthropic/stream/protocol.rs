@@ -22,7 +22,7 @@ use uuid::Uuid;
 use super::super::{Segment, content::sse};
 
 const SSE_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
-const SSE_KEEPALIVE_FRAME: &[u8] = b": keepalive\n\n";
+const SSE_KEEPALIVE_FRAME: &[u8] = b"event: ping\ndata: {\"type\":\"ping\"}\n\n";
 
 pub(in crate::anthropic) type StreamSender = mpsc::Sender<Result<Bytes, Infallible>>;
 
@@ -48,15 +48,19 @@ pub(super) fn sse_response(receiver: mpsc::Receiver<Result<Bytes, Infallible>>) 
 pub(in crate::anthropic) fn streaming_sse_response(
     receiver: mpsc::Receiver<Result<Bytes, Infallible>>,
 ) -> Response<Body> {
+    streaming_sse_response_with_interval(receiver, SSE_KEEPALIVE_INTERVAL)
+}
+
+fn streaming_sse_response_with_interval(
+    receiver: mpsc::Receiver<Result<Bytes, Infallible>>,
+    interval: Duration,
+) -> Response<Body> {
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "text/event-stream")
         .header(header::CACHE_CONTROL, "no-cache")
         .header("x-accel-buffering", "no")
-        .body(Body::from_stream(KeepaliveStream::new(
-            receiver,
-            SSE_KEEPALIVE_INTERVAL,
-        )))
+        .body(Body::from_stream(KeepaliveStream::new(receiver, interval)))
         .expect("valid streaming response")
 }
 
@@ -195,6 +199,7 @@ mod lazy_tests {
     };
 
     use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio_stream::StreamExt;
 
     #[tokio::test]
@@ -213,16 +218,19 @@ mod lazy_tests {
     }
 
     #[tokio::test]
-    async fn shared_stream_emits_keepalives_and_stops_after_completion() {
+    async fn shared_stream_emits_anthropic_pings_and_stops_after_completion() {
         let (sender, receiver) = mpsc::channel::<Result<Bytes, Infallible>>(2);
         let mut stream = KeepaliveStream::new(receiver, Duration::from_millis(5));
 
-        let keepalive = tokio::time::timeout(Duration::from_millis(100), stream.next())
+        let ping = tokio::time::timeout(Duration::from_millis(100), stream.next())
             .await
-            .expect("keepalive deadline")
-            .expect("keepalive frame")
+            .expect("ping deadline")
+            .expect("ping frame")
             .expect("infallible frame");
-        assert_eq!(keepalive.as_ref(), SSE_KEEPALIVE_FRAME);
+        assert_eq!(
+            ping.as_ref(),
+            b"event: ping\ndata: {\"type\":\"ping\"}\n\n"
+        );
 
         let completion = Bytes::from_static(b"event: message_stop\ndata: {}\n\n");
         sender
@@ -238,7 +246,7 @@ mod lazy_tests {
     }
 
     #[tokio::test]
-    async fn prioritizes_ready_model_frames_over_keepalives() {
+    async fn prioritizes_ready_model_frames_over_pings() {
         let (sender, receiver) = mpsc::channel::<Result<Bytes, Infallible>>(1);
         let delta = Bytes::from_static(b"event: content_block_delta\ndata: {}\n\n");
         sender
@@ -247,5 +255,75 @@ mod lazy_tests {
         let mut stream = KeepaliveStream::new(receiver, Duration::ZERO);
 
         assert_eq!(stream.next().await.expect("model delta"), Ok(delta));
+    }
+
+    #[tokio::test]
+    async fn shared_http_response_streams_repeated_anthropic_pings() {
+        const PING_FRAME: &[u8] = b"event: ping\ndata: {\"type\":\"ping\"}\n\n";
+
+        let (sender, receiver) = mpsc::channel::<Result<Bytes, Infallible>>(1);
+        let receiver = Arc::new(tokio::sync::Mutex::new(Some(receiver)));
+        let app = axum::Router::new().route(
+            "/",
+            axum::routing::get(move || take_ping_response(Arc::clone(&receiver))),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind SSE listener");
+        let address = listener.local_addr().expect("SSE listener address");
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app).await.expect("serve SSE response");
+        });
+
+        let mut client = tokio::net::TcpStream::connect(address)
+            .await
+            .expect("connect SSE client");
+        client
+            .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .await
+            .expect("send SSE request");
+        let wire = read_until_ping_count(&mut client, PING_FRAME, 2).await;
+        assert!(wire.starts_with(b"HTTP/1.1 200 OK\r\n"));
+        assert!(count_frames(&wire, PING_FRAME) >= 2);
+        drop(sender);
+        server.abort();
+        let _ = server.await;
+    }
+
+    type PingReceiver =
+        Arc<tokio::sync::Mutex<Option<mpsc::Receiver<Result<Bytes, Infallible>>>>>;
+
+    async fn take_ping_response(receiver: PingReceiver) -> Response<Body> {
+        let receiver = receiver
+            .lock()
+            .await
+            .take()
+            .expect("single streaming request");
+        streaming_sse_response_with_interval(receiver, Duration::from_millis(5))
+    }
+
+    async fn read_until_ping_count(
+        client: &mut tokio::net::TcpStream,
+        ping_frame: &[u8],
+        needed: usize,
+    ) -> Vec<u8> {
+        let mut wire = Vec::new();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            let mut chunk = [0; 1024];
+            while count_frames(&wire, ping_frame) < needed {
+                let count = client.read(&mut chunk).await.expect("read SSE response");
+                assert_ne!(count, 0, "SSE response ended before enough pings");
+                wire.extend_from_slice(&chunk[..count]);
+            }
+        })
+        .await
+        .expect("enough ping frames");
+        wire
+    }
+
+    fn count_frames(wire: &[u8], frame: &[u8]) -> usize {
+        wire.windows(frame.len())
+            .filter(|window| *window == frame)
+            .count()
     }
 }

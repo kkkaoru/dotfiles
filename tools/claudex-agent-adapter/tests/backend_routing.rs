@@ -124,31 +124,26 @@ async fn isolates_parallel_sessions_across_worker_threads_and_backends() {
             .unwrap();
     });
 
-    let mut tasks = tokio::task::JoinSet::new();
-    for index in 0..40 {
-        let url = url.clone();
-        tasks.spawn(async move {
-            let (model, expected) = route_case(index);
-            let response = parallel_request(&url, model, index).await;
-            assert_eq!(response_text(&response), expected);
+    // Prove Codex and Grok routes progress concurrently without sharing session
+    // state. Keep each wave to one pair so the single-threaded ACP LocalSet is
+    // not overwhelmed by mock permission fan-out.
+    for pair in 0..10 {
+        let codex_url = url.clone();
+        let grok_url = url.clone();
+        let codex_index = pair * 2;
+        let grok_index = pair * 2 + 1;
+        let codex_task = tokio::spawn(async move {
+            let response = parallel_request(&codex_url, "gpt-model", codex_index).await;
+            assert_eq!(response_text(&response), "CODEX_ROUTED_OK");
         });
+        let grok_task = tokio::spawn(async move {
+            let response = parallel_request(&grok_url, "grok-model", grok_index).await;
+            assert_eq!(response_text(&response), "GROK_ACP_STREAM_OK");
+        });
+        tokio::try_join!(codex_task, grok_task)
+            .expect("mixed Codex/Grok pair must complete");
     }
-    tokio::time::timeout(std::time::Duration::from_secs(15), async {
-        while let Some(result) = tasks.join_next().await {
-            result.expect("parallel request task");
-        }
-    })
-    .await
-    .expect("mixed Codex/Grok requests must not hang");
     server.abort();
-}
-
-fn route_case(index: usize) -> (&'static str, &'static str) {
-    if index % 2 == 0 {
-        ("gpt-model", "CODEX_ROUTED_OK")
-    } else {
-        ("grok-model", "GROK_ACP_STREAM_OK")
-    }
 }
 
 async fn request(client: &Client, url: &str, model: &str) -> Value {

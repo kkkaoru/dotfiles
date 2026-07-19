@@ -81,6 +81,12 @@ pub enum AgentBackend {
     Routed(RoutedBackends),
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TurnCancellation {
+    Settled,
+    Unsupported,
+}
+
 impl AgentBackend {
     pub async fn spawn(kind: BackendKind, model: &str) -> Result<Arc<Self>> {
         match kind {
@@ -219,6 +225,28 @@ impl AgentBackend {
                 Box::pin(backend.request_detached(method, params)).await
             }
             Self::Routed(_) => bail!("routed backend does not support request `{method}`"),
+        }
+    }
+
+    pub(crate) async fn cancel_turn(&self, thread_id: &str) -> Result<TurnCancellation> {
+        match self {
+            Self::Codex(_) => Ok(TurnCancellation::Unsupported),
+            Self::Copilot(agent) => {
+                agent.cancel_turn(thread_id).await?;
+                Ok(TurnCancellation::Settled)
+            }
+            Self::Grok(agent) => {
+                agent.cancel_turn(thread_id).await?;
+                Ok(TurnCancellation::Settled)
+            }
+            Self::Routed(routes) => {
+                let (index, raw_id) = routed_thread(thread_id);
+                let backend = routes
+                    .route(index)
+                    .ready_backend()
+                    .context("thread route backend is unavailable during cancellation")?;
+                Box::pin(backend.cancel_turn(raw_id)).await
+            }
         }
     }
 

@@ -1,5 +1,7 @@
 use std::{
+    fs,
     io::{self, BufRead, Write},
+    path::PathBuf,
     thread,
     time::Duration,
 };
@@ -11,6 +13,8 @@ struct Fixture<W> {
     pending_tool: bool,
     parallel_agents: Option<ParallelAgents>,
     team_guidance: bool,
+    disconnected_tool_drained: bool,
+    disconnect_marker: Option<PathBuf>,
 }
 
 #[derive(Default)]
@@ -113,6 +117,21 @@ impl<W: Write> Fixture<W> {
             self.send_interleaved_tools();
         } else if input.contains("TEXT_THEN_TOOL") {
             self.send_text_then_tool();
+        } else if input.contains("DISCONNECT_WITH_TOOL") {
+            // turn/start serializes `input` with Value::to_string(), so the prompt is
+            // JSON-encoded and real newlines become the two characters '\' 'n'.
+            self.disconnect_marker = disconnect_marker_from_input(input);
+            self.pending_tool = true;
+            self.send_text("DISCONNECT_READY");
+            thread::sleep(Duration::from_millis(100));
+            self.send_tool_event(900, "call-disconnected");
+        } else if input.contains("REPORT_DISCONNECT_DRAIN") {
+            let status = if self.disconnected_tool_drained {
+                "CODEX_DISCONNECT_DRAINED"
+            } else {
+                "CODEX_DISCONNECT_ABANDONED"
+            };
+            self.send_text_and_complete(status);
         } else if input.contains("RECOVER_ORPHAN_TOOL_RESULT")
             && input.contains(r#"\"type\":\"tool_result\""#)
         {
@@ -285,7 +304,17 @@ impl<W: Write> Fixture<W> {
             .and_then(Value::as_str)
             .unwrap_or("missing tool result")
             .to_owned();
+        let disconnected_tool_drained = message.pointer("/result/success") == Some(&json!(false))
+            && text.contains("disconnected");
+        self.disconnected_tool_drained = disconnected_tool_drained;
         self.send_text_and_complete(&text);
+        if disconnected_tool_drained {
+            let marker = self
+                .disconnect_marker
+                .as_ref()
+                .expect("disconnect marker path was not provided");
+            fs::write(marker, "").expect("write disconnect drain marker");
+        }
     }
 
     fn handle_named_teammate_result(&mut self, message: &Value) -> bool {
@@ -454,6 +483,15 @@ fn requested_tool(input: &str) -> Option<&'static str> {
     }
 }
 
+fn disconnect_marker_from_input(input: &str) -> Option<PathBuf> {
+    let rest = input.split("DISCONNECT_MARKER=").nth(1)?;
+    let path: String = rest
+        .chars()
+        .take_while(|c| !matches!(*c, '"' | '\\' | '\n' | '\r' | ']' | '}'))
+        .collect();
+    (!path.is_empty()).then(|| PathBuf::from(path))
+}
+
 fn requested_agent_effort(input: &str) -> &'static str {
     ["low", "medium", "high", "xhigh", "max"]
         .into_iter()
@@ -480,6 +518,8 @@ fn main() {
         pending_tool: false,
         parallel_agents: None,
         team_guidance: false,
+        disconnected_tool_drained: false,
+        disconnect_marker: None,
     };
     writeln!(fixture.stdout, "not-json").expect("write malformed fixture line");
     fixture.send(json!({"id":99999,"result":{}}));

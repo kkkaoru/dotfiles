@@ -42,4 +42,8 @@ impl CopilotAcp {
     pub async fn start_turn(&self, params: Value) -> Result<()> {
         self.inner.start_turn(params).await
     }
+
+    pub async fn cancel_turn(&self, session_id: &str) -> Result<()> {
+        self.inner.cancel_turn(session_id).await
+    }
 }

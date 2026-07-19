@@ -202,6 +202,47 @@ async fn streams_text_before_the_turn_completes() {
 }
 
 #[tokio::test]
+async fn drains_a_non_cancellable_codex_turn_after_stream_disconnect() {
+    let adapter = Adapter::start().await;
+    let client = Client::new();
+    let mut response = client
+        .post(messages_url(&adapter))
+        .json(&json!({
+            "model":"test-main-model", "stream":true, "system":"Disconnect drain test",
+            "tools":lookup_tools(),
+            "messages":[{"role":"user","content":adapter.codex_disconnect_prompt()}]
+        }))
+        .send()
+        .await
+        .expect("start Codex stream");
+    let mut stream = String::new();
+    while !stream.contains("DISCONNECT_READY") {
+        let chunk = response
+            .chunk()
+            .await
+            .expect("read disconnect stream")
+            .expect("stream ended before disconnect marker");
+        stream.push_str(&String::from_utf8_lossy(&chunk));
+    }
+    drop(response);
+    adapter.wait_for_codex_disconnect_drain().await;
+
+    let report = post_json(
+        &client,
+        &messages_url(&adapter),
+        json!({
+            "model":"test-main-model", "system":"Disconnect drain report",
+            "messages":[{"role":"user","content":"REPORT_DISCONNECT_DRAIN"}]
+        }),
+    )
+    .await;
+    assert_eq!(
+        report["content"][0]["text"],
+        "CODEX_DISCONNECT_DRAINED"
+    );
+}
+
+#[tokio::test]
 async fn completes_an_external_tool_round_trip_after_a_signature_change() {
     let adapter = Adapter::start().await;
     let client = Client::new();

@@ -92,6 +92,7 @@ async fn reports_a_closed_driver_for_each_command_response_type() {
 
     assert!(agent.create_session(json!({})).await.is_err());
     assert!(agent.start_turn(json!({})).await.is_err());
+    assert!(agent.cancel_turn("session").await.is_err());
 }
 
 #[tokio::test]
@@ -129,6 +130,7 @@ async fn bounded_queues_apply_backpressure_at_fixed_capacities() {
                 session_id: format!("session-{index}"),
                 prompt: "prompt".to_owned(),
                 effort: None,
+                cancellation: pending_cancellation(),
                 _permit: Arc::clone(&permits).acquire_owned().await.unwrap(),
             })
             .await
@@ -182,6 +184,7 @@ async fn check_concurrent_turn_worker() {
                 session_id: session_id.to_owned(),
                 prompt: String::new(),
                 effort: None,
+                cancellation: pending_cancellation(),
                 _permit: Arc::clone(&permits).acquire_owned().await.unwrap(),
             })
             .await
@@ -213,6 +216,11 @@ async fn hold_turn(
     }
     release.notified().await;
     active.set(active.get() - 1);
+}
+
+fn pending_cancellation() -> tokio::sync::oneshot::Receiver<super::CancelRequest> {
+    let (_sender, receiver) = tokio::sync::oneshot::channel();
+    receiver
 }
 
 #[tokio::test]

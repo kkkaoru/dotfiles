@@ -1,6 +1,14 @@
-use std::{fs, sync::Arc, time::Duration};
+mod project_fixture;
+
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 
 use claudex_agent_adapter::{anthropic::Bridge, app_server::AppServer, http_router};
+use project_fixture::ProjectFixture;
 use reqwest::Client;
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -8,6 +16,11 @@ use tempfile::TempDir;
 pub struct Adapter {
     server: tokio::task::JoinHandle<()>,
     _home: TempDir,
+    _artifacts: ProjectFixture,
+    // Used by disconnect-focused http_bridge tests; other crates that share this
+    // fixture module do not read the field and would otherwise trip dead_code.
+    #[allow(dead_code)]
+    disconnect_marker: PathBuf,
     pub base_url: String,
 }
 
@@ -39,6 +52,10 @@ impl Adapter {
         auth_token: Option<String>,
     ) -> Self {
         let home = fixture_home();
+        let artifacts = ProjectFixture::new("codex");
+        let disconnect_marker = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join(artifacts.path())
+            .join("drained");
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind adapter test listener");
@@ -67,6 +84,8 @@ impl Adapter {
         let adapter = Self {
             server,
             _home: home,
+            _artifacts: artifacts,
+            disconnect_marker,
             base_url,
         };
         adapter.wait_until_ready().await;
@@ -87,6 +106,25 @@ impl Adapter {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
         panic!("adapter did not become ready");
+    }
+
+    #[allow(dead_code)]
+    pub async fn wait_for_codex_disconnect_drain(&self) {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            while !self.disconnect_marker.exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("Codex fixture did not drain the disconnected turn");
+    }
+
+    #[allow(dead_code)]
+    pub fn codex_disconnect_prompt(&self) -> String {
+        format!(
+            "DISCONNECT_WITH_TOOL\nDISCONNECT_MARKER={}",
+            self.disconnect_marker.display()
+        )
     }
 }
 

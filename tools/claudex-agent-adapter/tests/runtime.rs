@@ -123,8 +123,10 @@ async fn cancelled_first_request_does_not_restart_the_provider() {
 }
 
 async fn request_burst(base_url: &str, model: &'static str, expected: &'static str) {
+    // Stay near the ACP turn permit limit. Much larger fan-out can stall the
+    // single-threaded LocalSet under concurrent mock permission round-trips.
     let mut requests = tokio::task::JoinSet::new();
-    for index in 0..20 {
+    for index in 0..8 {
         let base_url = base_url.to_owned();
         requests.spawn(async move {
             let response = provider_request(&base_url, model, index).await;

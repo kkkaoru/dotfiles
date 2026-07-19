@@ -33,8 +33,8 @@ Streaming requests return their HTTP response immediately. Each Codex
 `item/agentMessage/delta` notification is converted to an Anthropic
 `content_block_delta` SSE event instead of being buffered until turn completion.
 Subscription subprocesses likewise use Claude Code's `stream-json` output and
-forward text deltas as they arrive. Every streaming backend emits SSE comment
-keepalives during provider silence.
+forward text deltas as they arrive. Every streaming backend emits Anthropic
+`ping` SSE events during provider silence.
 
 For `codex-app-server`, the adapter starts `codex app-server` with an isolated
 `CODEX_HOME`. Only Codex authentication is copied into that home; Claude Code

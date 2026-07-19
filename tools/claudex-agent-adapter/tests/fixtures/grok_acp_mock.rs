@@ -1,11 +1,24 @@
-use std::{cell::Cell, fs::OpenOptions, io::Write as _, path::PathBuf, sync::Arc};
+use std::{
+    cell::{Cell, RefCell},
+    collections::{HashMap, HashSet},
+    fs::OpenOptions,
+    io::Write as _,
+    path::PathBuf,
+    rc::Rc,
+    sync::Arc,
+};
 
 use agent_client_protocol::{self as acp, Client as _};
 use serde_json::value::RawValue;
-use tokio::sync::{Notify, mpsc, oneshot};
+use tokio::{
+    io::AsyncReadExt as _,
+    net::UnixListener,
+    sync::{Notify, mpsc, oneshot},
+};
 use tokio_util::compat::{TokioAsyncReadCompatExt as _, TokioAsyncWriteCompatExt as _};
 
 const TRACE_FILE: &str = "grok-acp-mock.jsonl";
+const SETUP_RELEASE_SOCKET: &str = "grok-acp-setup-release.sock";
 
 struct MockAgent {
     operations: mpsc::UnboundedSender<ClientOperation>,
@@ -14,6 +27,10 @@ struct MockAgent {
     next_session: Cell<u64>,
     concurrent_prompts: Cell<usize>,
     both_prompts_started: Notify,
+    cancellable_prompts: RefCell<HashMap<String, Rc<Notify>>>,
+    cancelled_sessions: RefCell<HashSet<String>>,
+    // Consumed on the first blocked set_model so later requests are not stuck.
+    setup_release: RefCell<Option<UnixListener>>,
 }
 
 enum ClientOperation {
@@ -121,6 +138,89 @@ impl MockAgent {
         } else {
             self.both_prompts_started.notify_one();
         }
+    }
+
+    async fn maybe_cancellable_prompt(
+        &self,
+        request: &acp::PromptRequest,
+    ) -> acp::Result<Option<acp::PromptResponse>> {
+        if !matches!(
+            self.mode.as_str(),
+            "cancellable-turns" | "ignored-cancellation" | "ignored-setup"
+        ) || prompt_contains(request, "COMPLETE")
+        {
+            return Ok(None);
+        }
+        let session_id = request.session_id.0.to_string();
+        self.record("prompt_submitted", request)?;
+        if self.mode == "ignored-cancellation" {
+            return std::future::pending::<acp::Result<Option<acp::PromptResponse>>>().await;
+        }
+        let cancelled = Rc::new(Notify::new());
+        self.cancellable_prompts
+            .borrow_mut()
+            .insert(session_id.clone(), Rc::clone(&cancelled));
+        let already_cancelled = self.cancelled_sessions.borrow_mut().remove(&session_id);
+        if !already_cancelled {
+            cancelled.notified().await;
+            self.cancelled_sessions.borrow_mut().remove(&session_id);
+        }
+        self.cancellable_prompts.borrow_mut().remove(&session_id);
+        Ok(Some(acp::PromptResponse::new(acp::StopReason::Cancelled)))
+    }
+
+    async fn complete_prompt_with_permission(
+        &self,
+        request: acp::PromptRequest,
+    ) -> acp::Result<acp::PromptResponse> {
+        let permission = acp::RequestPermissionRequest::new(
+            request.session_id.clone(),
+            acp::ToolCallUpdate::new(
+                "tool-call",
+                acp::ToolCallUpdateFields::new().title("Mock tool"),
+            ),
+            vec![
+                acp::PermissionOption::new(
+                    "allow-once",
+                    "Allow once",
+                    acp::PermissionOptionKind::AllowOnce,
+                ),
+                acp::PermissionOption::new(
+                    "reject-once",
+                    "Reject",
+                    acp::PermissionOptionKind::RejectOnce,
+                ),
+            ],
+        );
+        let (permission_tx, permission_rx) = oneshot::channel();
+        self.operations
+            .send(ClientOperation::Permission(permission, permission_tx))
+            .map_err(|_| acp::Error::internal_error())?;
+        let permission_response = permission_rx
+            .await
+            .map_err(|_| acp::Error::internal_error())??;
+        self.record("permission_response", permission_response)?;
+        for update in [
+            acp::SessionUpdate::UserMessageChunk(acp::ContentChunk::new(acp::ContentBlock::Text(
+                acp::TextContent::new("ignored user"),
+            ))),
+            acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(
+                acp::ContentBlock::Image(acp::ImageContent::new("data", "image/png")),
+            )),
+            acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(acp::ContentBlock::Text(
+                acp::TextContent::new(""),
+            ))),
+        ] {
+            self.notify(request.session_id.clone(), update).await?;
+        }
+        self.notify(
+            request.session_id,
+            acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(
+                "GROK_ACP_STREAM_OK".into(),
+            )),
+        )
+        .await?;
+        Ok(acp::PromptResponse::new(acp::StopReason::EndTurn))
     }
 }
 
@@ -244,67 +344,65 @@ impl acp::Agent for MockAgent {
         if self.mode == "concurrent-turns" {
             self.wait_for_concurrent_prompt().await;
         }
-        let permission = acp::RequestPermissionRequest::new(
-            request.session_id.clone(),
-            acp::ToolCallUpdate::new(
-                "tool-call",
-                acp::ToolCallUpdateFields::new().title("Mock tool"),
-            ),
-            vec![
-                acp::PermissionOption::new(
-                    "allow-once",
-                    "Allow once",
-                    acp::PermissionOptionKind::AllowOnce,
-                ),
-                acp::PermissionOption::new(
-                    "reject-once",
-                    "Reject",
-                    acp::PermissionOptionKind::RejectOnce,
-                ),
-            ],
-        );
-        let (permission_tx, permission_rx) = oneshot::channel();
-        self.operations
-            .send(ClientOperation::Permission(permission, permission_tx))
-            .map_err(|_| acp::Error::internal_error())?;
-        let permission_response = permission_rx
-            .await
-            .map_err(|_| acp::Error::internal_error())??;
-        self.record("permission_response", permission_response)?;
-        for update in [
-            acp::SessionUpdate::UserMessageChunk(acp::ContentChunk::new(acp::ContentBlock::Text(
-                acp::TextContent::new("ignored user"),
-            ))),
-            acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(
-                acp::ContentBlock::Image(acp::ImageContent::new("data", "image/png")),
-            )),
-            acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(acp::ContentBlock::Text(
-                acp::TextContent::new(""),
-            ))),
-        ] {
-            self.notify(request.session_id.clone(), update).await?;
+        if let Some(response) = self.maybe_cancellable_prompt(&request).await? {
+            return Ok(response);
         }
-        self.notify(
-            request.session_id,
-            acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(
-                "GROK_ACP_STREAM_OK".into(),
-            )),
-        )
-        .await?;
-        Ok(acp::PromptResponse::new(acp::StopReason::EndTurn))
+        self.complete_prompt_with_permission(request).await
     }
 
     async fn cancel(&self, request: acp::CancelNotification) -> acp::Result<()> {
-        self.record("cancel", request)
+        self.record("cancel", &request)?;
+        let session_id = request.session_id.0.to_string();
+        self.cancelled_sessions
+            .borrow_mut()
+            .insert(session_id.clone());
+        if self.mode == "ignored-cancellation" {
+            return Ok(());
+        }
+        if let Some(cancelled) = self
+            .cancellable_prompts
+            .borrow()
+            .get(&session_id)
+            .cloned()
+        {
+            cancelled.notify_one();
+        }
+        Ok(())
     }
 
     async fn set_session_model(
         &self,
         request: acp::SetSessionModelRequest,
     ) -> acp::Result<acp::SetSessionModelResponse> {
-        self.record("set_model", request)?;
+        self.record("set_model", &request)?;
         if self.mode == "fail-effort" {
             return Err(acp::Error::invalid_params());
+        }
+        if self.mode == "ignored-setup" {
+            self.record("set_model_blocked", &request)?;
+            return std::future::pending::<acp::Result<acp::SetSessionModelResponse>>().await;
+        }
+        if self.mode == "blocked-effort" {
+            let listener = self.setup_release.borrow_mut().take();
+            if let Some(listener) = listener {
+                let (mut release, _) = tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    listener.accept(),
+                )
+                .await
+                .map_err(|_| acp::Error::internal_error())?
+                .map_err(|_| acp::Error::internal_error())?;
+                self.record("set_model_blocked", &request)?;
+                let mut signal = [0];
+                tokio::time::timeout(
+                    std::time::Duration::from_secs(5),
+                    release.read_exact(&mut signal),
+                )
+                .await
+                .map_err(|_| acp::Error::internal_error())?
+                .map_err(|_| acp::Error::internal_error())?;
+                self.record("set_model_settled", &request)?;
+            }
         }
         Ok(acp::SetSessionModelResponse::default())
     }
@@ -312,11 +410,18 @@ impl acp::Agent for MockAgent {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> acp::Result<()> {
-    let trace = std::env::current_dir()
-        .map_err(|_| acp::Error::internal_error())?
-        .join(TRACE_FILE);
+    let cwd = std::env::current_dir().map_err(|_| acp::Error::internal_error())?;
+    let trace = cwd.join(TRACE_FILE);
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     let mode = args.get(1).cloned().unwrap_or_default();
+    let setup_release = if mode == "blocked-effort" {
+        Some(
+            UnixListener::bind(SETUP_RELEASE_SOCKET)
+                .map_err(|_| acp::Error::internal_error())?,
+        )
+    } else {
+        None
+    };
     let (operations, requests) = mpsc::unbounded_channel();
     let agent = MockAgent {
         operations,
@@ -325,6 +430,9 @@ async fn main() -> acp::Result<()> {
         next_session: Cell::new(0),
         concurrent_prompts: Cell::new(0),
         both_prompts_started: Notify::new(),
+        cancellable_prompts: RefCell::new(HashMap::new()),
+        cancelled_sessions: RefCell::new(HashSet::new()),
+        setup_release: RefCell::new(setup_release),
     };
     agent.record("arguments", &args)?;
     let local = tokio::task::LocalSet::new();
@@ -342,4 +450,16 @@ async fn main() -> acp::Result<()> {
             io.await
         })
         .await
+}
+
+fn prompt_contains(request: &acp::PromptRequest, expected: &str) -> bool {
+    serde_json::to_value(request)
+        .ok()
+        .and_then(|value| {
+            value
+                .pointer("/prompt/0/text")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+        .is_some_and(|text| text.contains(expected))
 }

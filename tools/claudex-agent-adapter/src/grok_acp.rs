@@ -1,6 +1,6 @@
 use std::{
     cell::RefCell,
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     ffi::OsString,
     path::{Path, PathBuf},
     rc::Rc,
@@ -12,7 +12,7 @@ use std::{
 
 use agent_client_protocol::{self as acp, Agent as _};
 use anyhow::{Context, Result, anyhow};
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::app_server::{ThreadEvents, events::ThreadEventDispatcher};
@@ -28,7 +28,10 @@ const COMMAND_QUEUE_CAPACITY: usize = 32;
 const TURN_QUEUE_CAPACITY: usize = 8;
 
 use connection::AcpProvider;
-use turns::drive_turn_tasks;
+use turns::{cancel_turn, drive_turns, queue_turn};
+
+#[cfg(test)]
+use turns::{CancelRequest, PreparedTurn};
 
 enum DriverCommand {
     CreateSession {
@@ -38,6 +41,10 @@ enum DriverCommand {
     StartTurn {
         params: Value,
         permit: tokio::sync::OwnedSemaphorePermit,
+        response: oneshot::Sender<Result<()>>,
+    },
+    CancelTurn {
+        session_id: String,
         response: oneshot::Sender<Result<()>>,
     },
 }
@@ -145,6 +152,10 @@ impl GrokAcp {
         self.alive.load(Ordering::Relaxed)
     }
 
+    pub const fn turn_capacity(&self) -> usize {
+        TURN_QUEUE_CAPACITY
+    }
+
     pub async fn create_session(&self, params: Value) -> Result<Value> {
         self.call(|response| DriverCommand::CreateSession { params, response })
             .await
@@ -158,6 +169,14 @@ impl GrokAcp {
         self.call(|response| DriverCommand::StartTurn {
             params,
             permit,
+            response,
+        })
+        .await
+    }
+
+    pub async fn cancel_turn(&self, session_id: &str) -> Result<()> {
+        self.call(|response| DriverCommand::CancelTurn {
+            session_id: session_id.to_owned(),
             response,
         })
         .await
@@ -218,6 +237,8 @@ async fn drive_commands(
     events: &Arc<ThreadEventDispatcher>,
 ) {
     let instructions = Rc::new(RefCell::new(HashMap::<String, String>::new()));
+    let active_turns = Rc::new(RefCell::new(HashMap::new()));
+    let invalidated_sessions = Rc::new(RefCell::new(HashSet::new()));
     let (turns, turn_receiver) = mpsc::channel(TURN_QUEUE_CAPACITY);
     let turn_worker = tokio::task::spawn_local(drive_turns(
         provider,
@@ -225,6 +246,8 @@ async fn drive_commands(
         model.to_owned(),
         turn_receiver,
         Arc::clone(events),
+        Rc::clone(&active_turns),
+        Rc::clone(&invalidated_sessions),
     ));
     while let Some(command) = commands.recv().await {
         match command {
@@ -238,15 +261,22 @@ async fn drive_commands(
                 permit,
                 response,
             } => {
-                let result = match prepare_turn(provider, params, permit, &instructions) {
-                    Ok(turn) => turns
-                        .send(turn)
-                        .await
-                        .map_err(|_| anyhow!("ACP turn worker is unavailable")),
-                    Err(error) => Err(error),
-                };
+                let result = queue_turn(
+                    provider,
+                    params,
+                    permit,
+                    &instructions,
+                    &turns,
+                    &active_turns,
+                    &invalidated_sessions,
+                )
+                .await;
                 let _ = response.send(result);
             }
+            DriverCommand::CancelTurn {
+                session_id,
+                response,
+            } => cancel_turn(&active_turns, &session_id, response),
         }
     }
     drop(turns);
@@ -275,107 +305,6 @@ async fn create_session(
         instructions.borrow_mut().insert(session_id.clone(), base);
     }
     Ok(json!({"thread":{"id":session_id}}))
-}
-
-struct PreparedTurn {
-    session_id: String,
-    prompt: String,
-    effort: Option<String>,
-    _permit: tokio::sync::OwnedSemaphorePermit,
-}
-
-fn prepare_turn(
-    provider: AcpProvider,
-    params: Value,
-    permit: tokio::sync::OwnedSemaphorePermit,
-    instructions: &Rc<RefCell<HashMap<String, String>>>,
-) -> Result<PreparedTurn> {
-    let session_id = params
-        .get("threadId")
-        .and_then(Value::as_str)
-        .with_context(|| format!("{} ACP turn is missing threadId", provider.label()))?
-        .to_owned();
-    let prompt = prompt::input_text(params.get("input").unwrap_or(&Value::Null));
-    let prefix = instructions.borrow_mut().remove(&session_id);
-    let prompt = match prefix {
-        Some(prefix) => format!("{prefix}\n\n{prompt}"),
-        None => prompt,
-    };
-    let effort = params
-        .get("effort")
-        .and_then(Value::as_str)
-        .and_then(|effort| match provider {
-            AcpProvider::Grok => prompt::grok_effort(effort),
-            AcpProvider::Copilot => prompt::copilot_effort(effort),
-        })
-        .map(str::to_owned);
-    Ok(PreparedTurn {
-        session_id,
-        prompt,
-        effort,
-        _permit: permit,
-    })
-}
-
-async fn drive_turns(
-    provider: AcpProvider,
-    connection: Rc<acp::ClientSideConnection>,
-    model: String,
-    turns: mpsc::Receiver<PreparedTurn>,
-    events: Arc<ThreadEventDispatcher>,
-) {
-    drive_turn_tasks(turns, move |turn| {
-        let connection = Rc::clone(&connection);
-        let model = model.clone();
-        let events = Arc::clone(&events);
-        async move { execute_turn(provider, connection, &model, turn, &events).await }
-    })
-    .await;
-}
-
-async fn execute_turn(
-    provider: AcpProvider,
-    connection: Rc<acp::ClientSideConnection>,
-    model: &str,
-    turn: PreparedTurn,
-    events: &ThreadEventDispatcher,
-) {
-    let id = acp::SessionId::new(turn.session_id.clone());
-    if let Some(effort) = turn.effort.as_deref() {
-        let mut meta = Map::new();
-        meta.insert(
-            "reasoningEffort".to_owned(),
-            Value::String(effort.to_owned()),
-        );
-        let request =
-            acp::SetSessionModelRequest::new(id.clone(), model.to_owned()).meta(Some(meta));
-        if let Err(error) = connection.set_session_model(request).await {
-            updates::dispatch_error(
-                events,
-                &turn.session_id,
-                format!("{} ACP set effort failed: {error:?}", provider.label()),
-            );
-            return;
-        }
-    }
-    let request = acp::PromptRequest::new(
-        id,
-        vec![acp::ContentBlock::Text(acp::TextContent::new(turn.prompt))],
-    );
-    match connection.prompt(request).await {
-        Ok(_) => {
-            // ACP handlers are local tasks. Yield so notifications parsed before the
-            // prompt response are dispatched before the terminal event.
-            tokio::task::yield_now().await;
-            events.dispatch(json!({
-                "method":"turn/completed",
-                "params":{"threadId":turn.session_id,"turn":{"status":"completed"}}
-            }));
-        }
-        Err(error) => {
-            updates::dispatch_error(events, &turn.session_id, format!("{error:?}"));
-        }
-    }
 }
 
 #[cfg(test)]
