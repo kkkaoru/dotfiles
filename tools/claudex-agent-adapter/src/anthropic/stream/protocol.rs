@@ -21,7 +21,9 @@ use uuid::Uuid;
 
 use super::super::{Segment, content::sse};
 
-const SSE_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(15);
+// Stay well under Claude Code's ~180s raw-byte and ~300s decoded-event idle
+// watchdogs. 15s worked in isolation; 10s leaves more margin under load.
+const SSE_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
 const SSE_KEEPALIVE_FRAME: &[u8] = b"event: ping\ndata: {\"type\":\"ping\"}\n\n";
 
 pub(in crate::anthropic) type StreamSender = mpsc::Sender<Result<Bytes, Infallible>>;

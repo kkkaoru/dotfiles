@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 use tokio::sync::{Mutex, Semaphore, mpsc};
 
 use super::{
-    SegmentBuilder, error_flow, message_start, parse_tool_call, send_stream_completion,
+    SegmentBuilder, builder::parse_tool_call, error_flow, message_start, send_stream_completion,
     send_stream_error, send_stream_frame, tool_use_frames, turn_flow,
 };
 use crate::{

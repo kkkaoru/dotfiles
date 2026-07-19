@@ -1,6 +1,6 @@
 use std::{ops::ControlFlow, sync::Arc};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use axum::{
     body::{Body, Bytes},
     http::Response,
@@ -9,18 +9,18 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
 use super::{
-    ActiveTurn, Bridge, Segment, Session,
+    ActiveTurn, Bridge, MessagesRequest, Segment, Session,
     content::anthropic_response,
     stream_batch::{NextEvent, next_event},
     subscription::{SubscriptionOptions, run_subscription_model, subscription_prompt},
 };
-use crate::agent_backend::TurnCancellation;
 
 mod builder;
+mod disconnect;
 mod protocol;
 mod thinking;
 
-use builder::{SegmentBuilder, parse_tool_call};
+use builder::SegmentBuilder;
 
 #[cfg(test)]
 pub(super) use protocol::tool_use_frames;
@@ -34,7 +34,7 @@ struct ToolCall<'a> {
     request_id: Value,
 }
 
-enum StreamTurn {
+pub(super) enum StreamTurn {
     Segment {
         segment: Segment,
         provider_settled: bool,
@@ -65,16 +65,42 @@ impl Bridge {
         Ok(anthropic_response(segment, &turn.response_model))
     }
 
-    pub(super) fn streaming_response(self: &Arc<Self>, turn: ActiveTurn) -> Response<Body> {
+    pub(super) fn streaming_messages(
+        self: &Arc<Self>,
+        request: MessagesRequest,
+        input_tokens: u64,
+        effort: Option<String>,
+    ) -> Response<Body> {
         let (sender, receiver) = mpsc::channel(256);
+        let response_model = self.request_model(&request);
         sender
             .try_send(Ok(Bytes::from(message_start(
-                &turn.response_model,
-                turn.input_tokens,
+                &response_model,
+                input_tokens,
             ))))
             .expect("new streaming response channel has capacity");
-        tokio::spawn(Arc::clone(self).drive_stream(turn, sender));
+        tokio::spawn(Arc::clone(self).drive_prepared_stream(request, input_tokens, effort, sender));
         sse_response(receiver)
+    }
+
+    async fn drive_prepared_stream(
+        self: Arc<Self>,
+        request: MessagesRequest,
+        input_tokens: u64,
+        effort: Option<String>,
+        sender: StreamSender,
+    ) {
+        // KeepaliveStream already pings while prepare_turn runs. Abort promptly if
+        // Claude Code disconnects during that startup window.
+        let turn = tokio::select! {
+            biased;
+            () = sender.closed() => return,
+            result = self.prepare_turn(&request, input_tokens, effort) => result,
+        };
+        match turn {
+            Ok(turn) => self.drive_stream(turn, sender).await,
+            Err(error) => send_stream_error(&sender, error).await,
+        }
     }
 
     async fn drive_stream(self: Arc<Self>, turn: ActiveTurn, sender: StreamSender) {
@@ -154,76 +180,6 @@ impl Bridge {
         }
     }
 
-    async fn finish_closed_stream(
-        &self,
-        session: &Arc<Session>,
-        events: &crate::app_server::ThreadEvents,
-        provider_settled: bool,
-    ) {
-        if provider_settled {
-            self.remove_session(session).await;
-        } else {
-            self.disconnect_stream(session, events).await;
-        }
-    }
-
-    async fn disconnect_stream(
-        &self,
-        session: &Arc<Session>,
-        events: &crate::app_server::ThreadEvents,
-    ) -> StreamTurn {
-        self.remove_session(session).await;
-        match self.app.cancel_turn(&session.thread_id).await {
-            Ok(TurnCancellation::Settled) => {}
-            Ok(TurnCancellation::Unsupported) => {
-                if let Err(error) = self.drain_disconnected_turn(session, events).await {
-                    tracing::warn!(
-                        %error,
-                        thread_id = %session.thread_id,
-                        "failed to drain disconnected non-cancellable turn"
-                    );
-                }
-            }
-            Err(error) => {
-                tracing::warn!(
-                    %error,
-                    thread_id = %session.thread_id,
-                    "failed to cancel disconnected streaming turn"
-                );
-            }
-        }
-        StreamTurn::Disconnected
-    }
-
-    async fn drain_disconnected_turn(
-        &self,
-        session: &Session,
-        events: &crate::app_server::ThreadEvents,
-    ) -> Result<()> {
-        self.reject_pending_disconnected_tools(session).await?;
-        loop {
-            let event = events
-                .recv()
-                .await
-                .context("app-server event stream closed while draining disconnected turn")?;
-            match event.get("method").and_then(Value::as_str) {
-                Some("item/tool/call") => {
-                    let request_id = parse_tool_call(&event)?.request_id;
-                    self.reject_disconnected_tool(session, request_id).await?;
-                }
-                Some("error") => {
-                    let _ = error_flow(&event)?;
-                }
-                Some("turn/completed")
-                    if turn_flow(&event)? == ControlFlow::Break(()) =>
-                {
-                    return Ok(());
-                }
-                _ => {}
-            }
-        }
-    }
-
     async fn external_batch_segment(
         &self,
         session: &Arc<Session>,
@@ -239,47 +195,6 @@ impl Bridge {
             segment,
             provider_settled: false,
         })
-    }
-
-    async fn reject_pending_disconnected_tools(&self, session: &Session) -> Result<()> {
-        loop {
-            let pending = session
-                .pending_tools
-                .lock()
-                .await
-                .iter()
-                .next()
-                .map(|(tool_use_id, request_id)| (tool_use_id.clone(), request_id.clone()));
-            let Some((tool_use_id, request_id)) = pending else {
-                break;
-            };
-            self.reject_disconnected_tool(session, request_id).await?;
-            session.pending_tools.lock().await.remove(&tool_use_id);
-            self.agent_efforts
-                .remove_tool_results(std::iter::once(tool_use_id.as_str()));
-        }
-        *session
-            .pending_since
-            .lock()
-            .expect("pending tool clock poisoned") = None;
-        Ok(())
-    }
-
-    async fn reject_disconnected_tool(&self, session: &Session, request_id: Value) -> Result<()> {
-        self.app
-            .respond_for_model(
-                &session.model,
-                request_id,
-                json!({
-                    "contentItems":[{
-                        "type":"inputText",
-                        "text":"Claude Code disconnected before returning this tool result."
-                    }],
-                    "success":false
-                }),
-            )
-            .await
-            .context("failed to reject a tool call from a disconnected turn")
     }
 
     async fn wait_for_segment(

@@ -39,7 +39,7 @@ const MAX_SESSIONS: usize = 1_024;
 const MAX_SIGNATURE_BUCKETS: usize = MAX_SESSIONS * 2;
 type SignaturePool = StdMutex<HashMap<u64, Vec<Weak<str>>>>;
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct MessagesRequest {
     #[serde(default)]
     pub model: String,
@@ -271,14 +271,18 @@ impl Bridge {
         }
 
         let input_tokens = u64::try_from(token_count(&request)).unwrap_or(u64::MAX);
-        let turn = self.prepare_turn(&request, input_tokens, effort).await?;
+        // Open the SSE body before prepare_turn so Claude Code receives
+        // message_start + ping keepalives while session/provider startup runs.
+        // Waiting until prepare_turn finishes is what produced 5-minute
+        // "operation timed out" / "Response stalled mid-stream" errors.
         if request.stream {
-            return Ok(self.streaming_response(turn));
+            return Ok(self.streaming_messages(request, input_tokens, effort));
         }
+        let turn = self.prepare_turn(&request, input_tokens, effort).await?;
         self.non_streaming_response(turn).await
     }
 
-    fn request_model(&self, request: &MessagesRequest) -> String {
+    pub(super) fn request_model(&self, request: &MessagesRequest) -> String {
         if request.model.is_empty() {
             self.model.clone()
         } else {
