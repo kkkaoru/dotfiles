@@ -170,10 +170,11 @@ impl SegmentBuilder {
     ) -> Result<()> {
         let tool_use_id = format!("toolu_{}", Uuid::new_v4().simple());
         let (intent_arguments, claude_arguments) =
-            crate::anthropic::agent_effort::prepare_arguments(
+            crate::anthropic::agent_effort::prepare_arguments_for_user(
                 original_name,
                 &tool_use_id,
                 call.arguments,
+                current_messages,
             );
         if let Some(arguments) = intent_arguments.as_ref() {
             bridge.agent_efforts.record_from_user_messages(

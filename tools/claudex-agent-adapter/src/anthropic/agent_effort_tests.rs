@@ -4,7 +4,9 @@
 mod tests {
     use serde_json::json;
 
-    use super::{AgentEffort, AgentEffortIntents, prepare_arguments, tool_schema};
+    use super::{
+        AgentEffort, AgentEffortIntents, prepare_arguments, prepare_arguments_for_user, tool_schema,
+    };
     use crate::anthropic::MessagesRequest;
 
     fn request(user_id: &str, prompt: &str, subagent: bool) -> MessagesRequest {
@@ -222,6 +224,51 @@ mod tests {
                 internal["prompt"].as_str().expect("correlated prompt")
             )).effort),
             "medium"
+        );
+    }
+
+    #[test]
+    fn removes_invented_mailbox_names_but_preserves_user_supplied_names() {
+        let arguments = json!({
+            "prompt":"audit contracts", "name":"wf_contract_audit",
+            "subagent_type":"general-purpose"
+        });
+        let ordinary = [json!({"role":"user","content":"Run a contract audit SubAgent"})];
+        let (_, public) =
+            prepare_arguments_for_user("Agent", "tool-ordinary", &arguments, &ordinary);
+        assert!(public.get("name").is_none());
+        let (_, public) = prepare_arguments_for_user(
+            "Agent",
+            "tool-coincidental",
+            &json!({"prompt":"audit contracts", "name":"audit"}),
+            &ordinary,
+        );
+        assert!(public.get("name").is_none());
+
+        let explicit = [json!({
+            "role":"user", "content":"Use the named teammate wf_contract_audit"
+        })];
+        let (_, public) =
+            prepare_arguments_for_user("Agent", "tool-named", &arguments, &explicit);
+        assert_eq!(public["name"], "wf_contract_audit");
+
+        let stale = [
+            json!({"role":"user","content":"Earlier I named wf_contract_audit"}),
+            json!({"role":"user","content":"Run another ordinary SubAgent"}),
+            json!({"role":"user","content":"<agent-message from=\"wf_contract_audit\">done</agent-message>"}),
+        ];
+        let (_, public) =
+            prepare_arguments_for_user("Agent", "tool-stale", &arguments, &stale);
+        assert!(public.get("name").is_none());
+
+        let schema = tool_schema("Agent", json!({
+            "type":"object", "properties":{"name":{"type":"string"}}
+        }));
+        assert!(
+            schema["properties"]["name"]["description"]
+                .as_str()
+                .expect("name guidance")
+                .contains("never invent one")
         );
     }
 

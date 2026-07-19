@@ -52,7 +52,10 @@ async fn routes_named_teammates_through_mailbox_instead_of_task_output() {
     let adapter = Adapter::start().await;
     let client = Client::new();
     let url = format!("{}/v1/messages", adapter.base_url);
-    let user = json!({"role":"user","content":"USE_NAMED_TEAM_MAILBOX"});
+    let user = json!({
+        "role":"user",
+        "content":"USE_NAMED_TEAM_MAILBOX with the explicit teammate name company-profile"
+    });
 
     let spawned = post_json(&client, &url, request(json!([user.clone()]))).await;
     let agent = &spawned["content"][0];

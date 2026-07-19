@@ -91,6 +91,8 @@ fn builds_thread_configuration_for_empty_and_team_system_prompts() {
         developer.contains("unless they are explicitly active for the current task"),
         "explicit current-task restrictions must remain supported"
     );
+    assert!(developer.contains("Omit the Agent name field for ordinary SubAgents"));
+    assert!(developer.contains("only when the active user explicitly supplies that teammate name"));
 
     let agent = json!({
         "name":"Agent", "description":"spawn",

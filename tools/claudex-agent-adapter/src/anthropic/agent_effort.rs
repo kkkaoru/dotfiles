@@ -195,10 +195,20 @@ fn is_model_id_character(character: char) -> bool {
     character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.' | ':' | '/')
 }
 
+#[cfg(test)]
 pub(super) fn prepare_arguments(
     tool_name: &str,
     tool_use_id: &str,
     arguments: &Value,
+) -> (Option<Value>, Value) {
+    prepare_arguments_for_user(tool_name, tool_use_id, arguments, &[])
+}
+
+pub(super) fn prepare_arguments_for_user(
+    tool_name: &str,
+    tool_use_id: &str,
+    arguments: &Value,
+    user_messages: &[Value],
 ) -> (Option<Value>, Value) {
     let mut correlated = arguments.clone();
     let Some(prompt) = agent_prompt(tool_name, arguments) else {
@@ -214,7 +224,45 @@ pub(super) fn prepare_arguments(
     public.remove(ADAPTER_EFFORT);
     public.remove(ADAPTER_MODEL);
     public.remove("model");
+    if public
+        .get("name")
+        .and_then(Value::as_str)
+        .is_some_and(|name| !active_user_supplied_name(user_messages, name))
+    {
+        public.remove("name");
+    }
     (Some(correlated), claude_arguments)
+}
+
+fn active_user_supplied_name(messages: &[Value], name: &str) -> bool {
+    messages
+        .iter()
+        .rev()
+        .filter(|message| message.get("role").and_then(Value::as_str) == Some("user"))
+        .filter_map(|message| message.get("content"))
+        .flat_map(value_texts)
+        .find(|text| {
+            !text.contains("<agent-message")
+                && !text.contains("<teammate-message")
+                && !text.starts_with("Another Claude session sent a message")
+        })
+        .is_some_and(|text| explicitly_names_agent(text, name))
+}
+
+fn explicitly_names_agent(text: &str, name: &str) -> bool {
+    [
+        format!("`{name}`"),
+        format!("\"{name}\""),
+        format!("@{name}"),
+        format!("name {name}"),
+        format!("names {name}"),
+        format!("named {name}"),
+        format!("named teammate {name}"),
+        format!("名前を{name}"),
+        format!("{name}という名前"),
+    ]
+    .iter()
+    .any(|pattern| text.contains(pattern))
 }
 
 pub(super) fn tool_schema(tool_name: &str, mut schema: Value) -> Value {
@@ -230,6 +278,12 @@ pub(super) fn tool_schema(tool_name: &str, mut schema: Value) -> Value {
     let Some(properties) = properties.as_object_mut() else {
         return schema;
     };
+    if let Some(name) = properties.get_mut("name").and_then(Value::as_object_mut) {
+        name.insert(
+            "description".to_owned(),
+            Value::String("Persistent mailbox teammate name. Omit for ordinary SubAgents and parallel delegation. Set only to an exact teammate name explicitly supplied by the active user; never invent one.".to_owned()),
+        );
+    }
     properties
         .entry(ADAPTER_EFFORT.to_owned())
         .or_insert_with(|| {
