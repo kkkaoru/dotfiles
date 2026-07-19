@@ -73,7 +73,7 @@ For example, this keeps model selection independent from backend selection and
 routes the selected model through GitHub Copilot CLI for the main session:
 
 ```fish
-env CLAUDEX_MODEL=MODEL CLAUDEX_BACKEND=copilot-acp claudex
+CLAUDEX_MODEL=MODEL CLAUDEX_BACKEND=copilot-acp claudex
 ```
 
 `ANTHROPIC_AUTH_TOKEN` remains an environment variable because command-line
