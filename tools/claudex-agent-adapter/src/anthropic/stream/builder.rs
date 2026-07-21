@@ -18,9 +18,12 @@ use super::{
 
 pub(super) struct SegmentBuilder {
     pub(super) blocks: Vec<Value>,
-    thinking: ThinkingState,
-    open_text_block: Option<(usize, String)>,
+    pub(super) thinking: ThinkingState,
+    pub(super) open_text_block: Option<(usize, String)>,
     external_tool_calls: usize,
+    /// Grok-ACP (or other provider-owned) tools shown as Claude tool cards
+    /// without waiting for Claude Code to execute them.
+    pub(super) provider_tool_ids: Vec<String>,
     usage: Usage,
 }
 
@@ -31,6 +34,7 @@ impl SegmentBuilder {
             thinking: ThinkingState::default(),
             open_text_block: None,
             external_tool_calls: 0,
+            provider_tool_ids: Vec::new(),
             usage: Usage {
                 input_tokens,
                 ..Usage::default()
@@ -58,6 +62,12 @@ impl SegmentBuilder {
                 let call = parse_tool_call(event)?;
                 self.tool_call(bridge, session, current_messages, call, stream)
                     .await?;
+            }
+            Some("item/providerTool/call") => {
+                self.provider_tool_call(event, stream).await?;
+            }
+            Some("item/providerTool/update") => {
+                self.provider_tool_update(event, stream).await?;
             }
             Some("thread/tokenUsage/updated") => self.update_usage(event),
             Some("error") => return error_flow(event),
@@ -134,7 +144,7 @@ impl SegmentBuilder {
             .await
     }
 
-    async fn start_text_block(
+    pub(super) async fn start_text_block(
         &mut self,
         delta: &str,
         stream: Option<&StreamSender>,
@@ -245,7 +255,7 @@ impl SegmentBuilder {
         .await
     }
 
-    async fn close_open_blocks(&mut self, stream: Option<&StreamSender>) -> Result<()> {
+    pub(super) async fn close_open_blocks(&mut self, stream: Option<&StreamSender>) -> Result<()> {
         self.thinking.close(&mut self.blocks, stream).await?;
         self.close_text_block(stream).await
     }
@@ -282,7 +292,14 @@ impl SegmentBuilder {
                 })
                 .sum();
         }
-        let stop_reason = if self.blocks.iter().any(|block| block["type"] == "tool_use") {
+        // Provider display tools are tool_use cards only — never ask Claude Code
+        // to execute them. external_tool_calls tracks true Claude-owned tools.
+        for block in &mut self.blocks {
+            if let Some(object) = block.as_object_mut() {
+                object.remove("_claudex_provider");
+            }
+        }
+        let stop_reason = if self.external_tool_calls > 0 {
             "tool_use"
         } else {
             "end_turn"

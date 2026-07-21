@@ -287,6 +287,8 @@ fn is_bridge_event(event: &Value) -> bool {
             "item/agentMessage/delta"
                 | "item/reasoning/summaryTextDelta"
                 | "item/tool/call"
+                | "item/providerTool/call"
+                | "item/providerTool/update"
                 | "thread/tokenUsage/updated"
                 | "turn/completed"
                 | "error"

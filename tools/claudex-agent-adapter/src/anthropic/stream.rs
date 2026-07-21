@@ -21,6 +21,7 @@ use super::{
 mod builder;
 mod disconnect;
 mod protocol;
+mod provider_tool;
 mod thinking;
 
 use builder::SegmentBuilder;
