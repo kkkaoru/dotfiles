@@ -64,6 +64,7 @@ node_modules
 .codex/archived_sessions/
 .codex/browser/
 .codex/goals_*.sqlite*
+.codex/generated_images/
 .codex/ollama-launch-models.json
 .codex/session_index.jsonl
 .codex/sessions/
