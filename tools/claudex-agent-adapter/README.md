@@ -26,12 +26,19 @@ creates ACP sessions, streams agent message chunks, and selects `AllowOnce` when
 either ACP agent requests permission for a tool. The selected ACP provider owns
 execution of its tools; Claude Code remains the outer conversation UI. Independent
 ACP sessions, including parallel SubAgents, progress concurrently over the shared
-provider connection. Grok ACP tools are rendered as Anthropic `tool_use` content blocks in Claude Code
-(native expandable cards with input), without asking Claude Code to re-execute
-them (`stop_reason` stays `end_turn` for provider-owned tools). True model
-thinking still uses `thinking_delta`. SubAgent lifecycle remains short status
-text. Tool completion may append a compact ✓/✗ output preview when Grok sends
-`raw_output`. Copilot-native SubAgents inherit the model used to launch the
+provider connection. All ACP backends that share this bridge (Grok ACP and Copilot ACP) map protocol
+updates into Claude Code surfaces:
+
+| ACP | Claude Code |
+| --- | --- |
+| `AgentThoughtChunk` | thinking panel |
+| `AgentMessageChunk` | assistant text |
+| `ToolCall` / `ToolCallUpdate` | native `tool_use` cards (display-only; input from `raw_input` + content + locations; output preview from `raw_output` / content) |
+| `Plan` | compact plan checklist text |
+| xAI SubAgent / retry extensions | short status text |
+
+Provider-owned tools never set `stop_reason=tool_use`, so Claude Code does not
+re-execute them. Copilot-native SubAgents inherit the model used to launch the
 Copilot ACP server.
 
 Streaming requests return their HTTP response immediately. Each Codex

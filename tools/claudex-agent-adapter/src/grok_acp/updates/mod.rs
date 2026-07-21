@@ -1,3 +1,16 @@
+//! Shared ACP → Claude Code bridge (Grok ACP and Copilot ACP both use this).
+//!
+//! | ACP update | Claude Code surface |
+//! |---|---|
+//! | AgentThoughtChunk | thinking panel (`thinking_delta`) |
+//! | AgentMessageChunk | assistant text |
+//! | ToolCall / ToolCallUpdate | native `tool_use` cards (display-only) |
+//! | Plan | compact plan status text |
+//! | SessionInfo / mode | light status (when useful) |
+//! | xAI SubAgent extensions | status text |
+
+mod tools;
+
 use std::time::Duration;
 
 use agent_client_protocol::{self as acp};
@@ -5,17 +18,12 @@ use serde_json::{Value, json};
 
 use crate::app_server::events::ThreadEventDispatcher;
 
-// Grok ACP owns tool execution. Claude Code is display-only for those tools:
-// - AgentThoughtChunk → reasoning (Claude "Thought for …" panel)
-// - ToolCall / ToolCallUpdate → item/providerTool/* → Anthropic tool_use SSE
-//   (native Claude Code tool cards with expandable input). These are not
-//   external Claude tools: SegmentBuilder must not wait for tool_result.
-// - SubAgent / retry → short agentMessage status lines (not full tool cards)
+use tools::{dispatch_plan, dispatch_provider_tool_call, dispatch_provider_tool_update};
 
-const AGENT_MESSAGE_METHOD: &str = "item/agentMessage/delta";
-const REASONING_METHOD: &str = "item/reasoning/summaryTextDelta";
-const PROVIDER_TOOL_CALL: &str = "item/providerTool/call";
-const PROVIDER_TOOL_UPDATE: &str = "item/providerTool/update";
+pub(super) const AGENT_MESSAGE_METHOD: &str = "item/agentMessage/delta";
+pub(super) const REASONING_METHOD: &str = "item/reasoning/summaryTextDelta";
+pub(super) const PROVIDER_TOOL_CALL: &str = "item/providerTool/call";
+pub(super) const PROVIDER_TOOL_UPDATE: &str = "item/providerTool/update";
 
 pub(super) fn dispatch_error(events: &ThreadEventDispatcher, session_id: &str, message: String) {
     events.dispatch(json!({
@@ -46,6 +54,26 @@ pub(super) fn dispatch_notification(
         acp::SessionUpdate::ToolCallUpdate(update) => {
             dispatch_provider_tool_update(events, &session_id, update);
         }
+        acp::SessionUpdate::Plan(plan) => {
+            dispatch_plan(events, &session_id, plan);
+        }
+        acp::SessionUpdate::CurrentModeUpdate(update) => {
+            dispatch_status(
+                events,
+                &session_id,
+                format!("\n\nSession mode: {}\n", update.current_mode_id),
+            );
+        }
+        acp::SessionUpdate::SessionInfoUpdate(info) => {
+            if let acp::MaybeUndefined::Value(title) = info.title {
+                if !title.is_empty() {
+                    dispatch_status(events, &session_id, format!("\n\nSession: {title}\n"));
+                }
+            }
+        }
+        acp::SessionUpdate::UserMessageChunk(_)
+        | acp::SessionUpdate::AvailableCommandsUpdate(_)
+        | acp::SessionUpdate::ConfigOptionUpdate(_) => {}
         _ => {}
     }
 }
@@ -89,91 +117,7 @@ fn dispatch_text(
     }
 }
 
-fn dispatch_provider_tool_call(
-    events: &ThreadEventDispatcher,
-    session_id: &str,
-    call: acp::ToolCall,
-) {
-    let call_id = call.tool_call_id.0.to_string();
-    let name = tool_display_name(&call);
-    let input = call
-        .raw_input
-        .unwrap_or_else(|| json!({"description": call.title}));
-    events.dispatch(json!({
-        "method": PROVIDER_TOOL_CALL,
-        "params": {
-            "threadId": session_id,
-            "callId": call_id,
-            "tool": name,
-            "title": call.title,
-            "arguments": input
-        }
-    }));
-}
-
-fn dispatch_provider_tool_update(
-    events: &ThreadEventDispatcher,
-    session_id: &str,
-    update: acp::ToolCallUpdate,
-) {
-    let Some(status) = update.fields.status else {
-        return;
-    };
-    let status = match status {
-        acp::ToolCallStatus::Completed => "completed",
-        acp::ToolCallStatus::Failed => "failed",
-        acp::ToolCallStatus::InProgress => "in_progress",
-        acp::ToolCallStatus::Pending => "pending",
-        _ => return,
-    };
-    let call_id = update.tool_call_id.0.to_string();
-    let mut params = json!({
-        "threadId": session_id,
-        "callId": call_id,
-        "status": status
-    });
-    if let Some(title) = update.fields.title {
-        params["title"] = json!(title);
-    }
-    if let Some(raw_input) = update.fields.raw_input {
-        params["arguments"] = raw_input;
-    }
-    if let Some(raw_output) = update.fields.raw_output {
-        params["output"] = raw_output;
-    }
-    events.dispatch(json!({
-        "method": PROVIDER_TOOL_UPDATE,
-        "params": params
-    }));
-}
-
-fn tool_display_name(call: &acp::ToolCall) -> String {
-    match call.kind {
-        acp::ToolKind::Read => return "Read".into(),
-        acp::ToolKind::Edit => return "Edit".into(),
-        acp::ToolKind::Execute => return "Bash".into(),
-        acp::ToolKind::Search => return "Search".into(),
-        acp::ToolKind::Fetch => return "WebFetch".into(),
-        acp::ToolKind::Delete => return "Delete".into(),
-        acp::ToolKind::Move => return "Move".into(),
-        acp::ToolKind::Think => return "Think".into(),
-        _ => {}
-    }
-    let title = call.title.trim();
-    let stripped = title
-        .strip_prefix("Using ")
-        .unwrap_or(title)
-        .trim_end_matches('…')
-        .trim_end_matches("...")
-        .trim();
-    if stripped.is_empty() {
-        "Tool".into()
-    } else {
-        stripped.to_owned()
-    }
-}
-
-fn dispatch_status(events: &ThreadEventDispatcher, session_id: &str, delta: String) {
+pub(super) fn dispatch_status(events: &ThreadEventDispatcher, session_id: &str, delta: String) {
     dispatch_delta(events, session_id, AGENT_MESSAGE_METHOD, &delta);
 }
 

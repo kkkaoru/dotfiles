@@ -121,6 +121,36 @@ async fn forwards_xai_subagent_lifecycle_as_visible_message() {
     );
 }
 
+#[tokio::test]
+async fn forwards_plan_as_checklist_text() {
+    let events = ThreadEventDispatcher::default();
+    let receiver = events.subscribe("session");
+    dispatch_notification(
+        &events,
+        acp::SessionNotification::new(
+            "session",
+            acp::SessionUpdate::Plan(acp::Plan::new(vec![
+                acp::PlanEntry::new(
+                    "Investigate",
+                    acp::PlanEntryPriority::High,
+                    acp::PlanEntryStatus::Completed,
+                ),
+                acp::PlanEntry::new(
+                    "Implement",
+                    acp::PlanEntryPriority::Medium,
+                    acp::PlanEntryStatus::InProgress,
+                ),
+            ])),
+        ),
+    );
+    let plan = receiver.recv().await.unwrap();
+    assert_eq!(plan["method"], "item/agentMessage/delta");
+    let text = plan["params"]["delta"].as_str().unwrap();
+    assert!(text.contains("Plan:"), "text={text}");
+    assert!(text.contains("Investigate"), "text={text}");
+    assert!(text.contains("Implement"), "text={text}");
+}
+
 #[test]
 fn ignores_unrelated_or_unstructured_extensions() {
     let events = ThreadEventDispatcher::default();
