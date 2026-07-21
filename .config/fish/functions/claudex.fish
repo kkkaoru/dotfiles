@@ -16,11 +16,15 @@ function claudex --description 'Run Claude Code with dynamically routed agent ba
     else if test -r "$HOME/.grok/config.toml"
         set grok_model (string match -rg '^default\s*=\s*"([^"]+)"' < "$HOME/.grok/config.toml")[1]
     end
+
+    # Main model: explicit CLAUDEX_MODEL, else codex default, else grok default.
+    # Grok-only machines must not fail just because Codex is not configured.
     set -l main_model $codex_model
+    test -z "$main_model"; and set main_model $grok_model
     set -q CLAUDEX_MODEL; and set main_model $CLAUDEX_MODEL
 
     if test -z "$main_model"
-        echo 'claudex: set CLAUDEX_MODEL or configure a default Codex model' >&2
+        echo 'claudex: set CLAUDEX_MODEL, or configure ~/.codex/config.toml or ~/.grok/config.toml' >&2
         return 2
     end
 
@@ -37,6 +41,10 @@ function claudex --description 'Run Claude Code with dynamically routed agent ba
     set -q CLAUDEX_ADAPTER_LISTEN; and set -a adapter_args --listen "$CLAUDEX_ADAPTER_LISTEN"
     set -q CLAUDEX_SUBSCRIPTION_MAX_PROCESSES; and set -a adapter_args --subscription-max-processes "$CLAUDEX_SUBSCRIPTION_MAX_PROCESSES"
     set -q CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES; and set -a adapter_args --subscription-timeout-minutes "$CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES"
+
+    # One-line orientation so Claude Code UI feels intentional, not silent.
+    # stderr only — never pollute Claude Code stdin/stdout protocol streams.
+    echo "claudex: model=$main_model backend=$main_backend (tools stream as live status lines)" >&2
 
     command "$HOME/.local/bin/claudex-agent-adapter" $adapter_args -- $argv
 end

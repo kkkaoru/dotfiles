@@ -148,6 +148,67 @@ async fn streams_summarized_thinking_before_text_and_preserves_the_block() {
 }
 
 #[tokio::test]
+async fn activity_keepalive_emits_zero_width_thinking_during_silence() {
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
+    let mut builder = SegmentBuilder::new(1);
+    builder
+        .activity_keepalive(Some(&sender))
+        .await
+        .expect("open keepalive thinking");
+    builder
+        .activity_keepalive(Some(&sender))
+        .await
+        .expect("second heartbeat");
+    let segment = builder.finish(Some(&sender)).await.expect("segment");
+    drop(sender);
+
+    assert_eq!(segment.blocks[0]["type"], "thinking");
+    assert_eq!(segment.blocks[0]["thinking"], "\u{200b}\u{200b}");
+
+    let mut frames = Vec::new();
+    while let Some(frame) = receiver.recv().await {
+        let frame = String::from_utf8(frame.expect("frame").to_vec()).expect("UTF-8 SSE");
+        let data = frame.lines().find_map(|line| line.strip_prefix("data: "));
+        frames.push(serde_json::from_str::<Value>(data.expect("SSE data")).expect("JSON frame"));
+    }
+    assert_eq!(frames[0]["content_block"]["type"], "thinking");
+    assert_eq!(
+        frames[1]["delta"],
+        json!({"type":"thinking_delta","thinking":"\u{200b}"})
+    );
+    assert_eq!(
+        frames[2]["delta"],
+        json!({"type":"thinking_delta","thinking":"\u{200b}"})
+    );
+}
+
+#[tokio::test]
+async fn activity_keepalive_uses_open_text_when_visible_output_started() {
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
+    let mut builder = SegmentBuilder::new(1);
+    builder
+        .text_delta(&json!({"params":{"delta":"hi"}}), Some(&sender))
+        .await
+        .expect("text");
+    builder
+        .activity_keepalive(Some(&sender))
+        .await
+        .expect("text heartbeat");
+    let segment = builder.finish(Some(&sender)).await.expect("segment");
+    drop(sender);
+
+    assert_eq!(segment.blocks[0], json!({"type":"text","text":"hi\u{200b}"}));
+    let mut saw_zwsp = false;
+    while let Some(frame) = receiver.recv().await {
+        let frame = String::from_utf8(frame.expect("frame").to_vec()).expect("UTF-8 SSE");
+        if frame.contains("\\u200b") || frame.contains('\u{200b}') {
+            saw_zwsp = true;
+        }
+    }
+    assert!(saw_zwsp, "expected a zero-width text_delta keepalive frame");
+}
+
+#[tokio::test]
 async fn ignores_malformed_empty_raw_and_late_reasoning() {
     let mut builder = SegmentBuilder::new(1);
     for event in [

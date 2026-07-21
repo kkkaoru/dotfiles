@@ -1,4 +1,4 @@
-use std::{ops::ControlFlow, sync::Arc};
+use std::{ops::ControlFlow, sync::Arc, time::Duration};
 
 use anyhow::{Result, bail};
 use axum::{
@@ -6,7 +6,10 @@ use axum::{
     http::Response,
 };
 use serde_json::{Value, json};
-use tokio::sync::mpsc;
+use tokio::{
+    sync::mpsc,
+    time::{Instant, sleep},
+};
 
 use super::{
     ActiveTurn, Bridge, MessagesRequest, Segment, Session,
@@ -149,15 +152,31 @@ impl Bridge {
         current_messages: &[Value],
         sender: &StreamSender,
     ) -> Result<StreamTurn> {
+        // Claude Code's decoded-event idle watchdog is ~300s. Anthropic `ping`
+        // frames only satisfy the ~180s raw-byte watchdog, so emit a content
+        // delta after provider silence well under that ceiling.
+        const ACTIVITY_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(45);
         let mut builder = SegmentBuilder::new(input_tokens);
+        let mut activity_deadline =
+            Box::pin(sleep(ACTIVITY_KEEPALIVE_INTERVAL));
         loop {
             let next = tokio::select! {
                 biased;
                 () = sender.closed() => {
                     return Ok(self.disconnect_stream(session, events).await);
                 }
+                () = &mut activity_deadline => {
+                    builder.activity_keepalive(Some(sender)).await?;
+                    activity_deadline
+                        .as_mut()
+                        .reset(Instant::now() + ACTIVITY_KEEPALIVE_INTERVAL);
+                    continue;
+                }
                 next = next_event(events, builder.has_external_tool_calls()) => next,
             };
+            activity_deadline
+                .as_mut()
+                .reset(Instant::now() + ACTIVITY_KEEPALIVE_INTERVAL);
             let event = match next {
                 NextEvent::Event(event) => event,
                 NextEvent::ExternalBatchReady => {

@@ -1,13 +1,33 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use agent_client_protocol::{self as acp};
 use serde_json::{json, value::RawValue};
 
 use super::{dispatch_error, dispatch_extension, dispatch_notification};
-use crate::app_server::events::ThreadEventDispatcher;
+use crate::app_server::events::{ThreadEventDispatcher, ThreadEvents};
+
+async fn drain(receiver: &ThreadEvents) -> Vec<serde_json::Value> {
+    let mut out = Vec::new();
+    loop {
+        match tokio::time::timeout(Duration::from_millis(100), receiver.recv()).await {
+            Ok(Some(event)) => out.push(event),
+            Ok(None) | Err(_) => break,
+        }
+    }
+    out
+}
+
+fn joined_deltas(events: &[serde_json::Value]) -> String {
+    events
+        .iter()
+        .filter(|event| event["method"] == "item/agentMessage/delta")
+        .filter_map(|event| event["params"]["delta"].as_str())
+        .collect()
+}
 
 #[tokio::test]
-async fn forwards_thought_and_tool_progress_without_actionable_tool_calls() {
+async fn forwards_thought_as_reasoning_and_tool_progress_as_message() {
     let events = ThreadEventDispatcher::default();
     let receiver = events.subscribe("session");
     dispatch_notification(
@@ -27,9 +47,10 @@ async fn forwards_thought_and_tool_progress_without_actionable_tool_calls() {
     let thought = receiver.recv().await.unwrap();
     let tool = receiver.recv().await.unwrap();
     assert_eq!(thought["method"], "item/reasoning/summaryTextDelta");
-    assert_eq!(thought["params"]["itemId"], "session:reasoning");
     assert_eq!(thought["params"]["delta"], "thinking");
-    assert_eq!(tool["method"], "item/reasoning/summaryTextDelta");
+    // Tool progress must stay on agentMessage so it is not dropped after the
+    // first visible text block (thinking path is gated by has_visible_output).
+    assert_eq!(tool["method"], "item/agentMessage/delta");
     assert!(
         tool["params"]["delta"]
             .as_str()
@@ -39,7 +60,7 @@ async fn forwards_thought_and_tool_progress_without_actionable_tool_calls() {
 }
 
 #[tokio::test]
-async fn forwards_terminal_tool_updates_and_errors() {
+async fn forwards_terminal_and_in_progress_tool_updates() {
     let events = ThreadEventDispatcher::default();
     let receiver = events.subscribe("session");
     for fields in [
@@ -47,7 +68,10 @@ async fn forwards_terminal_tool_updates_and_errors() {
         acp::ToolCallUpdateFields::new().status(acp::ToolCallStatus::Completed),
         acp::ToolCallUpdateFields::new()
             .status(acp::ToolCallStatus::Pending)
-            .title("Pending"),
+            .title("Pending job"),
+        acp::ToolCallUpdateFields::new()
+            .status(acp::ToolCallStatus::InProgress)
+            .title("Running job"),
         acp::ToolCallUpdateFields::new()
             .status(acp::ToolCallStatus::Completed)
             .title("Search complete"),
@@ -65,25 +89,22 @@ async fn forwards_terminal_tool_updates_and_errors() {
     }
     dispatch_error(&events, "session", "provider failed".to_owned());
 
+    // Same-method agentMessage deltas coalesce in the event queue.
     let progress = receiver.recv().await.unwrap();
     let error = receiver.recv().await.unwrap();
+    assert_eq!(progress["method"], "item/agentMessage/delta");
+    let delta = progress["params"]["delta"].as_str().unwrap();
+    assert!(delta.contains("Pending"), "delta={delta}");
     assert!(
-        progress["params"]["delta"]
-            .as_str()
-            .unwrap()
-            .contains("Completed")
+        delta.contains("Running") || delta.contains("Completed"),
+        "delta={delta}"
     );
-    assert!(
-        progress["params"]["delta"]
-            .as_str()
-            .unwrap()
-            .contains("Failed")
-    );
+    assert!(delta.contains("Failed"), "delta={delta}");
     assert_eq!(error["params"]["error"]["message"], "provider failed");
 }
 
 #[tokio::test]
-async fn forwards_xai_subagent_lifecycle_and_usage() {
+async fn forwards_xai_subagent_lifecycle_as_visible_message() {
     let events = ThreadEventDispatcher::default();
     let receiver = events.subscribe("session");
     for update in [
@@ -101,28 +122,21 @@ async fn forwards_xai_subagent_lifecycle_and_usage() {
             acp::ExtNotification::new("_x.ai/session/update", Arc::from(raw)),
         );
     }
-    let lifecycle = receiver.recv().await.unwrap();
-    let usage = receiver.recv().await.unwrap();
+    let drained = drain(&receiver).await;
+    let text = joined_deltas(&drained);
+    assert!(text.contains("grok-4.5"), "text={text}");
+    assert!(text.contains("medium effort"), "text={text}");
+    assert!(text.contains("1.2s"), "text={text}");
     assert!(
-        lifecycle["params"]["delta"]
-            .as_str()
-            .unwrap()
-            .contains("grok-4.5")
-    );
-    assert!(
-        lifecycle["params"]["delta"]
-            .as_str()
-            .unwrap()
-            .contains("medium effort")
-    );
-    assert!(
-        lifecycle["params"]["delta"]
-            .as_str()
-            .unwrap()
-            .contains("1.2s")
+        drained
+            .iter()
+            .any(|event| event["method"] == "thread/tokenUsage/updated")
     );
     assert_eq!(
-        usage["params"]["tokenUsage"]["last"]["reasoningOutputTokens"],
+        drained
+            .iter()
+            .find(|event| event["method"] == "thread/tokenUsage/updated")
+            .unwrap()["params"]["tokenUsage"]["last"]["reasoningOutputTokens"],
         3
     );
 }
@@ -154,20 +168,11 @@ async fn covers_extension_defaults_retries_and_missing_usage() {
         dispatch_raw_extension(&events, params);
     }
 
-    let lifecycle = receiver.recv().await.unwrap();
-    let retry = receiver.recv().await.unwrap();
-    assert!(
-        lifecycle["params"]["delta"]
-            .as_str()
-            .unwrap()
-            .contains("SubAgent")
-    );
-    assert!(
-        retry["params"]["delta"]
-            .as_str()
-            .unwrap()
-            .contains("Retrying")
-    );
+    let drained = drain(&receiver).await;
+    let text = joined_deltas(&drained);
+    assert!(text.contains("SubAgent"), "text={text}");
+    assert!(text.contains("Retrying"), "text={text}");
+    assert!(text.contains("2/4"), "text={text}");
 }
 
 fn dispatch_raw_extension(events: &ThreadEventDispatcher, params: serde_json::Value) {

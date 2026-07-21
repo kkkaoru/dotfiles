@@ -26,7 +26,10 @@ creates ACP sessions, streams agent message chunks, and selects `AllowOnce` when
 either ACP agent requests permission for a tool. The selected ACP provider owns
 execution of its tools; Claude Code remains the outer conversation UI. Independent
 ACP sessions, including parallel SubAgents, progress concurrently over the shared
-provider connection. Copilot-native SubAgents inherit the model used to launch the
+provider connection. Grok tool and SubAgent status lines are forwarded as
+`agentMessage` text deltas (not only thinking) so Claude Code keeps showing live
+activity after the first visible token — matching Grok Build / Claude Code feel
+instead of a silent tool wait. Copilot-native SubAgents inherit the model used to launch the
 Copilot ACP server.
 
 Streaming requests return their HTTP response immediately. Each Codex
@@ -34,9 +37,11 @@ Streaming requests return their HTTP response immediately. Each Codex
 `content_block_delta` SSE event instead of being buffered until turn completion.
 Subscription subprocesses likewise use Claude Code's `stream-json` output and
 forward text deltas as they arrive. Streaming responses open immediately with
-`message_start` so Anthropic `ping` SSE events keep Claude Code's mid-stream
-watchdog alive while the provider session is still being prepared, and again
-during later provider silence.
+`message_start` so Anthropic `ping` SSE events keep Claude Code's ~180s raw-byte
+idle watchdog alive while the provider session is still being prepared. During
+longer provider silence (for example multi-minute Grok tool or subagent waits),
+the adapter also emits zero-width `content_block_delta` heartbeats about every
+45s so Claude Code's ~300s decoded-event idle watchdog does not abort the stream.
 
 For `codex-app-server`, the adapter starts `codex app-server` with an isolated
 `CODEX_HOME`. Only Codex authentication is copied into that home; Claude Code

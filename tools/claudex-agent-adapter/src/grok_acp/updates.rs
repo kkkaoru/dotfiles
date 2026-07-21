@@ -5,6 +5,15 @@ use serde_json::{Value, json};
 
 use crate::app_server::events::ThreadEventDispatcher;
 
+// Visible progress must use agentMessage deltas, not reasoning. Once Claude Code
+// has opened a text block, SegmentBuilder drops later thinking_delta frames
+// (has_visible_output). Routing tool/SubAgent status into reasoning therefore
+// makes long Grok tool runs look frozen after the first text token — the main
+// UX regression for ClaudeX + grok-acp versus native Claude Code / Grok Build.
+
+const AGENT_MESSAGE_METHOD: &str = "item/agentMessage/delta";
+const REASONING_METHOD: &str = "item/reasoning/summaryTextDelta";
+
 pub(super) fn dispatch_error(events: &ThreadEventDispatcher, session_id: &str, message: String) {
     events.dispatch(json!({
         "method":"error",
@@ -23,24 +32,13 @@ pub(super) fn dispatch_notification(
     let session_id = notification.session_id.0;
     match notification.update {
         acp::SessionUpdate::AgentMessageChunk(chunk) => {
-            dispatch_text(events, &session_id, chunk, "item/agentMessage/delta", 0);
+            dispatch_text(events, &session_id, chunk, AGENT_MESSAGE_METHOD);
         }
         acp::SessionUpdate::AgentThoughtChunk(chunk) => {
-            dispatch_text(
-                events,
-                &session_id,
-                chunk,
-                "item/reasoning/summaryTextDelta",
-                0,
-            );
+            dispatch_text(events, &session_id, chunk, REASONING_METHOD);
         }
         acp::SessionUpdate::ToolCall(call) => {
-            dispatch_progress(
-                events,
-                &session_id,
-                format!("\n\nUsing {}…\n", call.title),
-                1,
-            );
+            dispatch_status(events, &session_id, format!("\n\nUsing {}…\n", call.title));
         }
         acp::SessionUpdate::ToolCallUpdate(update) => {
             dispatch_tool_update(events, &session_id, update);
@@ -82,44 +80,28 @@ fn dispatch_text(
     session_id: &str,
     chunk: acp::ContentChunk,
     method: &str,
-    summary_index: u64,
 ) {
     if let acp::ContentBlock::Text(text) = chunk.content {
-        dispatch_delta(events, session_id, method, &text.text, summary_index);
+        dispatch_delta(events, session_id, method, &text.text);
     }
 }
 
-fn dispatch_progress(
-    events: &ThreadEventDispatcher,
-    session_id: &str,
-    delta: String,
-    summary_index: u64,
-) {
-    dispatch_delta(
-        events,
-        session_id,
-        "item/reasoning/summaryTextDelta",
-        &delta,
-        summary_index,
-    );
+fn dispatch_status(events: &ThreadEventDispatcher, session_id: &str, delta: String) {
+    dispatch_delta(events, session_id, AGENT_MESSAGE_METHOD, &delta);
 }
 
-fn dispatch_delta(
-    events: &ThreadEventDispatcher,
-    session_id: &str,
-    method: &str,
-    delta: &str,
-    summary_index: u64,
-) {
+fn dispatch_delta(events: &ThreadEventDispatcher, session_id: &str, method: &str, delta: &str) {
     if delta.is_empty() {
         return;
     }
+    // itemId/summaryIndex are only consumed for reasoning; agentMessage path
+    // reads params.delta. Keep both so one helper covers both methods.
     events.dispatch(json!({
         "method":method,
         "params":{
             "threadId":session_id,
-            "itemId":format!("{session_id}:reasoning"),
-            "summaryIndex":summary_index,
+            "itemId":format!("{session_id}:status"),
+            "summaryIndex":0,
             "delta":delta
         }
     }));
@@ -139,9 +121,12 @@ fn dispatch_tool_update(
     let marker = match status {
         acp::ToolCallStatus::Completed => "Completed",
         acp::ToolCallStatus::Failed => "Failed",
+        acp::ToolCallStatus::InProgress => "Running",
+        acp::ToolCallStatus::Pending => "Pending",
+        // ToolCallStatus is non-exhaustive across ACP schema versions.
         _ => return,
     };
-    dispatch_progress(events, session_id, format!("{marker}: {title}\n"), 1);
+    dispatch_status(events, session_id, format!("{marker}: {title}\n"));
 }
 
 fn dispatch_subagent_started(events: &ThreadEventDispatcher, session_id: &str, update: &Value) {
@@ -151,11 +136,10 @@ fn dispatch_subagent_started(events: &ThreadEventDispatcher, session_id: &str, u
         .get("reasoning_effort")
         .and_then(Value::as_str)
         .map_or_else(String::new, |value| format!(", {value} effort"));
-    dispatch_progress(
+    dispatch_status(
         events,
         session_id,
         format!("\n\nSubAgent started: {description} ({model}{effort})\n"),
-        2,
     );
 }
 
@@ -168,12 +152,7 @@ fn dispatch_subagent_finished(events: &ThreadEventDispatcher, session_id: &str, 
         .map_or_else(String::new, |value| {
             format!(" in {:.1}s", value.as_secs_f64())
         });
-    dispatch_progress(
-        events,
-        session_id,
-        format!("SubAgent {status}{duration}\n"),
-        2,
-    );
+    dispatch_status(events, session_id, format!("SubAgent {status}{duration}\n"));
 }
 
 fn dispatch_retry(events: &ThreadEventDispatcher, session_id: &str, update: &Value) {
@@ -182,11 +161,10 @@ fn dispatch_retry(events: &ThreadEventDispatcher, session_id: &str, update: &Val
         .get("max_retries")
         .and_then(Value::as_u64)
         .unwrap_or(1);
-    dispatch_progress(
+    dispatch_status(
         events,
         session_id,
         format!("Retrying provider request ({attempt}/{max})…\n"),
-        3,
     );
 }
 
