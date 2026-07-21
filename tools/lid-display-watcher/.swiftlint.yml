@@ -1,0 +1,81 @@
+strict: true
+
+included:
+  - Package.swift
+  - Sources
+  - Tests
+
+opt_in_rules: all
+
+# Swift Format owns brace placement and uses type inference intentionally.
+# Bool? represents the required unknown/open/closed state, and `k` prefixes are
+# contrary to Swift naming conventions.
+disabled_rules:
+  - contrasted_opening_brace
+  - discouraged_optional_boolean
+  - explicit_type_interface
+  - prefixed_toplevel_constant
+
+nesting:
+  type_level:
+    warning: 1
+    error: 1
+  function_level:
+    warning: 3
+    error: 3
+  check_nesting_in_closures_and_statements: true
+  always_allow_one_type_in_functions: false
+  ignore_typealiases_and_associatedtypes: false
+  ignore_coding_keys: false
+
+function_parameter_count:
+  warning: 7
+  error: 8
+  ignores_default_parameters: true
+
+large_tuple:
+  warning: 5
+  error: 6
+
+function_body_length:
+  warning: 30
+  error: 40
+
+closure_body_length:
+  warning: 20
+  error: 30
+
+cyclomatic_complexity:
+  warning: 5
+  error: 7
+
+file_length:
+  warning: 170
+  error: 180
+
+type_body_length:
+  warning: 120
+  error: 140
+
+file_name:
+  excluded:
+    - Package.swift
+    - main.swift
+    - SystemBindings.swift
+
+indentation_width:
+  indentation_width: 2
+  include_comments: true
+  include_compiler_directives: true
+  include_multiline_strings: true
+  include_multiline_conditions: false
+
+trailing_comma:
+  mandatory_comma: true
+
+line_length:
+  warning: 100
+  error: 100
+  ignores_comments: false
+  ignores_interpolated_strings: false
+  ignores_urls: false
