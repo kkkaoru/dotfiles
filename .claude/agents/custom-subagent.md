@@ -1,5 +1,5 @@
 ---
-name: custom-subagent-creator
+name: custom-subagent
 description: Creates or improves reusable Claude Code custom subagent definitions from user requirements. Use when asked to add, design, review, or update agents in .claude/agents or ~/.claude/agents.
 model: claude-sonnet-5
 effort: high
