@@ -104,14 +104,20 @@ pub async fn ensure_running(options: AdapterOptions) -> Result<String> {
     ensure_config_running(&config).await
 }
 
-pub async fn run_claude(options: AdapterOptions, arguments: Vec<OsString>) -> Result<i32> {
+pub async fn run_claude(
+    options: AdapterOptions,
+    arguments: Vec<OsString>,
+    inherit_claude_model: bool,
+) -> Result<i32> {
     reject_model_override(&arguments)?;
     let config = ServiceConfig::new(options)?;
     let base_url = ensure_config_running(&config).await?;
     let program = std::env::var_os("CLAUDEX_CLAUDE_PROGRAM").unwrap_or_else(|| "claude".into());
-    let mut child = Command::new(program)
-        .arg("--model")
-        .arg(&config.options.model)
+    let mut command = Command::new(program);
+    if !inherit_claude_model {
+        command.args(["--model", &config.options.model]);
+    }
+    let mut child = command
         .args(arguments)
         .env("ANTHROPIC_BASE_URL", base_url)
         .env("ANTHROPIC_AUTH_TOKEN", &config.token)

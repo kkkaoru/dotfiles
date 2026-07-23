@@ -49,6 +49,8 @@ fn fish_launcher_discovers_provider_models_without_pinning_them() {
     assert!(arguments.contains("--backend-route\ngrok-4-test=grok-acp\n"));
     assert!(arguments.ends_with("--\nsmoke\n"));
 
+    assert_no_argument_launch(&function, &home);
+
     let output = Command::new("fish")
         .args([
             "-c",
@@ -69,4 +71,24 @@ fn fish_launcher_discovers_provider_models_without_pinning_them() {
     assert!(arguments.contains("--backend-route\ngpt-5.6-test=copilot-acp\n"));
     assert!(!arguments.contains("gpt-5.6-test=codex-app-server"));
     assert!(arguments.ends_with("--\ncopilot-smoke\n"));
+}
+
+fn assert_no_argument_launch(function: &std::path::Path, home: &tempfile::TempDir) {
+    let output = Command::new("fish")
+        .args(["-c", &format!("source '{}'; claudex", function.display())])
+        .env("HOME", home.path())
+        .env_remove("CLAUDEX_MODEL")
+        .env_remove("CLAUDEX_CODEX_MODEL")
+        .env_remove("CLAUDEX_GROK_MODEL")
+        .env_remove("CLAUDEX_BACKEND")
+        .output()
+        .expect("run no-argument fish launcher");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let arguments = String::from_utf8(output.stdout).expect("UTF-8 adapter arguments");
+    assert!(arguments.contains("--inherit-claude-model\n"));
+    assert!(arguments.ends_with("--\n--agent\nclaudex-orchestrator\n"));
 }

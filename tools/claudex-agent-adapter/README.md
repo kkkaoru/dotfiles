@@ -71,7 +71,7 @@ env -u RUSTUP_TOOLCHAIN cargo install \
 The public CLI uses explicit subcommands:
 
 ```text
-claudex-agent-adapter launch --model MODEL --backend-route MODEL=BACKEND [...] [ADAPTER OPTIONS] -- [CLAUDE OPTIONS]
+claudex-agent-adapter launch --model MODEL --backend-route MODEL=BACKEND [...] [ADAPTER OPTIONS] [--inherit-claude-model] -- [CLAUDE OPTIONS]
 claudex-agent-adapter ensure --model MODEL --backend-route MODEL=BACKEND [...] [ADAPTER OPTIONS]
 claudex-agent-adapter serve --model MODEL --backend-route MODEL=BACKEND [...] [ADAPTER OPTIONS]
 claudex-agent-adapter build-id
@@ -83,7 +83,15 @@ Backend values are `codex-app-server`, `copilot-acp`, and `grok-acp`.
 Omitting all routes preserves the single-model `codex-app-server` default.
 Other adapter options are `--listen`, `--subscription-max-processes`, and
 `--subscription-timeout-minutes`; their defaults are `127.0.0.1:8318`, 20, and
-120. The fish launcher configures provider routes and translates optional
+120. The launch-only `--inherit-claude-model` option omits Claude Code's
+`--model` argument, allowing the normal Claude `model` and `effortLevel`
+settings to control the outer conversation while the adapter model remains a
+backend bootstrap route. The fish launcher uses this mode with the
+`claudex-orchestrator` agent when `claudex` has no arguments. That agent reads a
+sanitized, five-minute Codexbar usage cache and delegates primarily to the
+manually configurable `claudex-gpt` and `claudex-grok` agents; it selects the
+`claudex-sonnet` subscription fallback only when both provider quotas are
+unavailable. The fish launcher configures provider routes and translates optional
 `CLAUDEX_MODEL`, `CLAUDEX_BACKEND`, `CLAUDEX_CODEX_MODEL`, `CLAUDEX_GROK_MODEL`,
 `CLAUDEX_ADAPTER_LISTEN`, `CLAUDEX_SUBSCRIPTION_MAX_PROCESSES`, and
 `CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES` values into these options. Adapter-private
@@ -171,7 +179,8 @@ in-flight tool ownership is not lost. It restarts an incompatible service,
 manages its log and readiness checks, and prints the matching base URL.
 `launch --model MODEL -- ...` scopes Anthropic routing,
 removes conflicting provider and adapter variables, launches Claude Code with
-untouched non-model arguments, suppresses only the adapter-specific advisor-rank
+untouched non-model arguments, and returns Claude Code's exit status. With
+`--inherit-claude-model`, it does not inject a main-model argument. It suppresses only the adapter-specific advisor-rank
 warning, and returns Claude Code's exit status. Claude Code's
 `CLAUDE_CODE_ALWAYS_ENABLE_EFFORT` stays in fish because it is harness UI policy,
 not transport configuration. Health checks fail if the selected backend child

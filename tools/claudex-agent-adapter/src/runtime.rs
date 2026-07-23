@@ -14,8 +14,14 @@ use crate::{
 enum RuntimeCommand {
     BuildId,
     Ensure(AdapterOptions),
-    Launch(AdapterOptions, Vec<OsString>),
+    Launch(AdapterOptions, Vec<OsString>, bool),
     Serve(AdapterOptions),
+}
+
+#[derive(Debug)]
+struct ParsedOptions {
+    adapter: AdapterOptions,
+    inherit_claude_model: bool,
 }
 
 pub async fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<i32> {
@@ -28,8 +34,8 @@ pub async fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<i32> {
             println!("{}", launcher::ensure_running(options).await?);
             0
         }
-        RuntimeCommand::Launch(options, arguments) => {
-            launcher::run_claude(options, arguments).await?
+        RuntimeCommand::Launch(options, arguments, inherit_claude_model) => {
+            launcher::run_claude(options, arguments, inherit_claude_model).await?
         }
         RuntimeCommand::Serve(options) => {
             serve(options).await?;
@@ -48,26 +54,33 @@ fn parse_command(mut arguments: VecDeque<OsString>) -> Result<RuntimeCommand> {
         }
         "ensure" => {
             let options = parse_options(&mut arguments)?;
+            reject_inherit_model(&options, "ensure")?;
             reject_remaining(&arguments)?;
-            Ok(RuntimeCommand::Ensure(options))
+            Ok(RuntimeCommand::Ensure(options.adapter))
         }
         "launch" => {
             let options = parse_options(&mut arguments)?;
             consume_separator(&mut arguments)?;
-            Ok(RuntimeCommand::Launch(options, arguments.into()))
+            Ok(RuntimeCommand::Launch(
+                options.adapter,
+                arguments.into(),
+                options.inherit_claude_model,
+            ))
         }
         "serve" => {
             let options = parse_options(&mut arguments)?;
+            reject_inherit_model(&options, "serve")?;
             reject_remaining(&arguments)?;
-            Ok(RuntimeCommand::Serve(options))
+            Ok(RuntimeCommand::Serve(options.adapter))
         }
         _ => bail!("unknown command `{command}`; expected build-id, ensure, launch, or serve"),
     }
 }
 
-fn parse_options(arguments: &mut VecDeque<OsString>) -> Result<AdapterOptions> {
+fn parse_options(arguments: &mut VecDeque<OsString>) -> Result<ParsedOptions> {
     let mut routes = Vec::new();
     let mut model = None;
+    let mut inherit_claude_model = false;
     let mut listen = "127.0.0.1:8318".parse().expect("default listener");
     let mut max_processes = DEFAULT_MAX_PROCESSES;
     let mut timeout_minutes = DEFAULT_TIMEOUT_MINUTES;
@@ -81,6 +94,10 @@ fn parse_options(arguments: &mut VecDeque<OsString>) -> Result<AdapterOptions> {
                 routes.push(option_value(arguments, "--backend-route")?.parse()?);
             }
             "--model" => model = Some(option_value(arguments, "--model")?),
+            "--inherit-claude-model" => {
+                arguments.pop_front();
+                inherit_claude_model = true;
+            }
             "--listen" => {
                 listen = option_value(arguments, "--listen")?
                     .parse()
@@ -111,13 +128,23 @@ fn parse_options(arguments: &mut VecDeque<OsString>) -> Result<AdapterOptions> {
         });
     }
     validate_routes(&routes, &model)?;
-    Ok(AdapterOptions {
-        routes,
-        model,
-        listen,
-        subscription_max_processes: max_processes,
-        subscription_timeout_minutes: timeout_minutes,
+    Ok(ParsedOptions {
+        adapter: AdapterOptions {
+            routes,
+            model,
+            listen,
+            subscription_max_processes: max_processes,
+            subscription_timeout_minutes: timeout_minutes,
+        },
+        inherit_claude_model,
     })
+}
+
+fn reject_inherit_model(options: &ParsedOptions, command: &str) -> Result<()> {
+    if options.inherit_claude_model {
+        bail!("--inherit-claude-model is valid only for launch, not {command}");
+    }
+    Ok(())
 }
 
 fn validate_routes(routes: &[BackendRoute], model: &str) -> Result<()> {

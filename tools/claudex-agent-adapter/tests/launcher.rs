@@ -282,7 +282,7 @@ exit 23
         .args(["--subscription-max-processes", "20"])
         .args(["--subscription-timeout-minutes", "120", "--"])
         .arg("--continue")
-        .env("PATH", path)
+        .env("PATH", &path)
         .env("CLAUDE_CODE_ALWAYS_ENABLE_EFFORT", "configured-by-fish")
         .env("CLAUDE_CODE_SUBAGENT_MODEL", "wrong-model")
         .env("ANTHROPIC_API_KEY", "must-not-leak")
@@ -304,6 +304,8 @@ exit 23
     let stderr = String::from_utf8(output.stderr).expect("Claude stderr");
     assert_eq!(stderr, "kept stderr\n");
 
+    assert_inherited_launch(&home, port, &path);
+
     let base_url = format!("http://127.0.0.1:{port}");
     let pid = health(&Client::new(), &base_url).await["pid"]
         .as_u64()
@@ -323,6 +325,28 @@ exit 23
         .output()
         .expect("reject duplicate model");
     assert_error(rejected, "pass the main model to adapter option --model");
+}
+
+fn assert_inherited_launch(home: &TempDir, port: u16, path: &str) {
+    let inherited = common_command(home, port, "20")
+        .args(["launch", "--model", "test-main-model"])
+        .args(["--listen", &format!("127.0.0.1:{port}")])
+        .args(["--subscription-max-processes", "20"])
+        .args([
+            "--subscription-timeout-minutes",
+            "120",
+            "--inherit-claude-model",
+            "--",
+            "--agent",
+            "claudex-orchestrator",
+        ])
+        .env("PATH", path)
+        .output()
+        .expect("run Claude wrapper with inherited model");
+    assert_eq!(inherited.status.code(), Some(23));
+    let inherited_stdout = String::from_utf8(inherited.stdout).expect("Claude stdout");
+    assert!(inherited_stdout.contains("args=--agent claudex-orchestrator"));
+    assert!(!inherited_stdout.contains("args=--model"));
 }
 
 fn ensure_command(home: &TempDir, port: u16, max_processes: &str) -> Command {

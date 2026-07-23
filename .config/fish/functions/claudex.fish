@@ -17,8 +17,8 @@ function claudex --description 'Run Claude Code with dynamically routed agent ba
         set grok_model (string match -rg '^default\s*=\s*"([^"]+)"' < "$HOME/.grok/config.toml")[1]
     end
 
-    # Main model: explicit CLAUDEX_MODEL, else codex default, else grok default.
-    # Grok-only machines must not fail just because Codex is not configured.
+    # The adapter still needs one provider route as its daemon bootstrap model.
+    # With no arguments Claude itself inherits model/effort from Claude settings.
     set -l main_model $codex_model
     test -z "$main_model"; and set main_model $grok_model
     set -q CLAUDEX_MODEL; and set main_model $CLAUDEX_MODEL
@@ -42,9 +42,19 @@ function claudex --description 'Run Claude Code with dynamically routed agent ba
     set -q CLAUDEX_SUBSCRIPTION_MAX_PROCESSES; and set -a adapter_args --subscription-max-processes "$CLAUDEX_SUBSCRIPTION_MAX_PROCESSES"
     set -q CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES; and set -a adapter_args --subscription-timeout-minutes "$CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES"
 
+    set -l claude_args $argv
+    if test (count $argv) -eq 0
+        set -a adapter_args --inherit-claude-model
+        set claude_args --agent claudex-orchestrator
+    end
+
     # One-line orientation so Claude Code UI feels intentional, not silent.
     # stderr only — never pollute Claude Code stdin/stdout protocol streams.
-    echo "claudex: model=$main_model backend=$main_backend (tools stream as live status lines)" >&2
+    if test (count $argv) -eq 0
+        echo "claudex: Claude settings + Codexbar-routed subagents (adapter bootstrap=$main_model)" >&2
+    else
+        echo "claudex: model=$main_model backend=$main_backend (tools stream as live status lines)" >&2
+    end
 
-    command "$HOME/.local/bin/claudex-agent-adapter" $adapter_args -- $argv
+    command "$HOME/.local/bin/claudex-agent-adapter" $adapter_args -- $claude_args
 end

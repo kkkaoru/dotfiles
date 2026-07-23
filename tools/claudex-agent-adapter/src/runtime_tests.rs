@@ -25,6 +25,14 @@ mod tests {
     fn validates_cli_shape_and_limits() {
         let failures = [
             (vec!["ensure", "--model", "m", "--"], "unexpected arguments"),
+            (
+                vec!["ensure", "--model", "m", "--inherit-claude-model"],
+                "valid only for launch",
+            ),
+            (
+                vec!["serve", "--model", "m", "--inherit-claude-model"],
+                "valid only for launch",
+            ),
             (vec!["launch", "--model", "m"], "requires `--`"),
             (vec!["serve", "--unknown"], "unknown adapter option"),
             (
@@ -111,16 +119,21 @@ mod tests {
         assert_eq!(options.subscription_max_processes, 3);
         assert_eq!(options.subscription_timeout_minutes, 4);
 
-        assert!(matches!(
-            parse_command(
-                ["launch", "--model", "m", "--", "--continue"]
-                    .into_iter()
-                    .map(OsString::from)
-                    .collect()
-            )
-            .expect("valid launch command"),
-            RuntimeCommand::Launch(_, _)
-        ));
+        let launch = parse_command(
+            [
+                "launch",
+                "--model",
+                "m",
+                "--inherit-claude-model",
+                "--",
+                "--continue",
+            ]
+            .into_iter()
+            .map(OsString::from)
+            .collect(),
+        )
+        .expect("valid launch command");
+        assert!(matches!(launch, RuntimeCommand::Launch(_, _, true)));
         assert!(matches!(
             parse_command(
                 ["ensure", "--model", "m"]
