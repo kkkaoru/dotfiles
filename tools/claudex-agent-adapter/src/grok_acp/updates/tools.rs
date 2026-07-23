@@ -42,7 +42,7 @@ pub(super) fn dispatch_provider_tool_update(
             acp::ToolCallStatus::Pending | acp::ToolCallStatus::InProgress
         ) && fields.raw_input.is_some()
         {
-            let mut call = acp::ToolCall::new(call_id.clone(), title.clone());
+            let mut call = acp::ToolCall::new(call_id.clone(), title);
             if let Some(kind) = fields.kind {
                 call = call.kind(kind);
             }
@@ -71,9 +71,11 @@ pub(super) fn dispatch_provider_tool_update(
                 params["title"] = json!(title);
             }
             if let Some(raw_input) = fields.raw_input {
-                params["arguments"] = enrich_arguments(raw_input, &fields.content, &fields.locations);
+                params["arguments"] =
+                    enrich_arguments(raw_input, &fields.content, &fields.locations);
             } else if fields.content.is_some() || fields.locations.is_some() {
-                params["arguments"] = enrich_arguments(json!({}), &fields.content, &fields.locations);
+                params["arguments"] =
+                    enrich_arguments(json!({}), &fields.content, &fields.locations);
             }
             events.dispatch(json!({ "method": PROVIDER_TOOL_UPDATE, "params": params }));
         }
@@ -144,20 +146,11 @@ fn enrich_arguments(
         }
         _ => Map::new(),
     };
-    if let Some(locations) = locations {
-        if !locations.is_empty() {
-            let paths: Vec<Value> = locations
-                .iter()
-                .map(|loc| {
-                    let mut entry = json!({"path": loc.path.display().to_string()});
-                    if let Some(line) = loc.line {
-                        entry["line"] = json!(line);
-                    }
-                    entry
-                })
-                .collect();
-            object.insert("locations".into(), Value::Array(paths));
-        }
+    if let Some(paths) = locations.as_ref().filter(|items| !items.is_empty()) {
+        object.insert(
+            "locations".into(),
+            Value::Array(paths.iter().map(tool_location).collect()),
+        );
     }
     if let Some(content) = content {
         let text = tool_content_text(content);
@@ -172,11 +165,21 @@ fn enrich_arguments(
     }
 }
 
+fn tool_location(location: &acp::ToolCallLocation) -> Value {
+    let mut entry = json!({"path": location.path.display().to_string()});
+    if let Some(line) = location.line {
+        entry["line"] = json!(line);
+    }
+    entry
+}
+
 fn combine_output(
     raw_output: Option<Value>,
     content: Option<&Vec<acp::ToolCallContent>>,
 ) -> Option<Value> {
-    let content_text = content.map(|items| tool_content_text(items.as_slice())).unwrap_or_default();
+    let content_text = content
+        .map(|items| tool_content_text(items.as_slice()))
+        .unwrap_or_default();
     match (raw_output, content_text.as_str()) {
         (Some(Value::String(s)), extra) if !extra.is_empty() && s != extra => {
             Some(json!(format!("{s}\n{extra}")))
@@ -188,31 +191,32 @@ fn combine_output(
 }
 
 fn tool_content_text(content: &[acp::ToolCallContent]) -> String {
-    let mut parts = Vec::new();
-    for item in content {
-        match item {
-            acp::ToolCallContent::Content(block) => {
-                if let acp::ContentBlock::Text(text) = &block.content {
-                    if !text.text.is_empty() {
-                        parts.push(text.text.clone());
-                    }
-                }
-            }
-            acp::ToolCallContent::Diff(diff) => {
-                let path = diff.path.display();
-                let old = diff.old_text.as_deref().unwrap_or("");
-                parts.push(format!(
-                    "diff {path}:\n--- old ---\n{old}\n--- new ---\n{}",
-                    diff.new_text
-                ));
-            }
-            acp::ToolCallContent::Terminal(term) => {
-                parts.push(format!("terminal {term_id}", term_id = term.terminal_id));
-            }
-            _ => {}
+    content
+        .iter()
+        .filter_map(tool_content_part)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn tool_content_part(item: &acp::ToolCallContent) -> Option<String> {
+    match item {
+        acp::ToolCallContent::Content(block) => match &block.content {
+            acp::ContentBlock::Text(text) if !text.text.is_empty() => Some(text.text.clone()),
+            _ => None,
+        },
+        acp::ToolCallContent::Diff(diff) => {
+            let path = diff.path.display();
+            let old = diff.old_text.as_deref().unwrap_or("");
+            Some(format!(
+                "diff {path}:\n--- old ---\n{old}\n--- new ---\n{}",
+                diff.new_text
+            ))
         }
+        acp::ToolCallContent::Terminal(term) => {
+            Some(format!("terminal {term_id}", term_id = term.terminal_id))
+        }
+        _ => None,
     }
-    parts.join("\n")
 }
 
 fn tool_display_name(call: &acp::ToolCall) -> String {
@@ -267,3 +271,6 @@ fn tool_status_label(status: acp::ToolCallStatus) -> &'static str {
         _ => "updated",
     }
 }
+
+#[cfg(test)]
+include!("tools_tests.rs");

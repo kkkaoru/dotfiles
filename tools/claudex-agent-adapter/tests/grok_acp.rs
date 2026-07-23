@@ -261,9 +261,7 @@ async fn dropping_http_stream_cancels_the_active_acp_prompt() {
         backend,
         "cancellable-turns".to_owned(),
     ));
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}/v1/messages", listener.local_addr().unwrap());
     let server = tokio::spawn(async move {
         axum::serve(
@@ -330,9 +328,7 @@ async fn disconnect_during_effort_setup_does_not_submit_or_cancel_a_prompt() {
         backend,
         "blocked-effort".to_owned(),
     ));
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}/v1/messages", listener.local_addr().unwrap());
     let server = tokio::spawn(async move {
         axum::serve(
@@ -382,9 +378,11 @@ async fn disconnect_during_effort_setup_does_not_submit_or_cancel_a_prompt() {
 
     let trace = read_trace(&trace_path);
     assert!(!trace.iter().any(|event| event.get("cancel").is_some()));
-    assert!(!trace.iter().any(|event| {
-        event.pointer("/prompt/sessionId") == Some(&json!("grok-session-1"))
-    }));
+    assert!(
+        !trace
+            .iter()
+            .any(|event| { event.pointer("/prompt/sessionId") == Some(&json!("grok-session-1")) })
+    );
     server.abort();
 }
 
@@ -401,12 +399,9 @@ async fn ignored_setup_invalidates_only_that_session_and_recovers_capacity() {
     let mut queued = spawn_queued_turn(Arc::clone(&agent), next_id);
     assert_still_queued(&mut queued, "turn started without available capacity").await;
 
-    let error = cancel_blocked_setup_and_expect_timeout(
-        Arc::clone(&agent),
-        setup_id.clone(),
-        &mut queued,
-    )
-    .await;
+    let error =
+        cancel_blocked_setup_and_expect_timeout(Arc::clone(&agent), setup_id.clone(), &mut queued)
+            .await;
     assert!(
         error
             .to_string()
@@ -415,7 +410,11 @@ async fn ignored_setup_invalidates_only_that_session_and_recovers_capacity() {
     assert_setup_timeout_event(&setup_events).await;
     await_queued_turn_completion(&mut queued, &next_events).await;
     assert_session_invalidated(&agent, &setup_id).await;
-    assert!(!read_trace(&trace_path).iter().any(|event| event.get("cancel").is_some()));
+    assert!(
+        !read_trace(&trace_path)
+            .iter()
+            .any(|event| event.get("cancel").is_some())
+    );
 }
 
 async fn start_blocked_setup(
@@ -522,7 +521,10 @@ async fn await_queued_turn_completion(
         .expect("queued turn did not recover released capacity")
         .expect("queued turn task failed")
         .expect("queued turn start failed");
-    assert_eq!(recv(next_events).await["params"]["delta"], "GROK_ACP_STREAM_OK");
+    assert_eq!(
+        recv(next_events).await["params"]["delta"],
+        "GROK_ACP_STREAM_OK"
+    );
     assert_eq!(
         recv(next_events).await["params"]["turn"]["status"],
         "completed"
@@ -646,7 +648,10 @@ async fn ignored_cancellation_invalidates_only_that_session_and_recovers_capacit
         .expect("queued turn did not recover released capacity")
         .expect("queued turn task failed")
         .expect("queued turn start failed");
-    assert_eq!(recv(&next_events).await["params"]["delta"], "GROK_ACP_STREAM_OK");
+    assert_eq!(
+        recv(&next_events).await["params"]["delta"],
+        "GROK_ACP_STREAM_OK"
+    );
     assert_eq!(
         recv(&next_events).await["params"]["turn"]["status"],
         "completed"

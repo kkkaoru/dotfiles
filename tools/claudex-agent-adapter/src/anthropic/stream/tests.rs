@@ -197,7 +197,10 @@ async fn activity_keepalive_uses_open_text_when_visible_output_started() {
     let segment = builder.finish(Some(&sender)).await.expect("segment");
     drop(sender);
 
-    assert_eq!(segment.blocks[0], json!({"type":"text","text":"hi\u{200b}"}));
+    assert_eq!(
+        segment.blocks[0],
+        json!({"type":"text","text":"hi\u{200b}"})
+    );
     let mut saw_zwsp = false;
     while let Some(frame) = receiver.recv().await {
         let frame = String::from_utf8(frame.expect("frame").to_vec()).expect("UTF-8 SSE");
@@ -206,6 +209,37 @@ async fn activity_keepalive_uses_open_text_when_visible_output_started() {
         }
     }
     assert!(saw_zwsp, "expected a zero-width text_delta keepalive frame");
+}
+
+#[tokio::test]
+async fn refreshes_activity_deadlines_and_detects_closed_streams() {
+    let (sender, receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
+    let mut builder = SegmentBuilder::new(1);
+    let mut deadline = Box::pin(tokio::time::sleep(std::time::Duration::from_secs(1)));
+    super::refresh_activity_keepalive(&mut builder, &sender, deadline.as_mut())
+        .await
+        .expect("activity keepalive");
+    assert!(!deadline.is_elapsed());
+
+    let (_root, app, bridge, session) = disconnect_fixture().await;
+    let events = app.subscribe_thread("thread");
+    assert!(
+        !bridge
+            .finish_if_stream_closed(&sender, &session, &events, true)
+            .await
+    );
+    drop(receiver);
+    assert!(
+        bridge
+            .finish_if_stream_closed(&sender, &session, &events, true)
+            .await
+    );
+    super::disconnect::warn_disconnect_failure(
+        &anyhow!("test drain failure"),
+        "thread",
+        "tested disconnect warning",
+    );
+    super::disconnect::warn_cancel_failure(&anyhow!("test cancel failure"), "thread");
 }
 
 #[tokio::test]
@@ -373,6 +407,85 @@ async fn rejects_a_malformed_tool_event_before_dispatch() {
         .await
         .expect_err("malformed tool event");
     assert!(error.to_string().contains("callId missing"));
+}
+
+#[tokio::test]
+async fn drains_pending_and_new_tools_after_a_stream_disconnect() {
+    let (root, app, bridge, session) = disconnect_fixture().await;
+    let events = app.subscribe_thread("thread");
+    session
+        .pending_tools
+        .lock()
+        .await
+        .insert("pending".to_owned(), json!(41));
+    *session.pending_since.lock().unwrap() = Some(Instant::now());
+    app.dispatch_test_event(json!({
+        "id":42,"method":"item/tool/call",
+        "params":{"threadId":"thread","callId":"new","tool":"Read"}
+    }));
+    app.dispatch_test_event(json!({
+        "method":"error","params":{"threadId":"thread","willRetry":true}
+    }));
+    app.dispatch_test_event(json!({
+        "method":"turn/completed","params":{"threadId":"thread","turn":{"status":"completed"}}
+    }));
+
+    assert!(matches!(
+        bridge.disconnect_stream(&session, &events).await,
+        super::StreamTurn::Disconnected
+    ));
+    assert!(session.pending_tools.lock().await.is_empty());
+    assert!(session.pending_since.lock().unwrap().is_none());
+    bridge.finish_closed_stream(&session, &events, true).await;
+    drop(root);
+}
+
+#[tokio::test]
+async fn tolerates_a_drain_error_after_stream_disconnect() {
+    let (_root, app, bridge, session) = disconnect_fixture().await;
+    let events = app.subscribe_thread("thread");
+    app.dispatch_test_event(json!({
+        "method":"error","params":{"threadId":"thread","message":"fatal"}
+    }));
+    bridge.finish_closed_stream(&session, &events, false).await;
+}
+
+async fn disconnect_fixture() -> (tempfile::TempDir, Arc<AppServer>, Bridge, Arc<Session>) {
+    let root = tempfile::tempdir().expect("disconnect fixture");
+    let source = root.path().join("source");
+    std::fs::create_dir(&source).expect("source home");
+    std::fs::write(source.join("auth.json"), "{}").expect("source auth");
+    let program = root.path().join("mock-app-server");
+    std::fs::write(
+        &program,
+        "#!/bin/sh\nread line\nprintf '%s\\n' '{\"id\":1,\"result\":{}}'\nwhile read line; do :; done\n",
+    )
+    .expect("mock app-server");
+    let mut permissions = std::fs::metadata(&program).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&program, permissions).unwrap();
+    let app =
+        AppServer::spawn_with_program("main", &program, &source, &root.path().join("isolated"))
+            .await
+            .expect("start mock app-server");
+    let bridge = Bridge::new(Arc::clone(&app), "main".to_owned());
+    let slots = Arc::new(Semaphore::new(1));
+    let session = Arc::new(Session {
+        thread_id: "thread".to_owned(),
+        model: "main".to_owned(),
+        signature: Arc::from("signature"),
+        transcript: Mutex::new(Vec::new()),
+        pending_tools: Mutex::new(HashMap::new()),
+        consumed_tool_ids: Mutex::new(HashSet::new()),
+        internal_tools: HashMap::new(),
+        external_tool_names: HashMap::new(),
+        client_user_id: None,
+        gate: Arc::new(Mutex::new(())),
+        last_activity: std::sync::Mutex::new(Instant::now()),
+        pending_since: std::sync::Mutex::new(None),
+        _slot: slots.try_acquire_owned().expect("session slot"),
+    });
+    (root, app, bridge, session)
 }
 
 #[test]

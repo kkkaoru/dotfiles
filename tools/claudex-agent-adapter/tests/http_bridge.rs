@@ -236,10 +236,7 @@ async fn drains_a_non_cancellable_codex_turn_after_stream_disconnect() {
         }),
     )
     .await;
-    assert_eq!(
-        report["content"][0]["text"],
-        "CODEX_DISCONNECT_DRAINED"
-    );
+    assert_eq!(report["content"][0]["text"], "CODEX_DISCONNECT_DRAINED");
 }
 
 #[tokio::test]

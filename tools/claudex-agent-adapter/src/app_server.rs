@@ -133,6 +133,11 @@ impl AppServer {
         self.event_dispatcher.subscribe(thread_id)
     }
 
+    #[cfg(test)]
+    pub(crate) fn dispatch_test_event(&self, event: Value) {
+        self.event_dispatcher.dispatch(event);
+    }
+
     pub fn is_alive(&self) -> bool {
         self.alive.load(Ordering::Relaxed)
     }

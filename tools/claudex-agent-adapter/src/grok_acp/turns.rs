@@ -28,11 +28,10 @@ pub(super) struct PreparedTurn {
 }
 
 pub(super) struct CancelRequest {
-    response: oneshot::Sender<Result<()>>,
+    pub(super) response: oneshot::Sender<Result<()>>,
 }
 
-pub(super) type ActiveTurns =
-    Rc<RefCell<HashMap<String, Option<oneshot::Sender<CancelRequest>>>>>;
+pub(super) type ActiveTurns = Rc<RefCell<HashMap<String, Option<oneshot::Sender<CancelRequest>>>>>;
 pub(super) type InvalidatedSessions = Rc<RefCell<HashSet<String>>>;
 
 pub(super) async fn queue_turn(
@@ -166,10 +165,8 @@ pub(super) async fn drive_turns(
     .await;
 }
 
-pub(super) async fn drive_turn_tasks<F, Fut>(
-    mut turns: mpsc::Receiver<PreparedTurn>,
-    mut start: F,
-) where
+pub(super) async fn drive_turn_tasks<F, Fut>(mut turns: mpsc::Receiver<PreparedTurn>, mut start: F)
+where
     F: FnMut(PreparedTurn) -> Fut,
     Fut: Future<Output = ()> + 'static,
 {

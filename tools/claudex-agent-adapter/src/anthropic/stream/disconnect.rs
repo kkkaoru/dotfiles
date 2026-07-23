@@ -33,19 +33,15 @@ impl Bridge {
             Ok(TurnCancellation::Settled) => {}
             Ok(TurnCancellation::Unsupported) => {
                 if let Err(error) = self.drain_disconnected_turn(session, events).await {
-                    tracing::warn!(
-                        %error,
-                        thread_id = %session.thread_id,
-                        "failed to drain disconnected non-cancellable turn"
+                    warn_disconnect_failure(
+                        &error,
+                        &session.thread_id,
+                        "failed to drain disconnected non-cancellable turn",
                     );
                 }
             }
             Err(error) => {
-                tracing::warn!(
-                    %error,
-                    thread_id = %session.thread_id,
-                    "failed to cancel disconnected streaming turn"
-                );
+                warn_cancel_failure(&error, &session.thread_id);
             }
         }
         StreamTurn::Disconnected
@@ -118,4 +114,16 @@ impl Bridge {
             .await
             .context("failed to reject a tool call from a disconnected turn")
     }
+}
+
+pub(super) fn warn_disconnect_failure(error: &anyhow::Error, thread_id: &str, message: &str) {
+    tracing::warn!(%error, thread_id, message);
+}
+
+pub(super) fn warn_cancel_failure(error: &anyhow::Error, thread_id: &str) {
+    warn_disconnect_failure(
+        error,
+        thread_id,
+        "failed to cancel disconnected streaming turn",
+    );
 }

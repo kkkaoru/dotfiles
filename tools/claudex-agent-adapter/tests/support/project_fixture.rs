@@ -12,10 +12,7 @@ pub(crate) struct ProjectFixture {
 impl ProjectFixture {
     pub(crate) fn new(label: &str) -> Self {
         let id = NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed);
-        let path = PathBuf::from("target/t").join(format!(
-            "{}-{id}-{label}",
-            std::process::id()
-        ));
+        let path = PathBuf::from("target/t").join(format!("{}-{id}-{label}", std::process::id()));
         std::fs::create_dir_all(&path).expect("create project-local test fixture");
         Self { path }
     }

@@ -197,7 +197,8 @@ fn write_provider_wrapper(
 }
 
 async fn wait_for_start(path: &Path) {
-    for _ in 0..100 {
+    // Instrumented coverage binaries can take longer to reach lazy provider startup.
+    for _ in 0..300 {
         if start_count(path) > 0 {
             return;
         }

@@ -106,11 +106,8 @@ pub(super) fn finish_setup_cancellation(
     dispatch_turn_terminal(events, session_id, "cancelled");
 }
 
-pub(super) async fn cancel_setup<F, T>(
-    ctx: CancelCtx<'_>,
-    active_turns: &ActiveTurns,
-    setup: F,
-) where
+pub(super) async fn cancel_setup<F, T>(ctx: CancelCtx<'_>, active_turns: &ActiveTurns, setup: F)
+where
     F: Future<Output = T>,
 {
     let policy = SettlementPolicy::default();
@@ -157,12 +154,7 @@ pub(super) async fn cancel_prompt<F>(
             "{} ACP session/cancel failed: {error:?}",
             ctx.provider.label()
         );
-        ctx.invalidated_sessions
-            .borrow_mut()
-            .insert(ctx.session_id.to_owned());
-        drop(ctx.permit);
-        let _ = ctx.cancellation.response.send(Err(anyhow!(message.clone())));
-        updates::dispatch_error(ctx.events, ctx.session_id, message);
+        fail_cancellation(ctx, message, true);
         return;
     }
     let policy = SettlementPolicy::default();
@@ -190,10 +182,7 @@ pub(super) async fn cancel_prompt<F>(
     settle_cancelled_prompt(ctx, response);
 }
 
-fn settle_cancelled_prompt(
-    ctx: CancelCtx<'_>,
-    response: acp::Result<acp::PromptResponse>,
-) {
+fn settle_cancelled_prompt(ctx: CancelCtx<'_>, response: acp::Result<acp::PromptResponse>) {
     match response {
         Ok(response) if response.stop_reason == acp::StopReason::Cancelled => {
             drop(ctx.permit);
@@ -215,9 +204,24 @@ fn settle_cancelled_prompt(
                 "{} ACP cancelled prompt failed to settle: {error:?}",
                 ctx.provider.label()
             );
-            drop(ctx.permit);
-            let _ = ctx.cancellation.response.send(Err(anyhow!(message.clone())));
-            updates::dispatch_error(ctx.events, ctx.session_id, message);
+            fail_cancellation(ctx, message, false);
         }
     }
 }
+
+fn fail_cancellation(ctx: CancelCtx<'_>, message: String, invalidate: bool) {
+    if invalidate {
+        ctx.invalidated_sessions
+            .borrow_mut()
+            .insert(ctx.session_id.to_owned());
+    }
+    drop(ctx.permit);
+    let _ = ctx
+        .cancellation
+        .response
+        .send(Err(anyhow!(message.clone())));
+    updates::dispatch_error(ctx.events, ctx.session_id, message);
+}
+
+#[cfg(test)]
+include!("cancellation_tests.rs");

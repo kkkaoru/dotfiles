@@ -140,8 +140,7 @@ async fn isolates_parallel_sessions_across_worker_threads_and_backends() {
             let response = parallel_request(&grok_url, "grok-model", grok_index).await;
             assert_eq!(response_text(&response), "GROK_ACP_STREAM_OK");
         });
-        tokio::try_join!(codex_task, grok_task)
-            .expect("mixed Codex/Grok pair must complete");
+        tokio::try_join!(codex_task, grok_task).expect("mixed Codex/Grok pair must complete");
     }
     server.abort();
 }

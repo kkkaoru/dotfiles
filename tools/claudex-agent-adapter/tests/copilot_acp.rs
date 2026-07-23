@@ -84,6 +84,10 @@ async fn routes_a_selected_model_through_copilot_cli_acp() {
     )
     .await
     .expect("start Copilot ACP mock");
+    agent
+        .cancel_turn("missing-session")
+        .await
+        .expect("cancel an absent Copilot turn");
     let copilot = AgentBackend::copilot(agent);
     assert!(copilot.is_alive());
     assert_eq!(copilot.kind().to_string(), "copilot-acp");

@@ -31,6 +31,8 @@ pub(super) use protocol::tool_use_frames;
 use protocol::{StreamSender, send_stream_completion, send_stream_error, sse_response};
 pub(super) use protocol::{message_start, send_stream_frame, streaming_sse_response};
 
+const ACTIVITY_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(45);
+
 struct ToolCall<'a> {
     call_id: &'a str,
     name: &'a str,
@@ -125,17 +127,16 @@ impl Bridge {
                 segment,
                 provider_settled,
             }) => {
-                if sender.is_closed() {
-                    self.finish_closed_stream(&session, &events, provider_settled)
-                        .await;
+                if self
+                    .finish_if_stream_closed(&sender, &session, &events, provider_settled)
+                    .await
+                {
                     return;
                 }
                 commit_transcript(&session, extras, &segment).await;
                 send_stream_completion(&sender, &segment).await;
-                if sender.is_closed() {
-                    self.finish_closed_stream(&session, &events, provider_settled)
-                        .await;
-                }
+                self.finish_if_stream_closed(&sender, &session, &events, provider_settled)
+                    .await;
             }
             Ok(StreamTurn::Disconnected) => {}
             Err(error) => {
@@ -156,10 +157,8 @@ impl Bridge {
         // Claude Code's decoded-event idle watchdog is ~300s. Anthropic `ping`
         // frames only satisfy the ~180s raw-byte watchdog, so emit a content
         // delta after provider silence well under that ceiling.
-        const ACTIVITY_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(45);
         let mut builder = SegmentBuilder::new(input_tokens);
-        let mut activity_deadline =
-            Box::pin(sleep(ACTIVITY_KEEPALIVE_INTERVAL));
+        let mut activity_deadline = Box::pin(sleep(ACTIVITY_KEEPALIVE_INTERVAL));
         loop {
             let next = tokio::select! {
                 biased;
@@ -167,10 +166,8 @@ impl Bridge {
                     return Ok(self.disconnect_stream(session, events).await);
                 }
                 () = &mut activity_deadline => {
-                    builder.activity_keepalive(Some(sender)).await?;
-                    activity_deadline
-                        .as_mut()
-                        .reset(Instant::now() + ACTIVITY_KEEPALIVE_INTERVAL);
+                    refresh_activity_keepalive(&mut builder, sender, activity_deadline.as_mut())
+                        .await?;
                     continue;
                 }
                 next = next_event(events, builder.has_external_tool_calls()) => next,
@@ -198,6 +195,21 @@ impl Bridge {
                 });
             }
         }
+    }
+
+    async fn finish_if_stream_closed(
+        &self,
+        sender: &StreamSender,
+        session: &Arc<Session>,
+        events: &crate::app_server::ThreadEvents,
+        provider_settled: bool,
+    ) -> bool {
+        if !sender.is_closed() {
+            return false;
+        }
+        self.finish_closed_stream(session, events, provider_settled)
+            .await;
+        true
     }
 
     async fn external_batch_segment(
@@ -283,6 +295,18 @@ impl Bridge {
             }
         });
     }
+}
+
+async fn refresh_activity_keepalive(
+    builder: &mut SegmentBuilder,
+    sender: &StreamSender,
+    mut deadline: std::pin::Pin<&mut tokio::time::Sleep>,
+) -> Result<()> {
+    builder.activity_keepalive(Some(sender)).await?;
+    deadline
+        .as_mut()
+        .reset(Instant::now() + ACTIVITY_KEEPALIVE_INTERVAL);
+    Ok(())
 }
 
 pub(super) fn turn_flow(event: &Value) -> Result<ControlFlow<()>> {

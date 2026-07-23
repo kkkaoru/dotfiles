@@ -5,7 +5,11 @@ use serde_json::{json, value::RawValue};
 
 use super::{
     COMMAND_QUEUE_CAPACITY, DriverCommand, GrokAcp, PreparedTurn, TURN_QUEUE_CAPACITY,
-    client::AcpClient, prompt, turns::drive_turn_tasks, updates,
+    client::AcpClient,
+    connection::AcpProvider,
+    prompt,
+    turns::{ActiveTurns, InvalidatedSessions, cancel_turn, drive_turn_tasks, queue_turn},
+    updates,
 };
 use crate::app_server::events::ThreadEventDispatcher;
 
@@ -149,6 +153,95 @@ async fn bounded_queues_apply_backpressure_at_fixed_capacities() {
     );
     turn_receiver.recv().await.unwrap();
     assert!(Arc::clone(&permits).acquire_owned().await.is_ok());
+}
+
+#[tokio::test]
+async fn rejects_invalid_duplicate_and_unavailable_turn_queues() {
+    let permits = Arc::new(tokio::sync::Semaphore::new(3));
+    let instructions = std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()));
+    let active = ActiveTurns::default();
+    let invalidated = InvalidatedSessions::default();
+    invalidated.borrow_mut().insert("invalid".to_owned());
+    let (turns, receiver) = tokio::sync::mpsc::channel(1);
+    let params = |id| json!({"threadId":id,"input":"prompt"});
+
+    assert!(
+        queue_turn(
+            AcpProvider::Grok,
+            params("invalid"),
+            Arc::clone(&permits).acquire_owned().await.unwrap(),
+            &instructions,
+            &turns,
+            &active,
+            &invalidated,
+        )
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("invalidated")
+    );
+    active.borrow_mut().insert("duplicate".to_owned(), None);
+    assert!(
+        queue_turn(
+            AcpProvider::Copilot,
+            params("duplicate"),
+            Arc::clone(&permits).acquire_owned().await.unwrap(),
+            &instructions,
+            &turns,
+            &active,
+            &invalidated,
+        )
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("active turn")
+    );
+    drop(receiver);
+    assert!(
+        queue_turn(
+            AcpProvider::Grok,
+            params("closed"),
+            Arc::clone(&permits).acquire_owned().await.unwrap(),
+            &instructions,
+            &turns,
+            &active,
+            &invalidated,
+        )
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("unavailable")
+    );
+}
+
+#[tokio::test]
+async fn handles_absent_repeated_and_dropped_turn_cancellations() {
+    let active = ActiveTurns::default();
+    let (response, result) = tokio::sync::oneshot::channel();
+    cancel_turn(&active, "missing", response);
+    assert!(result.await.unwrap().is_ok());
+
+    let (cancel, cancel_rx) = tokio::sync::oneshot::channel();
+    active
+        .borrow_mut()
+        .insert("active".to_owned(), Some(cancel));
+    let (first, first_result) = tokio::sync::oneshot::channel();
+    cancel_turn(&active, "active", first);
+    let request = cancel_rx.await.unwrap();
+    request.response.send(Ok(())).unwrap();
+    assert!(first_result.await.unwrap().is_ok());
+    let (second, second_result) = tokio::sync::oneshot::channel();
+    cancel_turn(&active, "active", second);
+    assert!(second_result.await.unwrap().is_err());
+
+    let (dropped, dropped_rx) = tokio::sync::oneshot::channel();
+    drop(dropped_rx);
+    active
+        .borrow_mut()
+        .insert("dropped".to_owned(), Some(dropped));
+    let (response, result) = tokio::sync::oneshot::channel();
+    cancel_turn(&active, "dropped", response);
+    assert!(result.await.unwrap().is_ok());
 }
 
 #[tokio::test(flavor = "current_thread")]

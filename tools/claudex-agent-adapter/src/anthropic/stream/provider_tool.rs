@@ -22,10 +22,7 @@ impl SegmentBuilder {
             .get("callId")
             .and_then(Value::as_str)
             .context("provider tool callId missing")?;
-        let name = params
-            .get("tool")
-            .and_then(Value::as_str)
-            .unwrap_or("Tool");
+        let name = params.get("tool").and_then(Value::as_str).unwrap_or("Tool");
         let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
         let tool_use_id = format!("toolu_provider_{}", call_id.replace(':', "_"));
         self.close_open_blocks(stream).await?;
@@ -68,13 +65,11 @@ impl SegmentBuilder {
                     .await?;
             }
             "completed" => {
-                if let Some(output) = params.get("output") {
-                    let detail = output_preview(Some(output), "");
-                    if !detail.is_empty() {
-                        let preview = truncate_for_status(&detail, 240);
-                        self.append_text(&format!("\n✓ {title}: {preview}\n"), stream)
-                            .await?;
-                    }
+                let detail = output_preview(params.get("output"), "");
+                if !detail.is_empty() {
+                    let preview = truncate_for_status(&detail, 240);
+                    self.append_text(&format!("\n✓ {title}: {preview}\n"), stream)
+                        .await?;
                 }
             }
             _ => {}
@@ -126,3 +121,6 @@ fn truncate_for_status(text: &str, max_chars: usize) -> String {
         head
     }
 }
+
+#[cfg(test)]
+include!("provider_tool_tests.rs");

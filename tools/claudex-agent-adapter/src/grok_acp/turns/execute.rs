@@ -108,8 +108,7 @@ async fn apply_effort(
         "reasoningEffort".to_owned(),
         Value::String(effort.to_owned()),
     );
-    let request =
-        acp::SetSessionModelRequest::new(id.clone(), model.to_owned()).meta(Some(meta));
+    let request = acp::SetSessionModelRequest::new(id.clone(), model.to_owned()).meta(Some(meta));
     let setup_started = Rc::new(Cell::new(false));
     let setup = {
         let connection = Rc::clone(connection);
@@ -132,11 +131,12 @@ async fn apply_effort(
         },
         result = &mut setup => result,
     };
+    finish_effort_setup(ctl, setup_result.map(drop))
+}
+
+fn finish_effort_setup(ctl: &mut TurnCtl<'_>, setup_result: acp::Result<()>) -> bool {
     if let Err(error) = setup_result {
-        let message = format!(
-            "{} ACP set effort failed: {error:?}",
-            ctl.provider.label()
-        );
+        let message = format!("{} ACP set effort failed: {error:?}", ctl.provider.label());
         drop(ctl.permit.take());
         ctl.active_turns.borrow_mut().remove(ctl.session_id);
         if let Ok(cancellation) = ctl.cancellation.try_recv() {
@@ -239,18 +239,16 @@ async fn handle_prompt_cancellation<F>(
 ) where
     F: Future<Output = acp::Result<acp::PromptResponse>>,
 {
-    let permit = ctl.take_permit();
     if prompt_started {
+        let permit = ctl.take_permit();
         cancel_prompt(ctl.cancel_ctx(permit, cancellation), connection, prompt).await;
         return;
     }
-    finish_setup_cancellation(
-        ctl.session_id,
-        permit,
-        cancellation,
-        ctl.events,
-        ctl.active_turns,
-    );
+    finish_unstarted_prompt(ctl, cancellation);
+}
+
+fn finish_unstarted_prompt(ctl: &mut TurnCtl<'_>, cancellation: CancelRequest) {
+    ctl.finish_pre_prompt_cancel(cancellation);
 }
 
 async fn finish_prompt(
@@ -280,3 +278,6 @@ async fn finish_prompt(
         }
     }
 }
+
+#[cfg(test)]
+include!("execute_tests.rs");

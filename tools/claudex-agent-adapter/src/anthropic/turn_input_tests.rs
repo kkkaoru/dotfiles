@@ -1,9 +1,38 @@
 use serde_json::{Value, json};
 
 use super::{
-    MAX_TURN_INPUT_BYTES, TRUNCATED_HISTORY_HEADER, TRUNCATED_INPUT_NOTICE, full_transcript_input,
-    user_input_from_messages,
+    FULL_HISTORY_HEADER, MAX_TURN_INPUT_BYTES, TRUNCATED_HISTORY_HEADER, TRUNCATED_INPUT_NOTICE,
+    bound_input, full_transcript_input, input_bytes, oversized_latest_message,
+    user_input_from_messages, utf8_suffix,
 };
+
+#[test]
+fn handles_small_empty_and_mixed_message_inputs() {
+    let transcript = full_transcript_input(&[
+        json!({"role":"assistant","content":"answer"}),
+        json!({"role":"user","content":"question"}),
+    ]);
+    assert!(
+        transcript[0]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with(FULL_HISTORY_HEADER)
+    );
+    assert_eq!(
+        user_input_from_messages(&[]),
+        vec![json!({"type":"text","text":"Continue."})]
+    );
+    let input = user_input_from_messages(&[
+        json!({"role":"assistant","content":"ignored"}),
+        json!({"role":"user","content":[
+            {"type":"text","text":"visible"},
+            {"type":"image","source":{"type":"base64","media_type":"image/png","data":"abc"}},
+            {"type":"unknown"}
+        ]}),
+    ]);
+    assert_eq!(input[0]["text"], "visible");
+    assert_eq!(input[1]["url"], "data:image/png;base64,abc");
+}
 
 #[test]
 fn bounds_reconstructed_history_at_complete_message_boundaries() {
@@ -71,6 +100,35 @@ fn truncates_one_oversized_latest_message_on_a_utf8_boundary() {
             .unwrap()
             .ends_with("LATEST_SUFFIX")
     );
+}
+
+#[test]
+fn truncates_an_oversized_latest_history_message_and_covers_byte_helpers() {
+    let input = full_transcript_input(&[
+        json!({"role":"assistant","content":"old"}),
+        json!({"role":"user","content":"x".repeat(MAX_TURN_INPUT_BYTES + 1)}),
+    ]);
+    let text = input[0]["text"].as_str().unwrap();
+    assert!(text.starts_with(TRUNCATED_HISTORY_HEADER));
+    assert!(text.contains("truncated_message_suffix"));
+    assert_eq!(oversized_latest_message(None, 10), "[]");
+    assert_eq!(utf8_suffix("short", 10), "short");
+    assert_eq!(utf8_suffix("a界b", 2), "b");
+    assert_eq!(input_bytes(&json!({"url":"abc"})), 3);
+    assert!(input_bytes(&json!({"other":1})) > 0);
+}
+
+#[test]
+fn bounds_non_text_and_exact_budget_inputs() {
+    let oversized = json!({"blob":"x".repeat(MAX_TURN_INPUT_BYTES)});
+    assert_eq!(bound_input(vec![oversized]).len(), 1);
+    let exact_remaining = MAX_TURN_INPUT_BYTES - TRUNCATED_INPUT_NOTICE.len();
+    let bounded = bound_input(vec![
+        json!({"type":"text","text":"p".repeat(TRUNCATED_INPUT_NOTICE.len() + 1)}),
+        json!({"type":"text","text":"x".repeat(exact_remaining)}),
+    ]);
+    assert_eq!(bounded[0]["text"], TRUNCATED_INPUT_NOTICE);
+    assert_eq!(bounded.len(), 2);
 }
 
 fn input_text_bytes(item: &Value) -> usize {

@@ -359,12 +359,7 @@ impl acp::Agent for MockAgent {
         if self.mode == "ignored-cancellation" {
             return Ok(());
         }
-        if let Some(cancelled) = self
-            .cancellable_prompts
-            .borrow()
-            .get(&session_id)
-            .cloned()
-        {
+        if let Some(cancelled) = self.cancellable_prompts.borrow().get(&session_id).cloned() {
             cancelled.notify_one();
         }
         Ok(())
@@ -385,13 +380,11 @@ impl acp::Agent for MockAgent {
         if self.mode == "blocked-effort" {
             let listener = self.setup_release.borrow_mut().take();
             if let Some(listener) = listener {
-                let (mut release, _) = tokio::time::timeout(
-                    std::time::Duration::from_secs(5),
-                    listener.accept(),
-                )
-                .await
-                .map_err(|_| acp::Error::internal_error())?
-                .map_err(|_| acp::Error::internal_error())?;
+                let (mut release, _) =
+                    tokio::time::timeout(std::time::Duration::from_secs(5), listener.accept())
+                        .await
+                        .map_err(|_| acp::Error::internal_error())?
+                        .map_err(|_| acp::Error::internal_error())?;
                 self.record("set_model_blocked", &request)?;
                 let mut signal = [0];
                 tokio::time::timeout(
@@ -415,10 +408,7 @@ async fn main() -> acp::Result<()> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     let mode = args.get(1).cloned().unwrap_or_default();
     let setup_release = if mode == "blocked-effort" {
-        Some(
-            UnixListener::bind(SETUP_RELEASE_SOCKET)
-                .map_err(|_| acp::Error::internal_error())?,
-        )
+        Some(UnixListener::bind(SETUP_RELEASE_SOCKET).map_err(|_| acp::Error::internal_error())?)
     } else {
         None
     };

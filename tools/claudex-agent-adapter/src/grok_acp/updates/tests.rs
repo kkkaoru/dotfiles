@@ -9,11 +9,10 @@ use crate::app_server::events::{ThreadEventDispatcher, ThreadEvents};
 
 async fn drain(receiver: &ThreadEvents) -> Vec<serde_json::Value> {
     let mut out = Vec::new();
-    loop {
-        match tokio::time::timeout(Duration::from_millis(100), receiver.recv()).await {
-            Ok(Some(event)) => out.push(event),
-            Ok(None) | Err(_) => break,
-        }
+    while let Ok(Some(event)) =
+        tokio::time::timeout(Duration::from_millis(100), receiver.recv()).await
+    {
+        out.push(event);
     }
     out
 }
@@ -149,6 +148,27 @@ async fn forwards_plan_as_checklist_text() {
     assert!(text.contains("Plan:"), "text={text}");
     assert!(text.contains("Investigate"), "text={text}");
     assert!(text.contains("Implement"), "text={text}");
+}
+
+#[tokio::test]
+async fn forwards_mode_and_nonempty_session_titles_only() {
+    let events = ThreadEventDispatcher::default();
+    let receiver = events.subscribe("session");
+    for update in [
+        acp::SessionUpdate::CurrentModeUpdate(acp::CurrentModeUpdate::new("review")),
+        acp::SessionUpdate::SessionInfoUpdate(acp::SessionInfoUpdate::new().title("Work")),
+        acp::SessionUpdate::SessionInfoUpdate(acp::SessionInfoUpdate::new().title("")),
+        acp::SessionUpdate::SessionInfoUpdate(acp::SessionInfoUpdate::new()),
+    ] {
+        dispatch_notification(&events, acp::SessionNotification::new("session", update));
+    }
+    let text: String = drain(&receiver)
+        .await
+        .iter()
+        .filter_map(|event| event["params"]["delta"].as_str())
+        .collect();
+    assert!(text.contains("review"));
+    assert!(text.contains("Work"));
 }
 
 #[test]

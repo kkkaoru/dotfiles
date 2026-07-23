@@ -123,10 +123,7 @@ impl SegmentBuilder {
 
     /// Keep Claude Code's decoded-event idle watchdog alive during provider
     /// silence (long Grok/Codex tool runs with no model tokens).
-    pub(super) async fn activity_keepalive(
-        &mut self,
-        stream: Option<&StreamSender>,
-    ) -> Result<()> {
+    pub(super) async fn activity_keepalive(&mut self, stream: Option<&StreamSender>) -> Result<()> {
         const HEARTBEAT: &str = "\u{200b}";
         if let Some((index, text)) = &mut self.open_text_block {
             text.push_str(HEARTBEAT);

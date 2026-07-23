@@ -231,10 +231,7 @@ mod lazy_tests {
             .expect("ping deadline")
             .expect("ping frame")
             .expect("infallible frame");
-        assert_eq!(
-            ping.as_ref(),
-            b"event: ping\ndata: {\"type\":\"ping\"}\n\n"
-        );
+        assert_eq!(ping.as_ref(), b"event: ping\ndata: {\"type\":\"ping\"}\n\n");
 
         let completion = Bytes::from_static(b"event: message_stop\ndata: {}\n\n");
         sender
@@ -276,7 +273,9 @@ mod lazy_tests {
             .expect("bind SSE listener");
         let address = listener.local_addr().expect("SSE listener address");
         let server = tokio::spawn(async move {
-            axum::serve(listener, app).await.expect("serve SSE response");
+            axum::serve(listener, app)
+                .await
+                .expect("serve SSE response");
         });
 
         let mut client = tokio::net::TcpStream::connect(address)
@@ -294,8 +293,7 @@ mod lazy_tests {
         let _ = server.await;
     }
 
-    type PingReceiver =
-        Arc<tokio::sync::Mutex<Option<mpsc::Receiver<Result<Bytes, Infallible>>>>>;
+    type PingReceiver = Arc<tokio::sync::Mutex<Option<mpsc::Receiver<Result<Bytes, Infallible>>>>>;
 
     async fn take_ping_response(receiver: PingReceiver) -> Response<Body> {
         let receiver = receiver
