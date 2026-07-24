@@ -52,5 +52,6 @@ object:
 
 Arguments are passed directly without a shell, and every `{model}` occurrence is replaced with the
 selected model. The provider's `agent` must name a Claude Code agent definition. Keep that agent's
-frontmatter defaults aligned with `defaultModel` and `effort` so direct manual invocation remains
-safe; claudex orchestration passes the config values explicitly.
+frontmatter model set to `inherit`; claudex orchestration passes the config model and effort
+explicitly. Pinning a provider model in the Agent definition can trigger Claude Code's native model
+validation before the adapter receives the request.

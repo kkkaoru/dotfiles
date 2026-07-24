@@ -1,5 +1,8 @@
 # claudex agent adapter
 
+For end-user setup, cross-Mac installation, routing configuration, and daily usage, see the
+[Claudex guide](../../.config/claudex/README.md).
+
 This local Rust service presents the subset of Anthropic's Messages API used by
 Claude Code and routes it to built-in or config-defined agent backends:
 

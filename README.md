@@ -1,5 +1,10 @@
 # Setup with Dotfiles
 
+## Claudex
+
+Claude CodeからCodex、Grok、Claude fallback、advisorを動的に使い分ける環境の導入と
+使い方は[Claudex README](.config/claudex/README.md)を参照してください。
+
 ## Create sym links
 
 ```sh

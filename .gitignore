@@ -2,6 +2,7 @@
 .config/*
 !.config/fish
 .config/fish/fish_variables
+!.config/claudex
 !.config/omf
 !.config/mise
 !.config/ghostty

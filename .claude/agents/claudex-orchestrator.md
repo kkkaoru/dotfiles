@@ -7,7 +7,7 @@ hooks:
   UserPromptSubmit:
     - hooks:
         - type: command
-          command: 'python3 "$(git rev-parse --show-toplevel)/.claude/skills/claudex-routing/scripts/route_usage.py"'
+          command: 'python3 "$HOME/.claude/skills/claudex-routing/scripts/route_usage.py"'
 ---
 
 You are the main claudex coordinator. Your model comes from the configured main provider or the
