@@ -1,5 +1,10 @@
 function herdr-cwd --description "Open a Herdr workspace for the current directory path"
-    argparse -i 'd/directory-session' -- $argv; or return 2
+    argparse -i 's/sync' 'd/directory-session' -- $argv; or return 2
+
+    if set -q _flag_sync; and set -q _flag_directory_session
+        echo "hdr: --sync and --directory-session cannot be used together" >&2
+        return 2
+    end
 
     set -l real_pwd (pwd -P)
     set -l dir_name (basename "$real_pwd")
@@ -7,7 +12,11 @@ function herdr-cwd --description "Open a Herdr workspace for the current directo
     set -l path_hash (printf '%s' "$real_pwd" | cksum | string split ' ' | head -n 1 | string sub -l 8)
     set -l workspace_label "$safe_dir-$path_hash"
 
-    set -q _flag_directory_session; and set -p argv --session "$workspace_label"
+    # Keep the existing persistent, per-directory session as an explicit mode.
+    if set -q _flag_directory_session
+        command herdr --session "$workspace_label" $argv
+        return $status
+    end
 
     # Keep Herdr's normal CLI behavior when options or subcommands are supplied.
     if test (count $argv) -gt 0
@@ -15,6 +24,8 @@ function herdr-cwd --description "Open a Herdr workspace for the current directo
         return $status
     end
 
+    # No option (or --sync) uses the shared default session and its path-based
+    # workspaces, matching hdr's behavior before session-mode options existed.
     set -l workspace_json (command herdr workspace list 2>/dev/null)
     if test $status -ne 0
         # The first launch creates its initial workspace in the current directory.

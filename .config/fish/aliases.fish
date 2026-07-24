@@ -35,3 +35,4 @@ alias git-commit-claude='claude --dangerously-skip-permissions --model "claude-h
 alias zj='zellij-cwd'
 alias hdr='herdr-cwd'
 alias hkw='worktree-hunk'
+alias wt='worktree-hunk'
