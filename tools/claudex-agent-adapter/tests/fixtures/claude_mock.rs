@@ -34,7 +34,9 @@ fn main() {
         );
         return;
     }
-    let result = if prompt.contains("SUBSCRIPTION_ROUTE") {
+    let result = if prompt.contains("SUBSCRIPTION_EMPTY") {
+        String::new()
+    } else if prompt.contains("SUBSCRIPTION_ROUTE") {
         format!(
             "{}|{}|{}|{}|{}",
             argument(&arguments, "--model"),

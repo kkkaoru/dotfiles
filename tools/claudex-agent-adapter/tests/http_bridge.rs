@@ -587,6 +587,27 @@ async fn routes_non_main_models_to_subscription_with_requested_effort() {
     assert!(!stream.contains("Claudex is still working"));
     assert!(!stream.contains(r#""type":"thinking""#));
 
+    let empty_started = Instant::now();
+    let empty = client
+        .post(messages_url(&adapter))
+        .json(&json!({
+            "model":"test-sonnet-model", "stream":true,
+            "system":system,
+            "messages":[{"role":"user","content":"SUBSCRIPTION_EMPTY"}]
+        }))
+        .send()
+        .await
+        .expect("request empty subscription stream")
+        .text()
+        .await
+        .expect("read empty subscription stream");
+    assert!(empty_started.elapsed() < Duration::from_millis(500));
+    assert!(empty.contains(r#""text":"""#));
+    assert!(empty.contains("event: message_stop"));
+    assert!(!empty.contains("Claudex is still working"));
+    assert!(!empty.contains(r#""type":"thinking""#));
+
+    let failure_started = Instant::now();
     let failure = client
         .post(messages_url(&adapter))
         .json(&json!({
@@ -602,4 +623,7 @@ async fn routes_non_main_models_to_subscription_with_requested_effort() {
         .expect("read failing subscription stream");
     assert!(failure.contains("event: error"));
     assert!(failure.contains("forced subscription failure"));
+    assert!(failure_started.elapsed() < Duration::from_millis(500));
+    assert!(!failure.contains("Claudex is still working"));
+    assert!(!failure.contains(r#""type":"thinking""#));
 }

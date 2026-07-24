@@ -103,6 +103,39 @@ async fn forwards_empty_and_regular_deltas_then_finishes_once() {
 }
 
 #[tokio::test]
+async fn empty_partial_delta_is_not_visible_output_and_remains_eligible_for_status() {
+    let (sender, mut receiver) = channel();
+    let mut stream = SubscriptionStream {
+        text_started: false,
+        text_closed: false,
+        saw_result: false,
+        next_index: 0,
+        tools: Vec::new(),
+        tool_context: None,
+        activity: SubscriptionActivity::default(),
+    };
+    stream
+        .handle_line(
+            &sender,
+            r#"{"type":"stream_event","event":{"delta":{"type":"text_delta","text":""}}}"#,
+        )
+        .await
+        .expect("empty partial delta");
+    assert!(output(&mut receiver).await.is_empty());
+    assert!(!stream.text_started);
+
+    stream
+        .activity_keepalive(&sender)
+        .await
+        .expect("status after continued silence");
+    assert!(
+        output(&mut receiver)
+            .await
+            .contains("Claudex is still working")
+    );
+}
+
+#[tokio::test]
 async fn shows_activity_status_before_delayed_subscription_output() {
     let (sender, mut receiver) = channel();
     let mut stream = SubscriptionStream {
@@ -260,6 +293,19 @@ async fn fast_subscription_result_skips_activity_status_and_requires_result_even
         .expect("immediate text frame");
     assert!(text_frame.contains(r#""index":0"#));
 
+    let (empty_sender, mut empty_receiver) = channel();
+    consume_subscription_stream(
+        child(r#"printf '%s\n' '{"type":"result","subtype":"success","result":""}'"#),
+        &empty_sender,
+    )
+    .await
+    .expect("successful empty subscription stream");
+    let empty = output(&mut empty_receiver).await;
+    assert!(empty.contains(r#""text":"""#));
+    assert!(empty.contains("event: message_stop"));
+    assert!(!empty.contains("Claudex is still working"));
+    assert!(!empty.contains(r#""type":"thinking""#));
+
     let error =
         consume_subscription_stream(child("printf '%s\\n' '{\"type\":\"ignored\"}'"), &sender)
             .await
@@ -269,13 +315,14 @@ async fn fast_subscription_result_skips_activity_status_and_requires_result_even
 
 #[tokio::test]
 async fn reports_process_failure_and_stderr() {
-    let (sender, _receiver) = channel();
+    let (sender, mut receiver) = channel();
     let error = consume_subscription_stream(child("printf 'fixture failure' >&2; exit 7"), &sender)
         .await
         .expect_err("failed process");
     let message = error.to_string();
     assert!(message.contains("fixture failure"));
     assert!(message.contains("exit status"));
+    assert!(output(&mut receiver).await.is_empty());
 }
 
 #[tokio::test]
