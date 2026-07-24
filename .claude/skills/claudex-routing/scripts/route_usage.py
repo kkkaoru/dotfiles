@@ -157,7 +157,9 @@ def hook_output(summary: dict[str, Any]) -> dict[str, Any]:
     """Wrap the routing summary in Claude Code's structured hook response."""
     compact = json.dumps(summary, ensure_ascii=False, separators=(",", ":"))
     instructions = (
-        " Follow claudex-routing: use selected_workers for primary delegation and pass each "
+        " Follow claudex-routing: delegation is the standing default for substantive work unless "
+        "the user opts out; do not wait for them to repeat it or merely announce future delegation. "
+        "Use selected_workers and pass each "
         "worker's model and effort as claudex_model and claudex_effort for every Agent/Task launch, "
         "including nested launches from a worker; never default a nested launch to generic claude "
         "or blindly inherit its parent route. If the user names a "
@@ -168,7 +170,11 @@ def hook_output(summary: dict[str, Any]) -> dict[str, Any]:
         "when explicitly requested or when a complex, ambiguous, or high-risk decision benefits "
         "from strategic review. Start as many instances as useful, but for related follow-ups use "
         "SendMessage with the exact compatible recipient specified by the prior Agent/Task result; "
-        "decide shutdown only after weighing likely reuse and potential cache value against resource pressure."
+        "decide shutdown only after weighing likely reuse and potential cache value against resource pressure. "
+        "Prefer foreground parallel calls when their results are needed now; use background only "
+        "when useful work can continue or the task should outlive the turn. TUI N queued is pending "
+        "main-session input, including human prompts and background notifications, not worker "
+        "capacity, active slots, or SendMessage delivery."
     )
     return {
         "hookSpecificOutput": {

@@ -76,6 +76,19 @@ class ConfigurationTests(unittest.TestCase):
 
 
 class RoutingTests(unittest.TestCase):
+    def test_orchestration_artifacts_keep_delegation_as_the_standing_default(self) -> None:
+        claude_home = Path(__file__).parents[3]
+        for path in [
+            claude_home / "CLAUDE.md",
+            claude_home / "agents" / "claudex-orchestrator.md",
+            Path(__file__).parents[1] / "SKILL.md",
+        ]:
+            instructions = path.read_text(encoding="utf-8")
+            self.assertIn("standing default", instructions, path)
+            self.assertIn("foreground", instructions, path)
+            self.assertIn("N queued", instructions, path)
+            self.assertNotIn("When delegation is requested", instructions, path)
+
     def test_collects_nested_numeric_percentages_only(self) -> None:
         usage = {
             "primary": {"usedPercent": 12},
@@ -126,6 +139,10 @@ class RoutingTests(unittest.TestCase):
         self.assertIn("every Agent/Task launch", context)
         self.assertIn("nested launches from a worker", context)
         self.assertIn("claudex_model and claudex_effort", context)
+        self.assertIn("standing default", context)
+        self.assertIn("do not wait for them to repeat it", context)
+        self.assertIn("TUI N queued", context)
+        self.assertIn("not worker capacity", context)
         self.assertNotIn("account", context)
 
 

@@ -198,6 +198,12 @@ claudex
 sessionの表示名をagent名へ変更しません。adapterの `--inherit-claude-model` を使うため、outer sessionは
 `~/.claude/settings.json` の `model` と `effortLevel` を継承します。
 
+SubAgentへの委譲はsubstantiveな調査・実装・レビューに対する既定動作なので、promptごとに
+繰り返し指定する必要はありません。Claude Codeの `N queued` はmain conversationの次turnへ
+渡す入力数であり、human promptとbackground Agentの完了通知を含みます。workerの実行slot数や
+`SendMessage` の配信待ち数ではありません。現在turnで結果が必要な並列作業はforeground Agent
+呼び出しをまとめて行い、backgroundは結果を待たずに有用な作業を継続できる場合に限定します。
+
 ### Orchestratorのモデルを指定
 
 ```fish

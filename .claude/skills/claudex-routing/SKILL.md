@@ -12,11 +12,12 @@ selected agents; account details from `codexbar` are never retained.
 
 ## Routing policy
 
-1. Delegate substantive work primarily to agents in `selected_workers` with the available
-   SubAgent tool (`Task` in current Claude Code, `Agent` in older versions). Pass their `model` and
-   `effort` values as `claudex_model` and `claudex_effort`.
-   When delegation is explicitly requested and the work is clear, invoke the selected SubAgent in
-   the first response. Do not use task-list bookkeeping merely as a precondition for delegation.
+1. By default, delegate substantive work primarily to agents in `selected_workers` with the
+   available SubAgent tool (`Task` in current Claude Code, `Agent` in older versions), unless the
+   user explicitly opts out. This is the standing default; do not wait for the user to repeat it.
+   Pass each worker's `model` and `effort` as `claudex_model` and `claudex_effort`. When substantive
+   work is clear, invoke the selected SubAgent in the first response rather than merely announcing
+   future delegation. Do not use task-list bookkeeping merely as a precondition for delegation.
 2. If the user explicitly names a model that matches a provider's `model_prefixes`, select that
    provider dynamically and pass the exact requested model. The adapter resolves the matching
    backend lazily.
@@ -26,14 +27,18 @@ selected agents; account details from `codexbar` are never retained.
    Apply this selection to every Agent/Task launch, including nested launches made by an existing
    worker. A nested launch must use the current selected worker's agent and exact model/effort; it
    must not default to generic `claude` or blindly inherit its parent's provider route.
+   When the main session must await results before synthesis, launch independent calls together as
+   foreground calls in one tool round. Use background execution only when useful independent work
+   can continue or the task must outlive the turn; its notifications join the next-turn input queue.
 4. Use the configured fallback only when every capacity-managed provider is unavailable.
 5. Invoke the configured `advisor` in addition to workers when explicitly requested or when a
    complex, ambiguous, high-risk, or consequential decision benefits from strategic review. The
    advisor never replaces an implementation worker and does not depend on provider quota.
 6. Synthesize, verify, and present the subagents' results in the main conversation. Capacity
    selection does not relax repository instructions, safety requirements, or validation gates.
-7. Count delegation as successful only after an actual SubAgent tool result. Never fabricate a
-   selected worker response in the main session; report unavailable execution explicitly.
+7. Agent/Task acceptance proves delegation, not completion. Count delegated work as complete only
+   after an actual worker reply or completion notification. Never fabricate a selected worker
+   response; if execution is unavailable, continue safely in the main session and report it.
 8. Treat worker and advisor lifecycle as a deliberate decision:
    - Reuse a prior instance for a related follow-up when the exact `SendMessage` recipient specified
      by its Agent/Task result (agent ID or teammate name as applicable) is available in the current
@@ -43,7 +48,9 @@ selected agents; account details from `codexbar` are never retained.
      prefix remain reusable.
    - Do not guess a recipient, persist it to memory, or call task-list tools solely to rediscover
      it. A `SendMessage` delivery acknowledgement is not completion evidence; wait for the actual
-     reply or completion notification.
+     reply or completion notification. The TUI's `N queued` is pending main-session input, which may
+     include human prompts and background task notifications—not worker capacity, active slots, or
+     `SendMessage` delivery. The latter reports its own worker-bound delivery status separately.
    - Start a new instance when true concurrency, a clean-room review, an independent second opinion,
      a different route/model/effort/role, incompatible scope or authorization, or an unavailable
      recipient requires it.
