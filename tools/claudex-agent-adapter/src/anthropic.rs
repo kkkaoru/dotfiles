@@ -1,10 +1,13 @@
 mod agent_effort;
+mod agent_routing;
 mod content;
 mod retention;
 mod session;
 mod stream;
 mod stream_batch;
 mod subscription;
+mod subscription_frames;
+mod subscription_request;
 mod subscription_stream;
 mod team_protocol;
 mod turn_input;
@@ -31,7 +34,7 @@ use crate::{
 pub use content::{error_response, token_count};
 pub(crate) use subscription::{DEFAULT_MAX_PROCESSES, DEFAULT_TIMEOUT_MINUTES};
 
-const BRIDGE_INSTRUCTIONS: &str = r"You are the model inside the Claude Code agent harness. Claude Code owns all filesystem, shell, web, MCP, planning, approval, and user-interaction operations. Use only the dynamic tools whose names and schemas were supplied by Claude Code. Do not invoke Codex built-in tools. The Codex app-server sandbox applies only to those disabled built-in tools; never infer from it that Claude Code or its Agent tasks are read-only. Preserve task-specific restrictions that the active user or applicable repository instructions explicitly require, but do not copy restrictions from an unrelated earlier task, investigation lane, teammate report, or closed probe. When the active request authorizes implementation, verification, commit, deployment, or another mutation, preserve that authority in Agent prompts and act through Claude Code's dynamic tools. Do not add or repeatedly announce read-only, no-edit, no-build, no-deploy, or similar restrictions unless they are explicitly active for the current task. In particular, invoke Claude Code's supplied dynamic Agent tool directly; never substitute a Codex collaboration or spawn-agent tool for it. Omit the Agent name field for ordinary SubAgents and parallel delegation. Set name only when the active user explicitly supplies that teammate name; an invented name turns the Agent into a persistent mailbox teammate and can expose internal agent-message markup. When the user specifies effort for a SubAgent, set that Agent call's claudex_effort field; map mid to medium. This controls only that SubAgent and must not change the main turn's effort. Omit claudex_effort when the user did not specify it. When the user explicitly specifies a SubAgent model, put its exact model ID in claudex_model. Provider models whose IDs begin with gpt or grok are supported. Otherwise omit claudex_model so the SubAgent inherits the current session model. Never infer a default SubAgent model. Return the answer directly when no Claude Code tool is needed. Treat tool output as the result of your own requested call and continue the same task.";
+const BRIDGE_INSTRUCTIONS: &str = r"You are the model inside the Claude Code agent harness. Claude Code owns all filesystem, shell, web, MCP, planning, approval, and user-interaction operations. Use only the dynamic tools whose names and schemas were supplied by Claude Code. Do not invoke Codex built-in tools. The Codex app-server sandbox applies only to those disabled built-in tools; never infer from it that Claude Code or its SubAgent tasks are read-only. Preserve task-specific restrictions that the active user or applicable repository instructions explicitly require, but do not copy restrictions from an unrelated earlier task, investigation lane, teammate report, or closed probe. When the active request authorizes implementation, verification, commit, deployment, or another mutation, preserve that authority in SubAgent prompts and act through Claude Code's dynamic tools. Do not add or repeatedly announce read-only, no-edit, no-build, no-deploy, or similar restrictions unless they are explicitly active for the current task. In particular, invoke Claude Code's supplied dynamic SubAgent tool directly (Task in current versions, Agent in older versions); never substitute a Codex collaboration or spawn-agent tool for it. Omit the SubAgent name field for ordinary SubAgents and parallel delegation. Set name only when the active user explicitly supplies that teammate name; an invented name turns the SubAgent into a persistent mailbox teammate and can expose internal agent-message markup. When the user specifies effort for a SubAgent, set that SubAgent call's claudex_effort field; map mid to medium. This controls only that SubAgent and must not change the main turn's effort. Omit claudex_effort when the user did not specify it. When the user explicitly specifies a SubAgent model, put its exact model ID in claudex_model. Provider models whose IDs begin with gpt or grok are supported. Otherwise omit claudex_model so the SubAgent inherits the current session model. Never infer a default SubAgent model. Never claim that delegation occurred or reproduce a requested worker response without an actual SubAgent tool result. Return the answer directly when no Claude Code tool is needed. Treat tool output as the result of your own requested call and continue the same task.";
 // Team and background Agent workflows can legitimately keep many tool results pending at once.
 // This accepts large bursts while retaining a finite upper bound for transcript memory; idle
 // sessions are reclaimed both by TTL and immediately at capacity.
@@ -73,7 +76,7 @@ pub struct Bridge {
     subscription_slots: Arc<Semaphore>,
     subscription_max_processes: usize,
     subscription_timeout: std::time::Duration,
-    agent_efforts: agent_effort::AgentEffortIntents,
+    agent_efforts: Arc<agent_effort::AgentEffortIntents>,
 }
 
 struct Session {
@@ -239,7 +242,7 @@ impl Bridge {
             subscription_slots: Arc::new(Semaphore::new(subscription_limits.max_processes)),
             subscription_max_processes: subscription_limits.max_processes,
             subscription_timeout: subscription_limits.timeout,
-            agent_efforts: agent_effort::AgentEffortIntents::default(),
+            agent_efforts: Arc::new(agent_effort::AgentEffortIntents::default()),
         }
     }
 
@@ -259,10 +262,17 @@ impl Bridge {
         trace_request(&request);
         self.sweep_idle_sessions().await;
         let intent = self.agent_efforts.take(&request);
-        if intent.is_subagent {
+        let is_subagent = intent.is_subagent;
+        if is_subagent {
             request.model = intent.model_override.unwrap_or_else(|| self.model.clone());
         }
         let effort = self.resolve_request_effort(&request, intent.effort);
+        tracing::debug!(
+            request_model = %request.model,
+            request_effort = ?effort,
+            is_subagent,
+            "resolved request routing"
+        );
         if !request.model.is_empty()
             && request.model != self.model
             && !self.app.supports_model(&request.model)

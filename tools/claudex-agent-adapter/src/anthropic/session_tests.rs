@@ -80,18 +80,19 @@ fn builds_thread_configuration_for_empty_and_team_system_prompts() {
         .as_str()
         .expect("developer instructions");
     assert!(
-        developer.contains("never infer from it that Claude Code or its Agent tasks are read-only")
+        developer
+            .contains("never infer from it that Claude Code or its SubAgent tasks are read-only")
     );
     assert!(developer.contains("do not copy restrictions from an unrelated earlier task"));
     assert!(
-        developer.contains("preserve that authority in Agent prompts"),
+        developer.contains("preserve that authority in SubAgent prompts"),
         "implementation authority must propagate to SubAgents"
     );
     assert!(
         developer.contains("unless they are explicitly active for the current task"),
         "explicit current-task restrictions must remain supported"
     );
-    assert!(developer.contains("Omit the Agent name field for ordinary SubAgents"));
+    assert!(developer.contains("Omit the SubAgent name field for ordinary SubAgents"));
     assert!(developer.contains("only when the active user explicitly supplies that teammate name"));
 
     let agent = json!({

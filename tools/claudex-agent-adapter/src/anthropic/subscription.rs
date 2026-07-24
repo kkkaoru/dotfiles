@@ -18,20 +18,35 @@ use tokio::{
 use super::{
     Bridge, MessagesRequest, Segment, Usage,
     agent_effort::AgentEffort,
-    content::{anthropic_response, estimated_tokens, system_text, token_count},
+    content::{anthropic_response, estimated_tokens, token_count},
+    subscription_request::{subscription_request_cwd, subscription_request_prompt},
     subscription_stream::subscription_streaming_response,
 };
+
+#[cfg(test)]
+pub(super) use super::subscription_request::cwd_from_system;
+pub(super) use super::subscription_request::requested_tools;
 
 pub(crate) const DEFAULT_MAX_PROCESSES: usize = 20;
 pub(crate) const DEFAULT_TIMEOUT_MINUTES: u64 = 120;
 const MAX_PROCESSES_ENV: &str = "CLAUDEX_SUBSCRIPTION_MAX_PROCESSES";
 const TIMEOUT_MINUTES_ENV: &str = "CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES";
+const OUTER_TOOL_BRIDGE_SETTINGS: &str = r#"{"hooks":{"PreToolUse":[{"matcher":".*","hooks":[{"type":"command","command":"exit 2"}]}]}}"#;
 pub(super) struct SubscriptionOptions {
     pub(super) effort: Option<String>,
     pub(super) tools: Vec<String>,
     pub(super) cwd: Option<PathBuf>,
     pub(super) slots: Arc<Semaphore>,
     pub(super) timeout: Duration,
+    pub(super) tool_context: Option<SubscriptionToolContext>,
+}
+
+#[derive(Clone)]
+pub(super) struct SubscriptionToolContext {
+    pub(super) agent_efforts: Arc<super::agent_effort::AgentEffortIntents>,
+    pub(super) client_user_id: Option<String>,
+    pub(super) parent_model: String,
+    pub(super) user_messages: Vec<Value>,
 }
 
 impl SubscriptionOptions {
@@ -42,6 +57,7 @@ impl SubscriptionOptions {
             cwd: None,
             slots,
             timeout,
+            tool_context: None,
         }
     }
 }
@@ -165,6 +181,16 @@ impl Bridge {
             cwd: subscription_request_cwd(request),
             slots: Arc::clone(&self.subscription_slots),
             timeout: self.subscription_timeout,
+            tool_context: Some(SubscriptionToolContext {
+                agent_efforts: Arc::clone(&self.agent_efforts),
+                client_user_id: request
+                    .metadata
+                    .get("user_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                parent_model: request.model.clone(),
+                user_messages: request.messages.clone(),
+            }),
         }
     }
 }
@@ -305,6 +331,9 @@ pub(super) fn subscription_command(
     }
     if matches!(output, OutputMode::StreamJson) {
         command.args(["--include-partial-messages", "--verbose"]);
+        if !options.tools.is_empty() {
+            command.args(["--settings", OUTER_TOOL_BRIDGE_SETTINGS]);
+        }
     }
     if let Some(effort) = &options.effort {
         command.args(["--effort", effort]);
@@ -351,50 +380,4 @@ pub(super) fn validate_subscription_result(result: &Value) -> Result<()> {
         );
     }
     Ok(())
-}
-
-fn subscription_request_prompt(request: &MessagesRequest) -> String {
-    format!(
-        "Act as the requested Claude Code subagent. Follow the system instructions and complete the conversation below. Use only the enabled tools when needed.\n\nSystem:\n{}\n\nMessages:\n{}",
-        system_text(&request.system),
-        serde_json::to_string(&request.messages).unwrap_or_default()
-    )
-}
-
-pub(super) fn requested_tools(tools: &[Value]) -> Vec<String> {
-    let mut selected = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    for name in tools
-        .iter()
-        .filter_map(|tool| tool.get("name").and_then(Value::as_str))
-        .filter(|name| !name.is_empty())
-    {
-        if seen.insert(name) {
-            selected.push(name.to_owned());
-        }
-    }
-    selected
-}
-
-pub(super) fn subscription_request_cwd(request: &MessagesRequest) -> Option<PathBuf> {
-    cwd_from_system(&system_text(&request.system))
-}
-
-pub(super) fn cwd_from_system(system: &str) -> Option<PathBuf> {
-    system.lines().find_map(|line| {
-        let line = line.trim().strip_prefix("- ").unwrap_or(line.trim());
-        let raw_path = [
-            "Primary working directory: ",
-            "Working directory: ",
-            "CWD: ",
-        ]
-        .iter()
-        .find_map(|prefix| line.strip_prefix(prefix))?;
-        let path = Path::new(raw_path.trim());
-        if !path.is_absolute() {
-            return None;
-        }
-        let canonical = std::fs::canonicalize(path).ok()?;
-        canonical.is_dir().then_some(canonical)
-    })
 }

@@ -155,9 +155,13 @@ fn remove_expired(pending: &mut VecDeque<AgentEffortIntent>) {
 }
 
 fn agent_prompt<'a>(tool_name: &str, arguments: &'a Value) -> Option<&'a str> {
-    (tool_name == "Agent")
+    is_agent_tool(tool_name)
         .then(|| arguments.get("prompt").and_then(Value::as_str))
         .flatten()
+}
+
+pub(super) fn is_agent_tool(tool_name: &str) -> bool {
+    matches!(tool_name, "Agent" | "Task")
 }
 
 fn requested_model(arguments: &Value) -> Option<&str> {
@@ -214,6 +218,7 @@ pub(super) fn prepare_arguments_for_user(
     let Some(prompt) = agent_prompt(tool_name, arguments) else {
         return (None, correlated);
     };
+    super::agent_routing::hydrate_routing_fields(&mut correlated);
     correlated["prompt"] = Value::String(format!(
         "{prompt}\n\n<{CORRELATION_TAG}>{tool_use_id}</{CORRELATION_TAG}>"
     ));
@@ -266,7 +271,7 @@ fn explicitly_names_agent(text: &str, name: &str) -> bool {
 }
 
 pub(super) fn tool_schema(tool_name: &str, mut schema: Value) -> Value {
-    if tool_name != "Agent" {
+    if !is_agent_tool(tool_name) {
         return schema;
     }
     let Some(object) = schema.as_object_mut() else {

@@ -273,7 +273,13 @@ fn start_adapter(config: &ServiceConfig) -> Result<()> {
         .open(&config.log_path)
         .context("open adapter log")?;
     let stderr = stdout.try_clone().context("clone adapter log handle")?;
-    Command::new("nohup")
+    let mut command = Command::new("nohup");
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
+    command
         .arg(&config.executable)
         .args(daemon_arguments(&config.options))
         .env("ANTHROPIC_AUTH_TOKEN", &config.token)

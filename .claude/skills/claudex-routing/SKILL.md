@@ -12,7 +12,8 @@ selected agents; account details from `codexbar` are never retained.
 
 ## Routing policy
 
-1. Delegate substantive work primarily to agents in `selected_workers`. Pass their `model` and
+1. Delegate substantive work primarily to agents in `selected_workers` with the available
+   SubAgent tool (`Task` in current Claude Code, `Agent` in older versions). Pass their `model` and
    `effort` values as `claudex_model` and `claudex_effort`.
 2. If the user explicitly names a model that matches a provider's `model_prefixes`, select that
    provider dynamically and pass the exact requested model. The adapter resolves the matching
@@ -24,6 +25,8 @@ selected agents; account details from `codexbar` are never retained.
    advisor never replaces an implementation worker and does not depend on provider quota.
 6. Synthesize, verify, and present the subagents' results in the main conversation. Capacity
    selection does not relax repository instructions, safety requirements, or validation gates.
+7. Count delegation as successful only after an actual SubAgent tool result. Never fabricate a
+   selected worker response in the main session; report unavailable execution explicitly.
 
 `scripts/route_usage.py` refreshes the capacity snapshot at most once every five minutes by
 default. Set `CLAUDEX_USAGE_CACHE_SECONDS=0` to disable caching. A missing provider, unknown usage,

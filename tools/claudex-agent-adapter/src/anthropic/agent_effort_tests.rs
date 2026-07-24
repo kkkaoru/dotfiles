@@ -193,38 +193,61 @@ mod tests {
 
     #[test]
     fn adds_and_strips_adapter_only_agent_effort() {
-        let schema = tool_schema("Agent", json!({"type":"object"}));
-        assert_eq!(
-            schema["properties"]["claudex_effort"]["enum"],
-            json!(["low", "medium", "high", "xhigh", "max"])
-        );
-        assert_eq!(
-            schema["properties"]["claudex_model"]["type"],
-            "string"
-        );
-        let (internal, public) = prepare_arguments(
-            "Agent",
-            "tool-mid",
-            &json!({"prompt":"task","claudex_effort":"mid"}),
-        );
-        let internal = internal.expect("agent intent");
-        assert_eq!(internal["claudex_effort"], "mid");
-        assert!(public.get("claudex_effort").is_none());
+        for tool_name in ["Agent", "Task"] {
+            let schema = tool_schema(tool_name, json!({"type":"object"}));
+            assert_eq!(
+                schema["properties"]["claudex_effort"]["enum"],
+                json!(["low", "medium", "high", "xhigh", "max"])
+            );
+            assert_eq!(
+                schema["properties"]["claudex_model"]["type"],
+                "string"
+            );
+            let tool_use_id = format!("tool-mid-{tool_name}");
+            let (internal, public) = prepare_arguments(
+                tool_name,
+                &tool_use_id,
+                &json!({"prompt":"task","claudex_effort":"mid"}),
+            );
+            let internal = internal.expect("agent intent");
+            assert_eq!(internal["claudex_effort"], "mid");
+            assert!(public.get("claudex_effort").is_none());
 
-        let intents = AgentEffortIntents::default();
-        intents.record(
-            None,
-            "Agent",
-            "tool-mid".to_owned(),
-            "main-model",
-            &internal,
+            let intents = AgentEffortIntents::default();
+            intents.record(
+                None,
+                tool_name,
+                tool_use_id,
+                "main-model",
+                &internal,
+            );
+            assert_eq!(
+                explicit(intents.take(&request_without_user_id(
+                    internal["prompt"].as_str().expect("correlated prompt")
+                )).effort),
+                "medium"
+            );
+        }
+    }
+
+    #[test]
+    fn recovers_subscription_routing_headers_from_task_prompts() {
+        let arguments = json!({
+            "prompt":"claudex_model: gpt-5.6-sol\nclaudex_effort: high\n\nDo the task",
+            "model":"gpt-5.6-sol"
+        });
+        let (internal, public) = prepare_arguments_for_user(
+            "Task",
+            "tool-subscription",
+            &arguments,
+            &[json!({"role":"user","content":"selected model gpt-5.6-sol"})],
         );
-        assert_eq!(
-            explicit(intents.take(&request_without_user_id(
-                internal["prompt"].as_str().expect("correlated prompt")
-            )).effort),
-            "medium"
-        );
+        let internal = internal.expect("Task routing intent");
+        assert_eq!(internal["claudex_model"], "gpt-5.6-sol");
+        assert_eq!(internal["claudex_effort"], "high");
+        assert!(public.get("model").is_none());
+        assert!(public.get("claudex_model").is_none());
+        assert!(public.get("claudex_effort").is_none());
     }
 
     #[test]

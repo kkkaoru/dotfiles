@@ -29,7 +29,11 @@ async fn handles_ignored_invalid_and_non_text_events() {
     let (sender, mut receiver) = channel();
     let mut stream = SubscriptionStream {
         text_started: false,
+        text_closed: false,
         saw_result: false,
+        next_index: 0,
+        tools: Vec::new(),
+        tool_context: None,
     };
     stream
         .handle_line(&sender, r#"{"type":"ignored"}"#)
@@ -59,7 +63,11 @@ async fn forwards_empty_and_regular_deltas_then_finishes_once() {
     let (sender, mut receiver) = channel();
     let mut stream = SubscriptionStream {
         text_started: false,
+        text_closed: false,
         saw_result: false,
+        next_index: 0,
+        tools: Vec::new(),
+        tool_context: None,
     };
     for text in ["", "hello"] {
         stream
@@ -95,7 +103,11 @@ async fn falls_back_to_result_text_and_estimated_tokens() {
     let (sender, mut receiver) = channel();
     let mut stream = SubscriptionStream {
         text_started: false,
+        text_closed: false,
         saw_result: false,
+        next_index: 0,
+        tools: Vec::new(),
+        tool_context: None,
     };
     stream
         .finish(
@@ -119,7 +131,11 @@ async fn rejects_unsuccessful_results() {
     let (sender, _) = channel();
     let mut stream = SubscriptionStream {
         text_started: false,
+        text_closed: false,
         saw_result: false,
+        next_index: 0,
+        tools: Vec::new(),
+        tool_context: None,
     };
     assert!(
         stream
@@ -130,6 +146,44 @@ async fn rejects_unsuccessful_results() {
             .await
             .is_err()
     );
+}
+
+#[tokio::test]
+async fn forwards_agent_alias_as_outer_task_with_streaming_input() {
+    let (sender, mut receiver) = channel();
+    let mut stream = SubscriptionStream {
+        text_started: false,
+        text_closed: false,
+        saw_result: false,
+        next_index: 0,
+        tools: vec!["Task".to_owned()],
+        tool_context: None,
+    };
+    let intercepted = stream
+        .handle_line(
+            &sender,
+            &json!({
+                "type":"assistant",
+                "parent_tool_use_id":null,
+                "message":{
+                    "usage":{"output_tokens":7},
+                    "content":[{
+                        "type":"tool_use", "id":"tool-subscription", "name":"Agent",
+                        "input":{"prompt":"work", "subagent_type":"claudex-gpt"}
+                    }]
+                }
+            })
+            .to_string(),
+        )
+        .await
+        .expect("forward subscription tool");
+    assert!(intercepted);
+    let output = output(&mut receiver).await;
+    assert!(output.contains(r#""name":"Task""#));
+    assert!(output.contains(r#""input":{}"#));
+    assert!(output.contains("input_json_delta"));
+    assert!(output.contains(r#""stop_reason":"tool_use""#));
+    assert!(output.find("input_json_delta") < output.find("content_block_stop"));
 }
 
 fn child(script: &str) -> tokio::process::Child {
