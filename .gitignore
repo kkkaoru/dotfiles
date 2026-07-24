@@ -2,6 +2,7 @@
 .config/*
 !.config/fish
 .config/fish/fish_variables
+.config/fish/fishd.tmp.*
 !.config/claudex
 !.config/omf
 !.config/mise
@@ -44,8 +45,10 @@ node_modules
 
 # Codex runtime state/cache
 .codex/.codex-global-state.json*
+.codex/..codex-global-state.json.tmp-*
 .codex/.app-server-state-reconciled-v1
 .codex/.personality_migration
+.codex/.sandbox_migration
 .codex/.tmp/
 .codex/auth.json
 .codex/cache/
