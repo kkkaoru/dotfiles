@@ -21,6 +21,11 @@ selected agents; account details from `codexbar` are never retained.
    provider dynamically and pass the exact requested model. The adapter resolves the matching
    backend lazily.
 3. Use multiple selected workers for independent work or complementary review only when useful.
+   Start the number needed for genuine parallelism, role separation, and clean independent context;
+   reuse policy must not suppress useful fan-out.
+   Apply this selection to every Agent/Task launch, including nested launches made by an existing
+   worker. A nested launch must use the current selected worker's agent and exact model/effort; it
+   must not default to generic `claude` or blindly inherit its parent's provider route.
 4. Use the configured fallback only when every capacity-managed provider is unavailable.
 5. Invoke the configured `advisor` in addition to workers when explicitly requested or when a
    complex, ambiguous, high-risk, or consequential decision benefits from strategic review. The
@@ -29,6 +34,25 @@ selected agents; account details from `codexbar` are never retained.
    selection does not relax repository instructions, safety requirements, or validation gates.
 7. Count delegation as successful only after an actual SubAgent tool result. Never fabricate a
    selected worker response in the main session; report unavailable execution explicitly.
+8. Treat worker and advisor lifecycle as a deliberate decision:
+   - Reuse a prior instance for a related follow-up when the exact `SendMessage` recipient specified
+     by its Agent/Task result (agent ID or teammate name as applicable) is available in the current
+     main-session transcript and its agent, model, effort, role, scope, and authorization remain
+     compatible with the current routing context. Send the smallest sufficient, self-contained
+     delta, including new evidence the recipient has not seen, so the existing context and prompt
+     prefix remain reusable.
+   - Do not guess a recipient, persist it to memory, or call task-list tools solely to rediscover
+     it. A `SendMessage` delivery acknowledgement is not completion evidence; wait for the actual
+     reply or completion notification.
+   - Start a new instance when true concurrency, a clean-room review, an independent second opinion,
+     a different route/model/effort/role, incompatible scope or authorization, or an unavailable
+     recipient requires it.
+   - Before explicitly shutting down or discarding an instance, weigh likely follow-ups and
+     potential prompt-prefix/cache reuse against slot pressure, resource cost, stale or contaminated
+     context, and whether the role is genuinely complete. Termination is allowed when those factors
+     favor it; it is not automatic merely because one delegated task ended. A completed agent may be
+     logically resumable without a live process, so do not keep it artificially busy. Apply the same
+     rule to the advisor.
 
 `scripts/route_usage.py` refreshes the capacity snapshot at most once every five minutes by
 default. Set `CLAUDEX_USAGE_CACHE_SECONDS=0` to disable caching. A missing provider, unknown usage,

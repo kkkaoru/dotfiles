@@ -138,11 +138,11 @@ async fn evicts_the_least_recently_used_idle_session() {
 async fn sweeps_only_expired_unowned_sessions_without_pending_tools() {
     let semaphore = Arc::new(tokio::sync::Semaphore::new(4));
     let now = Instant::now();
-    let expired = test_session_at(&semaphore, false, now - Duration::from_secs(31 * 60));
-    let active = test_session_at(&semaphore, false, now - Duration::from_secs(31 * 60));
+    let expired = test_session_at(&semaphore, false, now - Duration::from_secs(121 * 60));
+    let active = test_session_at(&semaphore, false, now - Duration::from_secs(121 * 60));
     let active_owner = Arc::clone(&active);
     let pending = test_session_at(&semaphore, true, now - Duration::from_secs(60 * 60));
-    let fresh_activity = now - Duration::from_secs(29 * 60);
+    let fresh_activity = now - Duration::from_secs(119 * 60);
     let fresh = test_session_at(&semaphore, false, fresh_activity);
     let sessions = tokio::sync::Mutex::new(vec![expired, active, pending, fresh]);
 

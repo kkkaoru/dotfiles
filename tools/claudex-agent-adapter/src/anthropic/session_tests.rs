@@ -94,6 +94,9 @@ fn builds_thread_configuration_for_empty_and_team_system_prompts() {
     );
     assert!(developer.contains("Omit the SubAgent name field for ordinary SubAgents"));
     assert!(developer.contains("only when the active user explicitly supplies that teammate name"));
+    assert!(developer.contains("every Agent or Task launch, including a nested launch"));
+    assert!(developer.contains("exact claudex_model and claudex_effort"));
+    assert!(developer.contains("never use generic claude or blindly inherit"));
 
     let agent = json!({
         "name":"Agent", "description":"spawn",

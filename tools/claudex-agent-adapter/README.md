@@ -184,6 +184,23 @@ may run concurrently and each has a 120-minute timeout. Set
 `CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES` before invoking `claudex` to override
 either positive integer independently. Subprocesses are killed if their task is
 dropped.
+Idle provider threads are retained for two hours to support related provider-backed worker
+continuations and prompt-prefix reuse; capacity pressure may evict the oldest idle thread sooner.
+This backend-thread retention is separate from Claude Code's logical agent lifecycle. The main
+session reuses a compatible logical instance with `SendMessage` and the exact recipient specified by
+the prior Agent/Task result, while starting new instances when concurrency or independent context
+requires it.
+Claude subscription workers and advisors still use a new `--no-session-persistence` subprocess per
+provider call. Logical-agent reuse can preserve a reusable transcript prefix but does not guarantee
+a provider prompt-cache hit.
+
+Claude Code's UI and Agent `resolvedModel` metadata describe the native custom-agent profile. For
+provider workers whose frontmatter uses `model: inherit`, that metadata can say
+`claude-sonnet-5` even when the adapter routes every actual assistant turn to GPT or Grok. Verify
+the effective model from the SubAgent JSONL assistant `message.model`, provider sampling logs, or
+adapter routing logs. Nested Agent/Task calls remain supported and must apply the current injected
+`selected_workers` selection rather than defaulting to generic `claude` or blindly inheriting the
+parent provider.
 
 The adapter's `ensure` command compares the running service's protocol, routes,
 and limits with the installed binary. A source-derived build ID remains exposed

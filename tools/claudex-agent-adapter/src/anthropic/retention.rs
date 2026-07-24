@@ -12,9 +12,10 @@ use super::{Bridge, Session};
 // Thirty minutes allows long interactive tool work while bounding leaked slots.
 const PENDING_SESSION_TTL: Duration = Duration::from_secs(30 * 60);
 // A session without pending tools can be reconstructed from Claude Code's next full transcript.
-// Thirty minutes covers normal interactive pauses while preventing inactive transcripts from
-// occupying session slots indefinitely. Pending and actively-owned sessions are excluded.
-const IDLE_SESSION_TTL: Duration = Duration::from_secs(30 * 60);
+// Two hours preserves provider threads across substantial interactive pauses so related Agent and
+// advisor follow-ups can reuse context and prompt prefixes. Capacity pressure can still evict the
+// oldest idle session immediately, and pending or actively-owned sessions remain protected.
+const IDLE_SESSION_TTL: Duration = Duration::from_secs(120 * 60);
 // Capacity pressure has its own immediate eviction path. Periodic sweeps only reclaim old idle
 // transcripts, so scanning every session on every request wastes work during large Agent bursts.
 pub(super) const SESSION_SWEEP_INTERVAL: Duration = Duration::from_secs(60);
@@ -184,6 +185,12 @@ mod tests {
 
     use super::*;
     use crate::app_server::AppServer;
+
+    #[test]
+    fn retains_idle_provider_context_for_follow_up_window() {
+        assert_eq!(IDLE_SESSION_TTL, Duration::from_secs(120 * 60));
+        assert!(IDLE_SESSION_TTL > PENDING_SESSION_TTL);
+    }
 
     #[tokio::test]
     async fn bridge_evicts_expired_tools_and_sends_cancellation() {

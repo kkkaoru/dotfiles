@@ -123,6 +123,9 @@ class RoutingTests(unittest.TestCase):
             output["hookSpecificOutput"]["hookEventName"], "UserPromptSubmit"
         )
         self.assertIn("claudex-gpt", context)
+        self.assertIn("every Agent/Task launch", context)
+        self.assertIn("nested launches from a worker", context)
+        self.assertIn("claudex_model and claudex_effort", context)
         self.assertNotIn("account", context)
 
 

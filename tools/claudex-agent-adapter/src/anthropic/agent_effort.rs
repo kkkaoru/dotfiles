@@ -14,6 +14,7 @@ const ADAPTER_MODEL: &str = "claudex_model";
 struct AgentEffortIntent {
     client_user_id: Option<String>,
     prompt: String,
+    correlated: bool,
     effort: Option<String>,
     model_override: String,
     tool_use_id: String,
@@ -96,6 +97,10 @@ impl AgentEffortIntents {
                 "ignored SubAgent model not explicitly present in current user input"
             );
         }
+        // Claude Code can resume a completed logical Agent long after its provider thread expires.
+        // Keep only the correlation route (not the potentially large prompt) until bounded LRU
+        // pressure evicts it, so SendMessage continuations do not silently inherit the main route.
+        let correlated = has_correlation_marker(prompt);
         let mut pending = self.pending.lock().expect("agent effort intents poisoned");
         remove_expired(&mut pending);
         if pending.len() == MAX_PENDING_INTENTS {
@@ -103,7 +108,12 @@ impl AgentEffortIntents {
         }
         pending.push_back(AgentEffortIntent {
             client_user_id: client_user_id.map(str::to_owned),
-            prompt: prompt.to_owned(),
+            prompt: if correlated {
+                String::new()
+            } else {
+                prompt.to_owned()
+            },
+            correlated,
             effort,
             model_override: explicit_model.unwrap_or(parent_model).to_owned(),
             tool_use_id,
@@ -120,13 +130,16 @@ impl AgentEffortIntents {
         remove_expired(&mut pending);
         let Some(index) = pending.iter().position(|intent| {
             request_matches_intent(&request.messages, intent)
-                && (has_correlation_marker(&intent.prompt)
-                    || intent.client_user_id.as_deref() == client_user_id)
+                && (intent.correlated || intent.client_user_id.as_deref() == client_user_id)
         }) else {
             return AgentIntent::unmatched(true);
         };
-        let intent = if has_correlation_marker(&pending[index].prompt) {
-            pending[index].clone()
+        let intent = if pending[index].correlated {
+            let intent = pending
+                .remove(index)
+                .expect("matched correlated agent intent");
+            pending.push_back(intent.clone());
+            intent
         } else {
             pending.remove(index).expect("matched agent intent")
         };
@@ -143,15 +156,19 @@ impl AgentEffortIntents {
 
     pub(super) fn remove_tool_results<'a>(&self, tool_use_ids: impl Iterator<Item = &'a str>) {
         let ids = tool_use_ids.collect::<Vec<_>>();
+        // A completed correlated Agent remains resumable through SendMessage. Only one-shot,
+        // uncorrelated launch intents are owned by and removed with the outer tool result.
         self.pending
             .lock()
             .expect("agent effort intents poisoned")
-            .retain(|intent| !ids.contains(&intent.tool_use_id.as_str()));
+            .retain(|intent| intent.correlated || !ids.contains(&intent.tool_use_id.as_str()));
     }
 }
 
 fn remove_expired(pending: &mut VecDeque<AgentEffortIntent>) {
-    pending.retain(|intent| intent.created_at.elapsed() < INTENT_TTL);
+    // Uncorrelated intents are one-shot launch handoffs. Correlated intents represent resumable
+    // logical Agents and are instead bounded by MAX_PENDING_INTENTS and refreshed on each match.
+    pending.retain(|intent| intent.correlated || intent.created_at.elapsed() < INTENT_TTL);
 }
 
 fn agent_prompt<'a>(tool_name: &str, arguments: &'a Value) -> Option<&'a str> {
@@ -330,7 +347,7 @@ fn request_contains_prompt(messages: &[Value], prompt: &str) -> bool {
 }
 
 fn request_matches_intent(messages: &[Value], intent: &AgentEffortIntent) -> bool {
-    if has_correlation_marker(&intent.prompt) {
+    if intent.correlated {
         let marker = format!(
             "<{CORRELATION_TAG}>{}</{CORRELATION_TAG}>",
             intent.tool_use_id

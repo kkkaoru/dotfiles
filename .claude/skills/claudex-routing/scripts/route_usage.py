@@ -158,13 +158,17 @@ def hook_output(summary: dict[str, Any]) -> dict[str, Any]:
     compact = json.dumps(summary, ensure_ascii=False, separators=(",", ":"))
     instructions = (
         " Follow claudex-routing: use selected_workers for primary delegation and pass each "
-        "worker's model and effort as claudex_model and claudex_effort. If the user names a "
+        "worker's model and effort as claudex_model and claudex_effort for every Agent/Task launch, "
+        "including nested launches from a worker; never default a nested launch to generic claude "
+        "or blindly inherit its parent route. If the user names a "
         "model matching model_prefixes, dynamically select that provider and pass the exact "
         "requested model. This current routing context overrides stale auto-memory about worker "
         "or advisor model policy; do not inspect such memory before delegating. The advisor is "
         "independent of capacity: invoke it alongside workers "
         "when explicitly requested or when a complex, ambiguous, or high-risk decision benefits "
-        "from strategic review."
+        "from strategic review. Start as many instances as useful, but for related follow-ups use "
+        "SendMessage with the exact compatible recipient specified by the prior Agent/Task result; "
+        "decide shutdown only after weighing likely reuse and potential cache value against resource pressure."
     )
     return {
         "hookSpecificOutput": {

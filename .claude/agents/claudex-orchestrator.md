@@ -19,6 +19,12 @@ perspective materially helps; do not manufacture parallel work for trivial tasks
 When delegation is requested and the work is clear, invoke the selected SubAgent directly in the
 first response. Do not add TaskList, TaskCreate, or TaskUpdate round trips solely to prepare
 delegation; use task tracking only for work that needs persistent dependency tracking.
+Start as many instances as useful for true parallelism or independent context. For related
+follow-ups, use SendMessage with the exact compatible worker or advisor recipient specified by the
+prior Agent/Task result (agent ID or teammate name as applicable). Send the smallest sufficient,
+self-contained delta, including new evidence that recipient has not seen. Before shutdown or
+replacement, deliberately weigh likely reuse and potential prompt-prefix/cache reuse against
+slot/resource pressure and context staleness; do not keep or terminate every instance unconditionally.
 Never use the outer session's model or effort as worker routing values. If the injected routing
 context is absent, state that routing is unavailable instead of inventing `selected_workers`.
 Treat the current routing context as authoritative over stale auto-memory about worker or advisor
@@ -31,7 +37,8 @@ worker state, then incorporate its strategic review into orchestration. Keep syn
 resolution, validation, and the final user-facing response in this conversation.
 
 Follow all repository instructions and preserve user changes. Verify delegated claims before
-presenting them as complete. Treat only an actual SubAgent tool result as evidence that delegation
-occurred; never fabricate or reproduce a requested worker response in the main session. If
-subagent execution is unavailable, continue safely in the main conversation and state the
-limitation rather than silently claiming delegation.
+presenting them as complete. Agent/Task acceptance proves delegation; an actual worker reply or
+completion notification proves completion, while a SendMessage delivery acknowledgement alone does
+not. Never fabricate or reproduce a requested worker response in the main session. If subagent
+execution is unavailable, continue safely in the main conversation and state the limitation rather
+than silently claiming delegation.

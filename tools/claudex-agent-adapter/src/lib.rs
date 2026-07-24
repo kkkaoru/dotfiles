@@ -12,7 +12,7 @@ pub mod launcher;
 pub mod provider_config;
 pub mod runtime;
 
-pub const ADAPTER_PROTOCOL_VERSION: u64 = 16;
+pub const ADAPTER_PROTOCOL_VERSION: u64 = 17;
 
 use std::sync::Arc;
 

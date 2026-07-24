@@ -2,6 +2,8 @@
 // Coverage gates measure production code; test implementations are excluded.
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::time::Instant;
+
     use serde_json::json;
 
     use super::{
@@ -141,10 +143,10 @@ mod tests {
             "high"
         );
         intents.remove_tool_results(["tool-first"].into_iter());
-        assert!(matches!(
-            intents.take(&request_without_user_id(first_prompt)).effort,
-            AgentEffort::Unmatched
-        ));
+        assert_eq!(
+            explicit(intents.take(&request_without_user_id(first_prompt)).effort),
+            "high"
+        );
     }
 
     #[test]
@@ -187,8 +189,54 @@ mod tests {
             false,
         ));
         assert!(intent.is_subagent);
-        assert!(intent.model_override.is_none());
-        assert!(matches!(intent.effort, AgentEffort::Unmatched));
+        assert_eq!(intent.model_override.as_deref(), Some("main-model"));
+        assert!(matches!(intent.effort, AgentEffort::ConfiguredDefault));
+    }
+
+    #[test]
+    fn correlated_intent_survives_time_and_refreshes_lru() {
+        assert_eq!(super::INTENT_TTL, std::time::Duration::from_secs(10 * 60));
+        let intents = AgentEffortIntents::default();
+        let (internal, _) = prepare_arguments(
+            "Agent",
+            "tool-reused",
+            &json!({"prompt":"initial task","claudex_effort":"high"}),
+        );
+        let internal = internal.expect("correlated agent intent");
+        intents.record(
+            None,
+            "Agent",
+            "tool-reused".to_owned(),
+            "provider-model",
+            &internal,
+        );
+        let (second, _) = prepare_arguments(
+            "Agent",
+            "tool-second",
+            &json!({"prompt":"second task","claudex_effort":"low"}),
+        );
+        intents.record(
+            None,
+            "Agent",
+            "tool-second".to_owned(),
+            "second-model",
+            second.as_ref().expect("second correlated intent"),
+        );
+        intents.pending.lock().unwrap()[0].created_at =
+            Instant::now() - std::time::Duration::from_secs(121 * 60);
+
+        assert!(intents.pending.lock().unwrap()[0].prompt.is_empty());
+
+        let reused = intents.take(&request_without_user_id(
+            internal["prompt"].as_str().expect("correlated prompt"),
+        ));
+
+        assert_eq!(reused.model_override.as_deref(), Some("provider-model"));
+        assert_eq!(explicit(reused.effort), "high");
+        let pending = intents.pending.lock().unwrap();
+        assert_eq!(pending.len(), 2);
+        assert_eq!(pending.front().unwrap().tool_use_id, "tool-second");
+        assert_eq!(pending.back().unwrap().tool_use_id, "tool-reused");
     }
 
     #[test]
@@ -457,6 +505,38 @@ mod tests {
         ));
         assert!(matches!(
             intents.take(&request("session", "task-2", true)).effort,
+            AgentEffort::ConfiguredDefault
+        ));
+    }
+
+    #[test]
+    fn bounds_correlated_intents_without_blocking_new_fanout() {
+        let intents = AgentEffortIntents::default();
+        let mut first_prompt = String::new();
+        let mut second_prompt = String::new();
+        for index in 0..=super::MAX_PENDING_INTENTS {
+            let tool_id = format!("tool-correlated-{index}");
+            let (internal, _) = prepare_arguments(
+                "Agent",
+                &tool_id,
+                &json!({"prompt":format!("task-{index}")}),
+            );
+            let internal = internal.expect("correlated intent");
+            if index == 0 {
+                first_prompt = internal["prompt"].as_str().unwrap().to_owned();
+            } else if index == 1 {
+                second_prompt = internal["prompt"].as_str().unwrap().to_owned();
+            }
+            intents.record(None, "Agent", tool_id, "main-model", &internal);
+        }
+
+        assert_eq!(intents.pending.lock().unwrap().len(), super::MAX_PENDING_INTENTS);
+        assert!(matches!(
+            intents.take(&request_without_user_id(&first_prompt)).effort,
+            AgentEffort::Unmatched
+        ));
+        assert!(matches!(
+            intents.take(&request_without_user_id(&second_prompt)).effort,
             AgentEffort::ConfiguredDefault
         ));
     }
