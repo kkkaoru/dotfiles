@@ -38,6 +38,7 @@ fn fish_launcher_uses_the_shared_provider_config() {
     let arguments = String::from_utf8(output.stdout).expect("UTF-8 adapter arguments");
     assert!(arguments.contains("--provider-config\n"));
     assert!(arguments.contains(".config/claudex/providers.json\n"));
+    assert!(arguments.contains("--inherit-claude-model\n"));
     assert!(arguments.ends_with("--\nsmoke\n"));
 
     assert_no_argument_launch(&function, &home);
@@ -62,6 +63,7 @@ fn fish_launcher_uses_the_shared_provider_config() {
     let arguments = String::from_utf8(output.stdout).expect("UTF-8 override arguments");
     assert!(arguments.contains(&format!("--provider-config\n{}\n", alternate.display())));
     assert!(arguments.contains("--model\nvendor-model\n"));
+    assert!(!arguments.contains("--inherit-claude-model\n"));
     assert!(arguments.ends_with("--\noverride-smoke\n"));
 }
 
@@ -91,6 +93,6 @@ fn assert_no_argument_launch(function: &std::path::Path, home: &tempfile::TempDi
         String::from_utf8_lossy(&output.stderr)
     );
     let arguments = String::from_utf8(output.stdout).expect("UTF-8 adapter arguments");
-    assert!(!arguments.contains("--inherit-claude-model\n"));
+    assert!(arguments.contains("--inherit-claude-model\n"));
     assert!(arguments.ends_with("--\n--agent\nclaudex-orchestrator\n"));
 }

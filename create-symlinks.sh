@@ -54,9 +54,11 @@ done
 # Claude Code keeps history, sessions, plugins, and caches under ~/.claude.
 # Link only repository-managed definitions so those runtime paths remain local.
 mkdir -p "${HOME}/.claude"
-if [ -f "${DOTPATH}/.claude/settings.json" ]; then
-  link_path "${DOTPATH}/.claude/settings.json" "${HOME}/.claude/settings.json"
-fi
+for file in CLAUDE.md settings.json; do
+  if [ -f "${DOTPATH}/.claude/${file}" ]; then
+    link_path "${DOTPATH}/.claude/${file}" "${HOME}/.claude/${file}"
+  fi
+done
 for name in agents commands hooks skills; do
   if [ -d "${DOTPATH}/.claude/${name}" ]; then
     link_tree "${DOTPATH}/.claude/${name}" "${HOME}/.claude/${name}"

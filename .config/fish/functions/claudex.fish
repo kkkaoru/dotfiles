@@ -11,7 +11,14 @@ function claudex --description 'Run Claude Code with config-driven agent backend
     # The shared JSON is authoritative for provider commands, default models,
     # model prefixes, worker agents, fallback, and advisor selection.
     set -l adapter_args launch --provider-config "$provider_config"
-    set -q CLAUDEX_MODEL; and set -a adapter_args --model "$CLAUDEX_MODEL"
+    if set -q CLAUDEX_MODEL
+        # An explicit provider-model override keeps the existing routed-main-model behavior.
+        set -a adapter_args --model "$CLAUDEX_MODEL"
+    else
+        # Normal launches keep the adapter routes but let Claude Code's model and
+        # effortLevel settings control the outer orchestrator session.
+        set -a adapter_args --inherit-claude-model
+    end
     set -q CLAUDEX_ADAPTER_LISTEN; and set -a adapter_args --listen "$CLAUDEX_ADAPTER_LISTEN"
     set -q CLAUDEX_SUBSCRIPTION_MAX_PROCESSES; and set -a adapter_args --subscription-max-processes "$CLAUDEX_SUBSCRIPTION_MAX_PROCESSES"
     set -q CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES; and set -a adapter_args --subscription-timeout-minutes "$CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES"
