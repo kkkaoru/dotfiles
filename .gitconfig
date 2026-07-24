@@ -32,3 +32,5 @@
 ; This file is intentionally NOT tracked by the dotfiles repo.
 [include]
 	path = ~/.gitconfig.local
+[url "git@github.com:"]
+	insteadOf = https://github.com/
