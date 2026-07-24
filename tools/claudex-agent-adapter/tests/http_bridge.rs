@@ -584,6 +584,8 @@ async fn routes_non_main_models_to_subscription_with_requested_effort() {
     }
     assert!(stream.contains("STREAM_SECOND"));
     assert!(stream.contains("event: message_stop"));
+    assert!(!stream.contains("Claudex is still working"));
+    assert!(!stream.contains(r#""type":"thinking""#));
 
     let failure = client
         .post(messages_url(&adapter))

@@ -242,7 +242,7 @@ fn child(script: &str) -> tokio::process::Child {
 }
 
 #[tokio::test]
-async fn consumes_successful_process_and_requires_result_event() {
+async fn fast_subscription_result_skips_activity_status_and_requires_result_event() {
     let (sender, mut receiver) = channel();
     consume_subscription_stream(
         child(r#"printf '%s\n' '{"type":"result","subtype":"success","result":"done"}'"#),
@@ -250,7 +250,15 @@ async fn consumes_successful_process_and_requires_result_event() {
     )
     .await
     .expect("successful subscription stream");
-    assert!(output(&mut receiver).await.contains("done"));
+    let success = output(&mut receiver).await;
+    assert!(success.contains("done"));
+    assert!(!success.contains("Claudex is still working"));
+    assert!(!success.contains(r#""type":"thinking""#));
+    let text_frame = success
+        .split("\n\n")
+        .find(|frame| frame.contains(r#""text":"done""#))
+        .expect("immediate text frame");
+    assert!(text_frame.contains(r#""index":0"#));
 
     let error =
         consume_subscription_stream(child("printf '%s\\n' '{\"type\":\"ignored\"}'"), &sender)
