@@ -39,7 +39,7 @@ fn fish_launcher_uses_the_shared_provider_config() {
     assert!(arguments.contains("--provider-config\n"));
     assert!(arguments.contains(".config/claudex/providers.json\n"));
     assert!(arguments.contains("--inherit-claude-model\n"));
-    assert!(arguments.ends_with("--\nsmoke\n"));
+    assert!(arguments.ends_with("--\n--agent\nclaudex-orchestrator\nsmoke\n"));
 
     assert_no_argument_launch(&function, &home);
 
@@ -64,7 +64,27 @@ fn fish_launcher_uses_the_shared_provider_config() {
     assert!(arguments.contains(&format!("--provider-config\n{}\n", alternate.display())));
     assert!(arguments.contains("--model\nvendor-model\n"));
     assert!(!arguments.contains("--inherit-claude-model\n"));
-    assert!(arguments.ends_with("--\noverride-smoke\n"));
+    assert!(arguments.ends_with("--\n--agent\nclaudex-orchestrator\noverride-smoke\n"));
+
+    assert_explicit_agent_is_preserved(&function, &home);
+}
+
+fn assert_explicit_agent_is_preserved(function: &std::path::Path, home: &tempfile::TempDir) {
+    let output = Command::new("fish")
+        .args([
+            "-c",
+            &format!(
+                "source '{}'; claudex --agent custom-subagent smoke",
+                function.display()
+            ),
+        ])
+        .env("HOME", home.path())
+        .output()
+        .expect("run explicit-agent fish launcher");
+    assert!(output.status.success());
+    let arguments = String::from_utf8(output.stdout).expect("UTF-8 explicit-agent arguments");
+    assert_eq!(arguments.matches("--agent\n").count(), 1);
+    assert!(arguments.ends_with("--\n--agent\ncustom-subagent\nsmoke\n"));
 }
 
 #[test]

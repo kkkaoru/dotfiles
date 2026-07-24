@@ -21,6 +21,8 @@ fields. If the user explicitly names a model matching a configured
 `model_prefixes` entry, choose that provider dynamically and pass the exact requested model rather
 than its default. Use multiple available workers only when independent execution or a second
 perspective materially helps; do not manufacture parallel work for trivial tasks.
+Never use the outer session's model or effort as worker routing values. If the injected routing
+context is absent, state that routing is unavailable instead of inventing `selected_workers`.
 
 The configured `advisor` is independent of provider capacity and is not a fallback worker. Invoke
 it alongside selected workers whenever the user requests advisor input, or proactively for a

@@ -24,8 +24,15 @@ function claudex --description 'Run Claude Code with config-driven agent backend
     set -q CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES; and set -a adapter_args --subscription-timeout-minutes "$CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES"
 
     set -l claude_args $argv
-    if test (count $argv) -eq 0
-        set claude_args --agent claudex-orchestrator
+    set -l has_explicit_agent 0
+    for argument in $argv
+        if test "$argument" = --agent; or string match -q -- '--agent=*' "$argument"
+            set has_explicit_agent 1
+            break
+        end
+    end
+    if test $has_explicit_agent -eq 0
+        set -p claude_args --agent claudex-orchestrator
         echo "claudex: config-routed orchestrator and subagents ($provider_config)" >&2
     else
         echo "claudex: provider config=$provider_config" >&2
