@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, ffi::OsString, sync::Arc};
+use std::{collections::VecDeque, ffi::OsString, path::PathBuf, sync::Arc};
 
 use anyhow::{Context, Result, bail};
 use tracing_subscriber::EnvFilter;
@@ -8,6 +8,7 @@ use crate::{
     anthropic::{Bridge, DEFAULT_MAX_PROCESSES, DEFAULT_TIMEOUT_MINUTES},
     http_router,
     launcher::{self, AdapterOptions},
+    provider_config,
 };
 
 #[derive(Debug)]
@@ -80,6 +81,7 @@ fn parse_command(mut arguments: VecDeque<OsString>) -> Result<RuntimeCommand> {
 fn parse_options(arguments: &mut VecDeque<OsString>) -> Result<ParsedOptions> {
     let mut routes = Vec::new();
     let mut model = None;
+    let mut provider_config = None;
     let mut inherit_claude_model = false;
     let mut listen = "127.0.0.1:8318".parse().expect("default listener");
     let mut max_processes = DEFAULT_MAX_PROCESSES;
@@ -92,6 +94,14 @@ fn parse_options(arguments: &mut VecDeque<OsString>) -> Result<ParsedOptions> {
         match option.as_str() {
             "--backend-route" => {
                 routes.push(option_value(arguments, "--backend-route")?.parse()?);
+            }
+            "--backend-route-json" => {
+                let value = option_value(arguments, "--backend-route-json")?;
+                routes.push(serde_json::from_str(&value).context("invalid backend route JSON")?);
+            }
+            "--provider-config" => {
+                provider_config =
+                    Some(PathBuf::from(option_value(arguments, "--provider-config")?));
             }
             "--model" => model = Some(option_value(arguments, "--model")?),
             "--inherit-claude-model" => {
@@ -120,12 +130,18 @@ fn parse_options(arguments: &mut VecDeque<OsString>) -> Result<ParsedOptions> {
         bail!("adapter options must be valid UTF-8");
     }
     validate_limits(max_processes, timeout_minutes)?;
-    let model = model.context("--model is required")?;
+    let configured = provider_config
+        .as_deref()
+        .map(provider_config::load)
+        .transpose()?;
+    if let Some(configured) = &configured {
+        routes.splice(0..0, configured.routes.clone());
+    }
+    let model = model
+        .or_else(|| configured.map(|configured| configured.main_model))
+        .context("--model or --provider-config is required")?;
     if routes.is_empty() {
-        routes.push(BackendRoute {
-            model: model.clone(),
-            backend: BackendKind::CodexAppServer,
-        });
+        routes.push(BackendRoute::new(&model, BackendKind::CodexAppServer));
     }
     validate_routes(&routes, &model)?;
     Ok(ParsedOptions {
@@ -155,7 +171,14 @@ fn validate_routes(routes: &[BackendRoute], model: &str) -> Result<()> {
     if unique.len() != routes.len() {
         bail!("--backend-route models must be unique");
     }
-    if !unique.contains(model) {
+    let supports_main = routes.iter().any(|route| {
+        route.model == model
+            || route
+                .model_prefixes
+                .iter()
+                .any(|prefix| model.starts_with(prefix))
+    });
+    if !supports_main {
         bail!("the main --model must have a --backend-route");
     }
     Ok(())

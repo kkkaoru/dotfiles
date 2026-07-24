@@ -12,6 +12,7 @@ const MAX_DYNAMIC_ROUTES: usize = 32;
 pub(super) struct RoutedBackend {
     pub(super) model: String,
     pub(super) kind: BackendKind,
+    template: BackendRoute,
     startup: Arc<BackendStartup>,
     activated: AtomicBool,
 }
@@ -25,10 +26,11 @@ enum StartupState {
 }
 
 impl RoutedBackend {
-    fn lazy(model: String, kind: BackendKind, startup: Arc<BackendStartup>) -> Self {
+    fn lazy(route: BackendRoute, startup: Arc<BackendStartup>) -> Self {
         Self {
-            model,
-            kind,
+            model: route.model.clone(),
+            kind: route.backend,
+            template: route,
             startup,
             activated: AtomicBool::new(false),
         }
@@ -41,6 +43,7 @@ impl RoutedBackend {
         let startup = Arc::new(OnceLock::new());
         startup.set(receiver).ok().expect("empty startup cell");
         Self {
+            template: BackendRoute::new(&model, kind),
             model,
             kind,
             startup,
@@ -71,10 +74,9 @@ impl RoutedBackend {
         self.startup
             .get_or_init(|| {
                 let (sender, receiver) = tokio::sync::watch::channel(StartupState::Starting);
-                let kind = self.kind;
-                let model = self.model.clone();
+                let route = self.template.clone();
                 tokio::spawn(async move {
-                    let result = AgentBackend::spawn(kind, &model)
+                    let result = AgentBackend::spawn_route(&route)
                         .await
                         .map_err(|error| Arc::<str>::from(format!("{error:#}")));
                     sender.send_replace(StartupState::Ready(result));
@@ -122,8 +124,7 @@ impl RoutedBackends {
                 .iter()
                 .map(|route| {
                     Arc::new(RoutedBackend::lazy(
-                        route.model.clone(),
-                        route.backend,
+                        route.clone(),
                         provider_startup(route.backend, &codex_startup),
                     ))
                 })
@@ -151,13 +152,20 @@ impl RoutedBackends {
     }
 
     pub(super) fn supports(&self, model: &str) -> bool {
-        self.configured.iter().any(|route| route.model == model) || inferred_kind(model).is_some()
+        self.configured.iter().any(|route| {
+            route.model == model
+                || route
+                    .template
+                    .model_prefixes
+                    .iter()
+                    .any(|prefix| model.starts_with(prefix))
+        }) || inferred_kind(model).is_some()
     }
 
     pub(super) fn descriptions(&self) -> Vec<String> {
         self.configured
             .iter()
-            .map(|route| format!("{}={}", route.model, route.kind))
+            .map(|route| route.template.description())
             .collect()
     }
 
@@ -232,11 +240,35 @@ impl RoutedBackends {
         if dynamic.len() == MAX_DYNAMIC_ROUTES {
             bail!("dynamic backend route limit reached");
         }
-        let kind = inferred_kind(model)
+        let template = self
+            .configured
+            .iter()
+            .filter(|route| {
+                route
+                    .template
+                    .model_prefixes
+                    .iter()
+                    .any(|prefix| model.starts_with(prefix))
+            })
+            .max_by_key(|route| {
+                route
+                    .template
+                    .model_prefixes
+                    .iter()
+                    .filter(|prefix| model.starts_with(*prefix))
+                    .map(String::len)
+                    .max()
+                    .unwrap_or_default()
+            })
+            .map(|route| route.template.clone())
+            .or_else(|| inferred_kind(model).map(|kind| BackendRoute::new(model, kind)))
             .with_context(|| format!("no backend route is configured for model `{model}`"))?;
+        let kind = template.backend;
         let route = Arc::new(RoutedBackend::lazy(
-            model.to_owned(),
-            kind,
+            BackendRoute {
+                model: model.to_owned(),
+                ..template
+            },
             provider_startup(kind, &self.codex_startup),
         ));
         dynamic.push(Arc::clone(&route));
@@ -262,7 +294,9 @@ impl RoutedBackends {
 fn provider_startup(kind: BackendKind, codex_startup: &Arc<BackendStartup>) -> Arc<BackendStartup> {
     match kind {
         BackendKind::CodexAppServer => Arc::clone(codex_startup),
-        BackendKind::CopilotAcp | BackendKind::GrokAcp => Arc::new(OnceLock::new()),
+        BackendKind::ConfiguredAcp | BackendKind::CopilotAcp | BackendKind::GrokAcp => {
+            Arc::new(OnceLock::new())
+        }
     }
 }
 
@@ -277,58 +311,4 @@ fn inferred_kind(model: &str) -> Option<BackendKind> {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-
-    use super::{MAX_DYNAMIC_ROUTES, RoutedBackends};
-    use crate::agent_backend::{BackendKind, BackendRoute};
-
-    #[test]
-    fn shares_codex_startup_but_keeps_acp_servers_model_specific() {
-        let routes = RoutedBackends::lazy(&[
-            route("gpt-one", BackendKind::CodexAppServer),
-            route("gpt-two", BackendKind::CodexAppServer),
-            route("gpt-copilot-one", BackendKind::CopilotAcp),
-            route("gpt-copilot-two", BackendKind::CopilotAcp),
-            route("grok-one", BackendKind::GrokAcp),
-            route("grok-two", BackendKind::GrokAcp),
-        ]);
-        let gpt_one = routes.route(0);
-        let gpt_two = routes.route(1);
-        let copilot_one = routes.route(2);
-        let copilot_two = routes.route(3);
-        let grok_one = routes.route(4);
-        let grok_two = routes.route(5);
-
-        assert!(Arc::ptr_eq(&gpt_one.startup, &gpt_two.startup));
-        assert!(!Arc::ptr_eq(&copilot_one.startup, &copilot_two.startup));
-        assert!(!Arc::ptr_eq(&grok_one.startup, &grok_two.startup));
-
-        let (_, dynamic_gpt) = routes.resolve("gpt-dynamic").unwrap();
-        let (_, dynamic_grok) = routes.resolve("grok-dynamic").unwrap();
-        assert!(Arc::ptr_eq(&gpt_one.startup, &dynamic_gpt.startup));
-        assert!(!Arc::ptr_eq(&grok_one.startup, &dynamic_grok.startup));
-    }
-
-    #[test]
-    fn bounds_dynamic_routes_but_reuses_existing_models() {
-        let routes = RoutedBackends::lazy(&[]);
-        for index in 0..MAX_DYNAMIC_ROUTES {
-            let (route_index, route) = routes
-                .resolve(&format!("gpt-dynamic-{index}"))
-                .expect("available dynamic route");
-            assert_eq!(route_index, index);
-            assert_eq!(route.model, format!("gpt-dynamic-{index}"));
-        }
-        let (existing, _) = routes.resolve("gpt-dynamic-0").expect("existing route");
-        assert_eq!(existing, 0);
-        assert!(routes.resolve("grok-over-limit").is_err());
-    }
-
-    fn route(model: &str, backend: BackendKind) -> BackendRoute {
-        BackendRoute {
-            model: model.to_owned(),
-            backend,
-        }
-    }
-}
+include!("routes_tests.rs");

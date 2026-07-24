@@ -13,6 +13,7 @@ use crate::app_server::events::ThreadEventDispatcher;
 pub(super) enum AcpProvider {
     Grok,
     Copilot,
+    Configured,
 }
 
 impl AcpProvider {
@@ -20,6 +21,7 @@ impl AcpProvider {
         match self {
             Self::Grok => "Grok",
             Self::Copilot => "Copilot",
+            Self::Configured => "Configured",
         }
     }
 
@@ -27,6 +29,7 @@ impl AcpProvider {
         match self {
             Self::Grok => "claudex-grok-acp",
             Self::Copilot => "claudex-copilot-acp",
+            Self::Configured => "claudex-configured-acp",
         }
     }
 }
@@ -34,6 +37,7 @@ impl AcpProvider {
 pub(super) async fn start(
     provider: AcpProvider,
     program: &OsString,
+    arguments: Option<&[String]>,
     model: &str,
     cwd: &Path,
     events: Arc<ThreadEventDispatcher>,
@@ -49,6 +53,14 @@ pub(super) async fn start(
         }
         AcpProvider::Copilot => {
             command.args(["--acp", "--stdio", "--model", model]);
+        }
+        AcpProvider::Configured => {
+            let arguments = arguments.context("configured ACP arguments are required")?;
+            command.args(
+                arguments
+                    .iter()
+                    .map(|argument| argument.replace("{model}", model)),
+            );
         }
     }
     let mut child = command

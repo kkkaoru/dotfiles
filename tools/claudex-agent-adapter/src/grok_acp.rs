@@ -15,7 +15,10 @@ use anyhow::{Context, Result, anyhow};
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
 
-use crate::app_server::{ThreadEvents, events::ThreadEventDispatcher};
+use crate::{
+    agent_backend::AcpLaunch,
+    app_server::{ThreadEvents, events::ThreadEventDispatcher},
+};
 
 mod client;
 mod connection;
@@ -52,6 +55,7 @@ enum DriverCommand {
 struct DriverSetup {
     provider: AcpProvider,
     program: OsString,
+    arguments: Option<Vec<String>>,
     model: String,
     cwd: PathBuf,
     events: Arc<ThreadEventDispatcher>,
@@ -70,14 +74,14 @@ impl GrokAcp {
     pub async fn spawn(model: &str) -> Result<Arc<Self>> {
         let program = std::env::var_os("CLAUDEX_GROK_PROGRAM").unwrap_or_else(|| "grok".into());
         let cwd = std::env::current_dir().context("resolve Grok ACP working directory")?;
-        Self::spawn_provider(AcpProvider::Grok, model, program, cwd).await
+        Self::spawn_provider(AcpProvider::Grok, model, program, None, cwd).await
     }
 
     pub async fn spawn_copilot(model: &str) -> Result<Arc<Self>> {
         let program =
             std::env::var_os("CLAUDEX_COPILOT_PROGRAM").unwrap_or_else(|| "copilot".into());
         let cwd = std::env::current_dir().context("resolve Copilot ACP working directory")?;
-        Self::spawn_provider(AcpProvider::Copilot, model, program, cwd).await
+        Self::spawn_provider(AcpProvider::Copilot, model, program, None, cwd).await
     }
 
     pub async fn spawn_with_program(
@@ -85,7 +89,7 @@ impl GrokAcp {
         program: impl Into<OsString>,
         cwd: PathBuf,
     ) -> Result<Arc<Self>> {
-        Self::spawn_provider(AcpProvider::Grok, model, program, cwd).await
+        Self::spawn_provider(AcpProvider::Grok, model, program, None, cwd).await
     }
 
     pub async fn spawn_copilot_with_program(
@@ -93,13 +97,26 @@ impl GrokAcp {
         program: impl Into<OsString>,
         cwd: PathBuf,
     ) -> Result<Arc<Self>> {
-        Self::spawn_provider(AcpProvider::Copilot, model, program, cwd).await
+        Self::spawn_provider(AcpProvider::Copilot, model, program, None, cwd).await
+    }
+
+    pub async fn spawn_configured(model: &str, launch: &AcpLaunch) -> Result<Arc<Self>> {
+        let cwd = std::env::current_dir().context("resolve configured ACP working directory")?;
+        Self::spawn_provider(
+            AcpProvider::Configured,
+            model,
+            &launch.program,
+            Some(launch.arguments.clone()),
+            cwd,
+        )
+        .await
     }
 
     async fn spawn_provider(
         provider: AcpProvider,
         model: &str,
         program: impl Into<OsString>,
+        arguments: Option<Vec<String>>,
         cwd: PathBuf,
     ) -> Result<Arc<Self>> {
         let (command_tx, command_rx) = mpsc::channel(COMMAND_QUEUE_CAPACITY);
@@ -123,6 +140,7 @@ impl GrokAcp {
                     DriverSetup {
                         provider,
                         program,
+                        arguments,
                         model,
                         cwd,
                         events: driver_events,
@@ -201,6 +219,7 @@ async fn run_driver(setup: DriverSetup, mut commands: mpsc::Receiver<DriverComma
     let started = connection::start(
         setup.provider,
         &setup.program,
+        setup.arguments.as_deref(),
         &setup.model,
         &setup.cwd,
         Arc::clone(&setup.events),

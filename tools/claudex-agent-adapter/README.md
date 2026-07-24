@@ -1,11 +1,12 @@
 # claudex agent adapter
 
 This local Rust service presents the subset of Anthropic's Messages API used by
-Claude Code and routes it to one of three agent backends:
+Claude Code and routes it to built-in or config-defined agent backends:
 
 | `--backend-route MODEL=BACKEND` | Backend protocol | Tool runtime |
 | --- | --- | --- |
 | `codex-app-server` | Codex app-server JSON-RPC | Claude Code tools bridged through Codex |
+| `configured-acp` | Configured Agent Client Protocol command | Provider-owned agent tools and permission requests |
 | `copilot-acp` | GitHub Copilot CLI Agent Client Protocol (ACP) | Copilot CLI agent tools and permission requests |
 | `grok-acp` | Grok Build Agent Client Protocol (ACP) | Grok Build agent tools and permission requests |
 
@@ -72,12 +73,18 @@ The public CLI uses explicit subcommands:
 
 ```text
 claudex-agent-adapter launch --model MODEL --backend-route MODEL=BACKEND [...] [ADAPTER OPTIONS] [--inherit-claude-model] -- [CLAUDE OPTIONS]
+claudex-agent-adapter launch --provider-config PATH [--model MODEL] [ADAPTER OPTIONS] [--inherit-claude-model] -- [CLAUDE OPTIONS]
 claudex-agent-adapter ensure --model MODEL --backend-route MODEL=BACKEND [...] [ADAPTER OPTIONS]
 claudex-agent-adapter serve --model MODEL --backend-route MODEL=BACKEND [...] [ADAPTER OPTIONS]
 claudex-agent-adapter build-id
 ```
 
-Backend values are `codex-app-server`, `copilot-acp`, and `grok-acp`.
+Backend values are `codex-app-server`, `configured-acp`, `copilot-acp`, and
+`grok-acp`. The preferred launcher path is `--provider-config
+$HOME/.config/claudex/providers.json`. It defines enabled providers, the main
+provider, default models, effort, model prefixes, quota names, fallback, and
+advisor. A `configured-acp` provider also supplies a program and argument array;
+`{model}` placeholders are replaced directly without invoking a shell.
 `--backend-route` is repeatable, model keys must be unique, and the main
 `--model` must have a route.
 Omitting all routes preserves the single-model `codex-app-server` default.
@@ -86,32 +93,33 @@ Other adapter options are `--listen`, `--subscription-max-processes`, and
 120. The launch-only `--inherit-claude-model` option omits Claude Code's
 `--model` argument, allowing the normal Claude `model` and `effortLevel`
 settings to control the outer conversation while the adapter model remains a
-backend bootstrap route. The fish launcher uses this mode with the
-`claudex-orchestrator` agent when `claudex` has no arguments. That agent reads a
-sanitized, five-minute Codexbar usage cache and delegates primarily to the
-manually configurable `claudex-gpt` and `claudex-grok` agents; it selects the
-`claudex-sonnet` subscription fallback only when both provider quotas are
-unavailable. The fish launcher configures provider routes and translates optional
-`CLAUDEX_MODEL`, `CLAUDEX_BACKEND`, `CLAUDEX_CODEX_MODEL`, `CLAUDEX_GROK_MODEL`,
-`CLAUDEX_ADAPTER_LISTEN`, `CLAUDEX_SUBSCRIPTION_MAX_PROCESSES`, and
+backend bootstrap route. The fish launcher uses the configured main provider with the
+`claudex-orchestrator` agent when `claudex` has no arguments, because its Agent calls must pass
+through the adapter. `CLAUDEX_MODEL` may override the orchestrator with any model accepted by a
+configured prefix. The agent reads a
+sanitized, five-minute Codexbar usage cache and delegates to available agents in
+the shared provider config. It selects the configured subscription fallback only
+when all capacity-managed providers are unavailable and may consult the configured
+advisor independently for complex decisions. The fish launcher translates optional
+`CLAUDEX_PROVIDER_CONFIG`, `CLAUDEX_MODEL`, `CLAUDEX_ADAPTER_LISTEN`,
+`CLAUDEX_SUBSCRIPTION_MAX_PROCESSES`, and
 `CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES` values into these options. Adapter-private
 variables are removed before Claude Code starts.
 
-For example, this keeps model selection independent from backend selection and
-routes the selected model through GitHub Copilot CLI for the main session:
+For example, this selects another model dynamically while its matching
+`modelPrefixes` entry determines the backend:
 
 ```fish
-CLAUDEX_MODEL=MODEL CLAUDEX_BACKEND=copilot-acp claudex
+CLAUDEX_MODEL=MODEL claudex
 ```
 
 `ANTHROPIC_AUTH_TOKEN` remains an environment variable because command-line
 secrets are exposed in process listings. API routes accept it as either a
 Bearer token or `x-api-key`; `/health` remains public. A non-loopback listener
-requires a non-default token. The main model is a required CLI option and is
-not hard-coded by claudex. The fish function discovers provider defaults from
-their own configuration files; `CLAUDEX_MODEL` and the provider-specific
-variables override those values. Advisor and collaborator model IDs come from
-Claude Code settings.
+requires a non-default token. Either `--model` or `--provider-config` is
+required; the latter derives the main model from `mainProvider`. The fish
+function uses the shared config by default, while `CLAUDEX_MODEL` may override
+the bootstrap model when one of the configured prefixes supports it.
 
 Each request selects effort independently. An explicit Anthropic
 `output_config.effort` wins; otherwise the adapter rereads Claude Code's
@@ -144,11 +152,11 @@ The adapter accepts an arbitrary explicit SubAgent model through its private
 `claudex_model` Agent field, so selection is not limited by Claude Code's native
 Agent model enum. It removes provider model details from the public tool input,
 correlates the child request, and routes the selected ID through the configured
-backend routes. An unconfigured model whose ID starts with `gpt` or `grok` is
-also added lazily and routed to Codex
-app-server or Grok ACP respectively, so SubAgents may select provider models
-that were not named when the daemon started. An explicit `copilot-acp` route
-takes precedence over this prefix inference. Other unconfigured model IDs fall
+backend routes. Models matching a configured `modelPrefixes` value are added
+lazily and routed through that provider, so manually added model families and
+ACPs need no Rust change. When prefixes overlap, the longest matching prefix
+wins. Legacy `gpt` and `grok` inference remains available for direct CLI routes.
+Other unconfigured model IDs fall
 back to the Claude subscription process. Without an explicit model, a matched
 Claude Code child inherits the model of the session that launched it; an
 otherwise-unmatched child request falls back to the configured main model. This
@@ -204,7 +212,9 @@ env -u RUSTUP_TOOLCHAIN cargo coverage-branch
 coverage, plus at least 95% line coverage for every production source file.
 `cargo coverage-branch` uses nightly-only Rust branch instrumentation and
 enforces at least 95% for all four aggregate metrics: lines, functions,
-regions, and branches. Test-only modules and mock process fixtures under
+regions, and branches. Branch outcomes generated more than once for the same
+source location across unit and integration binaries are merged before the
+percentage is calculated. Test-only modules and mock process fixtures under
 `tests/fixtures` are excluded so the report measures production behavior. The
 ACP client trait shim is the only production exclusion and has a documented
 nightly LLVM mapping workaround in the source; its delegated application logic

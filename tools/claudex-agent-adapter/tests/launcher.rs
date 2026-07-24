@@ -216,7 +216,7 @@ fn ensure_running_reports_missing_or_invalid_environment() {
         .arg("ensure")
         .output()
         .expect("run without model");
-    assert_error(missing_model, "--model is required");
+    assert_error(missing_model, "--model or --provider-config is required");
 
     let invalid_listen = Command::new(binary)
         .args([

@@ -40,6 +40,14 @@ mod tests {
                 "MODEL=BACKEND",
             ),
             (
+                vec!["serve", "--model", "m", "--backend-route-json", "invalid"],
+                "invalid backend route JSON",
+            ),
+            (
+                vec!["serve", "--provider-config", "/definitely/missing/providers.json"],
+                "read provider config",
+            ),
+            (
                 vec![
                     "serve",
                     "--model",
@@ -146,6 +154,44 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn expands_provider_config_and_internal_route_json() {
+        let root = tempfile::tempdir().expect("provider config fixture");
+        let path = root.path().join("providers.json");
+        std::fs::write(
+            &path,
+            r#"{"version":1,"mainProvider":"vendor","providers":[{"id":"vendor","agent":"worker","defaultModel":"vendor-default","effort":"high","modelPrefixes":["vendor-"],"backend":"configured-acp","acp":{"program":"vendor","arguments":["--model","{model}"]}}],"fallback":{"agent":"fallback","model":"sonnet","effort":"high"},"advisor":{"agent":"advisor","model":"fable","effort":"xhigh"}}"#,
+        )
+        .expect("provider config");
+        let command = parse_command(
+            [
+                OsString::from("serve"),
+                OsString::from("--provider-config"),
+                path.into_os_string(),
+                OsString::from("--model"),
+                OsString::from("vendor-next"),
+            ]
+            .into_iter()
+            .collect(),
+        )
+        .expect("config-driven command");
+        let RuntimeCommand::Serve(options) = command else {
+            panic!("serve command expected");
+        };
+        assert_eq!(options.model, "vendor-next");
+        assert_eq!(options.routes[0].backend, BackendKind::ConfiguredAcp);
+
+        let route = serde_json::to_string(&options.routes[0]).unwrap();
+        let command = parse_command(
+            ["serve", "--model", "vendor-default", "--backend-route-json", &route]
+                .into_iter()
+                .map(OsString::from)
+                .collect(),
+        )
+        .expect("serialized daemon route");
+        assert!(matches!(command, RuntimeCommand::Serve(_)));
+    }
+
     #[tokio::test]
     async fn runs_the_build_id_command() {
         assert_eq!(
@@ -176,10 +222,7 @@ mod tests {
             .expect("listener");
         let listen = listener.local_addr().expect("listener address");
         let options = AdapterOptions {
-            routes: vec![BackendRoute {
-                model: "model".to_owned(),
-                backend: BackendKind::CodexAppServer,
-            }],
+            routes: vec![BackendRoute::new("model", BackendKind::CodexAppServer)],
             model: "model".to_owned(),
             listen,
             subscription_max_processes: 2,
@@ -215,10 +258,7 @@ mod tests {
             .await
             .expect("listener");
         let options = AdapterOptions {
-            routes: vec![BackendRoute {
-                model: "model".to_owned(),
-                backend: BackendKind::CodexAppServer,
-            }],
+            routes: vec![BackendRoute::new("model", BackendKind::CodexAppServer)],
             model: "model".to_owned(),
             listen: listener.local_addr().expect("listener address"),
             subscription_max_processes: 0,
@@ -232,10 +272,7 @@ mod tests {
 
         let occupied = std::net::TcpListener::bind("127.0.0.1:0").expect("occupied listener");
         let options = AdapterOptions {
-            routes: vec![BackendRoute {
-                model: "model".to_owned(),
-                backend: BackendKind::CodexAppServer,
-            }],
+            routes: vec![BackendRoute::new("model", BackendKind::CodexAppServer)],
             model: "model".to_owned(),
             listen: occupied.local_addr().expect("occupied address"),
             subscription_max_processes: 1,

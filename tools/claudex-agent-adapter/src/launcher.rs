@@ -191,7 +191,19 @@ fn relay_stderr(stderr: impl std::io::Read, model: &str) -> Result<()> {
     relay_filtered(stderr, model, &mut output)
 }
 
-fn relay_filtered(input: impl std::io::Read, model: &str, output: &mut impl Write) -> Result<()> {
+fn relay_filtered(
+    mut input: impl std::io::Read,
+    model: &str,
+    output: &mut impl Write,
+) -> Result<()> {
+    relay_filtered_io(&mut input, model, output)
+}
+
+fn relay_filtered_io(
+    input: &mut dyn std::io::Read,
+    model: &str,
+    output: &mut dyn Write,
+) -> Result<()> {
     let advisor_warning = format!("Advisor disabled — base model '{model}' has no advisor rank");
     let connector_warning = "claude.ai connectors are disabled because";
     let mut reader = BufReader::new(input);
@@ -293,8 +305,12 @@ fn daemon_arguments(options: &AdapterOptions) -> Vec<OsString> {
         options.model.clone().into(),
     ];
     for route in &options.routes {
-        arguments.push("--backend-route".into());
-        arguments.push(format!("{}={}", route.model, route.backend).into());
+        arguments.push("--backend-route-json".into());
+        arguments.push(
+            serde_json::to_string(route)
+                .expect("backend route must serialize")
+                .into(),
+        );
     }
     arguments.extend([
         "--listen".into(),
@@ -308,10 +324,7 @@ fn daemon_arguments(options: &AdapterOptions) -> Vec<OsString> {
 }
 
 fn route_descriptions(routes: &[BackendRoute]) -> Vec<String> {
-    routes
-        .iter()
-        .map(|route| format!("{}={}", route.model, route.backend))
-        .collect()
+    routes.iter().map(BackendRoute::description).collect()
 }
 
 async fn wait_until_ready(client: &reqwest::Client, config: &ServiceConfig) -> Result<()> {

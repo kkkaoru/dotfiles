@@ -47,9 +47,12 @@ pub(super) fn dispatch_provider_tool_update(
                 call = call.kind(kind);
             }
             call = call.status(status);
-            if let Some(raw_input) = fields.raw_input.clone() {
-                call = call.raw_input(raw_input);
-            }
+            call = call.raw_input(
+                fields
+                    .raw_input
+                    .clone()
+                    .expect("checked incremental tool input"),
+            );
             if let Some(content) = fields.content.clone() {
                 call = call.content(content);
             }
@@ -73,7 +76,7 @@ pub(super) fn dispatch_provider_tool_update(
             if let Some(raw_input) = fields.raw_input {
                 params["arguments"] =
                     enrich_arguments(raw_input, &fields.content, &fields.locations);
-            } else if fields.content.is_some() || fields.locations.is_some() {
+            } else {
                 params["arguments"] =
                     enrich_arguments(json!({}), &fields.content, &fields.locations);
             }

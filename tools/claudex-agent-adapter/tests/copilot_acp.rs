@@ -91,6 +91,13 @@ async fn routes_a_selected_model_through_copilot_cli_acp() {
     let copilot = AgentBackend::copilot(agent);
     assert!(copilot.is_alive());
     assert_eq!(copilot.kind().to_string(), "copilot-acp");
+    assert!(copilot.request("unsupported", json!({})).await.is_err());
+    assert!(
+        copilot
+            .request_detached("unsupported", json!({}))
+            .await
+            .is_err()
+    );
     let backend = AgentBackend::routed(vec![("gpt-copilot-test".to_owned(), copilot)]);
     assert_eq!(
         backend.route_descriptions(),

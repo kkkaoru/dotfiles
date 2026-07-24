@@ -9,10 +9,10 @@ use serde_json::Value;
 mod report;
 #[cfg(test)]
 use report::is_test_only_source;
-use report::{coverage_percent, production_line_failures};
+use report::{coverage_percent, production_line_failures, source_branch_percent};
 
 const MINIMUM_PERCENT: f64 = 95.0;
-const TOTAL_METRICS: [&str; 4] = ["lines", "functions", "regions", "branches"];
+const TOTAL_METRICS: [&str; 3] = ["lines", "functions", "regions"];
 
 pub fn run(root: &Path) -> Result<()> {
     run_with(root, command_status)
@@ -55,7 +55,6 @@ fn coverage_arguments(report: &Path) -> Vec<String> {
         "--include-build-script",
         "--ignore-filename-regex",
         "/tests/fixtures/",
-        "--summary-only",
         "--json",
         "--output-path",
     ]
@@ -89,6 +88,10 @@ pub fn audit_report(root: &Path, report: &Path) -> Result<()> {
         .collect::<Result<Vec<_>>>()?
         .into_iter()
         .flatten()
+        .chain({
+            let coverage = source_branch_percent(root, data)?;
+            (coverage < MINIMUM_PERCENT).then(|| format!("branches: {coverage:.2}%"))
+        })
         .collect::<Vec<_>>();
     if !total_failures.is_empty() {
         bail!(
@@ -118,7 +121,7 @@ mod tests {
 
     use super::{
         audit_report, command_status, coverage_arguments, coverage_percent, is_test_only_source,
-        run_commands, run_with,
+        run_commands, run_with, source_branch_percent,
     };
 
     #[test]
@@ -131,6 +134,7 @@ mod tests {
         );
         assert!(arguments.contains(&"--include-build-script".to_owned()));
         assert!(arguments.contains(&"/tests/fixtures/".to_owned()));
+        assert!(!arguments.contains(&"--summary-only".to_owned()));
         assert_eq!(arguments.last().map(String::as_str), Some("report.json"));
     }
 
@@ -181,6 +185,26 @@ mod tests {
         fs::write(&report, serde_json::to_vec(&document).expect("JSON")).expect("write report");
         let error = audit_report(functions.path(), &report).expect_err("low functions");
         assert!(error.to_string().contains("functions: 94.90%"));
+    }
+
+    #[test]
+    fn merges_duplicate_branch_instances_by_source_location() {
+        let root = tempfile::tempdir().expect("branch fixture");
+        let source = root.path().join("src/lib.rs");
+        fs::create_dir_all(source.parent().unwrap()).unwrap();
+        fs::write(&source, "pub fn covered() {}\n").unwrap();
+        let data = json!({
+            "totals":{"branches":{"covered":0,"count":4}},
+            "files":[{
+                "filename":source,
+                "branches":[
+                    [1,1,1,4,3,0,0,0,4],
+                    [1,1,1,4,0,2,0,0,4]
+                ],
+                "summary":{"lines":{"covered":1,"count":1}}
+            }]
+        });
+        assert_eq!(source_branch_percent(root.path(), &data).unwrap(), 100.0);
     }
 
     #[test]

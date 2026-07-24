@@ -9,6 +9,7 @@ pub mod copilot_acp;
 pub mod coverage_gate;
 pub mod grok_acp;
 pub mod launcher;
+pub mod provider_config;
 pub mod runtime;
 
 pub const ADAPTER_PROTOCOL_VERSION: u64 = 16;

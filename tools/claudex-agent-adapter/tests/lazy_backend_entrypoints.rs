@@ -12,6 +12,12 @@ use claudex_agent_adapter::{
 };
 use serde_json::json;
 
+#[test]
+#[should_panic(expected = "a routed backend has no single kind")]
+fn routed_backend_has_no_leaf_kind() {
+    AgentBackend::spawn_routes(&[route("model", BackendKind::CodexAppServer)]).kind();
+}
+
 #[tokio::test]
 async fn lazy_routes_cover_provider_entry_points_and_failed_startup_state() {
     let (home, codex_spawns) = provider_home();
@@ -125,6 +131,21 @@ async fn exercise_dynamic_route() {
         .respond(json!(999), json!({}))
         .await
         .expect("find the dynamically started Codex backend");
+    for index in 1..32 {
+        dynamic_only
+            .request(
+                "thread/start",
+                json!({"model":format!("gpt-dynamic-only-{index}")}),
+            )
+            .await
+            .expect("fill dynamic route capacity");
+    }
+    assert!(
+        dynamic_only
+            .request("thread/start", json!({"model":"gpt-over-limit"}))
+            .await
+            .is_err()
+    );
 }
 
 async fn exercise_failed_route_health() {
@@ -265,8 +286,5 @@ async fn post(url: &str, body: serde_json::Value) -> serde_json::Value {
 }
 
 fn route(model: &str, backend: BackendKind) -> BackendRoute {
-    BackendRoute {
-        model: model.to_owned(),
-        backend,
-    }
+    BackendRoute::new(model, backend)
 }

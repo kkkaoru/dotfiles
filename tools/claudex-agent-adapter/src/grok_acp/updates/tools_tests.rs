@@ -38,6 +38,7 @@ mod tests {
             ("Using deploy…", "deploy"),
             ("read_file: target", "read_file"),
             ("two words: target", "two words: target"),
+            (": target", ": target"),
             ("", "Tool"),
         ] {
             assert_eq!(
@@ -93,6 +94,14 @@ mod tests {
             Some(json!("only"))
         );
         assert_eq!(combine_output(None, None), None);
+        assert_eq!(
+            combine_output(Some(json!("same")), Some(&vec![text("same")])),
+            Some(json!("same"))
+        );
+        assert_eq!(
+            enrich_arguments(json!({}), &Some(Vec::new()), &Some(Vec::new())),
+            json!({})
+        );
     }
 
     #[tokio::test]
@@ -166,6 +175,53 @@ mod tests {
             messages.push(message);
         }
         assert_dispatched_messages(&messages);
+    }
+
+    #[tokio::test]
+    async fn dispatches_each_optional_update_field_independently() {
+        let events = ThreadEventDispatcher::default();
+        let receiver = events.subscribe("session");
+        let updates = [
+            acp::ToolCallUpdateFields::new()
+                .title("Minimal")
+                .status(acp::ToolCallStatus::Pending)
+                .raw_input(json!({"minimal":true})),
+            acp::ToolCallUpdateFields::new()
+                .status(acp::ToolCallStatus::Pending)
+                .raw_input(json!({"pending":true})),
+            acp::ToolCallUpdateFields::new()
+                .title("No input")
+                .status(acp::ToolCallStatus::InProgress),
+            acp::ToolCallUpdateFields::new()
+                .title("Completed")
+                .status(acp::ToolCallStatus::Completed)
+                .raw_input(json!({"done":true}))
+                .raw_output(json!("output")),
+            acp::ToolCallUpdateFields::new()
+                .status(acp::ToolCallStatus::Failed)
+                .content(vec![text("failure")]),
+            acp::ToolCallUpdateFields::new()
+                .locations(vec![acp::ToolCallLocation::new("only-location")]),
+        ];
+        for (index, fields) in updates.into_iter().enumerate() {
+            dispatch_provider_tool_update(
+                &events,
+                "session",
+                acp::ToolCallUpdate::new(format!("optional-{index}"), fields),
+            );
+        }
+
+        let mut messages = Vec::new();
+        while let Ok(Some(message)) =
+            tokio::time::timeout(std::time::Duration::from_millis(10), receiver.recv()).await
+        {
+            messages.push(message);
+        }
+        assert_eq!(messages.len(), 7);
+        assert!(messages.iter().any(|event| event["params"]["output"] == "output"));
+        assert!(messages.iter().any(|event| {
+            event["params"]["arguments"]["locations"][0]["path"] == "only-location"
+        }));
     }
 
     fn assert_dispatched_messages(messages: &[Value]) {

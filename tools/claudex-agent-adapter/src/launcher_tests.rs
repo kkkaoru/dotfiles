@@ -8,10 +8,10 @@ mod tests {
     fn config() -> ServiceConfig {
         ServiceConfig {
             options: AdapterOptions {
-                routes: vec![BackendRoute {
-                    model: "test-model".to_owned(),
-                    backend: BackendKind::CodexAppServer,
-                }],
+                routes: vec![BackendRoute::new(
+                    "test-model",
+                    BackendKind::CodexAppServer,
+                )],
                 listen: "127.0.0.1:8318".parse().expect("default listen"),
                 model: "test-model".to_owned(),
                 subscription_max_processes: 20,

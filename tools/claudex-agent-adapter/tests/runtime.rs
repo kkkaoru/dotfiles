@@ -226,7 +226,10 @@ fn unused_port() -> u16 {
 
 #[test]
 fn reports_cli_and_server_configuration_errors() {
-    assert_command_error(command(&["launch"]), "--model is required");
+    assert_command_error(
+        command(&["launch"]),
+        "--model or --provider-config is required",
+    );
     assert_command_error(command(&["launch", "--model", "model"]), "requires `--`");
     assert_command_error(command(&[]), "command is required");
     assert_command_error(
