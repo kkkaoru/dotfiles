@@ -1,25 +1,28 @@
 ---
 name: claudex-routing
-description: Route claudex work to configured GPT, Grok, or Sonnet subagents from the current Codexbar quota summary. Use automatically in the claudex orchestrator and manually when diagnosing or changing provider-capacity routing.
+description: Route claudex work to config-defined provider agents by Codexbar capacity, select explicitly requested models dynamically, and consult the independent advisor when useful. Use automatically in the claudex orchestrator and manually when diagnosing or changing provider routing.
 disable-model-invocation: true
 ---
 
 # Claudex Routing
 
 Use the routing context injected at prompt submission as the authoritative capacity snapshot for
-the current turn. It contains only provider names, utilization percentages, and selected agent
-names; account details from `codexbar` are never retained.
+the current turn. It contains only provider names, utilization percentages, routing fields, and
+selected agents; account details from `codexbar` are never retained.
 
 ## Routing policy
 
-1. Delegate substantive work primarily to every agent listed in `selected_agents`.
-2. When both `claudex-gpt` and `claudex-grok` are selected, split independent work between them
-   or request complementary reviews when that improves the result. Parallelism is optional for
-   small or sequential tasks.
-3. When only one provider agent is selected, use that agent for the primary delegated work.
-4. Use `claudex-sonnet` only when both external providers are unavailable, or when the injected
-   context explicitly selects it.
-5. Synthesize, verify, and present the subagents' results in the main conversation. Capacity
+1. Delegate substantive work primarily to agents in `selected_workers`. Pass their `model` and
+   `effort` values as `claudex_model` and `claudex_effort`.
+2. If the user explicitly names a model that matches a provider's `model_prefixes`, select that
+   provider dynamically and pass the exact requested model. The adapter resolves the matching
+   backend lazily.
+3. Use multiple selected workers for independent work or complementary review only when useful.
+4. Use the configured fallback only when every capacity-managed provider is unavailable.
+5. Invoke the configured `advisor` in addition to workers when explicitly requested or when a
+   complex, ambiguous, high-risk, or consequential decision benefits from strategic review. The
+   advisor never replaces an implementation worker and does not depend on provider quota.
+6. Synthesize, verify, and present the subagents' results in the main conversation. Capacity
    selection does not relax repository instructions, safety requirements, or validation gates.
 
 `scripts/route_usage.py` refreshes the capacity snapshot at most once every five minutes by
@@ -27,14 +30,27 @@ default. Set `CLAUDEX_USAGE_CACHE_SECONDS=0` to disable caching. A missing provi
 100% utilization in any reported quota window, malformed output, or a `codexbar` failure is
 treated conservatively as unavailable.
 
-## Manual model updates
+After changing the routing script, run `uv run tests/run_coverage.py` from this skill directory.
+The test runner measures statements and branches and fails below 95% coverage.
 
-Provider model IDs and effort levels are intentionally stored in agent frontmatter rather than
-in the adapter implementation:
+## Provider configuration
 
-- `.claude/agents/claudex-gpt.md`
-- `.claude/agents/claudex-grok.md`
-- `.claude/agents/claudex-sonnet.md`
+`.config/claudex/providers.json` is the shared source for the main provider, enabled providers,
+default models, effort, model prefixes, capacity provider names, fallback, and advisor. The fish
+launcher and routing hook both honor `CLAUDEX_PROVIDER_CONFIG` when a different file is needed.
 
-Update those files when provider model names change. The adapter routes unconfigured `gpt*` and
-`grok*` model IDs lazily, so no Rust change is required for a normal model-version update.
+To add a model for an existing provider, extend `modelPrefixes` or update `defaultModel`. To add an
+ACP without a Rust change, add an enabled provider using `backend: "configured-acp"` and an `acp`
+object:
+
+```json
+{
+  "program": "new-provider",
+  "arguments": ["--model", "{model}", "--acp", "--stdio"]
+}
+```
+
+Arguments are passed directly without a shell, and every `{model}` occurrence is replaced with the
+selected model. The provider's `agent` must name a Claude Code agent definition. Keep that agent's
+frontmatter defaults aligned with `defaultModel` and `effort` so direct manual invocation remains
+safe; claudex orchestration passes the config values explicitly.

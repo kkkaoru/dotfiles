@@ -1,7 +1,7 @@
 ---
 name: claudex-grok
 description: Primary Grok-backed claudex worker for implementation, investigation, testing, and independent review when Codexbar reports available Grok capacity.
-model: grok-4.5
+model: inherit
 effort: high
 ---
 

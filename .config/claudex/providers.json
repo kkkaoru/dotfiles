@@ -1,0 +1,36 @@
+{
+  "version": 1,
+  "mainProvider": "codex",
+  "providers": [
+    {
+      "id": "codex",
+      "agent": "claudex-gpt",
+      "defaultModel": "gpt-5.6-sol",
+      "effort": "high",
+      "enabled": true,
+      "usageProvider": "codex",
+      "modelPrefixes": ["gpt"],
+      "backend": "codex-app-server"
+    },
+    {
+      "id": "grok",
+      "agent": "claudex-grok",
+      "defaultModel": "grok-4.5",
+      "effort": "high",
+      "enabled": true,
+      "usageProvider": "grok",
+      "modelPrefixes": ["grok"],
+      "backend": "grok-acp"
+    }
+  ],
+  "fallback": {
+    "agent": "claudex-sonnet",
+    "model": "sonnet",
+    "effort": "high"
+  },
+  "advisor": {
+    "agent": "custom-advisor",
+    "model": "claude-fable-5",
+    "effort": "xhigh"
+  }
+}
