@@ -33,7 +33,10 @@ selected agents; account details from `codexbar` are never retained.
 4. Use the configured fallback only when every capacity-managed provider is unavailable.
 5. Invoke the configured `advisor` in addition to workers when explicitly requested or when a
    complex, ambiguous, high-risk, or consequential decision benefits from strategic review. The
-   advisor never replaces an implementation worker and does not depend on provider quota.
+   advisor never replaces an implementation worker and does not depend on provider quota. Treat the
+   first compatible advisor in a session as the continuing advisor for related decisions: resume it
+   with `SendMessage` using the exact Agent/Task recipient, including after completion. Start another
+   only for true parallel or clean-room review, incompatible context, or an unavailable recipient.
 6. Synthesize, verify, and present the subagents' results in the main conversation. Capacity
    selection does not relax repository instructions, safety requirements, or validation gates.
 7. Agent/Task acceptance proves delegation, not completion. Count delegated work as complete only

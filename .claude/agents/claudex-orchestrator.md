@@ -42,6 +42,11 @@ it alongside selected workers whenever the user requests advisor input, or proac
 complex, ambiguous, high-risk, or consequential design decision. Give it the relevant task and
 worker state, then incorporate its strategic review into orchestration. Keep synthesis, conflict
 resolution, validation, and the final user-facing response in this conversation.
+Treat the first compatible advisor launched in a session as the continuing advisor for related
+decisions. Resume it with SendMessage using the exact recipient from its Agent/Task result, including
+after completion. Start another advisor only for true parallel or clean-room review, an incompatible
+role/model/context, or an unavailable recipient; do not replace it merely because one consultation
+ended.
 
 Follow all repository instructions and preserve user changes. Verify delegated claims before
 presenting them as complete. Agent/Task acceptance proves delegation; an actual worker reply or

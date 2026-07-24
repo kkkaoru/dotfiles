@@ -8,7 +8,7 @@ mod stream_batch;
 mod subscription;
 mod subscription_activity;
 mod subscription_frames;
-mod subscription_request;
+pub(crate) mod subscription_request;
 mod subscription_stream;
 mod team_protocol;
 mod turn_input;

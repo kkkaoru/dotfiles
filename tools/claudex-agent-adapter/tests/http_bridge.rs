@@ -141,6 +141,29 @@ async fn ignores_oversized_provider_events_that_the_bridge_does_not_consume() {
 }
 
 #[tokio::test]
+async fn renders_codex_provider_tools_as_progress_without_executable_tool_use() {
+    let adapter = Adapter::start().await;
+    let client = Client::new();
+    let mut request = base_request();
+    request["messages"] = json!([{"role":"user","content":"PROVIDER_TOOL_PROGRESS"}]);
+
+    let response = post_json(&client, &messages_url(&adapter), request).await;
+
+    assert_eq!(response["stop_reason"], "end_turn");
+    let content = response["content"].as_array().expect("response content");
+    assert!(content.iter().all(|block| block["type"] != "tool_use"));
+    let text = content
+        .iter()
+        .filter_map(|block| block["text"].as_str())
+        .collect::<String>();
+    assert!(text.contains("▶ Read config"), "response={response}");
+    assert!(
+        text.contains("CODEX_PROVIDER_PROGRESS_OK"),
+        "response={response}"
+    );
+}
+
+#[tokio::test]
 async fn bounds_reconstructed_history_below_the_app_server_input_limit() {
     let adapter = Adapter::start().await;
     let client = Client::new();

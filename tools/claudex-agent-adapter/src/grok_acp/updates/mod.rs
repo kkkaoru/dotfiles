@@ -4,7 +4,7 @@
 //! |---|---|
 //! | AgentThoughtChunk | thinking panel (`thinking_delta`) |
 //! | AgentMessageChunk | assistant text |
-//! | ToolCall / ToolCallUpdate | native `tool_use` cards (display-only) |
+//! | ToolCall / ToolCallUpdate | provider progress text (never executable `tool_use`) |
 //! | Plan | compact plan status text |
 //! | SessionInfo / mode | light status (when useful) |
 //! | xAI SubAgent extensions | status text |

@@ -117,6 +117,8 @@ impl<W: Write> Fixture<W> {
             self.send_interleaved_tools();
         } else if input.contains("TEXT_THEN_TOOL") {
             self.send_text_then_tool();
+        } else if input.contains("PROVIDER_TOOL_PROGRESS") {
+            self.send_provider_tool_progress();
         } else if input.contains("DISCONNECT_WITH_TOOL") {
             // turn/start serializes `input` with Value::to_string(), so the prompt is
             // JSON-encoded and real newlines become the two characters '\' 'n'.
@@ -224,6 +226,27 @@ impl<W: Write> Fixture<W> {
             }
         }));
         self.send_response_item_completed("call-text-tool", "lookup");
+    }
+
+    fn send_provider_tool_progress(&mut self) {
+        const PROVIDER_CALL_ID: &str = "provider-read-config";
+        self.send(json!({
+            "method":"item/providerTool/call",
+            "params":{
+                "threadId":"thread-test", "turnId":"turn-test",
+                "callId":PROVIDER_CALL_ID, "tool":"Read", "title":"Read config",
+                "arguments":{"path":"CLAUDE.md"}
+            }
+        }));
+        self.send(json!({
+            "method":"item/providerTool/update",
+            "params":{
+                "threadId":"thread-test", "turnId":"turn-test",
+                "callId":PROVIDER_CALL_ID, "status":"completed", "title":"Read config",
+                "output":"config loaded"
+            }
+        }));
+        self.send_text_and_complete("CODEX_PROVIDER_PROGRESS_OK");
     }
 
     fn send_tool(&mut self, tool: &str, input: &str) {

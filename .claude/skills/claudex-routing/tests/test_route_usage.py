@@ -141,6 +141,8 @@ class RoutingTests(unittest.TestCase):
         self.assertIn("claudex_model and claudex_effort", context)
         self.assertIn("standing default", context)
         self.assertIn("do not wait for them to repeat it", context)
+        self.assertIn("Reuse the first compatible session advisor", context)
+        self.assertIn("including after completion", context)
         self.assertIn("TUI N queued", context)
         self.assertIn("not worker capacity", context)
         self.assertNotIn("account", context)

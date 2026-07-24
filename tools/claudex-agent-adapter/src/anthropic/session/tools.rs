@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use serde_json::{Value, json};
 
 use super::super::{BRIDGE_INSTRUCTIONS, MessagesRequest, content::system_text};
+use crate::anthropic::subscription_request::cwd_from_system;
 
 pub(super) fn tool_configuration(
     request: &MessagesRequest,
@@ -48,6 +49,9 @@ pub(super) fn thread_start_params(
     dynamic_tools: Vec<Value>,
 ) -> Value {
     let system = system_text(&request.system);
+    let cwd = cwd_from_system(&system)
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_else(isolated_runtime_cwd);
     let developer_instructions = super::super::team_protocol::guidance(&request.tools).map_or_else(
         || BRIDGE_INSTRUCTIONS.to_owned(),
         |guidance| format!("{BRIDGE_INSTRUCTIONS}\n\n{guidance}"),
@@ -59,7 +63,7 @@ pub(super) fn thread_start_params(
     };
     json!({
         "model": model,
-        "cwd": isolated_runtime_cwd(),
+        "cwd": cwd,
         "baseInstructions": base_instructions,
         "developerInstructions": developer_instructions,
         "dynamicTools": dynamic_tools,

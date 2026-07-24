@@ -21,9 +21,9 @@ pub(super) struct SegmentBuilder {
     pub(super) thinking: ThinkingState,
     pub(super) open_text_block: Option<(usize, String)>,
     external_tool_calls: usize,
-    /// Grok-ACP (or other provider-owned) tools shown as Claude tool cards
-    /// without waiting for Claude Code to execute them.
-    pub(super) provider_tool_ids: Vec<String>,
+    /// Provider call IDs already shown as progress text. ACP can report the same
+    /// call first as ToolCall and again as a populated ToolCallUpdate.
+    pub(super) provider_tool_call_ids: Vec<String>,
     usage: Usage,
 }
 
@@ -34,7 +34,7 @@ impl SegmentBuilder {
             thinking: ThinkingState::default(),
             open_text_block: None,
             external_tool_calls: 0,
-            provider_tool_ids: Vec::new(),
+            provider_tool_call_ids: Vec::new(),
             usage: Usage {
                 input_tokens,
                 ..Usage::default()
@@ -288,13 +288,6 @@ impl SegmentBuilder {
                     estimated_block_tokens(block).saturating_add(thinking)
                 })
                 .sum();
-        }
-        // Provider display tools are tool_use cards only — never ask Claude Code
-        // to execute them. external_tool_calls tracks true Claude-owned tools.
-        for block in &mut self.blocks {
-            if let Some(object) = block.as_object_mut() {
-                object.remove("_claudex_provider");
-            }
         }
         let stop_reason = if self.external_tool_calls > 0 {
             "tool_use"

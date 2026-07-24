@@ -17,6 +17,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::{
     agent_backend::AcpLaunch,
+    anthropic::subscription_request::cwd_from_system,
     app_server::{ThreadEvents, events::ThreadEventDispatcher},
 };
 
@@ -271,9 +272,20 @@ async fn drive_commands(
     while let Some(command) = commands.recv().await {
         match command {
             DriverCommand::CreateSession { params, response } => {
-                let result =
-                    create_session(provider, &connection, model, cwd, params, &instructions).await;
-                let _ = response.send(result);
+                // ACP connections multiplex requests. Do not hold the driver command loop while a
+                // provider creates one session: a parallel Agent burst would otherwise serialize
+                // every session/new request and also strand already-created sessions' turn/start
+                // commands behind the remaining session creations.
+                let connection = Rc::clone(&connection);
+                let model = model.to_owned();
+                let cwd = cwd.to_owned();
+                let instructions = Rc::clone(&instructions);
+                tokio::task::spawn_local(async move {
+                    let result =
+                        create_session(provider, &connection, &model, &cwd, params, &instructions)
+                            .await;
+                    let _ = response.send(result);
+                });
             }
             DriverCommand::StartTurn {
                 params,
@@ -310,9 +322,17 @@ async fn create_session(
     params: Value,
     instructions: &Rc<RefCell<HashMap<String, String>>>,
 ) -> Result<Value> {
+    // `cwd` is the adapter process fallback. Claude Code's thread/start payload carries the
+    // active child working directory in its base instructions; use that request-scoped path for
+    // ACP providers instead of leaking the adapter's launch directory into every provider session.
+    let session_cwd = params
+        .get("baseInstructions")
+        .and_then(Value::as_str)
+        .and_then(cwd_from_system)
+        .unwrap_or_else(|| cwd.to_owned());
     let response = connection
         .new_session(
-            acp::NewSessionRequest::new(cwd)
+            acp::NewSessionRequest::new(&session_cwd)
                 .mcp_servers(vec![])
                 .meta(json!({ "modelId": model }).as_object().cloned()),
         )

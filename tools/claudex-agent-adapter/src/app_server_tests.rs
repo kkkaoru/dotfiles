@@ -158,6 +158,47 @@ mod tests {
         server.stop("detached request test complete").await;
     }
 
+    #[tokio::test]
+    async fn writes_parallel_requests_without_head_of_line_blocking() {
+        const INITIALIZE_REQUEST_ID: u64 = 1;
+        const FIRST_REQUEST_ID: u64 = 2;
+        const SECOND_REQUEST_ID: u64 = 3;
+        const PARALLEL_REQUEST_TIMEOUT: Duration = Duration::from_secs(1);
+        let root = tempfile::tempdir().expect("parallel app-server fixture");
+        let source = root.path().join("source");
+        std::fs::create_dir(&source).expect("create source home");
+        std::fs::write(source.join("auth.json"), "{}").expect("write auth");
+        let body = format!(
+            "read initialize\nprintf '%s\\n' '{{\"id\":{INITIALIZE_REQUEST_ID},\"result\":{{}}}}'\n\
+             read initialized\nread first_request\nread second_request\n\
+             printf '%s\\n' '{{\"id\":{FIRST_REQUEST_ID},\"result\":{{\"thread\":{{\"id\":\"first\"}}}}}}'\n\
+             printf '%s\\n' '{{\"id\":{SECOND_REQUEST_ID},\"result\":{{\"thread\":{{\"id\":\"second\"}}}}}}'\n\
+             while read line; do :; done\n"
+        );
+        let program = script(root.path(), "parallel-program", &body);
+        let server = AppServer::spawn_with_program(
+            "model",
+            &program,
+            &source,
+            &root.path().join("parallel-home"),
+        )
+        .await
+        .expect("start parallel app-server");
+
+        let (first, second) = tokio::time::timeout(PARALLEL_REQUEST_TIMEOUT, async {
+            tokio::join!(
+                server.request("thread/start", json!({"request":"first"})),
+                server.request("thread/start", json!({"request":"second"}))
+            )
+        })
+        .await
+        .expect("parallel requests were serialized");
+
+        assert_eq!(response_thread_id(&first.expect("first response")).unwrap(), "first");
+        assert_eq!(response_thread_id(&second.expect("second response")).unwrap(), "second");
+        server.stop("parallel request test complete").await;
+    }
+
     fn script(root: &std::path::Path, name: &str, body: &str) -> PathBuf {
         let path = root.join(name);
         std::fs::write(&path, format!("#!/bin/sh\n{body}")).expect("write script");

@@ -1,15 +1,23 @@
-//! Display-only Anthropic tool_use cards for provider-owned tools (Grok ACP).
+//! Display-only progress for provider-owned tools (Grok ACP).
 
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
 
 use super::{
     builder::SegmentBuilder,
-    protocol::{StreamSender, send_stream_frame, send_tool_use},
+    protocol::{StreamSender, send_stream_frame},
 };
 
+const FAILED_STATUS_PREVIEW_CHAR_LIMIT: usize = 400;
+const COMPLETED_STATUS_PREVIEW_CHAR_LIMIT: usize = 240;
+
 impl SegmentBuilder {
-    /// Streams a Claude Code tool card without waiting for Claude tool_result.
+    /// Streams provider-owned work as text, never as Anthropic `tool_use`.
+    ///
+    /// Claude Code executes every `tool_use` block it receives, even when the
+    /// provider already executed that tool and the message ends with `end_turn`.
+    /// A display-only card would therefore produce a synthetic
+    /// `No such tool available` result and an unnecessary follow-up turn.
     pub(super) async fn provider_tool_call(
         &mut self,
         event: &Value,
@@ -22,25 +30,24 @@ impl SegmentBuilder {
             .get("callId")
             .and_then(Value::as_str)
             .context("provider tool callId missing")?;
+        if self
+            .provider_tool_call_ids
+            .iter()
+            .any(|seen| seen == call_id)
+        {
+            return Ok(());
+        }
+        self.provider_tool_call_ids.push(call_id.to_owned());
         let name = params.get("tool").and_then(Value::as_str).unwrap_or("Tool");
-        let arguments = params.get("arguments").cloned().unwrap_or(json!({}));
-        let tool_use_id = format!("toolu_provider_{}", call_id.replace(':', "_"));
-        self.close_open_blocks(stream).await?;
-        let block = json!({
-            "type": "tool_use",
-            "id": tool_use_id,
-            "name": name,
-            "input": arguments,
-            "_claudex_provider": true
-        });
-        let index = self.blocks.len();
-        send_tool_use(stream, index, &block).await?;
-        self.blocks.push(block);
-        self.provider_tool_ids.push(tool_use_id);
-        Ok(())
+        let title = params
+            .get("title")
+            .and_then(Value::as_str)
+            .filter(|title| !title.trim().is_empty())
+            .unwrap_or(name);
+        self.append_text(&format!("\n\n▶ {title}\n"), stream).await
     }
 
-    /// Status / output for a provider tool card already streamed.
+    /// Status / output for provider-owned work already streamed.
     pub(super) async fn provider_tool_update(
         &mut self,
         event: &Value,
@@ -60,14 +67,14 @@ impl SegmentBuilder {
         match status {
             "failed" => {
                 let detail = output_preview(params.get("output"), "failed");
-                let preview = truncate_for_status(&detail, 400);
+                let preview = truncate_for_status(&detail, FAILED_STATUS_PREVIEW_CHAR_LIMIT);
                 self.append_text(&format!("\n✗ {title}: {preview}\n"), stream)
                     .await?;
             }
             "completed" => {
                 let detail = output_preview(params.get("output"), "");
                 if !detail.is_empty() {
-                    let preview = truncate_for_status(&detail, 240);
+                    let preview = truncate_for_status(&detail, COMPLETED_STATUS_PREVIEW_CHAR_LIMIT);
                     self.append_text(&format!("\n✓ {title}: {preview}\n"), stream)
                         .await?;
                 }

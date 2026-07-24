@@ -37,13 +37,13 @@ updates into Claude Code surfaces:
 | --- | --- |
 | `AgentThoughtChunk` | thinking panel |
 | `AgentMessageChunk` | assistant text |
-| `ToolCall` / `ToolCallUpdate` | native `tool_use` cards (display-only; input from `raw_input` + content + locations; output preview from `raw_output` / content) |
+| `ToolCall` / `ToolCallUpdate` | progress text with bounded completion or failure output previews |
 | `Plan` | compact plan checklist text |
 | xAI SubAgent / retry extensions | short status text |
 
-Provider-owned tools never set `stop_reason=tool_use`, so Claude Code does not
-re-execute them. Copilot-native SubAgents inherit the model used to launch the
-Copilot ACP server.
+Provider-owned tools are never emitted as executable Anthropic `tool_use` blocks,
+so Claude Code cannot re-execute them or send synthetic missing-tool results.
+Copilot-native SubAgents inherit the model used to launch the Copilot ACP server.
 
 Streaming requests return their HTTP response immediately. Each Codex
 `item/agentMessage/delta` notification is converted to an Anthropic

@@ -29,6 +29,11 @@
   advisor model policy; do not inspect such memory before delegation.
 - Use `custom-advisor` when requested or when a complex, ambiguous, high-risk, long-running, or
   stalled decision benefits from independent strategic review. The advisor advises; workers act.
+- Treat the first compatible advisor launched in a session as the continuing advisor for related
+  decisions. Resume it with `SendMessage` using the exact recipient from its Agent/Task result,
+  including after completion. Start another advisor only for true parallel or clean-room review,
+  an incompatible role/model/context, or an unavailable recipient; do not replace it merely because
+  one consultation ended.
 - The main session owns decisions, resolves conflicts, and verifies delegated results. Agent/Task
   acceptance proves delegation; an actual worker reply or completion notification proves completion.
   A `SendMessage` delivery acknowledgement alone does not. Never fabricate a worker response or

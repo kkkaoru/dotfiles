@@ -13,6 +13,10 @@ use tokio::{io::AsyncWriteExt as _, net::UnixStream};
 use project_fixture::ProjectFixture;
 
 const SETUP_RELEASE_SOCKET: &str = "grok-acp-setup-release.sock";
+const LOOPBACK_EPHEMERAL_ADDRESS: &str = "127.0.0.1:0";
+const PARALLEL_SESSION_CREATION_TIMEOUT: Duration = Duration::from_secs(1);
+const PARALLEL_SESSION_COUNT: usize = 2;
+const EXPECTED_PROVIDER_PROMPT_COUNT: usize = 1;
 
 #[tokio::test]
 async fn streams_grok_acp_and_forwards_model_effort_and_instructions() {
@@ -78,6 +82,40 @@ async fn streams_grok_acp_and_forwards_model_effort_and_instructions() {
             .is_err()
     );
     assert!(backend.respond(json!(1), json!({})).await.is_err());
+}
+
+#[tokio::test]
+async fn creates_grok_acp_session_in_the_request_working_directory() {
+    let root = tempfile::tempdir().expect("request cwd fixture");
+    let active_cwd = root.path().join("active-child");
+    std::fs::create_dir(&active_cwd).expect("create active child cwd");
+    let active_cwd = std::fs::canonicalize(active_cwd).expect("canonicalize active child cwd");
+    let agent = GrokAcp::spawn_with_program(
+        "request-cwd",
+        env!("CARGO_BIN_EXE_grok-acp-mock"),
+        root.path().to_owned(),
+    )
+    .await
+    .expect("start request cwd mock");
+
+    agent
+        .create_session(json!({
+            "cwd":"/adapter/isolated/runtime/must-not-win",
+            "baseInstructions":format!(
+                "Project policy\n- Primary working directory: {}\nBridge policy",
+                active_cwd.display()
+            )
+        }))
+        .await
+        .expect("create request cwd session");
+
+    let trace = read_trace(&root.path().join("grok-acp-mock.jsonl"));
+    assert!(
+        trace.iter().any(|event| {
+            event.pointer("/new_session/cwd").and_then(Value::as_str) == active_cwd.to_str()
+        }),
+        "trace={trace:?}"
+    );
 }
 
 fn assert_trace(trace: &[Value]) {
@@ -210,6 +248,68 @@ async fn forwards_grok_tool_subagent_retry_and_usage_updates() {
 }
 
 #[tokio::test]
+async fn bridge_renders_provider_tools_as_progress_without_a_follow_up_tool_turn() {
+    let root = tempfile::tempdir().expect("provider progress fixture");
+    let trace_path = root.path().join("grok-acp-mock.jsonl");
+    let agent = spawn_mock("coverage-updates", root.path()).await;
+    let backend = AgentBackend::routed(vec![(
+        "coverage-updates".to_owned(),
+        AgentBackend::grok(agent),
+    )]);
+    let bridge = Arc::new(Bridge::new_with_backend(
+        backend,
+        "coverage-updates".to_owned(),
+    ));
+    let listener = tokio::net::TcpListener::bind(LOOPBACK_EPHEMERAL_ADDRESS)
+        .await
+        .expect("bind provider progress server");
+    let url = format!("http://{}/v1/messages", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            http_router(bridge, "coverage-updates".to_owned(), None),
+        )
+        .await
+        .expect("serve provider progress bridge");
+    });
+
+    let response: Value = Client::new()
+        .post(url)
+        .json(&json!({
+            "model":"coverage-updates",
+            "messages":[{"role":"user","content":"show provider progress"}]
+        }))
+        .send()
+        .await
+        .expect("request provider progress")
+        .error_for_status()
+        .expect("provider progress status")
+        .json()
+        .await
+        .expect("provider progress response");
+
+    assert_eq!(response["stop_reason"], "end_turn");
+    let content = response["content"].as_array().expect("response content");
+    assert!(content.iter().all(|block| block["type"] != "tool_use"));
+    let text = content
+        .iter()
+        .filter_map(|block| block["text"].as_str())
+        .collect::<String>();
+    assert!(text.contains("▶ Read config"), "response={response}");
+    assert!(text.contains("GROK_ACP_STREAM_OK"), "response={response}");
+    let trace = read_trace(&trace_path);
+    assert_eq!(
+        trace
+            .iter()
+            .filter(|event| event.get("prompt").is_some())
+            .count(),
+        EXPECTED_PROVIDER_PROMPT_COUNT,
+        "provider display must not cause a follow-up ACP prompt"
+    );
+    server.abort();
+}
+
+#[tokio::test]
 async fn streams_two_grok_acp_sessions_concurrently() {
     let root = tempfile::tempdir().expect("concurrent fixture");
     let agent = spawn_mock("concurrent-turns", root.path()).await;
@@ -221,10 +321,13 @@ async fn streams_two_grok_acp_sessions_concurrently() {
         .await
         .unwrap();
 
-    let second = tokio::time::timeout(Duration::from_secs(1), agent.create_session(json!({})))
-        .await
-        .expect("session creation blocked behind an active turn")
-        .unwrap();
+    let second = tokio::time::timeout(
+        PARALLEL_SESSION_CREATION_TIMEOUT,
+        agent.create_session(json!({})),
+    )
+    .await
+    .expect("session creation blocked behind an active turn")
+    .unwrap();
     let second_id = second
         .pointer("/thread/id")
         .and_then(Value::as_str)
@@ -246,6 +349,33 @@ async fn streams_two_grok_acp_sessions_concurrently() {
     let (first_done, second_done) = tokio::join!(recv(&first_events), recv(&second_events));
     assert_eq!(first_done["method"], "turn/completed");
     assert_eq!(second_done["method"], "turn/completed");
+}
+
+#[tokio::test]
+async fn creates_parallel_grok_acp_sessions_without_driver_head_of_line_blocking() {
+    let root = tempfile::tempdir().expect("parallel session fixture");
+    let agent = spawn_mock("concurrent-sessions", root.path()).await;
+
+    let (first, second) = tokio::time::timeout(PARALLEL_SESSION_CREATION_TIMEOUT, async {
+        tokio::join!(
+            agent.create_session(json!({})),
+            agent.create_session(json!({}))
+        )
+    })
+    .await
+    .expect("parallel session creation was serialized by the driver");
+    let first = first.expect("first session");
+    let second = second.expect("second session");
+
+    assert_ne!(first["thread"]["id"], second["thread"]["id"]);
+    let trace = read_trace(&root.path().join("grok-acp-mock.jsonl"));
+    assert_eq!(
+        trace
+            .iter()
+            .filter(|event| event.get("new_session").is_some())
+            .count(),
+        PARALLEL_SESSION_COUNT
+    );
 }
 
 #[tokio::test]

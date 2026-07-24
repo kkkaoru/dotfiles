@@ -122,6 +122,24 @@ fn builds_thread_configuration_for_empty_and_team_system_prompts() {
 }
 
 #[test]
+fn starts_codex_threads_in_the_request_working_directory() {
+    let root = tempfile::tempdir().expect("request cwd fixture");
+    let active_cwd = root.path().join("active-child");
+    std::fs::create_dir(&active_cwd).expect("create active child cwd");
+    let active_cwd = active_cwd
+        .canonicalize()
+        .expect("canonical active child cwd");
+    let system = json!(format!(
+        "Project policy\n- Primary working directory: {}\nBridge policy",
+        active_cwd.display()
+    ));
+
+    let params = thread_start_params(&request(system, Vec::new()), "main", Vec::new());
+
+    assert_eq!(params["cwd"].as_str(), active_cwd.to_str());
+}
+
+#[test]
 fn supplies_a_default_dynamic_tool_schema() {
     let tool = json!({"name":"lookup"});
     let dynamic = dynamic_tool(&tool, "lookup").expect("dynamic tool");
