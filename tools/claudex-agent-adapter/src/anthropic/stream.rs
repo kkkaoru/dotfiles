@@ -31,7 +31,7 @@ pub(super) use protocol::tool_use_frames;
 use protocol::{StreamSender, send_stream_completion, send_stream_error, sse_response};
 pub(super) use protocol::{message_start, send_stream_frame, streaming_sse_response};
 
-const ACTIVITY_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(45);
+const ACTIVITY_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
 
 struct ToolCall<'a> {
     call_id: &'a str,

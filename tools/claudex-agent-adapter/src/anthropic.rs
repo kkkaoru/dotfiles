@@ -6,6 +6,7 @@ mod session;
 mod stream;
 mod stream_batch;
 mod subscription;
+mod subscription_activity;
 mod subscription_frames;
 mod subscription_request;
 mod subscription_stream;

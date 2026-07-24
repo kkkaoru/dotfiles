@@ -148,7 +148,7 @@ async fn streams_summarized_thinking_before_text_and_preserves_the_block() {
 }
 
 #[tokio::test]
-async fn activity_keepalive_emits_zero_width_thinking_during_silence() {
+async fn activity_keepalive_emits_visible_status_then_zero_width_heartbeat() {
     let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
     let mut builder = SegmentBuilder::new(1);
     builder
@@ -163,7 +163,10 @@ async fn activity_keepalive_emits_zero_width_thinking_during_silence() {
     drop(sender);
 
     assert_eq!(segment.blocks[0]["type"], "thinking");
-    assert_eq!(segment.blocks[0]["thinking"], "\u{200b}\u{200b}");
+    assert_eq!(
+        segment.blocks[0]["thinking"],
+        "Claudex is still working; waiting for provider output\u{2026}\u{200b}"
+    );
 
     let mut frames = Vec::new();
     while let Some(frame) = receiver.recv().await {
@@ -174,7 +177,10 @@ async fn activity_keepalive_emits_zero_width_thinking_during_silence() {
     assert_eq!(frames[0]["content_block"]["type"], "thinking");
     assert_eq!(
         frames[1]["delta"],
-        json!({"type":"thinking_delta","thinking":"\u{200b}"})
+        json!({
+            "type":"thinking_delta",
+            "thinking":"Claudex is still working; waiting for provider output\u{2026}"
+        })
     );
     assert_eq!(
         frames[2]["delta"],

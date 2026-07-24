@@ -1,4 +1,4 @@
-use std::{convert::Infallible, path::Path, path::PathBuf, sync::Arc};
+use std::{convert::Infallible, path::Path, path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result, anyhow, bail};
 use axum::{
@@ -13,18 +13,23 @@ use tokio::{
 };
 use uuid::Uuid;
 
+const ACTIVITY_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
+
 use super::{
-    content::{estimated_tokens, sse},
-    stream::{send_stream_frame, streaming_sse_response},
+    content::sse,
+    stream::streaming_sse_response,
     subscription::{
         OutputMode, SubscriptionOptions, acquire_subscription_slot, spawn_subscription,
         subscription_command, validate_subscription_result, write_subscription_prompt,
     },
+    subscription_activity::SubscriptionActivity,
     subscription_frames::{
-        assistant_output_tokens, mapped_tool_name, send_block_stop, send_text_delta,
-        send_text_finish, send_text_start, send_tool_block, send_tool_finish,
+        assistant_output_tokens, mapped_tool_name, send_block_stop, send_subscription_error,
+        send_text_delta, send_text_finish, send_text_start, send_tool_block, send_tool_finish,
     },
 };
+
+pub(super) use super::subscription_frames::result_output_tokens;
 
 pub(super) fn subscription_streaming_response(
     program: PathBuf,
@@ -101,6 +106,7 @@ struct SubscriptionStream {
     next_index: usize,
     tools: Vec<String>,
     tool_context: Option<super::subscription::SubscriptionToolContext>,
+    activity: SubscriptionActivity,
 }
 
 #[cfg(test)]
@@ -141,10 +147,18 @@ async fn consume_subscription_stream_with_options(
         next_index: 0,
         tools: options.tools.clone(),
         tool_context: options.tool_context.clone(),
+        activity: SubscriptionActivity::default(),
     };
+    let mut activity_deadline = Box::pin(tokio::time::sleep(ACTIVITY_KEEPALIVE_INTERVAL));
     loop {
         tokio::select! {
             () = sender.closed() => return Ok(()),
+            () = &mut activity_deadline => {
+                stream.activity_keepalive(sender).await?;
+                activity_deadline.as_mut().reset(
+                    tokio::time::Instant::now() + ACTIVITY_KEEPALIVE_INTERVAL,
+                );
+            }
             line = lines.next_line() => match line? {
                 Some(line) if stream.handle_line(sender, &line).await? => {
                     let _ = child.kill().await;
@@ -156,6 +170,7 @@ async fn consume_subscription_stream_with_options(
             }
         }
     }
+    stream.activity.close(sender).await?;
     validate_stream_exit(&mut child, stderr_task, stream.saw_result).await
 }
 
@@ -222,12 +237,16 @@ impl SubscriptionStream {
             .pointer("/event/delta/text")
             .and_then(Value::as_str)
             .unwrap_or_default();
+        if text.is_empty() {
+            return Ok(());
+        }
+        self.activity.close(sender).await?;
         if !self.text_started {
             send_text_start(sender, self.next_index).await?;
             self.text_started = true;
             self.next_index += 1;
         }
-        send_text_delta(sender, text).await
+        send_text_delta(sender, self.next_index.saturating_sub(1), text).await
     }
 
     async fn forward_tool_uses(
@@ -254,6 +273,7 @@ impl SubscriptionStream {
         if tool_uses.is_empty() {
             return Ok(false);
         }
+        self.activity.close(sender).await?;
         self.close_text(sender).await?;
         for block in tool_uses {
             self.forward_tool_use(sender, block).await?;
@@ -328,13 +348,14 @@ impl SubscriptionStream {
         result: &Value,
     ) -> Result<()> {
         validate_subscription_result(result)?;
+        self.activity.close(sender).await?;
         if !self.text_started {
             send_text_start(sender, self.next_index).await?;
             let text = result
                 .get("result")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
-            send_text_delta(sender, text).await?;
+            send_text_delta(sender, self.next_index, text).await?;
             self.text_started = true;
             self.next_index += 1;
         }
@@ -350,33 +371,19 @@ impl SubscriptionStream {
         self.saw_result = true;
         Ok(())
     }
-}
 
-pub(super) fn result_output_tokens(result: &Value) -> u64 {
-    result
-        .pointer("/usage/output_tokens")
-        .and_then(Value::as_u64)
-        .unwrap_or_else(|| {
-            estimated_tokens(
-                result
-                    .get("result")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default(),
-            )
-        })
-}
-
-async fn send_subscription_error(
-    sender: &mpsc::Sender<Result<Bytes, Infallible>>,
-    error: anyhow::Error,
-) {
-    let _ = send_stream_frame(Some(sender), "error", || {
-        json!({
-            "type":"error",
-            "error":{"type":"api_error","message":format!("{error:#}")}
-        })
-    })
-    .await;
+    async fn activity_keepalive(
+        &mut self,
+        sender: &mpsc::Sender<Result<Bytes, Infallible>>,
+    ) -> Result<()> {
+        if self.text_closed || self.saw_result {
+            return Ok(());
+        }
+        let text_index = self.text_started.then(|| self.next_index.saturating_sub(1));
+        self.activity
+            .keepalive(sender, text_index, &mut self.next_index)
+            .await
+    }
 }
 
 #[cfg(test)]

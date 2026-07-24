@@ -52,9 +52,11 @@ Subscription subprocesses likewise use Claude Code's `stream-json` output and
 forward text deltas as they arrive. Streaming responses open immediately with
 `message_start` so Anthropic `ping` SSE events keep Claude Code's ~180s raw-byte
 idle watchdog alive while the provider session is still being prepared. During
-longer provider silence (for example multi-minute Grok tool or subagent waits),
-the adapter also emits zero-width `content_block_delta` heartbeats about every
-45s so Claude Code's ~300s decoded-event idle watchdog does not abort the stream.
+longer provider silence (for example multi-minute Grok, subscription, tool, or
+subagent waits), the adapter emits a visible waiting status after about 30s and
+then zero-width `content_block_delta` heartbeats every 30s. This keeps the user
+informed and prevents Claude Code's ~300s decoded-event idle watchdog from
+aborting the stream without adding repeated status text to the final answer.
 
 For `codex-app-server`, the adapter starts `codex app-server` with an isolated
 `CODEX_HOME`. Only Codex authentication is copied into that home; Claude Code

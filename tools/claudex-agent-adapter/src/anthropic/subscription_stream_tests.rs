@@ -7,7 +7,9 @@ use tokio::{process::Command, sync::mpsc};
 use super::{
     SubscriptionStream, consume_subscription_stream, result_output_tokens, run_subscription_stream,
 };
-use crate::anthropic::subscription::SubscriptionOptions;
+use crate::anthropic::{
+    subscription::SubscriptionOptions, subscription_activity::SubscriptionActivity,
+};
 
 type Frame = Result<Bytes, Infallible>;
 type FrameChannel = (mpsc::Sender<Frame>, mpsc::Receiver<Frame>);
@@ -34,6 +36,7 @@ async fn handles_ignored_invalid_and_non_text_events() {
         next_index: 0,
         tools: Vec::new(),
         tool_context: None,
+        activity: SubscriptionActivity::default(),
     };
     stream
         .handle_line(&sender, r#"{"type":"ignored"}"#)
@@ -68,6 +71,7 @@ async fn forwards_empty_and_regular_deltas_then_finishes_once() {
         next_index: 0,
         tools: Vec::new(),
         tool_context: None,
+        activity: SubscriptionActivity::default(),
     };
     for text in ["", "hello"] {
         stream
@@ -99,6 +103,45 @@ async fn forwards_empty_and_regular_deltas_then_finishes_once() {
 }
 
 #[tokio::test]
+async fn shows_activity_status_before_delayed_subscription_output() {
+    let (sender, mut receiver) = channel();
+    let mut stream = SubscriptionStream {
+        text_started: false,
+        text_closed: false,
+        saw_result: false,
+        next_index: 0,
+        tools: Vec::new(),
+        tool_context: None,
+        activity: SubscriptionActivity::default(),
+    };
+    stream
+        .activity_keepalive(&sender)
+        .await
+        .expect("visible activity status");
+    stream
+        .activity_keepalive(&sender)
+        .await
+        .expect("zero-width follow-up heartbeat");
+    stream
+        .handle_line(
+            &sender,
+            r#"{"type":"stream_event","event":{"delta":{"type":"text_delta","text":"hello"}}}"#,
+        )
+        .await
+        .expect("delayed text delta");
+
+    let output = output(&mut receiver).await;
+    assert!(output.contains("Claudex is still working; waiting for provider output"));
+    assert!(output.contains("signature_delta"));
+    assert_eq!(output.matches("event: content_block_start").count(), 2);
+    let text_frame = output
+        .split("\n\n")
+        .find(|frame| frame.contains(r#""text":"hello""#))
+        .expect("forwarded text frame");
+    assert!(text_frame.contains(r#""index":1"#));
+}
+
+#[tokio::test]
 async fn falls_back_to_result_text_and_estimated_tokens() {
     let (sender, mut receiver) = channel();
     let mut stream = SubscriptionStream {
@@ -108,6 +151,7 @@ async fn falls_back_to_result_text_and_estimated_tokens() {
         next_index: 0,
         tools: Vec::new(),
         tool_context: None,
+        activity: SubscriptionActivity::default(),
     };
     stream
         .finish(
@@ -136,6 +180,7 @@ async fn rejects_unsuccessful_results() {
         next_index: 0,
         tools: Vec::new(),
         tool_context: None,
+        activity: SubscriptionActivity::default(),
     };
     assert!(
         stream
@@ -158,6 +203,7 @@ async fn forwards_agent_alias_as_outer_task_with_streaming_input() {
         next_index: 0,
         tools: vec!["Task".to_owned()],
         tool_context: None,
+        activity: SubscriptionActivity::default(),
     };
     let intercepted = stream
         .handle_line(

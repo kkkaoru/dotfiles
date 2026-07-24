@@ -1,11 +1,11 @@
 use std::convert::Infallible;
 
-use anyhow::Result;
+use anyhow::{Error, Result};
 use axum::body::Bytes;
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
-use super::{agent_effort::is_agent_tool, stream::send_stream_frame};
+use super::{agent_effort::is_agent_tool, content::estimated_tokens, stream::send_stream_frame};
 
 pub(super) fn mapped_tool_name<'a>(emitted: &'a str, available: &'a [String]) -> &'a str {
     if is_agent_tool(emitted) {
@@ -44,11 +44,12 @@ pub(super) async fn send_text_start(
 
 pub(super) async fn send_text_delta(
     sender: &mpsc::Sender<Result<Bytes, Infallible>>,
+    index: usize,
     text: &str,
 ) -> Result<()> {
     send_stream_frame(Some(sender), "content_block_delta", || {
         json!({
-            "type":"content_block_delta", "index":0,
+            "type":"content_block_delta", "index":index,
             "delta":{"type":"text_delta","text":text}
         })
     })
@@ -132,4 +133,31 @@ pub(super) async fn send_tool_finish(
         send_stream_frame(Some(sender), event, || frame).await?;
     }
     Ok(())
+}
+
+pub(super) fn result_output_tokens(result: &Value) -> u64 {
+    result
+        .pointer("/usage/output_tokens")
+        .and_then(Value::as_u64)
+        .unwrap_or_else(|| {
+            estimated_tokens(
+                result
+                    .get("result")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            )
+        })
+}
+
+pub(super) async fn send_subscription_error(
+    sender: &mpsc::Sender<Result<Bytes, Infallible>>,
+    error: Error,
+) {
+    let _ = send_stream_frame(Some(sender), "error", || {
+        json!({
+            "type":"error",
+            "error":{"type":"api_error","message":format!("{error:#}")}
+        })
+    })
+    .await;
 }

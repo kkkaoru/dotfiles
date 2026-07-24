@@ -110,11 +110,12 @@ impl ThinkingState {
     }
 
     /// Emit a decoded content event so Claude Code's ~300s event-idle watchdog
-    /// does not fire during long provider-side tool waits.
+    /// does not fire during long provider-side tool waits. The first heartbeat
+    /// is visible so a silent provider does not leave the user with only a
+    /// spinner; later heartbeats stay zero-width to avoid noisy repetition.
     ///
     /// Anthropic `ping` frames keep the raw-byte idle timer alive (~180s) but
-    /// do not reset the decoded-event timer. A zero-width thinking delta is
-    /// invisible in the UI while still counting as stream activity.
+    /// do not reset the decoded-event timer.
     pub(super) async fn activity_keepalive(
         &mut self,
         blocks: &mut Vec<Value>,
@@ -124,16 +125,22 @@ impl ThinkingState {
             return Ok(());
         }
         const HEARTBEAT: &str = "\u{200b}";
+        const STATUS: &str = "Claudex is still working; waiting for provider output\u{2026}";
         if self.open.is_none() {
             self.start(blocks, "claudex_activity_keepalive", 0, stream)
                 .await?;
         }
         let open = self.open.as_mut().expect("thinking block just opened");
-        open.text.push_str(HEARTBEAT);
+        let delta = if open.item_id == "claudex_activity_keepalive" && open.text.is_empty() {
+            STATUS
+        } else {
+            HEARTBEAT
+        };
+        open.text.push_str(delta);
         send_stream_frame(stream, "content_block_delta", || {
             json!({
                 "type":"content_block_delta", "index":open.index,
-                "delta":{"type":"thinking_delta","thinking":HEARTBEAT}
+                "delta":{"type":"thinking_delta","thinking":delta}
             })
         })
         .await
