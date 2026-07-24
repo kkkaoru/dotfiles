@@ -96,9 +96,11 @@ Other adapter options are `--listen`, `--subscription-max-processes`, and
 120. The launch-only `--inherit-claude-model` option omits Claude Code's
 `--model` argument, allowing the normal Claude `model` and `effortLevel`
 settings to control the outer conversation while the adapter model remains a
-backend bootstrap route. The fish launcher enables this inheritance by default and adds the
-`claudex-orchestrator` agent unless an explicit `--agent` is supplied, while keeping the configured main
-provider available as the bootstrap route for Agent calls. `CLAUDEX_MODEL` explicitly disables
+backend bootstrap route. The fish launcher enables this inheritance by default and marks the outer
+process so the global, claudex-only routing hook can inject capacity context without selecting a
+custom agent or changing the session display name. An explicit `--agent` is still passed through
+unchanged, while the configured main provider remains available as the bootstrap route for Agent
+calls. `CLAUDEX_MODEL` explicitly disables
 inheritance and may override the orchestrator with any model accepted by a configured prefix. The agent reads a
 sanitized, five-minute Codexbar usage cache and delegates to available agents in
 the shared provider config. It selects the configured subscription fallback only

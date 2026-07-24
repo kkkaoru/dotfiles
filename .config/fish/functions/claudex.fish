@@ -1,5 +1,6 @@
 function claudex --description 'Run Claude Code with config-driven agent backends'
     set -lx CLAUDE_CODE_ALWAYS_ENABLE_EFFORT 1
+    set -lx CLAUDEX_ACTIVE 1
 
     set -l provider_config "$HOME/.config/claudex/providers.json"
     set -q CLAUDEX_PROVIDER_CONFIG; and set provider_config $CLAUDEX_PROVIDER_CONFIG
@@ -23,20 +24,9 @@ function claudex --description 'Run Claude Code with config-driven agent backend
     set -q CLAUDEX_SUBSCRIPTION_MAX_PROCESSES; and set -a adapter_args --subscription-max-processes "$CLAUDEX_SUBSCRIPTION_MAX_PROCESSES"
     set -q CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES; and set -a adapter_args --subscription-timeout-minutes "$CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES"
 
-    set -l claude_args $argv
-    set -l has_explicit_agent 0
-    for argument in $argv
-        if test "$argument" = --agent; or string match -q -- '--agent=*' "$argument"
-            set has_explicit_agent 1
-            break
-        end
-    end
-    if test $has_explicit_agent -eq 0
-        set -p claude_args --agent claudex-orchestrator
-        echo "claudex: config-routed orchestrator and subagents ($provider_config)" >&2
-    else
-        echo "claudex: provider config=$provider_config" >&2
-    end
-
-    command "$HOME/.local/bin/claudex-agent-adapter" $adapter_args -- $claude_args
+    # Routing is injected by the CLAUDEX_ACTIVE-gated global hook. Avoid a
+    # default --agent here: Claude Code persists it as the resumed session's
+    # agent setting and replaces the session display name with the agent name.
+    echo "claudex: config-routed orchestration ($provider_config)" >&2
+    command "$HOME/.local/bin/claudex-agent-adapter" $adapter_args -- $argv
 end

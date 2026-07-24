@@ -160,7 +160,9 @@ def hook_output(summary: dict[str, Any]) -> dict[str, Any]:
         " Follow claudex-routing: use selected_workers for primary delegation and pass each "
         "worker's model and effort as claudex_model and claudex_effort. If the user names a "
         "model matching model_prefixes, dynamically select that provider and pass the exact "
-        "requested model. The advisor is independent of capacity: invoke it alongside workers "
+        "requested model. This current routing context overrides stale auto-memory about worker "
+        "or advisor model policy; do not inspect such memory before delegating. The advisor is "
+        "independent of capacity: invoke it alongside workers "
         "when explicitly requested or when a complex, ambiguous, or high-risk decision benefits "
         "from strategic review."
     )

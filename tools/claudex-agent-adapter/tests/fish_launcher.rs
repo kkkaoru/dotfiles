@@ -11,7 +11,11 @@ fn fish_launcher_uses_the_shared_provider_config() {
     )
     .expect("Grok config");
     let adapter = home.path().join(".local/bin/claudex-agent-adapter");
-    fs::write(&adapter, "#!/bin/sh\nprintf '%s\\n' \"$@\"\n").expect("fake adapter");
+    fs::write(
+        &adapter,
+        "#!/bin/sh\nprintf 'CLAUDEX_ACTIVE=%s\\n' \"${CLAUDEX_ACTIVE:-}\"\nprintf '%s\\n' \"$@\"\n",
+    )
+    .expect("fake adapter");
     let mut permissions = fs::metadata(&adapter)
         .expect("fake adapter metadata")
         .permissions();
@@ -37,9 +41,10 @@ fn fish_launcher_uses_the_shared_provider_config() {
     );
     let arguments = String::from_utf8(output.stdout).expect("UTF-8 adapter arguments");
     assert!(arguments.contains("--provider-config\n"));
+    assert!(arguments.contains("CLAUDEX_ACTIVE=1\n"));
     assert!(arguments.contains(".config/claudex/providers.json\n"));
     assert!(arguments.contains("--inherit-claude-model\n"));
-    assert!(arguments.ends_with("--\n--agent\nclaudex-orchestrator\nsmoke\n"));
+    assert!(arguments.ends_with("--\nsmoke\n"));
 
     assert_no_argument_launch(&function, &home);
 
@@ -64,9 +69,10 @@ fn fish_launcher_uses_the_shared_provider_config() {
     assert!(arguments.contains(&format!("--provider-config\n{}\n", alternate.display())));
     assert!(arguments.contains("--model\nvendor-model\n"));
     assert!(!arguments.contains("--inherit-claude-model\n"));
-    assert!(arguments.ends_with("--\n--agent\nclaudex-orchestrator\noverride-smoke\n"));
+    assert!(arguments.ends_with("--\noverride-smoke\n"));
 
     assert_explicit_agent_is_preserved(&function, &home);
+    assert_routing_marker_is_scoped_to_claudex(&function, &home);
 }
 
 fn assert_explicit_agent_is_preserved(function: &std::path::Path, home: &tempfile::TempDir) {
@@ -85,6 +91,26 @@ fn assert_explicit_agent_is_preserved(function: &std::path::Path, home: &tempfil
     let arguments = String::from_utf8(output.stdout).expect("UTF-8 explicit-agent arguments");
     assert_eq!(arguments.matches("--agent\n").count(), 1);
     assert!(arguments.ends_with("--\n--agent\ncustom-subagent\nsmoke\n"));
+}
+
+fn assert_routing_marker_is_scoped_to_claudex(
+    function: &std::path::Path,
+    home: &tempfile::TempDir,
+) {
+    let output = Command::new("fish")
+        .args([
+            "-c",
+            &format!(
+                "source '{}'; claudex marker-smoke; if set -q CLAUDEX_ACTIVE; echo leaked; end",
+                function.display()
+            ),
+        ])
+        .env("HOME", home.path())
+        .output()
+        .expect("run routing marker smoke");
+    assert!(output.status.success());
+    let arguments = String::from_utf8(output.stdout).expect("UTF-8 marker arguments");
+    assert!(!arguments.contains("leaked"));
 }
 
 #[test]
@@ -114,5 +140,5 @@ fn assert_no_argument_launch(function: &std::path::Path, home: &tempfile::TempDi
     );
     let arguments = String::from_utf8(output.stdout).expect("UTF-8 adapter arguments");
     assert!(arguments.contains("--inherit-claude-model\n"));
-    assert!(arguments.ends_with("--\n--agent\nclaudex-orchestrator\n"));
+    assert!(arguments.ends_with("--\n"));
 }

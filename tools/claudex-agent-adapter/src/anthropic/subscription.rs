@@ -129,9 +129,10 @@ impl Bridge {
         &self,
         request: MessagesRequest,
         effort: Option<String>,
+        is_subagent: bool,
     ) -> Result<Response<Body>> {
         let input_tokens = u64::try_from(token_count(&request)).unwrap_or(u64::MAX);
-        let options = self.subscription_options(&request, effort);
+        let options = self.subscription_options(&request, effort, is_subagent);
         let prompt = subscription_request_prompt(&request);
         if request.stream {
             return Ok(subscription_streaming_response(
@@ -174,10 +175,11 @@ impl Bridge {
         &self,
         request: &MessagesRequest,
         effort: Option<String>,
+        is_subagent: bool,
     ) -> SubscriptionOptions {
         SubscriptionOptions {
             effort,
-            tools: requested_tools(&request.tools),
+            tools: requested_tools(&request.tools, !is_subagent),
             cwd: subscription_request_cwd(request),
             slots: Arc::clone(&self.subscription_slots),
             timeout: self.subscription_timeout,
@@ -351,6 +353,7 @@ fn remove_proxy_environment(command: &mut Command) {
         "ANTHROPIC_AUTH_TOKEN",
         "ANTHROPIC_API_KEY",
         "ANTHROPIC_MODEL",
+        "CLAUDEX_ACTIVE",
         "CLAUDE_CODE_ENABLE_EXPERIMENTAL_ADVISOR_TOOL",
         "CLAUDE_CODE_SUBAGENT_MODEL",
         "ENABLE_CLAUDEAI_MCP_SERVERS",

@@ -104,7 +104,7 @@ fn selects_subscription_workspace_and_outer_tools() {
     assert!(cwd_from_system("CWD: relative/path").is_none());
     assert!(cwd_from_system("CWD: /path/that/does/not/exist").is_none());
 
-    let tools = requested_tools(&[
+    let requested = [
         json!({"name":"Read"}),
         json!({"name":"mcp__server__tool"}),
         json!({"name":"custom_tool"}),
@@ -119,7 +119,8 @@ fn selects_subscription_workspace_and_outer_tools() {
         json!({"name":"CronCreate"}),
         json!({"name":"CronDelete"}),
         json!({"name":"CronList"}),
-    ]);
+    ];
+    let tools = requested_tools(&requested, false);
     assert_eq!(
         tools,
         [
@@ -131,6 +132,19 @@ fn selects_subscription_workspace_and_outer_tools() {
             "TaskGet",
             "TaskList",
             "TaskUpdate",
+            "ToolSearch",
+            "CronCreate",
+            "CronDelete",
+            "CronList",
+        ]
+    );
+    assert_eq!(
+        requested_tools(&requested, true),
+        [
+            "Read",
+            "mcp__server__tool",
+            "custom_tool",
+            "Bash",
             "ToolSearch",
             "CronCreate",
             "CronDelete",

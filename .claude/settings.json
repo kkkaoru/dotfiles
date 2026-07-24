@@ -21,6 +21,18 @@
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "test \"${CLAUDEX_ACTIVE:-}\" != 1 || exec python3 \"$HOME/.claude/skills/claudex-routing/scripts/route_usage.py\"",
+            "timeout": 15
+          }
+        ]
+      }
     ]
   },
   "enabledPlugins": {

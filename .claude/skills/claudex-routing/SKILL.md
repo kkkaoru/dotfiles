@@ -15,6 +15,8 @@ selected agents; account details from `codexbar` are never retained.
 1. Delegate substantive work primarily to agents in `selected_workers` with the available
    SubAgent tool (`Task` in current Claude Code, `Agent` in older versions). Pass their `model` and
    `effort` values as `claudex_model` and `claudex_effort`.
+   When delegation is explicitly requested and the work is clear, invoke the selected SubAgent in
+   the first response. Do not use task-list bookkeeping merely as a precondition for delegation.
 2. If the user explicitly names a model that matches a provider's `model_prefixes`, select that
    provider dynamically and pass the exact requested model. The adapter resolves the matching
    backend lazily.

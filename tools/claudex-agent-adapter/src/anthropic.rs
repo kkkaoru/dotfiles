@@ -277,7 +277,9 @@ impl Bridge {
             && request.model != self.model
             && !self.app.supports_model(&request.model)
         {
-            return self.subscription_messages(request, effort).await;
+            return self
+                .subscription_messages(request, effort, is_subagent)
+                .await;
         }
 
         let input_tokens = u64::try_from(token_count(&request)).unwrap_or(u64::MAX);

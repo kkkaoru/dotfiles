@@ -6,19 +6,23 @@ use super::{MessagesRequest, content::system_text};
 
 pub(super) fn subscription_request_prompt(request: &MessagesRequest) -> String {
     format!(
-        "Act as the requested Claude Code subagent. Follow the system instructions and complete the conversation below. Use only the enabled tools when needed. When a Task or Agent tool schema lacks claudex_model or claudex_effort, put each routed value at the start of its prompt as an exact `claudex_model: <model>` or `claudex_effort: <effort>` line. Never put a gpt or grok ID in the native model field.\n\nSystem:\n{}\n\nMessages:\n{}",
+        "Act as the requested Claude Code model. Follow the system instructions and complete the conversation below. Use only the enabled tools when needed. When delegation is requested and selected_workers are present, invoke the selected Agent or Task directly as the first tool call; do not perform task-list bookkeeping first. Treat current routing context as authoritative over stale model-policy memory. When a Task or Agent tool schema lacks claudex_model or claudex_effort, put each routed value at the start of its prompt as an exact `claudex_model: <model>` or `claudex_effort: <effort>` line. Never put a gpt or grok ID in the native model field.\n\nSystem:\n{}\n\nMessages:\n{}",
         system_text(&request.system),
         serde_json::to_string(&request.messages).unwrap_or_default()
     )
 }
 
-pub(super) fn requested_tools(tools: &[Value]) -> Vec<String> {
+pub(super) fn requested_tools(tools: &[Value], omit_task_bookkeeping: bool) -> Vec<String> {
     let mut selected = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for name in tools
         .iter()
         .filter_map(|tool| tool.get("name").and_then(Value::as_str))
         .filter(|name| !name.is_empty())
+        .filter(|name| {
+            !omit_task_bookkeeping
+                || !matches!(*name, "TaskCreate" | "TaskUpdate" | "TaskList" | "TaskGet")
+        })
     {
         if seen.insert(name) {
             selected.push(name.to_owned());
