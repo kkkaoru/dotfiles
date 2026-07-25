@@ -12,11 +12,12 @@ use std::{
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
+mod launcher_logs;
+mod daemon_process;
 use crate::{
     ADAPTER_PROTOCOL_VERSION, agent_backend::BackendRoute, subagent_policy as policy,
     working_directory,
 };
-mod daemon_process;
 use daemon_process::{matches as process_matches, terminate};
 
 const LOCAL_TOKEN: &str = "claudex-local";
@@ -69,11 +70,12 @@ impl ServiceConfig {
             .map(PathBuf::from)
             .context("HOME is required")?
             .join(".cache/claudex");
+        let log_path = launcher_logs::adapter_log_path(&cache, &options.listen);
         Ok(Self {
             options,
             token,
             executable,
-            log_path: cache.join("adapter.log"),
+            log_path,
         })
     }
 
@@ -291,12 +293,18 @@ fn start_adapter(config: &ServiceConfig) -> Result<()> {
         .parent()
         .context("adapter log has no parent")?;
     fs::create_dir_all(log_dir).context("create adapter log directory")?;
-    let stdout = OpenOptions::new()
+    launcher_logs::archive_previous_log(&config.log_path)?;
+    let mut stdout = OpenOptions::new()
         .create(true)
-        .append(true)
+        .write(true)
+        .truncate(true)
         .open(&config.log_path)
         .context("open adapter log")?;
-    let stderr = stdout.try_clone().context("clone adapter log handle")?;
+    launcher_logs::write_adapter_log_header(&mut stdout, &config.options.model, &config.options.listen, config.token.len())?;
+    let stdout = stdout;
+    let stderr = stdout
+        .try_clone()
+        .context("clone adapter log handle")?;
     let mut command = Command::new("nohup");
     #[cfg(unix)]
     {

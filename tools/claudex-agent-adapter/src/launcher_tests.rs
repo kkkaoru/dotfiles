@@ -44,6 +44,23 @@ mod tests {
     }
 
     #[test]
+    fn routes_logs_per_listen_address() {
+        let base = std::path::PathBuf::from("/tmp/claudex-log-cache");
+        let listen_1 = "127.0.0.1:8318".parse().expect("listen one");
+        let listen_2 = "127.0.0.1:18319".parse().expect("listen two");
+        assert_ne!(
+            super::launcher_logs::adapter_log_path(&base, &listen_1),
+            super::launcher_logs::adapter_log_path(&base, &listen_2)
+        );
+        assert_eq!(
+            super::launcher_logs::adapter_log_path(&base, &listen_1)
+                .file_name()
+                .expect("name one"),
+            "adapter.127.0.0.1_8318.log"
+        );
+    }
+
+    #[test]
     fn rejects_a_second_main_model_argument() {
         assert!(reject_model_override(&["--model".into(), "other".into()]).is_err());
         assert!(reject_model_override(&["--model=other".into()]).is_err());
