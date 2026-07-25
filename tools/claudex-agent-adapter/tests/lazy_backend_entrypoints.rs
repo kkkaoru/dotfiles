@@ -49,8 +49,27 @@ async fn lazy_routes_cover_provider_entry_points_and_failed_startup_state() {
     assert_single_codex_spawn(&codex_spawns);
 
     exercise_dynamic_route().await;
+    exercise_provider_restart(home.path()).await;
     exercise_failed_route_health().await;
     drop(home);
+}
+
+async fn exercise_provider_restart(root: &Path) {
+    let backend = AgentBackend::spawn_routes(&[route("exit-once-session", BackendKind::GrokAcp)]);
+    let recovered = backend
+        .request("thread/start", json!({"model":"exit-once-session"}))
+        .await
+        .expect("restart an exited ACP provider and retry the session");
+    assert!(recovered.pointer("/thread/id").is_some());
+    assert!(backend.is_alive());
+    let trace = fs::read_to_string(root.join("grok-acp-mock.jsonl"))
+        .expect("read restarted provider trace");
+    assert_eq!(
+        trace
+            .matches("\"arguments\":[\"--model\",\"exit-once-session\"")
+            .count(),
+        2
+    );
 }
 
 fn provider_home() -> (tempfile::TempDir, PathBuf) {

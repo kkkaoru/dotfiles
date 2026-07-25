@@ -10,14 +10,13 @@ use std::{
     },
 };
 
-use agent_client_protocol::{self as acp, Agent as _};
+use agent_client_protocol as acp;
 use anyhow::{Context, Result, anyhow};
-use serde_json::{Value, json};
+use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::{
     agent_backend::AcpLaunch,
-    anthropic::subscription_request::cwd_from_system,
     app_server::{ThreadEvents, events::ThreadEventDispatcher},
 };
 
@@ -25,10 +24,14 @@ mod client;
 mod connection;
 mod plugin;
 mod prompt;
+mod session;
 mod turns;
 mod updates;
 
 const COMMAND_QUEUE_CAPACITY: usize = 32;
+// Real ACP providers intermittently lose concurrent session/new responses. Session setup is short,
+// while completed sessions still run turns concurrently through the independent turn capacity.
+const SESSION_QUEUE_CAPACITY: usize = 1;
 const TURN_QUEUE_CAPACITY: usize = 8;
 
 use connection::AcpProvider;
@@ -40,6 +43,7 @@ use turns::{CancelRequest, PreparedTurn};
 enum DriverCommand {
     CreateSession {
         params: Value,
+        _permit: tokio::sync::OwnedSemaphorePermit,
         response: oneshot::Sender<Result<Value>>,
     },
     StartTurn {
@@ -66,6 +70,7 @@ struct DriverSetup {
 
 pub struct GrokAcp {
     commands: mpsc::Sender<DriverCommand>,
+    session_permits: Arc<tokio::sync::Semaphore>,
     turn_permits: Arc<tokio::sync::Semaphore>,
     events: Arc<ThreadEventDispatcher>,
     alive: Arc<AtomicBool>,
@@ -121,6 +126,7 @@ impl GrokAcp {
         cwd: PathBuf,
     ) -> Result<Arc<Self>> {
         let (command_tx, command_rx) = mpsc::channel(COMMAND_QUEUE_CAPACITY);
+        let session_permits = Arc::new(tokio::sync::Semaphore::new(SESSION_QUEUE_CAPACITY));
         let turn_permits = Arc::new(tokio::sync::Semaphore::new(TURN_QUEUE_CAPACITY));
         let events = Arc::new(ThreadEventDispatcher::default());
         let alive = Arc::new(AtomicBool::new(true));
@@ -157,6 +163,7 @@ impl GrokAcp {
             .with_context(|| format!("{} ACP driver stopped during startup", provider.label()))??;
         Ok(Arc::new(Self {
             commands: command_tx,
+            session_permits,
             turn_permits,
             events,
             alive,
@@ -176,8 +183,16 @@ impl GrokAcp {
     }
 
     pub async fn create_session(&self, params: Value) -> Result<Value> {
-        self.call(|response| DriverCommand::CreateSession { params, response })
+        let permit = Arc::clone(&self.session_permits)
+            .acquire_owned()
             .await
+            .map_err(|_| anyhow!("ACP driver is unavailable"))?;
+        self.call(|response| DriverCommand::CreateSession {
+            params,
+            _permit: permit,
+            response,
+        })
+        .await
     }
 
     pub async fn start_turn(&self, params: Value) -> Result<()> {
@@ -226,23 +241,40 @@ async fn run_driver(setup: DriverSetup, mut commands: mpsc::Receiver<DriverComma
         Arc::clone(&setup.events),
     )
     .await;
-    let Ok((connection, child)) = started else {
+    let Ok((connection, mut child, io_stopped, process_group)) = started else {
         let _ = setup.ready.send(started.map(|_| ()));
         setup.alive.store(false, Ordering::Relaxed);
         setup.events.close();
         return;
     };
     let _ = setup.ready.send(Ok(()));
-    drive_commands(
-        setup.provider,
-        Rc::new(connection),
-        child,
-        &setup.model,
-        &setup.cwd,
-        &mut commands,
-        &setup.events,
-    )
-    .await;
+    tokio::select! {
+        () = drive_commands(
+            setup.provider,
+            Rc::new(connection),
+            &setup.model,
+            &setup.cwd,
+            &mut commands,
+            &setup.events,
+        ) => {}
+        status = child.wait() => match status {
+            Ok(status) => tracing::warn!(
+                provider = setup.provider.label(),
+                %status,
+                "ACP provider exited"
+            ),
+            Err(error) => tracing::error!(
+                provider = setup.provider.label(),
+                ?error,
+                "failed to wait for ACP provider"
+            ),
+        },
+        _ = io_stopped => tracing::warn!(
+            provider = setup.provider.label(),
+            "ACP provider I/O closed"
+        ),
+    }
+    connection::terminate_process_group(process_group);
     setup.alive.store(false, Ordering::Relaxed);
     setup.events.close();
 }
@@ -250,7 +282,6 @@ async fn run_driver(setup: DriverSetup, mut commands: mpsc::Receiver<DriverComma
 async fn drive_commands(
     provider: AcpProvider,
     connection: Rc<acp::ClientSideConnection>,
-    _child: tokio::process::Child,
     model: &str,
     cwd: &Path,
     commands: &mut mpsc::Receiver<DriverCommand>,
@@ -259,6 +290,7 @@ async fn drive_commands(
     let instructions = Rc::new(RefCell::new(HashMap::<String, String>::new()));
     let active_turns = Rc::new(RefCell::new(HashMap::new()));
     let invalidated_sessions = Rc::new(RefCell::new(HashSet::new()));
+    let (driver_faults, mut driver_faults_rx) = mpsc::unbounded_channel();
     let (turns, turn_receiver) = mpsc::channel(TURN_QUEUE_CAPACITY);
     let turn_worker = tokio::task::spawn_local(drive_turns(
         provider,
@@ -269,29 +301,50 @@ async fn drive_commands(
         Rc::clone(&active_turns),
         Rc::clone(&invalidated_sessions),
     ));
-    while let Some(command) = commands.recv().await {
+    let faulted = loop {
+        let command = tokio::select! {
+            fault = driver_faults_rx.recv() => {
+                tracing::warn!(provider = provider.label(), ?fault, "recycling ACP provider");
+                break true;
+            }
+            command = commands.recv() => command,
+        };
+        let Some(command) = command else {
+            break false;
+        };
         match command {
-            DriverCommand::CreateSession { params, response } => {
+            DriverCommand::CreateSession {
+                params,
+                _permit: permit,
+                response,
+            } => {
                 // ACP connections multiplex requests. Do not hold the driver command loop while a
                 // provider creates one session: a parallel Agent burst would otherwise serialize
                 // every session/new request and also strand already-created sessions' turn/start
                 // commands behind the remaining session creations.
-                let connection = Rc::clone(&connection);
-                let model = model.to_owned();
-                let cwd = cwd.to_owned();
-                let instructions = Rc::clone(&instructions);
-                tokio::task::spawn_local(async move {
-                    let result =
-                        create_session(provider, &connection, &model, &cwd, params, &instructions)
-                            .await;
-                    let _ = response.send(result);
-                });
+                session::Task {
+                    provider,
+                    connection: Rc::clone(&connection),
+                    model: model.to_owned(),
+                    cwd: cwd.to_owned(),
+                    params,
+                    instructions: Rc::clone(&instructions),
+                    permit,
+                    response,
+                    driver_faults: driver_faults.clone(),
+                }
+                .spawn();
             }
             DriverCommand::StartTurn {
                 params,
                 permit,
                 response,
             } => {
+                let session_id = params
+                    .get("threadId")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned();
                 let result = queue_turn(
                     provider,
                     params,
@@ -302,55 +355,34 @@ async fn drive_commands(
                     &invalidated_sessions,
                 )
                 .await;
-                let _ = response.send(result);
+                finish_start_turn(&active_turns, &session_id, response, result);
             }
             DriverCommand::CancelTurn {
                 session_id,
                 response,
             } => cancel_turn(&active_turns, &session_id, response),
         }
-    }
+    };
     drop(turns);
+    if faulted {
+        turn_worker.abort();
+    }
     let _ = turn_worker.await;
 }
 
-async fn create_session(
-    provider: AcpProvider,
-    connection: &acp::ClientSideConnection,
-    model: &str,
-    cwd: &Path,
-    params: Value,
-    instructions: &Rc<RefCell<HashMap<String, String>>>,
-) -> Result<Value> {
-    // `cwd` is the adapter process fallback. Claude Code's thread/start payload carries the
-    // active child working directory in its base instructions; use that request-scoped path for
-    // ACP providers instead of leaking the adapter's launch directory into every provider session.
-    let session_cwd = params
-        .get("baseInstructions")
-        .and_then(Value::as_str)
-        .and_then(cwd_from_system)
-        .or_else(|| {
-            params
-                .get("cwd")
-                .and_then(Value::as_str)
-                .map(PathBuf::from)
-                .filter(|path| path.is_absolute() && path.is_dir())
-        })
-        .unwrap_or_else(|| cwd.to_owned());
-    let response = connection
-        .new_session(
-            acp::NewSessionRequest::new(&session_cwd)
-                .mcp_servers(vec![])
-                .meta(json!({ "modelId": model }).as_object().cloned()),
-        )
-        .await
-        .map_err(|error| anyhow!("{} ACP session/new failed: {error:?}", provider.label()))?;
-    let session_id = response.session_id.0.to_string();
-    let base = prompt::provider_instructions(&params, provider == AcpProvider::Grok);
-    if !base.is_empty() {
-        instructions.borrow_mut().insert(session_id.clone(), base);
+fn finish_start_turn(
+    active_turns: &turns::ActiveTurns,
+    session_id: &str,
+    response: oneshot::Sender<Result<()>>,
+    result: Result<()>,
+) {
+    let Err(unsent) = response.send(result) else {
+        return;
+    };
+    if unsent.is_ok() {
+        let (cancelled, _result) = oneshot::channel();
+        cancel_turn(active_turns, session_id, cancelled);
     }
-    Ok(json!({"thread":{"id":session_id}}))
 }
 
 #[cfg(test)]

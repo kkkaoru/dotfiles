@@ -1,5 +1,5 @@
 use std::sync::{
-    Arc, Mutex, OnceLock,
+    Arc, Mutex,
     atomic::{AtomicBool, Ordering},
 };
 
@@ -17,7 +17,10 @@ pub(super) struct RoutedBackend {
     activated: AtomicBool,
 }
 
-type BackendStartup = OnceLock<tokio::sync::watch::Receiver<StartupState>>;
+#[derive(Default)]
+struct BackendStartup {
+    receiver: Mutex<Option<tokio::sync::watch::Receiver<StartupState>>>,
+}
 
 #[derive(Clone)]
 enum StartupState {
@@ -40,8 +43,8 @@ impl RoutedBackend {
         let kind = backend.kind();
         let (sender, receiver) = tokio::sync::watch::channel(StartupState::Starting);
         sender.send_replace(StartupState::Ready(Ok(backend)));
-        let startup = Arc::new(OnceLock::new());
-        startup.set(receiver).ok().expect("empty startup cell");
+        let startup = Arc::new(BackendStartup::default());
+        *startup.receiver.lock().expect("backend startup poisoned") = Some(receiver);
         Self {
             template: BackendRoute::new(&model, kind),
             model,
@@ -71,35 +74,59 @@ impl RoutedBackend {
     }
 
     fn startup_receiver(&self) -> tokio::sync::watch::Receiver<StartupState> {
-        self.startup
-            .get_or_init(|| {
-                let (sender, receiver) = tokio::sync::watch::channel(StartupState::Starting);
-                let route = self.template.clone();
-                tokio::spawn(async move {
-                    let result = AgentBackend::spawn_route(&route)
-                        .await
-                        .map_err(|error| Arc::<str>::from(format!("{error:#}")));
-                    sender.send_replace(StartupState::Ready(result));
-                });
-                receiver
-            })
-            .clone()
+        let mut startup = self
+            .startup
+            .receiver
+            .lock()
+            .expect("backend startup poisoned");
+        let reusable = startup
+            .as_ref()
+            .is_some_and(|receiver| match receiver.borrow().clone() {
+                StartupState::Starting => true,
+                StartupState::Ready(Ok(backend)) => backend.is_alive(),
+                StartupState::Ready(Err(_)) => false,
+            });
+        if !reusable {
+            *startup = Some(start_backend(self.template.clone()));
+        }
+        startup.as_ref().expect("backend startup receiver").clone()
     }
 
     pub(super) fn ready_backend(&self) -> Option<Arc<AgentBackend>> {
-        let state = self.startup.get()?.borrow().clone();
+        let receiver = self
+            .startup
+            .receiver
+            .lock()
+            .expect("backend startup poisoned")
+            .clone()?;
+        let state = receiver.borrow().clone();
         match state {
-            StartupState::Ready(Ok(backend)) => Some(backend),
+            StartupState::Ready(Ok(backend)) if backend.is_alive() => Some(backend),
             StartupState::Starting | StartupState::Ready(Err(_)) => None,
+            StartupState::Ready(Ok(_)) => None,
         }
+    }
+
+    pub(super) fn retire(&self) {
+        *self
+            .startup
+            .receiver
+            .lock()
+            .expect("backend startup poisoned") = None;
     }
 
     fn is_started(&self) -> bool {
         self.activated.load(Ordering::Relaxed) && self.ready_backend().is_some()
     }
 
-    fn is_alive(&self) -> bool {
-        let Some(startup) = self.startup.get() else {
+    pub(super) fn is_alive(&self) -> bool {
+        let Some(startup) = self
+            .startup
+            .receiver
+            .lock()
+            .expect("backend startup poisoned")
+            .clone()
+        else {
             return true;
         };
         match startup.borrow().clone() {
@@ -118,7 +145,7 @@ pub struct RoutedBackends {
 
 impl RoutedBackends {
     pub(super) fn lazy(routes: &[BackendRoute]) -> Self {
-        let codex_startup = Arc::new(OnceLock::new());
+        let codex_startup = Arc::new(BackendStartup::default());
         Self {
             configured: routes
                 .iter()
@@ -143,7 +170,7 @@ impl RoutedBackends {
             .iter()
             .find(|route| route.kind == BackendKind::CodexAppServer)
             .map(|route| Arc::clone(&route.startup))
-            .unwrap_or_else(|| Arc::new(OnceLock::new()));
+            .unwrap_or_else(|| Arc::new(BackendStartup::default()));
         Self {
             configured,
             dynamic: Mutex::new(Vec::new()),
@@ -196,6 +223,10 @@ impl RoutedBackends {
                 .expect("dynamic routes poisoned")
                 .iter()
                 .all(|route| route.is_alive())
+    }
+
+    pub(super) fn model_is_alive(&self, model: &str) -> bool {
+        self.find(model).is_none_or(|route| route.is_alive())
     }
 
     pub(super) fn route(&self, index: usize) -> Arc<RoutedBackend> {
@@ -295,9 +326,20 @@ fn provider_startup(kind: BackendKind, codex_startup: &Arc<BackendStartup>) -> A
     match kind {
         BackendKind::CodexAppServer => Arc::clone(codex_startup),
         BackendKind::ConfiguredAcp | BackendKind::CopilotAcp | BackendKind::GrokAcp => {
-            Arc::new(OnceLock::new())
+            Arc::new(BackendStartup::default())
         }
     }
+}
+
+fn start_backend(route: BackendRoute) -> tokio::sync::watch::Receiver<StartupState> {
+    let (sender, receiver) = tokio::sync::watch::channel(StartupState::Starting);
+    tokio::spawn(async move {
+        let result = AgentBackend::spawn_route(&route)
+            .await
+            .map_err(|error| Arc::<str>::from(format!("{error:#}")));
+        sender.send_replace(StartupState::Ready(result));
+    });
+    receiver
 }
 
 fn inferred_kind(model: &str) -> Option<BackendKind> {

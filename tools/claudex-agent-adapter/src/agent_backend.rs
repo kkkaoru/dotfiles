@@ -12,7 +12,7 @@ use crate::{
 
 mod routes;
 
-use routes::RoutedBackends;
+use routes::{RoutedBackend, RoutedBackends};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -230,6 +230,15 @@ impl AgentBackend {
         }
     }
 
+    pub(crate) fn model_is_alive(&self, model: &str) -> bool {
+        match self {
+            Self::Routed(routes) => routes.model_is_alive(model),
+            Self::Codex(_) | Self::ConfiguredAcp(_) | Self::Copilot(_) | Self::Grok(_) => {
+                self.is_alive()
+            }
+        }
+    }
+
     pub async fn request(&self, method: &str, params: Value) -> Result<Value> {
         match self {
             Self::Codex(server) => server.request(method, params).await,
@@ -249,8 +258,12 @@ impl AgentBackend {
                     .and_then(Value::as_str)
                     .unwrap_or_default();
                 let (index, route) = routes.resolve(model)?;
-                let backend = route.get().await?;
-                let mut response = Box::pin(backend.request(method, params)).await?;
+                let mut response = if route.kind == BackendKind::CodexAppServer {
+                    let backend = route.get().await?;
+                    Box::pin(backend.request(method, params)).await?
+                } else {
+                    request_acp_session(&route, method, params).await?
+                };
                 let raw_id = response
                     .pointer("/thread/id")
                     .and_then(Value::as_str)
@@ -350,6 +363,27 @@ impl AgentBackend {
             }
         }
     }
+}
+
+async fn request_acp_session(
+    route: &Arc<RoutedBackend>,
+    method: &str,
+    params: Value,
+) -> Result<Value> {
+    let backend = route.get().await?;
+    let first = Box::pin(backend.request(method, params.clone())).await;
+    let Err(error) = first else {
+        return first;
+    };
+    tracing::warn!(
+        ?error,
+        "restarting ACP provider after session creation failed"
+    );
+    route.retire();
+    let restarted = route.get().await?;
+    Box::pin(restarted.request(method, params))
+        .await
+        .with_context(|| format!("ACP session retry failed after initial error: {error:#}"))
 }
 
 fn routed_thread(thread_id: &str) -> (usize, &str) {

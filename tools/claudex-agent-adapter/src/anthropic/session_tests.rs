@@ -5,7 +5,8 @@ use tokio::sync::{Mutex, Semaphore};
 
 use super::{
     candidate_length, codex_tool_name, dynamic_tool, is_better_length, owns_tool_result,
-    thread_start_params, tool_configuration, transcript_owns_tool_results,
+    reserve_matching_session, thread_start_params, tool_configuration,
+    transcript_owns_tool_results,
 };
 use crate::anthropic::{
     MessagesRequest, Session, subscription_request::subscription_request_prompt,
@@ -204,6 +205,44 @@ async fn candidate_requires_the_signature_and_matching_transcript() {
         .await,
         None
     );
+}
+
+#[tokio::test]
+async fn reserves_only_idle_matching_sessions_for_parallel_requests() {
+    let message = json!({"role":"user","content":"parallel"});
+    let active = session("signature", Vec::new());
+    let active_gate = Arc::clone(&active.gate).lock_owned().await;
+    assert!(
+        reserve_matching_session(
+            vec![Arc::clone(&active)],
+            &Arc::from("signature"),
+            std::slice::from_ref(&message),
+        )
+        .await
+        .is_none()
+    );
+    drop(active_gate);
+    let selected = reserve_matching_session(
+        vec![active],
+        &Arc::from("signature"),
+        std::slice::from_ref(&message),
+    )
+    .await
+    .expect("idle matching session");
+    assert_eq!(selected.existing_len, 0);
+
+    let first = json!({"role":"user","content":"first"});
+    let second = json!({"role":"assistant","content":"second"});
+    let longer = session("signature", vec![first.clone()]);
+    let shorter = session("signature", Vec::new());
+    let selected = reserve_matching_session(
+        vec![longer, shorter],
+        &Arc::from("signature"),
+        &[first, second],
+    )
+    .await
+    .expect("best matching session");
+    assert_eq!(selected.existing_len, 1);
 }
 
 #[test]

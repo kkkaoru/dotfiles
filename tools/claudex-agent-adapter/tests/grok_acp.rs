@@ -350,9 +350,9 @@ async fn streams_two_grok_acp_sessions_concurrently() {
 }
 
 #[tokio::test]
-async fn creates_parallel_grok_acp_sessions_without_driver_head_of_line_blocking() {
+async fn queues_parallel_grok_acp_session_requests_without_dropping_them() {
     let root = tempfile::tempdir().expect("parallel session fixture");
-    let agent = spawn_mock("concurrent-sessions", root.path()).await;
+    let agent = spawn_mock("", root.path()).await;
 
     let (first, second) = tokio::time::timeout(PARALLEL_SESSION_CREATION_TIMEOUT, async {
         tokio::join!(
@@ -361,7 +361,7 @@ async fn creates_parallel_grok_acp_sessions_without_driver_head_of_line_blocking
         )
     })
     .await
-    .expect("parallel session creation was serialized by the driver");
+    .expect("queued session creation stalled");
     let first = first.expect("first session");
     let second = second.expect("second session");
 

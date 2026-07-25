@@ -84,7 +84,10 @@ mod tests {
             }),
         };
         let routes = RoutedBackends::lazy(&[route]);
+        assert!(routes.model_is_alive("missing-acp"));
         assert!(routes.route(0).get().await.is_err());
+        assert!(!routes.model_is_alive("missing-acp"));
+        assert!(routes.model_is_alive("unconfigured-model"));
         assert!(!routes.is_alive());
     }
 

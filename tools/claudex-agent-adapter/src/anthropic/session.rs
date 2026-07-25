@@ -18,7 +18,10 @@ use super::{
 };
 use crate::app_server::response_thread_id;
 
+mod reservation;
 mod tools;
+
+use reservation::reserve_matching_session;
 
 #[cfg(test)]
 pub(super) use tools::{
@@ -33,6 +36,8 @@ impl Bridge {
         input_tokens: u64,
         effort: Option<String>,
     ) -> Result<ActiveTurn> {
+        self.remove_failed_model_sessions(&self.request_model(request))
+            .await;
         let advisor_model = self
             .advisor_model_override
             .clone()
@@ -65,6 +70,16 @@ impl Bridge {
             .await?;
         self.start_selected_turn(request, input_tokens, effort, selected, tool_results)
             .await
+    }
+
+    async fn remove_failed_model_sessions(&self, model: &str) {
+        if self.app.model_is_alive(model) {
+            return;
+        }
+        self.sessions
+            .lock()
+            .await
+            .retain(|session| session.model != model);
     }
 
     async fn start_selected_turn(
@@ -223,16 +238,8 @@ impl Bridge {
         signature: &Arc<str>,
         messages: &[Value],
     ) -> Option<SelectedSession> {
-        let (session, _) = self.find_session(signature, messages).await?;
-        let gate = Arc::clone(&session.gate).lock_owned().await;
-        let existing_len = matching_transcript_len(&session, messages).await?;
-        touch_session(&session);
-        Some(SelectedSession {
-            session,
-            existing_len,
-            recovered: false,
-            gate,
-        })
+        let sessions = self.sessions.lock().await.clone();
+        reserve_matching_session(sessions, signature, messages).await
     }
 
     pub(super) async fn remove_session(&self, removed: &Arc<Session>) {
@@ -240,25 +247,6 @@ impl Bridge {
             .lock()
             .await
             .retain(|session| !Arc::ptr_eq(session, removed));
-    }
-
-    async fn find_session(
-        &self,
-        signature: &Arc<str>,
-        messages: &[Value],
-    ) -> Option<(Arc<Session>, usize)> {
-        let sessions = self.sessions.lock().await.clone();
-        let mut best = None;
-        for session in sessions {
-            let Some(length) = candidate_length(&session, signature, messages).await else {
-                continue;
-            };
-            let best_length = best.as_ref().map(|(_, best_len)| *best_len);
-            if is_better_length(best_length, length) {
-                best = Some((session, length));
-            }
-        }
-        best
     }
 
     async fn find_result_session(&self, results: &[ToolResult]) -> Option<Arc<Session>> {

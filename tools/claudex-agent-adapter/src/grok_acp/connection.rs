@@ -1,9 +1,14 @@
-use std::{ffi::OsString, path::Path, process::Stdio, sync::Arc};
+use std::{
+    ffi::OsString,
+    path::Path,
+    process::{Command as StdCommand, Stdio},
+    sync::Arc,
+};
 
 use agent_client_protocol::{self as acp, Agent as _};
 use anyhow::{Context as _, Result, anyhow, bail};
 use serde_json::{Value, json};
-use tokio::process::Command;
+use tokio::{process::Command, sync::oneshot};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use super::{client::AcpClient, plugin};
@@ -41,7 +46,12 @@ pub(super) async fn start(
     model: &str,
     cwd: &Path,
     events: Arc<ThreadEventDispatcher>,
-) -> Result<(acp::ClientSideConnection, tokio::process::Child)> {
+) -> Result<(
+    acp::ClientSideConnection,
+    tokio::process::Child,
+    oneshot::Receiver<()>,
+    u32,
+)> {
     let mut command = Command::new(program);
     match provider {
         AcpProvider::Grok => {
@@ -66,6 +76,11 @@ pub(super) async fn start(
             );
         }
     }
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+        command.as_std_mut().process_group(0);
+    }
     let mut child = command
         .current_dir(cwd)
         .stdin(Stdio::piped())
@@ -74,6 +89,9 @@ pub(super) async fn start(
         .kill_on_drop(true)
         .spawn()
         .with_context(|| format!("start {} ACP server", provider.label()))?;
+    let process_group = child
+        .id()
+        .with_context(|| format!("{} ACP process id is unavailable", provider.label()))?;
     let outgoing = child
         .stdin
         .take()
@@ -89,13 +107,26 @@ pub(super) async fn start(
         acp::ClientSideConnection::new(client, outgoing, incoming, |future| {
             tokio::task::spawn_local(future);
         });
+    let (io_stopped, io_stopped_rx) = oneshot::channel();
     tokio::task::spawn_local(async move {
         if let Err(error) = handle_io.await {
             tracing::error!(?error, provider = provider.label(), "ACP I/O stopped");
         }
+        let _ = io_stopped.send(());
     });
-    initialize(provider, &connection).await?;
-    Ok((connection, child))
+    if let Err(error) = initialize(provider, &connection).await {
+        terminate_process_group(process_group);
+        return Err(error);
+    }
+    Ok((connection, child, io_stopped_rx, process_group))
+}
+
+pub(super) fn terminate_process_group(process_group: u32) {
+    let _status = StdCommand::new("kill")
+        .args(["-KILL", &format!("-{process_group}")])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
 }
 
 async fn initialize(provider: AcpProvider, connection: &acp::ClientSideConnection) -> Result<()> {

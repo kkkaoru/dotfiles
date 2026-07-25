@@ -25,8 +25,6 @@ struct MockAgent {
     trace: PathBuf,
     mode: String,
     next_session: Cell<u64>,
-    first_concurrent_session_waiting: Cell<bool>,
-    both_sessions_started: Notify,
     concurrent_prompts: Cell<usize>,
     both_prompts_started: Notify,
     cancellable_prompts: RefCell<HashMap<String, Rc<Notify>>>,
@@ -149,14 +147,6 @@ impl MockAgent {
             self.both_prompts_started.notified().await;
         } else {
             self.both_prompts_started.notify_one();
-        }
-    }
-
-    async fn wait_for_concurrent_session(&self) {
-        if self.first_concurrent_session_waiting.replace(true) {
-            self.both_sessions_started.notify_one();
-        } else {
-            self.both_sessions_started.notified().await;
         }
     }
 
@@ -344,14 +334,18 @@ impl acp::Agent for MockAgent {
         request: acp::NewSessionRequest,
     ) -> acp::Result<acp::NewSessionResponse> {
         self.record("new_session", request)?;
+        if self.mode == "exit-once-session" {
+            let marker = self.trace.with_file_name("grok-acp-exited-once");
+            if !marker.exists() {
+                std::fs::write(marker, b"exited").map_err(|_| acp::Error::internal_error())?;
+                std::process::exit(9);
+            }
+        }
         if self.mode == "fail-session" {
             return Err(acp::Error::internal_error());
         }
         let next = self.next_session.get() + 1;
         self.next_session.set(next);
-        if self.mode == "concurrent-sessions" {
-            self.wait_for_concurrent_session().await;
-        }
         Ok(acp::NewSessionResponse::new(format!("grok-session-{next}")))
     }
 
@@ -441,8 +435,6 @@ async fn main() -> acp::Result<()> {
         trace,
         mode,
         next_session: Cell::new(0),
-        first_concurrent_session_waiting: Cell::new(false),
-        both_sessions_started: Notify::new(),
         concurrent_prompts: Cell::new(0),
         both_prompts_started: Notify::new(),
         cancellable_prompts: RefCell::new(HashMap::new()),

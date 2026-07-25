@@ -4,17 +4,50 @@ use agent_client_protocol::{self as acp, Client as _};
 use serde_json::{json, value::RawValue};
 
 use super::{
-    COMMAND_QUEUE_CAPACITY, DriverCommand, GrokAcp, PreparedTurn, TURN_QUEUE_CAPACITY,
+    COMMAND_QUEUE_CAPACITY, DriverCommand, GrokAcp, PreparedTurn, SESSION_QUEUE_CAPACITY,
+    TURN_QUEUE_CAPACITY,
     client::AcpClient,
     connection::AcpProvider,
-    prompt,
+    finish_start_turn, prompt,
     turns::{ActiveTurns, InvalidatedSessions, cancel_turn, drive_turn_tasks, queue_turn},
     updates,
 };
 use crate::app_server::events::ThreadEventDispatcher;
 
+#[tokio::test]
+async fn terminates_the_entire_provider_process_group() {
+    use std::{os::unix::process::CommandExt as _, process::Stdio, time::Duration};
+
+    let mut command = tokio::process::Command::new("sh");
+    command
+        .args(["-c", "sleep 60 & wait"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    command.as_std_mut().process_group(0);
+    let mut child = command.spawn().unwrap();
+    let process_group = child.id().unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    super::connection::terminate_process_group(process_group);
+    let status = tokio::time::timeout(Duration::from_secs(2), child.wait())
+        .await
+        .expect("provider process group did not terminate")
+        .unwrap();
+    let group_exists = std::process::Command::new("kill")
+        .args(["-0", &format!("-{process_group}")])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .unwrap()
+        .success();
+    assert!(!status.success());
+    assert!(!group_exists);
+}
+
 #[test]
 fn converts_backend_prompts_and_effort() {
+    assert_eq!(SESSION_QUEUE_CAPACITY, 1);
     assert_eq!(prompt::input_text(&json!("hello")), "hello");
     assert_eq!(
         prompt::input_text(&json!([{"type":"text","text":"one"},{"content":"two"}])),
@@ -89,6 +122,7 @@ async fn reports_a_closed_driver_for_each_command_response_type() {
     drop(receiver);
     let agent = GrokAcp {
         commands,
+        session_permits: Arc::new(tokio::sync::Semaphore::new(SESSION_QUEUE_CAPACITY)),
         turn_permits: Arc::new(tokio::sync::Semaphore::new(TURN_QUEUE_CAPACITY)),
         events: Arc::new(ThreadEventDispatcher::default()),
         alive: Arc::new(AtomicBool::new(false)),
@@ -242,6 +276,28 @@ async fn handles_absent_repeated_and_dropped_turn_cancellations() {
     let (response, result) = tokio::sync::oneshot::channel();
     cancel_turn(&active, "dropped", response);
     assert!(result.await.unwrap().is_ok());
+}
+
+#[tokio::test]
+async fn cancels_a_queued_turn_when_its_requester_disconnects() {
+    let active = ActiveTurns::default();
+    let (cancel, cancelled) = tokio::sync::oneshot::channel();
+    active
+        .borrow_mut()
+        .insert("session".to_owned(), Some(cancel));
+    let (response, requester) = tokio::sync::oneshot::channel();
+    drop(requester);
+    finish_start_turn(&active, "session", response, Ok(()));
+    assert!(cancelled.await.is_ok());
+
+    let (response, requester) = tokio::sync::oneshot::channel();
+    drop(requester);
+    finish_start_turn(
+        &active,
+        "missing",
+        response,
+        Err(anyhow::anyhow!("queue rejected")),
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]

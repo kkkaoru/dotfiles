@@ -146,18 +146,11 @@ pub(super) async fn cancel_prompt<F>(
 ) where
     F: Future<Output = acp::Result<acp::PromptResponse>>,
 {
-    if let Err(error) = connection
-        .cancel(acp::CancelNotification::new(ctx.session_id.to_owned()))
-        .await
-    {
-        let message = format!(
-            "{} ACP session/cancel failed: {error:?}",
-            ctx.provider.label()
-        );
-        fail_cancellation(ctx, message, true);
-        return;
-    }
     let policy = SettlementPolicy::default();
+    let cancel = connection.cancel(acp::CancelNotification::new(ctx.session_id.to_owned()));
+    let Some(ctx) = continue_after_cancel_request(ctx, policy, policy.settle(cancel).await) else {
+        return;
+    };
     let response = match policy.settle(prompt).await {
         Settlement::Settled(response) => response,
         Settlement::TimedOut => {
@@ -182,6 +175,34 @@ pub(super) async fn cancel_prompt<F>(
     settle_cancelled_prompt(ctx, response);
 }
 
+fn continue_after_cancel_request<'a>(
+    ctx: CancelCtx<'a>,
+    policy: SettlementPolicy,
+    settlement: Settlement<acp::Result<()>>,
+) -> Option<CancelCtx<'a>> {
+    match settlement {
+        Settlement::Settled(Ok(())) => Some(ctx),
+        Settlement::Settled(Err(error)) => {
+            let message = format!(
+                "{} ACP session/cancel failed: {error:?}",
+                ctx.provider.label()
+            );
+            fail_cancellation(ctx, message);
+            None
+        }
+        Settlement::TimedOut => {
+            let message = format!(
+                "{} ACP session `{}` cancel request did not complete within {:?}",
+                ctx.provider.label(),
+                ctx.session_id,
+                policy.timeout
+            );
+            fail_cancellation(ctx, message);
+            None
+        }
+    }
+}
+
 fn settle_cancelled_prompt(ctx: CancelCtx<'_>, response: acp::Result<acp::PromptResponse>) {
     match response {
         Ok(response) if response.stop_reason == acp::StopReason::Cancelled => {
@@ -200,21 +221,23 @@ fn settle_cancelled_prompt(ctx: CancelCtx<'_>, response: acp::Result<acp::Prompt
             dispatch_turn_terminal(ctx.events, ctx.session_id, "completed");
         }
         Err(error) => {
-            let message = format!(
-                "{} ACP cancelled prompt failed to settle: {error:?}",
-                ctx.provider.label()
+            tracing::debug!(
+                provider = ctx.provider.label(),
+                session_id = ctx.session_id,
+                ?error,
+                "ACP provider reported an error while settling an explicit cancellation"
             );
-            fail_cancellation(ctx, message, false);
+            drop(ctx.permit);
+            let _ = ctx.cancellation.response.send(Ok(()));
+            dispatch_turn_terminal(ctx.events, ctx.session_id, "cancelled");
         }
     }
 }
 
-fn fail_cancellation(ctx: CancelCtx<'_>, message: String, invalidate: bool) {
-    if invalidate {
-        ctx.invalidated_sessions
-            .borrow_mut()
-            .insert(ctx.session_id.to_owned());
-    }
+fn fail_cancellation(ctx: CancelCtx<'_>, message: String) {
+    ctx.invalidated_sessions
+        .borrow_mut()
+        .insert(ctx.session_id.to_owned());
     drop(ctx.permit);
     let _ = ctx
         .cancellation
