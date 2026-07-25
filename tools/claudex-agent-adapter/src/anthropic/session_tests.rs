@@ -7,6 +7,7 @@ use super::{
     candidate_length, codex_tool_name, dynamic_tool, is_better_length, owns_tool_result,
     reservation::reserve_matching_session, thread_start_params, tool_configuration,
     transcript_owns_tool_results,
+    session_turn::contains_context_window_marker,
 };
 use crate::anthropic::{
     MessagesRequest, Session, subscription_request::subscription_request_prompt,
@@ -317,4 +318,12 @@ fn recognizes_pending_and_consumed_tool_results() {
     assert!(is_better_length(None, 1));
     assert!(is_better_length(Some(1), 2));
     assert!(!is_better_length(Some(2), 1));
+}
+
+#[test]
+fn classifies_context_window_errors() {
+    assert!(contains_context_window_marker("context window exceeded"));
+    assert!(contains_context_window_marker("ContextWindowExceeded"));
+    assert!(contains_context_window_marker("ran out of room in this conversation"));
+    assert!(!contains_context_window_marker("validation failed"));
 }

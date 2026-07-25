@@ -19,6 +19,7 @@ use super::{
 };
 
 mod builder;
+mod context_window;
 mod disconnect;
 mod prepare;
 mod protocol;
@@ -375,10 +376,17 @@ pub(super) fn error_flow(event: &Value) -> Result<ControlFlow<()>> {
         );
         return Ok(ControlFlow::Continue(()));
     }
+    if is_context_window_event(event) {
+        tracing::warn!(error = %event.get("params").unwrap_or(event), "codex app-server hit context window limit");
+    }
     bail!(
         "codex app-server turn failed: {}",
         event.get("params").unwrap_or(event)
     )
+}
+
+fn is_context_window_event(event: &Value) -> bool {
+    context_window::is_context_window_event(event)
 }
 
 async fn commit_transcript(session: &Session, extras: Vec<Value>, segment: &Segment) {

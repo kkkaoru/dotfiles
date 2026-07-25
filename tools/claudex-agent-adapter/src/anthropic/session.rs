@@ -14,11 +14,11 @@ use super::{
         ToolResult, collect_tool_results, matching_transcript_len, request_signature,
         take_pending_results, transcript_owns_tool_results,
     },
-    turn_input::{full_transcript_input, user_input_from_messages},
 };
 use crate::app_server::response_thread_id;
 
 mod preempt;
+mod session_turn;
 #[cfg(test)]
 pub(super) mod reservation;
 #[cfg(not(test))]
@@ -70,7 +70,15 @@ impl Bridge {
                 &tool_results,
             )
             .await?;
-        self.start_selected_turn(request, input_tokens, effort, selected, tool_results)
+        self.start_selected_turn(
+            request,
+            input_tokens,
+            effort,
+            selected,
+            tool_results,
+            advisor_model.as_deref(),
+            collaborator_model.as_deref(),
+        )
             .await
     }
 
@@ -82,85 +90,6 @@ impl Bridge {
             .lock()
             .await
             .retain(|session| session.model != model);
-    }
-
-    async fn start_selected_turn(
-        &self,
-        request: &MessagesRequest,
-        input_tokens: u64,
-        effort: Option<String>,
-        selected: SelectedSession,
-        tool_results: Vec<ToolResult>,
-    ) -> Result<ActiveTurn> {
-        let existing_len = selected.existing_len;
-        let recovered = selected.recovered;
-        let extras = request.messages[existing_len..].to_vec();
-        let events = self.app.subscribe_thread(&selected.session.thread_id);
-        let start = if tool_results.is_empty() || recovered {
-            self.start_model_turn(
-                request,
-                &selected.session,
-                existing_len,
-                &extras,
-                effort.as_deref(),
-            )
-            .await
-        } else if self
-            .submit_tool_results(&selected.session, tool_results)
-            .await?
-        {
-            Ok(())
-        } else {
-            self.start_model_turn(
-                request,
-                &selected.session,
-                existing_len,
-                &extras,
-                effort.as_deref(),
-            )
-            .await
-        };
-        if let Err(error) = start {
-            self.remove_session(&selected.session).await;
-            return Err(error);
-        }
-        let response_model = self.request_model(request);
-        Ok(ActiveTurn {
-            session: selected.session,
-            events,
-            response_model,
-            extras,
-            input_tokens,
-            gate: selected.gate,
-        })
-    }
-
-    async fn start_model_turn(
-        &self,
-        request: &MessagesRequest,
-        session: &Session,
-        existing_len: usize,
-        extras: &[Value],
-        effort: Option<&str>,
-    ) -> Result<()> {
-        let input = if existing_len == 0 {
-            full_transcript_input(&request.messages)
-        } else {
-            user_input_from_messages(extras)
-        };
-        let mut params = json!({
-            "threadId": session.thread_id,
-            "input": input,
-            "model": self.request_model(request)
-        });
-        if let Some(effort) = effort {
-            params["effort"] = json!(effort);
-        }
-        // Mark interactive user turns so ACP keeps a reserved slot free of SubAgent load.
-        if !super::agent_effort::is_subagent_request(request) {
-            params["priority"] = json!("user");
-        }
-        self.app.request_detached("turn/start", params).await
     }
 
     async fn select_session(
