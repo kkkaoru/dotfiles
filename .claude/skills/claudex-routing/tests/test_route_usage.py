@@ -9,6 +9,8 @@ import runpy
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -588,6 +590,35 @@ class CommandTests(unittest.TestCase):
             Path("/test-home/.cache/claudex/qwen-quota.json"),
             100,
         )
+
+    def test_collect_usage_runs_codexbar_and_qwen_in_parallel(self) -> None:
+        started = {"codexbar": 0.0, "qwen": 0.0}
+        barrier = threading.Barrier(2, timeout=2)
+
+        def slow_codexbar(_program: str) -> list[dict[str, object]]:
+            started["codexbar"] = time.monotonic()
+            barrier.wait()
+            time.sleep(0.05)
+            return report()[:2]
+
+        def slow_qwen(*_args: object, **_kwargs: object) -> dict[str, object]:
+            started["qwen"] = time.monotonic()
+            barrier.wait()
+            time.sleep(0.05)
+            return qwen_report()
+
+        with (
+            mock.patch("route_usage.run_codexbar", side_effect=slow_codexbar),
+            mock.patch("route_usage.qwen_usage_entry", side_effect=slow_qwen),
+        ):
+            began = time.monotonic()
+            collected = route_usage.collect_usage(configuration(), "codexbar", "curl")
+            elapsed = time.monotonic() - began
+        self.assertEqual(
+            [entry["provider"] for entry in collected], ["codex", "grok", "qwen"]
+        )
+        self.assertLess(elapsed, 0.14)
+        self.assertLess(abs(started["codexbar"] - started["qwen"]), 0.05)
 
     @mock.patch("route_usage.qwen_usage_entry", return_value=qwen_report())
     @mock.patch(

@@ -12,6 +12,7 @@ import shlex
 import subprocess
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -778,6 +779,26 @@ def unavailable_usage_entry(provider: str) -> dict[str, Any]:
     }
 
 
+def collect_codexbar_report(
+    codexbar_program: str,
+    codexbar_names: set[str],
+    qwen_names: set[str],
+) -> list[dict[str, Any]]:
+    """Load Codexbar usage, isolating failures from other providers."""
+    try:
+        raw_report = run_codexbar(codexbar_program)
+        if not isinstance(raw_report, list):
+            return []
+        return [
+            entry
+            for entry in raw_report
+            if not isinstance(entry, dict)
+            or str(entry.get("provider", "")).casefold() not in qwen_names
+        ]
+    except (OSError, ValueError, subprocess.SubprocessError, json.JSONDecodeError):
+        return [unavailable_usage_entry(name) for name in sorted(codexbar_names)]
+
+
 def collect_usage(
     config: dict[str, Any],
     codexbar_program: str,
@@ -810,23 +831,16 @@ def collect_usage(
         and provider["usageProvider"]
         and provider not in qwen_providers
     }
-    try:
-        raw_report = run_codexbar(codexbar_program)
-        report = (
-            [
-                entry
-                for entry in raw_report
-                if not isinstance(entry, dict)
-                or str(entry.get("provider", "")).casefold() not in qwen_names
-            ]
-            if isinstance(raw_report, list)
-            else []
+    # Codexbar and Qwen quota are independent; run them together so a cold hook
+    # pays max(source latency) instead of sum(source latency).
+    worker_count = 1 + max(len(qwen_providers), 0)
+    with ThreadPoolExecutor(max_workers=worker_count) as pool:
+        codexbar_future = pool.submit(
+            collect_codexbar_report, codexbar_program, codexbar_names, qwen_names
         )
-    except (OSError, ValueError, subprocess.SubprocessError, json.JSONDecodeError):
-        report = [unavailable_usage_entry(name) for name in sorted(codexbar_names)]
-    for provider in qwen_providers:
-        report.append(
-            qwen_usage_entry(
+        qwen_futures = [
+            pool.submit(
+                qwen_usage_entry,
                 curl_program,
                 provider["usageProvider"],
                 provider["defaultModel"],
@@ -835,7 +849,10 @@ def collect_usage(
                 quota_cache_path,
                 now,
             )
-        )
+            for provider in qwen_providers
+        ]
+        report = list(codexbar_future.result())
+        report.extend(future.result() for future in qwen_futures)
     return report
 
 

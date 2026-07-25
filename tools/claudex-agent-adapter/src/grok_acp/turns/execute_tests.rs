@@ -198,6 +198,31 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn finishes_successful_effort_setup() {
+        let events = ThreadEventDispatcher::default();
+        let active = ActiveTurns::default();
+        active.borrow_mut().insert("session".to_owned(), None);
+        let invalidated = InvalidatedSessions::default();
+        let permits = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
+        let (_cancel_sender, mut cancellation) = oneshot::channel();
+        let mut permit = Some(permits.acquire_owned().await.unwrap());
+        {
+            let mut ctl = TurnCtl {
+                provider: AcpProvider::Grok,
+                session_id: "session",
+                cancellation: &mut cancellation,
+                permit: &mut permit,
+                events: &events,
+                active_turns: &active,
+                invalidated_sessions: &invalidated,
+            };
+            assert!(finish_effort_setup(&mut ctl, Ok(())));
+        }
+        assert!(permit.is_some());
+        assert!(active.borrow().contains_key("session"));
+    }
+
+    #[tokio::test]
     async fn reports_effort_failure_to_a_queued_cancellation() {
         let events = ThreadEventDispatcher::default();
         let receiver = events.subscribe("session");
@@ -220,10 +245,64 @@ mod tests {
         };
         assert!(!finish_effort_setup(
             &mut ctl,
-            Err(acp::Error::internal_error())
+            Err(EffortSetupError::Failed(acp::Error::internal_error()))
         ));
         assert!(result.await.unwrap().is_err());
         assert_eq!(receiver.recv().await.unwrap()["method"], "error");
+    }
+
+    #[tokio::test]
+    async fn configured_effort_failures_continue_the_turn() {
+        let events = ThreadEventDispatcher::default();
+        let active = ActiveTurns::default();
+        active.borrow_mut().insert("session".to_owned(), None);
+        let invalidated = InvalidatedSessions::default();
+        let permits = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
+        let (_cancel_sender, mut cancellation) = oneshot::channel();
+        let mut permit = Some(permits.acquire_owned().await.unwrap());
+        {
+            let mut ctl = TurnCtl {
+                provider: AcpProvider::Configured,
+                session_id: "session",
+                cancellation: &mut cancellation,
+                permit: &mut permit,
+                events: &events,
+                active_turns: &active,
+                invalidated_sessions: &invalidated,
+            };
+            assert!(finish_effort_setup(
+                &mut ctl,
+                Err(EffortSetupError::Failed(acp::Error::internal_error()))
+            ));
+            assert!(finish_effort_setup(&mut ctl, Err(EffortSetupError::TimedOut)));
+        }
+        assert!(permit.is_some());
+        assert!(active.borrow().contains_key("session"));
+    }
+
+    #[tokio::test]
+    async fn effort_timeout_continues_native_providers() {
+        let events = ThreadEventDispatcher::default();
+        let active = ActiveTurns::default();
+        active.borrow_mut().insert("session".to_owned(), None);
+        let invalidated = InvalidatedSessions::default();
+        let permits = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
+        let (_cancel_sender, mut cancellation) = oneshot::channel();
+        let mut permit = Some(permits.acquire_owned().await.unwrap());
+        {
+            let mut ctl = TurnCtl {
+                provider: AcpProvider::Grok,
+                session_id: "session",
+                cancellation: &mut cancellation,
+                permit: &mut permit,
+                events: &events,
+                active_turns: &active,
+                invalidated_sessions: &invalidated,
+            };
+            assert!(finish_effort_setup(&mut ctl, Err(EffortSetupError::TimedOut)));
+        }
+        assert!(permit.is_some());
+        assert!(active.borrow().contains_key("session"));
     }
 
     #[tokio::test]

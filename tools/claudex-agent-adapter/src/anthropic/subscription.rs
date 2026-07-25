@@ -298,7 +298,8 @@ pub(super) fn take_subscription_stdin(child: &mut Child) -> Result<ChildStdin> {
 }
 
 pub(super) async fn write_subscription_prompt(mut stdin: ChildStdin, prompt: &str) -> Result<()> {
-    stdin.write_all(prompt.as_bytes()).await.map_err(Into::into)
+    stdin.write_all(prompt.as_bytes()).await?;
+    stdin.shutdown().await.map_err(Into::into) // explicit EOF for --print
 }
 
 pub(super) async fn wait_for_subscription<F, T>(future: F, timeout: Duration) -> Result<T>
