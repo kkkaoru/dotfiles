@@ -1,13 +1,13 @@
 {
   "version": 1,
-  "mainProvider": "codex",
+  "mainProvider": "grok",
   "providers": [
     {
       "id": "codex",
       "agent": "claudex-gpt",
       "defaultModel": "gpt-5.6-sol",
       "effort": "high",
-      "enabled": true,
+      "enabled": false,
       "usageProvider": "codex",
       "modelPrefixes": ["gpt"],
       "backend": "codex-app-server"
