@@ -1,15 +1,17 @@
 {
   "version": 1,
-  "mainProvider": "grok",
+  "mainProvider": "codex",
   "providers": [
     {
       "id": "codex",
       "agent": "claudex-gpt",
-      "defaultModel": "gpt-5.6-sol",
+      "defaultModel": "gpt-5.3-codex-spark",
       "effort": "high",
-      "enabled": false,
+      "enabled": true,
       "usageProvider": "codex",
-      "modelPrefixes": ["gpt"],
+      "modelPrefixes": [
+        "gpt"
+      ],
       "backend": "codex-app-server"
     },
     {
@@ -19,7 +21,9 @@
       "effort": "high",
       "enabled": true,
       "usageProvider": "grok",
-      "modelPrefixes": ["grok"],
+      "modelPrefixes": [
+        "grok"
+      ],
       "backend": "grok-acp"
     },
     {
@@ -29,7 +33,9 @@
       "effort": "high",
       "enabled": true,
       "usageProvider": "qwen",
-      "modelPrefixes": ["qwen"],
+      "modelPrefixes": [
+        "qwen"
+      ],
       "backend": "configured-acp",
       "acp": {
         "program": "/usr/bin/env",

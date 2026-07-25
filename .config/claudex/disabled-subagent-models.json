@@ -1,4 +1,4 @@
 {
   "version": 1,
-  "disabledModels": ["gpt-5.6-sol"]
+  "disabledModels": ["gpt-5.6", "grok-4.5"]
 }
