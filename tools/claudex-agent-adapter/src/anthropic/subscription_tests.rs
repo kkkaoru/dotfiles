@@ -1,11 +1,33 @@
-use std::{fs, time::Duration};
+use std::{fs, path::Path, sync::Arc, time::Duration};
 
 use serde_json::json;
 
 use super::subscription::{
-    cwd_from_system, request_effort, requested_tools, setting_at, subscription_limits_from,
-    subscription_prompt, valid_effort, wait_for_subscription,
+    OutputMode, SubscriptionOptions, cwd_from_system, request_effort, requested_tools, setting_at,
+    subscription_command, subscription_limits_from, subscription_prompt, valid_effort,
+    wait_for_subscription,
 };
+use crate::NONINTERACTIVE_CHILD_ENV;
+
+#[test]
+fn subscription_children_identify_as_noninteractive() {
+    let options = SubscriptionOptions::internal(
+        Arc::new(tokio::sync::Semaphore::new(1)),
+        Duration::from_secs(1),
+    );
+    let command = subscription_command(
+        Path::new("claude"),
+        "claude-sonnet-5",
+        &options,
+        OutputMode::Json,
+    );
+    let value = command
+        .as_std()
+        .get_envs()
+        .find_map(|(name, value)| (name == NONINTERACTIVE_CHILD_ENV).then_some(value))
+        .flatten();
+    assert_eq!(value, Some(std::ffi::OsStr::new("1")));
+}
 
 #[test]
 fn subscription_limits_use_documented_defaults() {

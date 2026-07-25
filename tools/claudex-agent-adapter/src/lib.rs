@@ -14,6 +14,7 @@ pub mod runtime;
 mod working_directory;
 
 pub const ADAPTER_PROTOCOL_VERSION: u64 = 20;
+pub(crate) const NONINTERACTIVE_CHILD_ENV: &str = "CLAUDEX_NONINTERACTIVE_CHILD";
 
 use std::sync::Arc;
 

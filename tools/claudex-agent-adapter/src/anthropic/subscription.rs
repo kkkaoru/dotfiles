@@ -21,6 +21,7 @@ use super::{
     subscription_request::{subscription_request_cwd, subscription_request_prompt},
     subscription_stream::subscription_streaming_response,
 };
+use crate::NONINTERACTIVE_CHILD_ENV;
 
 #[cfg(test)]
 pub(super) use super::subscription_request::cwd_from_system;
@@ -353,6 +354,8 @@ pub(super) fn subscription_command(
     if let Some(cwd) = &options.cwd {
         command.current_dir(cwd);
     }
+    // Avoid interactive startup hooks while retaining a fresh context for each isolated request.
+    command.env(NONINTERACTIVE_CHILD_ENV, "1");
     remove_proxy_environment(&mut command);
     command
 }
