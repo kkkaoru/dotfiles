@@ -2,7 +2,10 @@ use std::{
     ffi::OsString,
     path::Path,
     process::{Command as StdCommand, Stdio},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
 };
 
 use agent_client_protocol::{self as acp, Agent as _};
@@ -46,6 +49,7 @@ pub(super) async fn start(
     model: &str,
     cwd: &Path,
     events: Arc<ThreadEventDispatcher>,
+    alive: Arc<AtomicBool>,
 ) -> Result<(
     acp::ClientSideConnection,
     tokio::process::Child,
@@ -112,6 +116,9 @@ pub(super) async fn start(
         if let Err(error) = handle_io.await {
             tracing::error!(?error, provider = provider.label(), "ACP I/O stopped");
         }
+        // Mark the provider dead before failed RPCs wake their callers. Otherwise session/new can
+        // observe a closed connection while the driver still appears alive and skip route recovery.
+        alive.store(false, Ordering::Relaxed);
         let _ = io_stopped.send(());
     });
     if let Err(error) = initialize(provider, &connection).await {

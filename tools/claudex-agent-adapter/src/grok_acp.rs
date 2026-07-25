@@ -239,6 +239,7 @@ async fn run_driver(setup: DriverSetup, mut commands: mpsc::Receiver<DriverComma
         &setup.model,
         &setup.cwd,
         Arc::clone(&setup.events),
+        Arc::clone(&setup.alive),
     )
     .await;
     let Ok((connection, mut child, io_stopped, process_group)) = started else {

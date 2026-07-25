@@ -127,6 +127,23 @@ mod tests {
             .expect("current process");
     }
 
+    #[tokio::test]
+    async fn waits_for_graceful_drain_and_bounds_a_stalled_shutdown() {
+        let mut checks = 0;
+        wait_until_stopped_with(Duration::from_secs(1), || {
+            checks += 1;
+            checks == 1
+        })
+        .await
+        .expect("drained process");
+        assert_eq!(checks, 2);
+
+        let error = wait_until_stopped_with(Duration::ZERO, || true)
+            .await
+            .expect_err("stalled drain");
+        assert!(error.to_string().contains("still draining"));
+    }
+
     #[test]
     fn reports_adapter_log_configuration_errors() {
         let mut config = config();

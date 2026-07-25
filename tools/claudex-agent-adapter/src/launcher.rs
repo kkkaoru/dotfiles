@@ -263,8 +263,15 @@ async fn stop_stale(config: &ServiceConfig, pid: Option<u32>) -> Result<()> {
 }
 
 async fn wait_until_stopped(pid: u32, executable: &std::path::Path) -> Result<()> {
-    let deadline = Instant::now() + START_TIMEOUT;
-    while process_matches(pid, executable) {
+    wait_until_stopped_with(START_TIMEOUT, || process_matches(pid, executable)).await
+}
+
+async fn wait_until_stopped_with(
+    timeout: Duration,
+    mut process_running: impl FnMut() -> bool,
+) -> Result<()> {
+    let deadline = Instant::now() + timeout;
+    while process_running() {
         if Instant::now() >= deadline {
             bail!("agent adapter is still draining active requests; retry after they complete");
         }
