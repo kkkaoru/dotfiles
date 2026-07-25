@@ -147,9 +147,15 @@ pub(super) fn is_context_window_exceeded(error: &anyhow::Error) -> bool {
 }
 
 pub(super) fn contains_context_window_marker(message: &str) -> bool {
-    const CONTEXT_WINDOW_MARKER: &str = "contextwindowexceeded";
     let message = message.to_lowercase();
-    message.contains("context window")
-        || message.contains("ran out of room")
-        || message.contains(CONTEXT_WINDOW_MARKER)
+    const CONTEXT_WINDOW_MARKERS: [&str; 5] = [
+        "context window",
+        "ran out of room",
+        "contextwindowexceeded",
+        "context_window_exceeded",
+        "context limit",
+    ];
+    CONTEXT_WINDOW_MARKERS
+        .into_iter()
+        .any(|marker| message.contains(marker))
 }
