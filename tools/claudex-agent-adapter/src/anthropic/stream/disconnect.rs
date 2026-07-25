@@ -28,7 +28,8 @@ impl Bridge {
         session: &Arc<Session>,
         events: &crate::app_server::ThreadEvents,
     ) -> StreamTurn {
-        self.remove_session(session).await;
+        // Cancel before unregistering so a racing outer follow-up can still
+        // discover this session, preempt the gate, and reuse the provider thread.
         match self.app.cancel_turn(&session.thread_id).await {
             Ok(TurnCancellation::Settled) => {}
             Ok(TurnCancellation::Unsupported) => {
@@ -44,6 +45,7 @@ impl Bridge {
                 warn_cancel_failure(&error, &session.thread_id);
             }
         }
+        self.remove_session(session).await;
         StreamTurn::Disconnected
     }
 

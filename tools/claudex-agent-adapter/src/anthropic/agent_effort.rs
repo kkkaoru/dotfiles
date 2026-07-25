@@ -335,7 +335,7 @@ fn normalized_effort(value: &str) -> Option<&str> {
     valid_effort(normalized).then_some(normalized)
 }
 
-fn is_subagent_request(request: &MessagesRequest) -> bool {
+pub(super) fn is_subagent_request(request: &MessagesRequest) -> bool {
     value_texts(&request.system).any(|text| text.contains("cc_is_subagent=true"))
         || request
             .messages

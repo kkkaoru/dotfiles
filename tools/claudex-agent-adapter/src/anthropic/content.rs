@@ -97,7 +97,7 @@ pub(super) async fn matching_transcript_len(
     .then_some(transcript.len())
 }
 
-fn canonical_eq(left: &Value, right: &Value) -> bool {
+pub(super) fn canonical_eq(left: &Value, right: &Value) -> bool {
     match (left, right) {
         (Value::Array(left), Value::Array(right)) => {
             left.len() == right.len()

@@ -18,10 +18,12 @@ use super::{
 };
 use crate::app_server::response_thread_id;
 
+mod preempt;
+#[cfg(test)]
+pub(super) mod reservation;
+#[cfg(not(test))]
 mod reservation;
 mod tools;
-
-use reservation::reserve_matching_session;
 
 #[cfg(test)]
 pub(super) use tools::{
@@ -188,7 +190,7 @@ impl Bridge {
             });
         }
         if let Some(selected) = self
-            .select_matching_session(&signature, &request.messages)
+            .select_matching_session(request, &signature, &request.messages)
             .await
         {
             return Ok(selected);
@@ -235,11 +237,12 @@ impl Bridge {
 
     async fn select_matching_session(
         &self,
+        request: &MessagesRequest,
         signature: &Arc<str>,
         messages: &[Value],
     ) -> Option<SelectedSession> {
         let sessions = self.sessions.lock().await.clone();
-        reserve_matching_session(sessions, signature, messages).await
+        preempt::select_matching_session(sessions, request, signature, messages, &self.app).await
     }
 
     pub(super) async fn remove_session(&self, removed: &Arc<Session>) {

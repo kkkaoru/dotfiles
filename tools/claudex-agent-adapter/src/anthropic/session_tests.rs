@@ -5,7 +5,7 @@ use tokio::sync::{Mutex, Semaphore};
 
 use super::{
     candidate_length, codex_tool_name, dynamic_tool, is_better_length, owns_tool_result,
-    reserve_matching_session, thread_start_params, tool_configuration,
+    reservation::reserve_matching_session, thread_start_params, tool_configuration,
     transcript_owns_tool_results,
 };
 use crate::anthropic::{
@@ -251,6 +251,38 @@ async fn reserves_only_idle_matching_sessions_for_parallel_requests() {
     .await
     .expect("best matching session");
     assert_eq!(selected.existing_len, 1);
+}
+
+#[tokio::test]
+async fn finds_busy_matching_session_for_outer_preempt() {
+    use super::reservation::find_busy_matching_session;
+    let message = json!({"role":"user","content":"follow-up"});
+    let busy = session("signature", Vec::new());
+    let _gate = Arc::clone(&busy.gate).lock_owned().await;
+    let found = find_busy_matching_session(
+        vec![Arc::clone(&busy)],
+        &Arc::from("signature"),
+        std::slice::from_ref(&message),
+    )
+    .await
+    .expect("busy match");
+    assert!(Arc::ptr_eq(&found.0, &busy));
+    assert_eq!(found.1, 0);
+}
+
+#[tokio::test]
+async fn take_gate_after_preempt_drops_orphaned_assistant_tail() {
+    use super::reservation::take_gate_after_preempt;
+    let user = json!({"role":"user","content":"hi"});
+    let orphan = json!({"role":"assistant","content":"partial"});
+    let follow = json!({"role":"user","content":"again"});
+    let target = session("signature", vec![user.clone(), orphan]);
+    // Gate is free so take_gate can lock immediately (cancel already settled).
+    let selected = take_gate_after_preempt(&target, &[user.clone(), follow.clone()])
+        .await
+        .expect("aligned session");
+    assert_eq!(selected.existing_len, 1);
+    assert_eq!(target.transcript.lock().await.as_slice(), [user]);
 }
 
 #[test]
