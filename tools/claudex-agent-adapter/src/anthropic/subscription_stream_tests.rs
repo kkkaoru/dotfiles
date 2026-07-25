@@ -447,6 +447,25 @@ async fn delayed_subscription_result_emits_early_activity_status() {
 }
 
 #[tokio::test]
+async fn early_text_is_not_split_by_the_initial_activity_deadline() {
+    let (sender, mut receiver) = channel();
+    let script = concat!(
+        r#"printf '%s\n' '{"type":"stream_event","event":{"delta":{"type":"text_delta","text":"ST"}}}'; "#,
+        "sleep 2.1; ",
+        r#"printf '%s\n' '{"type":"stream_event","event":{"delta":{"type":"text_delta","text":"REAM_OK"}}}' "#,
+        r#"'{"type":"result","subtype":"success","result":"STREAM_OK"}'"#,
+    );
+    consume_subscription_stream(child(script), &sender)
+        .await
+        .expect("stream with early text");
+    let frames = output(&mut receiver).await;
+    assert!(!frames.contains("Claudex is still working"));
+    assert!(!frames.contains('\u{200b}'));
+    assert!(frames.contains(r#""text":"ST""#));
+    assert!(frames.contains(r#""text":"REAM_OK""#));
+}
+
+#[tokio::test]
 async fn reports_process_failure_and_stderr() {
     let (sender, mut receiver) = channel();
     let error = consume_subscription_stream(child("printf 'fixture failure' >&2; exit 7"), &sender)

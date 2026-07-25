@@ -15,7 +15,6 @@ use uuid::Uuid;
 
 const INITIAL_ACTIVITY_DELAY: Duration = Duration::from_secs(2);
 const ACTIVITY_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
-
 use super::{
     content::sse,
     stream::streaming_sse_response,
@@ -32,7 +31,6 @@ use super::{
 };
 
 pub(super) use super::subscription_frames::result_output_tokens;
-
 pub(super) fn subscription_streaming_response(
     program: PathBuf,
     model: String,
@@ -92,8 +90,7 @@ async fn stream_subscription_model(
     let mut command = subscription_command(program, model, &options, OutputMode::StreamJson);
     let mut child = spawn_subscription(&mut command, model)?;
     let stdin = take_subscription_stdin(&mut child)?;
-    // Defer a stdin error so an early process exit can report its actionable
-    // status and stderr instead of only a BrokenPipe.
+    // Defer stdin errors so an early process exit can report its status and stderr.
     let timeout = options.timeout;
     tokio::time::timeout(timeout, async {
         let (prompt_result, stream_result) = tokio::join!(
@@ -158,11 +155,15 @@ async fn consume_subscription_stream_with_options(
         activity: SubscriptionActivity::default(),
     };
     let mut activity_deadline = Box::pin(tokio::time::sleep(INITIAL_ACTIVITY_DELAY));
+    let mut initial_activity = true;
     loop {
         tokio::select! {
             () = sender.closed() => return Ok(()),
             () = &mut activity_deadline => {
-                stream.activity_keepalive(sender).await?;
+                if !initial_activity || !stream.text_started {
+                    stream.activity_keepalive(sender).await?;
+                }
+                initial_activity = false;
                 activity_deadline.as_mut().reset(
                     tokio::time::Instant::now() + ACTIVITY_KEEPALIVE_INTERVAL,
                 );
