@@ -45,6 +45,21 @@ fn main() {
         );
         return;
     }
+    if prompt.contains("SUBSCRIPTION_PARALLEL_TOOLS")
+        && argument(&arguments, "--output-format") == "stream-json"
+    {
+        send_subscription_tool("tool-alpha", "alpha");
+        send_stream_delta("INNER_TOOL_REJECTION_MUST_NOT_LEAK");
+        send_subscription_tool("tool-beta", "beta");
+        println!(
+            "{}",
+            json!({
+                "type":"result","subtype":"success","is_error":false,
+                "result":"inner tools were bridged","usage":{"output_tokens":9}
+            })
+        );
+        return;
+    }
     let result = if backpressure {
         format!("BACKPRESSURE_OK:{}", prompt.len())
     } else if prompt.contains("SUBSCRIPTION_EMPTY") {
@@ -90,4 +105,25 @@ fn send_stream_delta(text: &str) {
         })
     );
     io::stdout().flush().expect("flush stream delta");
+}
+
+fn send_subscription_tool(id: &str, description: &str) {
+    println!(
+        "{}",
+        json!({
+            "type":"assistant", "parent_tool_use_id":null,
+            "message":{
+                "usage":{"output_tokens":3},
+                "content":[{
+                    "type":"tool_use", "id":id, "name":"Agent",
+                    "input":{
+                        "description":description,
+                        "prompt":format!("complete {description}"),
+                        "subagent_type":"claudex-gpt"
+                    }
+                }]
+            }
+        })
+    );
+    io::stdout().flush().expect("flush subscription tool");
 }

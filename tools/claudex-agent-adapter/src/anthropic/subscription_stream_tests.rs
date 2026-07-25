@@ -34,6 +34,7 @@ async fn handles_ignored_invalid_and_non_text_events() {
     let mut stream = SubscriptionStream {
         text_started: false,
         text_closed: false,
+        saw_tool_use: false,
         saw_result: false,
         next_index: 0,
         tools: Vec::new(),
@@ -69,6 +70,7 @@ async fn forwards_empty_and_regular_deltas_then_finishes_once() {
     let mut stream = SubscriptionStream {
         text_started: false,
         text_closed: false,
+        saw_tool_use: false,
         saw_result: false,
         next_index: 0,
         tools: Vec::new(),
@@ -110,6 +112,7 @@ async fn empty_partial_delta_is_not_visible_output_and_remains_eligible_for_stat
     let mut stream = SubscriptionStream {
         text_started: false,
         text_closed: false,
+        saw_tool_use: false,
         saw_result: false,
         next_index: 0,
         tools: Vec::new(),
@@ -143,6 +146,7 @@ async fn shows_activity_status_before_delayed_subscription_output() {
     let mut stream = SubscriptionStream {
         text_started: false,
         text_closed: false,
+        saw_tool_use: false,
         saw_result: false,
         next_index: 0,
         tools: Vec::new(),
@@ -182,6 +186,7 @@ async fn falls_back_to_result_text_and_estimated_tokens() {
     let mut stream = SubscriptionStream {
         text_started: false,
         text_closed: false,
+        saw_tool_use: false,
         saw_result: false,
         next_index: 0,
         tools: Vec::new(),
@@ -211,6 +216,7 @@ async fn rejects_unsuccessful_results() {
     let mut stream = SubscriptionStream {
         text_started: false,
         text_closed: false,
+        saw_tool_use: false,
         saw_result: false,
         next_index: 0,
         tools: Vec::new(),
@@ -229,18 +235,19 @@ async fn rejects_unsuccessful_results() {
 }
 
 #[tokio::test]
-async fn forwards_agent_alias_as_outer_task_with_streaming_input() {
+async fn collects_sequential_subscription_agents_into_one_outer_tool_round() {
     let (sender, mut receiver) = channel();
     let mut stream = SubscriptionStream {
         text_started: false,
         text_closed: false,
+        saw_tool_use: false,
         saw_result: false,
         next_index: 0,
         tools: vec!["Task".to_owned()],
         tool_context: None,
         activity: SubscriptionActivity::default(),
     };
-    let intercepted = stream
+    stream
         .handle_line(
             &sender,
             &json!({
@@ -258,11 +265,52 @@ async fn forwards_agent_alias_as_outer_task_with_streaming_input() {
         )
         .await
         .expect("forward subscription tool");
-    assert!(intercepted);
+    stream
+        .handle_line(
+            &sender,
+            &json!({
+                "type":"stream_event",
+                "event":{"delta":{"type":"text_delta","text":"blocked inner tool"}}
+            })
+            .to_string(),
+        )
+        .await
+        .expect("ignore text emitted after a forwarded tool");
+    stream
+        .activity_keepalive(&sender)
+        .await
+        .expect("show progress while collecting tools");
+    stream
+        .handle_line(
+            &sender,
+            &json!({
+                "type":"assistant",
+                "parent_tool_use_id":null,
+                "message":{"content":[{
+                    "type":"tool_use", "id":"tool-subscription-2", "name":"Agent",
+                    "input":{"prompt":"more work", "subagent_type":"claudex-grok"}
+                }]}
+            })
+            .to_string(),
+        )
+        .await
+        .expect("forward second subscription tool");
+    stream
+        .finish(
+            &sender,
+            &json!({"type":"result","subtype":"success","result":"done"}),
+        )
+        .await
+        .expect("finish forwarded subscription tool");
     let output = output(&mut receiver).await;
+    assert_eq!(output.matches(r#""name":"Task""#).count(), 2);
     assert!(output.contains(r#""name":"Task""#));
     assert!(output.contains(r#""input":{}"#));
     assert!(output.contains("input_json_delta"));
+    assert!(output.contains("Claudex is still working"));
+    assert!(output.contains("signature_delta"));
+    assert!(!output.contains("blocked inner tool"));
+    assert_eq!(output.matches(r#""stop_reason":"tool_use""#).count(), 1);
     assert!(output.contains(r#""stop_reason":"tool_use""#));
     assert!(output.find("input_json_delta") < output.find("content_block_stop"));
 }
@@ -277,6 +325,7 @@ async fn sanitizes_and_records_contextual_agent_tool_input() {
     let mut stream = SubscriptionStream {
         text_started: true,
         text_closed: false,
+        saw_tool_use: false,
         saw_result: false,
         next_index: 1,
         tools: vec!["Agent".to_owned()],
@@ -288,7 +337,7 @@ async fn sanitizes_and_records_contextual_agent_tool_input() {
         }),
         activity: SubscriptionActivity::default(),
     };
-    let intercepted = stream
+    stream
         .handle_line(
             &sender,
             &json!({
@@ -305,7 +354,6 @@ async fn sanitizes_and_records_contextual_agent_tool_input() {
         )
         .await
         .expect("forward contextual Agent tool");
-    assert!(intercepted);
     assert!(stream.text_closed);
     let output = output(&mut receiver).await;
     assert!(output.contains("<claudex-agent-id>tool-context</claudex-agent-id>"));
@@ -315,11 +363,58 @@ async fn sanitizes_and_records_contextual_agent_tool_input() {
 }
 
 #[tokio::test]
+async fn rejects_each_malformed_subscription_tool_shape() {
+    let (sender, _) = channel();
+    let mut stream = SubscriptionStream {
+        text_started: false,
+        text_closed: false,
+        saw_tool_use: false,
+        saw_result: false,
+        next_index: 0,
+        tools: vec!["Agent".to_owned()],
+        tool_context: None,
+        activity: SubscriptionActivity::default(),
+    };
+    for block in [
+        json!({"type":"tool_use", "name":"Agent", "input":{}}),
+        json!({"type":"tool_use", "id":"missing-name", "input":{}}),
+    ] {
+        let error = stream
+            .handle_line(
+                &sender,
+                &json!({
+                    "type":"assistant", "parent_tool_use_id":null,
+                    "message":{"content":[block]}
+                })
+                .to_string(),
+            )
+            .await
+            .expect_err("missing tool identity must fail");
+        assert!(error.to_string().contains("without an ID or name"));
+    }
+    let error = stream
+        .handle_line(
+            &sender,
+            &json!({
+                "type":"assistant", "parent_tool_use_id":null,
+                "message":{"content":[{
+                    "type":"tool_use", "id":"invalid-input", "name":"Agent", "input":[]
+                }]}
+            })
+            .to_string(),
+        )
+        .await
+        .expect_err("non-object tool input must fail");
+    assert!(error.to_string().contains("non-object tool input"));
+}
+
+#[tokio::test]
 async fn ignores_non_top_level_tool_events_and_exercises_completed_state() {
     let (sender, mut receiver) = channel();
     let mut stream = SubscriptionStream {
         text_started: false,
         text_closed: false,
+        saw_tool_use: false,
         saw_result: false,
         next_index: 0,
         tools: vec!["Read".to_owned(), "Agent".to_owned()],
@@ -339,12 +434,10 @@ async fn ignores_non_top_level_tool_events_and_exercises_completed_state() {
             "message":{"content":[{"type":"text", "text":"not a tool"}]}
         }),
     ] {
-        assert!(
-            !stream
-                .handle_line(&sender, &envelope.to_string())
-                .await
-                .unwrap()
-        );
+        stream
+            .handle_line(&sender, &envelope.to_string())
+            .await
+            .unwrap();
     }
 
     assert_eq!(

@@ -25,10 +25,12 @@ use super::{
     },
     subscription_activity::SubscriptionActivity,
     subscription_frames::{
-        assistant_output_tokens, mapped_tool_name, send_block_stop, send_subscription_error,
-        send_text_delta, send_text_finish, send_text_start, send_tool_block, send_tool_finish,
+        send_block_stop, send_subscription_error, send_text_delta, send_text_finish,
+        send_text_start, send_tool_finish,
     },
 };
+
+mod tool_collection;
 
 pub(super) use super::subscription_frames::result_output_tokens;
 pub(super) fn subscription_streaming_response(
@@ -107,6 +109,7 @@ async fn stream_subscription_model(
 struct SubscriptionStream {
     text_started: bool,
     text_closed: bool,
+    saw_tool_use: bool,
     saw_result: bool,
     next_index: usize,
     tools: Vec<String>,
@@ -148,6 +151,7 @@ async fn consume_subscription_stream_with_options(
     let mut stream = SubscriptionStream {
         text_started: false,
         text_closed: false,
+        saw_tool_use: false,
         saw_result: false,
         next_index: 0,
         tools: options.tools.clone(),
@@ -169,12 +173,7 @@ async fn consume_subscription_stream_with_options(
                 );
             }
             line = lines.next_line() => match line? {
-                Some(line) if stream.handle_line(sender, &line).await? => {
-                    let _ = child.kill().await;
-                    stderr_task.abort();
-                    return Ok(());
-                }
-                Some(_) => {},
+                Some(line) => stream.handle_line(sender, &line).await?,
                 None => break,
             }
         }
@@ -213,20 +212,20 @@ impl SubscriptionStream {
         &mut self,
         sender: &mpsc::Sender<Result<Bytes, Infallible>>,
         line: &str,
-    ) -> Result<bool> {
+    ) -> Result<()> {
         let envelope: Value = serde_json::from_str(line)
             .with_context(|| format!("Claude subscription emitted invalid stream JSON: {line}"))?;
         match envelope.get("type").and_then(Value::as_str) {
             Some("stream_event") => {
                 self.forward_text_delta(sender, &envelope).await?;
-                Ok(false)
+                Ok(())
             }
             Some("assistant") => self.forward_tool_uses(sender, &envelope).await,
             Some("result") => {
                 self.finish(sender, &envelope).await?;
-                Ok(false)
+                Ok(())
             }
-            _ => Ok(false),
+            _ => Ok(()),
         }
     }
 
@@ -249,6 +248,9 @@ impl SubscriptionStream {
         if text.is_empty() {
             return Ok(());
         }
+        if self.saw_tool_use {
+            return Ok(());
+        }
         self.activity.close(sender).await?;
         if !self.text_started {
             send_text_start(sender, self.next_index).await?;
@@ -256,65 +258,6 @@ impl SubscriptionStream {
             self.next_index += 1;
         }
         send_text_delta(sender, self.next_index.saturating_sub(1), text).await
-    }
-
-    async fn forward_tool_uses(
-        &mut self,
-        sender: &mpsc::Sender<Result<Bytes, Infallible>>,
-        envelope: &Value,
-    ) -> Result<bool> {
-        if envelope
-            .get("parent_tool_use_id")
-            .is_some_and(|value| !value.is_null())
-        {
-            return Ok(false);
-        }
-        let Some(content) = envelope
-            .pointer("/message/content")
-            .and_then(Value::as_array)
-        else {
-            return Ok(false);
-        };
-        let tool_uses = content
-            .iter()
-            .filter(|block| block.get("type").and_then(Value::as_str) == Some("tool_use"))
-            .collect::<Vec<_>>();
-        if tool_uses.is_empty() {
-            return Ok(false);
-        }
-        self.activity.close(sender).await?;
-        self.close_text(sender).await?;
-        for block in tool_uses {
-            self.forward_tool_use(sender, block).await?;
-        }
-        send_tool_finish(sender, assistant_output_tokens(envelope)).await?;
-        self.saw_result = true;
-        Ok(true)
-    }
-
-    async fn forward_tool_use(
-        &mut self,
-        sender: &mpsc::Sender<Result<Bytes, Infallible>>,
-        block: &Value,
-    ) -> Result<()> {
-        let id = block.get("id").and_then(Value::as_str).unwrap_or_default();
-        let emitted_name = block
-            .get("name")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let name = mapped_tool_name(emitted_name, &self.tools);
-        if id.is_empty() || name.is_empty() {
-            bail!("Claude subscription emitted a tool call without an ID or name");
-        }
-        let input = block
-            .get("input")
-            .filter(|input| input.is_object())
-            .cloned()
-            .context("Claude subscription emitted non-object tool input")?;
-        let public_input = self.prepare_tool_input(name, id, &input);
-        send_tool_block(sender, self.next_index, id, name, public_input).await?;
-        self.next_index += 1;
-        Ok(())
     }
 
     fn prepare_tool_input(&self, name: &str, id: &str, input: &Value) -> Value {
@@ -358,6 +301,11 @@ impl SubscriptionStream {
     ) -> Result<()> {
         validate_subscription_result(result)?;
         self.activity.close(sender).await?;
+        if self.saw_tool_use {
+            send_tool_finish(sender, result_output_tokens(result)).await?;
+            self.saw_result = true;
+            return Ok(());
+        }
         if !self.text_started {
             send_text_start(sender, self.next_index).await?;
             let text = result
@@ -385,7 +333,16 @@ impl SubscriptionStream {
         &mut self,
         sender: &mpsc::Sender<Result<Bytes, Infallible>>,
     ) -> Result<()> {
-        if self.text_closed || self.saw_result {
+        if self.saw_result {
+            return Ok(());
+        }
+        if self.saw_tool_use {
+            return self
+                .activity
+                .keepalive(sender, None, &mut self.next_index)
+                .await;
+        }
+        if self.text_closed {
             return Ok(());
         }
         let text_index = self.text_started.then(|| self.next_index.saturating_sub(1));

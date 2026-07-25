@@ -571,6 +571,43 @@ async fn routes_non_main_models_to_subscription_with_requested_effort() {
 }
 
 #[tokio::test]
+async fn collects_sequential_subscription_tools_before_finishing_the_outer_turn() {
+    let adapter = Adapter::start().await;
+    let response = Client::new()
+        .post(messages_url(&adapter))
+        .json(&json!({
+            "model":"test-sonnet-model", "stream":true,
+            "system":"Parallel subscription tool bridge",
+            "tools":[{
+                "name":"Agent", "description":"Launch a worker",
+                "input_schema":{
+                    "type":"object",
+                    "properties":{
+                        "description":{"type":"string"},
+                        "prompt":{"type":"string"},
+                        "subagent_type":{"type":"string"}
+                    }
+                }
+            }],
+            "messages":[{"role":"user","content":"SUBSCRIPTION_PARALLEL_TOOLS"}]
+        }))
+        .send()
+        .await
+        .expect("request parallel subscription tools")
+        .text()
+        .await
+        .expect("read parallel subscription tools");
+
+    assert_eq!(response.matches(r#""name":"Agent""#).count(), 2);
+    assert_eq!(response.matches("input_json_delta").count(), 2);
+    assert_eq!(response.matches(r#""stop_reason":"tool_use""#).count(), 1);
+    assert!(response.contains("tool-alpha"));
+    assert!(response.contains("tool-beta"));
+    assert!(!response.contains("INNER_TOOL_REJECTION_MUST_NOT_LEAK"));
+    assert!(!response.contains(r#""stop_reason":"end_turn""#));
+}
+
+#[tokio::test]
 async fn exchanges_large_subscription_input_and_output_without_pipe_deadlock() {
     let adapter = Adapter::start().await;
     let client = Client::new();

@@ -22,13 +22,6 @@ pub(super) fn mapped_tool_name<'a>(emitted: &'a str, available: &'a [String]) ->
         .unwrap_or(emitted)
 }
 
-pub(super) fn assistant_output_tokens(envelope: &Value) -> u64 {
-    envelope
-        .pointer("/message/usage/output_tokens")
-        .and_then(Value::as_u64)
-        .unwrap_or(0)
-}
-
 pub(super) async fn send_text_start(
     sender: &mpsc::Sender<Result<Bytes, Infallible>>,
     index: usize,
