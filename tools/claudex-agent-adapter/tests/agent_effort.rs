@@ -265,7 +265,7 @@ async fn terminal_policy_denies_only_subagents_and_isolates_explicit_models() {
         "REPORT_EFFORT",
     )
     .await;
-    assert!(denied_default.contains("disabled for this terminal"));
+    assert!(denied_default.contains("disabled by the active Claudex policy"));
 
     let user_id = r#"{"session_id":"denied-explicit-model"}"#;
     let prompt = launch_explicit_effort_agent(&client, &url, user_id, "high", true).await;
@@ -278,6 +278,7 @@ async fn terminal_policy_denies_only_subagents_and_isolates_explicit_models() {
     )
     .await;
     assert!(denied_explicit.contains("CLAUDEX_DISABLED_SUBAGENT_MODELS"));
+    assert!(denied_explicit.contains("disabledModels"));
 
     let allowed_user_id = r#"{"session_id":"allowed-explicit-model"}"#;
     let allowed_prompt =

@@ -251,6 +251,13 @@ fn ensure_running_reports_missing_or_invalid_environment() {
 #[tokio::test]
 async fn run_claude_forwards_arguments_environment_stderr_and_status() {
     let home = launcher_home();
+    let policy_directory = home.path().join(".config/claudex");
+    fs::create_dir_all(&policy_directory).expect("create model policy directory");
+    fs::write(
+        policy_directory.join("disabled-subagent-models.json"),
+        r#"{"version":1,"disabledModels":["configured-model"]}"#,
+    )
+    .expect("write model policy");
     let port = unused_port();
     let claude = home.path().join("claude");
     fs::write(
@@ -263,6 +270,7 @@ printf 'api_key=%s anthropic_model=%s bedrock=%s foundry=%s vertex=%s\n' \
     "${CLAUDE_CODE_USE_BEDROCK-unset}" "${CLAUDE_CODE_USE_FOUNDRY-unset}" \
     "${CLAUDE_CODE_USE_VERTEX-unset}"
 printf 'custom_headers=%s\n' "$ANTHROPIC_CUSTOM_HEADERS"
+printf 'resolved_models=%s\n' "$CLAUDEX_RESOLVED_DISABLED_SUBAGENT_MODELS"
 printf "Advisor disabled — base model 'test-main-model' has no advisor rank\n" >&2
 printf 'kept stderr\n' >&2
 exit 23
@@ -299,6 +307,7 @@ exit 23
             "CLAUDEX_DISABLED_SUBAGENT_MODELS",
             "grok-4.5,gpt-5.6-sol,grok-4.5",
         )
+        .env("CLAUDEX_RESOLVED_DISABLED_SUBAGENT_MODELS", "forged")
         .output()
         .expect("run Claude wrapper");
     assert_eq!(output.status.code(), Some(23));
@@ -311,6 +320,7 @@ exit 23
         )
     );
     assert_terminal_policy_headers(&stdout);
+    assert!(stdout.contains("resolved_models=configured-model,gpt-5.6-sol,grok-4.5"));
     let stderr = String::from_utf8(output.stderr).expect("Claude stderr");
     assert_eq!(stderr, "kept stderr\n");
 
@@ -345,7 +355,10 @@ fn assert_duplicate_model_is_rejected(home: &TempDir, port: u16, claude: &std::p
 fn assert_terminal_policy_headers(output: &str) {
     assert!(output.contains("custom_headers=x-user-header: keep"));
     assert!(output.contains("x-claudex-working-directory:"));
-    assert!(output.contains("x-claudex-disabled-subagent-models: gpt-5.6-sol,grok-4.5"));
+    assert!(
+        output
+            .contains("x-claudex-disabled-subagent-models: configured-model,gpt-5.6-sol,grok-4.5")
+    );
     assert!(!output.contains("forged"));
 }
 

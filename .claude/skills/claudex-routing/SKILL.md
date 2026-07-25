@@ -26,10 +26,10 @@ retained.
    future delegation. Do not use task-list bookkeeping merely as a precondition for delegation.
 2. If the user explicitly names a model that matches a provider's `model_prefixes`, select that
    provider dynamically and pass the exact requested model only when it is not listed in
-   `disabled_subagent_models`. That terminal-local list is an absolute SubAgent denylist and takes
-   precedence over explicit requests, inheritance, prior recipients, and capacity. The adapter
-   resolves an allowed matching backend lazily. If no allowed worker remains, continue in the main
-   session and report that SubAgent routing is unavailable.
+   `disabled_subagent_models`. That list, merged from the dedicated config and terminal overrides,
+   is an absolute SubAgent denylist and takes precedence over explicit requests, inheritance, prior
+   recipients, and capacity. The adapter resolves an allowed matching backend lazily. If no allowed
+   worker remains, continue in the main session and report that SubAgent routing is unavailable.
 3. Use multiple selected workers for independent work or complementary review only when useful.
    Start the number needed for genuine parallelism, role separation, and clean independent context;
    reuse policy must not suppress useful fan-out.
@@ -85,10 +85,12 @@ and Grok. Set `CLAUDEX_USAGE_CACHE_SECONDS=0` to disable the five-minute routing
 one-hour Qwen quota cache remains independent. Missing, unknown, malformed, exhausted, or failed
 usage is treated conservatively for the affected provider.
 
-Set the comma-separated `CLAUDEX_DISABLED_SUBAGENT_MODELS` before starting `claudex` to disable
-exact model IDs for only that terminal's SubAgents. It does not disable the outer main-session
-model. The policy participates in the routing cache key and is enforced again by the adapter before
-provider execution, so a stale prompt or an explicit Agent field cannot bypass it.
+Define persistent exact model IDs in `.config/claudex/disabled-subagent-models.json`. Set
+`CLAUDEX_DISABLED_SUBAGENT_MODELS_CONFIG` before starting `claudex` to select a different dedicated
+file for one terminal, and use comma-separated `CLAUDEX_DISABLED_SUBAGENT_MODELS` for additional
+terminal-only entries. These settings do not disable the outer main-session model. The merged policy
+participates in the routing cache key and is enforced again by the adapter before provider execution,
+so a stale prompt or an explicit Agent field cannot bypass it.
 
 After changing the routing script, run `uv run tests/run_coverage.py` from this skill directory.
 The test runner measures statements and branches and fails below 95% coverage.

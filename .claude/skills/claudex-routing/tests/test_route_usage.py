@@ -155,6 +155,22 @@ class ConfigurationTests(unittest.TestCase):
         )
         with mock.patch.object(Path, "is_file", return_value=False):
             self.assertEqual(route_usage.config_path({}), route_usage.REPOSITORY_CONFIG)
+            self.assertEqual(
+                route_usage.disabled_models_config_path({}),
+                route_usage.REPOSITORY_DISABLED_MODELS_CONFIG,
+            )
+        self.assertEqual(
+            route_usage.disabled_models_config_path(
+                {
+                    route_usage.DISABLED_SUBAGENT_MODELS_CONFIG_ENV: "~/terminal-policy.json"
+                }
+            ),
+            Path.home() / "terminal-policy.json",
+        )
+        with self.assertRaises(ValueError):
+            route_usage.disabled_models_config_path(
+                {route_usage.DISABLED_SUBAGENT_MODELS_CONFIG_ENV: ""}
+            )
 
     def test_validates_config_structure_and_choices(self) -> None:
         base = configuration()
@@ -180,6 +196,34 @@ class ConfigurationTests(unittest.TestCase):
         self.assertFalse(route_usage.valid_provider(None))
         self.assertFalse(route_usage.valid_choice(None))
 
+    def test_validates_dedicated_disabled_models_config(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "disabled.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "disabledModels": ["grok-4.5", "gpt-5.6-sol"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                route_usage.load_disabled_models_config(path),
+                frozenset({"gpt-5.6-sol", "grok-4.5"}),
+            )
+            for policy in [
+                [],
+                {"version": 2, "disabledModels": []},
+                {"version": 1, "disabledModels": "gpt"},
+                {"version": 1, "disabledModels": ["invalid model"]},
+                {"version": 1, "disabledModels": ["same", "same"]},
+                {"version": 1, "disabledModels": [], "extra": True},
+            ]:
+                path.write_text(json.dumps(policy), encoding="utf-8")
+                with self.assertRaises(ValueError):
+                    route_usage.load_disabled_models_config(path)
+
     def test_unmetered_provider_is_available_and_config_changes_cache_key(self) -> None:
         config = configuration()
         config["providers"][0].pop("usageProvider")
@@ -190,17 +234,22 @@ class ConfigurationTests(unittest.TestCase):
         config["providers"][0]["effort"] = "xhigh"
         self.assertNotEqual(route_usage.configuration_key(config), original)
 
-    def test_parses_and_keys_terminal_local_disabled_models(self) -> None:
+    def test_merges_and_keys_configured_and_terminal_disabled_models(self) -> None:
         disabled = route_usage.disabled_subagent_models(
+            frozenset({"qwen3.8-max-preview"}),
             {route_usage.DISABLED_SUBAGENT_MODELS_ENV: " grok-4.5,gpt-5.6-sol,grok-4.5 "}
         )
-        self.assertEqual(disabled, frozenset({"gpt-5.6-sol", "grok-4.5"}))
+        self.assertEqual(
+            disabled,
+            frozenset({"gpt-5.6-sol", "grok-4.5", "qwen3.8-max-preview"}),
+        )
         self.assertNotEqual(
             route_usage.configuration_key(configuration()),
             route_usage.configuration_key(configuration(), disabled),
         )
         with self.assertRaises(ValueError):
             route_usage.disabled_subagent_models(
+                frozenset(),
                 {route_usage.DISABLED_SUBAGENT_MODELS_ENV: "model with spaces"}
             )
 
@@ -349,7 +398,7 @@ class RoutingTests(unittest.TestCase):
         summary = route_usage.routing_summary(report(), configuration(), disabled)
         self.assertEqual(summary["selected_agents"], ["claudex-qwen"])
         self.assertEqual(summary["disabled_subagent_models"], sorted(disabled))
-        self.assertEqual(summary["providers"]["codex"]["reason"], "disabled-for-terminal")
+        self.assertEqual(summary["providers"]["codex"]["reason"], "disabled-by-policy")
         self.assertTrue(summary["providers"]["grok"]["disabled"])
 
         unavailable = report(codex=100, grok=100)
@@ -1005,6 +1054,8 @@ class MainTests(unittest.TestCase):
                 "route_usage.py",
                 "--config",
                 "providers.json",
+                "--disabled-models-config",
+                "disabled.json",
                 "--input",
                 "usage.json",
                 "--no-cache",
@@ -1017,6 +1068,7 @@ class MainTests(unittest.TestCase):
             arguments = route_usage.parse_arguments()
         self.assertEqual(arguments.input, Path("usage.json"))
         self.assertEqual(arguments.config, Path("providers.json"))
+        self.assertEqual(arguments.disabled_models_config, Path("disabled.json"))
         self.assertTrue(arguments.no_cache)
         self.assertEqual(arguments.codexbar_program, "usage-tool")
         self.assertEqual(arguments.curl_program, "curl-tool")
@@ -1109,6 +1161,45 @@ class MainTests(unittest.TestCase):
         )
         self.assertEqual(read_cache.call_args.args[3], expected_key)
 
+    @mock.patch("route_usage.collect_usage", return_value=report())
+    @mock.patch("route_usage.read_cache", return_value=None)
+    def test_main_applies_dedicated_model_policy_file(
+        self, read_cache: mock.Mock, _collect_usage: mock.Mock
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            policy = Path(directory) / "disabled.json"
+            policy.write_text(
+                json.dumps({"version": 1, "disabledModels": ["gpt-5.6-sol"]}),
+                encoding="utf-8",
+            )
+            output = self.run_main(
+                "--no-cache", "--disabled-models-config", str(policy)
+            )
+        context = json.loads(output)["hookSpecificOutput"]["additionalContext"]
+        self.assertNotIn('"agent":"claudex-gpt"', context.split('"selected_workers":', 1)[1])
+        expected_key = route_usage.configuration_key(
+            configuration(), frozenset({"gpt-5.6-sol"})
+        )
+        self.assertEqual(read_cache.call_args.args[3], expected_key)
+
+    @mock.patch("route_usage.collect_usage", return_value=report())
+    @mock.patch("route_usage.read_cache", return_value=None)
+    def test_main_prefers_the_launcher_policy_snapshot(
+        self, read_cache: mock.Mock, _collect_usage: mock.Mock
+    ) -> None:
+        environment = {
+            route_usage.DISABLED_SUBAGENT_MODELS_ENV: "gpt-5.6-sol",
+            route_usage.RESOLVED_DISABLED_SUBAGENT_MODELS_ENV: "qwen3.8-max-preview",
+        }
+        with mock.patch.dict(os.environ, environment):
+            output = self.run_main("--no-cache")
+        context = json.loads(output)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn('"selected_agents":["claudex-gpt","claudex-grok"]', context)
+        expected_key = route_usage.configuration_key(
+            configuration(), frozenset({"qwen3.8-max-preview"})
+        )
+        self.assertEqual(read_cache.call_args.args[3], expected_key)
+
     def test_module_entrypoint_exits_with_main_status(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             fixture = Path(directory) / "usage.json"
@@ -1125,7 +1216,8 @@ class MainTests(unittest.TestCase):
             ):
                 runpy.run_path(str(Path(route_usage.__file__)), run_name="__main__")
         self.assertEqual(exit_status.exception.code, 0)
-        self.assertIn("claudex-gpt", stdout.getvalue())
+        context = json.loads(stdout.getvalue())["hookSpecificOutput"]["additionalContext"]
+        self.assertIn('"disabled_subagent_models":["gpt-5.6-sol"]', context)
 
     def test_main_rejects_an_invalid_configuration(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1136,13 +1228,24 @@ class MainTests(unittest.TestCase):
 
     def run_main(self, *arguments: str) -> str:
         stdout = io.StringIO()
-        with (
-            mock.patch.object(
-                sys, "argv", [str(Path(route_usage.__file__)), *arguments]
-            ),
-            contextlib.redirect_stdout(stdout),
-        ):
-            self.assertEqual(route_usage.main(), 0)
+        with tempfile.TemporaryDirectory() as directory:
+            effective_arguments = list(arguments)
+            if "--disabled-models-config" not in effective_arguments:
+                policy = Path(directory) / "disabled.json"
+                policy.write_text(
+                    json.dumps({"version": 1, "disabledModels": []}),
+                    encoding="utf-8",
+                )
+                effective_arguments.extend(["--disabled-models-config", str(policy)])
+            with (
+                mock.patch.object(
+                    sys,
+                    "argv",
+                    [str(Path(route_usage.__file__)), *effective_arguments],
+                ),
+                contextlib.redirect_stdout(stdout),
+            ):
+                self.assertEqual(route_usage.main(), 0)
         return stdout.getvalue()
 
 

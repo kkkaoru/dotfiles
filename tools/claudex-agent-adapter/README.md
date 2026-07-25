@@ -173,10 +173,12 @@ backend routes. Models matching a configured `modelPrefixes` value are added
 lazily and routed through that provider, so manually added model families and
 ACPs need no Rust change. When prefixes overlap, the longest matching prefix
 wins. Legacy `gpt` and `grok` inference remains available for direct CLI routes.
-`CLAUDEX_DISABLED_SUBAGENT_MODELS` supplies a comma-separated exact-model denylist for the
-current launcher process. The launcher adds it as a reserved per-request header so terminals that
-share one daemon retain independent policies. The adapter rejects a resolved disabled SubAgent
-model before starting its provider; outer main-session and advisor requests remain unaffected.
+The launcher reads persistent exact-model entries from
+`~/.config/claudex/disabled-subagent-models.json`. A terminal can select another dedicated file with
+`CLAUDEX_DISABLED_SUBAGENT_MODELS_CONFIG` and add comma-separated entries with
+`CLAUDEX_DISABLED_SUBAGENT_MODELS`. The launcher sends the merged policy as a reserved per-request
+header so terminals sharing one daemon remain independent. The adapter rejects a resolved disabled
+SubAgent model before starting its provider; outer main-session and advisor requests remain unaffected.
 Other unconfigured model IDs fall
 back to the Claude subscription process. Without an explicit model, a matched
 Claude Code child inherits the model of the session that launched it; an

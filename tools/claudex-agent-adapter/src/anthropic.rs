@@ -276,7 +276,7 @@ impl Bridge {
         }
         if is_subagent && request.disabled_subagent_models.contains(&request.model) {
             bail!(
-                "SubAgent model `{}` is disabled for this terminal by {}",
+                "SubAgent model `{}` is disabled by the active Claudex policy ({}/disabledModels)",
                 request.model,
                 crate::subagent_policy::ENV_NAME
             );

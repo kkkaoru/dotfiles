@@ -24,6 +24,9 @@ QWEN_REQUEST_TIMEOUT_SECONDS = 5
 QWEN_SUBPROCESS_GRACE_SECONDS = 2
 REPOSITORY_ROOT = Path(__file__).parents[4]
 REPOSITORY_CONFIG = REPOSITORY_ROOT / ".config/claudex/providers.json"
+REPOSITORY_DISABLED_MODELS_CONFIG = (
+    REPOSITORY_ROOT / ".config/claudex/disabled-subagent-models.json"
+)
 DEFAULT_QWEN_CURL = REPOSITORY_ROOT / "tmp/curl.txt"
 QWEN_USAGE_PROVIDER = "qwen"
 QWEN_CONSOLE_HOST = "cs-data.qwencloud.com"
@@ -33,6 +36,8 @@ QWEN_CONSOLE_ACTION = "IntlBroadScopeAspnGateway"
 QWEN_QUOTA_API = "zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/usage"
 USAGE_COMMAND_TIMEOUT_SECONDS = 45
 DISABLED_SUBAGENT_MODELS_ENV = "CLAUDEX_DISABLED_SUBAGENT_MODELS"
+DISABLED_SUBAGENT_MODELS_CONFIG_ENV = "CLAUDEX_DISABLED_SUBAGENT_MODELS_CONFIG"
+RESOLVED_DISABLED_SUBAGENT_MODELS_ENV = "CLAUDEX_RESOLVED_DISABLED_SUBAGENT_MODELS"
 
 
 def config_path(environment: dict[str, str], requested: Path | None = None) -> Path:
@@ -63,6 +68,21 @@ def load_config(path: Path) -> dict[str, Any]:
     return {**config, "providers": enabled}
 
 
+def disabled_models_config_path(
+    environment: dict[str, str], requested: Path | None = None
+) -> Path:
+    """Resolve the dedicated model-policy config independently of providers."""
+    if requested:
+        return requested
+    if DISABLED_SUBAGENT_MODELS_CONFIG_ENV in environment:
+        configured = environment[DISABLED_SUBAGENT_MODELS_CONFIG_ENV]
+        if not configured:
+            raise ValueError(f"{DISABLED_SUBAGENT_MODELS_CONFIG_ENV} must not be empty")
+        return Path(configured).expanduser()
+    installed = Path.home() / ".config/claudex/disabled-subagent-models.json"
+    return installed if installed.is_file() else REPOSITORY_DISABLED_MODELS_CONFIG
+
+
 def valid_provider(provider: Any) -> bool:
     """Check fields used by both quota and model routing."""
     required = ("id", "agent", "defaultModel", "effort", "backend")
@@ -79,18 +99,51 @@ def valid_choice(choice: Any) -> bool:
     )
 
 
-def disabled_subagent_models(environment: dict[str, str]) -> frozenset[str]:
-    """Parse the terminal-local, comma-separated exact model denylist."""
+def valid_model_id(model: Any) -> bool:
+    """Accept a non-empty, visible-ASCII exact model identifier."""
+    return (
+        isinstance(model, str)
+        and bool(model)
+        and model.isascii()
+        and all("!" <= char <= "~" for char in model)
+    )
+
+
+def load_disabled_models_config(path: Path) -> frozenset[str]:
+    """Read and validate the dedicated exact-model denylist."""
+    policy = json.loads(path.read_text(encoding="utf-8"))
+    if (
+        not isinstance(policy, dict)
+        or set(policy) != {"version", "disabledModels"}
+        or policy["version"] != 1
+    ):
+        raise ValueError("disabled SubAgent model config must use version 1 schema")
+    configured = policy["disabledModels"]
+    if not isinstance(configured, list) or any(
+        not valid_model_id(model) for model in configured
+    ):
+        raise ValueError("disabledModels must contain valid exact model IDs")
+    if len(set(configured)) != len(configured):
+        raise ValueError("disabledModels must not contain duplicates")
+    return frozenset(configured)
+
+
+def disabled_subagent_models(
+    configured: frozenset[str], environment: dict[str, str]
+) -> frozenset[str]:
+    """Merge configured models with the terminal-local exact model denylist."""
+    return configured | environment_models(environment, DISABLED_SUBAGENT_MODELS_ENV)
+
+
+def environment_models(environment: dict[str, str], name: str) -> frozenset[str]:
+    """Parse one comma-separated exact-model environment value."""
     models = {
         item.strip()
-        for item in environment.get(DISABLED_SUBAGENT_MODELS_ENV, "").split(",")
+        for item in environment.get(name, "").split(",")
         if item.strip()
     }
-    if any(
-        not model.isascii() or not all("!" <= char <= "~" for char in model)
-        for model in models
-    ):
-        raise ValueError(f"{DISABLED_SUBAGENT_MODELS_ENV} contains an invalid model ID")
+    if any(not valid_model_id(model) for model in models):
+        raise ValueError(f"{name} contains an invalid model ID")
     return frozenset(models)
 
 
@@ -222,7 +275,7 @@ def routing_summary(
             else status(True, None, "unmetered")
         )
         disabled = provider["defaultModel"] in disabled_models
-        effective = status(False, None, "disabled-for-terminal") if disabled else quota
+        effective = status(False, None, "disabled-by-policy") if disabled else quota
         providers[provider["id"]] = {**effective, **worker(provider), "disabled": disabled}
         if quota["available"] and not disabled:
             candidates.append((capacity_priority(quota, index), worker(provider)))
@@ -257,8 +310,9 @@ def hook_output(summary: dict[str, Any]) -> dict[str, Any]:
         "including nested launches from a worker; never default a nested launch to generic claude "
         "or blindly inherit its parent route. If the user names a "
         "model matching model_prefixes, dynamically select that provider and pass the exact "
-        "requested model only when it is not in disabled_subagent_models. The terminal-local "
-        "disabled_subagent_models list is an absolute SubAgent denylist: never launch, inherit, "
+        "requested model only when it is not in disabled_subagent_models. The merged configured "
+        "and terminal-local disabled_subagent_models list is an absolute SubAgent denylist: never "
+        "launch, inherit, "
         "dynamically select, or reuse one of those exact models, even when the user names it. If "
         "selected_workers is empty, continue safely in the main session and report that no "
         "allowed SubAgent model is available. This current routing context overrides stale "
@@ -806,7 +860,7 @@ def fallback_summary(
     providers = {}
     for provider in config["providers"]:
         disabled = provider["defaultModel"] in disabled_models
-        unavailable_reason = "disabled-for-terminal" if disabled else reason
+        unavailable_reason = "disabled-by-policy" if disabled else reason
         providers[provider["id"]] = {
             **status(False, None, unavailable_reason),
             **worker(provider),
@@ -827,6 +881,9 @@ def fallback_summary(
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, help="provider routing JSON")
+    parser.add_argument(
+        "--disabled-models-config", type=Path, help="disabled SubAgent models JSON"
+    )
     parser.add_argument("--input", type=Path, help="read a Codexbar JSON fixture")
     parser.add_argument("--no-cache", action="store_true")
     parser.add_argument("--codexbar-program", default="codexbar")
@@ -839,7 +896,19 @@ def main() -> int:
     now = time.time()
     try:
         config = load_config(config_path(os.environ, arguments.config))
-        disabled_models = disabled_subagent_models(os.environ)
+        if RESOLVED_DISABLED_SUBAGENT_MODELS_ENV in os.environ:
+            disabled_models = environment_models(
+                os.environ, RESOLVED_DISABLED_SUBAGENT_MODELS_ENV
+            )
+        else:
+            configured_disabled_models = load_disabled_models_config(
+                disabled_models_config_path(
+                    os.environ, arguments.disabled_models_config
+                )
+            )
+            disabled_models = disabled_subagent_models(
+                configured_disabled_models, os.environ
+            )
     except (OSError, ValueError, json.JSONDecodeError) as error:
         raise SystemExit(f"claudex routing configuration error: {error}") from error
     key = configuration_key(config, disabled_models)

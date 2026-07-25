@@ -73,8 +73,8 @@ approval待機やauto classifierがSubAgentの権限を狭めないようにし�
    `selected_workers` からAgentを選び、model/effortを明示します。nested起動でもgeneric
    `claude`へのdefaultや親providerの無条件継承は行いません。
 5. promptに `gpt...`、`grok...` または `qwen...` の完全なモデルIDがある場合は、
-   `modelPrefixes` が一致するproviderへそのIDをそのまま渡します。ただし、端末固有の
-   `CLAUDEX_DISABLED_SUBAGENT_MODELS` に含まれる完全一致モデルは明示指定でも拒否します。
+   `modelPrefixes` が一致するproviderへそのIDをそのまま渡します。ただし、専用設定と
+   端末固有の追加設定を統合したdeny listに含まれる完全一致モデルは明示指定でも拒否します。
 6. providerを利用できない場合はClaude subscriptionのfallbackを使います。
 7. 標準advisorはworkerの代替ではありません。provider quotaとは独立して動作し、会話履歴
    全体を自動参照します。
@@ -272,28 +272,40 @@ gpt-5.6-sol のworkerを使ってこの変更を実装してください。
 Orchestratorは完全なモデルIDを `claudex_model` としてAgentへ渡し、一致するbackendを
 遅延起動します。設定済みprefix内であれば、`defaultModel` 以外も同じ方式で選択できます。
 
-### 端末ごとにSubAgentモデルを禁止
+### SubAgentモデルを禁止
 
-`providers.json` やAgent定義を削除せず、その端末から起動するClaudexのSubAgentだけで
-完全一致モデルを禁止できます。main sessionのモデルと標準advisorには影響しません。
+provider設定とは分離した `~/.config/claudex/disabled-subagent-models.json` に、常に禁止する
+完全一致モデルを定義します。repositoryでは現在 `gpt-5.6-sol` を禁止しています。
+
+```json
+{
+  "version": 1,
+  "disabledModels": ["gpt-5.6-sol"]
+}
+```
+
+main sessionのモデルと標準advisorには影響しません。端末ごとに別の専用ファイルを使う場合や、
+その端末だけ禁止モデルを追加する場合は次のように指定します。
 
 ```fish
-# この1回の起動だけCodex workerを禁止
-env CLAUDEX_DISABLED_SUBAGENT_MODELS=gpt-5.6-sol claudex
+# この端末だけ別の専用ファイルを参照
+set -gx CLAUDEX_DISABLED_SUBAGENT_MODELS_CONFIG /path/to/terminal-policy.json
+claudex
 
-# 現在のfish端末で複数モデルを禁止
+# 専用ファイルに加えて、この端末だけ複数モデルを追加で禁止
 set -gx CLAUDEX_DISABLED_SUBAGENT_MODELS gpt-5.6-sol,grok-4.5
 claudex
 
-# 現在の端末の禁止を解除
+# 端末固有の上書きと追加を解除
+set -e CLAUDEX_DISABLED_SUBAGENT_MODELS_CONFIG
 set -e CLAUDEX_DISABLED_SUBAGENT_MODELS
 ```
 
-値はカンマ区切りの完全なモデルIDです。Claudex起動後に親shellの値を変更しても既存session
-には反映されないため、変更後は新しい `claudex` sessionを開始してください。routing hookは
-禁止モデルを候補・fallback・再利用から除外し、共有daemonも端末別request headerを使って
-SubAgent provider実行直前に再検証します。全モデルが禁止または利用不能ならmain sessionが
-作業を継続し、SubAgent routingが利用できないことを報告します。
+`disabledModels` と追加環境変数は完全なモデルIDです。環境変数側はカンマ区切りです。
+Claudex起動後に設定を変更しても既存sessionには反映されないため、変更後は新しい `claudex`
+sessionを開始してください。routing hookは統合した禁止モデルを候補・fallback・再利用から
+除外し、共有daemonも端末別request headerを使ってSubAgent provider実行直前に再検証します。
+全モデルが禁止または利用不能ならmain sessionが作業を継続します。
 
 ### 標準Advisorを利用
 
@@ -318,6 +330,7 @@ claudex --print \
 
 ```fish
 CLAUDEX_PROVIDER_CONFIG=/path/to/providers.json claudex
+CLAUDEX_DISABLED_SUBAGENT_MODELS_CONFIG=/path/to/disabled-models.json claudex
 CLAUDEX_USAGE_CACHE_SECONDS=0 claudex
 CLAUDEX_SUBSCRIPTION_MAX_PROCESSES=8 claudex
 CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES=60 claudex
