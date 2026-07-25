@@ -20,11 +20,13 @@ use super::{
 
 mod builder;
 mod disconnect;
+mod prepare;
 mod protocol;
 mod provider_tool;
 mod thinking;
 
 use builder::SegmentBuilder;
+use prepare::prepare_with_activity;
 
 #[cfg(test)]
 pub(super) use protocol::tool_use_frames;
@@ -32,6 +34,7 @@ use protocol::{StreamSender, send_stream_completion, send_stream_error, sse_resp
 pub(super) use protocol::{message_start, send_stream_frame, streaming_sse_response};
 
 const ACTIVITY_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
+const INITIAL_ACTIVITY_DELAY: Duration = Duration::from_secs(2);
 
 struct ToolCall<'a> {
     call_id: &'a str,
@@ -96,31 +99,40 @@ impl Bridge {
         effort: Option<String>,
         sender: StreamSender,
     ) {
-        // KeepaliveStream already pings while prepare_turn runs. Abort promptly if
-        // Claude Code disconnects during that startup window.
-        let turn = tokio::select! {
-            biased;
-            () = sender.closed() => return,
-            result = self.prepare_turn(&request, input_tokens, effort) => result,
-        };
+        let (turn, mut builder) = prepare_with_activity(
+            self.prepare_turn(&request, input_tokens, effort),
+            input_tokens,
+            &sender,
+            INITIAL_ACTIVITY_DELAY,
+            ACTIVITY_KEEPALIVE_INTERVAL,
+        )
+        .await;
         match turn {
-            Ok(turn) => self.drive_stream(turn, sender).await,
-            Err(error) => send_stream_error(&sender, error).await,
+            Ok(Some(turn)) => self.drive_stream(turn, sender, builder).await,
+            Ok(None) => {}
+            Err(error) => {
+                let _ = builder.close_open_blocks(Some(&sender)).await;
+                send_stream_error(&sender, error).await;
+            }
         }
     }
 
-    async fn drive_stream(self: Arc<Self>, turn: ActiveTurn, sender: StreamSender) {
+    async fn drive_stream(
+        self: Arc<Self>,
+        turn: ActiveTurn,
+        sender: StreamSender,
+        builder: SegmentBuilder,
+    ) {
         let ActiveTurn {
             session,
             events,
             extras,
-            input_tokens,
             gate,
             ..
         } = turn;
         let _gate = gate;
         match self
-            .wait_for_stream_segment(&session, &events, input_tokens, &extras, &sender)
+            .wait_for_stream_segment(&session, &events, &extras, &sender, builder)
             .await
         {
             Ok(StreamTurn::Segment {
@@ -150,15 +162,34 @@ impl Bridge {
         &self,
         session: &Arc<Session>,
         events: &crate::app_server::ThreadEvents,
-        input_tokens: u64,
         current_messages: &[Value],
         sender: &StreamSender,
+        builder: SegmentBuilder,
+    ) -> Result<StreamTurn> {
+        self.wait_for_stream_segment_with_interval(
+            session,
+            events,
+            current_messages,
+            sender,
+            builder,
+            ACTIVITY_KEEPALIVE_INTERVAL,
+        )
+        .await
+    }
+
+    async fn wait_for_stream_segment_with_interval(
+        &self,
+        session: &Arc<Session>,
+        events: &crate::app_server::ThreadEvents,
+        current_messages: &[Value],
+        sender: &StreamSender,
+        mut builder: SegmentBuilder,
+        activity_interval: Duration,
     ) -> Result<StreamTurn> {
         // Claude Code's decoded-event idle watchdog is ~300s. Anthropic `ping`
         // frames only satisfy the ~180s raw-byte watchdog, so emit a content
         // delta after provider silence well under that ceiling.
-        let mut builder = SegmentBuilder::new(input_tokens);
-        let mut activity_deadline = Box::pin(sleep(ACTIVITY_KEEPALIVE_INTERVAL));
+        let mut activity_deadline = Box::pin(sleep(activity_interval));
         loop {
             let next = tokio::select! {
                 biased;
@@ -166,15 +197,16 @@ impl Bridge {
                     return Ok(self.disconnect_stream(session, events).await);
                 }
                 () = &mut activity_deadline => {
-                    refresh_activity_keepalive(&mut builder, sender, activity_deadline.as_mut())
-                        .await?;
+                    refresh_activity_keepalive(
+                        &mut builder,
+                        sender,
+                        activity_deadline.as_mut(),
+                        activity_interval,
+                    ).await?;
                     continue;
                 }
                 next = next_event(events, builder.has_external_tool_calls()) => next,
             };
-            activity_deadline
-                .as_mut()
-                .reset(Instant::now() + ACTIVITY_KEEPALIVE_INTERVAL);
             let event = match next {
                 NextEvent::Event(event) => event,
                 NextEvent::ExternalBatchReady => {
@@ -301,11 +333,10 @@ async fn refresh_activity_keepalive(
     builder: &mut SegmentBuilder,
     sender: &StreamSender,
     mut deadline: std::pin::Pin<&mut tokio::time::Sleep>,
+    interval: Duration,
 ) -> Result<()> {
     builder.activity_keepalive(Some(sender)).await?;
-    deadline
-        .as_mut()
-        .reset(Instant::now() + ACTIVITY_KEEPALIVE_INTERVAL);
+    deadline.as_mut().reset(Instant::now() + interval);
     Ok(())
 }
 

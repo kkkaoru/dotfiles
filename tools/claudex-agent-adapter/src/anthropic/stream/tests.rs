@@ -4,7 +4,7 @@ use std::{
     ops::ControlFlow,
     os::unix::fs::PermissionsExt,
     sync::Arc,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use anyhow::anyhow;
@@ -222,9 +222,14 @@ async fn refreshes_activity_deadlines_and_detects_closed_streams() {
     let (sender, receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
     let mut builder = SegmentBuilder::new(1);
     let mut deadline = Box::pin(tokio::time::sleep(std::time::Duration::from_secs(1)));
-    super::refresh_activity_keepalive(&mut builder, &sender, deadline.as_mut())
-        .await
-        .expect("activity keepalive");
+    super::refresh_activity_keepalive(
+        &mut builder,
+        &sender,
+        deadline.as_mut(),
+        Duration::from_secs(1),
+    )
+    .await
+    .expect("activity keepalive");
     assert!(!deadline.is_elapsed());
 
     let (_root, app, bridge, session) = disconnect_fixture().await;
@@ -246,6 +251,136 @@ async fn refreshes_activity_deadlines_and_detects_closed_streams() {
         "tested disconnect warning",
     );
     super::disconnect::warn_cancel_failure(&anyhow!("test cancel failure"), "thread");
+}
+
+#[tokio::test]
+async fn hidden_provider_events_do_not_postpone_visible_activity() {
+    let (_root, _app, bridge, session) = disconnect_fixture().await;
+    let dispatcher = crate::app_server::events::ThreadEventDispatcher::default();
+    let events = dispatcher.subscribe("thread");
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
+    let wait = bridge.wait_for_stream_segment_with_interval(
+        &session,
+        &events,
+        &[],
+        &sender,
+        SegmentBuilder::new(1),
+        Duration::from_millis(10),
+    );
+    let dispatch = async {
+        for _ in 0..5 {
+            tokio::time::sleep(Duration::from_millis(4)).await;
+            dispatcher.dispatch(json!({
+                "method":"thread/tokenUsage/updated",
+                "params":{
+                    "threadId":"thread",
+                    "tokenUsage":{"last":{"inputTokens":1}}
+                }
+            }));
+        }
+        dispatcher.dispatch(json!({
+            "method":"turn/completed",
+            "params":{"threadId":"thread","turn":{"status":"completed"}}
+        }));
+    };
+    let (result, ()) = tokio::join!(wait, dispatch);
+    result.expect("stream segment");
+    drop(sender);
+
+    let mut output = String::new();
+    while let Some(frame) = receiver.recv().await {
+        output.push_str(&String::from_utf8_lossy(&frame.expect("frame")));
+    }
+    assert!(output.contains("waiting for provider output"));
+}
+
+#[tokio::test]
+async fn reports_a_closed_provider_event_stream() {
+    let (_root, _app, bridge, session) = disconnect_fixture().await;
+    let dispatcher = crate::app_server::events::ThreadEventDispatcher::default();
+    let events = dispatcher.subscribe("thread");
+    dispatcher.close();
+    let (sender, _receiver) = mpsc::channel::<Result<Bytes, Infallible>>(1);
+    let result = bridge
+        .wait_for_stream_segment_with_interval(
+            &session,
+            &events,
+            &[],
+            &sender,
+            SegmentBuilder::new(1),
+            Duration::from_secs(1),
+        )
+        .await;
+    let Err(error) = result else {
+        panic!("closed provider event stream must fail");
+    };
+
+    assert!(error.to_string().contains("event stream closed"));
+}
+
+#[tokio::test]
+async fn reports_slow_stream_preparation_before_the_provider_is_ready() {
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
+    let prepare = async {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        Ok::<_, anyhow::Error>("ready")
+    };
+    let (result, builder) = super::prepare_with_activity(
+        prepare,
+        3,
+        &sender,
+        Duration::from_millis(5),
+        Duration::from_millis(50),
+    )
+    .await;
+    assert_eq!(result.expect("prepare result"), Some("ready"));
+    let segment = builder.finish(Some(&sender)).await.expect("segment");
+    drop(sender);
+
+    assert_eq!(segment.usage.input_tokens, 3);
+    assert!(
+        segment.blocks[0]["thinking"]
+            .as_str()
+            .expect("activity status")
+            .contains("waiting for provider output")
+    );
+    let mut frames = Vec::new();
+    while let Some(frame) = receiver.recv().await {
+        frames.push(String::from_utf8(frame.expect("frame").to_vec()).expect("UTF-8 SSE"));
+    }
+    assert!(frames.iter().any(|frame| frame.contains("thinking_delta")));
+    assert!(
+        frames
+            .iter()
+            .any(|frame| frame.contains("content_block_stop"))
+    );
+}
+
+#[tokio::test]
+async fn finishes_fast_or_disconnected_stream_preparation_without_activity_status() {
+    let (sender, receiver) = mpsc::channel::<Result<Bytes, Infallible>>(1);
+    let (result, builder) = super::prepare_with_activity(
+        std::future::ready(Ok::<_, anyhow::Error>("ready")),
+        1,
+        &sender,
+        Duration::from_secs(1),
+        Duration::from_secs(1),
+    )
+    .await;
+    assert_eq!(result.expect("fast prepare"), Some("ready"));
+    assert!(builder.blocks.is_empty());
+
+    drop(receiver);
+    let (result, builder) = super::prepare_with_activity(
+        std::future::pending::<anyhow::Result<()>>(),
+        1,
+        &sender,
+        Duration::from_secs(1),
+        Duration::from_secs(1),
+    )
+    .await;
+    assert!(result.expect("disconnected prepare").is_none());
+    assert!(builder.blocks.is_empty());
 }
 
 #[tokio::test]

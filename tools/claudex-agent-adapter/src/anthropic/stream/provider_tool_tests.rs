@@ -51,7 +51,7 @@ mod tests {
         assert!(text.contains("▶ Search docs"));
         assert!(!text.contains("tool_use"));
         assert_eq!(
-            builder.provider_tool_call_ids.len(),
+            builder.provider_tool_calls.len(),
             EXPECTED_PROVIDER_CALLS
         );
     }
@@ -120,6 +120,41 @@ mod tests {
             frame_count += 1;
         }
         assert_eq!(frame_count, EXPECTED_PROGRESS_FRAMES);
+    }
+
+    #[tokio::test]
+    async fn renders_update_only_tools_once_and_reuses_their_titles() {
+        let mut builder = SegmentBuilder::new(1);
+        for status in ["pending", "in_progress"] {
+            builder
+                .provider_tool_update(
+                    &json!({"params":{
+                        "callId":"update-only",
+                        "status":status,
+                        "title":"WebFetch"
+                    }}),
+                    None,
+                )
+                .await
+                .expect("provider update");
+        }
+        builder
+            .provider_tool_update(
+                &json!({"params":{
+                    "callId":"update-only",
+                    "status":"completed",
+                    "output":"done"
+                }}),
+                None,
+            )
+            .await
+            .expect("provider completion");
+        let segment = builder.finish(None).await.expect("segment");
+        let text = segment.blocks[0]["text"].as_str().expect("progress text");
+
+        assert_eq!(text.matches("▶ WebFetch").count(), 1);
+        assert!(text.contains("✓ WebFetch: done"));
+        assert!(!text.contains("✓ tool"));
     }
 
     #[test]

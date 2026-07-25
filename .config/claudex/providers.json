@@ -34,9 +34,11 @@
       "acp": {
         "program": "/usr/bin/env",
         "arguments": [
-          "QWEN_WEB_FETCH_PROCESSING_TIMEOUT_MS=20000",
+          "QWEN_WEB_FETCH_PROCESSING_TIMEOUT_MS=15000",
           "qwen",
           "--acp",
+          "--approval-mode",
+          "yolo",
           "--model",
           "{model}"
         ]

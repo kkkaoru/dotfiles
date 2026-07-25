@@ -43,8 +43,9 @@ worker のAgent定義と `providers.json` の両方に同じ固定モデルを�
 共有設定の不一致を検出します。
 
 Qwen ACPは `/usr/bin/env` 経由でQwen Codeだけに
-`QWEN_WEB_FETCH_PROCESSING_TIMEOUT_MS=20000` を渡します。Qwen Codeの `web_fetch` は取得後の
-content processingを既定で最大300秒待つため、ここでは20秒でraw contentへfallbackさせます。
+`QWEN_WEB_FETCH_PROCESSING_TIMEOUT_MS=15000` を渡し、`--approval-mode yolo` でmain sessionの
+無確認実行と同等のtool権限にします。Qwen Codeの `web_fetch` は取得後の
+content processingを既定で最大300秒待つため、ここでは15秒でraw contentへfallbackさせます。
 workerにも1 batch 1件・1 task 2件までの取得上限と同一URLの再試行禁止を指定し、複数URLの
 逐次処理によってSubAgentが長時間応答しない状態を抑えます。
 
@@ -53,6 +54,8 @@ permission contextを継承します。調査・reviewという役割だけを�
 background SubAgentはClaude Codeの仕様上、main sessionで対話確認できる未承認操作を自動拒否
 するため、その可能性がある作業はforegroundで委譲します。main sessionを
 `--dangerously-skip-permissions` で起動した場合、そのmodeはSubAgentにも優先して継承されます。
+Grok ACPは `--always-approve`、Qwen ACPは `--approval-mode yolo` を明示し、provider自身の
+approval待機やauto classifierがSubAgentの権限を狭めないようにします。
 
 ## ルーティング
 
@@ -122,10 +125,13 @@ brew install --cask claude-code codex codexbar
   `codexbar` コマンドが見つからない場合は、同READMEのCLI tarballまたはCLI install手順も
   実行してください。
 - Grok Build CLIは利用可能な配布元からインストールし、`grok login` を実行します。
-  このadapterは `grok --model MODEL agent stdio` のACP接続を使用します。
+  このadapterは `grok --model MODEL agent --always-approve stdio` のACP接続を使用します。
+  GrokはClaude互換hookのstdinを閉じないため、adapterはchildに `CLAUDEX_GROK_ACP=1` を渡し、
+  `SessionStart` のClaude専用Herdr通知を入力読取前にskipします。これにより各sessionの10秒timeoutと
+  timeout後に残るhook processを防ぎます。
 - Qwen Codeは `bun add -g @qwen-code/qwen-code` など公式手順でインストールし、`qwen` の
   `/auth` からToken Planを設定します。API keyはclaudexへ重複設定せず、Qwen Code自身の
-  設定を `qwen --acp --model MODEL` が再利用します。
+  設定を `qwen --acp --approval-mode yolo --model MODEL` が再利用します。
 
 Qwen Cloudのremaining取得には、Chrome DevToolsのNetworkでToken Plan usage requestを
 「Copy as cURL (bash)」し、repository localの `tmp/curl.txt` に保存します。このファイルは

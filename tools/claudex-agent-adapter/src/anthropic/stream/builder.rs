@@ -23,7 +23,7 @@ pub(super) struct SegmentBuilder {
     external_tool_calls: usize,
     /// Provider call IDs already shown as progress text. ACP can report the same
     /// call first as ToolCall and again as a populated ToolCallUpdate.
-    pub(super) provider_tool_call_ids: Vec<String>,
+    pub(super) provider_tool_calls: Vec<(String, String)>,
     usage: Usage,
 }
 
@@ -34,7 +34,7 @@ impl SegmentBuilder {
             thinking: ThinkingState::default(),
             open_text_block: None,
             external_tool_calls: 0,
-            provider_tool_call_ids: Vec::new(),
+            provider_tool_calls: Vec::new(),
             usage: Usage {
                 input_tokens,
                 ..Usage::default()

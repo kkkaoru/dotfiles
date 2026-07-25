@@ -30,20 +30,15 @@ impl SegmentBuilder {
             .get("callId")
             .and_then(Value::as_str)
             .context("provider tool callId missing")?;
-        if self
-            .provider_tool_call_ids
-            .iter()
-            .any(|seen| seen == call_id)
-        {
-            return Ok(());
-        }
-        self.provider_tool_call_ids.push(call_id.to_owned());
         let name = params.get("tool").and_then(Value::as_str).unwrap_or("Tool");
         let title = params
             .get("title")
             .and_then(Value::as_str)
             .filter(|title| !title.trim().is_empty())
             .unwrap_or(name);
+        if !self.remember_provider_tool(call_id, title) {
+            return Ok(());
+        }
         self.append_text(&format!("\n\n▶ {title}\n"), stream).await
     }
 
@@ -60,10 +55,15 @@ impl SegmentBuilder {
             .get("status")
             .and_then(Value::as_str)
             .unwrap_or("updated");
-        let title = params
+        let call_id = params.get("callId").and_then(Value::as_str);
+        let explicit_title = params
             .get("title")
             .and_then(Value::as_str)
-            .unwrap_or("tool");
+            .filter(|title| !title.trim().is_empty());
+        let title = explicit_title
+            .or_else(|| call_id.and_then(|id| self.provider_tool_title(id)))
+            .unwrap_or("tool")
+            .to_owned();
         match status {
             "failed" => {
                 let detail = output_preview(params.get("output"), "failed");
@@ -79,9 +79,44 @@ impl SegmentBuilder {
                         .await?;
                 }
             }
+            "pending" | "in_progress" => {
+                self.start_provider_tool_from_update(call_id, &title, stream)
+                    .await?;
+            }
             _ => {}
         }
         Ok(())
+    }
+
+    async fn start_provider_tool_from_update(
+        &mut self,
+        call_id: Option<&str>,
+        title: &str,
+        stream: Option<&StreamSender>,
+    ) -> Result<()> {
+        let Some(call_id) = call_id else {
+            return Ok(());
+        };
+        if !self.remember_provider_tool(call_id, title) {
+            return Ok(());
+        }
+        self.append_text(&format!("\n\n▶ {title}\n"), stream).await
+    }
+
+    fn remember_provider_tool(&mut self, call_id: &str, title: &str) -> bool {
+        if self.provider_tool_title(call_id).is_some() {
+            return false;
+        }
+        self.provider_tool_calls
+            .push((call_id.to_owned(), title.to_owned()));
+        true
+    }
+
+    fn provider_tool_title(&self, call_id: &str) -> Option<&str> {
+        self.provider_tool_calls
+            .iter()
+            .find(|(seen, _)| seen == call_id)
+            .map(|(_, title)| title.as_str())
     }
 
     pub(super) async fn append_text(

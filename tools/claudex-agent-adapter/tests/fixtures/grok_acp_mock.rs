@@ -450,6 +450,7 @@ async fn main() -> acp::Result<()> {
         setup_release: RefCell::new(setup_release),
     };
     agent.record("arguments", &args)?;
+    agent.record("claudex_grok_acp", std::env::var("CLAUDEX_GROK_ACP").ok())?;
     let local = tokio::task::LocalSet::new();
     local
         .run_until(async move {

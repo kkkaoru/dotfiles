@@ -119,11 +119,9 @@ async fn creates_grok_acp_session_in_the_request_working_directory() {
 }
 
 fn assert_trace(trace: &[Value]) {
-    assert!(
-        trace
-            .iter()
-            .any(|event| event["arguments"] == json!(["--model", "grok-4.5", "agent", "stdio"]))
-    );
+    assert!(trace.iter().any(|event| event["arguments"]
+        == json!(["--model", "grok-4.5", "agent", "--always-approve", "stdio"])));
+    assert!(trace.iter().any(|event| event["claudex_grok_acp"] == "1"));
     assert!(
         trace
             .iter()

@@ -142,6 +142,7 @@ fn provider_workers_fix_the_models_from_the_shared_config() {
     }
 
     assert_qwen_runtime_is_bounded(&root, &config);
+    assert_grok_skips_claude_session_hook(&root);
 }
 
 #[test]
@@ -186,9 +187,11 @@ fn assert_qwen_runtime_is_bounded(root: &std::path::Path, config: &serde_json::V
     assert_eq!(
         qwen["acp"]["arguments"],
         serde_json::json!([
-            "QWEN_WEB_FETCH_PROCESSING_TIMEOUT_MS=20000",
+            "QWEN_WEB_FETCH_PROCESSING_TIMEOUT_MS=15000",
             "qwen",
             "--acp",
+            "--approval-mode",
+            "yolo",
             "--model",
             "{model}"
         ])
@@ -207,6 +210,31 @@ fn assert_qwen_runtime_is_bounded(root: &std::path::Path, config: &serde_json::V
             "missing Qwen research policy: {policy}"
         );
     }
+}
+
+fn assert_grok_skips_claude_session_hook(root: &std::path::Path) {
+    let settings: serde_json::Value = serde_json::from_slice(
+        &fs::read(root.join(".claude/settings.json")).expect("Claude settings"),
+    )
+    .expect("valid Claude settings");
+    let command = settings["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+        .as_str()
+        .expect("SessionStart command");
+    assert!(
+        command.find("CLAUDEX_GROK_ACP").is_some_and(|guard| {
+            command
+                .find("herdr-agent-state.sh")
+                .is_some_and(|hook| guard < hook)
+        }),
+        "Grok guard must run before the Herdr hook reads stdin"
+    );
+    let output = Command::new("sh")
+        .args(["-c", command])
+        .env("CLAUDEX_GROK_ACP", "1")
+        .env("HOME", "/path/that/must/not/be-read")
+        .output()
+        .expect("run guarded SessionStart hook");
+    assert!(output.status.success());
 }
 
 fn assert_no_argument_launch(function: &std::path::Path, home: &tempfile::TempDir) {

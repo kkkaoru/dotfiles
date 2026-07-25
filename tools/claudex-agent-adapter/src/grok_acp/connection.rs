@@ -45,7 +45,10 @@ pub(super) async fn start(
     let mut command = Command::new(program);
     match provider {
         AcpProvider::Grok => {
-            command.args(["--model", model, "agent"]);
+            // Grok runs Claude-compatible project hooks but does not close their stdin. Mark the
+            // child so the SessionStart hook can skip its blocking Claude-only state report.
+            command.env("CLAUDEX_GROK_ACP", "1");
+            command.args(["--model", model, "agent", "--always-approve"]);
             if let Some(path) = plugin::prepare(program)? {
                 command.arg("--plugin-dir").arg(path);
             }
