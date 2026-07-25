@@ -344,6 +344,12 @@ impl acp::Agent for MockAgent {
         if self.mode == "fail-session" {
             return Err(acp::Error::internal_error());
         }
+        if self.mode == "fail-parallel-session" && self.next_session.get() > 0 {
+            return Err(acp::Error::internal_error());
+        }
+        if self.mode == "dropped-parallel-session" && self.next_session.get() > 0 {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
         let next = self.next_session.get() + 1;
         self.next_session.set(next);
         Ok(acp::NewSessionResponse::new(format!("grok-session-{next}")))
@@ -351,6 +357,12 @@ impl acp::Agent for MockAgent {
 
     async fn prompt(&self, request: acp::PromptRequest) -> acp::Result<acp::PromptResponse> {
         self.record("prompt", &request)?;
+        if matches!(
+            self.mode.as_str(),
+            "fail-parallel-session" | "dropped-parallel-session"
+        ) {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        }
         if self.mode == "fail-prompt" {
             return Err(acp::Error::internal_error());
         }

@@ -152,6 +152,12 @@ impl Bridge {
             }
             Ok(StreamTurn::Disconnected) => {}
             Err(error) => {
+                tracing::warn!(
+                    thread_id = %session.thread_id,
+                    model = %session.model,
+                    ?error,
+                    "streaming turn failed before message_stop"
+                );
                 self.remove_session(&session).await;
                 send_stream_error(&sender, error).await;
             }

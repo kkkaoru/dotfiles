@@ -377,6 +377,65 @@ async fn queues_parallel_grok_acp_session_requests_without_dropping_them() {
 }
 
 #[tokio::test]
+async fn parallel_session_failure_does_not_interrupt_an_active_turn() {
+    let root = tempfile::tempdir().expect("parallel session failure fixture");
+    let agent = spawn_mock("fail-parallel-session", root.path()).await;
+    let (events, session_id) = start_delayed_turn(&agent).await;
+
+    assert!(agent.create_session(json!({})).await.is_err());
+    assert!(agent.is_alive());
+    assert_completed_turn(&events).await;
+    agent.cancel_turn(&session_id).await.expect("settled turn");
+    assert!(agent.is_alive());
+}
+
+#[tokio::test]
+async fn dropped_parallel_session_request_does_not_interrupt_or_restart_provider() {
+    let root = tempfile::tempdir().expect("dropped parallel session fixture");
+    let trace = root.path().join("grok-acp-mock.jsonl");
+    let agent = spawn_mock("dropped-parallel-session", root.path()).await;
+    let (events, _session_id) = start_delayed_turn(&agent).await;
+    let request = tokio::spawn({
+        let agent = Arc::clone(&agent);
+        async move { agent.create_session(json!({})).await }
+    });
+    wait_for_trace_count(&trace, "new_session", 2).await;
+    request.abort();
+
+    assert_completed_turn(&events).await;
+    let next = tokio::time::timeout(Duration::from_secs(1), agent.create_session(json!({})))
+        .await
+        .expect("provider stopped accepting sessions after a requester disconnected")
+        .expect("provider rejected a session after a requester disconnected");
+    assert!(next.pointer("/thread/id").is_some());
+    assert!(agent.is_alive());
+}
+
+async fn start_delayed_turn(
+    agent: &Arc<GrokAcp>,
+) -> (claudex_agent_adapter::app_server::ThreadEvents, String) {
+    let session = agent
+        .create_session(json!({}))
+        .await
+        .expect("first session");
+    let session_id = session["thread"]["id"]
+        .as_str()
+        .expect("session ID")
+        .to_owned();
+    let events = agent.subscribe_thread(&session_id);
+    agent
+        .start_turn(json!({"threadId":session_id,"input":"stay alive"}))
+        .await
+        .expect("start delayed turn");
+    (events, session_id)
+}
+
+async fn assert_completed_turn(events: &claudex_agent_adapter::app_server::ThreadEvents) {
+    assert_eq!(recv(events).await["params"]["delta"], "GROK_ACP_STREAM_OK");
+    assert_eq!(recv(events).await["method"], "turn/completed");
+}
+
+#[tokio::test]
 async fn dropping_http_stream_cancels_the_active_acp_prompt() {
     let root = ProjectFixture::new("disconnect");
     let trace_path = root.path().join("grok-acp-mock.jsonl");
