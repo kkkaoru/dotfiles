@@ -11,9 +11,10 @@ pub mod grok_acp;
 pub mod launcher;
 pub mod provider_config;
 pub mod runtime;
+mod subagent_policy;
 mod working_directory;
 
-pub const ADAPTER_PROTOCOL_VERSION: u64 = 20;
+pub const ADAPTER_PROTOCOL_VERSION: u64 = 21;
 pub(crate) const NONINTERACTIVE_CHILD_ENV: &str = "CLAUDEX_NONINTERACTIVE_CHILD";
 
 use std::sync::Arc;
@@ -112,6 +113,10 @@ async fn messages(
     Json(mut request): Json<MessagesRequest>,
 ) -> Response<axum::body::Body> {
     request.working_directory = request_working_directory(&headers);
+    request.disabled_subagent_models = match subagent_policy::request_models(&headers) {
+        Ok(models) => models,
+        Err(error) => return error_response(StatusCode::BAD_REQUEST, error),
+    };
     bridge
         .messages(request)
         .await
@@ -157,5 +162,21 @@ mod tests {
         );
         assert!(request_working_directory(&headers).is_none());
         assert!(request_working_directory(&HeaderMap::new()).is_none());
+    }
+
+    #[test]
+    fn parses_terminal_subagent_policy_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            subagent_policy::HEADER_NAME,
+            "gpt-5.6-sol,grok-4.5".parse().unwrap(),
+        );
+        assert_eq!(
+            subagent_policy::request_models(&headers)
+                .unwrap()
+                .into_iter()
+                .collect::<Vec<_>>(),
+            ["gpt-5.6-sol", "grok-4.5"]
+        );
     }
 }

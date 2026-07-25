@@ -22,6 +22,7 @@ fn request(system: Value, tools: Vec<Value>) -> MessagesRequest {
         output_config: Value::Null,
         metadata: Value::Null,
         working_directory: None,
+        disabled_subagent_models: Default::default(),
         claudex_collaborator_model: None,
     }
 }

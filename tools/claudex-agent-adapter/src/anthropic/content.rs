@@ -77,6 +77,7 @@ pub(super) fn request_signature(
         "tools": request.tools.iter().map(canonical_value).collect::<Vec<_>>(),
         "metadata": request.metadata.get("user_id"),
         "working_directory": request.working_directory,
+        "disabled_subagent_models": request.disabled_subagent_models,
         "advisor_model": advisor_model,
         "collaborator_model": collaborator_model
     }))

@@ -324,6 +324,19 @@ fn extracts_signatures_and_counts() {
         )
         .unwrap()
     );
+    let mut other_policy = request.clone();
+    other_policy
+        .disabled_subagent_models
+        .insert("gpt-5.6-sol".to_owned());
+    assert_ne!(
+        base_signature,
+        request_signature(
+            &other_policy,
+            Some("test-advisor"),
+            Some("test-collaborator")
+        )
+        .unwrap()
+    );
     let serialized_bytes = serde_json::to_string(&request.system).unwrap().len()
         + serde_json::to_string(&request.messages).unwrap().len()
         + serde_json::to_string(&request.tools).unwrap().len();

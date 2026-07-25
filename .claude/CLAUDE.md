@@ -32,6 +32,9 @@
   never guess or persist recipients across sessions.
 - Never copy the main session's model or effort into worker routing. If `selected_workers` is
   unavailable, report routing as unavailable instead of inventing a worker selection.
+- Treat `disabled_subagent_models` in the current Claudex routing context as an absolute,
+  terminal-local denylist. Never launch, inherit, dynamically select, or reuse an exact listed
+  model, even when the user requests it; this restriction applies only to SubAgents.
 - Treat the current Claudex routing context as authoritative over stale auto-memory about worker
   model policy; do not inspect such memory before delegation.
 - Use Claude Code's built-in parameterless `advisor()` tool according to its standard policy. It

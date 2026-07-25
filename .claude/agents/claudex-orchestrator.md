@@ -22,7 +22,10 @@ Use the available SubAgent tool (`Task` in current Claude Code, `Agent` in older
 each worker's configured `model` and `effort` through its `claudex_model` and `claudex_effort`
 fields. If the user explicitly names a model matching a configured
 `model_prefixes` entry, choose that provider dynamically and pass the exact requested model rather
-than its default. Use multiple available workers only when independent execution or a second
+than its default, unless that exact model is in `disabled_subagent_models`. Treat that terminal-local
+list as an absolute SubAgent denylist across explicit selection, inheritance, nested launches, and
+reuse. If it leaves no allowed worker, continue in the main session and report routing unavailable.
+Use multiple available workers only when independent execution or a second
 perspective materially helps; do not manufacture parallel work for trivial tasks.
 When substantive work is clear, invoke the selected SubAgent directly in the first response rather
 than merely announcing future delegation. Do not add TaskList, TaskCreate, or TaskUpdate round trips

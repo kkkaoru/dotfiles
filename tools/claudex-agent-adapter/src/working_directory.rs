@@ -5,7 +5,11 @@ use std::{
 
 pub(crate) const HEADER_NAME: &str = "x-claudex-working-directory";
 
-pub(crate) fn custom_headers(existing: Option<&OsStr>, cwd: &Path) -> String {
+pub(crate) fn custom_headers(
+    existing: Option<&OsStr>,
+    cwd: &Path,
+    disabled_subagent_models: Option<&str>,
+) -> String {
     let mut headers = existing
         .map(|value| value.to_string_lossy())
         .into_iter()
@@ -18,6 +22,9 @@ pub(crate) fn custom_headers(existing: Option<&OsStr>, cwd: &Path) -> String {
         })
         .collect::<Vec<_>>();
     headers.push(format!("{HEADER_NAME}: {}", encode(cwd)));
+    if let Some(models) = disabled_subagent_models {
+        headers.push(format!("{}: {models}", crate::subagent_policy::HEADER_NAME));
+    }
     headers.join("\n")
 }
 
@@ -64,8 +71,11 @@ const fn hex_value(byte: u8) -> Option<u8> {
 }
 
 fn reserved_header(line: &str) -> bool {
-    line.split_once(':')
-        .is_some_and(|(name, _)| name.trim().eq_ignore_ascii_case(HEADER_NAME))
+    line.split_once(':').is_some_and(|(name, _)| {
+        let name = name.trim();
+        name.eq_ignore_ascii_case(HEADER_NAME)
+            || name.eq_ignore_ascii_case(crate::subagent_policy::HEADER_NAME)
+    })
 }
 
 #[cfg(test)]
@@ -85,16 +95,17 @@ mod tests {
     fn merges_custom_headers_and_replaces_the_reserved_header() {
         let headers = custom_headers(
             Some(OsStr::new(
-                "x-user-header: keep\nX-CLAUDEX-WORKING-DIRECTORY: forged",
+                "x-user-header: keep\nX-CLAUDEX-WORKING-DIRECTORY: forged\nX-CLAUDEX-DISABLED-SUBAGENT-MODELS: forged",
             )),
             Path::new("/tmp/project with space"),
+            Some("gpt-5.6-sol,grok-4.5"),
         );
         assert_eq!(
             headers,
-            "x-user-header: keep\nx-claudex-working-directory: /tmp/project%20with%20space"
+            "x-user-header: keep\nx-claudex-working-directory: /tmp/project%20with%20space\nx-claudex-disabled-subagent-models: gpt-5.6-sol,grok-4.5"
         );
         assert_eq!(
-            custom_headers(None, Path::new("/tmp/plain")),
+            custom_headers(None, Path::new("/tmp/plain"), None),
             "x-claudex-working-directory: /tmp/plain"
         );
     }

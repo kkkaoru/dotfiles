@@ -293,7 +293,11 @@ exit 23
         .env("CLAUDE_CODE_USE_VERTEX", "1")
         .env(
             "ANTHROPIC_CUSTOM_HEADERS",
-            "x-user-header: keep\nx-claudex-working-directory: forged",
+            "x-user-header: keep\nx-claudex-working-directory: forged\nx-claudex-disabled-subagent-models: forged",
+        )
+        .env(
+            "CLAUDEX_DISABLED_SUBAGENT_MODELS",
+            "grok-4.5,gpt-5.6-sol,grok-4.5",
         )
         .output()
         .expect("run Claude wrapper");
@@ -306,9 +310,7 @@ exit 23
             "api_key=unset anthropic_model=unset bedrock=unset foundry=unset vertex=unset"
         )
     );
-    assert!(stdout.contains("custom_headers=x-user-header: keep"));
-    assert!(stdout.contains("x-claudex-working-directory:"));
-    assert!(!stdout.contains("forged"));
+    assert_terminal_policy_headers(&stdout);
     let stderr = String::from_utf8(output.stderr).expect("Claude stderr");
     assert_eq!(stderr, "kept stderr\n");
 
@@ -320,7 +322,12 @@ exit 23
         .expect("wrapper daemon pid");
     terminate(pid);
 
-    let rejected = common_command(&home, port, "20")
+    assert_duplicate_model_is_rejected(&home, port, &claude);
+    assert_invalid_subagent_policy_is_rejected(&home, port, &claude);
+}
+
+fn assert_duplicate_model_is_rejected(home: &TempDir, port: u16, claude: &std::path::Path) {
+    let output = common_command(home, port, "20")
         .args([
             "launch",
             "--model",
@@ -329,10 +336,29 @@ exit 23
             "--model",
             "other",
         ])
-        .env("CLAUDEX_CLAUDE_PROGRAM", &claude)
+        .env("CLAUDEX_CLAUDE_PROGRAM", claude)
         .output()
         .expect("reject duplicate model");
-    assert_error(rejected, "pass the main model to adapter option --model");
+    assert_error(output, "pass the main model to adapter option --model");
+}
+
+fn assert_terminal_policy_headers(output: &str) {
+    assert!(output.contains("custom_headers=x-user-header: keep"));
+    assert!(output.contains("x-claudex-working-directory:"));
+    assert!(output.contains("x-claudex-disabled-subagent-models: gpt-5.6-sol,grok-4.5"));
+    assert!(!output.contains("forged"));
+}
+
+fn assert_invalid_subagent_policy_is_rejected(home: &TempDir, port: u16, claude: &std::path::Path) {
+    let output = common_command(home, port, "20")
+        .args(["launch", "--model", "test-main-model"])
+        .args(["--listen", &format!("127.0.0.1:{port}")])
+        .args(["--", "--continue"])
+        .env("CLAUDEX_CLAUDE_PROGRAM", claude)
+        .env("CLAUDEX_DISABLED_SUBAGENT_MODELS", "model with spaces")
+        .output()
+        .expect("reject invalid terminal model policy");
+    assert_error(output, "contains an invalid model ID");
 }
 
 fn assert_inherited_launch(home: &TempDir, port: u16, path: &str) {

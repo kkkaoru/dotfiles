@@ -24,6 +24,7 @@ mod tests {
             output_config: json!({"effort":"low"}),
             metadata: json!({"user_id":user_id}),
             working_directory: None,
+            disabled_subagent_models: Default::default(),
             claudex_collaborator_model: None,
         }
     }

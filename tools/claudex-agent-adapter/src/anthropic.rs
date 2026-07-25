@@ -14,14 +14,14 @@ mod team_protocol;
 mod turn_input;
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     hash::{DefaultHasher, Hash, Hasher},
     path::PathBuf,
     sync::{Arc, Mutex as StdMutex, Weak},
     time::Instant,
 };
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use axum::{body::Body, http::Response};
 use serde::Deserialize;
 use serde_json::Value;
@@ -35,7 +35,7 @@ use crate::{
 pub use content::{error_response, token_count};
 pub(crate) use subscription::{DEFAULT_MAX_PROCESSES, DEFAULT_TIMEOUT_MINUTES};
 
-const BRIDGE_INSTRUCTIONS: &str = r"You are the model inside the Claude Code agent harness. Claude Code owns all filesystem, shell, web, MCP, planning, approval, and user-interaction operations. Use only the dynamic tools whose names and schemas were supplied by Claude Code. Do not invoke Codex built-in tools. The Codex app-server sandbox applies only to those disabled built-in tools; never infer from it that Claude Code or its SubAgent tasks are read-only. Preserve task-specific restrictions that the active user or applicable repository instructions explicitly require, but do not copy restrictions from an unrelated earlier task, investigation lane, teammate report, or closed probe. When the active request authorizes implementation, verification, commit, deployment, or another mutation, preserve that authority in SubAgent prompts and act through Claude Code's dynamic tools. Do not add or repeatedly announce read-only, no-edit, no-build, no-deploy, or similar restrictions unless they are explicitly active for the current task. In particular, invoke Claude Code's supplied dynamic SubAgent tool directly (Task in current versions, Agent in older versions); never substitute a Codex collaboration or spawn-agent tool for it. Omit the SubAgent name field for ordinary SubAgents and parallel delegation. Set name only when the active user explicitly supplies that teammate name; an invented name turns the SubAgent into a persistent mailbox teammate and can expose internal agent-message markup. Apply the current selected_workers routing to every Agent or Task launch, including a nested launch from a worker: choose the corresponding claudex worker agent and pass its exact claudex_model and claudex_effort. This routed selection is authoritative, not an inferred default; never use generic claude or blindly inherit the parent provider when the current routing context selects a worker. An exact model explicitly requested by the active user still takes precedence. Provider models selected by the current routing context are supported. If no current routing context or explicit model is available, omit claudex_model so the SubAgent inherits the current session model, and never invent a route. Never claim that delegation occurred or reproduce a requested worker response without an actual SubAgent tool result. Return the answer directly when no Claude Code tool is needed. Treat tool output as the result of your own requested call and continue the same task.";
+const BRIDGE_INSTRUCTIONS: &str = r"You are the model inside the Claude Code agent harness. Claude Code owns all filesystem, shell, web, MCP, planning, approval, and user-interaction operations. Use only the dynamic tools whose names and schemas were supplied by Claude Code. Do not invoke Codex built-in tools. The Codex app-server sandbox applies only to those disabled built-in tools; never infer from it that Claude Code or its SubAgent tasks are read-only. Preserve task-specific restrictions that the active user or applicable repository instructions explicitly require, but do not copy restrictions from an unrelated earlier task, investigation lane, teammate report, or closed probe. When the active request authorizes implementation, verification, commit, deployment, or another mutation, preserve that authority in SubAgent prompts and act through Claude Code's dynamic tools. Do not add or repeatedly announce read-only, no-edit, no-build, no-deploy, or similar restrictions unless they are explicitly active for the current task. In particular, invoke Claude Code's supplied dynamic SubAgent tool directly (Task in current versions, Agent in older versions); never substitute a Codex collaboration or spawn-agent tool for it. Omit the SubAgent name field for ordinary SubAgents and parallel delegation. Set name only when the active user explicitly supplies that teammate name; an invented name turns the SubAgent into a persistent mailbox teammate and can expose internal agent-message markup. Apply the current selected_workers routing to every Agent or Task launch, including a nested launch from a worker: choose the corresponding claudex worker agent and pass its exact claudex_model and claudex_effort. Treat disabled_subagent_models in the current routing context as an absolute SubAgent denylist across explicit selection, inheritance, nested launches, and reuse. This routed selection is authoritative, not an inferred default; never use generic claude or blindly inherit the parent provider when the current routing context selects a worker. An exact model explicitly requested by the active user still takes precedence only when it is not disabled. Provider models selected by the current routing context are supported. If no current routing context or explicit model is available, omit claudex_model so the SubAgent inherits the current session model, and never invent a route. Never claim that delegation occurred or reproduce a requested worker response without an actual SubAgent tool result. Return the answer directly when no Claude Code tool is needed. Treat tool output as the result of your own requested call and continue the same task.";
 // Team and background Agent workflows can legitimately keep many tool results pending at once.
 // This accepts large bursts while retaining a finite upper bound for transcript memory; idle
 // sessions are reclaimed both by TTL and immediately at capacity.
@@ -61,6 +61,8 @@ pub struct MessagesRequest {
     pub metadata: Value,
     #[serde(skip)]
     pub working_directory: Option<PathBuf>,
+    #[serde(skip)]
+    pub disabled_subagent_models: BTreeSet<String>,
     #[serde(default)]
     pub claudex_collaborator_model: Option<String>,
 }
@@ -271,6 +273,13 @@ impl Bridge {
         } else if is_subagent && !intent.matched {
             // Only a correlated Claude Code Agent may keep its fixed frontmatter model.
             request.model.clone_from(&self.model);
+        }
+        if is_subagent && request.disabled_subagent_models.contains(&request.model) {
+            bail!(
+                "SubAgent model `{}` is disabled for this terminal by {}",
+                request.model,
+                crate::subagent_policy::ENV_NAME
+            );
         }
         let effort = self.resolve_request_effort(&request, intent.effort);
         tracing::debug!(

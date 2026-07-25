@@ -32,6 +32,7 @@ QWEN_CONSOLE_PRODUCT = "sfm_bailian"
 QWEN_CONSOLE_ACTION = "IntlBroadScopeAspnGateway"
 QWEN_QUOTA_API = "zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/usage"
 USAGE_COMMAND_TIMEOUT_SECONDS = 45
+DISABLED_SUBAGENT_MODELS_ENV = "CLAUDEX_DISABLED_SUBAGENT_MODELS"
 
 
 def config_path(environment: dict[str, str], requested: Path | None = None) -> Path:
@@ -78,10 +79,31 @@ def valid_choice(choice: Any) -> bool:
     )
 
 
-def configuration_key(config: dict[str, Any]) -> str:
-    """Bind cached capacity decisions to the exact routing configuration."""
+def disabled_subagent_models(environment: dict[str, str]) -> frozenset[str]:
+    """Parse the terminal-local, comma-separated exact model denylist."""
+    models = {
+        item.strip()
+        for item in environment.get(DISABLED_SUBAGENT_MODELS_ENV, "").split(",")
+        if item.strip()
+    }
+    if any(
+        not model.isascii() or not all("!" <= char <= "~" for char in model)
+        for model in models
+    ):
+        raise ValueError(f"{DISABLED_SUBAGENT_MODELS_ENV} contains an invalid model ID")
+    return frozenset(models)
+
+
+def configuration_key(
+    config: dict[str, Any], disabled_models: frozenset[str] = frozenset()
+) -> str:
+    """Bind cached capacity decisions to the config and terminal model policy."""
     compact = json.dumps(
-        {"cacheVersion": ROUTING_CACHE_VERSION, "config": config},
+        {
+            "cacheVersion": ROUTING_CACHE_VERSION,
+            "config": config,
+            "disabledSubagentModels": sorted(disabled_models),
+        },
         sort_keys=True,
         separators=(",", ":"),
     ).encode()
@@ -184,7 +206,9 @@ def capacity_priority(quota: dict[str, Any], config_index: int) -> tuple[float, 
 
 
 def routing_summary(
-    report: Any, config: dict[str, Any] | None = None
+    report: Any,
+    config: dict[str, Any] | None = None,
+    disabled_models: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     """Select configured workers when they have capacity, otherwise fallback."""
     config = config or load_config(config_path(os.environ))
@@ -197,21 +221,24 @@ def routing_summary(
             if isinstance(quota_name, str) and quota_name
             else status(True, None, "unmetered")
         )
-        providers[provider["id"]] = {**quota, **worker(provider)}
-        if quota["available"]:
+        disabled = provider["defaultModel"] in disabled_models
+        effective = status(False, None, "disabled-for-terminal") if disabled else quota
+        providers[provider["id"]] = {**effective, **worker(provider), "disabled": disabled}
+        if quota["available"] and not disabled:
             candidates.append((capacity_priority(quota, index), worker(provider)))
     selected = [
         item for _, item in sorted(candidates, key=lambda candidate: candidate[0])
     ]
-    fallback_active = not selected
+    fallback_active = not selected and config["fallback"]["model"] not in disabled_models
     if fallback_active:
         selected = [{"provider": "fallback", **config["fallback"]}]
     return {
         "providers": providers,
         "selected_agents": [item["agent"] for item in selected],
         "selected_workers": selected,
-        "preferred_worker": selected[0],
+        "preferred_worker": selected[0] if selected else None,
         "fallback_active": fallback_active,
+        "disabled_subagent_models": sorted(disabled_models),
     }
 
 
@@ -230,7 +257,12 @@ def hook_output(summary: dict[str, Any]) -> dict[str, Any]:
         "including nested launches from a worker; never default a nested launch to generic claude "
         "or blindly inherit its parent route. If the user names a "
         "model matching model_prefixes, dynamically select that provider and pass the exact "
-        "requested model. This current routing context overrides stale auto-memory about worker "
+        "requested model only when it is not in disabled_subagent_models. The terminal-local "
+        "disabled_subagent_models list is an absolute SubAgent denylist: never launch, inherit, "
+        "dynamically select, or reuse one of those exact models, even when the user names it. If "
+        "selected_workers is empty, continue safely in the main session and report that no "
+        "allowed SubAgent model is available. This current routing context overrides stale "
+        "auto-memory about worker "
         "model policy; do not inspect such memory before delegating. Use Claude Code's built-in "
         "parameterless advisor tool according to its standard policy; it is independent of provider "
         "capacity and already receives the complete conversation history. "
@@ -765,21 +797,30 @@ def cache_seconds(environment: dict[str, str]) -> int:
 
 
 def fallback_summary(
-    reason: str, config: dict[str, Any] | None = None
+    reason: str,
+    config: dict[str, Any] | None = None,
+    disabled_models: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     """Prefer the configured native fallback when usage cannot be established."""
     config = config or load_config(config_path(os.environ))
-    providers = {
-        provider["id"]: {**status(False, None, reason), **worker(provider)}
-        for provider in config["providers"]
-    }
+    providers = {}
+    for provider in config["providers"]:
+        disabled = provider["defaultModel"] in disabled_models
+        unavailable_reason = "disabled-for-terminal" if disabled else reason
+        providers[provider["id"]] = {
+            **status(False, None, unavailable_reason),
+            **worker(provider),
+            "disabled": disabled,
+        }
     fallback = {"provider": "fallback", **config["fallback"]}
+    selected = [] if fallback["model"] in disabled_models else [fallback]
     return {
         "providers": providers,
-        "selected_agents": [fallback["agent"]],
-        "selected_workers": [fallback],
-        "preferred_worker": fallback,
-        "fallback_active": True,
+        "selected_agents": [item["agent"] for item in selected],
+        "selected_workers": selected,
+        "preferred_worker": selected[0] if selected else None,
+        "fallback_active": bool(selected),
+        "disabled_subagent_models": sorted(disabled_models),
     }
 
 
@@ -798,9 +839,10 @@ def main() -> int:
     now = time.time()
     try:
         config = load_config(config_path(os.environ, arguments.config))
+        disabled_models = disabled_subagent_models(os.environ)
     except (OSError, ValueError, json.JSONDecodeError) as error:
         raise SystemExit(f"claudex routing configuration error: {error}") from error
-    key = configuration_key(config)
+    key = configuration_key(config, disabled_models)
     cache_path = Path.home() / ".cache/claudex/usage-routing.json"
     quota_cache_path = qwen_quota_cache_path(os.environ)
     ttl = 0 if arguments.no_cache or arguments.input else cache_seconds(os.environ)
@@ -822,11 +864,11 @@ def main() -> int:
                     now,
                 )
             )
-            summary = routing_summary(report, config)
+            summary = routing_summary(report, config, disabled_models)
             if ttl > 0:
                 write_cache(cache_path, summary, now, key)
         except (OSError, ValueError, subprocess.SubprocessError, json.JSONDecodeError):
-            summary = fallback_summary("usage-unavailable", config)
+            summary = fallback_summary("usage-unavailable", config, disabled_models)
     print(json.dumps(hook_output(summary), ensure_ascii=False, separators=(",", ":")))
     return 0
 

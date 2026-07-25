@@ -5,6 +5,8 @@ use reqwest::Client;
 use serde_json::json;
 use support::{Adapter, post_json};
 
+const DISABLED_MODELS_HEADER: &str = "x-claudex-disabled-subagent-models";
+
 async fn launch_explicit_effort_agent(
     client: &Client,
     url: &str,
@@ -235,4 +237,84 @@ async fn unmatched_subagent_ignores_claude_codes_fallback_model() {
         assert_eq!(child["model"], "test-main-model");
         assert_eq!(child["content"][0]["text"], "low");
     }
+}
+
+#[tokio::test]
+async fn terminal_policy_denies_only_subagents_and_isolates_explicit_models() {
+    let adapter = Adapter::start().await;
+    let client = Client::new();
+    let url = format!("{}/v1/messages", adapter.base_url);
+
+    let main = client
+        .post(&url)
+        .header(DISABLED_MODELS_HEADER, "test-main-model")
+        .json(&json!({
+            "model":"test-main-model", "system":"main request",
+            "messages":[{"role":"user","content":"Say OK"}]
+        }))
+        .send()
+        .await
+        .expect("send allowed main request");
+    assert!(main.status().is_success());
+
+    let denied_default = denied_child_response(
+        &client,
+        &url,
+        "test-main-model",
+        "test-main-model",
+        "REPORT_EFFORT",
+    )
+    .await;
+    assert!(denied_default.contains("disabled for this terminal"));
+
+    let user_id = r#"{"session_id":"denied-explicit-model"}"#;
+    let prompt = launch_explicit_effort_agent(&client, &url, user_id, "high", true).await;
+    let denied_explicit = denied_child_response(
+        &client,
+        &url,
+        "claude-opus-4-8",
+        "test-sonnet-model",
+        &prompt,
+    )
+    .await;
+    assert!(denied_explicit.contains("CLAUDEX_DISABLED_SUBAGENT_MODELS"));
+
+    let allowed_user_id = r#"{"session_id":"allowed-explicit-model"}"#;
+    let allowed_prompt =
+        launch_explicit_effort_agent(&client, &url, allowed_user_id, "high", true).await;
+    let allowed = child_request(
+        &client,
+        &url,
+        allowed_user_id,
+        &allowed_prompt,
+        "test-sonnet-model",
+    )
+    .await;
+    assert!(
+        allowed["content"][0]["text"]
+            .as_str()
+            .is_some_and(|text| text.starts_with("claude-opus-4-8|high|"))
+    );
+}
+
+async fn denied_child_response(
+    client: &Client,
+    url: &str,
+    disabled_model: &str,
+    requested_model: &str,
+    prompt: &str,
+) -> String {
+    let response = client
+        .post(url)
+        .header(DISABLED_MODELS_HEADER, disabled_model)
+        .json(&json!({
+            "model":requested_model,
+            "system":[{"type":"text","text":"cc_is_subagent=true"}],
+            "messages":[{"role":"user","content":prompt}]
+        }))
+        .send()
+        .await
+        .expect("send denied child request");
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_GATEWAY);
+    response.text().await.expect("read denied child response")
 }

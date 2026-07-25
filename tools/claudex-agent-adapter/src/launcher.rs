@@ -12,7 +12,9 @@ use std::{
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
-use crate::{ADAPTER_PROTOCOL_VERSION, agent_backend::BackendRoute, working_directory};
+use crate::{
+    ADAPTER_PROTOCOL_VERSION, agent_backend::BackendRoute, subagent_policy, working_directory,
+};
 
 mod daemon_process;
 
@@ -114,9 +116,11 @@ pub async fn run_claude(
     let base_url = ensure_config_running(&config).await?;
     let program = std::env::var_os("CLAUDEX_CLAUDE_PROGRAM").unwrap_or_else(|| "claude".into());
     let cwd = std::env::current_dir().context("resolve Claude Code working directory")?;
+    let disabled_subagent_models = subagent_policy::current_environment_header()?;
     let custom_headers = working_directory::custom_headers(
         std::env::var_os("ANTHROPIC_CUSTOM_HEADERS").as_deref(),
         &cwd,
+        disabled_subagent_models.as_deref(),
     );
     let mut command = Command::new(program);
     if !inherit_claude_model {

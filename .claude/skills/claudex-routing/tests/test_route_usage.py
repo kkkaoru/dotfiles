@@ -190,6 +190,20 @@ class ConfigurationTests(unittest.TestCase):
         config["providers"][0]["effort"] = "xhigh"
         self.assertNotEqual(route_usage.configuration_key(config), original)
 
+    def test_parses_and_keys_terminal_local_disabled_models(self) -> None:
+        disabled = route_usage.disabled_subagent_models(
+            {route_usage.DISABLED_SUBAGENT_MODELS_ENV: " grok-4.5,gpt-5.6-sol,grok-4.5 "}
+        )
+        self.assertEqual(disabled, frozenset({"gpt-5.6-sol", "grok-4.5"}))
+        self.assertNotEqual(
+            route_usage.configuration_key(configuration()),
+            route_usage.configuration_key(configuration(), disabled),
+        )
+        with self.assertRaises(ValueError):
+            route_usage.disabled_subagent_models(
+                {route_usage.DISABLED_SUBAGENT_MODELS_ENV: "model with spaces"}
+            )
+
 
 class RoutingTests(unittest.TestCase):
     def test_grok_worker_avoids_terminal_pipe_deadlocks(self) -> None:
@@ -330,6 +344,34 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(fallback["selected_agents"], ["claudex-sonnet"])
         self.assertTrue(fallback["fallback_active"])
 
+    def test_disabled_models_are_excluded_without_deleting_provider_config(self) -> None:
+        disabled = frozenset({"gpt-5.6-sol", "grok-4.5"})
+        summary = route_usage.routing_summary(report(), configuration(), disabled)
+        self.assertEqual(summary["selected_agents"], ["claudex-qwen"])
+        self.assertEqual(summary["disabled_subagent_models"], sorted(disabled))
+        self.assertEqual(summary["providers"]["codex"]["reason"], "disabled-for-terminal")
+        self.assertTrue(summary["providers"]["grok"]["disabled"])
+
+        unavailable = report(codex=100, grok=100)
+        unavailable[-1] = qwen_report(None, available=False)
+        fallback = route_usage.routing_summary(
+            unavailable,
+            configuration(),
+            frozenset({"claude-sonnet-5"}),
+        )
+        self.assertEqual(fallback["selected_workers"], [])
+        self.assertIsNone(fallback["preferred_worker"])
+        self.assertFalse(fallback["fallback_active"])
+
+    def test_failure_fallback_also_honors_terminal_denylist(self) -> None:
+        summary = route_usage.fallback_summary(
+            "usage-unavailable",
+            configuration(),
+            frozenset({"claude-sonnet-5"}),
+        )
+        self.assertEqual(summary["selected_agents"], [])
+        self.assertEqual(summary["disabled_subagent_models"], ["claude-sonnet-5"])
+
     def test_prioritizes_the_provider_with_the_most_known_headroom(self) -> None:
         summary = route_usage.routing_summary(report(codex=80, grok=10, qwen_used=2))
         self.assertEqual(
@@ -360,6 +402,8 @@ class RoutingTests(unittest.TestCase):
         self.assertIn("every Agent/Task launch", context)
         self.assertIn("nested launches from a worker", context)
         self.assertIn("claudex_model and claudex_effort", context)
+        self.assertIn("absolute SubAgent denylist", context)
+        self.assertIn("even when the user names it", context)
         self.assertIn("complete tool set and permission context", context)
         self.assertIn("never add an implicit read-only", context)
         self.assertIn("background execution would auto-deny", context)
@@ -1047,6 +1091,23 @@ class MainTests(unittest.TestCase):
         output = self.run_main("--no-cache")
         self.assertIn("usage-unavailable", output)
         self.assertIn("claudex-sonnet", output)
+
+    @mock.patch("route_usage.collect_usage", return_value=report())
+    @mock.patch("route_usage.read_cache", return_value=None)
+    def test_main_applies_each_terminal_environment_to_selection_and_cache_key(
+        self, read_cache: mock.Mock, _collect_usage: mock.Mock
+    ) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {route_usage.DISABLED_SUBAGENT_MODELS_ENV: "gpt-5.6-sol,grok-4.5"},
+        ):
+            output = self.run_main("--no-cache")
+        context = json.loads(output)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn('"selected_agents":["claudex-qwen"]', context)
+        expected_key = route_usage.configuration_key(
+            configuration(), frozenset({"gpt-5.6-sol", "grok-4.5"})
+        )
+        self.assertEqual(read_cache.call_args.args[3], expected_key)
 
     def test_module_entrypoint_exits_with_main_status(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
