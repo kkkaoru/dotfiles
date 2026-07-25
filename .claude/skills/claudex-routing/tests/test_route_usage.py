@@ -192,6 +192,15 @@ class ConfigurationTests(unittest.TestCase):
 
 
 class RoutingTests(unittest.TestCase):
+    def test_grok_worker_avoids_terminal_pipe_deadlocks(self) -> None:
+        grok_agent = (
+            Path(__file__).parents[3] / "agents" / "claudex-grok.md"
+        ).read_text(encoding="utf-8")
+        instructions = " ".join(grok_agent.split())
+        self.assertIn("Do not pass long heredocs", instructions)
+        self.assertIn("dedicated write/edit", instructions)
+        self.assertIn("instead of waiting indefinitely", instructions)
+
     def test_orchestration_artifacts_keep_delegation_as_the_standing_default(
         self,
     ) -> None:

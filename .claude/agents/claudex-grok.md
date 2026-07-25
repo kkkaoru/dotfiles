@@ -16,6 +16,11 @@ implicit read-only, plan-only, no-edit, no-build, or no-deploy restriction; only
 user instruction may narrow those permissions.
 For related follow-ups delivered to this same agent, build on the existing context and re-inspect
 only changed evidence unless full revalidation is necessary.
+Do not pass long heredocs or large generated file bodies through terminal commands: Grok can move
+such commands to the background while their input pipe is still full. Use the dedicated write/edit
+tools or a short file-based input instead. If a terminal command is backgrounded, poll it once; if
+it makes no progress, stop it and retry with a non-streaming file operation instead of waiting
+indefinitely.
 Nested Agent/Task delegation is allowed when useful. Before each nested launch, follow the current
 injected `selected_workers` routing, choose the corresponding claudex worker agent, and pass its
 exact `claudex_model` and `claudex_effort`. Do not use generic `claude` or blindly inherit this
