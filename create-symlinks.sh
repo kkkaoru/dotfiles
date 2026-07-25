@@ -65,6 +65,11 @@ for name in agents commands hooks skills; do
   fi
 done
 
+# Git's config-based hooks invoke this stable per-user path from every repository.
+mkdir -p "${HOME}/.local/bin"
+link_path "${DOTPATH}/tools/git-hooks/dotfiles-git-quality" \
+  "${HOME}/.local/bin/dotfiles-git-quality"
+
 # .config apps
 mkdir -p "${HOME}/.config"
 if [ -d "${DOTPATH}/.config" ]; then

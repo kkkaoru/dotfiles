@@ -34,3 +34,12 @@
 	path = ~/.gitconfig.local
 [url "git@github.com:"]
 	insteadOf = https://github.com/
+[hook "staged-whitespace"]
+	event = pre-commit
+	command = git diff --cached --check
+[hook "dotfiles-pre-commit"]
+	event = pre-commit
+	command = ~/.local/bin/dotfiles-git-quality pre-commit
+[hook "dotfiles-pre-push"]
+	event = pre-push
+	command = ~/.local/bin/dotfiles-git-quality pre-push

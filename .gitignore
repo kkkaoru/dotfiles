@@ -18,6 +18,8 @@
 .config/zed/{prompts,conversations,themes}
 
 node_modules
+__pycache__/
+*.py[cod]
 !.gitkeep
 .hyper_plugins/cache/*
 !.hyper_plugins/cache/.gitkeep
@@ -37,6 +39,8 @@ node_modules
 !.claude/.gitkeep
 !.claude/CLAUDE.md
 !.claude/settings.json
+!.claude/agents/
+!.claude/agents/**
 !.claude/commands
 !.claude/commands/*
 !.claude/hooks/

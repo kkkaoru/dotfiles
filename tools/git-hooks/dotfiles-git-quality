@@ -1,0 +1,16 @@
+#!/bin/sh
+
+set -eu
+
+# Resolve the installed symlink so the importable Python module stays beside this launcher.
+launcher_path=$0
+if [ -L "$launcher_path" ]; then
+  link_target=$(readlink "$launcher_path")
+  case "$link_target" in
+    /*) launcher_path=$link_target ;;
+    *) launcher_path=$(dirname "$launcher_path")/$link_target ;;
+  esac
+fi
+launcher_directory=$(unset CDPATH; cd -- "$(dirname -- "$launcher_path")" && pwd)
+
+exec python3 "$launcher_directory/quality_hook.py" "$@"
