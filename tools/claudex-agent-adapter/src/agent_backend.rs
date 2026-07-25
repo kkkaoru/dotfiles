@@ -11,7 +11,6 @@ use crate::{
 };
 
 mod routes;
-
 use routes::{RoutedBackend, RoutedBackends};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -22,7 +21,6 @@ pub enum BackendKind {
     CopilotAcp,
     GrokAcp,
 }
-
 impl BackendKind {
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -33,13 +31,11 @@ impl BackendKind {
         }
     }
 }
-
 impl fmt::Display for BackendKind {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(self.as_str())
     }
 }
-
 impl FromStr for BackendKind {
     type Err = anyhow::Error;
 
@@ -55,7 +51,6 @@ impl FromStr for BackendKind {
         }
     }
 }
-
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AcpLaunch {
@@ -68,30 +63,34 @@ pub struct AcpLaunch {
 pub struct BackendRoute {
     pub model: String,
     pub backend: BackendKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_context_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub model_prefixes: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub acp: Option<AcpLaunch>,
 }
-
 impl BackendRoute {
     pub fn new(model: impl Into<String>, backend: BackendKind) -> Self {
         Self {
             model: model.into(),
             backend,
+            max_context_tokens: None,
             model_prefixes: Vec::new(),
             acp: None,
         }
     }
 
     pub fn description(&self) -> String {
-        if self.model_prefixes.is_empty() && self.acp.is_none() {
+        if self.max_context_tokens.is_none()
+            && self.model_prefixes.is_empty()
+            && self.acp.is_none()
+        {
             return format!("{}={}", self.model, self.backend);
         }
         serde_json::to_string(self).expect("backend route must serialize")
     }
 }
-
 impl FromStr for BackendRoute {
     type Err = anyhow::Error;
 
@@ -105,7 +104,6 @@ impl FromStr for BackendRoute {
         Ok(Self::new(model, backend.parse()?))
     }
 }
-
 pub enum AgentBackend {
     Codex(Arc<AppServer>),
     Copilot(Arc<CopilotAcp>),
@@ -113,13 +111,11 @@ pub enum AgentBackend {
     Grok(Arc<GrokAcp>),
     Routed(RoutedBackends),
 }
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum TurnCancellation {
     Settled,
     Unsupported,
 }
-
 impl AgentBackend {
     pub async fn spawn(kind: BackendKind, model: &str) -> Result<Arc<Self>> {
         match kind {
@@ -239,6 +235,12 @@ impl AgentBackend {
         }
     }
 
+    pub(crate) fn max_context_tokens_for_model(&self, model: &str) -> Option<u64> {
+        match self {
+            Self::Routed(routes) => routes.max_context_tokens_for_model(model),
+            Self::Codex(_) | Self::ConfiguredAcp(_) | Self::Copilot(_) | Self::Grok(_) => None,
+        }
+    }
     pub async fn request(&self, method: &str, params: Value) -> Result<Value> {
         match self {
             Self::Codex(server) => server.request(method, params).await,
@@ -274,7 +276,6 @@ impl AgentBackend {
             Self::Routed(_) => bail!("routed backend does not support request `{method}`"),
         }
     }
-
     pub async fn request_detached(self: &Arc<Self>, method: &str, mut params: Value) -> Result<()> {
         match self.as_ref() {
             Self::Codex(server) => server.request_detached(method, params).await,
@@ -300,7 +301,6 @@ impl AgentBackend {
             Self::Routed(_) => bail!("routed backend does not support request `{method}`"),
         }
     }
-
     pub(crate) async fn cancel_turn(&self, thread_id: &str) -> Result<TurnCancellation> {
         match self {
             Self::Codex(_) => Ok(TurnCancellation::Unsupported),
@@ -326,7 +326,6 @@ impl AgentBackend {
             }
         }
     }
-
     pub async fn respond(&self, id: Value, result: Value) -> Result<()> {
         match self {
             Self::Codex(server) => server.respond(id, result).await,
@@ -364,7 +363,6 @@ impl AgentBackend {
         }
     }
 }
-
 async fn request_acp_session(
     route: &Arc<RoutedBackend>,
     method: &str,

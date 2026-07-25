@@ -28,6 +28,8 @@ struct Provider {
     #[serde(default)]
     usage_provider: Option<String>,
     #[serde(default)]
+    max_context_tokens: Option<u64>,
+    #[serde(default)]
     model_prefixes: Vec<String>,
     backend: BackendKind,
     #[serde(default)]
@@ -181,6 +183,9 @@ fn validate_providers(providers: &[Provider]) -> Result<()> {
         if provider.model_prefixes.iter().any(String::is_empty) {
             bail!("modelPrefixes must not contain an empty value");
         }
+        if provider.max_context_tokens == Some(0) {
+            bail!("maxContextTokens must be greater than zero");
+        }
         if !provider
             .model_prefixes
             .iter()
@@ -218,6 +223,7 @@ impl Provider {
         BackendRoute {
             model: self.default_model,
             backend: self.backend,
+            max_context_tokens: self.max_context_tokens,
             model_prefixes: self.model_prefixes,
             acp: self.acp,
         }
@@ -272,6 +278,21 @@ mod tests {
         let parsed: ProviderConfig = serde_json::from_str(&json).unwrap();
         let loaded = validate(parsed).unwrap();
         assert_eq!(loaded.routes[0].acp.as_ref().unwrap().program, "new-acp");
+        assert_eq!(loaded.routes[0].max_context_tokens, None);
+    }
+
+    #[test]
+    fn accepts_provider_context_limit() {
+        let path = tempfile::tempdir().unwrap().path().join("providers.json");
+        std::fs::write(
+            &path,
+            config(
+                r#"{"id":"p","agent":"worker","defaultModel":"new-1","effort":"high","enabled":true,"maxContextTokens":262144,"modelPrefixes":["new-"],"backend":"codex-app-server"}"#,
+            ),
+        )
+        .unwrap();
+        let loaded = load(&path).unwrap();
+        assert_eq!(loaded.routes[0].max_context_tokens, Some(262_144));
     }
 
     #[test]
@@ -291,6 +312,9 @@ mod tests {
             ),
             config(
                 r#"{"id":"p","agent":"w","defaultModel":"m","effort":"h","backend":"configured-acp","acp":{"program":"provider","arguments":[]}}"#,
+            ),
+            config(
+                r#"{"id":"p","agent":"w","defaultModel":"m","effort":"h","enabled":true,"maxContextTokens":0,"backend":"grok-acp"}"#,
             ),
         ];
         for json in invalid {

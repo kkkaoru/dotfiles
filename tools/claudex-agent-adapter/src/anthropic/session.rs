@@ -40,6 +40,7 @@ impl Bridge {
     ) -> Result<ActiveTurn> {
         self.remove_failed_model_sessions(&self.request_model(request))
             .await;
+        let model = self.request_model(request);
         let advisor_model = self
             .advisor_model_override
             .clone()
@@ -61,7 +62,7 @@ impl Bridge {
             .last()
             .map(|message| collect_tool_results(std::slice::from_ref(message)))
             .unwrap_or_default();
-        let selected = self
+        let mut selected = self
             .select_session(
                 request,
                 signature,
@@ -70,6 +71,19 @@ impl Bridge {
                 &tool_results,
             )
             .await?;
+        if let Some(limit) = self.app.max_context_tokens_for_model(&model) {
+            if input_tokens >= limit {
+                tracing::warn!(
+                    limit,
+                    input_tokens,
+                    model = %model,
+                    "claudex: preemptively starting fresh thread before context limit"
+                );
+                selected = self
+                    .start_new_session(request, &selected, advisor_model.as_deref(), collaborator_model.as_deref())
+                    .await?;
+            }
+        }
         self.start_selected_turn(
             request,
             input_tokens,

@@ -237,6 +237,46 @@ impl RoutedBackends {
             .expect("routed backend index must exist")
     }
 
+    pub(super) fn max_context_tokens_for_model(&self, model: &str) -> Option<u64> {
+        let exact_limit = self
+            .configured
+            .iter()
+            .find(|route| route.model == model)
+            .and_then(|route| route.template.max_context_tokens)
+            .map(|limit| (usize::MAX, limit));
+        let prefix_limit = self
+            .configured
+            .iter()
+            .map(|route| {
+                route
+                    .template
+                    .model_prefixes
+                    .iter()
+                    .filter(|prefix| model.starts_with(prefix.as_str()))
+                    .map(String::len)
+                    .max()
+                    .map(|len| (len, route.template.max_context_tokens))
+            })
+            .flatten()
+            .filter(|(_, limit)| limit.is_some())
+            .max_by_key(|(len, _)| *len)
+            .and_then(|(_, limit)| limit);
+        if exact_limit.is_some() {
+            return exact_limit.map(|(_, limit)| limit);
+        }
+        if let Some(dynamic) = self
+            .dynamic
+            .lock()
+            .expect("dynamic routes poisoned")
+            .iter()
+            .find(|route| route.model == model)
+            .and_then(|route| route.template.max_context_tokens)
+        {
+            return Some(dynamic);
+        }
+        prefix_limit
+    }
+
     pub(super) fn find(&self, model: &str) -> Option<Arc<RoutedBackend>> {
         self.configured
             .iter()

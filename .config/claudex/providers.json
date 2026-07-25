@@ -7,6 +7,7 @@
       "agent": "claudex-gpt",
       "defaultModel": "gpt-5.3-codex-spark",
       "effort": "high",
+      "maxContextTokens": 262144,
       "enabled": true,
       "usageProvider": "codex",
       "modelPrefixes": ["gpt"],

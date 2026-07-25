@@ -86,6 +86,7 @@ mod tests {
         let route = BackendRoute {
             model: "missing-acp".to_owned(),
             backend: BackendKind::ConfiguredAcp,
+            max_context_tokens: None,
             model_prefixes: Vec::new(),
             acp: Some(AcpLaunch {
                 program: "/definitely/missing/acp".to_owned(),

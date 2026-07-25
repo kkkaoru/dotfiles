@@ -356,6 +356,12 @@ CLAUDEX_DISABLED_SUBAGENT_MODELS=gpt-5.6,grok-4.5 claudex
 `defaultModel`、対応するworker frontmatter、呼び出し時の `claudex_model` を同じ値へ
 更新してください。テストは共有設定とAgent定義の不一致を拒否します。
 
+`maxContextTokens` をproviderごとに設定すると、`request` の概算入力トークン数が上限に達した時点で
+新しいCodexスレッドを先に開始し、`contextWindowExceeded` を事前回避できます。未設定は現行どおり
+既定値なし（制御なし）として扱われます。`gpt-5.3-codex-spark` は、
+実運用ログ上 `max_chars=1048576` が上限だったため、`maxContextTokens` は
+`262144`（`1048576 / 4`）を採用しています。
+
 ### providerを無効化
 
 ```json
