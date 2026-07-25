@@ -216,13 +216,9 @@ impl RoutedBackends {
     }
 
     pub(super) fn is_alive(&self) -> bool {
-        self.configured.iter().all(|route| route.is_alive())
-            && self
-                .dynamic
-                .lock()
-                .expect("dynamic routes poisoned")
-                .iter()
-                .all(|route| route.is_alive())
+        // Routes restart lazily. Marking the whole HTTP daemon unavailable for one failed child
+        // would make the launcher terminate unrelated in-flight model streams.
+        true
     }
 
     pub(super) fn model_is_alive(&self, model: &str) -> bool {

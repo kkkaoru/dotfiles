@@ -10,7 +10,7 @@ use std::{
 use agent_client_protocol::{self as acp, Agent as _};
 use anyhow::{Result, anyhow};
 use serde_json::{Value, json};
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::oneshot;
 
 use super::{connection::AcpProvider, prompt};
 use crate::anthropic::subscription_request::cwd_from_system;
@@ -26,7 +26,6 @@ pub(super) struct Task {
     pub(super) instructions: Rc<RefCell<HashMap<String, String>>>,
     pub(super) permit: tokio::sync::OwnedSemaphorePermit,
     pub(super) response: oneshot::Sender<Result<Value>>,
-    pub(super) driver_faults: mpsc::UnboundedSender<&'static str>,
 }
 
 impl Task {
@@ -42,23 +41,9 @@ impl Task {
             )
             .await;
             drop(self.permit);
-            let reason = recycle_reason(self.response.is_closed(), &result);
             let _ = self.response.send(result);
-            if let Some(reason) = reason {
-                let _ = self.driver_faults.send(reason);
-            }
         });
     }
-}
-
-fn recycle_reason(requester_disconnected: bool, result: &Result<Value>) -> Option<&'static str> {
-    if requester_disconnected {
-        return Some("session requester disconnected");
-    }
-    result
-        .as_ref()
-        .is_err_and(|error| error.to_string().contains("timed out"))
-        .then_some("session setup timed out")
 }
 
 pub(super) async fn create(

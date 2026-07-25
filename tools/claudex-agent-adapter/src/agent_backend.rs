@@ -375,6 +375,9 @@ async fn request_acp_session(
     let Err(error) = first else {
         return first;
     };
+    if backend.is_alive() {
+        return Err(error);
+    }
     tracing::warn!(
         ?error,
         "restarting ACP provider after session creation failed"

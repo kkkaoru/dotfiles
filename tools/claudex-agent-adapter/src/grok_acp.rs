@@ -290,7 +290,6 @@ async fn drive_commands(
     let instructions = Rc::new(RefCell::new(HashMap::<String, String>::new()));
     let active_turns = Rc::new(RefCell::new(HashMap::new()));
     let invalidated_sessions = Rc::new(RefCell::new(HashSet::new()));
-    let (driver_faults, mut driver_faults_rx) = mpsc::unbounded_channel();
     let (turns, turn_receiver) = mpsc::channel(TURN_QUEUE_CAPACITY);
     let turn_worker = tokio::task::spawn_local(drive_turns(
         provider,
@@ -301,17 +300,7 @@ async fn drive_commands(
         Rc::clone(&active_turns),
         Rc::clone(&invalidated_sessions),
     ));
-    let faulted = loop {
-        let command = tokio::select! {
-            fault = driver_faults_rx.recv() => {
-                tracing::warn!(provider = provider.label(), ?fault, "recycling ACP provider");
-                break true;
-            }
-            command = commands.recv() => command,
-        };
-        let Some(command) = command else {
-            break false;
-        };
+    while let Some(command) = commands.recv().await {
         match command {
             DriverCommand::CreateSession {
                 params,
@@ -331,7 +320,6 @@ async fn drive_commands(
                     instructions: Rc::clone(&instructions),
                     permit,
                     response,
-                    driver_faults: driver_faults.clone(),
                 }
                 .spawn();
             }
@@ -362,11 +350,8 @@ async fn drive_commands(
                 response,
             } => cancel_turn(&active_turns, &session_id, response),
         }
-    };
-    drop(turns);
-    if faulted {
-        turn_worker.abort();
     }
+    drop(turns);
     let _ = turn_worker.await;
 }
 

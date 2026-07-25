@@ -88,7 +88,7 @@ mod tests {
         assert!(routes.route(0).get().await.is_err());
         assert!(!routes.model_is_alive("missing-acp"));
         assert!(routes.model_is_alive("unconfigured-model"));
-        assert!(!routes.is_alive());
+        assert!(routes.is_alive());
     }
 
     fn route(model: &str, backend: BackendKind) -> BackendRoute {

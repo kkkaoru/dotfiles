@@ -50,8 +50,31 @@ async fn lazy_routes_cover_provider_entry_points_and_failed_startup_state() {
 
     exercise_dynamic_route().await;
     exercise_provider_restart(home.path()).await;
+    exercise_nonfatal_session_failure(home.path()).await;
     exercise_failed_route_health().await;
     drop(home);
+}
+
+async fn exercise_nonfatal_session_failure(root: &Path) {
+    let backend = AgentBackend::spawn_routes(&[route("fail-session", BackendKind::GrokAcp)]);
+    for _ in 0..2 {
+        assert!(
+            backend
+                .request("thread/start", json!({"model":"fail-session"}))
+                .await
+                .is_err()
+        );
+    }
+    assert_eq!(backend.started_models(), ["fail-session"]);
+    let trace = fs::read_to_string(root.join("grok-acp-mock.jsonl"))
+        .expect("read nonfatal session failure trace");
+    assert_eq!(
+        trace
+            .matches("\"arguments\":[\"--model\",\"fail-session\"")
+            .count(),
+        1,
+        "a session-level failure must not restart its live provider"
+    );
 }
 
 async fn exercise_provider_restart(root: &Path) {
@@ -176,7 +199,7 @@ async fn exercise_failed_route_health() {
             .is_err()
     );
     assert!(failed.started_models().is_empty());
-    assert!(!failed.is_alive());
+    assert!(failed.is_alive());
 
     let bridge = Arc::new(Bridge::new_with_backend(failed, "bad-version".to_owned()));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -192,10 +215,10 @@ async fn exercise_failed_route_health() {
     let health = reqwest::get(format!("http://{address}/health"))
         .await
         .unwrap();
-    assert_eq!(health.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(health.status(), reqwest::StatusCode::OK);
     assert_eq!(
         health.json::<serde_json::Value>().await.unwrap()["status"],
-        "unavailable"
+        "ok"
     );
     server.abort();
 }
