@@ -118,14 +118,18 @@ pub(super) async fn start(
         }
         // Mark the provider dead before failed RPCs wake their callers. Otherwise session/new can
         // observe a closed connection while the driver still appears alive and skip route recovery.
-        alive.store(false, Ordering::Relaxed);
-        let _ = io_stopped.send(());
+        mark_io_stopped(&alive, io_stopped);
     });
     if let Err(error) = initialize(provider, &connection).await {
         terminate_process_group(process_group);
         return Err(error);
     }
     Ok((connection, child, io_stopped_rx, process_group))
+}
+
+fn mark_io_stopped(alive: &AtomicBool, io_stopped: oneshot::Sender<()>) {
+    alive.store(false, Ordering::Relaxed);
+    let _ = io_stopped.send(());
 }
 
 pub(super) fn terminate_process_group(process_group: u32) {
@@ -190,4 +194,18 @@ async fn initialize(provider: AcpProvider, connection: &acp::ClientSideConnectio
             })?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn marks_provider_dead_before_notifying_the_driver() {
+        let alive = AtomicBool::new(true);
+        let (stopped, mut stopped_rx) = oneshot::channel();
+        mark_io_stopped(&alive, stopped);
+        assert!(!alive.load(Ordering::Relaxed));
+        assert_eq!(stopped_rx.try_recv(), Ok(()));
+    }
 }
