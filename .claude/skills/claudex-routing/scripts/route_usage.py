@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Emit sanitized routing context from Codexbar and provider CLI usage."""
+"""Emit sanitized routing context from Codexbar and Qwen Cloud quota."""
 
 from __future__ import annotations
 
@@ -8,17 +8,29 @@ import hashlib
 import json
 import math
 import os
-import re
+import shlex
 import subprocess
 import tempfile
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 DEFAULT_CACHE_SECONDS = 300
-REPOSITORY_CONFIG = Path(__file__).parents[4] / ".config/claudex/providers.json"
+ROUTING_CACHE_VERSION = 2
+QWEN_QUOTA_CACHE_SECONDS = 60 * 60
+QWEN_REQUEST_TIMEOUT_SECONDS = 5
+QWEN_SUBPROCESS_GRACE_SECONDS = 2
+REPOSITORY_ROOT = Path(__file__).parents[4]
+REPOSITORY_CONFIG = REPOSITORY_ROOT / ".config/claudex/providers.json"
+DEFAULT_QWEN_CURL = REPOSITORY_ROOT / "tmp/curl.txt"
 QWEN_USAGE_PROVIDER = "qwen"
-QWEN_USAGE_FILENAME = "usage.json"
+QWEN_CONSOLE_HOST = "cs-data.qwencloud.com"
+QWEN_CONSOLE_PATH = "/data/api.json"
+QWEN_CONSOLE_PRODUCT = "sfm_bailian"
+QWEN_CONSOLE_ACTION = "IntlBroadScopeAspnGateway"
+QWEN_QUOTA_API = "zeldaHttp.apikeyMgr./tokenplan/personal/api/v2/usage"
 USAGE_COMMAND_TIMEOUT_SECONDS = 45
 
 
@@ -68,7 +80,11 @@ def valid_choice(choice: Any) -> bool:
 
 def configuration_key(config: dict[str, Any]) -> str:
     """Bind cached capacity decisions to the exact routing configuration."""
-    compact = json.dumps(config, sort_keys=True, separators=(",", ":")).encode()
+    compact = json.dumps(
+        {"cacheVersion": ROUTING_CACHE_VERSION, "config": config},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
     return hashlib.sha256(compact).hexdigest()
 
 
@@ -121,44 +137,19 @@ def provider_status(report: Any, provider: str) -> dict[str, Any]:
 
 
 def explicitly_reported_status(entry: dict[str, Any]) -> dict[str, Any]:
-    """Read availability and optional local usage from a non-Codexbar source."""
+    """Read availability and optional quota usage from a non-Codexbar source."""
     available = entry.get("available")
     if not isinstance(available, bool):
         return status(False, None, "unknown")
     reason = entry.get("reason")
     if not isinstance(reason, str) or not reason:
         reason = "available" if available else "usage-unavailable"
-    result = status(available, None, reason)
-    local = entry.get("localUsage")
-    if not isinstance(local, dict):
-        return result
-    period = local.get("period")
-    tokens = local.get("tokens")
-    requests = local.get("requests")
-    if (
-        isinstance(period, str)
-        and period
-        and numeric_usage_value(tokens)
-        and numeric_usage_value(requests)
-    ):
-        result.update(
-            {
-                "usage_period": period,
-                "usage_tokens": int(tokens),
-                "usage_requests": int(requests),
-            }
-        )
-    return result
-
-
-def numeric_usage_value(value: Any) -> bool:
-    """Accept non-negative integer-like usage counters while rejecting booleans."""
-    return (
-        isinstance(value, (int, float))
-        and not isinstance(value, bool)
-        and value >= 0
-        and float(value).is_integer()
-    )
+    maximum = entry.get("maxUsedPercent")
+    if maximum is None:
+        return status(available, None, reason)
+    if not valid_percentage(maximum) or float(maximum) > 100:
+        return status(False, None, "unknown")
+    return status(available, float(maximum), reason)
 
 
 def status(available: bool, maximum: float | None, reason: str) -> dict[str, Any]:
@@ -277,11 +268,16 @@ def write_cache(
     path: Path, summary: dict[str, Any], now: float, key: str | None = None
 ) -> None:
     """Atomically cache only the sanitized summary, never raw Codexbar output."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = json.dumps(
+    write_private_json(
+        path,
         {"created_at": now, "configuration_key": key, "summary": summary},
-        separators=(",", ":"),
     )
+
+
+def write_private_json(path: Path, value: dict[str, Any]) -> None:
+    """Atomically write private JSON with owner-only permissions."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(value, separators=(",", ":"))
     temporary: str | None = None
     try:
         with tempfile.NamedTemporaryFile(
@@ -308,65 +304,380 @@ def run_codexbar(program: str) -> Any:
     return json.loads(completed.stdout)
 
 
-def qwen_usage_entry(payload: Any, provider: str, model: str) -> dict[str, Any]:
-    """Convert Qwen's local monthly export to a sanitized provider report."""
-    if not isinstance(payload, dict):
-        raise TypeError("Qwen usage export must be an object")
-    period = payload.get("value")
-    models = payload.get("byModel")
+def single_value(values: dict[str, list[str]], key: str) -> str:
+    """Read one required query or form value without accepting ambiguity."""
+    matches = values.get(key, [])
+    if len(matches) != 1 or not matches[0]:
+        raise ValueError(f"Qwen request must contain one {key}")
+    return matches[0]
+
+
+def qwen_curl_request(path: Path) -> dict[str, str]:
+    """Extract only validated request data from a browser Copy-as-cURL file."""
+    tokens = [
+        token
+        for token in shlex.split(path.read_text(encoding="utf-8"))
+        if token.strip() and token != "\\"
+    ]
+    if not tokens or Path(tokens[0]).name != "curl":
+        raise ValueError("Qwen quota input must be a curl command")
+
+    url = ""
+    cookie = ""
+    body = ""
+    content_type = ""
+    index = 1
+    while index < len(tokens):
+        token = tokens[index]
+        if token.startswith("https://"):
+            if url:
+                raise ValueError("Qwen curl command must contain one URL")
+            url = token
+            index += 1
+            continue
+        option, separator, inline = token.partition("=")
+        if option in {"-H", "--header", "-b", "--cookie", "--data", "--data-raw"}:
+            value = inline if separator else next_curl_value(tokens, index)
+            index += 1 if separator else 2
+            if option in {"-H", "--header"}:
+                name, header_separator, header_value = value.partition(":")
+                if header_separator and name.strip().casefold() == "content-type":
+                    content_type = header_value.strip().casefold()
+            elif option in {"-b", "--cookie"}:
+                cookie = unique_curl_value(cookie, value, "cookie")
+            else:
+                body = unique_curl_value(body, value, "request body")
+            continue
+        raise ValueError("Qwen curl command contains an unsupported argument")
+
+    validate_qwen_request(url, cookie, body, content_type)
+    return {"url": url, "cookie": cookie, "body": body}
+
+
+def next_curl_value(tokens: list[str], index: int) -> str:
+    """Read the value following a supported curl option."""
+    if index + 1 >= len(tokens):
+        raise ValueError("Qwen curl option is missing a value")
+    return tokens[index + 1]
+
+
+def unique_curl_value(current: str, value: str, name: str) -> str:
+    """Reject duplicate security-sensitive curl values."""
+    if current or not value:
+        raise ValueError(f"Qwen curl command has an invalid {name}")
+    return value
+
+
+def validate_qwen_request(url: str, cookie: str, body: str, content_type: str) -> None:
+    """Allow only Qwen Cloud's personal Token Plan usage request."""
+    parsed = urlparse(url)
     if (
-        payload.get("period") != "month"
-        or not isinstance(period, str)
-        or re.fullmatch(r"\d{4}-\d{2}", period) is None
-        or not isinstance(models, list)
+        parsed.scheme != "https"
+        or parsed.hostname != QWEN_CONSOLE_HOST
+        or parsed.path != QWEN_CONSOLE_PATH
+        or parsed.port not in {None, 443}
+        or parsed.username is not None
+        or parsed.fragment
+        or any(character in url + cookie + body for character in "\r\n\0")
     ):
-        raise ValueError("Qwen usage export is missing period or model usage")
-    model_usage = next(
-        (
-            item
-            for item in models
-            if isinstance(item, dict) and item.get("model") == model
+        raise ValueError("Qwen curl command targets an unexpected endpoint")
+    query = parse_qs(parsed.query, keep_blank_values=True)
+    if set(query) != {"product", "action", "api"}:
+        raise ValueError("Qwen curl command has unexpected query fields")
+    if (
+        single_value(query, "product") != QWEN_CONSOLE_PRODUCT
+        or single_value(query, "action") != QWEN_CONSOLE_ACTION
+        or single_value(query, "api") != QWEN_QUOTA_API
+    ):
+        raise ValueError("Qwen curl command targets an unexpected API")
+    form = parse_qs(body, keep_blank_values=True)
+    if set(form) != {"product", "action", "sec_token", "region", "params"}:
+        raise ValueError("Qwen curl command has unexpected form fields")
+    parameters = json.loads(single_value(form, "params"))
+    if (
+        single_value(form, "product") != QWEN_CONSOLE_PRODUCT
+        or single_value(form, "action") != QWEN_CONSOLE_ACTION
+        or not single_value(form, "sec_token")
+        or single_value(form, "region") != "ap-southeast-1"
+        or not isinstance(parameters, dict)
+        or parameters.get("Api") != QWEN_QUOTA_API
+        or not isinstance(parameters.get("Data"), dict)
+        or parameters.get("V") != "1.0"
+        or "=" not in cookie
+        or content_type != "application/x-www-form-urlencoded"
+    ):
+        raise ValueError("Qwen curl command contains invalid request data")
+
+
+def quota_fraction(value: Any, name: str) -> float:
+    """Validate one fractional Qwen quota utilization value."""
+    if not valid_percentage(value) or float(value) > 1:
+        raise ValueError(f"Qwen quota response contains invalid {name}")
+    return float(value)
+
+
+def quota_reset(value: Any, name: str) -> int:
+    """Validate one millisecond reset timestamp."""
+    if (
+        not isinstance(value, (int, float))
+        or isinstance(value, bool)
+        or not math.isfinite(value)
+        or value < 0
+        or not float(value).is_integer()
+    ):
+        raise ValueError(f"Qwen quota response contains invalid {name}")
+    return int(value)
+
+
+def qwen_quota_entry(payload: Any, provider: str) -> dict[str, Any]:
+    """Convert the Qwen Cloud response to a credential-free routing report."""
+    try:
+        quota = payload["data"]["DataV2"]["data"]["data"]
+    except (KeyError, TypeError) as error:
+        raise ValueError("Qwen quota response is missing usage data") from error
+    if not isinstance(quota, dict):
+        raise ValueError("Qwen quota response usage data must be an object")
+    windows = [
+        qwen_quota_window(
+            quota, "five-hour", "per5HourPercentage", "per5HourResetTime"
         ),
-        None,
-    )
-    tokens = 0 if model_usage is None else model_usage.get("totalTokens")
-    requests = 0 if model_usage is None else model_usage.get("requests")
-    if not numeric_usage_value(tokens) or not numeric_usage_value(requests):
-        raise ValueError("Qwen usage export contains invalid counters")
+        qwen_quota_window(
+            quota, "seven-day", "per1WeekPercentage", "per1WeekResetTime"
+        ),
+    ]
+    maximum = max(window["usedPercent"] for window in windows)
+    available = maximum < 100
     return {
         "provider": provider,
-        "available": True,
-        "reason": "available-local-stats-only",
-        "localUsage": {
-            "period": period,
-            "tokens": int(tokens),
-            "requests": int(requests),
-        },
+        "available": available,
+        "reason": "available-qwen-cloud-quota" if available else "exhausted",
+        "maxUsedPercent": maximum,
+        "quotaWindows": windows,
     }
 
 
-def run_qwen_usage(program: str, provider: str, model: str) -> dict[str, Any]:
-    """Ask Qwen Code to export its local monthly usage without a model request."""
-    with tempfile.TemporaryDirectory(prefix="claudex-qwen-usage-") as directory:
-        subprocess.run(
-            [
-                program,
-                "--prompt",
-                f"/stats export monthly --format json --output {QWEN_USAGE_FILENAME}",
-                "--output-format",
-                "text",
-                "--safe-mode",
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=USAGE_COMMAND_TIMEOUT_SECONDS,
-            cwd=directory,
-        )
-        payload = json.loads(
-            (Path(directory) / QWEN_USAGE_FILENAME).read_text(encoding="utf-8")
-        )
-    return qwen_usage_entry(payload, provider, model)
+def qwen_quota_window(
+    quota: dict[str, Any], name: str, percentage_key: str, reset_key: str
+) -> dict[str, Any]:
+    """Sanitize one Qwen rolling quota window."""
+    used = round(quota_fraction(quota.get(percentage_key), percentage_key) * 100, 6)
+    return {
+        "name": name,
+        "usedPercent": used,
+        "remainingPercent": round(100 - used, 6),
+        "resetAtMilliseconds": quota_reset(quota.get(reset_key), reset_key),
+    }
+
+
+def run_qwen_quota(program: str, path: Path, provider: str) -> dict[str, Any]:
+    """Fetch Qwen quota with a validated, shell-free curl invocation."""
+    request = qwen_curl_request(path)
+    completed = subprocess.run(
+        [
+            program,
+            "--silent",
+            "--show-error",
+            "--fail-with-body",
+            "--max-time",
+            str(QWEN_REQUEST_TIMEOUT_SECONDS),
+            request["url"],
+            "--header",
+            "accept: application/json",
+            "--header",
+            "content-type: application/x-www-form-urlencoded",
+            "--header",
+            "origin: https://home.qwencloud.com",
+            "--header",
+            "referer: https://home.qwencloud.com/billing/subscription/token-plan-individual",
+            "--cookie",
+            request["cookie"],
+            "--data-raw",
+            request["body"],
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=QWEN_REQUEST_TIMEOUT_SECONDS + QWEN_SUBPROCESS_GRACE_SECONDS,
+    )
+    return qwen_quota_entry(json.loads(completed.stdout), provider)
+
+
+def qwen_quota_cache_entry(path: Path, now: float) -> dict[str, Any] | None:
+    """Return quota acquired less than one hour ago."""
+    try:
+        cached = json.loads(path.read_text(encoding="utf-8"))
+        fetched_at = parse_utc_datetime(cached["fetched_at"])
+        entry = cached["entry"]
+        age = now - fetched_at
+        if (
+            0 <= age < QWEN_QUOTA_CACHE_SECONDS
+            and isinstance(entry, dict)
+            and entry.get("provider") == QWEN_USAGE_PROVIDER
+            and entry.get("reason") in {"available-qwen-cloud-quota", "exhausted"}
+            and isinstance(entry.get("quotaWindows"), list)
+            and explicitly_reported_status(entry)["reason"] != "unknown"
+        ):
+            return entry
+    except (FileNotFoundError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        pass
+    return None
+
+
+def format_utc_datetime(timestamp: float) -> str:
+    """Format a Unix timestamp as an explicit UTC cache acquisition time."""
+    return (
+        datetime.fromtimestamp(timestamp, timezone.utc)
+        .isoformat(timespec="microseconds")
+        .replace("+00:00", "Z")
+    )
+
+
+def parse_utc_datetime(value: Any) -> float:
+    """Parse the UTC ISO 8601 acquisition time stored in the quota cache."""
+    if not isinstance(value, str) or not value.endswith("Z"):
+        raise ValueError("Qwen quota cache has an invalid acquisition time")
+    parsed = datetime.fromisoformat(f"{value[:-1]}+00:00")
+    return parsed.timestamp()
+
+
+def qwen_quota_cache_path(environment: dict[str, str]) -> Path:
+    """Resolve the private Qwen quota cache under the effective home directory."""
+    return (
+        Path(environment.get("HOME", str(Path.home())))
+        / ".cache/claudex/qwen-quota.json"
+    )
+
+
+def qwen_quota_refresh_due(
+    summary: Any, config: dict[str, Any], cache_path: Path, now: float
+) -> bool:
+    """Prevent a routing cache from outliving the Qwen quota behind it."""
+    providers = summary.get("providers") if isinstance(summary, dict) else None
+    if not isinstance(providers, dict):
+        return False
+    qwen_ids = {
+        provider["id"]
+        for provider in config["providers"]
+        if str(provider.get("usageProvider", "")).casefold() == QWEN_USAGE_PROVIDER
+    }
+    quota_reasons = {"available-qwen-cloud-quota", "exhausted"}
+    uses_quota = any(
+        isinstance(providers.get(provider_id), dict)
+        and providers[provider_id].get("reason") in quota_reasons
+        for provider_id in qwen_ids
+    )
+    return uses_quota and qwen_quota_cache_entry(cache_path, now) is None
+
+
+def write_qwen_quota_cache(path: Path, entry: dict[str, Any], now: float) -> None:
+    """Persist only sanitized Qwen quota fields, never browser credentials."""
+    write_private_json(path, {"fetched_at": format_utc_datetime(now), "entry": entry})
+
+
+def qwen_compatible_configuration(path: Path, model: str) -> tuple[str, str]:
+    """Read Qwen Code's existing compatible endpoint and API key."""
+    settings = json.loads(path.read_text(encoding="utf-8"))
+    providers = settings.get("modelProviders")
+    environment = settings.get("env")
+    if not isinstance(providers, dict) or not isinstance(environment, dict):
+        raise ValueError("Qwen settings are missing model providers or environment")
+    candidates = [
+        item
+        for items in providers.values()
+        if isinstance(items, list)
+        for item in items
+        if isinstance(item, dict) and item.get("id") == model
+    ]
+    if len(candidates) != 1:
+        raise ValueError("Qwen settings must contain one configured model")
+    candidate = candidates[0]
+    base_url = candidate.get("baseUrl")
+    environment_key = candidate.get("envKey")
+    api_key = (
+        environment.get(environment_key) if isinstance(environment_key, str) else None
+    )
+    if not isinstance(base_url, str) or not isinstance(api_key, str) or not api_key:
+        raise ValueError("Qwen settings are missing compatible API credentials")
+    parsed = urlparse(base_url)
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname is None
+        or not parsed.hostname.endswith(".maas.aliyuncs.com")
+        or not parsed.hostname.startswith("token-plan.")
+        or parsed.path.rstrip("/") != "/compatible-mode/v1"
+        or parsed.port not in {None, 443}
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+        or parsed.username is not None
+    ):
+        raise ValueError("Qwen settings contain an unexpected compatible endpoint")
+    return f"{base_url.rstrip('/')}/models", api_key
+
+
+def qwen_compatible_available(program: str, settings: Path, model: str) -> bool:
+    """Verify the configured plan through its non-generative models endpoint."""
+    endpoint, api_key = qwen_compatible_configuration(settings, model)
+    subprocess.run(
+        [
+            program,
+            "--silent",
+            "--show-error",
+            "--fail",
+            "--output",
+            os.devnull,
+            "--max-time",
+            str(QWEN_REQUEST_TIMEOUT_SECONDS),
+            "--header",
+            f"Authorization: Bearer {api_key}",
+            endpoint,
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=QWEN_REQUEST_TIMEOUT_SECONDS + QWEN_SUBPROCESS_GRACE_SECONDS,
+    )
+    return True
+
+
+def qwen_usage_entry(
+    program: str,
+    provider: str,
+    model: str,
+    curl_path: Path,
+    settings_path: Path,
+    cache_path: Path,
+    now: float,
+) -> dict[str, Any]:
+    """Use fresh quota, refresh stale quota, or verify compatible API availability."""
+    if cached := qwen_quota_cache_entry(cache_path, now):
+        return cached
+    try:
+        entry = run_qwen_quota(program, curl_path, provider)
+        write_qwen_quota_cache(cache_path, entry, now)
+        return entry
+    except (
+        OSError,
+        TypeError,
+        ValueError,
+        subprocess.SubprocessError,
+        json.JSONDecodeError,
+    ):
+        try:
+            qwen_compatible_available(program, settings_path, model)
+            return {
+                "provider": provider,
+                "available": True,
+                "reason": "available-compatible-api-only",
+            }
+        except (
+            OSError,
+            TypeError,
+            ValueError,
+            subprocess.SubprocessError,
+            json.JSONDecodeError,
+        ):
+            return unavailable_usage_entry(provider)
 
 
 def unavailable_usage_entry(provider: str) -> dict[str, Any]:
@@ -379,9 +690,23 @@ def unavailable_usage_entry(provider: str) -> dict[str, Any]:
 
 
 def collect_usage(
-    config: dict[str, Any], codexbar_program: str, qwen_program: str
+    config: dict[str, Any],
+    codexbar_program: str,
+    curl_program: str,
+    environment: dict[str, str] | None = None,
+    now: float | None = None,
 ) -> list[dict[str, Any]]:
-    """Collect Codexbar and Qwen usage independently so one failure stays isolated."""
+    """Collect independent provider usage and keep failures isolated."""
+    environment = os.environ if environment is None else environment
+    now = time.time() if now is None else now
+    home = Path(environment.get("HOME", str(Path.home())))
+    curl_path = Path(
+        environment.get("CLAUDEX_QWEN_QUOTA_CURL_FILE", str(DEFAULT_QWEN_CURL))
+    ).expanduser()
+    settings_path = Path(
+        environment.get("CLAUDEX_QWEN_SETTINGS_FILE", str(home / ".qwen/settings.json"))
+    ).expanduser()
+    quota_cache_path = qwen_quota_cache_path(environment)
     providers = config["providers"]
     qwen_providers = [
         provider
@@ -411,22 +736,17 @@ def collect_usage(
     except (OSError, ValueError, subprocess.SubprocessError, json.JSONDecodeError):
         report = [unavailable_usage_entry(name) for name in sorted(codexbar_names)]
     for provider in qwen_providers:
-        try:
-            report.append(
-                run_qwen_usage(
-                    qwen_program,
-                    provider["usageProvider"],
-                    provider["defaultModel"],
-                )
+        report.append(
+            qwen_usage_entry(
+                curl_program,
+                provider["usageProvider"],
+                provider["defaultModel"],
+                curl_path,
+                settings_path,
+                quota_cache_path,
+                now,
             )
-        except (
-            OSError,
-            TypeError,
-            ValueError,
-            subprocess.SubprocessError,
-            json.JSONDecodeError,
-        ):
-            report.append(unavailable_usage_entry(provider["usageProvider"]))
+        )
     return report
 
 
@@ -466,7 +786,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--input", type=Path, help="read a Codexbar JSON fixture")
     parser.add_argument("--no-cache", action="store_true")
     parser.add_argument("--codexbar-program", default="codexbar")
-    parser.add_argument("--qwen-program", default="qwen")
+    parser.add_argument("--curl-program", default="curl")
     return parser.parse_args()
 
 
@@ -479,15 +799,24 @@ def main() -> int:
         raise SystemExit(f"claudex routing configuration error: {error}") from error
     key = configuration_key(config)
     cache_path = Path.home() / ".cache/claudex/usage-routing.json"
+    quota_cache_path = qwen_quota_cache_path(os.environ)
     ttl = 0 if arguments.no_cache or arguments.input else cache_seconds(os.environ)
     summary = read_cache(cache_path, now, ttl, key)
+    if summary is not None and qwen_quota_refresh_due(
+        summary, config, quota_cache_path, now
+    ):
+        summary = None
     if summary is None:
         try:
             report = (
                 json.loads(arguments.input.read_text(encoding="utf-8"))
                 if arguments.input
                 else collect_usage(
-                    config, arguments.codexbar_program, arguments.qwen_program
+                    config,
+                    arguments.codexbar_program,
+                    arguments.curl_program,
+                    os.environ,
+                    now,
                 )
             )
             summary = routing_summary(report, config)

@@ -7,8 +7,9 @@ disable-model-invocation: true
 # Claudex Routing
 
 Use the routing context injected at prompt submission as the authoritative capacity snapshot for
-the current turn. It contains only provider names, sanitized utilization or local token counters,
-routing fields, and selected agents; account details and raw provider output are never retained.
+the current turn. It contains only provider names, sanitized utilization, routing fields, and
+selected agents; account details, browser credentials, API keys, and raw provider output are never
+retained.
 
 ## Routing policy
 
@@ -62,14 +63,20 @@ routing fields, and selected agents; account details and raw provider output are
      logically resumable without a live process, so do not keep it artificially busy.
 
 `scripts/route_usage.py` refreshes the capacity snapshot at most once every five minutes by
-default. Codex and Grok usage comes from `codexbar usage --json`. Qwen usage comes from Qwen Code's
-local, non-model `/stats export monthly --format json` command and records the configured model's
-monthly tokens and requests. Qwen Cloud does not expose remaining Token Plan Credits through this
-command, so Qwen cannot outrank providers with measurable remaining capacity. Successful local
-export means available with an unknown limit; a Qwen CLI/export failure disables only Qwen.
-A Codexbar failure likewise disables only its providers. Set `CLAUDEX_USAGE_CACHE_SECONDS=0` to
-disable caching. Missing, unknown, malformed, exhausted, or failed usage is treated conservatively
-as unavailable for the affected provider.
+default. Codex and Grok usage comes from `codexbar usage --json`. Qwen's five-hour and seven-day
+Token Plan utilization comes from the validated Qwen Cloud request saved in `tmp/curl.txt`. Only
+sanitized percentages, reset times, and the acquisition time as UTC ISO 8601 `fetched_at` are saved
+to `~/.cache/claudex/qwen-quota.json` with mode `0600`. Each read parses that stored acquisition
+time; quota acquired less than one hour ago is reused, and at exactly one hour it is refreshed.
+
+If the browser session has expired or quota refresh otherwise fails, use Qwen Code's existing
+compatible API configuration to make a non-generative `GET /models` availability check. A
+successful check keeps Qwen available with unknown headroom, after providers with known remaining
+capacity. A failed check disables only Qwen. A Codexbar failure likewise disables only its
+providers. Qwen with known quota participates in the same lowest-used-percentage ordering as Codex
+and Grok. Set `CLAUDEX_USAGE_CACHE_SECONDS=0` to disable the five-minute routing-summary cache; the
+one-hour Qwen quota cache remains independent. Missing, unknown, malformed, exhausted, or failed
+usage is treated conservatively for the affected provider.
 
 After changing the routing script, run `uv run tests/run_coverage.py` from this skill directory.
 The test runner measures statements and branches and fails below 95% coverage.

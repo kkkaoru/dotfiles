@@ -34,7 +34,7 @@ flowchart LR
 | Orchestrator | 通常のmain session | Claude Code設定 (`sonnet`) | Claude Code設定 (`xhigh`) | 通常起動 |
 | Codex worker | `claudex-gpt` | `gpt-5.6-sol` | `high` | Codexに空きがある場合 |
 | Grok worker | `claudex-grok` | `grok-4.5` | `high` | Grokに空きがある場合 |
-| Qwen worker | `claudex-qwen` | `qwen3.8-max-preview` | `high` | Qwen CLIの月次usageを取得できる場合 |
+| Qwen worker | `claudex-qwen` | `qwen3.8-max-preview` | `high` | Qwen Cloud quotaまたはcompatible APIが利用可能な場合 |
 | Fallback | `claudex-sonnet` | `claude-sonnet-5` | `high` | 利用率を管理するproviderをすべて利用できない場合 |
 | Advisor | Claude Code標準 `advisor()` | `opus` | Claude Code標準 | 標準advisor policyに従う |
 
@@ -47,11 +47,13 @@ worker のAgent定義と `providers.json` の両方に同じ固定モデルを�
 1. `claudex` はClaude Code設定のモデルとeffortを継承した通常のmain sessionを起動し、
    claudex実行時だけglobal hookでorchestration contextを追加します。`mainProvider` は
    adapterのbootstrap routeとworker設定に使われ、通常起動のouter sessionへは強制しません。
-2. prompt送信時にCodex/Grokは `codexbar usage --json`、QwenはモデルAPIを呼ばない
-   `qwen -p '/stats export monthly ...'` を実行します。結果は既定で5分間キャッシュされます。
-3. Codex/Grokは利用率100%未満、Qwenは月次usage export成功時に `selected_workers` として
-   選びます。既知のquota残量が多い順に並べ、残量を取得できないQwenはその後に置きます。
-   片方のusage commandが失敗しても別sourceのproviderは無効化しません。
+2. prompt送信時にCodex/Grokは `codexbar usage --json` を使います。QwenはQwen Cloudの
+   5時間・7日quotaを取得し、成功時刻から1時間未満はlocal cacheを再利用します。routing結果
+   全体は既定で5分間キャッシュされます。
+3. 各providerをquota windowの最大使用率が低い順、つまり最小残量の制約に最も余裕がある順に
+   並べます。Qwen quota更新に失敗した場合は、Qwen Codeに保存済みのAPI keyを使う非生成の
+   compatible `GET /models` で利用可能性を確認します。利用可能でも残量不明なら、既知の残量を
+   持つproviderの後に置きます。片方のusage sourceが失敗しても別providerは無効化しません。
 4. mainまたはworkerがAgent/Taskを起動するたび、そのturnへ注入された
    `selected_workers` からAgentを選び、model/effortを明示します。nested起動でもgeneric
    `claude`へのdefaultや親providerの無条件継承は行いません。
@@ -61,10 +63,12 @@ worker のAgent定義と `providers.json` の両方に同じ固定モデルを�
 7. 標準advisorはworkerの代替ではありません。provider quotaとは独立して動作し、会話履歴
    全体を自動参照します。
 
-生の利用状況、アカウント情報、認証情報はキャッシュしません。
-`~/.cache/claudex/usage-routing.json` にはルーティングに必要な利用率、Qwenの月次
-token/request counter、選択結果だけを
-モード `0600` で保存します。
+生response、アカウント情報、Cookie、API keyはキャッシュしません。
+`~/.cache/claudex/usage-routing.json` にはrouting結果を5分間、
+`~/.cache/claudex/qwen-quota.json` にはQwenのsanitized utilization、reset時刻、取得日時を
+UTC ISO 8601形式の `fetched_at` として保存します。cache参照のたびにこの日時を読み、取得から
+1時間未満なら再利用し、1時間以上なら更新します。いずれもモード `0600` で保存し、後者に
+認証情報は含まれません。
 
 ### SubAgentの再利用
 
@@ -111,6 +115,20 @@ brew install --cask claude-code codex codexbar
   `/auth` からToken Planを設定します。API keyはclaudexへ重複設定せず、Qwen Code自身の
   設定を `qwen --acp --model MODEL` が再利用します。
 
+Qwen Cloudのremaining取得には、Chrome DevToolsのNetworkでToken Plan usage requestを
+「Copy as cURL (bash)」し、repository localの `tmp/curl.txt` に保存します。このファイルは
+login Cookieを含むためgit管理せず、ownerだけが読めるようにします。
+
+```sh
+chmod 600 tmp/curl.txt
+```
+
+別の場所へ保存する場合は `CLAUDEX_QWEN_QUOTA_CURL_FILE` に絶対pathを指定します。Cookieが
+期限切れになった場合は新しいCopy-as-cURLで置き換えます。更新に失敗してもQwen Codeの
+`~/.qwen/settings.json` にあるcompatible API設定でavailabilityを確認するため、routing全体は
+継続します。Copy-as-cURLをshellとして実行することはなく、許可したQwen endpoint、Cookie、
+form dataだけを解析してshellを介さずrequestを再構成します。
+
 インストールと認証を確認します。
 
 ```sh
@@ -120,7 +138,7 @@ codex --version
 grok --version
 qwen --version
 codexbar usage --json | jq '[.[] | {provider, has_usage: (.usage != null)}]'
-qwen --prompt '/stats monthly' --output-format text --safe-mode
+python3 .claude/skills/claudex-routing/scripts/route_usage.py --no-cache | jq .
 ```
 
 CodexBarの出力に `codex` と `grok` が含まれ、それぞれ `has_usage: true` になることを
@@ -312,9 +330,9 @@ Rustコードを変更せず、`configured-acp` providerを追加できます。
 `agent` と同名の `~/.claude/agents/claudex-vendor.md` も作成します。Claude Codeが外部model
 IDを受理しないproviderではfrontmatterを `model: inherit` にし、呼び出し時の
 `claudex_model` で固定します。利用率をCodexBarで管理するproviderには `usageProvider` を
-追加します。Qwen Codeのlocal usage exportを使うproviderは `usageProvider: "qwen"` とし、
-`defaultModel` と一致する月次token/request数を取得します。省略したproviderは常に利用可能な
-unmetered providerとして扱われます。
+追加します。Qwen Cloud quotaを使うproviderは `usageProvider: "qwen"` とします。quota更新に
+失敗した場合は `defaultModel` と一致するQwen Codeのcompatible API設定をavailability確認に
+使います。省略したproviderは常に利用可能なunmetered providerとして扱われます。
 
 ## 更新
 
@@ -389,14 +407,16 @@ Claudexをdotfiles repository以外から使うには、AgentとSkillがproject-
 
 ```sh
 codexbar usage --json | jq '[.[] | {provider, usage}]'
-qwen --prompt '/stats monthly' --output-format text --safe-mode
+stat -f '%Sp %N' tmp/curl.txt
 env CLAUDEX_USAGE_CACHE_SECONDS=0 \
   python3 "$HOME/.claude/skills/claudex-routing/scripts/route_usage.py" \
   | jq .
 ```
 
-providerが存在しない、利用状況が不明、quota windowが100%、または対応するusage commandが
-失敗した場合はそのproviderだけを利用不可にします。すべて利用不可の場合にfallbackを選びます。
+`qwen-quota.json` の取得時刻から1時間以上経過していればQwen quotaを更新します。更新に
+失敗してもcompatible APIが利用可能ならQwenを残量不明として候補に残します。providerが
+存在しない、quota windowが100%、またはusageとavailabilityの両方を確認できない場合は、その
+providerだけを利用不可にします。すべて利用不可の場合にfallbackを選びます。
 
 ### daemon設定が古い
 

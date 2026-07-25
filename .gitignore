@@ -111,3 +111,5 @@ __pycache__/
 
 # Local Codex backups
 .codex/*.bak
+
+tmp
