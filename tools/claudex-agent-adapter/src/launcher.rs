@@ -302,28 +302,17 @@ fn start_adapter(config: &ServiceConfig) -> Result<()> {
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
-    command
-        .arg(&config.executable)
-        .args(daemon_arguments(&config.options))
-        .env("ANTHROPIC_AUTH_TOKEN", &config.token)
-        .env_remove("ANTHROPIC_API_KEY")
-        .env_remove("ANTHROPIC_BASE_URL")
-        .env_remove("ANTHROPIC_MODEL")
-        .env_remove("CLAUDE_CODE_SUBAGENT_MODEL")
-        .env_remove("CLAUDE_CODE_USE_BEDROCK")
-        .env_remove("CLAUDE_CODE_USE_FOUNDRY")
-        .env_remove("CLAUDE_CODE_USE_VERTEX")
-        .env_remove("CLAUDEX_ADAPTER_LISTEN")
-        .env_remove("CLAUDEX_BACKEND")
-        .env_remove("CLAUDEX_CLAUDE_PROGRAM")
-        .env_remove("CLAUDEX_MODEL")
-        .env_remove("CLAUDEX_SUBSCRIPTION_MAX_PROCESSES")
-        .env_remove("CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES")
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(stdout))
-        .stderr(Stdio::from(stderr))
-        .spawn()
-        .context("start adapter daemon")?;
+    crate::path_env::apply_daemon_env(
+        command
+            .arg(&config.executable)
+            .args(daemon_arguments(&config.options)),
+        &config.token,
+    )
+    .stdin(Stdio::null())
+    .stdout(Stdio::from(stdout))
+    .stderr(Stdio::from(stderr))
+    .spawn()
+    .context("start adapter daemon")?;
     Ok(())
 }
 

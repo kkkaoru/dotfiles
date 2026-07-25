@@ -32,7 +32,10 @@ fn provider_model(arguments: &Value) -> Option<String> {
     arguments
         .get("model")
         .and_then(Value::as_str)
-        .filter(|model| model.starts_with("gpt") || model.starts_with("grok"))
+        .filter(|model| {
+            // Keep in sync with configured claudex provider model prefixes.
+            model.starts_with("gpt") || model.starts_with("grok") || model.starts_with("qwen")
+        })
         .map(str::to_owned)
 }
 

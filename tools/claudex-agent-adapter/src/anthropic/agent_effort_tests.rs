@@ -307,6 +307,24 @@ mod tests {
     }
 
     #[test]
+    fn hydrates_qwen_provider_model_into_claudex_model() {
+        let (internal, public) = prepare_arguments(
+            "Task",
+            "tool-qwen",
+            &json!({
+                "prompt":"investigate",
+                "model":"qwen3.8-max-preview",
+                "claudex_effort":"high"
+            }),
+        );
+        let internal = internal.expect("Task routing intent");
+        assert_eq!(internal["claudex_model"], "qwen3.8-max-preview");
+        assert_eq!(internal["claudex_effort"], "high");
+        assert!(public.get("model").is_none());
+        assert!(public.get("claudex_model").is_none());
+    }
+
+    #[test]
     fn removes_invented_mailbox_names_but_preserves_user_supplied_names() {
         let arguments = json!({
             "prompt":"audit contracts", "name":"wf_contract_audit",

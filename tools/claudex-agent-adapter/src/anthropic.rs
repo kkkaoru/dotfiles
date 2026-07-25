@@ -271,8 +271,12 @@ impl Bridge {
         if let Some(model) = intent.model_override {
             request.model = model;
         } else if is_subagent && !intent.matched {
-            // Only a correlated Claude Code Agent may keep its fixed frontmatter model.
-            request.model.clone_from(&self.model);
+            // Unmatched subagent requests often carry Claude Code's subscription fallback model.
+            // Force those onto the adapter main route. Keep fixed custom-agent frontmatter models
+            // that already map to a configured provider backend (for example claudex-qwen).
+            if !self.app.supports_model(&request.model) {
+                request.model.clone_from(&self.model);
+            }
         }
         if is_subagent && request.disabled_subagent_models.contains(&request.model) {
             bail!(

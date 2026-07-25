@@ -9,6 +9,7 @@ pub mod copilot_acp;
 pub mod coverage_gate;
 pub mod grok_acp;
 pub mod launcher;
+pub mod path_env;
 pub mod provider_config;
 pub mod runtime;
 mod subagent_policy;

@@ -1,4 +1,5 @@
 use std::{
+    env,
     ffi::OsString,
     path::Path,
     process::{Command as StdCommand, Stdio},
@@ -15,7 +16,7 @@ use tokio::{process::Command, sync::oneshot};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
 use super::{client::AcpClient, plugin};
-use crate::app_server::events::ThreadEventDispatcher;
+use crate::{app_server::events::ThreadEventDispatcher, path_env};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum AcpProvider {
@@ -80,6 +81,9 @@ pub(super) async fn start(
             );
         }
     }
+    // Long-lived daemons may inherit a minimal PATH (for example without ~/.bun/bin).
+    // Configured launches often use `/usr/bin/env qwen ...`, so surface user tool bins.
+    command.env("PATH", path_env::tool_search_path());
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt as _;

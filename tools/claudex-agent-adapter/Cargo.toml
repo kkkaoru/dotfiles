@@ -76,7 +76,7 @@ incremental = true
 opt-level = "z"
 panic = "abort"
 strip = "symbols"
-# thin LTO keeps runtime size/opt close to fat while cutting full and incremental
-# release rebuilds that block adapter installs during claudex iteration.
-lto = "thin"
-codegen-units = 4
+# Measured A/B: thin LTO was slower and larger (≈30s/3.4MB) than fat LTO with
+# one codegen unit (≈25s/2.0MB). Keep fat LTO for the installed release binary.
+lto = "fat"
+codegen-units = 1

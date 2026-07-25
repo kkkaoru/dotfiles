@@ -35,7 +35,7 @@
         "program": "/usr/bin/env",
         "arguments": [
           "QWEN_WEB_FETCH_PROCESSING_TIMEOUT_MS=15000",
-          "qwen",
+          "/Users/kkk4oru/.bun/bin/qwen",
           "--acp",
           "--approval-mode",
           "yolo",

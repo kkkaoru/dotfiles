@@ -279,7 +279,7 @@ and `src` only, while integration tests enforce file-size limits across both
 
 Development and test profiles use incremental compilation with reduced debug
 information. Dependencies enable only required features. Release builds optimize for size, abort
-on panic, strip symbols, and use thin LTO with four codegen units so install rebuilds stay fast
-without giving up size-focused optimization. Distribution builds should name
+on panic, strip symbols, and use fat LTO with one codegen unit (measured smaller and faster than
+thin LTO for this crate). Distribution builds should name
 `--bin claudex-agent-adapter`; an unqualified build also compiles the five test fixture binaries
 declared in `Cargo.toml`.
