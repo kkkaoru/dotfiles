@@ -136,6 +136,10 @@ fn parse_options(arguments: &mut VecDeque<OsString>) -> Result<ParsedOptions> {
         .as_deref()
         .map(provider_config::load)
         .transpose()?;
+    let mut model_catalog = configured
+        .as_ref()
+        .map(|configured| configured.model_catalog.clone())
+        .unwrap_or_default();
     if let Some(configured) = &configured {
         routes.splice(0..0, configured.routes.clone());
     }
@@ -145,6 +149,9 @@ fn parse_options(arguments: &mut VecDeque<OsString>) -> Result<ParsedOptions> {
     if routes.is_empty() {
         routes.push(BackendRoute::new(&model, BackendKind::CodexAppServer));
     }
+    if model_catalog == provider_config::ModelCatalog::default() {
+        model_catalog = provider_config::ModelCatalog::from_routes(&routes);
+    }
     validate_routes(&routes, &model)?;
     Ok(ParsedOptions {
         adapter: AdapterOptions {
@@ -153,6 +160,7 @@ fn parse_options(arguments: &mut VecDeque<OsString>) -> Result<ParsedOptions> {
             listen,
             subscription_max_processes: max_processes,
             subscription_timeout_minutes: timeout_minutes,
+            model_catalog,
         },
         inherit_claude_model,
     })
@@ -261,12 +269,15 @@ async fn serve_on_listener(
     backend: Arc<AgentBackend>,
     listener: tokio::net::TcpListener,
 ) -> Result<()> {
-    let bridge = Arc::new(Bridge::new_with_backend_limits(
-        backend,
-        options.model.clone(),
-        options.subscription_max_processes,
-        options.subscription_timeout_minutes,
-    )?);
+    let bridge = Arc::new(
+        Bridge::new_with_backend_limits(
+            backend,
+            options.model.clone(),
+            options.subscription_max_processes,
+            options.subscription_timeout_minutes,
+        )?
+        .with_model_catalog(options.model_catalog.clone()),
+    );
     tracing::info!(listen = %options.listen, routes = ?options.routes, model = %options.model, "claudex agent adapter is ready");
     shutdown::serve(listener, http_router(bridge, options.model, auth_token)).await
 }

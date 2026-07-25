@@ -32,18 +32,32 @@ mod tests {
         };
         assert!(configured.description().contains("configured-acp"));
         let routes = AgentBackend::spawn_routes(&[
-            BackendRoute::new("unused-codex", BackendKind::CodexAppServer),
-            BackendRoute::new("unused-copilot", BackendKind::CopilotAcp),
-            BackendRoute::new("unused-grok", BackendKind::GrokAcp),
+            route_with_prefix("unused-codex", BackendKind::CodexAppServer, "codex-"),
+            route_with_prefix("unused-copilot", BackendKind::CopilotAcp, "copilot-"),
+            route_with_prefix("unused-acp", BackendKind::GrokAcp, "acp-"),
         ]);
         assert!(routes.started_models().is_empty());
         assert!(routes.is_alive());
-        for model in ["gpt", "gpt-5.6-sol", "gpt_custom", "grok", "grok-4.5"] {
+        // Supports only exact configured models and declared prefixes — never vendor-name inference.
+        for model in [
+            "unused-codex",
+            "codex-extra",
+            "unused-copilot",
+            "copilot-extra",
+            "unused-acp",
+            "acp-extra",
+        ] {
             assert!(routes.supports_model(model));
         }
-        for model in ["", "GPT-5.6-sol", "Grok-4.5", "claude-unconfigured"] {
+        for model in ["", "Codex-extra", "unconfigured", "gpt", "grok", "qwen"] {
             assert!(!routes.supports_model(model));
         }
+    }
+
+    fn route_with_prefix(model: &str, backend: BackendKind, prefix: &str) -> BackendRoute {
+        let mut route = BackendRoute::new(model, backend);
+        route.model_prefixes.push(prefix.to_owned());
+        route
     }
 
     #[test]

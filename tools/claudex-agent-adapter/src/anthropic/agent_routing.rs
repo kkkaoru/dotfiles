@@ -6,11 +6,12 @@ const ADAPTER_EFFORT: &str = "claudex_effort";
 const ADAPTER_MODEL: &str = "claudex_model";
 
 pub(super) fn hydrate_routing_fields(arguments: &mut Value) {
+    // Only explicit claudex_model fields / prompt headers are trusted. Do not infer from the
+    // Claude Code `model` field via vendor name prefixes; that becomes config debt.
     let model = arguments
         .get(ADAPTER_MODEL)
         .and_then(Value::as_str)
         .map(str::to_owned)
-        .or_else(|| provider_model(arguments))
         .or_else(|| prompt_routing_value(arguments, ADAPTER_MODEL));
     let effort = arguments
         .get(ADAPTER_EFFORT)
@@ -26,17 +27,6 @@ pub(super) fn hydrate_routing_fields(arguments: &mut Value) {
     if let Some(effort) = effort.filter(|value| valid_effort(value)) {
         object.insert(ADAPTER_EFFORT.to_owned(), Value::String(effort));
     }
-}
-
-fn provider_model(arguments: &Value) -> Option<String> {
-    arguments
-        .get("model")
-        .and_then(Value::as_str)
-        .filter(|model| {
-            // Keep in sync with configured claudex provider model prefixes.
-            model.starts_with("gpt") || model.starts_with("grok") || model.starts_with("qwen")
-        })
-        .map(str::to_owned)
 }
 
 fn prompt_routing_value(arguments: &Value, key: &str) -> Option<String> {

@@ -22,18 +22,22 @@ fn routed_backend_has_no_leaf_kind() {
 async fn lazy_routes_cover_provider_entry_points_and_failed_startup_state() {
     let (home, codex_spawns) = provider_home();
 
+    // Prefixes are unique per provider (mirrors providers.json). Exact default models
+    // match without a prefix; dynamic ids require a declared owner prefix.
     let backend = AgentBackend::spawn_routes(&[
-        route("gpt-model", BackendKind::CodexAppServer),
+        route_with_prefix("gpt-model", BackendKind::CodexAppServer, "gpt"),
         route("gpt-secondary", BackendKind::CodexAppServer),
         route("gpt-unused", BackendKind::CodexAppServer),
         route("gpt-copilot", BackendKind::CopilotAcp),
-        route("grok-model", BackendKind::GrokAcp),
+        route_with_prefix("grok-model", BackendKind::GrokAcp, "grok"),
     ]);
     exercise_initial_provider_routes(&backend, &codex_spawns).await;
 
+    // Dynamic models match configured prefixes only (no vendor-name inference).
     assert!(backend.supports_model("gpt-5.6-sol"));
     assert!(backend.supports_model("grok-4.5"));
     assert!(!backend.supports_model("claude-opus-5"));
+    assert!(!backend.supports_model("qwen-unconfigured"));
     exercise_explicit_subagent_routes(Arc::clone(&backend)).await;
     assert_eq!(
         backend.started_models(),
@@ -164,11 +168,16 @@ fn assert_single_codex_spawn(codex_spawns: &Path) {
 }
 
 async fn exercise_dynamic_route() {
-    let dynamic_only = AgentBackend::spawn_routes(&[route("grok-only", BackendKind::GrokAcp)]);
+    // Dynamic models require a configured prefix owner; vendor prefixes are never inferred.
+    let dynamic_only = AgentBackend::spawn_routes(&[route_with_prefix(
+        "codex-base",
+        BackendKind::CodexAppServer,
+        "dynamic-",
+    )]);
     dynamic_only
-        .request("thread/start", json!({"model":"gpt-dynamic-only"}))
+        .request("thread/start", json!({"model":"dynamic-only"}))
         .await
-        .expect("start an inferred Codex route without a configured Codex route");
+        .expect("start a dynamic Codex route from a configured prefix");
     dynamic_only
         .respond(json!(999), json!({}))
         .await
@@ -177,16 +186,24 @@ async fn exercise_dynamic_route() {
         dynamic_only
             .request(
                 "thread/start",
-                json!({"model":format!("gpt-dynamic-only-{index}")}),
+                json!({"model":format!("dynamic-only-{index}")}),
             )
             .await
             .expect("fill dynamic route capacity");
     }
     assert!(
         dynamic_only
-            .request("thread/start", json!({"model":"gpt-over-limit"}))
+            .request("thread/start", json!({"model":"dynamic-over-limit"}))
             .await
-            .is_err()
+            .is_err(),
+        "dynamic route capacity is finite"
+    );
+    assert!(
+        dynamic_only
+            .request("thread/start", json!({"model":"unconfigured-model"}))
+            .await
+            .is_err(),
+        "models outside configured prefixes must not invent a backend"
     );
 }
 
@@ -329,4 +346,10 @@ async fn post(url: &str, body: serde_json::Value) -> serde_json::Value {
 
 fn route(model: &str, backend: BackendKind) -> BackendRoute {
     BackendRoute::new(model, backend)
+}
+
+fn route_with_prefix(model: &str, backend: BackendKind, prefix: &str) -> BackendRoute {
+    let mut route = BackendRoute::new(model, backend);
+    route.model_prefixes.push(prefix.to_owned());
+    route
 }

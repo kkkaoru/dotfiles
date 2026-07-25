@@ -45,6 +45,66 @@ struct AgentChoice {
 pub struct LoadedConfig {
     pub main_model: String,
     pub routes: Vec<BackendRoute>,
+    /// Exact default models and prefixes declared by any provider entry, including disabled ones.
+    /// Used to remap unrouted provider ids onto the main backend without hardcoding vendor names.
+    pub model_catalog: ModelCatalog,
+}
+
+/// Config-declared model identities used for routing remaps.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ModelCatalog {
+    exact: Vec<String>,
+    prefixes: Vec<String>,
+}
+
+impl ModelCatalog {
+    fn from_providers<'a>(providers: impl IntoIterator<Item = &'a Provider>) -> Self {
+        let mut exact = Vec::new();
+        let mut prefixes = Vec::new();
+        for provider in providers {
+            if !provider.default_model.is_empty() {
+                exact.push(provider.default_model.clone());
+            }
+            for prefix in &provider.model_prefixes {
+                if !prefix.is_empty() {
+                    prefixes.push(prefix.clone());
+                }
+            }
+        }
+        exact.sort();
+        exact.dedup();
+        prefixes.sort();
+        prefixes.dedup();
+        Self { exact, prefixes }
+    }
+
+    pub fn from_routes(routes: &[BackendRoute]) -> Self {
+        let mut exact = Vec::new();
+        let mut prefixes = Vec::new();
+        for route in routes {
+            if !route.model.is_empty() {
+                exact.push(route.model.clone());
+            }
+            for prefix in &route.model_prefixes {
+                if !prefix.is_empty() {
+                    prefixes.push(prefix.clone());
+                }
+            }
+        }
+        exact.sort();
+        exact.dedup();
+        prefixes.sort();
+        prefixes.dedup();
+        Self { exact, prefixes }
+    }
+
+    pub fn matches(&self, model: &str) -> bool {
+        self.exact.iter().any(|exact| exact == model)
+            || self
+                .prefixes
+                .iter()
+                .any(|prefix| model.starts_with(prefix.as_str()))
+    }
 }
 
 const fn enabled_by_default() -> bool {
@@ -64,6 +124,10 @@ fn validate(config: ProviderConfig) -> Result<LoadedConfig> {
         bail!("provider config version must be {CONFIG_VERSION}");
     }
     validate_choice(&config.fallback, "fallback")?;
+    // Keep identities for disabled providers so exhausted/denied backends can still be
+    // recognized and remapped instead of falling through to Claude subscription under a
+    // stale provider model id.
+    let model_catalog = ModelCatalog::from_providers(&config.providers);
     let providers = config
         .providers
         .into_iter()
@@ -79,7 +143,11 @@ fn validate(config: ProviderConfig) -> Result<LoadedConfig> {
         .map(|provider| provider.default_model.clone())
         .context("mainProvider must name an enabled provider")?;
     let routes = providers.into_iter().map(Provider::into_route).collect();
-    Ok(LoadedConfig { main_model, routes })
+    Ok(LoadedConfig {
+        main_model,
+        routes,
+        model_catalog,
+    })
 }
 
 fn validate_choice(choice: &AgentChoice, name: &str) -> Result<()> {
@@ -189,6 +257,11 @@ mod tests {
         assert_eq!(loaded.main_model, "model");
         assert_eq!(loaded.routes.len(), 1);
         assert_eq!(loaded.routes[0].model_prefixes, ["model-"]);
+        // Disabled providers still contribute catalog identities for remaps.
+        assert!(loaded.model_catalog.matches("model"));
+        assert!(loaded.model_catalog.matches("model-extra"));
+        assert!(loaded.model_catalog.matches("off"));
+        assert!(!loaded.model_catalog.matches("claude-sonnet-5"));
     }
 
     #[test]

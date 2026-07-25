@@ -307,19 +307,22 @@ mod tests {
     }
 
     #[test]
-    fn hydrates_qwen_provider_model_into_claudex_model() {
+    fn hydrates_explicit_claudex_model_without_vendor_prefix_inference() {
         let (internal, public) = prepare_arguments(
             "Task",
-            "tool-qwen",
+            "tool-provider",
             &json!({
                 "prompt":"investigate",
-                "model":"qwen3.8-max-preview",
+                "model":"sonnet",
+                "claudex_model":"vendor-next",
                 "claudex_effort":"high"
             }),
         );
         let internal = internal.expect("Task routing intent");
-        assert_eq!(internal["claudex_model"], "qwen3.8-max-preview");
+        assert_eq!(internal["claudex_model"], "vendor-next");
         assert_eq!(internal["claudex_effort"], "high");
+        // Claude Code short aliases in `model` must not become claudex_model.
+        assert_ne!(internal.get("claudex_model"), Some(&json!("sonnet")));
         assert!(public.get("model").is_none());
         assert!(public.get("claudex_model").is_none());
     }

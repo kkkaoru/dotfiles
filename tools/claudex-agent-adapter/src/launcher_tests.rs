@@ -16,6 +16,7 @@ mod tests {
                 model: "test-model".to_owned(),
                 subscription_max_processes: 20,
                 subscription_timeout_minutes: 120,
+                model_catalog: crate::provider_config::ModelCatalog::default(),
             },
             token: LOCAL_TOKEN.to_owned(),
             executable: PathBuf::from("/tmp/adapter"),

@@ -227,6 +227,7 @@ mod tests {
             listen,
             subscription_max_processes: 2,
             subscription_timeout_minutes: 3,
+            model_catalog: crate::provider_config::ModelCatalog::default(),
         };
         let backend = AgentBackend::codex(app_server);
         let server = tokio::spawn(serve_on_listener(options, None, backend, listener));
@@ -263,6 +264,7 @@ mod tests {
             listen: listener.local_addr().expect("listener address"),
             subscription_max_processes: 0,
             subscription_timeout_minutes: 1,
+            model_catalog: crate::provider_config::ModelCatalog::default(),
         };
         assert!(
             serve_on_listener(options, None, AgentBackend::codex(app_server), listener)
@@ -277,6 +279,7 @@ mod tests {
             listen: occupied.local_addr().expect("occupied address"),
             subscription_max_processes: 1,
             subscription_timeout_minutes: 1,
+            model_catalog: crate::provider_config::ModelCatalog::default(),
         };
         assert!(serve(options).await.is_err());
     }

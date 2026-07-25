@@ -31,6 +31,7 @@ pub struct AdapterOptions {
     pub listen: SocketAddr,
     pub subscription_max_processes: usize,
     pub subscription_timeout_minutes: u64,
+    pub model_catalog: crate::provider_config::ModelCatalog,
 }
 
 #[derive(Debug)]

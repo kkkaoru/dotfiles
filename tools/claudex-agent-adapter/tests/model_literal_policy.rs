@@ -17,6 +17,12 @@ fn production_sources_do_not_pin_complete_model_ids() {
                 path.display(),
                 index + 1
             );
+            assert!(
+                !contains_vendor_prefix_inference(line),
+                "vendor model-prefix inference in production source {}:{}: {line}",
+                path.display(),
+                index + 1
+            );
         }
     }
 }
@@ -60,6 +66,22 @@ fn contains_complete_model_id(line: &str) -> bool {
         })
 }
 
+/// Vendor prefixes belong in providers.json (`modelPrefixes`), not production Rust.
+/// Matching `starts_with("gpt"|"grok"|"qwen")` hardcodes families and becomes debt on new models.
+fn contains_vendor_prefix_inference(line: &str) -> bool {
+    let lower = line.to_ascii_lowercase();
+    // Allow comments that document the ban; flag executable-looking inference only.
+    if lower.trim_start().starts_with("//") || lower.trim_start().starts_with('#') {
+        return false;
+    }
+    ["starts_with(\"gpt\")", "starts_with(\"grok\")", "starts_with(\"qwen\")"]
+        .iter()
+        .any(|needle| lower.contains(needle))
+        || ["starts_with(\"gpt-\")", "starts_with(\"grok-\")", "starts_with(\"qwen-\")"]
+            .iter()
+            .any(|needle| lower.contains(needle))
+}
+
 #[test]
 fn model_literal_detector_covers_provider_and_claude_families() {
     for literal in [
@@ -80,5 +102,30 @@ fn model_literal_detector_covers_provider_and_claude_families() {
         "copilot-acp",
     ] {
         assert!(!contains_complete_model_id(rule), "false positive: {rule}");
+    }
+}
+
+#[test]
+fn vendor_prefix_inference_detector_flags_hardcoded_families() {
+    for line in [
+        r#"model.starts_with("gpt") || model.starts_with("grok")"#,
+        r#"if model.starts_with("qwen") {"#,
+        r#"if model.starts_with("gpt-") {"#,
+    ] {
+        assert!(
+            contains_vendor_prefix_inference(line),
+            "missed inference: {line}"
+        );
+    }
+    for line in [
+        r#"// Keep off starts_with("gpt") hardcoding"#,
+        r#"model.starts_with(prefix)"#,
+        r#"model.starts_with(prefix.as_str())"#,
+        r#"model.starts_with("vendor-")"#,
+    ] {
+        assert!(
+            !contains_vendor_prefix_inference(line),
+            "false positive: {line}"
+        );
     }
 }

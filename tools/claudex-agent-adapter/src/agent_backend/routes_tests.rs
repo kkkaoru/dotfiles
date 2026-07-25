@@ -9,47 +9,54 @@ mod tests {
     #[test]
     fn shares_codex_startup_but_keeps_acp_servers_model_specific() {
         let routes = RoutedBackends::lazy(&[
-            route("gpt-one", BackendKind::CodexAppServer),
-            route("gpt-two", BackendKind::CodexAppServer),
-            route("gpt-copilot-one", BackendKind::CopilotAcp),
-            route("gpt-copilot-two", BackendKind::CopilotAcp),
-            route("grok-one", BackendKind::GrokAcp),
-            route("grok-two", BackendKind::GrokAcp),
+            route_with_prefix("codex-one", BackendKind::CodexAppServer, "codex-"),
+            route_with_prefix("codex-two", BackendKind::CodexAppServer, "codex-"),
+            route_with_prefix("copilot-one", BackendKind::CopilotAcp, "copilot-"),
+            route_with_prefix("copilot-two", BackendKind::CopilotAcp, "copilot-"),
+            route_with_prefix("acp-one", BackendKind::GrokAcp, "acp-"),
+            route_with_prefix("acp-two", BackendKind::GrokAcp, "acp-"),
         ]);
-        let gpt_one = routes.route(0);
-        let gpt_two = routes.route(1);
+        let codex_one = routes.route(0);
+        let codex_two = routes.route(1);
         let copilot_one = routes.route(2);
         let copilot_two = routes.route(3);
-        let grok_one = routes.route(4);
-        let grok_two = routes.route(5);
+        let acp_one = routes.route(4);
+        let acp_two = routes.route(5);
 
-        assert!(Arc::ptr_eq(&gpt_one.startup, &gpt_two.startup));
+        assert!(Arc::ptr_eq(&codex_one.startup, &codex_two.startup));
         assert!(!Arc::ptr_eq(&copilot_one.startup, &copilot_two.startup));
-        assert!(!Arc::ptr_eq(&grok_one.startup, &grok_two.startup));
+        assert!(!Arc::ptr_eq(&acp_one.startup, &acp_two.startup));
 
-        let (_, dynamic_gpt) = routes.resolve("gpt-dynamic").unwrap();
-        let (_, dynamic_grok) = routes.resolve("grok-dynamic").unwrap();
-        assert!(Arc::ptr_eq(&gpt_one.startup, &dynamic_gpt.startup));
-        assert!(!Arc::ptr_eq(&grok_one.startup, &dynamic_grok.startup));
+        let (_, dynamic_codex) = routes.resolve("codex-dynamic").unwrap();
+        let (_, dynamic_acp) = routes.resolve("acp-dynamic").unwrap();
+        assert!(Arc::ptr_eq(&codex_one.startup, &dynamic_codex.startup));
+        assert!(!Arc::ptr_eq(&acp_one.startup, &dynamic_acp.startup));
     }
 
     #[test]
     fn bounds_dynamic_routes_but_reuses_existing_models() {
-        let routes = RoutedBackends::lazy(&[]);
+        let routes = RoutedBackends::lazy(&[route_with_prefix(
+            "dynamic-base",
+            BackendKind::CodexAppServer,
+            "dynamic-",
+        )]);
         for index in 0..MAX_DYNAMIC_ROUTES {
             let (route_index, route) = routes
-                .resolve(&format!("gpt-dynamic-{index}"))
+                .resolve(&format!("dynamic-extra-{index}"))
                 .expect("available dynamic route");
-            assert_eq!(route_index, index);
-            assert_eq!(route.model, format!("gpt-dynamic-{index}"));
+            assert_eq!(route_index, index + 1);
+            assert_eq!(route.model, format!("dynamic-extra-{index}"));
         }
-        let (existing, _) = routes.resolve("gpt-dynamic-0").expect("existing route");
-        assert_eq!(existing, 0);
-        assert_eq!(routes.route(existing).model, "gpt-dynamic-0");
-        assert_eq!(routes.find("gpt-dynamic-0").unwrap().model, "gpt-dynamic-0");
+        let (existing, _) = routes.resolve("dynamic-extra-0").expect("existing route");
+        assert_eq!(existing, 1);
+        assert_eq!(routes.route(existing).model, "dynamic-extra-0");
+        assert_eq!(
+            routes.find("dynamic-extra-0").unwrap().model,
+            "dynamic-extra-0"
+        );
         assert!(routes.find("missing").is_none());
         assert!(routes.first_ready(BackendKind::CodexAppServer).is_none());
-        assert!(routes.resolve("grok-over-limit").is_err());
+        assert!(routes.resolve("unconfigured-over-limit").is_err());
     }
 
     #[test]
@@ -70,6 +77,8 @@ mod tests {
             BackendKind::GrokAcp
         );
         assert!(routes.first_ready(BackendKind::CodexAppServer).is_none());
+        assert!(!routes.supports("unconfigured-model"));
+        assert!(routes.resolve("unconfigured-model").is_err());
     }
 
     #[tokio::test]
@@ -93,5 +102,11 @@ mod tests {
 
     fn route(model: &str, backend: BackendKind) -> BackendRoute {
         BackendRoute::new(model, backend)
+    }
+
+    fn route_with_prefix(model: &str, backend: BackendKind, prefix: &str) -> BackendRoute {
+        let mut route = BackendRoute::new(model, backend);
+        route.model_prefixes.push(prefix.to_owned());
+        route
     }
 }

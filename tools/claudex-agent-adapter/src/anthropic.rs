@@ -1,6 +1,7 @@
 mod agent_effort;
 mod agent_routing;
 mod content;
+mod request_routing;
 mod retention;
 mod session;
 mod stream;
@@ -21,7 +22,7 @@ use std::{
     time::Instant,
 };
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use axum::{body::Body, http::Response};
 use serde::Deserialize;
 use serde_json::Value;
@@ -70,6 +71,7 @@ pub struct MessagesRequest {
 pub struct Bridge {
     app: Arc<AgentBackend>,
     model: String,
+    model_catalog: crate::provider_config::ModelCatalog,
     advisor_model_override: Option<String>,
     collaborator_model_override: Option<String>,
     subscription_program: PathBuf,
@@ -234,6 +236,7 @@ impl Bridge {
         Self {
             app,
             model,
+            model_catalog: crate::provider_config::ModelCatalog::default(),
             advisor_model_override,
             collaborator_model_override,
             subscription_program,
@@ -260,6 +263,18 @@ impl Bridge {
         }
     }
 
+    /// Install the config-declared model catalog used for unrouted-provider remaps.
+    #[must_use]
+    pub fn with_model_catalog(
+        self,
+        model_catalog: crate::provider_config::ModelCatalog,
+    ) -> Self {
+        Self {
+            model_catalog,
+            ..self
+        }
+    }
+
     pub async fn messages(
         self: &Arc<Self>,
         mut request: MessagesRequest,
@@ -268,34 +283,24 @@ impl Bridge {
         self.sweep_idle_sessions().await;
         let intent = self.agent_efforts.take(&request);
         let is_subagent = intent.is_subagent;
-        if let Some(model) = intent.model_override {
-            request.model = model;
-        } else if is_subagent && !intent.matched {
-            // Unmatched subagent requests often carry Claude Code's subscription fallback model.
-            // Force those onto the adapter main route. Keep fixed custom-agent frontmatter models
-            // that already map to a configured provider backend (for example claudex-qwen).
-            if !self.app.supports_model(&request.model) {
-                request.model.clone_from(&self.model);
-            }
-        }
-        if is_subagent && request.disabled_subagent_models.contains(&request.model) {
-            bail!(
-                "SubAgent model `{}` is disabled by the active Claudex policy ({}/disabledModels)",
-                request.model,
-                crate::subagent_policy::ENV_NAME
-            );
-        }
+        let route = request_routing::resolve_request_model(
+            &mut request,
+            &self.model,
+            is_subagent,
+            intent.matched,
+            intent.model_override,
+            |model| self.app.supports_model(model),
+            |model| self.model_catalog.matches(model),
+        )?;
         let effort = self.resolve_request_effort(&request, intent.effort);
         tracing::debug!(
             request_model = %request.model,
             request_effort = ?effort,
             is_subagent,
+            ?route,
             "resolved request routing"
         );
-        if !request.model.is_empty()
-            && request.model != self.model
-            && !self.app.supports_model(&request.model)
-        {
+        if route == request_routing::RouteDecision::Subscription {
             return self
                 .subscription_messages(request, effort, is_subagent)
                 .await;

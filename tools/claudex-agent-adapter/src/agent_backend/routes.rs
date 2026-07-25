@@ -186,7 +186,7 @@ impl RoutedBackends {
                     .model_prefixes
                     .iter()
                     .any(|prefix| model.starts_with(prefix))
-        }) || inferred_kind(model).is_some()
+        })
     }
 
     pub(super) fn descriptions(&self) -> Vec<String> {
@@ -288,7 +288,6 @@ impl RoutedBackends {
                     .unwrap_or_default()
             })
             .map(|route| route.template.clone())
-            .or_else(|| inferred_kind(model).map(|kind| BackendRoute::new(model, kind)))
             .with_context(|| format!("no backend route is configured for model `{model}`"))?;
         let kind = template.backend;
         let route = Arc::new(RoutedBackend::lazy(
@@ -336,16 +335,6 @@ fn start_backend(route: BackendRoute) -> tokio::sync::watch::Receiver<StartupSta
         sender.send_replace(StartupState::Ready(result));
     });
     receiver
-}
-
-fn inferred_kind(model: &str) -> Option<BackendKind> {
-    if model.starts_with("gpt") {
-        Some(BackendKind::CodexAppServer)
-    } else if model.starts_with("grok") {
-        Some(BackendKind::GrokAcp)
-    } else {
-        None
-    }
 }
 
 #[cfg(test)]
