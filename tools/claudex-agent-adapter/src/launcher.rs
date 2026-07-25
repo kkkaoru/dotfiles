@@ -14,6 +14,8 @@ use serde::Deserialize;
 
 mod launcher_logs;
 mod daemon_process;
+mod stale;
+use stale::wait_until_stopped_with;
 use crate::{
     ADAPTER_PROTOCOL_VERSION, agent_backend::BackendRoute, subagent_policy as policy,
     working_directory,
@@ -49,11 +51,13 @@ struct Health {
     pid: Option<u32>,
     protocol_version: u64,
     #[serde(rename = "build_id")]
-    _build_id: String,
+    build_id: String,
     #[serde(default)]
     backend_routes: Vec<String>,
     subscription_max_processes: usize,
     subscription_timeout_minutes: u64,
+    #[serde(default)]
+    session_slots_used: usize,
 }
 
 impl ServiceConfig {
@@ -180,9 +184,20 @@ async fn ensure_config_running(config: &ServiceConfig) -> Result<String> {
     let client = reqwest::Client::new();
     if let Some(health) = fetch_health(&client, config).await {
         if config.matches(&health) && authenticates(&client, config).await {
+            if health.build_id != env!("CLAUDEX_BUILD_ID") {
+                stale::wait_until_stale_drains(&client, config).await?;
+                stop_stale(config, health.pid).await?;
+            } else {
+                return Ok(config.base_url());
+            }
+        } else {
+            stop_stale(config, health.pid).await?;
+        }
+        if health.build_id != env!("CLAUDEX_BUILD_ID") {
+            start_adapter(config)?;
+            wait_until_ready(&client, config).await?;
             return Ok(config.base_url());
         }
-        stop_stale(config, health.pid).await?;
     }
     start_adapter(config)?;
     wait_until_ready(&client, config).await?;
@@ -264,25 +279,7 @@ async fn stop_stale(config: &ServiceConfig, pid: Option<u32>) -> Result<()> {
         && process_matches(pid, &config.executable)
     {
         terminate(pid);
-        wait_until_stopped(pid, &config.executable).await?;
-    }
-    Ok(())
-}
-
-async fn wait_until_stopped(pid: u32, executable: &std::path::Path) -> Result<()> {
-    wait_until_stopped_with(START_TIMEOUT, || process_matches(pid, executable)).await
-}
-
-async fn wait_until_stopped_with(
-    timeout: Duration,
-    mut process_running: impl FnMut() -> bool,
-) -> Result<()> {
-    let deadline = Instant::now() + timeout;
-    while process_running() {
-        if Instant::now() >= deadline {
-            bail!("agent adapter is still draining active requests; retry after they complete");
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        wait_until_stopped_with(START_TIMEOUT, || process_matches(pid, &config.executable)).await?;
     }
     Ok(())
 }

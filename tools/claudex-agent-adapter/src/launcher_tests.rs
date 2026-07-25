@@ -72,10 +72,11 @@ mod tests {
             status: "ok".to_owned(),
             pid: Some(42),
             protocol_version: ADAPTER_PROTOCOL_VERSION,
-            _build_id: env!("CLAUDEX_BUILD_ID").to_owned(),
+            build_id: env!("CLAUDEX_BUILD_ID").to_owned(),
             backend_routes: route_descriptions(&config.options.routes),
             subscription_max_processes: 20,
             subscription_timeout_minutes: 120,
+            session_slots_used: 0,
         }
     }
 
@@ -100,7 +101,7 @@ mod tests {
         }
 
         let mut compatible_build = healthy(&config);
-        compatible_build._build_id = "newer-compatible-build".to_owned();
+        compatible_build.build_id = "newer-compatible-build".to_owned();
         assert!(config.matches(&compatible_build));
     }
 

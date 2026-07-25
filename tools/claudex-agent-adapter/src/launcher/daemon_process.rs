@@ -46,6 +46,7 @@ fn process_field(pid: u32, field: &str) -> Option<String> {
 fn command_matches(program: &str, command: &str, executable: &Path) -> bool {
     let program = Path::new(program);
     let current = program == executable;
+    let same_binary_name = program.file_name() == executable.file_name();
     let renamed = program.parent() == executable.parent()
         && program.file_name().is_some_and(|name| {
             LEGACY_ADAPTER_NAMES
@@ -55,7 +56,7 @@ fn command_matches(program: &str, command: &str, executable: &Path) -> bool {
     let subcommand = command
         .strip_prefix(&program.to_string_lossy().to_string())
         .and_then(|arguments| arguments.split_ascii_whitespace().next());
-    (current || renamed) && subcommand == Some("serve")
+    (current || renamed || same_binary_name) && subcommand == Some("serve")
 }
 
 #[cfg(test)]
@@ -70,6 +71,11 @@ mod tests {
         assert!(command_matches(
             "/tmp/claudex-agent-adapter",
             "/tmp/claudex-agent-adapter serve --model current",
+            executable
+        ));
+        assert!(command_matches(
+            "/Users/kkk4oru/.cargo/bin/claudex-agent-adapter",
+            "/Users/kkk4oru/.cargo/bin/claudex-agent-adapter serve --model legacy",
             executable
         ));
         assert!(command_matches(
