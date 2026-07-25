@@ -431,6 +431,22 @@ async fn fast_subscription_result_skips_activity_status_and_requires_result_even
 }
 
 #[tokio::test]
+async fn delayed_subscription_result_emits_early_activity_status() {
+    let (sender, mut receiver) = channel();
+    consume_subscription_stream(
+        child(
+            r#"sleep 2.1; printf '%s\n' '{"type":"result","subtype":"success","result":"done"}'"#,
+        ),
+        &sender,
+    )
+    .await
+    .expect("delayed subscription stream");
+    let frames = output(&mut receiver).await;
+    assert!(frames.contains("Claudex is still working"));
+    assert!(frames.contains("done"));
+}
+
+#[tokio::test]
 async fn reports_process_failure_and_stderr() {
     let (sender, mut receiver) = channel();
     let error = consume_subscription_stream(child("printf 'fixture failure' >&2; exit 7"), &sender)

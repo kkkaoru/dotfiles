@@ -13,6 +13,7 @@ use tokio::{
 };
 use uuid::Uuid;
 
+const INITIAL_ACTIVITY_DELAY: Duration = Duration::from_secs(2);
 const ACTIVITY_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
 
 use super::{
@@ -156,7 +157,7 @@ async fn consume_subscription_stream_with_options(
         tool_context: options.tool_context.clone(),
         activity: SubscriptionActivity::default(),
     };
-    let mut activity_deadline = Box::pin(tokio::time::sleep(ACTIVITY_KEEPALIVE_INTERVAL));
+    let mut activity_deadline = Box::pin(tokio::time::sleep(INITIAL_ACTIVITY_DELAY));
     loop {
         tokio::select! {
             () = sender.closed() => return Ok(()),
