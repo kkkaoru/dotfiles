@@ -7,7 +7,7 @@
     "allow": [],
     "deny": []
   },
-  "model": "sonnet",
+  "model": "sonnet[1m]",
   "enableAllProjectMcpServers": true,
   "hooks": {
     "SessionStart": [
