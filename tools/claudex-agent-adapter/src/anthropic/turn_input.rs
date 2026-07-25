@@ -59,7 +59,7 @@ fn bounded_history(messages: &[Value]) -> (&'static str, String) {
     tracing::warn!(
         original_bytes,
         retained_messages = messages.len().saturating_sub(start),
-        "truncated reconstructed transcript before Codex turn/start"
+        "truncated reconstructed transcript before provider turn/start"
     );
     (TRUNCATED_HISTORY_HEADER, history)
 }

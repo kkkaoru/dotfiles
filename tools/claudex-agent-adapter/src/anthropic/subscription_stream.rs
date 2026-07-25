@@ -162,8 +162,22 @@ async fn consume_subscription_stream_with_options(
     let mut activity_deadline = Box::pin(tokio::time::sleep(INITIAL_ACTIVITY_DELAY));
     let mut initial_activity = true;
     loop {
+        // Prefer child output lines over keepalives so heartbeats never jump
+        // ahead of already-buffered stream-json events (scrambled UI order).
         tokio::select! {
+            biased;
             () = sender.closed() => return Ok(()),
+            line = lines.next_line() => match line? {
+                Some(line) => {
+                    stream.handle_line(sender, &line).await?;
+                    // Real output postpones the idle status timer.
+                    activity_deadline.as_mut().reset(
+                        tokio::time::Instant::now() + ACTIVITY_KEEPALIVE_INTERVAL,
+                    );
+                    initial_activity = false;
+                }
+                None => break,
+            },
             () = &mut activity_deadline => {
                 if !initial_activity || !stream.text_started {
                     stream.activity_keepalive(sender).await?;
@@ -172,10 +186,6 @@ async fn consume_subscription_stream_with_options(
                 activity_deadline.as_mut().reset(
                     tokio::time::Instant::now() + ACTIVITY_KEEPALIVE_INTERVAL,
                 );
-            }
-            line = lines.next_line() => match line? {
-                Some(line) => stream.handle_line(sender, &line).await?,
-                None => break,
             }
         }
     }

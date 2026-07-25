@@ -197,11 +197,15 @@ impl Bridge {
         // while the provider is already producing visible output.
         let mut activity_deadline = Box::pin(sleep(activity_interval));
         loop {
+            // Prefer provider events over keepalives. A biased keepalive-first
+            // select reordered heartbeats ahead of already-queued text/tool
+            // events and made the Claude Code log stream look scrambled.
             let next = tokio::select! {
                 biased;
                 () = sender.closed() => {
                     return Ok(self.disconnect_stream(session, events).await);
                 }
+                next = next_event(events, builder.has_external_tool_calls()) => next,
                 () = &mut activity_deadline => {
                     refresh_activity_keepalive(
                         &mut builder,
@@ -211,7 +215,6 @@ impl Bridge {
                     ).await?;
                     continue;
                 }
-                next = next_event(events, builder.has_external_tool_calls()) => next,
             };
             let event = match next {
                 NextEvent::Event(event) => event,

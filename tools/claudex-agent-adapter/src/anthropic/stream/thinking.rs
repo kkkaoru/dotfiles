@@ -156,6 +156,15 @@ impl ThinkingState {
         if delta.is_empty() {
             return Ok(());
         }
+        // Do not tear down an open model-reasoning block for tool chrome. Closing
+        // mid-thought produced signature/stop noise and reordered the UI log.
+        if self
+            .open
+            .as_ref()
+            .is_some_and(|open| is_model_reasoning_item(&open.item_id))
+        {
+            return Ok(());
+        }
         if self
             .open
             .as_ref()
@@ -178,6 +187,18 @@ impl ThinkingState {
         })
         .await
     }
+
+    /// True once any non-thinking content block exists (answer text / tools).
+    pub(super) fn has_visible_answer(&self, blocks: &[Value]) -> bool {
+        has_visible_output(blocks)
+    }
+}
+
+fn is_model_reasoning_item(item_id: &str) -> bool {
+    !matches!(
+        item_id,
+        "claudex_provider_status" | "claudex_activity_keepalive"
+    ) && !item_id.ends_with(":status")
 }
 
 fn summary_delta(event: &Value) -> Option<(&str, i64, &str)> {

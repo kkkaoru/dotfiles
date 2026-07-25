@@ -121,7 +121,13 @@ pub(super) async fn start(
     let (io_stopped, io_stopped_rx) = oneshot::channel();
     tokio::task::spawn_local(async move {
         if let Err(error) = handle_io.await {
-            tracing::error!(?error, provider = provider.label(), "ACP I/O stopped");
+            // EPIPE / broken pipe is common when the Node ACP child exits first.
+            // Surface it clearly so route recycle kicks in instead of hanging turns.
+            tracing::error!(
+                ?error,
+                provider = provider.label(),
+                "ACP I/O stopped (provider likely exited; recycle the route)"
+            );
         }
         // Mark the provider dead before failed RPCs wake their callers. Otherwise session/new can
         // observe a closed connection while the driver still appears alive and skip route recovery.

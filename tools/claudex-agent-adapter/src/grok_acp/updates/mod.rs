@@ -52,15 +52,15 @@ pub(super) fn dispatch_notification(
             dispatch_thought(events, thoughts, &session_id, chunk);
         }
         acp::SessionUpdate::ToolCall(call) => {
+            // Only tool *starts* open a new thought unit. Per-update breaks made
+            // summaryIndex thrash and reordered thinking chunks in the UI log.
             thoughts.break_after_interrupt(&session_id);
             dispatch_provider_tool_call(events, &session_id, call);
         }
         acp::SessionUpdate::ToolCallUpdate(update) => {
-            thoughts.break_after_interrupt(&session_id);
             dispatch_provider_tool_update(events, &session_id, update);
         }
         acp::SessionUpdate::Plan(plan) => {
-            thoughts.break_after_interrupt(&session_id);
             dispatch_plan(events, &session_id, plan);
         }
         // Mode/title chatter is far noisier than Claude Code's own session UI.

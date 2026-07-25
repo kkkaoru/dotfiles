@@ -165,17 +165,13 @@ impl SegmentBuilder {
         if delta.is_empty() {
             return Ok(());
         }
-        if let Some((index, _)) = self.open_text_block {
-            return send_stream_frame(stream, "content_block_delta", || {
-                json!({
-                    "type":"content_block_delta", "index":index,
-                    "delta":{"type":"text_delta","text":delta}
-                })
-            })
-            .await;
+        // Never splice status into open answer text — that scrambled token order
+        // in Claude Code's log (▶ lines mid-sentence). After text has started,
+        // drop chrome; the tool already ran on the provider.
+        if self.open_text_block.is_some() || self.thinking.has_visible_answer(self.blocks.as_slice())
+        {
+            return Ok(());
         }
-        // Before answer text exists, surface progress in thinking so the final
-        // transcript does not treat ▶/✓ lines as the model answer.
         self.thinking
             .status_progress(delta, &mut self.blocks, stream)
             .await
