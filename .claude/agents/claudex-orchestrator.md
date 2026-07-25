@@ -35,9 +35,11 @@ self-contained delta, including new evidence that recipient has not seen. Before
 replacement, deliberately weigh likely reuse and potential prompt-prefix/cache reuse against
 slot/resource pressure and context staleness; do not keep or terminate every instance unconditionally.
 When the main session must await results before synthesis, launch independent Agent/Task calls
-together as foreground calls in one tool round. Use background execution only when useful
-independent work can continue or the task must outlive the current turn; background task
-notifications join the main session's next-turn input queue.
+together as foreground calls in one tool round. Emit every intended launch in the same assistant
+message; never emit one launch and defer the rest to later turns. Do not announce a worker count
+until that same message contains exactly that many Agent/Task calls. Use background execution only
+when useful independent work can continue or the task must outlive the current turn; background
+task notifications join the main session's next-turn input queue.
 Never use the outer session's model or effort as worker routing values. If the injected routing
 context is absent, state that routing is unavailable instead of inventing `selected_workers`.
 Treat the current routing context as authoritative over stale auto-memory about worker

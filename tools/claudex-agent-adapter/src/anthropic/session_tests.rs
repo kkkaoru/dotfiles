@@ -143,6 +143,13 @@ fn subscription_prompt_keeps_external_provider_models_out_of_the_native_field() 
 }
 
 #[test]
+fn subscription_prompt_requires_atomic_parallel_launches() {
+    let prompt = subscription_request_prompt(&request(json!("system"), Vec::new()));
+    assert!(prompt.contains("same assistant message and tool round"));
+    assert!(prompt.contains("exactly that many launch calls"));
+}
+
+#[test]
 fn starts_codex_threads_in_the_request_working_directory() {
     let root = tempfile::tempdir().expect("request cwd fixture");
     let active_cwd = root.path().join("active-child");
