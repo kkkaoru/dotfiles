@@ -110,7 +110,7 @@ mod tests {
         let mut config = config();
         config.options.listen = "127.0.0.1:1".parse().expect("closed test listener");
         config.executable = PathBuf::from("/definitely/missing/adapter");
-        stop_stale(&config, None).await;
+        stop_stale(&config, None).await.expect("absent process");
         terminate(u32::MAX);
         let error = wait_until_ready_with(
             &reqwest::Client::new(),
@@ -122,7 +122,9 @@ mod tests {
         .await
         .expect_err("unreachable adapter must time out");
         assert!(error.to_string().contains("failed to start"));
-        stop_stale(&config, Some(std::process::id())).await;
+        stop_stale(&config, Some(std::process::id()))
+            .await
+            .expect("current process");
     }
 
     #[test]

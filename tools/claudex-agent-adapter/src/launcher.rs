@@ -175,7 +175,7 @@ async fn ensure_config_running(config: &ServiceConfig) -> Result<String> {
         if config.matches(&health) && authenticates(&client, config).await {
             return Ok(config.base_url());
         }
-        stop_stale(config, health.pid).await;
+        stop_stale(config, health.pid).await?;
     }
     start_adapter(config)?;
     wait_until_ready(&client, config).await?;
@@ -251,20 +251,26 @@ async fn fetch_health(client: &reqwest::Client, config: &ServiceConfig) -> Optio
         .ok()
 }
 
-async fn stop_stale(config: &ServiceConfig, pid: Option<u32>) {
+async fn stop_stale(config: &ServiceConfig, pid: Option<u32>) -> Result<()> {
     if let Some(pid) = pid
         && pid != std::process::id()
         && process_matches(pid, &config.executable)
     {
         terminate(pid);
+        wait_until_stopped(pid, &config.executable).await?;
     }
-    let client = reqwest::Client::new();
-    for _ in 0..20 {
-        if fetch_health(&client, config).await.is_none() {
-            return;
+    Ok(())
+}
+
+async fn wait_until_stopped(pid: u32, executable: &std::path::Path) -> Result<()> {
+    let deadline = Instant::now() + START_TIMEOUT;
+    while process_matches(pid, executable) {
+        if Instant::now() >= deadline {
+            bail!("agent adapter is still draining active requests; retry after they complete");
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
+    Ok(())
 }
 
 fn start_adapter(config: &ServiceConfig) -> Result<()> {

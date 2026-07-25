@@ -11,6 +11,8 @@ use crate::{
     provider_config,
 };
 
+mod shutdown;
+
 #[derive(Debug)]
 enum RuntimeCommand {
     BuildId,
@@ -266,9 +268,7 @@ async fn serve_on_listener(
         options.subscription_timeout_minutes,
     )?);
     tracing::info!(listen = %options.listen, routes = ?options.routes, model = %options.model, "claudex agent adapter is ready");
-    axum::serve(listener, http_router(bridge, options.model, auth_token))
-        .await
-        .map_err(Into::into)
+    shutdown::serve(listener, http_router(bridge, options.model, auth_token)).await
 }
 
 fn configured_token() -> Option<String> {
