@@ -58,10 +58,13 @@ pub(super) async fn start(
     u32,
 )> {
     let mut command = Command::new(program);
+    // Provider ACP children must not re-run Claude Code SessionStart / routing
+    // hooks (Herdr stdin, capacity probes). Grok historically used CLAUDEX_GROK_ACP;
+    // all ACP providers now also set CLAUDEX_PROVIDER_ACP for a single guard.
+    command.env("CLAUDEX_PROVIDER_ACP", "1");
     match provider {
         AcpProvider::Grok => {
-            // Grok runs Claude-compatible project hooks but does not close their stdin. Mark the
-            // child so the SessionStart hook can skip its blocking Claude-only state report.
+            // Keep the legacy flag for existing SessionStart guards in settings.
             command.env("CLAUDEX_GROK_ACP", "1");
             command.args(["--model", model, "agent", "--always-approve"]);
             if let Some(path) = plugin::prepare(program)? {

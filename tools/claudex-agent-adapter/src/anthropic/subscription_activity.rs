@@ -31,6 +31,10 @@ impl SubscriptionActivity {
         text_index: Option<usize>,
         next_index: &mut usize,
     ) -> Result<()> {
+        // Prefer thinking heartbeats so stream-only ZWSP never lands in the
+        // final assistant text the way a text_delta injector would. When text is
+        // already open, still send a stream-only text heartbeat for the idle
+        // watchdog without reopening thinking after text (block-order safety).
         if let Some(index) = text_index {
             return send_text_delta(sender, index, HEARTBEAT).await;
         }

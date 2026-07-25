@@ -36,6 +36,9 @@ pub(super) fn dispatch_provider_tool_update(
 ) {
     let call_id = update.tool_call_id.0.to_string();
     let fields = update.fields;
+    // Prefer a single ToolCall for first-seen pending/in_progress work. Emitting
+    // both call + update for the same start doubles queue traffic without a UI win
+    // (the stream builder already dedupes display by callId).
     if let (Some(title), Some(status)) = (fields.title.clone(), fields.status) {
         if matches!(
             status,
@@ -60,30 +63,38 @@ pub(super) fn dispatch_provider_tool_update(
                 call = call.locations(locations);
             }
             dispatch_provider_tool_call(events, session_id, call);
+            return;
         }
     }
 
     let Some(status) = fields.status else {
-        if fields.raw_input.is_some() || fields.content.is_some() || fields.locations.is_some() {
+        // Content-only patches without a status do not change Claude Code's WIP
+        // surface; skip them to cut event spam from chatty ACP providers.
+        return;
+    };
+    // Ignore pure pending/in_progress updates without new identity — start was
+    // already shown (or will arrive as ToolCall). Only terminal states matter.
+    if matches!(
+        status,
+        acp::ToolCallStatus::Pending | acp::ToolCallStatus::InProgress
+    ) && fields.raw_output.is_none()
+        && fields.content.is_none()
+    {
+        // Title-only progress with callId still needs a start if ToolCall never
+        // arrived (update-only tools).
+        if fields.title.is_some() {
             let mut params = json!({
                 "threadId": session_id,
                 "callId": call_id,
-                "status": "pending"
+                "status": tool_status_label(status)
             });
             if let Some(title) = fields.title {
                 params["title"] = json!(title);
             }
-            if let Some(raw_input) = fields.raw_input {
-                params["arguments"] =
-                    enrich_arguments(raw_input, &fields.content, &fields.locations);
-            } else {
-                params["arguments"] =
-                    enrich_arguments(json!({}), &fields.content, &fields.locations);
-            }
             events.dispatch(json!({ "method": PROVIDER_TOOL_UPDATE, "params": params }));
         }
         return;
-    };
+    }
     let status = tool_status_label(status);
     let mut params = json!({
         "threadId": session_id,
@@ -109,19 +120,23 @@ pub(super) fn dispatch_plan(events: &ThreadEventDispatcher, session_id: &str, pl
     if plan.entries.is_empty() {
         return;
     }
-    let mut text = String::from("\n\nPlan:\n");
-    for entry in plan.entries {
-        let mark = match entry.status {
-            acp::PlanEntryStatus::Completed => "●",
-            acp::PlanEntryStatus::InProgress => "◎",
-            acp::PlanEntryStatus::Pending => "○",
-            _ => "·",
-        };
-        text.push_str(mark);
-        text.push(' ');
-        text.push_str(entry.content.trim());
-        text.push('\n');
-    }
+    // Compact one-line summary instead of reprinting full checklists every tick.
+    let total = plan.entries.len();
+    let completed = plan
+        .entries
+        .iter()
+        .filter(|entry| matches!(entry.status, acp::PlanEntryStatus::Completed))
+        .count();
+    let active = plan.entries.iter().find_map(|entry| {
+        matches!(entry.status, acp::PlanEntryStatus::InProgress)
+            .then(|| entry.content.trim().to_owned())
+    });
+    let text = match active {
+        Some(step) if !step.is_empty() => {
+            format!("\nPlan {completed}/{total}: {step}\n")
+        }
+        _ => format!("\nPlan {completed}/{total}\n"),
+    };
     dispatch_status(events, session_id, text);
 }
 

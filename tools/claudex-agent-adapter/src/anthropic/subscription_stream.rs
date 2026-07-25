@@ -13,7 +13,8 @@ use tokio::{
 };
 use uuid::Uuid;
 
-const INITIAL_ACTIVITY_DELAY: Duration = Duration::from_secs(2);
+// Align with the main provider stream: status only after real silence (~30s).
+const INITIAL_ACTIVITY_DELAY: Duration = Duration::from_secs(30);
 const ACTIVITY_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
 use super::{
     content::sse,

@@ -524,7 +524,9 @@ async fn fast_subscription_result_skips_activity_status_and_requires_result_even
 }
 
 #[tokio::test]
-async fn delayed_subscription_result_emits_early_activity_status() {
+async fn delayed_subscription_result_stays_quiet_under_activity_threshold() {
+    // Initial activity delay is 30s (Claude-like quieter idle). A ~2s silent wait
+    // must not inject a "still working" thinking block.
     let (sender, mut receiver) = channel();
     consume_subscription_stream(
         child(
@@ -535,7 +537,7 @@ async fn delayed_subscription_result_emits_early_activity_status() {
     .await
     .expect("delayed subscription stream");
     let frames = output(&mut receiver).await;
-    assert!(frames.contains("Claudex is still working"));
+    assert!(!frames.contains("Claudex is still working"));
     assert!(frames.contains("done"));
 }
 

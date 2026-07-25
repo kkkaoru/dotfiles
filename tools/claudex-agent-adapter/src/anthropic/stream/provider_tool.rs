@@ -1,12 +1,11 @@
-//! Display-only progress for provider-owned tools (Grok ACP).
+//! Ephemeral WIP progress for provider-owned tools (Grok / configured ACP).
+//!
+//! Progress is streamed for live visibility but not committed as answer text.
 
 use anyhow::{Context, Result};
-use serde_json::{Value, json};
+use serde_json::Value;
 
-use super::{
-    builder::SegmentBuilder,
-    protocol::{StreamSender, send_stream_frame},
-};
+use super::{builder::SegmentBuilder, protocol::StreamSender};
 
 const FAILED_STATUS_PREVIEW_CHAR_LIMIT: usize = 400;
 const COMPLETED_STATUS_PREVIEW_CHAR_LIMIT: usize = 240;
@@ -39,7 +38,8 @@ impl SegmentBuilder {
         if !self.remember_provider_tool(call_id, title) {
             return Ok(());
         }
-        self.append_text(&format!("\n\n▶ {title}\n"), stream).await
+        self.stream_ephemeral_status(&format!("\n\n▶ {title}\n"), stream)
+            .await
     }
 
     /// Status / output for provider-owned work already streamed.
@@ -68,14 +68,14 @@ impl SegmentBuilder {
             "failed" => {
                 let detail = output_preview(params.get("output"), "failed");
                 let preview = truncate_for_status(&detail, FAILED_STATUS_PREVIEW_CHAR_LIMIT);
-                self.append_text(&format!("\n✗ {title}: {preview}\n"), stream)
+                self.stream_ephemeral_status(&format!("\n✗ {title}: {preview}\n"), stream)
                     .await?;
             }
             "completed" => {
                 let detail = output_preview(params.get("output"), "");
                 if !detail.is_empty() {
                     let preview = truncate_for_status(&detail, COMPLETED_STATUS_PREVIEW_CHAR_LIMIT);
-                    self.append_text(&format!("\n✓ {title}: {preview}\n"), stream)
+                    self.stream_ephemeral_status(&format!("\n✓ {title}: {preview}\n"), stream)
                         .await?;
                 }
             }
@@ -100,7 +100,8 @@ impl SegmentBuilder {
         if !self.remember_provider_tool(call_id, title) {
             return Ok(());
         }
-        self.append_text(&format!("\n\n▶ {title}\n"), stream).await
+        self.stream_ephemeral_status(&format!("\n\n▶ {title}\n"), stream)
+            .await
     }
 
     fn remember_provider_tool(&mut self, call_id: &str, title: &str) -> bool {
@@ -117,31 +118,6 @@ impl SegmentBuilder {
             .iter()
             .find(|(seen, _)| seen == call_id)
             .map(|(_, title)| title.as_str())
-    }
-
-    pub(super) async fn append_text(
-        &mut self,
-        delta: &str,
-        stream: Option<&StreamSender>,
-    ) -> Result<()> {
-        if delta.is_empty() {
-            return Ok(());
-        }
-        self.thinking.close(&mut self.blocks, stream).await?;
-        let index = match &mut self.open_text_block {
-            Some((index, text)) => {
-                text.push_str(delta);
-                *index
-            }
-            None => self.start_text_block(delta, stream).await?,
-        };
-        send_stream_frame(stream, "content_block_delta", || {
-            json!({
-                "type":"content_block_delta", "index":index,
-                "delta":{"type":"text_delta","text":delta}
-            })
-        })
-        .await
     }
 }
 

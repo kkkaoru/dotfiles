@@ -13,6 +13,7 @@ use crate::anthropic::{
 
 use super::{
     protocol::{StreamSender, send_stream_frame, send_tool_use},
+    sanitize::sanitize_committed_blocks,
     thinking::ThinkingState,
 };
 
@@ -104,6 +105,15 @@ impl SegmentBuilder {
         if delta.is_empty() {
             return Ok(());
         }
+        // ACP status lines reuse agentMessage/delta with itemId "...:status".
+        // Keep them live-only so the final answer matches Claude Code more closely.
+        if event
+            .pointer("/params/itemId")
+            .and_then(Value::as_str)
+            .is_some_and(|id| id.ends_with(":status"))
+        {
+            return self.stream_ephemeral_status(delta, stream).await;
+        }
         self.thinking.close(&mut self.blocks, stream).await?;
         let index = match &mut self.open_text_block {
             Some((index, text)) => {
@@ -123,11 +133,14 @@ impl SegmentBuilder {
 
     /// Keep Claude Code's decoded-event idle watchdog alive during provider
     /// silence (long Grok/Codex tool runs with no model tokens).
+    ///
+    /// Heartbeats are stream-only when assistant text is already open so the
+    /// final answer/transcript never accumulates zero-width junk the way a
+    /// wall-clock injector would. Otherwise use a disposable thinking block.
     pub(super) async fn activity_keepalive(&mut self, stream: Option<&StreamSender>) -> Result<()> {
         const HEARTBEAT: &str = "\u{200b}";
-        if let Some((index, text)) = &mut self.open_text_block {
-            text.push_str(HEARTBEAT);
-            let index = *index;
+        if let Some((index, _)) = self.open_text_block {
+            // Stream-only: do not mutate the committed text buffer.
             return send_stream_frame(stream, "content_block_delta", || {
                 json!({
                     "type":"content_block_delta", "index":index,
@@ -138,6 +151,33 @@ impl SegmentBuilder {
         }
         self.thinking
             .activity_keepalive(&mut self.blocks, stream)
+            .await
+    }
+
+    /// Live-only provider progress (ACP tools). Streamed for WIP visibility but
+    /// excluded from committed answer text so history matches Claude Code more
+    /// closely (tool cards are not part of the assistant answer).
+    pub(super) async fn stream_ephemeral_status(
+        &mut self,
+        delta: &str,
+        stream: Option<&StreamSender>,
+    ) -> Result<()> {
+        if delta.is_empty() {
+            return Ok(());
+        }
+        if let Some((index, _)) = self.open_text_block {
+            return send_stream_frame(stream, "content_block_delta", || {
+                json!({
+                    "type":"content_block_delta", "index":index,
+                    "delta":{"type":"text_delta","text":delta}
+                })
+            })
+            .await;
+        }
+        // Before answer text exists, surface progress in thinking so the final
+        // transcript does not treat ▶/✓ lines as the model answer.
+        self.thinking
+            .status_progress(delta, &mut self.blocks, stream)
             .await
     }
 
@@ -276,6 +316,7 @@ impl SegmentBuilder {
 
     pub(super) async fn finish(mut self, stream: Option<&StreamSender>) -> Result<Segment> {
         self.close_open_blocks(stream).await?;
+        sanitize_committed_blocks(&mut self.blocks);
         if self.usage.output_tokens == 0 {
             self.usage.output_tokens = self
                 .blocks

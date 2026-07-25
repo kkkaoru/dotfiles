@@ -187,7 +187,7 @@ fn assert_qwen_runtime_is_bounded(root: &std::path::Path, config: &serde_json::V
     assert_eq!(
         qwen["acp"]["arguments"],
         serde_json::json!([
-            "QWEN_WEB_FETCH_PROCESSING_TIMEOUT_MS=15000",
+            "QWEN_WEB_FETCH_PROCESSING_TIMEOUT_MS=8000",
             "qwen",
             "--acp",
             "--approval-mode",
@@ -221,7 +221,11 @@ fn assert_provider_children_skip_claude_session_hook(root: &std::path::Path) {
         .as_str()
         .expect("SessionStart command");
     let hook = command.find("herdr-agent-state.sh").expect("Herdr hook");
-    for guard in ["CLAUDEX_NONINTERACTIVE_CHILD", "CLAUDEX_GROK_ACP"] {
+    for guard in [
+        "CLAUDEX_NONINTERACTIVE_CHILD",
+        "CLAUDEX_GROK_ACP",
+        "CLAUDEX_PROVIDER_ACP",
+    ] {
         assert!(
             command.find(guard).is_some_and(|index| index < hook),
             "{guard} must be checked before the Herdr hook reads stdin"

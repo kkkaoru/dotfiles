@@ -4,10 +4,10 @@
 //! |---|---|
 //! | AgentThoughtChunk | thinking panel (`thinking_delta`) |
 //! | AgentMessageChunk | assistant text |
-//! | ToolCall / ToolCallUpdate | provider progress text (never executable `tool_use`) |
-//! | Plan | compact plan status text |
-//! | SessionInfo / mode | light status (when useful) |
-//! | xAI SubAgent extensions | status text |
+//! | ToolCall / ToolCallUpdate | ephemeral WIP progress (never executable `tool_use`) |
+//! | Plan | compact plan status (debounced; not answer text) |
+//! | SessionInfo / mode | ignored (noisy vs native Claude Code) |
+//! | xAI SubAgent extensions | compact status |
 
 mod tools;
 
@@ -57,21 +57,11 @@ pub(super) fn dispatch_notification(
         acp::SessionUpdate::Plan(plan) => {
             dispatch_plan(events, &session_id, plan);
         }
-        acp::SessionUpdate::CurrentModeUpdate(update) => {
-            dispatch_status(
-                events,
-                &session_id,
-                format!("\n\nSession mode: {}\n", update.current_mode_id),
-            );
-        }
-        acp::SessionUpdate::SessionInfoUpdate(info) => {
-            if let acp::MaybeUndefined::Value(title) = info.title {
-                if !title.is_empty() {
-                    dispatch_status(events, &session_id, format!("\n\nSession: {title}\n"));
-                }
-            }
-        }
-        acp::SessionUpdate::UserMessageChunk(_)
+        // Mode/title chatter is far noisier than Claude Code's own session UI.
+        // Drop it so ACP turns do not spam assistant/thinking streams.
+        acp::SessionUpdate::CurrentModeUpdate(_)
+        | acp::SessionUpdate::SessionInfoUpdate(_)
+        | acp::SessionUpdate::UserMessageChunk(_)
         | acp::SessionUpdate::AvailableCommandsUpdate(_)
         | acp::SessionUpdate::ConfigOptionUpdate(_) => {}
         _ => {}
@@ -117,6 +107,9 @@ fn dispatch_text(
     }
 }
 
+/// Status that must not become answer text. Uses the shared agent-message path
+/// with a dedicated `itemId` suffix so the stream builder can treat it as
+/// ephemeral WIP and strip it from the committed transcript.
 pub(super) fn dispatch_status(events: &ThreadEventDispatcher, session_id: &str, delta: String) {
     dispatch_delta(events, session_id, AGENT_MESSAGE_METHOD, &delta);
 }

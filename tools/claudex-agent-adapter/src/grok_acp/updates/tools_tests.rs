@@ -217,9 +217,11 @@ mod tests {
         {
             messages.push(message);
         }
-        assert_eq!(messages.len(), 7);
+        // Content-only / location-only patches without terminal status are dropped.
+        assert_eq!(messages.len(), 4);
         assert!(messages.iter().any(|event| event["params"]["output"] == "output"));
-        assert!(messages.iter().any(|event| {
+        assert!(messages.iter().any(|event| event["params"]["status"] == "failed"));
+        assert!(!messages.iter().any(|event| {
             event["params"]["arguments"]["locations"][0]["path"] == "only-location"
         }));
     }
@@ -234,13 +236,14 @@ mod tests {
                 .iter()
                 .any(|event| event["params"]["callId"] == "pending")
         );
+        // Status-less content patches are not bridge events.
         assert!(
-            messages
+            !messages
                 .iter()
                 .any(|event| event["params"]["callId"] == "partial")
         );
         assert!(
-            messages
+            !messages
                 .iter()
                 .any(|event| event["params"]["callId"] == "partial-raw")
         );
@@ -248,6 +251,13 @@ mod tests {
             !messages
                 .iter()
                 .any(|event| event["params"]["callId"] == "empty")
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|event| event["params"]["delta"]
+                    .as_str()
+                    .is_some_and(|text| text.contains("Plan 0/2")))
         );
     }
 

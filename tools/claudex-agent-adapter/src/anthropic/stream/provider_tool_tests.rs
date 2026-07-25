@@ -44,15 +44,21 @@ mod tests {
             .await
             .expect("default provider progress");
 
+        // Progress lives in ephemeral thinking, not open answer text.
         assert_eq!(builder.blocks.len(), EXPECTED_PROGRESS_BLOCKS);
-        let (_, text) = builder.open_text_block.as_ref().unwrap();
-        let text = text.as_str();
-        assert!(text.contains("▶ Read"));
-        assert!(text.contains("▶ Search docs"));
-        assert!(!text.contains("tool_use"));
+        assert!(builder.open_text_block.is_none());
+        let thinking = builder.blocks[0]["thinking"].as_str().expect("status thinking");
+        assert!(thinking.contains("▶ Read"));
+        assert!(thinking.contains("▶ Search docs"));
+        assert!(!thinking.contains("tool_use"));
         assert_eq!(
             builder.provider_tool_calls.len(),
             EXPECTED_PROVIDER_CALLS
+        );
+        let segment = builder.finish(None).await.expect("segment");
+        assert!(
+            segment.blocks.is_empty(),
+            "provider progress must not remain in committed answer blocks"
         );
     }
 
@@ -60,7 +66,7 @@ mod tests {
     async fn streams_provider_progress_and_all_status_variants() {
         const SAMPLE_INPUT_TOKEN_COUNT: u64 = 1;
         const STREAM_CHANNEL_CAPACITY: usize = 32;
-        const EXPECTED_PROGRESS_FRAMES: usize = 5;
+        const EXPECTED_PROGRESS_FRAMES: usize = 6;
         let (sender, mut receiver) =
             mpsc::channel::<Result<Bytes, Infallible>>(STREAM_CHANNEL_CAPACITY);
         let mut builder = SegmentBuilder::new(SAMPLE_INPUT_TOKEN_COUNT);
@@ -93,10 +99,6 @@ mod tests {
             .provider_tool_update(&json!({"params":{"status":"pending"}}), Some(&sender))
             .await
             .expect("ignored status");
-        builder
-            .append_text("", Some(&sender))
-            .await
-            .expect("empty text");
         assert!(
             builder
                 .provider_tool_update(&json!({}), None)
@@ -107,18 +109,20 @@ mod tests {
         drop(sender);
 
         assert!(segment.blocks.iter().all(|block| block["type"] != "tool_use"));
-        let text = segment
-            .blocks
-            .first()
-            .and_then(|block| block["text"].as_str())
-            .expect("status text");
-        assert!(text.contains("▶ Bash"));
-        assert!(text.contains("✗ Build: {\"code\":1}"));
-        assert!(text.contains("✓ Read: done"));
+        // Live frames carried progress; committed segment stays answer-clean.
+        assert!(
+            segment.blocks.is_empty(),
+            "provider progress is ephemeral and stripped on finish"
+        );
+        let mut output = String::new();
         let mut frame_count = 0;
-        while receiver.recv().await.is_some() {
+        while let Some(frame) = receiver.recv().await {
             frame_count += 1;
+            output.push_str(&String::from_utf8_lossy(&frame.expect("frame")));
         }
+        assert!(output.contains("▶ Bash"));
+        assert!(output.contains("✗ Build"));
+        assert!(output.contains("✓ Read"));
         assert_eq!(frame_count, EXPECTED_PROGRESS_FRAMES);
     }
 
@@ -149,12 +153,17 @@ mod tests {
             )
             .await
             .expect("provider completion");
+        // Before finish, progress is in thinking; after finish it is stripped.
+        assert_eq!(
+            builder.blocks[0]["thinking"]
+                .as_str()
+                .expect("progress thinking")
+                .matches("▶ WebFetch")
+                .count(),
+            1
+        );
         let segment = builder.finish(None).await.expect("segment");
-        let text = segment.blocks[0]["text"].as_str().expect("progress text");
-
-        assert_eq!(text.matches("▶ WebFetch").count(), 1);
-        assert!(text.contains("✓ WebFetch: done"));
-        assert!(!text.contains("✓ tool"));
+        assert!(segment.blocks.is_empty());
     }
 
     #[test]

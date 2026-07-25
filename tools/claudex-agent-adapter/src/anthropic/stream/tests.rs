@@ -162,11 +162,8 @@ async fn activity_keepalive_emits_visible_status_then_zero_width_heartbeat() {
     let segment = builder.finish(Some(&sender)).await.expect("segment");
     drop(sender);
 
-    assert_eq!(segment.blocks[0]["type"], "thinking");
-    assert_eq!(
-        segment.blocks[0]["thinking"],
-        "Claudex is still working; waiting for provider output\u{2026}\u{200b}"
-    );
+    // Pure keepalive thinking is stripped from the committed segment.
+    assert!(segment.blocks.is_empty());
 
     let mut frames = Vec::new();
     while let Some(frame) = receiver.recv().await {
@@ -203,10 +200,8 @@ async fn activity_keepalive_uses_open_text_when_visible_output_started() {
     let segment = builder.finish(Some(&sender)).await.expect("segment");
     drop(sender);
 
-    assert_eq!(
-        segment.blocks[0],
-        json!({"type":"text","text":"hi\u{200b}"})
-    );
+    // Stream-only heartbeat: final answer text stays clean.
+    assert_eq!(segment.blocks[0], json!({"type":"text","text":"hi"}));
     let mut saw_zwsp = false;
     while let Some(frame) = receiver.recv().await {
         let frame = String::from_utf8(frame.expect("frame").to_vec()).expect("UTF-8 SSE");
@@ -338,16 +333,17 @@ async fn reports_slow_stream_preparation_before_the_provider_is_ready() {
     drop(sender);
 
     assert_eq!(segment.usage.input_tokens, 3);
-    assert!(
-        segment.blocks[0]["thinking"]
-            .as_str()
-            .expect("activity status")
-            .contains("waiting for provider output")
-    );
+    // Keepalive thinking is live-only; committed segment stays clean.
+    assert!(segment.blocks.is_empty());
     let mut frames = Vec::new();
     while let Some(frame) = receiver.recv().await {
         frames.push(String::from_utf8(frame.expect("frame").to_vec()).expect("UTF-8 SSE"));
     }
+    assert!(
+        frames
+            .iter()
+            .any(|frame| frame.contains("waiting for provider output"))
+    );
     assert!(frames.iter().any(|frame| frame.contains("thinking_delta")));
     assert!(
         frames

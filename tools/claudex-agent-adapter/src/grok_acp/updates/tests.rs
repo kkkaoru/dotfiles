@@ -145,13 +145,14 @@ async fn forwards_plan_as_checklist_text() {
     let plan = receiver.recv().await.unwrap();
     assert_eq!(plan["method"], "item/agentMessage/delta");
     let text = plan["params"]["delta"].as_str().unwrap();
-    assert!(text.contains("Plan:"), "text={text}");
-    assert!(text.contains("Investigate"), "text={text}");
+    // Compact plan status (not a full checklist dump).
+    assert!(text.contains("Plan 1/2"), "text={text}");
     assert!(text.contains("Implement"), "text={text}");
+    assert!(!text.contains("Investigate"), "text={text}");
 }
 
 #[tokio::test]
-async fn forwards_mode_and_nonempty_session_titles_only() {
+async fn ignores_mode_and_session_title_chatter() {
     let events = ThreadEventDispatcher::default();
     let receiver = events.subscribe("session");
     for update in [
@@ -162,13 +163,11 @@ async fn forwards_mode_and_nonempty_session_titles_only() {
     ] {
         dispatch_notification(&events, acp::SessionNotification::new("session", update));
     }
-    let text: String = drain(&receiver)
-        .await
-        .iter()
-        .filter_map(|event| event["params"]["delta"].as_str())
-        .collect();
-    assert!(text.contains("review"));
-    assert!(text.contains("Work"));
+    let drained = drain(&receiver).await;
+    assert!(
+        drained.is_empty(),
+        "mode/title updates must not spam the bridge: {drained:?}"
+    );
 }
 
 #[test]

@@ -23,18 +23,22 @@ mod disconnect;
 mod prepare;
 mod protocol;
 mod provider_tool;
+mod sanitize;
 mod thinking;
 
 use builder::SegmentBuilder;
 use prepare::prepare_with_activity;
+use sanitize::is_visible_activity_event;
 
 #[cfg(test)]
 pub(super) use protocol::tool_use_frames;
 use protocol::{StreamSender, send_stream_completion, send_stream_error, sse_response};
 pub(super) use protocol::{message_start, send_stream_frame, streaming_sse_response};
 
+// Match Claude Code's quieter idle UX: visible status only after long provider silence.
+// Anthropic `ping` already covers the ~180s raw-byte watchdog during short waits.
 const ACTIVITY_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
-const INITIAL_ACTIVITY_DELAY: Duration = Duration::from_secs(2);
+const INITIAL_ACTIVITY_DELAY: Duration = Duration::from_secs(30);
 
 struct ToolCall<'a> {
     call_id: &'a str,
@@ -189,7 +193,8 @@ impl Bridge {
     ) -> Result<StreamTurn> {
         // Claude Code's decoded-event idle watchdog is ~300s. Anthropic `ping`
         // frames only satisfy the ~180s raw-byte watchdog, so emit a content
-        // delta after provider silence well under that ceiling.
+        // delta after *silence* well under that ceiling — never on a wall clock
+        // while the provider is already producing visible output.
         let mut activity_deadline = Box::pin(sleep(activity_interval));
         loop {
             let next = tokio::select! {
@@ -217,6 +222,7 @@ impl Bridge {
                 }
                 NextEvent::Closed => bail!("app-server event stream closed"),
             };
+            let visible = is_visible_activity_event(&event);
             if builder
                 .handle_event(self, session, current_messages, &event, Some(sender))
                 .await?
@@ -226,6 +232,11 @@ impl Bridge {
                     segment: builder.finish(Some(sender)).await?,
                     provider_settled: true,
                 });
+            }
+            if visible {
+                activity_deadline
+                    .as_mut()
+                    .reset(Instant::now() + activity_interval);
             }
         }
     }

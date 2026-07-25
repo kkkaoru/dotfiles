@@ -37,13 +37,17 @@ updates into Claude Code surfaces:
 | --- | --- |
 | `AgentThoughtChunk` | thinking panel |
 | `AgentMessageChunk` | assistant text |
-| `ToolCall` / `ToolCallUpdate` | progress text with bounded completion or failure output previews |
-| `Plan` | compact plan checklist text |
-| xAI SubAgent / retry extensions | short status text |
+| `ToolCall` / `ToolCallUpdate` | ephemeral WIP progress (live only; not answer text) |
+| `Plan` | compact `Plan done/total` status (debounced; not a full checklist dump) |
+| Session mode / title | ignored (noisier than Claude Code's own session UI) |
+| xAI SubAgent / retry extensions | short ephemeral status |
 
 Provider-owned tools are never emitted as executable Anthropic `tool_use` blocks,
 so Claude Code cannot re-execute them or send synthetic missing-tool results.
-Copilot-native SubAgents inherit the model used to launch the Copilot ACP server.
+Progress is streamed for live visibility, then stripped from the committed
+assistant message/transcript so history stays answer-focused like native Claude
+Code turns. Copilot-native SubAgents inherit the model used to launch the
+Copilot ACP server.
 
 Streaming requests return their HTTP response immediately. Each Codex
 `item/agentMessage/delta` notification is converted to an Anthropic
@@ -51,12 +55,11 @@ Streaming requests return their HTTP response immediately. Each Codex
 Subscription subprocesses likewise use Claude Code's `stream-json` output and
 forward text deltas as they arrive. Streaming responses open immediately with
 `message_start` so Anthropic `ping` SSE events keep Claude Code's ~180s raw-byte
-idle watchdog alive while the provider session is still being prepared. During
-longer provider silence (for example multi-minute Grok, subscription, tool, or
-subagent waits), the adapter emits a visible waiting status after about 30s and
-then zero-width `content_block_delta` heartbeats every 30s. This keeps the user
-informed and prevents Claude Code's ~300s decoded-event idle watchdog from
-aborting the stream without adding repeated status text to the final answer.
+idle watchdog alive while the provider session is still being prepared. Activity
+heartbeats are silence-only: after about 30s without visible provider output the
+adapter emits a waiting status, then zero-width heartbeats every 30s. Real text,
+thinking, or tool progress resets that timer. Heartbeats never accumulate into
+the final answer text.
 
 For `codex-app-server`, the adapter starts `codex app-server` with an isolated
 `CODEX_HOME`. Only Codex authentication is copied into that home; Claude Code

@@ -115,7 +115,8 @@ impl ThinkingState {
     /// spinner; later heartbeats stay zero-width to avoid noisy repetition.
     ///
     /// Anthropic `ping` frames keep the raw-byte idle timer alive (~180s) but
-    /// do not reset the decoded-event timer.
+    /// do not reset the decoded-event timer. Pure keepalive thinking is stripped
+    /// from the committed segment so transcripts stay clean.
     pub(super) async fn activity_keepalive(
         &mut self,
         blocks: &mut Vec<Value>,
@@ -137,6 +138,42 @@ impl ThinkingState {
             HEARTBEAT
         };
         open.text.push_str(delta);
+        blocks[open.index]["thinking"] = json!(open.text);
+        send_stream_frame(stream, "content_block_delta", || {
+            json!({
+                "type":"content_block_delta", "index":open.index,
+                "delta":{"type":"thinking_delta","thinking":delta}
+            })
+        })
+        .await
+    }
+
+    /// Provider WIP status (ACP tools/plan). Uses a dedicated thinking item so
+    /// real model thoughts are not mixed into the same summary stream, and so
+    /// `finish` can drop pure status blocks from the transcript.
+    pub(super) async fn status_progress(
+        &mut self,
+        delta: &str,
+        blocks: &mut Vec<Value>,
+        stream: Option<&StreamSender>,
+    ) -> Result<()> {
+        if delta.is_empty() {
+            return Ok(());
+        }
+        if self
+            .open
+            .as_ref()
+            .is_some_and(|open| open.item_id != "claudex_provider_status")
+        {
+            self.close(blocks, stream).await?;
+        }
+        if self.open.is_none() {
+            self.start(blocks, "claudex_provider_status", 0, stream)
+                .await?;
+        }
+        let open = self.open.as_mut().expect("status thinking just opened");
+        open.text.push_str(delta);
+        blocks[open.index]["thinking"] = json!(open.text);
         send_stream_frame(stream, "content_block_delta", || {
             json!({
                 "type":"content_block_delta", "index":open.index,
