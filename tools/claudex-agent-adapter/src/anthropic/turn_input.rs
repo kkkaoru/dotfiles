@@ -2,9 +2,9 @@ use serde_json::{Value, json};
 
 use super::content::{image_data_url, serialized_len};
 
-// Codex app-server rejects turn input above 1 MiB. Keep headroom for framing and count UTF-8
-// bytes, which is conservative relative to the upstream character limit.
-const MAX_TURN_INPUT_BYTES: usize = 3 * 256 * 1_024;
+// Codex app-server rejects turn input above 1 MiB. Leave generous headroom for
+// JSON-RPC framing, model metadata, and serialized events.
+pub(super) const MAX_TURN_INPUT_BYTES: usize = 512 * 1_024;
 const FULL_HISTORY_HEADER: &str =
     "Continue this Claude Code conversation. The role-tagged history follows:\n";
 const TRUNCATED_HISTORY_HEADER: &str = "Continue this Claude Code conversation. Earlier completed history was omitted to fit the provider input limit. The retained role-tagged history follows:\n";
