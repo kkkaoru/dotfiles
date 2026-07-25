@@ -42,25 +42,63 @@ pub(super) async fn reserve_matching_session(
 }
 
 /// Find the best transcript-matching session that is currently busy (gate held).
+///
+/// Outer follow-ups first require an exact signature match. If tools/system drift
+/// broke the signature (common mid-conversation), fall back to model + user_id so
+/// interactive messages still reclaim the live provider thread instead of cold-starting.
 pub(super) async fn find_busy_matching_session(
     sessions: Vec<Arc<Session>>,
     signature: &Arc<str>,
     messages: &[Value],
+    model: Option<&str>,
+    user_id: Option<&str>,
 ) -> Option<(Arc<Session>, usize)> {
     let mut best: Option<(Arc<Session>, usize)> = None;
-    for session in sessions {
-        let Some(existing_len) = candidate_length(&session, signature, messages).await else {
+    for session in sessions.iter() {
+        let Some(existing_len) = candidate_length(session, signature, messages).await else {
             continue;
         };
-        // Idle matches belong to reserve_matching_session; only busy ones here.
         if Arc::clone(&session.gate).try_lock_owned().is_ok() {
             continue;
         }
+        if is_better_length(best.as_ref().map(|(_, len)| *len), existing_len) {
+            best = Some((Arc::clone(session), existing_len));
+        }
+    }
+    if best.is_some() {
+        return best;
+    }
+    // Signature miss: still reclaim a busy conversation for the same human.
+    let mut best: Option<(Arc<Session>, usize)> = None;
+    for session in sessions {
+        if Arc::clone(&session.gate).try_lock_owned().is_ok() {
+            continue;
+        }
+        if !conversation_matches(&session, model, user_id) {
+            continue;
+        }
+        align_transcript_to_request(&session, messages).await;
+        let Some(existing_len) = matching_transcript_len(&session, messages).await else {
+            continue;
+        };
         if is_better_length(best.as_ref().map(|(_, len)| *len), existing_len) {
             best = Some((session, existing_len));
         }
     }
     best
+}
+
+fn conversation_matches(session: &Session, model: Option<&str>, user_id: Option<&str>) -> bool {
+    if model.is_some_and(|model| session.model != model) {
+        return false;
+    }
+    match (user_id, session.client_user_id.as_deref()) {
+        (Some(left), Some(right)) => left == right,
+        // Without a client session id, only allow the fallback when model matches
+        // and we have a single busy candidate (checked by caller scoring).
+        (None, None) => true,
+        _ => false,
+    }
 }
 
 /// Wait for a cancelled turn to release its session gate, then realign the

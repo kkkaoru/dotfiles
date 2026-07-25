@@ -288,12 +288,21 @@ async fn bridge_renders_provider_tools_as_progress_without_a_follow_up_tool_turn
 
     assert_eq!(response["stop_reason"], "end_turn");
     let content = response["content"].as_array().expect("response content");
+    // Provider tool chrome is live-only and stripped from the committed answer,
+    // matching Claude Code (tool cards are not assistant text).
     assert!(content.iter().all(|block| block["type"] != "tool_use"));
+    assert!(
+        content.iter().all(|block| {
+            block["text"]
+                .as_str()
+                .is_none_or(|text| !text.contains('▶'))
+        }),
+        "progress chrome must not remain in committed text: {response}"
+    );
     let text = content
         .iter()
         .filter_map(|block| block["text"].as_str())
         .collect::<String>();
-    assert!(text.contains("▶ Read config"), "response={response}");
     assert!(text.contains("GROK_ACP_STREAM_OK"), "response={response}");
     let trace = read_trace(&trace_path);
     assert_eq!(
@@ -614,6 +623,7 @@ async fn start_blocked_setup(
     agent
         .start_turn(json!({
             "threadId":setup_id,
+            "priority":"user",
             "effort":"high",
             "input":"SETUP NEVER SETTLES"
         }))
@@ -627,8 +637,14 @@ async fn fill_remaining_capacity(agent: &GrokAcp, trace_path: &Path, capacity: u
     for index in 1..capacity {
         let response = agent.create_session(json!({})).await.unwrap();
         let session_id = response["thread"]["id"].as_str().unwrap();
+        // priority=user can consume the outer reserve + shared pool so tests still
+        // saturate the full turn_capacity after OUTER_TURN_RESERVE landed.
         agent
-            .start_turn(json!({"threadId":session_id,"input":format!("BLOCK {index}")}))
+            .start_turn(json!({
+                "threadId":session_id,
+                "priority":"user",
+                "input":format!("BLOCK {index}")
+            }))
             .await
             .unwrap();
     }
@@ -655,6 +671,7 @@ fn spawn_queued_turn(
         agent
             .start_turn(json!({
                 "threadId":session_id,
+                "priority":"user",
                 "input":"COMPLETE AFTER SETUP TIMEOUT"
             }))
             .await
@@ -740,6 +757,7 @@ async fn cancelled_turn_releases_capacity_for_another_session() {
         agent
             .start_turn(json!({
                 "threadId":session_id,
+                "priority":"user",
                 "input":format!("BLOCK {index}")
             }))
             .await
@@ -755,7 +773,11 @@ async fn cancelled_turn_releases_capacity_for_another_session() {
     let queued_id = next_id.clone();
     let mut queued = tokio::spawn(async move {
         queued_agent
-            .start_turn(json!({"threadId":queued_id,"input":"COMPLETE AFTER CANCEL"}))
+            .start_turn(json!({
+                "threadId":queued_id,
+                "priority":"user",
+                "input":"COMPLETE AFTER CANCEL"
+            }))
             .await
     });
     assert!(
@@ -791,7 +813,11 @@ async fn ignored_cancellation_invalidates_only_that_session_and_recovers_capacit
         let response = agent.create_session(json!({})).await.unwrap();
         let session_id = response["thread"]["id"].as_str().unwrap().to_owned();
         agent
-            .start_turn(json!({"threadId":session_id,"input":format!("BLOCK {index}")}))
+            .start_turn(json!({
+                "threadId":session_id,
+                "priority":"user",
+                "input":format!("BLOCK {index}")
+            }))
             .await
             .unwrap();
         blocked.push(session_id);
@@ -814,7 +840,11 @@ async fn ignored_cancellation_invalidates_only_that_session_and_recovers_capacit
     let queued_id = next_id.clone();
     let mut queued = tokio::spawn(async move {
         queued_agent
-            .start_turn(json!({"threadId":queued_id,"input":"COMPLETE AFTER TIMEOUT"}))
+            .start_turn(json!({
+                "threadId":queued_id,
+                "priority":"user",
+                "input":"COMPLETE AFTER TIMEOUT"
+            }))
             .await
     });
     assert!(

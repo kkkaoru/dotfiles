@@ -31,16 +31,30 @@ pub(super) async fn select_matching_session(
     if crate::anthropic::agent_effort::is_subagent_request(request) {
         return None;
     }
-    preempt_busy_matching_session(sessions, signature, messages, app).await
+    preempt_busy_matching_session(sessions, request, signature, messages, app).await
 }
 
 async fn preempt_busy_matching_session(
     sessions: Vec<Arc<Session>>,
+    request: &MessagesRequest,
     signature: &Arc<str>,
     messages: &[Value],
     app: &AgentBackend,
 ) -> Option<SelectedSession> {
-    let (session, prior_len) = find_busy_matching_session(sessions, signature, messages).await?;
+    let model = if request.model.is_empty() {
+        None
+    } else {
+        Some(request.model.as_str())
+    };
+    let user_id = request.metadata.get("user_id").and_then(Value::as_str);
+    let (session, prior_len) = find_busy_matching_session(
+        sessions,
+        signature,
+        messages,
+        model,
+        user_id,
+    )
+    .await?;
     tracing::info!(
         thread_id = %session.thread_id,
         prior_transcript_len = prior_len,

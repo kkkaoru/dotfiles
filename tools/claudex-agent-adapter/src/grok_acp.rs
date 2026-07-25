@@ -29,15 +29,14 @@ mod turns;
 mod updates;
 
 const COMMAND_QUEUE_CAPACITY: usize = 32;
-// Real ACP providers intermittently lose concurrent session/new responses. Session setup is short,
-// while completed sessions still run turns concurrently through the independent turn capacity.
 const SESSION_QUEUE_CAPACITY: usize = 1;
 const TURN_QUEUE_CAPACITY: usize = 8;
-// Qwen/configured ACP shares one Node process and degrades under many concurrent prompts.
 const CONFIGURED_TURN_QUEUE_CAPACITY: usize = 2;
+/// Reserved so SubAgent bursts cannot starve interactive user turns.
+const OUTER_TURN_RESERVE: usize = 1;
 
 use connection::AcpProvider;
-use turns::{cancel_turn, drive_turns, queue_turn};
+use turns::{acquire_turn_permit, cancel_turn, drive_turns, queue_turn};
 
 #[cfg(test)]
 use turns::{CancelRequest, PreparedTurn};
@@ -74,6 +73,8 @@ pub struct GrokAcp {
     commands: mpsc::Sender<DriverCommand>,
     session_permits: Arc<tokio::sync::Semaphore>,
     turn_permits: Arc<tokio::sync::Semaphore>,
+    outer_permits: Arc<tokio::sync::Semaphore>,
+    turn_capacity: usize,
     events: Arc<ThreadEventDispatcher>,
     alive: Arc<AtomicBool>,
 }
@@ -133,7 +134,10 @@ impl GrokAcp {
             AcpProvider::Configured => CONFIGURED_TURN_QUEUE_CAPACITY,
             AcpProvider::Grok | AcpProvider::Copilot => TURN_QUEUE_CAPACITY,
         };
-        let turn_permits = Arc::new(tokio::sync::Semaphore::new(turn_capacity));
+        let turn_permits = Arc::new(tokio::sync::Semaphore::new(
+            turn_capacity.saturating_sub(OUTER_TURN_RESERVE).max(1),
+        ));
+        let outer_permits = Arc::new(tokio::sync::Semaphore::new(OUTER_TURN_RESERVE));
         let events = Arc::new(ThreadEventDispatcher::default());
         let alive = Arc::new(AtomicBool::new(true));
         let (ready_tx, ready_rx) = oneshot::channel();
@@ -171,6 +175,8 @@ impl GrokAcp {
             commands: command_tx,
             session_permits,
             turn_permits,
+            outer_permits,
+            turn_capacity,
             events,
             alive,
         }))
@@ -185,7 +191,7 @@ impl GrokAcp {
     }
 
     pub const fn turn_capacity(&self) -> usize {
-        TURN_QUEUE_CAPACITY
+        self.turn_capacity
     }
 
     pub async fn create_session(&self, params: Value) -> Result<Value> {
@@ -202,10 +208,8 @@ impl GrokAcp {
     }
 
     pub async fn start_turn(&self, params: Value) -> Result<()> {
-        let permit = Arc::clone(&self.turn_permits)
-            .acquire_owned()
-            .await
-            .map_err(|_| anyhow!("ACP driver is unavailable"))?;
+        let is_user = params.get("priority").and_then(Value::as_str) == Some("user");
+        let permit = acquire_turn_permit(&self.turn_permits, &self.outer_permits, is_user).await?;
         self.call(|response| DriverCommand::StartTurn {
             params,
             permit,

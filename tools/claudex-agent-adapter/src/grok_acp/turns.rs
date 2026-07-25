@@ -4,12 +4,14 @@ use std::{
     future::Future,
     rc::Rc,
     sync::Arc,
+    time::Duration,
 };
 
 use agent_client_protocol as acp;
 use anyhow::{Context, Result, anyhow};
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
+use tokio::time::{sleep, timeout};
 
 use super::{connection::AcpProvider, prompt};
 use crate::app_server::events::ThreadEventDispatcher;
@@ -18,6 +20,9 @@ mod cancellation;
 mod execute;
 
 use execute::execute_turn;
+
+/// How long a same-session replace waits for the prior turn to leave `active_turns`.
+const REPLACE_SETTLE_TIMEOUT: Duration = Duration::from_secs(2);
 
 pub(super) struct PreparedTurn {
     pub(super) session_id: String,
@@ -52,11 +57,10 @@ pub(super) async fn queue_turn(
             turn.session_id
         ));
     }
+    // Same-session follow-ups must replace the in-flight turn instead of failing
+    // with "already has an active turn" (that error deferred live user messages).
     if active_turns.borrow().contains_key(&turn.session_id) {
-        return Err(anyhow!(
-            "{} ACP session already has an active turn",
-            provider.label()
-        ));
+        replace_active_turn(provider, active_turns, &turn.session_id).await?;
     }
     let session_id = turn.session_id.clone();
     active_turns
@@ -65,6 +69,57 @@ pub(super) async fn queue_turn(
     if turns.send(turn).await.is_err() {
         active_turns.borrow_mut().remove(&session_id);
         return Err(anyhow!("ACP turn worker is unavailable"));
+    }
+    Ok(())
+}
+
+async fn replace_active_turn(
+    provider: AcpProvider,
+    active_turns: &ActiveTurns,
+    session_id: &str,
+) -> Result<()> {
+    tracing::info!(
+        session_id,
+        provider = provider.label(),
+        "replacing in-flight ACP turn for a newer request on the same session"
+    );
+    let (response_tx, response_rx) = oneshot::channel();
+    cancel_turn(active_turns, session_id, response_tx);
+    match timeout(REPLACE_SETTLE_TIMEOUT, response_rx).await {
+        Ok(Ok(Ok(()))) => {}
+        Ok(Ok(Err(error))) => {
+            tracing::warn!(
+                %error,
+                session_id,
+                "cancel during same-session replace returned an error; waiting for worker exit"
+            );
+        }
+        Ok(Err(_)) => {
+            tracing::warn!(
+                session_id,
+                "cancel response dropped during same-session replace"
+            );
+        }
+        Err(_) => {
+            tracing::warn!(
+                session_id,
+                "cancel did not settle within {:?}; waiting for active_turns clear",
+                REPLACE_SETTLE_TIMEOUT
+            );
+        }
+    }
+    let deadline = tokio::time::Instant::now() + REPLACE_SETTLE_TIMEOUT;
+    while active_turns.borrow().contains_key(session_id) {
+        if tokio::time::Instant::now() >= deadline {
+            return Err(anyhow!(
+                "{} ACP session `{}` still has an active turn after replace cancel",
+                provider.label(),
+                session_id
+            ));
+        }
+        // Yield so the turn worker on this LocalSet can finish execute_turn.
+        tokio::task::yield_now().await;
+        sleep(Duration::from_millis(10)).await;
     }
     Ok(())
 }
@@ -199,4 +254,26 @@ pub(super) fn dispatch_turn_terminal(
         "method":"turn/completed",
         "params":{"threadId":session_id,"turn":{"status":status}}
     }));
+}
+
+/// User turns wait on outer reserve **or** shared pool so SubAgents cannot starve them.
+pub(super) async fn acquire_turn_permit(
+    shared: &Arc<tokio::sync::Semaphore>,
+    outer: &Arc<tokio::sync::Semaphore>,
+    is_user: bool,
+) -> Result<tokio::sync::OwnedSemaphorePermit> {
+    if !is_user {
+        return Arc::clone(shared)
+            .acquire_owned()
+            .await
+            .map_err(|_| anyhow!("ACP driver is unavailable"));
+    }
+    tokio::select! {
+        permit = Arc::clone(outer).acquire_owned() => {
+            permit.map_err(|_| anyhow!("ACP driver is unavailable"))
+        }
+        permit = Arc::clone(shared).acquire_owned() => {
+            permit.map_err(|_| anyhow!("ACP driver is unavailable"))
+        }
+    }
 }

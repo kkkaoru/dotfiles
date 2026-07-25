@@ -263,6 +263,8 @@ async fn finds_busy_matching_session_for_outer_preempt() {
         vec![Arc::clone(&busy)],
         &Arc::from("signature"),
         std::slice::from_ref(&message),
+        Some("model"),
+        None,
     )
     .await
     .expect("busy match");

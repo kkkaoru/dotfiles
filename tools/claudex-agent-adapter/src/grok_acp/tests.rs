@@ -124,6 +124,8 @@ async fn reports_a_closed_driver_for_each_command_response_type() {
         commands,
         session_permits: Arc::new(tokio::sync::Semaphore::new(SESSION_QUEUE_CAPACITY)),
         turn_permits: Arc::new(tokio::sync::Semaphore::new(TURN_QUEUE_CAPACITY)),
+        outer_permits: Arc::new(tokio::sync::Semaphore::new(1)),
+        turn_capacity: TURN_QUEUE_CAPACITY,
         events: Arc::new(ThreadEventDispatcher::default()),
         alive: Arc::new(AtomicBool::new(false)),
     };

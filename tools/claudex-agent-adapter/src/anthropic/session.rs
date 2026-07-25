@@ -156,6 +156,10 @@ impl Bridge {
         if let Some(effort) = effort {
             params["effort"] = json!(effort);
         }
+        // Mark interactive user turns so ACP keeps a reserved slot free of SubAgent load.
+        if !super::agent_effort::is_subagent_request(request) {
+            params["priority"] = json!("user");
+        }
         self.app.request_detached("turn/start", params).await
     }
 
