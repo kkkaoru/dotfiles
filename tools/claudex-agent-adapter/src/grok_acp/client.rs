@@ -2,16 +2,20 @@ use std::sync::Arc;
 
 use agent_client_protocol::{self as acp};
 
-use super::updates;
+use super::updates::{self, ThoughtUnits};
 use crate::app_server::events::ThreadEventDispatcher;
 
 pub(super) struct AcpClient {
     events: Arc<ThreadEventDispatcher>,
+    thoughts: Arc<ThoughtUnits>,
 }
 
 impl AcpClient {
     pub(super) fn new(events: Arc<ThreadEventDispatcher>) -> Self {
-        Self { events }
+        Self {
+            events,
+            thoughts: Arc::new(ThoughtUnits::default()),
+        }
     }
 }
 
@@ -31,12 +35,12 @@ impl acp::Client for AcpClient {
         &self,
         notification: acp::SessionNotification,
     ) -> acp::Result<()> {
-        updates::dispatch_notification(&self.events, notification);
+        updates::dispatch_notification(&self.events, &self.thoughts, notification);
         Ok(())
     }
 
     async fn ext_notification(&self, notification: acp::ExtNotification) -> acp::Result<()> {
-        updates::dispatch_extension(&self.events, notification);
+        updates::dispatch_extension(&self.events, &self.thoughts, notification);
         Ok(())
     }
 }

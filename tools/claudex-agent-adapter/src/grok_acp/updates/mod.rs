@@ -2,13 +2,14 @@
 //!
 //! | ACP update | Claude Code surface |
 //! |---|---|
-//! | AgentThoughtChunk | thinking panel (`thinking_delta`) |
+//! | AgentThoughtChunk | thinking units (`thinking_delta`, one block per unit) |
 //! | AgentMessageChunk | assistant text |
 //! | ToolCall / ToolCallUpdate | ephemeral WIP progress (never executable `tool_use`) |
 //! | Plan | compact plan status (debounced; not answer text) |
 //! | SessionInfo / mode | ignored (noisy vs native Claude Code) |
 //! | xAI SubAgent extensions | compact status |
 
+mod thought_units;
 mod tools;
 
 use std::time::Duration;
@@ -18,6 +19,7 @@ use serde_json::{Value, json};
 
 use crate::app_server::events::ThreadEventDispatcher;
 
+pub(crate) use thought_units::ThoughtUnits;
 use tools::{dispatch_plan, dispatch_provider_tool_call, dispatch_provider_tool_update};
 
 pub(super) const AGENT_MESSAGE_METHOD: &str = "item/agentMessage/delta";
@@ -38,23 +40,27 @@ pub(super) fn dispatch_error(events: &ThreadEventDispatcher, session_id: &str, m
 
 pub(super) fn dispatch_notification(
     events: &ThreadEventDispatcher,
+    thoughts: &ThoughtUnits,
     notification: acp::SessionNotification,
 ) {
     let session_id = notification.session_id.0;
     match notification.update {
         acp::SessionUpdate::AgentMessageChunk(chunk) => {
-            dispatch_text(events, &session_id, chunk, AGENT_MESSAGE_METHOD);
+            dispatch_message(events, &session_id, chunk);
         }
         acp::SessionUpdate::AgentThoughtChunk(chunk) => {
-            dispatch_text(events, &session_id, chunk, REASONING_METHOD);
+            dispatch_thought(events, thoughts, &session_id, chunk);
         }
         acp::SessionUpdate::ToolCall(call) => {
+            thoughts.break_after_interrupt(&session_id);
             dispatch_provider_tool_call(events, &session_id, call);
         }
         acp::SessionUpdate::ToolCallUpdate(update) => {
+            thoughts.break_after_interrupt(&session_id);
             dispatch_provider_tool_update(events, &session_id, update);
         }
         acp::SessionUpdate::Plan(plan) => {
+            thoughts.break_after_interrupt(&session_id);
             dispatch_plan(events, &session_id, plan);
         }
         // Mode/title chatter is far noisier than Claude Code's own session UI.
@@ -70,6 +76,7 @@ pub(super) fn dispatch_notification(
 
 pub(super) fn dispatch_extension(
     events: &ThreadEventDispatcher,
+    thoughts: &ThoughtUnits,
     notification: acp::ExtNotification,
 ) {
     if notification.method.as_ref() != "_x.ai/session/update" {
@@ -77,10 +84,14 @@ pub(super) fn dispatch_extension(
     }
     let params = serde_json::from_str::<Value>(notification.params.get())
         .expect("ACP extension params are validated JSON");
-    dispatch_extension_value(events, &params);
+    dispatch_extension_value(events, thoughts, &params);
 }
 
-fn dispatch_extension_value(events: &ThreadEventDispatcher, params: &Value) {
+fn dispatch_extension_value(
+    events: &ThreadEventDispatcher,
+    thoughts: &ThoughtUnits,
+    params: &Value,
+) {
     let Some(session_id) = params.get("sessionId").and_then(Value::as_str) else {
         return;
     };
@@ -88,22 +99,58 @@ fn dispatch_extension_value(events: &ThreadEventDispatcher, params: &Value) {
         return;
     };
     match update.get("sessionUpdate").and_then(Value::as_str) {
-        Some("subagent_spawned") => dispatch_subagent_started(events, session_id, update),
-        Some("subagent_finished") => dispatch_subagent_finished(events, session_id, update),
-        Some("retry_state") => dispatch_retry(events, session_id, update),
-        Some("turn_completed") => dispatch_usage(events, session_id, update),
+        Some("subagent_spawned") => {
+            thoughts.break_after_interrupt(session_id);
+            dispatch_subagent_started(events, session_id, update);
+        }
+        Some("subagent_finished") => {
+            thoughts.break_after_interrupt(session_id);
+            dispatch_subagent_finished(events, session_id, update);
+        }
+        Some("retry_state") => {
+            thoughts.break_after_interrupt(session_id);
+            dispatch_retry(events, session_id, update);
+        }
+        Some("turn_completed") => {
+            thoughts.clear(session_id);
+            dispatch_usage(events, session_id, update);
+        }
         _ => {}
     }
 }
 
-fn dispatch_text(
+fn dispatch_message(events: &ThreadEventDispatcher, session_id: &str, chunk: acp::ContentChunk) {
+    if let acp::ContentBlock::Text(text) = chunk.content {
+        dispatch_delta(
+            events,
+            session_id,
+            AGENT_MESSAGE_METHOD,
+            &format!("{session_id}:message"),
+            0,
+            &text.text,
+        );
+    }
+}
+
+fn dispatch_thought(
     events: &ThreadEventDispatcher,
+    thoughts: &ThoughtUnits,
     session_id: &str,
     chunk: acp::ContentChunk,
-    method: &str,
 ) {
-    if let acp::ContentBlock::Text(text) = chunk.content {
-        dispatch_delta(events, session_id, method, &text.text);
+    let acp::ContentBlock::Text(text) = chunk.content else {
+        return;
+    };
+    let item_id = format!("{session_id}:reasoning");
+    for (summary_index, piece) in thoughts.partition(session_id, &text.text) {
+        dispatch_delta(
+            events,
+            session_id,
+            REASONING_METHOD,
+            &item_id,
+            summary_index,
+            &piece,
+        );
     }
 }
 
@@ -111,10 +158,24 @@ fn dispatch_text(
 /// with a dedicated `itemId` suffix so the stream builder can treat it as
 /// ephemeral WIP and strip it from the committed transcript.
 pub(super) fn dispatch_status(events: &ThreadEventDispatcher, session_id: &str, delta: String) {
-    dispatch_delta(events, session_id, AGENT_MESSAGE_METHOD, &delta);
+    dispatch_delta(
+        events,
+        session_id,
+        AGENT_MESSAGE_METHOD,
+        &format!("{session_id}:status"),
+        0,
+        &delta,
+    );
 }
 
-fn dispatch_delta(events: &ThreadEventDispatcher, session_id: &str, method: &str, delta: &str) {
+fn dispatch_delta(
+    events: &ThreadEventDispatcher,
+    session_id: &str,
+    method: &str,
+    item_id: &str,
+    summary_index: i64,
+    delta: &str,
+) {
     if delta.is_empty() {
         return;
     }
@@ -122,8 +183,8 @@ fn dispatch_delta(events: &ThreadEventDispatcher, session_id: &str, method: &str
         "method":method,
         "params":{
             "threadId":session_id,
-            "itemId":format!("{session_id}:status"),
-            "summaryIndex":0,
+            "itemId":item_id,
+            "summaryIndex":summary_index,
             "delta":delta
         }
     }));

@@ -419,10 +419,11 @@ async fn ignores_non_agent_non_text_and_empty_notification_chunks() {
             acp::TextContent::new(""),
         ))),
     ] {
-        updates::dispatch_notification(&events, acp::SessionNotification::new("session", update));
+        updates::dispatch_notification(&events, &updates::ThoughtUnits::default(), acp::SessionNotification::new("session", update));
     }
     updates::dispatch_notification(
         &events,
+        &updates::ThoughtUnits::default(),
         acp::SessionNotification::new(
             "session",
             acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(acp::ContentBlock::Text(

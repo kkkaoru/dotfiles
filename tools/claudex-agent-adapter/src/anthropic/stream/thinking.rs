@@ -30,29 +30,25 @@ impl ThinkingState {
         if delta.is_empty() || has_visible_output(blocks) {
             return Ok(());
         }
-        if self
-            .open
-            .as_ref()
-            .is_some_and(|open| open.item_id != item_id)
-        {
+        // One Anthropic thinking block per (itemId, summaryIndex) unit — matching
+        // Claude Code's discrete thinking sections instead of one endless blob.
+        let unit_changed = self.open.as_ref().is_some_and(|open| {
+            open.item_id != item_id || open.summary_index != summary_index
+        });
+        if unit_changed {
             self.close(blocks, stream).await?;
         }
         if self.open.is_none() {
             self.start(blocks, item_id, summary_index, stream).await?;
         }
         let open = self.open.as_mut().expect("thinking block just opened");
-        let separator = if open.summary_index != summary_index {
-            "\n\n"
-        } else {
-            ""
-        };
         open.summary_index = summary_index;
-        open.text.push_str(separator);
         open.text.push_str(delta);
+        blocks[open.index]["thinking"] = json!(open.text);
         send_stream_frame(stream, "content_block_delta", || {
             json!({
                 "type":"content_block_delta", "index":open.index,
-                "delta":{"type":"thinking_delta","thinking":format!("{separator}{delta}")}
+                "delta":{"type":"thinking_delta","thinking":delta}
             })
         })
         .await

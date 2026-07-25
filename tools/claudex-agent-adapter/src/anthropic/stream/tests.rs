@@ -69,7 +69,7 @@ async fn defaults_missing_reasoning_usage_to_zero() {
 }
 
 #[tokio::test]
-async fn streams_summarized_thinking_before_text_and_preserves_the_block() {
+async fn streams_summarized_thinking_as_separate_units_before_text() {
     let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
     let mut builder = SegmentBuilder::new(2);
     for (summary_index, delta) in [(0, "Plan"), (1, "Act")] {
@@ -110,14 +110,16 @@ async fn streams_summarized_thinking_before_text_and_preserves_the_block() {
     let segment = builder.finish(Some(&sender)).await.expect("segment");
     drop(sender);
 
+    // Each summaryIndex is its own thinking block (Claude-like units).
     assert_eq!(segment.blocks[0]["type"], "thinking");
-    assert_eq!(segment.blocks[0]["thinking"], "Plan\n\nAct");
-    assert!(
-        segment.blocks[0]["signature"]
-            .as_str()
-            .is_some_and(|value| value.starts_with("claudex_local_"))
+    assert_eq!(segment.blocks[0]["thinking"], "Plan");
+    assert_eq!(segment.blocks[1]["type"], "thinking");
+    assert_eq!(segment.blocks[1]["thinking"], "Act");
+    assert_ne!(
+        segment.blocks[0]["signature"],
+        segment.blocks[1]["signature"]
     );
-    assert_eq!(segment.blocks[1], json!({"type":"text","text":"Answer"}));
+    assert_eq!(segment.blocks[2], json!({"type":"text","text":"Answer"}));
     assert_eq!(segment.usage.input_tokens, 9);
     assert_eq!(segment.usage.output_tokens, 12);
 
@@ -127,24 +129,28 @@ async fn streams_summarized_thinking_before_text_and_preserves_the_block() {
         let data = frame.lines().find_map(|line| line.strip_prefix("data: "));
         frames.push(serde_json::from_str::<Value>(data.expect("SSE data")).expect("JSON frame"));
     }
-    assert_eq!(frames.len(), 8);
+    // start Plan, delta, sig, stop, start Act, delta, sig, stop, start text, delta, stop
+    assert_eq!(frames.len(), 11);
     assert_eq!(frames[0]["content_block"]["type"], "thinking");
     assert_eq!(
         frames[1]["delta"],
         json!({"type":"thinking_delta","thinking":"Plan"})
     );
+    assert_eq!(frames[2]["delta"]["type"], "signature_delta");
+    assert_eq!(frames[3], json!({"type":"content_block_stop","index":0}));
+    assert_eq!(frames[4]["content_block"]["type"], "thinking");
     assert_eq!(
-        frames[2]["delta"],
-        json!({"type":"thinking_delta","thinking":"\n\nAct"})
+        frames[5]["delta"],
+        json!({"type":"thinking_delta","thinking":"Act"})
     );
-    assert_eq!(frames[3]["delta"]["type"], "signature_delta");
-    assert_eq!(frames[4], json!({"type":"content_block_stop","index":0}));
-    assert_eq!(frames[5]["content_block"]["type"], "text");
+    assert_eq!(frames[6]["delta"]["type"], "signature_delta");
+    assert_eq!(frames[7], json!({"type":"content_block_stop","index":1}));
+    assert_eq!(frames[8]["content_block"]["type"], "text");
     assert_eq!(
-        frames[6]["delta"],
+        frames[9]["delta"],
         json!({"type":"text_delta","text":"Answer"})
     );
-    assert_eq!(frames[7], json!({"type":"content_block_stop","index":1}));
+    assert_eq!(frames[10], json!({"type":"content_block_stop","index":2}));
 }
 
 #[tokio::test]

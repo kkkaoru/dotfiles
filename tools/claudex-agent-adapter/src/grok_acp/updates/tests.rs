@@ -4,8 +4,12 @@ use std::time::Duration;
 use agent_client_protocol::{self as acp};
 use serde_json::{json, value::RawValue};
 
-use super::{dispatch_extension, dispatch_notification};
+use super::{ThoughtUnits, dispatch_extension, dispatch_notification};
 use crate::app_server::events::{ThreadEventDispatcher, ThreadEvents};
+
+fn thoughts() -> ThoughtUnits {
+    ThoughtUnits::default()
+}
 
 async fn drain(receiver: &ThreadEvents) -> Vec<serde_json::Value> {
     let mut out = Vec::new();
@@ -23,6 +27,7 @@ async fn forwards_thought_as_reasoning_and_tools_as_provider_cards() {
     let receiver = events.subscribe("session");
     dispatch_notification(
         &events,
+        &thoughts(),
         acp::SessionNotification::new(
             "session",
             acp::SessionUpdate::AgentThoughtChunk(acp::ContentChunk::new("thinking".into())),
@@ -30,6 +35,7 @@ async fn forwards_thought_as_reasoning_and_tools_as_provider_cards() {
     );
     dispatch_notification(
         &events,
+        &thoughts(),
         acp::SessionNotification::new(
             "session",
             acp::SessionUpdate::ToolCall(
@@ -43,6 +49,8 @@ async fn forwards_thought_as_reasoning_and_tools_as_provider_cards() {
     let tool = receiver.recv().await.unwrap();
     assert_eq!(thought["method"], "item/reasoning/summaryTextDelta");
     assert_eq!(thought["params"]["delta"], "thinking");
+    assert_eq!(thought["params"]["itemId"], "session:reasoning");
+    assert_eq!(thought["params"]["summaryIndex"], 0);
     assert_eq!(tool["method"], "item/providerTool/call");
     assert_eq!(tool["params"]["tool"], "Read");
     assert_eq!(tool["params"]["arguments"]["path"], "/tmp/a");
@@ -54,6 +62,7 @@ async fn forwards_tool_status_updates_with_output() {
     let receiver = events.subscribe("session");
     dispatch_notification(
         &events,
+        &thoughts(),
         acp::SessionNotification::new(
             "session",
             acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new(
@@ -67,6 +76,7 @@ async fn forwards_tool_status_updates_with_output() {
     );
     dispatch_notification(
         &events,
+        &thoughts(),
         acp::SessionNotification::new(
             "session",
             acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new(
@@ -102,6 +112,7 @@ async fn forwards_xai_subagent_lifecycle_as_visible_message() {
         let raw = RawValue::from_string(params.to_string()).unwrap();
         dispatch_extension(
             &events,
+            &thoughts(),
             acp::ExtNotification::new("_x.ai/session/update", Arc::from(raw)),
         );
     }
@@ -126,6 +137,7 @@ async fn forwards_plan_as_checklist_text() {
     let receiver = events.subscribe("session");
     dispatch_notification(
         &events,
+        &thoughts(),
         acp::SessionNotification::new(
             "session",
             acp::SessionUpdate::Plan(acp::Plan::new(vec![
@@ -161,7 +173,7 @@ async fn ignores_mode_and_session_title_chatter() {
         acp::SessionUpdate::SessionInfoUpdate(acp::SessionInfoUpdate::new().title("")),
         acp::SessionUpdate::SessionInfoUpdate(acp::SessionInfoUpdate::new()),
     ] {
-        dispatch_notification(&events, acp::SessionNotification::new("session", update));
+        dispatch_notification(&events, &thoughts(), acp::SessionNotification::new("session", update));
     }
     let drained = drain(&receiver).await;
     assert!(
@@ -175,7 +187,7 @@ fn ignores_unrelated_or_unstructured_extensions() {
     let events = ThreadEventDispatcher::default();
     for (method, payload) in [("other/method", "{}"), ("_x.ai/session/update", "\"text\"")] {
         let raw = RawValue::from_string(payload.to_owned()).unwrap();
-        dispatch_extension(&events, acp::ExtNotification::new(method, Arc::from(raw)));
+        dispatch_extension(&events, &thoughts(), acp::ExtNotification::new(method, Arc::from(raw)));
     }
 }
 
@@ -212,6 +224,7 @@ fn dispatch_raw_extension(events: &ThreadEventDispatcher, params: serde_json::Va
     let raw = RawValue::from_string(params.to_string()).unwrap();
     dispatch_extension(
         events,
+        &thoughts(),
         acp::ExtNotification::new("_x.ai/session/update", Arc::from(raw)),
     );
 }
