@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""Emit sanitized, config-driven Claude routing context from Codexbar usage."""
+"""Emit sanitized routing context from Codexbar and provider CLI usage."""
 
 from __future__ import annotations
 
 import argparse
 import hashlib
 import json
+import math
 import os
+import re
 import subprocess
 import tempfile
 import time
@@ -15,6 +17,9 @@ from typing import Any
 
 DEFAULT_CACHE_SECONDS = 300
 REPOSITORY_CONFIG = Path(__file__).parents[4] / ".config/claudex/providers.json"
+QWEN_USAGE_PROVIDER = "qwen"
+QWEN_USAGE_FILENAME = "usage.json"
+USAGE_COMMAND_TIMEOUT_SECONDS = 45
 
 
 def config_path(environment: dict[str, str], requested: Path | None = None) -> Path:
@@ -40,9 +45,8 @@ def load_config(path: Path) -> dict[str, Any]:
         raise ValueError("provider config contains an invalid enabled provider")
     if config.get("mainProvider") not in {provider["id"] for provider in enabled}:
         raise ValueError("mainProvider must name an enabled provider")
-    for name in ("fallback", "advisor"):
-        if not valid_choice(config.get(name)):
-            raise ValueError(f"provider config contains an invalid {name}")
+    if not valid_choice(config.get("fallback")):
+        raise ValueError("provider config contains an invalid fallback")
     return {**config, "providers": enabled}
 
 
@@ -55,7 +59,7 @@ def valid_provider(provider: Any) -> bool:
 
 
 def valid_choice(choice: Any) -> bool:
-    """Check a native fallback or advisor agent selection."""
+    """Check the native fallback agent selection."""
     return isinstance(choice, dict) and all(
         isinstance(choice.get(field), str) and choice[field]
         for field in ("agent", "model", "effort")
@@ -73,7 +77,7 @@ def usage_percentages(value: Any) -> list[float]:
     percentages: list[float] = []
     if isinstance(value, dict):
         for key, nested in value.items():
-            if key == "usedPercent" and isinstance(nested, (int, float)):
+            if key == "usedPercent" and valid_percentage(nested):
                 percentages.append(float(nested))
             else:
                 percentages.extend(usage_percentages(nested))
@@ -81,6 +85,16 @@ def usage_percentages(value: Any) -> list[float]:
         for nested in value:
             percentages.extend(usage_percentages(nested))
     return percentages
+
+
+def valid_percentage(value: Any) -> bool:
+    """Accept finite, non-negative percentages while rejecting booleans."""
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+        and value >= 0
+    )
 
 
 def provider_status(report: Any, provider: str) -> dict[str, Any]:
@@ -97,6 +111,8 @@ def provider_status(report: Any, provider: str) -> dict[str, Any]:
     )
     if entry is None:
         return status(False, None, "missing")
+    if "available" in entry:
+        return explicitly_reported_status(entry)
     percentages = usage_percentages(entry.get("usage"))
     if not percentages:
         return status(False, None, "unknown")
@@ -104,11 +120,53 @@ def provider_status(report: Any, provider: str) -> dict[str, Any]:
     return status(maximum < 100, maximum, "available" if maximum < 100 else "exhausted")
 
 
+def explicitly_reported_status(entry: dict[str, Any]) -> dict[str, Any]:
+    """Read availability and optional local usage from a non-Codexbar source."""
+    available = entry.get("available")
+    if not isinstance(available, bool):
+        return status(False, None, "unknown")
+    reason = entry.get("reason")
+    if not isinstance(reason, str) or not reason:
+        reason = "available" if available else "usage-unavailable"
+    result = status(available, None, reason)
+    local = entry.get("localUsage")
+    if not isinstance(local, dict):
+        return result
+    period = local.get("period")
+    tokens = local.get("tokens")
+    requests = local.get("requests")
+    if (
+        isinstance(period, str)
+        and period
+        and numeric_usage_value(tokens)
+        and numeric_usage_value(requests)
+    ):
+        result.update(
+            {
+                "usage_period": period,
+                "usage_tokens": int(tokens),
+                "usage_requests": int(requests),
+            }
+        )
+    return result
+
+
+def numeric_usage_value(value: Any) -> bool:
+    """Accept non-negative integer-like usage counters while rejecting booleans."""
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and value >= 0
+        and float(value).is_integer()
+    )
+
+
 def status(available: bool, maximum: float | None, reason: str) -> dict[str, Any]:
     """Create the stable, sanitized quota status shape."""
     return {
         "available": available,
         "max_used_percent": maximum,
+        "remaining_percent": None if maximum is None else max(0.0, 100 - maximum),
         "reason": reason,
     }
 
@@ -124,14 +182,24 @@ def worker(provider: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def capacity_priority(quota: dict[str, Any], config_index: int) -> tuple[float, ...]:
+    """Prefer unmetered, then greater known headroom, then unknown-limit providers."""
+    if quota["reason"] == "unmetered":
+        return (0, config_index)
+    maximum = quota["max_used_percent"]
+    if isinstance(maximum, (int, float)):
+        return (1, float(maximum), config_index)
+    return (2, config_index)
+
+
 def routing_summary(
     report: Any, config: dict[str, Any] | None = None
 ) -> dict[str, Any]:
     """Select configured workers when they have capacity, otherwise fallback."""
     config = config or load_config(config_path(os.environ))
     providers: dict[str, dict[str, Any]] = {}
-    selected: list[dict[str, Any]] = []
-    for provider in config["providers"]:
+    candidates: list[tuple[tuple[float, ...], dict[str, Any]]] = []
+    for index, provider in enumerate(config["providers"]):
         quota_name = provider.get("usageProvider")
         quota = (
             provider_status(report, quota_name)
@@ -140,7 +208,10 @@ def routing_summary(
         )
         providers[provider["id"]] = {**quota, **worker(provider)}
         if quota["available"]:
-            selected.append(worker(provider))
+            candidates.append((capacity_priority(quota, index), worker(provider)))
+    selected = [
+        item for _, item in sorted(candidates, key=lambda candidate: candidate[0])
+    ]
     fallback_active = not selected
     if fallback_active:
         selected = [{"provider": "fallback", **config["fallback"]}]
@@ -148,8 +219,8 @@ def routing_summary(
         "providers": providers,
         "selected_agents": [item["agent"] for item in selected],
         "selected_workers": selected,
+        "preferred_worker": selected[0],
         "fallback_active": fallback_active,
-        "advisor": config["advisor"],
     }
 
 
@@ -161,16 +232,14 @@ def hook_output(summary: dict[str, Any]) -> dict[str, Any]:
         "the user opts out; do not wait for them to repeat it or merely announce future delegation. "
         "Use selected_workers and pass each "
         "worker's model and effort as claudex_model and claudex_effort for every Agent/Task launch, "
+        "prefer preferred_worker for primary work because known quota headroom orders the list, "
         "including nested launches from a worker; never default a nested launch to generic claude "
         "or blindly inherit its parent route. If the user names a "
         "model matching model_prefixes, dynamically select that provider and pass the exact "
         "requested model. This current routing context overrides stale auto-memory about worker "
-        "or advisor model policy; do not inspect such memory before delegating. The advisor is "
-        "independent of capacity: invoke it alongside workers "
-        "when explicitly requested or when a complex, ambiguous, or high-risk decision benefits "
-        "from strategic review. Reuse the first compatible session advisor for related decisions "
-        "with SendMessage and its exact recipient, including after completion; start another advisor "
-        "only for true parallel or clean-room review, incompatible context, or an unavailable recipient. "
+        "model policy; do not inspect such memory before delegating. Use Claude Code's built-in "
+        "parameterless advisor tool according to its standard policy; it is independent of provider "
+        "capacity and already receives the complete conversation history. "
         "Start as many worker instances as useful, but for related follow-ups use "
         "SendMessage with the exact compatible recipient specified by the prior Agent/Task result; "
         "decide shutdown only after weighing likely reuse and potential cache value against resource pressure. "
@@ -234,9 +303,131 @@ def run_codexbar(program: str) -> Any:
         check=True,
         capture_output=True,
         text=True,
-        timeout=45,
+        timeout=USAGE_COMMAND_TIMEOUT_SECONDS,
     )
     return json.loads(completed.stdout)
+
+
+def qwen_usage_entry(payload: Any, provider: str, model: str) -> dict[str, Any]:
+    """Convert Qwen's local monthly export to a sanitized provider report."""
+    if not isinstance(payload, dict):
+        raise TypeError("Qwen usage export must be an object")
+    period = payload.get("value")
+    models = payload.get("byModel")
+    if (
+        payload.get("period") != "month"
+        or not isinstance(period, str)
+        or re.fullmatch(r"\d{4}-\d{2}", period) is None
+        or not isinstance(models, list)
+    ):
+        raise ValueError("Qwen usage export is missing period or model usage")
+    model_usage = next(
+        (
+            item
+            for item in models
+            if isinstance(item, dict) and item.get("model") == model
+        ),
+        None,
+    )
+    tokens = 0 if model_usage is None else model_usage.get("totalTokens")
+    requests = 0 if model_usage is None else model_usage.get("requests")
+    if not numeric_usage_value(tokens) or not numeric_usage_value(requests):
+        raise ValueError("Qwen usage export contains invalid counters")
+    return {
+        "provider": provider,
+        "available": True,
+        "reason": "available-local-stats-only",
+        "localUsage": {
+            "period": period,
+            "tokens": int(tokens),
+            "requests": int(requests),
+        },
+    }
+
+
+def run_qwen_usage(program: str, provider: str, model: str) -> dict[str, Any]:
+    """Ask Qwen Code to export its local monthly usage without a model request."""
+    with tempfile.TemporaryDirectory(prefix="claudex-qwen-usage-") as directory:
+        subprocess.run(
+            [
+                program,
+                "--prompt",
+                f"/stats export monthly --format json --output {QWEN_USAGE_FILENAME}",
+                "--output-format",
+                "text",
+                "--safe-mode",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=USAGE_COMMAND_TIMEOUT_SECONDS,
+            cwd=directory,
+        )
+        payload = json.loads(
+            (Path(directory) / QWEN_USAGE_FILENAME).read_text(encoding="utf-8")
+        )
+    return qwen_usage_entry(payload, provider, model)
+
+
+def unavailable_usage_entry(provider: str) -> dict[str, Any]:
+    """Represent a provider-specific usage command failure."""
+    return {
+        "provider": provider,
+        "available": False,
+        "reason": "usage-unavailable",
+    }
+
+
+def collect_usage(
+    config: dict[str, Any], codexbar_program: str, qwen_program: str
+) -> list[dict[str, Any]]:
+    """Collect Codexbar and Qwen usage independently so one failure stays isolated."""
+    providers = config["providers"]
+    qwen_providers = [
+        provider
+        for provider in providers
+        if str(provider.get("usageProvider", "")).casefold() == QWEN_USAGE_PROVIDER
+    ]
+    qwen_names = {provider["usageProvider"].casefold() for provider in qwen_providers}
+    codexbar_names = {
+        provider["usageProvider"]
+        for provider in providers
+        if isinstance(provider.get("usageProvider"), str)
+        and provider["usageProvider"]
+        and provider not in qwen_providers
+    }
+    try:
+        raw_report = run_codexbar(codexbar_program)
+        report = (
+            [
+                entry
+                for entry in raw_report
+                if not isinstance(entry, dict)
+                or str(entry.get("provider", "")).casefold() not in qwen_names
+            ]
+            if isinstance(raw_report, list)
+            else []
+        )
+    except (OSError, ValueError, subprocess.SubprocessError, json.JSONDecodeError):
+        report = [unavailable_usage_entry(name) for name in sorted(codexbar_names)]
+    for provider in qwen_providers:
+        try:
+            report.append(
+                run_qwen_usage(
+                    qwen_program,
+                    provider["usageProvider"],
+                    provider["defaultModel"],
+                )
+            )
+        except (
+            OSError,
+            TypeError,
+            ValueError,
+            subprocess.SubprocessError,
+            json.JSONDecodeError,
+        ):
+            report.append(unavailable_usage_entry(provider["usageProvider"]))
+    return report
 
 
 def cache_seconds(environment: dict[str, str]) -> int:
@@ -264,8 +455,8 @@ def fallback_summary(
         "providers": providers,
         "selected_agents": [fallback["agent"]],
         "selected_workers": [fallback],
+        "preferred_worker": fallback,
         "fallback_active": True,
-        "advisor": config["advisor"],
     }
 
 
@@ -275,6 +466,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--input", type=Path, help="read a Codexbar JSON fixture")
     parser.add_argument("--no-cache", action="store_true")
     parser.add_argument("--codexbar-program", default="codexbar")
+    parser.add_argument("--qwen-program", default="qwen")
     return parser.parse_args()
 
 
@@ -294,7 +486,9 @@ def main() -> int:
             report = (
                 json.loads(arguments.input.read_text(encoding="utf-8"))
                 if arguments.input
-                else run_codexbar(arguments.codexbar_program)
+                else collect_usage(
+                    config, arguments.codexbar_program, arguments.qwen_program
+                )
             )
             summary = routing_summary(report, config)
             if ttl > 0:

@@ -1,20 +1,21 @@
 ---
 name: claudex-routing
-description: Route claudex work to config-defined provider agents by Codexbar capacity, select explicitly requested models dynamically, and consult the independent advisor when useful. Use automatically in the claudex orchestrator and manually when diagnosing or changing provider routing.
+description: Route claudex work to config-defined provider agents by Codexbar or provider-CLI usage and select explicitly requested models dynamically. Use automatically in the claudex orchestrator and manually when diagnosing or changing provider routing.
 disable-model-invocation: true
 ---
 
 # Claudex Routing
 
 Use the routing context injected at prompt submission as the authoritative capacity snapshot for
-the current turn. It contains only provider names, utilization percentages, routing fields, and
-selected agents; account details from `codexbar` are never retained.
+the current turn. It contains only provider names, sanitized utilization or local token counters,
+routing fields, and selected agents; account details and raw provider output are never retained.
 
 ## Routing policy
 
 1. By default, delegate substantive work primarily to agents in `selected_workers` with the
    available SubAgent tool (`Task` in current Claude Code, `Agent` in older versions), unless the
    user explicitly opts out. This is the standing default; do not wait for the user to repeat it.
+   The list is ordered by known quota headroom; prefer `preferred_worker` for primary work.
    Pass each worker's `model` and `effort` as `claudex_model` and `claudex_effort`. When substantive
    work is clear, invoke the selected SubAgent in the first response rather than merely announcing
    future delegation. Do not use task-list bookkeeping merely as a precondition for delegation.
@@ -31,18 +32,15 @@ selected agents; account details from `codexbar` are never retained.
    foreground calls in one tool round. Use background execution only when useful independent work
    can continue or the task must outlive the turn; its notifications join the next-turn input queue.
 4. Use the configured fallback only when every capacity-managed provider is unavailable.
-5. Invoke the configured `advisor` in addition to workers when explicitly requested or when a
-   complex, ambiguous, high-risk, or consequential decision benefits from strategic review. The
-   advisor never replaces an implementation worker and does not depend on provider quota. Treat the
-   first compatible advisor in a session as the continuing advisor for related decisions: resume it
-   with `SendMessage` using the exact Agent/Task recipient, including after completion. Start another
-   only for true parallel or clean-room review, incompatible context, or an unavailable recipient.
+5. Use Claude Code's built-in parameterless `advisor()` tool according to its standard policy. It
+   automatically receives the complete conversation history, never replaces an implementation
+   worker, and does not depend on provider quota. Do not launch or model-route a custom advisor.
 6. Synthesize, verify, and present the subagents' results in the main conversation. Capacity
    selection does not relax repository instructions, safety requirements, or validation gates.
 7. Agent/Task acceptance proves delegation, not completion. Count delegated work as complete only
    after an actual worker reply or completion notification. Never fabricate a selected worker
    response; if execution is unavailable, continue safely in the main session and report it.
-8. Treat worker and advisor lifecycle as a deliberate decision:
+8. Treat worker lifecycle as a deliberate decision:
    - Reuse a prior instance for a related follow-up when the exact `SendMessage` recipient specified
      by its Agent/Task result (agent ID or teammate name as applicable) is available in the current
      main-session transcript and its agent, model, effort, role, scope, and authorization remain
@@ -61,13 +59,17 @@ selected agents; account details from `codexbar` are never retained.
      potential prompt-prefix/cache reuse against slot pressure, resource cost, stale or contaminated
      context, and whether the role is genuinely complete. Termination is allowed when those factors
      favor it; it is not automatic merely because one delegated task ended. A completed agent may be
-     logically resumable without a live process, so do not keep it artificially busy. Apply the same
-     rule to the advisor.
+     logically resumable without a live process, so do not keep it artificially busy.
 
 `scripts/route_usage.py` refreshes the capacity snapshot at most once every five minutes by
-default. Set `CLAUDEX_USAGE_CACHE_SECONDS=0` to disable caching. A missing provider, unknown usage,
-100% utilization in any reported quota window, malformed output, or a `codexbar` failure is
-treated conservatively as unavailable.
+default. Codex and Grok usage comes from `codexbar usage --json`. Qwen usage comes from Qwen Code's
+local, non-model `/stats export monthly --format json` command and records the configured model's
+monthly tokens and requests. Qwen Cloud does not expose remaining Token Plan Credits through this
+command, so Qwen cannot outrank providers with measurable remaining capacity. Successful local
+export means available with an unknown limit; a Qwen CLI/export failure disables only Qwen.
+A Codexbar failure likewise disables only its providers. Set `CLAUDEX_USAGE_CACHE_SECONDS=0` to
+disable caching. Missing, unknown, malformed, exhausted, or failed usage is treated conservatively
+as unavailable for the affected provider.
 
 After changing the routing script, run `uv run tests/run_coverage.py` from this skill directory.
 The test runner measures statements and branches and fails below 95% coverage.
@@ -75,7 +77,7 @@ The test runner measures statements and branches and fails below 95% coverage.
 ## Provider configuration
 
 `.config/claudex/providers.json` is the shared source for the main provider, enabled providers,
-default models, effort, model prefixes, capacity provider names, fallback, and advisor. The fish
+default models, effort, model prefixes, capacity provider names, and fallback. The fish
 launcher and routing hook both honor `CLAUDEX_PROVIDER_CONFIG` when a different file is needed.
 
 To add a model for an existing provider, extend `modelPrefixes` or update `defaultModel`. To add an
@@ -90,7 +92,7 @@ object:
 ```
 
 Arguments are passed directly without a shell, and every `{model}` occurrence is replaced with the
-selected model. The provider's `agent` must name a Claude Code agent definition. Keep that agent's
-frontmatter model set to `inherit`; claudex orchestration passes the config model and effort
-explicitly. Pinning a provider model in the Agent definition can trigger Claude Code's native model
-validation before the adapter receives the request.
+selected model. The provider's `agent` must name a Claude Code agent definition whose fixed
+frontmatter model matches `defaultModel`; claudex orchestration also passes that model and effort
+explicitly. Verify a new external model against the installed Claude Code because native validation
+can reject an unsupported ID before the adapter receives the request.

@@ -248,7 +248,9 @@ pub(super) async fn run_subscription_model(
     let _permit = acquire_subscription_slot(Arc::clone(&options.slots), options.timeout).await?;
     let mut command = subscription_command(program, model, &options, OutputMode::Json);
     let mut child = spawn_subscription(&mut command, model)?;
-    write_subscription_prompt(&mut child, prompt).await?;
+    // An early child exit can close stdin first. Prefer its status and stderr
+    // over the resulting BrokenPipe because they explain the actual failure.
+    let prompt_result = write_subscription_prompt(&mut child, prompt).await;
     let output = wait_for_subscription(child.wait_with_output(), options.timeout).await?;
     if !output.status.success() {
         bail!(
@@ -257,6 +259,7 @@ pub(super) async fn run_subscription_model(
             String::from_utf8_lossy(&output.stderr).trim()
         );
     }
+    prompt_result.context("failed to write Claude subscription prompt")?;
     subscription_result(&output.stdout)
 }
 

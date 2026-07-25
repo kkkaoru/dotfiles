@@ -49,7 +49,10 @@ pub(super) fn thread_start_params(
     dynamic_tools: Vec<Value>,
 ) -> Value {
     let system = system_text(&request.system);
-    let cwd = cwd_from_system(&system)
+    let cwd = request
+        .working_directory
+        .clone()
+        .or_else(|| cwd_from_system(&system))
         .map(|path| path.to_string_lossy().into_owned())
         .unwrap_or_else(isolated_runtime_cwd);
     let developer_instructions = super::super::team_protocol::guidance(&request.tools).map_or_else(

@@ -14,7 +14,6 @@ struct ProviderConfig {
     main_provider: String,
     providers: Vec<Provider>,
     fallback: AgentChoice,
-    advisor: AgentChoice,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -65,7 +64,6 @@ fn validate(config: ProviderConfig) -> Result<LoadedConfig> {
         bail!("provider config version must be {CONFIG_VERSION}");
     }
     validate_choice(&config.fallback, "fallback")?;
-    validate_choice(&config.advisor, "advisor")?;
     let providers = config
         .providers
         .into_iter()
@@ -165,7 +163,7 @@ mod tests {
 
     fn config(provider: &str) -> String {
         format!(
-            r#"{{"version":1,"mainProvider":"p","providers":[{provider}],"fallback":{{"agent":"f","model":"m","effort":"high"}},"advisor":{{"agent":"a","model":"x","effort":"xhigh"}}}}"#
+            r#"{{"version":1,"mainProvider":"p","providers":[{provider}],"fallback":{{"agent":"f","model":"m","effort":"high"}}}}"#
         )
     }
 

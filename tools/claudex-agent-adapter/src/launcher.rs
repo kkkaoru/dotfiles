@@ -12,7 +12,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
-use crate::{ADAPTER_PROTOCOL_VERSION, agent_backend::BackendRoute};
+use crate::{ADAPTER_PROTOCOL_VERSION, agent_backend::BackendRoute, working_directory};
 
 mod daemon_process;
 
@@ -113,6 +113,11 @@ pub async fn run_claude(
     let config = ServiceConfig::new(options)?;
     let base_url = ensure_config_running(&config).await?;
     let program = std::env::var_os("CLAUDEX_CLAUDE_PROGRAM").unwrap_or_else(|| "claude".into());
+    let cwd = std::env::current_dir().context("resolve Claude Code working directory")?;
+    let custom_headers = working_directory::custom_headers(
+        std::env::var_os("ANTHROPIC_CUSTOM_HEADERS").as_deref(),
+        &cwd,
+    );
     let mut command = Command::new(program);
     if !inherit_claude_model {
         command.args(["--model", &config.options.model]);
@@ -121,6 +126,7 @@ pub async fn run_claude(
         .args(arguments)
         .env("ANTHROPIC_BASE_URL", base_url)
         .env("ANTHROPIC_AUTH_TOKEN", &config.token)
+        .env("ANTHROPIC_CUSTOM_HEADERS", custom_headers)
         .env_remove("ANTHROPIC_API_KEY")
         .env_remove("ANTHROPIC_MODEL")
         .env_remove("CLAUDE_CODE_USE_BEDROCK")

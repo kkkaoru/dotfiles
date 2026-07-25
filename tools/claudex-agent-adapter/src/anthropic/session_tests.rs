@@ -7,7 +7,9 @@ use super::{
     candidate_length, codex_tool_name, dynamic_tool, is_better_length, owns_tool_result,
     thread_start_params, tool_configuration, transcript_owns_tool_results,
 };
-use crate::anthropic::{MessagesRequest, Session};
+use crate::anthropic::{
+    MessagesRequest, Session, subscription_request::subscription_request_prompt,
+};
 
 fn request(system: Value, tools: Vec<Value>) -> MessagesRequest {
     MessagesRequest {
@@ -18,6 +20,7 @@ fn request(system: Value, tools: Vec<Value>) -> MessagesRequest {
         stream: false,
         output_config: Value::Null,
         metadata: Value::Null,
+        working_directory: None,
         claudex_collaborator_model: None,
     }
 }
@@ -122,6 +125,23 @@ fn builds_thread_configuration_for_empty_and_team_system_prompts() {
 }
 
 #[test]
+fn bridge_instructions_support_every_configured_provider() {
+    let configured = thread_start_params(&request(Value::Null, Vec::new()), "main", Vec::new());
+    assert!(
+        configured["developerInstructions"]
+            .as_str()
+            .expect("developer instructions")
+            .contains("models selected by the current routing context are supported")
+    );
+}
+
+#[test]
+fn subscription_prompt_keeps_external_provider_models_out_of_the_native_field() {
+    let prompt = subscription_request_prompt(&request(json!("system"), Vec::new()));
+    assert!(prompt.contains("external provider model ID in the native model field"));
+}
+
+#[test]
 fn starts_codex_threads_in_the_request_working_directory() {
     let root = tempfile::tempdir().expect("request cwd fixture");
     let active_cwd = root.path().join("active-child");
@@ -137,6 +157,16 @@ fn starts_codex_threads_in_the_request_working_directory() {
     let params = thread_start_params(&request(system, Vec::new()), "main", Vec::new());
 
     assert_eq!(params["cwd"].as_str(), active_cwd.to_str());
+
+    let launch_cwd = root.path().canonicalize().expect("canonical launch cwd");
+    let mut launched = request(json!("no embedded cwd"), Vec::new());
+    launched.working_directory = Some(launch_cwd.clone());
+    let params = thread_start_params(&launched, "main", Vec::new());
+    assert_eq!(params["cwd"].as_str(), launch_cwd.to_str());
+    assert_eq!(
+        crate::anthropic::subscription_request::subscription_request_cwd(&launched).as_deref(),
+        Some(launch_cwd.as_path())
+    );
 }
 
 #[test]

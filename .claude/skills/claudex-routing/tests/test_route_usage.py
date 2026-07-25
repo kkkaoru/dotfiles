@@ -18,10 +18,45 @@ sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
 import route_usage
 
 
-def report(codex: object = 10, grok: object = 20) -> list[dict[str, object]]:
+def qwen_report(
+    available: object = True, tokens: object = 71_215, requests: object = 4
+) -> dict[str, object]:
+    return {
+        "provider": "qwen",
+        "available": available,
+        "reason": (
+            "available-local-stats-only" if available is True else "usage-unavailable"
+        ),
+        "localUsage": {
+            "period": "2026-07",
+            "tokens": tokens,
+            "requests": requests,
+        },
+    }
+
+
+def qwen_export(tokens: object = 71_215, requests: object = 4) -> dict[str, object]:
+    return {
+        "period": "month",
+        "value": "2026-07",
+        "totals": {"totalTokens": 108_016, "requests": 6},
+        "byModel": [
+            {
+                "model": "qwen3.8-max-preview",
+                "totalTokens": tokens,
+                "requests": requests,
+            }
+        ],
+    }
+
+
+def report(
+    codex: object = 10, grok: object = 20, qwen: object = True
+) -> list[dict[str, object]]:
     return [
         {"provider": "codex", "usage": {"primary": {"usedPercent": codex}}},
         {"provider": "grok", "usage": {"primary": {"usedPercent": grok}}},
+        qwen_report(qwen),
     ]
 
 
@@ -47,7 +82,7 @@ class ConfigurationTests(unittest.TestCase):
             ("version", 2),
             ("providers", []),
             ("mainProvider", "missing"),
-            ("advisor", {}),
+            ("fallback", {}),
         ]:
             changed = copy.deepcopy(base)
             changed[key] = value
@@ -76,7 +111,9 @@ class ConfigurationTests(unittest.TestCase):
 
 
 class RoutingTests(unittest.TestCase):
-    def test_orchestration_artifacts_keep_delegation_as_the_standing_default(self) -> None:
+    def test_orchestration_artifacts_keep_delegation_as_the_standing_default(
+        self,
+    ) -> None:
         claude_home = Path(__file__).parents[3]
         for path in [
             claude_home / "CLAUDE.md",
@@ -89,6 +126,22 @@ class RoutingTests(unittest.TestCase):
             self.assertIn("N queued", instructions, path)
             self.assertNotIn("When delegation is requested", instructions, path)
 
+        settings = json.loads(
+            (claude_home / "settings.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(settings["advisorModel"], "opus")
+        self.assertNotIn("advisor", configuration())
+        self.assertFalse((claude_home / "agents" / "custom-advisor.md").exists())
+        routing_hook = next(
+            hook
+            for group in settings["hooks"]["UserPromptSubmit"]
+            for hook in group["hooks"]
+            if "route_usage.py" in hook["command"]
+        )
+        self.assertGreater(
+            routing_hook["timeout"], route_usage.USAGE_COMMAND_TIMEOUT_SECONDS
+        )
+
     def test_collects_nested_numeric_percentages_only(self) -> None:
         usage = {
             "primary": {"usedPercent": 12},
@@ -99,6 +152,16 @@ class RoutingTests(unittest.TestCase):
         }
         self.assertEqual(route_usage.usage_percentages(usage), [12.0, 34.5])
         self.assertEqual(route_usage.usage_percentages("invalid"), [])
+        self.assertEqual(
+            route_usage.usage_percentages(
+                {
+                    "boolean": {"usedPercent": True},
+                    "negative": {"usedPercent": -1},
+                    "infinite": {"usedPercent": float("inf")},
+                }
+            ),
+            [],
+        )
 
     def test_reports_missing_unknown_available_and_exhausted_providers(self) -> None:
         self.assertEqual(route_usage.provider_status([], "codex")["reason"], "missing")
@@ -112,21 +175,74 @@ class RoutingTests(unittest.TestCase):
         exhausted = report(codex=100)
         self.assertEqual(
             route_usage.provider_status(exhausted, "codex"),
-            {"available": False, "max_used_percent": 100.0, "reason": "exhausted"},
+            {
+                "available": False,
+                "max_used_percent": 100.0,
+                "remaining_percent": 0.0,
+                "reason": "exhausted",
+            },
         )
 
-    def test_selects_both_single_and_fallback_agents(self) -> None:
+    def test_reports_qwen_availability_and_local_usage(self) -> None:
+        self.assertEqual(
+            route_usage.provider_status(report(), "qwen"),
+            {
+                "available": True,
+                "max_used_percent": None,
+                "remaining_percent": None,
+                "reason": "available-local-stats-only",
+                "usage_period": "2026-07",
+                "usage_tokens": 71_215,
+                "usage_requests": 4,
+            },
+        )
+        unavailable = route_usage.provider_status(report(qwen=False), "qwen")
+        self.assertFalse(unavailable["available"])
+        self.assertEqual(unavailable["reason"], "usage-unavailable")
+
+    def test_rejects_malformed_explicit_usage_without_leaking_counters(self) -> None:
+        malformed = qwen_report(available="yes", tokens=True, requests=-1)
+        self.assertEqual(
+            route_usage.provider_status([malformed], "qwen")["reason"], "unknown"
+        )
+        malformed["available"] = True
+        status = route_usage.provider_status([malformed], "qwen")
+        self.assertNotIn("usage_tokens", status)
+        self.assertEqual(
+            route_usage.explicitly_reported_status({"available": True})["reason"],
+            "available",
+        )
+        self.assertFalse(route_usage.numeric_usage_value(True))
+        self.assertFalse(route_usage.numeric_usage_value(1.5))
+
+    def test_selects_all_single_and_fallback_agents(self) -> None:
         self.assertEqual(
             route_usage.routing_summary(report())["selected_agents"],
-            ["claudex-gpt", "claudex-grok"],
+            ["claudex-gpt", "claudex-grok", "claudex-qwen"],
         )
         self.assertEqual(
             route_usage.routing_summary(report(grok=100))["selected_agents"],
-            ["claudex-gpt"],
+            ["claudex-gpt", "claudex-qwen"],
         )
-        fallback = route_usage.routing_summary(report(codex=100, grok=100))
+        fallback = route_usage.routing_summary(report(codex=100, grok=100, qwen=False))
         self.assertEqual(fallback["selected_agents"], ["claudex-sonnet"])
         self.assertTrue(fallback["fallback_active"])
+
+    def test_prioritizes_the_provider_with_the_most_known_headroom(self) -> None:
+        summary = route_usage.routing_summary(report(codex=80, grok=10))
+        self.assertEqual(
+            summary["selected_agents"],
+            ["claudex-grok", "claudex-gpt", "claudex-qwen"],
+        )
+        self.assertEqual(summary["preferred_worker"]["provider"], "grok")
+        self.assertEqual(summary["providers"]["grok"]["remaining_percent"], 90.0)
+        self.assertEqual(summary["providers"]["codex"]["remaining_percent"], 20.0)
+        self.assertIsNone(summary["providers"]["qwen"]["remaining_percent"])
+
+    def test_unknown_qwen_limit_cannot_outrank_known_capacity(self) -> None:
+        summary = route_usage.routing_summary(report(codex=99, grok=100))
+        self.assertEqual(summary["selected_agents"], ["claudex-gpt", "claudex-qwen"])
+        self.assertEqual(summary["preferred_worker"]["provider"], "codex")
 
     def test_hook_output_contains_only_the_sanitized_summary(self) -> None:
         summary = route_usage.routing_summary(report())
@@ -136,13 +252,15 @@ class RoutingTests(unittest.TestCase):
             output["hookSpecificOutput"]["hookEventName"], "UserPromptSubmit"
         )
         self.assertIn("claudex-gpt", context)
+        self.assertIn("claudex-qwen", context)
         self.assertIn("every Agent/Task launch", context)
         self.assertIn("nested launches from a worker", context)
         self.assertIn("claudex_model and claudex_effort", context)
         self.assertIn("standing default", context)
         self.assertIn("do not wait for them to repeat it", context)
-        self.assertIn("Reuse the first compatible session advisor", context)
-        self.assertIn("including after completion", context)
+        self.assertIn("built-in parameterless advisor tool", context)
+        self.assertIn("complete conversation history", context)
+        self.assertNotIn("custom-advisor", context)
         self.assertIn("TUI N queued", context)
         self.assertIn("not worker capacity", context)
         self.assertNotIn("account", context)
@@ -190,6 +308,15 @@ class CacheTests(unittest.TestCase):
 
 
 class CommandTests(unittest.TestCase):
+    def test_converts_a_recorded_qwen_0_21_monthly_export(self) -> None:
+        fixture = Path(__file__).parent / "fixtures" / "qwen-monthly.json"
+        payload = json.loads(fixture.read_text(encoding="utf-8"))
+        entry = route_usage.qwen_usage_entry(payload, "qwen", "qwen3.8-max-preview")
+        self.assertEqual(
+            entry,
+            qwen_report(tokens=92_493, requests=5),
+        )
+
     @mock.patch("route_usage.subprocess.run")
     def test_runs_codexbar_without_a_shell(self, run: mock.Mock) -> None:
         run.return_value = subprocess.CompletedProcess([], 0, json.dumps(report()), "")
@@ -199,8 +326,96 @@ class CommandTests(unittest.TestCase):
             check=True,
             capture_output=True,
             text=True,
-            timeout=45,
+            timeout=route_usage.USAGE_COMMAND_TIMEOUT_SECONDS,
         )
+
+    @mock.patch("route_usage.subprocess.run")
+    def test_runs_qwen_local_monthly_export_without_a_model_prompt(
+        self, run: mock.Mock
+    ) -> None:
+        def write_export(
+            *_args: object, **kwargs: object
+        ) -> subprocess.CompletedProcess:
+            Path(str(kwargs["cwd"]), route_usage.QWEN_USAGE_FILENAME).write_text(
+                json.dumps(qwen_export()), encoding="utf-8"
+            )
+            return subprocess.CompletedProcess([], 0, "exported", "")
+
+        run.side_effect = write_export
+        entry = route_usage.run_qwen_usage("qwen-test", "qwen", "qwen3.8-max-preview")
+        self.assertEqual(entry, qwen_report())
+        arguments = run.call_args.args[0]
+        self.assertEqual(arguments[0], "qwen-test")
+        self.assertTrue(
+            any(argument.startswith("/stats export monthly") for argument in arguments)
+        )
+        self.assertIn("--safe-mode", arguments)
+        self.assertEqual(run.call_args.kwargs["timeout"], 45)
+
+    def test_validates_qwen_export_and_zeroes_a_new_model(self) -> None:
+        entry = route_usage.qwen_usage_entry(qwen_export(), "qwen", "new-model")
+        self.assertEqual(entry["localUsage"]["tokens"], 0)
+        invalid = [
+            [],
+            {},
+            {"period": "day", "value": "2026-07", "byModel": []},
+            {"period": "month", "value": "July 2026", "byModel": []},
+            {"value": "2026-07", "byModel": "invalid"},
+            qwen_export(tokens="invalid"),
+        ]
+        for payload in invalid:
+            with self.assertRaises((TypeError, ValueError)):
+                route_usage.qwen_usage_entry(payload, "qwen", "qwen3.8-max-preview")
+
+    @mock.patch("route_usage.run_qwen_usage", return_value=qwen_report())
+    @mock.patch("route_usage.run_codexbar", return_value=report()[:2])
+    def test_collects_codexbar_and_qwen_usage(
+        self, _codexbar: mock.Mock, qwen: mock.Mock
+    ) -> None:
+        collected = route_usage.collect_usage(configuration(), "codexbar", "qwen")
+        self.assertEqual(
+            [entry["provider"] for entry in collected], ["codex", "grok", "qwen"]
+        )
+        qwen.assert_called_once_with("qwen", "qwen", "qwen3.8-max-preview")
+
+    @mock.patch("route_usage.run_qwen_usage", return_value=qwen_report())
+    @mock.patch(
+        "route_usage.run_codexbar",
+        return_value=[*report()[:2], {"provider": "qwen", "usage": {}}],
+    )
+    def test_qwen_cli_usage_replaces_a_codexbar_qwen_entry(
+        self, _codexbar: mock.Mock, _qwen: mock.Mock
+    ) -> None:
+        collected = route_usage.collect_usage(configuration(), "codexbar", "qwen")
+        qwen_entries = [entry for entry in collected if entry.get("provider") == "qwen"]
+        self.assertEqual(qwen_entries, [qwen_report()])
+        qwen_worker = next(
+            worker
+            for worker in route_usage.routing_summary(collected)["selected_workers"]
+            if worker["provider"] == "qwen"
+        )
+        self.assertEqual(qwen_worker["model"], "qwen3.8-max-preview")
+        self.assertEqual(qwen_worker["model_prefixes"], ["qwen"])
+
+    @mock.patch("route_usage.run_qwen_usage", side_effect=OSError("missing"))
+    @mock.patch("route_usage.run_codexbar", return_value=report()[:2])
+    def test_qwen_usage_failure_does_not_disable_codexbar_providers(
+        self, _codexbar: mock.Mock, _qwen: mock.Mock
+    ) -> None:
+        collected = route_usage.collect_usage(configuration(), "codexbar", "qwen")
+        summary = route_usage.routing_summary(collected)
+        self.assertEqual(summary["selected_agents"], ["claudex-gpt", "claudex-grok"])
+        self.assertEqual(summary["providers"]["qwen"]["reason"], "usage-unavailable")
+
+    @mock.patch("route_usage.run_qwen_usage", return_value=qwen_report())
+    @mock.patch("route_usage.run_codexbar", side_effect=OSError("missing"))
+    def test_codexbar_failure_does_not_disable_qwen(
+        self, _codexbar: mock.Mock, _qwen: mock.Mock
+    ) -> None:
+        collected = route_usage.collect_usage(configuration(), "codexbar", "qwen")
+        summary = route_usage.routing_summary(collected)
+        self.assertEqual(summary["selected_agents"], ["claudex-qwen"])
+        self.assertEqual(summary["providers"]["codex"]["reason"], "usage-unavailable")
 
     def test_fallback_summary_disables_external_providers(self) -> None:
         summary = route_usage.fallback_summary("test-failure")
@@ -257,6 +472,8 @@ class MainTests(unittest.TestCase):
                 "--no-cache",
                 "--codexbar-program",
                 "usage-tool",
+                "--qwen-program",
+                "qwen-tool",
             ],
         ):
             arguments = route_usage.parse_arguments()
@@ -264,37 +481,38 @@ class MainTests(unittest.TestCase):
         self.assertEqual(arguments.config, Path("providers.json"))
         self.assertTrue(arguments.no_cache)
         self.assertEqual(arguments.codexbar_program, "usage-tool")
+        self.assertEqual(arguments.qwen_program, "qwen-tool")
 
-    @mock.patch("route_usage.run_codexbar")
+    @mock.patch("route_usage.collect_usage")
     @mock.patch("route_usage.read_cache")
     def test_main_reuses_a_fresh_cache(
-        self, read_cache: mock.Mock, run_codexbar: mock.Mock
+        self, read_cache: mock.Mock, collect_usage: mock.Mock
     ) -> None:
         read_cache.return_value = route_usage.routing_summary(report())
         output = self.run_main()
         self.assertIn("claudex-gpt", output)
-        run_codexbar.assert_not_called()
+        collect_usage.assert_not_called()
 
     @mock.patch("route_usage.write_cache")
-    @mock.patch("route_usage.run_codexbar", return_value=report())
+    @mock.patch("route_usage.collect_usage", return_value=report())
     @mock.patch("route_usage.read_cache", return_value=None)
     def test_main_refreshes_and_writes_the_cache(
         self,
         _read_cache: mock.Mock,
-        _run_codexbar: mock.Mock,
+        _collect_usage: mock.Mock,
         write_cache: mock.Mock,
     ) -> None:
         output = self.run_main()
-        self.assertIn("claudex-grok", output)
+        self.assertIn("claudex-qwen", output)
         write_cache.assert_called_once()
 
     @mock.patch("route_usage.write_cache")
-    @mock.patch("route_usage.run_codexbar")
+    @mock.patch("route_usage.collect_usage")
     @mock.patch("route_usage.read_cache", return_value=None)
     def test_main_reads_an_uncached_fixture(
         self,
         _read_cache: mock.Mock,
-        run_codexbar: mock.Mock,
+        collect_usage: mock.Mock,
         write_cache: mock.Mock,
     ) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -302,17 +520,14 @@ class MainTests(unittest.TestCase):
             fixture.write_text(json.dumps(report(grok=100)), encoding="utf-8")
             output = self.run_main("--input", str(fixture))
         context = json.loads(output)["hookSpecificOutput"]["additionalContext"]
-        self.assertIn('"selected_agents":["claudex-gpt"]', context)
-        run_codexbar.assert_not_called()
+        self.assertIn('"selected_agents":["claudex-gpt","claudex-qwen"]', context)
+        collect_usage.assert_not_called()
         write_cache.assert_not_called()
 
-    @mock.patch(
-        "route_usage.run_codexbar",
-        side_effect=subprocess.TimeoutExpired("codexbar", 45),
-    )
+    @mock.patch("route_usage.collect_usage", side_effect=OSError("failed"))
     @mock.patch("route_usage.read_cache", return_value=None)
     def test_main_falls_back_when_usage_refresh_fails(
-        self, _read_cache: mock.Mock, _run_codexbar: mock.Mock
+        self, _read_cache: mock.Mock, _collect_usage: mock.Mock
     ) -> None:
         output = self.run_main("--no-cache")
         self.assertIn("usage-unavailable", output)

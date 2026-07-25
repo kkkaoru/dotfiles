@@ -1,7 +1,7 @@
 ---
-name: claudex-sonnet
-description: Claude subscription fallback worker used only when no capacity-managed provider is available.
-model: claude-sonnet-5
+name: claudex-qwen
+description: Qwen-backed claudex worker for implementation, investigation, testing, and independent review when Qwen Code reports available local usage.
+model: qwen3.8-max-preview
 effort: high
 skills:
   - claudex-routing

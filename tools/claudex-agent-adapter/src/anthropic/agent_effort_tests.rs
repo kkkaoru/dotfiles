@@ -23,6 +23,7 @@ mod tests {
             stream: false,
             output_config: json!({"effort":"low"}),
             metadata: json!({"user_id":user_id}),
+            working_directory: None,
             claudex_collaborator_model: None,
         }
     }
@@ -189,7 +190,7 @@ mod tests {
             false,
         ));
         assert!(intent.is_subagent);
-        assert_eq!(intent.model_override.as_deref(), Some("main-model"));
+        assert!(intent.model_override.is_none());
         assert!(matches!(intent.effort, AgentEffort::ConfiguredDefault));
     }
 
@@ -231,7 +232,7 @@ mod tests {
             internal["prompt"].as_str().expect("correlated prompt"),
         ));
 
-        assert_eq!(reused.model_override.as_deref(), Some("provider-model"));
+        assert!(reused.model_override.is_none());
         assert_eq!(explicit(reused.effort), "high");
         let pending = intents.pending.lock().unwrap();
         assert_eq!(pending.len(), 2);
@@ -250,6 +251,12 @@ mod tests {
             assert_eq!(
                 schema["properties"]["claudex_model"]["type"],
                 "string"
+            );
+            assert!(
+                schema["properties"]["claudex_model"]["description"]
+                    .as_str()
+                    .expect("model description")
+                    .contains("current routing context")
             );
             let tool_use_id = format!("tool-mid-{tool_name}");
             let (internal, public) = prepare_arguments(
@@ -344,7 +351,7 @@ mod tests {
     }
 
     #[test]
-    fn resolves_parent_and_arbitrary_explicit_provider_models() {
+    fn preserves_fixed_and_arbitrary_explicit_provider_models() {
         let intents = AgentEffortIntents::default();
         let (inherited, public) = prepare_arguments(
             "Agent",
@@ -363,7 +370,7 @@ mod tests {
         let intent = intents.take(&request_without_user_id(
             inherited["prompt"].as_str().expect("inherited prompt"),
         ));
-        assert_eq!(intent.model_override.as_deref(), Some("parent-model"));
+        assert!(intent.model_override.is_none());
 
         for model in ["gpt-5.6-sol", "grok-4.5", "claude-opus-4-8"] {
             let tool_id = format!("tool-{model}");
@@ -399,21 +406,21 @@ mod tests {
     fn ignores_inferred_model_unless_current_user_input_names_exact_id() {
         let intents = AgentEffortIntents::default();
         for (tool_id, user_text, expected) in [
-            ("tool-omitted", "Run the commit command", "parent-model"),
+            ("tool-omitted", "Run the commit command", None),
             (
                 "tool-prefix-only",
                 "Use claude-sonnet-5-newer for this SubAgent",
-                "parent-model",
+                None,
             ),
             (
                 "tool-dot-suffix",
                 "Use claude-sonnet-5.1 for this SubAgent",
-                "parent-model",
+                None,
             ),
             (
                 "tool-explicit",
                 "Use claude-sonnet-5.",
-                "claude-sonnet-5",
+                Some("claude-sonnet-5"),
             ),
         ] {
             let (arguments, _) = prepare_arguments(
@@ -437,7 +444,7 @@ mod tests {
             let intent = intents.take(&request_without_user_id(
                 arguments["prompt"].as_str().expect("correlated prompt"),
             ));
-            assert_eq!(intent.model_override.as_deref(), Some(expected));
+            assert_eq!(intent.model_override.as_deref(), expected);
         }
     }
 

@@ -262,6 +262,7 @@ printf 'api_key=%s anthropic_model=%s bedrock=%s foundry=%s vertex=%s\n' \
     "${ANTHROPIC_API_KEY-unset}" "${ANTHROPIC_MODEL-unset}" \
     "${CLAUDE_CODE_USE_BEDROCK-unset}" "${CLAUDE_CODE_USE_FOUNDRY-unset}" \
     "${CLAUDE_CODE_USE_VERTEX-unset}"
+printf 'custom_headers=%s\n' "$ANTHROPIC_CUSTOM_HEADERS"
 printf "Advisor disabled — base model 'test-main-model' has no advisor rank\n" >&2
 printf 'kept stderr\n' >&2
 exit 23
@@ -290,6 +291,10 @@ exit 23
         .env("CLAUDE_CODE_USE_BEDROCK", "1")
         .env("CLAUDE_CODE_USE_FOUNDRY", "1")
         .env("CLAUDE_CODE_USE_VERTEX", "1")
+        .env(
+            "ANTHROPIC_CUSTOM_HEADERS",
+            "x-user-header: keep\nx-claudex-working-directory: forged",
+        )
         .output()
         .expect("run Claude wrapper");
     assert_eq!(output.status.code(), Some(23));
@@ -301,6 +306,9 @@ exit 23
             "api_key=unset anthropic_model=unset bedrock=unset foundry=unset vertex=unset"
         )
     );
+    assert!(stdout.contains("custom_headers=x-user-header: keep"));
+    assert!(stdout.contains("x-claudex-working-directory:"));
+    assert!(!stdout.contains("forged"));
     let stderr = String::from_utf8(output.stderr).expect("Claude stderr");
     assert_eq!(stderr, "kept stderr\n");
 

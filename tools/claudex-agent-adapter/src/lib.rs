@@ -11,8 +11,9 @@ pub mod grok_acp;
 pub mod launcher;
 pub mod provider_config;
 pub mod runtime;
+mod working_directory;
 
-pub const ADAPTER_PROTOCOL_VERSION: u64 = 19;
+pub const ADAPTER_PROTOCOL_VERSION: u64 = 20;
 
 use std::sync::Arc;
 
@@ -106,14 +107,54 @@ fn has_token(headers: &HeaderMap, expected: &str) -> bool {
 
 async fn messages(
     State(bridge): State<Arc<Bridge>>,
-    Json(request): Json<MessagesRequest>,
+    headers: HeaderMap,
+    Json(mut request): Json<MessagesRequest>,
 ) -> Response<axum::body::Body> {
+    request.working_directory = request_working_directory(&headers);
     bridge
         .messages(request)
         .await
         .unwrap_or_else(|error| error_response(StatusCode::BAD_GATEWAY, error))
 }
 
+fn request_working_directory(headers: &HeaderMap) -> Option<std::path::PathBuf> {
+    let path = headers
+        .get(working_directory::HEADER_NAME)
+        .and_then(|value| value.to_str().ok())
+        .and_then(working_directory::decode)?
+        .canonicalize()
+        .ok()?;
+    path.is_dir().then_some(path)
+}
+
 async fn count_tokens_handler(Json(request): Json<MessagesRequest>) -> impl IntoResponse {
     Json(json!({ "input_tokens": token_count(&request) }))
+}
+
+#[cfg(test)]
+// Coverage gates measure production code; test implementations are excluded.
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn accepts_only_valid_existing_working_directory_headers() {
+        let root = tempfile::tempdir().expect("working directory fixture");
+        let canonical = root.path().canonicalize().expect("canonical fixture");
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            working_directory::HEADER_NAME,
+            working_directory::encode(root.path())
+                .parse()
+                .expect("header"),
+        );
+        assert_eq!(request_working_directory(&headers), Some(canonical));
+
+        headers.insert(
+            working_directory::HEADER_NAME,
+            "/definitely/missing".parse().expect("missing header"),
+        );
+        assert!(request_working_directory(&headers).is_none());
+        assert!(request_working_directory(&HeaderMap::new()).is_none());
+    }
 }

@@ -1,9 +1,11 @@
 # Claudex
 
 Claudex は Claude Code を操作画面とオーケストレーターとして使いながら、Codex、Grok
-Build、Claude の各モデルへ仕事を振り分けるローカル実行環境です。provider の利用率、
-モデル、実行方式、fallback、advisor は
+Build、Qwen Code、Claude の各モデルへ仕事を振り分けるローカル実行環境です。provider の利用率、
+モデル、実行方式、fallback は
 [`providers.json`](./providers.json) で一元管理します。
+advisor はClaude Code標準の引数なし `advisor()` ツールを使用し、モデルは
+[`settings.json`](../../.claude/settings.json) の `advisorModel` で管理します。
 
 このREADMEは日常利用と別のMacへの導入手順を扱います。Anthropic Messages API互換
 adapterの内部実装や開発上の詳細は
@@ -17,11 +19,12 @@ flowchart LR
     User[ユーザー] --> Fish[fish: claudex]
     Fish --> Adapter[claudex-agent-adapter]
     Adapter --> Orchestrator[Claude main session]
-    Orchestrator --> Hook[CodexBar利用率フック]
+    Orchestrator --> Hook[provider利用状況フック]
     Hook --> Codex[claudex-gpt\nCodex app-server]
     Hook --> Grok[claudex-grok\nGrok ACP]
+    Hook --> Qwen[claudex-qwen\nQwen Code ACP]
     Hook --> Fallback[claudex-sonnet\nClaude fallback]
-    Orchestrator -. 必要時に併用 .-> Advisor[custom-advisor\nClaude Fable]
+    Orchestrator -. 標準機能 .-> Advisor[Claude Code advisor()\nadvisorModel: opus]
 ```
 
 現在の既定値は次のとおりです。
@@ -31,45 +34,46 @@ flowchart LR
 | Orchestrator | 通常のmain session | Claude Code設定 (`sonnet`) | Claude Code設定 (`xhigh`) | 通常起動 |
 | Codex worker | `claudex-gpt` | `gpt-5.6-sol` | `high` | Codexに空きがある場合 |
 | Grok worker | `claudex-grok` | `grok-4.5` | `high` | Grokに空きがある場合 |
-| Fallback | `claudex-sonnet` | `sonnet` | `high` | 利用率を管理するproviderをすべて利用できない場合 |
-| Advisor | `custom-advisor` | `claude-fable-5` | `xhigh` | 明示指定時、または複雑・曖昧・高リスクな判断時 |
+| Qwen worker | `claudex-qwen` | `qwen3.8-max-preview` | `high` | Qwen CLIの月次usageを取得できる場合 |
+| Fallback | `claudex-sonnet` | `claude-sonnet-5` | `high` | 利用率を管理するproviderをすべて利用できない場合 |
+| Advisor | Claude Code標準 `advisor()` | `opus` | Claude Code標準 | 標準advisor policyに従う |
 
-provider worker のAgent定義は `model: inherit` です。実際のモデルはAgentファイルへ
-重複定義せず、`providers.json` とAgent呼び出し時の `claudex_model` で決定します。
-これにより、Claude Codeによるネイティブモデル検証を回避しながら、追加されたモデルを
-設定だけで選択できます。そのためClaude Code UIやAgent tool resultの `resolvedModel` は
-native profileの継承元（例: `claude-sonnet-5`）を表示する場合があり、adapterが実際に転送した
-modelとは一致しません。実modelはSubAgent JSONLのassistant `message.model`、provider log、
-adapter routing logの順で確認します。
+worker のAgent定義と `providers.json` の両方に同じ固定モデルを指定します。adapterは
+呼び出し時の `claudex_model` を最終的なprovider routeとして扱い、テストでfrontmatterと
+共有設定の不一致を検出します。
 
 ## ルーティング
 
 1. `claudex` はClaude Code設定のモデルとeffortを継承した通常のmain sessionを起動し、
    claudex実行時だけglobal hookでorchestration contextを追加します。`mainProvider` は
    adapterのbootstrap routeとworker設定に使われ、通常起動のouter sessionへは強制しません。
-2. prompt送信時に `codexbar usage --json` を実行し、providerごとの最大利用率だけを
-   抽出します。結果は既定で5分間キャッシュされます。
-3. 利用率が100%未満のproviderを `selected_workers` として選びます。
+2. prompt送信時にCodex/Grokは `codexbar usage --json`、QwenはモデルAPIを呼ばない
+   `qwen -p '/stats export monthly ...'` を実行します。結果は既定で5分間キャッシュされます。
+3. Codex/Grokは利用率100%未満、Qwenは月次usage export成功時に `selected_workers` として
+   選びます。既知のquota残量が多い順に並べ、残量を取得できないQwenはその後に置きます。
+   片方のusage commandが失敗しても別sourceのproviderは無効化しません。
 4. mainまたはworkerがAgent/Taskを起動するたび、そのturnへ注入された
    `selected_workers` からAgentを選び、model/effortを明示します。nested起動でもgeneric
    `claude`へのdefaultや親providerの無条件継承は行いません。
-5. promptに `gpt...` または `grok...` の完全なモデルIDがある場合は、
+5. promptに `gpt...`、`grok...` または `qwen...` の完全なモデルIDがある場合は、
    `modelPrefixes` が一致するproviderへそのIDをそのまま渡します。
 6. providerを利用できない場合はClaude subscriptionのfallbackを使います。
-7. advisorはworkerの代替ではありません。実装workerと独立して、必要な場合に併用します。
+7. 標準advisorはworkerの代替ではありません。provider quotaとは独立して動作し、会話履歴
+   全体を自動参照します。
 
-Codex/Grokの生の利用状況、アカウント情報、認証情報はキャッシュしません。
-`~/.cache/claudex/usage-routing.json` にはルーティングに必要な利用率と選択結果だけを
+生の利用状況、アカウント情報、認証情報はキャッシュしません。
+`~/.cache/claudex/usage-routing.json` にはルーティングに必要な利用率、Qwenの月次
+token/request counter、選択結果だけを
 モード `0600` で保存します。
 
-### SubAgentとadvisorの再利用
+### SubAgentの再利用
 
 必要な並列性、役割分離、独立レビューのためのSubAgentを固定上限で抑制せず、作業に
 必要な数を起動します。一方、1つの作業が終わっただけでは同じinstanceを自動的に破棄せず、
 関連する追作業が見込まれ、agent、model、effort、scopeが互換なら、Agent/Task結果が指定した
 正確な `SendMessage` recipient（通常agent ID、named mailbox teammateではteammate名）へ継続
 します。追送は、そのrecipientが未確認の新しい証拠を含む、必要最小限で自己完結した差分にし、
-会話contextとprompt prefixを再利用します。advisorも同じ方針です。
+会話contextとprompt prefixを再利用します。
 
 独立した第二意見、clean-room review、真の並列実行、route/model/effortや権限範囲の変更では
 新しいinstanceを起動します。終了時は、追作業とcache再利用の可能性に対して、slot・resource
@@ -79,9 +83,7 @@ Codex/Grokの生の利用状況、アカウント情報、認証情報はキャ�
 adapter daemon/backendの再利用とSubAgent会話instanceの再利用は別の層です。adapter側の
 provider threadは通常2時間保持し、capacity到達時は最古のidle sessionを先に解放します。
 完了済みagentを無意味に稼働させ続けるのではなく、logical recipientを保持して必要時に
-resumeします。Claude subscriptionを使うadvisorは継続時も内部process自体は毎回新規ですが、
-同じlogical transcriptを渡すため再利用可能なprompt prefixを保てます。実際のprompt cache
-hitはprovider依存であり保証されません。
+resumeします。実際のprompt cache hitはprovider依存であり保証されません。
 
 ## 別のMacへの導入
 
@@ -105,6 +107,9 @@ brew install --cask claude-code codex codexbar
   実行してください。
 - Grok Build CLIは利用可能な配布元からインストールし、`grok login` を実行します。
   このadapterは `grok --model MODEL agent stdio` のACP接続を使用します。
+- Qwen Codeは `bun add -g @qwen-code/qwen-code` など公式手順でインストールし、`qwen` の
+  `/auth` からToken Planを設定します。API keyはclaudexへ重複設定せず、Qwen Code自身の
+  設定を `qwen --acp --model MODEL` が再利用します。
 
 インストールと認証を確認します。
 
@@ -113,7 +118,9 @@ fish --version
 claude --version
 codex --version
 grok --version
+qwen --version
 codexbar usage --json | jq '[.[] | {provider, has_usage: (.usage != null)}]'
+qwen --prompt '/stats monthly' --output-format text --safe-mode
 ```
 
 CodexBarの出力に `codex` と `grok` が含まれ、それぞれ `has_usage: true` になることを
@@ -133,7 +140,7 @@ Agent、Skill、Command、Hook、settingsだけを `~/.claude` へリンクし�
 
 - `~/.config/claudex` → `.config/claudex`
 - `~/.config/fish/functions/claudex.fish` → repositoryのfish function
-- `~/.claude/agents/claudex-*.md` と `custom-advisor.md`
+- `~/.claude/agents/` 配下の全定義
 - `~/.claude/skills/claudex-routing`
 - `~/.claude/CLAUDE.md`（共通のSubAgent・orchestration方針）
 - `~/.claude/settings.json`
@@ -178,7 +185,7 @@ claudex-agent-adapter ensure \
 curl --fail --silent http://127.0.0.1:8318/health | jq .
 ```
 
-`status` が `ok` で、`backend_routes` にCodexとGrokが含まれていれば準備完了です。
+`status` が `ok` で、`backend_routes` にCodex、Grok、Qwenが含まれていれば準備完了です。
 常設のlaunchd plistは不要です。`claudex` の起動時に互換性のあるdaemonを再利用し、
 存在しなければloopbackの `127.0.0.1:8318` へ自動起動します。
 
@@ -197,6 +204,9 @@ claudex
 `UserPromptSubmit` hookがrouting contextを注入します。このため新規・resumeのどちらでも
 sessionの表示名をagent名へ変更しません。adapterの `--inherit-claude-model` を使うため、outer sessionは
 `~/.claude/settings.json` の `model` と `effortLevel` を継承します。
+launcherは起動元のcwdを予約済みcustom headerでloopback adapterへ渡すため、daemonや
+provider設定がdotfilesにあってもCodex、Grok、Qwen、Sonnetの作業ディレクトリは実行元を維持します。
+既存の `ANTHROPIC_CUSTOM_HEADERS` は保持され、予約済みheaderだけが安全な値へ置き換わります。
 
 SubAgentへの委譲はsubstantiveな調査・実装・レビューに対する既定動作なので、promptごとに
 繰り返し指定する必要はありません。Claude Codeの `N queued` はmain conversationの次turnへ
@@ -209,6 +219,7 @@ SubAgentへの委譲はsubstantiveな調査・実装・レビューに対する�
 ```fish
 CLAUDEX_MODEL=grok-4.5 claudex
 CLAUDEX_MODEL=gpt-5.6-sol claudex
+CLAUDEX_MODEL=qwen3.8-max-preview claudex
 ```
 
 `CLAUDEX_MODEL` を明示した場合だけClaude Code設定の継承を無効化し、指定モデルをouter
@@ -224,14 +235,15 @@ gpt-5.6-sol のworkerを使ってこの変更を実装してください。
 Orchestratorは完全なモデルIDを `claudex_model` としてAgentへ渡し、一致するbackendを
 遅延起動します。設定済みprefix内であれば、`defaultModel` 以外も同じ方式で選択できます。
 
-### Advisorを併用
+### 標準Advisorを利用
 
 ```text
-custom-advisorを併用して設計をレビューし、workerの実装結果と統合してください。
+標準advisorを使って設計をレビューし、workerの実装結果と統合してください。
 ```
 
-Advisorは `custom-advisor / claude-fable-5 / xhigh` で独立して起動し、実装は行わず
-意思決定、リスク、検証観点を返します。
+Claude Code標準の `advisor()` は引数を取らず、呼び出し時点の会話履歴全体を自動参照します。
+`providers.json` ではmodel routingせず、`.claude/settings.json` の `advisorModel: opus` を
+使用します。
 
 ### 非対話実行
 
@@ -239,7 +251,7 @@ Advisorは `custom-advisor / claude-fable-5 / xhigh` で独立して起動し、
 
 ```fish
 claudex --print \
-  'custom-advisorを併用して、この設計をレビューしてください。'
+  '標準advisorを使って、この設計をレビューしてください。'
 ```
 
 ### 一時的な設定上書き
@@ -262,9 +274,8 @@ CLAUDEX_ADAPTER_LISTEN=127.0.0.1:9418 claudex
 `providers.json` の `defaultModel` を変更します。同じproviderで将来追加されるモデルを
 動的に受け入れる場合は `modelPrefixes` を維持または追加します。
 
-worker Agentのfrontmatterは `model: inherit` のままにしてください。モデルをAgentへ
-固定するとClaude Codeのネイティブ検証がadapterより先に実行され、providerモデルへ
-到達できない場合があります。
+`defaultModel`、対応するworker frontmatter、呼び出し時の `claudex_model` を同じ値へ
+更新してください。テストは共有設定とAgent定義の不一致を拒否します。
 
 ### providerを無効化
 
@@ -298,9 +309,12 @@ Rustコードを変更せず、`configured-acp` providerを追加できます。
 ```
 
 `arguments` はshellを介さず直接実行され、すべての `{model}` が選択モデルに置換されます。
-`agent` と同名の `~/.claude/agents/claudex-vendor.md` も作成し、frontmatterを
-`model: inherit` にします。利用率をCodexBarで管理するproviderには `usageProvider` を
-追加します。省略したproviderは常に利用可能なunmetered providerとして扱われます。
+`agent` と同名の `~/.claude/agents/claudex-vendor.md` も作成します。Claude Codeが外部model
+IDを受理しないproviderではfrontmatterを `model: inherit` にし、呼び出し時の
+`claudex_model` で固定します。利用率をCodexBarで管理するproviderには `usageProvider` を
+追加します。Qwen Codeのlocal usage exportを使うproviderは `usageProvider: "qwen"` とし、
+`defaultModel` と一致する月次token/request数を取得します。省略したproviderは常に利用可能な
+unmetered providerとして扱われます。
 
 ## 更新
 
@@ -375,13 +389,14 @@ Claudexをdotfiles repository以外から使うには、AgentとSkillがproject-
 
 ```sh
 codexbar usage --json | jq '[.[] | {provider, usage}]'
+qwen --prompt '/stats monthly' --output-format text --safe-mode
 env CLAUDEX_USAGE_CACHE_SECONDS=0 \
   python3 "$HOME/.claude/skills/claudex-routing/scripts/route_usage.py" \
   | jq .
 ```
 
-providerが存在しない、利用率が不明、いずれかのquota windowが100%、またはCodexBarが
-失敗した場合は安全側に倒してfallbackを選びます。
+providerが存在しない、利用状況が不明、quota windowが100%、または対応するusage commandが
+失敗した場合はそのproviderだけを利用不可にします。すべて利用不可の場合にfallbackを選びます。
 
 ### daemon設定が古い
 

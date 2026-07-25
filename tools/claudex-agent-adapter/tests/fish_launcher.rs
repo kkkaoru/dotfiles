@@ -114,13 +114,30 @@ fn assert_routing_marker_is_scoped_to_claudex(
 }
 
 #[test]
-fn provider_workers_leave_model_selection_to_the_shared_config() {
-    let agents = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.claude/agents");
-    for name in ["claudex-gpt.md", "claudex-grok.md"] {
-        let definition = fs::read_to_string(agents.join(name)).expect("provider worker definition");
+fn provider_workers_fix_the_models_from_the_shared_config() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let config: serde_json::Value = serde_json::from_slice(
+        &fs::read(root.join(".config/claudex/providers.json")).expect("provider config"),
+    )
+    .expect("valid provider config");
+    let configured = config["providers"]
+        .as_array()
+        .expect("configured providers")
+        .iter()
+        .map(|provider| (&provider["agent"], &provider["defaultModel"]))
+        .chain(std::iter::once((
+            &config["fallback"]["agent"],
+            &config["fallback"]["model"],
+        )));
+    for (agent, model) in configured {
+        let name = format!("{}.md", agent.as_str().expect("worker agent"));
+        let model = model.as_str().expect("worker model");
+        let definition = fs::read_to_string(root.join(".claude/agents").join(&name))
+            .expect("provider worker definition");
+        let expected = format!("model: {model}");
         assert!(
-            definition.lines().any(|line| line == "model: inherit"),
-            "{name} must not bypass config-driven model routing"
+            definition.lines().any(|line| line == expected),
+            "{name} must match the shared provider model"
         );
     }
 }

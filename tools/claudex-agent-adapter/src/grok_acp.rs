@@ -329,6 +329,13 @@ async fn create_session(
         .get("baseInstructions")
         .and_then(Value::as_str)
         .and_then(cwd_from_system)
+        .or_else(|| {
+            params
+                .get("cwd")
+                .and_then(Value::as_str)
+                .map(PathBuf::from)
+                .filter(|path| path.is_absolute() && path.is_dir())
+        })
         .unwrap_or_else(|| cwd.to_owned());
     let response = connection
         .new_session(

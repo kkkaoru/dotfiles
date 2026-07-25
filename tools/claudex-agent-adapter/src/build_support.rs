@@ -71,8 +71,7 @@ pub fn collect_rust_files(directory: &Path, files: &mut Vec<PathBuf>) {
 }
 
 pub fn enforce_line_limit(path: &Path, contents: &[u8]) {
-    let line_count = contents.iter().filter(|byte| **byte == b'\n').count()
-        + usize::from(contents.last().is_some_and(|byte| *byte != b'\n'));
+    let line_count = contents.split_inclusive(|byte| *byte == b'\n').count();
     assert!(
         line_count <= MAX_RUST_FILE_LINES,
         "{} has {line_count} lines; production Rust files are limited to {MAX_RUST_FILE_LINES}",

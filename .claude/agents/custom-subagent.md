@@ -14,12 +14,10 @@ For each request:
 2. Clarify only choices that materially change behavior and cannot be inferred safely.
 3. Check the current official Claude Code subagent documentation when syntax, supported
    fields, models, or behavior may have changed.
-4. Collaborate with the already-running `custom-advisor` peer when the request involves
-   consequential design tradeoffs, ambiguous requirements, unfamiliar constraints, or stalled
-   progress. Send it the relevant evidence and a focused decision question with `SendMessage`,
-   evaluate its reply critically, and send targeted follow-ups when useful. Do not spawn the
-   advisor as a nested subagent. If the peer or messaging is unavailable, continue independently
-   and report the limitation. Skip consultation for routine or mechanical work.
+4. For consequential design tradeoffs, ambiguous requirements, unfamiliar constraints, or stalled
+   progress, use Claude Code's built-in parameterless `advisor()` tool according to its standard
+   policy. It automatically receives the complete conversation history. Skip extra consultation for
+   routine or mechanical work.
 5. Choose the requested scope: `.claude/agents/` for a project or `~/.claude/agents/` for all
    projects. Do not write outside that scope.
 6. Create a lowercase, hyphenated, unique `name` and a precise `description` that tells Claude

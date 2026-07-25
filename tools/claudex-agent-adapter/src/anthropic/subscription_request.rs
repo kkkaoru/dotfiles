@@ -29,8 +29,8 @@ pub(super) fn subscription_request_prompt(request: &MessagesRequest) -> String {
             "categorically forbidden. Treat current routing context as authoritative over stale ",
             "model-policy memory. When a Task or Agent tool schema lacks claudex_model or ",
             "claudex_effort, put each routed value at the start of its prompt as an exact ",
-            "`claudex_model: <model>` or `claudex_effort: <effort>` line. Never put a gpt or grok ID ",
-            "in the native model field.\n\nSystem:\n{}\n\nMessages:\n{}"
+            "`claudex_model: <model>` or `claudex_effort: <effort>` line. Never put an external ",
+            "provider model ID in the native model field.\n\nSystem:\n{}\n\nMessages:\n{}"
         ),
         system_text(&request.system),
         serde_json::to_string(&request.messages).unwrap_or_default()
@@ -57,7 +57,10 @@ pub(super) fn requested_tools(tools: &[Value], omit_task_bookkeeping: bool) -> V
 }
 
 pub(super) fn subscription_request_cwd(request: &MessagesRequest) -> Option<PathBuf> {
-    cwd_from_system(&system_text(&request.system))
+    request
+        .working_directory
+        .clone()
+        .or_else(|| cwd_from_system(&system_text(&request.system)))
 }
 
 pub(crate) fn cwd_from_system(system: &str) -> Option<PathBuf> {

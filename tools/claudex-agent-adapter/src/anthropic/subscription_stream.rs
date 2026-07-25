@@ -89,14 +89,17 @@ async fn stream_subscription_model(
     let _permit = acquire_subscription_slot(Arc::clone(&options.slots), options.timeout).await?;
     let mut command = subscription_command(program, model, &options, OutputMode::StreamJson);
     let mut child = spawn_subscription(&mut command, model)?;
-    write_subscription_prompt(&mut child, prompt).await?;
+    // Defer a stdin error so an early process exit can report its actionable
+    // status and stderr instead of only a BrokenPipe.
+    let prompt_result = write_subscription_prompt(&mut child, prompt).await;
     let timeout = options.timeout;
     tokio::time::timeout(
         timeout,
         consume_subscription_stream_with_options(child, sender, &options),
     )
     .await
-    .map_err(|_| anyhow!("Claude subscription timed out after {timeout:?}"))?
+    .map_err(|_| anyhow!("Claude subscription timed out after {timeout:?}"))??;
+    prompt_result.context("failed to write Claude subscription prompt")
 }
 
 struct SubscriptionStream {

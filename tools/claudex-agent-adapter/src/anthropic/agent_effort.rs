@@ -16,7 +16,7 @@ struct AgentEffortIntent {
     prompt: String,
     correlated: bool,
     effort: Option<String>,
-    model_override: String,
+    model_override: Option<String>,
     tool_use_id: String,
     created_at: Instant,
 }
@@ -36,6 +36,7 @@ pub(super) struct AgentIntent {
     pub(super) effort: AgentEffort,
     pub(super) model_override: Option<String>,
     pub(super) is_subagent: bool,
+    pub(super) matched: bool,
 }
 
 impl AgentIntent {
@@ -44,6 +45,7 @@ impl AgentIntent {
             effort: AgentEffort::Unmatched,
             model_override: None,
             is_subagent,
+            matched: false,
         }
     }
 }
@@ -115,7 +117,7 @@ impl AgentEffortIntents {
             },
             correlated,
             effort,
-            model_override: explicit_model.unwrap_or(parent_model).to_owned(),
+            model_override: explicit_model.map(str::to_owned),
             tool_use_id,
             created_at: Instant::now(),
         });
@@ -149,8 +151,9 @@ impl AgentEffortIntents {
         };
         AgentIntent {
             effort,
-            model_override: Some(intent.model_override),
+            model_override: intent.model_override,
             is_subagent: true,
+            matched: true,
         }
     }
 
@@ -321,7 +324,7 @@ pub(super) fn tool_schema(tool_name: &str, mut schema: Value) -> Value {
             serde_json::json!({
                 "type":"string",
                 "minLength":1,
-                "description":"Exact model ID explicitly requested by the user for this SubAgent. IDs beginning with gpt or grok use the corresponding routed provider. Omit it to inherit the current session model."
+                "description":"Exact model ID explicitly requested by the user for this SubAgent. Provider models selected by the current routing context use their configured backend. Omit it to preserve the fixed SubAgent model."
             })
         });
     schema

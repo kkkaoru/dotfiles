@@ -1,4 +1,4 @@
-use std::{convert::Infallible, process::Stdio};
+use std::{convert::Infallible, process::Stdio, sync::Arc};
 
 use axum::body::Bytes;
 use serde_json::json;
@@ -8,7 +8,9 @@ use super::{
     SubscriptionStream, consume_subscription_stream, result_output_tokens, run_subscription_stream,
 };
 use crate::anthropic::{
-    subscription::SubscriptionOptions, subscription_activity::SubscriptionActivity,
+    agent_effort::AgentEffortIntents,
+    subscription::{SubscriptionOptions, SubscriptionToolContext},
+    subscription_activity::SubscriptionActivity,
 };
 
 type Frame = Result<Bytes, Infallible>;
@@ -263,6 +265,121 @@ async fn forwards_agent_alias_as_outer_task_with_streaming_input() {
     assert!(output.contains("input_json_delta"));
     assert!(output.contains(r#""stop_reason":"tool_use""#));
     assert!(output.find("input_json_delta") < output.find("content_block_stop"));
+}
+
+#[tokio::test]
+async fn sanitizes_and_records_contextual_agent_tool_input() {
+    let (sender, mut receiver) = channel();
+    let intents = Arc::new(AgentEffortIntents::default());
+    let user_messages = vec![json!({
+        "role":"user", "content":"Use gpt-test with high effort"
+    })];
+    let mut stream = SubscriptionStream {
+        text_started: true,
+        text_closed: false,
+        saw_result: false,
+        next_index: 1,
+        tools: vec!["Agent".to_owned()],
+        tool_context: Some(SubscriptionToolContext {
+            agent_efforts: intents,
+            client_user_id: Some("user".to_owned()),
+            parent_model: "parent-model".to_owned(),
+            user_messages,
+        }),
+        activity: SubscriptionActivity::default(),
+    };
+    let intercepted = stream
+        .handle_line(
+            &sender,
+            &json!({
+                "type":"assistant", "parent_tool_use_id":null,
+                "message":{"content":[{
+                    "type":"tool_use", "id":"tool-context", "name":"Agent",
+                    "input":{
+                        "prompt":"work", "name":"invented",
+                        "claudex_model":"gpt-test", "claudex_effort":"high"
+                    }
+                }]}
+            })
+            .to_string(),
+        )
+        .await
+        .expect("forward contextual Agent tool");
+    assert!(intercepted);
+    assert!(stream.text_closed);
+    let output = output(&mut receiver).await;
+    assert!(output.contains("<claudex-agent-id>tool-context</claudex-agent-id>"));
+    assert!(!output.contains("claudex_model"));
+    assert!(!output.contains("claudex_effort"));
+    assert!(!output.contains("invented"));
+}
+
+#[tokio::test]
+async fn ignores_non_top_level_tool_events_and_exercises_completed_state() {
+    let (sender, mut receiver) = channel();
+    let mut stream = SubscriptionStream {
+        text_started: false,
+        text_closed: false,
+        saw_result: false,
+        next_index: 0,
+        tools: vec!["Read".to_owned(), "Agent".to_owned()],
+        tool_context: Some(SubscriptionToolContext {
+            agent_efforts: Arc::new(AgentEffortIntents::default()),
+            client_user_id: None,
+            parent_model: "parent-model".to_owned(),
+            user_messages: Vec::new(),
+        }),
+        activity: SubscriptionActivity::default(),
+    };
+    for envelope in [
+        json!({"type":"assistant", "parent_tool_use_id":"parent"}),
+        json!({"type":"assistant", "parent_tool_use_id":null}),
+        json!({
+            "type":"assistant", "parent_tool_use_id":null,
+            "message":{"content":[{"type":"text", "text":"not a tool"}]}
+        }),
+    ] {
+        assert!(
+            !stream
+                .handle_line(&sender, &envelope.to_string())
+                .await
+                .unwrap()
+        );
+    }
+
+    assert_eq!(
+        stream.prepare_tool_input("Read", "read", &json!({"path":"README.md"})),
+        json!({"path":"README.md"})
+    );
+    assert_eq!(
+        stream.prepare_tool_input("Agent", "agent", &json!({"description":"missing prompt"})),
+        json!({"description":"missing prompt"})
+    );
+    stream.close_text(&sender).await.expect("close absent text");
+    stream
+        .finish(
+            &sender,
+            &json!({"type":"result", "subtype":"success", "result":"done"}),
+        )
+        .await
+        .expect("first result");
+    stream
+        .finish(
+            &sender,
+            &json!({"type":"result", "subtype":"success", "result":"ignored"}),
+        )
+        .await
+        .expect("duplicate result");
+    stream
+        .activity_keepalive(&sender)
+        .await
+        .expect("closed stream keepalive");
+    stream.text_closed = false;
+    stream
+        .activity_keepalive(&sender)
+        .await
+        .expect("completed stream keepalive");
+    assert!(output(&mut receiver).await.contains("done"));
 }
 
 fn child(script: &str) -> tokio::process::Child {

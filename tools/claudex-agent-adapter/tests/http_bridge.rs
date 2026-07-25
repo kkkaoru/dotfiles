@@ -564,9 +564,21 @@ async fn routes_non_main_models_to_subscription_with_requested_effort() {
         .canonicalize()
         .expect("canonical workspace");
     let system = format!("<env>\nWorking directory: {}\n</env>", workspace.display());
+    let expected = format!("test-sonnet-model|high|Read|Read|{}", workspace.display());
+    assert_subscription_response(&client, &adapter, &system, &expected).await;
+    assert_streaming_subscription(&client, &adapter, &system).await;
+    assert_fast_subscription_outcomes(&client, &adapter, &system).await;
+}
+
+async fn assert_subscription_response(
+    client: &Client,
+    adapter: &Adapter,
+    system: &str,
+    expected: &str,
+) {
     let response = post_json(
-        &client,
-        &messages_url(&adapter),
+        client,
+        &messages_url(adapter),
         json!({
             "model":"test-sonnet-model", "system":system,
             "output_config":{"effort":"high"},
@@ -575,14 +587,13 @@ async fn routes_non_main_models_to_subscription_with_requested_effort() {
         }),
     )
     .await;
-    assert_eq!(
-        response["content"][0]["text"],
-        format!("test-sonnet-model|high|Read|Read|{}", workspace.display())
-    );
+    assert_eq!(response["content"][0]["text"], expected);
+}
 
+async fn assert_streaming_subscription(client: &Client, adapter: &Adapter, system: &str) {
     let started = Instant::now();
     let mut response = client
-        .post(messages_url(&adapter))
+        .post(messages_url(adapter))
         .json(&json!({
             "model":"test-sonnet-model", "stream":true,
             "system":system, "output_config":{"effort":"low"},
@@ -609,10 +620,12 @@ async fn routes_non_main_models_to_subscription_with_requested_effort() {
     assert!(stream.contains("event: message_stop"));
     assert!(!stream.contains("Claudex is still working"));
     assert!(!stream.contains(r#""type":"thinking""#));
+}
 
+async fn assert_fast_subscription_outcomes(client: &Client, adapter: &Adapter, system: &str) {
     let empty_started = Instant::now();
     let empty = client
-        .post(messages_url(&adapter))
+        .post(messages_url(adapter))
         .json(&json!({
             "model":"test-sonnet-model", "stream":true,
             "system":system,
@@ -632,7 +645,7 @@ async fn routes_non_main_models_to_subscription_with_requested_effort() {
 
     let failure_started = Instant::now();
     let failure = client
-        .post(messages_url(&adapter))
+        .post(messages_url(adapter))
         .json(&json!({
             "model":"test-failing-model", "stream":true,
             "system":"Subscription failure stream",
@@ -645,7 +658,10 @@ async fn routes_non_main_models_to_subscription_with_requested_effort() {
         .await
         .expect("read failing subscription stream");
     assert!(failure.contains("event: error"));
-    assert!(failure.contains("forced subscription failure"));
+    assert!(
+        failure.contains("forced subscription failure"),
+        "unexpected subscription failure stream: {failure}"
+    );
     assert!(failure_started.elapsed() < Duration::from_millis(500));
     assert!(!failure.contains("Claudex is still working"));
     assert!(!failure.contains(r#""type":"thinking""#));

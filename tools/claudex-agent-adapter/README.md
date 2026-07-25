@@ -104,7 +104,7 @@ custom agent or changing the session display name. An explicit `--agent` is stil
 unchanged, while the configured main provider remains available as the bootstrap route for Agent
 calls. `CLAUDEX_MODEL` explicitly disables
 inheritance and may override the orchestrator with any model accepted by a configured prefix. The agent reads a
-sanitized, five-minute Codexbar usage cache and delegates to available agents in
+sanitized, five-minute Codexbar/provider-CLI usage cache and delegates to available agents in
 the shared provider config. It selects the configured subscription fallback only
 when all capacity-managed providers are unavailable and may consult the configured
 advisor independently for complex decisions. The fish launcher translates optional
@@ -112,6 +112,11 @@ advisor independently for complex decisions. The fish launcher translates option
 `CLAUDEX_SUBSCRIPTION_MAX_PROCESSES`, and
 `CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES` values into these options. Adapter-private
 variables are removed before Claude Code starts.
+
+The launcher also merges a reserved, percent-encoded working-directory header into
+`ANTHROPIC_CUSTOM_HEADERS`. The loopback adapter canonicalizes that path per request and passes it
+to Codex, ACP providers, and subscription subprocesses. Existing custom headers are preserved, but
+an incoming value using the reserved header name is replaced so a stale or forged path cannot win.
 
 For example, this selects another model dynamically while its matching
 `modelPrefixes` entry determines the backend:
@@ -196,9 +201,9 @@ Claude subscription workers and advisors still use a new `--no-session-persisten
 provider call. Logical-agent reuse can preserve a reusable transcript prefix but does not guarantee
 a provider prompt-cache hit.
 
-Claude Code's UI and Agent `resolvedModel` metadata describe the native custom-agent profile. For
-provider workers whose frontmatter uses `model: inherit`, that metadata can say
-`claude-sonnet-5` even when the adapter routes every actual assistant turn to GPT or Grok. Verify
+Claude Code's UI and Agent `resolvedModel` metadata describe the native custom-agent profile. Every
+claudex worker fixes the same model in its frontmatter and the shared provider config. The adapter
+still treats the correlated `claudex_model` as the effective provider route. Verify
 the effective model from the SubAgent JSONL assistant `message.model`, provider sampling logs, or
 adapter routing logs. Nested Agent/Task calls remain supported and must apply the current injected
 `selected_workers` selection rather than defaulting to generic `claude` or blindly inheriting the

@@ -310,10 +310,19 @@ fn extracts_signatures_and_counts() {
         "tools":[]
     }))
     .unwrap();
-    assert!(
-        request_signature(&request, Some("test-advisor"), Some("test-collaborator"))
-            .unwrap()
-            .contains("test-advisor")
+    let base_signature =
+        request_signature(&request, Some("test-advisor"), Some("test-collaborator")).unwrap();
+    assert!(base_signature.contains("test-advisor"));
+    let mut other_directory = request.clone();
+    other_directory.working_directory = Some("/tmp/other-project".into());
+    assert_ne!(
+        base_signature,
+        request_signature(
+            &other_directory,
+            Some("test-advisor"),
+            Some("test-collaborator")
+        )
+        .unwrap()
     );
     let serialized_bytes = serde_json::to_string(&request.system).unwrap().len()
         + serde_json::to_string(&request.messages).unwrap().len()

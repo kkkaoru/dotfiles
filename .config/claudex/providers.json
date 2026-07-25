@@ -21,16 +21,25 @@
       "usageProvider": "grok",
       "modelPrefixes": ["grok"],
       "backend": "grok-acp"
+    },
+    {
+      "id": "qwen",
+      "agent": "claudex-qwen",
+      "defaultModel": "qwen3.8-max-preview",
+      "effort": "high",
+      "enabled": true,
+      "usageProvider": "qwen",
+      "modelPrefixes": ["qwen"],
+      "backend": "configured-acp",
+      "acp": {
+        "program": "qwen",
+        "arguments": ["--acp", "--model", "{model}"]
+      }
     }
   ],
   "fallback": {
     "agent": "claudex-sonnet",
-    "model": "sonnet",
+    "model": "claude-sonnet-5",
     "effort": "high"
-  },
-  "advisor": {
-    "agent": "custom-advisor",
-    "model": "claude-fable-5",
-    "effort": "xhigh"
   }
 }

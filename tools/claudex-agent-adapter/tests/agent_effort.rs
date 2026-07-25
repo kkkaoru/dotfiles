@@ -66,8 +66,12 @@ async fn model_inferred_by_main_model_is_ignored_without_user_authorization() {
         .as_str()
         .expect("decorated Agent prompt");
     let child = child_request(&client, &url, user_id, prompt, "claude-sonnet-5").await;
-    assert_eq!(child["model"], "test-main-model");
-    assert_eq!(child["content"][0]["text"], "medium");
+    assert_eq!(child["model"], "claude-sonnet-5");
+    assert!(
+        child["content"][0]["text"]
+            .as_str()
+            .is_some_and(|text| text.starts_with("claude-sonnet-5|medium|"))
+    );
 }
 
 #[tokio::test]
@@ -88,7 +92,7 @@ async fn arbitrary_explicit_agent_model_bypasses_native_enum_and_preserves_effor
 }
 
 #[tokio::test]
-async fn agent_without_model_inherits_main_route_with_explicit_effort() {
+async fn agent_without_model_keeps_its_fixed_route_with_explicit_effort() {
     let adapter = Adapter::start().await;
     let client = Client::new();
     let url = format!("{}/v1/messages", adapter.base_url);
@@ -96,7 +100,36 @@ async fn agent_without_model_inherits_main_route_with_explicit_effort() {
         let user_id = format!(r#"{{"session_id":"app-server-{requested}"}}"#);
         let prompt = launch_explicit_effort_agent(&client, &url, &user_id, requested, false).await;
         let child = child_request(&client, &url, &user_id, &prompt, "test-sonnet-model").await;
-        assert_eq!(child["content"][0]["text"], expected);
+        assert_eq!(child["model"], "test-sonnet-model");
+        assert!(
+            child["content"][0]["text"]
+                .as_str()
+                .is_some_and(|text| text.starts_with(&format!("test-sonnet-model|{expected}|")))
+        );
+    }
+}
+
+#[tokio::test]
+async fn every_fixed_worker_model_survives_a_correlated_subagent_launch() {
+    let adapter = Adapter::start().await;
+    let client = Client::new();
+    let url = format!("{}/v1/messages", adapter.base_url);
+    for (agent, model) in [
+        ("claudex-gpt", "gpt-5.6-sol"),
+        ("claudex-grok", "grok-4.5"),
+        ("claudex-sonnet", "claude-sonnet-5"),
+        ("claudex-qwen", "qwen3.8-max-preview"),
+    ] {
+        let user_id = format!(r#"{{"session_id":"fixed-{agent}"}}"#);
+        let prompt = launch_explicit_effort_agent(&client, &url, &user_id, "high", false).await;
+        let child = child_request(&client, &url, &user_id, &prompt, model).await;
+        assert_eq!(child["model"], model, "{agent}");
+        assert!(
+            child["content"][0]["text"]
+                .as_str()
+                .is_some_and(|text| text.starts_with(&format!("{model}|high|"))),
+            "{agent}: {child}"
+        );
     }
 }
 
@@ -169,7 +202,12 @@ async fn agent_without_effort_uses_configured_default_on_same_main_model() {
         }),
     )
     .await;
-    assert_eq!(child["content"][0]["text"], "medium");
+    assert_eq!(child["model"], "test-sonnet-model");
+    assert!(
+        child["content"][0]["text"]
+            .as_str()
+            .is_some_and(|text| text.starts_with("test-sonnet-model|medium|"))
+    );
 }
 
 #[tokio::test]
