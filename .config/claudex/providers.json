@@ -32,8 +32,14 @@
       "modelPrefixes": ["qwen"],
       "backend": "configured-acp",
       "acp": {
-        "program": "qwen",
-        "arguments": ["--acp", "--model", "{model}"]
+        "program": "/usr/bin/env",
+        "arguments": [
+          "QWEN_WEB_FETCH_PROCESSING_TIMEOUT_MS=20000",
+          "qwen",
+          "--acp",
+          "--model",
+          "{model}"
+        ]
       }
     }
   ],

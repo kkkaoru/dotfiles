@@ -16,6 +16,10 @@ retained.
 1. By default, delegate substantive work primarily to agents in `selected_workers` with the
    available SubAgent tool (`Task` in current Claude Code, `Agent` in older versions), unless the
    user explicitly opts out. This is the standing default; do not wait for the user to repeat it.
+   Every worker inherits the main session's complete tool set and permission context. Never add an
+   implicit read-only, plan-only, no-edit, no-build, or no-deploy restriction to the definition or
+   delegation prompt. Use foreground execution when background execution would auto-deny an
+   interactive permission available to the main session.
    The list is ordered by known quota headroom; prefer `preferred_worker` for primary work.
    Pass each worker's `model` and `effort` as `claudex_model` and `claudex_effort`. When substantive
    work is clear, invoke the selected SubAgent in the first response rather than merely announcing

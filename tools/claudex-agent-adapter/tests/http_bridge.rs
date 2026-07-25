@@ -570,6 +570,34 @@ async fn routes_non_main_models_to_subscription_with_requested_effort() {
     assert_fast_subscription_outcomes(&client, &adapter, &system).await;
 }
 
+#[tokio::test]
+async fn exchanges_large_subscription_input_and_output_without_pipe_deadlock() {
+    let adapter = Adapter::start().await;
+    let client = Client::new();
+    let large_prompt = format!("SUBSCRIPTION_BACKPRESSURE{}", "x".repeat(128 * 1_024));
+    for stream in [false, true] {
+        let request = client.post(messages_url(&adapter)).json(&json!({
+            "model":"test-backpressure-model",
+            "stream":stream,
+            "system":"Large subscription pipe test",
+            "messages":[{"role":"user","content":large_prompt}]
+        }));
+        let response = tokio::time::timeout(Duration::from_secs(5), request.send())
+            .await
+            .expect("large subscription request deadlocked")
+            .expect("send large subscription request")
+            .error_for_status()
+            .expect("successful large subscription status")
+            .text()
+            .await
+            .expect("read large subscription response");
+        assert!(response.contains("BACKPRESSURE_OK"), "response={response}");
+        if stream {
+            assert!(response.contains("event: message_stop"));
+        }
+    }
+}
+
 async fn assert_subscription_response(
     client: &Client,
     adapter: &Adapter,

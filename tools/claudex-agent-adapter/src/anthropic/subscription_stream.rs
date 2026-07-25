@@ -20,7 +20,8 @@ use super::{
     stream::streaming_sse_response,
     subscription::{
         OutputMode, SubscriptionOptions, acquire_subscription_slot, spawn_subscription,
-        subscription_command, validate_subscription_result, write_subscription_prompt,
+        subscription_command, take_subscription_stdin, validate_subscription_result,
+        write_subscription_prompt,
     },
     subscription_activity::SubscriptionActivity,
     subscription_frames::{
@@ -89,17 +90,20 @@ async fn stream_subscription_model(
     let _permit = acquire_subscription_slot(Arc::clone(&options.slots), options.timeout).await?;
     let mut command = subscription_command(program, model, &options, OutputMode::StreamJson);
     let mut child = spawn_subscription(&mut command, model)?;
+    let stdin = take_subscription_stdin(&mut child)?;
     // Defer a stdin error so an early process exit can report its actionable
     // status and stderr instead of only a BrokenPipe.
-    let prompt_result = write_subscription_prompt(&mut child, prompt).await;
     let timeout = options.timeout;
-    tokio::time::timeout(
-        timeout,
-        consume_subscription_stream_with_options(child, sender, &options),
-    )
+    tokio::time::timeout(timeout, async {
+        let (prompt_result, stream_result) = tokio::join!(
+            write_subscription_prompt(stdin, prompt),
+            consume_subscription_stream_with_options(child, sender, &options),
+        );
+        stream_result?;
+        prompt_result.context("failed to write Claude subscription prompt")
+    })
     .await
-    .map_err(|_| anyhow!("Claude subscription timed out after {timeout:?}"))??;
-    prompt_result.context("failed to write Claude subscription prompt")
+    .map_err(|_| anyhow!("Claude subscription timed out after {timeout:?}"))?
 }
 
 struct SubscriptionStream {

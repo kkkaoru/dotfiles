@@ -88,7 +88,7 @@ Backend values are `codex-app-server`, `configured-acp`, `copilot-acp`, and
 `grok-acp`. The preferred launcher path is `--provider-config
 $HOME/.config/claudex/providers.json`. It defines enabled providers, the main
 provider, default models, effort, model prefixes, quota names, fallback, and
-advisor. A `configured-acp` provider also supplies a program and argument array;
+ACP launch settings. A `configured-acp` provider also supplies a program and argument array;
 `{model}` placeholders are replaced directly without invoking a shell.
 `--backend-route` is repeatable, model keys must be unique, and the main
 `--model` must have a route.
@@ -104,19 +104,24 @@ custom agent or changing the session display name. An explicit `--agent` is stil
 unchanged, while the configured main provider remains available as the bootstrap route for Agent
 calls. `CLAUDEX_MODEL` explicitly disables
 inheritance and may override the orchestrator with any model accepted by a configured prefix. The agent reads a
-sanitized, five-minute Codexbar/provider-CLI usage cache and delegates to available agents in
+sanitized, five-minute Codexbar/Qwen Cloud capacity cache and delegates to available agents in
 the shared provider config. It selects the configured subscription fallback only
-when all capacity-managed providers are unavailable and may consult the configured
-advisor independently for complex decisions. The fish launcher translates optional
+when all capacity-managed providers are unavailable. Claude Code's built-in parameterless
+`advisor()` remains independent of provider capacity; the adapter reads its model from
+`.claude/settings.json`'s `advisorModel`. The fish launcher translates optional
 `CLAUDEX_PROVIDER_CONFIG`, `CLAUDEX_MODEL`, `CLAUDEX_ADAPTER_LISTEN`,
 `CLAUDEX_SUBSCRIPTION_MAX_PROCESSES`, and
 `CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES` values into these options. Adapter-private
 variables are removed before Claude Code starts.
 
 The launcher also merges a reserved, percent-encoded working-directory header into
-`ANTHROPIC_CUSTOM_HEADERS`. The loopback adapter canonicalizes that path per request and passes it
-to Codex, ACP providers, and subscription subprocesses. Existing custom headers are preserved, but
-an incoming value using the reserved header name is replaced so a stale or forged path cannot win.
+`ANTHROPIC_CUSTOM_HEADERS`. The loopback adapter canonicalizes that path per request and uses it
+directly for Codex and subscription subprocesses. ACP session creation first honors a valid
+working-directory marker in the request's `baseInstructions`, then the explicit request `cwd`
+populated from this header, and finally the daemon launch directory. This preserves ACP's tested
+request-instruction semantics without making the dotfiles directory an implicit default. Existing
+custom headers are preserved, but an incoming value using the reserved header name is replaced so
+a stale or forged header cannot win.
 
 For example, this selects another model dynamically while its matching
 `modelPrefixes` entry determines the backend:
@@ -158,8 +163,8 @@ running on the Codex model. It loads the normal Claude Code configuration and
 enables and pre-authorizes only tools present in the outer request. This keeps
 built-in, configured MCP, and custom tools available to noninteractive Agents
 without granting tools that the outer harness did not supply. Existing Claude
-Code deny rules still take precedence. The subprocess working directory is
-parsed and canonicalized from Claude Code's request environment section.
+Code deny rules still take precedence. The subprocess working directory uses the canonicalized
+reserved request header when present and falls back to Claude Code's request environment section.
 The adapter accepts an arbitrary explicit SubAgent model through its private
 `claudex_model` Agent field, so selection is not limited by Claude Code's native
 Agent model enum. It removes provider model details from the public tool input,
@@ -267,6 +272,7 @@ and `src` only, while integration tests enforce file-size limits across both
 `src` and `tests`.
 
 Development and test profiles use incremental compilation with reduced debug
-information. Dependencies enable only required features. Release builds
-optimize for size, abort on panic, strip symbols, and use thin LTO to balance
-binary size with link time.
+information. Dependencies enable only required features. Release builds optimize for size, abort
+on panic, strip symbols, and use fat LTO with one codegen unit. Distribution builds should name
+`--bin claudex-agent-adapter`; an unqualified build also compiles the five test fixture binaries
+declared in `Cargo.toml`.

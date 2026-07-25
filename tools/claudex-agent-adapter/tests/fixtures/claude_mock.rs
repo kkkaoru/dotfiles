@@ -15,6 +15,17 @@ fn main() {
         eprintln!("forced subscription failure");
         std::process::exit(7);
     }
+    let backpressure = argument(&arguments, "--model") == "test-backpressure-model";
+    if backpressure {
+        // Fill stdout before reading stdin. Sequential parent I/O deadlocks when both
+        // payloads exceed the OS pipe capacity; concurrent parent I/O must drain this.
+        io::stdout()
+            .write_all(&vec![b' '; 128 * 1_024])
+            .expect("write subscription backpressure fixture");
+        io::stdout()
+            .flush()
+            .expect("flush subscription backpressure fixture");
+    }
     let mut prompt = String::new();
     io::stdin()
         .read_to_string(&mut prompt)
@@ -34,7 +45,9 @@ fn main() {
         );
         return;
     }
-    let result = if prompt.contains("SUBSCRIPTION_EMPTY") {
+    let result = if backpressure {
+        format!("BACKPRESSURE_OK:{}", prompt.len())
+    } else if prompt.contains("SUBSCRIPTION_EMPTY") {
         String::new()
     } else if prompt.contains("SUBSCRIPTION_ROUTE") {
         format!(

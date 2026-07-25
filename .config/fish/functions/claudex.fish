@@ -10,7 +10,7 @@ function claudex --description 'Run Claude Code with config-driven agent backend
     end
 
     # The shared JSON is authoritative for provider commands, default models,
-    # model prefixes, worker agents, fallback, and advisor selection.
+    # model prefixes, worker agents, and fallback selection. Claude Code owns advisorModel.
     set -l adapter_args launch --provider-config "$provider_config"
     if set -q CLAUDEX_MODEL
         # An explicit provider-model override keeps the existing routed-main-model behavior.

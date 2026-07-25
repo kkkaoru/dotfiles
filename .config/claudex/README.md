@@ -42,6 +42,18 @@ worker のAgent定義と `providers.json` の両方に同じ固定モデルを�
 呼び出し時の `claudex_model` を最終的なprovider routeとして扱い、テストでfrontmatterと
 共有設定の不一致を検出します。
 
+Qwen ACPは `/usr/bin/env` 経由でQwen Codeだけに
+`QWEN_WEB_FETCH_PROCESSING_TIMEOUT_MS=20000` を渡します。Qwen Codeの `web_fetch` は取得後の
+content processingを既定で最大300秒待つため、ここでは20秒でraw contentへfallbackさせます。
+workerにも1 batch 1件・1 task 2件までの取得上限と同一URLの再試行禁止を指定し、複数URLの
+逐次処理によってSubAgentが長時間応答しない状態を抑えます。
+
+全SubAgent定義は `tools`、`disallowedTools`、`permissionMode` を省略し、main sessionの全toolと
+permission contextを継承します。調査・reviewという役割だけを理由に読み取り専用へ変更しません。
+background SubAgentはClaude Codeの仕様上、main sessionで対話確認できる未承認操作を自動拒否
+するため、その可能性がある作業はforegroundで委譲します。main sessionを
+`--dangerously-skip-permissions` で起動した場合、そのmodeはSubAgentにも優先して継承されます。
+
 ## ルーティング
 
 1. `claudex` はClaude Code設定のモデルとeffortを継承した通常のmain sessionを起動し、
@@ -425,6 +437,9 @@ claudex-agent-adapter ensure \
   --provider-config "$HOME/.config/claudex/providers.json"
 curl --fail --silent http://127.0.0.1:8318/health | jq .
 ```
+
+`providers.json` のQwen起動引数を含むroute定義はdaemon互換性判定の対象です。timeout値を変更
+した場合も `ensure` が旧daemonを置き換え、新しいQwen childへ設定を反映します。
 
 外部のlaunchd jobなどが旧 `--backend-route` 引数で同じportをKeepAliveしていると、共有
 設定のdaemonを置き換えてしまいます。その場合は該当jobを停止し、`--provider-config`

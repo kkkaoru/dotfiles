@@ -158,16 +158,20 @@ async fn provider_request(base_url: &str, model: &str, index: usize) -> Value {
 }
 
 async fn read_health(client: &Client, base_url: &str) -> Value {
-    for _ in 0..100 {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
         if let Ok(response) = client.get(format!("{base_url}/health")).send().await
             && let Ok(response) = response.error_for_status()
             && let Ok(value) = response.json().await
         {
             return value;
         }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "runtime server did not become healthy"
+        );
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
-    panic!("runtime server did not become healthy")
 }
 
 fn provider_wrapper(root: &Path, name: &str, target: &str, count: &Path) -> std::path::PathBuf {

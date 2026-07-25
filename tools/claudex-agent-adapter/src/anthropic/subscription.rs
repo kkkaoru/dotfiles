@@ -1,7 +1,6 @@
 use std::{
     future::Future,
     path::{Path, PathBuf},
-    process::Output,
     sync::Arc,
     time::Duration,
 };
@@ -11,7 +10,7 @@ use axum::{body::Body, http::Response};
 use serde_json::{Value, json};
 use tokio::{
     io::AsyncWriteExt,
-    process::{Child, Command},
+    process::{Child, ChildStdin, Command},
     sync::{OwnedSemaphorePermit, Semaphore},
 };
 
@@ -248,10 +247,17 @@ pub(super) async fn run_subscription_model(
     let _permit = acquire_subscription_slot(Arc::clone(&options.slots), options.timeout).await?;
     let mut command = subscription_command(program, model, &options, OutputMode::Json);
     let mut child = spawn_subscription(&mut command, model)?;
+    let stdin = take_subscription_stdin(&mut child)?;
     // An early child exit can close stdin first. Prefer its status and stderr
     // over the resulting BrokenPipe because they explain the actual failure.
-    let prompt_result = write_subscription_prompt(&mut child, prompt).await;
-    let output = wait_for_subscription(child.wait_with_output(), options.timeout).await?;
+    let interaction = async {
+        let (prompt_result, output) = tokio::join!(
+            write_subscription_prompt(stdin, prompt),
+            child.wait_with_output()
+        );
+        output.map(|output| (prompt_result, output))
+    };
+    let (prompt_result, output) = wait_for_subscription(interaction, options.timeout).await?;
     if !output.status.success() {
         bail!(
             "Claude subscription model {model} exited with {}: {}",
@@ -283,19 +289,20 @@ pub(super) fn spawn_subscription(command: &mut Command, model: &str) -> Result<C
         .with_context(|| format!("failed to start Claude subscription model {model}"))
 }
 
-pub(super) async fn write_subscription_prompt(child: &mut Child, prompt: &str) -> Result<()> {
+pub(super) fn take_subscription_stdin(child: &mut Child) -> Result<ChildStdin> {
     child
         .stdin
         .take()
-        .context("Claude subscription stdin is unavailable")?
-        .write_all(prompt.as_bytes())
-        .await
-        .map_err(Into::into)
+        .context("Claude subscription stdin is unavailable")
 }
 
-pub(super) async fn wait_for_subscription<F>(future: F, timeout: Duration) -> Result<Output>
+pub(super) async fn write_subscription_prompt(mut stdin: ChildStdin, prompt: &str) -> Result<()> {
+    stdin.write_all(prompt.as_bytes()).await.map_err(Into::into)
+}
+
+pub(super) async fn wait_for_subscription<F, T>(future: F, timeout: Duration) -> Result<T>
 where
-    F: Future<Output = std::io::Result<Output>>,
+    F: Future<Output = std::io::Result<T>>,
 {
     tokio::time::timeout(timeout, future)
         .await

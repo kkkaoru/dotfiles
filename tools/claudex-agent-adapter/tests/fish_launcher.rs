@@ -140,6 +140,73 @@ fn provider_workers_fix_the_models_from_the_shared_config() {
             "{name} must match the shared provider model"
         );
     }
+
+    assert_qwen_runtime_is_bounded(&root, &config);
+}
+
+#[test]
+fn every_subagent_inherits_the_main_tool_and_permission_context() {
+    let agents = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.claude/agents");
+    for entry in fs::read_dir(agents).expect("Claude agent definitions") {
+        let path = entry.expect("agent directory entry").path();
+        if path.extension().and_then(std::ffi::OsStr::to_str) != Some("md") {
+            continue;
+        }
+        let definition = fs::read_to_string(&path).expect("Claude agent definition");
+        let frontmatter = definition
+            .lines()
+            .skip(1)
+            .take_while(|line| *line != "---")
+            .collect::<Vec<_>>();
+        for restricted_field in ["tools:", "disallowedTools:", "permissionMode:"] {
+            assert!(
+                !frontmatter
+                    .iter()
+                    .any(|line| line.starts_with(restricted_field)),
+                "{} must inherit instead of setting {restricted_field}",
+                path.display()
+            );
+        }
+        assert!(
+            definition.contains("main session's complete tool set and permission context"),
+            "{} must state the permission inheritance contract",
+            path.display()
+        );
+    }
+}
+
+fn assert_qwen_runtime_is_bounded(root: &std::path::Path, config: &serde_json::Value) {
+    let qwen = config["providers"]
+        .as_array()
+        .expect("configured providers")
+        .iter()
+        .find(|provider| provider["id"] == "qwen")
+        .expect("Qwen provider");
+    assert_eq!(qwen["acp"]["program"], "/usr/bin/env");
+    assert_eq!(
+        qwen["acp"]["arguments"],
+        serde_json::json!([
+            "QWEN_WEB_FETCH_PROCESSING_TIMEOUT_MS=20000",
+            "qwen",
+            "--acp",
+            "--model",
+            "{model}"
+        ])
+    );
+
+    let agent = fs::read_to_string(root.join(".claude/agents/claudex-qwen.md"))
+        .expect("Qwen worker definition");
+    let policy_text = agent.split_whitespace().collect::<Vec<_>>().join(" ");
+    for policy in [
+        "more than one `web_fetch` in a tool batch",
+        "more than two `web_fetch` calls per delegated task",
+        "Never retry the same or a substantially equivalent URL",
+    ] {
+        assert!(
+            policy_text.contains(policy),
+            "missing Qwen research policy: {policy}"
+        );
+    }
 }
 
 fn assert_no_argument_launch(function: &std::path::Path, home: &tempfile::TempDir) {

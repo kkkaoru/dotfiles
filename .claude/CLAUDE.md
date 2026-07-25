@@ -6,6 +6,13 @@
 - Use the available SubAgent tool (`Task` in current Claude Code, `Agent` in older versions) and
   the orchestration skill. In Claudex, follow `claudex-routing` and delegate primarily to its
   `selected_workers`, preserving each configured model and effort.
+- Preserve the main session's tool set and permission context for every SubAgent. Do not add
+  `tools`, `disallowedTools`, or `permissionMode` restrictions to a worker definition or describe
+  a delegated task as read-only, plan-only, no-edit, no-build, or no-deploy unless the active user
+  explicitly requests that restriction. Investigation and review tasks retain normal permissions;
+  their requested scope, not a hidden permission downgrade, determines whether they modify files.
+  Use foreground delegation whenever background execution would auto-deny a permission available
+  interactively in the main session.
 - Apply the current `selected_workers` routing to every Agent/Task launch, including launches from
   an already delegated worker. Nested delegation is allowed, but it must select the routed worker
   agent and pass that worker's exact `claudex_model` and `claudex_effort`; do not default a nested
