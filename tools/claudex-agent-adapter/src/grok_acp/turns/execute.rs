@@ -112,6 +112,17 @@ async fn apply_effort(
     let Some(effort) = effort else {
         return true;
     };
+    // Configured ACP (qwen) already receives --model on process start. Calling
+    // set_session_model each turn has been observed to stall or fail; when it
+    // times out the full EFFORT_SETUP_TIMEOUT is paid on every turn.
+    if ctl.provider == AcpProvider::Configured {
+        tracing::debug!(
+            session_id = ctl.session_id,
+            effort,
+            "skipping Configured ACP set_session_model; model is launch-scoped"
+        );
+        return true;
+    }
     let mut meta = Map::new();
     meta.insert(
         "reasoningEffort".to_owned(),

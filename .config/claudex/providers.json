@@ -34,7 +34,7 @@
       "acp": {
         "program": "/usr/bin/env",
         "arguments": [
-          "QWEN_WEB_FETCH_PROCESSING_TIMEOUT_MS=15000",
+          "QWEN_WEB_FETCH_PROCESSING_TIMEOUT_MS=8000",
           "/Users/kkk4oru/.bun/bin/qwen",
           "--acp",
           "--approval-mode",

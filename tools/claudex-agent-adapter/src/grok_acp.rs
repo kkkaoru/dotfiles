@@ -33,6 +33,8 @@ const COMMAND_QUEUE_CAPACITY: usize = 32;
 // while completed sessions still run turns concurrently through the independent turn capacity.
 const SESSION_QUEUE_CAPACITY: usize = 1;
 const TURN_QUEUE_CAPACITY: usize = 8;
+// Qwen/configured ACP shares one Node process and degrades under many concurrent prompts.
+const CONFIGURED_TURN_QUEUE_CAPACITY: usize = 2;
 
 use connection::AcpProvider;
 use turns::{cancel_turn, drive_turns, queue_turn};
@@ -127,7 +129,11 @@ impl GrokAcp {
     ) -> Result<Arc<Self>> {
         let (command_tx, command_rx) = mpsc::channel(COMMAND_QUEUE_CAPACITY);
         let session_permits = Arc::new(tokio::sync::Semaphore::new(SESSION_QUEUE_CAPACITY));
-        let turn_permits = Arc::new(tokio::sync::Semaphore::new(TURN_QUEUE_CAPACITY));
+        let turn_capacity = match provider {
+            AcpProvider::Configured => CONFIGURED_TURN_QUEUE_CAPACITY,
+            AcpProvider::Grok | AcpProvider::Copilot => TURN_QUEUE_CAPACITY,
+        };
+        let turn_permits = Arc::new(tokio::sync::Semaphore::new(turn_capacity));
         let events = Arc::new(ThreadEventDispatcher::default());
         let alive = Arc::new(AtomicBool::new(true));
         let (ready_tx, ready_rx) = oneshot::channel();
