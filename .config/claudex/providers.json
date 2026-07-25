@@ -9,9 +9,7 @@
       "effort": "high",
       "enabled": true,
       "usageProvider": "codex",
-      "modelPrefixes": [
-        "gpt"
-      ],
+      "modelPrefixes": ["gpt"],
       "backend": "codex-app-server"
     },
     {
@@ -21,9 +19,7 @@
       "effort": "high",
       "enabled": true,
       "usageProvider": "grok",
-      "modelPrefixes": [
-        "grok"
-      ],
+      "modelPrefixes": ["grok"],
       "backend": "grok-acp"
     },
     {
@@ -33,9 +29,7 @@
       "effort": "high",
       "enabled": true,
       "usageProvider": "qwen",
-      "modelPrefixes": [
-        "qwen"
-      ],
+      "modelPrefixes": ["qwen"],
       "backend": "configured-acp",
       "acp": {
         "program": "/usr/bin/env",
@@ -47,6 +41,21 @@
           "yolo",
           "--model",
           "{model}"
+        ]
+      }
+    },
+    {
+      "id": "opencode-go",
+      "agent": "claudex-deepseek",
+      "defaultModel": "opencode-go/deepseek-v4-flash",
+      "effort": "high",
+      "enabled": true,
+      "modelPrefixes": ["opencode-go/"],
+      "backend": "configured-acp",
+      "acp": {
+        "program": "opencode",
+        "arguments": [
+          "acp"
         ]
       }
     }

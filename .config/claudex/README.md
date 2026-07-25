@@ -1,7 +1,7 @@
 # Claudex
 
 Claudex は Claude Code を操作画面とオーケストレーターとして使いながら、Codex、Grok
-Build、Qwen Code、Claude の各モデルへ仕事を振り分けるローカル実行環境です。provider の利用率、
+Build、Qwen Code、OpenCode Go、Claude の各モデルへ仕事を振り分けるローカル実行環境です。provider の利用率、
 モデル、実行方式、fallback は
 [`providers.json`](./providers.json) で一元管理します。
 advisor はClaude Code標準の引数なし `advisor()` ツールを使用し、モデルは
@@ -23,6 +23,7 @@ flowchart LR
     Hook --> Codex[claudex-gpt\nCodex app-server]
     Hook --> Grok[claudex-grok\nGrok ACP]
     Hook --> Qwen[claudex-qwen\nQwen Code ACP]
+    Hook --> DeepSeek[claudex-deepseek\nOpenCode Go ACP]
     Hook --> Fallback[claudex-sonnet\nClaude fallback]
     Orchestrator -. 標準機能 .-> Advisor[Claude Code advisor()\nadvisorModel: opus]
 ```
@@ -32,9 +33,10 @@ flowchart LR
 | 役割 | Agent | Model | Effort | 選択条件 |
 | --- | --- | --- | --- | --- |
 | Orchestrator | 通常のmain session | Claude Code設定 (`sonnet`) | Claude Code設定 (`xhigh`) | 通常起動 |
-| Codex worker | `claudex-gpt` | `gpt-5.6-sol` | `high` | Codexに空きがある場合 |
+| Codex worker | `claudex-gpt` | `gpt-5.3-codex-spark` | `high` | Codexに空きがある場合 |
 | Grok worker | `claudex-grok` | `grok-4.5` | `high` | Grokに空きがある場合 |
 | Qwen worker | `claudex-qwen` | `qwen3.8-max-preview` | `high` | Qwen Cloud quotaまたはcompatible APIが利用可能な場合 |
+| DeepSeek worker | `claudex-deepseek` | `opencode-go/deepseek-v4-flash` | `high` | OpenCode Go ACP（usage未連携のため unmetered） |
 | Fallback | `claudex-sonnet` | `claude-sonnet-5` | `high` | 利用率を管理するproviderをすべて利用できない場合 |
 | Advisor | Claude Code標準 `advisor()` | `opus` | Claude Code標準 | 標準advisor policyに従う |
 
@@ -55,7 +57,10 @@ background SubAgentはClaude Codeの仕様上、main sessionで対話確認で�
 するため、その可能性がある作業はforegroundで委譲します。main sessionを
 `--dangerously-skip-permissions` で起動した場合、そのmodeはSubAgentにも優先して継承されます。
 Grok ACPは `--always-approve`、Qwen ACPは `--approval-mode yolo` を明示し、provider自身の
-approval待機やauto classifierがSubAgentの権限を狭めないようにします。
+approval待機やauto classifierがSubAgentの権限を狭めないようにします。OpenCode Go ACPは
+`opencode acp` を起動し、モデルは adapter の `session/new` meta `modelId` で渡します
+（CLIの `--model` は `acp` サブコマンドでは受け付けません）。既定モデルは
+`opencode-go/deepseek-v4-flash` です。
 
 ## ルーティング
 
@@ -255,7 +260,7 @@ SubAgentへの委譲はsubstantiveな調査・実装・レビューに対する�
 
 ```fish
 CLAUDEX_MODEL=grok-4.5 claudex
-CLAUDEX_MODEL=gpt-5.6-sol claudex
+CLAUDEX_MODEL=gpt-5.3-codex-spark claudex
 CLAUDEX_MODEL=qwen3.8-max-preview claudex
 ```
 
@@ -266,7 +271,7 @@ sessionにも使います。指定値は `modelPrefixes` と照合され、設�
 ### 作業workerのモデルをpromptで指定
 
 ```text
-gpt-5.6-sol のworkerを使ってこの変更を実装してください。
+gpt-5.3-codex-spark のworkerを使ってこの変更を実装してください。
 ```
 
 Orchestratorは完全なモデルIDを `claudex_model` としてAgentへ渡し、一致するbackendを
@@ -275,12 +280,12 @@ Orchestratorは完全なモデルIDを `claudex_model` としてAgentへ渡し�
 ### SubAgentモデルを禁止
 
 provider設定とは分離した `~/.config/claudex/disabled-subagent-models.json` に、常に禁止する
-完全一致モデルを定義します。repositoryでは現在 `gpt-5.6-sol` を禁止しています。
+完全一致モデルを定義します。repositoryでは現在 `gpt-5.6` と `grok-4.5` を禁止しています。
 
 ```json
 {
   "version": 1,
-  "disabledModels": ["gpt-5.6-sol"]
+  "disabledModels": ["gpt-5.6", "grok-4.5"]
 }
 ```
 
@@ -293,7 +298,7 @@ set -gx CLAUDEX_DISABLED_SUBAGENT_MODELS_CONFIG /path/to/terminal-policy.json
 claudex
 
 # 専用ファイルに加えて、この端末だけ複数モデルを追加で禁止
-set -gx CLAUDEX_DISABLED_SUBAGENT_MODELS gpt-5.6-sol,grok-4.5
+set -gx CLAUDEX_DISABLED_SUBAGENT_MODELS gpt-5.6,grok-4.5
 claudex
 
 # 端末固有の上書きと追加を解除
@@ -335,7 +340,7 @@ CLAUDEX_USAGE_CACHE_SECONDS=0 claudex
 CLAUDEX_SUBSCRIPTION_MAX_PROCESSES=8 claudex
 CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES=60 claudex
 CLAUDEX_ADAPTER_LISTEN=127.0.0.1:9418 claudex
-CLAUDEX_DISABLED_SUBAGENT_MODELS=gpt-5.6-sol,grok-4.5 claudex
+CLAUDEX_DISABLED_SUBAGENT_MODELS=gpt-5.6,grok-4.5 claudex
 ```
 
 `CLAUDEX_USAGE_CACHE_SECONDS=0` は調査時だけ使用してください。通常はprovider CLIへの
