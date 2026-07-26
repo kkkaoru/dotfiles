@@ -70,6 +70,7 @@ print(model)
     # Routing is injected by the CLAUDEX_ACTIVE-gated global hook. Avoid a
     # default --agent here: Claude Code persists it as the resumed session's
     # agent setting and replaces the session display name with the agent name.
+    set -lx CLAUDEX_MAIN_MODEL "$main_model"
     echo "claudex: config-routed orchestration ($provider_config, $main_model)" >&2
     command "$HOME/.local/bin/claudex-agent-adapter" $adapter_args -- $argv
 end

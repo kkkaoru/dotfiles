@@ -1,16 +1,22 @@
 use std::collections::HashMap;
 
+use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::super::{BRIDGE_INSTRUCTIONS, MessagesRequest, content::system_text};
 use crate::anthropic::subscription_request::cwd_from_system;
 
-pub(super) fn tool_configuration(
+const ORCHESTRATOR_INSTRUCTIONS: &str = "Claudex main-session orchestration mode is active. Coordinate, decompose, delegate, monitor, resolve conflicts, synthesize worker results, and deliver the final response. For every substantive investigation, implementation, review, test, or validation, call a routed Agent/Task worker instead of doing the work in main. Direct filesystem, shell, search, edit, web, and external-work tools are intentionally available only inside worker sessions. This remains mandatory after long execution, compaction, resume, context reconstruction, and worker failure.";
+
+pub(in crate::anthropic) fn tool_configuration(
     request: &MessagesRequest,
     advisor_model: Option<&str>,
     collaborator_model: Option<&str>,
 ) -> (Vec<Value>, HashMap<String, String>, HashMap<String, String>) {
-    let (mut tools, external_names) = external_tools(&request.tools);
+    let orchestrator_only = !super::super::agent_effort::is_subagent_request(request);
+    let selected_agents = selected_agents(request);
+    let (mut tools, external_names) =
+        external_tools(&request.tools, orchestrator_only, &selected_agents);
     let mut internal = HashMap::new();
     if let Some(model) = advisor_model {
         internal.insert("advisor".to_owned(), model.to_owned());
@@ -27,21 +33,32 @@ pub(super) fn tool_configuration(
     (tools, external_names, internal)
 }
 
-fn external_tools(tools: &[Value]) -> (Vec<Value>, HashMap<String, String>) {
+fn external_tools(
+    tools: &[Value],
+    orchestrator_only: bool,
+    selected_agents: &[String],
+) -> (Vec<Value>, HashMap<String, String>) {
     let mut specs = Vec::new();
     let mut names = HashMap::new();
     for (index, tool) in tools.iter().enumerate() {
         let Some(original_name) = tool.get("name").and_then(Value::as_str) else {
             continue;
         };
+        if orchestrator_only && !is_orchestration_tool(original_name) {
+            continue;
+        }
+        let mut routed_tool = tool.clone();
+        if orchestrator_only && super::super::agent_batch::supports(original_name) {
+            constrain_agent_types(&mut routed_tool, selected_agents);
+        }
         let codex_name = codex_tool_name(original_name, index);
-        if let Some(spec) = dynamic_tool(tool, &codex_name) {
+        if let Some(spec) = dynamic_tool(&routed_tool, &codex_name) {
             names.insert(codex_name, original_name.to_owned());
             specs.push(spec);
         }
         if super::super::agent_batch::supports(original_name) {
             let batch_name = codex_tool_name(&format!("{original_name}_batch"), index);
-            if let Some(spec) = super::super::agent_batch::dynamic_tool(tool, &batch_name) {
+            if let Some(spec) = super::super::agent_batch::dynamic_tool(&routed_tool, &batch_name) {
                 names.insert(
                     batch_name,
                     super::super::agent_batch::mapped_name(original_name),
@@ -53,7 +70,65 @@ fn external_tools(tools: &[Value]) -> (Vec<Value>, HashMap<String, String>) {
     (specs, names)
 }
 
-pub(super) fn thread_start_params(
+fn is_orchestration_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "Agent"
+            | "Task"
+            | "SendMessage"
+            | "AskUserQuestion"
+            | "Skill"
+            | "EnterPlanMode"
+            | "ExitPlanMode"
+            | "TodoWrite"
+    ) || name.starts_with("Task")
+        || name.starts_with("Team")
+}
+
+fn constrain_agent_types(tool: &mut Value, selected_agents: &[String]) {
+    if selected_agents.is_empty() {
+        return;
+    }
+    let Some(property) = tool
+        .pointer_mut("/input_schema/properties/subagent_type")
+        .and_then(Value::as_object_mut)
+    else {
+        return;
+    };
+    property.insert("enum".to_owned(), json!(selected_agents));
+    property.insert(
+        "description".to_owned(),
+        Value::String(format!(
+            "Required routed Claudex worker. Choose exactly one of: {}.",
+            selected_agents.join(", ")
+        )),
+    );
+}
+
+fn selected_agents(request: &MessagesRequest) -> Vec<String> {
+    routing_texts(&request.system)
+        .chain(request.messages.iter().flat_map(routing_texts))
+        .find_map(routing_summary)
+        .and_then(|summary| summary.get("selected_agents").cloned())
+        .and_then(|agents| serde_json::from_value(agents).ok())
+        .unwrap_or_default()
+}
+
+fn routing_summary(text: &str) -> Option<Value> {
+    let start = text.find("{\"providers\":")?;
+    Value::deserialize(&mut serde_json::Deserializer::from_str(&text[start..])).ok()
+}
+
+fn routing_texts(value: &Value) -> Box<dyn Iterator<Item = &str> + '_> {
+    match value {
+        Value::String(text) => Box::new(std::iter::once(text.as_str())),
+        Value::Array(items) => Box::new(items.iter().flat_map(routing_texts)),
+        Value::Object(object) => Box::new(object.values().flat_map(routing_texts)),
+        _ => Box::new(std::iter::empty()),
+    }
+}
+
+pub(in crate::anthropic) fn thread_start_params(
     request: &MessagesRequest,
     model: &str,
     dynamic_tools: Vec<Value>,
@@ -65,10 +140,14 @@ pub(super) fn thread_start_params(
         .or_else(|| cwd_from_system(&system))
         .map(|path| path.to_string_lossy().into_owned())
         .unwrap_or_else(isolated_runtime_cwd);
-    let developer_instructions = super::super::team_protocol::guidance(&request.tools).map_or_else(
+    let mut developer_instructions = super::super::team_protocol::guidance(&request.tools).map_or_else(
         || BRIDGE_INSTRUCTIONS.to_owned(),
         |guidance| format!("{BRIDGE_INSTRUCTIONS}\n\n{guidance}"),
     );
+    if !super::super::agent_effort::is_subagent_request(request) {
+        developer_instructions.push_str("\n\n");
+        developer_instructions.push_str(ORCHESTRATOR_INSTRUCTIONS);
+    }
     let base_instructions = if system.is_empty() {
         developer_instructions.clone()
     } else {

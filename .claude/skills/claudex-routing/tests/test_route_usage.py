@@ -413,6 +413,25 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(fallback["selected_agents"], ["claudex-sonnet"])
         self.assertTrue(fallback["fallback_active"])
 
+    def test_keeps_main_model_out_of_workers_and_requires_delegation(self) -> None:
+        summary = route_usage.enforce_worker_model_separation(
+            configured_summary(report()),
+            "gpt-5.3-codex-spark",
+            configuration(),
+            frozenset(),
+        )
+        self.assertNotIn(
+            "gpt-5.3-codex-spark",
+            [worker["model"] for worker in summary["selected_workers"]],
+        )
+        self.assertEqual(summary["main_session_model"], "gpt-5.3-codex-spark")
+        self.assertEqual(summary["orchestration_mode"], "subagent-first")
+        self.assertTrue(summary["delegation_required"])
+        self.assertEqual(summary["providers"]["codex"]["reason"], "same-as-main-model")
+        context = route_usage.hook_output(summary)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("MANDATORY SUBAGENT-FIRST ORCHESTRATION", context)
+        self.assertIn("first substantive tool call must be Agent/Task", context)
+
     def test_disabled_models_are_excluded_without_deleting_provider_config(self) -> None:
         disabled = frozenset({"gpt-5.3-codex-spark", "grok-4.5"})
         summary = configured_summary(report(), disabled)

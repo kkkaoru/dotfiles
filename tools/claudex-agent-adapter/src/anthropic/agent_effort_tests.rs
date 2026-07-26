@@ -471,6 +471,38 @@ mod tests {
     }
 
     #[test]
+    fn accepts_model_from_a_routed_claudex_agent_without_user_literal() {
+        let intents = AgentEffortIntents::default();
+        let (arguments, _) = prepare_arguments(
+            "Agent",
+            "tool-routed",
+            &json!({
+                "prompt":"implement the task",
+                "subagent_type":"claudex-deepseek",
+                "claudex_model":"opencode-go/deepseek-v4-flash",
+                "claudex_effort":"high"
+            }),
+        );
+        let arguments = arguments.expect("routed Agent intent");
+        intents.record_from_user_messages(
+            None,
+            "Agent",
+            "tool-routed".to_owned(),
+            "main-model",
+            &arguments,
+            &[json!({"role":"user","content":"implement this"})],
+        );
+        let intent = intents.take(&request_without_user_id(
+            "implement the task\n\n<claudex-agent-id>tool-routed</claudex-agent-id>",
+        ));
+        assert_eq!(
+            intent.model_override.as_deref(),
+            Some("opencode-go/deepseek-v4-flash")
+        );
+        assert_eq!(explicit(intent.effort), "high");
+    }
+
+    #[test]
     fn preserves_native_effort_and_non_agent_schemas() {
         let (_, public) =
             prepare_arguments("Agent", "tool", &json!({"prompt":"task","effort":"high"}));

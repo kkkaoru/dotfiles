@@ -3,6 +3,10 @@
 - Keep the main session focused on decomposition, coordination, synthesis, verification, and the
   final response. Delegating substantive investigation, implementation, and review to SubAgents is
   the standing default for every turn; the user does not need to repeat that preference.
+- In Claudex, this becomes mandatory SubAgent-first orchestration whenever routed workers exist.
+  Main must not drift back to direct Read/Bash/Edit/Write/Grep/Glob/Web work during long execution,
+  compaction, resume, context reconstruction, or worker failure. Delegate implementation,
+  investigation, review, testing, and validation; keep orchestration and synthesis in main.
 - Use the available SubAgent tool (`Task` in current Claude Code, `Agent` in older versions) and
   the orchestration skill. In Claudex, follow `claudex-routing` and delegate primarily to its
   `selected_workers`, preserving each configured model and effort.

@@ -28,7 +28,9 @@ mod tools;
 #[cfg(test)]
 pub(super) use tools::{
     codex_tool_name, dynamic_tool, internal_advisor_tool, internal_collaborator_tool,
+    thread_start_params, tool_configuration,
 };
+#[cfg(not(test))]
 use tools::{thread_start_params, tool_configuration};
 pub(in crate::anthropic) use session_turn::is_context_window_exceeded;
 

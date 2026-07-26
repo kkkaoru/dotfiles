@@ -90,13 +90,14 @@ impl AgentEffortIntents {
             .map(str::to_owned);
         let requested_model = requested_model(arguments);
         let explicit_model = requested_model.filter(|model| {
-            message_texts(user_messages).any(|text| contains_model_id(text, model))
+            routed_claudex_agent(arguments)
+                || message_texts(user_messages).any(|text| contains_model_id(text, model))
         });
         if requested_model.is_some() && explicit_model.is_none() {
             tracing::debug!(
                 requested_model = requested_model.unwrap_or_default(),
                 %parent_model,
-                "ignored SubAgent model not explicitly present in current user input"
+                "ignored unrouted SubAgent model not explicitly present in current user input"
             );
         }
         // Claude Code can resume a completed logical Agent long after its provider thread expires.
@@ -324,10 +325,18 @@ pub(super) fn tool_schema(tool_name: &str, mut schema: Value) -> Value {
             serde_json::json!({
                 "type":"string",
                 "minLength":1,
-                "description":"Exact model ID explicitly requested by the user for this SubAgent. Provider models selected by the current routing context use their configured backend. Omit it to preserve the fixed SubAgent model."
+                "description":"Exact model ID for this SubAgent. For a routed claudex-* worker, pass the model from the current routing context's selected_workers entry. A user-explicit provider model may also be passed."
             })
         });
     schema
+}
+
+fn routed_claudex_agent(arguments: &Value) -> bool {
+    arguments
+        .get("subagent_type")
+        .or_else(|| arguments.get("agent"))
+        .and_then(Value::as_str)
+        .is_some_and(|agent| agent.starts_with("claudex-"))
 }
 
 fn normalized_effort(value: &str) -> Option<&str> {

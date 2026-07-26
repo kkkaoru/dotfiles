@@ -54,7 +54,7 @@ fn configures_external_and_internal_tools_without_duplicates() {
         json!({"description":"missing name"}),
     ];
     let configured = tool_configuration(
-        &request(json!("system"), tools),
+        &request(json!("cc_is_subagent=true"), tools),
         Some("advisor-model"),
         Some("collaborator-model"),
     );
@@ -66,7 +66,11 @@ fn configures_external_and_internal_tools_without_duplicates() {
     let explicit = vec![json!({
         "name":"claude_collaborator", "input_schema":{"type":"object"}
     })];
-    let configured = tool_configuration(&request(Value::Null, explicit), None, Some("ignored"));
+    let configured = tool_configuration(
+        &request(json!("cc_is_subagent=true"), explicit),
+        None,
+        Some("ignored"),
+    );
     assert_eq!(configured.0.len(), 1);
     assert!(configured.2.is_empty());
 }
@@ -87,6 +91,44 @@ fn configures_a_bounded_batch_tool_for_parallel_agents() {
     assert_eq!(batch["inputSchema"]["properties"]["tasks"]["minItems"], 2);
     assert_eq!(batch["inputSchema"]["properties"]["tasks"]["maxItems"], 40);
     assert!(configured.1.values().any(|name| name.ends_with(":Agent")));
+}
+
+#[test]
+fn main_exposes_only_routed_orchestration_tools_while_workers_keep_full_tools() {
+    let routing = r#"Claudex routing for this turn: {"providers":{},"selected_agents":["claudex-deepseek","claudex-ollama-glm-5-2"],"selected_workers":[{"agent":"claudex-deepseek"}]} mandatory policy"#;
+    let tools = vec![
+        json!({"name":"Read","input_schema":{"type":"object"}}),
+        json!({"name":"Bash","input_schema":{"type":"object"}}),
+        json!({"name":"Edit","input_schema":{"type":"object"}}),
+        json!({"name":"Agent","input_schema":{"type":"object","properties":{"subagent_type":{"type":"string"},"prompt":{"type":"string"}}}}),
+        json!({"name":"SendMessage","input_schema":{"type":"object"}}),
+        json!({"name":"TaskGet","input_schema":{"type":"object"}}),
+    ];
+    let main = tool_configuration(&request(json!(routing), tools.clone()), Some("advisor"), None);
+    let exposed = main.1.values().cloned().collect::<Vec<_>>();
+    assert!(exposed.iter().any(|name| name == "Agent"));
+    assert!(exposed.iter().any(|name| name.ends_with(":Agent")));
+    assert!(exposed.iter().any(|name| name == "SendMessage"));
+    assert!(exposed.iter().any(|name| name == "TaskGet"));
+    assert!(!exposed.iter().any(|name| matches!(name.as_str(), "Read" | "Bash" | "Edit")));
+    let agent = main
+        .0
+        .iter()
+        .find(|tool| tool["name"].as_str().is_some_and(|name| name.starts_with("cc_Agent_")))
+        .expect("routed Agent tool");
+    assert_eq!(
+        agent["inputSchema"]["properties"]["subagent_type"]["enum"],
+        json!(["claudex-deepseek", "claudex-ollama-glm-5-2"])
+    );
+
+    let worker = tool_configuration(
+        &request(json!("cc_is_subagent=true"), tools),
+        None,
+        None,
+    );
+    assert!(worker.1.values().any(|name| name == "Read"));
+    assert!(worker.1.values().any(|name| name == "Bash"));
+    assert!(worker.1.values().any(|name| name == "Edit"));
 }
 
 #[test]

@@ -329,9 +329,15 @@ def hook_output(summary: dict[str, Any]) -> dict[str, Any]:
     """Wrap the routing summary in Claude Code's structured hook response."""
     compact = json.dumps(summary, ensure_ascii=False, separators=(",", ":"))
     instructions = (
-        " Follow claudex-routing: delegation is the standing default for substantive work unless "
-        "the user opts out; do not wait for them to repeat it or merely announce future delegation. "
-        "Use selected_workers and pass each "
+        " MANDATORY SUBAGENT-FIRST ORCHESTRATION: when delegation_required is true, the main "
+        "session remains an orchestrator and its first substantive tool call must be Agent/Task. "
+        "Delegate investigation, implementation, review, testing, and validation; keep only "
+        "decomposition, coordination, conflict resolution, synthesis, and the final response in "
+        "main. Direct Read/Bash/Edit/Write/Grep/Glob/Web work belongs to workers, including after "
+        "long execution, compaction, resume, context reconstruction, or worker failure. Do not "
+        "wait for the user to repeat this standing default; do not wait for them to repeat it or "
+        "merely announce future delegation. "
+        "Follow claudex-routing. Use selected_workers and pass each "
         "worker's model and effort as claudex_model and claudex_effort for every Agent/Task launch, "
         "preserve the main session's complete tool set and permission context, and never add an "
         "implicit read-only, plan-only, no-edit, no-build, or no-deploy restriction; use foreground "
@@ -367,6 +373,36 @@ def hook_output(summary: dict[str, Any]) -> dict[str, Any]:
             "additionalContext": f"Claudex routing for this turn: {compact}.{instructions}",
         }
     }
+
+
+def enforce_worker_model_separation(
+    summary: dict[str, Any],
+    main_model: str | None,
+    config: dict[str, Any],
+    disabled_models: frozenset[str],
+) -> dict[str, Any]:
+    """Keep the outer model out of worker routing and mark strict orchestration mode."""
+    separated = json.loads(json.dumps(summary))
+    selected = list(separated.get("selected_workers") or [])
+    if main_model:
+        selected = [worker for worker in selected if worker.get("model") != main_model]
+        for provider in separated.get("providers", {}).values():
+            if provider.get("model") == main_model:
+                provider.update(status(False, None, "same-as-main-model"))
+        if not selected:
+            fallback = {"provider": "fallback", **config["fallback"]}
+            if fallback["model"] != main_model and fallback["model"] not in disabled_models:
+                selected = [fallback]
+                separated["fallback_active"] = True
+            else:
+                separated["fallback_active"] = False
+    separated["selected_workers"] = selected
+    separated["selected_agents"] = [worker["agent"] for worker in selected]
+    separated["preferred_worker"] = selected[0] if selected else None
+    separated["main_session_model"] = main_model
+    separated["orchestration_mode"] = "subagent-first"
+    separated["delegation_required"] = bool(selected)
+    return separated
 
 
 def read_cache(
@@ -1067,6 +1103,12 @@ def main() -> int:
                 write_cache(cache_path, summary, now, key)
         except (OSError, ValueError, subprocess.SubprocessError, json.JSONDecodeError):
             summary = fallback_summary("usage-unavailable", config, disabled_models)
+    summary = enforce_worker_model_separation(
+        summary,
+        os.environ.get("CLAUDEX_MAIN_MODEL"),
+        config,
+        disabled_models,
+    )
     print(json.dumps(hook_output(summary), ensure_ascii=False, separators=(",", ":")))
     return 0
 

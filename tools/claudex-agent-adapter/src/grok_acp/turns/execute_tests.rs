@@ -252,7 +252,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn configured_effort_failures_continue_the_turn() {
+    async fn launch_scoped_configured_effort_failures_continue_the_turn() {
         let events = ThreadEventDispatcher::default();
         let active = ActiveTurns::default();
         active.borrow_mut().insert("session".to_owned(), None);
@@ -262,7 +262,7 @@ mod tests {
         let mut permit = Some(permits.acquire_owned().await.unwrap());
         {
             let mut ctl = TurnCtl {
-                provider: AcpProvider::Configured,
+                provider: AcpProvider::ConfiguredLaunchScoped,
                 session_id: "session",
                 cancellation: &mut cancellation,
                 permit: &mut permit,
