@@ -3,7 +3,10 @@ use std::{
     collections::{HashMap, HashSet},
     future::Future,
     rc::Rc,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::AtomicBool,
+    },
     time::Duration,
 };
 
@@ -17,6 +20,7 @@ use super::{connection::AcpProvider, prompt};
 use crate::app_server::events::ThreadEventDispatcher;
 
 mod cancellation;
+mod configured_prompt;
 mod execute;
 
 use execute::execute_turn;
@@ -197,6 +201,7 @@ pub(super) async fn drive_turns(
     events: Arc<ThreadEventDispatcher>,
     active_turns: ActiveTurns,
     invalidated_sessions: InvalidatedSessions,
+    alive: Arc<AtomicBool>,
 ) {
     drive_turn_tasks(turns, move |turn| {
         let connection = Rc::clone(&connection);
@@ -204,6 +209,7 @@ pub(super) async fn drive_turns(
         let events = Arc::clone(&events);
         let active_turns = Rc::clone(&active_turns);
         let invalidated_sessions = Rc::clone(&invalidated_sessions);
+        let alive = Arc::clone(&alive);
         async move {
             let session_id = turn.session_id.clone();
             execute_turn(
@@ -214,6 +220,7 @@ pub(super) async fn drive_turns(
                 &events,
                 &active_turns,
                 &invalidated_sessions,
+                &alive,
             )
             .await;
             active_turns.borrow_mut().remove(&session_id);

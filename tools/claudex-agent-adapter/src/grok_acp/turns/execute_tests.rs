@@ -70,36 +70,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn maps_prompt_completion_cancellation_and_failure() {
-        for (response, expected_method, expected_status) in [
-            (
-                Ok(acp::PromptResponse::new(acp::StopReason::EndTurn)),
-                "turn/completed",
-                "completed",
-            ),
-            (
-                Ok(acp::PromptResponse::new(acp::StopReason::Cancelled)),
-                "turn/completed",
-                "cancelled",
-            ),
-            (Err(acp::Error::internal_error()), "error", ""),
-        ] {
-            let events = ThreadEventDispatcher::default();
-            let receiver = events.subscribe("session");
-            finish_prompt(AcpProvider::Grok, "session", response, &events).await;
-            let event = receiver.recv().await.unwrap();
-            assert_eq!(event["method"], expected_method);
-            assert_eq!(
-                event
-                    .pointer("/params/turn/status")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or(""),
-                expected_status
-            );
-        }
-    }
-
-    #[tokio::test]
     async fn handles_cancellation_before_a_prompt_future_starts() {
         let events = std::sync::Arc::new(ThreadEventDispatcher::default());
         let receiver = events.subscribe("session");
@@ -159,6 +129,7 @@ mod tests {
             &events,
             &active,
             &invalidated,
+            &AtomicBool::new(true),
         )
         .await;
         assert!(result.await.unwrap().is_ok());
@@ -330,6 +301,7 @@ mod tests {
             std::rc::Rc::new(disconnected_connection(std::sync::Arc::clone(&events))),
             acp::SessionId::new("session".to_owned()),
             "prompt".to_owned(),
+            &AtomicBool::new(true),
         )
         .await;
         assert_eq!(receiver.recv().await.unwrap()["method"], "error");

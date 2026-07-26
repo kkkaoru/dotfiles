@@ -1,4 +1,10 @@
-use std::{cell::Cell, future::Future, rc::Rc, time::Duration};
+use std::{
+    cell::Cell,
+    future::Future,
+    rc::Rc,
+    sync::atomic::AtomicBool,
+    time::Duration,
+};
 
 use agent_client_protocol::{self as acp, Agent as _};
 use anyhow::anyhow;
@@ -8,7 +14,7 @@ use tokio::sync::oneshot;
 use super::{
     ActiveTurns, CancelRequest, InvalidatedSessions, PreparedTurn, cancellation::CancelCtx,
     cancellation::cancel_prompt, cancellation::cancel_setup,
-    cancellation::finish_setup_cancellation, dispatch_turn_terminal,
+    cancellation::finish_setup_cancellation, configured_prompt,
 };
 use crate::{
     app_server::events::ThreadEventDispatcher,
@@ -18,7 +24,6 @@ use crate::{
 // Session creation is bounded; effort setup must not hang a turn forever when a
 // provider ignores or stalls on set_session_model (observed with configured ACP).
 const EFFORT_SETUP_TIMEOUT: Duration = Duration::from_secs(8);
-const CONFIGURED_ACP_RECOVERY_PROMPT: &str = "The previous provider stream failed after partial execution. Do not repeat completed tool actions. Inspect this same session and the current working tree, finish only incomplete safe work, then return a concise final report with results, validation, and remaining blockers.";
 
 enum EffortSetupError {
     TimedOut,
@@ -74,6 +79,7 @@ pub(super) async fn execute_turn(
     events: &ThreadEventDispatcher,
     active_turns: &ActiveTurns,
     invalidated_sessions: &InvalidatedSessions,
+    alive: &AtomicBool,
 ) {
     let PreparedTurn {
         session_id,
@@ -100,7 +106,7 @@ pub(super) async fn execute_turn(
     if !apply_effort(&mut ctl, &connection, model, effort.as_deref(), &id).await {
         return;
     }
-    run_prompt(ctl, connection, id, prompt).await;
+    run_prompt(ctl, connection, id, prompt, alive).await;
 }
 
 async fn apply_effort(
@@ -254,33 +260,62 @@ async fn run_prompt(
     connection: Rc<acp::ClientSideConnection>,
     id: acp::SessionId,
     prompt: String,
+    alive: &AtomicBool,
 ) {
     let request = acp::PromptRequest::new(
         id.clone(),
         vec![acp::ContentBlock::Text(acp::TextContent::new(prompt))],
     );
-    let Some(mut response) = prompt_once(&mut ctl, &connection, request).await else {
-        return;
-    };
-    if response.is_err() && ctl.provider.is_session_scoped_configured() {
-        tracing::warn!(
-            session_id = ctl.session_id,
-            "Configured ACP stream failed; requesting one same-session recovery summary"
-        );
-        let recovery = acp::PromptRequest::new(
-            id,
-            vec![acp::ContentBlock::Text(acp::TextContent::new(
-                CONFIGURED_ACP_RECOVERY_PROMPT,
-            ))],
-        );
-        let Some(recovered) = prompt_once(&mut ctl, &connection, recovery).await else {
+    let response = match configured_prompt::wait(
+        ctl.provider,
+        configured_prompt::TIMEOUT,
+        prompt_once(&mut ctl, &connection, request),
+    )
+    .await
+    {
+        configured_prompt::Wait::Completed(Some(response)) => response,
+        configured_prompt::Wait::Completed(None) => return,
+        configured_prompt::Wait::TimedOut => {
+            let message = format!(
+                "{} ACP prompt timed out after {:?}; recycling provider",
+                ctl.provider.label(),
+                configured_prompt::TIMEOUT
+            );
+            configured_prompt::invalidate(
+                ctl.provider,
+                ctl.session_id,
+                &mut *ctl.permit,
+                ctl.events,
+                ctl.active_turns,
+                ctl.invalidated_sessions,
+                alive,
+                message,
+            );
             return;
-        };
-        response = recovered;
+        }
+    };
+    if let Err(error) = response.as_ref()
+        && ctl.provider.is_session_scoped_configured()
+    {
+        let message = format!(
+            "{} ACP prompt failed: {error:?}; recycling provider",
+            ctl.provider.label()
+        );
+        configured_prompt::invalidate(
+            ctl.provider,
+            ctl.session_id,
+            &mut *ctl.permit,
+            ctl.events,
+            ctl.active_turns,
+            ctl.invalidated_sessions,
+            alive,
+            message,
+        );
+        return;
     }
     drop(ctl.permit.take());
     ctl.active_turns.borrow_mut().remove(ctl.session_id);
-    finish_prompt(ctl.provider, ctl.session_id, response, ctl.events).await;
+    configured_prompt::finish(ctl.provider, ctl.session_id, response, ctl.events).await;
 }
 
 async fn prompt_once(
@@ -348,34 +383,6 @@ async fn handle_prompt_cancellation<F>(
 
 fn finish_unstarted_prompt(ctl: &mut TurnCtl<'_>, cancellation: CancelRequest) {
     ctl.finish_pre_prompt_cancel(cancellation);
-}
-
-async fn finish_prompt(
-    provider: AcpProvider,
-    session_id: &str,
-    response: acp::Result<acp::PromptResponse>,
-    events: &ThreadEventDispatcher,
-) {
-    match response {
-        Ok(response) => {
-            // ACP handlers are local tasks. Yield so notifications parsed before the
-            // prompt response are dispatched before the terminal event.
-            tokio::task::yield_now().await;
-            let status = if response.stop_reason == acp::StopReason::Cancelled {
-                "cancelled"
-            } else {
-                "completed"
-            };
-            dispatch_turn_terminal(events, session_id, status);
-        }
-        Err(error) => {
-            updates::dispatch_error(
-                events,
-                session_id,
-                format!("{} ACP prompt failed: {error:?}", provider.label()),
-            );
-        }
-    }
 }
 
 #[cfg(test)]

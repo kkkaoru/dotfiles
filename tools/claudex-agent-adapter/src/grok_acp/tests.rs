@@ -8,7 +8,7 @@ use super::{
     TURN_QUEUE_CAPACITY,
     client::AcpClient,
     connection::AcpProvider,
-    finish_start_turn, prompt,
+    prompt, queue,
     turns::{ActiveTurns, InvalidatedSessions, cancel_turn, drive_turn_tasks, queue_turn},
     updates,
 };
@@ -121,6 +121,7 @@ async fn reports_a_closed_driver_for_each_command_response_type() {
     let (commands, receiver) = tokio::sync::mpsc::channel(1);
     drop(receiver);
     let agent = GrokAcp {
+        provider: AcpProvider::Grok,
         commands,
         session_permits: Arc::new(tokio::sync::Semaphore::new(SESSION_QUEUE_CAPACITY)),
         turn_permits: Arc::new(tokio::sync::Semaphore::new(TURN_QUEUE_CAPACITY)),
@@ -289,12 +290,12 @@ async fn cancels_a_queued_turn_when_its_requester_disconnects() {
         .insert("session".to_owned(), Some(cancel));
     let (response, requester) = tokio::sync::oneshot::channel();
     drop(requester);
-    finish_start_turn(&active, "session", response, Ok(()));
+    queue::finish_start_turn(&active, "session", response, Ok(()));
     assert!(cancelled.await.is_ok());
 
     let (response, requester) = tokio::sync::oneshot::channel();
     drop(requester);
-    finish_start_turn(
+    queue::finish_start_turn(
         &active,
         "missing",
         response,

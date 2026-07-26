@@ -24,6 +24,7 @@ mod client;
 mod connection;
 mod plugin;
 mod prompt;
+mod queue;
 mod session;
 mod turns;
 mod updates;
@@ -70,6 +71,7 @@ struct DriverSetup {
 }
 
 pub struct GrokAcp {
+    provider: AcpProvider,
     commands: mpsc::Sender<DriverCommand>,
     session_permits: Arc<tokio::sync::Semaphore>,
     turn_permits: Arc<tokio::sync::Semaphore>,
@@ -183,6 +185,7 @@ impl GrokAcp {
             .await
             .with_context(|| format!("{} ACP driver stopped during startup", provider.label()))??;
         Ok(Arc::new(Self {
+            provider,
             commands: command_tx,
             session_permits,
             turn_permits,
@@ -206,10 +209,17 @@ impl GrokAcp {
     }
 
     pub async fn create_session(&self, params: Value) -> Result<Value> {
-        let permit = Arc::clone(&self.session_permits)
-            .acquire_owned()
-            .await
-            .map_err(|_| anyhow!("ACP driver is unavailable"))?;
+        let permit = queue::acquire(
+            self.provider,
+            "session/new",
+            async {
+                Arc::clone(&self.session_permits)
+                    .acquire_owned()
+                    .await
+                    .map_err(|_| anyhow!("ACP driver is unavailable"))
+            },
+        )
+        .await?;
         self.call(|response| DriverCommand::CreateSession {
             params,
             _permit: permit,
@@ -220,7 +230,12 @@ impl GrokAcp {
 
     pub async fn start_turn(&self, params: Value) -> Result<()> {
         let is_user = params.get("priority").and_then(Value::as_str) == Some("user");
-        let permit = acquire_turn_permit(&self.turn_permits, &self.outer_permits, is_user).await?;
+        let permit = queue::acquire(
+            self.provider,
+            "turn/start",
+            acquire_turn_permit(&self.turn_permits, &self.outer_permits, is_user),
+        )
+        .await?;
         self.call(|response| DriverCommand::StartTurn {
             params,
             permit,
@@ -278,6 +293,7 @@ async fn run_driver(setup: DriverSetup, mut commands: mpsc::Receiver<DriverComma
             &setup.cwd,
             &mut commands,
             &setup.events,
+            &setup.alive,
         ) => {}
         status = child.wait() => match status {
             Ok(status) => tracing::warn!(
@@ -308,6 +324,7 @@ async fn drive_commands(
     cwd: &Path,
     commands: &mut mpsc::Receiver<DriverCommand>,
     events: &Arc<ThreadEventDispatcher>,
+    alive: &Arc<AtomicBool>,
 ) {
     let instructions = Rc::new(RefCell::new(HashMap::<String, String>::new()));
     let active_turns = Rc::new(RefCell::new(HashMap::new()));
@@ -321,6 +338,7 @@ async fn drive_commands(
         Arc::clone(events),
         Rc::clone(&active_turns),
         Rc::clone(&invalidated_sessions),
+        Arc::clone(alive),
     ));
     while let Some(command) = commands.recv().await {
         match command {
@@ -365,7 +383,7 @@ async fn drive_commands(
                     &invalidated_sessions,
                 )
                 .await;
-                finish_start_turn(&active_turns, &session_id, response, result);
+                queue::finish_start_turn(&active_turns, &session_id, response, result);
             }
             DriverCommand::CancelTurn {
                 session_id,
@@ -375,21 +393,6 @@ async fn drive_commands(
     }
     drop(turns);
     let _ = turn_worker.await;
-}
-
-fn finish_start_turn(
-    active_turns: &turns::ActiveTurns,
-    session_id: &str,
-    response: oneshot::Sender<Result<()>>,
-    result: Result<()>,
-) {
-    let Err(unsent) = response.send(result) else {
-        return;
-    };
-    if unsent.is_ok() {
-        let (cancelled, _result) = oneshot::channel();
-        cancel_turn(active_turns, session_id, cancelled);
-    }
 }
 
 #[cfg(test)]
