@@ -30,6 +30,18 @@ link_tree() {
   local dest_dir="$2"
 
   mkdir -p "$dest_dir"
+  for dest in "$dest_dir"/*; do
+    [ -L "$dest" ] || continue
+    local target
+    target=$(readlink "$dest")
+    case "$target" in
+      "$src_dir"/*)
+        if [ ! -e "$target" ]; then
+          rm -v "$dest"
+        fi
+        ;;
+    esac
+  done
   for src in "$src_dir"/*; do
     [ -e "$src" ] || continue
     local dest
