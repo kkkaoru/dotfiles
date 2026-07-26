@@ -62,7 +62,8 @@ thinking, or tool progress resets that timer. Heartbeats never accumulate into
 the final answer text.
 
 For `codex-app-server`, the adapter starts `codex app-server` with an isolated
-`CODEX_HOME`. Only Codex authentication is copied into that home; Claude Code
+`CODEX_HOME`. Codex authentication and only the user's `model_providers`
+configuration are copied into that home; Claude Code
 remains responsible for tools, hooks, MCP servers, skills, approvals, and
 project instructions. `CLAUDEX_CODEX_PROGRAM`, `CLAUDEX_COPILOT_PROGRAM`,
 `CLAUDEX_GROK_PROGRAM`, and `CLAUDEX_CLAUDE_PROGRAM` are development-only
@@ -95,6 +96,10 @@ ACP launch settings. A `configured-acp` provider also supplies a program and arg
 `{model}` placeholders are replaced directly without invoking a shell.
 `--backend-route` is repeatable, model keys must be unique, and the main
 `--model` must have a route.
+Codex app-server routes may additionally set `modelProvider` and
+`modelCatalogJson`. These values are applied per `thread/start`, allowing
+OpenAI GPT and custom-provider models such as Sakana Fugu to coexist in the
+same persistent app-server process.
 Omitting all routes preserves the single-model `codex-app-server` default.
 Other adapter options are `--listen`, `--subscription-max-processes`, and
 `--subscription-timeout-minutes`; their defaults are `127.0.0.1:8318`, 20, and
@@ -137,7 +142,7 @@ CLAUDEX_MODEL=MODEL claudex
 secrets are exposed in process listings. API routes accept it as either a
 Bearer token or `x-api-key`; `/health` remains public. A non-loopback listener
 requires a non-default token. Either `--model` or `--provider-config` is
-required; the latter derives the main model from `mainProvider`. The fish
+required; the latter derives the bootstrap main model from the first `mainProviders` entry. The fish
 function uses the shared config by default, while `CLAUDEX_MODEL` may override
 the bootstrap model when one of the configured prefixes supports it.
 

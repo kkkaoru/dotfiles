@@ -119,7 +119,7 @@ fn send_subscription_tool(id: &str, description: &str) {
                     "input":{
                         "description":description,
                         "prompt":format!("complete {description}"),
-                        "subagent_type":"claudex-gpt"
+                        "subagent_type":"claudex-gpt-spark"
                     }
                 }]
             }

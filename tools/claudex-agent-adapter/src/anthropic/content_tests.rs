@@ -15,7 +15,7 @@ mod tests {
         MAX_CONSUMED_TOOL_IDS, ToolResult, content_text, matching_transcript_len,
         remember_consumed_tool_id, take_pending_results,
     };
-    use crate::anthropic::Session;
+    use crate::anthropic::{Session, agent_batch::pending_marker};
 
     #[tokio::test]
     async fn accepts_pending_and_already_consumed_results() {
@@ -32,6 +32,39 @@ mod tests {
         assert_eq!(responses.len(), 1);
         assert_eq!(responses[0].0, "call");
         assert!(active.pending_since.lock().expect("clock").is_none());
+    }
+
+    #[tokio::test]
+    async fn combines_a_complete_parallel_agent_batch_into_one_provider_result() {
+        let active = session(
+            [
+                ("one".to_owned(), pending_marker(json!(77), 0, 2)),
+                ("two".to_owned(), pending_marker(json!(77), 1, 2)),
+            ]
+            .into(),
+            HashSet::new(),
+            Vec::new(),
+        )
+        .await;
+        let responses = take_pending_results(&active, vec![result("two"), result("one")])
+            .await
+            .expect("complete batch");
+        assert_eq!(responses.len(), 1);
+        assert_eq!(responses[0].0, 77);
+        assert_eq!(responses[0].1.content_items[0]["text"], "SubAgent 1 result:");
+        assert_eq!(responses[0].1.content_items[1]["text"], "SubAgent 2 result:");
+
+        let partial = session(
+            [
+                ("one".to_owned(), pending_marker(json!(88), 0, 2)),
+                ("two".to_owned(), pending_marker(json!(88), 1, 2)),
+            ]
+            .into(),
+            HashSet::new(),
+            Vec::new(),
+        )
+        .await;
+        assert!(take_pending_results(&partial, vec![result("one")]).await.is_err());
     }
 
     #[tokio::test]

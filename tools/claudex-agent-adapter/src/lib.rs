@@ -17,6 +17,7 @@ mod working_directory;
 
 pub const ADAPTER_PROTOCOL_VERSION: u64 = 21;
 pub(crate) const NONINTERACTIVE_CHILD_ENV: &str = "CLAUDEX_NONINTERACTIVE_CHILD";
+pub(crate) const DISCOVERY_MODEL_PREFIX: &str = "claude-claudex-";
 
 use std::sync::Arc;
 
@@ -45,7 +46,12 @@ pub fn http_router(bridge: Arc<Bridge>, model: String, auth_token: Option<String
             get(move || async move {
                 let data = models
                     .into_iter()
-                    .map(|id| json!({"id":id,"object":"model"}))
+                    .map(|model| json!({
+                        "id":format!("{DISCOVERY_MODEL_PREFIX}{model}"),
+                        "type":"model",
+                        "display_name":model,
+                        "description":"Claudex provider model"
+                    }))
                     .collect::<Vec<_>>();
                 Json(json!({"object":"list","data":data}))
             }),

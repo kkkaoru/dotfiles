@@ -47,6 +47,19 @@ impl SegmentBuilder {
         self.external_tool_calls > 0
     }
 
+    pub(super) fn has_committed_output(&self) -> bool {
+        if self
+            .open_text_block
+            .as_ref()
+            .is_some_and(|(_, text)| !text.is_empty())
+        {
+            return true;
+        }
+        let mut blocks = self.blocks.clone();
+        sanitize_committed_blocks(&mut blocks);
+        !blocks.is_empty()
+    }
+
     pub(super) async fn handle_event(
         &mut self,
         bridge: &Bridge,
@@ -214,6 +227,31 @@ impl SegmentBuilder {
             .get(call.name)
             .map(String::as_str)
             .unwrap_or(call.name);
+        if let Some(original_name) = crate::anthropic::agent_batch::original_name(original_name) {
+            let tasks = call
+                .arguments
+                .get("tasks")
+                .and_then(Value::as_array)
+                .context("batch Agent tasks missing")?;
+            if !(2..=crate::anthropic::agent_batch::MAX_BATCH_SIZE).contains(&tasks.len()) {
+                anyhow::bail!("batch Agent tasks must contain between 2 and 40 launches");
+            }
+            for (index, arguments) in tasks.iter().enumerate() {
+                let nested = ToolCall {
+                    call_id: call.call_id,
+                    name: call.name,
+                    arguments,
+                    request_id: crate::anthropic::agent_batch::pending_marker(
+                        call.request_id.clone(), index, tasks.len(),
+                    ),
+                };
+                self.external_tool_call(
+                    bridge, session, current_messages, original_name, nested, stream,
+                )
+                .await?;
+            }
+            return Ok(());
+        }
         self.external_tool_call(
             bridge,
             session,
@@ -264,8 +302,7 @@ impl SegmentBuilder {
         let block = json!({
             "type": "tool_use",
             "id": tool_use_id,
-            "name": session.external_tool_names.get(call.name)
-                .map(String::as_str).unwrap_or(call.name),
+            "name": original_name,
             "input": claude_arguments
         });
         let index = self.blocks.len();

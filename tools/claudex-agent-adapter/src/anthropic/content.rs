@@ -49,15 +49,38 @@ pub(super) async fn take_pending_results(
     if !valid {
         bail!("Claude returned duplicate or unknown tool_use_id values");
     }
-    let responses = results
-        .into_iter()
-        .filter_map(|result| {
-            pending.remove(&result.tool_use_id).map(|id| {
-                remember_consumed_tool_id(&mut consumed, result.tool_use_id.clone());
-                (id, result)
-            })
-        })
-        .collect();
+    validate_complete_batches(&pending, &results)?;
+    let mut responses = Vec::new();
+    let mut batches: Vec<(Value, usize, Vec<(usize, ToolResult)>)> = Vec::new();
+    for result in results {
+        let Some(id) = pending.remove(&result.tool_use_id) else {
+            continue;
+        };
+        remember_consumed_tool_id(&mut consumed, result.tool_use_id.clone());
+        if let Some(marker) = super::agent_batch::pending_batch(&id) {
+            if let Some(batch) = batches
+                .iter_mut()
+                .find(|batch| batch.0 == *marker.request_id && batch.1 == marker.total)
+            {
+                batch.2.push((marker.index, result));
+            } else {
+                batches.push((marker.request_id.clone(), marker.total, vec![(marker.index, result)]));
+            }
+        } else {
+            responses.push((id, result));
+        }
+    }
+    for (request_id, _, mut results) in batches {
+        results.sort_by_key(|(index, _)| *index);
+        let tool_use_id = results[0].1.tool_use_id.clone();
+        let is_error = results.iter().any(|(_, result)| result.is_error);
+        let mut content_items = Vec::new();
+        for (index, result) in results {
+            content_items.push(input_text(&format!("SubAgent {} result:", index + 1)));
+            content_items.extend(result.content_items);
+        }
+        responses.push((request_id, ToolResult { tool_use_id, content_items, is_error }));
+    }
     if pending.is_empty() {
         *session
             .pending_since
@@ -65,6 +88,32 @@ pub(super) async fn take_pending_results(
             .expect("pending tool clock poisoned") = None;
     }
     Ok(responses)
+}
+
+fn validate_complete_batches(
+    pending: &std::collections::HashMap<String, Value>,
+    results: &[ToolResult],
+) -> Result<()> {
+    for result in results {
+        let Some(marker) = pending
+            .get(&result.tool_use_id)
+            .and_then(super::agent_batch::pending_batch)
+        else {
+            continue;
+        };
+        let returned = results
+            .iter()
+            .filter_map(|candidate| pending.get(&candidate.tool_use_id))
+            .filter_map(super::agent_batch::pending_batch)
+            .filter(|candidate| {
+                candidate.request_id == marker.request_id && candidate.total == marker.total
+            })
+            .count();
+        if returned != marker.total {
+            bail!("Claude must return every result from a batch Agent tool round together");
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn request_signature(

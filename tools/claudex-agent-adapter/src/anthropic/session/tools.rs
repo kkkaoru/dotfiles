@@ -39,6 +39,16 @@ fn external_tools(tools: &[Value]) -> (Vec<Value>, HashMap<String, String>) {
             names.insert(codex_name, original_name.to_owned());
             specs.push(spec);
         }
+        if super::super::agent_batch::supports(original_name) {
+            let batch_name = codex_tool_name(&format!("{original_name}_batch"), index);
+            if let Some(spec) = super::super::agent_batch::dynamic_tool(tool, &batch_name) {
+                names.insert(
+                    batch_name,
+                    super::super::agent_batch::mapped_name(original_name),
+                );
+                specs.push(spec);
+            }
+        }
     }
     (specs, names)
 }

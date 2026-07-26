@@ -160,7 +160,7 @@ mod tests {
         let path = root.path().join("providers.json");
         std::fs::write(
             &path,
-            r#"{"version":1,"mainProvider":"vendor","providers":[{"id":"vendor","agent":"worker","defaultModel":"vendor-default","effort":"high","modelPrefixes":["vendor-"],"backend":"configured-acp","acp":{"program":"vendor","arguments":["--model","{model}"]}}],"fallback":{"agent":"fallback","model":"sonnet","effort":"high"}}"#,
+            r#"{"version":1,"mainProviders":["vendor"],"providers":[{"id":"vendor","agent":"worker","defaultModel":"vendor-default","effort":"high","modelPrefixes":["vendor-"],"backend":"configured-acp","acp":{"program":"vendor","arguments":["--model","{model}"]}}],"fallback":{"agent":"fallback","model":"sonnet","effort":"high"}}"#,
         )
         .expect("provider config");
         let command = parse_command(

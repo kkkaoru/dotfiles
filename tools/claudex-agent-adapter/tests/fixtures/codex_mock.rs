@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 
 struct Fixture<W> {
     stdout: W,
+    next_thread: u64,
     pending_tool: bool,
     parallel_agents: Option<ParallelAgents>,
     team_guidance: bool,
@@ -29,6 +30,10 @@ impl<W: Write> Fixture<W> {
         self.stdout.flush().expect("flush mock app-server message");
     }
 
+    fn thread_id(&self) -> String {
+        format!("thread-{}", self.next_thread)
+    }
+
     fn handle(&mut self, message: &Value) -> bool {
         match message.get("method").and_then(Value::as_str) {
             Some("initialize") => self.send(json!({
@@ -44,8 +49,9 @@ impl<W: Write> Fixture<W> {
                     .pointer("/params/developerInstructions")
                     .and_then(Value::as_str)
                     .is_some_and(|text| text.contains("named teammate's name"));
+                self.next_thread += 1;
                 self.send(json!({
-                    "id":message["id"], "result":{"thread":{"id":"thread-test"}}
+                    "id":message["id"], "result":{"thread":{"id":self.thread_id()}}
                 }));
             }
             Some("turn/start") => self.start_turn(message),
@@ -88,18 +94,23 @@ impl<W: Write> Fixture<W> {
         self.run_scenario(message, &input);
     }
 
+    #[allow(clippy::cognitive_complexity)]
     fn run_scenario(&mut self, message: &Value, input: &str) {
         if input.contains("DETACHED_ERROR") {
             return;
         }
-        if input.contains("RETRY_THEN_OK") {
+        if input.contains("CONTEXT_WINDOW_ONCE") {
+            self.context_window_once(message);
+        } else if input.contains("CONTEXT_WINDOW_ALWAYS") {
+            self.context_window_error(message);
+        } else if input.contains("RETRY_THEN_OK") {
             self.retry_then_ok();
         } else if input.contains("TURN_FAILED") {
             self.complete_with_status("failed");
         } else if input.contains("TURN_ERROR") {
             self.send(json!({
                 "method":"error",
-                "params":{"threadId":"thread-test","message":"forced turn error"}
+                "params":{"threadId":self.thread_id(),"message":"forced turn error"}
             }));
         } else if input.contains("REPORT_EFFORT") {
             let effort = message
@@ -145,11 +156,33 @@ impl<W: Write> Fixture<W> {
         }
     }
 
+    fn context_window_once(&mut self, message: &Value) {
+        if self.next_thread == 1 {
+            self.context_window_error(message);
+        } else {
+            self.send_text_and_complete("OK_AFTER_CONTEXT_RESTART");
+        }
+    }
+
+    fn context_window_error(&mut self, message: &Value) {
+        self.send(json!({
+            "method":"error",
+            "params":{
+                "threadId":message.pointer("/params/threadId"),
+                "turnId":"turn-test", "willRetry":false,
+                "error":{
+                    "codexErrorInfo":"contextWindowExceeded",
+                    "message":"Codex ran out of room in the model's context window."
+                }
+            }
+        }));
+    }
+
     fn retry_then_ok(&mut self) {
         self.send(json!({
             "method":"error",
             "params":{
-                "threadId":"thread-test", "turnId":"turn-test", "willRetry":true,
+                "threadId":self.thread_id(), "turnId":"turn-test", "willRetry":true,
                 "error":{"message":"retry fixture"}
             }
         }));
@@ -170,7 +203,7 @@ impl<W: Write> Fixture<W> {
             self.send(json!({
                 "id":id, "method":"item/tool/call",
                 "params":{
-                    "threadId":"thread-test", "turnId":"turn-test",
+                    "threadId":self.thread_id(), "turnId":"turn-test",
                     "callId":format!("call-agent-{name}"), "tool":"cc_Agent_0",
                     "arguments":{
                         "description":name, "prompt":format!("research {name}"),
@@ -186,7 +219,7 @@ impl<W: Write> Fixture<W> {
         self.send(json!({
             "id":930, "method":"item/tool/call",
             "params":{
-                "threadId":"thread-test", "turnId":"turn-test",
+                "threadId":self.thread_id(), "turnId":"turn-test",
                 "callId":"call-named-agent", "tool":"cc_Agent_0",
                 "arguments":{
                     "description":"company profile", "prompt":"research profile",
@@ -209,7 +242,7 @@ impl<W: Write> Fixture<W> {
         self.send(json!({
             "id":id, "method":"item/tool/call",
             "params":{
-                "threadId":"thread-test", "turnId":"turn-test", "callId":call_id,
+                "threadId":self.thread_id(), "turnId":"turn-test", "callId":call_id,
                 "tool":"lookup", "arguments":{"key":call_id}
             }
         }));
@@ -221,7 +254,7 @@ impl<W: Write> Fixture<W> {
         self.send(json!({
             "id":900, "method":"item/tool/call",
             "params":{
-                "threadId":"thread-test", "turnId":"turn-test",
+                "threadId":self.thread_id(), "turnId":"turn-test",
                 "callId":"call-text-tool", "tool":"lookup", "arguments":{"key":"alpha"}
             }
         }));
@@ -233,7 +266,7 @@ impl<W: Write> Fixture<W> {
         self.send(json!({
             "method":"item/providerTool/call",
             "params":{
-                "threadId":"thread-test", "turnId":"turn-test",
+                "threadId":self.thread_id(), "turnId":"turn-test",
                 "callId":PROVIDER_CALL_ID, "tool":"Read", "title":"Read config",
                 "arguments":{"path":"CLAUDE.md"}
             }
@@ -241,7 +274,7 @@ impl<W: Write> Fixture<W> {
         self.send(json!({
             "method":"item/providerTool/update",
             "params":{
-                "threadId":"thread-test", "turnId":"turn-test",
+                "threadId":self.thread_id(), "turnId":"turn-test",
                 "callId":PROVIDER_CALL_ID, "status":"completed", "title":"Read config",
                 "output":"config loaded"
             }
@@ -279,7 +312,7 @@ impl<W: Write> Fixture<W> {
         self.send(json!({
             "id":900, "method":"item/tool/call",
             "params":{
-                "threadId":"thread-test", "turnId":"turn-test", "callId":"call-test",
+                "threadId":self.thread_id(), "turnId":"turn-test", "callId":"call-test",
                 "tool":tool, "arguments":arguments
             }
         }));
@@ -291,13 +324,13 @@ impl<W: Write> Fixture<W> {
             self.send(json!({
                 "method":"item/started",
                 "params":{
-                    "threadId":"thread-test",
+                    "threadId":self.thread_id(),
                     "item":{"input":"x".repeat(2 * 1024 * 1024)}
                 }
             }));
         }
         self.send(json!({
-            "method":"fixture/ignored", "params":{"threadId":"thread-test"}
+            "method":"fixture/ignored", "params":{"threadId":self.thread_id()}
         }));
         if input.contains("STREAMING_DELAY") {
             self.send_text("FIRST");
@@ -376,7 +409,7 @@ impl<W: Write> Fixture<W> {
         self.send(json!({
             "id":931, "method":"item/tool/call",
             "params":{
-                "threadId":"thread-test", "turnId":"turn-test",
+                "threadId":self.thread_id(), "turnId":"turn-test",
                 "callId":"call-team-follow-up", "tool":tool, "arguments":arguments
             }
         }));
@@ -416,7 +449,7 @@ impl<W: Write> Fixture<W> {
             self.send(json!({
                 "id":920 + offset, "method":"item/tool/call",
                 "params":{
-                    "threadId":"thread-test", "turnId":"turn-test",
+                    "threadId":self.thread_id(), "turnId":"turn-test",
                     "callId":format!("call-output-{offset}"), "tool":"cc_TaskOutput_1",
                     "arguments":{"task_id":agent_id, "block":true, "timeout":120000}
                 }
@@ -446,7 +479,7 @@ impl<W: Write> Fixture<W> {
         self.send(json!({
             "method":"thread/tokenUsage/updated",
             "params":{
-                "threadId":"thread-test", "turnId":"turn-test",
+                "threadId":self.thread_id(), "turnId":"turn-test",
                 "tokenUsage":{
                     "last":{"inputTokens":17,"outputTokens":3,"cachedInputTokens":0,
                         "reasoningOutputTokens":0,"totalTokens":20},
@@ -462,7 +495,7 @@ impl<W: Write> Fixture<W> {
         self.send(json!({
             "method":"turn/completed",
             "params":{
-                "threadId":"thread-test",
+                "threadId":self.thread_id(),
                 "turn":{"id":"turn-test","status":status}
             }
         }));
@@ -472,7 +505,7 @@ impl<W: Write> Fixture<W> {
         self.send(json!({
             "method":"rawResponseItem/completed",
             "params":{
-                "threadId":"thread-test", "turnId":"turn-test",
+                "threadId":self.thread_id(), "turnId":"turn-test",
                 "item":{
                     "type":"function_call", "name":tool,
                     "arguments":"{}", "call_id":call_id
@@ -485,7 +518,7 @@ impl<W: Write> Fixture<W> {
         self.send(json!({
             "method":"item/agentMessage/delta",
             "params":{
-                "threadId":"thread-test", "turnId":"turn-test",
+                "threadId":self.thread_id(), "turnId":"turn-test",
                 "itemId":"item-test", "delta":text
             }
         }));
@@ -538,6 +571,7 @@ fn main() {
     let stdin = io::stdin();
     let mut fixture = Fixture {
         stdout: io::stdout().lock(),
+        next_thread: 0,
         pending_tool: false,
         parallel_agents: None,
         team_guidance: false,

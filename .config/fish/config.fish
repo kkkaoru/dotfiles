@@ -9,6 +9,7 @@ source (dirname (status -f))/path.fish
 set -g theme_display_cmd_duration no
 
 set -gx HOMEBREW_GITHUB_API_TOKEN your_token_here
+set -gx CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS 40
 
 # pnpm
 set -gx PNPM_HOME "/Users/kaoru/Library/pnpm"

@@ -12,3 +12,11 @@ set -gx PKG_CONFIG_PATH /usr/local/opt/icu4c/lib/pkgconfig
 set -g fish_user_paths /usr/local/opt/gnu-getopt/bin $fish_user_paths
 # set -x ASDF_GOLANG_MOD_VERSION_ENABLED true
 set -gx ASDF_GOLANG_MOD_VERSION_ENABLED true
+
+# Fugu (SAKANA) API key for Codex Fugu models.
+# Priority: explicit env > ~/.codex/.env
+if not set -q SAKANA_AI_PRO_API_KEY
+  if test -r ~/.codex/.env
+    source ~/.codex/.env
+  end
+end

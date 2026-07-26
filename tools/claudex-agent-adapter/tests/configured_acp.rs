@@ -2,6 +2,7 @@ use claudex_agent_adapter::agent_backend::{AcpLaunch, AgentBackend, BackendKind,
 use serde_json::{Value, json};
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn configured_acp_routes_dynamic_models_and_expands_arguments() {
     assert!(
         AgentBackend::spawn(BackendKind::ConfiguredAcp, "missing-launch")
@@ -18,6 +19,9 @@ async fn configured_acp_routes_dynamic_models_and_expands_arguments() {
     let route = BackendRoute {
         model: "vendor-default".to_owned(),
         backend: BackendKind::ConfiguredAcp,
+        model_provider: None,
+        model_catalog_json: None,
+        max_context_tokens: None,
         model_prefixes: vec!["vendor-".to_owned()],
         acp: Some(AcpLaunch {
             program: env!("CARGO_BIN_EXE_grok-acp-mock").to_owned(),

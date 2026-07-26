@@ -21,6 +21,7 @@ use tokio::{
 pub(crate) mod events;
 use events::ThreadEventDispatcher;
 pub use events::ThreadEvents;
+mod isolated_config;
 mod pending;
 use pending::{PendingRequest, PendingResponse, await_response};
 
@@ -366,8 +367,7 @@ fn prepare_isolated_codex_home(
     // An isolated home prevents the Codex runtime from loading the user's MCP
     // servers, hooks, skills, and AGENTS instructions alongside Claude Code's
     // equivalent tools and context.
-    std::fs::write(
-        isolated.join("config.toml"),
+    let mut config = String::from(
         r#"web_search = "disabled"
 
 [features]
@@ -380,7 +380,9 @@ tool_search = false
 unified_exec = false
 web_search = false
 "#,
-    )?;
+    );
+    isolated_config::append_model_providers(source_home, &mut config)?;
+    std::fs::write(isolated.join("config.toml"), config)?;
     Ok(isolated.to_path_buf())
 }
 

@@ -30,6 +30,7 @@ pub(super) use tools::{
     codex_tool_name, dynamic_tool, internal_advisor_tool, internal_collaborator_tool,
 };
 use tools::{thread_start_params, tool_configuration};
+pub(in crate::anthropic) use session_turn::is_context_window_exceeded;
 
 impl Bridge {
     pub(super) async fn prepare_turn(
@@ -72,7 +73,7 @@ impl Bridge {
             )
             .await?;
         if let Some(limit) = self.app.max_context_tokens_for_model(&model) {
-            if input_tokens >= limit {
+            if should_preempt_for_context_limit(input_tokens, limit, !tool_results.is_empty()) {
                 tracing::warn!(
                     limit,
                     input_tokens,
@@ -92,6 +93,7 @@ impl Bridge {
             tool_results,
             advisor_model.as_deref(),
             collaborator_model.as_deref(),
+            true,
         )
             .await
     }
@@ -268,11 +270,13 @@ impl Bridge {
         session: &Session,
         results: Vec<ToolResult>,
     ) -> Result<bool> {
+        let completed_ids = results
+            .iter()
+            .map(|result| result.tool_use_id.clone())
+            .collect::<Vec<_>>();
         let responses = take_pending_results(session, results).await?;
         self.agent_efforts.remove_tool_results(
-            responses
-                .iter()
-                .map(|(_, result)| result.tool_use_id.as_str()),
+            completed_ids.iter().map(String::as_str),
         );
         let submitted = !responses.is_empty();
         for (id, result) in responses {
@@ -311,6 +315,14 @@ fn is_better_length(best: Option<usize>, candidate: usize) -> bool {
         Some(best) => candidate > best,
         None => true,
     }
+}
+
+fn should_preempt_for_context_limit(
+    input_tokens: u64,
+    limit: u64,
+    has_tool_results: bool,
+) -> bool {
+    !has_tool_results && input_tokens >= limit
 }
 
 async fn candidate_length(

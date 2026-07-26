@@ -56,7 +56,7 @@ mod tests {
             super::launcher_logs::adapter_log_path(&base, &listen_1)
                 .file_name()
                 .expect("name one"),
-            "adapter.127.0.0.1_8318.log"
+            "adapter.127_0_0_1_8318.log"
         );
     }
 

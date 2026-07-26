@@ -12,15 +12,16 @@ use tokio::{
 };
 
 use super::{
-    ActiveTurn, Bridge, MessagesRequest, Segment, Session,
-    content::anthropic_response,
+    Bridge, MessagesRequest, Segment, Session,
     stream_batch::{NextEvent, next_event},
     subscription::{SubscriptionOptions, run_subscription_model, subscription_prompt},
 };
 
 mod builder;
 mod context_window;
+mod context_retry;
 mod disconnect;
+mod drive;
 mod prepare;
 mod protocol;
 mod provider_tool;
@@ -53,32 +54,11 @@ pub(super) enum StreamTurn {
         segment: Segment,
         provider_settled: bool,
     },
+    ContextWindow(anyhow::Error),
     Disconnected,
 }
 
 impl Bridge {
-    pub(super) async fn non_streaming_response(&self, turn: ActiveTurn) -> Result<Response<Body>> {
-        let _gate = turn.gate;
-        let segment = match self
-            .wait_for_segment(
-                &turn.session,
-                &turn.events,
-                turn.input_tokens,
-                &turn.extras,
-                None,
-            )
-            .await
-        {
-            Ok(segment) => segment,
-            Err(error) => {
-                self.remove_session(&turn.session).await;
-                return Err(error);
-            }
-        };
-        commit_transcript(&turn.session, turn.extras, &segment).await;
-        Ok(anthropic_response(segment, &turn.response_model))
-    }
-
     pub(super) fn streaming_messages(
         self: &Arc<Self>,
         request: MessagesRequest,
@@ -117,48 +97,6 @@ impl Bridge {
             Ok(None) => {}
             Err(error) => {
                 let _ = builder.close_open_blocks(Some(&sender)).await;
-                send_stream_error(&sender, error).await;
-            }
-        }
-    }
-
-    async fn drive_stream(
-        self: Arc<Self>,
-        turn: ActiveTurn,
-        sender: StreamSender,
-        builder: SegmentBuilder,
-    ) {
-        let ActiveTurn {
-            session,
-            events,
-            extras,
-            gate,
-            ..
-        } = turn;
-        let _gate = gate;
-        match self
-            .wait_for_stream_segment(&session, &events, &extras, &sender, builder)
-            .await
-        {
-            Ok(StreamTurn::Segment {
-                segment,
-                provider_settled,
-            }) => {
-                if self
-                    .finish_if_stream_closed(&sender, &session, &events, provider_settled)
-                    .await
-                {
-                    return;
-                }
-                commit_transcript(&session, extras, &segment).await;
-                send_stream_completion(&sender, &segment).await;
-                self.finish_if_stream_closed(&sender, &session, &events, provider_settled)
-                    .await;
-            }
-            Ok(StreamTurn::Disconnected) => {}
-            Err(error) => {
-                tracing::warn!(?error, "streaming turn failed before message_stop");
-                self.remove_session(&session).await;
                 send_stream_error(&sender, error).await;
             }
         }
@@ -227,11 +165,20 @@ impl Bridge {
                 NextEvent::Closed => bail!("app-server event stream closed"),
             };
             let visible = is_visible_activity_event(&event);
-            if builder
+            let flow = match builder
                 .handle_event(self, session, current_messages, &event, Some(sender))
-                .await?
-                == ControlFlow::Break(())
+                .await
             {
+                Ok(flow) => flow,
+                Err(error)
+                    if is_context_window_event(&event) && !builder.has_committed_output() =>
+                {
+                    builder.close_open_blocks(Some(sender)).await?;
+                    return Ok(StreamTurn::ContextWindow(error));
+                }
+                Err(error) => return Err(error),
+            };
+            if flow == ControlFlow::Break(()) {
                 return Ok(StreamTurn::Segment {
                     segment: builder.finish(Some(sender)).await?,
                     provider_settled: true,

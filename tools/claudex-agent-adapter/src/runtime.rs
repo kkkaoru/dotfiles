@@ -80,6 +80,7 @@ fn parse_command(mut arguments: VecDeque<OsString>) -> Result<RuntimeCommand> {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn parse_options(arguments: &mut VecDeque<OsString>) -> Result<ParsedOptions> {
     let mut routes = Vec::new();
     let mut model = None;

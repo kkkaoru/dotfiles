@@ -67,6 +67,8 @@ __pycache__/
 .codex/memories_*.sqlite*
 .codex/models_cache.json
 .codex/config.toml
+!.codex/fugu.config.toml
+!.codex/fugu.json
 .codex/plugins/
 .codex/process_manager/
 .codex/rules/

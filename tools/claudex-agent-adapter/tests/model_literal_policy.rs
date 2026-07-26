@@ -119,8 +119,8 @@ fn vendor_prefix_inference_detector_flags_hardcoded_families() {
     }
     for line in [
         r#"// Keep off starts_with("gpt") hardcoding"#,
-        r#"model.starts_with(prefix)"#,
-        r#"model.starts_with(prefix.as_str())"#,
+        r"model.starts_with(prefix)",
+        r"model.starts_with(prefix.as_str())",
         r#"model.starts_with("vendor-")"#,
     ] {
         assert!(

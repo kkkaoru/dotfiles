@@ -32,6 +32,19 @@ mod tests {
         let isolated = root.path().join("isolated");
         std::fs::create_dir(&source).unwrap();
         std::fs::write(source.join("auth.json"), r#"{"token":"test"}"#).unwrap();
+        std::fs::write(
+            source.join("config.toml"),
+            r#"[model_providers.sakana]
+name = "Sakana"
+base_url = "https://api.sakana.ai/v1"
+env_key = "SAKANA_AI_PRO_API_KEY"
+wire_api = "responses"
+
+[mcp_servers.must_not_copy]
+command = "false"
+"#,
+        )
+        .unwrap();
 
         let prepared = prepare_isolated_codex_home(&source, &isolated).unwrap();
         assert_eq!(prepared, isolated);
@@ -42,6 +55,8 @@ mod tests {
         let config = std::fs::read_to_string(prepared.join("config.toml")).unwrap();
         assert!(config.contains("tool_search = false"));
         assert!(config.contains("plugins = false"));
+        assert!(config.contains("[model_providers.sakana]"));
+        assert!(!config.contains("mcp_servers.must_not_copy"));
     }
 
     #[test]

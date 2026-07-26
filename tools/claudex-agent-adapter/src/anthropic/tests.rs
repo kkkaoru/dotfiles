@@ -8,7 +8,7 @@ use axum::body::to_bytes;
 use serde_json::{Value, json};
 
 use super::{
-    MessagesRequest, Segment, Session, SignaturePool, Usage,
+    BRIDGE_INSTRUCTIONS, MessagesRequest, Segment, Session, SignaturePool, Usage,
     content::*,
     intern_signature,
     retention::{record_pending_tool, sweep_idle_sessions_at, take_oldest_evictable_at},
@@ -17,6 +17,12 @@ use super::{
     trace_request,
     turn_input::{full_transcript_input, user_input_from_messages},
 };
+
+#[test]
+fn bridge_requires_atomic_parallel_subagent_launches() {
+    assert!(BRIDGE_INSTRUCTIONS.contains("batch Agent/Task dynamic tool exactly once"));
+    assert!(BRIDGE_INSTRUCTIONS.contains("batch contains exactly that many launch tasks"));
+}
 
 #[tokio::test]
 async fn tolerates_a_closed_stream_receiver() {

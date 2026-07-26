@@ -117,7 +117,7 @@ async fn every_fixed_worker_model_survives_a_correlated_subagent_launch() {
     let client = Client::new();
     let url = format!("{}/v1/messages", adapter.base_url);
     for (agent, model) in [
-        ("claudex-gpt", "gpt-5.6-sol"),
+        ("claudex-gpt-spark", "gpt-5.3-codex-spark"),
         ("claudex-grok", "grok-4.5"),
         ("claudex-sonnet", "claude-sonnet-5"),
         ("claudex-qwen", "qwen3.8-max-preview"),

@@ -25,6 +25,9 @@
   calls together as foreground calls in one tool round. Use background execution only when useful
   independent work can continue or the delegated task must outlive the current turn. Background
   task notifications join the main session's next-turn input queue.
+- When launching multiple independent workers, emit every intended Agent/Task call in the same
+  assistant response and tool round. Never launch one and defer the rest. Do not announce a worker
+  count unless that same response contains exactly that many launch calls.
 - Start as many SubAgents as useful for real parallelism or independent context. Before shutting
   down, abandoning, or replacing one, weigh likely follow-ups and potential prompt-prefix/cache
   reuse against slot and resource pressure. For a compatible follow-up, use `SendMessage` with the

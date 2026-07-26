@@ -1,32 +1,33 @@
-use std::{collections::HashSet, fs, path::Path};
-
+use crate::agent_backend::{AcpLaunch, BackendKind, BackendRoute};
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
-
-use crate::agent_backend::{AcpLaunch, BackendKind, BackendRoute};
-
+use std::{collections::HashSet, fs, path::Path};
 const CONFIG_VERSION: u64 = 1;
-
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct ProviderConfig {
     version: u64,
-    main_provider: String,
+    main_providers: Vec<String>,
     providers: Vec<Provider>,
     fallback: AgentChoice,
 }
-
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Provider {
     id: String,
     agent: String,
     default_model: String,
+    #[serde(default)]
+    subagent_model: Option<String>,
     effort: String,
     #[serde(default = "enabled_by_default")]
     enabled: bool,
     #[serde(default)]
     usage_provider: Option<String>,
+    #[serde(default)]
+    model_provider: Option<String>,
+    #[serde(default)]
+    model_catalog_json: Option<String>,
     #[serde(default)]
     max_context_tokens: Option<u64>,
     #[serde(default)]
@@ -35,7 +36,6 @@ struct Provider {
     #[serde(default)]
     acp: Option<AcpLaunch>,
 }
-
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct AgentChoice {
@@ -43,7 +43,6 @@ struct AgentChoice {
     model: String,
     effort: String,
 }
-
 pub struct LoadedConfig {
     pub main_model: String,
     pub routes: Vec<BackendRoute>,
@@ -51,14 +50,12 @@ pub struct LoadedConfig {
     /// Used to remap unrouted provider ids onto the main backend without hardcoding vendor names.
     pub model_catalog: ModelCatalog,
 }
-
 /// Config-declared model identities used for routing remaps.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ModelCatalog {
     exact: Vec<String>,
     prefixes: Vec<String>,
 }
-
 impl ModelCatalog {
     fn from_providers<'a>(providers: impl IntoIterator<Item = &'a Provider>) -> Self {
         let mut exact = Vec::new();
@@ -67,11 +64,18 @@ impl ModelCatalog {
             if !provider.default_model.is_empty() {
                 exact.push(provider.default_model.clone());
             }
-            for prefix in &provider.model_prefixes {
-                if !prefix.is_empty() {
-                    prefixes.push(prefix.clone());
-                }
+            if let Some(model) = &provider.subagent_model
+                && !model.is_empty()
+            {
+                exact.push(model.clone());
             }
+            prefixes.extend(
+                provider
+                    .model_prefixes
+                    .iter()
+                    .filter(|prefix| !prefix.is_empty())
+                    .cloned(),
+            );
         }
         exact.sort();
         exact.dedup();
@@ -79,7 +83,6 @@ impl ModelCatalog {
         prefixes.dedup();
         Self { exact, prefixes }
     }
-
     pub fn from_routes(routes: &[BackendRoute]) -> Self {
         let mut exact = Vec::new();
         let mut prefixes = Vec::new();
@@ -87,11 +90,13 @@ impl ModelCatalog {
             if !route.model.is_empty() {
                 exact.push(route.model.clone());
             }
-            for prefix in &route.model_prefixes {
-                if !prefix.is_empty() {
-                    prefixes.push(prefix.clone());
-                }
-            }
+            prefixes.extend(
+                route
+                    .model_prefixes
+                    .iter()
+                    .filter(|prefix| !prefix.is_empty())
+                    .cloned(),
+            );
         }
         exact.sort();
         exact.dedup();
@@ -99,7 +104,6 @@ impl ModelCatalog {
         prefixes.dedup();
         Self { exact, prefixes }
     }
-
     pub fn matches(&self, model: &str) -> bool {
         self.exact.iter().any(|exact| exact == model)
             || self
@@ -108,11 +112,9 @@ impl ModelCatalog {
                 .any(|prefix| model.starts_with(prefix.as_str()))
     }
 }
-
 const fn enabled_by_default() -> bool {
     true
 }
-
 pub fn load(path: &Path) -> Result<LoadedConfig> {
     let contents = fs::read_to_string(path)
         .with_context(|| format!("read provider config {}", path.display()))?;
@@ -120,7 +122,6 @@ pub fn load(path: &Path) -> Result<LoadedConfig> {
         .with_context(|| format!("parse provider config {}", path.display()))?;
     validate(config)
 }
-
 fn validate(config: ProviderConfig) -> Result<LoadedConfig> {
     if config.version != CONFIG_VERSION {
         bail!("provider config version must be {CONFIG_VERSION}");
@@ -139,11 +140,13 @@ fn validate(config: ProviderConfig) -> Result<LoadedConfig> {
         bail!("provider config must enable at least one provider");
     }
     validate_providers(&providers)?;
-    let main_model = providers
-        .iter()
-        .find(|provider| provider.id == config.main_provider)
-        .map(|provider| provider.default_model.clone())
-        .context("mainProvider must name an enabled provider")?;
+    let enabled_ids = providers.iter().map(|provider| provider.id.as_str()).collect::<HashSet<_>>();
+    let main_ids = config.main_providers.iter().map(String::as_str).collect::<HashSet<_>>();
+    if main_ids.is_empty() || main_ids.len() != config.main_providers.len() || !main_ids.is_subset(&enabled_ids) {
+        bail!("mainProviders must name distinct enabled providers");
+    }
+    let main_model = providers.iter().find(|provider| provider.id == config.main_providers[0])
+        .expect("validated main provider").default_model.clone();
     let routes = providers.into_iter().map(Provider::into_route).collect();
     Ok(LoadedConfig {
         main_model,
@@ -151,7 +154,6 @@ fn validate(config: ProviderConfig) -> Result<LoadedConfig> {
         model_catalog,
     })
 }
-
 fn validate_choice(choice: &AgentChoice, name: &str) -> Result<()> {
     if [&choice.agent, &choice.model, &choice.effort]
         .into_iter()
@@ -161,7 +163,6 @@ fn validate_choice(choice: &AgentChoice, name: &str) -> Result<()> {
     }
     Ok(())
 }
-
 fn validate_providers(providers: &[Provider]) -> Result<()> {
     let mut ids = HashSet::new();
     let mut models = HashSet::new();
@@ -186,6 +187,25 @@ fn validate_providers(providers: &[Provider]) -> Result<()> {
         if provider.max_context_tokens == Some(0) {
             bail!("maxContextTokens must be greater than zero");
         }
+        if provider.subagent_model.as_ref().is_some_and(String::is_empty) {
+            bail!("subagentModel must not be empty");
+        }
+        if provider
+            .model_provider
+            .as_ref()
+            .is_some_and(String::is_empty)
+            || provider
+                .model_catalog_json
+                .as_ref()
+                .is_some_and(String::is_empty)
+        {
+            bail!("modelProvider and modelCatalogJson must not be empty");
+        }
+        if provider.backend != BackendKind::CodexAppServer
+            && (provider.model_provider.is_some() || provider.model_catalog_json.is_some())
+        {
+            bail!("modelProvider and modelCatalogJson are valid only with codex-app-server");
+        }
         if !provider
             .model_prefixes
             .iter()
@@ -197,7 +217,6 @@ fn validate_providers(providers: &[Provider]) -> Result<()> {
     }
     Ok(())
 }
-
 fn validate_acp(provider: &Provider) -> Result<()> {
     match (provider.backend, &provider.acp) {
         (BackendKind::ConfiguredAcp, Some(acp))
@@ -212,152 +231,22 @@ fn validate_acp(provider: &Provider) -> Result<()> {
         (_, Some(_)) => bail!("acp is valid only with configured-acp"),
     }
 }
-
 impl Provider {
     fn required_fields(&self) -> [&str; 4] {
         [&self.id, &self.agent, &self.default_model, &self.effort]
     }
-
     fn into_route(self) -> BackendRoute {
         let _ = self.usage_provider;
         BackendRoute {
             model: self.default_model,
             backend: self.backend,
+            model_provider: self.model_provider,
+            model_catalog_json: self.model_catalog_json,
             max_context_tokens: self.max_context_tokens,
             model_prefixes: self.model_prefixes,
             acp: self.acp,
         }
     }
 }
-
 #[cfg(test)]
-#[cfg_attr(coverage_nightly, coverage(off))]
-mod tests {
-    use super::*;
-
-    fn config(provider: &str) -> String {
-        format!(
-            r#"{{"version":1,"mainProvider":"p","providers":[{provider}],"fallback":{{"agent":"f","model":"m","effort":"high"}}}}"#
-        )
-    }
-
-    fn parsed() -> ProviderConfig {
-        serde_json::from_str(&config(
-            r#"{"id":"p","agent":"w","defaultModel":"m","effort":"h","modelPrefixes":["m-"],"backend":"grok-acp"}"#,
-        ))
-        .unwrap()
-    }
-
-    #[test]
-    fn loads_enabled_routes_and_ignores_disabled_routes() {
-        let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("providers.json");
-        std::fs::write(
-            &path,
-            config(
-                r#"{"id":"p","agent":"worker","defaultModel":"model","effort":"high","enabled":true,"usageProvider":"quota","modelPrefixes":["model-"],"backend":"codex-app-server"},{"id":"off","agent":"off","defaultModel":"off","effort":"low","enabled":false,"backend":"grok-acp"}"#,
-            ),
-        )
-        .unwrap();
-        let loaded = load(&path).unwrap();
-        assert_eq!(loaded.main_model, "model");
-        assert_eq!(loaded.routes.len(), 1);
-        assert_eq!(loaded.routes[0].model_prefixes, ["model-"]);
-        // Disabled providers still contribute catalog identities for remaps.
-        assert!(loaded.model_catalog.matches("model"));
-        assert!(loaded.model_catalog.matches("model-extra"));
-        assert!(loaded.model_catalog.matches("off"));
-        assert!(!loaded.model_catalog.matches("claude-sonnet-5"));
-    }
-
-    #[test]
-    fn accepts_a_configured_acp() {
-        let json = config(
-            r#"{"id":"p","agent":"worker","defaultModel":"new-1","effort":"high","enabled":true,"modelPrefixes":["new-"],"backend":"configured-acp","acp":{"program":"new-acp","arguments":["--model","{model}","--stdio"]}}"#,
-        );
-        let parsed: ProviderConfig = serde_json::from_str(&json).unwrap();
-        let loaded = validate(parsed).unwrap();
-        assert_eq!(loaded.routes[0].acp.as_ref().unwrap().program, "new-acp");
-        assert_eq!(loaded.routes[0].max_context_tokens, None);
-    }
-
-    #[test]
-    fn accepts_provider_context_limit() {
-        let path = tempfile::tempdir().unwrap().path().join("providers.json");
-        std::fs::write(
-            &path,
-            config(
-                r#"{"id":"p","agent":"worker","defaultModel":"new-1","effort":"high","enabled":true,"maxContextTokens":262144,"modelPrefixes":["new-"],"backend":"codex-app-server"}"#,
-            ),
-        )
-        .unwrap();
-        let loaded = load(&path).unwrap();
-        assert_eq!(loaded.routes[0].max_context_tokens, Some(262_144));
-    }
-
-    #[test]
-    fn rejects_invalid_configurations() {
-        let invalid = [
-            config(
-                r#"{"id":"p","agent":"w","defaultModel":"m","effort":"h","enabled":true,"backend":"configured-acp"}"#,
-            ),
-            config(
-                r#"{"id":"p","agent":"w","defaultModel":"m","effort":"h","enabled":true,"backend":"grok-acp","acp":{"program":"x","arguments":["y"]}}"#,
-            ),
-            config(
-                r#"{"id":"p","agent":"","defaultModel":"m","effort":"h","enabled":true,"backend":"grok-acp"}"#,
-            ),
-            config(
-                r#"{"id":"p","agent":"w","defaultModel":"m","effort":"h","backend":"configured-acp","acp":{"program":"","arguments":["--stdio"]}}"#,
-            ),
-            config(
-                r#"{"id":"p","agent":"w","defaultModel":"m","effort":"h","backend":"configured-acp","acp":{"program":"provider","arguments":[]}}"#,
-            ),
-            config(
-                r#"{"id":"p","agent":"w","defaultModel":"m","effort":"h","enabled":true,"maxContextTokens":0,"backend":"grok-acp"}"#,
-            ),
-        ];
-        for json in invalid {
-            let parsed: ProviderConfig = serde_json::from_str(&json).unwrap();
-            assert!(validate(parsed).is_err());
-        }
-    }
-
-    #[test]
-    fn rejects_every_cross_provider_constraint() {
-        let mut invalid = Vec::new();
-        let mut config = parsed();
-        config.version = 2;
-        invalid.push(config);
-        let mut config = parsed();
-        config.providers[0].enabled = false;
-        invalid.push(config);
-        let mut config = parsed();
-        config.main_provider = "missing".to_owned();
-        invalid.push(config);
-        let mut config = parsed();
-        config.fallback.agent.clear();
-        invalid.push(config);
-        let mut config = parsed();
-        config.providers[0].model_prefixes = vec![String::new()];
-        invalid.push(config);
-        for field in ["id", "model", "prefix"] {
-            let mut config = parsed();
-            let mut duplicate = config.providers[0].clone();
-            match field {
-                "id" => duplicate.default_model = "other".to_owned(),
-                "model" => duplicate.id = "other".to_owned(),
-                "prefix" => {
-                    duplicate.id = "other".to_owned();
-                    duplicate.default_model = "other".to_owned();
-                }
-                _ => unreachable!(),
-            }
-            config.providers.push(duplicate);
-            invalid.push(config);
-        }
-        for config in invalid {
-            assert!(validate(config).is_err());
-        }
-    }
-}
+include!("provider_config_tests.rs");

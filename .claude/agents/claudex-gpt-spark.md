@@ -1,5 +1,5 @@
 ---
-name: claudex-gpt
+name: claudex-gpt-spark
 description: Primary Codex-backed claudex worker for implementation, investigation, testing, and independent review when Codexbar reports available Codex capacity.
 model: gpt-5.3-codex-spark
 effort: high

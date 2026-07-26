@@ -7,13 +7,13 @@ fn fish_launcher_uses_the_shared_provider_config() {
     fs::create_dir_all(home.path().join(".local/bin")).expect("adapter directory");
     fs::write(
         home.path().join(".config/claudex/providers.json"),
-        "{\"version\":1}",
+        "{\"version\":1,\"mainProviders\":[\"p\"],\"providers\":[{\"id\":\"p\",\"agent\":\"worker\",\"defaultModel\":\"model\",\"subagentModel\":\"worker-model\",\"effort\":\"high\",\"backend\":\"codex-app-server\"}],\"fallback\":{\"agent\":\"fallback\",\"model\":\"sonnet\",\"effort\":\"high\"}}",
     )
     .expect("Grok config");
     let adapter = home.path().join(".local/bin/claudex-agent-adapter");
     fs::write(
         &adapter,
-        "#!/bin/sh\nprintf 'CLAUDEX_ACTIVE=%s\\n' \"${CLAUDEX_ACTIVE:-}\"\nprintf '%s\\n' \"$@\"\n",
+        "#!/bin/sh\nprintf 'CLAUDEX_ACTIVE=%s\\n' \"${CLAUDEX_ACTIVE:-}\"\nprintf 'CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=%s\\n' \"${CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY:-}\"\nprintf 'CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS=%s\\n' \"${CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS:-}\"\nprintf '%s\\n' \"$@\"\n",
     )
     .expect("fake adapter");
     let mut permissions = fs::metadata(&adapter)
@@ -42,8 +42,11 @@ fn fish_launcher_uses_the_shared_provider_config() {
     let arguments = String::from_utf8(output.stdout).expect("UTF-8 adapter arguments");
     assert!(arguments.contains("--provider-config\n"));
     assert!(arguments.contains("CLAUDEX_ACTIVE=1\n"));
+    assert!(arguments.contains("CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1\n"));
+    assert!(arguments.contains("CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS=40\n"));
     assert!(arguments.contains(".config/claudex/providers.json\n"));
-    assert!(arguments.contains("--inherit-claude-model\n"));
+    assert!(arguments.contains("--model\nmodel\n"));
+    assert!(arguments.contains("--subscription-max-processes\n40\n"));
     assert!(arguments.ends_with("--\nsmoke\n"));
 
     assert_no_argument_launch(&function, &home);
@@ -73,6 +76,18 @@ fn fish_launcher_uses_the_shared_provider_config() {
 
     assert_explicit_agent_is_preserved(&function, &home);
     assert_routing_marker_is_scoped_to_claudex(&function, &home);
+}
+
+#[test]
+fn fish_config_sets_the_plain_claude_subagent_limit() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let config = fs::read_to_string(root.join(".config/fish/config.fish"))
+        .expect("fish configuration");
+    assert!(
+        config
+            .lines()
+            .any(|line| line == "set -gx CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS 40")
+    );
 }
 
 fn assert_explicit_agent_is_preserved(function: &std::path::Path, home: &tempfile::TempDir) {
@@ -114,7 +129,7 @@ fn assert_routing_marker_is_scoped_to_claudex(
 }
 
 #[test]
-fn provider_workers_fix_the_models_from_the_shared_config() {
+fn explicit_subagent_models_and_fallback_match_worker_definitions() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let config: serde_json::Value = serde_json::from_slice(
         &fs::read(root.join(".config/claudex/providers.json")).expect("provider config"),
@@ -124,7 +139,11 @@ fn provider_workers_fix_the_models_from_the_shared_config() {
         .as_array()
         .expect("configured providers")
         .iter()
-        .map(|provider| (&provider["agent"], &provider["defaultModel"]))
+        .filter_map(|provider| {
+            provider
+                .get("subagentModel")
+                .map(|model| (&provider["agent"], model))
+        })
         .chain(std::iter::once((
             &config["fallback"]["agent"],
             &config["fallback"]["model"],
@@ -254,6 +273,6 @@ fn assert_no_argument_launch(function: &std::path::Path, home: &tempfile::TempDi
         String::from_utf8_lossy(&output.stderr)
     );
     let arguments = String::from_utf8(output.stdout).expect("UTF-8 adapter arguments");
-    assert!(arguments.contains("--inherit-claude-model\n"));
+    assert!(arguments.contains("--model\nmodel\n"));
     assert!(arguments.ends_with("--\n"));
 }

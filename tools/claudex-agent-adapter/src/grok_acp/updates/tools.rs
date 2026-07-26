@@ -45,7 +45,7 @@ pub(super) fn dispatch_provider_tool_update(
             acp::ToolCallStatus::Pending | acp::ToolCallStatus::InProgress
         ) && fields.raw_input.is_some()
         {
-            let mut call = acp::ToolCall::new(call_id.clone(), title);
+            let mut call = acp::ToolCall::new(call_id, title);
             if let Some(kind) = fields.kind {
                 call = call.kind(kind);
             }

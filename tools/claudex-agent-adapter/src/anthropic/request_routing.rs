@@ -19,6 +19,14 @@ pub(super) fn resolve_request_model(
         // Unmatched SubAgents may carry Claude Code's subscription fallback model.
         request.model = main_model.to_owned();
     }
+    if let Some(model) = request
+        .model
+        .strip_prefix(crate::DISCOVERY_MODEL_PREFIX)
+        .filter(|model| *model == main_model || supports_model(model))
+        .map(str::to_owned)
+    {
+        request.model = model;
+    }
 
     apply_disabled_model_policy(request, main_model, is_subagent)?;
 
@@ -59,11 +67,10 @@ fn apply_disabled_model_policy(
         );
     }
     if request.model == main_model {
-        bail!(
-            "main model `{}` is disabled by the active Claudex policy ({}/disabledModels); change mainProvider or clear the denylist",
-            request.model,
-            crate::subagent_policy::ENV_NAME
-        );
+        // The dedicated policy controls only spawned workers. A terminal may
+        // keep using a model in its outer session while denying that same
+        // model to SubAgents.
+        return Ok(());
     }
     tracing::warn!(
         disabled_model = %request.model,
@@ -110,6 +117,21 @@ mod tests {
             |model| model == "vendor-a" || model == "main-model",
         )
         .expect("remap");
+        assert_eq!(decision, RouteDecision::Provider);
+        assert_eq!(request.model, "main-model");
+    }
+
+    #[test]
+    fn keeps_a_disabled_model_for_the_outer_main_session() {
+        let mut request = request("main-model", &["main-model"]);
+        let decision = resolve(
+            &mut request,
+            "main-model",
+            false,
+            |model| model == "main-model",
+            |model| model == "main-model",
+        )
+        .expect("outer main model remains allowed");
         assert_eq!(decision, RouteDecision::Provider);
         assert_eq!(request.model, "main-model");
     }

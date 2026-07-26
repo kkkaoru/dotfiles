@@ -81,11 +81,37 @@ mod tests {
         assert!(routes.resolve("unconfigured-model").is_err());
     }
 
+    #[test]
+    fn applies_codex_provider_and_catalog_to_exact_and_dynamic_routes() {
+        let mut fugu = route("fugu", BackendKind::CodexAppServer);
+        fugu.model_provider = Some("sakana".to_owned());
+        fugu.model_catalog_json = Some("~/.codex/fugu.json".to_owned());
+        fugu.model_prefixes.push("fugu".to_owned());
+        let routes = RoutedBackends::lazy(&[fugu]);
+
+        for model in ["fugu", "fugu-ultra-v1.1"] {
+            let (_, route) = routes.resolve(model).expect("Fugu route");
+            let params = route.thread_start_params(serde_json::json!({
+                "model": model,
+                "config": {"web_search":"disabled"}
+            }));
+            assert_eq!(params["modelProvider"], "sakana");
+            assert!(
+                params["config"]["model_catalog_json"]
+                    .as_str()
+                    .is_some_and(|path| path.ends_with("/.codex/fugu.json"))
+            );
+            assert_eq!(params["config"]["web_search"], "disabled");
+        }
+    }
+
     #[tokio::test]
     async fn failed_startup_is_not_alive() {
         let route = BackendRoute {
             model: "missing-acp".to_owned(),
             backend: BackendKind::ConfiguredAcp,
+            model_provider: None,
+            model_catalog_json: None,
             max_context_tokens: None,
             model_prefixes: Vec::new(),
             acp: Some(AcpLaunch {

@@ -115,6 +115,11 @@ impl RoutedBackend {
             .expect("backend startup poisoned") = None;
     }
 
+    pub(super) fn thread_start_params(&self, mut params: serde_json::Value) -> serde_json::Value {
+        super::route_config::apply(&self.template, &mut params);
+        params
+    }
+
     fn is_started(&self) -> bool {
         self.activated.load(Ordering::Relaxed) && self.ready_backend().is_some()
     }
@@ -247,7 +252,7 @@ impl RoutedBackends {
         let prefix_limit = self
             .configured
             .iter()
-            .map(|route| {
+            .filter_map(|route| {
                 route
                     .template
                     .model_prefixes
@@ -257,7 +262,6 @@ impl RoutedBackends {
                     .max()
                     .map(|len| (len, route.template.max_context_tokens))
             })
-            .flatten()
             .filter(|(_, limit)| limit.is_some())
             .max_by_key(|(len, _)| *len)
             .and_then(|(_, limit)| limit);

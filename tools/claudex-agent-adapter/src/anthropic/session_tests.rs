@@ -72,6 +72,24 @@ fn configures_external_and_internal_tools_without_duplicates() {
 }
 
 #[test]
+fn configures_a_bounded_batch_tool_for_parallel_agents() {
+    let tools = vec![json!({
+        "name":"Agent", "description":"delegate",
+        "input_schema":{"type":"object","properties":{"prompt":{"type":"string"}}}
+    })];
+    let configured = tool_configuration(&request(Value::Null, tools), None, None);
+    assert_eq!(configured.0.len(), 2);
+    let batch = configured
+        .0
+        .iter()
+        .find(|tool| tool["description"].as_str().is_some_and(|text| text.contains("two or more")))
+        .expect("parallel Agent batch tool");
+    assert_eq!(batch["inputSchema"]["properties"]["tasks"]["minItems"], 2);
+    assert_eq!(batch["inputSchema"]["properties"]["tasks"]["maxItems"], 40);
+    assert!(configured.1.values().any(|name| name.ends_with(":Agent")));
+}
+
+#[test]
 fn builds_thread_configuration_for_empty_and_team_system_prompts() {
     let empty = thread_start_params(&request(Value::Null, Vec::new()), "main", Vec::new());
     let base = empty["baseInstructions"]
@@ -326,4 +344,14 @@ fn classifies_context_window_errors() {
     assert!(contains_context_window_marker("ContextWindowExceeded"));
     assert!(contains_context_window_marker("ran out of room in this conversation"));
     assert!(!contains_context_window_marker("validation failed"));
+}
+
+#[test]
+fn pending_tool_results_are_submitted_before_context_preemption() {
+    assert!(super::should_preempt_for_context_limit(
+        110_000, 110_000, false
+    ));
+    assert!(!super::should_preempt_for_context_limit(
+        111_801, 110_000, true
+    ));
 }

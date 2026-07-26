@@ -90,6 +90,57 @@ async fn routes_main_and_subagent_models_to_coexisting_backends() {
     server.abort();
 }
 
+#[tokio::test]
+async fn context_window_recovery_is_model_agnostic_for_fugu_routes() {
+    let root = tempfile::tempdir().expect("Fugu routing fixture");
+    let source = root.path().join("codex-source");
+    std::fs::create_dir(&source).unwrap();
+    std::fs::write(source.join("auth.json"), "{}").unwrap();
+    let codex = AppServer::spawn_with_program(
+        "bootstrap-model",
+        env!("CARGO_BIN_EXE_codex-mock"),
+        &source,
+        &root.path().join("codex-home"),
+    )
+    .await
+    .expect("start Codex backend");
+    let backend = AgentBackend::routed(vec![
+        ("fugu".to_owned(), AgentBackend::codex(Arc::clone(&codex))),
+        (
+            "fugu-ultra-v1.1".to_owned(),
+            AgentBackend::codex(Arc::clone(&codex)),
+        ),
+    ]);
+    let bridge = Arc::new(Bridge::new_with_backend(backend, "fugu".to_owned()));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/v1/messages", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        axum::serve(listener, http_router(bridge, "fugu".to_owned(), None))
+            .await
+            .unwrap();
+    });
+
+    for model in ["fugu", "fugu-ultra-v1.1"] {
+        let response = Client::new()
+            .post(&url)
+            .json(&json!({
+                "model":model,
+                "messages":[{"role":"user","content":"CONTEXT_WINDOW_ONCE"}]
+            }))
+            .send()
+            .await
+            .unwrap()
+            .error_for_status()
+            .unwrap()
+            .json::<Value>()
+            .await
+            .unwrap();
+        assert_eq!(response["model"], model);
+        assert_eq!(response_text(&response), "OK_AFTER_CONTEXT_RESTART");
+    }
+    server.abort();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn isolates_parallel_sessions_across_worker_threads_and_backends() {
     let root = tempfile::tempdir().expect("parallel routing fixture");

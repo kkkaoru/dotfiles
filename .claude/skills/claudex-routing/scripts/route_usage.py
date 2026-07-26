@@ -30,6 +30,9 @@ REPOSITORY_DISABLED_MODELS_CONFIG = (
 )
 DEFAULT_QWEN_CURL = REPOSITORY_ROOT / "tmp/curl.txt"
 QWEN_USAGE_PROVIDER = "qwen"
+OLLAMA_USAGE_PROVIDER = "ollama"
+OLLAMA_BASE_URL_ENV = "CLAUDEX_OLLAMA_BASE_URL"
+DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 QWEN_CONSOLE_HOST = "cs-data.qwencloud.com"
 QWEN_CONSOLE_PATH = "/data/api.json"
 QWEN_CONSOLE_PRODUCT = "sfm_bailian"
@@ -62,8 +65,15 @@ def load_config(path: Path) -> dict[str, Any]:
     enabled = [provider for provider in providers if provider.get("enabled", True)]
     if not enabled or any(not valid_provider(provider) for provider in enabled):
         raise ValueError("provider config contains an invalid enabled provider")
-    if config.get("mainProvider") not in {provider["id"] for provider in enabled}:
-        raise ValueError("mainProvider must name an enabled provider")
+    main_providers = config.get("mainProviders")
+    if (
+        not isinstance(main_providers, list)
+        or not main_providers
+        or any(not isinstance(provider, str) for provider in main_providers)
+        or len(set(main_providers)) != len(main_providers)
+        or any(provider not in {item["id"] for item in enabled} for provider in main_providers)
+    ):
+        raise ValueError("mainProviders must name distinct enabled providers")
     if not valid_choice(config.get("fallback")):
         raise ValueError("provider config contains an invalid fallback")
     return {**config, "providers": enabled}
@@ -87,8 +97,12 @@ def disabled_models_config_path(
 def valid_provider(provider: Any) -> bool:
     """Check fields used by both quota and model routing."""
     required = ("id", "agent", "defaultModel", "effort", "backend")
-    return isinstance(provider, dict) and all(
+    if not isinstance(provider, dict) or not all(
         isinstance(provider.get(field), str) and provider[field] for field in required
+    ):
+        return False
+    return "subagentModel" not in provider or valid_model_id(
+        provider["subagentModel"]
     )
 
 
@@ -243,7 +257,7 @@ def worker(provider: dict[str, Any]) -> dict[str, Any]:
     return {
         "provider": provider["id"],
         "agent": provider["agent"],
-        "model": provider["defaultModel"],
+        "model": provider.get("subagentModel", provider["defaultModel"]),
         "effort": provider["effort"],
         "model_prefixes": provider.get("modelPrefixes", []),
     }
@@ -267,6 +281,7 @@ def routing_summary(
     """Select configured workers when they have capacity, otherwise fallback."""
     config = config or load_config(config_path(os.environ))
     providers: dict[str, dict[str, Any]] = {}
+    main_workers: dict[str, dict[str, Any]] = {}
     candidates: list[tuple[tuple[float, ...], dict[str, Any]]] = []
     for index, provider in enumerate(config["providers"]):
         quota_name = provider.get("usageProvider")
@@ -275,9 +290,14 @@ def routing_summary(
             if isinstance(quota_name, str) and quota_name
             else status(True, None, "unmetered")
         )
-        disabled = provider["defaultModel"] in disabled_models
+        disabled = worker(provider)["model"] in disabled_models
         effective = status(False, None, "disabled-by-policy") if disabled else quota
         providers[provider["id"]] = {**effective, **worker(provider), "disabled": disabled}
+        main_workers[provider["id"]] = {
+            **quota,
+            **worker(provider),
+            "model": provider["defaultModel"],
+        }
         if quota["available"] and not disabled:
             candidates.append((capacity_priority(quota, index), worker(provider)))
     selected = [
@@ -286,11 +306,20 @@ def routing_summary(
     fallback_active = not selected and config["fallback"]["model"] not in disabled_models
     if fallback_active:
         selected = [{"provider": "fallback", **config["fallback"]}]
+    preferred_main_worker = next(
+        (
+            main_workers[provider]
+            for provider in config["mainProviders"]
+            if provider in main_workers and main_workers[provider]["available"]
+        ),
+        None,
+    )
     return {
         "providers": providers,
         "selected_agents": [item["agent"] for item in selected],
         "selected_workers": selected,
         "preferred_worker": selected[0] if selected else None,
+        "preferred_main_worker": preferred_main_worker,
         "fallback_active": fallback_active,
         "disabled_subagent_models": sorted(disabled_models),
     }
@@ -325,7 +354,10 @@ def hook_output(summary: dict[str, Any]) -> dict[str, Any]:
         "SendMessage with the exact compatible recipient specified by the prior Agent/Task result; "
         "decide shutdown only after weighing likely reuse and potential cache value against resource pressure. "
         "Prefer foreground parallel calls when their results are needed now; use background only "
-        "when useful work can continue or the task should outlive the turn. TUI N queued is pending "
+        "when useful work can continue or the task should outlive the turn. When launching multiple "
+        "independent workers, emit every intended Agent/Task call in the same assistant response and "
+        "tool round; never launch one and defer the rest. Do not announce a worker count unless that "
+        "same response contains exactly that many launch calls. TUI N queued is pending "
         "main-session input, including human prompts and background notifications, not worker "
         "capacity, active slots, or SendMessage delivery."
     )
@@ -779,6 +811,55 @@ def unavailable_usage_entry(provider: str) -> dict[str, Any]:
     }
 
 
+def ollama_usage_entry(
+    curl_program: str,
+    provider: str,
+    model: str,
+    environment: dict[str, str],
+) -> dict[str, Any]:
+    """Keep an Ollama model routable when Codexbar usage is unavailable."""
+    base_url = environment.get(OLLAMA_BASE_URL_ENV, DEFAULT_OLLAMA_BASE_URL).rstrip("/")
+    parsed = urlparse(base_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return unavailable_usage_entry(provider)
+    try:
+        completed = subprocess.run(
+            [
+                curl_program,
+                "--fail",
+                "--silent",
+                "--show-error",
+                "--max-time",
+                str(QWEN_REQUEST_TIMEOUT_SECONDS),
+                f"{base_url}/api/tags",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=QWEN_REQUEST_TIMEOUT_SECONDS + QWEN_SUBPROCESS_GRACE_SECONDS,
+        )
+        payload = json.loads(completed.stdout)
+        models = payload.get("models") if isinstance(payload, dict) else None
+        if not isinstance(models, list) or not any(
+            isinstance(item, dict)
+            and model in {item.get("name"), item.get("model")}
+            for item in models
+        ):
+            return unavailable_usage_entry(provider)
+        return {
+            "provider": provider,
+            "available": True,
+            "reason": "available-ollama-api-only",
+        }
+    except (
+        OSError,
+        ValueError,
+        subprocess.SubprocessError,
+        json.JSONDecodeError,
+    ):
+        return unavailable_usage_entry(provider)
+
+
 def collect_codexbar_report(
     codexbar_program: str,
     codexbar_names: set[str],
@@ -824,6 +905,11 @@ def collect_usage(
         if str(provider.get("usageProvider", "")).casefold() == QWEN_USAGE_PROVIDER
     ]
     qwen_names = {provider["usageProvider"].casefold() for provider in qwen_providers}
+    ollama_providers = [
+        provider
+        for provider in providers
+        if str(provider.get("usageProvider", "")).casefold() == OLLAMA_USAGE_PROVIDER
+    ]
     codexbar_names = {
         provider["usageProvider"]
         for provider in providers
@@ -833,7 +919,7 @@ def collect_usage(
     }
     # Codexbar and Qwen quota are independent; run them together so a cold hook
     # pays max(source latency) instead of sum(source latency).
-    worker_count = 1 + max(len(qwen_providers), 0)
+    worker_count = 1 + len(qwen_providers) + len(ollama_providers)
     with ThreadPoolExecutor(max_workers=worker_count) as pool:
         codexbar_future = pool.submit(
             collect_codexbar_report, codexbar_program, codexbar_names, qwen_names
@@ -851,8 +937,34 @@ def collect_usage(
             )
             for provider in qwen_providers
         ]
+        ollama_futures = [
+            (
+                provider,
+                pool.submit(
+                    ollama_usage_entry,
+                    curl_program,
+                    provider["usageProvider"],
+                    worker(provider)["model"],
+                    environment,
+                ),
+            )
+            for provider in ollama_providers
+        ]
         report = list(codexbar_future.result())
         report.extend(future.result() for future in qwen_futures)
+        for provider, future in ollama_futures:
+            usage_provider = provider["usageProvider"]
+            current = provider_status(report, usage_provider)
+            if current["reason"] not in {"missing", "unknown", "usage-unavailable"}:
+                continue
+            report = [
+                entry
+                for entry in report
+                if not isinstance(entry, dict)
+                or str(entry.get("provider", "")).casefold()
+                != usage_provider.casefold()
+            ]
+            report.append(future.result())
     return report
 
 
@@ -876,7 +988,7 @@ def fallback_summary(
     config = config or load_config(config_path(os.environ))
     providers = {}
     for provider in config["providers"]:
-        disabled = provider["defaultModel"] in disabled_models
+        disabled = worker(provider)["model"] in disabled_models
         unavailable_reason = "disabled-by-policy" if disabled else reason
         providers[provider["id"]] = {
             **status(False, None, unavailable_reason),

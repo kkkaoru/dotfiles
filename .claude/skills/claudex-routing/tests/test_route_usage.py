@@ -144,7 +144,25 @@ def write_qwen_settings(
 
 
 def configuration() -> dict[str, object]:
+    config = route_usage.load_config(route_usage.REPOSITORY_CONFIG)
+    return {
+        **config,
+        "providers": [
+            provider
+            for provider in config["providers"]
+            if provider["id"] not in {"fugu", "ollama-glm-5-2", "opencode-go"}
+        ],
+    }
+
+
+def complete_configuration() -> dict[str, object]:
     return route_usage.load_config(route_usage.REPOSITORY_CONFIG)
+
+
+def configured_summary(
+    usage: object, disabled: frozenset[str] = frozenset()
+) -> dict[str, object]:
+    return route_usage.routing_summary(usage, configuration(), disabled)
 
 
 class ConfigurationTests(unittest.TestCase):
@@ -231,7 +249,7 @@ class ConfigurationTests(unittest.TestCase):
         config["providers"][0].pop("usageProvider")
         summary = route_usage.routing_summary([], config)
         self.assertEqual(summary["providers"]["codex"]["reason"], "unmetered")
-        self.assertIn("claudex-gpt", summary["selected_agents"])
+        self.assertIn("claudex-gpt-spark", summary["selected_agents"])
         original = route_usage.configuration_key(config)
         config["providers"][0]["effort"] = "xhigh"
         self.assertNotEqual(route_usage.configuration_key(config), original)
@@ -382,26 +400,27 @@ class RoutingTests(unittest.TestCase):
 
     def test_selects_all_single_and_fallback_agents(self) -> None:
         self.assertEqual(
-            route_usage.routing_summary(report())["selected_agents"],
-            ["claudex-qwen", "claudex-gpt", "claudex-grok"],
+            configured_summary(report())["selected_agents"],
+            ["claudex-qwen", "claudex-gpt-spark", "claudex-grok"],
         )
         self.assertEqual(
-            route_usage.routing_summary(report(grok=100))["selected_agents"],
-            ["claudex-qwen", "claudex-gpt"],
+            configured_summary(report(grok=100))["selected_agents"],
+            ["claudex-qwen", "claudex-gpt-spark"],
         )
         unavailable = report(codex=100, grok=100)
         unavailable[-1] = qwen_report(None, available=False)
-        fallback = route_usage.routing_summary(unavailable)
+        fallback = configured_summary(unavailable)
         self.assertEqual(fallback["selected_agents"], ["claudex-sonnet"])
         self.assertTrue(fallback["fallback_active"])
 
     def test_disabled_models_are_excluded_without_deleting_provider_config(self) -> None:
-        disabled = frozenset({"gpt-5.6-sol", "grok-4.5"})
-        summary = route_usage.routing_summary(report(), configuration(), disabled)
+        disabled = frozenset({"gpt-5.3-codex-spark", "grok-4.5"})
+        summary = configured_summary(report(), disabled)
         self.assertEqual(summary["selected_agents"], ["claudex-qwen"])
         self.assertEqual(summary["disabled_subagent_models"], sorted(disabled))
         self.assertEqual(summary["providers"]["codex"]["reason"], "disabled-by-policy")
         self.assertTrue(summary["providers"]["grok"]["disabled"])
+        self.assertEqual(summary["preferred_main_worker"]["model"], "gpt-5.6-sol")
 
         unavailable = report(codex=100, grok=100)
         unavailable[-1] = qwen_report(None, available=False)
@@ -424,31 +443,72 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(summary["disabled_subagent_models"], ["claude-sonnet-5"])
 
     def test_prioritizes_the_provider_with_the_most_known_headroom(self) -> None:
-        summary = route_usage.routing_summary(report(codex=80, grok=10, qwen_used=2))
+        summary = configured_summary(report(codex=80, grok=10, qwen_used=2))
         self.assertEqual(
             summary["selected_agents"],
-            ["claudex-qwen", "claudex-grok", "claudex-gpt"],
+            ["claudex-qwen", "claudex-grok", "claudex-gpt-spark"],
         )
         self.assertEqual(summary["preferred_worker"]["provider"], "qwen")
         self.assertEqual(summary["providers"]["grok"]["remaining_percent"], 90.0)
         self.assertEqual(summary["providers"]["codex"]["remaining_percent"], 20.0)
         self.assertEqual(summary["providers"]["qwen"]["remaining_percent"], 98.0)
+        codex_worker = next(
+            worker
+            for worker in summary["selected_workers"]
+            if worker["provider"] == "codex"
+        )
+        self.assertEqual(codex_worker["model"], "gpt-5.3-codex-spark")
+        self.assertEqual(summary["preferred_main_worker"]["model"], "gpt-5.6-sol")
 
     def test_unknown_qwen_limit_cannot_outrank_known_capacity(self) -> None:
         unknown = report(codex=99, grok=100)
         unknown[-1] = qwen_report(None, reason="available-compatible-api-only")
-        summary = route_usage.routing_summary(unknown)
-        self.assertEqual(summary["selected_agents"], ["claudex-gpt", "claudex-qwen"])
+        summary = configured_summary(unknown)
+        self.assertEqual(summary["selected_agents"], ["claudex-gpt-spark", "claudex-qwen"])
         self.assertEqual(summary["preferred_worker"]["provider"], "codex")
 
+    def test_selects_fugu_from_codexbar_sakana_capacity(self) -> None:
+        usage = [
+            *report(),
+            {"provider": "sakana", "usage": {"primary": {"usedPercent": 7}}},
+        ]
+        summary = route_usage.routing_summary(usage, complete_configuration())
+        self.assertEqual(summary["providers"]["fugu"]["remaining_percent"], 93.0)
+        worker = next(
+            item
+            for item in summary["selected_workers"]
+            if item["provider"] == "fugu"
+        )
+        self.assertEqual(worker["agent"], "claudex-fugu")
+        self.assertEqual(worker["model"], "fugu-ultra-v1.1")
+        self.assertEqual(worker["model_prefixes"], ["fugu"])
+
+    def test_selects_glm_from_codexbar_ollama_capacity(self) -> None:
+        usage = [
+            *report(),
+            {"provider": "ollama", "usage": {"primary": {"usedPercent": 4}}},
+        ]
+        summary = route_usage.routing_summary(usage, complete_configuration())
+        self.assertEqual(
+            summary["providers"]["ollama-glm-5-2"]["remaining_percent"], 96.0
+        )
+        worker = next(
+            item
+            for item in summary["selected_workers"]
+            if item["provider"] == "ollama-glm-5-2"
+        )
+        self.assertEqual(worker["agent"], "claudex-ollama-glm-5-2")
+        self.assertEqual(worker["model"], "glm-5.2:cloud")
+        self.assertEqual(worker["model_prefixes"], ["glm-"])
+
     def test_hook_output_contains_only_the_sanitized_summary(self) -> None:
-        summary = route_usage.routing_summary(report())
+        summary = configured_summary(report())
         output = route_usage.hook_output(summary)
         context = output["hookSpecificOutput"]["additionalContext"]
         self.assertEqual(
             output["hookSpecificOutput"]["hookEventName"], "UserPromptSubmit"
         )
-        self.assertIn("claudex-gpt", context)
+        self.assertIn("claudex-gpt-spark", context)
         self.assertIn("claudex-qwen", context)
         self.assertIn("every Agent/Task launch", context)
         self.assertIn("nested launches from a worker", context)
@@ -458,6 +518,8 @@ class RoutingTests(unittest.TestCase):
         self.assertIn("complete tool set and permission context", context)
         self.assertIn("never add an implicit read-only", context)
         self.assertIn("background execution would auto-deny", context)
+        self.assertIn("same assistant response and tool round", context)
+        self.assertIn("exactly that many launch calls", context)
         self.assertIn("standing default", context)
         self.assertIn("do not wait for them to repeat it", context)
         self.assertIn("built-in parameterless advisor tool", context)
@@ -510,6 +572,75 @@ class CacheTests(unittest.TestCase):
 
 
 class CommandTests(unittest.TestCase):
+    @mock.patch("route_usage.subprocess.run")
+    def test_ollama_api_fallback_detects_the_configured_cloud_model(
+        self, run: mock.Mock
+    ) -> None:
+        run.return_value = subprocess.CompletedProcess(
+            [],
+            0,
+            stdout=json.dumps(
+                {"models": [{"name": "glm-5.2:cloud", "model": "glm-5.2:cloud"}]}
+            ),
+        )
+        self.assertEqual(
+            route_usage.ollama_usage_entry(
+                "curl", "ollama", "glm-5.2:cloud", {}
+            ),
+            {
+                "provider": "ollama",
+                "available": True,
+                "reason": "available-ollama-api-only",
+            },
+        )
+
+    @mock.patch("route_usage.subprocess.run", side_effect=OSError("unavailable"))
+    def test_ollama_api_fallback_isolated_failure(self, _run: mock.Mock) -> None:
+        self.assertEqual(
+            route_usage.ollama_usage_entry(
+                "curl", "ollama", "glm-5.2:cloud", {}
+            ),
+            route_usage.unavailable_usage_entry("ollama"),
+        )
+        self.assertEqual(
+            route_usage.ollama_usage_entry(
+                "curl",
+                "ollama",
+                "glm-5.2:cloud",
+                {route_usage.OLLAMA_BASE_URL_ENV: "not-a-url"},
+            ),
+            route_usage.unavailable_usage_entry("ollama"),
+        )
+
+    @mock.patch("route_usage.qwen_usage_entry", return_value=qwen_report())
+    @mock.patch(
+        "route_usage.ollama_usage_entry",
+        return_value={
+            "provider": "ollama",
+            "available": True,
+            "reason": "available-ollama-api-only",
+        },
+    )
+    @mock.patch(
+        "route_usage.run_codexbar",
+        return_value=[
+            *report()[:2],
+            {"provider": "ollama", "available": False, "reason": "usage-unavailable"},
+        ],
+    )
+    def test_ollama_usage_failure_falls_back_to_model_availability(
+        self, _codexbar: mock.Mock, _ollama: mock.Mock, _qwen: mock.Mock
+    ) -> None:
+        collected = route_usage.collect_usage(
+            complete_configuration(), "codexbar", "curl"
+        )
+        summary = route_usage.routing_summary(collected, complete_configuration())
+        self.assertEqual(
+            summary["providers"]["ollama-glm-5-2"]["reason"],
+            "available-ollama-api-only",
+        )
+        self.assertIn("claudex-ollama-glm-5-2", summary["selected_agents"])
+
     def test_converts_qwen_quota_windows_to_percentages(self) -> None:
         entry = route_usage.qwen_quota_entry(quota_payload(), "qwen")
         self.assertEqual(entry["maxUsedPercent"], 2.0)
@@ -648,8 +779,8 @@ class CommandTests(unittest.TestCase):
         self, _codexbar: mock.Mock, _qwen: mock.Mock
     ) -> None:
         collected = route_usage.collect_usage(configuration(), "codexbar", "curl")
-        summary = route_usage.routing_summary(collected)
-        self.assertEqual(summary["selected_agents"], ["claudex-gpt", "claudex-grok"])
+        summary = configured_summary(collected)
+        self.assertEqual(summary["selected_agents"], ["claudex-gpt-spark", "claudex-grok"])
         self.assertEqual(summary["providers"]["qwen"]["reason"], "usage-unavailable")
 
     @mock.patch("route_usage.qwen_usage_entry", return_value=qwen_report())
@@ -658,7 +789,7 @@ class CommandTests(unittest.TestCase):
         self, _codexbar: mock.Mock, _qwen: mock.Mock
     ) -> None:
         collected = route_usage.collect_usage(configuration(), "codexbar", "curl")
-        summary = route_usage.routing_summary(collected)
+        summary = configured_summary(collected)
         self.assertEqual(summary["selected_agents"], ["claudex-qwen"])
         self.assertEqual(summary["providers"]["codex"]["reason"], "usage-unavailable")
 
@@ -680,7 +811,7 @@ class CommandTests(unittest.TestCase):
                 text=True,
             )
             self.assertIn(
-                "claudex-gpt",
+                "claudex-gpt-spark",
                 json.loads(success.stdout)["hookSpecificOutput"]["additionalContext"],
             )
 
@@ -697,7 +828,13 @@ class CommandTests(unittest.TestCase):
                 check=True,
                 capture_output=True,
                 text=True,
-                env={**os.environ, "HOME": directory},
+                env={
+                    **os.environ,
+                    "HOME": directory,
+                    route_usage.DISABLED_SUBAGENT_MODELS_ENV: (
+                        "opencode-go/deepseek-v4-flash"
+                    ),
+                },
             )
             self.assertIn(
                 "claudex-sonnet",
@@ -1115,7 +1252,7 @@ class MainTests(unittest.TestCase):
     ) -> None:
         read_cache.return_value = route_usage.routing_summary(report())
         output = self.run_main()
-        self.assertIn("claudex-gpt", output)
+        self.assertIn("claudex-gpt-spark", output)
         collect_usage.assert_not_called()
 
     @mock.patch("route_usage.write_cache")
@@ -1160,9 +1297,13 @@ class MainTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             fixture = Path(directory) / "usage.json"
             fixture.write_text(json.dumps(report(grok=100)), encoding="utf-8")
-            output = self.run_main("--input", str(fixture))
+            output = self.run_main(
+                "--input",
+                str(fixture),
+                disabled_models=["opencode-go/deepseek-v4-flash"],
+            )
         context = json.loads(output)["hookSpecificOutput"]["additionalContext"]
-        self.assertIn('"selected_agents":["claudex-qwen","claudex-gpt"]', context)
+        self.assertIn('"selected_agents":["claudex-qwen","claudex-gpt-spark"]', context)
         collect_usage.assert_not_called()
         write_cache.assert_not_called()
 
@@ -1182,13 +1323,27 @@ class MainTests(unittest.TestCase):
     ) -> None:
         with mock.patch.dict(
             os.environ,
-            {route_usage.DISABLED_SUBAGENT_MODELS_ENV: "gpt-5.6-sol,grok-4.5"},
+            {
+                route_usage.DISABLED_SUBAGENT_MODELS_ENV: (
+                    "gpt-5.3-codex-spark,grok-4.5"
+                )
+            },
         ):
-            output = self.run_main("--no-cache")
+            output = self.run_main(
+                "--no-cache",
+                disabled_models=["opencode-go/deepseek-v4-flash"],
+            )
         context = json.loads(output)["hookSpecificOutput"]["additionalContext"]
         self.assertIn('"selected_agents":["claudex-qwen"]', context)
         expected_key = route_usage.configuration_key(
-            configuration(), frozenset({"gpt-5.6-sol", "grok-4.5"})
+            complete_configuration(),
+            frozenset(
+                {
+                    "gpt-5.3-codex-spark",
+                    "grok-4.5",
+                    "opencode-go/deepseek-v4-flash",
+                }
+            ),
         )
         self.assertEqual(read_cache.call_args.args[3], expected_key)
 
@@ -1200,16 +1355,30 @@ class MainTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             policy = Path(directory) / "disabled.json"
             policy.write_text(
-                json.dumps({"version": 1, "disabledModels": ["gpt-5.6-sol"]}),
+                json.dumps(
+                    {
+                        "version": 1,
+                        "disabledModels": [
+                            "gpt-5.3-codex-spark",
+                            "opencode-go/deepseek-v4-flash",
+                        ],
+                    }
+                ),
                 encoding="utf-8",
             )
             output = self.run_main(
                 "--no-cache", "--disabled-models-config", str(policy)
             )
         context = json.loads(output)["hookSpecificOutput"]["additionalContext"]
-        self.assertNotIn('"agent":"claudex-gpt"', context.split('"selected_workers":', 1)[1])
+        selected_workers = context.split('"selected_workers":', 1)[1].split(
+            ',"preferred_worker":', 1
+        )[0]
+        self.assertNotIn('"agent":"claudex-gpt-spark"', selected_workers)
         expected_key = route_usage.configuration_key(
-            configuration(), frozenset({"gpt-5.6-sol"})
+            complete_configuration(),
+            frozenset(
+                {"gpt-5.3-codex-spark", "opencode-go/deepseek-v4-flash"}
+            ),
         )
         self.assertEqual(read_cache.call_args.args[3], expected_key)
 
@@ -1219,15 +1388,20 @@ class MainTests(unittest.TestCase):
         self, read_cache: mock.Mock, _collect_usage: mock.Mock
     ) -> None:
         environment = {
-            route_usage.DISABLED_SUBAGENT_MODELS_ENV: "gpt-5.6-sol",
-            route_usage.RESOLVED_DISABLED_SUBAGENT_MODELS_ENV: "qwen3.8-max-preview",
+            route_usage.DISABLED_SUBAGENT_MODELS_ENV: "gpt-5.3-codex-spark",
+            route_usage.RESOLVED_DISABLED_SUBAGENT_MODELS_ENV: (
+                "qwen3.8-max-preview,opencode-go/deepseek-v4-flash"
+            ),
         }
         with mock.patch.dict(os.environ, environment):
             output = self.run_main("--no-cache")
         context = json.loads(output)["hookSpecificOutput"]["additionalContext"]
-        self.assertIn('"selected_agents":["claudex-gpt","claudex-grok"]', context)
+        self.assertIn('"selected_agents":["claudex-gpt-spark","claudex-grok"]', context)
         expected_key = route_usage.configuration_key(
-            configuration(), frozenset({"qwen3.8-max-preview"})
+            complete_configuration(),
+            frozenset(
+                {"qwen3.8-max-preview", "opencode-go/deepseek-v4-flash"}
+            ),
         )
         self.assertEqual(read_cache.call_args.args[3], expected_key)
 
@@ -1248,7 +1422,10 @@ class MainTests(unittest.TestCase):
                 runpy.run_path(str(Path(route_usage.__file__)), run_name="__main__")
         self.assertEqual(exit_status.exception.code, 0)
         context = json.loads(stdout.getvalue())["hookSpecificOutput"]["additionalContext"]
-        self.assertIn('"disabled_subagent_models":["gpt-5.6-sol"]', context)
+        self.assertIn(
+            '"disabled_subagent_models":["grok-4.5","qwen3.8-max-preview"]',
+            context,
+        )
 
     def test_main_rejects_an_invalid_configuration(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1257,14 +1434,21 @@ class MainTests(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, "configuration error"):
                 self.run_main("--config", str(path))
 
-    def run_main(self, *arguments: str) -> str:
+    def run_main(
+        self, *arguments: str, disabled_models: list[str] | None = None
+    ) -> str:
         stdout = io.StringIO()
         with tempfile.TemporaryDirectory() as directory:
             effective_arguments = list(arguments)
             if "--disabled-models-config" not in effective_arguments:
                 policy = Path(directory) / "disabled.json"
                 policy.write_text(
-                    json.dumps({"version": 1, "disabledModels": []}),
+                    json.dumps(
+                        {
+                            "version": 1,
+                            "disabledModels": disabled_models or [],
+                        }
+                    ),
                     encoding="utf-8",
                 )
                 effective_arguments.extend(["--disabled-models-config", str(policy)])

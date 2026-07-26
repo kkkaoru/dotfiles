@@ -24,6 +24,8 @@ mod tests {
         let configured = BackendRoute {
             model: "configured".to_owned(),
             backend: BackendKind::ConfiguredAcp,
+            model_provider: None,
+            model_catalog_json: None,
             max_context_tokens: None,
             model_prefixes: Vec::new(),
             acp: Some(AcpLaunch {

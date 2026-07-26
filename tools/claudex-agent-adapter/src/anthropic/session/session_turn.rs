@@ -10,6 +10,7 @@ use super::super::{
 };
 
 impl Bridge {
+    #[allow(clippy::too_many_arguments)]
     pub(super) async fn start_selected_turn(
         &self,
         request: &MessagesRequest,
@@ -19,6 +20,7 @@ impl Bridge {
         tool_results: Vec<ToolResult>,
         advisor_model: Option<&str>,
         collaborator_model: Option<&str>,
+        allow_context_retry: bool,
     ) -> Result<ActiveTurn> {
         let mut selected = selected;
         let mut existing_len = selected.existing_len;
@@ -88,8 +90,52 @@ impl Bridge {
             response_model,
             extras,
             input_tokens,
+            retry: allow_context_retry.then(|| super::super::ContextRetry {
+                request: request.clone(),
+                effort: effort.clone(),
+                advisor_model: advisor_model.map(str::to_owned),
+                collaborator_model: collaborator_model.map(str::to_owned),
+            }),
             gate: selected.gate,
         })
+    }
+
+    pub(in crate::anthropic) async fn retry_after_context_window(
+        &self,
+        retry: super::super::ContextRetry,
+        previous: &std::sync::Arc<Session>,
+        input_tokens: u64,
+    ) -> Result<ActiveTurn> {
+        let signature = std::sync::Arc::clone(&previous.signature);
+        self.remove_session(previous).await;
+        let effort = retry.effort.clone();
+        let advisor_model = retry.advisor_model.clone();
+        let collaborator_model = retry.collaborator_model.clone();
+        let session = self
+            .create_session(
+                &retry.request,
+                signature,
+                retry.advisor_model.as_deref(),
+                retry.collaborator_model.as_deref(),
+            )
+            .await?;
+        let gate = std::sync::Arc::clone(&session.gate).lock_owned().await;
+        self.start_selected_turn(
+            &retry.request,
+            input_tokens,
+            effort,
+            SelectedSession {
+                session,
+                existing_len: 0,
+                recovered: false,
+                gate,
+            },
+            Vec::new(),
+            advisor_model.as_deref(),
+            collaborator_model.as_deref(),
+            false,
+        )
+        .await
     }
 
     pub(super) async fn start_new_session(
@@ -142,7 +188,7 @@ impl Bridge {
     }
 }
 
-pub(super) fn is_context_window_exceeded(error: &anyhow::Error) -> bool {
+pub(in crate::anthropic) fn is_context_window_exceeded(error: &anyhow::Error) -> bool {
     contains_context_window_marker(&error.to_string())
 }
 

@@ -84,7 +84,18 @@ async fn serves_models_counts_plain_messages_and_continuations() {
         .json()
         .await
         .expect("decode models");
-    assert_eq!(models["data"][0]["id"], "test-main-model");
+    assert_eq!(models["data"][0]["id"], "claude-claudex-test-main-model");
+    assert_eq!(models["data"][0]["display_name"], "test-main-model");
+    let model_ids = models["data"]
+        .as_array()
+        .expect("model list")
+        .iter()
+        .filter_map(|model| model["id"].as_str())
+        .collect::<Vec<_>>();
+    assert!(model_ids.contains(&"claude-claudex-test-main-model"));
+    assert!(models["data"].as_array().expect("model list").iter().all(|model| {
+        model["type"] == "model" && model["display_name"].as_str().is_some_and(|name| !name.is_empty())
+    }));
 
     let count = post_json(
         &client,
@@ -99,6 +110,12 @@ async fn serves_models_counts_plain_messages_and_continuations() {
     assert_eq!(plain["stop_reason"], "end_turn");
     assert_eq!(plain["usage"]["input_tokens"], 17);
     assert_eq!(plain["usage"]["output_tokens"], 3);
+
+    let mut discovered = base_request();
+    discovered["model"] = json!("claude-claudex-test-main-model");
+    let discovery_adapter = Adapter::start().await;
+    let discovered = post_json(&client, &messages_url(&discovery_adapter), discovered).await;
+    assert_eq!(discovered["content"][0]["text"], "OK");
 
     let continued = post_json(
         &client,
@@ -156,7 +173,7 @@ async fn renders_codex_provider_tools_as_progress_without_executable_tool_use() 
         .iter()
         .filter_map(|block| block["text"].as_str())
         .collect::<String>();
-    assert!(text.contains("▶ Read config"), "response={response}");
+    assert!(!text.contains("▶ Read config"), "response={response}");
     assert!(
         text.contains("CODEX_PROVIDER_PROGRESS_OK"),
         "response={response}"
@@ -449,6 +466,48 @@ async fn handles_retry_failed_turn_and_detached_errors() {
         .expect("read detached failure stream");
     assert!(detached.contains("event: error"));
     assert!(detached.contains("detached failure"));
+}
+
+#[tokio::test]
+async fn retries_terminal_context_window_errors_once_on_a_fresh_thread() {
+    let adapter = Adapter::start().await;
+    let client = Client::new();
+    let recovered = post_json(
+        &client,
+        &messages_url(&adapter),
+        json!({
+            "model":"test-main-model", "system":"Context retry test",
+            "messages":[{"role":"user","content":"CONTEXT_WINDOW_ONCE"}]
+        }),
+    )
+    .await;
+    assert_eq!(
+        recovered["content"][0]["text"],
+        "OK_AFTER_CONTEXT_RESTART"
+    );
+}
+
+#[tokio::test]
+async fn bounds_context_window_retry_to_one_fresh_thread() {
+    let adapter = Adapter::start().await;
+    let client = Client::new();
+    let failed = client
+        .post(messages_url(&adapter))
+        .json(&json!({
+            "model":"test-main-model", "system":"Context retry bound",
+            "messages":[{"role":"user","content":"CONTEXT_WINDOW_ALWAYS"}]
+        }))
+        .send()
+        .await
+        .expect("request bounded context retry");
+    assert_eq!(failed.status(), reqwest::StatusCode::BAD_GATEWAY);
+    assert!(
+        failed
+            .text()
+            .await
+            .expect("read context retry failure")
+            .contains("contextWindowExceeded")
+    );
 }
 
 #[tokio::test]

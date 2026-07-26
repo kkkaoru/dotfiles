@@ -1,16 +1,49 @@
 {
   "version": 1,
-  "mainProvider": "codex",
+  "mainProviders": ["codex", "grok", "fugu", "ollama-glm-5-2", "qwen", "opencode-go"],
   "providers": [
     {
       "id": "codex",
-      "agent": "claudex-gpt",
-      "defaultModel": "gpt-5.3-codex-spark",
+      "agent": "claudex-gpt-spark",
+      "defaultModel": "gpt-5.6-sol",
+      "subagentModel": "gpt-5.3-codex-spark",
       "effort": "high",
-      "maxContextTokens": 262144,
+      "maxContextTokens": 110000,
       "enabled": true,
       "usageProvider": "codex",
-      "modelPrefixes": ["gpt"],
+      "modelPrefixes": [
+        "gpt"
+      ],
+      "backend": "codex-app-server"
+    },
+    {
+      "id": "fugu",
+      "agent": "claudex-fugu",
+      "defaultModel": "fugu-ultra-v1.1",
+      "effort": "xhigh",
+      "maxContextTokens": 1000000,
+      "enabled": true,
+      "usageProvider": "sakana",
+      "modelProvider": "sakana",
+      "modelCatalogJson": "~/.codex/fugu.json",
+      "modelPrefixes": [
+        "fugu"
+      ],
+      "backend": "codex-app-server"
+    },
+    {
+      "id": "ollama-glm-5-2",
+      "agent": "claudex-ollama-glm-5-2",
+      "defaultModel": "glm-5.2:cloud",
+      "subagentModel": "glm-5.2:cloud",
+      "effort": "high",
+      "enabled": true,
+      "usageProvider": "ollama",
+      "modelProvider": "ollama-launch-codex-app",
+      "modelCatalogJson": "~/.codex/fugu.json",
+      "modelPrefixes": [
+        "glm-"
+      ],
       "backend": "codex-app-server"
     },
     {
@@ -20,7 +53,9 @@
       "effort": "high",
       "enabled": true,
       "usageProvider": "grok",
-      "modelPrefixes": ["grok"],
+      "modelPrefixes": [
+        "grok"
+      ],
       "backend": "grok-acp"
     },
     {
@@ -30,7 +65,9 @@
       "effort": "high",
       "enabled": true,
       "usageProvider": "qwen",
-      "modelPrefixes": ["qwen"],
+      "modelPrefixes": [
+        "qwen"
+      ],
       "backend": "configured-acp",
       "acp": {
         "program": "/usr/bin/env",
@@ -51,7 +88,9 @@
       "defaultModel": "opencode-go/deepseek-v4-flash",
       "effort": "high",
       "enabled": true,
-      "modelPrefixes": ["opencode-go/"],
+      "modelPrefixes": [
+        "opencode-go/"
+      ],
       "backend": "configured-acp",
       "acp": {
         "program": "opencode",

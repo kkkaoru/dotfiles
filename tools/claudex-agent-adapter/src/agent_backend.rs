@@ -1,18 +1,15 @@
-use std::{fmt, str::FromStr, sync::Arc};
-
-use anyhow::{Context, Result, bail};
-use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
-
 use crate::{
     app_server::{AppServer, ThreadEvents},
     copilot_acp::CopilotAcp,
     grok_acp::GrokAcp,
 };
-
+use anyhow::{Context, Result, bail};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use std::{fmt, str::FromStr, sync::Arc};
+mod route_config;
 mod routes;
 use routes::{RoutedBackend, RoutedBackends};
-
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum BackendKind {
@@ -38,7 +35,6 @@ impl fmt::Display for BackendKind {
 }
 impl FromStr for BackendKind {
     type Err = anyhow::Error;
-
     fn from_str(value: &str) -> Result<Self> {
         match value {
             "codex-app-server" => Ok(Self::CodexAppServer),
@@ -57,12 +53,15 @@ pub struct AcpLaunch {
     pub program: String,
     pub arguments: Vec<String>,
 }
-
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct BackendRoute {
     pub model: String,
     pub backend: BackendKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_catalog_json: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_context_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -75,14 +74,17 @@ impl BackendRoute {
         Self {
             model: model.into(),
             backend,
+            model_provider: None,
+            model_catalog_json: None,
             max_context_tokens: None,
             model_prefixes: Vec::new(),
             acp: None,
         }
     }
-
     pub fn description(&self) -> String {
-        if self.max_context_tokens.is_none()
+        if self.model_provider.is_none()
+            && self.model_catalog_json.is_none()
+            && self.max_context_tokens.is_none()
             && self.model_prefixes.is_empty()
             && self.acp.is_none()
         {
@@ -93,7 +95,6 @@ impl BackendRoute {
 }
 impl FromStr for BackendRoute {
     type Err = anyhow::Error;
-
     fn from_str(value: &str) -> Result<Self> {
         let (model, backend) = value
             .split_once('=')
@@ -127,7 +128,6 @@ impl AgentBackend {
             BackendKind::GrokAcp => Ok(Arc::new(Self::Grok(GrokAcp::spawn(model).await?))),
         }
     }
-
     async fn spawn_route(route: &BackendRoute) -> Result<Arc<Self>> {
         if let Some(acp) = &route.acp {
             return Ok(Arc::new(Self::ConfiguredAcp(
@@ -136,7 +136,6 @@ impl AgentBackend {
         }
         Self::spawn(route.backend, &route.model).await
     }
-
     pub fn spawn_routes(routes: &[BackendRoute]) -> Arc<Self> {
         Arc::new(Self::Routed(RoutedBackends::lazy(routes)))
     }
@@ -260,6 +259,7 @@ impl AgentBackend {
                     .and_then(Value::as_str)
                     .unwrap_or_default();
                 let (index, route) = routes.resolve(model)?;
+                let params = route.thread_start_params(params);
                 let mut response = if route.kind == BackendKind::CodexAppServer {
                     let backend = route.get().await?;
                     Box::pin(backend.request(method, params)).await?

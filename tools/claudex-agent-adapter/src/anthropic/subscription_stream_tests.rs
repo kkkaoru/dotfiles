@@ -257,7 +257,7 @@ async fn collects_sequential_subscription_agents_into_one_outer_tool_round() {
                     "usage":{"output_tokens":7},
                     "content":[{
                         "type":"tool_use", "id":"tool-subscription", "name":"Agent",
-                        "input":{"prompt":"work", "subagent_type":"claudex-gpt"}
+                        "input":{"prompt":"work", "subagent_type":"claudex-gpt-spark"}
                     }]
                 }
             })

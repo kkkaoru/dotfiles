@@ -39,6 +39,9 @@ retained.
    When the main session must await results before synthesis, launch independent calls together as
    foreground calls in one tool round. Use background execution only when useful independent work
    can continue or the task must outlive the turn; its notifications join the next-turn input queue.
+   Emit every intended independent Agent/Task call in the same assistant response and tool round;
+   never launch one and defer the rest. Do not announce a worker count unless that same response
+   contains exactly that many launch calls.
 4. Use the configured fallback only when every capacity-managed provider is unavailable.
 5. Use Claude Code's built-in parameterless `advisor()` tool according to its standard policy. It
    automatically receives the complete conversation history, never replaces an implementation

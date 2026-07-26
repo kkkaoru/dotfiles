@@ -20,7 +20,7 @@ flowchart LR
     Fish --> Adapter[claudex-agent-adapter]
     Adapter --> Orchestrator[Claude main session]
     Orchestrator --> Hook[provider利用状況フック]
-    Hook --> Codex[claudex-gpt\nCodex app-server]
+    Hook --> Codex[claudex-gpt-spark\nCodex app-server]
     Hook --> Grok[claudex-grok\nGrok ACP]
     Hook --> Qwen[claudex-qwen\nQwen Code ACP]
     Hook --> DeepSeek[claudex-deepseek\nOpenCode Go ACP]
@@ -32,15 +32,18 @@ flowchart LR
 
 | 役割 | Agent | Model | Effort | 選択条件 |
 | --- | --- | --- | --- | --- |
-| Orchestrator | 通常のmain session | Claude Code設定 (`sonnet`) | Claude Code設定 (`xhigh`) | 通常起動 |
-| Codex worker | `claudex-gpt` | `gpt-5.3-codex-spark` | `high` | Codexに空きがある場合 |
+| Orchestrator | 通常のmain session | `gpt-5.6-sol` | `high` | `mainProviders` の優先順と空き状況で選択 |
+| Codex worker | `claudex-gpt-spark` | `gpt-5.3-codex-spark` | `high` | Codexに空きがある場合 |
+| Fugu worker | `claudex-fugu` | `fugu-ultra-v1.1` | `xhigh` | CodexBarのSakana枠に空きがある場合 |
+| Ollama GLM worker | `claudex-ollama-glm-5-2` | `glm-5.2:cloud` | `high` | CodexBarのOllama枠に空きがある場合 |
 | Grok worker | `claudex-grok` | `grok-4.5` | `high` | Grokに空きがある場合 |
-| Qwen worker | `claudex-qwen` | `qwen3.8-max-preview` | `high` | Qwen Cloud quotaまたはcompatible APIが利用可能な場合 |
+| Qwen worker | `claudex-qwen` | `qwen3.8-max-preview` | `high` | providerは維持するがSubAgentではdenylistにより禁止 |
 | DeepSeek worker | `claudex-deepseek` | `opencode-go/deepseek-v4-flash` | `high` | OpenCode Go ACP（usage未連携のため unmetered） |
 | Fallback | `claudex-sonnet` | `claude-sonnet-5` | `high` | 利用率を管理するproviderをすべて利用できない場合 |
 | Advisor | Claude Code標準 `advisor()` | `opus` | Claude Code標準 | 標準advisor policyに従う |
 
-worker のAgent定義と `providers.json` の両方に同じ固定モデルを指定します。adapterは
+worker のAgent定義と `providers.json` の `subagentModel` に同じ固定モデルを指定します。
+`defaultModel` はmain session用で、省略時はworkerにも使われます。adapterは
 呼び出し時の `claudex_model` を最終的なprovider routeとして扱い、テストでfrontmatterと
 共有設定の不一致を検出します。
 
@@ -64,10 +67,12 @@ approval待機やauto classifierがSubAgentの権限を狭めないようにし�
 
 ## ルーティング
 
-1. `claudex` はClaude Code設定のモデルとeffortを継承した通常のmain sessionを起動し、
-   claudex実行時だけglobal hookでorchestration contextを追加します。`mainProvider` は
-   adapterのbootstrap routeとworker設定に使われ、通常起動のouter sessionへは強制しません。
-2. prompt送信時にCodex/Grokは `codexbar usage --json` を使います。QwenはQwen Cloudの
+1. `claudex` は `mainProviders` の順に利用可能なproviderを選び、その `defaultModel` でmain
+   sessionを起動します。claudex実行時だけglobal hookでorchestration contextを追加します。
+   `subagentModel` があるproviderではworkerだけを別モデルへ固定します。
+2. prompt送信時にCodex/Grok/Sakana/Ollamaは `codexbar usage --json` を使います。Ollamaの
+   usage取得に失敗した場合はlocal Ollama APIのmodel catalogを確認し、対象modelが存在すれば
+   残量不明の候補として維持します。QwenはQwen Cloudの
    5時間・7日quotaを取得し、成功時刻から1時間未満はlocal cacheを再利用します。routing結果
    全体は既定で5分間キャッシュされます。
 3. 各providerをquota windowの最大使用率が低い順、つまり最小残量の制約に最も余裕がある順に
@@ -77,7 +82,7 @@ approval待機やauto classifierがSubAgentの権限を狭めないようにし�
 4. mainまたはworkerがAgent/Taskを起動するたび、そのturnへ注入された
    `selected_workers` からAgentを選び、model/effortを明示します。nested起動でもgeneric
    `claude`へのdefaultや親providerの無条件継承は行いません。
-5. promptに `gpt...`、`grok...` または `qwen...` の完全なモデルIDがある場合は、
+5. promptに `gpt...`、`fugu...`、`glm-...`、`grok...` または `qwen...` の完全なモデルIDがある場合は、
    `modelPrefixes` が一致するproviderへそのIDをそのまま渡します。ただし、専用設定と
    端末固有の追加設定を統合したdeny listに含まれる完全一致モデルは明示指定でも拒否します。
 6. providerを利用できない場合はClaude subscriptionのfallbackを使います。
@@ -280,12 +285,13 @@ Orchestratorは完全なモデルIDを `claudex_model` としてAgentへ渡し�
 ### SubAgentモデルを禁止
 
 provider設定とは分離した `~/.config/claudex/disabled-subagent-models.json` に、常に禁止する
-完全一致モデルを定義します。repositoryでは現在 `gpt-5.6` と `grok-4.5` を禁止しています。
+完全一致モデルを定義します。repositoryでは現在 `grok-4.5` と `qwen3.8-max-preview` を
+SubAgentで禁止しています。
 
 ```json
 {
   "version": 1,
-  "disabledModels": ["gpt-5.6", "grok-4.5"]
+  "disabledModels": ["grok-4.5", "qwen3.8-max-preview"]
 }
 ```
 
@@ -343,6 +349,10 @@ CLAUDEX_ADAPTER_LISTEN=127.0.0.1:9418 claudex
 CLAUDEX_DISABLED_SUBAGENT_MODELS=gpt-5.6,grok-4.5 claudex
 ```
 
+通常の `claude` と `claudex` はともに `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS=40` で起動します。
+`claudex` はadapter側の `subscription-max-processes` も既定で40に揃えます。実行中のsessionには
+反映されないため、上限変更後は新しいsessionを起動してください。
+
 `CLAUDEX_USAGE_CACHE_SECONDS=0` は調査時だけ使用してください。通常はprovider CLIへの
 不要な問い合わせを避けるため、既定の5分キャッシュを推奨します。
 
@@ -350,17 +360,21 @@ CLAUDEX_DISABLED_SUBAGENT_MODELS=gpt-5.6,grok-4.5 claudex
 
 ### 既存providerのモデルを変更
 
-`providers.json` の `defaultModel` を変更します。同じproviderで将来追加されるモデルを
+main sessionのモデルは `providers.json` の `defaultModel`、workerのモデルは任意の
+`subagentModel` を変更します。同じproviderで将来追加されるモデルを
 動的に受け入れる場合は `modelPrefixes` を維持または追加します。
 
-`defaultModel`、対応するworker frontmatter、呼び出し時の `claudex_model` を同じ値へ
-更新してください。テストは共有設定とAgent定義の不一致を拒否します。
+`subagentModel`（省略時は `defaultModel`）、対応するworker frontmatter、呼び出し時の
+`claudex_model` を同じ値へ更新してください。テストは共有設定とAgent定義の不一致を拒否します。
 
 `maxContextTokens` をproviderごとに設定すると、`request` の概算入力トークン数が上限に達した時点で
 新しいCodexスレッドを先に開始し、`contextWindowExceeded` を事前回避できます。未設定は現行どおり
 既定値なし（制御なし）として扱われます。`gpt-5.3-codex-spark` は、
-実運用ログ上 `max_chars=1048576` が上限だったため、`maxContextTokens` は
-`262144`（`1048576 / 4`）を採用しています。
+2026-07-26 の実運用ログで約116k入力トークン時に上限へ到達したため、再構築時の
+システム指示やtool schemaの余白を確保して `110000` を採用しています。
+`fugu` / `fugu-ultra-v1.1` はCodex catalogの1M context windowに合わせて
+`1000000` を指定しています。いずれもproviderが実際の上限を先に返した場合は、
+非streaming turnを新規threadで1回だけ自動再試行します。
 
 ### providerを無効化
 
