@@ -22,7 +22,10 @@ use crate::{app_server::events::ThreadEventDispatcher, path_env};
 pub(super) enum AcpProvider {
     Grok,
     Copilot,
+    /// The model must be selected with ACP `set_session_model`.
     Configured,
+    /// The configured command receives the model through a `{model}` argument.
+    ConfiguredLaunchScoped,
 }
 
 impl AcpProvider {
@@ -30,7 +33,7 @@ impl AcpProvider {
         match self {
             Self::Grok => "Grok",
             Self::Copilot => "Copilot",
-            Self::Configured => "Configured",
+            Self::Configured | Self::ConfiguredLaunchScoped => "Configured",
         }
     }
 
@@ -38,8 +41,16 @@ impl AcpProvider {
         match self {
             Self::Grok => "claudex-grok-acp",
             Self::Copilot => "claudex-copilot-acp",
-            Self::Configured => "claudex-configured-acp",
+            Self::Configured | Self::ConfiguredLaunchScoped => "claudex-configured-acp",
         }
+    }
+
+    pub(super) const fn model_is_launch_scoped(self) -> bool {
+        matches!(self, Self::ConfiguredLaunchScoped)
+    }
+
+    pub(super) const fn is_session_scoped_configured(self) -> bool {
+        matches!(self, Self::Configured)
     }
 }
 
@@ -75,7 +86,7 @@ pub(super) async fn start(
         AcpProvider::Copilot => {
             command.args(["--acp", "--stdio", "--model", model]);
         }
-        AcpProvider::Configured => {
+        AcpProvider::Configured | AcpProvider::ConfiguredLaunchScoped => {
             let arguments = arguments.context("configured ACP arguments are required")?;
             command.args(
                 arguments

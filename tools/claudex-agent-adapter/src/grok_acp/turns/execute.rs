@@ -18,6 +18,7 @@ use crate::{
 // Session creation is bounded; effort setup must not hang a turn forever when a
 // provider ignores or stalls on set_session_model (observed with configured ACP).
 const EFFORT_SETUP_TIMEOUT: Duration = Duration::from_secs(8);
+const CONFIGURED_ACP_RECOVERY_PROMPT: &str = "The previous provider stream failed after partial execution. Do not repeat completed tool actions. Inspect this same session and the current working tree, finish only incomplete safe work, then return a concise final report with results, validation, and remaining blockers.";
 
 enum EffortSetupError {
     TimedOut,
@@ -109,13 +110,7 @@ async fn apply_effort(
     effort: Option<&str>,
     id: &acp::SessionId,
 ) -> bool {
-    let Some(effort) = effort else {
-        return true;
-    };
-    // Configured ACP (qwen) already receives --model on process start. Calling
-    // set_session_model each turn has been observed to stall or fail; when it
-    // times out the full EFFORT_SETUP_TIMEOUT is paid on every turn.
-    if ctl.provider == AcpProvider::Configured {
+    if ctl.provider.model_is_launch_scoped() {
         tracing::debug!(
             session_id = ctl.session_id,
             effort,
@@ -123,12 +118,18 @@ async fn apply_effort(
         );
         return true;
     }
+    if effort.is_none() && !ctl.provider.is_session_scoped_configured() {
+        return true;
+    }
     let mut meta = Map::new();
-    meta.insert(
-        "reasoningEffort".to_owned(),
-        Value::String(effort.to_owned()),
-    );
-    let request = acp::SetSessionModelRequest::new(id.clone(), model.to_owned()).meta(Some(meta));
+    if let Some(effort) = effort {
+        meta.insert(
+            "reasoningEffort".to_owned(),
+            Value::String(effort.to_owned()),
+        );
+    }
+    let request = acp::SetSessionModelRequest::new(id.clone(), model.to_owned())
+        .meta((!meta.is_empty()).then_some(meta));
     let setup_started = Rc::new(Cell::new(false));
     let setup = {
         let connection = Rc::clone(connection);
@@ -169,6 +170,16 @@ fn finish_effort_setup(ctl: &mut TurnCtl<'_>, setup_result: Result<(), EffortSet
             }
             true
         }
+        Err(EffortSetupError::TimedOut) if ctl.provider.is_session_scoped_configured() => {
+            fail_model_setup(
+                ctl,
+                format!(
+                    "{} ACP model selection timed out after {:?}",
+                    ctl.provider.label(),
+                    EFFORT_SETUP_TIMEOUT
+                ),
+            )
+        }
         Err(EffortSetupError::TimedOut) => continue_without_effort(
             ctl,
             format!(
@@ -177,7 +188,7 @@ fn finish_effort_setup(ctl: &mut TurnCtl<'_>, setup_result: Result<(), EffortSet
                 EFFORT_SETUP_TIMEOUT
             ),
         ),
-        Err(EffortSetupError::Failed(error)) if ctl.provider == AcpProvider::Configured => {
+        Err(EffortSetupError::Failed(error)) if ctl.provider.model_is_launch_scoped() => {
             continue_without_effort(
                 ctl,
                 format!(
@@ -186,17 +197,24 @@ fn finish_effort_setup(ctl: &mut TurnCtl<'_>, setup_result: Result<(), EffortSet
                 ),
             )
         }
-        Err(EffortSetupError::Failed(error)) => {
-            let message = format!("{} ACP set effort failed: {error:?}", ctl.provider.label());
-            drop(ctl.permit.take());
-            ctl.active_turns.borrow_mut().remove(ctl.session_id);
-            if let Ok(cancellation) = ctl.cancellation.try_recv() {
-                let _ = cancellation.response.send(Err(anyhow!(message.clone())));
-            }
-            updates::dispatch_error(ctl.events, ctl.session_id, message);
-            false
-        }
+        Err(EffortSetupError::Failed(error)) => fail_model_setup(
+            ctl,
+            format!(
+                "{} ACP model selection failed: {error:?}",
+                ctl.provider.label()
+            ),
+        ),
     }
+}
+
+fn fail_model_setup(ctl: &mut TurnCtl<'_>, message: String) -> bool {
+    drop(ctl.permit.take());
+    ctl.active_turns.borrow_mut().remove(ctl.session_id);
+    if let Ok(cancellation) = ctl.cancellation.try_recv() {
+        let _ = cancellation.response.send(Err(anyhow!(message.clone())));
+    }
+    updates::dispatch_error(ctl.events, ctl.session_id, message);
+    false
 }
 
 fn continue_without_effort(ctl: &mut TurnCtl<'_>, warning: String) -> bool {
@@ -237,11 +255,40 @@ async fn run_prompt(
     id: acp::SessionId,
     prompt: String,
 ) {
-    let session_id = ctl.session_id;
     let request = acp::PromptRequest::new(
-        id,
+        id.clone(),
         vec![acp::ContentBlock::Text(acp::TextContent::new(prompt))],
     );
+    let Some(mut response) = prompt_once(&mut ctl, &connection, request).await else {
+        return;
+    };
+    if response.is_err() && ctl.provider.is_session_scoped_configured() {
+        tracing::warn!(
+            session_id = ctl.session_id,
+            "Configured ACP stream failed; requesting one same-session recovery summary"
+        );
+        let recovery = acp::PromptRequest::new(
+            id,
+            vec![acp::ContentBlock::Text(acp::TextContent::new(
+                CONFIGURED_ACP_RECOVERY_PROMPT,
+            ))],
+        );
+        let Some(recovered) = prompt_once(&mut ctl, &connection, recovery).await else {
+            return;
+        };
+        response = recovered;
+    }
+    drop(ctl.permit.take());
+    ctl.active_turns.borrow_mut().remove(ctl.session_id);
+    finish_prompt(ctl.provider, ctl.session_id, response, ctl.events).await;
+}
+
+async fn prompt_once(
+    ctl: &mut TurnCtl<'_>,
+    connection: &Rc<acp::ClientSideConnection>,
+    request: acp::PromptRequest,
+) -> Option<acp::Result<acp::PromptResponse>> {
+    let session_id = ctl.session_id;
     let prompt_started = Rc::new(Cell::new(false));
     let prompt = {
         let connection = Rc::clone(&connection);
@@ -267,7 +314,7 @@ async fn run_prompt(
         cancellation = &mut *ctl.cancellation => match cancellation {
             Ok(cancellation) => {
                 handle_prompt_cancellation(
-                    &mut ctl,
+                    ctl,
                     &connection,
                     prompt_started.get(),
                     prompt,
@@ -279,11 +326,7 @@ async fn run_prompt(
             Err(_) => Some(prompt.await),
         },
     };
-    if let Some(response) = response {
-        drop(ctl.permit.take());
-        ctl.active_turns.borrow_mut().remove(session_id);
-        finish_prompt(ctl.provider, session_id, response, ctl.events).await;
-    }
+    response
 }
 
 async fn handle_prompt_cancellation<F>(

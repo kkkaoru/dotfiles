@@ -175,7 +175,9 @@ fn prepare_turn(
         .and_then(Value::as_str)
         .and_then(|effort| match provider {
             AcpProvider::Grok => prompt::grok_effort(effort),
-            AcpProvider::Configured | AcpProvider::Copilot => prompt::copilot_effort(effort),
+            AcpProvider::Configured
+            | AcpProvider::ConfiguredLaunchScoped
+            | AcpProvider::Copilot => prompt::copilot_effort(effort),
         })
         .map(str::to_owned);
     Ok(PreparedTurn {

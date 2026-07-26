@@ -366,6 +366,13 @@ impl acp::Agent for MockAgent {
         if self.mode == "fail-prompt" {
             return Err(acp::Error::internal_error());
         }
+        if self.mode == "fail-prompt-once" {
+            let marker = self.trace.with_file_name("grok-acp-prompt-failed-once");
+            if !marker.exists() {
+                std::fs::write(marker, b"failed").map_err(|_| acp::Error::internal_error())?;
+                return Err(acp::Error::internal_error());
+            }
+        }
         if self.mode == "coverage-updates" {
             self.send_coverage_updates(request.session_id.clone())
                 .await?;

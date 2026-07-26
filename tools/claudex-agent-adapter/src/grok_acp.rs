@@ -111,8 +111,17 @@ impl GrokAcp {
 
     pub async fn spawn_configured(model: &str, launch: &AcpLaunch) -> Result<Arc<Self>> {
         let cwd = std::env::current_dir().context("resolve configured ACP working directory")?;
+        let provider = if launch
+            .arguments
+            .iter()
+            .any(|argument| argument.contains("{model}"))
+        {
+            AcpProvider::ConfiguredLaunchScoped
+        } else {
+            AcpProvider::Configured
+        };
         Self::spawn_provider(
-            AcpProvider::Configured,
+            provider,
             model,
             &launch.program,
             Some(launch.arguments.clone()),
@@ -131,7 +140,9 @@ impl GrokAcp {
         let (command_tx, command_rx) = mpsc::channel(COMMAND_QUEUE_CAPACITY);
         let session_permits = Arc::new(tokio::sync::Semaphore::new(SESSION_QUEUE_CAPACITY));
         let turn_capacity = match provider {
-            AcpProvider::Configured => CONFIGURED_TURN_QUEUE_CAPACITY,
+            AcpProvider::Configured | AcpProvider::ConfiguredLaunchScoped => {
+                CONFIGURED_TURN_QUEUE_CAPACITY
+            }
             AcpProvider::Grok | AcpProvider::Copilot => TURN_QUEUE_CAPACITY,
         };
         let turn_permits = Arc::new(tokio::sync::Semaphore::new(

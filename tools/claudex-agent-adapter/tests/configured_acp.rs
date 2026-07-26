@@ -88,6 +88,71 @@ async fn configured_acp_routes_dynamic_models_and_expands_arguments() {
             .is_err()
     );
     assert!(leaf.respond(json!(1), json!({})).await.is_err());
+
+    session_scoped_configured_acp_sets_model_and_recovers_one_failed_stream().await;
+}
+
+async fn session_scoped_configured_acp_sets_model_and_recovers_one_failed_stream() {
+    let root = tempfile::tempdir().expect("session-scoped ACP fixture");
+    std::env::set_current_dir(root.path()).expect("isolate ACP trace");
+    let agent = claudex_agent_adapter::grok_acp::GrokAcp::spawn_configured(
+        "opencode-go/deepseek-v4-flash",
+        &AcpLaunch {
+            program: env!("CARGO_BIN_EXE_grok-acp-mock").to_owned(),
+            arguments: vec!["--mode".to_owned(), "fail-prompt-once".to_owned()],
+        },
+    )
+    .await
+    .expect("start session-scoped ACP");
+    let backend = AgentBackend::configured_acp(agent);
+    let response = backend
+        .request(
+            "thread/start",
+            json!({"model":"opencode-go/deepseek-v4-flash","cwd":root.path()}),
+        )
+        .await
+        .expect("start session");
+    let thread_id = response["thread"]["id"].as_str().unwrap();
+    let receiver = backend.subscribe_thread(thread_id);
+    backend
+        .request_detached(
+            "turn/start",
+            json!({"threadId":thread_id,"input":"do work","effort":"high"}),
+        )
+        .await
+        .expect("start recoverable turn");
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let event = receiver.recv().await.expect("ACP event");
+            if event["method"] == "turn/completed" {
+                break;
+            }
+            assert_ne!(event["method"], "error", "unexpected ACP error: {event}");
+        }
+    })
+    .await
+    .expect("recovered turn completed");
+
+    let trace = std::fs::read_to_string(root.path().join("grok-acp-mock.jsonl"))
+        .expect("configured ACP trace")
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("trace event"))
+        .collect::<Vec<_>>();
+    assert!(trace.iter().any(|event| {
+        event
+            .pointer("/set_model/modelId")
+            .is_some_and(|model| model == "opencode-go/deepseek-v4-flash")
+    }));
+    let prompts = trace
+        .iter()
+        .filter_map(|event| event.get("prompt"))
+        .collect::<Vec<_>>();
+    assert_eq!(prompts.len(), 2);
+    assert!(
+        prompts[1]
+            .to_string()
+            .contains("Do not repeat completed tool actions")
+    );
 }
 
 async fn assert_params_cwd(backend: &AgentBackend, root: &std::path::Path) {
