@@ -63,6 +63,14 @@ pub(crate) fn write_adapter_log_header(
 }
 
 pub(crate) fn adapter_log_path(cache: &Path, listen: &SocketAddr) -> PathBuf {
+    cache.join(format!("adapter.{}.log", listen_token(listen)))
+}
+
+pub(crate) fn adapter_lock_path(cache: &Path, listen: &SocketAddr) -> PathBuf {
+    cache.join(format!("adapter.port-{}.lock", listen.port()))
+}
+
+fn listen_token(listen: &SocketAddr) -> String {
     let token: String = listen
         .to_string()
         .chars()
@@ -75,7 +83,7 @@ pub(crate) fn adapter_log_path(cache: &Path, listen: &SocketAddr) -> PathBuf {
         })
         .collect();
     if token.is_empty() {
-        return cache.join("adapter.unknown-listen.log");
+        return "unknown-listen".to_owned();
     }
-    cache.join(format!("adapter.{token}.log"))
+    token
 }

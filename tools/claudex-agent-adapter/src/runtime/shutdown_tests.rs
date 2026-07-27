@@ -3,6 +3,9 @@ use std::{sync::Arc, time::Duration};
 use axum::{extract::State, routing::get};
 use tokio::sync::Notify;
 
+const LISTENER_RELEASE_TIMEOUT: Duration = Duration::from_secs(1);
+const LISTENER_RETRY_INTERVAL: Duration = Duration::from_millis(5);
+
 #[derive(Clone)]
 struct SlowResponse {
     entered: Arc<Notify>,
@@ -44,7 +47,22 @@ async fn drains_an_active_response_before_server_shutdown() {
     });
     entered.notified().await;
     shutdown.notify_one();
-    assert!(tokio::time::timeout(Duration::from_millis(20), server).await.is_err());
+    let replacement_listener = tokio::time::timeout(LISTENER_RELEASE_TIMEOUT, async {
+        loop {
+            match tokio::net::TcpListener::bind(address).await {
+                Ok(listener) => break listener,
+                Err(_) => tokio::time::sleep(LISTENER_RETRY_INTERVAL).await,
+            }
+        }
+    })
+    .await
+    .expect("graceful shutdown must release the listener before responses drain");
+    assert!(!response.is_finished());
+    drop(replacement_listener);
     release.notify_one();
     assert_eq!(response.await.expect("request task"), "complete");
+    server
+        .await
+        .expect("server task")
+        .expect("graceful server shutdown");
 }

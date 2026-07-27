@@ -4,6 +4,7 @@ use std::{
     net::TcpListener,
     os::unix::fs::PermissionsExt,
     process::Command,
+    sync::{Arc, Barrier},
     thread,
     time::{Duration, Instant},
 };
@@ -11,6 +12,116 @@ use std::{
 use reqwest::Client;
 use serde_json::Value;
 use tempfile::TempDir;
+
+const ACTIVE_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+const FILE_POLL_INTERVAL: Duration = Duration::from_millis(10);
+const CONCURRENT_LAUNCHERS: usize = 4;
+const DAEMON_START_MARKER: &str = "=== claudex-agent-adapter daemon start ===";
+
+#[tokio::test]
+async fn protocol_compatible_build_replacement_preserves_an_active_response() {
+    let home = launcher_home();
+    let port = unused_port();
+    let stale_binary = home.path().join("stale/claudex-agent-adapter");
+    fs::create_dir_all(stale_binary.parent().expect("stale binary directory"))
+        .expect("create stale binary directory");
+    fs::copy(env!("CARGO_BIN_EXE_stale-adapter-mock"), &stale_binary)
+        .expect("copy stale adapter fixture");
+    fs::set_permissions(&stale_binary, fs::Permissions::from_mode(0o755))
+        .expect("make stale adapter executable");
+    let entered = home.path().join("slow-entered");
+    let release = home.path().join("slow-release");
+    let mut stale = Command::new(&stale_binary)
+        .args(["serve", "--listen", &format!("127.0.0.1:{port}")])
+        .args(["--entered", entered.to_str().expect("entered path")])
+        .args(["--release", release.to_str().expect("release path")])
+        .spawn()
+        .expect("start stale adapter fixture");
+    let client = Client::new();
+    let base_url = format!("http://127.0.0.1:{port}");
+    let stale_pid = health(&client, &base_url).await["pid"]
+        .as_u64()
+        .expect("stale adapter pid");
+    let slow = tokio::spawn({
+        let client = client.clone();
+        let base_url = base_url.clone();
+        async move {
+            client
+                .get(format!("{base_url}/slow"))
+                .send()
+                .await
+                .expect("active response")
+                .text()
+                .await
+                .expect("active response body")
+        }
+    });
+    wait_for_file(&entered).await;
+
+    let mut ensure = ensure_command(&home, port, "20");
+    let output = tokio::time::timeout(
+        ACTIVE_REQUEST_TIMEOUT,
+        tokio::task::spawn_blocking(move || ensure.output()),
+    )
+    .await
+    .expect("replacement must become ready while the old response is active")
+    .expect("ensure task")
+    .expect("replace compatible stale build");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let replacement_pid = health(&client, &base_url).await["pid"]
+        .as_u64()
+        .expect("replacement adapter pid");
+    assert_ne!(replacement_pid, stale_pid);
+    assert!(!slow.is_finished());
+    assert!(stale.try_wait().expect("inspect stale adapter").is_none());
+
+    fs::write(&release, "release").expect("release active response");
+    assert_eq!(slow.await.expect("active response task"), "complete");
+    assert!(stale.wait().expect("reap stale adapter").success());
+    terminate(replacement_pid);
+    wait_for_exit(&client, &base_url).await;
+}
+
+#[tokio::test]
+async fn concurrent_ensure_commands_start_exactly_one_daemon() {
+    let home = launcher_home();
+    let port = unused_port();
+    let barrier = Arc::new(Barrier::new(CONCURRENT_LAUNCHERS));
+    let commands = (0..CONCURRENT_LAUNCHERS)
+        .map(|_| ensure_command(&home, port, "20"))
+        .collect::<Vec<_>>();
+    let workers = commands
+        .into_iter()
+        .map(|mut command| {
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || {
+                barrier.wait();
+                command.output().expect("run concurrent ensure")
+            })
+        })
+        .collect::<Vec<_>>();
+    for worker in workers {
+        let output = worker.join().expect("concurrent ensure worker");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    assert_eq!(daemon_start_count(&home), 1);
+    let base_url = format!("http://127.0.0.1:{port}");
+    let client = Client::new();
+    let pid = health(&client, &base_url).await["pid"]
+        .as_u64()
+        .expect("concurrently launched daemon pid");
+    terminate(pid);
+    wait_for_exit(&client, &base_url).await;
+}
 
 #[tokio::test]
 async fn ensure_running_starts_reuses_and_replaces_the_daemon() {
@@ -461,6 +572,25 @@ async fn wait_for_exit(client: &Client, base_url: &str) {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     panic!("adapter daemon did not exit");
+}
+
+async fn wait_for_file(path: &std::path::Path) {
+    tokio::time::timeout(ACTIVE_REQUEST_TIMEOUT, async {
+        while !path.exists() {
+            tokio::time::sleep(FILE_POLL_INTERVAL).await;
+        }
+    })
+    .await
+    .expect("active request marker");
+}
+
+fn daemon_start_count(home: &TempDir) -> usize {
+    fs::read_dir(home.path().join(".cache/claudex"))
+        .expect("read launcher cache")
+        .filter_map(Result::ok)
+        .filter_map(|entry| fs::read_to_string(entry.path()).ok())
+        .map(|contents| contents.matches(DAEMON_START_MARKER).count())
+        .sum()
 }
 
 fn unused_port() -> u16 {

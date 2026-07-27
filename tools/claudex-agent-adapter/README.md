@@ -229,10 +229,13 @@ adapter routing logs. Nested Agent/Task calls remain supported and must apply th
 parent provider.
 
 The adapter's `ensure` command compares the running service's protocol, routes,
-and limits with the installed binary. A source-derived build ID remains exposed
-for diagnostics, but a protocol-compatible daemon is preserved across builds so
-in-flight tool ownership is not lost. It restarts an incompatible service,
-manages its log and readiness checks, and prints the matching base URL.
+limits, and source-derived build ID with the installed binary. A per-port
+cross-process lock serializes concurrent launchers. On a mismatch, `ensure` sends
+SIGTERM so the old listener is released, starts the current build on the same
+address, and lets already accepted responses finish on the old process. Readiness
+requires the current build ID, matching configuration, and successful authentication.
+This handover replaces idle retained sessions without waiting for their retention
+window and does not interrupt in-flight HTTP responses.
 `launch --model MODEL -- ...` scopes Anthropic routing,
 removes conflicting provider and adapter variables, launches Claude Code with
 untouched non-model arguments, and returns Claude Code's exit status. With

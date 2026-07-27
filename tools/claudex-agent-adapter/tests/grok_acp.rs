@@ -737,7 +737,11 @@ async fn await_queued_turn_completion(
 
 async fn assert_session_invalidated(agent: &GrokAcp, setup_id: &str) {
     let invalidated = agent
-        .start_turn(json!({"threadId":setup_id,"input":"MUST NOT REUSE"}))
+        .start_turn(json!({
+            "threadId":setup_id,
+            "priority":"user",
+            "input":"MUST NOT REUSE"
+        }))
         .await
         .expect_err("timed-out setup session was reused");
     assert!(invalidated.to_string().contains("was invalidated"));
@@ -875,7 +879,11 @@ async fn ignored_cancellation_invalidates_only_that_session_and_recovers_capacit
     );
 
     let invalidated = agent
-        .start_turn(json!({"threadId":blocked[0],"input":"MUST NOT REUSE"}))
+        .start_turn(json!({
+            "threadId":blocked[0],
+            "priority":"user",
+            "input":"MUST NOT REUSE"
+        }))
         .await
         .expect_err("timed-out session was reused");
     assert!(invalidated.to_string().contains("was invalidated"));

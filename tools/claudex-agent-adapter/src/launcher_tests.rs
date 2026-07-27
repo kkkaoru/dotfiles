@@ -21,6 +21,7 @@ mod tests {
             token: LOCAL_TOKEN.to_owned(),
             executable: PathBuf::from("/tmp/adapter"),
             log_path: PathBuf::from("/tmp/adapter.log"),
+            lock_path: PathBuf::from("/tmp/adapter.lock"),
         }
     }
 
@@ -61,6 +62,17 @@ mod tests {
     }
 
     #[test]
+    fn serializes_launchers_that_can_compete_for_the_same_port() {
+        let base = std::path::PathBuf::from("/tmp/claudex-lock-cache");
+        let loopback = "127.0.0.1:8318".parse().expect("loopback listener");
+        let wildcard = "0.0.0.0:8318".parse().expect("wildcard listener");
+        assert_eq!(
+            super::launcher_logs::adapter_lock_path(&base, &loopback),
+            super::launcher_logs::adapter_lock_path(&base, &wildcard)
+        );
+    }
+
+    #[test]
     fn rejects_a_second_main_model_argument() {
         assert!(reject_model_override(&["--model".into(), "other".into()]).is_err());
         assert!(reject_model_override(&["--model=other".into()]).is_err());
@@ -76,7 +88,6 @@ mod tests {
             backend_routes: route_descriptions(&config.options.routes),
             subscription_max_processes: 20,
             subscription_timeout_minutes: 120,
-            session_slots_used: 0,
         }
     }
 
@@ -129,8 +140,11 @@ mod tests {
         let mut config = config();
         config.options.listen = "127.0.0.1:1".parse().expect("closed test listener");
         config.executable = PathBuf::from("/definitely/missing/adapter");
-        stop_stale(&config, None).await.expect("absent process");
-        terminate(u32::MAX);
+        let client = reqwest::Client::new();
+        handover::release_stale_listener(&client, &config, None)
+            .await
+            .expect("absent process");
+        daemon_process::terminate(u32::MAX);
         let error = wait_until_ready_with(
             &reqwest::Client::new(),
             &config,
@@ -141,26 +155,9 @@ mod tests {
         .await
         .expect_err("unreachable adapter must time out");
         assert!(error.to_string().contains("failed to start"));
-        stop_stale(&config, Some(std::process::id()))
+        handover::release_stale_listener(&client, &config, Some(std::process::id()))
             .await
             .expect("current process");
-    }
-
-    #[tokio::test]
-    async fn waits_for_graceful_drain_and_bounds_a_stalled_shutdown() {
-        let mut checks = 0;
-        wait_until_stopped_with(Duration::from_secs(1), || {
-            checks += 1;
-            checks == 1
-        })
-        .await
-        .expect("drained process");
-        assert_eq!(checks, 2);
-
-        let error = wait_until_stopped_with(Duration::ZERO, || true)
-            .await
-            .expect_err("stalled drain");
-        assert!(error.to_string().contains("still draining"));
     }
 
     #[test]

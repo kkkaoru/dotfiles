@@ -535,8 +535,10 @@ claudex-agent-adapter ensure \
 curl --fail --silent http://127.0.0.1:8318/health | jq .
 ```
 
-`providers.json` のQwen起動引数を含むroute定義はdaemon互換性判定の対象です。timeout値を変更
-した場合も `ensure` が旧daemonを置き換え、新しいQwen childへ設定を反映します。
+`providers.json` のQwen起動引数を含むroute定義とbuild IDはdaemon切替判定の対象です。
+`ensure` はport単位で多重起動を排他し、旧listenerを解放して同じportへ新buildを
+起動します。旧daemonが受付済みの応答はそのprocess上で完了するため、idle sessionの保持期限を
+待たずに設定とバイナリを反映できます。timeout値を変更した場合も新しいQwen childへ反映します。
 
 外部のlaunchd jobなどが旧 `--backend-route` 引数で同じportをKeepAliveしていると、共有
 設定のdaemonを置き換えてしまいます。その場合は該当jobを停止し、`--provider-config`

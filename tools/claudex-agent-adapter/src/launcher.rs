@@ -12,15 +12,15 @@ use std::{
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
-mod launcher_logs;
 mod daemon_process;
-mod stale;
-use stale::wait_until_stopped_with;
+mod handover;
+mod launcher_lock;
+mod launcher_logs;
 use crate::{
     ADAPTER_PROTOCOL_VERSION, agent_backend::BackendRoute, subagent_policy as policy,
     working_directory,
 };
-use daemon_process::{matches as process_matches, terminate};
+use handover::ServiceState;
 
 const LOCAL_TOKEN: &str = "claudex-local";
 const START_TIMEOUT: Duration = Duration::from_secs(10);
@@ -43,6 +43,7 @@ struct ServiceConfig {
     token: String,
     executable: PathBuf,
     log_path: PathBuf,
+    lock_path: PathBuf,
 }
 
 #[derive(Debug, Deserialize)]
@@ -56,8 +57,6 @@ struct Health {
     backend_routes: Vec<String>,
     subscription_max_processes: usize,
     subscription_timeout_minutes: u64,
-    #[serde(default)]
-    session_slots_used: usize,
 }
 
 impl ServiceConfig {
@@ -75,11 +74,13 @@ impl ServiceConfig {
             .context("HOME is required")?
             .join(".cache/claudex");
         let log_path = launcher_logs::adapter_log_path(&cache, &options.listen);
+        let lock_path = launcher_logs::adapter_lock_path(&cache, &options.listen);
         Ok(Self {
             options,
             token,
             executable,
             log_path,
+            lock_path,
         })
     }
 
@@ -97,8 +98,8 @@ impl ServiceConfig {
     }
 
     fn matches(&self, health: &Health) -> bool {
-        // The protocol version is the compatibility contract. Replacing a compatible daemon
-        // solely for a build change would discard in-flight Claude tool ownership state.
+        // Protocol/config compatibility is separate from build freshness. The handover
+        // state machine checks the build ID without interrupting accepted responses.
         health.status == "ok"
             && health.protocol_version == ADAPTER_PROTOCOL_VERSION
             && health.backend_routes == route_descriptions(&self.options.routes)
@@ -181,26 +182,22 @@ fn reject_model_override(arguments: &[OsString]) -> Result<()> {
 }
 
 async fn ensure_config_running(config: &ServiceConfig) -> Result<String> {
+    let _lock = launcher_lock::acquire(&config.lock_path)?;
     let client = reqwest::Client::new();
-    if let Some(health) = fetch_health(&client, config).await {
-        if config.matches(&health) && authenticates(&client, config).await {
-            if health.build_id != env!("CLAUDEX_BUILD_ID") {
-                stale::wait_until_stale_drains(&client, config).await?;
-                stop_stale(config, health.pid).await?;
-            } else {
-                return Ok(config.base_url());
-            }
-        } else {
-            stop_stale(config, health.pid).await?;
+    match handover::inspect_service(&client, config).await {
+        ServiceState::Reuse => return Ok(config.base_url()),
+        ServiceState::Replace(pid) => {
+            handover::release_stale_listener(&client, config, pid).await?
         }
-        if health.build_id != env!("CLAUDEX_BUILD_ID") {
-            start_adapter(config)?;
-            wait_until_ready(&client, config).await?;
-            return Ok(config.base_url());
-        }
+        ServiceState::Start => {}
     }
-    start_adapter(config)?;
-    wait_until_ready(&client, config).await?;
+    let started_pid = start_adapter(config)?;
+    if let Err(error) = wait_until_ready(&client, config).await {
+        if daemon_process::matches(started_pid, &config.executable) {
+            daemon_process::terminate(started_pid);
+        }
+        return Err(error);
+    }
     Ok(config.base_url())
 }
 
@@ -273,18 +270,7 @@ async fn fetch_health(client: &reqwest::Client, config: &ServiceConfig) -> Optio
         .ok()
 }
 
-async fn stop_stale(config: &ServiceConfig, pid: Option<u32>) -> Result<()> {
-    if let Some(pid) = pid
-        && pid != std::process::id()
-        && process_matches(pid, &config.executable)
-    {
-        terminate(pid);
-        wait_until_stopped_with(START_TIMEOUT, || process_matches(pid, &config.executable)).await?;
-    }
-    Ok(())
-}
-
-fn start_adapter(config: &ServiceConfig) -> Result<()> {
+fn start_adapter(config: &ServiceConfig) -> Result<u32> {
     let log_dir = config
         .log_path
         .parent()
@@ -308,7 +294,7 @@ fn start_adapter(config: &ServiceConfig) -> Result<()> {
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
-    crate::path_env::apply_daemon_env(
+    let child = crate::path_env::apply_daemon_env(
         command
             .arg(&config.executable)
             .args(daemon_arguments(&config.options)),
@@ -319,7 +305,7 @@ fn start_adapter(config: &ServiceConfig) -> Result<()> {
     .stderr(Stdio::from(stderr))
     .spawn()
     .context("start adapter daemon")?;
-    Ok(())
+    Ok(child.id())
 }
 
 fn daemon_arguments(options: &AdapterOptions) -> Vec<OsString> {
@@ -372,9 +358,10 @@ async fn wait_until_ready_with(
     let deadline = Instant::now() + timeout;
     let mut delay = initial_delay;
     loop {
-        if fetch_health(client, config)
-            .await
-            .is_some_and(|health| config.matches(&health))
+        if let Some(health) = fetch_health(client, config).await
+            && config.matches(&health)
+            && health.build_id == env!("CLAUDEX_BUILD_ID")
+            && authenticates(client, config).await
         {
             return Ok(());
         }
