@@ -272,6 +272,7 @@ impl SegmentBuilder {
         call: ToolCall<'_>,
         stream: Option<&StreamSender>,
     ) -> Result<()> {
+        crate::anthropic::agent_effort::validate_routed_agent_arguments(original_name, call.arguments, current_messages)?;
         let tool_use_id = format!("toolu_{}", Uuid::new_v4().simple());
         let (intent_arguments, claude_arguments) =
             crate::anthropic::agent_effort::prepare_arguments_for_user(

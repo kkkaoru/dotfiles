@@ -47,6 +47,12 @@ worker のAgent定義と `providers.json` の `subagentModel` に同じ固定モ
 呼び出し時の `claudex_model` を最終的なprovider routeとして扱い、テストでfrontmatterと
 共有設定の不一致を検出します。
 
+Codex app-server用のcustom provider credentialは、daemon起動時の非空envを最優先します。
+コピー対象の `model_providers` が宣言する `env_key` だけを対象に、欠落時は
+`~/.codex/.env`、`~/.env` の順で補完します。無関係なdotenv変数やcredential値は
+log・healthへ出力しません。credential変更後は、永続app-server childへ新しい起動環境を
+渡すため共有daemonを再起動します。
+
 Qwen ACPは `/usr/bin/env` 経由でQwen Codeだけに
 `QWEN_WEB_FETCH_PROCESSING_TIMEOUT_MS=15000` を渡し、`--approval-mode yolo` でmain sessionの
 無確認実行と同等のtool権限にします。Qwen Codeの `web_fetch` は取得後の
@@ -298,7 +304,9 @@ gpt-5.3-codex-spark のworkerを使ってこの変更を実装してください
 ```
 
 Orchestratorは完全なモデルIDを `claudex_model` としてAgentへ渡し、一致するbackendを
-遅延起動します。設定済みprefix内であれば、`defaultModel` 以外も同じ方式で選択できます。
+遅延起動します。nested Agent/Taskでも `selected_workers` の同一entryにあるagent/modelを
+必ず明示し、model未指定時にparentやmain modelを暗黙継承しません。設定済みprefix内であれば、
+active userが完全なmodel IDを指定した場合に限り `defaultModel` 以外も同じ方式で選択できます。
 
 ### SubAgentモデルを禁止
 

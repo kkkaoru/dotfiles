@@ -7,7 +7,7 @@ use reqwest::Client;
 use serde_json::{Value, json};
 
 #[tokio::test]
-async fn fallback_claude_child_without_override_inherits_main_copilot_acp_route() {
+async fn unmatched_claude_child_does_not_inherit_main_copilot_acp_route() {
     const MAIN_MODEL: &str = "gpt-5.6-sol";
 
     let root = tempfile::tempdir().expect("Copilot ACP child fixture");
@@ -41,14 +41,15 @@ async fn fallback_claude_child_without_override_inherits_main_copilot_acp_route(
         }))
         .send()
         .await
-        .expect("send Claude Code child request")
-        .error_for_status()
-        .expect("Claude Code child response status")
+        .expect("send unmatched Claude Code child request");
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_GATEWAY);
+    let response = response
         .json::<Value>()
         .await
-        .expect("decode Claude Code child response");
-    assert_eq!(response["model"], MAIN_MODEL);
-    assert_eq!(response["content"][0]["text"], "GROK_ACP_STREAM_OK");
+        .expect("decode unmatched child error");
+    assert!(response["error"]["message"]
+        .as_str()
+        .is_some_and(|message| message.contains("did not match an explicit Agent/Task launch")));
     server.abort();
 
     let trace = read_trace(&root.path().join("grok-acp-mock.jsonl"));
@@ -57,21 +58,7 @@ async fn fallback_claude_child_without_override_inherits_main_copilot_acp_route(
             event["arguments"] == json!(["--acp", "--stdio", "--model", MAIN_MODEL])
         })
     );
-    assert!(
-        trace.iter().any(|event| {
-            event.pointer("/new_session/_meta/modelId") == Some(&json!(MAIN_MODEL))
-        })
-    );
-    assert!(trace.iter().any(|event| {
-        event
-            .pointer("/prompt/prompt/0/text")
-            .and_then(Value::as_str)
-            .is_some_and(|prompt| prompt.contains("inherited child prompt"))
-    }));
-
-    // Copilot-native SubAgents are created behind this single ACP boundary, not
-    // as new HTTP-routed Claude Code children. Their lifecycle notifications are
-    // emitted by this same Copilot ACP session, so they remain in its provider.
+    assert!(!trace.iter().any(|event| event.get("new_session").is_some()));
 }
 
 #[tokio::test]

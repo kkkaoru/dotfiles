@@ -12,13 +12,8 @@ async fn launch_explicit_effort_agent(
     url: &str,
     user_id: &str,
     effort: &str,
-    explicit_model: bool,
 ) -> String {
-    let instruction = if explicit_model {
-        "USE_AGENT_MODEL claude-opus-4-8"
-    } else {
-        "USE_AGENT"
-    };
+    let instruction = "USE_AGENT_MODEL claude-opus-4-8";
     let agent = post_json(
         client,
         url,
@@ -47,33 +42,19 @@ async fn launch_explicit_effort_agent(
     correlated_prompt.to_owned()
 }
 
-#[tokio::test]
-async fn model_inferred_by_main_model_is_ignored_without_user_authorization() {
-    let adapter = Adapter::start().await;
-    let client = Client::new();
-    let url = format!("{}/v1/messages", adapter.base_url);
-    let user_id = r#"{"session_id":"inferred-model"}"#;
-    let agent = post_json(
-        &client,
-        &url,
-        json!({
-            "model":"test-main-model", "system":"Agent routing regression test",
-            "metadata":{"user_id":user_id},
+async fn missing_model_launch_response(client: &Client, url: &str, instruction: &str) -> String {
+    let response = client
+        .post(url)
+        .json(&json!({
+            "model":"test-main-model", "system":"missing Agent model test",
             "tools":[{"name":"Agent","input_schema":{"type":"object"}}],
-            "messages":[{"role":"user","content":"USE_AGENT_MODEL"}]
-        }),
-    )
-    .await;
-    let prompt = agent["content"][0]["input"]["prompt"]
-        .as_str()
-        .expect("decorated Agent prompt");
-    let child = child_request(&client, &url, user_id, prompt, "claude-sonnet-5").await;
-    assert_eq!(child["model"], "claude-sonnet-5");
-    assert!(
-        child["content"][0]["text"]
-            .as_str()
-            .is_some_and(|text| text.starts_with("claude-sonnet-5|medium|"))
-    );
+            "messages":[{"role":"user","content":instruction}]
+        }))
+        .send()
+        .await
+        .expect("send model-less Agent launch");
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_GATEWAY);
+    response.text().await.expect("read model-less Agent rejection")
 }
 
 #[tokio::test]
@@ -83,7 +64,7 @@ async fn arbitrary_explicit_agent_model_bypasses_native_enum_and_preserves_effor
     let url = format!("{}/v1/messages", adapter.base_url);
     for (requested, expected) in supported_efforts() {
         let user_id = format!(r#"{{"session_id":"subscription-{requested}"}}"#);
-        let prompt = launch_explicit_effort_agent(&client, &url, &user_id, requested, true).await;
+        let prompt = launch_explicit_effort_agent(&client, &url, &user_id, requested).await;
         let child = child_request(&client, &url, &user_id, &prompt, "test-sonnet-model").await;
         assert!(
             child["content"][0]["text"]
@@ -94,45 +75,36 @@ async fn arbitrary_explicit_agent_model_bypasses_native_enum_and_preserves_effor
 }
 
 #[tokio::test]
-async fn agent_without_model_keeps_its_fixed_route_with_explicit_effort() {
+async fn agent_without_model_is_rejected_before_launch() {
     let adapter = Adapter::start().await;
-    let client = Client::new();
-    let url = format!("{}/v1/messages", adapter.base_url);
-    for (requested, expected) in supported_efforts() {
-        let user_id = format!(r#"{{"session_id":"app-server-{requested}"}}"#);
-        let prompt = launch_explicit_effort_agent(&client, &url, &user_id, requested, false).await;
-        let child = child_request(&client, &url, &user_id, &prompt, "test-sonnet-model").await;
-        assert_eq!(child["model"], "test-sonnet-model");
-        assert!(
-            child["content"][0]["text"]
-                .as_str()
-                .is_some_and(|text| text.starts_with(&format!("test-sonnet-model|{expected}|")))
-        );
-    }
+    let error = missing_model_launch_response(
+        &Client::new(),
+        &format!("{}/v1/messages", adapter.base_url),
+        "USE_AGENT EFFORT_HIGH",
+    )
+    .await;
+    assert!(error.contains("missing required `claudex_model`"));
 }
 
 #[tokio::test]
-async fn every_fixed_worker_model_survives_a_correlated_subagent_launch() {
+async fn inferred_model_without_user_authorization_is_rejected_before_launch() {
     let adapter = Adapter::start().await;
-    let client = Client::new();
-    let url = format!("{}/v1/messages", adapter.base_url);
-    for (agent, model) in [
-        ("claudex-gpt-spark", "gpt-5.3-codex-spark"),
-        ("claudex-grok", "grok-4.5"),
-        ("claudex-sonnet", "claude-sonnet-5"),
-        ("claudex-qwen", "qwen3.8-max-preview"),
-    ] {
-        let user_id = format!(r#"{{"session_id":"fixed-{agent}"}}"#);
-        let prompt = launch_explicit_effort_agent(&client, &url, &user_id, "high", false).await;
-        let child = child_request(&client, &url, &user_id, &prompt, model).await;
-        assert_eq!(child["model"], model, "{agent}");
-        assert!(
-            child["content"][0]["text"]
-                .as_str()
-                .is_some_and(|text| text.starts_with(&format!("{model}|high|"))),
-            "{agent}: {child}"
-        );
-    }
+    let response = Client::new()
+        .post(format!("{}/v1/messages", adapter.base_url))
+        .json(&json!({
+            "model":"test-main-model", "system":"inferred model test",
+            "tools":[{"name":"Agent","input_schema":{"type":"object"}}],
+            "messages":[{"role":"user","content":"USE_AGENT_MODEL"}]
+        }))
+        .send()
+        .await
+        .expect("send inferred model launch");
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_GATEWAY);
+    assert!(response
+        .text()
+        .await
+        .expect("read inferred model rejection")
+        .contains("neither the selected worker's exact model"));
 }
 
 fn supported_efforts() -> [(&'static str, &'static str); 6] {
@@ -172,48 +144,19 @@ async fn child_request(
 }
 
 #[tokio::test]
-async fn agent_without_effort_uses_configured_default_on_same_main_model() {
+async fn agent_without_effort_or_model_is_rejected_before_launch() {
     let adapter = Adapter::start().await;
-    let client = Client::new();
-    let url = format!("{}/v1/messages", adapter.base_url);
-    let user_id = r#"{"session_id":"same-main-default"}"#;
-    let agent = post_json(
-        &client,
-        &url,
-        json!({
-            "model":"test-main-model", "system":"Agent default effort test",
-            "output_config":{"effort":"low"}, "metadata":{"user_id":user_id},
-            "tools":[{"name":"Agent","input_schema":{"type":"object"}}],
-            "messages":[{"role":"user","content":"USE_AGENT_DEFAULT"}]
-        }),
+    let error = missing_model_launch_response(
+        &Client::new(),
+        &format!("{}/v1/messages", adapter.base_url),
+        "USE_AGENT_DEFAULT",
     )
     .await;
-    assert!(agent["content"][0]["input"].get("effort").is_none());
-    assert!(agent["content"][0]["input"].get("model").is_none());
-    let prompt = agent["content"][0]["input"]["prompt"]
-        .as_str()
-        .expect("decorated default-effort prompt");
-    let child = post_json(
-        &client,
-        &url,
-        json!({
-            "model":"test-sonnet-model",
-            "system":[{"type":"text","text":"cc_is_subagent=true"}],
-            "output_config":{"effort":"low"}, "metadata":{"user_id":user_id},
-            "messages":[{"role":"user","content":prompt}]
-        }),
-    )
-    .await;
-    assert_eq!(child["model"], "test-sonnet-model");
-    assert!(
-        child["content"][0]["text"]
-            .as_str()
-            .is_some_and(|text| text.starts_with("test-sonnet-model|medium|"))
-    );
+    assert!(error.contains("missing required `claudex_model`"));
 }
 
 #[tokio::test]
-async fn unmatched_subagent_ignores_claude_codes_fallback_model() {
+async fn unmatched_subagent_rejects_claude_codes_fallback_model() {
     let adapter = Adapter::start().await;
     let client = Client::new();
     for (system, prompt) in [
@@ -223,19 +166,23 @@ async fn unmatched_subagent_ignores_claude_codes_fallback_model() {
             "REPORT_EFFORT\n\n<claudex-agent-id>toolu_background</claudex-agent-id>",
         ),
     ] {
-        let child = post_json(
-            &client,
-            &format!("{}/v1/messages", adapter.base_url),
-            json!({
+        let response = client
+            .post(format!("{}/v1/messages", adapter.base_url))
+            .json(&json!({
                 "model":"claude-opus-4-8",
                 "system":[{"type":"text","text":system}],
                 "output_config":{"effort":"low"},
                 "messages":[{"role":"user","content":prompt}]
-            }),
-        )
-        .await;
-        assert_eq!(child["model"], "test-main-model");
-        assert_eq!(child["content"][0]["text"], "low");
+            }))
+            .send()
+            .await
+            .expect("send unmatched SubAgent request");
+        assert_eq!(response.status(), reqwest::StatusCode::BAD_GATEWAY);
+        assert!(response
+            .text()
+            .await
+            .expect("read unmatched rejection")
+            .contains("did not match an explicit Agent/Task launch"));
     }
 }
 
@@ -265,10 +212,10 @@ async fn terminal_policy_denies_only_subagents_and_isolates_explicit_models() {
         "REPORT_EFFORT",
     )
     .await;
-    assert!(denied_default.contains("disabled by the active Claudex policy"));
+    assert!(denied_default.contains("did not match an explicit Agent/Task launch"));
 
     let user_id = r#"{"session_id":"denied-explicit-model"}"#;
-    let prompt = launch_explicit_effort_agent(&client, &url, user_id, "high", true).await;
+    let prompt = launch_explicit_effort_agent(&client, &url, user_id, "high").await;
     let denied_explicit = denied_child_response(
         &client,
         &url,
@@ -281,8 +228,7 @@ async fn terminal_policy_denies_only_subagents_and_isolates_explicit_models() {
     assert!(denied_explicit.contains("disabledModels"));
 
     let allowed_user_id = r#"{"session_id":"allowed-explicit-model"}"#;
-    let allowed_prompt =
-        launch_explicit_effort_agent(&client, &url, allowed_user_id, "high", true).await;
+    let allowed_prompt = launch_explicit_effort_agent(&client, &url, allowed_user_id, "high").await;
     let allowed = child_request(
         &client,
         &url,

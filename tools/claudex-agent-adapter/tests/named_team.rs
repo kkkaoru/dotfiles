@@ -54,7 +54,12 @@ async fn routes_named_teammates_through_mailbox_instead_of_task_output() {
     let url = format!("{}/v1/messages", adapter.base_url);
     let user = json!({
         "role":"user",
-        "content":"USE_NAMED_TEAM_MAILBOX with the explicit teammate name company-profile"
+        "content":concat!(
+            "USE_NAMED_TEAM_MAILBOX with the explicit teammate name company-profile\n",
+            "Claudex routing for this turn: ",
+            r#"{"providers":{},"selected_agents":["general-purpose"],"selected_workers":[{"agent":"general-purpose","model":"test-main-model"}]}"#,
+            " mandatory policy"
+        )
     });
 
     let spawned = post_json(&client, &url, request(json!([user.clone()]))).await;

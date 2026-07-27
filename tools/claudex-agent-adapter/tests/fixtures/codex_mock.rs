@@ -207,7 +207,8 @@ impl<W: Write> Fixture<W> {
                     "callId":format!("call-agent-{name}"), "tool":"cc_Agent_0",
                     "arguments":{
                         "description":name, "prompt":format!("research {name}"),
-                        "subagent_type":"general-purpose", "run_in_background":true
+                        "subagent_type":"general-purpose", "run_in_background":true,
+                        "claudex_model":"test-main-model"
                     }
                 }
             }));
@@ -224,7 +225,7 @@ impl<W: Write> Fixture<W> {
                 "arguments":{
                     "description":"company profile", "prompt":"research profile",
                     "subagent_type":"general-purpose", "run_in_background":true,
-                    "name":"company-profile"
+                    "name":"company-profile", "claudex_model":"test-main-model"
                 }
             }
         }));

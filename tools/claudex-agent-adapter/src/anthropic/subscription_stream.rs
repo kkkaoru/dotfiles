@@ -271,13 +271,19 @@ impl SubscriptionStream {
         send_text_delta(sender, self.next_index.saturating_sub(1), text).await
     }
 
-    fn prepare_tool_input(&self, name: &str, id: &str, input: &Value) -> Value {
+    fn prepare_tool_input(&self, name: &str, id: &str, input: &Value) -> Result<Value> {
         if !super::agent_effort::is_agent_tool(name) {
-            return input.clone();
+            return Ok(input.clone());
         }
-        let Some(context) = &self.tool_context else {
-            return input.clone();
-        };
+        let context = self
+            .tool_context
+            .as_ref()
+            .context("subscription Agent/Task call has no routing context")?;
+        super::agent_effort::validate_routed_agent_arguments(
+            name,
+            input,
+            &context.user_messages,
+        )?;
         let (intent, public) = super::agent_effort::prepare_arguments_for_user(
             name,
             id,
@@ -294,7 +300,7 @@ impl SubscriptionStream {
                 &context.user_messages,
             );
         }
-        public
+        Ok(public)
     }
 
     async fn close_text(&mut self, sender: &mpsc::Sender<Result<Bytes, Infallible>>) -> Result<()> {

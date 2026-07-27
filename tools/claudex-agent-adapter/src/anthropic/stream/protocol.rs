@@ -127,10 +127,11 @@ pub(super) async fn send_stream_completion(sender: &StreamSender, segment: &Segm
 }
 
 pub(super) async fn send_stream_error(sender: &StreamSender, error: anyhow::Error) {
+    let error_type = super::super::error::error_type(&error);
     let _ = send_stream_frame(Some(sender), "error", || {
         json!({
             "type":"error",
-            "error":{"type":"api_error","message":format!("{error:#}")}
+            "error":{"type":error_type,"message":format!("{error:#}")}
         })
     })
     .await;
@@ -219,6 +220,24 @@ mod lazy_tests {
         .expect("optional stream");
 
         assert!(!built.load(Ordering::Relaxed));
+    }
+
+    #[tokio::test]
+    async fn marks_missing_provider_environment_as_non_retryable() {
+        let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(1);
+
+        send_stream_error(
+            &sender,
+            anyhow::anyhow!("Missing environment variable: SAKANA_AI_API_KEY"),
+        )
+        .await;
+
+        let frame = receiver
+            .recv()
+            .await
+            .expect("error frame")
+            .expect("infallible frame");
+        assert!(String::from_utf8_lossy(&frame).contains("invalid_request_error"));
     }
 
     #[tokio::test]

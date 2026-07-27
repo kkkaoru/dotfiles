@@ -1,5 +1,6 @@
 use std::{collections::VecDeque, sync::Mutex, time::Instant};
 
+use anyhow::{Result, bail};
 use serde_json::Value;
 
 use super::{MessagesRequest, subscription::valid_effort};
@@ -90,8 +91,7 @@ impl AgentEffortIntents {
             .map(str::to_owned);
         let requested_model = requested_model(arguments);
         let explicit_model = requested_model.filter(|model| {
-            routed_claudex_agent(arguments)
-                || message_texts(user_messages).any(|text| contains_model_id(text, model))
+            super::agent_routing::model_is_authorized(arguments, user_messages, model)
         });
         if requested_model.is_some() && explicit_model.is_none() {
             tracing::debug!(
@@ -185,39 +185,30 @@ pub(super) fn is_agent_tool(tool_name: &str) -> bool {
     matches!(tool_name, "Agent" | "Task")
 }
 
+pub(super) fn validate_routed_agent_arguments(
+    tool_name: &str,
+    arguments: &Value,
+    user_messages: &[Value],
+) -> Result<()> {
+    if !is_agent_tool(tool_name) {
+        return Ok(());
+    }
+    let Some(model) = requested_model(arguments) else {
+        bail!("{tool_name} launch is missing required `claudex_model`");
+    };
+    if !super::agent_routing::model_is_authorized(arguments, user_messages, model) {
+        bail!(
+            "{tool_name} launch model `{model}` is neither the selected worker's exact model nor an exact model requested by the active user"
+        );
+    }
+    Ok(())
+}
+
 fn requested_model(arguments: &Value) -> Option<&str> {
     arguments
         .get(ADAPTER_MODEL)
         .and_then(Value::as_str)
         .filter(|model| !model.is_empty())
-}
-
-fn contains_model_id(text: &str, model: &str) -> bool {
-    text.match_indices(model).any(|(start, _)| {
-        let end = start + model.len();
-        let before_is_boundary = text[..start]
-            .chars()
-            .next_back()
-            .is_none_or(|character| !is_model_id_character(character));
-        let after_is_boundary = model_id_ends_at_boundary(&text[end..]);
-        before_is_boundary && after_is_boundary
-    })
-}
-
-fn model_id_ends_at_boundary(remaining: &str) -> bool {
-    let mut characters = remaining.chars();
-    match characters.next() {
-        None => true,
-        Some(character) if !is_model_id_character(character) => true,
-        Some(character @ ('.' | ':')) => characters
-            .next()
-            .is_none_or(|next| !is_model_id_character(next) || next == character),
-        Some(_) => false,
-    }
-}
-
-fn is_model_id_character(character: char) -> bool {
-    character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.' | ':' | '/')
 }
 
 #[cfg(test)]
@@ -328,15 +319,18 @@ pub(super) fn tool_schema(tool_name: &str, mut schema: Value) -> Value {
                 "description":"Exact model ID for this SubAgent. For a routed claudex-* worker, pass the model from the current routing context's selected_workers entry. A user-explicit provider model may also be passed."
             })
         });
+    let required = object
+        .entry("required")
+        .or_insert_with(|| serde_json::json!([]));
+    if !required.is_array() {
+        *required = serde_json::json!([]);
+    }
+    if let Some(required) = required.as_array_mut()
+        && !required.iter().any(|field| field == ADAPTER_MODEL)
+    {
+        required.push(Value::String(ADAPTER_MODEL.to_owned()));
+    }
     schema
-}
-
-fn routed_claudex_agent(arguments: &Value) -> bool {
-    arguments
-        .get("subagent_type")
-        .or_else(|| arguments.get("agent"))
-        .and_then(Value::as_str)
-        .is_some_and(|agent| agent.starts_with("claudex-"))
 }
 
 fn normalized_effort(value: &str) -> Option<&str> {

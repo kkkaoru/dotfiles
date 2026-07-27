@@ -244,7 +244,7 @@ async fn collects_sequential_subscription_agents_into_one_outer_tool_round() {
         saw_result: false,
         next_index: 0,
         tools: vec!["Task".to_owned()],
-        tool_context: None,
+        tool_context: Some(explicit_subscription_tool_context()),
         activity: SubscriptionActivity::default(),
     };
     stream
@@ -257,7 +257,7 @@ async fn collects_sequential_subscription_agents_into_one_outer_tool_round() {
                     "usage":{"output_tokens":7},
                     "content":[{
                         "type":"tool_use", "id":"tool-subscription", "name":"Agent",
-                        "input":{"prompt":"work", "subagent_type":"claudex-gpt-spark"}
+                        "input":{"prompt":"work", "subagent_type":"claudex-gpt-spark", "claudex_model":"gpt-5.3-codex-spark"}
                     }]
                 }
             })
@@ -288,7 +288,7 @@ async fn collects_sequential_subscription_agents_into_one_outer_tool_round() {
                 "parent_tool_use_id":null,
                 "message":{"content":[{
                     "type":"tool_use", "id":"tool-subscription-2", "name":"Agent",
-                    "input":{"prompt":"more work", "subagent_type":"claudex-grok"}
+                    "input":{"prompt":"more work", "subagent_type":"claudex-grok", "claudex_model":"grok-4.5"}
                 }]}
             })
             .to_string(),
@@ -313,6 +313,17 @@ async fn collects_sequential_subscription_agents_into_one_outer_tool_round() {
     assert_eq!(output.matches(r#""stop_reason":"tool_use""#).count(), 1);
     assert!(output.contains(r#""stop_reason":"tool_use""#));
     assert!(output.find("input_json_delta") < output.find("content_block_stop"));
+}
+
+fn explicit_subscription_tool_context() -> SubscriptionToolContext {
+    SubscriptionToolContext {
+        agent_efforts: Arc::new(AgentEffortIntents::default()),
+        client_user_id: None,
+        parent_model: "parent-model".to_owned(),
+        user_messages: vec![json!({
+            "role":"user", "content":"Use gpt-5.3-codex-spark and grok-4.5"
+        })],
+    }
 }
 
 #[tokio::test]
@@ -441,12 +452,17 @@ async fn ignores_non_top_level_tool_events_and_exercises_completed_state() {
     }
 
     assert_eq!(
-        stream.prepare_tool_input("Read", "read", &json!({"path":"README.md"})),
+        stream
+            .prepare_tool_input("Read", "read", &json!({"path":"README.md"}))
+            .expect("non-Agent input"),
         json!({"path":"README.md"})
     );
-    assert_eq!(
-        stream.prepare_tool_input("Agent", "agent", &json!({"description":"missing prompt"})),
-        json!({"description":"missing prompt"})
+    assert!(
+        stream
+            .prepare_tool_input("Agent", "agent", &json!({"description":"missing prompt"}))
+            .expect_err("missing Agent model")
+            .to_string()
+            .contains("missing required `claudex_model`")
     );
     stream.close_text(&sender).await.expect("close absent text");
     stream

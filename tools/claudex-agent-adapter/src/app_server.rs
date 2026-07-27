@@ -23,6 +23,7 @@ use events::ThreadEventDispatcher;
 pub use events::ThreadEvents;
 mod isolated_config;
 mod pending;
+mod provider_environment;
 use pending::{PendingRequest, PendingResponse, await_response};
 
 const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(15);
@@ -82,6 +83,7 @@ impl AppServer {
                 "web_search=\"disabled\"",
             ])
             .env("CODEX_HOME", &codex_home)
+            .envs(provider_environment::credentials(source_home, &codex_home))
             .env("RUST_LOG", "error")
             .current_dir(&codex_home)
             .stdin(Stdio::piped())

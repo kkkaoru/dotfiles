@@ -8,6 +8,7 @@ mod tests {
 
     use super::{
         AgentEffort, AgentEffortIntents, prepare_arguments, prepare_arguments_for_user, tool_schema,
+        validate_routed_agent_arguments,
     };
     use crate::anthropic::MessagesRequest;
 
@@ -254,6 +255,12 @@ mod tests {
                 "string"
             );
             assert!(
+                schema["required"]
+                    .as_array()
+                    .expect("required Agent fields")
+                    .contains(&json!("claudex_model"))
+            );
+            assert!(
                 schema["properties"]["claudex_model"]["description"]
                     .as_str()
                     .expect("model description")
@@ -471,35 +478,87 @@ mod tests {
     }
 
     #[test]
-    fn accepts_model_from_a_routed_claudex_agent_without_user_literal() {
+    fn accepts_only_an_exact_selected_worker_agent_model_pair_without_user_literal() {
         let intents = AgentEffortIntents::default();
-        let (arguments, _) = prepare_arguments(
+        let routing = r#"Claudex routing for this turn: {"providers":{},"selected_agents":["claudex-gpt-spark"],"selected_workers":[{"agent":"claudex-gpt-spark","model":"gpt-5.3-codex-spark","effort":"high"}]} mandatory policy"#;
+        for (tool_id, arguments, expected) in [
+            (
+                "tool-missing",
+                json!({"prompt":"missing", "subagent_type":"claudex-gpt-spark"}),
+                None,
+            ),
+            (
+                "tool-mismatch",
+                json!({"prompt":"mismatch", "subagent_type":"claudex-gpt-spark", "claudex_model":"gpt-5.6-sol"}),
+                None,
+            ),
+            (
+                "tool-selected",
+                json!({"prompt":"selected", "subagent_type":"claudex-gpt-spark", "claudex_model":"gpt-5.3-codex-spark"}),
+                Some("gpt-5.3-codex-spark"),
+            ),
+        ] {
+            let (arguments, _) = prepare_arguments("Agent", tool_id, &arguments);
+            let arguments = arguments.expect("routed Agent intent");
+            intents.record_from_user_messages(
+                None,
+                "Agent",
+                tool_id.to_owned(),
+                "main-model",
+                &arguments,
+                &[json!({"role":"user","content":format!("implement this\n{routing}")})],
+            );
+            let intent = intents.take(&request_without_user_id(
+                arguments["prompt"].as_str().expect("correlated prompt"),
+            ));
+            assert_eq!(intent.model_override.as_deref(), expected);
+        }
+    }
+
+    #[test]
+    fn validates_agent_model_against_the_latest_route_or_active_user_literal() {
+        let old = r#"Claudex routing for this turn: {"providers":{},"selected_workers":[{"agent":"claudex-gpt-spark","model":"gpt-old"}]} mandatory policy"#;
+        let latest = r#"Claudex routing for this turn: {"providers":{},"selected_workers":[{"agent":"claudex-gpt-spark","model":"gpt-5.3-codex-spark"}]} mandatory policy"#;
+        let messages = [
+            json!({"role":"assistant","content":old}),
+            json!({"role":"user","content":format!("implement this\n{latest}")}),
+            json!({"role":"assistant","content":old}),
+        ];
+        assert!(validate_routed_agent_arguments(
             "Agent",
-            "tool-routed",
-            &json!({
-                "prompt":"implement the task",
-                "subagent_type":"claudex-deepseek",
-                "claudex_model":"opencode-go/deepseek-v4-flash",
-                "claudex_effort":"high"
-            }),
-        );
-        let arguments = arguments.expect("routed Agent intent");
-        intents.record_from_user_messages(
-            None,
+            &json!({"subagent_type":"claudex-gpt-spark","claudex_model":"gpt-5.3-codex-spark"}),
+            &messages,
+        )
+        .is_ok());
+        for rejected in [
+            json!({"subagent_type":"claudex-gpt-spark"}),
+            json!({"subagent_type":"claudex-gpt-spark","claudex_model":"gpt-old"}),
+            json!({"subagent_type":"claude-code-guide","claudex_model":"claudex-gpt-spark"}),
+        ] {
+            assert!(validate_routed_agent_arguments("Agent", &rejected, &messages).is_err());
+        }
+
+        let explicit = [json!({
+            "role":"user",
+            "content":format!("Use gpt-5.6-sol for this worker.\n{latest}")
+        })];
+        assert!(validate_routed_agent_arguments(
+            "Task",
+            &json!({"subagent_type":"claudex-gpt-spark","claudex_model":"gpt-5.6-sol"}),
+            &explicit,
+        )
+        .is_ok());
+
+        let compound = [json!({
+            "role":"user",
+            "content":"Use vendor@beta+1 for this worker."
+        })];
+        assert!(validate_routed_agent_arguments(
             "Agent",
-            "tool-routed".to_owned(),
-            "main-model",
-            &arguments,
-            &[json!({"role":"user","content":"implement this"})],
-        );
-        let intent = intents.take(&request_without_user_id(
-            "implement the task\n\n<claudex-agent-id>tool-routed</claudex-agent-id>",
-        ));
-        assert_eq!(
-            intent.model_override.as_deref(),
-            Some("opencode-go/deepseek-v4-flash")
-        );
-        assert_eq!(explicit(intent.effort), "high");
+            &json!({"subagent_type":"general-purpose","claudex_model":"beta"}),
+            &compound,
+        )
+        .is_err());
     }
 
     #[test]
@@ -510,6 +569,13 @@ mod tests {
         assert_eq!(
             tool_schema("Read", json!({"type":"object"})),
             json!({"type":"object"})
+        );
+        assert_eq!(
+            tool_schema(
+                "Agent",
+                json!({"type":"object","properties":{},"required":"invalid"}),
+            )["required"],
+            json!(["claudex_model"])
         );
     }
 
@@ -615,7 +681,9 @@ mod tests {
                 "claudex_model":{"type":"string","const":"grok-4.5"}
             }
         });
-        assert_eq!(tool_schema("Agent", existing.clone()), existing);
+        let mut expected = existing.clone();
+        expected["required"] = json!(["claudex_model"]);
+        assert_eq!(tool_schema("Agent", existing), expected);
     }
 
     fn request_without_user_id(prompt: &str) -> MessagesRequest {

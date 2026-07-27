@@ -13,11 +13,14 @@ pub(super) fn resolve_request_model(
     // True when the model matches any provider identity declared in config (enabled or not).
     is_declared_provider_model: impl Fn(&str) -> bool,
 ) -> Result<RouteDecision> {
+    if is_subagent && !intent_matched {
+        bail!("SubAgent request did not match an explicit Agent/Task launch intent");
+    }
+    if is_subagent && model_override.is_none() {
+        bail!("SubAgent launch is missing required explicit `claudex_model`");
+    }
     if let Some(model) = model_override {
         request.model = model;
-    } else if is_subagent && !intent_matched && !supports_model(&request.model) {
-        // Unmatched SubAgents may carry Claude Code's subscription fallback model.
-        request.model = main_model.to_owned();
     }
     if let Some(model) = request
         .model
@@ -103,7 +106,16 @@ mod tests {
         supports: impl Fn(&str) -> bool,
         declared: impl Fn(&str) -> bool,
     ) -> Result<RouteDecision> {
-        resolve_request_model(request, main, is_subagent, true, None, supports, declared)
+        let model_override = is_subagent.then(|| request.model.clone());
+        resolve_request_model(
+            request,
+            main,
+            is_subagent,
+            true,
+            model_override,
+            supports,
+            declared,
+        )
     }
 
     #[test]
@@ -178,5 +190,35 @@ mod tests {
         )
         .expect_err("deny");
         assert!(error.to_string().contains("disabled by the active Claudex policy"));
+    }
+
+    #[test]
+    fn rejects_unmatched_or_model_less_subagent_requests() {
+        let mut unmatched = request("claude-sonnet-5", &[]);
+        let error = resolve_request_model(
+            &mut unmatched,
+            "main-model",
+            true,
+            false,
+            None,
+            |_| false,
+            |_| false,
+        )
+        .expect_err("unmatched SubAgent");
+        assert!(error.to_string().contains("did not match"));
+        assert_eq!(unmatched.model, "claude-sonnet-5");
+
+        let mut missing = request("main-model", &[]);
+        let error = resolve_request_model(
+            &mut missing,
+            "main-model",
+            true,
+            true,
+            None,
+            |_| true,
+            |_| true,
+        )
+        .expect_err("model-less SubAgent");
+        assert!(error.to_string().contains("missing required explicit `claudex_model`"));
     }
 }

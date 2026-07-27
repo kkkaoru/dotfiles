@@ -61,7 +61,7 @@ impl SubscriptionStream {
             .filter(|input| input.is_object())
             .cloned()
             .context("Claude subscription emitted non-object tool input")?;
-        let public_input = self.prepare_tool_input(name, id, &input);
+        let public_input = self.prepare_tool_input(name, id, &input)?;
         send_tool_block(sender, self.next_index, id, name, public_input).await?;
         self.next_index += 1;
         Ok(())

@@ -64,7 +64,15 @@ async fn preserves_parallel_agent_ids_for_follow_up_task_output_calls() {
     let adapter = Adapter::start().await;
     let client = Client::new();
     let url = format!("{}/v1/messages", adapter.base_url);
-    let user = json!({"role":"user","content":"USE_PARALLEL_AGENTS_TASK_OUTPUT"});
+    let user = json!({
+        "role":"user",
+        "content":concat!(
+            "USE_PARALLEL_AGENTS_TASK_OUTPUT\n",
+            "Claudex routing for this turn: ",
+            r#"{"providers":{},"selected_agents":["general-purpose"],"selected_workers":[{"agent":"general-purpose","model":"test-main-model"}]}"#,
+            " mandatory policy"
+        )
+    });
 
     let agents = post_json(&client, &url, request(json!([user.clone()]))).await;
     assert_eq!(agents["stop_reason"], "tool_use");

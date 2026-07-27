@@ -367,9 +367,11 @@ pub(super) fn serialized_len(value: &impl serde::Serialize) -> usize {
 
 pub fn error_response(status: StatusCode, error: anyhow::Error) -> Response<Body> {
     tracing::error!(%error, "Anthropic compatibility request failed");
+    let status = super::error::http_status(status, &error);
+    let error_type = super::error::error_type(&error);
     let body = json!({
         "type":"error",
-        "error":{"type":"api_error","message":error.to_string()}
+        "error":{"type":error_type,"message":error.to_string()}
     });
     Response::builder()
         .status(status)

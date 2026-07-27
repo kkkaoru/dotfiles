@@ -46,8 +46,9 @@ Provider-owned tools are never emitted as executable Anthropic `tool_use` blocks
 so Claude Code cannot re-execute them or send synthetic missing-tool results.
 Progress is streamed for live visibility, then stripped from the committed
 assistant message/transcript so history stays answer-focused like native Claude
-Code turns. Copilot-native SubAgents inherit the model used to launch the
-Copilot ACP server.
+Code turns. Copilot-native SubAgents stay inside the Copilot ACP server's
+provider session. Adapter-routed Agent/Task launches still require an explicit
+`claudex_model`.
 
 Streaming requests return their HTTP response immediately. Each Codex
 `item/agentMessage/delta` notification is converted to an Anthropic
@@ -65,7 +66,13 @@ For `codex-app-server`, the adapter starts `codex app-server` with an isolated
 `CODEX_HOME`. Codex authentication and only the user's `model_providers`
 configuration are copied into that home; Claude Code
 remains responsible for tools, hooks, MCP servers, skills, approvals, and
-project instructions. `CLAUDEX_CODEX_PROGRAM`, `CLAUDEX_COPILOT_PROGRAM`,
+project instructions. The child inherits non-empty provider credentials from
+the daemon environment. For a missing `env_key` declared by copied
+`model_providers` configuration, the adapter reads only that variable from the
+source `CODEX_HOME/.env`, then the user home `.env`; unrelated dotenv values are
+not forwarded and credential values are not logged. Restart the shared daemon
+after changing these credentials because the persistent app-server child receives
+them only when it starts. `CLAUDEX_CODEX_PROGRAM`, `CLAUDEX_COPILOT_PROGRAM`,
 `CLAUDEX_GROK_PROGRAM`, and `CLAUDEX_CLAUDE_PROGRAM` are development-only
 executable overrides used by process integration tests.
 
@@ -187,12 +194,11 @@ The launcher reads persistent exact-model entries from
 `CLAUDEX_DISABLED_SUBAGENT_MODELS`. The launcher sends the merged policy as a reserved per-request
 header so terminals sharing one daemon remain independent. The adapter rejects a resolved disabled
 SubAgent model before starting its provider; outer main-session and advisor requests remain unaffected.
-Other unconfigured model IDs fall
-back to the Claude subscription process. Without an explicit model, a matched
-Claude Code child inherits the model of the session that launched it; an
-otherwise-unmatched child request falls back to the configured main model. This
-keeps both Claude Code's Agent display and actual routing from claiming a fixed
-Sonnet model for an inherited SubAgent.
+Other user-explicit, unconfigured model IDs fall back to the Claude subscription
+process. Every matched Claude Code child must carry the exact `claudex_model`
+recorded by its Agent/Task launch. An unmatched child or a matched launch without
+that field is rejected instead of inheriting the parent or falling back to the
+configured main model.
 
 Agent Teams remains controlled by Claude Code. The adapter preserves named
 Agent arguments and distinguishes persistent mailbox teammates from regular
@@ -226,7 +232,9 @@ still treats the correlated `claudex_model` as the effective provider route. Ver
 the effective model from the SubAgent JSONL assistant `message.model`, provider sampling logs, or
 adapter routing logs. Nested Agent/Task calls remain supported and must apply the current injected
 `selected_workers` selection rather than defaulting to generic `claude` or blindly inheriting the
-parent provider.
+parent provider. Their `subagent_type` must be one of the current `selected_agents`, and their
+`claudex_model` must match the same selected worker entry unless the active user explicitly requested
+that exact model.
 
 The adapter's `ensure` command compares the running service's protocol, routes,
 limits, and source-derived build ID with the installed binary. A per-port

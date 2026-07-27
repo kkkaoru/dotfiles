@@ -95,7 +95,7 @@ fn configures_a_bounded_batch_tool_for_parallel_agents() {
 
 #[test]
 fn main_exposes_only_routed_orchestration_tools_while_workers_keep_full_tools() {
-    let routing = r#"Claudex routing for this turn: {"providers":{},"selected_agents":["claudex-deepseek","claudex-ollama-glm-5-2"],"selected_workers":[{"agent":"claudex-deepseek"}]} mandatory policy"#;
+    let routing = r#"Claudex routing for this turn: {"providers":{},"selected_agents":["claudex-deepseek","claudex-ollama-glm-5-2"],"selected_workers":[{"agent":"claudex-deepseek","model":"deepseek-model"}]} mandatory policy"#;
     let tools = vec![
         json!({"name":"Read","input_schema":{"type":"object"}}),
         json!({"name":"Bash","input_schema":{"type":"object"}}),
@@ -120,15 +120,59 @@ fn main_exposes_only_routed_orchestration_tools_while_workers_keep_full_tools() 
         agent["inputSchema"]["properties"]["subagent_type"]["enum"],
         json!(["claudex-deepseek", "claudex-ollama-glm-5-2"])
     );
+    assert!(agent["inputSchema"]["required"]
+        .as_array()
+        .expect("Agent required fields")
+        .contains(&json!("claudex_model")));
 
     let worker = tool_configuration(
-        &request(json!("cc_is_subagent=true"), tools),
+        &request(json!(format!("cc_is_subagent=true\n{routing}")), tools),
         None,
         None,
     );
     assert!(worker.1.values().any(|name| name == "Read"));
     assert!(worker.1.values().any(|name| name == "Bash"));
     assert!(worker.1.values().any(|name| name == "Edit"));
+    let nested_agent_schemas = worker
+        .0
+        .iter()
+        .filter_map(|tool| {
+            tool.pointer("/inputSchema/properties/subagent_type/enum")
+                .or_else(|| {
+                    tool.pointer(
+                        "/inputSchema/properties/tasks/items/properties/subagent_type/enum",
+                    )
+                })
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(nested_agent_schemas.len(), 2);
+    for schema in nested_agent_schemas {
+        assert_eq!(
+            schema,
+            &json!(["claudex-deepseek", "claudex-ollama-glm-5-2"])
+        );
+    }
+}
+
+#[test]
+fn constrains_agent_schemas_to_the_latest_routing_context() {
+    let tools = vec![json!({
+        "name":"Agent",
+        "input_schema":{"type":"object","properties":{"subagent_type":{"type":"string"}}}
+    })];
+    let mut request = request(Value::Null, tools);
+    request.messages = vec![
+        json!({"role":"user","content":r#"{"providers":{},"selected_agents":["claudex-old"]}"#}),
+        json!({"role":"user","content":r#"{"providers":{},"selected_agents":["claudex-current"]}"#}),
+    ];
+    let configured = tool_configuration(&request, None, None);
+    assert!(configured.0.iter().all(|tool| {
+        tool.pointer("/inputSchema/properties/subagent_type/enum")
+            .or_else(|| {
+                tool.pointer("/inputSchema/properties/tasks/items/properties/subagent_type/enum")
+            })
+            == Some(&json!(["claudex-current"]))
+    }));
 }
 
 #[test]

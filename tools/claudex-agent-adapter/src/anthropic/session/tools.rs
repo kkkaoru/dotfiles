@@ -48,7 +48,7 @@ fn external_tools(
             continue;
         }
         let mut routed_tool = tool.clone();
-        if orchestrator_only && super::super::agent_batch::supports(original_name) {
+        if super::super::agent_batch::supports(original_name) {
             constrain_agent_types(&mut routed_tool, selected_agents);
         }
         let codex_name = codex_tool_name(original_name, index);
@@ -108,7 +108,8 @@ fn constrain_agent_types(tool: &mut Value, selected_agents: &[String]) {
 fn selected_agents(request: &MessagesRequest) -> Vec<String> {
     let Some(summary) = routing_texts(&request.system)
         .chain(request.messages.iter().flat_map(routing_texts))
-        .find_map(routing_summary)
+        .filter_map(routing_summary)
+        .last()
     else {
         return Vec::new();
     };

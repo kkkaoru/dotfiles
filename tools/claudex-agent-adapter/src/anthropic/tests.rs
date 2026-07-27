@@ -311,6 +311,15 @@ async fn builds_anthropic_json_and_error_responses() {
     assert_eq!(error.status(), axum::http::StatusCode::BAD_REQUEST);
     let body = to_bytes(error.into_body(), usize::MAX).await.unwrap();
     assert!(String::from_utf8_lossy(&body).contains("bad request"));
+
+    let terminal = error_response(
+        axum::http::StatusCode::BAD_GATEWAY,
+        anyhow::anyhow!("Missing environment variable: SAKANA_AI_API_KEY"),
+    );
+    assert_eq!(terminal.status(), axum::http::StatusCode::BAD_REQUEST);
+    let body = to_bytes(terminal.into_body(), usize::MAX).await.unwrap();
+    let terminal: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(terminal["error"]["type"], "invalid_request_error");
 }
 
 #[test]

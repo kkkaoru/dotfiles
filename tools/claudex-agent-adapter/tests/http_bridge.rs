@@ -630,7 +630,7 @@ async fn routes_non_main_models_to_subscription_with_requested_effort() {
 }
 
 #[tokio::test]
-async fn collects_sequential_subscription_tools_before_finishing_the_outer_turn() {
+async fn rejects_model_less_subscription_tools_before_forwarding_them() {
     let adapter = Adapter::start().await;
     let response = Client::new()
         .post(messages_url(&adapter))
@@ -657,11 +657,11 @@ async fn collects_sequential_subscription_tools_before_finishing_the_outer_turn(
         .await
         .expect("read parallel subscription tools");
 
-    assert_eq!(response.matches(r#""name":"Agent""#).count(), 2);
-    assert_eq!(response.matches("input_json_delta").count(), 2);
-    assert_eq!(response.matches(r#""stop_reason":"tool_use""#).count(), 1);
-    assert!(response.contains("tool-alpha"));
-    assert!(response.contains("tool-beta"));
+    assert_eq!(response.matches(r#""name":"Agent""#).count(), 0);
+    assert_eq!(response.matches("input_json_delta").count(), 0);
+    assert!(response.contains("missing required `claudex_model`"));
+    assert!(!response.contains("tool-alpha"));
+    assert!(!response.contains("tool-beta"));
     assert!(!response.contains("INNER_TOOL_REJECTION_MUST_NOT_LEAK"));
     assert!(!response.contains(r#""stop_reason":"end_turn""#));
 }
