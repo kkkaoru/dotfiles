@@ -185,7 +185,7 @@ async fn reports_acp_startup_effort_and_prompt_failures() {
     assert!(agent.create_session(json!({})).await.is_err());
 
     for (model, effort, expected) in [
-        ("fail-effort", Some("high"), "set effort failed"),
+        ("fail-effort", Some("high"), "model selection failed"),
         ("fail-prompt", None, "Internal error"),
     ] {
         let root = tempfile::tempdir().expect("error fixture");
