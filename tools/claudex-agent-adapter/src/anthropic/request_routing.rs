@@ -37,6 +37,12 @@ pub(super) fn resolve_request_model(
         return Ok(RouteDecision::Provider);
     }
     if is_declared_provider_model(&request.model) {
+        if is_subagent {
+            bail!(
+                "SubAgent model `{}` is declared but has no active provider route",
+                request.model
+            );
+        }
         tracing::warn!(
             request_model = %request.model,
             main_model,
@@ -176,6 +182,21 @@ mod tests {
         .expect("subscription");
         assert_eq!(decision, RouteDecision::Subscription);
         assert_eq!(request.model, "claude-sonnet-5");
+    }
+
+    #[test]
+    fn rejects_an_unrouted_declared_subagent_model_instead_of_using_main() {
+        let mut request = request("vendor-offline-1", &[]);
+        let error = resolve(
+            &mut request,
+            "main-model",
+            true,
+            |_| false,
+            |model| model.starts_with("vendor-"),
+        )
+        .expect_err("unrouted declared SubAgent model");
+        assert!(error.to_string().contains("has no active provider route"));
+        assert_eq!(request.model, "vendor-offline-1");
     }
 
     #[test]

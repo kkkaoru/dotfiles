@@ -118,9 +118,11 @@ async fn allows_session_creations_up_to_the_configured_concurrency_limit() {
             .expect("session concurrency task failed");
         assert_eq!(response["content"][0]["text"], "GROK_ACP_STREAM_OK");
     }
+    // Once the queued request acquires a permit, it may either create a new session or reuse one
+    // of the seven sessions released above. Both are valid; every request must still be prompted.
     assert_eq!(
-        session_count(root.path()),
-        CONFIGURED_PARALLEL_LIMIT + EXPECTED_QUEUED_REQUESTS
+        prompt_count(root.path()),
+        CONFIGURED_PARALLEL_LIMIT + EXPECTED_QUEUED_REQUESTS,
     );
     server.abort();
 }
