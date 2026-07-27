@@ -341,6 +341,8 @@ class RoutingTests(unittest.TestCase):
             self.assertIn("standing default", instructions, path)
             self.assertIn("foreground", instructions, path)
             self.assertIn("N queued", instructions, path)
+            self.assertIn("parallel capacity", instructions, path)
+            self.assertIn("user-visible status", instructions, path)
             self.assertNotIn("When delegation is requested", instructions, path)
 
         settings = json.loads(

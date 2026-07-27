@@ -42,7 +42,11 @@ retained.
    must not default to generic `claude` or blindly inherit its parent's provider route.
    When the main session must await results before synthesis, launch independent calls together as
    foreground calls in one tool round. Use background execution only when useful independent work
-   can continue or the task must outlive the turn; its notifications join the next-turn input queue.
+   can continue or the task must outlive the turn. Useful continuing work must be a concrete next
+   action that is already identified and started immediately; otherwise use foreground execution.
+   After successful background launches, immediately start that concrete action or end the turn
+   with a concise user-visible status. Do not silently wait or keep reasoning for completion
+   notifications; they join the next-turn input queue only after the current turn ends.
    Emit every intended independent Agent/Task call in the same assistant response and tool round;
    never launch one and defer the rest. Do not announce a worker count unless that same response
    contains exactly that many launch calls.
@@ -67,6 +71,9 @@ retained.
      reply or completion notification. The TUI's `N queued` is pending main-session input, which may
      include human prompts and background task notifications—not worker capacity, active slots, or
      `SendMessage` delivery. The latter reports its own worker-bound delivery status separately.
+     Do not send a mid-flight message merely to repeat scope or restrictions already present in the
+     original delegation. A message queued to a busy worker does not add parallel capacity; assign
+     genuinely independent work to another routed worker when useful capacity exists.
    - Start a new instance when true concurrency, a clean-room review, an independent second opinion,
      a different route/model/effort/role, incompatible scope or authorization, or an unavailable
      recipient requires it.

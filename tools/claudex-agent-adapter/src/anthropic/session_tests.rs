@@ -257,6 +257,8 @@ fn subscription_prompt_requires_atomic_parallel_launches() {
     let prompt = subscription_request_prompt(&request(json!("system"), Vec::new()));
     assert!(prompt.contains("same assistant message and tool round"));
     assert!(prompt.contains("exactly that many launch calls"));
+    assert!(prompt.contains("queued to a busy worker does not add parallel capacity"));
+    assert!(prompt.contains("end the turn promptly with concise user-visible status"));
 }
 
 #[test]

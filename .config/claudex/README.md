@@ -266,7 +266,14 @@ SubAgentへの委譲はsubstantiveな調査・実装・レビューに対する�
 繰り返し指定する必要はありません。Claude Codeの `N queued` はmain conversationの次turnへ
 渡す入力数であり、human promptとbackground Agentの完了通知を含みます。workerの実行slot数や
 `SendMessage` の配信待ち数ではありません。現在turnで結果が必要な並列作業はforeground Agent
-呼び出しをまとめて行い、backgroundは結果を待たずに有用な作業を継続できる場合に限定します。
+呼び出しをまとめて行います。backgroundは、同じturnで直ちに開始する具体的な別作業がある場合、
+またはtaskがturnをまたぐ必要がある場合に限定します。起動後に具体的な別作業がなければ、mainは
+完了通知を待ってhidden reasoningを続けず、短い進捗を表示してturnを終了します。既に委譲promptに
+含まれる制約の再送は行わず、busy workerへの配信待ちは追加の並列数として数えません。
+Claude Code 2.1系の `N background agents launched` は複数の標準Agent tool cardをまとめた
+headerです。直後の各identity行または `↓ to manage` から個別workerを確認できます。headerだけが
+見える場合も、これを `N queued` や直列実行とは解釈しません。十分なterminal表示領域でidentity行が
+継続して欠落する場合は、adapterではなくClaude Code TUI側の表示問題として切り分けます。
 
 ### Orchestratorのモデルを指定
 

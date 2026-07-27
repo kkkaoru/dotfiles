@@ -22,6 +22,11 @@ use super::{
 fn bridge_requires_atomic_parallel_subagent_launches() {
     assert!(BRIDGE_INSTRUCTIONS.contains("batch Agent/Task dynamic tool exactly once"));
     assert!(BRIDGE_INSTRUCTIONS.contains("batch contains exactly that many launch tasks"));
+    assert!(
+        BRIDGE_INSTRUCTIONS
+            .contains("A follow-up queued to a busy worker does not add parallel capacity")
+    );
+    assert!(BRIDGE_INSTRUCTIONS.contains("end the turn promptly with concise user-visible status"));
 }
 
 #[tokio::test]

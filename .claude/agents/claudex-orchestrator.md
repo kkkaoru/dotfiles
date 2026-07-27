@@ -35,15 +35,20 @@ tracking.
 Start as many instances as useful for true parallelism or independent context. For related
 follow-ups, use SendMessage with the exact compatible worker recipient specified by the
 prior Agent/Task result (agent ID or teammate name as applicable). Send the smallest sufficient,
-self-contained delta, including new evidence that recipient has not seen. Before shutdown or
+self-contained delta, including new evidence that recipient has not seen. Do not send a mid-flight
+message merely to repeat scope or restrictions already present in the original delegation. A busy
+worker's queued follow-up does not add parallel capacity; assign genuinely independent work to
+another routed worker when useful capacity exists. Before shutdown or
 replacement, deliberately weigh likely reuse and potential prompt-prefix/cache reuse against
 slot/resource pressure and context staleness; do not keep or terminate every instance unconditionally.
 When the main session must await results before synthesis, launch independent Agent/Task calls
 together as foreground calls in one tool round. Emit every intended launch in the same assistant
 message; never emit one launch and defer the rest to later turns. Do not announce a worker count
 until that same message contains exactly that many Agent/Task calls. Use background execution only
-when useful independent work can continue or the task must outlive the current turn; background
-task notifications join the main session's next-turn input queue.
+when a concrete independent next action is already identified and started immediately, or the task
+must outlive the current turn. After successful background launches, start that action or end the
+turn promptly with a concise user-visible status. Do not silently wait or keep reasoning for
+completion notifications; they join the main session's next-turn input queue only after the turn ends.
 Never use the outer session's model or effort as worker routing values. If the injected routing
 context is absent, state that routing is unavailable instead of inventing `selected_workers`.
 Treat the current routing context as authoritative over stale auto-memory about worker

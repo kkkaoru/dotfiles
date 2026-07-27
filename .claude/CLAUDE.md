@@ -27,8 +27,12 @@
   task tracking only when the work itself needs persistent dependency tracking.
 - When the main session must await worker results before synthesis, launch independent Agent/Task
   calls together as foreground calls in one tool round. Use background execution only when useful
-  independent work can continue or the delegated task must outlive the current turn. Background
-  task notifications join the main session's next-turn input queue.
+  independent work can continue or the delegated task must outlive the current turn. "Useful work
+  can continue" means a concrete next action is already identified and is started immediately; if
+  no such action exists, use foreground execution. After background launches succeed, either start
+  that concrete action or end the turn promptly with a concise user-visible status. Do not remain
+  in hidden reasoning while waiting for notifications, because background task notifications only
+  join the main session's next-turn input queue.
 - When launching multiple independent workers, emit every intended Agent/Task call in the same
   assistant response and tool round. Never launch one and defer the rest. Do not announce a worker
   count unless that same response contains exactly that many launch calls.
@@ -36,7 +40,10 @@
   down, abandoning, or replacing one, weigh likely follow-ups and potential prompt-prefix/cache
   reuse against slot and resource pressure. For a compatible follow-up, use `SendMessage` with the
   exact recipient specified by the prior Agent/Task result (agent ID or teammate name as applicable);
-  never guess or persist recipients across sessions.
+  never guess or persist recipients across sessions. Do not send a mid-flight message merely to
+  repeat constraints already present in the original delegation. A busy worker's queued follow-up
+  does not increase parallel capacity; for genuinely independent work, start another routed worker
+  when useful instead of queueing it behind the busy worker.
 - Never copy the main session's model or effort into worker routing. If `selected_workers` is
   unavailable, report routing as unavailable instead of inventing a worker selection.
 - Treat `disabled_subagent_models` in the current Claudex routing context as an absolute, active
