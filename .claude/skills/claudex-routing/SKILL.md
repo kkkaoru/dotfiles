@@ -20,14 +20,18 @@ retained.
    implicit read-only, plan-only, no-edit, no-build, or no-deploy restriction to the definition or
    delegation prompt. Use foreground execution when background execution would auto-deny an
    interactive permission available to the main session.
-   The list is ordered by known quota headroom; prefer `preferred_worker` for primary work.
+   The list is ordered by the tightest known quota or exact-model concurrency headroom; prefer
+   `preferred_worker` for primary work. Treat an exact `model_concurrency` entry with
+   `available: false` as unavailable for that turn.
    Pass each worker's `model` and `effort` as `claudex_model` and `claudex_effort`. When substantive
    work is clear, invoke the selected SubAgent in the first response rather than merely announcing
    future delegation. Do not use task-list bookkeeping merely as a precondition for delegation.
 2. If the user explicitly names a model that matches a provider's `model_prefixes`, select that
    provider dynamically and pass the exact requested model only when it is not listed in
-   `disabled_subagent_models`. That list, merged from the dedicated config and terminal overrides,
-   is an absolute SubAgent denylist and takes precedence over explicit requests, inheritance, prior
+   `disabled_subagent_models` and its exact `model_concurrency` entry is not unavailable. A missing
+   dynamic entry inherits the provider's `max_concurrency` and means the daemon observed no active
+   request for that exact model. The denylist, merged from the dedicated config and terminal overrides,
+   is absolute and takes precedence over explicit requests, inheritance, prior
    recipients, and capacity. The adapter resolves an allowed matching backend lazily. If no allowed
    worker remains, continue in the main session and report that SubAgent routing is unavailable.
 3. Use multiple selected workers for independent work or complementary review only when useful.
@@ -87,6 +91,15 @@ providers. Qwen with known quota participates in the same lowest-used-percentage
 and Grok. Set `CLAUDEX_USAGE_CACHE_SECONDS=0` to disable the five-minute routing-summary cache; the
 one-hour Qwen quota cache remains independent. Missing, unknown, malformed, exhausted, or failed
 usage is treated conservatively for the affected provider.
+
+The hook reads the shared daemon's loopback `/health` on every prompt, independently of the usage
+cache. Providers with `maxConcurrency` inherit that positive exact-model limit for every dynamic
+route selected through `modelPrefixes`. `model_concurrency` exposes only sanitized model IDs and
+`active`, `queued`, `limit`, and `available` state. A full exact model is excluded. The health URL
+comes from explicit `CLAUDEX_DAEMON_HEALTH_URL`, a loopback `ANTHROPIC_BASE_URL` origin, or the
+default `127.0.0.1:8318` daemon, in that order. If health is temporarily
+unavailable, the worker remains launchable with unknown slot headroom because the adapter enforces
+the hard limit authoritatively.
 
 Define persistent exact model IDs in `.config/claudex/disabled-subagent-models.json`. Set
 `CLAUDEX_DISABLED_SUBAGENT_MODELS_CONFIG` before starting `claudex` to select a different dedicated

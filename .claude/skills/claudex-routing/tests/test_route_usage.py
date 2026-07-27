@@ -67,6 +67,39 @@ def report(
     ]
 
 
+def complete_report(
+    codex: object = 10,
+    fugu: object = 20,
+    opencode_go: object = 5,
+) -> list[dict[str, object]]:
+    return [
+        *report(codex=codex, grok=100),
+        {"provider": "sakana", "usage": {"primary": {"usedPercent": fugu}}},
+        {
+            "provider": "ollama",
+            "available": False,
+            "reason": "usage-unavailable",
+        },
+        {
+            "provider": "opencodego",
+            "usage": {"primary": {"usedPercent": opencode_go}},
+        },
+    ]
+
+
+def model_health(
+    active: int, limit: int = 7, queued: int = 0
+) -> dict[str, dict[str, object]]:
+    return {
+        "opencode-go/deepseek-v4-flash": {
+            "active": active,
+            "queued": queued,
+            "limit": limit,
+            "available": active + queued < limit,
+        }
+    }
+
+
 def qwen_curl_text(**overrides: str) -> str:
     params = json.dumps(
         {
@@ -207,6 +240,10 @@ class ConfigurationTests(unittest.TestCase):
         changed = copy.deepcopy(base)
         changed["providers"][0]["agent"] = ""
         invalid.append(changed)
+        for maximum in [True, 0, -1, 1.5, "7"]:
+            changed = copy.deepcopy(base)
+            changed["providers"][0]["maxConcurrency"] = maximum
+            invalid.append(changed)
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "providers.json"
             for config in invalid:
@@ -215,6 +252,13 @@ class ConfigurationTests(unittest.TestCase):
                     route_usage.load_config(path)
         self.assertFalse(route_usage.valid_provider(None))
         self.assertFalse(route_usage.valid_choice(None))
+        opencode = next(
+            provider
+            for provider in complete_configuration()["providers"]
+            if provider["id"] == "opencode-go"
+        )
+        self.assertEqual(opencode["usageProvider"], "opencodego")
+        self.assertEqual(opencode["maxConcurrency"], 7)
 
     def test_validates_dedicated_disabled_models_config(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -479,6 +523,121 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(codex_worker["model"], "gpt-5.3-codex-spark")
         self.assertEqual(summary["preferred_main_worker"]["model"], "gpt-5.6-sol")
 
+    def test_combines_quota_and_model_concurrency_headroom(self) -> None:
+        config = complete_configuration()
+        base = route_usage.routing_summary(complete_report(), config)
+        summary = route_usage.apply_model_concurrency(base, config, model_health(6))
+        selected = [worker["provider"] for worker in summary["selected_workers"]]
+        self.assertLess(selected.index("fugu"), selected.index("opencode-go"))
+        self.assertLess(selected.index("codex"), selected.index("opencode-go"))
+        opencode = summary["providers"]["opencode-go"]
+        self.assertEqual(opencode["remaining_percent"], 95.0)
+        self.assertEqual(opencode["concurrency_remaining"], 1)
+        self.assertEqual(
+            summary["model_concurrency"]["opencode-go/deepseek-v4-flash"],
+            {
+                "active": 6,
+                "queued": 0,
+                "limit": 7,
+                "available": True,
+                "remaining": 1,
+                "reason": "available",
+                "known": True,
+            },
+        )
+
+        full = route_usage.apply_model_concurrency(base, config, model_health(7))
+        self.assertNotIn(
+            "opencode-go",
+            [worker["provider"] for worker in full["selected_workers"]],
+        )
+        self.assertEqual(
+            full["providers"]["opencode-go"]["reason"],
+            "concurrency-limit-reached",
+        )
+
+    def test_concurrency_headroom_can_rank_below_an_unmetered_provider(self) -> None:
+        config = complete_configuration()
+        opencode = next(
+            provider for provider in config["providers"] if provider["id"] == "opencode-go"
+        )
+        opencode.pop("usageProvider")
+        summary = route_usage.apply_model_concurrency(
+            route_usage.routing_summary(complete_report(codex=10), config),
+            config,
+            model_health(6),
+        )
+        selected = [worker["provider"] for worker in summary["selected_workers"]]
+        self.assertLess(selected.index("codex"), selected.index("opencode-go"))
+
+    def test_missing_health_keeps_a_limited_model_safely_launchable(self) -> None:
+        config = complete_configuration()
+        base = route_usage.routing_summary(complete_report(), config)
+        summary = route_usage.apply_model_concurrency(base, config, None)
+        worker = next(
+            worker
+            for worker in summary["selected_workers"]
+            if worker["provider"] == "opencode-go"
+        )
+        self.assertEqual(worker["max_concurrency"], 7)
+        self.assertEqual(worker["concurrency"]["reason"], "daemon-health-unavailable")
+        self.assertTrue(worker["concurrency"]["available"])
+        self.assertFalse(worker["concurrency"]["known"])
+
+    def test_missing_usage_still_uses_the_existing_native_fallback(self) -> None:
+        config = complete_configuration()
+        base = route_usage.routing_summary([], config)
+        self.assertEqual(base["providers"]["opencode-go"]["reason"], "missing")
+        summary = route_usage.apply_model_concurrency(base, config, model_health(0))
+        self.assertEqual(summary["selected_agents"], ["claudex-sonnet"])
+        self.assertTrue(summary["fallback_active"])
+
+    def test_dynamic_models_inherit_the_most_specific_prefix_limit(self) -> None:
+        config = complete_configuration()
+        dynamic = "opencode-go/another-model"
+        owner = route_usage.provider_for_model(config, dynamic)
+        self.assertIsNotNone(owner)
+        self.assertEqual(owner["id"], "opencode-go")
+        health = {
+            **model_health(0),
+            dynamic: {"active": 6, "queued": 1, "limit": 7, "available": False},
+        }
+        summary = route_usage.apply_model_concurrency(
+            route_usage.routing_summary(complete_report(), config), config, health
+        )
+        self.assertFalse(summary["model_concurrency"][dynamic]["available"])
+        self.assertEqual(summary["model_concurrency"][dynamic]["limit"], 7)
+
+    def test_main_capacity_uses_default_model_not_subagent_model(self) -> None:
+        config = configuration()
+        codex = next(provider for provider in config["providers"] if provider["id"] == "codex")
+        codex["maxConcurrency"] = 7
+        health = {
+            codex["defaultModel"]: {
+                "active": 7,
+                "queued": 0,
+                "limit": 7,
+                "available": False,
+            },
+            codex["subagentModel"]: {
+                "active": 1,
+                "queued": 0,
+                "limit": 7,
+                "available": True,
+            },
+        }
+        summary = route_usage.apply_model_concurrency(
+            route_usage.routing_summary(report(), config), config, health
+        )
+        self.assertIn(
+            "codex", [worker["provider"] for worker in summary["selected_workers"]]
+        )
+        self.assertEqual(summary["preferred_main_worker"]["provider"], "grok")
+        self.assertFalse(summary["model_concurrency"]["gpt-5.6-sol"]["available"])
+        self.assertTrue(
+            summary["model_concurrency"]["gpt-5.3-codex-spark"]["available"]
+        )
+
     def test_unknown_qwen_limit_cannot_outrank_known_capacity(self) -> None:
         unknown = report(codex=99, grok=100)
         unknown[-1] = qwen_report(None, reason="available-compatible-api-only")
@@ -694,6 +853,92 @@ class CommandTests(unittest.TestCase):
         ]:
             with self.subTest(output=output), self.assertRaises(ValueError):
                 route_usage.strict_json_array(output)
+
+    @mock.patch("route_usage.subprocess.run")
+    def test_reads_sanitized_model_concurrency_from_loopback_health(
+        self, run: mock.Mock
+    ) -> None:
+        self.assertEqual(
+            route_usage.daemon_health_url(
+                {route_usage.ANTHROPIC_BASE_URL_ENV: "http://localhost:9418/v1"}
+            ),
+            "http://localhost:9418/health",
+        )
+        self.assertEqual(
+            route_usage.daemon_health_url(
+                {
+                    route_usage.DAEMON_HEALTH_URL_ENV: "http://127.0.0.1:7777/health",
+                    route_usage.ANTHROPIC_BASE_URL_ENV: "http://localhost:9418/v1",
+                }
+            ),
+            "http://127.0.0.1:7777/health",
+        )
+        self.assertEqual(
+            route_usage.daemon_health_url(
+                {route_usage.ANTHROPIC_BASE_URL_ENV: "https://api.anthropic.com"}
+            ),
+            route_usage.DEFAULT_DAEMON_HEALTH_URL,
+        )
+        payload = {
+            "status": "ok",
+            "pid": 123,
+            "model_concurrency": model_health(3),
+        }
+        run.return_value = subprocess.CompletedProcess([], 0, json.dumps(payload), "")
+        self.assertEqual(
+            route_usage.run_daemon_health("curl-test", {}), model_health(3)
+        )
+        run.assert_called_once_with(
+            [
+                "curl-test",
+                "--fail",
+                "--silent",
+                "--show-error",
+                "--max-time",
+                str(route_usage.DAEMON_HEALTH_TIMEOUT_SECONDS),
+                route_usage.DEFAULT_DAEMON_HEALTH_URL,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=(
+                route_usage.DAEMON_HEALTH_TIMEOUT_SECONDS
+                + route_usage.QWEN_SUBPROCESS_GRACE_SECONDS
+            ),
+        )
+
+    @mock.patch("route_usage.subprocess.run")
+    def test_health_failure_and_malformed_capacity_use_safe_fallback(
+        self, run: mock.Mock
+    ) -> None:
+        for value in [
+            None,
+            [],
+            {
+                "model": {
+                    "active": True,
+                    "queued": 0,
+                    "limit": 7,
+                    "available": True,
+                }
+            },
+            {
+                "model": {
+                    "active": 6,
+                    "queued": 1,
+                    "limit": 7,
+                    "available": True,
+                }
+            },
+        ]:
+            self.assertIsNone(route_usage.sanitize_model_concurrency(value))
+        self.assertIsNone(
+            route_usage.run_daemon_health(
+                "curl-test",
+                {route_usage.DAEMON_HEALTH_URL_ENV: "https://example.com/health"},
+            )
+        )
+        run.assert_not_called()
 
     @mock.patch("route_usage.subprocess.run")
     def test_runs_validated_qwen_quota_curl_without_a_shell(
@@ -1286,6 +1531,27 @@ class MainTests(unittest.TestCase):
         self.assertIn("claudex-gpt-spark", output)
         collect_usage.assert_not_called()
 
+    @mock.patch("route_usage.qwen_quota_refresh_due", return_value=False)
+    @mock.patch("route_usage.collect_usage")
+    @mock.patch("route_usage.read_cache")
+    def test_main_refreshes_concurrency_even_when_usage_is_cached(
+        self,
+        read_cache: mock.Mock,
+        collect_usage: mock.Mock,
+        _quota_due: mock.Mock,
+    ) -> None:
+        read_cache.return_value = route_usage.routing_summary(
+            complete_report(), complete_configuration()
+        )
+        output = self.run_main(health=model_health(7))
+        context = json.loads(output)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn('"reason":"concurrency-limit-reached"', context)
+        selected = context.split('"selected_workers":', 1)[1].split(
+            ',"preferred_worker":', 1
+        )[0]
+        self.assertNotIn('"provider":"opencode-go"', selected)
+        collect_usage.assert_not_called()
+
     @mock.patch("route_usage.write_cache")
     @mock.patch("route_usage.collect_usage", return_value=report())
     @mock.patch("route_usage.qwen_quota_refresh_due", return_value=True)
@@ -1466,7 +1732,10 @@ class MainTests(unittest.TestCase):
                 self.run_main("--config", str(path))
 
     def run_main(
-        self, *arguments: str, disabled_models: list[str] | None = None
+        self,
+        *arguments: str,
+        disabled_models: list[str] | None = None,
+        health: dict[str, dict[str, object]] | None = None,
     ) -> str:
         stdout = io.StringIO()
         with tempfile.TemporaryDirectory() as directory:
@@ -1489,6 +1758,7 @@ class MainTests(unittest.TestCase):
                     "argv",
                     [str(Path(route_usage.__file__)), *effective_arguments],
                 ),
+                mock.patch("route_usage.run_daemon_health", return_value=health),
                 contextlib.redirect_stdout(stdout),
             ):
                 self.assertEqual(route_usage.main(), 0)

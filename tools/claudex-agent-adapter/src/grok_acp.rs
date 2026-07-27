@@ -5,22 +5,23 @@ use std::{
     path::{Path, PathBuf},
     rc::Rc,
     sync::{
-        Arc,
         atomic::{AtomicBool, Ordering},
+        Arc,
     },
 };
 
 use agent_client_protocol as acp;
-use anyhow::{Context, Result, anyhow};
+use anyhow::{anyhow, Context, Result};
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::{
     agent_backend::AcpLaunch,
-    app_server::{ThreadEvents, events::ThreadEventDispatcher},
+    app_server::{events::ThreadEventDispatcher, ThreadEvents},
 };
 
 mod client;
+mod configured;
 mod connection;
 mod plugin;
 mod prompt;
@@ -35,6 +36,8 @@ const TURN_QUEUE_CAPACITY: usize = 8;
 const CONFIGURED_TURN_QUEUE_CAPACITY: usize = 2;
 /// Reserved so SubAgent bursts cannot starve interactive user turns.
 const OUTER_TURN_RESERVE: usize = 1;
+pub(crate) const MAX_MODEL_CONCURRENCY: usize =
+    tokio::sync::Semaphore::MAX_PERMITS - OUTER_TURN_RESERVE;
 
 use connection::AcpProvider;
 use turns::{acquire_turn_permit, cancel_turn, drive_turns, queue_turn};
@@ -85,14 +88,14 @@ impl GrokAcp {
     pub async fn spawn(model: &str) -> Result<Arc<Self>> {
         let program = std::env::var_os("CLAUDEX_GROK_PROGRAM").unwrap_or_else(|| "grok".into());
         let cwd = std::env::current_dir().context("resolve Grok ACP working directory")?;
-        Self::spawn_provider(AcpProvider::Grok, model, program, None, cwd).await
+        Self::spawn_provider(AcpProvider::Grok, model, program, None, cwd, None).await
     }
 
     pub async fn spawn_copilot(model: &str) -> Result<Arc<Self>> {
         let program =
             std::env::var_os("CLAUDEX_COPILOT_PROGRAM").unwrap_or_else(|| "copilot".into());
         let cwd = std::env::current_dir().context("resolve Copilot ACP working directory")?;
-        Self::spawn_provider(AcpProvider::Copilot, model, program, None, cwd).await
+        Self::spawn_provider(AcpProvider::Copilot, model, program, None, cwd, None).await
     }
 
     pub async fn spawn_with_program(
@@ -100,7 +103,7 @@ impl GrokAcp {
         program: impl Into<OsString>,
         cwd: PathBuf,
     ) -> Result<Arc<Self>> {
-        Self::spawn_provider(AcpProvider::Grok, model, program, None, cwd).await
+        Self::spawn_provider(AcpProvider::Grok, model, program, None, cwd, None).await
     }
 
     pub async fn spawn_copilot_with_program(
@@ -108,28 +111,7 @@ impl GrokAcp {
         program: impl Into<OsString>,
         cwd: PathBuf,
     ) -> Result<Arc<Self>> {
-        Self::spawn_provider(AcpProvider::Copilot, model, program, None, cwd).await
-    }
-
-    pub async fn spawn_configured(model: &str, launch: &AcpLaunch) -> Result<Arc<Self>> {
-        let cwd = std::env::current_dir().context("resolve configured ACP working directory")?;
-        let provider = if launch
-            .arguments
-            .iter()
-            .any(|argument| argument.contains("{model}"))
-        {
-            AcpProvider::ConfiguredLaunchScoped
-        } else {
-            AcpProvider::Configured
-        };
-        Self::spawn_provider(
-            provider,
-            model,
-            &launch.program,
-            Some(launch.arguments.clone()),
-            cwd,
-        )
-        .await
+        Self::spawn_provider(AcpProvider::Copilot, model, program, None, cwd, None).await
     }
 
     async fn spawn_provider(
@@ -138,15 +120,18 @@ impl GrokAcp {
         program: impl Into<OsString>,
         arguments: Option<Vec<String>>,
         cwd: PathBuf,
+        max_concurrency: Option<usize>,
     ) -> Result<Arc<Self>> {
         let (command_tx, command_rx) = mpsc::channel(COMMAND_QUEUE_CAPACITY);
         let session_permits = Arc::new(tokio::sync::Semaphore::new(SESSION_QUEUE_CAPACITY));
-        let turn_capacity = match provider {
+        let default_turn_capacity = match provider {
             AcpProvider::Configured | AcpProvider::ConfiguredLaunchScoped => {
                 CONFIGURED_TURN_QUEUE_CAPACITY
             }
             AcpProvider::Grok | AcpProvider::Copilot => TURN_QUEUE_CAPACITY,
         };
+        let turn_capacity =
+            max_concurrency.map_or(default_turn_capacity, |limit| limit + OUTER_TURN_RESERVE);
         let turn_permits = Arc::new(tokio::sync::Semaphore::new(
             turn_capacity.saturating_sub(OUTER_TURN_RESERVE).max(1),
         ));
@@ -209,16 +194,12 @@ impl GrokAcp {
     }
 
     pub async fn create_session(&self, params: Value) -> Result<Value> {
-        let permit = queue::acquire(
-            self.provider,
-            "session/new",
-            async {
-                Arc::clone(&self.session_permits)
-                    .acquire_owned()
-                    .await
-                    .map_err(|_| anyhow!("ACP driver is unavailable"))
-            },
-        )
+        let permit = queue::acquire(self.provider, "session/new", async {
+            Arc::clone(&self.session_permits)
+                .acquire_owned()
+                .await
+                .map_err(|_| anyhow!("ACP driver is unavailable"))
+        })
         .await?;
         self.call(|response| DriverCommand::CreateSession {
             params,

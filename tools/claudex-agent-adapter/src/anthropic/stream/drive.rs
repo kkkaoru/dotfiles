@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
 use super::{
-    SegmentBuilder, StreamSender, StreamTurn, commit_transcript, send_stream_completion,
-    send_stream_error,
+    commit_transcript, send_stream_completion, send_stream_error, SegmentBuilder, StreamSender,
+    StreamTurn,
 };
-use crate::anthropic::{ActiveTurn, Bridge};
+use crate::anthropic::{model_concurrency::ModelPermit, ActiveTurn, Bridge};
 
 impl Bridge {
     pub(super) async fn drive_stream(
@@ -12,6 +12,7 @@ impl Bridge {
         turn: ActiveTurn,
         sender: StreamSender,
         builder: SegmentBuilder,
+        model_permit: Option<ModelPermit>,
     ) {
         let ActiveTurn {
             session,
@@ -58,6 +59,7 @@ impl Bridge {
                             retried,
                             sender,
                             SegmentBuilder::new(input_tokens),
+                            model_permit,
                         ))
                         .await;
                     }

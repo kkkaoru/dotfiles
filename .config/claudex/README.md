@@ -70,15 +70,21 @@ approval待機やauto classifierがSubAgentの権限を狭めないようにし�
 1. `claudex` は `mainProviders` の順に利用可能なproviderを選び、その `defaultModel` でmain
    sessionを起動します。claudex実行時だけglobal hookでorchestration contextを追加します。
    `subagentModel` があるproviderではworkerだけを別モデルへ固定します。
-2. prompt送信時にCodex/Grok/Sakana/Ollamaは `codexbar usage --json` を使います。Ollamaの
+2. prompt送信時にCodex/Grok/Sakana/Ollama/OpenCode Goは `codexbar usage --json` を使います。Ollamaの
    usage取得に失敗した場合はlocal Ollama APIのmodel catalogを確認し、対象modelが存在すれば
    残量不明の候補として維持します。QwenはQwen Cloudの
    5時間・7日quotaを取得し、成功時刻から1時間未満はlocal cacheを再利用します。routing結果
-   全体は既定で5分間キャッシュされます。
-3. 各providerをquota windowの最大使用率が低い順、つまり最小残量の制約に最も余裕がある順に
-   並べます。Qwen quota更新に失敗した場合は、Qwen Codeに保存済みのAPI keyを使う非生成の
+   全体は既定で5分間キャッシュされます。共有daemonの `/health` にあるmodel別
+   `model_concurrency` はpromptごとに再取得し、usage cacheには保存しません。health URLは
+   `CLAUDEX_DAEMON_HEALTH_URL`、loopback `ANTHROPIC_BASE_URL` のorigin、既定の
+   `http://127.0.0.1:8318/health` の順に解決します。
+3. 各providerをquota windowとmodel別並列上限のうち、より厳しい使用率が低い順に並べます。
+   `maxConcurrency` に達したmodelはそのturnの候補から外します。Qwen quota更新に失敗した場合は、
+   Qwen Codeに保存済みのAPI keyを使う非生成の
    compatible `GET /models` で利用可能性を確認します。利用可能でも残量不明なら、既知の残量を
-   持つproviderの後に置きます。片方のusage sourceが失敗しても別providerは無効化しません。
+   持つproviderの後に置きます。healthを取得できない場合はproviderを起動可能な候補として残し、
+   adapter側のhard limitに最終判定を委ねます。片方のusage sourceが失敗しても別providerは
+   無効化しません。
 4. mainまたはworkerがAgent/Taskを起動するたび、そのturnへ注入された
    `selected_workers` からAgentを選び、model/effortを明示します。nested起動でもgeneric
    `claude`へのdefaultや親providerの無条件継承は行いません。
@@ -232,7 +238,8 @@ claudex-agent-adapter ensure \
 curl --fail --silent http://127.0.0.1:8318/health | jq .
 ```
 
-`status` が `ok` で、`backend_routes` にCodex、Grok、Qwenが含まれていれば準備完了です。
+`status` が `ok` で、`backend_routes` にCodex、Grok、Qwenが含まれ、上限を設定したmodelが
+`model_concurrency` に `active`、`queued`、`limit`、`available` を持てば準備完了です。
 常設のlaunchd plistは不要です。`claudex` の起動時に互換性のあるdaemonを再利用し、
 存在しなければloopbackの `127.0.0.1:8318` へ自動起動します。
 
@@ -376,6 +383,15 @@ main sessionのモデルは `providers.json` の `defaultModel`、workerのモ�
 `1000000` を指定しています。いずれもproviderが実際の上限を先に返した場合は、
 非streaming turnを新規threadで1回だけ自動再試行します。
 
+`maxConcurrency` はpositive integerのmodel別並列上限です。`subagentModel`（省略時は
+`defaultModel`）だけでなく、同じproviderの `modelPrefixes` に一致して動的生成された各exact
+model routeにも同じ値を継承します。共有daemonは `/health` の `model_concurrency` にexact model
+ごとの `active`、`queued`、`limit`、`available` を公開し、routing hookはquota headroomと
+予約済みqueueを含む空きslotの小さい方を
+使って候補を並べます。OpenCode GoはCodexBarの `opencodego` usageと
+`maxConcurrency: 7` の両方で制御します。healthが一時的に読めない場合も起動候補は維持されますが、
+adapter自身が上限を強制するため超過実行は許可されません。
+
 ### providerを無効化
 
 ```json
@@ -411,7 +427,8 @@ Rustコードを変更せず、`configured-acp` providerを追加できます。
 `agent` と同名の `~/.claude/agents/claudex-vendor.md` も作成します。Claude Codeが外部model
 IDを受理しないproviderではfrontmatterを `model: inherit` にし、呼び出し時の
 `claudex_model` で固定します。利用率をCodexBarで管理するproviderには `usageProvider` を
-追加します。Qwen Cloud quotaを使うproviderは `usageProvider: "qwen"` とします。quota更新に
+追加します。必要ならmodel別上限としてpositive integerの `maxConcurrency` も追加します。
+Qwen Cloud quotaを使うproviderは `usageProvider: "qwen"` とします。quota更新に
 失敗した場合は `defaultModel` と一致するQwen Codeのcompatible API設定をavailability確認に
 使います。省略したproviderは常に利用可能なunmetered providerとして扱われます。
 

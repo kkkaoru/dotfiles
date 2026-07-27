@@ -1,5 +1,5 @@
 use crate::agent_backend::{AcpLaunch, BackendKind, BackendRoute};
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use std::{collections::HashSet, fs, path::Path};
 const CONFIG_VERSION: u64 = 1;
@@ -30,6 +30,8 @@ struct Provider {
     model_catalog_json: Option<String>,
     #[serde(default)]
     max_context_tokens: Option<u64>,
+    #[serde(default)]
+    max_concurrency: Option<usize>,
     #[serde(default)]
     model_prefixes: Vec<String>,
     backend: BackendKind,
@@ -140,13 +142,27 @@ fn validate(config: ProviderConfig) -> Result<LoadedConfig> {
         bail!("provider config must enable at least one provider");
     }
     validate_providers(&providers)?;
-    let enabled_ids = providers.iter().map(|provider| provider.id.as_str()).collect::<HashSet<_>>();
-    let main_ids = config.main_providers.iter().map(String::as_str).collect::<HashSet<_>>();
-    if main_ids.is_empty() || main_ids.len() != config.main_providers.len() || !main_ids.is_subset(&enabled_ids) {
+    let enabled_ids = providers
+        .iter()
+        .map(|provider| provider.id.as_str())
+        .collect::<HashSet<_>>();
+    let main_ids = config
+        .main_providers
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
+    if main_ids.is_empty()
+        || main_ids.len() != config.main_providers.len()
+        || !main_ids.is_subset(&enabled_ids)
+    {
         bail!("mainProviders must name distinct enabled providers");
     }
-    let main_model = providers.iter().find(|provider| provider.id == config.main_providers[0])
-        .expect("validated main provider").default_model.clone();
+    let main_model = providers
+        .iter()
+        .find(|provider| provider.id == config.main_providers[0])
+        .expect("validated main provider")
+        .default_model
+        .clone();
     let routes = providers.into_iter().map(Provider::into_route).collect();
     Ok(LoadedConfig {
         main_model,
@@ -187,7 +203,17 @@ fn validate_providers(providers: &[Provider]) -> Result<()> {
         if provider.max_context_tokens == Some(0) {
             bail!("maxContextTokens must be greater than zero");
         }
-        if provider.subagent_model.as_ref().is_some_and(String::is_empty) {
+        if provider
+            .max_concurrency
+            .is_some_and(|limit| limit == 0 || limit > crate::grok_acp::MAX_MODEL_CONCURRENCY)
+        {
+            bail!("maxConcurrency must be between 1 and the adapter semaphore limit");
+        }
+        if provider
+            .subagent_model
+            .as_ref()
+            .is_some_and(String::is_empty)
+        {
             bail!("subagentModel must not be empty");
         }
         if provider
@@ -243,6 +269,7 @@ impl Provider {
             model_provider: self.model_provider,
             model_catalog_json: self.model_catalog_json,
             max_context_tokens: self.max_context_tokens,
+            max_concurrency: self.max_concurrency,
             model_prefixes: self.model_prefixes,
             acp: self.acp,
         }

@@ -1,11 +1,13 @@
 use std::sync::{
-    Arc, Mutex,
     atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 
 use super::{AgentBackend, BackendKind, BackendRoute};
+
+mod concurrency;
 
 const MAX_DYNAMIC_ROUTES: usize = 32;
 
@@ -312,26 +314,8 @@ impl RoutedBackends {
             bail!("dynamic backend route limit reached");
         }
         let template = self
-            .configured
-            .iter()
-            .filter(|route| {
-                route
-                    .template
-                    .model_prefixes
-                    .iter()
-                    .any(|prefix| model.starts_with(prefix))
-            })
-            .max_by_key(|route| {
-                route
-                    .template
-                    .model_prefixes
-                    .iter()
-                    .filter(|prefix| model.starts_with(*prefix))
-                    .map(String::len)
-                    .max()
-                    .unwrap_or_default()
-            })
-            .map(|route| route.template.clone())
+            .prefix_template(model)
+            .cloned()
             .with_context(|| format!("no backend route is configured for model `{model}`"))?;
         let kind = template.backend;
         let route = Arc::new(RoutedBackend::lazy(
@@ -343,6 +327,23 @@ impl RoutedBackends {
         ));
         dynamic.push(Arc::clone(&route));
         Ok((self.configured.len() + dynamic.len() - 1, route))
+    }
+
+    fn prefix_template(&self, model: &str) -> Option<&BackendRoute> {
+        self.configured
+            .iter()
+            .filter_map(|route| {
+                route
+                    .template
+                    .model_prefixes
+                    .iter()
+                    .filter(|prefix| model.starts_with(prefix.as_str()))
+                    .map(String::len)
+                    .max()
+                    .map(|length| (length, &route.template))
+            })
+            .max_by_key(|(length, _)| *length)
+            .map(|(_, template)| template)
     }
 
     pub(super) fn first_ready(&self, kind: BackendKind) -> Option<Arc<AgentBackend>> {

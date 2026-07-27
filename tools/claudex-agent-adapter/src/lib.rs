@@ -15,21 +15,21 @@ pub mod runtime;
 mod subagent_policy;
 mod working_directory;
 
-pub const ADAPTER_PROTOCOL_VERSION: u64 = 22;
+pub const ADAPTER_PROTOCOL_VERSION: u64 = 23;
 pub(crate) const NONINTERACTIVE_CHILD_ENV: &str = "CLAUDEX_NONINTERACTIVE_CHILD";
 pub(crate) const DISCOVERY_MODEL_PREFIX: &str = "claude-claudex-";
 
 use std::sync::Arc;
 
-use anthropic::{Bridge, MessagesRequest, error_response, token_count};
+use anthropic::{error_response, token_count, Bridge, MessagesRequest};
 use axum::{
-    Json, Router,
     extract::{Request, State},
     http::{HeaderMap, Response, StatusCode},
     middleware,
     middleware::Next,
     response::IntoResponse,
     routing::{get, post},
+    Json, Router,
 };
 use serde_json::json;
 
@@ -46,12 +46,14 @@ pub fn http_router(bridge: Arc<Bridge>, model: String, auth_token: Option<String
             get(move || async move {
                 let data = models
                     .into_iter()
-                    .map(|model| json!({
-                        "id":format!("{DISCOVERY_MODEL_PREFIX}{model}"),
-                        "type":"model",
-                        "display_name":model,
-                        "description":"Claudex provider model"
-                    }))
+                    .map(|model| {
+                        json!({
+                            "id":format!("{DISCOVERY_MODEL_PREFIX}{model}"),
+                            "type":"model",
+                            "display_name":model,
+                            "description":"Claudex provider model"
+                        })
+                    })
                     .collect::<Vec<_>>();
                 Json(json!({"object":"list","data":data}))
             }),
@@ -77,6 +79,7 @@ pub fn http_router(bridge: Arc<Bridge>, model: String, auth_token: Option<String
                         "build_id":env!("CLAUDEX_BUILD_ID"),
                         "backend_routes":backend_routes,
                         "started_models":health_bridge.started_models(),
+                        "model_concurrency":health_bridge.model_concurrency(),
                         "model":health_model,
                         "session_capacity":health_bridge.session_capacity(),
                         "session_slots_used":health_bridge.used_session_slots(),

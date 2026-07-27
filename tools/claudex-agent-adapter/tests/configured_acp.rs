@@ -1,13 +1,151 @@
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
-use claudex_agent_adapter::agent_backend::{AcpLaunch, AgentBackend, BackendKind, BackendRoute};
-use serde_json::{Value, json};
+use claudex_agent_adapter::{
+    agent_backend::{AcpLaunch, AgentBackend, BackendKind, BackendRoute},
+    anthropic::Bridge,
+    http_router,
+};
+use reqwest::Client;
+use serde_json::{json, Value};
 
 const ACP_EVENT_TIMEOUT: Duration = Duration::from_secs(5);
+const CONFIGURED_PARALLEL_PROMPTS: usize = 7;
+const PARALLEL_RELEASE_FILE: &str = "grok-acp-parallel-release";
+static CWD_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn enforces_seven_exact_model_turns_and_queues_the_eighth() {
+    let _cwd_guard = CWD_LOCK.lock().await;
+    let root = tempfile::tempdir().expect("configured concurrency fixture");
+    std::env::set_current_dir(root.path()).expect("isolate configured concurrency trace");
+    let model = "opencode-go/deepseek-v4-flash";
+    let backend = AgentBackend::spawn_routes(&[BackendRoute {
+        model: model.to_owned(),
+        backend: BackendKind::ConfiguredAcp,
+        model_provider: None,
+        model_catalog_json: None,
+        max_context_tokens: None,
+        max_concurrency: Some(CONFIGURED_PARALLEL_PROMPTS),
+        model_prefixes: vec!["opencode-go/".to_owned()],
+        acp: Some(AcpLaunch {
+            program: env!("CARGO_BIN_EXE_grok-acp-mock").to_owned(),
+            arguments: vec!["--mode".to_owned(), "concurrent-turns-seven".to_owned()],
+        }),
+    }]);
+    let bridge = Arc::new(Bridge::new_with_backend(backend, model.to_owned()));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind concurrency adapter");
+    let address = listener.local_addr().expect("concurrency adapter address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, http_router(bridge, model.to_owned(), None))
+            .await
+            .expect("serve concurrency adapter");
+    });
+    // Two independent HTTP clients model two Claude Code main sessions sharing one daemon.
+    let client_a = Client::new();
+    let client_b = Client::new();
+    let health_url = format!("http://{address}/health");
+    let initial = client_a
+        .get(&health_url)
+        .send()
+        .await
+        .expect("initial health")
+        .json::<Value>()
+        .await
+        .expect("decode initial health");
+    assert_eq!(
+        initial["model_concurrency"][model],
+        json!({"active":0,"limit":7,"available":true,"queued":0})
+    );
+
+    let url = format!("http://{address}/v1/messages");
+    let mut turns = Vec::new();
+    for index in 0..=CONFIGURED_PARALLEL_PROMPTS {
+        let client = if index % 2 == 0 {
+            client_a.clone()
+        } else {
+            client_b.clone()
+        };
+        let url = url.clone();
+        turns.push(tokio::spawn(async move {
+            client
+                .post(url)
+                .json(&json!({
+                    "model":model,
+                    "max_tokens":128,
+                    "messages":[{"role":"user","content":format!("parallel {index}")}]
+                }))
+                .send()
+                .await
+                .expect("send parallel turn")
+                .error_for_status()
+                .expect("parallel turn status")
+                .json::<Value>()
+                .await
+                .expect("decode parallel turn")
+        }));
+    }
+
+    let saturated = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let health = client_a
+                .get(&health_url)
+                .send()
+                .await
+                .expect("saturated health")
+                .json::<Value>()
+                .await
+                .expect("decode saturated health");
+            let status = &health["model_concurrency"][model];
+            if status["active"] == CONFIGURED_PARALLEL_PROMPTS
+                && status["queued"] == 1
+                && prompt_count(root.path()) == CONFIGURED_PARALLEL_PROMPTS
+            {
+                break health;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("seven prompts should run while the eighth waits");
+    assert_eq!(
+        saturated["model_concurrency"][model],
+        json!({"active":7,"limit":7,"available":false,"queued":1})
+    );
+
+    std::fs::write(root.path().join(PARALLEL_RELEASE_FILE), b"release")
+        .expect("release parallel prompts");
+    for turn in turns {
+        let response = tokio::time::timeout(ACP_EVENT_TIMEOUT, turn)
+            .await
+            .expect("parallel turn timed out")
+            .expect("parallel turn task failed");
+        assert_eq!(response["content"][0]["text"], "GROK_ACP_STREAM_OK");
+    }
+    assert_eq!(prompt_count(root.path()), CONFIGURED_PARALLEL_PROMPTS + 1);
+    server.abort();
+}
+
+fn prompt_count(root: &std::path::Path) -> usize {
+    std::fs::read_to_string(root.join("grok-acp-mock.jsonl"))
+        .map(|trace| {
+            trace
+                .lines()
+                .filter(|line| {
+                    serde_json::from_str::<Value>(line)
+                        .ok()
+                        .is_some_and(|event| event.get("prompt").is_some())
+                })
+                .count()
+        })
+        .unwrap_or(0)
+}
 
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn configured_acp_routes_dynamic_models_and_expands_arguments() {
+    let _cwd_guard = CWD_LOCK.lock().await;
     assert!(
         AgentBackend::spawn(BackendKind::ConfiguredAcp, "missing-launch")
             .await
@@ -27,6 +165,7 @@ async fn configured_acp_routes_dynamic_models_and_expands_arguments() {
         model_catalog_json: None,
         max_context_tokens: None,
         model_prefixes: vec!["vendor-".to_owned()],
+        max_concurrency: None,
         acp: Some(AcpLaunch {
             program: env!("CARGO_BIN_EXE_grok-acp-mock").to_owned(),
             arguments: vec!["--model".to_owned(), "{model}".to_owned()],
@@ -62,12 +201,10 @@ async fn configured_acp_routes_dynamic_models_and_expands_arguments() {
     let _ = tokio::time::timeout(std::time::Duration::from_secs(1), receiver.recv())
         .await
         .expect("configured ACP event");
-    assert!(
-        backend
-            .respond_for_model("vendor-next", json!(1), json!({}))
-            .await
-            .is_err()
-    );
+    assert!(backend
+        .respond_for_model("vendor-next", json!(1), json!({}))
+        .await
+        .is_err());
 
     assert_configured_trace(root.path(), &request_cwd);
 
@@ -86,11 +223,10 @@ async fn configured_acp_routes_dynamic_models_and_expands_arguments() {
     assert_eq!(leaf.kind(), BackendKind::ConfiguredAcp);
     assert!(leaf.is_alive());
     assert!(leaf.request("unsupported", json!({})).await.is_err());
-    assert!(
-        leaf.request_detached("unsupported", json!({}))
-            .await
-            .is_err()
-    );
+    assert!(leaf
+        .request_detached("unsupported", json!({}))
+        .await
+        .is_err());
     assert!(leaf.respond(json!(1), json!({})).await.is_err());
 
     session_scoped_configured_acp_recycles_after_one_failed_stream().await;
@@ -107,6 +243,7 @@ async fn session_scoped_configured_acp_recycles_after_one_failed_stream() {
         model_catalog_json: None,
         max_context_tokens: None,
         model_prefixes: Vec::new(),
+        max_concurrency: None,
         acp: Some(AcpLaunch {
             program: env!("CARGO_BIN_EXE_grok-acp-mock").to_owned(),
             arguments: vec!["--mode".to_owned(), "fail-prompt-once".to_owned()],
@@ -130,11 +267,9 @@ async fn session_scoped_configured_acp_recycles_after_one_failed_stream() {
         .expect("failed turn event")
         .expect("failed turn event dispatcher");
     assert_eq!(failed["method"], "error");
-    assert!(
-        failed["params"]["error"]["message"]
-            .as_str()
-            .is_some_and(|message| message.contains("recycling provider"))
-    );
+    assert!(failed["params"]["error"]["message"]
+        .as_str()
+        .is_some_and(|message| message.contains("recycling provider")));
     assert!(backend.started_models().is_empty());
 
     let restarted = backend
@@ -217,9 +352,7 @@ fn assert_configured_trace(root: &std::path::Path, request_cwd: &std::path::Path
         .map(|line| serde_json::from_str::<Value>(line).expect("trace event"))
         .collect::<Vec<_>>();
     assert_eq!(trace[0]["arguments"], json!(["--model", "vendor-next"]));
-    assert!(
-        trace
-            .iter()
-            .any(|event| event["new_session"]["cwd"] == json!(request_cwd))
-    );
+    assert!(trace
+        .iter()
+        .any(|event| event["new_session"]["cwd"] == json!(request_cwd)));
 }

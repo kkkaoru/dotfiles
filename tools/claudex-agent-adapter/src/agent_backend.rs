@@ -3,10 +3,11 @@ use crate::{
     copilot_acp::CopilotAcp,
     grok_acp::GrokAcp,
 };
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::{fmt, str::FromStr, sync::Arc};
+mod concurrency;
 mod route_config;
 mod routes;
 use routes::{RoutedBackend, RoutedBackends};
@@ -64,6 +65,8 @@ pub struct BackendRoute {
     pub model_catalog_json: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_context_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_concurrency: Option<usize>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub model_prefixes: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -77,6 +80,7 @@ impl BackendRoute {
             model_provider: None,
             model_catalog_json: None,
             max_context_tokens: None,
+            max_concurrency: None,
             model_prefixes: Vec::new(),
             acp: None,
         }
@@ -85,6 +89,7 @@ impl BackendRoute {
         if self.model_provider.is_none()
             && self.model_catalog_json.is_none()
             && self.max_context_tokens.is_none()
+            && self.max_concurrency.is_none()
             && self.model_prefixes.is_empty()
             && self.acp.is_none()
         {
@@ -131,7 +136,12 @@ impl AgentBackend {
     async fn spawn_route(route: &BackendRoute) -> Result<Arc<Self>> {
         if let Some(acp) = &route.acp {
             return Ok(Arc::new(Self::ConfiguredAcp(
-                GrokAcp::spawn_configured(&route.model, acp).await?,
+                GrokAcp::spawn_configured_with_max_concurrency(
+                    &route.model,
+                    acp,
+                    route.max_concurrency,
+                )
+                .await?,
             )));
         }
         Self::spawn(route.backend, &route.model).await
@@ -143,23 +153,18 @@ impl AgentBackend {
     pub fn codex(server: Arc<AppServer>) -> Arc<Self> {
         Arc::new(Self::Codex(server))
     }
-
     pub fn grok(agent: Arc<GrokAcp>) -> Arc<Self> {
         Arc::new(Self::Grok(agent))
     }
-
     pub fn copilot(agent: Arc<CopilotAcp>) -> Arc<Self> {
         Arc::new(Self::Copilot(agent))
     }
-
     pub fn configured_acp(agent: Arc<GrokAcp>) -> Arc<Self> {
         Arc::new(Self::ConfiguredAcp(agent))
     }
-
     pub fn routed(routes: Vec<(String, Arc<Self>)>) -> Arc<Self> {
         Arc::new(Self::Routed(RoutedBackends::ready(routes)))
     }
-
     pub const fn kind(&self) -> BackendKind {
         match self {
             Self::Codex(_) => BackendKind::CodexAppServer,
@@ -169,21 +174,18 @@ impl AgentBackend {
             Self::Routed(_) => panic!("a routed backend has no single kind"),
         }
     }
-
     pub fn supports_model(&self, model: &str) -> bool {
         match self {
             Self::Routed(routes) => routes.supports(model),
             Self::Codex(_) | Self::ConfiguredAcp(_) | Self::Copilot(_) | Self::Grok(_) => false,
         }
     }
-
     pub fn route_descriptions(&self) -> Vec<String> {
         match self {
             Self::Routed(routes) => routes.descriptions(),
             leaf => vec![leaf.kind().to_string()],
         }
     }
-
     pub fn models(&self) -> Vec<String> {
         match self {
             Self::Routed(routes) => routes.models(),
@@ -234,12 +236,6 @@ impl AgentBackend {
         }
     }
 
-    pub(crate) fn max_context_tokens_for_model(&self, model: &str) -> Option<u64> {
-        match self {
-            Self::Routed(routes) => routes.max_context_tokens_for_model(model),
-            Self::Codex(_) | Self::ConfiguredAcp(_) | Self::Copilot(_) | Self::Grok(_) => None,
-        }
-    }
     pub async fn request(&self, method: &str, params: Value) -> Result<Value> {
         match self {
             Self::Codex(server) => server.request(method, params).await,

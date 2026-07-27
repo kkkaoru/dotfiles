@@ -28,6 +28,7 @@ mod tests {
             model_catalog_json: None,
             max_context_tokens: None,
             model_prefixes: Vec::new(),
+            max_concurrency: None,
             acp: Some(AcpLaunch {
                 program: "provider".to_owned(),
                 arguments: vec!["--stdio".to_owned()],
@@ -66,10 +67,7 @@ mod tests {
     #[test]
     #[should_panic(expected = "a routed backend has no single kind")]
     fn routed_backend_rejects_a_leaf_kind_query() {
-        AgentBackend::spawn_routes(&[BackendRoute::new(
-            "model",
-            BackendKind::CodexAppServer,
-        )])
-        .kind();
+        AgentBackend::spawn_routes(&[BackendRoute::new("model", BackendKind::CodexAppServer)])
+            .kind();
     }
 }

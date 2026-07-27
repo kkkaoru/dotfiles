@@ -3,7 +3,7 @@
 mod tests {
     use std::sync::Arc;
 
-    use super::{MAX_DYNAMIC_ROUTES, RoutedBackends};
+    use super::{RoutedBackends, MAX_DYNAMIC_ROUTES};
     use crate::agent_backend::{AcpLaunch, BackendKind, BackendRoute};
 
     #[test]
@@ -82,6 +82,32 @@ mod tests {
     }
 
     #[test]
+    fn concurrency_limits_follow_the_exact_or_most_specific_prefix() {
+        let mut broad = route("vendor-default", BackendKind::GrokAcp);
+        broad.max_concurrency = Some(3);
+        broad.model_prefixes.push("vendor-".to_owned());
+        let mut specific = route("vendor-code", BackendKind::GrokAcp);
+        specific.max_concurrency = Some(7);
+        specific.model_prefixes.push("vendor-code-".to_owned());
+        let routes = RoutedBackends::lazy(&[broad, specific]);
+
+        assert_eq!(routes.max_concurrency_for_model("vendor-chat"), Some(3));
+        assert_eq!(
+            routes.max_concurrency_for_model("vendor-code-next"),
+            Some(7)
+        );
+        assert_eq!(routes.max_concurrency_for_model("vendor-default"), Some(3));
+        assert_eq!(routes.max_concurrency_for_model("other"), None);
+        assert_eq!(
+            routes.configured_concurrency_limits(),
+            [
+                ("vendor-default".to_owned(), 3),
+                ("vendor-code".to_owned(), 7)
+            ]
+        );
+    }
+
+    #[test]
     fn applies_codex_provider_and_catalog_to_exact_and_dynamic_routes() {
         let mut fugu = route("fugu", BackendKind::CodexAppServer);
         fugu.model_provider = Some("sakana".to_owned());
@@ -96,11 +122,9 @@ mod tests {
                 "config": {"web_search":"disabled"}
             }));
             assert_eq!(params["modelProvider"], "sakana");
-            assert!(
-                params["config"]["model_catalog_json"]
-                    .as_str()
-                    .is_some_and(|path| path.ends_with("/.codex/fugu.json"))
-            );
+            assert!(params["config"]["model_catalog_json"]
+                .as_str()
+                .is_some_and(|path| path.ends_with("/.codex/fugu.json")));
             assert_eq!(params["config"]["web_search"], "disabled");
         }
     }
@@ -114,6 +138,7 @@ mod tests {
             model_catalog_json: None,
             max_context_tokens: None,
             model_prefixes: Vec::new(),
+            max_concurrency: None,
             acp: Some(AcpLaunch {
                 program: "/definitely/missing/acp".to_owned(),
                 arguments: vec!["--stdio".to_owned()],

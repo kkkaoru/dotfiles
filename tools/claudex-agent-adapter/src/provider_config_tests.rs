@@ -67,6 +67,22 @@ mod tests {
     }
 
     #[test]
+    fn accepts_provider_concurrency_limit() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("providers.json");
+        std::fs::write(
+            &path,
+            config(
+                r#"{"id":"p","agent":"worker","defaultModel":"new-1","effort":"high","enabled":true,"maxConcurrency":7,"modelPrefixes":["new-"],"backend":"codex-app-server"}"#,
+            ),
+        )
+        .unwrap();
+        let loaded = load(&path).unwrap();
+        assert_eq!(loaded.routes[0].max_concurrency, Some(7));
+        assert!(loaded.routes[0].description().contains("maxConcurrency"));
+    }
+
+    #[test]
     fn accepts_codex_provider_and_catalog_metadata() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("providers.json");
@@ -98,8 +114,14 @@ mod tests {
         .unwrap();
         let loaded = load(&path).unwrap();
         assert_eq!(loaded.main_model, "glm-5.2:cloud");
-        assert_eq!(loaded.routes[0].model_provider.as_deref(), Some("ollama-launch-codex-app"));
-        assert_eq!(loaded.routes[0].model_catalog_json.as_deref(), Some("~/.codex/fugu.json"));
+        assert_eq!(
+            loaded.routes[0].model_provider.as_deref(),
+            Some("ollama-launch-codex-app")
+        );
+        assert_eq!(
+            loaded.routes[0].model_catalog_json.as_deref(),
+            Some("~/.codex/fugu.json")
+        );
         assert!(loaded.model_catalog.matches("glm-5.2:cloud"));
     }
 
@@ -123,6 +145,9 @@ mod tests {
             ),
             config(
                 r#"{"id":"p","agent":"w","defaultModel":"m","effort":"h","enabled":true,"maxContextTokens":0,"backend":"grok-acp"}"#,
+            ),
+            config(
+                r#"{"id":"p","agent":"w","defaultModel":"m","effort":"h","enabled":true,"maxConcurrency":0,"backend":"grok-acp"}"#,
             ),
             config(
                 r#"{"id":"p","agent":"w","defaultModel":"m","subagentModel":"","effort":"h","enabled":true,"backend":"grok-acp"}"#,
@@ -160,6 +185,9 @@ mod tests {
         invalid.push(config);
         let mut config = parsed();
         config.providers[0].model_prefixes = vec![String::new()];
+        invalid.push(config);
+        let mut config = parsed();
+        config.providers[0].max_concurrency = Some(crate::grok_acp::MAX_MODEL_CONCURRENCY + 1);
         invalid.push(config);
         for field in ["id", "model", "prefix"] {
             let mut config = parsed();

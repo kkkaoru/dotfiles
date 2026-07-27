@@ -19,7 +19,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 DEFAULT_CACHE_SECONDS = 300
-ROUTING_CACHE_VERSION = 2
+ROUTING_CACHE_VERSION = 3
 QWEN_QUOTA_CACHE_SECONDS = 60 * 60
 QWEN_REQUEST_TIMEOUT_SECONDS = 5
 QWEN_SUBPROCESS_GRACE_SECONDS = 2
@@ -33,6 +33,10 @@ QWEN_USAGE_PROVIDER = "qwen"
 OLLAMA_USAGE_PROVIDER = "ollama"
 OLLAMA_BASE_URL_ENV = "CLAUDEX_OLLAMA_BASE_URL"
 DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434"
+DAEMON_HEALTH_URL_ENV = "CLAUDEX_DAEMON_HEALTH_URL"
+ANTHROPIC_BASE_URL_ENV = "ANTHROPIC_BASE_URL"
+DEFAULT_DAEMON_HEALTH_URL = "http://127.0.0.1:8318/health"
+DAEMON_HEALTH_TIMEOUT_SECONDS = 2
 QWEN_CONSOLE_HOST = "cs-data.qwencloud.com"
 QWEN_CONSOLE_PATH = "/data/api.json"
 QWEN_CONSOLE_PRODUCT = "sfm_bailian"
@@ -101,8 +105,11 @@ def valid_provider(provider: Any) -> bool:
         isinstance(provider.get(field), str) and provider[field] for field in required
     ):
         return False
-    return "subagentModel" not in provider or valid_model_id(
-        provider["subagentModel"]
+    if "subagentModel" in provider and not valid_model_id(provider["subagentModel"]):
+        return False
+    maximum = provider.get("maxConcurrency")
+    return maximum is None or (
+        isinstance(maximum, int) and not isinstance(maximum, bool) and maximum > 0
     )
 
 
@@ -254,12 +261,191 @@ def status(available: bool, maximum: float | None, reason: str) -> dict[str, Any
 
 def worker(provider: dict[str, Any]) -> dict[str, Any]:
     """Expose only the routing fields an orchestrator needs."""
-    return {
+    result = {
         "provider": provider["id"],
         "agent": provider["agent"],
         "model": provider.get("subagentModel", provider["defaultModel"]),
         "effort": provider["effort"],
         "model_prefixes": provider.get("modelPrefixes", []),
+    }
+    if "maxConcurrency" in provider:
+        result["max_concurrency"] = provider["maxConcurrency"]
+    return result
+
+
+def daemon_health_url(environment: dict[str, str]) -> str:
+    """Accept only the shared loopback daemon health endpoint."""
+    if configured := environment.get(DAEMON_HEALTH_URL_ENV):
+        return validate_daemon_health_url(configured)
+    if base_url := environment.get(ANTHROPIC_BASE_URL_ENV):
+        parsed = urlparse(base_url)
+        if parsed.hostname in {"127.0.0.1", "::1", "localhost"}:
+            origin = parsed._replace(path="/health", params="", query="", fragment="")
+            return validate_daemon_health_url(origin.geturl())
+    return validate_daemon_health_url(DEFAULT_DAEMON_HEALTH_URL)
+
+
+def validate_daemon_health_url(value: str) -> str:
+    """Reject credentials, remote hosts, and non-health paths."""
+    parsed = urlparse(value)
+    if (
+        parsed.scheme != "http"
+        or parsed.hostname not in {"127.0.0.1", "::1", "localhost"}
+        or parsed.path != "/health"
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        raise ValueError("daemon health URL must be a loopback HTTP /health endpoint")
+    return value
+
+
+def run_daemon_health(
+    curl_program: str, environment: dict[str, str]
+) -> dict[str, Any] | None:
+    """Read public daemon capacity without retaining unrelated health fields."""
+    try:
+        completed = subprocess.run(
+            [
+                curl_program,
+                "--fail",
+                "--silent",
+                "--show-error",
+                "--max-time",
+                str(DAEMON_HEALTH_TIMEOUT_SECONDS),
+                daemon_health_url(environment),
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=DAEMON_HEALTH_TIMEOUT_SECONDS + QWEN_SUBPROCESS_GRACE_SECONDS,
+        )
+        payload = json.loads(completed.stdout)
+        if not isinstance(payload, dict) or payload.get("status") != "ok":
+            return None
+        return sanitize_model_concurrency(payload.get("model_concurrency"))
+    except (
+        OSError,
+        TypeError,
+        ValueError,
+        subprocess.SubprocessError,
+        json.JSONDecodeError,
+    ):
+        return None
+
+
+def sanitize_model_concurrency(value: Any) -> dict[str, dict[str, Any]] | None:
+    """Validate the exact-model counters exported by the adapter."""
+    if not isinstance(value, dict):
+        return None
+    sanitized: dict[str, dict[str, Any]] = {}
+    for model, fields in value.items():
+        if not valid_model_id(model) or not isinstance(fields, dict):
+            return None
+        active = fields.get("active")
+        queued = fields.get("queued")
+        limit = fields.get("limit")
+        available = fields.get("available")
+        if (
+            not isinstance(active, int)
+            or isinstance(active, bool)
+            or active < 0
+            or not isinstance(queued, int)
+            or isinstance(queued, bool)
+            or queued < 0
+            or not isinstance(limit, int)
+            or isinstance(limit, bool)
+            or limit <= 0
+            or not isinstance(available, bool)
+            or available != (active + queued < limit)
+        ):
+            return None
+        sanitized[model] = {
+            "active": active,
+            "queued": queued,
+            "limit": limit,
+            "available": available,
+        }
+    return sanitized
+
+
+def provider_for_model(
+    config: dict[str, Any], model: str
+) -> dict[str, Any] | None:
+    """Resolve exact models first, then the most-specific configured prefix."""
+    exact = [
+        provider
+        for provider in config["providers"]
+        if model
+        in {
+            provider["defaultModel"],
+            provider.get("subagentModel", provider["defaultModel"]),
+        }
+    ]
+    if exact:
+        return exact[0]
+    matches = [
+        (len(prefix), -index, provider)
+        for index, provider in enumerate(config["providers"])
+        for prefix in provider.get("modelPrefixes", [])
+        if model.startswith(prefix)
+    ]
+    return max(matches, default=(0, 0, None), key=lambda item: item[:2])[2]
+
+
+def model_concurrency_status(
+    provider: dict[str, Any],
+    model: str,
+    health: dict[str, dict[str, Any]] | None,
+) -> dict[str, Any]:
+    """Resolve one model limit, assuming launchable state when health is absent."""
+    configured_limit = provider.get("maxConcurrency")
+    if configured_limit is None:
+        return concurrency_status(None, None, None, True, "not-limited", True)
+    if health is None:
+        return concurrency_status(
+            None, None, configured_limit, True, "daemon-health-unavailable", False
+        )
+    fields = health.get(model)
+    if fields is None:
+        return concurrency_status(0, 0, configured_limit, True, "idle", True)
+    if fields["limit"] != configured_limit:
+        return concurrency_status(
+            None, None, configured_limit, True, "daemon-health-unavailable", False
+        )
+    return concurrency_status(
+        fields["active"],
+        fields["queued"],
+        configured_limit,
+        fields["available"],
+        "available" if fields["available"] else "limit-reached",
+        True,
+    )
+
+
+def concurrency_status(
+    active: int | None,
+    queued: int | None,
+    limit: int | None,
+    available: bool,
+    reason: str,
+    known: bool,
+) -> dict[str, Any]:
+    """Build the sanitized concurrency status attached to routing output."""
+    return {
+        "active": active,
+        "queued": queued,
+        "limit": limit,
+        "available": available,
+        "remaining": (
+            None
+            if active is None or queued is None or limit is None
+            else max(0, limit - active - queued)
+        ),
+        "reason": reason,
+        "known": known,
     }
 
 
@@ -316,6 +502,7 @@ def routing_summary(
     )
     return {
         "providers": providers,
+        "main_workers": main_workers,
         "selected_agents": [item["agent"] for item in selected],
         "selected_workers": selected,
         "preferred_worker": selected[0] if selected else None,
@@ -323,6 +510,132 @@ def routing_summary(
         "fallback_active": fallback_active,
         "disabled_subagent_models": sorted(disabled_models),
     }
+
+
+def combined_capacity_priority(
+    quota: dict[str, Any], concurrency: dict[str, Any], config_index: int
+) -> tuple[float, ...]:
+    """Rank by the tightest known quota or model-concurrency constraint."""
+    if quota["reason"] == "unmetered":
+        quota_unknown = 0.0
+        quota_used = 0.0
+    elif isinstance(quota["max_used_percent"], (int, float)):
+        quota_unknown = 0.0
+        quota_used = float(quota["max_used_percent"])
+    else:
+        quota_unknown = 1.0
+        quota_used = 0.0
+    parallel_used = 0.0
+    if (
+        concurrency["active"] is not None
+        and concurrency["queued"] is not None
+        and concurrency["limit"] is not None
+    ):
+        parallel_used = (
+            100
+            * (concurrency["active"] + concurrency["queued"])
+            / concurrency["limit"]
+        )
+    health_unknown = 1.0 if concurrency["reason"] == "daemon-health-unavailable" else 0.0
+    return (
+        quota_unknown,
+        max(quota_used, parallel_used),
+        health_unknown,
+        config_index,
+    )
+
+
+def apply_model_concurrency(
+    summary: dict[str, Any],
+    config: dict[str, Any],
+    health: dict[str, dict[str, Any]] | None,
+    disabled_models: frozenset[str] = frozenset(),
+) -> dict[str, Any]:
+    """Refresh volatile daemon slots without invalidating cached provider usage."""
+    combined = json.loads(json.dumps(summary))
+    candidates: list[tuple[tuple[float, ...], dict[str, Any]]] = []
+    model_capacity: dict[str, dict[str, Any]] = {}
+    main_workers = combined.get("main_workers", {})
+    for index, provider in enumerate(config["providers"]):
+        provider_id = provider["id"]
+        fields = combined["providers"][provider_id]
+        current_worker = worker(provider)
+        model = current_worker["model"]
+        concurrency = model_concurrency_status(provider, model, health)
+        if "maxConcurrency" in provider:
+            model_capacity[model] = concurrency
+            fields.update(
+                {
+                    "concurrency_active": concurrency["active"],
+                    "concurrency_queued": concurrency["queued"],
+                    "concurrency_limit": concurrency["limit"],
+                    "concurrency_remaining": concurrency["remaining"],
+                    "concurrency_available": concurrency["available"],
+                    "concurrency_reason": concurrency["reason"],
+                }
+            )
+            main_model = provider["defaultModel"]
+            main_concurrency = model_concurrency_status(provider, main_model, health)
+            model_capacity[main_model] = main_concurrency
+            if provider_id in main_workers:
+                main_workers[provider_id]["concurrency"] = main_concurrency
+                if (
+                    main_workers[provider_id]["available"]
+                    and not main_concurrency["available"]
+                ):
+                    main_workers[provider_id]["available"] = False
+                    main_workers[provider_id]["reason"] = "concurrency-limit-reached"
+        quota = {
+            "available": fields["available"],
+            "max_used_percent": fields["max_used_percent"],
+            "reason": fields["reason"],
+        }
+        disabled = model in disabled_models or fields.get("disabled", False)
+        if quota["available"] and not concurrency["available"] and not disabled:
+            fields["available"] = False
+            fields["reason"] = "concurrency-limit-reached"
+        if quota["available"] and concurrency["available"] and not disabled:
+            selected_worker = current_worker
+            if "maxConcurrency" in provider:
+                selected_worker = {**current_worker, "concurrency": concurrency}
+            candidates.append(
+                (
+                    combined_capacity_priority(quota, concurrency, index),
+                    selected_worker,
+                )
+            )
+
+    if health is not None:
+        for model in health:
+            provider = provider_for_model(config, model)
+            if provider is not None and "maxConcurrency" in provider:
+                model_capacity[model] = model_concurrency_status(provider, model, health)
+
+    selected = [item for _, item in sorted(candidates, key=lambda item: item[0])]
+    fallback = {"provider": "fallback", **config["fallback"]}
+    fallback_active = not selected and fallback["model"] not in disabled_models
+    if fallback_active:
+        selected = [fallback]
+    preferred_main_worker = next(
+        (
+            main_workers[provider]
+            for provider in config["mainProviders"]
+            if provider in main_workers and main_workers[provider]["available"]
+        ),
+        None,
+    )
+    combined.update(
+        {
+            "selected_agents": [item["agent"] for item in selected],
+            "selected_workers": selected,
+            "preferred_worker": selected[0] if selected else None,
+            "fallback_active": fallback_active,
+            "model_concurrency": model_capacity,
+            "main_workers": main_workers,
+            "preferred_main_worker": preferred_main_worker,
+        }
+    )
+    return combined
 
 
 def hook_output(summary: dict[str, Any]) -> dict[str, Any]:
@@ -342,11 +655,14 @@ def hook_output(summary: dict[str, Any]) -> dict[str, Any]:
         "preserve the main session's complete tool set and permission context, and never add an "
         "implicit read-only, plan-only, no-edit, no-build, or no-deploy restriction; use foreground "
         "delegation when background execution would auto-deny an interactive main-session permission. "
-        "prefer preferred_worker for primary work because known quota headroom orders the list, "
+        "prefer preferred_worker for primary work because quota and current model-concurrency "
+        "headroom order the list, "
         "including nested launches from a worker; never default a nested launch to generic claude "
         "or blindly inherit its parent route. If the user names a "
         "model matching model_prefixes, dynamically select that provider and pass the exact "
-        "requested model only when it is not in disabled_subagent_models. The merged configured "
+        "requested model only when it is not in disabled_subagent_models and its exact "
+        "model_concurrency entry is not unavailable. A missing exact dynamic entry inherits the "
+        "provider's max_concurrency and means no active use was observed. The merged configured "
         "and terminal-local disabled_subagent_models list is an absolute SubAgent denylist: never "
         "launch, inherit, "
         "dynamically select, or reuse one of those exact models, even when the user names it. If "
@@ -1043,10 +1359,12 @@ def fallback_summary(
     selected = [] if fallback["model"] in disabled_models else [fallback]
     return {
         "providers": providers,
+        "main_workers": {},
         "selected_agents": [item["agent"] for item in selected],
         "selected_workers": selected,
         "preferred_worker": selected[0] if selected else None,
         "fallback_active": bool(selected),
+        "preferred_main_worker": None,
         "disabled_subagent_models": sorted(disabled_models),
     }
 
@@ -1111,6 +1429,12 @@ def main() -> int:
                 write_cache(cache_path, summary, now, key)
         except (OSError, ValueError, subprocess.SubprocessError, json.JSONDecodeError):
             summary = fallback_summary("usage-unavailable", config, disabled_models)
+    summary = apply_model_concurrency(
+        summary,
+        config,
+        run_daemon_health(arguments.curl_program, os.environ),
+        disabled_models,
+    )
     summary = enforce_worker_model_separation(
         summary,
         os.environ.get("CLAUDEX_MAIN_MODEL"),

@@ -88,6 +88,8 @@
       "defaultModel": "opencode-go/deepseek-v4-flash",
       "effort": "high",
       "enabled": true,
+      "usageProvider": "opencodego",
+      "maxConcurrency": 7,
       "modelPrefixes": [
         "opencode-go/"
       ],

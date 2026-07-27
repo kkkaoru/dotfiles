@@ -1,6 +1,6 @@
 use std::{collections::VecDeque, ffi::OsString, path::PathBuf, sync::Arc};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use tracing_subscriber::EnvFilter;
 
 use crate::{
@@ -175,6 +175,13 @@ fn reject_inherit_model(options: &ParsedOptions, command: &str) -> Result<()> {
 }
 
 fn validate_routes(routes: &[BackendRoute], model: &str) -> Result<()> {
+    if routes.iter().any(|route| {
+        route
+            .max_concurrency
+            .is_some_and(|limit| limit == 0 || limit > crate::grok_acp::MAX_MODEL_CONCURRENCY)
+    }) {
+        bail!("backend route maxConcurrency is out of range");
+    }
     let unique = routes
         .iter()
         .map(|route| route.model.as_str())

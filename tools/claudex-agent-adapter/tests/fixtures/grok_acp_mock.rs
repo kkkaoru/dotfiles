@@ -13,12 +13,13 @@ use serde_json::value::RawValue;
 use tokio::{
     io::AsyncReadExt as _,
     net::UnixListener,
-    sync::{Notify, mpsc, oneshot},
+    sync::{mpsc, oneshot, Notify},
 };
 use tokio_util::compat::{TokioAsyncReadCompatExt as _, TokioAsyncWriteCompatExt as _};
 
 const TRACE_FILE: &str = "grok-acp-mock.jsonl";
 const SETUP_RELEASE_SOCKET: &str = "grok-acp-setup-release.sock";
+const PARALLEL_RELEASE_FILE: &str = "grok-acp-parallel-release";
 
 struct MockAgent {
     operations: mpsc::UnboundedSender<ClientOperation>,
@@ -140,13 +141,19 @@ impl MockAgent {
         Ok(())
     }
 
-    async fn wait_for_concurrent_prompt(&self) {
+    async fn wait_for_concurrent_prompt(&self, expected: usize) {
         let count = self.concurrent_prompts.get() + 1;
         self.concurrent_prompts.set(count);
-        if count == 1 {
+        if count < expected {
             self.both_prompts_started.notified().await;
         } else {
-            self.both_prompts_started.notify_one();
+            self.both_prompts_started.notify_waiters();
+        }
+        if expected > 2 {
+            let release = self.trace.with_file_name(PARALLEL_RELEASE_FILE);
+            while !release.exists() {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
         }
     }
 
@@ -378,7 +385,10 @@ impl acp::Agent for MockAgent {
                 .await?;
         }
         if self.mode == "concurrent-turns" {
-            self.wait_for_concurrent_prompt().await;
+            self.wait_for_concurrent_prompt(2).await;
+        }
+        if self.mode == "concurrent-turns-seven" {
+            self.wait_for_concurrent_prompt(7).await;
         }
         if let Some(response) = self.maybe_cancellable_prompt(&request).await? {
             return Ok(response);

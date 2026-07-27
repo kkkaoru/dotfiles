@@ -1,7 +1,9 @@
-mod agent_effort;
 mod agent_batch;
+mod agent_effort;
 mod agent_routing;
 mod content;
+mod health;
+mod model_concurrency;
 mod request_routing;
 mod retention;
 mod session;
@@ -85,6 +87,7 @@ pub struct Bridge {
     subscription_max_processes: usize,
     subscription_timeout: std::time::Duration,
     agent_efforts: Arc<agent_effort::AgentEffortIntents>,
+    model_concurrency: model_concurrency::ModelConcurrency,
 }
 
 struct Session {
@@ -141,43 +144,6 @@ struct ContextRetry {
 }
 
 impl Bridge {
-    pub fn is_alive(&self) -> bool {
-        self.app.is_alive()
-    }
-
-    pub fn subscription_max_processes(&self) -> usize {
-        self.subscription_max_processes
-    }
-
-    pub const fn session_capacity(&self) -> usize {
-        MAX_SESSIONS
-    }
-
-    pub fn used_session_slots(&self) -> usize {
-        MAX_SESSIONS - self.session_slots.available_permits()
-    }
-
-    pub fn subscription_timeout_minutes(&self) -> u64 {
-        self.subscription_timeout.as_secs() / 60
-    }
-
-    pub fn backend_routes(&self) -> Vec<String> {
-        self.app.route_descriptions()
-    }
-
-    pub fn routed_models(&self) -> Vec<String> {
-        let models = self.app.models();
-        if models.is_empty() {
-            vec![self.model.clone()]
-        } else {
-            models
-        }
-    }
-
-    pub fn started_models(&self) -> Vec<String> {
-        self.app.started_models()
-    }
-
     pub fn new(app: Arc<AppServer>, model: String) -> Self {
         Self::new_with_subscription_program(app, model, "claude")
     }
@@ -243,6 +209,8 @@ impl Bridge {
         collaborator_model_override: Option<String>,
         subscription_limits: subscription::SubscriptionLimits,
     ) -> Self {
+        let model_concurrency =
+            model_concurrency::ModelConcurrency::new(app.configured_concurrency_limits());
         Self {
             app,
             model,
@@ -261,6 +229,7 @@ impl Bridge {
             subscription_max_processes: subscription_limits.max_processes,
             subscription_timeout: subscription_limits.timeout,
             agent_efforts: Arc::new(agent_effort::AgentEffortIntents::default()),
+            model_concurrency,
         }
     }
 
@@ -275,10 +244,7 @@ impl Bridge {
 
     /// Install the config-declared model catalog used for unrouted-provider remaps.
     #[must_use]
-    pub fn with_model_catalog(
-        self,
-        model_catalog: crate::provider_config::ModelCatalog,
-    ) -> Self {
+    pub fn with_model_catalog(self, model_catalog: crate::provider_config::ModelCatalog) -> Self {
         Self {
             model_catalog,
             ..self
@@ -316,14 +282,23 @@ impl Bridge {
                 .await;
         }
 
+        let concurrency_ticket = self.model_concurrency.ticket(
+            &request.model,
+            self.app.max_concurrency_for_model(&request.model),
+        );
+
         let input_tokens = u64::try_from(token_count(&request)).unwrap_or(u64::MAX);
         // Open the SSE body before prepare_turn so Claude Code receives
         // message_start + ping keepalives while session/provider startup runs.
         // Waiting until prepare_turn finishes is what produced 5-minute
         // "operation timed out" / "Response stalled mid-stream" errors.
         if request.stream {
-            return Ok(self.streaming_messages(request, input_tokens, effort));
+            return Ok(self.streaming_messages(request, input_tokens, effort, concurrency_ticket));
         }
+        let _concurrency_permit = match concurrency_ticket {
+            Some(ticket) => Some(ticket.acquire().await),
+            None => None,
+        };
         let turn = self.prepare_turn(&request, input_tokens, effort).await?;
         self.non_streaming_response(turn).await
     }
