@@ -13,19 +13,23 @@ use serde_json::value::RawValue;
 use tokio::{
     io::AsyncReadExt as _,
     net::UnixListener,
-    sync::{mpsc, oneshot, Notify},
+    sync::{Barrier, Notify, mpsc, oneshot},
 };
 use tokio_util::compat::{TokioAsyncReadCompatExt as _, TokioAsyncWriteCompatExt as _};
 
 const TRACE_FILE: &str = "grok-acp-mock.jsonl";
 const SETUP_RELEASE_SOCKET: &str = "grok-acp-setup-release.sock";
 const PARALLEL_RELEASE_FILE: &str = "grok-acp-parallel-release";
+const CONFIGURED_PARALLEL_SESSIONS: usize = 7;
+const PARALLEL_RELEASE_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
 
 struct MockAgent {
     operations: mpsc::UnboundedSender<ClientOperation>,
     trace: PathBuf,
     mode: String,
     next_session: Cell<u64>,
+    concurrent_sessions: Cell<usize>,
+    session_barrier: Option<Rc<Barrier>>,
     concurrent_prompts: Cell<usize>,
     both_prompts_started: Notify,
     cancellable_prompts: RefCell<HashMap<String, Rc<Notify>>>,
@@ -152,7 +156,7 @@ impl MockAgent {
         if expected > 2 {
             let release = self.trace.with_file_name(PARALLEL_RELEASE_FILE);
             while !release.exists() {
-                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                tokio::time::sleep(PARALLEL_RELEASE_POLL_INTERVAL).await;
             }
         }
     }
@@ -341,6 +345,17 @@ impl acp::Agent for MockAgent {
         request: acp::NewSessionRequest,
     ) -> acp::Result<acp::NewSessionResponse> {
         self.record("new_session", request)?;
+        if let Some(barrier) = &self.session_barrier {
+            let count = self.concurrent_sessions.get() + 1;
+            self.concurrent_sessions.set(count);
+            if count <= CONFIGURED_PARALLEL_SESSIONS {
+                barrier.wait().await;
+                let release = self.trace.with_file_name(PARALLEL_RELEASE_FILE);
+                while !release.exists() {
+                    tokio::time::sleep(PARALLEL_RELEASE_POLL_INTERVAL).await;
+                }
+            }
+        }
         if self.mode == "exit-once-session" {
             let marker = self.trace.with_file_name("grok-acp-exited-once");
             if !marker.exists() {
@@ -453,6 +468,8 @@ async fn main() -> acp::Result<()> {
     let trace = cwd.join(TRACE_FILE);
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     let mode = args.get(1).cloned().unwrap_or_default();
+    let session_barrier = (mode == "concurrent-sessions-at-limit")
+        .then(|| Rc::new(Barrier::new(CONFIGURED_PARALLEL_SESSIONS)));
     let setup_release = if mode == "blocked-effort" {
         Some(UnixListener::bind(SETUP_RELEASE_SOCKET).map_err(|_| acp::Error::internal_error())?)
     } else {
@@ -464,6 +481,8 @@ async fn main() -> acp::Result<()> {
         trace,
         mode,
         next_session: Cell::new(0),
+        concurrent_sessions: Cell::new(0),
+        session_barrier,
         concurrent_prompts: Cell::new(0),
         both_prompts_started: Notify::new(),
         cancellable_prompts: RefCell::new(HashMap::new()),

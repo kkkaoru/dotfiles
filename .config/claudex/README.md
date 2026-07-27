@@ -38,7 +38,7 @@ flowchart LR
 | Ollama GLM worker | `claudex-ollama-glm-5-2` | `glm-5.2:cloud` | `high` | CodexBarのOllama枠に空きがある場合 |
 | Grok worker | `claudex-grok` | `grok-4.5` | `high` | Grokに空きがある場合 |
 | Qwen worker | `claudex-qwen` | `qwen3.8-max-preview` | `high` | providerは維持するがSubAgentではdenylistにより禁止 |
-| DeepSeek worker | `claudex-deepseek` | `opencode-go/deepseek-v4-flash` | `high` | OpenCode Go ACP（usage未連携のため unmetered） |
+| DeepSeek worker | `claudex-deepseek` | `opencode-go/deepseek-v4-flash` | `high` | CodexBarのOpenCode Go枠に空きがある場合 |
 | Fallback | `claudex-sonnet` | `claude-sonnet-5` | `high` | 利用率を管理するproviderをすべて利用できない場合 |
 | Advisor | Claude Code標準 `advisor()` | `opus` | Claude Code標準 | 標準advisor policyに従う |
 
@@ -63,7 +63,11 @@ Grok ACPは `--always-approve`、Qwen ACPは `--approval-mode yolo` を明示し
 approval待機やauto classifierがSubAgentの権限を狭めないようにします。OpenCode Go ACPは
 `opencode acp` を起動し、モデルは adapter の `session/new` meta `modelId` で渡します
 （CLIの `--model` は `acp` サブコマンドでは受け付けません）。既定モデルは
-`opencode-go/deepseek-v4-flash` です。
+`opencode-go/deepseek-v4-flash` です。OpenCode内で実行されるprovider-owned toolはClaude側で
+再実行しないようAnthropic `tool_use`へ変換せず、実行中だけthinkingの進捗として扱います。
+このためClaude Codeの完了結果ではtool数が0に見える場合がありますが、OpenCode側では実行済みです。
+DeepSeek workerは独立した調査をまとめて実行し、確定済みの判断を反復せず、長い処理のフェーズ間で
+短い進捗を返すよう定義しています。
 
 ## ルーティング
 

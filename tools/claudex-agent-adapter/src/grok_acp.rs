@@ -123,7 +123,13 @@ impl GrokAcp {
         max_concurrency: Option<usize>,
     ) -> Result<Arc<Self>> {
         let (command_tx, command_rx) = mpsc::channel(COMMAND_QUEUE_CAPACITY);
-        let session_permits = Arc::new(tokio::sync::Semaphore::new(SESSION_QUEUE_CAPACITY));
+        let session_capacity = match provider {
+            AcpProvider::Configured | AcpProvider::ConfiguredLaunchScoped => {
+                max_concurrency.unwrap_or(SESSION_QUEUE_CAPACITY)
+            }
+            AcpProvider::Grok | AcpProvider::Copilot => SESSION_QUEUE_CAPACITY,
+        };
+        let session_permits = Arc::new(tokio::sync::Semaphore::new(session_capacity));
         let default_turn_capacity = match provider {
             AcpProvider::Configured | AcpProvider::ConfiguredLaunchScoped => {
                 CONFIGURED_TURN_QUEUE_CAPACITY
