@@ -673,15 +673,27 @@ class CommandTests(unittest.TestCase):
 
     @mock.patch("route_usage.subprocess.run")
     def test_runs_codexbar_without_a_shell(self, run: mock.Mock) -> None:
-        run.return_value = subprocess.CompletedProcess([], 0, json.dumps(report()), "")
+        run.return_value = subprocess.CompletedProcess(
+            [], 1, json.dumps(report()), "private provider error"
+        )
         self.assertEqual(route_usage.run_codexbar("codexbar-test"), report())
         run.assert_called_once_with(
             ["codexbar-test", "usage", "--json"],
-            check=True,
+            check=False,
             capture_output=True,
             text=True,
             timeout=route_usage.USAGE_COMMAND_TIMEOUT_SECONDS,
         )
+
+    def test_codexbar_output_rejects_non_arrays_and_suffix_data(self) -> None:
+        for output in [
+            '{"provider":"codex"}',
+            f"notice\n{json.dumps(report())}",
+            f"notice\n{json.dumps(report())}\nunexpected",
+            'notice\n{"usage":[]}\n',
+        ]:
+            with self.subTest(output=output), self.assertRaises(ValueError):
+                route_usage.strict_json_array(output)
 
     @mock.patch("route_usage.subprocess.run")
     def test_runs_validated_qwen_quota_curl_without_a_shell(

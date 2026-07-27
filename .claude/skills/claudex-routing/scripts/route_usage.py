@@ -451,15 +451,23 @@ def write_private_json(path: Path, value: dict[str, Any]) -> None:
 
 
 def run_codexbar(program: str) -> Any:
-    """Load Codexbar JSON without involving a shell."""
+    """Load a valid partial Codexbar report even when some providers fail."""
     completed = subprocess.run(
         [program, "usage", "--json"],
-        check=True,
+        check=False,
         capture_output=True,
         text=True,
         timeout=USAGE_COMMAND_TIMEOUT_SECONDS,
     )
-    return json.loads(completed.stdout)
+    return strict_json_array(completed.stdout)
+
+
+def strict_json_array(output: str) -> list[Any]:
+    """Decode exactly one JSON array without exposing rejected output."""
+    value = json.loads(output)
+    if not isinstance(value, list):
+        raise ValueError("Codexbar output must be a JSON array")
+    return value
 
 
 def single_value(values: dict[str, list[str]], key: str) -> str:
