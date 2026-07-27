@@ -499,7 +499,7 @@ class RoutingTests(unittest.TestCase):
             if item["provider"] == "fugu"
         )
         self.assertEqual(worker["agent"], "claudex-fugu")
-        self.assertEqual(worker["model"], "fugu-ultra-v1.1")
+        self.assertEqual(worker["model"], "fugu")
         self.assertEqual(worker["model_prefixes"], ["fugu"])
 
     def test_selects_glm_from_codexbar_ollama_capacity(self) -> None:

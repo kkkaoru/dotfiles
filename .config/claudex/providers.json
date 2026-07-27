@@ -19,8 +19,8 @@
     {
       "id": "fugu",
       "agent": "claudex-fugu",
-      "defaultModel": "fugu-ultra-v1.1",
-      "effort": "xhigh",
+      "defaultModel": "fugu",
+      "effort": "high",
       "maxContextTokens": 1000000,
       "enabled": true,
       "usageProvider": "sakana",

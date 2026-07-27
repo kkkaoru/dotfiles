@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -106,12 +106,114 @@ fn constrain_agent_types(tool: &mut Value, selected_agents: &[String]) {
 }
 
 fn selected_agents(request: &MessagesRequest) -> Vec<String> {
-    routing_texts(&request.system)
+    let Some(summary) = routing_texts(&request.system)
         .chain(request.messages.iter().flat_map(routing_texts))
         .find_map(routing_summary)
-        .and_then(|summary| summary.get("selected_agents").cloned())
+    else {
+        return Vec::new();
+    };
+    let mut agents = summary
+        .get("selected_agents")
+        .cloned()
         .and_then(|agents| serde_json::from_value(agents).ok())
-        .unwrap_or_default()
+        .unwrap_or_default();
+    add_explicit_provider_agents(request, &summary, &mut agents);
+    agents
+}
+
+fn add_explicit_provider_agents(
+    request: &MessagesRequest,
+    summary: &Value,
+    agents: &mut Vec<String>,
+) {
+    let requested = current_user_model_ids(request);
+    if requested.is_empty() {
+        return;
+    }
+    let mut denied = request
+        .disabled_subagent_models
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
+    denied.extend(
+        summary
+            .get("disabled_subagent_models")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str),
+    );
+    let Some(providers) = summary.get("providers").and_then(Value::as_object) else {
+        return;
+    };
+    for provider in providers.values() {
+        let Some(agent) = explicit_provider_agent(provider, &requested, &denied) else {
+            continue;
+        };
+        if !agents.iter().any(|selected| selected == agent) {
+            agents.push(agent.to_owned());
+        }
+    }
+}
+
+fn explicit_provider_agent<'a>(
+    provider: &'a Value,
+    requested: &[String],
+    denied: &HashSet<&str>,
+) -> Option<&'a str> {
+    if provider.get("disabled").and_then(Value::as_bool) != Some(false) {
+        return None;
+    }
+    let model = provider.get("model").and_then(Value::as_str)?;
+    let prefixes = provider
+        .get("model_prefixes")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter(|prefix| !prefix.is_empty())
+        .collect::<Vec<_>>();
+    requested
+        .iter()
+        .any(|requested| {
+            !denied.contains(requested.as_str())
+                && (requested == model
+                    || prefixes
+                        .iter()
+                        .any(|prefix| requested.starts_with(*prefix) && requested != prefix))
+        })
+        .then(|| provider.get("agent").and_then(Value::as_str))
+        .flatten()
+}
+
+fn current_user_model_ids(request: &MessagesRequest) -> Vec<String> {
+    let Some(content) = request
+        .messages
+        .iter()
+        .rev()
+        .find(|message| message.get("role").and_then(Value::as_str) == Some("user"))
+        .and_then(|message| message.get("content"))
+    else {
+        return Vec::new();
+    };
+    routing_texts(content)
+        .flat_map(|text| {
+            let explicit_text = text
+                .split_once("{\"providers\":")
+                .map_or(text, |(before_routing_context, _)| before_routing_context);
+            explicit_text
+                .split(|character: char| !is_model_id_character(character))
+                .map(|token| {
+                    token.trim_matches(|character: char| !character.is_ascii_alphanumeric())
+                })
+                .filter(|token| !token.is_empty())
+                .map(str::to_owned)
+        })
+        .collect()
+}
+
+fn is_model_id_character(character: char) -> bool {
+    character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.' | '/' | ':' | '@' | '+')
 }
 
 fn routing_summary(text: &str) -> Option<Value> {

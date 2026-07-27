@@ -1,7 +1,13 @@
 model = "fugu"
-model_reasoning_effort = "xhigh"
+model_reasoning_effort = "high"
 model_provider = "sakana"
 model_catalog_json = "~/.codex/fugu.json"
+
+[model_providers.sakana]
+name = "Sakana"
+base_url = "https://api.sakana.ai/v1"
+env_key = "SAKANA_AI_PRO_API_KEY"
+wire_api = "responses"
 
 [features]
 image_generation = false

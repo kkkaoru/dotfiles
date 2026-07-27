@@ -132,6 +132,54 @@ fn main_exposes_only_routed_orchestration_tools_while_workers_keep_full_tools() 
 }
 
 #[test]
+fn adds_explicit_non_denied_provider_agents_to_the_routed_schema() {
+    let routing = r#"Claudex routing for this turn: {"providers":{"vendor":{"available":false,"disabled":false,"agent":"claudex-vendor","model":"vendor-default","model_prefixes":[]},"codex":{"available":false,"disabled":false,"agent":"claudex-codex","model":"gpt-default","model_prefixes":["gpt-"]},"special":{"available":false,"disabled":false,"agent":"claudex-special","model":"vendor@beta+1","model_prefixes":[]},"summary":{"available":false,"disabled":false,"agent":"claudex-summary-only","model":"summary-only","model_prefixes":[]},"grok":{"available":false,"disabled":true,"agent":"claudex-grok","model":"grok-denied","model_prefixes":["grok-"]},"qwen":{"available":false,"disabled":false,"agent":"claudex-qwen","model":"qwen-denied","model_prefixes":["qwen-"]}},"selected_agents":["claudex-selected"],"disabled_subagent_models":["qwen-denied"]} mandatory policy"#;
+    let tools = vec![json!({
+        "name":"Agent",
+        "input_schema":{"type":"object","properties":{
+            "subagent_type":{"type":"string"},"prompt":{"type":"string"}
+        }}
+    })];
+    let mut request = request(Value::Null, tools);
+    request.messages = vec![json!({
+        "role":"user",
+        "content":format!("Use vendor-default, vendor@beta+1, and gpt-experimental. Do not bypass grok-denied or qwen-denied.\n{routing}")
+    })];
+    request
+        .disabled_subagent_models
+        .insert("qwen-denied".to_owned());
+
+    let configured = tool_configuration(&request, None, None);
+    let expected = json!([
+        "claudex-selected",
+        "claudex-codex",
+        "claudex-special",
+        "claudex-vendor"
+    ]);
+    let ordinary = configured
+        .0
+        .iter()
+        .find_map(|tool| tool.pointer("/inputSchema/properties/subagent_type/enum"))
+        .expect("ordinary routed agent enum");
+    let batch = configured
+        .0
+        .iter()
+        .find_map(|tool| {
+            tool.pointer("/inputSchema/properties/tasks/items/properties/subagent_type/enum")
+        })
+        .expect("batch routed agent enum");
+
+    assert_eq!(ordinary, &expected);
+    assert_eq!(batch, &expected);
+    assert!(ordinary.as_array().expect("routed agent candidates").iter().all(
+        |candidate| !matches!(
+            candidate.as_str(),
+            Some("claudex-grok" | "claudex-qwen" | "claudex-summary-only")
+        )
+    ));
+}
+
+#[test]
 fn builds_thread_configuration_for_empty_and_team_system_prompts() {
     let empty = thread_start_params(&request(Value::Null, Vec::new()), "main", Vec::new());
     let base = empty["baseInstructions"]

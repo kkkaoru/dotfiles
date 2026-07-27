@@ -34,7 +34,7 @@ flowchart LR
 | --- | --- | --- | --- | --- |
 | Orchestrator | 通常のmain session | `gpt-5.6-sol` | `high` | `mainProviders` の優先順と空き状況で選択 |
 | Codex worker | `claudex-gpt-spark` | `gpt-5.3-codex-spark` | `high` | Codexに空きがある場合 |
-| Fugu worker | `claudex-fugu` | `fugu-ultra-v1.1` | `xhigh` | CodexBarのSakana枠に空きがある場合 |
+| Fugu worker | `claudex-fugu` | `fugu` | `high` | CodexBarのSakana枠に空きがある場合 |
 | Ollama GLM worker | `claudex-ollama-glm-5-2` | `glm-5.2:cloud` | `high` | CodexBarのOllama枠に空きがある場合 |
 | Grok worker | `claudex-grok` | `grok-4.5` | `high` | Grokに空きがある場合 |
 | Qwen worker | `claudex-qwen` | `qwen3.8-max-preview` | `high` | providerは維持するがSubAgentではdenylistにより禁止 |
@@ -372,7 +372,7 @@ main sessionのモデルは `providers.json` の `defaultModel`、workerのモ�
 既定値なし（制御なし）として扱われます。`gpt-5.3-codex-spark` は、
 2026-07-26 の実運用ログで約116k入力トークン時に上限へ到達したため、再構築時の
 システム指示やtool schemaの余白を確保して `110000` を採用しています。
-`fugu` / `fugu-ultra-v1.1` はCodex catalogの1M context windowに合わせて
+`fugu` はCodex catalogの1M context windowに合わせて
 `1000000` を指定しています。いずれもproviderが実際の上限を先に返した場合は、
 非streaming turnを新規threadで1回だけ自動再試行します。
 

@@ -1,5 +1,10 @@
 model = "glm-5.2:cloud"
 openai_base_url = "http://127.0.0.1:11434/v1/"
 model_provider = "ollama-launch-codex-app"
-model_catalog_json = "/Users/kkk4oru/.codex/fugu.json"
+model_catalog_json = "~/.codex/fugu.json"
 model_reasoning_effort = "none"
+
+[model_providers.ollama-launch-codex-app]
+name = "Ollama"
+base_url = "http://127.0.0.1:11434/v1"
+wire_api = "responses"

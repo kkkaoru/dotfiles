@@ -24,11 +24,12 @@ fn codex_fish_routes_external_models_to_their_provider_profiles() {
             .any(|model| model["slug"] == "glm-5.2:cloud")
     }));
 
-    for (profile, provider) in [
-        ("fugu.config.toml", "sakana"),
+    for (profile, provider, base_url) in [
+        ("fugu.config.toml", "sakana", "https://api.sakana.ai/v1"),
         (
             "ollama-launch-codex-app.config.toml",
             "ollama-launch-codex-app",
+            "http://127.0.0.1:11434/v1",
         ),
     ] {
         let config = fs::read_to_string(root.join(".codex").join(profile))
@@ -37,5 +38,7 @@ fn codex_fish_routes_external_models_to_their_provider_profiles() {
             config.contains(&format!("model_provider = \"{provider}\"")),
             "{profile} must select {provider}"
         );
+        assert!(config.contains(&format!("[model_providers.{provider}]")));
+        assert!(config.contains(&format!("base_url = \"{base_url}\"")));
     }
 }

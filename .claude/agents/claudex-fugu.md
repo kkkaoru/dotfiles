@@ -1,6 +1,6 @@
 ---
 name: claudex-fugu
-description: Sakana Fugu Ultra-backed claudex worker for demanding implementation, investigation, testing, and independent review when CodexBar reports available Sakana capacity.
+description: Sakana Fugu-backed claudex worker for demanding implementation, investigation, testing, and independent review when CodexBar reports available Sakana capacity.
 model: fugu
 effort: high
 skills:

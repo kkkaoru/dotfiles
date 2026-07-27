@@ -45,6 +45,25 @@ command = "false"
 "#,
         )
         .unwrap();
+        std::fs::write(
+            source.join("ollama.config.toml"),
+            r#"[model_providers.ollama]
+name = "Ollama"
+base_url = "http://127.0.0.1:11434/v1"
+wire_api = "responses"
+
+[mcp_servers.must_not_copy]
+command = "false"
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            source.join("duplicate.config.toml"),
+            r#"[model_providers.sakana]
+name = "Must not replace the base config"
+"#,
+        )
+        .unwrap();
 
         let prepared = prepare_isolated_codex_home(&source, &isolated).unwrap();
         assert_eq!(prepared, isolated);
@@ -56,6 +75,9 @@ command = "false"
         assert!(config.contains("tool_search = false"));
         assert!(config.contains("plugins = false"));
         assert!(config.contains("[model_providers.sakana]"));
+        assert!(config.contains("[model_providers.ollama]"));
+        assert_eq!(config.matches("[model_providers.sakana]").count(), 1);
+        assert!(!config.contains("Must not replace"));
         assert!(!config.contains("mcp_servers.must_not_copy"));
     }
 

@@ -15,7 +15,7 @@ pub mod runtime;
 mod subagent_policy;
 mod working_directory;
 
-pub const ADAPTER_PROTOCOL_VERSION: u64 = 21;
+pub const ADAPTER_PROTOCOL_VERSION: u64 = 22;
 pub(crate) const NONINTERACTIVE_CHILD_ENV: &str = "CLAUDEX_NONINTERACTIVE_CHILD";
 pub(crate) const DISCOVERY_MODEL_PREFIX: &str = "claude-claudex-";
 
