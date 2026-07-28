@@ -246,6 +246,9 @@ fn builds_thread_configuration_for_empty_and_team_system_prompts() {
         developer.contains("preserve that authority in SubAgent prompts"),
         "implementation authority must propagate to SubAgents"
     );
+    assert!(developer.contains("run independent calls, fetches, or checks in parallel"));
+    assert!(developer.contains("Promise.all"));
+    assert!(developer.contains("avoid serializing independent operations"));
     assert!(
         developer.contains("unless they are explicitly active for the current task"),
         "explicit current-task restrictions must remain supported"

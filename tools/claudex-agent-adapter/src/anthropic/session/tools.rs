@@ -247,6 +247,8 @@ pub(in crate::anthropic) fn thread_start_params(
         || BRIDGE_INSTRUCTIONS.to_owned(),
         |guidance| format!("{BRIDGE_INSTRUCTIONS}\n\n{guidance}"),
     );
+    developer_instructions.push_str("\n\n");
+    developer_instructions.push_str(super::super::CODEX_APP_SERVER_PARALLELIZATION_INSTRUCTIONS);
     if !super::super::agent_effort::is_subagent_request(request) {
         developer_instructions.push_str("\n\n");
         developer_instructions.push_str(ORCHESTRATOR_INSTRUCTIONS);
