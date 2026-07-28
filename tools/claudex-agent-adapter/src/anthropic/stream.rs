@@ -1,21 +1,21 @@
 use std::{ops::ControlFlow, sync::Arc, time::Duration};
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use axum::{
     body::{Body, Bytes},
     http::Response,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::{
     sync::mpsc,
-    time::{sleep, Instant},
+    time::{Instant, sleep},
 };
 
 use super::{
-    model_concurrency::Ticket,
-    stream_batch::{next_event, NextEvent},
-    subscription::{run_subscription_model, subscription_prompt, SubscriptionOptions},
     Bridge, MessagesRequest, Segment, Session,
+    model_concurrency::Ticket,
+    stream_batch::{NextEvent, next_event},
+    subscription::{SubscriptionOptions, run_subscription_model, subscription_prompt},
 };
 
 mod builder;
@@ -23,6 +23,7 @@ mod context_retry;
 mod context_window;
 mod disconnect;
 mod drive;
+mod tool_call_parser;
 mod prepare;
 mod protocol;
 mod provider_tool;
@@ -35,8 +36,8 @@ use sanitize::is_visible_activity_event;
 
 #[cfg(test)]
 pub(super) use protocol::tool_use_frames;
+use protocol::{StreamSender, send_stream_completion, send_stream_error, sse_response};
 pub(super) use protocol::{message_start, send_stream_frame, streaming_sse_response};
-use protocol::{send_stream_completion, send_stream_error, sse_response, StreamSender};
 
 // Match Claude Code's quieter idle UX: visible status only after long provider silence.
 // Anthropic `ping` already covers the ~180s raw-byte watchdog during short waits.
@@ -186,7 +187,14 @@ impl Bridge {
             };
             let visible = is_visible_activity_event(&event);
             let flow = match builder
-                .handle_event(self, session, current_messages, system, &event, Some(sender))
+                .handle_event(
+                    self,
+                    session,
+                    current_messages,
+                    system,
+                    &event,
+                    Some(sender),
+                )
                 .await
             {
                 Ok(flow) => flow,

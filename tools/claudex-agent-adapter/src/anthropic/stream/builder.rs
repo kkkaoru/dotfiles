@@ -17,6 +17,8 @@ use super::{
     thinking::ThinkingState,
 };
 
+pub(super) use super::tool_call_parser::parse_tool_call;
+
 pub(super) struct SegmentBuilder {
     pub(super) blocks: Vec<Value>,
     pub(super) thinking: ThinkingState,
@@ -182,7 +184,8 @@ impl SegmentBuilder {
         // Never splice status into open answer text — that scrambled token order
         // in Claude Code's log (▶ lines mid-sentence). After text has started,
         // drop chrome; the tool already ran on the provider.
-        if self.open_text_block.is_some() || self.thinking.has_visible_answer(self.blocks.as_slice())
+        if self.open_text_block.is_some()
+            || self.thinking.has_visible_answer(self.blocks.as_slice())
         {
             return Ok(());
         }
@@ -210,8 +213,13 @@ impl SegmentBuilder {
     }
 
     async fn tool_call(
-        &mut self, bridge: &Bridge, session: &Session, current_messages: &[Value], system: &Value,
-        call: ToolCall<'_>, stream: Option<&StreamSender>,
+        &mut self,
+        bridge: &Bridge,
+        session: &Session,
+        current_messages: &[Value],
+        system: &Value,
+        call: ToolCall<'_>,
+        stream: Option<&StreamSender>,
     ) -> Result<()> {
         if let Some(model) = session.internal_tools.get(call.name) {
             bridge
@@ -239,31 +247,71 @@ impl SegmentBuilder {
                     name: call.name,
                     arguments,
                     request_id: crate::anthropic::agent_batch::pending_marker(
-                        call.request_id.clone(), index, tasks.len(),
+                        call.request_id.clone(),
+                        index,
+                        tasks.len(),
                     ),
                 };
-                self.external_tool_call(bridge, session, current_messages, system, original_name, nested, stream)
-                    .await?;
+                self.external_tool_call(
+                    bridge,
+                    session,
+                    current_messages,
+                    system,
+                    original_name,
+                    nested,
+                    stream,
+                )
+                .await?;
             }
             return Ok(());
         }
-        self.external_tool_call(bridge, session, current_messages, system, original_name, call, stream)
-            .await
+        self.external_tool_call(
+            bridge,
+            session,
+            current_messages,
+            system,
+            original_name,
+            call,
+            stream,
+        )
+        .await
     }
 
     async fn external_tool_call(
-        &mut self, bridge: &Bridge, session: &Session, current_messages: &[Value], system: &Value,
-        original_name: &str, call: ToolCall<'_>, stream: Option<&StreamSender>,
+        &mut self,
+        bridge: &Bridge,
+        session: &Session,
+        current_messages: &[Value],
+        system: &Value,
+        original_name: &str,
+        call: ToolCall<'_>,
+        stream: Option<&StreamSender>,
     ) -> Result<()> {
         crate::anthropic::agent_effort::validate_routed_agent_arguments(
-            original_name, call.arguments, current_messages, system)?;
+            original_name,
+            call.arguments,
+            current_messages,
+            system,
+        )?;
         let tool_use_id = format!("toolu_{}", Uuid::new_v4().simple());
-        let (intent_arguments, claude_arguments) = crate::anthropic::agent_effort::prepare_arguments_for_user(
-            original_name, &tool_use_id, call.arguments, current_messages, system);
+        let (intent_arguments, claude_arguments) =
+            crate::anthropic::agent_effort::prepare_arguments_for_user(
+                original_name,
+                &tool_use_id,
+                call.arguments,
+                current_messages,
+                system,
+            );
         if let Some(arguments) = intent_arguments.as_ref() {
-            bridge.agent_efforts.record_from_user_messages(session.client_user_id.as_deref(),
-                original_name, tool_use_id.clone(), &session.model, arguments,
-                current_messages, system);
+            bridge.agent_efforts.record_from_user_messages(
+                session.client_user_id.as_deref(),
+                original_name,
+                tool_use_id.clone(),
+                &session.model,
+                arguments,
+                current_messages,
+                system,
+            );
         }
         tracing::debug!(call_id = %call.call_id, %tool_use_id, "mapped app-server tool call");
         record_pending_tool(
@@ -349,23 +397,4 @@ impl SegmentBuilder {
             usage: self.usage,
         })
     }
-}
-
-pub(super) fn parse_tool_call(event: &Value) -> Result<ToolCall<'_>> {
-    let params = event.get("params").context("tool call params missing")?;
-    Ok(ToolCall {
-        call_id: params
-            .get("callId")
-            .and_then(Value::as_str)
-            .context("tool call callId missing")?,
-        name: params
-            .get("tool")
-            .and_then(Value::as_str)
-            .context("tool call name missing")?,
-        arguments: params.get("arguments").unwrap_or(&Value::Null),
-        request_id: event
-            .get("id")
-            .cloned()
-            .context("tool request id missing")?,
-    })
 }
