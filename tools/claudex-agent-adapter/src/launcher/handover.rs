@@ -36,14 +36,25 @@ pub(super) async fn release_stale_listener(
     config: &ServiceConfig,
     pid: Option<u32>,
 ) -> Result<()> {
-    if let Some(pid) = pid
-        && pid != std::process::id()
-        && process_matches(pid, &config.executable)
-    {
-        eprintln!("claudex: draining active requests on stale adapter pid {pid} during handover");
-        terminate(pid);
-        wait_until_listener_released(client, config, pid).await?;
+    release_stale_listener_with(client, config, pid, process_matches, terminate).await
+}
+
+pub(super) async fn release_stale_listener_with(
+    client: &reqwest::Client,
+    config: &ServiceConfig,
+    pid: Option<u32>,
+    process_matches: impl Fn(u32, &std::path::Path) -> bool,
+    terminate: impl Fn(u32),
+) -> Result<()> {
+    let Some(pid) = pid else {
+        return Ok(());
+    };
+    if pid == std::process::id() || !process_matches(pid, &config.executable) {
+        return Ok(());
     }
+    eprintln!("claudex: draining active requests on stale adapter pid {pid} during handover");
+    terminate(pid);
+    wait_until_listener_released(client, config, pid).await?;
     Ok(())
 }
 
@@ -52,7 +63,21 @@ async fn wait_until_listener_released(
     config: &ServiceConfig,
     stale_pid: u32,
 ) -> Result<()> {
-    let deadline = Instant::now() + super::START_TIMEOUT;
+    wait_until_listener_released_by(
+        client,
+        config,
+        stale_pid,
+        Instant::now() + super::START_TIMEOUT,
+    )
+    .await
+}
+
+pub(super) async fn wait_until_listener_released_by(
+    client: &reqwest::Client,
+    config: &ServiceConfig,
+    stale_pid: u32,
+    deadline: Instant,
+) -> Result<()> {
     loop {
         let stale_health_is_gone = fetch_health(client, config)
             .await

@@ -201,9 +201,9 @@ impl ThreadEventDispatcher {
             .map(|(_, queue)| Arc::clone(queue))
             .collect::<Vec<_>>();
         drop(channels);
-        let Some(last) = subscribers.pop() else {
-            return;
-        };
+        let last = subscribers
+            .pop()
+            .expect("multiple subscribers are non-empty");
         for queue in subscribers {
             queue.push(event.clone());
         }

@@ -100,6 +100,26 @@ mod tests {
     }
 
     #[test]
+    fn rejects_an_invalid_backend_route_concurrency_limit() {
+        let arguments = [
+            "serve",
+            "--model",
+            "m",
+            "--backend-route-json",
+            r#"{"model":"m","backend":"grok-acp","maxConcurrency":0}"#,
+        ]
+        .into_iter()
+        .map(OsString::from)
+        .collect();
+        assert!(
+            parse_command(arguments)
+                .expect_err("zero route concurrency must fail")
+                .to_string()
+                .contains("maxConcurrency")
+        );
+    }
+
+    #[test]
     fn parses_valid_cli_options_and_commands() {
         let serve = parse_command(
             [

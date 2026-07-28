@@ -17,10 +17,14 @@ pub(super) fn apply(route: &BackendRoute, params: &mut Value) {
 }
 
 fn expand_home(path: &str) -> String {
+    expand_home_with(path, std::env::var_os("HOME"))
+}
+
+fn expand_home_with(path: &str, home: Option<std::ffi::OsString>) -> String {
     let Some(relative) = path.strip_prefix("~/") else {
         return path.to_owned();
     };
-    std::env::var_os("HOME").map_or_else(
+    home.map_or_else(
         || path.to_owned(),
         |home| {
             std::path::PathBuf::from(home)
@@ -30,3 +34,7 @@ fn expand_home(path: &str) -> String {
         },
     )
 }
+
+#[cfg(test)]
+#[path = "route_config_tests.rs"]
+mod tests;

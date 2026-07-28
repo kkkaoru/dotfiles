@@ -1,6 +1,9 @@
 #[cfg(test)]
+// Coverage excludes test implementation; production behavior remains measured.
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use crate::agent_backend::{BackendKind, BackendRoute};
+
     use super::*;
 
     fn config(provider: &str) -> String {
@@ -181,6 +184,12 @@ mod tests {
         config.main_providers = vec!["missing".to_owned()];
         invalid.push(config);
         let mut config = parsed();
+        config.main_providers.clear();
+        invalid.push(config);
+        let mut config = parsed();
+        config.main_providers = vec!["p".to_owned(), "p".to_owned()];
+        invalid.push(config);
+        let mut config = parsed();
         config.fallback.agent.clear();
         invalid.push(config);
         let mut config = parsed();
@@ -207,5 +216,26 @@ mod tests {
         for config in invalid {
             assert!(validate(config).is_err());
         }
+    }
+
+    #[test]
+    fn keeps_empty_disabled_catalog_entries_out_of_exact_matches() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("providers.json");
+        std::fs::write(
+            &path,
+            config(
+                r#"{"id":"p","agent":"worker","defaultModel":"model","effort":"high","enabled":true,"backend":"grok-acp"},{"id":"disabled","agent":"worker","defaultModel":"","effort":"low","enabled":false,"backend":"grok-acp"}"#,
+            ),
+        )
+        .unwrap();
+        let loaded = load(&path).unwrap();
+        assert!(!loaded.model_catalog.matches(""));
+
+        let empty = ModelCatalog::from_routes(&[BackendRoute::new(
+            "",
+            BackendKind::GrokAcp,
+        )]);
+        assert!(!empty.matches(""));
     }
 }

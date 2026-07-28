@@ -2,16 +2,26 @@
 // Coverage gates measure production code; test implementations are excluded.
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::{
+        io::{Read, Write},
+        net::{SocketAddr, TcpListener},
+        path::Path,
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+        thread,
+        time::Instant,
+    };
+
     use super::*;
     use crate::agent_backend::BackendKind;
+    use serde_json::json;
 
     fn config() -> ServiceConfig {
         ServiceConfig {
             options: AdapterOptions {
-                routes: vec![BackendRoute::new(
-                    "test-model",
-                    BackendKind::CodexAppServer,
-                )],
+                routes: vec![BackendRoute::new("test-model", BackendKind::CodexAppServer)],
                 listen: "127.0.0.1:8318".parse().expect("default listen"),
                 model: "test-model".to_owned(),
                 subscription_max_processes: 20,
@@ -62,6 +72,34 @@ mod tests {
     }
 
     #[test]
+    fn archives_existing_logs_and_writes_a_header() {
+        let root = tempfile::tempdir().expect("log archive fixture");
+        let missing = root.path().join("missing.log");
+        super::launcher_logs::archive_previous_log(&missing).expect("missing log is harmless");
+        let log = root.path().join("adapter.log");
+        std::fs::write(&log, "old").expect("old log");
+        super::launcher_logs::archive_previous_log(&log).expect("archive log");
+        assert!(!log.exists());
+        let archived = std::fs::read_dir(root.path())
+            .expect("archive directory")
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .find(|path| path != &log)
+            .expect("archived log");
+        assert_eq!(std::fs::read_to_string(archived).unwrap(), "old");
+
+        let mut output = Vec::new();
+        super::launcher_logs::write_adapter_log_header(
+            &mut output,
+            "model",
+            &"127.0.0.1:8318".parse().unwrap(),
+            7,
+        )
+        .expect("log header");
+        assert!(String::from_utf8(output).unwrap().contains("token_len=7"));
+    }
+
+    #[test]
     fn serializes_launchers_that_can_compete_for_the_same_port() {
         let base = std::path::PathBuf::from("/tmp/claudex-lock-cache");
         let loopback = "127.0.0.1:8318".parse().expect("loopback listener");
@@ -70,6 +108,23 @@ mod tests {
             super::launcher_logs::adapter_lock_path(&base, &loopback),
             super::launcher_logs::adapter_lock_path(&base, &wildcard)
         );
+    }
+
+    #[test]
+    fn acquires_launcher_lock_and_rejects_a_parentless_path() {
+        let root = tempfile::tempdir().expect("lock fixture");
+        let lock_path = root.path().join("adapter.lock");
+        let guard = super::launcher_lock::acquire(&lock_path).expect("lock acquisition");
+        assert!(lock_path.exists());
+        drop(guard);
+        assert!(super::launcher_lock::acquire(Path::new("")).is_err());
+    }
+
+    #[test]
+    fn reports_an_exclusive_lock_error_for_an_invalid_file_descriptor() {
+        let error = super::launcher_lock::lock_file_descriptor(-1)
+            .expect_err("invalid file descriptor must fail");
+        assert!(error.to_string().contains("lock launcher state"));
     }
 
     #[test]
@@ -158,6 +213,159 @@ mod tests {
         handover::release_stale_listener(&client, &config, Some(std::process::id()))
             .await
             .expect("current process");
+    }
+
+    #[tokio::test]
+    async fn inspects_start_reuse_and_replacement_service_states() {
+        let client = reqwest::Client::new();
+        let mut absent = config();
+        absent.options.listen = unused_listen();
+        assert_eq!(
+            handover::inspect_service(&client, &absent).await,
+            handover::ServiceState::Start
+        );
+
+        let mut reusable = config();
+        let listener = TcpListener::bind("127.0.0.1:0").expect("reuse listener");
+        reusable.options.listen = listener.local_addr().expect("reuse address");
+        let health = healthy(&reusable);
+        let server = serve_responses(
+            listener,
+            vec![health_response(&health), http_response("200 OK", "{}")],
+        );
+        assert_eq!(
+            handover::inspect_service(&client, &reusable).await,
+            handover::ServiceState::Reuse
+        );
+        server.join().expect("reuse server");
+
+        let mut stale = healthy(&reusable);
+        stale.build_id = "old-build".to_owned();
+        let listener = TcpListener::bind("127.0.0.1:0").expect("stale listener");
+        reusable.options.listen = listener.local_addr().expect("stale address");
+        let server = serve_responses(listener, vec![health_response(&stale)]);
+        assert_eq!(
+            handover::inspect_service(&client, &reusable).await,
+            handover::ServiceState::Replace(Some(42))
+        );
+        server.join().expect("stale server");
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("authentication listener");
+        reusable.options.listen = listener.local_addr().expect("authentication address");
+        let server = serve_responses(
+            listener,
+            vec![
+                health_response(&healthy(&reusable)),
+                http_response("401 Unauthorized", "{}"),
+            ],
+        );
+        assert_eq!(
+            handover::inspect_service(&client, &reusable).await,
+            handover::ServiceState::Replace(Some(42))
+        );
+        server.join().expect("authentication server");
+    }
+
+    #[tokio::test]
+    async fn releases_a_matched_stale_listener_and_reports_a_deadline() {
+        let client = reqwest::Client::new();
+        let mut released = config();
+        released.options.listen = unused_listen();
+        let terminated = Arc::new(AtomicBool::new(false));
+        let terminated_for_callback = Arc::clone(&terminated);
+        handover::release_stale_listener_with(
+            &client,
+            &released,
+            Some(42),
+            |pid, executable| pid == 42 && executable == Path::new("/tmp/adapter"),
+            move |pid| mark_terminated(pid, &terminated_for_callback),
+        )
+        .await
+        .expect("release stale listener");
+        assert!(terminated.load(Ordering::SeqCst));
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("occupied listener");
+        let mut occupied = config();
+        occupied.options.listen = listener.local_addr().expect("occupied address");
+        let accepting_listener = listener.try_clone().expect("clone occupied listener");
+        accepting_listener
+            .set_nonblocking(true)
+            .expect("make health listener nonblocking");
+        let stopped = Arc::new(AtomicBool::new(false));
+        let server_stopped = Arc::clone(&stopped);
+        let server = thread::spawn(move || accept_until_stopped(accepting_listener, server_stopped));
+        let error = handover::wait_until_listener_released_by(
+            &client,
+            &occupied,
+            42,
+            Instant::now() + Duration::from_millis(40),
+        )
+        .await
+        .expect_err("occupied stale listener must time out");
+        assert!(error.to_string().contains("did not release its listener"));
+        stopped.store(true, Ordering::SeqCst);
+        server.join().expect("occupied listener server");
+        drop(listener);
+    }
+
+    fn unused_listen() -> SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("unused listener");
+        listener.local_addr().expect("unused address")
+    }
+
+    fn mark_terminated(pid: u32, terminated: &AtomicBool) {
+        assert_eq!(pid, 42);
+        terminated.store(true, Ordering::SeqCst);
+    }
+
+    fn accept_until_stopped(listener: TcpListener, stopped: Arc<AtomicBool>) {
+        while !stopped.load(Ordering::SeqCst) {
+            match listener.accept() {
+                Ok((_stream, _)) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(1));
+                }
+                Err(error) => panic!("accept health request: {error}"),
+            }
+        }
+    }
+
+    fn health_response(health: &Health) -> String {
+        http_response(
+            "200 OK",
+            &json!({
+                "status": health.status,
+                "pid": health.pid,
+                "protocol_version": health.protocol_version,
+                "build_id": health.build_id,
+                "backend_routes": health.backend_routes,
+                "subscription_max_processes": health.subscription_max_processes,
+                "subscription_timeout_minutes": health.subscription_timeout_minutes,
+            })
+            .to_string(),
+        )
+    }
+
+    fn http_response(status: &str, body: &str) -> String {
+        format!(
+            "HTTP/1.1 {status}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    fn serve_responses(listener: TcpListener, responses: Vec<String>) -> thread::JoinHandle<()> {
+        thread::spawn(move || {
+            for response in responses {
+                let (mut stream, _) = listener.accept().expect("accept request");
+                let mut request = [0; 1_024];
+                let bytes_read = stream.read(&mut request).expect("read request");
+                assert!(bytes_read > 0, "request must contain bytes");
+                stream
+                    .write_all(response.as_bytes())
+                    .expect("write response");
+                stream.flush().expect("flush response");
+            }
+        })
     }
 
     #[test]

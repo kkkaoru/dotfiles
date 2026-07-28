@@ -16,6 +16,9 @@ const PARALLEL_RELEASE_FILE: &str = "grok-acp-parallel-release";
 static CWD_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+// This integration scenario intentionally keeps setup, saturation, release, and cleanup
+// together so it verifies the complete configured-ACP concurrency lifecycle in one test.
+#[allow(clippy::excessive_nesting, clippy::too_many_lines)]
 async fn allows_session_creations_up_to_the_configured_concurrency_limit() {
     let _cwd_guard = CWD_LOCK.lock().await;
     let root = tempfile::tempdir().expect("configured session concurrency fixture");
@@ -128,6 +131,8 @@ async fn allows_session_creations_up_to_the_configured_concurrency_limit() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+// See the companion test above: the full queueing lifecycle is kept in one scenario.
+#[allow(clippy::excessive_nesting, clippy::too_many_lines)]
 async fn enforces_seven_exact_model_turns_and_queues_the_eighth() {
     let _cwd_guard = CWD_LOCK.lock().await;
     let root = tempfile::tempdir().expect("configured concurrency fixture");
@@ -367,6 +372,8 @@ async fn configured_acp_routes_dynamic_models_and_expands_arguments() {
     session_scoped_configured_acp_recycles_after_one_failed_stream().await;
 }
 
+// This test covers failure, provider recycling, and the succeeding follow-up in one lifecycle.
+#[allow(clippy::too_many_lines)]
 async fn session_scoped_configured_acp_recycles_after_one_failed_stream() {
     let root = tempfile::tempdir().expect("session-scoped ACP fixture");
     std::env::set_current_dir(root.path()).expect("isolate ACP trace");

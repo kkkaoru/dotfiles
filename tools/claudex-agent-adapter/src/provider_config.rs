@@ -66,8 +66,10 @@ impl ModelCatalog {
             if !provider.default_model.is_empty() {
                 exact.push(provider.default_model.clone());
             }
-            if let Some(model) = &provider.subagent_model
-                && !model.is_empty()
+            if let Some(model) = provider
+                .subagent_model
+                .as_ref()
+                .filter(|model| !model.is_empty())
             {
                 exact.push(model.clone());
             }

@@ -17,6 +17,7 @@ const ACTIVE_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const FILE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const CONCURRENT_LAUNCHERS: usize = 4;
 const DAEMON_START_MARKER: &str = "=== claudex-agent-adapter daemon start ===";
+const REPLACEMENT_READY_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[tokio::test]
 async fn protocol_compatible_build_replacement_preserves_an_active_response() {
@@ -91,11 +92,8 @@ async fn concurrent_ensure_commands_start_exactly_one_daemon() {
     let home = launcher_home();
     let port = unused_port();
     let barrier = Arc::new(Barrier::new(CONCURRENT_LAUNCHERS));
-    let commands = (0..CONCURRENT_LAUNCHERS)
+    let workers = (0..CONCURRENT_LAUNCHERS)
         .map(|_| ensure_command(&home, port, "20"))
-        .collect::<Vec<_>>();
-    let workers = commands
-        .into_iter()
         .map(|mut command| {
             let barrier = Arc::clone(&barrier);
             thread::spawn(move || {
@@ -205,9 +203,17 @@ async fn ensure_running_replaces_the_renamed_legacy_daemon() {
         .expect("start renamed legacy daemon");
     let client = Client::new();
     let base_url = format!("http://127.0.0.1:{port}");
-    let legacy_pid = health(&client, &base_url).await["pid"]
+    let legacy_pid = health_with_deadline(
+        &client,
+        &base_url,
+        Instant::now() + REPLACEMENT_READY_TIMEOUT,
+    )
+    .await["pid"]
         .as_u64()
         .expect("legacy daemon pid");
+    // Do not retain an idle connection to the daemon while it drains during
+    // handover. The replacement readiness probe below uses a fresh client.
+    drop(client);
 
     let output = Command::new(&current_binary)
         .args(["ensure", "--model", "test-main-model"])
@@ -223,12 +229,13 @@ async fn ensure_running_replaces_the_renamed_legacy_daemon() {
         let _cleanup = legacy.kill();
         panic!("{}", String::from_utf8_lossy(&output.stderr));
     }
+    let replacement_client = Client::new();
+    let replacement = replacement_health(&replacement_client, &base_url, legacy_pid).await;
     let _status = legacy.wait().expect("reap renamed legacy daemon");
-    let replacement = health(&client, &base_url).await;
     assert_eq!(replacement["model"], "test-main-model");
     assert_ne!(replacement["pid"].as_u64(), Some(legacy_pid));
     terminate(replacement["pid"].as_u64().expect("replacement daemon pid"));
-    wait_for_exit(&client, &base_url).await;
+    wait_for_exit(&replacement_client, &base_url).await;
 }
 
 #[tokio::test]
@@ -239,7 +246,9 @@ async fn ensure_running_replaces_an_unavailable_health_endpoint() {
         .local_addr()
         .expect("stale endpoint address")
         .port();
-    let stale = thread::spawn(move || serve_stale_health(listener, 2, unavailable_health()));
+    let stale = thread::spawn(move || {
+        serve_stale_health_after_releasing_listener(listener, unavailable_health())
+    });
     let output = ensure_command(&home, port, "20")
         .output()
         .expect("replace unavailable endpoint");
@@ -539,15 +548,63 @@ fn launcher_home() -> TempDir {
 
 async fn health(client: &Client, base_url: &str) -> Value {
     for _ in 0..120 {
-        if let Ok(response) = client.get(format!("{base_url}/health")).send().await
-            && let Ok(response) = response.error_for_status()
-            && let Ok(value) = response.json().await
-        {
-            return value;
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
+        let Ok(response) = client.get(format!("{base_url}/health")).send().await else {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+            continue;
+        };
+        let Ok(response) = response.error_for_status() else {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+            continue;
+        };
+        let Ok(value) = response.json().await else {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+            continue;
+        };
+        return value;
     }
     panic!("adapter health did not become readable")
+}
+
+async fn replacement_health(client: &Client, base_url: &str, legacy_pid: u64) -> Value {
+    let deadline = Instant::now() + REPLACEMENT_READY_TIMEOUT;
+    loop {
+        if let Some(value) = fetch_test_health(client, base_url).await {
+            if value["pid"].as_u64() != Some(legacy_pid) {
+                return value;
+            }
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25).min(remaining)).await;
+    }
+    panic!("replacement adapter health did not become readable")
+}
+
+async fn health_with_deadline(client: &Client, base_url: &str, deadline: Instant) -> Value {
+    loop {
+        if let Some(value) = fetch_test_health(client, base_url).await {
+            return value;
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25).min(remaining)).await;
+    }
+    panic!("adapter health did not become readable")
+}
+
+async fn fetch_test_health(client: &Client, base_url: &str) -> Option<Value> {
+    let response = client
+        .get(format!("{base_url}/health"))
+        .send()
+        .await
+        .ok()?
+        .error_for_status()
+        .ok()?;
+    response.json().await.ok()
 }
 
 fn terminate(pid: u64) {
@@ -617,6 +674,22 @@ fn serve_stale_health(listener: TcpListener, responses: usize, body: String) {
         )
         .expect("write health response");
     }
+}
+
+fn serve_stale_health_after_releasing_listener(listener: TcpListener, body: String) {
+    let (mut stream, _) = listener.accept().expect("accept health request");
+    let mut request = [0_u8; 1024];
+    let _bytes = stream.read(&mut request).expect("read health request");
+    // `ensure` starts the replacement as soon as it receives this unavailable
+    // health response. Release the port first so fixture scheduling cannot make
+    // the replacement race a still-bound stale listener.
+    drop(listener);
+    write!(
+        stream,
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+    .expect("write health response");
 }
 
 fn assert_error(output: std::process::Output, expected: &str) {

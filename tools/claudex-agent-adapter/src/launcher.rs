@@ -361,11 +361,15 @@ async fn wait_until_ready_with(
     let deadline = Instant::now() + timeout;
     let mut delay = initial_delay;
     loop {
-        if let Some(health) = fetch_health(client, config).await
-            && config.matches(&health)
-            && health.build_id == env!("CLAUDEX_BUILD_ID")
-            && authenticates(client, config).await
-        {
+        let ready = match fetch_health(client, config).await {
+            Some(health)
+                if config.matches(&health) && health.build_id == env!("CLAUDEX_BUILD_ID") =>
+            {
+                authenticates(client, config).await
+            }
+            _ => false,
+        };
+        if ready {
             return Ok(());
         }
         let remaining = deadline.saturating_duration_since(Instant::now());

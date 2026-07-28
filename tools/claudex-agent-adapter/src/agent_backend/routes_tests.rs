@@ -1,4 +1,5 @@
 #[cfg(test)]
+// Coverage excludes test implementation; production behavior remains measured.
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use std::sync::Arc;
@@ -127,6 +128,30 @@ mod tests {
                 .is_some_and(|path| path.ends_with("/.codex/fugu.json")));
             assert_eq!(params["config"]["web_search"], "disabled");
         }
+        let mut plain = route("plain", BackendKind::CodexAppServer);
+        plain.model_catalog_json = Some("catalog.json".to_owned());
+        let (_, plain) = RoutedBackends::lazy(&[plain]).resolve("plain").unwrap();
+        let params = plain.thread_start_params(serde_json::json!({}));
+        assert_eq!(params["config"]["model_catalog_json"], "catalog.json");
+    }
+
+    #[test]
+    fn selects_exact_dynamic_and_prefix_context_limits() {
+        let mut exact = route("exact", BackendKind::CodexAppServer);
+        exact.max_context_tokens = Some(100);
+        let mut prefixed = route("prefix", BackendKind::CodexAppServer);
+        prefixed.max_context_tokens = Some(200);
+        prefixed.model_prefixes.push("prefix-".to_owned());
+        let routes = RoutedBackends::lazy(&[exact, prefixed]);
+
+        assert_eq!(routes.max_context_tokens_for_model("exact"), Some(100));
+        assert_eq!(routes.max_context_tokens_for_model("prefix-chat"), Some(200));
+        routes.resolve("prefix-dynamic").expect("dynamic route");
+        assert_eq!(
+            routes.max_context_tokens_for_model("prefix-dynamic"),
+            Some(200)
+        );
+        assert_eq!(routes.max_context_tokens_for_model("unknown"), None);
     }
 
     #[tokio::test]

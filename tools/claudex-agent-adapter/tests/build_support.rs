@@ -19,18 +19,25 @@ fn discovers_sorted_inputs_and_hashes_content_deterministically() {
             .iter()
             .any(|path| path.ends_with("src/nested/module.rs"))
     );
-    let first = build_support::calculate_build_id(&inputs).expect("first build ID");
-    let second = build_support::calculate_build_id(&inputs).expect("second build ID");
-    assert_eq!(first, second);
-    fs::write(
-        root.path().join("src/nested/module.rs"),
-        "fn changed() {}\n",
-    )
-    .expect("change fixture");
-    assert_ne!(
-        first,
-        build_support::calculate_build_id(&inputs).expect("changed build ID")
+    for input in ["build.rs", "Cargo.toml", "Cargo.lock"] {
+        assert!(inputs.iter().any(|path| path.ends_with(input)));
+    }
+    let mut previous = build_support::calculate_build_id(&inputs).expect("first build ID");
+    assert_eq!(
+        previous,
+        build_support::calculate_build_id(&inputs).expect("second build ID")
     );
+    for (file, contents) in [
+        ("src/nested/module.rs", "fn changed() {}\n"),
+        ("build.rs", "fn changed_build_script() {}\n"),
+        ("Cargo.toml", "changed manifest\n"),
+        ("Cargo.lock", "changed lockfile\n"),
+    ] {
+        fs::write(root.path().join(file), contents).expect("change fixture");
+        let changed = build_support::calculate_build_id(&inputs).expect("changed build ID");
+        assert_ne!(previous, changed, "{file} must affect the build ID");
+        previous = changed;
+    }
 }
 
 #[test]

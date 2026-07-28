@@ -15,14 +15,24 @@ pub(super) fn acquire(path: &Path) -> Result<LauncherLock> {
     fs::create_dir_all(parent).context("create launcher lock directory")?;
     let file = OpenOptions::new()
         .create(true)
+        .truncate(false)
         .read(true)
         .write(true)
         .open(path)
         .context("open launcher lock")?;
+    lock(&file)?;
+    Ok(LauncherLock { _file: file })
+}
+
+fn lock(file: &File) -> Result<()> {
+    lock_file_descriptor(file.as_raw_fd())
+}
+
+pub(super) fn lock_file_descriptor(file_descriptor: std::os::fd::RawFd) -> Result<()> {
     loop {
-        let result = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+        let result = unsafe { libc::flock(file_descriptor, libc::LOCK_EX) };
         if result == 0 {
-            return Ok(LauncherLock { _file: file });
+            return Ok(());
         }
         let error = std::io::Error::last_os_error();
         if error.kind() != std::io::ErrorKind::Interrupted {

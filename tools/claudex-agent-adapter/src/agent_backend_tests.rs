@@ -1,4 +1,5 @@
 #[cfg(test)]
+// Coverage excludes test implementation; production behavior remains measured.
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::{AcpLaunch, AgentBackend, BackendKind, BackendRoute};
@@ -56,6 +57,36 @@ mod tests {
         for model in ["", "Codex-extra", "unconfigured", "gpt", "grok", "qwen"] {
             assert!(!routes.supports_model(model));
         }
+    }
+
+    #[test]
+    fn keeps_plain_route_descriptions_compact() {
+        assert_eq!(
+            BackendRoute::new("model", BackendKind::CodexAppServer).description(),
+            "model=codex-app-server"
+        );
+        let mut metadata = BackendRoute::new("model", BackendKind::CodexAppServer);
+        metadata.model_provider = Some("provider".to_owned());
+        assert!(metadata.description().contains("modelProvider"));
+
+        let mut catalog = BackendRoute::new("model", BackendKind::CodexAppServer);
+        catalog.model_catalog_json = Some("catalog.json".to_owned());
+        assert!(catalog.description().contains("modelCatalogJson"));
+        let mut context = BackendRoute::new("model", BackendKind::CodexAppServer);
+        context.max_context_tokens = Some(100);
+        assert!(context.description().contains("maxContextTokens"));
+        let mut concurrency = BackendRoute::new("model", BackendKind::CodexAppServer);
+        concurrency.max_concurrency = Some(2);
+        assert!(concurrency.description().contains("maxConcurrency"));
+        let mut prefix = BackendRoute::new("model", BackendKind::CodexAppServer);
+        prefix.model_prefixes.push("model-".to_owned());
+        assert!(prefix.description().contains("modelPrefixes"));
+        let mut acp = BackendRoute::new("model", BackendKind::ConfiguredAcp);
+        acp.acp = Some(AcpLaunch {
+            program: "provider".to_owned(),
+            arguments: Vec::new(),
+        });
+        assert!(acp.description().contains("program"));
     }
 
     fn route_with_prefix(model: &str, backend: BackendKind, prefix: &str) -> BackendRoute {

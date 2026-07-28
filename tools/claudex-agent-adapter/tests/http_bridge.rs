@@ -86,13 +86,14 @@ async fn serves_models_counts_plain_messages_and_continuations() {
         .expect("decode models");
     assert_eq!(models["data"][0]["id"], "claude-claudex-test-main-model");
     assert_eq!(models["data"][0]["display_name"], "test-main-model");
-    let model_ids = models["data"]
-        .as_array()
-        .expect("model list")
-        .iter()
-        .filter_map(|model| model["id"].as_str())
-        .collect::<Vec<_>>();
-    assert!(model_ids.contains(&"claude-claudex-test-main-model"));
+    assert!(
+        models["data"]
+            .as_array()
+            .expect("model list")
+            .iter()
+            .filter_map(|model| model["id"].as_str())
+            .any(|id| id == "claude-claudex-test-main-model")
+    );
     assert!(
         models["data"]
             .as_array()
@@ -222,21 +223,40 @@ async fn streams_text_before_the_turn_completes() {
         .await
         .expect("request stream");
     let mut stream = String::new();
-    while !stream.contains("FIRST") {
+    let message_start_at = loop {
+        let chunk = response
+            .chunk()
+            .await
+            .expect("read initial stream chunk")
+            .expect("stream ended before message_start");
+        stream.push_str(&String::from_utf8_lossy(&chunk));
+        if stream.contains("event: message_start") {
+            break started.elapsed();
+        }
+    };
+    assert!(
+        message_start_at < Duration::from_millis(150),
+        "message_start was buffered behind provider setup: {message_start_at:?}"
+    );
+    let first_text_at = loop {
+        if stream.contains("FIRST") {
+            break started.elapsed();
+        }
         let chunk = response
             .chunk()
             .await
             .expect("read early stream chunk")
             .expect("stream ended before first delta");
         stream.push_str(&String::from_utf8_lossy(&chunk));
-    }
-    assert!(
-        started.elapsed() < Duration::from_millis(500),
-        "first text delta was buffered until the turn completed"
-    );
+    };
     while let Some(chunk) = response.chunk().await.expect("read stream remainder") {
         stream.push_str(&String::from_utf8_lossy(&chunk));
     }
+    let completion_at = started.elapsed();
+    assert!(
+        completion_at.saturating_sub(first_text_at) >= Duration::from_millis(100),
+        "first text delta was buffered until completion: first={first_text_at:?}, completion={completion_at:?}"
+    );
     for expected in [
         "event: message_start",
         "event: content_block_delta",

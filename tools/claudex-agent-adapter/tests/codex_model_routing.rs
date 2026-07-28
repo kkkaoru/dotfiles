@@ -60,9 +60,7 @@ fn codex_model_catalog_includes_parallel_execution_guidance_for_gpt_56_sol() {
         .expect("models exists in Codex catalog");
 
     for model in models {
-        let slug = model["slug"]
-            .as_str()
-            .unwrap_or("<unknown>");
+        let slug = model["slug"].as_str().unwrap_or("<unknown>");
         assert!(
             model["base_instructions"]
                 .as_str()
@@ -70,13 +68,18 @@ fn codex_model_catalog_includes_parallel_execution_guidance_for_gpt_56_sol() {
             "{slug} base instructions should include parallel execution guidance"
         );
 
-        if let Some(model_messages) = model["model_messages"].as_object() {
-            if let Some(template) = model_messages.get("instructions_template").and_then(|v| v.as_str()) {
-                assert!(
-                    template.contains(phrase),
-                    "{slug} instructions template should include parallel execution guidance"
-                );
-            }
-        }
+        let Some(model_messages) = model["model_messages"].as_object() else {
+            continue;
+        };
+        let Some(template) = model_messages
+            .get("instructions_template")
+            .and_then(|v| v.as_str())
+        else {
+            continue;
+        };
+        assert!(
+            template.contains(phrase),
+            "{slug} instructions template should include parallel execution guidance"
+        );
     }
 }

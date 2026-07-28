@@ -34,7 +34,10 @@ mod tests {
         std::fs::write(source.join("auth.json"), r#"{"token":"test"}"#).unwrap();
         std::fs::write(
             source.join("config.toml"),
-            r#"[model_providers.sakana]
+            r#"[model_providers]
+root = true
+
+[model_providers.sakana]
 name = "Sakana"
 base_url = "https://api.sakana.ai/v1"
 env_key = "SAKANA_AI_PRO_API_KEY"
@@ -193,6 +196,12 @@ name = "Must not replace the base config"
         ));
         drop(pending);
         server.stop("detached request test complete").await;
+        assert!(
+            server
+                .request_detached("turn/start", json!({"threadId":"after-stop"}))
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]

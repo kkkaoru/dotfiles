@@ -194,6 +194,7 @@ async fn supports_nested_ids_and_closes_or_cleans_channels() {
     assert!(dispatcher.channels.lock().unwrap().is_empty());
 
     let events = dispatcher.subscribe("closed");
+    dispatcher.dispatch(json!({"method":"error","params":{}}));
     dispatcher.dispatch(json!({"params":{}}));
     dispatcher.close();
     assert!(events.recv().await.is_none());

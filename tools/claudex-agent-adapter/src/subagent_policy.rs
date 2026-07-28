@@ -227,5 +227,8 @@ mod tests {
             ["gpt-5.6-sol", "qwen3.8-max-preview"]
         );
         assert!(parse("model with spaces").is_err());
+        assert!(!valid_model_id(""));
+        assert!(!valid_model_id("モデル"));
+        assert!(!valid_model_id("model\n"));
     }
 }

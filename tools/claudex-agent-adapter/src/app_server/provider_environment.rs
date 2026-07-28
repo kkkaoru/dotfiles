@@ -41,10 +41,9 @@ fn inherited_environment_keys(
 
 fn dotenv_paths(source_home: &Path, process_home: Option<PathBuf>) -> Vec<PathBuf> {
     let mut paths = vec![source_home.join(DOTENV_FILE_NAME)];
-    if let Some(path) = process_home.map(|home| home.join(DOTENV_FILE_NAME))
-        && !paths.contains(&path)
-    {
-        paths.push(path);
+    match process_home.map(|home| home.join(DOTENV_FILE_NAME)) {
+        Some(path) if !paths.contains(&path) => paths.push(path),
+        _ => {}
     }
     paths
 }
@@ -153,6 +152,8 @@ fn valid_environment_name(value: &str) -> bool {
 }
 
 #[cfg(test)]
+// Coverage gates measure production credentials handling; this inline module only contains tests.
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 
@@ -275,5 +276,47 @@ env_key = "MCP_KEY"
             dotenv_paths(source, None),
             [PathBuf::from("/tmp/codex-home/.env")]
         );
+    }
+
+    #[test]
+    fn covers_malformed_provider_and_dotenv_entries() {
+        let config = r#"
+[unrelated]
+env_key = "NOPE"
+[model_providers]
+not_an_assignment
+name = "wrong"
+env_key = bare
+[model_providers.valid]
+env_key = '_VALID_KEY'
+env_key = 'invalid-key'
+"#;
+        assert_eq!(
+            provider_environment_keys(config),
+            HashSet::from(["_VALID_KEY".to_owned()])
+        );
+
+        let required = HashSet::from(["FIRST".to_owned(), "EMPTY".to_owned()]);
+        let values = dotenv_values(
+            "\n# comment\nnot-an-assignment\nUNKNOWN=value\nexport FIRST='one'\nEMPTY=\n",
+            &required,
+        );
+        assert_eq!(values.get("FIRST").map(String::as_str), Some("one"));
+        assert!(!values.contains_key("EMPTY"));
+        assert!(
+            dotenv_fallbacks(
+                &required,
+                &HashSet::new(),
+                &[PathBuf::from("/definitely/missing/.env")]
+            )
+            .is_empty()
+        );
+        assert!(dotenv_fallbacks(&required, &required, &[]).is_empty());
+        assert!(quoted_value("").is_none());
+        assert!(quoted_value("bare").is_none());
+        assert!(quoted_value("\"unterminated").is_none());
+        assert!(valid_environment_name("A1_"));
+        assert!(!valid_environment_name("1A"));
+        assert!(!valid_environment_name(""));
     }
 }

@@ -263,22 +263,24 @@ Development commands:
 env -u RUSTUP_TOOLCHAIN cargo fmt-check
 env -u RUSTUP_TOOLCHAIN cargo lint
 env -u RUSTUP_TOOLCHAIN cargo test-all
-env -u RUSTUP_TOOLCHAIN cargo coverage
+env -u RUSTUP_TOOLCHAIN cargo +1.85.0 coverage
 env -u RUSTUP_TOOLCHAIN cargo coverage-branch
 ```
 
-`cargo coverage` enforces at least 95% aggregate line, function, and region
-coverage, plus at least 95% line coverage for every production source file.
-`cargo coverage-branch` uses nightly-only Rust branch instrumentation and
-enforces at least 95% for all four aggregate metrics: lines, functions,
-regions, and branches. Branch outcomes generated more than once for the same
-source location across unit and integration binaries are merged before the
-percentage is calculated. Test-only modules and mock process fixtures under
-`tests/fixtures` are excluded so the report measures production behavior. The
-ACP client trait shim is the only production exclusion and has a documented
-nightly LLVM mapping workaround in the source; its delegated application logic
-remains measured. Both coverage commands include the Cargo build script, whose
-reusable logic is measured through `src/build_support.rs`.
+`cargo coverage` is the stable-Cargo entry point to the nightly branch coverage
+gate: it runs the `coverage-branch` binary, which explicitly invokes
+`cargo +nightly llvm-cov`. Consequently, the exact 1.85 command above enforces
+at least 95% for all four aggregate metrics—lines, functions, regions, and
+branches—plus at least 95% line coverage for every production source file.
+`cargo coverage-branch` invokes that gate directly. Branch outcomes generated
+more than once for the same source location across unit and integration binaries
+are merged before the percentage is calculated. Test-only modules and mock
+process fixtures under `tests/fixtures` are excluded so the report measures
+production behavior. The ACP client trait shim is the only production exclusion
+and has a documented nightly LLVM mapping workaround in the source; its
+delegated application logic remains measured. Both coverage commands include
+the Cargo build script, whose reusable logic is measured through
+`src/build_support.rs`.
 The build also rejects production Rust files over 400 physical lines; dedicated
 `tests.rs`, `*_tests.rs`, and `tests/**` files are exempt. Clippy rejects
 functions over 80 lines, cognitive complexity over 17, and block nesting deeper
