@@ -68,6 +68,7 @@ impl AgentEffortIntents {
             parent_model,
             arguments,
             &[],
+            &serde_json::json!(null),
         );
     }
 
@@ -79,6 +80,7 @@ impl AgentEffortIntents {
         parent_model: &str,
         arguments: &Value,
         user_messages: &[Value],
+        system: &Value,
     ) {
         let Some(prompt) = agent_prompt(tool_name, arguments) else {
             return;
@@ -91,7 +93,7 @@ impl AgentEffortIntents {
             .map(str::to_owned);
         let requested_model = requested_model(arguments);
         let explicit_model = requested_model.filter(|model| {
-            super::agent_routing::model_is_authorized(arguments, user_messages, model)
+            super::agent_routing::model_is_authorized(arguments, user_messages, system, model)
         });
         if requested_model.is_some() && explicit_model.is_none() {
             tracing::debug!(
@@ -189,6 +191,7 @@ pub(super) fn validate_routed_agent_arguments(
     tool_name: &str,
     arguments: &Value,
     user_messages: &[Value],
+    system: &Value,
 ) -> Result<()> {
     if !is_agent_tool(tool_name) {
         return Ok(());
@@ -196,7 +199,7 @@ pub(super) fn validate_routed_agent_arguments(
     let Some(model) = requested_model(arguments) else {
         bail!("{tool_name} launch is missing required `claudex_model`");
     };
-    if !super::agent_routing::model_is_authorized(arguments, user_messages, model) {
+    if !super::agent_routing::model_is_authorized(arguments, user_messages, system, model) {
         bail!(
             "{tool_name} launch model `{model}` is neither the selected worker's exact model nor an exact model requested by the active user"
         );
@@ -217,7 +220,13 @@ pub(super) fn prepare_arguments(
     tool_use_id: &str,
     arguments: &Value,
 ) -> (Option<Value>, Value) {
-    prepare_arguments_for_user(tool_name, tool_use_id, arguments, &[])
+    prepare_arguments_for_user(
+        tool_name,
+        tool_use_id,
+        arguments,
+        &[],
+        &serde_json::json!(null),
+    )
 }
 
 pub(super) fn prepare_arguments_for_user(
@@ -225,6 +234,7 @@ pub(super) fn prepare_arguments_for_user(
     tool_use_id: &str,
     arguments: &Value,
     user_messages: &[Value],
+    _system: &Value,
 ) -> (Option<Value>, Value) {
     let mut correlated = arguments.clone();
     let Some(prompt) = agent_prompt(tool_name, arguments) else {

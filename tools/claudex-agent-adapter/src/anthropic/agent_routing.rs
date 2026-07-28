@@ -42,12 +42,22 @@ fn prompt_routing_value(arguments: &Value, key: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
-pub(super) fn model_is_authorized(arguments: &Value, messages: &[Value], model: &str) -> bool {
+pub(super) fn model_is_authorized(
+    arguments: &Value,
+    messages: &[Value],
+    system: &Value,
+    model: &str,
+) -> bool {
     current_user_requests_model(messages, model)
-        || selected_worker_matches(arguments, messages, model)
+        || selected_worker_matches(arguments, messages, system, model)
 }
 
-fn selected_worker_matches(arguments: &Value, messages: &[Value], model: &str) -> bool {
+fn selected_worker_matches(
+    arguments: &Value,
+    messages: &[Value],
+    system: &Value,
+    model: &str,
+) -> bool {
     let Some(agent) = arguments
         .get("subagent_type")
         .or_else(|| arguments.get("agent"))
@@ -56,6 +66,7 @@ fn selected_worker_matches(arguments: &Value, messages: &[Value], model: &str) -
         return false;
     };
     user_message_texts(messages)
+        .chain(value_texts(system))
         .filter_map(routing_summary)
         .last()
         .is_some_and(|summary| {

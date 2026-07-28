@@ -304,6 +304,7 @@ mod tests {
             "tool-subscription",
             &arguments,
             &[json!({"role":"user","content":"selected model gpt-5.6-sol"})],
+            &json!(null),
         );
         let internal = internal.expect("Task routing intent");
         assert_eq!(internal["claudex_model"], "gpt-5.6-sol");
@@ -342,13 +343,20 @@ mod tests {
         });
         let ordinary = [json!({"role":"user","content":"Run a contract audit SubAgent"})];
         let (_, public) =
-            prepare_arguments_for_user("Agent", "tool-ordinary", &arguments, &ordinary);
+            prepare_arguments_for_user(
+                "Agent",
+                "tool-ordinary",
+                &arguments,
+                &ordinary,
+                &json!(null),
+            );
         assert!(public.get("name").is_none());
         let (_, public) = prepare_arguments_for_user(
             "Agent",
             "tool-coincidental",
             &json!({"prompt":"audit contracts", "name":"audit"}),
             &ordinary,
+            &json!(null),
         );
         assert!(public.get("name").is_none());
 
@@ -356,7 +364,13 @@ mod tests {
             "role":"user", "content":"Use the named teammate wf_contract_audit"
         })];
         let (_, public) =
-            prepare_arguments_for_user("Agent", "tool-named", &arguments, &explicit);
+            prepare_arguments_for_user(
+                "Agent",
+                "tool-named",
+                &arguments,
+                &explicit,
+                &json!(null),
+            );
         assert_eq!(public["name"], "wf_contract_audit");
 
         let stale = [
@@ -365,7 +379,13 @@ mod tests {
             json!({"role":"user","content":"<agent-message from=\"wf_contract_audit\">done</agent-message>"}),
         ];
         let (_, public) =
-            prepare_arguments_for_user("Agent", "tool-stale", &arguments, &stale);
+            prepare_arguments_for_user(
+                "Agent",
+                "tool-stale",
+                &arguments,
+                &stale,
+                &json!(null),
+            );
         assert!(public.get("name").is_none());
 
         let schema = tool_schema("Agent", json!({
@@ -423,6 +443,7 @@ mod tests {
                 "parent-model",
                 &explicit,
                 &user_messages,
+                &json!(null),
             );
             let intent = intents.take(&request_without_user_id(
                 explicit["prompt"].as_str().expect("explicit prompt"),
@@ -469,6 +490,7 @@ mod tests {
                 "parent-model",
                 &arguments,
                 &user_messages,
+                &json!(null),
             );
             let intent = intents.take(&request_without_user_id(
                 arguments["prompt"].as_str().expect("correlated prompt"),
@@ -507,6 +529,7 @@ mod tests {
                 "main-model",
                 &arguments,
                 &[json!({"role":"user","content":format!("implement this\n{routing}")})],
+                &json!(null),
             );
             let intent = intents.take(&request_without_user_id(
                 arguments["prompt"].as_str().expect("correlated prompt"),
@@ -528,6 +551,7 @@ mod tests {
             "Agent",
             &json!({"subagent_type":"claudex-gpt-spark","claudex_model":"gpt-5.3-codex-spark"}),
             &messages,
+            &json!(null),
         )
         .is_ok());
         for rejected in [
@@ -535,7 +559,13 @@ mod tests {
             json!({"subagent_type":"claudex-gpt-spark","claudex_model":"gpt-old"}),
             json!({"subagent_type":"claude-code-guide","claudex_model":"claudex-gpt-spark"}),
         ] {
-            assert!(validate_routed_agent_arguments("Agent", &rejected, &messages).is_err());
+            assert!(validate_routed_agent_arguments(
+                "Agent",
+                &rejected,
+                &messages,
+                &json!(null),
+            )
+            .is_err());
         }
 
         let explicit = [json!({
@@ -546,6 +576,7 @@ mod tests {
             "Task",
             &json!({"subagent_type":"claudex-gpt-spark","claudex_model":"gpt-5.6-sol"}),
             &explicit,
+            &json!(null),
         )
         .is_ok());
 
@@ -557,6 +588,32 @@ mod tests {
             "Agent",
             &json!({"subagent_type":"general-purpose","claudex_model":"beta"}),
             &compound,
+            &json!(null),
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn accepts_selected_worker_model_from_system_routing_context() {
+        let system = json!([{
+            "type":"text",
+            "text":"Claudex routing for this turn: {\"providers\":{},\"selected_agents\":[\"claudex-gpt-spark\"],\"selected_workers\":[{\"agent\":\"claudex-gpt-spark\",\"model\":\"gpt-5.3-codex-spark\",\"effort\":\"high\"}]} mandatory policy"
+        }]);
+        let messages = [
+            json!({"role":"user","content":"Please run this task"}),
+        ];
+        assert!(validate_routed_agent_arguments(
+            "Agent",
+            &json!({"subagent_type":"claudex-gpt-spark","claudex_model":"gpt-5.3-codex-spark"}),
+            &messages,
+            &system,
+        )
+        .is_ok());
+        assert!(validate_routed_agent_arguments(
+            "Agent",
+            &json!({"subagent_type":"claudex-gpt-spark","claudex_model":"gpt-old"}),
+            &messages,
+            &system,
         )
         .is_err());
     }

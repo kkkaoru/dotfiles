@@ -264,6 +264,7 @@ async fn hidden_provider_events_do_not_postpone_visible_activity() {
         &session,
         &events,
         &[],
+        &json!(null),
         &sender,
         SegmentBuilder::new(1),
         Duration::from_millis(10),
@@ -307,6 +308,7 @@ async fn reports_a_closed_provider_event_stream() {
             &session,
             &events,
             &[],
+            &json!(null),
             &sender,
             SegmentBuilder::new(1),
             Duration::from_secs(1),
@@ -544,6 +546,7 @@ async fn rejects_a_malformed_tool_event_before_dispatch() {
             &bridge,
             &session,
             &[],
+            &json!(null),
             &json!({"method":"item/tool/call","params":{}}),
             None,
         )

@@ -320,6 +320,7 @@ fn explicit_subscription_tool_context() -> SubscriptionToolContext {
         agent_efforts: Arc::new(AgentEffortIntents::default()),
         client_user_id: None,
         parent_model: "parent-model".to_owned(),
+        system: json!(null),
         user_messages: vec![json!({
             "role":"user", "content":"Use gpt-5.3-codex-spark and grok-4.5"
         })],
@@ -344,6 +345,7 @@ async fn sanitizes_and_records_contextual_agent_tool_input() {
             agent_efforts: intents,
             client_user_id: Some("user".to_owned()),
             parent_model: "parent-model".to_owned(),
+            system: json!([{"type":"text","text":"system message"}]),
             user_messages,
         }),
         activity: SubscriptionActivity::default(),
@@ -433,6 +435,7 @@ async fn ignores_non_top_level_tool_events_and_exercises_completed_state() {
             agent_efforts: Arc::new(AgentEffortIntents::default()),
             client_user_id: None,
             parent_model: "parent-model".to_owned(),
+            system: json!([{"type":"text","text":"system message"}]),
             user_messages: Vec::new(),
         }),
         activity: SubscriptionActivity::default(),

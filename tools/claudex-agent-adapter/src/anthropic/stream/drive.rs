@@ -18,6 +18,7 @@ impl Bridge {
             session,
             events,
             extras,
+            routing_system,
             input_tokens,
             retry,
             gate,
@@ -25,7 +26,7 @@ impl Bridge {
         } = turn;
         let _gate = gate;
         match self
-            .wait_for_stream_segment(&session, &events, &extras, &sender, builder)
+            .wait_for_stream_segment(&session, &events, &extras, &routing_system, &sender, builder)
             .await
         {
             Ok(StreamTurn::Segment {

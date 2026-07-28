@@ -89,6 +89,7 @@ impl Bridge {
             events,
             response_model,
             extras,
+            routing_system: request.system.clone(),
             input_tokens,
             retry: allow_context_retry.then(|| super::super::ContextRetry {
                 request: request.clone(),

@@ -32,6 +32,7 @@ impl Bridge {
                     &turn.events,
                     turn.input_tokens,
                     &turn.extras,
+                    &turn.routing_system,
                     None,
                 )
                 .await;

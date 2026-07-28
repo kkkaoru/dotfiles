@@ -283,12 +283,14 @@ impl SubscriptionStream {
             name,
             input,
             &context.user_messages,
+            &context.system,
         )?;
         let (intent, public) = super::agent_effort::prepare_arguments_for_user(
             name,
             id,
             input,
             &context.user_messages,
+            &context.system,
         );
         if let Some(intent) = intent.as_ref() {
             context.agent_efforts.record_from_user_messages(
@@ -298,6 +300,7 @@ impl SubscriptionStream {
                 &context.parent_model,
                 intent,
                 &context.user_messages,
+                &context.system,
             );
         }
         Ok(public)

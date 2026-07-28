@@ -47,6 +47,7 @@ pub(super) struct SubscriptionToolContext {
     pub(super) client_user_id: Option<String>,
     pub(super) parent_model: String,
     pub(super) user_messages: Vec<Value>,
+    pub(super) system: Value,
 }
 
 impl SubscriptionOptions {
@@ -185,13 +186,10 @@ impl Bridge {
             timeout: self.subscription_timeout,
             tool_context: Some(SubscriptionToolContext {
                 agent_efforts: Arc::clone(&self.agent_efforts),
-                client_user_id: request
-                    .metadata
-                    .get("user_id")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned),
+                client_user_id: request.metadata.get("user_id").and_then(Value::as_str).map(str::to_owned),
                 parent_model: request.model.clone(),
                 user_messages: request.messages.clone(),
+                system: request.system.clone(),
             }),
         }
     }

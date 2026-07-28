@@ -124,6 +124,7 @@ impl Bridge {
         session: &Arc<Session>,
         events: &crate::app_server::ThreadEvents,
         current_messages: &[Value],
+        system: &Value,
         sender: &StreamSender,
         builder: SegmentBuilder,
     ) -> Result<StreamTurn> {
@@ -131,6 +132,7 @@ impl Bridge {
             session,
             events,
             current_messages,
+            system,
             sender,
             builder,
             ACTIVITY_KEEPALIVE_INTERVAL,
@@ -143,6 +145,7 @@ impl Bridge {
         session: &Arc<Session>,
         events: &crate::app_server::ThreadEvents,
         current_messages: &[Value],
+        system: &Value,
         sender: &StreamSender,
         mut builder: SegmentBuilder,
         activity_interval: Duration,
@@ -183,7 +186,7 @@ impl Bridge {
             };
             let visible = is_visible_activity_event(&event);
             let flow = match builder
-                .handle_event(self, session, current_messages, &event, Some(sender))
+                .handle_event(self, session, current_messages, system, &event, Some(sender))
                 .await
             {
                 Ok(flow) => flow,
@@ -247,6 +250,7 @@ impl Bridge {
         events: &crate::app_server::ThreadEvents,
         input_tokens: u64,
         current_messages: &[Value],
+        system: &Value,
         stream: Option<&StreamSender>,
     ) -> Result<Segment> {
         let mut builder = SegmentBuilder::new(input_tokens);
@@ -257,7 +261,7 @@ impl Bridge {
                 NextEvent::Closed => bail!("app-server event stream closed"),
             };
             if builder
-                .handle_event(self, session, current_messages, &event, stream)
+                .handle_event(self, session, current_messages, system, &event, stream)
                 .await?
                 == ControlFlow::Break(())
             {

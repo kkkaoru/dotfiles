@@ -131,6 +131,7 @@ struct ActiveTurn {
     events: ThreadEvents,
     response_model: String,
     extras: Vec<Value>,
+    routing_system: Value,
     input_tokens: u64,
     retry: Option<ContextRetry>,
     gate: tokio::sync::OwnedMutexGuard<()>,
