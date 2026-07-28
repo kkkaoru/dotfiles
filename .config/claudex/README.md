@@ -344,6 +344,36 @@ sessionを開始してください。routing hookは統合した禁止モデル�
 除外し、共有daemonも端末別request headerを使ってSubAgent provider実行直前に再検証します。
 全モデルが禁止または利用不能ならmain sessionが作業を継続します。
 
+### 端末別ポリシー: providers のローカル上書き
+
+`qwen` をこの Mac だけ有効化し、他の Mac では無効化する場合は、`providers.json` を
+デフォルトで `qwen` 無効にした状態で、端末ごとの上書きファイルを使います。
+
+- 端末別上書きファイル: `~/.config/claudex/providers.$(hostname -s).local.json`
+- Git 追跡対象から除外: `~/.config/claudex/.gitignore`
+- 例: `~/.config/claudex/providers.kkk4oru.local.json`
+
+```json
+{
+  "version": 1,
+  "mainProviders": ["codex", "grok", "fugu", "ollama-glm-5-2", "qwen", "opencode-go"],
+  "providers": [
+    {
+      "id": "qwen",
+      "enabled": true
+    }
+  ]
+}
+```
+
+上書きファイルが存在する場合のみ反映し、明示的に `CLAUDEX_PROVIDER_CONFIG` を設定した
+場合はそちらを優先します。
+
+```fish
+set -gx CLAUDEX_PROVIDER_LOCAL_CONFIG "$HOME/.config/claudex/providers.$(hostname -s).local.json"
+claudex
+```
+
 ### 標準Advisorを利用
 
 ```text

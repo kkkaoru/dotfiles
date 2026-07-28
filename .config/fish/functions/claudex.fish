@@ -4,8 +4,40 @@ function claudex --description 'Run Claude Code with config-driven agent backend
     set -lx CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS 40
     set -lx CLAUDEX_ACTIVE 1
 
-    set -l provider_config "$HOME/.config/claudex/providers.json"
-    set -q CLAUDEX_PROVIDER_CONFIG; and set provider_config $CLAUDEX_PROVIDER_CONFIG
+    set -l default_provider_config "$HOME/.config/claudex/providers.json"
+    set -l provider_override_config "$HOME/.config/claudex/providers.$(hostname -s).local.json"
+    set -l provider_config $default_provider_config
+
+    if set -q CLAUDEX_PROVIDER_CONFIG
+        set provider_config $CLAUDEX_PROVIDER_CONFIG
+    else if set -q CLAUDEX_PROVIDER_LOCAL_CONFIG
+        set provider_override_config $CLAUDEX_PROVIDER_LOCAL_CONFIG
+    end
+
+    if test -z "$CLAUDEX_PROVIDER_CONFIG"; and test -r "$provider_override_config"
+        set -l cache_path "$HOME/.cache/claudex"
+        set -l scoped_provider_config "$cache_path/providers.local-resolved.json"
+        set -l resolver_script "$HOME/.config/claudex/resolve-provider-local-config.py"
+
+        if not mkdir -p "$cache_path"
+            echo "claudex: cannot create provider cache directory: $cache_path" >&2
+            return 2
+        end
+
+        set -l effective_provider_config (python3 "$resolver_script" "$default_provider_config" "$provider_override_config" "$scoped_provider_config")
+        set -l resolver_status $status
+        if test $resolver_status -ne 0
+            echo "claudex: failed to resolve local provider config" >&2
+            return 2
+        end
+        if test -z "$effective_provider_config"
+            echo "claudex: failed to resolve local provider config" >&2
+            return 2
+        end
+        set provider_config $effective_provider_config
+    end
+
+    set -lx CLAUDEX_PROVIDER_CONFIG "$provider_config"
     if not test -r "$provider_config"
         echo "claudex: provider config is not readable: $provider_config" >&2
         return 2

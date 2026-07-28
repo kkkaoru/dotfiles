@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "mainProviders": ["codex", "grok", "fugu", "ollama-glm-5-2", "qwen", "opencode-go"],
+    "mainProviders": ["codex", "grok", "fugu", "ollama-glm-5-2", "opencode-go"],
   "providers": [
     {
       "id": "codex",
@@ -63,7 +63,7 @@
       "agent": "claudex-qwen",
       "defaultModel": "qwen3.8-max-preview",
       "effort": "high",
-      "enabled": true,
+      "enabled": false,
       "usageProvider": "qwen",
       "modelPrefixes": [
         "qwen"

@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "mainProviders": [
+    "codex",
+    "grok",
+    "fugu",
+    "ollama-glm-5-2",
+    "qwen",
+    "opencode-go"
+  ],
+  "providers": [
+    {
+      "id": "qwen",
+      "enabled": true
+    }
+  ]
+}
