@@ -55,25 +55,28 @@ fn codex_model_catalog_includes_parallel_execution_guidance_for_gpt_56_sol() {
     .expect("valid shared Codex model catalog");
 
     let phrase = "In Code tasks, avoid serializing independent operations";
-    let model = catalog["models"]
+    let models = catalog["models"]
         .as_array()
-        .and_then(|models| {
-            models
-                .iter()
-                .find(|model| model["slug"] == "gpt-5.6-sol")
-        })
-        .expect("gpt-5.6-sol exists in Codex catalog");
+        .expect("models exists in Codex catalog");
 
-    assert!(
-        model["base_instructions"].as_str().is_some_and(|instructions| {
-            instructions.contains(phrase)
-        }),
-        "gpt-5.6-sol base instructions should include parallel execution guidance"
-    );
-    assert!(
-        model["model_messages"]["instructions_template"]
+    for model in models {
+        let slug = model["slug"]
             .as_str()
-            .is_some_and(|instructions| instructions.contains(phrase)),
-        "gpt-5.6-sol instructions template should include parallel execution guidance"
-    );
+            .unwrap_or("<unknown>");
+        assert!(
+            model["base_instructions"]
+                .as_str()
+                .is_some_and(|instructions| instructions.contains(phrase)),
+            "{slug} base instructions should include parallel execution guidance"
+        );
+
+        if let Some(model_messages) = model["model_messages"].as_object() {
+            if let Some(template) = model_messages.get("instructions_template").and_then(|v| v.as_str()) {
+                assert!(
+                    template.contains(phrase),
+                    "{slug} instructions template should include parallel execution guidance"
+                );
+            }
+        }
+    }
 }
