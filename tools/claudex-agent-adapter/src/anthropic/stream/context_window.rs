@@ -1,9 +1,13 @@
 use serde_json::Value;
 
 pub(super) fn is_context_window_event(event: &Value) -> bool {
-    let message = event.pointer("/params/error/message").and_then(Value::as_str);
+    let message = event
+        .pointer("/params/error/message")
+        .and_then(Value::as_str);
     let details = event.pointer("/params/message").and_then(Value::as_str);
-    let codex_error = event.pointer("/params/error/codexErrorInfo").and_then(Value::as_str);
+    let codex_error = event
+        .pointer("/params/error/codexErrorInfo")
+        .and_then(Value::as_str);
     let error_code = event.pointer("/params/error/code").and_then(Value::as_str);
     let error_type = event.pointer("/params/error/type").and_then(Value::as_str);
     let error_name = event.pointer("/params/error/name").and_then(Value::as_str);

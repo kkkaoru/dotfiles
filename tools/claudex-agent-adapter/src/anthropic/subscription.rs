@@ -186,7 +186,11 @@ impl Bridge {
             timeout: self.subscription_timeout,
             tool_context: Some(SubscriptionToolContext {
                 agent_efforts: Arc::clone(&self.agent_efforts),
-                client_user_id: request.metadata.get("user_id").and_then(Value::as_str).map(str::to_owned),
+                client_user_id: request
+                    .metadata
+                    .get("user_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
                 parent_model: request.model.clone(),
                 user_messages: request.messages.clone(),
                 system: request.system.clone(),
@@ -247,8 +251,6 @@ pub(super) async fn run_subscription_model(
     let mut command = subscription_command(program, model, &options, OutputMode::Json);
     let mut child = spawn_subscription(&mut command, model)?;
     let stdin = take_subscription_stdin(&mut child)?;
-    // An early child exit can close stdin first. Prefer its status and stderr
-    // over the resulting BrokenPipe because they explain the actual failure.
     let interaction = async {
         let (prompt_result, output) = tokio::join!(
             write_subscription_prompt(stdin, prompt),

@@ -54,7 +54,10 @@ async fn missing_model_launch_response(client: &Client, url: &str, instruction: 
         .await
         .expect("send model-less Agent launch");
     assert_eq!(response.status(), reqwest::StatusCode::BAD_GATEWAY);
-    response.text().await.expect("read model-less Agent rejection")
+    response
+        .text()
+        .await
+        .expect("read model-less Agent rejection")
 }
 
 #[tokio::test]
@@ -100,11 +103,13 @@ async fn inferred_model_without_user_authorization_is_rejected_before_launch() {
         .await
         .expect("send inferred model launch");
     assert_eq!(response.status(), reqwest::StatusCode::BAD_GATEWAY);
-    assert!(response
-        .text()
-        .await
-        .expect("read inferred model rejection")
-        .contains("neither the selected worker's exact model"));
+    assert!(
+        response
+            .text()
+            .await
+            .expect("read inferred model rejection")
+            .contains("neither the selected worker's exact model")
+    );
 }
 
 fn supported_efforts() -> [(&'static str, &'static str); 6] {
@@ -178,11 +183,13 @@ async fn unmatched_subagent_rejects_claude_codes_fallback_model() {
             .await
             .expect("send unmatched SubAgent request");
         assert_eq!(response.status(), reqwest::StatusCode::BAD_GATEWAY);
-        assert!(response
-            .text()
-            .await
-            .expect("read unmatched rejection")
-            .contains("did not match an explicit Agent/Task launch"));
+        assert!(
+            response
+                .text()
+                .await
+                .expect("read unmatched rejection")
+                .contains("did not match an explicit Agent/Task launch")
+        );
     }
 }
 

@@ -3,15 +3,14 @@ use std::{future::Future, time::Duration};
 use anyhow::{Result, anyhow};
 use tokio::sync::oneshot;
 
-use super::{connection::AcpProvider, turns::{ActiveTurns, cancel_turn}};
+use super::{
+    connection::AcpProvider,
+    turns::{ActiveTurns, cancel_turn},
+};
 
 const CONFIGURED_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
 
-pub(super) async fn acquire<T, F>(
-    provider: AcpProvider,
-    operation: &str,
-    future: F,
-) -> Result<T>
+pub(super) async fn acquire<T, F>(provider: AcpProvider, operation: &str, future: F) -> Result<T>
 where
     F: Future<Output = Result<T>>,
 {

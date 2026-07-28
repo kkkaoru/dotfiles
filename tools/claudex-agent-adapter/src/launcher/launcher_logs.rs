@@ -1,4 +1,4 @@
-use std::{fs, io::Write, net::SocketAddr, path::PathBuf, path::Path, process};
+use std::{fs, io::Write, net::SocketAddr, path::Path, path::PathBuf, process};
 
 use anyhow::{Context, Result};
 
@@ -22,7 +22,9 @@ fn archived_log_path(log_path: &Path) -> Result<std::path::PathBuf> {
         .file_stem()
         .and_then(|name| name.to_str())
         .context("adapter log file has no stem")?;
-    let extension = log_path.extension().and_then(|extension| extension.to_str());
+    let extension = log_path
+        .extension()
+        .and_then(|extension| extension.to_str());
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .context(EPOCH_FLOOR)?;

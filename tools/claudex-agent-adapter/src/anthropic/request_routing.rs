@@ -210,7 +210,11 @@ mod tests {
             |model| model == "vendor-a" || model == "main-model",
         )
         .expect_err("deny");
-        assert!(error.to_string().contains("disabled by the active Claudex policy"));
+        assert!(
+            error
+                .to_string()
+                .contains("disabled by the active Claudex policy")
+        );
     }
 
     #[test]
@@ -240,6 +244,10 @@ mod tests {
             |_| true,
         )
         .expect_err("model-less SubAgent");
-        assert!(error.to_string().contains("missing required explicit `claudex_model`"));
+        assert!(
+            error
+                .to_string()
+                .contains("missing required explicit `claudex_model`")
+        );
     }
 }

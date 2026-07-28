@@ -1,10 +1,4 @@
-use std::{
-    cell::Cell,
-    future::Future,
-    rc::Rc,
-    sync::atomic::AtomicBool,
-    time::Duration,
-};
+use std::{cell::Cell, future::Future, rc::Rc, sync::atomic::AtomicBool, time::Duration};
 
 use agent_client_protocol::{self as acp, Agent as _};
 use anyhow::anyhow;

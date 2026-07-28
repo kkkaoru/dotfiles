@@ -47,14 +47,8 @@ async fn preempt_busy_matching_session(
         Some(request.model.as_str())
     };
     let user_id = request.metadata.get("user_id").and_then(Value::as_str);
-    let (session, prior_len) = find_busy_matching_session(
-        sessions,
-        signature,
-        messages,
-        model,
-        user_id,
-    )
-    .await?;
+    let (session, prior_len) =
+        find_busy_matching_session(sessions, signature, messages, model, user_id).await?;
     tracing::info!(
         thread_id = %session.thread_id,
         prior_transcript_len = prior_len,

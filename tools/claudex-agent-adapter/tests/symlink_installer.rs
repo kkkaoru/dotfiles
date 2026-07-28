@@ -27,6 +27,9 @@ fn installs_current_claudex_agents_and_prunes_renamed_links() {
     for agent in ["claudex-gpt-spark.md", "claudex-ollama-glm-5-2.md"] {
         let installed = agents.join(agent);
         assert!(installed.is_symlink(), "{agent} must be installed");
-        assert!(installed.exists(), "{agent} must target a current definition");
+        assert!(
+            installed.exists(),
+            "{agent} must target a current definition"
+        );
     }
 }

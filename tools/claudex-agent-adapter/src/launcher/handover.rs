@@ -1,9 +1,9 @@
 use std::time::{Duration, Instant};
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 use super::daemon_process::{matches as process_matches, terminate};
-use super::{authenticates, fetch_health, ServiceConfig};
+use super::{ServiceConfig, authenticates, fetch_health};
 
 const LISTENER_RELEASE_POLL_INTERVAL: Duration = Duration::from_millis(25);
 
@@ -40,9 +40,7 @@ pub(super) async fn release_stale_listener(
         && pid != std::process::id()
         && process_matches(pid, &config.executable)
     {
-        eprintln!(
-            "claudex: draining active requests on stale adapter pid {pid} during handover"
-        );
+        eprintln!("claudex: draining active requests on stale adapter pid {pid} during handover");
         terminate(pid);
         wait_until_listener_released(client, config, pid).await?;
     }

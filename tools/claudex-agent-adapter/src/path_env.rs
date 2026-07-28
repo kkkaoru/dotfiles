@@ -1,9 +1,4 @@
-use std::{
-    env,
-    ffi::OsString,
-    path::PathBuf,
-    process::Command,
-};
+use std::{env, ffi::OsString, path::PathBuf, process::Command};
 
 /// PATH for long-lived adapter daemons and ACP child processes.
 ///
@@ -29,9 +24,8 @@ pub(crate) fn tool_search_path() -> OsString {
             }
         }
     }
-    env::join_paths(parts.iter().map(|part| part.as_os_str())).unwrap_or_else(|_| {
-        OsString::from("/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin")
-    })
+    env::join_paths(parts.iter().map(|part| part.as_os_str()))
+        .unwrap_or_else(|_| OsString::from("/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"))
 }
 
 /// Environment for a detached `serve` daemon started via nohup.

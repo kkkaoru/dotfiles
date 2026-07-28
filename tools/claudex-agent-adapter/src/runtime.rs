@@ -1,6 +1,6 @@
 use std::{collections::VecDeque, ffi::OsString, path::PathBuf, sync::Arc};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use tracing_subscriber::EnvFilter;
 
 use crate::{

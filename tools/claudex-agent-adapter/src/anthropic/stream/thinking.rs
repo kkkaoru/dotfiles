@@ -32,9 +32,10 @@ impl ThinkingState {
         }
         // One Anthropic thinking block per (itemId, summaryIndex) unit — matching
         // Claude Code's discrete thinking sections instead of one endless blob.
-        let unit_changed = self.open.as_ref().is_some_and(|open| {
-            open.item_id != item_id || open.summary_index != summary_index
-        });
+        let unit_changed = self
+            .open
+            .as_ref()
+            .is_some_and(|open| open.item_id != item_id || open.summary_index != summary_index);
         if unit_changed {
             self.close(blocks, stream).await?;
         }

@@ -5,19 +5,19 @@ use std::{
     path::{Path, PathBuf},
     rc::Rc,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc,
+        atomic::{AtomicBool, Ordering},
     },
 };
 
 use agent_client_protocol as acp;
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use serde_json::Value;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::{
     agent_backend::AcpLaunch,
-    app_server::{events::ThreadEventDispatcher, ThreadEvents},
+    app_server::{ThreadEvents, events::ThreadEventDispatcher},
 };
 
 mod client;

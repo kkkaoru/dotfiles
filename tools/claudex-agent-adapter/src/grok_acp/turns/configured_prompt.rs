@@ -20,11 +20,7 @@ pub(super) enum Wait<T> {
     TimedOut,
 }
 
-pub(super) async fn wait<T, F>(
-    provider: AcpProvider,
-    timeout: Duration,
-    future: F,
-) -> Wait<T>
+pub(super) async fn wait<T, F>(provider: AcpProvider, timeout: Duration, future: F) -> Wait<T>
 where
     F: Future<Output = T>,
 {

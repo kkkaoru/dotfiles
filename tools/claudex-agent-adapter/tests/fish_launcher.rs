@@ -81,8 +81,8 @@ fn fish_launcher_uses_the_shared_provider_config() {
 #[test]
 fn fish_config_sets_the_plain_claude_subagent_limit() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let config = fs::read_to_string(root.join(".config/fish/config.fish"))
-        .expect("fish configuration");
+    let config =
+        fs::read_to_string(root.join(".config/fish/config.fish")).expect("fish configuration");
     assert!(
         config
             .lines()

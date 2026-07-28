@@ -64,7 +64,11 @@ pub(super) async fn take_pending_results(
             {
                 batch.2.push((marker.index, result));
             } else {
-                batches.push((marker.request_id.clone(), marker.total, vec![(marker.index, result)]));
+                batches.push((
+                    marker.request_id.clone(),
+                    marker.total,
+                    vec![(marker.index, result)],
+                ));
             }
         } else {
             responses.push((id, result));
@@ -79,7 +83,14 @@ pub(super) async fn take_pending_results(
             content_items.push(input_text(&format!("SubAgent {} result:", index + 1)));
             content_items.extend(result.content_items);
         }
-        responses.push((request_id, ToolResult { tool_use_id, content_items, is_error }));
+        responses.push((
+            request_id,
+            ToolResult {
+                tool_use_id,
+                content_items,
+                is_error,
+            },
+        ));
     }
     if pending.is_empty() {
         *session

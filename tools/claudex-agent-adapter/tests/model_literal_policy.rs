@@ -74,12 +74,20 @@ fn contains_vendor_prefix_inference(line: &str) -> bool {
     if lower.trim_start().starts_with("//") || lower.trim_start().starts_with('#') {
         return false;
     }
-    ["starts_with(\"gpt\")", "starts_with(\"grok\")", "starts_with(\"qwen\")"]
+    [
+        "starts_with(\"gpt\")",
+        "starts_with(\"grok\")",
+        "starts_with(\"qwen\")",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+        || [
+            "starts_with(\"gpt-\")",
+            "starts_with(\"grok-\")",
+            "starts_with(\"qwen-\")",
+        ]
         .iter()
         .any(|needle| lower.contains(needle))
-        || ["starts_with(\"gpt-\")", "starts_with(\"grok-\")", "starts_with(\"qwen-\")"]
-            .iter()
-            .any(|needle| lower.contains(needle))
 }
 
 #[test]

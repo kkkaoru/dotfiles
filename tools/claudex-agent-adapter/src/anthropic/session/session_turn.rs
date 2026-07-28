@@ -2,11 +2,9 @@ use anyhow::Result;
 use serde_json::{Value, json};
 
 use super::super::{
-    content::{
-        ToolResult,
-    },
-    turn_input::{full_transcript_input, user_input_from_messages},
     ActiveTurn, Bridge, MessagesRequest, SelectedSession, Session,
+    content::ToolResult,
+    turn_input::{full_transcript_input, user_input_from_messages},
 };
 
 impl Bridge {

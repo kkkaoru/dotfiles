@@ -283,11 +283,14 @@ fn start_adapter(config: &ServiceConfig) -> Result<u32> {
         .truncate(true)
         .open(&config.log_path)
         .context("open adapter log")?;
-    launcher_logs::write_adapter_log_header(&mut stdout, &config.options.model, &config.options.listen, config.token.len())?;
+    launcher_logs::write_adapter_log_header(
+        &mut stdout,
+        &config.options.model,
+        &config.options.listen,
+        config.token.len(),
+    )?;
     let stdout = stdout;
-    let stderr = stdout
-        .try_clone()
-        .context("clone adapter log handle")?;
+    let stderr = stdout.try_clone().context("clone adapter log handle")?;
     let mut command = Command::new("nohup");
     #[cfg(unix)]
     {

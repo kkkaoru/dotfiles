@@ -107,12 +107,9 @@ pub(super) async fn take_gate_after_preempt(
     session: &Arc<Session>,
     messages: &[Value],
 ) -> Option<SelectedSession> {
-    let gate = tokio::time::timeout(
-        PREEMPT_GATE_TIMEOUT,
-        Arc::clone(&session.gate).lock_owned(),
-    )
-    .await
-    .ok()?;
+    let gate = tokio::time::timeout(PREEMPT_GATE_TIMEOUT, Arc::clone(&session.gate).lock_owned())
+        .await
+        .ok()?;
     align_transcript_to_request(session, messages).await;
     let existing_len = matching_transcript_len(session, messages).await?;
     touch_session(session);

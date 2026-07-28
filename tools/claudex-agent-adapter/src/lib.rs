@@ -21,15 +21,15 @@ pub(crate) const DISCOVERY_MODEL_PREFIX: &str = "claude-claudex-";
 
 use std::sync::Arc;
 
-use anthropic::{error_response, token_count, Bridge, MessagesRequest};
+use anthropic::{Bridge, MessagesRequest, error_response, token_count};
 use axum::{
+    Json, Router,
     extract::{Request, State},
     http::{HeaderMap, Response, StatusCode},
     middleware,
     middleware::Next,
     response::IntoResponse,
     routing::{get, post},
-    Json, Router,
 };
 use serde_json::json;
 

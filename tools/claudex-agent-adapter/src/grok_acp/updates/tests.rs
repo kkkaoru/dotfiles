@@ -173,7 +173,11 @@ async fn ignores_mode_and_session_title_chatter() {
         acp::SessionUpdate::SessionInfoUpdate(acp::SessionInfoUpdate::new().title("")),
         acp::SessionUpdate::SessionInfoUpdate(acp::SessionInfoUpdate::new()),
     ] {
-        dispatch_notification(&events, &thoughts(), acp::SessionNotification::new("session", update));
+        dispatch_notification(
+            &events,
+            &thoughts(),
+            acp::SessionNotification::new("session", update),
+        );
     }
     let drained = drain(&receiver).await;
     assert!(
@@ -187,7 +191,11 @@ fn ignores_unrelated_or_unstructured_extensions() {
     let events = ThreadEventDispatcher::default();
     for (method, payload) in [("other/method", "{}"), ("_x.ai/session/update", "\"text\"")] {
         let raw = RawValue::from_string(payload.to_owned()).unwrap();
-        dispatch_extension(&events, &thoughts(), acp::ExtNotification::new(method, Arc::from(raw)));
+        dispatch_extension(
+            &events,
+            &thoughts(),
+            acp::ExtNotification::new(method, Arc::from(raw)),
+        );
     }
 }
 

@@ -3,10 +3,7 @@ use std::{
     collections::{HashMap, HashSet},
     future::Future,
     rc::Rc,
-    sync::{
-        Arc,
-        atomic::AtomicBool,
-    },
+    sync::{Arc, atomic::AtomicBool},
     time::Duration,
 };
 

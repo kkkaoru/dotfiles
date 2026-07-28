@@ -18,13 +18,14 @@ use super::{
 use crate::app_server::response_thread_id;
 
 mod preempt;
-mod session_turn;
 #[cfg(test)]
 pub(super) mod reservation;
 #[cfg(not(test))]
 mod reservation;
+mod session_turn;
 mod tools;
 
+pub(in crate::anthropic) use session_turn::is_context_window_exceeded;
 #[cfg(test)]
 pub(super) use tools::{
     codex_tool_name, dynamic_tool, internal_advisor_tool, internal_collaborator_tool,
@@ -32,7 +33,6 @@ pub(super) use tools::{
 };
 #[cfg(not(test))]
 use tools::{thread_start_params, tool_configuration};
-pub(in crate::anthropic) use session_turn::is_context_window_exceeded;
 
 impl Bridge {
     pub(super) async fn prepare_turn(
@@ -83,7 +83,12 @@ impl Bridge {
                     "claudex: preemptively starting fresh thread before context limit"
                 );
                 selected = self
-                    .start_new_session(request, &selected, advisor_model.as_deref(), collaborator_model.as_deref())
+                    .start_new_session(
+                        request,
+                        &selected,
+                        advisor_model.as_deref(),
+                        collaborator_model.as_deref(),
+                    )
                     .await?;
             }
         }
@@ -97,7 +102,7 @@ impl Bridge {
             collaborator_model.as_deref(),
             true,
         )
-            .await
+        .await
     }
 
     async fn remove_failed_model_sessions(&self, model: &str) {
@@ -277,9 +282,8 @@ impl Bridge {
             .map(|result| result.tool_use_id.clone())
             .collect::<Vec<_>>();
         let responses = take_pending_results(session, results).await?;
-        self.agent_efforts.remove_tool_results(
-            completed_ids.iter().map(String::as_str),
-        );
+        self.agent_efforts
+            .remove_tool_results(completed_ids.iter().map(String::as_str));
         let submitted = !responses.is_empty();
         for (id, result) in responses {
             self.app
@@ -319,11 +323,7 @@ fn is_better_length(best: Option<usize>, candidate: usize) -> bool {
     }
 }
 
-fn should_preempt_for_context_limit(
-    input_tokens: u64,
-    limit: u64,
-    has_tool_results: bool,
-) -> bool {
+fn should_preempt_for_context_limit(input_tokens: u64, limit: u64, has_tool_results: bool) -> bool {
     !has_tool_results && input_tokens >= limit
 }
 

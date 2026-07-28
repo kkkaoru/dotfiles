@@ -47,9 +47,11 @@ async fn unmatched_claude_child_does_not_inherit_main_copilot_acp_route() {
         .json::<Value>()
         .await
         .expect("decode unmatched child error");
-    assert!(response["error"]["message"]
-        .as_str()
-        .is_some_and(|message| message.contains("did not match an explicit Agent/Task launch")));
+    assert!(
+        response["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("did not match an explicit Agent/Task launch"))
+    );
     server.abort();
 
     let trace = read_trace(&root.path().join("grok-acp-mock.jsonl"));

@@ -1,5 +1,5 @@
 use crate::agent_backend::{AcpLaunch, BackendKind, BackendRoute};
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 use std::{collections::HashSet, fs, path::Path};
 const CONFIG_VERSION: u64 = 1;

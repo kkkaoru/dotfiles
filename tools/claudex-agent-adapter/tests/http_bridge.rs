@@ -93,9 +93,18 @@ async fn serves_models_counts_plain_messages_and_continuations() {
         .filter_map(|model| model["id"].as_str())
         .collect::<Vec<_>>();
     assert!(model_ids.contains(&"claude-claudex-test-main-model"));
-    assert!(models["data"].as_array().expect("model list").iter().all(|model| {
-        model["type"] == "model" && model["display_name"].as_str().is_some_and(|name| !name.is_empty())
-    }));
+    assert!(
+        models["data"]
+            .as_array()
+            .expect("model list")
+            .iter()
+            .all(|model| {
+                model["type"] == "model"
+                    && model["display_name"]
+                        .as_str()
+                        .is_some_and(|name| !name.is_empty())
+            })
+    );
 
     let count = post_json(
         &client,
@@ -481,10 +490,7 @@ async fn retries_terminal_context_window_errors_once_on_a_fresh_thread() {
         }),
     )
     .await;
-    assert_eq!(
-        recovered["content"][0]["text"],
-        "OK_AFTER_CONTEXT_RESTART"
-    );
+    assert_eq!(recovered["content"][0]["text"], "OK_AFTER_CONTEXT_RESTART");
 }
 
 #[tokio::test]

@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use super::{model_concurrency::ModelConcurrencyStatus, Bridge, MAX_SESSIONS};
+use super::{Bridge, MAX_SESSIONS, model_concurrency::ModelConcurrencyStatus};
 
 impl Bridge {
     pub fn is_alive(&self) -> bool {

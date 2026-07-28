@@ -6,7 +6,7 @@ use claudex_agent_adapter::{
     http_router,
 };
 use reqwest::Client;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 const ACP_EVENT_TIMEOUT: Duration = Duration::from_secs(5);
 const CONFIGURED_PARALLEL_LIMIT: usize = 7;
@@ -333,10 +333,12 @@ async fn configured_acp_routes_dynamic_models_and_expands_arguments() {
     let _ = tokio::time::timeout(std::time::Duration::from_secs(1), receiver.recv())
         .await
         .expect("configured ACP event");
-    assert!(backend
-        .respond_for_model("vendor-next", json!(1), json!({}))
-        .await
-        .is_err());
+    assert!(
+        backend
+            .respond_for_model("vendor-next", json!(1), json!({}))
+            .await
+            .is_err()
+    );
 
     assert_configured_trace(root.path(), &request_cwd);
 
@@ -355,10 +357,11 @@ async fn configured_acp_routes_dynamic_models_and_expands_arguments() {
     assert_eq!(leaf.kind(), BackendKind::ConfiguredAcp);
     assert!(leaf.is_alive());
     assert!(leaf.request("unsupported", json!({})).await.is_err());
-    assert!(leaf
-        .request_detached("unsupported", json!({}))
-        .await
-        .is_err());
+    assert!(
+        leaf.request_detached("unsupported", json!({}))
+            .await
+            .is_err()
+    );
     assert!(leaf.respond(json!(1), json!({})).await.is_err());
 
     session_scoped_configured_acp_recycles_after_one_failed_stream().await;
@@ -399,9 +402,11 @@ async fn session_scoped_configured_acp_recycles_after_one_failed_stream() {
         .expect("failed turn event")
         .expect("failed turn event dispatcher");
     assert_eq!(failed["method"], "error");
-    assert!(failed["params"]["error"]["message"]
-        .as_str()
-        .is_some_and(|message| message.contains("recycling provider")));
+    assert!(
+        failed["params"]["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("recycling provider"))
+    );
     assert!(backend.started_models().is_empty());
 
     let restarted = backend
@@ -484,7 +489,9 @@ fn assert_configured_trace(root: &std::path::Path, request_cwd: &std::path::Path
         .map(|line| serde_json::from_str::<Value>(line).expect("trace event"))
         .collect::<Vec<_>>();
     assert_eq!(trace[0]["arguments"], json!(["--model", "vendor-next"]));
-    assert!(trace
-        .iter()
-        .any(|event| event["new_session"]["cwd"] == json!(request_cwd)));
+    assert!(
+        trace
+            .iter()
+            .any(|event| event["new_session"]["cwd"] == json!(request_cwd))
+    );
 }

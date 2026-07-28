@@ -1,8 +1,8 @@
 use std::{
     collections::{BTreeMap, HashMap},
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
     },
 };
 
@@ -125,9 +125,11 @@ mod tests {
         let first = registry.ticket("exact", Some(1)).unwrap().acquire().await;
         let second = registry.ticket("exact", Some(1)).unwrap();
         let mut waiting = Box::pin(second.acquire());
-        assert!(timeout(Duration::from_millis(10), waiting.as_mut())
-            .await
-            .is_err());
+        assert!(
+            timeout(Duration::from_millis(10), waiting.as_mut())
+                .await
+                .is_err()
+        );
         assert_eq!(
             registry.snapshot()["exact"],
             ModelConcurrencyStatus {
