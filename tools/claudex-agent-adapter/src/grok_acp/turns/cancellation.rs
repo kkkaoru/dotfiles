@@ -175,11 +175,11 @@ pub(super) async fn cancel_prompt<F>(
     settle_cancelled_prompt(ctx, response);
 }
 
-fn continue_after_cancel_request<'a>(
-    ctx: CancelCtx<'a>,
+fn continue_after_cancel_request(
+    ctx: CancelCtx<'_>,
     policy: SettlementPolicy,
     settlement: Settlement<acp::Result<()>>,
-) -> Option<CancelCtx<'a>> {
+) -> Option<CancelCtx<'_>> {
     match settlement {
         Settlement::Settled(Ok(())) => Some(ctx),
         Settlement::Settled(Err(error)) => {

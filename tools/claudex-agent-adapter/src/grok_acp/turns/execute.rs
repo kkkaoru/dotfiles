@@ -34,6 +34,16 @@ struct TurnCtl<'a> {
     invalidated_sessions: &'a InvalidatedSessions,
 }
 
+pub(super) struct TurnExecution<'a> {
+    pub(super) provider: AcpProvider,
+    pub(super) connection: Rc<acp::ClientSideConnection>,
+    pub(super) model: &'a str,
+    pub(super) events: &'a ThreadEventDispatcher,
+    pub(super) active_turns: &'a ActiveTurns,
+    pub(super) invalidated_sessions: &'a InvalidatedSessions,
+    pub(super) alive: &'a AtomicBool,
+}
+
 impl TurnCtl<'_> {
     fn take_permit(&mut self) -> tokio::sync::OwnedSemaphorePermit {
         self.permit.take().expect("active turn permit")
@@ -65,16 +75,16 @@ impl TurnCtl<'_> {
     }
 }
 
-pub(super) async fn execute_turn(
-    provider: AcpProvider,
-    connection: Rc<acp::ClientSideConnection>,
-    model: &str,
-    turn: PreparedTurn,
-    events: &ThreadEventDispatcher,
-    active_turns: &ActiveTurns,
-    invalidated_sessions: &InvalidatedSessions,
-    alive: &AtomicBool,
-) {
+pub(super) async fn execute_turn(context: TurnExecution<'_>, turn: PreparedTurn) {
+    let TurnExecution {
+        provider,
+        connection,
+        model,
+        events,
+        active_turns,
+        invalidated_sessions,
+        alive,
+    } = context;
     let PreparedTurn {
         session_id,
         prompt,
@@ -100,7 +110,8 @@ pub(super) async fn execute_turn(
     if !apply_effort(&mut ctl, &connection, model, effort.as_deref(), &id).await {
         return;
     }
-    run_prompt(ctl, connection, id, prompt, alive).await;
+    let timeout = configured_prompt::TIMEOUT;
+    run_prompt(ctl, connection, id, prompt, timeout, alive).await;
 }
 
 async fn apply_effort(
@@ -158,6 +169,10 @@ async fn apply_effort(
         },
         result = &mut setup => result,
     };
+    // Let queued stream-disconnect cancellation reach the turn before prompt submission.
+    if setup_result.is_ok() {
+        tokio::task::yield_now().await;
+    }
     finish_effort_setup(ctl, setup_result)
 }
 
@@ -254,6 +269,7 @@ async fn run_prompt(
     connection: Rc<acp::ClientSideConnection>,
     id: acp::SessionId,
     prompt: String,
+    timeout: Duration,
     alive: &AtomicBool,
 ) {
     let request = acp::PromptRequest::new(
@@ -262,7 +278,7 @@ async fn run_prompt(
     );
     let response = match configured_prompt::wait(
         ctl.provider,
-        configured_prompt::TIMEOUT,
+        timeout,
         prompt_once(&mut ctl, &connection, request),
     )
     .await
@@ -273,37 +289,40 @@ async fn run_prompt(
             let message = format!(
                 "{} ACP prompt timed out after {:?}; recycling provider",
                 ctl.provider.label(),
-                configured_prompt::TIMEOUT
+                timeout
             );
             configured_prompt::invalidate(
                 ctl.provider,
-                ctl.session_id,
-                &mut *ctl.permit,
-                ctl.events,
-                ctl.active_turns,
-                ctl.invalidated_sessions,
-                alive,
-                message,
+                configured_prompt::Invalidation {
+                    session_id: ctl.session_id,
+                    permit: &mut *ctl.permit,
+                    events: ctl.events,
+                    active_turns: ctl.active_turns,
+                    invalidated_sessions: ctl.invalidated_sessions,
+                    alive,
+                    message,
+                },
             );
             return;
         }
     };
-    if let Err(error) = response.as_ref()
-        && ctl.provider.is_session_scoped_configured()
-    {
+    let is_session_configured = ctl.provider.is_session_scoped_configured();
+    if let (true, Err(error)) = (is_session_configured, response.as_ref()) {
         let message = format!(
             "{} ACP prompt failed: {error:?}; recycling provider",
             ctl.provider.label()
         );
         configured_prompt::invalidate(
             ctl.provider,
-            ctl.session_id,
-            &mut *ctl.permit,
-            ctl.events,
-            ctl.active_turns,
-            ctl.invalidated_sessions,
-            alive,
-            message,
+            configured_prompt::Invalidation {
+                session_id: ctl.session_id,
+                permit: &mut *ctl.permit,
+                events: ctl.events,
+                active_turns: ctl.active_turns,
+                invalidated_sessions: ctl.invalidated_sessions,
+                alive,
+                message,
+            },
         );
         return;
     }
@@ -320,7 +339,7 @@ async fn prompt_once(
     let session_id = ctl.session_id;
     let prompt_started = Rc::new(Cell::new(false));
     let prompt = {
-        let connection = Rc::clone(&connection);
+        let connection = Rc::clone(connection);
         let prompt_started = Rc::clone(&prompt_started);
         async move {
             prompt_started.set(true);
@@ -344,7 +363,7 @@ async fn prompt_once(
             Ok(cancellation) => {
                 handle_prompt_cancellation(
                     ctl,
-                    &connection,
+                    connection,
                     prompt_started.get(),
                     prompt,
                     cancellation,
@@ -372,10 +391,6 @@ async fn handle_prompt_cancellation<F>(
         cancel_prompt(ctl.cancel_ctx(permit, cancellation), connection, prompt).await;
         return;
     }
-    finish_unstarted_prompt(ctl, cancellation);
-}
-
-fn finish_unstarted_prompt(ctl: &mut TurnCtl<'_>, cancellation: CancelRequest) {
     ctl.finish_pre_prompt_cancel(cancellation);
 }
 

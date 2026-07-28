@@ -20,6 +20,16 @@ pub(super) enum Wait<T> {
     TimedOut,
 }
 
+pub(super) struct Invalidation<'a> {
+    pub(super) session_id: &'a str,
+    pub(super) permit: &'a mut Option<OwnedSemaphorePermit>,
+    pub(super) events: &'a ThreadEventDispatcher,
+    pub(super) active_turns: &'a ActiveTurns,
+    pub(super) invalidated_sessions: &'a InvalidatedSessions,
+    pub(super) alive: &'a AtomicBool,
+    pub(super) message: String,
+}
+
 pub(super) async fn wait<T, F>(provider: AcpProvider, timeout: Duration, future: F) -> Wait<T>
 where
     F: Future<Output = T>,
@@ -33,16 +43,16 @@ where
     }
 }
 
-pub(super) fn invalidate(
-    provider: AcpProvider,
-    session_id: &str,
-    permit: &mut Option<OwnedSemaphorePermit>,
-    events: &ThreadEventDispatcher,
-    active_turns: &ActiveTurns,
-    invalidated_sessions: &InvalidatedSessions,
-    alive: &AtomicBool,
-    message: String,
-) {
+pub(super) fn invalidate(provider: AcpProvider, context: Invalidation<'_>) {
+    let Invalidation {
+        session_id,
+        permit,
+        events,
+        active_turns,
+        invalidated_sessions,
+        alive,
+        message,
+    } = context;
     debug_assert!(provider.is_session_scoped_configured());
     invalidated_sessions
         .borrow_mut()
@@ -81,6 +91,7 @@ pub(super) async fn finish(
 }
 
 #[cfg(test)]
+// Coverage excludes test implementation; production behavior remains measured.
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
@@ -129,13 +140,15 @@ mod tests {
 
         invalidate(
             AcpProvider::Configured,
-            "session",
-            &mut permit,
-            &events,
-            &active,
-            &invalidated,
-            &alive,
-            "configured prompt timed out".to_owned(),
+            Invalidation {
+                session_id: "session",
+                permit: &mut permit,
+                events: &events,
+                active_turns: &active,
+                invalidated_sessions: &invalidated,
+                alive: &alive,
+                message: "configured prompt timed out".to_owned(),
+            },
         );
 
         assert!(!alive.load(Ordering::Acquire));

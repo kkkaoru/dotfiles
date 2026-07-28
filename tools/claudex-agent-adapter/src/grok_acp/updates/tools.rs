@@ -82,17 +82,16 @@ pub(super) fn dispatch_provider_tool_update(
     {
         // Title-only progress with callId still needs a start if ToolCall never
         // arrived (update-only tools).
-        if fields.title.is_some() {
-            let mut params = json!({
-                "threadId": session_id,
-                "callId": call_id,
-                "status": tool_status_label(status)
-            });
-            if let Some(title) = fields.title {
-                params["title"] = json!(title);
-            }
-            events.dispatch(json!({ "method": PROVIDER_TOOL_UPDATE, "params": params }));
-        }
+        let Some(title) = fields.title else {
+            return;
+        };
+        let mut params = json!({
+            "threadId": session_id,
+            "callId": call_id,
+            "status": tool_status_label(status)
+        });
+        params["title"] = json!(title);
+        events.dispatch(json!({ "method": PROVIDER_TOOL_UPDATE, "params": params }));
         return;
     }
     let status = tool_status_label(status);

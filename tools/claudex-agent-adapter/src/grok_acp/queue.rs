@@ -53,6 +53,7 @@ pub(super) fn finish_start_turn(
 }
 
 #[cfg(test)]
+// Coverage excludes test implementation; production behavior remains measured.
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
@@ -79,5 +80,65 @@ mod tests {
             .await
             .is_ok()
         );
+    }
+
+    #[tokio::test]
+    async fn queue_wait_returns_ready_values_and_errors_without_a_timeout() {
+        assert_eq!(
+            acquire(
+                AcpProvider::Grok,
+                "turn/start",
+                std::future::ready(Ok::<_, anyhow::Error>("ready")),
+            )
+            .await
+            .unwrap(),
+            "ready"
+        );
+        assert!(
+            acquire_with_timeout(
+                AcpProvider::Grok,
+                "turn/start",
+                Duration::from_millis(1),
+                std::future::ready(Err::<(), _>(anyhow!("unavailable"))),
+            )
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("unavailable")
+        );
+    }
+
+    #[tokio::test]
+    async fn disconnected_start_response_cancels_only_a_successful_queued_turn() {
+        let active_turns = ActiveTurns::default();
+        let (cancel, cancelled) = oneshot::channel();
+        active_turns
+            .borrow_mut()
+            .insert("session".to_owned(), Some(cancel));
+
+        let (response, requester) = oneshot::channel();
+        drop(requester);
+        finish_start_turn(&active_turns, "session", response, Ok(()));
+        assert!(cancelled.await.is_ok());
+
+        let (response, requester) = oneshot::channel();
+        drop(requester);
+        finish_start_turn(&active_turns, "session", response, Err(anyhow!("rejected")));
+        assert!(active_turns.borrow().contains_key("session"));
+    }
+
+    #[tokio::test]
+    async fn delivered_start_response_leaves_the_queued_turn_alone() {
+        let active_turns = ActiveTurns::default();
+        let (cancel, mut cancelled) = oneshot::channel();
+        active_turns
+            .borrow_mut()
+            .insert("session".to_owned(), Some(cancel));
+        let (response, result) = oneshot::channel();
+
+        finish_start_turn(&active_turns, "session", response, Ok(()));
+
+        assert!(result.await.unwrap().is_ok());
+        assert!(cancelled.try_recv().is_err());
     }
 }

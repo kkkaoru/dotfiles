@@ -11,6 +11,24 @@ fn thoughts() -> ThoughtUnits {
     ThoughtUnits::default()
 }
 
+#[test]
+fn thought_units_handle_empty_chunks_and_bare_paragraph_breaks() {
+    let units = thoughts();
+    assert!(units.partition("session", "").is_empty());
+    assert_eq!(
+        units.partition("session", "open"),
+        vec![(0, "open".to_owned())]
+    );
+    assert!(units.partition("bare", "\n\n").is_empty());
+    assert!(units.partition("session", "\n\n").is_empty());
+    assert_eq!(
+        units.partition("session", "next"),
+        vec![(1, "next".to_owned())]
+    );
+    units.break_after_interrupt("session");
+    units.clear("session");
+}
+
 async fn drain(receiver: &ThreadEvents) -> Vec<serde_json::Value> {
     let mut out = Vec::new();
     while let Ok(Some(event)) =
@@ -80,6 +98,43 @@ async fn forwards_tool_status_updates_with_output() {
         acp::SessionNotification::new(
             "session",
             acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new(
+                "output-progress",
+                acp::ToolCallUpdateFields::new()
+                    .status(acp::ToolCallStatus::Pending)
+                    .raw_output(json!("output")),
+            )),
+        ),
+    );
+    dispatch_notification(
+        &events,
+        &thoughts(),
+        acp::SessionNotification::new(
+            "session",
+            acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new(
+                "content-progress",
+                acp::ToolCallUpdateFields::new()
+                    .status(acp::ToolCallStatus::Pending)
+                    .content(vec![text_content("content")]),
+            )),
+        ),
+    );
+    dispatch_notification(
+        &events,
+        &thoughts(),
+        acp::SessionNotification::new(
+            "session",
+            acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new(
+                "anonymous-progress",
+                acp::ToolCallUpdateFields::new().status(acp::ToolCallStatus::Pending),
+            )),
+        ),
+    );
+    dispatch_notification(
+        &events,
+        &thoughts(),
+        acp::SessionNotification::new(
+            "session",
+            acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new(
                 "call-2",
                 acp::ToolCallUpdateFields::new()
                     .status(acp::ToolCallStatus::Failed)
@@ -88,12 +143,93 @@ async fn forwards_tool_status_updates_with_output() {
             )),
         ),
     );
-    let completed = receiver.recv().await.unwrap();
-    let failed = receiver.recv().await.unwrap();
-    assert_eq!(completed["method"], "item/providerTool/update");
-    assert_eq!(completed["params"]["status"], "completed");
-    assert_eq!(completed["params"]["output"], "file contents here");
-    assert_eq!(failed["params"]["status"], "failed");
+    let messages = drain(&receiver).await;
+    assert!(messages.iter().any(|event| {
+        event["method"] == "item/providerTool/update"
+            && event["params"]["status"] == "completed"
+            && event["params"]["output"] == "file contents here"
+    }));
+    assert!(messages.iter().any(|event| {
+        event["method"] == "item/providerTool/update" && event["params"]["status"] == "failed"
+    }));
+}
+
+#[tokio::test]
+async fn covers_tool_update_progress_and_empty_plan_paths() {
+    let events = ThreadEventDispatcher::default();
+    let receiver = events.subscribe("session");
+    dispatch_notification(
+        &events,
+        &thoughts(),
+        acp::SessionNotification::new(
+            "session",
+            acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new(
+                "start",
+                acp::ToolCallUpdateFields::new()
+                    .title("Read")
+                    .kind(acp::ToolKind::Read)
+                    .status(acp::ToolCallStatus::InProgress)
+                    .raw_input(json!({"path":"file"}))
+                    .content(vec![text_content("chunk")])
+                    .locations(vec![acp::ToolCallLocation::new("file")]),
+            )),
+        ),
+    );
+    dispatch_notification(
+        &events,
+        &thoughts(),
+        acp::SessionNotification::new(
+            "session",
+            acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new(
+                "title-only",
+                acp::ToolCallUpdateFields::new()
+                    .title("Read")
+                    .status(acp::ToolCallStatus::Pending),
+            )),
+        ),
+    );
+    dispatch_notification(
+        &events,
+        &thoughts(),
+        acp::SessionNotification::new(
+            "session",
+            acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new(
+                "content-only",
+                acp::ToolCallUpdateFields::new().content(vec![text_content("ignored")]),
+            )),
+        ),
+    );
+    dispatch_notification(
+        &events,
+        &thoughts(),
+        acp::SessionNotification::new(
+            "session",
+            acp::SessionUpdate::Plan(acp::Plan::new(vec![acp::PlanEntry::new(
+                " ",
+                acp::PlanEntryPriority::Low,
+                acp::PlanEntryStatus::InProgress,
+            )])),
+        ),
+    );
+
+    let messages = drain(&receiver).await;
+    assert!(messages.iter().any(|event| {
+        event["method"] == "item/providerTool/call"
+            && event["params"]["arguments"]["path"] == "file"
+    }));
+    assert!(messages.iter().any(|event| {
+        event["method"] == "item/providerTool/update" && event["params"]["callId"] == "title-only"
+    }));
+    assert!(!messages.iter().any(|event| {
+        event["method"] == "item/providerTool/update" && event["params"]["callId"] == "content-only"
+    }));
+    assert!(messages.iter().any(|event| {
+        event["method"] == "item/agentMessage/delta" && event["params"]["delta"] == "\nPlan 0/1\n"
+    }));
+}
+
+fn text_content(value: &str) -> acp::ToolCallContent {
+    acp::ContentBlock::Text(acp::TextContent::new(value)).into()
 }
 
 #[tokio::test]

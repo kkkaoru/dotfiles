@@ -1,7 +1,11 @@
 #[path = "support/project_fixture.rs"]
 mod project_fixture;
 
-use std::{path::Path, sync::Arc, time::Duration};
+use std::{
+    path::Path,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use claudex_agent_adapter::{
     agent_backend::AgentBackend, anthropic::Bridge, grok_acp::GrokAcp, http_router,
@@ -46,7 +50,7 @@ async fn streams_grok_acp_and_forwards_model_effort_and_instructions() {
         .and_then(Value::as_str)
         .unwrap();
     let events = backend.subscribe_thread(thread_id);
-    for effort in ["low", "mid", "xhigh"] {
+    for effort in ["low", "mid", "xhigh", "max"] {
         backend
             .request_detached(
                 "turn/start",
@@ -127,14 +131,15 @@ fn assert_trace(trace: &[Value]) {
             .iter()
             .any(|event| event.pointer("/new_session/_meta/modelId") == Some(&json!("grok-4.5")))
     );
-    for effort in ["low", "medium", "high"] {
-        assert!(
-            trace
-                .iter()
-                .any(|event| event.pointer("/set_model/_meta/reasoningEffort")
-                    == Some(&json!(effort)))
-        );
-    }
+    let efforts = trace
+        .iter()
+        .filter_map(|event| {
+            event
+                .pointer("/set_model/_meta/reasoningEffort")
+                .and_then(Value::as_str)
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(efforts, ["low", "medium", "high", "high"]);
     assert!(trace.iter().any(
         |event| event.pointer("/permission_response/outcome/optionId")
             == Some(&json!("allow-once"))
@@ -324,7 +329,7 @@ async fn streams_two_grok_acp_sessions_concurrently() {
     let first_id = first.pointer("/thread/id").and_then(Value::as_str).unwrap();
     let first_events = agent.subscribe_thread(first_id);
     agent
-        .start_turn(json!({"threadId":first_id,"input":"first"}))
+        .start_turn(json!({"threadId":first_id,"effort":"mid","input":"first"}))
         .await
         .unwrap();
 
@@ -341,7 +346,7 @@ async fn streams_two_grok_acp_sessions_concurrently() {
         .unwrap();
     let second_events = agent.subscribe_thread(second_id);
     agent
-        .start_turn(json!({"threadId":second_id,"input":"second"}))
+        .start_turn(json!({"threadId":second_id,"effort":"max","input":"second"}))
         .await
         .unwrap();
 
@@ -356,6 +361,20 @@ async fn streams_two_grok_acp_sessions_concurrently() {
     let (first_done, second_done) = tokio::join!(recv(&first_events), recv(&second_events));
     assert_eq!(first_done["method"], "turn/completed");
     assert_eq!(second_done["method"], "turn/completed");
+
+    let trace = read_trace(&root.path().join("grok-acp-mock.jsonl"));
+    for (session_id, effort) in [(first_id, "medium"), (second_id, "high")] {
+        assert!(
+            trace.iter().any(|event| {
+                event
+                    .pointer("/set_model/sessionId")
+                    .and_then(Value::as_str)
+                    == Some(session_id)
+                    && event.pointer("/set_model/_meta/reasoningEffort") == Some(&json!(effort))
+            }),
+            "missing isolated {effort} setup for {session_id}: {trace:?}"
+        );
+    }
 }
 
 #[tokio::test]
@@ -469,7 +488,8 @@ async fn dropping_http_stream_cancels_the_active_acp_prompt() {
     });
 
     let client = Client::new();
-    let response = client
+    let started = Instant::now();
+    let mut response = client
         .post(&url)
         .json(&json!({
             "model":"cancellable-turns",
@@ -479,6 +499,20 @@ async fn dropping_http_stream_cancels_the_active_acp_prompt() {
         .send()
         .await
         .expect("start cancellable HTTP stream");
+    let first_frame = tokio::time::timeout(Duration::from_millis(150), response.chunk())
+        .await
+        .expect("message_start was buffered behind the ACP prompt")
+        .expect("read initial ACP stream frame")
+        .expect("ACP stream ended before message_start");
+    assert!(
+        String::from_utf8_lossy(&first_frame).contains("event: message_start"),
+        "unexpected initial ACP stream frame: {}",
+        String::from_utf8_lossy(&first_frame)
+    );
+    assert!(
+        started.elapsed() < Duration::from_millis(150),
+        "message_start was buffered behind provider setup"
+    );
     wait_for_trace_count(&trace_path, "prompt_submitted", 1).await;
     drop(response);
 

@@ -221,6 +221,8 @@ async fn initialize(provider: AcpProvider, connection: &acp::ClientSideConnectio
 }
 
 #[cfg(test)]
+// Coverage gates measure production ACP I/O; this inline module only contains tests.
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 

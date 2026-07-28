@@ -309,6 +309,32 @@ async fn turn_worker_runs_local_tasks_concurrently_and_cleans_them_up() {
     local.run_until(check_concurrent_turn_worker()).await;
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn turn_worker_logs_a_panicking_task_and_still_shuts_down() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let permits = Arc::new(tokio::sync::Semaphore::new(TURN_QUEUE_CAPACITY));
+            let (turns, receiver) = tokio::sync::mpsc::channel(1);
+            let worker = tokio::task::spawn_local(drive_turn_tasks(receiver, |_turn| async {
+                panic!("fixture turn panic");
+            }));
+            turns
+                .send(PreparedTurn {
+                    session_id: "panic".to_owned(),
+                    prompt: String::new(),
+                    effort: None,
+                    cancellation: pending_cancellation(),
+                    _permit: permits.acquire_owned().await.unwrap(),
+                })
+                .await
+                .unwrap();
+            drop(turns);
+            worker.await.unwrap();
+        })
+        .await;
+}
+
 async fn check_concurrent_turn_worker() {
     let permits = Arc::new(tokio::sync::Semaphore::new(TURN_QUEUE_CAPACITY));
     let (turns, receiver) = tokio::sync::mpsc::channel(TURN_QUEUE_CAPACITY);

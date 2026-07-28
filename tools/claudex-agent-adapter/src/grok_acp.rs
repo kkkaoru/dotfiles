@@ -318,14 +318,16 @@ async fn drive_commands(
     let invalidated_sessions = Rc::new(RefCell::new(HashSet::new()));
     let (turns, turn_receiver) = mpsc::channel(TURN_QUEUE_CAPACITY);
     let turn_worker = tokio::task::spawn_local(drive_turns(
-        provider,
-        Rc::clone(&connection),
-        model.to_owned(),
+        turns::TurnDriver {
+            provider,
+            connection: Rc::clone(&connection),
+            model: model.to_owned(),
+            events: Arc::clone(events),
+            active_turns: Rc::clone(&active_turns),
+            invalidated_sessions: Rc::clone(&invalidated_sessions),
+            alive: Arc::clone(alive),
+        },
         turn_receiver,
-        Arc::clone(events),
-        Rc::clone(&active_turns),
-        Rc::clone(&invalidated_sessions),
-        Arc::clone(alive),
     ));
     while let Some(command) = commands.recv().await {
         match command {

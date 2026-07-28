@@ -20,7 +20,7 @@ mod cancellation;
 mod configured_prompt;
 mod execute;
 
-use execute::execute_turn;
+use execute::{TurnExecution, execute_turn};
 
 /// How long a same-session replace waits for the prior turn to leave `active_turns`.
 const REPLACE_SETTLE_TIMEOUT: Duration = Duration::from_secs(2);
@@ -190,16 +190,26 @@ fn prepare_turn(
     })
 }
 
-pub(super) async fn drive_turns(
-    provider: AcpProvider,
-    connection: Rc<acp::ClientSideConnection>,
-    model: String,
-    turns: mpsc::Receiver<PreparedTurn>,
-    events: Arc<ThreadEventDispatcher>,
-    active_turns: ActiveTurns,
-    invalidated_sessions: InvalidatedSessions,
-    alive: Arc<AtomicBool>,
-) {
+pub(super) struct TurnDriver {
+    pub(super) provider: AcpProvider,
+    pub(super) connection: Rc<acp::ClientSideConnection>,
+    pub(super) model: String,
+    pub(super) events: Arc<ThreadEventDispatcher>,
+    pub(super) active_turns: ActiveTurns,
+    pub(super) invalidated_sessions: InvalidatedSessions,
+    pub(super) alive: Arc<AtomicBool>,
+}
+
+pub(super) async fn drive_turns(driver: TurnDriver, turns: mpsc::Receiver<PreparedTurn>) {
+    let TurnDriver {
+        provider,
+        connection,
+        model,
+        events,
+        active_turns,
+        invalidated_sessions,
+        alive,
+    } = driver;
     drive_turn_tasks(turns, move |turn| {
         let connection = Rc::clone(&connection);
         let model = model.clone();
@@ -210,14 +220,16 @@ pub(super) async fn drive_turns(
         async move {
             let session_id = turn.session_id.clone();
             execute_turn(
-                provider,
-                connection,
-                &model,
+                TurnExecution {
+                    provider,
+                    connection,
+                    model: &model,
+                    events: &events,
+                    active_turns: &active_turns,
+                    invalidated_sessions: &invalidated_sessions,
+                    alive: &alive,
+                },
                 turn,
-                &events,
-                &active_turns,
-                &invalidated_sessions,
-                &alive,
             )
             .await;
             active_turns.borrow_mut().remove(&session_id);
@@ -283,3 +295,9 @@ pub(super) async fn acquire_turn_permit(
         }
     }
 }
+
+#[cfg(test)]
+// Coverage excludes test implementation; production behavior remains measured.
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[path = "turns_tests.rs"]
+mod tests;
