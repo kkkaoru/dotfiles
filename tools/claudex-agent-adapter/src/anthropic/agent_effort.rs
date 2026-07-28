@@ -3,6 +3,7 @@ use std::{collections::VecDeque, sync::Mutex, time::Instant};
 use anyhow::{Result, bail};
 use serde_json::Value;
 
+pub(super) use super::AgentEffortRecord;
 use super::{MessagesRequest, subscription::valid_effort};
 
 const INTENT_TTL: std::time::Duration = std::time::Duration::from_secs(10 * 60);
@@ -61,27 +62,27 @@ impl AgentEffortIntents {
         parent_model: &str,
         arguments: &Value,
     ) {
-        self.record_from_user_messages(
+        self.record_from_user_messages(AgentEffortRecord {
             client_user_id,
             tool_name,
             tool_use_id,
             parent_model,
             arguments,
-            &[],
-            &serde_json::json!(null),
-        );
+            user_messages: &[],
+            system: &serde_json::json!(null),
+        });
     }
 
-    pub(super) fn record_from_user_messages(
-        &self,
-        client_user_id: Option<&str>,
-        tool_name: &str,
-        tool_use_id: String,
-        parent_model: &str,
-        arguments: &Value,
-        user_messages: &[Value],
-        system: &Value,
-    ) {
+    pub(super) fn record_from_user_messages(&self, input: AgentEffortRecord<'_>) {
+        let AgentEffortRecord {
+            client_user_id,
+            tool_name,
+            tool_use_id,
+            parent_model,
+            arguments,
+            user_messages,
+            system,
+        } = input;
         let Some(prompt) = agent_prompt(tool_name, arguments) else {
             return;
         };
@@ -335,10 +336,11 @@ pub(super) fn tool_schema(tool_name: &str, mut schema: Value) -> Value {
     if !required.is_array() {
         *required = serde_json::json!([]);
     }
-    if let Some(required) = required.as_array_mut()
-        && !required.iter().any(|field| field == ADAPTER_MODEL)
-    {
-        required.push(Value::String(ADAPTER_MODEL.to_owned()));
+    match required.as_array_mut() {
+        Some(required) if !required.iter().any(|field| field == ADAPTER_MODEL) => {
+            required.push(Value::String(ADAPTER_MODEL.to_owned()));
+        }
+        _ => {}
     }
     schema
 }

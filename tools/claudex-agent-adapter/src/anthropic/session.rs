@@ -74,23 +74,23 @@ impl Bridge {
                 &tool_results,
             )
             .await?;
-        if let Some(limit) = self.app.max_context_tokens_for_model(&model) {
-            if should_preempt_for_context_limit(input_tokens, limit, !tool_results.is_empty()) {
-                tracing::warn!(
-                    limit,
-                    input_tokens,
-                    model = %model,
-                    "claudex: preemptively starting fresh thread before context limit"
-                );
-                selected = self
-                    .start_new_session(
-                        request,
-                        &selected,
-                        advisor_model.as_deref(),
-                        collaborator_model.as_deref(),
-                    )
-                    .await?;
-            }
+        let context_limit = self.app.max_context_tokens_for_model(&model);
+        if should_preempt_for_context_limit(input_tokens, context_limit, !tool_results.is_empty()) {
+            let limit = context_limit.expect("preemption requires a context limit");
+            tracing::warn!(
+                limit,
+                input_tokens,
+                model = %model,
+                "claudex: preemptively starting fresh thread before context limit"
+            );
+            selected = self
+                .start_new_session(
+                    request,
+                    &selected,
+                    advisor_model.as_deref(),
+                    collaborator_model.as_deref(),
+                )
+                .await?;
         }
         self.start_selected_turn(
             request,
@@ -174,14 +174,10 @@ impl Bridge {
         let gate = Arc::clone(&session.gate).lock_owned().await;
         let pending = session.pending_tools.lock().await;
         let consumed = session.consumed_tool_ids.lock().await;
-        let valid = tool_results
-            .iter()
-            .all(|result| owns_tool_result(&pending, &consumed, &result.tool_use_id));
+        let valid = validate_tool_result_ownership(&pending, &consumed, tool_results);
         drop(consumed);
         drop(pending);
-        if !valid {
-            bail!("Claude tool results were already consumed by another request");
-        }
+        valid?;
         touch_session(&session);
         Ok(Some(SelectedSession {
             session,
@@ -323,8 +319,26 @@ fn is_better_length(best: Option<usize>, candidate: usize) -> bool {
     }
 }
 
-fn should_preempt_for_context_limit(input_tokens: u64, limit: u64, has_tool_results: bool) -> bool {
-    !has_tool_results && input_tokens >= limit
+fn validate_tool_result_ownership(
+    pending: &HashMap<String, Value>,
+    consumed: &HashSet<String>,
+    tool_results: &[ToolResult],
+) -> Result<()> {
+    if tool_results
+        .iter()
+        .all(|result| owns_tool_result(pending, consumed, &result.tool_use_id))
+    {
+        return Ok(());
+    }
+    bail!("Claude tool results were already consumed by another request");
+}
+
+fn should_preempt_for_context_limit(
+    input_tokens: u64,
+    limit: Option<u64>,
+    has_tool_results: bool,
+) -> bool {
+    limit.is_some_and(|limit| !has_tool_results && input_tokens >= limit)
 }
 
 async fn candidate_length(

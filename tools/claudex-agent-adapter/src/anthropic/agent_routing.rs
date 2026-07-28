@@ -43,59 +43,52 @@ fn prompt_routing_value(arguments: &Value, key: &str) -> Option<String> {
 }
 
 pub(super) fn model_is_authorized(
-    arguments: &Value,
+    _arguments: &Value,
     messages: &[Value],
     system: &Value,
     model: &str,
 ) -> bool {
+    // Claude Code can preserve its built-in `general-purpose` / `Explore` type while passing a
+    // routed provider model. The selected model remains the authority; requiring its display
+    // type to equal the configured worker name rejects that valid launch before ACP can start.
     current_user_requests_model(messages, model)
-        || selected_worker_matches(arguments, messages, system, model)
+        || selected_worker_model_matches(messages, system, model)
 }
 
-fn selected_worker_matches(
-    arguments: &Value,
-    messages: &[Value],
-    system: &Value,
-    model: &str,
-) -> bool {
-    let Some(agent) = arguments
-        .get("subagent_type")
-        .or_else(|| arguments.get("agent"))
-        .and_then(Value::as_str)
-    else {
-        return false;
-    };
-    user_message_texts(messages)
-        .chain(value_texts(system))
+fn selected_worker_model_matches(messages: &[Value], system: &Value, model: &str) -> bool {
+    // The hook normally places the current snapshot in a user message, but Claude Code can
+    // retain it in an assistant/tool transcript after compaction or a resumed turn. Prefer the
+    // request-level system snapshot, then the latest user snapshot, and finally any transcript
+    // snapshot so an otherwise valid routed worker is not rejected after context reshaping.
+    let summary = value_texts(system)
         .filter_map(routing_summary)
         .last()
-        .is_some_and(|summary| {
-            summary
-                .get("selected_workers")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .any(|worker| {
-                    worker.get("agent").and_then(Value::as_str) == Some(agent)
-                        && worker.get("model").and_then(Value::as_str) == Some(model)
-                })
+        .or_else(|| {
+            user_message_texts(messages)
+                .filter_map(routing_summary)
+                .last()
         })
+        .or_else(|| message_texts(messages).filter_map(routing_summary).last());
+    summary.is_some_and(|summary| {
+        summary
+            .get("selected_workers")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .any(|worker| worker.get("model").and_then(Value::as_str) == Some(model))
+    })
 }
 
 fn current_user_requests_model(messages: &[Value], model: &str) -> bool {
-    messages
-        .iter()
-        .rev()
-        .find(|message| message.get("role").and_then(Value::as_str) == Some("user"))
-        .and_then(|message| message.get("content"))
-        .into_iter()
-        .flat_map(value_texts)
-        .any(|text| {
-            let explicit = text
-                .split_once("{\"providers\":")
-                .map_or(text, |(before_routing_context, _)| before_routing_context);
-            contains_model_id(explicit, model)
-        })
+    // A resumed Claude Code turn may end with only "continue" after the original model choice.
+    // Keep explicit user authorization across the retained conversation; the request-level
+    // disabled-model policy is still enforced before any provider request is started.
+    user_message_texts(messages).any(|text| {
+        let explicit = text
+            .split_once("{\"providers\":")
+            .map_or(text, |(before_routing_context, _)| before_routing_context);
+        contains_model_id(explicit, model)
+    })
 }
 
 fn contains_model_id(text: &str, model: &str) -> bool {
@@ -135,6 +128,13 @@ fn user_message_texts(messages: &[Value]) -> impl Iterator<Item = &str> {
     messages
         .iter()
         .filter(|message| message.get("role").and_then(Value::as_str) == Some("user"))
+        .filter_map(|message| message.get("content"))
+        .flat_map(value_texts)
+}
+
+fn message_texts(messages: &[Value]) -> impl Iterator<Item = &str> {
+    messages
+        .iter()
         .filter_map(|message| message.get("content"))
         .flat_map(value_texts)
 }

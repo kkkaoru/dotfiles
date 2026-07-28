@@ -23,12 +23,12 @@ mod context_retry;
 mod context_window;
 mod disconnect;
 mod drive;
-mod tool_call_parser;
 mod prepare;
 mod protocol;
 mod provider_tool;
 mod sanitize;
 mod thinking;
+mod tool_call_parser;
 
 use builder::SegmentBuilder;
 use prepare::prepare_with_activity;
@@ -49,6 +49,16 @@ struct ToolCall<'a> {
     name: &'a str,
     arguments: &'a Value,
     request_id: Value,
+}
+
+struct StreamWaitInput<'a> {
+    session: &'a Arc<Session>,
+    events: &'a crate::app_server::ThreadEvents,
+    current_messages: &'a [Value],
+    system: &'a Value,
+    sender: &'a StreamSender,
+    builder: SegmentBuilder,
+    activity_interval: Duration,
 }
 
 pub(super) enum StreamTurn {
@@ -129,28 +139,31 @@ impl Bridge {
         sender: &StreamSender,
         builder: SegmentBuilder,
     ) -> Result<StreamTurn> {
-        self.wait_for_stream_segment_with_interval(
+        self.wait_for_stream_segment_with_interval(StreamWaitInput {
             session,
             events,
             current_messages,
             system,
             sender,
             builder,
-            ACTIVITY_KEEPALIVE_INTERVAL,
-        )
+            activity_interval: ACTIVITY_KEEPALIVE_INTERVAL,
+        })
         .await
     }
 
     async fn wait_for_stream_segment_with_interval(
         &self,
-        session: &Arc<Session>,
-        events: &crate::app_server::ThreadEvents,
-        current_messages: &[Value],
-        system: &Value,
-        sender: &StreamSender,
-        mut builder: SegmentBuilder,
-        activity_interval: Duration,
+        input: StreamWaitInput<'_>,
     ) -> Result<StreamTurn> {
+        let StreamWaitInput {
+            session,
+            events,
+            current_messages,
+            system,
+            sender,
+            mut builder,
+            activity_interval,
+        } = input;
         // Claude Code's decoded-event idle watchdog is ~300s. Anthropic `ping`
         // frames only satisfy the ~180s raw-byte watchdog, so emit a content
         // delta after *silence* well under that ceiling — never on a wall clock

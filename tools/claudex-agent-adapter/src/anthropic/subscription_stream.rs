@@ -160,7 +160,6 @@ async fn consume_subscription_stream_with_options(
         activity: SubscriptionActivity::default(),
     };
     let mut activity_deadline = Box::pin(tokio::time::sleep(INITIAL_ACTIVITY_DELAY));
-    let mut initial_activity = true;
     loop {
         // Prefer child output lines over keepalives so heartbeats never jump
         // ahead of already-buffered stream-json events (scrambled UI order).
@@ -174,15 +173,11 @@ async fn consume_subscription_stream_with_options(
                     activity_deadline.as_mut().reset(
                         tokio::time::Instant::now() + ACTIVITY_KEEPALIVE_INTERVAL,
                     );
-                    initial_activity = false;
                 }
                 None => break,
             },
             () = &mut activity_deadline => {
-                if !initial_activity || !stream.text_started {
-                    stream.activity_keepalive(sender).await?;
-                }
-                initial_activity = false;
+                stream.activity_keepalive(sender).await?;
                 activity_deadline.as_mut().reset(
                     tokio::time::Instant::now() + ACTIVITY_KEEPALIVE_INTERVAL,
                 );
@@ -294,13 +289,15 @@ impl SubscriptionStream {
         );
         if let Some(intent) = intent.as_ref() {
             context.agent_efforts.record_from_user_messages(
-                context.client_user_id.as_deref(),
-                name,
-                id.to_owned(),
-                &context.parent_model,
-                intent,
-                &context.user_messages,
-                &context.system,
+                super::agent_effort::AgentEffortRecord {
+                    client_user_id: context.client_user_id.as_deref(),
+                    tool_name: name,
+                    tool_use_id: id.to_owned(),
+                    parent_model: &context.parent_model,
+                    arguments: intent,
+                    user_messages: &context.user_messages,
+                    system: &context.system,
+                },
             );
         }
         Ok(public)

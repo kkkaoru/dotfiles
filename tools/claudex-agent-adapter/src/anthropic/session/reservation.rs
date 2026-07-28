@@ -126,9 +126,11 @@ pub(super) async fn take_gate_after_preempt(
 async fn align_transcript_to_request(session: &Session, messages: &[Value]) {
     let mut transcript = session.transcript.lock().await;
     while !transcript_is_prefix(&transcript, messages) {
-        if transcript.pop().is_none() {
-            break;
-        }
+        // A non-prefix transcript necessarily has at least one entry: an empty
+        // transcript is a prefix of every request.
+        transcript
+            .pop()
+            .expect("non-prefix transcript must contain an entry");
     }
 }
 
@@ -141,12 +143,32 @@ fn transcript_is_prefix(transcript: &[Value], messages: &[Value]) -> bool {
 }
 
 #[cfg(test)]
+// Coverage excludes test implementation; production behavior remains measured.
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
     use serde_json::json;
-    use std::sync::Arc;
-    use tokio::sync::Mutex;
+    use std::{collections::HashMap, sync::Arc, time::Instant};
+    use tokio::sync::{Mutex, Semaphore};
+
+    fn session(model: &str, client_user_id: Option<&str>) -> Session {
+        let slots = Arc::new(Semaphore::new(1));
+        Session {
+            thread_id: "thread".to_owned(),
+            model: model.to_owned(),
+            signature: Arc::from("signature"),
+            transcript: Mutex::new(Vec::new()),
+            pending_tools: Mutex::new(HashMap::new()),
+            consumed_tool_ids: Mutex::new(Default::default()),
+            internal_tools: HashMap::new(),
+            external_tool_names: HashMap::new(),
+            client_user_id: client_user_id.map(str::to_owned),
+            gate: Arc::new(Mutex::new(())),
+            last_activity: std::sync::Mutex::new(Instant::now()),
+            pending_since: std::sync::Mutex::new(None),
+            _slot: slots.try_acquire_owned().expect("session slot"),
+        }
+    }
 
     // Lightweight fixtures exercise align/prefix helpers without a full Session.
     #[test]
@@ -155,6 +177,55 @@ mod tests {
         let right = json!({"role":"user","content":"hi"});
         assert!(canonical_eq(&left, &right));
         assert!(transcript_is_prefix(std::slice::from_ref(&left), &[right]));
+    }
+
+    #[test]
+    fn fallback_identity_checks_model_and_client_user_id() {
+        let identified = session("main", Some("client"));
+        assert!(conversation_matches(
+            &identified,
+            Some("main"),
+            Some("client")
+        ));
+        assert!(conversation_matches(&identified, None, Some("client")));
+        assert!(!conversation_matches(
+            &identified,
+            Some("other"),
+            Some("client")
+        ));
+        assert!(!conversation_matches(
+            &identified,
+            Some("main"),
+            Some("other")
+        ));
+
+        let anonymous = session("main", None);
+        assert!(conversation_matches(&anonymous, Some("main"), None));
+        assert!(!conversation_matches(
+            &anonymous,
+            Some("main"),
+            Some("client")
+        ));
+    }
+
+    #[tokio::test]
+    async fn busy_fallback_rejects_incompatible_candidates() {
+        let wrong_model = Arc::new(session("other", Some("client")));
+        let anonymous = Arc::new(session("main", None));
+        let _wrong_model_gate = Arc::clone(&wrong_model.gate).lock_owned().await;
+        let _anonymous_gate = Arc::clone(&anonymous.gate).lock_owned().await;
+        let message = json!({"role":"user","content":"follow-up"});
+
+        let found = find_busy_matching_session(
+            vec![wrong_model, anonymous],
+            &Arc::from("different-signature"),
+            &[message],
+            Some("main"),
+            Some("client"),
+        )
+        .await;
+
+        assert!(found.is_none());
     }
 
     #[tokio::test]

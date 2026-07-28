@@ -7,8 +7,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        AgentEffort, AgentEffortIntents, prepare_arguments, prepare_arguments_for_user, tool_schema,
-        validate_routed_agent_arguments,
+        AgentEffort, AgentEffortIntents, AgentEffortRecord, prepare_arguments,
+        prepare_arguments_for_user, tool_schema, validate_routed_agent_arguments,
     };
     use crate::anthropic::MessagesRequest;
 
@@ -336,6 +336,27 @@ mod tests {
     }
 
     #[test]
+    fn ignores_non_object_routing_inputs_and_respects_model_boundaries() {
+        let mut scalar = json!("claudex_model: ignored");
+        super::super::agent_routing::hydrate_routing_fields(&mut scalar);
+        assert_eq!(scalar, json!("claudex_model: ignored"));
+
+        for (text, expected) in [
+            ("Use claude-sonnet-5:5 for this task", false),
+            ("Use claude-sonnet-5: for this task", true),
+            ("Use claude-sonnet-5.5 for this task", false),
+        ] {
+            let user_messages = [json!({"role":"user", "content":text})];
+            assert_eq!(super::super::agent_routing::model_is_authorized(
+                &json!({"claudex_model":"claude-sonnet-5"}),
+                &user_messages,
+                &json!(null),
+                "claude-sonnet-5",
+            ), expected);
+        }
+    }
+
+    #[test]
     fn removes_invented_mailbox_names_but_preserves_user_supplied_names() {
         let arguments = json!({
             "prompt":"audit contracts", "name":"wf_contract_audit",
@@ -350,6 +371,17 @@ mod tests {
                 &ordinary,
                 &json!(null),
             );
+        assert!(public.get("name").is_none());
+        let (_, public) = prepare_arguments_for_user(
+            "Agent",
+            "tool-teammate",
+            &json!({"prompt":"audit contracts", "name":"wf_contract_audit"}),
+            &[json!({
+                "role":"user",
+                "content":"<teammate-message>keep mailbox context</teammate-message>"
+            })],
+            &json!(null),
+        );
         assert!(public.get("name").is_none());
         let (_, public) = prepare_arguments_for_user(
             "Agent",
@@ -437,13 +469,15 @@ mod tests {
                 "role":"user", "content":format!("Use {model} for this SubAgent")
             })];
             intents.record_from_user_messages(
-                None,
-                "Agent",
-                tool_id,
-                "parent-model",
-                &explicit,
-                &user_messages,
-                &json!(null),
+                AgentEffortRecord {
+                    client_user_id: None,
+                    tool_name: "Agent",
+                    tool_use_id: tool_id,
+                    parent_model: "parent-model",
+                    arguments: &explicit,
+                    user_messages: &user_messages,
+                    system: &json!(null),
+                },
             );
             let intent = intents.take(&request_without_user_id(
                 explicit["prompt"].as_str().expect("explicit prompt"),
@@ -484,13 +518,15 @@ mod tests {
             let arguments = arguments.expect("Agent intent");
             let user_messages = [json!({"role":"user", "content":user_text})];
             intents.record_from_user_messages(
-                None,
-                "Agent",
-                tool_id.to_owned(),
-                "parent-model",
-                &arguments,
-                &user_messages,
-                &json!(null),
+                AgentEffortRecord {
+                    client_user_id: None,
+                    tool_name: "Agent",
+                    tool_use_id: tool_id.to_owned(),
+                    parent_model: "parent-model",
+                    arguments: &arguments,
+                    user_messages: &user_messages,
+                    system: &json!(null),
+                },
             );
             let intent = intents.take(&request_without_user_id(
                 arguments["prompt"].as_str().expect("correlated prompt"),
@@ -500,7 +536,7 @@ mod tests {
     }
 
     #[test]
-    fn accepts_only_an_exact_selected_worker_agent_model_pair_without_user_literal() {
+    fn authorizes_exact_selected_worker_model_without_matching_display_agent_type() {
         let intents = AgentEffortIntents::default();
         let routing = r#"Claudex routing for this turn: {"providers":{},"selected_agents":["claudex-gpt-spark"],"selected_workers":[{"agent":"claudex-gpt-spark","model":"gpt-5.3-codex-spark","effort":"high"}]} mandatory policy"#;
         for (tool_id, arguments, expected) in [
@@ -523,13 +559,18 @@ mod tests {
             let (arguments, _) = prepare_arguments("Agent", tool_id, &arguments);
             let arguments = arguments.expect("routed Agent intent");
             intents.record_from_user_messages(
-                None,
-                "Agent",
-                tool_id.to_owned(),
-                "main-model",
-                &arguments,
-                &[json!({"role":"user","content":format!("implement this\n{routing}")})],
-                &json!(null),
+                AgentEffortRecord {
+                    client_user_id: None,
+                    tool_name: "Agent",
+                    tool_use_id: tool_id.to_owned(),
+                    parent_model: "main-model",
+                    arguments: &arguments,
+                    user_messages: &[json!({
+                        "role":"user",
+                        "content":format!("implement this\n{routing}")
+                    })],
+                    system: &json!(null),
+                },
             );
             let intent = intents.take(&request_without_user_id(
                 arguments["prompt"].as_str().expect("correlated prompt"),
@@ -594,28 +635,60 @@ mod tests {
     }
 
     #[test]
-    fn accepts_selected_worker_model_from_system_routing_context() {
+    fn accepts_selected_worker_model_when_claude_uses_a_generic_agent_type() {
         let system = json!([{
             "type":"text",
-            "text":"Claudex routing for this turn: {\"providers\":{},\"selected_agents\":[\"claudex-gpt-spark\"],\"selected_workers\":[{\"agent\":\"claudex-gpt-spark\",\"model\":\"gpt-5.3-codex-spark\",\"effort\":\"high\"}]} mandatory policy"
+            "text":"Claudex routing for this turn: {\"providers\":{},\"selected_agents\":[\"claudex-deepseek\"],\"selected_workers\":[{\"agent\":\"claudex-deepseek\",\"model\":\"opencode-go/deepseek-v4-flash\",\"effort\":\"high\"}]} mandatory policy"
         }]);
         let messages = [
             json!({"role":"user","content":"Please run this task"}),
         ];
         assert!(validate_routed_agent_arguments(
             "Agent",
-            &json!({"subagent_type":"claudex-gpt-spark","claudex_model":"gpt-5.3-codex-spark"}),
+            &json!({"subagent_type":"general-purpose","claudex_model":"opencode-go/deepseek-v4-flash"}),
             &messages,
             &system,
         )
         .is_ok());
         assert!(validate_routed_agent_arguments(
             "Agent",
-            &json!({"subagent_type":"claudex-gpt-spark","claudex_model":"gpt-old"}),
+            &json!({"subagent_type":"general-purpose","claudex_model":"opencode-go/deepseek-v4-pro"}),
             &messages,
             &system,
         )
         .is_err());
+    }
+
+    #[test]
+    fn accepts_a_worker_snapshot_retained_in_the_transcript_after_compaction() {
+        let routing = r#"Claudex routing for this turn: {"providers":{},"selected_workers":[{"agent":"claudex-grok","model":"grok-4.5","effort":"medium"}]} mandatory policy"#;
+        let messages = [
+            json!({"role":"assistant","content":routing}),
+            json!({"role":"user","content":"Continue the research"}),
+        ];
+        assert!(validate_routed_agent_arguments(
+            "Agent",
+            &json!({"subagent_type":"general-purpose","claudex_model":"grok-4.5"}),
+            &messages,
+            &json!(null),
+        )
+        .is_ok());
+    }
+
+    #[test]
+    fn keeps_an_explicit_model_authorized_for_a_resumed_continue_turn() {
+        let messages = [
+            json!({"role":"user","content":"Use grok-4.5 for the research SubAgent"}),
+            json!({"role":"assistant","content":"I will continue"}),
+            json!({"role":"user","content":"continue"}),
+        ];
+        assert!(validate_routed_agent_arguments(
+            "Task",
+            &json!({"subagent_type":"general-purpose","claudex_model":"grok-4.5"}),
+            &messages,
+            &json!(null),
+        )
+        .is_ok());
     }
 
     #[test]
@@ -741,6 +814,12 @@ mod tests {
         let mut expected = existing.clone();
         expected["required"] = json!(["claudex_model"]);
         assert_eq!(tool_schema("Agent", existing), expected);
+        let already_required = json!({
+            "properties":{"claudex_model":{"type":"string"}},
+            "required":["claudex_model"]
+        });
+        let schema = tool_schema("Agent", already_required);
+        assert_eq!(schema["required"], json!(["claudex_model"]));
     }
 
     fn request_without_user_id(prompt: &str) -> MessagesRequest {

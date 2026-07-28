@@ -6,17 +6,15 @@ use serde_json::{Value, json};
 use super::super::{BRIDGE_INSTRUCTIONS, MessagesRequest, content::system_text};
 use crate::anthropic::subscription_request::cwd_from_system;
 
-const ORCHESTRATOR_INSTRUCTIONS: &str = "Claudex main-session orchestration mode is active. Coordinate, decompose, delegate, monitor, resolve conflicts, synthesize worker results, and deliver the final response. For every substantive investigation, implementation, review, test, or validation, call a routed Agent/Task worker instead of doing the work in main. Direct filesystem, shell, search, edit, web, and external-work tools are intentionally available only inside worker sessions. This remains mandatory after long execution, compaction, resume, context reconstruction, and worker failure.";
+const ORCHESTRATOR_INSTRUCTIONS: &str = "Claudex main-session orchestration mode is active. Coordinate, decompose, delegate, monitor, resolve conflicts, synthesize worker results, and deliver the final response. Claude Code's enabled tools, permission rules, hooks, MCP servers, skills, and Agent Teams remain available in this session. For every substantive investigation, implementation, review, test, or validation, call a routed Agent/Task worker by default rather than doing the work in main. This remains mandatory after long execution, compaction, resume, context reconstruction, and worker failure.";
 
 pub(in crate::anthropic) fn tool_configuration(
     request: &MessagesRequest,
     advisor_model: Option<&str>,
     collaborator_model: Option<&str>,
 ) -> (Vec<Value>, HashMap<String, String>, HashMap<String, String>) {
-    let orchestrator_only = !super::super::agent_effort::is_subagent_request(request);
     let selected_agents = selected_agents(request);
-    let (mut tools, external_names) =
-        external_tools(&request.tools, orchestrator_only, &selected_agents);
+    let (mut tools, external_names) = external_tools(&request.tools, &selected_agents);
     let mut internal = HashMap::new();
     if let Some(model) = advisor_model {
         internal.insert("advisor".to_owned(), model.to_owned());
@@ -35,7 +33,6 @@ pub(in crate::anthropic) fn tool_configuration(
 
 fn external_tools(
     tools: &[Value],
-    orchestrator_only: bool,
     selected_agents: &[String],
 ) -> (Vec<Value>, HashMap<String, String>) {
     let mut specs = Vec::new();
@@ -44,45 +41,26 @@ fn external_tools(
         let Some(original_name) = tool.get("name").and_then(Value::as_str) else {
             continue;
         };
-        if orchestrator_only && !is_orchestration_tool(original_name) {
-            continue;
-        }
         let mut routed_tool = tool.clone();
         if super::super::agent_batch::supports(original_name) {
             constrain_agent_types(&mut routed_tool, selected_agents);
         }
         let codex_name = codex_tool_name(original_name, index);
-        if let Some(spec) = dynamic_tool(&routed_tool, &codex_name) {
-            names.insert(codex_name, original_name.to_owned());
-            specs.push(spec);
-        }
+        let spec = dynamic_tool(&routed_tool, &codex_name).expect("tool name was validated");
+        names.insert(codex_name, original_name.to_owned());
+        specs.push(spec);
         if super::super::agent_batch::supports(original_name) {
             let batch_name = codex_tool_name(&format!("{original_name}_batch"), index);
-            if let Some(spec) = super::super::agent_batch::dynamic_tool(&routed_tool, &batch_name) {
-                names.insert(
-                    batch_name,
-                    super::super::agent_batch::mapped_name(original_name),
-                );
-                specs.push(spec);
-            }
+            let spec = super::super::agent_batch::dynamic_tool(&routed_tool, &batch_name)
+                .expect("agent tool name was validated");
+            names.insert(
+                batch_name,
+                super::super::agent_batch::mapped_name(original_name),
+            );
+            specs.push(spec);
         }
     }
     (specs, names)
-}
-
-fn is_orchestration_tool(name: &str) -> bool {
-    matches!(
-        name,
-        "Agent"
-            | "Task"
-            | "SendMessage"
-            | "AskUserQuestion"
-            | "Skill"
-            | "EnterPlanMode"
-            | "ExitPlanMode"
-            | "TodoWrite"
-    ) || name.starts_with("Task")
-        || name.starts_with("Team")
 }
 
 fn constrain_agent_types(tool: &mut Value, selected_agents: &[String]) {
@@ -95,11 +73,24 @@ fn constrain_agent_types(tool: &mut Value, selected_agents: &[String]) {
     else {
         return;
     };
-    property.insert("enum".to_owned(), json!(selected_agents));
+    let mut agent_types = property
+        .get("enum")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    for selected_agent in selected_agents {
+        if !agent_types.iter().any(|agent| agent == selected_agent) {
+            agent_types.push(selected_agent.clone());
+        }
+    }
+    property.insert("enum".to_owned(), json!(agent_types));
     property.insert(
         "description".to_owned(),
         Value::String(format!(
-            "Required routed Claudex worker. Choose exactly one of: {}.",
+            "For routed Claudex workers, choose one of: {}. Claude Code's standard SubAgent types remain available when supplied by its schema.",
             selected_agents.join(", ")
         )),
     );
@@ -214,7 +205,8 @@ fn current_user_model_ids(request: &MessagesRequest) -> Vec<String> {
 }
 
 fn is_model_id_character(character: char) -> bool {
-    character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.' | '/' | ':' | '@' | '+')
+    character.is_ascii_alphanumeric()
+        || matches!(character, '-' | '_' | '.' | '/' | ':' | '@' | '+')
 }
 
 fn routing_summary(text: &str) -> Option<Value> {
@@ -243,10 +235,11 @@ pub(in crate::anthropic) fn thread_start_params(
         .or_else(|| cwd_from_system(&system))
         .map(|path| path.to_string_lossy().into_owned())
         .unwrap_or_else(isolated_runtime_cwd);
-    let mut developer_instructions = super::super::team_protocol::guidance(&request.tools).map_or_else(
-        || BRIDGE_INSTRUCTIONS.to_owned(),
-        |guidance| format!("{BRIDGE_INSTRUCTIONS}\n\n{guidance}"),
-    );
+    let mut developer_instructions = super::super::team_protocol::guidance(&request.tools)
+        .map_or_else(
+            || BRIDGE_INSTRUCTIONS.to_owned(),
+            |guidance| format!("{BRIDGE_INSTRUCTIONS}\n\n{guidance}"),
+        );
     developer_instructions.push_str("\n\n");
     developer_instructions.push_str(super::super::CODEX_APP_SERVER_PARALLELIZATION_INSTRUCTIONS);
     if !super::super::agent_effort::is_subagent_request(request) {

@@ -65,6 +65,31 @@ mod tests {
         )
         .await;
         assert!(take_pending_results(&partial, vec![result("one")]).await.is_err());
+
+        let mixed = session(
+            [
+                ("one".to_owned(), pending_marker(json!(77), 0, 2)),
+                ("two".to_owned(), pending_marker(json!(77), 1, 2)),
+                ("other-one".to_owned(), pending_marker(json!(88), 0, 2)),
+                ("other-two".to_owned(), pending_marker(json!(88), 1, 2)),
+            ]
+            .into(),
+            HashSet::new(),
+            Vec::new(),
+        )
+        .await;
+        let responses = take_pending_results(
+            &mixed,
+            vec![
+                result("one"),
+                result("two"),
+                result("other-one"),
+                result("other-two"),
+            ],
+        )
+        .await
+        .expect("complete independent batches");
+        assert_eq!(responses.len(), 2);
     }
 
     #[tokio::test]
@@ -153,6 +178,19 @@ mod tests {
             ])),
             "kept"
         );
+        assert!(!super::canonical_eq(&json!([1]), &json!([])));
+        assert!(!super::canonical_eq(
+            &json!({"left":1}),
+            &json!({"right":1})
+        ));
+        assert!(!super::canonical_eq(
+            &json!({"left":1}),
+            &json!({"left":1,"extra":2})
+        ));
+        assert!(super::canonical_eq(
+            &json!({"cache_control":{"type":"ephemeral"}}),
+            &json!({})
+        ));
     }
 
     fn result(tool_use_id: &str) -> ToolResult {

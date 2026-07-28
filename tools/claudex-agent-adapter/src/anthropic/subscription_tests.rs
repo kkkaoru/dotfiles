@@ -63,6 +63,41 @@ fn subscription_limits_reject_zero_invalid_and_overflowing_values() {
     assert_eq!(excessive.max_processes, 20);
 }
 
+#[test]
+fn validates_direct_subscription_limits() {
+    assert!(super::subscription::SubscriptionLimits::new(0, 1).is_err());
+    assert!(
+        super::subscription::SubscriptionLimits::new(tokio::sync::Semaphore::MAX_PERMITS + 1, 1)
+            .is_err()
+    );
+    assert!(super::subscription::SubscriptionLimits::new(1, 0).is_err());
+    assert!(super::subscription::SubscriptionLimits::new(1, u64::MAX).is_err());
+    let valid = super::subscription::SubscriptionLimits::new(2, 3).expect("valid limits");
+    assert_eq!(valid.max_processes, 2);
+    assert_eq!(valid.timeout, Duration::from_secs(180));
+}
+
+#[tokio::test]
+async fn emits_subscription_activity_for_text_and_thinking_paths() {
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(8);
+    let mut activity = super::subscription_activity::SubscriptionActivity::default();
+    let mut next_index = 0;
+    activity
+        .keepalive(&sender, Some(3), &mut next_index)
+        .await
+        .expect("text heartbeat");
+    activity
+        .keepalive(&sender, None, &mut next_index)
+        .await
+        .expect("thinking status");
+    activity
+        .keepalive(&sender, None, &mut next_index)
+        .await
+        .expect("thinking heartbeat");
+    activity.close(&sender).await.expect("close activity");
+    assert!(receiver.recv().await.is_some());
+}
+
 #[tokio::test]
 async fn times_out_a_stalled_subscription_process() {
     let stalled = std::future::pending::<std::io::Result<std::process::Output>>();

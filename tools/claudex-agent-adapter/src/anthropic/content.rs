@@ -31,6 +31,9 @@ pub(super) struct ToolResult {
     pub(super) is_error: bool,
 }
 
+type BatchResult = (usize, ToolResult);
+type AgentBatch = (Value, usize, Vec<BatchResult>);
+
 pub(super) async fn take_pending_results(
     session: &Session,
     results: Vec<ToolResult>,
@@ -51,27 +54,27 @@ pub(super) async fn take_pending_results(
     }
     validate_complete_batches(&pending, &results)?;
     let mut responses = Vec::new();
-    let mut batches: Vec<(Value, usize, Vec<(usize, ToolResult)>)> = Vec::new();
+    let mut batches: Vec<AgentBatch> = Vec::new();
     for result in results {
         let Some(id) = pending.remove(&result.tool_use_id) else {
             continue;
         };
         remember_consumed_tool_id(&mut consumed, result.tool_use_id.clone());
-        if let Some(marker) = super::agent_batch::pending_batch(&id) {
-            if let Some(batch) = batches
-                .iter_mut()
-                .find(|batch| batch.0 == *marker.request_id && batch.1 == marker.total)
-            {
-                batch.2.push((marker.index, result));
-            } else {
-                batches.push((
-                    marker.request_id.clone(),
-                    marker.total,
-                    vec![(marker.index, result)],
-                ));
-            }
-        } else {
+        let Some(marker) = super::agent_batch::pending_batch(&id) else {
             responses.push((id, result));
+            continue;
+        };
+        if let Some(batch) = batches
+            .iter_mut()
+            .find(|batch| batch.0 == *marker.request_id && batch.1 == marker.total)
+        {
+            batch.2.push((marker.index, result));
+        } else {
+            batches.push((
+                marker.request_id.clone(),
+                marker.total,
+                vec![(marker.index, result)],
+            ));
         }
     }
     for (request_id, _, mut results) in batches {

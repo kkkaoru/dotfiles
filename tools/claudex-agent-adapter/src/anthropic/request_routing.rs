@@ -13,6 +13,26 @@ pub(super) fn resolve_request_model(
     // True when the model matches any provider identity declared in config (enabled or not).
     is_declared_provider_model: impl Fn(&str) -> bool,
 ) -> Result<RouteDecision> {
+    resolve_request_model_inner(
+        request,
+        main_model,
+        is_subagent,
+        intent_matched,
+        model_override,
+        &supports_model,
+        &is_declared_provider_model,
+    )
+}
+
+fn resolve_request_model_inner(
+    request: &mut MessagesRequest,
+    main_model: &str,
+    is_subagent: bool,
+    intent_matched: bool,
+    model_override: Option<String>,
+    supports_model: &dyn Fn(&str) -> bool,
+    is_declared_provider_model: &dyn Fn(&str) -> bool,
+) -> Result<RouteDecision> {
     if is_subagent && !intent_matched {
         bail!("SubAgent request did not match an explicit Agent/Task launch intent");
     }
@@ -91,9 +111,23 @@ fn apply_disabled_model_policy(
 }
 
 #[cfg(test)]
+// Coverage gates measure production routing; this inline module only contains tests.
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::sync::Once;
+
     use super::*;
     use serde_json::json;
+
+    fn enable_warning_logs() {
+        static INIT: Once = Once::new();
+        INIT.call_once(|| {
+            let _ = tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::WARN)
+                .with_test_writer()
+                .try_init();
+        });
+    }
 
     fn request(model: &str, disabled: &[&str]) -> MessagesRequest {
         let mut request: MessagesRequest = serde_json::from_value(json!({
@@ -126,6 +160,7 @@ mod tests {
 
     #[test]
     fn remaps_disabled_outer_provider_model_to_main() {
+        enable_warning_logs();
         let mut request = request("vendor-a", &["vendor-a"]);
         let decision = resolve(
             &mut request,
@@ -156,6 +191,7 @@ mod tests {
 
     #[test]
     fn remaps_unrouted_declared_provider_model_to_main_instead_of_subscription() {
+        enable_warning_logs();
         let mut request = request("vendor-offline-1", &[]);
         let decision = resolve(
             &mut request,
@@ -182,6 +218,72 @@ mod tests {
         .expect("subscription");
         assert_eq!(decision, RouteDecision::Subscription);
         assert_eq!(request.model, "claude-sonnet-5");
+    }
+
+    #[test]
+    fn keeps_an_unsupported_discovery_alias_on_subscription() {
+        let mut request = request("claude-claudex-unknown", &[]);
+        let decision = resolve_request_model(
+            &mut request,
+            "main-model",
+            false,
+            true,
+            None,
+            |_| false,
+            |_| false,
+        )
+        .expect("unsupported discovery alias should remain a subscription");
+        assert_eq!(decision, RouteDecision::Subscription);
+        assert_eq!(request.model, "claude-claudex-unknown");
+    }
+
+    #[test]
+    fn normalizes_supported_discovery_aliases_before_routing() {
+        let mut main = request("claude-claudex-main-model", &[]);
+        let decision = resolve_request_model(
+            &mut main,
+            "main-model",
+            false,
+            true,
+            None,
+            |_| false,
+            |_| false,
+        )
+        .expect("main discovery alias");
+        assert_eq!(decision, RouteDecision::Provider);
+        assert_eq!(main.model, "main-model");
+
+        let mut supported = request("claude-claudex-vendor-model", &[]);
+        let decision = resolve_request_model(
+            &mut supported,
+            "main-model",
+            false,
+            true,
+            None,
+            |model| model == "vendor-model",
+            |_| false,
+        )
+        .expect("provider discovery alias");
+        assert_eq!(decision, RouteDecision::Provider);
+        assert_eq!(supported.model, "vendor-model");
+    }
+
+    #[test]
+    fn routes_empty_main_and_supported_models_to_the_provider() {
+        for model in ["", "main-model", "vendor-model"] {
+            let mut request = request(model, &[]);
+            let decision = resolve_request_model(
+                &mut request,
+                "main-model",
+                false,
+                true,
+                None,
+                |candidate| candidate == "vendor-model",
+                |_| false,
+            )
+            .expect("provider route");
+            assert_eq!(decision, RouteDecision::Provider, "model={model}");
+        }
     }
 
     #[test]

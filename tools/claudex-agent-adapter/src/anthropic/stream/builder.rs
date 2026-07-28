@@ -2,20 +2,20 @@ use std::ops::ControlFlow;
 
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
-use uuid::Uuid;
 
 use super::{ToolCall, error_flow, turn_flow};
 use crate::anthropic::{
     Bridge, Segment, Session, Usage,
     content::{estimated_block_tokens, estimated_tokens},
-    retention::record_pending_tool,
 };
 
 use super::{
-    protocol::{StreamSender, send_stream_frame, send_tool_use},
+    protocol::{StreamSender, send_stream_frame},
     sanitize::sanitize_committed_blocks,
     thinking::ThinkingState,
 };
+
+mod external_tool;
 
 pub(super) use super::tool_call_parser::parse_tool_call;
 
@@ -232,6 +232,13 @@ impl SegmentBuilder {
             .get(call.name)
             .map(String::as_str)
             .unwrap_or(call.name);
+        let context = external_tool::ExternalToolContext {
+            bridge,
+            session,
+            current_messages,
+            system,
+            stream,
+        };
         if let Some(original_name) = crate::anthropic::agent_batch::original_name(original_name) {
             let tasks = call
                 .arguments
@@ -252,87 +259,12 @@ impl SegmentBuilder {
                         tasks.len(),
                     ),
                 };
-                self.external_tool_call(
-                    bridge,
-                    session,
-                    current_messages,
-                    system,
-                    original_name,
-                    nested,
-                    stream,
-                )
-                .await?;
+                self.external_tool_call(context, original_name, nested)
+                    .await?;
             }
             return Ok(());
         }
-        self.external_tool_call(
-            bridge,
-            session,
-            current_messages,
-            system,
-            original_name,
-            call,
-            stream,
-        )
-        .await
-    }
-
-    async fn external_tool_call(
-        &mut self,
-        bridge: &Bridge,
-        session: &Session,
-        current_messages: &[Value],
-        system: &Value,
-        original_name: &str,
-        call: ToolCall<'_>,
-        stream: Option<&StreamSender>,
-    ) -> Result<()> {
-        crate::anthropic::agent_effort::validate_routed_agent_arguments(
-            original_name,
-            call.arguments,
-            current_messages,
-            system,
-        )?;
-        let tool_use_id = format!("toolu_{}", Uuid::new_v4().simple());
-        let (intent_arguments, claude_arguments) =
-            crate::anthropic::agent_effort::prepare_arguments_for_user(
-                original_name,
-                &tool_use_id,
-                call.arguments,
-                current_messages,
-                system,
-            );
-        if let Some(arguments) = intent_arguments.as_ref() {
-            bridge.agent_efforts.record_from_user_messages(
-                session.client_user_id.as_deref(),
-                original_name,
-                tool_use_id.clone(),
-                &session.model,
-                arguments,
-                current_messages,
-                system,
-            );
-        }
-        tracing::debug!(call_id = %call.call_id, %tool_use_id, "mapped app-server tool call");
-        record_pending_tool(
-            session,
-            tool_use_id.clone(),
-            call.request_id,
-            std::time::Instant::now(),
-        )
-        .await;
-        self.close_open_blocks(stream).await?;
-        let block = json!({
-            "type": "tool_use",
-            "id": tool_use_id,
-            "name": original_name,
-            "input": claude_arguments
-        });
-        let index = self.blocks.len();
-        send_tool_use(stream, index, &block).await?;
-        self.blocks.push(block);
-        self.external_tool_calls += 1;
-        Ok(())
+        self.external_tool_call(context, original_name, call).await
     }
 
     async fn close_text_block(&mut self, stream: Option<&StreamSender>) -> Result<()> {

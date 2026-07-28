@@ -494,6 +494,40 @@ async fn ignores_non_top_level_tool_events_and_exercises_completed_state() {
     assert!(output(&mut receiver).await.contains("done"));
 }
 
+#[tokio::test]
+async fn accepts_a_valid_agent_model_without_a_prompt() {
+    let (_sender, _receiver) = channel();
+    let stream = SubscriptionStream {
+        text_started: false,
+        text_closed: false,
+        saw_tool_use: false,
+        saw_result: false,
+        next_index: 0,
+        tools: vec!["Agent".to_owned()],
+        tool_context: Some(SubscriptionToolContext {
+            agent_efforts: Arc::new(AgentEffortIntents::default()),
+            client_user_id: None,
+            parent_model: "parent-model".to_owned(),
+            system: json!(null),
+            user_messages: vec![json!({
+                "role":"user",
+                "content":"Use gpt-test for this worker"
+            })],
+        }),
+        activity: SubscriptionActivity::default(),
+    };
+    assert_eq!(
+        stream
+            .prepare_tool_input(
+                "Agent",
+                "agent-no-prompt",
+                &json!({"claudex_model":"gpt-test"})
+            )
+            .expect("model-only Agent input"),
+        json!({"claudex_model":"gpt-test"})
+    );
+}
+
 fn child(script: &str) -> tokio::process::Child {
     Command::new("sh")
         .args(["-c", script])

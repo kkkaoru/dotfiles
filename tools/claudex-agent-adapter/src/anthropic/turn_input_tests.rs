@@ -8,6 +8,24 @@ use super::{
 
 #[test]
 fn handles_small_empty_and_mixed_message_inputs() {
+    let single_user = full_transcript_input(&[json!({"role":"user","content":"question"})]);
+    assert_eq!(
+        single_user,
+        user_input_from_messages(&[json!({
+            "role":"user",
+            "content":"question"
+        })])
+    );
+    let single_assistant = full_transcript_input(&[json!({
+        "role":"assistant",
+        "content":"answer"
+    })]);
+    assert!(
+        single_assistant[0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("answer")
+    );
     let transcript = full_transcript_input(&[
         json!({"role":"assistant","content":"answer"}),
         json!({"role":"user","content":"question"}),

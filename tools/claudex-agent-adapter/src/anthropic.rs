@@ -32,6 +32,16 @@ use serde::Deserialize;
 use serde_json::Value;
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
 
+pub(super) struct AgentEffortRecord<'a> {
+    pub(super) client_user_id: Option<&'a str>,
+    pub(super) tool_name: &'a str,
+    pub(super) tool_use_id: String,
+    pub(super) parent_model: &'a str,
+    pub(super) arguments: &'a Value,
+    pub(super) user_messages: &'a [Value],
+    pub(super) system: &'a Value,
+}
+
 use crate::{
     agent_backend::AgentBackend,
     app_server::{AppServer, ThreadEvents},

@@ -142,11 +142,13 @@ pub(in crate::anthropic) async fn send_stream_frame(
     event: &str,
     value: impl FnOnce() -> Value,
 ) -> Result<()> {
-    if let Some(sender) = stream
-        && sender
-            .send(Ok(Bytes::from(sse(event, value()))))
-            .await
-            .is_err()
+    let Some(sender) = stream else {
+        return Ok(());
+    };
+    if sender
+        .send(Ok(Bytes::from(sse(event, value()))))
+        .await
+        .is_err()
     {
         tracing::debug!(event, "Claude Code closed the streaming response");
     }
@@ -197,6 +199,8 @@ pub(in crate::anthropic) fn tool_use_frames(
 }
 
 #[cfg(test)]
+// Coverage gates measure production stream framing; this inline module only contains tests.
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod lazy_tests {
     use std::sync::{
         Arc,

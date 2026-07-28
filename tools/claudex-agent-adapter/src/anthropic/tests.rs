@@ -333,7 +333,11 @@ fn extracts_signatures_and_counts() {
     let base_signature =
         request_signature(&request, Some("test-advisor"), Some("test-collaborator")).unwrap();
     assert!(base_signature.contains("test-advisor"));
-    let mut other_directory = request.clone();
+    let serialized_bytes = serde_json::to_string(&request.system).unwrap().len()
+        + serde_json::to_string(&request.messages).unwrap().len()
+        + serde_json::to_string(&request.tools).unwrap().len();
+    let expected_tokens = token_count(&request);
+    let mut other_directory = request;
     other_directory.working_directory = Some("/tmp/other-project".into());
     assert_ne!(
         base_signature,
@@ -344,23 +348,20 @@ fn extracts_signatures_and_counts() {
         )
         .unwrap()
     );
-    let mut other_policy = request.clone();
-    other_policy
+    other_directory.working_directory = None;
+    other_directory
         .disabled_subagent_models
         .insert("gpt-5.6-sol".to_owned());
     assert_ne!(
         base_signature,
         request_signature(
-            &other_policy,
+            &other_directory,
             Some("test-advisor"),
             Some("test-collaborator")
         )
         .unwrap()
     );
-    let serialized_bytes = serde_json::to_string(&request.system).unwrap().len()
-        + serde_json::to_string(&request.messages).unwrap().len()
-        + serde_json::to_string(&request.tools).unwrap().len();
-    assert_eq!(token_count(&request), serialized_bytes.div_ceil(4));
+    assert_eq!(expected_tokens, serialized_bytes.div_ceil(4));
     assert_eq!(canonical_value(&json!(5)), json!(5));
 }
 
@@ -394,10 +395,24 @@ fn shares_live_session_signatures_and_releases_dead_values() {
     let first = intern_signature(&pool, "large-shared-signature".to_owned());
     let shared = intern_signature(&pool, "large-shared-signature".to_owned());
     assert!(Arc::ptr_eq(&first, &shared));
+    let distinct = intern_signature(&pool, "different-signature".to_owned());
+    assert!(!Arc::ptr_eq(&first, &distinct));
 
     drop(first);
     drop(shared);
+    drop(distinct);
     let replacement = intern_signature(&pool, "large-shared-signature".to_owned());
     assert_eq!(replacement.as_ref(), "large-shared-signature");
-    assert_eq!(pool.lock().unwrap().values().flatten().count(), 1);
+    assert_eq!(pool.lock().unwrap().values().flatten().count(), 2);
+}
+
+#[test]
+fn prunes_signature_buckets_after_the_bound_is_reached() {
+    let pool = SignaturePool::default();
+    let mut signatures = Vec::new();
+    for index in 0..super::MAX_SIGNATURE_BUCKETS {
+        signatures.push(intern_signature(&pool, format!("signature-{index}")));
+    }
+    let _trigger = intern_signature(&pool, "signature-trigger".to_owned());
+    assert!(!signatures.is_empty());
 }

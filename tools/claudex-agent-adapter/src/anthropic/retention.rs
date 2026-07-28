@@ -225,6 +225,8 @@ mod tests {
         );
         assert_eq!(bridge.sweep_idle_sessions_if_due_at(sweep_at).await, 1);
         assert_eq!(bridge.sweep_idle_sessions_if_due_at(sweep_at).await, 0);
+        let next_sweep = *bridge.next_session_sweep.lock().unwrap();
+        assert_eq!(bridge.sweep_idle_sessions_if_due_at(next_sweep).await, 0);
 
         assert!(bridge.sessions.lock().await.is_empty());
     }
