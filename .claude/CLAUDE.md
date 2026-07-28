@@ -44,8 +44,9 @@
   repeat constraints already present in the original delegation. A busy worker's queued follow-up
   does not increase parallel capacity; for genuinely independent work, start another routed worker
   when useful instead of queueing it behind the busy worker.
-- Never copy the main session's model or effort into worker routing. If `selected_workers` is
-  unavailable, report routing as unavailable instead of inventing a worker selection.
+- Never infer a worker route or effort from the main session. Use the exact `selected_workers`
+  entry and its configured model/effort; that entry may intentionally use the same model as the
+  main session, because outer and SubAgent requests have independent concurrency.
 - Treat `disabled_subagent_models` in the current Claudex routing context as an absolute, active
   denylist merged from the dedicated config and terminal overrides. Never launch, inherit,
   dynamically select, or reuse an exact listed model, even when the user requests it; this

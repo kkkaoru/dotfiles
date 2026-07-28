@@ -49,6 +49,7 @@ __pycache__/
 
 
 # Codex runtime state/cache
+.codex/packages/
 .codex/.codex-global-state.json*
 .codex/..codex-global-state.json.tmp-*
 .codex/.app-server-state-reconciled-v1

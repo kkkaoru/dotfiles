@@ -19,7 +19,9 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 DEFAULT_CACHE_SECONDS = 300
-ROUTING_CACHE_VERSION = 3
+# Bump when worker-selection semantics change so a cached context cannot retain
+# the old main-model exclusion rule for up to the normal routing-cache TTL.
+ROUTING_CACHE_VERSION = 4
 QWEN_QUOTA_CACHE_SECONDS = 60 * 60
 QWEN_REQUEST_TIMEOUT_SECONDS = 5
 QWEN_SUBPROCESS_GRACE_SECONDS = 2
@@ -652,6 +654,8 @@ def hook_output(summary: dict[str, Any]) -> dict[str, Any]:
         "merely announce future delegation. "
         "Follow claudex-routing. Use selected_workers and pass each "
         "worker's model and effort as claudex_model and claudex_effort for every Agent/Task launch, "
+        "allow a selected worker to use the same model as the outer session because those requests "
+        "are independent, "
         "preserve the main session's complete tool set and permission context, and never add an "
         "implicit read-only, plan-only, no-edit, no-build, or no-deploy restriction; use foreground "
         "delegation when background execution would auto-deny an interactive main-session permission. "
@@ -703,21 +707,18 @@ def enforce_worker_model_separation(
     config: dict[str, Any],
     disabled_models: frozenset[str],
 ) -> dict[str, Any]:
-    """Keep the outer model out of worker routing and mark strict orchestration mode."""
+    """Finalize worker routing while allowing a configured model to serve both roles.
+
+    The outer session and a SubAgent are independent requests.  A provider worker
+    therefore remains selectable when its model is also the current main model;
+    only the normal provider availability and exact-model denylist checks remove it.
+    """
     separated = json.loads(json.dumps(summary))
     selected = list(separated.get("selected_workers") or [])
-    if main_model:
-        selected = [worker for worker in selected if worker.get("model") != main_model]
-        for provider in separated.get("providers", {}).values():
-            if provider.get("model") == main_model:
-                provider.update(status(False, None, "same-as-main-model"))
-        if not selected:
-            fallback = {"provider": "fallback", **config["fallback"]}
-            if fallback["model"] != main_model and fallback["model"] not in disabled_models:
-                selected = [fallback]
-                separated["fallback_active"] = True
-            else:
-                separated["fallback_active"] = False
+    # `main_model` is retained as context for the hook and adapter, but it is
+    # not a worker exclusion rule.  `routing_summary` and
+    # `apply_model_concurrency` already enforce provider availability and the
+    # exact disabled-model policy before this finalization step.
     separated["selected_workers"] = selected
     separated["selected_agents"] = [worker["agent"] for worker in selected]
     separated["preferred_worker"] = selected[0] if selected else None

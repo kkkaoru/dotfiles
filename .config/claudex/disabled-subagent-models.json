@@ -1,4 +1,4 @@
 {
   "version": 1,
-  "disabledModels": ["grok-4.5", "qwen3.8-max-preview"]
+  "disabledModels": ["qwen3.8-max-preview"]
 }

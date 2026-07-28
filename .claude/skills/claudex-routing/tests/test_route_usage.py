@@ -177,14 +177,67 @@ def write_qwen_settings(
 
 
 def configuration() -> dict[str, object]:
-    config = route_usage.load_config(route_usage.REPOSITORY_CONFIG)
+    """Return a stable routing fixture independent of deployment enablement.
+
+    The production configuration intentionally disables Qwen, while these unit
+    tests also cover Qwen quota parsing and fallback behavior.  Keeping a small
+    enabled fixture here prevents local provider changes from rewriting the
+    expected routing contract; deployment-backed tests use complete_configuration.
+    """
     return {
-        **config,
+        "version": 1,
+        "mainProviders": ["codex", "grok", "qwen"],
         "providers": [
-            provider
-            for provider in config["providers"]
-            if provider["id"] not in {"fugu", "ollama-glm-5-2", "opencode-go"}
+            {
+                "id": "codex",
+                "agent": "claudex-gpt-spark",
+                "defaultModel": "gpt-5.6-sol",
+                "subagentModel": "gpt-5.3-codex-spark",
+                "effort": "high",
+                "maxContextTokens": 110000,
+                "enabled": True,
+                "usageProvider": "codex",
+                "modelPrefixes": ["gpt"],
+                "backend": "codex-app-server",
+            },
+            {
+                "id": "grok",
+                "agent": "claudex-grok",
+                "defaultModel": "grok-4.5",
+                "effort": "high",
+                "enabled": True,
+                "usageProvider": "grok",
+                "modelPrefixes": ["grok"],
+                "backend": "grok-acp",
+            },
+            {
+                "id": "qwen",
+                "agent": "claudex-qwen",
+                "defaultModel": "qwen3.8-max-preview",
+                "effort": "high",
+                "enabled": True,
+                "usageProvider": "qwen",
+                "modelPrefixes": ["qwen"],
+                "backend": "configured-acp",
+                "acp": {
+                    "program": "/usr/bin/env",
+                    "arguments": [
+                        "QWEN_WEB_FETCH_PROCESSING_TIMEOUT_MS=8000",
+                        "qwen",
+                        "--acp",
+                        "--approval-mode",
+                        "yolo",
+                        "--model",
+                        "{model}",
+                    ],
+                },
+            },
         ],
+        "fallback": {
+            "agent": "claudex-sonnet",
+            "model": "claude-sonnet-5",
+            "effort": "high",
+        },
     }
 
 
@@ -231,7 +284,7 @@ class ConfigurationTests(unittest.TestCase):
         for key, value in [
             ("version", 2),
             ("providers", []),
-            ("mainProvider", "missing"),
+            ("mainProviders", []),
             ("fallback", {}),
         ]:
             changed = copy.deepcopy(base)
@@ -459,24 +512,25 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(fallback["selected_agents"], ["claudex-sonnet"])
         self.assertTrue(fallback["fallback_active"])
 
-    def test_keeps_main_model_out_of_workers_and_requires_delegation(self) -> None:
+    def test_keeps_main_model_available_for_workers_and_requires_delegation(self) -> None:
         summary = route_usage.enforce_worker_model_separation(
             configured_summary(report()),
             "gpt-5.3-codex-spark",
             configuration(),
             frozenset(),
         )
-        self.assertNotIn(
+        self.assertIn(
             "gpt-5.3-codex-spark",
             [worker["model"] for worker in summary["selected_workers"]],
         )
         self.assertEqual(summary["main_session_model"], "gpt-5.3-codex-spark")
         self.assertEqual(summary["orchestration_mode"], "subagent-first")
         self.assertTrue(summary["delegation_required"])
-        self.assertEqual(summary["providers"]["codex"]["reason"], "same-as-main-model")
+        self.assertEqual(summary["providers"]["codex"]["reason"], "available")
         context = route_usage.hook_output(summary)["hookSpecificOutput"]["additionalContext"]
         self.assertIn("MANDATORY SUBAGENT-FIRST ORCHESTRATION", context)
         self.assertIn("first substantive tool call must be Agent/Task", context)
+        self.assertIn("same model as the outer session", context)
 
     def test_disabled_models_are_excluded_without_deleting_provider_config(self) -> None:
         disabled = frozenset({"gpt-5.3-codex-spark", "grok-4.5"})
@@ -1042,7 +1096,9 @@ class CommandTests(unittest.TestCase):
         self.assertEqual(qwen_entries, [qwen_report()])
         qwen_worker = next(
             worker
-            for worker in route_usage.routing_summary(collected)["selected_workers"]
+            for worker in route_usage.routing_summary(
+                collected, configuration()
+            )["selected_workers"]
             if worker["provider"] == "qwen"
         )
         self.assertEqual(qwen_worker["model"], "qwen3.8-max-preview")
@@ -1528,7 +1584,7 @@ class MainTests(unittest.TestCase):
         collect_usage: mock.Mock,
         _quota_due: mock.Mock,
     ) -> None:
-        read_cache.return_value = route_usage.routing_summary(report())
+        read_cache.return_value = route_usage.routing_summary(report(), configuration())
         output = self.run_main()
         self.assertIn("claudex-gpt-spark", output)
         collect_usage.assert_not_called()
@@ -1545,7 +1601,9 @@ class MainTests(unittest.TestCase):
         read_cache.return_value = route_usage.routing_summary(
             complete_report(), complete_configuration()
         )
-        output = self.run_main(health=model_health(7))
+        output = self.run_main(
+            health=model_health(7), config=complete_configuration()
+        )
         context = json.loads(output)["hookSpecificOutput"]["additionalContext"]
         self.assertIn('"reason":"concurrency-limit-reached"', context)
         selected = context.split('"selected_workers":', 1)[1].split(
@@ -1565,7 +1623,7 @@ class MainTests(unittest.TestCase):
         collect_usage: mock.Mock,
         write_cache: mock.Mock,
     ) -> None:
-        read_cache.return_value = route_usage.routing_summary(report())
+        read_cache.return_value = route_usage.routing_summary(report(), configuration())
         output = self.run_main()
         self.assertIn("claudex-qwen", output)
         collect_usage.assert_called_once()
@@ -1635,7 +1693,7 @@ class MainTests(unittest.TestCase):
         context = json.loads(output)["hookSpecificOutput"]["additionalContext"]
         self.assertIn('"selected_agents":["claudex-qwen"]', context)
         expected_key = route_usage.configuration_key(
-            complete_configuration(),
+            configuration(),
             frozenset(
                 {
                     "gpt-5.3-codex-spark",
@@ -1674,7 +1732,7 @@ class MainTests(unittest.TestCase):
         )[0]
         self.assertNotIn('"agent":"claudex-gpt-spark"', selected_workers)
         expected_key = route_usage.configuration_key(
-            complete_configuration(),
+            configuration(),
             frozenset(
                 {"gpt-5.3-codex-spark", "opencode-go/deepseek-v4-flash"}
             ),
@@ -1697,7 +1755,7 @@ class MainTests(unittest.TestCase):
         context = json.loads(output)["hookSpecificOutput"]["additionalContext"]
         self.assertIn('"selected_agents":["claudex-gpt-spark","claudex-grok"]', context)
         expected_key = route_usage.configuration_key(
-            complete_configuration(),
+            configuration(),
             frozenset(
                 {"qwen3.8-max-preview", "opencode-go/deepseek-v4-flash"}
             ),
@@ -1708,13 +1766,34 @@ class MainTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             fixture = Path(directory) / "usage.json"
             fixture.write_text(json.dumps(report()), encoding="utf-8")
+            config = Path(directory) / "providers.json"
+            config.write_text(json.dumps(configuration()), encoding="utf-8")
+            policy = Path(directory) / "disabled.json"
+            policy.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "disabledModels": ["grok-4.5", "qwen3.8-max-preview"],
+                    }
+                ),
+                encoding="utf-8",
+            )
             stdout = io.StringIO()
             with (
                 mock.patch.object(
                     sys,
                     "argv",
-                    [str(Path(route_usage.__file__)), "--input", str(fixture)],
+                    [
+                        str(Path(route_usage.__file__)),
+                        "--config",
+                        str(config),
+                        "--disabled-models-config",
+                        str(policy),
+                        "--input",
+                        str(fixture),
+                    ],
                 ),
+                mock.patch("route_usage.run_daemon_health", return_value=None),
                 contextlib.redirect_stdout(stdout),
                 self.assertRaises(SystemExit) as exit_status,
             ):
@@ -1738,10 +1817,20 @@ class MainTests(unittest.TestCase):
         *arguments: str,
         disabled_models: list[str] | None = None,
         health: dict[str, dict[str, object]] | None = None,
+        config: dict[str, object] | None = None,
     ) -> str:
         stdout = io.StringIO()
         with tempfile.TemporaryDirectory() as directory:
             effective_arguments = list(arguments)
+            if "--config" not in effective_arguments:
+                provider_config = Path(directory) / "providers.json"
+                provider_config.write_text(
+                    json.dumps(
+                        configuration() if config is None else config
+                    ),
+                    encoding="utf-8",
+                )
+                effective_arguments.extend(["--config", str(provider_config)])
             if "--disabled-models-config" not in effective_arguments:
                 policy = Path(directory) / "disabled.json"
                 policy.write_text(

@@ -23,6 +23,8 @@ retained.
    The list is ordered by the tightest known quota or exact-model concurrency headroom; prefer
    `preferred_worker` for primary work. Treat an exact `model_concurrency` entry with
    `available: false` as unavailable for that turn.
+   A selected worker may intentionally use the same model as the outer session; outer and
+   SubAgent requests are independent, so model identity alone never makes a worker unavailable.
    Pass each worker's `model` and `effort` as `claudex_model` and `claudex_effort`. When substantive
    work is clear, invoke the selected SubAgent in the first response rather than merely announcing
    future delegation. Do not use task-list bookkeeping merely as a precondition for delegation.

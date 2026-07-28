@@ -1,18 +1,32 @@
 {
   "version": 1,
-    "mainProviders": ["codex", "grok", "fugu", "ollama-glm-5-2", "opencode-go"],
+    "mainProviders": ["codex", "codex-spark", "grok", "fugu", "ollama-glm-5-2", "opencode-go"],
   "providers": [
     {
       "id": "codex",
-      "agent": "claudex-gpt-spark",
-      "defaultModel": "gpt-5.6-sol",
-      "subagentModel": "gpt-5.3-codex-spark",
-      "effort": "high",
+      "agent": "claudex-gpt",
+      "defaultModel": "gpt-5.6-luna",
+      "subagentModel": "gpt-5.6-luna",
+      "effort": "max",
       "maxContextTokens": 110000,
       "enabled": true,
       "usageProvider": "codex",
       "modelPrefixes": [
         "gpt"
+      ],
+      "backend": "codex-app-server"
+    },
+    {
+      "id": "codex-spark",
+      "agent": "claudex-gpt-spark",
+      "defaultModel": "gpt-5.3-codex-spark",
+      "subagentModel": "gpt-5.3-codex-spark",
+      "effort": "xhigh",
+      "maxContextTokens": 110000,
+      "enabled": true,
+      "usageProvider": "codex",
+      "modelPrefixes": [
+        "gpt-5.3-codex-spark"
       ],
       "backend": "codex-app-server"
     },

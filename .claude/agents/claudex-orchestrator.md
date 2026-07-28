@@ -49,8 +49,10 @@ when a concrete independent next action is already identified and started immedi
 must outlive the current turn. After successful background launches, start that action or end the
 turn promptly with a concise user-visible status. Do not silently wait or keep reasoning for
 completion notifications; they join the main session's next-turn input queue only after the turn ends.
-Never use the outer session's model or effort as worker routing values. If the injected routing
-context is absent, state that routing is unavailable instead of inventing `selected_workers`.
+Never infer a worker model or effort from the outer session. Use the exact `selected_workers` entry
+and its configured model/effort; the selected worker may intentionally use the same model as the
+outer session. If the injected routing context is absent, state that routing is unavailable
+instead of inventing `selected_workers`.
 Treat the current routing context as authoritative over stale auto-memory about worker
 model policy; do not inspect such memory before delegation.
 

@@ -20,7 +20,8 @@ flowchart LR
     Fish --> Adapter[claudex-agent-adapter]
     Adapter --> Orchestrator[Claude main session]
     Orchestrator --> Hook[provider利用状況フック]
-    Hook --> Codex[claudex-gpt-spark\nCodex app-server]
+    Hook --> Codex[claudex-gpt\ngpt-5.6-luna\nCodex app-server]
+    Hook --> CodexSpark[claudex-gpt-spark\ngpt-5.3-codex-spark\nCodex app-server]
     Hook --> Grok[claudex-grok\nGrok ACP]
     Hook --> Qwen[claudex-qwen\nQwen Code ACP]
     Hook --> DeepSeek[claudex-deepseek\nOpenCode Go ACP]
@@ -32,8 +33,9 @@ flowchart LR
 
 | 役割 | Agent | Model | Effort | 選択条件 |
 | --- | --- | --- | --- | --- |
-| Orchestrator | 通常のmain session | `gpt-5.6-sol` | `high` | `mainProviders` の優先順と空き状況で選択 |
-| Codex worker | `claudex-gpt-spark` | `gpt-5.3-codex-spark` | `high` | Codexに空きがある場合 |
+| Orchestrator | 通常のmain session | `gpt-5.6-luna` | `max` | `mainProviders` の優先順と空き状況で選択 |
+| Codex worker | `claudex-gpt` | `gpt-5.6-luna` | `max` | Codexに空きがある場合 |
+| Codex Spark worker | `claudex-gpt-spark` | `gpt-5.3-codex-spark` | `xhigh` | Codexに空きがある場合 |
 | Fugu worker | `claudex-fugu` | `fugu` | `high` | CodexBarのSakana枠に空きがある場合 |
 | Ollama GLM worker | `claudex-ollama-glm-5-2` | `glm-5.2:cloud` | `high` | CodexBarのOllama枠に空きがある場合 |
 | Grok worker | `claudex-grok` | `grok-4.5` | `high` | Grokに空きがある場合 |
@@ -97,7 +99,8 @@ DeepSeek workerは独立した調査をまとめて実行し、確定済みの�
    無効化しません。
 4. mainまたはworkerがAgent/Taskを起動するたび、そのturnへ注入された
    `selected_workers` からAgentを選び、model/effortを明示します。nested起動でもgeneric
-   `claude`へのdefaultや親providerの無条件継承は行いません。
+   `claude`へのdefaultや親providerの無条件継承は行いません。親のmain modelと同じmodelが
+   `selected_workers` に明示されている場合は、outer requestとは独立したSubAgentとして起動します。
 5. promptに `gpt...`、`fugu...`、`glm-...`、`grok...` または `qwen...` の完全なモデルIDがある場合は、
    `modelPrefixes` が一致するproviderへそのIDをそのまま渡します。ただし、専用設定と
    端末固有の追加設定を統合したdeny listに含まれる完全一致モデルは明示指定でも拒否します。
@@ -307,17 +310,18 @@ Orchestratorは完全なモデルIDを `claudex_model` としてAgentへ渡し�
 遅延起動します。nested Agent/Taskでも `selected_workers` の同一entryにあるagent/modelを
 必ず明示し、model未指定時にparentやmain modelを暗黙継承しません。設定済みprefix内であれば、
 active userが完全なmodel IDを指定した場合に限り `defaultModel` 以外も同じ方式で選択できます。
+`selected_workers` にmainと同じmodelがある場合も、その明示指定を優先します。
 
 ### SubAgentモデルを禁止
 
 provider設定とは分離した `~/.config/claudex/disabled-subagent-models.json` に、常に禁止する
-完全一致モデルを定義します。repositoryでは現在 `grok-4.5` と `qwen3.8-max-preview` を
+完全一致モデルを定義します。repositoryでは現在 `qwen3.8-max-preview` を
 SubAgentで禁止しています。
 
 ```json
 {
   "version": 1,
-  "disabledModels": ["grok-4.5", "qwen3.8-max-preview"]
+  "disabledModels": ["qwen3.8-max-preview"]
 }
 ```
 
