@@ -245,14 +245,20 @@ impl SegmentBuilder {
                 .get("tasks")
                 .and_then(Value::as_array)
                 .context("batch Agent tasks missing")?;
-            if !(2..=crate::anthropic::agent_batch::MAX_BATCH_SIZE).contains(&tasks.len()) {
-                anyhow::bail!("batch Agent tasks must contain between 2 and 40 launches");
+            let minimum_batch = crate::anthropic::agent_batch::minimum_batch_size();
+            let maximum_batch = crate::anthropic::agent_batch::maximum_batch_size();
+            if !(minimum_batch..=maximum_batch).contains(&tasks.len()) {
+                anyhow::bail!(
+                    "batch Agent tasks must contain between {minimum_batch} and {maximum_batch} launches"
+                );
             }
             for (index, arguments) in tasks.iter().enumerate() {
+                let mut nested_arguments = arguments.clone();
+                ensure_background_batch_launch(&mut nested_arguments);
                 let nested = ToolCall {
                     call_id: call.call_id,
                     name: call.name,
-                    arguments,
+                    arguments: &nested_arguments,
                     request_id: crate::anthropic::agent_batch::pending_marker(
                         call.request_id.clone(),
                         index,
@@ -302,7 +308,7 @@ impl SegmentBuilder {
         }
     }
 
-    pub(super) async fn finish(mut self, stream: Option<&StreamSender>) -> Result<Segment> {
+    pub(super) async fn finish(&mut self, stream: Option<&StreamSender>) -> Result<Segment> {
         self.close_open_blocks(stream).await?;
         sanitize_committed_blocks(&mut self.blocks);
         if self.usage.output_tokens == 0 {
@@ -323,10 +329,37 @@ impl SegmentBuilder {
         } else {
             "end_turn"
         };
+        let blocks = std::mem::take(&mut self.blocks);
         Ok(Segment {
-            blocks: self.blocks,
+            blocks,
             stop_reason,
             usage: self.usage,
         })
+    }
+}
+
+fn ensure_background_batch_launch(arguments: &mut Value) {
+    // A batch is the adapter's explicit parallel primitive. Normalize every
+    // member to a background launch so one slow worker cannot hold the
+    // Claude Code turn open, while leaving ordinary single Agent/Task calls
+    // untouched.
+    if let Some(arguments) = arguments.as_object_mut() {
+        arguments.insert("run_in_background".to_owned(), Value::Bool(true));
+    }
+}
+
+#[cfg(test)]
+// Coverage gates measure production behavior; this inline test is excluded.
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use serde_json::json;
+
+    use super::ensure_background_batch_launch;
+
+    #[test]
+    fn leaves_non_object_batch_arguments_unchanged() {
+        let mut arguments = json!(null);
+        ensure_background_batch_launch(&mut arguments);
+        assert_eq!(arguments, json!(null));
     }
 }

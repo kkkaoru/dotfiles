@@ -41,6 +41,65 @@ mod tests {
         assert!(loaded.model_catalog.matches("model-extra"));
         assert!(loaded.model_catalog.matches("off"));
         assert!(!loaded.model_catalog.matches("claude-sonnet-5"));
+        assert_eq!(
+            loaded.model_catalog.worker_fields("worker"),
+            Some(("model-spark", "high"))
+        );
+        assert_eq!(loaded.model_catalog.worker_fields("off"), None);
+    }
+
+    #[test]
+    fn validates_and_exports_worker_routes() {
+        let mut catalog = ModelCatalog::from_routes(&[BackendRoute::new("model", BackendKind::GrokAcp)]);
+        assert!(catalog
+            .set_worker_routes(vec![WorkerRoute {
+                agent: String::new(),
+                model: "model".to_owned(),
+                effort: "high".to_owned(),
+            }])
+            .is_err());
+        assert!(catalog
+            .set_worker_routes(vec![
+                WorkerRoute {
+                    agent: "worker".to_owned(),
+                    model: "model".to_owned(),
+                    effort: "high".to_owned(),
+                },
+                WorkerRoute {
+                    agent: "worker".to_owned(),
+                    model: "other".to_owned(),
+                    effort: "low".to_owned(),
+                },
+            ])
+            .is_err());
+        catalog
+            .set_worker_routes(vec![WorkerRoute {
+                agent: "worker".to_owned(),
+                model: "model".to_owned(),
+                effort: "high".to_owned(),
+            }])
+            .expect("valid worker route");
+        assert_eq!(catalog.worker_fields("worker"), Some(("model", "high")));
+        assert_eq!(catalog.worker_routes().len(), 1);
+    }
+
+    #[test]
+    fn accepts_and_validates_the_optional_advisor_choice() {
+        let mut document: serde_json::Value = serde_json::from_str(&config(
+            r#"{"id":"p","agent":"worker","defaultModel":"model","effort":"high","enabled":true,"backend":"grok-acp"}"#,
+        ))
+        .unwrap();
+        document["advisor"] = serde_json::json!({
+            "agent": "custom-advisor",
+            "model": "claude-fable-5",
+            "effort": "xhigh"
+        });
+        let parsed: ProviderConfig = serde_json::from_value(document.clone()).unwrap();
+        assert!(validate(parsed).is_ok());
+
+        document["advisor"]["model"] = serde_json::Value::String(String::new());
+        let parsed: ProviderConfig = serde_json::from_value(document).unwrap();
+        assert!(validate(parsed).is_err());
     }
 
     #[test]
@@ -232,10 +291,7 @@ mod tests {
         let loaded = load(&path).unwrap();
         assert!(!loaded.model_catalog.matches(""));
 
-        let empty = ModelCatalog::from_routes(&[BackendRoute::new(
-            "",
-            BackendKind::GrokAcp,
-        )]);
+        let empty = ModelCatalog::from_routes(&[BackendRoute::new("", BackendKind::GrokAcp)]);
         assert!(!empty.matches(""));
     }
 }

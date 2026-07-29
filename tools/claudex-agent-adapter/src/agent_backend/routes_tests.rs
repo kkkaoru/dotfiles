@@ -4,8 +4,8 @@
 mod tests {
     use std::sync::Arc;
 
-    use super::{RoutedBackends, MAX_DYNAMIC_ROUTES};
-    use crate::agent_backend::{AcpLaunch, BackendKind, BackendRoute};
+    use super::{startup, RoutedBackends, StartupState, MAX_DYNAMIC_ROUTES};
+    use crate::agent_backend::{AcpLaunch, AgentBackend, BackendKind, BackendRoute};
 
     #[test]
     fn shares_codex_startup_but_keeps_acp_servers_model_specific() {
@@ -145,7 +145,10 @@ mod tests {
         let routes = RoutedBackends::lazy(&[exact, prefixed]);
 
         assert_eq!(routes.max_context_tokens_for_model("exact"), Some(100));
-        assert_eq!(routes.max_context_tokens_for_model("prefix-chat"), Some(200));
+        assert_eq!(
+            routes.max_context_tokens_for_model("prefix-chat"),
+            Some(200)
+        );
         routes.resolve("prefix-dynamic").expect("dynamic route");
         assert_eq!(
             routes.max_context_tokens_for_model("prefix-dynamic"),
@@ -173,8 +176,66 @@ mod tests {
         assert!(routes.model_is_alive("missing-acp"));
         assert!(routes.route(0).get().await.is_err());
         assert!(!routes.model_is_alive("missing-acp"));
+        assert!(routes.route(0).get().await.is_err());
         assert!(routes.model_is_alive("unconfigured-model"));
         assert!(routes.is_alive());
+    }
+
+    #[tokio::test]
+    async fn closed_startup_receiver_reaps_a_successful_backend() {
+        let (sender, receiver) = tokio::sync::watch::channel(StartupState::Starting);
+        drop(receiver);
+        let backend = Arc::new(AgentBackend::Routed(RoutedBackends::lazy(&[])));
+
+        startup::publish_result(sender, Ok(backend)).await;
+    }
+
+    #[tokio::test]
+    async fn closed_startup_receiver_discards_a_failed_backend_result() {
+        let (sender, receiver) = tokio::sync::watch::channel(StartupState::Starting);
+        drop(receiver);
+
+        startup::publish_result(sender, Err(Arc::<str>::from("startup failed"))).await;
+    }
+
+    #[tokio::test]
+    async fn open_startup_receiver_gets_the_started_backend() {
+        let (sender, receiver) = tokio::sync::watch::channel(StartupState::Starting);
+        let backend = Arc::new(AgentBackend::Routed(RoutedBackends::lazy(&[])));
+
+        startup::publish_result(sender, Ok(backend)).await;
+
+        assert!(matches!(
+            receiver.borrow().clone(),
+            StartupState::Ready(Ok(_))
+        ));
+    }
+
+    #[tokio::test]
+    async fn shutdown_skips_routes_without_ready_backends() {
+        let routes = RoutedBackends::lazy(&[
+            route("no-startup", BackendKind::GrokAcp),
+            route("starting", BackendKind::GrokAcp),
+            route("failed", BackendKind::GrokAcp),
+        ]);
+        let starting = routes.route(1);
+        let (_, starting_receiver) = tokio::sync::watch::channel(StartupState::Starting);
+        *starting
+            .startup
+            .receiver
+            .lock()
+            .expect("backend startup poisoned") = Some(starting_receiver);
+        let failed = routes.route(2);
+        let (_, failed_receiver) = tokio::sync::watch::channel(StartupState::Ready(Err(
+            Arc::<str>::from("startup failed"),
+        )));
+        *failed
+            .startup
+            .receiver
+            .lock()
+            .expect("backend startup poisoned") = Some(failed_receiver);
+
+        routes.shutdown().await;
     }
 
     fn route(model: &str, backend: BackendKind) -> BackendRoute {

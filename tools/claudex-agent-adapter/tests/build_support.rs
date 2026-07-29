@@ -43,6 +43,8 @@ fn discovers_sorted_inputs_and_hashes_content_deterministically() {
 #[test]
 fn includes_only_rust_files_from_source_trees() {
     let root = fixture();
+    fs::write(root.path().join("src/nested/extensionless"), "ignored")
+        .expect("write extensionless fixture");
     let mut inputs = Vec::new();
     build_support::collect_rust_files(&root.path().join("src"), &mut inputs);
     build_support::collect_rust_files(&root.path().join("tests"), &mut inputs);
@@ -52,6 +54,11 @@ fn includes_only_rust_files_from_source_trees() {
         !inputs
             .iter()
             .any(|path| path.ends_with("tests/ignored.txt"))
+    );
+    assert!(
+        !inputs
+            .iter()
+            .any(|path| path.ends_with("src/nested/extensionless"))
     );
     inputs.retain(|path| !build_support::is_test_source(path));
     build_support::calculate_build_id(&inputs).expect("audit production Rust files");
@@ -141,8 +148,8 @@ fn audits_control_flow_hidden_from_clippy_nesting() {
             .iter()
             .map(|source| source.matches("tokio::select!").count())
             .sum::<usize>(),
-        8,
-        "review every control-flow macro because Clippy nesting skips macro expansions"
+        9,
+        "count includes runtime::shutdown's explicit tokio::select!",
     );
 }
 

@@ -1,6 +1,6 @@
 use crate::agent_backend::{AcpLaunch, BackendKind, BackendRoute};
 use anyhow::{Context, Result, bail};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, fs, path::Path};
 const CONFIG_VERSION: u64 = 1;
 #[derive(Clone, Debug, Deserialize)]
@@ -10,6 +10,8 @@ struct ProviderConfig {
     main_providers: Vec<String>,
     providers: Vec<Provider>,
     fallback: AgentChoice,
+    #[serde(default)]
+    advisor: Option<AgentChoice>,
 }
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -57,6 +59,15 @@ pub struct LoadedConfig {
 pub struct ModelCatalog {
     exact: Vec<String>,
     prefixes: Vec<String>,
+    workers: Vec<WorkerRoute>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct WorkerRoute {
+    pub agent: String,
+    pub model: String,
+    pub effort: String,
 }
 impl ModelCatalog {
     fn from_providers<'a>(providers: impl IntoIterator<Item = &'a Provider>) -> Self {
@@ -85,7 +96,11 @@ impl ModelCatalog {
         exact.dedup();
         prefixes.sort();
         prefixes.dedup();
-        Self { exact, prefixes }
+        Self {
+            exact,
+            prefixes,
+            workers: Vec::new(),
+        }
     }
     pub fn from_routes(routes: &[BackendRoute]) -> Self {
         let mut exact = Vec::new();
@@ -106,7 +121,11 @@ impl ModelCatalog {
         exact.dedup();
         prefixes.sort();
         prefixes.dedup();
-        Self { exact, prefixes }
+        Self {
+            exact,
+            prefixes,
+            workers: Vec::new(),
+        }
     }
     pub fn matches(&self, model: &str) -> bool {
         self.exact.iter().any(|exact| exact == model)
@@ -114,6 +133,55 @@ impl ModelCatalog {
                 .prefixes
                 .iter()
                 .any(|prefix| model.starts_with(prefix.as_str()))
+    }
+
+    pub fn worker_fields(&self, agent: &str) -> Option<(&str, &str)> {
+        self.workers
+            .iter()
+            .find(|worker| worker.agent == agent)
+            .map(|worker| (worker.model.as_str(), worker.effort.as_str()))
+    }
+
+    pub fn worker_routes(&self) -> &[WorkerRoute] {
+        &self.workers
+    }
+
+    pub fn set_worker_routes(&mut self, workers: Vec<WorkerRoute>) -> Result<()> {
+        if workers.iter().any(|worker| {
+            [
+                worker.agent.as_str(),
+                worker.model.as_str(),
+                worker.effort.as_str(),
+            ]
+            .into_iter()
+            .any(str::is_empty)
+        }) {
+            bail!("worker route fields must not be empty");
+        }
+        let agents = workers
+            .iter()
+            .map(|worker| worker.agent.as_str())
+            .collect::<HashSet<_>>();
+        if agents.len() != workers.len() {
+            bail!("worker route agent values must be unique");
+        }
+        self.workers = workers;
+        Ok(())
+    }
+
+    fn add_workers(&mut self, providers: &[Provider]) {
+        self.workers = providers
+            .iter()
+            .map(|provider| WorkerRoute {
+                agent: provider.agent.clone(),
+                model: provider
+                    .subagent_model
+                    .as_ref()
+                    .unwrap_or(&provider.default_model)
+                    .clone(),
+                effort: provider.effort.clone(),
+            })
+            .collect();
     }
 }
 const fn enabled_by_default() -> bool {
@@ -131,10 +199,13 @@ fn validate(config: ProviderConfig) -> Result<LoadedConfig> {
         bail!("provider config version must be {CONFIG_VERSION}");
     }
     validate_choice(&config.fallback, "fallback")?;
+    if let Some(advisor) = config.advisor.as_ref() {
+        validate_choice(advisor, "advisor")?;
+    }
     // Keep identities for disabled providers so exhausted/denied backends can still be
     // recognized and remapped instead of falling through to Claude subscription under a
     // stale provider model id.
-    let model_catalog = ModelCatalog::from_providers(&config.providers);
+    let mut model_catalog = ModelCatalog::from_providers(&config.providers);
     let providers = config
         .providers
         .into_iter()
@@ -144,6 +215,7 @@ fn validate(config: ProviderConfig) -> Result<LoadedConfig> {
         bail!("provider config must enable at least one provider");
     }
     validate_providers(&providers)?;
+    model_catalog.add_workers(&providers);
     let enabled_ids = providers
         .iter()
         .map(|provider| provider.id.as_str())
@@ -183,6 +255,7 @@ fn validate_choice(choice: &AgentChoice, name: &str) -> Result<()> {
 }
 fn validate_providers(providers: &[Provider]) -> Result<()> {
     let mut ids = HashSet::new();
+    let mut agents = HashSet::new();
     let mut models = HashSet::new();
     let mut prefixes = HashSet::new();
     for provider in providers {
@@ -195,6 +268,9 @@ fn validate_providers(providers: &[Provider]) -> Result<()> {
         }
         if !ids.insert(&provider.id) {
             bail!("enabled provider IDs must be unique");
+        }
+        if !agents.insert(&provider.agent) {
+            bail!("enabled provider agent values must be unique");
         }
         if !models.insert(&provider.default_model) {
             bail!("enabled provider defaultModel values must be unique");

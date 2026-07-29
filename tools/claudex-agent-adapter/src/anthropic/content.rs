@@ -1,6 +1,6 @@
 use std::{collections::HashSet, io::Write};
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use axum::{
     body::Body,
     http::{HeaderValue, Response, StatusCode, header},
@@ -8,13 +8,13 @@ use axum::{
 use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
+pub(super) use super::content_pending::take_pending_results;
 use super::{MessagesRequest, Segment, Session};
 
-// Consumed IDs only suppress replays of completed results. A 4,096-entry replay cache is generous
-// for one session while bounding tool-heavy conversations; pending results live in a separate map.
+// consumed IDs suppress replays of completed results.
 const MAX_CONSUMED_TOOL_IDS: usize = 4_096;
 
-fn remember_consumed_tool_id(consumed: &mut HashSet<String>, id: String) {
+pub(super) fn remember_consumed_tool_id(consumed: &mut HashSet<String>, id: String) {
     if consumed.contains(&id) {
         return;
     }
@@ -29,105 +29,6 @@ pub(super) struct ToolResult {
     pub(super) tool_use_id: String,
     pub(super) content_items: Vec<Value>,
     pub(super) is_error: bool,
-}
-
-type BatchResult = (usize, ToolResult);
-type AgentBatch = (Value, usize, Vec<BatchResult>);
-
-pub(super) async fn take_pending_results(
-    session: &Session,
-    results: Vec<ToolResult>,
-) -> Result<Vec<(Value, ToolResult)>> {
-    let mut pending = session.pending_tools.lock().await;
-    let mut consumed = session.consumed_tool_ids.lock().await;
-    let unique = results
-        .iter()
-        .map(|result| result.tool_use_id.as_str())
-        .collect::<HashSet<_>>();
-    let valid = unique.len() == results.len()
-        && results.iter().all(|result| {
-            pending.contains_key(&result.tool_use_id)
-                || consumed.contains(result.tool_use_id.as_str())
-        });
-    if !valid {
-        bail!("Claude returned duplicate or unknown tool_use_id values");
-    }
-    validate_complete_batches(&pending, &results)?;
-    let mut responses = Vec::new();
-    let mut batches: Vec<AgentBatch> = Vec::new();
-    for result in results {
-        let Some(id) = pending.remove(&result.tool_use_id) else {
-            continue;
-        };
-        remember_consumed_tool_id(&mut consumed, result.tool_use_id.clone());
-        let Some(marker) = super::agent_batch::pending_batch(&id) else {
-            responses.push((id, result));
-            continue;
-        };
-        if let Some(batch) = batches
-            .iter_mut()
-            .find(|batch| batch.0 == *marker.request_id && batch.1 == marker.total)
-        {
-            batch.2.push((marker.index, result));
-        } else {
-            batches.push((
-                marker.request_id.clone(),
-                marker.total,
-                vec![(marker.index, result)],
-            ));
-        }
-    }
-    for (request_id, _, mut results) in batches {
-        results.sort_by_key(|(index, _)| *index);
-        let tool_use_id = results[0].1.tool_use_id.clone();
-        let is_error = results.iter().any(|(_, result)| result.is_error);
-        let mut content_items = Vec::new();
-        for (index, result) in results {
-            content_items.push(input_text(&format!("SubAgent {} result:", index + 1)));
-            content_items.extend(result.content_items);
-        }
-        responses.push((
-            request_id,
-            ToolResult {
-                tool_use_id,
-                content_items,
-                is_error,
-            },
-        ));
-    }
-    if pending.is_empty() {
-        *session
-            .pending_since
-            .lock()
-            .expect("pending tool clock poisoned") = None;
-    }
-    Ok(responses)
-}
-
-fn validate_complete_batches(
-    pending: &std::collections::HashMap<String, Value>,
-    results: &[ToolResult],
-) -> Result<()> {
-    for result in results {
-        let Some(marker) = pending
-            .get(&result.tool_use_id)
-            .and_then(super::agent_batch::pending_batch)
-        else {
-            continue;
-        };
-        let returned = results
-            .iter()
-            .filter_map(|candidate| pending.get(&candidate.tool_use_id))
-            .filter_map(super::agent_batch::pending_batch)
-            .filter(|candidate| {
-                candidate.request_id == marker.request_id && candidate.total == marker.total
-            })
-            .count();
-        if returned != marker.total {
-            bail!("Claude must return every result from a batch Agent tool round together");
-        }
-    }
-    Ok(())
 }
 
 pub(super) fn request_signature(
@@ -145,6 +46,12 @@ pub(super) fn request_signature(
         "collaborator_model": collaborator_model
     }))
     .map_err(Into::into)
+}
+
+pub(super) fn pending_request_id(pending: &Value) -> Value {
+    super::agent_batch::pending_batch(pending)
+        .map(|pending| pending.request_id.to_owned())
+        .unwrap_or_else(|| pending.clone())
 }
 
 pub(super) async fn matching_transcript_len(
@@ -305,7 +212,7 @@ fn tool_result_item(item: &Value) -> Option<Value> {
     }
 }
 
-fn input_text(text: &str) -> Value {
+pub(super) fn input_text(text: &str) -> Value {
     json!({
         "type": "inputText",
         "text": super::team_protocol::clarify_result(text)

@@ -3,6 +3,10 @@ use std::collections::BTreeMap;
 use super::{Bridge, MAX_SESSIONS, model_concurrency::ModelConcurrencyStatus};
 
 impl Bridge {
+    pub(super) fn model_catalog(&self) -> &crate::provider_config::ModelCatalog {
+        &self.model_catalog
+    }
+
     pub fn is_alive(&self) -> bool {
         self.app.is_alive()
     }
@@ -25,6 +29,14 @@ impl Bridge {
 
     pub fn backend_routes(&self) -> Vec<String> {
         self.app.route_descriptions()
+    }
+
+    pub fn worker_routes(&self) -> Vec<String> {
+        self.model_catalog
+            .worker_routes()
+            .iter()
+            .map(|worker| serde_json::to_string(worker).expect("worker route must serialize"))
+            .collect()
     }
 
     pub fn routed_models(&self) -> Vec<String> {

@@ -6,6 +6,7 @@ mod tests {
         io::{Read, Write},
         net::{SocketAddr, TcpListener},
         path::Path,
+        process::{Command, Stdio},
         sync::{
             Arc,
             atomic::{AtomicBool, Ordering},
@@ -13,6 +14,10 @@ mod tests {
         thread,
         time::Instant,
     };
+    #[cfg(unix)]
+    use std::os::unix::process::CommandExt as _;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
 
     use super::*;
     use crate::agent_backend::BackendKind;
@@ -52,6 +57,17 @@ mod tests {
         assert_eq!(config.base_url(), "http://127.0.0.1:9000");
         config.options.listen = "[::]:9000".parse().expect("IPv6 listener");
         assert_eq!(config.base_url(), "http://[::1]:9000");
+        config.options.listen = "[::1]:9000".parse().expect("IPv6 loopback listener");
+        assert_eq!(config.base_url(), "http://[::1]:9000");
+    }
+
+    #[test]
+    fn requires_authentication_only_for_untrusted_listeners_with_the_local_token() {
+        let loopback = "127.0.0.1:8318".parse().expect("loopback listener");
+        let public = "0.0.0.0:8318".parse().expect("public listener");
+        assert!(!requires_authentication(&loopback, LOCAL_TOKEN));
+        assert!(!requires_authentication(&public, "real-token"));
+        assert!(requires_authentication(&public, LOCAL_TOKEN));
     }
 
     #[test]
@@ -134,6 +150,27 @@ mod tests {
         assert!(reject_model_override(&["--continue".into()]).is_ok());
     }
 
+    #[test]
+    fn daemon_arguments_preserve_configured_worker_routes() {
+        let mut config = config();
+        config
+            .options
+            .model_catalog
+            .set_worker_routes(vec![crate::provider_config::WorkerRoute {
+                agent: "claudex-grok".to_owned(),
+                model: "grok-4.5".to_owned(),
+                effort: "high".to_owned(),
+            }])
+            .expect("worker route");
+        let arguments = daemon_arguments(&config.options)
+            .into_iter()
+            .map(|argument| argument.into_string().expect("UTF-8 argument"))
+            .collect::<Vec<_>>();
+        assert!(arguments.windows(2).any(|pair| {
+            pair[0] == "--worker-route-json" && pair[1].contains("claudex-grok")
+        }));
+    }
+
     fn healthy(config: &ServiceConfig) -> Health {
         Health {
             status: "ok".to_owned(),
@@ -141,6 +178,7 @@ mod tests {
             protocol_version: ADAPTER_PROTOCOL_VERSION,
             build_id: env!("CLAUDEX_BUILD_ID").to_owned(),
             backend_routes: route_descriptions(&config.options.routes),
+            worker_routes: worker_route_descriptions(&config.options.model_catalog),
             subscription_max_processes: 20,
             subscription_timeout_minutes: 120,
         }
@@ -161,6 +199,9 @@ mod tests {
         stale.push(health);
         let mut health = healthy(&config);
         health.subscription_timeout_minutes = 45;
+        stale.push(health);
+        let mut health = healthy(&config);
+        health.worker_routes.push("stale-worker".to_owned());
         stale.push(health);
         for health in stale {
             assert!(!config.matches(&health));
@@ -271,18 +312,23 @@ mod tests {
         let client = reqwest::Client::new();
         let mut released = config();
         released.options.listen = unused_listen();
-        let terminated = Arc::new(AtomicBool::new(false));
-        let terminated_for_callback = Arc::clone(&terminated);
+        let gracefully_terminated = Arc::new(AtomicBool::new(false));
+        let gracefully_terminated_for_callback = Arc::clone(&gracefully_terminated);
+        let force_terminated = Arc::new(AtomicBool::new(false));
+        let force_terminated_for_callback = Arc::clone(&force_terminated);
         handover::release_stale_listener_with(
             &client,
             &released,
             Some(42),
             |pid, executable| pid == 42 && executable == Path::new("/tmp/adapter"),
-            move |pid| mark_terminated(pid, &terminated_for_callback),
+            move |pid| mark_terminated(pid, &gracefully_terminated_for_callback),
+            move |pid| mark_terminated(pid, &force_terminated_for_callback),
+            Instant::now() + Duration::from_millis(40),
         )
         .await
         .expect("release stale listener");
-        assert!(terminated.load(Ordering::SeqCst));
+        assert!(gracefully_terminated.load(Ordering::SeqCst));
+        assert!(!force_terminated.load(Ordering::SeqCst));
 
         let listener = TcpListener::bind("127.0.0.1:0").expect("occupied listener");
         let mut occupied = config();
@@ -293,16 +339,28 @@ mod tests {
             .expect("make health listener nonblocking");
         let stopped = Arc::new(AtomicBool::new(false));
         let server_stopped = Arc::clone(&stopped);
-        let server = thread::spawn(move || accept_until_stopped(accepting_listener, server_stopped));
-        let error = handover::wait_until_listener_released_by(
+        let stale_health = health_response(&healthy(&occupied));
+        let server = thread::spawn(move || {
+            serve_response_until_stopped(accepting_listener, stale_health, server_stopped)
+        });
+        let gracefully_terminated = Arc::new(AtomicBool::new(false));
+        let gracefully_terminated_for_callback = Arc::clone(&gracefully_terminated);
+        let force_terminated = Arc::new(AtomicBool::new(false));
+        let force_terminated_for_callback = Arc::clone(&force_terminated);
+        let error = handover::release_stale_listener_with(
             &client,
             &occupied,
-            42,
+            Some(42),
+            |pid, executable| pid == 42 && executable == Path::new("/tmp/adapter"),
+            move |pid| mark_terminated(pid, &gracefully_terminated_for_callback),
+            move |pid| mark_terminated(pid, &force_terminated_for_callback),
             Instant::now() + Duration::from_millis(40),
         )
         .await
         .expect_err("occupied stale listener must time out");
         assert!(error.to_string().contains("did not release its listener"));
+        assert!(gracefully_terminated.load(Ordering::SeqCst));
+        assert!(force_terminated.load(Ordering::SeqCst));
         stopped.store(true, Ordering::SeqCst);
         server.join().expect("occupied listener server");
         drop(listener);
@@ -318,10 +376,100 @@ mod tests {
         terminated.store(true, Ordering::SeqCst);
     }
 
-    fn accept_until_stopped(listener: TcpListener, stopped: Arc<AtomicBool>) {
+    #[cfg(unix)]
+    #[test]
+    #[allow(clippy::zombie_processes)]
+    fn daemon_terminate_uses_term_then_kill_for_resistant_process_groups() {
+        let root = tempfile::tempdir().expect("terminate fixture");
+        let child_pid_file = root.path().join("child.pid");
+        let script = root.path().join("resistant-daemon.sh");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\n\
+                 trap '' TERM\n\
+                 sleep 100 &\n\
+                 echo $! > '{}'\n\
+                 while true; do sleep 1; done\n",
+                child_pid_file.to_string_lossy()
+            ),
+        )
+        .expect("daemon script");
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+            .expect("daemon executable");
+        let mut command = Command::new("sh");
+        command.arg(script).process_group(0);
+        let mut child = command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("launch resistant daemon");
+        let child_id = child.id();
+        let _cleanup = ProcessGroupCleanup::for_leader(child_id);
+        let child_pid = wait_for_child_pid(&child_pid_file);
+
+        daemon_process::terminate(child_id);
+        let stop_deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        let mut observed_status = None;
+        while std::time::Instant::now() < stop_deadline {
+            if let Ok(Some(status)) = child.try_wait() {
+                observed_status = Some(status);
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        if observed_status.is_none() {
+            child.kill().expect("resistant daemon still running");
+            observed_status = Some(child.wait().expect("daemon process terminated"));
+        }
+        let _ = observed_status.expect("daemon process terminated");
+
+        assert!(!process_alive(child_id));
+        assert!(!process_alive(child_pid));
+    }
+
+    #[cfg(unix)]
+    fn wait_for_child_pid(path: &Path) -> u32 {
+        for _ in 0..100 {
+            if let Some(pid) = std::fs::read_to_string(path)
+                .ok()
+                .and_then(|raw_pid| raw_pid.trim().parse::<u32>().ok())
+            {
+                return pid;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        panic!("child pid written")
+    }
+
+    #[cfg(unix)]
+    struct ProcessGroupCleanup(i32);
+
+    #[cfg(unix)]
+    impl ProcessGroupCleanup {
+        fn for_leader(pid: u32) -> Self {
+            Self(pid.try_into().expect("process group id fits in i32"))
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for ProcessGroupCleanup {
+        fn drop(&mut self) {
+            let _result = unsafe { libc::kill(-self.0, libc::SIGKILL) };
+        }
+    }
+
+    fn serve_response_until_stopped(
+        listener: TcpListener,
+        response: String,
+        stopped: Arc<AtomicBool>,
+    ) {
         while !stopped.load(Ordering::SeqCst) {
             match listener.accept() {
-                Ok((_stream, _)) => {}
+                Ok((mut stream, _)) => {
+                    let _result = stream.write_all(response.as_bytes());
+                }
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                     thread::sleep(Duration::from_millis(1));
                 }
@@ -339,11 +487,34 @@ mod tests {
                 "protocol_version": health.protocol_version,
                 "build_id": health.build_id,
                 "backend_routes": health.backend_routes,
+                "worker_routes": health.worker_routes,
                 "subscription_max_processes": health.subscription_max_processes,
                 "subscription_timeout_minutes": health.subscription_timeout_minutes,
             })
             .to_string(),
         )
+    }
+
+    #[cfg(unix)]
+    fn process_alive(pid: u32) -> bool {
+        let output = Command::new("ps")
+            .args(["-p", &pid.to_string(), "-o", "stat="])
+            .output()
+            .ok();
+        let Some(output) = output else {
+            return false;
+        };
+        let output_state = String::from_utf8_lossy(&output.stdout);
+        let Some(state) = output_state
+            .split_whitespace()
+            .next()
+        else {
+            return false;
+        };
+        if state.starts_with('Z') {
+            return false;
+        }
+        output.status.success()
     }
 
     fn http_response(status: &str, body: &str) -> String {
@@ -385,5 +556,212 @@ mod tests {
         std::fs::create_dir(&directory_log).expect("directory log");
         config.log_path = directory_log;
         assert!(start_adapter(&config).is_err());
+    }
+
+    #[tokio::test]
+    async fn readiness_waits_for_matching_authenticated_health() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("readiness listener");
+        let mut ready_config = config();
+        ready_config.options.listen = listener.local_addr().expect("readiness address");
+        let ready_health = healthy(&ready_config);
+        let mut stale = healthy(&ready_config);
+        stale.status = "starting".to_owned();
+        let server = serve_responses(
+            listener,
+            vec![
+                health_response(&ready_health),
+                http_response("401 Unauthorized", "{}"),
+                health_response(&stale),
+                health_response(&ready_health),
+                http_response("200 OK", "{}"),
+            ],
+        );
+
+        wait_until_ready_with(
+            &reqwest::Client::new(),
+            &ready_config,
+            Duration::from_millis(300),
+            Duration::from_millis(1),
+            Duration::from_millis(2),
+        )
+        .await
+        .expect("matching authenticated health becomes ready");
+        server.join().expect("readiness server");
+    }
+
+    #[tokio::test]
+    async fn readiness_retries_when_a_compatible_daemon_has_an_old_build() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("readiness listener");
+        let mut ready_config = config();
+        ready_config.options.listen = listener.local_addr().expect("readiness address");
+        let mut old_build = healthy(&ready_config);
+        old_build.build_id = "previous-build".to_owned();
+        let server = serve_responses(
+            listener,
+            vec![
+                health_response(&old_build),
+                health_response(&healthy(&ready_config)),
+                http_response("200 OK", "{}"),
+            ],
+        );
+
+        wait_until_ready_with(
+            &reqwest::Client::new(),
+            &ready_config,
+            Duration::from_millis(100),
+            Duration::from_millis(1),
+            Duration::from_millis(2),
+        )
+        .await
+        .expect("current build becomes ready");
+        server.join().expect("readiness server");
+    }
+
+    #[tokio::test]
+    async fn handover_ignores_unmatched_processes_and_waits_for_stale_health() {
+        let client = reqwest::Client::new();
+        let ignored = Arc::new(AtomicBool::new(false));
+        let ignored_graceful = Arc::clone(&ignored);
+        let ignored_force = Arc::clone(&ignored);
+        handover::release_stale_listener_with(
+            &client,
+            &config(),
+            Some(42),
+            |_pid, _executable| false,
+            move |_pid| ignored_graceful.store(true, Ordering::SeqCst),
+            move |_pid| ignored_force.store(true, Ordering::SeqCst),
+            Instant::now() + Duration::from_millis(20),
+        )
+        .await
+        .expect("unmatched process is ignored");
+        assert!(!ignored.load(Ordering::SeqCst));
+
+        let listener = TcpListener::bind("127.0.0.1:0").expect("stale health listener");
+        let mut released = config();
+        released.options.listen = listener.local_addr().expect("stale health address");
+        let mut stale_health = healthy(&released);
+        stale_health.pid = Some(42);
+        let server = serve_responses(listener, vec![health_response(&stale_health)]);
+        let graceful = Arc::new(AtomicBool::new(false));
+        let graceful_callback = Arc::clone(&graceful);
+        let forced = Arc::new(AtomicBool::new(false));
+        let forced_callback = Arc::clone(&forced);
+        handover::release_stale_listener_with(
+            &client,
+            &released,
+            Some(42),
+            |pid, executable| pid == 42 && executable == Path::new("/tmp/adapter"),
+            move |pid| mark_terminated(pid, &graceful_callback),
+            move |pid| mark_terminated(pid, &forced_callback),
+            Instant::now() + Duration::from_secs(1),
+        )
+        .await
+        .expect("stale listener releases after its health response");
+        assert!(graceful.load(Ordering::SeqCst));
+        assert!(!forced.load(Ordering::SeqCst));
+        server.join().expect("stale health server");
+    }
+
+    #[test]
+    fn keeps_non_file_logs_and_archives_extensionless_logs() {
+        let root = tempfile::tempdir().expect("log fixture");
+        let directory = root.path().join("directory");
+        std::fs::create_dir(&directory).expect("log directory");
+        super::launcher_logs::archive_previous_log(&directory).expect("directory is not a log");
+        assert!(directory.is_dir());
+
+        let extensionless = root.path().join("adapter");
+        std::fs::write(&extensionless, "old").expect("extensionless log");
+        super::launcher_logs::archive_previous_log(&extensionless).expect("archive extensionless log");
+        assert!(!extensionless.exists());
+        assert_eq!(
+            std::fs::read_dir(root.path())
+                .expect("log directory")
+                .filter_map(Result::ok)
+                .filter(|entry| entry.path().is_file())
+                .count(),
+            1
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn graceful_shutdown_signals_a_live_daemon_but_not_unsafe_pids() {
+        let root = tempfile::tempdir().expect("graceful shutdown fixture");
+        let ready = root.path().join("ready");
+        let mut command = Command::new("sh");
+        command
+            .args([
+                "-c",
+                "trap 'exit 0' TERM; : > \"$1\"; while :; do :; done",
+                "sh",
+                ready.to_str().expect("ready path"),
+            ])
+            .process_group(0);
+        let mut child = command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("start graceful shutdown fixture");
+        let _cleanup = ProcessGroupCleanup::for_leader(child.id());
+        for _ in 0..100 {
+            if ready.exists() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(1));
+        }
+        assert!(ready.exists(), "fixture installed its TERM handler");
+
+        daemon_process::request_graceful_shutdown(child.id());
+        assert!(child.wait().expect("reap graceful fixture").success());
+        daemon_process::request_graceful_shutdown(0);
+        daemon_process::request_graceful_shutdown(u32::MAX);
+        daemon_process::request_graceful_shutdown(std::process::id());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[allow(clippy::zombie_processes)]
+    fn daemon_terminate_kills_an_orphaned_term_ignoring_process_group() {
+        let root = tempfile::tempdir().expect("orphaned daemon fixture");
+        let child_pid_file = root.path().join("child.pid");
+        let script = root.path().join("orphaned-daemon.sh");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\n\
+                 trap '' TERM\n\
+                 sleep 100 &\n\
+                 echo $! > '{}'\n\
+                 exit 0\n",
+                child_pid_file.to_string_lossy()
+            ),
+        )
+        .expect("orphaned daemon script");
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
+            .expect("orphaned daemon executable");
+        let mut command = Command::new("sh");
+        command.arg(script).process_group(0);
+        let mut parent = command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("launch orphaned daemon");
+        let parent_pid = parent.id();
+        let _cleanup = ProcessGroupCleanup::for_leader(parent_pid);
+        let child_pid = wait_for_child_pid(&child_pid_file);
+        assert!(parent.wait().expect("reap exited daemon").success());
+
+        daemon_process::terminate(parent_pid);
+        for _ in 0..100 {
+            if !process_alive(child_pid) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!process_alive(child_pid));
+        daemon_process::terminate(std::process::id());
     }
 }

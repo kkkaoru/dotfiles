@@ -2,7 +2,13 @@ use serde_json::{Value, json};
 
 const MAPPED_NAME_PREFIX: &str = "__claudex_agent_batch__:";
 const MARKER_KEY: &str = "claudexAgentBatch";
-pub(super) const MAX_BATCH_SIZE: usize = 40;
+const DEFAULT_MAX_BATCH_SIZE: usize = 40;
+
+pub(super) fn minimum_batch_size() -> usize {
+    crate::parallel_scheduler::ParallelScheduler::shared()
+        .config()
+        .min_parallel_workers
+}
 
 pub(super) struct PendingBatch<'a> {
     pub(super) request_id: &'a Value,
@@ -24,6 +30,8 @@ pub(super) fn original_name(mapped: &str) -> Option<&str> {
 
 pub(super) fn dynamic_tool(tool: &Value, codex_name: &str) -> Option<Value> {
     let original_name = tool.get("name")?.as_str()?;
+    let (minimum, maximum) =
+        effective_batch_range(&crate::parallel_scheduler::ParallelScheduler::shared().config());
     let item_schema = crate::anthropic::agent_effort::tool_schema(
         original_name,
         tool.get("input_schema")
@@ -34,15 +42,32 @@ pub(super) fn dynamic_tool(tool: &Value, codex_name: &str) -> Option<Value> {
         "type":"function",
         "name":codex_name,
         "description":format!(
-            "Required instead of `{original_name}` when launching two or more independent SubAgents. Supply every intended launch in one tasks array; the bridge emits them concurrently in one Claude Code tool round."
+            "Required instead of `{original_name}` when launching at least {minimum} independent SubAgents. Supply every intended launch in one tasks array; the bridge emits them concurrently in one Claude Code tool round."
         ),
         "inputSchema":{
             "type":"object",
-            "properties":{"tasks":{"type":"array","minItems":2,"maxItems":MAX_BATCH_SIZE,"items":item_schema}},
+            "properties":{"tasks":{"type":"array","minItems":minimum,"maxItems":maximum,"items":item_schema}},
             "required":["tasks"],
             "additionalProperties":false
         }
     }))
+}
+
+pub(super) fn maximum_batch_size() -> usize {
+    let (_, maximum) =
+        effective_batch_range(&crate::parallel_scheduler::ParallelScheduler::shared().config());
+    maximum
+}
+
+fn effective_batch_range(config: &crate::parallel_scheduler::SchedulerConfig) -> (usize, usize) {
+    let minimum = config.min_parallel_workers.max(3);
+    // Keep the schema valid even for a manually constructed test configuration
+    // where the requested minimum is larger than the configured upper bound.
+    let maximum = config
+        .max_parallel_workers
+        .min(DEFAULT_MAX_BATCH_SIZE)
+        .max(minimum);
+    (minimum, maximum)
 }
 
 pub(super) fn pending_marker(request_id: Value, index: usize, total: usize) -> Value {
@@ -56,4 +81,49 @@ pub(super) fn pending_batch(value: &Value) -> Option<PendingBatch<'_>> {
         index: marker.get("index")?.as_u64()?.try_into().ok()?,
         total: marker.get("total")?.as_u64()?.try_into().ok()?,
     })
+}
+
+#[cfg(test)]
+// Test-only assertions are excluded from production coverage by the shared
+// coverage gate; the production batch validation remains covered through the
+// session and stream tests.
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn caps_batch_max_to_effective_maximum() {
+        let config = crate::parallel_scheduler::SchedulerConfig {
+            max_parallel_workers: 7,
+            min_parallel_workers: 3,
+            ..Default::default()
+        };
+        let (minimum, maximum) = effective_batch_range(&config);
+        assert_eq!(minimum, 3);
+        assert_eq!(maximum, 7);
+    }
+
+    #[test]
+    fn clamps_batch_max_to_internal_hard_limit() {
+        let config = crate::parallel_scheduler::SchedulerConfig {
+            max_parallel_workers: 99,
+            min_parallel_workers: 3,
+            ..Default::default()
+        };
+        let (_, maximum) = effective_batch_range(&config);
+        assert_eq!(maximum, 40);
+    }
+
+    #[test]
+    fn keeps_schema_max_at_least_as_large_as_schema_minimum() {
+        let config = crate::parallel_scheduler::SchedulerConfig {
+            max_parallel_workers: 3,
+            min_parallel_workers: 8,
+            ..Default::default()
+        };
+        let (minimum, maximum) = effective_batch_range(&config);
+        assert_eq!(minimum, 8);
+        assert_eq!(maximum, 8);
+        assert!(minimum <= maximum);
+    }
 }

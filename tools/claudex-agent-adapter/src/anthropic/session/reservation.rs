@@ -230,12 +230,116 @@ mod tests {
 
     #[tokio::test]
     async fn find_busy_skips_idle_sessions() {
-        // Built via Session construction in session_tests; unit-level here only
-        // documents that try_lock success excludes a candidate from the busy set.
         let gate = Arc::new(Mutex::new(()));
         let _hold = gate.lock().await;
         assert!(gate.clone().try_lock_owned().is_err());
         drop(_hold);
         assert!(gate.try_lock_owned().is_ok());
+    }
+
+    #[tokio::test]
+    async fn reserve_prefers_the_longest_idle_matching_transcript() {
+        let messages = messages();
+        let busy = session_with("main", Some("client"), "signature", messages.clone());
+        let _busy_gate = Arc::clone(&busy.gate).lock_owned().await;
+        let wrong_signature = session_with("main", Some("client"), "other", messages.clone());
+        let longest = session_with("main", Some("client"), "signature", messages.clone());
+        let shortest = session_with("main", Some("client"), "signature", messages[..1].to_vec());
+
+        let selected = reserve_matching_session(
+            vec![wrong_signature, busy, Arc::clone(&longest), shortest],
+            &Arc::from("signature"),
+            &messages,
+        )
+        .await
+        .expect("matching idle session");
+
+        assert!(Arc::ptr_eq(&selected.session, &longest));
+        assert_eq!(selected.existing_len, messages.len());
+    }
+
+    #[tokio::test]
+    async fn busy_selection_skips_idle_sessions_and_keeps_the_longest_match() {
+        let messages = messages();
+        let idle = session_with("main", Some("client"), "signature", messages.clone());
+        let wrong_signature = session_with("main", Some("client"), "other", messages.clone());
+        let shortest = session_with("main", Some("client"), "signature", messages[..1].to_vec());
+        let longest = session_with("main", Some("client"), "signature", messages.clone());
+        let trailing = session_with("main", Some("client"), "signature", messages[..1].to_vec());
+        let _wrong_signature_gate = Arc::clone(&wrong_signature.gate).lock_owned().await;
+        let _shortest_gate = Arc::clone(&shortest.gate).lock_owned().await;
+        let _longest_gate = Arc::clone(&longest.gate).lock_owned().await;
+        let _trailing_gate = Arc::clone(&trailing.gate).lock_owned().await;
+
+        let found = find_busy_matching_session(
+            vec![
+                idle,
+                wrong_signature,
+                shortest,
+                Arc::clone(&longest),
+                trailing,
+            ],
+            &Arc::from("signature"),
+            &messages,
+            Some("main"),
+            Some("client"),
+        )
+        .await
+        .expect("busy matching session");
+
+        assert!(Arc::ptr_eq(&found.0, &longest));
+        assert_eq!(found.1, messages.len());
+    }
+
+    #[tokio::test]
+    async fn busy_fallback_realigns_a_matching_conversation_after_signature_drift() {
+        let messages = messages();
+        let wrong_model = session_with("other", Some("client"), "other", messages.clone());
+        let realigned = session_with(
+            "main",
+            Some("client"),
+            "other",
+            vec![
+                messages[0].clone(),
+                json!({"role":"assistant","content":"stale"}),
+            ],
+        );
+        let equally_good = session_with("main", Some("client"), "other", messages[..1].to_vec());
+        let _wrong_model_gate = Arc::clone(&wrong_model.gate).lock_owned().await;
+        let _realigned_gate = Arc::clone(&realigned.gate).lock_owned().await;
+        let _equally_good_gate = Arc::clone(&equally_good.gate).lock_owned().await;
+
+        let found = find_busy_matching_session(
+            vec![wrong_model, Arc::clone(&realigned), equally_good],
+            &Arc::from("signature"),
+            &messages,
+            Some("main"),
+            Some("client"),
+        )
+        .await
+        .expect("matching busy fallback");
+
+        assert!(Arc::ptr_eq(&found.0, &realigned));
+        assert_eq!(found.1, 1);
+        assert_eq!(*realigned.transcript.lock().await, messages[..1]);
+    }
+
+    fn messages() -> Vec<Value> {
+        vec![
+            json!({"role":"user","content":"first"}),
+            json!({"role":"user","content":"follow-up"}),
+        ]
+    }
+
+    fn session_with(
+        model: &str,
+        client_user_id: Option<&str>,
+        signature: &str,
+        transcript: Vec<Value>,
+    ) -> Arc<Session> {
+        let mut session = session(model, client_user_id);
+        session.signature = Arc::from(signature);
+        session.transcript = Mutex::new(transcript);
+        Arc::new(session)
     }
 }

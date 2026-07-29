@@ -9,6 +9,7 @@ pub mod copilot_acp;
 pub mod coverage_gate;
 pub mod grok_acp;
 pub mod launcher;
+pub mod parallel_scheduler;
 pub mod path_env;
 pub mod provider_config;
 pub mod runtime;
@@ -17,6 +18,7 @@ mod working_directory;
 
 pub const ADAPTER_PROTOCOL_VERSION: u64 = 23;
 pub(crate) const NONINTERACTIVE_CHILD_ENV: &str = "CLAUDEX_NONINTERACTIVE_CHILD";
+/// Legacy gateway aliases remain accepted on requests from older Claude Code sessions.
 pub(crate) const DISCOVERY_MODEL_PREFIX: &str = "claude-claudex-";
 
 use std::sync::Arc;
@@ -39,6 +41,7 @@ pub fn http_router(bridge: Arc<Bridge>, model: String, auth_token: Option<String
     let subscription_max_processes = bridge.subscription_max_processes();
     let subscription_timeout_minutes = bridge.subscription_timeout_minutes();
     let backend_routes = bridge.backend_routes();
+    let worker_routes = bridge.worker_routes();
     let models = bridge.routed_models();
     let protected = Router::new()
         .route(
@@ -48,7 +51,7 @@ pub fn http_router(bridge: Arc<Bridge>, model: String, auth_token: Option<String
                     .into_iter()
                     .map(|model| {
                         json!({
-                            "id":format!("{DISCOVERY_MODEL_PREFIX}{model}"),
+                            "id":model,
                             "type":"model",
                             "display_name":model,
                             "description":"Claudex provider model"
@@ -78,6 +81,7 @@ pub fn http_router(bridge: Arc<Bridge>, model: String, auth_token: Option<String
                         "protocol_version":ADAPTER_PROTOCOL_VERSION,
                         "build_id":env!("CLAUDEX_BUILD_ID"),
                         "backend_routes":backend_routes,
+                        "worker_routes":worker_routes,
                         "started_models":health_bridge.started_models(),
                         "model_concurrency":health_bridge.model_concurrency(),
                         "model":health_model,

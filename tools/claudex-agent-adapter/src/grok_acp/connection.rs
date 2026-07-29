@@ -68,6 +68,24 @@ pub(super) async fn start(
     oneshot::Receiver<()>,
     u32,
 )> {
+    let command = build_provider_command(program, provider, arguments, model)?;
+    let (mut child, process_group) = spawn_provider_process(command, provider, cwd)?;
+    let (connection, io_stopped_rx) =
+        wire_provider_connection(provider, events, &mut child, alive.clone())?;
+    if let Err(error) = initialize(provider, &connection).await {
+        terminate_process_group(process_group);
+        let _ = child.wait().await;
+        return Err(error);
+    }
+    Ok((connection, child, io_stopped_rx, process_group))
+}
+
+fn build_provider_command(
+    program: &OsString,
+    provider: AcpProvider,
+    arguments: Option<&[String]>,
+    model: &str,
+) -> Result<Command> {
     let mut command = Command::new(program);
     // Provider ACP children must not re-run Claude Code SessionStart / routing
     // hooks (Herdr stdin, capacity probes). Grok historically used CLAUDEX_GROK_ACP;
@@ -75,7 +93,6 @@ pub(super) async fn start(
     command.env("CLAUDEX_PROVIDER_ACP", "1");
     match provider {
         AcpProvider::Grok => {
-            // Keep the legacy flag for existing SessionStart guards in settings.
             command.env("CLAUDEX_GROK_ACP", "1");
             command.args(["--model", model, "agent", "--always-approve"]);
             if let Some(path) = plugin::prepare(program)? {
@@ -95,15 +112,21 @@ pub(super) async fn start(
             );
         }
     }
-    // Long-lived daemons may inherit a minimal PATH (for example without ~/.bun/bin).
-    // Configured launches often use `/usr/bin/env qwen ...`, so surface user tool bins.
     command.env("PATH", path_env::tool_search_path());
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt as _;
         command.as_std_mut().process_group(0);
     }
-    let mut child = command
+    Ok(command)
+}
+
+fn spawn_provider_process(
+    mut command: Command,
+    provider: AcpProvider,
+    cwd: &Path,
+) -> Result<(tokio::process::Child, u32)> {
+    let child = command
         .current_dir(cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -114,6 +137,15 @@ pub(super) async fn start(
     let process_group = child
         .id()
         .with_context(|| format!("{} ACP process id is unavailable", provider.label()))?;
+    Ok((child, process_group))
+}
+
+fn wire_provider_connection(
+    provider: AcpProvider,
+    events: Arc<ThreadEventDispatcher>,
+    child: &mut tokio::process::Child,
+    alive: Arc<AtomicBool>,
+) -> Result<(acp::ClientSideConnection, oneshot::Receiver<()>)> {
     let outgoing = child
         .stdin
         .take()
@@ -130,25 +162,18 @@ pub(super) async fn start(
             tokio::task::spawn_local(future);
         });
     let (io_stopped, io_stopped_rx) = oneshot::channel();
+    let provider_label = provider.label();
     tokio::task::spawn_local(async move {
         if let Err(error) = handle_io.await {
-            // EPIPE / broken pipe is common when the Node ACP child exits first.
-            // Surface it clearly so route recycle kicks in instead of hanging turns.
             tracing::error!(
                 ?error,
-                provider = provider.label(),
+                provider = provider_label,
                 "ACP I/O stopped (provider likely exited; recycle the route)"
             );
         }
-        // Mark the provider dead before failed RPCs wake their callers. Otherwise session/new can
-        // observe a closed connection while the driver still appears alive and skip route recovery.
         mark_io_stopped(&alive, io_stopped);
     });
-    if let Err(error) = initialize(provider, &connection).await {
-        terminate_process_group(process_group);
-        return Err(error);
-    }
-    Ok((connection, child, io_stopped_rx, process_group))
+    Ok((connection, io_stopped_rx))
 }
 
 fn mark_io_stopped(alive: &AtomicBool, io_stopped: oneshot::Sender<()>) {

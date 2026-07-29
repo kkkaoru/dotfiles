@@ -2,7 +2,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Result, bail};
 
-use super::daemon_process::{matches as process_matches, terminate};
+use super::daemon_process::{
+    matches as process_matches, request_graceful_shutdown, terminate as force_terminate,
+};
 use super::{ServiceConfig, authenticates, fetch_health};
 
 const LISTENER_RELEASE_POLL_INTERVAL: Duration = Duration::from_millis(25);
@@ -36,7 +38,16 @@ pub(super) async fn release_stale_listener(
     config: &ServiceConfig,
     pid: Option<u32>,
 ) -> Result<()> {
-    release_stale_listener_with(client, config, pid, process_matches, terminate).await
+    release_stale_listener_with(
+        client,
+        config,
+        pid,
+        process_matches,
+        request_graceful_shutdown,
+        force_terminate,
+        Instant::now() + super::START_TIMEOUT,
+    )
+    .await
 }
 
 pub(super) async fn release_stale_listener_with(
@@ -44,7 +55,9 @@ pub(super) async fn release_stale_listener_with(
     config: &ServiceConfig,
     pid: Option<u32>,
     process_matches: impl Fn(u32, &std::path::Path) -> bool,
-    terminate: impl Fn(u32),
+    request_graceful_shutdown: impl Fn(u32),
+    force_terminate: impl Fn(u32),
+    deadline: Instant,
 ) -> Result<()> {
     let Some(pid) = pid else {
         return Ok(());
@@ -53,23 +66,13 @@ pub(super) async fn release_stale_listener_with(
         return Ok(());
     }
     eprintln!("claudex: draining active requests on stale adapter pid {pid} during handover");
-    terminate(pid);
-    wait_until_listener_released(client, config, pid).await?;
+    request_graceful_shutdown(pid);
+    if let Err(error) = wait_until_listener_released_by(client, config, pid, deadline).await {
+        eprintln!("claudex: force-terminating stale adapter pid {pid} after handover timeout");
+        force_terminate(pid);
+        return Err(error);
+    }
     Ok(())
-}
-
-async fn wait_until_listener_released(
-    client: &reqwest::Client,
-    config: &ServiceConfig,
-    stale_pid: u32,
-) -> Result<()> {
-    wait_until_listener_released_by(
-        client,
-        config,
-        stale_pid,
-        Instant::now() + super::START_TIMEOUT,
-    )
-    .await
 }
 
 pub(super) async fn wait_until_listener_released_by(

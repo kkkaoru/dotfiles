@@ -218,8 +218,14 @@ mod tests {
         {
             messages.push(message);
         }
-        // Content-only / location-only patches without terminal status are dropped.
-        assert_eq!(messages.len(), 4);
+        // Location-only patches and content-only updates without status are dropped.
+        assert_eq!(messages.len(), 5);
+        assert!(messages.iter().any(|event| event["params"]["callId"] == "optional-0"));
+        assert!(messages.iter().any(|event| event["params"]["callId"] == "optional-1"));
+        assert!(messages.iter().any(|event| event["params"]["callId"] == "optional-2"));
+        assert!(messages.iter().any(|event| event["params"]["callId"] == "optional-3"));
+        assert!(messages.iter().any(|event| event["params"]["callId"] == "optional-4"));
+        assert!(!messages.iter().any(|event| event["params"]["callId"] == "optional-5"));
         assert!(messages.iter().any(|event| event["params"]["output"] == "output"));
         assert!(messages.iter().any(|event| event["params"]["status"] == "failed"));
         assert!(!messages.iter().any(|event| {

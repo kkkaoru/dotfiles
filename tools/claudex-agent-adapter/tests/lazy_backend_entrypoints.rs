@@ -18,6 +18,21 @@ fn routed_backend_has_no_leaf_kind() {
     AgentBackend::spawn_routes(&[route("model", BackendKind::CodexAppServer)]).kind();
 }
 
+#[test]
+fn fixture_binaries_follow_the_integration_test_target_directory() {
+    let fixture = fixture_binary_path(env!("CARGO_BIN_EXE_codex-mock"));
+    let test_target = std::env::current_exe()
+        .expect("resolve integration test executable")
+        .parent()
+        .and_then(Path::parent)
+        .expect("resolve integration test target directory")
+        .to_path_buf();
+
+    assert_eq!(fixture.parent(), Some(test_target.as_path()));
+    assert_eq!(fixture.file_name(), Some("codex-mock".as_ref()));
+    assert!(fixture.is_file());
+}
+
 #[tokio::test]
 async fn lazy_routes_cover_provider_entry_points_and_failed_startup_state() {
     let (home, codex_spawns) = provider_home();
@@ -56,6 +71,7 @@ async fn lazy_routes_cover_provider_entry_points_and_failed_startup_state() {
     exercise_provider_restart(home.path()).await;
     exercise_nonfatal_session_failure(home.path()).await;
     exercise_failed_route_health().await;
+    backend.shutdown().await;
     drop(home);
 }
 
@@ -109,7 +125,7 @@ fn provider_home() -> (tempfile::TempDir, PathBuf) {
         &codex_wrapper,
         format!(
             "#!/bin/sh\nprintf 'spawn\\n' >> \"$HOME/codex-spawns\"\nexec \"{}\" \"$@\"\n",
-            env!("CARGO_BIN_EXE_codex-mock")
+            fixture_binary_path(env!("CARGO_BIN_EXE_codex-mock")).display()
         ),
     )
     .expect("write Codex spawn-counting wrapper");
@@ -121,12 +137,39 @@ fn provider_home() -> (tempfile::TempDir, PathBuf) {
         std::env::set_var("CLAUDEX_CODEX_PROGRAM", &codex_wrapper);
         std::env::set_var(
             "CLAUDEX_COPILOT_PROGRAM",
-            env!("CARGO_BIN_EXE_grok-acp-mock"),
+            fixture_binary_path(env!("CARGO_BIN_EXE_grok-acp-mock")),
         );
-        std::env::set_var("CLAUDEX_GROK_PROGRAM", env!("CARGO_BIN_EXE_grok-acp-mock"));
+        std::env::set_var(
+            "CLAUDEX_GROK_PROGRAM",
+            fixture_binary_path(env!("CARGO_BIN_EXE_grok-acp-mock")),
+        );
     }
     std::env::set_current_dir(home.path()).expect("isolate Grok ACP trace output");
     (home, codex_spawns)
+}
+
+fn fixture_binary_path(cargo_binary: &str) -> PathBuf {
+    let cargo_binary = Path::new(cargo_binary);
+    let filename = cargo_binary
+        .file_name()
+        .expect("fixture binary path has a file name");
+    let alongside_test = std::env::current_exe()
+        .expect("resolve integration test executable")
+        .parent()
+        .and_then(Path::parent)
+        .map(|directory| directory.join(filename));
+    if let Some(path) = alongside_test.as_ref().filter(|path| path.is_file()) {
+        return path.to_path_buf();
+    }
+    assert!(
+        cargo_binary.is_file(),
+        "fixture binary is unavailable beside the test executable ({}) or at Cargo's path ({})",
+        alongside_test
+            .as_deref()
+            .map_or("<unknown>".to_owned(), |path| path.display().to_string()),
+        cargo_binary.display(),
+    );
+    cargo_binary.to_path_buf()
 }
 
 async fn exercise_initial_provider_routes(backend: &Arc<AgentBackend>, codex_spawns: &Path) {
@@ -186,7 +229,7 @@ async fn exercise_dynamic_route() {
         dynamic_only
             .request(
                 "thread/start",
-                json!({"model":format!("dynamic-only-{index}")}),
+                json!({ "model": format!("dynamic-only-{index}") }),
             )
             .await
             .expect("fill dynamic route capacity");

@@ -2,18 +2,35 @@ use std::{fs, os::unix::fs::PermissionsExt, process::Command};
 
 #[test]
 fn fish_launcher_uses_the_shared_provider_config() {
+    let home = shared_provider_fixture();
+    let function = launcher_function();
+    assert_shared_provider_default(&function, &home);
+    assert_no_argument_launch(&function, &home);
+    assert_explicit_override(&function, &home);
+    assert_explicit_agent_is_preserved(&function, &home);
+    assert_routing_marker_is_scoped_to_claudex(&function, &home);
+    assert_local_defaults(&function, &home);
+}
+
+fn shared_provider_fixture() -> tempfile::TempDir {
     let home = tempfile::tempdir().expect("temporary launcher home");
     fs::create_dir_all(home.path().join(".config/claudex")).expect("provider config directory");
     fs::create_dir_all(home.path().join(".local/bin")).expect("adapter directory");
+    fs::create_dir_all(home.path().join(".claude")).expect("settings directory");
     fs::write(
         home.path().join(".config/claudex/providers.json"),
         "{\"version\":1,\"mainProviders\":[\"p\"],\"providers\":[{\"id\":\"p\",\"agent\":\"worker\",\"defaultModel\":\"model\",\"subagentModel\":\"worker-model\",\"effort\":\"high\",\"backend\":\"codex-app-server\"}],\"fallback\":{\"agent\":\"fallback\",\"model\":\"sonnet\",\"effort\":\"high\"}}",
     )
     .expect("Grok config");
+    fs::write(
+        home.path().join(".claude/settings.json"),
+        "{\"model\":\"sonnet[1m]\",\"effortLevel\":\"high\"}",
+    )
+    .expect("temporary settings file");
     let adapter = home.path().join(".local/bin/claudex-agent-adapter");
     fs::write(
         &adapter,
-        "#!/bin/sh\nprintf 'CLAUDEX_ACTIVE=%s\\n' \"${CLAUDEX_ACTIVE:-}\"\nprintf 'CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=%s\\n' \"${CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY:-}\"\nprintf 'CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS=%s\\n' \"${CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS:-}\"\nprintf '%s\\n' \"$@\"\n",
+        "#!/bin/sh\nprintf 'CLAUDEX_ACTIVE=%s\\n' \"${CLAUDEX_ACTIVE:-}\"\nprintf 'CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=%s\\n' \"${CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY:-}\"\nprintf 'CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS=%s\\n' \"${CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS:-}\"\nprintf 'CLAUDE_CODE_ALWAYS_ENABLE_EFFORT=%s\\n' \"${CLAUDE_CODE_ALWAYS_ENABLE_EFFORT:-}\"\nprintf '%s\\n' \"$@\"\n",
     )
     .expect("fake adapter");
     let mut permissions = fs::metadata(&adapter)
@@ -21,9 +38,15 @@ fn fish_launcher_uses_the_shared_provider_config() {
         .permissions();
     permissions.set_mode(0o755);
     fs::set_permissions(&adapter, permissions).expect("executable fake adapter");
+    home
+}
 
-    let function = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../.config/fish/functions/claudex.fish");
+fn launcher_function() -> std::path::PathBuf {
+    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../.config/fish/functions/claudex.fish")
+}
+
+fn assert_shared_provider_default(function: &std::path::Path, home: &tempfile::TempDir) {
     let output = Command::new("fish")
         .args([
             "-c",
@@ -46,11 +69,13 @@ fn fish_launcher_uses_the_shared_provider_config() {
     assert!(arguments.contains("CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS=40\n"));
     assert!(arguments.contains(".config/claudex/providers.json\n"));
     assert!(arguments.contains("--model\nmodel\n"));
-    assert!(arguments.contains("--subscription-max-processes\n40\n"));
+    assert!(arguments.contains("--inherit-claude-model\n"));
+    assert!(arguments.contains("--subscription-max-processes\n20\n"));
     assert!(arguments.ends_with("--\nsmoke\n"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("settings sonnet[1m], high"));
+}
 
-    assert_no_argument_launch(&function, &home);
-
+fn assert_explicit_override(function: &std::path::Path, home: &tempfile::TempDir) {
     let alternate = home.path().join("alternate-providers.json");
     fs::write(&alternate, "{\"version\":1}").expect("alternate config");
     let output = Command::new("fish")
@@ -72,10 +97,117 @@ fn fish_launcher_uses_the_shared_provider_config() {
     assert!(arguments.contains(&format!("--provider-config\n{}\n", alternate.display())));
     assert!(arguments.contains("--model\nvendor-model\n"));
     assert!(!arguments.contains("--inherit-claude-model\n"));
-    assert!(arguments.ends_with("--\noverride-smoke\n"));
+    assert!(arguments.contains("--effort\nhigh\n"));
+    assert!(arguments.ends_with("--\n--effort\nhigh\noverride-smoke\n"));
+}
 
-    assert_explicit_agent_is_preserved(&function, &home);
-    assert_routing_marker_is_scoped_to_claudex(&function, &home);
+fn assert_local_defaults(function: &std::path::Path, home: &tempfile::TempDir) {
+    fs::write(
+        home.path().join(".config/claudex/defaults.local.json"),
+        "{\"version\":1,\"source\":\"explicit\",\"model\":\"gpt-local\",\"effort\":\"low\"}",
+    )
+    .expect("explicit defaults");
+    let output = Command::new("fish")
+        .args([
+            "-c",
+            &format!(
+                "source '{}'; claudex local-default-smoke",
+                function.display()
+            ),
+        ])
+        .env("HOME", home.path())
+        .env_remove("CLAUDEX_MODEL")
+        .env_remove("CLAUDEX_EFFORT")
+        .output()
+        .expect("run explicit defaults fish launcher");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let arguments = String::from_utf8(output.stdout).expect("UTF-8 explicit defaults arguments");
+    assert!(arguments.contains("--model\ngpt-local\n"));
+    assert!(arguments.contains("--effort\nlow\n"));
+    assert!(!arguments.contains("--inherit-claude-model\n"));
+
+    fs::write(
+        home.path().join(".config/claudex/defaults.local.json"),
+        "{\"version\":1,\"source\":\"unsupported\",\"model\":\"gpt-local\",\"effort\":\"low\"}",
+    )
+    .expect("invalid defaults");
+    let output = Command::new("fish")
+        .args([
+            "-c",
+            &format!(
+                "source '{}'; claudex invalid-default-smoke",
+                function.display()
+            ),
+        ])
+        .env("HOME", home.path())
+        .env_remove("CLAUDEX_MODEL")
+        .env_remove("CLAUDEX_EFFORT")
+        .output()
+        .expect("run invalid defaults fish launcher");
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("source must be `explicit` or `settings`")
+    );
+}
+
+#[test]
+fn fish_launcher_uses_claude_settings_model_and_effort_when_available() {
+    let home = tempfile::tempdir().expect("temporary settings launcher home");
+    fs::create_dir_all(home.path().join(".local/bin")).expect("adapter directory");
+    fs::create_dir_all(home.path().join(".claude")).expect("settings directory");
+    fs::create_dir_all(home.path().join(".config/claudex")).expect("provider config directory");
+    fs::write(
+        home.path().join(".claude/settings.json"),
+        "{\"model\":\"sonnet[1m]\",\"effortLevel\":\"high\"}",
+    )
+    .expect("fixture settings");
+    fs::write(
+        home.path().join(".config/claudex/providers.json"),
+        "{\"version\":1,\"mainProviders\":[\"p\"],\"providers\":[{\"id\":\"p\",\"agent\":\"worker\",\"defaultModel\":\"provider-model\",\"subagentModel\":\"worker-model\",\"effort\":\"high\",\"backend\":\"codex-app-server\"}],\"fallback\":{\"agent\":\"fallback\",\"model\":\"sonnet\",\"effort\":\"high\"}}",
+    )
+    .expect("fixture provider config");
+    let adapter = home.path().join(".local/bin/claudex-agent-adapter");
+    fs::write(
+        &adapter,
+        "#!/bin/sh\nprintf 'CLAUDE_CODE_ALWAYS_ENABLE_EFFORT=%s\\n' \"${CLAUDE_CODE_ALWAYS_ENABLE_EFFORT:-}\"\nprintf '%s\\n' \"$@\"\n",
+    )
+    .expect("fake adapter");
+    let mut permissions = fs::metadata(&adapter)
+        .expect("fake adapter metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&adapter, permissions).expect("executable fake adapter");
+
+    let function = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../.config/fish/functions/claudex.fish");
+    let output = Command::new("fish")
+        .args([
+            "-c",
+            &format!("source '{}'; claudex settings-smoke", function.display()),
+        ])
+        .env("HOME", home.path())
+        .env_remove("CLAUDEX_MODEL")
+        .env_remove("CLAUDEX_PROVIDER_CONFIG")
+        .output()
+        .expect("run fish launcher with settings");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let arguments = String::from_utf8(output.stdout).expect("UTF-8 settings launcher arguments");
+    assert!(arguments.contains("--model\nprovider-model\n"));
+    assert!(arguments.contains("--inherit-claude-model\n"));
+    assert!(arguments.contains(&format!(
+        "--provider-config\n{}\n",
+        home.path().join(".config/claudex/providers.json").display()
+    )));
+    assert!(arguments.ends_with("--\nsettings-smoke\n"));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("settings sonnet[1m], high"));
 }
 
 #[test]
@@ -86,7 +218,21 @@ fn fish_config_sets_the_plain_claude_subagent_limit() {
     assert!(
         config
             .lines()
-            .any(|line| line == "set -gx CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS 40")
+            .any(|line| line.contains("CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS"))
+    );
+    assert!(
+        config
+            .lines()
+            .any(|line| line.contains("or set -gx CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS 40"))
+    );
+    assert!(
+        config.lines().any(|line| {
+            line.contains(
+            "set -q CLAUDEX_SUBAGENT_MAX_PARALLEL; and set -gx CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS"
+        )
+        }) || config.lines().any(|line| line.contains(
+            "set -q CLAUDEX_SUBAGENT_MAX_PARALLEL; or set -gx CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS"
+        ))
     );
 }
 
@@ -165,11 +311,14 @@ fn explicit_subagent_models_and_fallback_match_worker_definitions() {
 }
 
 #[test]
-fn every_subagent_inherits_the_main_tool_and_permission_context() {
+fn every_non_advisor_subagent_inherits_the_main_tool_and_permission_context() {
     let agents = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.claude/agents");
     for entry in fs::read_dir(agents).expect("Claude agent definitions") {
         let path = entry.expect("agent directory entry").path();
         if path.extension().and_then(std::ffi::OsStr::to_str) != Some("md") {
+            continue;
+        }
+        if path.file_name().and_then(std::ffi::OsStr::to_str) == Some("custom-advisor.md") {
             continue;
         }
         let definition = fs::read_to_string(&path).expect("Claude agent definition");
@@ -193,6 +342,43 @@ fn every_subagent_inherits_the_main_tool_and_permission_context() {
             path.display()
         );
     }
+}
+
+#[test]
+fn custom_advisor_has_an_explicit_isolated_peer_messaging_channel() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../.claude/agents/custom-advisor.md");
+    let definition = fs::read_to_string(&path).expect("custom advisor definition");
+    let frontmatter = definition
+        .lines()
+        .skip(1)
+        .take_while(|line| *line != "---")
+        .collect::<Vec<_>>();
+    let tool_lines = frontmatter
+        .iter()
+        .filter(|line| line.starts_with("tools:"))
+        .copied()
+        .collect::<Vec<_>>();
+
+    assert_eq!(tool_lines, ["tools: SendMessage"]);
+    for forbidden_field in ["disallowedTools:", "permissionMode:"] {
+        assert!(
+            !frontmatter
+                .iter()
+                .any(|line| line.starts_with(forbidden_field)),
+            "custom-advisor must declare only its SendMessage channel, not {forbidden_field}"
+        );
+    }
+    assert!(
+        definition.contains("deliberate exception to normal worker inheritance"),
+        "custom-advisor must document why it does not inherit worker tools"
+    );
+    assert!(
+        definition.contains("only tool is")
+            && definition.contains("`SendMessage`")
+            && definition.contains("peer-advisory channel"),
+        "custom-advisor must document its isolated peer-messaging channel"
+    );
 }
 
 fn assert_qwen_runtime_is_bounded(root: &std::path::Path, config: &serde_json::Value) {

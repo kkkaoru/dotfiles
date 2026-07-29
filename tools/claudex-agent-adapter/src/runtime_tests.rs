@@ -44,6 +44,10 @@ mod tests {
                 "invalid backend route JSON",
             ),
             (
+                vec!["serve", "--model", "m", "--worker-route-json", "invalid"],
+                "invalid worker route JSON",
+            ),
+            (
                 vec!["serve", "--provider-config", "/definitely/missing/providers.json"],
                 "read provider config",
             ),
@@ -128,6 +132,8 @@ mod tests {
                 "grok-4.5",
                 "--backend-route",
                 "grok-4.5=grok-acp",
+                "--worker-route-json",
+                r#"{"agent":"claudex-grok","model":"grok-4.5","effort":"high"}"#,
                 "--listen",
                 "127.0.0.1:9000",
                 "--subscription-max-processes",
@@ -146,6 +152,10 @@ mod tests {
         assert_eq!(options.listen, "127.0.0.1:9000".parse().unwrap());
         assert_eq!(options.subscription_max_processes, 3);
         assert_eq!(options.subscription_timeout_minutes, 4);
+        assert_eq!(
+            options.model_catalog.worker_fields("claudex-grok"),
+            Some(("grok-4.5", "high"))
+        );
 
         let launch = parse_command(
             [
@@ -161,7 +171,9 @@ mod tests {
             .collect(),
         )
         .expect("valid launch command");
-        assert!(matches!(launch, RuntimeCommand::Launch(_, _, true)));
+        let RuntimeCommand::Launch(_, _, true) = launch else {
+            panic!("launch command expected");
+        };
         assert!(matches!(
             parse_command(
                 ["ensure", "--model", "m"]
@@ -172,6 +184,47 @@ mod tests {
             .expect("valid ensure command"),
             RuntimeCommand::Ensure(_)
         ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn parses_provider_defaults_and_rejects_non_utf8_option_names() {
+        use std::os::unix::ffi::OsStringExt;
+
+        let root = tempfile::tempdir().expect("provider config fixture");
+        let path = root.path().join("providers.json");
+        std::fs::write(
+            &path,
+            r#"{"version":1,"mainProviders":["vendor"],"providers":[{"id":"vendor","agent":"worker","defaultModel":"vendor-default","effort":"high","modelPrefixes":["vendor-"],"backend":"configured-acp","acp":{"program":"vendor","arguments":["--model","{model}"]}}],"fallback":{"agent":"fallback","model":"sonnet","effort":"high"}}"#,
+        )
+        .expect("provider config");
+        let command = parse_command(
+            [
+                OsString::from("serve"),
+                OsString::from("--provider-config"),
+                path.into_os_string(),
+            ]
+            .into_iter()
+            .collect(),
+        )
+        .expect("provider configuration supplies the main model");
+        let RuntimeCommand::Serve(options) = command else {
+            panic!("serve command expected");
+        };
+        assert_eq!(options.model, "vendor-default");
+
+        let error = parse_command(
+            [
+                OsString::from("serve"),
+                OsString::from("--model"),
+                OsString::from("model"),
+                OsString::from_vec(vec![0xff]),
+            ]
+            .into_iter()
+            .collect(),
+        )
+        .expect_err("non-UTF-8 option must fail");
+        assert!(error.to_string().contains("valid UTF-8"));
     }
 
     #[test]
@@ -241,7 +294,7 @@ mod tests {
             .await
             .expect("listener");
         let listen = listener.local_addr().expect("listener address");
-        let options = AdapterOptions {
+        let mut options = AdapterOptions {
             routes: vec![BackendRoute::new("model", BackendKind::CodexAppServer)],
             model: "model".to_owned(),
             listen,
@@ -249,6 +302,14 @@ mod tests {
             subscription_timeout_minutes: 3,
             model_catalog: crate::provider_config::ModelCatalog::default(),
         };
+        options
+            .model_catalog
+            .set_worker_routes(vec![crate::provider_config::WorkerRoute {
+                agent: "worker".to_owned(),
+                model: "model".to_owned(),
+                effort: "high".to_owned(),
+            }])
+            .expect("worker route");
         let backend = AgentBackend::codex(app_server);
         let server = tokio::spawn(serve_on_listener(options, None, backend, listener));
         let health = Client::new()
@@ -257,6 +318,13 @@ mod tests {
             .await
             .expect("health response");
         assert!(health.status().is_success());
+        assert_eq!(
+            health
+                .json::<serde_json::Value>()
+                .await
+                .expect("health JSON")["worker_routes"][0],
+            r#"{"agent":"worker","model":"model","effort":"high"}"#
+        );
         server.abort();
     }
 

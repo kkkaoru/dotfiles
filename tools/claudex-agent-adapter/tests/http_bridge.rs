@@ -22,6 +22,23 @@ fn lookup_tools() -> Value {
     }])
 }
 
+async fn wait_for_session_slot_release(client: &Client, adapter: &Adapter) {
+    loop {
+        let health: Value = client
+            .get(format!("{}/health", adapter.base_url))
+            .send()
+            .await
+            .expect("read adapter health while draining")
+            .json()
+            .await
+            .expect("decode adapter health while draining");
+        if health["session_slots_used"] == 0 {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
 #[tokio::test]
 async fn authenticates_protected_routes_but_keeps_health_public() {
     let adapter = Adapter::start_authenticated("test-secret").await;
@@ -73,6 +90,20 @@ async fn authenticates_protected_routes_but_keeps_health_public() {
 }
 
 #[tokio::test]
+async fn rejects_an_invalid_disabled_subagent_model_header() {
+    let adapter = Adapter::start().await;
+    let response = Client::new()
+        .post(messages_url(&adapter))
+        .header("x-claudex-disabled-subagent-models", "model with spaces")
+        .json(&base_request())
+        .send()
+        .await
+        .expect("send invalid policy header");
+
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn serves_models_counts_plain_messages_and_continuations() {
     let adapter = Adapter::start().await;
     let client = Client::new();
@@ -84,7 +115,7 @@ async fn serves_models_counts_plain_messages_and_continuations() {
         .json()
         .await
         .expect("decode models");
-    assert_eq!(models["data"][0]["id"], "claude-claudex-test-main-model");
+    assert_eq!(models["data"][0]["id"], "test-main-model");
     assert_eq!(models["data"][0]["display_name"], "test-main-model");
     assert!(
         models["data"]
@@ -92,7 +123,7 @@ async fn serves_models_counts_plain_messages_and_continuations() {
             .expect("model list")
             .iter()
             .filter_map(|model| model["id"].as_str())
-            .any(|id| id == "claude-claudex-test-main-model")
+            .any(|id| id == "test-main-model")
     );
     assert!(
         models["data"]
@@ -301,6 +332,51 @@ async fn drains_a_non_cancellable_codex_turn_after_stream_disconnect() {
         &messages_url(&adapter),
         json!({
             "model":"test-main-model", "system":"Disconnect drain report",
+            "messages":[{"role":"user","content":"REPORT_DISCONNECT_DRAIN"}]
+        }),
+    )
+    .await;
+    assert_eq!(report["content"][0]["text"], "CODEX_DISCONNECT_DRAINED");
+}
+
+#[tokio::test]
+async fn releases_the_session_slot_while_a_disconnected_codex_turn_drains() {
+    let adapter = Adapter::start().await;
+    let client = Client::new();
+    let mut response = client
+        .post(messages_url(&adapter))
+        .json(&json!({
+            "model":"test-main-model", "stream":true, "system":"Slow disconnect drain test",
+            "tools":lookup_tools(),
+            "messages":[{"role":"user","content":adapter.codex_slow_disconnect_prompt()}]
+        }))
+        .send()
+        .await
+        .expect("start slow Codex stream");
+    let mut stream = String::new();
+    while !stream.contains("DISCONNECT_READY") {
+        let chunk = response
+            .chunk()
+            .await
+            .expect("read slow disconnect stream")
+            .expect("stream ended before disconnect marker");
+        stream.push_str(&String::from_utf8_lossy(&chunk));
+    }
+    drop(response);
+
+    tokio::time::timeout(
+        Duration::from_millis(300),
+        wait_for_session_slot_release(&client, &adapter),
+    )
+    .await
+    .expect("disconnect must release the session slot before the slow tool event");
+
+    adapter.wait_for_codex_disconnect_drain().await;
+    let report = post_json(
+        &client,
+        &messages_url(&adapter),
+        json!({
+            "model":"test-main-model", "system":"Slow disconnect drain report",
             "messages":[{"role":"user","content":"REPORT_DISCONNECT_DRAIN"}]
         }),
     )

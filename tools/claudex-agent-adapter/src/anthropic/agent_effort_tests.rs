@@ -30,6 +30,30 @@ mod tests {
         }
     }
 
+    impl AgentEffortIntents {
+        fn record(
+            &self,
+            client_user_id: Option<&str>,
+            tool_name: &str,
+            tool_use_id: String,
+            parent_model: &str,
+            arguments: &serde_json::Value,
+        ) {
+            self.record_from_user_messages(
+                AgentEffortRecord {
+                    client_user_id,
+                    tool_name,
+                    tool_use_id,
+                    parent_model,
+                    arguments,
+                    user_messages: &[],
+                    system: &json!(null),
+                },
+                None,
+            );
+        }
+    }
+
     fn explicit(effort: AgentEffort) -> String {
         match effort {
             AgentEffort::Explicit(value) => value,
@@ -197,6 +221,113 @@ mod tests {
     }
 
     #[test]
+    fn plain_launch_id_matches_each_concurrent_background_agent() {
+        let intents = AgentEffortIntents::default();
+        for (tool_use_id, effort) in [("tool-first", "low"), ("tool-second", "xhigh")] {
+            let (arguments, _) = prepare_arguments(
+                "Agent",
+                tool_use_id,
+                &json!({"prompt":"parallel work", "claudex_effort":effort}),
+            );
+            intents.record(
+                Some("session"),
+                "Agent",
+                tool_use_id.to_owned(),
+                "main-model",
+                &arguments.expect("correlated Agent intent"),
+            );
+        }
+
+        let request = request(
+            "session",
+            "work payload\nclaudex_launch_id: tool-second",
+            true,
+        );
+        assert_eq!(explicit(intents.take(&request).effort), "xhigh");
+    }
+
+    #[test]
+    fn restores_correlated_launch_intents_after_adapter_handover() {
+        let root = tempfile::tempdir().expect("intent journal directory");
+        let path = root.path().join("agent-intents.json");
+        let (arguments, _) = prepare_arguments(
+            "Agent",
+            "tool-handover",
+            &json!({
+                "prompt":"resume this worker", "claudex_model":"grok-4.5",
+                "claudex_effort":"xhigh"
+            }),
+        );
+        let arguments = arguments.expect("correlated Agent intent");
+        let user_messages = [json!({
+            "role":"user", "content":"Use grok-4.5 for this SubAgent"
+        })];
+        AgentEffortIntents::with_store(path.clone()).record_from_user_messages(
+            AgentEffortRecord {
+                client_user_id: Some("outer-session"),
+                tool_name: "Agent",
+                tool_use_id: "tool-handover".to_owned(),
+                parent_model: "main-model",
+                arguments: &arguments,
+                user_messages: &user_messages,
+                system: &json!(null),
+            },
+            None,
+        );
+
+        let restored = AgentEffortIntents::with_store(path);
+        let intent = restored.take(&request_without_user_id(
+            arguments["prompt"].as_str().expect("correlated prompt"),
+        ));
+        assert!(intent.matched);
+        assert_eq!(intent.model_override.as_deref(), Some("grok-4.5"));
+        assert_eq!(explicit(intent.effort), "xhigh");
+    }
+
+    #[test]
+    fn recovers_a_unique_correlated_intent_after_context_compaction() {
+        let intents = AgentEffortIntents::default();
+        let (arguments, _) = prepare_arguments(
+            "Agent",
+            "tool-compacted",
+            &json!({"prompt":"large worker", "claudex_effort":"high"}),
+        );
+        intents.record(
+            Some("outer-session"),
+            "Agent",
+            "tool-compacted".to_owned(),
+            "main-model",
+            &arguments.expect("correlated Agent arguments"),
+        );
+        let intent = intents.take(&request("outer-session", "retained suffix only", true));
+        assert!(intent.matched);
+        assert_eq!(explicit(intent.effort), "high");
+    }
+
+    #[test]
+    fn does_not_guess_between_multiple_compacted_correlations() {
+        let intents = AgentEffortIntents::default();
+        for id in ["tool-compacted-a", "tool-compacted-b"] {
+            let (arguments, _) = prepare_arguments(
+                "Agent",
+                id,
+                &json!({"prompt":id, "claudex_effort":"high"}),
+            );
+            intents.record(
+                Some("outer-session"),
+                "Agent",
+                id.to_owned(),
+                "main-model",
+                &arguments.expect("correlated Agent arguments"),
+            );
+        }
+        assert!(matches!(
+            intents.take(&request("outer-session", "retained suffix only", true)).effort,
+            AgentEffort::Unmatched
+        ));
+    }
+
+    #[test]
     fn correlated_intent_survives_time_and_refreshes_lru() {
         assert_eq!(super::INTENT_TTL, std::time::Duration::from_secs(10 * 60));
         let intents = AgentEffortIntents::default();
@@ -333,6 +464,87 @@ mod tests {
         assert_ne!(internal.get("claudex_model"), Some(&json!("sonnet")));
         assert!(public.get("model").is_none());
         assert!(public.get("claudex_model").is_none());
+    }
+
+    #[test]
+    fn hydrates_and_authorizes_a_configured_worker_without_proxy_fields() {
+        let root = tempfile::tempdir().expect("provider config directory");
+        let path = root.path().join("providers.json");
+        std::fs::write(
+            &path,
+            r#"{"version":1,"mainProviders":["grok"],"providers":[{"id":"grok","agent":"claudex-grok","defaultModel":"grok-4.5","effort":"high","backend":"grok-acp"}],"fallback":{"agent":"claudex-sonnet","model":"claude-sonnet-5","effort":"high"}}"#,
+        )
+        .expect("write provider config");
+        let catalog = crate::provider_config::load(&path)
+            .expect("load provider config")
+            .model_catalog;
+        let mut arguments = json!({"subagent_type":"claudex-grok","prompt":"research"});
+
+        super::super::agent_routing::hydrate_routing_fields_from_context(
+            &mut arguments,
+            &[],
+            &json!(null),
+            &catalog,
+        );
+
+        assert_eq!(arguments["claudex_model"], "grok-4.5");
+        assert_eq!(arguments["claudex_effort"], "high");
+        super::validate_routed_agent_arguments_with_catalog(
+            "Agent",
+            &arguments,
+            &[],
+            &json!(null),
+            &catalog,
+        )
+        .expect("configured worker must be authorized");
+        let (intent_arguments, _) = prepare_arguments("Agent", "tool-configured", &arguments);
+        let intent_arguments = intent_arguments.expect("configured Agent intent");
+        let intents = AgentEffortIntents::default();
+        intents.record_from_user_messages(
+            AgentEffortRecord {
+                client_user_id: None,
+                tool_name: "Agent",
+                tool_use_id: "tool-configured".to_owned(),
+                parent_model: "parent-model",
+                arguments: &intent_arguments,
+                user_messages: &[],
+                system: &json!(null),
+            },
+            Some(&catalog),
+        );
+        assert_eq!(
+            intents
+                .take(&request_without_user_id(
+                    intent_arguments["prompt"].as_str().expect("correlated prompt"),
+                ))
+                .model_override
+                .as_deref(),
+            Some("grok-4.5")
+        );
+    }
+
+    #[test]
+    fn standard_agent_types_inherit_only_the_parent_model() {
+        let mut arguments = json!({"subagent_type":"Explore","prompt":"inspect"});
+        super::super::agent_routing::hydrate_standard_agent_to_parent(
+            &mut arguments,
+            "claude-sonnet-5",
+        );
+        assert_eq!(arguments["claudex_model"], "claude-sonnet-5");
+        assert!(super::super::agent_routing::model_is_authorized_with_catalog(
+            &arguments,
+            &[],
+            &json!(null),
+            &crate::provider_config::ModelCatalog::default(),
+            "claude-sonnet-5",
+        ));
+
+        let mut routed = json!({"subagent_type":"claudex-gpt"});
+        super::super::agent_routing::hydrate_standard_agent_to_parent(
+            &mut routed,
+            "claude-sonnet-5",
+        );
+        assert!(routed.get("claudex_model").is_none());
     }
 
     #[test]
@@ -478,6 +690,7 @@ mod tests {
                     user_messages: &user_messages,
                     system: &json!(null),
                 },
+                None,
             );
             let intent = intents.take(&request_without_user_id(
                 explicit["prompt"].as_str().expect("explicit prompt"),
@@ -527,6 +740,7 @@ mod tests {
                     user_messages: &user_messages,
                     system: &json!(null),
                 },
+                None,
             );
             let intent = intents.take(&request_without_user_id(
                 arguments["prompt"].as_str().expect("correlated prompt"),
@@ -571,12 +785,71 @@ mod tests {
                     })],
                     system: &json!(null),
                 },
+                None,
             );
             let intent = intents.take(&request_without_user_id(
                 arguments["prompt"].as_str().expect("correlated prompt"),
             ));
             assert_eq!(intent.model_override.as_deref(), expected);
         }
+    }
+
+    #[test]
+    fn authorizes_only_the_configured_custom_advisor_model() {
+        let routing = r#"Claudex routing for this turn: {"providers":{},"selected_workers":[],"advisor":{"agent":"custom-advisor","model":"claude-fable-5","effort":"xhigh"},"custom_advisor_enabled":true} mandatory policy"#;
+        let messages = [json!({
+            "role":"user",
+            "content":format!("Review this decision\n{routing}")
+        })];
+
+        assert!(validate_routed_agent_arguments(
+            "Agent",
+            &json!({
+                "subagent_type":"custom-advisor",
+                "claudex_model":"claude-fable-5"
+            }),
+            &messages,
+            &json!(null),
+        )
+        .is_ok());
+
+        for rejected in [
+            json!({
+                "subagent_type":"custom-advisor",
+                "claudex_model":"claude-sonnet-5"
+            }),
+            json!({
+                "subagent_type":"general-purpose",
+                "claudex_model":"claude-fable-5"
+            }),
+        ] {
+            assert!(validate_routed_agent_arguments(
+                "Task",
+                &rejected,
+                &messages,
+                &json!(null),
+            )
+            .is_err());
+        }
+
+        let disabled_routing = r#"Claudex routing for this turn: {"providers":{},"selected_workers":[],"advisor":{"agent":"custom-advisor","model":"claude-fable-5","effort":"xhigh"},"custom_advisor_enabled":false} mandatory policy"#;
+        let disabled_messages = [json!({
+            "role":"user",
+            "content":format!("Use claude-fable-5 for this review.
+{disabled_routing}")
+        })];
+        assert!(
+            validate_routed_agent_arguments(
+                "Agent",
+                &json!({
+                    "subagent_type":"custom-advisor",
+                    "claudex_model":"claude-fable-5"
+                }),
+                &disabled_messages,
+                &json!(null),
+            )
+            .is_err()
+        );
     }
 
     #[test]

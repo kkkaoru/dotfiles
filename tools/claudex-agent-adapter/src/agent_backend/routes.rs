@@ -8,6 +8,10 @@ use anyhow::{Context, Result, bail};
 use super::{AgentBackend, BackendKind, BackendRoute};
 
 mod concurrency;
+mod shutdown;
+mod startup;
+
+use startup::start_backend;
 
 const MAX_DYNAMIC_ROUTES: usize = 32;
 
@@ -25,7 +29,7 @@ struct BackendStartup {
 }
 
 #[derive(Clone)]
-enum StartupState {
+pub(super) enum StartupState {
     Starting,
     Ready(Result<Arc<AgentBackend>, Arc<str>>),
 }
@@ -369,17 +373,6 @@ fn provider_startup(kind: BackendKind, codex_startup: &Arc<BackendStartup>) -> A
             Arc::new(BackendStartup::default())
         }
     }
-}
-
-fn start_backend(route: BackendRoute) -> tokio::sync::watch::Receiver<StartupState> {
-    let (sender, receiver) = tokio::sync::watch::channel(StartupState::Starting);
-    tokio::spawn(async move {
-        let result = AgentBackend::spawn_route(&route)
-            .await
-            .map_err(|error| Arc::<str>::from(format!("{error:#}")));
-        sender.send_replace(StartupState::Ready(result));
-    });
-    receiver
 }
 
 #[cfg(test)]

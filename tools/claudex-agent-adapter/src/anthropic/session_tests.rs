@@ -161,12 +161,15 @@ fn configures_a_bounded_batch_tool_for_parallel_agents() {
         .0
         .iter()
         .find(|tool| {
-            tool["description"]
-                .as_str()
-                .is_some_and(|text| text.contains("two or more"))
+            tool["description"].as_str().is_some_and(|text| {
+                text.contains(&format!(
+                    "at least {}",
+                    crate::anthropic::agent_batch::minimum_batch_size()
+                ))
+            })
         })
         .expect("parallel Agent batch tool");
-    assert_eq!(batch["inputSchema"]["properties"]["tasks"]["minItems"], 2);
+    assert_eq!(batch["inputSchema"]["properties"]["tasks"]["minItems"], 3);
     assert_eq!(batch["inputSchema"]["properties"]["tasks"]["maxItems"], 40);
     assert!(configured.1.values().any(|name| name.ends_with(":Agent")));
 }
@@ -415,27 +418,58 @@ fn assert_empty_thread_configuration() {
 }
 
 fn assert_developer_guidance(developer: &str) {
-    assert!(
-        developer
-            .contains("never infer from it that Claude Code or its SubAgent tasks are read-only")
+    const REQUIRED: &[&str] = &[
+        "never infer from it that Claude Code or its SubAgent tasks are read-only",
+        "do not copy restrictions from an unrelated earlier task",
+        "preserve that authority in SubAgent prompts",
+        "run independent calls, fetches, or checks in parallel",
+        "Promise.all",
+        "avoid serializing independent operations",
+        "unless they are explicitly active for the current task",
+        "Omit the SubAgent name field for ordinary SubAgents",
+        "only when the active user explicitly supplies that teammate name",
+        "every Agent or Task launch, including a nested launch",
+        "exact claudex_model and claudex_effort",
+        "never use generic claude or blindly inherit",
+        "main session must control parallel distribution across multiple SubAgents",
+        "Avoid serial heavy processing by one worker",
+        "reuse compatible workers with SendMessage and the exact prior Agent/Task recipient instead of churning processes",
+        "custom-advisor is a separate logical session singleton/capacity channel",
+        "built-in advisor remains independent of worker capacity",
+        "Prefer reusing a compatible recipient via SendMessage over launching a replacement process",
+        "set run_in_background=true on every launch in the single batch",
+        "Do not mix foreground and background launches in one batch",
+        "end the current turn promptly instead of reasoning while waiting",
+    ];
+    for phrase in REQUIRED {
+        assert!(
+            developer.contains(phrase),
+            "missing developer guidance: {phrase}"
+        );
+    }
+}
+
+#[test]
+fn main_session_orchestration_instructions_are_omitted_for_subagents() {
+    let mut subagent = request(
+        json!("x-anthropic-billing-header: cc_version=1; cc_is_subagent=true;"),
+        Vec::new(),
     );
-    assert!(developer.contains("do not copy restrictions from an unrelated earlier task"));
+    subagent.messages = vec![json!({
+        "role":"user",
+        "content":"<claudex-agent-id>toolu_subagent</claudex-agent-id>\ncontinue"
+    })];
+    let params = thread_start_params(&subagent, "worker", Vec::new());
+    let developer = params["developerInstructions"]
+        .as_str()
+        .expect("developer instructions");
     assert!(
-        developer.contains("preserve that authority in SubAgent prompts"),
-        "implementation authority must propagate to SubAgents"
+        !developer.contains("Claudex main-session orchestration mode is active"),
+        "worker turns must not receive main-session orchestration mode"
     );
-    assert!(developer.contains("run independent calls, fetches, or checks in parallel"));
-    assert!(developer.contains("Promise.all"));
-    assert!(developer.contains("avoid serializing independent operations"));
-    assert!(
-        developer.contains("unless they are explicitly active for the current task"),
-        "explicit current-task restrictions must remain supported"
-    );
-    assert!(developer.contains("Omit the SubAgent name field for ordinary SubAgents"));
-    assert!(developer.contains("only when the active user explicitly supplies that teammate name"));
-    assert!(developer.contains("every Agent or Task launch, including a nested launch"));
-    assert!(developer.contains("exact claudex_model and claudex_effort"));
-    assert!(developer.contains("never use generic claude or blindly inherit"));
+    assert!(developer.contains(
+        "Prefer reusing a compatible recipient via SendMessage over launching a replacement process"
+    ));
 }
 
 fn assert_team_thread_configuration() {
@@ -482,10 +516,125 @@ fn subscription_prompt_keeps_external_provider_models_out_of_the_native_field() 
 #[test]
 fn subscription_prompt_requires_atomic_parallel_launches() {
     let prompt = subscription_request_prompt(&request(json!("system"), Vec::new()));
+    let minimum = crate::anthropic::agent_batch::minimum_batch_size();
     assert!(prompt.contains("same assistant message and tool round"));
     assert!(prompt.contains("exactly that many launch calls"));
+    assert!(prompt.contains(&format!("at least {minimum}")));
+    assert!(prompt.contains("ordinary workers"));
+    assert!(prompt.contains("run_in_background=true"));
+    assert!(prompt.contains("Do not mix foreground and background launches"));
     assert!(prompt.contains("queued to a busy worker does not add parallel capacity"));
     assert!(prompt.contains("end the turn promptly with concise user-visible status"));
+    assert!(
+        prompt
+            .contains("main session must control parallel distribution across multiple SubAgents")
+    );
+    assert!(prompt.contains("Avoid serial heavy processing by one worker"));
+    assert!(
+        prompt.contains(
+            "reuse compatible workers with SendMessage and the exact compatible recipient"
+        )
+    );
+    assert!(prompt.contains("instead of churning processes with fresh launches"));
+    assert!(
+        prompt.contains("custom-advisor is a separate logical session singleton/capacity channel")
+    );
+    assert!(prompt.contains("built-in advisor remains independent of worker capacity"));
+}
+
+#[test]
+fn subscription_prompt_preserves_worker_reuse_and_advisor_exception() {
+    let prompt = subscription_request_prompt(&request(json!("system"), Vec::new()));
+    assert!(prompt.contains("reuse compatible workers with SendMessage"));
+    assert!(prompt.contains("A follow-up queued to a busy worker does not add parallel capacity"));
+    assert!(
+        prompt.contains("custom-advisor is a separate logical session singleton/capacity channel")
+    );
+    assert!(prompt.contains("built-in advisor remains independent of worker capacity"));
+    assert!(prompt.contains("Reuse the first compatible session advisor for related decisions"));
+}
+
+#[test]
+fn subscription_and_session_instructions_report_the_default_parallel_contract() {
+    let default_config = crate::parallel_scheduler::SchedulerConfig::default();
+    assert_default_parallel_config(&default_config);
+    clear_parallel_config_env();
+
+    let params = thread_start_params(
+        &request(json!("parallel contract"), Vec::new()),
+        "main",
+        Vec::new(),
+    );
+    let developer = params["developerInstructions"]
+        .as_str()
+        .expect("developer instructions");
+    let cadence = default_config.reassess_interval.as_secs() / 60;
+    assert_parallel_contract_text(developer, &default_config, cadence);
+
+    let prompt = subscription_request_prompt(&request(json!("parallel contract"), Vec::new()));
+    assert!(prompt.contains(&format!(
+        "Runtime parallel contract for this prompt: launch at least {} ordinary workers",
+        default_config.min_parallel_workers
+    )));
+    assert!(prompt.contains(&format!(
+        "maintain at least {} active lanes",
+        default_config.active_floor
+    )));
+    assert!(prompt.contains(&format!(
+        "use at least {} model families",
+        default_config.min_model_families
+    )));
+    assert!(prompt.contains(&format!("every {} minutes", cadence)));
+    assert!(prompt.contains("interrupt stale work"));
+}
+
+fn assert_default_parallel_config(config: &crate::parallel_scheduler::SchedulerConfig) {
+    assert_eq!(config.min_parallel_workers, 3);
+    assert_eq!(config.active_floor, 2);
+    assert_eq!(config.min_model_families, 2);
+    assert_eq!(config.reassess_interval.as_secs(), 600);
+    assert!(config.allow_reuse);
+    assert!(config.cleanup_on_exit);
+}
+
+fn clear_parallel_config_env() {
+    unsafe {
+        for name in [
+            "CLAUDEX_SUBAGENT_MIN_PARALLEL",
+            "CLAUDEX_SUBAGENT_MAX_PARALLEL",
+            "CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS",
+            "CLAUDEX_SUBAGENT_ACTIVE_FLOOR",
+            "CLAUDEX_SUBAGENT_MIN_MODEL_FAMILIES",
+            "CLAUDEX_SUBAGENT_REASSESS_INTERVAL_SECONDS",
+            "CLAUDEX_SUBAGENT_REEVALUATE_ON_COMPLETION",
+            "CLAUDEX_SUBAGENT_REUSE",
+            "CLAUDEX_SUBAGENT_CLEANUP_ON_EXIT",
+        ] {
+            std::env::remove_var(name);
+        }
+    }
+}
+
+fn assert_parallel_contract_text(
+    text: &str,
+    config: &crate::parallel_scheduler::SchedulerConfig,
+    cadence: u64,
+) {
+    assert!(text.contains(&format!(
+        "Runtime parallel floor: launch at least {} ordinary workers",
+        config.min_parallel_workers
+    )));
+    assert!(text.contains(&format!(
+        "maintain at least {} active lanes",
+        config.active_floor
+    )));
+    assert!(text.contains(&format!(
+        "Use at least {} model families",
+        config.min_model_families
+    )));
+    assert!(text.contains(&format!("every {cadence} minutes")));
+    assert!(text.contains("interrupt stale work"));
+    assert_eq!(text.matches("Parallel status:").count(), 1);
 }
 
 #[test]

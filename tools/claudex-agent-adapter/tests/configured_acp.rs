@@ -368,6 +368,10 @@ async fn configured_acp_routes_dynamic_models_and_expands_arguments() {
             .is_err()
     );
     assert!(leaf.respond(json!(1), json!({})).await.is_err());
+    leaf.shutdown().await;
+
+    // Routed shutdown must recurse into the initialized configured provider.
+    backend.shutdown().await;
 
     session_scoped_configured_acp_recycles_after_one_failed_stream().await;
 }

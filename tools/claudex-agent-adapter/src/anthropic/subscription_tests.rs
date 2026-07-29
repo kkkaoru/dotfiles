@@ -1,11 +1,17 @@
 use std::{fs, path::Path, sync::Arc, time::Duration};
 
+#[cfg(unix)]
+use std::{
+    os::unix::fs::PermissionsExt,
+    process::{Command as StdCommand, Stdio},
+};
+
 use serde_json::json;
 
 use super::subscription::{
-    OutputMode, SubscriptionOptions, cwd_from_system, request_effort, requested_tools, setting_at,
-    subscription_command, subscription_limits_from, subscription_prompt, valid_effort,
-    wait_for_subscription,
+    OutputMode, SubscriptionOptions, cwd_from_system, request_effort, requested_tools,
+    run_subscription_model, setting_at, subscription_command, subscription_limits_from,
+    subscription_prompt, valid_effort,
 };
 use crate::NONINTERACTIVE_CHILD_ENV;
 
@@ -27,6 +33,61 @@ fn subscription_children_identify_as_noninteractive() {
         .find_map(|(name, value)| (name == NONINTERACTIVE_CHILD_ENV).then_some(value))
         .flatten();
     assert_eq!(value, Some(std::ffi::OsStr::new("1")));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn terminating_a_subscription_reaps_its_entire_process_group() {
+    let directory = tempfile::tempdir().expect("create process fixture directory");
+    let program = directory.path().join("subscription-fixture.sh");
+    fs::write(&program, "#!/bin/sh\nsleep 30 &\nwait\n").expect("write process fixture");
+    fs::set_permissions(&program, fs::Permissions::from_mode(0o755))
+        .expect("make process fixture executable");
+    let options = SubscriptionOptions::internal(
+        Arc::new(tokio::sync::Semaphore::new(1)),
+        Duration::from_secs(1),
+    );
+    let mut command = subscription_command(&program, "model", &options, OutputMode::Json);
+    let mut child = super::subscription::spawn_subscription(&mut command, "model")
+        .expect("spawn isolated subscription process group");
+    let process_group = child.id().expect("child process group ID");
+    tokio::time::sleep(Duration::from_millis(20)).await;
+
+    super::subscription::terminate_subscription(&mut child)
+        .await
+        .expect("terminate and reap subscription process group");
+
+    assert!(child.try_wait().expect("inspect child").is_some());
+    assert!(
+        !StdCommand::new("kill")
+            .args(["-0", &format!("-{process_group}")])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .expect("inspect process group")
+            .success()
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn subscription_timeout_terminates_and_reaps_the_model_process() {
+    let directory = tempfile::tempdir().expect("create timeout fixture directory");
+    let program = directory.path().join("timeout-fixture.sh");
+    fs::write(&program, "#!/bin/sh\nsleep 30 &\nwait\n").expect("write timeout fixture");
+    fs::set_permissions(&program, fs::Permissions::from_mode(0o755))
+        .expect("make timeout fixture executable");
+    let options = SubscriptionOptions::internal(
+        Arc::new(tokio::sync::Semaphore::new(1)),
+        Duration::from_millis(100),
+    );
+
+    let error = run_subscription_model(&program, "model", "prompt", options)
+        .await
+        .expect_err("stalled subscription must time out");
+
+    assert!(error.to_string().contains("timed out"));
 }
 
 #[test]
@@ -96,15 +157,6 @@ async fn emits_subscription_activity_for_text_and_thinking_paths() {
         .expect("thinking heartbeat");
     activity.close(&sender).await.expect("close activity");
     assert!(receiver.recv().await.is_some());
-}
-
-#[tokio::test]
-async fn times_out_a_stalled_subscription_process() {
-    let stalled = std::future::pending::<std::io::Result<std::process::Output>>();
-    let error = wait_for_subscription(stalled, Duration::from_millis(1))
-        .await
-        .expect_err("stalled subscription must time out");
-    assert!(error.to_string().contains("timed out"));
 }
 
 #[test]

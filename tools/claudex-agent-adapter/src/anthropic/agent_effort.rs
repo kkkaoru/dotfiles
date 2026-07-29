@@ -4,30 +4,34 @@ use anyhow::{Result, bail};
 use serde_json::Value;
 
 pub(super) use super::AgentEffortRecord;
-use super::{MessagesRequest, subscription::valid_effort};
+pub(super) use super::agent_effort_matching::is_subagent_request;
+use super::{
+    MessagesRequest,
+    agent_effort_matching::{has_correlation_marker, request_matches_intent, value_texts},
+    agent_intent_store::{persistence_snapshot, unix_seconds},
+    subscription::valid_effort,
+};
 
 const INTENT_TTL: std::time::Duration = std::time::Duration::from_secs(10 * 60);
-const MAX_PENDING_INTENTS: usize = 1_024;
-const CORRELATION_TAG: &str = "claudex-agent-id";
+pub(super) const MAX_PENDING_INTENTS: usize = 1_024;
 const ADAPTER_EFFORT: &str = "claudex_effort";
 const ADAPTER_MODEL: &str = "claudex_model";
-
+const INHERITED_PARENT_MODEL: &str = "claudex_inherited_parent_model";
 #[derive(Clone)]
-struct AgentEffortIntent {
-    client_user_id: Option<String>,
-    prompt: String,
-    correlated: bool,
-    effort: Option<String>,
-    model_override: Option<String>,
-    tool_use_id: String,
-    created_at: Instant,
+pub(super) struct AgentEffortIntent {
+    pub(super) client_user_id: Option<String>,
+    pub(super) prompt: String,
+    pub(super) correlated: bool,
+    pub(super) effort: Option<String>,
+    pub(super) model_override: Option<String>,
+    pub(super) tool_use_id: String,
+    pub(super) created_at: Instant,
+    pub(super) created_unix_seconds: u64,
 }
-
-#[derive(Default)]
 pub(super) struct AgentEffortIntents {
-    pending: Mutex<VecDeque<AgentEffortIntent>>,
+    pub(super) pending: Mutex<VecDeque<AgentEffortIntent>>,
+    pub(super) store: Option<super::agent_intent_store::AgentIntentStore>,
 }
-
 pub(super) enum AgentEffort {
     Unmatched,
     ConfiguredDefault,
@@ -53,27 +57,11 @@ impl AgentIntent {
 }
 
 impl AgentEffortIntents {
-    #[cfg(test)]
-    pub(super) fn record(
+    pub(super) fn record_from_user_messages(
         &self,
-        client_user_id: Option<&str>,
-        tool_name: &str,
-        tool_use_id: String,
-        parent_model: &str,
-        arguments: &Value,
+        input: AgentEffortRecord<'_>,
+        model_catalog: Option<&crate::provider_config::ModelCatalog>,
     ) {
-        self.record_from_user_messages(AgentEffortRecord {
-            client_user_id,
-            tool_name,
-            tool_use_id,
-            parent_model,
-            arguments,
-            user_messages: &[],
-            system: &serde_json::json!(null),
-        });
-    }
-
-    pub(super) fn record_from_user_messages(&self, input: AgentEffortRecord<'_>) {
         let AgentEffortRecord {
             client_user_id,
             tool_name,
@@ -94,7 +82,25 @@ impl AgentEffortIntents {
             .map(str::to_owned);
         let requested_model = requested_model(arguments);
         let explicit_model = requested_model.filter(|model| {
-            super::agent_routing::model_is_authorized(arguments, user_messages, system, model)
+            model_catalog.map_or_else(
+                || {
+                    super::agent_routing::model_is_authorized(
+                        arguments,
+                        user_messages,
+                        system,
+                        model,
+                    )
+                },
+                |catalog| {
+                    super::agent_routing::model_is_authorized_with_catalog(
+                        arguments,
+                        user_messages,
+                        system,
+                        catalog,
+                        model,
+                    )
+                },
+            )
         });
         if requested_model.is_some() && explicit_model.is_none() {
             tracing::debug!(
@@ -103,9 +109,6 @@ impl AgentEffortIntents {
                 "ignored unrouted SubAgent model not explicitly present in current user input"
             );
         }
-        // Claude Code can resume a completed logical Agent long after its provider thread expires.
-        // Keep only the correlation route (not the potentially large prompt) until bounded LRU
-        // pressure evicts it, so SendMessage continuations do not silently inherit the main route.
         let correlated = has_correlation_marker(prompt);
         let mut pending = self.pending.lock().expect("agent effort intents poisoned");
         remove_expired(&mut pending);
@@ -124,7 +127,11 @@ impl AgentEffortIntents {
             model_override: explicit_model.map(str::to_owned),
             tool_use_id,
             created_at: Instant::now(),
+            created_unix_seconds: unix_seconds(),
         });
+        let snapshot = persistence_snapshot(&pending);
+        drop(pending);
+        self.persist(snapshot);
     }
 
     pub(super) fn take(&self, request: &MessagesRequest) -> AgentIntent {
@@ -134,10 +141,20 @@ impl AgentEffortIntents {
         let client_user_id = request.metadata.get("user_id").and_then(Value::as_str);
         let mut pending = self.pending.lock().expect("agent effort intents poisoned");
         remove_expired(&mut pending);
-        let Some(index) = pending.iter().position(|intent| {
-            request_matches_intent(&request.messages, intent)
-                && (intent.correlated || intent.client_user_id.as_deref() == client_user_id)
-        }) else {
+        let index = pending
+            .iter()
+            .position(|intent| {
+                request_matches_intent(&request.messages, intent)
+                    && (intent.correlated || intent.client_user_id.as_deref() == client_user_id)
+            })
+            .or_else(|| {
+                let mut candidates = pending.iter().enumerate().filter(|(_, intent)| {
+                    intent.correlated && intent.client_user_id.as_deref() == client_user_id
+                });
+                let candidate = candidates.next()?;
+                candidates.next().is_none().then_some(candidate.0)
+            });
+        let Some(index) = index else {
             return AgentIntent::unmatched(true);
         };
         let intent = if pending[index].correlated {
@@ -153,28 +170,29 @@ impl AgentEffortIntents {
             Some(effort) => AgentEffort::Explicit(effort),
             None => AgentEffort::ConfiguredDefault,
         };
-        AgentIntent {
+        let result = AgentIntent {
             effort,
             model_override: intent.model_override,
             is_subagent: true,
             matched: true,
-        }
+        };
+        let snapshot = persistence_snapshot(&pending);
+        drop(pending);
+        self.persist(snapshot);
+        result
     }
 
     pub(super) fn remove_tool_results<'a>(&self, tool_use_ids: impl Iterator<Item = &'a str>) {
         let ids = tool_use_ids.collect::<Vec<_>>();
-        // A completed correlated Agent remains resumable through SendMessage. Only one-shot,
-        // uncorrelated launch intents are owned by and removed with the outer tool result.
-        self.pending
-            .lock()
-            .expect("agent effort intents poisoned")
-            .retain(|intent| intent.correlated || !ids.contains(&intent.tool_use_id.as_str()));
+        let mut pending = self.pending.lock().expect("agent effort intents poisoned");
+        pending.retain(|intent| intent.correlated || !ids.contains(&intent.tool_use_id.as_str()));
+        let snapshot = persistence_snapshot(&pending);
+        drop(pending);
+        self.persist(snapshot);
     }
 }
 
 fn remove_expired(pending: &mut VecDeque<AgentEffortIntent>) {
-    // Uncorrelated intents are one-shot launch handoffs. Correlated intents represent resumable
-    // logical Agents and are instead bounded by MAX_PENDING_INTENTS and refreshed on each match.
     pending.retain(|intent| intent.correlated || intent.created_at.elapsed() < INTENT_TTL);
 }
 
@@ -188,11 +206,28 @@ pub(super) fn is_agent_tool(tool_name: &str) -> bool {
     matches!(tool_name, "Agent" | "Task")
 }
 
+#[cfg(test)]
 pub(super) fn validate_routed_agent_arguments(
     tool_name: &str,
     arguments: &Value,
     user_messages: &[Value],
     system: &Value,
+) -> Result<()> {
+    validate_routed_agent_arguments_with_catalog(
+        tool_name,
+        arguments,
+        user_messages,
+        system,
+        &crate::provider_config::ModelCatalog::default(),
+    )
+}
+
+pub(super) fn validate_routed_agent_arguments_with_catalog(
+    tool_name: &str,
+    arguments: &Value,
+    user_messages: &[Value],
+    system: &Value,
+    model_catalog: &crate::provider_config::ModelCatalog,
 ) -> Result<()> {
     if !is_agent_tool(tool_name) {
         return Ok(());
@@ -200,7 +235,13 @@ pub(super) fn validate_routed_agent_arguments(
     let Some(model) = requested_model(arguments) else {
         bail!("{tool_name} launch is missing required `claudex_model`");
     };
-    if !super::agent_routing::model_is_authorized(arguments, user_messages, system, model) {
+    if !super::agent_routing::model_is_authorized_with_catalog(
+        arguments,
+        user_messages,
+        system,
+        model_catalog,
+        model,
+    ) {
         bail!(
             "{tool_name} launch model `{model}` is neither the selected worker's exact model nor an exact model requested by the active user"
         );
@@ -242,8 +283,10 @@ pub(super) fn prepare_arguments_for_user(
         return (None, correlated);
     };
     super::agent_routing::hydrate_routing_fields(&mut correlated);
-    correlated["prompt"] = Value::String(format!(
-        "{prompt}\n\n<{CORRELATION_TAG}>{tool_use_id}</{CORRELATION_TAG}>"
+    correlated["prompt"] = Value::String(super::agent_effort_matching::correlated_prompt(
+        prompt,
+        tool_use_id,
+        requested_model(arguments),
     ));
     let mut claude_arguments = correlated.clone();
     let public = claude_arguments
@@ -251,6 +294,7 @@ pub(super) fn prepare_arguments_for_user(
         .expect("Agent arguments must be an object");
     public.remove(ADAPTER_EFFORT);
     public.remove(ADAPTER_MODEL);
+    public.remove(INHERITED_PARENT_MODEL);
     public.remove("model");
     if public
         .get("name")
@@ -348,52 +392,6 @@ pub(super) fn tool_schema(tool_name: &str, mut schema: Value) -> Value {
 fn normalized_effort(value: &str) -> Option<&str> {
     let normalized = if value == "mid" { "medium" } else { value };
     valid_effort(normalized).then_some(normalized)
-}
-
-pub(super) fn is_subagent_request(request: &MessagesRequest) -> bool {
-    value_texts(&request.system).any(|text| text.contains("cc_is_subagent=true"))
-        || request
-            .messages
-            .iter()
-            .filter_map(|message| message.get("content"))
-            .flat_map(value_texts)
-            .any(has_correlation_marker)
-}
-
-fn request_contains_prompt(messages: &[Value], prompt: &str) -> bool {
-    message_texts(messages).any(|text| text == prompt)
-}
-
-fn request_matches_intent(messages: &[Value], intent: &AgentEffortIntent) -> bool {
-    if intent.correlated {
-        let marker = format!(
-            "<{CORRELATION_TAG}>{}</{CORRELATION_TAG}>",
-            intent.tool_use_id
-        );
-        return message_texts(messages).any(|text| text.contains(&marker));
-    }
-    request_contains_prompt(messages, &intent.prompt)
-}
-
-fn has_correlation_marker(prompt: &str) -> bool {
-    prompt.contains(&format!("<{CORRELATION_TAG}>"))
-}
-
-fn value_texts(value: &Value) -> impl Iterator<Item = &str> {
-    let direct = value.as_str().into_iter();
-    let blocks = value
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|block| block.get("text").and_then(Value::as_str));
-    direct.chain(blocks)
-}
-
-fn message_texts(messages: &[Value]) -> impl Iterator<Item = &str> {
-    messages
-        .iter()
-        .filter_map(|message| message.get("content"))
-        .flat_map(value_texts)
 }
 
 #[cfg(test)]

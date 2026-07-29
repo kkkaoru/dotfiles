@@ -123,11 +123,23 @@ sanitized, five-minute Codexbar/Qwen Cloud capacity cache and delegates to avail
 the shared provider config. It selects the configured subscription fallback only
 when all capacity-managed providers are unavailable. Claude Code's built-in parameterless
 `advisor()` remains independent of provider capacity; the adapter reads its model from
-`.claude/settings.json`'s `advisorModel`. The fish launcher translates optional
-`CLAUDEX_PROVIDER_CONFIG`, `CLAUDEX_MODEL`, `CLAUDEX_ADAPTER_LISTEN`,
+`.claude/settings.json`'s `advisorModel`. The separate `custom-advisor` SubAgent
+(`claude-fable-5` / `xhigh`) also stays outside worker capacity accounting and is reused as a
+logical session singleton via `SendMessage` (prefer one continuing advisor; not a hard
+process=1 OS cap); it coexists with built-in `advisor()` and does not replace it. Set
+`CLAUDEX_CUSTOM_ADVISOR` to `0`, `false`, or `off` to skip only custom-advisor launches. The fish launcher translates optional
+`CLAUDEX_PROVIDER_CONFIG`, `CLAUDEX_DEFAULTS_SOURCE`, `CLAUDEX_MODEL`,
+`CLAUDEX_EFFORT`, `CLAUDEX_ADAPTER_LISTEN`,
+`CLAUDEX_SUBAGENT_MIN_PARALLEL`, `CLAUDEX_SUBAGENT_ACTIVE_FLOOR`,
+`CLAUDEX_SUBAGENT_REASSESS_INTERVAL_SECONDS`, and
+`CLAUDEX_SUBAGENT_MIN_MODEL_FAMILIES`,
 `CLAUDEX_SUBSCRIPTION_MAX_PROCESSES`, and
 `CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES` values into these options. Adapter-private
-variables are removed before Claude Code starts.
+variables are removed before Claude Code starts. The frequently changed outer
+model/effort pair is persisted separately in the gitignored
+`~/.config/claudex/defaults.local.json`; omit its `source` (or set it to
+`settings`) to inherit `.claude/settings.json`, or set `source` to `explicit`
+for its `model` and `effort` values.
 
 The launcher also merges a reserved, percent-encoded working-directory header into
 `ANTHROPIC_CUSTOM_HEADERS`. The loopback adapter canonicalizes that path per request and uses it
@@ -219,9 +231,10 @@ dropped.
 Idle provider threads are retained for two hours to support related provider-backed worker
 continuations and prompt-prefix reuse; capacity pressure may evict the oldest idle thread sooner.
 This backend-thread retention is separate from Claude Code's logical agent lifecycle. The main
-session reuses a compatible logical instance with `SendMessage` and the exact recipient specified by
-the prior Agent/Task result, while starting new instances when concurrency or independent context
-requires it.
+session reuses a compatible logical worker or custom-advisor instance with `SendMessage` and the
+exact recipient specified by the prior Agent/Task result, while starting new instances when
+concurrency or independent context requires it. Prefer one continuing custom-advisor per session
+and account for it separately from `selected_workers` / provider quota headroom.
 Claude subscription workers and advisors still use a new `--no-session-persistence` subprocess per
 provider call. Logical-agent reuse can preserve a reusable transcript prefix but does not guarantee
 a provider prompt-cache hit.
@@ -281,6 +294,13 @@ and has a documented nightly LLVM mapping workaround in the source; its
 delegated application logic remains measured. Both coverage commands include
 the Cargo build script, whose reusable logic is measured through
 `src/build_support.rs`.
+
+Coverage uses an isolated `target/llvm-cov-*` directory. A later coverage run
+automatically removes artifacts older than ten minutes, while preserving its
+own directory and a directory owned by a live sibling coverage process. This
+keeps retained failure diagnostics briefly without allowing old instrumented
+build outputs to accumulate indefinitely.
+
 The build also rejects production Rust files over 400 physical lines; dedicated
 `tests.rs`, `*_tests.rs`, and `tests/**` files are exempt. Clippy rejects
 functions over 80 lines, cognitive complexity over 17, and block nesting deeper

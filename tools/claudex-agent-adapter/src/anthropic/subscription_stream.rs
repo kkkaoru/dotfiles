@@ -1,13 +1,13 @@
 use std::{convert::Infallible, path::Path, path::PathBuf, sync::Arc, time::Duration};
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow};
 use axum::{
     body::{Body, Bytes},
     http::Response,
 };
 use serde_json::{Value, json};
 use tokio::{
-    io::{AsyncBufReadExt, AsyncReadExt, BufReader},
+    io::{AsyncBufReadExt, BufReader},
     process::Child,
     sync::mpsc,
 };
@@ -21,8 +21,8 @@ use super::{
     stream::streaming_sse_response,
     subscription::{
         OutputMode, SubscriptionOptions, acquire_subscription_slot, spawn_subscription,
-        subscription_command, take_subscription_stdin, validate_subscription_result,
-        write_subscription_prompt,
+        subscription_command, take_subscription_stdin, terminate_subscription,
+        validate_subscription_result, write_subscription_prompt,
     },
     subscription_activity::SubscriptionActivity,
     subscription_frames::{
@@ -31,7 +31,12 @@ use super::{
     },
 };
 
+mod lifecycle;
 mod tool_collection;
+
+use lifecycle::{
+    read_stderr, terminate_after_stream_failure, terminate_closed_stream, validate_stream_exit,
+};
 
 pub(super) use super::subscription_frames::result_output_tokens;
 pub(super) fn subscription_streaming_response(
@@ -78,6 +83,7 @@ async fn run_subscription_stream(
 ) {
     let result = stream_subscription_model(&sender, &program, &model, &prompt, options).await;
     if let Err(error) = result {
+        tracing::warn!(%model, error = ?error, "Claude subscription stream failed");
         send_subscription_error(&sender, error).await;
     }
 }
@@ -95,16 +101,24 @@ async fn stream_subscription_model(
     let stdin = take_subscription_stdin(&mut child)?;
     // Defer stdin errors so an early process exit can report its status and stderr.
     let timeout = options.timeout;
-    tokio::time::timeout(timeout, async {
+    let result = tokio::time::timeout(timeout, async {
         let (prompt_result, stream_result) = tokio::join!(
             write_subscription_prompt(stdin, prompt),
-            consume_subscription_stream_with_options(child, sender, &options),
+            consume_subscription_stream_with_options(&mut child, sender, &options),
         );
         stream_result?;
         prompt_result.context("failed to write Claude subscription prompt")
     })
     .await
-    .map_err(|_| anyhow!("Claude subscription timed out after {timeout:?}"))?
+    .map_err(|_| anyhow!("Claude subscription timed out after {timeout:?}"));
+    match result {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) => terminate_after_stream_failure(&mut child, error).await,
+        Err(error) => {
+            terminate_subscription(&mut child).await?;
+            Err(error)
+        }
+    }
 }
 
 struct SubscriptionStream {
@@ -120,22 +134,26 @@ struct SubscriptionStream {
 
 #[cfg(test)]
 async fn consume_subscription_stream(
-    child: Child,
+    mut child: Child,
     sender: &mpsc::Sender<Result<Bytes, Infallible>>,
 ) -> Result<()> {
-    consume_subscription_stream_with_options(
-        child,
+    let result = consume_subscription_stream_with_options(
+        &mut child,
         sender,
         &SubscriptionOptions::internal(
             Arc::new(tokio::sync::Semaphore::new(1)),
             std::time::Duration::from_secs(1),
         ),
     )
-    .await
+    .await;
+    if let Err(error) = result {
+        return terminate_after_stream_failure(&mut child, error).await;
+    }
+    Ok(())
 }
 
 async fn consume_subscription_stream_with_options(
-    mut child: Child,
+    child: &mut Child,
     sender: &mpsc::Sender<Result<Bytes, Infallible>>,
     options: &SubscriptionOptions,
 ) -> Result<()> {
@@ -165,7 +183,7 @@ async fn consume_subscription_stream_with_options(
         // ahead of already-buffered stream-json events (scrambled UI order).
         tokio::select! {
             biased;
-            () = sender.closed() => return Ok(()),
+            () = sender.closed() => return terminate_closed_stream(child, stderr_task).await,
             line = lines.next_line() => match line? {
                 Some(line) => {
                     stream.handle_line(sender, &line).await?;
@@ -185,32 +203,7 @@ async fn consume_subscription_stream_with_options(
         }
     }
     stream.activity.close(sender).await?;
-    validate_stream_exit(&mut child, stderr_task, stream.saw_result).await
-}
-
-async fn validate_stream_exit(
-    child: &mut Child,
-    stderr_task: tokio::task::JoinHandle<std::io::Result<Vec<u8>>>,
-    saw_result: bool,
-) -> Result<()> {
-    let status = child.wait().await?;
-    let stderr = stderr_task.await.context("Claude stderr task failed")??;
-    if !status.success() {
-        bail!(
-            "Claude subscription exited with {status}: {}",
-            String::from_utf8_lossy(&stderr).trim()
-        );
-    }
-    if !saw_result {
-        bail!("Claude subscription stream ended without a result event");
-    }
-    Ok(())
-}
-
-async fn read_stderr(mut stderr: tokio::process::ChildStderr) -> std::io::Result<Vec<u8>> {
-    let mut output = Vec::new();
-    stderr.read_to_end(&mut output).await?;
-    Ok(output)
+    validate_stream_exit(child, stderr_task, stream.saw_result).await
 }
 
 impl SubscriptionStream {
@@ -274,16 +267,36 @@ impl SubscriptionStream {
             .tool_context
             .as_ref()
             .context("subscription Agent/Task call has no routing context")?;
-        super::agent_effort::validate_routed_agent_arguments(
-            name,
-            input,
+        let mut routed_input = input.clone();
+        super::agent_routing::hydrate_routing_fields_from_context(
+            &mut routed_input,
             &context.user_messages,
             &context.system,
+            &context.model_catalog,
+        );
+        super::agent_routing::hydrate_standard_agent_to_parent(
+            &mut routed_input,
+            &context.parent_model,
+        );
+        if routed_input.get("claudex_model").is_none() {
+            tracing::warn!(
+                tool = name,
+                subagent_type = ?routed_input.get("subagent_type"),
+                native_model = ?routed_input.get("model"),
+                "subscription Agent/Task omitted Claudex routing fields"
+            );
+        }
+        super::agent_effort::validate_routed_agent_arguments_with_catalog(
+            name,
+            &routed_input,
+            &context.user_messages,
+            &context.system,
+            &context.model_catalog,
         )?;
         let (intent, public) = super::agent_effort::prepare_arguments_for_user(
             name,
             id,
-            input,
+            &routed_input,
             &context.user_messages,
             &context.system,
         );
@@ -298,6 +311,7 @@ impl SubscriptionStream {
                     user_messages: &context.user_messages,
                     system: &context.system,
                 },
+                Some(&context.model_catalog),
             );
         }
         Ok(public)

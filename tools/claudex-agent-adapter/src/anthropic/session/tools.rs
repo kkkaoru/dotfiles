@@ -6,7 +6,8 @@ use serde_json::{Value, json};
 use super::super::{BRIDGE_INSTRUCTIONS, MessagesRequest, content::system_text};
 use crate::anthropic::subscription_request::cwd_from_system;
 
-const ORCHESTRATOR_INSTRUCTIONS: &str = "Claudex main-session orchestration mode is active. Coordinate, decompose, delegate, monitor, resolve conflicts, synthesize worker results, and deliver the final response. Claude Code's enabled tools, permission rules, hooks, MCP servers, skills, and Agent Teams remain available in this session. For every substantive investigation, implementation, review, test, or validation, call a routed Agent/Task worker by default rather than doing the work in main. This remains mandatory after long execution, compaction, resume, context reconstruction, and worker failure.";
+const ORCHESTRATOR_INSTRUCTIONS: &str = "Claudex main-session orchestration mode is active. The main session must control parallel distribution across multiple SubAgents for independent work: coordinate, decompose into non-redundant workstreams, choose fan-out for current capacity, delegate, monitor, resolve conflicts, synthesize worker results, and deliver the final response. Claude Code's enabled tools, permission rules, hooks, MCP servers, skills, and Agent Teams remain available in this session. For every substantive investigation, implementation, review, or validation, call a routed Agent/Task worker by default rather than doing the work in main. This remains mandatory after long execution, compaction, resume, context reconstruction, and worker failure. Avoid serial heavy processing by one worker when capacity allows multi-worker fan-out: unless the work is truly indivisible, the user opts out, or only one compatible worker slot is available, launch parallel ordinary workers in the same batch; do not give an entire heavy or unknown-duration task to one ordinary worker merely for convenience. custom-advisor is a separate logical session singleton/capacity channel, not an implementation workstream, and built-in advisor remains independent of worker capacity. For related follow-ups, reuse compatible workers with SendMessage and the exact prior Agent/Task recipient instead of churning processes with fresh launches; start a new instance only when true concurrency, clean-room review, a different route/role, incompatible scope, or an unavailable recipient requires it.";
+const SUBAGENT_LIFECYCLE_INSTRUCTIONS: &str = "For independent fan-out that may be long-running or whose duration is unknown, set run_in_background=true on every launch in the single batch unless the active user explicitly requires synchronous results. Do not mix foreground and background launches in one batch. Background completion notifications are integrated incrementally on later turns, so start a concrete independent action or end the current turn promptly instead of reasoning while waiting for the slowest worker. Use foreground only for short bounded work, a dependency-required result, or an explicit synchronous request. This rule supersedes generic foreground advice above when a worker may be heavy. Prefer reusing a compatible recipient via SendMessage over launching a replacement process solely to continue related work.";
 
 pub(in crate::anthropic) fn tool_configuration(
     request: &MessagesRequest,
@@ -242,6 +243,10 @@ pub(in crate::anthropic) fn thread_start_params(
         );
     developer_instructions.push_str("\n\n");
     developer_instructions.push_str(super::super::CODEX_APP_SERVER_PARALLELIZATION_INSTRUCTIONS);
+    developer_instructions.push_str("\n\n");
+    developer_instructions.push_str(&parallel_scheduler_instructions(request));
+    developer_instructions.push_str("\n\n");
+    developer_instructions.push_str(SUBAGENT_LIFECYCLE_INSTRUCTIONS);
     if !super::super::agent_effort::is_subagent_request(request) {
         developer_instructions.push_str("\n\n");
         developer_instructions.push_str(ORCHESTRATOR_INSTRUCTIONS);
@@ -272,6 +277,25 @@ pub(in crate::anthropic) fn thread_start_params(
             }
         }
     })
+}
+
+fn parallel_scheduler_instructions(request: &MessagesRequest) -> String {
+    let scheduler = crate::parallel_scheduler::ParallelScheduler::shared();
+    let config = scheduler.config();
+    let cadence_minutes = (config.reassess_interval.as_secs() / 60).max(1);
+    let mut lines = vec![
+        format!(
+            "Runtime parallel floor: launch at least {} ordinary workers when splitting substantive work; maintain at least {} active lanes while running. Use at least {} model families before work is considered sufficiently distributed.",
+            config.min_parallel_workers, config.active_floor, config.min_model_families
+        ),
+        format!(
+            "After each SubAgent completion and every {cadence_minutes} minutes, reassess active lanes. If only one active lane remains during ongoing work, interrupt stale work, redirect stale branches, and immediately add or replace workers to restore the floor."
+        ),
+        "Prefer reuse over replacement: continue compatible workers with SendMessage and send minimal follow-up context, then launch fresh workers only when reuse is not safe or not possible. For completed sub-tasks, replay same-scope work on fresh workers while expanding context on survivors when needed."
+            .to_string(),
+    ];
+    lines.push(scheduler.guidance_for_request(request));
+    lines.join("\n")
 }
 
 pub(in crate::anthropic) fn dynamic_tool(tool: &Value, codex_name: &str) -> Option<Value> {

@@ -36,69 +36,78 @@ pub(super) fn dispatch_provider_tool_update(
 ) {
     let call_id = update.tool_call_id.0.to_string();
     let fields = update.fields;
-    // Prefer a single ToolCall for first-seen pending/in_progress work. Emitting
-    // both call + update for the same start doubles queue traffic without a UI win
-    // (the stream builder already dedupes display by callId).
-    if let (Some(title), Some(status)) = (fields.title.clone(), fields.status) {
-        if matches!(
-            status,
-            acp::ToolCallStatus::Pending | acp::ToolCallStatus::InProgress
-        ) && fields.raw_input.is_some()
-        {
-            let mut call = acp::ToolCall::new(call_id, title);
-            if let Some(kind) = fields.kind {
-                call = call.kind(kind);
-            }
-            call = call.status(status);
-            call = call.raw_input(
-                fields
-                    .raw_input
-                    .clone()
-                    .expect("checked incremental tool input"),
-            );
-            if let Some(content) = fields.content.clone() {
-                call = call.content(content);
-            }
-            if let Some(locations) = fields.locations.clone() {
-                call = call.locations(locations);
-            }
-            dispatch_provider_tool_call(events, session_id, call);
-            return;
-        }
-    }
-
-    let Some(status) = fields.status else {
+    if let Some(call) = update_to_tool_call(&call_id, fields.clone()) {
+        dispatch_provider_tool_call(events, session_id, call);
+    } else if let Some(params) = status_only_params(session_id, &call_id, &fields) {
+        events.dispatch(json!({ "method": PROVIDER_TOOL_UPDATE, "params": params }));
+    } else if let Some(status) = fields.status {
+        events.dispatch(json!({
+            "method": PROVIDER_TOOL_UPDATE,
+            "params": tool_update_params(session_id, &call_id, fields, status)
+        }));
+    } else {
         // Content-only patches without a status do not change Claude Code's WIP
         // surface; skip them to cut event spam from chatty ACP providers.
-        return;
-    };
-    // Ignore pure pending/in_progress updates without new identity — start was
-    // already shown (or will arrive as ToolCall). Only terminal states matter.
+    }
+}
+
+fn update_to_tool_call(call_id: &str, fields: acp::ToolCallUpdateFields) -> Option<acp::ToolCall> {
+    let title = fields.title?;
+    let status = fields.status?;
+    if !matches!(
+        status,
+        acp::ToolCallStatus::Pending | acp::ToolCallStatus::InProgress
+    ) {
+        return None;
+    }
+    let raw_input = fields.raw_input.as_ref()?;
+    let mut call = acp::ToolCall::new(call_id.to_owned(), title);
+    if let Some(kind) = fields.kind {
+        call = call.kind(kind);
+    }
+    if let Some(content) = fields.content {
+        call = call.content(content);
+    }
+    if let Some(locations) = fields.locations {
+        call = call.locations(locations);
+    }
+    Some(call.status(status).raw_input(raw_input.clone()))
+}
+
+fn status_only_params(
+    session_id: &str,
+    call_id: &str,
+    fields: &acp::ToolCallUpdateFields,
+) -> Option<Value> {
+    let status = fields.status?;
     if matches!(
         status,
         acp::ToolCallStatus::Pending | acp::ToolCallStatus::InProgress
     ) && fields.raw_output.is_none()
         && fields.content.is_none()
     {
-        // Title-only progress with callId still needs a start if ToolCall never
-        // arrived (update-only tools).
-        let Some(title) = fields.title else {
-            return;
-        };
+        let title = fields.title.as_ref()?;
         let mut params = json!({
             "threadId": session_id,
             "callId": call_id,
             "status": tool_status_label(status)
         });
         params["title"] = json!(title);
-        events.dispatch(json!({ "method": PROVIDER_TOOL_UPDATE, "params": params }));
-        return;
+        return Some(params);
     }
-    let status = tool_status_label(status);
+    None
+}
+
+fn tool_update_params(
+    session_id: &str,
+    call_id: &str,
+    fields: acp::ToolCallUpdateFields,
+    status: acp::ToolCallStatus,
+) -> Value {
     let mut params = json!({
         "threadId": session_id,
         "callId": call_id,
-        "status": status
+        "status": tool_status_label(status),
     });
     if let Some(title) = fields.title {
         params["title"] = json!(title);
@@ -109,10 +118,7 @@ pub(super) fn dispatch_provider_tool_update(
     if let Some(output) = combine_output(fields.raw_output, fields.content.as_ref()) {
         params["output"] = output;
     }
-    events.dispatch(json!({
-        "method": PROVIDER_TOOL_UPDATE,
-        "params": params
-    }));
+    params
 }
 
 pub(super) fn dispatch_plan(events: &ThreadEventDispatcher, session_id: &str, plan: acp::Plan) {

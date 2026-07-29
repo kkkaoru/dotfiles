@@ -18,6 +18,7 @@ const FILE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const CONCURRENT_LAUNCHERS: usize = 4;
 const DAEMON_START_MARKER: &str = "=== claudex-agent-adapter daemon start ===";
 const REPLACEMENT_READY_TIMEOUT: Duration = Duration::from_secs(10);
+const HEALTH_READY_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[tokio::test]
 async fn protocol_compatible_build_replacement_preserves_an_active_response() {
@@ -83,8 +84,8 @@ async fn protocol_compatible_build_replacement_preserves_an_active_response() {
     fs::write(&release, "release").expect("release active response");
     assert_eq!(slow.await.expect("active response task"), "complete");
     assert!(stale.wait().expect("reap stale adapter").success());
-    terminate(replacement_pid);
-    wait_for_exit(&client, &base_url).await;
+    drop(client);
+    terminate_and_wait(replacement_pid).await;
 }
 
 #[tokio::test]
@@ -117,8 +118,8 @@ async fn concurrent_ensure_commands_start_exactly_one_daemon() {
     let pid = health(&client, &base_url).await["pid"]
         .as_u64()
         .expect("concurrently launched daemon pid");
-    terminate(pid);
-    wait_for_exit(&client, &base_url).await;
+    drop(client);
+    terminate_and_wait(pid).await;
 }
 
 #[tokio::test]
@@ -176,8 +177,8 @@ async fn ensure_running_starts_reuses_and_replaces_the_daemon() {
     assert_eq!(changed["subscription_max_processes"], 7);
     let replacement_pid = changed["pid"].as_u64().expect("replacement daemon pid");
     assert_ne!(replacement_pid, authenticated_pid);
-    terminate(replacement_pid);
-    wait_for_exit(&client, &base_url).await;
+    drop(client);
+    terminate_and_wait(replacement_pid).await;
 }
 
 #[tokio::test]
@@ -234,8 +235,8 @@ async fn ensure_running_replaces_the_renamed_legacy_daemon() {
     let _status = legacy.wait().expect("reap renamed legacy daemon");
     assert_eq!(replacement["model"], "test-main-model");
     assert_ne!(replacement["pid"].as_u64(), Some(legacy_pid));
-    terminate(replacement["pid"].as_u64().expect("replacement daemon pid"));
-    wait_for_exit(&replacement_client, &base_url).await;
+    drop(replacement_client);
+    terminate_and_wait(replacement["pid"].as_u64().expect("replacement daemon pid")).await;
 }
 
 #[tokio::test]
@@ -260,10 +261,12 @@ async fn ensure_running_replaces_an_unavailable_health_endpoint() {
     );
 
     let base_url = format!("http://127.0.0.1:{port}");
-    let pid = health(&Client::new(), &base_url).await["pid"]
+    let client = Client::new();
+    let pid = health(&client, &base_url).await["pid"]
         .as_u64()
         .expect("replacement daemon pid");
-    terminate(pid);
+    drop(client);
+    terminate_and_wait(pid).await;
 }
 
 #[tokio::test]
@@ -285,10 +288,12 @@ async fn ensure_running_replaces_a_protocol_stale_foreign_endpoint() {
     stale.join().expect("stale endpoint thread");
     assert!(output.status.success());
     let base_url = format!("http://127.0.0.1:{port}");
-    let pid = health(&Client::new(), &base_url).await["pid"]
+    let client = Client::new();
+    let pid = health(&client, &base_url).await["pid"]
         .as_u64()
         .expect("replacement daemon pid");
-    terminate(pid);
+    drop(client);
+    terminate_and_wait(pid).await;
 }
 
 #[test]
@@ -323,10 +328,12 @@ async fn ensure_running_connects_through_loopback_for_an_exposed_listener() {
         format!("http://127.0.0.1:{port}")
     );
     let base_url = format!("http://127.0.0.1:{port}");
-    let pid = health(&Client::new(), &base_url).await["pid"]
+    let client = Client::new();
+    let pid = health(&client, &base_url).await["pid"]
         .as_u64()
         .expect("exposed daemon pid");
-    terminate(pid);
+    drop(client);
+    terminate_and_wait(pid).await;
 }
 
 #[test]
@@ -371,6 +378,27 @@ fn ensure_running_reports_missing_or_invalid_environment() {
 #[tokio::test]
 async fn run_claude_forwards_arguments_environment_stderr_and_status() {
     let home = launcher_home();
+    let claude = prepare_claude_mock(&home);
+    let port = unused_port();
+
+    let path = format!(
+        "{}:{}",
+        home.path().display(),
+        std::env::var("PATH").expect("PATH")
+    );
+
+    let output = run_mocked_claude(&home, port, &path);
+    assert_eq!(output.status.code(), Some(23));
+    assert_claude_wrapper_output(output);
+
+    assert_inherited_launch(&home, port, &path);
+    stop_wrapper_daemon(port).await;
+
+    assert_duplicate_model_is_rejected(&home, port, &claude);
+    assert_invalid_subagent_policy_is_rejected(&home, port, &claude);
+}
+
+fn prepare_claude_mock(home: &TempDir) -> std::path::PathBuf {
     let policy_directory = home.path().join(".config/claudex");
     fs::create_dir_all(&policy_directory).expect("create model policy directory");
     fs::write(
@@ -378,7 +406,6 @@ async fn run_claude_forwards_arguments_environment_stderr_and_status() {
         r#"{"version":1,"disabledModels":["configured-model"]}"#,
     )
     .expect("write model policy");
-    let port = unused_port();
     let claude = home.path().join("claude");
     fs::write(
         &claude,
@@ -399,19 +426,17 @@ exit 23
     .expect("write Claude mock");
     fs::set_permissions(&claude, fs::Permissions::from_mode(0o755))
         .expect("make Claude mock executable");
-    let path = format!(
-        "{}:{}",
-        home.path().display(),
-        std::env::var("PATH").expect("PATH")
-    );
+    claude
+}
 
-    let output = common_command(&home, port, "20")
+fn run_mocked_claude(home: &TempDir, port: u16, path: &str) -> std::process::Output {
+    common_command(home, port, "20")
         .args(["launch", "--model", "test-main-model"])
         .args(["--listen", &format!("127.0.0.1:{port}")])
         .args(["--subscription-max-processes", "20"])
         .args(["--subscription-timeout-minutes", "120", "--"])
         .arg("--continue")
-        .env("PATH", &path)
+        .env("PATH", path)
         .env("CLAUDE_CODE_ALWAYS_ENABLE_EFFORT", "configured-by-fish")
         .env("CLAUDE_CODE_SUBAGENT_MODEL", "wrong-model")
         .env("ANTHROPIC_API_KEY", "must-not-leak")
@@ -429,8 +454,10 @@ exit 23
         )
         .env("CLAUDEX_RESOLVED_DISABLED_SUBAGENT_MODELS", "forged")
         .output()
-        .expect("run Claude wrapper");
-    assert_eq!(output.status.code(), Some(23));
+        .expect("run Claude wrapper")
+}
+
+fn assert_claude_wrapper_output(output: std::process::Output) {
     let stdout = String::from_utf8(output.stdout).expect("Claude stdout");
     assert!(stdout.contains("args=--model test-main-model --continue"));
     assert!(stdout.contains("effort=configured-by-fish subagent=unset"));
@@ -443,17 +470,16 @@ exit 23
     assert!(stdout.contains("resolved_models=configured-model,gpt-5.6-sol,grok-4.5"));
     let stderr = String::from_utf8(output.stderr).expect("Claude stderr");
     assert_eq!(stderr, "kept stderr\n");
+}
 
-    assert_inherited_launch(&home, port, &path);
-
+async fn stop_wrapper_daemon(port: u16) {
     let base_url = format!("http://127.0.0.1:{port}");
-    let pid = health(&Client::new(), &base_url).await["pid"]
+    let client = Client::new();
+    let pid = health(&client, &base_url).await["pid"]
         .as_u64()
         .expect("wrapper daemon pid");
-    terminate(pid);
-
-    assert_duplicate_model_is_rejected(&home, port, &claude);
-    assert_invalid_subagent_policy_is_rejected(&home, port, &claude);
+    drop(client);
+    terminate_and_wait(pid).await;
 }
 
 fn assert_duplicate_model_is_rejected(home: &TempDir, port: u16, claude: &std::path::Path) {
@@ -547,22 +573,31 @@ fn launcher_home() -> TempDir {
 }
 
 async fn health(client: &Client, base_url: &str) -> Value {
-    for _ in 0..120 {
+    let deadline = Instant::now() + HEALTH_READY_TIMEOUT;
+    loop {
         let Ok(response) = client.get(format!("{base_url}/health")).send().await else {
-            tokio::time::sleep(Duration::from_millis(25)).await;
+            sleep_until_health_deadline(deadline).await;
             continue;
         };
         let Ok(response) = response.error_for_status() else {
-            tokio::time::sleep(Duration::from_millis(25)).await;
+            sleep_until_health_deadline(deadline).await;
             continue;
         };
         let Ok(value) = response.json().await else {
-            tokio::time::sleep(Duration::from_millis(25)).await;
+            sleep_until_health_deadline(deadline).await;
             continue;
         };
         return value;
     }
-    panic!("adapter health did not become readable")
+}
+
+async fn sleep_until_health_deadline(deadline: Instant) {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    assert!(
+        !remaining.is_zero(),
+        "adapter health did not become readable"
+    );
+    tokio::time::sleep(Duration::from_millis(25).min(remaining)).await;
 }
 
 async fn replacement_health(client: &Client, base_url: &str, legacy_pid: u64) -> Value {
@@ -610,25 +645,30 @@ async fn fetch_test_health(client: &Client, base_url: &str) -> Option<Value> {
 fn terminate(pid: u64) {
     let status = Command::new("kill")
         .arg(pid.to_string())
+        .stderr(std::process::Stdio::null())
         .status()
         .expect("terminate daemon");
     assert!(status.success());
 }
 
-async fn wait_for_exit(client: &Client, base_url: &str) {
+async fn terminate_and_wait(pid: u64) {
+    terminate(pid);
     let deadline = Instant::now() + Duration::from_secs(3);
     while Instant::now() < deadline {
-        if client
-            .get(format!("{base_url}/health"))
-            .send()
-            .await
-            .is_err()
-        {
+        if !process_is_alive(pid) {
             return;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     panic!("adapter daemon did not exit");
+}
+
+fn process_is_alive(pid: u64) -> bool {
+    Command::new("kill")
+        .args(["-0", &pid.to_string()])
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
 }
 
 async fn wait_for_file(path: &std::path::Path) {

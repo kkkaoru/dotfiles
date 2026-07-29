@@ -1,0 +1,208 @@
+use std::collections::HashSet;
+use std::time::{Duration, Instant};
+
+use crate::anthropic::MessagesRequest;
+use serde_json::Value;
+
+use super::{SchedulerConfig, SchedulerDecision, core};
+
+pub(crate) fn reassessment_due(
+    inner: &super::Inner,
+    key: &str,
+    now: Instant,
+    config: &SchedulerConfig,
+) -> bool {
+    inner
+        .threads
+        .get(key)
+        .is_none_or(|state| now.duration_since(state.last_reassessed) >= config.reassess_interval)
+}
+
+pub(crate) fn apply_reassessment_actions(
+    decision: &mut SchedulerDecision,
+    snapshot: &core::SubagentSnapshot,
+    config: &SchedulerConfig,
+    should_reassess: bool,
+) {
+    if !snapshot.has_any_workers() || !config.reevaluate_on_completion {
+        return;
+    }
+    if should_reassess {
+        let cadence_minutes = config.reassess_interval.as_secs().div_ceil(60).max(1);
+        decision.actions.push(format!(
+            "Re-evaluate active set and issue follow-up instructions every {cadence_minutes}-minute tick"
+        ));
+    }
+    if decision.completed_recently > 0 {
+        decision
+            .actions
+            .push("Re-evaluate immediately after completion and rebalance lanes now".to_owned());
+    }
+}
+
+pub(crate) fn apply_capacity_actions(
+    decision: &mut SchedulerDecision,
+    target_workers: usize,
+    config: &SchedulerConfig,
+) {
+    let (lower_bound, upper_bound) = worker_bounds(config);
+    let effective_target = target_workers.clamp(lower_bound, upper_bound);
+    if decision.active_workers >= effective_target {
+        return;
+    }
+    let target_gap = effective_target - decision.active_workers;
+    decision.needs_more_workers = target_gap;
+    decision.actions.push(format!(
+        "Launch at least {target_gap} additional SubAgent lanes now (minimum floor is {}).",
+        effective_target
+    ));
+}
+
+fn worker_bounds(config: &SchedulerConfig) -> (usize, usize) {
+    if config.min_parallel_workers <= config.max_parallel_workers {
+        (config.min_parallel_workers, config.max_parallel_workers)
+    } else {
+        (config.max_parallel_workers, config.max_parallel_workers)
+    }
+}
+
+pub(crate) fn apply_floor_action(decision: &mut SchedulerDecision, config: &SchedulerConfig) {
+    if !decision.has_work() || decision.active_workers >= config.active_floor {
+        return;
+    }
+    decision.active_floor_breached = true;
+    let action = match decision.active_workers {
+        1 => {
+            "Only one active lane remains; interrupt stale work, dispatch replacements for unfinished branches, then continue."
+        }
+        _ => {
+            "Active worker count is close to the operational floor; reallocate heavy work and keep replacements ready."
+        }
+    };
+    decision.actions.push(action.to_owned());
+}
+
+pub(crate) fn apply_diversity_action(decision: &mut SchedulerDecision, config: &SchedulerConfig) {
+    if decision.active_workers == 0 || decision.active_model_families >= config.min_model_families {
+        return;
+    }
+    decision.needs_model_diversity = true;
+    decision.actions.push(format!(
+        "Diversify providers: active models should cover at least {} families.",
+        config.min_model_families
+    ));
+}
+
+pub(crate) fn apply_reuse_actions(decision: &mut SchedulerDecision, config: &SchedulerConfig) {
+    if config.allow_reuse && decision.has_work() {
+        decision.actions.push(
+            "Prefer reusing compatible completed workers via SendMessage; add new tasks to the same workers when their context fits."
+                .to_owned(),
+        );
+    }
+    if decision.completed_recently == 0 || !decision.has_work() {
+        return;
+    }
+    decision.actions.push(
+        "After each completion, audit unfinished scopes, send completion-aware follow-ups to remaining workers, then launch replacements for the still-open branches."
+            .to_owned(),
+    );
+    decision.actions.push(
+        "If scope remains weak, replay the same high-value subtask on fresh workers and expand scope on surviving active workers."
+            .to_owned(),
+    );
+    if config.cleanup_on_exit {
+        decision.actions.push(
+            "After completion, reclaim obsolete or idle lanes; maintain two+ active reusable workers to sustain throughput."
+                .to_owned(),
+        );
+    }
+}
+
+pub(crate) fn clear_empty_decision(
+    decision: &mut SchedulerDecision,
+    snapshot: &core::SubagentSnapshot,
+) {
+    if snapshot.has_any_workers() || decision.completed_recently > 0 {
+        return;
+    }
+    decision.needs_more_workers = 0;
+    decision.actions.clear();
+}
+
+pub(crate) fn persist_thread(
+    inner: &mut super::Inner,
+    key: String,
+    now: Instant,
+    should_reassess: bool,
+    previous_last_reassessed: Instant,
+    active_units: HashSet<String>,
+) {
+    inner.threads.insert(
+        key,
+        core::LiveThreadState {
+            last_seen: now,
+            last_reassessed: if should_reassess {
+                now
+            } else {
+                previous_last_reassessed
+            },
+            active_units,
+        },
+    );
+    inner
+        .threads
+        .retain(|_, state| now.duration_since(state.last_seen) < Duration::from_secs(3600));
+    if inner.threads.len() > 1_024 {
+        inner.threads.clear();
+    }
+}
+
+pub(crate) fn estimate_target_workers(
+    snapshot: &core::SubagentSnapshot,
+    request: &MessagesRequest,
+    config: &SchedulerConfig,
+) -> usize {
+    let mut target = config.min_parallel_workers;
+    let explicit_blocks = request
+        .messages
+        .iter()
+        .filter(|message| message.get("role").and_then(Value::as_str) == Some("user"))
+        .filter_map(|message| message.get("content").and_then(Value::as_str))
+        .map(count_explicit_blocks)
+        .max()
+        .unwrap_or(0);
+    if explicit_blocks >= 2 {
+        target = target.saturating_add(explicit_blocks.min(5));
+    }
+    target = target.max(snapshot.active_model_families().saturating_add(1));
+    target.min(config.max_parallel_workers)
+}
+
+fn count_explicit_blocks(content: &str) -> usize {
+    content
+        .lines()
+        .filter(|line| is_explicit_block(line))
+        .count()
+}
+
+fn is_explicit_block(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    trimmed.starts_with("- ")
+        || trimmed.starts_with("* ")
+        || trimmed.starts_with("・")
+        || is_numbered_block(trimmed)
+}
+
+fn is_numbered_block(trimmed: &str) -> bool {
+    let Some(character) = trimmed.chars().next() else {
+        return false;
+    };
+    if !character.is_ascii_digit() {
+        return false;
+    }
+    trimmed
+        .char_indices()
+        .nth(1)
+        .is_some_and(|(index, _)| trimmed[index..].starts_with(". "))
+}

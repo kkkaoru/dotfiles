@@ -1,10 +1,11 @@
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::{
     collections::HashMap,
-    os::unix::fs::PermissionsExt,
     path::PathBuf,
     process::Stdio,
     sync::{
-        Arc,
+        Arc, Weak,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::Duration,
@@ -22,6 +23,7 @@ pub(crate) mod events;
 use events::ThreadEventDispatcher;
 pub use events::ThreadEvents;
 mod isolated_config;
+mod lifecycle;
 mod pending;
 mod provider_environment;
 use pending::{PendingRequest, PendingResponse, await_response};
@@ -57,42 +59,7 @@ impl AppServer {
         isolated_home: &std::path::Path,
     ) -> Result<Arc<Self>> {
         let codex_home = prepare_isolated_codex_home(source_home, isolated_home)?;
-        let mut child = Command::new(program)
-            .args([
-                "app-server",
-                "--stdio",
-                "--disable",
-                "shell_tool",
-                "--disable",
-                "unified_exec",
-                "--disable",
-                "web_search",
-                "--disable",
-                "tool_search",
-                "--disable",
-                "apps",
-                "--disable",
-                "multi_agent",
-                "--disable",
-                "plugins",
-                "--disable",
-                "remote_control",
-                "-c",
-                &format!("model={model:?}"),
-                "-c",
-                "web_search=\"disabled\"",
-            ])
-            .env("CODEX_HOME", &codex_home)
-            .envs(provider_environment::credentials(source_home, &codex_home))
-            .env("RUST_LOG", "error")
-            .current_dir(&codex_home)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .kill_on_drop(true)
-            .spawn()
-            .context("failed to start `codex app-server`")?;
-
+        let mut child = spawn_child(model, program, source_home, &codex_home)?;
         let stdin = child
             .stdin
             .take()
@@ -110,7 +77,8 @@ impl AppServer {
             alive: AtomicBool::new(true),
         });
 
-        tokio::spawn(Self::read_loop(Arc::clone(&server), stdout));
+        // A weak reader handle lets kill_on_drop stop an abandoned app-server process.
+        tokio::spawn(Self::read_loop(Arc::downgrade(&server), stdout));
         let initialize = server
             .request_with_timeout("initialize", initialize_params(), INITIALIZE_TIMEOUT)
             .await
@@ -143,6 +111,10 @@ impl AppServer {
 
     pub fn is_alive(&self) -> bool {
         self.alive.load(Ordering::Relaxed)
+    }
+
+    pub async fn shutdown(&self) {
+        self.stop("adapter shutdown").await;
     }
 
     pub async fn request(&self, method: &str, params: Value) -> Result<Value> {
@@ -220,33 +192,33 @@ impl AppServer {
         Ok(())
     }
 
-    async fn read_loop(server: Arc<Self>, stdout: tokio::process::ChildStdout) {
+    async fn read_loop(server: Weak<Self>, stdout: tokio::process::ChildStdout) {
         let mut lines = BufReader::new(stdout).lines();
         loop {
-            let Some(line) = server.next_line(&mut lines).await else {
+            let line = match lines.next_line().await {
+                Ok(Some(line)) => line,
+                Ok(None) => {
+                    lifecycle::stop_if_alive(
+                        &server,
+                        "codex app-server exited or closed its output",
+                    )
+                    .await;
+                    return;
+                }
+                Err(error) => {
+                    tracing::error!(%error, "failed to read codex app-server output");
+                    lifecycle::stop_if_alive(
+                        &server,
+                        &format!("failed to read codex app-server output: {error}"),
+                    )
+                    .await;
+                    return;
+                }
+            };
+            let Some(server) = server.upgrade() else {
                 return;
             };
             server.dispatch_line(&line).await;
-        }
-    }
-
-    async fn next_line(
-        &self,
-        lines: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
-    ) -> Option<String> {
-        match lines.next_line().await {
-            Ok(Some(line)) => Some(line),
-            Ok(None) => {
-                self.stop("codex app-server exited or closed its output")
-                    .await;
-                None
-            }
-            Err(error) => {
-                tracing::error!(%error, "failed to read codex app-server output");
-                self.stop(&format!("failed to read codex app-server output: {error}"))
-                    .await;
-                None
-            }
         }
     }
 
@@ -255,25 +227,6 @@ impl AppServer {
             Ok(message) => self.dispatch(message).await,
             Err(error) => tracing::warn!(%error, %line, "invalid app-server JSONL message"),
         }
-    }
-
-    async fn stop(&self, reason: &str) {
-        if !self.alive.swap(false, Ordering::Relaxed) {
-            return;
-        }
-        self.fail_pending(reason).await;
-        self.event_dispatcher.close();
-
-        let mut child = self.child.lock().await;
-        let status = match child.try_wait() {
-            Ok(Some(status)) => Ok(status),
-            Ok(None) => {
-                let _ = child.start_kill();
-                child.wait().await
-            }
-            Err(error) => Err(error),
-        };
-        tracing::error!(?status, %reason, "codex app-server stopped");
     }
 
     async fn dispatch(&self, message: Value) {
@@ -345,6 +298,52 @@ fn initialize_params() -> Value {
     })
 }
 
+fn spawn_child(
+    model: &str,
+    program: impl AsRef<std::ffi::OsStr>,
+    source_home: &std::path::Path,
+    codex_home: &std::path::Path,
+) -> Result<Child> {
+    let mut command = Command::new(program);
+    #[cfg(unix)]
+    command.process_group(0);
+    command
+        .args([
+            "app-server",
+            "--stdio",
+            "--disable",
+            "shell_tool",
+            "--disable",
+            "unified_exec",
+            "--disable",
+            "web_search",
+            "--disable",
+            "tool_search",
+            "--disable",
+            "apps",
+            "--disable",
+            "multi_agent",
+            "--disable",
+            "plugins",
+            "--disable",
+            "remote_control",
+            "-c",
+            &format!("model={model:?}"),
+            "-c",
+            "web_search=\"disabled\"",
+        ])
+        .env("CODEX_HOME", codex_home)
+        .envs(provider_environment::credentials(source_home, codex_home))
+        .env("RUST_LOG", "error")
+        .current_dir(codex_home)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .kill_on_drop(true)
+        .spawn()
+        .context("failed to start `codex app-server`")
+}
+
 fn prepare_isolated_codex_home(
     source_home: &std::path::Path,
     isolated: &std::path::Path,
@@ -361,6 +360,7 @@ fn prepare_isolated_codex_home(
     std::fs::copy(&source_auth, isolated.join("auth.json"))
         .with_context(|| format!("failed to copy {}", source_auth.display()))?;
 
+    #[cfg(unix)]
     let _ = std::fs::set_permissions(
         isolated.join("auth.json"),
         std::fs::Permissions::from_mode(0o600),

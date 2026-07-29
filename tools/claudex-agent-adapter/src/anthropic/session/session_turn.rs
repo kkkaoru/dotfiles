@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use anyhow::Result;
 use serde_json::{Value, json};
 
@@ -16,6 +18,8 @@ pub(super) struct StartContextRetry<'a> {
 }
 
 impl Bridge {
+    // This method mirrors the complete session-turn state assembled by the
+    // request router; explicit fields keep ownership and retry context visible.
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn start_selected_turn(
         &self,
@@ -70,7 +74,7 @@ impl Bridge {
             )
             .await?;
         let response_model = self.request_model(request);
-        let events = self.app.subscribe_thread(&selected.session.thread_id);
+        let events = Arc::new(self.app.subscribe_thread(&selected.session.thread_id));
         Ok(ActiveTurn {
             session: selected.session,
             events,

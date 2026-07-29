@@ -20,10 +20,18 @@ async fn serve_until(
 
 #[cfg(unix)]
 async fn termination_signal() {
-    let mut signal = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
         .expect("install SIGTERM handler");
-    signal.recv().await;
-    tracing::info!("draining active HTTP requests before shutdown");
+    let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+        .expect("install SIGINT handler");
+    tokio::select! {
+        _ = sigterm.recv() => {
+            tracing::info!("received SIGTERM; draining active HTTP requests before shutdown");
+        }
+        _ = sigint.recv() => {
+            tracing::info!("received SIGINT; draining active HTTP requests before shutdown");
+        }
+    }
 }
 
 #[cfg(not(unix))]

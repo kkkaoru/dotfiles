@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{fmt, str::FromStr, sync::Arc};
 mod concurrency;
+mod lifecycle;
 mod route_config;
 mod routes;
 use routes::{RoutedBackend, RoutedBackends};

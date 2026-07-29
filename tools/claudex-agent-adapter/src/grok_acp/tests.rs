@@ -8,6 +8,7 @@ use super::{
     TURN_QUEUE_CAPACITY,
     client::AcpClient,
     connection::AcpProvider,
+    driver::{StartTurnRequest, drive_start_turns, schedule_start_turn},
     prompt, queue,
     turns::{ActiveTurns, InvalidatedSessions, cancel_turn, drive_turn_tasks, queue_turn},
     updates,
@@ -43,6 +44,35 @@ async fn terminates_the_entire_provider_process_group() {
         .success();
     assert!(!status.success());
     assert!(!group_exists);
+}
+
+#[test]
+fn identifies_each_acp_provider_and_its_model_scope() {
+    assert_eq!(AcpProvider::Grok.label(), "Grok");
+    assert_eq!(AcpProvider::Grok.driver_name(), "claudex-grok-acp");
+    assert!(!AcpProvider::Grok.model_is_launch_scoped());
+    assert!(!AcpProvider::Grok.is_session_scoped_configured());
+
+    assert_eq!(AcpProvider::Copilot.label(), "Copilot");
+    assert_eq!(AcpProvider::Copilot.driver_name(), "claudex-copilot-acp");
+    assert!(!AcpProvider::Copilot.model_is_launch_scoped());
+    assert!(!AcpProvider::Copilot.is_session_scoped_configured());
+
+    assert_eq!(AcpProvider::Configured.label(), "Configured");
+    assert_eq!(
+        AcpProvider::Configured.driver_name(),
+        "claudex-configured-acp"
+    );
+    assert!(!AcpProvider::Configured.model_is_launch_scoped());
+    assert!(AcpProvider::Configured.is_session_scoped_configured());
+
+    assert_eq!(AcpProvider::ConfiguredLaunchScoped.label(), "Configured");
+    assert_eq!(
+        AcpProvider::ConfiguredLaunchScoped.driver_name(),
+        "claudex-configured-acp"
+    );
+    assert!(AcpProvider::ConfiguredLaunchScoped.model_is_launch_scoped());
+    assert!(!AcpProvider::ConfiguredLaunchScoped.is_session_scoped_configured());
 }
 
 #[test]
@@ -134,6 +164,53 @@ async fn reports_a_closed_driver_for_each_command_response_type() {
     assert!(agent.create_session(json!({})).await.is_err());
     assert!(agent.start_turn(json!({})).await.is_err());
     assert!(agent.cancel_turn("session").await.is_err());
+}
+
+#[tokio::test]
+async fn shutdown_is_idempotent_when_the_driver_is_already_unavailable() {
+    let (commands, receiver) = tokio::sync::mpsc::channel(1);
+    drop(receiver);
+    let agent = GrokAcp {
+        provider: AcpProvider::Grok,
+        commands,
+        session_permits: Arc::new(tokio::sync::Semaphore::new(SESSION_QUEUE_CAPACITY)),
+        turn_permits: Arc::new(tokio::sync::Semaphore::new(TURN_QUEUE_CAPACITY)),
+        outer_permits: Arc::new(tokio::sync::Semaphore::new(1)),
+        turn_capacity: TURN_QUEUE_CAPACITY,
+        events: Arc::new(ThreadEventDispatcher::default()),
+        alive: Arc::new(AtomicBool::new(true)),
+    };
+
+    agent.shutdown().await;
+    assert!(!agent.is_alive());
+    agent.shutdown().await;
+}
+
+#[tokio::test]
+async fn shutdown_waits_for_an_available_driver_to_acknowledge() {
+    let (commands, mut receiver) = tokio::sync::mpsc::channel(1);
+    let agent = GrokAcp {
+        provider: AcpProvider::Grok,
+        commands,
+        session_permits: Arc::new(tokio::sync::Semaphore::new(SESSION_QUEUE_CAPACITY)),
+        turn_permits: Arc::new(tokio::sync::Semaphore::new(TURN_QUEUE_CAPACITY)),
+        outer_permits: Arc::new(tokio::sync::Semaphore::new(1)),
+        turn_capacity: TURN_QUEUE_CAPACITY,
+        events: Arc::new(ThreadEventDispatcher::default()),
+        alive: Arc::new(AtomicBool::new(true)),
+    };
+    let driver = tokio::spawn(async move {
+        let Some(DriverCommand::Shutdown { response }) = receiver.recv().await else {
+            panic!("shutdown command expected");
+        };
+        response
+            .send(())
+            .expect("driver receives shutdown acknowledgement");
+    });
+
+    agent.shutdown().await;
+    driver.await.expect("driver task");
+    assert!(!agent.is_alive());
 }
 
 #[tokio::test]
@@ -301,6 +378,90 @@ async fn cancels_a_queued_turn_when_its_requester_disconnects() {
         response,
         Err(anyhow::anyhow!("queue rejected")),
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn start_turn_scheduler_keeps_cancellation_progress_independent() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let instructions =
+                std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()));
+            let active_turns = ActiveTurns::default();
+            let invalidated_sessions = InvalidatedSessions::default();
+            let (turns, mut turn_receiver) =
+                tokio::sync::mpsc::channel::<PreparedTurn>(TURN_QUEUE_CAPACITY);
+            let (start_turns, start_turn_receiver) =
+                tokio::sync::mpsc::unbounded_channel::<StartTurnRequest>();
+            let scheduler = tokio::task::spawn_local(drive_start_turns(
+                AcpProvider::Grok,
+                start_turn_receiver,
+                std::rc::Rc::clone(&instructions),
+                turns.clone(),
+                std::rc::Rc::clone(&active_turns),
+                std::rc::Rc::clone(&invalidated_sessions),
+            ));
+
+            let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
+            active_turns
+                .borrow_mut()
+                .insert("session".to_owned(), Some(cancel_tx));
+            let permits = Arc::new(tokio::sync::Semaphore::new(1));
+            let (response_tx, response_rx) = tokio::sync::oneshot::channel();
+            start_turns
+                .send(StartTurnRequest {
+                    params: json!({"threadId":"session","input":"next"}),
+                    permit: Arc::clone(&permits).acquire_owned().await.unwrap(),
+                    response: response_tx,
+                })
+                .unwrap();
+
+            let cancel = tokio::time::timeout(std::time::Duration::from_secs(1), cancel_rx)
+                .await
+                .expect("scheduler did not reach the in-flight cancellation")
+                .expect("scheduler dropped the cancellation request");
+            cancel.response.send(Ok(())).unwrap();
+            active_turns.borrow_mut().remove("session");
+
+            assert!(
+                tokio::time::timeout(std::time::Duration::from_secs(1), response_rx)
+                    .await
+                    .expect("scheduler did not finish after cancellation")
+                    .unwrap()
+                    .is_ok()
+            );
+            let prepared =
+                tokio::time::timeout(std::time::Duration::from_secs(1), turn_receiver.recv())
+                    .await
+                    .expect("scheduler did not queue the replacement turn")
+                    .expect("scheduler dropped the replacement turn");
+            assert_eq!(prepared.session_id, "session");
+            drop(prepared);
+            assert_eq!(permits.available_permits(), 1);
+
+            drop(start_turns);
+            drop(turns);
+            scheduler.await.unwrap();
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn start_turn_scheduler_rejects_requests_after_worker_shutdown() {
+    let (turns, receiver) = tokio::sync::mpsc::unbounded_channel();
+    drop(receiver);
+    let permits = Arc::new(tokio::sync::Semaphore::new(1));
+    let (response, rejected) = tokio::sync::oneshot::channel();
+
+    schedule_start_turn(
+        &turns,
+        StartTurnRequest {
+            params: json!({"threadId":"rejected"}),
+            permit: permits.acquire_owned().await.unwrap(),
+            response,
+        },
+    );
+
+    assert!(rejected.await.unwrap().is_err());
 }
 
 #[tokio::test(flavor = "current_thread")]

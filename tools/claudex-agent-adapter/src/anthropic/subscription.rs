@@ -1,5 +1,4 @@
 use std::{
-    future::Future,
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
@@ -14,6 +13,11 @@ use tokio::{
     sync::{OwnedSemaphorePermit, Semaphore},
 };
 
+mod lifecycle;
+
+#[cfg(test)]
+pub(super) use super::subscription_request::cwd_from_system;
+pub(super) use super::subscription_request::requested_tools;
 use super::{
     Bridge, MessagesRequest, Segment, Usage,
     agent_effort::AgentEffort,
@@ -22,10 +26,8 @@ use super::{
     subscription_stream::subscription_streaming_response,
 };
 use crate::NONINTERACTIVE_CHILD_ENV;
-
-#[cfg(test)]
-pub(super) use super::subscription_request::cwd_from_system;
-pub(super) use super::subscription_request::requested_tools;
+pub(in crate::anthropic) use lifecycle::terminate_subscription;
+use lifecycle::{collect_subscription_output, terminate_after_subscription_failure};
 
 pub(crate) const DEFAULT_MAX_PROCESSES: usize = 20;
 pub(crate) const DEFAULT_TIMEOUT_MINUTES: u64 = 120;
@@ -44,6 +46,7 @@ pub(super) struct SubscriptionOptions {
 #[derive(Clone)]
 pub(super) struct SubscriptionToolContext {
     pub(super) agent_efforts: Arc<super::agent_effort::AgentEffortIntents>,
+    pub(super) model_catalog: crate::provider_config::ModelCatalog,
     pub(super) client_user_id: Option<String>,
     pub(super) parent_model: String,
     pub(super) user_messages: Vec<Value>,
@@ -186,6 +189,7 @@ impl Bridge {
             timeout: self.subscription_timeout,
             tool_context: Some(SubscriptionToolContext {
                 agent_efforts: Arc::clone(&self.agent_efforts),
+                model_catalog: self.model_catalog.clone(),
                 client_user_id: request
                     .metadata
                     .get("user_id")
@@ -251,14 +255,15 @@ pub(super) async fn run_subscription_model(
     let mut command = subscription_command(program, model, &options, OutputMode::Json);
     let mut child = spawn_subscription(&mut command, model)?;
     let stdin = take_subscription_stdin(&mut child)?;
-    let interaction = async {
-        let (prompt_result, output) = tokio::join!(
-            write_subscription_prompt(stdin, prompt),
-            child.wait_with_output()
-        );
-        output.map(|output| (prompt_result, output))
+    let interaction = collect_subscription_output(&mut child, stdin, prompt);
+    let (prompt_result, output) = match tokio::time::timeout(options.timeout, interaction).await {
+        Ok(Ok(output)) => output,
+        Ok(Err(error)) => return terminate_after_subscription_failure(&mut child, error).await,
+        Err(_) => {
+            terminate_subscription(&mut child).await?;
+            bail!("Claude subscription timed out after {:?}", options.timeout);
+        }
     };
-    let (prompt_result, output) = wait_for_subscription(interaction, options.timeout).await?;
     if !output.status.success() {
         bail!(
             "Claude subscription model {model} exited with {}: {}",
@@ -302,16 +307,6 @@ pub(super) async fn write_subscription_prompt(mut stdin: ChildStdin, prompt: &st
     stdin.shutdown().await.map_err(Into::into) // explicit EOF for --print
 }
 
-pub(super) async fn wait_for_subscription<F, T>(future: F, timeout: Duration) -> Result<T>
-where
-    F: Future<Output = std::io::Result<T>>,
-{
-    tokio::time::timeout(timeout, future)
-        .await
-        .map_err(|_| anyhow!("Claude subscription timed out after {timeout:?}"))?
-        .map_err(Into::into)
-}
-
 #[derive(Clone, Copy)]
 pub(super) enum OutputMode {
     Json,
@@ -325,6 +320,11 @@ pub(super) fn subscription_command(
     output: OutputMode,
 ) -> Command {
     let mut command = Command::new(program);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+        command.as_std_mut().process_group(0);
+    }
     let tools = options.tools.join(",");
     let output_format = match output {
         OutputMode::Json => "json",

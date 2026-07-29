@@ -109,7 +109,7 @@ impl Stream for KeepaliveStream {
     }
 }
 
-pub(super) async fn send_stream_completion(sender: &StreamSender, segment: &Segment) {
+pub(in crate::anthropic) async fn send_stream_completion(sender: &StreamSender, segment: &Segment) {
     let _ = send_stream_frame(Some(sender), "message_delta", || {
         json!({
             "type":"message_delta",
@@ -291,9 +291,11 @@ mod lazy_tests {
             "/",
             axum::routing::get(move || take_ping_response(Arc::clone(&receiver))),
         );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind SSE listener");
+        let listener = match tokio::net::TcpListener::bind("127.0.0.1:0").await {
+            Ok(listener) => listener,
+            Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => return,
+            Err(error) => panic!("bind SSE listener: {error}"),
+        };
         let address = listener.local_addr().expect("SSE listener address");
         let server = tokio::spawn(async move {
             axum::serve(listener, app)

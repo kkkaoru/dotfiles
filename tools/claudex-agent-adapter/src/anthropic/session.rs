@@ -273,11 +273,7 @@ impl Bridge {
         session: &Session,
         results: Vec<ToolResult>,
     ) -> Result<bool> {
-        let completed_ids = results
-            .iter()
-            .map(|result| result.tool_use_id.clone())
-            .collect::<Vec<_>>();
-        let responses = take_pending_results(session, results).await?;
+        let (responses, completed_ids) = take_pending_results(session, results).await?;
         self.agent_efforts
             .remove_tool_results(completed_ids.iter().map(String::as_str));
         let submitted = !responses.is_empty();

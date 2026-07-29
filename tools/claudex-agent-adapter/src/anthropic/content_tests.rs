@@ -16,6 +16,7 @@ mod tests {
         remember_consumed_tool_id, take_pending_results,
     };
     use crate::anthropic::{Session, agent_batch::pending_marker};
+    use crate::anthropic::content_batch::{batch_progress, store_batch_result};
 
     #[tokio::test]
     async fn accepts_pending_and_already_consumed_results() {
@@ -26,16 +27,82 @@ mod tests {
         )
         .await;
         let results = vec![result("pending"), result("consumed")];
-        let responses = take_pending_results(&active, results)
+        let (responses, completed_tool_use_ids) = take_pending_results(&active, results)
             .await
             .expect("valid results");
         assert_eq!(responses.len(), 1);
         assert_eq!(responses[0].0, "call");
+        assert_eq!(completed_tool_use_ids, vec!["pending"]);
         assert!(active.pending_since.lock().expect("clock").is_none());
     }
 
     #[tokio::test]
     async fn combines_a_complete_parallel_agent_batch_into_one_provider_result() {
+        assert_complete_batch().await;
+        assert_partial_batch_replays().await;
+        assert_independent_batches_are_combined().await;
+    }
+
+    #[tokio::test]
+    async fn accepts_repeated_batch_members_and_preserves_earlier_error_status() {
+        let active = session(
+            [
+                ("one".to_owned(), pending_marker(json!(66), 0, 3)),
+                ("two".to_owned(), pending_marker(json!(66), 1, 3)),
+                ("three".to_owned(), pending_marker(json!(66), 2, 3)),
+            ]
+            .into(),
+            HashSet::new(),
+            Vec::new(),
+        )
+        .await;
+
+        let (responses, completed) = take_pending_results(
+            &active,
+            vec![result("one"), error_result("one"), result("two"), result("three")],
+        )
+        .await
+        .expect("duplicate batch members are retained until the batch completes");
+
+        assert_eq!(responses.len(), 1);
+        assert!(responses[0].1.is_error);
+        assert_eq!(completed.len(), 3);
+        assert!(active.pending_tools.lock().await.is_empty());
+    }
+
+    #[test]
+    fn reports_partial_and_complete_batch_progress_without_consuming_pending() {
+        let mut invalid = json!("not an object");
+        store_batch_result(&mut invalid, "ignored".to_owned(), Vec::new(), false);
+        assert_eq!(invalid, json!("not an object"));
+
+        let mut pending = HashMap::from([
+            ("plain".to_owned(), json!("ordinary tool")),
+            ("one".to_owned(), pending_marker(json!(88), 0, 2)),
+            ("two".to_owned(), pending_marker(json!(88), 1, 2)),
+            ("other".to_owned(), pending_marker(json!(99), 0, 1)),
+        ]);
+        assert_eq!(batch_progress(&pending, &json!(88)), Some((0, 2)));
+        assert_eq!(batch_progress(&pending, &json!(404)), None);
+
+        store_batch_result(
+            pending.get_mut("one").expect("first batch marker"),
+            "one".to_owned(),
+            vec![json!({"type":"inputText","text":"first"})],
+            false,
+        );
+        assert_eq!(batch_progress(&pending, &json!(88)), Some((1, 2)));
+
+        store_batch_result(
+            pending.get_mut("two").expect("second batch marker"),
+            "two".to_owned(),
+            vec![json!({"type":"inputText","text":"second"})],
+            false,
+        );
+        assert_eq!(batch_progress(&pending, &json!(88)), Some((2, 2)));
+    }
+
+    async fn assert_complete_batch() {
         let active = session(
             [
                 ("one".to_owned(), pending_marker(json!(77), 0, 2)),
@@ -46,14 +113,27 @@ mod tests {
             Vec::new(),
         )
         .await;
-        let responses = take_pending_results(&active, vec![result("two"), result("one")])
-            .await
-            .expect("complete batch");
+        let (responses, completed_tool_use_ids) =
+            take_pending_results(&active, vec![error_result("two"), result("one")])
+                .await
+                .expect("complete batch");
         assert_eq!(responses.len(), 1);
         assert_eq!(responses[0].0, 77);
-        assert_eq!(responses[0].1.content_items[0]["text"], "SubAgent 1 result:");
-        assert_eq!(responses[0].1.content_items[1]["text"], "SubAgent 2 result:");
+        assert_eq!(completed_tool_use_ids.len(), 2);
+        assert!(completed_tool_use_ids.contains(&"one".to_string()));
+        assert!(completed_tool_use_ids.contains(&"two".to_string()));
+        assert_eq!(
+            responses[0].1.content_items[0]["text"],
+            "SubAgent 1 result:"
+        );
+        assert_eq!(
+            responses[0].1.content_items[1]["text"],
+            "SubAgent 2 result:"
+        );
+        assert!(responses[0].1.is_error);
+    }
 
+    async fn assert_partial_batch_replays() {
         let partial = session(
             [
                 ("one".to_owned(), pending_marker(json!(88), 0, 2)),
@@ -64,8 +144,51 @@ mod tests {
             Vec::new(),
         )
         .await;
-        assert!(take_pending_results(&partial, vec![result("one")]).await.is_err());
+        assert_first_partial_result(&partial).await;
+        assert_replayed_batch_completes(&partial).await;
+    }
 
+    async fn assert_first_partial_result(partial: &Session) {
+        let (responses, completed_tool_use_ids) =
+            take_pending_results(partial, vec![result("one")])
+                .await
+                .expect("partial batch is accepted");
+        assert!(responses.is_empty());
+        assert!(completed_tool_use_ids.is_empty());
+        let pending = partial.pending_tools.lock().await;
+        assert!(pending.contains_key("one"));
+        assert!(pending.contains_key("two"));
+        assert_eq!(
+            super::super::content_batch::batch_progress(&pending, &json!(88)),
+            Some((1, 2))
+        );
+    }
+
+    async fn assert_replayed_batch_completes(partial: &Session) {
+        let (responses, completed_tool_use_ids) =
+            take_pending_results(partial, vec![result("one")])
+                .await
+                .expect("partial duplicate replay is accepted");
+        assert!(responses.is_empty());
+        assert!(completed_tool_use_ids.is_empty());
+        let (responses, _completed_tool_use_ids) =
+            take_pending_results(partial, vec![result("two")])
+                .await
+                .expect("remaining batch result is accepted");
+        assert_eq!(responses.len(), 1);
+        assert_eq!(responses[0].0, 88);
+        assert_eq!(
+            responses[0].1.content_items[0]["text"],
+            "SubAgent 1 result:"
+        );
+        assert_eq!(
+            responses[0].1.content_items[1]["text"],
+            "SubAgent 2 result:"
+        );
+        assert!(partial.pending_tools.lock().await.is_empty());
+    }
+
+    async fn assert_independent_batches_are_combined() {
         let mixed = session(
             [
                 ("one".to_owned(), pending_marker(json!(77), 0, 2)),
@@ -78,7 +201,7 @@ mod tests {
             Vec::new(),
         )
         .await;
-        let responses = take_pending_results(
+        let (responses, _completed_tool_use_ids) = take_pending_results(
             &mixed,
             vec![
                 result("one"),
@@ -114,10 +237,12 @@ mod tests {
                 .await
                 .is_err()
         );
-        let responses = take_pending_results(&active, vec![result("one")])
-            .await
-            .expect("one pending result");
+        let (responses, completed_tool_use_ids) =
+            take_pending_results(&active, vec![result("one")])
+                .await
+                .expect("one pending result");
         assert_eq!(responses.len(), 1);
+        assert_eq!(completed_tool_use_ids, vec!["one"]);
         assert!(active.pending_since.lock().expect("clock").is_some());
         assert!(
             matching_transcript_len(&active, &[json!({"role":"user","content":"different"})])
@@ -198,6 +323,13 @@ mod tests {
             tool_use_id: tool_use_id.to_owned(),
             content_items: Vec::new(),
             is_error: false,
+        }
+    }
+
+    fn error_result(tool_use_id: &str) -> ToolResult {
+        ToolResult {
+            is_error: true,
+            ..result(tool_use_id)
         }
     }
 

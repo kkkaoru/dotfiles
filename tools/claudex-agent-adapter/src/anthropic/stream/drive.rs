@@ -28,7 +28,7 @@ impl Bridge {
         match self
             .wait_for_stream_segment(
                 &session,
-                &events,
+                Arc::clone(&events),
                 &extras,
                 &routing_system,
                 &sender,

@@ -5,6 +5,7 @@ use super::subscription::valid_effort;
 
 const ADAPTER_EFFORT: &str = "claudex_effort";
 const ADAPTER_MODEL: &str = "claudex_model";
+const INHERITED_PARENT_MODEL: &str = "claudex_inherited_parent_model";
 
 pub(super) fn hydrate_routing_fields(arguments: &mut Value) {
     // Only explicit claudex_model fields / prompt headers are trusted. Do not infer from the
@@ -30,6 +31,89 @@ pub(super) fn hydrate_routing_fields(arguments: &mut Value) {
     }
 }
 
+/// Native Claude subscription tools do not expose Claudex-only schema fields.
+/// Recover them only from the exact selected worker named by the tool call.
+pub(super) fn hydrate_routing_fields_from_context(
+    arguments: &mut Value,
+    messages: &[Value],
+    system: &Value,
+    model_catalog: &crate::provider_config::ModelCatalog,
+) {
+    hydrate_routing_fields(arguments);
+    let Some((model, effort)) = selected_worker_fields(arguments, messages, system)
+        .or_else(|| configured_worker_fields(arguments, model_catalog))
+    else {
+        return;
+    };
+    let Some(object) = arguments.as_object_mut() else {
+        return;
+    };
+    object
+        .entry(ADAPTER_MODEL.to_owned())
+        .or_insert(Value::String(model));
+    if let Some(effort) = effort {
+        object
+            .entry(ADAPTER_EFFORT.to_owned())
+            .or_insert(Value::String(effort));
+    }
+}
+
+/// Preserve Claude Code's built-in Explore agent when it does not select a routed worker.
+/// Its only safe fallback is the current parent model, never a guessed provider model.
+pub(super) fn hydrate_standard_agent_to_parent(arguments: &mut Value, parent_model: &str) {
+    let Some(subagent_type) = arguments.get("subagent_type").and_then(Value::as_str) else {
+        return;
+    };
+    if subagent_type != "Explore"
+        || parent_model.is_empty()
+        || subagent_type.starts_with("claudex-")
+        || arguments.get(ADAPTER_MODEL).is_some()
+    {
+        return;
+    }
+    let Some(object) = arguments.as_object_mut() else {
+        return;
+    };
+    object.insert(
+        ADAPTER_MODEL.to_owned(),
+        Value::String(parent_model.to_owned()),
+    );
+    object.insert(
+        INHERITED_PARENT_MODEL.to_owned(),
+        Value::String(parent_model.to_owned()),
+    );
+}
+
+fn configured_worker_fields(
+    arguments: &Value,
+    model_catalog: &crate::provider_config::ModelCatalog,
+) -> Option<(String, Option<String>)> {
+    let (model, effort) = model_catalog.worker_fields(arguments.get("subagent_type")?.as_str()?)?;
+    Some((model.to_owned(), Some(effort.to_owned())))
+}
+
+fn selected_worker_fields(
+    arguments: &Value,
+    messages: &[Value],
+    system: &Value,
+) -> Option<(String, Option<String>)> {
+    let agent = arguments.get("subagent_type")?.as_str()?;
+    let summary = active_routing_summary(messages, system)?;
+    let worker = summary
+        .get("selected_workers")?
+        .as_array()?
+        .iter()
+        .find(|worker| worker.get("agent").and_then(Value::as_str) == Some(agent))?;
+    Some((
+        worker.get("model")?.as_str()?.to_owned(),
+        worker
+            .get("effort")
+            .and_then(Value::as_str)
+            .filter(|effort| valid_effort(effort))
+            .map(str::to_owned),
+    ))
+}
+
 fn prompt_routing_value(arguments: &Value, key: &str) -> Option<String> {
     let prefix = format!("{key}:");
     arguments
@@ -43,7 +127,7 @@ fn prompt_routing_value(arguments: &Value, key: &str) -> Option<String> {
 }
 
 pub(super) fn model_is_authorized(
-    _arguments: &Value,
+    arguments: &Value,
     messages: &[Value],
     system: &Value,
     model: &str,
@@ -51,25 +135,38 @@ pub(super) fn model_is_authorized(
     // Claude Code can preserve its built-in `general-purpose` / `Explore` type while passing a
     // routed provider model. The selected model remains the authority; requiring its display
     // type to equal the configured worker name rejects that valid launch before ACP can start.
+    if advisor_launch_disabled(arguments, messages, system) {
+        return false;
+    }
     current_user_requests_model(messages, model)
         || selected_worker_model_matches(messages, system, model)
+        || configured_advisor_model_matches(arguments, messages, system, model)
+}
+
+pub(super) fn model_is_authorized_with_catalog(
+    arguments: &Value,
+    messages: &[Value],
+    system: &Value,
+    model_catalog: &crate::provider_config::ModelCatalog,
+    model: &str,
+) -> bool {
+    model_is_authorized(arguments, messages, system, model)
+        || arguments
+            .get(INHERITED_PARENT_MODEL)
+            .and_then(Value::as_str)
+            == Some(model)
+        || model_catalog
+            .worker_fields(
+                arguments
+                    .get("subagent_type")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            )
+            .is_some_and(|(configured, _)| configured == model)
 }
 
 fn selected_worker_model_matches(messages: &[Value], system: &Value, model: &str) -> bool {
-    // The hook normally places the current snapshot in a user message, but Claude Code can
-    // retain it in an assistant/tool transcript after compaction or a resumed turn. Prefer the
-    // request-level system snapshot, then the latest user snapshot, and finally any transcript
-    // snapshot so an otherwise valid routed worker is not rejected after context reshaping.
-    let summary = value_texts(system)
-        .filter_map(routing_summary)
-        .last()
-        .or_else(|| {
-            user_message_texts(messages)
-                .filter_map(routing_summary)
-                .last()
-        })
-        .or_else(|| message_texts(messages).filter_map(routing_summary).last());
-    summary.is_some_and(|summary| {
+    active_routing_summary(messages, system).is_some_and(|summary| {
         summary
             .get("selected_workers")
             .and_then(Value::as_array)
@@ -77,6 +174,62 @@ fn selected_worker_model_matches(messages: &[Value], system: &Value, model: &str
             .flatten()
             .any(|worker| worker.get("model").and_then(Value::as_str) == Some(model))
     })
+}
+
+fn advisor_launch_disabled(arguments: &Value, messages: &[Value], system: &Value) -> bool {
+    let Some(agent) = arguments.get("subagent_type").and_then(Value::as_str) else {
+        return false;
+    };
+    active_routing_summary(messages, system).is_some_and(|summary| {
+        summary
+            .get("custom_advisor_enabled")
+            .and_then(Value::as_bool)
+            .is_some_and(|enabled| {
+                !enabled
+                    && summary
+                        .get("advisor")
+                        .and_then(|advisor| advisor.get("agent"))
+                        .and_then(Value::as_str)
+                        == Some(agent)
+            })
+    })
+}
+
+fn configured_advisor_model_matches(
+    arguments: &Value,
+    messages: &[Value],
+    system: &Value,
+    model: &str,
+) -> bool {
+    let Some(agent) = arguments.get("subagent_type").and_then(Value::as_str) else {
+        return false;
+    };
+    active_routing_summary(messages, system).is_some_and(|summary| {
+        summary
+            .get("custom_advisor_enabled")
+            .and_then(Value::as_bool)
+            .unwrap_or(true)
+            && summary.get("advisor").is_some_and(|advisor| {
+                advisor.get("agent").and_then(Value::as_str) == Some(agent)
+                    && advisor.get("model").and_then(Value::as_str) == Some(model)
+            })
+    })
+}
+
+fn active_routing_summary(messages: &[Value], system: &Value) -> Option<Value> {
+    // The hook normally places the current snapshot in a user message, but Claude Code can
+    // retain it in an assistant/tool transcript after compaction or a resumed turn. Prefer the
+    // request-level system snapshot, then the latest user snapshot, and finally any transcript
+    // snapshot so an otherwise valid routed worker is not rejected after context reshaping.
+    value_texts(system)
+        .filter_map(routing_summary)
+        .last()
+        .or_else(|| {
+            user_message_texts(messages)
+                .filter_map(routing_summary)
+                .last()
+        })
+        .or_else(|| message_texts(messages).filter_map(routing_summary).last())
 }
 
 fn current_user_requests_model(messages: &[Value], model: &str) -> bool {

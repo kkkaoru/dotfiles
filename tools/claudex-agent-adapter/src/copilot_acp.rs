@@ -35,6 +35,10 @@ impl CopilotAcp {
         self.inner.is_alive()
     }
 
+    pub async fn shutdown(&self) {
+        self.inner.shutdown().await;
+    }
+
     pub async fn create_session(&self, params: Value) -> Result<Value> {
         self.inner.create_session(params).await
     }

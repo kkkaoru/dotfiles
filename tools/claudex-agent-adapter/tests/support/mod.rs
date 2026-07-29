@@ -126,6 +126,14 @@ impl Adapter {
             self.disconnect_marker.display()
         )
     }
+
+    #[allow(dead_code)]
+    pub fn codex_slow_disconnect_prompt(&self) -> String {
+        format!(
+            "DISCONNECT_WITH_SLOW_TOOL\nDISCONNECT_MARKER={}",
+            self.disconnect_marker.display()
+        )
+    }
 }
 
 fn fixture_home() -> TempDir {

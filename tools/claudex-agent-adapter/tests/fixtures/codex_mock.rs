@@ -130,14 +130,8 @@ impl<W: Write> Fixture<W> {
             self.send_text_then_tool();
         } else if input.contains("PROVIDER_TOOL_PROGRESS") {
             self.send_provider_tool_progress();
-        } else if input.contains("DISCONNECT_WITH_TOOL") {
-            // turn/start serializes `input` with Value::to_string(), so the prompt is
-            // JSON-encoded and real newlines become the two characters '\' 'n'.
-            self.disconnect_marker = disconnect_marker_from_input(input);
-            self.pending_tool = true;
-            self.send_text("DISCONNECT_READY");
-            thread::sleep(Duration::from_millis(100));
-            self.send_tool_event(900, "call-disconnected");
+        } else if input.contains("DISCONNECT_WITH") {
+            self.start_disconnected_tool_turn(input);
         } else if input.contains("REPORT_DISCONNECT_DRAIN") {
             let status = if self.disconnected_tool_drained {
                 "CODEX_DISCONNECT_DRAINED"
@@ -154,6 +148,21 @@ impl<W: Write> Fixture<W> {
         } else {
             self.send_plain_or_streamed(message, input);
         }
+    }
+
+    fn start_disconnected_tool_turn(&mut self, input: &str) {
+        // turn/start serializes `input` with Value::to_string(), so the prompt is
+        // JSON-encoded and real newlines become the two characters '\' 'n'.
+        self.disconnect_marker = disconnect_marker_from_input(input);
+        self.pending_tool = true;
+        self.send_text("DISCONNECT_READY");
+        let delay = if input.contains("SLOW_TOOL") {
+            500
+        } else {
+            100
+        };
+        thread::sleep(Duration::from_millis(delay));
+        self.send_tool_event(900, "call-disconnected");
     }
 
     fn context_window_once(&mut self, message: &Value) {

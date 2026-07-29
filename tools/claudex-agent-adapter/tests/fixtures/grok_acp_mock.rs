@@ -76,7 +76,7 @@ impl MockAgent {
             .append(true)
             .open(&self.trace)
             .map_err(|_| acp::Error::internal_error())?;
-        serde_json::to_writer(&mut file, &serde_json::json!({event:value}))
+        serde_json::to_writer(&mut file, &serde_json::json!({ event: value }))
             .map_err(|_| acp::Error::internal_error())?;
         writeln!(file).map_err(|_| acp::Error::internal_error())
     }
@@ -251,7 +251,7 @@ fn coverage_extensions(session_id: &str) -> Vec<(&'static str, serde_json::Value
         ("_x.ai/session/update", serde_json::json!({})),
         (
             "_x.ai/session/update",
-            serde_json::json!({"sessionId":session_id}),
+            serde_json::json!({ "sessionId": session_id }),
         ),
         (
             "_x.ai/session/update",

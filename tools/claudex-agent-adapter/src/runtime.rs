@@ -8,7 +8,7 @@ use crate::{
     anthropic::{Bridge, DEFAULT_MAX_PROCESSES, DEFAULT_TIMEOUT_MINUTES},
     http_router,
     launcher::{self, AdapterOptions},
-    provider_config,
+    provider_config::{self, WorkerRoute},
 };
 
 mod shutdown;
@@ -80,9 +80,12 @@ fn parse_command(mut arguments: VecDeque<OsString>) -> Result<RuntimeCommand> {
     }
 }
 
+// Keep the option table in one place so each supported CLI flag has a single,
+// auditable parsing branch; the build gate still limits this file to 400 lines.
 #[allow(clippy::too_many_lines)]
 fn parse_options(arguments: &mut VecDeque<OsString>) -> Result<ParsedOptions> {
     let mut routes = Vec::new();
+    let mut worker_routes = Vec::new();
     let mut model = None;
     let mut provider_config = None;
     let mut inherit_claude_model = false;
@@ -101,6 +104,13 @@ fn parse_options(arguments: &mut VecDeque<OsString>) -> Result<ParsedOptions> {
             "--backend-route-json" => {
                 let value = option_value(arguments, "--backend-route-json")?;
                 routes.push(serde_json::from_str(&value).context("invalid backend route JSON")?);
+            }
+            "--worker-route-json" => {
+                let value = option_value(arguments, "--worker-route-json")?;
+                worker_routes.push(
+                    serde_json::from_str::<WorkerRoute>(&value)
+                        .context("invalid worker route JSON")?,
+                );
             }
             "--provider-config" => {
                 provider_config =
@@ -141,6 +151,7 @@ fn parse_options(arguments: &mut VecDeque<OsString>) -> Result<ParsedOptions> {
         .as_ref()
         .map(|configured| configured.model_catalog.clone())
         .unwrap_or_default();
+
     if let Some(configured) = &configured {
         routes.splice(0..0, configured.routes.clone());
     }
@@ -152,6 +163,9 @@ fn parse_options(arguments: &mut VecDeque<OsString>) -> Result<ParsedOptions> {
     }
     if model_catalog == provider_config::ModelCatalog::default() {
         model_catalog = provider_config::ModelCatalog::from_routes(&routes);
+    }
+    if !worker_routes.is_empty() {
+        model_catalog.set_worker_routes(worker_routes)?;
     }
     validate_routes(&routes, &model)?;
     Ok(ParsedOptions {
@@ -279,15 +293,22 @@ async fn serve_on_listener(
 ) -> Result<()> {
     let bridge = Arc::new(
         Bridge::new_with_backend_limits(
-            backend,
+            Arc::clone(&backend),
             options.model.clone(),
             options.subscription_max_processes,
             options.subscription_timeout_minutes,
         )?
+        .with_persisted_agent_intents()
         .with_model_catalog(options.model_catalog.clone()),
     );
     tracing::info!(listen = %options.listen, routes = ?options.routes, model = %options.model, "claudex agent adapter is ready");
-    shutdown::serve(listener, http_router(bridge, options.model, auth_token)).await
+    let result = shutdown::serve(
+        listener,
+        http_router(Arc::clone(&bridge), options.model, auth_token),
+    )
+    .await;
+    backend.shutdown().await;
+    result
 }
 
 fn configured_token() -> Option<String> {

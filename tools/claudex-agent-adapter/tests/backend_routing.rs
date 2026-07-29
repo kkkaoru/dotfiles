@@ -91,6 +91,50 @@ async fn routes_main_and_subagent_models_to_coexisting_backends() {
 }
 
 #[tokio::test]
+async fn health_reports_unavailable_after_a_leaf_backend_stops() {
+    let root = tempfile::tempdir().expect("health fixture");
+    let source = root.path().join("codex-source");
+    std::fs::create_dir(&source).expect("create Codex source home");
+    std::fs::write(source.join("auth.json"), "{}").expect("write Codex auth");
+    let app_server = AppServer::spawn_with_program(
+        "health-model",
+        env!("CARGO_BIN_EXE_codex-mock"),
+        &source,
+        &root.path().join("codex-home"),
+    )
+    .await
+    .expect("start Codex backend");
+    let backend = AgentBackend::codex(app_server);
+    backend.shutdown().await;
+
+    let bridge = Arc::new(Bridge::new_with_backend(backend, "health-model".to_owned()));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind health listener");
+    let address = listener.local_addr().expect("read health listener address");
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            http_router(bridge, "health-model".to_owned(), None),
+        )
+        .await
+        .expect("serve health endpoint");
+    });
+
+    let response = Client::new()
+        .get(format!("http://{address}/health"))
+        .send()
+        .await
+        .expect("request unavailable health");
+    assert_eq!(response.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        response.json::<Value>().await.expect("decode health")["status"],
+        "unavailable"
+    );
+    server.abort();
+}
+
+#[tokio::test]
 async fn context_window_recovery_is_model_agnostic_for_fugu_routes() {
     let root = tempfile::tempdir().expect("Fugu routing fixture");
     let source = root.path().join("codex-source");

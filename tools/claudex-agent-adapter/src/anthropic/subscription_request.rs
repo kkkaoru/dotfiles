@@ -5,48 +5,70 @@ use serde_json::Value;
 use super::{MessagesRequest, content::system_text};
 
 pub(super) fn subscription_request_prompt(request: &MessagesRequest) -> String {
-    format!(
+    let mut prompt = format!(
         concat!(
             "Act as the requested Claude Code model. Follow the system instructions and complete ",
             "the conversation below. Use only the enabled tools when needed. Delegation is the ",
-            "standing default for substantive work unless the user opts out. When selected_workers ",
-            "are present, invoke the selected Agent or Task directly as the first tool call; do not ",
-            "perform task-list bookkeeping first. Apply current selected_workers routing to every ",
-            "Agent/Task launch, including nested launches from an existing worker: choose the ",
-            "selected claudex worker agent and pass its exact model and effort. Never default a ",
-            "nested launch to generic claude or blindly inherit its parent provider when current ",
-            "routing selects another route. Start as many worker instances as useful for real ",
+            "standing default for substantive work unless the user opts out. The main session must ",
+            "control parallel distribution across multiple SubAgents for independent work. When ",
+            "selected_workers are present, invoke the selected Agent or Task directly as the first ",
+            "tool call; do not perform task-list bookkeeping first. Apply current selected_workers ",
+            "routing to every Agent/Task launch, including nested launches from an existing worker: ",
+            "choose the selected claudex worker agent and pass its exact model and effort. Never ",
+            "default a nested launch to generic claude or blindly inherit its parent provider when ",
+            "current routing selects another route. Start as many worker instances as useful for real ",
             "parallelism. Treat disabled_subagent_models in the current routing context as an ",
             "absolute SubAgent denylist, including explicit, inherited, nested, and reused routes. ",
-            "When launching multiple independent workers, emit every intended ",
-            "Agent/Task call together in the same assistant message and tool round; never emit one ",
-            "call and defer the rest to later turns. Do not announce a worker count until that same ",
-            "message contains exactly that many launch calls. When the main session needs their ",
-            "results now, use foreground calls; use background only when useful independent work ",
-            "can continue or the task must outlive the turn. Continuing work must be a concrete next ",
-            "action already identified and started immediately. After successful background launches, ",
-            "start that action or end the turn promptly with concise user-visible status; never keep ",
-            "reasoning while waiting for completion notifications. For a related follow-up, use SendMessage ",
-            "with the exact compatible recipient specified by the prior Agent/Task result (agent ID ",
-            "or teammate name as applicable), sending the smallest sufficient self-contained delta ",
-            "including unseen evidence. Do not send a mid-flight message merely to repeat scope or ",
-            "restrictions already present in the original delegation. A follow-up queued to a busy ",
-            "worker does not add parallel capacity; assign genuinely independent work to another ",
-            "routed worker when useful capacity exists. Reuse the first compatible session advisor for related ",
-            "decisions, including after completion; start another only for true parallel or ",
-            "clean-room review, incompatible context, or an unavailable recipient. Before shutdown ",
-            "or replacement, weigh likely follow-ups and potential prompt-prefix/cache reuse against ",
-            "slot/resource pressure and stale context; neither creation nor termination is ",
-            "categorically forbidden. Treat current routing context as authoritative over stale ",
-            "model-policy memory. Every Task or Agent launch must include an exact claudex_model ",
-            "from its selected_workers entry or the active user's explicit model request. If no ",
-            "such model is available, do not launch or inherit the parent model. When a schema ",
-            "lacks claudex_effort, put the routed effort at the start of its prompt as an exact ",
-            "`claudex_effort: <effort>` line. Never put an external ",
-            "provider model ID in the native model field.\n\nSystem:\n{}\n\nMessages:\n{}"
+            "Before a substantive non-trivial phase, split the work into non-redundant streams and ",
+            "launch parallel ordinary workers together unless the work is indivisible, the user ",
+            "opts out, or only one compatible slot is available. Avoid serial heavy processing by one ",
+            "worker: do not give one ordinary worker a heavy or unknown-duration task merely for ",
+            "convenience. custom-advisor is a separate logical session singleton/capacity channel, ",
+            "not an implementation workstream; built-in advisor remains independent of worker ",
+            "capacity. When launching multiple independent workers, emit every intended Agent/Task ",
+            "call together in the same assistant message and tool round; never emit one call and ",
+            "defer the rest to later turns. Do not announce a worker count until that same message ",
+            "contains exactly that many launch calls. For heavy or unknown-duration independent ",
+            "work, set run_in_background=true on every launch in that single batch. Do not mix ",
+            "foreground and background launches. Use foreground only for short bounded work, ",
+            "dependency-required results, or an explicit synchronous request. After successful ",
+            "background launches, start a concrete independent action or end the turn promptly with ",
+            "concise user-visible status; never keep reasoning while waiting for completion ",
+            "notifications. For a related follow-up, reuse compatible workers with SendMessage and ",
+            "the exact compatible recipient specified by the prior Agent/Task result (agent ID or ",
+            "teammate name as applicable) instead of churning processes with fresh launches, ",
+            "sending the smallest sufficient self-contained delta including unseen evidence. Do not ",
+            "send a mid-flight message merely to repeat scope or restrictions already present in the ",
+            "original delegation. A follow-up queued to a busy worker does not add parallel capacity; ",
+            "assign genuinely independent work to another routed worker when useful capacity exists. ",
+            "Reuse the first compatible session advisor for related decisions, including after ",
+            "completion; start another only for true parallel or clean-room review, incompatible ",
+            "context, or an unavailable recipient. Before shutdown or replacement, weigh likely ",
+            "follow-ups and potential prompt-prefix/cache reuse against slot/resource pressure and ",
+            "stale context; neither creation nor termination is categorically forbidden. Treat ",
+            "current routing context as authoritative over stale model-policy memory. Every Task or ",
+            "Agent launch must include an exact claudex_model from its selected_workers entry or the ",
+            "active user's explicit model request. If no such model is available, do not launch or ",
+            "inherit the parent model. When a schema lacks claudex_effort, put the routed effort at ",
+            "the start of its prompt as an exact `claudex_effort: <effort>` line. Never put an ",
+            "external provider model ID in the native model field.\n\nSystem:\n{}\n\nMessages:\n{}"
         ),
         system_text(&request.system),
         serde_json::to_string(&request.messages).unwrap_or_default()
+    );
+    prompt.push('\n');
+    prompt.push('\n');
+    prompt.push_str(&subscription_parallel_scheduler_instructions(request));
+    prompt
+}
+
+fn subscription_parallel_scheduler_instructions(_request: &MessagesRequest) -> String {
+    let scheduler = crate::parallel_scheduler::ParallelScheduler::shared();
+    let config = scheduler.config();
+    let cadence_minutes = (config.reassess_interval.as_secs() / 60).max(1);
+    format!(
+        "Runtime parallel contract for this prompt: launch at least {} ordinary workers for substantive decomposition, maintain at least {} active lanes during in-flight work, and use at least {} model families. Recheck the lanes on each SubAgent completion and every {cadence_minutes} minutes. If only one active lane remains, interrupt stale work and dispatch replacements immediately. Reissue unfinished same-scope tasks on fresh workers and continue expanded follow-up on surviving lanes while preserving reusable context.",
+        config.min_parallel_workers, config.active_floor, config.min_model_families
     )
 }
 

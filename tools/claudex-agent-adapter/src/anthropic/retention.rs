@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 use tokio::sync::Mutex;
 
 use super::{Bridge, Session};
+use crate::anthropic::content::pending_request_id;
 
 // An abandoned Claude tool request must not reserve a session slot forever.
 // Thirty minutes allows long interactive tool work while bounding leaked slots.
@@ -140,7 +141,7 @@ pub(super) async fn drain_cancellation_responses(session: &Session) -> Vec<(Valu
         .lock()
         .await
         .drain()
-        .map(|(_, id)| (id, cancellation_result()))
+        .map(|(_, id)| (pending_request_id(&id), cancellation_result()))
         .collect();
     *session
         .pending_since

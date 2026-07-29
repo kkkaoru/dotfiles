@@ -229,7 +229,7 @@ fn accepts_only_events_used_by_the_anthropic_bridge() {
         "turn/completed",
         "error",
     ] {
-        assert!(is_bridge_event(&json!({"method":method})));
+        assert!(is_bridge_event(&json!({ "method": method })));
     }
     for method in [
         "thread/started",
@@ -238,7 +238,7 @@ fn accepts_only_events_used_by_the_anthropic_bridge() {
         "item/completed",
         "item/reasoning/textDelta",
     ] {
-        assert!(!is_bridge_event(&json!({"method":method})));
+        assert!(!is_bridge_event(&json!({ "method": method })));
     }
 }
 

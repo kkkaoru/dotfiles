@@ -3,6 +3,7 @@
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
 
     #[test]
@@ -195,13 +196,90 @@ name = "Must not replace the base config"
             Some(PendingResponse::Detached { thread_id }) if thread_id == "thread"
         ));
         drop(pending);
-        server.stop("detached request test complete").await;
+        server.shutdown().await;
         assert!(
             server
-                .request_detached("turn/start", json!({"threadId":"after-stop"}))
+                .child
+                .lock()
                 .await
-                .is_err()
+                .try_wait()
+                .expect("inspect stopped app-server")
+                .is_some(),
+            "shutdown must reap the direct app-server child"
         );
+        assert!(server
+            .request_detached("turn/start", json!({"threadId":"after-stop"}))
+            .await
+            .is_err());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shutdown_reaps_a_completed_parent_and_its_process_group() {
+        let root = tempfile::tempdir().expect("app-server process-group fixture");
+        let source = source_home(root.path());
+        let program = script(
+            root.path(),
+            "completed-parent-program",
+            "read initialize\nprintf '%s\\n' '{\"id\":1,\"result\":{}}'\nread initialized\nsleep 30 &\n",
+        );
+        let server = AppServer::spawn_with_program(
+            "model",
+            &program,
+            &source,
+            &root.path().join("completed-parent-home"),
+        )
+        .await
+        .expect("start app-server fixture");
+        let process_group = server
+            .child
+            .lock()
+            .await
+            .id()
+            .expect("app-server process group ID");
+
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        server.stop("completed parent test").await;
+
+        assert!(server
+            .child
+            .lock()
+            .await
+            .try_wait()
+            .expect("inspect completed app-server")
+            .is_some());
+        assert!(!process_group_exists(process_group));
+    }
+
+    #[tokio::test]
+    async fn ignores_stop_requests_for_a_dropped_server() {
+        let dropped = std::sync::Weak::<AppServer>::new();
+
+        lifecycle::stop_if_alive(&dropped, "already dropped").await;
+
+        assert!(dropped.upgrade().is_none());
+    }
+
+    #[tokio::test]
+    async fn stop_is_idempotent() {
+        let root = tempfile::tempdir().expect("app-server lifecycle fixture");
+        let source = source_home(root.path());
+        let program = script(
+            root.path(),
+            "idempotent-program",
+            "read line\nprintf '%s\\n' '{\"id\":1,\"result\":{}}'\nwhile read line; do :; done\n",
+        );
+        let server = AppServer::spawn_with_program(
+            "model",
+            &program,
+            &source,
+            &root.path().join("idempotent-home"),
+        )
+        .await
+        .expect("start app-server fixture");
+        server.stop("first stop").await;
+        server.stop("second stop").await;
+        assert!(!server.is_alive());
     }
 
     #[tokio::test]
@@ -240,16 +318,42 @@ name = "Must not replace the base config"
         .await
         .expect("parallel requests were serialized");
 
-        assert_eq!(response_thread_id(&first.expect("first response")).unwrap(), "first");
-        assert_eq!(response_thread_id(&second.expect("second response")).unwrap(), "second");
+        assert_eq!(
+            response_thread_id(&first.expect("first response")).unwrap(),
+            "first"
+        );
+        assert_eq!(
+            response_thread_id(&second.expect("second response")).unwrap(),
+            "second"
+        );
         server.stop("parallel request test complete").await;
     }
 
     fn script(root: &std::path::Path, name: &str, body: &str) -> PathBuf {
         let path = root.join(name);
         std::fs::write(&path, format!("#!/bin/sh\n{body}")).expect("write script");
+        #[cfg(unix)]
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
             .expect("make script executable");
         path
+    }
+
+    fn source_home(root: &std::path::Path) -> PathBuf {
+        let source = root.join("source");
+        std::fs::create_dir(&source).expect("create source home");
+        std::fs::write(source.join("auth.json"), "{}").expect("write auth");
+        source
+    }
+
+    #[cfg(unix)]
+    fn process_group_exists(process_group: u32) -> bool {
+        std::process::Command::new("kill")
+            .args(["-0", &format!("-{process_group}")])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .expect("inspect app-server process group")
+            .success()
     }
 }

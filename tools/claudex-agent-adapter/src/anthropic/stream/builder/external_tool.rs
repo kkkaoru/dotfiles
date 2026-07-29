@@ -22,18 +22,30 @@ impl SegmentBuilder {
         original_name: &str,
         call: ToolCall<'_>,
     ) -> Result<()> {
-        crate::anthropic::agent_effort::validate_routed_agent_arguments(
-            original_name,
-            call.arguments,
+        let mut arguments = call.arguments.clone();
+        crate::anthropic::agent_routing::hydrate_routing_fields_from_context(
+            &mut arguments,
             context.current_messages,
             context.system,
+            context.bridge.model_catalog(),
+        );
+        crate::anthropic::agent_routing::hydrate_standard_agent_to_parent(
+            &mut arguments,
+            &context.session.model,
+        );
+        crate::anthropic::agent_effort::validate_routed_agent_arguments_with_catalog(
+            original_name,
+            &arguments,
+            context.current_messages,
+            context.system,
+            context.bridge.model_catalog(),
         )?;
         let tool_use_id = format!("toolu_{}", Uuid::new_v4().simple());
         let (intent_arguments, claude_arguments) =
             crate::anthropic::agent_effort::prepare_arguments_for_user(
                 original_name,
                 &tool_use_id,
-                call.arguments,
+                &arguments,
                 context.current_messages,
                 context.system,
             );
@@ -48,6 +60,7 @@ impl SegmentBuilder {
                     user_messages: context.current_messages,
                     system: context.system,
                 },
+                Some(context.bridge.model_catalog()),
             );
         }
         tracing::debug!(call_id = %call.call_id, %tool_use_id, "mapped app-server tool call");

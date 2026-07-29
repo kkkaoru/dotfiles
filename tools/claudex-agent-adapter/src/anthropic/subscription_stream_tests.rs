@@ -1,4 +1,7 @@
-use std::{convert::Infallible, process::Stdio, sync::Arc};
+use std::{convert::Infallible, fs, process::Stdio, sync::Arc, time::Duration};
+
+#[cfg(unix)]
+use std::os::unix::{fs::PermissionsExt, process::CommandExt as _};
 
 use axum::body::Bytes;
 use serde_json::json;
@@ -6,12 +9,14 @@ use tokio::{process::Command, sync::mpsc};
 
 use super::{
     SubscriptionStream, consume_subscription_stream, result_output_tokens, run_subscription_stream,
+    stream_subscription_model,
 };
 use crate::anthropic::{
     agent_effort::AgentEffortIntents,
     subscription::{SubscriptionOptions, SubscriptionToolContext},
     subscription_activity::SubscriptionActivity,
 };
+use crate::provider_config::ModelCatalog;
 
 type Frame = Result<Bytes, Infallible>;
 type FrameChannel = (mpsc::Sender<Frame>, mpsc::Receiver<Frame>);
@@ -257,7 +262,7 @@ async fn collects_sequential_subscription_agents_into_one_outer_tool_round() {
                     "usage":{"output_tokens":7},
                     "content":[{
                         "type":"tool_use", "id":"tool-subscription", "name":"Agent",
-                        "input":{"prompt":"work", "subagent_type":"claudex-gpt-spark", "claudex_model":"gpt-5.3-codex-spark"}
+                        "input":{"prompt":"work", "subagent_type":"claudex-gpt-spark"}
                     }]
                 }
             })
@@ -288,7 +293,7 @@ async fn collects_sequential_subscription_agents_into_one_outer_tool_round() {
                 "parent_tool_use_id":null,
                 "message":{"content":[{
                     "type":"tool_use", "id":"tool-subscription-2", "name":"Agent",
-                    "input":{"prompt":"more work", "subagent_type":"claudex-grok", "claudex_model":"grok-4.5"}
+                    "input":{"prompt":"more work", "subagent_type":"claudex-grok"}
                 }]}
             })
             .to_string(),
@@ -318,11 +323,12 @@ async fn collects_sequential_subscription_agents_into_one_outer_tool_round() {
 fn explicit_subscription_tool_context() -> SubscriptionToolContext {
     SubscriptionToolContext {
         agent_efforts: Arc::new(AgentEffortIntents::default()),
+        model_catalog: ModelCatalog::default(),
         client_user_id: None,
         parent_model: "parent-model".to_owned(),
         system: json!(null),
         user_messages: vec![json!({
-            "role":"user", "content":"Use gpt-5.3-codex-spark and grok-4.5"
+            "role":"user", "content":"Claudex routing for this turn: {\"providers\":{},\"selected_workers\":[{\"agent\":\"claudex-gpt-spark\",\"model\":\"gpt-5.3-codex-spark\",\"effort\":\"xhigh\"},{\"agent\":\"claudex-grok\",\"model\":\"grok-4.5\",\"effort\":\"high\"}]}"
         })],
     }
 }
@@ -343,6 +349,7 @@ async fn sanitizes_and_records_contextual_agent_tool_input() {
         tools: vec!["Agent".to_owned()],
         tool_context: Some(SubscriptionToolContext {
             agent_efforts: intents,
+            model_catalog: ModelCatalog::default(),
             client_user_id: Some("user".to_owned()),
             parent_model: "parent-model".to_owned(),
             system: json!([{"type":"text","text":"system message"}]),
@@ -370,7 +377,9 @@ async fn sanitizes_and_records_contextual_agent_tool_input() {
     assert!(stream.text_closed);
     let output = output(&mut receiver).await;
     assert!(output.contains("<claudex-agent-id>tool-context</claudex-agent-id>"));
-    assert!(!output.contains("claudex_model"));
+    assert!(output.contains("claudex_launch_id: tool-context"));
+    assert!(output.contains("claudex_model: gpt-test"));
+    assert!(!output.contains(r#"\"claudex_model\":"#));
     assert!(!output.contains("claudex_effort"));
     assert!(!output.contains("invented"));
 }
@@ -433,6 +442,7 @@ async fn ignores_non_top_level_tool_events_and_exercises_completed_state() {
         tools: vec!["Read".to_owned(), "Agent".to_owned()],
         tool_context: Some(SubscriptionToolContext {
             agent_efforts: Arc::new(AgentEffortIntents::default()),
+            model_catalog: ModelCatalog::default(),
             client_user_id: None,
             parent_model: "parent-model".to_owned(),
             system: json!([{"type":"text","text":"system message"}]),
@@ -506,6 +516,7 @@ async fn accepts_a_valid_agent_model_without_a_prompt() {
         tools: vec!["Agent".to_owned()],
         tool_context: Some(SubscriptionToolContext {
             agent_efforts: Arc::new(AgentEffortIntents::default()),
+            model_catalog: ModelCatalog::default(),
             client_user_id: None,
             parent_model: "parent-model".to_owned(),
             system: json!(null),
@@ -529,12 +540,25 @@ async fn accepts_a_valid_agent_model_without_a_prompt() {
 }
 
 fn child(script: &str) -> tokio::process::Child {
-    Command::new("sh")
+    let mut command = Command::new("sh");
+    #[cfg(unix)]
+    command.as_std_mut().process_group(0);
+    command
         .args(["-c", script])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .expect("spawn stream fixture")
+}
+
+#[cfg(unix)]
+fn stalled_stream_program() -> tempfile::TempDir {
+    let directory = tempfile::tempdir().expect("create stalled stream fixture directory");
+    let program = directory.path().join("stalled-stream.sh");
+    fs::write(&program, "#!/bin/sh\nsleep 30 &\nwait\n").expect("write stalled stream fixture");
+    fs::set_permissions(&program, fs::Permissions::from_mode(0o755))
+        .expect("make stalled stream fixture executable");
+    directory
 }
 
 #[tokio::test]
@@ -632,6 +656,29 @@ async fn stops_cleanly_when_the_receiver_closes() {
     consume_subscription_stream(child("sleep 1"), &sender)
         .await
         .expect("closed response stream");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn stream_timeout_terminates_the_entire_subscription_process_group() {
+    let directory = stalled_stream_program();
+    let (sender, _receiver) = channel();
+    let options = SubscriptionOptions::internal(
+        Arc::new(tokio::sync::Semaphore::new(1)),
+        Duration::from_millis(100),
+    );
+
+    let error = stream_subscription_model(
+        &sender,
+        &directory.path().join("stalled-stream.sh"),
+        "model",
+        "prompt",
+        options,
+    )
+    .await
+    .expect_err("stalled subscription stream must time out");
+
+    assert!(error.to_string().contains("timed out"));
 }
 
 #[tokio::test]

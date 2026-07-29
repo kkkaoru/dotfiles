@@ -12,6 +12,8 @@ use std::{
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
+mod claude_process;
+mod daemon_arguments;
 mod daemon_process;
 mod handover;
 mod launcher_lock;
@@ -20,6 +22,8 @@ use crate::{
     ADAPTER_PROTOCOL_VERSION, agent_backend::BackendRoute, subagent_policy as policy,
     working_directory,
 };
+use claude_process::ClaudeProcess;
+use daemon_arguments::{daemon_arguments, route_descriptions, worker_route_descriptions};
 use handover::ServiceState;
 
 const LOCAL_TOKEN: &str = "claudex-local";
@@ -55,6 +59,8 @@ struct Health {
     build_id: String,
     #[serde(default)]
     backend_routes: Vec<String>,
+    #[serde(default)]
+    worker_routes: Vec<String>,
     subscription_max_processes: usize,
     subscription_timeout_minutes: u64,
 }
@@ -65,7 +71,7 @@ impl ServiceConfig {
             .ok()
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| LOCAL_TOKEN.to_owned());
-        if !options.listen.ip().is_loopback() & (token == LOCAL_TOKEN) {
+        if requires_authentication(&options.listen, &token) {
             bail!("ANTHROPIC_AUTH_TOKEN is required for a non-loopback listener");
         }
         let executable = std::env::current_exe().context("locate adapter executable")?;
@@ -103,6 +109,7 @@ impl ServiceConfig {
         health.status == "ok"
             && health.protocol_version == ADAPTER_PROTOCOL_VERSION
             && health.backend_routes == route_descriptions(&self.options.routes)
+            && health.worker_routes == worker_route_descriptions(&self.options.model_catalog)
             && health.subscription_max_processes == self.options.subscription_max_processes
             && health.subscription_timeout_minutes == self.options.subscription_timeout_minutes
     }
@@ -120,47 +127,52 @@ pub async fn run_claude(
 ) -> Result<i32> {
     reject_model_override(&arguments)?;
     let config = ServiceConfig::new(options)?;
+    // Reject invalid launch policy before creating a reusable daemon.
+    let policy_header = policy::active_header()?;
     let base_url = ensure_config_running(&config).await?;
     let program = std::env::var_os("CLAUDEX_CLAUDE_PROGRAM").unwrap_or_else(|| "claude".into());
     let cwd = std::env::current_dir().context("resolve Claude Code working directory")?;
-    let policy_header = policy::active_header()?;
     let custom_headers = working_directory::custom_headers(
         std::env::var_os("ANTHROPIC_CUSTOM_HEADERS").as_deref(),
         &cwd,
         policy_header.as_deref(),
     );
     let mut command = Command::new(program);
+    let isolated = claude_process::configure(&mut command);
     policy::apply_snapshot(&mut command, &policy_header);
     if !inherit_claude_model {
         command.args(["--model", &config.options.model]);
     }
-    let mut child = command
-        .args(arguments)
-        .env("ANTHROPIC_BASE_URL", base_url)
-        .env("ANTHROPIC_AUTH_TOKEN", &config.token)
-        .env("ANTHROPIC_CUSTOM_HEADERS", custom_headers)
-        .env_remove("ANTHROPIC_API_KEY")
-        .env_remove("ANTHROPIC_MODEL")
-        .env_remove("CLAUDE_CODE_USE_BEDROCK")
-        .env_remove("CLAUDE_CODE_USE_FOUNDRY")
-        .env_remove("CLAUDE_CODE_USE_VERTEX")
-        .env_remove("CLAUDE_CODE_SUBAGENT_MODEL")
-        .env_remove("CLAUDEX_ADAPTER_LISTEN")
-        .env_remove("CLAUDEX_BACKEND")
-        .env_remove("CLAUDEX_CLAUDE_PROGRAM")
-        .env_remove("CLAUDEX_CODEX_PROGRAM")
-        .env_remove("CLAUDEX_COLLABORATOR_MODEL")
-        .env_remove("CLAUDEX_COPILOT_PROGRAM")
-        .env_remove("CLAUDEX_GROK_PROGRAM")
-        .env_remove("CLAUDEX_MODEL")
-        .env_remove("CLAUDEX_SUBSCRIPTION_MAX_PROCESSES")
-        .env_remove("CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES")
-        .stdin(Stdio::inherit())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::piped())
-        .spawn()
-        .context("start Claude Code")?;
-    let stderr = child.stderr.take().context("capture Claude Code stderr")?;
+    let mut child = ClaudeProcess::new(
+        command
+            .args(arguments)
+            .env("ANTHROPIC_BASE_URL", base_url)
+            .env("ANTHROPIC_AUTH_TOKEN", &config.token)
+            .env("ANTHROPIC_CUSTOM_HEADERS", custom_headers)
+            .env_remove("ANTHROPIC_API_KEY")
+            .env_remove("ANTHROPIC_MODEL")
+            .env_remove("CLAUDE_CODE_USE_BEDROCK")
+            .env_remove("CLAUDE_CODE_USE_FOUNDRY")
+            .env_remove("CLAUDE_CODE_USE_VERTEX")
+            .env_remove("CLAUDE_CODE_SUBAGENT_MODEL")
+            .env_remove("CLAUDEX_ADAPTER_LISTEN")
+            .env_remove("CLAUDEX_BACKEND")
+            .env_remove("CLAUDEX_CLAUDE_PROGRAM")
+            .env_remove("CLAUDEX_CODEX_PROGRAM")
+            .env_remove("CLAUDEX_COLLABORATOR_MODEL")
+            .env_remove("CLAUDEX_COPILOT_PROGRAM")
+            .env_remove("CLAUDEX_GROK_PROGRAM")
+            .env_remove("CLAUDEX_MODEL")
+            .env_remove("CLAUDEX_SUBSCRIPTION_MAX_PROCESSES")
+            .env_remove("CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES")
+            .stdin(Stdio::inherit())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::piped())
+            .spawn()
+            .context("start Claude Code")?,
+        isolated,
+    );
+    let stderr = child.take_stderr().context("capture Claude Code stderr")?;
     let model = config.options.model;
     let relay = thread::spawn(move || relay_stderr(stderr, &model));
     let status = child.wait().context("wait for Claude Code")?;
@@ -168,6 +180,10 @@ pub async fn run_claude(
         .join()
         .map_err(|_| anyhow::anyhow!("Claude Code stderr relay panicked"))??;
     Ok(exit_code(status))
+}
+
+fn requires_authentication(listen: &SocketAddr, token: &str) -> bool {
+    !listen.ip().is_loopback() && token == LOCAL_TOKEN
 }
 
 fn reject_model_override(arguments: &[OsString]) -> Result<()> {
@@ -309,35 +325,6 @@ fn start_adapter(config: &ServiceConfig) -> Result<u32> {
     .spawn()
     .context("start adapter daemon")?;
     Ok(child.id())
-}
-
-fn daemon_arguments(options: &AdapterOptions) -> Vec<OsString> {
-    let mut arguments = vec![
-        "serve".into(),
-        "--model".into(),
-        options.model.clone().into(),
-    ];
-    for route in &options.routes {
-        arguments.push("--backend-route-json".into());
-        arguments.push(
-            serde_json::to_string(route)
-                .expect("backend route must serialize")
-                .into(),
-        );
-    }
-    arguments.extend([
-        "--listen".into(),
-        options.listen.to_string().into(),
-        "--subscription-max-processes".into(),
-        options.subscription_max_processes.to_string().into(),
-        "--subscription-timeout-minutes".into(),
-        options.subscription_timeout_minutes.to_string().into(),
-    ]);
-    arguments
-}
-
-fn route_descriptions(routes: &[BackendRoute]) -> Vec<String> {
-    routes.iter().map(BackendRoute::description).collect()
 }
 
 async fn wait_until_ready(client: &reqwest::Client, config: &ServiceConfig) -> Result<()> {

@@ -367,7 +367,7 @@ async fn refreshes_activity_deadlines_and_detects_closed_streams() {
     assert!(!deadline.is_elapsed());
 
     let (_root, app, bridge, session) = disconnect_fixture().await;
-    let events = app.subscribe_thread("thread");
+    let events = Arc::new(app.subscribe_thread("thread"));
     app.dispatch_test_event(json!({
         "method":"turn/completed",
         "params":{"threadId":"thread","turn":{"status":"completed"}}
@@ -391,6 +391,24 @@ async fn refreshes_activity_deadlines_and_detects_closed_streams() {
     super::disconnect::warn_cancel_failure(&anyhow!("test cancel failure"), "thread");
 }
 
+#[test]
+fn drains_after_unsupported_or_failed_cancellation() {
+    use crate::agent_backend::TurnCancellation;
+
+    assert!(!super::disconnect::requires_disconnected_drain(
+        Ok(TurnCancellation::Settled),
+        "thread",
+    ));
+    assert!(super::disconnect::requires_disconnected_drain(
+        Ok(TurnCancellation::Unsupported),
+        "thread",
+    ));
+    assert!(super::disconnect::requires_disconnected_drain(
+        Err(anyhow!("cancellation failed")),
+        "thread",
+    ));
+}
+
 #[tokio::test]
 async fn hidden_provider_events_do_not_postpone_visible_activity() {
     let (_root, _app, bridge, session) = disconnect_fixture().await;
@@ -399,7 +417,7 @@ async fn hidden_provider_events_do_not_postpone_visible_activity() {
     let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
     let wait = bridge.wait_for_stream_segment_with_interval(StreamWaitInput {
         session: &session,
-        events: &events,
+        events: Arc::new(events),
         current_messages: &[],
         system: &json!(null),
         sender: &sender,
@@ -443,7 +461,7 @@ async fn reports_a_closed_provider_event_stream() {
     let result = bridge
         .wait_for_stream_segment_with_interval(StreamWaitInput {
             session: &session,
-            events: &events,
+            events: Arc::new(events),
             current_messages: &[],
             system: &json!(null),
             sender: &sender,
@@ -471,7 +489,7 @@ async fn retries_context_window_errors_only_before_committed_output() {
     let result = bridge
         .wait_for_stream_segment_with_interval(StreamWaitInput {
             session: &session,
-            events: &events,
+            events: Arc::new(events),
             current_messages: &[],
             system: &json!(null),
             sender: &sender,
@@ -495,7 +513,7 @@ async fn retries_context_window_errors_only_before_committed_output() {
     let result = bridge
         .wait_for_stream_segment_with_interval(StreamWaitInput {
             session: &session,
-            events: &events,
+            events: Arc::new(events),
             current_messages: &[],
             system: &json!(null),
             sender: &sender,
@@ -516,7 +534,7 @@ async fn reports_slow_stream_preparation_before_the_provider_is_ready() {
         tokio::time::sleep(Duration::from_millis(20)).await;
         Ok::<_, anyhow::Error>("ready")
     };
-    let (result, builder) = super::prepare_with_activity(
+    let (result, mut builder) = super::prepare_with_activity(
         prepare,
         3,
         &sender,
@@ -768,47 +786,83 @@ async fn expands_valid_parallel_agent_batches_and_rejects_short_batches() {
     );
     let messages = [json!({"role":"user","content":"delegate"})];
     let mut builder = SegmentBuilder::new(1);
-    let event = json!({
-        "id":99,
-        "method":"item/tool/call",
-        "params":{
-            "callId":"batch-call",
-            "tool":"cc_Agent_batch_0",
-            "arguments":{
-                "tasks":[
-                    {"prompt":"first","subagent_type":"worker","claudex_model":"worker-model"},
-                    {"prompt":"second","subagent_type":"worker","claudex_model":"worker-model"}
-                ]
-            }
-        }
-    });
+    let event = agent_batch_event(
+        "batch-call",
+        [
+            worker_task("first", None),
+            worker_task("second", Some(true)),
+            worker_task("third", Some(true)),
+        ],
+    );
     let _ = builder
         .handle_event(&bridge, &session, &messages, &routing, &event, None)
         .await
         .expect("parallel batch");
     assert!(builder.has_external_tool_calls());
-    assert_eq!(builder.blocks.len(), 2);
+    assert_eq!(builder.blocks.len(), 3);
+    assert_background_batch(&builder, 0, 3);
 
-    let short = json!({
-        "id":100,
-        "method":"item/tool/call",
-        "params":{
-            "callId":"short-call",
-            "tool":"cc_Agent_batch_0",
-            "arguments":{"tasks":[{"prompt":"only","subagent_type":"worker","claudex_model":"worker-model"}]}
-        }
-    });
+    let mixed = agent_batch_event(
+        "mixed-call",
+        [
+            worker_task("background", None),
+            worker_task("foreground", Some(false)),
+            worker_task("third", Some(true)),
+        ],
+    );
+    let _ = builder
+        .handle_event(&bridge, &session, &messages, &routing, &mixed, None)
+        .await
+        .expect("mixed batch modes are normalized to background");
+    assert_eq!(builder.blocks.len(), 6);
+    assert_background_batch(&builder, 3, 3);
+
+    let short = agent_batch_event("short-call", [worker_task("only", None)]);
     let error = builder
         .handle_event(&bridge, &session, &messages, &routing, &short, None)
         .await
         .expect_err("short batch");
-    assert!(error.to_string().contains("between 2 and 40"));
+    assert!(error.to_string().contains("between 3 and 40"));
+}
+
+fn worker_task(prompt: &str, run_in_background: Option<bool>) -> Value {
+    let mut task = json!({
+        "prompt": prompt,
+        "subagent_type": "worker",
+        "claudex_model": "worker-model"
+    });
+    if let Some(run_in_background) = run_in_background {
+        task["run_in_background"] = json!(run_in_background);
+    }
+    task
+}
+
+fn agent_batch_event(call_id: &str, tasks: impl IntoIterator<Item = Value>) -> Value {
+    json!({
+        "id": 99,
+        "method": "item/tool/call",
+        "params": {
+            "callId": call_id,
+            "tool": "cc_Agent_batch_0",
+            "arguments": {"tasks": tasks.into_iter().collect::<Vec<_>>()}
+        }
+    })
+}
+
+fn assert_background_batch(builder: &SegmentBuilder, start: usize, count: usize) {
+    for index in start..start + count {
+        assert_eq!(
+            builder.blocks[index]["input"]["run_in_background"].as_bool(),
+            Some(true),
+            "batch worker {index} should run in background"
+        );
+    }
 }
 
 #[tokio::test]
 async fn treats_a_closed_sender_after_batch_finish_as_disconnect() {
     let (_root, app, bridge, session) = disconnect_fixture().await;
-    let events = app.subscribe_thread("thread");
+    let events = Arc::new(app.subscribe_thread("thread"));
     app.dispatch_test_event(json!({
         "method":"turn/completed",
         "params":{"threadId":"thread","turn":{"status":"completed"}}
@@ -832,7 +886,8 @@ async fn treats_a_closed_sender_after_batch_finish_as_disconnect() {
                     "tool":"cc_Agent_batch_0",
                     "arguments":{"tasks":[
                         {"prompt":"first","subagent_type":"worker","claudex_model":"worker-model"},
-                        {"prompt":"second","subagent_type":"worker","claudex_model":"worker-model"}
+                        {"prompt":"second","subagent_type":"worker","claudex_model":"worker-model"},
+                        {"prompt":"third","subagent_type":"worker","claudex_model":"worker-model"}
                     ]}
                 }
             }),
@@ -841,7 +896,7 @@ async fn treats_a_closed_sender_after_batch_finish_as_disconnect() {
         .await
         .expect("batch tool call");
     let result = bridge
-        .external_batch_segment(&session, &events, builder, &sender)
+        .external_batch_segment(&session, events, &mut builder, &sender)
         .await
         .expect("closed batch sender");
     assert!(matches!(result, super::StreamTurn::Disconnected));
@@ -873,7 +928,7 @@ async fn keeps_status_deltas_out_of_committed_text() {
 #[tokio::test]
 async fn drains_pending_and_new_tools_after_a_stream_disconnect() {
     let (root, app, bridge, session) = disconnect_fixture().await;
-    let events = app.subscribe_thread("thread");
+    let events = Arc::new(app.subscribe_thread("thread"));
     session
         .pending_tools
         .lock()
@@ -881,8 +936,16 @@ async fn drains_pending_and_new_tools_after_a_stream_disconnect() {
         .insert("pending".to_owned(), json!(41));
     *session.pending_since.lock().unwrap() = Some(Instant::now());
     app.dispatch_test_event(json!({
+        "id":41,"method":"item/tool/call",
+        "params":{"threadId":"thread","callId":"duplicate","tool":"Read"}
+    }));
+    app.dispatch_test_event(json!({
         "id":42,"method":"item/tool/call",
         "params":{"threadId":"thread","callId":"new","tool":"Read"}
+    }));
+    app.dispatch_test_event(json!({
+        "method":"thread/tokenUsage/updated",
+        "params":{"threadId":"thread","tokenUsage":{"last":{"inputTokens":1}}}
     }));
     app.dispatch_test_event(json!({
         "method":"error","params":{"threadId":"thread","willRetry":true}
@@ -892,23 +955,93 @@ async fn drains_pending_and_new_tools_after_a_stream_disconnect() {
     }));
 
     assert!(matches!(
-        bridge.disconnect_stream(&session, &events).await,
+        bridge
+            .disconnect_stream(&session, Arc::clone(&events))
+            .await,
         super::StreamTurn::Disconnected
     ));
     assert!(session.pending_tools.lock().await.is_empty());
     assert!(session.pending_since.lock().unwrap().is_none());
+    assert_disconnected_tool_rejections(&root, &[41, 42]).await;
     bridge.finish_closed_stream(&session, &events, true).await;
     drop(root);
 }
 
 #[tokio::test]
+async fn disconnected_drain_handles_incremental_events_and_provider_errors() {
+    let (root, app, bridge, _session) = disconnect_fixture().await;
+    let events = Arc::new(app.subscribe_thread("thread"));
+    app.dispatch_test_event(json!({
+        "id":51,"method":"item/tool/call",
+        "params":{"threadId":"thread","callId":"first","tool":"Read"}
+    }));
+    app.dispatch_test_event(json!({
+        "id":51,"method":"item/tool/call",
+        "params":{"threadId":"thread","callId":"duplicate","tool":"Read"}
+    }));
+    app.dispatch_test_event(json!({
+        "method":"turn/completed",
+        "params":{"threadId":"thread","turn":{"status":"inProgress"}}
+    }));
+    app.dispatch_test_event(json!({
+        "method":"error","params":{"threadId":"thread","willRetry":true}
+    }));
+    app.dispatch_test_event(json!({
+        "method":"turn/completed",
+        "params":{"threadId":"thread","turn":{"status":"completed"}}
+    }));
+
+    super::disconnect::drain_disconnected_turn(&bridge.app, "main", events, HashSet::new())
+        .await
+        .expect("completed turn drains successfully");
+    assert_disconnected_tool_rejections(&root, &[51]).await;
+}
+
+#[tokio::test]
+async fn disconnected_drain_returns_non_retryable_provider_errors() {
+    let (_root, app, bridge, _session) = disconnect_fixture().await;
+    let events = Arc::new(app.subscribe_thread("thread"));
+    app.dispatch_test_event(json!({
+        "method":"error","params":{"threadId":"thread","message":"fatal"}
+    }));
+
+    let error =
+        super::disconnect::drain_disconnected_turn(&bridge.app, "main", events, HashSet::new())
+            .await
+            .expect_err("fatal provider event must stop the drain");
+    assert!(error.to_string().contains("fatal"));
+}
+
+#[tokio::test]
 async fn tolerates_a_drain_error_after_stream_disconnect() {
     let (_root, app, bridge, session) = disconnect_fixture().await;
-    let events = app.subscribe_thread("thread");
+    let events = Arc::new(app.subscribe_thread("thread"));
     app.dispatch_test_event(json!({
         "method":"error","params":{"threadId":"thread","message":"fatal"}
     }));
     bridge.finish_closed_stream(&session, &events, false).await;
+    wait_for_disconnected_drain(&events).await;
+}
+
+#[tokio::test]
+async fn tolerates_failed_pending_tool_rejection_after_disconnect() {
+    let (_root, app, bridge, session) = disconnect_fixture().await;
+    let events = Arc::new(app.subscribe_thread("thread"));
+    session
+        .pending_tools
+        .lock()
+        .await
+        .insert("pending".to_owned(), json!(61));
+    app.shutdown().await;
+
+    assert!(matches!(
+        bridge
+            .disconnect_stream(&session, Arc::clone(&events))
+            .await,
+        super::StreamTurn::Disconnected
+    ));
+    assert!(session.pending_tools.lock().await.is_empty());
+    wait_for_disconnected_drain(&events).await;
 }
 
 #[tokio::test]
@@ -1121,7 +1254,7 @@ async fn drive_turn(
     let gate = Arc::clone(&session.gate).lock_owned().await;
     ActiveTurn {
         session,
-        events,
+        events: Arc::new(events),
         response_model: "main".to_owned(),
         extras,
         routing_system: Value::Null,
@@ -1154,7 +1287,7 @@ async fn disconnect_fixture() -> (tempfile::TempDir, Arc<AppServer>, Bridge, Arc
     let program = root.path().join("mock-app-server");
     std::fs::write(
         &program,
-        "#!/bin/sh\nread line\nprintf '%s\\n' '{\"id\":1,\"result\":{}}'\nwhile read line; do :; done\n",
+        "#!/bin/sh\nlog=\"${0%/*}/responses.log\"\nread line\nprintf '%s\\n' '{\"id\":1,\"result\":{}}'\nwhile read line; do printf '%s\\n' \"$line\" >> \"$log\"; done\n",
     )
     .expect("mock app-server");
     let mut permissions = std::fs::metadata(&program).unwrap().permissions();
@@ -1185,6 +1318,37 @@ async fn disconnect_fixture() -> (tempfile::TempDir, Arc<AppServer>, Bridge, Arc
         _slot: slots.try_acquire_owned().expect("session slot"),
     });
     (root, app, bridge, session)
+}
+
+async fn assert_disconnected_tool_rejections(root: &tempfile::TempDir, expected: &[u64]) {
+    let log = root.path().join("responses.log");
+    let actual = tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            let responses = std::fs::read_to_string(&log).unwrap_or_default();
+            let ids = responses
+                .lines()
+                .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+                .filter_map(|response| response.get("id").and_then(Value::as_u64))
+                .collect::<Vec<_>>();
+            if ids.as_slice() == expected {
+                return ids;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("disconnected tool responses should be written promptly");
+    assert_eq!(actual, expected);
+}
+
+async fn wait_for_disconnected_drain(events: &Arc<crate::app_server::ThreadEvents>) {
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while Arc::strong_count(events) > 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("background disconnected drain should finish promptly");
 }
 
 async fn retryable_drive_fixture() -> (tempfile::TempDir, Arc<AppServer>, Arc<Bridge>, Arc<Session>)
@@ -1336,3 +1500,69 @@ fn creates_start_and_tool_frames() {
     );
     assert_eq!(frames[2].0, "content_block_stop");
 }
+
+#[test]
+fn committed_output_ignores_empty_or_disposable_blocks() {
+    let mut builder = SegmentBuilder::new(1);
+    assert!(!builder.has_committed_output());
+
+    builder
+        .blocks
+        .push(json!({"type":"thinking","thinking":"▶ running"}));
+    assert!(!builder.has_committed_output());
+
+    builder.open_text_block = Some((0, String::new()));
+    assert!(!builder.has_committed_output());
+    builder.open_text_block = Some((0, "answer".to_owned()));
+    assert!(builder.has_committed_output());
+}
+
+#[tokio::test]
+async fn prepared_stream_reports_orphaned_tool_results() {
+    let (_root, _app, bridge, _session) = disconnect_fixture().await;
+    let bridge = Arc::new(bridge);
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(4);
+    let mut request = drive_request();
+    request.messages = vec![json!({
+        "role":"user",
+        "content":[{"type":"tool_result","tool_use_id":"orphan","content":"result"}]
+    })];
+
+    Arc::clone(&bridge)
+        .drive_prepared_stream(request, 1, None, None, sender)
+        .await;
+
+    let frame = receiver
+        .recv()
+        .await
+        .expect("stream preparation error frame")
+        .expect("infallible frame");
+    assert!(String::from_utf8_lossy(&frame).contains("no active claudex session"));
+}
+
+#[tokio::test]
+async fn external_batch_segment_returns_an_unsettled_segment_while_stream_is_open() {
+    let (_root, app, bridge, session) = disconnect_fixture().await;
+    let events = Arc::new(app.subscribe_thread("thread"));
+    let (sender, _receiver) = mpsc::channel::<Result<Bytes, Infallible>>(4);
+    let mut builder = SegmentBuilder::new(1);
+    builder
+        .text_delta(&json!({"params":{"delta":"answer"}}), Some(&sender))
+        .await
+        .expect("text segment");
+
+    let result = bridge
+        .external_batch_segment(&session, events, &mut builder, &sender)
+        .await
+        .expect("open stream segment");
+    let super::StreamTurn::Segment {
+        segment,
+        provider_settled,
+    } = result
+    else {
+        panic!("open sender must keep the batch segment");
+    };
+    assert!(!provider_settled);
+    assert_eq!(segment.blocks[0]["text"], "answer");
+}
+//x
