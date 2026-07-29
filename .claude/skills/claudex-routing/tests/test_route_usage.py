@@ -852,6 +852,7 @@ class RoutingTests(unittest.TestCase):
         )
         self.assertEqual(worker["agent"], "claudex-ollama-glm-5-2")
         self.assertEqual(worker["model"], "glm-5.2:cloud")
+        self.assertEqual(worker["effort"], "max")
         self.assertEqual(worker["model_prefixes"], ["glm-"])
 
     def test_hook_output_contains_only_the_sanitized_summary(self) -> None:

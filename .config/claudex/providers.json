@@ -50,7 +50,7 @@
       "agent": "claudex-ollama-glm-5-2",
       "defaultModel": "glm-5.2:cloud",
       "subagentModel": "glm-5.2:cloud",
-      "effort": "high",
+      "effort": "max",
       "enabled": true,
       "usageProvider": "ollama",
       "modelProvider": "ollama-launch-codex-app",

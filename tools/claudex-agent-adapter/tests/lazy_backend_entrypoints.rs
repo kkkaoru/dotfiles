@@ -339,7 +339,6 @@ async fn exercise_model_specific_tool_round_trip(url: &str) {
             "model":"claude-sonnet-5", "system":"cc_is_subagent=true",
             "metadata":{"user_id":user_id}, "tools":tools,
             "messages":[
-                {"role":"user","content":prompt},
                 {"role":"assistant","content":first["content"]},
                 {"role":"user","content":[{
                     "type":"tool_result", "tool_use_id":first["content"][0]["id"],

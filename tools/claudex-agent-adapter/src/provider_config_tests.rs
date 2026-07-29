@@ -170,7 +170,7 @@ mod tests {
         std::fs::write(
             &path,
             config(
-                r#"{"id":"p","agent":"claudex-ollama-glm-5-2","defaultModel":"glm-5.2:cloud","subagentModel":"glm-5.2:cloud","effort":"high","enabled":true,"usageProvider":"ollama","modelProvider":"ollama-launch-codex-app","modelCatalogJson":"~/.codex/fugu.json","modelPrefixes":["glm-"],"backend":"codex-app-server"}"#,
+                r#"{"id":"p","agent":"claudex-ollama-glm-5-2","defaultModel":"glm-5.2:cloud","subagentModel":"glm-5.2:cloud","effort":"max","enabled":true,"usageProvider":"ollama","modelProvider":"ollama-launch-codex-app","modelCatalogJson":"~/.codex/fugu.json","modelPrefixes":["glm-"],"backend":"codex-app-server"}"#,
             ),
         )
         .unwrap();
@@ -185,6 +185,12 @@ mod tests {
             Some("~/.codex/fugu.json")
         );
         assert!(loaded.model_catalog.matches("glm-5.2:cloud"));
+        assert_eq!(
+            loaded
+                .model_catalog
+                .worker_fields("claudex-ollama-glm-5-2"),
+            Some(("glm-5.2:cloud", "max"))
+        );
     }
 
     #[test]

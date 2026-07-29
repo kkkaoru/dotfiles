@@ -204,7 +204,7 @@ impl Bridge {
             .retain(|session| !Arc::ptr_eq(session, removed));
     }
 
-    async fn find_result_session(&self, results: &[ToolResult]) -> Option<Arc<Session>> {
+    pub(super) async fn find_result_session(&self, results: &[ToolResult]) -> Option<Arc<Session>> {
         let sessions = self.sessions.lock().await.clone();
         for session in sessions {
             let pending = session.pending_tools.lock().await;

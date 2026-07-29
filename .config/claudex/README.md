@@ -40,7 +40,7 @@ flowchart LR
 | Codex worker | `claudex-gpt` | `gpt-5.6-luna` | `max` | Codexに空きがある場合 |
 | Codex Spark worker | `claudex-gpt-spark` | `gpt-5.3-codex-spark` | `xhigh` | Codexに空きがある場合 |
 | Fugu worker | `claudex-fugu` | `fugu` | `high` | CodexBarのSakana枠に空きがある場合 |
-| Ollama GLM worker | `claudex-ollama-glm-5-2` | `glm-5.2:cloud` | `high` | CodexBarのOllama枠に空きがある場合 |
+| Ollama GLM worker | `claudex-ollama-glm-5-2` | `glm-5.2:cloud` | `max` | CodexBarのOllama枠に空きがある場合 |
 | Grok worker | `claudex-grok` | `grok-4.5` | `high` | Grokに空きがある場合 |
 | Qwen worker | `claudex-qwen` | `qwen3.8-max-preview` | `high` | providerは維持するがSubAgentではdenylistにより禁止 |
 | DeepSeek worker | `claudex-deepseek` | `opencode-go/deepseek-v4-flash` | `high` | CodexBarのOpenCode Go枠に空きがある場合 |
