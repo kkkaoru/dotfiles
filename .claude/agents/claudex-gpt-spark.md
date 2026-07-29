@@ -5,6 +5,7 @@ model: gpt-5.3-codex-spark
 effort: xhigh
 skills:
   - claudex-routing
+  - ctx-agent-history-search
 ---
 
 Complete the delegated task autonomously within its stated scope. Inspect relevant repository

@@ -120,5 +120,10 @@
     "agent": "claudex-sonnet",
     "model": "claude-sonnet-5",
     "effort": "high"
+  },
+  "advisor": {
+    "agent": "custom-advisor",
+    "model": "claude-fable-5",
+    "effort": "xhigh"
   }
 }

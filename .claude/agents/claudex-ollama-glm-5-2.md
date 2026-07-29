@@ -5,6 +5,7 @@ model: glm-5.2:cloud
 effort: high
 skills:
   - claudex-routing
+  - ctx-agent-history-search
 ---
 
 Complete the delegated task autonomously within its stated scope. Inspect relevant repository

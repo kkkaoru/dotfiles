@@ -238,6 +238,11 @@ def configuration() -> dict[str, object]:
             "model": "claude-sonnet-5",
             "effort": "high",
         },
+        "advisor": {
+            "agent": "custom-advisor",
+            "model": "claude-fable-5",
+            "effort": "xhigh",
+        },
     }
 
 
@@ -286,6 +291,7 @@ class ConfigurationTests(unittest.TestCase):
             ("providers", []),
             ("mainProviders", []),
             ("fallback", {}),
+            ("advisor", {}),
         ]:
             changed = copy.deepcopy(base)
             changed[key] = value
@@ -396,14 +402,49 @@ class RoutingTests(unittest.TestCase):
             self.assertIn("N queued", instructions, path)
             self.assertIn("parallel capacity", instructions, path)
             self.assertIn("user-visible status", instructions, path)
+            self.assertIn("unknown or potentially long-running", instructions, path)
+            self.assertIn("without waiting for the slowest worker", instructions, path)
+            normalized = " ".join(instructions.replace("`", "").split())
+            lowered = normalized.casefold()
+            self.assertIn(
+                "main session must control parallel distribution", lowered, path
+            )
+            self.assertTrue(
+                "at least three ordinary workers" in lowered
+                or "least three ordinary workers" in lowered,
+                path,
+            )
+            self.assertIn("two distinct model kinds", lowered, path)
+            self.assertIn(
+                "avoid serial heavy processing by one worker", lowered, path
+            )
+            self.assertIn(
+                "reuse compatible workers with sendmessage", lowered, path
+            )
+            self.assertIn("instead of churning processes", lowered, path)
+            self.assertIn(
+                "foreground worker into a background worker batch", normalized, path
+            )
+            self.assertIn("re-evaluate the active set", normalized, path)
             self.assertNotIn("When delegation is requested", instructions, path)
 
         settings = json.loads(
             (claude_home / "settings.json").read_text(encoding="utf-8")
         )
         self.assertEqual(settings["advisorModel"], "opus")
-        self.assertNotIn("advisor", configuration())
-        self.assertFalse((claude_home / "agents" / "custom-advisor.md").exists())
+        self.assertEqual(configuration()["advisor"]["model"], "claude-fable-5")
+        self.assertEqual(configuration()["advisor"]["effort"], "xhigh")
+        advisor_path = claude_home / "agents" / "custom-advisor.md"
+        self.assertTrue(advisor_path.exists())
+        advisor_text = advisor_path.read_text(encoding="utf-8")
+        self.assertIn("model: claude-fable-5", advisor_text)
+        self.assertIn("effort: xhigh", advisor_text)
+        # Claude Code file frontmatter uses a comma-separated tools allowlist.
+        # Background subagents keep SendMessage; TaskList/TaskGet are agent-team tools.
+        self.assertRegex(advisor_text, r"(?m)^tools:\s*SendMessage\s*$")
+        self.assertNotIn("TaskList", advisor_text)
+        self.assertNotIn("TaskGet", advisor_text)
+        self.assertNotIn("process=1", advisor_text)
         routing_hook = next(
             hook
             for group in settings["hooks"]["UserPromptSubmit"]
@@ -419,6 +460,83 @@ class RoutingTests(unittest.TestCase):
                 + route_usage.QWEN_SUBPROCESS_GRACE_SECONDS
             ),
         )
+
+    def test_orchestration_contract_exposes_dynamic_worker_floor(self) -> None:
+        summary = configured_summary(report())
+        contract = summary["orchestration"]
+        self.assertTrue(contract["dynamic_fanout"])
+        self.assertEqual(contract["minimum_subagents_per_phase"], 3)
+        self.assertEqual(contract["minimum_active_subagents"], 2)
+        self.assertEqual(contract["minimum_model_kinds"], 2)
+        self.assertGreaterEqual(contract["available_model_kinds"], 2)
+        self.assertTrue(contract["model_diversity_satisfied"])
+        self.assertTrue(contract["completion_rebalance_required"])
+        self.assertTrue(contract["reuse_compatible_workers"])
+        self.assertTrue(contract["cleanup_on_exit"])
+        self.assertEqual(contract["monitor_interval_seconds"], 600)
+        self.assertFalse(contract["hook_launches_agents"])
+
+        constrained = route_usage.orchestration_contract(
+            {"selected_workers": [{"model": "only-model"}]}
+        )
+        self.assertTrue(constrained["capacity_shortfall"])
+        self.assertFalse(constrained["model_diversity_satisfied"])
+
+        family_contract = route_usage.orchestration_contract(
+            {
+                "selected_workers": [
+                    {"model": "provider/gpt-5.6-sol"},
+                    {"model": "provider/gpt-5.6-luna"},
+                    {"model": "grok-4.5"},
+                ]
+            }
+        )
+        self.assertEqual(family_contract["available_model_kinds"], 2)
+        self.assertTrue(family_contract["model_diversity_satisfied"])
+
+    def test_orchestration_environment_overrides_are_strictly_validated(self) -> None:
+        environment = {
+            route_usage.SUBAGENT_MIN_PARALLEL_ENV: "4",
+            route_usage.SUBAGENT_ACTIVE_FLOOR_ENV: "3",
+            route_usage.SUBAGENT_REEVALUATE_ON_COMPLETION_ENV: "off",
+            route_usage.SUBAGENT_REASSESS_INTERVAL_ENV: "120",
+            route_usage.SUBAGENT_MIN_MODEL_FAMILIES_ENV: "3",
+            route_usage.SUBAGENT_REUSE_ENV: "0",
+            route_usage.SUBAGENT_CLEANUP_ON_EXIT_ENV: "false",
+        }
+        settings = route_usage.orchestration_settings(environment)
+        self.assertEqual(settings["minimum_subagents_per_phase"], 4)
+        self.assertEqual(settings["minimum_active_subagents"], 3)
+        self.assertFalse(settings["reevaluate_on_completion"])
+        self.assertEqual(settings["monitor_interval_seconds"], 120)
+        self.assertEqual(settings["minimum_model_kinds"], 3)
+        self.assertFalse(settings["reuse_compatible_workers"])
+        self.assertFalse(settings["cleanup_on_exit"])
+        for name in (
+            route_usage.SUBAGENT_MIN_PARALLEL_ENV,
+            route_usage.SUBAGENT_ACTIVE_FLOOR_ENV,
+            route_usage.SUBAGENT_REASSESS_INTERVAL_ENV,
+            route_usage.SUBAGENT_MIN_MODEL_FAMILIES_ENV,
+        ):
+            with self.subTest(name=name):
+                with self.assertRaises(ValueError):
+                    route_usage.orchestration_settings({name: "invalid"})
+        for name, value in (
+            (route_usage.SUBAGENT_MIN_PARALLEL_ENV, "1"),
+            (route_usage.SUBAGENT_ACTIVE_FLOOR_ENV, "1"),
+            (route_usage.SUBAGENT_MIN_MODEL_FAMILIES_ENV, "1"),
+        ):
+            with self.subTest(name=name):
+                with self.assertRaises(ValueError):
+                    route_usage.orchestration_settings({name: value})
+        for name in (
+            route_usage.SUBAGENT_REEVALUATE_ON_COMPLETION_ENV,
+            route_usage.SUBAGENT_REUSE_ENV,
+            route_usage.SUBAGENT_CLEANUP_ON_EXIT_ENV,
+        ):
+            with self.subTest(name=name):
+                with self.assertRaises(ValueError):
+                    route_usage.orchestration_settings({name: "maybe"})
 
     def test_collects_nested_numeric_percentages_only(self) -> None:
         usage = {
@@ -527,10 +645,11 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(summary["orchestration_mode"], "subagent-first")
         self.assertTrue(summary["delegation_required"])
         self.assertEqual(summary["providers"]["codex"]["reason"], "available")
-        context = route_usage.hook_output(summary)["hookSpecificOutput"]["additionalContext"]
-        self.assertIn("MANDATORY SUBAGENT-FIRST ORCHESTRATION", context)
-        self.assertIn("first substantive tool call must be Agent/Task", context)
-        self.assertIn("same model as the outer session", context)
+        context = route_usage.hook_output(summary, {})["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("[claudex-routing-metadata]", context)
+        self.assertIn('"source":"claudex-routing-local-hook"', context)
+        self.assertIn('"model":"gpt-5.3-codex-spark"', context)
+        self.assertNotIn("MANDATORY SUBAGENT-FIRST ORCHESTRATION", context)
 
     def test_disabled_models_are_excluded_without_deleting_provider_config(self) -> None:
         disabled = frozenset({"gpt-5.3-codex-spark", "grok-4.5"})
@@ -737,31 +856,45 @@ class RoutingTests(unittest.TestCase):
 
     def test_hook_output_contains_only_the_sanitized_summary(self) -> None:
         summary = configured_summary(report())
-        output = route_usage.hook_output(summary)
+        output = route_usage.hook_output(summary, {})
         context = output["hookSpecificOutput"]["additionalContext"]
         self.assertEqual(
             output["hookSpecificOutput"]["hookEventName"], "UserPromptSubmit"
         )
         self.assertIn("claudex-gpt-spark", context)
         self.assertIn("claudex-qwen", context)
-        self.assertIn("every Agent/Task launch", context)
-        self.assertIn("nested launches from a worker", context)
-        self.assertIn("claudex_model and claudex_effort", context)
-        self.assertIn("absolute SubAgent denylist", context)
-        self.assertIn("even when the user names it", context)
-        self.assertIn("complete tool set and permission context", context)
-        self.assertIn("never add an implicit read-only", context)
-        self.assertIn("background execution would auto-deny", context)
-        self.assertIn("same assistant response and tool round", context)
-        self.assertIn("exactly that many launch calls", context)
-        self.assertIn("standing default", context)
-        self.assertIn("do not wait for them to repeat it", context)
-        self.assertIn("built-in parameterless advisor tool", context)
-        self.assertIn("complete conversation history", context)
-        self.assertNotIn("custom-advisor", context)
-        self.assertIn("TUI N queued", context)
-        self.assertIn("not worker capacity", context)
+        self.assertIn("claude-fable-5", context)
+        self.assertIn("[claudex-routing-metadata]", context)
+        self.assertIn('"source":"claudex-routing-local-hook"', context)
+        self.assertIn('"minimum_subagents_per_phase":3', context)
+        self.assertIn('"minimum_model_kinds":2', context)
+        self.assertIn('"custom_advisor_enabled":true', context)
+        self.assertNotIn("Runtime parallel contract", context)
+        self.assertNotIn("MANDATORY SUBAGENT-FIRST ORCHESTRATION", context)
         self.assertNotIn("account", context)
+
+    def test_custom_advisor_env_gate_keeps_builtin_advisor_independent(self) -> None:
+        summary = configured_summary(report())
+        enabled = route_usage.hook_output(summary, {})[
+            "hookSpecificOutput"
+        ]["additionalContext"]
+        self.assertIn("custom-advisor", enabled)
+        self.assertIn("claude-fable-5", enabled)
+        self.assertIn('"custom_advisor_enabled":true', enabled)
+        for value in ["0", "false", "FALSE", "off", " OFF "]:
+            with self.subTest(value=value):
+                disabled = route_usage.hook_output(
+                    summary, {route_usage.CUSTOM_ADVISOR_ENV: value}
+                )["hookSpecificOutput"]["additionalContext"]
+                self.assertIn("custom-advisor", disabled)
+                self.assertIn('"custom_advisor_enabled":false', disabled)
+        for value in ["1", "true", "on", "unexpected"]:
+            with self.subTest(value=value):
+                self.assertTrue(
+                    route_usage.custom_advisor_enabled(
+                        {route_usage.CUSTOM_ADVISOR_ENV: value}
+                    )
+                )
 
 
 class CacheTests(unittest.TestCase):
@@ -875,6 +1008,27 @@ class CommandTests(unittest.TestCase):
         )
         self.assertIn("claudex-ollama-glm-5-2", summary["selected_agents"])
 
+    @mock.patch("route_usage.qwen_usage_entry", return_value=qwen_report())
+    @mock.patch("route_usage.ollama_usage_entry")
+    @mock.patch(
+        "route_usage.run_codexbar",
+        return_value=[
+            *report()[:2],
+            {"provider": "ollama", "usage": {"primary": {"usedPercent": 4}}},
+        ],
+    )
+    def test_collect_usage_skips_unused_ollama_fallback(
+        self, _codexbar: mock.Mock, ollama: mock.Mock, _qwen: mock.Mock
+    ) -> None:
+        collected = route_usage.collect_usage(
+            complete_configuration(), "codexbar", "curl"
+        )
+        self.assertEqual(
+            route_usage.provider_status(collected, "ollama"),
+            route_usage.status(True, 4.0, "available"),
+        )
+        ollama.assert_not_called()
+
     def test_converts_qwen_quota_windows_to_percentages(self) -> None:
         entry = route_usage.qwen_quota_entry(quota_payload(), "qwen")
         self.assertEqual(entry["maxUsedPercent"], 2.0)
@@ -978,16 +1132,28 @@ class CommandTests(unittest.TestCase):
                     "available": True,
                 }
             },
+        ]:
+            self.assertIsNone(route_usage.sanitize_model_concurrency(value))
+        self.assertEqual(
+            route_usage.sanitize_model_concurrency(
+                {
+                    "model": {
+                        "active": 6,
+                        "queued": 1,
+                        "limit": 7,
+                        "available": True,
+                    }
+                }
+            ),
             {
                 "model": {
                     "active": 6,
                     "queued": 1,
                     "limit": 7,
-                    "available": True,
+                    "available": False,
                 }
             },
-        ]:
-            self.assertIsNone(route_usage.sanitize_model_concurrency(value))
+        )
         self.assertIsNone(
             route_usage.run_daemon_health(
                 "curl-test",
@@ -1605,11 +1771,8 @@ class MainTests(unittest.TestCase):
             health=model_health(7), config=complete_configuration()
         )
         context = json.loads(output)["hookSpecificOutput"]["additionalContext"]
-        self.assertIn('"reason":"concurrency-limit-reached"', context)
-        selected = context.split('"selected_workers":', 1)[1].split(
-            ',"preferred_worker":', 1
-        )[0]
-        self.assertNotIn('"provider":"opencode-go"', selected)
+        self.assertNotIn('"agent":"claudex-deepseek"', context)
+        self.assertIn('"agent":"claudex-gpt"', context)
         collect_usage.assert_not_called()
 
     @mock.patch("route_usage.write_cache")
@@ -1670,7 +1833,6 @@ class MainTests(unittest.TestCase):
         self, _read_cache: mock.Mock, _collect_usage: mock.Mock
     ) -> None:
         output = self.run_main("--no-cache")
-        self.assertIn("usage-unavailable", output)
         self.assertIn("claudex-sonnet", output)
 
     @mock.patch("route_usage.collect_usage", return_value=report())
@@ -1751,7 +1913,7 @@ class MainTests(unittest.TestCase):
             ),
         }
         with mock.patch.dict(os.environ, environment):
-            output = self.run_main("--no-cache")
+            output = self.run_main("--no-cache", respect_resolved_disabled_models=True)
         context = json.loads(output)["hookSpecificOutput"]["additionalContext"]
         self.assertIn('"selected_agents":["claudex-gpt-spark","claudex-grok"]', context)
         expected_key = route_usage.configuration_key(
@@ -1818,6 +1980,7 @@ class MainTests(unittest.TestCase):
         disabled_models: list[str] | None = None,
         health: dict[str, dict[str, object]] | None = None,
         config: dict[str, object] | None = None,
+        respect_resolved_disabled_models: bool = False,
     ) -> str:
         stdout = io.StringIO()
         with tempfile.TemporaryDirectory() as directory:
@@ -1832,17 +1995,18 @@ class MainTests(unittest.TestCase):
                 )
                 effective_arguments.extend(["--config", str(provider_config)])
             if "--disabled-models-config" not in effective_arguments:
-                policy = Path(directory) / "disabled.json"
-                policy.write_text(
-                    json.dumps(
-                        {
-                            "version": 1,
-                            "disabledModels": disabled_models or [],
-                        }
-                    ),
-                    encoding="utf-8",
-                )
-                effective_arguments.extend(["--disabled-models-config", str(policy)])
+                if not respect_resolved_disabled_models:
+                    policy = Path(directory) / "disabled.json"
+                    policy.write_text(
+                        json.dumps(
+                            {
+                                "version": 1,
+                                "disabledModels": disabled_models or [],
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+                    effective_arguments.extend(["--disabled-models-config", str(policy)])
             with (
                 mock.patch.object(
                     sys,

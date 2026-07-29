@@ -1,0 +1,6 @@
+{
+  "version": 1,
+  "source": "settings",
+  "model": "sonnet[1m]",
+  "effort": "high"
+}

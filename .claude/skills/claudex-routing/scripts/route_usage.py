@@ -15,7 +15,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 from urllib.parse import parse_qs, urlparse
 
 DEFAULT_CACHE_SECONDS = 300
@@ -48,9 +48,30 @@ USAGE_COMMAND_TIMEOUT_SECONDS = 45
 DISABLED_SUBAGENT_MODELS_ENV = "CLAUDEX_DISABLED_SUBAGENT_MODELS"
 DISABLED_SUBAGENT_MODELS_CONFIG_ENV = "CLAUDEX_DISABLED_SUBAGENT_MODELS_CONFIG"
 RESOLVED_DISABLED_SUBAGENT_MODELS_ENV = "CLAUDEX_RESOLVED_DISABLED_SUBAGENT_MODELS"
+CUSTOM_ADVISOR_ENV = "CLAUDEX_CUSTOM_ADVISOR"
+CUSTOM_ADVISOR_DISABLED_VALUES = frozenset({"0", "false", "off"})
+# These values describe the orchestration contract injected into Claude Code.
+# The routing hook cannot start Agent/Task calls itself; the main session uses
+# this metadata to choose and rebalance ordinary workers.
+MIN_SUBAGENT_FANOUT = 3
+MIN_ACTIVE_SUBAGENTS = 2
+MIN_SUBAGENT_MODEL_KINDS = 2
+ORCHESTRATION_REBALANCE_INTERVAL_SECONDS = 10 * 60
+SUBAGENT_MIN_PARALLEL_ENV = "CLAUDEX_SUBAGENT_MIN_PARALLEL"
+SUBAGENT_ACTIVE_FLOOR_ENV = "CLAUDEX_SUBAGENT_ACTIVE_FLOOR"
+SUBAGENT_REEVALUATE_ON_COMPLETION_ENV = "CLAUDEX_SUBAGENT_REEVALUATE_ON_COMPLETION"
+SUBAGENT_REASSESS_INTERVAL_ENV = "CLAUDEX_SUBAGENT_REASSESS_INTERVAL_SECONDS"
+SUBAGENT_MIN_MODEL_FAMILIES_ENV = "CLAUDEX_SUBAGENT_MIN_MODEL_FAMILIES"
+SUBAGENT_REUSE_ENV = "CLAUDEX_SUBAGENT_REUSE"
+SUBAGENT_CLEANUP_ON_EXIT_ENV = "CLAUDEX_SUBAGENT_CLEANUP_ON_EXIT"
+DEFAULT_ADVISOR = {
+    "agent": "custom-advisor",
+    "model": "claude-fable-5",
+    "effort": "xhigh",
+}
 
 
-def config_path(environment: dict[str, str], requested: Path | None = None) -> Path:
+def config_path(environment: Mapping[str, str], requested: Path | None = None) -> Path:
     """Resolve an explicit, installed, or repository-local provider config."""
     if requested:
         return requested
@@ -82,11 +103,14 @@ def load_config(path: Path) -> dict[str, Any]:
         raise ValueError("mainProviders must name distinct enabled providers")
     if not valid_choice(config.get("fallback")):
         raise ValueError("provider config contains an invalid fallback")
-    return {**config, "providers": enabled}
+    advisor = config.get("advisor", DEFAULT_ADVISOR)
+    if not valid_choice(advisor):
+        raise ValueError("provider config contains an invalid advisor")
+    return {**config, "providers": enabled, "advisor": dict(advisor)}
 
 
 def disabled_models_config_path(
-    environment: dict[str, str], requested: Path | None = None
+    environment: Mapping[str, str], requested: Path | None = None
 ) -> Path:
     """Resolve the dedicated model-policy config independently of providers."""
     if requested:
@@ -116,7 +140,7 @@ def valid_provider(provider: Any) -> bool:
 
 
 def valid_choice(choice: Any) -> bool:
-    """Check the native fallback agent selection."""
+    """Check the native fallback or advisor agent selection."""
     return isinstance(choice, dict) and all(
         isinstance(choice.get(field), str) and choice[field]
         for field in ("agent", "model", "effort")
@@ -131,6 +155,12 @@ def valid_model_id(model: Any) -> bool:
         and model.isascii()
         and all("!" <= char <= "~" for char in model)
     )
+
+
+def model_family(model: str) -> str:
+    for separator in ("/", "-", "_", "."):
+        model = model.split(separator, 1)[0]
+    return model
 
 
 def load_disabled_models_config(path: Path) -> frozenset[str]:
@@ -153,13 +183,19 @@ def load_disabled_models_config(path: Path) -> frozenset[str]:
 
 
 def disabled_subagent_models(
-    configured: frozenset[str], environment: dict[str, str]
+    configured: frozenset[str], environment: Mapping[str, str]
 ) -> frozenset[str]:
     """Merge configured models with the terminal-local exact model denylist."""
     return configured | environment_models(environment, DISABLED_SUBAGENT_MODELS_ENV)
 
 
-def environment_models(environment: dict[str, str], name: str) -> frozenset[str]:
+def custom_advisor_enabled(environment: Mapping[str, str] | None = None) -> bool:
+    """Return whether the independent custom-advisor channel is enabled."""
+    values = os.environ if environment is None else environment
+    return values.get(CUSTOM_ADVISOR_ENV, "").strip().casefold() not in CUSTOM_ADVISOR_DISABLED_VALUES
+
+
+def environment_models(environment: Mapping[str, str], name: str) -> frozenset[str]:
     """Parse one comma-separated exact-model environment value."""
     models = {
         item.strip()
@@ -275,7 +311,104 @@ def worker(provider: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def daemon_health_url(environment: dict[str, str]) -> str:
+def _positive_or_default(
+    environment: Mapping[str, str], name: str, default: int, minimum: int
+) -> int:
+    """Parse one positive orchestration integer and reject unsafe values."""
+    raw = environment.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"{name} must be an integer >= {minimum}") from error
+    if value < minimum:
+        raise ValueError(f"{name} must be an integer >= {minimum}")
+    return value
+
+
+def _boolean_or_default(
+    environment: Mapping[str, str], name: str, default: bool
+) -> bool:
+    """Parse a strict boolean orchestration switch."""
+    raw = environment.get(name)
+    if raw is None or not raw.strip():
+        return default
+    normalized = raw.strip().casefold()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be one of 0, 1, true, or false")
+
+
+def orchestration_settings(environment: Mapping[str, str] | None = None) -> dict[str, Any]:
+    """Resolve validated worker lifecycle settings from terminal-local env."""
+    values = os.environ if environment is None else environment
+    return {
+        "minimum_subagents_per_phase": _positive_or_default(
+            values, SUBAGENT_MIN_PARALLEL_ENV, MIN_SUBAGENT_FANOUT, MIN_SUBAGENT_FANOUT
+        ),
+        "minimum_active_subagents": _positive_or_default(
+            values, SUBAGENT_ACTIVE_FLOOR_ENV, MIN_ACTIVE_SUBAGENTS, MIN_ACTIVE_SUBAGENTS
+        ),
+        "reevaluate_on_completion": _boolean_or_default(
+            values, SUBAGENT_REEVALUATE_ON_COMPLETION_ENV, True
+        ),
+        "monitor_interval_seconds": _positive_or_default(
+            values,
+            SUBAGENT_REASSESS_INTERVAL_ENV,
+            ORCHESTRATION_REBALANCE_INTERVAL_SECONDS,
+            1,
+        ),
+        "minimum_model_kinds": _positive_or_default(
+            values,
+            SUBAGENT_MIN_MODEL_FAMILIES_ENV,
+            MIN_SUBAGENT_MODEL_KINDS,
+            MIN_SUBAGENT_MODEL_KINDS,
+        ),
+        "reuse_compatible_workers": _boolean_or_default(values, SUBAGENT_REUSE_ENV, True),
+        "cleanup_on_exit": _boolean_or_default(
+            values, SUBAGENT_CLEANUP_ON_EXIT_ENV, True
+        ),
+    }
+
+
+def orchestration_contract(
+    summary: Mapping[str, Any], environment: Mapping[str, str] | None = None
+) -> dict[str, Any]:
+    """Describe the main-session worker contract without launching workers.
+
+    The UserPromptSubmit hook is a context producer, not an Agent/Task
+    executor.  Claude Code (or another compatible harness) uses this
+    sanitized state to choose the number of independent workstreams and to
+    rebalance them as results arrive.
+    """
+    selected = summary.get("selected_workers")
+    workers = selected if isinstance(selected, list) else []
+    models = {
+        model_family(worker_item["model"])
+        for worker_item in workers
+        if isinstance(worker_item, dict)
+        and isinstance(worker_item.get("model"), str)
+        and worker_item["model"]
+    }
+    available = len(workers)
+    settings = orchestration_settings(environment)
+    return {
+        "dynamic_fanout": True,
+        **settings,
+        "max_available_workers": available,
+        "available_model_kinds": len(models),
+        "model_diversity_satisfied": len(models) >= settings["minimum_model_kinds"],
+        "completion_rebalance_required": settings["reevaluate_on_completion"],
+        "custom_advisor_exempt": True,
+        "capacity_shortfall": available < settings["minimum_subagents_per_phase"],
+        "hook_launches_agents": False,
+    }
+
+
+def daemon_health_url(environment: Mapping[str, str]) -> str:
     """Accept only the shared loopback daemon health endpoint."""
     if configured := environment.get(DAEMON_HEALTH_URL_ENV):
         return validate_daemon_health_url(configured)
@@ -305,7 +438,7 @@ def validate_daemon_health_url(value: str) -> str:
 
 
 def run_daemon_health(
-    curl_program: str, environment: dict[str, str]
+    curl_program: str, environment: Mapping[str, str]
 ) -> dict[str, Any] | None:
     """Read public daemon capacity without retaining unrelated health fields."""
     try:
@@ -361,14 +494,13 @@ def sanitize_model_concurrency(value: Any) -> dict[str, dict[str, Any]] | None:
             or isinstance(limit, bool)
             or limit <= 0
             or not isinstance(available, bool)
-            or available != (active + queued < limit)
         ):
             return None
         sanitized[model] = {
             "active": active,
             "queued": queued,
             "limit": limit,
-            "available": available,
+            "available": available and active + queued < limit,
         }
     return sanitized
 
@@ -414,8 +546,14 @@ def model_concurrency_status(
     if fields is None:
         return concurrency_status(0, 0, configured_limit, True, "idle", True)
     if fields["limit"] != configured_limit:
+        available = fields["active"] + fields["queued"] < configured_limit
         return concurrency_status(
-            None, None, configured_limit, True, "daemon-health-unavailable", False
+            fields["active"],
+            fields["queued"],
+            configured_limit,
+            available,
+            "configured-limit-mismatch",
+            False,
         )
     return concurrency_status(
         fields["active"],
@@ -502,7 +640,7 @@ def routing_summary(
         ),
         None,
     )
-    return {
+    summary = {
         "providers": providers,
         "main_workers": main_workers,
         "selected_agents": [item["agent"] for item in selected],
@@ -511,7 +649,10 @@ def routing_summary(
         "preferred_main_worker": preferred_main_worker,
         "fallback_active": fallback_active,
         "disabled_subagent_models": sorted(disabled_models),
+        "advisor": dict(config.get("advisor", DEFAULT_ADVISOR)),
     }
+    summary["orchestration"] = orchestration_contract(summary)
+    return summary
 
 
 def combined_capacity_priority(
@@ -637,66 +778,44 @@ def apply_model_concurrency(
             "preferred_main_worker": preferred_main_worker,
         }
     )
+    combined["orchestration"] = orchestration_contract(combined)
     return combined
 
 
-def hook_output(summary: dict[str, Any]) -> dict[str, Any]:
+def hook_output(
+    summary: dict[str, Any], environment: Mapping[str, str] | None = None
+) -> dict[str, Any]:
     """Wrap the routing summary in Claude Code's structured hook response."""
-    compact = json.dumps(summary, ensure_ascii=False, separators=(",", ":"))
-    instructions = (
-        " MANDATORY SUBAGENT-FIRST ORCHESTRATION: when delegation_required is true, the main "
-        "session remains an orchestrator and its first substantive tool call must be Agent/Task. "
-        "Delegate investigation, implementation, review, testing, and validation; keep only "
-        "decomposition, coordination, conflict resolution, synthesis, and the final response in "
-        "main. Direct Read/Bash/Edit/Write/Grep/Glob/Web work belongs to workers, including after "
-        "long execution, compaction, resume, context reconstruction, or worker failure. Do not "
-        "wait for the user to repeat this standing default; do not wait for them to repeat it or "
-        "merely announce future delegation. "
-        "Follow claudex-routing. Use selected_workers and pass each "
-        "worker's model and effort as claudex_model and claudex_effort for every Agent/Task launch, "
-        "allow a selected worker to use the same model as the outer session because those requests "
-        "are independent, "
-        "preserve the main session's complete tool set and permission context, and never add an "
-        "implicit read-only, plan-only, no-edit, no-build, or no-deploy restriction; use foreground "
-        "delegation when background execution would auto-deny an interactive main-session permission. "
-        "prefer preferred_worker for primary work because quota and current model-concurrency "
-        "headroom order the list, "
-        "including nested launches from a worker; never default a nested launch to generic claude "
-        "or blindly inherit its parent route. If the user names a "
-        "model matching model_prefixes, dynamically select that provider and pass the exact "
-        "requested model only when it is not in disabled_subagent_models and its exact "
-        "model_concurrency entry is not unavailable. A missing exact dynamic entry inherits the "
-        "provider's max_concurrency and means no active use was observed. The merged configured "
-        "and terminal-local disabled_subagent_models list is an absolute SubAgent denylist: never "
-        "launch, inherit, "
-        "dynamically select, or reuse one of those exact models, even when the user names it. If "
-        "selected_workers is empty, continue safely in the main session and report that no "
-        "allowed SubAgent model is available. This current routing context overrides stale "
-        "auto-memory about worker "
-        "model policy; do not inspect such memory before delegating. Use Claude Code's built-in "
-        "parameterless advisor tool according to its standard policy; it is independent of provider "
-        "capacity and already receives the complete conversation history. "
-        "Start as many worker instances as useful, but for related follow-ups use "
-        "SendMessage with the exact compatible recipient specified by the prior Agent/Task result; "
-        "decide shutdown only after weighing likely reuse and potential cache value against resource pressure. "
-        "Prefer foreground parallel calls when their results are needed now; use background only "
-        "when a concrete independent next action is already identified and started immediately, or "
-        "the task should outlive the turn. After successful background launches, start that action "
-        "immediately or end the turn promptly with a concise user-visible status; never remain in "
-        "hidden reasoning waiting for completion notifications. Do not SendMessage merely to repeat "
-        "scope or restrictions already present in the original delegation. A follow-up queued to a "
-        "busy worker does not add parallel capacity; route genuinely independent work to another "
-        "worker when useful capacity exists. When launching multiple "
-        "independent workers, emit every intended Agent/Task call in the same assistant response and "
-        "tool round; never launch one and defer the rest. Do not announce a worker count unless that "
-        "same response contains exactly that many launch calls. TUI N queued is pending "
-        "main-session input, including human prompts and background notifications, not worker "
-        "capacity, active slots, or SendMessage delivery."
-    )
+    # UserPromptSubmit additionalContext is rendered alongside conversation material by Claude
+    # Code. Keep it compact and declarative: imperative orchestration prose here looks like
+    # untrusted prompt content after compaction and causes the model to misclassify our own hook.
+    advisor_enabled = custom_advisor_enabled(environment)
+    metadata = {
+        "providers": {},
+        "source": "claudex-routing-local-hook",
+        "selected_agents": list(summary.get("selected_agents", [])),
+        "selected_workers": [
+            {
+                key: worker[key]
+                for key in ("agent", "model", "effort")
+                if key in worker
+            }
+            for worker in summary.get("selected_workers", [])
+        ],
+        "disabled_subagent_models": list(summary.get("disabled_subagent_models", [])),
+        "advisor": dict(summary.get("advisor", DEFAULT_ADVISOR)),
+        "custom_advisor_enabled": advisor_enabled,
+        "orchestration": orchestration_contract(summary, environment),
+    }
+    compact = json.dumps(metadata, ensure_ascii=False, separators=(",", ":"))
     return {
         "hookSpecificOutput": {
             "hookEventName": "UserPromptSubmit",
-            "additionalContext": f"Claudex routing for this turn: {compact}.{instructions}",
+            "additionalContext": (
+                "[claudex-routing-metadata]\\n"
+                f"{compact}\\n"
+                "[/claudex-routing-metadata]"
+            ),
         }
     }
 
@@ -725,6 +844,7 @@ def enforce_worker_model_separation(
     separated["main_session_model"] = main_model
     separated["orchestration_mode"] = "subagent-first"
     separated["delegation_required"] = bool(selected)
+    separated["orchestration"] = orchestration_contract(separated)
     return separated
 
 
@@ -1029,7 +1149,7 @@ def parse_utc_datetime(value: Any) -> float:
     return parsed.timestamp()
 
 
-def qwen_quota_cache_path(environment: dict[str, str]) -> Path:
+def qwen_quota_cache_path(environment: Mapping[str, str]) -> Path:
     """Resolve the private Qwen quota cache under the effective home directory."""
     return (
         Path(environment.get("HOME", str(Path.home())))
@@ -1182,7 +1302,7 @@ def ollama_usage_entry(
     curl_program: str,
     provider: str,
     model: str,
-    environment: dict[str, str],
+    environment: Mapping[str, str],
 ) -> dict[str, Any]:
     """Keep an Ollama model routable when Codexbar usage is unavailable."""
     base_url = environment.get(OLLAMA_BASE_URL_ENV, DEFAULT_OLLAMA_BASE_URL).rstrip("/")
@@ -1251,21 +1371,32 @@ def collect_usage(
     config: dict[str, Any],
     codexbar_program: str,
     curl_program: str,
-    environment: dict[str, str] | None = None,
+    environment: Mapping[str, str] | None = None,
     now: float | None = None,
+    disabled_models: frozenset[str] | None = None,
 ) -> list[dict[str, Any]]:
     """Collect independent provider usage and keep failures isolated."""
-    environment = os.environ if environment is None else environment
+    env: Mapping[str, str] = os.environ if environment is None else environment
+    disabled = disabled_models or frozenset()
     now = time.time() if now is None else now
-    home = Path(environment.get("HOME", str(Path.home())))
+    home = Path(env.get("HOME", str(Path.home())))
     curl_path = Path(
-        environment.get("CLAUDEX_QWEN_QUOTA_CURL_FILE", str(DEFAULT_QWEN_CURL))
+        env.get("CLAUDEX_QWEN_QUOTA_CURL_FILE", str(DEFAULT_QWEN_CURL))
     ).expanduser()
     settings_path = Path(
-        environment.get("CLAUDEX_QWEN_SETTINGS_FILE", str(home / ".qwen/settings.json"))
+        env.get("CLAUDEX_QWEN_SETTINGS_FILE", str(home / ".qwen/settings.json"))
     ).expanduser()
-    quota_cache_path = qwen_quota_cache_path(environment)
-    providers = config["providers"]
+    quota_cache_path = qwen_quota_cache_path(env)
+    providers = [
+        provider
+        for provider in config["providers"]
+        if worker(provider)["model"] not in disabled
+    ]
+    if not providers:
+        return [
+            unavailable_usage_entry(str(provider["id"]))
+            for provider in config["providers"]
+        ]
     qwen_providers = [
         provider
         for provider in providers
@@ -1285,8 +1416,10 @@ def collect_usage(
         and provider not in qwen_providers
     }
     # Codexbar and Qwen quota are independent; run them together so a cold hook
-    # pays max(source latency) instead of sum(source latency).
-    worker_count = 1 + len(qwen_providers) + len(ollama_providers)
+    # pays max(source latency) instead of sum(source latency). Ollama's API is
+    # only a fallback for a missing or unusable Codexbar entry, so do not start
+    # an otherwise unnecessary request that can hold the hook on executor exit.
+    worker_count = 1 + len(qwen_providers)
     with ThreadPoolExecutor(max_workers=worker_count) as pool:
         codexbar_future = pool.submit(
             collect_codexbar_report, codexbar_program, codexbar_names, qwen_names
@@ -1304,38 +1437,46 @@ def collect_usage(
             )
             for provider in qwen_providers
         ]
-        ollama_futures = [
-            (
-                provider,
-                pool.submit(
-                    ollama_usage_entry,
-                    curl_program,
-                    provider["usageProvider"],
-                    worker(provider)["model"],
-                    environment,
-                ),
-            )
-            for provider in ollama_providers
-        ]
         report = list(codexbar_future.result())
         report.extend(future.result() for future in qwen_futures)
-        for provider, future in ollama_futures:
-            usage_provider = provider["usageProvider"]
-            current = provider_status(report, usage_provider)
-            if current["reason"] not in {"missing", "unknown", "usage-unavailable"}:
-                continue
-            report = [
-                entry
-                for entry in report
-                if not isinstance(entry, dict)
-                or str(entry.get("provider", "")).casefold()
-                != usage_provider.casefold()
+    fallback_providers = [
+        provider
+        for provider in ollama_providers
+        if provider_status(report, provider["usageProvider"])["reason"]
+        in {"missing", "unknown", "usage-unavailable"}
+    ]
+    if fallback_providers:
+        # Multiple missing Ollama providers are independent. Keep their
+        # fallback probes parallel, but never delay a valid Codexbar result for
+        # an API probe whose result will be discarded.
+        with ThreadPoolExecutor(max_workers=len(fallback_providers)) as pool:
+            fallback_futures = [
+                (
+                    provider,
+                    pool.submit(
+                        ollama_usage_entry,
+                        curl_program,
+                        provider["usageProvider"],
+                        worker(provider)["model"],
+                        env,
+                    ),
+                )
+                for provider in fallback_providers
             ]
-            report.append(future.result())
+            for provider, future in fallback_futures:
+                usage_provider = provider["usageProvider"]
+                report = [
+                    entry
+                    for entry in report
+                    if not isinstance(entry, dict)
+                    or str(entry.get("provider", "")).casefold()
+                    != usage_provider.casefold()
+                ]
+                report.append(future.result())
     return report
 
 
-def cache_seconds(environment: dict[str, str]) -> int:
+def cache_seconds(environment: Mapping[str, str]) -> int:
     """Parse the optional cache TTL, falling back safely on invalid values."""
     try:
         return max(
@@ -1364,7 +1505,7 @@ def fallback_summary(
         }
     fallback = {"provider": "fallback", **config["fallback"]}
     selected = [] if fallback["model"] in disabled_models else [fallback]
-    return {
+    summary = {
         "providers": providers,
         "main_workers": {},
         "selected_agents": [item["agent"] for item in selected],
@@ -1373,7 +1514,10 @@ def fallback_summary(
         "fallback_active": bool(selected),
         "preferred_main_worker": None,
         "disabled_subagent_models": sorted(disabled_models),
+        "advisor": dict(config.get("advisor", DEFAULT_ADVISOR)),
     }
+    summary["orchestration"] = orchestration_contract(summary)
+    return summary
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -1394,7 +1538,12 @@ def main() -> int:
     now = time.time()
     try:
         config = load_config(config_path(os.environ, arguments.config))
-        if RESOLVED_DISABLED_SUBAGENT_MODELS_ENV in os.environ:
+        orchestration_settings(os.environ)
+        explicit_disabled_config = (
+            arguments.disabled_models_config is not None
+            or DISABLED_SUBAGENT_MODELS_CONFIG_ENV in os.environ
+        )
+        if not explicit_disabled_config and RESOLVED_DISABLED_SUBAGENT_MODELS_ENV in os.environ:
             disabled_models = environment_models(
                 os.environ, RESOLVED_DISABLED_SUBAGENT_MODELS_ENV
             )
@@ -1429,6 +1578,7 @@ def main() -> int:
                     arguments.curl_program,
                     os.environ,
                     now,
+                    disabled_models,
                 )
             )
             summary = routing_summary(report, config, disabled_models)
@@ -1448,7 +1598,11 @@ def main() -> int:
         config,
         disabled_models,
     )
-    print(json.dumps(hook_output(summary), ensure_ascii=False, separators=(",", ":")))
+    print(
+        json.dumps(
+            hook_output(summary, os.environ), ensure_ascii=False, separators=(",", ":")
+        )
+    )
     return 0
 
 

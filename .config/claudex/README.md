@@ -4,8 +4,10 @@ Claudex は Claude Code を操作画面とオーケストレーターとして�
 Build、Qwen Code、OpenCode Go、Claude の各モデルへ仕事を振り分けるローカル実行環境です。provider の利用率、
 モデル、実行方式、fallback は
 [`providers.json`](./providers.json) で一元管理します。
-advisor はClaude Code標準の引数なし `advisor()` ツールを使用し、モデルは
-[`settings.json`](../../.claude/settings.json) の `advisorModel` で管理します。
+advisor は2系統を独立して併用します。Claude Code標準の引数なし `advisor()` は
+[`settings.json`](../../.claude/settings.json) の `advisorModel` を使い、
+custom-advisor SubAgent（`claude-fable-5` / `xhigh`）は worker capacity とは別管理の
+論理的な session singleton として `SendMessage` で再利用します（hard process=1 ではない）。
 
 このREADMEは日常利用と別のMacへの導入手順を扱います。Anthropic Messages API互換
 adapterの内部実装や開発上の詳細は
@@ -18,7 +20,7 @@ adapterの内部実装や開発上の詳細は
 flowchart LR
     User[ユーザー] --> Fish[fish: claudex]
     Fish --> Adapter[claudex-agent-adapter]
-    Adapter --> Orchestrator[Claude main session]
+    Adapter --> Orchestrator[Claude main session\nsettings.json model/effort]
     Orchestrator --> Hook[provider利用状況フック]
     Hook --> Codex[claudex-gpt\ngpt-5.6-luna\nCodex app-server]
     Hook --> CodexSpark[claudex-gpt-spark\ngpt-5.3-codex-spark\nCodex app-server]
@@ -26,14 +28,15 @@ flowchart LR
     Hook --> Qwen[claudex-qwen\nQwen Code ACP]
     Hook --> DeepSeek[claudex-deepseek\nOpenCode Go ACP]
     Hook --> Fallback[claudex-sonnet\nClaude fallback]
-    Orchestrator -. 標準機能 .-> Advisor[Claude Code advisor()\nadvisorModel: opus]
+    Orchestrator -. 標準機能 .-> BuiltinAdvisor[Claude Code advisor()\nadvisorModel: opus]
+    Orchestrator -. 必要時に併用 .-> CustomAdvisor[custom-advisor\nclaude-fable-5 / xhigh]
 ```
 
 現在の既定値は次のとおりです。
 
 | 役割 | Agent | Model | Effort | 選択条件 |
 | --- | --- | --- | --- | --- |
-| Orchestrator | 通常のmain session | `gpt-5.6-luna` | `max` | `mainProviders` の優先順と空き状況で選択 |
+| Orchestrator | 通常のmain session | `sonnet[1m]` | `high` | `.claude/settings.json` を優先（adapterのbootstrap routeは `mainProviders` の空き状況で選択） |
 | Codex worker | `claudex-gpt` | `gpt-5.6-luna` | `max` | Codexに空きがある場合 |
 | Codex Spark worker | `claudex-gpt-spark` | `gpt-5.3-codex-spark` | `xhigh` | Codexに空きがある場合 |
 | Fugu worker | `claudex-fugu` | `fugu` | `high` | CodexBarのSakana枠に空きがある場合 |
@@ -42,7 +45,8 @@ flowchart LR
 | Qwen worker | `claudex-qwen` | `qwen3.8-max-preview` | `high` | providerは維持するがSubAgentではdenylistにより禁止 |
 | DeepSeek worker | `claudex-deepseek` | `opencode-go/deepseek-v4-flash` | `high` | CodexBarのOpenCode Go枠に空きがある場合 |
 | Fallback | `claudex-sonnet` | `claude-sonnet-5` | `high` | 利用率を管理するproviderをすべて利用できない場合 |
-| Advisor | Claude Code標準 `advisor()` | `opus` | Claude Code標準 | 標準advisor policyに従う |
+| Built-in advisor | Claude Code標準 `advisor()` | `opus` | Claude Code標準 | 標準advisor policyに従う。provider capacity非依存 |
+| Custom advisor | `custom-advisor` | `claude-fable-5` | `xhigh` | 明示指定時、または複雑・曖昧・高リスク・長期・停滞時。worker capacityとは別管理の論理 session singleton（hard process=1ではない） |
 
 worker のAgent定義と `providers.json` の `subagentModel` に同じ固定モデルを指定します。
 `defaultModel` はmain session用で、省略時はworkerにも使われます。adapterは
@@ -105,8 +109,10 @@ DeepSeek workerは独立した調査をまとめて実行し、確定済みの�
    `modelPrefixes` が一致するproviderへそのIDをそのまま渡します。ただし、専用設定と
    端末固有の追加設定を統合したdeny listに含まれる完全一致モデルは明示指定でも拒否します。
 6. providerを利用できない場合はClaude subscriptionのfallbackを使います。
-7. 標準advisorはworkerの代替ではありません。provider quotaとは独立して動作し、会話履歴
-   全体を自動参照します。
+7. advisorはworkerの代替ではありません。Claude Code標準の `advisor()` はprovider quotaと
+   独立して会話履歴全体を自動参照します。`custom-advisor` もworker capacity /
+   `selected_workers` スロットとは別管理で、実装を行わず戦略レビューとpeer `SendMessage`
+   に使います。両者は置換関係ではなく併用可能です。
 
 生response、アカウント情報、Cookie、API keyはキャッシュしません。
 `~/.cache/claudex/usage-routing.json` にはrouting結果を5分間、
@@ -115,24 +121,34 @@ UTC ISO 8601形式の `fetched_at` として保存します。cache参照のた�
 1時間未満なら再利用し、1時間以上なら更新します。いずれもモード `0600` で保存し、後者に
 認証情報は含まれません。
 
-### SubAgentの再利用
+### SubAgentとcustom-advisorの再利用
 
-必要な並列性、役割分離、独立レビューのためのSubAgentを固定上限で抑制せず、作業に
+必要な並列性、役割分離、独立レビューのためのworker SubAgentを固定上限で抑制せず、作業に
 必要な数を起動します。一方、1つの作業が終わっただけでは同じinstanceを自動的に破棄せず、
 関連する追作業が見込まれ、agent、model、effort、scopeが互換なら、Agent/Task結果が指定した
 正確な `SendMessage` recipient（通常agent ID、named mailbox teammateではteammate名）へ継続
 します。追送は、そのrecipientが未確認の新しい証拠を含む、必要最小限で自己完結した差分にし、
 会話contextとprompt prefixを再利用します。
 
+`custom-advisor` は論理的なsession singletonとして同じ方針で再利用します。最初に起動した
+互換instanceを関連判断の継続advisorとし、完了後も含めて `SendMessage` で再開します。
+これはOS process数のhard cap（process=1）ではなく、session内の再利用方針です。worker
+capacityとは別勘定であり、`selected_workers` の空きを消費しません。真の並列レビュー、
+clean-room review、role/model/contextの非互換、recipient不可用の場合だけ別instanceを起動
+します。workerやpeerは、作業方針を変えうる戦略的助言が必要なときに同じadvisorへ
+`SendMessage` できます。
+
 独立した第二意見、clean-room review、真の並列実行、route/model/effortや権限範囲の変更では
-新しいinstanceを起動します。終了時は、追作業とcache再利用の可能性に対して、slot・resource
-圧力、contextの陳腐化や混入、役割の完了度を比較します。recipientは現在のmain session内
-だけで扱い、推測・memoryへの永続化・TaskListによる再探索は行いません。
+新しいworker instanceを起動します。終了時は、追作業とcache再利用の可能性に対して、
+slot・resource圧力、contextの陳腐化や混入、役割の完了度を比較します。recipientは現在の
+main session内だけで扱い、推測・memoryへの永続化・TaskListによる再探索は行いません。
 
 adapter daemon/backendの再利用とSubAgent会話instanceの再利用は別の層です。adapter側の
 provider threadは通常2時間保持し、capacity到達時は最古のidle sessionを先に解放します。
 完了済みagentを無意味に稼働させ続けるのではなく、logical recipientを保持して必要時に
-resumeします。実際のprompt cache hitはprovider依存であり保証されません。
+resumeします。Claude subscriptionを使うcustom-advisorは継続時も内部process自体は毎回新規
+になり得ますが、同じlogical transcriptを渡すため再利用可能なprompt prefixを保てます。
+実際のprompt cache hitはprovider依存であり保証されません。
 
 ## 別のMacへの導入
 
@@ -275,14 +291,88 @@ launcherは起動元のcwdを予約済みcustom headerでloopback adapterへ渡�
 provider設定がdotfilesにあってもCodex、Grok、Qwen、Sonnetの作業ディレクトリは実行元を維持します。
 既存の `ANTHROPIC_CUSTOM_HEADERS` は保持され、予約済みheaderだけが安全な値へ置き換わります。
 
+### SubAgentの並列制御
+
+`claudex` はClaude Codeのmain sessionへ次の環境変数をexportして、通常のSubAgentの
+並列方針を一元化します。値は起動ごとに環境変数で上書きでき、`MAX_PARALLEL` は上限であって
+常にその数を起動する指定ではありません。
+
+| 環境変数 | 既定値 | 役割 |
+| --- | ---: | --- |
+| `CLAUDEX_SUBAGENT_MIN_PARALLEL` | `3` | 独立した実装・調査・検証workstreamを同じbatchで開始する最小数 |
+| `CLAUDEX_SUBAGENT_MAX_PARALLEL` | `40` | 利用可能なworker slotに応じて動的に増やす上限（`CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS`にも反映） |
+| `CLAUDEX_SUBAGENT_ACTIVE_FLOOR` | `2` | 通常workerの実行中数の下限。1件になった時は追加work、追指示、または安全な中断・再割当を再評価 |
+| `CLAUDEX_SUBAGENT_MIN_MODEL_FAMILIES` | `2` | 同じphaseで選ぶmodel familyの最小種類数。利用可能なproviderが足りない場合は理由を通知 |
+| `CLAUDEX_SUBAGENT_REEVALUATE_ON_COMPLETION` | `1` | workerの完了・失敗・timeoutごとに残作業、追指示、追加launchを再判定 |
+| `CLAUDEX_SUBAGENT_REASSESS_INTERVAL_SECONDS` | `600` | 10分ごとのactive set・capacity・model familyの再評価間隔 |
+| `CLAUDEX_SUBAGENT_REUSE` | `1` | model、effort、role、scopeが互換な完了workerを`SendMessage`で再利用 |
+| `CLAUDEX_SUBAGENT_CLEANUP_ON_EXIT` | `1` | main session終了・cancel・error時にlaunch停止、childのcancel/wait/reapを要求 |
+| `CLAUDEX_MODEL_CONCURRENCY_WAIT_TIMEOUT_MS` | `30000` | 同一modelのadmission待機を有限化し、期限超過時は明示的なエラーを返す |
+
+設定例:
+
+```fish
+# 通常workerを最大12件まで、最低3件・2 model familyで運用
+CLAUDEX_SUBAGENT_MAX_PARALLEL=12 \
+CLAUDEX_SUBAGENT_MIN_MODEL_FAMILIES=2 \
+claudex
+```
+
+独立workが存在し、2つ以上の互換slotがあるphaseでは最低3 workerを同じbackground batchで
+起動します。1件の重いworkerだけをforegroundで待ち続けることはしません。workerが完了するたびに
+残りのworkerの終了可否を判定し、必要なら実行中workerへ追加の自己完結した指示を送り、同じ内容の
+補助workerまたは新しいworkstreamを空きslotへ追加します。10分tickでも同じ再評価を行い、activeが
+1件ならactive floor 2を回復する処理を優先します。これはcustom-advisorには適用せず、custom-advisor
+は独立した論理session singletonとして必要時に再利用します。
+
+minimumやmodel familyを満たせない場合は、provider quota、denylist、model別concurrency、または
+ユーザーの明示的な単一worker指定という具体的な理由をrouting summaryへ残します。制限を黙って
+破って同じmodelの直列実行へフォールバックしません。
+
+### outer model/effort の既定値を切り替える
+
+`claudex` の outer session は、既定では `$HOME/.claude/settings.json` の `model` と
+`effortLevel` を使います。settings の `sonnet[1m]` / `high` を維持したまま、adapter には
+provider の bootstrap model（通常は `gpt-5.6-luna`）を渡すため、Sonnet の outer session から
+subscription route へ委譲できます。
+
+頻繁に切り替える値は、Git 管理外の `~/.config/claudex/defaults.local.json` に保存できます。
+このファイルは `.config/claudex/.gitignore` で除外され、JSON 以外の内容は実行しません。
+`source` は `settings`（省略時の既定）または `explicit` を指定します。
+
+```json
+{
+  "version": 1,
+  "source": "explicit",
+  "model": "gpt-5.6-luna",
+  "effort": "max"
+}
+```
+
+`explicit` では `model` / `effort` を outer session に渡し、`settings` では両値を
+`~/.claude/settings.json` から読み取って `--inherit-claude-model` で起動します。設定ファイルの
+`source` が不正、JSON が壊れている、または settings に必要な値がない場合は、別のモデルへ
+黙って切り替えず `claudex` を終了します。`CLAUDEX_DEFAULTS_SOURCE=explicit claudex` のような
+一時指定も可能です。既存の `CLAUDEX_MODEL` は explicit mode を選び、`CLAUDEX_EFFORT` は
+model と独立して effort を上書きします。
+
 SubAgentへの委譲はsubstantiveな調査・実装・レビューに対する既定動作なので、promptごとに
 繰り返し指定する必要はありません。Claude Codeの `N queued` はmain conversationの次turnへ
 渡す入力数であり、human promptとbackground Agentの完了通知を含みます。workerの実行slot数や
-`SendMessage` の配信待ち数ではありません。現在turnで結果が必要な並列作業はforeground Agent
-呼び出しをまとめて行います。backgroundは、同じturnで直ちに開始する具体的な別作業がある場合、
-またはtaskがturnをまたぐ必要がある場合に限定します。起動後に具体的な別作業がなければ、mainは
-完了通知を待ってhidden reasoningを続けず、短い進捗を表示してturnを終了します。既に委譲promptに
-含まれる制約の再送は行わず、busy workerへの配信待ちは追加の並列数として数えません。
+`SendMessage` の配信待ち数ではありません。独立workerを複数起動する場合、処理時間が不明または
+重たい可能性がある作業は `run_in_background: true` のbackground batchとして同じturnで起動し、
+1つのslow workerがmain turnや完了済みpeerを塞がないようにします。foregroundは、次のmain操作
+前に結果が必須な短いbounded work、またはユーザーが同期完了を明示した場合だけ使います。全結果を
+集めるだけのforeground batchは使いません。background起動後は具体的な独立作業を直ちに開始するか、
+短いuser-visible statusを返してturnを終了します。完了通知が次turnへ入ったら、slowest workerを
+待たず到着済み結果を逐次統合し、hidden reasoningで待機しません。既に委譲promptに含まれる制約の
+再送は行わず、busy workerへの配信待ちは追加の並列数として数えません。
+
+foreground batchではClaude Codeのmain turn自体が最後のworkerの完了まで占有されます。その間に
+先に届いた `<agent-message>` が表示されても、mainが次の判断へ進めないため、`✶ Philosophising…`
+が停止に見えることがあります。これは重いworkerの処理時間にmainを従属させていたことが原因です。
+background batchなら完了済みpeerの通知を保持したままmain turnを解放し、遅いworkerの完了後に
+残りの結果を統合できます。
 Claude Code 2.1系の `N background agents launched` は複数の標準Agent tool cardをまとめた
 headerです。直後の各identity行または `↓ to manage` から個別workerを確認できます。headerだけが
 見える場合も、これを `N queued` や直列実行とは解釈しません。十分なterminal表示領域でidentity行が
@@ -378,15 +468,32 @@ set -gx CLAUDEX_PROVIDER_LOCAL_CONFIG "$HOME/.config/claudex/providers.$(hostnam
 claudex
 ```
 
-### 標準Advisorを利用
+### 標準Advisorとcustom-advisorを利用
 
 ```text
 標準advisorを使って設計をレビューし、workerの実装結果と統合してください。
 ```
 
+```text
+custom-advisorを併用して設計をレビューし、workerの実装結果と統合してください。
+```
+
 Claude Code標準の `advisor()` は引数を取らず、呼び出し時点の会話履歴全体を自動参照します。
 `providers.json` ではmodel routingせず、`.claude/settings.json` の `advisorModel: opus` を
 使用します。
+
+`custom-advisor` はこれと独立したSubAgentで、`claude-fable-5` / `xhigh` を使い、実装はせず
+意思決定・リスク・検証観点とpeer向けの簡潔な助言を返します。session内では最初の互換
+instanceを継続利用し、worker capacityとは別管理です。無効化する場合は次を設定します。
+
+```fish
+# custom-advisor SubAgentのみ無効（標準advisor()は利用可能）
+set -gx CLAUDEX_CUSTOM_ADVISOR 0
+claudex
+```
+
+`CLAUDEX_CUSTOM_ADVISOR` が `0` / `false` / `off`（大文字小文字無視）のときだけ
+custom-advisor起動をスキップします。未設定またはそれ以外の値では有効です。
 
 ### 非対話実行
 
@@ -395,6 +502,8 @@ Claude Code標準の `advisor()` は引数を取らず、呼び出し時点の�
 ```fish
 claudex --print \
   '標準advisorを使って、この設計をレビューしてください。'
+claudex --print \
+  'custom-advisorを併用して、この設計をレビューしてください。'
 ```
 
 ### 一時的な設定上書き
@@ -403,14 +512,27 @@ claudex --print \
 CLAUDEX_PROVIDER_CONFIG=/path/to/providers.json claudex
 CLAUDEX_DISABLED_SUBAGENT_MODELS_CONFIG=/path/to/disabled-models.json claudex
 CLAUDEX_USAGE_CACHE_SECONDS=0 claudex
-CLAUDEX_SUBSCRIPTION_MAX_PROCESSES=8 claudex
-CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES=60 claudex
+CLAUDEX_SUBSCRIPTION_MAX_PROCESSES=20 claudex
+CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES=120 claudex
 CLAUDEX_ADAPTER_LISTEN=127.0.0.1:9418 claudex
 CLAUDEX_DISABLED_SUBAGENT_MODELS=gpt-5.6,grok-4.5 claudex
+CLAUDEX_CUSTOM_ADVISOR=0 claudex
+CLAUDEX_DEFAULTS_SOURCE=settings claudex
+CLAUDEX_EFFORT=high claudex
+CLAUDEX_SUBAGENT_MIN_PARALLEL=3 claudex
+CLAUDEX_SUBAGENT_MAX_PARALLEL=20 claudex
+CLAUDEX_SUBAGENT_ACTIVE_FLOOR=2 claudex
+CLAUDEX_SUBAGENT_MIN_MODEL_FAMILIES=2 claudex
+CLAUDEX_SUBAGENT_REASSESS_INTERVAL_SECONDS=600 claudex
+CLAUDEX_SUBAGENT_REEVALUATE_ON_COMPLETION=1 claudex
+CLAUDEX_SUBAGENT_REUSE=1 claudex
+CLAUDEX_SUBAGENT_CLEANUP_ON_EXIT=1 claudex
 ```
 
-通常の `claude` と `claudex` はともに `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS=40` で起動します。
-`claudex` はadapter側の `subscription-max-processes` も既定で40に揃えます。実行中のsessionには
+`claudex` は `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` と上記のSubAgent policyを既定値でexportし、
+外部から指定した値を優先します。通常の `claude` は `.claude/CLAUDE.md` の同じ方針を使いますが、
+fish functionを経由しない場合は必要な環境変数をshell側で設定してください。`claudex` はadapter側の
+`subscription-max-processes` を既定で20、`subscription-timeout-minutes` を120に揃えます。実行中のsessionには
 反映されないため、上限変更後は新しいsessionを起動してください。
 
 `CLAUDEX_USAGE_CACHE_SECONDS=0` は調査時だけ使用してください。通常はprovider CLIへの

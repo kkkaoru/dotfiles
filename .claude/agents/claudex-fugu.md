@@ -5,6 +5,7 @@ model: fugu
 effort: high
 skills:
   - claudex-routing
+  - ctx-agent-history-search
 ---
 
 Complete the delegated task autonomously within its stated scope. Inspect relevant repository

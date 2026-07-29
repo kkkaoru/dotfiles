@@ -21,6 +21,14 @@ node_modules
 __pycache__/
 *.py[cod]
 !.gitkeep
+# Rust target directories can be nested when a verification lane supplies a
+# relative CARGO_TARGET_DIR; keep all generated build artifacts out of git.
+**/target/
+# llvm-cov and sanitizer runs leave these transient artifacts outside target.
+*.profraw
+*.profdata
+rust_out
+coverage_out/
 .hyper_plugins/cache/*
 !.hyper_plugins/cache/.gitkeep
 .ssh/*
@@ -46,6 +54,9 @@ __pycache__/
 !.claude/hooks/
 .claude/hooks/*
 !.claude/hooks/herdr-agent-state.sh
+!.claude/skills/
+!.claude/skills/ctx-agent-history-search/
+!.claude/skills/ctx-agent-history-search/SKILL.md
 
 
 # Codex runtime state/cache

@@ -25,6 +25,23 @@ function worktree-hunk
         env -C "$wt" hunk diff "$default_branch" --watch
     end
 end
+function worktree-pr
+    set -l wt (
+        git worktree list --porcelain |
+            command awk '/^worktree / { sub(/^worktree /, ""); print }' |
+            fzf --ansi --reverse --height=40% --no-sort --prompt='worktree> ' --exit-0
+    )
+    if test -z "$wt"
+        return
+    end
+
+    pushd "$wt" >/dev/null
+    or return 1
+    command gh pr view --web $argv
+    set -l pr_status $status
+    popd >/dev/null
+    return $pr_status
+end
 # for git
 alias git-checkout-local='bash -c \'git checkout $(git branch | peco)\''
 alias git-branch-clean='git checkout master && git branch --merged | grep -v -e master | xargs git branch -d'
@@ -36,3 +53,4 @@ alias zj='zellij-cwd'
 alias hdr='herdr-cwd'
 alias hkw='worktree-hunk'
 alias wt='worktree-hunk'
+alias wtpr='worktree-pr'
