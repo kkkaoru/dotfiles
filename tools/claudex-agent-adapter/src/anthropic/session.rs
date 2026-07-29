@@ -237,6 +237,7 @@ impl Bridge {
         let session = Arc::new(Session {
             thread_id: response_thread_id(&result)?,
             model,
+            disabled_subagent_models: request.disabled_subagent_models.clone(),
             signature,
             transcript: Mutex::new(Vec::new()),
             pending_tools: Mutex::new(HashMap::new()),

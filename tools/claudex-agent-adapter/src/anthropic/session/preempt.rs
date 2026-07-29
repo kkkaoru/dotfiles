@@ -196,6 +196,7 @@ mod tests {
         Arc::new(Session {
             thread_id: "thread".to_owned(),
             model: model.to_owned(),
+            disabled_subagent_models: Default::default(),
             signature: Arc::from("signature"),
             transcript: Mutex::new(vec![json!({"role":"user","content":"first"})]),
             pending_tools: Mutex::new(HashMap::new()),

@@ -4,7 +4,7 @@ use axum::{body::Body, http::Response};
 use super::super::{ActiveTurn, Bridge, content::anthropic_response};
 
 impl Bridge {
-    async fn context_retry_or_error(
+    pub(in crate::anthropic) async fn context_retry_or_error(
         &self,
         turn: &mut ActiveTurn,
         error: anyhow::Error,

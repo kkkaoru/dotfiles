@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap};
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -105,37 +105,74 @@ fn selected_agents(request: &MessagesRequest) -> Vec<String> {
     else {
         return Vec::new();
     };
-    let mut agents = summary
+    let mut agents: Vec<String> = summary
         .get("selected_agents")
         .cloned()
         .and_then(|agents| serde_json::from_value(agents).ok())
         .unwrap_or_default();
-    add_explicit_provider_agents(request, &summary, &mut agents);
+    let denied = disabled_models(request, &summary);
+    agents.retain(|agent| !selected_agent_uses_denied_model(agent, &summary, &denied));
+    add_explicit_provider_agents(request, &summary, &denied, &mut agents);
     agents
 }
 
-fn add_explicit_provider_agents(
-    request: &MessagesRequest,
-    summary: &Value,
-    agents: &mut Vec<String>,
-) {
-    let requested = current_user_model_ids(request);
-    if requested.is_empty() {
-        return;
-    }
-    let mut denied = request
-        .disabled_subagent_models
-        .iter()
-        .map(String::as_str)
-        .collect::<HashSet<_>>();
+fn disabled_models(request: &MessagesRequest, summary: &Value) -> BTreeSet<String> {
+    let mut denied = request.disabled_subagent_models.clone();
     denied.extend(
         summary
             .get("disabled_subagent_models")
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
-            .filter_map(Value::as_str),
+            .filter_map(Value::as_str)
+            .map(str::to_owned),
     );
+    denied
+}
+
+fn selected_agent_uses_denied_model(
+    agent: &str,
+    summary: &Value,
+    denied: &BTreeSet<String>,
+) -> bool {
+    let mut workers = summary
+        .get("selected_workers")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten();
+    if workers.any(|worker| {
+        worker.get("agent").and_then(Value::as_str) == Some(agent)
+            && worker
+                .get("model")
+                .and_then(Value::as_str)
+                .is_some_and(|model| denied.contains(model))
+    }) {
+        return true;
+    }
+    summary
+        .get("providers")
+        .and_then(Value::as_object)
+        .into_iter()
+        .flatten()
+        .any(|(_, provider)| {
+            provider.get("agent").and_then(Value::as_str) == Some(agent)
+                && provider
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .is_some_and(|model| denied.contains(model))
+        })
+}
+
+fn add_explicit_provider_agents(
+    request: &MessagesRequest,
+    summary: &Value,
+    denied: &BTreeSet<String>,
+    agents: &mut Vec<String>,
+) {
+    let requested = current_user_model_ids(request);
+    if requested.is_empty() {
+        return;
+    }
     let Some(providers) = summary.get("providers").and_then(Value::as_object) else {
         return;
     };
@@ -152,7 +189,7 @@ fn add_explicit_provider_agents(
 fn explicit_provider_agent<'a>(
     provider: &'a Value,
     requested: &[String],
-    denied: &HashSet<&str>,
+    denied: &BTreeSet<String>,
 ) -> Option<&'a str> {
     if provider.get("disabled").and_then(Value::as_bool) != Some(false) {
         return None;
@@ -169,7 +206,7 @@ fn explicit_provider_agent<'a>(
     requested
         .iter()
         .any(|requested| {
-            !denied.contains(requested.as_str())
+            !denied.contains(requested)
                 && (requested == model
                     || prefixes
                         .iter()
@@ -205,10 +242,8 @@ fn current_user_model_ids(request: &MessagesRequest) -> Vec<String> {
         .collect()
 }
 
-fn is_model_id_character(character: char) -> bool {
-    character.is_ascii_alphanumeric()
-        || matches!(character, '-' | '_' | '.' | '/' | ':' | '@' | '+')
-}
+#[rustfmt::skip]
+fn is_model_id_character(character: char) -> bool { character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.' | '/' | ':' | '@' | '+') }
 
 fn routing_summary(text: &str) -> Option<Value> {
     let start = text.find("{\"providers\":")?;

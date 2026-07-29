@@ -752,6 +752,7 @@ async fn rejects_a_malformed_tool_event_before_dispatch() {
     let session = Session {
         thread_id: "thread".to_owned(),
         model: "main".to_owned(),
+        disabled_subagent_models: Default::default(),
         signature: Arc::from("signature"),
         transcript: Mutex::new(Vec::new()),
         pending_tools: Mutex::new(HashMap::new()),
@@ -1302,6 +1303,7 @@ async fn disconnect_fixture() -> (tempfile::TempDir, Arc<AppServer>, Bridge, Arc
     let session = Arc::new(Session {
         thread_id: "thread".to_owned(),
         model: "main".to_owned(),
+        disabled_subagent_models: Default::default(),
         signature: Arc::from("signature"),
         transcript: Mutex::new(Vec::new()),
         pending_tools: Mutex::new(HashMap::new()),
@@ -1375,6 +1377,7 @@ async fn retryable_drive_fixture() -> (tempfile::TempDir, Arc<AppServer>, Arc<Br
     let session = Arc::new(Session {
         thread_id: "thread".to_owned(),
         model: "main".to_owned(),
+        disabled_subagent_models: Default::default(),
         signature: Arc::from("signature"),
         transcript: Mutex::new(Vec::new()),
         pending_tools: Mutex::new(HashMap::new()),
@@ -1414,6 +1417,7 @@ async fn retry_failure_drive_fixture()
     let session = Arc::new(Session {
         thread_id: "thread".to_owned(),
         model: "main".to_owned(),
+        disabled_subagent_models: Default::default(),
         signature: Arc::from("signature"),
         transcript: Mutex::new(Vec::new()),
         pending_tools: Mutex::new(HashMap::new()),
@@ -1529,7 +1533,7 @@ async fn prepared_stream_reports_orphaned_tool_results() {
     })];
 
     Arc::clone(&bridge)
-        .drive_prepared_stream(request, 1, None, None, sender)
+        .drive_prepared_subagent_stream(request, 1, None, None, false, sender)
         .await;
 
     let frame = receiver

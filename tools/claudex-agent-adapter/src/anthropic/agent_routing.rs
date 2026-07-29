@@ -1,11 +1,12 @@
 use serde::Deserialize;
 use serde_json::Value;
 
+use super::request_routing::official_claude_haiku_model;
 use super::subscription::valid_effort;
 
 const ADAPTER_EFFORT: &str = "claudex_effort";
 const ADAPTER_MODEL: &str = "claudex_model";
-const INHERITED_PARENT_MODEL: &str = "claudex_inherited_parent_model";
+const IMPLICIT_MODEL: &str = "claudex_implicit_model";
 
 pub(super) fn hydrate_routing_fields(arguments: &mut Value) {
     // Only explicit claudex_model fields / prompt headers are trusted. Do not infer from the
@@ -58,13 +59,31 @@ pub(super) fn hydrate_routing_fields_from_context(
     }
 }
 
-/// Preserve Claude Code's built-in Explore agent when it does not select a routed worker.
-/// Its only safe fallback is the current parent model, never a guessed provider model.
+/// Route native Claude children to the official Haiku alias, and preserve standard agents on
+/// their current parent model when they do not select a routed worker.
 pub(super) fn hydrate_standard_agent_to_parent(arguments: &mut Value, parent_model: &str) {
-    let Some(subagent_type) = arguments.get("subagent_type").and_then(Value::as_str) else {
+    let Some(subagent_type) = arguments
+        .get("subagent_type")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+    else {
         return;
     };
-    if subagent_type != "Explore"
+    if subagent_type == "claude" && arguments.get(ADAPTER_MODEL).is_none() {
+        let Some(object) = arguments.as_object_mut() else {
+            return;
+        };
+        object.insert(
+            ADAPTER_MODEL.to_owned(),
+            Value::String(official_claude_haiku_model().to_owned()),
+        );
+        object.insert(
+            IMPLICIT_MODEL.to_owned(),
+            Value::String(official_claude_haiku_model().to_owned()),
+        );
+        return;
+    }
+    if !matches!(subagent_type.as_str(), "Explore" | "general-purpose")
         || parent_model.is_empty()
         || subagent_type.starts_with("claudex-")
         || arguments.get(ADAPTER_MODEL).is_some()
@@ -79,7 +98,7 @@ pub(super) fn hydrate_standard_agent_to_parent(arguments: &mut Value, parent_mod
         Value::String(parent_model.to_owned()),
     );
     object.insert(
-        INHERITED_PARENT_MODEL.to_owned(),
+        IMPLICIT_MODEL.to_owned(),
         Value::String(parent_model.to_owned()),
     );
 }
@@ -151,10 +170,7 @@ pub(super) fn model_is_authorized_with_catalog(
     model: &str,
 ) -> bool {
     model_is_authorized(arguments, messages, system, model)
-        || arguments
-            .get(INHERITED_PARENT_MODEL)
-            .and_then(Value::as_str)
-            == Some(model)
+        || arguments.get(IMPLICIT_MODEL).and_then(Value::as_str) == Some(model)
         || model_catalog
             .worker_fields(
                 arguments

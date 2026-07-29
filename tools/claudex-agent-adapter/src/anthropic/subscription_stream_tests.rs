@@ -505,6 +505,55 @@ async fn ignores_non_top_level_tool_events_and_exercises_completed_state() {
 }
 
 #[tokio::test]
+async fn blocks_an_unsupported_subagent_without_failing_the_parent_stream() {
+    let (sender, mut receiver) = channel();
+    let mut stream = SubscriptionStream {
+        text_started: false,
+        text_closed: false,
+        saw_tool_use: false,
+        saw_result: false,
+        next_index: 0,
+        tools: vec!["Agent".to_owned()],
+        tool_context: Some(SubscriptionToolContext {
+            agent_efforts: Arc::new(AgentEffortIntents::default()),
+            model_catalog: ModelCatalog::default(),
+            client_user_id: None,
+            parent_model: "claude-haiku-4-5".to_owned(),
+            system: json!(null),
+            user_messages: Vec::new(),
+        }),
+        activity: SubscriptionActivity::default(),
+    };
+    stream
+        .handle_line(
+            &sender,
+            &json!({
+                "type":"assistant", "parent_tool_use_id":null,
+                "message":{"content":[{
+                    "type":"tool_use", "id":"unsupported", "name":"Agent",
+                    "input":{"prompt":"work", "subagent_type":"claudex-sonnet"}
+                }]}
+            })
+            .to_string(),
+        )
+        .await
+        .expect("unsupported SubAgent must not fail the parent stream");
+    assert!(!stream.saw_tool_use);
+    stream
+        .finish(
+            &sender,
+            &json!({"type":"result", "subtype":"success", "result":""}),
+        )
+        .await
+        .expect("finish parent stream");
+    assert!(
+        output(&mut receiver)
+            .await
+            .contains("was not started. Continue without it.")
+    );
+}
+
+#[tokio::test]
 async fn accepts_a_valid_agent_model_without_a_prompt() {
     let (_sender, _receiver) = channel();
     let stream = SubscriptionStream {
@@ -537,6 +586,40 @@ async fn accepts_a_valid_agent_model_without_a_prompt() {
             .expect("model-only Agent input"),
         json!({"claudex_model":"gpt-test"})
     );
+}
+
+#[tokio::test]
+async fn routes_a_standard_general_purpose_agent_to_the_parent_subscription() {
+    let (_sender, _receiver) = channel();
+    let stream = SubscriptionStream {
+        text_started: false,
+        text_closed: false,
+        saw_tool_use: false,
+        saw_result: false,
+        next_index: 0,
+        tools: vec!["Agent".to_owned()],
+        tool_context: Some(SubscriptionToolContext {
+            agent_efforts: Arc::new(AgentEffortIntents::default()),
+            model_catalog: ModelCatalog::default(),
+            client_user_id: None,
+            parent_model: "claude-sonnet-5".to_owned(),
+            system: json!(null),
+            user_messages: Vec::new(),
+        }),
+        activity: SubscriptionActivity::default(),
+    };
+    let routed = stream
+        .prepare_tool_input(
+            "Agent",
+            "agent-standard",
+            &json!({"prompt":"work", "subagent_type":"general-purpose"}),
+        )
+        .expect("standard Agent input");
+    let prompt = routed["prompt"].as_str().expect("correlated prompt");
+    assert!(prompt.contains("claudex_model: claude-sonnet-5"));
+    assert!(prompt.contains("<claudex-agent-id>agent-standard</claudex-agent-id>"));
+    assert_eq!(routed["subagent_type"], "general-purpose");
+    assert!(routed.get("claudex_model").is_none());
 }
 
 fn child(script: &str) -> tokio::process::Child {

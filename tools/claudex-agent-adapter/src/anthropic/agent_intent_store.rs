@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 use super::agent_effort::{AgentEffortIntent, AgentEffortIntents};
 use super::subscription::valid_effort;
 
-const CACHE_FILE_NAME: &str = "agent-intents-v1.json";
-const CACHE_VERSION: u8 = 1;
+const CACHE_FILE_NAME: &str = "agent-intents-v2.json";
+const CACHE_VERSION: u8 = 2;
 const MAX_AGE_SECONDS: u64 = 2 * 60 * 60;
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -20,6 +20,8 @@ pub(super) struct StoredAgentIntent {
     pub(super) client_user_id: Option<String>,
     pub(super) effort: Option<String>,
     pub(super) model_override: Option<String>,
+    #[serde(default)]
+    pub(super) model_is_inherited: bool,
     pub(super) tool_use_id: String,
     pub(super) created_unix_seconds: u64,
 }
@@ -194,6 +196,7 @@ fn restored_intent(stored: StoredAgentIntent) -> AgentEffortIntent {
         correlated: true,
         effort: stored.effort,
         model_override: stored.model_override,
+        model_is_inherited: stored.model_is_inherited,
         tool_use_id: stored.tool_use_id,
         created_at: std::time::Instant::now(),
         created_unix_seconds: stored.created_unix_seconds,
@@ -205,6 +208,7 @@ fn stored_intent(intent: &AgentEffortIntent) -> StoredAgentIntent {
         client_user_id: intent.client_user_id.clone(),
         effort: intent.effort.clone(),
         model_override: intent.model_override.clone(),
+        model_is_inherited: intent.model_is_inherited,
         tool_use_id: intent.tool_use_id.clone(),
         created_unix_seconds: intent.created_unix_seconds,
     }

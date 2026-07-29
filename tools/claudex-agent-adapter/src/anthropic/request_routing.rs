@@ -1,8 +1,12 @@
+use super::MessagesRequest;
 use anyhow::{Result, bail};
 
-use super::MessagesRequest;
+mod models;
+use models::normalize_claude_model_to_haiku;
+pub(in crate::anthropic) use models::official_claude_haiku_model;
 
 /// Apply SubAgent intent overrides and policy denylist / unrouted-provider remaps.
+#[cfg(test)]
 pub(super) fn resolve_request_model(
     request: &mut MessagesRequest,
     main_model: &str,
@@ -13,12 +17,38 @@ pub(super) fn resolve_request_model(
     // True when the model matches any provider identity declared in config (enabled or not).
     is_declared_provider_model: impl Fn(&str) -> bool,
 ) -> Result<RouteDecision> {
+    resolve_request_model_with_origin(
+        request,
+        main_model,
+        is_subagent,
+        intent_matched,
+        model_override,
+        false,
+        supports_model,
+        is_declared_provider_model,
+    )
+}
+
+/// Resolve a request while retaining whether a SubAgent model came from its parent.
+/// Explicit child model selections are never rewritten.
+pub(super) fn resolve_request_model_with_origin(
+    request: &mut MessagesRequest,
+    main_model: &str,
+    is_subagent: bool,
+    intent_matched: bool,
+    model_override: Option<String>,
+    model_is_inherited: bool,
+    supports_model: impl Fn(&str) -> bool,
+    // True when the model matches any provider identity declared in config (enabled or not).
+    is_declared_provider_model: impl Fn(&str) -> bool,
+) -> Result<RouteDecision> {
     resolve_request_model_inner(
         request,
         main_model,
         is_subagent,
         intent_matched,
         model_override,
+        model_is_inherited,
         &supports_model,
         &is_declared_provider_model,
     )
@@ -30,15 +60,19 @@ fn resolve_request_model_inner(
     is_subagent: bool,
     intent_matched: bool,
     model_override: Option<String>,
+    model_is_inherited: bool,
     supports_model: &dyn Fn(&str) -> bool,
     is_declared_provider_model: &dyn Fn(&str) -> bool,
 ) -> Result<RouteDecision> {
-    if is_subagent && !intent_matched {
-        bail!("SubAgent request did not match an explicit Agent/Task launch intent");
+    if is_subagent && (!intent_matched || model_override.is_none()) {
+        tracing::warn!(
+            request_model = %request.model,
+            intent_matched,
+            has_explicit_model = model_override.is_some(),
+            "routing a SubAgent from its request model because launch metadata is incomplete"
+        );
     }
-    if is_subagent && model_override.is_none() {
-        bail!("SubAgent launch is missing required explicit `claudex_model`");
-    }
+    let has_model_override = model_override.is_some();
     if let Some(model) = model_override {
         request.model = model;
     }
@@ -50,19 +84,39 @@ fn resolve_request_model_inner(
     {
         request.model = model;
     }
+    if is_subagent
+        && (!has_model_override || model_is_inherited)
+        && let Some(model) = normalize_claude_model_to_haiku(&request.model)
+    {
+        tracing::warn!(
+            request_model = %request.model,
+            normalized_model = model,
+            "routing a Claude SubAgent tool request through the small fast model"
+        );
+        request.model = model.to_owned();
+        return Ok(RouteDecision::Subscription);
+    }
 
     apply_disabled_model_policy(request, main_model, is_subagent)?;
+
+    let explicit_native_claude = has_model_override
+        && !model_is_inherited
+        && normalize_claude_model_to_haiku(&request.model).is_some();
+    if is_subagent
+        && !explicit_native_claude
+        && (request.model.is_empty()
+            || (request.model != main_model && !supports_model(&request.model)))
+    {
+        bail!(
+            "SubAgent model `{}` does not have a recoverable configured route and must not be launched",
+            request.model
+        );
+    }
 
     if request.model.is_empty() || request.model == main_model || supports_model(&request.model) {
         return Ok(RouteDecision::Provider);
     }
     if is_declared_provider_model(&request.model) {
-        if is_subagent {
-            bail!(
-                "SubAgent model `{}` is declared but has no active provider route",
-                request.model
-            );
-        }
         tracing::warn!(
             request_model = %request.model,
             main_model,
@@ -90,9 +144,8 @@ fn apply_disabled_model_policy(
     }
     if is_subagent {
         bail!(
-            "SubAgent model `{}` is disabled by the active Claudex policy ({}/disabledModels)",
-            request.model,
-            crate::subagent_policy::ENV_NAME
+            "SubAgent model `{}` is disabled by the active Claudex policy and must not be launched",
+            request.model
         );
     }
     if request.model == main_model {
@@ -111,245 +164,4 @@ fn apply_disabled_model_policy(
 }
 
 #[cfg(test)]
-// Coverage gates measure production routing; this inline module only contains tests.
-#[cfg_attr(coverage_nightly, coverage(off))]
-mod tests {
-    use std::sync::Once;
-
-    use super::*;
-    use serde_json::json;
-
-    fn enable_warning_logs() {
-        static INIT: Once = Once::new();
-        INIT.call_once(|| {
-            let _ = tracing_subscriber::fmt()
-                .with_max_level(tracing::Level::WARN)
-                .with_test_writer()
-                .try_init();
-        });
-    }
-
-    fn request(model: &str, disabled: &[&str]) -> MessagesRequest {
-        let mut request: MessagesRequest = serde_json::from_value(json!({
-            "model": model,
-            "messages": [{"role":"user","content":"hi"}]
-        }))
-        .expect("request");
-        request.disabled_subagent_models = disabled.iter().map(|item| (*item).to_owned()).collect();
-        request
-    }
-
-    fn resolve(
-        request: &mut MessagesRequest,
-        main: &str,
-        is_subagent: bool,
-        supports: impl Fn(&str) -> bool,
-        declared: impl Fn(&str) -> bool,
-    ) -> Result<RouteDecision> {
-        let model_override = is_subagent.then(|| request.model.clone());
-        resolve_request_model(
-            request,
-            main,
-            is_subagent,
-            true,
-            model_override,
-            supports,
-            declared,
-        )
-    }
-
-    #[test]
-    fn remaps_disabled_outer_provider_model_to_main() {
-        enable_warning_logs();
-        let mut request = request("vendor-a", &["vendor-a"]);
-        let decision = resolve(
-            &mut request,
-            "main-model",
-            false,
-            |model| model == "main-model",
-            |model| model == "vendor-a" || model == "main-model",
-        )
-        .expect("remap");
-        assert_eq!(decision, RouteDecision::Provider);
-        assert_eq!(request.model, "main-model");
-    }
-
-    #[test]
-    fn keeps_a_disabled_model_for_the_outer_main_session() {
-        let mut request = request("main-model", &["main-model"]);
-        let decision = resolve(
-            &mut request,
-            "main-model",
-            false,
-            |model| model == "main-model",
-            |model| model == "main-model",
-        )
-        .expect("outer main model remains allowed");
-        assert_eq!(decision, RouteDecision::Provider);
-        assert_eq!(request.model, "main-model");
-    }
-
-    #[test]
-    fn remaps_unrouted_declared_provider_model_to_main_instead_of_subscription() {
-        enable_warning_logs();
-        let mut request = request("vendor-offline-1", &[]);
-        let decision = resolve(
-            &mut request,
-            "main-model",
-            false,
-            |_| false,
-            |model| model.starts_with("vendor-"),
-        )
-        .expect("remap");
-        assert_eq!(decision, RouteDecision::Provider);
-        assert_eq!(request.model, "main-model");
-    }
-
-    #[test]
-    fn keeps_subscription_for_undeclared_models() {
-        let mut request = request("claude-sonnet-5", &[]);
-        let decision = resolve(
-            &mut request,
-            "main-model",
-            false,
-            |_| false,
-            |model| model.starts_with("vendor-"),
-        )
-        .expect("subscription");
-        assert_eq!(decision, RouteDecision::Subscription);
-        assert_eq!(request.model, "claude-sonnet-5");
-    }
-
-    #[test]
-    fn keeps_an_unsupported_discovery_alias_on_subscription() {
-        let mut request = request("claude-claudex-unknown", &[]);
-        let decision = resolve_request_model(
-            &mut request,
-            "main-model",
-            false,
-            true,
-            None,
-            |_| false,
-            |_| false,
-        )
-        .expect("unsupported discovery alias should remain a subscription");
-        assert_eq!(decision, RouteDecision::Subscription);
-        assert_eq!(request.model, "claude-claudex-unknown");
-    }
-
-    #[test]
-    fn normalizes_supported_discovery_aliases_before_routing() {
-        let mut main = request("claude-claudex-main-model", &[]);
-        let decision = resolve_request_model(
-            &mut main,
-            "main-model",
-            false,
-            true,
-            None,
-            |_| false,
-            |_| false,
-        )
-        .expect("main discovery alias");
-        assert_eq!(decision, RouteDecision::Provider);
-        assert_eq!(main.model, "main-model");
-
-        let mut supported = request("claude-claudex-vendor-model", &[]);
-        let decision = resolve_request_model(
-            &mut supported,
-            "main-model",
-            false,
-            true,
-            None,
-            |model| model == "vendor-model",
-            |_| false,
-        )
-        .expect("provider discovery alias");
-        assert_eq!(decision, RouteDecision::Provider);
-        assert_eq!(supported.model, "vendor-model");
-    }
-
-    #[test]
-    fn routes_empty_main_and_supported_models_to_the_provider() {
-        for model in ["", "main-model", "vendor-model"] {
-            let mut request = request(model, &[]);
-            let decision = resolve_request_model(
-                &mut request,
-                "main-model",
-                false,
-                true,
-                None,
-                |candidate| candidate == "vendor-model",
-                |_| false,
-            )
-            .expect("provider route");
-            assert_eq!(decision, RouteDecision::Provider, "model={model}");
-        }
-    }
-
-    #[test]
-    fn rejects_an_unrouted_declared_subagent_model_instead_of_using_main() {
-        let mut request = request("vendor-offline-1", &[]);
-        let error = resolve(
-            &mut request,
-            "main-model",
-            true,
-            |_| false,
-            |model| model.starts_with("vendor-"),
-        )
-        .expect_err("unrouted declared SubAgent model");
-        assert!(error.to_string().contains("has no active provider route"));
-        assert_eq!(request.model, "vendor-offline-1");
-    }
-
-    #[test]
-    fn still_rejects_disabled_subagent_models() {
-        let mut request = request("vendor-a", &["vendor-a"]);
-        let error = resolve(
-            &mut request,
-            "main-model",
-            true,
-            |model| model == "main-model",
-            |model| model == "vendor-a" || model == "main-model",
-        )
-        .expect_err("deny");
-        assert!(
-            error
-                .to_string()
-                .contains("disabled by the active Claudex policy")
-        );
-    }
-
-    #[test]
-    fn rejects_unmatched_or_model_less_subagent_requests() {
-        let mut unmatched = request("claude-sonnet-5", &[]);
-        let error = resolve_request_model(
-            &mut unmatched,
-            "main-model",
-            true,
-            false,
-            None,
-            |_| false,
-            |_| false,
-        )
-        .expect_err("unmatched SubAgent");
-        assert!(error.to_string().contains("did not match"));
-        assert_eq!(unmatched.model, "claude-sonnet-5");
-
-        let mut missing = request("main-model", &[]);
-        let error = resolve_request_model(
-            &mut missing,
-            "main-model",
-            true,
-            true,
-            None,
-            |_| true,
-            |_| true,
-        )
-        .expect_err("model-less SubAgent");
-        assert!(
-            error
-                .to_string()
-                .contains("missing required explicit `claudex_model`")
-        );
-    }
-}
+include!("request_routing_tests.rs");

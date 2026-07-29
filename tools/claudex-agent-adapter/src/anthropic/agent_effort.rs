@@ -3,11 +3,17 @@ use std::{collections::VecDeque, sync::Mutex, time::Instant};
 use anyhow::{Result, bail};
 use serde_json::Value;
 
+mod model;
+use model::requested_model;
+pub(super) use model::{disabled_subagent_model, is_agent_tool};
+
 pub(super) use super::AgentEffortRecord;
 pub(super) use super::agent_effort_matching::is_subagent_request;
 use super::{
     MessagesRequest,
-    agent_effort_matching::{has_correlation_marker, request_matches_intent, value_texts},
+    agent_effort_matching::{
+        has_correlation_marker, request_matches_intent_with_system, value_texts,
+    },
     agent_intent_store::{persistence_snapshot, unix_seconds},
     subscription::valid_effort,
 };
@@ -16,7 +22,7 @@ const INTENT_TTL: std::time::Duration = std::time::Duration::from_secs(10 * 60);
 pub(super) const MAX_PENDING_INTENTS: usize = 1_024;
 const ADAPTER_EFFORT: &str = "claudex_effort";
 const ADAPTER_MODEL: &str = "claudex_model";
-const INHERITED_PARENT_MODEL: &str = "claudex_inherited_parent_model";
+const IMPLICIT_MODEL: &str = "claudex_implicit_model";
 #[derive(Clone)]
 pub(super) struct AgentEffortIntent {
     pub(super) client_user_id: Option<String>,
@@ -24,6 +30,7 @@ pub(super) struct AgentEffortIntent {
     pub(super) correlated: bool,
     pub(super) effort: Option<String>,
     pub(super) model_override: Option<String>,
+    pub(super) model_is_inherited: bool,
     pub(super) tool_use_id: String,
     pub(super) created_at: Instant,
     pub(super) created_unix_seconds: u64,
@@ -37,25 +44,24 @@ pub(super) enum AgentEffort {
     ConfiguredDefault,
     Explicit(String),
 }
-
 pub(super) struct AgentIntent {
     pub(super) effort: AgentEffort,
     pub(super) model_override: Option<String>,
+    pub(super) model_is_inherited: bool,
     pub(super) is_subagent: bool,
     pub(super) matched: bool,
 }
-
 impl AgentIntent {
     fn unmatched(is_subagent: bool) -> Self {
         Self {
             effort: AgentEffort::Unmatched,
             model_override: None,
+            model_is_inherited: false,
             is_subagent,
             matched: false,
         }
     }
 }
-
 impl AgentEffortIntents {
     pub(super) fn record_from_user_messages(
         &self,
@@ -109,6 +115,9 @@ impl AgentEffortIntents {
                 "ignored unrouted SubAgent model not explicitly present in current user input"
             );
         }
+        let model_is_inherited = explicit_model.is_some_and(|model| {
+            arguments.get(IMPLICIT_MODEL).and_then(Value::as_str) == Some(model)
+        });
         let correlated = has_correlation_marker(prompt);
         let mut pending = self.pending.lock().expect("agent effort intents poisoned");
         remove_expired(&mut pending);
@@ -125,6 +134,7 @@ impl AgentEffortIntents {
             correlated,
             effort,
             model_override: explicit_model.map(str::to_owned),
+            model_is_inherited,
             tool_use_id,
             created_at: Instant::now(),
             created_unix_seconds: unix_seconds(),
@@ -133,7 +143,6 @@ impl AgentEffortIntents {
         drop(pending);
         self.persist(snapshot);
     }
-
     pub(super) fn take(&self, request: &MessagesRequest) -> AgentIntent {
         if !is_subagent_request(request) {
             return AgentIntent::unmatched(false);
@@ -144,7 +153,7 @@ impl AgentEffortIntents {
         let index = pending
             .iter()
             .position(|intent| {
-                request_matches_intent(&request.messages, intent)
+                request_matches_intent_with_system(&request.system, &request.messages, intent)
                     && (intent.correlated || intent.client_user_id.as_deref() == client_user_id)
             })
             .or_else(|| {
@@ -173,6 +182,7 @@ impl AgentEffortIntents {
         let result = AgentIntent {
             effort,
             model_override: intent.model_override,
+            model_is_inherited: intent.model_is_inherited,
             is_subagent: true,
             matched: true,
         };
@@ -200,10 +210,6 @@ fn agent_prompt<'a>(tool_name: &str, arguments: &'a Value) -> Option<&'a str> {
     is_agent_tool(tool_name)
         .then(|| arguments.get("prompt").and_then(Value::as_str))
         .flatten()
-}
-
-pub(super) fn is_agent_tool(tool_name: &str) -> bool {
-    matches!(tool_name, "Agent" | "Task")
 }
 
 #[cfg(test)]
@@ -249,13 +255,6 @@ pub(super) fn validate_routed_agent_arguments_with_catalog(
     Ok(())
 }
 
-fn requested_model(arguments: &Value) -> Option<&str> {
-    arguments
-        .get(ADAPTER_MODEL)
-        .and_then(Value::as_str)
-        .filter(|model| !model.is_empty())
-}
-
 #[cfg(test)]
 pub(super) fn prepare_arguments(
     tool_name: &str,
@@ -294,7 +293,7 @@ pub(super) fn prepare_arguments_for_user(
         .expect("Agent arguments must be an object");
     public.remove(ADAPTER_EFFORT);
     public.remove(ADAPTER_MODEL);
-    public.remove(INHERITED_PARENT_MODEL);
+    public.remove(IMPLICIT_MODEL);
     public.remove("model");
     if public
         .get("name")

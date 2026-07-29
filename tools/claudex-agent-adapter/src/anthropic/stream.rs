@@ -32,7 +32,8 @@ mod thinking;
 mod tool_call_parser;
 
 use builder::SegmentBuilder;
-use control::{commit_transcript, refresh_activity_keepalive};
+pub(in crate::anthropic) use control::commit_transcript;
+use control::refresh_activity_keepalive;
 use prepare::prepare_with_activity;
 use sanitize::is_visible_activity_event;
 
@@ -85,6 +86,7 @@ impl Bridge {
         input_tokens: u64,
         effort: Option<String>,
         concurrency_ticket: Option<Ticket>,
+        is_subagent: bool,
     ) -> Response<Body> {
         let (sender, receiver) = mpsc::channel(256);
         let response_model = self.request_model(&request);
@@ -94,22 +96,24 @@ impl Bridge {
                 input_tokens,
             ))))
             .expect("new streaming response channel has capacity");
-        tokio::spawn(Arc::clone(self).drive_prepared_stream(
+        tokio::spawn(Arc::clone(self).drive_prepared_subagent_stream(
             request,
             input_tokens,
             effort,
             concurrency_ticket,
+            is_subagent,
             sender,
         ));
         sse_response(receiver)
     }
 
-    async fn drive_prepared_stream(
+    async fn drive_prepared_subagent_stream(
         self: Arc<Self>,
         request: MessagesRequest,
         input_tokens: u64,
         effort: Option<String>,
         concurrency_ticket: Option<Ticket>,
+        is_subagent: bool,
         sender: StreamSender,
     ) {
         let prepare = async {
@@ -129,7 +133,10 @@ impl Bridge {
         )
         .await;
         match turn {
-            Ok(Some((turn, permit))) => self.drive_stream(turn, sender, builder, permit).await,
+            Ok(Some((turn, permit))) => {
+                self.drive_subagent_stream(turn, sender, builder, permit, is_subagent)
+                    .await
+            }
             Ok(None) => {}
             Err(error) => {
                 let _ = builder.close_open_blocks(Some(&sender)).await;
@@ -351,7 +358,7 @@ impl Bridge {
         })
     }
 
-    async fn wait_for_segment(
+    pub(in crate::anthropic) async fn wait_for_segment(
         &self,
         session: &Session,
         events: &crate::app_server::ThreadEvents,

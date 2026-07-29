@@ -80,6 +80,7 @@ fn test_session_at(
     Arc::new(Session {
         thread_id: "thread-test".to_owned(),
         model: "main-model".to_owned(),
+        disabled_subagent_models: Default::default(),
         signature: Arc::from("signature"),
         transcript: tokio::sync::Mutex::new(Vec::new()),
         pending_tools: tokio::sync::Mutex::new(pending_tools),

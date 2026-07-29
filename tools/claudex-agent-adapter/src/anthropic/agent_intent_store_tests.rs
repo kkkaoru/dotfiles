@@ -9,6 +9,7 @@ mod tests {
             client_user_id: Some("session".to_owned()),
             effort: Some("high".to_owned()),
             model_override: Some("grok-4.5".to_owned()),
+            model_is_inherited: false,
             tool_use_id: id.to_owned(),
             created_unix_seconds: unix_seconds().saturating_sub(age),
         }
@@ -146,6 +147,7 @@ mod tests {
                 correlated: false,
                 effort: Some("low".to_owned()),
                 model_override: None,
+                model_is_inherited: false,
                 tool_use_id: "ordinary".to_owned(),
                 created_at: std::time::Instant::now(),
                 created_unix_seconds: now,
@@ -156,6 +158,7 @@ mod tests {
                 correlated: true,
                 effort: Some("max".to_owned()),
                 model_override: Some("gpt-5.6-luna".to_owned()),
+                model_is_inherited: false,
                 tool_use_id: "correlated".to_owned(),
                 created_at: std::time::Instant::now(),
                 created_unix_seconds: now,

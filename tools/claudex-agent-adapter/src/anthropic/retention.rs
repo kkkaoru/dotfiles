@@ -267,6 +267,7 @@ mod tests {
         Arc::new(Session {
             thread_id: "thread".to_owned(),
             model: "main-model".to_owned(),
+            disabled_subagent_models: Default::default(),
             signature: Arc::from("signature"),
             transcript: Mutex::new(Vec::new()),
             pending_tools: Mutex::new(HashMap::from([("tool".to_owned(), json!(9))])),

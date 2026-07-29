@@ -539,12 +539,55 @@ mod tests {
             "claude-sonnet-5",
         ));
 
+        let mut general = json!({"subagent_type":"general-purpose","prompt":"inspect"});
+        super::super::agent_routing::hydrate_standard_agent_to_parent(
+            &mut general,
+            "claude-sonnet-5",
+        );
+        assert_eq!(general["claudex_model"], "claude-sonnet-5");
+        assert!(general["claudex_implicit_model"].as_str().is_some());
+
+        let (intent_arguments, _) = prepare_arguments("Agent", "tool-inherited", &general);
+        let intent_arguments = intent_arguments.expect("inherited Agent intent");
+        let intents = AgentEffortIntents::default();
+        intents.record_from_user_messages(
+            AgentEffortRecord {
+                client_user_id: None,
+                tool_name: "Agent",
+                tool_use_id: "tool-inherited".to_owned(),
+                parent_model: "claude-sonnet-5",
+                arguments: &intent_arguments,
+                user_messages: &[],
+                system: &json!(null),
+            },
+            Some(&crate::provider_config::ModelCatalog::default()),
+        );
+        let intent = intents.take(&request_without_user_id(
+            intent_arguments["prompt"].as_str().expect("correlated prompt"),
+        ));
+        assert_eq!(intent.model_override.as_deref(), Some("claude-sonnet-5"));
+        assert!(intent.model_is_inherited);
+
         let mut routed = json!({"subagent_type":"claudex-gpt"});
         super::super::agent_routing::hydrate_standard_agent_to_parent(
             &mut routed,
             "claude-sonnet-5",
         );
         assert!(routed.get("claudex_model").is_none());
+
+        let mut native_claude = json!({"subagent_type":"claude","prompt":"inspect"});
+        super::super::agent_routing::hydrate_standard_agent_to_parent(
+            &mut native_claude,
+            "gpt-5.6-luna",
+        );
+        assert_eq!(native_claude["claudex_model"], "claude-haiku-4-5");
+        assert!(super::super::agent_routing::model_is_authorized_with_catalog(
+            &native_claude,
+            &[],
+            &json!(null),
+            &crate::provider_config::ModelCatalog::default(),
+            "claude-haiku-4-5",
+        ));
     }
 
     #[test]

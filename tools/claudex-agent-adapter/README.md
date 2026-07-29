@@ -207,10 +207,13 @@ The launcher reads persistent exact-model entries from
 header so terminals sharing one daemon remain independent. The adapter rejects a resolved disabled
 SubAgent model before starting its provider; outer main-session and advisor requests remain unaffected.
 Other user-explicit, unconfigured model IDs fall back to the Claude subscription
-process. Every matched Claude Code child must carry the exact `claudex_model`
-recorded by its Agent/Task launch. An unmatched child or a matched launch without
-that field is rejected instead of inheriting the parent or falling back to the
-configured main model.
+process. A correlated Claude Code child uses the exact `claudex_model` recorded
+by its Agent/Task launch. If that metadata is absent or cannot be correlated,
+the adapter routes from the request model instead: active provider models use
+their configured provider, native Claude models use the subscription process,
+and declared-but-unavailable provider models remap to the configured main model.
+This keeps standard agents and Claude-internal children such as `WebSearch`
+running without inheriting an unrelated provider route or failing with 502.
 
 Agent Teams remains controlled by Claude Code. The adapter preserves named
 Agent arguments and distinguishes persistent mailbox teammates from regular

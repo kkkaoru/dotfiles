@@ -7,7 +7,7 @@ use reqwest::Client;
 use serde_json::{Value, json};
 
 #[tokio::test]
-async fn unmatched_claude_child_does_not_inherit_main_copilot_acp_route() {
+async fn unmatched_provider_child_uses_its_main_copilot_acp_route() {
     const MAIN_MODEL: &str = "gpt-5.6-sol";
 
     let root = tempfile::tempdir().expect("Copilot ACP child fixture");
@@ -34,7 +34,7 @@ async fn unmatched_claude_child_does_not_inherit_main_copilot_acp_route() {
     let response = Client::new()
         .post(format!("http://{address}/v1/messages"))
         .json(&json!({
-            "model":"claude-sonnet-5",
+            "model":MAIN_MODEL,
             "max_tokens":128,
             "system":[{"type":"text","text":"cc_is_subagent=true"}],
             "messages":[{"role":"user","content":"inherited child prompt"}]
@@ -42,16 +42,7 @@ async fn unmatched_claude_child_does_not_inherit_main_copilot_acp_route() {
         .send()
         .await
         .expect("send unmatched Claude Code child request");
-    assert_eq!(response.status(), reqwest::StatusCode::BAD_GATEWAY);
-    let response = response
-        .json::<Value>()
-        .await
-        .expect("decode unmatched child error");
-    assert!(
-        response["error"]["message"]
-            .as_str()
-            .is_some_and(|message| message.contains("did not match an explicit Agent/Task launch"))
-    );
+    assert!(response.status().is_success());
     server.abort();
 
     let trace = read_trace(&root.path().join("grok-acp-mock.jsonl"));
@@ -60,7 +51,7 @@ async fn unmatched_claude_child_does_not_inherit_main_copilot_acp_route() {
             event["arguments"] == json!(["--acp", "--stdio", "--model", MAIN_MODEL])
         })
     );
-    assert!(!trace.iter().any(|event| event.get("new_session").is_some()));
+    assert!(trace.iter().any(|event| event.get("new_session").is_some()));
 }
 
 #[tokio::test]

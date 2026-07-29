@@ -42,7 +42,7 @@ async fn launch_explicit_effort_agent(
     correlated_prompt.to_owned()
 }
 
-async fn missing_model_launch_response(client: &Client, url: &str, instruction: &str) -> String {
+async fn native_claude_launch_prompt(client: &Client, url: &str, instruction: &str) -> String {
     let response = client
         .post(url)
         .json(&json!({
@@ -52,12 +52,17 @@ async fn missing_model_launch_response(client: &Client, url: &str, instruction: 
         }))
         .send()
         .await
-        .expect("send model-less Agent launch");
-    assert_eq!(response.status(), reqwest::StatusCode::BAD_GATEWAY);
-    response
-        .text()
+        .expect("send native Claude Agent launch");
+    assert!(response.status().is_success());
+    let response = response
+        .json::<serde_json::Value>()
         .await
-        .expect("read model-less Agent rejection")
+        .expect("read native Claude Agent launch");
+    assert_eq!(response["content"][0]["name"], "Agent");
+    response["content"][0]["input"]["prompt"]
+        .as_str()
+        .expect("decorated native Claude Agent prompt")
+        .to_owned()
 }
 
 #[tokio::test]
@@ -78,15 +83,12 @@ async fn arbitrary_explicit_agent_model_bypasses_native_enum_and_preserves_effor
 }
 
 #[tokio::test]
-async fn agent_without_model_is_rejected_before_launch() {
+async fn native_claude_agent_without_model_routes_to_haiku() {
     let adapter = Adapter::start().await;
-    let error = missing_model_launch_response(
-        &Client::new(),
-        &format!("{}/v1/messages", adapter.base_url),
-        "USE_AGENT EFFORT_HIGH",
-    )
-    .await;
-    assert!(error.contains("missing required `claudex_model`"));
+    let url = format!("{}/v1/messages", adapter.base_url);
+    let prompt = native_claude_launch_prompt(&Client::new(), &url, "USE_AGENT EFFORT_HIGH").await;
+    let child = child_request(&Client::new(), &url, "", &prompt, "claude-sonnet-5").await;
+    assert_eq!(child["model"], "claude-haiku-4-5");
 }
 
 #[tokio::test]
@@ -149,19 +151,16 @@ async fn child_request(
 }
 
 #[tokio::test]
-async fn agent_without_effort_or_model_is_rejected_before_launch() {
+async fn native_claude_agent_without_effort_or_model_routes_to_haiku() {
     let adapter = Adapter::start().await;
-    let error = missing_model_launch_response(
-        &Client::new(),
-        &format!("{}/v1/messages", adapter.base_url),
-        "USE_AGENT_DEFAULT",
-    )
-    .await;
-    assert!(error.contains("missing required `claudex_model`"));
+    let url = format!("{}/v1/messages", adapter.base_url);
+    let prompt = native_claude_launch_prompt(&Client::new(), &url, "USE_AGENT_DEFAULT").await;
+    let child = child_request(&Client::new(), &url, "", &prompt, "claude-sonnet-5").await;
+    assert_eq!(child["model"], "claude-haiku-4-5");
 }
 
 #[tokio::test]
-async fn unmatched_subagent_rejects_claude_codes_fallback_model() {
+async fn unmatched_subagent_uses_its_configured_provider_model() {
     let adapter = Adapter::start().await;
     let client = Client::new();
     for (system, prompt) in [
@@ -174,7 +173,7 @@ async fn unmatched_subagent_rejects_claude_codes_fallback_model() {
         let response = client
             .post(format!("{}/v1/messages", adapter.base_url))
             .json(&json!({
-                "model":"claude-opus-4-8",
+                "model":"test-main-model",
                 "system":[{"type":"text","text":system}],
                 "output_config":{"effort":"low"},
                 "messages":[{"role":"user","content":prompt}]
@@ -182,19 +181,51 @@ async fn unmatched_subagent_rejects_claude_codes_fallback_model() {
             .send()
             .await
             .expect("send unmatched SubAgent request");
-        assert_eq!(response.status(), reqwest::StatusCode::BAD_GATEWAY);
-        assert!(
-            response
-                .text()
-                .await
-                .expect("read unmatched rejection")
-                .contains("did not match an explicit Agent/Task launch")
-        );
+        assert!(response.status().is_success());
     }
 }
 
 #[tokio::test]
-async fn terminal_policy_denies_only_subagents_and_isolates_explicit_models() {
+async fn unmatched_claude_subagent_routes_to_haiku() {
+    let adapter = Adapter::start().await;
+    let client = Client::new();
+    let child = child_request(
+        &client,
+        &format!("{}/v1/messages", adapter.base_url),
+        r#"{"session_id":"unmatched-native"}"#,
+        "unmatched Claude child",
+        "claude-sonnet-5",
+    )
+    .await;
+
+    assert_eq!(child["model"], "claude-haiku-4-5");
+}
+
+#[tokio::test]
+async fn unmatched_unknown_subagent_model_is_rejected_without_a_fallback() {
+    let adapter = Adapter::start().await;
+    let response = Client::new()
+        .post(format!("{}/v1/messages", adapter.base_url))
+        .json(&json!({
+            "model":"unrouted-worker", "system":"cc_is_subagent=true",
+            "messages":[{"role":"user","content":"child request"}]
+        }))
+        .send()
+        .await
+        .expect("send unknown SubAgent request");
+
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+    assert!(
+        response
+            .text()
+            .await
+            .expect("read unknown SubAgent rejection")
+            .contains("does not have a recoverable configured route")
+    );
+}
+
+#[tokio::test]
+async fn terminal_policy_blocks_disabled_subagents_without_fallback() {
     let adapter = Adapter::start().await;
     let client = Client::new();
     let url = format!("{}/v1/messages", adapter.base_url);
@@ -211,7 +242,7 @@ async fn terminal_policy_denies_only_subagents_and_isolates_explicit_models() {
         .expect("send allowed main request");
     assert!(main.status().is_success());
 
-    let denied_default = denied_child_response(
+    let (default_status, default_body) = denied_child_response(
         &client,
         &url,
         "test-main-model",
@@ -219,11 +250,12 @@ async fn terminal_policy_denies_only_subagents_and_isolates_explicit_models() {
         "REPORT_EFFORT",
     )
     .await;
-    assert!(denied_default.contains("did not match an explicit Agent/Task launch"));
+    assert_eq!(default_status, 400);
+    assert!(default_body.contains("disabled by the active Claudex policy"));
 
     let user_id = r#"{"session_id":"denied-explicit-model"}"#;
     let prompt = launch_explicit_effort_agent(&client, &url, user_id, "high").await;
-    let denied_explicit = denied_child_response(
+    let (explicit_status, explicit_body) = denied_child_response(
         &client,
         &url,
         "claude-opus-4-8",
@@ -231,8 +263,8 @@ async fn terminal_policy_denies_only_subagents_and_isolates_explicit_models() {
         &prompt,
     )
     .await;
-    assert!(denied_explicit.contains("CLAUDEX_DISABLED_SUBAGENT_MODELS"));
-    assert!(denied_explicit.contains("disabledModels"));
+    assert_eq!(explicit_status, 400);
+    assert!(explicit_body.contains("disabled by the active Claudex policy"));
 
     let allowed_user_id = r#"{"session_id":"allowed-explicit-model"}"#;
     let allowed_prompt = launch_explicit_effort_agent(&client, &url, allowed_user_id, "high").await;
@@ -257,7 +289,7 @@ async fn denied_child_response(
     disabled_model: &str,
     requested_model: &str,
     prompt: &str,
-) -> String {
+) -> (u16, String) {
     let response = client
         .post(url)
         .header(DISABLED_MODELS_HEADER, disabled_model)
@@ -269,6 +301,7 @@ async fn denied_child_response(
         .send()
         .await
         .expect("send denied child request");
-    assert_eq!(response.status(), reqwest::StatusCode::BAD_GATEWAY);
-    response.text().await.expect("read denied child response")
+    let status = response.status().as_u16();
+    let body = response.text().await.expect("read denied child response");
+    (status, body)
 }

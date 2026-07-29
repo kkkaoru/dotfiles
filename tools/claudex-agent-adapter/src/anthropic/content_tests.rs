@@ -342,6 +342,7 @@ mod tests {
         Session {
             thread_id: "thread".to_owned(),
             model: "main-model".to_owned(),
+            disabled_subagent_models: Default::default(),
             signature: Arc::from("signature"),
             transcript: Mutex::new(transcript),
             pending_tools: Mutex::new(pending_tools),

@@ -33,6 +33,25 @@ impl SegmentBuilder {
             &mut arguments,
             &context.session.model,
         );
+        if let Some(model) = crate::anthropic::agent_effort::disabled_subagent_model(
+            original_name,
+            &arguments,
+            &context.session.disabled_subagent_models,
+        ) {
+            tracing::warn!(
+                tool_name = original_name,
+                model,
+                "blocked a disabled SubAgent before emitting its launch tool call"
+            );
+            self.close_open_blocks(context.stream).await?;
+            self.start_text_block(
+                &format!("SubAgent model `{model}` is disabled by policy and was not launched."),
+                context.stream,
+            )
+            .await?;
+            self.close_open_blocks(context.stream).await?;
+            return Ok(());
+        }
         crate::anthropic::agent_effort::validate_routed_agent_arguments_with_catalog(
             original_name,
             &arguments,

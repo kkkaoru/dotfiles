@@ -56,6 +56,7 @@ fn session_with_slot(
     Arc::new(Session {
         thread_id: "thread".to_owned(),
         model: model.to_owned(),
+        disabled_subagent_models: Default::default(),
         signature: Arc::from(signature),
         transcript: Mutex::new(transcript),
         pending_tools: Mutex::new(HashMap::new()),
@@ -345,7 +346,7 @@ fn tolerates_a_routed_agent_schema_without_subagent_type() {
 
 #[test]
 fn adds_explicit_non_denied_provider_agents_to_the_routed_schema() {
-    let routing = r#"Claudex routing for this turn: {"providers":{"vendor":{"available":false,"disabled":false,"agent":"claudex-vendor","model":"vendor-default","model_prefixes":[]},"codex":{"available":false,"disabled":false,"agent":"claudex-codex","model":"gpt-default","model_prefixes":["gpt-"]},"special":{"available":false,"disabled":false,"agent":"claudex-special","model":"vendor@beta+1","model_prefixes":[]},"summary":{"available":false,"disabled":false,"agent":"claudex-summary-only","model":"summary-only","model_prefixes":[]},"grok":{"available":false,"disabled":true,"agent":"claudex-grok","model":"grok-denied","model_prefixes":["grok-"]},"qwen":{"available":false,"disabled":false,"agent":"claudex-qwen","model":"qwen-denied","model_prefixes":["qwen-"]}},"selected_agents":["claudex-selected"],"disabled_subagent_models":["qwen-denied"]} mandatory policy"#;
+    let routing = r#"Claudex routing for this turn: {"providers":{"vendor":{"available":false,"disabled":false,"agent":"claudex-vendor","model":"vendor-default","model_prefixes":[]},"codex":{"available":false,"disabled":false,"agent":"claudex-codex","model":"gpt-default","model_prefixes":["gpt-"]},"special":{"available":false,"disabled":false,"agent":"claudex-special","model":"vendor@beta+1","model_prefixes":[]},"summary":{"available":false,"disabled":false,"agent":"claudex-summary-only","model":"summary-only","model_prefixes":[]},"grok":{"available":false,"disabled":true,"agent":"claudex-grok","model":"grok-denied","model_prefixes":["grok-"]},"qwen":{"available":false,"disabled":false,"agent":"claudex-qwen","model":"qwen-denied","model_prefixes":["qwen-"]}},"selected_agents":["claudex-selected","claudex-qwen"],"selected_workers":[{"agent":"claudex-qwen","model":"qwen-denied"}],"disabled_subagent_models":["qwen-denied"]} mandatory policy"#;
     let tools = vec![json!({
         "name":"Agent",
         "input_schema":{"type":"object","properties":{

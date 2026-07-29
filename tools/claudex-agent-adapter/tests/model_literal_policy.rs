@@ -12,7 +12,7 @@ fn production_sources_do_not_pin_complete_model_ids() {
         let production = source.split("#[cfg(test)]").next().unwrap_or(&source);
         for (index, line) in production.lines().enumerate() {
             assert!(
-                !contains_complete_model_id(line),
+                !contains_complete_model_id(line) || is_official_haiku_alias_constant(&path, line),
                 "complete model ID in production source {}:{}: {line}",
                 path.display(),
                 index + 1
@@ -25,6 +25,13 @@ fn production_sources_do_not_pin_complete_model_ids() {
             );
         }
     }
+}
+
+/// The official Claude Haiku alias is centrally defined once for child routing.
+/// All other complete model IDs remain prohibited in production code.
+fn is_official_haiku_alias_constant(path: &Path, line: &str) -> bool {
+    path.ends_with("src/anthropic/request_routing/models.rs")
+        && line.trim() == r#"pub(super) const CLAUDE_HAIKU_MODEL: &str = "claude-haiku-4-5";"#
 }
 
 fn collect_rust_sources(directory: &Path, files: &mut Vec<std::path::PathBuf>) {
@@ -111,6 +118,21 @@ fn model_literal_detector_covers_provider_and_claude_families() {
     ] {
         assert!(!contains_complete_model_id(rule), "false positive: {rule}");
     }
+}
+
+#[test]
+fn allows_only_the_central_official_haiku_alias_constant() {
+    let approved = Path::new("src/anthropic/request_routing/models.rs");
+    let line = r#"pub(super) const CLAUDE_HAIKU_MODEL: &str = "claude-haiku-4-5";"#;
+    assert!(is_official_haiku_alias_constant(approved, line));
+    assert!(!is_official_haiku_alias_constant(
+        Path::new("src/anthropic/request_routing.rs"),
+        line
+    ));
+    assert!(!is_official_haiku_alias_constant(
+        approved,
+        r#"pub(super) const CLAUDE_HAIKU_MODEL: &str = "claude-fable-5";"#
+    ));
 }
 
 #[test]

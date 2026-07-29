@@ -47,7 +47,11 @@ pub(super) async fn refresh_activity_keepalive(
     Ok(())
 }
 
-pub(super) async fn commit_transcript(session: &Session, extras: Vec<Value>, segment: &Segment) {
+pub(in crate::anthropic) async fn commit_transcript(
+    session: &Session,
+    extras: Vec<Value>,
+    segment: &Segment,
+) {
     let mut transcript = session.transcript.lock().await;
     transcript.extend(extras);
     transcript.push(json!({"role":"assistant","content":segment.blocks}));
