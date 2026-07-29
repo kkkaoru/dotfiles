@@ -211,5 +211,10 @@ print(model)
     else
         echo "claudex: explicit-routed orchestration ($provider_config, $outer_model, $outer_effort)" >&2
     end
-    command "$HOME/.local/bin/claudex-agent-adapter" $adapter_args -- $claude_args
+    set -l adapter "$HOME/.cargo/bin/claudex-agent-adapter"
+    if not test -x "$adapter"
+        echo "claudex: installed adapter is not executable: $adapter" >&2
+        return 127
+    end
+    command "$adapter" $adapter_args -- $claude_args
 end

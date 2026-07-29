@@ -82,6 +82,16 @@ mkdir -p "${HOME}/.local/bin"
 link_path "${DOTPATH}/tools/git-hooks/dotfiles-git-quality" \
   "${HOME}/.local/bin/dotfiles-git-quality"
 
+# The Fish launcher executes Cargo's installed adapter directly. Keep the
+# historical local path as a symlink too, so manual invocations cannot select
+# an obsolete copied binary.
+adapter_link="${HOME}/.local/bin/claudex-agent-adapter"
+adapter_target="${HOME}/.cargo/bin/claudex-agent-adapter"
+if [ -e "$adapter_link" ] && [ ! -L "$adapter_link" ]; then
+  mv -f "$adapter_link" "${adapter_link}.legacy"
+fi
+ln -snfv "$adapter_target" "$adapter_link"
+
 # .config apps
 mkdir -p "${HOME}/.config"
 if [ -d "${DOTPATH}/.config" ]; then

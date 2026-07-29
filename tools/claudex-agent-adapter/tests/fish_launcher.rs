@@ -15,7 +15,7 @@ fn fish_launcher_uses_the_shared_provider_config() {
 fn shared_provider_fixture() -> tempfile::TempDir {
     let home = tempfile::tempdir().expect("temporary launcher home");
     fs::create_dir_all(home.path().join(".config/claudex")).expect("provider config directory");
-    fs::create_dir_all(home.path().join(".local/bin")).expect("adapter directory");
+    fs::create_dir_all(home.path().join(".cargo/bin")).expect("adapter directory");
     fs::create_dir_all(home.path().join(".claude")).expect("settings directory");
     fs::write(
         home.path().join(".config/claudex/providers.json"),
@@ -27,7 +27,7 @@ fn shared_provider_fixture() -> tempfile::TempDir {
         "{\"model\":\"sonnet[1m]\",\"effortLevel\":\"high\"}",
     )
     .expect("temporary settings file");
-    let adapter = home.path().join(".local/bin/claudex-agent-adapter");
+    let adapter = home.path().join(".cargo/bin/claudex-agent-adapter");
     fs::write(
         &adapter,
         "#!/bin/sh\nprintf 'CLAUDEX_ACTIVE=%s\\n' \"${CLAUDEX_ACTIVE:-}\"\nprintf 'CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=%s\\n' \"${CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY:-}\"\nprintf 'CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS=%s\\n' \"${CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS:-}\"\nprintf 'CLAUDE_CODE_ALWAYS_ENABLE_EFFORT=%s\\n' \"${CLAUDE_CODE_ALWAYS_ENABLE_EFFORT:-}\"\nprintf '%s\\n' \"$@\"\n",
@@ -157,7 +157,7 @@ fn assert_local_defaults(function: &std::path::Path, home: &tempfile::TempDir) {
 #[test]
 fn fish_launcher_uses_claude_settings_model_and_effort_when_available() {
     let home = tempfile::tempdir().expect("temporary settings launcher home");
-    fs::create_dir_all(home.path().join(".local/bin")).expect("adapter directory");
+    fs::create_dir_all(home.path().join(".cargo/bin")).expect("adapter directory");
     fs::create_dir_all(home.path().join(".claude")).expect("settings directory");
     fs::create_dir_all(home.path().join(".config/claudex")).expect("provider config directory");
     fs::write(
@@ -170,7 +170,7 @@ fn fish_launcher_uses_claude_settings_model_and_effort_when_available() {
         "{\"version\":1,\"mainProviders\":[\"p\"],\"providers\":[{\"id\":\"p\",\"agent\":\"worker\",\"defaultModel\":\"provider-model\",\"subagentModel\":\"worker-model\",\"effort\":\"high\",\"backend\":\"codex-app-server\"}],\"fallback\":{\"agent\":\"fallback\",\"model\":\"sonnet\",\"effort\":\"high\"}}",
     )
     .expect("fixture provider config");
-    let adapter = home.path().join(".local/bin/claudex-agent-adapter");
+    let adapter = home.path().join(".cargo/bin/claudex-agent-adapter");
     fs::write(
         &adapter,
         "#!/bin/sh\nprintf 'CLAUDE_CODE_ALWAYS_ENABLE_EFFORT=%s\\n' \"${CLAUDE_CODE_ALWAYS_ENABLE_EFFORT:-}\"\nprintf '%s\\n' \"$@\"\n",

@@ -49,6 +49,7 @@
     }
   },
   "alwaysThinkingEnabled": true,
+  "effortLevel": "high",
   "advisorModel": "opus",
   "tui": "fullscreen",
   "skipDangerousModePermissionPrompt": true,
@@ -60,6 +61,5 @@
   "mcp": {
     "enabled": true,
     "projectConfig": true
-  },
-  "effortLevel": "high"
+  }
 }
