@@ -281,19 +281,22 @@ fn is_bridge_event(event: &Value) -> bool {
     // App-server lifecycle events can repeat the complete user input and dynamic tool schemas.
     // The Anthropic bridge ignores them, so admitting them can overflow the queue before the
     // small output deltas behind them are consumed.
-    matches!(
-        event.get("method").and_then(Value::as_str),
+    match event.get("method").and_then(Value::as_str) {
+        Some("item/started" | "item/completed") => {
+            event.pointer("/params/item/type").and_then(Value::as_str) == Some("webSearch")
+        }
         Some(
             "item/agentMessage/delta"
-                | "item/reasoning/summaryTextDelta"
-                | "item/tool/call"
-                | "item/providerTool/call"
-                | "item/providerTool/update"
-                | "thread/tokenUsage/updated"
-                | "turn/completed"
-                | "error"
-        )
-    )
+            | "item/reasoning/summaryTextDelta"
+            | "item/tool/call"
+            | "item/providerTool/call"
+            | "item/providerTool/update"
+            | "thread/tokenUsage/updated"
+            | "turn/completed"
+            | "error",
+        ) => true,
+        _ => false,
+    }
 }
 
 fn encoded_string_content_bytes(value: &str) -> usize {

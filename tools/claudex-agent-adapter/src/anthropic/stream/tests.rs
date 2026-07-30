@@ -91,6 +91,7 @@ fn sanitizes_text_thinking_and_provider_status_variants() {
         "Retrying provider request",
         "Session mode: worker",
         "Session: worker",
+        "🔎 WebSearch: AVITA株式会社",
     ] {
         let mut status_block = vec![json!({"type":"thinking","thinking":status})];
         sanitize::sanitize_committed_blocks(&mut status_block);
@@ -669,6 +670,49 @@ async fn ignores_malformed_empty_raw_and_late_reasoning() {
         .expect("late reasoning");
     let segment = builder.finish(None).await.expect("segment");
     assert_eq!(segment.blocks, [json!({"type":"text","text":"visible"})]);
+}
+
+#[tokio::test]
+async fn streams_native_web_search_status_without_committing_it() {
+    let (_root, app, bridge, session) = disconnect_fixture().await;
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
+    let mut builder = SegmentBuilder::new(1);
+    for event in [
+        json!({
+            "method":"item/started",
+            "params":{"item":{"type":"message","query":"ignored"}}
+        }),
+        json!({
+            "method":"item/started",
+            "params":{"item":{"type":"webSearch","query":"AVITA株式会社"}}
+        }),
+        json!({
+            "method":"item/started",
+            "params":{"item":{"type":"webSearch","query":""}}
+        }),
+    ] {
+        assert!(
+            builder
+                .handle_event(&bridge, &session, &[], &json!({}), &event, Some(&sender),)
+                .await
+                .expect("native search event")
+                .is_continue()
+        );
+    }
+    let segment = builder.finish(Some(&sender)).await.expect("segment");
+    drop(sender);
+    assert!(segment.blocks.is_empty());
+    assert_eq!(segment.usage.web_search_requests, 2);
+
+    let mut frames = Vec::new();
+    while let Some(frame) = receiver.recv().await {
+        let frame = String::from_utf8(frame.expect("frame").to_vec()).expect("UTF-8 SSE");
+        frames.push(frame);
+    }
+    assert_eq!(frames.len(), 5);
+    assert!(frames.iter().any(|frame| frame.contains("AVITA株式会社")));
+    assert!(frames.iter().any(|frame| frame.contains("search")));
+    app.shutdown().await;
 }
 
 #[tokio::test]
@@ -1583,6 +1627,7 @@ async fn emits_completion_error_and_optional_frames() {
         usage: super::super::Usage {
             input_tokens: 1,
             output_tokens: 4,
+            web_search_requests: 0,
         },
     };
     send_stream_completion(&sender, &segment).await;

@@ -11,6 +11,7 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
+use uuid::Uuid;
 
 mod claude_process;
 mod daemon_arguments;
@@ -23,7 +24,10 @@ use crate::{
     working_directory,
 };
 use claude_process::ClaudeProcess;
-use daemon_arguments::{daemon_arguments, route_descriptions, worker_route_descriptions};
+use daemon_arguments::{
+    daemon_arguments, route_descriptions, search_worker_route_descriptions,
+    worker_route_descriptions,
+};
 use handover::ServiceState;
 
 const LOCAL_TOKEN: &str = "claudex-local";
@@ -61,6 +65,8 @@ struct Health {
     backend_routes: Vec<String>,
     #[serde(default)]
     worker_routes: Vec<String>,
+    #[serde(default)]
+    search_worker_routes: Vec<String>,
     subscription_max_processes: usize,
     subscription_timeout_minutes: u64,
 }
@@ -110,6 +116,8 @@ impl ServiceConfig {
             && health.protocol_version == ADAPTER_PROTOCOL_VERSION
             && health.backend_routes == route_descriptions(&self.options.routes)
             && health.worker_routes == worker_route_descriptions(&self.options.model_catalog)
+            && health.search_worker_routes
+                == search_worker_route_descriptions(&self.options.model_catalog)
             && health.subscription_max_processes == self.options.subscription_max_processes
             && health.subscription_timeout_minutes == self.options.subscription_timeout_minutes
     }
@@ -148,6 +156,12 @@ pub async fn run_claude(
             .args(arguments)
             .env("ANTHROPIC_BASE_URL", base_url)
             .env("ANTHROPIC_AUTH_TOKEN", &config.token)
+            .env("CLAUDE_CODE_WEBSEARCH_USE_CCR_PROXY", "1")
+            .env(
+                "CLAUDE_CODE_SESSION_ID",
+                format!("session_{}", Uuid::new_v4().simple()),
+            )
+            .env("CLAUDE_CODE_SESSION_ACCESS_TOKEN", &config.token)
             .env("ANTHROPIC_CUSTOM_HEADERS", custom_headers)
             .env_remove("ANTHROPIC_API_KEY")
             .env_remove("ANTHROPIC_MODEL")

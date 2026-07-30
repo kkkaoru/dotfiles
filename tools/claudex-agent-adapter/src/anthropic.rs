@@ -130,6 +130,7 @@ struct Segment {
 struct Usage {
     input_tokens: u64,
     output_tokens: u64,
+    web_search_requests: u64,
 }
 
 struct SelectedSession {

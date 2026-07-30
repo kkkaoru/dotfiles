@@ -1,3 +1,4 @@
+pub use crate::web_search::WebSearchMode;
 use crate::{
     app_server::{AppServer, ThreadEvents},
     copilot_acp::CopilotAcp,
@@ -6,49 +7,14 @@ use crate::{
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{fmt, str::FromStr, sync::Arc};
+use std::{str::FromStr, sync::Arc};
+mod kind;
+pub use kind::BackendKind;
 mod concurrency;
 mod lifecycle;
 mod route_config;
 mod routes;
 use routes::{RoutedBackend, RoutedBackends};
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum BackendKind {
-    CodexAppServer,
-    ConfiguredAcp,
-    CopilotAcp,
-    GrokAcp,
-}
-impl BackendKind {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::CodexAppServer => "codex-app-server",
-            Self::ConfiguredAcp => "configured-acp",
-            Self::CopilotAcp => "copilot-acp",
-            Self::GrokAcp => "grok-acp",
-        }
-    }
-}
-impl fmt::Display for BackendKind {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.as_str())
-    }
-}
-impl FromStr for BackendKind {
-    type Err = anyhow::Error;
-    fn from_str(value: &str) -> Result<Self> {
-        match value {
-            "codex-app-server" => Ok(Self::CodexAppServer),
-            "configured-acp" => Ok(Self::ConfiguredAcp),
-            "copilot-acp" => Ok(Self::CopilotAcp),
-            "grok-acp" => Ok(Self::GrokAcp),
-            _ => bail!(
-                "invalid backend `{value}`; expected codex-app-server, configured-acp, copilot-acp, or grok-acp"
-            ),
-        }
-    }
-}
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct AcpLaunch {
@@ -72,6 +38,8 @@ pub struct BackendRoute {
     pub model_prefixes: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub acp: Option<AcpLaunch>,
+    #[serde(default, skip_serializing_if = "WebSearchMode::is_default")]
+    pub web_search_mode: WebSearchMode,
 }
 impl BackendRoute {
     pub fn new(model: impl Into<String>, backend: BackendKind) -> Self {
@@ -84,6 +52,7 @@ impl BackendRoute {
             max_concurrency: None,
             model_prefixes: Vec::new(),
             acp: None,
+            web_search_mode: WebSearchMode::default(),
         }
     }
     pub fn description(&self) -> String {
@@ -93,6 +62,7 @@ impl BackendRoute {
             && self.max_concurrency.is_none()
             && self.model_prefixes.is_empty()
             && self.acp.is_none()
+            && self.web_search_mode.is_default()
         {
             return format!("{}={}", self.model, self.backend);
         }
@@ -179,6 +149,15 @@ impl AgentBackend {
         match self {
             Self::Routed(routes) => routes.supports(model),
             Self::Codex(_) | Self::ConfiguredAcp(_) | Self::Copilot(_) | Self::Grok(_) => false,
+        }
+    }
+
+    pub fn web_search_mode(&self, model: &str) -> WebSearchMode {
+        match self {
+            Self::Routed(routes) => routes.web_search_mode(model),
+            Self::Codex(_) | Self::ConfiguredAcp(_) | Self::Copilot(_) | Self::Grok(_) => {
+                WebSearchMode::default()
+            }
         }
     }
     pub fn route_descriptions(&self) -> Vec<String> {

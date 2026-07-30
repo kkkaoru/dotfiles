@@ -231,14 +231,18 @@ fn accepts_only_events_used_by_the_anthropic_bridge() {
     ] {
         assert!(is_bridge_event(&json!({ "method": method })));
     }
-    for method in [
-        "thread/started",
-        "turn/started",
-        "item/started",
-        "item/completed",
-        "item/reasoning/textDelta",
-    ] {
+    for method in ["thread/started", "turn/started", "item/reasoning/textDelta"] {
         assert!(!is_bridge_event(&json!({ "method": method })));
+    }
+    for method in ["item/started", "item/completed"] {
+        assert!(is_bridge_event(&json!({
+            "method": method,
+            "params": {"item": {"type": "webSearch"}}
+        })));
+        assert!(!is_bridge_event(&json!({
+            "method": method,
+            "params": {"item": {"type": "agentMessage"}}
+        })));
     }
 }
 

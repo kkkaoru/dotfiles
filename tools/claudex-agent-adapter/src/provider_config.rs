@@ -1,7 +1,10 @@
-use crate::agent_backend::{AcpLaunch, BackendKind, BackendRoute};
+use crate::agent_backend::{AcpLaunch, BackendKind, BackendRoute, WebSearchMode};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, fs, path::Path};
+
+mod validation;
+use validation::{validate_choice, validate_providers, validate_worker_routes};
 const CONFIG_VERSION: u64 = 1;
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -12,6 +15,15 @@ struct ProviderConfig {
     fallback: AgentChoice,
     #[serde(default)]
     advisor: Option<AgentChoice>,
+    #[serde(default)]
+    web_search: WebSearchSettings,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct WebSearchSettings {
+    #[serde(default)]
+    fallback_providers: Vec<String>,
 }
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -39,6 +51,8 @@ struct Provider {
     backend: BackendKind,
     #[serde(default)]
     acp: Option<AcpLaunch>,
+    #[serde(default)]
+    web_search_mode: WebSearchMode,
 }
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -60,6 +74,7 @@ pub struct ModelCatalog {
     exact: Vec<String>,
     prefixes: Vec<String>,
     workers: Vec<WorkerRoute>,
+    search_workers: Vec<WorkerRoute>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -100,6 +115,7 @@ impl ModelCatalog {
             exact,
             prefixes,
             workers: Vec::new(),
+            search_workers: Vec::new(),
         }
     }
     pub fn from_routes(routes: &[BackendRoute]) -> Self {
@@ -125,6 +141,7 @@ impl ModelCatalog {
             exact,
             prefixes,
             workers: Vec::new(),
+            search_workers: Vec::new(),
         }
     }
     pub fn matches(&self, model: &str) -> bool {
@@ -146,25 +163,23 @@ impl ModelCatalog {
         &self.workers
     }
 
+    pub fn search_worker_routes(&self) -> &[WorkerRoute] {
+        &self.search_workers
+    }
+
+    pub fn with_search_worker_routes(mut self, workers: Vec<WorkerRoute>) -> Result<Self> {
+        self.set_search_worker_routes(workers)?;
+        Ok(self)
+    }
+
+    pub fn set_search_worker_routes(&mut self, workers: Vec<WorkerRoute>) -> Result<()> {
+        validate_worker_routes(&workers)?;
+        self.search_workers = workers;
+        Ok(())
+    }
+
     pub fn set_worker_routes(&mut self, workers: Vec<WorkerRoute>) -> Result<()> {
-        if workers.iter().any(|worker| {
-            [
-                worker.agent.as_str(),
-                worker.model.as_str(),
-                worker.effort.as_str(),
-            ]
-            .into_iter()
-            .any(str::is_empty)
-        }) {
-            bail!("worker route fields must not be empty");
-        }
-        let agents = workers
-            .iter()
-            .map(|worker| worker.agent.as_str())
-            .collect::<HashSet<_>>();
-        if agents.len() != workers.len() {
-            bail!("worker route agent values must be unique");
-        }
+        validate_worker_routes(&workers)?;
         self.workers = workers;
         Ok(())
     }
@@ -184,6 +199,7 @@ impl ModelCatalog {
             .collect();
     }
 }
+
 const fn enabled_by_default() -> bool {
     true
 }
@@ -206,6 +222,7 @@ fn validate(config: ProviderConfig) -> Result<LoadedConfig> {
     // recognized and remapped instead of falling through to Claude subscription under a
     // stale provider model id.
     let mut model_catalog = ModelCatalog::from_providers(&config.providers);
+    let search_provider_ids = config.web_search.fallback_providers.clone();
     let providers = config
         .providers
         .into_iter()
@@ -216,6 +233,27 @@ fn validate(config: ProviderConfig) -> Result<LoadedConfig> {
     }
     validate_providers(&providers)?;
     model_catalog.add_workers(&providers);
+    let search_workers = search_provider_ids
+        .iter()
+        .map(|id| {
+            providers
+                .iter()
+                .find(|provider| &provider.id == id)
+                .with_context(|| format!("webSearch fallback provider `{id}` is not enabled"))
+        })
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .map(|provider| WorkerRoute {
+            agent: provider.agent.clone(),
+            model: provider
+                .subagent_model
+                .as_ref()
+                .unwrap_or(&provider.default_model)
+                .clone(),
+            effort: provider.effort.clone(),
+        })
+        .collect();
+    model_catalog.set_search_worker_routes(search_workers)?;
     let enabled_ids = providers
         .iter()
         .map(|provider| provider.id.as_str())
@@ -244,97 +282,6 @@ fn validate(config: ProviderConfig) -> Result<LoadedConfig> {
         model_catalog,
     })
 }
-fn validate_choice(choice: &AgentChoice, name: &str) -> Result<()> {
-    if [&choice.agent, &choice.model, &choice.effort]
-        .into_iter()
-        .any(|value| value.is_empty())
-    {
-        bail!("provider config {name} fields must not be empty");
-    }
-    Ok(())
-}
-fn validate_providers(providers: &[Provider]) -> Result<()> {
-    let mut ids = HashSet::new();
-    let mut agents = HashSet::new();
-    let mut models = HashSet::new();
-    let mut prefixes = HashSet::new();
-    for provider in providers {
-        if provider
-            .required_fields()
-            .iter()
-            .any(|value| value.is_empty())
-        {
-            bail!("enabled provider fields must not be empty");
-        }
-        if !ids.insert(&provider.id) {
-            bail!("enabled provider IDs must be unique");
-        }
-        if !agents.insert(&provider.agent) {
-            bail!("enabled provider agent values must be unique");
-        }
-        if !models.insert(&provider.default_model) {
-            bail!("enabled provider defaultModel values must be unique");
-        }
-        if provider.model_prefixes.iter().any(String::is_empty) {
-            bail!("modelPrefixes must not contain an empty value");
-        }
-        if provider.max_context_tokens == Some(0) {
-            bail!("maxContextTokens must be greater than zero");
-        }
-        if provider
-            .max_concurrency
-            .is_some_and(|limit| limit == 0 || limit > crate::grok_acp::MAX_MODEL_CONCURRENCY)
-        {
-            bail!("maxConcurrency must be between 1 and the adapter semaphore limit");
-        }
-        if provider
-            .subagent_model
-            .as_ref()
-            .is_some_and(String::is_empty)
-        {
-            bail!("subagentModel must not be empty");
-        }
-        if provider
-            .model_provider
-            .as_ref()
-            .is_some_and(String::is_empty)
-            || provider
-                .model_catalog_json
-                .as_ref()
-                .is_some_and(String::is_empty)
-        {
-            bail!("modelProvider and modelCatalogJson must not be empty");
-        }
-        if provider.backend != BackendKind::CodexAppServer
-            && (provider.model_provider.is_some() || provider.model_catalog_json.is_some())
-        {
-            bail!("modelProvider and modelCatalogJson are valid only with codex-app-server");
-        }
-        if !provider
-            .model_prefixes
-            .iter()
-            .all(|prefix| prefixes.insert(prefix))
-        {
-            bail!("enabled provider modelPrefixes must be unique");
-        }
-        validate_acp(provider)?;
-    }
-    Ok(())
-}
-fn validate_acp(provider: &Provider) -> Result<()> {
-    match (provider.backend, &provider.acp) {
-        (BackendKind::ConfiguredAcp, Some(acp))
-            if !acp.program.is_empty() && !acp.arguments.is_empty() =>
-        {
-            Ok(())
-        }
-        (BackendKind::ConfiguredAcp, _) => {
-            bail!("configured-acp requires a non-empty acp program and arguments")
-        }
-        (_, None) => Ok(()),
-        (_, Some(_)) => bail!("acp is valid only with configured-acp"),
-    }
-}
 impl Provider {
     fn required_fields(&self) -> [&str; 4] {
         [&self.id, &self.agent, &self.default_model, &self.effort]
@@ -350,6 +297,7 @@ impl Provider {
             max_concurrency: self.max_concurrency,
             model_prefixes: self.model_prefixes,
             acp: self.acp,
+            web_search_mode: self.web_search_mode,
         }
     }
 }

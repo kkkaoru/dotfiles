@@ -3,19 +3,39 @@ use std::collections::{BTreeSet, HashMap};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::super::{BRIDGE_INSTRUCTIONS, MessagesRequest, content::system_text};
-use crate::anthropic::subscription_request::cwd_from_system;
+use super::super::MessagesRequest;
+use crate::agent_backend::WebSearchMode;
+mod thread;
+#[cfg(test)]
+pub(in crate::anthropic) use thread::thread_start_params;
+pub(in crate::anthropic) use thread::thread_start_params_for_mode;
 
 const ORCHESTRATOR_INSTRUCTIONS: &str = "Claudex main-session orchestration mode is active. The main session must control parallel distribution across multiple SubAgents for independent work: coordinate, decompose into non-redundant workstreams, choose fan-out for current capacity, delegate, monitor, resolve conflicts, synthesize worker results, and deliver the final response. Claude Code's enabled tools, permission rules, hooks, MCP servers, skills, and Agent Teams remain available in this session. For every substantive investigation, implementation, review, or validation, call a routed Agent/Task worker by default rather than doing the work in main. This remains mandatory after long execution, compaction, resume, context reconstruction, and worker failure. Avoid serial heavy processing by one worker when capacity allows multi-worker fan-out: unless the work is truly indivisible, the user opts out, or only one compatible worker slot is available, launch parallel ordinary workers in the same batch; do not give an entire heavy or unknown-duration task to one ordinary worker merely for convenience. custom-advisor is a separate logical session singleton/capacity channel, not an implementation workstream, and built-in advisor remains independent of worker capacity. For related follow-ups, reuse compatible workers with SendMessage and the exact prior Agent/Task recipient instead of churning processes with fresh launches; start a new instance only when true concurrency, clean-room review, a different route/role, incompatible scope, or an unavailable recipient requires it.";
 const SUBAGENT_LIFECYCLE_INSTRUCTIONS: &str = "For independent fan-out that may be long-running or whose duration is unknown, set run_in_background=true on every launch in the single batch unless the active user explicitly requires synchronous results. Do not mix foreground and background launches in one batch. Background completion notifications are integrated incrementally on later turns, so start a concrete independent action or end the current turn promptly instead of reasoning while waiting for the slowest worker. Use foreground only for short bounded work, a dependency-required result, or an explicit synchronous request. This rule supersedes generic foreground advice above when a worker may be heavy. Prefer reusing a compatible recipient via SendMessage over launching a replacement process solely to continue related work.";
 
+#[cfg(test)]
 pub(in crate::anthropic) fn tool_configuration(
     request: &MessagesRequest,
     advisor_model: Option<&str>,
     collaborator_model: Option<&str>,
 ) -> (Vec<Value>, HashMap<String, String>, HashMap<String, String>) {
+    tool_configuration_for_mode(
+        request,
+        advisor_model,
+        collaborator_model,
+        WebSearchMode::default(),
+    )
+}
+
+pub(in crate::anthropic) fn tool_configuration_for_mode(
+    request: &MessagesRequest,
+    advisor_model: Option<&str>,
+    collaborator_model: Option<&str>,
+    web_search_mode: WebSearchMode,
+) -> (Vec<Value>, HashMap<String, String>, HashMap<String, String>) {
     let selected_agents = selected_agents(request);
-    let (mut tools, external_names) = external_tools(&request.tools, &selected_agents);
+    let (mut tools, external_names) =
+        external_tools(&request.tools, &selected_agents, web_search_mode);
     let mut internal = HashMap::new();
     if let Some(model) = advisor_model {
         internal.insert("advisor".to_owned(), model.to_owned());
@@ -35,6 +55,7 @@ pub(in crate::anthropic) fn tool_configuration(
 fn external_tools(
     tools: &[Value],
     selected_agents: &[String],
+    web_search_mode: WebSearchMode,
 ) -> (Vec<Value>, HashMap<String, String>) {
     let mut specs = Vec::new();
     let mut names = HashMap::new();
@@ -42,6 +63,9 @@ fn external_tools(
         let Some(original_name) = tool.get("name").and_then(Value::as_str) else {
             continue;
         };
+        if web_search_mode == WebSearchMode::CodexNative && original_name == "WebSearch" {
+            continue;
+        }
         let mut routed_tool = tool.clone();
         if super::super::agent_batch::supports(original_name) {
             constrain_agent_types(&mut routed_tool, selected_agents);
@@ -259,61 +283,6 @@ fn routing_texts(value: &Value) -> Box<dyn Iterator<Item = &str> + '_> {
     }
 }
 
-pub(in crate::anthropic) fn thread_start_params(
-    request: &MessagesRequest,
-    model: &str,
-    dynamic_tools: Vec<Value>,
-) -> Value {
-    let system = system_text(&request.system);
-    let cwd = request
-        .working_directory
-        .clone()
-        .or_else(|| cwd_from_system(&system))
-        .map(|path| path.to_string_lossy().into_owned())
-        .unwrap_or_else(isolated_runtime_cwd);
-    let mut developer_instructions = super::super::team_protocol::guidance(&request.tools)
-        .map_or_else(
-            || BRIDGE_INSTRUCTIONS.to_owned(),
-            |guidance| format!("{BRIDGE_INSTRUCTIONS}\n\n{guidance}"),
-        );
-    developer_instructions.push_str("\n\n");
-    developer_instructions.push_str(super::super::CODEX_APP_SERVER_PARALLELIZATION_INSTRUCTIONS);
-    developer_instructions.push_str("\n\n");
-    developer_instructions.push_str(&parallel_scheduler_instructions(request));
-    developer_instructions.push_str("\n\n");
-    developer_instructions.push_str(SUBAGENT_LIFECYCLE_INSTRUCTIONS);
-    if !super::super::agent_effort::is_subagent_request(request) {
-        developer_instructions.push_str("\n\n");
-        developer_instructions.push_str(ORCHESTRATOR_INSTRUCTIONS);
-    }
-    let base_instructions = if system.is_empty() {
-        developer_instructions.clone()
-    } else {
-        format!("{system}\n\n{developer_instructions}")
-    };
-    json!({
-        "model": model,
-        "cwd": cwd,
-        "baseInstructions": base_instructions,
-        "developerInstructions": developer_instructions,
-        "dynamicTools": dynamic_tools,
-        "environments": [],
-        "ephemeral": true,
-        "approvalPolicy": "never",
-        // Codex built-in execution tools remain disabled below. Using workspace-write here
-        // prevents the provider from misrepresenting Claude Code's dynamic tools as read-only.
-        "sandbox": "workspace-write",
-        "personality": "none",
-        "config": {
-            "web_search": "disabled",
-            "features": {
-                "apps": false, "multi_agent": false, "shell_tool": false,
-                "tool_search": false, "unified_exec": false, "web_search": false
-            }
-        }
-    })
-}
-
 fn parallel_scheduler_instructions(request: &MessagesRequest) -> String {
     let scheduler = crate::parallel_scheduler::ParallelScheduler::shared();
     let config = scheduler.config();
@@ -363,16 +332,6 @@ pub(in crate::anthropic) fn codex_tool_name(original_name: &str, index: usize) -
     let maximum_name_bytes = 128usize.saturating_sub(3 + suffix.len());
     let stem = &sanitized[..sanitized.len().min(maximum_name_bytes)];
     format!("cc_{stem}{suffix}")
-}
-
-fn isolated_runtime_cwd() -> String {
-    let home = match std::env::var_os("HOME") {
-        Some(home) => std::path::PathBuf::from(home),
-        None => std::path::PathBuf::from("/tmp"),
-    };
-    home.join(".cache/claudex/codex-home")
-        .to_string_lossy()
-        .into_owned()
 }
 
 pub(in crate::anthropic) fn internal_advisor_tool() -> Value {

@@ -144,6 +144,7 @@ fn background_response(turn: &ActiveTurn) -> Response<Body> {
             usage: Usage {
                 input_tokens: turn.input_tokens,
                 output_tokens: 0,
+                web_search_requests: 0,
             },
         },
         &turn.response_model,

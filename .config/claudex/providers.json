@@ -1,6 +1,6 @@
 {
   "version": 1,
-    "mainProviders": ["codex", "codex-spark", "grok", "fugu", "ollama-glm-5-2", "opencode-go"],
+  "mainProviders": ["codex", "codex-spark", "grok", "fugu", "ollama-glm-5-2", "opencode-go"],
   "providers": [
     {
       "id": "codex",
@@ -14,7 +14,8 @@
       "modelPrefixes": [
         "gpt"
       ],
-      "backend": "codex-app-server"
+      "backend": "codex-app-server",
+      "webSearchMode": "codex-native"
     },
     {
       "id": "codex-spark",
@@ -28,7 +29,8 @@
       "modelPrefixes": [
         "gpt-5.3-codex-spark"
       ],
-      "backend": "codex-app-server"
+      "backend": "codex-app-server",
+      "webSearchMode": "codex-native"
     },
     {
       "id": "fugu",
@@ -43,7 +45,8 @@
       "modelPrefixes": [
         "fugu"
       ],
-      "backend": "codex-app-server"
+      "backend": "codex-app-server",
+      "webSearchMode": "delegate-ccr"
     },
     {
       "id": "ollama-glm-5-2",
@@ -58,7 +61,8 @@
       "modelPrefixes": [
         "glm-"
       ],
-      "backend": "codex-app-server"
+      "backend": "codex-app-server",
+      "webSearchMode": "delegate-ccr"
     },
     {
       "id": "grok",
@@ -70,7 +74,8 @@
       "modelPrefixes": [
         "grok"
       ],
-      "backend": "grok-acp"
+      "backend": "grok-acp",
+      "webSearchMode": "acp-native"
     },
     {
       "id": "qwen",
@@ -83,6 +88,7 @@
         "qwen"
       ],
       "backend": "configured-acp",
+      "webSearchMode": "disabled",
       "acp": {
         "program": "/usr/bin/env",
         "arguments": [
@@ -108,6 +114,7 @@
         "opencode-go/"
       ],
       "backend": "configured-acp",
+      "webSearchMode": "delegate-mcp",
       "acp": {
         "program": "opencode",
         "arguments": [
@@ -120,6 +127,9 @@
     "agent": "claudex-sonnet",
     "model": "claude-sonnet-5",
     "effort": "high"
+  },
+  "webSearch": {
+    "fallbackProviders": ["codex-spark", "codex"]
   },
   "advisor": {
     "agent": "custom-advisor",

@@ -14,6 +14,7 @@ pub mod path_env;
 pub mod provider_config;
 pub mod runtime;
 mod subagent_policy;
+mod web_search;
 mod working_directory;
 
 pub const ADAPTER_PROTOCOL_VERSION: u64 = 23;
@@ -26,14 +27,15 @@ use std::sync::Arc;
 use anthropic::{Bridge, MessagesRequest, error_response, token_count};
 use axum::{
     Json, Router,
-    extract::{Request, State},
+    extract::{Path, Request, State},
     http::{HeaderMap, Response, StatusCode},
     middleware,
     middleware::Next,
     response::IntoResponse,
     routing::{get, post},
 };
-use serde_json::json;
+use serde::Deserialize;
+use serde_json::{Value, json};
 
 pub fn http_router(bridge: Arc<Bridge>, model: String, auth_token: Option<String>) -> Router {
     let health_model = model;
@@ -42,6 +44,7 @@ pub fn http_router(bridge: Arc<Bridge>, model: String, auth_token: Option<String
     let subscription_timeout_minutes = bridge.subscription_timeout_minutes();
     let backend_routes = bridge.backend_routes();
     let worker_routes = bridge.worker_routes();
+    let search_worker_routes = bridge.search_worker_routes();
     let models = bridge.routed_models();
     let protected = Router::new()
         .route(
@@ -63,6 +66,10 @@ pub fn http_router(bridge: Arc<Bridge>, model: String, auth_token: Option<String
         )
         .route("/v1/messages", post(messages))
         .route("/v1/messages/count_tokens", post(count_tokens_handler))
+        .route(
+            "/v1/code/sessions/{session_id}/worker/web-search",
+            post(ccr_web_search),
+        )
         .route_layer(middleware::from_fn_with_state(auth_token, authorize));
     Router::new()
         .route(
@@ -82,6 +89,7 @@ pub fn http_router(bridge: Arc<Bridge>, model: String, auth_token: Option<String
                         "build_id":env!("CLAUDEX_BUILD_ID"),
                         "backend_routes":backend_routes,
                         "worker_routes":worker_routes,
+                        "search_worker_routes":search_worker_routes,
                         "started_models":health_bridge.started_models(),
                         "model_concurrency":health_bridge.model_concurrency(),
                         "model":health_model,
@@ -151,6 +159,65 @@ async fn count_tokens_handler(Json(request): Json<MessagesRequest>) -> impl Into
     Json(json!({ "input_tokens": token_count(&request) }))
 }
 
+#[derive(Debug, Default, Deserialize)]
+struct CcrWebSearchRequest {
+    query: String,
+    #[serde(default)]
+    allowed_domains: Vec<String>,
+    #[serde(default)]
+    blocked_domains: Vec<String>,
+}
+
+async fn ccr_web_search(
+    State(bridge): State<Arc<Bridge>>,
+    Path(session_id): Path<String>,
+    Json(request): Json<CcrWebSearchRequest>,
+) -> Response<axum::body::Body> {
+    if session_id.is_empty() {
+        return error_response(
+            StatusCode::BAD_REQUEST,
+            anyhow::anyhow!("session_id is empty"),
+        );
+    }
+    match bridge.run_web_search(&request.query).await {
+        Ok(mut response) => {
+            response.results.retain(|result| {
+                domain_allowed(
+                    &result.url,
+                    &request.allowed_domains,
+                    &request.blocked_domains,
+                )
+            });
+            response.search_count = u64::try_from(response.results.len()).unwrap_or(u64::MAX);
+            Json(json!({"results": response.results, "error": Value::Null})).into_response()
+        }
+        Err(error) => error_response(StatusCode::BAD_GATEWAY, error),
+    }
+}
+
+fn domain_allowed(url: &str, allowed: &[String], blocked: &[String]) -> bool {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return false;
+    };
+    if !matches!(scheme.to_ascii_lowercase().as_str(), "http" | "https") {
+        return false;
+    }
+    let host = rest
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    if host.is_empty() {
+        return false;
+    }
+    let matches = |domain: &String| {
+        let domain = domain.trim_start_matches(".").to_ascii_lowercase();
+        host == domain || host.ends_with(&format!(".{domain}"))
+    };
+    !blocked.iter().any(matches) && (allowed.is_empty() || allowed.iter().any(matches))
+}
+
 #[cfg(test)]
 // Coverage gates measure production code; test implementations are excluded.
 #[cfg_attr(coverage_nightly, coverage(off))]
@@ -192,5 +259,20 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["gpt-5.6-sol", "grok-4.5"]
         );
+    }
+
+    #[test]
+    fn applies_domain_filters_to_search_urls() {
+        let allowed = vec!["example.com".to_owned()];
+        let blocked = vec!["blocked.example.com".to_owned()];
+        assert!(domain_allowed("https://example.com/a", &allowed, &[]));
+        assert!(domain_allowed("https://sub.example.com/a", &allowed, &[]));
+        assert!(!domain_allowed("https://other.com/a", &allowed, &[]));
+        assert!(!domain_allowed(
+            "https://blocked.example.com/a",
+            &[],
+            &blocked
+        ));
+        assert!(!domain_allowed("not-a-url", &[], &[]));
     }
 }

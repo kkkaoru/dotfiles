@@ -104,6 +104,26 @@ mod tests {
     }
 
     #[test]
+    fn rejects_invalid_search_worker_route_json() {
+        let arguments = [
+            "serve",
+            "--model",
+            "m",
+            "--search-worker-route-json",
+            "invalid",
+        ]
+        .into_iter()
+        .map(OsString::from)
+        .collect();
+        assert!(
+            parse_command(arguments)
+                .expect_err("invalid search worker route must fail")
+                .to_string()
+                .contains("invalid search worker route JSON")
+        );
+    }
+
+    #[test]
     fn rejects_an_invalid_backend_route_concurrency_limit() {
         let arguments = [
             "serve",
@@ -134,6 +154,8 @@ mod tests {
                 "grok-4.5=grok-acp",
                 "--worker-route-json",
                 r#"{"agent":"claudex-grok","model":"grok-4.5","effort":"high"}"#,
+                "--search-worker-route-json",
+                r#"{"agent":"claudex-search","model":"gpt-search","effort":"xhigh"}"#,
                 "--listen",
                 "127.0.0.1:9000",
                 "--subscription-max-processes",
@@ -155,6 +177,14 @@ mod tests {
         assert_eq!(
             options.model_catalog.worker_fields("claudex-grok"),
             Some(("grok-4.5", "high"))
+        );
+        assert_eq!(
+            options.model_catalog.search_worker_routes(),
+            &[crate::provider_config::WorkerRoute {
+                agent: "claudex-search".to_owned(),
+                model: "gpt-search".to_owned(),
+                effort: "xhigh".to_owned(),
+            }]
         );
 
         let launch = parse_command(

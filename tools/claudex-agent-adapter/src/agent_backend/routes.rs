@@ -5,7 +5,7 @@ use std::sync::{
 
 use anyhow::{Context, Result, bail};
 
-use super::{AgentBackend, BackendKind, BackendRoute};
+use super::{AgentBackend, BackendKind, BackendRoute, WebSearchMode};
 
 mod concurrency;
 mod shutdown;
@@ -198,6 +198,16 @@ impl RoutedBackends {
                     .iter()
                     .any(|prefix| model.starts_with(prefix))
         })
+    }
+
+    pub(super) fn web_search_mode(&self, model: &str) -> WebSearchMode {
+        self.find(model)
+            .map(|route| route.template.web_search_mode)
+            .or_else(|| {
+                self.prefix_template(model)
+                    .map(|route| route.web_search_mode)
+            })
+            .unwrap_or_default()
     }
 
     pub(super) fn descriptions(&self) -> Vec<String> {

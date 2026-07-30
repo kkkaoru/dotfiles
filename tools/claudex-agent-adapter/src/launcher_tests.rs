@@ -169,6 +169,23 @@ mod tests {
         assert!(arguments.windows(2).any(|pair| {
             pair[0] == "--worker-route-json" && pair[1].contains("claudex-grok")
         }));
+
+        config
+            .options
+            .model_catalog
+            .set_search_worker_routes(vec![crate::provider_config::WorkerRoute {
+                agent: "claudex-search".to_owned(),
+                model: "gpt-search".to_owned(),
+                effort: "xhigh".to_owned(),
+            }])
+            .expect("search worker route");
+        let arguments = daemon_arguments(&config.options)
+            .into_iter()
+            .map(|argument| argument.into_string().expect("UTF-8 argument"))
+            .collect::<Vec<_>>();
+        assert!(arguments.windows(2).any(|pair| {
+            pair[0] == "--search-worker-route-json" && pair[1].contains("claudex-search")
+        }));
     }
 
     fn healthy(config: &ServiceConfig) -> Health {
@@ -179,6 +196,7 @@ mod tests {
             build_id: env!("CLAUDEX_BUILD_ID").to_owned(),
             backend_routes: route_descriptions(&config.options.routes),
             worker_routes: worker_route_descriptions(&config.options.model_catalog),
+            search_worker_routes: search_worker_route_descriptions(&config.options.model_catalog),
             subscription_max_processes: 20,
             subscription_timeout_minutes: 120,
         }
@@ -202,6 +220,9 @@ mod tests {
         stale.push(health);
         let mut health = healthy(&config);
         health.worker_routes.push("stale-worker".to_owned());
+        stale.push(health);
+        let mut health = healthy(&config);
+        health.search_worker_routes.push("stale-search-worker".to_owned());
         stale.push(health);
         for health in stale {
             assert!(!config.matches(&health));

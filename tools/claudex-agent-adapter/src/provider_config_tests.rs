@@ -84,6 +84,33 @@ mod tests {
     }
 
     #[test]
+    fn loads_configured_web_search_fallback_workers() {
+        let root = tempfile::tempdir().expect("web search config fixture");
+        let path = root.path().join("providers.json");
+        let mut document: serde_json::Value = serde_json::from_str(&config(
+            r#"{"id":"p","agent":"worker","defaultModel":"model","subagentModel":"worker-model","effort":"high","enabled":true,"backend":"codex-app-server"}"#,
+        ))
+        .unwrap();
+        document["webSearch"] = serde_json::json!({"fallbackProviders":["p"]});
+        std::fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
+
+        let loaded = load(&path).expect("load search fallback");
+        assert_eq!(
+            loaded.model_catalog.search_worker_routes(),
+            [WorkerRoute {
+                agent: "worker".to_owned(),
+                model: "worker-model".to_owned(),
+                effort: "high".to_owned()
+            }]
+        );
+
+        document["webSearch"] = serde_json::json!({"fallbackProviders":["missing"]});
+        std::fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
+        let error = load(&path).err().expect("missing search fallback should fail");
+        assert!(error.to_string().contains("not enabled"));
+    }
+
+    #[test]
     fn accepts_and_validates_the_optional_advisor_choice() {
         let mut document: serde_json::Value = serde_json::from_str(&config(
             r#"{"id":"p","agent":"worker","defaultModel":"model","effort":"high","enabled":true,"backend":"grok-acp"}"#,

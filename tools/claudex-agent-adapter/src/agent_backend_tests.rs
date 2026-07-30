@@ -2,7 +2,7 @@
 // Coverage excludes test implementation; production behavior remains measured.
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use super::{AcpLaunch, AgentBackend, BackendKind, BackendRoute};
+    use super::{AcpLaunch, AgentBackend, BackendKind, BackendRoute, WebSearchMode};
 
     #[test]
     fn parses_and_displays_backend_kinds() {
@@ -34,6 +34,7 @@ mod tests {
                 program: "provider".to_owned(),
                 arguments: vec!["--stdio".to_owned()],
             }),
+            web_search_mode: WebSearchMode::default(),
         };
         assert!(configured.description().contains("configured-acp"));
         let routes = AgentBackend::spawn_routes(&[

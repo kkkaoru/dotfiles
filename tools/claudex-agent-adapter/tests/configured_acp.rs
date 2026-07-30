@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use claudex_agent_adapter::{
-    agent_backend::{AcpLaunch, AgentBackend, BackendKind, BackendRoute},
+    agent_backend::{AcpLaunch, AgentBackend, BackendKind, BackendRoute, WebSearchMode},
     anthropic::Bridge,
     http_router,
 };
@@ -39,6 +39,7 @@ async fn allows_session_creations_up_to_the_configured_concurrency_limit() {
                 "concurrent-sessions-at-limit".to_owned(),
             ],
         }),
+        web_search_mode: WebSearchMode::default(),
     }]);
     let bridge = Arc::new(Bridge::new_with_backend(backend, model.to_owned()));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -150,6 +151,7 @@ async fn enforces_seven_exact_model_turns_and_queues_the_eighth() {
             program: env!("CARGO_BIN_EXE_grok-acp-mock").to_owned(),
             arguments: vec!["--mode".to_owned(), "concurrent-turns-seven".to_owned()],
         }),
+        web_search_mode: WebSearchMode::default(),
     }]);
     let bridge = Arc::new(Bridge::new_with_backend(backend, model.to_owned()));
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
@@ -307,6 +309,7 @@ async fn configured_acp_routes_dynamic_models_and_expands_arguments() {
             program: env!("CARGO_BIN_EXE_grok-acp-mock").to_owned(),
             arguments: vec!["--model".to_owned(), "{model}".to_owned()],
         }),
+        web_search_mode: WebSearchMode::default(),
     };
     let backend = AgentBackend::spawn_routes(&[route]);
     let response = backend
@@ -394,6 +397,7 @@ async fn session_scoped_configured_acp_recycles_after_one_failed_stream() {
             program: env!("CARGO_BIN_EXE_grok-acp-mock").to_owned(),
             arguments: vec!["--mode".to_owned(), "fail-prompt-once".to_owned()],
         }),
+        web_search_mode: WebSearchMode::default(),
     }]);
     let response = backend
         .request("thread/start", json!({"model":model,"cwd":root.path()}))

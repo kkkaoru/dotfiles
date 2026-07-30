@@ -32,7 +32,6 @@ pub(crate) const DEFAULT_MAX_PROCESSES: usize = 20;
 pub(crate) const DEFAULT_TIMEOUT_MINUTES: u64 = 120;
 const MAX_PROCESSES_ENV: &str = "CLAUDEX_SUBSCRIPTION_MAX_PROCESSES";
 const TIMEOUT_MINUTES_ENV: &str = "CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES";
-// Let the subscription execute native web tools; the outer session bridges every other tool.
 const OUTER_TOOL_BRIDGE_SETTINGS: &str = r#"{"hooks":{"PreToolUse":[{"matcher":"^(?!WebSearch$|WebFetch$).*","hooks":[{"type":"command","command":"exit 2"}]}]}}"#;
 pub(super) struct SubscriptionOptions {
     pub(super) effort: Option<String>,
@@ -156,6 +155,7 @@ impl Bridge {
             usage: Usage {
                 input_tokens,
                 output_tokens: estimated_tokens(&text),
+                web_search_requests: 0,
             },
         };
         Ok(anthropic_response(segment, &request.model))
@@ -355,7 +355,6 @@ pub(super) fn subscription_command(
     if let Some(cwd) = &options.cwd {
         command.current_dir(cwd);
     }
-    // Avoid interactive startup hooks while retaining a fresh context for each isolated request.
     command.env(NONINTERACTIVE_CHILD_ENV, "1");
     remove_proxy_environment(&mut command);
     command
@@ -374,6 +373,7 @@ fn remove_proxy_environment(command: &mut Command) {
     ] {
         command.env_remove(variable);
     }
+    crate::web_search::clear_local_ccr_environment(command);
 }
 
 pub(super) fn subscription_result(stdout: &[u8]) -> Result<String> {

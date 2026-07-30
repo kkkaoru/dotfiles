@@ -39,6 +39,21 @@ impl Bridge {
             .collect()
     }
 
+    pub fn search_worker_routes(&self) -> Vec<String> {
+        self.model_catalog
+            .search_worker_routes()
+            .iter()
+            .map(|worker| serde_json::to_string(worker).expect("worker route must serialize"))
+            .collect()
+    }
+
+    pub(crate) async fn run_web_search(
+        &self,
+        query: &str,
+    ) -> anyhow::Result<crate::web_search::SearchResponse> {
+        crate::web_search::run(&self.app, self.model_catalog.search_worker_routes(), query).await
+    }
+
     pub fn routed_models(&self) -> Vec<String> {
         let models = self.app.models();
         if models.is_empty() {

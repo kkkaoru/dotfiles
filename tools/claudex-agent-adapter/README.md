@@ -107,6 +107,27 @@ Codex app-server routes may additionally set `modelProvider` and
 `modelCatalogJson`. These values are applied per `thread/start`, allowing
 OpenAI GPT and custom-provider models such as Sakana Fugu to coexist in the
 same persistent app-server process.
+
+Each route may also set `webSearchMode` to `codex-native`, `acp-native`,
+`delegate-ccr`, `delegate-mcp`, or `disabled`. `codex-native` enables the
+Codex app-server live search flags on `thread/start`; `acp-native` leaves the
+request on an ACP route that owns native search; `delegate-mcp` leaves search
+to the configured ACP/MCP provider; and `disabled` suppresses search for that
+route. `delegate-ccr` (the default) exposes the protected
+`/v1/code/sessions/{session_id}/worker/web-search` endpoint. The endpoint
+starts the ordered provider IDs in the top-level `webSearch.fallbackProviders`
+array, using each provider's configured model and effort, and returns the
+results to the original Claude Code session. It does not change the model that
+writes the final answer. This keeps model IDs and effort values configuration-
+driven and lets a non-search-capable worker use a separately configured search
+worker.
+
+The fish launcher sets `CLAUDE_CODE_WEBSEARCH_USE_CCR_PROXY`,
+`CLAUDE_CODE_SESSION_ID`, and `CLAUDE_CODE_SESSION_ACCESS_TOKEN` only for the
+outer `claudex` invocation. Subscription children explicitly clear those
+local CCR variables, preventing recursive search calls. A fallback worker must
+be enabled and have a valid route; configuration loading rejects unknown or
+disabled fallback IDs before serving requests.
 Omitting all routes preserves the single-model `codex-app-server` default.
 Other adapter options are `--listen`, `--subscription-max-processes`, and
 `--subscription-timeout-minutes`; their defaults are `127.0.0.1:8318`, 20, and

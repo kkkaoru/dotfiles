@@ -316,8 +316,6 @@ fn spawn_child(
             "--disable",
             "unified_exec",
             "--disable",
-            "web_search",
-            "--disable",
             "tool_search",
             "--disable",
             "apps",
@@ -380,7 +378,7 @@ remote_control = false
 shell_tool = false
 tool_search = false
 unified_exec = false
-web_search = false
+web_search = true
 "#,
     );
     isolated_config::append_model_providers(source_home, &mut config)?;

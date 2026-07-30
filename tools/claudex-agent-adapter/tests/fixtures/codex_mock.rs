@@ -118,6 +118,13 @@ impl<W: Write> Fixture<W> {
                 .and_then(Value::as_str)
                 .unwrap_or("unset");
             self.send_text_and_complete(effort);
+        } else if input.contains("WEBSEARCH_EMPTY") {
+            self.send(json!({
+                "method":"turn/completed",
+                "params":{"threadId":self.thread_id(), "turnId":"turn-test"}
+            }));
+        } else if input.contains("WEBSEARCH_QUERY") {
+            self.send_web_search();
         } else if input.contains("USE_NAMED_TEAM_MAILBOX") {
             self.send_named_teammate();
         } else if input.contains("USE_PARALLEL_AGENTS_TASK_OUTPUT") {
@@ -148,6 +155,28 @@ impl<W: Write> Fixture<W> {
         } else {
             self.send_plain_or_streamed(message, input);
         }
+    }
+
+    fn send_web_search(&mut self) {
+        let item = json!({
+            "type":"webSearch", "query":"WEBSEARCH_QUERY",
+            "results":[
+                {"title":"Example result", "url":"https://example.com/source", "snippet":"fixture"},
+                {"title":"Blocked result", "url":"https://blocked.example.com/source"}
+            ]
+        });
+        self.send(json!({
+            "method":"item/started",
+            "params":{"threadId":self.thread_id(), "item":item}
+        }));
+        self.send(json!({
+            "method":"item/completed",
+            "params":{"threadId":self.thread_id(), "item":item}
+        }));
+        self.send(json!({
+            "method":"turn/completed",
+            "params":{"threadId":self.thread_id(), "turnId":"turn-test"}
+        }));
     }
 
     fn start_disconnected_tool_turn(&mut self, input: &str) {

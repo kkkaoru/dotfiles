@@ -86,6 +86,7 @@ fn parse_command(mut arguments: VecDeque<OsString>) -> Result<RuntimeCommand> {
 fn parse_options(arguments: &mut VecDeque<OsString>) -> Result<ParsedOptions> {
     let mut routes = Vec::new();
     let mut worker_routes = Vec::new();
+    let mut search_worker_routes = Vec::new();
     let mut model = None;
     let mut provider_config = None;
     let mut inherit_claude_model = false;
@@ -110,6 +111,13 @@ fn parse_options(arguments: &mut VecDeque<OsString>) -> Result<ParsedOptions> {
                 worker_routes.push(
                     serde_json::from_str::<WorkerRoute>(&value)
                         .context("invalid worker route JSON")?,
+                );
+            }
+            "--search-worker-route-json" => {
+                let value = option_value(arguments, "--search-worker-route-json")?;
+                search_worker_routes.push(
+                    serde_json::from_str::<WorkerRoute>(&value)
+                        .context("invalid search worker route JSON")?,
                 );
             }
             "--provider-config" => {
@@ -166,6 +174,9 @@ fn parse_options(arguments: &mut VecDeque<OsString>) -> Result<ParsedOptions> {
     }
     if !worker_routes.is_empty() {
         model_catalog.set_worker_routes(worker_routes)?;
+    }
+    if !search_worker_routes.is_empty() {
+        model_catalog.set_search_worker_routes(search_worker_routes)?;
     }
     validate_routes(&routes, &model)?;
     Ok(ParsedOptions {

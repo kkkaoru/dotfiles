@@ -86,6 +86,10 @@ impl SegmentBuilder {
             Some("item/providerTool/update") => {
                 self.provider_tool_update(event, stream).await?;
             }
+            Some("item/started") => {
+                self.native_web_search_event(event, stream).await?;
+            }
+            Some("item/completed") => {}
             Some("thread/tokenUsage/updated") => self.update_usage(event),
             Some("error") => return error_flow(event),
             Some("turn/completed") => return turn_flow(event),
@@ -108,6 +112,24 @@ impl SegmentBuilder {
             _ => return Ok(false),
         }
         Ok(true)
+    }
+
+    async fn native_web_search_event(
+        &mut self,
+        event: &Value,
+        stream: Option<&StreamSender>,
+    ) -> Result<()> {
+        if event.pointer("/params/item/type").and_then(Value::as_str) != Some("webSearch") {
+            return Ok(());
+        }
+        self.usage.web_search_requests = self.usage.web_search_requests.saturating_add(1);
+        let query = event
+            .pointer("/params/item/query")
+            .and_then(Value::as_str)
+            .filter(|query| !query.is_empty())
+            .unwrap_or("search");
+        self.stream_ephemeral_status(&format!("\n\n🔎 WebSearch: {query}\n"), stream)
+            .await
     }
 
     pub(super) async fn text_delta(

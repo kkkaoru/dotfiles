@@ -230,7 +230,10 @@ pub(super) fn anthropic_response(segment: Segment, model: &str) -> Response<Body
         "stop_sequence": null,
         "usage": {
             "input_tokens": segment.usage.input_tokens,
-            "output_tokens": segment.usage.output_tokens
+            "output_tokens": segment.usage.output_tokens,
+            "server_tool_use": {
+                "web_search_requests": segment.usage.web_search_requests
+            }
         }
     }))
 }

@@ -61,5 +61,6 @@ fn is_provider_status_only(text: &str) -> bool {
             || line.starts_with("Retrying provider request")
             || line.starts_with("Session mode:")
             || line.starts_with("Session:")
+            || line.starts_with("🔎 WebSearch:")
     })
 }

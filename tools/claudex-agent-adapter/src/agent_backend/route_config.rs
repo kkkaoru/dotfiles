@@ -14,6 +14,15 @@ pub(super) fn apply(route: &BackendRoute, params: &mut Value) {
             .or_insert_with(|| serde_json::json!({}));
         config["model_catalog_json"] = Value::String(expand_home(catalog));
     }
+    if route.web_search_mode == crate::agent_backend::WebSearchMode::CodexNative {
+        let config = params
+            .as_object_mut()
+            .expect("thread/start params must be an object")
+            .entry("config")
+            .or_insert_with(|| serde_json::json!({}));
+        config["web_search"] = Value::String("live".to_owned());
+        config["features"]["web_search"] = Value::Bool(true);
+    }
 }
 
 fn expand_home(path: &str) -> String {

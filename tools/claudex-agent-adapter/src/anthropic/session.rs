@@ -29,10 +29,11 @@ pub(in crate::anthropic) use session_turn::is_context_window_exceeded;
 #[cfg(test)]
 pub(super) use tools::{
     codex_tool_name, dynamic_tool, internal_advisor_tool, internal_collaborator_tool,
-    thread_start_params, tool_configuration,
+    thread_start_params, thread_start_params_for_mode, tool_configuration,
+    tool_configuration_for_mode,
 };
 #[cfg(not(test))]
-use tools::{thread_start_params, tool_configuration};
+use tools::{thread_start_params_for_mode, tool_configuration_for_mode};
 
 impl Bridge {
     pub(super) async fn prepare_turn(
@@ -229,10 +230,15 @@ impl Bridge {
         collaborator_model: Option<&str>,
     ) -> Result<Arc<Session>> {
         let slot = self.acquire_session_slot().await?;
-        let (dynamic_tools, external_tool_names, internal_tools) =
-            tool_configuration(request, advisor_model, collaborator_model);
         let model = self.request_model(request);
-        let params = thread_start_params(request, &model, dynamic_tools);
+        let web_search_mode = self.app.web_search_mode(&model);
+        let (dynamic_tools, external_tool_names, internal_tools) = tool_configuration_for_mode(
+            request,
+            advisor_model,
+            collaborator_model,
+            web_search_mode,
+        );
+        let params = thread_start_params_for_mode(request, &model, dynamic_tools, web_search_mode);
         let result = self.app.request("thread/start", params).await?;
         let session = Arc::new(Session {
             thread_id: response_thread_id(&result)?,

@@ -299,6 +299,7 @@ async fn builds_anthropic_json_and_error_responses() {
             usage: Usage {
                 input_tokens: 10,
                 output_tokens: 2,
+                web_search_requests: 0,
             },
         },
         "model",

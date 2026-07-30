@@ -114,6 +114,31 @@ DeepSeek workerは独立した調査をまとめて実行し、確定済みの�
    `selected_workers` スロットとは別管理で、実装を行わず戦略レビューとpeer `SendMessage`
    に使います。両者は置換関係ではなく併用可能です。
 
+### WebSearchの経路
+
+WebSearchは、選択されたmodelのprovider routeにある `webSearchMode` で経路を決めます。
+model IDやeffortはここへハードコードせず、各providerの `defaultModel`、`subagentModel`、
+`effort`（またはリクエストの明示値）をそのまま使います。
+
+| `webSearchMode` | 実行経路 | 回答を作るmodel |
+| --- | --- | --- |
+| `codex-native` | Codex app-serverのnative live WebSearch | 選択されたCodex route |
+| `acp-native` | ACP providerが提供するnative検索 | 選択されたACP route |
+| `delegate-ccr` | adapterのCCR互換 `worker/web-search` が `webSearch.fallbackProviders` の順に検索workerを起動 | 元のmodel（検索結果だけを返却） |
+| `delegate-mcp` | 設定済みACP/MCP providerの検索機能 | 選択されたprovider |
+| `disabled` | 検索を公開しない | 元のmodel（検索なし） |
+
+`delegate-ccr` は、検索を要求したmodelがnative検索を持たない場合の既定経路です。
+`fallbackProviders` はprovider IDの順序で、各workerの実model/effortを使って検索します。
+したがって、たとえば `grok` から検索しても、結果取得だけを `codex-spark` → `codex`
+へ委譲し、最終回答はGrokのセッションへ戻ります。検索workerが全て失敗した場合は
+空の成功を返さずエラーにし、Claude Code側で再試行可能な形にします。
+
+`claudex` の1 invocationだけ、CCR互換ルート用にsession IDとaccess tokenをadapterへ渡します。
+Claude subscriptionの子プロセスではこれらのlocal CCR変数を除去するため、検索要求が
+誤って同じadapterへ再帰することはありません。設定検証は起動時に行い、未定義・無効化された
+fallback providerは受け付けません。
+
 生response、アカウント情報、Cookie、API keyはキャッシュしません。
 `~/.cache/claudex/usage-routing.json` にはrouting結果を5分間、
 `~/.cache/claudex/qwen-quota.json` にはQwenのsanitized utilization、reset時刻、取得日時を

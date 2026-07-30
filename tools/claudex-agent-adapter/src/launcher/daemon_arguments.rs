@@ -18,6 +18,10 @@ pub(super) fn daemon_arguments(options: &AdapterOptions) -> Vec<OsString> {
         arguments.push("--worker-route-json".into());
         arguments.push(worker_json(worker).into());
     }
+    for worker in options.model_catalog.search_worker_routes() {
+        arguments.push("--search-worker-route-json".into());
+        arguments.push(worker_json(worker).into());
+    }
     arguments.extend([
         "--listen".into(),
         options.listen.to_string().into(),
@@ -35,6 +39,14 @@ pub(super) fn route_descriptions(routes: &[BackendRoute]) -> Vec<String> {
 
 pub(super) fn worker_route_descriptions(catalog: &ModelCatalog) -> Vec<String> {
     catalog.worker_routes().iter().map(worker_json).collect()
+}
+
+pub(super) fn search_worker_route_descriptions(catalog: &ModelCatalog) -> Vec<String> {
+    catalog
+        .search_worker_routes()
+        .iter()
+        .map(worker_json)
+        .collect()
 }
 
 fn route_json(route: &BackendRoute) -> String {

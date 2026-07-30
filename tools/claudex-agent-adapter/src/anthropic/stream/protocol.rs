@@ -114,7 +114,10 @@ pub(in crate::anthropic) async fn send_stream_completion(sender: &StreamSender, 
         json!({
             "type":"message_delta",
             "delta":{"stop_reason":segment.stop_reason,"stop_sequence":null},
-            "usage":{"output_tokens":segment.usage.output_tokens}
+            "usage":{
+                "output_tokens":segment.usage.output_tokens,
+                "server_tool_use":{"web_search_requests":segment.usage.web_search_requests}
+            }
         })
     })
     .await;

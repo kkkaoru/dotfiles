@@ -5,7 +5,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::{startup, RoutedBackends, StartupState, MAX_DYNAMIC_ROUTES};
-    use crate::agent_backend::{AcpLaunch, AgentBackend, BackendKind, BackendRoute};
+    use crate::agent_backend::{AcpLaunch, AgentBackend, BackendKind, BackendRoute, WebSearchMode};
 
     #[test]
     fn shares_codex_startup_but_keeps_acp_servers_model_specific() {
@@ -136,6 +136,24 @@ mod tests {
     }
 
     #[test]
+    fn selects_web_search_mode_from_the_most_specific_prefix() {
+        let mut broad = route("broad", BackendKind::CodexAppServer);
+        broad.web_search_mode = WebSearchMode::DelegateCcr;
+        broad.model_prefixes.push("vendor-".to_owned());
+        let mut specific = route("specific", BackendKind::CodexAppServer);
+        specific.web_search_mode = WebSearchMode::CodexNative;
+        specific.model_prefixes.push("vendor-codex-".to_owned());
+        let routes = RoutedBackends::lazy(&[broad, specific]);
+
+        assert_eq!(routes.web_search_mode("vendor-chat"), WebSearchMode::DelegateCcr);
+        assert_eq!(
+            routes.web_search_mode("vendor-codex-preview"),
+            WebSearchMode::CodexNative
+        );
+        assert_eq!(routes.web_search_mode("unknown"), WebSearchMode::default());
+    }
+
+    #[test]
     fn selects_exact_dynamic_and_prefix_context_limits() {
         let mut exact = route("exact", BackendKind::CodexAppServer);
         exact.max_context_tokens = Some(100);
@@ -171,6 +189,7 @@ mod tests {
                 program: "/definitely/missing/acp".to_owned(),
                 arguments: vec!["--stdio".to_owned()],
             }),
+            web_search_mode: WebSearchMode::default(),
         };
         let routes = RoutedBackends::lazy(&[route]);
         assert!(routes.model_is_alive("missing-acp"));
