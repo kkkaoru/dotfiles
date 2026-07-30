@@ -329,6 +329,30 @@ fn preserves_claude_code_agent_types_when_adding_routed_workers() {
 }
 
 #[test]
+fn exposes_explicit_native_haiku_agent_definitions_to_agent_tools() {
+    let tools = vec![json!({
+        "name":"Agent",
+        "input_schema":{"type":"object","properties":{
+            "subagent_type":{"type":"string","enum":["general-purpose"]},
+            "prompt":{"type":"string"}
+        }}
+    })];
+    let request = request(json!(r#"{"providers":{},"selected_agents":[]}"#), tools);
+    let mut request = request;
+    request.messages = vec![json!({
+        "role":"user",
+        "content":"Use subagent_type=claudex-haiku-search with claudex_model=claude-haiku-4-5."
+    })];
+    let configured = tool_configuration(&request, None, None);
+    let schema = configured
+        .0
+        .iter()
+        .find_map(|tool| tool.pointer("/inputSchema/properties/subagent_type/enum"))
+        .expect("Agent schema");
+    assert_eq!(schema, &json!(["general-purpose", "claudex-haiku-search"]));
+}
+
+#[test]
 fn tolerates_a_routed_agent_schema_without_subagent_type() {
     let mut request = request(
         json!(r#"{"providers":{},"selected_agents":["worker"]}"#),
@@ -439,8 +463,12 @@ fn enables_native_search_without_exposing_a_duplicate_dynamic_tool() {
         None,
         WebSearchMode::CodexNative,
     );
-    assert!(tools.is_empty());
-    assert!(names.is_empty());
+    assert!(tools.iter().all(|tool| {
+        tool.get("name")
+            .and_then(Value::as_str)
+            .is_some_and(|name| !name.contains("WebSearch"))
+    }));
+    assert!(!names.values().any(|name| *name == "WebSearch"));
     let params = thread_start_params_for_mode(
         &request(Value::Null, Vec::new()),
         "gpt-native",
@@ -449,6 +477,49 @@ fn enables_native_search_without_exposing_a_duplicate_dynamic_tool() {
     );
     assert_eq!(params["config"]["web_search"], "live");
     assert_eq!(params["config"]["features"]["web_search"], true);
+}
+
+#[test]
+fn main_session_gets_fallback_agent_tools_when_claude_omits_the_schemas() {
+    let request = request(
+        json!("main session"),
+        vec![json!({
+            "name":"WebFetch",
+            "input_schema":{"type":"object"}
+        })],
+    );
+    let (_, names, _) =
+        tool_configuration_for_mode(&request, None, None, WebSearchMode::CodexNative);
+    assert!(names.values().any(|name| *name == "Agent"));
+    assert!(names.values().any(|name| *name == "Task"));
+}
+
+#[test]
+fn search_worker_keeps_only_live_web_tools_for_provider_context() {
+    let mut request = request(
+        json!("cc_is_subagent=true; Dedicated live-web retrieval worker: claudex-haiku-search"),
+        vec![
+            json!({"name":"Read","input_schema":{"type":"object"}}),
+            json!({"name":"Agent","input_schema":{"type":"object"}}),
+            json!({"name":"WebSearch","input_schema":{"type":"object"}}),
+            json!({"name":"WebFetch","input_schema":{"type":"object"}}),
+        ],
+    );
+    request.messages = vec![json!({
+        "role":"user",
+        "content":"Use the claudex-haiku-search live-web retrieval worker."
+    })];
+    let (tools, names, _) =
+        tool_configuration_for_mode(&request, None, None, WebSearchMode::CodexNative);
+    assert_eq!(
+        tools.len(),
+        1,
+        "only WebFetch remains dynamic for Codex-native search"
+    );
+    assert_eq!(
+        names.values().collect::<Vec<_>>(),
+        vec![&"WebFetch".to_owned()]
+    );
 }
 
 fn assert_empty_thread_configuration() {

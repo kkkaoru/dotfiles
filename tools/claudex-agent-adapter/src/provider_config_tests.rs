@@ -80,6 +80,7 @@ mod tests {
             }])
             .expect("valid worker route");
         assert_eq!(catalog.worker_fields("worker"), Some(("model", "high")));
+        assert_eq!(catalog.worker_effort_for_model("model"), Some("high"));
         assert_eq!(catalog.worker_routes().len(), 1);
     }
 

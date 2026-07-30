@@ -170,6 +170,14 @@ impl ModelCatalog {
             .map(|worker| (worker.model.as_str(), worker.effort.as_str()))
     }
 
+    pub fn worker_effort_for_model(&self, model: &str) -> Option<&str> {
+        self.workers
+            .iter()
+            .chain(self.search_workers.iter())
+            .find(|worker| worker.model == model)
+            .map(|worker| worker.effort.as_str())
+    }
+
     pub fn worker_routes(&self) -> &[WorkerRoute] {
         &self.workers
     }

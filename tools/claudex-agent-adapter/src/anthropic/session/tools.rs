@@ -5,6 +5,8 @@ use serde_json::{Value, json};
 
 use super::super::MessagesRequest;
 use crate::agent_backend::WebSearchMode;
+mod fallback;
+mod search;
 mod thread;
 #[cfg(test)]
 pub(in crate::anthropic) use thread::thread_start_params;
@@ -34,15 +36,18 @@ pub(in crate::anthropic) fn tool_configuration_for_mode(
     web_search_mode: WebSearchMode,
 ) -> (Vec<Value>, HashMap<String, String>, HashMap<String, String>) {
     let selected_agents = selected_agents(request);
+    let mut provider_tools = search::provider_tools(request);
+    if !super::super::agent_effort::is_subagent_request(request) {
+        fallback::append_missing_agent_tools(&mut provider_tools);
+    }
     let (mut tools, external_names) =
-        external_tools(&request.tools, &selected_agents, web_search_mode);
+        external_tools(&provider_tools, &selected_agents, web_search_mode);
     let mut internal = HashMap::new();
     if let Some(model) = advisor_model {
         internal.insert("advisor".to_owned(), model.to_owned());
         tools.push(internal_advisor_tool());
     }
-    let has_collaborator = request
-        .tools
+    let has_collaborator = provider_tools
         .iter()
         .any(|tool| tool["name"] == "claude_collaborator");
     if let Some(model) = collaborator_model.filter(|_| !has_collaborator) {
@@ -137,7 +142,31 @@ fn selected_agents(request: &MessagesRequest) -> Vec<String> {
     let denied = disabled_models(request, &summary);
     agents.retain(|agent| !selected_agent_uses_denied_model(agent, &summary, &denied));
     add_explicit_provider_agents(request, &summary, &denied, &mut agents);
+    add_explicit_native_claude_agents(request, &denied, &mut agents);
     agents
+}
+
+fn add_explicit_native_claude_agents(
+    request: &MessagesRequest,
+    denied: &BTreeSet<String>,
+    agents: &mut Vec<String>,
+) {
+    let requested_text = serde_json::to_string(&request.messages).unwrap_or_default();
+    let requested_names = requested_text
+        .split(|character: char| !character.is_ascii_alphanumeric() && character != '-')
+        .collect::<BTreeSet<_>>();
+    for (agent, model) in [
+        ("claudex-haiku", "claude-haiku-4-5"),
+        ("claudex-haiku-search", "claude-haiku-4-5"),
+    ] {
+        if denied.contains(model)
+            || !requested_names.contains(agent)
+            || agents.iter().any(|selected| selected == agent)
+        {
+            continue;
+        }
+        agents.push(agent.to_owned());
+    }
 }
 
 fn disabled_models(request: &MessagesRequest, summary: &Value) -> BTreeSet<String> {

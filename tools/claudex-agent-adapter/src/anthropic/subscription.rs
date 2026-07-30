@@ -12,6 +12,7 @@ use tokio::{
     sync::{OwnedSemaphorePermit, Semaphore},
 };
 
+mod effort;
 mod lifecycle;
 
 #[cfg(test)]
@@ -21,7 +22,6 @@ pub(super) use super::subscription_request::requested_tools;
 pub(super) use super::subscription_request::requested_tools_for_request;
 use super::{
     Bridge, MessagesRequest, Segment, Usage,
-    agent_effort::AgentEffort,
     content::{anthropic_response, estimated_tokens, token_count},
     subscription_request::{subscription_request_cwd, subscription_request_prompt},
     subscription_stream::subscription_streaming_response,
@@ -159,20 +159,6 @@ impl Bridge {
             },
         };
         Ok(anthropic_response(segment, &request.model))
-    }
-
-    pub(super) fn resolve_request_effort(
-        &self,
-        request: &MessagesRequest,
-        agent_effort: AgentEffort,
-    ) -> Option<String> {
-        match agent_effort {
-            AgentEffort::Explicit(effort) => Some(effort),
-            AgentEffort::ConfiguredDefault => self.claude_effort(),
-            AgentEffort::Unmatched => request_effort(&request.output_config)
-                .map(str::to_owned)
-                .or_else(|| self.claude_effort()),
-        }
     }
 
     fn subscription_options(

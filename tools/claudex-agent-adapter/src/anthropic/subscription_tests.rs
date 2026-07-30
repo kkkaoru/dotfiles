@@ -14,7 +14,9 @@ use super::subscription::{
     subscription_prompt, valid_effort,
 };
 use crate::NONINTERACTIVE_CHILD_ENV;
-use crate::anthropic::MessagesRequest;
+use crate::agent_backend::AgentBackend;
+use crate::anthropic::{Bridge, MessagesRequest, agent_effort::AgentEffort};
+use crate::provider_config::WorkerRoute;
 
 #[test]
 fn subscription_children_identify_as_noninteractive() {
@@ -318,5 +320,35 @@ fn search_worker_receives_native_web_tools_even_when_child_tools_are_empty() {
     assert_eq!(
         super::subscription::requested_tools_for_request(&request, true),
         ["WebSearch", "WebFetch"]
+    );
+}
+
+#[test]
+fn configured_worker_effort_replaces_an_unsupported_explicit_effort() {
+    let mut bridge = Bridge::new_with_backend(AgentBackend::spawn_routes(&[]), "main".to_owned());
+    bridge
+        .model_catalog
+        .set_worker_routes(vec![WorkerRoute {
+            agent: "claudex-gpt-spark".to_owned(),
+            model: "gpt-5.3-codex-spark".to_owned(),
+            effort: "xhigh".to_owned(),
+        }])
+        .expect("worker route");
+    let request = MessagesRequest {
+        model: "gpt-5.3-codex-spark".to_owned(),
+        system: json!(null),
+        messages: vec![],
+        tools: vec![],
+        stream: false,
+        output_config: json!({}),
+        metadata: json!({}),
+        working_directory: None,
+        disabled_subagent_models: Default::default(),
+        claudex_collaborator_model: None,
+    };
+
+    assert_eq!(
+        bridge.resolve_request_effort(&request, AgentEffort::Explicit("max".to_owned())),
+        Some("xhigh".to_owned())
     );
 }
