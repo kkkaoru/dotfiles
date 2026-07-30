@@ -211,7 +211,9 @@ print(model)
     else
         echo "claudex: explicit-routed orchestration ($provider_config, $outer_model, $outer_effort)" >&2
     end
-    set -l adapter "$HOME/.cargo/bin/claudex-agent-adapter"
+    # cargo install uses the user-local prefix selected by this repository's
+    # install command, so the launcher and installed binary stay in sync.
+    set -l adapter "$HOME/.local/bin/claudex-agent-adapter"
     if not test -x "$adapter"
         echo "claudex: installed adapter is not executable: $adapter" >&2
         return 127

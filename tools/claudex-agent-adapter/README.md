@@ -76,10 +76,10 @@ them only when it starts. `CLAUDEX_CODEX_PROGRAM`, `CLAUDEX_COPILOT_PROGRAM`,
 `CLAUDEX_GROK_PROGRAM`, and `CLAUDEX_CLAUDE_PROGRAM` are development-only
 executable overrides used by process integration tests.
 
-Build and install with the current stable Rust toolchain:
+Build and install with Rust 1.97.1:
 
 ```sh
-env -u RUSTUP_TOOLCHAIN cargo install \
+env -u RUSTUP_TOOLCHAIN cargo +1.97.1 install \
   --path tools/claudex-agent-adapter \
   --root "$HOME/.local" \
   --bin claudex-agent-adapter
@@ -276,16 +276,16 @@ prompt contents.
 Development commands:
 
 ```sh
-env -u RUSTUP_TOOLCHAIN cargo fmt-check
-env -u RUSTUP_TOOLCHAIN cargo lint
-env -u RUSTUP_TOOLCHAIN cargo test-all
-env -u RUSTUP_TOOLCHAIN cargo +1.85.0 coverage
-env -u RUSTUP_TOOLCHAIN cargo coverage-branch
+env -u RUSTUP_TOOLCHAIN cargo +1.97.1 fmt-check
+env -u RUSTUP_TOOLCHAIN cargo +1.97.1 lint
+env -u RUSTUP_TOOLCHAIN cargo +1.97.1 test-all
+env -u RUSTUP_TOOLCHAIN cargo +1.97.1 coverage
+env -u RUSTUP_TOOLCHAIN cargo +1.97.1 coverage-branch
 ```
 
-`cargo coverage` is the stable-Cargo entry point to the nightly branch coverage
+`cargo coverage` is the Rust 1.97.1 Cargo entry point to the nightly branch coverage
 gate: it runs the `coverage-branch` binary, which explicitly invokes
-`cargo +nightly llvm-cov`. Consequently, the exact 1.85 command above enforces
+`cargo +nightly llvm-cov`. Consequently, the exact 1.97.1 command above enforces
 at least 95% for all four aggregate metrics—lines, functions, regions, and
 branches—plus at least 95% line coverage for every production source file.
 `cargo coverage-branch` invokes that gate directly. Branch outcomes generated
