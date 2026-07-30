@@ -761,7 +761,7 @@ async fn rejects_model_less_subscription_tools_before_forwarding_them() {
 
     assert_eq!(response.matches(r#""name":"Agent""#).count(), 0);
     assert_eq!(response.matches("input_json_delta").count(), 0);
-    assert!(response.contains("missing required `claudex_model`"));
+    assert!(response.contains("requested SubAgent model is not configured"));
     assert!(!response.contains("tool-alpha"));
     assert!(!response.contains("tool-beta"));
     assert!(!response.contains("INNER_TOOL_REJECTION_MUST_NOT_LEAK"));

@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     convert::Infallible,
     ops::ControlFlow,
     os::unix::fs::PermissionsExt,
@@ -826,6 +826,65 @@ async fn expands_valid_parallel_agent_batches_and_rejects_short_batches() {
     assert!(error.to_string().contains("between 3 and 40"));
 }
 
+#[tokio::test]
+async fn forwards_generic_tools_and_blocks_disabled_subagent_models() {
+    let (_root, _app, bridge, session) = disconnect_fixture().await;
+    let mut generic = SegmentBuilder::new(1);
+    let _ = generic
+        .handle_event(
+            &bridge,
+            &session,
+            &[],
+            &Value::Null,
+            &json!({
+                "id":1,
+                "method":"item/tool/call",
+                "params":{"callId":"read","tool":"cc_Read_0","arguments":{}}
+            }),
+            None,
+        )
+        .await
+        .expect("generic external tool");
+    assert!(generic.has_external_tool_calls());
+    assert_eq!(generic.blocks[0]["name"], "Read");
+
+    let disabled = BTreeSet::from(["blocked-model".to_owned()]);
+    let (_root, _app, bridge, session) = disconnect_fixture_with_disabled(disabled).await;
+    let mut blocked = SegmentBuilder::new(1);
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
+    let _ = blocked
+        .handle_event(
+            &bridge,
+            &session,
+            &[],
+            &Value::Null,
+            &json!({
+                "id":2,
+                "method":"item/tool/call",
+                "params":{
+                    "callId":"agent",
+                    "tool":"cc_Agent_0",
+                    "arguments":{"prompt":"delegate","subagent_type":"worker","claudex_model":"blocked-model"}
+                }
+            }),
+            Some(&sender),
+        )
+        .await
+        .expect("disabled subagent is a visible local response");
+    assert!(!blocked.has_external_tool_calls());
+    assert!(
+        blocked.blocks[0]["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("blocked-model"))
+    );
+    drop(sender);
+    let mut output = String::new();
+    while let Some(frame) = receiver.recv().await {
+        output.push_str(&String::from_utf8_lossy(&frame.expect("infallible frame")));
+    }
+    assert!(output.contains("blocked-model"));
+}
+
 fn worker_task(prompt: &str, run_in_background: Option<bool>) -> Value {
     let mut task = json!({
         "prompt": prompt,
@@ -1246,6 +1305,54 @@ async fn drive_stream_stops_before_commit_when_client_closes_after_segment() {
     assert!(session.transcript.lock().await.is_empty());
 }
 
+#[tokio::test]
+async fn subagent_stream_timeout_continues_in_background_and_notifies_client() {
+    let (_root, app, bridge, session) = disconnect_fixture().await;
+    let bridge = Arc::new(bridge);
+    let events = app.subscribe_thread("thread");
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
+
+    Arc::clone(&bridge)
+        .drive_subagent_stream_with_timeout(
+            drive_turn(session, events, Vec::new(), None).await,
+            sender,
+            SegmentBuilder::new(1),
+            None,
+            true,
+            Some(Duration::ZERO),
+        )
+        .await;
+
+    let mut output = String::new();
+    while let Some(frame) = receiver.recv().await {
+        output.push_str(&String::from_utf8_lossy(&frame.expect("infallible frame")));
+    }
+    assert!(
+        output.contains(crate::anthropic::subagent_timeout::BACKGROUND_NOTICE),
+        "unexpected stream: {output}"
+    );
+}
+
+#[tokio::test]
+async fn subagent_stream_timeout_tolerates_a_disconnected_client() {
+    let (_root, app, bridge, session) = disconnect_fixture().await;
+    let bridge = Arc::new(bridge);
+    let events = app.subscribe_thread("thread");
+    let (sender, receiver) = mpsc::channel::<Result<Bytes, Infallible>>(1);
+    drop(receiver);
+
+    Arc::clone(&bridge)
+        .drive_subagent_stream_with_timeout(
+            drive_turn(session, events, Vec::new(), None).await,
+            sender,
+            SegmentBuilder::new(1),
+            None,
+            true,
+            Some(Duration::ZERO),
+        )
+        .await;
+}
+
 async fn drive_turn(
     session: Arc<Session>,
     events: crate::app_server::ThreadEvents,
@@ -1281,6 +1388,12 @@ fn drive_request() -> MessagesRequest {
 }
 
 async fn disconnect_fixture() -> (tempfile::TempDir, Arc<AppServer>, Bridge, Arc<Session>) {
+    disconnect_fixture_with_disabled(Default::default()).await
+}
+
+async fn disconnect_fixture_with_disabled(
+    disabled_subagent_models: BTreeSet<String>,
+) -> (tempfile::TempDir, Arc<AppServer>, Bridge, Arc<Session>) {
     let root = tempfile::tempdir().expect("disconnect fixture");
     let source = root.path().join("source");
     std::fs::create_dir(&source).expect("source home");
@@ -1303,16 +1416,20 @@ async fn disconnect_fixture() -> (tempfile::TempDir, Arc<AppServer>, Bridge, Arc
     let session = Arc::new(Session {
         thread_id: "thread".to_owned(),
         model: "main".to_owned(),
-        disabled_subagent_models: Default::default(),
+        disabled_subagent_models,
         signature: Arc::from("signature"),
         transcript: Mutex::new(Vec::new()),
         pending_tools: Mutex::new(HashMap::new()),
         consumed_tool_ids: Mutex::new(HashSet::new()),
         internal_tools: HashMap::new(),
-        external_tool_names: HashMap::from([(
-            "cc_Agent_batch_0".to_owned(),
-            "__claudex_agent_batch__:Agent".to_owned(),
-        )]),
+        external_tool_names: HashMap::from([
+            (
+                "cc_Agent_batch_0".to_owned(),
+                "__claudex_agent_batch__:Agent".to_owned(),
+            ),
+            ("cc_Agent_0".to_owned(), "Agent".to_owned()),
+            ("cc_Read_0".to_owned(), "Read".to_owned()),
+        ]),
         client_user_id: None,
         gate: Arc::new(Mutex::new(())),
         last_activity: std::sync::Mutex::new(Instant::now()),

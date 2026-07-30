@@ -24,13 +24,13 @@ impl ProjectFixture {
 
 impl Drop for ProjectFixture {
     fn drop(&mut self) {
-        if let Err(error) = std::fs::remove_dir_all(&self.path) {
-            if error.kind() != std::io::ErrorKind::NotFound {
-                eprintln!(
-                    "failed to clean project-local fixture {}: {error}",
-                    self.path.display()
-                );
-            }
+        if let Err(error) = std::fs::remove_dir_all(&self.path)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            eprintln!(
+                "failed to clean project-local fixture {}: {error}",
+                self.path.display()
+            );
         }
     }
 }

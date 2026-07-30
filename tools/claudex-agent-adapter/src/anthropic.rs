@@ -289,10 +289,12 @@ impl Bridge {
         let route = request_routing::resolve_request_model_with_origin(
             &mut request,
             &self.model,
-            is_subagent,
-            intent.matched,
             intent.model_override,
-            intent.model_is_inherited,
+            request_routing::RouteOrigin::new(
+                is_subagent,
+                intent.matched,
+                intent.model_is_inherited,
+            ),
             |model| self.app.supports_model(model),
             |model| self.model_catalog.matches(model),
         )?;

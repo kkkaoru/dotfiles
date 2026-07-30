@@ -33,23 +33,10 @@ impl SegmentBuilder {
             &mut arguments,
             &context.session.model,
         );
-        if let Some(model) = crate::anthropic::agent_effort::disabled_subagent_model(
-            original_name,
-            &arguments,
-            &context.session.disabled_subagent_models,
-        ) {
-            tracing::warn!(
-                tool_name = original_name,
-                model,
-                "blocked a disabled SubAgent before emitting its launch tool call"
-            );
-            self.close_open_blocks(context.stream).await?;
-            self.start_text_block(
-                &format!("SubAgent model `{model}` is disabled by policy and was not launched."),
-                context.stream,
-            )
-            .await?;
-            self.close_open_blocks(context.stream).await?;
+        if self
+            .reject_disabled_subagent(context, original_name, &arguments)
+            .await?
+        {
             return Ok(());
         }
         crate::anthropic::agent_effort::validate_routed_agent_arguments_with_catalog(
@@ -102,5 +89,35 @@ impl SegmentBuilder {
         self.blocks.push(block);
         self.external_tool_calls += 1;
         Ok(())
+    }
+
+    async fn reject_disabled_subagent(
+        &mut self,
+        context: ExternalToolContext<'_>,
+        original_name: &str,
+        arguments: &Value,
+    ) -> Result<bool> {
+        let Some(model) = crate::anthropic::agent_effort::disabled_subagent_model(
+            original_name,
+            arguments,
+            &context.session.disabled_subagent_models,
+        ) else {
+            return Ok(false);
+        };
+        tracing::warn!(
+            tool_name = original_name,
+            model,
+            "blocked a disabled SubAgent before emitting its launch tool call"
+        );
+        self.close_open_blocks(context.stream).await?;
+        let notice =
+            format!("SubAgent model `{model}` is disabled by policy and was not launched.");
+        self.text_delta(
+            &serde_json::json!({"params":{"delta":notice}}),
+            context.stream,
+        )
+        .await?;
+        self.close_open_blocks(context.stream).await?;
+        Ok(true)
     }
 }

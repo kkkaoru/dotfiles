@@ -603,10 +603,10 @@ async fn sleep_until_health_deadline(deadline: Instant) {
 async fn replacement_health(client: &Client, base_url: &str, legacy_pid: u64) -> Value {
     let deadline = Instant::now() + REPLACEMENT_READY_TIMEOUT;
     loop {
-        if let Some(value) = fetch_test_health(client, base_url).await {
-            if value["pid"].as_u64() != Some(legacy_pid) {
-                return value;
-            }
+        if let Some(value) = fetch_test_health(client, base_url).await
+            && value["pid"].as_u64() != Some(legacy_pid)
+        {
+            return value;
         }
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {

@@ -40,11 +40,10 @@ impl SubscriptionStream {
         }
         self.activity.close(sender).await?;
         self.close_text(sender).await?;
-        let mut forwarded = false;
         for block in tool_uses {
-            forwarded |= self.forward_tool_use(sender, block).await?;
+            self.forward_tool_use(sender, block).await?;
         }
-        self.saw_tool_use = forwarded;
+        self.saw_tool_use = true;
         Ok(())
     }
 
@@ -52,7 +51,7 @@ impl SubscriptionStream {
         &mut self,
         sender: &mpsc::Sender<Result<Bytes, Infallible>>,
         block: &Value,
-    ) -> Result<bool> {
+    ) -> Result<()> {
         let id = block.get("id").and_then(Value::as_str).unwrap_or_default();
         let emitted_name = block
             .get("name")
@@ -72,13 +71,13 @@ impl SubscriptionStream {
             Err(error) if super::super::agent_effort::is_agent_tool(name) => {
                 tracing::warn!(%error, tool = name, "blocked unsupported SubAgent launch");
                 self.report_blocked_subagent(sender).await?;
-                return Ok(false);
+                return Ok(());
             }
             Err(error) => return Err(error),
         };
         send_tool_block(sender, self.next_index, id, name, public_input).await?;
         self.next_index += 1;
-        Ok(true)
+        Ok(())
     }
 
     async fn report_blocked_subagent(

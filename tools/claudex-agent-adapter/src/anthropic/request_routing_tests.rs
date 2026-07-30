@@ -213,7 +213,7 @@ mod tests {
     }
 
     #[test]
-    fn prioritizes_parent_models_and_rejects_unknown_subagents() {
+    fn routes_correlated_parent_and_provider_subagents() {
         let mut unmatched = request("claude-sonnet-5", &[]);
         let decision = resolve_request_model(
             &mut unmatched,
@@ -269,7 +269,10 @@ mod tests {
         .expect("model-less provider SubAgent must use its active route");
         assert_eq!(decision, RouteDecision::Provider);
         assert_eq!(missing.model, "main-model");
+    }
 
+    #[test]
+    fn normalizes_native_subagent_models_from_origin() {
         let mut missing_native = request("claude-sonnet-5", &[]);
         let decision = resolve_request_model(
             &mut missing_native,
@@ -291,10 +294,8 @@ mod tests {
         let decision = resolve_request_model_with_origin(
             &mut inherited_native,
             "main-model",
-            true,
-            true,
             Some("claude-sonnet-5".to_owned()),
-            true,
+            RouteOrigin::new(true, true, true),
             |_| false,
             |_| false,
         )
@@ -306,17 +307,18 @@ mod tests {
         let decision = resolve_request_model_with_origin(
             &mut explicit_native,
             "main-model",
-            true,
-            true,
             Some("claude-opus-5".to_owned()),
-            false,
+            RouteOrigin::new(true, true, false),
             |_| false,
             |_| false,
         )
         .expect("an explicitly selected Claude child model must be preserved");
         assert_eq!(decision, RouteDecision::Subscription);
         assert_eq!(explicit_native.model, "claude-opus-5");
+    }
 
+    #[test]
+    fn rejects_unknown_subagent_model() {
         let mut empty = request("", &[]);
         let decision = resolve_request_model(
             &mut empty,

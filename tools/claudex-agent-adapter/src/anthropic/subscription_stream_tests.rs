@@ -538,7 +538,7 @@ async fn blocks_an_unsupported_subagent_without_failing_the_parent_stream() {
         )
         .await
         .expect("unsupported SubAgent must not fail the parent stream");
-    assert!(!stream.saw_tool_use);
+    assert!(stream.saw_tool_use);
     stream
         .finish(
             &sender,

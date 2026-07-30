@@ -177,7 +177,7 @@ fn add_explicit_provider_agents(
         return;
     };
     for provider in providers.values() {
-        let Some(agent) = explicit_provider_agent(provider, &requested, &denied) else {
+        let Some(agent) = explicit_provider_agent(provider, &requested, denied) else {
             continue;
         };
         if !agents.iter().any(|selected| selected == agent) {

@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use super::{
     SegmentBuilder, StreamSender, StreamTurn, commit_transcript, send_stream_completion,
@@ -31,46 +31,84 @@ impl Bridge {
         model_permit: Option<ModelPermit>,
         is_subagent: bool,
     ) {
+        let timeout = is_subagent.then(subagent_response_timeout);
+        self.drive_subagent_stream_with_timeout(
+            turn,
+            sender,
+            builder,
+            model_permit,
+            is_subagent,
+            timeout,
+        )
+        .await;
+    }
+
+    pub(super) async fn drive_subagent_stream_with_timeout(
+        self: Arc<Self>,
+        turn: ActiveTurn,
+        sender: StreamSender,
+        builder: SegmentBuilder,
+        model_permit: Option<ModelPermit>,
+        is_subagent: bool,
+        timeout: Option<Duration>,
+    ) {
         let input_tokens = turn.input_tokens;
-        let waited = if is_subagent {
-            completes_within(
-                subagent_response_timeout(),
-                self.wait_for_stream_segment(
-                    &turn.session,
-                    Arc::clone(&turn.events),
-                    &turn.extras,
-                    &turn.routing_system,
-                    &sender,
-                    builder,
-                ),
-            )
-            .await
-        } else {
-            Some(
-                self.wait_for_stream_segment(
-                    &turn.session,
-                    Arc::clone(&turn.events),
-                    &turn.extras,
-                    &turn.routing_system,
-                    &sender,
-                    builder,
-                )
-                .await,
-            )
-        };
+        let waited = self
+            .wait_for_stream_turn(&turn, &sender, builder, timeout)
+            .await;
         let Some(waited) = waited else {
             self.continue_subagent_in_background(turn, model_permit);
-            let mut notice = SegmentBuilder::new(input_tokens);
-            if notice
-                .start_text_block(BACKGROUND_NOTICE, Some(&sender))
-                .await
-                .is_ok()
-                && let Ok(segment) = notice.finish(Some(&sender)).await
-            {
-                send_stream_completion(&sender, &segment).await;
-            }
+            self.send_background_notice(input_tokens, &sender).await;
             return;
         };
+        self.finish_stream_turn(turn, sender, waited, model_permit, is_subagent)
+            .await;
+    }
+
+    async fn wait_for_stream_turn(
+        &self,
+        turn: &ActiveTurn,
+        sender: &StreamSender,
+        builder: SegmentBuilder,
+        timeout: Option<Duration>,
+    ) -> Option<anyhow::Result<StreamTurn>> {
+        let wait = self.wait_for_stream_segment(
+            &turn.session,
+            Arc::clone(&turn.events),
+            &turn.extras,
+            &turn.routing_system,
+            sender,
+            builder,
+        );
+        match timeout {
+            Some(timeout) => completes_within(timeout, wait).await,
+            None => Some(wait.await),
+        }
+    }
+
+    async fn send_background_notice(&self, input_tokens: u64, sender: &StreamSender) {
+        let mut notice = SegmentBuilder::new(input_tokens);
+        if notice
+            .text_delta(
+                &serde_json::json!({"params":{"delta":BACKGROUND_NOTICE}}),
+                Some(sender),
+            )
+            .await
+            .is_ok()
+            && let Ok(segment) = notice.finish(Some(sender)).await
+        {
+            send_stream_completion(sender, &segment).await;
+        }
+    }
+
+    async fn finish_stream_turn(
+        self: Arc<Self>,
+        turn: ActiveTurn,
+        sender: StreamSender,
+        waited: anyhow::Result<StreamTurn>,
+        model_permit: Option<ModelPermit>,
+        is_subagent: bool,
+    ) {
         let ActiveTurn {
             session,
             events,
