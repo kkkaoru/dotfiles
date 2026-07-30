@@ -1372,7 +1372,7 @@ async fn subagent_stream_timeout_continues_in_background_and_notifies_client() {
         output.push_str(&String::from_utf8_lossy(&frame.expect("infallible frame")));
     }
     assert!(
-        output.contains(crate::anthropic::subagent_timeout::BACKGROUND_NOTICE),
+        output.contains("dynamic progress from progress subagent"),
         "unexpected stream: {output}"
     );
 }
@@ -1456,7 +1456,27 @@ async fn disconnect_fixture_with_disabled(
         AppServer::spawn_with_program("main", &program, &source, &root.path().join("isolated"))
             .await
             .expect("start mock app-server");
-    let bridge = Bridge::new(Arc::clone(&app), "main".to_owned());
+    let progress_program = root.path().join("mock-claude");
+    std::fs::write(
+        &progress_program,
+        "#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"dynamic progress from progress subagent\"}'\n",
+    )
+    .expect("write progress model mock");
+    let mut progress_permissions = std::fs::metadata(&progress_program)
+        .expect("progress model metadata")
+        .permissions();
+    progress_permissions.set_mode(0o755);
+    std::fs::set_permissions(&progress_program, progress_permissions)
+        .expect("make progress model mock executable");
+    let settings = root.path().join("settings.json");
+    std::fs::write(&settings, r#"{"model":"mock-progress"}"#)
+        .expect("write progress model settings");
+    let bridge = Bridge::new_with_subscription_program(
+        Arc::clone(&app),
+        "main".to_owned(),
+        progress_program,
+    )
+    .with_settings_path(settings);
     let slots = Arc::new(Semaphore::new(1));
     let session = Arc::new(Session {
         thread_id: "thread".to_owned(),

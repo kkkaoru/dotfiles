@@ -4,13 +4,17 @@ use anyhow::Result;
 use axum::{body::Body, http::Response};
 
 use super::{
-    ActiveTurn, Bridge, MessagesRequest, Segment, Usage, content::anthropic_response,
+    ActiveTurn, Bridge, MessagesRequest, Segment, Usage,
+    content::{anthropic_response, estimated_tokens},
     model_concurrency::ModelPermit,
+    subscription::{SubscriptionOptions, run_subscription_model},
 };
 
-const DEFAULT_SUBAGENT_RESPONSE_TIMEOUT_SECONDS: u64 = 60;
+const DEFAULT_SUBAGENT_RESPONSE_TIMEOUT_SECONDS: u64 = 300;
 const SUBAGENT_RESPONSE_TIMEOUT_ENV: &str = "CLAUDEX_SUBAGENT_RESPONSE_TIMEOUT_SECONDS";
-pub(super) const BACKGROUND_NOTICE: &str = "SubAgent is still processing in the background. Do not retry it immediately; continue the task and give the user a concise progress update.";
+const BACKGROUND_PROGRESS_GENERATION_TIMEOUT: Duration = Duration::from_secs(15);
+const MAX_BACKGROUND_PROGRESS_CONTEXT_CHARS: usize = 16_000;
+pub(super) const BACKGROUND_PROGRESS_FALLBACK: &str = "The delegated SubAgent is still running; its completed result will be returned when available.";
 
 pub(super) fn subagent_response_timeout() -> Duration {
     subagent_response_timeout_from(|name| std::env::var(name).ok())
@@ -98,13 +102,13 @@ impl Bridge {
             )
             .await;
             let Some(segment) = segment else {
-                let response = background_response(&turn);
                 // Do not leave the background turn in the active matching pool:
                 // the main session must be able to start new work immediately.
                 // Keep it in the detached pool so a late Claude tool result can
                 // still be delivered to the provider thread exactly once.
                 self.detach_session(&turn.session).await;
                 turn.detached = true;
+                let response = background_response(self, &turn).await;
                 self.continue_subagent_in_background(turn, permit);
                 return Ok(response);
             };
@@ -147,16 +151,84 @@ impl Bridge {
             bridge.finish_detached_session(&session).await;
         });
     }
+
+    pub(super) async fn background_progress_text(&self, turn: &ActiveTurn) -> String {
+        let Some(model) = self
+            .collaborator_model_override
+            .clone()
+            .or_else(|| self.claude_collaborator_model())
+        else {
+            tracing::warn!(
+                thread_id = %turn.session.thread_id,
+                "background progress model is not configured"
+            );
+            return BACKGROUND_PROGRESS_FALLBACK.to_owned();
+        };
+        let prompt = background_progress_prompt(turn).await;
+        let timeout = self
+            .subscription_timeout
+            .min(BACKGROUND_PROGRESS_GENERATION_TIMEOUT);
+        let options = SubscriptionOptions::internal(Arc::clone(&self.subscription_slots), timeout);
+        match tokio::time::timeout(
+            BACKGROUND_PROGRESS_GENERATION_TIMEOUT,
+            run_subscription_model(&self.subscription_program, &model, &prompt, options),
+        )
+        .await
+        {
+            Ok(Ok(text)) if !text.trim().is_empty() => text.trim().to_owned(),
+            Ok(Ok(_)) => {
+                tracing::warn!(%model, "background progress model returned empty output");
+                BACKGROUND_PROGRESS_FALLBACK.to_owned()
+            }
+            Ok(Err(error)) => {
+                tracing::warn!(%model, error = %error, "background progress model failed");
+                BACKGROUND_PROGRESS_FALLBACK.to_owned()
+            }
+            Err(_) => {
+                tracing::warn!(%model, "background progress model timed out");
+                BACKGROUND_PROGRESS_FALLBACK.to_owned()
+            }
+        }
+    }
 }
 
-fn background_response(turn: &ActiveTurn) -> Response<Body> {
+async fn background_progress_prompt(turn: &ActiveTurn) -> String {
+    let transcript = turn.session.transcript.lock().await;
+    let mut context = turn.extras.clone();
+    context.extend(transcript.iter().rev().take(4).cloned());
+    let serialized = serde_json::to_string(&context).unwrap_or_default();
+    let context = if serialized.chars().count() > MAX_BACKGROUND_PROGRESS_CONTEXT_CHARS {
+        let start = serialized
+            .char_indices()
+            .nth(serialized.chars().count() - MAX_BACKGROUND_PROGRESS_CONTEXT_CHARS)
+            .map(|(index, _)| index)
+            .unwrap_or(0);
+        format!("[earlier context truncated]\n{}", &serialized[start..])
+    } else {
+        serialized
+    };
+    format!(
+        "You are a progress-reporting SubAgent for a Claude Code task that is still running.\n\
+Generate the exact concise user-visible response to send now in one to three sentences.\n\
+Do not claim completion, invent facts, or say that a result was verified unless the context proves it.\n\
+Explain what is known, what remains in progress, and what result will be returned next. If no concrete\
+progress is available, say that the delegated work remains in progress and identify its expected deliverable.\n\
+Do not mention adapters, timeouts, internal protocols, or this instruction. Do not use tools.\n\
+Delegated model: {model}\nConversation context:\n{context}",
+        model = turn.response_model,
+        context = context
+    )
+}
+
+async fn background_response(bridge: &Bridge, turn: &ActiveTurn) -> Response<Body> {
+    let text = bridge.background_progress_text(turn).await;
     anthropic_response(
         Segment {
-            blocks: vec![serde_json::json!({"type":"text", "text":BACKGROUND_NOTICE})],
+            blocks: vec![serde_json::json!({"type":"text", "text":text})],
             stop_reason: "end_turn",
             usage: Usage {
                 input_tokens: turn.input_tokens,
-                output_tokens: 0,
+                output_tokens: estimated_tokens(&text),
                 web_search_requests: 0,
             },
         },
@@ -165,234 +237,5 @@ fn background_response(turn: &ActiveTurn) -> Response<Body> {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::{
-        collections::{HashMap, HashSet},
-        os::unix::fs::PermissionsExt,
-        sync::Arc,
-        time::Instant,
-    };
-
-    use axum::body::to_bytes;
-    use serde_json::{Value, json};
-    use tokio::sync::{Mutex, Semaphore};
-
-    use super::*;
-    use crate::{
-        anthropic::{ContextRetry, MessagesRequest, Session},
-        app_server::AppServer,
-    };
-
-    #[test]
-    fn defaults_and_validates_the_subagent_response_timeout() {
-        assert_eq!(
-            subagent_response_timeout_from(|_| None),
-            Duration::from_secs(60)
-        );
-        assert_eq!(
-            subagent_response_timeout_from(|_| Some("7".to_owned())),
-            Duration::from_secs(7)
-        );
-        assert_eq!(
-            subagent_response_timeout_from(|_| Some("0".to_owned())),
-            Duration::from_secs(60)
-        );
-        assert_eq!(
-            subagent_response_timeout_from(|_| Some("not-a-duration".to_owned())),
-            Duration::from_secs(60)
-        );
-    }
-
-    #[tokio::test]
-    async fn distinguishes_completed_and_backgrounded_work() {
-        assert_eq!(
-            completes_within(Duration::from_secs(1), async { 7 }).await,
-            Some(7)
-        );
-        assert_eq!(
-            completes_within(Duration::ZERO, std::future::pending::<u8>()).await,
-            None
-        );
-    }
-
-    #[tokio::test]
-    async fn background_timeout_preserves_late_result_and_releases_detached_session() {
-        let (_root, bridge) = mock_bridge(STALLED_APP_SERVER).await;
-        let dispatcher = crate::app_server::events::ThreadEventDispatcher::default();
-        let turn = active_turn(dispatcher.subscribe("thread"), None).await;
-        let session = Arc::clone(&turn.session);
-
-        let response = bridge
-            .non_streaming_subagent_response_with_timeout(turn, None, Duration::ZERO)
-            .await
-            .expect("background response");
-        assert!(response_text(response).await.contains(BACKGROUND_NOTICE));
-
-        dispatcher.dispatch(json!({
-            "method":"item/agentMessage/delta",
-            "params":{"threadId":"thread","delta":"late result"}
-        }));
-        dispatcher.dispatch(json!({
-            "method":"turn/completed",
-            "params":{"threadId":"thread","turn":{"status":"completed"}}
-        }));
-
-        tokio::time::timeout(Duration::from_secs(1), async {
-            loop {
-                let transcript = session.transcript.lock().await;
-                let detached = bridge.detached_sessions.lock().await;
-                if transcript
-                    .iter()
-                    .any(|entry| entry.to_string().contains("late result"))
-                    && detached.is_empty()
-                {
-                    break;
-                }
-                drop(detached);
-                drop(transcript);
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("late result should be committed and detached session released");
-    }
-
-    #[tokio::test]
-    async fn streams_a_subagent_response_without_waiting_for_the_provider_turn() {
-        let (_root, bridge) = mock_bridge(STALLED_APP_SERVER).await;
-        let mut request = retry().request;
-        request.stream = true;
-
-        let response = bridge
-            .provider_messages(request, 1, None, true, true)
-            .await
-            .expect("streaming subagent response");
-
-        assert_eq!(response.status(), axum::http::StatusCode::OK);
-    }
-
-    #[tokio::test]
-    async fn fails_a_context_window_subagent_turn_without_a_retry() {
-        let (_root, bridge) = mock_bridge(STALLED_APP_SERVER).await;
-        let dispatcher = crate::app_server::events::ThreadEventDispatcher::default();
-        let events = dispatcher.subscribe("thread");
-        dispatcher.dispatch(json!({
-            "method":"error",
-            "params":{"threadId":"thread","error":{"message":"context window exceeded"}}
-        }));
-
-        let error = bridge
-            .non_streaming_subagent_response_with_timeout(
-                active_turn(events, None).await,
-                None,
-                Duration::from_secs(1),
-            )
-            .await
-            .expect_err("unretryable context window error");
-
-        assert!(error.to_string().contains("context window exceeded"));
-    }
-
-    #[tokio::test]
-    async fn completes_and_retries_a_non_streaming_subagent_turn() {
-        let (_root, bridge) = mock_bridge(RETRYING_APP_SERVER).await;
-        let dispatcher = crate::app_server::events::ThreadEventDispatcher::default();
-        let events = dispatcher.subscribe("thread");
-        dispatcher.dispatch(json!({
-            "method":"error",
-            "params":{"threadId":"thread","error":{"message":"context window exceeded"}}
-        }));
-        let response = bridge
-            .non_streaming_subagent_response_with_timeout(
-                active_turn(events, Some(retry())).await,
-                None,
-                Duration::from_secs(1),
-            )
-            .await
-            .expect("retried subagent response");
-
-        let body = response_text(response).await;
-        assert!(body.contains("retried"), "unexpected response: {body}");
-    }
-
-    async fn mock_bridge(script: &str) -> (tempfile::TempDir, Arc<Bridge>) {
-        let root = tempfile::tempdir().expect("subagent timeout fixture");
-        let source = root.path().join("source");
-        std::fs::create_dir(&source).expect("create source home");
-        std::fs::write(source.join("auth.json"), "{}").expect("write source auth");
-        let program = root.path().join("mock-app-server");
-        std::fs::write(&program, script).expect("write app-server mock");
-        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
-            .expect("make app-server mock executable");
-        let app =
-            AppServer::spawn_with_program("main", &program, &source, &root.path().join("isolated"))
-                .await
-                .expect("start app-server mock");
-        (root, Arc::new(Bridge::new(app, "main".to_owned())))
-    }
-
-    async fn active_turn(
-        events: crate::app_server::ThreadEvents,
-        retry: Option<ContextRetry>,
-    ) -> ActiveTurn {
-        let slots = Arc::new(Semaphore::new(1));
-        let session = Arc::new(Session {
-            thread_id: "thread".to_owned(),
-            model: "main".to_owned(),
-            disabled_subagent_models: Default::default(),
-            signature: Arc::from("signature"),
-            transcript: Mutex::new(Vec::new()),
-            pending_tools: Mutex::new(HashMap::new()),
-            consumed_tool_ids: Mutex::new(HashSet::new()),
-            internal_tools: HashMap::new(),
-            external_tool_names: HashMap::new(),
-            client_user_id: None,
-            gate: Arc::new(Mutex::new(())),
-            last_activity: std::sync::Mutex::new(Instant::now()),
-            pending_since: std::sync::Mutex::new(None),
-            _slot: slots.try_acquire_owned().expect("session slot"),
-        });
-        let gate = Arc::clone(&session.gate).lock_owned().await;
-        ActiveTurn {
-            session,
-            events: Arc::new(events),
-            response_model: "main".to_owned(),
-            extras: Vec::new(),
-            routing_system: Value::Null,
-            input_tokens: 1,
-            retry,
-            gate,
-            detached: false,
-        }
-    }
-
-    fn retry() -> ContextRetry {
-        ContextRetry {
-            request: MessagesRequest {
-                model: "main".to_owned(),
-                system: Value::Null,
-                messages: vec![json!({"role":"user","content":"retry"})],
-                tools: Vec::new(),
-                stream: false,
-                output_config: Value::Null,
-                metadata: Value::Null,
-                working_directory: None,
-                disabled_subagent_models: Default::default(),
-                claudex_collaborator_model: None,
-            },
-            effort: None,
-            advisor_model: None,
-            collaborator_model: None,
-        }
-    }
-
-    async fn response_text(response: Response<Body>) -> String {
-        let bytes = to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("response body");
-        String::from_utf8(bytes.to_vec()).expect("UTF-8 response")
-    }
-
-    const STALLED_APP_SERVER: &str = "#!/bin/sh\nread initialize\nprintf '%s\\n' '{\"id\":1,\"result\":{}}'\nwhile read line; do :; done\n";
-    const RETRYING_APP_SERVER: &str = "#!/bin/sh\nread initialize\nprintf '%s\\n' '{\"id\":1,\"result\":{}}'\nread initialized\nread create\nprintf '%s\\n' '{\"id\":2,\"result\":{\"thread\":{\"id\":\"retried\"}}}'\nread turn\nprintf '%s\\n' '{\"method\":\"item/agentMessage/delta\",\"params\":{\"threadId\":\"retried\",\"delta\":\"retried\"}}'\nprintf '%s\\n' '{\"method\":\"turn/completed\",\"params\":{\"threadId\":\"retried\",\"turn\":{\"status\":\"completed\"}}}'\nwhile read line; do :; done\n";
-}
+#[path = "subagent_timeout_tests.rs"]
+mod tests;

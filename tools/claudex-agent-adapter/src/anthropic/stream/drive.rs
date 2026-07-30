@@ -7,7 +7,7 @@ use super::{
 use crate::anthropic::{
     ActiveTurn, Bridge,
     model_concurrency::ModelPermit,
-    subagent_timeout::{BACKGROUND_NOTICE, completes_within, subagent_response_timeout},
+    subagent_timeout::{completes_within, subagent_response_timeout},
 };
 
 impl Bridge {
@@ -58,8 +58,13 @@ impl Bridge {
             .wait_for_stream_turn(&turn, &sender, builder, timeout)
             .await;
         let Some(waited) = waited else {
+            let mut turn = turn;
+            self.detach_session(&turn.session).await;
+            turn.detached = true;
+            let progress = self.background_progress_text(&turn).await;
             self.continue_subagent_in_background(turn, model_permit);
-            self.send_background_notice(input_tokens, &sender).await;
+            self.send_background_progress(input_tokens, &sender, &progress)
+                .await;
             return;
         };
         self.finish_stream_turn(
@@ -94,11 +99,16 @@ impl Bridge {
         }
     }
 
-    async fn send_background_notice(&self, input_tokens: u64, sender: &StreamSender) {
+    async fn send_background_progress(
+        &self,
+        input_tokens: u64,
+        sender: &StreamSender,
+        progress: &str,
+    ) {
         let mut notice = SegmentBuilder::new(input_tokens);
         if notice
             .text_delta(
-                &serde_json::json!({"params":{"delta":BACKGROUND_NOTICE}}),
+                &serde_json::json!({"params":{"delta":progress}}),
                 Some(sender),
             )
             .await
