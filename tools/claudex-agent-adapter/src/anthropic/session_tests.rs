@@ -11,9 +11,10 @@ use tokio::sync::{Mutex, Semaphore};
 use super::{
     candidate_length, codex_tool_name, dynamic_tool, is_better_length, owns_tool_result,
     reservation::reserve_matching_session, session_turn::contains_context_window_marker,
-    thread_start_params, tool_configuration, transcript_owns_tool_results,
-    validate_tool_result_ownership,
+    thread_start_params, thread_start_params_for_mode, tool_configuration,
+    tool_configuration_for_mode, transcript_owns_tool_results, validate_tool_result_ownership,
 };
+use crate::agent_backend::WebSearchMode;
 use crate::anthropic::{
     Bridge, MessagesRequest, SelectedSession, Session, content::ToolResult,
     subscription_request::subscription_request_prompt,
@@ -402,6 +403,31 @@ fn builds_thread_configuration_for_empty_and_team_system_prompts() {
     assert_team_thread_configuration();
 }
 
+#[test]
+fn enables_native_search_without_exposing_a_duplicate_dynamic_tool() {
+    let search = json!({
+        "name": "WebSearch",
+        "description": "search",
+        "input_schema": {"type":"object"}
+    });
+    let (tools, names, _) = tool_configuration_for_mode(
+        &request(Value::Null, vec![search]),
+        None,
+        None,
+        WebSearchMode::CodexNative,
+    );
+    assert!(tools.is_empty());
+    assert!(names.is_empty());
+    let params = thread_start_params_for_mode(
+        &request(Value::Null, Vec::new()),
+        "gpt-native",
+        Vec::new(),
+        WebSearchMode::CodexNative,
+    );
+    assert_eq!(params["config"]["web_search"], "live");
+    assert_eq!(params["config"]["features"]["web_search"], true);
+}
+
 fn assert_empty_thread_configuration() {
     let empty = thread_start_params(&request(Value::Null, Vec::new()), "main", Vec::new());
     let base = empty["baseInstructions"]
@@ -574,7 +600,7 @@ fn subscription_and_session_instructions_report_the_default_parallel_contract() 
 
     let prompt = subscription_request_prompt(&request(json!("parallel contract"), Vec::new()));
     assert!(prompt.contains(&format!(
-        "Runtime parallel contract for this prompt: launch at least {} ordinary workers",
+        "Launch at least {} ordinary workers for substantive decomposition",
         default_config.min_parallel_workers
     )));
     assert!(prompt.contains(&format!(
@@ -587,6 +613,9 @@ fn subscription_and_session_instructions_report_the_default_parallel_contract() 
     )));
     assert!(prompt.contains(&format!("every {} minutes", cadence)));
     assert!(prompt.contains("interrupt stale work"));
+    assert!(prompt.contains("An explicit active user request for an exact worker count"));
+    assert!(prompt.contains("Adapter orchestration defaults (runtime metadata)"));
+    assert!(!prompt.contains("prompt injection"));
 }
 
 fn assert_default_parallel_config(config: &crate::parallel_scheduler::SchedulerConfig) {
@@ -910,6 +939,7 @@ async fn removes_sessions_for_a_failed_model_backend() {
             program: "/definitely/missing/claudex-acp".to_owned(),
             arguments: Vec::new(),
         }),
+        web_search_mode: WebSearchMode::default(),
     }]);
     assert!(
         backend

@@ -646,7 +646,7 @@ class RoutingTests(unittest.TestCase):
         self.assertTrue(summary["delegation_required"])
         self.assertEqual(summary["providers"]["codex"]["reason"], "available")
         context = route_usage.hook_output(summary, {})["hookSpecificOutput"]["additionalContext"]
-        self.assertIn("[claudex-routing-metadata]", context)
+        self.assertIn("<system-reminder>", context)
         self.assertIn('"source":"claudex-routing-local-hook"', context)
         self.assertIn('"model":"gpt-5.3-codex-spark"', context)
         self.assertNotIn("MANDATORY SUBAGENT-FIRST ORCHESTRATION", context)
@@ -865,7 +865,7 @@ class RoutingTests(unittest.TestCase):
         self.assertIn("claudex-gpt-spark", context)
         self.assertIn("claudex-qwen", context)
         self.assertIn("claude-fable-5", context)
-        self.assertIn("[claudex-routing-metadata]", context)
+        self.assertIn("<system-reminder>", context)
         self.assertIn('"source":"claudex-routing-local-hook"', context)
         self.assertIn('"minimum_subagents_per_phase":3', context)
         self.assertIn('"minimum_model_kinds":2', context)

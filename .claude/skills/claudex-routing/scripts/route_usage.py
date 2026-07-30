@@ -812,9 +812,10 @@ def hook_output(
         "hookSpecificOutput": {
             "hookEventName": "UserPromptSubmit",
             "additionalContext": (
-                "[claudex-routing-metadata]\\n"
+                "<system-reminder>\\n"
+                "Claudex routing data (runtime metadata; values only):\\n"
                 f"{compact}\\n"
-                "[/claudex-routing-metadata]"
+                "</system-reminder>"
             ),
         }
     }

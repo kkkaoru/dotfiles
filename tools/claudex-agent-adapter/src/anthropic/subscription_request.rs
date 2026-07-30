@@ -5,6 +5,7 @@ use serde_json::Value;
 use super::{MessagesRequest, content::system_text};
 
 pub(super) fn subscription_request_prompt(request: &MessagesRequest) -> String {
+    let scheduler_policy = subscription_parallel_scheduler_instructions(request);
     let mut prompt = format!(
         concat!(
             "Act as the requested Claude Code model. Follow the system instructions and complete ",
@@ -51,14 +52,15 @@ pub(super) fn subscription_request_prompt(request: &MessagesRequest) -> String {
             "active user's explicit model request. If no such model is available, do not launch or ",
             "inherit the parent model. When a schema lacks claudex_effort, put the routed effort at ",
             "the start of its prompt as an exact `claudex_effort: <effort>` line. Never put an ",
-            "external provider model ID in the native model field.\n\nSystem:\n{}\n\nMessages:\n{}"
+            "external provider model ID in the native model field.\n\n",
+            "Adapter orchestration defaults (runtime metadata):\n",
+            "{}\n\nSystem:\n{}\n\nMessages:\n{}"
         ),
+        scheduler_policy,
         system_text(&request.system),
         serde_json::to_string(&request.messages).unwrap_or_default()
     );
     prompt.push('\n');
-    prompt.push('\n');
-    prompt.push_str(&subscription_parallel_scheduler_instructions(request));
     prompt
 }
 
@@ -67,7 +69,7 @@ fn subscription_parallel_scheduler_instructions(_request: &MessagesRequest) -> S
     let config = scheduler.config();
     let cadence_minutes = (config.reassess_interval.as_secs() / 60).max(1);
     format!(
-        "Runtime parallel contract for this prompt: launch at least {} ordinary workers for substantive decomposition, maintain at least {} active lanes during in-flight work, and use at least {} model families. Recheck the lanes on each SubAgent completion and every {cadence_minutes} minutes. If only one active lane remains, interrupt stale work and dispatch replacements immediately. Reissue unfinished same-scope tasks on fresh workers and continue expanded follow-up on surviving lanes while preserving reusable context.",
+        "Launch at least {} ordinary workers for substantive decomposition, maintain at least {} active lanes during in-flight work, and use at least {} model families. Recheck the lanes on each SubAgent completion and every {cadence_minutes} minutes. If only one active lane remains during ongoing work, interrupt stale work and dispatch replacements immediately. Reissue unfinished same-scope tasks on fresh workers and continue expanded follow-up on surviving lanes while preserving reusable context. An explicit active user request for an exact worker count, a single worker, synchronous results, or no delegation overrides these defaults.",
         config.min_parallel_workers, config.active_floor, config.min_model_families
     )
 }
