@@ -9,7 +9,9 @@ pub(super) fn subscription_request_prompt(request: &MessagesRequest) -> String {
     let mut prompt = format!(
         concat!(
             "Act as the requested Claude Code model. Follow the system instructions and complete ",
-            "the conversation below. Use only the enabled tools when needed. Delegation is the ",
+            "the conversation below. Use only the enabled tools when needed. For an explicit live ",
+            "WebSearch/WebFetch or page-retrieval request, call the supplied web tool and never ",
+            "substitute memory or a guessed URL; claim success only after a tool result. Delegation is the ",
             "standing default for substantive work unless the user opts out. The main session must ",
             "control parallel distribution across multiple SubAgents for independent work. When ",
             "selected_workers are present, invoke the selected Agent or Task directly as the first ",

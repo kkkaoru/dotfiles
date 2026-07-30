@@ -78,11 +78,24 @@ executable overrides used by process integration tests.
 
 Build and install with Rust 1.97.1:
 
+The crate's Cargo config keeps direct debug/test artifacts outside the
+checkout. For normal builds and installs, use the repository's ephemeral Cargo
+wrapper: it allocates a unique temporary target directory and removes it on
+both success and failure. It also removes the legacy `target/t` fixture root
+left by older test versions.
+
 ```sh
-env -u RUSTUP_TOOLCHAIN cargo +1.97.1 install \
+tools/claudex-agent-adapter/scripts/cargo-ephemeral.sh +1.97.1 install \
   --path tools/claudex-agent-adapter \
   --root "$HOME/.local" \
   --bin claudex-agent-adapter
+```
+
+Use the same wrapper for verification, for example:
+
+```sh
+tools/claudex-agent-adapter/scripts/cargo-ephemeral.sh +1.97.1 test \
+  --manifest-path tools/claudex-agent-adapter/Cargo.toml
 ```
 
 The public CLI uses explicit subcommands:

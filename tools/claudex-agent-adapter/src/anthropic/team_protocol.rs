@@ -4,9 +4,9 @@ use serde_json::Value;
 
 use super::agent_effort::is_agent_tool;
 
-const GUIDANCE: &str = "Determine SubAgent lifecycle from each Agent or Task tool result, because a named SubAgent may be either a persistent mailbox teammate or a regular background agent. A result containing teammate_spawned or saying that the agent receives instructions via mailbox identifies a teammate: never pass that named teammate's name or name@session agent ID to TaskOutput or TaskList; use SendMessage with the teammate name only when further communication is necessary, otherwise end the turn and wait for Claude Code's automatic teammate message. A result saying Async agent launched identifies a regular background agent: wait for Claude Code's automatic completion notification and follow the recipient ID stated by that result if communication is necessary. Never restart a completed agent merely to collect output. Use TaskOutput only when a tool result explicitly returns a task_id for TaskOutput, never with a display name or agent_id.";
+const GUIDANCE: &str = "Determine SubAgent lifecycle from each Agent or Task tool result, because a named SubAgent may be either a persistent mailbox teammate or a regular background agent. A result containing teammate_spawned or saying that the agent receives instructions via mailbox identifies a teammate: never pass that named teammate's name or name@session agent ID to TaskOutput or TaskList; use SendMessage with the teammate name only when further communication is necessary, otherwise end the turn and wait for Claude Code's automatic teammate message. A result saying Async agent launched identifies a regular background agent: wait for Claude Code's automatic completion notification and follow the recipient ID stated by that result if communication is necessary. Never restart a completed agent merely to collect output. Use TaskOutput only when a tool result explicitly returns a task_id for TaskOutput, never with a display name or agent_id. TaskStop/Stop Task is best-effort and idempotent: invoke it only with the exact active task_id returned by the current Agent/Task result; never guess, reuse, or stop a display name, mailbox agent_id, completion notification, or already-consumed task. If Claude Code reports `No task found` for a stop request, treat the task as already completed or stopped, do not retry, and continue the remaining work.";
 
-const RESULT_CLARIFICATION: &str = "Claudex protocol: this is a named mailbox teammate, not a TaskOutput or TaskList task. Do not pass its name or agent_id to TaskOutput. Use SendMessage with the teammate name when needed, then end the turn and wait for automatic teammate messages.";
+const RESULT_CLARIFICATION: &str = "Claudex protocol: this is a named mailbox teammate, not a TaskOutput or TaskList task. Do not pass its name or agent_id to TaskOutput. Use SendMessage with the teammate name when needed, then end the turn and wait for automatic teammate messages. Do not call TaskStop/Stop Task for this mailbox result; if a stale stop reports `No task found`, treat it as an idempotent already-stopped outcome and continue.";
 
 pub(super) fn guidance(tools: &[Value]) -> Option<&'static str> {
     let named_agent = tools.iter().any(|tool| {
@@ -56,6 +56,8 @@ mod tests {
             let text = guidance(&[agent.clone(), send]).expect("team guidance");
             assert!(text.contains("never pass that named teammate's name"));
             assert!(text.contains("Async agent launched"));
+            assert!(text.contains("TaskStop/Stop Task is best-effort and idempotent"));
+            assert!(text.contains("No task found"));
             assert!(guidance(&[agent]).is_none());
         }
         assert!(guidance(&[json!({"name":"Agent"})]).is_none());
@@ -70,6 +72,7 @@ mod tests {
         let clarified = clarify_result(original);
         assert!(clarified.starts_with(original));
         assert!(clarified.contains(RESULT_CLARIFICATION));
+        assert!(clarified.contains("No task found"));
         assert!(clarified.contains("company-profile@session-123"));
         assert_eq!(clarify_result(&clarified), clarified);
         let already_clarified = format!("teammate_spawned {RESULT_CLARIFICATION}");

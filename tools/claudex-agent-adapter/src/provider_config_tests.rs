@@ -172,6 +172,21 @@ mod tests {
     }
 
     #[test]
+    fn accepts_open_code_go_request_budget_metadata() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("providers.json");
+        std::fs::write(
+            &path,
+            config(
+                r#"{"id":"p","agent":"worker","defaultModel":"opencode-go/deepseek-v4-pro","effort":"high","enabled":true,"usageProvider":"opencodego","requestBudget":{"estimatedRequests":3450,"windowMinutes":300,"usageWindow":"primary"},"modelPrefixes":["opencode-go/"],"backend":"configured-acp","acp":{"program":"opencode","arguments":["acp"]}}"#,
+            ),
+        )
+        .unwrap();
+        let loaded = load(&path).unwrap();
+        assert_eq!(loaded.routes[0].model, "opencode-go/deepseek-v4-pro");
+    }
+
+    #[test]
     fn accepts_codex_provider_and_catalog_metadata() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("providers.json");

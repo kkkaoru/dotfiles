@@ -1,3 +1,8 @@
+[build]
+# Keep test/debug artifacts out of the checkout. macOS periodically cleans /tmp,
+# and CARGO_TARGET_DIR can override this for a persistent cache when needed.
+target-dir = "/tmp/claudex-agent-adapter-target"
+
 [alias]
 fmt-check = "fmt --all -- --check"
 test-all = "test --all-targets"

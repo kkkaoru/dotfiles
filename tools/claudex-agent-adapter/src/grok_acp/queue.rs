@@ -1,6 +1,6 @@
-use std::{future::Future, time::Duration};
+use std::future::Future;
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use tokio::sync::oneshot;
 
 use super::{
@@ -8,33 +8,23 @@ use super::{
     turns::{ActiveTurns, cancel_turn},
 };
 
-const CONFIGURED_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
-
 pub(super) async fn acquire<T, F>(provider: AcpProvider, operation: &str, future: F) -> Result<T>
-where
-    F: Future<Output = Result<T>>,
-{
-    acquire_with_timeout(provider, operation, CONFIGURED_WAIT_TIMEOUT, future).await
-}
-
-async fn acquire_with_timeout<T, F>(
-    provider: AcpProvider,
-    operation: &str,
-    timeout: Duration,
-    future: F,
-) -> Result<T>
 where
     F: Future<Output = Result<T>>,
 {
     if !provider.is_session_scoped_configured() {
         return future.await;
     }
-    tokio::time::timeout(timeout, future).await.map_err(|_| {
-        anyhow!(
-            "{} ACP {operation} queue wait timed out after {timeout:?}",
-            provider.label()
-        )
-    })?
+    // A configured ACP may legitimately have a long-running SubAgent turn.
+    // Keep queue pressure cancellable by the caller, but never turn it into a
+    // synthetic 30-second failure. User turns retain a reserved permit in
+    // `acquire_turn_permit`, so background work cannot starve the main session.
+    tracing::debug!(
+        provider = provider.label(),
+        operation,
+        "waiting for ACP queue capacity"
+    );
+    future.await
 }
 
 pub(super) fn finish_start_turn(
@@ -56,25 +46,27 @@ pub(super) fn finish_start_turn(
 // Coverage excludes test implementation; production behavior remains measured.
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use anyhow::anyhow;
+
     use super::*;
 
     #[tokio::test]
-    async fn configured_wait_is_bounded_without_changing_launch_scoped_providers() {
-        let stalled = acquire_with_timeout(
-            AcpProvider::Configured,
-            "turn/start",
-            Duration::from_millis(1),
-            std::future::pending::<Result<()>>(),
+    async fn configured_wait_is_caller_cancellable_without_a_synthetic_timeout() {
+        let result = tokio::time::timeout(
+            std::time::Duration::from_millis(5),
+            acquire(
+                AcpProvider::Configured,
+                "turn/start",
+                std::future::pending::<Result<()>>(),
+            ),
         )
-        .await
-        .unwrap_err();
-        assert!(stalled.to_string().contains("queue wait timed out"));
+        .await;
+        assert!(result.is_err(), "the caller-owned cancellation should win");
 
         assert!(
-            acquire_with_timeout(
+            acquire(
                 AcpProvider::ConfiguredLaunchScoped,
                 "turn/start",
-                Duration::from_millis(1),
                 std::future::ready(Ok(())),
             )
             .await
@@ -95,10 +87,9 @@ mod tests {
             "ready"
         );
         assert!(
-            acquire_with_timeout(
+            acquire(
                 AcpProvider::Grok,
                 "turn/start",
-                Duration::from_millis(1),
                 std::future::ready(Err::<(), _>(anyhow!("unavailable"))),
             )
             .await

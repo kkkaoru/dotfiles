@@ -177,6 +177,29 @@ fn configures_a_bounded_batch_tool_for_parallel_agents() {
 }
 
 #[test]
+fn documents_idempotent_task_stop_semantics_in_the_dynamic_schema() {
+    for name in ["TaskStop", "StopTask", "Stop Task"] {
+        let tool = dynamic_tool(
+            &json!({"name":name,"description":"stop a background task"}),
+            "cc_task_stop_0",
+        )
+        .expect("task-stop schema");
+        let description = tool["description"].as_str().expect("description");
+        assert!(description.contains("stopping is idempotent"));
+        assert!(description.contains("exact active task_id"));
+        assert!(description.contains("No task found"));
+    }
+    let ordinary =
+        dynamic_tool(&json!({"name":"TaskGet"}), "cc_task_get_0").expect("ordinary task schema");
+    assert!(
+        !ordinary["description"]
+            .as_str()
+            .expect("ordinary description")
+            .contains("stopping is idempotent")
+    );
+}
+
+#[test]
 fn main_and_worker_sessions_keep_full_claude_code_tool_sets() {
     let routing = r#"Claudex routing for this turn: {"providers":{},"selected_agents":["claudex-deepseek","claudex-ollama-glm-5-2"],"selected_workers":[{"agent":"claudex-deepseek","model":"deepseek-model"}]} mandatory policy"#;
     let tools = vec![
@@ -449,6 +472,7 @@ fn assert_developer_guidance(developer: &str) {
         "never infer from it that Claude Code or its SubAgent tasks are read-only",
         "do not copy restrictions from an unrelated earlier task",
         "preserve that authority in SubAgent prompts",
+        "explicitly requires live WebSearch",
         "run independent calls, fetches, or checks in parallel",
         "Promise.all",
         "avoid serializing independent operations",
@@ -923,6 +947,40 @@ async fn session_capacity_evicts_idle_sessions_before_rejecting_busy_capacity() 
         .await
         .expect_err("busy capacity is rejected");
     assert!(error.to_string().contains("session capacity"));
+}
+
+#[tokio::test]
+async fn detached_background_sessions_are_not_selected_but_route_one_late_result() {
+    let bridge = Bridge::new_with_backend(AgentBackend::spawn_routes(&[]), "main".to_owned());
+    let session = session("detached", Vec::new());
+    session
+        .pending_tools
+        .lock()
+        .await
+        .insert("toolu-late".to_owned(), json!(17));
+    bridge.sessions.lock().await.push(Arc::clone(&session));
+
+    bridge.detach_session(&session).await;
+
+    assert!(bridge.sessions.lock().await.is_empty());
+    assert_eq!(bridge.detached_sessions.lock().await.len(), 1);
+    let result = ToolResult {
+        tool_use_id: "toolu-late".to_owned(),
+        content_items: vec![json!({"type":"text","text":"late result"})],
+        is_error: false,
+    };
+    let found = bridge
+        .find_result_session(std::slice::from_ref(&result))
+        .await
+        .expect("late result owner remains discoverable");
+    assert!(Arc::ptr_eq(&found, &session));
+
+    bridge.finish_detached_session(&session).await;
+    assert!(bridge.detached_sessions.lock().await.is_empty());
+    assert!(bridge.find_result_session(&[result]).await.is_none());
+    // Repeated completion is intentionally harmless when a late notification
+    // races the background task's final cleanup.
+    bridge.finish_detached_session(&session).await;
 }
 
 #[tokio::test]

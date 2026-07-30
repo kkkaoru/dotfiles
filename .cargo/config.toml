@@ -1,0 +1,4 @@
+[build]
+# Keep Rust debug/test artifacts outside the dotfiles checkout. The crate also
+# carries this setting for commands run from its own directory.
+target-dir = "/tmp/claudex-agent-adapter-target"

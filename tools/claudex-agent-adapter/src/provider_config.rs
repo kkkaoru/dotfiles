@@ -47,12 +47,23 @@ struct Provider {
     #[serde(default)]
     max_concurrency: Option<usize>,
     #[serde(default)]
+    request_budget: Option<RequestBudget>,
+    #[serde(default)]
     model_prefixes: Vec<String>,
     backend: BackendKind,
     #[serde(default)]
     acp: Option<AcpLaunch>,
     #[serde(default)]
     web_search_mode: WebSearchMode,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[allow(dead_code)]
+struct RequestBudget {
+    estimated_requests: u64,
+    window_minutes: u64,
+    usage_window: String,
 }
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -288,6 +299,13 @@ impl Provider {
     }
     fn into_route(self) -> BackendRoute {
         let _ = self.usage_provider;
+        let _ = self.request_budget.map(|budget| {
+            (
+                budget.estimated_requests,
+                budget.window_minutes,
+                budget.usage_window,
+            )
+        });
         BackendRoute {
             model: self.default_model,
             backend: self.backend,

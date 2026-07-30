@@ -89,6 +89,7 @@ impl Bridge {
                 collaborator_model: collaborator_model.map(str::to_owned),
             }),
             gate: selected.gate,
+            detached: false,
         })
     }
 
@@ -180,22 +181,29 @@ impl Bridge {
             )
             .await?;
         let gate = std::sync::Arc::clone(&session.gate).lock_owned().await;
-        self.start_selected_turn(
-            &retry.request,
-            input_tokens,
-            effort,
-            SelectedSession {
-                session,
-                existing_len: 0,
-                recovered: false,
-                gate,
-            },
-            Vec::new(),
-            advisor_model.as_deref(),
-            collaborator_model.as_deref(),
-            false,
-        )
-        .await
+        let detached = self.is_detached_session(previous).await;
+        let mut turn = self
+            .start_selected_turn(
+                &retry.request,
+                input_tokens,
+                effort,
+                SelectedSession {
+                    session,
+                    existing_len: 0,
+                    recovered: false,
+                    gate,
+                },
+                Vec::new(),
+                advisor_model.as_deref(),
+                collaborator_model.as_deref(),
+                false,
+            )
+            .await?;
+        if detached {
+            self.detach_session(&turn.session).await;
+            turn.detached = true;
+        }
+        Ok(turn)
     }
 
     pub(super) async fn start_new_session(

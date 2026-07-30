@@ -163,8 +163,11 @@ async fn run_worker(
             _ => {}
         }
     }
+    // A URL in the model's prose is not evidence that a live search happened.
+    // Only use prose fallback after the provider emitted at least one native
+    // search event; otherwise the caller must observe a failed search.
     if results.is_empty() {
-        results = extract_urls(&answer);
+        results = fallback_results(search_count, &answer);
     }
     Ok(SearchResponse {
         query: query.to_owned(),
@@ -216,6 +219,12 @@ fn extract_urls(text: &str) -> Vec<SearchResult> {
             })
         })
         .collect()
+}
+
+fn fallback_results(search_count: u64, answer: &str) -> Vec<SearchResult> {
+    (search_count > 0)
+        .then(|| extract_urls(answer))
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -279,6 +288,15 @@ mod tests {
             ["https://example.test/a", "http://example.test/b"]
         );
         assert!(extract_urls("no links here").is_empty());
+    }
+
+    #[test]
+    fn does_not_treat_prose_urls_as_a_live_search_result_without_an_event() {
+        assert!(fallback_results(0, "https://example.test/from-memory").is_empty());
+        assert_eq!(
+            fallback_results(1, "https://example.test/after-search")[0].url,
+            "https://example.test/after-search"
+        );
     }
 
     #[tokio::test]

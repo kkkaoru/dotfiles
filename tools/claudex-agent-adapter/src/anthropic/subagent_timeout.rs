@@ -97,12 +97,21 @@ impl Bridge {
             .await;
             let Some(segment) = segment else {
                 let response = background_response(&turn);
+                // Do not leave the background turn in the active matching pool:
+                // the main session must be able to start new work immediately.
+                // Keep it in the detached pool so a late Claude tool result can
+                // still be delivered to the provider thread exactly once.
+                self.detach_session(&turn.session).await;
+                turn.detached = true;
                 self.continue_subagent_in_background(turn, permit);
                 return Ok(response);
             };
             match segment {
                 Ok(segment) => {
                     super::stream::commit_transcript(&turn.session, turn.extras, &segment).await;
+                    if turn.detached {
+                        self.finish_detached_session(&turn.session).await;
+                    }
                     return Ok(anthropic_response(segment, &turn.response_model));
                 }
                 Err(error) => {
@@ -127,11 +136,13 @@ impl Bridge {
         permit: Option<ModelPermit>,
     ) {
         let bridge = Arc::clone(self);
+        let session = Arc::clone(&turn.session);
         tokio::spawn(async move {
             let _permit = permit;
             if let Err(error) = bridge.non_streaming_response(turn).await {
                 tracing::warn!(%error, "background SubAgent turn did not complete");
             }
+            bridge.finish_detached_session(&session).await;
         });
     }
 }
@@ -203,19 +214,45 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn returns_a_background_notice_without_losing_the_provider_turn() {
+    async fn background_timeout_preserves_late_result_and_releases_detached_session() {
         let (_root, bridge) = mock_bridge(STALLED_APP_SERVER).await;
         let dispatcher = crate::app_server::events::ThreadEventDispatcher::default();
+        let turn = active_turn(dispatcher.subscribe("thread"), None).await;
+        let session = Arc::clone(&turn.session);
+
         let response = bridge
-            .non_streaming_subagent_response_with_timeout(
-                active_turn(dispatcher.subscribe("thread"), None).await,
-                None,
-                Duration::ZERO,
-            )
+            .non_streaming_subagent_response_with_timeout(turn, None, Duration::ZERO)
             .await
             .expect("background response");
-
         assert!(response_text(response).await.contains(BACKGROUND_NOTICE));
+
+        dispatcher.dispatch(json!({
+            "method":"item/agentMessage/delta",
+            "params":{"threadId":"thread","delta":"late result"}
+        }));
+        dispatcher.dispatch(json!({
+            "method":"turn/completed",
+            "params":{"threadId":"thread","turn":{"status":"completed"}}
+        }));
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let transcript = session.transcript.lock().await;
+                let detached = bridge.detached_sessions.lock().await;
+                if transcript
+                    .iter()
+                    .any(|entry| entry.to_string().contains("late result"))
+                    && detached.is_empty()
+                {
+                    break;
+                }
+                drop(detached);
+                drop(transcript);
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("late result should be committed and detached session released");
     }
 
     #[tokio::test]
@@ -323,6 +360,7 @@ mod tests {
             input_tokens: 1,
             retry,
             gate,
+            detached: false,
         }
     }
 

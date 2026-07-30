@@ -1413,6 +1413,7 @@ async fn drive_turn(
         input_tokens: 1,
         retry,
         gate,
+        detached: false,
     }
 }
 

@@ -11,7 +11,7 @@ pub(in crate::anthropic) use thread::thread_start_params;
 pub(in crate::anthropic) use thread::thread_start_params_for_mode;
 
 const ORCHESTRATOR_INSTRUCTIONS: &str = "Claudex main-session orchestration mode is active. The main session must control parallel distribution across multiple SubAgents for independent work: coordinate, decompose into non-redundant workstreams, choose fan-out for current capacity, delegate, monitor, resolve conflicts, synthesize worker results, and deliver the final response. Claude Code's enabled tools, permission rules, hooks, MCP servers, skills, and Agent Teams remain available in this session. For every substantive investigation, implementation, review, or validation, call a routed Agent/Task worker by default rather than doing the work in main. This remains mandatory after long execution, compaction, resume, context reconstruction, and worker failure. Avoid serial heavy processing by one worker when capacity allows multi-worker fan-out: unless the work is truly indivisible, the user opts out, or only one compatible worker slot is available, launch parallel ordinary workers in the same batch; do not give an entire heavy or unknown-duration task to one ordinary worker merely for convenience. custom-advisor is a separate logical session singleton/capacity channel, not an implementation workstream, and built-in advisor remains independent of worker capacity. For related follow-ups, reuse compatible workers with SendMessage and the exact prior Agent/Task recipient instead of churning processes with fresh launches; start a new instance only when true concurrency, clean-room review, a different route/role, incompatible scope, or an unavailable recipient requires it.";
-const SUBAGENT_LIFECYCLE_INSTRUCTIONS: &str = "For independent fan-out that may be long-running or whose duration is unknown, set run_in_background=true on every launch in the single batch unless the active user explicitly requires synchronous results. Do not mix foreground and background launches in one batch. Background completion notifications are integrated incrementally on later turns, so start a concrete independent action or end the current turn promptly instead of reasoning while waiting for the slowest worker. Use foreground only for short bounded work, a dependency-required result, or an explicit synchronous request. This rule supersedes generic foreground advice above when a worker may be heavy. Prefer reusing a compatible recipient via SendMessage over launching a replacement process solely to continue related work.";
+const SUBAGENT_LIFECYCLE_INSTRUCTIONS: &str = "For independent fan-out that may be long-running or whose duration is unknown, set run_in_background=true on every launch in the single batch unless the active user explicitly requires synchronous results. Do not mix foreground and background launches in one batch. Background completion notifications are integrated incrementally on later turns, so start a concrete independent action or end the current turn promptly instead of reasoning while waiting for the slowest worker. Use foreground only for short bounded work, a dependency-required result, or an explicit synchronous request. This rule supersedes generic foreground advice above when a worker may be heavy. Prefer reusing a compatible recipient via SendMessage over launching a replacement process solely to continue related work. TaskStop/Stop Task is best-effort and idempotent: use only the exact active task_id returned by the current Agent/Task result, never guessed or stale IDs. Never stop a mailbox name, completion notification, or already-consumed task. If the tool reports `No task found`, treat it as already stopped/completed, do not retry, and continue.";
 
 #[cfg(test)]
 pub(in crate::anthropic) fn tool_configuration(
@@ -304,17 +304,28 @@ fn parallel_scheduler_instructions(request: &MessagesRequest) -> String {
 
 pub(in crate::anthropic) fn dynamic_tool(tool: &Value, codex_name: &str) -> Option<Value> {
     let original_name = tool.get("name")?.as_str()?;
+    let lifecycle_guidance = task_lifecycle_guidance(original_name);
     Some(json!({
         "type": "function",
         "name": codex_name,
         "description": format!(
-            "Claude Code tool `{original_name}`. {}",
-            tool.get("description").and_then(Value::as_str).unwrap_or("")
+            "Claude Code tool `{original_name}`. {}{}",
+            tool.get("description").and_then(Value::as_str).unwrap_or(""),
+            lifecycle_guidance
         ),
         "inputSchema": super::super::agent_effort::tool_schema(original_name,
             tool.get("input_schema").cloned()
                 .unwrap_or_else(|| json!({"type":"object"})))
     }))
+}
+
+fn task_lifecycle_guidance(tool_name: &str) -> &'static str {
+    match tool_name {
+        "TaskStop" | "StopTask" | "Stop Task" => {
+            " Task lifecycle: stopping is idempotent; use only the exact active task_id returned by the current Agent/Task launch. Never guess IDs or stop completed/notification-consumed tasks. A `No task found` response means already stopped/completed; do not retry."
+        }
+        _ => "",
+    }
 }
 
 pub(in crate::anthropic) fn codex_tool_name(original_name: &str, index: usize) -> String {
