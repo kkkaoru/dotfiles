@@ -40,10 +40,13 @@ impl SubscriptionStream {
         }
         self.activity.close(sender).await?;
         self.close_text(sender).await?;
+        let mut forwarded = false;
         for block in tool_uses {
-            self.forward_tool_use(sender, block).await?;
+            forwarded |= self.forward_tool_use(sender, block).await?;
         }
-        self.saw_tool_use = true;
+        if forwarded {
+            self.saw_tool_use = true;
+        }
         Ok(())
     }
 
@@ -51,7 +54,7 @@ impl SubscriptionStream {
         &mut self,
         sender: &mpsc::Sender<Result<Bytes, Infallible>>,
         block: &Value,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let id = block.get("id").and_then(Value::as_str).unwrap_or_default();
         let emitted_name = block
             .get("name")
@@ -60,6 +63,9 @@ impl SubscriptionStream {
         let name = mapped_tool_name(emitted_name, &self.tools);
         if id.is_empty() || name.is_empty() {
             bail!("Claude subscription emitted a tool call without an ID or name");
+        }
+        if matches!(name, "WebSearch" | "WebFetch") {
+            return Ok(false);
         }
         let input = block
             .get("input")
@@ -71,13 +77,13 @@ impl SubscriptionStream {
             Err(error) if super::super::agent_effort::is_agent_tool(name) => {
                 tracing::warn!(%error, tool = name, "blocked unsupported SubAgent launch");
                 self.report_blocked_subagent(sender).await?;
-                return Ok(());
+                return Ok(true);
             }
             Err(error) => return Err(error),
         };
         send_tool_block(sender, self.next_index, id, name, public_input).await?;
         self.next_index += 1;
-        Ok(())
+        Ok(true)
     }
 
     async fn report_blocked_subagent(

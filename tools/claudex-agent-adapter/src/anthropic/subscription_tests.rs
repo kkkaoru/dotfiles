@@ -35,6 +35,39 @@ fn subscription_children_identify_as_noninteractive() {
     assert_eq!(value, Some(std::ffi::OsStr::new("1")));
 }
 
+#[test]
+fn streaming_subscription_bridges_native_web_tools_to_the_outer_session() {
+    let mut options = SubscriptionOptions::internal(
+        Arc::new(tokio::sync::Semaphore::new(1)),
+        Duration::from_secs(1),
+    );
+    options.tools = vec![
+        "WebSearch".to_owned(),
+        "WebFetch".to_owned(),
+        "Agent".to_owned(),
+    ];
+    let command = subscription_command(
+        Path::new("claude"),
+        "claude-sonnet-5",
+        &options,
+        OutputMode::StreamJson,
+    );
+    let args = command.as_std().get_args().collect::<Vec<_>>();
+    let settings = args
+        .windows(2)
+        .find_map(|pair| (pair[0].to_str() == Some("--settings")).then_some(pair[1]))
+        .expect("stream settings")
+        .to_str()
+        .expect("UTF-8 settings");
+    let value: serde_json::Value = serde_json::from_str(settings).expect("settings JSON");
+    assert_eq!(
+        value
+            .pointer("/hooks/PreToolUse/0/matcher")
+            .and_then(serde_json::Value::as_str),
+        Some("^(?!WebSearch$|WebFetch$).*")
+    );
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn terminating_a_subscription_reaps_its_entire_process_group() {
@@ -245,6 +278,8 @@ fn selects_subscription_workspace_and_outer_tools() {
             "CronCreate",
             "CronDelete",
             "CronList",
+            "WebSearch",
+            "WebFetch",
         ]
     );
     assert_eq!(
@@ -258,6 +293,8 @@ fn selects_subscription_workspace_and_outer_tools() {
             "CronCreate",
             "CronDelete",
             "CronList",
+            "WebSearch",
+            "WebFetch",
         ]
     );
 }

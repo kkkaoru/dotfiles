@@ -725,7 +725,10 @@ async fn routes_non_main_models_to_subscription_with_requested_effort() {
         .canonicalize()
         .expect("canonical workspace");
     let system = format!("<env>\nWorking directory: {}\n</env>", workspace.display());
-    let expected = format!("test-sonnet-model|high|Read|Read|{}", workspace.display());
+    let expected = format!(
+        "test-sonnet-model|high|Read,WebSearch,WebFetch|Read,WebSearch,WebFetch|{}",
+        workspace.display()
+    );
     assert_subscription_response(&client, &adapter, &system, &expected).await;
     assert_streaming_subscription(&client, &adapter, &system).await;
     assert_fast_subscription_outcomes(&client, &adapter, &system).await;

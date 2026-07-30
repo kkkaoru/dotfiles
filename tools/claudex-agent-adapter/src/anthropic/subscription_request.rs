@@ -88,6 +88,13 @@ pub(super) fn requested_tools(tools: &[Value], omit_task_bookkeeping: bool) -> V
             selected.push(name.to_owned());
         }
     }
+    if !selected.is_empty() {
+        for native in ["WebSearch", "WebFetch"] {
+            if seen.insert(native) {
+                selected.push(native.to_owned());
+            }
+        }
+    }
     selected
 }
 

@@ -112,6 +112,56 @@ async fn forwards_empty_and_regular_deltas_then_finishes_once() {
 }
 
 #[tokio::test]
+async fn keeps_native_web_results_inside_the_subscription() {
+    let (sender, mut receiver) = channel();
+    let mut stream = SubscriptionStream {
+        text_started: false,
+        text_closed: false,
+        saw_tool_use: false,
+        saw_result: false,
+        next_index: 0,
+        tools: vec!["WebSearch".to_owned(), "WebFetch".to_owned()],
+        tool_context: None,
+        activity: SubscriptionActivity::default(),
+    };
+    stream
+        .handle_line(
+            &sender,
+            &json!({
+                "type":"assistant",
+                "parent_tool_use_id":null,
+                "message":{"content":[{
+                    "type":"tool_use", "id":"web-search", "name":"WebSearch",
+                    "input":{"query":"AVITA株式会社"}
+                }]}
+            })
+            .to_string(),
+        )
+        .await
+        .expect("consume native web tool");
+    stream
+        .handle_line(
+            &sender,
+            r#"{"type":"stream_event","event":{"delta":{"type":"text_delta","text":"https://avita.co.jp"}}}"#,
+        )
+        .await
+        .expect("forward native web result");
+    stream
+        .handle_line(
+            &sender,
+            r#"{"type":"result","subtype":"success","result":"https://avita.co.jp"}"#,
+        )
+        .await
+        .expect("finish native web result");
+    let output = output(&mut receiver).await;
+    assert!(!output.contains("tool_use"));
+    assert!(output.contains("https://avita.co.jp"));
+    assert!(output.contains("end_turn"));
+    assert!(!stream.saw_tool_use);
+    assert!(stream.saw_result);
+}
+
+#[tokio::test]
 async fn empty_partial_delta_is_not_visible_output_and_remains_eligible_for_status() {
     let (sender, mut receiver) = channel();
     let mut stream = SubscriptionStream {

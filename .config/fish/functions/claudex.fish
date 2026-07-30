@@ -189,12 +189,18 @@ print(model)
     # agent setting and replaces the session display name with the agent name.
     set -l claude_args $argv
     set -l has_cli_effort 0
+    set -l has_allowed_tools 0
     for argument in $argv
         switch $argument
             case --effort '--effort=*'
                 set has_cli_effort 1
+            case --allowedTools --allowed-tools '--allowedTools=*' '--allowed-tools=*'
+                set has_allowed_tools 1
         end
     end
+    # Native web tools are returned by the adapter and executed by this outer Claude Code process.
+    # Pre-allow them for claudex only so print and interactive sessions do not report zero searches.
+    test $has_allowed_tools -eq 1; or set -p claude_args --allowedTools WebSearch,WebFetch
     # Explicit defaults must be forwarded to Claude Code. In settings mode,
     # only an explicit CLAUDEX_EFFORT override is forwarded; otherwise the
     # inherited settings.json value remains authoritative.

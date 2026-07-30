@@ -28,12 +28,12 @@ use super::{
 use crate::NONINTERACTIVE_CHILD_ENV;
 pub(in crate::anthropic) use lifecycle::terminate_subscription;
 use lifecycle::{collect_subscription_output, terminate_after_subscription_failure};
-
 pub(crate) const DEFAULT_MAX_PROCESSES: usize = 20;
 pub(crate) const DEFAULT_TIMEOUT_MINUTES: u64 = 120;
 const MAX_PROCESSES_ENV: &str = "CLAUDEX_SUBSCRIPTION_MAX_PROCESSES";
 const TIMEOUT_MINUTES_ENV: &str = "CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES";
-const OUTER_TOOL_BRIDGE_SETTINGS: &str = r#"{"hooks":{"PreToolUse":[{"matcher":".*","hooks":[{"type":"command","command":"exit 2"}]}]}}"#;
+// Let the subscription execute native web tools; the outer session bridges every other tool.
+const OUTER_TOOL_BRIDGE_SETTINGS: &str = r#"{"hooks":{"PreToolUse":[{"matcher":"^(?!WebSearch$|WebFetch$).*","hooks":[{"type":"command","command":"exit 2"}]}]}}"#;
 pub(super) struct SubscriptionOptions {
     pub(super) effort: Option<String>,
     pub(super) tools: Vec<String>,

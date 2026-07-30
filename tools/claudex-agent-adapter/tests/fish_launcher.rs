@@ -71,7 +71,8 @@ fn assert_shared_provider_default(function: &std::path::Path, home: &tempfile::T
     assert!(arguments.contains("--model\nmodel\n"));
     assert!(arguments.contains("--inherit-claude-model\n"));
     assert!(arguments.contains("--subscription-max-processes\n20\n"));
-    assert!(arguments.ends_with("--\nsmoke\n"));
+    assert!(arguments.contains("--allowedTools\nWebSearch,WebFetch\n"));
+    assert!(arguments.ends_with("--\n--allowedTools\nWebSearch,WebFetch\nsmoke\n"));
     assert!(String::from_utf8_lossy(&output.stderr).contains("settings sonnet[1m], high"));
 }
 
@@ -98,7 +99,11 @@ fn assert_explicit_override(function: &std::path::Path, home: &tempfile::TempDir
     assert!(arguments.contains("--model\nvendor-model\n"));
     assert!(!arguments.contains("--inherit-claude-model\n"));
     assert!(arguments.contains("--effort\nhigh\n"));
-    assert!(arguments.ends_with("--\n--effort\nhigh\noverride-smoke\n"));
+    assert!(arguments.contains("--allowedTools\nWebSearch,WebFetch\n"));
+    assert!(
+        arguments
+            .ends_with("--\n--effort\nhigh\n--allowedTools\nWebSearch,WebFetch\noverride-smoke\n")
+    );
 }
 
 fn assert_local_defaults(function: &std::path::Path, home: &tempfile::TempDir) {
@@ -206,7 +211,7 @@ fn fish_launcher_uses_claude_settings_model_and_effort_when_available() {
         "--provider-config\n{}\n",
         home.path().join(".config/claudex/providers.json").display()
     )));
-    assert!(arguments.ends_with("--\nsettings-smoke\n"));
+    assert!(arguments.ends_with("--\n--allowedTools\nWebSearch,WebFetch\nsettings-smoke\n"));
     assert!(String::from_utf8_lossy(&output.stderr).contains("settings sonnet[1m], high"));
 }
 
@@ -251,7 +256,10 @@ fn assert_explicit_agent_is_preserved(function: &std::path::Path, home: &tempfil
     assert!(output.status.success());
     let arguments = String::from_utf8(output.stdout).expect("UTF-8 explicit-agent arguments");
     assert_eq!(arguments.matches("--agent\n").count(), 1);
-    assert!(arguments.ends_with("--\n--agent\ncustom-subagent\nsmoke\n"));
+    assert!(
+        arguments
+            .ends_with("--\n--allowedTools\nWebSearch,WebFetch\n--agent\ncustom-subagent\nsmoke\n")
+    );
 }
 
 fn assert_routing_marker_is_scoped_to_claudex(
@@ -460,5 +468,5 @@ fn assert_no_argument_launch(function: &std::path::Path, home: &tempfile::TempDi
     );
     let arguments = String::from_utf8(output.stdout).expect("UTF-8 adapter arguments");
     assert!(arguments.contains("--model\nmodel\n"));
-    assert!(arguments.ends_with("--\n"));
+    assert!(arguments.ends_with("--\n--allowedTools\nWebSearch,WebFetch\n"));
 }
