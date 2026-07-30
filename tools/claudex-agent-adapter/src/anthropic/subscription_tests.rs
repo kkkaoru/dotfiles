@@ -14,6 +14,7 @@ use super::subscription::{
     subscription_prompt, valid_effort,
 };
 use crate::NONINTERACTIVE_CHILD_ENV;
+use crate::anthropic::MessagesRequest;
 
 #[test]
 fn subscription_children_identify_as_noninteractive() {
@@ -296,5 +297,26 @@ fn selects_subscription_workspace_and_outer_tools() {
             "WebSearch",
             "WebFetch",
         ]
+    );
+}
+
+#[test]
+fn search_worker_receives_native_web_tools_even_when_child_tools_are_empty() {
+    let request = MessagesRequest {
+        model: "claude-haiku-4-5".to_owned(),
+        system: json!("name: claudex-haiku-search\ntools: WebSearch,WebFetch"),
+        messages: vec![],
+        tools: vec![],
+        stream: true,
+        output_config: json!({}),
+        metadata: json!({}),
+        working_directory: None,
+        disabled_subagent_models: Default::default(),
+        claudex_collaborator_model: None,
+    };
+
+    assert_eq!(
+        super::subscription::requested_tools_for_request(&request, true),
+        ["WebSearch", "WebFetch"]
     );
 }

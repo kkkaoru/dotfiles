@@ -1,12 +1,11 @@
+use anyhow::{Context, Result, anyhow, bail};
+use axum::{body::Body, http::Response};
+use serde_json::{Value, json};
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
 };
-
-use anyhow::{Context, Result, anyhow, bail};
-use axum::{body::Body, http::Response};
-use serde_json::{Value, json};
 use tokio::{
     io::AsyncWriteExt,
     process::{Child, ChildStdin, Command},
@@ -17,7 +16,9 @@ mod lifecycle;
 
 #[cfg(test)]
 pub(super) use super::subscription_request::cwd_from_system;
+#[cfg(test)]
 pub(super) use super::subscription_request::requested_tools;
+pub(super) use super::subscription_request::requested_tools_for_request;
 use super::{
     Bridge, MessagesRequest, Segment, Usage,
     agent_effort::AgentEffort,
@@ -41,7 +42,6 @@ pub(super) struct SubscriptionOptions {
     pub(super) timeout: Duration,
     pub(super) tool_context: Option<SubscriptionToolContext>,
 }
-
 #[derive(Clone)]
 pub(super) struct SubscriptionToolContext {
     pub(super) agent_efforts: Arc<super::agent_effort::AgentEffortIntents>,
@@ -183,7 +183,7 @@ impl Bridge {
     ) -> SubscriptionOptions {
         SubscriptionOptions {
             effort,
-            tools: requested_tools(&request.tools, !is_subagent),
+            tools: requested_tools_for_request(request, !is_subagent),
             cwd: subscription_request_cwd(request),
             slots: Arc::clone(&self.subscription_slots),
             timeout: self.subscription_timeout,

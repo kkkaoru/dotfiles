@@ -14,11 +14,11 @@ use super::{
     agent_effort_matching::{
         has_correlation_marker, request_matches_intent_with_system, value_texts,
     },
-    agent_intent_store::{persistence_snapshot, unix_seconds},
+    agent_intent_store::{persistence_snapshot, remove_expired, unix_seconds},
     subscription::valid_effort,
 };
 
-const INTENT_TTL: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+pub(super) const INTENT_TTL: std::time::Duration = std::time::Duration::from_secs(10 * 60);
 pub(super) const MAX_PENDING_INTENTS: usize = 1_024;
 const ADAPTER_EFFORT: &str = "claudex_effort";
 const ADAPTER_MODEL: &str = "claudex_model";
@@ -31,6 +31,7 @@ pub(super) struct AgentEffortIntent {
     pub(super) effort: Option<String>,
     pub(super) model_override: Option<String>,
     pub(super) model_is_inherited: bool,
+    pub(super) run_in_background: bool,
     pub(super) tool_use_id: String,
     pub(super) created_at: Instant,
     pub(super) created_unix_seconds: u64,
@@ -48,6 +49,7 @@ pub(super) struct AgentIntent {
     pub(super) effort: AgentEffort,
     pub(super) model_override: Option<String>,
     pub(super) model_is_inherited: bool,
+    pub(super) run_in_background: bool,
     pub(super) is_subagent: bool,
     pub(super) matched: bool,
 }
@@ -57,6 +59,7 @@ impl AgentIntent {
             effort: AgentEffort::Unmatched,
             model_override: None,
             model_is_inherited: false,
+            run_in_background: false,
             is_subagent,
             matched: false,
         }
@@ -118,6 +121,8 @@ impl AgentEffortIntents {
         let model_is_inherited = explicit_model.is_some_and(|model| {
             arguments.get(IMPLICIT_MODEL).and_then(Value::as_str) == Some(model)
         });
+        let run_in_background =
+            arguments.get("run_in_background").and_then(Value::as_bool) == Some(true);
         let correlated = has_correlation_marker(prompt);
         let mut pending = self.pending.lock().expect("agent effort intents poisoned");
         remove_expired(&mut pending);
@@ -135,6 +140,7 @@ impl AgentEffortIntents {
             effort,
             model_override: explicit_model.map(str::to_owned),
             model_is_inherited,
+            run_in_background,
             tool_use_id,
             created_at: Instant::now(),
             created_unix_seconds: unix_seconds(),
@@ -183,6 +189,7 @@ impl AgentEffortIntents {
             effort,
             model_override: intent.model_override,
             model_is_inherited: intent.model_is_inherited,
+            run_in_background: intent.run_in_background,
             is_subagent: true,
             matched: true,
         };
@@ -201,17 +208,11 @@ impl AgentEffortIntents {
         self.persist(snapshot);
     }
 }
-
-fn remove_expired(pending: &mut VecDeque<AgentEffortIntent>) {
-    pending.retain(|intent| intent.correlated || intent.created_at.elapsed() < INTENT_TTL);
-}
-
 fn agent_prompt<'a>(tool_name: &str, arguments: &'a Value) -> Option<&'a str> {
     is_agent_tool(tool_name)
         .then(|| arguments.get("prompt").and_then(Value::as_str))
         .flatten()
 }
-
 #[cfg(test)]
 pub(super) fn validate_routed_agent_arguments(
     tool_name: &str,

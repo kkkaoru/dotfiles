@@ -19,7 +19,7 @@ impl Bridge {
         builder: SegmentBuilder,
         model_permit: Option<ModelPermit>,
     ) {
-        self.drive_subagent_stream(turn, sender, builder, model_permit, false)
+        self.drive_subagent_stream(turn, sender, builder, model_permit, false, false)
             .await;
     }
 
@@ -30,8 +30,9 @@ impl Bridge {
         builder: SegmentBuilder,
         model_permit: Option<ModelPermit>,
         is_subagent: bool,
+        run_in_background: bool,
     ) {
-        let timeout = is_subagent.then(subagent_response_timeout);
+        let timeout = response_timeout(is_subagent, run_in_background);
         self.drive_subagent_stream_with_timeout(
             turn,
             sender,
@@ -61,8 +62,15 @@ impl Bridge {
             self.send_background_notice(input_tokens, &sender).await;
             return;
         };
-        self.finish_stream_turn(turn, sender, waited, model_permit, is_subagent)
-            .await;
+        self.finish_stream_turn(
+            turn,
+            sender,
+            waited,
+            model_permit,
+            is_subagent,
+            timeout.is_some(),
+        )
+        .await;
     }
 
     async fn wait_for_stream_turn(
@@ -108,6 +116,7 @@ impl Bridge {
         waited: anyhow::Result<StreamTurn>,
         model_permit: Option<ModelPermit>,
         is_subagent: bool,
+        run_in_background: bool,
     ) {
         let ActiveTurn {
             session,
@@ -154,6 +163,7 @@ impl Bridge {
                             SegmentBuilder::new(input_tokens),
                             model_permit,
                             is_subagent,
+                            run_in_background,
                         ))
                         .await;
                     }
@@ -167,5 +177,22 @@ impl Bridge {
                 send_stream_error(&sender, error).await;
             }
         }
+    }
+}
+
+fn response_timeout(is_subagent: bool, run_in_background: bool) -> Option<Duration> {
+    (is_subagent && run_in_background).then(subagent_response_timeout)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::response_timeout;
+
+    #[test]
+    fn only_background_subagents_get_a_response_timeout() {
+        assert!(response_timeout(false, false).is_none());
+        assert!(response_timeout(false, true).is_none());
+        assert!(response_timeout(true, false).is_none());
+        assert!(response_timeout(true, true).is_some());
     }
 }

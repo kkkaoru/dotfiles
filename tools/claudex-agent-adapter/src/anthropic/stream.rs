@@ -87,6 +87,7 @@ impl Bridge {
         effort: Option<String>,
         concurrency_ticket: Option<Ticket>,
         is_subagent: bool,
+        run_in_background: bool,
     ) -> Response<Body> {
         let (sender, receiver) = mpsc::channel(256);
         let response_model = self.request_model(&request);
@@ -102,6 +103,7 @@ impl Bridge {
             effort,
             concurrency_ticket,
             is_subagent,
+            run_in_background,
             sender,
         ));
         sse_response(receiver)
@@ -114,6 +116,7 @@ impl Bridge {
         effort: Option<String>,
         concurrency_ticket: Option<Ticket>,
         is_subagent: bool,
+        run_in_background: bool,
         sender: StreamSender,
     ) {
         let prepare = async {
@@ -134,8 +137,15 @@ impl Bridge {
         .await;
         match turn {
             Ok(Some((turn, permit))) => {
-                self.drive_subagent_stream(turn, sender, builder, permit, is_subagent)
-                    .await
+                self.drive_subagent_stream(
+                    turn,
+                    sender,
+                    builder,
+                    permit,
+                    is_subagent,
+                    run_in_background,
+                )
+                .await
             }
             Ok(None) => {}
             Err(error) => {

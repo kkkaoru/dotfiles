@@ -193,6 +193,30 @@ mod tests {
     }
 
     #[test]
+    fn preserves_claude_code_foreground_and_background_launch_modes() {
+        let intents = AgentEffortIntents::default();
+        intents.record(
+            Some("session"),
+            "Agent",
+            "foreground".to_owned(),
+            "main-model",
+            &json!({"prompt":"foreground","run_in_background":false}),
+        );
+        intents.record(
+            Some("session"),
+            "Agent",
+            "background".to_owned(),
+            "main-model",
+            &json!({"prompt":"background","run_in_background":true}),
+        );
+
+        let foreground = intents.take(&request("session", "foreground", true));
+        let background = intents.take(&request("session", "background", true));
+        assert!(!foreground.run_in_background);
+        assert!(background.run_in_background);
+    }
+
+    #[test]
     fn correlation_marker_identifies_subagent_without_billing_header() {
         let intents = AgentEffortIntents::default();
         let (internal, _) = prepare_arguments(

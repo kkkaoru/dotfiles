@@ -1696,7 +1696,7 @@ async fn prepared_stream_reports_orphaned_tool_results() {
     })];
 
     Arc::clone(&bridge)
-        .drive_prepared_subagent_stream(request, 1, None, None, false, sender)
+        .drive_prepared_subagent_stream(request, 1, None, None, false, false, sender)
         .await;
 
     let frame = receiver

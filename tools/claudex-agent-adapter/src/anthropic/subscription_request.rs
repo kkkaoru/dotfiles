@@ -54,7 +54,10 @@ pub(super) fn subscription_request_prompt(request: &MessagesRequest) -> String {
             "active user's explicit model request. If no such model is available, do not launch or ",
             "inherit the parent model. When a schema lacks claudex_effort, put the routed effort at ",
             "the start of its prompt as an exact `claudex_effort: <effort>` line. Never put an ",
-            "external provider model ID in the native model field.\n\n",
+            "external provider model ID in the native model field. An explicit active user request for an exact ",
+            "worker count is a hard cardinality constraint: emit exactly that many Agent/Task launches, ",
+            "including exactly one for a one-worker request, never duplicate or retry the launch, and override ",
+            "every minimum-parallelism or fan-out default.\n\n",
             "Adapter orchestration defaults (runtime metadata):\n",
             "{}\n\nSystem:\n{}\n\nMessages:\n{}"
         ),
@@ -76,7 +79,27 @@ fn subscription_parallel_scheduler_instructions(_request: &MessagesRequest) -> S
     )
 }
 
+#[cfg(test)]
 pub(super) fn requested_tools(tools: &[Value], omit_task_bookkeeping: bool) -> Vec<String> {
+    requested_tools_with_native(tools, omit_task_bookkeeping, false)
+}
+
+pub(super) fn requested_tools_for_request(
+    request: &MessagesRequest,
+    omit_task_bookkeeping: bool,
+) -> Vec<String> {
+    requested_tools_with_native(
+        &request.tools,
+        omit_task_bookkeeping,
+        is_live_web_retrieval_worker(request),
+    )
+}
+
+fn requested_tools_with_native(
+    tools: &[Value],
+    omit_task_bookkeeping: bool,
+    force_native_web_tools: bool,
+) -> Vec<String> {
     let mut selected = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for name in tools
@@ -92,7 +115,7 @@ pub(super) fn requested_tools(tools: &[Value], omit_task_bookkeeping: bool) -> V
             selected.push(name.to_owned());
         }
     }
-    if !selected.is_empty() {
+    if force_native_web_tools || !selected.is_empty() {
         for native in ["WebSearch", "WebFetch"] {
             if seen.insert(native) {
                 selected.push(native.to_owned());
@@ -100,6 +123,18 @@ pub(super) fn requested_tools(tools: &[Value], omit_task_bookkeeping: bool) -> V
         }
     }
     selected
+}
+
+fn is_live_web_retrieval_worker(request: &MessagesRequest) -> bool {
+    let system = system_text(&request.system);
+    let messages = serde_json::to_string(&request.messages).unwrap_or_default();
+    [system.as_str(), messages.as_str()]
+        .into_iter()
+        .any(|text| {
+            text.contains("claudex-haiku-search")
+                || text.contains("Dedicated live-web retrieval worker")
+                || text.contains("tools: WebSearch,WebFetch")
+        })
 }
 
 pub(super) fn subscription_request_cwd(request: &MessagesRequest) -> Option<PathBuf> {

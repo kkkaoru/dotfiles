@@ -22,6 +22,8 @@ pub(super) struct StoredAgentIntent {
     pub(super) model_override: Option<String>,
     #[serde(default)]
     pub(super) model_is_inherited: bool,
+    #[serde(default)]
+    pub(super) run_in_background: bool,
     pub(super) tool_use_id: String,
     pub(super) created_unix_seconds: u64,
 }
@@ -146,6 +148,12 @@ pub(super) fn persistence_snapshot(
         .collect()
 }
 
+pub(super) fn remove_expired(pending: &mut VecDeque<AgentEffortIntent>) {
+    pending.retain(|intent| {
+        intent.correlated || intent.created_at.elapsed() < super::agent_effort::INTENT_TTL
+    });
+}
+
 fn bound_intents(mut intents: VecDeque<StoredAgentIntent>) -> VecDeque<StoredAgentIntent> {
     while intents.len() > super::agent_effort::MAX_PENDING_INTENTS {
         intents.pop_front();
@@ -197,6 +205,7 @@ fn restored_intent(stored: StoredAgentIntent) -> AgentEffortIntent {
         effort: stored.effort,
         model_override: stored.model_override,
         model_is_inherited: stored.model_is_inherited,
+        run_in_background: stored.run_in_background,
         tool_use_id: stored.tool_use_id,
         created_at: std::time::Instant::now(),
         created_unix_seconds: stored.created_unix_seconds,
@@ -209,6 +218,7 @@ fn stored_intent(intent: &AgentEffortIntent) -> StoredAgentIntent {
         effort: intent.effort.clone(),
         model_override: intent.model_override.clone(),
         model_is_inherited: intent.model_is_inherited,
+        run_in_background: intent.run_in_background,
         tool_use_id: intent.tool_use_id.clone(),
         created_unix_seconds: intent.created_unix_seconds,
     }

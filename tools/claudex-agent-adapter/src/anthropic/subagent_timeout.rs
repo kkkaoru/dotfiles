@@ -39,6 +39,7 @@ impl Bridge {
         input_tokens: u64,
         effort: Option<String>,
         is_subagent: bool,
+        run_in_background: bool,
     ) -> Result<Response<Body>> {
         let concurrency_ticket = self.model_concurrency.ticket(
             &request.model,
@@ -53,6 +54,7 @@ impl Bridge {
                 effort,
                 concurrency_ticket,
                 is_subagent,
+                run_in_background,
             ));
         }
         let permit = match concurrency_ticket {
@@ -60,7 +62,7 @@ impl Bridge {
             None => None,
         };
         let turn = self.prepare_turn(&request, input_tokens, effort).await?;
-        if is_subagent {
+        if is_subagent && run_in_background {
             self.non_streaming_subagent_response(turn, permit).await
         } else {
             self.non_streaming_response(turn).await
@@ -262,7 +264,7 @@ mod tests {
         request.stream = true;
 
         let response = bridge
-            .provider_messages(request, 1, None, true)
+            .provider_messages(request, 1, None, true, true)
             .await
             .expect("streaming subagent response");
 

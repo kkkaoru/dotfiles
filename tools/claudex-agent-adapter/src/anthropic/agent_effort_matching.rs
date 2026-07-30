@@ -100,6 +100,7 @@ mod tests {
             effort: None,
             model_override: Some("gpt-5.6-luna".to_owned()),
             model_is_inherited: false,
+            run_in_background: false,
             tool_use_id: "toolu_system_marker".to_owned(),
             created_at: Instant::now(),
             created_unix_seconds: 0,

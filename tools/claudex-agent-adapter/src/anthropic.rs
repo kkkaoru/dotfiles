@@ -319,10 +319,15 @@ impl Bridge {
                 .subscription_messages(request, effort, is_subagent)
                 .await;
         }
-
         let input_tokens = u64::try_from(token_count(&request)).unwrap_or(u64::MAX);
-        self.provider_messages(request, input_tokens, effort, is_subagent)
-            .await
+        self.provider_messages(
+            request,
+            input_tokens,
+            effort,
+            is_subagent,
+            intent.run_in_background,
+        )
+        .await
     }
 
     pub(super) fn request_model(&self, request: &MessagesRequest) -> String {
