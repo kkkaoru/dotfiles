@@ -82,7 +82,13 @@ def complete_report(
         },
         {
             "provider": "opencodego",
-            "usage": {"primary": {"usedPercent": opencode_go}},
+            "usage": {
+                "primary": {
+                    "usedPercent": opencode_go,
+                    "windowMinutes": 300,
+                    "resetsAt": "2026-07-31T00:39:13Z",
+                }
+            },
         },
     ]
 
@@ -91,7 +97,7 @@ def model_health(
     active: int, limit: int = 7, queued: int = 0
 ) -> dict[str, dict[str, object]]:
     return {
-        "opencode-go/deepseek-v4-flash": {
+        "opencode-go/deepseek-v4-pro": {
             "active": active,
             "queued": queued,
             "limit": limit,
@@ -250,6 +256,15 @@ def complete_configuration() -> dict[str, object]:
     return route_usage.load_config(route_usage.REPOSITORY_CONFIG)
 
 
+def complete_configuration_with_model_concurrency() -> dict[str, object]:
+    config = complete_configuration()
+    opencode = next(
+        provider for provider in config["providers"] if provider["id"] == "opencode-go"
+    )
+    opencode["maxConcurrency"] = 500
+    return config
+
+
 def configured_summary(
     usage: object, disabled: frozenset[str] = frozenset()
 ) -> dict[str, object]:
@@ -317,7 +332,13 @@ class ConfigurationTests(unittest.TestCase):
             if provider["id"] == "opencode-go"
         )
         self.assertEqual(opencode["usageProvider"], "opencodego")
-        self.assertEqual(opencode["maxConcurrency"], 7)
+        self.assertEqual(opencode["defaultModel"], "opencode-go/deepseek-v4-pro")
+        self.assertEqual(
+            opencode["requestBudget"],
+            {"estimatedRequests": 3450, "windowMinutes": 300, "usageWindow": "primary"},
+        )
+        self.assertEqual(opencode["backend"], "configured-acp")
+        self.assertEqual(opencode["acp"], {"program": "opencode", "arguments": ["acp"]})
 
     def test_validates_dedicated_disabled_models_config(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -404,6 +425,10 @@ class RoutingTests(unittest.TestCase):
             self.assertIn("user-visible status", instructions, path)
             self.assertIn("unknown or potentially long-running", instructions, path)
             self.assertIn("without waiting for the slowest worker", instructions, path)
+            self.assertIn("subagent_type: custom-advisor", instructions, path)
+            self.assertIn("claudex_model: claude-fable-5", instructions, path)
+            self.assertIn("claudex_effort: xhigh", instructions, path)
+            self.assertIn("resolvedModel: claude-fable-5", instructions, path)
             normalized = " ".join(instructions.replace("`", "").split())
             lowered = normalized.casefold()
             self.assertIn(
@@ -445,6 +470,20 @@ class RoutingTests(unittest.TestCase):
         self.assertNotIn("TaskList", advisor_text)
         self.assertNotIn("TaskGet", advisor_text)
         self.assertNotIn("process=1", advisor_text)
+        haiku_path = claude_home / "agents" / "claudex-haiku.md"
+        self.assertTrue(haiku_path.exists())
+        haiku_text = haiku_path.read_text(encoding="utf-8")
+        self.assertIn("model: claude-haiku-4-5", haiku_text)
+        self.assertIn("effort: max", haiku_text)
+        self.assertNotIn("tools:", haiku_text)
+        self.assertIn("complete the delegated task autonomously", haiku_text.lower())
+        search_path = claude_home / "agents" / "claudex-haiku-search.md"
+        self.assertTrue(search_path.exists())
+        search_text = search_path.read_text(encoding="utf-8")
+        self.assertIn("model: claude-haiku-4-5", search_text)
+        self.assertIn("effort: max", search_text)
+        self.assertRegex(search_text, r"(?m)^tools:\s*WebSearch,WebFetch\s*$")
+        self.assertIn("Never answer from", search_text)
         routing_hook = next(
             hook
             for group in settings["hooks"]["UserPromptSubmit"]
@@ -475,6 +514,13 @@ class RoutingTests(unittest.TestCase):
         self.assertTrue(contract["cleanup_on_exit"])
         self.assertEqual(contract["monitor_interval_seconds"], 600)
         self.assertFalse(contract["hook_launches_agents"])
+        self.assertTrue(contract["subagent_first"])
+        self.assertTrue(contract["background_status_required"])
+        self.assertEqual(contract["status_poll_interval_seconds"], 15)
+        self.assertIn("complex_or_ambiguous_decision", contract["custom_advisor_consult_when"])
+        self.assertIn(
+            "worker_failure_timeout_or_stall", contract["custom_advisor_consult_when"]
+        )
 
         constrained = route_usage.orchestration_contract(
             {"selected_workers": [{"model": "only-model"}]}
@@ -512,6 +558,13 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(settings["minimum_model_kinds"], 3)
         self.assertFalse(settings["reuse_compatible_workers"])
         self.assertFalse(settings["cleanup_on_exit"])
+        self.assertTrue(settings["subagent_first"])
+        self.assertEqual(settings["status_poll_interval_seconds"], 15)
+        environment[route_usage.SUBAGENT_FIRST_ENV] = "0"
+        environment[route_usage.SUBAGENT_STATUS_POLL_ENV] = "7"
+        settings = route_usage.orchestration_settings(environment)
+        self.assertFalse(settings["subagent_first"])
+        self.assertEqual(settings["status_poll_interval_seconds"], 7)
         for name in (
             route_usage.SUBAGENT_MIN_PARALLEL_ENV,
             route_usage.SUBAGENT_ACTIVE_FLOOR_ENV,
@@ -644,12 +697,85 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(summary["main_session_model"], "gpt-5.3-codex-spark")
         self.assertEqual(summary["orchestration_mode"], "subagent-first")
         self.assertTrue(summary["delegation_required"])
+        self.assertEqual(summary["direct_main_execution"], "fallback-only")
+        self.assertTrue(summary["background_status_required"])
         self.assertEqual(summary["providers"]["codex"]["reason"], "available")
         context = route_usage.hook_output(summary, {})["hookSpecificOutput"]["additionalContext"]
         self.assertIn("<system-reminder>", context)
         self.assertIn('"source":"claudex-routing-local-hook"', context)
         self.assertIn('"model":"gpt-5.3-codex-spark"', context)
-        self.assertNotIn("MANDATORY SUBAGENT-FIRST ORCHESTRATION", context)
+        self.assertIn('"delegation_required":true', context)
+        self.assertIn('"direct_main_execution":"fallback-only"', context)
+        self.assertIn('"background_status_required":true', context)
+        self.assertIn('"custom_advisor_policy":', context)
+
+    def test_suppresses_automatic_sonnet_fallback_when_outer_session_is_sonnet(self) -> None:
+        unavailable = report(codex=100, grok=100)
+        unavailable[-1] = qwen_report(None, available=False)
+        summary = route_usage.enforce_worker_model_separation(
+            route_usage.routing_summary(unavailable, configuration()),
+            "gpt-5.6-sol",
+            configuration(),
+            frozenset(),
+            outer_model="sonnet[1m]",
+        )
+        self.assertEqual(summary["selected_workers"], [])
+        self.assertEqual(summary["selected_agents"], [])
+        self.assertFalse(summary["fallback_active"])
+        self.assertEqual(
+            summary["automatic_selection_excluded_models"], ["claude-sonnet-5"]
+        )
+        self.assertTrue(summary["sonnet_subagent_suppressed"])
+        self.assertFalse(summary["sonnet_subagent_explicit_allowed"])
+        context = route_usage.hook_output(summary)["hookSpecificOutput"][
+            "additionalContext"
+        ]
+        self.assertIn('"sonnet_subagent_suppressed":true', context)
+        self.assertIn('"automatic_selection_excluded_models":["claude-sonnet-5"]', context)
+
+    def test_explicit_sonnet_policy_keeps_automatic_fallback_available(self) -> None:
+        unavailable = report(codex=100, grok=100)
+        unavailable[-1] = qwen_report(None, available=False)
+        summary = route_usage.enforce_worker_model_separation(
+            route_usage.routing_summary(unavailable, configuration()),
+            "gpt-5.6-sol",
+            configuration(),
+            frozenset(),
+            outer_model="sonnet[1m]",
+            allow_sonnet_subagent=True,
+        )
+        self.assertEqual(summary["selected_agents"], ["claudex-sonnet"])
+        self.assertTrue(summary["fallback_active"])
+        self.assertEqual(summary["automatic_selection_excluded_models"], [])
+        self.assertFalse(summary["sonnet_subagent_suppressed"])
+        self.assertTrue(summary["sonnet_subagent_explicit_allowed"])
+
+    def test_environment_opt_in_is_explicit_policy_for_sonnet_fallback(self) -> None:
+        unavailable = report(codex=100, grok=100)
+        unavailable[-1] = qwen_report(None, available=False)
+        with mock.patch.dict(
+            os.environ,
+            {route_usage.ALLOW_SONNET_SUBAGENT_ENV: "1"},
+            clear=False,
+        ):
+            summary = route_usage.enforce_worker_model_separation(
+                route_usage.routing_summary(unavailable, configuration()),
+                "gpt-5.6-sol",
+                configuration(),
+                frozenset(),
+                outer_model="claude-sonnet-5",
+            )
+        self.assertEqual(summary["selected_agents"], ["claudex-sonnet"])
+        self.assertTrue(summary["sonnet_subagent_explicit_allowed"])
+
+    def test_direct_sonnet_worker_definition_remains_explicitly_launchable(self) -> None:
+        definition = (
+            Path(__file__).resolve().parents[4] / ".claude/agents/claudex-sonnet.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("model: claude-sonnet-5", definition)
+        self.assertIn("effort: high", definition)
+        self.assertIn("claudex_model: claude-sonnet-5", definition)
+        self.assertNotIn("disabled_subagent_models", definition)
 
     def test_disabled_models_are_excluded_without_deleting_provider_config(self) -> None:
         disabled = frozenset({"gpt-5.3-codex-spark", "grok-4.5"})
@@ -698,10 +824,43 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(codex_worker["model"], "gpt-5.3-codex-spark")
         self.assertEqual(summary["preferred_main_worker"]["model"], "gpt-5.6-sol")
 
+    def test_open_code_go_uses_the_published_request_budget(self) -> None:
+        summary = route_usage.routing_summary(
+            complete_report(opencode_go=12), complete_configuration()
+        )
+        opencode = summary["providers"]["opencode-go"]
+        self.assertEqual(opencode["max_used_percent"], 12.0)
+        self.assertNotIn("max_concurrency", opencode)
+        self.assertEqual(
+            opencode["request_budget"],
+            {
+                "estimated_requests": 3450,
+                "window_minutes": 300,
+                "usage_window": "primary",
+                "known": True,
+                "used_percent": 12.0,
+                "reported_window_minutes": 300,
+                "estimated_used_requests": 414.0,
+                "estimated_remaining_requests": 3036.0,
+                "resets_at": "2026-07-31T00:39:13Z",
+            },
+        )
+
+    def test_open_code_go_excludes_an_unknown_request_budget_window(self) -> None:
+        report = complete_report()
+        report[-1]["usage"]["primary"].pop("windowMinutes")
+        summary = route_usage.routing_summary(report, complete_configuration())
+        opencode = summary["providers"]["opencode-go"]
+        self.assertFalse(opencode["available"])
+        self.assertEqual(opencode["reason"], "request-budget-window-mismatch")
+        self.assertFalse(opencode["request_budget"]["known"])
+
     def test_combines_quota_and_model_concurrency_headroom(self) -> None:
-        config = complete_configuration()
+        config = complete_configuration_with_model_concurrency()
         base = route_usage.routing_summary(complete_report(), config)
-        summary = route_usage.apply_model_concurrency(base, config, model_health(6))
+        summary = route_usage.apply_model_concurrency(
+            base, config, model_health(499, limit=500)
+        )
         selected = [worker["provider"] for worker in summary["selected_workers"]]
         self.assertLess(selected.index("fugu"), selected.index("opencode-go"))
         self.assertLess(selected.index("codex"), selected.index("opencode-go"))
@@ -709,11 +868,11 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(opencode["remaining_percent"], 95.0)
         self.assertEqual(opencode["concurrency_remaining"], 1)
         self.assertEqual(
-            summary["model_concurrency"]["opencode-go/deepseek-v4-flash"],
+            summary["model_concurrency"]["opencode-go/deepseek-v4-pro"],
             {
-                "active": 6,
+                "active": 499,
                 "queued": 0,
-                "limit": 7,
+                "limit": 500,
                 "available": True,
                 "remaining": 1,
                 "reason": "available",
@@ -721,7 +880,9 @@ class RoutingTests(unittest.TestCase):
             },
         )
 
-        full = route_usage.apply_model_concurrency(base, config, model_health(7))
+        full = route_usage.apply_model_concurrency(
+            base, config, model_health(500, limit=500)
+        )
         self.assertNotIn(
             "opencode-go",
             [worker["provider"] for worker in full["selected_workers"]],
@@ -732,7 +893,7 @@ class RoutingTests(unittest.TestCase):
         )
 
     def test_concurrency_headroom_can_rank_below_an_unmetered_provider(self) -> None:
-        config = complete_configuration()
+        config = complete_configuration_with_model_concurrency()
         opencode = next(
             provider for provider in config["providers"] if provider["id"] == "opencode-go"
         )
@@ -740,13 +901,13 @@ class RoutingTests(unittest.TestCase):
         summary = route_usage.apply_model_concurrency(
             route_usage.routing_summary(complete_report(codex=10), config),
             config,
-            model_health(6),
+            model_health(499, limit=500),
         )
         selected = [worker["provider"] for worker in summary["selected_workers"]]
         self.assertLess(selected.index("codex"), selected.index("opencode-go"))
 
     def test_missing_health_keeps_a_limited_model_safely_launchable(self) -> None:
-        config = complete_configuration()
+        config = complete_configuration_with_model_concurrency()
         base = route_usage.routing_summary(complete_report(), config)
         summary = route_usage.apply_model_concurrency(base, config, None)
         worker = next(
@@ -754,13 +915,13 @@ class RoutingTests(unittest.TestCase):
             for worker in summary["selected_workers"]
             if worker["provider"] == "opencode-go"
         )
-        self.assertEqual(worker["max_concurrency"], 7)
+        self.assertEqual(worker["max_concurrency"], 500)
         self.assertEqual(worker["concurrency"]["reason"], "daemon-health-unavailable")
         self.assertTrue(worker["concurrency"]["available"])
         self.assertFalse(worker["concurrency"]["known"])
 
     def test_missing_usage_still_uses_the_existing_native_fallback(self) -> None:
-        config = complete_configuration()
+        config = complete_configuration_with_model_concurrency()
         base = route_usage.routing_summary([], config)
         self.assertEqual(base["providers"]["opencode-go"]["reason"], "missing")
         summary = route_usage.apply_model_concurrency(base, config, model_health(0))
@@ -768,20 +929,20 @@ class RoutingTests(unittest.TestCase):
         self.assertTrue(summary["fallback_active"])
 
     def test_dynamic_models_inherit_the_most_specific_prefix_limit(self) -> None:
-        config = complete_configuration()
+        config = complete_configuration_with_model_concurrency()
         dynamic = "opencode-go/another-model"
         owner = route_usage.provider_for_model(config, dynamic)
         self.assertIsNotNone(owner)
         self.assertEqual(owner["id"], "opencode-go")
         health = {
-            **model_health(0),
-            dynamic: {"active": 6, "queued": 1, "limit": 7, "available": False},
+            **model_health(0, limit=500),
+            dynamic: {"active": 498, "queued": 2, "limit": 500, "available": False},
         }
         summary = route_usage.apply_model_concurrency(
             route_usage.routing_summary(complete_report(), config), config, health
         )
         self.assertFalse(summary["model_concurrency"][dynamic]["available"])
-        self.assertEqual(summary["model_concurrency"][dynamic]["limit"], 7)
+        self.assertEqual(summary["model_concurrency"][dynamic]["limit"], 500)
 
     def test_main_capacity_uses_default_model_not_subagent_model(self) -> None:
         config = configuration()
@@ -1333,7 +1494,7 @@ class CommandTests(unittest.TestCase):
                     **os.environ,
                     "HOME": directory,
                     route_usage.DISABLED_SUBAGENT_MODELS_ENV: (
-                        "opencode-go/deepseek-v4-flash"
+                        "opencode-go/deepseek-v4-pro"
                     ),
                 },
             )
@@ -1769,7 +1930,8 @@ class MainTests(unittest.TestCase):
             complete_report(), complete_configuration()
         )
         output = self.run_main(
-            health=model_health(7), config=complete_configuration()
+            health=model_health(500, limit=500),
+            config=complete_configuration_with_model_concurrency(),
         )
         context = json.loads(output)["hookSpecificOutput"]["additionalContext"]
         self.assertNotIn('"agent":"claudex-deepseek"', context)
@@ -1821,7 +1983,7 @@ class MainTests(unittest.TestCase):
             output = self.run_main(
                 "--input",
                 str(fixture),
-                disabled_models=["opencode-go/deepseek-v4-flash"],
+                disabled_models=["opencode-go/deepseek-v4-pro"],
             )
         context = json.loads(output)["hookSpecificOutput"]["additionalContext"]
         self.assertIn('"selected_agents":["claudex-qwen","claudex-gpt-spark"]', context)
@@ -1851,7 +2013,7 @@ class MainTests(unittest.TestCase):
         ):
             output = self.run_main(
                 "--no-cache",
-                disabled_models=["opencode-go/deepseek-v4-flash"],
+                disabled_models=["opencode-go/deepseek-v4-pro"],
             )
         context = json.loads(output)["hookSpecificOutput"]["additionalContext"]
         self.assertIn('"selected_agents":["claudex-qwen"]', context)
@@ -1861,7 +2023,7 @@ class MainTests(unittest.TestCase):
                 {
                     "gpt-5.3-codex-spark",
                     "grok-4.5",
-                    "opencode-go/deepseek-v4-flash",
+                    "opencode-go/deepseek-v4-pro",
                 }
             ),
         )
@@ -1880,7 +2042,7 @@ class MainTests(unittest.TestCase):
                         "version": 1,
                         "disabledModels": [
                             "gpt-5.3-codex-spark",
-                            "opencode-go/deepseek-v4-flash",
+                        "opencode-go/deepseek-v4-pro",
                         ],
                     }
                 ),
@@ -1897,7 +2059,7 @@ class MainTests(unittest.TestCase):
         expected_key = route_usage.configuration_key(
             configuration(),
             frozenset(
-                {"gpt-5.3-codex-spark", "opencode-go/deepseek-v4-flash"}
+                {"gpt-5.3-codex-spark", "opencode-go/deepseek-v4-pro"}
             ),
         )
         self.assertEqual(read_cache.call_args.args[3], expected_key)
@@ -1910,7 +2072,7 @@ class MainTests(unittest.TestCase):
         environment = {
             route_usage.DISABLED_SUBAGENT_MODELS_ENV: "gpt-5.3-codex-spark",
             route_usage.RESOLVED_DISABLED_SUBAGENT_MODELS_ENV: (
-                "qwen3.8-max-preview,opencode-go/deepseek-v4-flash"
+                "qwen3.8-max-preview,opencode-go/deepseek-v4-pro"
             ),
         }
         with mock.patch.dict(os.environ, environment):
@@ -1920,7 +2082,7 @@ class MainTests(unittest.TestCase):
         expected_key = route_usage.configuration_key(
             configuration(),
             frozenset(
-                {"qwen3.8-max-preview", "opencode-go/deepseek-v4-flash"}
+                {"qwen3.8-max-preview", "opencode-go/deepseek-v4-pro"}
             ),
         )
         self.assertEqual(read_cache.call_args.args[3], expected_key)

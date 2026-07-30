@@ -72,7 +72,9 @@ fn assert_shared_provider_default(function: &std::path::Path, home: &tempfile::T
     assert!(arguments.contains("--inherit-claude-model\n"));
     assert!(arguments.contains("--subscription-max-processes\n20\n"));
     assert!(arguments.contains("--allowedTools\nWebSearch,WebFetch\n"));
-    assert!(arguments.ends_with("--\n--allowedTools\nWebSearch,WebFetch\nsmoke\n"));
+    assert!(arguments.ends_with(
+        "--\n--agent\nclaudex-orchestrator\n--allowedTools\nWebSearch,WebFetch\nsmoke\n"
+    ));
     assert!(String::from_utf8_lossy(&output.stderr).contains("settings sonnet[1m], high"));
 }
 
@@ -102,7 +104,9 @@ fn assert_explicit_override(function: &std::path::Path, home: &tempfile::TempDir
     assert!(arguments.contains("--allowedTools\nWebSearch,WebFetch\n"));
     assert!(
         arguments
-            .ends_with("--\n--effort\nhigh\n--allowedTools\nWebSearch,WebFetch\noverride-smoke\n")
+            .ends_with(
+                "--\n--agent\nclaudex-orchestrator\n--effort\nhigh\n--allowedTools\nWebSearch,WebFetch\noverride-smoke\n"
+            )
     );
 }
 
@@ -211,7 +215,9 @@ fn fish_launcher_uses_claude_settings_model_and_effort_when_available() {
         "--provider-config\n{}\n",
         home.path().join(".config/claudex/providers.json").display()
     )));
-    assert!(arguments.ends_with("--\n--allowedTools\nWebSearch,WebFetch\nsettings-smoke\n"));
+    assert!(arguments.ends_with(
+        "--\n--agent\nclaudex-orchestrator\n--allowedTools\nWebSearch,WebFetch\nsettings-smoke\n"
+    ));
     assert!(String::from_utf8_lossy(&output.stderr).contains("settings sonnet[1m], high"));
 }
 
@@ -326,7 +332,8 @@ fn every_non_advisor_subagent_inherits_the_main_tool_and_permission_context() {
         if path.extension().and_then(std::ffi::OsStr::to_str) != Some("md") {
             continue;
         }
-        if path.file_name().and_then(std::ffi::OsStr::to_str) == Some("custom-advisor.md") {
+        let file_name = path.file_name().and_then(std::ffi::OsStr::to_str);
+        if file_name == Some("custom-advisor.md") {
             continue;
         }
         let definition = fs::read_to_string(&path).expect("Claude agent definition");
@@ -335,6 +342,19 @@ fn every_non_advisor_subagent_inherits_the_main_tool_and_permission_context() {
             .skip(1)
             .take_while(|line| *line != "---")
             .collect::<Vec<_>>();
+        if file_name == Some("claudex-haiku-search.md") {
+            assert!(
+                frontmatter
+                    .iter()
+                    .any(|line| *line == "tools: WebSearch,WebFetch"),
+                "{file_name:?} must expose only live web retrieval tools"
+            );
+            assert!(
+                definition.contains("Dedicated live-web retrieval worker"),
+                "{file_name:?} must document its bounded retrieval scope"
+            );
+            continue;
+        }
         for restricted_field in ["tools:", "disallowedTools:", "permissionMode:"] {
             assert!(
                 !frontmatter
@@ -468,5 +488,8 @@ fn assert_no_argument_launch(function: &std::path::Path, home: &tempfile::TempDi
     );
     let arguments = String::from_utf8(output.stdout).expect("UTF-8 adapter arguments");
     assert!(arguments.contains("--model\nmodel\n"));
-    assert!(arguments.ends_with("--\n--allowedTools\nWebSearch,WebFetch\n"));
+    assert!(
+        arguments
+            .ends_with("--\n--agent\nclaudex-orchestrator\n--allowedTools\nWebSearch,WebFetch\n")
+    );
 }
