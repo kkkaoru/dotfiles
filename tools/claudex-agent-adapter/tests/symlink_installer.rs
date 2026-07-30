@@ -29,7 +29,11 @@ fn installs_current_claudex_agents_and_prunes_renamed_links() {
         !stale_link.is_symlink(),
         "stale managed link must be pruned"
     );
-    for agent in ["claudex-gpt-spark.md", "claudex-ollama-glm-5-2.md"] {
+    for agent in [
+        "claudex-gpt-spark.md",
+        "claudex-ollama-glm-5-2.md",
+        "claudex-haiku.md",
+    ] {
         let installed = agents.join(agent);
         assert!(installed.is_symlink(), "{agent} must be installed");
         assert!(

@@ -51,7 +51,7 @@ pub(super) fn subscription_request_prompt(request: &MessagesRequest) -> String {
             "active user's explicit model request. If no such model is available, do not launch or ",
             "inherit the parent model. When a schema lacks claudex_effort, put the routed effort at ",
             "the start of its prompt as an exact `claudex_effort: <effort>` line. Never put an ",
-            "external provider model ID in the native model field.\n\nSystem:\n{}\n\nMessages:\n{}"
+            "external provider model ID in the native model field. The parent session is an orchestrator: delegate substantive investigation, Web work, repository inspection, implementation, build, and testing to routed workers; workers must execute the assigned work and return concrete results, while the parent collects and synthesizes them. When the current reply requires those results, this overrides background guidance: set run_in_background=false for the whole batch and wait for the actual child replies.\n\nSystem:\n{}\n\nMessages:\n{}"
         ),
         system_text(&request.system),
         serde_json::to_string(&request.messages).unwrap_or_default()

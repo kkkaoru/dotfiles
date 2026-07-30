@@ -54,12 +54,7 @@ worker's queued follow-up does not add parallel capacity; assign genuinely indep
 another routed worker when useful capacity exists. Before shutdown or
 replacement, deliberately weigh likely reuse and potential prompt-prefix/cache reuse against
 slot/resource pressure and context staleness; do not keep or terminate every instance unconditionally.
-For several independent workers, treat unknown or potentially long-running work as asynchronous:
-emit every intended Agent/Task launch together as one background batch
-(`run_in_background: true`) so a slow worker cannot hold the main turn or delay peers that already
-finished. Use foreground only for short, bounded work whose result is required before the next main
-action, or when the active user explicitly requests synchronous completion. Do not use a foreground
-batch merely to gather all results. Emit every intended launch in the same assistant message; never
+When the user asks for findings, an answer, or completed work in the current reply, every required worker result is a dependency: launch the entire batch with `run_in_background: false`, wait for actual replies, and synthesize them before responding. Use background launches only when the user explicitly asks for asynchronous progress or the current response does not require the result. Emit every intended launch in the same assistant message; never
 emit one launch and defer the rest to later turns. Do not announce a worker count until that same
 message contains exactly that many Agent/Task calls. After successful background launches, start a
 concrete independent action immediately or end the turn with a concise user-visible status. When

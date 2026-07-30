@@ -237,7 +237,7 @@ async fn forwards_xai_subagent_lifecycle_as_visible_message() {
     let events = ThreadEventDispatcher::default();
     let receiver = events.subscribe("session");
     for update in [
-        json!({"sessionUpdate":"subagent_spawned","description":"Research AVITA",
+        json!({"sessionUpdate":"subagent_spawned","description":"Research TEST_CORPORATION",
             "model":"grok-4.5","reasoning_effort":"medium"}),
         json!({"sessionUpdate":"subagent_finished","status":"completed","duration_ms":1250}),
         json!({"sessionUpdate":"turn_completed","usage":{

@@ -252,9 +252,15 @@ impl SegmentBuilder {
                     "batch Agent tasks must contain between {minimum_batch} and {maximum_batch} launches"
                 );
             }
+            let run_in_background = tasks.iter().all(|arguments| {
+                arguments
+                    .get("run_in_background")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true)
+            });
             for (index, arguments) in tasks.iter().enumerate() {
                 let mut nested_arguments = arguments.clone();
-                ensure_background_batch_launch(&mut nested_arguments);
+                normalize_batch_launch(&mut nested_arguments, run_in_background);
                 let nested = ToolCall {
                     call_id: call.call_id,
                     name: call.name,
@@ -338,13 +344,15 @@ impl SegmentBuilder {
     }
 }
 
-fn ensure_background_batch_launch(arguments: &mut Value) {
-    // A batch is the adapter's explicit parallel primitive. Normalize every
-    // member to a background launch so one slow worker cannot hold the
-    // Claude Code turn open, while leaving ordinary single Agent/Task calls
-    // untouched.
+fn normalize_batch_launch(arguments: &mut Value, run_in_background: bool) {
+    // Keep a batch in one lifecycle mode. A caller that requires results in
+    // the current answer marks any member foreground; all peers then remain
+    // foreground so their completed results can be synthesized by the parent.
     if let Some(arguments) = arguments.as_object_mut() {
-        arguments.insert("run_in_background".to_owned(), Value::Bool(true));
+        arguments.insert(
+            "run_in_background".to_owned(),
+            Value::Bool(run_in_background),
+        );
     }
 }
 
@@ -354,12 +362,12 @@ fn ensure_background_batch_launch(arguments: &mut Value) {
 mod tests {
     use serde_json::json;
 
-    use super::ensure_background_batch_launch;
+    use super::normalize_batch_launch;
 
     #[test]
     fn leaves_non_object_batch_arguments_unchanged() {
         let mut arguments = json!(null);
-        ensure_background_batch_launch(&mut arguments);
+        normalize_batch_launch(&mut arguments, true);
         assert_eq!(arguments, json!(null));
     }
 }

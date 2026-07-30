@@ -59,9 +59,13 @@ pub(super) fn hydrate_routing_fields_from_context(
     }
 }
 
-/// Route native Claude children to the official Haiku alias, and preserve standard agents on
-/// their current parent model when they do not select a routed worker.
-pub(super) fn hydrate_standard_agent_to_parent(arguments: &mut Value, parent_model: &str) {
+/// Route a generic Claude child from the main session to the official Haiku fallback. A child
+/// launched inside a routed SubAgent instead inherits that SubAgent's normalized model.
+pub(super) fn hydrate_standard_agent_to_parent(
+    arguments: &mut Value,
+    parent_model: &str,
+    inherit_parent_for_nested_child: bool,
+) {
     let Some(subagent_type) = arguments
         .get("subagent_type")
         .and_then(Value::as_str)
@@ -73,14 +77,13 @@ pub(super) fn hydrate_standard_agent_to_parent(arguments: &mut Value, parent_mod
         let Some(object) = arguments.as_object_mut() else {
             return;
         };
-        object.insert(
-            ADAPTER_MODEL.to_owned(),
-            Value::String(official_claude_haiku_model().to_owned()),
-        );
-        object.insert(
-            IMPLICIT_MODEL.to_owned(),
-            Value::String(official_claude_haiku_model().to_owned()),
-        );
+        let model = if inherit_parent_for_nested_child && !parent_model.is_empty() {
+            parent_model
+        } else {
+            official_claude_haiku_model()
+        };
+        object.insert(ADAPTER_MODEL.to_owned(), Value::String(model.to_owned()));
+        object.insert(IMPLICIT_MODEL.to_owned(), Value::String(model.to_owned()));
         return;
     }
     if !matches!(subagent_type.as_str(), "Explore" | "general-purpose")

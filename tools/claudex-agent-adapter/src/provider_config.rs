@@ -9,6 +9,8 @@ struct ProviderConfig {
     version: u64,
     main_providers: Vec<String>,
     providers: Vec<Provider>,
+    #[serde(default)]
+    worker_routes: Vec<WorkerRoute>,
     fallback: AgentChoice,
     #[serde(default)]
     advisor: Option<AgentChoice>,
@@ -166,6 +168,10 @@ impl ModelCatalog {
             bail!("worker route agent values must be unique");
         }
         self.workers = workers;
+        self.exact
+            .extend(self.workers.iter().map(|worker| worker.model.clone()));
+        self.exact.sort();
+        self.exact.dedup();
         Ok(())
     }
 
@@ -205,6 +211,7 @@ fn validate(config: ProviderConfig) -> Result<LoadedConfig> {
     // Keep identities for disabled providers so exhausted/denied backends can still be
     // recognized and remapped instead of falling through to Claude subscription under a
     // stale provider model id.
+    let configured_workers = config.worker_routes.clone();
     let mut model_catalog = ModelCatalog::from_providers(&config.providers);
     let providers = config
         .providers
@@ -216,6 +223,9 @@ fn validate(config: ProviderConfig) -> Result<LoadedConfig> {
     }
     validate_providers(&providers)?;
     model_catalog.add_workers(&providers);
+    let mut workers = model_catalog.worker_routes().to_vec();
+    workers.extend(configured_workers);
+    model_catalog.set_worker_routes(workers)?;
     let enabled_ids = providers
         .iter()
         .map(|provider| provider.id.as_str())

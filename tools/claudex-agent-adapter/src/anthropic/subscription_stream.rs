@@ -5,19 +5,17 @@ use axum::{
     body::{Body, Bytes},
     http::Response,
 };
-use serde_json::{Value, json};
+use serde_json::Value;
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
     process::Child,
     sync::mpsc,
 };
-use uuid::Uuid;
 
 // Align with the main provider stream: status only after real silence (~30s).
 const INITIAL_ACTIVITY_DELAY: Duration = Duration::from_secs(30);
 const ACTIVITY_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
 use super::{
-    content::sse,
     stream::streaming_sse_response,
     subscription::{
         OutputMode, SubscriptionOptions, acquire_subscription_slot, spawn_subscription,
@@ -26,7 +24,7 @@ use super::{
     },
     subscription_activity::SubscriptionActivity,
     subscription_frames::{
-        send_block_stop, send_subscription_error, send_text_delta, send_text_finish,
+        send_block_stop, send_subscription_failure, send_text_delta, send_text_finish,
         send_text_start, send_tool_finish,
     },
 };
@@ -35,10 +33,11 @@ mod lifecycle;
 mod tool_collection;
 
 use lifecycle::{
-    read_stderr, terminate_after_stream_failure, terminate_closed_stream, validate_stream_exit,
+    bail_api_retry, is_api_retry_failure, read_stderr, terminate_after_stream_failure,
+    terminate_closed_stream, terminate_failed_stream, validate_stream_exit,
 };
 
-pub(super) use super::subscription_frames::result_output_tokens;
+pub(super) use super::subscription_frames::{result_output_tokens, subscription_start_frame};
 pub(super) fn subscription_streaming_response(
     program: PathBuf,
     model: String,
@@ -59,21 +58,6 @@ pub(super) fn subscription_streaming_response(
     streaming_sse_response(receiver)
 }
 
-pub(super) fn subscription_start_frame(model: &str, input_tokens: u64) -> String {
-    sse(
-        "message_start",
-        json!({
-            "type":"message_start",
-            "message":{
-                "id":format!("msg_{}", Uuid::new_v4().simple()),
-                "type":"message","role":"assistant","model":model,
-                "content":[],"stop_reason":null,"stop_sequence":null,
-                "usage":{"input_tokens":input_tokens,"output_tokens":0}
-            }
-        }),
-    )
-}
-
 async fn run_subscription_stream(
     sender: mpsc::Sender<Result<Bytes, Infallible>>,
     program: PathBuf,
@@ -84,7 +68,7 @@ async fn run_subscription_stream(
     let result = stream_subscription_model(&sender, &program, &model, &prompt, options).await;
     if let Err(error) = result {
         tracing::warn!(%model, error = ?error, "Claude subscription stream failed");
-        send_subscription_error(&sender, error).await;
+        let _ = send_subscription_failure(&sender, &error).await;
     }
 }
 
@@ -178,21 +162,24 @@ async fn consume_subscription_stream_with_options(
         activity: SubscriptionActivity::default(),
     };
     let mut activity_deadline = Box::pin(tokio::time::sleep(INITIAL_ACTIVITY_DELAY));
-    loop {
+    let stream_error = loop {
         // Prefer child output lines over keepalives so heartbeats never jump
         // ahead of already-buffered stream-json events (scrambled UI order).
         tokio::select! {
             biased;
             () = sender.closed() => return terminate_closed_stream(child, stderr_task).await,
-            line = lines.next_line() => match line? {
-                Some(line) => {
-                    stream.handle_line(sender, &line).await?;
+            line = lines.next_line() => match line {
+                Ok(Some(line)) => {
+                    if let Err(error) = stream.handle_line(sender, &line).await {
+                        break Some(error);
+                    }
                     // Real output postpones the idle status timer.
                     activity_deadline.as_mut().reset(
                         tokio::time::Instant::now() + ACTIVITY_KEEPALIVE_INTERVAL,
                     );
                 }
-                None => break,
+                Ok(None) => break None,
+                Err(error) => break Some(error.into()),
             },
             () = &mut activity_deadline => {
                 stream.activity_keepalive(sender).await?;
@@ -201,9 +188,20 @@ async fn consume_subscription_stream_with_options(
                 );
             }
         }
+    };
+    if let Some(error) = stream_error {
+        let error = terminate_failed_stream(child, stderr_task, error).await?;
+        return stream.recover_failure(sender, &error).await;
     }
     stream.activity.close(sender).await?;
-    validate_stream_exit(child, stderr_task, stream.saw_result).await
+    match validate_stream_exit(child, stderr_task, stream.saw_result).await {
+        Ok(()) => Ok(()),
+        Err(error) if stream.saw_result => {
+            tracing::warn!(?error, "ignored provider exit failure after message_stop");
+            Ok(())
+        }
+        Err(error) => stream.recover_failure(sender, &error).await,
+    }
 }
 
 impl SubscriptionStream {
@@ -214,6 +212,13 @@ impl SubscriptionStream {
     ) -> Result<()> {
         let envelope: Value = serde_json::from_str(line)
             .with_context(|| format!("Claude subscription emitted invalid stream JSON: {line}"))?;
+        if self.saw_result {
+            tracing::warn!(event = ?envelope.get("type"), "ignored event after subscription result");
+            return Ok(());
+        }
+        if is_api_retry_failure(&envelope) {
+            bail_api_retry(&envelope)?;
+        }
         match envelope.get("type").and_then(Value::as_str) {
             Some("stream_event") => {
                 self.forward_text_delta(sender, &envelope).await?;
@@ -250,13 +255,7 @@ impl SubscriptionStream {
         if self.saw_tool_use {
             return Ok(());
         }
-        self.activity.close(sender).await?;
-        if !self.text_started {
-            send_text_start(sender, self.next_index).await?;
-            self.text_started = true;
-            self.next_index += 1;
-        }
-        send_text_delta(sender, self.next_index.saturating_sub(1), text).await
+        self.append_text(sender, text).await
     }
 
     fn prepare_tool_input(&self, name: &str, id: &str, input: &Value) -> Result<Value> {
@@ -277,6 +276,7 @@ impl SubscriptionStream {
         super::agent_routing::hydrate_standard_agent_to_parent(
             &mut routed_input,
             &context.parent_model,
+            context.child_executor.is_some(),
         );
         if routed_input.get("claudex_model").is_none() {
             tracing::warn!(

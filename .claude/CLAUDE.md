@@ -26,12 +26,7 @@
   the selected SubAgent directly in the first response. Do not merely announce future delegation.
   Do not add `TaskList`, `TaskCreate`, or `TaskUpdate` round trips solely to prepare delegation; use
   task tracking only when the work itself needs persistent dependency tracking.
-- When launching several independent workers, treat unknown or potentially long-running work as
-  asynchronous: emit every Agent/Task call in one background batch (`run_in_background: true`) so
-  one slow worker cannot hold the main turn or delay already-completed peers. Use foreground only
-  for short, bounded work whose result is required before the next main action, or when the active
-  user explicitly requests synchronous completion. Do not use a foreground batch merely to gather
-  all results. After background launches succeed, immediately start a concrete independent action
+- When the user asks for findings, an answer, or completed work in the current reply, every required worker result is a dependency: launch the entire batch with `run_in_background: false`, wait for actual replies, and synthesize them before responding. Use background launches only when the user explicitly asks for asynchronous progress or the current response does not require the result. After background launches succeed, immediately start a concrete independent action
   or end the turn promptly with a concise user-visible status. When completion notifications re-enter the next
   turn, integrate each available result without waiting for the slowest worker; never remain in
   hidden reasoning while waiting for pending notifications.

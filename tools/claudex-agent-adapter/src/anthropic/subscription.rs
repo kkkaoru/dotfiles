@@ -14,6 +14,11 @@ use tokio::{
 };
 
 mod lifecycle;
+mod options;
+
+pub(in crate::anthropic) use options::{
+    SubscriptionChildExecutor, SubscriptionOptions, SubscriptionToolContext,
+};
 
 #[cfg(test)]
 pub(super) use super::subscription_request::cwd_from_system;
@@ -34,37 +39,7 @@ pub(crate) const DEFAULT_TIMEOUT_MINUTES: u64 = 120;
 const MAX_PROCESSES_ENV: &str = "CLAUDEX_SUBSCRIPTION_MAX_PROCESSES";
 const TIMEOUT_MINUTES_ENV: &str = "CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES";
 const OUTER_TOOL_BRIDGE_SETTINGS: &str = r#"{"hooks":{"PreToolUse":[{"matcher":".*","hooks":[{"type":"command","command":"exit 2"}]}]}}"#;
-pub(super) struct SubscriptionOptions {
-    pub(super) effort: Option<String>,
-    pub(super) tools: Vec<String>,
-    pub(super) cwd: Option<PathBuf>,
-    pub(super) slots: Arc<Semaphore>,
-    pub(super) timeout: Duration,
-    pub(super) tool_context: Option<SubscriptionToolContext>,
-}
-
 #[derive(Clone)]
-pub(super) struct SubscriptionToolContext {
-    pub(super) agent_efforts: Arc<super::agent_effort::AgentEffortIntents>,
-    pub(super) model_catalog: crate::provider_config::ModelCatalog,
-    pub(super) client_user_id: Option<String>,
-    pub(super) parent_model: String,
-    pub(super) user_messages: Vec<Value>,
-    pub(super) system: Value,
-}
-
-impl SubscriptionOptions {
-    pub(super) fn internal(slots: Arc<Semaphore>, timeout: Duration) -> Self {
-        Self {
-            effort: None,
-            tools: Vec::new(),
-            cwd: None,
-            slots,
-            timeout,
-            tool_context: None,
-        }
-    }
-}
 
 pub(super) struct SubscriptionLimits {
     pub(super) max_processes: usize,
@@ -184,21 +159,45 @@ impl Bridge {
         SubscriptionOptions {
             effort,
             tools: requested_tools(&request.tools, !is_subagent),
+            bridge_tools: true,
             cwd: subscription_request_cwd(request),
             slots: Arc::clone(&self.subscription_slots),
             timeout: self.subscription_timeout,
-            tool_context: Some(SubscriptionToolContext {
-                agent_efforts: Arc::clone(&self.agent_efforts),
-                model_catalog: self.model_catalog.clone(),
-                client_user_id: request
-                    .metadata
-                    .get("user_id")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned),
-                parent_model: request.model.clone(),
-                user_messages: request.messages.clone(),
-                system: request.system.clone(),
-            }),
+            tool_context: (!is_subagent)
+                .then(|| SubscriptionToolContext {
+                    agent_efforts: Arc::clone(&self.agent_efforts),
+                    model_catalog: self.model_catalog.clone(),
+                    child_executor: None,
+                    client_user_id: request
+                        .metadata
+                        .get("user_id")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                    parent_model: request.model.clone(),
+                    user_messages: request.messages.clone(),
+                    system: request.system.clone(),
+                })
+                .or_else(|| {
+                    Some(SubscriptionToolContext {
+                        agent_efforts: Arc::clone(&self.agent_efforts),
+                        model_catalog: self.model_catalog.clone(),
+                        child_executor: Some(SubscriptionChildExecutor {
+                            program: self.subscription_program.clone(),
+                            slots: Arc::clone(&self.subscription_slots),
+                            timeout: self.subscription_timeout,
+                            cwd: subscription_request_cwd(request),
+                            tools: requested_tools(&request.tools, true),
+                        }),
+                        client_user_id: request
+                            .metadata
+                            .get("user_id")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned),
+                        parent_model: request.model.clone(),
+                        user_messages: request.messages.clone(),
+                        system: request.system.clone(),
+                    })
+                }),
         }
     }
 }
@@ -345,7 +344,7 @@ pub(super) fn subscription_command(
     }
     if matches!(output, OutputMode::StreamJson) {
         command.args(["--include-partial-messages", "--verbose"]);
-        if !options.tools.is_empty() {
+        if options.bridge_tools && !options.tools.is_empty() {
             command.args(["--settings", OUTER_TOOL_BRIDGE_SETTINGS]);
         }
     }

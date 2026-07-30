@@ -234,9 +234,9 @@ def configuration() -> dict[str, object]:
             },
         ],
         "fallback": {
-            "agent": "claudex-sonnet",
-            "model": "claude-sonnet-5",
-            "effort": "high",
+            "agent": "claudex-haiku",
+            "model": "claude-haiku-4-5",
+            "effort": "max",
         },
         "advisor": {
             "agent": "custom-advisor",
@@ -402,7 +402,7 @@ class RoutingTests(unittest.TestCase):
             self.assertIn("N queued", instructions, path)
             self.assertIn("parallel capacity", instructions, path)
             self.assertIn("user-visible status", instructions, path)
-            self.assertIn("unknown or potentially long-running", instructions, path)
+            self.assertIn("every required worker result is a dependency", instructions, path)
             self.assertIn("without waiting for the slowest worker", instructions, path)
             normalized = " ".join(instructions.replace("`", "").split())
             lowered = normalized.casefold()
@@ -627,7 +627,7 @@ class RoutingTests(unittest.TestCase):
         unavailable = report(codex=100, grok=100)
         unavailable[-1] = qwen_report(None, available=False)
         fallback = configured_summary(unavailable)
-        self.assertEqual(fallback["selected_agents"], ["claudex-sonnet"])
+        self.assertEqual(fallback["selected_agents"], ["claudex-haiku"])
         self.assertTrue(fallback["fallback_active"])
 
     def test_keeps_main_model_available_for_workers_and_requires_delegation(self) -> None:
@@ -665,7 +665,7 @@ class RoutingTests(unittest.TestCase):
         fallback = route_usage.routing_summary(
             unavailable,
             configuration(),
-            frozenset({"claude-sonnet-5"}),
+            frozenset({"claude-haiku-4-5"}),
         )
         self.assertEqual(fallback["selected_workers"], [])
         self.assertIsNone(fallback["preferred_worker"])
@@ -675,10 +675,10 @@ class RoutingTests(unittest.TestCase):
         summary = route_usage.fallback_summary(
             "usage-unavailable",
             configuration(),
-            frozenset({"claude-sonnet-5"}),
+            frozenset({"claude-haiku-4-5"}),
         )
         self.assertEqual(summary["selected_agents"], [])
-        self.assertEqual(summary["disabled_subagent_models"], ["claude-sonnet-5"])
+        self.assertEqual(summary["disabled_subagent_models"], ["claude-haiku-4-5"])
 
     def test_prioritizes_the_provider_with_the_most_known_headroom(self) -> None:
         summary = configured_summary(report(codex=80, grok=10, qwen_used=2))
@@ -764,7 +764,7 @@ class RoutingTests(unittest.TestCase):
         base = route_usage.routing_summary([], config)
         self.assertEqual(base["providers"]["opencode-go"]["reason"], "missing")
         summary = route_usage.apply_model_concurrency(base, config, model_health(0))
-        self.assertEqual(summary["selected_agents"], ["claudex-sonnet"])
+        self.assertEqual(summary["selected_agents"], ["claudex-haiku"])
         self.assertTrue(summary["fallback_active"])
 
     def test_dynamic_models_inherit_the_most_specific_prefix_limit(self) -> None:
@@ -1296,7 +1296,7 @@ class CommandTests(unittest.TestCase):
 
     def test_fallback_summary_disables_external_providers(self) -> None:
         summary = route_usage.fallback_summary("test-failure")
-        self.assertEqual(summary["selected_agents"], ["claudex-sonnet"])
+        self.assertEqual(summary["selected_agents"], ["claudex-haiku"])
         self.assertTrue(summary["fallback_active"])
         self.assertEqual(summary["providers"]["codex"]["reason"], "test-failure")
 
@@ -1338,7 +1338,7 @@ class CommandTests(unittest.TestCase):
                 },
             )
             self.assertIn(
-                "claudex-sonnet",
+                "claudex-haiku",
                 json.loads(failure.stdout)["hookSpecificOutput"]["additionalContext"],
             )
 
@@ -1834,7 +1834,7 @@ class MainTests(unittest.TestCase):
         self, _read_cache: mock.Mock, _collect_usage: mock.Mock
     ) -> None:
         output = self.run_main("--no-cache")
-        self.assertIn("claudex-sonnet", output)
+        self.assertIn("claudex-haiku", output)
 
     @mock.patch("route_usage.collect_usage", return_value=report())
     @mock.patch("route_usage.read_cache", return_value=None)

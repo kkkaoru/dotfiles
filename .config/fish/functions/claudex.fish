@@ -211,7 +211,10 @@ print(model)
     else
         echo "claudex: explicit-routed orchestration ($provider_config, $outer_model, $outer_effort)" >&2
     end
-    set -l adapter "$HOME/.cargo/bin/claudex-agent-adapter"
+    # Keep this path identical to the documented cargo install --root target.
+    # Do not resolve a stale ~/.cargo binary when the current build lives in
+    # ~/.local/bin.
+    set -l adapter "$HOME/.local/bin/claudex-agent-adapter"
     if not test -x "$adapter"
         echo "claudex: installed adapter is not executable: $adapter" >&2
         return 127

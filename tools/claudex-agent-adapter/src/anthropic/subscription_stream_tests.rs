@@ -13,8 +13,9 @@ use super::{
 };
 use crate::anthropic::{
     agent_effort::AgentEffortIntents,
-    subscription::{SubscriptionOptions, SubscriptionToolContext},
+    subscription::{SubscriptionChildExecutor, SubscriptionOptions, SubscriptionToolContext},
     subscription_activity::SubscriptionActivity,
+    subscription_frames::{send_block_stop, send_text_delta, send_text_start},
 };
 use crate::provider_config::ModelCatalog;
 
@@ -324,6 +325,7 @@ fn explicit_subscription_tool_context() -> SubscriptionToolContext {
     SubscriptionToolContext {
         agent_efforts: Arc::new(AgentEffortIntents::default()),
         model_catalog: ModelCatalog::default(),
+        child_executor: None,
         client_user_id: None,
         parent_model: "parent-model".to_owned(),
         system: json!(null),
@@ -350,6 +352,7 @@ async fn sanitizes_and_records_contextual_agent_tool_input() {
         tool_context: Some(SubscriptionToolContext {
             agent_efforts: intents,
             model_catalog: ModelCatalog::default(),
+            child_executor: None,
             client_user_id: Some("user".to_owned()),
             parent_model: "parent-model".to_owned(),
             system: json!([{"type":"text","text":"system message"}]),
@@ -443,6 +446,7 @@ async fn ignores_non_top_level_tool_events_and_exercises_completed_state() {
         tool_context: Some(SubscriptionToolContext {
             agent_efforts: Arc::new(AgentEffortIntents::default()),
             model_catalog: ModelCatalog::default(),
+            child_executor: None,
             client_user_id: None,
             parent_model: "parent-model".to_owned(),
             system: json!([{"type":"text","text":"system message"}]),
@@ -517,6 +521,7 @@ async fn blocks_an_unsupported_subagent_without_failing_the_parent_stream() {
         tool_context: Some(SubscriptionToolContext {
             agent_efforts: Arc::new(AgentEffortIntents::default()),
             model_catalog: ModelCatalog::default(),
+            child_executor: None,
             client_user_id: None,
             parent_model: "claude-haiku-4-5".to_owned(),
             system: json!(null),
@@ -566,6 +571,7 @@ async fn accepts_a_valid_agent_model_without_a_prompt() {
         tool_context: Some(SubscriptionToolContext {
             agent_efforts: Arc::new(AgentEffortIntents::default()),
             model_catalog: ModelCatalog::default(),
+            child_executor: None,
             client_user_id: None,
             parent_model: "parent-model".to_owned(),
             system: json!(null),
@@ -589,7 +595,7 @@ async fn accepts_a_valid_agent_model_without_a_prompt() {
 }
 
 #[tokio::test]
-async fn routes_a_standard_general_purpose_agent_to_the_parent_subscription() {
+async fn routes_a_standard_claude_child_to_official_haiku() {
     let (_sender, _receiver) = channel();
     let stream = SubscriptionStream {
         text_started: false,
@@ -601,6 +607,7 @@ async fn routes_a_standard_general_purpose_agent_to_the_parent_subscription() {
         tool_context: Some(SubscriptionToolContext {
             agent_efforts: Arc::new(AgentEffortIntents::default()),
             model_catalog: ModelCatalog::default(),
+            child_executor: None,
             client_user_id: None,
             parent_model: "claude-sonnet-5".to_owned(),
             system: json!(null),
@@ -612,13 +619,13 @@ async fn routes_a_standard_general_purpose_agent_to_the_parent_subscription() {
         .prepare_tool_input(
             "Agent",
             "agent-standard",
-            &json!({"prompt":"work", "subagent_type":"general-purpose"}),
+            &json!({"prompt":"work", "subagent_type":"claude"}),
         )
         .expect("standard Agent input");
     let prompt = routed["prompt"].as_str().expect("correlated prompt");
-    assert!(prompt.contains("claudex_model: claude-sonnet-5"));
+    assert!(prompt.contains("claudex_model: claude-haiku-4-5"));
     assert!(prompt.contains("<claudex-agent-id>agent-standard</claudex-agent-id>"));
-    assert_eq!(routed["subagent_type"], "general-purpose");
+    assert_eq!(routed["subagent_type"], "claude");
     assert!(routed.get("claudex_model").is_none());
 }
 
@@ -676,11 +683,12 @@ async fn fast_subscription_result_skips_activity_status_and_requires_result_even
     assert!(!empty.contains("Claudex is still working"));
     assert!(!empty.contains(r#""type":"thinking""#));
 
-    let error =
-        consume_subscription_stream(child("printf '%s\\n' '{\"type\":\"ignored\"}'"), &sender)
-            .await
-            .expect_err("missing result");
-    assert!(error.to_string().contains("without a result"));
+    consume_subscription_stream(child("printf '%s\\n' '{\"type\":\"ignored\"}'"), &sender)
+        .await
+        .expect("missing result becomes a completed diagnostic stream");
+    let recovered = output(&mut receiver).await;
+    assert!(recovered.contains("without a result"));
+    assert!(recovered.contains("event: message_stop"));
 }
 
 #[tokio::test]
@@ -723,13 +731,13 @@ async fn early_text_is_not_split_by_the_initial_activity_deadline() {
 #[tokio::test]
 async fn reports_process_failure_and_stderr() {
     let (sender, mut receiver) = channel();
-    let error = consume_subscription_stream(child("printf 'fixture failure' >&2; exit 7"), &sender)
+    consume_subscription_stream(child("printf 'fixture failure' >&2; exit 7"), &sender)
         .await
-        .expect_err("failed process");
-    let message = error.to_string();
-    assert!(message.contains("fixture failure"));
-    assert!(message.contains("exit status"));
-    assert!(output(&mut receiver).await.is_empty());
+        .expect("failed process becomes a completed diagnostic stream");
+    let frames = output(&mut receiver).await;
+    assert!(frames.contains("fixture failure"));
+    assert!(frames.contains("exit status"));
+    assert!(frames.contains("event: message_stop"));
 }
 
 #[tokio::test]
@@ -795,7 +803,7 @@ async fn requires_piped_stdout_and_stderr() {
 }
 
 #[tokio::test]
-async fn converts_launch_failures_to_stream_errors() {
+async fn converts_launch_failures_to_completed_diagnostic_streams() {
     let (sender, mut receiver) = channel();
     let options = SubscriptionOptions::internal(
         std::sync::Arc::new(tokio::sync::Semaphore::new(1)),
@@ -810,15 +818,252 @@ async fn converts_launch_failures_to_stream_errors() {
     )
     .await;
     let output = output(&mut receiver).await;
-    assert!(output.contains("event: error"));
+    assert!(!output.contains("event: error"));
+    assert!(output.contains("event: message_stop"));
     assert!(output.contains("failed to start Claude subscription"));
 }
 
 #[tokio::test]
 async fn reports_invalid_json_from_a_process() {
-    let (sender, _receiver) = channel();
-    let error = consume_subscription_stream(child("printf 'not-json\\n'"), &sender)
+    let (sender, mut receiver) = channel();
+    consume_subscription_stream(child("printf 'not-json\\n'"), &sender)
         .await
-        .expect_err("invalid process output");
-    assert!(error.to_string().contains("invalid stream JSON"));
+        .expect("invalid process output becomes a completed diagnostic stream");
+    let frames = output(&mut receiver).await;
+    assert!(frames.contains("invalid stream JSON"));
+    assert!(frames.contains("event: message_stop"));
+}
+
+#[tokio::test]
+async fn rejects_api_retry_authentication_failure_instead_of_ignoring_it() {
+    let (sender, _) = channel();
+    let mut stream = SubscriptionStream {
+        text_started: false,
+        text_closed: false,
+        saw_tool_use: false,
+        saw_result: false,
+        next_index: 0,
+        tools: Vec::new(),
+        tool_context: None,
+        activity: SubscriptionActivity::default(),
+    };
+
+    let error = stream
+        .handle_line(
+            &sender,
+            &json!({
+                "type":"system",
+                "subtype":"api_retry",
+                "attempt":1,
+                "error":{
+                    "type":"authentication_failed",
+                    "message":"synthetic credentials rejected"
+                }
+            })
+            .to_string(),
+        )
+        .await
+        .expect_err("authentication retry must terminate the provider stream");
+
+    let message = format!("{error:#}");
+    assert!(message.contains("api_retry"));
+    assert!(message.contains("authentication_failed"));
+    assert!(message.contains("synthetic credentials rejected"));
+}
+
+#[tokio::test]
+async fn forwards_nested_non_agent_tools_instead_of_discarding_them() {
+    let (sender, mut receiver) = channel();
+    let mut stream = SubscriptionStream {
+        text_started: false,
+        text_closed: false,
+        saw_tool_use: false,
+        saw_result: false,
+        next_index: 0,
+        tools: vec!["WebSearch".to_owned()],
+        tool_context: None,
+        activity: SubscriptionActivity::default(),
+    };
+
+    stream
+        .handle_line(
+            &sender,
+            &json!({
+                "type":"assistant",
+                "parent_tool_use_id":"synthetic-parent",
+                "message":{"content":[{
+                    "type":"tool_use",
+                    "id":"synthetic-search",
+                    "name":"WebSearch",
+                    "input":{"query":"synthetic widget documentation"}
+                }]}
+            })
+            .to_string(),
+        )
+        .await
+        .expect("nested WebSearch must be forwarded");
+
+    let frames = output(&mut receiver).await;
+    assert!(stream.saw_tool_use);
+    assert!(frames.contains(r#""name":"WebSearch""#));
+    assert!(frames.contains("synthetic widget documentation"));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn direct_nested_result_after_preface_opens_and_closes_a_new_text_block() {
+    let directory = tempfile::tempdir().expect("create direct child fixture directory");
+    let program = directory.path().join("direct-child.sh");
+    fs::write(
+        &program,
+        concat!(
+            "#!/bin/sh\n",
+            "cat >/dev/null\n",
+            "printf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"SYNTHETIC_CHILD_OK\"}'\n",
+        ),
+    )
+    .expect("write direct child fixture");
+    fs::set_permissions(&program, fs::Permissions::from_mode(0o755))
+        .expect("make direct child fixture executable");
+
+    let (sender, mut receiver) = channel();
+    send_text_start(&sender, 0).await.expect("preface start");
+    send_text_delta(&sender, 0, "synthetic preface")
+        .await
+        .expect("preface delta");
+    send_block_stop(&sender, 0).await.expect("preface stop");
+    let mut stream = SubscriptionStream {
+        text_started: true,
+        text_closed: true,
+        saw_tool_use: false,
+        saw_result: false,
+        next_index: 1,
+        tools: vec!["Agent".to_owned()],
+        tool_context: Some(SubscriptionToolContext {
+            agent_efforts: Arc::new(AgentEffortIntents::default()),
+            model_catalog: ModelCatalog::default(),
+            child_executor: Some(SubscriptionChildExecutor {
+                program,
+                slots: Arc::new(tokio::sync::Semaphore::new(2)),
+                timeout: Duration::from_secs(2),
+                cwd: None,
+                tools: Vec::new(),
+            }),
+            client_user_id: None,
+            parent_model: "gpt-test".to_owned(),
+            system: json!(null),
+            user_messages: vec![json!({
+                "role":"user",
+                "content":"Claudex routing for this turn: {\"providers\":{},\"selected_workers\":[{\"agent\":\"synthetic-worker\",\"model\":\"gpt-test\",\"effort\":\"high\"}]}"
+            })],
+        }),
+        activity: SubscriptionActivity::default(),
+    };
+    stream
+        .handle_line(
+            &sender,
+            &json!({
+                "type":"assistant", "parent_tool_use_id":null,
+                "message":{"content":[{
+                    "type":"tool_use", "id":"synthetic-child", "name":"Agent",
+                    "input":{"prompt":"return the synthetic fixture result", "claudex_model":"gpt-test"}
+                }]}
+            })
+            .to_string(),
+        )
+        .await
+        .expect("execute direct nested child");
+    stream
+        .finish(
+            &sender,
+            &json!({"type":"result","subtype":"success","result":""}),
+        )
+        .await
+        .expect("finish direct nested child stream");
+
+    let frames = output(&mut receiver).await;
+    assert_eq!(frames.matches("event: content_block_start").count(), 2);
+    assert_eq!(frames.matches("event: content_block_stop").count(), 2);
+    assert!(frames.contains("SYNTHETIC_CHILD_OK"));
+    assert!(frames.contains(r#""stop_reason":"end_turn""#));
+    assert!(!frames.contains(r#""stop_reason":"tool_use""#));
+    assert_eq!(frames.matches("event: message_stop").count(), 1);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn partial_text_then_failed_process_has_one_clean_terminal_event() {
+    let directory = tempfile::tempdir().expect("create failed stream fixture directory");
+    let program = directory.path().join("failed-stream.sh");
+    fs::write(
+        &program,
+        concat!(
+            "#!/bin/sh\n",
+            "cat >/dev/null\n",
+            "printf '%s\\n' '{\"type\":\"stream_event\",\"event\":{\"delta\":{\"type\":\"text_delta\",\"text\":\"SYNTHETIC_PARTIAL\"}}}'\n",
+            "printf '%s' 'synthetic child failure' >&2\n",
+            "exit 7\n",
+        ),
+    )
+    .expect("write failed stream fixture");
+    fs::set_permissions(&program, fs::Permissions::from_mode(0o755))
+        .expect("make failed stream fixture executable");
+
+    let (sender, mut receiver) = channel();
+    run_subscription_stream(
+        sender,
+        program,
+        "synthetic-model".to_owned(),
+        "synthetic prompt".to_owned(),
+        SubscriptionOptions::internal(
+            Arc::new(tokio::sync::Semaphore::new(1)),
+            Duration::from_secs(2),
+        ),
+    )
+    .await;
+
+    let frames = output(&mut receiver).await;
+    assert!(frames.contains("SYNTHETIC_PARTIAL"));
+    assert!(frames.contains("synthetic child failure"));
+    assert_eq!(frames.matches("event: content_block_stop").count(), 1);
+    assert_eq!(frames.matches("event: message_stop").count(), 1);
+    assert!(!frames.contains("event: error"));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn completed_result_is_not_followed_by_an_error_when_process_exit_is_late_failure() {
+    let directory = tempfile::tempdir().expect("create late failure fixture directory");
+    let program = directory.path().join("late-failure.sh");
+    fs::write(
+        &program,
+        concat!(
+            "#!/bin/sh\n",
+            "cat >/dev/null\n",
+            "printf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"SYNTHETIC_COMPLETE\"}'\n",
+            "printf '%s' 'synthetic late failure' >&2\n",
+            "exit 9\n",
+        ),
+    )
+    .expect("write late failure fixture");
+    fs::set_permissions(&program, fs::Permissions::from_mode(0o755))
+        .expect("make late failure fixture executable");
+
+    let (sender, mut receiver) = channel();
+    run_subscription_stream(
+        sender,
+        program,
+        "synthetic-model".to_owned(),
+        "synthetic prompt".to_owned(),
+        SubscriptionOptions::internal(
+            Arc::new(tokio::sync::Semaphore::new(1)),
+            Duration::from_secs(2),
+        ),
+    )
+    .await;
+
+    let frames = output(&mut receiver).await;
+    assert!(frames.contains("SYNTHETIC_COMPLETE"));
+    assert_eq!(frames.matches("event: message_stop").count(), 1);
+    assert!(!frames.contains("event: error"));
 }

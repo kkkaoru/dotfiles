@@ -35,6 +35,45 @@ fn subscription_children_identify_as_noninteractive() {
     assert_eq!(value, Some(std::ffi::OsStr::new("1")));
 }
 
+#[test]
+fn direct_nested_child_keeps_agent_tools_without_reexposing_the_outer_tool_bridge() {
+    let slots = Arc::new(tokio::sync::Semaphore::new(1));
+    let nested = SubscriptionOptions {
+        effort: None,
+        tools: vec!["Agent".to_owned()],
+        bridge_tools: false,
+        cwd: None,
+        slots: Arc::clone(&slots),
+        timeout: Duration::from_secs(1),
+        tool_context: None,
+    };
+    let outer = SubscriptionOptions {
+        bridge_tools: true,
+        ..nested.clone()
+    };
+    let nested = subscription_command(
+        Path::new("claude"),
+        "claude-haiku-4-5",
+        &nested,
+        OutputMode::StreamJson,
+    );
+    let outer = subscription_command(
+        Path::new("claude"),
+        "claude-sonnet-5",
+        &outer,
+        OutputMode::StreamJson,
+    );
+    let nested_args = nested.as_std().get_args().collect::<Vec<_>>();
+    let outer_args = outer.as_std().get_args().collect::<Vec<_>>();
+    assert!(
+        nested_args
+            .windows(2)
+            .any(|pair| pair == ["--allowedTools", "Agent"])
+    );
+    assert!(!nested_args.iter().any(|arg| *arg == "--settings"));
+    assert!(outer_args.iter().any(|arg| *arg == "--settings"));
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn terminating_a_subscription_reaps_its_entire_process_group() {

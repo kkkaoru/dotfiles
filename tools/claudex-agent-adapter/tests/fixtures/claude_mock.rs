@@ -45,12 +45,90 @@ fn main() {
         );
         return;
     }
+    if prompt.contains("SUBSCRIPTION_PARENT_SYNTHESIS") {
+        println!(
+            "{}",
+            json!({
+                "type":"result","subtype":"success","is_error":false,
+                "result":"NESTED_CHILD_RESULT_RECEIVED","usage":{"output_tokens":4}
+            })
+        );
+        return;
+    }
+    if prompt.contains("SUBSCRIPTION_NESTED_AGENT")
+        && argument(&arguments, "--output-format") == "stream-json"
+    {
+        send_subscription_tool(
+            "nested-child",
+            "child research",
+            prompt
+                .contains("USE_AGENT_MODEL")
+                .then_some("claude-opus-4-8"),
+        );
+        println!(
+            "{}",
+            json!({
+                "type":"result","subtype":"success","is_error":false,
+                "result":"nested child launched","usage":{"output_tokens":4}
+            })
+        );
+        return;
+    }
+    if prompt.contains("SUBSCRIPTION_WEB_TOOL_ROUND")
+        && prompt.contains("SYNTHETIC_SEARCH_RESULT")
+        && prompt.contains("SYNTHETIC_FETCH_RESULT")
+    {
+        println!(
+            "{}",
+            json!({
+                "type":"result","subtype":"success","is_error":false,
+                "result":"SYNTHETIC_WEB_RESULTS_RECEIVED","usage":{"output_tokens":6}
+            })
+        );
+        return;
+    }
+    if prompt.contains("SERVER_WEB_SEARCH_HANDOFF") || prompt.contains("SYNTHETIC_SEARCH_HANDOFF") {
+        println!(
+            "{}",
+            json!({
+                "type":"result","subtype":"success","is_error":false,
+                "result":"[{\"title\":\"Synthetic result\",\"url\":\"https://example.test/search-result\",\"page_age\":null,\"encrypted_content\":\"synthetic\"}]",
+                "usage":{"output_tokens":8}
+            })
+        );
+        return;
+    }
+    if prompt.contains("SUBSCRIPTION_WEB_TOOL_ROUND")
+        && argument(&arguments, "--output-format") == "stream-json"
+    {
+        send_stream_delta("出典");
+        send_subscription_named_tool(
+            "web-search-1",
+            "WebSearch",
+            json!({"query":"SYNTHETIC_COMPANY_OFFICIAL"}),
+            Some("outer-agent"),
+        );
+        send_subscription_named_tool(
+            "web-fetch-1",
+            "WebFetch",
+            json!({"url":"https://example.test/fixture"}),
+            Some("outer-agent"),
+        );
+        println!(
+            "{}",
+            json!({
+                "type":"result","subtype":"success","is_error":false,
+                "result":"web tools requested","usage":{"output_tokens":6}
+            })
+        );
+        return;
+    }
     if prompt.contains("SUBSCRIPTION_PARALLEL_TOOLS")
         && argument(&arguments, "--output-format") == "stream-json"
     {
-        send_subscription_tool("tool-alpha", "alpha");
+        send_subscription_tool("tool-alpha", "alpha", None);
         send_stream_delta("INNER_TOOL_REJECTION_MUST_NOT_LEAK");
-        send_subscription_tool("tool-beta", "beta");
+        send_subscription_tool("tool-beta", "beta", None);
         println!(
             "{}",
             json!({
@@ -107,20 +185,33 @@ fn send_stream_delta(text: &str) {
     io::stdout().flush().expect("flush stream delta");
 }
 
-fn send_subscription_tool(id: &str, description: &str) {
+fn send_subscription_tool(id: &str, description: &str, model: Option<&str>) {
+    let mut input = json!({
+        "description":description,
+        "prompt":format!("complete {description}"),
+        "subagent_type":"claude"
+    });
+    if let Some(model) = model {
+        input["claudex_model"] = json!(model);
+    }
+    send_subscription_named_tool(id, "Agent", input, None);
+}
+
+fn send_subscription_named_tool(
+    id: &str,
+    name: &str,
+    input: serde_json::Value,
+    parent_tool_use_id: Option<&str>,
+) {
     println!(
         "{}",
         json!({
-            "type":"assistant", "parent_tool_use_id":null,
+            "type":"assistant", "parent_tool_use_id":parent_tool_use_id,
             "message":{
                 "usage":{"output_tokens":3},
                 "content":[{
-                    "type":"tool_use", "id":id, "name":"Agent",
-                    "input":{
-                        "description":description,
-                        "prompt":format!("complete {description}"),
-                        "subagent_type":"claudex-gpt-spark"
-                    }
+                    "type":"tool_use", "id":id, "name":name,
+                    "input":input
                 }]
             }
         })

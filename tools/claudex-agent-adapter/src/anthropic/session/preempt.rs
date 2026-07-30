@@ -28,10 +28,24 @@ pub(super) async fn select_matching_session(
     // Outer (non-SubAgent) follow-ups cancel-and-reuse the busy main session
     // instead of cold-starting a second provider thread. Parallel SubAgents
     // keep the skip-busy fork so they do not preempt each other.
-    if crate::anthropic::agent_effort::is_subagent_request(request) {
+    if crate::anthropic::agent_effort::is_subagent_request(request)
+        || is_server_tool_handoff(request)
+    {
         return None;
     }
     preempt_busy_matching_session(sessions, request, signature, messages, app).await
+}
+
+fn is_server_tool_handoff(request: &MessagesRequest) -> bool {
+    request.tools.iter().any(|tool| {
+        let name = tool.get("name").and_then(Value::as_str);
+        let kind = tool.get("type").and_then(Value::as_str);
+        match (name, kind) {
+            (Some("web_search"), Some(kind)) => kind.starts_with("web_search_"),
+            (Some("web_fetch"), Some(kind)) => kind.starts_with("web_fetch_"),
+            _ => false,
+        }
+    })
 }
 
 async fn preempt_busy_matching_session(
@@ -116,6 +130,50 @@ mod tests {
                 .expect("reused session");
             assert_eq!(selected.existing_len, 1);
         }
+    }
+
+    #[tokio::test]
+    async fn server_web_search_handoff_does_not_preempt_a_busy_parent() {
+        let app = test_app().await;
+        let session = session("main-model", Some("client"));
+        let _gate = Arc::clone(&session.gate).lock_owned().await;
+        let mut request = request("main-model");
+        request.messages = vec![json!({
+            "role":"user", "content":"SYNTHETIC_SEARCH_HANDOFF"
+        })];
+        request.tools = vec![json!({
+            "type":"web_search_20250305", "name":"web_search"
+        })];
+        let selected = tokio::time::timeout(
+            Duration::from_millis(50),
+            select_matching_session(
+                vec![session],
+                &request,
+                &Arc::from("different-signature"),
+                &request.messages,
+                &app,
+            ),
+        )
+        .await
+        .expect("server web-search handoff must not wait on a busy parent");
+        assert!(selected.is_none());
+    }
+
+    #[test]
+    fn recognizes_only_typed_server_web_tools() {
+        let mut request = request("main-model");
+        request.tools = vec![json!({
+            "type":"function", "name":"web_search"
+        })];
+        assert!(!is_server_tool_handoff(&request));
+        request.tools = vec![json!({
+            "type":"web_search_20250305", "name":"web_search"
+        })];
+        assert!(is_server_tool_handoff(&request));
+        request.tools = vec![json!({
+            "type":"web_fetch_20250305", "name":"web_fetch"
+        })];
+        assert!(is_server_tool_handoff(&request));
     }
 
     #[test]

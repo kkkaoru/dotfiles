@@ -32,6 +32,7 @@ impl SegmentBuilder {
         crate::anthropic::agent_routing::hydrate_standard_agent_to_parent(
             &mut arguments,
             &context.session.model,
+            false,
         );
         if let Some(model) = crate::anthropic::agent_effort::disabled_subagent_model(
             original_name,

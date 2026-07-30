@@ -1,8 +1,8 @@
 ---
-name: claudex-gpt-spark
-description: Primary Codex-backed claudex worker for implementation, investigation, testing, and independent review when Codexbar reports available Codex capacity.
-model: gpt-5.3-codex-spark
-effort: xhigh
+name: claudex-haiku
+description: Claude Haiku fallback worker used only when no capacity-managed provider is available.
+model: claude-haiku-4-5
+effort: max
 skills:
   - claudex-routing
   - ctx-agent-history-search

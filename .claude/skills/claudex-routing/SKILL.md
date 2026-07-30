@@ -54,11 +54,7 @@ retained.
    Apply this selection to every Agent/Task launch, including nested launches made by an existing
    worker. A nested launch must use the current selected worker's agent and exact model/effort; it
    must not default to generic `claude` or blindly inherit its parent's provider route.
-   For several independent workers, treat unknown or potentially long-running work as asynchronous:
-   emit every call in one background batch (`run_in_background: true`) so a slow worker cannot hold
-   the main turn or delay peers that already finished. Use foreground only for short, bounded work
-   whose result is required before the next main action, or when the active user explicitly asks for
-   synchronous completion. Do not use a foreground batch merely to gather all results. After a
+   When the user asks for findings, an answer, or completed work in the current reply, every required worker result is a dependency: launch the entire batch with `run_in_background: false`, wait for actual replies, and synthesize them before responding. Use background launches only when the user explicitly asks for asynchronous progress or the current response does not require the result. After a
    background launch, immediately start a concrete independent action or end the turn with a concise
    user-visible status. When completion notifications re-enter the next turn, integrate each available result
    without waiting for the slowest worker; never silently wait or keep hidden reasoning for pending

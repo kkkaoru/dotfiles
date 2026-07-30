@@ -433,14 +433,15 @@ fn assert_developer_guidance(developer: &str) {
         "exact claudex_model and claudex_effort",
         "never use generic claude or blindly inherit",
         "main session must control parallel distribution across multiple SubAgents",
+        "Workers retain the complete tool set and must execute their assigned work",
         "Avoid serial heavy processing by one worker",
         "reuse compatible workers with SendMessage and the exact prior Agent/Task recipient instead of churning processes",
         "custom-advisor is a separate logical session singleton/capacity channel",
         "built-in advisor remains independent of worker capacity",
         "Prefer reusing a compatible recipient via SendMessage over launching a replacement process",
-        "set run_in_background=true on every launch in the single batch",
+        "every required SubAgent result is a dependency",
         "Do not mix foreground and background launches in one batch",
-        "end the current turn promptly instead of reasoning while waiting",
+        "do not create a startup, availability, routing, or WebSearch probe",
     ];
     for phrase in REQUIRED {
         assert!(
@@ -522,10 +523,10 @@ fn subscription_prompt_requires_atomic_parallel_launches() {
     assert!(prompt.contains("exactly that many launch calls"));
     assert!(prompt.contains(&format!("at least {minimum}")));
     assert!(prompt.contains("ordinary workers"));
-    assert!(prompt.contains("run_in_background=true"));
+    assert!(prompt.contains("run_in_background=false"));
     assert!(prompt.contains("Do not mix foreground and background launches"));
     assert!(prompt.contains("queued to a busy worker does not add parallel capacity"));
-    assert!(prompt.contains("end the turn promptly with concise user-visible status"));
+    assert!(prompt.contains("wait for the actual child replies"));
     assert!(
         prompt
             .contains("main session must control parallel distribution across multiple SubAgents")

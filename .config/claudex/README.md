@@ -27,7 +27,7 @@ flowchart LR
     Hook --> Grok[claudex-grok\nGrok ACP]
     Hook --> Qwen[claudex-qwen\nQwen Code ACP]
     Hook --> DeepSeek[claudex-deepseek\nOpenCode Go ACP]
-    Hook --> Fallback[claudex-sonnet\nClaude fallback]
+    Hook --> Fallback[claudex-haiku\nClaude fallback]
     Orchestrator -. 標準機能 .-> BuiltinAdvisor[Claude Code advisor()\nadvisorModel: opus]
     Orchestrator -. 必要時に併用 .-> CustomAdvisor[custom-advisor\nclaude-fable-5 / xhigh]
 ```
@@ -44,7 +44,8 @@ flowchart LR
 | Grok worker | `claudex-grok` | `grok-4.5` | `high` | Grokに空きがある場合 |
 | Qwen worker | `claudex-qwen` | `qwen3.8-max-preview` | `high` | providerは維持するがSubAgentではdenylistにより禁止 |
 | DeepSeek worker | `claudex-deepseek` | `opencode-go/deepseek-v4-flash` | `high` | CodexBarのOpenCode Go枠に空きがある場合 |
-| Fallback | `claudex-sonnet` | `claude-sonnet-5` | `high` | 利用率を管理するproviderをすべて利用できない場合 |
+| Fallback | `claudex-haiku` | `claude-haiku-4-5` | `max` | 利用率を管理するproviderをすべて利用できない場合 |
+| Dedicated Claude worker | `claudex-sonnet` | `claude-sonnet-5` | `high` | 明示された Sonnet SubAgent。fallback ではなくworker routeとして直接選択 |
 | Built-in advisor | Claude Code標準 `advisor()` | `opus` | Claude Code標準 | 標準advisor policyに従う。provider capacity非依存 |
 | Custom advisor | `custom-advisor` | `claude-fable-5` | `xhigh` | 明示指定時、または複雑・曖昧・高リスク・長期・停滞時。worker capacityとは別管理の論理 session singleton（hard process=1ではない） |
 

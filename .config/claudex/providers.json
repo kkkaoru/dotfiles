@@ -116,10 +116,17 @@
       }
     }
   ],
+  "workerRoutes": [
+    {
+      "agent": "claudex-sonnet",
+      "model": "claude-sonnet-5",
+      "effort": "high"
+    }
+  ],
   "fallback": {
-    "agent": "claudex-sonnet",
-    "model": "claude-sonnet-5",
-    "effort": "high"
+    "agent": "claudex-haiku",
+    "model": "claude-haiku-4-5",
+    "effort": "max"
   },
   "advisor": {
     "agent": "custom-advisor",

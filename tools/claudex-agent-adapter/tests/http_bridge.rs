@@ -423,6 +423,224 @@ async fn completes_an_external_tool_round_trip_after_a_signature_change() {
 }
 
 #[tokio::test]
+async fn app_server_web_search_round_trip_returns_a_parent_result() {
+    let adapter = Adapter::start().await;
+    let client = Client::new();
+    let tools = json!([{
+        "name": "WebSearch",
+        "description": "Synthetic search tool",
+        "input_schema": {
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+            "required": ["query"]
+        }
+    }]);
+    let first = post_json(
+        &client,
+        &messages_url(&adapter),
+        json!({
+            "model":"test-main-model", "max_tokens":128,
+            "tools":tools, "messages":[{"role":"user","content":"USE_WEB_SEARCH"}]
+        }),
+    )
+    .await;
+    assert_eq!(first["stop_reason"], "tool_use");
+    let tool_use = first["content"]
+        .as_array()
+        .and_then(|items| items.iter().find(|item| item["type"] == "tool_use"))
+        .expect("WebSearch tool_use");
+    assert_eq!(tool_use["name"], "WebSearch");
+    assert_eq!(tool_use["input"]["query"], "SYNTHETIC_SEARCH_QUERY");
+    let tool_use_id = tool_use["id"].as_str().expect("tool_use id");
+
+    let second = post_json(
+        &client,
+        &messages_url(&adapter),
+        json!({
+            "model":"test-main-model", "max_tokens":128, "tools":tools,
+            "messages":[
+                {"role":"user","content":"USE_WEB_SEARCH"},
+                {"role":"assistant","content":first["content"]},
+                {"role":"user","content":[{
+                    "type":"tool_result", "tool_use_id":tool_use_id,
+                    "content":"SYNTHETIC_SEARCH_RESULT"
+                }]}
+            ]
+        }),
+    )
+    .await;
+    assert_eq!(second["stop_reason"], "end_turn");
+    let text = second["content"]
+        .as_array()
+        .and_then(|items| items.iter().find_map(|item| item["text"].as_str()))
+        .expect("parent text result");
+    assert!(text.contains("SYNTHETIC_SEARCH_RESULT"), "{text}");
+}
+
+#[tokio::test]
+async fn server_web_search_handoff_returns_structured_results_instead_of_empty_text() {
+    let adapter = Adapter::start().await;
+    let client = Client::new();
+    let response = post_json(
+        &client,
+        &messages_url(&adapter),
+        json!({
+            "model":"test-main-model", "max_tokens":128,
+            "tools":[{"type":"web_search_20250305","name":"web_search"}],
+            "messages":[{"role":"user","content":"SERVER_WEB_SEARCH_HANDOFF"}]
+        }),
+    )
+    .await;
+    assert_eq!(response["stop_reason"], "end_turn");
+    let content = response["content"].as_array().expect("server tool content");
+    assert!(content.iter().any(|block| {
+        block["type"] == "server_tool_use"
+            && block["name"] == "web_search"
+            && block["input"]["query"] == "SERVER_WEB_SEARCH_HANDOFF"
+    }));
+    assert!(content.iter().any(|block| {
+        block["type"] == "web_search_tool_result"
+            && block["content"][0]["type"] == "web_search_result"
+            && block["content"][0]["url"] == "https://example.test/search-result"
+    }));
+    assert!(content.iter().all(|block| block["text"].is_null()));
+}
+
+#[tokio::test]
+async fn streaming_server_web_search_handoff_preserves_result_blocks() {
+    let adapter = Adapter::start().await;
+    let client = Client::new();
+    let body = client
+        .post(messages_url(&adapter))
+        .json(&json!({
+            "model":"test-main-model", "max_tokens":128, "stream":true,
+            "tools":[{"type":"web_search_20250305","name":"web_search"}],
+            "messages":[{"role":"user","content":"SERVER_WEB_SEARCH_HANDOFF"}]
+        }))
+        .send()
+        .await
+        .expect("stream server web-search handoff")
+        .error_for_status()
+        .expect("successful streaming response")
+        .text()
+        .await
+        .expect("read streaming server web-search handoff");
+    assert!(body.contains(r#""type":"server_tool_use""#), "{body}");
+    assert!(
+        body.contains(r#""type":"web_search_tool_result""#),
+        "{body}"
+    );
+    assert!(
+        body.contains("https://example.test/search-result"),
+        "{body}"
+    );
+    assert!(body.contains(r#""stop_reason":"end_turn""#), "{body}");
+}
+
+#[tokio::test]
+async fn app_server_web_search_result_only_follow_up_reuses_the_pending_turn() {
+    let adapter = Adapter::start().await;
+    let client = Client::new();
+    let tools = json!([{
+        "name": "WebSearch",
+        "description": "Synthetic search tool",
+        "input_schema": {
+            "type": "object",
+            "properties": {"query": {"type": "string"}},
+            "required": ["query"]
+        }
+    }]);
+    let first = post_json(
+        &client,
+        &messages_url(&adapter),
+        json!({
+            "model":"test-main-model", "max_tokens":128,
+            "tools":tools, "messages":[{"role":"user","content":"USE_WEB_SEARCH"}]
+        }),
+    )
+    .await;
+    let tool_use = first["content"]
+        .as_array()
+        .and_then(|items| items.iter().find(|item| item["type"] == "tool_use"))
+        .expect("WebSearch tool_use");
+    let tool_use_id = tool_use["id"].as_str().expect("tool_use id");
+
+    let follow_up = post_json(
+        &client,
+        &messages_url(&adapter),
+        json!({
+            "model":"test-main-model", "max_tokens":128, "tools":tools,
+            "messages":[{"role":"user","content":[{
+                "type":"tool_result", "tool_use_id":tool_use_id,
+                "content":"SYNTHETIC_SEARCH_RESULT_ONLY"
+            }]}]
+        }),
+    )
+    .await;
+    assert_eq!(follow_up["stop_reason"], "end_turn");
+    let text = follow_up["content"]
+        .as_array()
+        .and_then(|items| items.iter().find_map(|item| item["text"].as_str()))
+        .expect("parent text result");
+    assert!(text.contains("SYNTHETIC_SEARCH_RESULT_ONLY"), "{text}");
+}
+
+#[tokio::test]
+async fn server_web_search_handoff_does_not_wait_on_the_parent_tool_turn() {
+    let adapter = Adapter::start().await;
+    let client = Client::new();
+    let mut first = client
+        .post(messages_url(&adapter))
+        .json(&json!({
+            "model":"test-main-model", "max_tokens":128, "stream":true,
+            "tools":[{"name":"WebSearch","input_schema":{"type":"object"}}],
+            "messages":[{"role":"user","content":"USE_WEB_SEARCH HOLD_EXTERNAL_TOOL_TURN"}]
+        }))
+        .send()
+        .await
+        .expect("start parent WebSearch stream");
+    assert!(first.status().is_success());
+    let mut saw_tool_use = false;
+    for _ in 0..16 {
+        let Some(first_chunk) = tokio::time::timeout(Duration::from_secs(1), first.chunk())
+            .await
+            .expect("parent WebSearch stream must emit promptly")
+            .expect("read parent WebSearch stream")
+        else {
+            break;
+        };
+        if String::from_utf8_lossy(&first_chunk).contains("tool_use") {
+            saw_tool_use = true;
+            break;
+        }
+    }
+    assert!(saw_tool_use);
+
+    let handoff = tokio::time::timeout(
+        Duration::from_secs(2),
+        post_json(
+            &client,
+            &messages_url(&adapter),
+            json!({
+                "model":"test-main-model", "max_tokens":128,
+                "tools":[{"type":"web_search_20250305","name":"web_search"}],
+                "messages":[{"role":"user","content":"SYNTHETIC_SEARCH_HANDOFF"}]
+            }),
+        ),
+    )
+    .await
+    .expect("server web-search handoff must not wait for the parent tool turn");
+    assert_eq!(handoff["stop_reason"], "end_turn");
+    assert!(handoff["content"].as_array().is_some_and(|content| {
+        content.iter().any(|block| {
+            block["type"] == "web_search_tool_result"
+                && block["content"][0]["type"] == "web_search_result"
+        })
+    }));
+    let _ = first.bytes().await;
+}
+
+#[tokio::test]
 async fn recovers_a_tool_result_after_adapter_session_loss() {
     let first_adapter = Adapter::start().await;
     let client = Client::new();
@@ -732,10 +950,12 @@ async fn routes_non_main_models_to_subscription_with_requested_effort() {
 }
 
 #[tokio::test]
-async fn rejects_model_less_subscription_tools_before_forwarding_them() {
+async fn forwards_a_subscription_child_to_haiku_and_returns_its_result_to_the_parent() {
     let adapter = Adapter::start().await;
-    let response = Client::new()
-        .post(messages_url(&adapter))
+    let client = Client::new();
+    let url = messages_url(&adapter);
+    let initial = client
+        .post(&url)
         .json(&json!({
             "model":"test-sonnet-model", "stream":true,
             "system":"Parallel subscription tool bridge",
@@ -750,22 +970,155 @@ async fn rejects_model_less_subscription_tools_before_forwarding_them() {
                     }
                 }
             }],
-            "messages":[{"role":"user","content":"SUBSCRIPTION_PARALLEL_TOOLS"}]
+            "messages":[{"role":"user","content":"SUBSCRIPTION_NESTED_AGENT"}]
         }))
         .send()
         .await
-        .expect("request parallel subscription tools")
+        .expect("start nested subscription request")
         .text()
         .await
-        .expect("read parallel subscription tools");
+        .expect("read nested subscription stream");
+    assert!(initial.contains(r#""name":"Agent""#), "response={initial}");
+    assert!(
+        initial.contains("claudex_model: claude-haiku-4-5"),
+        "response={initial}"
+    );
+    let prompt = "claudex_model: claude-haiku-4-5\n\
+        <claudex-agent-id>nested-child</claudex-agent-id>\nchild research";
+    let launch = json!({
+        "type":"tool_use", "id":"nested-child", "name":"Agent",
+        "input":{"prompt":prompt, "subagent_type":"claude"}
+    });
 
-    assert_eq!(response.matches(r#""name":"Agent""#).count(), 0);
-    assert_eq!(response.matches("input_json_delta").count(), 0);
-    assert!(response.contains("missing required `claudex_model`"));
-    assert!(!response.contains("tool-alpha"));
-    assert!(!response.contains("tool-beta"));
-    assert!(!response.contains("INNER_TOOL_REJECTION_MUST_NOT_LEAK"));
-    assert!(!response.contains(r#""stop_reason":"end_turn""#));
+    let child = post_json(
+        &client,
+        &url,
+        json!({
+            "model":"claude-sonnet-5",
+            "system":[{"type":"text","text":"cc_is_subagent=true"}],
+            "messages":[{"role":"user","content":[{"type":"text","text":format!("<teammate-message>{prompt}</teammate-message>")}]}]
+        }),
+    )
+    .await;
+    assert_eq!(child["model"], "claude-haiku-4-5");
+
+    let completed = post_json(
+        &client,
+        &url,
+        json!({
+            "model":"test-sonnet-model",
+            "system":"Parallel subscription tool bridge",
+            "tools":[{
+                "name":"Agent", "description":"Launch a worker",
+                "input_schema":{"type":"object"}
+            }],
+            "messages":[
+                {"role":"user","content":"SUBSCRIPTION_NESTED_AGENT"},
+                {"role":"assistant","content":[launch.clone()]},
+                {"role":"user","content":[{"type":"tool_result","tool_use_id":launch["id"],"content":format!("SUBSCRIPTION_PARENT_SYNTHESIS {}", child["content"][0]["text"].as_str().unwrap_or_default())}]}
+            ]
+        }),
+    )
+    .await;
+    assert_eq!(
+        completed["content"][0]["text"],
+        "NESTED_CHILD_RESULT_RECEIVED"
+    );
+}
+
+#[tokio::test]
+async fn subagent_executes_its_direct_child_without_a_main_tool_call() {
+    let adapter = Adapter::start().await;
+    let response = Client::new()
+        .post(messages_url(&adapter))
+        .json(&json!({
+            "model":"claude-sonnet-5", "stream":true,
+            "system":[{"type":"text","text":"cc_is_subagent=true"}],
+            "tools":[{
+                "name":"Agent", "description":"Launch a worker",
+                "input_schema":{"type":"object"}
+            }],
+            "messages":[{"role":"user","content":"SUBSCRIPTION_NESTED_AGENT"}]
+        }))
+        .send()
+        .await
+        .expect("start routed SubAgent")
+        .text()
+        .await
+        .expect("read routed SubAgent stream");
+
+    assert!(
+        !response.contains(r#"\"name\":\"Agent\""#),
+        "nested child leaked to the main session: {response}"
+    );
+    assert!(
+        response.contains("Nested SubAgent result (claude-haiku-4-5):"),
+        "direct child result missing: {response}"
+    );
+    assert!(
+        response.contains("MOCK_COLLABORATOR_RESULT"),
+        "direct child was not executed: {response}"
+    );
+}
+
+#[tokio::test]
+async fn nested_child_uses_correlated_subagent_model_instead_of_main_model() {
+    let adapter = Adapter::start().await;
+    let client = Client::new();
+    let url = messages_url(&adapter);
+    let parent = client
+        .post(&url)
+        .json(&json!({
+            "model":"test-main-model", "stream":true,
+            "system":"main model is intentionally different",
+            "tools":[{"name":"Agent","input_schema":{"type":"object"}}],
+            "messages":[{"role":"user","content":"USE_AGENT_MODEL claude-opus-4-8 SUBSCRIPTION_NESTED_AGENT"}]
+        }))
+        .send()
+        .await
+        .expect("launch main routed Agent")
+        .text()
+        .await
+        .expect("read parent tool stream");
+    assert!(
+        parent.contains("claudex_model: claude-opus-4-8"),
+        "response={parent}"
+    );
+
+    let nested_prompt = "complete child research\n\n\
+        claudex_launch_id: nested-child\n\
+        claudex_model: claude-opus-4-8\n\n\
+        <claudex-agent-id>nested-child</claudex-agent-id>";
+    let child = client
+        .post(&url)
+        .json(&json!({
+            "model":"claude-sonnet-5", "stream":true,
+            "system":[{"type":"text","text":"cc_is_subagent=true"}],
+            "tools":[{"name":"Agent","input_schema":{"type":"object"}}],
+            "messages":[
+                {"role":"user","content":"SUBSCRIPTION_NESTED_AGENT"},
+                {"role":"user","content":[{"type":"text","text":format!("<teammate-message>{nested_prompt}</teammate-message>")}]}
+            ]
+        }))
+        .send()
+        .await
+        .expect("launch correlated SubAgent")
+        .text()
+        .await
+        .expect("read correlated SubAgent stream");
+
+    assert!(
+        child.contains("Nested SubAgent result (claude-opus-4-8):"),
+        "child did not inherit its routed model: {child}"
+    );
+    assert!(
+        !child.contains("test-main-model"),
+        "main model leaked to child: {child}"
+    );
+    assert!(
+        !child.contains("claude-sonnet-5"),
+        "request model leaked to child: {child}"
+    );
 }
 
 #[tokio::test]
@@ -794,6 +1147,116 @@ async fn exchanges_large_subscription_input_and_output_without_pipe_deadlock() {
             assert!(response.contains("event: message_stop"));
         }
     }
+}
+
+#[tokio::test]
+async fn subscription_web_tools_require_results_before_the_parent_completes() {
+    let adapter = Adapter::start().await;
+    let client = Client::new();
+    let url = messages_url(&adapter);
+    let tools = json!([
+        {
+            "name":"WebSearch", "description":"Search synthetic sources",
+            "input_schema":{
+                "type":"object",
+                "properties":{"query":{"type":"string"}},
+                "required":["query"]
+            }
+        },
+        {
+            "name":"WebFetch", "description":"Fetch a synthetic source",
+            "input_schema":{
+                "type":"object",
+                "properties":{"url":{"type":"string"}},
+                "required":["url"]
+            }
+        }
+    ]);
+
+    let initial = client
+        .post(&url)
+        .json(&json!({
+            "model":"test-sonnet-model", "stream":true,
+            "system":"Synthetic web tool round-trip",
+            "tools":tools,
+            "messages":[{"role":"user","content":"SUBSCRIPTION_WEB_TOOL_ROUND"}]
+        }))
+        .send()
+        .await
+        .expect("start synthetic web tool request")
+        .text()
+        .await
+        .expect("read initial synthetic web tool stream");
+
+    assert!(
+        initial.contains(r#""id":"web-search-1""#),
+        "response={initial}"
+    );
+    assert!(
+        initial.contains(r#""name":"WebSearch""#),
+        "response={initial}"
+    );
+    assert!(
+        initial.contains("SYNTHETIC_COMPANY_OFFICIAL"),
+        "response={initial}"
+    );
+    assert!(
+        initial.contains(r#""id":"web-fetch-1""#),
+        "response={initial}"
+    );
+    assert!(
+        initial.contains(r#""name":"WebFetch""#),
+        "response={initial}"
+    );
+    assert!(
+        !initial.contains("SYNTHETIC_WEB_RESULTS_RECEIVED"),
+        "parent completed before tool results: {initial}"
+    );
+
+    let search = json!({
+        "type":"tool_use", "id":"web-search-1", "name":"WebSearch",
+        "input":{"query":"SYNTHETIC_COMPANY_OFFICIAL"}
+    });
+    let fetch = json!({
+        "type":"tool_use", "id":"web-fetch-1", "name":"WebFetch",
+        "input":{"url":"https://example.test/source"}
+    });
+    let completed = client
+        .post(&url)
+        .json(&json!({
+            "model":"test-sonnet-model", "stream":true,
+            "system":"Synthetic web tool round-trip",
+            "tools":tools,
+            "messages":[
+                {"role":"user","content":"SUBSCRIPTION_WEB_TOOL_ROUND"},
+                {"role":"assistant","content":[search.clone(), fetch.clone()]},
+                {"role":"user","content":[
+                    {
+                        "type":"tool_result", "tool_use_id":search["id"],
+                        "content":"SYNTHETIC_SEARCH_RESULT https://example.test/search-result"
+                    },
+                    {
+                        "type":"tool_result", "tool_use_id":fetch["id"],
+                        "content":"SYNTHETIC_FETCH_RESULT synthetic source body"
+                    }
+                ]}
+            ]
+        }))
+        .send()
+        .await
+        .expect("return synthetic web tool results")
+        .text()
+        .await
+        .expect("read completed synthetic web tool stream");
+
+    assert!(
+        completed.contains("SYNTHETIC_WEB_RESULTS_RECEIVED"),
+        "tool results did not reach the subscription parent: {completed}"
+    );
+    assert!(
+        completed.contains("event: message_stop"),
+        "subscription parent did not complete after tool results: {completed}"
+    );
 }
 
 async fn assert_subscription_response(
@@ -883,11 +1346,13 @@ async fn assert_fast_subscription_outcomes(client: &Client, adapter: &Adapter, s
         .text()
         .await
         .expect("read failing subscription stream");
-    assert!(failure.contains("event: error"));
+    assert!(!failure.contains("event: error"));
     assert!(
         failure.contains("forced subscription failure"),
         "unexpected subscription failure stream: {failure}"
     );
+    assert!(failure.contains("event: message_stop"));
+    assert_eq!(failure.matches("event: message_stop").count(), 1);
     assert!(failure_started.elapsed() < Duration::from_millis(500));
     assert!(!failure.contains("Claudex is still working"));
     assert!(!failure.contains(r#""type":"thinking""#));

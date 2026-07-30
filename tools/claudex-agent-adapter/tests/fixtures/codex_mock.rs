@@ -294,7 +294,10 @@ impl<W: Write> Fixture<W> {
 
     fn send_tool(&mut self, tool: &str, input: &str) {
         self.pending_tool = true;
-        let arguments = if tool.contains("Agent") && input.contains("USE_AGENT_DEFAULT") {
+        let request_id = if tool.contains("WebSearch") { 0 } else { 900 };
+        let arguments = if tool.contains("WebSearch") {
+            json!({"query":"SYNTHETIC_SEARCH_QUERY"})
+        } else if tool.contains("Agent") && input.contains("USE_AGENT_DEFAULT") {
             json!({
                 "description":"default effort fixture",
                 "prompt":"REPORT_EFFORT SUBSCRIPTION_ROUTE",
@@ -320,12 +323,21 @@ impl<W: Write> Fixture<W> {
             json!({"key":"alpha","task":"small task"})
         };
         self.send(json!({
-            "id":900, "method":"item/tool/call",
+            "id":request_id, "method":"item/tool/call",
             "params":{
                 "threadId":self.thread_id(), "turnId":"turn-test", "callId":"call-test",
                 "tool":tool, "arguments":arguments
             }
         }));
+        if input.contains("HOLD_EXTERNAL_TOOL_TURN") {
+            for sequence in 0..8 {
+                thread::sleep(Duration::from_millis(50));
+                self.send(json!({
+                    "method":"fixture/external-tool-heartbeat",
+                    "params":{"sequence":sequence}
+                }));
+            }
+        }
         self.send_response_item_completed("call-test", tool);
     }
 
@@ -361,7 +373,9 @@ impl<W: Write> Fixture<W> {
         if self.handle_parallel_agent_result(message) {
             return;
         }
-        if !self.pending_tool || message.get("id") != Some(&json!(900)) {
+        if !self.pending_tool
+            || !matches!(message.get("id"), Some(id) if id == &json!(900) || id == &json!(0))
+        {
             return;
         }
         self.pending_tool = false;
@@ -536,7 +550,9 @@ impl<W: Write> Fixture<W> {
 }
 
 fn requested_tool(input: &str) -> Option<&'static str> {
-    if input.contains("USE_ADVISOR") {
+    if input.contains("USE_WEB_SEARCH") {
+        Some("cc_WebSearch_0")
+    } else if input.contains("USE_ADVISOR") {
         Some("advisor")
     } else if input.contains("USE_COLLABORATOR") {
         Some("claude_collaborator")

@@ -472,7 +472,7 @@ mod tests {
         let path = root.path().join("providers.json");
         std::fs::write(
             &path,
-            r#"{"version":1,"mainProviders":["grok"],"providers":[{"id":"grok","agent":"claudex-grok","defaultModel":"grok-4.5","effort":"high","backend":"grok-acp"}],"fallback":{"agent":"claudex-sonnet","model":"claude-sonnet-5","effort":"high"}}"#,
+            r#"{"version":1,"mainProviders":["grok"],"providers":[{"id":"grok","agent":"claudex-grok","defaultModel":"grok-4.5","effort":"high","backend":"grok-acp"}],"fallback":{"agent":"claudex-haiku","model":"claude-haiku-4-5","effort":"high"}}"#,
         )
         .expect("write provider config");
         let catalog = crate::provider_config::load(&path)
@@ -528,23 +528,25 @@ mod tests {
         let mut arguments = json!({"subagent_type":"Explore","prompt":"inspect"});
         super::super::agent_routing::hydrate_standard_agent_to_parent(
             &mut arguments,
-            "claude-sonnet-5",
+            "claude-haiku-4-5",
+            false,
         );
-        assert_eq!(arguments["claudex_model"], "claude-sonnet-5");
+        assert_eq!(arguments["claudex_model"], "claude-haiku-4-5");
         assert!(super::super::agent_routing::model_is_authorized_with_catalog(
             &arguments,
             &[],
             &json!(null),
             &crate::provider_config::ModelCatalog::default(),
-            "claude-sonnet-5",
+            "claude-haiku-4-5",
         ));
 
         let mut general = json!({"subagent_type":"general-purpose","prompt":"inspect"});
         super::super::agent_routing::hydrate_standard_agent_to_parent(
             &mut general,
-            "claude-sonnet-5",
+            "claude-haiku-4-5",
+            false,
         );
-        assert_eq!(general["claudex_model"], "claude-sonnet-5");
+        assert_eq!(general["claudex_model"], "claude-haiku-4-5");
         assert!(general["claudex_implicit_model"].as_str().is_some());
 
         let (intent_arguments, _) = prepare_arguments("Agent", "tool-inherited", &general);
@@ -555,7 +557,7 @@ mod tests {
                 client_user_id: None,
                 tool_name: "Agent",
                 tool_use_id: "tool-inherited".to_owned(),
-                parent_model: "claude-sonnet-5",
+                parent_model: "claude-haiku-4-5",
                 arguments: &intent_arguments,
                 user_messages: &[],
                 system: &json!(null),
@@ -565,13 +567,14 @@ mod tests {
         let intent = intents.take(&request_without_user_id(
             intent_arguments["prompt"].as_str().expect("correlated prompt"),
         ));
-        assert_eq!(intent.model_override.as_deref(), Some("claude-sonnet-5"));
+        assert_eq!(intent.model_override.as_deref(), Some("claude-haiku-4-5"));
         assert!(intent.model_is_inherited);
 
         let mut routed = json!({"subagent_type":"claudex-gpt"});
         super::super::agent_routing::hydrate_standard_agent_to_parent(
             &mut routed,
-            "claude-sonnet-5",
+            "claude-haiku-4-5",
+            false,
         );
         assert!(routed.get("claudex_model").is_none());
 
@@ -579,6 +582,7 @@ mod tests {
         super::super::agent_routing::hydrate_standard_agent_to_parent(
             &mut native_claude,
             "gpt-5.6-luna",
+            false,
         );
         assert_eq!(native_claude["claudex_model"], "claude-haiku-4-5");
         assert!(super::super::agent_routing::model_is_authorized_with_catalog(
@@ -588,6 +592,15 @@ mod tests {
             &crate::provider_config::ModelCatalog::default(),
             "claude-haiku-4-5",
         ));
+
+        let mut nested_claude = json!({"subagent_type":"claude","prompt":"inspect"});
+        super::super::agent_routing::hydrate_standard_agent_to_parent(
+            &mut nested_claude,
+            "claude-sonnet-5",
+            true,
+        );
+        assert_eq!(nested_claude["claudex_model"], "claude-sonnet-5");
+        assert!(nested_claude["claudex_implicit_model"].as_str().is_some());
     }
 
     #[test]
@@ -597,16 +610,16 @@ mod tests {
         assert_eq!(scalar, json!("claudex_model: ignored"));
 
         for (text, expected) in [
-            ("Use claude-sonnet-5:5 for this task", false),
-            ("Use claude-sonnet-5: for this task", true),
-            ("Use claude-sonnet-5.5 for this task", false),
+            ("Use claude-haiku-4-5:5 for this task", false),
+            ("Use claude-haiku-4-5: for this task", true),
+            ("Use claude-haiku-4-5.5 for this task", false),
         ] {
             let user_messages = [json!({"role":"user", "content":text})];
             assert_eq!(super::super::agent_routing::model_is_authorized(
-                &json!({"claudex_model":"claude-sonnet-5"}),
+                &json!({"claudex_model":"claude-haiku-4-5"}),
                 &user_messages,
                 &json!(null),
-                "claude-sonnet-5",
+                "claude-haiku-4-5",
             ), expected);
         }
     }
@@ -749,18 +762,18 @@ mod tests {
             ("tool-omitted", "Run the commit command", None),
             (
                 "tool-prefix-only",
-                "Use claude-sonnet-5-newer for this SubAgent",
+                "Use claude-haiku-4-5-newer for this SubAgent",
                 None,
             ),
             (
                 "tool-dot-suffix",
-                "Use claude-sonnet-5.1 for this SubAgent",
+                "Use claude-haiku-4-5.1 for this SubAgent",
                 None,
             ),
             (
                 "tool-explicit",
-                "Use claude-sonnet-5.",
-                Some("claude-sonnet-5"),
+                "Use claude-haiku-4-5.",
+                Some("claude-haiku-4-5"),
             ),
         ] {
             let (arguments, _) = prepare_arguments(
@@ -768,7 +781,7 @@ mod tests {
                 tool_id,
                 &json!({
                     "prompt":"analyze changes",
-                    "claudex_model":"claude-sonnet-5"
+                    "claudex_model":"claude-haiku-4-5"
                 }),
             );
             let arguments = arguments.expect("Agent intent");
@@ -859,7 +872,7 @@ mod tests {
         for rejected in [
             json!({
                 "subagent_type":"custom-advisor",
-                "claudex_model":"claude-sonnet-5"
+                "claudex_model":"claude-haiku-4-5"
             }),
             json!({
                 "subagent_type":"general-purpose",

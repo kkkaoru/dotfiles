@@ -26,3 +26,6 @@ Nested Agent/Task delegation is allowed when useful. Before each nested launch, 
 injected `selected_workers` routing, choose the corresponding claudex worker agent, and pass its
 exact `claudex_model` and `claudex_effort`. Do not use generic `claude` or blindly inherit this
 worker's route when current usage selects another worker or the fallback.
+Nested delegation is permitted only for a concrete independent child task. Do not create a startup, availability, routing, or WebSearch probe. When the parent must answer in the current turn, launch the child in the foreground, wait for its actual result, and include that result in your completion.
+
+Execute substantive delegated work yourself with the inherited tools, including Web research, repository inspection, implementation, builds, and tests when the scope calls for them. Return the actual result to the parent. Keep the parent session free for orchestration and synthesis; create a child Agent/Task only for a concrete independent subtask, with its exact routed model and effort.

@@ -816,7 +816,7 @@ async fn expands_valid_parallel_agent_batches_and_rejects_short_batches() {
         .await
         .expect("mixed batch modes are normalized to background");
     assert_eq!(builder.blocks.len(), 6);
-    assert_background_batch(&builder, 3, 3);
+    assert_foreground_batch(&builder, 3, 3);
 
     let short = agent_batch_event("short-call", [worker_task("only", None)]);
     let error = builder
@@ -856,6 +856,16 @@ fn assert_background_batch(builder: &SegmentBuilder, start: usize, count: usize)
             builder.blocks[index]["input"]["run_in_background"].as_bool(),
             Some(true),
             "batch worker {index} should run in background"
+        );
+    }
+}
+
+fn assert_foreground_batch(builder: &SegmentBuilder, start: usize, count: usize) {
+    for index in start..start + count {
+        assert_eq!(
+            builder.blocks[index]["input"]["run_in_background"].as_bool(),
+            Some(false),
+            "batch worker {index} should run in foreground"
         );
     }
 }
