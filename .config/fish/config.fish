@@ -1,4 +1,5 @@
 eval (/opt/homebrew/bin/brew shellenv)
+fish_add_path --move /opt/homebrew/bin /opt/homebrew/sbin
 
 source (dirname (status -f))/aliases.fish
 source (dirname (status -f))/envs.fish
@@ -41,7 +42,7 @@ fish_add_path /Users/kaoru/.codeium/windsurf/bin
 thefuck --alias | source
 set -x GPG_TTY (tty)
 mise activate fish | source
-set -gx PATH $HOME/.local/bin /opt/homebrew/bin $PATH
+fish_add_path --move $HOME/.local/bin
 
 # Added by Windsurf - Next
 fish_add_path /Users/kaoru/.codeium/windsurf/bin

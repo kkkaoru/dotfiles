@@ -61,6 +61,7 @@ coverage_out/
 
 
 # Codex runtime state/cache
+.codex/attachments/
 .codex/packages/
 .codex/.codex-global-state.json*
 .codex/..codex-global-state.json.tmp-*
