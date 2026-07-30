@@ -18,10 +18,12 @@ from pathlib import Path
 from typing import Any, Mapping
 from urllib.parse import parse_qs, urlparse
 
+import opencode_go_budget
+
 DEFAULT_CACHE_SECONDS = 300
 # Bump when worker-selection semantics change so a cached context cannot retain
 # the old main-model exclusion rule for up to the normal routing-cache TTL.
-ROUTING_CACHE_VERSION = 4
+ROUTING_CACHE_VERSION = 5
 QWEN_QUOTA_CACHE_SECONDS = 60 * 60
 QWEN_REQUEST_TIMEOUT_SECONDS = 5
 QWEN_SUBPROCESS_GRACE_SECONDS = 2
@@ -50,6 +52,20 @@ DISABLED_SUBAGENT_MODELS_CONFIG_ENV = "CLAUDEX_DISABLED_SUBAGENT_MODELS_CONFIG"
 RESOLVED_DISABLED_SUBAGENT_MODELS_ENV = "CLAUDEX_RESOLVED_DISABLED_SUBAGENT_MODELS"
 CUSTOM_ADVISOR_ENV = "CLAUDEX_CUSTOM_ADVISOR"
 CUSTOM_ADVISOR_DISABLED_VALUES = frozenset({"0", "false", "off"})
+OUTER_MODEL_ENV = "CLAUDEX_OUTER_MODEL"
+ALLOW_SONNET_SUBAGENT_ENV = "CLAUDEX_ALLOW_SONNET_SUBAGENT"
+# Claude Code settings use the short `sonnet[1m]` spelling while the
+# configured fallback worker uses the canonical `claude-sonnet-5` ID.  Keep
+# the equivalence local to routing; explicit Agent/Task model requests still
+# pass through the normal denylist and provider validation paths.
+SONNET_MODEL_ALIASES = frozenset(
+    {
+        "sonnet",
+        "sonnet[1m]",
+        "claude-sonnet-5",
+        "claude-sonnet-5[1m]",
+    }
+)
 # These values describe the orchestration contract injected into Claude Code.
 # The routing hook cannot start Agent/Task calls itself; the main session uses
 # this metadata to choose and rebalance ordinary workers.
@@ -57,6 +73,7 @@ MIN_SUBAGENT_FANOUT = 3
 MIN_ACTIVE_SUBAGENTS = 2
 MIN_SUBAGENT_MODEL_KINDS = 2
 ORCHESTRATION_REBALANCE_INTERVAL_SECONDS = 10 * 60
+DEFAULT_SUBAGENT_STATUS_POLL_SECONDS = 15
 SUBAGENT_MIN_PARALLEL_ENV = "CLAUDEX_SUBAGENT_MIN_PARALLEL"
 SUBAGENT_ACTIVE_FLOOR_ENV = "CLAUDEX_SUBAGENT_ACTIVE_FLOOR"
 SUBAGENT_REEVALUATE_ON_COMPLETION_ENV = "CLAUDEX_SUBAGENT_REEVALUATE_ON_COMPLETION"
@@ -64,11 +81,21 @@ SUBAGENT_REASSESS_INTERVAL_ENV = "CLAUDEX_SUBAGENT_REASSESS_INTERVAL_SECONDS"
 SUBAGENT_MIN_MODEL_FAMILIES_ENV = "CLAUDEX_SUBAGENT_MIN_MODEL_FAMILIES"
 SUBAGENT_REUSE_ENV = "CLAUDEX_SUBAGENT_REUSE"
 SUBAGENT_CLEANUP_ON_EXIT_ENV = "CLAUDEX_SUBAGENT_CLEANUP_ON_EXIT"
+SUBAGENT_FIRST_ENV = "CLAUDEX_SUBAGENT_FIRST"
+SUBAGENT_STATUS_POLL_ENV = "CLAUDEX_SUBAGENT_STATUS_POLL_SECONDS"
 DEFAULT_ADVISOR = {
     "agent": "custom-advisor",
     "model": "claude-fable-5",
     "effort": "xhigh",
 }
+CUSTOM_ADVISOR_CONSULT_WHEN = (
+    "complex_or_ambiguous_decision",
+    "external_research_or_multiple_sources",
+    "high_risk_implementation_or_config_change",
+    "long_running_phase_over_ten_minutes",
+    "worker_failure_timeout_or_stall",
+    "conflicting_worker_results",
+)
 
 
 def config_path(environment: Mapping[str, str], requested: Path | None = None) -> Path:
@@ -134,8 +161,19 @@ def valid_provider(provider: Any) -> bool:
     if "subagentModel" in provider and not valid_model_id(provider["subagentModel"]):
         return False
     maximum = provider.get("maxConcurrency")
-    return maximum is None or (
+    valid_maximum = maximum is None or (
         isinstance(maximum, int) and not isinstance(maximum, bool) and maximum > 0
+    )
+    if not valid_maximum:
+        return False
+    budget = provider.get("requestBudget")
+    if budget is None:
+        return True
+    return (
+        provider.get("defaultModel") == opencode_go_budget.DEFAULT_MODEL
+        and str(provider.get("usageProvider", "")).casefold()
+        == opencode_go_budget.DEFAULT_USAGE_PROVIDER
+        and opencode_go_budget.valid_request_budget(budget)
     )
 
 
@@ -271,6 +309,21 @@ def provider_status(report: Any, provider: str) -> dict[str, Any]:
     return status(maximum < 100, maximum, "available" if maximum < 100 else "exhausted")
 
 
+def provider_quota_status(
+    report: Any, provider: dict[str, Any]
+) -> dict[str, Any]:
+    """Evaluate a provider's published request budget before generic usage."""
+    usage_provider = provider.get("usageProvider")
+    if not isinstance(usage_provider, str) or not usage_provider:
+        return status(True, None, "unmetered")
+    budget = provider.get("requestBudget")
+    if budget is not None:
+        evaluated = opencode_go_budget.evaluate(report, usage_provider, budget)
+        if evaluated is not None:
+            return evaluated
+    return provider_status(report, usage_provider)
+
+
 def explicitly_reported_status(entry: dict[str, Any]) -> dict[str, Any]:
     """Read availability and optional quota usage from a non-Codexbar source."""
     available = entry.get("available")
@@ -371,6 +424,10 @@ def orchestration_settings(environment: Mapping[str, str] | None = None) -> dict
         "cleanup_on_exit": _boolean_or_default(
             values, SUBAGENT_CLEANUP_ON_EXIT_ENV, True
         ),
+        "subagent_first": _boolean_or_default(values, SUBAGENT_FIRST_ENV, True),
+        "status_poll_interval_seconds": _positive_or_default(
+            values, SUBAGENT_STATUS_POLL_ENV, DEFAULT_SUBAGENT_STATUS_POLL_SECONDS, 1
+        ),
     }
 
 
@@ -403,9 +460,22 @@ def orchestration_contract(
         "model_diversity_satisfied": len(models) >= settings["minimum_model_kinds"],
         "completion_rebalance_required": settings["reevaluate_on_completion"],
         "custom_advisor_exempt": True,
+        "custom_advisor_consult_when": list(CUSTOM_ADVISOR_CONSULT_WHEN),
         "capacity_shortfall": available < settings["minimum_subagents_per_phase"],
         "hook_launches_agents": False,
+        "background_status_required": True,
+        "automatic_selection_excluded_models": sorted(
+            summary.get("automatic_selection_excluded_models", [])
+        ),
+        "sonnet_subagent_suppressed": bool(
+            summary.get("sonnet_subagent_suppressed", False)
+        ),
     }
+
+
+def is_sonnet_model(model: object) -> bool:
+    """Return whether a model spelling identifies the Sonnet 5 family."""
+    return isinstance(model, str) and model.strip().casefold() in SONNET_MODEL_ALIASES
 
 
 def daemon_health_url(environment: Mapping[str, str]) -> str:
@@ -611,11 +681,7 @@ def routing_summary(
     candidates: list[tuple[tuple[float, ...], dict[str, Any]]] = []
     for index, provider in enumerate(config["providers"]):
         quota_name = provider.get("usageProvider")
-        quota = (
-            provider_status(report, quota_name)
-            if isinstance(quota_name, str) and quota_name
-            else status(True, None, "unmetered")
-        )
+        quota = provider_quota_status(report, provider)
         disabled = worker(provider)["model"] in disabled_models
         effective = status(False, None, "disabled-by-policy") if disabled else quota
         providers[provider["id"]] = {**effective, **worker(provider), "disabled": disabled}
@@ -803,8 +869,29 @@ def hook_output(
             for worker in summary.get("selected_workers", [])
         ],
         "disabled_subagent_models": list(summary.get("disabled_subagent_models", [])),
+        "main_session_model": summary.get("main_session_model"),
+        "outer_session_model": summary.get("outer_session_model"),
+        "automatic_selection_excluded_models": list(
+            summary.get("automatic_selection_excluded_models", [])
+        ),
+        "sonnet_subagent_suppressed": bool(
+            summary.get("sonnet_subagent_suppressed", False)
+        ),
+        "sonnet_subagent_explicit_allowed": bool(
+            summary.get("sonnet_subagent_explicit_allowed", False)
+        ),
+        "orchestration_mode": summary.get("orchestration_mode", "subagent-first"),
+        "delegation_required": bool(summary.get("delegation_required", False)),
+        "direct_main_execution": summary.get("direct_main_execution", "allowed"),
+        "background_status_required": True,
         "advisor": dict(summary.get("advisor", DEFAULT_ADVISOR)),
         "custom_advisor_enabled": advisor_enabled,
+        "custom_advisor_policy": {
+            "enabled": advisor_enabled,
+            "consult_when": list(CUSTOM_ADVISOR_CONSULT_WHEN),
+            "reuse_logical_session": True,
+            "not_for_trivial_tasks": True,
+        },
         "orchestration": orchestration_contract(summary, environment),
     }
     compact = json.dumps(metadata, ensure_ascii=False, separators=(",", ":"))
@@ -826,25 +913,60 @@ def enforce_worker_model_separation(
     main_model: str | None,
     config: dict[str, Any],
     disabled_models: frozenset[str],
+    *,
+    outer_model: str | None = None,
+    allow_sonnet_subagent: bool | None = None,
 ) -> dict[str, Any]:
-    """Finalize worker routing while allowing a configured model to serve both roles.
+    """Finalize worker routing while conserving a duplicated Sonnet request.
 
-    The outer session and a SubAgent are independent requests.  A provider worker
-    therefore remains selectable when its model is also the current main model;
-    only the normal provider availability and exact-model denylist checks remove it.
+    The outer session and a SubAgent are independent requests, so most providers
+    remain selectable when their model is also the current main model.  The
+    subscription Sonnet fallback is the deliberate exception: when the outer
+    session already runs Sonnet 5, automatic fallback selection would spend an
+    additional subscription request for no model diversity.  An explicit
+    `CLAUDEX_ALLOW_SONNET_SUBAGENT=1` policy opt-in restores automatic selection;
+    direct Agent/Task requests with `claudex_model: claude-sonnet-5` are never
+    filtered here and remain available unless the exact model is denylisted.
     """
     separated = json.loads(json.dumps(summary))
     selected = list(separated.get("selected_workers") or [])
-    # `main_model` is retained as context for the hook and adapter, but it is
-    # not a worker exclusion rule.  `routing_summary` and
-    # `apply_model_concurrency` already enforce provider availability and the
-    # exact disabled-model policy before this finalization step.
+    if allow_sonnet_subagent is None:
+        allow_sonnet_subagent = _boolean_or_default(
+            os.environ, ALLOW_SONNET_SUBAGENT_ENV, False
+        )
+    session_model = outer_model or main_model
+    excluded_models: set[str] = set()
+    sonnet_suppressed = False
+    if is_sonnet_model(session_model) and not allow_sonnet_subagent:
+        retained: list[dict[str, Any]] = []
+        for worker_item in selected:
+            if is_sonnet_model(worker_item.get("model")):
+                model = worker_item.get("model")
+                if isinstance(model, str):
+                    excluded_models.add(model)
+                sonnet_suppressed = True
+            else:
+                retained.append(worker_item)
+        selected = retained
     separated["selected_workers"] = selected
     separated["selected_agents"] = [worker["agent"] for worker in selected]
     separated["preferred_worker"] = selected[0] if selected else None
     separated["main_session_model"] = main_model
+    separated["outer_session_model"] = outer_model
+    separated["automatic_selection_excluded_models"] = sorted(excluded_models)
+    separated["sonnet_subagent_suppressed"] = sonnet_suppressed
+    separated["sonnet_subagent_explicit_allowed"] = bool(allow_sonnet_subagent)
+    if sonnet_suppressed:
+        separated["fallback_active"] = False
     separated["orchestration_mode"] = "subagent-first"
-    separated["delegation_required"] = bool(selected)
+    separated["orchestration"] = orchestration_contract(separated)
+    separated["delegation_required"] = bool(selected) and separated["orchestration"].get(
+        "subagent_first", True
+    )
+    separated["direct_main_execution"] = (
+        "fallback-only" if separated["delegation_required"] else "allowed"
+    )
+    separated["background_status_required"] = True
     separated["orchestration"] = orchestration_contract(separated)
     return separated
 
@@ -1598,6 +1720,10 @@ def main() -> int:
         os.environ.get("CLAUDEX_MAIN_MODEL"),
         config,
         disabled_models,
+        outer_model=os.environ.get(OUTER_MODEL_ENV),
+        allow_sonnet_subagent=_boolean_or_default(
+            os.environ, ALLOW_SONNET_SUBAGENT_ENV, False
+        ),
     )
     print(
         json.dumps(

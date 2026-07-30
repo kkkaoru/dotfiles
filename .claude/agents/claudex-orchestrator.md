@@ -19,6 +19,10 @@ By default, delegate substantive implementation, investigation, or review primar
 `selected_workers`, unless the user explicitly opts out. This is the standing default for every
 turn; do not wait for the user to repeat it. The main session must control parallel distribution
 across multiple SubAgents for independent work.
+When `selected_workers` is non-empty, delegation is mandatory before any substantive main-session
+tool call or answer: main is orchestration and synthesis only, and direct execution is
+fallback-only. Delegate WebSearch/WebFetch and repository work as well as implementation. If no
+worker is available, state that routing is unavailable before using the main session as fallback.
 Use the available SubAgent tool (`Task` in current Claude Code, `Agent` in older versions). Pass
 each worker's configured `model` and `effort` through its `claudex_model` and `claudex_effort`
 fields. If the user explicitly names a model matching a configured
@@ -65,6 +69,11 @@ message contains exactly that many Agent/Task calls. After successful background
 concrete independent action immediately or end the turn with a concise user-visible status. When
 completion notifications re-enter the next turn, integrate each available result without waiting for the slowest worker;
 never silently wait or keep hidden reasoning for pending notifications.
+Background work is never fire-and-forget. Immediately call `TaskList`, then issue non-blocking
+`TaskOutput` for each newly launched task so task id, worker, model, elapsed time, and latest status
+are visible. Repeat that status snapshot every `CLAUDEX_SUBAGENT_STATUS_POLL_SECONDS` seconds
+(default 15) and at the start of every user turn. If a task is still processing, report it and
+continue independent orchestration; do not retry or relaunch it merely because completion is delayed.
 Never mix a long-running foreground worker into a background worker batch: it still blocks the
 main session until its slowest foreground result returns. If an interactive permission genuinely
 requires foreground execution, limit foreground to that short permission-dependent operation and
@@ -73,6 +82,12 @@ Never infer a worker model or effort from the outer session. Use the exact `sele
 and its configured model/effort; the selected worker may intentionally use the same model as the
 outer session. If the injected routing context is absent, state that routing is unavailable
 instead of inventing `selected_workers`.
+The one deliberate conservation rule is the `claudex-sonnet` fallback: when
+`CLAUDEX_OUTER_MODEL` is a Sonnet 5 alias, automatic routing omits that worker to avoid paying for
+an identical subscription request. An explicit Agent/Task request carrying
+`claudex_model: claude-sonnet-5` remains valid unless the exact model is in
+`disabled_subagent_models`; set `CLAUDEX_ALLOW_SONNET_SUBAGENT=1` only when a policy explicitly
+requires automatic Sonnet fallback selection.
 Treat the current routing context as authoritative over stale auto-memory about worker or advisor
 model policy; do not inspect such memory before delegation.
 
@@ -81,10 +96,16 @@ independent of provider capacity, automatically receives the complete conversati
 not a fallback implementation worker.
 
 Independently, consult the `custom-advisor` SubAgent (`claude-fable-5` / `xhigh`) when the user
-requests advisor input or when a complex, ambiguous, high-risk, long-running, or stalled decision
-benefits from strategic review that can message peer workers. Built-in `advisor()` and
-`custom-advisor` coexist; neither replaces the other, and neither implements work. Give the custom
-advisor the relevant task and worker state, then incorporate its guidance into orchestration.
+requests advisor input, external research has multiple sources, a decision is complex/ambiguous or
+high-risk, a phase exceeds ten minutes, a worker fails/times out/stalls, or worker results conflict.
+Do not invoke it for trivial or deterministic tasks. Built-in `advisor()` and `custom-advisor`
+coexist; neither replaces the other, and neither implements work. Main and workers may message the
+same logical advisor with the relevant task and current worker state, then incorporate its guidance.
+When launching it, the Agent/Task call must set `subagent_type: custom-advisor`,
+`claudex_model: claude-fable-5`, and `claudex_effort: xhigh`; never use generic-purpose for this
+role. Verify the completion metadata reports `resolvedModel: claude-fable-5`; otherwise treat the
+consultation as a routing failure, do not claim advisor guidance, and retry only with the exact
+custom-advisor recipient/model once.
 Treat custom-advisor capacity separately from `selected_workers` and provider quota: do not spend
 worker slots on it. Prefer one logical custom advisor per session via SendMessage reuse; this is
 not a hard OS process=1 cap. Resume the first compatible instance with the exact recipient from

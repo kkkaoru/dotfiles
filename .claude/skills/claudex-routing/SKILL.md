@@ -24,7 +24,13 @@ retained.
    `preferred_worker` for primary work. Treat an exact `model_concurrency` entry with
    `available: false` as unavailable for that turn.
    A selected worker may intentionally use the same model as the outer session; outer and
-   SubAgent requests are independent, so model identity alone never makes a worker unavailable.
+   SubAgent requests are independent. The one conservation exception is the `claudex-sonnet`
+   fallback: when `CLAUDEX_OUTER_MODEL` is a Sonnet 5 alias, automatic routing omits that worker
+   unless `CLAUDEX_ALLOW_SONNET_SUBAGENT=1` is an explicit policy opt-in. An explicit Agent/Task
+   request with `claudex_model: claude-sonnet-5` remains valid unless the exact model is denylisted.
+   When any selected worker exists, delegation is mandatory before substantive main-session work;
+   direct execution is fallback-only when no worker is available or the user explicitly opts out.
+   This includes WebSearch/WebFetch, repository reads, and implementation work.
    Pass each worker's `model` and `effort` as `claudex_model` and `claudex_effort`. When substantive
    work is clear, invoke the selected SubAgent in the first response rather than merely announcing
    future delegation. Do not use task-list bookkeeping merely as a precondition for delegation.
@@ -63,6 +69,11 @@ retained.
    user-visible status. When completion notifications re-enter the next turn, integrate each available result
    without waiting for the slowest worker; never silently wait or keep hidden reasoning for pending
    notifications.
+   Background workers are never fire-and-forget: immediately call `TaskList` and non-blocking
+   `TaskOutput` for each new task, then repeat the status snapshot every
+   `CLAUDEX_SUBAGENT_STATUS_POLL_SECONDS` seconds (default 15) and at every user turn. If a task is
+   still processing, preserve its task id, report its status, and continue independent work; never
+   retry or relaunch it solely because completion is delayed.
    Do not mix a long-running foreground worker into a background worker batch: it still holds the
    main session until its slowest foreground result returns. When an interactive permission really
    requires foreground execution, restrict it to that short permission-dependent operation and
@@ -70,14 +81,21 @@ retained.
    Emit every intended independent Agent/Task call in the same assistant response and tool round;
    never launch one and defer the rest. Do not announce a worker count unless that same response
    contains exactly that many launch calls.
-4. Use the configured fallback only when every capacity-managed provider is unavailable.
+4. Use the configured fallback only when every capacity-managed provider is unavailable. If that
+   fallback is `claudex-sonnet` and the outer session already uses Sonnet 5, suppress automatic
+   selection as described above; direct explicit Sonnet launches remain available.
 5. Advisors are independent of worker capacity and never replace implementation workers:
    - Use Claude Code's built-in parameterless `advisor()` tool according to its standard policy. It
      automatically receives the complete conversation history and does not depend on provider quota.
    - Independently, invoke the `custom-advisor` SubAgent (`claude-fable-5` / `xhigh`) when explicitly
-     requested or when a complex, ambiguous, high-risk, long-running, or stalled decision benefits
-     from strategic review that can message peers. Built-in `advisor()` and `custom-advisor`
-     coexist; neither replaces the other.
+     requested, external research has multiple sources, a decision is complex/ambiguous or high-risk,
+     a phase exceeds ten minutes, a worker fails/times out/stalls, or worker results conflict. Do not
+     invoke it for trivial or deterministic tasks. Built-in `advisor()` and `custom-advisor` coexist;
+     neither replaces the other.
+     Its Agent/Task call must set `subagent_type: custom-advisor`, `claudex_model: claude-fable-5`,
+     and `claudex_effort: xhigh`; generic-purpose is not an acceptable substitute. Verify
+     `resolvedModel: claude-fable-5` in the completion result and treat any mismatch as routing
+     failure rather than advisor success.
    - Account for `custom-advisor` separately from `selected_workers` and provider quota headroom. Do
      not spend worker slots on it and do not treat its presence as capacity pressure against workers.
    - Prefer one logical custom-advisor per session (reuse via `SendMessage`; not a hard process=1

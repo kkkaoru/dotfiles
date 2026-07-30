@@ -55,6 +55,8 @@ class ClaudexOrchestrationEnvironmentTests(unittest.TestCase):
         self.assertEqual(output["CLAUDEX_SUBAGENT_MAX_PARALLEL"], "40")
         self.assertEqual(output["CLAUDEX_SUBAGENT_MIN_PARALLEL"], "3")
         self.assertEqual(output["CLAUDEX_SUBAGENT_MIN_MODEL_FAMILIES"], "2")
+        self.assertEqual(output["CLAUDEX_SUBAGENT_FIRST"], "1")
+        self.assertEqual(output["CLAUDEX_SUBAGENT_STATUS_POLL_SECONDS"], "15")
 
     def test_defaults_are_exported_to_claude_child(self) -> None:
         output = self.run_launcher({})
@@ -67,8 +69,19 @@ class ClaudexOrchestrationEnvironmentTests(unittest.TestCase):
         self.assertEqual(output["CLAUDEX_SUBAGENT_REEVALUATE_ON_COMPLETION"], "1")
         self.assertEqual(output["CLAUDEX_SUBAGENT_REUSE"], "1")
         self.assertEqual(output["CLAUDEX_SUBAGENT_CLEANUP_ON_EXIT"], "1")
+        self.assertEqual(output["CLAUDEX_SUBAGENT_FIRST"], "1")
+        self.assertEqual(output["CLAUDEX_SUBAGENT_STATUS_POLL_SECONDS"], "15")
+        self.assertIn("--agent claudex-orchestrator", output["CLAUDEX_ADAPTER_ARGS"])
         self.assertEqual(output["CLAUDEX_SUBSCRIPTION_MAX_PROCESSES"], "20")
         self.assertEqual(output["CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES"], "120")
+        self.assertEqual(output["CLAUDEX_OUTER_MODEL"], "sonnet[1m]")
+
+    def test_explicit_sonnet_outer_model_is_forwarded_without_changing_worker_definition(
+        self,
+    ) -> None:
+        output = self.run_launcher({"CLAUDEX_MODEL": "claude-sonnet-5"})
+        self.assertEqual(output["CLAUDEX_OUTER_MODEL"], "claude-sonnet-5")
+        self.assertEqual(output["CLAUDEX_MAIN_MODEL"], "claude-sonnet-5")
 
     def test_external_values_override_defaults_without_shell_evaluation(self) -> None:
         values = {
@@ -80,6 +93,8 @@ class ClaudexOrchestrationEnvironmentTests(unittest.TestCase):
             "CLAUDEX_SUBAGENT_REEVALUATE_ON_COMPLETION": "0",
             "CLAUDEX_SUBAGENT_REUSE": "0",
             "CLAUDEX_SUBAGENT_CLEANUP_ON_EXIT": "0",
+            "CLAUDEX_SUBAGENT_FIRST": "0",
+            "CLAUDEX_SUBAGENT_STATUS_POLL_SECONDS": "7",
             "CLAUDEX_SUBSCRIPTION_MAX_PROCESSES": "8",
             "CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES": "60",
         }
@@ -129,6 +144,7 @@ class ClaudexOrchestrationEnvironmentTests(unittest.TestCase):
                 "#!/bin/sh\n"
                 "subscription_max_processes=\n"
                 "subscription_timeout_minutes=\n"
+                "adapter_args=\"$*\"\n"
                 "while [ \"$#\" -gt 0 ]; do\n"
                 "  case \"$1\" in\n"
                 "    --subscription-max-processes) shift; subscription_max_processes=$1 ;;\n"
@@ -154,6 +170,15 @@ class ClaudexOrchestrationEnvironmentTests(unittest.TestCase):
                 "\"${CLAUDEX_SUBAGENT_REUSE:-}\"\n"
                 "printf 'CLAUDEX_SUBAGENT_CLEANUP_ON_EXIT=%s\\n' "
                 "\"${CLAUDEX_SUBAGENT_CLEANUP_ON_EXIT:-}\"\n"
+                "printf 'CLAUDEX_SUBAGENT_FIRST=%s\\n' "
+                "\"${CLAUDEX_SUBAGENT_FIRST:-}\"\n"
+                "printf 'CLAUDEX_SUBAGENT_STATUS_POLL_SECONDS=%s\\n' "
+                "\"${CLAUDEX_SUBAGENT_STATUS_POLL_SECONDS:-}\"\n"
+                "printf 'CLAUDEX_ADAPTER_ARGS=%s\\n' \"${adapter_args}\"\n"
+                "printf 'CLAUDEX_OUTER_MODEL=%s\\n' "
+                "\"${CLAUDEX_OUTER_MODEL:-}\"\n"
+                "printf 'CLAUDEX_MAIN_MODEL=%s\\n' "
+                "\"${CLAUDEX_MAIN_MODEL:-}\"\n"
                 "printf 'CLAUDEX_SUBSCRIPTION_MAX_PROCESSES=%s\\n' "
                 "\"${subscription_max_processes}\"\n"
                 "printf 'CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES=%s\\n' "

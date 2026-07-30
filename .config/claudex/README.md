@@ -43,7 +43,7 @@ flowchart LR
 | Ollama GLM worker | `claudex-ollama-glm-5-2` | `glm-5.2:cloud` | `max` | CodexBarのOllama枠に空きがある場合 |
 | Grok worker | `claudex-grok` | `grok-4.5` | `high` | Grokに空きがある場合 |
 | Qwen worker | `claudex-qwen` | `qwen3.8-max-preview` | `high` | providerは維持するがSubAgentではdenylistにより禁止 |
-| DeepSeek worker | `claudex-deepseek` | `opencode-go/deepseek-v4-flash` | `high` | CodexBarのOpenCode Go枠に空きがある場合 |
+| DeepSeek worker | `claudex-deepseek` | `opencode-go/deepseek-v4-pro` | `high` | CodexBarのOpenCode Go枠に空きがある場合 |
 | Fallback | `claudex-sonnet` | `claude-sonnet-5` | `high` | 利用率を管理するproviderをすべて利用できない場合 |
 | Built-in advisor | Claude Code標準 `advisor()` | `opus` | Claude Code標準 | 標準advisor policyに従う。provider capacity非依存 |
 | Custom advisor | `custom-advisor` | `claude-fable-5` | `xhigh` | 明示指定時、または複雑・曖昧・高リスク・長期・停滞時。worker capacityとは別管理の論理 session singleton（hard process=1ではない） |
@@ -75,7 +75,7 @@ Grok ACPは `--always-approve`、Qwen ACPは `--approval-mode yolo` を明示し
 approval待機やauto classifierがSubAgentの権限を狭めないようにします。OpenCode Go ACPは
 `opencode acp` を起動し、モデルは adapter の `session/new` meta `modelId` で渡します
 （CLIの `--model` は `acp` サブコマンドでは受け付けません）。既定モデルは
-`opencode-go/deepseek-v4-flash` です。OpenCode内で実行されるprovider-owned toolはClaude側で
+`opencode-go/deepseek-v4-pro` です。OpenCode内で実行されるprovider-owned toolはClaude側で
 再実行しないようAnthropic `tool_use`へ変換せず、実行中だけthinkingの進捗として扱います。
 このためClaude Codeの完了結果ではtool数が0に見える場合がありますが、OpenCode側では実行済みです。
 DeepSeek workerは独立した調査をまとめて実行し、確定済みの判断を反復せず、長い処理のフェーズ間で
@@ -94,8 +94,9 @@ DeepSeek workerは独立した調査をまとめて実行し、確定済みの�
    `model_concurrency` はpromptごとに再取得し、usage cacheには保存しません。health URLは
    `CLAUDEX_DAEMON_HEALTH_URL`、loopback `ANTHROPIC_BASE_URL` のorigin、既定の
    `http://127.0.0.1:8318/health` の順に解決します。
-3. 各providerをquota windowとmodel別並列上限のうち、より厳しい使用率が低い順に並べます。
-   `maxConcurrency` に達したmodelはそのturnの候補から外します。Qwen quota更新に失敗した場合は、
+3. 各providerをquota window、OpenCode Goのmodel別request budget、model別並列上限のうち、
+   より厳しい使用率が低い順に並べます。`requestBudget` の5時間窓を使い切ったmodelは
+   そのturnの候補から外します。`maxConcurrency` に達したmodelも候補から外します。Qwen quota更新に失敗した場合は、
    Qwen Codeに保存済みのAPI keyを使う非生成の
    compatible `GET /models` で利用可能性を確認します。利用可能でも残量不明なら、既知の残量を
    持つproviderの後に置きます。healthを取得できない場合はproviderを起動可能な候補として残し、
@@ -105,10 +106,14 @@ DeepSeek workerは独立した調査をまとめて実行し、確定済みの�
    `selected_workers` からAgentを選び、model/effortを明示します。nested起動でもgeneric
    `claude`へのdefaultや親providerの無条件継承は行いません。親のmain modelと同じmodelが
    `selected_workers` に明示されている場合は、outer requestとは独立したSubAgentとして起動します。
+   ただし、outer sessionが `sonnet[1m]` / `claude-sonnet-5` の場合は、同じSonnet fallbackを
+   自動選択せず利用量を節約します。明示的な `claudex_model: claude-sonnet-5` は引き続き起動でき、
+   自動選択を明示的に許可する場合だけ `CLAUDEX_ALLOW_SONNET_SUBAGENT=1` を指定します。
 5. promptに `gpt...`、`fugu...`、`glm-...`、`grok...` または `qwen...` の完全なモデルIDがある場合は、
    `modelPrefixes` が一致するproviderへそのIDをそのまま渡します。ただし、専用設定と
    端末固有の追加設定を統合したdeny listに含まれる完全一致モデルは明示指定でも拒否します。
-6. providerを利用できない場合はClaude subscriptionのfallbackを使います。
+6. providerを利用できない場合はClaude subscriptionのfallbackを使います。ただしouter sessionが
+   Sonnet 5のときは同一modelの `claudex-sonnet` fallbackを自動選択から除外します（明示起動は除外しません）。
 7. advisorはworkerの代替ではありません。Claude Code標準の `advisor()` はprovider quotaと
    独立して会話履歴全体を自動参照します。`custom-advisor` もworker capacity /
    `selected_workers` スロットとは別管理で、実装を行わず戦略レビューとpeer `SendMessage`
@@ -292,7 +297,7 @@ claudex-agent-adapter ensure \
 curl --fail --silent http://127.0.0.1:8318/health | jq .
 ```
 
-`status` が `ok` で、`backend_routes` にCodex、Grok、Qwenが含まれ、上限を設定したmodelが
+`status` が `ok` で、`backend_routes` にCodex、Grok、Qwen、OpenCode Goが含まれ、上限を設定したmodelが
 `model_concurrency` に `active`、`queued`、`limit`、`available` を持てば準備完了です。
 常設のlaunchd plistは不要です。`claudex` の起動時に互換性のあるdaemonを再利用し、
 存在しなければloopbackの `127.0.0.1:8318` へ自動起動します。
@@ -332,6 +337,8 @@ provider設定がdotfilesにあってもCodex、Grok、Qwen、Sonnetの作業デ
 | `CLAUDEX_SUBAGENT_REASSESS_INTERVAL_SECONDS` | `600` | 10分ごとのactive set・capacity・model familyの再評価間隔 |
 | `CLAUDEX_SUBAGENT_REUSE` | `1` | model、effort、role、scopeが互換な完了workerを`SendMessage`で再利用 |
 | `CLAUDEX_SUBAGENT_CLEANUP_ON_EXIT` | `1` | main session終了・cancel・error時にlaunch停止、childのcancel/wait/reapを要求 |
+| `CLAUDEX_SUBAGENT_FIRST` | `1` | routed workerがある場合はSubAgent委譲を必須化し、main直接実行をfallback限定にする |
+| `CLAUDEX_SUBAGENT_STATUS_POLL_SECONDS` | `15` | background SubAgentの`TaskList`/非ブロッキング`TaskOutput`状態スナップショット間隔 |
 | `CLAUDEX_MODEL_CONCURRENCY_WAIT_TIMEOUT_MS` | `30000` | 同一modelのadmission待機を有限化し、期限超過時は明示的なエラーを返す |
 
 設定例:
@@ -392,6 +399,11 @@ SubAgentへの委譲はsubstantiveな調査・実装・レビューに対する�
 短いuser-visible statusを返してturnを終了します。完了通知が次turnへ入ったら、slowest workerを
 待たず到着済み結果を逐次統合し、hidden reasoningで待機しません。既に委譲promptに含まれる制約の
 再送は行わず、busy workerへの配信待ちは追加の並列数として数えません。
+background workerはfire-and-forgetにしません。起動直後に`TaskList`と各taskへの非ブロッキング
+`TaskOutput`を実行し、task id・worker・model・経過時間・最新statusをmain sessionへ表示します。
+以後15秒ごと（`CLAUDEX_SUBAGENT_STATUS_POLL_SECONDS`で変更）と各user turn開始時に状態を再取得します。
+`SubAgent is still processing in the background`の場合は再起動せず、現在のtask idと状態を表示したまま
+独立した作業を継続します。
 
 foreground batchではClaude Codeのmain turn自体が最後のworkerの完了まで占有されます。その間に
 先に届いた `<agent-message>` が表示されても、mainが次の判断へ進めないため、`✶ Philosophising…`
@@ -587,9 +599,16 @@ main sessionのモデルは `providers.json` の `defaultModel`、workerのモ�
 `defaultModel`）だけでなく、同じproviderの `modelPrefixes` に一致して動的生成された各exact
 model routeにも同じ値を継承します。共有daemonは `/health` の `model_concurrency` にexact model
 ごとの `active`、`queued`、`limit`、`available` を公開し、routing hookはquota headroomと
-予約済みqueueを含む空きslotの小さい方を
-使って候補を並べます。OpenCode GoはCodexBarの `opencodego` usageと
-`maxConcurrency: 7` の両方で制御します。healthが一時的に読めない場合も起動候補は維持されますが、
+予約済みqueueを含む空きslotの小さい方を使って候補を並べます。
+
+OpenCode Goの利用枠は並列数ではなくrequest budgetとして別に扱います。`requestBudget` は
+CodexBarの `opencodego` usageにある指定window（現在のPro設定は `primary`、300分）の
+`usedPercent` を、OpenCode Goが公開するProの「5時間あたり推定3,450リクエスト」に換算します。
+出力の `request_budget` には窓、リセット時刻、推定使用件数、推定残件数を含め、窓が欠落・不一致・
+不明な場合は候補から除外します。これはOpenCode Goの使用量制御であり、DeepSeek APIのレート制限や
+adapterの同時実行制御とは別です。根拠は[OpenCode Go公式の利用枠](https://dev.opencode.ai/docs/go/)
+（Proの推定3,450リクエスト/5時間）です。
+healthが一時的に読めない場合も起動候補は維持されますが、
 adapter自身が上限を強制するため超過実行は許可されません。
 
 ### providerを無効化

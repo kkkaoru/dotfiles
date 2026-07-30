@@ -8,6 +8,11 @@
   Main must not drift back to direct Read/Bash/Edit/Write/Grep/Glob/Web work during long execution,
   compaction, resume, context reconstruction, or worker failure. Delegate implementation,
   investigation, review, testing, and validation; keep orchestration and synthesis in main.
+  When a routed worker is available, launch it before any substantive main-session tool call;
+  direct execution is fallback-only. A background task is never fire-and-forget: call `TaskList`
+  and non-blocking `TaskOutput` immediately after launch, repeat a status snapshot every 15 seconds
+  and at each user turn, and report task id/worker/model/status when it is still processing. Never
+  retry or relaunch a still-processing task solely because its completion notification is delayed.
 - Use the available SubAgent tool (`Task` in current Claude Code, `Agent` in older versions) and
   the orchestration skill. In Claudex, follow `claudex-routing` and delegate primarily to its
   `selected_workers`, preserving each configured model and effort.
@@ -94,9 +99,14 @@
   automatically receives the complete conversation history, is independent of provider capacity, and
   is not a fallback implementation worker. Keep using it when its standard policy applies.
 - Independently, use the `custom-advisor` SubAgent (`claude-fable-5` / `xhigh`) when requested or
-  when a complex, ambiguous, high-risk, long-running, or stalled decision benefits from strategic
-  review that can message peers. Built-in `advisor()` and `custom-advisor` coexist; neither replaces
-  the other, and neither implements work. Workers act; advisors advise.
+  when external research has multiple sources, a decision is complex/ambiguous or high-risk, a
+  phase exceeds ten minutes, a worker fails/times out/stalls, or worker results conflict. Do not
+  invoke it for trivial or deterministic tasks. Built-in `advisor()` and `custom-advisor` coexist;
+  neither replaces the other, and neither implements work. Workers act; advisors advise.
+  The custom-advisor Agent/Task call must set `subagent_type: custom-advisor`,
+  `claudex_model: claude-fable-5`, and `claudex_effort: xhigh`; `general-purpose` is not an
+  acceptable substitute. Verify completion metadata reports `resolvedModel: claude-fable-5` and
+  treat a mismatch as a routing failure rather than advisor guidance.
 - Treat `custom-advisor` as a logical session singleton separate from worker capacity accounting.
   Prefer reuse of one continuing advisor per session via `SendMessage`; this is not a hard OS
   process=1 cap (Claude subscription turns may still start a new subprocess while reusing the same

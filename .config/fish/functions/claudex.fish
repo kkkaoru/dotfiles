@@ -19,6 +19,10 @@ function claudex --description 'Run Claude Code with config-driven agent backend
     set -q CLAUDEX_SUBAGENT_REUSE; and set reuse_workers "$CLAUDEX_SUBAGENT_REUSE"
     set -l cleanup_on_exit 1
     set -q CLAUDEX_SUBAGENT_CLEANUP_ON_EXIT; and set cleanup_on_exit "$CLAUDEX_SUBAGENT_CLEANUP_ON_EXIT"
+    set -l subagent_first 1
+    set -q CLAUDEX_SUBAGENT_FIRST; and set subagent_first "$CLAUDEX_SUBAGENT_FIRST"
+    set -l status_poll_seconds 15
+    set -q CLAUDEX_SUBAGENT_STATUS_POLL_SECONDS; and set status_poll_seconds "$CLAUDEX_SUBAGENT_STATUS_POLL_SECONDS"
 
     set -lx CLAUDE_CODE_ALWAYS_ENABLE_EFFORT 1
     set -lx CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY 1
@@ -31,6 +35,8 @@ function claudex --description 'Run Claude Code with config-driven agent backend
     set -lx CLAUDEX_SUBAGENT_REEVALUATE_ON_COMPLETION "$reevaluate_on_completion"
     set -lx CLAUDEX_SUBAGENT_REUSE "$reuse_workers"
     set -lx CLAUDEX_SUBAGENT_CLEANUP_ON_EXIT "$cleanup_on_exit"
+    set -lx CLAUDEX_SUBAGENT_FIRST "$subagent_first"
+    set -lx CLAUDEX_SUBAGENT_STATUS_POLL_SECONDS "$status_poll_seconds"
     set -lx CLAUDEX_ACTIVE 1
 
     # Keep the frequently changed outer-session defaults outside git.  The
@@ -81,6 +87,10 @@ function claudex --description 'Run Claude Code with config-driven agent backend
     set -l outer_effort "$defaults_output[3]"
     set -l settings_model "$defaults_output[4]"
     set -l settings_effort "$defaults_output[5]"
+    # Export before the pre-launch routing probe as well as for the adapter and
+    # UserPromptSubmit hook.  `CLAUDEX_MAIN_MODEL` is the bootstrap provider
+    # route and can differ from the actual settings/explicit outer model.
+    set -lx CLAUDEX_OUTER_MODEL "$outer_model"
 
     set -l default_provider_config "$HOME/.config/claudex/providers.json"
     set -l provider_override_config "$HOME/.config/claudex/providers.$(hostname -s).local.json"
@@ -190,12 +200,15 @@ print(model)
     set -l claude_args $argv
     set -l has_cli_effort 0
     set -l has_allowed_tools 0
+    set -l has_agent 0
     for argument in $argv
         switch $argument
             case --effort '--effort=*'
                 set has_cli_effort 1
             case --allowedTools --allowed-tools '--allowedTools=*' '--allowed-tools=*'
                 set has_allowed_tools 1
+            case --agent '--agent=*'
+                set has_agent 1
         end
     end
     # Native web tools are returned by the adapter and executed by this outer Claude Code process.
@@ -211,6 +224,10 @@ print(model)
             set -p claude_args --effort "$outer_effort"
         end
     end
+    # Always load the coordinator instructions unless the caller explicitly
+    # selected another agent. This makes SubAgent-first orchestration a launch
+    # invariant instead of relying only on the prompt hook metadata.
+    test $has_agent -eq 1; or set -p claude_args --agent claudex-orchestrator
     set -lx CLAUDEX_MAIN_MODEL "$main_model"
     if test "$defaults_source" = settings
         echo "claudex: settings-routed orchestration ($provider_config, bootstrap $main_model; settings $settings_model, $settings_effort)" >&2

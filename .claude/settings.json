@@ -7,7 +7,7 @@
     "allow": [],
     "deny": []
   },
-  "model": "sonnet[1m]",
+  "model": "opus[1m]",
   "enableAllProjectMcpServers": true,
   "hooks": {
     "SessionStart": [
@@ -49,7 +49,7 @@
     }
   },
   "alwaysThinkingEnabled": true,
-  "effortLevel": "high",
+  "effortLevel": "medium",
   "advisorModel": "opus",
   "tui": "fullscreen",
   "skipDangerousModePermissionPrompt": true,

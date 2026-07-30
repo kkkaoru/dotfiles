@@ -105,11 +105,15 @@
     {
       "id": "opencode-go",
       "agent": "claudex-deepseek",
-      "defaultModel": "opencode-go/deepseek-v4-flash",
+      "defaultModel": "opencode-go/deepseek-v4-pro",
       "effort": "high",
       "enabled": true,
       "usageProvider": "opencodego",
-      "maxConcurrency": 7,
+      "requestBudget": {
+        "estimatedRequests": 3450,
+        "windowMinutes": 300,
+        "usageWindow": "primary"
+      },
       "modelPrefixes": [
         "opencode-go/"
       ],
