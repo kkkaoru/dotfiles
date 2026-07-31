@@ -82,7 +82,8 @@
       "agent": "claudex-qwen",
       "defaultModel": "qwen3.8-max-preview",
       "effort": "high",
-      "enabled": false,
+      "maxConcurrency": 3,
+      "enabled": true,
       "usageProvider": "qwen",
       "modelPrefixes": [
         "qwen"
