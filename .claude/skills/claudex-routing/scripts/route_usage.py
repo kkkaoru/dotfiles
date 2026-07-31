@@ -130,10 +130,25 @@ def load_config(path: Path) -> dict[str, Any]:
         raise ValueError("mainProviders must name distinct enabled providers")
     if not valid_choice(config.get("fallback")):
         raise ValueError("provider config contains an invalid fallback")
+    native_workers = config.get("nativeWorkers", [])
+    if (
+        not isinstance(native_workers, list)
+        or any(not valid_choice(worker) for worker in native_workers)
+        or len({worker["agent"] for worker in native_workers}) != len(native_workers)
+    ):
+        raise ValueError("provider config contains invalid nativeWorkers")
+    provider_agents = {provider["agent"] for provider in enabled}
+    if any(worker["agent"] in provider_agents for worker in native_workers):
+        raise ValueError("nativeWorkers agent values must not overlap enabled providers")
     advisor = config.get("advisor", DEFAULT_ADVISOR)
     if not valid_choice(advisor):
         raise ValueError("provider config contains an invalid advisor")
-    return {**config, "providers": enabled, "advisor": dict(advisor)}
+    return {
+        **config,
+        "providers": enabled,
+        "nativeWorkers": [dict(worker) for worker in native_workers],
+        "advisor": dict(advisor),
+    }
 
 
 def disabled_models_config_path(
@@ -669,6 +684,17 @@ def capacity_priority(quota: dict[str, Any], config_index: int) -> tuple[float, 
     return (2, config_index)
 
 
+def selected_native_workers(
+    config: Mapping[str, Any], disabled_models: frozenset[str]
+) -> list[dict[str, Any]]:
+    """Return config-declared subscription workers that need no provider quota probe."""
+    return [
+        {"provider": "native", **worker}
+        for worker in config.get("nativeWorkers", [])
+        if worker["model"] not in disabled_models
+    ]
+
+
 def routing_summary(
     report: Any,
     config: dict[str, Any] | None = None,
@@ -698,6 +724,7 @@ def routing_summary(
     fallback_active = not selected and config["fallback"]["model"] not in disabled_models
     if fallback_active:
         selected = [{"provider": "fallback", **config["fallback"]}]
+    selected.extend(selected_native_workers(config, disabled_models))
     preferred_main_worker = next(
         (
             main_workers[provider]
@@ -825,6 +852,7 @@ def apply_model_concurrency(
     fallback_active = not selected and fallback["model"] not in disabled_models
     if fallback_active:
         selected = [fallback]
+    selected.extend(selected_native_workers(config, disabled_models))
     preferred_main_worker = next(
         (
             main_workers[provider]
@@ -1628,13 +1656,15 @@ def fallback_summary(
         }
     fallback = {"provider": "fallback", **config["fallback"]}
     selected = [] if fallback["model"] in disabled_models else [fallback]
+    fallback_active = bool(selected)
+    selected.extend(selected_native_workers(config, disabled_models))
     summary = {
         "providers": providers,
         "main_workers": {},
         "selected_agents": [item["agent"] for item in selected],
         "selected_workers": selected,
         "preferred_worker": selected[0] if selected else None,
-        "fallback_active": bool(selected),
+        "fallback_active": fallback_active,
         "preferred_main_worker": None,
         "disabled_subagent_models": sorted(disabled_models),
         "advisor": dict(config.get("advisor", DEFAULT_ADVISOR)),

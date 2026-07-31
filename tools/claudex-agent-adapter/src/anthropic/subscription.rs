@@ -33,7 +33,6 @@ pub(crate) const DEFAULT_MAX_PROCESSES: usize = 20;
 pub(crate) const DEFAULT_TIMEOUT_MINUTES: u64 = 120;
 const MAX_PROCESSES_ENV: &str = "CLAUDEX_SUBSCRIPTION_MAX_PROCESSES";
 const TIMEOUT_MINUTES_ENV: &str = "CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES";
-const OUTER_TOOL_BRIDGE_SETTINGS: &str = r#"{"hooks":{"PreToolUse":[{"matcher":"^(?!WebSearch$|WebFetch$).*","hooks":[{"type":"command","command":"exit 2"}]}]}}"#;
 pub(super) struct SubscriptionOptions {
     pub(super) effort: Option<String>,
     pub(super) tools: Vec<String>,
@@ -332,9 +331,6 @@ pub(super) fn subscription_command(
     }
     if matches!(output, OutputMode::StreamJson) {
         command.args(["--include-partial-messages", "--verbose"]);
-        if !options.tools.is_empty() {
-            command.args(["--settings", OUTER_TOOL_BRIDGE_SETTINGS]);
-        }
     }
     if let Some(effort) = &options.effort {
         command.args(["--effort", effort]);

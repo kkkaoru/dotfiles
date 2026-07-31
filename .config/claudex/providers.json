@@ -122,6 +122,7 @@
       "acp": {
         "program": "opencode",
         "arguments": [
+          "--auto",
           "acp"
         ]
       }
@@ -132,6 +133,13 @@
     "model": "claude-sonnet-5",
     "effort": "high"
   },
+  "nativeWorkers": [
+    {
+      "agent": "claudex-haiku-search",
+      "model": "claude-haiku-4-5",
+      "effort": "max"
+    }
+  ],
   "webSearch": {
     "fallbackProviders": ["codex-spark", "codex"]
   },

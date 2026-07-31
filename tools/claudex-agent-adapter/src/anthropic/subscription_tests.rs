@@ -48,6 +48,7 @@ fn streaming_subscription_bridges_native_web_tools_to_the_outer_session() {
         "WebSearch".to_owned(),
         "WebFetch".to_owned(),
         "Agent".to_owned(),
+        "Bash".to_owned(),
     ];
     let command = subscription_command(
         Path::new("claude"),
@@ -56,19 +57,19 @@ fn streaming_subscription_bridges_native_web_tools_to_the_outer_session() {
         OutputMode::StreamJson,
     );
     let args = command.as_std().get_args().collect::<Vec<_>>();
-    let settings = args
-        .windows(2)
-        .find_map(|pair| (pair[0].to_str() == Some("--settings")).then_some(pair[1]))
-        .expect("stream settings")
-        .to_str()
-        .expect("UTF-8 settings");
-    let value: serde_json::Value = serde_json::from_str(settings).expect("settings JSON");
-    assert_eq!(
-        value
-            .pointer("/hooks/PreToolUse/0/matcher")
-            .and_then(serde_json::Value::as_str),
-        Some("^(?!WebSearch$|WebFetch$).*")
+    assert!(
+        !args
+            .iter()
+            .any(|argument| argument.to_str() == Some("--settings")),
+        "streaming subscription must not install a hook that rejects shell commands"
     );
+    let allowed_tools = args
+        .windows(2)
+        .find_map(|pair| (pair[0].to_str() == Some("--allowedTools")).then_some(pair[1]))
+        .expect("allowed tools")
+        .to_str()
+        .expect("UTF-8 allowed tools");
+    assert!(allowed_tools.split(',').any(|tool| tool == "Bash"));
 }
 
 #[cfg(unix)]
@@ -220,6 +221,42 @@ fn reads_effort_dynamically_from_claude_settings() {
     assert_eq!(
         setting_at(&settings_path, "effortLevel").as_deref(),
         Some("xhigh")
+    );
+}
+
+#[test]
+fn resolves_effort_from_the_latest_claude_settings_file() {
+    let directory = tempfile::tempdir().expect("create dynamic effort settings");
+    let settings_path = directory.path().join("settings.json");
+    fs::write(&settings_path, r#"{"effortLevel":"high"}"#).expect("write high settings");
+    let bridge = Bridge::new_with_backend(AgentBackend::spawn_routes(&[]), "main".to_owned())
+        .with_settings_path(&settings_path);
+    let request = MessagesRequest {
+        model: "claude-sonnet-5".to_owned(),
+        system: json!(null),
+        messages: vec![],
+        tools: vec![],
+        stream: false,
+        output_config: json!({}),
+        metadata: json!({}),
+        working_directory: None,
+        disabled_subagent_models: Default::default(),
+        claudex_collaborator_model: None,
+    };
+
+    assert_eq!(
+        bridge.resolve_request_effort(&request, AgentEffort::Unmatched),
+        Some("high".to_owned())
+    );
+    fs::write(&settings_path, r#"{"effortLevel":"xhigh"}"#).expect("update xhigh settings");
+    assert_eq!(
+        bridge.resolve_request_effort(&request, AgentEffort::Unmatched),
+        Some("xhigh".to_owned())
+    );
+    fs::write(&settings_path, r#"{"effortLevel":"invalid"}"#).expect("write invalid settings");
+    assert_eq!(
+        bridge.resolve_request_effort(&request, AgentEffort::Unmatched),
+        None
     );
 }
 

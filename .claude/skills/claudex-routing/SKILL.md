@@ -47,14 +47,14 @@ retained.
    needed for genuine parallelism, role separation, and clean independent context; reuse policy
    must not suppress useful fan-out.
    Before launching a substantive, non-trivial phase, explicitly decompose it into non-redundant
-   workstreams and select the fan-out dynamically for task content and current capacity. Launch at
-   least three ordinary workers in the same background batch whenever the phase is divisible and
-   capacity permits; if fewer than three natural workstreams exist, use implementation, independent
-   verification, and risk/review roles rather than silently serializing. Use at least two distinct
-   model kinds whenever allowed workers provide them. Report a genuine indivisible phase or
-   capacity shortfall and re-evaluate fan-out at the next result, failure, capacity update, or phase
-   boundary. Avoid serial heavy processing by one worker: do not give an entire heavy
-   or unknown-duration task to one ordinary worker merely because it is convenient. `custom-advisor`
+   workstreams and select the fan-out dynamically for task content and current capacity. Use one
+   ordinary worker for one indivisible scope, two for two independent scopes, and at least three
+   only when three or more independent scopes justify it and capacity permits. Use at least two
+   distinct model kinds whenever the selected fan-out is two or more and allowed workers provide
+   them. Report a genuine indivisible phase or capacity shortfall and re-evaluate fan-out at the
+   next result, failure, capacity update, or phase boundary. Avoid serial heavy processing by one
+   worker when independent scopes exist: do not give an entire heavy or unknown-duration task to
+   one ordinary worker merely because it is convenient. `custom-advisor`
    is a separate logical session singleton/capacity channel, not one of these implementation
    workstreams; built-in `advisor()` remains independent of worker capacity.
    Apply this selection to every Agent/Task launch, including nested launches made by an existing

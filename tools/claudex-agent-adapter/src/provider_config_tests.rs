@@ -49,6 +49,38 @@ mod tests {
     }
 
     #[test]
+    fn loads_native_workers_without_declaring_a_provider_backend() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("providers.json");
+        let mut document: serde_json::Value = serde_json::from_str(&config(
+            r#"{"id":"p","agent":"worker","defaultModel":"model","effort":"high","enabled":true,"backend":"grok-acp"}"#,
+        ))
+        .unwrap();
+        document["nativeWorkers"] = serde_json::json!([
+            {
+                "agent": "claudex-haiku-search",
+                "model": "claude-haiku-4-5",
+                "effort": "max"
+            }
+        ]);
+        std::fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
+
+        let loaded = load(&path).expect("load native worker");
+        assert_eq!(
+            loaded.model_catalog.worker_fields("claudex-haiku-search"),
+            Some(("claude-haiku-4-5", "max"))
+        );
+        assert!(loaded
+            .model_catalog
+            .worker_routes()
+            .iter()
+            .any(|worker| worker.agent == "claudex-haiku-search"));
+        // Native workers must stay out of the provider identity catalog so an
+        // explicit Haiku child reaches the Claude subscription backend.
+        assert!(!loaded.model_catalog.matches("claude-haiku-4-5"));
+    }
+
+    #[test]
     fn validates_and_exports_worker_routes() {
         let mut catalog = ModelCatalog::from_routes(&[BackendRoute::new("model", BackendKind::GrokAcp)]);
         assert!(catalog

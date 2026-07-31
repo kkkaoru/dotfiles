@@ -76,7 +76,9 @@ name = "Must not replace the base config"
             r#"{"token":"test"}"#
         );
         let config = std::fs::read_to_string(prepared.join("config.toml")).unwrap();
-        assert!(config.contains("tool_search = false"));
+        assert!(config.contains("shell_tool = true"));
+        assert!(config.contains("tool_search = true"));
+        assert!(config.contains("unified_exec = true"));
         assert!(config.contains("plugins = false"));
         assert!(config.contains("[model_providers.sakana]"));
         assert!(config.contains("[model_providers.ollama]"));

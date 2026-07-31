@@ -34,16 +34,15 @@ main session and report routing unavailable.
 Use multiple available workers only when independent execution or a second
 perspective materially helps; do not manufacture parallel work for a trivial, indivisible task.
 Before launching a substantive phase, explicitly decompose it into non-redundant workstreams and
-select the fan-out dynamically for task content and current capacity. Launch at least three
-ordinary workers together whenever the phase is divisible and capacity permits; if fewer than
-two natural workstreams exist, use implementation, independent verification, and risk/review
-roles rather than silently serializing. Use at least two distinct model kinds whenever allowed
-workers provide them. Report a genuine indivisible phase or capacity shortfall and re-evaluate it
-at the next result, failure, capacity update, or phase boundary. Avoid serial heavy processing by
-one worker: do not give an entire heavy or unknown-duration task to one ordinary worker merely
-because it is convenient. `custom-advisor` is a separate logical session singleton/capacity
-channel, excluded from ordinary-worker counts; built-in `advisor()` remains independent of worker
-capacity.
+select the fan-out dynamically for task content and current capacity. Use one ordinary worker for
+one indivisible scope, two for two independent scopes, and at least three only when three or more
+independent scopes justify it and capacity permits. Use at least two distinct model kinds whenever
+the selected fan-out is two or more and allowed workers provide them. Report a genuine indivisible
+phase or capacity shortfall and re-evaluate it at the next result, failure, capacity update, or
+phase boundary. Avoid serial heavy processing by one worker when independent scopes exist: do not
+give an entire heavy or unknown-duration task to one ordinary worker merely because it is
+convenient. `custom-advisor` is a separate logical session singleton/capacity channel, excluded
+from ordinary-worker counts; built-in `advisor()` remains independent of worker capacity.
 When substantive work is clear, invoke the selected SubAgent directly in the first response rather
 than merely announcing future delegation. Do not add TaskList, TaskCreate, or TaskUpdate round trips
 solely to prepare delegation; use task tracking only for work that needs persistent dependency

@@ -41,12 +41,12 @@
   turn, integrate each available result without waiting for the slowest worker; never remain in
   hidden reasoning while waiting for pending notifications.
 - Before launching a substantive, non-trivial phase, explicitly split it into non-redundant
-  workstreams and choose the fan-out dynamically for current capacity and task content. Launch at
-  least three ordinary workers in the same background batch whenever the phase is divisible and
-  capacity permits; if there are fewer than two natural workstreams, use implementation,
-  independent verification, and risk/review work rather than silently serializing. Use at least
-  two distinct model kinds whenever allowed workers provide them. A genuine indivisible phase or
-  capacity shortfall must be reported and re-evaluated, not hidden behind a one-worker default.
+  workstreams and choose the fan-out dynamically from current capacity and task content. Use one
+  worker for one indivisible scope, two for two independent scopes, and at least three only when
+  three or more independent scopes justify it and capacity permits. Use at least two distinct
+  model kinds whenever the selected fan-out is two or more and allowed workers provide them. A
+  genuine indivisible phase or capacity shortfall must be reported and re-evaluated, not hidden
+  behind a fixed worker count.
   Avoid serial heavy processing by one worker: do not send an entire heavy or unknown-duration task
   to one ordinary worker merely because it is convenient. `custom-advisor` is a separate logical
   session singleton/capacity channel and is excluded from ordinary-worker counts; built-in

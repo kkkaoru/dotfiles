@@ -14,6 +14,8 @@ struct ProviderConfig {
     providers: Vec<Provider>,
     fallback: AgentChoice,
     #[serde(default)]
+    native_workers: Vec<WorkerRoute>,
+    #[serde(default)]
     advisor: Option<AgentChoice>,
     #[serde(default)]
     web_search: WebSearchSettings,
@@ -203,8 +205,12 @@ impl ModelCatalog {
         Ok(())
     }
 
-    fn add_workers(&mut self, providers: &[Provider]) {
-        self.workers = providers
+    fn add_workers(
+        &mut self,
+        providers: &[Provider],
+        native_workers: &[WorkerRoute],
+    ) -> Result<()> {
+        let mut workers = providers
             .iter()
             .map(|provider| WorkerRoute {
                 agent: provider.agent.clone(),
@@ -215,7 +221,9 @@ impl ModelCatalog {
                     .clone(),
                 effort: provider.effort.clone(),
             })
-            .collect();
+            .collect::<Vec<_>>();
+        workers.extend_from_slice(native_workers);
+        self.set_worker_routes(workers)
     }
 }
 
@@ -234,6 +242,7 @@ fn validate(config: ProviderConfig) -> Result<LoadedConfig> {
         bail!("provider config version must be {CONFIG_VERSION}");
     }
     validate_choice(&config.fallback, "fallback")?;
+    validate_worker_routes(&config.native_workers)?;
     if let Some(advisor) = config.advisor.as_ref() {
         validate_choice(advisor, "advisor")?;
     }
@@ -251,7 +260,7 @@ fn validate(config: ProviderConfig) -> Result<LoadedConfig> {
         bail!("provider config must enable at least one provider");
     }
     validate_providers(&providers)?;
-    model_catalog.add_workers(&providers);
+    model_catalog.add_workers(&providers, &config.native_workers)?;
     let search_workers = search_provider_ids
         .iter()
         .map(|id| {

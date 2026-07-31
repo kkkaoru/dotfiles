@@ -244,6 +244,7 @@ def configuration() -> dict[str, object]:
             "model": "claude-sonnet-5",
             "effort": "high",
         },
+        "nativeWorkers": [],
         "advisor": {
             "agent": "custom-advisor",
             "model": "claude-fable-5",
@@ -339,7 +340,10 @@ class ConfigurationTests(unittest.TestCase):
             {"estimatedRequests": 3450, "windowMinutes": 300, "usageWindow": "primary"},
         )
         self.assertEqual(opencode["backend"], "configured-acp")
-        self.assertEqual(opencode["acp"], {"program": "opencode", "arguments": ["acp"]})
+        self.assertEqual(
+            opencode["acp"],
+            {"program": "opencode", "arguments": ["--auto", "acp"]},
+        )
 
     def test_validates_dedicated_disabled_models_config(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -436,8 +440,9 @@ class RoutingTests(unittest.TestCase):
                 "main session must control parallel distribution", lowered, path
             )
             self.assertTrue(
-                "at least three ordinary workers" in lowered
-                or "least three ordinary workers" in lowered,
+                "at least three" in lowered
+                and "ordinary worker" in lowered
+                and "independent scopes" in lowered,
                 path,
             )
             self.assertIn("two distinct model kinds", lowered, path)
@@ -465,9 +470,7 @@ class RoutingTests(unittest.TestCase):
         advisor_text = advisor_path.read_text(encoding="utf-8")
         self.assertIn("model: claude-fable-5", advisor_text)
         self.assertIn("effort: xhigh", advisor_text)
-        # Claude Code file frontmatter uses a comma-separated tools allowlist.
-        # Background subagents keep SendMessage; TaskList/TaskGet are agent-team tools.
-        self.assertRegex(advisor_text, r"(?m)^tools:\s*SendMessage\s*$")
+        self.assertNotRegex(advisor_text, r"(?m)^(?:tools|disallowedTools|permissionMode):")
         self.assertNotIn("TaskList", advisor_text)
         self.assertNotIn("TaskGet", advisor_text)
         self.assertNotIn("process=1", advisor_text)
@@ -483,8 +486,9 @@ class RoutingTests(unittest.TestCase):
         search_text = search_path.read_text(encoding="utf-8")
         self.assertIn("model: claude-haiku-4-5", search_text)
         self.assertIn("effort: max", search_text)
-        self.assertRegex(search_text, r"(?m)^tools:\s*WebSearch,WebFetch\s*$")
-        self.assertIn("Never answer from", search_text)
+        self.assertNotRegex(search_text, r"(?m)^(?:tools|disallowedTools|permissionMode):")
+        self.assertIn("complete tool set and permission context", search_text)
+        self.assertIn("answer from memory", search_text)
         routing_hook = next(
             hook
             for group in settings["hooks"]["UserPromptSubmit"]
@@ -684,6 +688,71 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(fallback["selected_agents"], ["claudex-sonnet"])
         self.assertTrue(fallback["fallback_active"])
 
+    def test_selects_configured_native_worker_without_provider_quota(self) -> None:
+        config = configuration()
+        config["nativeWorkers"] = [
+            {
+                "agent": "claudex-haiku-search",
+                "model": "claude-haiku-4-5",
+                "effort": "max",
+            }
+        ]
+
+        summary = route_usage.routing_summary(report(), config)
+        self.assertEqual(
+            summary["selected_workers"][-1],
+            {
+                "provider": "native",
+                "agent": "claudex-haiku-search",
+                "model": "claude-haiku-4-5",
+                "effort": "max",
+            },
+        )
+        self.assertEqual(summary["preferred_worker"]["agent"], "claudex-qwen")
+
+        denied = route_usage.routing_summary(
+            report(), config, frozenset({"claude-haiku-4-5"})
+        )
+        self.assertNotIn("claudex-haiku-search", denied["selected_agents"])
+
+        fallback = route_usage.fallback_summary(
+            "usage-unavailable", config, frozenset({"claude-sonnet-5"})
+        )
+        self.assertEqual(fallback["selected_agents"], ["claudex-haiku-search"])
+        self.assertFalse(fallback["fallback_active"])
+
+    def test_rejects_invalid_or_overlapping_native_workers(self) -> None:
+        for native_workers in [
+            {},
+            [{"agent": "", "model": "claude-haiku-4-5", "effort": "max"}],
+            [
+                {
+                    "agent": "claudex-haiku-search",
+                    "model": "claude-haiku-4-5",
+                    "effort": "max",
+                },
+                {
+                    "agent": "claudex-haiku-search",
+                    "model": "claude-haiku-4-5",
+                    "effort": "max",
+                },
+            ],
+            [
+                {
+                    "agent": "claudex-gpt-spark",
+                    "model": "claude-haiku-4-5",
+                    "effort": "max",
+                }
+            ],
+        ]:
+            config = configuration()
+            config["nativeWorkers"] = native_workers
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "providers.json"
+                path.write_text(json.dumps(config), encoding="utf-8")
+                with self.assertRaises(ValueError):
+                    route_usage.load_config(path)
+
     def test_keeps_main_model_available_for_workers_and_requires_delegation(self) -> None:
         summary = route_usage.enforce_worker_model_separation(
             configured_summary(report()),
@@ -765,7 +834,7 @@ class RoutingTests(unittest.TestCase):
                 configuration(),
                 frozenset(),
                 outer_model="claude-sonnet-5",
-            )
+        )
         self.assertEqual(summary["selected_agents"], ["claudex-sonnet"])
         self.assertTrue(summary["sonnet_subagent_explicit_allowed"])
 
@@ -926,7 +995,9 @@ class RoutingTests(unittest.TestCase):
         base = route_usage.routing_summary([], config)
         self.assertEqual(base["providers"]["opencode-go"]["reason"], "missing")
         summary = route_usage.apply_model_concurrency(base, config, model_health(0))
-        self.assertEqual(summary["selected_agents"], ["claudex-sonnet"])
+        self.assertEqual(
+            summary["selected_agents"], ["claudex-sonnet", "claudex-haiku-search"]
+        )
         self.assertTrue(summary["fallback_active"])
 
     def test_dynamic_models_inherit_the_most_specific_prefix_limit(self) -> None:
@@ -1463,7 +1534,9 @@ class CommandTests(unittest.TestCase):
 
     def test_fallback_summary_disables_external_providers(self) -> None:
         summary = route_usage.fallback_summary("test-failure")
-        self.assertEqual(summary["selected_agents"], ["claudex-sonnet"])
+        self.assertEqual(
+            summary["selected_agents"], ["claudex-sonnet", "claudex-haiku-search"]
+        )
         self.assertTrue(summary["fallback_active"])
         self.assertEqual(summary["providers"]["codex"]["reason"], "test-failure")
 

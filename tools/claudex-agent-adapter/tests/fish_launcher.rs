@@ -12,6 +12,60 @@ fn fish_launcher_uses_the_shared_provider_config() {
     assert_local_defaults(&function, &home);
 }
 
+#[test]
+fn fish_launcher_keeps_command_tools_available_for_new_and_resumed_sessions() {
+    let home = shared_provider_fixture();
+    let function = launcher_function();
+
+    let fresh = run_fish_launcher(&function, &home, "claudex command-tool-smoke");
+    assert_command_tools_are_not_filtered(&fresh);
+    assert!(fresh.ends_with(
+        "--\n--agent\nclaudex-orchestrator\n--allowedTools\nWebSearch,WebFetch\ncommand-tool-smoke\n"
+    ));
+
+    let resumed = run_fish_launcher(
+        &function,
+        &home,
+        "claudex --resume retained-session --allowedTools 'Bash(git *),Bash(gh *)' resume-command-tool-smoke",
+    );
+    assert_command_tools_are_not_filtered(&resumed);
+    assert!(resumed.ends_with(
+        "--\n--agent\nclaudex-orchestrator\n--resume\nretained-session\n--allowedTools\nBash(git *),Bash(gh *)\nresume-command-tool-smoke\n"
+    ));
+}
+
+fn run_fish_launcher(
+    function: &std::path::Path,
+    home: &tempfile::TempDir,
+    command: &str,
+) -> String {
+    let output = Command::new("fish")
+        .args(["-c", &format!("source '{}'; {command}", function.display())])
+        .env("HOME", home.path())
+        .env_remove("CLAUDEX_MODEL")
+        .env_remove("CLAUDEX_PROVIDER_CONFIG")
+        .output()
+        .expect("run fish launcher");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).expect("UTF-8 adapter arguments")
+}
+
+fn assert_command_tools_are_not_filtered(arguments: &str) {
+    // `--tools` is Claude Code's built-in-tool availability filter. The launcher
+    // may pre-allow web tools, but it must not remove Bash (and therefore git/gh)
+    // from either a new or a resumed main session.
+    for forbidden in ["--tools\n", "--disallowedTools\n", "--disallowed-tools\n"] {
+        assert!(
+            !arguments.contains(forbidden),
+            "launcher unexpectedly filters command tools with {forbidden:?}: {arguments}"
+        );
+    }
+}
+
 fn shared_provider_fixture() -> tempfile::TempDir {
     let home = tempfile::tempdir().expect("temporary launcher home");
     fs::create_dir_all(home.path().join(".config/claudex")).expect("provider config directory");
@@ -349,17 +403,6 @@ fn every_non_advisor_subagent_inherits_the_main_tool_and_permission_context() {
             .skip(1)
             .take_while(|line| *line != "---")
             .collect::<Vec<_>>();
-        if file_name == Some("claudex-haiku-search.md") {
-            assert!(
-                frontmatter.contains(&"tools: WebSearch,WebFetch"),
-                "{file_name:?} must expose only live web retrieval tools"
-            );
-            assert!(
-                definition.contains("Dedicated live-web retrieval worker"),
-                "{file_name:?} must document its bounded retrieval scope"
-            );
-            continue;
-        }
         for restricted_field in ["tools:", "disallowedTools:", "permissionMode:"] {
             assert!(
                 !frontmatter
@@ -378,7 +421,7 @@ fn every_non_advisor_subagent_inherits_the_main_tool_and_permission_context() {
 }
 
 #[test]
-fn custom_advisor_has_an_explicit_isolated_peer_messaging_channel() {
+fn custom_advisor_inherits_tools_while_preserving_peer_advisory_scope() {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../.claude/agents/custom-advisor.md");
     let definition = fs::read_to_string(&path).expect("custom advisor definition");
@@ -387,30 +430,21 @@ fn custom_advisor_has_an_explicit_isolated_peer_messaging_channel() {
         .skip(1)
         .take_while(|line| *line != "---")
         .collect::<Vec<_>>();
-    let tool_lines = frontmatter
-        .iter()
-        .filter(|line| line.starts_with("tools:"))
-        .copied()
-        .collect::<Vec<_>>();
-
-    assert_eq!(tool_lines, ["tools: SendMessage"]);
-    for forbidden_field in ["disallowedTools:", "permissionMode:"] {
+    for forbidden_field in ["tools:", "disallowedTools:", "permissionMode:"] {
         assert!(
             !frontmatter
                 .iter()
                 .any(|line| line.starts_with(forbidden_field)),
-            "custom-advisor must declare only its SendMessage channel, not {forbidden_field}"
+            "custom-advisor must inherit the complete tool set, not {forbidden_field}"
         );
     }
     assert!(
-        definition.contains("deliberate exception to normal worker inheritance"),
-        "custom-advisor must document why it does not inherit worker tools"
+        definition.contains("main session's complete tool set and permission context"),
+        "custom-advisor must document permission inheritance"
     );
     assert!(
-        definition.contains("only tool is")
-            && definition.contains("`SendMessage`")
-            && definition.contains("peer-advisory channel"),
-        "custom-advisor must document its isolated peer-messaging channel"
+        definition.contains("SendMessage") && definition.contains("strategic advisor"),
+        "custom-advisor must preserve its peer-advisory role"
     );
 }
 

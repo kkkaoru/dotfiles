@@ -9,7 +9,8 @@ pub(super) fn subscription_request_prompt(request: &MessagesRequest) -> String {
     let mut prompt = format!(
         concat!(
             "Act as the requested Claude Code model. Follow the system instructions and complete ",
-            "the conversation below. Use only the enabled tools when needed. For an explicit live ",
+            "the conversation below. Use only the enabled tools when needed; shell and command ",
+            "tools must remain usable whenever they are supplied. For an explicit live ",
             "WebSearch/WebFetch or page-retrieval request, call the supplied web tool and never ",
             "substitute memory or a guessed URL; claim success only after a tool result. Delegation is the ",
             "standing default for substantive work unless the user opts out. The main session must ",
@@ -69,13 +70,15 @@ pub(super) fn subscription_request_prompt(request: &MessagesRequest) -> String {
     prompt
 }
 
-fn subscription_parallel_scheduler_instructions(_request: &MessagesRequest) -> String {
+fn subscription_parallel_scheduler_instructions(request: &MessagesRequest) -> String {
     let scheduler = crate::parallel_scheduler::ParallelScheduler::shared();
     let config = scheduler.config();
     let cadence_minutes = (config.reassess_interval.as_secs() / 60).max(1);
     format!(
-        "Launch at least {} ordinary workers for substantive decomposition, maintain at least {} active lanes during in-flight work, and use at least {} model families. Recheck the lanes on each SubAgent completion and every {cadence_minutes} minutes. If only one active lane remains during ongoing work, interrupt stale work and dispatch replacements immediately. Reissue unfinished same-scope tasks on fresh workers and continue expanded follow-up on surviving lanes while preserving reusable context. An explicit active user request for an exact worker count, a single worker, synchronous results, or no delegation overrides these defaults.",
-        config.min_parallel_workers, config.active_floor, config.min_model_families
+        "Choose the worker count dynamically from independent workstreams and current active lanes. {}. When at least three independent scopes exist and capacity permits, fan out to at least {} ordinary workers across at least {} model families; for one indivisible scope use one worker. Recheck lanes after each SubAgent completion and every {cadence_minutes} minutes. If only one lane remains during ongoing work at a completion or cadence tick, interrupt stale work and dispatch replacements immediately. Reuse compatible workers before creating new processes. An explicit active user request for an exact worker count, a single worker, synchronous results, or no delegation overrides these defaults.",
+        scheduler.guidance_for_request(request),
+        config.min_parallel_workers,
+        config.min_model_families
     )
 }
 

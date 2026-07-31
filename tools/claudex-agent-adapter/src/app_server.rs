@@ -312,12 +312,6 @@ fn spawn_child(
             "app-server",
             "--stdio",
             "--disable",
-            "shell_tool",
-            "--disable",
-            "unified_exec",
-            "--disable",
-            "tool_search",
-            "--disable",
             "apps",
             "--disable",
             "multi_agent",
@@ -375,9 +369,9 @@ apps = false
 multi_agent = false
 plugins = false
 remote_control = false
-shell_tool = false
-tool_search = false
-unified_exec = false
+shell_tool = true
+tool_search = true
+unified_exec = true
 web_search = true
 "#,
     );

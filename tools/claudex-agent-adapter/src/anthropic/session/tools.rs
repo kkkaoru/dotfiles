@@ -318,8 +318,8 @@ fn parallel_scheduler_instructions(request: &MessagesRequest) -> String {
     let cadence_minutes = (config.reassess_interval.as_secs() / 60).max(1);
     let mut lines = vec![
         format!(
-            "Runtime parallel floor: launch at least {} ordinary workers when splitting substantive work; maintain at least {} active lanes while running. Use at least {} model families before work is considered sufficiently distributed.",
-            config.min_parallel_workers, config.active_floor, config.min_model_families
+            "Runtime parallel policy: choose one ordinary worker for one indivisible scope, two for two independent scopes, and fan out to at least {} ordinary workers across at least {} model families only when three or more scopes justify it; maintain at least {} active lanes during a completion or cadence rebalance.",
+            config.min_parallel_workers, config.min_model_families, config.active_floor
         ),
         format!(
             "After each SubAgent completion and every {cadence_minutes} minutes, reassess active lanes. If only one active lane remains during ongoing work, interrupt stale work, redirect stale branches, and immediately add or replace workers to restore the floor."
