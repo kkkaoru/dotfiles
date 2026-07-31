@@ -318,7 +318,7 @@ fn parallel_scheduler_instructions(request: &MessagesRequest) -> String {
     let cadence_minutes = (config.reassess_interval.as_secs() / 60).max(1);
     let mut lines = vec![
         format!(
-            "Runtime parallel policy: choose one ordinary worker for one indivisible scope, two for two independent scopes, and fan out to at least {} ordinary workers across at least {} model families only when three or more scopes justify it; maintain at least {} active lanes during a completion or cadence rebalance.",
+            "Runtime parallel policy: choose one ordinary worker for one indivisible scope, two for two independent scopes, and fan out to at least {} ordinary workers across at least {} model families only when three or more scopes justify it; selected_workers is a capacity pool, not a launch count; maintain at least {} active lanes during a completion or cadence rebalance.",
             config.min_parallel_workers, config.min_model_families, config.active_floor
         ),
         format!(

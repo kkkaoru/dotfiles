@@ -482,14 +482,20 @@ fn increases_floor_with_explicit_request_structure() {
 #[test]
 fn leaves_a_single_indivisible_lane_steady_between_rebalance_events() {
     let scheduler = ParallelScheduler::for_tests();
-    let state = messages(&[serde_json::json!({
-        "role":"assistant",
-        "content":[tool_use("t1","cc_Agent_0","gpt-5.6-sol")],
-    })]);
+    let state = messages(&[
+        serde_json::json!({
+            "role":"user",
+            "content":"gh pr view https://github.com/example/repo/pull/1",
+        }),
+        serde_json::json!({
+            "role":"assistant",
+            "content":[tool_use("t1","cc_Agent_0","gpt-5.6-sol")],
+        }),
+    ]);
     let initial = scheduler.decision_for_request(&state);
     assert_eq!(
-        initial.target_workers, 2,
-        "initial tick establishes the floor"
+        initial.target_workers, 1,
+        "a single bounded request starts with one worker"
     );
 
     let steady = scheduler.decision_for_request(&state);
@@ -502,6 +508,167 @@ fn leaves_a_single_indivisible_lane_steady_between_rebalance_events() {
             .actions
             .iter()
             .any(|action| action.contains("Only one active lane remains"))
+    );
+}
+
+#[test]
+fn single_gh_pr_lookup_schedules_exactly_one_worker_on_its_initial_cycle() {
+    let scheduler = ParallelScheduler::for_tests();
+    let request = messages(&[serde_json::json!({
+        "role": "user",
+        "content": "gh コマンドで https://github.com/avita-co-jp/avatar-infra/pull/74 の情報を取得して",
+    })]);
+
+    let decision = scheduler.decision_for_request(&request);
+
+    assert_eq!(decision.target_workers, 1);
+    assert_eq!(decision.needs_more_workers, 1);
+    assert!(
+        decision
+            .actions
+            .iter()
+            .any(|action| action.contains("Launch at least 1")),
+        "an indivisible `gh pr view` request must launch one worker"
+    );
+    assert!(
+        scheduler
+            .guidance_for_request(&request)
+            .contains("Task-shape: one bounded or indivisible scope detected. Launch exactly one")
+    );
+}
+
+#[test]
+fn single_gh_pr_lookup_does_not_expand_after_its_worker_starts() {
+    let scheduler = ParallelScheduler::for_tests();
+    let request = messages(&[
+        serde_json::json!({
+            "role": "user",
+            "content": "gh コマンドで https://github.com/avita-co-jp/avatar-infra/pull/74 の情報を取得して",
+        }),
+        serde_json::json!({
+            "role": "assistant",
+            "content": [tool_use("pr-74", "cc_Agent_0", "gpt-5.6-sol")],
+        }),
+    ]);
+
+    let decision = scheduler.decision_for_request(&request);
+
+    assert_eq!(decision.active_workers, 1);
+    assert_eq!(decision.target_workers, 1);
+    assert_eq!(decision.needs_more_workers, 0);
+    assert!(!decision.active_floor_breached);
+    assert!(
+        !decision
+            .actions
+            .iter()
+            .any(|action| action.contains("Launch at least")),
+        "an indivisible `gh pr view` request must not be expanded into duplicate workers"
+    );
+    assert!(
+        scheduler
+            .guidance_for_request(&request)
+            .contains("selected_workers is a capacity pool, not a launch count")
+    );
+}
+
+#[test]
+fn explicit_parallel_request_keeps_multi_worker_fanout_without_list_markers() {
+    let scheduler = ParallelScheduler::for_tests();
+    let request = messages(&[
+        serde_json::json!({
+            "role": "user",
+            "content": "AVITA株式会社を複数のSubAgentで並列で調査してください",
+        }),
+        serde_json::json!({
+            "role": "assistant",
+            "content": [tool_use("company", "cc_Agent_0", "gpt-5.6-sol")],
+        }),
+    ]);
+
+    let decision = scheduler.decision_for_request(&request);
+
+    assert!(decision.target_workers >= 3);
+    assert_eq!(decision.needs_more_workers, decision.target_workers - 1);
+    assert!(
+        scheduler
+            .guidance_for_request(&request)
+            .contains("Task-shape: multiple independent scopes detected")
+    );
+}
+
+#[test]
+fn independent_research_scopes_still_request_parallel_workers() {
+    let scheduler = ParallelScheduler::for_tests();
+    let request = messages(&[
+        serde_json::json!({
+            "role": "user",
+            "content": "AVITA株式会社を調査してください。\n- 会社概要\n- 資金調達\n- 競合と市場動向",
+        }),
+        serde_json::json!({
+            "role": "assistant",
+            "content": [tool_use("company", "cc_Agent_0", "gpt-5.6-sol")],
+        }),
+    ]);
+
+    let decision = scheduler.decision_for_request(&request);
+
+    assert_eq!(decision.active_workers, 1);
+    assert_eq!(decision.target_workers, 3);
+    assert_eq!(decision.needs_more_workers, 2);
+    assert!(
+        decision
+            .actions
+            .iter()
+            .any(|action| action.contains("Launch at least 2")),
+        "three non-overlapping research scopes should retain useful fan-out"
+    );
+}
+
+#[test]
+fn multi_scope_completion_reassesses_only_the_unfinished_lanes() {
+    let scheduler = ParallelScheduler::for_tests();
+    let first = messages(&[
+        serde_json::json!({
+            "role": "user",
+            "content": "AVITA株式会社を調査してください。\n- 会社概要\n- 資金調達\n- 競合と市場動向",
+        }),
+        serde_json::json!({
+            "role": "assistant",
+            "content": [
+                tool_use("company", "cc_Agent_0", "gpt-5.6-sol"),
+                tool_use("funding", "cc_Agent_0", "grok-4.5"),
+                tool_use("market", "cc_Agent_0", "gpt-5.6-sol"),
+            ],
+        }),
+    ]);
+    let after_market = messages(&[
+        serde_json::json!({
+            "role": "user",
+            "content": "AVITA株式会社を調査してください。\n- 会社概要\n- 資金調達\n- 競合と市場動向",
+        }),
+        serde_json::json!({
+            "role": "assistant",
+            "content": [
+                {"type":"tool_result", "tool_use_id":"market", "content":"done"},
+                tool_use("company", "cc_Agent_0", "gpt-5.6-sol"),
+                tool_use("funding", "cc_Agent_0", "grok-4.5"),
+            ],
+        }),
+    ]);
+
+    let _ = scheduler.decision_for_request(&first);
+    let decision = scheduler.decision_for_request(&after_market);
+
+    assert_eq!(decision.completed_recently, 1);
+    assert_eq!(decision.active_workers, 2);
+    assert_eq!(decision.target_workers, 3);
+    assert_eq!(decision.needs_more_workers, 1);
+    assert!(
+        decision
+            .actions
+            .iter()
+            .any(|action| action.contains("immediately after completion")),
+        "completion must keep the dynamic reassessment path for unfinished work"
     );
 }
 
@@ -604,12 +771,20 @@ fn ignores_malformed_or_completed_subagent_tool_payloads() {
 fn policy_helpers_cover_early_returns_and_cleanup_choices() {
     let config = SchedulerConfig::default();
     let no_workers = core::SubagentSnapshot::default();
+    let single_request = messages(&[serde_json::json!({
+        "role": "user",
+        "content": "gh pr view https://github.com/example/repo/pull/1",
+    })]);
+    let parallel_request = messages(&[serde_json::json!({
+        "role": "user",
+        "content": "調査を分担して並列で実行してください。\n- 概要\n- リスク",
+    })]);
     let mut untouched = SchedulerDecision::no_action();
 
-    policy::apply_reassessment_actions(&mut untouched, &no_workers, &config, true);
-    policy::apply_floor_action(&mut untouched, &config);
-    policy::apply_diversity_action(&mut untouched, &config);
-    policy::apply_reuse_actions(&mut untouched, &config);
+    policy::apply_reassessment_actions(&mut untouched, &no_workers, &single_request, &config, true);
+    policy::apply_floor_action(&mut untouched, &single_request, &config);
+    policy::apply_diversity_action(&mut untouched, &single_request, &config);
+    policy::apply_reuse_actions(&mut untouched, &single_request, &config);
     policy::clear_empty_decision(&mut untouched, &no_workers);
     assert!(untouched.actions.is_empty());
 
@@ -618,7 +793,7 @@ fn policy_helpers_cover_early_returns_and_cleanup_choices() {
     completed_but_idle
         .actions
         .push("keep completion context".to_owned());
-    policy::apply_reuse_actions(&mut completed_but_idle, &config);
+    policy::apply_reuse_actions(&mut completed_but_idle, &single_request, &config);
     policy::clear_empty_decision(&mut completed_but_idle, &no_workers);
     assert_eq!(completed_but_idle.actions, ["keep completion context"]);
 
@@ -635,14 +810,21 @@ fn policy_helpers_cover_early_returns_and_cleanup_choices() {
         reevaluate_on_completion: false,
         ..config.clone()
     };
-    policy::apply_reassessment_actions(&mut decision, &active, &disabled_reassessment, true);
+    policy::apply_reassessment_actions(
+        &mut decision,
+        &active,
+        &parallel_request,
+        &disabled_reassessment,
+        true,
+    );
 
     decision.completed_recently = 1;
-    policy::apply_reassessment_actions(&mut decision, &active, &config, false);
-    policy::apply_floor_action(&mut decision, &config);
-    policy::apply_diversity_action(&mut decision, &config);
+    policy::apply_reassessment_actions(&mut decision, &active, &parallel_request, &config, false);
+    policy::apply_floor_action(&mut decision, &parallel_request, &config);
+    policy::apply_diversity_action(&mut decision, &parallel_request, &config);
     policy::apply_reuse_actions(
         &mut decision,
+        &parallel_request,
         &SchedulerConfig {
             allow_reuse: false,
             cleanup_on_exit: false,
@@ -663,9 +845,9 @@ fn policy_helpers_cover_early_returns_and_cleanup_choices() {
             .any(|action| action.contains("reclaim"))
     );
 
-    policy::apply_floor_action(&mut decision, &config);
+    policy::apply_floor_action(&mut decision, &parallel_request, &config);
     decision.active_model_families = 2;
-    policy::apply_diversity_action(&mut decision, &config);
+    policy::apply_diversity_action(&mut decision, &parallel_request, &config);
     policy::clear_empty_decision(&mut decision, &active);
     assert!(!decision.actions.is_empty());
 }

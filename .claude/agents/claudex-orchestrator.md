@@ -47,8 +47,10 @@ When substantive work is clear, invoke the selected SubAgent directly in the fir
 than merely announcing future delegation. Do not add TaskList, TaskCreate, or TaskUpdate round trips
 solely to prepare delegation; use task tracking only for work that needs persistent dependency
 tracking.
-Start as many worker instances as useful for true parallelism or independent context. For related
-follow-ups, reuse compatible workers with SendMessage and the exact compatible worker or
+Start only as many worker instances as the current independent scopes justify. For one bounded
+command, lookup, fetch, or one-file check, launch exactly one ordinary worker and never duplicate
+the same scope; `selected_workers` is a capacity pool, not a launch count. For related follow-ups,
+reuse compatible workers with SendMessage and the exact compatible worker or
 custom-advisor recipient specified by the prior Agent/Task result (agent ID or teammate name as
 applicable) instead of churning processes with fresh launches. Send the smallest sufficient,
 self-contained delta, including new evidence that recipient has not seen. Do not send a mid-flight

@@ -21,10 +21,14 @@ pub(crate) fn reassessment_due(
 pub(crate) fn apply_reassessment_actions(
     decision: &mut SchedulerDecision,
     snapshot: &core::SubagentSnapshot,
+    request: &MessagesRequest,
     config: &SchedulerConfig,
     should_reassess: bool,
 ) {
-    if !snapshot.has_any_workers() || !config.reevaluate_on_completion {
+    if !snapshot.has_any_workers()
+        || !config.reevaluate_on_completion
+        || !has_parallel_scope(request)
+    {
         return;
     }
     if should_reassess {
@@ -46,10 +50,14 @@ pub(crate) fn apply_reassessment_actions(
 pub(crate) fn apply_replenishment_target(
     decision: &mut SchedulerDecision,
     snapshot: &core::SubagentSnapshot,
+    request: &MessagesRequest,
     config: &SchedulerConfig,
     should_reassess: bool,
 ) {
-    if !snapshot.has_any_workers() || (decision.completed_recently == 0 && !should_reassess) {
+    if !snapshot.has_any_workers()
+        || !has_parallel_scope(request)
+        || (decision.completed_recently == 0 && !should_reassess)
+    {
         return;
     }
     decision.target_workers = decision
@@ -85,13 +93,21 @@ fn worker_bounds(config: &SchedulerConfig) -> (usize, usize) {
     }
 }
 
-pub(crate) fn apply_floor_action(decision: &mut SchedulerDecision, config: &SchedulerConfig) {
+pub(crate) fn apply_floor_action(
+    decision: &mut SchedulerDecision,
+    request: &MessagesRequest,
+    config: &SchedulerConfig,
+) {
     let rebalance_due = decision.completed_recently > 0
         || decision
             .actions
             .iter()
             .any(|action| action.contains("Re-evaluate active set"));
-    if !decision.has_work() || decision.active_workers >= config.active_floor || !rebalance_due {
+    if !has_parallel_scope(request)
+        || !decision.has_work()
+        || decision.active_workers >= config.active_floor
+        || !rebalance_due
+    {
         return;
     }
     decision.active_floor_breached = true;
@@ -106,8 +122,85 @@ pub(crate) fn apply_floor_action(decision: &mut SchedulerDecision, config: &Sche
     decision.actions.push(action.to_owned());
 }
 
-pub(crate) fn apply_diversity_action(decision: &mut SchedulerDecision, config: &SchedulerConfig) {
-    if decision.active_workers == 0 || decision.active_model_families >= config.min_model_families {
+pub(crate) fn has_parallel_scope(request: &MessagesRequest) -> bool {
+    independent_scope_count(request) >= 2
+}
+
+fn has_explicit_parallel_scope(request: &MessagesRequest) -> bool {
+    request
+        .messages
+        .iter()
+        .filter(|message| message.get("role").and_then(Value::as_str) == Some("user"))
+        .filter_map(|message| message.get("content").and_then(Value::as_str))
+        .any(|content| count_explicit_blocks(content) >= 2 || contains_parallel_intent(content))
+}
+
+pub(crate) fn independent_scope_count(request: &MessagesRequest) -> usize {
+    let user_text = request
+        .messages
+        .iter()
+        .filter(|message| message.get("role").and_then(Value::as_str) == Some("user"))
+        .filter_map(|message| message.get("content").and_then(Value::as_str))
+        .collect::<Vec<_>>();
+    let Some(content) = user_text.last() else {
+        // A reconstructed request without a user turn cannot be classified safely. Keep the
+        // existing conservative behavior until the next user turn supplies a scope.
+        return 2;
+    };
+    if contains_single_scope_request(content) {
+        return 1;
+    }
+    let explicit_blocks = count_explicit_blocks(content);
+    if explicit_blocks >= 2 {
+        return explicit_blocks;
+    }
+    if contains_parallel_intent(content) {
+        2
+    } else {
+        1
+    }
+}
+
+fn contains_single_scope_request(content: &str) -> bool {
+    let normalized = content.to_ascii_lowercase();
+    [
+        "exactly one",
+        "one worker",
+        "one subagent",
+        "1つのsubagent",
+        "1つのsub agent",
+        "単一",
+    ]
+    .iter()
+    .any(|hint| normalized.contains(hint))
+}
+
+fn contains_parallel_intent(content: &str) -> bool {
+    let normalized = content.to_ascii_lowercase();
+    [
+        "parallel",
+        "multiple",
+        "independent",
+        "in parallel",
+        "複数",
+        "並列",
+        "分担",
+        "各観点",
+        "比較",
+    ]
+    .iter()
+    .any(|hint| normalized.contains(hint))
+}
+
+pub(crate) fn apply_diversity_action(
+    decision: &mut SchedulerDecision,
+    request: &MessagesRequest,
+    config: &SchedulerConfig,
+) {
+    if !has_parallel_scope(request)
+        || decision.active_workers == 0
+        || decision.active_model_families >= config.min_model_families
+    {
         return;
     }
     decision.needs_model_diversity = true;
@@ -117,7 +210,14 @@ pub(crate) fn apply_diversity_action(decision: &mut SchedulerDecision, config: &
     ));
 }
 
-pub(crate) fn apply_reuse_actions(decision: &mut SchedulerDecision, config: &SchedulerConfig) {
+pub(crate) fn apply_reuse_actions(
+    decision: &mut SchedulerDecision,
+    request: &MessagesRequest,
+    config: &SchedulerConfig,
+) {
+    if !has_parallel_scope(request) {
+        return;
+    }
     if config.allow_reuse && decision.has_work() {
         decision.actions.push(
             "Prefer reusing compatible completed workers via SendMessage; add new tasks to the same workers when their context fits."
@@ -147,7 +247,11 @@ pub(crate) fn clear_empty_decision(
     decision: &mut SchedulerDecision,
     snapshot: &core::SubagentSnapshot,
 ) {
-    if snapshot.has_any_workers() || decision.completed_recently > 0 {
+    if snapshot.has_any_workers()
+        || decision.completed_recently > 0
+        || decision.target_workers > 0
+        || decision.needs_more_workers > 0
+    {
         return;
     }
     decision.needs_more_workers = 0;
@@ -187,20 +291,78 @@ pub(crate) fn estimate_target_workers(
     request: &MessagesRequest,
     config: &SchedulerConfig,
 ) -> usize {
-    let explicit_blocks = request
+    let requested_scopes = independent_scope_count(request);
+    let active = snapshot.active_count();
+    // A reconstructed request can contain only an assistant-side advisor call and no
+    // user scope.  Do not turn that metadata-only state into ordinary worker launches.
+    if active == 0
+        && !request
+            .messages
+            .iter()
+            .any(|message| message.get("role").and_then(Value::as_str) == Some("user"))
+    {
+        return 0;
+    }
+    let mut target = active;
+    if target == 0 && needs_single_worker(request) {
+        target = 1;
+    }
+    if requested_scopes >= 2 {
+        target = target.max(requested_scopes);
+        if has_explicit_parallel_scope(request) {
+            target = target.max(config.min_parallel_workers);
+        }
+        target = target.max(snapshot.active_model_families().saturating_add(1));
+    }
+    target.min(config.max_parallel_workers)
+}
+
+fn needs_single_worker(request: &MessagesRequest) -> bool {
+    request
         .messages
         .iter()
         .filter(|message| message.get("role").and_then(Value::as_str) == Some("user"))
         .filter_map(|message| message.get("content").and_then(Value::as_str))
-        .map(count_explicit_blocks)
-        .max()
-        .unwrap_or(0);
-    let active = snapshot.active_count();
-    let mut target = active.max(explicit_blocks);
-    if explicit_blocks >= 2 {
-        target = target.max(snapshot.active_model_families().saturating_add(1));
+        .any(|content| {
+            let normalized = content.to_ascii_lowercase();
+            [
+                "gh ",
+                "git ",
+                "bash",
+                "shell",
+                "command",
+                "http://",
+                "https://",
+                "調査",
+                "取得",
+                "確認",
+                "実行",
+                "修正",
+                "テスト",
+                "review",
+                "research",
+                "investigate",
+                "fetch",
+                "implement",
+                "fix",
+                "test",
+            ]
+            .iter()
+            .any(|hint| normalized.contains(hint))
+        })
+}
+
+pub(crate) fn scope_guidance(
+    request: &MessagesRequest,
+    decision: &SchedulerDecision,
+) -> &'static str {
+    if !has_parallel_scope(request) {
+        if decision.active_workers > 1 {
+            return "Task-shape: one bounded scope detected. Keep exactly one ordinary SubAgent and stop duplicate same-scope workers; selected_workers is a capacity pool, not a launch count.";
+        }
+        return "Task-shape: one bounded or indivisible scope detected. Launch exactly one ordinary SubAgent; selected_workers is a capacity pool, not a launch count.";
     }
-    target.min(config.max_parallel_workers)
+    "Task-shape: multiple independent scopes detected. Launch only the number of non-redundant workers justified by those scopes, then reassess as each completes."
 }
 
 fn count_explicit_blocks(content: &str) -> usize {

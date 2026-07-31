@@ -227,13 +227,25 @@ impl ParallelScheduler {
 
         let mut inner = self.inner.lock().expect("parallel scheduler state");
         let should_reassess = policy::reassessment_due(&inner, &key, now, &config);
-        policy::apply_reassessment_actions(&mut decision, &snapshot, &config, should_reassess);
-        policy::apply_replenishment_target(&mut decision, &snapshot, &config, should_reassess);
+        policy::apply_reassessment_actions(
+            &mut decision,
+            &snapshot,
+            request,
+            &config,
+            should_reassess,
+        );
+        policy::apply_replenishment_target(
+            &mut decision,
+            &snapshot,
+            request,
+            &config,
+            should_reassess,
+        );
         let effective_target = decision.target_workers;
         policy::apply_capacity_actions(&mut decision, effective_target, &config);
-        policy::apply_floor_action(&mut decision, &config);
-        policy::apply_diversity_action(&mut decision, &config);
-        policy::apply_reuse_actions(&mut decision, &config);
+        policy::apply_floor_action(&mut decision, request, &config);
+        policy::apply_diversity_action(&mut decision, request, &config);
+        policy::apply_reuse_actions(&mut decision, request, &config);
         policy::clear_empty_decision(&mut decision, &snapshot);
         policy::persist_thread(
             &mut inner,
@@ -267,7 +279,11 @@ impl ParallelScheduler {
     pub(crate) fn guidance_for_request(&self, request: &MessagesRequest) -> String {
         let decision = self.decision_for_request(request);
         let config = self.config();
-        decision.guidance(&config)
+        format!(
+            "{}\n{}",
+            policy::scope_guidance(request, &decision),
+            decision.guidance(&config)
+        )
     }
 }
 

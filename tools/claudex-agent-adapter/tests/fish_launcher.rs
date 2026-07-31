@@ -19,9 +19,8 @@ fn fish_launcher_keeps_command_tools_available_for_new_and_resumed_sessions() {
 
     let fresh = run_fish_launcher(&function, &home, "claudex command-tool-smoke");
     assert_command_tools_are_not_filtered(&fresh);
-    assert!(fresh.ends_with(
-        "--\n--agent\nclaudex-orchestrator\n--allowedTools\nWebSearch,WebFetch\ncommand-tool-smoke\n"
-    ));
+    assert!(fresh.ends_with("--\n--allowedTools\nWebSearch,WebFetch\ncommand-tool-smoke\n"));
+    assert_no_implicit_agent(&fresh);
 
     let resumed = run_fish_launcher(
         &function,
@@ -30,8 +29,9 @@ fn fish_launcher_keeps_command_tools_available_for_new_and_resumed_sessions() {
     );
     assert_command_tools_are_not_filtered(&resumed);
     assert!(resumed.ends_with(
-        "--\n--agent\nclaudex-orchestrator\n--resume\nretained-session\n--allowedTools\nBash(git *),Bash(gh *)\nresume-command-tool-smoke\n"
+        "--\n--resume\nretained-session\n--allowedTools\nBash(git *),Bash(gh *)\nresume-command-tool-smoke\n"
     ));
+    assert_no_implicit_agent(&resumed);
 }
 
 fn run_fish_launcher(
@@ -64,6 +64,13 @@ fn assert_command_tools_are_not_filtered(arguments: &str) {
             "launcher unexpectedly filters command tools with {forbidden:?}: {arguments}"
         );
     }
+}
+
+fn assert_no_implicit_agent(arguments: &str) {
+    assert!(
+        !arguments.contains("--agent\n"),
+        "the default launcher must not force an orchestrator agent: {arguments}"
+    );
 }
 
 fn shared_provider_fixture() -> tempfile::TempDir {
@@ -126,9 +133,8 @@ fn assert_shared_provider_default(function: &std::path::Path, home: &tempfile::T
     assert!(arguments.contains("--inherit-claude-model\n"));
     assert!(arguments.contains("--subscription-max-processes\n20\n"));
     assert!(arguments.contains("--allowedTools\nWebSearch,WebFetch\n"));
-    assert!(arguments.ends_with(
-        "--\n--agent\nclaudex-orchestrator\n--allowedTools\nWebSearch,WebFetch\nsmoke\n"
-    ));
+    assert!(arguments.ends_with("--\n--allowedTools\nWebSearch,WebFetch\nsmoke\n"));
+    assert_no_implicit_agent(&arguments);
     assert!(String::from_utf8_lossy(&output.stderr).contains("settings sonnet[1m], high"));
 }
 
@@ -158,10 +164,9 @@ fn assert_explicit_override(function: &std::path::Path, home: &tempfile::TempDir
     assert!(arguments.contains("--allowedTools\nWebSearch,WebFetch\n"));
     assert!(
         arguments
-            .ends_with(
-                "--\n--agent\nclaudex-orchestrator\n--effort\nhigh\n--allowedTools\nWebSearch,WebFetch\noverride-smoke\n"
-            )
+            .ends_with("--\n--effort\nhigh\n--allowedTools\nWebSearch,WebFetch\noverride-smoke\n")
     );
+    assert_no_implicit_agent(&arguments);
 }
 
 fn assert_local_defaults(function: &std::path::Path, home: &tempfile::TempDir) {
@@ -269,9 +274,8 @@ fn fish_launcher_uses_claude_settings_model_and_effort_when_available() {
         "--provider-config\n{}\n",
         home.path().join(".config/claudex/providers.json").display()
     )));
-    assert!(arguments.ends_with(
-        "--\n--agent\nclaudex-orchestrator\n--allowedTools\nWebSearch,WebFetch\nsettings-smoke\n"
-    ));
+    assert!(arguments.ends_with("--\n--allowedTools\nWebSearch,WebFetch\nsettings-smoke\n"));
+    assert_no_implicit_agent(&arguments);
     assert!(String::from_utf8_lossy(&output.stderr).contains("settings sonnet[1m], high"));
 }
 
@@ -527,8 +531,6 @@ fn assert_no_argument_launch(function: &std::path::Path, home: &tempfile::TempDi
     );
     let arguments = String::from_utf8(output.stdout).expect("UTF-8 adapter arguments");
     assert!(arguments.contains("--model\nmodel\n"));
-    assert!(
-        arguments
-            .ends_with("--\n--agent\nclaudex-orchestrator\n--allowedTools\nWebSearch,WebFetch\n")
-    );
+    assert!(arguments.ends_with("--\n--allowedTools\nWebSearch,WebFetch\n"));
+    assert_no_implicit_agent(&arguments);
 }

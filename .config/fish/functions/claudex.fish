@@ -200,15 +200,12 @@ print(model)
     set -l claude_args $argv
     set -l has_cli_effort 0
     set -l has_allowed_tools 0
-    set -l has_agent 0
     for argument in $argv
         switch $argument
             case --effort '--effort=*'
                 set has_cli_effort 1
             case --allowedTools --allowed-tools '--allowedTools=*' '--allowed-tools=*'
                 set has_allowed_tools 1
-            case --agent '--agent=*'
-                set has_agent 1
         end
     end
     # Native web tools are returned by the adapter and executed by this outer Claude Code process.
@@ -224,10 +221,9 @@ print(model)
             set -p claude_args --effort "$outer_effort"
         end
     end
-    # Always load the coordinator instructions unless the caller explicitly
-    # selected another agent. This makes SubAgent-first orchestration a launch
-    # invariant instead of relying only on the prompt hook metadata.
-    test $has_agent -eq 1; or set -p claude_args --agent claudex-orchestrator
+    # Do not inject a fixed Claude Code agent/session name. The routing hook and
+    # project instructions provide orchestration policy without changing the
+    # user's session label; an explicit --agent argument remains untouched.
     set -lx CLAUDEX_MAIN_MODEL "$main_model"
     if test "$defaults_source" = settings
         echo "claudex: settings-routed orchestration ($provider_config, bootstrap $main_model; settings $settings_model, $settings_effort)" >&2
