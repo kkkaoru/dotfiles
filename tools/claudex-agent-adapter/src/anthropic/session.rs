@@ -159,13 +159,12 @@ impl Bridge {
             return Ok(selected);
         }
         // Claude Code can omit the unchanged tool schemas on an ordinary
-        // resumed main-session request.  The schemas belong to the provider
+        // resumed main or SubAgent request. The schemas belong to the provider
         // thread, so cold-starting here would replace the previous complete
         // capability set (for example `Bash`) with only the fallback tools.
         // Reuse only a tool-less continuation whose model, client identity,
-        // and transcript all match an idle main session.
+        // and transcript all match an idle session.
         if request.tools.is_empty()
-            && !super::agent_effort::is_subagent_request(request)
             && let Some(selected) = continuation::select_toolless_main_session(self, request).await
         {
             return Ok(selected);

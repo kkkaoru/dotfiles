@@ -934,6 +934,63 @@ async fn toolless_main_continuation_reuses_the_session_with_bash_schema() {
 }
 
 #[tokio::test]
+async fn toolless_subagent_continuation_reuses_the_session_with_bash_schema() {
+    let bridge = Bridge::new_with_backend(AgentBackend::spawn_routes(&[]), "main".to_owned());
+    let mut initial = request(
+        json!("cc_is_subagent=true\n<claudex-agent-id>toolu_command_probe</claudex-agent-id>"),
+        vec![json!({
+            "name":"Bash",
+            "description":"run shell commands",
+            "input_schema":{"type":"object"}
+        })],
+    );
+    initial.metadata = json!({"user_id":"continued-subagent"});
+    initial.messages = vec![
+        json!({"role":"user","content":"run gh pr view"}),
+        json!({"role":"assistant","content":[{"type":"text","text":"I will run it."}]}),
+    ];
+    let (_, external_tools, _) = tool_configuration(&initial, None, None);
+    let bash_dynamic_name = external_tools
+        .iter()
+        .find_map(|(dynamic, original)| (original == "Bash").then_some(dynamic.clone()))
+        .expect("initial subagent session exposes Bash");
+    let initial_signature = bridge.intern_signature(format!(
+        "{}\0{}",
+        bridge.request_model(&initial),
+        crate::anthropic::content::request_signature(&initial, None, None)
+            .expect("initial request signature")
+    ));
+    let mut retained = session_for_model("main", &initial_signature, initial.messages.clone());
+    let retained_session = Arc::get_mut(&mut retained).expect("session is not yet shared");
+    retained_session.external_tool_names = external_tools;
+    retained_session.client_user_id = Some("continued-subagent".to_owned());
+    bridge.sessions.lock().await.push(Arc::clone(&retained));
+
+    let mut continued = initial.clone();
+    continued.tools.clear();
+    continued
+        .messages
+        .push(json!({"role":"user","content":"now run gh pr view again"}));
+    let continued_signature = bridge.intern_signature(format!(
+        "{}\0{}",
+        bridge.request_model(&continued),
+        crate::anthropic::content::request_signature(&continued, None, None)
+            .expect("tool-less continuation signature")
+    ));
+
+    let selected = bridge
+        .select_session(&continued, continued_signature, None, None, &[])
+        .await
+        .expect("tool-less subagent continuation reuses the routed thread");
+    assert!(Arc::ptr_eq(&selected.session, &retained));
+    assert_eq!(selected.existing_len, initial.messages.len());
+    assert_eq!(
+        selected.session.external_tool_names.get(&bash_dynamic_name),
+        Some(&"Bash".to_owned())
+    );
+}
+
+#[tokio::test]
 async fn reserves_only_idle_matching_sessions_for_parallel_requests() {
     let message = json!({"role":"user","content":"parallel"});
     let active = session("signature", Vec::new());

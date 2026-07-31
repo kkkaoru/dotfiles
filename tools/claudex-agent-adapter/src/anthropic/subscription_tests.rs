@@ -74,6 +74,48 @@ fn streaming_subscription_bridges_native_web_tools_to_the_outer_session() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn subscription_fallback_child_executes_the_bash_git_and_gh_probe() {
+    let directory = tempfile::tempdir().expect("create subscription command fixture directory");
+    let program = directory.path().join("subscription-command-fixture.sh");
+    fs::write(
+        &program,
+        r#"#!/bin/sh
+set -eu
+tools=""
+allowed_tools=""
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --tools) tools="$2"; shift 2 ;;
+        --allowedTools) allowed_tools="$2"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+case ",$tools," in *,Bash,*) ;; *) exit 21 ;; esac
+case ",$allowed_tools," in *,Bash,*) ;; *) exit 22 ;; esac
+cat >/dev/null
+git --version >/dev/null
+gh --version >/dev/null
+printf '%s\n' '{"type":"result","subtype":"success","result":"SUBSCRIPTION_COMMAND_PROBE_OK"}'
+"#,
+    )
+    .expect("write subscription command fixture");
+    fs::set_permissions(&program, fs::Permissions::from_mode(0o755))
+        .expect("make subscription command fixture executable");
+    let mut options = SubscriptionOptions::internal(
+        Arc::new(tokio::sync::Semaphore::new(1)),
+        Duration::from_secs(5),
+    );
+    options.tools = vec!["Bash".to_owned()];
+
+    let result = run_subscription_model(&program, "claude-sonnet-5", "command probe", options)
+        .await
+        .expect("subscription child must receive Bash and execute git and gh");
+
+    assert_eq!(result, "SUBSCRIPTION_COMMAND_PROBE_OK");
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn terminating_a_subscription_reaps_its_entire_process_group() {
     let directory = tempfile::tempdir().expect("create process fixture directory");
     let program = directory.path().join("subscription-fixture.sh");

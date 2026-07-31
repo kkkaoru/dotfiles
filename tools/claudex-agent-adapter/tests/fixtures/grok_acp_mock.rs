@@ -194,12 +194,19 @@ impl MockAgent {
         &self,
         request: acp::PromptRequest,
     ) -> acp::Result<acp::PromptResponse> {
+        let fields = if self.mode == "command-probe" {
+            acp::ToolCallUpdateFields::new()
+                .kind(acp::ToolKind::Execute)
+                .title("Run harmless git and gh command probe")
+                .raw_input(serde_json::json!({
+                    "command":"command -v git && command -v gh"
+                }))
+        } else {
+            acp::ToolCallUpdateFields::new().title("Mock tool")
+        };
         let permission = acp::RequestPermissionRequest::new(
             request.session_id.clone(),
-            acp::ToolCallUpdate::new(
-                "tool-call",
-                acp::ToolCallUpdateFields::new().title("Mock tool"),
-            ),
+            acp::ToolCallUpdate::new("tool-call", fields),
             vec![
                 acp::PermissionOption::new(
                     "allow-once",
@@ -220,7 +227,19 @@ impl MockAgent {
         let permission_response = permission_rx
             .await
             .map_err(|_| acp::Error::internal_error())??;
-        self.record("permission_response", permission_response)?;
+        self.record("permission_response", &permission_response)?;
+        if self.mode == "command-probe" {
+            let result = permission_was_approved(&permission_response)
+                .then(command_probe_result)
+                .unwrap_or("ACP_COMMAND_PROBE_DENIED");
+            self.record("command_probe", result)?;
+            self.notify(
+                request.session_id,
+                acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(result.into())),
+            )
+            .await?;
+            return Ok(acp::PromptResponse::new(acp::StopReason::EndTurn));
+        }
         for update in [
             acp::SessionUpdate::UserMessageChunk(acp::ContentChunk::new(acp::ContentBlock::Text(
                 acp::TextContent::new("ignored user"),
@@ -242,6 +261,29 @@ impl MockAgent {
         )
         .await?;
         Ok(acp::PromptResponse::new(acp::StopReason::EndTurn))
+    }
+}
+
+fn permission_was_approved(response: &acp::RequestPermissionResponse) -> bool {
+    matches!(
+        &response.outcome,
+        acp::RequestPermissionOutcome::Selected(selected)
+            if selected.option_id.0.as_ref() == "allow-once"
+    )
+}
+
+fn command_probe_result() -> &'static str {
+    let succeeded = std::process::Command::new("sh")
+        .args([
+            "-c",
+            "command -v git >/dev/null && command -v gh >/dev/null && printf ACP_COMMAND_PROBE_OK >/dev/null",
+        ])
+        .status()
+        .is_ok_and(|status| status.success());
+    if succeeded {
+        "ACP_COMMAND_PROBE_OK"
+    } else {
+        "ACP_COMMAND_PROBE_UNAVAILABLE"
     }
 }
 

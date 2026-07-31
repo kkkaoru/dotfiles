@@ -1,9 +1,21 @@
+#[allow(dead_code)]
+mod support;
+
 use std::{
     fs,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
+use claudex_agent_adapter::{
+    agent_backend::{AcpLaunch, AgentBackend, BackendKind, BackendRoute, WebSearchMode},
+    anthropic::Bridge,
+    http_router,
+};
+use reqwest::Client;
 use serde_json::Value;
+use serde_json::json;
+use support::{Adapter, post_json};
 
 fn repository_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -198,4 +210,107 @@ fn configured_worker_routes_are_command_capable() {
         fallback["model"].as_str().expect("fallback worker model"),
         fallback["effort"].as_str().expect("fallback worker effort"),
     );
+}
+
+#[tokio::test]
+async fn codex_subagent_child_exposes_bash_and_accepts_a_harmless_git_gh_result() {
+    let adapter = Adapter::start().await;
+    let client = Client::new();
+    let url = format!("{}/v1/messages", adapter.base_url);
+    let system = "cc_is_subagent=true\n<claudex-agent-id>toolu_command_probe</claudex-agent-id>";
+    let initial = post_json(
+        &client,
+        &url,
+        json!({
+            "model":"test-main-model", "system":system,
+            "tools":[bash_tool()],
+            "messages":[{"role":"user","content":"USE_COMMAND_TOOL"}]
+        }),
+    )
+    .await;
+    let tool = initial["content"]
+        .as_array()
+        .and_then(|content| content.first())
+        .expect("Codex child must request the supplied Bash tool");
+    assert_eq!(tool["type"], "tool_use");
+    assert_eq!(tool["name"], "Bash");
+    assert_eq!(
+        tool["input"]["command"],
+        "command -v git >/dev/null && command -v gh >/dev/null && printf CLAUDEX_COMMAND_PROBE_OK"
+    );
+
+    let completed = post_json(
+        &client,
+        &url,
+        json!({
+            "model":"test-main-model", "system":system,
+            "messages":[
+                {"role":"user","content":"USE_COMMAND_TOOL"},
+                {"role":"assistant","content":initial["content"]},
+                {"role":"user","content":[{
+                    "type":"tool_result", "tool_use_id":tool["id"],
+                    "content":"CLAUDEX_COMMAND_PROBE_OK"
+                }]}
+            ]
+        }),
+    )
+    .await;
+    assert_eq!(completed["content"][0]["text"], "CLAUDEX_COMMAND_PROBE_OK");
+}
+
+#[tokio::test]
+async fn configured_acp_subagent_approves_and_executes_the_git_gh_probe() {
+    let model = "command-probe-model";
+    let backend = AgentBackend::spawn_routes(&[BackendRoute {
+        model: model.to_owned(),
+        backend: BackendKind::ConfiguredAcp,
+        model_provider: None,
+        model_catalog_json: None,
+        max_context_tokens: None,
+        max_concurrency: None,
+        model_prefixes: Vec::new(),
+        acp: Some(AcpLaunch {
+            program: env!("CARGO_BIN_EXE_grok-acp-mock").to_owned(),
+            arguments: vec!["--mode".to_owned(), "command-probe".to_owned()],
+        }),
+        web_search_mode: WebSearchMode::default(),
+    }]);
+    let bridge = Arc::new(Bridge::new_with_backend(
+        Arc::clone(&backend),
+        model.to_owned(),
+    ));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind configured ACP command adapter");
+    let url = format!(
+        "http://{}/v1/messages",
+        listener.local_addr().expect("adapter address")
+    );
+    let server = tokio::spawn(async move {
+        axum::serve(listener, http_router(bridge, model.to_owned(), None))
+            .await
+            .expect("serve configured ACP command adapter");
+    });
+
+    let response = post_json(
+        &Client::new(),
+        &url,
+        json!({
+            "model":model,
+            "system":"cc_is_subagent=true\n<claudex-agent-id>toolu_acp_command_probe</claudex-agent-id>",
+            "messages":[{"role":"user","content":"Run the command capability probe."}]
+        }),
+    )
+    .await;
+    assert_eq!(response["content"][0]["text"], "ACP_COMMAND_PROBE_OK");
+
+    server.abort();
+    backend.shutdown().await;
+}
+
+fn bash_tool() -> Value {
+    json!({
+        "name":"Bash", "description":"run shell commands",
+        "input_schema":{"type":"object","properties":{"command":{"type":"string"}}}
+    })
 }

@@ -2,6 +2,7 @@ use std::{
     fs,
     io::{self, BufRead, Write},
     path::PathBuf,
+    process::Command,
     thread,
     time::Duration,
 };
@@ -16,6 +17,7 @@ struct Fixture<W> {
     parallel_thread_id: Option<String>,
     team_guidance: bool,
     orchestrator_mode: bool,
+    command_capable: bool,
     disconnected_tool_drained: bool,
     disconnect_marker: Option<PathBuf>,
 }
@@ -54,6 +56,7 @@ impl<W: Write> Fixture<W> {
                 self.team_guidance = instructions.contains("named teammate's name");
                 self.orchestrator_mode =
                     instructions.contains("main-session orchestration mode is active");
+                self.command_capable = command_capability(message);
                 self.next_thread += 1;
                 self.send(json!({
                     "id":message["id"], "result":{"thread":{"id":self.thread_id()}}
@@ -153,7 +156,33 @@ impl<W: Write> Fixture<W> {
     }
 
     fn run_control_scenario(&mut self, message: &Value, input: &str) -> bool {
-        if input.contains("CONTROL_SUBAGENTS_TASK_OUTPUT") {
+        if input.contains("FOLLOW_UP_LAUNCH_AGENT") {
+            self.send_control_tool(
+                message,
+                "call-follow-up-agent",
+                "cc_Agent_0",
+                json!({
+                    "description":"follow-up implementation",
+                    "prompt":"perform the newly requested independent follow-up",
+                    "subagent_type":"general-purpose",
+                    "run_in_background":true,
+                    "claudex_model":"test-main-model"
+                }),
+            );
+        } else if input.contains("FOLLOW_UP_REUSE_AGENT") {
+            self.send_control_tool(
+                message,
+                "call-follow-up-reuse",
+                "cc_SendMessage_3",
+                json!({
+                    "to":"agent-profile-7",
+                    "summary":"continue the related investigation",
+                    "message":"Incorporate the new instruction and report the delta."
+                }),
+            );
+        } else if input.contains("FOLLOW_UP_NO_AGENT") {
+            self.send_text_and_complete("FOLLOW_UP_NO_AGENT_LAUNCHED");
+        } else if input.contains("CONTROL_SUBAGENTS_TASK_OUTPUT") {
             self.send_control_tool(
                 message,
                 "call-control-output",
@@ -435,6 +464,23 @@ impl<W: Write> Fixture<W> {
     }
 
     fn send_tool(&mut self, tool: &str, input: &str) {
+        if tool.contains("Bash") {
+            if !self.command_capable || !command_probe_succeeds() {
+                self.send_text_and_complete("COMMAND_TOOL_UNAVAILABLE");
+                return;
+            }
+            self.pending_tool = true;
+            self.send(json!({
+                "id":900, "method":"item/tool/call",
+                "params":{
+                    "threadId":self.thread_id(), "turnId":"turn-test", "callId":"call-command",
+                    "tool":tool,
+                    "arguments":{"command":"command -v git >/dev/null && command -v gh >/dev/null && printf CLAUDEX_COMMAND_PROBE_OK"}
+                }
+            }));
+            self.send_response_item_completed("call-command", tool);
+            return;
+        }
         self.pending_tool = true;
         let arguments = if tool.contains("Agent") && input.contains("USE_AGENT_DEFAULT") {
             json!({
@@ -686,9 +732,41 @@ fn requested_tool(input: &str) -> Option<&'static str> {
         Some("cc_Agent_0")
     } else if input.contains("USE_TOOL") {
         Some("lookup")
+    } else if input.contains("USE_COMMAND_TOOL") {
+        Some("cc_Bash_0")
     } else {
         None
     }
+}
+
+fn command_capability(message: &Value) -> bool {
+    let features = message.pointer("/params/config/features");
+    let shell_features_enabled = ["shell_tool", "unified_exec", "tool_search"]
+        .into_iter()
+        .all(|name| features.and_then(|features| features.get(name)) == Some(&json!(true)));
+    let bash_schema_present = message
+        .pointer("/params/dynamicTools")
+        .and_then(Value::as_array)
+        .is_some_and(|tools| {
+            tools.iter().any(|tool| {
+                tool.get("name").and_then(Value::as_str) == Some("cc_Bash_0")
+                    && tool
+                        .get("description")
+                        .and_then(Value::as_str)
+                        .is_some_and(|description| description.contains("tool `Bash`"))
+            })
+        });
+    shell_features_enabled && bash_schema_present
+}
+
+fn command_probe_succeeds() -> bool {
+    Command::new("sh")
+        .args([
+            "-c",
+            "command -v git >/dev/null && command -v gh >/dev/null && printf CLAUDEX_COMMAND_PROBE_OK >/dev/null",
+        ])
+        .status()
+        .is_ok_and(|status| status.success())
 }
 
 fn disconnect_marker_from_input(input: &str) -> Option<PathBuf> {
@@ -729,6 +807,7 @@ fn main() {
         parallel_thread_id: None,
         team_guidance: false,
         orchestrator_mode: false,
+        command_capable: false,
         disconnected_tool_drained: false,
         disconnect_marker: None,
     };
