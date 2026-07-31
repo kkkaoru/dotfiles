@@ -1,6 +1,5 @@
 use std::{
     ffi::OsString,
-    fs::{self, OpenOptions},
     io::{BufRead, BufReader, Write},
     net::SocketAddr,
     path::PathBuf,
@@ -16,6 +15,7 @@ use uuid::Uuid;
 mod claude_process;
 mod daemon_arguments;
 mod daemon_process;
+mod daemon_start;
 mod handover;
 mod launcher_lock;
 mod launcher_logs;
@@ -24,10 +24,12 @@ use crate::{
     working_directory,
 };
 use claude_process::ClaudeProcess;
+#[cfg(test)]
+use daemon_arguments::daemon_arguments;
 use daemon_arguments::{
-    daemon_arguments, route_descriptions, search_worker_route_descriptions,
-    worker_route_descriptions,
+    route_descriptions, search_worker_route_descriptions, worker_route_descriptions,
 };
+use daemon_start::start_adapter;
 use handover::ServiceState;
 
 const LOCAL_TOKEN: &str = "claudex-local";
@@ -298,47 +300,6 @@ async fn fetch_health(client: &reqwest::Client, config: &ServiceConfig) -> Optio
         .json()
         .await
         .ok()
-}
-
-fn start_adapter(config: &ServiceConfig) -> Result<u32> {
-    let log_dir = config
-        .log_path
-        .parent()
-        .context("adapter log has no parent")?;
-    fs::create_dir_all(log_dir).context("create adapter log directory")?;
-    launcher_logs::archive_previous_log(&config.log_path)?;
-    let mut stdout = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(&config.log_path)
-        .context("open adapter log")?;
-    launcher_logs::write_adapter_log_header(
-        &mut stdout,
-        &config.options.model,
-        &config.options.listen,
-        config.token.len(),
-    )?;
-    let stdout = stdout;
-    let stderr = stdout.try_clone().context("clone adapter log handle")?;
-    let mut command = Command::new("nohup");
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        command.process_group(0);
-    }
-    let child = crate::path_env::apply_daemon_env(
-        command
-            .arg(&config.executable)
-            .args(daemon_arguments(&config.options)),
-        &config.token,
-    )
-    .stdin(Stdio::null())
-    .stdout(Stdio::from(stdout))
-    .stderr(Stdio::from(stderr))
-    .spawn()
-    .context("start adapter daemon")?;
-    Ok(child.id())
 }
 
 async fn wait_until_ready(client: &reqwest::Client, config: &ServiceConfig) -> Result<()> {

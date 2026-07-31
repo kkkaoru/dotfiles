@@ -579,6 +579,40 @@ mod tests {
         assert!(start_adapter(&config).is_err());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn starts_a_detached_daemon_with_the_configured_arguments() {
+        let root = tempfile::tempdir().expect("daemon start fixture");
+        let arguments = root.path().join("arguments");
+        let executable = root.path().join("daemon.sh");
+        std::fs::write(
+            &executable,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" > '{}'\n",
+                arguments.to_string_lossy()
+            ),
+        )
+        .expect("daemon script");
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755))
+            .expect("daemon executable");
+
+        let mut config = config();
+        config.executable = executable;
+        config.log_path = root.path().join("adapter.log");
+        let _pid = start_adapter(&config).expect("start detached daemon");
+
+        for _ in 0..100 {
+            if arguments.exists() {
+                break;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        let arguments = std::fs::read_to_string(arguments).expect("daemon arguments");
+        assert!(arguments.contains("serve\n"));
+        assert!(arguments.contains("--model\ntest-model\n"));
+        assert!(config.log_path.exists());
+    }
+
     #[tokio::test]
     async fn readiness_waits_for_matching_authenticated_health() {
         let listener = TcpListener::bind("127.0.0.1:0").expect("readiness listener");
