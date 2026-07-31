@@ -28,6 +28,16 @@ fn tools() -> Value {
                 },
                 "required":["task_id"]
             }
+        },
+        {
+            "name":"TaskStop", "description":"Stop a running background task",
+            "input_schema":{
+                "type":"object",
+                "properties":{
+                    "task_id":{"type":"string"}, "reason":{"type":"string"}
+                },
+                "required":["task_id"]
+            }
         }
     ])
 }
@@ -124,4 +134,55 @@ async fn preserves_parallel_agent_ids_for_follow_up_task_output_calls() {
         "PARALLEL_AGENT_RESULTS_COMPLETE"
     );
     assert_eq!(completed["stop_reason"], "end_turn");
+}
+
+#[tokio::test]
+async fn main_user_follow_up_controls_running_subagents_on_a_fresh_session() {
+    let _ = Adapter::start_authenticated;
+    let _ = support::base_request();
+    let adapter = Adapter::start().await;
+    let client = Client::new();
+    let url = format!("{}/v1/messages", adapter.base_url);
+    let user = json!({
+        "role":"user",
+        "content":concat!(
+            "USE_PARALLEL_AGENTS_TASK_OUTPUT\n",
+            "Claudex routing for this turn: ",
+            r#"{"providers":{},"selected_agents":["general-purpose"],"selected_workers":[{"agent":"general-purpose","model":"test-main-model"}]}"#,
+            " mandatory policy"
+        )
+    });
+
+    let launched = post_json(&client, &url, request(json!([user.clone()]))).await;
+    assert_eq!(launched["stop_reason"], "tool_use");
+    assert_eq!(launched["content"].as_array().unwrap().len(), 3);
+
+    let control = post_json(
+        &client,
+        &url,
+        request(json!([
+            user.clone(),
+            {"role":"assistant","content":launched["content"]},
+            {"role":"user","content":"CONTROL_SUBAGENTS_STOP: stop the profile worker now"}
+        ])),
+    )
+    .await;
+    assert_eq!(control["stop_reason"], "tool_use");
+    assert_eq!(control["content"][0]["name"], "TaskStop");
+    assert_eq!(control["content"][0]["input"]["task_id"], "agent-profile-7");
+
+    let stopped = post_json(
+        &client,
+        &url,
+        request(json!([
+            user,
+            {"role":"assistant","content":launched["content"]},
+            {"role":"user","content":"CONTROL_SUBAGENTS_STOP: stop the profile worker now"},
+            {"role":"assistant","content":control["content"]},
+            {"role":"user","content":tool_results(&control, &["stop delivered"])}
+        ])),
+    )
+    .await;
+    assert_eq!(stopped["content"][0]["text"], "stop delivered");
+    assert_eq!(stopped["stop_reason"], "end_turn");
 }

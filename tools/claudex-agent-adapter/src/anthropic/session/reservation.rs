@@ -20,6 +20,9 @@ pub(super) async fn reserve_matching_session(
         let Ok(gate) = Arc::clone(&session.gate).try_lock_owned() else {
             continue;
         };
+        if !session.pending_tools.lock().await.is_empty() {
+            continue;
+        }
         let Some(existing_len) = candidate_length(&session, signature, messages).await else {
             continue;
         };
@@ -236,6 +239,23 @@ mod tests {
         assert!(gate.clone().try_lock_owned().is_err());
         drop(_hold);
         assert!(gate.try_lock_owned().is_ok());
+    }
+
+    #[tokio::test]
+    async fn reserve_skips_a_session_with_pending_subagent_tools() {
+        let session = Arc::new(session("main", Some("client")));
+        session
+            .pending_tools
+            .lock()
+            .await
+            .insert("tool-1".to_owned(), json!(1));
+        let selected = reserve_matching_session(
+            vec![session],
+            &Arc::from("signature"),
+            &[json!({"role":"user","content":"follow-up"})],
+        )
+        .await;
+        assert!(selected.is_none());
     }
 
     #[tokio::test]

@@ -13,6 +13,7 @@ struct Fixture<W> {
     next_thread: u64,
     pending_tool: bool,
     parallel_agents: Option<ParallelAgents>,
+    parallel_thread_id: Option<String>,
     team_guidance: bool,
     disconnected_tool_drained: bool,
     disconnect_marker: Option<PathBuf>,
@@ -127,8 +128,10 @@ impl<W: Write> Fixture<W> {
             self.send_web_search();
         } else if input.contains("USE_NAMED_TEAM_MAILBOX") {
             self.send_named_teammate();
+        } else if input.contains("CONTROL_SUBAGENTS_STOP") {
+            self.send_control_tool(message);
         } else if input.contains("USE_PARALLEL_AGENTS_TASK_OUTPUT") {
-            self.send_parallel_agents();
+            self.send_parallel_agents(message);
         } else if input.contains("USE_PARALLEL_TOOLS") {
             self.send_delayed_parallel_tools();
         } else if input.contains("USE_INTERLEAVED_TOOLS") {
@@ -234,9 +237,13 @@ impl<W: Write> Fixture<W> {
         self.send_tool_event(901, "call-test-b");
     }
 
-    fn send_parallel_agents(&mut self) {
+    fn send_parallel_agents(&mut self, message: &Value) {
         self.pending_tool = true;
         self.parallel_agents = Some(ParallelAgents::default());
+        self.parallel_thread_id = message
+            .pointer("/params/threadId")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
         for (id, name) in [(910, "profile"), (911, "business"), (912, "funding")] {
             self.send(json!({
                 "id":id, "method":"item/tool/call",
@@ -251,6 +258,34 @@ impl<W: Write> Fixture<W> {
                 }
             }));
         }
+    }
+
+    fn send_control_tool(&mut self, message: &Value) {
+        let thread_id = message.pointer("/params/threadId").and_then(Value::as_str);
+        if self.parallel_agents.is_some() && self.parallel_thread_id.as_deref() == thread_id {
+            self.send(json!({
+                "method":"error",
+                "params":{
+                    "threadId":message.pointer("/params/threadId"),
+                    "turnId":"turn-test", "willRetry":false,
+                    "error":{"message":"active SubAgent turn still owns this thread"}
+                }
+            }));
+            return;
+        }
+        self.pending_tool = true;
+        self.send(json!({
+            "id":900, "method":"item/tool/call",
+            "params":{
+                "threadId":thread_id, "turnId":"turn-test",
+                "callId":"call-control-stop", "tool":"cc_TaskStop_2",
+                "arguments":{
+                    "task_id":"agent-profile-7",
+                    "reason":"user requested that the main session stop this SubAgent"
+                }
+            }
+        }));
+        self.send_response_item_completed("call-control-stop", "cc_TaskStop_2");
     }
 
     fn send_named_teammate(&mut self) {
@@ -613,6 +648,7 @@ fn main() {
         next_thread: 0,
         pending_tool: false,
         parallel_agents: None,
+        parallel_thread_id: None,
         team_guidance: false,
         disconnected_tool_drained: false,
         disconnect_marker: None,
