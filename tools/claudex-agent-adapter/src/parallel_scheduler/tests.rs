@@ -61,7 +61,7 @@ fn evaluates_subagent_floor_and_reuse_signals() {
     let first = scheduler.decision_for_request(&state);
     assert_eq!(first.active_workers, 1);
     assert!(first.active_floor_breached);
-    assert_eq!(first.needs_more_workers, 2);
+    assert_eq!(first.needs_more_workers, 1);
     assert!(first.guidance(&scheduler.config()).contains("Re-evaluate"));
 }
 
@@ -263,7 +263,7 @@ fn one_active_worker_triggers_interruption_and_replacement_protocol() {
     let decision = scheduler.decision_for_request(&second);
     assert_eq!(decision.active_workers, 1);
     assert!(decision.active_floor_breached);
-    assert!(decision.needs_more_workers >= 2);
+    assert!(decision.needs_more_workers >= 1);
     let guidance = decision.guidance(&scheduler.config());
     assert!(guidance.contains("Only one active lane remains"));
     assert!(guidance.contains("re-issue same-scope"));
@@ -292,7 +292,7 @@ fn stale_single_worker_is_replaced_on_reassessment_tick() {
     let decision = scheduler.decision_for_request(&steady);
     assert_eq!(decision.active_workers, 1);
     assert!(decision.active_floor_breached);
-    assert!(decision.needs_more_workers >= 2);
+    assert!(decision.needs_more_workers >= 1);
     let guidance = decision.guidance(&scheduler.config());
     assert!(guidance.contains("Re-evaluate"));
     assert!(guidance.contains("interrupt stale work"));
@@ -438,7 +438,7 @@ fn when_one_active_worker_remains_prompt_interrupts_and_replaces() {
     assert_eq!(decision.active_workers, 1);
     assert_eq!(decision.completed_recently, 3);
     assert!(decision.active_floor_breached);
-    assert!(decision.needs_more_workers >= 2);
+    assert!(decision.needs_more_workers >= 1);
     assert!(
         decision
             .actions
@@ -467,7 +467,7 @@ fn increases_floor_with_explicit_request_structure() {
         }),
     ]);
     let decision = scheduler.decision_for_request(&request);
-    assert!(decision.target_workers > 3);
+    assert_eq!(decision.target_workers, 3);
     assert_eq!(
         decision.needs_more_workers,
         decision.target_workers - decision.active_workers
@@ -477,6 +477,59 @@ fn increases_floor_with_explicit_request_structure() {
             .guidance(&scheduler.config())
             .contains("target concurrency is")
     );
+}
+
+#[test]
+fn leaves_a_single_indivisible_lane_steady_between_rebalance_events() {
+    let scheduler = ParallelScheduler::for_tests();
+    let state = messages(&[serde_json::json!({
+        "role":"assistant",
+        "content":[tool_use("t1","cc_Agent_0","gpt-5.6-sol")],
+    })]);
+    let initial = scheduler.decision_for_request(&state);
+    assert_eq!(
+        initial.target_workers, 2,
+        "initial tick establishes the floor"
+    );
+
+    let steady = scheduler.decision_for_request(&state);
+    assert_eq!(steady.active_workers, 1);
+    assert_eq!(steady.target_workers, 1);
+    assert_eq!(steady.needs_more_workers, 0);
+    assert!(!steady.active_floor_breached);
+    assert!(
+        !steady
+            .actions
+            .iter()
+            .any(|action| action.contains("Only one active lane remains"))
+    );
+}
+
+#[test]
+fn replenishes_only_to_the_active_floor_after_completion() {
+    let scheduler = ParallelScheduler::for_tests();
+    let first = messages(&[serde_json::json!({
+        "role":"assistant",
+        "content":[
+            tool_use("t1","cc_Agent_0","gpt-5.6-sol"),
+            tool_use("t2","cc_Agent_0","grok-4.5"),
+            tool_use("t3","cc_Agent_0","gpt-5.6-sol"),
+        ]
+    })]);
+    let second = messages(&[serde_json::json!({
+        "role":"assistant",
+        "content":[
+            {"type":"tool_result","tool_use_id":"t2","content":"done"},
+            {"type":"tool_result","tool_use_id":"t3","content":"done"},
+            tool_use("t1","cc_Agent_0","gpt-5.6-sol"),
+        ]
+    })]);
+    let _ = scheduler.decision_for_request(&first);
+    let decision = scheduler.decision_for_request(&second);
+    assert_eq!(decision.completed_recently, 2);
+    assert_eq!(decision.target_workers, 2);
+    assert_eq!(decision.needs_more_workers, 1);
+    assert!(decision.active_floor_breached);
 }
 
 #[test]
@@ -691,7 +744,7 @@ fn estimates_structured_work_and_handles_all_list_markers() {
     let plain = messages(&[serde_json::json!({"role": "user", "content": "1) no\n9 no\nx"})]);
     assert_eq!(
         policy::estimate_target_workers(&core::SubagentSnapshot::default(), &plain, &config),
-        3
+        0
     );
 }
 

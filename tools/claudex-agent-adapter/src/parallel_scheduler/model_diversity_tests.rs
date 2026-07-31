@@ -67,14 +67,14 @@ fn treats_gpt_variants_as_one_family_and_requires_grok_for_diversity() {
 }
 
 #[test]
-fn keeps_a_three_worker_target_and_recovers_the_two_worker_floor() {
+fn keeps_a_two_worker_target_and_recovers_the_two_worker_floor() {
     let scheduler = ParallelScheduler::new(config());
     let decision =
         scheduler.decision_for_request(&request(vec![agent("only-worker", "gpt-5.6-luna")]));
 
-    assert_eq!(decision.target_workers, 3);
+    assert_eq!(decision.target_workers, 2);
     assert_eq!(decision.active_workers, 1);
-    assert_eq!(decision.needs_more_workers, 2);
+    assert_eq!(decision.needs_more_workers, 1);
     assert!(decision.active_floor_breached);
     assert!(
         decision

@@ -115,7 +115,7 @@ pub(crate) struct SchedulerDecision {
 impl SchedulerDecision {
     fn no_action() -> Self {
         Self {
-            target_workers: DEFAULT_MIN_PARALLEL_WORKERS,
+            target_workers: 0,
             active_workers: 0,
             completed_recently: 0,
             active_model_families: 0,
@@ -134,8 +134,9 @@ impl SchedulerDecision {
         let floor = config.active_floor.max(2);
         if self.actions.is_empty() {
             return format!(
-                "Parallel status: keep the current fan-out. Re-check active workers after each SubAgent completion or every {} minutes.",
-                config.reassess_interval.as_secs() / 60
+                "Dynamic parallel status: keep {} active lane(s) for the current independent work; re-check after each SubAgent completion or every {} minutes.",
+                self.target_workers,
+                config.reassess_interval.as_secs().div_ceil(60).max(1)
             );
         }
         let mut lines = Vec::with_capacity(1 + self.actions.len() + 2);
@@ -227,7 +228,9 @@ impl ParallelScheduler {
         let mut inner = self.inner.lock().expect("parallel scheduler state");
         let should_reassess = policy::reassessment_due(&inner, &key, now, &config);
         policy::apply_reassessment_actions(&mut decision, &snapshot, &config, should_reassess);
-        policy::apply_capacity_actions(&mut decision, target_workers, &config);
+        policy::apply_replenishment_target(&mut decision, &snapshot, &config, should_reassess);
+        let effective_target = decision.target_workers;
+        policy::apply_capacity_actions(&mut decision, effective_target, &config);
         policy::apply_floor_action(&mut decision, &config);
         policy::apply_diversity_action(&mut decision, &config);
         policy::apply_reuse_actions(&mut decision, &config);

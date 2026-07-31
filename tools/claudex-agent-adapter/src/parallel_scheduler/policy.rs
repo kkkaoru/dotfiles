@@ -40,13 +40,32 @@ pub(crate) fn apply_reassessment_actions(
     }
 }
 
+/// A completion or cadence tick is the only point at which a surviving lane is
+/// replenished automatically.  Stable single-worker work is left alone so an
+/// indivisible request does not turn the default floor into an over-spawn.
+pub(crate) fn apply_replenishment_target(
+    decision: &mut SchedulerDecision,
+    snapshot: &core::SubagentSnapshot,
+    config: &SchedulerConfig,
+    should_reassess: bool,
+) {
+    if !snapshot.has_any_workers() || (decision.completed_recently == 0 && !should_reassess) {
+        return;
+    }
+    decision.target_workers = decision
+        .target_workers
+        .max(config.active_floor)
+        .min(config.max_parallel_workers);
+}
+
 pub(crate) fn apply_capacity_actions(
     decision: &mut SchedulerDecision,
     target_workers: usize,
     config: &SchedulerConfig,
 ) {
-    let (lower_bound, upper_bound) = worker_bounds(config);
-    let effective_target = target_workers.clamp(lower_bound, upper_bound);
+    let (_, upper_bound) = worker_bounds(config);
+    let effective_target = target_workers.min(upper_bound);
+    decision.target_workers = effective_target;
     if decision.active_workers >= effective_target {
         return;
     }
@@ -67,7 +86,12 @@ fn worker_bounds(config: &SchedulerConfig) -> (usize, usize) {
 }
 
 pub(crate) fn apply_floor_action(decision: &mut SchedulerDecision, config: &SchedulerConfig) {
-    if !decision.has_work() || decision.active_workers >= config.active_floor {
+    let rebalance_due = decision.completed_recently > 0
+        || decision
+            .actions
+            .iter()
+            .any(|action| action.contains("Re-evaluate active set"));
+    if !decision.has_work() || decision.active_workers >= config.active_floor || !rebalance_due {
         return;
     }
     decision.active_floor_breached = true;
@@ -163,7 +187,6 @@ pub(crate) fn estimate_target_workers(
     request: &MessagesRequest,
     config: &SchedulerConfig,
 ) -> usize {
-    let mut target = config.min_parallel_workers;
     let explicit_blocks = request
         .messages
         .iter()
@@ -172,10 +195,11 @@ pub(crate) fn estimate_target_workers(
         .map(count_explicit_blocks)
         .max()
         .unwrap_or(0);
+    let active = snapshot.active_count();
+    let mut target = active.max(explicit_blocks);
     if explicit_blocks >= 2 {
-        target = target.saturating_add(explicit_blocks.min(5));
+        target = target.max(snapshot.active_model_families().saturating_add(1));
     }
-    target = target.max(snapshot.active_model_families().saturating_add(1));
     target.min(config.max_parallel_workers)
 }
 
