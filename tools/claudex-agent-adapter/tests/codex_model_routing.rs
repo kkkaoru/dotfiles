@@ -27,13 +27,9 @@ fn codex_fish_routes_external_models_to_their_provider_profiles() {
             .is_some_and(|models| { models.iter().any(|model| model["slug"] == "glm-5.2:cloud") })
     );
 
-    for (profile, provider, base_url) in [
-        ("fugu.config.toml", "sakana", "https://api.sakana.ai/v1"),
-        (
-            "ollama-launch-codex-app.config.toml",
-            "ollama-launch-codex-app",
-            "http://127.0.0.1:11434/v1",
-        ),
+    for (profile, provider) in [
+        ("fugu.config.toml", "sakana"),
+        ("ollama-launch-codex-app.config.toml", "ollama"),
     ] {
         let config =
             fs::read_to_string(root.join(".codex").join(profile)).expect("Codex provider profile");
@@ -41,9 +37,19 @@ fn codex_fish_routes_external_models_to_their_provider_profiles() {
             config.contains(&format!("model_provider = \"{provider}\"")),
             "{profile} must select {provider}"
         );
-        assert!(config.contains(&format!("[model_providers.{provider}]")));
-        assert!(config.contains(&format!("base_url = \"{base_url}\"")));
     }
+
+    let fugu = fs::read_to_string(root.join(".codex/fugu.config.toml"))
+        .expect("Fugu Codex provider profile");
+    assert!(fugu.contains("[model_providers.sakana]"));
+    assert!(fugu.contains("base_url = \"https://api.sakana.ai/v1\""));
+
+    let ollama = fs::read_to_string(root.join(".codex/ollama-launch-codex-app.config.toml"))
+        .expect("Ollama Codex provider profile");
+    assert!(
+        !ollama.contains("[model_providers."),
+        "GLM should use Codex's built-in Ollama provider without a fragile custom registration"
+    );
 }
 
 #[test]

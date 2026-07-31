@@ -342,7 +342,7 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(opencode["backend"], "configured-acp")
         self.assertEqual(
             opencode["acp"],
-            {"program": "opencode", "arguments": ["--auto", "acp"]},
+            {"program": "opencode", "arguments": ["acp"]},
         )
 
     def test_validates_dedicated_disabled_models_config(self) -> None:

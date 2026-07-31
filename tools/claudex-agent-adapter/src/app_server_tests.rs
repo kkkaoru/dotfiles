@@ -50,8 +50,8 @@ command = "false"
         )
         .unwrap();
         std::fs::write(
-            source.join("ollama.config.toml"),
-            r#"[model_providers.ollama]
+            source.join("ollama-launch-codex-app.config.toml"),
+            r#"[model_providers.ollama-launch-codex-app]
 name = "Ollama"
 base_url = "http://127.0.0.1:11434/v1"
 wire_api = "responses"
@@ -81,7 +81,7 @@ name = "Must not replace the base config"
         assert!(config.contains("unified_exec = true"));
         assert!(config.contains("plugins = false"));
         assert!(config.contains("[model_providers.sakana]"));
-        assert!(config.contains("[model_providers.ollama]"));
+        assert!(config.contains("[model_providers.ollama-launch-codex-app]"));
         assert_eq!(config.matches("[model_providers.sakana]").count(), 1);
         assert!(!config.contains("Must not replace"));
         assert!(!config.contains("mcp_servers.must_not_copy"));

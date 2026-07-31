@@ -16,6 +16,30 @@ const TRACE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const PARALLEL_RELEASE_FILE: &str = "grok-acp-parallel-release";
 static CWD_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+#[test]
+fn opencode_route_uses_valid_acp_argv_and_preserves_web_bridge_mode() {
+    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("tools directory")
+        .parent()
+        .expect("repository root");
+    let config: Value = serde_json::from_str(
+        &std::fs::read_to_string(repository.join(".config/claudex/providers.json"))
+            .expect("provider configuration"),
+    )
+    .expect("valid provider configuration");
+    let provider = config["providers"]
+        .as_array()
+        .expect("providers array")
+        .iter()
+        .find(|provider| provider["id"] == "opencode-go")
+        .expect("OpenCode Go provider");
+
+    assert_eq!(provider["acp"]["program"], "opencode");
+    assert_eq!(provider["acp"]["arguments"], json!(["acp"]));
+    assert_eq!(provider["webSearchMode"], "delegate-mcp");
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 // This integration scenario intentionally keeps setup, saturation, release, and cleanup
 // together so it verifies the complete configured-ACP concurrency lifecycle in one test.
@@ -615,4 +639,7 @@ fn assert_configured_trace(root: &std::path::Path, request_cwd: &std::path::Path
             .iter()
             .any(|event| event["new_session"]["cwd"] == json!(request_cwd))
     );
+    assert!(trace.iter().any(|event| {
+        event.pointer("/permission_response/outcome/optionId") == Some(&json!("allow-once"))
+    }));
 }

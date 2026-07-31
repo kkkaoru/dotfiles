@@ -94,7 +94,7 @@ fn every_model_worker_inherits_shell_and_command_capability() {
 }
 
 #[test]
-fn opencode_provider_starts_in_auto_permission_mode() {
+fn opencode_provider_starts_the_acp_subcommand() {
     let root = repository_root();
     let config: Value = serde_json::from_str(
         &fs::read_to_string(root.join(".config/claudex/providers.json"))
@@ -110,9 +110,10 @@ fn opencode_provider_starts_in_auto_permission_mode() {
     let arguments = provider["acp"]["arguments"]
         .as_array()
         .expect("OpenCode ACP arguments");
-    assert!(
-        arguments.iter().any(|argument| argument == "--auto"),
-        "OpenCode ACP must auto-approve shell and command tools"
+    assert_eq!(
+        arguments,
+        &[Value::String("acp".to_owned())],
+        "OpenCode ACP permissions are approved through the ACP client; TUI-only flags must not intercept the subcommand"
     );
 }
 

@@ -245,7 +245,7 @@ mod tests {
         std::fs::write(
             &path,
             config(
-                r#"{"id":"p","agent":"claudex-ollama-glm-5-2","defaultModel":"glm-5.2:cloud","subagentModel":"glm-5.2:cloud","effort":"max","enabled":true,"usageProvider":"ollama","modelProvider":"ollama-launch-codex-app","modelCatalogJson":"~/.codex/fugu.json","modelPrefixes":["glm-"],"backend":"codex-app-server"}"#,
+                r#"{"id":"p","agent":"claudex-ollama-glm-5-2","defaultModel":"glm-5.2:cloud","subagentModel":"glm-5.2:cloud","effort":"max","enabled":true,"usageProvider":"ollama","modelProvider":"ollama","modelCatalogJson":"~/.codex/fugu.json","modelPrefixes":["glm-"],"backend":"codex-app-server"}"#,
             ),
         )
         .unwrap();
@@ -253,7 +253,7 @@ mod tests {
         assert_eq!(loaded.main_model, "glm-5.2:cloud");
         assert_eq!(
             loaded.routes[0].model_provider.as_deref(),
-            Some("ollama-launch-codex-app")
+            Some("ollama")
         );
         assert_eq!(
             loaded.routes[0].model_catalog_json.as_deref(),

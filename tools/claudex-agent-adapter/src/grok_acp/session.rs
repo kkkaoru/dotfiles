@@ -56,12 +56,7 @@ pub(super) async fn create(
 ) -> Result<Value> {
     // Claude Code embeds the active child cwd in its base instructions. Keep ACP sessions scoped
     // to that request instead of leaking the adapter daemon's launch directory.
-    let session_cwd = params
-        .get("baseInstructions")
-        .and_then(Value::as_str)
-        .and_then(cwd_from_system)
-        .or_else(|| request_cwd(&params))
-        .unwrap_or_else(|| cwd.to_owned());
+    let session_cwd = session_cwd(&params, cwd);
     let request = connection.new_session(
         acp::NewSessionRequest::new(&session_cwd)
             .mcp_servers(vec![])
@@ -88,6 +83,15 @@ pub(super) async fn create(
         instructions.borrow_mut().insert(session_id.clone(), base);
     }
     Ok(json!({"thread":{"id":session_id}}))
+}
+
+fn session_cwd(params: &Value, fallback: &Path) -> PathBuf {
+    params
+        .get("baseInstructions")
+        .and_then(Value::as_str)
+        .and_then(cwd_from_system)
+        .or_else(|| request_cwd(params))
+        .unwrap_or_else(|| fallback.to_owned())
 }
 
 async fn await_model_setup<T>(
@@ -194,5 +198,31 @@ mod tests {
         assert!(request_cwd(&json!({"cwd":"relative"})).is_none());
         assert!(request_cwd(&json!({"cwd":"/definitely/missing"})).is_none());
         assert!(request_cwd(&Value::Null).is_none());
+    }
+
+    #[test]
+    fn falls_back_from_invalid_system_and_request_directories() {
+        let fallback = tempfile::tempdir().unwrap();
+        let request = tempfile::tempdir().unwrap();
+        assert_eq!(
+            session_cwd(
+                &json!({
+                    "baseInstructions":"CWD: /definitely/missing",
+                    "cwd":request.path()
+                }),
+                fallback.path(),
+            ),
+            request.path()
+        );
+        assert_eq!(
+            session_cwd(
+                &json!({
+                    "baseInstructions":"CWD: relative/path",
+                    "cwd":"/definitely/missing"
+                }),
+                fallback.path(),
+            ),
+            fallback.path()
+        );
     }
 }
