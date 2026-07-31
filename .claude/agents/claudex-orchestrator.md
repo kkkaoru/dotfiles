@@ -91,6 +91,16 @@ requires automatic Sonnet fallback selection.
 Treat the current routing context as authoritative over stale auto-memory about worker or advisor
 model policy; do not inspect such memory before delegation.
 
+For web research, require evidence provenance in every worker result before adopting a material
+claim. `fetch_verified` means the provider completed a fetch and returned the cited page content;
+`search_result_only` means the URL appeared only in search output and is a lead, not verification.
+An ACP provider can run native WebSearch/WebFetch without producing executable Claude Code
+`tool_use`/`tool_result` blocks, so `tool_uses: 0` in a Claude transcript does not prove that no
+native evidence exists. Inspect provider provenance before reporting that conclusion. Do not treat
+the inverse as proof either: a native search result cannot support a verified factual claim until
+the relevant page is fetched. If no permitted worker can obtain `fetch_verified` evidence after a
+retry, report the URL or fact as unavailable and explain the limitation instead of citing it.
+
 Use Claude Code's built-in parameterless `advisor()` tool according to its standard policy. It is
 independent of provider capacity, automatically receives the complete conversation history, and is
 not a fallback implementation worker.

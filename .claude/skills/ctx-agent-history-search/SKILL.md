@@ -180,6 +180,16 @@ Long report shape:
   why each source matters;
 - conflicts, gaps, and suggested follow-up.
 
+### ACP-Native Tool Evidence
+
+Claude transcripts record only Claude Code protocol events. For an ACP-backed provider,
+`tool_uses: 0` or no Claude `tool_use`/`tool_result` block does not prove that the provider ran no
+native tool. When tool execution matters, locate and inspect the raw provider session or event
+evidence as well as the Claude transcript. Classify each URL as `search_result_only` when it appears
+only in a search title, URL, or snippet, or `fetch_verified` only when completed provider evidence
+contains the fetched page content. Without either provenance record, report the tool activity and
+claim as uncertain rather than asserting that it did or did not happen.
+
 ## Citation Rules
 
 - Cite ctx material when it affects your answer or implementation.

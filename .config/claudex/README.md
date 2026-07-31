@@ -43,7 +43,7 @@ flowchart LR
 | Ollama GLM worker | `claudex-ollama-glm-5-2` | `glm-5.2:cloud` | `max` | CodexBarのOllama枠に空きがある場合 |
 | Grok worker | `claudex-grok` | `grok-4.5` | `high` | Grokに空きがある場合 |
 | Qwen worker | `claudex-qwen` | `qwen3.8-max-preview` | `high` | providerは維持するがSubAgentではdenylistにより禁止 |
-| DeepSeek worker | `claudex-deepseek` | `opencode-go/deepseek-v4-pro` | `high` | CodexBarのOpenCode Go枠に空きがある場合 |
+| DeepSeek worker | `claudex-deepseek` | `opencode-go/deepseek-v4-pro` | `max` | CodexBarのOpenCode Go枠に空きがある場合 |
 | Fallback | `claudex-sonnet` | `claude-sonnet-5` | `high` | 利用率を管理するproviderをすべて利用できない場合 |
 | Built-in advisor | Claude Code標準 `advisor()` | `opus` | Claude Code標準 | 標準advisor policyに従う。provider capacity非依存 |
 | Custom advisor | `custom-advisor` | `claude-fable-5` | `xhigh` | 明示指定時、または複雑・曖昧・高リスク・長期・停滞時。worker capacityとは別管理の論理 session singleton（hard process=1ではない） |
@@ -138,6 +138,33 @@ model IDやeffortはここへハードコードせず、各providerの `defaultM
 したがって、たとえば `grok` から検索しても、結果取得だけを `codex-spark` → `codex`
 へ委譲し、最終回答はGrokのセッションへ戻ります。検索workerが全て失敗した場合は
 空の成功を返さずエラーにし、Claude Code側で再試行可能な形にします。
+
+### Web research evidence contract
+
+The final answer must keep discovery and verification distinct. `search_result_only` means that a
+URL or claim came from a native WebSearch title, URL, or snippet. It is useful for choosing a page
+to inspect, but it is not a citation for a material fact. `fetch_verified` means the provider
+completed WebFetch (or an equivalent provider fetch) and returned the cited page content; only this
+class may support a factual claim such as a person's role, a date, an amount, or a quotation.
+
+ACP providers can execute provider-owned native WebSearch/WebFetch without emitting executable
+Claude Code `tool_use` or `tool_result` records. Consequently, `tool_uses: 0` in a Claude
+transcript is a Claude-side observation, not proof that no provider-native search or fetch took
+place. Check the provider's provenance before making that claim. The converse is also important:
+native search activity alone does not make every result URL `fetch_verified`.
+
+For provider-native completions, the adapter also exposes an aggregate,
+non-executable audit field in the Anthropic response: `metadata.claudex.web_evidence`
+contains `verified_count` and `evidence_class_counts.verified_retrieval`. It never
+contains provider URLs, page text, or model-authored prose. This metadata explains
+why a Claude transcript can show `tool_uses: 0` while the selected ACP provider
+still supplied validated retrieval evidence; it is an audit signal, not a substitute
+for the provider's source-level evidence contract.
+
+When a requested fact needs verification and no `fetch_verified` evidence is available, retry a
+permitted fetch or route retrieval to a verified-capable worker. If that cannot succeed, report the
+fact or URL as unavailable with the reason. Do not cite an unverified URL or complete the answer
+from memory.
 
 `claudex` の1 invocationだけ、CCR互換ルート用にsession IDとaccess tokenをadapterへ渡します。
 Claude subscriptionの子プロセスではこれらのlocal CCR変数を除去するため、検索要求が

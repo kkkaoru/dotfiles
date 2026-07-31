@@ -108,6 +108,21 @@ retained.
      custom-advisor enabled.
 6. Synthesize, verify, and present the subagents' results in the main conversation. Capacity
    selection does not relax repository instructions, safety requirements, or validation gates.
+   For web research, preserve the evidence class for every material claim:
+   - `fetch_verified` means the provider completed a fetch and returned the page content for the
+     cited URL. It may support factual claims from that page.
+   - `search_result_only` means the URL or claim appeared only in a native search result, title, or
+     snippet. It is a discovery lead, not verification, and must not be cited as a confirmed source
+     for names, dates, amounts, quotations, or other material facts.
+   ACP providers can execute native WebSearch/WebFetch outside Claude Code's executable tool
+   protocol. Therefore `tool_uses: 0`, or the absence of `tool_use`/`tool_result` blocks in a
+   Claude transcript, is only a Claude-transcript observation; it does not prove that ACP-native
+   evidence is absent. Inspect provider provenance before making that conclusion. Conversely, do
+   not call a native search result a fetched page merely because the provider executed a tool.
+   When the required `fetch_verified` evidence is unavailable, retry a permitted fetch or route the
+   retrieval to a verified-capable worker. If that still fails, state the exact evidence limitation
+   and that the fact or URL is unavailable; never fill the gap from memory, an unverified URL, or a
+   worker's unsupported assertion.
 7. Agent/Task acceptance proves delegation, not completion. Count delegated work as complete only
    after an actual worker reply or completion notification. Never fabricate a selected worker
    response; if execution is unavailable, continue safely in the main session and report it.
