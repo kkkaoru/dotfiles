@@ -89,6 +89,68 @@ fn tool_results(response: &Value, values: &[&str]) -> Value {
     )
 }
 
+async fn completed_parallel_history(client: &Client, url: &str, user: Value) -> Value {
+    let agents = post_json(client, url, request(json!([user.clone()]))).await;
+    assert_eq!(agents["stop_reason"], "tool_use");
+    let agent_results = tool_results(
+        &agents,
+        &["agent-profile-7", "agent-business-8", "agent-funding-9"],
+    );
+    let outputs = post_json(
+        client,
+        url,
+        request(json!([
+            user.clone(),
+            {"role":"assistant","content":agents["content"]},
+            {"role":"user","content":agent_results}
+        ])),
+    )
+    .await;
+    assert_eq!(outputs["stop_reason"], "tool_use");
+    let output_results = tool_results(&outputs, &["profile", "business", "funding"]);
+    let completed = post_json(
+        client,
+        url,
+        request(json!([
+            user.clone(),
+            {"role":"assistant","content":agents["content"]},
+            {"role":"user","content":agent_results},
+            {"role":"assistant","content":outputs["content"]},
+            {"role":"user","content":output_results}
+        ])),
+    )
+    .await;
+    assert_eq!(completed["stop_reason"], "end_turn");
+    assert_eq!(
+        completed["content"][0]["text"],
+        "PARALLEL_AGENT_RESULTS_COMPLETE"
+    );
+    json!([
+        user,
+        {"role":"assistant","content":agents["content"]},
+        {"role":"user","content":agent_results},
+        {"role":"assistant","content":outputs["content"]},
+        {"role":"user","content":output_results},
+        {"role":"assistant","content":completed["content"]}
+    ])
+}
+
+async fn stream_follow_up(client: &Client, url: &str, messages: Value) -> String {
+    client
+        .post(url)
+        .json(&json!({
+            "model":"test-main-model", "max_tokens":256, "stream":true,
+            "system":"Follow-up SubAgent visibility regression", "tools":tools(),
+            "messages":messages
+        }))
+        .send()
+        .await
+        .expect("send streamed follow-up")
+        .text()
+        .await
+        .expect("read streamed follow-up")
+}
+
 #[tokio::test]
 async fn preserves_parallel_agent_ids_for_follow_up_task_output_calls() {
     let _ = Adapter::start_authenticated;
@@ -404,5 +466,131 @@ async fn main_user_follow_up_continues_without_forcing_a_subagent_control_tool()
             .expect("continued content")
             .iter()
             .all(|block| block["type"] != "tool_use")
+    );
+}
+
+#[tokio::test]
+async fn streamed_follow_up_after_a_completed_batch_visibly_launches_a_new_subagent() {
+    let adapter = Adapter::start().await;
+    let client = Client::new();
+    let url = format!("{}/v1/messages", adapter.base_url);
+    let user = json!({
+        "role":"user",
+        "content":concat!(
+            "USE_PARALLEL_AGENTS_TASK_OUTPUT\n",
+            "Claudex routing for this turn: ",
+            r#"{"providers":{},"selected_agents":["general-purpose"],"selected_workers":[{"agent":"general-purpose","model":"test-main-model"}]}"#,
+            " mandatory policy"
+        )
+    });
+    let mut history = completed_parallel_history(&client, &url, user).await;
+    history.as_array_mut().expect("history array").push(json!({
+        "role":"user",
+        "content":"FOLLOW_UP_LAUNCH_AGENT: start the newly requested independent task"
+    }));
+
+    let stream = stream_follow_up(&client, &url, history).await;
+
+    for visible_launch_fragment in [
+        "event: message_start",
+        "event: content_block_start",
+        r#""name":"Agent""#,
+        "follow-up implementation",
+        "event: message_delta",
+        r#""stop_reason":"tool_use""#,
+        "event: message_stop",
+    ] {
+        assert!(
+            stream.contains(visible_launch_fragment),
+            "missing visible launch fragment {visible_launch_fragment}: {stream}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn streamed_related_follow_up_visibly_reuses_an_active_subagent() {
+    let adapter = Adapter::start().await;
+    let client = Client::new();
+    let url = format!("{}/v1/messages", adapter.base_url);
+    let user = json!({
+        "role":"user",
+        "content":concat!(
+            "USE_PARALLEL_AGENTS_TASK_OUTPUT\n",
+            "Claudex routing for this turn: ",
+            r#"{"providers":{},"selected_agents":["general-purpose"],"selected_workers":[{"agent":"general-purpose","model":"test-main-model"}]}"#,
+            " mandatory policy"
+        )
+    });
+    let launched = post_json(&client, &url, request(json!([user.clone()]))).await;
+    assert_eq!(launched["stop_reason"], "tool_use");
+    let stream = stream_follow_up(
+        &client,
+        &url,
+        json!([
+            user,
+            {"role":"assistant","content":launched["content"]},
+            {"role":"user","content":"FOLLOW_UP_REUSE_AGENT: extend the profile worker's current task"}
+        ]),
+    )
+    .await;
+
+    for visible_reuse_fragment in [
+        "event: content_block_start",
+        r#""name":"SendMessage""#,
+        "agent-profile-7",
+        "continue the related investigation",
+        r#""stop_reason":"tool_use""#,
+        "event: message_stop",
+    ] {
+        assert!(
+            stream.contains(visible_reuse_fragment),
+            "missing visible reuse fragment {visible_reuse_fragment}: {stream}"
+        );
+    }
+    assert!(
+        !stream.contains(r#""name":"Agent""#),
+        "a reuse must be visibly distinct from a fresh launch: {stream}"
+    );
+}
+
+#[tokio::test]
+async fn streamed_follow_up_without_a_subagent_is_distinguishable_from_launch_or_reuse() {
+    let adapter = Adapter::start().await;
+    let client = Client::new();
+    let url = format!("{}/v1/messages", adapter.base_url);
+    let user = json!({
+        "role":"user",
+        "content":concat!(
+            "USE_PARALLEL_AGENTS_TASK_OUTPUT\n",
+            "Claudex routing for this turn: ",
+            r#"{"providers":{},"selected_agents":["general-purpose"],"selected_workers":[{"agent":"general-purpose","model":"test-main-model"}]}"#,
+            " mandatory policy"
+        )
+    });
+    let mut history = completed_parallel_history(&client, &url, user).await;
+    history.as_array_mut().expect("history array").push(json!({
+        "role":"user",
+        "content":"FOLLOW_UP_NO_AGENT: answer directly without delegating"
+    }));
+
+    let stream = stream_follow_up(&client, &url, history).await;
+
+    assert!(
+        stream.contains("FOLLOW_UP_NO_AGENT_LAUNCHED"),
+        "stream={stream}"
+    );
+    assert!(
+        stream.contains(
+            "SubAgent status: no Agent/Task launch or SendMessage reuse was emitted for this follow-up."
+        ),
+        "stream={stream}"
+    );
+    assert!(
+        stream.contains(r#""stop_reason":"end_turn""#),
+        "stream={stream}"
+    );
+    assert!(
+        !stream.contains(r#""type":"tool_use""#),
+        "a no-launch follow-up must not look like a launch: {stream}"
     );
 }

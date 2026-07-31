@@ -7,6 +7,7 @@ use super::{ToolCall, error_flow, turn_flow};
 use crate::anthropic::{
     Bridge, Segment, Session, Usage, WebEvidenceSummary,
     content::{estimated_block_tokens, estimated_tokens},
+    subagent_visibility::SubagentVisibility,
 };
 
 use super::{
@@ -16,6 +17,7 @@ use super::{
 };
 
 mod external_tool;
+mod visibility;
 #[path = "web_provenance.rs"]
 mod web_provenance;
 
@@ -33,6 +35,8 @@ pub(super) struct SegmentBuilder {
     /// Completed provider-native web calls whose provenance has already been
     /// counted. A provider may repeat its final ToolCallUpdate while reconnecting.
     verified_web_evidence_call_ids: Vec<String>,
+    subagent_visibility: SubagentVisibility,
+    injected_output_tokens: u64,
     usage: Usage,
 }
 
@@ -46,6 +50,8 @@ impl SegmentBuilder {
             provider_tool_calls: Vec::new(),
             requires_verified_web_evidence: false,
             verified_web_evidence_call_ids: Vec::new(),
+            subagent_visibility: SubagentVisibility::default(),
+            injected_output_tokens: 0,
             usage: Usage {
                 input_tokens,
                 ..Usage::default()
@@ -79,6 +85,8 @@ impl SegmentBuilder {
         event: &Value,
         stream: Option<&StreamSender>,
     ) -> Result<ControlFlow<()>> {
+        self.observe_subagent_context(session, current_messages)
+            .await;
         self.record_web_evidence_requirement(current_messages, system);
         if self.model_output_event(event, stream).await? {
             return Ok(ControlFlow::Continue(()));
@@ -324,6 +332,7 @@ impl SegmentBuilder {
     }
 
     pub(super) async fn finish(&mut self, stream: Option<&StreamSender>) -> Result<Segment> {
+        self.report_no_subagent_action(stream).await?;
         self.close_open_blocks(stream).await?;
         sanitize_committed_blocks(&mut self.blocks);
         let stop_reason = if self.external_tool_calls > 0 {
@@ -344,6 +353,9 @@ impl SegmentBuilder {
                     estimated_block_tokens(block).saturating_add(thinking)
                 })
                 .sum();
+        } else {
+            let output_tokens = self.usage.output_tokens;
+            self.usage.output_tokens = output_tokens.saturating_add(self.injected_output_tokens);
         }
         let blocks = std::mem::take(&mut self.blocks);
         Ok(Segment {

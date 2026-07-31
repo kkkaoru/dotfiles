@@ -17,6 +17,7 @@ mod stream;
 mod stream_batch;
 mod subagent_continuation;
 mod subagent_timeout;
+mod subagent_visibility;
 mod subscription;
 mod subscription_activity;
 mod subscription_frames;

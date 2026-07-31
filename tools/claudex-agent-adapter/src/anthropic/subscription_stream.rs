@@ -33,6 +33,7 @@ use super::{
 
 mod lifecycle;
 mod tool_collection;
+mod visibility;
 
 use lifecycle::{
     read_stderr, terminate_after_stream_failure, terminate_closed_stream, validate_stream_exit,
@@ -347,11 +348,12 @@ impl SubscriptionStream {
             self.text_started = true;
             self.next_index += 1;
         }
+        let visibility_tokens = self.report_no_subagent_action(sender).await?;
         if !self.text_closed {
             send_text_finish(
                 sender,
                 self.next_index.saturating_sub(1),
-                result_output_tokens(result),
+                result_output_tokens(result).saturating_add(visibility_tokens),
             )
             .await?;
             self.text_closed = true;

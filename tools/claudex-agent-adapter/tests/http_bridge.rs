@@ -772,6 +772,66 @@ async fn rejects_model_less_subscription_tools_before_forwarding_them() {
 }
 
 #[tokio::test]
+async fn subscription_follow_up_stream_distinguishes_launch_from_no_launch() {
+    let adapter = Adapter::start().await;
+    let client = Client::new();
+    let request = |marker: &str| {
+        json!({
+            "model":"test-sonnet-model", "stream":true,
+            "system":"Subscription follow-up visibility",
+            "tools":[{
+                "name":"Agent", "description":"Launch a worker",
+                "input_schema":{"type":"object"}
+            }],
+            "messages":[
+                {"role":"user","content":"start earlier work"},
+                {"role":"assistant","content":[{
+                    "type":"tool_use", "id":"prior-agent", "name":"Agent",
+                    "input":{"subagent_type":"general-purpose"}
+                }]},
+                {"role":"user","content":[{
+                    "type":"tool_result", "tool_use_id":"prior-agent", "content":"done"
+                }]},
+                {"role":"assistant","content":"earlier work complete"},
+                {"role":"user","content":format!(
+                    "{marker}\nClaudex routing for this turn: {}",
+                    r#"{"providers":{},"selected_agents":["general-purpose"],"selected_workers":[{"agent":"general-purpose","model":"test-main-model"}]}"#
+                )}
+            ]
+        })
+    };
+
+    let launch = client
+        .post(messages_url(&adapter))
+        .json(&request("SUBSCRIPTION_FOLLOW_UP_LAUNCH"))
+        .send()
+        .await
+        .expect("request subscription launch follow-up")
+        .text()
+        .await
+        .expect("read subscription launch follow-up");
+    assert!(launch.contains("SubAgent status: Agent launch emitted"));
+    assert!(launch.contains(r#""name":"Agent""#));
+    assert!(launch.contains(r#""stop_reason":"tool_use""#));
+
+    let no_launch = client
+        .post(messages_url(&adapter))
+        .json(&request("SUBSCRIPTION_FOLLOW_UP_NO_LAUNCH"))
+        .send()
+        .await
+        .expect("request subscription no-launch follow-up")
+        .text()
+        .await
+        .expect("read subscription no-launch follow-up");
+    assert!(no_launch.contains("SUBSCRIPTION_DIRECT_RESULT"));
+    assert!(no_launch.contains(
+        "SubAgent status: no Agent/Task launch or SendMessage reuse was emitted for this follow-up."
+    ));
+    assert!(!no_launch.contains(r#""type":"tool_use""#));
+    assert!(no_launch.contains(r#""stop_reason":"end_turn""#));
+}
+
+#[tokio::test]
 async fn exchanges_large_subscription_input_and_output_without_pipe_deadlock() {
     let adapter = Adapter::start().await;
     let client = Client::new();

@@ -60,11 +60,11 @@ impl SubscriptionStream {
             .get("name")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        let name = mapped_tool_name(emitted_name, &self.tools);
+        let name = mapped_tool_name(emitted_name, &self.tools).to_owned();
         if id.is_empty() || name.is_empty() {
             bail!("Claude subscription emitted a tool call without an ID or name");
         }
-        if matches!(name, "WebSearch" | "WebFetch") {
+        if matches!(name.as_str(), "WebSearch" | "WebFetch") {
             return Ok(false);
         }
         let input = block
@@ -72,16 +72,17 @@ impl SubscriptionStream {
             .filter(|input| input.is_object())
             .cloned()
             .context("Claude subscription emitted non-object tool input")?;
-        let public_input = match self.prepare_tool_input(name, id, &input) {
+        let public_input = match self.prepare_tool_input(&name, id, &input) {
             Ok(input) => input,
-            Err(error) if super::super::agent_effort::is_agent_tool(name) => {
+            Err(error) if super::super::agent_effort::is_agent_tool(&name) => {
                 tracing::warn!(%error, tool = name, "blocked unsupported SubAgent launch");
                 self.report_blocked_subagent(sender).await?;
                 return Ok(true);
             }
             Err(error) => return Err(error),
         };
-        send_tool_block(sender, self.next_index, id, name, public_input).await?;
+        self.report_subagent_action(sender, &name, &input).await?;
+        send_tool_block(sender, self.next_index, id, &name, public_input).await?;
         self.next_index += 1;
         Ok(true)
     }

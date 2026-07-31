@@ -77,6 +77,8 @@ impl SegmentBuilder {
             std::time::Instant::now(),
         )
         .await;
+        self.report_subagent_action(original_name, &arguments, context.stream)
+            .await?;
         self.close_open_blocks(context.stream).await?;
         let block = json!({
             "type": "tool_use",
