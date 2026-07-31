@@ -81,8 +81,10 @@ Build and install with Rust 1.97.1:
 The crate's Cargo config keeps direct debug/test artifacts outside the
 checkout. For normal builds and installs, use the repository's ephemeral Cargo
 wrapper: it allocates a unique temporary target directory and removes it on
-both success and failure. It also removes the legacy `target/t` fixture root
-left by older test versions.
+both success and failure. Before and after each invocation it removes the
+legacy checkout `target` directory (including debug, release, coverage, and
+fixture artifacts) when no direct Cargo process is using it, so old build
+outputs cannot accumulate indefinitely.
 
 ```sh
 tools/claudex-agent-adapter/scripts/cargo-ephemeral.sh +1.97.1 install \

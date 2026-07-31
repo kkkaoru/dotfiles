@@ -6,6 +6,25 @@ set -eu
 
 repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 tmp_root=${TMPDIR:-/tmp}
+
+checkout_target_in_use() {
+    # Direct Cargo/coverage invocations may still own the legacy checkout target.
+    # Leave it untouched in that case; the next invocation will retry cleanup.
+    ps -axo pid=,command= | awk -v root="$repo_root/target" -v self="$$" \
+        '$1 != self && $2 !~ /(^|\/)(awk|ps|grep|rg)$/ && index($0, root) { found = 1 } END { exit !found }'
+}
+
+prune_checkout_target() {
+    if [ ! -d "$repo_root/target" ] || checkout_target_in_use; then
+        return 0
+    fi
+    # All normal wrapper builds use a private temporary target.  The checkout
+    # target is therefore legacy output and can be removed as one unit,
+    # including stale debug, release, coverage, and fixture artifacts.
+    rm -rf -- "$repo_root/target"
+}
+
+prune_checkout_target
 target_dir=$(mktemp -d "${tmp_root%/}/claudex-agent-adapter-target.XXXXXX")
 
 cleanup() {
@@ -14,11 +33,8 @@ cleanup() {
     # remove even when Cargo fails, and avoids retaining partial artifacts.
     rm -rf -- "$target_dir"
     # Remove the legacy test-fixture root left by versions before the
-    # temporary-fixture migration. Do not touch any other checkout target.
-    if [ -d "$repo_root/target/t" ]; then
-        rm -rf -- "$repo_root/target/t"
-        rmdir "$repo_root/target" 2>/dev/null || true
-    fi
+    # temporary-fixture migration and any other stale checkout artifacts.
+    prune_checkout_target
     exit "$exit_code"
 }
 trap cleanup EXIT HUP INT TERM
