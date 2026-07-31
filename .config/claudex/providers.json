@@ -106,7 +106,7 @@
       "id": "opencode-go",
       "agent": "claudex-deepseek",
       "defaultModel": "opencode-go/deepseek-v4-pro",
-      "effort": "high",
+      "effort": "max",
       "enabled": true,
       "usageProvider": "opencodego",
       "requestBudget": {

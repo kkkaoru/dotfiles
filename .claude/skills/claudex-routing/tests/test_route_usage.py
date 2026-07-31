@@ -333,6 +333,7 @@ class ConfigurationTests(unittest.TestCase):
         )
         self.assertEqual(opencode["usageProvider"], "opencodego")
         self.assertEqual(opencode["defaultModel"], "opencode-go/deepseek-v4-pro")
+        self.assertEqual(opencode["effort"], "max")
         self.assertEqual(
             opencode["requestBudget"],
             {"estimatedRequests": 3450, "windowMinutes": 300, "usageWindow": "primary"},

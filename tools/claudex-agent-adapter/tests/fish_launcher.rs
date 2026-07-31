@@ -289,7 +289,7 @@ fn assert_routing_marker_is_scoped_to_claudex(
 }
 
 #[test]
-fn explicit_subagent_models_and_fallback_match_worker_definitions() {
+fn subagent_routes_and_fallback_match_worker_definitions() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let config: serde_json::Value = serde_json::from_slice(
         &fs::read(root.join(".config/claudex/providers.json")).expect("provider config"),
@@ -299,25 +299,32 @@ fn explicit_subagent_models_and_fallback_match_worker_definitions() {
         .as_array()
         .expect("configured providers")
         .iter()
-        .filter_map(|provider| {
-            provider
-                .get("subagentModel")
-                .map(|model| (&provider["agent"], model))
+        .map(|provider| {
+            (
+                &provider["agent"],
+                provider
+                    .get("subagentModel")
+                    .unwrap_or(&provider["defaultModel"]),
+                &provider["effort"],
+            )
         })
         .chain(std::iter::once((
             &config["fallback"]["agent"],
             &config["fallback"]["model"],
+            &config["fallback"]["effort"],
         )));
-    for (agent, model) in configured {
+    for (agent, model, effort) in configured {
         let name = format!("{}.md", agent.as_str().expect("worker agent"));
         let model = model.as_str().expect("worker model");
+        let effort = effort.as_str().expect("worker effort");
         let definition = fs::read_to_string(root.join(".claude/agents").join(&name))
             .expect("provider worker definition");
-        let expected = format!("model: {model}");
-        assert!(
-            definition.lines().any(|line| line == expected),
-            "{name} must match the shared provider model"
-        );
+        for expected in [format!("model: {model}"), format!("effort: {effort}")] {
+            assert!(
+                definition.lines().any(|line| line == expected),
+                "{name} must match the shared provider route: {expected}"
+            );
+        }
     }
 
     assert_qwen_runtime_is_bounded(&root, &config);
