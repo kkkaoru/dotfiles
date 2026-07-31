@@ -79,6 +79,7 @@ coverage_out/
 .codex/logs_*.sqlite*
 .codex/memories/
 .codex/memories_*.sqlite*
+.codex/mcp-oauth-locks/
 .codex/models_cache.json
 .codex/config.toml
 !.codex/fugu.config.toml
