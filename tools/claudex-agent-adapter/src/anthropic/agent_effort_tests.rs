@@ -910,6 +910,143 @@ mod tests {
     }
 
     #[test]
+    fn preserves_an_explicit_same_model_launch_intent() {
+        let intents = AgentEffortIntents::default();
+        let routing = r#"Claudex routing for this turn: {"providers":{},"selected_workers":[{"agent":"general-purpose","model":"main-model","effort":"high"}]} mandatory policy"#;
+        let user_messages = [json!({
+            "role":"user",
+            "content":format!("Use the main-model worker for this task.\n{routing}")
+        })];
+        let (arguments, _) = prepare_arguments(
+            "Agent",
+            "tool-same-model",
+            &json!({
+                "subagent_type":"general-purpose",
+                "prompt":"same route",
+                "claudex_model":"main-model",
+                "claudex_effort":"xhigh"
+            }),
+        );
+        let arguments = arguments.expect("same-model Agent intent");
+        validate_routed_agent_arguments(
+            "Agent",
+            &arguments,
+            &user_messages,
+            &json!(null),
+        )
+        .expect("selected same-model worker is authorized");
+        intents.record_from_user_messages(
+            AgentEffortRecord {
+                client_user_id: None,
+                tool_name: "Agent",
+                tool_use_id: "tool-same-model".to_owned(),
+                parent_model: "main-model",
+                arguments: &arguments,
+                user_messages: &user_messages,
+                system: &json!(null),
+            },
+            None,
+        );
+
+        let intent = intents.take(&request_without_user_id(
+            arguments["prompt"].as_str().expect("correlated prompt"),
+        ));
+        assert_eq!(intent.model_override.as_deref(), Some("main-model"));
+        assert!(!intent.model_is_inherited);
+        assert_eq!(explicit(intent.effort), "xhigh");
+    }
+
+    #[test]
+    fn carries_model_and_effort_across_a_resumed_worker_turn() {
+        let intents = AgentEffortIntents::default();
+        let (arguments, _) = prepare_arguments(
+            "Task",
+            "tool-resumed-model",
+            &json!({
+                "subagent_type":"general-purpose",
+                "prompt":"resume research",
+                "claudex_model":"grok-4.5",
+                "claudex_effort":"high"
+            }),
+        );
+        let arguments = arguments.expect("resumed Task intent");
+        let user_messages = [
+            json!({"role":"user","content":"Use grok-4.5 for this worker."}),
+            json!({"role":"assistant","content":"The worker is continuing."}),
+            json!({"role":"user","content":"continue"}),
+        ];
+        intents.record_from_user_messages(
+            AgentEffortRecord {
+                client_user_id: Some("resumed"),
+                tool_name: "Task",
+                tool_use_id: "tool-resumed-model".to_owned(),
+                parent_model: "main-model",
+                arguments: &arguments,
+                user_messages: &user_messages,
+                system: &json!(null),
+            },
+            None,
+        );
+
+        let mut request = request("resumed", "continue", true);
+        request.messages = vec![
+            user_messages[0].clone(),
+            user_messages[1].clone(),
+            json!({
+                "role":"user",
+                "content":format!("continue\n{}", arguments["prompt"])
+            }),
+        ];
+        let intent = intents.take(&request);
+        assert!(intent.matched);
+        assert_eq!(intent.model_override.as_deref(), Some("grok-4.5"));
+        assert_eq!(explicit(intent.effort), "high");
+    }
+
+    #[test]
+    fn rejects_invalid_agent_launch_intents_before_recording_routing_metadata() {
+        let user_messages = [json!({
+            "role":"user",
+            "content":"Run the selected worker"
+        })];
+        let cases = [
+            (
+                json!({"subagent_type":"general-purpose","prompt":"missing model"}),
+                "missing required `claudex_model`",
+            ),
+            (
+                json!({"subagent_type":"general-purpose","prompt":"empty model","claudex_model":""}),
+                "missing required `claudex_model`",
+            ),
+            (
+                json!({"subagent_type":"general-purpose","prompt":"wrong model","claudex_model":"not-selected"}),
+                "neither the selected worker's exact model",
+            ),
+            (
+                json!({"subagent_type":"general-purpose","prompt":"non-string model","claudex_model":7}),
+                "missing required `claudex_model`",
+            ),
+        ];
+        for (arguments, message) in cases {
+            let error = validate_routed_agent_arguments(
+                "Agent",
+                &arguments,
+                &user_messages,
+                &json!(null),
+            )
+            .expect_err("invalid Agent launch must be rejected");
+            assert!(error.to_string().contains(message), "{error}");
+        }
+        validate_routed_agent_arguments(
+            "Read",
+            &json!({"path":"README.md"}),
+            &user_messages,
+            &json!(null),
+        )
+        .expect("non-Agent tools do not require routing metadata");
+    }
+
+    #[test]
     fn authorizes_only_the_configured_custom_advisor_model() {
         let routing = r#"Claudex routing for this turn: {"providers":{},"selected_workers":[],"advisor":{"agent":"custom-advisor","model":"claude-fable-5","effort":"xhigh"},"custom_advisor_enabled":true} mandatory policy"#;
         let messages = [json!({

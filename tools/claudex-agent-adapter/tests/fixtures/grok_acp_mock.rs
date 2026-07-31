@@ -460,6 +460,18 @@ impl acp::Agent for MockAgent {
         }
         Ok(acp::SetSessionModelResponse::default())
     }
+
+    async fn set_session_config_option(
+        &self,
+        request: acp::SetSessionConfigOptionRequest,
+    ) -> acp::Result<acp::SetSessionConfigOptionResponse> {
+        self.record("set_effort", &request)?;
+        match self.mode.as_str() {
+            "effort-config" => Ok(acp::SetSessionConfigOptionResponse::new(vec![])),
+            "reject-effort" => Err(acp::Error::invalid_params()),
+            _ => Err(acp::Error::method_not_found()),
+        }
+    }
 }
 
 #[tokio::main(flavor = "current_thread")]

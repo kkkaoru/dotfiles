@@ -1227,6 +1227,58 @@ async fn drive_stream_retries_context_window_then_completes() {
 }
 
 #[tokio::test]
+async fn drive_stream_retries_context_window_with_explicit_effort() {
+    let (root, _app, bridge, session) = retryable_drive_fixture().await;
+    let dispatcher = crate::app_server::events::ThreadEventDispatcher::default();
+    let events = dispatcher.subscribe("thread");
+    dispatcher.dispatch(json!({
+        "method":"error",
+        "params":{"threadId":"thread","error":{"message":"context window exceeded"}}
+    }));
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(4);
+    let request = drive_request();
+    Arc::clone(&bridge)
+        .drive_stream(
+            drive_turn(
+                session,
+                events,
+                Vec::new(),
+                Some(ContextRetry {
+                    request,
+                    effort: Some("high".to_owned()),
+                    advisor_model: None,
+                    collaborator_model: None,
+                }),
+            )
+            .await,
+            sender,
+            SegmentBuilder::new(1),
+            None,
+        )
+        .await;
+
+    let trace = request_trace(&root.path().join("requests.log"), 2).await;
+    let turn_starts = trace
+        .into_iter()
+        .filter(|request| request.get("method").and_then(Value::as_str) == Some("turn/start"))
+        .collect::<Vec<_>>();
+    assert!(
+        !turn_starts.is_empty(),
+        "retry should trigger a logged turn/start request"
+    );
+    for request in &turn_starts {
+        assert_eq!(request["params"]["effort"], "high");
+    }
+
+    let mut output = String::new();
+    while let Some(frame) = receiver.recv().await {
+        output.push_str(&String::from_utf8_lossy(&frame.expect("infallible frame")));
+    }
+    assert!(output.contains("event: message_delta"));
+    assert!(output.contains("event: message_stop"));
+}
+
+#[tokio::test]
 async fn drive_stream_reports_context_retry_setup_errors() {
     let (_root, _app, bridge, session) = retry_failure_drive_fixture().await;
     let dispatcher = crate::app_server::events::ThreadEventDispatcher::default();
@@ -1525,6 +1577,28 @@ async fn assert_disconnected_tool_rejections(root: &tempfile::TempDir, expected:
     assert_eq!(actual, expected);
 }
 
+async fn request_trace(path: &std::path::Path, expected: usize) -> Vec<Value> {
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            let trace = std::fs::read_to_string(path)
+                .ok()
+                .map(|trace| {
+                    trace
+                        .lines()
+                        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+                        .collect::<Vec<Value>>()
+                })
+                .unwrap_or_default();
+            if trace.len() >= expected {
+                return trace;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("mock trace timeout")
+}
+
 async fn wait_for_disconnected_drain(events: &Arc<crate::app_server::ThreadEvents>) {
     tokio::time::timeout(Duration::from_secs(1), async {
         while Arc::strong_count(events) > 1 {
@@ -1541,12 +1615,24 @@ async fn retryable_drive_fixture() -> (tempfile::TempDir, Arc<AppServer>, Arc<Br
     let source = root.path().join("source");
     std::fs::create_dir(&source).expect("source home");
     std::fs::write(source.join("auth.json"), "{}").expect("source auth");
+    let requests_log = root.path().join("requests.log");
     let program = root.path().join("retry-app-server");
-    std::fs::write(
-        &program,
-        "#!/bin/sh\nread initialize\nprintf '%s\\n' '{\"id\":1,\"result\":{}}'\nread initialized\nread start\nprintf '%s\\n' '{\"id\":2,\"result\":{\"thread\":{\"id\":\"retried\"}}}'\nread turn\nsleep 0.05\nprintf '%s\\n' '{\"method\":\"turn/completed\",\"params\":{\"threadId\":\"retried\",\"turn\":{\"status\":\"completed\"}}}'\nwhile read line; do :; done\n",
-    )
-    .expect("mock app-server");
+    let mut program_script = r#"#!/bin/sh
+log="__REQUESTS_LOG__"
+read initialize
+printf '%s\n' '{"id":1,"result":{}}'
+read initialized
+read start
+printf '%s\n' "$start" >> "$log"
+printf '%s\n' '{"id":2,"result":{"thread":{"id":"retried"}}}'
+read turn
+printf '%s\n' "$turn" >> "$log"
+sleep 0.05
+printf '%s\n' '{"method":"turn/completed","params":{"threadId":"retried","turn":{"status":"completed"}}}'
+while read line; do :; done
+"#.to_owned();
+    program_script = program_script.replace("__REQUESTS_LOG__", &requests_log.to_string_lossy());
+    std::fs::write(&program, &program_script).expect("mock app-server");
     let mut permissions = std::fs::metadata(&program).unwrap().permissions();
     permissions.set_mode(0o755);
     std::fs::set_permissions(&program, permissions).unwrap();

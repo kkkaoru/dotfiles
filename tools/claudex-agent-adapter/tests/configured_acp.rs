@@ -3,6 +3,7 @@ use std::{sync::Arc, time::Duration};
 use claudex_agent_adapter::{
     agent_backend::{AcpLaunch, AgentBackend, BackendKind, BackendRoute, WebSearchMode},
     anthropic::Bridge,
+    app_server::ThreadEvents,
     http_router,
 };
 use reqwest::Client;
@@ -377,6 +378,111 @@ async fn configured_acp_routes_dynamic_models_and_expands_arguments() {
     backend.shutdown().await;
 
     session_scoped_configured_acp_recycles_after_one_failed_stream().await;
+}
+
+#[tokio::test]
+async fn configured_acp_selects_model_after_session_and_falls_back_for_effort_option() {
+    let _cwd_guard = CWD_LOCK.lock().await;
+    let model = "opencode-go/deepseek-v4-pro";
+    for (mode, expects_config_option) in [("effort-config", true), ("reject-effort", false)] {
+        let root = tempfile::tempdir().expect("configured ACP model fixture");
+        std::env::set_current_dir(root.path()).expect("isolate configured ACP model trace");
+        let backend = AgentBackend::spawn_routes(&[BackendRoute {
+            model: model.to_owned(),
+            backend: BackendKind::ConfiguredAcp,
+            model_provider: None,
+            model_catalog_json: None,
+            max_context_tokens: None,
+            model_prefixes: Vec::new(),
+            max_concurrency: None,
+            acp: Some(AcpLaunch {
+                program: env!("CARGO_BIN_EXE_grok-acp-mock").to_owned(),
+                arguments: vec!["--mode".to_owned(), mode.to_owned()],
+            }),
+            web_search_mode: WebSearchMode::default(),
+        }]);
+        let response = backend
+            .request("thread/start", json!({"model":model,"cwd":root.path()}))
+            .await
+            .expect("start configured ACP model session");
+        let thread_id = response["thread"]["id"]
+            .as_str()
+            .expect("configured ACP thread id");
+        let events = backend.subscribe_thread(thread_id);
+        backend
+            .request_detached(
+                "turn/start",
+                json!({"threadId":thread_id,"input":"model-only prompt"}),
+            )
+            .await
+            .expect("start model-only configured turn");
+        wait_for_turn_completion(events).await;
+        let events = backend.subscribe_thread(thread_id);
+        backend
+            .request_detached(
+                "turn/start",
+                json!({"threadId":thread_id,"effort":"max","input":"max prompt"}),
+            )
+            .await
+            .expect("start configured effort turn");
+        wait_for_turn_completion(events).await;
+
+        let trace = read_configured_trace(root.path());
+        let new_session = trace
+            .iter()
+            .position(|event| event.get("new_session").is_some())
+            .expect("session/new trace");
+        let first_prompt = trace
+            .iter()
+            .position(|event| event.get("prompt").is_some())
+            .expect("prompt trace");
+        assert!(
+            trace[new_session + 1..first_prompt]
+                .iter()
+                .any(|event| event.pointer("/set_model/modelId") == Some(&json!(model)))
+        );
+        let effort = trace
+            .iter()
+            .find(|event| event.get("set_effort").is_some())
+            .expect("effort config attempt");
+        assert_eq!(
+            effort.pointer("/set_effort/configId"),
+            Some(&json!("effort"))
+        );
+        assert_eq!(effort.pointer("/set_effort/value"), Some(&json!("max")));
+        if expects_config_option {
+            assert!(!has_effort_model_metadata(&trace));
+        } else {
+            assert!(has_effort_model_metadata(&trace));
+        }
+        backend.shutdown().await;
+    }
+}
+
+async fn wait_for_turn_completion(events: ThreadEvents) {
+    tokio::time::timeout(ACP_EVENT_TIMEOUT, async {
+        loop {
+            if events.recv().await.expect("configured ACP event")["method"] == "turn/completed" {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("configured ACP turn completion");
+}
+
+fn read_configured_trace(root: &std::path::Path) -> Vec<Value> {
+    std::fs::read_to_string(root.join("grok-acp-mock.jsonl"))
+        .expect("configured ACP trace")
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("configured ACP trace event"))
+        .collect()
+}
+
+fn has_effort_model_metadata(trace: &[Value]) -> bool {
+    trace
+        .iter()
+        .any(|event| event.pointer("/set_model/_meta/reasoningEffort") == Some(&json!("max")))
 }
 
 // This test covers failure, provider recycling, and the succeeding follow-up in one lifecycle.

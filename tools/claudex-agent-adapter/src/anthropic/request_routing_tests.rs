@@ -272,6 +272,23 @@ mod tests {
     }
 
     #[test]
+    fn keeps_an_explicit_same_model_subagent_on_the_provider_route() {
+        let mut request = request("main-model", &[]);
+        let decision = resolve_request_model_with_origin(
+            &mut request,
+            "main-model",
+            Some("main-model".to_owned()),
+            RouteOrigin::new(true, true, false),
+            |model| model == "main-model",
+            |_| false,
+        )
+        .expect("an explicit same-model worker should use the provider route");
+
+        assert_eq!(decision, RouteDecision::Provider);
+        assert_eq!(request.model, "main-model");
+    }
+
+    #[test]
     fn normalizes_native_subagent_models_from_origin() {
         let mut missing_native = request("claude-sonnet-5", &[]);
         let decision = resolve_request_model(

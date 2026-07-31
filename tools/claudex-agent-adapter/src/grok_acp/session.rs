@@ -68,12 +68,48 @@ pub(super) async fn create(
             .meta(json!({ "modelId": model }).as_object().cloned()),
     );
     let response = await_setup(provider, SESSION_SETUP_TIMEOUT, request).await?;
+    // OpenCode currently ignores the non-standard modelId metadata on session/new. Select the
+    // configured model through the ACP model method as soon as the session exists so the first
+    // prompt cannot run against the provider default.
+    if provider.is_session_scoped_configured() {
+        await_model_setup(
+            provider,
+            SESSION_SETUP_TIMEOUT,
+            connection.set_session_model(acp::SetSessionModelRequest::new(
+                response.session_id.clone(),
+                model.to_owned(),
+            )),
+        )
+        .await?;
+    }
     let session_id = response.session_id.0.to_string();
     let base = prompt::provider_instructions(&params, provider == AcpProvider::Grok);
     if !base.is_empty() {
         instructions.borrow_mut().insert(session_id.clone(), base);
     }
     Ok(json!({"thread":{"id":session_id}}))
+}
+
+async fn await_model_setup<T>(
+    provider: AcpProvider,
+    timeout: Duration,
+    request: impl Future<Output = acp::Result<T>>,
+) -> Result<T> {
+    tokio::time::timeout(timeout, request)
+        .await
+        .map_err(|_| {
+            anyhow!(
+                "{} ACP session/set_model timed out after {:?}",
+                provider.label(),
+                timeout
+            )
+        })?
+        .map_err(|error| {
+            anyhow!(
+                "{} ACP session/set_model failed: {error:?}",
+                provider.label()
+            )
+        })
 }
 
 async fn await_setup<T>(
@@ -125,6 +161,27 @@ mod tests {
         .await
         .unwrap_err();
         assert!(failed.to_string().contains("session/new failed"));
+    }
+
+    #[tokio::test]
+    async fn bounds_model_setup_and_reports_provider_failures() {
+        let timeout = await_model_setup(
+            AcpProvider::Configured,
+            Duration::from_millis(1),
+            std::future::pending::<acp::Result<()>>(),
+        )
+        .await
+        .unwrap_err();
+        assert!(timeout.to_string().contains("session/set_model timed out"));
+
+        let failed = await_model_setup(
+            AcpProvider::Grok,
+            Duration::from_secs(1),
+            std::future::ready(Err::<(), _>(acp::Error::internal_error())),
+        )
+        .await
+        .unwrap_err();
+        assert!(failed.to_string().contains("session/set_model failed"));
     }
 
     #[test]

@@ -2,7 +2,6 @@ use std::{cell::Cell, future::Future, rc::Rc, sync::atomic::AtomicBool, time::Du
 
 use agent_client_protocol::{self as acp, Agent as _};
 use anyhow::anyhow;
-use serde_json::{Map, Value};
 use tokio::sync::oneshot;
 
 use super::{
@@ -19,12 +18,12 @@ use crate::{
 // provider ignores or stalls on set_session_model (observed with configured ACP).
 const EFFORT_SETUP_TIMEOUT: Duration = Duration::from_secs(8);
 
-enum EffortSetupError {
+pub(super) enum EffortSetupError {
     TimedOut,
     Failed(acp::Error),
 }
 
-struct TurnCtl<'a> {
+pub(super) struct TurnCtl<'a> {
     provider: AcpProvider,
     session_id: &'a str,
     cancellation: &'a mut oneshot::Receiver<CancelRequest>,
@@ -33,6 +32,9 @@ struct TurnCtl<'a> {
     active_turns: &'a ActiveTurns,
     invalidated_sessions: &'a InvalidatedSessions,
 }
+
+mod setup;
+use setup::apply_effort;
 
 pub(super) struct TurnExecution<'a> {
     pub(super) provider: AcpProvider,
@@ -114,68 +116,6 @@ pub(super) async fn execute_turn(context: TurnExecution<'_>, turn: PreparedTurn)
     run_prompt(ctl, connection, id, prompt, timeout, alive).await;
 }
 
-async fn apply_effort(
-    ctl: &mut TurnCtl<'_>,
-    connection: &Rc<acp::ClientSideConnection>,
-    model: &str,
-    effort: Option<&str>,
-    id: &acp::SessionId,
-) -> bool {
-    if ctl.provider.model_is_launch_scoped() {
-        tracing::debug!(
-            session_id = ctl.session_id,
-            effort,
-            "skipping Configured ACP set_session_model; model is launch-scoped"
-        );
-        return true;
-    }
-    if effort.is_none() && !ctl.provider.is_session_scoped_configured() {
-        return true;
-    }
-    let mut meta = Map::new();
-    if let Some(effort) = effort {
-        meta.insert(
-            "reasoningEffort".to_owned(),
-            Value::String(effort.to_owned()),
-        );
-    }
-    let request = acp::SetSessionModelRequest::new(id.clone(), model.to_owned())
-        .meta((!meta.is_empty()).then_some(meta));
-    let setup_started = Rc::new(Cell::new(false));
-    let setup = {
-        let connection = Rc::clone(connection);
-        let setup_started = Rc::clone(&setup_started);
-        async move {
-            setup_started.set(true);
-            match tokio::time::timeout(EFFORT_SETUP_TIMEOUT, connection.set_session_model(request))
-                .await
-            {
-                Ok(Ok(_)) => Ok(()),
-                Ok(Err(error)) => Err(EffortSetupError::Failed(error)),
-                Err(_) => Err(EffortSetupError::TimedOut),
-            }
-        }
-    };
-    tokio::pin!(setup);
-    let setup_result = tokio::select! {
-        biased;
-        cancellation_result = &mut *ctl.cancellation => match cancellation_result {
-            Ok(cancellation) => {
-                handle_setup_cancellation(ctl, setup_started.get(), &mut setup, cancellation)
-                    .await;
-                return false;
-            }
-            Err(_) => setup.await,
-        },
-        result = &mut setup => result,
-    };
-    // Let queued stream-disconnect cancellation reach the turn before prompt submission.
-    if setup_result.is_ok() {
-        tokio::task::yield_now().await;
-    }
-    finish_effort_setup(ctl, setup_result)
-}
-
 fn finish_effort_setup(ctl: &mut TurnCtl<'_>, setup_result: Result<(), EffortSetupError>) -> bool {
     match setup_result {
         Ok(()) => {
@@ -241,7 +181,7 @@ fn continue_without_effort(ctl: &mut TurnCtl<'_>, warning: String) -> bool {
     true
 }
 
-async fn handle_setup_cancellation<F, T>(
+pub(super) async fn handle_setup_cancellation<F, T>(
     ctl: &mut TurnCtl<'_>,
     setup_started: bool,
     setup: F,
