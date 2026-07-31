@@ -177,6 +177,7 @@ fn completed_segment() -> Segment {
             output_tokens: 1,
             web_search_requests: 0,
         },
+        web_evidence: WebEvidenceSummary::default(),
     }
 }
 

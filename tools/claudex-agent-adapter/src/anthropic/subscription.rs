@@ -21,7 +21,7 @@ pub(super) use super::subscription_request::cwd_from_system;
 pub(super) use super::subscription_request::requested_tools;
 pub(super) use super::subscription_request::requested_tools_for_request;
 use super::{
-    Bridge, MessagesRequest, Segment, Usage,
+    Bridge, MessagesRequest, Segment, Usage, WebEvidenceSummary,
     content::{anthropic_response, estimated_tokens, token_count},
     subscription_request::{subscription_request_cwd, subscription_request_prompt},
     subscription_stream::subscription_streaming_response,
@@ -157,6 +157,7 @@ impl Bridge {
                 output_tokens: estimated_tokens(&text),
                 web_search_requests: 0,
             },
+            web_evidence: WebEvidenceSummary::default(),
         };
         Ok(anthropic_response(segment, &request.model))
     }

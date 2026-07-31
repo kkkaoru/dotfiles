@@ -5,50 +5,115 @@ use serde_json::{Map, Value, json};
 
 use crate::app_server::events::ThreadEventDispatcher;
 
+use super::web_evidence::{ProviderWebEvidence, completion_evidence, web_operation};
 use super::{PROVIDER_TOOL_CALL, PROVIDER_TOOL_UPDATE, dispatch_status};
 
+#[cfg(test)]
 pub(super) fn dispatch_provider_tool_call(
     events: &ThreadEventDispatcher,
+    session_id: &str,
+    call: acp::ToolCall,
+) {
+    dispatch_provider_tool_call_with_evidence(events, None, session_id, call);
+}
+
+pub(super) fn dispatch_provider_tool_call_with_evidence(
+    events: &ThreadEventDispatcher,
+    evidence: Option<&ProviderWebEvidence>,
     session_id: &str,
     call: acp::ToolCall,
 ) {
     let call_id = call.tool_call_id.0.to_string();
     let name = tool_display_name(&call);
     let input = build_tool_input(&call);
+    let operation = web_operation(&call.title, Some(call.kind), call.raw_input.as_ref());
+    let completed_operation = evidence.and_then(|tracker| {
+        operation.as_ref().and_then(|operation| {
+            tracker.record(session_id, &call_id, operation.clone());
+            (call.status == acp::ToolCallStatus::Completed)
+                .then(|| tracker.completion_candidate(session_id, &call_id, None))
+                .flatten()
+        })
+    });
+    let mut params = json!({
+        "threadId": session_id,
+        "callId": call_id,
+        "tool": name,
+        "title": call.title,
+        "kind": tool_kind_label(call.kind),
+        "status": tool_status_label(call.status),
+        "arguments": input
+    });
+    if let Some(operation) = completed_operation
+        && let Some(metadata) = completion_evidence(operation, call.raw_output, Some(&call.content))
+    {
+        params["evidence"] = metadata;
+        if let Some(tracker) = evidence {
+            tracker.mark_completed(session_id, &call_id);
+        }
+    }
     events.dispatch(json!({
         "method": PROVIDER_TOOL_CALL,
-        "params": {
-            "threadId": session_id,
-            "callId": call_id,
-            "tool": name,
-            "title": call.title,
-            "kind": tool_kind_label(call.kind),
-            "status": tool_status_label(call.status),
-            "arguments": input
-        }
+        "params": params
     }));
 }
 
+#[cfg(test)]
 pub(super) fn dispatch_provider_tool_update(
     events: &ThreadEventDispatcher,
     session_id: &str,
     update: acp::ToolCallUpdate,
 ) {
+    dispatch_provider_tool_update_with_evidence(events, None, session_id, update);
+}
+
+pub(super) fn dispatch_provider_tool_update_with_evidence(
+    events: &ThreadEventDispatcher,
+    evidence: Option<&ProviderWebEvidence>,
+    session_id: &str,
+    update: acp::ToolCallUpdate,
+) {
     let call_id = update.tool_call_id.0.to_string();
     let fields = update.fields;
+    let completed_evidence = evidence.and_then(|tracker| {
+        completed_web_operation(tracker, session_id, &call_id, &fields).and_then(|operation| {
+            let metadata = completion_evidence(
+                operation,
+                fields.raw_output.clone(),
+                fields.content.as_ref(),
+            )?;
+            tracker
+                .mark_completed(session_id, &call_id)
+                .then_some(metadata)
+        })
+    });
     if let Some(call) = update_to_tool_call(&call_id, fields.clone()) {
-        dispatch_provider_tool_call(events, session_id, call);
+        dispatch_provider_tool_call_with_evidence(events, evidence, session_id, call);
     } else if let Some(params) = status_only_params(session_id, &call_id, &fields) {
         events.dispatch(json!({ "method": PROVIDER_TOOL_UPDATE, "params": params }));
     } else if let Some(status) = fields.status {
         events.dispatch(json!({
             "method": PROVIDER_TOOL_UPDATE,
-            "params": tool_update_params(session_id, &call_id, fields, status)
+            "params": tool_update_params(session_id, &call_id, fields, status, completed_evidence)
         }));
     } else {
         // Content-only patches without a status do not change Claude Code's WIP
         // surface; skip them to cut event spam from chatty ACP providers.
     }
+}
+
+fn completed_web_operation(
+    evidence: &ProviderWebEvidence,
+    session_id: &str,
+    call_id: &str,
+    fields: &acp::ToolCallUpdateFields,
+) -> Option<super::web_evidence::WebOperation> {
+    (fields.status == Some(acp::ToolCallStatus::Completed)).then_some(())?;
+    let direct_operation = fields
+        .title
+        .as_deref()
+        .and_then(|title| web_operation(title, fields.kind, fields.raw_input.as_ref()));
+    evidence.completion_candidate(session_id, call_id, direct_operation)
 }
 
 fn update_to_tool_call(call_id: &str, fields: acp::ToolCallUpdateFields) -> Option<acp::ToolCall> {
@@ -103,6 +168,7 @@ fn tool_update_params(
     call_id: &str,
     fields: acp::ToolCallUpdateFields,
     status: acp::ToolCallStatus,
+    evidence: Option<Value>,
 ) -> Value {
     let mut params = json!({
         "threadId": session_id,
@@ -117,6 +183,9 @@ fn tool_update_params(
     }
     if let Some(output) = combine_output(fields.raw_output, fields.content.as_ref()) {
         params["output"] = output;
+    }
+    if let Some(evidence) = evidence {
+        params["evidence"] = evidence;
     }
     params
 }

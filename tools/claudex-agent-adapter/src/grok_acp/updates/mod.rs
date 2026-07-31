@@ -11,6 +11,7 @@
 
 mod thought_units;
 mod tools;
+mod web_evidence;
 
 use std::time::Duration;
 
@@ -20,7 +21,10 @@ use serde_json::{Value, json};
 use crate::app_server::events::ThreadEventDispatcher;
 
 pub(crate) use thought_units::ThoughtUnits;
-use tools::{dispatch_plan, dispatch_provider_tool_call, dispatch_provider_tool_update};
+use tools::{
+    dispatch_plan, dispatch_provider_tool_call_with_evidence,
+    dispatch_provider_tool_update_with_evidence,
+};
 
 pub(super) const AGENT_MESSAGE_METHOD: &str = "item/agentMessage/delta";
 pub(super) const REASONING_METHOD: &str = "item/reasoning/summaryTextDelta";
@@ -55,10 +59,20 @@ pub(super) fn dispatch_notification(
             // Only tool *starts* open a new thought unit. Per-update breaks made
             // summaryIndex thrash and reordered thinking chunks in the UI log.
             thoughts.break_after_interrupt(&session_id);
-            dispatch_provider_tool_call(events, &session_id, call);
+            dispatch_provider_tool_call_with_evidence(
+                events,
+                Some(&thoughts.provider_web_evidence),
+                &session_id,
+                call,
+            );
         }
         acp::SessionUpdate::ToolCallUpdate(update) => {
-            dispatch_provider_tool_update(events, &session_id, update);
+            dispatch_provider_tool_update_with_evidence(
+                events,
+                Some(&thoughts.provider_web_evidence),
+                &session_id,
+                update,
+            );
         }
         acp::SessionUpdate::Plan(plan) => {
             dispatch_plan(events, &session_id, plan);

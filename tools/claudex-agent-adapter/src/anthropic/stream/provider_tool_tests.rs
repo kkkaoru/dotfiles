@@ -186,4 +186,90 @@ mod tests {
             "abc…"
         );
     }
+
+    #[tokio::test]
+    async fn counts_only_validated_provider_web_evidence_once() {
+        let mut builder = SegmentBuilder::new(1);
+        let evidence = json!({
+            "provider":"acp",
+            "provenance":"provider-native-tool-completion",
+            "kind":"web_search",
+            "evidence_class":"search_result_only",
+            "status":"completed",
+            "verified":true,
+            "result_summary":"provider search result",
+            "source_urls":["https://example.com/result"]
+        });
+        for (call_id, evidence) in [
+            ("model-prose", json!("https://model.example/prose-url")),
+            (
+                "missing-source",
+                json!({
+                    "provider":"acp",
+                    "provenance":"provider-native-tool-completion",
+                    "kind":"web_search",
+                    "evidence_class":"search_result_only",
+                    "status":"completed",
+                    "verified":true,
+                    "result_summary":"missing source URL",
+                    "source_urls":[]
+                }),
+            ),
+            ("native-search", evidence.clone()),
+            ("native-search", evidence),
+        ] {
+            builder
+                .provider_tool_update(
+                    &json!({"params":{
+                        "callId":call_id,
+                        "status":"completed",
+                        "evidence":evidence
+                    }}),
+                    None,
+                )
+                .await
+                .expect("provider update");
+        }
+        let segment = builder.finish(None).await.expect("segment");
+        assert_eq!(segment.usage.web_search_requests, 1);
+    }
+
+    #[test]
+    fn accepts_only_complete_native_web_evidence_with_a_valid_source() {
+        let valid = json!({
+            "provider":"acp",
+            "provenance":"provider-native-tool-completion",
+            "kind":"web_search",
+            "evidence_class":"search_result_only",
+            "status":"completed",
+            "verified":true,
+            "result_summary":"provider result",
+            "source_urls":["https://example.com/result"]
+        });
+        assert!(validated_provider_web_evidence(Some(&valid)));
+        assert!(!validated_provider_web_evidence(None));
+
+        let mut invalid = valid.clone();
+        invalid["provenance"] = json!("model-prose");
+        assert!(!validated_provider_web_evidence(Some(&invalid)));
+
+        let mut fetch = valid.clone();
+        fetch["kind"] = json!("web_fetch");
+        fetch["evidence_class"] = json!("fetch_verified");
+        fetch["source_urls"] = json!(["http://example.com/fetch"]);
+        assert!(validated_provider_web_evidence(Some(&fetch)));
+
+        for (field, value) in [
+            ("evidence_class", json!("fetch_verified")),
+            ("status", json!("in_progress")),
+            ("verified", json!(false)),
+            ("result_summary", json!("  ")),
+            ("source_urls", json!(["ftp://example.com/result"])),
+            ("source_urls", json!([null])),
+        ] {
+            let mut invalid = valid.clone();
+            invalid[field] = value;
+            assert!(!validated_provider_web_evidence(Some(&invalid)));
+        }
+    }
 }

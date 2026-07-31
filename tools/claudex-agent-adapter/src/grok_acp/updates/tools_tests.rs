@@ -233,6 +233,64 @@ mod tests {
         }));
     }
 
+    #[tokio::test]
+    async fn attaches_one_provenance_record_only_after_explicit_web_completion() {
+        let events = ThreadEventDispatcher::default();
+        let receiver = events.subscribe("session");
+        let evidence = ProviderWebEvidence::default();
+        dispatch_provider_tool_call_with_evidence(
+            &events,
+            Some(&evidence),
+            "session",
+            acp::ToolCall::new("native-search", "WebSearch")
+                .kind(acp::ToolKind::Search)
+                .raw_input(json!({"query":"AVITA"})),
+        );
+        for output in ["", "https://example.com/result", "retry output"] {
+            dispatch_provider_tool_update_with_evidence(
+                &events,
+                Some(&evidence),
+                "session",
+                acp::ToolCallUpdate::new(
+                    "native-search",
+                    acp::ToolCallUpdateFields::new()
+                        .status(acp::ToolCallStatus::Completed)
+                        .raw_output(json!(output)),
+                ),
+            );
+        }
+        dispatch_provider_tool_update_with_evidence(
+            &events,
+            Some(&evidence),
+            "session",
+            acp::ToolCallUpdate::new(
+                "workspace-search",
+                acp::ToolCallUpdateFields::new()
+                    .title("Search workspace")
+                    .kind(acp::ToolKind::Search)
+                    .status(acp::ToolCallStatus::Completed)
+                    .raw_output(json!("https://model.example/should-not-count")),
+            ),
+        );
+
+        let mut messages = Vec::new();
+        while let Ok(Some(message)) =
+            tokio::time::timeout(std::time::Duration::from_millis(10), receiver.recv()).await
+        {
+            messages.push(message);
+        }
+        let completions = messages
+            .iter()
+            .filter(|message| message["params"]["evidence"]["verified"] == true)
+            .collect::<Vec<_>>();
+        assert_eq!(completions.len(), 1);
+        assert_eq!(completions[0]["params"]["evidence"]["kind"], "web_search");
+        assert_eq!(
+            completions[0]["params"]["evidence"]["source_urls"],
+            json!(["https://example.com/result"])
+        );
+    }
+
     fn assert_dispatched_messages(messages: &[Value]) {
         assert_eq!(
             messages[0]["params"]["arguments"]["description"],

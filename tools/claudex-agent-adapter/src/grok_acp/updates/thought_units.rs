@@ -7,9 +7,12 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+use super::web_evidence::ProviderWebEvidence;
+
 #[derive(Default)]
 pub(crate) struct ThoughtUnits {
     sessions: Mutex<HashMap<String, UnitState>>,
+    pub(super) provider_web_evidence: ProviderWebEvidence,
 }
 
 #[derive(Default)]
@@ -64,6 +67,7 @@ impl ThoughtUnits {
             .lock()
             .expect("thought units poisoned")
             .remove(session_id);
+        self.provider_web_evidence.clear(session_id);
     }
 }
 

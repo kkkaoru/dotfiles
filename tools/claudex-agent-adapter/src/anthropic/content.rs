@@ -220,7 +220,7 @@ pub(super) fn input_text(text: &str) -> Value {
 }
 
 pub(super) fn anthropic_response(segment: Segment, model: &str) -> Response<Body> {
-    json_response(json!({
+    let mut response = json!({
         "id": format!("msg_{}", Uuid::new_v4().simple()),
         "type": "message",
         "role": "assistant",
@@ -235,7 +235,11 @@ pub(super) fn anthropic_response(segment: Segment, model: &str) -> Response<Body
                 "web_search_requests": segment.usage.web_search_requests
             }
         }
-    }))
+    });
+    if let Some(metadata) = segment.web_evidence.metadata() {
+        response["metadata"] = metadata;
+    }
+    json_response(response)
 }
 
 pub(super) fn estimated_tokens(text: &str) -> u64 {

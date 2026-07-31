@@ -4,7 +4,7 @@ use anyhow::Result;
 use axum::{body::Body, http::Response};
 
 use super::{
-    ActiveTurn, Bridge, MessagesRequest, Segment, Usage,
+    ActiveTurn, Bridge, MessagesRequest, Segment, Usage, WebEvidenceSummary,
     content::{anthropic_response, estimated_tokens},
     model_concurrency::ModelPermit,
     subscription::{SubscriptionOptions, run_subscription_model},
@@ -227,6 +227,7 @@ async fn background_response(bridge: &Bridge, turn: &ActiveTurn) -> Response<Bod
                 output_tokens: estimated_tokens(&text),
                 web_search_requests: 0,
             },
+            web_evidence: WebEvidenceSummary::default(),
         },
         &turn.response_model,
     )

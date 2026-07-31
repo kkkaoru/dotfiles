@@ -702,7 +702,7 @@ async fn streams_native_web_search_status_without_committing_it() {
     let segment = builder.finish(Some(&sender)).await.expect("segment");
     drop(sender);
     assert!(segment.blocks.is_empty());
-    assert_eq!(segment.usage.web_search_requests, 2);
+    assert_eq!(segment.usage.web_search_requests, 0);
 
     let mut frames = Vec::new();
     while let Some(frame) = receiver.recv().await {
@@ -1650,6 +1650,7 @@ async fn emits_completion_error_and_optional_frames() {
             output_tokens: 4,
             web_search_requests: 0,
         },
+        web_evidence: super::super::WebEvidenceSummary::default(),
     };
     send_stream_completion(&sender, &segment).await;
     send_stream_error(&sender, anyhow!("boom")).await;
@@ -1666,6 +1667,42 @@ async fn emits_completion_error_and_optional_frames() {
     assert!(output.contains("event: message_stop"));
     assert!(output.contains("event: error"));
     assert!(output.contains("boom"));
+}
+
+#[tokio::test]
+async fn completion_frame_exposes_verified_web_evidence_metadata() {
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(2);
+    let segment = super::super::Segment {
+        blocks: Vec::new(),
+        stop_reason: "end_turn",
+        usage: super::super::Usage {
+            input_tokens: 1,
+            output_tokens: 4,
+            web_search_requests: 2,
+        },
+        web_evidence: super::super::WebEvidenceSummary::from_verified_count(2),
+    };
+
+    send_stream_completion(&sender, &segment).await;
+
+    let frame = receiver
+        .recv()
+        .await
+        .expect("message delta")
+        .expect("frame");
+    let frame = String::from_utf8(frame.to_vec()).expect("UTF-8 SSE");
+    let payload = frame
+        .strip_prefix("event: message_delta\ndata: ")
+        .expect("message delta payload");
+    let payload: Value = serde_json::from_str(payload.trim()).expect("message delta JSON");
+    assert_eq!(
+        payload["usage"]["server_tool_use"]["web_search_requests"],
+        2
+    );
+    assert_eq!(
+        payload["metadata"]["claudex"]["web_evidence"]["verified_count"],
+        2
+    );
 }
 
 #[test]

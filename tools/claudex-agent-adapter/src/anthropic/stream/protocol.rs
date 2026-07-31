@@ -111,14 +111,18 @@ impl Stream for KeepaliveStream {
 
 pub(in crate::anthropic) async fn send_stream_completion(sender: &StreamSender, segment: &Segment) {
     let _ = send_stream_frame(Some(sender), "message_delta", || {
-        json!({
+        let mut frame = json!({
             "type":"message_delta",
             "delta":{"stop_reason":segment.stop_reason,"stop_sequence":null},
             "usage":{
                 "output_tokens":segment.usage.output_tokens,
                 "server_tool_use":{"web_search_requests":segment.usage.web_search_requests}
             }
-        })
+        });
+        if let Some(metadata) = segment.web_evidence.metadata() {
+            frame["metadata"] = metadata;
+        }
+        frame
     })
     .await;
     let _ = send_stream_frame(

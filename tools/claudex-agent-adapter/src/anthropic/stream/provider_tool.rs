@@ -35,7 +35,9 @@ impl SegmentBuilder {
             .and_then(Value::as_str)
             .filter(|title| !title.trim().is_empty())
             .unwrap_or(name);
-        if !self.remember_provider_tool(call_id, title) {
+        let is_new = self.remember_provider_tool(call_id, title);
+        self.record_provider_web_evidence(call_id, params);
+        if !is_new {
             return Ok(());
         }
         self.stream_ephemeral_status(&format!("\n\n▶ {title}\n"), stream)
@@ -64,6 +66,9 @@ impl SegmentBuilder {
             .or_else(|| call_id.and_then(|id| self.provider_tool_title(id)))
             .unwrap_or("tool")
             .to_owned();
+        if let Some(call_id) = call_id {
+            self.record_provider_web_evidence(call_id, params);
+        }
         match status {
             "failed" => {
                 let detail = output_preview(params.get("output"), "failed");
@@ -119,6 +124,45 @@ impl SegmentBuilder {
             .find(|(seen, _)| seen == call_id)
             .map(|(_, title)| title.as_str())
     }
+
+    fn record_provider_web_evidence(&mut self, call_id: &str, params: &Value) {
+        if !validated_provider_web_evidence(params.get("evidence")) {
+            return;
+        }
+        self.record_verified_web_evidence(call_id);
+    }
+}
+
+fn validated_provider_web_evidence(evidence: Option<&Value>) -> bool {
+    let Some(evidence) = evidence else {
+        return false;
+    };
+    let source_urls = evidence.get("source_urls").and_then(Value::as_array);
+    evidence.get("provider").and_then(Value::as_str) == Some("acp")
+        && evidence.get("provenance").and_then(Value::as_str)
+            == Some("provider-native-tool-completion")
+        && matches!(
+            (
+                evidence.get("kind").and_then(Value::as_str),
+                evidence.get("evidence_class").and_then(Value::as_str),
+            ),
+            (Some("web_search"), Some("search_result_only"))
+                | (Some("web_fetch"), Some("fetch_verified"))
+        )
+        && evidence.get("status").and_then(Value::as_str) == Some("completed")
+        && evidence.get("verified").and_then(Value::as_bool) == Some(true)
+        && evidence
+            .get("result_summary")
+            .and_then(Value::as_str)
+            .is_some_and(|summary| !summary.trim().is_empty())
+        && source_urls.is_some_and(|urls| {
+            !urls.is_empty()
+                && urls.iter().all(|url| {
+                    url.as_str().is_some_and(|url| {
+                        url.starts_with("https://") || url.starts_with("http://")
+                    })
+                })
+        })
 }
 
 fn output_preview(value: Option<&Value>, fallback: &str) -> String {

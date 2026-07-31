@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 
 use super::{ToolCall, error_flow, turn_flow};
 use crate::anthropic::{
-    Bridge, Segment, Session, Usage,
+    Bridge, Segment, Session, Usage, WebEvidenceSummary,
     content::{estimated_block_tokens, estimated_tokens},
 };
 
@@ -16,6 +16,8 @@ use super::{
 };
 
 mod external_tool;
+#[path = "web_provenance.rs"]
+mod web_provenance;
 
 pub(super) use super::tool_call_parser::parse_tool_call;
 
@@ -27,6 +29,10 @@ pub(super) struct SegmentBuilder {
     /// Provider call IDs already shown as progress text. ACP can report the same
     /// call first as ToolCall and again as a populated ToolCallUpdate.
     pub(super) provider_tool_calls: Vec<(String, String)>,
+    requires_verified_web_evidence: bool,
+    /// Completed provider-native web calls whose provenance has already been
+    /// counted. A provider may repeat its final ToolCallUpdate while reconnecting.
+    verified_web_evidence_call_ids: Vec<String>,
     usage: Usage,
 }
 
@@ -38,6 +44,8 @@ impl SegmentBuilder {
             open_text_block: None,
             external_tool_calls: 0,
             provider_tool_calls: Vec::new(),
+            requires_verified_web_evidence: false,
+            verified_web_evidence_call_ids: Vec::new(),
             usage: Usage {
                 input_tokens,
                 ..Usage::default()
@@ -71,6 +79,7 @@ impl SegmentBuilder {
         event: &Value,
         stream: Option<&StreamSender>,
     ) -> Result<ControlFlow<()>> {
+        self.record_web_evidence_requirement(current_messages, system);
         if self.model_output_event(event, stream).await? {
             return Ok(ControlFlow::Continue(()));
         }
@@ -89,7 +98,9 @@ impl SegmentBuilder {
             Some("item/started") => {
                 self.native_web_search_event(event, stream).await?;
             }
-            Some("item/completed") => {}
+            Some("item/completed") => {
+                self.native_web_search_event(event, stream).await?;
+            }
             Some("thread/tokenUsage/updated") => self.update_usage(event),
             Some("error") => return error_flow(event),
             Some("turn/completed") => return turn_flow(event),
@@ -112,24 +123,6 @@ impl SegmentBuilder {
             _ => return Ok(false),
         }
         Ok(true)
-    }
-
-    async fn native_web_search_event(
-        &mut self,
-        event: &Value,
-        stream: Option<&StreamSender>,
-    ) -> Result<()> {
-        if event.pointer("/params/item/type").and_then(Value::as_str) != Some("webSearch") {
-            return Ok(());
-        }
-        self.usage.web_search_requests = self.usage.web_search_requests.saturating_add(1);
-        let query = event
-            .pointer("/params/item/query")
-            .and_then(Value::as_str)
-            .filter(|query| !query.is_empty())
-            .unwrap_or("search");
-        self.stream_ephemeral_status(&format!("\n\n🔎 WebSearch: {query}\n"), stream)
-            .await
     }
 
     pub(super) async fn text_delta(
@@ -333,7 +326,13 @@ impl SegmentBuilder {
     pub(super) async fn finish(&mut self, stream: Option<&StreamSender>) -> Result<Segment> {
         self.close_open_blocks(stream).await?;
         sanitize_committed_blocks(&mut self.blocks);
-        if self.usage.output_tokens == 0 {
+        let stop_reason = if self.external_tool_calls > 0 {
+            "tool_use"
+        } else {
+            "end_turn"
+        };
+        let web_answer_replaced = self.gate_unverified_web_response(stop_reason);
+        if web_answer_replaced || self.usage.output_tokens == 0 {
             self.usage.output_tokens = self
                 .blocks
                 .iter()
@@ -346,17 +345,16 @@ impl SegmentBuilder {
                 })
                 .sum();
         }
-        let stop_reason = if self.external_tool_calls > 0 {
-            "tool_use"
-        } else {
-            "end_turn"
-        };
         let blocks = std::mem::take(&mut self.blocks);
         Ok(Segment {
             blocks,
             stop_reason,
             usage: self.usage,
-        })
+            web_evidence: WebEvidenceSummary::default(),
+        }
+        .with_web_evidence(WebEvidenceSummary::from_verified_count(
+            self.verified_web_evidence_count(),
+        )))
     }
 }
 

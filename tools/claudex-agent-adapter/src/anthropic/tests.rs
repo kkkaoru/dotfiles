@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 
 use super::{
     BRIDGE_INSTRUCTIONS, MessagesRequest, Segment, Session, SignaturePool, Usage,
+    WebEvidenceSummary,
     content::*,
     intern_signature,
     retention::{record_pending_tool, sweep_idle_sessions_at, take_oldest_evictable_at},
@@ -301,6 +302,7 @@ async fn builds_anthropic_json_and_error_responses() {
                 output_tokens: 2,
                 web_search_requests: 0,
             },
+            web_evidence: WebEvidenceSummary::default(),
         },
         "model",
     );
@@ -309,6 +311,7 @@ async fn builds_anthropic_json_and_error_responses() {
     assert_eq!(response["content"][0]["text"], "OK");
     assert_eq!(response["usage"]["input_tokens"], 10);
     assert_eq!(response["usage"]["output_tokens"], 2);
+    assert!(response.get("metadata").is_none());
 
     let error = error_response(
         axum::http::StatusCode::BAD_REQUEST,
@@ -326,6 +329,40 @@ async fn builds_anthropic_json_and_error_responses() {
     let body = to_bytes(terminal.into_body(), usize::MAX).await.unwrap();
     let terminal: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(terminal["error"]["type"], "invalid_request_error");
+}
+
+#[tokio::test]
+async fn exposes_verified_web_evidence_metadata_in_non_stream_response() {
+    let response = anthropic_response(
+        Segment {
+            blocks: Vec::new(),
+            stop_reason: "end_turn",
+            usage: Usage {
+                input_tokens: 1,
+                output_tokens: 2,
+                web_search_requests: 3,
+            },
+            web_evidence: WebEvidenceSummary::from_verified_count(3),
+        },
+        "model",
+    );
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("response body");
+    let response: Value = serde_json::from_slice(&body).expect("Anthropic JSON");
+
+    assert_eq!(
+        response["usage"]["server_tool_use"]["web_search_requests"],
+        3
+    );
+    assert_eq!(
+        response["metadata"]["claudex"]["web_evidence"]["verified_count"],
+        3
+    );
+    assert_eq!(
+        response["metadata"]["claudex"]["web_evidence"]["evidence_class_counts"]["verified_retrieval"],
+        3
+    );
 }
 
 #[test]
