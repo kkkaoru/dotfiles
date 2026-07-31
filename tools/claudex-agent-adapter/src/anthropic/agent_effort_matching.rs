@@ -55,8 +55,18 @@ pub(super) fn correlated_prompt(prompt: &str, tool_use_id: &str, model: Option<&
 }
 
 pub(super) fn is_subagent_request(request: &MessagesRequest) -> bool {
-    value_contains_subagent_marker(&request.system)
-        || request.messages.iter().any(value_contains_subagent_marker)
+    if value_contains_billing_marker(&request.system) {
+        return true;
+    }
+    let has_tool_result = request.messages.iter().any(is_tool_result_message);
+    request.messages.iter().any(|message| {
+        message.get("role").and_then(Value::as_str) == Some("user")
+            && value_contains_subagent_marker(message)
+    }) || (has_tool_result
+        && request
+            .messages
+            .iter()
+            .any(value_contains_correlation_marker))
 }
 
 fn value_contains_subagent_marker(value: &Value) -> bool {
@@ -66,6 +76,36 @@ fn value_contains_subagent_marker(value: &Value) -> bool {
         Value::Object(values) => values.values().any(value_contains_subagent_marker),
         _ => false,
     }
+}
+
+fn value_contains_billing_marker(value: &Value) -> bool {
+    match value {
+        Value::String(text) => text.contains("cc_is_subagent=true"),
+        Value::Array(values) => values.iter().any(value_contains_billing_marker),
+        Value::Object(values) => values.values().any(value_contains_billing_marker),
+        _ => false,
+    }
+}
+
+fn value_contains_correlation_marker(value: &Value) -> bool {
+    match value {
+        Value::String(text) => has_correlation_marker(text),
+        Value::Array(values) => values.iter().any(value_contains_correlation_marker),
+        Value::Object(values) => values.values().any(value_contains_correlation_marker),
+        _ => false,
+    }
+}
+
+fn is_tool_result_message(value: &Value) -> bool {
+    value.get("role").and_then(Value::as_str) == Some("user")
+        && value
+            .get("content")
+            .and_then(Value::as_array)
+            .is_some_and(|blocks| {
+                blocks
+                    .iter()
+                    .any(|block| block.get("type").and_then(Value::as_str) == Some("tool_result"))
+            })
 }
 
 pub(super) fn value_texts(value: &Value) -> impl Iterator<Item = &str> {
@@ -138,5 +178,65 @@ mod tests {
             }]
         })];
         assert!(request_matches_intent(&nested_messages, &intent));
+    }
+
+    #[test]
+    fn ignores_a_prior_assistant_correlation_marker_for_an_outer_follow_up() {
+        let request = MessagesRequest {
+            model: "main-model".to_owned(),
+            system: json!("main session"),
+            messages: vec![
+                json!({"role":"user","content":"launch a worker"}),
+                json!({
+                    "role":"assistant",
+                    "content":[{
+                        "type":"tool_use",
+                        "name":"Agent",
+                        "input":{"prompt":"work <claudex-agent-id>worker-1</claudex-agent-id>"}
+                    }]
+                }),
+                json!({"role":"user","content":"continue the main response"}),
+            ],
+            tools: Vec::new(),
+            stream: false,
+            output_config: Value::Null,
+            metadata: Value::Null,
+            working_directory: None,
+            disabled_subagent_models: Default::default(),
+            claudex_collaborator_model: None,
+        };
+
+        assert!(!is_subagent_request(&request));
+    }
+
+    #[test]
+    fn keeps_a_correlation_marker_for_a_tool_result_continuation() {
+        let request = MessagesRequest {
+            model: "worker-model".to_owned(),
+            system: json!("child session"),
+            messages: vec![
+                json!({
+                    "role":"assistant",
+                    "content":[{
+                        "type":"tool_use",
+                        "name":"Agent",
+                        "input":{"prompt":"work <claudex-agent-id>worker-1</claudex-agent-id>"}
+                    }]
+                }),
+                json!({
+                    "role":"user",
+                    "content":[{"type":"tool_result","tool_use_id":"worker-1","content":"done"}]
+                }),
+            ],
+            tools: Vec::new(),
+            stream: false,
+            output_config: Value::Null,
+            metadata: Value::Null,
+            working_directory: None,
+            disabled_subagent_models: Default::default(),
+            claudex_collaborator_model: None,
+        };
+
+        assert!(is_subagent_request(&request));
     }
 }

@@ -4,7 +4,7 @@
 mod tests {
     use std::time::Instant;
 
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     use super::{
         AgentEffort, AgentEffortIntents, AgentEffortRecord, prepare_arguments,
@@ -242,6 +242,54 @@ mod tests {
         assert!(intent.is_subagent);
         assert!(intent.model_override.is_none());
         assert!(matches!(intent.effort, AgentEffort::ConfiguredDefault));
+    }
+
+    #[test]
+    fn outer_follow_up_does_not_consume_a_prior_agent_marker_without_tool_result() {
+        let intents = AgentEffortIntents::default();
+        let (internal, _) = prepare_arguments(
+            "Agent",
+            "tool-background",
+            &json!({
+                "prompt":"background task",
+                "claudex_model":"worker-model",
+                "claudex_effort":"high"
+            }),
+        );
+        let internal = internal.expect("agent intent");
+        intents.record(
+            Some("outer-session"),
+            "Agent",
+            "tool-background".to_owned(),
+            "main-model",
+            &internal,
+        );
+        let prompt = internal["prompt"].as_str().expect("correlated prompt");
+        let request = MessagesRequest {
+            model: "main-model".to_owned(),
+            system: json!("main session"),
+            messages: vec![
+                json!({"role":"user","content":"launch the worker"}),
+                json!({
+                    "role":"assistant",
+                    "content":[{"type":"tool_use","name":"Agent","input":{"prompt":prompt}}]
+                }),
+                json!({"role":"user","content":"continue the main answer"}),
+            ],
+            tools: Vec::new(),
+            stream: false,
+            output_config: Value::Null,
+            metadata: json!({"user_id":"outer-session"}),
+            working_directory: None,
+            disabled_subagent_models: Default::default(),
+            claudex_collaborator_model: None,
+        };
+
+        let intent = intents.take(&request);
+
+        assert!(!intent.is_subagent);
+        assert!(!intent.matched);
+        assert!(intent.model_override.is_none());
     }
 
     #[test]

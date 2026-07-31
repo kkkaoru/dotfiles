@@ -20,7 +20,7 @@ pub(super) async fn reserve_matching_session(
         let Ok(gate) = Arc::clone(&session.gate).try_lock_owned() else {
             continue;
         };
-        if !session.pending_tools.lock().await.is_empty() {
+        if has_pending_tools(&session).await {
             continue;
         }
         let Some(existing_len) = candidate_length(&session, signature, messages).await else {
@@ -58,6 +58,9 @@ pub(super) async fn find_busy_matching_session(
 ) -> Option<(Arc<Session>, usize)> {
     let mut best: Option<(Arc<Session>, usize)> = None;
     for session in sessions.iter() {
+        if has_pending_tools(session).await {
+            continue;
+        }
         let Some(existing_len) = candidate_length(session, signature, messages).await else {
             continue;
         };
@@ -74,6 +77,9 @@ pub(super) async fn find_busy_matching_session(
     // Signature miss: still reclaim a busy conversation for the same human.
     let mut best: Option<(Arc<Session>, usize)> = None;
     for session in sessions {
+        if has_pending_tools(&session).await {
+            continue;
+        }
         if Arc::clone(&session.gate).try_lock_owned().is_ok() {
             continue;
         }
@@ -113,6 +119,9 @@ pub(super) async fn take_gate_after_preempt(
     let gate = tokio::time::timeout(PREEMPT_GATE_TIMEOUT, Arc::clone(&session.gate).lock_owned())
         .await
         .ok()?;
+    if has_pending_tools(session).await {
+        return None;
+    }
     align_transcript_to_request(session, messages).await;
     let existing_len = matching_transcript_len(session, messages).await?;
     touch_session(session);
@@ -122,6 +131,9 @@ pub(super) async fn take_gate_after_preempt(
         recovered: false,
         gate,
     })
+}
+async fn has_pending_tools(session: &Session) -> bool {
+    !session.pending_tools.lock().await.is_empty()
 }
 
 /// Drop trailing transcript entries that the client did not keep after interrupt
@@ -259,6 +271,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn busy_selection_skips_a_session_with_pending_subagent_tools() {
+        let messages = messages();
+        let session = session_with("main", Some("client"), "signature", messages.clone());
+        session
+            .pending_tools
+            .lock()
+            .await
+            .insert("tool-1".to_owned(), json!(1));
+        let _gate = Arc::clone(&session.gate).lock_owned().await;
+
+        let found = find_busy_matching_session(
+            vec![session],
+            &Arc::from("signature"),
+            &messages,
+            Some("main"),
+            Some("client"),
+        )
+        .await;
+
+        assert!(found.is_none());
+    }
+
+    #[tokio::test]
     async fn reserve_prefers_the_longest_idle_matching_transcript() {
         let messages = messages();
         let busy = session_with("main", Some("client"), "signature", messages.clone());
@@ -344,7 +379,6 @@ mod tests {
         assert_eq!(found.1, 1);
         assert_eq!(*realigned.transcript.lock().await, messages[..1]);
     }
-
     fn messages() -> Vec<Value> {
         vec![
             json!({"role":"user","content":"first"}),

@@ -15,6 +15,7 @@ struct Fixture<W> {
     parallel_agents: Option<ParallelAgents>,
     parallel_thread_id: Option<String>,
     team_guidance: bool,
+    orchestrator_mode: bool,
     disconnected_tool_drained: bool,
     disconnect_marker: Option<PathBuf>,
 }
@@ -46,10 +47,13 @@ impl<W: Write> Fixture<W> {
             })),
             Some("force/exit") => return false,
             Some("thread/start") => {
-                self.team_guidance = message
+                let instructions = message
                     .pointer("/params/developerInstructions")
                     .and_then(Value::as_str)
-                    .is_some_and(|text| text.contains("named teammate's name"));
+                    .unwrap_or_default();
+                self.team_guidance = instructions.contains("named teammate's name");
+                self.orchestrator_mode =
+                    instructions.contains("main-session orchestration mode is active");
                 self.next_thread += 1;
                 self.send(json!({
                     "id":message["id"], "result":{"thread":{"id":self.thread_id()}}
@@ -128,8 +132,56 @@ impl<W: Write> Fixture<W> {
             self.send_web_search();
         } else if input.contains("USE_NAMED_TEAM_MAILBOX") {
             self.send_named_teammate();
+        } else if input.contains("CONTROL_SUBAGENTS_TASK_OUTPUT") {
+            self.send_control_tool(
+                message,
+                "call-control-output",
+                "cc_TaskOutput_1",
+                json!({
+                    "task_id":"agent-profile-7",
+                    "block":true,
+                    "timeout":120000
+                }),
+            );
+        } else if input.contains("CONTROL_SUBAGENTS_SEND_MESSAGE") {
+            self.send_control_tool(
+                message,
+                "call-control-message",
+                "cc_SendMessage_3",
+                json!({
+                    "to":"agent-profile-7",
+                    "summary":"request current findings",
+                    "message":"Return your current findings and continue the assigned work."
+                }),
+            );
+        } else if input.contains("CONTROL_SUBAGENTS_TASK_UPDATE") {
+            self.send_control_tool(
+                message,
+                "call-control-update",
+                "cc_TaskUpdate_4",
+                json!({
+                    "task_id":"agent-profile-7",
+                    "status":"in_progress",
+                    "description":"Revise the report with the latest findings."
+                }),
+            );
+        } else if input.contains("CONTROL_SUBAGENTS_CONTINUE") {
+            let response = if self.orchestrator_mode {
+                "MAIN_RESPONSE_CONTINUED"
+            } else {
+                "WORKER_RESPONSE_MISROUTED"
+            };
+            self.send_text_and_complete(response);
         } else if input.contains("CONTROL_SUBAGENTS_STOP") {
-            self.send_control_tool(message);
+            self.send_control_tool(
+                message,
+                "call-control-stop",
+                "cc_TaskStop_2",
+                json!({
+                    "task_id":"agent-profile-7",
+                    "reason":"user requested that the main session stop this SubAgent"
+                }),
+            );
         } else if input.contains("USE_PARALLEL_AGENTS_TASK_OUTPUT") {
             self.send_parallel_agents(message);
         } else if input.contains("USE_PARALLEL_TOOLS") {
@@ -260,7 +312,7 @@ impl<W: Write> Fixture<W> {
         }
     }
 
-    fn send_control_tool(&mut self, message: &Value) {
+    fn send_control_tool(&mut self, message: &Value, call_id: &str, tool: &str, arguments: Value) {
         let thread_id = message.pointer("/params/threadId").and_then(Value::as_str);
         if self.parallel_agents.is_some() && self.parallel_thread_id.as_deref() == thread_id {
             self.send(json!({
@@ -278,14 +330,10 @@ impl<W: Write> Fixture<W> {
             "id":900, "method":"item/tool/call",
             "params":{
                 "threadId":thread_id, "turnId":"turn-test",
-                "callId":"call-control-stop", "tool":"cc_TaskStop_2",
-                "arguments":{
-                    "task_id":"agent-profile-7",
-                    "reason":"user requested that the main session stop this SubAgent"
-                }
+                "callId":call_id, "tool":tool, "arguments":arguments
             }
         }));
-        self.send_response_item_completed("call-control-stop", "cc_TaskStop_2");
+        self.send_response_item_completed(call_id, tool);
     }
 
     fn send_named_teammate(&mut self) {
@@ -650,6 +698,7 @@ fn main() {
         parallel_agents: None,
         parallel_thread_id: None,
         team_guidance: false,
+        orchestrator_mode: false,
         disconnected_tool_drained: false,
         disconnect_marker: None,
     };
