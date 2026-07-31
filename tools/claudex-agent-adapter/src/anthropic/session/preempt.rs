@@ -197,6 +197,45 @@ mod tests {
         app.shutdown().await;
     }
 
+    #[tokio::test]
+    async fn stale_busy_gate_holds_do_not_block_preemption_forever() {
+        let request = request("main-model");
+        let session = session("main-model", Some("client"));
+        let _hold = Arc::clone(&session.gate).lock_owned().await;
+        let messages = request.messages.clone();
+
+        let selection = tokio::spawn(wait_for_preemption(Arc::clone(&session), messages.clone()));
+
+        tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+        let selection = selection
+            .await
+            .expect("take_gate_after_preempt must complete");
+        drop(_hold);
+        assert!(selection.is_none());
+    }
+
+    async fn wait_for_preemption(
+        session: Arc<Session>,
+        messages: Vec<Value>,
+    ) -> Option<SelectedSession> {
+        take_gate_after_preempt(&session, &messages).await
+    }
+
+    #[tokio::test]
+    async fn pending_busy_tools_prevent_session_reuse_after_gate_release() {
+        let session = session("main-model", Some("client"));
+        session
+            .pending_tools
+            .lock()
+            .await
+            .insert("tool-1".to_owned(), serde_json::json!({"id":"tool-1"}));
+        assert!(
+            take_gate_after_preempt(&session, &[json!({"role":"user","content":"first"})])
+                .await
+                .is_none()
+        );
+    }
+
     #[test]
     fn reports_all_preemption_cancellation_outcomes() {
         for cancellation in [

@@ -11,12 +11,14 @@ use tokio::sync::Mutex;
 use super::{
     ActiveTurn, Bridge, MessagesRequest, SelectedSession, Session,
     content::{
-        ToolResult, collect_tool_results, matching_transcript_len, request_signature,
-        take_pending_results, transcript_owns_tool_results,
+        ToolResult, collect_tool_results, request_signature, take_pending_results,
+        transcript_owns_tool_results,
     },
 };
 use crate::app_server::response_thread_id;
 
+mod continuation;
+mod helpers;
 mod preempt;
 #[cfg(test)]
 pub(super) mod reservation;
@@ -25,6 +27,10 @@ mod reservation;
 mod session_turn;
 mod tools;
 
+use helpers::{
+    candidate_length, is_better_length, owns_tool_result, should_preempt_for_context_limit,
+    touch_session, validate_tool_result_ownership,
+};
 pub(in crate::anthropic) use session_turn::is_context_window_exceeded;
 #[cfg(test)]
 pub(super) use tools::{
@@ -149,6 +155,18 @@ impl Bridge {
         if let Some(selected) = self
             .select_matching_session(request, &signature, &request.messages)
             .await
+        {
+            return Ok(selected);
+        }
+        // Claude Code can omit the unchanged tool schemas on an ordinary
+        // resumed main-session request.  The schemas belong to the provider
+        // thread, so cold-starting here would replace the previous complete
+        // capability set (for example `Bash`) with only the fallback tools.
+        // Reuse only a tool-less continuation whose model, client identity,
+        // and transcript all match an idle main session.
+        if request.tools.is_empty()
+            && !super::agent_effort::is_subagent_request(request)
+            && let Some(selected) = continuation::select_toolless_main_session(self, request).await
         {
             return Ok(selected);
         }
@@ -332,63 +350,6 @@ impl Bridge {
         }
         Ok(submitted)
     }
-}
-
-fn touch_session(session: &Session) {
-    *session
-        .last_activity
-        .lock()
-        .expect("session clock poisoned") = Instant::now();
-}
-
-fn owns_tool_result(
-    pending: &HashMap<String, Value>,
-    consumed: &HashSet<String>,
-    tool_use_id: &str,
-) -> bool {
-    pending.contains_key(tool_use_id) || consumed.contains(tool_use_id)
-}
-
-fn is_better_length(best: Option<usize>, candidate: usize) -> bool {
-    match best {
-        Some(best) => candidate > best,
-        None => true,
-    }
-}
-
-fn validate_tool_result_ownership(
-    pending: &HashMap<String, Value>,
-    consumed: &HashSet<String>,
-    tool_results: &[ToolResult],
-) -> Result<()> {
-    if tool_results
-        .iter()
-        .all(|result| owns_tool_result(pending, consumed, &result.tool_use_id))
-    {
-        return Ok(());
-    }
-    bail!("Claude tool results were already consumed by another request");
-}
-
-fn should_preempt_for_context_limit(
-    input_tokens: u64,
-    limit: Option<u64>,
-    has_tool_results: bool,
-) -> bool {
-    limit.is_some_and(|limit| !has_tool_results && input_tokens >= limit)
-}
-
-async fn candidate_length(
-    session: &Arc<Session>,
-    signature: &Arc<str>,
-    messages: &[Value],
-) -> Option<usize> {
-    if !Arc::ptr_eq(&session.signature, signature)
-        && session.signature.as_ref() != signature.as_ref()
-    {
-        return None;
-    }
-    matching_transcript_len(session, messages).await
 }
 
 #[cfg(test)]

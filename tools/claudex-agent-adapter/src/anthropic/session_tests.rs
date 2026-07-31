@@ -91,6 +91,28 @@ async fn mock_app_server(script: &str) -> (tempfile::TempDir, Arc<AppServer>) {
     (root, app)
 }
 
+fn write_mock_program(root: &tempfile::TempDir, script: &str) -> std::path::PathBuf {
+    let program = root.path().join("mock-app-server");
+    std::fs::write(&program, script).expect("write mock app-server");
+    let mut permissions = std::fs::metadata(&program)
+        .expect("mock app-server metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&program, permissions).expect("make mock app-server executable");
+    program
+}
+
+fn restore_environment(name: &str, previous: Option<std::ffi::OsString>) {
+    // SAFETY: tests restore each process-wide override before asserting results.
+    unsafe {
+        if let Some(previous) = previous {
+            std::env::set_var(name, previous);
+        } else {
+            std::env::remove_var(name);
+        }
+    }
+}
+
 async fn mock_trace(path: &std::path::Path, expected: usize) -> Vec<Value> {
     tokio::time::timeout(Duration::from_secs(1), async {
         loop {
@@ -495,6 +517,30 @@ fn main_session_gets_fallback_agent_tools_when_claude_omits_the_schemas() {
 }
 
 #[test]
+fn fallback_agent_tools_require_exact_model_and_expose_effort_choices() {
+    let request = request(json!("main session"), Vec::new());
+    let (tools, names, _) = tool_configuration(&request, None, None);
+    for original in ["Agent", "Task"] {
+        let dynamic_name = names
+            .iter()
+            .find_map(|(dynamic, name)| (name == original).then_some(dynamic))
+            .expect("fallback Agent/Task tool");
+        let schema = tools
+            .iter()
+            .find(|tool| tool["name"].as_str() == Some(dynamic_name.as_str()))
+            .expect("dynamic fallback schema");
+        let required = schema["inputSchema"]["required"]
+            .as_array()
+            .expect("fallback required fields");
+        assert!(required.iter().any(|field| field == "claudex_model"));
+        assert_eq!(
+            schema["inputSchema"]["properties"]["claudex_effort"]["enum"],
+            json!(["low", "medium", "high", "xhigh", "max"])
+        );
+    }
+}
+
+#[test]
 fn search_worker_keeps_only_live_web_tools_for_provider_context() {
     let mut request = request(
         json!("cc_is_subagent=true; Dedicated live-web retrieval worker: claudex-haiku-search"),
@@ -528,10 +574,11 @@ fn assert_empty_thread_configuration() {
         .as_str()
         .expect("base instructions");
     assert_eq!(base, empty["developerInstructions"]);
-    assert_eq!(empty["sandbox"], "workspace-write");
+    assert_eq!(empty["sandbox"], "danger-full-access");
     assert_eq!(empty["config"]["features"]["multi_agent"], false);
-    assert_eq!(empty["config"]["features"]["shell_tool"], false);
-    assert_eq!(empty["config"]["features"]["unified_exec"], false);
+    assert_eq!(empty["config"]["features"]["shell_tool"], true);
+    assert_eq!(empty["config"]["features"]["tool_search"], true);
+    assert_eq!(empty["config"]["features"]["unified_exec"], true);
     let developer = empty["developerInstructions"]
         .as_str()
         .expect("developer instructions");
@@ -695,17 +742,14 @@ fn subscription_and_session_instructions_report_the_default_parallel_contract() 
 
     let prompt = subscription_request_prompt(&request(json!("parallel contract"), Vec::new()));
     assert!(prompt.contains(&format!(
-        "Launch at least {} ordinary workers for substantive decomposition",
+        "fan out to at least {} ordinary workers",
         default_config.min_parallel_workers
     )));
     assert!(prompt.contains(&format!(
-        "maintain at least {} active lanes",
-        default_config.active_floor
-    )));
-    assert!(prompt.contains(&format!(
-        "use at least {} model families",
+        "across at least {} model families",
         default_config.min_model_families
     )));
+    assert!(prompt.contains("for one indivisible scope use one worker"));
     assert!(prompt.contains(&format!("every {} minutes", cadence)));
     assert!(prompt.contains("interrupt stale work"));
     assert!(prompt.contains("An explicit active user request for an exact worker count"));
@@ -745,21 +789,26 @@ fn assert_parallel_contract_text(
     config: &crate::parallel_scheduler::SchedulerConfig,
     cadence: u64,
 ) {
+    assert!(
+        text.contains(
+            "Runtime parallel policy: choose one ordinary worker for one indivisible scope"
+        )
+    );
     assert!(text.contains(&format!(
-        "Runtime parallel floor: launch at least {} ordinary workers",
+        "fan out to at least {} ordinary workers",
         config.min_parallel_workers
     )));
     assert!(text.contains(&format!(
-        "maintain at least {} active lanes",
-        config.active_floor
+        "fan out to at least {} ordinary workers",
+        config.min_parallel_workers
     )));
     assert!(text.contains(&format!(
-        "Use at least {} model families",
+        "across at least {} model families",
         config.min_model_families
     )));
     assert!(text.contains(&format!("every {cadence} minutes")));
     assert!(text.contains("interrupt stale work"));
-    assert_eq!(text.matches("Parallel status:").count(), 1);
+    assert_eq!(text.matches("Dynamic parallel status:").count(), 1);
 }
 
 #[test]
@@ -824,6 +873,63 @@ async fn candidate_requires_the_signature_and_matching_transcript() {
         )
         .await,
         None
+    );
+}
+
+#[tokio::test]
+async fn toolless_main_continuation_reuses_the_session_with_bash_schema() {
+    let bridge = Bridge::new_with_backend(AgentBackend::spawn_routes(&[]), "main".to_owned());
+    let mut initial = request(
+        json!("main system"),
+        vec![json!({
+            "name":"Bash",
+            "description":"run shell commands",
+            "input_schema":{"type":"object"}
+        })],
+    );
+    initial.metadata = json!({"user_id":"continued-main"});
+    initial.messages = vec![
+        json!({"role":"user","content":"inspect the repository"}),
+        json!({"role":"assistant","content":[{"type":"text","text":"I will inspect it."}]}),
+    ];
+    let (_, external_tools, _) = tool_configuration(&initial, None, None);
+    let bash_dynamic_name = external_tools
+        .iter()
+        .find_map(|(dynamic, original)| (original == "Bash").then_some(dynamic.clone()))
+        .expect("initial main session exposes Bash");
+    let initial_signature = bridge.intern_signature(format!(
+        "{}\0{}",
+        bridge.request_model(&initial),
+        crate::anthropic::content::request_signature(&initial, None, None)
+            .expect("initial request signature")
+    ));
+    let mut retained = session_for_model("main", &initial_signature, initial.messages.clone());
+    let retained_session = Arc::get_mut(&mut retained).expect("session is not yet shared");
+    retained_session.external_tool_names = external_tools;
+    retained_session.client_user_id = Some("continued-main".to_owned());
+    bridge.sessions.lock().await.push(Arc::clone(&retained));
+
+    let mut continued = initial.clone();
+    continued.tools.clear();
+    continued
+        .messages
+        .push(json!({"role":"user","content":"now check git status"}));
+    let continued_signature = bridge.intern_signature(format!(
+        "{}\0{}",
+        bridge.request_model(&continued),
+        crate::anthropic::content::request_signature(&continued, None, None)
+            .expect("tool-less continuation signature")
+    ));
+
+    let selected = bridge
+        .select_session(&continued, continued_signature, None, None, &[])
+        .await
+        .expect("tool-less continuation reuses the main thread");
+    assert!(Arc::ptr_eq(&selected.session, &retained));
+    assert_eq!(selected.existing_len, initial.messages.len());
+    assert_eq!(
+        selected.session.external_tool_names.get(&bash_dynamic_name),
+        Some(&"Bash".to_owned())
     );
 }
 
@@ -991,6 +1097,76 @@ fn pending_tool_results_are_submitted_before_context_preemption() {
     assert!(!super::should_preempt_for_context_limit(
         111_801, None, false
     ));
+}
+
+#[tokio::test]
+async fn prepare_turn_replaces_a_context_limited_provider_thread() {
+    enable_warning_logs();
+    let root = tempfile::tempdir().expect("mock app-server fixture");
+    let source = root.path().join("source");
+    std::fs::create_dir(&source).expect("create source home");
+    std::fs::write(source.join("auth.json"), "{}").expect("write source auth");
+    let trace = root.path().join("turns.jsonl");
+    let program = write_mock_program(
+        &root,
+        &format!(
+            "#!/bin/sh\nread initialize\nprintf '%s\\n' '{{\"id\":1,\"result\":{{}}}}'\nread initialized\nread initial\nprintf '%s\\n' '{{\"id\":2,\"result\":{{\"thread\":{{\"id\":\"initial\"}}}}}}'\nread replacement\nprintf '%s\\n' '{{\"id\":3,\"result\":{{\"thread\":{{\"id\":\"replacement\"}}}}}}'\nwhile read line; do printf '%s\\n' \"$line\" >> '{}'; done\n",
+            trace.display()
+        ),
+    );
+    let previous_program = std::env::var_os("CLAUDEX_CODEX_PROGRAM");
+    let previous_home = std::env::var_os("CODEX_HOME");
+    // SAFETY: the test restores both process-wide overrides before observing results.
+    unsafe {
+        std::env::set_var("CLAUDEX_CODEX_PROGRAM", &program);
+        std::env::set_var("CODEX_HOME", &source);
+    }
+
+    let mut route = BackendRoute::new("main", BackendKind::CodexAppServer);
+    route.max_context_tokens = Some(100);
+    let bridge = Bridge::new_with_backend(AgentBackend::spawn_routes(&[route]), "main".to_owned());
+    let result = bridge
+        .prepare_turn(&request(Value::Null, Vec::new()), 100, None)
+        .await;
+
+    restore_environment("CLAUDEX_CODEX_PROGRAM", previous_program);
+    restore_environment("CODEX_HOME", previous_home);
+
+    let turn = result.expect("preemptive replacement starts a fresh provider thread");
+    assert_eq!(turn.session.thread_id, "0:replacement");
+    assert_eq!(bridge.sessions.lock().await.len(), 1);
+    let trace = mock_trace(&trace, 1).await;
+    assert_eq!(trace[0]["method"], "turn/start");
+    assert_eq!(trace[0]["params"]["threadId"], "replacement");
+}
+
+#[tokio::test]
+async fn prepare_turn_recovers_transcript_owned_tool_results_after_session_loss() {
+    enable_warning_logs();
+    let (_root, app) = mock_app_server(
+        "#!/bin/sh\nread initialize\nprintf '%s\\n' '{\"id\":1,\"result\":{}}'\nread initialized\nread start\nprintf '%s\\n' '{\"id\":2,\"result\":{\"thread\":{\"id\":\"recovered\"}}}'\nwhile read line; do :; done\n",
+    )
+    .await;
+    let bridge = Bridge::new_with_backend(AgentBackend::codex(app), "main".to_owned());
+    let mut request = request(Value::Null, Vec::new());
+    request.messages = vec![
+        json!({
+            "role":"assistant",
+            "content":[{"type":"tool_use","id":"toolu-recovered","name":"Bash","input":{}}]
+        }),
+        json!({
+            "role":"user",
+            "content":[{"type":"tool_result","tool_use_id":"toolu-recovered","content":"done"}]
+        }),
+    ];
+
+    let turn = bridge
+        .prepare_turn(&request, 10, None)
+        .await
+        .expect("transcript-owned result recovers a session");
+
+    assert_eq!(turn.session.thread_id, "recovered");
+    assert_eq!(bridge.sessions.lock().await.len(), 1);
 }
 
 #[tokio::test]
