@@ -42,7 +42,7 @@ flowchart LR
 | Fugu worker | `claudex-fugu` | `fugu` | `high` | CodexBarのSakana枠に空きがある場合 |
 | Ollama GLM worker | `claudex-ollama-glm-5-2` | `glm-5.2:cloud` | `max` | CodexBarのOllama枠に空きがある場合 |
 | Grok worker | `claudex-grok` | `grok-4.5` | `high` | Grokに空きがある場合 |
-| Qwen worker | `claudex-qwen` | `qwen3.8-max-preview` | `high` | providerは維持するがSubAgentではdenylistにより禁止 |
+| Qwen worker | `claudex-qwen` | `qwen3.8-max-preview` | `high` | Qwen providerが利用可能で、モデル同時実行数の上限内の場合 |
 | DeepSeek worker | `claudex-deepseek` | `opencode-go/deepseek-v4-pro` | `max` | CodexBarのOpenCode Go枠に空きがある場合 |
 | Fallback | `claudex-sonnet` | `claude-sonnet-5` | `high` | 利用率を管理するproviderをすべて利用できない場合 |
 | Built-in advisor | Claude Code標準 `advisor()` | `opus` | Claude Code標準 | 標準advisor policyに従う。provider capacity非依存 |
@@ -469,13 +469,12 @@ active userが完全なmodel IDを指定した場合に限り `defaultModel` 以
 ### SubAgentモデルを禁止
 
 provider設定とは分離した `~/.config/claudex/disabled-subagent-models.json` に、常に禁止する
-完全一致モデルを定義します。repositoryでは現在 `qwen3.8-max-preview` を
-SubAgentで禁止しています。
+完全一致モデルを定義します。現在は常設の禁止モデルはありません。
 
 ```json
 {
   "version": 1,
-  "disabledModels": ["qwen3.8-max-preview"]
+  "disabledModels": []
 }
 ```
 

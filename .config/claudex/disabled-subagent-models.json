@@ -1,4 +1,4 @@
 {
   "version": 1,
-  "disabledModels": ["qwen3.8-max-preview"]
+  "disabledModels": []
 }
