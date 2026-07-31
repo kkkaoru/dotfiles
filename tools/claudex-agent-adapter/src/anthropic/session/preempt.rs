@@ -112,14 +112,89 @@ mod tests {
     async fn skips_busy_codex_reuse_after_an_unsupported_cancellation() {
         let app = test_app().await;
         let session = session("main-model", Some("client"));
-        let _gate = Arc::clone(&session.gate).lock_owned().await;
-        let request = request("main-model");
+        let gate = Arc::clone(&session.gate).lock_owned().await;
+        let request = request("");
+        assert!(
+            find_busy_matching_session(
+                vec![Arc::clone(&session)],
+                &Arc::from("signature"),
+                &request.messages,
+                Some(&request.model),
+                Some("client"),
+            )
+            .await
+            .is_some(),
+            "fixture must be eligible for busy-session preemption"
+        );
         let task = start_preemption(Arc::clone(&app), Arc::clone(&session), request);
         let selected = tokio::time::timeout(Duration::from_millis(100), task)
             .await
             .expect("unsupported cancellation must not wait on the busy gate")
             .expect("preemption task");
         assert!(selected.is_none());
+        drop(gate);
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn reuses_idle_sessions_but_never_preempts_subagents() {
+        let app = test_app().await;
+        let request = request("main-model");
+        let idle = session("main-model", Some("client"));
+        let selected = select_matching_session(
+            vec![Arc::clone(&idle)],
+            &request,
+            &Arc::from("signature"),
+            &request.messages,
+            &app,
+        )
+        .await
+        .expect("idle session must be reused");
+        assert!(Arc::ptr_eq(&selected.session, &idle));
+        drop(selected);
+
+        let busy = session("main-model", Some("client"));
+        let gate = Arc::clone(&busy.gate).lock_owned().await;
+        let mut subagent = request;
+        subagent.system = json!("cc_is_subagent=true");
+        assert!(
+            select_matching_session(
+                vec![busy],
+                &subagent,
+                &Arc::from("signature"),
+                &subagent.messages,
+                &app,
+            )
+            .await
+            .is_none()
+        );
+        drop(gate);
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn reuses_a_busy_session_after_an_acp_cancellation_failure() {
+        let (app, _root) = stopped_acp_app().await;
+        let session = session("main-model", Some("client"));
+        let gate = Arc::clone(&session.gate).lock_owned().await;
+        let request = request("main-model");
+        let task = start_preemption(Arc::clone(&app), Arc::clone(&session), request);
+
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert!(
+            !task.is_finished(),
+            "preemption must wait for the busy gate"
+        );
+        drop(gate);
+
+        let selected = tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .expect("cancellation failure must not stall preemption")
+            .expect("preemption task")
+            .expect("released busy session");
+        assert!(Arc::ptr_eq(&selected.session, &session));
+        drop(selected);
+        app.shutdown().await;
     }
 
     #[test]
@@ -175,6 +250,25 @@ mod tests {
             .await
             .expect("mock app server");
         AgentBackend::codex(server)
+    }
+
+    async fn stopped_acp_app() -> (Arc<AgentBackend>, tempfile::TempDir) {
+        let root = tempfile::tempdir().expect("ACP mock fixture");
+        let executable = std::env::current_exe().expect("test executable");
+        let program = executable
+            .parent()
+            .and_then(std::path::Path::parent)
+            .expect("test target directory")
+            .join("grok-acp-mock");
+        let agent = crate::grok_acp::GrokAcp::spawn_with_program(
+            "main-model",
+            program,
+            root.path().to_owned(),
+        )
+        .await
+        .expect("start ACP mock");
+        agent.shutdown().await;
+        (AgentBackend::grok(agent), root)
     }
 
     fn request(model: &str) -> MessagesRequest {

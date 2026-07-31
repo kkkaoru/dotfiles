@@ -1705,9 +1705,10 @@ fn committed_output_ignores_empty_or_disposable_blocks() {
 }
 
 #[tokio::test]
-async fn prepared_stream_reports_orphaned_tool_results() {
+async fn prepared_stream_releases_its_concurrency_ticket_after_a_prepare_error() {
     let (_root, _app, bridge, _session) = disconnect_fixture().await;
     let bridge = Arc::new(bridge);
+    let limits = super::super::model_concurrency::ModelConcurrency::new(Vec::new());
     let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(4);
     let mut request = drive_request();
     request.messages = vec![json!({
@@ -1716,7 +1717,15 @@ async fn prepared_stream_reports_orphaned_tool_results() {
     })];
 
     Arc::clone(&bridge)
-        .drive_prepared_subagent_stream(request, 1, None, None, false, false, sender)
+        .drive_prepared_subagent_stream(super::PreparedStream {
+            request,
+            input_tokens: 1,
+            effort: None,
+            concurrency_ticket: limits.ticket("main", Some(1)),
+            is_subagent: false,
+            run_in_background: false,
+            sender,
+        })
         .await;
 
     let frame = receiver
@@ -1725,6 +1734,29 @@ async fn prepared_stream_reports_orphaned_tool_results() {
         .expect("stream preparation error frame")
         .expect("infallible frame");
     assert!(String::from_utf8_lossy(&frame).contains("no active claudex session"));
+    assert_eq!(
+        serde_json::to_value(limits.snapshot()).unwrap()["main"]["active"],
+        0
+    );
+}
+
+#[tokio::test]
+async fn prepared_stream_stops_when_the_client_disconnects_during_setup() {
+    let (_root, _app, bridge, _session) = disconnect_fixture().await;
+    let (sender, receiver) = mpsc::channel::<Result<Bytes, Infallible>>(1);
+    drop(receiver);
+
+    Arc::new(bridge)
+        .drive_prepared_subagent_stream(super::PreparedStream {
+            request: drive_request(),
+            input_tokens: 1,
+            effort: None,
+            concurrency_ticket: None,
+            is_subagent: false,
+            run_in_background: false,
+            sender,
+        })
+        .await;
 }
 
 #[tokio::test]

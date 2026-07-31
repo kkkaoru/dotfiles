@@ -90,6 +90,21 @@ mod tests {
         assert!(acp.description().contains("program"));
     }
 
+    #[test]
+    fn describes_nondefault_web_search_routes_as_json() {
+        for mode in [
+            WebSearchMode::CodexNative,
+            WebSearchMode::AcpNative,
+            WebSearchMode::DelegateMcp,
+            WebSearchMode::Disabled,
+        ] {
+            let mut route = BackendRoute::new("model", BackendKind::CodexAppServer);
+            route.web_search_mode = mode;
+
+            assert!(route.description().contains(mode.as_str()));
+        }
+    }
+
     fn route_with_prefix(model: &str, backend: BackendKind, prefix: &str) -> BackendRoute {
         let mut route = BackendRoute::new(model, backend);
         route.model_prefixes.push(prefix.to_owned());

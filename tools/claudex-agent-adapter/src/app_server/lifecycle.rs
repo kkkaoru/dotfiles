@@ -243,15 +243,24 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn terminate_process_group_escalates_for_a_term_resistant_group() {
+        let root = tempfile::tempdir().expect("term-resistant group fixture");
+        let ready = root.path().join("term-handler-ready");
         let mut command = tokio::process::Command::new("sh");
         command
-            .args(["-c", "trap '' TERM; while :; do sleep 1; done"])
+            .args([
+                "-c",
+                &format!(
+                    "trap '' TERM\n: > '{}'\nwhile :; do sleep 1; done",
+                    ready.display()
+                ),
+            ])
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .process_group(0);
         let mut child = command.spawn().expect("start term-resistant group");
         let process_group = child.id().expect("process group ID");
+        wait_for_path(&ready).await;
 
         terminate_process_group(process_group).await;
         let status = child.wait().await.expect("reap term-resistant group");
@@ -275,5 +284,16 @@ mod tests {
         std::fs::create_dir(&source).expect("create source home");
         std::fs::write(source.join("auth.json"), "{}").expect("write auth");
         source
+    }
+
+    #[cfg(unix)]
+    async fn wait_for_path(path: &Path) {
+        tokio::time::timeout(Duration::from_millis(500), async {
+            while !path.exists() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("fixture installed its TERM handler");
     }
 }

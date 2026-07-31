@@ -344,9 +344,7 @@ fn every_non_advisor_subagent_inherits_the_main_tool_and_permission_context() {
             .collect::<Vec<_>>();
         if file_name == Some("claudex-haiku-search.md") {
             assert!(
-                frontmatter
-                    .iter()
-                    .any(|line| *line == "tools: WebSearch,WebFetch"),
+                frontmatter.contains(&"tools: WebSearch,WebFetch"),
                 "{file_name:?} must expose only live web retrieval tools"
             );
             assert!(

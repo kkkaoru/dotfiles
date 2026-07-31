@@ -1,4 +1,3 @@
-
 use std::{
     collections::{HashMap, HashSet},
     os::unix::fs::PermissionsExt,
@@ -49,6 +48,54 @@ async fn distinguishes_completed_and_backgrounded_work() {
 }
 
 #[tokio::test]
+async fn background_progress_falls_back_for_unconfigured_empty_and_failed_models() {
+    let (root, bridge) = mock_bridge(STALLED_APP_SERVER).await;
+    let settings = root.path().join("settings.json");
+    std::fs::write(&settings, "{}").expect("remove progress model setting");
+    assert_eq!(
+        bridge
+            .background_progress_text(&progress_turn().await)
+            .await,
+        BACKGROUND_PROGRESS_FALLBACK
+    );
+
+    std::fs::write(&settings, r#"{"model":"mock-progress"}"#).expect("restore model setting");
+    write_progress_model(
+        &root,
+        "#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"result\":\"\"}'\n",
+    );
+    assert_eq!(
+        bridge
+            .background_progress_text(&progress_turn().await)
+            .await,
+        BACKGROUND_PROGRESS_FALLBACK
+    );
+
+    write_progress_model(
+        &root,
+        "#!/bin/sh\ncat >/dev/null\nprintf failed >&2\nexit 1\n",
+    );
+    assert_eq!(
+        bridge
+            .background_progress_text(&progress_turn().await)
+            .await,
+        BACKGROUND_PROGRESS_FALLBACK
+    );
+}
+
+#[tokio::test]
+async fn background_progress_prompt_truncates_oversized_unicode_context() {
+    let mut turn = progress_turn().await;
+    let tail = "retain this tail";
+    turn.extras = vec![json!({"context": format!("{}{}", "🦀".repeat(16_001), tail)})];
+
+    let prompt = background_progress_prompt(&turn).await;
+
+    assert!(prompt.contains("[earlier context truncated]"));
+    assert!(prompt.contains(tail));
+}
+
+#[tokio::test]
 async fn background_timeout_preserves_late_result_and_releases_detached_session() {
     let (_root, bridge) = mock_bridge(STALLED_APP_SERVER).await;
     let dispatcher = crate::app_server::events::ThreadEventDispatcher::default();
@@ -75,23 +122,62 @@ async fn background_timeout_preserves_late_result_and_releases_detached_session(
     }));
 
     tokio::time::timeout(Duration::from_secs(1), async {
-        loop {
-            let transcript = session.transcript.lock().await;
-            let detached = bridge.detached_sessions.lock().await;
-            if transcript
-                .iter()
-                .any(|entry| entry.to_string().contains("late result"))
-                && detached.is_empty()
-            {
-                break;
-            }
-            drop(detached);
-            drop(transcript);
+        while !late_result_is_released(&session, &bridge).await {
             tokio::task::yield_now().await;
         }
     })
     .await
     .expect("late result should be committed and detached session released");
+}
+
+#[tokio::test]
+async fn completed_detached_subagent_turn_commits_and_releases_its_session() {
+    let (_root, bridge) = mock_bridge(STALLED_APP_SERVER).await;
+    let dispatcher = crate::app_server::events::ThreadEventDispatcher::default();
+    let mut turn = active_turn(dispatcher.subscribe("thread"), None).await;
+    let session = Arc::clone(&turn.session);
+    bridge.detach_session(&session).await;
+    turn.detached = true;
+
+    let response = completion::finish(&bridge, turn, completed_segment()).await;
+
+    assert!(
+        response_text(response)
+            .await
+            .contains("completed late result")
+    );
+    assert!(
+        session
+            .transcript
+            .lock()
+            .await
+            .iter()
+            .any(|entry| entry.to_string().contains("completed late result"))
+    );
+    assert!(bridge.detached_sessions.lock().await.is_empty());
+}
+
+async fn late_result_is_released(session: &Arc<Session>, bridge: &Arc<Bridge>) -> bool {
+    let has_result = {
+        let transcript = session.transcript.lock().await;
+        transcript
+            .iter()
+            .any(|entry| entry.to_string().contains("late result"))
+    };
+    let detached_empty = bridge.detached_sessions.lock().await.is_empty();
+    has_result && detached_empty
+}
+
+fn completed_segment() -> Segment {
+    Segment {
+        blocks: vec![json!({"type":"text","text":"completed late result"})],
+        stop_reason: "end_turn",
+        usage: Usage {
+            input_tokens: 1,
+            output_tokens: 1,
+            web_search_requests: 0,
+        },
+    }
 }
 
 #[tokio::test]
@@ -214,6 +300,16 @@ async fn active_turn(
         gate,
         detached: false,
     }
+}
+
+async fn progress_turn() -> ActiveTurn {
+    let dispatcher = crate::app_server::events::ThreadEventDispatcher::default();
+    active_turn(dispatcher.subscribe("thread"), None).await
+}
+
+fn write_progress_model(root: &tempfile::TempDir, script: &str) {
+    let program = root.path().join("mock-claude");
+    std::fs::write(&program, script).expect("write progress model mock");
 }
 
 fn retry() -> ContextRetry {

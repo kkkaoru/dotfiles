@@ -10,6 +10,8 @@ use super::{
     subscription::{SubscriptionOptions, run_subscription_model},
 };
 
+mod completion;
+
 const DEFAULT_SUBAGENT_RESPONSE_TIMEOUT_SECONDS: u64 = 300;
 const SUBAGENT_RESPONSE_TIMEOUT_ENV: &str = "CLAUDEX_SUBAGENT_RESPONSE_TIMEOUT_SECONDS";
 const BACKGROUND_PROGRESS_GENERATION_TIMEOUT: Duration = Duration::from_secs(15);
@@ -113,13 +115,7 @@ impl Bridge {
                 return Ok(response);
             };
             match segment {
-                Ok(segment) => {
-                    super::stream::commit_transcript(&turn.session, turn.extras, &segment).await;
-                    if turn.detached {
-                        self.finish_detached_session(&turn.session).await;
-                    }
-                    return Ok(anthropic_response(segment, &turn.response_model));
-                }
+                Ok(segment) => return Ok(completion::finish(self, turn, segment).await),
                 Err(error) => {
                     let error_text = error.to_string();
                     let retry = self.context_retry_or_error(&mut turn, error).await?;

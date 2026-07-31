@@ -3,7 +3,18 @@ use std::{future::Future, time::Duration};
 use anyhow::Result;
 use tokio::time::{Instant, sleep};
 
-use super::{SegmentBuilder, StreamSender};
+use super::super::model_concurrency::Ticket;
+use super::{MessagesRequest, SegmentBuilder, StreamSender};
+
+pub(super) struct PreparedStream {
+    pub(super) request: MessagesRequest,
+    pub(super) input_tokens: u64,
+    pub(super) effort: Option<String>,
+    pub(super) concurrency_ticket: Option<Ticket>,
+    pub(super) is_subagent: bool,
+    pub(super) run_in_background: bool,
+    pub(super) sender: StreamSender,
+}
 
 pub(super) async fn prepare_with_activity<F, T>(
     prepare: F,

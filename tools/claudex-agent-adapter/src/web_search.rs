@@ -222,9 +222,11 @@ fn extract_urls(text: &str) -> Vec<SearchResult> {
 }
 
 fn fallback_results(search_count: u64, answer: &str) -> Vec<SearchResult> {
-    (search_count > 0)
-        .then(|| extract_urls(answer))
-        .unwrap_or_default()
+    if search_count > 0 {
+        extract_urls(answer)
+    } else {
+        Vec::new()
+    }
 }
 
 #[cfg(test)]

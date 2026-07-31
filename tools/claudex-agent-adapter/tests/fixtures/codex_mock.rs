@@ -99,11 +99,25 @@ impl<W: Write> Fixture<W> {
         self.run_scenario(message, &input);
     }
 
-    #[allow(clippy::cognitive_complexity)]
     fn run_scenario(&mut self, message: &Value, input: &str) {
         if input.contains("DETACHED_ERROR") {
             return;
         }
+        if self.run_turn_scenario(message, input)
+            || self.run_control_scenario(message, input)
+            || self.run_parallel_scenario(message, input)
+            || self.run_disconnect_scenario(input)
+        {
+            return;
+        }
+        if let Some(tool) = requested_tool(input) {
+            self.send_tool(tool, input);
+        } else {
+            self.send_plain_or_streamed(message, input);
+        }
+    }
+
+    fn run_turn_scenario(&mut self, message: &Value, input: &str) -> bool {
         if input.contains("CONTEXT_WINDOW_ONCE") {
             self.context_window_once(message);
         } else if input.contains("CONTEXT_WINDOW_ALWAYS") {
@@ -132,16 +146,19 @@ impl<W: Write> Fixture<W> {
             self.send_web_search();
         } else if input.contains("USE_NAMED_TEAM_MAILBOX") {
             self.send_named_teammate();
-        } else if input.contains("CONTROL_SUBAGENTS_TASK_OUTPUT") {
+        } else {
+            return false;
+        }
+        true
+    }
+
+    fn run_control_scenario(&mut self, message: &Value, input: &str) -> bool {
+        if input.contains("CONTROL_SUBAGENTS_TASK_OUTPUT") {
             self.send_control_tool(
                 message,
                 "call-control-output",
                 "cc_TaskOutput_1",
-                json!({
-                    "task_id":"agent-profile-7",
-                    "block":true,
-                    "timeout":120000
-                }),
+                json!({"task_id":"agent-profile-7", "block":true, "timeout":120000}),
             );
         } else if input.contains("CONTROL_SUBAGENTS_SEND_MESSAGE") {
             self.send_control_tool(
@@ -182,7 +199,14 @@ impl<W: Write> Fixture<W> {
                     "reason":"user requested that the main session stop this SubAgent"
                 }),
             );
-        } else if input.contains("USE_PARALLEL_AGENTS_TASK_OUTPUT") {
+        } else {
+            return false;
+        }
+        true
+    }
+
+    fn run_parallel_scenario(&mut self, message: &Value, input: &str) -> bool {
+        if input.contains("USE_PARALLEL_AGENTS_TASK_OUTPUT") {
             self.send_parallel_agents(message);
         } else if input.contains("USE_PARALLEL_TOOLS") {
             self.send_delayed_parallel_tools();
@@ -192,7 +216,14 @@ impl<W: Write> Fixture<W> {
             self.send_text_then_tool();
         } else if input.contains("PROVIDER_TOOL_PROGRESS") {
             self.send_provider_tool_progress();
-        } else if input.contains("DISCONNECT_WITH") {
+        } else {
+            return false;
+        }
+        true
+    }
+
+    fn run_disconnect_scenario(&mut self, input: &str) -> bool {
+        if input.contains("DISCONNECT_WITH") {
             self.start_disconnected_tool_turn(input);
         } else if input.contains("REPORT_DISCONNECT_DRAIN") {
             let status = if self.disconnected_tool_drained {
@@ -205,11 +236,10 @@ impl<W: Write> Fixture<W> {
             && input.contains(r#"\"type\":\"tool_result\""#)
         {
             self.send_text_and_complete("RECOVERED_ORPHAN_TOOL_RESULT");
-        } else if let Some(tool) = requested_tool(input) {
-            self.send_tool(tool, input);
         } else {
-            self.send_plain_or_streamed(message, input);
+            return false;
         }
+        true
     }
 
     fn send_web_search(&mut self) {

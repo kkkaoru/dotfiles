@@ -34,7 +34,7 @@ mod tool_call_parser;
 use builder::SegmentBuilder;
 pub(in crate::anthropic) use control::commit_transcript;
 use control::refresh_activity_keepalive;
-use prepare::prepare_with_activity;
+use prepare::{PreparedStream, prepare_with_activity};
 use sanitize::is_visible_activity_event;
 
 pub(super) use control::{error_flow, turn_flow};
@@ -97,7 +97,22 @@ impl Bridge {
                 input_tokens,
             ))))
             .expect("new streaming response channel has capacity");
-        tokio::spawn(Arc::clone(self).drive_prepared_subagent_stream(
+        tokio::spawn(
+            Arc::clone(self).drive_prepared_subagent_stream(PreparedStream {
+                request,
+                input_tokens,
+                effort,
+                concurrency_ticket,
+                is_subagent,
+                run_in_background,
+                sender,
+            }),
+        );
+        sse_response(receiver)
+    }
+
+    async fn drive_prepared_subagent_stream(self: Arc<Self>, prepared: PreparedStream) {
+        let PreparedStream {
             request,
             input_tokens,
             effort,
@@ -105,20 +120,7 @@ impl Bridge {
             is_subagent,
             run_in_background,
             sender,
-        ));
-        sse_response(receiver)
-    }
-
-    async fn drive_prepared_subagent_stream(
-        self: Arc<Self>,
-        request: MessagesRequest,
-        input_tokens: u64,
-        effort: Option<String>,
-        concurrency_ticket: Option<Ticket>,
-        is_subagent: bool,
-        run_in_background: bool,
-        sender: StreamSender,
-    ) {
+        } = prepared;
         let prepare = async {
             let permit = match concurrency_ticket {
                 Some(ticket) => Some(ticket.acquire().await?),

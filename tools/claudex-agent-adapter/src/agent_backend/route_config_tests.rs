@@ -55,6 +55,25 @@ fn leaves_default_route_parameters_unchanged() {
 }
 
 #[test]
+fn updates_existing_configuration_for_native_search() {
+    let mut route = BackendRoute::new("gpt", BackendKind::CodexAppServer);
+    route.web_search_mode = WebSearchMode::CodexNative;
+    let mut params = json!({
+        "model": "gpt",
+        "config": {
+            "features": {"unrelated": true},
+            "web_search": "disabled"
+        }
+    });
+
+    apply(&route, &mut params);
+
+    assert_eq!(params["config"]["features"]["unrelated"], true);
+    assert_eq!(params["config"]["features"]["web_search"], true);
+    assert_eq!(params["config"]["web_search"], "live");
+}
+
+#[test]
 fn reports_invalid_parameters_before_mutating_route_configuration() {
     let mut route = BackendRoute::new("gpt", BackendKind::CodexAppServer);
     route.model_catalog_json = Some("catalog.json".to_owned());

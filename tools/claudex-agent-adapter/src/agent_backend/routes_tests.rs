@@ -154,6 +154,22 @@ mod tests {
     }
 
     #[test]
+    fn exact_web_search_route_overrides_a_matching_prefix() {
+        let mut template = route("template", BackendKind::CodexAppServer);
+        template.web_search_mode = WebSearchMode::CodexNative;
+        template.model_prefixes.push("vendor-".to_owned());
+        let mut exact = route("vendor-model", BackendKind::CodexAppServer);
+        exact.web_search_mode = WebSearchMode::Disabled;
+        let routes = RoutedBackends::lazy(&[template, exact]);
+
+        assert_eq!(routes.web_search_mode("vendor-model"), WebSearchMode::Disabled);
+        assert_eq!(
+            routes.web_search_mode("vendor-preview"),
+            WebSearchMode::CodexNative
+        );
+    }
+
+    #[test]
     fn selects_exact_dynamic_and_prefix_context_limits() {
         let mut exact = route("exact", BackendKind::CodexAppServer);
         exact.max_context_tokens = Some(100);
