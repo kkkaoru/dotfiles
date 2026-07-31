@@ -288,7 +288,7 @@ impl Bridge {
         mut request: MessagesRequest,
     ) -> Result<Response<Body>> {
         trace_request(&request);
-        self.sweep_idle_sessions().await;
+        self.schedule_idle_session_sweep();
         let intent = self
             .subagent_tool_continuation(&request)
             .await

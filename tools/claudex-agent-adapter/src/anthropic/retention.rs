@@ -22,6 +22,13 @@ const IDLE_SESSION_TTL: Duration = Duration::from_secs(120 * 60);
 pub(super) const SESSION_SWEEP_INTERVAL: Duration = Duration::from_secs(60);
 
 impl Bridge {
+    pub(super) fn schedule_idle_session_sweep(self: &Arc<Self>) {
+        let bridge = Arc::clone(self);
+        tokio::spawn(async move {
+            bridge.sweep_idle_sessions().await;
+        });
+    }
+
     pub(super) async fn sweep_idle_sessions(&self) {
         self.sweep_idle_sessions_if_due_at(Instant::now()).await;
     }

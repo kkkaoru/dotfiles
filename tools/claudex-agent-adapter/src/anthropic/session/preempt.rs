@@ -54,10 +54,19 @@ async fn preempt_busy_matching_session(
         prior_transcript_len = prior_len,
         "preempting in-flight session for outer user follow-up"
     );
-    report_cancellation(
-        app.cancel_turn(&session.thread_id).await,
-        &session.thread_id,
-    );
+    let cancellation = app.cancel_turn(&session.thread_id).await;
+    if matches!(cancellation, Ok(TurnCancellation::Unsupported)) {
+        // Codex app-server cannot interrupt an active turn. Waiting for its
+        // gate would defer the new user message for up to three seconds. The
+        // request contains the complete transcript, so a fresh provider
+        // thread is the lower-latency and lossless fallback.
+        tracing::info!(
+            thread_id = %session.thread_id,
+            "provider cannot cancel active turn; starting a fresh thread for the user follow-up"
+        );
+        return None;
+    }
+    report_cancellation(cancellation, &session.thread_id);
     take_gate_after_preempt(&session, messages).await
 }
 
@@ -100,22 +109,17 @@ mod tests {
     use crate::{agent_backend::AgentBackend, app_server::AppServer};
 
     #[tokio::test]
-    async fn reuses_busy_codex_sessions_after_an_unsupported_cancellation() {
+    async fn skips_busy_codex_reuse_after_an_unsupported_cancellation() {
         let app = test_app().await;
-        for model in ["main-model", ""] {
-            let session = session("main-model", Some("client"));
-            let gate = Arc::clone(&session.gate).lock_owned().await;
-            let request = request(model);
-            let task = start_preemption(Arc::clone(&app), Arc::clone(&session), request);
-            tokio::time::sleep(Duration::from_millis(5)).await;
-            drop(gate);
-            let selected = tokio::time::timeout(Duration::from_secs(1), task)
-                .await
-                .expect("preemption must release the gate")
-                .expect("preemption task")
-                .expect("reused session");
-            assert_eq!(selected.existing_len, 1);
-        }
+        let session = session("main-model", Some("client"));
+        let _gate = Arc::clone(&session.gate).lock_owned().await;
+        let request = request("main-model");
+        let task = start_preemption(Arc::clone(&app), Arc::clone(&session), request);
+        let selected = tokio::time::timeout(Duration::from_millis(100), task)
+            .await
+            .expect("unsupported cancellation must not wait on the busy gate")
+            .expect("preemption task");
+        assert!(selected.is_none());
     }
 
     #[test]
