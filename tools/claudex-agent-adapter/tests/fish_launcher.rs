@@ -21,7 +21,7 @@ fn fish_launcher_keeps_command_tools_available_for_new_and_resumed_sessions() {
 
     let fresh = run_fish_launcher(&function, &home, "claudex command-tool-smoke");
     assert_command_tools_are_not_filtered(&fresh);
-    assert!(fresh.ends_with("--\n--allowedTools\nWebSearch,WebFetch\ncommand-tool-smoke\n"));
+    assert!(fresh.ends_with("--\ncommand-tool-smoke\n"));
     assert_no_implicit_agent(&fresh);
 
     let resumed = run_fish_launcher(
@@ -85,8 +85,8 @@ fn run_fish_launcher_output(
 
 fn assert_command_tools_are_not_filtered(arguments: &str) {
     // `--tools` is Claude Code's built-in-tool availability filter. The launcher
-    // may pre-allow web tools, but it must not remove Bash (and therefore git/gh)
-    // from either a new or a resumed main session.
+    // must not add or remove tool restrictions from either a new or a resumed
+    // main session.
     for forbidden in ["--tools\n", "--disallowedTools\n", "--disallowed-tools\n"] {
         assert!(
             !arguments.contains(forbidden),
@@ -163,8 +163,8 @@ fn assert_shared_provider_default(function: &std::path::Path, home: &tempfile::T
     assert!(!arguments.contains("--model\n"));
     assert!(arguments.contains("--inherit-claude-model\n"));
     assert!(arguments.contains("--subscription-max-processes\n20\n"));
-    assert!(arguments.contains("--allowedTools\nWebSearch,WebFetch\n"));
-    assert!(arguments.ends_with("--\n--allowedTools\nWebSearch,WebFetch\nsmoke\n"));
+    assert!(!arguments.contains("--allowedTools\nWebSearch,WebFetch\n"));
+    assert!(arguments.ends_with("--\nsmoke\n"));
     assert_no_implicit_agent(&arguments);
     assert!(
         String::from_utf8_lossy(&output.stderr)
@@ -177,27 +177,27 @@ fn assert_settings_restore_modes(function: &std::path::Path, home: &tempfile::Te
         (
             "long resume",
             "claudex --resume retained-session resume-smoke",
-            "--\n--allowedTools\nWebSearch,WebFetch\n--resume\nretained-session\nresume-smoke\n",
+            "--\n--resume\nretained-session\nresume-smoke\n",
         ),
         (
             "joined resume",
             "claudex --resume=retained-session resume-equals-smoke",
-            "--\n--allowedTools\nWebSearch,WebFetch\n--resume=retained-session\nresume-equals-smoke\n",
+            "--\n--resume=retained-session\nresume-equals-smoke\n",
         ),
         (
             "short resume",
             "claudex -r retained-session short-resume-smoke",
-            "--\n--allowedTools\nWebSearch,WebFetch\n-r\nretained-session\nshort-resume-smoke\n",
+            "--\n-r\nretained-session\nshort-resume-smoke\n",
         ),
         (
             "long continue",
             "claudex --continue continue-smoke",
-            "--\n--allowedTools\nWebSearch,WebFetch\n--continue\ncontinue-smoke\n",
+            "--\n--continue\ncontinue-smoke\n",
         ),
         (
             "short continue",
             "claudex -c short-continue-smoke",
-            "--\n--allowedTools\nWebSearch,WebFetch\n-c\nshort-continue-smoke\n",
+            "--\n-c\nshort-continue-smoke\n",
         ),
     ];
 
@@ -258,7 +258,7 @@ fn assert_explicit_model_restore(function: &std::path::Path, home: &tempfile::Te
     assert!(arguments.contains("CLAUDEX_MAIN_MODEL=vendor-model\n"));
     assert!(arguments.contains("CLAUDEX_MAIN_MODEL_KNOWN=1\n"));
     assert!(arguments.ends_with(
-        "--\n--effort\nhigh\n--allowedTools\nWebSearch,WebFetch\n--resume\nretained-session\nexplicit-resume-smoke\n"
+        "--\n--effort\nhigh\n--resume\nretained-session\nexplicit-resume-smoke\n"
     ));
 }
 
@@ -285,10 +285,10 @@ fn assert_explicit_override(function: &std::path::Path, home: &tempfile::TempDir
     assert!(arguments.contains("--model\nvendor-model\n"));
     assert!(!arguments.contains("--inherit-claude-model\n"));
     assert!(arguments.contains("--effort\nhigh\n"));
-    assert!(arguments.contains("--allowedTools\nWebSearch,WebFetch\n"));
+    assert!(!arguments.contains("--allowedTools\nWebSearch,WebFetch\n"));
     assert!(
         arguments
-            .ends_with("--\n--effort\nhigh\n--allowedTools\nWebSearch,WebFetch\noverride-smoke\n")
+            .ends_with("--\n--effort\nhigh\noverride-smoke\n")
     );
     assert_no_implicit_agent(&arguments);
 }
@@ -400,7 +400,7 @@ fn fish_launcher_uses_claude_settings_model_and_effort_when_available() {
         "--provider-config\n{}\n",
         home.path().join(".config/claudex/providers.json").display()
     )));
-    assert!(arguments.ends_with("--\n--allowedTools\nWebSearch,WebFetch\nsettings-smoke\n"));
+    assert!(arguments.ends_with("--\nsettings-smoke\n"));
     assert_no_implicit_agent(&arguments);
     assert!(
         String::from_utf8_lossy(&output.stderr)
@@ -451,7 +451,7 @@ fn assert_explicit_agent_is_preserved(function: &std::path::Path, home: &tempfil
     assert_eq!(arguments.matches("--agent\n").count(), 1);
     assert!(
         arguments
-            .ends_with("--\n--allowedTools\nWebSearch,WebFetch\n--agent\ncustom-subagent\nsmoke\n")
+            .ends_with("--\n--agent\ncustom-subagent\nsmoke\n")
     );
 }
 
@@ -663,6 +663,6 @@ fn assert_no_argument_launch(function: &std::path::Path, home: &tempfile::TempDi
     assert!(arguments.contains("CLAUDEX_MAIN_MODEL_KNOWN=1\n"));
     assert!(!arguments.contains("--model\n"));
     assert!(arguments.contains("--inherit-claude-model\n"));
-    assert!(arguments.ends_with("--\n--allowedTools\nWebSearch,WebFetch\n"));
+    assert!(arguments.ends_with("--\n"));
     assert_no_implicit_agent(&arguments);
 }
