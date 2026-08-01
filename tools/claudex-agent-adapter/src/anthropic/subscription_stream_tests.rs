@@ -4,7 +4,7 @@ use std::{convert::Infallible, fs, process::Stdio, sync::Arc, time::Duration};
 use std::os::unix::{fs::PermissionsExt, process::CommandExt as _};
 
 use axum::body::Bytes;
-use serde_json::json;
+use serde_json::{Value, json};
 use tokio::{process::Command, sync::mpsc};
 
 use super::{
@@ -370,6 +370,122 @@ async fn collects_sequential_subscription_agents_into_one_outer_tool_round() {
     assert!(output.find("input_json_delta") < output.find("content_block_stop"));
 }
 
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn blocked_agent_after_a_forwarded_tool_uses_a_fresh_text_block() {
+    let (sender, mut receiver) = channel();
+    let mut stream = SubscriptionStream {
+        text_started: false,
+        text_closed: false,
+        saw_tool_use: false,
+        saw_result: false,
+        next_index: 0,
+        tools: vec!["Task".to_owned()],
+        tool_context: Some(routed_subscription_tool_context()),
+        activity: SubscriptionActivity::default(),
+    };
+
+    stream
+        .handle_line(
+            &sender,
+            &json!({
+                "type":"assistant",
+                "parent_tool_use_id":null,
+                "message":{
+                    "content":[
+                        {
+                            "type":"tool_use", "id":"supported-agent", "name":"Agent",
+                            "input":{
+                                "description":"first worker", "prompt":"do first work",
+                                "subagent_type":"claudex-gpt-spark",
+                                "claudex_model":"gpt-5.3-codex-spark"
+                            }
+                        },
+                        {
+                            "type":"tool_use", "id":"blocked-agent", "name":"Agent",
+                            "input":{
+                                "description":"second worker", "prompt":"do second work",
+                                "subagent_type":"claude-sonnet-5",
+                                "claudex_model":"claude-sonnet-5"
+                            }
+                        },
+                        {
+                            "type":"tool_use", "id":"blocked-agent-2", "name":"Agent",
+                            "input":{
+                                "description":"third worker", "prompt":"do third work",
+                                "subagent_type":"claude-fable",
+                                "claudex_model":"claude-fable"
+                            }
+                        }
+                    ]
+                }
+            })
+            .to_string(),
+        )
+        .await
+        .expect("forward mixed tool calls");
+    stream
+        .finish(
+            &sender,
+            &json!({"type":"result","subtype":"success","result":"done"}),
+        )
+        .await
+        .expect("finish mixed tool calls");
+
+    let output = output(&mut receiver).await;
+    let mut block_types = Vec::new();
+    let mut stopped_indices = Vec::new();
+    for frame in output.split("\n\n").filter(|frame| !frame.is_empty()) {
+        let data = frame
+            .lines()
+            .find_map(|line| line.strip_prefix("data: "))
+            .expect("SSE data");
+        let frame: Value = serde_json::from_str(data).expect("SSE JSON");
+        match frame["type"].as_str() {
+            Some("content_block_start") => block_types.push((
+                frame["index"].as_u64().expect("block index"),
+                frame["content_block"]["type"]
+                    .as_str()
+                    .expect("block type")
+                    .to_owned(),
+            )),
+            Some("content_block_delta")
+                if frame["delta"]["type"].as_str() == Some("text_delta") =>
+            {
+                let index = frame["index"].as_u64().expect("text index");
+                assert_eq!(
+                    block_types
+                        .iter()
+                        .find(|(block_index, _)| *block_index == index)
+                        .map(|(_, block_type)| block_type.as_str()),
+                    Some("text"),
+                    "text delta must target a text block: {frame}"
+                );
+            }
+            Some("content_block_stop") => {
+                stopped_indices.push(frame["index"].as_u64().expect("stop index"));
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(
+        block_types,
+        vec![
+            (0, "text".to_owned()),
+            (1, "tool_use".to_owned()),
+            (2, "text".to_owned()),
+            (3, "text".to_owned()),
+        ]
+    );
+    for index in [0, 2, 3] {
+        assert!(
+            stopped_indices.contains(&index),
+            "text block {index} must be closed"
+        );
+    }
+    assert!(output.contains("The requested SubAgent model is not configured"));
+}
+
 fn explicit_subscription_tool_context() -> SubscriptionToolContext {
     SubscriptionToolContext {
         agent_efforts: Arc::new(AgentEffortIntents::default()),
@@ -381,6 +497,19 @@ fn explicit_subscription_tool_context() -> SubscriptionToolContext {
             "role":"user", "content":"Claudex routing for this turn: {\"providers\":{},\"selected_workers\":[{\"agent\":\"claudex-gpt-spark\",\"model\":\"gpt-5.3-codex-spark\",\"effort\":\"xhigh\"},{\"agent\":\"claudex-grok\",\"model\":\"grok-4.5\",\"effort\":\"high\"}]}"
         })],
     }
+}
+
+fn routed_subscription_tool_context() -> SubscriptionToolContext {
+    let mut context = explicit_subscription_tool_context();
+    context.user_messages = vec![
+        json!({
+            "role":"assistant",
+            "content":[{"type":"tool_use","name":"Agent","id":"prior-agent","input":{}}]
+        }),
+        context.user_messages[0].clone(),
+        json!({"role":"user", "content":"launch the selected worker now"}),
+    ];
+    context
 }
 
 #[tokio::test]

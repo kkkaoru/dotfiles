@@ -99,7 +99,7 @@ async fn stream_subscription_model(
     options: &SubscriptionOptions,
 ) -> Result<()> {
     let _permit = acquire_subscription_slot(Arc::clone(&options.slots), options.timeout).await?;
-    let mut command = subscription_command(program, model, &options, OutputMode::StreamJson);
+    let mut command = subscription_command(program, model, options, OutputMode::StreamJson);
     let mut child = spawn_subscription(&mut command, model)?;
     let stdin = take_subscription_stdin(&mut child)?;
     // Defer stdin errors so an early process exit can report its status and stderr.
@@ -107,7 +107,7 @@ async fn stream_subscription_model(
     let result = tokio::time::timeout(timeout, async {
         let (prompt_result, stream_result) = tokio::join!(
             write_subscription_prompt(stdin, prompt),
-            consume_subscription_stream_with_options(&mut child, sender, &options),
+            consume_subscription_stream_with_options(&mut child, sender, options),
         );
         stream_result?;
         prompt_result.context("failed to write Claude subscription prompt")
@@ -134,7 +134,6 @@ struct SubscriptionStream {
     tool_context: Option<super::subscription::SubscriptionToolContext>,
     activity: SubscriptionActivity,
 }
-
 #[cfg(test)]
 async fn consume_subscription_stream(
     mut child: Child,
@@ -344,6 +343,7 @@ impl SubscriptionStream {
         validate_subscription_result(result)?;
         self.activity.close(sender).await?;
         if self.saw_tool_use {
+            self.close_text(sender).await?;
             send_tool_finish(sender, result_output_tokens(result)).await?;
             self.saw_result = true;
             return Ok(());

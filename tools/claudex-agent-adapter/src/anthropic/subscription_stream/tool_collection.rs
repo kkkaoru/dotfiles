@@ -91,11 +91,15 @@ impl SubscriptionStream {
         &mut self,
         sender: &mpsc::Sender<Result<Bytes, Infallible>>,
     ) -> Result<()> {
-        if !self.text_started {
-            send_text_start(sender, self.next_index).await?;
-            self.text_started = true;
-            self.next_index += 1;
-        }
+        // A preceding tool can have advanced `next_index` past the last text
+        // block while leaving `text_started` set. Never append the blocked
+        // notice to that index: Claude Code will classify it as tool input and
+        // reject the following text_delta as "not a text block".
+        self.close_text(sender).await?;
+        send_text_start(sender, self.next_index).await?;
+        self.text_started = true;
+        self.text_closed = false;
+        self.next_index += 1;
         send_text_delta(
             sender,
             self.next_index.saturating_sub(1),
