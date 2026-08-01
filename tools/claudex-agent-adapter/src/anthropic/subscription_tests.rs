@@ -39,6 +39,27 @@ fn subscription_children_identify_as_noninteractive() {
 }
 
 #[test]
+fn subscription_without_explicit_tools_does_not_disable_claude_tools() {
+    let options = SubscriptionOptions::internal(
+        Arc::new(tokio::sync::Semaphore::new(1)),
+        Duration::from_secs(1),
+    );
+    let command = subscription_command(
+        Path::new("claude"),
+        "claude-sonnet-5",
+        &options,
+        OutputMode::Json,
+    );
+    let args = command.as_std().get_args().collect::<Vec<_>>();
+    assert!(!args
+        .iter()
+        .any(|argument| argument.to_str() == Some("--tools")));
+    assert!(!args
+        .iter()
+        .any(|argument| argument.to_str() == Some("--allowedTools")));
+}
+
+#[test]
 fn streaming_subscription_bridges_native_web_tools_to_the_outer_session() {
     let mut options = SubscriptionOptions::internal(
         Arc::new(tokio::sync::Semaphore::new(1)),

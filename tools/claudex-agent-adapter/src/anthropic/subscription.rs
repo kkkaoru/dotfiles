@@ -327,7 +327,6 @@ pub(super) fn subscription_command(
         use std::os::unix::process::CommandExt as _;
         command.as_std_mut().process_group(0);
     }
-    let tools = options.tools.join(",");
     let output_format = match output {
         OutputMode::Json => "json",
         OutputMode::StreamJson => "stream-json",
@@ -338,11 +337,11 @@ pub(super) fn subscription_command(
         model,
         "--output-format",
         output_format,
-        "--tools",
-        &tools,
         "--no-session-persistence",
     ]);
     if !options.tools.is_empty() {
+        let tools = options.tools.join(",");
+        command.args(["--tools", &tools]);
         command.args(["--allowedTools", &tools]);
     }
     if matches!(output, OutputMode::StreamJson) {
