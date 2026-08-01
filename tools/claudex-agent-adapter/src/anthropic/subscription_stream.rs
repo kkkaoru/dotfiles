@@ -93,6 +93,12 @@ async fn stream_subscription_model(
             consume_subscription_stream_with_options(&mut child, sender, options, model),
         );
         stream_result?;
+        // A disconnected Claude Code response is a caller cancellation. The
+        // provider may close stdin while the prompt writer is still flushing;
+        // do not turn that expected teardown into a user-visible API error.
+        if sender.is_closed() {
+            return Ok(());
+        }
         super::subscription::failure::local_result(model, "failed to write prompt", prompt_result)
     })
     .await

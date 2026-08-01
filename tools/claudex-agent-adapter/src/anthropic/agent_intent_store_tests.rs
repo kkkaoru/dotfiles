@@ -139,6 +139,31 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_saves_do_not_share_a_temporary_path() {
+        let root = tempfile::tempdir().expect("store directory");
+        let path = root.path().join("nested/intents.json");
+        let store = std::sync::Arc::new(AgentIntentStore::at(path));
+
+        let handles = (0..8)
+            .map(|index| {
+                let store = std::sync::Arc::clone(&store);
+                std::thread::spawn(move || store.save(vec![stored(&format!("tool-{index}"), 0)]))
+            })
+            .collect::<Vec<_>>();
+        for handle in handles {
+            handle.join().expect("concurrent save thread");
+        }
+
+        assert_eq!(store.load().len(), 1);
+        let temporary_files = fs::read_dir(root.path().join("nested"))
+            .expect("cache directory")
+            .filter_map(Result::ok)
+            .filter(|entry| entry.path().extension().and_then(|value| value.to_str()) == Some("tmp"))
+            .count();
+        assert_eq!(temporary_files, 0);
+    }
+
+    #[test]
     fn persistence_snapshot_only_keeps_correlated_intents() {
         let now = unix_seconds();
         let pending = VecDeque::from([

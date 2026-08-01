@@ -3,6 +3,7 @@ use std::{
     fs::{self, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -14,6 +15,7 @@ use super::subscription::valid_effort;
 const CACHE_FILE_NAME: &str = "agent-intents-v2.json";
 const CACHE_VERSION: u8 = 2;
 const MAX_AGE_SECONDS: u64 = 2 * 60 * 60;
+static NEXT_TEMPORARY_SUFFIX: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Deserialize, Serialize)]
 pub(super) struct StoredAgentIntent {
@@ -94,8 +96,11 @@ impl AgentIntentStore {
     }
 
     fn temporary_path(&self) -> PathBuf {
-        self.path
-            .with_extension(format!("{}.tmp", std::process::id()))
+        self.path.with_extension(format!(
+            "{}.{}.tmp",
+            std::process::id(),
+            NEXT_TEMPORARY_SUFFIX.fetch_add(1, Ordering::Relaxed)
+        ))
     }
 }
 

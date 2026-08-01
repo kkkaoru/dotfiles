@@ -1863,6 +1863,32 @@ async fn stops_cleanly_when_the_receiver_closes() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn ignores_prompt_write_failure_after_the_response_disconnects() {
+    let directory = tempfile::tempdir().expect("create prompt fixture directory");
+    let program = directory.path().join("exit-immediately.sh");
+    fs::write(&program, "#!/bin/sh\nexit 0\n").expect("write prompt fixture");
+    fs::set_permissions(&program, fs::Permissions::from_mode(0o755))
+        .expect("make prompt fixture executable");
+    let (sender, receiver) = channel();
+    drop(receiver);
+    let options = SubscriptionOptions::internal(
+        Arc::new(tokio::sync::Semaphore::new(1)),
+        Duration::from_secs(5),
+    );
+
+    stream_subscription_model(
+        &sender,
+        &program,
+        "model",
+        &"x".repeat(1024 * 1024),
+        &options,
+    )
+    .await
+    .expect("closed response must cancel prompt cleanup without an API error");
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn stream_timeout_terminates_the_entire_subscription_process_group() {
     let fixture = BackgroundSleepFixture::new();
     let program = fixture.program();
