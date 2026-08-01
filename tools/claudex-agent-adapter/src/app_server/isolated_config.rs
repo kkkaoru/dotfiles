@@ -1,23 +1,14 @@
-use std::{collections::HashSet, path::PathBuf};
+use std::collections::HashSet;
 
 use anyhow::Result;
+
+use super::codex_config::provider_config_files;
 
 pub(super) fn append_model_providers(
     source_home: &std::path::Path,
     config: &mut String,
 ) -> Result<()> {
-    let mut sources = vec![source_home.join("config.toml")];
-    let mut profiles = std::fs::read_dir(source_home)?
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .is_some_and(|name| name.ends_with(".config.toml") && name != "config.toml")
-        })
-        .collect::<Vec<PathBuf>>();
-    profiles.sort();
-    sources.extend(profiles);
+    let sources = provider_config_files(source_home)?;
 
     let mut copied_sections = HashSet::new();
     for source in sources {

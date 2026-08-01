@@ -87,6 +87,7 @@ pub fn http_router(bridge: Arc<Bridge>, model: String, auth_token: Option<String
                         "pid":std::process::id(),
                         "protocol_version":ADAPTER_PROTOCOL_VERSION,
                         "build_id":env!("CLAUDEX_BUILD_ID"),
+                        "codex_config_fingerprint":std::env::var(crate::app_server::CODEX_CONFIG_FINGERPRINT_ENV).unwrap_or_default(),
                         "backend_routes":backend_routes,
                         "worker_routes":worker_routes,
                         "search_worker_routes":search_worker_routes,

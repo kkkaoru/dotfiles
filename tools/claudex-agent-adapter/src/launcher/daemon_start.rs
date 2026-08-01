@@ -35,6 +35,10 @@ pub(super) fn start_adapter(config: &ServiceConfig) -> Result<u32> {
             .args(daemon_arguments(&config.options)),
         &config.token,
     )
+    .env(
+        crate::app_server::CODEX_CONFIG_FINGERPRINT_ENV,
+        &config.codex_config_fingerprint,
+    )
     .stdin(Stdio::null())
     .stdout(Stdio::from(stdout))
     .stderr(Stdio::from(stderr))

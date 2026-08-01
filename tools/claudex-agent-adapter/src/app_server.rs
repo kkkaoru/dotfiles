@@ -22,6 +22,10 @@ use tokio::{
 pub(crate) mod events;
 use events::ThreadEventDispatcher;
 pub use events::ThreadEvents;
+mod codex_config;
+pub(crate) use codex_config::{
+    CODEX_CONFIG_FINGERPRINT_ENV, provider_config_fingerprint, source_home,
+};
 mod isolated_config;
 mod lifecycle;
 mod pending;
@@ -43,10 +47,8 @@ pub struct AppServer {
 
 impl AppServer {
     pub async fn spawn(model: &str) -> Result<Arc<Self>> {
+        let source_home = source_home()?;
         let home = std::env::var_os("HOME").context("HOME is not set")?;
-        let source_home = std::env::var_os("CODEX_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from(&home).join(".codex"));
         let isolated_home = PathBuf::from(home).join(".cache/claudex/codex-home");
         let program = std::env::var_os("CLAUDEX_CODEX_PROGRAM").unwrap_or_else(|| "codex".into());
         Self::spawn_with_program(model, program, &source_home, &isolated_home).await

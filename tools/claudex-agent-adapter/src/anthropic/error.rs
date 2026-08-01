@@ -9,6 +9,7 @@ const BLOCKED_SUBAGENT_MARKER: &str = "disabled by the active claudex policy";
 const UNKNOWN_SUBAGENT_MODEL_MARKER: &str = "does not have a recoverable configured route";
 const MISSING_REQUEST_MODEL_MARKER: &str = "request model is required";
 const UNAVAILABLE_PROVIDER_MODEL_MARKER: &str = "does not have an active route";
+const MISSING_MODEL_PROVIDER_MARKER: &str = "model provider";
 // Keep generic context-window errors on the session layer: it owns the
 // one-time fresh-thread retry. Only the provider's explicit oversized-prompt
 // diagnostic is terminal here, preventing Claude Code's retry storm without
@@ -39,6 +40,7 @@ fn is_terminal_provider_configuration_error(error: &Error) -> bool {
             || message.contains(UNKNOWN_SUBAGENT_MODEL_MARKER)
             || message.contains(MISSING_REQUEST_MODEL_MARKER)
             || message.contains(UNAVAILABLE_PROVIDER_MODEL_MARKER)
+            || (message.contains(MISSING_MODEL_PROVIDER_MARKER) && message.contains("not found"))
             || message.contains(OVERSIZED_PROMPT_MARKER)
     })
 }
@@ -107,6 +109,17 @@ mod tests {
                 StatusCode::BAD_REQUEST
             );
         }
+    }
+
+    #[test]
+    fn marks_missing_codex_model_provider_as_non_retryable() {
+        let error = anyhow!("failed to load configuration: Model provider `sakana` not found");
+
+        assert_eq!(error_type(&error), NON_RETRYABLE_ERROR_TYPE);
+        assert_eq!(
+            http_status(StatusCode::BAD_GATEWAY, &error),
+            StatusCode::BAD_REQUEST
+        );
     }
 
     #[test]

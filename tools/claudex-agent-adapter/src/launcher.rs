@@ -20,7 +20,7 @@ mod handover;
 mod launcher_lock;
 mod launcher_logs;
 use crate::{
-    ADAPTER_PROTOCOL_VERSION, agent_backend::BackendRoute, subagent_policy as policy,
+    ADAPTER_PROTOCOL_VERSION, agent_backend::BackendRoute, app_server, subagent_policy as policy,
     working_directory,
 };
 use claude_process::ClaudeProcess;
@@ -51,6 +51,7 @@ pub struct AdapterOptions {
 struct ServiceConfig {
     options: AdapterOptions,
     token: String,
+    codex_config_fingerprint: String,
     executable: PathBuf,
     log_path: PathBuf,
     lock_path: PathBuf,
@@ -63,6 +64,8 @@ struct Health {
     protocol_version: u64,
     #[serde(rename = "build_id")]
     build_id: String,
+    #[serde(default)]
+    codex_config_fingerprint: String,
     #[serde(default)]
     backend_routes: Vec<String>,
     #[serde(default)]
@@ -83,15 +86,18 @@ impl ServiceConfig {
             bail!("ANTHROPIC_AUTH_TOKEN is required for a non-loopback listener");
         }
         let executable = std::env::current_exe().context("locate adapter executable")?;
-        let cache = std::env::var_os("HOME")
+        let home = std::env::var_os("HOME").context("HOME is required")?;
+        let source_home = std::env::var_os("CODEX_HOME")
             .map(PathBuf::from)
-            .context("HOME is required")?
-            .join(".cache/claudex");
+            .unwrap_or_else(|| PathBuf::from(&home).join(".codex"));
+        let codex_config_fingerprint = app_server::provider_config_fingerprint(&source_home);
+        let cache = PathBuf::from(home).join(".cache/claudex");
         let log_path = launcher_logs::adapter_log_path(&cache, &options.listen);
         let lock_path = launcher_logs::adapter_lock_path(&cache, &options.listen);
         Ok(Self {
             options,
             token,
+            codex_config_fingerprint,
             executable,
             log_path,
             lock_path,
@@ -116,6 +122,7 @@ impl ServiceConfig {
         // state machine checks the build ID without interrupting accepted responses.
         health.status == "ok"
             && health.protocol_version == ADAPTER_PROTOCOL_VERSION
+            && health.codex_config_fingerprint == self.codex_config_fingerprint
             && health.backend_routes == route_descriptions(&self.options.routes)
             && health.worker_routes == worker_route_descriptions(&self.options.model_catalog)
             && health.search_worker_routes

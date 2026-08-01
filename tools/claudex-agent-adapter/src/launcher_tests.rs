@@ -34,6 +34,7 @@ mod tests {
                 model_catalog: crate::provider_config::ModelCatalog::default(),
             },
             token: LOCAL_TOKEN.to_owned(),
+            codex_config_fingerprint: "test-fingerprint".to_owned(),
             executable: PathBuf::from("/tmp/adapter"),
             log_path: PathBuf::from("/tmp/adapter.log"),
             lock_path: PathBuf::from("/tmp/adapter.lock"),
@@ -48,6 +49,14 @@ mod tests {
         let mut alternate_main = config();
         alternate_main.options.model = "alternate-model".to_owned();
         assert!(alternate_main.matches(&healthy(&base_config)));
+    }
+
+    #[test]
+    fn rejects_health_from_a_daemon_with_stale_codex_configuration() {
+        let config = config();
+        let mut stale = healthy(&config);
+        stale.codex_config_fingerprint = "stale-fingerprint".to_owned();
+        assert!(!config.matches(&stale));
     }
 
     #[test]
@@ -212,6 +221,7 @@ mod tests {
             pid: Some(42),
             protocol_version: ADAPTER_PROTOCOL_VERSION,
             build_id: env!("CLAUDEX_BUILD_ID").to_owned(),
+            codex_config_fingerprint: config.codex_config_fingerprint.clone(),
             backend_routes: route_descriptions(&config.options.routes),
             worker_routes: worker_route_descriptions(&config.options.model_catalog),
             search_worker_routes: search_worker_route_descriptions(&config.options.model_catalog),
@@ -527,6 +537,7 @@ mod tests {
                 "pid": health.pid,
                 "protocol_version": health.protocol_version,
                 "build_id": health.build_id,
+                "codex_config_fingerprint": health.codex_config_fingerprint,
                 "backend_routes": health.backend_routes,
                 "worker_routes": health.worker_routes,
                 "subscription_max_processes": health.subscription_max_processes,
