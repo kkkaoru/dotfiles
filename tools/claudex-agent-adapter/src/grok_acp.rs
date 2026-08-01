@@ -24,6 +24,8 @@ mod plugin;
 mod prompt;
 mod queue;
 mod session;
+#[cfg(test)]
+mod test_support;
 mod turns;
 mod updates;
 
@@ -76,6 +78,74 @@ struct DriverSetup {
     ready: oneshot::Sender<Result<()>>,
 }
 
+struct DriverThread {
+    handle: std::sync::Mutex<Option<std::thread::JoinHandle<()>>>,
+    joined: tokio::sync::watch::Sender<bool>,
+}
+
+fn finish_driver_thread(
+    handle: std::thread::JoinHandle<()>,
+    joined: tokio::sync::watch::Sender<bool>,
+) -> std::thread::Result<()> {
+    let result = handle.join();
+    joined.send_replace(true);
+    result
+}
+
+async fn join_driver_thread(
+    handle: std::thread::JoinHandle<()>,
+    joined: tokio::sync::watch::Sender<bool>,
+) {
+    let join = tokio::task::spawn_blocking(move || finish_driver_thread(handle, joined));
+    if let Err(error) = join.await {
+        tracing::error!(?error, "failed to join ACP driver thread");
+    }
+}
+
+impl DriverThread {
+    fn new(handle: std::thread::JoinHandle<()>) -> Self {
+        let (joined, _) = tokio::sync::watch::channel(false);
+        Self {
+            handle: std::sync::Mutex::new(Some(handle)),
+            joined,
+        }
+    }
+
+    async fn join(&self) {
+        let handle = self
+            .handle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(handle) = handle {
+            join_driver_thread(handle, self.joined.clone()).await;
+            return;
+        }
+
+        if *self.joined.borrow() {
+            return;
+        }
+        let mut joined = self.joined.subscribe();
+        if !*joined.borrow_and_update() {
+            let _ = joined.changed().await;
+        }
+    }
+
+    #[cfg(test)]
+    fn completed() -> Self {
+        let (joined, _) = tokio::sync::watch::channel(true);
+        Self {
+            handle: std::sync::Mutex::new(None),
+            joined,
+        }
+    }
+
+    #[cfg(test)]
+    fn is_joined(&self) -> bool {
+        *self.joined.borrow()
+    }
+}
+
 pub struct GrokAcp {
     provider: AcpProvider,
     commands: mpsc::Sender<DriverCommand>,
@@ -85,6 +155,7 @@ pub struct GrokAcp {
     turn_capacity: usize,
     events: Arc<ThreadEventDispatcher>,
     alive: Arc<AtomicBool>,
+    driver: DriverThread,
 }
 
 impl GrokAcp {
@@ -185,7 +256,7 @@ impl GrokAcp {
         let model = model.to_owned();
         let effort = effort.map(str::to_owned);
         let program = program.into();
-        std::thread::Builder::new()
+        let driver = std::thread::Builder::new()
             .name(provider.driver_name().to_owned())
             .spawn(move || {
                 let runtime = tokio::runtime::Builder::new_current_thread()
@@ -209,9 +280,15 @@ impl GrokAcp {
                 )));
             })
             .with_context(|| format!("start {} ACP driver thread", provider.label()))?;
-        ready_rx
+        let driver = DriverThread::new(driver);
+        let ready = ready_rx
             .await
-            .with_context(|| format!("{} ACP driver stopped during startup", provider.label()))??;
+            .with_context(|| format!("{} ACP driver stopped during startup", provider.label()))
+            .and_then(|ready| ready);
+        if let Err(error) = ready {
+            driver.join().await;
+            return Err(error);
+        }
         Ok(Arc::new(Self {
             provider,
             commands: command_tx,
@@ -221,6 +298,7 @@ impl GrokAcp {
             turn_capacity,
             events,
             alive,
+            driver,
         }))
     }
 
@@ -277,9 +355,7 @@ impl GrokAcp {
     }
 
     pub async fn shutdown(&self) {
-        if !self.alive.swap(false, Ordering::Relaxed) {
-            return;
-        }
+        self.alive.store(false, Ordering::Release);
         let (response, stopped) = oneshot::channel();
         if self
             .commands
@@ -289,6 +365,7 @@ impl GrokAcp {
         {
             let _ = stopped.await;
         }
+        self.driver.join().await;
     }
 
     async fn call<T>(
