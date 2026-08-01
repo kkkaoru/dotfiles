@@ -252,7 +252,7 @@ mod tests {
             [
                 OsString::from("launch"),
                 OsString::from("--provider-config"),
-                path.clone().into_os_string(),
+                path.into_os_string(),
                 OsString::from("--"),
                 OsString::from("--resume"),
                 OsString::from("session-id"),

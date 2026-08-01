@@ -157,7 +157,7 @@ impl RouteOrigin {
     }
 }
 
-fn apply_disabled_model_policy(request: &mut MessagesRequest, is_subagent: bool) -> Result<()> {
+fn apply_disabled_model_policy(request: &MessagesRequest, is_subagent: bool) -> Result<()> {
     if !request.disabled_subagent_models.contains(&request.model) {
         return Ok(());
     }

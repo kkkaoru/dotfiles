@@ -109,6 +109,7 @@ fn is_live_web_worker(request: &MessagesRequest) -> bool {
         })
 }
 
+#[allow(clippy::too_many_lines)]
 fn tool_spec(name: &str) -> Value {
     match name {
         "Bash" => json!({

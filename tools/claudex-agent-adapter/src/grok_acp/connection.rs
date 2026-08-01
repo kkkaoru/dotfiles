@@ -54,6 +54,7 @@ impl AcpProvider {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn start(
     provider: AcpProvider,
     program: &OsString,

@@ -71,7 +71,7 @@ pub(super) fn subscription_request_prompt(request: &MessagesRequest) -> String {
         serde_json::to_string(&request.messages).unwrap_or_default()
     );
     prompt.push('\n');
-    prompt.push_str("\n");
+    prompt.push('\n');
     prompt.push_str(SHARED_WORKSPACE_INSTRUCTIONS);
     prompt
 }

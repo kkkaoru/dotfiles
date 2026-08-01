@@ -9,6 +9,7 @@ const SESSION_USER_ID: &str = r#"{"session_id":"outer-model-authority"}"#;
 const OUTER_MODELS: [&str; 3] = ["claude-opus-5[1m]", "claude-fable-5", "claude-sonnet-5"];
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn outer_models_keep_authority_across_a_long_continue() {
     let fixture = tempfile::tempdir().expect("create outer-model fixture");
     let source = fixture.path().join("provider-source");

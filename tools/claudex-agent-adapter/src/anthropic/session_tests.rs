@@ -753,6 +753,7 @@ fn subscription_prompt_keeps_external_provider_models_out_of_the_native_field() 
 }
 
 #[test]
+#[allow(clippy::cognitive_complexity)]
 fn subscription_prompt_requires_atomic_parallel_launches() {
     let prompt = subscription_request_prompt(&request(json!("system"), Vec::new()));
     let minimum = crate::anthropic::agent_batch::minimum_batch_size();

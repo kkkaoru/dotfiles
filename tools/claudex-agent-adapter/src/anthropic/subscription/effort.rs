@@ -2,6 +2,7 @@ use super::super::{Bridge, MessagesRequest, agent_effort::AgentEffort};
 use super::request_effort;
 
 impl Bridge {
+    #[allow(clippy::excessive_nesting)]
     pub(in crate::anthropic) fn resolve_request_effort(
         &self,
         request: &MessagesRequest,
@@ -27,7 +28,9 @@ impl Bridge {
             AgentEffort::Unmatched => {
                 let requested = request_effort(&request.output_config);
                 if let Some(launch_scoped) = launch_scoped {
-                    if requested.is_some_and(|requested| requested != launch_scoped) {
+                    if let Some(requested) =
+                        requested.filter(|requested| *requested != launch_scoped)
+                    {
                         tracing::warn!(
                             effort = requested,
                             configured = %launch_scoped,

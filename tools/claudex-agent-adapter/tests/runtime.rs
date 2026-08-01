@@ -158,7 +158,9 @@ async fn provider_request(base_url: &str, model: &str, index: usize) -> Value {
 }
 
 async fn read_health(client: &Client, base_url: &str) -> Value {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    // Parallel integration tests and coverage-instrumented binaries can make
+    // the first runtime spawn exceed the old five-second probe window.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     loop {
         let Ok(response) = client.get(format!("{base_url}/health")).send().await else {
             assert!(

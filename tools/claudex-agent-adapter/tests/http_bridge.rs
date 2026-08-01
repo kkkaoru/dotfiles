@@ -104,6 +104,7 @@ async fn rejects_an_invalid_disabled_subagent_model_header() {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn serves_models_counts_plain_messages_and_continuations() {
     let adapter = Adapter::start().await;
     let client = Client::new();

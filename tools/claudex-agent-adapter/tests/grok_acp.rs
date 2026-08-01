@@ -88,6 +88,7 @@ async fn streams_grok_acp_with_launch_scoped_model_effort_and_instructions() {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn provider_config_high_reaches_the_exact_native_grok_argv() {
     let root = tempfile::tempdir().expect("provider route fixture");
     let config = root.path().join("providers.json");
