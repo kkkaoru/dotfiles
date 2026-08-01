@@ -126,21 +126,13 @@ pub(crate) fn has_parallel_scope(request: &MessagesRequest) -> bool {
     independent_scope_count(request) >= 2
 }
 
-fn has_explicit_parallel_scope(request: &MessagesRequest) -> bool {
-    request
-        .messages
-        .iter()
-        .filter(|message| message.get("role").and_then(Value::as_str) == Some("user"))
-        .filter_map(|message| message.get("content").and_then(Value::as_str))
-        .any(|content| count_explicit_blocks(content) >= 2 || contains_parallel_intent(content))
-}
-
 pub(crate) fn independent_scope_count(request: &MessagesRequest) -> usize {
     let user_text = request
         .messages
         .iter()
         .filter(|message| message.get("role").and_then(Value::as_str) == Some("user"))
         .filter_map(|message| message.get("content").and_then(Value::as_str))
+        .filter(|content| !content.trim_start().starts_with("<task-notification>"))
         .collect::<Vec<_>>();
     let Some(content) = user_text.last() else {
         // A reconstructed request without a user turn cannot be classified safely. Keep the
@@ -303,17 +295,16 @@ pub(crate) fn estimate_target_workers(
     {
         return 0;
     }
-    let mut target = active;
-    if target == 0 && needs_single_worker(request) {
-        target = 1;
-    }
-    if requested_scopes >= 2 {
-        target = target.max(requested_scopes);
-        if has_explicit_parallel_scope(request) {
-            target = target.max(config.min_parallel_workers);
-        }
-        target = target.max(snapshot.active_model_families().saturating_add(1));
-    }
+    // The current task shape owns desired concurrency. Existing workers affect
+    // only the launch gap; they must never inflate the target or cause duplicate
+    // launches when a resumed transcript contains more workers than scopes.
+    let target = if requested_scopes >= 2 {
+        requested_scopes
+    } else if active > 0 || needs_single_worker(request) {
+        1
+    } else {
+        0
+    };
     target.min(config.max_parallel_workers)
 }
 

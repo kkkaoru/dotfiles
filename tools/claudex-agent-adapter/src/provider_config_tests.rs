@@ -70,11 +70,13 @@ mod tests {
             loaded.model_catalog.worker_fields("claudex-haiku-search"),
             Some(("claude-haiku-4-5", "max"))
         );
-        assert!(loaded
-            .model_catalog
-            .worker_routes()
-            .iter()
-            .any(|worker| worker.agent == "claudex-haiku-search"));
+        assert!(
+            loaded
+                .model_catalog
+                .worker_routes()
+                .iter()
+                .any(|worker| worker.agent == "claudex-haiku-search")
+        );
         // Native workers must stay out of the provider identity catalog so an
         // explicit Haiku child reaches the Claude subscription backend.
         assert!(!loaded.model_catalog.matches("claude-haiku-4-5"));
@@ -82,28 +84,33 @@ mod tests {
 
     #[test]
     fn validates_and_exports_worker_routes() {
-        let mut catalog = ModelCatalog::from_routes(&[BackendRoute::new("model", BackendKind::GrokAcp)]);
-        assert!(catalog
-            .set_worker_routes(vec![WorkerRoute {
-                agent: String::new(),
-                model: "model".to_owned(),
-                effort: "high".to_owned(),
-            }])
-            .is_err());
-        assert!(catalog
-            .set_worker_routes(vec![
-                WorkerRoute {
-                    agent: "worker".to_owned(),
+        let mut catalog =
+            ModelCatalog::from_routes(&[BackendRoute::new("model", BackendKind::GrokAcp)]);
+        assert!(
+            catalog
+                .set_worker_routes(vec![WorkerRoute {
+                    agent: String::new(),
                     model: "model".to_owned(),
                     effort: "high".to_owned(),
-                },
-                WorkerRoute {
-                    agent: "worker".to_owned(),
-                    model: "other".to_owned(),
-                    effort: "low".to_owned(),
-                },
-            ])
-            .is_err());
+                }])
+                .is_err()
+        );
+        assert!(
+            catalog
+                .set_worker_routes(vec![
+                    WorkerRoute {
+                        agent: "worker".to_owned(),
+                        model: "model".to_owned(),
+                        effort: "high".to_owned(),
+                    },
+                    WorkerRoute {
+                        agent: "worker".to_owned(),
+                        model: "other".to_owned(),
+                        effort: "low".to_owned(),
+                    },
+                ])
+                .is_err()
+        );
         catalog
             .set_worker_routes(vec![WorkerRoute {
                 agent: "worker".to_owned(),
@@ -139,7 +146,9 @@ mod tests {
 
         document["webSearch"] = serde_json::json!({"fallbackProviders":["missing"]});
         std::fs::write(&path, serde_json::to_vec(&document).unwrap()).unwrap();
-        let error = load(&path).err().expect("missing search fallback should fail");
+        let error = load(&path)
+            .err()
+            .expect("missing search fallback should fail");
         assert!(error.to_string().contains("not enabled"));
     }
 
@@ -251,19 +260,14 @@ mod tests {
         .unwrap();
         let loaded = load(&path).unwrap();
         assert_eq!(loaded.routes[0].model, "glm-5.2:cloud");
-        assert_eq!(
-            loaded.routes[0].model_provider.as_deref(),
-            Some("ollama")
-        );
+        assert_eq!(loaded.routes[0].model_provider.as_deref(), Some("ollama"));
         assert_eq!(
             loaded.routes[0].model_catalog_json.as_deref(),
             Some("~/.codex/fugu.json")
         );
         assert!(loaded.model_catalog.matches("glm-5.2:cloud"));
         assert_eq!(
-            loaded
-                .model_catalog
-                .worker_fields("claudex-ollama-glm-5-2"),
+            loaded.model_catalog.worker_fields("claudex-ollama-glm-5-2"),
             Some(("glm-5.2:cloud", "max"))
         );
     }
@@ -359,15 +363,14 @@ mod tests {
         for field in ["id", "model", "prefix"] {
             let mut config = parsed();
             let mut duplicate = config.providers[0].clone();
-            match field {
-                "id" => duplicate.default_model = "other".to_owned(),
-                "model" => duplicate.id = "other".to_owned(),
-                "prefix" => {
-                    duplicate.id = "other".to_owned();
-                    duplicate.default_model = "other".to_owned();
-                }
+            let (id, model) = match field {
+                "id" => (duplicate.id.clone(), "other".to_owned()),
+                "model" => ("other".to_owned(), duplicate.default_model.clone()),
+                "prefix" => ("other".to_owned(), "other".to_owned()),
                 _ => unreachable!(),
-            }
+            };
+            duplicate.id = id;
+            duplicate.default_model = model;
             config.providers.push(duplicate);
             invalid.push(config);
         }

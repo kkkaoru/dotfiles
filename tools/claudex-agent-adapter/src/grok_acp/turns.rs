@@ -130,27 +130,34 @@ pub(super) fn cancel_turn(
     session_id: &str,
     response: oneshot::Sender<Result<()>>,
 ) {
-    let cancellation = {
-        let mut active_turns = active_turns.borrow_mut();
-        match active_turns.get_mut(session_id) {
-            Some(cancellation) => {
-                let Some(cancellation) = cancellation.take() else {
-                    let _ = response.send(Err(anyhow!(
-                        "ACP session `{session_id}` cancellation is already in progress"
-                    )));
-                    return;
-                };
-                cancellation
-            }
-            None => {
-                let _ = response.send(Ok(()));
-                return;
-            }
+    let cancellation = match take_cancellation(active_turns, session_id) {
+        Ok(Some(cancellation)) => cancellation,
+        Ok(None) => {
+            let _ = response.send(Ok(()));
+            return;
+        }
+        Err(error) => {
+            let _ = response.send(Err(error));
+            return;
         }
     };
     if let Err(request) = cancellation.send(CancelRequest { response }) {
         let _ = request.response.send(Ok(()));
     }
+}
+
+fn take_cancellation(
+    active_turns: &ActiveTurns,
+    session_id: &str,
+) -> Result<Option<oneshot::Sender<CancelRequest>>> {
+    let mut active_turns = active_turns.borrow_mut();
+    let Some(cancellation) = active_turns.get_mut(session_id) else {
+        return Ok(None);
+    };
+    cancellation
+        .take()
+        .map(Some)
+        .ok_or_else(|| anyhow!("ACP session `{session_id}` cancellation is already in progress"))
 }
 
 fn prepare_turn(

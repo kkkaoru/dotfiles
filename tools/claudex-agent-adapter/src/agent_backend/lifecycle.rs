@@ -1,6 +1,53 @@
-use super::AgentBackend;
+use anyhow::{Context, Result};
+
+use super::{AgentBackend, TurnCancellation, routed_thread};
 
 impl AgentBackend {
+    pub(crate) async fn cancel_turn(&self, thread_id: &str) -> Result<TurnCancellation> {
+        match self {
+            Self::Codex(_) => Ok(TurnCancellation::Unsupported),
+            Self::Copilot(agent) => {
+                agent.cancel_turn(thread_id).await?;
+                Ok(TurnCancellation::Settled)
+            }
+            Self::ConfiguredAcp(agent) => {
+                agent.cancel_turn(thread_id).await?;
+                Ok(TurnCancellation::Settled)
+            }
+            Self::Grok(agent) => {
+                agent.cancel_turn(thread_id).await?;
+                Ok(TurnCancellation::Settled)
+            }
+            Self::Routed(routes) => {
+                let (index, raw_id) = routed_thread(thread_id);
+                let backend = routes
+                    .route(index)
+                    .ready_backend()
+                    .context("thread route backend is unavailable during cancellation")?;
+                Box::pin(backend.cancel_turn(raw_id)).await
+            }
+        }
+    }
+
+    /// Force-close the provider that owns a turn when it has no per-turn
+    /// cancellation primitive. Routed providers are retired before shutdown so
+    /// a later request starts a fresh leaf instead of reusing the aborted one.
+    pub(crate) async fn abort_turn_provider(&self, thread_id: &str) -> Result<()> {
+        match self {
+            Self::Routed(routes) => {
+                let (index, _) = routed_thread(thread_id);
+                let route = routes.route(index);
+                let backend = route
+                    .ready_backend()
+                    .context("thread route backend is unavailable during provider abort")?;
+                route.retire();
+                backend.shutdown_leaf().await;
+            }
+            _ => self.shutdown_leaf().await,
+        }
+        Ok(())
+    }
+
     pub(super) async fn shutdown_leaf(&self) {
         match self {
             Self::Codex(server) => server.shutdown().await,

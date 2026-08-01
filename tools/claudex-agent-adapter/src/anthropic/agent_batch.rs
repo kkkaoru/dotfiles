@@ -16,41 +16,8 @@ pub(super) struct PendingBatch<'a> {
     pub(super) total: usize,
 }
 
-pub(super) fn supports(tool_name: &str) -> bool {
-    matches!(tool_name, "Agent" | "Task")
-}
-
-pub(super) fn mapped_name(tool_name: &str) -> String {
-    format!("{MAPPED_NAME_PREFIX}{tool_name}")
-}
-
 pub(super) fn original_name(mapped: &str) -> Option<&str> {
     mapped.strip_prefix(MAPPED_NAME_PREFIX)
-}
-
-pub(super) fn dynamic_tool(tool: &Value, codex_name: &str) -> Option<Value> {
-    let original_name = tool.get("name")?.as_str()?;
-    let (minimum, maximum) =
-        effective_batch_range(&crate::parallel_scheduler::ParallelScheduler::shared().config());
-    let item_schema = crate::anthropic::agent_effort::tool_schema(
-        original_name,
-        tool.get("input_schema")
-            .cloned()
-            .unwrap_or_else(|| json!({"type":"object"})),
-    );
-    Some(json!({
-        "type":"function",
-        "name":codex_name,
-        "description":format!(
-            "Required instead of `{original_name}` when launching at least {minimum} independent SubAgents. Supply every intended launch in one tasks array; the bridge emits them concurrently in one Claude Code tool round. For code changes, use this batch only when each task has explicitly disjoint file ownership; serialize overlapping or unknown mutation scopes and never run auto-fixing formatters or linters beside an editing task."
-        ),
-        "inputSchema":{
-            "type":"object",
-            "properties":{"tasks":{"type":"array","minItems":minimum,"maxItems":maximum,"items":item_schema}},
-            "required":["tasks"],
-            "additionalProperties":false
-        }
-    }))
 }
 
 pub(super) fn maximum_batch_size() -> usize {
@@ -125,20 +92,5 @@ mod tests {
         assert_eq!(minimum, 8);
         assert_eq!(maximum, 8);
         assert!(minimum <= maximum);
-    }
-
-    #[test]
-    fn batch_description_requires_disjoint_mutation_ownership() {
-        let tool = json!({
-            "name": "Agent",
-            "input_schema": {"type": "object"}
-        });
-        let description = dynamic_tool(&tool, "Agent_batch").unwrap()["description"]
-            .as_str()
-            .unwrap()
-            .to_owned();
-        assert!(description.contains("explicitly disjoint file ownership"));
-        assert!(description.contains("serialize overlapping or unknown mutation scopes"));
-        assert!(description.contains("auto-fixing formatters or linters"));
     }
 }

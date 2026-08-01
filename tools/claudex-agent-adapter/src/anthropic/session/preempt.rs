@@ -174,7 +174,7 @@ mod tests {
 
     #[tokio::test]
     async fn reuses_a_busy_session_after_an_acp_cancellation_failure() {
-        let (app, _root) = stopped_acp_app().await;
+        let app = stopped_acp_app();
         let session = session("main-model", Some("client"));
         let gate = Arc::clone(&session.gate).lock_owned().await;
         let request = request("main-model");
@@ -236,6 +236,37 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn cancellation_failure_never_reuses_a_busy_session_with_pending_tools() {
+        let app = stopped_acp_app();
+        let session = session("main-model", Some("client"));
+        let gate = Arc::clone(&session.gate).lock_owned().await;
+        let request = request("main-model");
+        let task = start_preemption(Arc::clone(&app), Arc::clone(&session), request);
+
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert!(
+            !task.is_finished(),
+            "preemption must wait for the active turn before checking pending tools"
+        );
+        session
+            .pending_tools
+            .lock()
+            .await
+            .insert("tool-1".to_owned(), json!({"id":"tool-1"}));
+        drop(gate);
+
+        let selected = tokio::time::timeout(Duration::from_secs(1), task)
+            .await
+            .expect("cancellation failure must not stall preemption")
+            .expect("preemption task");
+        assert!(
+            selected.is_none(),
+            "pending tool state makes busy-session reuse unsafe"
+        );
+        app.shutdown().await;
+    }
+
     #[test]
     fn reports_all_preemption_cancellation_outcomes() {
         for cancellation in [
@@ -291,23 +322,8 @@ mod tests {
         AgentBackend::codex(server)
     }
 
-    async fn stopped_acp_app() -> (Arc<AgentBackend>, tempfile::TempDir) {
-        let root = tempfile::tempdir().expect("ACP mock fixture");
-        let executable = std::env::current_exe().expect("test executable");
-        let program = executable
-            .parent()
-            .and_then(std::path::Path::parent)
-            .expect("test target directory")
-            .join("grok-acp-mock");
-        let agent = crate::grok_acp::GrokAcp::spawn_with_program(
-            "main-model",
-            program,
-            root.path().to_owned(),
-        )
-        .await
-        .expect("start ACP mock");
-        agent.shutdown().await;
-        (AgentBackend::grok(agent), root)
+    fn stopped_acp_app() -> Arc<AgentBackend> {
+        AgentBackend::grok(crate::grok_acp::GrokAcp::stopped_for_test())
     }
 
     fn request(model: &str) -> MessagesRequest {
@@ -338,7 +354,6 @@ mod tests {
             transcript: Mutex::new(vec![json!({"role":"user","content":"first"})]),
             pending_tools: Mutex::new(HashMap::new()),
             consumed_tool_ids: Mutex::new(Default::default()),
-            internal_tools: HashMap::new(),
             external_tool_names: HashMap::new(),
             client_user_id: user_id.map(str::to_owned),
             gate: Arc::new(Mutex::new(())),

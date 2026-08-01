@@ -114,7 +114,111 @@ fn deduplicates_same_prompt_across_fresh_tool_use_ids() {
 }
 
 #[test]
-fn explicit_batch_count_keeps_same_prompt_tasks_as_separate_lanes() {
+fn existing_workers_above_scope_count_do_not_inflate_the_target() {
+    let scheduler = ParallelScheduler::for_tests();
+    let request = messages(&[
+        serde_json::json!({
+            "role":"user",
+            "content":"Complete the independent scopes.\n- inspect transport behavior\n- inspect cache behavior"
+        }),
+        serde_json::json!({
+            "role":"assistant",
+            "content":[
+                {"type":"tool_use","id":"lane-a","name":"cc_Agent_0","input":{"prompt":"scope a","claudex_model":"model-a"}},
+                {"type":"tool_use","id":"lane-b","name":"cc_Agent_0","input":{"prompt":"scope b","claudex_model":"model-b"}},
+                {"type":"tool_use","id":"lane-c","name":"cc_Agent_0","input":{"prompt":"scope c","claudex_model":"model-c"}},
+                {"type":"tool_use","id":"lane-d","name":"cc_Agent_0","input":{"prompt":"scope d","claudex_model":"model-d"}},
+                {"type":"tool_use","id":"lane-e","name":"cc_Agent_0","input":{"prompt":"scope e","claudex_model":"model-e"}}
+            ]
+        }),
+    ]);
+
+    let decision = scheduler.decision_for_request(&request);
+
+    assert_eq!(decision.active_workers, 5);
+    assert_eq!(decision.target_workers, 2);
+    assert_eq!(decision.needs_more_workers, 0);
+    assert!(
+        decision
+            .actions
+            .iter()
+            .all(|action| !action.contains("Launch at least"))
+    );
+}
+
+#[test]
+fn async_launch_acknowledgement_keeps_native_workers_active_until_notification() {
+    let scheduler = ParallelScheduler::for_tests();
+    let launch = serde_json::json!({
+        "role":"assistant",
+        "content":[
+            {"type":"tool_use","id":"scope-a","name":"cc_Agent_0","input":{"prompt":"scope a","claudex_model":"gpt-5.6-sol"}},
+            {"type":"tool_use","id":"scope-b","name":"cc_Agent_0","input":{"prompt":"scope b","claudex_model":"grok-4.5"}}
+        ]
+    });
+    let acknowledgement = serde_json::json!({
+        "role":"user",
+        "content":[
+            {
+                "type":"tool_result", "tool_use_id":"scope-a",
+                "content":[{"type":"text", "text":"Async agent launched successfully.\nThe agent is working in the background."}]
+            },
+            {
+                "type":"tool_result", "tool_use_id":"scope-b",
+                "content":[{"type":"text", "text":"Async agent launched successfully.\nThe agent is working in the background."}]
+            }
+        ]
+    });
+    let running = messages(&[
+        serde_json::json!({"role":"user","content":"Run these scopes.\n- scope a\n- scope b"}),
+        launch.clone(),
+        acknowledgement.clone(),
+    ]);
+    let running_decision = scheduler.decision_for_request(&running);
+    assert_eq!(running_decision.active_workers, 2);
+    assert_eq!(running_decision.completed_recently, 0);
+    assert_eq!(running_decision.needs_more_workers, 0);
+
+    let completed = messages(&[
+        serde_json::json!({"role":"user","content":"Run these scopes.\n- scope a\n- scope b"}),
+        launch,
+        acknowledgement,
+        serde_json::json!({
+            "role":"user",
+            "content":"<task-notification>\n<task-id>native-a</task-id>\n<tool-use-id>scope-a</tool-use-id>\n<status>completed</status>\n<result>done</result>\n</task-notification>"
+        }),
+    ]);
+    let completed_decision = scheduler.decision_for_request(&completed);
+    assert_eq!(completed_decision.active_workers, 1);
+    assert_eq!(completed_decision.completed_recently, 1);
+    assert_eq!(completed_decision.needs_more_workers, 1);
+}
+
+#[test]
+fn partial_and_duplicate_async_acknowledgements_complete_only_the_reported_scope() {
+    let launch = serde_json::json!({
+        "role":"assistant",
+        "content":[
+            {"type":"tool_use","id":"scope-a","name":"cc_Agent_0","input":{"prompt":"scope a","claudex_model":"gpt-5.6-sol"}},
+            {"type":"tool_use","id":"scope-b","name":"cc_Agent_0","input":{"prompt":"scope b","claudex_model":"grok-4.5"}}
+        ]
+    });
+    let result = serde_json::json!({
+        "type":"tool_result", "tool_use_id":"scope-a",
+        "content":"Async agent launched successfully.\nThe agent is working in the background."
+    });
+    for acknowledgement in [
+        serde_json::json!({"role":"user", "content":[&result]}),
+        serde_json::json!({"role":"user", "content":[&result, &result]}),
+    ] {
+        let snapshot = core::analyze_subagent_work(&[launch.clone(), acknowledgement]);
+        assert_eq!(snapshot.active_count(), 1);
+        assert!(snapshot.active_unit_ids.contains("scope:scope b"));
+    }
+}
+
+#[test]
+fn legacy_batch_activity_does_not_inflate_a_single_scope_target() {
     let scheduler = ParallelScheduler::for_tests();
     let state = messages(&[
         serde_json::json!({
@@ -139,7 +243,7 @@ fn explicit_batch_count_keeps_same_prompt_tasks_as_separate_lanes() {
     let decision = scheduler.decision_for_request(&state);
 
     assert_eq!(decision.active_workers, 3);
-    assert_eq!(decision.target_workers, 3);
+    assert_eq!(decision.target_workers, 1);
     assert_eq!(decision.needs_more_workers, 0);
 }
 
@@ -690,12 +794,12 @@ fn single_gh_pr_lookup_does_not_expand_after_its_worker_starts() {
 }
 
 #[test]
-fn explicit_parallel_request_keeps_multi_worker_fanout_without_list_markers() {
+fn explicit_parallel_request_uses_inferred_scope_count_without_list_markers() {
     let scheduler = ParallelScheduler::for_tests();
     let request = messages(&[
         serde_json::json!({
             "role": "user",
-            "content": "AVITA株式会社を複数のSubAgentで並列で調査してください",
+            "content": "架空組織 Example Labs を複数のSubAgentで並列調査してください",
         }),
         serde_json::json!({
             "role": "assistant",
@@ -705,8 +809,8 @@ fn explicit_parallel_request_keeps_multi_worker_fanout_without_list_markers() {
 
     let decision = scheduler.decision_for_request(&request);
 
-    assert!(decision.target_workers >= 3);
-    assert_eq!(decision.needs_more_workers, decision.target_workers - 1);
+    assert_eq!(decision.target_workers, 2);
+    assert_eq!(decision.needs_more_workers, 1);
     assert!(
         scheduler
             .guidance_for_request(&request)
@@ -720,7 +824,7 @@ fn independent_research_scopes_still_request_parallel_workers() {
     let request = messages(&[
         serde_json::json!({
             "role": "user",
-            "content": "AVITA株式会社を調査してください。\n- 会社概要\n- 資金調達\n- 競合と市場動向",
+            "content": "架空組織 Example Labs を調査してください。\n- 会社概要\n- 資金調達\n- 競合と市場動向",
         }),
         serde_json::json!({
             "role": "assistant",
@@ -748,7 +852,7 @@ fn multi_scope_completion_reassesses_only_the_unfinished_lanes() {
     let first = messages(&[
         serde_json::json!({
             "role": "user",
-            "content": "AVITA株式会社を調査してください。\n- 会社概要\n- 資金調達\n- 競合と市場動向",
+            "content": "架空組織 Example Labs を調査してください。\n- 会社概要\n- 資金調達\n- 競合と市場動向",
         }),
         serde_json::json!({
             "role": "assistant",
@@ -762,7 +866,7 @@ fn multi_scope_completion_reassesses_only_the_unfinished_lanes() {
     let after_market = messages(&[
         serde_json::json!({
             "role": "user",
-            "content": "AVITA株式会社を調査してください。\n- 会社概要\n- 資金調達\n- 競合と市場動向",
+            "content": "架空組織 Example Labs を調査してください。\n- 会社概要\n- 資金調達\n- 競合と市場動向",
         }),
         serde_json::json!({
             "role": "assistant",
@@ -1039,7 +1143,7 @@ fn estimates_structured_work_and_handles_all_list_markers() {
 
     assert_eq!(
         policy::estimate_target_workers(&snapshot, &structured, &config),
-        5
+        4
     );
     let plain = messages(&[serde_json::json!({"role": "user", "content": "1) no\n9 no\nx"})]);
     assert_eq!(

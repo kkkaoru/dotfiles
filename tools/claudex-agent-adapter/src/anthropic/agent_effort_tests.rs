@@ -380,11 +380,8 @@ mod tests {
     fn does_not_guess_between_multiple_compacted_correlations() {
         let intents = AgentEffortIntents::default();
         for id in ["tool-compacted-a", "tool-compacted-b"] {
-            let (arguments, _) = prepare_arguments(
-                "Agent",
-                id,
-                &json!({"prompt":id, "claudex_effort":"high"}),
-            );
+            let (arguments, _) =
+                prepare_arguments("Agent", id, &json!({"prompt":id, "claudex_effort":"high"}));
             intents.record(
                 Some("outer-session"),
                 "Agent",
@@ -394,7 +391,9 @@ mod tests {
             );
         }
         assert!(matches!(
-            intents.take(&request("outer-session", "retained suffix only", true)).effort,
+            intents
+                .take(&request("outer-session", "retained suffix only", true))
+                .effort,
             AgentEffort::Unmatched
         ));
     }
@@ -446,29 +445,15 @@ mod tests {
     }
 
     #[test]
-    fn adds_and_strips_adapter_only_agent_effort() {
+    fn preserves_agent_schema_and_strips_adapter_only_arguments() {
         for tool_name in ["Agent", "Task"] {
-            let schema = tool_schema(tool_name, json!({"type":"object"}));
-            assert_eq!(
-                schema["properties"]["claudex_effort"]["enum"],
-                json!(["low", "medium", "high", "xhigh", "max"])
-            );
-            assert_eq!(
-                schema["properties"]["claudex_model"]["type"],
-                "string"
-            );
-            assert!(
-                schema["required"]
-                    .as_array()
-                    .expect("required Agent fields")
-                    .contains(&json!("claudex_model"))
-            );
-            assert!(
-                schema["properties"]["claudex_model"]["description"]
-                    .as_str()
-                    .expect("model description")
-                    .contains("current routing context")
-            );
+            let received = json!({
+                "type":"object",
+                "properties":{"prompt":{"type":"string"}},
+                "required":["prompt"],
+                "additionalProperties":false
+            });
+            assert_eq!(tool_schema(tool_name, received.clone()), received);
             let tool_use_id = format!("tool-mid-{tool_name}");
             let (internal, public) = prepare_arguments(
                 tool_name,
@@ -480,17 +465,15 @@ mod tests {
             assert!(public.get("claudex_effort").is_none());
 
             let intents = AgentEffortIntents::default();
-            intents.record(
-                None,
-                tool_name,
-                tool_use_id,
-                "main-model",
-                &internal,
-            );
+            intents.record(None, tool_name, tool_use_id, "main-model", &internal);
             assert_eq!(
-                explicit(intents.take(&request_without_user_id(
-                    internal["prompt"].as_str().expect("correlated prompt")
-                )).effort),
+                explicit(
+                    intents
+                        .take(&request_without_user_id(
+                            internal["prompt"].as_str().expect("correlated prompt")
+                        ))
+                        .effort
+                ),
                 "medium"
             );
         }
@@ -587,7 +570,9 @@ mod tests {
         assert_eq!(
             intents
                 .take(&request_without_user_id(
-                    intent_arguments["prompt"].as_str().expect("correlated prompt"),
+                    intent_arguments["prompt"]
+                        .as_str()
+                        .expect("correlated prompt"),
                 ))
                 .model_override
                 .as_deref(),
@@ -603,13 +588,15 @@ mod tests {
             "claude-sonnet-5",
         );
         assert_eq!(arguments["claudex_model"], "claude-sonnet-5");
-        assert!(super::super::agent_routing::model_is_authorized_with_catalog(
-            &arguments,
-            &[],
-            &json!(null),
-            &crate::provider_config::ModelCatalog::default(),
-            "claude-sonnet-5",
-        ));
+        assert!(
+            super::super::agent_routing::model_is_authorized_with_catalog(
+                &arguments,
+                &[],
+                &json!(null),
+                &crate::provider_config::ModelCatalog::default(),
+                "claude-sonnet-5",
+            )
+        );
 
         let mut general = json!({"subagent_type":"general-purpose","prompt":"inspect"});
         super::super::agent_routing::hydrate_standard_agent_to_parent(
@@ -635,7 +622,9 @@ mod tests {
             Some(&crate::provider_config::ModelCatalog::default()),
         );
         let intent = intents.take(&request_without_user_id(
-            intent_arguments["prompt"].as_str().expect("correlated prompt"),
+            intent_arguments["prompt"]
+                .as_str()
+                .expect("correlated prompt"),
         ));
         assert_eq!(intent.model_override.as_deref(), Some("claude-sonnet-5"));
         assert!(intent.model_is_inherited);
@@ -653,13 +642,15 @@ mod tests {
             "gpt-5.6-luna",
         );
         assert_eq!(native_claude["claudex_model"], "claude-haiku-4-5");
-        assert!(super::super::agent_routing::model_is_authorized_with_catalog(
-            &native_claude,
-            &[],
-            &json!(null),
-            &crate::provider_config::ModelCatalog::default(),
-            "claude-haiku-4-5",
-        ));
+        assert!(
+            super::super::agent_routing::model_is_authorized_with_catalog(
+                &native_claude,
+                &[],
+                &json!(null),
+                &crate::provider_config::ModelCatalog::default(),
+                "claude-haiku-4-5",
+            )
+        );
     }
 
     #[test]
@@ -674,12 +665,15 @@ mod tests {
             ("Use claude-sonnet-5.5 for this task", false),
         ] {
             let user_messages = [json!({"role":"user", "content":text})];
-            assert_eq!(super::super::agent_routing::model_is_authorized(
-                &json!({"claudex_model":"claude-sonnet-5"}),
-                &user_messages,
-                &json!(null),
-                "claude-sonnet-5",
-            ), expected);
+            assert_eq!(
+                super::super::agent_routing::model_is_authorized(
+                    &json!({"claudex_model":"claude-sonnet-5"}),
+                    &user_messages,
+                    &json!(null),
+                    "claude-sonnet-5",
+                ),
+                expected
+            );
         }
     }
 
@@ -690,14 +684,13 @@ mod tests {
             "subagent_type":"general-purpose"
         });
         let ordinary = [json!({"role":"user","content":"Run a contract audit SubAgent"})];
-        let (_, public) =
-            prepare_arguments_for_user(
-                "Agent",
-                "tool-ordinary",
-                &arguments,
-                &ordinary,
-                &json!(null),
-            );
+        let (_, public) = prepare_arguments_for_user(
+            "Agent",
+            "tool-ordinary",
+            &arguments,
+            &ordinary,
+            &json!(null),
+        );
         assert!(public.get("name").is_none());
         let (_, public) = prepare_arguments_for_user(
             "Agent",
@@ -723,13 +716,7 @@ mod tests {
             "role":"user", "content":"Use the named teammate wf_contract_audit"
         })];
         let (_, public) =
-            prepare_arguments_for_user(
-                "Agent",
-                "tool-named",
-                &arguments,
-                &explicit,
-                &json!(null),
-            );
+            prepare_arguments_for_user("Agent", "tool-named", &arguments, &explicit, &json!(null));
         assert_eq!(public["name"], "wf_contract_audit");
 
         let stale = [
@@ -738,24 +725,13 @@ mod tests {
             json!({"role":"user","content":"<agent-message from=\"wf_contract_audit\">done</agent-message>"}),
         ];
         let (_, public) =
-            prepare_arguments_for_user(
-                "Agent",
-                "tool-stale",
-                &arguments,
-                &stale,
-                &json!(null),
-            );
+            prepare_arguments_for_user("Agent", "tool-stale", &arguments, &stale, &json!(null));
         assert!(public.get("name").is_none());
 
-        let schema = tool_schema("Agent", json!({
-            "type":"object", "properties":{"name":{"type":"string"}}
-        }));
-        assert!(
-            schema["properties"]["name"]["description"]
-                .as_str()
-                .expect("name guidance")
-                .contains("never invent one")
-        );
+        let schema = json!({
+            "type":"object", "properties":{"name":{"type":"string","description":"native"}}
+        });
+        assert_eq!(tool_schema("Agent", schema.clone()), schema);
     }
 
     #[test]
@@ -928,13 +904,8 @@ mod tests {
             }),
         );
         let arguments = arguments.expect("same-model Agent intent");
-        validate_routed_agent_arguments(
-            "Agent",
-            &arguments,
-            &user_messages,
-            &json!(null),
-        )
-        .expect("selected same-model worker is authorized");
+        validate_routed_agent_arguments("Agent", &arguments, &user_messages, &json!(null))
+            .expect("selected same-model worker is authorized");
         intents.record_from_user_messages(
             AgentEffortRecord {
                 client_user_id: None,
@@ -1028,13 +999,9 @@ mod tests {
             ),
         ];
         for (arguments, message) in cases {
-            let error = validate_routed_agent_arguments(
-                "Agent",
-                &arguments,
-                &user_messages,
-                &json!(null),
-            )
-            .expect_err("invalid Agent launch must be rejected");
+            let error =
+                validate_routed_agent_arguments("Agent", &arguments, &user_messages, &json!(null))
+                    .expect_err("invalid Agent launch must be rejected");
             assert!(error.to_string().contains(message), "{error}");
         }
         validate_routed_agent_arguments(
@@ -1054,16 +1021,18 @@ mod tests {
             "content":format!("Review this decision\n{routing}")
         })];
 
-        assert!(validate_routed_agent_arguments(
-            "Agent",
-            &json!({
-                "subagent_type":"custom-advisor",
-                "claudex_model":"claude-fable-5"
-            }),
-            &messages,
-            &json!(null),
-        )
-        .is_ok());
+        assert!(
+            validate_routed_agent_arguments(
+                "Agent",
+                &json!({
+                    "subagent_type":"custom-advisor",
+                    "claudex_model":"claude-fable-5"
+                }),
+                &messages,
+                &json!(null),
+            )
+            .is_ok()
+        );
 
         for rejected in [
             json!({
@@ -1075,20 +1044,17 @@ mod tests {
                 "claudex_model":"claude-fable-5"
             }),
         ] {
-            assert!(validate_routed_agent_arguments(
-                "Task",
-                &rejected,
-                &messages,
-                &json!(null),
-            )
-            .is_err());
+            assert!(
+                validate_routed_agent_arguments("Task", &rejected, &messages, &json!(null),)
+                    .is_err()
+            );
         }
 
         let disabled_routing = r#"Claudex routing for this turn: {"providers":{},"selected_workers":[],"advisor":{"agent":"custom-advisor","model":"claude-fable-5","effort":"xhigh"},"custom_advisor_enabled":false} mandatory policy"#;
         let disabled_messages = [json!({
             "role":"user",
             "content":format!("Use claude-fable-5 for this review.
-{disabled_routing}")
+        {disabled_routing}")
         })];
         assert!(
             validate_routed_agent_arguments(
@@ -1113,50 +1079,53 @@ mod tests {
             json!({"role":"user","content":format!("implement this\n{latest}")}),
             json!({"role":"assistant","content":old}),
         ];
-        assert!(validate_routed_agent_arguments(
-            "Agent",
-            &json!({"subagent_type":"claudex-gpt-spark","claudex_model":"gpt-5.3-codex-spark"}),
-            &messages,
-            &json!(null),
-        )
-        .is_ok());
+        assert!(
+            validate_routed_agent_arguments(
+                "Agent",
+                &json!({"subagent_type":"claudex-gpt-spark","claudex_model":"gpt-5.3-codex-spark"}),
+                &messages,
+                &json!(null),
+            )
+            .is_ok()
+        );
         for rejected in [
             json!({"subagent_type":"claudex-gpt-spark"}),
             json!({"subagent_type":"claudex-gpt-spark","claudex_model":"gpt-old"}),
             json!({"subagent_type":"claude-code-guide","claudex_model":"claudex-gpt-spark"}),
         ] {
-            assert!(validate_routed_agent_arguments(
-                "Agent",
-                &rejected,
-                &messages,
-                &json!(null),
-            )
-            .is_err());
+            assert!(
+                validate_routed_agent_arguments("Agent", &rejected, &messages, &json!(null),)
+                    .is_err()
+            );
         }
 
         let explicit = [json!({
             "role":"user",
             "content":format!("Use gpt-5.6-sol for this worker.\n{latest}")
         })];
-        assert!(validate_routed_agent_arguments(
-            "Task",
-            &json!({"subagent_type":"claudex-gpt-spark","claudex_model":"gpt-5.6-sol"}),
-            &explicit,
-            &json!(null),
-        )
-        .is_ok());
+        assert!(
+            validate_routed_agent_arguments(
+                "Task",
+                &json!({"subagent_type":"claudex-gpt-spark","claudex_model":"gpt-5.6-sol"}),
+                &explicit,
+                &json!(null),
+            )
+            .is_ok()
+        );
 
         let compound = [json!({
             "role":"user",
             "content":"Use vendor@beta+1 for this worker."
         })];
-        assert!(validate_routed_agent_arguments(
-            "Agent",
-            &json!({"subagent_type":"general-purpose","claudex_model":"beta"}),
-            &compound,
-            &json!(null),
-        )
-        .is_err());
+        assert!(
+            validate_routed_agent_arguments(
+                "Agent",
+                &json!({"subagent_type":"general-purpose","claudex_model":"beta"}),
+                &compound,
+                &json!(null),
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -1165,9 +1134,7 @@ mod tests {
             "type":"text",
             "text":"Claudex routing for this turn: {\"providers\":{},\"selected_agents\":[\"claudex-deepseek\"],\"selected_workers\":[{\"agent\":\"claudex-deepseek\",\"model\":\"opencode-go/deepseek-v4-flash\",\"effort\":\"high\"}]} mandatory policy"
         }]);
-        let messages = [
-            json!({"role":"user","content":"Please run this task"}),
-        ];
+        let messages = [json!({"role":"user","content":"Please run this task"})];
         assert!(validate_routed_agent_arguments(
             "Agent",
             &json!({"subagent_type":"general-purpose","claudex_model":"opencode-go/deepseek-v4-flash"}),
@@ -1191,13 +1158,15 @@ mod tests {
             json!({"role":"assistant","content":routing}),
             json!({"role":"user","content":"Continue the research"}),
         ];
-        assert!(validate_routed_agent_arguments(
-            "Agent",
-            &json!({"subagent_type":"general-purpose","claudex_model":"grok-4.5"}),
-            &messages,
-            &json!(null),
-        )
-        .is_ok());
+        assert!(
+            validate_routed_agent_arguments(
+                "Agent",
+                &json!({"subagent_type":"general-purpose","claudex_model":"grok-4.5"}),
+                &messages,
+                &json!(null),
+            )
+            .is_ok()
+        );
     }
 
     #[test]
@@ -1207,13 +1176,15 @@ mod tests {
             json!({"role":"assistant","content":"I will continue"}),
             json!({"role":"user","content":"continue"}),
         ];
-        assert!(validate_routed_agent_arguments(
-            "Task",
-            &json!({"subagent_type":"general-purpose","claudex_model":"grok-4.5"}),
-            &messages,
-            &json!(null),
-        )
-        .is_ok());
+        assert!(
+            validate_routed_agent_arguments(
+                "Task",
+                &json!({"subagent_type":"general-purpose","claudex_model":"grok-4.5"}),
+                &messages,
+                &json!(null),
+            )
+            .is_ok()
+        );
     }
 
     #[test]
@@ -1229,8 +1200,8 @@ mod tests {
             tool_schema(
                 "Agent",
                 json!({"type":"object","properties":{},"required":"invalid"}),
-            )["required"],
-            json!(["claudex_model"])
+            ),
+            json!({"type":"object","properties":{},"required":"invalid"})
         );
     }
 
@@ -1304,27 +1275,41 @@ mod tests {
                 &json!({"prompt":format!("task-{index}")}),
             );
             let internal = internal.expect("correlated intent");
-            if index == 0 {
-                first_prompt = internal["prompt"].as_str().unwrap().to_owned();
-            } else if index == 1 {
-                second_prompt = internal["prompt"].as_str().unwrap().to_owned();
-            }
+            capture_initial_prompts(index, &internal, &mut first_prompt, &mut second_prompt);
             intents.record(None, "Agent", tool_id, "main-model", &internal);
         }
 
-        assert_eq!(intents.pending.lock().unwrap().len(), super::MAX_PENDING_INTENTS);
+        assert_eq!(
+            intents.pending.lock().unwrap().len(),
+            super::MAX_PENDING_INTENTS
+        );
         assert!(matches!(
             intents.take(&request_without_user_id(&first_prompt)).effort,
             AgentEffort::Unmatched
         ));
         assert!(matches!(
-            intents.take(&request_without_user_id(&second_prompt)).effort,
+            intents
+                .take(&request_without_user_id(&second_prompt))
+                .effort,
             AgentEffort::ConfiguredDefault
         ));
     }
 
+    fn capture_initial_prompts(
+        index: usize,
+        internal: &Value,
+        first_prompt: &mut String,
+        second_prompt: &mut String,
+    ) {
+        match index {
+            0 => *first_prompt = internal["prompt"].as_str().unwrap().to_owned(),
+            1 => *second_prompt = internal["prompt"].as_str().unwrap().to_owned(),
+            _ => {}
+        }
+    }
+
     #[test]
-    fn tolerates_invalid_and_preconfigured_agent_schemas() {
+    fn preserves_invalid_and_preconfigured_agent_schemas_exactly() {
         assert_eq!(tool_schema("Agent", json!(null)), json!(null));
         assert_eq!(
             tool_schema("Agent", json!({"properties":"invalid"})),
@@ -1336,15 +1321,15 @@ mod tests {
                 "claudex_model":{"type":"string","const":"grok-4.5"}
             }
         });
-        let mut expected = existing.clone();
-        expected["required"] = json!(["claudex_model"]);
-        assert_eq!(tool_schema("Agent", existing), expected);
+        assert_eq!(tool_schema("Agent", existing.clone()), existing);
         let already_required = json!({
             "properties":{"claudex_model":{"type":"string"}},
             "required":["claudex_model"]
         });
-        let schema = tool_schema("Agent", already_required);
-        assert_eq!(schema["required"], json!(["claudex_model"]));
+        assert_eq!(
+            tool_schema("Agent", already_required.clone()),
+            already_required
+        );
     }
 
     fn request_without_user_id(prompt: &str) -> MessagesRequest {

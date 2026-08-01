@@ -72,6 +72,41 @@ fn request(messages: Value) -> Value {
     })
 }
 
+#[tokio::test]
+async fn http_bridge_forwards_the_exact_agent_schema_without_a_batch_tool() {
+    let adapter = Adapter::start().await;
+    let client = Client::new();
+    let url = format!("{}/v1/messages", adapter.base_url);
+    let response = post_json(
+        &client,
+        &url,
+        json!({
+            "model":"test-main-model",
+            "max_tokens":256,
+            "system":"Schema authority integration",
+            "tools":[{
+                "name":"Agent",
+                "description":"native Agent",
+                "input_schema":{
+                    "type":"object",
+                    "properties":{
+                        "prompt":{"type":"string","description":"schema-authority-sentinel"},
+                        "subagent_type":{"type":"string","enum":["general-purpose","Explore"]}
+                    },
+                    "required":["prompt"],
+                    "additionalProperties":false,
+                    "x-native-contract":{"version":220}
+                }
+            }],
+            "messages":[{"role":"user","content":"VERIFY_AGENT_SCHEMA_AUTHORITY"}]
+        }),
+    )
+    .await;
+
+    assert_eq!(response["stop_reason"], "end_turn");
+    assert_eq!(response["content"][0]["text"], "AGENT_SCHEMA_AUTHORITY_OK");
+}
+
 fn tool_results(response: &Value, values: &[&str]) -> Value {
     Value::Array(
         response["content"]
@@ -133,6 +168,88 @@ async fn completed_parallel_history(client: &Client, url: &str, user: Value) -> 
         {"role":"user","content":output_results},
         {"role":"assistant","content":completed["content"]}
     ])
+}
+
+#[tokio::test]
+async fn pure_async_agent_launch_results_return_control_without_task_output_relaunch() {
+    let adapter = Adapter::start().await;
+    let client = Client::new();
+    let url = format!("{}/v1/messages", adapter.base_url);
+    let user = json!({
+        "role":"user",
+        "content":"USE_PARALLEL_AGENTS_TASK_OUTPUT with three independent synthetic scopes using test-main-model"
+    });
+    let agents_response = client
+        .post(&url)
+        .json(&request(json!([user.clone()])))
+        .send()
+        .await
+        .expect("send native Agent launch request");
+    let agents_status = agents_response.status();
+    let agents_body = agents_response
+        .text()
+        .await
+        .expect("read native Agent launch response");
+    assert!(
+        agents_status.is_success(),
+        "agent launch status {agents_status}: {agents_body}"
+    );
+    let agents: Value =
+        serde_json::from_str(&agents_body).expect("decode native Agent launch response");
+    assert_eq!(agents["stop_reason"], "tool_use");
+    assert_eq!(agents["content"].as_array().unwrap().len(), 3);
+
+    let launch_results = Value::Array(
+        agents["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .enumerate()
+            .map(|(index, block)| {
+                json!({
+                    "type":"tool_result",
+                    "tool_use_id":block["id"],
+                    "content":[{"type":"text", "text":format!(
+                        "Async agent launched successfully.\nagentId: internal-{index}\nThe agent is working in the background."
+                    )}]
+                })
+            })
+            .collect(),
+    );
+    let handoff_response = client
+        .post(&url)
+        .json(&request(json!([
+            user,
+            {"role":"assistant", "content":agents["content"]},
+            {"role":"user", "content":launch_results}
+        ])))
+        .send()
+        .await
+        .expect("send async launch handoff");
+    let status = handoff_response.status();
+    let handoff_body = handoff_response
+        .text()
+        .await
+        .expect("read async launch handoff response");
+    assert!(
+        status.is_success(),
+        "handoff status {status}: {handoff_body}"
+    );
+    let handoff: Value =
+        serde_json::from_str(&handoff_body).expect("decode async launch handoff response");
+
+    assert_eq!(handoff["stop_reason"], "end_turn");
+    let text = handoff["content"][0]["text"].as_str().unwrap();
+    assert!(text.contains("3 native background SubAgent(s)"));
+    assert!(text.contains("test-main-model"));
+    assert!(!text.contains("internal-0"));
+    assert!(
+        !handoff["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|block| { block.get("name").and_then(Value::as_str) == Some("TaskOutput") })
+    );
 }
 
 async fn stream_follow_up(client: &Client, url: &str, messages: Value) -> String {

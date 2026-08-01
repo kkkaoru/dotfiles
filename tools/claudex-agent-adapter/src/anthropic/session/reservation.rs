@@ -176,7 +176,6 @@ mod tests {
             transcript: Mutex::new(Vec::new()),
             pending_tools: Mutex::new(HashMap::new()),
             consumed_tool_ids: Mutex::new(Default::default()),
-            internal_tools: HashMap::new(),
             external_tool_names: HashMap::new(),
             client_user_id: client_user_id.map(str::to_owned),
             gate: Arc::new(Mutex::new(())),

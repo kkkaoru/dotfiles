@@ -44,10 +44,6 @@ pub(in crate::anthropic) fn thread_start_params_for_mode(
     developer_instructions.push_str(
         "\n\nCommand execution is available to every routed worker. If Claude Code supplies a shell, Bash, unified-exec, or command tool, use it when the active task requires it; do not refuse an available command tool because the backend is Codex, Grok, or OpenCode.",
     );
-    if let Some(recovery) = super::super::super::resume_tools::recovery_instructions(request) {
-        developer_instructions.push_str("\n\n");
-        developer_instructions.push_str(&recovery);
-    }
     if !super::super::super::agent_effort::is_subagent_request(request) {
         developer_instructions.push_str("\n\n");
         developer_instructions.push_str(super::ORCHESTRATOR_INSTRUCTIONS);
@@ -57,12 +53,16 @@ pub(in crate::anthropic) fn thread_start_params_for_mode(
     } else {
         format!("{system}\n\n{developer_instructions}")
     };
-    let web_search = if web_search_mode == WebSearchMode::CodexNative {
+    let web_search_enabled = web_search_mode == WebSearchMode::CodexNative
+        && request
+            .tools
+            .iter()
+            .any(|tool| tool.get("name").and_then(Value::as_str) == Some("WebSearch"));
+    let web_search = if web_search_enabled {
         "live"
     } else {
         "disabled"
     };
-    let web_search_enabled = web_search_mode == WebSearchMode::CodexNative;
     json!({
         "model": model,
         "cwd": cwd,

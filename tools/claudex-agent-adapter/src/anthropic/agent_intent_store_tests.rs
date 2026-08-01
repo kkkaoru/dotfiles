@@ -189,6 +189,49 @@ mod tests {
     }
 
     #[test]
+    fn terminal_task_notifications_retire_only_the_correlated_session_intent() {
+        let intents = AgentEffortIntents::default();
+        let now = unix_seconds();
+        intents
+            .pending
+            .lock()
+            .expect("pending intents")
+            .extend(["session-a", "session-b"].map(|client_user_id| AgentEffortIntent {
+                client_user_id: Some(client_user_id.to_owned()),
+                prompt: String::new(),
+                correlated: true,
+                effort: Some("high".to_owned()),
+                model_override: Some("worker".to_owned()),
+                model_is_inherited: false,
+                run_in_background: true,
+                tool_use_id: "tool-shared".to_owned(),
+                created_at: std::time::Instant::now(),
+                created_unix_seconds: now,
+            }));
+        let request = super::super::MessagesRequest {
+            model: "main".to_owned(),
+            system: serde_json::Value::Null,
+            messages: vec![serde_json::json!({
+                "role":"user",
+                "content":"<task-notification>\n<task-id>task</task-id>\n<tool-use-id>tool-shared</tool-use-id>\n<status>completed</status>\n<result>done</result>\n</task-notification>"
+            })],
+            tools: Vec::new(),
+            stream: false,
+            output_config: serde_json::Value::Null,
+            metadata: serde_json::json!({"user_id":"session-a"}),
+            working_directory: None,
+            disabled_subagent_models: Default::default(),
+            claudex_collaborator_model: None,
+        };
+
+        intents.retire_terminal_task_notifications(&request);
+
+        let pending = intents.pending.lock().expect("pending intents");
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending.front().unwrap().client_user_id.as_deref(), Some("session-b"));
+    }
+
+    #[test]
     fn default_intents_ignore_persistence_and_parent_defaults_to_current_directory() {
         AgentEffortIntents::default().persist(vec![stored("ignored", 0)]);
         assert_eq!(parent_directory(Path::new("intents.json")), Path::new("."));

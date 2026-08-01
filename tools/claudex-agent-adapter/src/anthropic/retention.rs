@@ -34,19 +34,7 @@ impl Bridge {
     }
 
     async fn sweep_idle_sessions_if_due_at(&self, now: Instant) -> usize {
-        let due = {
-            let mut next = self
-                .next_session_sweep
-                .lock()
-                .expect("session sweep clock poisoned");
-            if now < *next {
-                false
-            } else {
-                *next = now + SESSION_SWEEP_INTERVAL;
-                true
-            }
-        };
-        if !due {
+        if !session_sweep_due(&self.next_session_sweep, now) {
             return 0;
         }
         let removed = sweep_idle_sessions_at(&self.sessions, now).await;
@@ -61,14 +49,32 @@ impl Bridge {
             return;
         };
         for (request_id, result) in drain_cancellation_responses(&session).await {
-            if let Err(error) = self
-                .app
-                .respond_for_model(&session.model, request_id, result)
-                .await
-            {
-                tracing::warn!(%error, "failed to cancel an expired Claude tool request");
-            }
+            respond_to_evicted_request(self, &session.model, request_id, result).await;
         }
+    }
+}
+
+fn session_sweep_due(clock: &std::sync::Mutex<Instant>, now: Instant) -> bool {
+    let mut next = clock.lock().expect("session sweep clock poisoned");
+    if now < *next {
+        return false;
+    }
+    *next = now + SESSION_SWEEP_INTERVAL;
+    true
+}
+
+async fn respond_to_evicted_request(
+    bridge: &Bridge,
+    model: &str,
+    request_id: Value,
+    result: Value,
+) {
+    if let Err(error) = bridge
+        .app
+        .respond_for_model(model, request_id, result)
+        .await
+    {
+        tracing::warn!(%error, "failed to cancel an expired Claude tool request");
     }
 }
 
@@ -126,20 +132,23 @@ pub(super) async fn take_oldest_evictable_at(
     let mut sessions = sessions.lock().await;
     let mut oldest = None;
     for index in 0..sessions.len() {
-        if Arc::strong_count(&sessions[index]) != 1 {
+        let Some(activity) = evictable_activity(&sessions[index], now).await else {
             continue;
-        }
-        let pending = sessions[index].pending_tools.lock().await;
-        let expired = !pending.is_empty() && pending_expired(&sessions[index], now);
-        if pending.is_empty() || expired {
-            drop(pending);
-            let activity = session_activity(&sessions[index]);
-            if oldest.is_none_or(|(_, oldest_activity)| activity < oldest_activity) {
-                oldest = Some((index, activity));
-            }
+        };
+        if oldest.is_none_or(|(_, oldest_activity)| activity < oldest_activity) {
+            oldest = Some((index, activity));
         }
     }
     oldest.map(|(index, _)| sessions.remove(index))
+}
+
+async fn evictable_activity(session: &Arc<Session>, now: Instant) -> Option<Instant> {
+    if Arc::strong_count(session) != 1 {
+        return None;
+    }
+    let pending = session.pending_tools.lock().await;
+    let expired = !pending.is_empty() && pending_expired(session, now);
+    (pending.is_empty() || expired).then(|| session_activity(session))
 }
 
 pub(super) async fn drain_cancellation_responses(session: &Session) -> Vec<(Value, Value)> {
@@ -185,6 +194,7 @@ fn pending_expired(session: &Session, now: Instant) -> bool {
 #[cfg(test)]
 // Coverage gates measure production code; test implementations are excluded.
 #[cfg_attr(coverage_nightly, coverage(off))]
+#[allow(clippy::excessive_nesting)]
 mod tests {
     use std::{collections::HashMap, os::unix::fs::PermissionsExt, path::Path};
 
@@ -279,7 +289,6 @@ mod tests {
             transcript: Mutex::new(Vec::new()),
             pending_tools: Mutex::new(HashMap::from([("tool".to_owned(), json!(9))])),
             consumed_tool_ids: Mutex::new(Default::default()),
-            internal_tools: HashMap::new(),
             external_tool_names: HashMap::new(),
             client_user_id: None,
             gate: Arc::new(Mutex::new(())),
@@ -295,11 +304,7 @@ mod tests {
         let program = root.join("app-server");
         std::fs::create_dir(&source).unwrap();
         std::fs::write(source.join("auth.json"), "{}").unwrap();
-        let tail = if keep_open {
-            "while read line; do :; done"
-        } else {
-            "exit 0"
-        };
+        let tail = mock_app_server_tail(keep_open);
         std::fs::write(
             &program,
             format!(
@@ -311,6 +316,10 @@ mod tests {
         AppServer::spawn_with_program("model", program, &source, &isolated)
             .await
             .unwrap()
+    }
+
+    fn mock_app_server_tail(keep_open: bool) -> &'static str {
+        ["exit 0", "while read line; do :; done"][usize::from(keep_open)]
     }
 
     async fn wait_until_stopped(bridge: &Bridge) {

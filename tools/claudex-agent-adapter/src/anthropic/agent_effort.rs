@@ -3,9 +3,13 @@ use std::{collections::VecDeque, sync::Mutex, time::Instant};
 use anyhow::{Result, bail};
 use serde_json::Value;
 
+mod background_launch;
 mod model;
+mod terminal;
+pub(super) use background_launch::BackgroundLaunchIntent;
 use model::requested_model;
 pub(super) use model::{disabled_subagent_model, is_agent_tool};
+use terminal::terminal_task_notification_ids;
 
 pub(super) use super::AgentEffortRecord;
 pub(super) use super::agent_effort_matching::is_subagent_request;
@@ -91,25 +95,7 @@ impl AgentEffortIntents {
             .map(str::to_owned);
         let requested_model = requested_model(arguments);
         let explicit_model = requested_model.filter(|model| {
-            model_catalog.map_or_else(
-                || {
-                    super::agent_routing::model_is_authorized(
-                        arguments,
-                        user_messages,
-                        system,
-                        model,
-                    )
-                },
-                |catalog| {
-                    super::agent_routing::model_is_authorized_with_catalog(
-                        arguments,
-                        user_messages,
-                        system,
-                        catalog,
-                        model,
-                    )
-                },
-            )
+            authorized_model(arguments, user_messages, system, model_catalog, model)
         });
         if requested_model.is_some() && explicit_model.is_none() {
             tracing::debug!(
@@ -162,13 +148,7 @@ impl AgentEffortIntents {
                 request_matches_intent_with_system(&request.system, &request.messages, intent)
                     && (intent.correlated || intent.client_user_id.as_deref() == client_user_id)
             })
-            .or_else(|| {
-                let mut candidates = pending.iter().enumerate().filter(|(_, intent)| {
-                    intent.correlated && intent.client_user_id.as_deref() == client_user_id
-                });
-                let candidate = candidates.next()?;
-                candidates.next().is_none().then_some(candidate.0)
-            });
+            .or_else(|| unique_correlated_candidate(&pending, client_user_id));
         let Some(index) = index else {
             return AgentIntent::unmatched(true);
         };
@@ -207,7 +187,62 @@ impl AgentEffortIntents {
         drop(pending);
         self.persist(snapshot);
     }
+
+    pub(super) fn retire_terminal_task_notifications(&self, request: &MessagesRequest) {
+        let ids = terminal_task_notification_ids(&request.messages);
+        if ids.is_empty() {
+            return;
+        }
+        let client_user_id = request.metadata.get("user_id").and_then(Value::as_str);
+        let mut pending = self.pending.lock().expect("agent effort intents poisoned");
+        remove_expired(&mut pending);
+        pending.retain(|intent| retain_terminal_intent(intent, &ids, client_user_id));
+        let snapshot = persistence_snapshot(&pending);
+        drop(pending);
+        self.persist(snapshot);
+    }
 }
+
+fn authorized_model(
+    arguments: &Value,
+    user_messages: &[Value],
+    system: &Value,
+    model_catalog: Option<&crate::provider_config::ModelCatalog>,
+    model: &str,
+) -> bool {
+    match model_catalog {
+        Some(catalog) => super::agent_routing::model_is_authorized_with_catalog(
+            arguments,
+            user_messages,
+            system,
+            catalog,
+            model,
+        ),
+        None => super::agent_routing::model_is_authorized(arguments, user_messages, system, model),
+    }
+}
+
+fn unique_correlated_candidate(
+    pending: &VecDeque<AgentEffortIntent>,
+    client_user_id: Option<&str>,
+) -> Option<usize> {
+    let mut candidates = pending.iter().enumerate().filter(|(_, intent)| {
+        intent.correlated && intent.client_user_id.as_deref() == client_user_id
+    });
+    let candidate = candidates.next()?;
+    candidates.next().is_none().then_some(candidate.0)
+}
+
+fn retain_terminal_intent(
+    intent: &AgentEffortIntent,
+    terminal_ids: &std::collections::HashSet<String>,
+    client_user_id: Option<&str>,
+) -> bool {
+    !intent.correlated
+        || !terminal_ids.contains(intent.tool_use_id.as_str())
+        || client_user_id.is_some_and(|id| intent.client_user_id.as_deref() != Some(id))
+}
+
 fn agent_prompt<'a>(tool_name: &str, arguments: &'a Value) -> Option<&'a str> {
     is_agent_tool(tool_name)
         .then(|| arguments.get("prompt").and_then(Value::as_str))
@@ -337,55 +372,8 @@ fn explicitly_names_agent(text: &str, name: &str) -> bool {
     .any(|pattern| text.contains(pattern))
 }
 
-pub(super) fn tool_schema(tool_name: &str, mut schema: Value) -> Value {
-    if !is_agent_tool(tool_name) {
-        return schema;
-    }
-    let Some(object) = schema.as_object_mut() else {
-        return schema;
-    };
-    let properties = object
-        .entry("properties")
-        .or_insert_with(|| serde_json::json!({}));
-    let Some(properties) = properties.as_object_mut() else {
-        return schema;
-    };
-    if let Some(name) = properties.get_mut("name").and_then(Value::as_object_mut) {
-        name.insert(
-            "description".to_owned(),
-            Value::String("Persistent mailbox teammate name. Omit for ordinary SubAgents and parallel delegation. Set only to an exact teammate name explicitly supplied by the active user; never invent one.".to_owned()),
-        );
-    }
-    properties
-        .entry(ADAPTER_EFFORT.to_owned())
-        .or_insert_with(|| {
-            serde_json::json!({
-                "type":"string",
-                "enum":["low", "medium", "high", "xhigh", "max"],
-                "description":"Effort for this SubAgent only. Use medium when the user says mid."
-            })
-        });
-    properties
-        .entry(ADAPTER_MODEL.to_owned())
-        .or_insert_with(|| {
-            serde_json::json!({
-                "type":"string",
-                "minLength":1,
-                "description":"Exact model ID for this SubAgent. For a routed claudex-* worker, pass the model from the current routing context's selected_workers entry. A user-explicit provider model may also be passed."
-            })
-        });
-    let required = object
-        .entry("required")
-        .or_insert_with(|| serde_json::json!([]));
-    if !required.is_array() {
-        *required = serde_json::json!([]);
-    }
-    match required.as_array_mut() {
-        Some(required) if !required.iter().any(|field| field == ADAPTER_MODEL) => {
-            required.push(Value::String(ADAPTER_MODEL.to_owned()));
-        }
-        _ => {}
-    }
+#[cfg(test)]
+fn tool_schema(_tool_name: &str, schema: Value) -> Value {
     schema
 }
 

@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use serde_json::Value;
 
-use crate::anthropic::MessagesRequest;
+use crate::anthropic::{MessagesRequest, exact_async_launch_acknowledgement, tool_round_ids};
 
 #[derive(Clone, Debug)]
 pub(crate) struct LiveThreadState {
@@ -41,21 +41,27 @@ impl SubagentSnapshot {
 pub(crate) fn analyze_subagent_work(messages: &[Value]) -> SubagentSnapshot {
     let mut launched: Vec<Workunit> = Vec::new();
     let mut completed: HashSet<String> = HashSet::new();
+    let mut latest_tool_round: Option<Vec<String>> = None;
 
     for message in messages {
+        record_task_notification(message, &mut completed);
         let Some(content) = message.get("content").and_then(Value::as_array) else {
             continue;
         };
+        let exact_async_acknowledgement = latest_tool_round.as_deref().is_some_and(|expected| {
+            exact_async_launch_acknowledgement(message, expected).is_some()
+        });
 
-        for block in content {
-            let Some(block_type) = block.get("type").and_then(Value::as_str) else {
-                continue;
-            };
-            match block_type {
-                "tool_use" => parse_subagent_tool_use(block, &mut launched),
-                "tool_result" => record_completed_tool(block, &mut completed),
-                _ => {}
-            }
+        record_message_content(
+            content,
+            &mut launched,
+            &mut completed,
+            exact_async_acknowledgement,
+        );
+        if message.get("role").and_then(Value::as_str) == Some("assistant")
+            && let Some(ids) = tool_round_ids(message)
+        {
+            latest_tool_round = Some(ids);
         }
     }
 
@@ -75,11 +81,75 @@ pub(crate) fn analyze_subagent_work(messages: &[Value]) -> SubagentSnapshot {
     snapshot
 }
 
-fn record_completed_tool(block: &Value, completed: &mut HashSet<String>) {
+fn record_message_content(
+    content: &[Value],
+    launched: &mut Vec<Workunit>,
+    completed: &mut HashSet<String>,
+    exact_async_acknowledgement: bool,
+) {
+    for block in content {
+        match block.get("type").and_then(Value::as_str) {
+            Some("tool_use") => parse_subagent_tool_use(block, launched),
+            Some("tool_result") => {
+                record_completed_tool(block, completed, exact_async_acknowledgement);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn record_completed_tool(
+    block: &Value,
+    completed: &mut HashSet<String>,
+    exact_async_acknowledgement: bool,
+) {
+    if exact_async_acknowledgement {
+        return;
+    }
     let Some(id) = block.get("tool_use_id").and_then(Value::as_str) else {
         return;
     };
     completed.insert(id.to_owned());
+}
+
+fn record_task_notification(message: &Value, completed: &mut HashSet<String>) {
+    let Some(content) = message.get("content") else {
+        return;
+    };
+    match content {
+        Value::String(text) => record_task_notification_text(text, completed),
+        Value::Array(items) => {
+            for text in items
+                .iter()
+                .filter(|item| item.get("type").and_then(Value::as_str) == Some("text"))
+                .filter_map(|item| item.get("text").and_then(Value::as_str))
+            {
+                record_task_notification_text(text, completed);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn record_task_notification_text(text: &str, completed: &mut HashSet<String>) {
+    let text = text.trim();
+    if !text.starts_with("<task-notification>")
+        || !["completed", "failed", "stopped"]
+            .iter()
+            .any(|status| text.contains(&format!("<status>{status}</status>")))
+    {
+        return;
+    }
+    if let Some(tool_use_id) = xml_tag(text, "tool-use-id") {
+        completed.insert(tool_use_id.to_owned());
+    }
+}
+
+fn xml_tag<'a>(text: &'a str, tag: &str) -> Option<&'a str> {
+    let open = format!("<{tag}>");
+    let close = format!("</{tag}>");
+    let value = text.split_once(&open)?.1.split_once(&close)?.0.trim();
+    (!value.is_empty()).then_some(value)
 }
 
 fn parse_subagent_tool_use(block: &Value, launched: &mut Vec<Workunit>) {
@@ -105,25 +175,12 @@ fn parse_subagent_tool_use(block: &Value, launched: &mut Vec<Workunit>) {
         let Some(tasks) = input.get("tasks").and_then(Value::as_array) else {
             return;
         };
-        for (index, task) in tasks.iter().enumerate() {
-            let Some(task) = task.as_object() else {
-                continue;
-            };
-            if task
-                .get("subagent_type")
-                .and_then(Value::as_str)
-                .is_some_and(|agent_type| agent_type == "custom-advisor")
-            {
-                continue;
-            }
-            if let Some(model) = task.get("claudex_model").and_then(Value::as_str) {
-                launched.push(Workunit {
-                    unit_id: format!("{id}:{index}"),
-                    group_id: id.to_owned(),
-                    model: Some(model.to_owned()),
-                });
-            }
-        }
+        launched.extend(
+            tasks
+                .iter()
+                .enumerate()
+                .filter_map(|(index, task)| batch_workunit(id, index, task)),
+        );
         return;
     }
 
@@ -147,6 +204,23 @@ fn parse_subagent_tool_use(block: &Value, launched: &mut Vec<Workunit>) {
         group_id: id.to_owned(),
         model: Some(model.to_owned()),
     });
+}
+
+fn batch_workunit(id: &str, index: usize, task: &Value) -> Option<Workunit> {
+    let task = task.as_object()?;
+    if task
+        .get("subagent_type")
+        .and_then(Value::as_str)
+        .is_some_and(|agent_type| agent_type == "custom-advisor")
+    {
+        return None;
+    }
+    let model = task.get("claudex_model").and_then(Value::as_str)?;
+    Some(Workunit {
+        unit_id: format!("{id}:{index}"),
+        group_id: id.to_owned(),
+        model: Some(model.to_owned()),
+    })
 }
 
 fn normalize_scope(prompt: &str) -> String {

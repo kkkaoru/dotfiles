@@ -259,12 +259,7 @@ impl AgentBackend {
                     .unwrap_or_default();
                 let (index, route) = routes.resolve(model)?;
                 let params = route.thread_start_params(params);
-                let mut response = if route.kind == BackendKind::CodexAppServer {
-                    let backend = route.get().await?;
-                    Box::pin(backend.request(method, params)).await?
-                } else {
-                    request_acp_session(&route, method, params).await?
-                };
+                let mut response = request_session(&route, method, params).await?;
                 let raw_id = response
                     .pointer("/thread/id")
                     .and_then(Value::as_str)
@@ -298,31 +293,6 @@ impl AgentBackend {
                 Box::pin(backend.request_detached(method, params)).await
             }
             Self::Routed(_) => bail!("routed backend does not support request `{method}`"),
-        }
-    }
-    pub(crate) async fn cancel_turn(&self, thread_id: &str) -> Result<TurnCancellation> {
-        match self {
-            Self::Codex(_) => Ok(TurnCancellation::Unsupported),
-            Self::Copilot(agent) => {
-                agent.cancel_turn(thread_id).await?;
-                Ok(TurnCancellation::Settled)
-            }
-            Self::ConfiguredAcp(agent) => {
-                agent.cancel_turn(thread_id).await?;
-                Ok(TurnCancellation::Settled)
-            }
-            Self::Grok(agent) => {
-                agent.cancel_turn(thread_id).await?;
-                Ok(TurnCancellation::Settled)
-            }
-            Self::Routed(routes) => {
-                let (index, raw_id) = routed_thread(thread_id);
-                let backend = routes
-                    .route(index)
-                    .ready_backend()
-                    .context("thread route backend is unavailable during cancellation")?;
-                Box::pin(backend.cancel_turn(raw_id)).await
-            }
         }
     }
     pub async fn respond(&self, id: Value, result: Value) -> Result<()> {
@@ -362,6 +332,14 @@ impl AgentBackend {
         }
     }
 }
+async fn request_session(route: &Arc<RoutedBackend>, method: &str, params: Value) -> Result<Value> {
+    if route.kind == BackendKind::CodexAppServer {
+        let backend = route.get().await?;
+        return Box::pin(backend.request(method, params)).await;
+    }
+    request_acp_session(route, method, params).await
+}
+
 async fn request_acp_session(
     route: &Arc<RoutedBackend>,
     method: &str,

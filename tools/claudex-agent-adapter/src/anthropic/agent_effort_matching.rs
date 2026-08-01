@@ -55,6 +55,9 @@ pub(super) fn correlated_prompt(prompt: &str, tool_use_id: &str, model: Option<&
 }
 
 pub(super) fn is_subagent_request(request: &MessagesRequest) -> bool {
+    if let Some(is_subagent) = super::request_identity::authoritative_is_subagent(request) {
+        return is_subagent;
+    }
     if value_contains_billing_marker(&request.system)
         || value_contains_correlation_marker(&request.system)
     {
@@ -263,5 +266,54 @@ mod tests {
         };
 
         assert!(!is_subagent_request(&request));
+    }
+
+    #[test]
+    fn native_session_header_overrides_historical_child_markers_for_main() {
+        let mut request: MessagesRequest = serde_json::from_value(json!({
+            "model":"claude-opus-5",
+            "system":"cc_is_subagent=true\n<claudex-agent-id>archived</claudex-agent-id>",
+            "messages":[{"role":"user","content":"continue <claudex-agent-id>archived</claudex-agent-id>"}]
+        }))
+        .expect("request");
+        super::super::RequestIdentity::new(Some("session-main".to_owned()), None, None)
+            .attach(&mut request);
+
+        assert!(!is_subagent_request(&request));
+    }
+
+    #[test]
+    fn native_agent_header_identifies_a_child_without_body_markers() {
+        let mut request: MessagesRequest = serde_json::from_value(json!({
+            "model":"worker-model",
+            "system":"ordinary system",
+            "messages":[{"role":"user","content":"ordinary task"}]
+        }))
+        .expect("request");
+        super::super::RequestIdentity::new(
+            Some("session-child".to_owned()),
+            Some("agent-child".to_owned()),
+            None,
+        )
+        .attach(&mut request);
+
+        assert!(is_subagent_request(&request));
+    }
+
+    #[test]
+    fn native_parent_header_identifies_nested_child() {
+        let mut request: MessagesRequest = serde_json::from_value(json!({
+            "model":"worker-model",
+            "messages":[{"role":"user","content":"nested task"}]
+        }))
+        .expect("request");
+        super::super::RequestIdentity::new(
+            Some("session-nested".to_owned()),
+            None,
+            Some("agent-parent".to_owned()),
+        )
+        .attach(&mut request);
+
+        assert!(is_subagent_request(&request));
     }
 }

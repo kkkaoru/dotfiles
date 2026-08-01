@@ -5,6 +5,53 @@ mod tests {
     use std::path::PathBuf;
 
     use super::*;
+    use crate::app_server::ThreadEvents;
+
+    async fn collect_messages(receiver: ThreadEvents) -> Vec<Value> {
+        let mut messages = Vec::new();
+        while let Ok(Some(message)) =
+            tokio::time::timeout(std::time::Duration::from_millis(10), receiver.recv()).await
+        {
+            messages.push(message);
+        }
+        messages
+    }
+
+    fn dispatch_optional_updates(
+        events: &ThreadEventDispatcher,
+        updates: impl IntoIterator<Item = acp::ToolCallUpdateFields>,
+    ) {
+        for (index, fields) in updates.into_iter().enumerate() {
+            dispatch_provider_tool_update(
+                events,
+                "session",
+                acp::ToolCallUpdate::new(format!("optional-{index}"), fields),
+            );
+        }
+    }
+
+    fn dispatch_web_completion_updates(
+        events: &ThreadEventDispatcher,
+        evidence: &ProviderWebEvidence,
+    ) {
+        for output in ["", "https://example.com/result", "retry output"] {
+            dispatch_provider_tool_update_with_evidence(
+                events,
+                Some(evidence),
+                "session",
+                acp::ToolCallUpdate::new(
+                    "native-search",
+                    acp::ToolCallUpdateFields::new()
+                        .status(acp::ToolCallStatus::Completed)
+                        .raw_output(json!(output)),
+                ),
+            );
+        }
+    }
+
+    fn is_only_location(event: &Value) -> bool {
+        event["params"]["arguments"]["locations"][0]["path"] == "only-location"
+    }
 
     #[test]
     fn labels_every_tool_kind_status_and_title_shape() {
@@ -169,12 +216,7 @@ mod tests {
             ]),
         );
 
-        let mut messages = Vec::new();
-        while let Ok(Some(message)) =
-            tokio::time::timeout(std::time::Duration::from_millis(10), receiver.recv()).await
-        {
-            messages.push(message);
-        }
+        let messages = collect_messages(receiver).await;
         assert_dispatched_messages(&messages);
     }
 
@@ -204,33 +246,52 @@ mod tests {
             acp::ToolCallUpdateFields::new()
                 .locations(vec![acp::ToolCallLocation::new("only-location")]),
         ];
-        for (index, fields) in updates.into_iter().enumerate() {
-            dispatch_provider_tool_update(
-                &events,
-                "session",
-                acp::ToolCallUpdate::new(format!("optional-{index}"), fields),
-            );
-        }
+        dispatch_optional_updates(&events, updates);
 
-        let mut messages = Vec::new();
-        while let Ok(Some(message)) =
-            tokio::time::timeout(std::time::Duration::from_millis(10), receiver.recv()).await
-        {
-            messages.push(message);
-        }
+        let messages = collect_messages(receiver).await;
         // Location-only patches and content-only updates without status are dropped.
         assert_eq!(messages.len(), 5);
-        assert!(messages.iter().any(|event| event["params"]["callId"] == "optional-0"));
-        assert!(messages.iter().any(|event| event["params"]["callId"] == "optional-1"));
-        assert!(messages.iter().any(|event| event["params"]["callId"] == "optional-2"));
-        assert!(messages.iter().any(|event| event["params"]["callId"] == "optional-3"));
-        assert!(messages.iter().any(|event| event["params"]["callId"] == "optional-4"));
-        assert!(!messages.iter().any(|event| event["params"]["callId"] == "optional-5"));
-        assert!(messages.iter().any(|event| event["params"]["output"] == "output"));
-        assert!(messages.iter().any(|event| event["params"]["status"] == "failed"));
-        assert!(!messages.iter().any(|event| {
-            event["params"]["arguments"]["locations"][0]["path"] == "only-location"
-        }));
+        assert!(
+            messages
+                .iter()
+                .any(|event| event["params"]["callId"] == "optional-0")
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|event| event["params"]["callId"] == "optional-1")
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|event| event["params"]["callId"] == "optional-2")
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|event| event["params"]["callId"] == "optional-3")
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|event| event["params"]["callId"] == "optional-4")
+        );
+        assert!(
+            !messages
+                .iter()
+                .any(|event| event["params"]["callId"] == "optional-5")
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|event| event["params"]["output"] == "output")
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|event| event["params"]["status"] == "failed")
+        );
+        assert!(!messages.iter().any(is_only_location));
     }
 
     #[tokio::test]
@@ -246,19 +307,7 @@ mod tests {
                 .kind(acp::ToolKind::Search)
                 .raw_input(json!({"query":"AVITA"})),
         );
-        for output in ["", "https://example.com/result", "retry output"] {
-            dispatch_provider_tool_update_with_evidence(
-                &events,
-                Some(&evidence),
-                "session",
-                acp::ToolCallUpdate::new(
-                    "native-search",
-                    acp::ToolCallUpdateFields::new()
-                        .status(acp::ToolCallStatus::Completed)
-                        .raw_output(json!(output)),
-                ),
-            );
-        }
+        dispatch_web_completion_updates(&events, &evidence);
         dispatch_provider_tool_update_with_evidence(
             &events,
             Some(&evidence),
@@ -273,12 +322,7 @@ mod tests {
             ),
         );
 
-        let mut messages = Vec::new();
-        while let Ok(Some(message)) =
-            tokio::time::timeout(std::time::Duration::from_millis(10), receiver.recv()).await
-        {
-            messages.push(message);
-        }
+        let messages = collect_messages(receiver).await;
         let completions = messages
             .iter()
             .filter(|message| message["params"]["evidence"]["verified"] == true)
@@ -317,13 +361,11 @@ mod tests {
                 .iter()
                 .any(|event| event["params"]["callId"] == "empty")
         );
-        assert!(
-            messages
-                .iter()
-                .any(|event| event["params"]["delta"]
-                    .as_str()
-                    .is_some_and(|text| text.contains("Plan 0/2")))
-        );
+        assert!(messages.iter().any(|event| {
+            event["params"]["delta"]
+                .as_str()
+                .is_some_and(|text| text.contains("Plan 0/2"))
+        }));
     }
 
     fn text(value: &str) -> acp::ToolCallContent {

@@ -6,6 +6,14 @@ fn search(query: &str) -> WebOperation {
     }
 }
 
+struct PanicWhileLocked;
+
+impl Drop for PanicWhileLocked {
+    fn drop(&mut self) {
+        panic!("poison tracker");
+    }
+}
+
 #[test]
 fn completion_is_correlated_deduplicated_and_session_scoped() {
     let evidence = ProviderWebEvidence::default();
@@ -119,14 +127,6 @@ fn recognizes_explicit_variants_and_rejects_ambiguous_fetches() {
 
 #[test]
 fn records_limits_and_tolerates_a_poisoned_tracker() {
-    struct PanicWhileLocked;
-
-    impl Drop for PanicWhileLocked {
-        fn drop(&mut self) {
-            panic!("poison tracker");
-        }
-    }
-
     let evidence = ProviderWebEvidence::default();
     evidence.record("kept", "call", search("one"));
     evidence.record("kept", "call", search("replacement"));
@@ -172,7 +172,9 @@ fn builds_evidence_from_content_and_covers_output_shapes() {
     assert_eq!(
         provider_output(
             Some(json!("same")),
-            Some(&vec![acp::ContentBlock::Text(acp::TextContent::new("same")).into()])
+            Some(&vec![
+                acp::ContentBlock::Text(acp::TextContent::new("same")).into()
+            ])
         ),
         "same"
     );
@@ -186,8 +188,8 @@ fn builds_evidence_from_content_and_covers_output_shapes() {
     );
     assert_eq!(provider_output(None, None), "");
 
-    let evidence =
-        completion_evidence(search("AVITA"), None, Some(&content)).expect("content URL is evidence");
+    let evidence = completion_evidence(search("AVITA"), None, Some(&content))
+        .expect("content URL is evidence");
     assert_eq!(evidence["evidence_class"], "search_result_only");
     assert_eq!(evidence["query"], "AVITA");
     assert!(completion_evidence(search("AVITA"), Some(json!("null")), None).is_none());

@@ -184,18 +184,7 @@ async fn wait_for_health(client: &Client, url: &str, predicate: impl Fn(&Value) 
 async fn wait_for_trace_count(root: &std::path::Path, key: &str, expected: usize) {
     let deadline = Instant::now() + POLL_TIMEOUT;
     loop {
-        let count = std::fs::read_to_string(root.join("grok-acp-mock.jsonl"))
-            .map(|trace| {
-                trace
-                    .lines()
-                    .filter(|line| {
-                        serde_json::from_str::<Value>(line)
-                            .ok()
-                            .is_some_and(|event| event.get(key).is_some())
-                    })
-                    .count()
-            })
-            .unwrap_or_default();
+        let count = trace_event_count(root, key);
         if count >= expected {
             return;
         }
@@ -205,4 +194,21 @@ async fn wait_for_trace_count(root: &std::path::Path, key: &str, expected: usize
         );
         tokio::time::sleep(POLL_INTERVAL).await;
     }
+}
+
+fn trace_event_count(root: &std::path::Path, key: &str) -> usize {
+    std::fs::read_to_string(root.join("grok-acp-mock.jsonl"))
+        .map(|trace| {
+            trace
+                .lines()
+                .filter(|line| trace_has_key(line, key))
+                .count()
+        })
+        .unwrap_or_default()
+}
+
+fn trace_has_key(line: &str, key: &str) -> bool {
+    serde_json::from_str::<Value>(line)
+        .ok()
+        .is_some_and(|event| event.get(key).is_some())
 }

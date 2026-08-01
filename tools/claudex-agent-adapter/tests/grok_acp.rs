@@ -48,8 +48,8 @@ async fn streams_grok_acp_with_launch_scoped_model_effort_and_instructions() {
         .pointer("/thread/id")
         .and_then(Value::as_str)
         .unwrap();
-    let events = backend.subscribe_thread(thread_id);
     for effort in ["low", "mid", "xhigh", "max"] {
+        let events = backend.subscribe_thread(thread_id);
         backend
             .request_detached(
                 "turn/start",
@@ -414,15 +414,7 @@ async fn forwards_grok_tool_subagent_retry_and_usage_updates() {
         .await
         .unwrap();
 
-    let mut received = Vec::new();
-    loop {
-        let event = recv(&events).await;
-        let completed = event["method"] == "turn/completed";
-        received.push(event);
-        if completed {
-            break;
-        }
-    }
+    let received = recv_until_completed(&events).await;
     let combined = received.iter().map(Value::to_string).collect::<String>();
     assert!(combined.contains("Completed search"));
     assert!(combined.contains("SubAgent started"));
@@ -595,10 +587,8 @@ async fn dropped_parallel_session_request_does_not_interrupt_or_restart_provider
     let trace = root.path().join("grok-acp-mock.jsonl");
     let agent = spawn_mock("dropped-parallel-session", root.path()).await;
     let (events, _session_id) = start_delayed_turn(&agent).await;
-    let request = tokio::spawn({
-        let agent = Arc::clone(&agent);
-        async move { agent.create_session(json!({})).await }
-    });
+    let request_agent = Arc::clone(&agent);
+    let request = tokio::spawn(async move { request_agent.create_session(json!({})).await });
     wait_for_trace_count(&trace, "new_session", 2).await;
     request.abort();
 
@@ -894,6 +884,20 @@ async fn recv(events: &claudex_agent_adapter::app_server::ThreadEvents) -> Value
         .expect("ACP event stream closed")
 }
 
+async fn recv_until_completed(
+    events: &claudex_agent_adapter::app_server::ThreadEvents,
+) -> Vec<Value> {
+    let mut received = Vec::new();
+    loop {
+        let event = recv(events).await;
+        let completed = event["method"] == "turn/completed";
+        received.push(event);
+        if completed {
+            return received;
+        }
+    }
+}
+
 fn read_trace(path: &Path) -> Vec<Value> {
     std::fs::read_to_string(path)
         .expect("read ACP trace")
@@ -903,22 +907,27 @@ fn read_trace(path: &Path) -> Vec<Value> {
 }
 
 async fn wait_for_trace_count(path: &Path, key: &str, expected: usize) -> Vec<Value> {
-    tokio::time::timeout(Duration::from_secs(2), async {
-        loop {
-            let trace = try_read_trace(path).unwrap_or_default();
-            if trace
-                .iter()
-                .filter(|event| event.get(key).is_some())
-                .count()
-                >= expected
-            {
-                return trace;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        poll_trace_count(path, key, expected),
+    )
     .await
     .expect("ACP trace event timeout")
+}
+
+async fn poll_trace_count(path: &Path, key: &str, expected: usize) -> Vec<Value> {
+    loop {
+        let trace = try_read_trace(path).unwrap_or_default();
+        if trace
+            .iter()
+            .filter(|event| event.get(key).is_some())
+            .count()
+            >= expected
+        {
+            return trace;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
 }
 
 fn try_read_trace(path: &Path) -> Option<Vec<Value>> {

@@ -8,51 +8,27 @@ mod tests {
 
     #[tokio::test]
     async fn settles_cancelled_completed_and_failed_prompts() {
-        for (response, expected_method, expected_status, succeeds) in [
-            (
-                Ok(acp::PromptResponse::new(acp::StopReason::Cancelled)),
-                "turn/completed",
-                "cancelled",
-                true,
-            ),
-            (
-                Ok(acp::PromptResponse::new(acp::StopReason::EndTurn)),
-                "turn/completed",
-                "completed",
-                true,
-            ),
-            (
-                Err(acp::Error::internal_error()),
-                "turn/completed",
-                "cancelled",
-                true,
-            ),
-        ] {
-            let events = ThreadEventDispatcher::default();
-            let receiver = events.subscribe("session");
-            let invalidated = InvalidatedSessions::default();
-            let permits = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
-            let (sender, result) = tokio::sync::oneshot::channel();
-            let ctx = CancelCtx {
-                provider: AcpProvider::Grok,
-                session_id: "session",
-                permit: permits.acquire_owned().await.unwrap(),
-                cancellation: CancelRequest { response: sender },
-                events: &events,
-                invalidated_sessions: &invalidated,
-            };
-            settle_cancelled_prompt(ctx, response);
-            assert_eq!(result.await.unwrap().is_ok(), succeeds);
-            let event = receiver.recv().await.unwrap();
-            assert_eq!(event["method"], expected_method);
-            assert_eq!(
-                event
-                    .pointer("/params/turn/status")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or(""),
-                expected_status
-            );
-        }
+        assert_prompt_settlement(
+            Ok(acp::PromptResponse::new(acp::StopReason::Cancelled)),
+            "turn/completed",
+            "cancelled",
+            true,
+        )
+        .await;
+        assert_prompt_settlement(
+            Ok(acp::PromptResponse::new(acp::StopReason::EndTurn)),
+            "turn/completed",
+            "completed",
+            true,
+        )
+        .await;
+        assert_prompt_settlement(
+            Err(acp::Error::internal_error()),
+            "turn/completed",
+            "cancelled",
+            true,
+        )
+        .await;
     }
 
     #[tokio::test]
@@ -78,31 +54,62 @@ mod tests {
 
     #[tokio::test]
     async fn bounds_failed_and_stalled_cancel_requests() {
-        for settlement in [
-            Settlement::Settled(Err(acp::Error::internal_error())),
-            Settlement::TimedOut,
-        ] {
-            let events = ThreadEventDispatcher::default();
-            let receiver = events.subscribe("session");
-            let invalidated = InvalidatedSessions::default();
-            let permits = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
-            let (sender, result) = tokio::sync::oneshot::channel();
-            let ctx = CancelCtx {
-                provider: AcpProvider::Configured,
-                session_id: "session",
-                permit: permits.acquire_owned().await.unwrap(),
-                cancellation: CancelRequest { response: sender },
-                events: &events,
-                invalidated_sessions: &invalidated,
-            };
-            assert!(
-                continue_after_cancel_request(ctx, SettlementPolicy::default(), settlement)
-                    .is_none()
-            );
-            assert!(result.await.unwrap().is_err());
-            assert!(invalidated.borrow().contains("session"));
-            assert_eq!(receiver.recv().await.unwrap()["method"], "error");
-        }
+        assert_failed_settlement(Settlement::Settled(Err(acp::Error::internal_error()))).await;
+        assert_failed_settlement(Settlement::TimedOut).await;
+    }
+
+    async fn assert_prompt_settlement(
+        response: acp::Result<acp::PromptResponse>,
+        expected_method: &str,
+        expected_status: &str,
+        succeeds: bool,
+    ) {
+        let events = ThreadEventDispatcher::default();
+        let receiver = events.subscribe("session");
+        let invalidated = InvalidatedSessions::default();
+        let permits = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
+        let (sender, result) = tokio::sync::oneshot::channel();
+        let ctx = CancelCtx {
+            provider: AcpProvider::Grok,
+            session_id: "session",
+            permit: permits.acquire_owned().await.unwrap(),
+            cancellation: CancelRequest { response: sender },
+            events: &events,
+            invalidated_sessions: &invalidated,
+        };
+        settle_cancelled_prompt(ctx, response);
+        assert_eq!(result.await.unwrap().is_ok(), succeeds);
+        let event = receiver.recv().await.unwrap();
+        assert_eq!(event["method"], expected_method);
+        assert_eq!(
+            event
+                .pointer("/params/turn/status")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or(""),
+            expected_status
+        );
+    }
+
+    async fn assert_failed_settlement(settlement: Settlement<acp::Result<()>>) {
+        let events = ThreadEventDispatcher::default();
+        let receiver = events.subscribe("session");
+        let invalidated = InvalidatedSessions::default();
+        let permits = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
+        let (sender, result) = tokio::sync::oneshot::channel();
+        let ctx = CancelCtx {
+            provider: AcpProvider::Configured,
+            session_id: "session",
+            permit: permits.acquire_owned().await.unwrap(),
+            cancellation: CancelRequest { response: sender },
+            events: &events,
+            invalidated_sessions: &invalidated,
+        };
+        assert!(
+            continue_after_cancel_request(ctx, SettlementPolicy::default(), settlement).is_none()
+        );
+        assert!(result.await.unwrap().is_err());
+        assert!(invalidated.borrow().contains("session"));
+        assert_eq!(receiver.recv().await.unwrap()["method"], "error");
     }
 
     #[tokio::test]

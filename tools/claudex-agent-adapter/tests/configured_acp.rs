@@ -478,25 +478,23 @@ async fn configured_acp_selects_model_after_session_and_falls_back_for_effort_op
             Some(&json!("effort"))
         );
         assert_eq!(effort.pointer("/set_effort/value"), Some(&json!("max")));
-        if expects_config_option {
-            assert!(!has_effort_model_metadata(&trace));
-        } else {
-            assert!(has_effort_model_metadata(&trace));
-        }
+        assert_eq!(has_effort_model_metadata(&trace), !expects_config_option);
         backend.shutdown().await;
     }
 }
 
 async fn wait_for_turn_completion(events: ThreadEvents) {
-    tokio::time::timeout(ACP_EVENT_TIMEOUT, async {
-        loop {
-            if events.recv().await.expect("configured ACP event")["method"] == "turn/completed" {
-                break;
-            }
+    tokio::time::timeout(ACP_EVENT_TIMEOUT, receive_turn_completion(&events))
+        .await
+        .expect("configured ACP turn completion");
+}
+
+async fn receive_turn_completion(events: &ThreadEvents) {
+    loop {
+        if events.recv().await.expect("configured ACP event")["method"] == "turn/completed" {
+            return;
         }
-    })
-    .await
-    .expect("configured ACP turn completion");
+    }
 }
 
 fn read_configured_trace(root: &std::path::Path) -> Vec<Value> {
@@ -572,21 +570,10 @@ async fn session_scoped_configured_acp_recycles_after_one_failed_stream() {
         )
         .await
         .expect("start turn on recycled provider");
-    tokio::time::timeout(ACP_EVENT_TIMEOUT, async {
-        loop {
-            let event = restarted_receiver
-                .recv()
-                .await
-                .expect("recycled provider event dispatcher");
-            if event["method"] == "turn/completed" {
-                break;
-            }
-            assert_ne!(
-                event["method"], "error",
-                "recycled provider failed: {event}"
-            );
-        }
-    })
+    tokio::time::timeout(
+        ACP_EVENT_TIMEOUT,
+        receive_recycled_turn_completion(&restarted_receiver),
+    )
     .await
     .expect("recycled provider completed turn");
 
@@ -607,6 +594,22 @@ async fn session_scoped_configured_acp_recycles_after_one_failed_stream() {
     assert_eq!(prompts.len(), 2);
     assert!(prompts[0].to_string().contains("do work"));
     assert!(prompts[1].to_string().contains("finish work"));
+}
+
+async fn receive_recycled_turn_completion(events: &ThreadEvents) {
+    loop {
+        let event = events
+            .recv()
+            .await
+            .expect("recycled provider event dispatcher");
+        if event["method"] == "turn/completed" {
+            return;
+        }
+        assert_ne!(
+            event["method"], "error",
+            "recycled provider failed: {event}"
+        );
+    }
 }
 
 async fn assert_params_cwd(backend: &AgentBackend, root: &std::path::Path) {

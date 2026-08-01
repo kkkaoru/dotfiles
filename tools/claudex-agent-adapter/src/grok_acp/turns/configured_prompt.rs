@@ -160,31 +160,37 @@ mod tests {
 
     #[tokio::test]
     async fn maps_prompt_completion_cancellation_and_failure() {
-        for (response, expected_method, expected_status) in [
-            (
-                Ok(acp::PromptResponse::new(acp::StopReason::EndTurn)),
-                "turn/completed",
-                "completed",
-            ),
-            (
-                Ok(acp::PromptResponse::new(acp::StopReason::Cancelled)),
-                "turn/completed",
-                "cancelled",
-            ),
-            (Err(acp::Error::internal_error()), "error", ""),
-        ] {
-            let events = ThreadEventDispatcher::default();
-            let receiver = events.subscribe("session");
-            finish(AcpProvider::Grok, "session", response, &events).await;
-            let event = receiver.recv().await.unwrap();
-            assert_eq!(event["method"], expected_method);
-            assert_eq!(
-                event
-                    .pointer("/params/turn/status")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or(""),
-                expected_status
-            );
-        }
+        assert_prompt_finish(
+            Ok(acp::PromptResponse::new(acp::StopReason::EndTurn)),
+            "turn/completed",
+            "completed",
+        )
+        .await;
+        assert_prompt_finish(
+            Ok(acp::PromptResponse::new(acp::StopReason::Cancelled)),
+            "turn/completed",
+            "cancelled",
+        )
+        .await;
+        assert_prompt_finish(Err(acp::Error::internal_error()), "error", "").await;
+    }
+
+    async fn assert_prompt_finish(
+        response: acp::Result<acp::PromptResponse>,
+        expected_method: &str,
+        expected_status: &str,
+    ) {
+        let events = ThreadEventDispatcher::default();
+        let receiver = events.subscribe("session");
+        finish(AcpProvider::Grok, "session", response, &events).await;
+        let event = receiver.recv().await.unwrap();
+        assert_eq!(event["method"], expected_method);
+        assert_eq!(
+            event
+                .pointer("/params/turn/status")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or(""),
+            expected_status
+        );
     }
 }

@@ -227,17 +227,31 @@ async fn isolates_parallel_sessions_across_worker_threads_and_backends() {
         let grok_url = url.clone();
         let codex_index = pair * 2;
         let grok_index = pair * 2 + 1;
-        let codex_task = tokio::spawn(async move {
-            let response = parallel_request(&codex_url, "gpt-model", codex_index).await;
-            assert_eq!(response_text(&response), "CODEX_ROUTED_OK");
-        });
-        let grok_task = tokio::spawn(async move {
-            let response = parallel_request(&grok_url, "grok-model", grok_index).await;
-            assert_eq!(response_text(&response), "GROK_ACP_STREAM_OK");
-        });
+        let codex_task = tokio::spawn(assert_parallel_response(
+            codex_url,
+            "gpt-model",
+            codex_index,
+            "CODEX_ROUTED_OK",
+        ));
+        let grok_task = tokio::spawn(assert_parallel_response(
+            grok_url,
+            "grok-model",
+            grok_index,
+            "GROK_ACP_STREAM_OK",
+        ));
         tokio::try_join!(codex_task, grok_task).expect("mixed Codex/Grok pair must complete");
     }
     server.abort();
+}
+
+async fn assert_parallel_response(
+    url: String,
+    model: &'static str,
+    index: usize,
+    expected: &'static str,
+) {
+    let response = parallel_request(&url, model, index).await;
+    assert_eq!(response_text(&response), expected);
 }
 
 async fn request(client: &Client, url: &str, model: &str) -> Value {

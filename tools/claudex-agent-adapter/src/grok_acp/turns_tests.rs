@@ -53,11 +53,7 @@ async fn replacement_settles_successful_failed_and_dropped_cancellations() {
         active_turns
             .borrow_mut()
             .insert("session".to_owned(), Some(cancel));
-        let settle = async {
-            let request = cancel_receiver.await.unwrap();
-            assert!(request.response.send(result).is_ok());
-            active_turns.borrow_mut().remove("session");
-        };
+        let settle = settle_replacement(cancel_receiver, Rc::clone(&active_turns), Some(result));
         let replace = replace_active_turn(AcpProvider::Grok, &active_turns, "session");
         let (replace, ()) = tokio::join!(replace, settle);
         assert!(replace.is_ok());
@@ -68,14 +64,24 @@ async fn replacement_settles_successful_failed_and_dropped_cancellations() {
     active_turns
         .borrow_mut()
         .insert("session".to_owned(), Some(cancel));
-    let settle = async {
-        let request = cancel_receiver.await.unwrap();
-        drop(request.response);
-        active_turns.borrow_mut().remove("session");
-    };
+    let settle = settle_replacement(cancel_receiver, Rc::clone(&active_turns), None);
     let replace = replace_active_turn(AcpProvider::Grok, &active_turns, "session");
     let (replace, ()) = tokio::join!(replace, settle);
     assert!(replace.is_ok());
+}
+
+async fn settle_replacement(
+    cancel_receiver: oneshot::Receiver<CancelRequest>,
+    active_turns: ActiveTurns,
+    result: Option<Result<()>>,
+) {
+    let request = cancel_receiver.await.unwrap();
+    if let Some(result) = result {
+        assert!(request.response.send(result).is_ok());
+    } else {
+        drop(request.response);
+    }
+    active_turns.borrow_mut().remove("session");
 }
 
 #[tokio::test]

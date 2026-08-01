@@ -3,14 +3,17 @@ mod agent_effort;
 mod agent_effort_matching;
 mod agent_intent_store;
 mod agent_routing;
+mod async_agent_handoff;
+pub(crate) use async_agent_handoff::{exact_async_launch_acknowledgement, tool_round_ids};
 mod content;
 mod content_batch;
 mod content_pending;
 mod error;
 mod health;
+mod message_router;
 mod model_concurrency;
+mod request_identity;
 mod request_routing;
-mod resume_tools;
 mod retention;
 mod segment;
 mod session;
@@ -18,6 +21,13 @@ mod stream;
 mod stream_batch;
 mod subagent_continuation;
 mod subagent_timeout;
+// Runtime/daemon option plumbing imports these names once normalized CLI
+// configuration is installed on the Bridge. Keep the shared literals available
+// while individual library test targets compile without that plumbing.
+#[allow(unused_imports)]
+pub(crate) use subagent_timeout::{
+    LEGACY_SUBAGENT_RESPONSE_TIMEOUT_ENV, SUBAGENT_HARD_TIMEOUT_ENV,
+};
 mod subagent_visibility;
 mod subscription;
 mod subscription_activity;
@@ -25,9 +35,9 @@ mod subscription_frames;
 pub(crate) mod subscription_request;
 mod subscription_stream;
 mod team_protocol;
+mod tool_schema_cache;
 mod turn_input;
 use anyhow::Result;
-use axum::{body::Body, http::Response};
 use serde::Deserialize;
 use serde_json::Value;
 use std::{
@@ -55,10 +65,11 @@ use crate::{
 };
 
 pub use content::{error_response, token_count};
+pub use request_identity::RequestIdentity;
 use segment::{Segment, Usage, WebEvidenceSummary};
 pub(crate) use subscription::{DEFAULT_MAX_PROCESSES, DEFAULT_TIMEOUT_MINUTES};
 
-const BRIDGE_INSTRUCTIONS: &str = r"You are the model inside the Claude Code agent harness. Claude Code owns all filesystem, shell, web, MCP, planning, approval, and user-interaction operations. Use only the dynamic tools whose names and schemas were supplied by Claude Code. When the active request explicitly requires live WebSearch, WebFetch, or actual page retrieval, invoke the supplied web tool and do not substitute memory, a guessed URL, or a URL copied from prose; claim search success only after a tool result, and report the tool as unavailable when no web tool is supplied. Do not invoke Codex built-in tools. The Codex app-server sandbox applies only to those disabled built-in tools; never infer from it that Claude Code or its SubAgent tasks are read-only. Preserve task-specific restrictions that the active user or applicable repository instructions explicitly require, but do not copy restrictions from an unrelated earlier task, investigation lane, teammate report, or closed probe. When the active request authorizes implementation, verification, commit, deployment, or another mutation, preserve that authority in SubAgent prompts and act through Claude Code's dynamic tools. Do not add or repeatedly announce read-only, no-edit, no-build, no-deploy, or similar restrictions unless they are explicitly active for the current task. In particular, invoke Claude Code's supplied dynamic SubAgent tool directly (Task in current versions, Agent in older versions); never substitute a Codex collaboration or spawn-agent tool for it. Omit the SubAgent name field for ordinary SubAgents and parallel delegation. Set name only when the active user explicitly supplies that teammate name; an invented name turns the SubAgent into a persistent mailbox teammate and can expose internal agent-message markup. Apply the current selected_workers routing to every Agent or Task launch, including a nested launch from a worker: choose the corresponding claudex worker agent and pass its exact claudex_model and claudex_effort. Every Agent or Task launch must include an exact claudex_model. When multiple independent workers are requested, use the supplied batch Agent/Task dynamic tool exactly once with every intended launch in its tasks array; the bridge expands that batch into concurrent Claude Code tool_use blocks in one tool round. Never call the ordinary single Agent/Task tool first and defer the rest. Do not announce a worker count unless that same response's batch contains exactly that many launch tasks. Avoid serial heavy processing by one worker when capacity allows multi-worker fan-out. When results are needed in the current turn, use foreground launches. Use background launches only when a concrete independent next action is already identified and will start immediately, or the task must outlive the turn. After successful background launches, start that action or end the turn promptly with concise user-visible status; never keep reasoning while waiting for completion notifications. For related follow-ups, reuse compatible workers with SendMessage and the exact prior Agent/Task recipient instead of churning processes with fresh launches. Do not SendMessage merely to repeat scope or restrictions already present in the original delegation. A follow-up queued to a busy worker does not add parallel capacity; assign genuinely independent work to another routed worker when useful capacity exists. Treat disabled_subagent_models in the current routing context as an absolute SubAgent denylist across explicit selection, inheritance, nested launches, and reuse. This routed selection is authoritative, not an inferred default; never use generic claude or blindly inherit the parent provider when the current routing context selects a worker. An exact model explicitly requested by the active user still takes precedence only when it is not disabled. Provider models selected by the current routing context are supported. If no current routing context or explicit model is available, do not launch a SubAgent; report the missing route clearly instead of inheriting the current session model or inventing a route. Never claim that delegation occurred or reproduce a requested worker response without an actual SubAgent tool result. Return the answer directly when no Claude Code tool is needed. Treat tool output as the result of your own requested call and continue the same task.";
+const BRIDGE_INSTRUCTIONS: &str = r"You are the model inside the Claude Code agent harness. Claude Code owns all filesystem, shell, web, MCP, planning, approval, and user-interaction operations. Use only the dynamic tools whose names and schemas were supplied by Claude Code. When the active request explicitly requires live WebSearch, WebFetch, or actual page retrieval, invoke the supplied web tool and do not substitute memory, a guessed URL, or a URL copied from prose; claim search success only after a tool result, and report the tool as unavailable when no web tool is supplied. Do not invoke Codex built-in tools. The Codex app-server sandbox applies only to those disabled built-in tools; never infer from it that Claude Code or its SubAgent tasks are read-only. Preserve task-specific restrictions that the active user or applicable repository instructions explicitly require, but do not copy restrictions from an unrelated earlier task, investigation lane, teammate report, or closed probe. When the active request authorizes implementation, verification, commit, deployment, or another mutation, preserve that authority in SubAgent prompts and act through Claude Code's dynamic tools. Do not add or repeatedly announce read-only, no-edit, no-build, no-deploy, or similar restrictions unless they are explicitly active for the current task. In particular, invoke Claude Code's supplied dynamic SubAgent tool directly (Task in current versions, Agent in older versions); never substitute a Codex collaboration or spawn-agent tool for it. Omit the SubAgent name field for ordinary SubAgents and parallel delegation. Set name only when the active user explicitly supplies that teammate name; an invented name turns the SubAgent into a persistent mailbox teammate and can expose internal agent-message markup. Use only fields present in the exact Agent or Task schema supplied by Claude Code. The adapter correlates selected_workers routing outside the public schema; never invent adapter-only claudex_model or claudex_effort arguments when those fields are absent. When multiple independent workers are requested, emit one ordinary supplied Agent/Task tool call per intended worker in the same assistant message and tool round. Never invent or request an adapter-only batch tool. Do not announce a worker count unless that same response contains exactly that many native launch calls. Avoid serial heavy processing by one worker when capacity allows multi-worker fan-out. When results are needed in the current turn, use foreground launches. Use background launches only when a concrete independent next action is already identified and will start immediately, or the task must outlive the turn. After successful background launches, start that action or end the turn promptly with concise user-visible status; never keep reasoning while waiting for completion notifications. For related follow-ups, reuse compatible workers with SendMessage and the exact prior Agent/Task recipient instead of churning processes with fresh launches. Do not SendMessage merely to repeat scope or restrictions already present in the original delegation. A follow-up queued to a busy worker does not add parallel capacity; assign genuinely independent work to another routed worker when useful capacity exists. Treat disabled_subagent_models in the current routing context as an absolute SubAgent denylist across explicit selection, inheritance, nested launches, and reuse. This routed selection is authoritative, not an inferred default; never use generic claude or blindly inherit the parent provider when the current routing context selects a worker. An exact model explicitly requested by the active user still takes precedence only when it is not disabled. Provider models selected by the current routing context are supported. If no current routing context or explicit model is available, do not launch a SubAgent; report the missing route clearly instead of inheriting the current session model or inventing a route. Never claim that delegation occurred or reproduce a requested worker response without an actual SubAgent tool result. Return the answer directly when no Claude Code tool is needed. Treat tool output as the result of your own requested call and continue the same task.";
 const CODEX_APP_SERVER_PARALLELIZATION_INSTRUCTIONS: &str = r"In Code tasks, avoid serializing independent operations. For each bounded stage, run independent calls, fetches, or checks in parallel and await them as one batch (for JavaScript, `Promise.all` / `Promise.allSettled` patterns, or the language-equivalent concurrency primitive). Keep sequential order only when output dependencies or side effects require it. This helps reduce unnecessary latency and aligns with the Codex parallel execution guidance.";
 const MAX_SESSIONS: usize = 1_024;
 const MAX_SIGNATURE_BUCKETS: usize = MAX_SESSIONS * 2;
@@ -108,7 +119,11 @@ pub struct Bridge {
     subscription_slots: Arc<Semaphore>,
     subscription_max_processes: usize,
     subscription_timeout: std::time::Duration,
+    subagent_hard_timeout: Option<std::time::Duration>,
+    #[cfg(test)]
+    subagent_hard_timeout_cancel_attempts: std::sync::atomic::AtomicUsize,
     agent_efforts: Arc<agent_effort::AgentEffortIntents>,
+    tool_schemas: tool_schema_cache::ToolSchemaCache,
     model_concurrency: model_concurrency::ModelConcurrency,
 }
 
@@ -120,7 +135,6 @@ struct Session {
     transcript: Mutex<Vec<Value>>,
     pending_tools: Mutex<HashMap<String, Value>>,
     consumed_tool_ids: Mutex<HashSet<String>>,
-    internal_tools: HashMap<String, String>,
     external_tool_names: HashMap<String, String>,
     client_user_id: Option<String>,
     gate: Arc<Mutex<()>>,
@@ -194,6 +208,7 @@ impl Bridge {
     pub(crate) fn with_persisted_agent_intents(self) -> Self {
         Self {
             agent_efforts: Arc::new(agent_effort::AgentEffortIntents::persistent()),
+            tool_schemas: tool_schema_cache::ToolSchemaCache::persistent(),
             ..self
         }
     }
@@ -254,7 +269,11 @@ impl Bridge {
             subscription_slots: Arc::new(Semaphore::new(subscription_limits.max_processes)),
             subscription_max_processes: subscription_limits.max_processes,
             subscription_timeout: subscription_limits.timeout,
+            subagent_hard_timeout: subagent_timeout::subagent_hard_timeout(),
+            #[cfg(test)]
+            subagent_hard_timeout_cancel_attempts: std::sync::atomic::AtomicUsize::new(0),
             agent_efforts: Arc::new(agent_effort::AgentEffortIntents::default()),
+            tool_schemas: tool_schema_cache::ToolSchemaCache::default(),
             model_concurrency,
         }
     }
@@ -272,6 +291,24 @@ impl Bridge {
         }
     }
 
+    /// Install the normalized hard timeout used only for native background
+    /// SubAgent requests. `None` deliberately leaves the Claude Code Agent
+    /// lifecycle unbounded by claudex.
+    #[must_use]
+    pub(crate) fn with_subagent_hard_timeout(
+        self,
+        subagent_hard_timeout: Option<std::time::Duration>,
+    ) -> Self {
+        Self {
+            subagent_hard_timeout,
+            ..self
+        }
+    }
+
+    pub(crate) fn subagent_hard_timeout_seconds(&self) -> Option<u64> {
+        self.subagent_hard_timeout.map(|timeout| timeout.as_secs())
+    }
+
     /// Install the config-declared model catalog used for unrouted-provider remaps.
     #[must_use]
     pub fn with_model_catalog(self, model_catalog: crate::provider_config::ModelCatalog) -> Self {
@@ -279,55 +316,6 @@ impl Bridge {
             model_catalog,
             ..self
         }
-    }
-
-    pub async fn messages(
-        self: &Arc<Self>,
-        mut request: MessagesRequest,
-    ) -> Result<Response<Body>> {
-        trace_request(&request);
-        self.schedule_idle_session_sweep();
-        let intent = self
-            .subagent_tool_continuation(&request)
-            .await
-            .unwrap_or_else(|| self.agent_efforts.take(&request));
-        let is_subagent = intent.is_subagent;
-        let route = request_routing::resolve_request_model_with_origin(
-            &mut request,
-            &self.model,
-            intent.model_override,
-            request_routing::RouteOrigin::new(
-                is_subagent,
-                intent.matched,
-                intent.model_is_inherited,
-            ),
-            |model| {
-                self.app.supports_model(model) || (self.legacy_main_route && model == self.model)
-            },
-            |model| self.model_catalog.matches(model),
-        )?;
-        let effort = self.resolve_request_effort(&request, intent.effort);
-        tracing::debug!(
-            request_model = %request.model,
-            request_effort = ?effort,
-            is_subagent,
-            ?route,
-            "resolved request routing"
-        );
-        if route == request_routing::RouteDecision::Subscription {
-            return self
-                .subscription_messages(request, effort, is_subagent)
-                .await;
-        }
-        let input_tokens = u64::try_from(token_count(&request)).unwrap_or(u64::MAX);
-        self.provider_messages(
-            request,
-            input_tokens,
-            effort,
-            is_subagent,
-            intent.run_in_background,
-        )
-        .await
     }
 
     pub(super) fn request_model(&self, request: &MessagesRequest) -> String {

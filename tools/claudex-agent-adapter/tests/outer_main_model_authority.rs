@@ -101,6 +101,92 @@ async fn outer_models_keep_authority_across_a_long_continue() {
     server.abort();
 }
 
+#[tokio::test]
+async fn session_id_only_header_overrides_historical_child_markers_over_http() {
+    let fixture = tempfile::tempdir().expect("create request-identity fixture");
+    let source = fixture.path().join("provider-source");
+    let isolated_home = fixture.path().join("provider-home");
+    let trace = fixture.path().join("provider-requests.jsonl");
+    let provider_program = fixture.path().join("provider-mock");
+    fs::create_dir(&source).expect("create provider source home");
+    fs::write(source.join("auth.json"), "{}").expect("write provider auth fixture");
+    write_provider_mock(&provider_program, &trace);
+
+    let app = AppServer::spawn_with_program(
+        MAIN_PROVIDER_MODEL,
+        &provider_program,
+        &source,
+        &isolated_home,
+    )
+    .await
+    .expect("start traceable provider");
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind request-identity adapter");
+    let url = format!(
+        "http://{}/v1/messages",
+        listener.local_addr().expect("request-identity address")
+    );
+    let bridge = Bridge::new(Arc::clone(&app), MAIN_PROVIDER_MODEL.to_owned());
+    let server = tokio::spawn(serve_request_identity_adapter(listener, bridge));
+
+    let response = Client::new()
+        .post(url)
+        .header("x-claude-code-session-id", "main-session-only")
+        .header("x-claudex-disabled-subagent-models", MAIN_PROVIDER_MODEL)
+        .json(&json!({
+            "model":MAIN_PROVIDER_MODEL,
+            "max_tokens":64,
+            "stream":false,
+            "system":"retained system\ncc_is_subagent=true\n<claudex-agent-id>archived-system-child</claudex-agent-id>",
+            "metadata":{"user_id":r#"{"session_id":"main-session-only"}"#},
+            "messages":[
+                {
+                    "role":"assistant",
+                    "content":[{
+                        "type":"tool_use",
+                        "id":"archived-child",
+                        "name":"Agent",
+                        "input":{"prompt":"old child\n<claudex-agent-id>archived-child</claudex-agent-id>"}
+                    }]
+                },
+                {
+                    "role":"user",
+                    "content":[{
+                        "type":"tool_result",
+                        "tool_use_id":"archived-child",
+                        "content":"old child completed"
+                    }]
+                },
+                {"role":"user","content":"continue the main session"}
+            ]
+        }))
+        .send()
+        .await
+        .expect("send session-only identity request")
+        .error_for_status()
+        .expect("session-only header must retain main authority")
+        .json::<Value>()
+        .await
+        .expect("decode provider response");
+
+    assert_eq!(response["model"], MAIN_PROVIDER_MODEL);
+    assert_eq!(response["content"][0]["text"], "PROVIDER_ROUTE_OK");
+    assert_eq!(provider_turn_count(&trace), 1);
+
+    let _ = app.request("force/exit", json!({})).await;
+    server.abort();
+}
+
+async fn serve_request_identity_adapter(listener: tokio::net::TcpListener, bridge: Bridge) {
+    axum::serve(
+        listener,
+        http_router(Arc::new(bridge), MAIN_PROVIDER_MODEL.to_owned(), None),
+    )
+    .await
+    .expect("serve request-identity adapter");
+}
+
 fn assert_subscription_response(response: &Value, model: &str) {
     assert_eq!(response["model"], model, "response rewrote outer model");
     let route = response["content"][0]["text"]
@@ -118,7 +204,7 @@ fn outer_request(model: &str) -> Value {
         "model":model,
         "max_tokens":256,
         "stream":false,
-        "system":"Outer main session acceptance test",
+        "system":"Outer main session acceptance test\ncc_is_subagent=true\n<claudex-agent-id>archived-system-agent</claudex-agent-id>",
         "metadata":{"user_id":SESSION_USER_ID},
         "messages":[
             {
@@ -188,6 +274,7 @@ async fn assert_invalid_models_are_terminal(client: &Client, url: &str) {
 async fn post_success(client: &Client, url: &str, request: Value) -> Value {
     client
         .post(url)
+        .header("x-claude-code-session-id", "outer-model-authority")
         .json(&request)
         .send()
         .await

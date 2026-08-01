@@ -13,39 +13,8 @@ mod tests {
 
     #[tokio::test]
     async fn finishes_pre_prompt_and_setup_cancellations() {
-        for setup_started in [false, true] {
-            let events = ThreadEventDispatcher::default();
-            let receiver = events.subscribe("session");
-            let active = ActiveTurns::default();
-            active.borrow_mut().insert("session".to_owned(), None);
-            let invalidated = InvalidatedSessions::default();
-            let permits = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
-            let (_cancel_sender, mut cancel_receiver) = oneshot::channel();
-            let mut permit = Some(permits.acquire_owned().await.unwrap());
-            let (response, result) = oneshot::channel();
-            let mut ctl = TurnCtl {
-                provider: AcpProvider::Grok,
-                session_id: "session",
-                cancellation: &mut cancel_receiver,
-                permit: &mut permit,
-                events: &events,
-                active_turns: &active,
-                invalidated_sessions: &invalidated,
-            };
-            handle_setup_cancellation(
-                &mut ctl,
-                setup_started,
-                settled_setup(),
-                CancelRequest { response },
-            )
-            .await;
-            assert!(result.await.unwrap().is_ok());
-            assert_eq!(
-                receiver.recv().await.unwrap()["params"]["turn"]["status"],
-                "cancelled"
-            );
-            assert!(permit.is_none());
-        }
+        assert_setup_cancellation(false).await;
+        assert_setup_cancellation(true).await;
     }
 
     #[tokio::test]
@@ -187,18 +156,16 @@ mod tests {
         let permits = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
         let (_cancel_sender, mut cancellation) = oneshot::channel();
         let mut permit = Some(permits.acquire_owned().await.unwrap());
-        {
-            let mut ctl = TurnCtl {
-                provider: AcpProvider::Grok,
-                session_id: "session",
-                cancellation: &mut cancellation,
-                permit: &mut permit,
-                events: &events,
-                active_turns: &active,
-                invalidated_sessions: &invalidated,
-            };
-            assert!(finish_effort_setup(&mut ctl, Ok(())));
-        }
+        let mut ctl = TurnCtl {
+            provider: AcpProvider::Grok,
+            session_id: "session",
+            cancellation: &mut cancellation,
+            permit: &mut permit,
+            events: &events,
+            active_turns: &active,
+            invalidated_sessions: &invalidated,
+        };
+        assert!(finish_effort_setup(&mut ctl, Ok(())));
         assert!(permit.is_some());
         assert!(active.borrow().contains_key("session"));
     }
@@ -241,25 +208,23 @@ mod tests {
         let permits = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
         let (_cancel_sender, mut cancellation) = oneshot::channel();
         let mut permit = Some(permits.acquire_owned().await.unwrap());
-        {
-            let mut ctl = TurnCtl {
-                provider: AcpProvider::ConfiguredLaunchScoped,
-                session_id: "session",
-                cancellation: &mut cancellation,
-                permit: &mut permit,
-                events: &events,
-                active_turns: &active,
-                invalidated_sessions: &invalidated,
-            };
-            assert!(finish_effort_setup(
-                &mut ctl,
-                Err(EffortSetupError::Failed(acp::Error::internal_error()))
-            ));
-            assert!(finish_effort_setup(
-                &mut ctl,
-                Err(EffortSetupError::TimedOut)
-            ));
-        }
+        let mut ctl = TurnCtl {
+            provider: AcpProvider::ConfiguredLaunchScoped,
+            session_id: "session",
+            cancellation: &mut cancellation,
+            permit: &mut permit,
+            events: &events,
+            active_turns: &active,
+            invalidated_sessions: &invalidated,
+        };
+        assert!(finish_effort_setup(
+            &mut ctl,
+            Err(EffortSetupError::Failed(acp::Error::internal_error()))
+        ));
+        assert!(finish_effort_setup(
+            &mut ctl,
+            Err(EffortSetupError::TimedOut)
+        ));
         assert!(permit.is_some());
         assert!(active.borrow().contains_key("session"));
     }
@@ -273,21 +238,19 @@ mod tests {
         let permits = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
         let (_cancel_sender, mut cancellation) = oneshot::channel();
         let mut permit = Some(permits.acquire_owned().await.unwrap());
-        {
-            let mut ctl = TurnCtl {
-                provider: AcpProvider::Grok,
-                session_id: "session",
-                cancellation: &mut cancellation,
-                permit: &mut permit,
-                events: &events,
-                active_turns: &active,
-                invalidated_sessions: &invalidated,
-            };
-            assert!(finish_effort_setup(
-                &mut ctl,
-                Err(EffortSetupError::TimedOut)
-            ));
-        }
+        let mut ctl = TurnCtl {
+            provider: AcpProvider::Grok,
+            session_id: "session",
+            cancellation: &mut cancellation,
+            permit: &mut permit,
+            events: &events,
+            active_turns: &active,
+            invalidated_sessions: &invalidated,
+        };
+        assert!(finish_effort_setup(
+            &mut ctl,
+            Err(EffortSetupError::TimedOut)
+        ));
         assert!(permit.is_some());
         assert!(active.borrow().contains_key("session"));
     }
@@ -357,34 +320,8 @@ mod tests {
 
     #[tokio::test]
     async fn skips_model_setup_when_the_provider_does_not_need_it() {
-        for provider in [AcpProvider::Grok, AcpProvider::ConfiguredLaunchScoped] {
-            let events = std::sync::Arc::new(ThreadEventDispatcher::default());
-            let active = ActiveTurns::default();
-            let invalidated = InvalidatedSessions::default();
-            let permits = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
-            let (_cancel_sender, mut cancellation) = oneshot::channel();
-            let mut permit = Some(permits.acquire_owned().await.unwrap());
-            let mut ctl = TurnCtl {
-                provider,
-                session_id: "session",
-                cancellation: &mut cancellation,
-                permit: &mut permit,
-                events: &events,
-                active_turns: &active,
-                invalidated_sessions: &invalidated,
-            };
-            assert!(
-                apply_effort(
-                    &mut ctl,
-                    &std::rc::Rc::new(disconnected_connection(std::sync::Arc::clone(&events))),
-                    "model",
-                    None,
-                    &acp::SessionId::new("session".to_owned()),
-                )
-                .await
-            );
-            assert!(permit.is_some());
-        }
+        assert_model_setup_skipped(AcpProvider::Grok).await;
+        assert_model_setup_skipped(AcpProvider::ConfiguredLaunchScoped).await;
     }
 
     #[tokio::test]
@@ -461,128 +398,185 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn sends_effort_metadata_after_the_cancellation_channel_closes() {
-        LocalSet::new()
-            .run_until(async {
-                let events = std::sync::Arc::new(ThreadEventDispatcher::default());
-                let active = ActiveTurns::default();
-                let invalidated = InvalidatedSessions::default();
-                let permits = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
-                let (sender, mut cancellation) = oneshot::channel();
-                drop(sender);
-                let mut permit = Some(permits.acquire_owned().await.unwrap());
-                let mut ctl = TurnCtl {
-                    provider: AcpProvider::Copilot,
-                    session_id: "session",
-                    cancellation: &mut cancellation,
-                    permit: &mut permit,
-                    events: &events,
-                    active_turns: &active,
-                    invalidated_sessions: &invalidated,
-                };
-                let (connection, request) = responding_connection(std::sync::Arc::clone(&events));
-
-                assert!(
-                    apply_effort(
-                        &mut ctl,
-                        &std::rc::Rc::new(connection),
-                        "model",
-                        Some("high"),
-                        &acp::SessionId::new("session".to_owned()),
-                    )
-                    .await
-                );
-                let request = request.await.unwrap();
-                assert_eq!(request["method"], "session/set_model");
-                assert_eq!(request["params"]["_meta"]["reasoningEffort"], "high");
-            })
-            .await;
+        LocalSet::new().run_until(check_effort_metadata()).await;
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn configured_prompt_timeout_recycles_the_provider() {
-        LocalSet::new()
-            .run_until(async {
-                let events = std::sync::Arc::new(ThreadEventDispatcher::default());
-                let receiver = events.subscribe("session");
-                let active = ActiveTurns::default();
-                active.borrow_mut().insert("session".to_owned(), None);
-                let invalidated = InvalidatedSessions::default();
-                let permits = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
-                let (_sender, mut cancellation) = oneshot::channel();
-                let mut permit = Some(permits.acquire_owned().await.unwrap());
-                let (connection, _outgoing, _incoming) =
-                    stalled_connection(std::sync::Arc::clone(&events));
-                let ctl = TurnCtl {
-                    provider: AcpProvider::Configured,
-                    session_id: "session",
-                    cancellation: &mut cancellation,
-                    permit: &mut permit,
-                    events: &events,
-                    active_turns: &active,
-                    invalidated_sessions: &invalidated,
-                };
-                let alive = AtomicBool::new(true);
-
-                run_prompt(
-                    ctl,
-                    std::rc::Rc::new(connection),
-                    acp::SessionId::new("session".to_owned()),
-                    "prompt".to_owned(),
-                    Duration::from_millis(1),
-                    &alive,
-                )
-                .await;
-
-                assert!(!alive.load(std::sync::atomic::Ordering::Acquire));
-                assert!(invalidated.borrow().contains("session"));
-                assert!(!active.borrow().contains_key("session"));
-                assert!(permit.is_none());
-                assert_eq!(receiver.recv().await.unwrap()["method"], "error");
-            })
-            .await;
+        LocalSet::new().run_until(check_prompt_timeout()).await;
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn completes_a_prompt_without_a_queued_cancellation() {
-        LocalSet::new()
-            .run_until(async {
-                let events = std::sync::Arc::new(ThreadEventDispatcher::default());
-                let receiver = events.subscribe("session");
-                let active = ActiveTurns::default();
-                active.borrow_mut().insert("session".to_owned(), None);
-                let invalidated = InvalidatedSessions::default();
-                let permits = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
-                let (_sender, mut cancellation) = oneshot::channel();
-                let mut permit = Some(permits.acquire_owned().await.unwrap());
-                let (connection, request) = responding_connection(std::sync::Arc::clone(&events));
-                let ctl = TurnCtl {
-                    provider: AcpProvider::Grok,
-                    session_id: "session",
-                    cancellation: &mut cancellation,
-                    permit: &mut permit,
-                    events: &events,
-                    active_turns: &active,
-                    invalidated_sessions: &invalidated,
-                };
+        LocalSet::new().run_until(check_prompt_completion()).await;
+    }
 
-                run_prompt(
-                    ctl,
-                    std::rc::Rc::new(connection),
-                    acp::SessionId::new("session".to_owned()),
-                    "prompt".to_owned(),
-                    configured_prompt::TIMEOUT,
-                    &AtomicBool::new(true),
-                )
-                .await;
+    async fn assert_setup_cancellation(setup_started: bool) {
+        let events = ThreadEventDispatcher::default();
+        let receiver = events.subscribe("session");
+        let active = ActiveTurns::default();
+        active.borrow_mut().insert("session".to_owned(), None);
+        let invalidated = InvalidatedSessions::default();
+        let permits = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
+        let (_cancel_sender, mut cancel_receiver) = oneshot::channel();
+        let mut permit = Some(permits.acquire_owned().await.unwrap());
+        let (response, result) = oneshot::channel();
+        let mut ctl = TurnCtl {
+            provider: AcpProvider::Grok,
+            session_id: "session",
+            cancellation: &mut cancel_receiver,
+            permit: &mut permit,
+            events: &events,
+            active_turns: &active,
+            invalidated_sessions: &invalidated,
+        };
+        handle_setup_cancellation(
+            &mut ctl,
+            setup_started,
+            settled_setup(),
+            CancelRequest { response },
+        )
+        .await;
+        assert!(result.await.unwrap().is_ok());
+        assert_eq!(
+            receiver.recv().await.unwrap()["params"]["turn"]["status"],
+            "cancelled"
+        );
+        assert!(permit.is_none());
+    }
 
-                assert_eq!(request.await.unwrap()["method"], "session/prompt");
-                assert_eq!(
-                    receiver.recv().await.unwrap()["params"]["turn"]["status"],
-                    "completed"
-                );
-                assert!(permit.is_none());
-            })
-            .await;
+    async fn assert_model_setup_skipped(provider: AcpProvider) {
+        let events = std::sync::Arc::new(ThreadEventDispatcher::default());
+        let active = ActiveTurns::default();
+        let invalidated = InvalidatedSessions::default();
+        let permits = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
+        let (_cancel_sender, mut cancellation) = oneshot::channel();
+        let mut permit = Some(permits.acquire_owned().await.unwrap());
+        let mut ctl = TurnCtl {
+            provider,
+            session_id: "session",
+            cancellation: &mut cancellation,
+            permit: &mut permit,
+            events: &events,
+            active_turns: &active,
+            invalidated_sessions: &invalidated,
+        };
+        assert!(
+            apply_effort(
+                &mut ctl,
+                &std::rc::Rc::new(disconnected_connection(std::sync::Arc::clone(&events))),
+                "model",
+                None,
+                &acp::SessionId::new("session".to_owned()),
+            )
+            .await
+        );
+        assert!(permit.is_some());
+    }
+
+    async fn check_effort_metadata() {
+        let events = std::sync::Arc::new(ThreadEventDispatcher::default());
+        let active = ActiveTurns::default();
+        let invalidated = InvalidatedSessions::default();
+        let permits = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
+        let (sender, mut cancellation) = oneshot::channel();
+        drop(sender);
+        let mut permit = Some(permits.acquire_owned().await.unwrap());
+        let mut ctl = TurnCtl {
+            provider: AcpProvider::Copilot,
+            session_id: "session",
+            cancellation: &mut cancellation,
+            permit: &mut permit,
+            events: &events,
+            active_turns: &active,
+            invalidated_sessions: &invalidated,
+        };
+        let (connection, request) = responding_connection(std::sync::Arc::clone(&events));
+        assert!(
+            apply_effort(
+                &mut ctl,
+                &std::rc::Rc::new(connection),
+                "model",
+                Some("high"),
+                &acp::SessionId::new("session".to_owned()),
+            )
+            .await
+        );
+        let request = request.await.unwrap();
+        assert_eq!(request["method"], "session/set_model");
+        assert_eq!(request["params"]["_meta"]["reasoningEffort"], "high");
+    }
+
+    async fn check_prompt_timeout() {
+        let events = std::sync::Arc::new(ThreadEventDispatcher::default());
+        let receiver = events.subscribe("session");
+        let active = ActiveTurns::default();
+        active.borrow_mut().insert("session".to_owned(), None);
+        let invalidated = InvalidatedSessions::default();
+        let permits = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
+        let (_sender, mut cancellation) = oneshot::channel();
+        let mut permit = Some(permits.acquire_owned().await.unwrap());
+        let (connection, _outgoing, _incoming) = stalled_connection(std::sync::Arc::clone(&events));
+        let ctl = TurnCtl {
+            provider: AcpProvider::Configured,
+            session_id: "session",
+            cancellation: &mut cancellation,
+            permit: &mut permit,
+            events: &events,
+            active_turns: &active,
+            invalidated_sessions: &invalidated,
+        };
+        let alive = AtomicBool::new(true);
+        run_prompt(
+            ctl,
+            std::rc::Rc::new(connection),
+            acp::SessionId::new("session".to_owned()),
+            "prompt".to_owned(),
+            Duration::from_millis(1),
+            &alive,
+        )
+        .await;
+        assert!(!alive.load(std::sync::atomic::Ordering::Acquire));
+        assert!(invalidated.borrow().contains("session"));
+        assert!(!active.borrow().contains_key("session"));
+        assert!(permit.is_none());
+        assert_eq!(receiver.recv().await.unwrap()["method"], "error");
+    }
+
+    async fn check_prompt_completion() {
+        let events = std::sync::Arc::new(ThreadEventDispatcher::default());
+        let receiver = events.subscribe("session");
+        let active = ActiveTurns::default();
+        active.borrow_mut().insert("session".to_owned(), None);
+        let invalidated = InvalidatedSessions::default();
+        let permits = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
+        let (_sender, mut cancellation) = oneshot::channel();
+        let mut permit = Some(permits.acquire_owned().await.unwrap());
+        let (connection, request) = responding_connection(std::sync::Arc::clone(&events));
+        let ctl = TurnCtl {
+            provider: AcpProvider::Grok,
+            session_id: "session",
+            cancellation: &mut cancellation,
+            permit: &mut permit,
+            events: &events,
+            active_turns: &active,
+            invalidated_sessions: &invalidated,
+        };
+        run_prompt(
+            ctl,
+            std::rc::Rc::new(connection),
+            acp::SessionId::new("session".to_owned()),
+            "prompt".to_owned(),
+            configured_prompt::TIMEOUT,
+            &AtomicBool::new(true),
+        )
+        .await;
+        assert_eq!(request.await.unwrap()["method"], "session/prompt");
+        assert_eq!(
+            receiver.recv().await.unwrap()["params"]["turn"]["status"],
+            "completed"
+        );
+        assert!(permit.is_none());
     }
 
     async fn settled_setup() {}

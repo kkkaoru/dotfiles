@@ -4,8 +4,8 @@ use agent_client_protocol::{self as acp, Client as _};
 use serde_json::{json, value::RawValue};
 
 use super::{
-    COMMAND_QUEUE_CAPACITY, DriverCommand, GrokAcp, PreparedTurn, SESSION_QUEUE_CAPACITY,
-    TURN_QUEUE_CAPACITY,
+    COMMAND_QUEUE_CAPACITY, DriverCommand, DriverThread, GrokAcp, PreparedTurn,
+    SESSION_QUEUE_CAPACITY, TURN_QUEUE_CAPACITY,
     client::AcpClient,
     connection::AcpProvider,
     driver::{StartTurnRequest, drive_start_turns, schedule_start_turn},
@@ -144,18 +144,7 @@ async fn client_accepts_extension_notifications() {
 
 #[tokio::test]
 async fn reports_a_closed_driver_for_each_command_response_type() {
-    let (commands, receiver) = tokio::sync::mpsc::channel(1);
-    drop(receiver);
-    let agent = GrokAcp {
-        provider: AcpProvider::Grok,
-        commands,
-        session_permits: Arc::new(tokio::sync::Semaphore::new(SESSION_QUEUE_CAPACITY)),
-        turn_permits: Arc::new(tokio::sync::Semaphore::new(TURN_QUEUE_CAPACITY)),
-        outer_permits: Arc::new(tokio::sync::Semaphore::new(1)),
-        turn_capacity: TURN_QUEUE_CAPACITY,
-        events: Arc::new(ThreadEventDispatcher::default()),
-        alive: Arc::new(AtomicBool::new(false)),
-    };
+    let agent = GrokAcp::stopped_for_test();
 
     assert!(agent.create_session(json!({})).await.is_err());
     assert!(agent.start_turn(json!({})).await.is_err());
@@ -164,18 +153,7 @@ async fn reports_a_closed_driver_for_each_command_response_type() {
 
 #[tokio::test]
 async fn shutdown_is_idempotent_when_the_driver_is_already_unavailable() {
-    let (commands, receiver) = tokio::sync::mpsc::channel(1);
-    drop(receiver);
-    let agent = GrokAcp {
-        provider: AcpProvider::Grok,
-        commands,
-        session_permits: Arc::new(tokio::sync::Semaphore::new(SESSION_QUEUE_CAPACITY)),
-        turn_permits: Arc::new(tokio::sync::Semaphore::new(TURN_QUEUE_CAPACITY)),
-        outer_permits: Arc::new(tokio::sync::Semaphore::new(1)),
-        turn_capacity: TURN_QUEUE_CAPACITY,
-        events: Arc::new(ThreadEventDispatcher::default()),
-        alive: Arc::new(AtomicBool::new(true)),
-    };
+    let agent = GrokAcp::stopped_for_test();
 
     agent.shutdown().await;
     assert!(!agent.is_alive());
@@ -184,7 +162,7 @@ async fn shutdown_is_idempotent_when_the_driver_is_already_unavailable() {
 
 #[tokio::test]
 async fn shutdown_waits_for_an_available_driver_to_acknowledge() {
-    let (commands, mut receiver) = tokio::sync::mpsc::channel(1);
+    let (commands, receiver) = tokio::sync::mpsc::channel(1);
     let agent = GrokAcp {
         provider: AcpProvider::Grok,
         commands,
@@ -194,19 +172,100 @@ async fn shutdown_waits_for_an_available_driver_to_acknowledge() {
         turn_capacity: TURN_QUEUE_CAPACITY,
         events: Arc::new(ThreadEventDispatcher::default()),
         alive: Arc::new(AtomicBool::new(true)),
+        driver: DriverThread::completed(),
     };
-    let driver = tokio::spawn(async move {
-        let Some(DriverCommand::Shutdown { response }) = receiver.recv().await else {
-            panic!("shutdown command expected");
-        };
-        response
-            .send(())
-            .expect("driver receives shutdown acknowledgement");
-    });
+    let driver = tokio::spawn(acknowledge_shutdown(receiver));
 
     agent.shutdown().await;
     driver.await.expect("driver task");
     assert!(!agent.is_alive());
+}
+
+#[tokio::test]
+async fn shutdown_joins_cleanup_after_alive_is_false_for_every_provider_and_cancel_failure() {
+    assert_shutdown_cleanup(AcpProvider::Grok, "cancel-error").await;
+    assert_shutdown_cleanup(AcpProvider::Grok, "cancel-ignored").await;
+    assert_shutdown_cleanup(AcpProvider::Grok, "cancel-timeout").await;
+    assert_shutdown_cleanup(AcpProvider::Configured, "cancel-error").await;
+    assert_shutdown_cleanup(AcpProvider::Configured, "cancel-ignored").await;
+    assert_shutdown_cleanup(AcpProvider::Configured, "cancel-timeout").await;
+    assert_shutdown_cleanup(AcpProvider::Copilot, "cancel-error").await;
+    assert_shutdown_cleanup(AcpProvider::Copilot, "cancel-ignored").await;
+    assert_shutdown_cleanup(AcpProvider::Copilot, "cancel-timeout").await;
+}
+
+async fn acknowledge_shutdown(mut receiver: tokio::sync::mpsc::Receiver<DriverCommand>) {
+    let Some(DriverCommand::Shutdown { response }) = receiver.recv().await else {
+        panic!("shutdown command expected");
+    };
+    response
+        .send(())
+        .expect("driver receives shutdown acknowledgement");
+}
+
+async fn assert_shutdown_cleanup(provider: AcpProvider, failure: &str) {
+    use std::{sync::mpsc as std_mpsc, time::Duration};
+
+    let (commands, mut receiver) = tokio::sync::mpsc::channel(1);
+    let (cleanup_started, cleanup_observed) = tokio::sync::oneshot::channel();
+    let (release_cleanup, cleanup_release) = std_mpsc::channel();
+    let handle = std::thread::spawn(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build test driver runtime");
+        runtime.block_on(async move {
+            acknowledge_shutdown_cleanup(&mut receiver, cleanup_started, cleanup_release).await;
+        });
+    });
+    let agent = Arc::new(GrokAcp {
+        provider,
+        commands,
+        session_permits: Arc::new(tokio::sync::Semaphore::new(SESSION_QUEUE_CAPACITY)),
+        turn_permits: Arc::new(tokio::sync::Semaphore::new(TURN_QUEUE_CAPACITY)),
+        outer_permits: Arc::new(tokio::sync::Semaphore::new(1)),
+        turn_capacity: TURN_QUEUE_CAPACITY,
+        events: Arc::new(ThreadEventDispatcher::default()),
+        alive: Arc::new(AtomicBool::new(false)),
+        driver: DriverThread::new(handle),
+    });
+    let shutting_down = Arc::clone(&agent);
+    let mut shutdown = tokio::spawn(async move { shutting_down.shutdown().await });
+    cleanup_observed
+        .await
+        .unwrap_or_else(|_| panic!("{provider:?} {failure}: cleanup did not start"));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(25), &mut shutdown)
+            .await
+            .is_err(),
+        "{provider:?} {failure}: shutdown returned before cleanup completed"
+    );
+    release_cleanup
+        .send(())
+        .unwrap_or_else(|_| panic!("{provider:?} {failure}: release cleanup"));
+    tokio::time::timeout(Duration::from_secs(1), &mut shutdown)
+        .await
+        .unwrap_or_else(|_| panic!("{provider:?} {failure}: shutdown did not finish"))
+        .unwrap_or_else(|error| panic!("{provider:?} {failure}: {error}"));
+    assert!(agent.driver.is_joined(), "{provider:?} {failure}");
+    agent.shutdown().await;
+}
+
+async fn acknowledge_shutdown_cleanup(
+    receiver: &mut tokio::sync::mpsc::Receiver<DriverCommand>,
+    cleanup_started: tokio::sync::oneshot::Sender<()>,
+    cleanup_release: std::sync::mpsc::Receiver<()>,
+) {
+    let Some(DriverCommand::Shutdown { response }) = receiver.recv().await else {
+        panic!("shutdown command expected");
+    };
+    cleanup_started
+        .send(())
+        .expect("observe cleanup start before release");
+    cleanup_release
+        .recv()
+        .expect("release simulated process wait");
+    response.send(()).expect("acknowledge completed cleanup");
 }
 
 #[tokio::test]
@@ -469,27 +528,29 @@ async fn turn_worker_runs_local_tasks_concurrently_and_cleans_them_up() {
 #[tokio::test(flavor = "current_thread")]
 async fn turn_worker_logs_a_panicking_task_and_still_shuts_down() {
     let local = tokio::task::LocalSet::new();
-    local
-        .run_until(async {
-            let permits = Arc::new(tokio::sync::Semaphore::new(TURN_QUEUE_CAPACITY));
-            let (turns, receiver) = tokio::sync::mpsc::channel(1);
-            let worker = tokio::task::spawn_local(drive_turn_tasks(receiver, |_turn| async {
-                panic!("fixture turn panic");
-            }));
-            turns
-                .send(PreparedTurn {
-                    session_id: "panic".to_owned(),
-                    prompt: String::new(),
-                    effort: None,
-                    cancellation: pending_cancellation(),
-                    _permit: permits.acquire_owned().await.unwrap(),
-                })
-                .await
-                .unwrap();
-            drop(turns);
-            worker.await.unwrap();
+    local.run_until(check_panicking_turn_worker()).await;
+}
+
+async fn check_panicking_turn_worker() {
+    let permits = Arc::new(tokio::sync::Semaphore::new(TURN_QUEUE_CAPACITY));
+    let (turns, receiver) = tokio::sync::mpsc::channel(1);
+    let worker = tokio::task::spawn_local(drive_turn_tasks(receiver, panic_turn));
+    turns
+        .send(PreparedTurn {
+            session_id: "panic".to_owned(),
+            prompt: String::new(),
+            effort: None,
+            cancellation: pending_cancellation(),
+            _permit: permits.acquire_owned().await.unwrap(),
         })
-        .await;
+        .await
+        .unwrap();
+    drop(turns);
+    worker.await.unwrap();
+}
+
+async fn panic_turn(_turn: PreparedTurn) {
+    panic!("fixture turn panic");
 }
 
 async fn check_concurrent_turn_worker() {

@@ -154,11 +154,7 @@ async fn run_worker(
             Some("item/completed") if is_web_search(&event) => {
                 collect_item_results(&event, &mut results);
             }
-            Some("item/agentMessage/delta") => {
-                if let Some(delta) = event.pointer("/params/delta").and_then(Value::as_str) {
-                    answer.push_str(delta);
-                }
-            }
+            Some("item/agentMessage/delta") => append_answer_delta(&event, &mut answer),
             Some("turn/completed") | Some("error") => break,
             _ => {}
         }
@@ -174,6 +170,12 @@ async fn run_worker(
         results,
         search_count,
     })
+}
+
+fn append_answer_delta(event: &Value, answer: &mut String) {
+    if let Some(delta) = event.pointer("/params/delta").and_then(Value::as_str) {
+        answer.push_str(delta);
+    }
 }
 
 fn is_web_search(event: &Value) -> bool {

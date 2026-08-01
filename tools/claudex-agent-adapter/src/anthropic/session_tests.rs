@@ -1,3 +1,5 @@
+#![allow(clippy::excessive_nesting)]
+
 use std::{
     collections::HashMap,
     os::unix::fs::PermissionsExt,
@@ -83,7 +85,6 @@ fn session_with_slot(
         transcript: Mutex::new(transcript),
         pending_tools: Mutex::new(HashMap::new()),
         consumed_tool_ids: Mutex::new(std::collections::HashSet::new()),
-        internal_tools: HashMap::new(),
         external_tool_names: HashMap::new(),
         client_user_id: None,
         gate: Arc::new(Mutex::new(())),
@@ -137,15 +138,7 @@ fn restore_environment(name: &str, previous: Option<std::ffi::OsString>) {
 async fn mock_trace(path: &std::path::Path, expected: usize) -> Vec<Value> {
     tokio::time::timeout(Duration::from_secs(1), async {
         loop {
-            let trace = std::fs::read_to_string(path)
-                .ok()
-                .map(|trace| {
-                    trace
-                        .lines()
-                        .map(|line| serde_json::from_str(line).expect("mock trace JSON"))
-                        .collect::<Vec<Value>>()
-                })
-                .unwrap_or_default();
+            let trace = read_mock_trace(path);
             if trace.len() >= expected {
                 return trace;
             }
@@ -154,6 +147,27 @@ async fn mock_trace(path: &std::path::Path, expected: usize) -> Vec<Value> {
     })
     .await
     .expect("mock trace timeout")
+}
+
+fn read_mock_trace(path: &std::path::Path) -> Vec<Value> {
+    std::fs::read_to_string(path)
+        .ok()
+        .map(|trace| {
+            trace
+                .lines()
+                .map(|line| serde_json::from_str(line).expect("mock trace JSON"))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+async fn wait_for_app_stop(app: &AppServer) {
+    for _ in 0..10 {
+        if !app.is_alive() {
+            return;
+        }
+        tokio::task::yield_now().await;
+    }
 }
 
 fn enable_warning_logs() {
@@ -167,7 +181,7 @@ fn enable_warning_logs() {
 }
 
 #[test]
-fn configures_external_and_internal_tools_without_duplicates() {
+fn exposes_only_received_public_tools_without_internal_inference() {
     let tools = vec![
         json!({"name":"Read","description":"read","input_schema":{"type":"object"}}),
         json!({"description":"missing name"}),
@@ -177,10 +191,9 @@ fn configures_external_and_internal_tools_without_duplicates() {
         Some("advisor-model"),
         Some("collaborator-model"),
     );
-    assert_eq!(configured.0.len(), 3);
+    assert_eq!(configured.0.len(), 1);
     assert_eq!(configured.1["cc_Read_0"], "Read");
-    assert_eq!(configured.2["advisor"], "advisor-model");
-    assert_eq!(configured.2["claude_collaborator"], "collaborator-model");
+    assert!(configured.2.is_empty());
 
     let explicit = vec![json!({
         "name":"claude_collaborator", "input_schema":{"type":"object"}
@@ -190,13 +203,7 @@ fn configures_external_and_internal_tools_without_duplicates() {
         None,
         Some("ignored"),
     );
-    assert_eq!(configured.0.len(), 11);
-    for expected in ["Bash", "Read", "Write", "Edit", "Agent", "Task"] {
-        assert!(
-            configured.1.values().any(|name| name == expected),
-            "missing resumed capability {expected}"
-        );
-    }
+    assert_eq!(configured.0.len(), 1);
     assert!(
         configured
             .1
@@ -207,28 +214,88 @@ fn configures_external_and_internal_tools_without_duplicates() {
 }
 
 #[test]
-fn configures_a_bounded_batch_tool_for_parallel_agents() {
+fn does_not_synthesize_an_unrequested_batch_tool() {
     let tools = vec![json!({
         "name":"Agent", "description":"delegate",
         "input_schema":{"type":"object","properties":{"prompt":{"type":"string"}}}
     })];
     let configured = tool_configuration(&request(Value::Null, tools), None, None);
-    assert_eq!(configured.0.len(), 2);
-    let batch = configured
-        .0
-        .iter()
-        .find(|tool| {
-            tool["description"].as_str().is_some_and(|text| {
-                text.contains(&format!(
-                    "at least {}",
-                    crate::anthropic::agent_batch::minimum_batch_size()
-                ))
-            })
-        })
-        .expect("parallel Agent batch tool");
-    assert_eq!(batch["inputSchema"]["properties"]["tasks"]["minItems"], 3);
-    assert_eq!(batch["inputSchema"]["properties"]["tasks"]["maxItems"], 40);
-    assert!(configured.1.values().any(|name| name.ends_with(":Agent")));
+    assert_eq!(configured.0.len(), 1);
+    assert_eq!(configured.1.len(), 1);
+    assert!(configured.1.values().any(|name| name == "Agent"));
+    assert!(!configured.1.values().any(|name| name.ends_with(":Agent")));
+}
+
+#[test]
+fn agent_and_task_input_schemas_are_exactly_the_received_schemas() {
+    let agent_schema = json!({
+        "type":"object",
+        "properties":{
+            "prompt":{"type":"string","minLength":3,"description":"native prompt"},
+            "subagent_type":{"type":"string","enum":["general-purpose","Explore"]},
+            "run_in_background":{"type":"boolean","const":true}
+        },
+        "required":["prompt","subagent_type"],
+        "additionalProperties":false,
+        "x-native-contract":{"version":220}
+    });
+    let task_schema = json!({
+        "oneOf":[
+            {"type":"object","required":["description"]},
+            {"type":"object","required":["prompt"]}
+        ]
+    });
+    let request = request(
+        json!(r#"{"providers":{},"selected_agents":["routed-worker"]}"#),
+        vec![
+            json!({"name":"Agent","description":"native Agent","input_schema":agent_schema}),
+            json!({"name":"Task","description":"native Task","input_schema":task_schema}),
+        ],
+    );
+    let (tools, names, internal) = tool_configuration(
+        &request,
+        Some("ignored-advisor"),
+        Some("ignored-collaborator"),
+    );
+
+    assert_eq!(tools.len(), 2);
+    assert!(internal.is_empty());
+    assert!(
+        !names
+            .values()
+            .any(|name| name.contains(":Agent") || name.contains(":Task"))
+    );
+    let forwarded = |original: &str| {
+        let dynamic = names
+            .iter()
+            .find_map(|(dynamic, name)| (name == original).then_some(dynamic))
+            .expect("received tool mapping");
+        &tools
+            .iter()
+            .find(|tool| tool["name"].as_str() == Some(dynamic.as_str()))
+            .expect("forwarded tool")["inputSchema"]
+    };
+    assert_eq!(forwarded("Agent"), &agent_schema);
+    assert_eq!(forwarded("Task"), &task_schema);
+}
+
+#[test]
+fn received_advisor_schema_is_public_instead_of_internal_execution() {
+    let schema = json!({
+        "type":"object",
+        "properties":{"question":{"type":"string"}},
+        "required":["question"],
+        "additionalProperties":false
+    });
+    let request = request(
+        Value::Null,
+        vec![json!({"name":"advisor","input_schema":schema})],
+    );
+    let (tools, names, internal) = tool_configuration(&request, Some("hidden-model"), None);
+    assert_eq!(tools.len(), 1);
+    assert!(names.values().any(|name| name == "advisor"));
+    assert!(internal.is_empty());
+    assert_eq!(tools[0]["inputSchema"], schema);
 }
 
 #[test]
@@ -255,7 +322,7 @@ fn documents_idempotent_task_stop_semantics_in_the_dynamic_schema() {
 }
 
 #[test]
-fn main_and_worker_sessions_keep_full_claude_code_tool_sets() {
+fn main_and_worker_sessions_preserve_received_tool_schemas_exactly() {
     let routing = r#"Claudex routing for this turn: {"providers":{},"selected_agents":["claudex-deepseek","claudex-ollama-glm-5-2"],"selected_workers":[{"agent":"claudex-deepseek","model":"deepseek-model"}]} mandatory policy"#;
     let tools = vec![
         json!({"name":"Read","input_schema":{"type":"object"}}),
@@ -272,7 +339,7 @@ fn main_and_worker_sessions_keep_full_claude_code_tool_sets() {
     );
     let exposed = main.1.values().cloned().collect::<Vec<_>>();
     assert!(exposed.iter().any(|name| name == "Agent"));
-    assert!(exposed.iter().any(|name| name.ends_with(":Agent")));
+    assert!(!exposed.iter().any(|name| name.ends_with(":Agent")));
     assert!(exposed.iter().any(|name| name == "SendMessage"));
     assert!(exposed.iter().any(|name| name == "TaskGet"));
     for tool_name in ["Read", "Bash", "Edit"] {
@@ -288,14 +355,8 @@ fn main_and_worker_sessions_keep_full_claude_code_tool_sets() {
         })
         .expect("routed Agent tool");
     assert_eq!(
-        agent["inputSchema"]["properties"]["subagent_type"]["enum"],
-        json!(["claudex-deepseek", "claudex-ollama-glm-5-2"])
-    );
-    assert!(
-        agent["inputSchema"]["required"]
-            .as_array()
-            .expect("Agent required fields")
-            .contains(&json!("claudex_model"))
+        agent["inputSchema"],
+        json!({"type":"object","properties":{"subagent_type":{"type":"string"},"prompt":{"type":"string"}}})
     );
 
     let worker = tool_configuration(
@@ -311,24 +372,14 @@ fn main_and_worker_sessions_keep_full_claude_code_tool_sets() {
         .iter()
         .filter_map(|tool| {
             tool.pointer("/inputSchema/properties/subagent_type/enum")
-                .or_else(|| {
-                    tool.pointer(
-                        "/inputSchema/properties/tasks/items/properties/subagent_type/enum",
-                    )
-                })
+                .or_else(|| tool.pointer("/inputSchema/properties/subagent_type"))
         })
         .collect::<Vec<_>>();
-    assert_eq!(nested_agent_schemas.len(), 2);
-    for schema in nested_agent_schemas {
-        assert_eq!(
-            schema,
-            &json!(["claudex-deepseek", "claudex-ollama-glm-5-2"])
-        );
-    }
+    assert_eq!(nested_agent_schemas, vec![&json!({"type":"string"})]);
 }
 
 #[test]
-fn constrains_agent_schemas_to_the_latest_routing_context() {
+fn routing_context_never_mutates_received_agent_schema() {
     let tools = vec![json!({
         "name":"Agent",
         "input_schema":{"type":"object","properties":{"subagent_type":{"type":"string"}}}
@@ -339,17 +390,15 @@ fn constrains_agent_schemas_to_the_latest_routing_context() {
         json!({"role":"user","content":r#"{"providers":{},"selected_agents":["claudex-current"]}"#}),
     ];
     let configured = tool_configuration(&request, None, None);
-    assert!(configured.0.iter().all(|tool| {
-        tool.pointer("/inputSchema/properties/subagent_type/enum")
-            .or_else(|| {
-                tool.pointer("/inputSchema/properties/tasks/items/properties/subagent_type/enum")
-            })
-            == Some(&json!(["claudex-current"]))
-    }));
+    assert_eq!(configured.0.len(), 1);
+    assert_eq!(
+        configured.0[0]["inputSchema"],
+        json!({"type":"object","properties":{"subagent_type":{"type":"string"}}})
+    );
 }
 
 #[test]
-fn preserves_claude_code_agent_types_when_adding_routed_workers() {
+fn preserves_claude_code_agent_types_without_adding_routed_workers() {
     let standard_types = json!(["general-purpose", "Explore"]);
     let tools = ["Agent", "Task"]
         .into_iter()
@@ -371,20 +420,18 @@ fn preserves_claude_code_agent_types_when_adding_routed_workers() {
         None,
         None,
     );
-    let expected = json!(["general-purpose", "Explore", "claudex-worker"]);
+    let expected = json!(["general-purpose", "Explore"]);
+    assert_eq!(configured.0.len(), 2);
     for tool in &configured.0 {
         let schema = tool
             .pointer("/inputSchema/properties/subagent_type/enum")
-            .or_else(|| {
-                tool.pointer("/inputSchema/properties/tasks/items/properties/subagent_type/enum")
-            })
             .expect("Agent or Task schema");
         assert_eq!(schema, &expected);
     }
 }
 
 #[test]
-fn exposes_explicit_native_haiku_agent_definitions_to_agent_tools() {
+fn model_names_in_prompt_do_not_expand_agent_definitions() {
     let tools = vec![json!({
         "name":"Agent",
         "input_schema":{"type":"object","properties":{
@@ -404,7 +451,7 @@ fn exposes_explicit_native_haiku_agent_definitions_to_agent_tools() {
         .iter()
         .find_map(|tool| tool.pointer("/inputSchema/properties/subagent_type/enum"))
         .expect("Agent schema");
-    assert_eq!(schema, &json!(["general-purpose", "claudex-haiku-search"]));
+    assert_eq!(schema, &json!(["general-purpose"]));
 }
 
 #[test]
@@ -418,14 +465,14 @@ fn tolerates_a_routed_agent_schema_without_subagent_type() {
     );
     request.messages = vec![json!({"role":"user","content":"delegate"})];
     let configured = tool_configuration(&request, None, None);
-    assert_eq!(configured.0.len(), 2);
+    assert_eq!(configured.0.len(), 1);
 
     request.messages = vec![json!({
         "role":"user",
         "content":"Use model-x for this worker"
     })];
     let configured = tool_configuration(&request, None, None);
-    assert_eq!(configured.0.len(), 2);
+    assert_eq!(configured.0.len(), 1);
 
     request.system = json!(
         r#"{"providers":{"vendor":{"disabled":false,"agent":"worker","model":"model-x"}},"selected_agents":["worker"]}"#
@@ -439,16 +486,14 @@ fn tolerates_a_routed_agent_schema_without_subagent_type() {
         "content":"Use model-x for this worker"
     })];
     let configured = tool_configuration(&request, None, None);
-    let agent_schema = configured
-        .0
-        .iter()
-        .find_map(|tool| tool.pointer("/inputSchema/properties/subagent_type/enum"))
-        .expect("routed Agent schema");
-    assert_eq!(agent_schema, &json!(["worker"]));
+    assert_eq!(
+        configured.0[0]["inputSchema"],
+        json!({"type":"object","properties":{"subagent_type":{"type":"string"}}})
+    );
 }
 
 #[test]
-fn adds_explicit_non_denied_provider_agents_to_the_routed_schema() {
+fn explicit_provider_models_do_not_mutate_agent_schema() {
     let routing = r#"Claudex routing for this turn: {"providers":{"vendor":{"available":false,"disabled":false,"agent":"claudex-vendor","model":"vendor-default","model_prefixes":[]},"codex":{"available":false,"disabled":false,"agent":"claudex-codex","model":"gpt-default","model_prefixes":["gpt-"]},"special":{"available":false,"disabled":false,"agent":"claudex-special","model":"vendor@beta+1","model_prefixes":[]},"summary":{"available":false,"disabled":false,"agent":"claudex-summary-only","model":"summary-only","model_prefixes":[]},"grok":{"available":false,"disabled":true,"agent":"claudex-grok","model":"grok-denied","model_prefixes":["grok-"]},"qwen":{"available":false,"disabled":false,"agent":"claudex-qwen","model":"qwen-denied","model_prefixes":["qwen-"]}},"selected_agents":["claudex-selected","claudex-qwen"],"selected_workers":[{"agent":"claudex-qwen","model":"qwen-denied"}],"disabled_subagent_models":["qwen-denied"]} mandatory policy"#;
     let tools = vec![json!({
         "name":"Agent",
@@ -466,36 +511,14 @@ fn adds_explicit_non_denied_provider_agents_to_the_routed_schema() {
         .insert("qwen-denied".to_owned());
 
     let configured = tool_configuration(&request, None, None);
-    let expected = json!([
-        "claudex-selected",
-        "claudex-codex",
-        "claudex-special",
-        "claudex-vendor"
-    ]);
-    let ordinary = configured
-        .0
-        .iter()
-        .find_map(|tool| tool.pointer("/inputSchema/properties/subagent_type/enum"))
-        .expect("ordinary routed agent enum");
-    let batch = configured
-        .0
-        .iter()
-        .find_map(|tool| {
-            tool.pointer("/inputSchema/properties/tasks/items/properties/subagent_type/enum")
-        })
-        .expect("batch routed agent enum");
-
-    assert_eq!(ordinary, &expected);
-    assert_eq!(batch, &expected);
-    assert!(
-        ordinary
-            .as_array()
-            .expect("routed agent candidates")
-            .iter()
-            .all(|candidate| !matches!(
-                candidate.as_str(),
-                Some("claudex-grok" | "claudex-qwen" | "claudex-summary-only")
-            ))
+    assert_eq!(configured.0.len(), 1);
+    assert_eq!(configured.1.len(), 1);
+    assert!(configured.1.values().any(|name| name == "Agent"));
+    assert_eq!(
+        configured.0[0]["inputSchema"],
+        json!({"type":"object","properties":{
+            "subagent_type":{"type":"string"},"prompt":{"type":"string"}
+        }})
     );
 }
 
@@ -525,7 +548,10 @@ fn enables_native_search_without_exposing_a_duplicate_dynamic_tool() {
     }));
     assert!(!names.values().any(|name| *name == "WebSearch"));
     let params = thread_start_params_for_mode(
-        &request(Value::Null, Vec::new()),
+        &request(
+            Value::Null,
+            vec![json!({"name":"WebSearch","input_schema":{"type":"object"}})],
+        ),
         "gpt-native",
         Vec::new(),
         WebSearchMode::CodexNative,
@@ -535,7 +561,7 @@ fn enables_native_search_without_exposing_a_duplicate_dynamic_tool() {
 }
 
 #[test]
-fn main_session_gets_fallback_agent_tools_when_claude_omits_the_schemas() {
+fn main_session_does_not_synthesize_agent_tools() {
     let request = request(
         json!("main session"),
         vec![json!({
@@ -545,73 +571,80 @@ fn main_session_gets_fallback_agent_tools_when_claude_omits_the_schemas() {
     );
     let (_, names, _) =
         tool_configuration_for_mode(&request, None, None, WebSearchMode::CodexNative);
-    assert!(names.values().any(|name| *name == "Agent"));
-    assert!(names.values().any(|name| *name == "Task"));
+    assert_eq!(
+        names.values().collect::<Vec<_>>(),
+        vec![&"WebFetch".to_owned()]
+    );
 }
 
 #[test]
-fn resumed_codex_request_rehydrates_file_and_delegation_tools() {
+fn resumed_codex_request_does_not_infer_tools_from_history() {
     let mut request = request(json!("resumed main session"), Vec::new());
     request.messages = vec![json!({
         "role": "assistant",
         "content": [{"type": "tool_use", "name": "Bash", "input": {}}]
     })];
     let (_, names, _) = tool_configuration(&request, None, None);
-    for expected in ["Bash", "Read", "Write", "Edit", "Agent", "Task"] {
-        assert!(
-            names.values().any(|name| name == expected),
-            "missing {expected}"
-        );
-    }
+    assert!(names.is_empty());
 }
 
 #[test]
-fn failed_resume_without_tool_history_starts_with_full_dynamic_capabilities() {
+fn failed_resume_without_tool_history_stays_toolless() {
     let request = request(json!("resumed main session"), Vec::new());
     let (dynamic_tools, external_names, _) = tool_configuration(&request, None, None);
-    for expected in ["Bash", "Read", "Write", "Edit", "Agent", "Task"] {
-        assert!(
-            external_names.values().any(|name| name == expected),
-            "missing recovered capability {expected}"
-        );
-        assert!(
-            dynamic_tools.iter().any(|tool| {
-                tool.get("name")
-                    .and_then(Value::as_str)
-                    .and_then(|name| external_names.get(name))
-                    .is_some_and(|name| name == expected)
-            }),
-            "missing dynamic schema for recovered capability {expected}"
-        );
-    }
+    assert!(external_names.is_empty());
+    assert!(dynamic_tools.is_empty());
 }
 
 #[test]
-fn fallback_agent_tools_require_exact_model_and_expose_effort_choices() {
-    let request = request(json!("main session"), Vec::new());
+fn received_agent_tool_is_forwarded_exactly_without_adding_task_or_routing_fields() {
+    let request = request(
+        json!("main session"),
+        vec![json!({
+            "name":"Agent",
+            "description":"native agent",
+            "input_schema":{
+                "type":"object",
+                "properties":{"prompt":{"type":"string"}},
+                "required":["prompt"],
+                "additionalProperties":false
+            }
+        })],
+    );
     let (tools, names, _) = tool_configuration(&request, None, None);
-    for original in ["Agent", "Task"] {
-        let dynamic_name = names
-            .iter()
-            .find_map(|(dynamic, name)| (name == original).then_some(dynamic))
-            .expect("fallback Agent/Task tool");
-        let schema = tools
-            .iter()
-            .find(|tool| tool["name"].as_str() == Some(dynamic_name.as_str()))
-            .expect("dynamic fallback schema");
-        let required = schema["inputSchema"]["required"]
-            .as_array()
-            .expect("fallback required fields");
-        assert!(required.iter().any(|field| field == "claudex_model"));
-        assert_eq!(
-            schema["inputSchema"]["properties"]["claudex_effort"]["enum"],
-            json!(["low", "medium", "high", "xhigh", "max"])
-        );
-    }
+    assert!(!names.values().any(|name| name == "Task"));
+    let dynamic_name = names
+        .iter()
+        .find_map(|(dynamic, name)| (name == "Agent").then_some(dynamic))
+        .expect("received Agent tool");
+    let schema = tools
+        .iter()
+        .find(|tool| tool["name"].as_str() == Some(dynamic_name.as_str()))
+        .expect("dynamic Agent schema");
+    assert_eq!(
+        schema["inputSchema"],
+        json!({
+            "type":"object",
+            "properties":{"prompt":{"type":"string"}},
+            "required":["prompt"],
+            "additionalProperties":false
+        })
+    );
+    assert!(
+        schema["inputSchema"]
+            .pointer("/properties/claudex_model")
+            .is_none()
+    );
+    assert!(
+        schema["inputSchema"]
+            .pointer("/properties/claudex_effort")
+            .is_none()
+    );
+    assert_eq!(tools.len(), 1);
 }
 
 #[test]
-fn search_worker_keeps_only_live_web_tools_for_provider_context() {
+fn search_worker_preserves_every_received_capability() {
     let mut request = request(
         json!("cc_is_subagent=true; Dedicated live-web retrieval worker: claudex-haiku-search"),
         vec![
@@ -627,15 +660,11 @@ fn search_worker_keeps_only_live_web_tools_for_provider_context() {
     })];
     let (tools, names, _) =
         tool_configuration_for_mode(&request, None, None, WebSearchMode::CodexNative);
-    assert_eq!(
-        tools.len(),
-        1,
-        "only WebFetch remains dynamic for Codex-native search"
-    );
-    assert_eq!(
-        names.values().collect::<Vec<_>>(),
-        vec![&"WebFetch".to_owned()]
-    );
+    assert_eq!(tools.len(), 3, "Read, Agent, and WebFetch remain");
+    for expected in ["Read", "Agent", "WebFetch"] {
+        assert!(names.values().any(|name| name == expected));
+    }
+    assert!(!names.values().any(|name| name.ends_with(":Agent")));
 }
 
 fn assert_empty_thread_configuration() {
@@ -667,8 +696,8 @@ fn assert_developer_guidance(developer: &str) {
         "unless they are explicitly active for the current task",
         "Omit the SubAgent name field for ordinary SubAgents",
         "only when the active user explicitly supplies that teammate name",
-        "every Agent or Task launch, including a nested launch",
-        "exact claudex_model and claudex_effort",
+        "Use only fields present in the exact Agent or Task schema supplied by Claude Code",
+        "never invent adapter-only claudex_model or claudex_effort",
         "never use generic claude or blindly inherit",
         "main session must control parallel distribution across multiple SubAgents",
         "Avoid serial heavy processing by one worker",
@@ -1009,42 +1038,6 @@ async fn toolless_main_continuation_reuses_the_session_with_bash_schema() {
     );
 }
 
-#[test]
-fn stale_resume_session_without_dynamic_capabilities_is_not_reused() {
-    let request = request(json!("main system"), Vec::new());
-    let stale = session(
-        "signature",
-        vec![json!({
-            "role": "user",
-            "content": "continue"
-        })],
-    );
-    assert!(!Bridge::session_has_recovered_capability(&stale, &request));
-
-    let mut capable = session("signature", Vec::new());
-    let capable_session = Arc::get_mut(&mut capable).expect("capable session is not yet shared");
-    for (index, name) in ["Bash", "Read", "Write", "Edit", "Agent", "Task"]
-        .into_iter()
-        .enumerate()
-    {
-        capable_session
-            .external_tool_names
-            .insert(format!("cc_{name}_{index}"), name.to_owned());
-    }
-    assert!(Bridge::session_has_recovered_capability(&capable, &request));
-}
-
-#[test]
-fn partially_recovered_resume_session_remains_usable() {
-    let request = request(json!("main system"), Vec::new());
-    let mut partial = session("signature", Vec::new());
-    Arc::get_mut(&mut partial)
-        .expect("partial session is not yet shared")
-        .external_tool_names
-        .insert("cc_Bash_0".to_owned(), "Bash".to_owned());
-    assert!(Bridge::session_has_recovered_capability(&partial, &request));
-}
-
 #[tokio::test]
 async fn toolless_subagent_continuation_reuses_the_session_with_bash_schema() {
     let bridge = Bridge::new_with_backend(AgentBackend::spawn_routes(&[]), "main".to_owned());
@@ -1316,7 +1309,7 @@ async fn prepare_turn_recovers_transcript_owned_tool_results_after_session_loss(
         "#!/bin/sh\nread initialize\nprintf '%s\\n' '{\"id\":1,\"result\":{}}'\nread initialized\nread start\nprintf '%s\\n' '{\"id\":2,\"result\":{\"thread\":{\"id\":\"recovered\"}}}'\nwhile read line; do :; done\n",
     )
     .await;
-    let bridge = Bridge::new_with_backend(AgentBackend::codex(app), "main".to_owned());
+    let bridge = Bridge::new_with_backend(AgentBackend::codex(Arc::clone(&app)), "main".to_owned());
     let mut request = request(Value::Null, Vec::new());
     request.messages = vec![
         json!({
@@ -1445,12 +1438,13 @@ async fn recovers_a_context_limited_turn_with_the_previous_signature() {
         "#!/bin/sh\nread initialize\nprintf '%s\\n' '{\"id\":1,\"result\":{}}'\nread initialized\nread start\nprintf '%s\\n' '{\"id\":2,\"result\":{\"thread\":{\"id\":\"replacement\"}}}'\nwhile read line; do :; done\n",
     )
     .await;
-    let bridge = Bridge::new_with_backend(AgentBackend::codex(app), "main".to_owned());
+    let bridge = Bridge::new_with_backend(AgentBackend::codex(Arc::clone(&app)), "main".to_owned());
     let previous = session("shared-signature", Vec::new());
     bridge.sessions.lock().await.push(Arc::clone(&previous));
     let gate = Arc::clone(&previous.gate).lock_owned().await;
     let request = request(Value::Null, Vec::new());
-    let (selected, extras) = bridge
+    let initial_events = Arc::new(app.subscribe_thread(&previous.thread_id));
+    let (selected, extras, events) = bridge
         .recover_turn_start(
             SelectedSession {
                 session: Arc::clone(&previous),
@@ -1459,6 +1453,7 @@ async fn recovers_a_context_limited_turn_with_the_previous_signature() {
                 gate,
             },
             Vec::new(),
+            initial_events,
             Err(anyhow::anyhow!("context window exceeded")),
             super::session_turn::StartContextRetry {
                 request: &request,
@@ -1476,6 +1471,14 @@ async fn recovers_a_context_limited_turn_with_the_previous_signature() {
     assert_eq!(selected.session.signature.as_ref(), "shared-signature");
     assert_eq!(selected.existing_len, 0);
     assert!(!selected.recovered);
+    app.dispatch_test_event(json!({
+        "method":"item/tool/call",
+        "params":{"threadId":"replacement","callId":"replacement-tool"}
+    }));
+    assert_eq!(
+        events.recv().await.unwrap()["params"]["callId"],
+        "replacement-tool"
+    );
     let sessions = bridge.sessions.lock().await;
     assert_eq!(sessions.len(), 1);
     assert!(!Arc::ptr_eq(&sessions[0], &previous));
@@ -1549,12 +1552,7 @@ async fn removes_the_selected_session_when_turn_start_fails_immediately() {
     )
     .await;
     assert!(app.request("force/exit", json!({})).await.is_err());
-    for _ in 0..10 {
-        if !app.is_alive() {
-            break;
-        }
-        tokio::task::yield_now().await;
-    }
+    wait_for_app_stop(&app).await;
     assert!(!app.is_alive(), "mock app-server should be stopped");
 
     let bridge = Bridge::new_with_backend(AgentBackend::codex(app), "main".to_owned());

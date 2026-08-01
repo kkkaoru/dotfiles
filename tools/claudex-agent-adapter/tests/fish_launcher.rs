@@ -11,6 +11,7 @@ fn fish_launcher_uses_the_shared_provider_config() {
     assert_explicit_override(&function, &home);
     assert_explicit_agent_is_preserved(&function, &home);
     assert_routing_marker_is_scoped_to_claudex(&function, &home);
+    assert_user_local_adapter_forwards_hard_timeout(&function, &home);
     assert_local_defaults(&function, &home);
 }
 
@@ -125,7 +126,7 @@ fn shared_provider_fixture() -> tempfile::TempDir {
     let adapter = home.path().join(".local/bin/claudex-agent-adapter");
     fs::write(
         &adapter,
-        "#!/bin/sh\nprintf 'CLAUDEX_ACTIVE=%s\\n' \"${CLAUDEX_ACTIVE:-}\"\nprintf 'CLAUDEX_MAIN_MODEL=%s\\n' \"${CLAUDEX_MAIN_MODEL:-}\"\nprintf 'CLAUDEX_MAIN_MODEL_KNOWN=%s\\n' \"${CLAUDEX_MAIN_MODEL_KNOWN:-}\"\nprintf 'CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=%s\\n' \"${CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY:-}\"\nprintf 'CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS=%s\\n' \"${CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS:-}\"\nprintf 'CLAUDE_CODE_ALWAYS_ENABLE_EFFORT=%s\\n' \"${CLAUDE_CODE_ALWAYS_ENABLE_EFFORT:-}\"\nprintf '%s\\n' \"$@\"\n",
+        "#!/bin/sh\nprintf 'CLAUDEX_ACTIVE=%s\\n' \"${CLAUDEX_ACTIVE:-}\"\nprintf 'CLAUDEX_MAIN_MODEL=%s\\n' \"${CLAUDEX_MAIN_MODEL:-}\"\nprintf 'CLAUDEX_MAIN_MODEL_KNOWN=%s\\n' \"${CLAUDEX_MAIN_MODEL_KNOWN:-}\"\nprintf 'CLAUDEX_SUBAGENT_HARD_TIMEOUT_SECONDS=%s\\n' \"${CLAUDEX_SUBAGENT_HARD_TIMEOUT_SECONDS:-}\"\nprintf 'CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=%s\\n' \"${CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY:-}\"\nprintf 'CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS=%s\\n' \"${CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS:-}\"\nprintf 'CLAUDE_CODE_ALWAYS_ENABLE_EFFORT=%s\\n' \"${CLAUDE_CODE_ALWAYS_ENABLE_EFFORT:-}\"\nprintf '%s\\n' \"$@\"\n",
     )
     .expect("fake adapter");
     let mut permissions = fs::metadata(&adapter)
@@ -139,6 +140,27 @@ fn shared_provider_fixture() -> tempfile::TempDir {
 fn launcher_function() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../.config/fish/functions/claudex.fish")
+}
+
+fn assert_user_local_adapter_forwards_hard_timeout(
+    function: &std::path::Path,
+    home: &tempfile::TempDir,
+) {
+    let output = Command::new("fish")
+        .args([
+            "-c",
+            &format!("source '{}'; claudex timeout-smoke", function.display()),
+        ])
+        .env("HOME", home.path())
+        .env("CLAUDEX_SUBAGENT_HARD_TIMEOUT_SECONDS", "17")
+        .env_remove("CLAUDEX_PROVIDER_CONFIG")
+        .env_remove("CLAUDEX_MODEL")
+        .output()
+        .expect("run user-local adapter timeout smoke");
+    assert!(output.status.success());
+    let arguments = String::from_utf8(output.stdout).expect("UTF-8 timeout output");
+    assert!(arguments.contains("CLAUDEX_SUBAGENT_HARD_TIMEOUT_SECONDS=17\n"));
+    assert!(arguments.ends_with("--\ntimeout-smoke\n"));
 }
 
 fn assert_shared_provider_default(function: &std::path::Path, home: &tempfile::TempDir) {

@@ -101,23 +101,7 @@ impl ModelCatalog {
         let mut exact = Vec::new();
         let mut prefixes = Vec::new();
         for provider in providers {
-            if !provider.default_model.is_empty() {
-                exact.push(provider.default_model.clone());
-            }
-            if let Some(model) = provider
-                .subagent_model
-                .as_ref()
-                .filter(|model| !model.is_empty())
-            {
-                exact.push(model.clone());
-            }
-            prefixes.extend(
-                provider
-                    .model_prefixes
-                    .iter()
-                    .filter(|prefix| !prefix.is_empty())
-                    .cloned(),
-            );
+            collect_provider_models(provider, &mut exact, &mut prefixes);
         }
         exact.sort();
         exact.dedup();
@@ -134,16 +118,7 @@ impl ModelCatalog {
         let mut exact = Vec::new();
         let mut prefixes = Vec::new();
         for route in routes {
-            if !route.model.is_empty() {
-                exact.push(route.model.clone());
-            }
-            prefixes.extend(
-                route
-                    .model_prefixes
-                    .iter()
-                    .filter(|prefix| !prefix.is_empty())
-                    .cloned(),
-            );
+            collect_route_models(route, &mut exact, &mut prefixes);
         }
         exact.sort();
         exact.dedup();
@@ -224,6 +199,33 @@ impl ModelCatalog {
         workers.extend_from_slice(native_workers);
         self.set_worker_routes(workers)
     }
+}
+
+fn collect_provider_models(
+    provider: &Provider,
+    exact: &mut Vec<String>,
+    prefixes: &mut Vec<String>,
+) {
+    push_nonempty(exact, &provider.default_model);
+    if let Some(model) = provider.subagent_model.as_deref() {
+        push_nonempty(exact, model);
+    }
+    extend_nonempty(prefixes, &provider.model_prefixes);
+}
+
+fn collect_route_models(route: &BackendRoute, exact: &mut Vec<String>, prefixes: &mut Vec<String>) {
+    push_nonempty(exact, &route.model);
+    extend_nonempty(prefixes, &route.model_prefixes);
+}
+
+fn push_nonempty(values: &mut Vec<String>, value: &str) {
+    if !value.is_empty() {
+        values.push(value.to_owned());
+    }
+}
+
+fn extend_nonempty(values: &mut Vec<String>, candidates: &[String]) {
+    values.extend(candidates.iter().filter(|value| !value.is_empty()).cloned());
 }
 
 const fn enabled_by_default() -> bool {

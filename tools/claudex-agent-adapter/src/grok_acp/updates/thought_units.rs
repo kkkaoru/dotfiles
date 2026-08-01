@@ -23,6 +23,18 @@ struct UnitState {
     open: bool,
 }
 
+fn close_paragraph(state: &mut UnitState, head: &str, parts: &mut Vec<(i64, String)>) {
+    if !head.is_empty() {
+        parts.push((state.index, head.to_owned()));
+        state.open = false;
+        state.index = state.index.saturating_add(1);
+    } else if state.open {
+        // Bare paragraph break closes the open unit.
+        state.open = false;
+        state.index = state.index.saturating_add(1);
+    }
+}
+
 impl ThoughtUnits {
     /// Map a raw thought chunk into `(summary_index, text)` pieces.
     pub(super) fn partition(&self, session_id: &str, text: &str) -> Vec<(i64, String)> {
@@ -34,15 +46,7 @@ impl ThoughtUnits {
         let mut parts = Vec::new();
         let mut remaining = text;
         while let Some((head, tail)) = remaining.split_once("\n\n") {
-            if !head.is_empty() {
-                parts.push((state.index, head.to_owned()));
-                state.open = false;
-                state.index = state.index.saturating_add(1);
-            } else if state.open {
-                // Bare paragraph break closes the open unit.
-                state.open = false;
-                state.index = state.index.saturating_add(1);
-            }
+            close_paragraph(state, head, &mut parts);
             remaining = tail;
         }
         if !remaining.is_empty() {

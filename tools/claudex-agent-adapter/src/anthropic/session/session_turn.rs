@@ -35,6 +35,7 @@ impl Bridge {
         let existing_len = selected.existing_len;
         let extras = request.messages[existing_len..].to_vec();
         let has_tool_results = !tool_results.is_empty();
+        let events = Arc::new(self.app.subscribe_thread(&selected.session.thread_id));
         let start = if tool_results.is_empty() || selected.recovered {
             self.start_model_turn(
                 request,
@@ -59,10 +60,11 @@ impl Bridge {
             )
             .await
         };
-        let (selected, extras) = self
+        let (selected, extras, events) = self
             .recover_turn_start(
                 selected,
                 extras,
+                events,
                 start,
                 StartContextRetry {
                     request,
@@ -74,7 +76,6 @@ impl Bridge {
             )
             .await?;
         let response_model = self.request_model(request);
-        let events = Arc::new(self.app.subscribe_thread(&selected.session.thread_id));
         Ok(ActiveTurn {
             session: selected.session,
             events,
@@ -97,11 +98,16 @@ impl Bridge {
         &self,
         selected: SelectedSession,
         extras: Vec<Value>,
+        events: Arc<crate::app_server::ThreadEvents>,
         start: Result<()>,
         context: StartContextRetry<'_>,
-    ) -> Result<(SelectedSession, Vec<Value>)> {
-        let (selected, extras, start) = match start {
-            Ok(()) => (selected, extras, Ok(())),
+    ) -> Result<(
+        SelectedSession,
+        Vec<Value>,
+        Arc<crate::app_server::ThreadEvents>,
+    )> {
+        let (selected, extras, events, start) = match start {
+            Ok(()) => (selected, extras, events, Ok(())),
             Err(error) if !is_context_window_exceeded(&error) => {
                 self.remove_session(&selected.session).await;
                 return Err(error);
@@ -111,7 +117,9 @@ impl Bridge {
                     .await?
             }
         };
-        self.finish_turn_start(selected, extras, start).await
+        self.finish_turn_start(selected, extras, start)
+            .await
+            .map(|(selected, extras)| (selected, extras, events))
     }
 
     pub(super) async fn finish_turn_start(
@@ -132,7 +140,12 @@ impl Bridge {
         selected: SelectedSession,
         context: StartContextRetry<'_>,
         error: &anyhow::Error,
-    ) -> Result<(SelectedSession, Vec<Value>, Result<()>)> {
+    ) -> Result<(
+        SelectedSession,
+        Vec<Value>,
+        Arc<crate::app_server::ThreadEvents>,
+        Result<()>,
+    )> {
         tracing::warn!(
             error = %error,
             thread_id = %selected.session.thread_id,
@@ -149,6 +162,7 @@ impl Bridge {
             )
             .await?;
         let extras = context.request.messages.to_vec();
+        let events = Arc::new(self.app.subscribe_thread(&selected.session.thread_id));
         let start = self
             .start_model_turn(
                 context.request,
@@ -158,7 +172,7 @@ impl Bridge {
                 context.effort,
             )
             .await;
-        Ok((selected, extras, start))
+        Ok((selected, extras, events, start))
     }
 
     pub(in crate::anthropic) async fn retry_after_context_window(

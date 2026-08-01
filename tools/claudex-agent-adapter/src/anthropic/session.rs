@@ -34,9 +34,8 @@ use helpers::{
 pub(in crate::anthropic) use session_turn::is_context_window_exceeded;
 #[cfg(test)]
 pub(super) use tools::{
-    codex_tool_name, dynamic_tool, internal_advisor_tool, internal_collaborator_tool,
-    thread_start_params, thread_start_params_for_mode, tool_configuration,
-    tool_configuration_for_mode,
+    codex_tool_name, dynamic_tool, thread_start_params, thread_start_params_for_mode,
+    tool_configuration, tool_configuration_for_mode,
 };
 #[cfg(not(test))]
 use tools::{thread_start_params_for_mode, tool_configuration_for_mode};
@@ -131,38 +130,21 @@ impl Bridge {
         tool_results: &[ToolResult],
     ) -> Result<SelectedSession> {
         if !tool_results.is_empty() {
-            if let Some(selected) = self.select_pending_session(request, tool_results).await? {
-                return Ok(selected);
-            }
-            if !transcript_owns_tool_results(&request.messages, tool_results) {
-                bail!("no active claudex session owns the returned Claude tool_use_id");
-            }
-            tracing::warn!(
-                tool_result_count = tool_results.len(),
-                "recovering Claude tool results after adapter session loss"
-            );
-            let session = self
-                .create_session(request, signature, advisor_model, collaborator_model)
-                .await?;
-            let gate = Arc::clone(&session.gate).lock_owned().await;
-            return Ok(SelectedSession {
-                session,
-                existing_len: 0,
-                recovered: true,
-                gate,
-            });
+            return self
+                .select_tool_result_session(
+                    request,
+                    signature,
+                    advisor_model,
+                    collaborator_model,
+                    tool_results,
+                )
+                .await;
         }
         if let Some(selected) = self
             .select_matching_session(request, &signature, &request.messages)
             .await
         {
-            if Self::session_has_recovered_capability(&selected.session, request) {
-                return Ok(selected);
-            }
-            tracing::debug!(
-                thread_id = %selected.session.thread_id,
-                "discarding a resumed provider thread that has no recovered capability schema"
-            );
+            return Ok(selected);
         }
         // Claude Code can omit the unchanged tool schemas on an ordinary
         // resumed main or SubAgent request. The schemas belong to the provider
@@ -187,18 +169,34 @@ impl Bridge {
         })
     }
 
-    pub(super) fn session_has_recovered_capability(
-        session: &Session,
+    async fn select_tool_result_session(
+        &self,
         request: &MessagesRequest,
-    ) -> bool {
-        let required = super::resume_tools::names_for_request(request);
-        required.is_empty()
-            || required.iter().any(|required| {
-                session
-                    .external_tool_names
-                    .values()
-                    .any(|provided| provided == required)
-            })
+        signature: Arc<str>,
+        advisor_model: Option<&str>,
+        collaborator_model: Option<&str>,
+        tool_results: &[ToolResult],
+    ) -> Result<SelectedSession> {
+        if let Some(selected) = self.select_pending_session(request, tool_results).await? {
+            return Ok(selected);
+        }
+        if !transcript_owns_tool_results(&request.messages, tool_results) {
+            bail!("no active claudex session owns the returned Claude tool_use_id");
+        }
+        tracing::warn!(
+            tool_result_count = tool_results.len(),
+            "recovering Claude tool results after adapter session loss"
+        );
+        let session = self
+            .create_session(request, signature, advisor_model, collaborator_model)
+            .await?;
+        let gate = Arc::clone(&session.gate).lock_owned().await;
+        Ok(SelectedSession {
+            session,
+            existing_len: 0,
+            recovered: true,
+            gate,
+        })
     }
 
     async fn select_pending_session(
@@ -275,18 +273,14 @@ impl Bridge {
             .any(|session| Arc::ptr_eq(session, candidate))
     }
 
+    // Sequential locking preserves deterministic ownership when active and detached
+    // sessions race to report the same tool result.
+    #[allow(clippy::excessive_nesting)]
     pub(super) async fn find_result_session(&self, results: &[ToolResult]) -> Option<Arc<Session>> {
         let mut sessions = self.sessions.lock().await.clone();
         sessions.extend(self.detached_sessions.lock().await.iter().cloned());
         for session in sessions {
-            let pending = session.pending_tools.lock().await;
-            let consumed = session.consumed_tool_ids.lock().await;
-            if results
-                .iter()
-                .all(|result| owns_tool_result(&pending, &consumed, &result.tool_use_id))
-            {
-                drop(consumed);
-                drop(pending);
+            if session_owns_results(&session, results).await {
                 return Some(session);
             }
         }
@@ -303,7 +297,7 @@ impl Bridge {
         let slot = self.acquire_session_slot().await?;
         let model = self.request_model(request);
         let web_search_mode = self.app.web_search_mode(&model);
-        let (dynamic_tools, external_tool_names, internal_tools) = tool_configuration_for_mode(
+        let (dynamic_tools, external_tool_names, _internal_tools) = tool_configuration_for_mode(
             request,
             advisor_model,
             collaborator_model,
@@ -319,7 +313,6 @@ impl Bridge {
             transcript: Mutex::new(Vec::new()),
             pending_tools: Mutex::new(HashMap::new()),
             consumed_tool_ids: Mutex::new(HashSet::new()),
-            internal_tools,
             external_tool_names,
             client_user_id: request
                 .metadata
@@ -371,6 +364,14 @@ impl Bridge {
         }
         Ok(submitted)
     }
+}
+
+async fn session_owns_results(session: &Session, results: &[ToolResult]) -> bool {
+    let pending = session.pending_tools.lock().await;
+    let consumed = session.consumed_tool_ids.lock().await;
+    results
+        .iter()
+        .all(|result| owns_tool_result(&pending, &consumed, &result.tool_use_id))
 }
 
 fn is_idempotent_task_lifecycle_error(content_items: &[Value]) -> bool {
