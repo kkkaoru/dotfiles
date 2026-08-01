@@ -188,6 +188,13 @@ mod tests {
                 .action_status("SendMessage", &json!({"to":"worker-1"}))
                 .is_some_and(|status| status.contains("worker-1"))
         );
+        for recipient in ["", "line\nbreak", &"x".repeat(121)] {
+            assert!(
+                reuse
+                    .action_status("SendMessage", &json!({"to":recipient}))
+                    .is_some_and(|status| status.contains("worker"))
+            );
+        }
         assert_eq!(reuse.action_status("Bash", &json!({})), None);
     }
 }

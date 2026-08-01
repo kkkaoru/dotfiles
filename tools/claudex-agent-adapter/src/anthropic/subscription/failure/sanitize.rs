@@ -78,3 +78,56 @@ fn truncate(value: &str, limit: usize) -> String {
         truncated
     }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[allow(clippy::excessive_nesting)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn covers_sensitive_key_and_value_boundaries() {
+        for key in [
+            "bearer",
+            "authorization",
+            "api_key",
+            "api-key",
+            "apikey",
+            "api_token",
+            "access_token",
+            "refresh_token",
+            "token",
+            "cookie",
+        ] {
+            assert!(is_sensitive_key(key));
+            if key != "bearer" {
+                assert!(is_sensitive_key(&format!("[{key}]")));
+            }
+        }
+        assert!(!is_sensitive_key("ordinary"));
+        assert!(has_sensitive_value("sk-test"));
+        assert!(has_sensitive_value("bearer=fixture"));
+        assert!(has_sensitive_value("bearer:fixture"));
+        assert!(has_sensitive_value("cookie=fixture"));
+        assert!(!has_sensitive_value("ordinary"));
+
+        for value in [
+            "bearer:",
+            "bearer=",
+            "authorization:fixture",
+            "authorization=fixture",
+            "token:",
+            "api-key=",
+        ] {
+            assert!(redacts_following_value(value));
+        }
+        assert!(!redacts_following_value("ordinary"));
+    }
+
+    #[test]
+    fn preserves_exact_limit_and_normalizes_control_characters() {
+        assert_eq!(truncate("abc", 3), "abc");
+        assert_eq!(truncate("abcdef", 3), "abc...");
+        assert_eq!(sanitize_diagnostic("line\nnext"), "line next");
+    }
+}

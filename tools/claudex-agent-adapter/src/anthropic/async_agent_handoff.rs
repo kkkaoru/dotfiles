@@ -257,6 +257,7 @@ fn handoff_response(request: &MessagesRequest, text: &str, model: &str) -> Respo
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use axum::body::to_bytes;
     use serde_json::json;
@@ -390,3 +391,7 @@ mod tests {
         assert!(body.contains("event: message_stop"));
     }
 }
+
+#[cfg(test)]
+#[path = "async_agent_handoff_extra_tests.rs"]
+mod extra_tests;

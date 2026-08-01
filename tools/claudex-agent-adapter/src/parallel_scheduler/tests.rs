@@ -1075,6 +1075,49 @@ fn policy_helpers_cover_early_returns_and_cleanup_choices() {
 }
 
 #[test]
+fn policy_helpers_cover_live_reuse_and_single_scope_guidance_boundaries() {
+    let config = SchedulerConfig::default();
+    let parallel_request = messages(&[serde_json::json!({
+        "role": "user",
+        "content": "調査を分担して並列で実行してください。\n- 概要\n- リスク",
+    })]);
+    let single_request = messages(&[serde_json::json!({
+        "role": "user",
+        "content": "この1件を確認してください",
+    })]);
+
+    let mut active = SchedulerDecision::no_action();
+    active.active_workers = 1;
+    policy::apply_reuse_actions(&mut active, &parallel_request, &config);
+    assert!(
+        active
+            .actions
+            .iter()
+            .any(|action| action.contains("reusing"))
+    );
+
+    let mut completed = active.clone();
+    completed.completed_recently = 1;
+    policy::apply_reuse_actions(&mut completed, &parallel_request, &config);
+    assert!(
+        completed
+            .actions
+            .iter()
+            .any(|action| action.contains("completion-aware"))
+    );
+
+    let mut pending = SchedulerDecision::no_action();
+    pending.needs_more_workers = 1;
+    policy::clear_empty_decision(&mut pending, &core::SubagentSnapshot::default());
+    assert_eq!(pending.needs_more_workers, 1);
+
+    let mut crowded = SchedulerDecision::no_action();
+    crowded.active_workers = 2;
+    assert!(policy::scope_guidance(&single_request, &crowded).contains("stop duplicate"));
+    assert!(policy::scope_guidance(&single_request, &active).contains("exactly one"));
+}
+
+#[test]
 fn persistence_prunes_stale_entries_and_bounds_the_cache() {
     let now = Instant::now();
     let stale = core::LiveThreadState {
@@ -1201,4 +1244,146 @@ fn parses_scheduler_environment_values_and_rejects_invalid_inputs() {
         std::env::remove_var(U64);
         std::env::remove_var(BOOL);
     }
+}
+
+#[test]
+fn covers_malformed_work_units_and_policy_boundaries() {
+    let snapshot = core::analyze_subagent_work(&[
+        serde_json::json!({"role":"assistant", "content":null}),
+        serde_json::json!({
+            "role":"assistant",
+            "content":[
+                {"type":"tool_use"},
+                {"type":"tool_use", "id":"missing-input", "name":"cc_Agent_0", "input":null},
+                {"type":"tool_use", "id":"batch-missing", "name":"cc_Agent_batch_0", "input":{}},
+                {"type":"tool_use", "id":"batch", "name":"cc_Agent_batch_0", "input":{"tasks":[
+                    null,
+                    {"subagent_type":"custom-advisor", "claudex_model":"advisor"},
+                    {"claudex_model":"worker"}
+                ]}},
+                {"type":"tool_result"},
+                {"type":"unknown"}
+            ]
+        }),
+        serde_json::json!({
+            "role":"user",
+            "content":[
+                {"type":"text", "text":"<task-notification><status>unknown</status></task-notification>"},
+                {"type":"text", "text":"<task-notification><status>completed</status><tool-use-id></tool-use-id></task-notification>"}
+            ]
+        }),
+    ]);
+    assert_eq!(snapshot.active_count(), 1);
+    assert!(snapshot.active_models.contains_key("batch:2"));
+
+    let no_user = messages(&[serde_json::json!({"role":"assistant", "content":[]} )]);
+    assert_eq!(policy::independent_scope_count(&no_user), 2);
+    let single = messages(&[serde_json::json!({"role":"user", "content":"exactly one worker"})]);
+    assert_eq!(policy::independent_scope_count(&single), 1);
+    let explicit = messages(&[serde_json::json!({"role":"user", "content":"- one\n* two"})]);
+    assert_eq!(policy::independent_scope_count(&explicit), 2);
+    let parallel =
+        messages(&[serde_json::json!({"role":"user", "content":"compare these in parallel"})]);
+    assert_eq!(policy::independent_scope_count(&parallel), 2);
+    let plain = messages(&[serde_json::json!({"role":"user", "content":"one bounded task"})]);
+
+    let mut decision = SchedulerDecision::no_action();
+    decision.active_workers = 2;
+    decision.active_model_families = 1;
+    decision.completed_recently = 1;
+    let config = SchedulerConfig {
+        allow_reuse: false,
+        cleanup_on_exit: false,
+        ..SchedulerConfig::default()
+    };
+    policy::apply_diversity_action(&mut decision, &parallel, &config);
+    policy::apply_reuse_actions(&mut decision, &parallel, &config);
+    assert!(decision.needs_model_diversity);
+    assert!(
+        decision
+            .actions
+            .iter()
+            .all(|action| !action.contains("Prefer reusing"))
+    );
+    assert!(
+        decision
+            .actions
+            .iter()
+            .any(|action| action.contains("After each completion"))
+    );
+    policy::apply_reuse_actions(&mut decision, &plain, &config);
+
+    let mut empty = SchedulerDecision::no_action();
+    policy::clear_empty_decision(&mut empty, &core::SubagentSnapshot::default());
+    assert!(empty.actions.is_empty());
+}
+
+#[test]
+fn parses_all_scheduler_environment_overrides() {
+    let _lock = env_test_lock();
+    clear_scheduler_env();
+    unsafe {
+        std::env::set_var(SUBAGENT_MAX_PARALLEL_ENV, "8");
+        std::env::set_var(SUBAGENT_MIN_PARALLEL_ENV, "4");
+        std::env::set_var(SUBAGENT_ACTIVE_FLOOR_ENV, "3");
+        std::env::set_var(SUBAGENT_REEVALUATE_ON_COMPLETION_ENV, "false");
+        std::env::set_var(SUBAGENT_REASSESS_INTERVAL_SECONDS_ENV, "17");
+        std::env::set_var(SUBAGENT_MIN_MODEL_FAMILIES_ENV, "3");
+        std::env::set_var(SUBAGENT_REUSE_ENV, "false");
+        std::env::set_var(SUBAGENT_CLEANUP_ON_EXIT_ENV, "false");
+    }
+    let config = SchedulerConfig::parse();
+    assert_eq!(config.max_parallel_workers, 8);
+    assert_eq!(config.min_parallel_workers, 4);
+    assert_eq!(config.active_floor, 3);
+    assert!(!config.reevaluate_on_completion);
+    assert_eq!(config.reassess_interval, Duration::from_secs(17));
+    assert_eq!(config.min_model_families, 3);
+    assert!(!config.allow_reuse);
+    assert!(!config.cleanup_on_exit);
+    clear_scheduler_env();
+}
+
+#[test]
+fn normalizes_scheduler_scopes_and_task_notifications_without_false_duplicates() {
+    let messages = vec![
+        serde_json::json!({
+            "role":"assistant",
+            "content":[{"type":"tool_use", "id":"scope-one", "name":"Agent", "input":{
+                "claudex_model":"worker-a",
+                "prompt":"Research this\nclaudex_launch_id: hidden\nclaudex_model: worker-a <claudex-agent-id>correlation</claudex-agent-id>"
+            }}]
+        }),
+        serde_json::json!({
+            "role":"assistant",
+            "content":[{"type":"tool_use", "id":"scope-two", "name":"Agent", "input":{
+                "claudex_model":"worker-b",
+                "prompt":"Research this <claudex-agent-id>other</claudex-agent-id>"
+            }}]
+        }),
+        serde_json::json!({
+            "role":"user",
+            "content":"<task-notification><status>failed</status><tool-use-id>scope-two</tool-use-id></task-notification>"
+        }),
+    ];
+    let snapshot = core::analyze_subagent_work(&messages);
+    assert_eq!(snapshot.active_count(), 1);
+    assert!(snapshot.active_unit_ids.contains("scope:research this"));
+    assert_eq!(snapshot.active_model_families(), 1);
+
+    let unclosed = vec![serde_json::json!({
+        "role":"assistant",
+        "content":[{"type":"tool_use", "id":"unclosed", "name":"Agent", "input":{
+            "claudex_model":"worker-c",
+            "prompt":"scope <claudex-agent-id>unfinished"
+        }}]
+    })];
+    let snapshot = core::analyze_subagent_work(&unclosed);
+    assert_eq!(snapshot.active_count(), 1);
+    assert!(
+        snapshot
+            .active_unit_ids
+            .iter()
+            .any(|unit| unit.starts_with("scope:scope "))
+    );
 }

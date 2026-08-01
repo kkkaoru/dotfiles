@@ -372,6 +372,37 @@ mod tests {
     }
 
     #[test]
+    fn preserves_an_inherited_long_context_subscription_model() {
+        let mut long_context_request = request(super::models::CLAUDE_LONG_CONTEXT_MODEL, &[]);
+        let decision = resolve_request_model_with_origin(
+            &mut long_context_request,
+            "main-model",
+            None,
+            RouteOrigin::new(true, true, true),
+            |_| false,
+            |_| false,
+        )
+        .expect("inherited long-context model");
+        assert_eq!(decision, RouteDecision::Subscription);
+        assert_eq!(
+            long_context_request.model,
+            super::models::CLAUDE_LONG_CONTEXT_MODEL
+        );
+
+        let mut inherited_worker = request("worker-model", &[]);
+        let error = resolve_request_model_with_origin(
+            &mut inherited_worker,
+            "main-model",
+            Some("worker-model".to_owned()),
+            RouteOrigin::new(true, true, true),
+            |_| false,
+            |_| false,
+        )
+        .expect_err("an inherited unsupported worker must not be remapped");
+        assert!(error.to_string().contains("recoverable configured route"));
+    }
+
+    #[test]
     fn rejects_unknown_subagent_model() {
         let mut empty = request("", &[]);
         let decision = resolve_request_model(

@@ -25,6 +25,7 @@ use crate::anthropic::{
     agent_effort::AgentEffortIntents,
     subscription::{SubscriptionOptions, SubscriptionToolContext},
     subscription_activity::SubscriptionActivity,
+    subscription_stream::post_eof,
 };
 use crate::provider_config::ModelCatalog;
 
@@ -1471,6 +1472,70 @@ fn short_post_eof_options() -> SubscriptionOptions {
     options.stderr_drain_grace = Duration::from_millis(40);
     options.termination_timeout = Duration::from_millis(500);
     options
+}
+
+#[tokio::test]
+async fn post_eof_stderr_helpers_cover_empty_success_error_and_timeout() {
+    let mut absent = None;
+    assert_eq!(
+        post_eof::reap_stderr(&mut absent, Duration::from_millis(1))
+            .await
+            .expect("absent stderr task"),
+        Vec::<u8>::new()
+    );
+
+    let mut successful = Some(tokio::spawn(async {
+        Ok::<Vec<u8>, std::io::Error>(b"stderr".to_vec())
+    }));
+    assert_eq!(
+        post_eof::reap_stderr(&mut successful, Duration::from_millis(100),)
+            .await
+            .expect("successful stderr task"),
+        b"stderr"
+    );
+
+    let mut failed = Some(tokio::spawn(async {
+        Err::<Vec<u8>, _>(std::io::Error::other("stderr failed"))
+    }));
+    assert!(
+        post_eof::reap_stderr(&mut failed, Duration::from_millis(100),)
+            .await
+            .expect_err("stderr task error")
+            .to_string()
+            .contains("stderr failed")
+    );
+
+    let mut timed_out = Some(tokio::spawn(async {
+        std::future::pending::<std::io::Result<Vec<u8>>>().await
+    }));
+    assert_eq!(
+        post_eof::reap_stderr(&mut timed_out, Duration::from_millis(1),)
+            .await
+            .expect("timed out stderr task is discarded"),
+        Vec::<u8>::new()
+    );
+
+    let mut no_task = None;
+    assert!(
+        tokio::time::timeout(
+            Duration::from_millis(1),
+            post_eof::await_stderr(&mut no_task),
+        )
+        .await
+        .is_err()
+    );
+
+    let mut task = Some(tokio::spawn(async {
+        Ok::<Vec<u8>, std::io::Error>(b"taken".to_vec())
+    }));
+    let taken = task.take().expect("take task").await;
+    let mut task = Some(tokio::spawn(async {
+        Ok::<Vec<u8>, std::io::Error>(b"taken".to_vec())
+    }));
+    assert_eq!(
+        post_eof::take_stderr(&mut task, taken).expect("take stderr output"),
+        b"taken"
+    );
 }
 
 #[tokio::test]

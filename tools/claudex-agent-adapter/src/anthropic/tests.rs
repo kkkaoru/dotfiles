@@ -508,3 +508,16 @@ fn prunes_signature_buckets_after_the_bound_is_reached() {
     let _trigger = intern_signature(&pool, "signature-trigger".to_owned());
     assert!(!signatures.is_empty());
 }
+
+#[test]
+fn cleans_empty_signature_buckets_at_the_bound() {
+    let pool = SignaturePool::default();
+    {
+        let mut buckets = pool.lock().expect("signature pool");
+        buckets.extend((0..super::MAX_SIGNATURE_BUCKETS).map(|key| (key as u64, Vec::new())));
+    }
+
+    let value = intern_signature(&pool, "after-cleanup".to_owned());
+    assert_eq!(value.as_ref(), "after-cleanup");
+    assert_eq!(pool.lock().expect("signature pool").len(), 1);
+}

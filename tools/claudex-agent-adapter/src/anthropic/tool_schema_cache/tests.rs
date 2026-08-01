@@ -153,3 +153,154 @@ fn empty_or_unidentified_cache_never_adds_capabilities() {
     cache.restore_or_remember(&RequestIdentity::default(), &mut unidentified, false);
     assert!(unidentified.tools.is_empty());
 }
+
+#[test]
+fn ignores_malformed_incompatible_and_expired_persisted_entries() {
+    let root = tempfile::tempdir().expect("schema cache fixture");
+    let path = root.path().join("schemas.json");
+    std::fs::write(&path, b"not json").expect("malformed cache");
+    assert!(
+        ToolSchemaCache::with_store(path.clone())
+            .entries
+            .lock()
+            .unwrap()
+            .is_empty()
+    );
+
+    std::fs::write(
+        &path,
+        serde_json::to_vec(&serde_json::json!({"version":99,"entries":[]}))
+            .expect("incompatible cache"),
+    )
+    .expect("write incompatible cache");
+    assert!(
+        ToolSchemaCache::with_store(path.clone())
+            .entries
+            .lock()
+            .unwrap()
+            .is_empty()
+    );
+
+    let identity = identity("expired", None, None);
+    let expired = StoredSchema {
+        identity: SchemaIdentity::from_request(&identity).expect("identity"),
+        tools: vec![json!({"name":"Expired"})],
+        updated_unix_seconds: 1,
+        accessed_unix_seconds: 1,
+    };
+    std::fs::write(
+        &path,
+        serde_json::to_vec(&StoredSchemas {
+            version: CACHE_VERSION,
+            entries: vec![expired],
+        })
+        .expect("expired cache"),
+    )
+    .expect("write expired cache");
+    let cache = ToolSchemaCache::with_store(path);
+    assert!(cache.entries.lock().unwrap().is_empty());
+}
+
+#[test]
+fn bounds_and_merges_cache_generations_at_equal_and_older_timestamps() {
+    let root = tempfile::tempdir().expect("schema cache fixture");
+    let path = root.path().join("schemas.json");
+    let owner = identity("merge", None, None);
+    let first = vec![json!({"name":"first"})];
+    let now = unix_seconds();
+    ToolSchemaCache::with_store(path.clone()).restore_or_remember_at(
+        &owner,
+        &mut request(first.clone()),
+        true,
+        now,
+    );
+
+    let stale = ToolSchemaCache::with_store(path.clone());
+    stale.restore_or_remember_at(
+        &owner,
+        &mut request(vec![json!({"name":"older"})]),
+        true,
+        now - 1,
+    );
+    let restored_cache = ToolSchemaCache::with_store(path);
+    let mut restored = omitted_request();
+    restored_cache.restore_or_remember_at(&owner, &mut restored, false, now);
+    assert_eq!(restored.tools, first);
+
+    let cache = ToolSchemaCache::default();
+    for index in 0..(MAX_ENTRIES + 2) {
+        cache.restore_or_remember_at(
+            &identity(&format!("session-{index}"), None, None),
+            &mut request(vec![json!({"name":format!("tool-{index}")})]),
+            true,
+            100 + index as u64,
+        );
+    }
+    assert!(cache.entries.lock().unwrap().len() <= MAX_ENTRIES);
+}
+
+#[test]
+fn ignores_nonempty_resume_tools_and_invalid_cached_entries() {
+    let cache = ToolSchemaCache::default();
+    let owner = identity("resume-tools", None, None);
+    cache.restore_or_remember(
+        &owner,
+        &mut request(vec![json!({"name":"remembered"})]),
+        true,
+    );
+    let mut explicit = request(vec![json!({"name":"explicit"})]);
+    cache.restore_or_remember(&owner, &mut explicit, false);
+    assert_eq!(explicit.tools, vec![json!({"name":"explicit"})]);
+
+    let root = tempfile::tempdir().expect("schema cache fixture");
+    let path = root.path().join("schemas.json");
+    let invalid = StoredSchemas {
+        version: CACHE_VERSION,
+        entries: vec![
+            StoredSchema {
+                identity: SchemaIdentity {
+                    session_id: String::new(),
+                    agent_id: None,
+                    parent_agent_id: None,
+                },
+                tools: vec![json!({"name":"empty-session"})],
+                updated_unix_seconds: unix_seconds(),
+                accessed_unix_seconds: unix_seconds(),
+            },
+            StoredSchema {
+                identity: SchemaIdentity {
+                    session_id: "empty-tools".to_owned(),
+                    agent_id: None,
+                    parent_agent_id: None,
+                },
+                tools: Vec::new(),
+                updated_unix_seconds: unix_seconds(),
+                accessed_unix_seconds: unix_seconds(),
+            },
+        ],
+    };
+    std::fs::write(&path, serde_json::to_vec(&invalid).expect("invalid cache"))
+        .expect("write invalid cache");
+    assert!(
+        ToolSchemaCache::with_store(path)
+            .entries
+            .lock()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn falls_back_when_the_schema_store_parent_cannot_be_created() {
+    let root = tempfile::tempdir().expect("schema cache fixture");
+    let parent = root.path().join("not-a-directory");
+    std::fs::write(&parent, "occupied").expect("occupied parent");
+    let path = parent.join("schemas.json");
+    let cache = ToolSchemaCache::with_store(path);
+    let owner = identity("fallback", None, None);
+    let tools = vec![json!({"name":"fallback"})];
+    cache.restore_or_remember(&owner, &mut request(tools.clone()), true);
+    let mut resumed = omitted_request();
+    cache.restore_or_remember(&owner, &mut resumed, false);
+    assert_eq!(resumed.tools, tools);
+}

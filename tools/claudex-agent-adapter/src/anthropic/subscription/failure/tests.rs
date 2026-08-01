@@ -1,4 +1,6 @@
+use super::classification::{classify_failure, extract_diagnostic, status_hint};
 use super::*;
+use anyhow::anyhow;
 
 #[test]
 fn prefers_structured_stdout_and_redacts_diagnostics() {
@@ -107,6 +109,18 @@ fn redacts_case_insensitive_compact_authorization_and_cookie_values() {
 }
 
 #[test]
+fn sanitizes_control_characters_and_non_prefixed_sensitive_tokens() {
+    let error = protocol_failure(
+        None,
+        "plain\ntext sk-test-token trailing api_key: fixture-value",
+    );
+    let failure = subscription_failure(&error).expect("protocol failure");
+    assert!(failure.diagnostic.contains("plain text"));
+    assert!(!failure.diagnostic.contains("sk-test-token"));
+    assert!(!failure.diagnostic.contains("fixture-value"));
+}
+
+#[test]
 fn timeout_is_typed_failed_dependency_without_any_retry_scope() {
     let error = timeout_failure("claude-test", Duration::from_secs(5));
     let failure = subscription_failure(&error).expect("typed timeout failure");
@@ -145,4 +159,119 @@ fn nonzero_exit_with_success_stdout_uses_the_failure_from_stderr() {
     assert_eq!(failure.status_hint(), 401);
     assert!(failure.diagnostic.contains("Authentication failed"));
     assert!(!failure.diagnostic.contains("completed text"));
+}
+
+#[test]
+fn renders_non_string_structured_output_and_falls_back_from_null() {
+    assert_eq!(
+        subscription_result_text(&serde_json::json!({
+            "structured_output":{"answer":"ok"}
+        })),
+        Some(r#"{"answer":"ok"}"#.to_owned())
+    );
+    assert_eq!(
+        subscription_result_text(&serde_json::json!({
+            "structured_output":null,
+            "result":"fallback"
+        })),
+        Some("fallback".to_owned())
+    );
+}
+
+#[test]
+fn classifies_status_and_marker_variants_without_guessing_local_errors() {
+    for (value, diagnostic, expected) in [
+        (
+            serde_json::json!({"status":403}),
+            "",
+            SubscriptionFailureKind::Authentication,
+        ),
+        (
+            serde_json::json!({"status":429}),
+            "",
+            SubscriptionFailureKind::UpstreamTransient,
+        ),
+        (
+            serde_json::json!({"status":404}),
+            "",
+            SubscriptionFailureKind::Configuration,
+        ),
+        (
+            serde_json::json!({"status":413}),
+            "",
+            SubscriptionFailureKind::ContextLimit,
+        ),
+        (
+            serde_json::json!({}),
+            "provider sakana not found",
+            SubscriptionFailureKind::Configuration,
+        ),
+        (
+            serde_json::json!({}),
+            "protocol framing failed",
+            SubscriptionFailureKind::Protocol,
+        ),
+    ] {
+        assert_eq!(classify_failure(Some(&value), diagnostic), expected);
+    }
+    assert_eq!(
+        status_hint(
+            SubscriptionFailureKind::Authentication,
+            Some(&serde_json::json!({"status":403})),
+            None,
+        ),
+        403
+    );
+    assert_eq!(
+        status_hint(SubscriptionFailureKind::UpstreamTransient, None, None),
+        502
+    );
+    assert_eq!(
+        extract_diagnostic(&serde_json::json!({"error":{"code":"E1"}})).as_deref(),
+        Some("\"E1\"")
+    );
+    assert_eq!(
+        extract_diagnostic(&serde_json::json!({"status":500})).as_deref(),
+        Some("500")
+    );
+}
+
+#[test]
+fn formats_all_failure_kinds_and_marks_errors_after_stream_output() {
+    for kind in [
+        SubscriptionFailureKind::UpstreamTransient,
+        SubscriptionFailureKind::Authentication,
+        SubscriptionFailureKind::Configuration,
+        SubscriptionFailureKind::ContextLimit,
+        SubscriptionFailureKind::LocalProcess,
+        SubscriptionFailureKind::LocalTimeout,
+        SubscriptionFailureKind::EmptyProcessOutput,
+        SubscriptionFailureKind::Protocol,
+    ] {
+        let failure = SubscriptionFailure::new(
+            kind,
+            Some("claude-test"),
+            Some("exit status: 1".to_owned()),
+            "diagnostic",
+            424,
+        );
+        let rendered = failure.to_string();
+        assert!(rendered.contains(kind.label()));
+        assert!(rendered.contains("claude-test"));
+        assert!(rendered.contains("exit status: 1"));
+    }
+
+    let typed = after_stream_output("claude-test", protocol_failure(Some("claude-test"), "oops"));
+    let typed = subscription_failure(&typed).expect("typed post-stream failure");
+    assert!(!typed.is_internal_retryable());
+    assert!(typed.to_string().contains("stream already emitted frames"));
+
+    let generic = after_stream_output("claude-test", anyhow!("boom"));
+    let generic = subscription_failure(&generic).expect("wrapped post-stream failure");
+    assert!(!generic.is_internal_retryable());
+    assert!(
+        generic
+            .to_string()
+            .contains("stream failed after emitting frames")
+    );
 }

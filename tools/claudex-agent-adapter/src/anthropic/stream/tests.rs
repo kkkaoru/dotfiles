@@ -20,8 +20,10 @@ use super::{
     thinking::ThinkingState, tool_use_frames, turn_flow,
 };
 use crate::{
+    agent_backend::AgentBackend,
     anthropic::{ActiveTurn, Bridge, ContextRetry, MessagesRequest, Session},
-    app_server::AppServer,
+    app_server::{AppServer, events::ThreadEventDispatcher},
+    grok_acp::GrokAcp,
 };
 
 #[tokio::test]
@@ -1153,6 +1155,79 @@ async fn tolerates_failed_pending_tool_rejection_after_disconnect() {
 }
 
 #[tokio::test]
+async fn cancellation_failure_detaches_and_warns_for_pending_tools() {
+    let (_root, app, bridge, session) = disconnect_fixture().await;
+    let events = Arc::new(app.subscribe_thread("thread"));
+    session
+        .pending_tools
+        .lock()
+        .await
+        .insert("pending".to_owned(), json!(61));
+    app.shutdown().await;
+
+    assert!(matches!(
+        bridge
+            .disconnect_stream(&session, Arc::clone(&events))
+            .await,
+        super::StreamTurn::Disconnected
+    ));
+    assert!(session.pending_tools.lock().await.is_empty());
+    wait_for_disconnected_drain(&events).await;
+}
+
+#[tokio::test]
+async fn grok_cancellation_failure_rejects_pending_tools_and_detaches() {
+    let (bridge, session, dispatcher) = grok_disconnect_fixture();
+    let events = Arc::new(dispatcher.subscribe("thread"));
+    session
+        .pending_tools
+        .lock()
+        .await
+        .insert("pending".to_owned(), json!(61));
+    *session.pending_since.lock().unwrap() = Some(Instant::now());
+    bridge.sessions.lock().await.push(Arc::clone(&session));
+
+    assert!(matches!(
+        bridge
+            .disconnect_stream(&session, Arc::clone(&events))
+            .await,
+        super::StreamTurn::Disconnected
+    ));
+    assert!(bridge.sessions.lock().await.is_empty());
+    assert!(session.pending_tools.lock().await.is_empty());
+    dispatcher.close();
+    wait_for_disconnected_drain(&events).await;
+}
+
+#[tokio::test]
+async fn disconnected_drain_reports_closed_and_malformed_event_streams() {
+    let (bridge, _session, dispatcher) = grok_disconnect_fixture();
+    let events = Arc::new(dispatcher.subscribe("thread"));
+    dispatcher.close();
+    let error = super::disconnect::drain_disconnected_turn(
+        &bridge.app,
+        "main",
+        Arc::clone(&events),
+        HashSet::new(),
+    )
+    .await
+    .expect_err("closed event stream should be reported");
+    assert!(error.to_string().contains("event stream closed"));
+
+    let dispatcher = ThreadEventDispatcher::default();
+    let events = Arc::new(dispatcher.subscribe("thread"));
+    dispatcher.dispatch(json!({
+        "method":"item/tool/call",
+        "params":{"threadId":"thread"}
+    }));
+    let error =
+        super::disconnect::drain_disconnected_turn(&bridge.app, "main", events, HashSet::new())
+            .await
+            .expect_err("malformed tool event should be reported");
+    assert!(error.to_string().contains("tool"));
+}
+
+#[tokio::test]
 async fn drive_stream_reports_unretryable_context_window_errors() {
     let (_root, _app, bridge, session) = disconnect_fixture().await;
     let bridge = Arc::new(bridge);
@@ -1640,6 +1715,31 @@ fn drive_request() -> MessagesRequest {
 
 async fn disconnect_fixture() -> (tempfile::TempDir, Arc<AppServer>, Bridge, Arc<Session>) {
     disconnect_fixture_with_disabled(Default::default()).await
+}
+
+fn grok_disconnect_fixture() -> (Bridge, Arc<Session>, Arc<ThreadEventDispatcher>) {
+    let backend = Arc::new(AgentBackend::Grok(GrokAcp::stopped_for_test()));
+    let bridge = Bridge::new_with_backend(backend, "main".to_owned());
+    let slot = Arc::clone(&bridge.session_slots)
+        .try_acquire_owned()
+        .expect("session slot");
+    let dispatcher = Arc::new(ThreadEventDispatcher::default());
+    let session = Arc::new(Session {
+        thread_id: "thread".to_owned(),
+        model: "main".to_owned(),
+        disabled_subagent_models: BTreeSet::new(),
+        signature: Arc::from("signature"),
+        transcript: Mutex::new(Vec::new()),
+        pending_tools: Mutex::new(HashMap::new()),
+        consumed_tool_ids: Mutex::new(HashSet::new()),
+        external_tool_names: HashMap::new(),
+        client_user_id: None,
+        gate: Arc::new(Mutex::new(())),
+        last_activity: std::sync::Mutex::new(Instant::now()),
+        pending_since: std::sync::Mutex::new(None),
+        _slot: slot,
+    });
+    (bridge, session, dispatcher)
 }
 
 async fn disconnect_fixture_with_disabled(

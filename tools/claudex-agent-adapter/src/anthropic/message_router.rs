@@ -102,3 +102,58 @@ impl Bridge {
         .await
     }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
+    use super::*;
+    use serde_json::{Value, json};
+
+    #[tokio::test]
+    async fn messages_wrapper_forwards_tool_presence_to_the_inner_router() {
+        let root = tempfile::tempdir().expect("message wrapper fixture");
+        let source = root.path().join("source");
+        std::fs::create_dir(&source).expect("source home");
+        std::fs::write(source.join("auth.json"), "{}").expect("source auth");
+        let program = root.path().join("app-server");
+        std::fs::write(
+            &program,
+            "#!/bin/sh\nwhile IFS= read -r line; do id=$(printf '%s\\n' \"$line\" | sed -n 's/.*\"id\":\\([0-9]*\\).*/\\1/p'); printf '{\"id\":%s,\"result\":{}}\\n' \"$id\"; done\n",
+        )
+        .expect("app-server fixture");
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
+            .expect("make app-server fixture executable");
+        let app = crate::app_server::AppServer::spawn_with_program(
+            "main",
+            &program,
+            &source,
+            &root.path().join("isolated"),
+        )
+        .await
+        .expect("start app-server fixture");
+        let bridge = std::sync::Arc::new(Bridge::new_with_backend(
+            crate::agent_backend::AgentBackend::codex(app),
+            "main".to_owned(),
+        ));
+        let request = MessagesRequest {
+            model: "main".to_owned(),
+            system: Value::Null,
+            messages: vec![json!({"role":"user","content":"hello"})],
+            tools: vec![json!({"name":"Read"})],
+            stream: true,
+            output_config: Value::Null,
+            metadata: Value::Null,
+            working_directory: None,
+            disabled_subagent_models: Default::default(),
+            claudex_collaborator_model: None,
+        };
+        let response =
+            tokio::time::timeout(std::time::Duration::from_secs(2), bridge.messages(request))
+                .await
+                .expect("message wrapper should not hang")
+                .expect("streaming response");
+        assert_eq!(response.status(), axum::http::StatusCode::OK);
+    }
+}

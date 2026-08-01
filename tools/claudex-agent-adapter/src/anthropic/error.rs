@@ -87,6 +87,16 @@ mod tests {
     }
 
     #[test]
+    fn does_not_treat_an_unresolved_provider_phrase_as_terminal() {
+        let error = anyhow!("model provider is unavailable");
+        assert_eq!(error_type(&error), RETRYABLE_ERROR_TYPE);
+        assert_eq!(
+            http_status(StatusCode::BAD_GATEWAY, &error),
+            StatusCode::BAD_GATEWAY
+        );
+    }
+
+    #[test]
     fn marks_blocked_subagent_launches_as_non_retryable() {
         let error = anyhow!("SubAgent model `qwen` is disabled by the active Claudex policy");
 

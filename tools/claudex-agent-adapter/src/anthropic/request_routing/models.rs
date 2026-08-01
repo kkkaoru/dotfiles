@@ -27,7 +27,15 @@ mod tests {
 
     #[test]
     fn normalizes_unowned_native_claude_models_to_the_haiku_alias() {
-        for model in ["claude-sonnet-5", "sonnet", "haiku", "fable[1m]"] {
+        for model in [
+            "claude-sonnet-5",
+            "sonnet",
+            "haiku",
+            "fable[1m]",
+            "opus[1m]",
+            "sonnet[1m]",
+            "haiku[1m]",
+        ] {
             assert_eq!(
                 normalize_claude_model_to_haiku(model),
                 Some(CLAUDE_HAIKU_MODEL)

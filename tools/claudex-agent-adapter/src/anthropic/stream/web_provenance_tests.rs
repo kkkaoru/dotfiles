@@ -12,6 +12,9 @@ fn detects_only_explicit_user_web_requests_or_retrieval_workers() {
         &[json!({"role":"user","content":"summarize this"})],
         &json!("The bridge supports tools such as WebSearch."),
     ));
+    assert!(is_dedicated_live_web_worker(&json!("Dedicated live-web retrieval worker")));
+    assert!(is_dedicated_live_web_worker(&json!("tools: WebSearch,WebFetch")));
+    assert!(!is_dedicated_live_web_worker(&json!("ordinary worker")));
     assert!(explicitly_requests_live_web("Please SEARCH THE WEB for current facts."));
 }
 

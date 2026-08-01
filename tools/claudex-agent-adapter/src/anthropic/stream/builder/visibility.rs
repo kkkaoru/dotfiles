@@ -71,3 +71,86 @@ impl SegmentBuilder {
             })
     }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[allow(clippy::excessive_nesting)]
+mod tests {
+    use std::convert::Infallible;
+
+    use axum::body::Bytes;
+    use serde_json::json;
+    use tokio::sync::mpsc;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn reports_follow_up_actions_with_and_without_existing_text() {
+        let current = vec![
+            json!({
+                "role":"assistant",
+                "content":[{"type":"tool_use","name":"Agent","input":{}}]
+            }),
+            json!({"role":"user","content":"continue"}),
+        ];
+        let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
+
+        let mut builder = SegmentBuilder::new(1);
+        builder
+            .subagent_visibility
+            .observe_context(&current, &current);
+        builder
+            .report_subagent_action("Agent", &json!({"description":"research"}), None)
+            .await
+            .expect("non-stream action status");
+        builder
+            .report_subagent_action("SendMessage", &json!({"to":"worker-1"}), Some(&sender))
+            .await
+            .expect("stream action status");
+        assert!(
+            builder
+                .open_text_block
+                .as_ref()
+                .is_some_and(|(_, text)| text.contains("SendMessage reuse emitted"))
+        );
+
+        let mut with_open_text = SegmentBuilder::new(1);
+        with_open_text
+            .subagent_visibility
+            .observe_context(&current, &current);
+        with_open_text.open_text_block = Some((0, "answer".to_owned()));
+        with_open_text
+            .report_subagent_action("Task", &json!({"description":"next"}), Some(&sender))
+            .await
+            .expect("open text action status");
+
+        let mut with_committed_text = SegmentBuilder::new(1);
+        with_committed_text
+            .subagent_visibility
+            .observe_context(&current, &current);
+        with_committed_text
+            .blocks
+            .push(json!({"type":"text","text":"answer"}));
+        with_committed_text
+            .report_subagent_action("Task", &json!({"description":"next"}), Some(&sender))
+            .await
+            .expect("committed text action status");
+
+        let mut no_action = SegmentBuilder::new(1);
+        no_action
+            .subagent_visibility
+            .observe_context(&current, &current);
+        no_action
+            .report_no_subagent_action(Some(&sender))
+            .await
+            .expect("no-action status");
+        assert!(
+            no_action
+                .open_text_block
+                .as_ref()
+                .is_some_and(|(_, text)| text.contains("no Agent/Task launch"))
+        );
+        drop(sender);
+        while receiver.recv().await.is_some() {}
+    }
+}

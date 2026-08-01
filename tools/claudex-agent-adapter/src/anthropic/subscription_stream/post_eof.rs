@@ -134,7 +134,10 @@ async fn cleanup_process_group(
     Ok(())
 }
 
-async fn reap_stderr(task: &mut Option<StderrTask>, timeout: Duration) -> Result<Vec<u8>> {
+pub(super) async fn reap_stderr(
+    task: &mut Option<StderrTask>,
+    timeout: Duration,
+) -> Result<Vec<u8>> {
     let Some(mut task) = task.take() else {
         return Ok(Vec::new());
     };
@@ -150,7 +153,7 @@ async fn reap_stderr(task: &mut Option<StderrTask>, timeout: Duration) -> Result
     }
 }
 
-async fn await_stderr(
+pub(super) async fn await_stderr(
     task: &mut Option<StderrTask>,
 ) -> Result<std::io::Result<Vec<u8>>, tokio::task::JoinError> {
     match task {
@@ -159,7 +162,7 @@ async fn await_stderr(
     }
 }
 
-fn take_stderr(
+pub(super) fn take_stderr(
     task: &mut Option<StderrTask>,
     output: Result<std::io::Result<Vec<u8>>, tokio::task::JoinError>,
 ) -> Result<Vec<u8>> {

@@ -678,6 +678,74 @@ mod tests {
     }
 
     #[test]
+    fn covers_routing_field_and_standard_agent_guard_paths() {
+        let mut prompt_fields = json!({
+            "prompt":"claudex_model: worker-model\nclaudex_effort: high"
+        });
+        super::super::agent_routing::hydrate_routing_fields(&mut prompt_fields);
+        assert_eq!(prompt_fields["claudex_model"], "worker-model");
+        assert_eq!(prompt_fields["claudex_effort"], "high");
+
+        let mut invalid_effort = json!({
+            "prompt":"claudex_model: worker-model\nclaudex_effort: invalid"
+        });
+        super::super::agent_routing::hydrate_routing_fields(&mut invalid_effort);
+        assert!(invalid_effort.get("claudex_effort").is_none());
+
+        for mut arguments in [
+            json!({"subagent_type":"claude", "claudex_model":"already-selected"}),
+            json!({"subagent_type":"Explore"}),
+            json!({"subagent_type":"claudex-gpt"}),
+            json!({"subagent_type":"general-purpose", "claudex_model":"explicit"}),
+            json!({"prompt":"no subagent type"}),
+        ] {
+            super::super::agent_routing::hydrate_standard_agent_to_parent(
+                &mut arguments,
+                "",
+            );
+        }
+        let mut native = json!({"subagent_type":"claude"});
+        super::super::agent_routing::hydrate_standard_agent_to_parent(&mut native, "parent-model");
+        assert_eq!(native["claudex_model"], "claude-haiku-4-5");
+
+        let malformed_summary = [json!({
+            "role":"user",
+            "content":"Claudex routing for this turn: {\"providers\":{},\"selected_workers\":[{\"agent\":\"worker\"}]}"
+        })];
+        let mut malformed = json!({"subagent_type":"worker"});
+        super::super::agent_routing::hydrate_routing_fields_from_context(
+            &mut malformed,
+            &malformed_summary,
+            &json!(null),
+            &crate::provider_config::ModelCatalog::default(),
+        );
+        assert!(malformed.get("claudex_model").is_none());
+
+        let mut selected = json!({"subagent_type":"worker"});
+        let summary = [json!({
+            "role":"user",
+            "content":"Claudex routing for this turn: {\"providers\":{},\"selected_workers\":[{\"agent\":\"worker\",\"model\":\"worker-model\",\"effort\":\"invalid\"}]}"
+        })];
+        super::super::agent_routing::hydrate_routing_fields_from_context(
+            &mut selected,
+            &summary,
+            &json!(null),
+            &crate::provider_config::ModelCatalog::default(),
+        );
+        assert_eq!(selected["claudex_model"], "worker-model");
+        assert!(selected.get("claudex_effort").is_none());
+
+        let mut scalar = Value::String("not an object".to_owned());
+        super::super::agent_routing::hydrate_routing_fields_from_context(
+            &mut scalar,
+            &summary,
+            &json!(null),
+            &crate::provider_config::ModelCatalog::default(),
+        );
+        assert_eq!(scalar, Value::String("not an object".to_owned()));
+    }
+
+    #[test]
     fn removes_invented_mailbox_names_but_preserves_user_supplied_names() {
         let arguments = json!({
             "prompt":"audit contracts", "name":"wf_contract_audit",
@@ -1330,6 +1398,134 @@ mod tests {
             tool_schema("Agent", already_required.clone()),
             already_required
         );
+    }
+
+    #[test]
+    fn exercises_non_object_context_and_advisor_routing_boundaries() {
+        let mut scalar = json!("not an object");
+        super::super::agent_routing::hydrate_routing_fields_from_context(
+            &mut scalar,
+            &[],
+            &json!(null),
+            &crate::provider_config::ModelCatalog::default(),
+        );
+        assert_eq!(scalar, json!("not an object"));
+
+        let mut scalar_standard = json!("not an object");
+        super::super::agent_routing::hydrate_standard_agent_to_parent(
+            &mut scalar_standard,
+            "parent-model",
+        );
+        assert_eq!(scalar_standard, json!("not an object"));
+
+        let routing = r#"Claudex routing for this turn: {"providers":{},"selected_workers":[],"advisor":{"agent":"custom-advisor","model":"advisor-model","effort":"high"},"custom_advisor_enabled":true} mandatory policy"#;
+        let messages = [json!({"role":"user", "content":routing})];
+        let arguments = json!({"subagent_type":"custom-advisor"});
+        assert!(super::super::agent_routing::model_is_authorized(
+            &arguments,
+            &messages,
+            &json!(null),
+            "advisor-model"
+        ));
+        assert!(!super::super::agent_routing::model_is_authorized(
+            &arguments,
+            &messages,
+            &json!(null),
+            "different-model"
+        ));
+    }
+
+    #[test]
+    fn custom_advisor_enablement_is_required_only_when_explicitly_disabled() {
+        let disabled = [json!({
+            "role": "user",
+            "content": r#"Claudex routing for this turn: {"providers":{},"advisor":{"agent":"custom-advisor","model":"advisor-model","effort":"high"},"custom_advisor_enabled":false}"#
+        })];
+        let arguments = json!({"subagent_type":"custom-advisor"});
+        assert!(!super::super::agent_routing::model_is_authorized(
+            &arguments,
+            &disabled,
+            &json!(null),
+            "advisor-model"
+        ));
+
+        let omitted_flag = [json!({
+            "role": "user",
+            "content": r#"Claudex routing for this turn: {"providers":{},"advisor":{"agent":"custom-advisor","model":"advisor-model","effort":"high"}}"#
+        })];
+        assert!(super::super::agent_routing::model_is_authorized(
+            &arguments,
+            &omitted_flag,
+            &json!(null),
+            "advisor-model"
+        ));
+    }
+
+    #[test]
+    fn retains_terminal_intents_only_for_unfinished_matching_sessions() {
+        use std::collections::HashSet;
+
+        let intent = super::AgentEffortIntent {
+            client_user_id: Some("user".to_owned()),
+            prompt: "work".to_owned(),
+            correlated: true,
+            effort: None,
+            model_override: None,
+            model_is_inherited: false,
+            run_in_background: false,
+            tool_use_id: "tool".to_owned(),
+            created_at: Instant::now(),
+            created_unix_seconds: 0,
+        };
+        assert!(super::retain_terminal_intent(
+            &intent,
+            &HashSet::new(),
+            Some("user")
+        ));
+        assert!(super::retain_terminal_intent(
+            &intent,
+            &HashSet::from(["other".to_owned()]),
+            Some("user")
+        ));
+        assert!(super::retain_terminal_intent(
+            &intent,
+            &HashSet::from(["tool".to_owned()]),
+            Some("other")
+        ));
+        assert!(!super::retain_terminal_intent(
+            &intent,
+            &HashSet::from(["tool".to_owned()]),
+            Some("user")
+        ));
+        let mut uncorrelated = intent;
+        uncorrelated.correlated = false;
+        assert!(super::retain_terminal_intent(
+            &uncorrelated,
+            &HashSet::from(["tool".to_owned()]),
+            Some("user")
+        ));
+    }
+
+    #[test]
+    fn standard_agent_hydration_skips_claudex_workers_and_wrong_advisors() {
+        let mut routed = json!({"subagent_type":"claudex-worker"});
+        super::super::agent_routing::hydrate_standard_agent_to_parent(
+            &mut routed,
+            "parent-model",
+        );
+        assert!(routed.get("claudex_model").is_none());
+
+        let arguments = json!({"subagent_type":"custom-advisor"});
+        let messages = [json!({
+            "role": "user",
+            "content": r#"Claudex routing for this turn: {"providers":{},"advisor":{"agent":"custom-advisor","model":"advisor-model","effort":"high"},"custom_advisor_enabled":true}"#
+        })];
+        assert!(!super::super::agent_routing::model_is_authorized(
+            &arguments,
+            &messages,
+            &json!(null),
+            "wrong-model"
+        ));
     }
 
     fn request_without_user_id(prompt: &str) -> MessagesRequest {

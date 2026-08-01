@@ -95,5 +95,6 @@ mod tests {
                 .background_launches(&["background".to_owned(), "background".to_owned()])
                 .is_none()
         );
+        assert!(intents.background_launches(&[]).is_none());
     }
 }

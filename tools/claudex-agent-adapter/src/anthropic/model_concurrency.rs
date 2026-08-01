@@ -290,6 +290,28 @@ mod tests {
         drop(recovered);
     }
 
+    #[tokio::test]
+    async fn zero_wait_timeout_uses_nonblocking_admission() {
+        let registry = ModelConcurrency::new(vec![("zero".to_owned(), 1)]);
+        let first = registry
+            .ticket("zero", Some(1))
+            .unwrap()
+            .acquire()
+            .await
+            .unwrap();
+        let error = match registry
+            .ticket("zero", Some(1))
+            .unwrap()
+            .acquire_with_timeout(Duration::ZERO)
+            .await
+        {
+            Ok(_) => panic!("zero wait must not queue behind an occupied model"),
+            Err(error) => error,
+        };
+        assert!(error.to_string().contains("semaphore is unavailable"));
+        drop(first);
+    }
+
     #[test]
     fn parses_configured_wait_timeout_without_accepting_invalid_values() {
         assert_eq!(parse_wait_timeout(None), DEFAULT_WAIT_TIMEOUT);

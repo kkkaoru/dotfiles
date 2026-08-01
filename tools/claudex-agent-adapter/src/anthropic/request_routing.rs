@@ -14,6 +14,7 @@ const HAIKU_CONVERSATION_TOKEN_BUDGET: usize = 100_000;
 
 /// Apply SubAgent intent overrides and policy denylist / unrouted-provider remaps.
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 pub(super) fn resolve_request_model(
     request: &mut MessagesRequest,
     main_model: &str,

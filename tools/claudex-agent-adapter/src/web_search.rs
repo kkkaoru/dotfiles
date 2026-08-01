@@ -303,6 +303,24 @@ mod tests {
         );
     }
 
+    #[test]
+    fn rejects_malformed_results_and_answer_deltas() {
+        let mut answer = String::new();
+        append_answer_delta(&serde_json::json!({"params": {"delta": "ok"}}), &mut answer);
+        append_answer_delta(&serde_json::json!({"params": {"delta": 1}}), &mut answer);
+        append_answer_delta(&serde_json::json!({"params": {}}), &mut answer);
+        assert_eq!(answer, "ok");
+
+        let mut results = Vec::new();
+        collect_item_results(
+            &serde_json::json!({"params": {"item": {"type": "webSearch"}}}),
+            &mut results,
+        );
+        assert!(results.is_empty());
+        assert!(parse_result(&serde_json::json!({"title": " ", "url": "https://x"})).is_none());
+        assert!(parse_result(&serde_json::json!({"title": "x", "url": " "})).is_none());
+    }
+
     #[tokio::test]
     async fn rejects_empty_queries_and_missing_workers() {
         let backend = AgentBackend::routed(Vec::new());

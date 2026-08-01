@@ -53,3 +53,31 @@ fn xml_tag<'a>(text: &'a str, tag: &str) -> Option<&'a str> {
     let value = text.split_once(&open)?.1.split_once(&close)?.0.trim();
     (!value.is_empty()).then_some(value)
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn parses_terminal_statuses_and_rejects_malformed_content() {
+        assert!(terminal_task_notification_ids(&[
+            json!({"role":"assistant","content":"<task-notification><status>completed</status></task-notification>"})
+        ])
+        .is_empty());
+        let messages = vec![
+            json!({"role":"user"}),
+            json!({"role":"user","content":null}),
+            json!({"role":"user","content":[
+                {"type":"other","text":"<task-notification><status>completed</status></task-notification>"},
+                {"type":"text","text":"<task-notification><status>unknown</status><tool-use-id>x</tool-use-id></task-notification>"},
+                {"type":"text","text":"<task-notification><status>failed</status></task-notification>"},
+                {"type":"text","text":"<task-notification><status>stopped</status><tool-use-id>tool-1</tool-use-id></task-notification>"},
+                {"type":"text","text":"<task-notification><status>completed</status><tool-use-id> </tool-use-id></task-notification>"}
+            ]}),
+        ];
+        let ids = terminal_task_notification_ids(&messages);
+        assert_eq!(ids, HashSet::from(["tool-1".to_owned()]));
+    }
+}

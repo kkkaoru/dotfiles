@@ -396,4 +396,38 @@ mod tests {
         let empty = ModelCatalog::from_routes(&[BackendRoute::new("", BackendKind::GrokAcp)]);
         assert!(!empty.matches(""));
     }
+
+    #[test]
+    fn rejects_backend_metadata_and_search_mode_mismatches() {
+        for provider in [
+            r#"{"id":"p","agent":"w","defaultModel":"m","effort":"high","backend":"grok-acp","modelProvider":"provider"}"#,
+            r#"{"id":"p","agent":"w","defaultModel":"m","effort":"high","backend":"grok-acp","webSearchMode":"codex-native"}"#,
+            r#"{"id":"p","agent":"w","defaultModel":"m","effort":"high","backend":"configured-acp"}"#,
+            r#"{"id":"p","agent":"w","defaultModel":"m","effort":"high","backend":"codex-app-server","webSearchMode":"acp-native"}"#,
+        ] {
+            let parsed: ProviderConfig = serde_json::from_str(&config(provider)).unwrap();
+            assert!(validate(parsed).is_err(), "accepted invalid provider: {provider}");
+        }
+    }
+
+    #[test]
+    fn reaches_model_and_prefix_uniqueness_checks_after_distinct_identity_checks() {
+        let duplicate_model: ProviderConfig = serde_json::from_str(
+            r#"{"version":1,"mainProviders":["p"],"providers":[
+                {"id":"p","agent":"w","defaultModel":"same-model","effort":"high","backend":"grok-acp"},
+                {"id":"q","agent":"other-w","defaultModel":"same-model","effort":"low","backend":"grok-acp"}
+            ],"fallback":{"agent":"f","model":"m","effort":"high"}}"#,
+        )
+        .unwrap();
+        assert!(validate(duplicate_model).is_err());
+
+        let duplicate_prefix: ProviderConfig = serde_json::from_str(
+            r#"{"version":1,"mainProviders":["p"],"providers":[
+                {"id":"p","agent":"w","defaultModel":"model-a","effort":"high","modelPrefixes":["shared-"],"backend":"grok-acp"},
+                {"id":"q","agent":"other-w","defaultModel":"model-b","effort":"low","modelPrefixes":["shared-"],"backend":"grok-acp"}
+            ],"fallback":{"agent":"f","model":"m","effort":"high"}}"#,
+        )
+        .unwrap();
+        assert!(validate(duplicate_prefix).is_err());
+    }
 }

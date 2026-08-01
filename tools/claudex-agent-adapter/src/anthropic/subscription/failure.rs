@@ -240,6 +240,7 @@ pub(in crate::anthropic) fn protocol_failure(model: Option<&str>, diagnostic: &s
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 pub(in crate::anthropic) fn subscription_result(stdout: &[u8]) -> Result<String> {
     subscription_result_for_model(stdout, None)
 }
@@ -264,6 +265,7 @@ pub(in crate::anthropic) fn subscription_result_text(result: &Value) -> Option<S
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 pub(in crate::anthropic) fn validate_subscription_result(result: &Value) -> Result<()> {
     validate_subscription_result_for_model(result, None)
 }

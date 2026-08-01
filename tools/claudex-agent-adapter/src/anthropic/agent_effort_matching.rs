@@ -269,6 +269,38 @@ mod tests {
     }
 
     #[test]
+    fn plain_and_nested_values_without_markers_stay_main_session_requests() {
+        assert!(!value_contains_subagent_marker(&serde_json::json!(
+            "ordinary user text"
+        )));
+        assert!(value_contains_subagent_marker(&serde_json::json!(
+            "cc_is_subagent=true"
+        )));
+        assert!(value_contains_subagent_marker(&serde_json::json!(
+            "<claudex-agent-id>worker</claudex-agent-id>"
+        )));
+        assert!(!value_contains_subagent_marker(&serde_json::json!([
+            null,
+            {"content": ["ordinary", 7, false]}
+        ])));
+        assert!(!is_subagent_request(&MessagesRequest {
+            model: "main-model".to_owned(),
+            system: serde_json::json!(null),
+            messages: vec![serde_json::json!({
+                "role": "user",
+                "content": [{"type": "text", "text": "ordinary user text"}]
+            })],
+            tools: Vec::new(),
+            stream: false,
+            output_config: serde_json::Value::Null,
+            metadata: serde_json::Value::Null,
+            working_directory: None,
+            disabled_subagent_models: Default::default(),
+            claudex_collaborator_model: None,
+        }));
+    }
+
+    #[test]
     fn native_session_header_overrides_historical_child_markers_for_main() {
         let mut request: MessagesRequest = serde_json::from_value(json!({
             "model":"claude-opus-5",
