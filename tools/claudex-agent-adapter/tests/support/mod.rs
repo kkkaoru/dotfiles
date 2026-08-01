@@ -94,27 +94,20 @@ impl Adapter {
 
     async fn wait_until_ready(&self) {
         let client = Client::new();
-        for _ in 0..100 {
-            let ready = client
-                .get(format!("{}/health", self.base_url))
-                .send()
-                .await
-                .is_ok_and(|response| response.status().is_success());
-            if ready {
-                return;
-            }
+        let mut attempts = 0;
+        while attempts < 100 && !adapter_is_ready(&client, &self.base_url).await {
+            attempts += 1;
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        panic!("adapter did not become ready");
+        assert!(attempts < 100, "adapter did not become ready");
     }
 
     #[allow(dead_code)]
     pub async fn wait_for_codex_disconnect_drain(&self) {
-        tokio::time::timeout(Duration::from_secs(2), async {
-            while !self.disconnect_marker.exists() {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            wait_until_path_exists(&self.disconnect_marker),
+        )
         .await
         .expect("Codex fixture did not drain the disconnected turn");
     }
@@ -133,6 +126,20 @@ impl Adapter {
             "DISCONNECT_WITH_SLOW_TOOL\nDISCONNECT_MARKER={}",
             self.disconnect_marker.display()
         )
+    }
+}
+
+async fn adapter_is_ready(client: &Client, base_url: &str) -> bool {
+    client
+        .get(format!("{base_url}/health"))
+        .send()
+        .await
+        .is_ok_and(|response| response.status().is_success())
+}
+
+async fn wait_until_path_exists(path: &Path) {
+    while !path.exists() {
+        tokio::time::sleep(Duration::from_millis(10)).await;
     }
 }
 

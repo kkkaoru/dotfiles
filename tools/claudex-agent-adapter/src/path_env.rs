@@ -22,14 +22,23 @@ fn tool_search_path_from(home: Option<OsString>, existing: Option<OsString>) -> 
     parts.push(PathBuf::from("/usr/bin"));
     parts.push(PathBuf::from("/bin"));
     if let Some(existing) = existing {
-        for part in env::split_paths(&existing) {
-            if !part.as_os_str().is_empty() && !parts.iter().any(|seen| seen == &part) {
-                parts.push(part);
-            }
-        }
+        append_unique_paths(&mut parts, &existing);
     }
     env::join_paths(parts.iter().map(|part| part.as_os_str()))
         .unwrap_or_else(|_| OsString::from("/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"))
+}
+
+fn append_unique_paths(parts: &mut Vec<PathBuf>, existing: &OsString) {
+    for part in env::split_paths(existing) {
+        push_unique_path(parts, part);
+    }
+}
+
+fn push_unique_path(parts: &mut Vec<PathBuf>, part: PathBuf) {
+    if part.as_os_str().is_empty() || parts.contains(&part) {
+        return;
+    }
+    parts.push(part);
 }
 
 /// Environment for a detached `serve` daemon started via nohup.

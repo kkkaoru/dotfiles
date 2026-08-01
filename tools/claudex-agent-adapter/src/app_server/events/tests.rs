@@ -54,6 +54,77 @@ async fn isolates_threads_and_fans_out_subscribers() {
 }
 
 #[tokio::test]
+async fn replays_a_bounded_pre_subscription_backlog_in_fifo_order() {
+    let dispatcher = ThreadEventDispatcher::default();
+    for sequence in 0..3 {
+        dispatcher.dispatch(json!({
+            "method":"item/tool/call",
+            "params":{"threadId":"backlog","sequence":sequence}
+        }));
+    }
+
+    let events = dispatcher.subscribe("backlog");
+    for sequence in 0..3 {
+        assert_eq!(events.recv().await.unwrap()["params"]["sequence"], sequence);
+    }
+
+    drop(events);
+    for sequence in 0..=MAX_QUEUED_EVENTS {
+        dispatcher.dispatch(json!({
+            "method":"item/tool/call",
+            "params":{"threadId":"backlog","sequence":sequence}
+        }));
+    }
+    let events = dispatcher.subscribe("backlog");
+    let overflow = events.recv().await.unwrap();
+    assert_eq!(overflow["method"], "error");
+    assert!(events.queue.state.lock().unwrap().overflowed);
+}
+
+#[tokio::test]
+async fn hands_unread_single_subscriber_events_to_the_next_turn() {
+    let dispatcher = ThreadEventDispatcher::default();
+    let events = dispatcher.subscribe("handoff");
+    dispatcher.dispatch(json!({
+        "method":"item/tool/call",
+        "params":{"threadId":"handoff","callId":"late"}
+    }));
+    drop(events);
+
+    let next_turn = dispatcher.subscribe("handoff");
+    assert_eq!(next_turn.recv().await.unwrap()["params"]["callId"], "late");
+}
+
+#[tokio::test]
+async fn does_not_replay_fanout_copies_or_events_from_a_terminal_turn() {
+    let dispatcher = ThreadEventDispatcher::default();
+    let first = dispatcher.subscribe("shared-handoff");
+    let second = dispatcher.subscribe("shared-handoff");
+    dispatcher.dispatch(json!({
+        "method":"item/tool/call",
+        "params":{"threadId":"shared-handoff","callId":"shared"}
+    }));
+    assert_eq!(first.recv().await.unwrap()["params"]["callId"], "shared");
+    drop(first);
+    drop(second);
+    let next_turn = dispatcher.subscribe("shared-handoff");
+    assert!(next_turn.queue.state.lock().unwrap().events.is_empty());
+
+    let terminal = dispatcher.subscribe("terminal");
+    dispatcher.dispatch(json!({
+        "method":"item/tool/call",
+        "params":{"threadId":"terminal","callId":"obsolete"}
+    }));
+    dispatcher.dispatch(json!({
+        "method":"turn/completed",
+        "params":{"turn":{"threadId":"terminal","status":"completed"}}
+    }));
+    drop(terminal);
+    let after_terminal = dispatcher.subscribe("terminal");
+    assert!(after_terminal.queue.state.lock().unwrap().events.is_empty());
+}
+
+#[tokio::test]
 async fn coalesces_a_stalled_burst_larger_than_the_queue_limit() {
     let dispatcher = ThreadEventDispatcher::default();
     let events = dispatcher.subscribe("burst");
@@ -262,6 +333,7 @@ async fn dropping_one_subscriber_retains_the_other_and_closes_its_queue() {
             .unwrap()
             .get("shared")
             .unwrap()
+            .subscribers
             .len(),
         1
     );
@@ -284,8 +356,9 @@ fn rejects_a_corrupted_coalescible_queue_tail() {
         events: VecDeque::from([QueuedEvent {
             bytes: event_bytes(&value),
             value,
+            requeueable: true,
         }]),
         ..QueueState::default()
     };
-    state.append_delta("suffix");
+    state.append_delta("suffix", true);
 }

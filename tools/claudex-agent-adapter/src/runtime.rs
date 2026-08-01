@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, ffi::OsString, path::PathBuf, sync::Arc};
+use std::{collections::VecDeque, ffi::OsString, path::PathBuf, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result, bail};
 use tracing_subscriber::EnvFilter;
@@ -11,6 +11,7 @@ use crate::{
     provider_config::{self, WorkerRoute},
 };
 
+mod hard_timeout;
 mod shutdown;
 
 #[derive(Debug)]
@@ -95,6 +96,7 @@ fn parse_options(arguments: &mut VecDeque<OsString>) -> Result<ParsedOptions> {
     let mut listen = "127.0.0.1:8318".parse().expect("default listener");
     let mut max_processes = DEFAULT_MAX_PROCESSES;
     let mut timeout_minutes = DEFAULT_TIMEOUT_MINUTES;
+    let mut hard_timeout_cli = None;
     while let Some(option) = arguments
         .front()
         .and_then(|value| value.to_str())
@@ -142,6 +144,9 @@ fn parse_options(arguments: &mut VecDeque<OsString>) -> Result<ParsedOptions> {
             "--subscription-timeout-minutes" => {
                 timeout_minutes = positive_number(arguments, &option)?;
             }
+            "--subagent-hard-timeout-seconds" => {
+                parse_hard_timeout(arguments, &option, &mut hard_timeout_cli)?;
+            }
             "--" => break,
             _ => bail!("unknown adapter option `{option}`"),
         }
@@ -153,6 +158,7 @@ fn parse_options(arguments: &mut VecDeque<OsString>) -> Result<ParsedOptions> {
         bail!("adapter options must be valid UTF-8");
     }
     validate_limits(max_processes, timeout_minutes)?;
+    let hard_timeout = hard_timeout::resolve(hard_timeout_cli)?;
     let configured = provider_config
         .as_deref()
         .map(provider_config::load)
@@ -193,10 +199,24 @@ fn parse_options(arguments: &mut VecDeque<OsString>) -> Result<ParsedOptions> {
             listen,
             subscription_max_processes: max_processes,
             subscription_timeout_minutes: timeout_minutes,
+            subagent_hard_timeout_seconds: hard_timeout,
             model_catalog,
         },
         inherit_claude_model,
     })
+}
+
+fn parse_hard_timeout(
+    arguments: &mut VecDeque<OsString>,
+    option: &str,
+    hard_timeout: &mut Option<std::num::NonZeroU64>,
+) -> Result<()> {
+    if hard_timeout.is_some() {
+        bail!("--subagent-hard-timeout-seconds must not be repeated");
+    }
+    let seconds: u64 = positive_number(arguments, option)?;
+    *hard_timeout = std::num::NonZeroU64::new(seconds);
+    Ok(())
 }
 
 fn reject_inherit_model(options: &ParsedOptions, command: &str) -> Result<()> {
@@ -306,6 +326,11 @@ async fn serve_on_listener(
             options.subscription_max_processes,
             options.subscription_timeout_minutes,
         )?
+        .with_subagent_hard_timeout(
+            options
+                .subagent_hard_timeout_seconds
+                .map(|seconds| Duration::from_secs(seconds.get())),
+        )
         .with_persisted_agent_intents()
         .with_model_catalog(options.model_catalog.clone()),
     );

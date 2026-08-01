@@ -1,6 +1,6 @@
 use std::{
     collections::{HashMap, VecDeque},
-    io::{self, Write},
+    mem,
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -10,11 +10,23 @@ use std::{
 use serde_json::{Value, json};
 use tokio::sync::Notify;
 
+use self::encoding::{encoded_string_content_bytes, event_bytes};
+use self::event_shape::{coalescible_suffix, event_thread_id, is_bridge_event, is_terminal_event};
+
+mod encoding;
+mod event_shape;
+
 const MAX_QUEUED_EVENTS: usize = 256;
 const MAX_QUEUED_BYTES: usize = 1024 * 1024;
 
 type Subscribers = Vec<(u64, Arc<EventQueue>)>;
-type Registry = HashMap<String, Subscribers>;
+type Registry = HashMap<String, ThreadRoute>;
+
+#[derive(Default)]
+struct ThreadRoute {
+    subscribers: Subscribers,
+    backlog: QueueState,
+}
 
 #[derive(Default)]
 struct QueueState {
@@ -22,11 +34,13 @@ struct QueueState {
     queued_bytes: usize,
     closed: bool,
     overflowed: bool,
+    terminal_seen: bool,
 }
 
 struct QueuedEvent {
     value: Value,
     bytes: usize,
+    requeueable: bool,
 }
 
 #[derive(Default)]
@@ -43,11 +57,19 @@ enum QueuePoll {
 
 impl EventQueue {
     fn push(&self, event: Value) {
+        self.push_with_requeueability(event, true);
+    }
+
+    fn push_shared(&self, event: Value) {
+        self.push_with_requeueability(event, false);
+    }
+
+    fn push_with_requeueability(&self, event: Value, requeueable: bool) {
         let mut state = self.state.lock().expect("thread event queue poisoned");
-        if state.closed || state.overflowed {
+        if state.closed || state.overflowed || state.terminal_seen {
             return;
         }
-        state.push_or_overflow(event);
+        state.push_or_overflow(event, requeueable);
         drop(state);
         self.ready.notify_one();
     }
@@ -86,33 +108,54 @@ impl EventQueue {
 }
 
 impl QueueState {
-    fn push_or_overflow(&mut self, event: Value) {
-        if let Some(suffix) = self
-            .events
-            .back()
-            .and_then(|last| coalescible_suffix(&last.value, &event))
-        {
-            if !self.append_delta(suffix) {
-                self.overflow(event_thread_id(&event).expect("dispatched event thread id"));
-            }
+    fn push_or_overflow(&mut self, event: Value, requeueable: bool) {
+        if self.overflowed || self.terminal_seen {
+            return;
+        }
+        if self.append_to_coalescible_tail(&event, requeueable) {
             return;
         }
 
         let bytes = event_bytes(&event);
+        let terminal = is_terminal_event(&event);
         if self.events.len() >= MAX_QUEUED_EVENTS
             || self.queued_bytes.saturating_add(bytes) > MAX_QUEUED_BYTES
         {
-            self.overflow(event_thread_id(&event).expect("dispatched event thread id"));
+            self.overflow(
+                event_thread_id(&event).expect("dispatched event thread id"),
+                requeueable,
+            );
+            self.terminal_seen = terminal;
             return;
         }
         self.events.push_back(QueuedEvent {
             value: event,
             bytes,
+            requeueable,
         });
         self.queued_bytes += bytes;
+        self.terminal_seen = terminal;
     }
 
-    fn append_delta(&mut self, suffix: &str) -> bool {
+    fn append_to_coalescible_tail(&mut self, event: &Value, requeueable: bool) -> bool {
+        let Some(suffix) = self
+            .events
+            .back()
+            .and_then(|last| coalescible_suffix(&last.value, event))
+        else {
+            return false;
+        };
+        if self.append_delta(suffix, requeueable) {
+            return true;
+        }
+        self.overflow(
+            event_thread_id(event).expect("dispatched event thread id"),
+            requeueable,
+        );
+        true
+    }
+
+    fn append_delta(&mut self, suffix: &str, requeueable: bool) -> bool {
         let additional_bytes = encoded_string_content_bytes(suffix);
         if self.queued_bytes.saturating_add(additional_bytes) > MAX_QUEUED_BYTES {
             return false;
@@ -127,11 +170,13 @@ impl QueueState {
         };
         delta.push_str(suffix);
         event.bytes += additional_bytes;
+        event.requeueable &= requeueable;
         self.queued_bytes += additional_bytes;
         true
     }
 
-    fn overflow(&mut self, thread_id: &str) {
+    fn overflow(&mut self, thread_id: &str, requeueable: bool) {
+        let requeueable = requeueable && self.events.iter().all(|event| event.requeueable);
         let event = json!({
             "method":"error",
             "params":{
@@ -145,9 +190,28 @@ impl QueueState {
         self.events.push_back(QueuedEvent {
             value: event,
             bytes,
+            requeueable,
         });
         self.queued_bytes = bytes;
         self.overflowed = true;
+    }
+
+    fn take_requeueable_backlog(&mut self) -> Self {
+        if self.terminal_seen {
+            self.events.clear();
+            self.queued_bytes = 0;
+            return Self::default();
+        }
+        let mut backlog = Self::default();
+        backlog.events = self
+            .events
+            .drain(..)
+            .filter(|event| event.requeueable)
+            .collect();
+        backlog.queued_bytes = backlog.events.iter().map(|event| event.bytes).sum();
+        self.queued_bytes = 0;
+        backlog.overflowed = self.overflowed && !backlog.events.is_empty();
+        backlog
     }
 }
 
@@ -160,13 +224,17 @@ pub(crate) struct ThreadEventDispatcher {
 impl ThreadEventDispatcher {
     pub(crate) fn subscribe(&self, thread_id: &str) -> ThreadEvents {
         let channel_id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        let queue = Arc::new(EventQueue::default());
-        self.channels
+        let mut channels = self
+            .channels
             .lock()
-            .expect("thread event registry poisoned")
-            .entry(thread_id.to_owned())
-            .or_insert_with(|| Vec::with_capacity(1))
-            .push((channel_id, Arc::clone(&queue)));
+            .expect("thread event registry poisoned");
+        let route = channels.entry(thread_id.to_owned()).or_default();
+        let queue = Arc::new(EventQueue {
+            state: Mutex::new(mem::take(&mut route.backlog)),
+            ready: Notify::new(),
+        });
+        route.subscribers.push((channel_id, Arc::clone(&queue)));
+        drop(channels);
         ThreadEvents {
             thread_id: thread_id.to_owned(),
             channel_id,
@@ -183,31 +251,34 @@ impl ThreadEventDispatcher {
             tracing::debug!(?event, "ignored app-server event without thread id");
             return;
         };
-        let channels = self
+        let mut channels = self
             .channels
             .lock()
             .expect("thread event registry poisoned");
-        let Some(entries) = channels.get(thread_id) else {
+        if is_terminal_event(&event)
+            && channels
+                .get(thread_id)
+                .is_none_or(|route| route.subscribers.is_empty())
+        {
+            channels.remove(thread_id);
             return;
+        }
+        let route = channels.entry(thread_id.to_owned()).or_default();
+        if route.subscribers.is_empty() {
+            route.backlog.push_or_overflow(event, true);
+            return;
+        }
+        if route.subscribers.len() == 1 {
+            route.subscribers[0].1.push(event);
+            return;
+        }
+        let Some((last, rest)) = route.subscribers.split_last() else {
+            unreachable!("checked non-empty subscriber route");
         };
-        if entries.len() == 1 {
-            let queue = Arc::clone(&entries[0].1);
-            drop(channels);
-            queue.push(event);
-            return;
+        for (_, queue) in rest {
+            queue.push_shared(event.clone());
         }
-        let mut subscribers = entries
-            .iter()
-            .map(|(_, queue)| Arc::clone(queue))
-            .collect::<Vec<_>>();
-        drop(channels);
-        let last = subscribers
-            .pop()
-            .expect("multiple subscribers are non-empty");
-        for queue in subscribers {
-            queue.push(event.clone());
-        }
-        last.push(event);
+        last.1.push_shared(event);
     }
 
     pub(crate) fn close(&self) {
@@ -216,7 +287,7 @@ impl ThreadEventDispatcher {
             .lock()
             .expect("thread event registry poisoned")
             .drain()
-            .flat_map(|(_, subscribers)| subscribers.into_iter().map(|(_, queue)| queue))
+            .flat_map(|(_, route)| route.subscribers.into_iter().map(|(_, queue)| queue))
             .collect::<Vec<_>>();
         for queue in queues {
             queue.close();
@@ -240,103 +311,44 @@ impl ThreadEvents {
 
 impl Drop for ThreadEvents {
     fn drop(&mut self) {
-        {
-            let mut channels = self
+        unsubscribe(
+            &mut self
                 .channels
                 .lock()
-                .expect("thread event registry poisoned");
-            let is_empty = channels
-                .get_mut(&self.thread_id)
-                .is_some_and(|subscribers| {
-                    subscribers.retain(|(channel_id, _)| *channel_id != self.channel_id);
-                    subscribers.is_empty()
-                });
-            if is_empty {
-                channels.remove(&self.thread_id);
-            }
-        }
+                .expect("thread event registry poisoned"),
+            &self.thread_id,
+            self.channel_id,
+            &self.queue,
+        );
         self.queue.close();
     }
 }
 
-fn coalescible_suffix<'a>(last: &Value, next: &'a Value) -> Option<&'a str> {
-    let method = last.get("method")?.as_str()?;
-    if next.get("method")?.as_str()? != method
-        || !matches!(
-            method,
-            "item/agentMessage/delta" | "item/reasoning/summaryTextDelta"
-        )
-        || last.pointer("/params/turnId") != next.pointer("/params/turnId")
-        || last.pointer("/params/itemId") != next.pointer("/params/itemId")
-        || (method == "item/reasoning/summaryTextDelta"
-            && last.pointer("/params/summaryIndex") != next.pointer("/params/summaryIndex"))
-    {
-        return None;
-    }
-    last.pointer("/params/delta")?.as_str()?;
-    next.pointer("/params/delta")?.as_str()
-}
-
-fn is_bridge_event(event: &Value) -> bool {
-    // App-server lifecycle events can repeat the complete user input and dynamic tool schemas.
-    // The Anthropic bridge ignores them, so admitting them can overflow the queue before the
-    // small output deltas behind them are consumed.
-    match event.get("method").and_then(Value::as_str) {
-        Some("item/started" | "item/completed") => {
-            event.pointer("/params/item/type").and_then(Value::as_str) == Some("webSearch")
-        }
-        Some(
-            "item/agentMessage/delta"
-            | "item/reasoning/summaryTextDelta"
-            | "item/tool/call"
-            | "item/providerTool/call"
-            | "item/providerTool/update"
-            | "thread/tokenUsage/updated"
-            | "turn/completed"
-            | "error",
-        ) => true,
-        _ => false,
+fn unsubscribe(channels: &mut Registry, thread_id: &str, channel_id: u64, queue: &EventQueue) {
+    let remove_route = match channels.get_mut(thread_id) {
+        Some(route) => requeue_if_last_subscriber(route, channel_id, queue),
+        None => false,
+    };
+    if remove_route {
+        channels.remove(thread_id);
     }
 }
 
-fn encoded_string_content_bytes(value: &str) -> usize {
-    encoded_bytes(value).saturating_sub(2)
-}
-
-fn event_bytes(event: &Value) -> usize {
-    encoded_bytes(event)
-}
-
-fn encoded_bytes(value: &(impl serde::Serialize + ?Sized)) -> usize {
-    let mut counter = ByteCounter::default();
-    serde_json::to_writer(&mut counter, value).map_or(usize::MAX, |()| counter.bytes)
-}
-
-#[derive(Default)]
-struct ByteCounter {
-    bytes: usize,
-}
-
-impl Write for ByteCounter {
-    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-        self.bytes = self.bytes.saturating_add(buffer.len());
-        Ok(buffer.len())
+fn requeue_if_last_subscriber(
+    route: &mut ThreadRoute,
+    channel_id: u64,
+    queue: &EventQueue,
+) -> bool {
+    route
+        .subscribers
+        .retain(|(registered_id, _)| *registered_id != channel_id);
+    if !route.subscribers.is_empty() {
+        return false;
     }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-fn event_thread_id(event: &Value) -> Option<&str> {
-    event
-        .pointer("/params/threadId")
-        .and_then(Value::as_str)
-        .or_else(|| {
-            event
-                .pointer("/params/turn/threadId")
-                .and_then(Value::as_str)
-        })
+    let mut state = queue.state.lock().expect("thread event queue poisoned");
+    debug_assert!(route.backlog.events.is_empty());
+    route.backlog = state.take_requeueable_backlog();
+    route.backlog.events.is_empty()
 }
 
 #[cfg(test)]

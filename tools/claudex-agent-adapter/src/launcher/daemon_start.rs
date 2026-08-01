@@ -1,13 +1,90 @@
 use std::{
     fs::{self, OpenOptions},
+    path::Path,
     process::{Command, Stdio},
 };
 
 use anyhow::{Context, Result};
 
-use super::{ServiceConfig, daemon_arguments::daemon_arguments, launcher_logs};
+use super::{
+    RECOVERY_MANIFEST_ENV, SERVICE_CONFIG_FINGERPRINT_ENV, ServiceConfig,
+    daemon_arguments::daemon_arguments, launcher_logs, recovery_manifest,
+};
+
+#[derive(Clone, Debug)]
+pub(super) struct RecoveryProcess {
+    pub(super) pid: u32,
+    pub(super) generation: String,
+    pub(super) protocol_version: u64,
+    pub(super) build_id: String,
+    pub(super) model: String,
+    pub(super) codex_config_fingerprint: String,
+    pub(super) service_config_fingerprint: String,
+}
 
 pub(super) fn start_adapter(config: &ServiceConfig) -> Result<u32> {
+    let manifest_path = recovery_manifest::prepare(config)?;
+    spawn_adapter(
+        config,
+        &config.executable,
+        daemon_arguments(&config.options),
+        &config.codex_config_fingerprint,
+        &config.service_config_fingerprint,
+        Some(&manifest_path),
+    )
+}
+
+pub(super) fn start_ephemeral_adapter(config: &ServiceConfig) -> Result<u32> {
+    spawn_adapter(
+        config,
+        &config.executable,
+        daemon_arguments(&config.options),
+        &config.codex_config_fingerprint,
+        &config.service_config_fingerprint,
+        None,
+    )
+}
+
+pub(super) fn validate_recovery(
+    config: &ServiceConfig,
+    generation: &str,
+) -> Result<recovery_manifest::ValidatedRecovery> {
+    recovery_manifest::validate(config, generation)
+}
+
+pub(super) fn start_recovery(config: &ServiceConfig, generation: &str) -> Result<RecoveryProcess> {
+    let recovery = validate_recovery(config, generation)?;
+    let pid = spawn_adapter(
+        config,
+        &recovery.executable,
+        recovery.arguments,
+        &recovery.codex_config_fingerprint,
+        &recovery.service_config_fingerprint,
+        Some(&recovery.manifest_path),
+    )?;
+    Ok(RecoveryProcess {
+        pid,
+        generation: recovery.generation,
+        protocol_version: recovery.protocol_version,
+        build_id: recovery.build_id,
+        model: recovery.model,
+        codex_config_fingerprint: recovery.codex_config_fingerprint,
+        service_config_fingerprint: recovery.service_config_fingerprint,
+    })
+}
+
+pub(super) fn terminate_started_recovery(pid: u32) {
+    super::daemon_process::terminate(pid);
+}
+
+fn spawn_adapter(
+    config: &ServiceConfig,
+    executable: &Path,
+    arguments: Vec<std::ffi::OsString>,
+    codex_config_fingerprint: &str,
+    service_config_fingerprint: &str,
+    manifest_path: Option<&Path>,
+) -> Result<u32> {
     let log_dir = config
         .log_path
         .parent()
@@ -29,21 +106,26 @@ pub(super) fn start_adapter(config: &ServiceConfig) -> Result<u32> {
     let stderr = stdout.try_clone().context("clone adapter log handle")?;
     let mut command = Command::new("nohup");
     configure_process_group(&mut command);
-    let child = crate::path_env::apply_daemon_env(
-        command
-            .arg(&config.executable)
-            .args(daemon_arguments(&config.options)),
-        &config.token,
-    )
-    .env(
-        crate::app_server::CODEX_CONFIG_FINGERPRINT_ENV,
-        &config.codex_config_fingerprint,
-    )
-    .stdin(Stdio::null())
-    .stdout(Stdio::from(stdout))
-    .stderr(Stdio::from(stderr))
-    .spawn()
-    .context("start adapter daemon")?;
+    let command =
+        crate::path_env::apply_daemon_env(command.arg(executable).args(arguments), &config.token)
+            .env(
+                crate::app_server::CODEX_CONFIG_FINGERPRINT_ENV,
+                codex_config_fingerprint,
+            )
+            .env(SERVICE_CONFIG_FINGERPRINT_ENV, service_config_fingerprint);
+    if let Some(manifest_path) = manifest_path {
+        command.env(RECOVERY_MANIFEST_ENV, manifest_path);
+    } else {
+        command.env_remove(RECOVERY_MANIFEST_ENV);
+    }
+    let child = command
+        .env_remove(crate::anthropic::SUBAGENT_HARD_TIMEOUT_ENV)
+        .env_remove(crate::anthropic::LEGACY_SUBAGENT_RESPONSE_TIMEOUT_ENV)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr))
+        .spawn()
+        .context("start adapter daemon")?;
     Ok(child.id())
 }
 

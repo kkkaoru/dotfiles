@@ -29,6 +29,7 @@ pub(crate) use codex_config::{
 mod isolated_config;
 mod lifecycle;
 mod pending;
+mod protocol;
 mod provider_environment;
 use pending::{PendingRequest, PendingResponse, await_response};
 
@@ -196,32 +197,21 @@ impl AppServer {
 
     async fn read_loop(server: Weak<Self>, stdout: tokio::process::ChildStdout) {
         let mut lines = BufReader::new(stdout).lines();
-        loop {
-            let line = match lines.next_line().await {
-                Ok(Some(line)) => line,
-                Ok(None) => {
-                    lifecycle::stop_if_alive(
-                        &server,
-                        "codex app-server exited or closed its output",
-                    )
-                    .await;
-                    return;
-                }
-                Err(error) => {
-                    tracing::error!(%error, "failed to read codex app-server output");
-                    lifecycle::stop_if_alive(
-                        &server,
-                        &format!("failed to read codex app-server output: {error}"),
-                    )
-                    .await;
-                    return;
-                }
-            };
-            let Some(server) = server.upgrade() else {
-                return;
-            };
-            server.dispatch_line(&line).await;
-        }
+        while Self::dispatch_next_line(&server, &mut lines).await {}
+    }
+
+    async fn dispatch_next_line(
+        server: &Weak<Self>,
+        lines: &mut tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
+    ) -> bool {
+        let Some(line) = protocol::next_output_line(server, lines).await else {
+            return false;
+        };
+        let Some(server) = server.upgrade() else {
+            return false;
+        };
+        server.dispatch_line(&line).await;
+        true
     }
 
     async fn dispatch_line(&self, line: &str) {
@@ -248,32 +238,39 @@ impl AppServer {
             tracing::debug!(id, "received response for unknown app-server request");
             return;
         };
-        match tx {
-            PendingResponse::Awaited(tx) => {
-                let response = if let Some(error) = message.get("error") {
-                    Err(error.to_string())
-                } else {
-                    Ok(message.get("result").cloned().unwrap_or(Value::Null))
-                };
-                let _ = tx.send(response);
-            }
-            PendingResponse::Detached { thread_id } => {
-                if let Some(error) = message.get("error") {
-                    self.dispatch_detached_error(thread_id, error);
-                }
-            }
-        }
+        self.complete_response(tx, &message);
     }
 
     async fn fail_pending(&self, reason: &str) {
         for (_, response) in self.pending.lock().await.drain() {
-            match response {
-                PendingResponse::Awaited(tx) => {
-                    let _ = tx.send(Err(reason.to_owned()));
-                }
-                PendingResponse::Detached { thread_id } => {
-                    self.dispatch_detached_error(thread_id, &reason);
-                }
+            self.fail_response(response, reason);
+        }
+    }
+
+    fn complete_response(&self, response: PendingResponse, message: &Value) {
+        match response {
+            PendingResponse::Awaited(tx) => {
+                let _ = tx.send(protocol::awaited_result(message));
+            }
+            PendingResponse::Detached { thread_id } => {
+                self.dispatch_detached_response(thread_id, message);
+            }
+        }
+    }
+
+    fn dispatch_detached_response(&self, thread_id: Value, message: &Value) {
+        if let Some(error) = message.get("error") {
+            self.dispatch_detached_error(thread_id, error);
+        }
+    }
+
+    fn fail_response(&self, response: PendingResponse, reason: &str) {
+        match response {
+            PendingResponse::Awaited(tx) => {
+                let _ = tx.send(Err(reason.to_owned()));
+            }
+            PendingResponse::Detached { thread_id } => {
+                self.dispatch_detached_error(thread_id, &reason);
             }
         }
     }

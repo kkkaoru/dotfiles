@@ -39,14 +39,7 @@ pub(crate) fn provider_config_fingerprint(source_home: &Path) -> String {
     match provider_config_files(source_home) {
         Ok(files) => {
             for file in files {
-                file.hash(&mut hasher);
-                match fs::read(&file) {
-                    Ok(contents) => contents.hash(&mut hasher),
-                    Err(error) => {
-                        "unreadable".hash(&mut hasher);
-                        error.to_string().hash(&mut hasher);
-                    }
-                }
+                hash_provider_file(&mut hasher, &file);
             }
         }
         Err(error) => {
@@ -55,6 +48,17 @@ pub(crate) fn provider_config_fingerprint(source_home: &Path) -> String {
         }
     }
     format!("{:016x}", hasher.finish())
+}
+
+fn hash_provider_file(hasher: &mut DefaultHasher, file: &Path) {
+    file.hash(hasher);
+    match fs::read(file) {
+        Ok(contents) => contents.hash(hasher),
+        Err(error) => {
+            "unreadable".hash(hasher);
+            error.to_string().hash(hasher);
+        }
+    }
 }
 
 #[cfg(test)]

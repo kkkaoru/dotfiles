@@ -15,19 +15,27 @@ pub(super) fn append_model_providers(
         let Ok(contents) = std::fs::read_to_string(source) else {
             continue;
         };
-        let mut copying = false;
-        for line in contents.lines() {
-            let trimmed = line.trim();
-            if trimmed.starts_with('[') {
-                let provider_section =
-                    trimmed == "[model_providers]" || trimmed.starts_with("[model_providers.");
-                copying = provider_section && copied_sections.insert(trimmed.to_owned());
-            }
-            if copying {
-                config.push_str(line);
-                config.push('\n');
-            }
-        }
+        append_sections(&contents, config, &mut copied_sections);
     }
     Ok(())
+}
+
+fn append_sections(contents: &str, config: &mut String, copied_sections: &mut HashSet<String>) {
+    let mut copying = false;
+    for line in contents.lines() {
+        let trimmed = line.trim();
+        copying = next_copying_state(trimmed, copying, copied_sections);
+        if copying {
+            config.push_str(line);
+            config.push('\n');
+        }
+    }
+}
+
+fn next_copying_state(line: &str, current: bool, copied_sections: &mut HashSet<String>) -> bool {
+    if !line.starts_with('[') {
+        return current;
+    }
+    let provider_section = line == "[model_providers]" || line.starts_with("[model_providers.");
+    provider_section && copied_sections.insert(line.to_owned())
 }

@@ -12,7 +12,10 @@ const LISTENER_RELEASE_POLL_INTERVAL: Duration = Duration::from_millis(25);
 #[derive(Debug, Eq, PartialEq)]
 pub(super) enum ServiceState {
     Reuse,
-    Replace(Option<u32>),
+    Replace {
+        pid: Option<u32>,
+        recovery_generation: Option<String>,
+    },
     Start,
 }
 
@@ -29,7 +32,10 @@ pub(super) async fn inspect_service(
     {
         ServiceState::Reuse
     } else {
-        ServiceState::Replace(health.pid)
+        ServiceState::Replace {
+            pid: health.pid,
+            recovery_generation: health.recovery_generation,
+        }
     }
 }
 
@@ -56,7 +62,7 @@ pub(super) async fn release_stale_listener_with(
     pid: Option<u32>,
     process_matches: impl Fn(u32, &std::path::Path) -> bool,
     request_graceful_shutdown: impl Fn(u32),
-    force_terminate: impl Fn(u32),
+    _force_terminate: impl Fn(u32),
     deadline: Instant,
 ) -> Result<()> {
     let Some(pid) = pid else {
@@ -68,8 +74,9 @@ pub(super) async fn release_stale_listener_with(
     eprintln!("claudex: draining active requests on stale adapter pid {pid} during handover");
     request_graceful_shutdown(pid);
     if let Err(error) = wait_until_listener_released_by(client, config, pid, deadline).await {
-        eprintln!("claudex: force-terminating stale adapter pid {pid} after handover timeout");
-        force_terminate(pid);
+        eprintln!(
+            "claudex: handover aborted because stale adapter pid {pid} retained its listener"
+        );
         return Err(error);
     }
     Ok(())

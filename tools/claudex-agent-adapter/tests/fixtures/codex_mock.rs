@@ -18,6 +18,7 @@ struct Fixture<W> {
     team_guidance: bool,
     orchestrator_mode: bool,
     command_capable: bool,
+    agent_schema_authoritative: bool,
     disconnected_tool_drained: bool,
     disconnect_marker: Option<PathBuf>,
 }
@@ -57,6 +58,7 @@ impl<W: Write> Fixture<W> {
                 self.orchestrator_mode =
                     instructions.contains("main-session orchestration mode is active");
                 self.command_capable = command_capability(message);
+                self.agent_schema_authoritative = agent_schema_is_authoritative(message);
                 self.next_thread += 1;
                 self.send(json!({
                     "id":message["id"], "result":{"thread":{"id":self.thread_id()}}
@@ -140,6 +142,8 @@ impl<W: Write> Fixture<W> {
                 .and_then(Value::as_str)
                 .unwrap_or("unset");
             self.send_text_and_complete(effort);
+        } else if input.contains("VERIFY_AGENT_SCHEMA_AUTHORITY") {
+            self.send_text_and_complete(agent_schema_response(self.agent_schema_authoritative));
         } else if input.contains("WEBSEARCH_EMPTY") {
             self.send(json!({
                 "method":"turn/completed",
@@ -212,12 +216,7 @@ impl<W: Write> Fixture<W> {
                 }),
             );
         } else if input.contains("CONTROL_SUBAGENTS_CONTINUE") {
-            let response = if self.orchestrator_mode {
-                "MAIN_RESPONSE_CONTINUED"
-            } else {
-                "WORKER_RESPONSE_MISROUTED"
-            };
-            self.send_text_and_complete(response);
+            self.send_text_and_complete(orchestration_response(self.orchestrator_mode));
         } else if input.contains("CONTROL_SUBAGENTS_STOP") {
             self.send_control_tool(
                 message,
@@ -255,12 +254,7 @@ impl<W: Write> Fixture<W> {
         if input.contains("DISCONNECT_WITH") {
             self.start_disconnected_tool_turn(input);
         } else if input.contains("REPORT_DISCONNECT_DRAIN") {
-            let status = if self.disconnected_tool_drained {
-                "CODEX_DISCONNECT_DRAINED"
-            } else {
-                "CODEX_DISCONNECT_ABANDONED"
-            };
-            self.send_text_and_complete(status);
+            self.send_text_and_complete(disconnect_drain_response(self.disconnected_tool_drained));
         } else if input.contains("RECOVER_ORPHAN_TOOL_RESULT")
             && input.contains(r#"\"type\":\"tool_result\""#)
         {
@@ -465,45 +459,12 @@ impl<W: Write> Fixture<W> {
 
     fn send_tool(&mut self, tool: &str, input: &str) {
         if tool.contains("Bash") {
-            if !self.command_capable || !command_probe_succeeds() {
-                self.send_text_and_complete("COMMAND_TOOL_UNAVAILABLE");
-                return;
-            }
-            self.pending_tool = true;
-            self.send(json!({
-                "id":900, "method":"item/tool/call",
-                "params":{
-                    "threadId":self.thread_id(), "turnId":"turn-test", "callId":"call-command",
-                    "tool":tool,
-                    "arguments":{"command":"command -v git >/dev/null && command -v gh >/dev/null && printf CLAUDEX_COMMAND_PROBE_OK"}
-                }
-            }));
-            self.send_response_item_completed("call-command", tool);
+            self.send_command_tool(tool);
             return;
         }
         self.pending_tool = true;
-        let arguments = if tool.contains("Agent") && input.contains("USE_AGENT_DEFAULT") {
-            json!({
-                "description":"default effort fixture",
-                "prompt":"REPORT_EFFORT SUBSCRIPTION_ROUTE",
-                "subagent_type":"claude", "model":"sonnet"
-            })
-        } else if tool.contains("Agent") {
-            let prompt = if input.contains("USE_AGENT_MODEL_GPT_TOOL") {
-                "USE_TOOL"
-            } else {
-                "REPORT_EFFORT SUBSCRIPTION_ROUTE"
-            };
-            let mut arguments = json!({
-                "description":"effort fixture",
-                "prompt":prompt,
-                "subagent_type":"claude", "model":"sonnet",
-                "claudex_effort":requested_agent_effort(input)
-            });
-            if let Some(model) = requested_agent_model(input) {
-                arguments["claudex_model"] = json!(model);
-            }
-            arguments
+        let arguments = if tool.contains("Agent") {
+            requested_agent_arguments(input)
         } else {
             json!({"key":"alpha","task":"small task"})
         };
@@ -515,6 +476,23 @@ impl<W: Write> Fixture<W> {
             }
         }));
         self.send_response_item_completed("call-test", tool);
+    }
+
+    fn send_command_tool(&mut self, tool: &str) {
+        if !self.command_capable || !command_probe_succeeds() {
+            self.send_text_and_complete("COMMAND_TOOL_UNAVAILABLE");
+            return;
+        }
+        self.pending_tool = true;
+        self.send(json!({
+            "id":900, "method":"item/tool/call",
+            "params":{
+                "threadId":self.thread_id(), "turnId":"turn-test", "callId":"call-command",
+                "tool":tool,
+                "arguments":{"command":"command -v git >/dev/null && command -v gh >/dev/null && printf CLAUDEX_COMMAND_PROBE_OK"}
+            }
+        }));
+        self.send_response_item_completed("call-command", tool);
     }
 
     fn send_plain_or_streamed(&mut self, message: &Value, input: &str) {
@@ -723,8 +701,64 @@ impl<W: Write> Fixture<W> {
     }
 }
 
+fn agent_schema_response(authoritative: bool) -> &'static str {
+    if authoritative {
+        "AGENT_SCHEMA_AUTHORITY_OK"
+    } else {
+        "AGENT_SCHEMA_AUTHORITY_MUTATED"
+    }
+}
+
+fn orchestration_response(orchestrator_mode: bool) -> &'static str {
+    if orchestrator_mode {
+        "MAIN_RESPONSE_CONTINUED"
+    } else {
+        "WORKER_RESPONSE_MISROUTED"
+    }
+}
+
+fn disconnect_drain_response(drained: bool) -> &'static str {
+    if drained {
+        "CODEX_DISCONNECT_DRAINED"
+    } else {
+        "CODEX_DISCONNECT_ABANDONED"
+    }
+}
+
+fn requested_agent_arguments(input: &str) -> Value {
+    if input.contains("USE_AGENT_DEFAULT") {
+        return json!({
+            "description":"default effort fixture",
+            "prompt":"REPORT_EFFORT SUBSCRIPTION_ROUTE",
+            "subagent_type":"claude", "model":"sonnet"
+        });
+    }
+    let mut arguments = json!({
+        "description":"effort fixture",
+        "prompt":requested_agent_prompt(input),
+        "subagent_type":"claude", "model":"sonnet",
+        "claudex_effort":requested_agent_effort(input)
+    });
+    if let Some(model) = requested_agent_model(input) {
+        arguments["claudex_model"] = json!(model);
+    }
+    arguments
+}
+
+fn requested_agent_prompt(input: &str) -> &'static str {
+    if input.contains("USE_AGENT_MODEL_GPT_TOOL") {
+        "USE_TOOL"
+    } else {
+        "REPORT_EFFORT SUBSCRIPTION_ROUTE"
+    }
+}
+
 fn requested_tool(input: &str) -> Option<&'static str> {
-    if input.contains("USE_ADVISOR") {
+    if input.contains("USE_ADVISOR_PUBLIC") {
+        Some("cc_advisor_0")
+    } else if input.contains("USE_COLLABORATOR_PUBLIC") {
+        Some("cc_claude_collaborator_0")
+    } else if input.contains("USE_ADVISOR") {
         Some("advisor")
     } else if input.contains("USE_COLLABORATOR") {
         Some("claude_collaborator")
@@ -757,6 +791,33 @@ fn command_capability(message: &Value) -> bool {
             })
         });
     shell_features_enabled && bash_schema_present
+}
+
+fn agent_schema_is_authoritative(message: &Value) -> bool {
+    let expected = json!({
+        "type":"object",
+        "properties":{
+            "prompt":{"type":"string","description":"schema-authority-sentinel"},
+            "subagent_type":{"type":"string","enum":["general-purpose","Explore"]}
+        },
+        "required":["prompt"],
+        "additionalProperties":false,
+        "x-native-contract":{"version":220}
+    });
+    let Some(tools) = message
+        .pointer("/params/dynamicTools")
+        .and_then(Value::as_array)
+    else {
+        return false;
+    };
+    tools.len() == 1
+        && tools[0].get("name").and_then(Value::as_str) == Some("cc_Agent_0")
+        && tools[0].get("inputSchema") == Some(&expected)
+        && !tools.iter().any(|tool| {
+            tool.get("name")
+                .and_then(Value::as_str)
+                .is_some_and(|name| name.contains("Agent_batch"))
+        })
 }
 
 fn command_probe_succeeds() -> bool {
@@ -808,6 +869,7 @@ fn main() {
         team_guidance: false,
         orchestrator_mode: false,
         command_capable: false,
+        agent_schema_authoritative: false,
         disconnected_tool_drained: false,
         disconnect_marker: None,
     };

@@ -144,16 +144,16 @@ pub(super) fn source_branch_percent(root: &Path, data: &Value) -> Result<f64> {
             let values = record
                 .as_array()
                 .context("llvm-cov branch record is not an array")?;
-            let number = |index| {
-                values
-                    .get(index)
-                    .and_then(Value::as_u64)
-                    .context("llvm-cov branch record is incomplete")
-            };
-            let key = (path.clone(), number(0)?, number(1)?, number(2)?, number(3)?);
+            let key = (
+                path.clone(),
+                branch_record_number(values, 0)?,
+                branch_record_number(values, 1)?,
+                branch_record_number(values, 2)?,
+                branch_record_number(values, 3)?,
+            );
             let counts = branches.entry(key).or_default();
-            counts.0 = counts.0.saturating_add(number(4)?);
-            counts.1 = counts.1.saturating_add(number(5)?);
+            counts.0 = counts.0.saturating_add(branch_record_number(values, 4)?);
+            counts.1 = counts.1.saturating_add(branch_record_number(values, 5)?);
         }
     }
     if branches.is_empty() {
@@ -164,4 +164,11 @@ pub(super) fn source_branch_percent(root: &Path, data: &Value) -> Result<f64> {
         .map(|(taken, skipped)| u64::from(*taken > 0) + u64::from(*skipped > 0))
         .sum::<u64>();
     Ok(covered as f64 * 100.0 / (branches.len() * 2) as f64)
+}
+
+fn branch_record_number(values: &[Value], index: usize) -> Result<u64> {
+    values
+        .get(index)
+        .and_then(Value::as_u64)
+        .context("llvm-cov branch record is incomplete")
 }

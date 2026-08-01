@@ -30,6 +30,10 @@ pub(super) fn daemon_arguments(options: &AdapterOptions) -> Vec<OsString> {
         "--subscription-timeout-minutes".into(),
         options.subscription_timeout_minutes.to_string().into(),
     ]);
+    if let Some(seconds) = options.subagent_hard_timeout_seconds {
+        arguments.push("--subagent-hard-timeout-seconds".into());
+        arguments.push(seconds.get().to_string().into());
+    }
     arguments
 }
 

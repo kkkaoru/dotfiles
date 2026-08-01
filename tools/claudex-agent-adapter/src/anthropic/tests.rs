@@ -14,7 +14,7 @@ use super::{
     content::*,
     intern_signature,
     retention::{record_pending_tool, sweep_idle_sessions_at, take_oldest_evictable_at},
-    session::{codex_tool_name, dynamic_tool, internal_advisor_tool, internal_collaborator_tool},
+    session::{codex_tool_name, dynamic_tool},
     stream::send_stream_frame,
     trace_request,
     turn_input::{full_transcript_input, user_input_from_messages},
@@ -22,8 +22,15 @@ use super::{
 
 #[test]
 fn bridge_requires_atomic_parallel_subagent_launches() {
-    assert!(BRIDGE_INSTRUCTIONS.contains("batch Agent/Task dynamic tool exactly once"));
-    assert!(BRIDGE_INSTRUCTIONS.contains("batch contains exactly that many launch tasks"));
+    assert!(
+        BRIDGE_INSTRUCTIONS
+            .contains("one ordinary supplied Agent/Task tool call per intended worker")
+    );
+    assert!(BRIDGE_INSTRUCTIONS.contains("Never invent or request an adapter-only batch tool"));
+    assert!(BRIDGE_INSTRUCTIONS.contains("exactly that many native launch calls"));
+    assert!(
+        BRIDGE_INSTRUCTIONS.contains("never invent adapter-only claudex_model or claudex_effort")
+    );
     assert!(
         BRIDGE_INSTRUCTIONS
             .contains("A follow-up queued to a busy worker does not add parallel capacity")
@@ -119,7 +126,6 @@ fn test_session_at(
         transcript: tokio::sync::Mutex::new(Vec::new()),
         pending_tools: tokio::sync::Mutex::new(pending_tools),
         consumed_tool_ids: tokio::sync::Mutex::new(std::collections::HashSet::new()),
-        internal_tools: HashMap::new(),
         external_tool_names: HashMap::new(),
         client_user_id: None,
         gate: Arc::new(tokio::sync::Mutex::new(())),
@@ -258,9 +264,6 @@ fn converts_content_tools_names_and_prompts() {
     assert!(dynamic_tool(&json!({}), "cc_missing").is_none());
     assert_eq!(codex_tool_name(&"x".repeat(200), 7).len(), 128);
     assert_ne!(codex_tool_name("foo.bar", 0), codex_tool_name("foo_bar", 1));
-
-    assert_eq!(internal_advisor_tool()["name"], "advisor");
-    assert_eq!(internal_collaborator_tool()["name"], "claude_collaborator");
 }
 
 #[test]
@@ -400,15 +403,28 @@ async fn exposes_verified_web_evidence_metadata_in_non_stream_response() {
 
 #[test]
 fn extracts_signatures_and_counts() {
-    let request: MessagesRequest = serde_json::from_value(json!({
+    let mut request: MessagesRequest = serde_json::from_value(json!({
         "system":"system",
         "messages":[{"role":"user","content":"hello"}],
         "tools":[]
     }))
     .unwrap();
+    super::RequestIdentity::new(Some("session-a".to_owned()), None, None).attach(&mut request);
     let base_signature =
         request_signature(&request, Some("test-advisor"), Some("test-collaborator")).unwrap();
     assert!(base_signature.contains("test-advisor"));
+    let mut other_transport = request.clone();
+    super::RequestIdentity::new(Some("session-b".to_owned()), None, None)
+        .attach(&mut other_transport);
+    assert_ne!(
+        base_signature,
+        request_signature(
+            &other_transport,
+            Some("test-advisor"),
+            Some("test-collaborator")
+        )
+        .unwrap()
+    );
     let serialized_bytes = serde_json::to_string(&request.system).unwrap().len()
         + serde_json::to_string(&request.messages).unwrap().len()
         + serde_json::to_string(&request.tools).unwrap().len();

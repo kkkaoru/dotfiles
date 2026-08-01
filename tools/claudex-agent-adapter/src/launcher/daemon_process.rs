@@ -336,26 +336,30 @@ mod tests {
     #[cfg(unix)]
     fn wait_for_file_pid(child_pid_file: &Path, ready: &Path) -> u32 {
         for _ in 0..100 {
-            let pid = ready
-                .exists()
-                .then(|| std::fs::read_to_string(child_pid_file).ok())
-                .flatten()
-                .and_then(|pid| pid.trim().parse().ok());
-            if let Some(pid) = pid {
-                return pid;
+            match read_ready_pid(child_pid_file, ready) {
+                Some(pid) => return pid,
+                None => thread::sleep(Duration::from_millis(5)),
             }
-            thread::sleep(Duration::from_millis(5));
         }
         panic!("graceful shutdown fixture did not become ready")
     }
 
     #[cfg(unix)]
+    fn read_ready_pid(child_pid_file: &Path, ready: &Path) -> Option<u32> {
+        ready
+            .exists()
+            .then(|| std::fs::read_to_string(child_pid_file).ok())
+            .flatten()
+            .and_then(|pid| pid.trim().parse().ok())
+    }
+
+    #[cfg(unix)]
     fn wait_until_process_stops(pid: u32) {
         for _ in 0..100 {
-            if !process_is_alive(pid) {
-                return;
+            match process_is_alive(pid) {
+                false => return,
+                true => thread::sleep(Duration::from_millis(5)),
             }
-            thread::sleep(Duration::from_millis(5));
         }
     }
 

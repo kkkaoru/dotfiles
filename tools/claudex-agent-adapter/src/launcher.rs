@@ -1,15 +1,16 @@
 use std::{
+    collections::hash_map::DefaultHasher,
     ffi::OsString,
+    hash::{Hash, Hasher},
     io::{BufRead, BufReader, Write},
     net::SocketAddr,
     path::PathBuf,
     process::{Command, Stdio},
     thread,
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use anyhow::{Context, Result, bail};
-use serde::Deserialize;
 use uuid::Uuid;
 
 mod claude_process;
@@ -17,8 +18,13 @@ mod daemon_arguments;
 mod daemon_process;
 mod daemon_start;
 mod handover;
+mod health;
 mod launcher_lock;
 mod launcher_logs;
+mod preflight;
+mod program_identity;
+mod recovery;
+mod recovery_manifest;
 use crate::{
     ADAPTER_PROTOCOL_VERSION, agent_backend::BackendRoute, app_server, subagent_policy as policy,
     working_directory,
@@ -31,19 +37,25 @@ use daemon_arguments::{
 };
 use daemon_start::start_adapter;
 use handover::ServiceState;
+#[cfg(test)]
+use health::Health;
+use health::{authenticates, fetch_health, wait_until_ready, wait_until_recovery_ready};
 
 const LOCAL_TOKEN: &str = "claudex-local";
 const START_TIMEOUT: Duration = Duration::from_secs(10);
 const START_INITIAL_POLL_DELAY: Duration = Duration::from_millis(10);
 const START_MAX_POLL_DELAY: Duration = Duration::from_millis(250);
+pub(crate) const SERVICE_CONFIG_FINGERPRINT_ENV: &str = "CLAUDEX_SERVICE_CONFIG_FINGERPRINT";
+pub(crate) const RECOVERY_MANIFEST_ENV: &str = "CLAUDEX_RECOVERY_MANIFEST";
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct AdapterOptions {
     pub routes: Vec<BackendRoute>,
     pub model: String,
     pub listen: SocketAddr,
     pub subscription_max_processes: usize,
     pub subscription_timeout_minutes: u64,
+    pub subagent_hard_timeout_seconds: Option<std::num::NonZeroU64>,
     pub model_catalog: crate::provider_config::ModelCatalog,
 }
 
@@ -52,28 +64,10 @@ struct ServiceConfig {
     options: AdapterOptions,
     token: String,
     codex_config_fingerprint: String,
+    service_config_fingerprint: String,
     executable: PathBuf,
     log_path: PathBuf,
     lock_path: PathBuf,
-}
-
-#[derive(Debug, Deserialize)]
-struct Health {
-    status: String,
-    pid: Option<u32>,
-    protocol_version: u64,
-    #[serde(rename = "build_id")]
-    build_id: String,
-    #[serde(default)]
-    codex_config_fingerprint: String,
-    #[serde(default)]
-    backend_routes: Vec<String>,
-    #[serde(default)]
-    worker_routes: Vec<String>,
-    #[serde(default)]
-    search_worker_routes: Vec<String>,
-    subscription_max_processes: usize,
-    subscription_timeout_minutes: u64,
 }
 
 impl ServiceConfig {
@@ -91,6 +85,8 @@ impl ServiceConfig {
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from(&home).join(".codex"));
         let codex_config_fingerprint = app_server::provider_config_fingerprint(&source_home);
+        let service_config_fingerprint =
+            service_config_fingerprint(&options, &codex_config_fingerprint);
         let cache = PathBuf::from(home).join(".cache/claudex");
         let log_path = launcher_logs::adapter_log_path(&cache, &options.listen);
         let lock_path = launcher_logs::adapter_lock_path(&cache, &options.listen);
@@ -98,6 +94,7 @@ impl ServiceConfig {
             options,
             token,
             codex_config_fingerprint,
+            service_config_fingerprint,
             executable,
             log_path,
             lock_path,
@@ -117,19 +114,42 @@ impl ServiceConfig {
         format!("http://{listen}")
     }
 
-    fn matches(&self, health: &Health) -> bool {
-        // Protocol/config compatibility is separate from build freshness. The handover
-        // state machine checks the build ID without interrupting accepted responses.
-        health.status == "ok"
-            && health.protocol_version == ADAPTER_PROTOCOL_VERSION
-            && health.codex_config_fingerprint == self.codex_config_fingerprint
-            && health.backend_routes == route_descriptions(&self.options.routes)
-            && health.worker_routes == worker_route_descriptions(&self.options.model_catalog)
-            && health.search_worker_routes
-                == search_worker_route_descriptions(&self.options.model_catalog)
-            && health.subscription_max_processes == self.options.subscription_max_processes
-            && health.subscription_timeout_minutes == self.options.subscription_timeout_minutes
+    fn with_listen(&self, listen: SocketAddr) -> Self {
+        let cache = self.log_path.parent().expect("adapter log parent");
+        let mut options = self.options.clone();
+        options.listen = listen;
+        Self {
+            options,
+            token: self.token.clone(),
+            codex_config_fingerprint: self.codex_config_fingerprint.clone(),
+            service_config_fingerprint: self.service_config_fingerprint.clone(),
+            executable: self.executable.clone(),
+            log_path: launcher_logs::adapter_log_path(cache, &listen),
+            lock_path: launcher_logs::adapter_lock_path(cache, &listen),
+        }
     }
+}
+
+fn service_config_fingerprint(options: &AdapterOptions, codex_fingerprint: &str) -> String {
+    let mut hasher = DefaultHasher::new();
+    ADAPTER_PROTOCOL_VERSION.hash(&mut hasher);
+    codex_fingerprint.hash(&mut hasher);
+    options.model.hash(&mut hasher);
+    route_descriptions(&options.routes).hash(&mut hasher);
+    worker_route_descriptions(&options.model_catalog).hash(&mut hasher);
+    search_worker_route_descriptions(&options.model_catalog).hash(&mut hasher);
+    program_identity::identity(&options.routes).hash(&mut hasher);
+    options.subscription_max_processes.hash(&mut hasher);
+    options.subscription_timeout_minutes.hash(&mut hasher);
+    options
+        .subagent_hard_timeout_seconds
+        .map(std::num::NonZeroU64::get)
+        .hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+pub(crate) fn recovery_generation() -> Option<String> {
+    recovery_manifest::generation_from_environment()
 }
 
 pub async fn ensure_running(options: AdapterOptions) -> Result<String> {
@@ -188,6 +208,8 @@ pub async fn run_claude(
             .env_remove("CLAUDEX_MODEL")
             .env_remove("CLAUDEX_SUBSCRIPTION_MAX_PROCESSES")
             .env_remove("CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES")
+            .env_remove(crate::anthropic::SUBAGENT_HARD_TIMEOUT_ENV)
+            .env_remove(crate::anthropic::LEGACY_SUBAGENT_RESPONSE_TIMEOUT_ENV)
             .stdin(Stdio::inherit())
             .stdout(Stdio::inherit())
             .stderr(Stdio::piped())
@@ -223,31 +245,51 @@ fn reject_model_override(arguments: &[OsString]) -> Result<()> {
 async fn ensure_config_running(config: &ServiceConfig) -> Result<String> {
     let _lock = launcher_lock::acquire(&config.lock_path)?;
     let client = reqwest::Client::new();
-    match handover::inspect_service(&client, config).await {
+    let recovery_manifest = match handover::inspect_service(&client, config).await {
         ServiceState::Reuse => return Ok(config.base_url()),
-        ServiceState::Replace(pid) => {
-            handover::release_stale_listener(&client, config, pid).await?
+        ServiceState::Replace {
+            pid,
+            recovery_generation,
+        } => {
+            if let Some(generation) = recovery_generation.as_deref() {
+                daemon_start::validate_recovery(config, generation)
+                    .context("validate current adapter recovery generation before handover")?;
+            } else {
+                eprintln!(
+                    "claudex: current adapter predates recovery generations; performing a one-time preflight-only migration"
+                );
+            }
+            preflight::verify(&client, config).await?;
+            handover::release_stale_listener(&client, config, pid).await?;
+            recovery_generation
         }
-        ServiceState::Start => {}
-    }
-    let started_pid = start_adapter(config)?;
+        ServiceState::Start => None,
+    };
+    let started_pid = match start_adapter(config) {
+        Ok(pid) => pid,
+        Err(error) => {
+            return recovery::after_update_failure(
+                &client,
+                config,
+                recovery_manifest.as_deref(),
+                error.context("start new adapter generation"),
+            )
+            .await;
+        }
+    };
     if let Err(error) = wait_until_ready(&client, config).await {
         if daemon_process::matches(started_pid, &config.executable) {
             daemon_process::terminate(started_pid);
         }
-        return Err(error);
+        return recovery::after_update_failure(
+            &client,
+            config,
+            recovery_manifest.as_deref(),
+            error,
+        )
+        .await;
     }
     Ok(config.base_url())
-}
-
-async fn authenticates(client: &reqwest::Client, config: &ServiceConfig) -> bool {
-    client
-        .get(format!("{}/v1/models", config.base_url()))
-        .bearer_auth(&config.token)
-        .timeout(Duration::from_millis(500))
-        .send()
-        .await
-        .is_ok_and(|response| response.status().is_success())
 }
 
 fn relay_stderr(stderr: impl std::io::Read, model: &str) -> Result<()> {
@@ -297,62 +339,8 @@ fn exit_code(status: std::process::ExitStatus) -> i32 {
     })
 }
 
-async fn fetch_health(client: &reqwest::Client, config: &ServiceConfig) -> Option<Health> {
-    client
-        .get(format!("{}/health", config.base_url()))
-        .timeout(Duration::from_millis(500))
-        .send()
-        .await
-        .ok()?
-        .json()
-        .await
-        .ok()
-}
-
-async fn wait_until_ready(client: &reqwest::Client, config: &ServiceConfig) -> Result<()> {
-    wait_until_ready_with(
-        client,
-        config,
-        START_TIMEOUT,
-        START_INITIAL_POLL_DELAY,
-        START_MAX_POLL_DELAY,
-    )
-    .await
-}
-
-async fn wait_until_ready_with(
-    client: &reqwest::Client,
-    config: &ServiceConfig,
-    timeout: Duration,
-    initial_delay: Duration,
-    max_delay: Duration,
-) -> Result<()> {
-    let deadline = Instant::now() + timeout;
-    let mut delay = initial_delay;
-    loop {
-        let ready = match fetch_health(client, config).await {
-            Some(health)
-                if config.matches(&health) && health.build_id == env!("CLAUDEX_BUILD_ID") =>
-            {
-                authenticates(client, config).await
-            }
-            _ => false,
-        };
-        if ready {
-            return Ok(());
-        }
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            break;
-        }
-        tokio::time::sleep(delay.min(remaining)).await;
-        delay = delay.saturating_mul(2).min(max_delay);
-    }
-    bail!(
-        "agent adapter failed to start; see {}",
-        config.log_path.display()
-    )
-}
+#[cfg(test)]
+use health::wait_until_ready_with;
 
 #[cfg(test)]
 include!("launcher_tests.rs");

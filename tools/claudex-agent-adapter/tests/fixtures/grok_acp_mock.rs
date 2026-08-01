@@ -153,11 +153,12 @@ impl MockAgent {
         } else {
             self.both_prompts_started.notify_waiters();
         }
-        if expected > 2 {
-            let release = self.trace.with_file_name(PARALLEL_RELEASE_FILE);
-            while !release.exists() {
-                tokio::time::sleep(PARALLEL_RELEASE_POLL_INTERVAL).await;
-            }
+        if expected <= 2 {
+            return;
+        }
+        let release = self.trace.with_file_name(PARALLEL_RELEASE_FILE);
+        while !release.exists() {
+            tokio::time::sleep(PARALLEL_RELEASE_POLL_INTERVAL).await;
         }
     }
 
@@ -519,6 +520,22 @@ impl acp::Agent for MockAgent {
     }
 }
 
+async fn run_agent(
+    agent: MockAgent,
+    requests: mpsc::UnboundedReceiver<ClientOperation>,
+) -> acp::Result<()> {
+    let (connection, io) = acp::AgentSideConnection::new(
+        agent,
+        tokio::io::stdout().compat_write(),
+        tokio::io::stdin().compat(),
+        |future| {
+            tokio::task::spawn_local(future);
+        },
+    );
+    tokio::task::spawn_local(relay_client_operations(connection, requests));
+    io.await
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> acp::Result<()> {
     let cwd = std::env::current_dir().map_err(|_| acp::Error::internal_error())?;
@@ -550,20 +567,7 @@ async fn main() -> acp::Result<()> {
     agent.record("arguments", &args)?;
     agent.record("claudex_grok_acp", std::env::var("CLAUDEX_GROK_ACP").ok())?;
     let local = tokio::task::LocalSet::new();
-    local
-        .run_until(async move {
-            let (connection, io) = acp::AgentSideConnection::new(
-                agent,
-                tokio::io::stdout().compat_write(),
-                tokio::io::stdin().compat(),
-                |future| {
-                    tokio::task::spawn_local(future);
-                },
-            );
-            tokio::task::spawn_local(relay_client_operations(connection, requests));
-            io.await
-        })
-        .await
+    local.run_until(run_agent(agent, requests)).await
 }
 
 fn validate_native_grok_arguments(args: &[String]) -> acp::Result<()> {

@@ -18,6 +18,19 @@ async fn slow_response(State(state): State<SlowResponse>) -> &'static str {
     "complete"
 }
 
+async fn wait_for_shutdown(shutdown: Arc<Notify>) {
+    shutdown.notified().await;
+}
+
+async fn bind_replacement_listener(address: std::net::SocketAddr) -> tokio::net::TcpListener {
+    loop {
+        match tokio::net::TcpListener::bind(address).await {
+            Ok(listener) => return listener,
+            Err(_) => tokio::time::sleep(LISTENER_RETRY_INTERVAL).await,
+        }
+    }
+}
+
 #[tokio::test]
 async fn drains_an_active_response_before_server_shutdown() {
     let entered = Arc::new(Notify::new());
@@ -33,10 +46,11 @@ async fn drains_an_active_response_before_server_shutdown() {
         .expect("listener");
     let address = listener.local_addr().expect("listener address");
     let shutdown = Arc::new(Notify::new());
-    let server = tokio::spawn(serve_until(listener, router, {
-        let shutdown = Arc::clone(&shutdown);
-        async move { shutdown.notified().await }
-    }));
+    let server = tokio::spawn(serve_until(
+        listener,
+        router,
+        wait_for_shutdown(Arc::clone(&shutdown)),
+    ));
     let response = tokio::spawn(async move {
         reqwest::get(format!("http://{address}/slow"))
             .await
@@ -47,16 +61,10 @@ async fn drains_an_active_response_before_server_shutdown() {
     });
     entered.notified().await;
     shutdown.notify_one();
-    let replacement_listener = tokio::time::timeout(LISTENER_RELEASE_TIMEOUT, async {
-        loop {
-            match tokio::net::TcpListener::bind(address).await {
-                Ok(listener) => break listener,
-                Err(_) => tokio::time::sleep(LISTENER_RETRY_INTERVAL).await,
-            }
-        }
-    })
-    .await
-    .expect("graceful shutdown must release the listener before responses drain");
+    let replacement_listener =
+        tokio::time::timeout(LISTENER_RELEASE_TIMEOUT, bind_replacement_listener(address))
+            .await
+            .expect("graceful shutdown must release the listener before responses drain");
     assert!(!response.is_finished());
     drop(replacement_listener);
     release.notify_one();
