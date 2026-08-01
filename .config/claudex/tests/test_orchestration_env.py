@@ -53,8 +53,12 @@ class ClaudexOrchestrationEnvironmentTests(unittest.TestCase):
         )
         self.assertEqual(output["CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS"], "40")
         self.assertEqual(output["CLAUDEX_SUBAGENT_MAX_PARALLEL"], "40")
-        self.assertEqual(output["CLAUDEX_SUBAGENT_MIN_PARALLEL"], "3")
-        self.assertEqual(output["CLAUDEX_SUBAGENT_MIN_MODEL_FAMILIES"], "2")
+        for obsolete in (
+            "CLAUDEX_SUBAGENT_MIN_PARALLEL",
+            "CLAUDEX_SUBAGENT_ACTIVE_FLOOR",
+            "CLAUDEX_SUBAGENT_MIN_MODEL_FAMILIES",
+        ):
+            self.assertNotIn(obsolete, output)
         self.assertEqual(output["CLAUDEX_SUBAGENT_FIRST"], "1")
         self.assertEqual(output["CLAUDEX_SUBAGENT_STATUS_POLL_SECONDS"], "15")
 
@@ -62,19 +66,21 @@ class ClaudexOrchestrationEnvironmentTests(unittest.TestCase):
         output = self.run_launcher({})
 
         self.assertEqual(output["CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS"], "40")
-        self.assertEqual(output["CLAUDEX_SUBAGENT_MIN_PARALLEL"], "3")
-        self.assertEqual(output["CLAUDEX_SUBAGENT_ACTIVE_FLOOR"], "2")
-        self.assertEqual(output["CLAUDEX_SUBAGENT_MIN_MODEL_FAMILIES"], "2")
+        self.assertEqual(output["CLAUDEX_SUBAGENT_MAX_PARALLEL"], "40")
         self.assertEqual(output["CLAUDEX_SUBAGENT_REASSESS_INTERVAL_SECONDS"], "600")
         self.assertEqual(output["CLAUDEX_SUBAGENT_REEVALUATE_ON_COMPLETION"], "1")
         self.assertEqual(output["CLAUDEX_SUBAGENT_REUSE"], "1")
         self.assertEqual(output["CLAUDEX_SUBAGENT_CLEANUP_ON_EXIT"], "1")
         self.assertEqual(output["CLAUDEX_SUBAGENT_FIRST"], "1")
         self.assertEqual(output["CLAUDEX_SUBAGENT_STATUS_POLL_SECONDS"], "15")
-        self.assertIn("--agent claudex-orchestrator", output["CLAUDEX_ADAPTER_ARGS"])
+        self.assertNotIn("--agent claudex-orchestrator", output["CLAUDEX_ADAPTER_ARGS"])
         self.assertEqual(output["CLAUDEX_SUBSCRIPTION_MAX_PROCESSES"], "20")
         self.assertEqual(output["CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES"], "120")
         self.assertEqual(output["CLAUDEX_OUTER_MODEL"], "sonnet[1m]")
+        self.assertEqual(output["CLAUDEX_MAIN_MODEL"], "sonnet[1m]")
+        self.assertEqual(output["CLAUDEX_MAIN_MODEL_KNOWN"], "1")
+        self.assertNotIn("--model", output["CLAUDEX_ADAPTER_ARGS"])
+        self.assertIn("--inherit-claude-model", output["CLAUDEX_ADAPTER_ARGS"])
 
     def test_explicit_sonnet_outer_model_is_forwarded_without_changing_worker_definition(
         self,
@@ -82,13 +88,34 @@ class ClaudexOrchestrationEnvironmentTests(unittest.TestCase):
         output = self.run_launcher({"CLAUDEX_MODEL": "claude-sonnet-5"})
         self.assertEqual(output["CLAUDEX_OUTER_MODEL"], "claude-sonnet-5")
         self.assertEqual(output["CLAUDEX_MAIN_MODEL"], "claude-sonnet-5")
+        self.assertEqual(output["CLAUDEX_MAIN_MODEL_KNOWN"], "1")
+        self.assertIn("--model claude-sonnet-5", output["CLAUDEX_ADAPTER_ARGS"])
+        self.assertNotIn("--inherit-claude-model", output["CLAUDEX_ADAPTER_ARGS"])
+
+    def test_resume_does_not_claim_settings_model_is_restored_model(self) -> None:
+        output = self.run_launcher({}, ["--resume", "saved-session", "continue"])
+        self.assertEqual(output["CLAUDEX_OUTER_MODEL"], "sonnet[1m]")
+        self.assertEqual(output["CLAUDEX_MAIN_MODEL"], "")
+        self.assertEqual(output["CLAUDEX_MAIN_MODEL_KNOWN"], "0")
+        self.assertIn("--inherit-claude-model", output["CLAUDEX_ADAPTER_ARGS"])
+
+    def test_continue_does_not_claim_settings_model_is_restored_model(self) -> None:
+        output = self.run_launcher({}, ["--continue", "continue"])
+        self.assertEqual(output["CLAUDEX_OUTER_MODEL"], "sonnet[1m]")
+        self.assertEqual(output["CLAUDEX_MAIN_MODEL"], "")
+        self.assertEqual(output["CLAUDEX_MAIN_MODEL_KNOWN"], "0")
+
+    def test_explicit_model_remains_known_when_resuming(self) -> None:
+        output = self.run_launcher(
+            {"CLAUDEX_MODEL": "grok-4.5"},
+            ["--resume", "saved-session", "continue"],
+        )
+        self.assertEqual(output["CLAUDEX_MAIN_MODEL"], "grok-4.5")
+        self.assertEqual(output["CLAUDEX_MAIN_MODEL_KNOWN"], "1")
 
     def test_external_values_override_defaults_without_shell_evaluation(self) -> None:
         values = {
             "CLAUDEX_SUBAGENT_MAX_PARALLEL": "7",
-            "CLAUDEX_SUBAGENT_MIN_PARALLEL": "4",
-            "CLAUDEX_SUBAGENT_ACTIVE_FLOOR": "3",
-            "CLAUDEX_SUBAGENT_MIN_MODEL_FAMILIES": "3",
             "CLAUDEX_SUBAGENT_REASSESS_INTERVAL_SECONDS": "120",
             "CLAUDEX_SUBAGENT_REEVALUATE_ON_COMPLETION": "0",
             "CLAUDEX_SUBAGENT_REUSE": "0",
@@ -106,7 +133,11 @@ class ClaudexOrchestrationEnvironmentTests(unittest.TestCase):
         self.assertEqual(output["CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES"], "60")
         self.assertEqual(output["CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS"], "7")
 
-    def run_launcher(self, environment: dict[str, str]) -> dict[str, str]:
+    def run_launcher(
+        self,
+        environment: dict[str, str],
+        arguments: list[str] | None = None,
+    ) -> dict[str, str]:
         with tempfile.TemporaryDirectory(prefix="claudex-fish-smoke-") as temporary:
             home = Path(temporary)
             (home / ".config/claudex").mkdir(parents=True)
@@ -156,12 +187,6 @@ class ClaudexOrchestrationEnvironmentTests(unittest.TestCase):
                 "\"${CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS:-}\"\n"
                 "printf 'CLAUDEX_SUBAGENT_MAX_PARALLEL=%s\\n' "
                 "\"${CLAUDEX_SUBAGENT_MAX_PARALLEL:-}\"\n"
-                "printf 'CLAUDEX_SUBAGENT_MIN_PARALLEL=%s\\n' "
-                "\"${CLAUDEX_SUBAGENT_MIN_PARALLEL:-}\"\n"
-                "printf 'CLAUDEX_SUBAGENT_ACTIVE_FLOOR=%s\\n' "
-                "\"${CLAUDEX_SUBAGENT_ACTIVE_FLOOR:-}\"\n"
-                "printf 'CLAUDEX_SUBAGENT_MIN_MODEL_FAMILIES=%s\\n' "
-                "\"${CLAUDEX_SUBAGENT_MIN_MODEL_FAMILIES:-}\"\n"
                 "printf 'CLAUDEX_SUBAGENT_REASSESS_INTERVAL_SECONDS=%s\\n' "
                 "\"${CLAUDEX_SUBAGENT_REASSESS_INTERVAL_SECONDS:-}\"\n"
                 "printf 'CLAUDEX_SUBAGENT_REEVALUATE_ON_COMPLETION=%s\\n' "
@@ -179,6 +204,8 @@ class ClaudexOrchestrationEnvironmentTests(unittest.TestCase):
                 "\"${CLAUDEX_OUTER_MODEL:-}\"\n"
                 "printf 'CLAUDEX_MAIN_MODEL=%s\\n' "
                 "\"${CLAUDEX_MAIN_MODEL:-}\"\n"
+                "printf 'CLAUDEX_MAIN_MODEL_KNOWN=%s\\n' "
+                "\"${CLAUDEX_MAIN_MODEL_KNOWN:-}\"\n"
                 "printf 'CLAUDEX_SUBSCRIPTION_MAX_PROCESSES=%s\\n' "
                 "\"${subscription_max_processes}\"\n"
                 "printf 'CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES=%s\\n' "
@@ -186,11 +213,12 @@ class ClaudexOrchestrationEnvironmentTests(unittest.TestCase):
                 encoding="utf-8",
             )
             adapter.chmod(adapter.stat().st_mode | stat.S_IXUSR)
+            launcher_arguments = arguments or ["orchestration-smoke"]
             command = [
                 "fish",
                 "--no-config",
                 "-c",
-                f"source '{FUNCTION}'; claudex orchestration-smoke",
+                f"source '{FUNCTION}'; claudex {' '.join(launcher_arguments)}",
             ]
             result = subprocess.run(
                 command,

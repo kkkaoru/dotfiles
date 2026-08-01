@@ -34,22 +34,21 @@ main session and report routing unavailable.
 Use multiple available workers only when independent execution or a second
 perspective materially helps; do not manufacture parallel work for a trivial, indivisible task.
 Before launching a substantive phase, explicitly decompose it into non-redundant workstreams and
-select the fan-out dynamically for task content and current capacity. Use one ordinary worker for
-one indivisible scope, two for two independent scopes, and at least three only when three or more
-independent scopes justify it and capacity permits. Use at least two distinct model kinds whenever
-the selected fan-out is two or more and allowed workers provide them. Report a genuine indivisible
-phase or capacity shortfall and re-evaluate it at the next result, failure, capacity update, or
-phase boundary. Avoid serial heavy processing by one worker when independent scopes exist: do not
-give an entire heavy or unknown-duration task to one ordinary worker merely because it is
-convenient. `custom-advisor` is a separate logical session singleton/capacity channel, excluded
-from ordinary-worker counts; built-in `advisor()` remains independent of worker capacity.
+set `fanout = min(independent scopes, available worker slots, configured maximum)`. One indivisible
+scope means exactly one worker, even when more slots are available. Prefer distinct model kinds
+when the task already has two or more scopes and the pool provides them, but do not manufacture
+scopes or duplicate a launch to satisfy diversity. Report a genuine indivisible phase or capacity
+shortfall and re-evaluate it at the next result, failure, capacity update, or phase boundary.
+`custom-advisor` is a separate logical session singleton/capacity channel, excluded from
+ordinary-worker counts; built-in `advisor()` remains independent of worker capacity.
 When substantive work is clear, invoke the selected SubAgent directly in the first response rather
 than merely announcing future delegation. Do not add TaskList, TaskCreate, or TaskUpdate round trips
 solely to prepare delegation; use task tracking only for work that needs persistent dependency
 tracking.
 Start only as many worker instances as the current independent scopes justify. For one bounded
 command, lookup, fetch, or one-file check, launch exactly one ordinary worker and never duplicate
-the same scope; `selected_workers` is a capacity pool, not a launch count. For related follow-ups,
+the same scope; `selected_workers` is a capacity pool, not a launch count. Assign each scope a
+stable key and never relaunch a key that is in-flight, completed, or cancelled. For related follow-ups,
 reuse compatible workers with SendMessage and the exact compatible worker or
 custom-advisor recipient specified by the prior Agent/Task result (agent ID or teammate name as
 applicable) instead of churning processes with fresh launches. Send the smallest sufficient,
@@ -126,25 +125,19 @@ it merely because one consultation ended. When `CLAUDEX_CUSTOM_ADVISOR` is `0`, 
 (case-insensitive), skip only custom-advisor launches; built-in `advisor()` remains available.
 
 At every completion, failure, timeout, capacity update, and phase boundary, re-evaluate the active
-set. Integrate partial results immediately, reuse a compatible recipient for related deltas, and
-fill newly available capacity only with genuinely independent unresolved work or review risk. Do
-not retain a live worker solely for possible reuse: logical transcript reuse and live-process
-lifetime are separate. On normal completion, cancellation, error, or main-session exit, require
-the runtime lifecycle to stop launches, request cancellation, wait for every owned child, reap it,
-and then discard the session ownership record.
+set. Integrate partial results immediately and reuse a compatible recipient for related deltas. Do
+not automatically refill a completed slot; only an unresolved scope with a new stable key may be
+launched. Do not retain a live worker solely for possible reuse: logical transcript reuse and
+live-process lifetime are separate. On normal completion, cancellation, error, or main-session
+exit, require the runtime lifecycle to stop launches, request cancellation, wait for every owned
+child, reap it, and then discard the session ownership record.
 
-After every worker completion, also decide whether to stop a stale worker, send concrete additional
-instructions to an active worker, reuse a compatible recipient for the same content, or launch a
-new selected worker for the same or supplemental content. For any phase longer than ten minutes,
-perform a management tick every 600 seconds. If ordinary active workers fall to one, interrupt or
-cancel the stale sole worker as appropriate and add, reuse, or message work until at least two
-ordinary workers remain active whenever capacity permits. The routing hook emits context only; it
-cannot invoke Agent/Task/SendMessage, so this main session must perform those actions. The
-validated terminal controls are `CLAUDEX_SUBAGENT_MIN_PARALLEL`,
-`CLAUDEX_SUBAGENT_ACTIVE_FLOOR`, `CLAUDEX_SUBAGENT_REEVALUATE_ON_COMPLETION`,
-`CLAUDEX_SUBAGENT_REASSESS_INTERVAL_SECONDS`, `CLAUDEX_SUBAGENT_MIN_MODEL_FAMILIES`,
-`CLAUDEX_SUBAGENT_REUSE`, and `CLAUDEX_SUBAGENT_CLEANUP_ON_EXIT`; they impose no hard maximum
-process cap.
+After every worker completion, decide whether to stop a stale worker, send concrete additional
+instructions to an active worker, or reuse a compatible recipient. A phase longer than ten minutes
+may be re-evaluated, but it must not create duplicate scope keys or maintain an arbitrary active
+floor. The routing hook emits context only; it cannot invoke Agent/Task/SendMessage, so this main
+session must perform those actions. `CLAUDEX_SUBAGENT_MAX_PARALLEL` is the only parallel control
+and is an upper bound, never a required launch count.
 
 Keep synthesis, conflict resolution, validation, and the final user-facing response in this
 conversation.

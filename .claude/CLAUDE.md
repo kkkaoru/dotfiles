@@ -40,13 +40,12 @@
   or end the turn promptly with a concise user-visible status. When completion notifications re-enter the next
   turn, integrate each available result without waiting for the slowest worker; never remain in
   hidden reasoning while waiting for pending notifications.
-- Before launching a substantive, non-trivial phase, explicitly split it into non-redundant
-  workstreams and choose the fan-out dynamically from current capacity and task content. Use one
-  worker for one indivisible scope, two for two independent scopes, and at least three only when
-  three or more independent scopes justify it and capacity permits. Use at least two distinct
-  model kinds whenever the selected fan-out is two or more and allowed workers provide them. A
-  genuine indivisible phase or capacity shortfall must be reported and re-evaluated, not hidden
-  behind a fixed worker count.
+- Before launching a substantive phase, explicitly split it into non-redundant workstreams and set
+  `fanout = min(independent scopes, available worker slots, configured maximum)`. One indivisible
+  scope means exactly one worker, even when more slots are available. Prefer distinct model kinds
+  when the task already has two or more scopes and the pool provides them, but do not manufacture
+  scopes or duplicate a launch to satisfy diversity. A genuine indivisible phase or capacity
+  shortfall must be reported and re-evaluated, not hidden behind a fixed worker count.
   Avoid serial heavy processing by one worker: do not send an entire heavy or unknown-duration task
   to one ordinary worker merely because it is convenient. `custom-advisor` is a separate logical
   session singleton/capacity channel and is excluded from ordinary-worker counts; built-in
@@ -68,24 +67,20 @@
   parallel capacity; for genuinely independent work, start another routed worker when useful instead
   of queueing it behind the busy worker.
 - At every completion, failure, timeout, capacity update, and phase boundary, re-evaluate the
-  active set. Integrate available partial results immediately, reuse a compatible recipient for a
-  related delta, and fill newly available capacity with genuinely independent unresolved work or
-  review risk. Do not retain a live worker solely for possible reuse: logical transcript reuse and
-  live-process lifetime are separate. On normal completion, cancellation, error, or main-session
-  exit, hand off to the runtime lifecycle so it stops launches, requests cancellation, waits for
-  owned children to exit, and reaps them before discarding its session ownership record.
-- At each worker completion, re-check the remaining work and decide whether to stop a stale worker,
-  send concrete additional instructions to an active worker, reuse a compatible recipient for the
-  same content, or launch a new selected worker for the same or supplemental content. During a
-  phase lasting longer than ten minutes, perform a management tick every 600 seconds. If ordinary
-  active workers fall to one, interrupt/cancel the stale sole worker as appropriate and add, reuse,
-  or message work until at least two ordinary workers are active whenever capacity permits. The
-  routing hook only emits context; it cannot call Agent/Task/SendMessage, so the main Claude Code
-  session owns these actions. Configure the contract with the validated terminal variables
-  `CLAUDEX_SUBAGENT_MIN_PARALLEL`, `CLAUDEX_SUBAGENT_ACTIVE_FLOOR`,
-  `CLAUDEX_SUBAGENT_REEVALUATE_ON_COMPLETION`, `CLAUDEX_SUBAGENT_REASSESS_INTERVAL_SECONDS`,
-  `CLAUDEX_SUBAGENT_MIN_MODEL_FAMILIES`, `CLAUDEX_SUBAGENT_REUSE`, and
-  `CLAUDEX_SUBAGENT_CLEANUP_ON_EXIT`; no hard maximum process cap is imposed.
+  active set. Integrate partial results immediately and reuse a compatible recipient for a related
+  delta. Give every launch a stable scope key; never relaunch an in-flight, completed, or cancelled
+  key. Do not automatically refill a completed slot. Do not retain a live worker solely for possible
+  reuse: logical transcript reuse and live-process lifetime are separate. On normal completion,
+  cancellation, error, or main-session exit, hand off to the runtime lifecycle so it stops launches,
+  requests cancellation, waits for owned children to exit, and reaps them before discarding its
+  session ownership record.
+- At each worker completion, re-check the remaining scope keys and decide whether to stop a stale
+  worker or send concrete additional instructions to an active compatible recipient. A management
+  tick every 600 seconds may rebalance unresolved scopes, but it must not create duplicate launches
+  or maintain an arbitrary active floor. The routing hook only emits context; it cannot call
+  Agent/Task/SendMessage, so the main Claude Code session owns these actions. The only parallel
+  policy control is the validated `CLAUDEX_SUBAGENT_MAX_PARALLEL` cap; it is an upper bound, never a
+  target.
 - Never infer a worker route or effort from the main session. Use the exact `selected_workers`
   entry and its configured model/effort; that entry may intentionally use the same model as the
   main session, because outer and SubAgent requests have independent concurrency.

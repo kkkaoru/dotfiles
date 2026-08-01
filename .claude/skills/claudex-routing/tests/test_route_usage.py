@@ -97,7 +97,7 @@ def model_health(
     active: int, limit: int = 7, queued: int = 0
 ) -> dict[str, dict[str, object]]:
     return {
-        "opencode-go/deepseek-v4-pro": {
+        "opencode-go/deepseek-v4-flash": {
             "active": active,
             "queued": queued,
             "limit": limit,
@@ -305,7 +305,6 @@ class ConfigurationTests(unittest.TestCase):
         for key, value in [
             ("version", 2),
             ("providers", []),
-            ("mainProviders", []),
             ("fallback", {}),
             ("advisor", {}),
         ]:
@@ -327,17 +326,23 @@ class ConfigurationTests(unittest.TestCase):
                     route_usage.load_config(path)
         self.assertFalse(route_usage.valid_provider(None))
         self.assertFalse(route_usage.valid_choice(None))
+        compatibility_only = copy.deepcopy(base)
+        compatibility_only.pop("mainProviders")
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "providers.json"
+            path.write_text(json.dumps(compatibility_only), encoding="utf-8")
+            self.assertEqual(route_usage.load_config(path)["mainProviders"], [])
         opencode = next(
             provider
             for provider in complete_configuration()["providers"]
             if provider["id"] == "opencode-go"
         )
         self.assertEqual(opencode["usageProvider"], "opencodego")
-        self.assertEqual(opencode["defaultModel"], "opencode-go/deepseek-v4-pro")
+        self.assertEqual(opencode["defaultModel"], "opencode-go/deepseek-v4-flash")
         self.assertEqual(opencode["effort"], "max")
         self.assertEqual(
             opencode["requestBudget"],
-            {"estimatedRequests": 3450, "windowMinutes": 300, "usageWindow": "primary"},
+            {"estimatedRequests": 31650, "windowMinutes": 300, "usageWindow": "primary"},
         )
         self.assertEqual(opencode["backend"], "configured-acp")
         self.assertEqual(
@@ -439,16 +444,9 @@ class RoutingTests(unittest.TestCase):
             self.assertIn(
                 "main session must control parallel distribution", lowered, path
             )
-            self.assertTrue(
-                "at least three" in lowered
-                and "ordinary worker" in lowered
-                and "independent scopes" in lowered,
-                path,
-            )
-            self.assertIn("two distinct model kinds", lowered, path)
-            self.assertIn(
-                "avoid serial heavy processing by one worker", lowered, path
-            )
+            self.assertIn("min(independent scopes", lowered, path)
+            self.assertIn("one indivisible scope", lowered, path)
+            self.assertIn("do not manufacture", lowered, path)
             self.assertIn(
                 "reuse compatible workers with sendmessage", lowered, path
             )
@@ -457,6 +455,12 @@ class RoutingTests(unittest.TestCase):
                 "foreground worker into a background worker batch", normalized, path
             )
             self.assertIn("re-evaluate the active set", normalized, path)
+            for obsolete in (
+                "CLAUDEX_SUBAGENT_MIN_PARALLEL",
+                "CLAUDEX_SUBAGENT_ACTIVE_FLOOR",
+                "CLAUDEX_SUBAGENT_MIN_MODEL_FAMILIES",
+            ):
+                self.assertNotIn(obsolete, instructions, path)
             self.assertNotIn("When delegation is requested", instructions, path)
 
         settings = json.loads(
@@ -505,13 +509,16 @@ class RoutingTests(unittest.TestCase):
             ),
         )
 
-    def test_orchestration_contract_exposes_dynamic_worker_floor(self) -> None:
+    def test_orchestration_contract_exposes_dynamic_task_fanout(self) -> None:
         summary = configured_summary(report())
         contract = summary["orchestration"]
         self.assertTrue(contract["dynamic_fanout"])
-        self.assertEqual(contract["minimum_subagents_per_phase"], 3)
-        self.assertEqual(contract["minimum_active_subagents"], 2)
-        self.assertEqual(contract["minimum_model_kinds"], 2)
+        self.assertEqual(contract["minimum_subagents_per_phase"], 1)
+        self.assertEqual(contract["minimum_active_subagents"], 1)
+        self.assertEqual(contract["minimum_model_kinds"], 1)
+        self.assertEqual(contract["fanout_rule"], "min(independent_scopes, max_available_workers, max_parallel_workers)")
+        self.assertEqual(contract["task_fanout_default"], 1)
+        self.assertEqual(contract["max_parallel_workers"], 40)
         self.assertGreaterEqual(contract["available_model_kinds"], 2)
         self.assertTrue(contract["model_diversity_satisfied"])
         self.assertTrue(contract["completion_rebalance_required"])
@@ -527,9 +534,7 @@ class RoutingTests(unittest.TestCase):
             "worker_failure_timeout_or_stall", contract["custom_advisor_consult_when"]
         )
 
-        constrained = route_usage.orchestration_contract(
-            {"selected_workers": [{"model": "only-model"}]}
-        )
+        constrained = route_usage.orchestration_contract({"selected_workers": []})
         self.assertTrue(constrained["capacity_shortfall"])
         self.assertFalse(constrained["model_diversity_satisfied"])
 
@@ -547,20 +552,19 @@ class RoutingTests(unittest.TestCase):
 
     def test_orchestration_environment_overrides_are_strictly_validated(self) -> None:
         environment = {
-            route_usage.SUBAGENT_MIN_PARALLEL_ENV: "4",
-            route_usage.SUBAGENT_ACTIVE_FLOOR_ENV: "3",
+            route_usage.SUBAGENT_MAX_PARALLEL_ENV: "4",
             route_usage.SUBAGENT_REEVALUATE_ON_COMPLETION_ENV: "off",
             route_usage.SUBAGENT_REASSESS_INTERVAL_ENV: "120",
-            route_usage.SUBAGENT_MIN_MODEL_FAMILIES_ENV: "3",
             route_usage.SUBAGENT_REUSE_ENV: "0",
             route_usage.SUBAGENT_CLEANUP_ON_EXIT_ENV: "false",
         }
         settings = route_usage.orchestration_settings(environment)
-        self.assertEqual(settings["minimum_subagents_per_phase"], 4)
-        self.assertEqual(settings["minimum_active_subagents"], 3)
+        self.assertEqual(settings["max_parallel_workers"], 4)
+        self.assertEqual(settings["minimum_subagents_per_phase"], 1)
+        self.assertEqual(settings["minimum_active_subagents"], 1)
         self.assertFalse(settings["reevaluate_on_completion"])
         self.assertEqual(settings["monitor_interval_seconds"], 120)
-        self.assertEqual(settings["minimum_model_kinds"], 3)
+        self.assertEqual(settings["minimum_model_kinds"], 1)
         self.assertFalse(settings["reuse_compatible_workers"])
         self.assertFalse(settings["cleanup_on_exit"])
         self.assertTrue(settings["subagent_first"])
@@ -570,23 +574,10 @@ class RoutingTests(unittest.TestCase):
         settings = route_usage.orchestration_settings(environment)
         self.assertFalse(settings["subagent_first"])
         self.assertEqual(settings["status_poll_interval_seconds"], 7)
-        for name in (
-            route_usage.SUBAGENT_MIN_PARALLEL_ENV,
-            route_usage.SUBAGENT_ACTIVE_FLOOR_ENV,
-            route_usage.SUBAGENT_REASSESS_INTERVAL_ENV,
-            route_usage.SUBAGENT_MIN_MODEL_FAMILIES_ENV,
-        ):
+        for name in (route_usage.SUBAGENT_MAX_PARALLEL_ENV, route_usage.SUBAGENT_REASSESS_INTERVAL_ENV):
             with self.subTest(name=name):
                 with self.assertRaises(ValueError):
                     route_usage.orchestration_settings({name: "invalid"})
-        for name, value in (
-            (route_usage.SUBAGENT_MIN_PARALLEL_ENV, "1"),
-            (route_usage.SUBAGENT_ACTIVE_FLOOR_ENV, "1"),
-            (route_usage.SUBAGENT_MIN_MODEL_FAMILIES_ENV, "1"),
-        ):
-            with self.subTest(name=name):
-                with self.assertRaises(ValueError):
-                    route_usage.orchestration_settings({name: value})
         for name in (
             route_usage.SUBAGENT_REEVALUATE_ON_COMPLETION_ENV,
             route_usage.SUBAGENT_REUSE_ENV,
@@ -595,6 +586,21 @@ class RoutingTests(unittest.TestCase):
             with self.subTest(name=name):
                 with self.assertRaises(ValueError):
                     route_usage.orchestration_settings({name: "maybe"})
+
+    def test_task_fanout_is_bounded_by_scopes_and_capacity(self) -> None:
+        self.assertEqual(route_usage.task_fanout(0, 5), 0)
+        self.assertEqual(route_usage.task_fanout(1, 5), 1)
+        self.assertEqual(route_usage.task_fanout(2, 5), 2)
+        self.assertEqual(
+            route_usage.task_fanout(
+                8, 5, {route_usage.SUBAGENT_MAX_PARALLEL_ENV: "3"}
+            ),
+            3,
+        )
+        for scopes, workers in [(-1, 1), (1, -1), (True, 1), (1, False)]:
+            with self.subTest(scopes=scopes, workers=workers):
+                with self.assertRaises(ValueError):
+                    route_usage.task_fanout(scopes, workers)
 
     def test_collects_nested_numeric_percentages_only(self) -> None:
         usage = {
@@ -765,6 +771,7 @@ class RoutingTests(unittest.TestCase):
             [worker["model"] for worker in summary["selected_workers"]],
         )
         self.assertEqual(summary["main_session_model"], "gpt-5.3-codex-spark")
+        self.assertEqual(summary["current_main_model"], "gpt-5.3-codex-spark")
         self.assertEqual(summary["orchestration_mode"], "subagent-first")
         self.assertTrue(summary["delegation_required"])
         self.assertEqual(summary["direct_main_execution"], "fallback-only")
@@ -779,15 +786,15 @@ class RoutingTests(unittest.TestCase):
         self.assertIn('"background_status_required":true', context)
         self.assertIn('"custom_advisor_policy":', context)
 
-    def test_suppresses_automatic_sonnet_fallback_when_outer_session_is_sonnet(self) -> None:
+    def test_suppresses_automatic_sonnet_fallback_when_current_main_is_sonnet(self) -> None:
         unavailable = report(codex=100, grok=100)
         unavailable[-1] = qwen_report(None, available=False)
         summary = route_usage.enforce_worker_model_separation(
             route_usage.routing_summary(unavailable, configuration()),
-            "gpt-5.6-sol",
+            "sonnet[1m]",
             configuration(),
             frozenset(),
-            outer_model="sonnet[1m]",
+            outer_model="gpt-5.6-sol",
         )
         self.assertEqual(summary["selected_workers"], [])
         self.assertEqual(summary["selected_agents"], [])
@@ -797,6 +804,7 @@ class RoutingTests(unittest.TestCase):
         )
         self.assertTrue(summary["sonnet_subagent_suppressed"])
         self.assertFalse(summary["sonnet_subagent_explicit_allowed"])
+        self.assertEqual(summary["current_main_model"], "sonnet[1m]")
         context = route_usage.hook_output(summary)["hookSpecificOutput"][
             "additionalContext"
         ]
@@ -808,10 +816,9 @@ class RoutingTests(unittest.TestCase):
         unavailable[-1] = qwen_report(None, available=False)
         summary = route_usage.enforce_worker_model_separation(
             route_usage.routing_summary(unavailable, configuration()),
-            "gpt-5.6-sol",
+            "sonnet[1m]",
             configuration(),
             frozenset(),
-            outer_model="sonnet[1m]",
             allow_sonnet_subagent=True,
         )
         self.assertEqual(summary["selected_agents"], ["claudex-sonnet"])
@@ -830,10 +837,9 @@ class RoutingTests(unittest.TestCase):
         ):
             summary = route_usage.enforce_worker_model_separation(
                 route_usage.routing_summary(unavailable, configuration()),
-                "gpt-5.6-sol",
+                "claude-sonnet-5",
                 configuration(),
                 frozenset(),
-                outer_model="claude-sonnet-5",
         )
         self.assertEqual(summary["selected_agents"], ["claudex-sonnet"])
         self.assertTrue(summary["sonnet_subagent_explicit_allowed"])
@@ -854,7 +860,8 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(summary["disabled_subagent_models"], sorted(disabled))
         self.assertEqual(summary["providers"]["codex"]["reason"], "disabled-by-policy")
         self.assertTrue(summary["providers"]["grok"]["disabled"])
-        self.assertEqual(summary["preferred_main_worker"]["model"], "gpt-5.6-sol")
+        self.assertNotIn("main_workers", summary)
+        self.assertNotIn("preferred_main_worker", summary)
 
         unavailable = report(codex=100, grok=100)
         unavailable[-1] = qwen_report(None, available=False)
@@ -892,7 +899,7 @@ class RoutingTests(unittest.TestCase):
             if worker["provider"] == "codex"
         )
         self.assertEqual(codex_worker["model"], "gpt-5.3-codex-spark")
-        self.assertEqual(summary["preferred_main_worker"]["model"], "gpt-5.6-sol")
+        self.assertNotIn("gpt-5.6-sol", json.dumps(summary))
 
     def test_open_code_go_uses_the_published_request_budget(self) -> None:
         summary = route_usage.routing_summary(
@@ -904,14 +911,14 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(
             opencode["request_budget"],
             {
-                "estimated_requests": 3450,
+                "estimated_requests": 31650,
                 "window_minutes": 300,
                 "usage_window": "primary",
                 "known": True,
                 "used_percent": 12.0,
                 "reported_window_minutes": 300,
-                "estimated_used_requests": 414.0,
-                "estimated_remaining_requests": 3036.0,
+                "estimated_used_requests": 3798.0,
+                "estimated_remaining_requests": 27852.0,
                 "resets_at": "2026-07-31T00:39:13Z",
             },
         )
@@ -938,7 +945,7 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(opencode["remaining_percent"], 95.0)
         self.assertEqual(opencode["concurrency_remaining"], 1)
         self.assertEqual(
-            summary["model_concurrency"]["opencode-go/deepseek-v4-pro"],
+            summary["model_concurrency"]["opencode-go/deepseek-v4-flash"],
             {
                 "active": 499,
                 "queued": 0,
@@ -1016,7 +1023,7 @@ class RoutingTests(unittest.TestCase):
         self.assertFalse(summary["model_concurrency"][dynamic]["available"])
         self.assertEqual(summary["model_concurrency"][dynamic]["limit"], 500)
 
-    def test_main_capacity_uses_default_model_not_subagent_model(self) -> None:
+    def test_concurrency_tracks_worker_model_without_hidden_main_selection(self) -> None:
         config = configuration()
         codex = next(provider for provider in config["providers"] if provider["id"] == "codex")
         codex["maxConcurrency"] = 7
@@ -1040,8 +1047,9 @@ class RoutingTests(unittest.TestCase):
         self.assertIn(
             "codex", [worker["provider"] for worker in summary["selected_workers"]]
         )
-        self.assertEqual(summary["preferred_main_worker"]["provider"], "grok")
-        self.assertFalse(summary["model_concurrency"]["gpt-5.6-sol"]["available"])
+        self.assertNotIn("preferred_main_worker", summary)
+        self.assertNotIn("main_workers", summary)
+        self.assertNotIn("gpt-5.6-sol", summary["model_concurrency"])
         self.assertTrue(
             summary["model_concurrency"]["gpt-5.3-codex-spark"]["available"]
         )
@@ -1105,8 +1113,8 @@ class RoutingTests(unittest.TestCase):
         self.assertIn("claude-fable-5", context)
         self.assertIn("<system-reminder>", context)
         self.assertIn('"source":"claudex-routing-local-hook"', context)
-        self.assertIn('"minimum_subagents_per_phase":3', context)
-        self.assertIn('"minimum_model_kinds":2', context)
+        self.assertIn('"fanout_rule":"min(independent_scopes, max_available_workers, max_parallel_workers)"', context)
+        self.assertIn('"max_parallel_workers":40', context)
         self.assertIn('"custom_advisor_enabled":true', context)
         self.assertNotIn("Runtime parallel contract", context)
         self.assertNotIn("MANDATORY SUBAGENT-FIRST ORCHESTRATION", context)
@@ -1573,7 +1581,7 @@ class CommandTests(unittest.TestCase):
                     **os.environ,
                     "HOME": directory,
                     route_usage.DISABLED_SUBAGENT_MODELS_ENV: (
-                        "opencode-go/deepseek-v4-pro"
+                        "opencode-go/deepseek-v4-flash"
                     ),
                 },
             )
@@ -1985,6 +1993,86 @@ class MainTests(unittest.TestCase):
     @mock.patch("route_usage.qwen_quota_refresh_due", return_value=False)
     @mock.patch("route_usage.collect_usage")
     @mock.patch("route_usage.read_cache")
+    def test_main_reports_claude_current_model_without_hidden_provider_main(
+        self,
+        read_cache: mock.Mock,
+        collect_usage: mock.Mock,
+        _quota_due: mock.Mock,
+    ) -> None:
+        read_cache.return_value = route_usage.routing_summary(report(), configuration())
+        output = self.run_main(current_main_model="sonnet[1m]")
+        context = json.loads(output)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn('"current_main_model":"sonnet[1m]"', context)
+        self.assertIn('"main_session_model":"sonnet[1m]"', context)
+        self.assertNotIn("gpt-5.6-sol", context)
+        self.assertNotIn("preferred_main_worker", context)
+        self.assertNotIn("main_workers", context)
+        collect_usage.assert_not_called()
+
+    @mock.patch("route_usage.qwen_quota_refresh_due", return_value=False)
+    @mock.patch("route_usage.collect_usage")
+    @mock.patch("route_usage.read_cache")
+    def test_main_reports_external_current_model_and_ignores_legacy_outer_value(
+        self,
+        read_cache: mock.Mock,
+        collect_usage: mock.Mock,
+        _quota_due: mock.Mock,
+    ) -> None:
+        read_cache.return_value = route_usage.routing_summary(report(), configuration())
+        output = self.run_main(
+            current_main_model="grok-4.5",
+            legacy_outer_model="sonnet[1m]",
+        )
+        context = json.loads(output)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn('"current_main_model":"grok-4.5"', context)
+        self.assertNotIn('"current_main_model":"sonnet[1m]"', context)
+        self.assertNotIn("gpt-5.6-sol", context)
+        collect_usage.assert_not_called()
+
+    @mock.patch("route_usage.qwen_quota_refresh_due", return_value=False)
+    @mock.patch("route_usage.collect_usage")
+    @mock.patch("route_usage.read_cache")
+    def test_main_accepts_legacy_outer_model_only_when_current_model_is_absent(
+        self,
+        read_cache: mock.Mock,
+        collect_usage: mock.Mock,
+        _quota_due: mock.Mock,
+    ) -> None:
+        read_cache.return_value = route_usage.routing_summary(report(), configuration())
+        output = self.run_main(legacy_outer_model="claude-fable-5")
+        context = json.loads(output)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn('"current_main_model":"claude-fable-5"', context)
+        collect_usage.assert_not_called()
+
+    @mock.patch("route_usage.qwen_quota_refresh_due", return_value=False)
+    @mock.patch("route_usage.collect_usage")
+    @mock.patch("route_usage.read_cache")
+    def test_resumed_unknown_model_ignores_stale_settings_and_keeps_sonnet_worker(
+        self,
+        read_cache: mock.Mock,
+        collect_usage: mock.Mock,
+        _quota_due: mock.Mock,
+    ) -> None:
+        unavailable = report(codex=100, grok=100)
+        unavailable[-1] = qwen_report(None, available=False)
+        read_cache.return_value = route_usage.routing_summary(
+            unavailable, configuration()
+        )
+        output = self.run_main(
+            current_main_model="sonnet[1m]",
+            legacy_outer_model="sonnet[1m]",
+            current_main_model_known=False,
+        )
+        context = json.loads(output)["hookSpecificOutput"]["additionalContext"]
+        self.assertIn('"current_main_model":null', context)
+        self.assertIn('"current_main_model_known":false', context)
+        self.assertIn('"agent":"claudex-sonnet"', context)
+        self.assertIn('"sonnet_subagent_suppressed":false', context)
+        collect_usage.assert_not_called()
+
+    @mock.patch("route_usage.qwen_quota_refresh_due", return_value=False)
+    @mock.patch("route_usage.collect_usage")
+    @mock.patch("route_usage.read_cache")
     def test_main_reuses_a_fresh_cache(
         self,
         read_cache: mock.Mock,
@@ -2062,7 +2150,7 @@ class MainTests(unittest.TestCase):
             output = self.run_main(
                 "--input",
                 str(fixture),
-                disabled_models=["opencode-go/deepseek-v4-pro"],
+                disabled_models=["opencode-go/deepseek-v4-flash"],
             )
         context = json.loads(output)["hookSpecificOutput"]["additionalContext"]
         self.assertIn('"selected_agents":["claudex-qwen","claudex-gpt-spark"]', context)
@@ -2092,7 +2180,7 @@ class MainTests(unittest.TestCase):
         ):
             output = self.run_main(
                 "--no-cache",
-                disabled_models=["opencode-go/deepseek-v4-pro"],
+                disabled_models=["opencode-go/deepseek-v4-flash"],
             )
         context = json.loads(output)["hookSpecificOutput"]["additionalContext"]
         self.assertIn('"selected_agents":["claudex-qwen"]', context)
@@ -2102,7 +2190,7 @@ class MainTests(unittest.TestCase):
                 {
                     "gpt-5.3-codex-spark",
                     "grok-4.5",
-                    "opencode-go/deepseek-v4-pro",
+                    "opencode-go/deepseek-v4-flash",
                 }
             ),
         )
@@ -2121,7 +2209,7 @@ class MainTests(unittest.TestCase):
                         "version": 1,
                         "disabledModels": [
                             "gpt-5.3-codex-spark",
-                        "opencode-go/deepseek-v4-pro",
+                        "opencode-go/deepseek-v4-flash",
                         ],
                     }
                 ),
@@ -2138,7 +2226,7 @@ class MainTests(unittest.TestCase):
         expected_key = route_usage.configuration_key(
             configuration(),
             frozenset(
-                {"gpt-5.3-codex-spark", "opencode-go/deepseek-v4-pro"}
+                {"gpt-5.3-codex-spark", "opencode-go/deepseek-v4-flash"}
             ),
         )
         self.assertEqual(read_cache.call_args.args[3], expected_key)
@@ -2151,7 +2239,7 @@ class MainTests(unittest.TestCase):
         environment = {
             route_usage.DISABLED_SUBAGENT_MODELS_ENV: "gpt-5.3-codex-spark",
             route_usage.RESOLVED_DISABLED_SUBAGENT_MODELS_ENV: (
-                "qwen3.8-max-preview,opencode-go/deepseek-v4-pro"
+                "qwen3.8-max-preview,opencode-go/deepseek-v4-flash"
             ),
         }
         with mock.patch.dict(os.environ, environment):
@@ -2161,7 +2249,7 @@ class MainTests(unittest.TestCase):
         expected_key = route_usage.configuration_key(
             configuration(),
             frozenset(
-                {"qwen3.8-max-preview", "opencode-go/deepseek-v4-pro"}
+                {"qwen3.8-max-preview", "opencode-go/deepseek-v4-flash"}
             ),
         )
         self.assertEqual(read_cache.call_args.args[3], expected_key)
@@ -2223,6 +2311,9 @@ class MainTests(unittest.TestCase):
         health: dict[str, dict[str, object]] | None = None,
         config: dict[str, object] | None = None,
         respect_resolved_disabled_models: bool = False,
+        current_main_model: str | None = None,
+        legacy_outer_model: str | None = None,
+        current_main_model_known: bool | None = None,
     ) -> str:
         stdout = io.StringIO()
         with tempfile.TemporaryDirectory() as directory:
@@ -2256,6 +2347,19 @@ class MainTests(unittest.TestCase):
                     [str(Path(route_usage.__file__)), *effective_arguments],
                 ),
                 mock.patch("route_usage.run_daemon_health", return_value=health),
+                mock.patch.dict(
+                    os.environ,
+                    {
+                        route_usage.MAIN_MODEL_ENV: current_main_model or "",
+                        route_usage.LEGACY_OUTER_MODEL_ENV: legacy_outer_model or "",
+                        route_usage.MAIN_MODEL_KNOWN_ENV: (
+                            ""
+                            if current_main_model_known is None
+                            else "1" if current_main_model_known else "0"
+                        ),
+                    },
+                    clear=False,
+                ),
                 contextlib.redirect_stdout(stdout),
             ):
                 self.assertEqual(route_usage.main(), 0)

@@ -1,7 +1,7 @@
 ---
 name: claudex-deepseek
-description: OpenCode Go ACP-backed claudex worker for implementation, investigation, testing, and independent review with DeepSeek V4 Pro (opencode-go/deepseek-v4-pro).
-model: opencode-go/deepseek-v4-pro
+description: OpenCode Go ACP-backed claudex worker for implementation, investigation, testing, and independent review with DeepSeek V4 Flash (opencode-go/deepseek-v4-flash).
+model: opencode-go/deepseek-v4-flash
 effort: max
 skills:
   - claudex-routing

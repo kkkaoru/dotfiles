@@ -5,14 +5,8 @@ function claudex --description 'Run Claude Code with config-driven agent backend
     set -l max_parallel 40
     set -q CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS; and set max_parallel "$CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS"
     set -q CLAUDEX_SUBAGENT_MAX_PARALLEL; and set max_parallel "$CLAUDEX_SUBAGENT_MAX_PARALLEL"
-    set -l min_parallel 3
-    set -q CLAUDEX_SUBAGENT_MIN_PARALLEL; and set min_parallel "$CLAUDEX_SUBAGENT_MIN_PARALLEL"
-    set -l active_floor 2
-    set -q CLAUDEX_SUBAGENT_ACTIVE_FLOOR; and set active_floor "$CLAUDEX_SUBAGENT_ACTIVE_FLOOR"
     set -l reassess_seconds 600
     set -q CLAUDEX_SUBAGENT_REASSESS_INTERVAL_SECONDS; and set reassess_seconds "$CLAUDEX_SUBAGENT_REASSESS_INTERVAL_SECONDS"
-    set -l model_families 2
-    set -q CLAUDEX_SUBAGENT_MIN_MODEL_FAMILIES; and set model_families "$CLAUDEX_SUBAGENT_MIN_MODEL_FAMILIES"
     set -l reevaluate_on_completion 1
     set -q CLAUDEX_SUBAGENT_REEVALUATE_ON_COMPLETION; and set reevaluate_on_completion "$CLAUDEX_SUBAGENT_REEVALUATE_ON_COMPLETION"
     set -l reuse_workers 1
@@ -28,10 +22,7 @@ function claudex --description 'Run Claude Code with config-driven agent backend
     set -lx CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY 1
     set -lx CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS "$max_parallel"
     set -lx CLAUDEX_SUBAGENT_MAX_PARALLEL "$max_parallel"
-    set -lx CLAUDEX_SUBAGENT_MIN_PARALLEL "$min_parallel"
-    set -lx CLAUDEX_SUBAGENT_ACTIVE_FLOOR "$active_floor"
     set -lx CLAUDEX_SUBAGENT_REASSESS_INTERVAL_SECONDS "$reassess_seconds"
-    set -lx CLAUDEX_SUBAGENT_MIN_MODEL_FAMILIES "$model_families"
     set -lx CLAUDEX_SUBAGENT_REEVALUATE_ON_COMPLETION "$reevaluate_on_completion"
     set -lx CLAUDEX_SUBAGENT_REUSE "$reuse_workers"
     set -lx CLAUDEX_SUBAGENT_CLEANUP_ON_EXIT "$cleanup_on_exit"
@@ -87,9 +78,9 @@ function claudex --description 'Run Claude Code with config-driven agent backend
     set -l outer_effort "$defaults_output[3]"
     set -l settings_model "$defaults_output[4]"
     set -l settings_effort "$defaults_output[5]"
-    # Export before the pre-launch routing probe as well as for the adapter and
-    # UserPromptSubmit hook.  `CLAUDEX_MAIN_MODEL` is the bootstrap provider
-    # route and can differ from the actual settings/explicit outer model.
+    # Export the configured outer default for routing guidance. The adapter
+    # treats the model sent by Claude Code on each request as authoritative, so
+    # a resumed session can retain its own effective model without remapping.
     set -lx CLAUDEX_OUTER_MODEL "$outer_model"
 
     set -l default_provider_config "$HOME/.config/claudex/providers.json"
@@ -131,60 +122,20 @@ function claudex --description 'Run Claude Code with config-driven agent backend
         return 2
     end
 
-    # The shared JSON is authoritative for provider commands, bootstrap models,
-    # model prefixes, worker agents, and fallback selection. Claude Code owns
-    # advisorModel and (when selected) the outer model/effort settings.
+    # The shared JSON is authoritative for provider commands, model prefixes,
+    # worker agents, and fallback selection. Claude Code owns the outer main
+    # model in settings mode; CLAUDEX_MODEL remains an explicit override.
     set -l adapter_args launch --provider-config "$provider_config"
-    set -l main_model
+    set -l main_model "$outer_model"
     if test "$defaults_source" = explicit
         # Explicit mode keeps the existing routed-main-model behavior and uses
         # the configured model as both the adapter route and outer model.
-        set main_model "$outer_model"
         set -a adapter_args --model "$main_model"
     else
-        # Prefer the first capacity-available provider in mainProviders. The
-        # routing script shares its cached quota snapshot with the Claude Code
-        # hook; if it is unavailable, fall back to the first configured
-        # provider deterministically.
-        set -l routing_script "$HOME/.claude/skills/claudex-routing/scripts/route_usage.py"
-        set -l routing_output
-        if test -r "$routing_script"
-            set routing_output (env CLAUDEX_PROVIDER_CONFIG="$provider_config" python3 "$routing_script" 2>/dev/null)
-        end
-        set main_model (printf '%s' "$routing_output" | python3 -c '
-import json
-import sys
-
-config = json.load(open(sys.argv[1], encoding="utf-8"))
-model = None
-try:
-    hook = json.load(sys.stdin)
-    context = hook["hookSpecificOutput"]["additionalContext"]
-    summary = json.loads(context[context.index("{\\"providers\\":"):])
-    worker = summary.get("preferred_main_worker")
-    if isinstance(worker, dict) and isinstance(worker.get("model"), str):
-        model = worker["model"]
-except (IndexError, KeyError, TypeError, ValueError, json.JSONDecodeError):
-    pass
-if model is None:
-    providers = {provider.get("id"): provider for provider in config.get("providers", [])}
-    for provider_id in config.get("mainProviders", []):
-        provider = providers.get(provider_id)
-        if isinstance(provider, dict) and provider.get("enabled", True):
-            candidate = provider.get("defaultModel")
-            if isinstance(candidate, str) and candidate:
-                model = candidate
-                break
-if model is None:
-    raise SystemExit("claudex: no enabled provider in mainProviders")
-print(model)
-' "$provider_config")
-        if test -z "$main_model"
-            return 2
-        end
-        # Keep a provider route for the adapter daemon, but let Claude Code
-        # inherit model and effort from ~/.claude/settings.json.
-        set -a adapter_args --model "$main_model" --inherit-claude-model
+        # No provider bootstrap model is selected. Claude Code preserves its
+        # settings, /model changes, and resumed-session model; the adapter
+        # routes the resulting request model independently.
+        set -a adapter_args --inherit-claude-model
     end
     set -q CLAUDEX_ADAPTER_LISTEN; and set -a adapter_args --listen "$CLAUDEX_ADAPTER_LISTEN"
     set -l subscription_max_processes 20
@@ -200,12 +151,15 @@ print(model)
     set -l claude_args $argv
     set -l has_cli_effort 0
     set -l has_allowed_tools 0
+    set -l restores_session 0
     for argument in $argv
         switch $argument
             case --effort '--effort=*'
                 set has_cli_effort 1
             case --allowedTools --allowed-tools '--allowedTools=*' '--allowed-tools=*'
                 set has_allowed_tools 1
+            case --resume '--resume=*' -r --continue -c
+                set restores_session 1
         end
     end
     # Native web tools are returned by the adapter and executed by this outer Claude Code process.
@@ -224,9 +178,22 @@ print(model)
     # Do not inject a fixed Claude Code agent/session name. The routing hook and
     # project instructions provide orchestration policy without changing the
     # user's session label; an explicit --agent argument remains untouched.
+    # A restored session owns its effective model, which may differ from the
+    # current settings.json default.  Claude Code does not expose that restored
+    # value to the launcher, so publish an explicit unknown state instead of a
+    # stale model. An explicit CLAUDEX_MODEL remains authoritative and known.
     set -lx CLAUDEX_MAIN_MODEL "$main_model"
+    set -lx CLAUDEX_MAIN_MODEL_KNOWN 1
+    if test "$defaults_source" = settings; and test $restores_session -eq 1
+        set CLAUDEX_MAIN_MODEL ""
+        set CLAUDEX_MAIN_MODEL_KNOWN 0
+    end
     if test "$defaults_source" = settings
-        echo "claudex: settings-routed orchestration ($provider_config, bootstrap $main_model; settings $settings_model, $settings_effort)" >&2
+        if test $CLAUDEX_MAIN_MODEL_KNOWN -eq 1
+            echo "claudex: settings-routed orchestration ($provider_config; current $settings_model, $settings_effort; request model authoritative)" >&2
+        else
+            echo "claudex: resumed orchestration ($provider_config; current model restored by Claude Code and unknown to launcher; request model authoritative)" >&2
+        end
     else
         echo "claudex: explicit-routed orchestration ($provider_config, $outer_model, $outer_effort)" >&2
     end

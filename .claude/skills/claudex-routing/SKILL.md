@@ -43,18 +43,13 @@ retained.
    recipients, and capacity. The adapter resolves an allowed matching backend lazily. If no allowed
    worker remains, continue in the main session and report that SubAgent routing is unavailable.
 3. The main session must control parallel distribution across multiple SubAgents for independent
-   work or complementary review. Use multiple selected workers only when useful; start the number
-   needed for genuine parallelism, role separation, and clean independent context; reuse policy
-   must not suppress useful fan-out.
-   Before launching a substantive, non-trivial phase, explicitly decompose it into non-redundant
-   workstreams and select the fan-out dynamically for task content and current capacity. Use one
-   ordinary worker for one indivisible scope, two for two independent scopes, and at least three
-   only when three or more independent scopes justify it and capacity permits. Use at least two
-   distinct model kinds whenever the selected fan-out is two or more and allowed workers provide
-   them. Report a genuine indivisible phase or capacity shortfall and re-evaluate fan-out at the
-   next result, failure, capacity update, or phase boundary. Avoid serial heavy processing by one
-   worker when independent scopes exist: do not give an entire heavy or unknown-duration task to
-   one ordinary worker merely because it is convenient. `custom-advisor`
+   work or complementary review. Use multiple selected workers only when useful; start exactly
+   `min(independent scopes, available worker slots, configured maximum)` ordinary workers. One
+   indivisible scope means one worker, even when the pool is larger. Prefer distinct model kinds
+   when the task already has two or more scopes and the pool provides them, but do not manufacture
+   scopes or duplicate a launch to satisfy diversity. Report a genuine indivisible phase or
+   capacity shortfall and re-evaluate fan-out at the next result, failure, capacity update, or phase
+   boundary. `custom-advisor`
    is a separate logical session singleton/capacity channel, not one of these implementation
    workstreams; built-in `advisor()` remains independent of worker capacity.
    Apply this selection to every Agent/Task launch, including nested launches made by an existing
@@ -155,22 +150,17 @@ retained.
      deliberate reuse rule to custom-advisor, counted separately from worker slots.
    - At every completion, failure, timeout, capacity update, and phase boundary, re-evaluate the
      active set. Integrate partial results immediately, reuse a compatible recipient for a related
-     delta, and fill newly available capacity only with genuinely independent unresolved work or
-     review risk. Logical transcript reuse and live-process lifetime are separate: do not retain a
-     live worker solely for possible reuse. After each worker completion, decide whether to stop a
-     stale worker, send concrete additional instructions to an active worker, reuse a compatible
-     recipient for the same content, or launch a new selected worker for the same or supplemental
-     content. During phases longer than ten minutes, perform a management tick every 600 seconds;
-     when ordinary active workers fall to one, interrupt/cancel the stale sole worker as appropriate
-     and add, reuse, or message work until at least two remain active whenever capacity permits. On
+     delta. Keep a stable scope key for every launch; never relaunch an in-flight, completed, or
+     cancelled key. Do not refill a completed slot unless a genuinely unresolved scope with a new
+     key already exists. Logical transcript reuse and live-process lifetime are separate: do not
+     retain a live worker solely for possible reuse. During phases longer than ten minutes, perform
+     a management tick every 600 seconds without imposing an active floor. On
      normal completion, cancellation, error, or main-session exit, the runtime must stop launches,
      request cancellation, wait for every owned child to exit, reap it, and then discard its session
      ownership record. The routing hook emits context only and cannot invoke Agent/Task/SendMessage;
      the main session owns those actions. Its validated controls are
-     `CLAUDEX_SUBAGENT_MIN_PARALLEL`, `CLAUDEX_SUBAGENT_ACTIVE_FLOOR`,
-     `CLAUDEX_SUBAGENT_REEVALUATE_ON_COMPLETION`, `CLAUDEX_SUBAGENT_REASSESS_INTERVAL_SECONDS`,
-     `CLAUDEX_SUBAGENT_MIN_MODEL_FAMILIES`, `CLAUDEX_SUBAGENT_REUSE`, and
-     `CLAUDEX_SUBAGENT_CLEANUP_ON_EXIT`; no hard maximum process cap is imposed.
+     `CLAUDEX_SUBAGENT_MAX_PARALLEL` is the only parallel control; it is an upper bound, never a
+     required launch count.
 
 `scripts/route_usage.py` refreshes the capacity snapshot at most once every five minutes by
 default. Codex and Grok usage comes from `codexbar usage --json`. Qwen's five-hour and seven-day

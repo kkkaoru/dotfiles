@@ -23,7 +23,7 @@ import opencode_go_budget
 DEFAULT_CACHE_SECONDS = 300
 # Bump when worker-selection semantics change so a cached context cannot retain
 # the old main-model exclusion rule for up to the normal routing-cache TTL.
-ROUTING_CACHE_VERSION = 5
+ROUTING_CACHE_VERSION = 6
 QWEN_QUOTA_CACHE_SECONDS = 60 * 60
 QWEN_REQUEST_TIMEOUT_SECONDS = 5
 QWEN_SUBPROCESS_GRACE_SECONDS = 2
@@ -52,7 +52,13 @@ DISABLED_SUBAGENT_MODELS_CONFIG_ENV = "CLAUDEX_DISABLED_SUBAGENT_MODELS_CONFIG"
 RESOLVED_DISABLED_SUBAGENT_MODELS_ENV = "CLAUDEX_RESOLVED_DISABLED_SUBAGENT_MODELS"
 CUSTOM_ADVISOR_ENV = "CLAUDEX_CUSTOM_ADVISOR"
 CUSTOM_ADVISOR_DISABLED_VALUES = frozenset({"0", "false", "off"})
-OUTER_MODEL_ENV = "CLAUDEX_OUTER_MODEL"
+MAIN_MODEL_ENV = "CLAUDEX_MAIN_MODEL"
+MAIN_MODEL_KNOWN_ENV = "CLAUDEX_MAIN_MODEL_KNOWN"
+# Compatibility input for launchers predating the current-main-model contract.
+# It is consulted only when CLAUDEX_MAIN_MODEL is absent and is never emitted as
+# an independent routing authority.
+LEGACY_OUTER_MODEL_ENV = "CLAUDEX_OUTER_MODEL"
+OUTER_MODEL_ENV = LEGACY_OUTER_MODEL_ENV
 ALLOW_SONNET_SUBAGENT_ENV = "CLAUDEX_ALLOW_SONNET_SUBAGENT"
 # Claude Code settings use the short `sonnet[1m]` spelling while the
 # configured fallback worker uses the canonical `claude-sonnet-5` ID.  Keep
@@ -68,17 +74,14 @@ SONNET_MODEL_ALIASES = frozenset(
 )
 # These values describe the orchestration contract injected into Claude Code.
 # The routing hook cannot start Agent/Task calls itself; the main session uses
-# this metadata to choose and rebalance ordinary workers.
-MIN_SUBAGENT_FANOUT = 3
-MIN_ACTIVE_SUBAGENTS = 2
-MIN_SUBAGENT_MODEL_KINDS = 2
+# this metadata to choose ordinary workers for the current task. There is no
+# default launch floor: the task's independent scopes determine the fan-out.
+DEFAULT_MAX_SUBAGENTS = 40
 ORCHESTRATION_REBALANCE_INTERVAL_SECONDS = 10 * 60
 DEFAULT_SUBAGENT_STATUS_POLL_SECONDS = 15
-SUBAGENT_MIN_PARALLEL_ENV = "CLAUDEX_SUBAGENT_MIN_PARALLEL"
-SUBAGENT_ACTIVE_FLOOR_ENV = "CLAUDEX_SUBAGENT_ACTIVE_FLOOR"
+SUBAGENT_MAX_PARALLEL_ENV = "CLAUDEX_SUBAGENT_MAX_PARALLEL"
 SUBAGENT_REEVALUATE_ON_COMPLETION_ENV = "CLAUDEX_SUBAGENT_REEVALUATE_ON_COMPLETION"
 SUBAGENT_REASSESS_INTERVAL_ENV = "CLAUDEX_SUBAGENT_REASSESS_INTERVAL_SECONDS"
-SUBAGENT_MIN_MODEL_FAMILIES_ENV = "CLAUDEX_SUBAGENT_MIN_MODEL_FAMILIES"
 SUBAGENT_REUSE_ENV = "CLAUDEX_SUBAGENT_REUSE"
 SUBAGENT_CLEANUP_ON_EXIT_ENV = "CLAUDEX_SUBAGENT_CLEANUP_ON_EXIT"
 SUBAGENT_FIRST_ENV = "CLAUDEX_SUBAGENT_FIRST"
@@ -119,10 +122,12 @@ def load_config(path: Path) -> dict[str, Any]:
     enabled = [provider for provider in providers if provider.get("enabled", True)]
     if not enabled or any(not valid_provider(provider) for provider in enabled):
         raise ValueError("provider config contains an invalid enabled provider")
-    main_providers = config.get("mainProviders")
+    # version 1 called this an ordered list of implicit main providers.  Keep
+    # accepting it as compatibility metadata, but routing never selects a main
+    # model from it: the live CLAUDEX_MAIN_MODEL value is authoritative.
+    main_providers = config.get("mainProviders", [])
     if (
         not isinstance(main_providers, list)
-        or not main_providers
         or any(not isinstance(provider, str) for provider in main_providers)
         or len(set(main_providers)) != len(main_providers)
         or any(provider not in {item["id"] for item in enabled} for provider in main_providers)
@@ -145,6 +150,7 @@ def load_config(path: Path) -> dict[str, Any]:
         raise ValueError("provider config contains an invalid advisor")
     return {
         **config,
+        "mainProviders": list(main_providers),
         "providers": enabled,
         "nativeWorkers": [dict(worker) for worker in native_workers],
         "advisor": dict(advisor),
@@ -411,15 +417,28 @@ def _boolean_or_default(
 
 
 def orchestration_settings(environment: Mapping[str, str] | None = None) -> dict[str, Any]:
-    """Resolve validated worker lifecycle settings from terminal-local env."""
+    """Resolve the worker lifecycle cap from terminal-local env.
+
+    The cap limits useful independent scopes; it is never a target or a
+    minimum. Callers calculate the task-specific fan-out with ``task_fanout``.
+    """
     values = os.environ if environment is None else environment
+    max_parallel = values.get(SUBAGENT_MAX_PARALLEL_ENV)
+    if max_parallel is None:
+        max_parallel = values.get("CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS")
+    cap_environment = (
+        {SUBAGENT_MAX_PARALLEL_ENV: max_parallel}
+        if max_parallel is not None
+        else {}
+    )
     return {
-        "minimum_subagents_per_phase": _positive_or_default(
-            values, SUBAGENT_MIN_PARALLEL_ENV, MIN_SUBAGENT_FANOUT, MIN_SUBAGENT_FANOUT
+        "max_parallel_workers": _positive_or_default(
+            cap_environment, SUBAGENT_MAX_PARALLEL_ENV, DEFAULT_MAX_SUBAGENTS, 1
         ),
-        "minimum_active_subagents": _positive_or_default(
-            values, SUBAGENT_ACTIVE_FLOOR_ENV, MIN_ACTIVE_SUBAGENTS, MIN_ACTIVE_SUBAGENTS
-        ),
+        # Compatibility metadata for older consumers. These are neutral and
+        # are not launch requirements.
+        "minimum_subagents_per_phase": 1,
+        "minimum_active_subagents": 1,
         "reevaluate_on_completion": _boolean_or_default(
             values, SUBAGENT_REEVALUATE_ON_COMPLETION_ENV, True
         ),
@@ -429,12 +448,7 @@ def orchestration_settings(environment: Mapping[str, str] | None = None) -> dict
             ORCHESTRATION_REBALANCE_INTERVAL_SECONDS,
             1,
         ),
-        "minimum_model_kinds": _positive_or_default(
-            values,
-            SUBAGENT_MIN_MODEL_FAMILIES_ENV,
-            MIN_SUBAGENT_MODEL_KINDS,
-            MIN_SUBAGENT_MODEL_KINDS,
-        ),
+        "minimum_model_kinds": 1,
         "reuse_compatible_workers": _boolean_or_default(values, SUBAGENT_REUSE_ENV, True),
         "cleanup_on_exit": _boolean_or_default(
             values, SUBAGENT_CLEANUP_ON_EXIT_ENV, True
@@ -444,6 +458,34 @@ def orchestration_settings(environment: Mapping[str, str] | None = None) -> dict
             values, SUBAGENT_STATUS_POLL_ENV, DEFAULT_SUBAGENT_STATUS_POLL_SECONDS, 1
         ),
     }
+
+
+def task_fanout(
+    independent_scopes: int,
+    available_workers: int,
+    environment: Mapping[str, str] | None = None,
+) -> int:
+    """Return the number of ordinary workers justified by one task.
+
+    A task with one indivisible scope uses one worker even when more slots are
+    available. Callers must not count duplicate, completed, or cancelled
+    scopes. Zero scopes or zero available workers produces no launch.
+    """
+    if (
+        isinstance(independent_scopes, bool)
+        or not isinstance(independent_scopes, int)
+        or independent_scopes < 0
+        or isinstance(available_workers, bool)
+        or not isinstance(available_workers, int)
+        or available_workers < 0
+    ):
+        raise ValueError("scope and worker counts must be non-negative integers")
+    settings = orchestration_settings(environment)
+    return min(
+        independent_scopes,
+        available_workers,
+        settings["max_parallel_workers"],
+    )
 
 
 def orchestration_contract(
@@ -471,6 +513,8 @@ def orchestration_contract(
         "dynamic_fanout": True,
         **settings,
         "max_available_workers": available,
+        "fanout_rule": "min(independent_scopes, max_available_workers, max_parallel_workers)",
+        "task_fanout_default": task_fanout(1, available, environment),
         "available_model_kinds": len(models),
         "model_diversity_satisfied": len(models) >= settings["minimum_model_kinds"],
         "completion_rebalance_required": settings["reevaluate_on_completion"],
@@ -703,7 +747,6 @@ def routing_summary(
     """Select configured workers when they have capacity, otherwise fallback."""
     config = config or load_config(config_path(os.environ))
     providers: dict[str, dict[str, Any]] = {}
-    main_workers: dict[str, dict[str, Any]] = {}
     candidates: list[tuple[tuple[float, ...], dict[str, Any]]] = []
     for index, provider in enumerate(config["providers"]):
         quota_name = provider.get("usageProvider")
@@ -711,11 +754,6 @@ def routing_summary(
         disabled = worker(provider)["model"] in disabled_models
         effective = status(False, None, "disabled-by-policy") if disabled else quota
         providers[provider["id"]] = {**effective, **worker(provider), "disabled": disabled}
-        main_workers[provider["id"]] = {
-            **quota,
-            **worker(provider),
-            "model": provider["defaultModel"],
-        }
         if quota["available"] and not disabled:
             candidates.append((capacity_priority(quota, index), worker(provider)))
     selected = [
@@ -725,21 +763,11 @@ def routing_summary(
     if fallback_active:
         selected = [{"provider": "fallback", **config["fallback"]}]
     selected.extend(selected_native_workers(config, disabled_models))
-    preferred_main_worker = next(
-        (
-            main_workers[provider]
-            for provider in config["mainProviders"]
-            if provider in main_workers and main_workers[provider]["available"]
-        ),
-        None,
-    )
     summary = {
         "providers": providers,
-        "main_workers": main_workers,
         "selected_agents": [item["agent"] for item in selected],
         "selected_workers": selected,
         "preferred_worker": selected[0] if selected else None,
-        "preferred_main_worker": preferred_main_worker,
         "fallback_active": fallback_active,
         "disabled_subagent_models": sorted(disabled_models),
         "advisor": dict(config.get("advisor", DEFAULT_ADVISOR)),
@@ -791,7 +819,6 @@ def apply_model_concurrency(
     combined = json.loads(json.dumps(summary))
     candidates: list[tuple[tuple[float, ...], dict[str, Any]]] = []
     model_capacity: dict[str, dict[str, Any]] = {}
-    main_workers = combined.get("main_workers", {})
     for index, provider in enumerate(config["providers"]):
         provider_id = provider["id"]
         fields = combined["providers"][provider_id]
@@ -810,17 +837,6 @@ def apply_model_concurrency(
                     "concurrency_reason": concurrency["reason"],
                 }
             )
-            main_model = provider["defaultModel"]
-            main_concurrency = model_concurrency_status(provider, main_model, health)
-            model_capacity[main_model] = main_concurrency
-            if provider_id in main_workers:
-                main_workers[provider_id]["concurrency"] = main_concurrency
-                if (
-                    main_workers[provider_id]["available"]
-                    and not main_concurrency["available"]
-                ):
-                    main_workers[provider_id]["available"] = False
-                    main_workers[provider_id]["reason"] = "concurrency-limit-reached"
         quota = {
             "available": fields["available"],
             "max_used_percent": fields["max_used_percent"],
@@ -844,7 +860,17 @@ def apply_model_concurrency(
     if health is not None:
         for model in health:
             provider = provider_for_model(config, model)
-            if provider is not None and "maxConcurrency" in provider:
+            if (
+                provider is not None
+                and "maxConcurrency" in provider
+                # A provider defaultModel is legacy main-route metadata, not a
+                # worker candidate.  Do not leak it back into hook output when
+                # the provider delegates with a distinct subagentModel.
+                and not (
+                    model == provider.get("defaultModel")
+                    and model != worker(provider)["model"]
+                )
+            ):
                 model_capacity[model] = model_concurrency_status(provider, model, health)
 
     selected = [item for _, item in sorted(candidates, key=lambda item: item[0])]
@@ -853,14 +879,6 @@ def apply_model_concurrency(
     if fallback_active:
         selected = [fallback]
     selected.extend(selected_native_workers(config, disabled_models))
-    preferred_main_worker = next(
-        (
-            main_workers[provider]
-            for provider in config["mainProviders"]
-            if provider in main_workers and main_workers[provider]["available"]
-        ),
-        None,
-    )
     combined.update(
         {
             "selected_agents": [item["agent"] for item in selected],
@@ -868,8 +886,6 @@ def apply_model_concurrency(
             "preferred_worker": selected[0] if selected else None,
             "fallback_active": fallback_active,
             "model_concurrency": model_capacity,
-            "main_workers": main_workers,
-            "preferred_main_worker": preferred_main_worker,
         }
     )
     combined["orchestration"] = orchestration_contract(combined)
@@ -897,8 +913,12 @@ def hook_output(
             for worker in summary.get("selected_workers", [])
         ],
         "disabled_subagent_models": list(summary.get("disabled_subagent_models", [])),
-        "main_session_model": summary.get("main_session_model"),
-        "outer_session_model": summary.get("outer_session_model"),
+        "current_main_model": summary.get("current_main_model"),
+        "current_main_model_known": bool(
+            summary.get("current_main_model_known", False)
+        ),
+        # Compatibility alias for consumers of the previous hook shape.
+        "main_session_model": summary.get("current_main_model"),
         "automatic_selection_excluded_models": list(
             summary.get("automatic_selection_excluded_models", [])
         ),
@@ -943,6 +963,7 @@ def enforce_worker_model_separation(
     disabled_models: frozenset[str],
     *,
     outer_model: str | None = None,
+    main_model_known: bool = True,
     allow_sonnet_subagent: bool | None = None,
 ) -> dict[str, Any]:
     """Finalize worker routing while conserving a duplicated Sonnet request.
@@ -962,7 +983,11 @@ def enforce_worker_model_separation(
         allow_sonnet_subagent = _boolean_or_default(
             os.environ, ALLOW_SONNET_SUBAGENT_ENV, False
         )
-    session_model = outer_model or main_model
+    # CLAUDEX_MAIN_MODEL is the current outer/main session model.  outer_model
+    # remains a compatibility argument for old callers and cannot override it.
+    current_main_model = (main_model or outer_model) if main_model_known else None
+    current_main_model_known = bool(main_model_known and current_main_model)
+    session_model = current_main_model
     excluded_models: set[str] = set()
     sonnet_suppressed = False
     if is_sonnet_model(session_model) and not allow_sonnet_subagent:
@@ -979,8 +1004,11 @@ def enforce_worker_model_separation(
     separated["selected_workers"] = selected
     separated["selected_agents"] = [worker["agent"] for worker in selected]
     separated["preferred_worker"] = selected[0] if selected else None
-    separated["main_session_model"] = main_model
-    separated["outer_session_model"] = outer_model
+    separated["current_main_model"] = current_main_model
+    separated["current_main_model_known"] = current_main_model_known
+    # Compatibility alias; unlike the removed preferred_main_worker field this
+    # carries the live session value and cannot imply a provider bootstrap.
+    separated["main_session_model"] = current_main_model
     separated["automatic_selection_excluded_models"] = sorted(excluded_models)
     separated["sonnet_subagent_suppressed"] = sonnet_suppressed
     separated["sonnet_subagent_explicit_allowed"] = bool(allow_sonnet_subagent)
@@ -1660,12 +1688,10 @@ def fallback_summary(
     selected.extend(selected_native_workers(config, disabled_models))
     summary = {
         "providers": providers,
-        "main_workers": {},
         "selected_agents": [item["agent"] for item in selected],
         "selected_workers": selected,
         "preferred_worker": selected[0] if selected else None,
         "fallback_active": fallback_active,
-        "preferred_main_worker": None,
         "disabled_subagent_models": sorted(disabled_models),
         "advisor": dict(config.get("advisor", DEFAULT_ADVISOR)),
     }
@@ -1745,12 +1771,18 @@ def main() -> int:
         run_daemon_health(arguments.curl_program, os.environ),
         disabled_models,
     )
+    configured_main_model = os.environ.get(MAIN_MODEL_ENV) or os.environ.get(
+        LEGACY_OUTER_MODEL_ENV
+    )
+    main_model_known = _boolean_or_default(
+        os.environ, MAIN_MODEL_KNOWN_ENV, bool(configured_main_model)
+    )
     summary = enforce_worker_model_separation(
         summary,
-        os.environ.get("CLAUDEX_MAIN_MODEL"),
+        configured_main_model,
         config,
         disabled_models,
-        outer_model=os.environ.get(OUTER_MODEL_ENV),
+        main_model_known=main_model_known,
         allow_sonnet_subagent=_boolean_or_default(
             os.environ, ALLOW_SONNET_SUBAGENT_ENV, False
         ),
