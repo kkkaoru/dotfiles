@@ -76,19 +76,27 @@ impl SegmentBuilder {
                 self.stream_ephemeral_status(&format!("\n✗ {title}: {preview}\n"), stream)
                     .await?;
             }
-            "completed" => {
-                let detail = output_preview(params.get("output"), "");
-                if !detail.is_empty() {
-                    let preview = truncate_for_status(&detail, COMPLETED_STATUS_PREVIEW_CHAR_LIMIT);
-                    self.stream_ephemeral_status(&format!("\n✓ {title}: {preview}\n"), stream)
-                        .await?;
-                }
-            }
+            "completed" => self.stream_completed_tool(params, &title, stream).await?,
             "pending" | "in_progress" => {
                 self.start_provider_tool_from_update(call_id, &title, stream)
                     .await?;
             }
             _ => {}
+        }
+        Ok(())
+    }
+
+    async fn stream_completed_tool(
+        &mut self,
+        params: &Value,
+        title: &str,
+        stream: Option<&StreamSender>,
+    ) -> Result<()> {
+        let detail = output_preview(params.get("output"), "");
+        if !detail.is_empty() {
+            let preview = truncate_for_status(&detail, COMPLETED_STATUS_PREVIEW_CHAR_LIMIT);
+            self.stream_ephemeral_status(&format!("\n✓ {title}: {preview}\n"), stream)
+                .await?;
         }
         Ok(())
     }
@@ -155,14 +163,18 @@ fn validated_provider_web_evidence(evidence: Option<&Value>) -> bool {
             .get("result_summary")
             .and_then(Value::as_str)
             .is_some_and(|summary| !summary.trim().is_empty())
-        && source_urls.is_some_and(|urls| {
-            !urls.is_empty()
-                && urls.iter().all(|url| {
-                    url.as_str().is_some_and(|url| {
-                        url.starts_with("https://") || url.starts_with("http://")
-                    })
-                })
-        })
+        && source_urls
+            .map(Vec::as_slice)
+            .is_some_and(valid_source_urls)
+}
+
+fn valid_source_urls(urls: &[Value]) -> bool {
+    !urls.is_empty() && urls.iter().all(valid_source_url)
+}
+
+fn valid_source_url(url: &Value) -> bool {
+    url.as_str()
+        .is_some_and(|url| url.starts_with("https://") || url.starts_with("http://"))
 }
 
 fn output_preview(value: Option<&Value>, fallback: &str) -> String {

@@ -1,3 +1,5 @@
+#![allow(clippy::excessive_nesting)]
+
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
     convert::Infallible,
@@ -91,7 +93,7 @@ fn sanitizes_text_thinking_and_provider_status_variants() {
         "Retrying provider request",
         "Session mode: worker",
         "Session: worker",
-        "🔎 WebSearch: AVITA株式会社",
+        "🔎 WebSearch: Example Robotics",
     ] {
         let mut status_block = vec![json!({"type":"thinking","thinking":status})];
         sanitize::sanitize_committed_blocks(&mut status_block);
@@ -342,13 +344,7 @@ async fn activity_keepalive_uses_open_text_when_visible_output_started() {
 
     // Stream-only heartbeat: final answer text stays clean.
     assert_eq!(segment.blocks[0], json!({"type":"text","text":"hi"}));
-    let mut saw_zwsp = false;
-    while let Some(frame) = receiver.recv().await {
-        let frame = String::from_utf8(frame.expect("frame").to_vec()).expect("UTF-8 SSE");
-        if frame.contains("\\u200b") || frame.contains('\u{200b}') {
-            saw_zwsp = true;
-        }
-    }
+    let saw_zwsp = stream_contains_zwsp(&mut receiver).await;
     assert!(saw_zwsp, "expected a zero-width text_delta keepalive frame");
 }
 
@@ -392,24 +388,6 @@ async fn refreshes_activity_deadlines_and_detects_closed_streams() {
     super::disconnect::warn_cancel_failure(&anyhow!("test cancel failure"), "thread");
 }
 
-#[test]
-fn drains_after_unsupported_or_failed_cancellation() {
-    use crate::agent_backend::TurnCancellation;
-
-    assert!(!super::disconnect::requires_disconnected_drain(
-        Ok(TurnCancellation::Settled),
-        "thread",
-    ));
-    assert!(super::disconnect::requires_disconnected_drain(
-        Ok(TurnCancellation::Unsupported),
-        "thread",
-    ));
-    assert!(super::disconnect::requires_disconnected_drain(
-        Err(anyhow!("cancellation failed")),
-        "thread",
-    ));
-}
-
 #[tokio::test]
 async fn hidden_provider_events_do_not_postpone_visible_activity() {
     let (_root, _app, bridge, session) = disconnect_fixture().await;
@@ -425,22 +403,7 @@ async fn hidden_provider_events_do_not_postpone_visible_activity() {
         builder: SegmentBuilder::new(1),
         activity_interval: Duration::from_millis(10),
     });
-    let dispatch = async {
-        for _ in 0..5 {
-            tokio::time::sleep(Duration::from_millis(4)).await;
-            dispatcher.dispatch(json!({
-                "method":"thread/tokenUsage/updated",
-                "params":{
-                    "threadId":"thread",
-                    "tokenUsage":{"last":{"inputTokens":1}}
-                }
-            }));
-        }
-        dispatcher.dispatch(json!({
-            "method":"turn/completed",
-            "params":{"threadId":"thread","turn":{"status":"completed"}}
-        }));
-    };
+    let dispatch = dispatch_hidden_events(&dispatcher);
     let (result, ()) = tokio::join!(wait, dispatch);
     result.expect("stream segment");
     drop(sender);
@@ -450,6 +413,32 @@ async fn hidden_provider_events_do_not_postpone_visible_activity() {
         output.push_str(&String::from_utf8_lossy(&frame.expect("frame")));
     }
     assert!(output.contains("waiting for provider output"));
+}
+
+async fn stream_contains_zwsp(receiver: &mut mpsc::Receiver<Result<Bytes, Infallible>>) -> bool {
+    let mut saw_zwsp = false;
+    while let Some(frame) = receiver.recv().await {
+        let frame = String::from_utf8(frame.expect("frame").to_vec()).expect("UTF-8 SSE");
+        saw_zwsp |= frame.contains("\\u200b") || frame.contains('\u{200b}');
+    }
+    saw_zwsp
+}
+
+async fn dispatch_hidden_events(dispatcher: &crate::app_server::events::ThreadEventDispatcher) {
+    for _ in 0..5 {
+        tokio::time::sleep(Duration::from_millis(4)).await;
+        dispatcher.dispatch(json!({
+            "method":"thread/tokenUsage/updated",
+            "params":{
+                "threadId":"thread",
+                "tokenUsage":{"last":{"inputTokens":1}}
+            }
+        }));
+    }
+    dispatcher.dispatch(json!({
+        "method":"turn/completed",
+        "params":{"threadId":"thread","turn":{"status":"completed"}}
+    }));
 }
 
 #[tokio::test]
@@ -499,7 +488,7 @@ async fn retries_context_window_errors_only_before_committed_output() {
         })
         .await
         .expect("context error should request retry");
-    assert!(matches!(result, super::StreamTurn::ContextWindow(_)));
+    assert!(matches!(result, super::StreamTurn::ContextWindow { .. }));
 
     let dispatcher = crate::app_server::events::ThreadEventDispatcher::default();
     let events = dispatcher.subscribe("thread");
@@ -684,7 +673,7 @@ async fn streams_native_web_search_status_without_committing_it() {
         }),
         json!({
             "method":"item/started",
-            "params":{"item":{"type":"webSearch","query":"AVITA株式会社"}}
+            "params":{"item":{"type":"webSearch","query":"Example Robotics"}}
         }),
         json!({
             "method":"item/started",
@@ -710,7 +699,11 @@ async fn streams_native_web_search_status_without_committing_it() {
         frames.push(frame);
     }
     assert_eq!(frames.len(), 5);
-    assert!(frames.iter().any(|frame| frame.contains("AVITA株式会社")));
+    assert!(
+        frames
+            .iter()
+            .any(|frame| frame.contains("Example Robotics"))
+    );
     assert!(frames.iter().any(|frame| frame.contains("search")));
     app.shutdown().await;
 }
@@ -801,7 +794,6 @@ async fn rejects_a_malformed_tool_event_before_dispatch() {
         transcript: Mutex::new(Vec::new()),
         pending_tools: Mutex::new(HashMap::new()),
         consumed_tool_ids: Mutex::new(HashSet::new()),
-        internal_tools: HashMap::new(),
         external_tool_names: HashMap::new(),
         client_user_id: None,
         gate: Arc::new(Mutex::new(())),
@@ -1030,9 +1022,10 @@ async fn keeps_status_deltas_out_of_committed_text() {
 }
 
 #[tokio::test]
-async fn drains_pending_and_new_tools_after_a_stream_disconnect() {
+async fn unsupported_disconnect_with_a_visible_tool_aborts_without_a_drain() {
     let (root, app, bridge, session) = disconnect_fixture().await;
     let events = Arc::new(app.subscribe_thread("thread"));
+    bridge.sessions.lock().await.push(Arc::clone(&session));
     session
         .pending_tools
         .lock()
@@ -1066,8 +1059,18 @@ async fn drains_pending_and_new_tools_after_a_stream_disconnect() {
     ));
     assert!(session.pending_tools.lock().await.is_empty());
     assert!(session.pending_since.lock().unwrap().is_none());
-    assert_disconnected_tool_rejections(&root, &[41, 42]).await;
-    bridge.finish_closed_stream(&session, &events, true).await;
+    assert!(bridge.sessions.lock().await.is_empty());
+    assert!(bridge.detached_sessions.lock().await.is_empty());
+    assert!(!app.is_alive());
+    assert_eq!(Arc::strong_count(&events), 1, "no hidden drain owns events");
+    tokio::time::timeout(Duration::from_secs(1), async {
+        while events.recv().await.is_some() {}
+    })
+    .await
+    .expect("provider abort must close the event channel after queued events");
+    assert_eq!(bridge.used_session_slots(), 1);
+    drop(session);
+    assert_eq!(bridge.used_session_slots(), 0);
     drop(root);
 }
 
@@ -1117,7 +1120,7 @@ async fn disconnected_drain_returns_non_retryable_provider_errors() {
 }
 
 #[tokio::test]
-async fn tolerates_a_drain_error_after_stream_disconnect() {
+async fn unsupported_disconnect_drains_without_closing_the_provider() {
     let (_root, app, bridge, session) = disconnect_fixture().await;
     let events = Arc::new(app.subscribe_thread("thread"));
     app.dispatch_test_event(json!({
@@ -1125,6 +1128,7 @@ async fn tolerates_a_drain_error_after_stream_disconnect() {
     }));
     bridge.finish_closed_stream(&session, &events, false).await;
     wait_for_disconnected_drain(&events).await;
+    assert!(app.is_alive());
 }
 
 #[tokio::test]
@@ -1224,6 +1228,74 @@ async fn drive_stream_retries_context_window_then_completes() {
     }
     assert!(output.contains("event: message_delta"));
     assert!(output.contains("event: message_stop"));
+}
+
+#[tokio::test]
+async fn drive_stream_keeps_content_indices_monotonic_across_context_retry() {
+    let (_root, _app, bridge, session) = retryable_drive_fixture_with_output().await;
+    let dispatcher = crate::app_server::events::ThreadEventDispatcher::default();
+    let events = dispatcher.subscribe("thread");
+    dispatcher.dispatch(json!({
+        "method":"error",
+        "params":{"threadId":"thread","error":{"message":"context window exceeded"}}
+    }));
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
+    let mut builder = SegmentBuilder::new(1);
+    builder
+        .activity_keepalive(Some(&sender))
+        .await
+        .expect("keepalive thinking block");
+
+    Arc::clone(&bridge)
+        .drive_stream(
+            drive_turn(
+                session,
+                events,
+                Vec::new(),
+                Some(ContextRetry {
+                    request: drive_request(),
+                    effort: None,
+                    advisor_model: None,
+                    collaborator_model: None,
+                }),
+            )
+            .await,
+            sender,
+            builder,
+            None,
+        )
+        .await;
+
+    let mut open_index = None;
+    let mut next_index = 0;
+    let mut started_types = Vec::new();
+    while let Some(frame) = receiver.recv().await {
+        let frame = String::from_utf8(frame.expect("frame").to_vec()).expect("UTF-8 SSE");
+        let data = frame.lines().find_map(|line| line.strip_prefix("data: "));
+        let payload = serde_json::from_str::<Value>(data.expect("SSE data")).expect("JSON frame");
+        match payload.get("type").and_then(Value::as_str) {
+            Some("content_block_start") => {
+                let index = payload["index"].as_u64().expect("start index") as usize;
+                assert_eq!(index, next_index, "content indices must not be reused");
+                assert!(open_index.replace(index).is_none(), "nested content block");
+                next_index += 1;
+                started_types.push(payload["content_block"]["type"].clone());
+            }
+            Some("content_block_delta") => {
+                let index = payload["index"].as_u64().expect("delta index") as usize;
+                assert_eq!(open_index, Some(index), "delta must target the open block");
+            }
+            Some("content_block_stop") => {
+                let index = payload["index"].as_u64().expect("stop index") as usize;
+                assert_eq!(open_index.take(), Some(index), "stop must close its start");
+            }
+            _ => {}
+        }
+    }
+
+    assert_eq!(started_types, vec![json!("thinking"), json!("text")]);
+    assert_eq!(next_index, 2);
+    assert!(open_index.is_none());
 }
 
 #[tokio::test]
@@ -1402,20 +1474,71 @@ async fn drive_stream_stops_before_commit_when_client_closes_after_segment() {
 }
 
 #[tokio::test]
-async fn subagent_stream_timeout_continues_in_background_and_notifies_client() {
+async fn subagent_stream_without_hard_timeout_stays_attached_beyond_300_seconds() {
+    let (_root, _app, bridge, session) = disconnect_fixture().await;
+    tokio::time::pause();
+    let bridge = Arc::new(bridge);
+    let dispatcher = crate::app_server::events::ThreadEventDispatcher::default();
+    let events = dispatcher.subscribe("thread");
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(32);
+
+    let driver = tokio::spawn(Arc::clone(&bridge).drive_subagent_stream_with_timeout(
+        drive_turn(session, events, Vec::new(), None).await,
+        sender,
+        SegmentBuilder::new(1),
+        super::drive::StreamDriveOptions {
+            model_permit: None,
+            is_subagent: true,
+            run_in_background: true,
+            timeout: None,
+        },
+    ));
+    tokio::task::yield_now().await;
+    tokio::time::advance(Duration::from_secs(301)).await;
+    tokio::task::yield_now().await;
+
+    assert!(
+        !driver.is_finished(),
+        "unset timeout ended the native Agent stream"
+    );
+    assert!(bridge.detached_sessions.lock().await.is_empty());
+
+    dispatcher.dispatch(json!({
+        "method":"item/agentMessage/delta",
+        "params":{"threadId":"thread","delta":"stream completed after 301 seconds"}
+    }));
+    dispatcher.dispatch(json!({
+        "method":"turn/completed",
+        "params":{"threadId":"thread","turn":{"status":"completed"}}
+    }));
+    driver.await.expect("stream driver task");
+
+    let mut output = String::new();
+    while let Some(frame) = receiver.recv().await {
+        output.push_str(&String::from_utf8_lossy(&frame.expect("infallible frame")));
+    }
+    assert!(output.contains("stream completed after 301 seconds"));
+}
+
+#[tokio::test]
+async fn subagent_stream_hard_timeout_cancels_and_reports_a_visible_error() {
     let (_root, app, bridge, session) = disconnect_fixture().await;
     let bridge = Arc::new(bridge);
     let events = app.subscribe_thread("thread");
     let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
+    let observed_session = Arc::clone(&session);
 
     Arc::clone(&bridge)
         .drive_subagent_stream_with_timeout(
             drive_turn(session, events, Vec::new(), None).await,
             sender,
             SegmentBuilder::new(1),
-            None,
-            true,
-            Some(Duration::ZERO),
+            super::drive::StreamDriveOptions {
+                model_permit: None,
+                is_subagent: true,
+                run_in_background: true,
+                timeout: Some(Duration::ZERO),
+            },
         )
         .await;
 
@@ -1424,9 +1547,36 @@ async fn subagent_stream_timeout_continues_in_background_and_notifies_client() {
         output.push_str(&String::from_utf8_lossy(&frame.expect("infallible frame")));
     }
     assert!(
-        output.contains("dynamic progress from progress subagent"),
+        output.contains("configured hard timeout"),
         "unexpected stream: {output}"
     );
+    assert!(!output.contains("dynamic progress"));
+    assert!(bridge.detached_sessions.lock().await.is_empty());
+    assert_eq!(
+        bridge
+            .subagent_hard_timeout_cancel_attempts
+            .load(std::sync::atomic::Ordering::Relaxed),
+        1
+    );
+
+    app.dispatch_test_event(json!({
+        "method":"item/agentMessage/delta",
+        "params":{"threadId":"thread","delta":"late stream result"}
+    }));
+    app.dispatch_test_event(json!({
+        "method":"item/tool/call",
+        "params":{
+            "threadId":"thread",
+            "item":{"id":"late-stream-tool","name":"Read","arguments":{"path":"ignored"}}
+        }
+    }));
+    app.dispatch_test_event(json!({
+        "method":"turn/completed",
+        "params":{"threadId":"thread","turn":{"status":"completed"}}
+    }));
+    tokio::task::yield_now().await;
+    assert!(observed_session.transcript.lock().await.is_empty());
+    assert!(observed_session.pending_tools.lock().await.is_empty());
 }
 
 #[tokio::test]
@@ -1442,11 +1592,15 @@ async fn subagent_stream_timeout_tolerates_a_disconnected_client() {
             drive_turn(session, events, Vec::new(), None).await,
             sender,
             SegmentBuilder::new(1),
-            None,
-            true,
-            Some(Duration::ZERO),
+            super::drive::StreamDriveOptions {
+                model_permit: None,
+                is_subagent: true,
+                run_in_background: true,
+                timeout: Some(Duration::ZERO),
+            },
         )
         .await;
+    assert!(bridge.detached_sessions.lock().await.is_empty());
 }
 
 async fn drive_turn(
@@ -1529,7 +1683,6 @@ async fn disconnect_fixture_with_disabled(
         progress_program,
     )
     .with_settings_path(settings);
-    let slots = Arc::new(Semaphore::new(1));
     let session = Arc::new(Session {
         thread_id: "thread".to_owned(),
         model: "main".to_owned(),
@@ -1538,7 +1691,6 @@ async fn disconnect_fixture_with_disabled(
         transcript: Mutex::new(Vec::new()),
         pending_tools: Mutex::new(HashMap::new()),
         consumed_tool_ids: Mutex::new(HashSet::new()),
-        internal_tools: HashMap::new(),
         external_tool_names: HashMap::from([
             (
                 "cc_Agent_batch_0".to_owned(),
@@ -1551,7 +1703,9 @@ async fn disconnect_fixture_with_disabled(
         gate: Arc::new(Mutex::new(())),
         last_activity: std::sync::Mutex::new(Instant::now()),
         pending_since: std::sync::Mutex::new(None),
-        _slot: slots.try_acquire_owned().expect("session slot"),
+        _slot: Arc::clone(&bridge.session_slots)
+            .try_acquire_owned()
+            .expect("session slot"),
     });
     (root, app, bridge, session)
 }
@@ -1611,6 +1765,17 @@ async fn wait_for_disconnected_drain(events: &Arc<crate::app_server::ThreadEvent
 
 async fn retryable_drive_fixture() -> (tempfile::TempDir, Arc<AppServer>, Arc<Bridge>, Arc<Session>)
 {
+    retryable_drive_fixture_with_retried_output(false).await
+}
+
+async fn retryable_drive_fixture_with_output()
+-> (tempfile::TempDir, Arc<AppServer>, Arc<Bridge>, Arc<Session>) {
+    retryable_drive_fixture_with_retried_output(true).await
+}
+
+async fn retryable_drive_fixture_with_retried_output(
+    emit_output: bool,
+) -> (tempfile::TempDir, Arc<AppServer>, Arc<Bridge>, Arc<Session>) {
     let root = tempfile::tempdir().expect("retry stream fixture");
     let source = root.path().join("source");
     std::fs::create_dir(&source).expect("source home");
@@ -1628,10 +1793,15 @@ printf '%s\n' '{"id":2,"result":{"thread":{"id":"retried"}}}'
 read turn
 printf '%s\n' "$turn" >> "$log"
 sleep 0.05
+__RETRIED_OUTPUT__
 printf '%s\n' '{"method":"turn/completed","params":{"threadId":"retried","turn":{"status":"completed"}}}'
 while read line; do :; done
 "#.to_owned();
     program_script = program_script.replace("__REQUESTS_LOG__", &requests_log.to_string_lossy());
+    let retried_output = emit_output.then_some(
+        "printf '%s\\n' '{\"method\":\"item/agentMessage/delta\",\"params\":{\"threadId\":\"retried\",\"delta\":\"retried answer\"}}'",
+    );
+    program_script = program_script.replace("__RETRIED_OUTPUT__", retried_output.unwrap_or(""));
     std::fs::write(&program, &program_script).expect("mock app-server");
     let mut permissions = std::fs::metadata(&program).unwrap().permissions();
     permissions.set_mode(0o755);
@@ -1650,7 +1820,6 @@ while read line; do :; done
         transcript: Mutex::new(Vec::new()),
         pending_tools: Mutex::new(HashMap::new()),
         consumed_tool_ids: Mutex::new(HashSet::new()),
-        internal_tools: HashMap::new(),
         external_tool_names: HashMap::new(),
         client_user_id: None,
         gate: Arc::new(Mutex::new(())),
@@ -1690,7 +1859,6 @@ async fn retry_failure_drive_fixture()
         transcript: Mutex::new(Vec::new()),
         pending_tools: Mutex::new(HashMap::new()),
         consumed_tool_ids: Mutex::new(HashSet::new()),
-        internal_tools: HashMap::new(),
         external_tool_names: HashMap::new(),
         client_user_id: None,
         gate: Arc::new(Mutex::new(())),

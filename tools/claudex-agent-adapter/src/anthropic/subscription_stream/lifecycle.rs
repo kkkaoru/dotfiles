@@ -1,44 +1,43 @@
-use anyhow::{Context, Result, bail};
+use std::{process::ExitStatus, time::Duration};
+
+use anyhow::{Context, Result};
+use serde_json::Value;
 use tokio::{io::AsyncReadExt, process::Child};
 
-use super::super::subscription::terminate_subscription;
+use super::super::subscription::{
+    failure::{process_failure, protocol_failure},
+    terminate_subscription_process_group,
+};
 
 pub(super) async fn terminate_after_stream_failure<T>(
     child: &mut Child,
+    process_group: Option<u32>,
+    termination_timeout: Duration,
     error: anyhow::Error,
 ) -> Result<T> {
-    terminate_subscription(child)
+    terminate_subscription_process_group(child, process_group, termination_timeout)
         .await
         .context("also failed to terminate the Claude subscription stream")?;
     Err(error)
 }
 
-pub(super) async fn terminate_closed_stream(
-    child: &mut Child,
-    stderr_task: tokio::task::JoinHandle<std::io::Result<Vec<u8>>>,
+pub(super) fn validate_stream_exit(
+    status: &ExitStatus,
+    stderr: &[u8],
+    result: Option<&Value>,
+    model: &str,
 ) -> Result<()> {
-    let termination = terminate_subscription(child).await;
-    let stderr = stderr_task.await.context("Claude stderr task failed")?;
-    termination?;
-    stderr?;
-    Ok(())
-}
-
-pub(super) async fn validate_stream_exit(
-    child: &mut Child,
-    stderr_task: tokio::task::JoinHandle<std::io::Result<Vec<u8>>>,
-    saw_result: bool,
-) -> Result<()> {
-    let status = child.wait().await?;
-    let stderr = stderr_task.await.context("Claude stderr task failed")??;
     if !status.success() {
-        bail!(
-            "Claude subscription exited with {status}: {}",
-            String::from_utf8_lossy(&stderr).trim()
-        );
+        let stdout = result
+            .and_then(|result| serde_json::to_vec(result).ok())
+            .unwrap_or_default();
+        return Err(process_failure(model, status, &stdout, stderr));
     }
-    if !saw_result {
-        bail!("Claude subscription stream ended without a result event");
+    if result.is_none() {
+        return Err(protocol_failure(
+            Some(model),
+            "stream ended without a result event",
+        ));
     }
     Ok(())
 }

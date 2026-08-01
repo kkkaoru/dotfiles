@@ -18,36 +18,41 @@ impl SubscriptionStream {
         &mut self,
         sender: &mpsc::Sender<Result<Bytes, Infallible>>,
         envelope: &Value,
-    ) -> Result<()> {
+    ) -> Result<bool> {
+        if self.saw_result || self.blocked_subagent {
+            return Ok(false);
+        }
         if envelope
             .get("parent_tool_use_id")
             .is_some_and(|value| !value.is_null())
         {
-            return Ok(());
+            return Ok(false);
         }
         let Some(content) = envelope
             .pointer("/message/content")
             .and_then(Value::as_array)
         else {
-            return Ok(());
+            return Ok(false);
         };
         let tool_uses = content
             .iter()
             .filter(|block| block.get("type").and_then(Value::as_str) == Some("tool_use"))
             .collect::<Vec<_>>();
         if tool_uses.is_empty() {
-            return Ok(());
+            return Ok(false);
         }
+        let closed_visible = self.activity.is_open() || (self.text_started && !self.text_closed);
         self.activity.close(sender).await?;
         self.close_text(sender).await?;
         let mut forwarded = false;
-        for block in tool_uses {
+        let mut tool_uses = tool_uses.into_iter();
+        while let (false, Some(block)) = (self.blocked_subagent, tool_uses.next()) {
             forwarded |= self.forward_tool_use(sender, block).await?;
         }
         if forwarded {
             self.saw_tool_use = true;
         }
-        Ok(())
+        Ok(closed_visible || forwarded || self.blocked_subagent)
     }
 
     async fn forward_tool_use(
@@ -64,7 +69,10 @@ impl SubscriptionStream {
         if id.is_empty() || name.is_empty() {
             bail!("Claude subscription emitted a tool call without an ID or name");
         }
-        if matches!(name.as_str(), "WebSearch" | "WebFetch") {
+        if !self.seen_tool_ids.insert(id.to_owned()) {
+            return Ok(false);
+        }
+        if matches!(name.as_str(), "WebSearch" | "WebFetch" | "StructuredOutput") {
             return Ok(false);
         }
         let input = block
@@ -76,8 +84,13 @@ impl SubscriptionStream {
             Ok(input) => input,
             Err(error) if super::super::agent_effort::is_agent_tool(&name) => {
                 tracing::warn!(%error, tool = name, "blocked unsupported SubAgent launch");
+                self.blocked_subagent = true;
                 self.report_blocked_subagent(sender).await?;
-                return Ok(true);
+                // The notice is ordinary assistant text, not a tool_use block.
+                // Marking it as forwarded would emit stop_reason=tool_use with
+                // no corresponding tool block, leaving Claude Code waiting for
+                // a tool result and eventually stalling the response stream.
+                return Ok(false);
             }
             Err(error) => return Err(error),
         };

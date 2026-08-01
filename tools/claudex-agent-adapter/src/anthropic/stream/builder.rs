@@ -1,6 +1,6 @@
 use std::ops::ControlFlow;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde_json::{Value, json};
 
 use super::{ToolCall, error_flow, turn_flow};
@@ -16,6 +16,7 @@ use super::{
     thinking::ThinkingState,
 };
 
+mod batch;
 mod external_tool;
 mod visibility;
 #[path = "web_provenance.rs"]
@@ -23,7 +24,7 @@ mod web_provenance;
 
 pub(super) use super::tool_call_parser::parse_tool_call;
 
-pub(super) struct SegmentBuilder {
+pub(in crate::anthropic) struct SegmentBuilder {
     pub(super) blocks: Vec<Value>,
     pub(super) thinking: ThinkingState,
     pub(super) open_text_block: Option<(usize, String)>,
@@ -180,17 +181,22 @@ impl SegmentBuilder {
         const HEARTBEAT: &str = "\u{200b}";
         if let Some((index, _)) = self.open_text_block {
             // Stream-only: do not mutate the committed text buffer.
-            return send_stream_frame(stream, "content_block_delta", || {
-                json!({
-                    "type":"content_block_delta", "index":index,
-                    "delta":{"type":"text_delta","text":HEARTBEAT}
-                })
-            })
-            .await;
+            return Self::send_activity_heartbeat(stream, index, HEARTBEAT).await;
         }
         self.thinking
             .activity_keepalive(&mut self.blocks, stream)
             .await
+    }
+
+    async fn send_activity_heartbeat(
+        stream: Option<&StreamSender>,
+        index: usize,
+        heartbeat: &str,
+    ) -> Result<()> {
+        send_stream_frame(stream, "content_block_delta", || {
+            heartbeat_delta(index, heartbeat)
+        })
+        .await
     }
 
     /// Live-only provider progress (ACP tools). Streamed for WIP visibility but
@@ -244,17 +250,12 @@ impl SegmentBuilder {
         call: ToolCall<'_>,
         stream: Option<&StreamSender>,
     ) -> Result<()> {
-        if let Some(model) = session.internal_tools.get(call.name) {
-            bridge
-                .spawn_internal_tool(session, current_messages, &call, model)
-                .await;
+        let Some(original_name) =
+            external_tool::requested_external_tool_name(&session.external_tool_names, call.name)
+        else {
+            external_tool::reject_unrequested_tool(bridge, session, call).await?;
             return Ok(());
-        }
-        let original_name = session
-            .external_tool_names
-            .get(call.name)
-            .map(String::as_str)
-            .unwrap_or(call.name);
+        };
         let context = external_tool::ExternalToolContext {
             bridge,
             session,
@@ -263,35 +264,7 @@ impl SegmentBuilder {
             stream,
         };
         if let Some(original_name) = crate::anthropic::agent_batch::original_name(original_name) {
-            let tasks = call
-                .arguments
-                .get("tasks")
-                .and_then(Value::as_array)
-                .context("batch Agent tasks missing")?;
-            let minimum_batch = crate::anthropic::agent_batch::minimum_batch_size();
-            let maximum_batch = crate::anthropic::agent_batch::maximum_batch_size();
-            if !(minimum_batch..=maximum_batch).contains(&tasks.len()) {
-                anyhow::bail!(
-                    "batch Agent tasks must contain between {minimum_batch} and {maximum_batch} launches"
-                );
-            }
-            for (index, arguments) in tasks.iter().enumerate() {
-                let mut nested_arguments = arguments.clone();
-                ensure_background_batch_launch(&mut nested_arguments);
-                let nested = ToolCall {
-                    call_id: call.call_id,
-                    name: call.name,
-                    arguments: &nested_arguments,
-                    request_id: crate::anthropic::agent_batch::pending_marker(
-                        call.request_id.clone(),
-                        index,
-                        tasks.len(),
-                    ),
-                };
-                self.external_tool_call(context, original_name, nested)
-                    .await?;
-            }
-            return Ok(());
+            return batch::dispatch(self, context, original_name, call).await;
         }
         self.external_tool_call(context, original_name, call).await
     }
@@ -342,17 +315,7 @@ impl SegmentBuilder {
         };
         let web_answer_replaced = self.gate_unverified_web_response(stop_reason);
         if web_answer_replaced || self.usage.output_tokens == 0 {
-            self.usage.output_tokens = self
-                .blocks
-                .iter()
-                .map(|block| {
-                    let thinking = block
-                        .get("thinking")
-                        .and_then(Value::as_str)
-                        .map_or(0, estimated_tokens);
-                    estimated_block_tokens(block).saturating_add(thinking)
-                })
-                .sum();
+            self.usage.output_tokens = self.blocks.iter().map(estimated_output_tokens).sum();
         } else {
             let output_tokens = self.usage.output_tokens;
             self.usage.output_tokens = output_tokens.saturating_add(self.injected_output_tokens);
@@ -370,6 +333,21 @@ impl SegmentBuilder {
     }
 }
 
+fn heartbeat_delta(index: usize, heartbeat: &str) -> Value {
+    json!({
+        "type":"content_block_delta", "index":index,
+        "delta":{"type":"text_delta","text":heartbeat}
+    })
+}
+
+fn estimated_output_tokens(block: &Value) -> u64 {
+    let thinking = block
+        .get("thinking")
+        .and_then(Value::as_str)
+        .map_or(0, estimated_tokens);
+    estimated_block_tokens(block).saturating_add(thinking)
+}
+
 fn ensure_background_batch_launch(arguments: &mut Value) {
     // A batch is the adapter's explicit parallel primitive. Normalize every
     // member to a background launch so one slow worker cannot hold the
@@ -383,15 +361,4 @@ fn ensure_background_batch_launch(arguments: &mut Value) {
 #[cfg(test)]
 // Coverage gates measure production behavior; this inline test is excluded.
 #[cfg_attr(coverage_nightly, coverage(off))]
-mod tests {
-    use serde_json::json;
-
-    use super::ensure_background_batch_launch;
-
-    #[test]
-    fn leaves_non_object_batch_arguments_unchanged() {
-        let mut arguments = json!(null);
-        ensure_background_batch_launch(&mut arguments);
-        assert_eq!(arguments, json!(null));
-    }
-}
+mod tests;

@@ -25,6 +25,10 @@ struct OpenActivity {
 }
 
 impl SubscriptionActivity {
+    pub(super) fn is_open(&self) -> bool {
+        self.open.is_some()
+    }
+
     pub(super) async fn keepalive(
         &mut self,
         sender: &mpsc::Sender<Result<Bytes, Infallible>>,

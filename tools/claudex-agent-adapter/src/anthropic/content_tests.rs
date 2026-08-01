@@ -347,7 +347,6 @@ mod tests {
             transcript: Mutex::new(transcript),
             pending_tools: Mutex::new(pending_tools),
             consumed_tool_ids: Mutex::new(consumed_tool_ids),
-            internal_tools: HashMap::new(),
             external_tool_names: HashMap::new(),
             client_user_id: None,
             gate: Arc::new(Mutex::new(())),

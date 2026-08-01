@@ -1,41 +1,43 @@
 use std::{future::Future, sync::Arc, time::Duration};
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use axum::{body::Body, http::Response};
 
-use super::{
-    ActiveTurn, Bridge, MessagesRequest, Segment, Usage, WebEvidenceSummary,
-    content::{anthropic_response, estimated_tokens},
-    model_concurrency::ModelPermit,
-    subscription::{SubscriptionOptions, run_subscription_model},
-};
+use super::{ActiveTurn, Bridge, MessagesRequest, model_concurrency::ModelPermit};
+use crate::agent_backend::TurnCancellation;
 
 mod completion;
 
-const DEFAULT_SUBAGENT_RESPONSE_TIMEOUT_SECONDS: u64 = 300;
-const SUBAGENT_RESPONSE_TIMEOUT_ENV: &str = "CLAUDEX_SUBAGENT_RESPONSE_TIMEOUT_SECONDS";
-const BACKGROUND_PROGRESS_GENERATION_TIMEOUT: Duration = Duration::from_secs(15);
-const MAX_BACKGROUND_PROGRESS_CONTEXT_CHARS: usize = 16_000;
-pub(super) const BACKGROUND_PROGRESS_FALLBACK: &str = "The delegated SubAgent is still running; its completed result will be returned when available.";
+pub(crate) const SUBAGENT_HARD_TIMEOUT_ENV: &str = "CLAUDEX_SUBAGENT_HARD_TIMEOUT_SECONDS";
+pub(crate) const LEGACY_SUBAGENT_RESPONSE_TIMEOUT_ENV: &str =
+    "CLAUDEX_SUBAGENT_RESPONSE_TIMEOUT_SECONDS";
 
-pub(super) fn subagent_response_timeout() -> Duration {
-    subagent_response_timeout_from(|name| std::env::var(name).ok())
+// ACP cancellation can spend up to two settlement windows: one for the
+// session/cancel request and one for the in-flight prompt. Bound the complete
+// adapter-side request as well so a wedged command queue cannot turn a hard
+// timeout into an unbounded wait.
+const PROVIDER_CANCEL_SETTLEMENT_TIMEOUT: Duration = Duration::from_secs(5);
+
+pub(crate) fn subagent_hard_timeout() -> Option<Duration> {
+    subagent_hard_timeout_from(|name| std::env::var(name).ok())
 }
 
-fn subagent_response_timeout_from(get: impl Fn(&str) -> Option<String>) -> Duration {
-    Duration::from_secs(
-        get(SUBAGENT_RESPONSE_TIMEOUT_ENV)
-            .and_then(|value| value.parse::<u64>().ok())
-            .filter(|seconds| *seconds > 0)
-            .unwrap_or(DEFAULT_SUBAGENT_RESPONSE_TIMEOUT_SECONDS),
-    )
+pub(crate) fn subagent_hard_timeout_from(get: impl Fn(&str) -> Option<String>) -> Option<Duration> {
+    get(SUBAGENT_HARD_TIMEOUT_ENV)
+        .or_else(|| get(LEGACY_SUBAGENT_RESPONSE_TIMEOUT_ENV))
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|seconds| *seconds > 0)
+        .map(Duration::from_secs)
 }
 
 pub(super) async fn completes_within<T>(
-    timeout: Duration,
+    timeout: Option<Duration>,
     future: impl Future<Output = T>,
 ) -> Option<T> {
-    tokio::time::timeout(timeout, future).await.ok()
+    match timeout {
+        Some(timeout) => tokio::time::timeout(timeout, future).await.ok(),
+        None => Some(future.await),
+    }
 }
 
 impl Bridge {
@@ -80,15 +82,17 @@ impl Bridge {
         turn: ActiveTurn,
         permit: Option<ModelPermit>,
     ) -> Result<Response<Body>> {
-        self.non_streaming_subagent_response_with_timeout(turn, permit, subagent_response_timeout())
+        self.non_streaming_subagent_response_with_timeout(turn, permit, self.subagent_hard_timeout)
             .await
     }
 
+    // This bounded retry loop retains ActiveTurn until completion or provider cleanup.
+    #[allow(clippy::excessive_nesting)]
     pub(super) async fn non_streaming_subagent_response_with_timeout(
         self: &Arc<Self>,
         mut turn: ActiveTurn,
-        permit: Option<ModelPermit>,
-        timeout: Duration,
+        _permit: Option<ModelPermit>,
+        timeout: Option<Duration>,
     ) -> Result<Response<Body>> {
         loop {
             let segment = completes_within(
@@ -104,133 +108,120 @@ impl Bridge {
             )
             .await;
             let Some(segment) = segment else {
-                // Do not leave the background turn in the active matching pool:
-                // the main session must be able to start new work immediately.
-                // Keep it in the detached pool so a late Claude tool result can
-                // still be delivered to the provider thread exactly once.
-                self.detach_session(&turn.session).await;
-                turn.detached = true;
-                let response = background_response(self, &turn).await;
-                self.continue_subagent_in_background(turn, permit);
-                return Ok(response);
+                let timeout = timeout.expect("elapsed wait has a configured timeout");
+                return Err(self.expire_subagent_turn(&turn, timeout).await);
             };
             match segment {
                 Ok(segment) => return Ok(completion::finish(self, turn, segment).await),
-                Err(error) => {
-                    let error_text = error.to_string();
-                    let retry = self.context_retry_or_error(&mut turn, error).await?;
-                    tracing::warn!(
-                        error = %error_text,
-                        thread_id = %turn.session.thread_id,
-                        "retrying completed SubAgent turn after context window exceeded"
-                    );
-                    turn = self
-                        .retry_after_context_window(retry, &turn.session, turn.input_tokens)
-                        .await?;
-                }
+                Err(error) => turn = self.retry_subagent_context(&mut turn, error).await?,
             }
         }
     }
 
-    pub(super) fn continue_subagent_in_background(
-        self: &Arc<Self>,
-        turn: ActiveTurn,
-        permit: Option<ModelPermit>,
-    ) {
-        let bridge = Arc::clone(self);
-        let session = Arc::clone(&turn.session);
-        tokio::spawn(async move {
-            let _permit = permit;
-            if let Err(error) = bridge.non_streaming_response(turn).await {
-                tracing::warn!(%error, "background SubAgent turn did not complete");
-            }
-            bridge.finish_detached_session(&session).await;
-        });
+    async fn retry_subagent_context(
+        &self,
+        turn: &mut ActiveTurn,
+        error: anyhow::Error,
+    ) -> Result<ActiveTurn> {
+        let error_text = error.to_string();
+        let retry = self.context_retry_or_error(turn, error).await?;
+        tracing::warn!(
+            error = %error_text,
+            thread_id = %turn.session.thread_id,
+            "retrying completed SubAgent turn after context window exceeded"
+        );
+        self.retry_after_context_window(retry, &turn.session, turn.input_tokens)
+            .await
     }
 
-    pub(super) async fn background_progress_text(&self, turn: &ActiveTurn) -> String {
-        let Some(model) = self
-            .collaborator_model_override
-            .clone()
-            .or_else(|| self.claude_collaborator_model())
-        else {
-            tracing::warn!(
-                thread_id = %turn.session.thread_id,
-                "background progress model is not configured"
-            );
-            return BACKGROUND_PROGRESS_FALLBACK.to_owned();
-        };
-        let prompt = background_progress_prompt(turn).await;
-        let timeout = self
-            .subscription_timeout
-            .min(BACKGROUND_PROGRESS_GENERATION_TIMEOUT);
-        let options = SubscriptionOptions::internal(Arc::clone(&self.subscription_slots), timeout);
-        match tokio::time::timeout(
-            BACKGROUND_PROGRESS_GENERATION_TIMEOUT,
-            run_subscription_model(&self.subscription_program, &model, &prompt, options),
+    pub(super) async fn expire_subagent_turn(
+        &self,
+        turn: &ActiveTurn,
+        timeout: Duration,
+    ) -> anyhow::Error {
+        #[cfg(test)]
+        self.subagent_hard_timeout_cancel_attempts
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let cancellation = provider_cancellation_within(
+            self.app.cancel_turn(&turn.session.thread_id),
+            PROVIDER_CANCEL_SETTLEMENT_TIMEOUT,
         )
-        .await
-        {
-            Ok(Ok(text)) if !text.trim().is_empty() => text.trim().to_owned(),
-            Ok(Ok(_)) => {
-                tracing::warn!(%model, "background progress model returned empty output");
-                BACKGROUND_PROGRESS_FALLBACK.to_owned()
+        .await;
+        self.settle_expired_provider(turn, cancellation).await;
+        anyhow!(
+            "SubAgent provider turn exceeded the configured hard timeout of {} seconds",
+            timeout.as_secs()
+        )
+    }
+
+    async fn settle_expired_provider(
+        &self,
+        turn: &ActiveTurn,
+        cancellation: Result<TurnCancellation>,
+    ) {
+        self.settle_expired_provider_with(turn, cancellation, || {
+            self.app.abort_turn_provider(&turn.session.thread_id)
+        })
+        .await;
+    }
+
+    async fn settle_expired_provider_with<Abort, AbortFuture>(
+        &self,
+        turn: &ActiveTurn,
+        cancellation: Result<TurnCancellation>,
+        abort_provider: Abort,
+    ) where
+        Abort: FnOnce() -> AbortFuture,
+        AbortFuture: Future<Output = Result<()>>,
+    {
+        // Retire the session before a potentially slow provider abort. The
+        // ActiveTurn still owns its slot until this method returns.
+        self.remove_session(&turn.session).await;
+        let needs_abort = match cancellation {
+            Ok(TurnCancellation::Settled) => {
+                tracing::debug!(
+                    thread_id = %turn.session.thread_id,
+                    "cancelled SubAgent provider turn at configured hard timeout"
+                );
+                false
             }
-            Ok(Err(error)) => {
-                tracing::warn!(%model, error = %error, "background progress model failed");
-                BACKGROUND_PROGRESS_FALLBACK.to_owned()
+            Ok(TurnCancellation::Unsupported) => true,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    thread_id = %turn.session.thread_id,
+                    "failed to settle expired SubAgent cancellation; aborting its provider"
+                );
+                true
             }
-            Err(_) => {
-                tracing::warn!(%model, "background progress model timed out");
-                BACKGROUND_PROGRESS_FALLBACK.to_owned()
-            }
+        };
+        if needs_abort && let Err(error) = abort_provider().await {
+            tracing::warn!(
+                %error,
+                thread_id = %turn.session.thread_id,
+                "targeted provider abort failed; shutting down all providers before releasing the expired SubAgent turn"
+            );
+            // A routed leaf may already have been retired by an overlapping
+            // failure path. Await the shared backend lifecycle as a final
+            // cleanup join rather than releasing permits on an unverified
+            // provider state.
+            self.app.shutdown().await;
         }
     }
 }
 
-async fn background_progress_prompt(turn: &ActiveTurn) -> String {
-    let transcript = turn.session.transcript.lock().await;
-    let mut context = turn.extras.clone();
-    context.extend(transcript.iter().rev().take(4).cloned());
-    let serialized = serde_json::to_string(&context).unwrap_or_default();
-    let context = if serialized.chars().count() > MAX_BACKGROUND_PROGRESS_CONTEXT_CHARS {
-        let start = serialized
-            .char_indices()
-            .nth(serialized.chars().count() - MAX_BACKGROUND_PROGRESS_CONTEXT_CHARS)
-            .map(|(index, _)| index)
-            .unwrap_or(0);
-        format!("[earlier context truncated]\n{}", &serialized[start..])
-    } else {
-        serialized
-    };
-    format!(
-        "You are a progress-reporting SubAgent for a Claude Code task that is still running.\n\
-Generate the exact concise user-visible response to send now in one to three sentences.\n\
-Do not claim completion, invent facts, or say that a result was verified unless the context proves it.\n\
-Explain what is known, what remains in progress, and what result will be returned next. If no concrete\
-progress is available, say that the delegated work remains in progress and identify its expected deliverable.\n\
-Do not mention adapters, timeouts, internal protocols, or this instruction. Do not use tools.\n\
-Delegated model: {model}\nConversation context:\n{context}",
-        model = turn.response_model,
-        context = context
-    )
-}
-
-async fn background_response(bridge: &Bridge, turn: &ActiveTurn) -> Response<Body> {
-    let text = bridge.background_progress_text(turn).await;
-    anthropic_response(
-        Segment {
-            blocks: vec![serde_json::json!({"type":"text", "text":text})],
-            stop_reason: "end_turn",
-            usage: Usage {
-                input_tokens: turn.input_tokens,
-                output_tokens: estimated_tokens(&text),
-                web_search_requests: 0,
-            },
-            web_evidence: WebEvidenceSummary::default(),
-        },
-        &turn.response_model,
-    )
+async fn provider_cancellation_within(
+    cancellation: impl Future<Output = Result<TurnCancellation>>,
+    timeout: Duration,
+) -> Result<TurnCancellation> {
+    tokio::time::timeout(timeout, cancellation)
+        .await
+        .map_err(|_| {
+            anyhow!(
+                "SubAgent provider cancellation did not settle within {} seconds",
+                timeout.as_secs()
+            )
+        })?
 }
 
 #[cfg(test)]

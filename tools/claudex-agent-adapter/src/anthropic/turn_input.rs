@@ -84,20 +84,13 @@ fn bound_input(input: Vec<Value>) -> Vec<Value> {
     }
     let mut remaining = MAX_TURN_INPUT_BYTES.saturating_sub(TRUNCATED_INPUT_NOTICE.len());
     let mut retained = Vec::new();
-    for mut item in input.into_iter().rev() {
+    for item in input.into_iter().rev() {
         let size = input_bytes(&item);
         if size <= remaining {
             remaining -= size;
             retained.push(item);
         } else if retained.is_empty() {
-            if let Some(text) = item.get_mut("text") {
-                let suffix = text
-                    .as_str()
-                    .map(|value| utf8_suffix(value, remaining).to_owned())
-                    .unwrap_or_default();
-                *text = json!(suffix);
-                retained.push(item);
-            }
+            retain_truncated_item(&mut retained, item, remaining);
             break;
         } else {
             // Retain one contiguous suffix instead of stitching stale input around an
@@ -116,6 +109,18 @@ fn bound_input(input: Vec<Value>) -> Vec<Value> {
         "truncated incremental input before Codex turn/start"
     );
     retained
+}
+
+fn retain_truncated_item(retained: &mut Vec<Value>, mut item: Value, remaining: usize) {
+    let Some(text) = item.get_mut("text") else {
+        return;
+    };
+    let suffix = text
+        .as_str()
+        .map(|value| utf8_suffix(value, remaining).to_owned())
+        .unwrap_or_default();
+    *text = json!(suffix);
+    retained.push(item);
 }
 
 fn input_bytes(item: &Value) -> usize {

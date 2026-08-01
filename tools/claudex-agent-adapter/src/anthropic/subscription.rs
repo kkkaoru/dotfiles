@@ -13,8 +13,13 @@ use tokio::{
 };
 
 mod effort;
+pub(super) mod failure;
 mod lifecycle;
+mod options;
 mod retry;
+#[cfg(test)]
+pub(super) use effort::request_effort;
+pub(super) use effort::valid_effort;
 
 #[cfg(test)]
 pub(super) use super::subscription_request::cwd_from_system;
@@ -24,12 +29,32 @@ pub(super) use super::subscription_request::requested_tools_for_request;
 use super::{
     Bridge, MessagesRequest, Segment, Usage, WebEvidenceSummary,
     content::{anthropic_response, estimated_tokens, token_count},
-    subscription_request::{subscription_request_cwd, subscription_request_prompt},
-    subscription_stream::subscription_streaming_response,
+    subscription_request::{
+        is_compaction_request, request_json_schema, subscription_request_cwd,
+        subscription_request_prompt,
+    },
+    subscription_stream::{
+        ACTIVITY_KEEPALIVE_INTERVAL, INITIAL_ACTIVITY_DELAY, subscription_streaming_response,
+    },
 };
 use crate::NONINTERACTIVE_CHILD_ENV;
+use failure::{
+    local_failure, local_result, process_failure, spawn_child, subscription_result_for_model,
+    timeout_failure,
+};
+pub(super) use failure::{
+    subscription_failure, subscription_result_text, validate_subscription_result_for_model,
+};
+#[cfg(test)]
+pub(super) use failure::{subscription_result, validate_subscription_result};
+#[cfg(test)]
 pub(in crate::anthropic) use lifecycle::terminate_subscription;
+pub(in crate::anthropic) use lifecycle::terminate_subscription_process_group;
 use lifecycle::{collect_subscription_output, terminate_after_subscription_failure};
+pub(super) use options::{
+    DEFAULT_STDERR_DRAIN_GRACE, DEFAULT_TERMINATION_TIMEOUT, SubscriptionOptions,
+    SubscriptionToolContext,
+};
 pub(super) use retry::with_transient_retries;
 #[cfg(test)]
 pub(super) use retry::{should_retry_subscription, transient_retry_delay};
@@ -37,37 +62,6 @@ pub(crate) const DEFAULT_MAX_PROCESSES: usize = 20;
 pub(crate) const DEFAULT_TIMEOUT_MINUTES: u64 = 120;
 const MAX_PROCESSES_ENV: &str = "CLAUDEX_SUBSCRIPTION_MAX_PROCESSES";
 const TIMEOUT_MINUTES_ENV: &str = "CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES";
-pub(super) struct SubscriptionOptions {
-    pub(super) effort: Option<String>,
-    pub(super) tools: Vec<String>,
-    pub(super) cwd: Option<PathBuf>,
-    pub(super) slots: Arc<Semaphore>,
-    pub(super) timeout: Duration,
-    pub(super) tool_context: Option<SubscriptionToolContext>,
-}
-#[derive(Clone)]
-pub(super) struct SubscriptionToolContext {
-    pub(super) agent_efforts: Arc<super::agent_effort::AgentEffortIntents>,
-    pub(super) model_catalog: crate::provider_config::ModelCatalog,
-    pub(super) client_user_id: Option<String>,
-    pub(super) parent_model: String,
-    pub(super) user_messages: Vec<Value>,
-    pub(super) system: Value,
-}
-
-impl SubscriptionOptions {
-    pub(super) fn internal(slots: Arc<Semaphore>, timeout: Duration) -> Self {
-        Self {
-            effort: None,
-            tools: Vec::new(),
-            cwd: None,
-            slots,
-            timeout,
-            tool_context: None,
-        }
-    }
-}
-
 pub(super) struct SubscriptionLimits {
     pub(super) max_processes: usize,
     pub(super) timeout: Duration,
@@ -136,9 +130,10 @@ impl Bridge {
         request: MessagesRequest,
         effort: Option<String>,
         is_subagent: bool,
+        tools_were_provided: bool,
     ) -> Result<Response<Body>> {
         let input_tokens = u64::try_from(token_count(&request)).unwrap_or(u64::MAX);
-        let options = self.subscription_options(&request, effort, is_subagent);
+        let options = self.subscription_options(&request, effort, is_subagent, tools_were_provided);
         let prompt = subscription_request_prompt(&request);
         if request.stream {
             return Ok(subscription_streaming_response(
@@ -170,13 +165,21 @@ impl Bridge {
         request: &MessagesRequest,
         effort: Option<String>,
         is_subagent: bool,
+        tools_were_provided: bool,
     ) -> SubscriptionOptions {
         SubscriptionOptions {
             effort,
             tools: requested_tools_for_request(request, !is_subagent),
+            disable_tools: (tools_were_provided && request.tools.is_empty())
+                || is_compaction_request(request),
+            json_schema: request_json_schema(&request.output_config),
             cwd: subscription_request_cwd(request),
             slots: Arc::clone(&self.subscription_slots),
             timeout: self.subscription_timeout,
+            initial_activity_delay: INITIAL_ACTIVITY_DELAY,
+            activity_keepalive_interval: ACTIVITY_KEEPALIVE_INTERVAL,
+            stderr_drain_grace: DEFAULT_STDERR_DRAIN_GRACE,
+            termination_timeout: DEFAULT_TERMINATION_TIMEOUT,
             tool_context: Some(SubscriptionToolContext {
                 agent_efforts: Arc::clone(&self.agent_efforts),
                 model_catalog: self.model_catalog.clone(),
@@ -193,17 +196,6 @@ impl Bridge {
     }
 }
 
-pub(super) fn request_effort(output_config: &Value) -> Option<&str> {
-    output_config
-        .get("effort")
-        .and_then(Value::as_str)
-        .filter(|effort| valid_effort(effort))
-}
-
-pub(super) fn valid_effort(effort: &str) -> bool {
-    matches!(effort, "low" | "medium" | "high" | "xhigh" | "max")
-}
-
 pub(super) fn claude_settings_path() -> Option<PathBuf> {
     std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".claude/settings.json"))
 }
@@ -218,6 +210,7 @@ pub(super) fn setting_at(path: &Path, key: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
+#[cfg(test)]
 pub(super) fn subscription_prompt(tool: &str, arguments: &Value, transcript: &[Value]) -> String {
     if tool == "advisor" {
         return format!(
@@ -255,26 +248,29 @@ async fn run_subscription_model_attempt(
 ) -> Result<String> {
     let _permit = acquire_subscription_slot(Arc::clone(&options.slots), options.timeout).await?;
     let mut command = subscription_command(program, model, options, OutputMode::Json);
-    let mut child = spawn_subscription(&mut command, model)?;
-    let stdin = take_subscription_stdin(&mut child)?;
+    let (mut child, stdin) = spawn_child(&mut command, model)?;
     let interaction = collect_subscription_output(&mut child, stdin, prompt);
     let (prompt_result, output) = match tokio::time::timeout(options.timeout, interaction).await {
         Ok(Ok(output)) => output,
-        Ok(Err(error)) => return terminate_after_subscription_failure(&mut child, error).await,
+        Ok(Err(error)) => {
+            let error = local_failure(model, "failed to collect child output", &error);
+            return terminate_after_subscription_failure(&mut child, error).await;
+        }
         Err(_) => {
-            terminate_subscription(&mut child).await?;
-            bail!("Claude subscription timed out after {:?}", options.timeout);
+            let error = timeout_failure(model, options.timeout);
+            return terminate_after_subscription_failure(&mut child, error).await;
         }
     };
     if !output.status.success() {
-        bail!(
-            "Claude subscription model {model} exited with {}: {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
+        return Err(process_failure(
+            model,
+            &output.status,
+            &output.stdout,
+            &output.stderr,
+        ));
     }
-    prompt_result.context("failed to write Claude subscription prompt")?;
-    subscription_result(&output.stdout)
+    local_result(model, "failed to write prompt", prompt_result)?;
+    subscription_result_for_model(&output.stdout, Some(model))
 }
 
 pub(super) async fn acquire_subscription_slot(
@@ -339,10 +335,15 @@ pub(super) fn subscription_command(
         output_format,
         "--no-session-persistence",
     ]);
-    if !options.tools.is_empty() {
+    if options.disable_tools {
+        command.args(["--safe-mode", "--tools", "", "--allowedTools", ""]);
+    } else if !options.tools.is_empty() {
         let tools = options.tools.join(",");
         command.args(["--tools", &tools]);
         command.args(["--allowedTools", &tools]);
+    }
+    if let Some(schema) = &options.json_schema {
+        command.args(["--json-schema", schema]);
     }
     if matches!(output, OutputMode::StreamJson) {
         command.args(["--include-partial-messages", "--verbose"]);
@@ -372,27 +373,4 @@ fn remove_proxy_environment(command: &mut Command) {
         command.env_remove(variable);
     }
     crate::web_search::clear_local_ccr_environment(command);
-}
-
-pub(super) fn subscription_result(stdout: &[u8]) -> Result<String> {
-    let value: Value =
-        serde_json::from_slice(stdout).context("Claude subscription returned invalid JSON")?;
-    validate_subscription_result(&value)?;
-    value
-        .get("result")
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .ok_or_else(|| anyhow!("Claude subscription JSON did not contain a result: {value}"))
-}
-
-pub(super) fn validate_subscription_result(result: &Value) -> Result<()> {
-    if result.get("is_error").and_then(Value::as_bool) == Some(true)
-        || result.get("subtype").and_then(Value::as_str) != Some("success")
-    {
-        bail!(
-            "Claude subscription failed: {}",
-            result.get("result").unwrap_or(result)
-        );
-    }
-    Ok(())
 }

@@ -17,6 +17,13 @@ const MISSING_MODEL_PROVIDER_MARKER: &str = "model provider";
 const OVERSIZED_PROMPT_MARKER: &str = "prompt is too long";
 
 pub(super) fn error_type(error: &Error) -> &'static str {
+    if let Some(failure) = super::subscription::subscription_failure(error) {
+        return if failure.is_outer_retryable() {
+            RETRYABLE_ERROR_TYPE
+        } else {
+            NON_RETRYABLE_ERROR_TYPE
+        };
+    }
     if is_terminal_provider_configuration_error(error) {
         NON_RETRYABLE_ERROR_TYPE
     } else {
@@ -25,6 +32,10 @@ pub(super) fn error_type(error: &Error) -> &'static str {
 }
 
 pub(super) fn http_status(fallback: StatusCode, error: &Error) -> StatusCode {
+    if let Some(failure) = super::subscription::subscription_failure(error) {
+        return StatusCode::from_u16(failure.status_hint())
+            .unwrap_or(StatusCode::FAILED_DEPENDENCY);
+    }
     if is_terminal_provider_configuration_error(error) {
         StatusCode::BAD_REQUEST
     } else {
@@ -132,6 +143,55 @@ mod tests {
         assert_eq!(
             http_status(StatusCode::BAD_GATEWAY, &error),
             StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[test]
+    fn maps_typed_subscription_failures_without_retry_storms() {
+        let upstream = super::super::subscription::validate_subscription_result_for_model(
+            &serde_json::json!({
+                "subtype":"error", "is_error":true, "status":503,
+                "result":"Service unavailable"
+            }),
+            Some("claude-test"),
+        )
+        .expect_err("upstream failure");
+        assert_eq!(error_type(&upstream), RETRYABLE_ERROR_TYPE);
+        assert_eq!(
+            http_status(StatusCode::BAD_GATEWAY, &upstream),
+            StatusCode::SERVICE_UNAVAILABLE
+        );
+
+        for (result, expected_status) in [
+            ("Authentication failed", StatusCode::UNAUTHORIZED),
+            ("Model not found", StatusCode::BAD_REQUEST),
+            (
+                "Prompt is too long for the context window",
+                StatusCode::PAYLOAD_TOO_LARGE,
+            ),
+        ] {
+            let error = super::super::subscription::validate_subscription_result_for_model(
+                &serde_json::json!({
+                    "subtype":"error", "is_error":true, "result":result
+                }),
+                Some("claude-test"),
+            )
+            .expect_err("terminal subscription failure");
+            assert_eq!(error_type(&error), NON_RETRYABLE_ERROR_TYPE);
+            assert_eq!(
+                http_status(StatusCode::BAD_GATEWAY, &error),
+                expected_status
+            );
+        }
+
+        let local = super::super::subscription::failure::protocol_failure(
+            Some("claude-test"),
+            "invalid local child output",
+        );
+        assert_eq!(error_type(&local), NON_RETRYABLE_ERROR_TYPE);
+        assert_eq!(
+            http_status(StatusCode::BAD_GATEWAY, &local),
+            StatusCode::FAILED_DEPENDENCY
         );
     }
 }

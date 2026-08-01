@@ -2,35 +2,14 @@ use std::{future::Future, time::Duration};
 
 use anyhow::{Error, Result};
 
-pub(in crate::anthropic) const MAX_TRANSIENT_RETRIES: usize = 2;
+pub(in crate::anthropic) const MAX_TRANSIENT_RETRIES: usize = 1;
 const BASE_DELAY: Duration = Duration::from_millis(250);
 const STREAM_OUTPUT_MARKER: &str = "subscription stream already emitted frames";
 
 pub(in crate::anthropic) fn should_retry_subscription(error: &Error) -> bool {
-    let message = error
-        .chain()
-        .map(|cause| cause.to_string().to_ascii_lowercase())
-        .collect::<Vec<_>>()
-        .join("\n");
-    !message.contains(STREAM_OUTPUT_MARKER)
-        && (is_empty_subscription_exit(&message)
-            || [
-                "502",
-                "bad gateway",
-                "gateway timeout",
-                "service unavailable",
-                "temporarily unavailable",
-            ]
-            .iter()
-            .any(|marker| message.contains(marker)))
-}
-
-fn is_empty_subscription_exit(message: &str) -> bool {
-    message.contains("claude subscription")
-        && message.contains("exited with")
-        && message
-            .rsplit_once(':')
-            .is_some_and(|(_, stderr)| stderr.trim().is_empty())
+    !error.to_string().contains(STREAM_OUTPUT_MARKER)
+        && super::failure::subscription_failure(error)
+            .is_some_and(super::failure::SubscriptionFailure::is_internal_retryable)
 }
 
 pub(in crate::anthropic) fn transient_retry_delay(retry: usize) -> Duration {

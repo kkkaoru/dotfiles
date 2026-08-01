@@ -1,5 +1,17 @@
+use serde_json::Value;
+
 use super::super::{Bridge, MessagesRequest, agent_effort::AgentEffort};
-use super::request_effort;
+
+pub(in crate::anthropic) fn request_effort(output_config: &Value) -> Option<&str> {
+    output_config
+        .get("effort")
+        .and_then(Value::as_str)
+        .filter(|effort| valid_effort(effort))
+}
+
+pub(in crate::anthropic) fn valid_effort(effort: &str) -> bool {
+    matches!(effort, "low" | "medium" | "high" | "xhigh" | "max")
+}
 
 impl Bridge {
     #[allow(clippy::excessive_nesting)]

@@ -115,12 +115,7 @@ mod tests {
             segment.blocks.is_empty(),
             "provider progress is ephemeral and stripped on finish"
         );
-        let mut output = String::new();
-        let mut frame_count = 0;
-        while let Some(frame) = receiver.recv().await {
-            frame_count += 1;
-            output.push_str(&String::from_utf8_lossy(&frame.expect("frame")));
-        }
+        let (frame_count, output) = collect_frames(&mut receiver).await;
         assert!(output.contains("▶ Bash"));
         assert!(output.contains("✗ Build"));
         assert!(output.contains("✓ Read"));
@@ -130,19 +125,7 @@ mod tests {
     #[tokio::test]
     async fn renders_update_only_tools_once_and_reuses_their_titles() {
         let mut builder = SegmentBuilder::new(1);
-        for status in ["pending", "in_progress"] {
-            builder
-                .provider_tool_update(
-                    &json!({"params":{
-                        "callId":"update-only",
-                        "status":status,
-                        "title":"WebFetch"
-                    }}),
-                    None,
-                )
-                .await
-                .expect("provider update");
-        }
+        send_update_statuses(&mut builder).await;
         builder
             .provider_tool_update(
                 &json!({"params":{
@@ -200,6 +183,40 @@ mod tests {
             "result_summary":"provider search result",
             "source_urls":["https://example.com/result"]
         });
+        send_evidence_updates(&mut builder, evidence).await;
+        let segment = builder.finish(None).await.expect("segment");
+        assert_eq!(segment.usage.web_search_requests, 1);
+    }
+
+    async fn collect_frames(
+        receiver: &mut mpsc::Receiver<Result<Bytes, Infallible>>,
+    ) -> (usize, String) {
+        let mut output = String::new();
+        let mut frame_count = 0;
+        while let Some(frame) = receiver.recv().await {
+            frame_count += 1;
+            output.push_str(&String::from_utf8_lossy(&frame.expect("frame")));
+        }
+        (frame_count, output)
+    }
+
+    async fn send_update_statuses(builder: &mut SegmentBuilder) {
+        for status in ["pending", "in_progress"] {
+            builder
+                .provider_tool_update(
+                    &json!({"params":{
+                        "callId":"update-only",
+                        "status":status,
+                        "title":"WebFetch"
+                    }}),
+                    None,
+                )
+                .await
+                .expect("provider update");
+        }
+    }
+
+    async fn send_evidence_updates(builder: &mut SegmentBuilder, evidence: Value) {
         for (call_id, evidence) in [
             ("model-prose", json!("https://model.example/prose-url")),
             (
@@ -230,8 +247,6 @@ mod tests {
                 .await
                 .expect("provider update");
         }
-        let segment = builder.finish(None).await.expect("segment");
-        assert_eq!(segment.usage.web_search_requests, 1);
     }
 
     #[test]

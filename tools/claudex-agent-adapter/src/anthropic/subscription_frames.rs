@@ -4,8 +4,24 @@ use anyhow::{Error, Result};
 use axum::body::Bytes;
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
+use uuid::Uuid;
 
 use super::{agent_effort::is_agent_tool, content::estimated_tokens, stream::send_stream_frame};
+
+pub(super) fn subscription_start_frame(model: &str, input_tokens: u64) -> String {
+    super::content::sse(
+        "message_start",
+        json!({
+            "type":"message_start",
+            "message":{
+                "id":format!("msg_{}", Uuid::new_v4().simple()),
+                "type":"message","role":"assistant","model":model,
+                "content":[],"stop_reason":null,"stop_sequence":null,
+                "usage":{"input_tokens":input_tokens,"output_tokens":0}
+            }
+        }),
+    )
+}
 
 pub(super) fn mapped_tool_name<'a>(emitted: &'a str, available: &'a [String]) -> &'a str {
     if is_agent_tool(emitted) {

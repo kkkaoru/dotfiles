@@ -223,12 +223,9 @@ mod lazy_tests {
         let built = Arc::new(AtomicBool::new(false));
         let observed = Arc::clone(&built);
 
-        send_stream_frame(None, "ignored", || {
-            observed.store(true, Ordering::Relaxed);
-            json!({})
-        })
-        .await
-        .expect("optional stream");
+        send_stream_frame(None, "ignored", || mark_frame_built(&observed))
+            .await
+            .expect("optional stream");
 
         assert!(!built.load(Ordering::Relaxed));
     }
@@ -304,11 +301,7 @@ mod lazy_tests {
             Err(error) => panic!("bind SSE listener: {error}"),
         };
         let address = listener.local_addr().expect("SSE listener address");
-        let server = tokio::spawn(async move {
-            axum::serve(listener, app)
-                .await
-                .expect("serve SSE response");
-        });
+        let server = tokio::spawn(serve_sse(listener, app));
 
         let mut client = tokio::net::TcpStream::connect(address)
             .await
@@ -341,17 +334,37 @@ mod lazy_tests {
         ping_frame: &[u8],
         needed: usize,
     ) -> Vec<u8> {
-        let mut wire = Vec::new();
-        tokio::time::timeout(Duration::from_secs(1), async {
-            let mut chunk = [0; 1024];
-            while count_frames(&wire, ping_frame) < needed {
-                let count = client.read(&mut chunk).await.expect("read SSE response");
-                assert_ne!(count, 0, "SSE response ended before enough pings");
-                wire.extend_from_slice(&chunk[..count]);
-            }
-        })
+        tokio::time::timeout(
+            Duration::from_secs(1),
+            read_ping_frames(client, ping_frame, needed),
+        )
         .await
-        .expect("enough ping frames");
+        .expect("enough ping frames")
+    }
+
+    fn mark_frame_built(observed: &AtomicBool) -> Value {
+        observed.store(true, Ordering::Relaxed);
+        json!({})
+    }
+
+    async fn serve_sse(listener: tokio::net::TcpListener, app: axum::Router) {
+        axum::serve(listener, app)
+            .await
+            .expect("serve SSE response");
+    }
+
+    async fn read_ping_frames(
+        client: &mut tokio::net::TcpStream,
+        ping_frame: &[u8],
+        needed: usize,
+    ) -> Vec<u8> {
+        let mut wire = Vec::new();
+        let mut chunk = [0; 1024];
+        while count_frames(&wire, ping_frame) < needed {
+            let count = client.read(&mut chunk).await.expect("read SSE response");
+            assert_ne!(count, 0, "SSE response ended before enough pings");
+            wire.extend_from_slice(&chunk[..count]);
+        }
         wire
     }
 

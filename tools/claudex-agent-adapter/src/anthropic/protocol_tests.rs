@@ -14,6 +14,13 @@ fn builds_subscription_and_stream_protocol_frames() {
         subscription_result(br#"{"subtype":"success","is_error":false,"result":"OK"}"#).unwrap(),
         "OK"
     );
+    assert_eq!(
+        subscription_result(
+            br#"{"subtype":"success","is_error":false,"result":"fallback","structured_output":{"ok":true}}"#
+        )
+        .unwrap(),
+        r#"{"ok":true}"#
+    );
     assert!(subscription_result(b"not-json").is_err());
     assert!(subscription_result(br#"{"type":"result"}"#).is_err());
     assert!(subscription_start_frame("model", 12).contains("message_start"));

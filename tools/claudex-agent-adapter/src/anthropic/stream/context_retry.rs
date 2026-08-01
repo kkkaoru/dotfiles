@@ -21,6 +21,8 @@ impl Bridge {
         }
     }
 
+    // This provider retry loop deliberately transfers one ActiveTurn between attempts.
+    #[allow(clippy::excessive_nesting)]
     pub(in crate::anthropic) async fn non_streaming_response(
         &self,
         mut turn: ActiveTurn,

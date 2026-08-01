@@ -1,15 +1,25 @@
-use std::{convert::Infallible, fs, process::Stdio, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    convert::Infallible,
+    fs,
+    io::Cursor,
+    process::Stdio,
+    sync::Arc,
+    time::Duration,
+};
 
 #[cfg(unix)]
 use std::os::unix::{fs::PermissionsExt, process::CommandExt as _};
+#[cfg(unix)]
+use std::path::{Path, PathBuf};
 
 use axum::body::Bytes;
 use serde_json::{Value, json};
-use tokio::{process::Command, sync::mpsc};
+use tokio::{io::BufReader, process::Command, sync::mpsc};
 
 use super::{
-    SubscriptionStream, consume_subscription_stream, result_output_tokens, run_subscription_stream,
-    stream_subscription_model,
+    SubscriptionStream, consume_subscription_stream, consume_subscription_stream_with_options,
+    result_output_tokens, run_subscription_stream, stream_subscription_model,
 };
 use crate::anthropic::{
     agent_effort::AgentEffortIntents,
@@ -33,6 +43,185 @@ async fn output(receiver: &mut mpsc::Receiver<Result<Bytes, Infallible>>) -> Str
     output
 }
 
+#[derive(Default)]
+struct StreamValidation {
+    open_blocks: HashMap<u64, String>,
+    started_blocks: HashSet<u64>,
+    stopped_blocks: HashSet<u64>,
+    stop_reasons: Vec<String>,
+    message_stops: usize,
+    terminal: bool,
+}
+
+fn parse_frame(raw_frame: &str) -> Value {
+    let data = raw_frame
+        .lines()
+        .find_map(|line| line.strip_prefix("data: "))
+        .expect("SSE data");
+    serde_json::from_str(data).expect("SSE JSON")
+}
+
+impl StreamValidation {
+    fn observe(&mut self, raw_frame: &str) {
+        assert!(
+            !self.terminal,
+            "frame emitted after message_stop: {raw_frame}"
+        );
+        let frame = parse_frame(raw_frame);
+        match frame["type"].as_str() {
+            Some("content_block_start") => self.start_block(&frame),
+            Some("content_block_delta") => self.validate_delta(&frame),
+            Some("content_block_stop") => self.stop_block(&frame),
+            Some("message_delta") => self.record_stop_reason(&frame),
+            Some("message_stop") => self.stop_message(),
+            _ => {}
+        }
+    }
+
+    fn start_block(&mut self, frame: &Value) {
+        let index = frame["index"].as_u64().expect("start index");
+        assert_eq!(
+            index,
+            self.started_blocks.len() as u64,
+            "content block indices must be contiguous and increasing"
+        );
+        let block_type = frame["content_block"]["type"]
+            .as_str()
+            .expect("content block type")
+            .to_owned();
+        assert!(
+            self.started_blocks.insert(index),
+            "duplicate block start: {index}"
+        );
+        assert!(self.open_blocks.insert(index, block_type).is_none());
+    }
+
+    fn validate_delta(&self, frame: &Value) {
+        let index = frame["index"].as_u64().expect("delta index");
+        let block_type = self
+            .open_blocks
+            .get(&index)
+            .expect("delta targets open block");
+        let delta_type = frame["delta"]["type"].as_str().expect("delta type");
+        let expected_block_type = match delta_type {
+            "text_delta" => "text",
+            "input_json_delta" => "tool_use",
+            "thinking_delta" | "signature_delta" => "thinking",
+            other => panic!("unexpected delta type: {other}"),
+        };
+        assert_eq!(block_type, expected_block_type, "delta/block type mismatch");
+    }
+
+    fn stop_block(&mut self, frame: &Value) {
+        let index = frame["index"].as_u64().expect("stop index");
+        assert!(
+            self.open_blocks.remove(&index).is_some(),
+            "stop without open block: {index}"
+        );
+        assert!(
+            self.stopped_blocks.insert(index),
+            "duplicate block stop: {index}"
+        );
+    }
+
+    fn record_stop_reason(&mut self, frame: &Value) {
+        let Some(reason) = frame["delta"]["stop_reason"].as_str() else {
+            return;
+        };
+        assert!(
+            self.open_blocks.is_empty(),
+            "terminal delta emitted before every block was closed"
+        );
+        self.stop_reasons.push(reason.to_owned());
+    }
+
+    fn stop_message(&mut self) {
+        self.message_stops += 1;
+        self.terminal = true;
+    }
+
+    fn assert_finished(self, expected_stop_reason: Option<&str>) {
+        assert!(
+            self.open_blocks.is_empty(),
+            "unclosed blocks: {:?}",
+            self.open_blocks
+        );
+        assert_eq!(
+            self.started_blocks, self.stopped_blocks,
+            "start/stop index mismatch"
+        );
+        match expected_stop_reason {
+            Some(expected) => {
+                assert_eq!(self.message_stops, 1, "message_stop must be unique");
+                assert_eq!(self.stop_reasons, vec![expected.to_owned()]);
+            }
+            None => {
+                assert_eq!(
+                    self.message_stops, 0,
+                    "failed stream must not emit message_stop"
+                );
+                assert!(self.stop_reasons.is_empty());
+            }
+        }
+    }
+}
+
+fn assert_valid_stream(output: &str, expected_stop_reason: Option<&str>) {
+    let mut validation = StreamValidation::default();
+    for raw_frame in output.split("\n\n").filter(|frame| !frame.is_empty()) {
+        validation.observe(raw_frame);
+    }
+    validation.assert_finished(expected_stop_reason);
+}
+
+fn collect_block_events(output: &str) -> (Vec<(u64, String)>, Vec<u64>) {
+    let mut block_types = Vec::new();
+    let mut stopped_indices = Vec::new();
+    for raw_frame in output.split("\n\n").filter(|frame| !frame.is_empty()) {
+        record_block_event(
+            &parse_frame(raw_frame),
+            &mut block_types,
+            &mut stopped_indices,
+        );
+    }
+    (block_types, stopped_indices)
+}
+
+fn record_block_event(
+    frame: &Value,
+    block_types: &mut Vec<(u64, String)>,
+    stopped_indices: &mut Vec<u64>,
+) {
+    match frame["type"].as_str() {
+        Some("content_block_start") => block_types.push((
+            frame["index"].as_u64().expect("block index"),
+            frame["content_block"]["type"]
+                .as_str()
+                .expect("block type")
+                .to_owned(),
+        )),
+        Some("content_block_delta") if frame["delta"]["type"].as_str() == Some("text_delta") => {
+            assert_text_delta_targets_text(frame, block_types);
+        }
+        Some("content_block_stop") => {
+            stopped_indices.push(frame["index"].as_u64().expect("stop index"));
+        }
+        _ => {}
+    }
+}
+
+fn assert_text_delta_targets_text(frame: &Value, block_types: &[(u64, String)]) {
+    let index = frame["index"].as_u64().expect("text index");
+    assert_eq!(
+        block_types
+            .iter()
+            .find(|(block_index, _)| *block_index == index)
+            .map(|(_, block_type)| block_type.as_str()),
+        Some("text"),
+        "text delta must target a text block: {frame}"
+    );
+}
+
 #[tokio::test]
 async fn handles_ignored_invalid_and_non_text_events() {
     let (sender, mut receiver) = channel();
@@ -40,6 +229,8 @@ async fn handles_ignored_invalid_and_non_text_events() {
         text_started: false,
         text_closed: false,
         saw_tool_use: false,
+        seen_tool_ids: HashSet::new(),
+        blocked_subagent: false,
         saw_result: false,
         next_index: 0,
         tools: Vec::new(),
@@ -76,6 +267,8 @@ async fn forwards_empty_and_regular_deltas_then_finishes_once() {
         text_started: false,
         text_closed: false,
         saw_tool_use: false,
+        seen_tool_ids: HashSet::new(),
+        blocked_subagent: false,
         saw_result: false,
         next_index: 0,
         tools: Vec::new(),
@@ -118,6 +311,8 @@ async fn keeps_native_web_results_inside_the_subscription() {
         text_started: false,
         text_closed: false,
         saw_tool_use: false,
+        seen_tool_ids: HashSet::new(),
+        blocked_subagent: false,
         saw_result: false,
         next_index: 0,
         tools: vec!["WebSearch".to_owned(), "WebFetch".to_owned()],
@@ -132,7 +327,7 @@ async fn keeps_native_web_results_inside_the_subscription() {
                 "parent_tool_use_id":null,
                 "message":{"content":[{
                     "type":"tool_use", "id":"web-search", "name":"WebSearch",
-                    "input":{"query":"AVITA株式会社"}
+                    "input":{"query":"Example Robotics"}
                 }]}
             })
             .to_string(),
@@ -142,23 +337,103 @@ async fn keeps_native_web_results_inside_the_subscription() {
     stream
         .handle_line(
             &sender,
-            r#"{"type":"stream_event","event":{"delta":{"type":"text_delta","text":"https://avita.co.jp"}}}"#,
+            r#"{"type":"stream_event","event":{"delta":{"type":"text_delta","text":"https://example.invalid"}}}"#,
         )
         .await
         .expect("forward native web result");
     stream
         .handle_line(
             &sender,
-            r#"{"type":"result","subtype":"success","result":"https://avita.co.jp"}"#,
+            r#"{"type":"result","subtype":"success","result":"https://example.invalid"}"#,
         )
         .await
         .expect("finish native web result");
     let output = output(&mut receiver).await;
+    assert_valid_stream(&output, Some("end_turn"));
     assert!(!output.contains("tool_use"));
-    assert!(output.contains("https://avita.co.jp"));
+    assert!(output.contains("https://example.invalid"));
     assert!(output.contains("end_turn"));
     assert!(!stream.saw_tool_use);
+    stream
+        .handle_line(
+            &sender,
+            &json!({
+                "type":"stream_event",
+                "event":{"delta":{"type":"text_delta","text":"PRIVATE_PROVIDER_TAIL"}}
+            })
+            .to_string(),
+        )
+        .await
+        .expect("provider text after a rejected launch is ignored");
+    stream
+        .handle_line(
+            &sender,
+            &json!({
+                "type":"assistant", "parent_tool_use_id":null,
+                "message":{"content":[{
+                    "type":"tool_use", "id":"second-unsupported", "name":"Agent",
+                    "input":{"prompt":"duplicate", "subagent_type":"claudex-sonnet"}
+                }]}
+            })
+            .to_string(),
+        )
+        .await
+        .expect("later provider tools after a rejected launch are ignored");
     assert!(stream.saw_result);
+}
+
+#[tokio::test]
+async fn keeps_structured_output_internal_and_returns_its_json_result_as_text() {
+    let (sender, mut receiver) = channel();
+    let mut stream = SubscriptionStream {
+        text_started: false,
+        text_closed: false,
+        saw_tool_use: false,
+        seen_tool_ids: HashSet::new(),
+        blocked_subagent: false,
+        saw_result: false,
+        next_index: 0,
+        tools: Vec::new(),
+        tool_context: None,
+        activity: SubscriptionActivity::default(),
+    };
+    stream
+        .handle_line(
+            &sender,
+            &json!({
+                "type":"assistant",
+                "parent_tool_use_id":null,
+                "message":{"content":[{
+                    "type":"tool_use",
+                    "id":"structured-output",
+                    "name":"StructuredOutput",
+                    "input":{"ok":true}
+                }]}
+            })
+            .to_string(),
+        )
+        .await
+        .expect("consume internal structured output");
+    stream
+        .handle_line(
+            &sender,
+            &json!({
+                "type":"result",
+                "subtype":"success",
+                "result":"UNSTRUCTURED_FALLBACK_MUST_NOT_LEAK",
+                "structured_output":{"ok":true}
+            })
+            .to_string(),
+        )
+        .await
+        .expect("consume structured result");
+
+    assert!(!stream.saw_tool_use);
+    assert!(stream.saw_result);
+    let output = output(&mut receiver).await;
+    assert!(output.contains(r#"{\"ok\":true}"#));
+    assert!(!output.contains("UNSTRUCTURED_FALLBACK_MUST_NOT_LEAK"));
+    assert!(!output.contains("tool_use"));
 }
 
 #[tokio::test]
@@ -168,6 +443,8 @@ async fn empty_partial_delta_is_not_visible_output_and_remains_eligible_for_stat
         text_started: false,
         text_closed: false,
         saw_tool_use: false,
+        seen_tool_ids: HashSet::new(),
+        blocked_subagent: false,
         saw_result: false,
         next_index: 0,
         tools: Vec::new(),
@@ -202,6 +479,8 @@ async fn shows_activity_status_before_delayed_subscription_output() {
         text_started: false,
         text_closed: false,
         saw_tool_use: false,
+        seen_tool_ids: HashSet::new(),
+        blocked_subagent: false,
         saw_result: false,
         next_index: 0,
         tools: Vec::new(),
@@ -242,6 +521,8 @@ async fn falls_back_to_result_text_and_estimated_tokens() {
         text_started: false,
         text_closed: false,
         saw_tool_use: false,
+        seen_tool_ids: HashSet::new(),
+        blocked_subagent: false,
         saw_result: false,
         next_index: 0,
         tools: Vec::new(),
@@ -272,6 +553,8 @@ async fn rejects_unsuccessful_results() {
         text_started: false,
         text_closed: false,
         saw_tool_use: false,
+        seen_tool_ids: HashSet::new(),
+        blocked_subagent: false,
         saw_result: false,
         next_index: 0,
         tools: Vec::new(),
@@ -296,6 +579,8 @@ async fn collects_sequential_subscription_agents_into_one_outer_tool_round() {
         text_started: false,
         text_closed: false,
         saw_tool_use: false,
+        seen_tool_ids: HashSet::new(),
+        blocked_subagent: false,
         saw_result: false,
         next_index: 0,
         tools: vec!["Task".to_owned()],
@@ -378,6 +663,8 @@ async fn blocked_agent_after_a_forwarded_tool_uses_a_fresh_text_block() {
         text_started: false,
         text_closed: false,
         saw_tool_use: false,
+        seen_tool_ids: HashSet::new(),
+        blocked_subagent: false,
         saw_result: false,
         next_index: 0,
         tools: vec!["Task".to_owned()],
@@ -433,57 +720,146 @@ async fn blocked_agent_after_a_forwarded_tool_uses_a_fresh_text_block() {
         .expect("finish mixed tool calls");
 
     let output = output(&mut receiver).await;
-    let mut block_types = Vec::new();
-    let mut stopped_indices = Vec::new();
-    for frame in output.split("\n\n").filter(|frame| !frame.is_empty()) {
-        let data = frame
-            .lines()
-            .find_map(|line| line.strip_prefix("data: "))
-            .expect("SSE data");
-        let frame: Value = serde_json::from_str(data).expect("SSE JSON");
-        match frame["type"].as_str() {
-            Some("content_block_start") => block_types.push((
-                frame["index"].as_u64().expect("block index"),
-                frame["content_block"]["type"]
-                    .as_str()
-                    .expect("block type")
-                    .to_owned(),
-            )),
-            Some("content_block_delta")
-                if frame["delta"]["type"].as_str() == Some("text_delta") =>
-            {
-                let index = frame["index"].as_u64().expect("text index");
-                assert_eq!(
-                    block_types
-                        .iter()
-                        .find(|(block_index, _)| *block_index == index)
-                        .map(|(_, block_type)| block_type.as_str()),
-                    Some("text"),
-                    "text delta must target a text block: {frame}"
-                );
-            }
-            Some("content_block_stop") => {
-                stopped_indices.push(frame["index"].as_u64().expect("stop index"));
-            }
-            _ => {}
-        }
-    }
+    assert_valid_stream(&output, Some("tool_use"));
+    let (block_types, stopped_indices) = collect_block_events(&output);
     assert_eq!(
         block_types,
         vec![
             (0, "text".to_owned()),
             (1, "tool_use".to_owned()),
             (2, "text".to_owned()),
-            (3, "text".to_owned()),
         ]
     );
-    for index in [0, 2, 3] {
-        assert!(
-            stopped_indices.contains(&index),
-            "text block {index} must be closed"
+    for index in [0, 1, 2] {
+        assert_eq!(
+            stopped_indices
+                .iter()
+                .filter(|stopped| **stopped == index)
+                .count(),
+            1,
+            "block {index} must be closed exactly once"
         );
     }
     assert!(output.contains("The requested SubAgent model is not configured"));
+    assert_eq!(output.matches(r#""stop_reason":"tool_use""#).count(), 1);
+}
+
+#[tokio::test]
+async fn resumes_text_on_a_fresh_index_after_internal_web_search() {
+    let (sender, mut receiver) = channel();
+    let mut stream = SubscriptionStream {
+        text_started: false,
+        text_closed: false,
+        saw_tool_use: false,
+        seen_tool_ids: HashSet::new(),
+        blocked_subagent: false,
+        saw_result: false,
+        next_index: 0,
+        tools: vec!["WebSearch".to_owned()],
+        tool_context: None,
+        activity: SubscriptionActivity::default(),
+    };
+    stream
+        .handle_line(
+            &sender,
+            r#"{"type":"stream_event","event":{"delta":{"type":"text_delta","text":"before"}}}"#,
+        )
+        .await
+        .expect("first text");
+    stream
+        .handle_line(
+            &sender,
+            &json!({
+                "type":"assistant", "parent_tool_use_id":null,
+                "message":{"content":[{
+                    "type":"tool_use", "id":"synthetic-search", "name":"WebSearch",
+                    "input":{"query":"Example Robotics"}
+                }]}
+            })
+            .to_string(),
+        )
+        .await
+        .expect("internal search");
+    stream
+        .handle_line(
+            &sender,
+            r#"{"type":"stream_event","event":{"delta":{"type":"text_delta","text":"after"}}}"#,
+        )
+        .await
+        .expect("second text");
+    stream
+        .finish(
+            &sender,
+            &json!({"type":"result","subtype":"success","result":"done"}),
+        )
+        .await
+        .expect("finish text stream");
+
+    let output = output(&mut receiver).await;
+    assert_valid_stream(&output, Some("end_turn"));
+    assert!(output.contains(r#""index":0"#));
+    assert!(output.contains(r#""index":1"#));
+}
+
+#[tokio::test]
+async fn deduplicates_replayed_tool_ids_and_preserves_tool_terminal_state() {
+    let (sender, mut receiver) = channel();
+    let mut stream = SubscriptionStream {
+        text_started: false,
+        text_closed: false,
+        saw_tool_use: false,
+        seen_tool_ids: HashSet::new(),
+        blocked_subagent: false,
+        saw_result: false,
+        next_index: 0,
+        tools: vec!["Agent".to_owned()],
+        tool_context: Some(explicit_subscription_tool_context()),
+        activity: SubscriptionActivity::default(),
+    };
+    let envelope = json!({
+        "type":"assistant", "parent_tool_use_id":null,
+        "message":{"content":[{
+            "type":"tool_use", "id":"synthetic-replayed-tool", "name":"Agent",
+            "input":{
+                "prompt":"bounded synthetic work", "subagent_type":"claudex-gpt-spark",
+                "claudex_model":"gpt-5.3-codex-spark"
+            }
+        }]}
+    })
+    .to_string();
+    stream
+        .handle_line(&sender, &envelope)
+        .await
+        .expect("first tool");
+    stream
+        .handle_line(&sender, &envelope)
+        .await
+        .expect("replayed tool");
+    stream
+        .finish(
+            &sender,
+            &json!({"type":"result","subtype":"success","result":"done"}),
+        )
+        .await
+        .expect("finish tool stream");
+
+    let output = output(&mut receiver).await;
+    assert_valid_stream(&output, Some("tool_use"));
+    let forwarded_tool_starts = output
+        .split("\n\n")
+        .filter_map(|raw_frame| {
+            raw_frame
+                .lines()
+                .find_map(|line| line.strip_prefix("data: "))
+        })
+        .filter_map(|data| serde_json::from_str::<Value>(data).ok())
+        .filter(|frame| {
+            frame["type"].as_str() == Some("content_block_start")
+                && frame["content_block"]["type"].as_str() == Some("tool_use")
+                && frame["content_block"]["id"].as_str() == Some("synthetic-replayed-tool")
+        })
+        .count();
+    assert_eq!(forwarded_tool_starts, 1);
 }
 
 fn explicit_subscription_tool_context() -> SubscriptionToolContext {
@@ -523,6 +899,8 @@ async fn sanitizes_and_records_contextual_agent_tool_input() {
         text_started: true,
         text_closed: false,
         saw_tool_use: false,
+        seen_tool_ids: HashSet::new(),
+        blocked_subagent: false,
         saw_result: false,
         next_index: 1,
         tools: vec!["Agent".to_owned()],
@@ -570,6 +948,8 @@ async fn rejects_each_malformed_subscription_tool_shape() {
         text_started: false,
         text_closed: false,
         saw_tool_use: false,
+        seen_tool_ids: HashSet::new(),
+        blocked_subagent: false,
         saw_result: false,
         next_index: 0,
         tools: vec!["Agent".to_owned()],
@@ -616,6 +996,8 @@ async fn ignores_non_top_level_tool_events_and_exercises_completed_state() {
         text_started: false,
         text_closed: false,
         saw_tool_use: false,
+        seen_tool_ids: HashSet::new(),
+        blocked_subagent: false,
         saw_result: false,
         next_index: 0,
         tools: vec!["Read".to_owned(), "Agent".to_owned()],
@@ -690,6 +1072,8 @@ async fn blocks_an_unsupported_subagent_without_failing_the_parent_stream() {
         text_started: false,
         text_closed: false,
         saw_tool_use: false,
+        seen_tool_ids: HashSet::new(),
+        blocked_subagent: false,
         saw_result: false,
         next_index: 0,
         tools: vec!["Agent".to_owned()],
@@ -717,7 +1101,7 @@ async fn blocks_an_unsupported_subagent_without_failing_the_parent_stream() {
         )
         .await
         .expect("unsupported SubAgent must not fail the parent stream");
-    assert!(stream.saw_tool_use);
+    assert!(!stream.saw_tool_use);
     stream
         .finish(
             &sender,
@@ -725,11 +1109,20 @@ async fn blocks_an_unsupported_subagent_without_failing_the_parent_stream() {
         )
         .await
         .expect("finish parent stream");
-    assert!(
-        output(&mut receiver)
-            .await
-            .contains("was not started. Continue without it.")
+    let output = output(&mut receiver).await;
+    assert!(output.contains("was not started. Continue without it."));
+    assert_eq!(
+        output
+            .matches("was not started. Continue without it.")
+            .count(),
+        1
     );
+    assert!(!output.contains("PRIVATE_PROVIDER_TAIL"));
+    assert!(!output.contains("second-unsupported"));
+    assert_valid_stream(&output, Some("end_turn"));
+    assert!(output.contains(r#""stop_reason":"end_turn""#));
+    assert!(!output.contains(r#""stop_reason":"tool_use""#));
+    assert!(!output.contains(r#""type":"tool_use""#));
 }
 
 #[tokio::test]
@@ -739,6 +1132,8 @@ async fn accepts_a_valid_agent_model_without_a_prompt() {
         text_started: false,
         text_closed: false,
         saw_tool_use: false,
+        seen_tool_ids: HashSet::new(),
+        blocked_subagent: false,
         saw_result: false,
         next_index: 0,
         tools: vec!["Agent".to_owned()],
@@ -774,6 +1169,8 @@ async fn routes_a_standard_general_purpose_agent_to_the_parent_subscription() {
         text_started: false,
         text_closed: false,
         saw_tool_use: false,
+        seen_tool_ids: HashSet::new(),
+        blocked_subagent: false,
         saw_result: false,
         next_index: 0,
         tools: vec!["Agent".to_owned()],
@@ -814,13 +1211,147 @@ fn child(script: &str) -> tokio::process::Child {
 }
 
 #[cfg(unix)]
-fn stalled_stream_program() -> tempfile::TempDir {
-    let directory = tempfile::tempdir().expect("create stalled stream fixture directory");
-    let program = directory.path().join("stalled-stream.sh");
-    fs::write(&program, "#!/bin/sh\nsleep 30 &\nwait\n").expect("write stalled stream fixture");
-    fs::set_permissions(&program, fs::Permissions::from_mode(0o755))
-        .expect("make stalled stream fixture executable");
-    directory
+struct BackgroundSleepFixture {
+    _directory: tempfile::TempDir,
+    pid_file: PathBuf,
+    release_file: PathBuf,
+}
+
+#[cfg(unix)]
+impl BackgroundSleepFixture {
+    fn new() -> Self {
+        let directory = tempfile::tempdir().expect("create background process fixture directory");
+        let pid_file = directory.path().join("background.pid");
+        let release_file = directory.path().join("release");
+        Self {
+            _directory: directory,
+            pid_file,
+            release_file,
+        }
+    }
+
+    fn script(&self, after_release: &str) -> String {
+        format!(
+            r#"set -eu
+sleep 30 &
+background_pid=$!
+printf '%s\n' "$background_pid" > '{pid_file}'
+while [ ! -f '{release_file}' ]; do
+    sleep 0.01
+done
+{after_release}
+wait "$background_pid"
+"#,
+            pid_file = self.pid_file.display(),
+            release_file = self.release_file.display(),
+        )
+    }
+
+    fn stderr_holder_script(&self, after_release: &str) -> String {
+        format!(
+            r#"set -eu
+sleep 30 >/dev/null &
+background_pid=$!
+printf '%s\n' "$background_pid" > '{pid_file}'
+while [ ! -f '{release_file}' ]; do
+    sleep 0.01
+done
+{after_release}
+wait "$background_pid"
+"#,
+            pid_file = self.pid_file.display(),
+            release_file = self.release_file.display(),
+        )
+    }
+
+    fn program(&self) -> PathBuf {
+        let program = self._directory.path().join("stalled-stream.sh");
+        fs::write(&program, format!("#!/bin/sh\n{}", self.script(":")))
+            .expect("write stalled stream fixture");
+        fs::set_permissions(&program, fs::Permissions::from_mode(0o755))
+            .expect("make stalled stream fixture executable");
+        program
+    }
+
+    async fn release_after_pid(&self) -> Option<BackgroundProcessGuard> {
+        let guard = wait_for_background_process(&self.pid_file).await?;
+        fs::write(&self.release_file, b"release").expect("release background process fixture");
+        Some(guard)
+    }
+}
+
+#[cfg(unix)]
+struct BackgroundProcessGuard {
+    pid: libc::pid_t,
+    active: bool,
+}
+
+#[cfg(unix)]
+impl BackgroundProcessGuard {
+    async fn assert_exited(&mut self) {
+        let exited = wait_for_process_exit(self.pid)
+            .await
+            .expect("query background process");
+        assert!(
+            exited,
+            "background process {} survived process-group termination",
+            self.pid
+        );
+        self.active = false;
+    }
+}
+
+#[cfg(unix)]
+impl Drop for BackgroundProcessGuard {
+    fn drop(&mut self) {
+        if self.active {
+            // SAFETY: The test owns this child PID and only sends SIGKILL as cleanup.
+            unsafe {
+                libc::kill(self.pid, libc::SIGKILL);
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+fn process_is_gone(pid: libc::pid_t) -> std::io::Result<bool> {
+    // SAFETY: Signal zero only queries a process ID and has no process side effect.
+    if unsafe { libc::kill(pid, 0) } == 0 {
+        return Ok(false);
+    }
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ESRCH) {
+        return Ok(true);
+    }
+    Err(error)
+}
+
+#[cfg(unix)]
+async fn wait_for_process_exit(pid: libc::pid_t) -> std::io::Result<bool> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    while tokio::time::Instant::now() < deadline {
+        if process_is_gone(pid)? {
+            return Ok(true);
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    Ok(false)
+}
+
+#[cfg(unix)]
+async fn wait_for_background_process(pid_file: &Path) -> Option<BackgroundProcessGuard> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    while tokio::time::Instant::now() < deadline {
+        if let Ok(raw_pid) = fs::read_to_string(pid_file) {
+            let pid = raw_pid
+                .trim()
+                .parse()
+                .expect("valid background process PID");
+            return Some(BackgroundProcessGuard { pid, active: true });
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    None
 }
 
 #[tokio::test]
@@ -900,6 +1431,225 @@ async fn early_text_is_not_split_by_the_initial_activity_deadline() {
 }
 
 #[tokio::test]
+async fn hidden_provider_events_do_not_starve_client_visible_activity() {
+    let (sender, mut receiver) = channel();
+    let mut options = SubscriptionOptions::internal(
+        Arc::new(tokio::sync::Semaphore::new(1)),
+        Duration::from_secs(1),
+    );
+    options.initial_activity_delay = Duration::ZERO;
+    options.activity_keepalive_interval = Duration::from_secs(60);
+    let input = [
+        r#"{"type":"system","subtype":"init"}"#,
+        r#"{"type":"system","subtype":"init"}"#,
+        r#"{"type":"result","subtype":"success","result":"done"}"#,
+    ]
+    .join("\n");
+    let reader = BufReader::new(Cursor::new(input.into_bytes()));
+    SubscriptionStream::consume_reader_for_test(reader, &sender, &options, "subscription-test")
+        .await
+        .expect("ready hidden events must retain client-visible activity");
+    let frames = output(&mut receiver).await;
+    assert_eq!(frames.matches("Claudex is still working").count(), 1);
+    assert!(frames.contains("done"));
+    assert_valid_stream(&frames, Some("end_turn"));
+    let (block_types, stopped_indices) = collect_block_events(&frames);
+    assert_eq!(
+        block_types,
+        vec![(0, "thinking".to_owned()), (1, "text".to_owned())]
+    );
+    assert_eq!(stopped_indices, vec![0, 1]);
+}
+
+fn short_post_eof_options() -> SubscriptionOptions {
+    let mut options = SubscriptionOptions::internal(
+        Arc::new(tokio::sync::Semaphore::new(1)),
+        Duration::from_secs(1),
+    );
+    options.initial_activity_delay = Duration::from_millis(5);
+    options.activity_keepalive_interval = Duration::from_millis(15);
+    options.stderr_drain_grace = Duration::from_millis(40);
+    options.termination_timeout = Duration::from_millis(500);
+    options
+}
+
+#[tokio::test]
+async fn stdout_eof_keeps_activity_visible_until_the_leader_exits() {
+    let (sender, mut receiver) = channel();
+    let options = short_post_eof_options();
+    let mut process = child(concat!(
+        r#"printf '%s\n' '{"type":"result","subtype":"success","result":"done"}'; "#,
+        "exec 1>&-; sleep 0.08",
+    ));
+    consume_subscription_stream_with_options(&mut process, &sender, &options, "subscription-test")
+        .await
+        .expect("post-EOF leader completed");
+
+    let frames = output(&mut receiver).await;
+    assert!(
+        frames.matches(r#""type":"thinking_delta""#).count() >= 2,
+        "post-EOF wait must remain visibly alive: {frames}"
+    );
+    assert!(frames.contains("done"));
+    assert_valid_stream(&frames, Some("end_turn"));
+}
+
+#[tokio::test]
+async fn stderr_can_finish_before_the_post_eof_leader() {
+    let (sender, mut receiver) = channel();
+    let options = short_post_eof_options();
+    let mut process = child(concat!(
+        "exec 2>&-; ",
+        r#"printf '%s\n' '{"type":"result","subtype":"success","result":"done"}'; "#,
+        "exec 1>&-; sleep 0.04",
+    ));
+    consume_subscription_stream_with_options(&mut process, &sender, &options, "subscription-test")
+        .await
+        .expect("stderr-first stream completed");
+
+    let frames = output(&mut receiver).await;
+    assert!(frames.contains("done"));
+    assert_valid_stream(&frames, Some("end_turn"));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn stderr_drain_grace_kills_a_descriptor_holding_descendant() {
+    let fixture = BackgroundSleepFixture::new();
+    let script = fixture.stderr_holder_script(concat!(
+        r#"printf '%s\n' '{"type":"result","subtype":"success","result":"done"}'; "#,
+        "exit 0",
+    ));
+    let (sender, mut receiver) = channel();
+    let options = short_post_eof_options();
+    let mut process = child(&script);
+    let (result, background) = tokio::join!(
+        consume_subscription_stream_with_options(
+            &mut process,
+            &sender,
+            &options,
+            "subscription-test",
+        ),
+        fixture.release_after_pid(),
+    );
+    result.expect("valid result survives stderr drain cleanup");
+    let mut background = background.expect("descriptor holder started");
+    background.assert_exited().await;
+
+    let frames = output(&mut receiver).await;
+    assert!(frames.contains("done"));
+    assert_valid_stream(&frames, Some("end_turn"));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn receiver_close_after_stdout_eof_kills_the_entire_process_group() {
+    let fixture = BackgroundSleepFixture::new();
+    let script = fixture.stderr_holder_script(concat!(
+        r#"printf '%s\n' '{"type":"result","subtype":"success","result":"done"}'; "#,
+        "exec 1>&-",
+    ));
+    let (sender, receiver) = channel();
+    let options = short_post_eof_options();
+    let mut process = child(&script);
+    let wait_for_process = fixture.release_after_pid();
+    tokio::pin!(wait_for_process);
+    let consume = consume_subscription_stream_with_options(
+        &mut process,
+        &sender,
+        &options,
+        "subscription-test",
+    );
+    tokio::pin!(consume);
+    let mut background = tokio::select! {
+        background = &mut wait_for_process => background.expect("background process started"),
+        result = &mut consume => panic!("stream ended before receiver close: {result:?}"),
+    };
+    drop(receiver);
+    tokio::time::timeout(Duration::from_secs(2), consume)
+        .await
+        .expect("receiver-close cleanup is bounded")
+        .expect("receiver-close cleanup succeeds");
+    background.assert_exited().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn nonzero_exit_after_stderr_grace_preserves_the_diagnostic() {
+    let fixture = BackgroundSleepFixture::new();
+    let script = fixture.stderr_holder_script(concat!(
+        "printf 'post-eof diagnostic' >&2; ",
+        r#"printf '%s\n' '{"type":"result","subtype":"success","result":"done"}'; "#,
+        "exit 7",
+    ));
+    let (sender, mut receiver) = channel();
+    let options = short_post_eof_options();
+    let mut process = child(&script);
+    let (result, background) = tokio::join!(
+        consume_subscription_stream_with_options(
+            &mut process,
+            &sender,
+            &options,
+            "subscription-test",
+        ),
+        fixture.release_after_pid(),
+    );
+    let error = result.expect_err("nonzero leader status must fail");
+    assert!(error.to_string().contains("post-eof diagnostic"));
+    let mut background = background.expect("descriptor holder started");
+    background.assert_exited().await;
+    assert_valid_stream(&output(&mut receiver).await, None);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn blocked_subagent_terminates_a_hanging_child_and_finishes_the_stream() {
+    let (sender, mut receiver) = channel();
+    let mut options = SubscriptionOptions::internal(
+        Arc::new(tokio::sync::Semaphore::new(1)),
+        Duration::from_secs(2),
+    );
+    options.tools = vec!["Agent".to_owned()];
+    options.tool_context = Some(SubscriptionToolContext {
+        agent_efforts: Arc::new(AgentEffortIntents::default()),
+        model_catalog: ModelCatalog::default(),
+        client_user_id: None,
+        parent_model: "claude-haiku-4-5".to_owned(),
+        system: json!(null),
+        user_messages: Vec::new(),
+    });
+    let fixture = BackgroundSleepFixture::new();
+    let blocked_event = r#"printf '%s\n' '{"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"tool_use","id":"unsupported","name":"Agent","input":{"prompt":"work","subagent_type":"claudex-sonnet"}}]}}'"#;
+    let mut child = child(&fixture.script(blocked_event));
+    let attempt = tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::join!(
+            consume_subscription_stream_with_options(
+                &mut child,
+                &sender,
+                &options,
+                "subscription-test",
+            ),
+            fixture.release_after_pid(),
+        )
+    })
+    .await;
+    if attempt.is_err() {
+        crate::anthropic::subscription::terminate_subscription(&mut child)
+            .await
+            .expect("clean up timed-out blocked SubAgent fixture");
+    }
+    let (result, background) = attempt.expect("blocked SubAgent must terminate promptly");
+    result.expect("blocked SubAgent must finish the parent stream");
+    let mut background = background.expect("blocked fixture must record its background PID");
+    assert!(child.try_wait().expect("query child status").is_some());
+    background.assert_exited().await;
+    let frames = output(&mut receiver).await;
+    assert!(frames.contains("was not started. Continue without it."));
+    assert!(frames.contains(r#""stop_reason":"end_turn""#));
+    assert!(frames.contains("event: message_stop"));
+}
+
+#[tokio::test]
 async fn reports_process_failure_and_stderr() {
     let (sender, mut receiver) = channel();
     let error = consume_subscription_stream(child("printf 'fixture failure' >&2; exit 7"), &sender)
@@ -911,9 +1661,33 @@ async fn reports_process_failure_and_stderr() {
     assert!(output(&mut receiver).await.is_empty());
 }
 
+#[tokio::test]
+async fn validates_process_exit_before_emitting_message_stop_and_preserves_failure_type() {
+    let (sender, mut receiver) = channel();
+    let error = consume_subscription_stream(
+        child(concat!(
+            r#"printf '%s\n' '{"type":"stream_event","event":{"delta":{"type":"text_delta","text":"partial"}}}'; "#,
+            r#"printf '%s\n' '{"type":"result","subtype":"success","result":"done"}'; "#,
+            "printf 'Authentication failed' >&2; exit 7",
+        )),
+        &sender,
+    )
+    .await
+    .expect_err("nonzero exit after result must fail");
+
+    let failure = crate::anthropic::subscription::subscription_failure(&error)
+        .expect("typed subscription failure must survive streamed output");
+    assert_eq!(failure.status_hint(), 401);
+    assert!(!failure.is_internal_retryable());
+    assert!(!failure.is_outer_retryable());
+    let frames = output(&mut receiver).await;
+    assert!(frames.contains("partial"));
+    assert_valid_stream(&frames, None);
+}
+
 #[cfg(unix)]
 #[tokio::test]
-async fn retries_a_transient_stream_502_before_emitting_error() {
+async fn retries_an_empty_local_stream_exit_once() {
     let directory = tempfile::tempdir().expect("create stream retry fixture directory");
     let attempts = directory.path().join("attempts");
     let program = directory.path().join("stream-retry-fixture.sh");
@@ -924,10 +1698,11 @@ async fn retries_a_transient_stream_502_before_emitting_error() {
             r#"#!/bin/sh
 set -eu
 if [ ! -f '{attempts_path}' ]; then
-    : > '{attempts_path}'
+    printf 'attempt\n' > '{attempts_path}'
     cat >/dev/null
     exit 1
 fi
+printf 'attempt\n' >> '{attempts_path}'
 cat >/dev/null
 printf '%s\n' '{{"type":"result","subtype":"success","result":"STREAM_RETRIED_OK"}}'
 "#
@@ -954,7 +1729,62 @@ printf '%s\n' '{{"type":"result","subtype":"success","result":"STREAM_RETRIED_OK
     let frames = output(&mut receiver).await;
     assert!(frames.contains("STREAM_RETRIED_OK"));
     assert!(!frames.contains("event: error"));
-    assert!(attempts.exists());
+    assert_eq!(
+        fs::read_to_string(&attempts)
+            .expect("attempt log")
+            .lines()
+            .count(),
+        2
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn does_not_retry_a_structured_stream_502_internally() {
+    let directory = tempfile::tempdir().expect("create stream failure fixture directory");
+    let attempts = directory.path().join("attempts");
+    let program = directory.path().join("stream-failure-fixture.sh");
+    let attempts_path = attempts.display();
+    fs::write(
+        &program,
+        format!(
+            r#"#!/bin/sh
+set -eu
+cat >/dev/null
+printf 'attempt\n' >> '{attempts_path}'
+printf '%s\n' '{{"type":"result","subtype":"error","is_error":true,"result":"502 Bad Gateway"}}'
+exit 1
+"#
+        ),
+    )
+    .expect("write stream failure fixture");
+    fs::set_permissions(&program, fs::Permissions::from_mode(0o755))
+        .expect("make stream failure fixture executable");
+    let (sender, mut receiver) = channel();
+    let options = SubscriptionOptions::internal(
+        Arc::new(tokio::sync::Semaphore::new(1)),
+        Duration::from_secs(5),
+    );
+
+    run_subscription_stream(
+        sender,
+        program,
+        "claude-haiku-4-5".to_owned(),
+        "prompt".to_owned(),
+        options,
+    )
+    .await;
+
+    let frames = output(&mut receiver).await;
+    assert!(frames.contains("502 Bad Gateway"));
+    assert!(frames.contains("event: error"));
+    assert_eq!(
+        fs::read_to_string(&attempts)
+            .expect("attempt log")
+            .lines()
+            .count(),
+        1
+    );
 }
 
 #[tokio::test]
@@ -969,24 +1799,34 @@ async fn stops_cleanly_when_the_receiver_closes() {
 #[cfg(unix)]
 #[tokio::test]
 async fn stream_timeout_terminates_the_entire_subscription_process_group() {
-    let directory = stalled_stream_program();
+    let fixture = BackgroundSleepFixture::new();
+    let program = fixture.program();
     let (sender, _receiver) = channel();
     let options = SubscriptionOptions::internal(
         Arc::new(tokio::sync::Semaphore::new(1)),
-        Duration::from_millis(100),
+        Duration::from_secs(5),
     );
 
-    let error = stream_subscription_model(
-        &sender,
-        &directory.path().join("stalled-stream.sh"),
-        "model",
-        "prompt",
-        &options,
-    )
+    let (result, background) = tokio::time::timeout(Duration::from_secs(10), async {
+        tokio::join!(
+            stream_subscription_model(&sender, &program, "model", "prompt", &options),
+            fixture.release_after_pid(),
+        )
+    })
     .await
-    .expect_err("stalled subscription stream must time out");
+    .expect("stalled subscription test must finish within its cleanup bound");
+    let mut background = background.unwrap_or_else(|| {
+        panic!("timeout fixture did not start its background process: {result:?}")
+    });
+    let error = result.expect_err("stalled subscription stream must time out");
+    background.assert_exited().await;
 
     assert!(error.to_string().contains("timed out"));
+    let failure = crate::anthropic::subscription::subscription_failure(&error)
+        .expect("stream timeout must be typed");
+    assert_eq!(failure.status_hint(), 424);
+    assert!(!failure.is_internal_retryable());
+    assert!(!failure.is_outer_retryable());
 }
 
 #[tokio::test]

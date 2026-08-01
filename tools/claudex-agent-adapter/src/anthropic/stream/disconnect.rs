@@ -24,21 +24,56 @@ impl Bridge {
         }
     }
 
-    pub(super) async fn disconnect_stream(
+    pub(in crate::anthropic) async fn disconnect_stream(
         &self,
         session: &Arc<Session>,
         events: Arc<crate::app_server::ThreadEvents>,
     ) -> StreamTurn {
         // Cancel before unregistering so a racing outer follow-up can still
         // discover this session, preempt the gate, and reuse the provider thread.
-        if requires_disconnected_drain(
-            self.app.cancel_turn(&session.thread_id).await,
-            &session.thread_id,
-        ) {
-            self.detach_non_cancellable_turn(session, events).await;
+        match self.app.cancel_turn(&session.thread_id).await {
+            Ok(TurnCancellation::Settled) => {
+                self.remove_session(session).await;
+            }
+            Ok(TurnCancellation::Unsupported) => {
+                self.handle_unsupported_disconnect(session, events).await;
+            }
+            Err(error) => {
+                warn_cancel_failure(&error, &session.thread_id);
+                self.detach_non_cancellable_turn(session, events).await;
+                self.remove_session(session).await;
+            }
         }
-        self.remove_session(session).await;
         StreamTurn::Disconnected
+    }
+
+    async fn handle_unsupported_disconnect(
+        &self,
+        session: &Arc<Session>,
+        events: Arc<crate::app_server::ThreadEvents>,
+    ) {
+        if session.pending_tools.lock().await.is_empty() {
+            // No tool call has reached Claude Code yet. Keep consuming the
+            // non-cancellable turn so a delayed call receives a rejection.
+            self.detach_non_cancellable_turn(session, events).await;
+            self.remove_session(session).await;
+            return;
+        }
+        // A client-visible tool call can no longer receive a result. Abort and
+        // reap the provider instead of leaving hidden work attached to it.
+        self.remove_session(session).await;
+        self.discard_pending_disconnected_tools(session).await;
+        self.abort_disconnected_provider(&session.thread_id).await;
+    }
+
+    async fn abort_disconnected_provider(&self, thread_id: &str) {
+        if let Err(error) = self.app.abort_turn_provider(thread_id).await {
+            warn_disconnect_failure(
+                &error,
+                thread_id,
+                "failed to abort non-cancellable disconnected provider",
+            );
+        }
     }
 
     async fn detach_non_cancellable_turn(
@@ -57,17 +92,12 @@ impl Bridge {
         rejected_request_ids: HashSet<String>,
     ) {
         let app = Arc::clone(&self.app);
-        tokio::spawn(async move {
-            if let Err(error) =
-                drain_disconnected_turn(&app, &model, events, rejected_request_ids).await
-            {
-                warn_disconnect_failure(
-                    &error,
-                    &model,
-                    "failed to drain disconnected non-cancellable turn",
-                );
-            }
-        });
+        tokio::spawn(drain_disconnected_turn_with_warning(
+            app,
+            model,
+            events,
+            rejected_request_ids,
+        ));
     }
 
     async fn reject_pending_disconnected_tools(&self, session: &Session) -> HashSet<String> {
@@ -76,31 +106,44 @@ impl Bridge {
             .remove_tool_results(pending.iter().map(|(tool_use_id, _)| tool_use_id.as_str()));
         let rejected_request_ids = request_id_keys(&pending);
         for (_, request_id) in pending {
-            if let Err(error) =
-                reject_disconnected_tool(&self.app, &session.model, request_id).await
-            {
-                warn_disconnect_failure(
-                    &error,
-                    &session.thread_id,
-                    "failed to reject pending tool after client disconnect",
-                );
-            }
+            reject_disconnected_tool_with_warning(self, session, request_id).await;
         }
         rejected_request_ids
     }
+
+    async fn discard_pending_disconnected_tools(&self, session: &Session) {
+        let pending = take_pending_disconnected_tools(session).await;
+        self.agent_efforts
+            .remove_tool_results(pending.iter().map(|(tool_use_id, _)| tool_use_id.as_str()));
+    }
 }
 
-pub(super) fn requires_disconnected_drain(
-    cancellation: anyhow::Result<TurnCancellation>,
-    thread_id: &str,
-) -> bool {
-    match cancellation {
-        Ok(TurnCancellation::Settled) => false,
-        Ok(TurnCancellation::Unsupported) => true,
-        Err(error) => {
-            warn_cancel_failure(&error, thread_id);
-            true
-        }
+async fn drain_disconnected_turn_with_warning(
+    app: Arc<crate::agent_backend::AgentBackend>,
+    model: String,
+    events: Arc<crate::app_server::ThreadEvents>,
+    rejected_request_ids: HashSet<String>,
+) {
+    if let Err(error) = drain_disconnected_turn(&app, &model, events, rejected_request_ids).await {
+        warn_disconnect_failure(
+            &error,
+            &model,
+            "failed to drain disconnected non-cancellable turn",
+        );
+    }
+}
+
+async fn reject_disconnected_tool_with_warning(
+    bridge: &Bridge,
+    session: &Session,
+    request_id: Value,
+) {
+    if let Err(error) = reject_disconnected_tool(&bridge.app, &session.model, request_id).await {
+        warn_disconnect_failure(
+            &error,
+            &session.thread_id,
+            "failed to reject pending tool after client disconnect",
+        );
     }
 }
 

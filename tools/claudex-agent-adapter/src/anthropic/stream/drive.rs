@@ -5,10 +5,25 @@ use super::{
     send_stream_error,
 };
 use crate::anthropic::{
-    ActiveTurn, Bridge,
-    model_concurrency::ModelPermit,
-    subagent_timeout::{completes_within, subagent_response_timeout},
+    ActiveTurn, Bridge, model_concurrency::ModelPermit, subagent_timeout::completes_within,
 };
+
+struct ContextRetryStream {
+    turn: ActiveTurn,
+    sender: StreamSender,
+    error: anyhow::Error,
+    builder: SegmentBuilder,
+    model_permit: Option<ModelPermit>,
+    is_subagent: bool,
+    run_in_background: bool,
+}
+
+pub(super) struct StreamDriveOptions {
+    pub(super) model_permit: Option<ModelPermit>,
+    pub(super) is_subagent: bool,
+    pub(super) run_in_background: bool,
+    pub(super) timeout: Option<Duration>,
+}
 
 impl Bridge {
     #[cfg(test)]
@@ -32,14 +47,17 @@ impl Bridge {
         is_subagent: bool,
         run_in_background: bool,
     ) {
-        let timeout = response_timeout(is_subagent, run_in_background);
+        let timeout = response_timeout(self.subagent_hard_timeout, is_subagent, run_in_background);
         self.drive_subagent_stream_with_timeout(
             turn,
             sender,
             builder,
-            model_permit,
-            is_subagent,
-            timeout,
+            StreamDriveOptions {
+                model_permit,
+                is_subagent,
+                run_in_background,
+                timeout,
+            },
         )
         .await;
     }
@@ -49,22 +67,22 @@ impl Bridge {
         turn: ActiveTurn,
         sender: StreamSender,
         builder: SegmentBuilder,
-        model_permit: Option<ModelPermit>,
-        is_subagent: bool,
-        timeout: Option<Duration>,
+        options: StreamDriveOptions,
     ) {
-        let input_tokens = turn.input_tokens;
+        let StreamDriveOptions {
+            model_permit,
+            is_subagent,
+            run_in_background,
+            timeout,
+        } = options;
         let waited = self
             .wait_for_stream_turn(&turn, &sender, builder, timeout)
             .await;
         let Some(waited) = waited else {
-            let mut turn = turn;
-            self.detach_session(&turn.session).await;
-            turn.detached = true;
-            let progress = self.background_progress_text(&turn).await;
-            self.continue_subagent_in_background(turn, model_permit);
-            self.send_background_progress(input_tokens, &sender, &progress)
-                .await;
+            let timeout = timeout.expect("elapsed stream wait has a configured timeout");
+            let error = self.expire_subagent_turn(&turn, timeout).await;
+            drop(model_permit);
+            send_stream_error(&sender, error).await;
             return;
         };
         self.finish_stream_turn(
@@ -73,7 +91,7 @@ impl Bridge {
             waited,
             model_permit,
             is_subagent,
-            timeout.is_some(),
+            run_in_background,
         )
         .await;
     }
@@ -93,30 +111,7 @@ impl Bridge {
             sender,
             builder,
         );
-        match timeout {
-            Some(timeout) => completes_within(timeout, wait).await,
-            None => Some(wait.await),
-        }
-    }
-
-    async fn send_background_progress(
-        &self,
-        input_tokens: u64,
-        sender: &StreamSender,
-        progress: &str,
-    ) {
-        let mut notice = SegmentBuilder::new(input_tokens);
-        if notice
-            .text_delta(
-                &serde_json::json!({"params":{"delta":progress}}),
-                Some(sender),
-            )
-            .await
-            .is_ok()
-            && let Ok(segment) = notice.finish(Some(sender)).await
-        {
-            send_stream_completion(sender, &segment).await;
-        }
+        completes_within(timeout, wait).await
     }
 
     async fn finish_stream_turn(
@@ -128,81 +123,113 @@ impl Bridge {
         is_subagent: bool,
         run_in_background: bool,
     ) {
-        let ActiveTurn {
-            session,
-            events,
-            extras,
-            routing_system: _,
-            input_tokens,
-            retry,
-            gate,
-            ..
-        } = turn;
-        let _gate = gate;
         match waited {
             Ok(StreamTurn::Segment {
                 segment,
                 provider_settled,
             }) => {
-                if self
-                    .finish_if_stream_closed(&sender, &session, &events, provider_settled)
+                self.finish_completed_stream(turn, &sender, segment, provider_settled)
                     .await
-                {
-                    return;
-                }
-                commit_transcript(&session, extras, &segment).await;
-                send_stream_completion(&sender, &segment).await;
-                self.finish_if_stream_closed(&sender, &session, &events, provider_settled)
-                    .await;
             }
-            Ok(StreamTurn::ContextWindow(error)) => {
-                drop(_gate);
-                let Some(retry) = retry else {
-                    self.remove_session(&session).await;
-                    send_stream_error(&sender, error).await;
-                    return;
-                };
-                match self
-                    .retry_after_context_window(retry, &session, input_tokens)
-                    .await
-                {
-                    Ok(retried) => {
-                        Box::pin(self.drive_subagent_stream(
-                            retried,
-                            sender,
-                            SegmentBuilder::new(input_tokens),
-                            model_permit,
-                            is_subagent,
-                            run_in_background,
-                        ))
-                        .await;
-                    }
-                    Err(retry_error) => send_stream_error(&sender, retry_error).await,
-                }
+            Ok(StreamTurn::ContextWindow { error, builder }) => {
+                self.retry_context_stream(ContextRetryStream {
+                    turn,
+                    sender,
+                    error,
+                    builder,
+                    model_permit,
+                    is_subagent,
+                    run_in_background,
+                })
+                .await
             }
             Ok(StreamTurn::Disconnected) => {}
             Err(error) => {
                 tracing::warn!(?error, "streaming turn failed before message_stop");
-                self.remove_session(&session).await;
+                self.remove_session(&turn.session).await;
                 send_stream_error(&sender, error).await;
             }
         }
     }
+
+    async fn finish_completed_stream(
+        &self,
+        turn: ActiveTurn,
+        sender: &StreamSender,
+        segment: crate::anthropic::Segment,
+        provider_settled: bool,
+    ) {
+        if self
+            .finish_if_stream_closed(sender, &turn.session, &turn.events, provider_settled)
+            .await
+        {
+            return;
+        }
+        commit_transcript(&turn.session, turn.extras, &segment).await;
+        send_stream_completion(sender, &segment).await;
+        self.finish_if_stream_closed(sender, &turn.session, &turn.events, provider_settled)
+            .await;
+    }
+
+    async fn retry_context_stream(self: Arc<Self>, input: ContextRetryStream) {
+        let ActiveTurn {
+            session,
+            input_tokens,
+            retry,
+            gate,
+            ..
+        } = input.turn;
+        drop(gate);
+        let Some(retry) = retry else {
+            self.remove_session(&session).await;
+            send_stream_error(&input.sender, input.error).await;
+            return;
+        };
+        let retried = match self
+            .retry_after_context_window(retry, &session, input_tokens)
+            .await
+        {
+            Ok(retried) => retried,
+            Err(error) => {
+                send_stream_error(&input.sender, error).await;
+                return;
+            }
+        };
+        Box::pin(self.drive_subagent_stream(
+            retried,
+            input.sender,
+            input.builder,
+            input.model_permit,
+            input.is_subagent,
+            input.run_in_background,
+        ))
+        .await;
+    }
 }
 
-fn response_timeout(is_subagent: bool, run_in_background: bool) -> Option<Duration> {
-    (is_subagent && run_in_background).then(subagent_response_timeout)
+fn response_timeout(
+    configured: Option<Duration>,
+    is_subagent: bool,
+    run_in_background: bool,
+) -> Option<Duration> {
+    (is_subagent && run_in_background)
+        .then_some(configured)
+        .flatten()
 }
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::response_timeout;
 
     #[test]
-    fn only_background_subagents_get_a_response_timeout() {
-        assert!(response_timeout(false, false).is_none());
-        assert!(response_timeout(false, true).is_none());
-        assert!(response_timeout(true, false).is_none());
-        assert!(response_timeout(true, true).is_some());
+    fn only_background_subagents_get_an_explicit_hard_timeout() {
+        let configured = Some(Duration::from_secs(7));
+        assert_eq!(response_timeout(configured, false, false), None);
+        assert_eq!(response_timeout(configured, false, true), None);
+        assert_eq!(response_timeout(configured, true, false), None);
+        assert_eq!(response_timeout(configured, true, true), configured);
+        assert_eq!(response_timeout(None, true, true), None);
     }
 }

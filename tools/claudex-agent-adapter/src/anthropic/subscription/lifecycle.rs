@@ -1,4 +1,7 @@
-use std::process::{Command as StdCommand, Output, Stdio};
+use std::{
+    process::{Command as StdCommand, Output, Stdio},
+    time::Duration,
+};
 
 use anyhow::{Context, Result};
 use tokio::{
@@ -6,7 +9,7 @@ use tokio::{
     process::{Child, ChildStdin},
 };
 
-use super::write_subscription_prompt;
+use super::{DEFAULT_TERMINATION_TIMEOUT, write_subscription_prompt};
 
 pub(super) async fn collect_subscription_output(
     child: &mut Child,
@@ -49,16 +52,23 @@ pub(super) async fn terminate_after_subscription_failure<T>(
 
 pub(in crate::anthropic) async fn terminate_subscription(child: &mut Child) -> Result<()> {
     let process_group = child.id();
+    terminate_subscription_process_group(child, process_group, DEFAULT_TERMINATION_TIMEOUT).await
+}
+
+pub(in crate::anthropic) async fn terminate_subscription_process_group(
+    child: &mut Child,
+    process_group: Option<u32>,
+    termination_timeout: Duration,
+) -> Result<()> {
     if child.try_wait()?.is_none() {
         let _ = child.start_kill();
     }
     if let Some(process_group) = process_group {
         terminate_process_group(process_group);
     }
-    child
-        .wait()
+    tokio::time::timeout(termination_timeout, child.wait())
         .await
-        .context("wait for terminated Claude subscription")?;
+        .context("timed out reaping terminated Claude subscription")??;
     Ok(())
 }
 

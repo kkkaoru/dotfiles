@@ -15,7 +15,9 @@ use super::subscription::{
 };
 use crate::NONINTERACTIVE_CHILD_ENV;
 use crate::agent_backend::{AgentBackend, BackendKind, BackendRoute};
-use crate::anthropic::{Bridge, MessagesRequest, agent_effort::AgentEffort};
+use crate::anthropic::{
+    Bridge, MessagesRequest, agent_effort::AgentEffort, subscription_request::is_compaction_request,
+};
 use crate::provider_config::WorkerRoute;
 
 #[test]
@@ -61,6 +63,74 @@ fn subscription_without_explicit_tools_does_not_disable_claude_tools() {
             .iter()
             .any(|argument| argument.to_str() == Some("--allowedTools"))
     );
+}
+
+#[test]
+fn explicit_empty_tools_disable_customizations_and_preserve_structured_output() {
+    let mut options = SubscriptionOptions::internal(
+        Arc::new(tokio::sync::Semaphore::new(1)),
+        Duration::from_secs(1),
+    );
+    let schema = r#"{"additionalProperties":false,"properties":{"ok":{"type":"boolean"}},"required":["ok"],"type":"object"}"#;
+    options.disable_tools = true;
+    options.json_schema = Some(schema.to_owned());
+    let command = subscription_command(
+        Path::new("claude"),
+        "claude-opus-5",
+        &options,
+        OutputMode::StreamJson,
+    );
+    let args = command
+        .as_std()
+        .get_args()
+        .map(|argument| argument.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+
+    assert!(args.iter().any(|argument| argument == "--safe-mode"));
+    assert!(args.windows(2).any(|pair| pair == ["--tools", ""]));
+    assert!(args.windows(2).any(|pair| pair == ["--allowedTools", ""]));
+    assert!(
+        args.windows(2)
+            .any(|pair| pair == ["--json-schema", schema])
+    );
+}
+
+#[test]
+fn detects_only_the_latest_verified_compaction_instruction() {
+    let request = |messages| MessagesRequest {
+        model: "claude-opus-5".to_owned(),
+        system: json!(null),
+        messages,
+        tools: Vec::new(),
+        stream: true,
+        output_config: json!({}),
+        metadata: json!({}),
+        working_directory: None,
+        disabled_subagent_models: Default::default(),
+        claudex_collaborator_model: None,
+    };
+    let summary = concat!(
+        "CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.\n",
+        "Your task is to create a detailed summary of the conversation so far"
+    );
+    for content in [
+        json!(summary),
+        json!([{"type":"text", "text":summary}]),
+        json!("/compact Preserve the active goal and current implementation state."),
+        json!("<command-name>/compact</command-name>"),
+    ] {
+        assert!(is_compaction_request(&request(vec![json!({
+            "role":"user", "content":content
+        })])));
+    }
+    assert!(!is_compaction_request(&request(vec![
+        json!({"role":"user", "content":summary}),
+        json!({"role":"assistant", "content":"prior summary"}),
+        json!({"role":"user", "content":"continue ordinary work"}),
+    ])));
+    assert!(!is_compaction_request(&request(vec![json!({
+        "role":"user", "content":"/compaction is not a command"
+    })])));
 }
 
 #[test]
@@ -184,7 +254,7 @@ async fn subscription_timeout_terminates_and_reaps_the_model_process() {
         .expect("make timeout fixture executable");
     let options = SubscriptionOptions::internal(
         Arc::new(tokio::sync::Semaphore::new(1)),
-        Duration::from_millis(100),
+        Duration::from_secs(1),
     );
 
     let error = run_subscription_model(&program, "model", "prompt", options)
@@ -192,11 +262,86 @@ async fn subscription_timeout_terminates_and_reaps_the_model_process() {
         .expect_err("stalled subscription must time out");
 
     assert!(error.to_string().contains("timed out"));
+    let failure = super::subscription::subscription_failure(&error)
+        .expect("subscription timeout must be typed");
+    assert_eq!(failure.status_hint(), 424);
+    assert!(!failure.is_internal_retryable());
+    assert!(!failure.is_outer_retryable());
+    assert!(!should_retry_subscription(&error));
+    assert_eq!(
+        super::error::http_status(axum::http::StatusCode::BAD_GATEWAY, &error),
+        axum::http::StatusCode::FAILED_DEPENDENCY
+    );
+    assert_eq!(
+        super::error::error_type(&error),
+        super::error::NON_RETRYABLE_ERROR_TYPE
+    );
+}
+
+#[tokio::test]
+async fn does_not_retry_a_typed_subscription_timeout() {
+    let attempts = std::sync::atomic::AtomicUsize::new(0);
+
+    let error = super::subscription::with_transient_retries("claude-test", || {
+        attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        std::future::ready(Err::<(), _>(super::subscription::failure::timeout_failure(
+            "claude-test",
+            Duration::from_secs(5),
+        )))
+    })
+    .await
+    .expect_err("typed timeout must remain terminal");
+
+    assert!(error.to_string().contains("timed out"));
+    assert_eq!(attempts.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 
 #[cfg(unix)]
 #[tokio::test]
-async fn retries_a_transient_subscription_502_before_returning_success() {
+async fn retries_an_empty_local_subscription_exit_exactly_once() {
+    let directory = tempfile::tempdir().expect("create local retry fixture directory");
+    let attempts = directory.path().join("attempts");
+    let program = directory.path().join("local-retry-fixture.sh");
+    fs::write(
+        &program,
+        format!(
+            r#"#!/bin/sh
+set -eu
+cat >/dev/null
+printf 'attempt\n' >> '{attempts}'
+if [ "$(wc -l < '{attempts}')" -eq 1 ]; then
+    exit 1
+fi
+printf '%s\n' '{{"subtype":"success","is_error":false,"result":"RETRIED_OK"}}'
+"#,
+            attempts = attempts.display(),
+        ),
+    )
+    .expect("write local retry fixture");
+    fs::set_permissions(&program, fs::Permissions::from_mode(0o755))
+        .expect("make local retry fixture executable");
+    let options = SubscriptionOptions::internal(
+        Arc::new(tokio::sync::Semaphore::new(1)),
+        Duration::from_secs(5),
+    );
+
+    let result = run_subscription_model(&program, "claude-test", "prompt", options)
+        .await
+        .expect("empty local exit should retry once");
+
+    assert_eq!(result, "RETRIED_OK");
+    assert_eq!(
+        fs::read_to_string(attempts)
+            .expect("attempt log")
+            .lines()
+            .count(),
+        2
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn does_not_retry_a_structured_upstream_502_internally() {
     let directory = tempfile::tempdir().expect("create retry fixture directory");
     let attempts = directory.path().join("attempts");
     let program = directory.path().join("retry-fixture.sh");
@@ -206,14 +351,9 @@ async fn retries_a_transient_subscription_502_before_returning_success() {
         format!(
             r#"#!/bin/sh
 set -eu
-if [ ! -f '{attempts_path}' ]; then
-    : > '{attempts_path}'
-    cat >/dev/null
-    printf '%s\n' '{{"subtype":"error","is_error":true,"result":"502 Bad Gateway"}}'
-    exit 0
-fi
 cat >/dev/null
-printf '%s\n' '{{"subtype":"success","result":"RETRIED_OK"}}'
+printf 'attempt\n' >> '{attempts_path}'
+printf '%s\n' '{{"subtype":"error","is_error":true,"result":"502 Bad Gateway"}}'
 "#
         ),
     )
@@ -225,17 +365,21 @@ printf '%s\n' '{{"subtype":"success","result":"RETRIED_OK"}}'
         Arc::new(tokio::sync::Semaphore::new(1)),
         Duration::from_secs(5),
     );
-    let result = run_subscription_model(&program, "claude-haiku-4-5", "prompt", options)
+    let error = run_subscription_model(&program, "claude-haiku-4-5", "prompt", options)
         .await
-        .expect("transient 502 must be retried");
+        .expect_err("upstream 502 must be delegated to the outer retry policy");
 
-    assert_eq!(result, "RETRIED_OK");
-    assert!(attempts.exists());
-    assert!(should_retry_subscription(&anyhow::anyhow!(
+    assert!(error.to_string().contains("502 Bad Gateway"));
+    assert_eq!(
+        fs::read_to_string(&attempts)
+            .expect("attempt log")
+            .lines()
+            .count(),
+        1
+    );
+    assert!(!should_retry_subscription(&error));
+    assert!(!should_retry_subscription(&anyhow::anyhow!(
         "502 Bad Gateway"
-    )));
-    assert!(should_retry_subscription(&anyhow::anyhow!(
-        "Claude subscription model claude-haiku-4-5 exited with exit status: 1: "
     )));
     assert!(!should_retry_subscription(&anyhow::anyhow!(
         "Claude subscription model claude-haiku-4-5 exited with exit status: 1: fixture failure"
@@ -244,6 +388,40 @@ printf '%s\n' '{{"subtype":"success","result":"RETRIED_OK"}}'
         "502 Bad Gateway; subscription stream already emitted frames"
     )));
     assert_eq!(transient_retry_delay(1), Duration::from_millis(250));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn nonzero_subscription_exit_prefers_sanitized_stdout_json() {
+    let directory = tempfile::tempdir().expect("create failure fixture directory");
+    let program = directory.path().join("stdout-failure-fixture.sh");
+    fs::write(
+        &program,
+        r#"#!/bin/sh
+set -eu
+cat >/dev/null
+printf '%s\n' '{"subtype":"error","is_error":true,"result":"Authentication failed api_key=fixture-secret"}'
+printf '%s\n' 'less useful stderr' >&2
+exit 1
+"#,
+    )
+    .expect("write failure fixture");
+    fs::set_permissions(&program, fs::Permissions::from_mode(0o755))
+        .expect("make failure fixture executable");
+    let options = SubscriptionOptions::internal(
+        Arc::new(tokio::sync::Semaphore::new(1)),
+        Duration::from_secs(5),
+    );
+
+    let error = run_subscription_model(&program, "claude-test", "prompt", options)
+        .await
+        .expect_err("nonzero subscription process must fail");
+    let message = error.to_string();
+    assert!(message.contains("Authentication failed"));
+    assert!(message.contains("trace="));
+    assert!(!message.contains("less useful stderr"));
+    assert!(!message.contains("fixture-secret"));
+    assert!(!should_retry_subscription(&error));
 }
 
 #[test]
@@ -437,8 +615,6 @@ fn selects_subscription_workspace_and_outer_tools() {
             "CronCreate",
             "CronDelete",
             "CronList",
-            "WebSearch",
-            "WebFetch",
         ]
     );
     assert_eq!(
@@ -452,14 +628,12 @@ fn selects_subscription_workspace_and_outer_tools() {
             "CronCreate",
             "CronDelete",
             "CronList",
-            "WebSearch",
-            "WebFetch",
         ]
     );
 }
 
 #[test]
-fn search_worker_receives_native_web_tools_even_when_child_tools_are_empty() {
+fn search_worker_does_not_receive_unrequested_native_web_tools() {
     let request = MessagesRequest {
         model: "claude-haiku-4-5".to_owned(),
         system: json!("name: claudex-haiku-search\ntools: WebSearch,WebFetch"),
@@ -473,14 +647,11 @@ fn search_worker_receives_native_web_tools_even_when_child_tools_are_empty() {
         claudex_collaborator_model: None,
     };
 
-    assert_eq!(
-        super::subscription::requested_tools_for_request(&request, true),
-        ["WebSearch", "WebFetch"]
-    );
+    assert!(super::subscription::requested_tools_for_request(&request, true).is_empty());
 }
 
 #[test]
-fn resumed_subscription_request_rehydrates_file_and_delegation_tools() {
+fn resumed_subscription_request_does_not_infer_tools_from_history() {
     let request = MessagesRequest {
         model: "claude-opus-5".to_owned(),
         system: json!("resumed main session"),
@@ -497,13 +668,7 @@ fn resumed_subscription_request_rehydrates_file_and_delegation_tools() {
         claudex_collaborator_model: None,
     };
 
-    let tools = super::subscription::requested_tools_for_request(&request, false);
-    for expected in ["Bash", "Read", "Write", "Edit", "Agent", "Task"] {
-        assert!(
-            tools.iter().any(|tool| tool == expected),
-            "missing {expected}"
-        );
-    }
+    assert!(super::subscription::requested_tools_for_request(&request, false).is_empty());
 }
 
 #[test]

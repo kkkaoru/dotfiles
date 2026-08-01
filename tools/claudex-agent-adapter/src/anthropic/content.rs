@@ -40,6 +40,7 @@ pub(super) fn request_signature(
         "system": canonical_value(&request.system),
         "tools": request.tools.iter().map(canonical_value).collect::<Vec<_>>(),
         "metadata": request.metadata.get("user_id"),
+        "transport_identity": request.metadata.get("_claudex_transport_identity"),
         "working_directory": request.working_directory,
         "disabled_subagent_models": request.disabled_subagent_models,
         "advisor_model": advisor_model,

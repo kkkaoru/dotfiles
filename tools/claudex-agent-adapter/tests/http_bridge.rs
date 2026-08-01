@@ -2,7 +2,7 @@ mod support;
 
 use std::time::{Duration, Instant};
 
-use reqwest::Client;
+use reqwest::{Client, Response};
 use serde_json::{Value, json};
 use support::{Adapter, base_request, post_json};
 
@@ -36,6 +36,94 @@ async fn wait_for_session_slot_release(client: &Client, adapter: &Adapter) {
             return;
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+async fn active_request_counts(client: &Client, adapter: &Adapter) -> (u64, u64) {
+    let health: Value = client
+        .get(format!("{}/health", adapter.base_url))
+        .send()
+        .await
+        .expect("read adapter health counters")
+        .json()
+        .await
+        .expect("decode adapter health counters");
+    (
+        health["active_http_requests"]
+            .as_u64()
+            .expect("active HTTP request count"),
+        health["active_provider_turns"]
+            .as_u64()
+            .expect("active provider turn count"),
+    )
+}
+
+async fn count_tokens_for_session(
+    client: &Client,
+    adapter: &Adapter,
+    session_id: &str,
+    request: &Value,
+) -> u64 {
+    client
+        .post(format!("{}/v1/messages/count_tokens", adapter.base_url))
+        .header("x-claude-code-session-id", session_id)
+        .json(request)
+        .send()
+        .await
+        .expect("count session tokens")
+        .json::<Value>()
+        .await
+        .expect("decode session token count")["input_tokens"]
+        .as_u64()
+        .expect("numeric input token count")
+}
+
+async fn wait_for_active_request_counts(client: &Client, adapter: &Adapter, expected: (u64, u64)) {
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        poll_active_request_counts(client, adapter, expected),
+    )
+    .await
+    .expect("active request counters did not reach the expected values");
+}
+
+async fn poll_active_request_counts(client: &Client, adapter: &Adapter, expected: (u64, u64)) {
+    while active_request_counts(client, adapter).await != expected {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+async fn read_until_contains(
+    response: &mut Response,
+    stream: &mut String,
+    expected: &str,
+    early_end_message: &str,
+) {
+    while !stream.contains(expected) {
+        let chunk = response
+            .chunk()
+            .await
+            .expect("read response stream")
+            .expect(early_end_message);
+        stream.push_str(&String::from_utf8_lossy(&chunk));
+    }
+}
+
+async fn finish_counted_response(mut response: Response, drop_early: bool) {
+    if drop_early {
+        return;
+    }
+    while response
+        .chunk()
+        .await
+        .expect("read counted stream remainder")
+        .is_some()
+    {}
+}
+
+fn assert_subscription_stream_completion(response: &str, stream: bool) {
+    if stream {
+        assert!(response.contains("event: message_stop"));
     }
 }
 
@@ -208,6 +296,47 @@ async fn serves_models_counts_plain_messages_and_continuations() {
 }
 
 #[tokio::test]
+async fn count_tokens_restores_only_the_matching_transport_identity() {
+    let adapter = Adapter::start().await;
+    let client = Client::new();
+    let mut small = base_request();
+    small["tools"] = lookup_tools();
+    let mut large = base_request();
+    large["tools"] = json!([{
+        "name":"large_lookup",
+        "description":"x".repeat(2_048),
+        "input_schema":{"type":"object","properties":{}}
+    }]);
+
+    let small_count = count_tokens_for_session(&client, &adapter, "session-small", &small).await;
+    let large_count = count_tokens_for_session(&client, &adapter, "session-large", &large).await;
+    assert_ne!(small_count, large_count);
+
+    let mut omitted = base_request();
+    omitted
+        .as_object_mut()
+        .expect("request object")
+        .remove("tools");
+    assert_eq!(
+        count_tokens_for_session(&client, &adapter, "session-small", &omitted).await,
+        small_count
+    );
+    assert_eq!(
+        count_tokens_for_session(&client, &adapter, "session-large", &omitted).await,
+        large_count
+    );
+
+    let mut explicit_empty = omitted.clone();
+    explicit_empty["tools"] = json!([]);
+    let empty_count =
+        count_tokens_for_session(&client, &adapter, "session-empty", &explicit_empty).await;
+    assert_eq!(
+        count_tokens_for_session(&client, &adapter, "session-small", &explicit_empty).await,
+        empty_count
+    );
+}
+
+#[tokio::test]
 async fn ignores_oversized_provider_events_that_the_bridge_does_not_consume() {
     let adapter = Adapter::start().await;
     let client = Client::new();
@@ -276,32 +405,26 @@ async fn streams_text_before_the_turn_completes() {
         .await
         .expect("request stream");
     let mut stream = String::new();
-    let message_start_at = loop {
-        let chunk = response
-            .chunk()
-            .await
-            .expect("read initial stream chunk")
-            .expect("stream ended before message_start");
-        stream.push_str(&String::from_utf8_lossy(&chunk));
-        if stream.contains("event: message_start") {
-            break started.elapsed();
-        }
-    };
+    read_until_contains(
+        &mut response,
+        &mut stream,
+        "event: message_start",
+        "stream ended before message_start",
+    )
+    .await;
+    let message_start_at = started.elapsed();
     assert!(
         message_start_at < Duration::from_millis(150),
         "message_start was buffered behind provider setup: {message_start_at:?}"
     );
-    let first_text_at = loop {
-        if stream.contains("FIRST") {
-            break started.elapsed();
-        }
-        let chunk = response
-            .chunk()
-            .await
-            .expect("read early stream chunk")
-            .expect("stream ended before first delta");
-        stream.push_str(&String::from_utf8_lossy(&chunk));
-    };
+    read_until_contains(
+        &mut response,
+        &mut stream,
+        "FIRST",
+        "stream ended before first delta",
+    )
+    .await;
+    let first_text_at = started.elapsed();
     while let Some(chunk) = response.chunk().await.expect("read stream remainder") {
         stream.push_str(&String::from_utf8_lossy(&chunk));
     }
@@ -320,6 +443,42 @@ async fn streams_text_before_the_turn_completes() {
             stream.contains(expected),
             "missing SSE fragment: {expected}"
         );
+    }
+}
+
+#[tokio::test]
+async fn tracks_streaming_requests_until_body_eof_or_drop() {
+    let adapter = Adapter::start().await;
+    let client = Client::new();
+
+    for drop_early in [false, true] {
+        let mut request = base_request();
+        request["stream"] = json!(true);
+        request["messages"] = json!([{
+            "role":"user",
+            "content":format!(
+                "STREAMING_DELAY COUNTER_{}",
+                if drop_early { "DROP" } else { "EOF" }
+            )
+        }]);
+        let mut response = client
+            .post(messages_url(&adapter))
+            .json(&request)
+            .send()
+            .await
+            .expect("request counted stream");
+        let mut stream = String::new();
+        read_until_contains(
+            &mut response,
+            &mut stream,
+            "FIRST",
+            "counted stream ended before first delta",
+        )
+        .await;
+
+        assert_eq!(active_request_counts(&client, &adapter).await, (1, 1));
+        finish_counted_response(response, drop_early).await;
+        wait_for_active_request_counts(&client, &adapter, (0, 0)).await;
     }
 }
 
@@ -420,7 +579,7 @@ async fn completes_an_external_tool_round_trip_after_a_signature_change() {
         }),
     )
     .await;
-    assert_eq!(first["stop_reason"], "tool_use");
+    assert_eq!(first["stop_reason"], "tool_use", "response={first}");
     assert_eq!(first["content"][0]["name"], "lookup");
 
     let second = post_json(
@@ -458,7 +617,7 @@ async fn recovers_a_tool_result_after_adapter_session_loss() {
         }),
     )
     .await;
-    assert_eq!(first["stop_reason"], "tool_use");
+    assert_eq!(first["stop_reason"], "tool_use", "response={first}");
     drop(first_adapter);
 
     let restarted_adapter = Adapter::start().await;
@@ -503,7 +662,7 @@ async fn returns_parallel_and_streamed_tool_calls() {
     )
     .await
     .expect("external tool batch deadlocked");
-    assert_eq!(parallel["stop_reason"], "tool_use");
+    assert_eq!(parallel["stop_reason"], "tool_use", "response={parallel}");
     assert_eq!(parallel["content"].as_array().unwrap().len(), 2);
 
     let streamed = client
@@ -549,7 +708,7 @@ async fn ignores_per_item_completion_while_collecting_external_tools() {
     )
     .await
     .expect("per-item completion terminated or deadlocked the batch");
-    assert_eq!(response["stop_reason"], "tool_use");
+    assert_eq!(response["stop_reason"], "tool_use", "response={response}");
     assert_eq!(response["content"].as_array().unwrap().len(), 2);
 }
 
@@ -635,7 +794,7 @@ async fn bounds_context_window_retry_to_one_fresh_thread() {
 }
 
 #[tokio::test]
-async fn bridges_collaborator_success_and_failure() {
+async fn configured_collaborator_does_not_create_an_internal_tool() {
     let adapter = Adapter::start().await;
     let client = Client::new();
     let request = |model: &str| {
@@ -645,25 +804,17 @@ async fn bridges_collaborator_success_and_failure() {
             "messages":[{"role":"user","content":"USE_COLLABORATOR"}]
         })
     };
-    let success = post_json(
+    let response = post_json(
         &client,
         &messages_url(&adapter),
         request("test-collaborator-model"),
     )
     .await;
-    assert_eq!(success["content"][0]["text"], "MOCK_COLLABORATOR_RESULT");
-
-    let failure = post_json(
-        &client,
-        &messages_url(&adapter),
-        request("test-failing-model"),
-    )
-    .await;
     assert!(
-        failure["content"][0]["text"]
+        response["content"][0]["text"]
             .as_str()
             .unwrap()
-            .contains("forced subscription failure")
+            .contains("was not supplied by Claude Code and was not executed")
     );
 }
 
@@ -697,7 +848,7 @@ async fn rejects_unknown_tool_results_and_turn_errors() {
 }
 
 #[tokio::test]
-async fn bridges_configured_advisor_model() {
+async fn configured_advisor_does_not_create_an_internal_tool() {
     let adapter = Adapter::start_with_models(Some("test-advisor-model"), None).await;
     let advisor = post_json(
         &Client::new(),
@@ -708,7 +859,52 @@ async fn bridges_configured_advisor_model() {
         }),
     )
     .await;
-    assert_eq!(advisor["content"][0]["text"], "MOCK_ADVISOR_CURRENT_TURN");
+    assert!(
+        advisor["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("was not supplied by Claude Code and was not executed")
+    );
+}
+
+#[tokio::test]
+async fn received_advisor_and_collaborator_schemas_are_public_tool_uses() {
+    let adapter = Adapter::start_with_models(
+        Some("must-not-run-advisor"),
+        Some("must-not-run-collaborator"),
+    )
+    .await;
+    let client = Client::new();
+    for (prompt, name) in [
+        ("USE_ADVISOR_PUBLIC", "advisor"),
+        ("USE_COLLABORATOR_PUBLIC", "claude_collaborator"),
+    ] {
+        let response = post_json(
+            &client,
+            &messages_url(&adapter),
+            json!({
+                "model":"test-main-model",
+                "system":"Public tool schema authority test",
+                "tools":[{
+                    "name":name,
+                    "description":"public Claude Code tool",
+                    "input_schema":{
+                        "type":"object",
+                        "properties":{
+                            "key":{"type":"string"},
+                            "task":{"type":"string"}
+                        },
+                        "additionalProperties":false
+                    }
+                }],
+                "messages":[{"role":"user","content":prompt}]
+            }),
+        )
+        .await;
+        assert_eq!(response["stop_reason"], "tool_use");
+        assert_eq!(response["content"].as_array().unwrap().len(), 1);
+        assert_eq!(response["content"][0]["name"], name);
+    }
 }
 
 #[tokio::test]
@@ -747,13 +943,149 @@ async fn routes_non_main_models_to_subscription_with_requested_effort() {
         .canonicalize()
         .expect("canonical workspace");
     let system = format!("<env>\nWorking directory: {}\n</env>", workspace.display());
-    let expected = format!(
-        "test-sonnet-model|high|Read,WebSearch,WebFetch|Read,WebSearch,WebFetch|{}",
-        workspace.display()
-    );
+    let expected = format!("test-sonnet-model|high|Read|Read|{}", workspace.display());
     assert_subscription_response(&client, &adapter, &system, &expected).await;
     assert_streaming_subscription(&client, &adapter, &system).await;
     assert_fast_subscription_outcomes(&client, &adapter, &system).await;
+}
+
+#[cfg(unix)]
+fn structured_subscription_program(fixture: &tempfile::TempDir) -> std::path::PathBuf {
+    let subscription_program = fixture.path().join("structured-subscription.sh");
+    std::fs::write(
+        &subscription_program,
+        r#"#!/bin/sh
+set -eu
+trace="${0}.args"
+: > "$trace"
+for argument in "$@"; do
+  printf '%s\n' "$argument" >> "$trace"
+done
+cat >/dev/null
+printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"UNSTRUCTURED_FALLBACK_MUST_NOT_LEAK","structured_output":{"answer":"STRUCTURED_SUBSCRIPTION_OK"}}'
+"#,
+    )
+    .expect("write structured subscription fixture");
+    let mut permissions = std::fs::metadata(&subscription_program)
+        .expect("read structured subscription fixture metadata")
+        .permissions();
+    std::os::unix::fs::PermissionsExt::set_mode(&mut permissions, 0o755);
+    std::fs::set_permissions(&subscription_program, permissions)
+        .expect("make structured subscription fixture executable");
+    subscription_program
+}
+
+#[cfg(unix)]
+fn assert_structured_subscription_arguments(
+    subscription_program: &std::path::Path,
+    schema: &Value,
+) {
+    let arguments = std::fs::read_to_string(format!("{}.args", subscription_program.display()))
+        .expect("read structured subscription arguments")
+        .lines()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    let expected = vec![
+        "--safe-mode".to_owned(),
+        "--tools".to_owned(),
+        String::new(),
+        "--allowedTools".to_owned(),
+        String::new(),
+        "--json-schema".to_owned(),
+        schema.to_string(),
+    ];
+    assert!(
+        arguments
+            .windows(expected.len())
+            .any(|window| window == expected.as_slice()),
+        "structured subscription argv did not preserve explicit empty tools and schema: {arguments:?}"
+    );
+}
+
+#[tokio::test]
+#[cfg(unix)]
+async fn routes_omitted_tool_compaction_through_safe_structured_subscription() {
+    let fixture = tempfile::tempdir().expect("create structured subscription fixture");
+    let codex_home = fixture.path().join(".codex");
+    std::fs::create_dir(&codex_home).expect("create fixture CODEX_HOME");
+    std::fs::write(
+        codex_home.join("auth.json"),
+        r#"{"auth_mode":"chatgpt","tokens":{"access_token":"test"}}"#,
+    )
+    .expect("write fixture Codex auth");
+    let subscription_program = structured_subscription_program(&fixture);
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind structured subscription adapter");
+    let base_url = format!(
+        "http://{}",
+        listener
+            .local_addr()
+            .expect("structured subscription adapter address")
+    );
+    let app_server = claudex_agent_adapter::app_server::AppServer::spawn_with_program(
+        "test-main-model",
+        env!("CARGO_BIN_EXE_codex-mock"),
+        &codex_home,
+        &fixture.path().join("isolated-codex-home"),
+    )
+    .await
+    .expect("start structured subscription mock app-server");
+    let bridge = claudex_agent_adapter::anthropic::Bridge::new_with_subscription_program(
+        app_server,
+        "test-main-model".to_owned(),
+        &subscription_program,
+    )
+    .with_settings_path(fixture.path().join("missing-claude-settings.json"));
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            claudex_agent_adapter::http_router(
+                std::sync::Arc::new(bridge),
+                "test-main-model".to_owned(),
+                None,
+            ),
+        )
+        .await
+        .expect("serve structured subscription adapter");
+    });
+
+    let schema = json!({
+        "type":"object",
+        "properties":{"answer":{"type":"string"}},
+        "required":["answer"],
+        "additionalProperties":false
+    });
+    let response = Client::new()
+        .post(format!("{base_url}/v1/messages"))
+        .json(&json!({
+            "model":"test-sonnet-model", "max_tokens":256, "stream":false,
+            "system":"Subscription structured output",
+            "output_config":{"format":{"type":"json_schema","schema":schema.clone()}},
+            "messages":[{"role":"user","content":concat!(
+                "CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.\n",
+                "Your task is to create a detailed summary of the conversation so far"
+            )}]
+        }))
+        .send()
+        .await
+        .expect("send structured subscription request")
+        .error_for_status()
+        .expect("successful structured subscription status")
+        .json::<Value>()
+        .await
+        .expect("decode structured subscription response");
+
+    assert_structured_subscription_arguments(&subscription_program, &schema);
+
+    assert_eq!(response["content"][0]["type"], "text");
+    assert_eq!(
+        response["content"][0]["text"],
+        r#"{"answer":"STRUCTURED_SUBSCRIPTION_OK"}"#
+    );
+    assert_eq!(response["stop_reason"], "end_turn");
+    server.abort();
 }
 
 #[tokio::test]
@@ -790,7 +1122,7 @@ async fn rejects_model_less_subscription_tools_before_forwarding_them() {
     assert!(!response.contains("tool-alpha"));
     assert!(!response.contains("tool-beta"));
     assert!(!response.contains("INNER_TOOL_REJECTION_MUST_NOT_LEAK"));
-    assert!(!response.contains(r#""stop_reason":"end_turn""#));
+    assert!(response.contains(r#""stop_reason":"end_turn""#));
 }
 
 #[tokio::test]
@@ -875,9 +1207,7 @@ async fn exchanges_large_subscription_input_and_output_without_pipe_deadlock() {
             .await
             .expect("read large subscription response");
         assert!(response.contains("BACKPRESSURE_OK"), "response={response}");
-        if stream {
-            assert!(response.contains("event: message_stop"));
-        }
+        assert_subscription_stream_completion(&response, stream);
     }
 }
 

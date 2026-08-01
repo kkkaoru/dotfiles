@@ -23,11 +23,13 @@ mod context_window;
 mod control;
 mod disconnect;
 mod drive;
-mod internal_tools;
+mod non_stream;
 mod prepare;
 mod protocol;
 mod provider_tool;
 mod sanitize;
+mod turn;
+pub(in crate::anthropic) use turn::StreamTurn;
 mod thinking;
 mod tool_call_parser;
 
@@ -62,21 +64,17 @@ struct StreamWaitInput<'a> {
 }
 enum StreamWaitResult {
     Event(Value),
-    Done(StreamTurn),
+    Done(Box<StreamTurn>),
     NoEvent,
 }
 enum StreamEventState {
     Continue,
-    Done(StreamTurn),
+    Done(Box<StreamTurn>),
+    ContextWindow(anyhow::Error),
 }
 
-pub(super) enum StreamTurn {
-    Segment {
-        segment: Segment,
-        provider_settled: bool,
-    },
-    ContextWindow(anyhow::Error),
-    Disconnected,
+fn context_window_turn(error: anyhow::Error, builder: SegmentBuilder) -> Result<StreamTurn> {
+    Ok(StreamTurn::ContextWindow { error, builder })
 }
 
 impl Bridge {
@@ -178,6 +176,9 @@ impl Bridge {
         .await
     }
 
+    // This event loop owns the live SegmentBuilder across keepalive, completion,
+    // disconnect, and context-window transitions.
+    #[allow(clippy::excessive_nesting)]
     async fn wait_for_stream_segment_with_interval(
         &self,
         input: StreamWaitInput<'_>,
@@ -205,7 +206,7 @@ impl Bridge {
                     &mut activity_deadline,
                 )
                 .await?;
-            if let Some(turn) = self
+            let state = self
                 .resolve_stream_wait(
                     wait,
                     session,
@@ -214,9 +215,13 @@ impl Bridge {
                     system,
                     &mut builder,
                 )
-                .await?
-            {
-                return Ok(turn);
+                .await?;
+            match state {
+                StreamEventState::Continue => continue,
+                StreamEventState::Done(turn) => return Ok(*turn),
+                StreamEventState::ContextWindow(error) => {
+                    return context_window_turn(error, builder);
+                }
             }
         }
     }
@@ -229,25 +234,20 @@ impl Bridge {
         current_messages: &[Value],
         system: &Value,
         builder: &mut SegmentBuilder,
-    ) -> Result<Option<StreamTurn>> {
+    ) -> Result<StreamEventState> {
         match wait {
-            StreamWaitResult::Done(turn) => Ok(Some(turn)),
-            StreamWaitResult::NoEvent => Ok(None),
+            StreamWaitResult::Done(turn) => Ok(StreamEventState::Done(turn)),
+            StreamWaitResult::NoEvent => Ok(StreamEventState::Continue),
             StreamWaitResult::Event(event) => {
-                match self
-                    .consume_stream_event(
-                        session,
-                        sender,
-                        current_messages,
-                        system,
-                        &event,
-                        builder,
-                    )
-                    .await?
-                {
-                    StreamEventState::Done(turn) => Ok(Some(turn)),
-                    StreamEventState::Continue => Ok(None),
-                }
+                self.consume_stream_event(
+                    session,
+                    sender,
+                    current_messages,
+                    system,
+                    &event,
+                    builder,
+                )
+                .await
             }
         }
     }
@@ -264,7 +264,9 @@ impl Bridge {
         let next = tokio::select! {
             biased;
             () = sender.closed() => {
-                return Ok(StreamWaitResult::Done(self.disconnect_stream(session, events).await));
+                return Ok(StreamWaitResult::Done(Box::new(
+                    self.disconnect_stream(session, events).await,
+                )));
             }
             next = next_event(&events, builder.has_external_tool_calls()) => next,
             () = &mut *activity_deadline => {
@@ -280,26 +282,13 @@ impl Bridge {
         };
         match next {
             NextEvent::Event(event) => {
-                if is_visible_activity_event(&event) {
-                    activity_deadline
-                        .as_mut()
-                        .reset(Instant::now() + activity_interval);
-                }
+                reset_activity_deadline(&event, activity_deadline, activity_interval);
                 Ok(StreamWaitResult::Event(event))
             }
-            NextEvent::ExternalBatchReady => {
-                let segment = builder.finish(Some(sender)).await?;
-                if sender.is_closed() {
-                    Ok(StreamWaitResult::Done(
-                        self.disconnect_stream(session, events).await,
-                    ))
-                } else {
-                    Ok(StreamWaitResult::Done(StreamTurn::Segment {
-                        segment,
-                        provider_settled: false,
-                    }))
-                }
-            }
+            NextEvent::ExternalBatchReady => Ok(StreamWaitResult::Done(Box::new(
+                self.external_batch_segment(session, events, builder, sender)
+                    .await?,
+            ))),
             NextEvent::Closed => bail!("app-server event stream closed"),
         }
     }
@@ -323,15 +312,15 @@ impl Bridge {
                     && !builder.has_committed_output() =>
             {
                 builder.close_open_blocks(Some(sender)).await?;
-                return Ok(StreamEventState::Done(StreamTurn::ContextWindow(error)));
+                return Ok(StreamEventState::ContextWindow(error));
             }
             Err(error) => return Err(error),
         };
         if flow == ControlFlow::Break(()) {
-            Ok(StreamEventState::Done(StreamTurn::Segment {
+            Ok(StreamEventState::Done(Box::new(StreamTurn::Segment {
                 segment: builder.finish(Some(sender)).await?,
                 provider_settled: true,
-            }))
+            })))
         } else {
             Ok(StreamEventState::Continue)
         }
@@ -352,7 +341,6 @@ impl Bridge {
         true
     }
 
-    #[cfg(test)]
     async fn external_batch_segment(
         &self,
         session: &Arc<Session>,
@@ -369,31 +357,15 @@ impl Bridge {
             provider_settled: false,
         })
     }
+}
 
-    pub(in crate::anthropic) async fn wait_for_segment(
-        &self,
-        session: &Session,
-        events: &crate::app_server::ThreadEvents,
-        input_tokens: u64,
-        current_messages: &[Value],
-        system: &Value,
-        stream: Option<&StreamSender>,
-    ) -> Result<Segment> {
-        let mut builder = SegmentBuilder::new(input_tokens);
-        loop {
-            let event = match next_event(events, builder.has_external_tool_calls()).await {
-                NextEvent::Event(event) => event,
-                NextEvent::ExternalBatchReady => return builder.finish(stream).await,
-                NextEvent::Closed => bail!("app-server event stream closed"),
-            };
-            if builder
-                .handle_event(self, session, current_messages, system, &event, stream)
-                .await?
-                == ControlFlow::Break(())
-            {
-                return builder.finish(stream).await;
-            }
-        }
+fn reset_activity_deadline(
+    event: &Value,
+    deadline: &mut std::pin::Pin<Box<tokio::time::Sleep>>,
+    interval: Duration,
+) {
+    if is_visible_activity_event(event) {
+        deadline.as_mut().reset(Instant::now() + interval);
     }
 }
 #[cfg(test)]

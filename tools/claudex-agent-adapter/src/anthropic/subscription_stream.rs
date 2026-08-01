@@ -1,41 +1,39 @@
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use axum::{
     body::{Body, Bytes},
     http::Response,
 };
-use serde_json::{Value, json};
-use std::{convert::Infallible, path::Path, path::PathBuf, sync::Arc, time::Duration};
-use tokio::{
-    io::{AsyncBufReadExt, BufReader},
-    process::Child,
-    sync::mpsc,
+use serde_json::Value;
+use std::{
+    collections::HashSet, convert::Infallible, path::Path, path::PathBuf, sync::Arc, time::Duration,
 };
-use uuid::Uuid;
+use tokio::sync::mpsc;
 // Align with the main provider stream: status only after real silence (~30s).
-const INITIAL_ACTIVITY_DELAY: Duration = Duration::from_secs(30);
-const ACTIVITY_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
+pub(super) const INITIAL_ACTIVITY_DELAY: Duration = Duration::from_secs(30);
+pub(super) const ACTIVITY_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
 use super::{
-    content::sse,
     stream::streaming_sse_response,
     subscription::{
-        OutputMode, SubscriptionOptions, acquire_subscription_slot, spawn_subscription,
-        subscription_command, take_subscription_stdin, terminate_subscription,
-        validate_subscription_result, with_transient_retries, write_subscription_prompt,
+        OutputMode, SubscriptionOptions, acquire_subscription_slot, subscription_command,
+        with_transient_retries, write_subscription_prompt,
     },
     subscription_activity::SubscriptionActivity,
     subscription_frames::{
-        send_block_stop, send_subscription_error, send_text_delta, send_text_finish,
-        send_text_start, send_tool_finish,
+        send_block_stop, send_subscription_error, send_text_delta, send_text_start,
     },
 };
 
+mod consume;
+mod finish;
 mod lifecycle;
+mod post_eof;
 mod tool_collection;
 mod visibility;
-pub(super) use super::subscription_frames::result_output_tokens;
-use lifecycle::{
-    read_stderr, terminate_after_stream_failure, terminate_closed_stream, validate_stream_exit,
-};
+pub(super) use super::subscription_frames::{result_output_tokens, subscription_start_frame};
+#[cfg(test)]
+use consume::consume_subscription_stream;
+use consume::consume_subscription_stream_with_options;
+use lifecycle::terminate_after_stream_failure;
 pub(super) fn subscription_streaming_response(
     program: PathBuf,
     model: String,
@@ -54,21 +52,6 @@ pub(super) fn subscription_streaming_response(
         sender, program, model, prompt, options,
     ));
     streaming_sse_response(receiver)
-}
-
-pub(super) fn subscription_start_frame(model: &str, input_tokens: u64) -> String {
-    sse(
-        "message_start",
-        json!({
-            "type":"message_start",
-            "message":{
-                "id":format!("msg_{}", Uuid::new_v4().simple()),
-                "type":"message","role":"assistant","model":model,
-                "content":[],"stop_reason":null,"stop_sequence":null,
-                "usage":{"input_tokens":input_tokens,"output_tokens":0}
-            }
-        }),
-    )
 }
 
 async fn run_subscription_stream(
@@ -100,26 +83,38 @@ async fn stream_subscription_model(
 ) -> Result<()> {
     let _permit = acquire_subscription_slot(Arc::clone(&options.slots), options.timeout).await?;
     let mut command = subscription_command(program, model, options, OutputMode::StreamJson);
-    let mut child = spawn_subscription(&mut command, model)?;
-    let stdin = take_subscription_stdin(&mut child)?;
+    let (mut child, stdin) = super::subscription::failure::spawn_child(&mut command, model)?;
+    let process_group = child.id();
     // Defer stdin errors so an early process exit can report its status and stderr.
     let timeout = options.timeout;
-    let result = tokio::time::timeout(timeout, async {
+    match tokio::time::timeout(timeout, async {
         let (prompt_result, stream_result) = tokio::join!(
             write_subscription_prompt(stdin, prompt),
-            consume_subscription_stream_with_options(&mut child, sender, options),
+            consume_subscription_stream_with_options(&mut child, sender, options, model),
         );
         stream_result?;
-        prompt_result.context("failed to write Claude subscription prompt")
+        super::subscription::failure::local_result(model, "failed to write prompt", prompt_result)
     })
     .await
-    .map_err(|_| anyhow!("Claude subscription timed out after {timeout:?}"));
-    match result {
+    {
         Ok(Ok(())) => Ok(()),
-        Ok(Err(error)) => terminate_after_stream_failure(&mut child, error).await,
-        Err(error) => {
-            terminate_subscription(&mut child).await?;
-            Err(error)
+        Ok(Err(error)) => {
+            terminate_after_stream_failure(
+                &mut child,
+                process_group,
+                options.termination_timeout,
+                error,
+            )
+            .await
+        }
+        Err(_) => {
+            terminate_after_stream_failure(
+                &mut child,
+                process_group,
+                options.termination_timeout,
+                super::subscription::failure::timeout_failure(model, timeout),
+            )
+            .await
         }
     }
 }
@@ -128,113 +123,42 @@ struct SubscriptionStream {
     text_started: bool,
     text_closed: bool,
     saw_tool_use: bool,
+    seen_tool_ids: HashSet<String>,
+    blocked_subagent: bool,
     saw_result: bool,
     next_index: usize,
     tools: Vec<String>,
     tool_context: Option<super::subscription::SubscriptionToolContext>,
     activity: SubscriptionActivity,
 }
-#[cfg(test)]
-async fn consume_subscription_stream(
-    mut child: Child,
-    sender: &mpsc::Sender<Result<Bytes, Infallible>>,
-) -> Result<()> {
-    let result = consume_subscription_stream_with_options(
-        &mut child,
-        sender,
-        &SubscriptionOptions::internal(
-            Arc::new(tokio::sync::Semaphore::new(1)),
-            std::time::Duration::from_secs(1),
-        ),
-    )
-    .await;
-    if let Err(error) = result {
-        return terminate_after_stream_failure(&mut child, error).await;
-    }
-    Ok(())
-}
-
-async fn consume_subscription_stream_with_options(
-    child: &mut Child,
-    sender: &mpsc::Sender<Result<Bytes, Infallible>>,
-    options: &SubscriptionOptions,
-) -> Result<()> {
-    let stdout = child
-        .stdout
-        .take()
-        .context("Claude subscription stdout is unavailable")?;
-    let stderr = child
-        .stderr
-        .take()
-        .context("Claude subscription stderr is unavailable")?;
-    let stderr_task = tokio::spawn(read_stderr(stderr));
-    let mut lines = BufReader::new(stdout).lines();
-    let mut stream = SubscriptionStream {
-        text_started: false,
-        text_closed: false,
-        saw_tool_use: false,
-        saw_result: false,
-        next_index: 0,
-        tools: options.tools.clone(),
-        tool_context: options.tool_context.clone(),
-        activity: SubscriptionActivity::default(),
-    };
-    let mut activity_deadline = Box::pin(tokio::time::sleep(INITIAL_ACTIVITY_DELAY));
-    loop {
-        // Prefer child output lines over keepalives so heartbeats never jump
-        // ahead of already-buffered stream-json events (scrambled UI order).
-        tokio::select! {
-            biased;
-            () = sender.closed() => return terminate_closed_stream(child, stderr_task).await,
-            line = lines.next_line() => match line? {
-                Some(line) => {
-                    stream.handle_line(sender, &line).await?;
-                    // Real output postpones the idle status timer.
-                    activity_deadline.as_mut().reset(
-                        tokio::time::Instant::now() + ACTIVITY_KEEPALIVE_INTERVAL,
-                    );
-                }
-                None => break,
-            },
-            () = &mut activity_deadline => {
-                stream.activity_keepalive(sender).await?;
-                activity_deadline.as_mut().reset(
-                    tokio::time::Instant::now() + ACTIVITY_KEEPALIVE_INTERVAL,
-                );
-            }
-        }
-    }
-    stream.activity.close(sender).await?;
-    validate_stream_exit(child, stderr_task, stream.saw_result)
-        .await
-        .map_err(|error| {
-            if stream.next_index > 0 {
-                anyhow!("{error}; subscription stream already emitted frames")
-            } else {
-                error
-            }
-        })
-}
-
 impl SubscriptionStream {
+    #[cfg(test)]
     async fn handle_line(
         &mut self,
         sender: &mpsc::Sender<Result<Bytes, Infallible>>,
         line: &str,
     ) -> Result<()> {
-        let envelope: Value = serde_json::from_str(line)
-            .with_context(|| format!("Claude subscription emitted invalid stream JSON: {line}"))?;
+        if self.saw_result {
+            return Ok(());
+        }
+        let envelope = super::subscription::failure::parse_stream_envelope(None, line)?;
+        self.handle_envelope(sender, &envelope).await?;
+        Ok(())
+    }
+
+    async fn handle_envelope(
+        &mut self,
+        sender: &mpsc::Sender<Result<Bytes, Infallible>>,
+        envelope: &Value,
+    ) -> Result<bool> {
         match envelope.get("type").and_then(Value::as_str) {
-            Some("stream_event") => {
-                self.forward_text_delta(sender, &envelope).await?;
-                Ok(())
-            }
-            Some("assistant") => self.forward_tool_uses(sender, &envelope).await,
+            Some("stream_event") => self.forward_text_delta(sender, envelope).await,
+            Some("assistant") => self.forward_tool_uses(sender, envelope).await,
             Some("result") => {
-                self.finish(sender, &envelope).await?;
-                Ok(())
+                self.finish(sender, envelope).await?;
+                Ok(true)
             }
-            _ => Ok(()),
+            _ => Ok(false),
         }
     }
 
@@ -242,31 +166,33 @@ impl SubscriptionStream {
         &mut self,
         sender: &mpsc::Sender<Result<Bytes, Infallible>>,
         envelope: &Value,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         if envelope
             .pointer("/event/delta/type")
             .and_then(Value::as_str)
             != Some("text_delta")
         {
-            return Ok(());
+            return Ok(false);
         }
         let text = envelope
             .pointer("/event/delta/text")
             .and_then(Value::as_str)
             .unwrap_or_default();
         if text.is_empty() {
-            return Ok(());
+            return Ok(false);
         }
-        if self.saw_tool_use {
-            return Ok(());
+        if self.saw_tool_use || self.blocked_subagent {
+            return Ok(false);
         }
         self.activity.close(sender).await?;
-        if !self.text_started {
+        if !self.text_started || self.text_closed {
             send_text_start(sender, self.next_index).await?;
             self.text_started = true;
+            self.text_closed = false;
             self.next_index += 1;
         }
-        send_text_delta(sender, self.next_index.saturating_sub(1), text).await
+        send_text_delta(sender, self.next_index.saturating_sub(1), text).await?;
+        Ok(true)
     }
 
     fn prepare_tool_input(&self, name: &str, id: &str, input: &Value) -> Result<Value> {
@@ -335,43 +261,6 @@ impl SubscriptionStream {
         Ok(())
     }
 
-    async fn finish(
-        &mut self,
-        sender: &mpsc::Sender<Result<Bytes, Infallible>>,
-        result: &Value,
-    ) -> Result<()> {
-        validate_subscription_result(result)?;
-        self.activity.close(sender).await?;
-        if self.saw_tool_use {
-            self.close_text(sender).await?;
-            send_tool_finish(sender, result_output_tokens(result)).await?;
-            self.saw_result = true;
-            return Ok(());
-        }
-        if !self.text_started {
-            send_text_start(sender, self.next_index).await?;
-            let text = result
-                .get("result")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            send_text_delta(sender, self.next_index, text).await?;
-            self.text_started = true;
-            self.next_index += 1;
-        }
-        let visibility_tokens = self.report_no_subagent_action(sender).await?;
-        if !self.text_closed {
-            send_text_finish(
-                sender,
-                self.next_index.saturating_sub(1),
-                result_output_tokens(result).saturating_add(visibility_tokens),
-            )
-            .await?;
-            self.text_closed = true;
-        }
-        self.saw_result = true;
-        Ok(())
-    }
-
     async fn activity_keepalive(
         &mut self,
         sender: &mpsc::Sender<Result<Bytes, Infallible>>,
@@ -386,7 +275,10 @@ impl SubscriptionStream {
                 .await;
         }
         if self.text_closed {
-            return Ok(());
+            send_text_start(sender, self.next_index).await?;
+            self.text_started = true;
+            self.text_closed = false;
+            self.next_index += 1;
         }
         let text_index = self.text_started.then(|| self.next_index.saturating_sub(1));
         self.activity

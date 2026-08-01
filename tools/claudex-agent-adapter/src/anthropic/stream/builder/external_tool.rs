@@ -1,4 +1,6 @@
-use anyhow::Result;
+use std::collections::HashMap;
+
+use anyhow::{Context, Result};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -13,6 +15,47 @@ pub(super) struct ExternalToolContext<'a> {
     pub(super) current_messages: &'a [Value],
     pub(super) system: &'a Value,
     pub(super) stream: Option<&'a StreamSender>,
+}
+
+pub(super) fn requested_external_tool_name<'a>(
+    names: &'a HashMap<String, String>,
+    provider_name: &str,
+) -> Option<&'a str> {
+    names.get(provider_name).map(String::as_str).or_else(|| {
+        names
+            .values()
+            .find(|name| name.as_str() == provider_name)
+            .map(String::as_str)
+    })
+}
+
+pub(super) async fn reject_unrequested_tool(
+    bridge: &Bridge,
+    session: &Session,
+    call: ToolCall<'_>,
+) -> Result<()> {
+    tracing::warn!(
+        provider_tool_name = call.name,
+        "rejected a provider tool that Claude Code did not supply"
+    );
+    bridge
+        .app
+        .respond_for_model(
+            &session.model,
+            call.request_id,
+            json!({
+                "contentItems":[{
+                    "type":"inputText",
+                    "text":format!(
+                        "Tool `{}` was not supplied by Claude Code and was not executed.",
+                        call.name
+                    )
+                }],
+                "success":false
+            }),
+        )
+        .await
+        .context("failed to reject an unrequested provider tool")
 }
 
 impl SegmentBuilder {
