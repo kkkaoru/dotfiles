@@ -5,6 +5,11 @@ use serde_json::Value;
 use super::{MessagesRequest, content::system_text};
 
 pub(super) const SHARED_WORKSPACE_INSTRUCTIONS: &str = r"Shared-workspace safety is mandatory: parallelize read-only/research work, or implementation workers only when each has explicitly disjoint file ownership. If ownership overlaps or is unknown, serialize mutations. Never run an auto-fixing formatter, linter, or build alongside an editing worker. When a tool reports `File content has changed since it was last read`, stop the stale edit, re-read the latest file, and coordinate ownership instead of retrying the same patch. If a worker reports missing filesystem access or a provider region/opt-in restriction, mark that route unavailable for this turn and reroute once; do not churn retries.";
+const COMPACTION_TEXT_ONLY_PREFIX: &str =
+    "CRITICAL: Respond with TEXT ONLY. Do NOT call any tools.";
+const COMPACTION_SUMMARY_TASK: &str =
+    "Your task is to create a detailed summary of the conversation so far";
+const COMPACTION_COMMAND_TAG: &str = "<command-name>/compact</command-name>";
 
 pub(super) fn subscription_request_prompt(request: &MessagesRequest) -> String {
     let scheduler_policy = subscription_parallel_scheduler_instructions(request);
@@ -76,6 +81,52 @@ pub(super) fn subscription_request_prompt(request: &MessagesRequest) -> String {
     prompt
 }
 
+pub(super) fn request_json_schema(output_config: &Value) -> Option<String> {
+    let format = output_config.get("format")?;
+    if format.get("type").and_then(Value::as_str) != Some("json_schema") {
+        return None;
+    }
+    serde_json::to_string(format.get("schema")?.as_object()?).ok()
+}
+
+pub(super) fn is_compaction_request(request: &MessagesRequest) -> bool {
+    let Some(message) = request.messages.last() else {
+        return false;
+    };
+    if message.get("role").and_then(Value::as_str) != Some("user") {
+        return false;
+    }
+    let text = message_text(message.get("content").unwrap_or(&Value::Null));
+    is_compaction_text(text.trim_start())
+}
+
+fn message_text(content: &Value) -> String {
+    match content {
+        Value::String(text) => text.clone(),
+        Value::Array(blocks) => blocks
+            .iter()
+            .filter_map(text_block)
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    }
+}
+
+fn text_block(block: &Value) -> Option<&str> {
+    (block.get("type").and_then(Value::as_str) == Some("text"))
+        .then(|| block.get("text").and_then(Value::as_str))
+        .flatten()
+}
+
+fn is_compaction_text(text: &str) -> bool {
+    let compact_command = text
+        .strip_prefix("/compact")
+        .is_some_and(|tail| tail.chars().next().is_none_or(char::is_whitespace));
+    compact_command
+        || text.starts_with(COMPACTION_COMMAND_TAG)
+        || (text.starts_with(COMPACTION_TEXT_ONLY_PREFIX) && text.contains(COMPACTION_SUMMARY_TASK))
+}
+
 fn subscription_parallel_scheduler_instructions(request: &MessagesRequest) -> String {
     let scheduler = crate::parallel_scheduler::ParallelScheduler::shared();
     let config = scheduler.config();
@@ -90,37 +141,17 @@ fn subscription_parallel_scheduler_instructions(request: &MessagesRequest) -> St
 
 #[cfg(test)]
 pub(super) fn requested_tools(tools: &[Value], omit_task_bookkeeping: bool) -> Vec<String> {
-    requested_tools_with_native(tools, omit_task_bookkeeping, false)
+    requested_tools_from_request(tools, omit_task_bookkeeping)
 }
 
 pub(super) fn requested_tools_for_request(
     request: &MessagesRequest,
     omit_task_bookkeeping: bool,
 ) -> Vec<String> {
-    let mut selected = requested_tools_with_native(
-        &request.tools,
-        omit_task_bookkeeping,
-        is_live_web_retrieval_worker(request),
-    );
-    for name in super::resume_tools::names_for_request(request) {
-        if (!omit_task_bookkeeping
-            || !matches!(
-                name.as_str(),
-                "TaskCreate" | "TaskUpdate" | "TaskList" | "TaskGet"
-            ))
-            && !selected.iter().any(|selected| selected == &name)
-        {
-            selected.push(name);
-        }
-    }
-    selected
+    requested_tools_from_request(&request.tools, omit_task_bookkeeping)
 }
 
-fn requested_tools_with_native(
-    tools: &[Value],
-    omit_task_bookkeeping: bool,
-    force_native_web_tools: bool,
-) -> Vec<String> {
+fn requested_tools_from_request(tools: &[Value], omit_task_bookkeeping: bool) -> Vec<String> {
     let mut selected = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for name in tools
@@ -136,26 +167,7 @@ fn requested_tools_with_native(
             selected.push(name.to_owned());
         }
     }
-    if force_native_web_tools || !selected.is_empty() {
-        for native in ["WebSearch", "WebFetch"] {
-            if seen.insert(native) {
-                selected.push(native.to_owned());
-            }
-        }
-    }
     selected
-}
-
-fn is_live_web_retrieval_worker(request: &MessagesRequest) -> bool {
-    let system = system_text(&request.system);
-    let messages = serde_json::to_string(&request.messages).unwrap_or_default();
-    [system.as_str(), messages.as_str()]
-        .into_iter()
-        .any(|text| {
-            text.contains("claudex-haiku-search")
-                || text.contains("Dedicated live-web retrieval worker")
-                || text.contains("tools: WebSearch,WebFetch")
-        })
 }
 
 pub(super) fn subscription_request_cwd(request: &MessagesRequest) -> Option<PathBuf> {
