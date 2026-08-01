@@ -211,12 +211,23 @@ impl AgentBackend {
             Self::Grok(agent) => agent.subscribe_thread(thread_id),
             Self::Routed(routes) => {
                 let (index, raw_id) = routed_thread(thread_id);
-                routes
-                    .route(index)
-                    .ready_backend()
-                    .expect("thread route backend must already be initialized")
-                    .subscribe_thread(raw_id)
+                subscribe_routed_thread(routes.route(index).as_ref(), thread_id, raw_id)
             }
+        }
+    }
+
+    /// Wait for the leaf provider that owns a routed thread to be available.
+    /// Route startup is lazy and can race with a turn's event subscription.
+    /// Production callers should await this before subscribing; the
+    /// synchronous `subscribe_thread` fallback still protects against a
+    /// concurrent retire/abort that happens after this wait.
+    pub async fn ensure_thread_ready(&self, thread_id: &str) -> Result<()> {
+        match self {
+            Self::Routed(routes) => {
+                let (index, _) = routed_thread(thread_id);
+                routes.route(index).get().await.map(|_| ())
+            }
+            Self::Codex(_) | Self::Copilot(_) | Self::ConfiguredAcp(_) | Self::Grok(_) => Ok(()),
         }
     }
 
@@ -369,6 +380,20 @@ fn routed_thread(thread_id: &str) -> (usize, &str) {
         .split_once(':')
         .expect("routed backend thread ID is missing its route prefix");
     (index.parse().expect("invalid routed backend index"), raw_id)
+}
+
+fn subscribe_routed_thread(route: &RoutedBackend, thread_id: &str, raw_id: &str) -> ThreadEvents {
+    match route.ready_backend() {
+        Some(backend) => backend.subscribe_thread(raw_id),
+        None => {
+            tracing::warn!(
+                thread_id,
+                model = %route.model,
+                "thread route backend was retired before event subscription"
+            );
+            ThreadEvents::closed(raw_id)
+        }
+    }
 }
 
 #[cfg(test)]

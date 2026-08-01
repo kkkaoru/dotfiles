@@ -35,6 +35,10 @@ async fn cancellation_and_abort_cover_each_leaf_and_routed_route() {
     let routed = AgentBackend::routed(vec![("worker".to_owned(), leaf)]);
     assert!(routed.cancel_turn("0:session").await.is_err());
     routed.abort_turn_provider("0:session").await.unwrap();
+    // A concurrent event subscriber must observe a closed stream, not panic,
+    // after the routed leaf has been retired by the abort path.
+    let events = routed.subscribe_thread("0:session");
+    assert!(events.recv().await.is_none());
     assert!(routed.cancel_turn("0:session").await.is_err());
     assert!(routed.abort_turn_provider("0:session").await.is_err());
 }

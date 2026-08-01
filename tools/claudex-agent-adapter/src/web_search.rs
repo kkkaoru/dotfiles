@@ -130,6 +130,7 @@ async fn run_worker(
         .and_then(Value::as_str)
         .context("search worker omitted thread id")?
         .to_owned();
+    backend.ensure_thread_ready(&thread_id).await?;
     let events = backend.subscribe_thread(&thread_id);
     backend
         .request_detached(

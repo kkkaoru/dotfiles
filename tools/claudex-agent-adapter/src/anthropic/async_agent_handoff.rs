@@ -15,10 +15,8 @@ use super::{
     content::{ToolResult, anthropic_response, collect_tool_results, estimated_tokens, sse},
     stream::message_start,
 };
-
 const ASYNC_LAUNCH_PREFIX: &str = "Async agent launched successfully.";
 const BACKGROUND_MARKER: &str = "The agent is working in the background.";
-
 impl Bridge {
     pub(super) async fn async_agent_launch_handoff(
         &self,
@@ -43,7 +41,6 @@ impl Bridge {
             &self.request_model(request),
         ))
     }
-
     async fn cancel_handed_off_provider_session(&self, results: &[ToolResult]) -> bool {
         let Some(session) = self.find_result_session(results).await else {
             return true;
@@ -62,12 +59,15 @@ impl Bridge {
         {
             return false;
         }
+        let ready = self.app.ensure_thread_ready(&session.thread_id).await;
+        if ready.is_err() {
+            return false;
+        }
         let events = Arc::new(self.app.subscribe_thread(&session.thread_id));
         self.disconnect_stream(&session, events).await;
         true
     }
 }
-
 fn pure_async_launch_tool_results(message: &Value) -> Option<Vec<String>> {
     if message.get("role").and_then(Value::as_str) != Some("user") {
         return None;
@@ -100,7 +100,7 @@ fn pure_async_launch_tool_results(message: &Value) -> Option<Vec<String>> {
 }
 
 /// Return the successful async launch IDs only when they are a duplicate-free,
-/// exact match for the expected tool round. Both the Anthropic handoff and the
+/// exact match for the expected tool round. Both handoff and the
 /// scheduler use this predicate so a partial or replayed acknowledgement cannot
 /// make the two lifecycle views diverge.
 pub(crate) fn exact_async_launch_acknowledgement(

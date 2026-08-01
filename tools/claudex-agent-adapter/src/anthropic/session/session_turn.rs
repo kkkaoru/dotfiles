@@ -35,6 +35,9 @@ impl Bridge {
         let existing_len = selected.existing_len;
         let extras = request.messages[existing_len..].to_vec();
         let has_tool_results = !tool_results.is_empty();
+        self.app
+            .ensure_thread_ready(&selected.session.thread_id)
+            .await?;
         let events = Arc::new(self.app.subscribe_thread(&selected.session.thread_id));
         let start = if tool_results.is_empty() || selected.recovered {
             self.start_model_turn(
@@ -162,6 +165,9 @@ impl Bridge {
             )
             .await?;
         let extras = context.request.messages.to_vec();
+        self.app
+            .ensure_thread_ready(&selected.session.thread_id)
+            .await?;
         let events = Arc::new(self.app.subscribe_thread(&selected.session.thread_id));
         let start = self
             .start_model_turn(

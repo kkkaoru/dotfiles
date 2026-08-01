@@ -304,6 +304,17 @@ pub struct ThreadEvents {
 }
 
 impl ThreadEvents {
+    /// Create an already-closed receiver for a provider route that was retired
+    /// while a concurrent caller was attaching to its thread. Callers can
+    /// handle this as a normal stream-closed outcome instead of bringing down
+    /// the adapter with a panic.
+    pub(crate) fn closed(thread_id: impl Into<String>) -> Self {
+        let dispatcher = ThreadEventDispatcher::default();
+        let events = dispatcher.subscribe(&thread_id.into());
+        events.queue.close();
+        events
+    }
+
     pub async fn recv(&self) -> Option<Value> {
         self.queue.recv().await
     }
