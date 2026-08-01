@@ -121,7 +121,7 @@ impl Bridge {
         } = prepared;
         let prepare = async {
             let permit = match concurrency_ticket {
-                Some(ticket) => Some(ticket.acquire().await?),
+                Some(ticket) => Some(ticket.acquire_for(!is_subagent).await?),
                 None => None,
             };
             let turn = self.prepare_turn(&request, input_tokens, effort).await?;
@@ -196,7 +196,7 @@ impl Bridge {
         // visible progress semantics during active output.
         let mut activity_deadline = Box::pin(sleep(activity_interval));
         loop {
-            let wait = self
+            let wait = match self
                 .wait_for_stream_event(
                     session,
                     Arc::clone(&events),
@@ -205,7 +205,18 @@ impl Bridge {
                     activity_interval,
                     &mut activity_deadline,
                 )
-                .await?;
+                .await
+            {
+                Ok(wait) => wait,
+                Err(error)
+                    if is_provider_stream_closed(&error)
+                        && !self.app.model_is_alive(&session.model)
+                        && !builder.has_committed_output() =>
+                {
+                    return Ok(StreamTurn::ProviderFailure { error });
+                }
+                Err(error) => return Err(error),
+            };
             let state = self
                 .resolve_stream_wait(
                     wait,
@@ -357,6 +368,10 @@ impl Bridge {
             provider_settled: false,
         })
     }
+}
+
+pub(super) fn is_provider_stream_closed(error: &anyhow::Error) -> bool {
+    error.to_string().contains("app-server event stream closed")
 }
 
 fn reset_activity_deadline(

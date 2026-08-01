@@ -4,6 +4,31 @@ use axum::{body::Body, http::Response};
 use super::super::{ActiveTurn, Bridge, content::anthropic_response};
 
 impl Bridge {
+    pub(in crate::anthropic) async fn retry_after_provider_failure(
+        &self,
+        mut turn: ActiveTurn,
+        error: anyhow::Error,
+    ) -> Result<ActiveTurn> {
+        if !super::is_provider_stream_closed(&error) || self.app.model_is_alive(&turn.session.model)
+        {
+            self.remove_session(&turn.session).await;
+            return Err(error);
+        }
+        let Some(retry) = turn.retry.take() else {
+            self.remove_session(&turn.session).await;
+            return Err(error);
+        };
+        let model = turn.session.model.clone();
+        let input_tokens = turn.input_tokens;
+        let previous = std::sync::Arc::clone(&turn.session);
+        tracing::warn!(
+            model = %model,
+            "retrying a provider failure after the routed ACP process was recycled"
+        );
+        self.retry_after_context_window(retry, &previous, input_tokens)
+            .await
+    }
+
     pub(in crate::anthropic) async fn context_retry_or_error(
         &self,
         turn: &mut ActiveTurn,

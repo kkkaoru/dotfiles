@@ -143,11 +143,51 @@ impl Bridge {
                 })
                 .await
             }
+            Ok(StreamTurn::ProviderFailure { error }) => {
+                self.retry_provider_stream(
+                    turn,
+                    sender,
+                    error,
+                    model_permit,
+                    is_subagent,
+                    run_in_background,
+                )
+                .await;
+            }
             Ok(StreamTurn::Disconnected) => {}
             Err(error) => {
                 tracing::warn!(?error, "streaming turn failed before message_stop");
                 self.remove_session(&turn.session).await;
                 send_stream_error(&sender, error).await;
+            }
+        }
+    }
+
+    async fn retry_provider_stream(
+        self: Arc<Self>,
+        turn: ActiveTurn,
+        sender: StreamSender,
+        error: anyhow::Error,
+        model_permit: Option<ModelPermit>,
+        is_subagent: bool,
+        run_in_background: bool,
+    ) {
+        let input_tokens = turn.input_tokens;
+        match self.retry_after_provider_failure(turn, error).await {
+            Ok(retried) => {
+                Box::pin(self.drive_subagent_stream(
+                    retried,
+                    sender,
+                    SegmentBuilder::new(input_tokens),
+                    model_permit,
+                    is_subagent,
+                    run_in_background,
+                ))
+                .await;
+            }
+            Err(retry_error) => {
+                drop(model_permit);
+                send_stream_error(&sender, retry_error).await;
             }
         }
     }

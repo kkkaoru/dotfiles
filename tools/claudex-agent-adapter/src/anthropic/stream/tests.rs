@@ -469,6 +469,29 @@ async fn reports_a_closed_provider_event_stream() {
 }
 
 #[tokio::test]
+async fn classifies_a_dead_provider_stream_closure_for_one_retry() {
+    let (bridge, session, dispatcher) = grok_disconnect_fixture();
+    let events = dispatcher.subscribe("thread");
+    dispatcher.close();
+    let (sender, _receiver) = mpsc::channel::<Result<Bytes, Infallible>>(1);
+    let result = bridge
+        .wait_for_stream_segment_with_interval(StreamWaitInput {
+            session: &session,
+            events: Arc::new(events),
+            current_messages: &[],
+            system: &json!(null),
+            sender: &sender,
+            builder: SegmentBuilder::new(1),
+            activity_interval: Duration::from_secs(1),
+        })
+        .await;
+    assert!(matches!(
+        result,
+        Ok(super::StreamTurn::ProviderFailure { .. })
+    ));
+}
+
+#[tokio::test]
 async fn retries_context_window_errors_only_before_committed_output() {
     let (_root, _app, bridge, session) = disconnect_fixture().await;
     let dispatcher = crate::app_server::events::ThreadEventDispatcher::default();

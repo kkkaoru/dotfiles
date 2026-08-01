@@ -33,8 +33,10 @@ pub(super) struct ModelConcurrency {
 struct LimitedModel {
     limit: usize,
     slots: Arc<Semaphore>,
+    interactive: Arc<Semaphore>,
     admission: Arc<Semaphore>,
     queued: AtomicUsize,
+    active: AtomicUsize,
 }
 
 pub(super) struct Ticket {
@@ -45,6 +47,13 @@ pub(super) struct Ticket {
 pub(super) struct ModelPermit {
     _admission: OwnedSemaphorePermit,
     _permit: OwnedSemaphorePermit,
+    entry: Arc<LimitedModel>,
+}
+
+impl Drop for ModelPermit {
+    fn drop(&mut self) {
+        self.entry.active.fetch_sub(1, Ordering::Relaxed);
+    }
 }
 
 struct QueueGuard<'a>(&'a AtomicUsize);
@@ -96,31 +105,48 @@ impl LimitedModel {
     fn new(limit: usize) -> Self {
         Self {
             limit,
-            slots: Arc::new(Semaphore::new(limit)),
+            slots: Arc::new(Semaphore::new(limit.saturating_sub(1).max(1))),
+            interactive: Arc::new(Semaphore::new(usize::from(limit > 1))),
             admission: Arc::new(Semaphore::new(admission_capacity(limit))),
             queued: AtomicUsize::new(0),
+            active: AtomicUsize::new(0),
         }
     }
 
     fn status(&self) -> ModelConcurrencyStatus {
-        let free_permits = self.slots.available_permits();
+        let active = self.active.load(Ordering::Relaxed);
         let queued = self.queued.load(Ordering::Relaxed);
         ModelConcurrencyStatus {
-            active: self.limit - free_permits,
+            active,
             limit: self.limit,
-            available: self.limit - free_permits + queued < self.limit,
+            available: active + queued < self.limit,
             queued,
         }
     }
 }
 
 impl Ticket {
+    #[cfg(test)]
     pub(super) async fn acquire(self) -> Result<ModelPermit> {
         self.acquire_with_timeout(model_concurrency_wait_timeout())
             .await
     }
 
+    pub(super) async fn acquire_for(self, interactive: bool) -> Result<ModelPermit> {
+        self.acquire_with_timeout_for(model_concurrency_wait_timeout(), interactive)
+            .await
+    }
+
+    #[cfg(test)]
     async fn acquire_with_timeout(self, wait_timeout: Duration) -> Result<ModelPermit> {
+        self.acquire_with_timeout_for(wait_timeout, false).await
+    }
+
+    async fn acquire_with_timeout_for(
+        self,
+        wait_timeout: Duration,
+        interactive: bool,
+    ) -> Result<ModelPermit> {
         let started = Instant::now();
         let admission = acquire_permit(
             Arc::clone(&self.entry.admission),
@@ -132,19 +158,51 @@ impl Ticket {
         self.entry.queued.fetch_add(1, Ordering::Relaxed);
         let queued = QueueGuard(&self.entry.queued);
         let remaining = wait_timeout.saturating_sub(started.elapsed());
-        let permit = acquire_permit(
-            Arc::clone(&self.entry.slots),
-            remaining,
-            "model",
-            &self.model,
-        )
-        .await?;
+        let permit = if interactive {
+            acquire_interactive_permit(&self.entry, remaining, &self.model).await?
+        } else {
+            acquire_permit(
+                Arc::clone(&self.entry.slots),
+                remaining,
+                "model",
+                &self.model,
+            )
+            .await?
+        };
         drop(queued);
+        self.entry.active.fetch_add(1, Ordering::Relaxed);
         Ok(ModelPermit {
             _admission: admission,
             _permit: permit,
+            entry: Arc::clone(&self.entry),
         })
     }
+}
+
+async fn acquire_interactive_permit(
+    entry: &LimitedModel,
+    wait_timeout: Duration,
+    model: &str,
+) -> Result<OwnedSemaphorePermit> {
+    if wait_timeout.is_zero() {
+        return entry
+            .interactive
+            .clone()
+            .try_acquire_owned()
+            .or_else(|_| entry.slots.clone().try_acquire_owned())
+            .map_err(|_| anyhow!("model `{model}` concurrency semaphore is unavailable"));
+    }
+    timeout(wait_timeout, async {
+        tokio::select! {
+            permit = entry.interactive.clone().acquire_owned() => permit,
+            permit = entry.slots.clone().acquire_owned() => permit,
+        }
+    })
+    .await
+    .map_err(|_| {
+        anyhow!("model `{model}` concurrency model admission timed out after {wait_timeout:?}")
+    })?
+    .map_err(|_| anyhow!("model `{model}` concurrency semaphore is unavailable"))
 }
 
 async fn acquire_permit(
@@ -331,3 +389,7 @@ mod tests {
         assert_eq!(admission_capacity(0), 0);
     }
 }
+
+#[cfg(test)]
+#[path = "model_concurrency_priority_tests.rs"]
+mod priority_tests;

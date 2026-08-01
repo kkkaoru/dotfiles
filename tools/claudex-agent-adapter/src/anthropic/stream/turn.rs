@@ -11,5 +11,8 @@ pub(in crate::anthropic) enum StreamTurn {
         error: anyhow::Error,
         builder: SegmentBuilder,
     },
+    ProviderFailure {
+        error: anyhow::Error,
+    },
     Disconnected,
 }

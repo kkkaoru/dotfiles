@@ -66,7 +66,7 @@ impl Bridge {
             ));
         }
         let permit = match concurrency_ticket {
-            Some(ticket) => Some(ticket.acquire().await?),
+            Some(ticket) => Some(ticket.acquire_for(!is_subagent).await?),
             None => None,
         };
         let turn = self.prepare_turn(&request, input_tokens, effort).await?;
