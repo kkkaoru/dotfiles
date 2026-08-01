@@ -629,12 +629,13 @@ mod tests {
         config.log_path = root.path().join("adapter.log");
         let _pid = start_adapter(&config).expect("start detached daemon");
 
-        for _ in 0..100 {
+        for _ in 0..500 {
             if arguments.exists() {
                 break;
             }
             thread::sleep(Duration::from_millis(10));
         }
+        assert!(arguments.exists(), "detached daemon did not write arguments");
         let arguments = std::fs::read_to_string(arguments).expect("daemon arguments");
         assert!(arguments.contains("serve\n"));
         assert!(arguments.contains("--model\ntest-model\n"));

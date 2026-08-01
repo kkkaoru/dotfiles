@@ -356,19 +356,34 @@ impl Bridge {
             .remove_tool_results(completed_ids.iter().map(String::as_str));
         let submitted = !responses.is_empty();
         for (id, result) in responses {
+            let success =
+                !result.is_error || is_idempotent_task_lifecycle_error(&result.content_items);
             self.app
                 .respond_for_model(
                     &session.model,
                     id,
                     json!({
                         "contentItems": result.content_items,
-                        "success": !result.is_error
+                        "success": success
                     }),
                 )
                 .await?;
         }
         Ok(submitted)
     }
+}
+
+fn is_idempotent_task_lifecycle_error(content_items: &[Value]) -> bool {
+    // Claude Code reports a consumed TaskStop/TaskOutput target as an error
+    // string even though the requested lifecycle state is already satisfied.
+    content_items.iter().any(|item| {
+        let Some(text) = item.get("text").and_then(Value::as_str) else {
+            return false;
+        };
+        let normalized = text.trim_start().to_ascii_lowercase();
+        normalized.starts_with("error: no task found with id:")
+            || normalized.starts_with("no task found with id:")
+    })
 }
 
 #[cfg(test)]

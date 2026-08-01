@@ -9,12 +9,32 @@ use serde_json::{Value, json};
 use tokio::sync::{Mutex, Semaphore};
 
 use super::{
-    candidate_length, codex_tool_name, dynamic_tool, is_better_length, owns_tool_result,
-    reservation::reserve_matching_session, session_turn::contains_context_window_marker,
-    thread_start_params,
-    thread_start_params_for_mode, tool_configuration,
-    tool_configuration_for_mode, transcript_owns_tool_results, validate_tool_result_ownership,
+    candidate_length, codex_tool_name, dynamic_tool, is_better_length,
+    is_idempotent_task_lifecycle_error, owns_tool_result, reservation::reserve_matching_session,
+    session_turn::contains_context_window_marker, thread_start_params,
+    thread_start_params_for_mode, tool_configuration, tool_configuration_for_mode,
+    transcript_owns_tool_results, validate_tool_result_ownership,
 };
+
+#[test]
+fn treats_unknown_task_lifecycle_ids_as_idempotent_success() {
+    assert!(is_idempotent_task_lifecycle_error(&[json!({
+        "type":"text",
+        "text":"Error: No task found with ID: bfn35ry3f"
+    })]));
+    assert!(is_idempotent_task_lifecycle_error(&[json!({
+        "type":"text",
+        "text":"error: no task found with id: already-consumed"
+    })]));
+    assert!(!is_idempotent_task_lifecycle_error(&[json!({
+        "type":"text",
+        "text":"Error: provider unavailable"
+    })]));
+    assert!(!is_idempotent_task_lifecycle_error(&[json!({
+        "type":"text",
+        "text":"shell output: Error: No task found with ID: unrelated"
+    })]));
+}
 use crate::agent_backend::WebSearchMode;
 use crate::anthropic::{
     Bridge, MessagesRequest, SelectedSession, Session, content::ToolResult,
@@ -177,7 +197,12 @@ fn configures_external_and_internal_tools_without_duplicates() {
             "missing resumed capability {expected}"
         );
     }
-    assert!(configured.1.values().any(|name| name == "claude_collaborator"));
+    assert!(
+        configured
+            .1
+            .values()
+            .any(|name| name == "claude_collaborator")
+    );
     assert!(configured.2.is_empty());
 }
 
@@ -533,7 +558,10 @@ fn resumed_codex_request_rehydrates_file_and_delegation_tools() {
     })];
     let (_, names, _) = tool_configuration(&request, None, None);
     for expected in ["Bash", "Read", "Write", "Edit", "Agent", "Task"] {
-        assert!(names.values().any(|name| name == expected), "missing {expected}");
+        assert!(
+            names.values().any(|name| name == expected),
+            "missing {expected}"
+        );
     }
 }
 
@@ -983,10 +1011,13 @@ async fn toolless_main_continuation_reuses_the_session_with_bash_schema() {
 #[test]
 fn stale_resume_session_without_dynamic_capabilities_is_not_reused() {
     let request = request(json!("main system"), Vec::new());
-    let stale = session("signature", vec![json!({
-        "role": "user",
-        "content": "continue"
-    })]);
+    let stale = session(
+        "signature",
+        vec![json!({
+            "role": "user",
+            "content": "continue"
+        })],
+    );
     assert!(!Bridge::session_has_recovered_capability(&stale, &request));
 
     let mut capable = session("signature", Vec::new());

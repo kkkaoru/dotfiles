@@ -90,6 +90,124 @@ fn parses_batch_launches() {
 }
 
 #[test]
+fn deduplicates_same_prompt_across_fresh_tool_use_ids() {
+    let scheduler = ParallelScheduler::for_tests();
+    let state = messages(&[
+        serde_json::json!({
+            "role":"user",
+            "content":"Handle this one bounded task.",
+        }),
+        serde_json::json!({
+            "role":"assistant",
+            "content":[
+                {"type":"tool_use","id":"retry-a","name":"cc_Agent_0","input":{"prompt":"Handle this one bounded task.","claudex_model":"gpt-5.6-sol"}},
+                {"type":"tool_use","id":"retry-b","name":"cc_Agent_0","input":{"prompt":" handle   this one bounded task. ","claudex_model":"grok-4.5"}},
+            ]
+        }),
+    ]);
+
+    let decision = scheduler.decision_for_request(&state);
+
+    assert_eq!(decision.active_workers, 1);
+    assert_eq!(decision.target_workers, 1);
+    assert_eq!(decision.needs_more_workers, 0);
+}
+
+#[test]
+fn explicit_batch_count_keeps_same_prompt_tasks_as_separate_lanes() {
+    let scheduler = ParallelScheduler::for_tests();
+    let state = messages(&[
+        serde_json::json!({
+            "role":"user",
+            "content":"Run the explicitly requested batch.",
+        }),
+        serde_json::json!({
+            "role":"assistant",
+            "content":[{
+                "type":"tool_use",
+                "id":"batch-explicit",
+                "name":"cc_Agent_batch_0",
+                "input":{"tasks":[
+                    {"prompt":"same scope","claudex_model":"gpt-5.6-sol"},
+                    {"prompt":"same scope","claudex_model":"grok-4.5"},
+                    {"prompt":"same scope","claudex_model":"gpt-5.6-sol"}
+                ]}
+            }]
+        }),
+    ]);
+
+    let decision = scheduler.decision_for_request(&state);
+
+    assert_eq!(decision.active_workers, 3);
+    assert_eq!(decision.target_workers, 3);
+    assert_eq!(decision.needs_more_workers, 0);
+}
+
+#[test]
+fn completing_one_duplicate_scope_does_not_trigger_a_relaunch() {
+    let scheduler = ParallelScheduler::for_tests();
+    let first = messages(&[
+        serde_json::json!({"role":"user","content":"Handle one bounded task."}),
+        serde_json::json!({"role":"assistant","content":[
+            {"type":"tool_use","id":"same-a","name":"cc_Agent_0","input":{"prompt":"Handle one bounded task.","claudex_model":"gpt-5.6-sol"}},
+            {"type":"tool_use","id":"same-b","name":"cc_Agent_0","input":{"prompt":"Handle one bounded task.","claudex_model":"gpt-5.6-sol"}}
+        ]}),
+    ]);
+    let after_one_completion = messages(&[
+        serde_json::json!({"role":"user","content":"Handle one bounded task."}),
+        serde_json::json!({"role":"assistant","content":[
+            {"type":"tool_result","tool_use_id":"same-a","content":"done"},
+            {"type":"tool_use","id":"same-b","name":"cc_Agent_0","input":{"prompt":"Handle one bounded task.","claudex_model":"gpt-5.6-sol"}}
+        ]}),
+    ]);
+
+    let _ = scheduler.decision_for_request(&first);
+    let decision = scheduler.decision_for_request(&after_one_completion);
+
+    assert_eq!(decision.active_workers, 1);
+    assert_eq!(decision.completed_recently, 0);
+    assert_eq!(decision.needs_more_workers, 0);
+}
+
+#[test]
+fn unknown_task_result_does_not_restart_other_running_scopes() {
+    let scheduler = ParallelScheduler::new(SchedulerConfig {
+        min_parallel_workers: 2,
+        max_parallel_workers: 2,
+        active_floor: 2,
+        ..SchedulerConfig::default()
+    });
+    let first = messages(&[
+        serde_json::json!({"role":"user","content":"Run these independent scopes in parallel."}),
+        serde_json::json!({"role":"assistant","content":[
+            {"type":"tool_use","id":"running-a","name":"cc_Agent_0","input":{"prompt":"scope a","claudex_model":"gpt-5.6-sol"}},
+            {"type":"tool_use","id":"running-b","name":"cc_Agent_0","input":{"prompt":"scope b","claudex_model":"gpt-5.6-sol"}}
+        ]}),
+    ]);
+    let stale_result = messages(&[
+        serde_json::json!({"role":"user","content":"Run these independent scopes in parallel."}),
+        serde_json::json!({"role":"assistant","content":[
+            {"type":"tool_result","tool_use_id":"unknown-stale-task","content":"Error: No task found with ID: unknown-stale-task"},
+            {"type":"tool_use","id":"running-a","name":"cc_Agent_0","input":{"prompt":"scope a","claudex_model":"gpt-5.6-sol"}},
+            {"type":"tool_use","id":"running-b","name":"cc_Agent_0","input":{"prompt":"scope b","claudex_model":"gpt-5.6-sol"}}
+        ]}),
+    ]);
+
+    let _ = scheduler.decision_for_request(&first);
+    let decision = scheduler.decision_for_request(&stale_result);
+
+    assert_eq!(decision.active_workers, 2);
+    assert_eq!(decision.completed_recently, 0);
+    assert_eq!(decision.needs_more_workers, 0);
+    assert!(
+        !decision
+            .actions
+            .iter()
+            .any(|action| action.contains("Launch at least"))
+    );
+}
+
+#[test]
 fn healthy_active_floor_is_not_marked_as_breached() {
     let scheduler = ParallelScheduler::for_tests();
     let state = messages(&[serde_json::json!({

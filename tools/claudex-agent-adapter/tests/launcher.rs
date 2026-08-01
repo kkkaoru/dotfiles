@@ -182,6 +182,56 @@ async fn ensure_running_starts_reuses_and_replaces_the_daemon() {
 }
 
 #[tokio::test]
+async fn ensure_running_replaces_daemon_when_codex_config_changes() {
+    let home = launcher_home();
+    let codex_config = home.path().join(".codex/config.toml");
+    fs::write(&codex_config, "[model_providers.sakana]\n# initial\n")
+        .expect("write initial Codex config");
+    let port = unused_port();
+
+    let first = ensure_command(&home, port, "20")
+        .output()
+        .expect("start daemon with initial Codex config");
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stderr)
+    );
+
+    let base_url = format!("http://127.0.0.1:{port}");
+    let client = Client::new();
+    let initial = health(&client, &base_url).await;
+    let initial_pid = initial["pid"].as_u64().expect("initial daemon pid");
+    let initial_fingerprint = initial["codex_config_fingerprint"]
+        .as_str()
+        .filter(|fingerprint| !fingerprint.is_empty())
+        .expect("initial Codex config fingerprint")
+        .to_owned();
+
+    fs::write(&codex_config, "[model_providers.sakana]\n# changed\n").expect("change Codex config");
+    let replaced = ensure_command(&home, port, "20")
+        .output()
+        .expect("replace daemon after Codex config change");
+    assert!(
+        replaced.status.success(),
+        "{}",
+        String::from_utf8_lossy(&replaced.stderr)
+    );
+
+    let changed = health(&client, &base_url).await;
+    let replacement_pid = changed["pid"].as_u64().expect("replacement daemon pid");
+    let replacement_fingerprint = changed["codex_config_fingerprint"]
+        .as_str()
+        .filter(|fingerprint| !fingerprint.is_empty())
+        .expect("replacement Codex config fingerprint");
+    assert_ne!(replacement_pid, initial_pid);
+    assert_ne!(replacement_fingerprint, initial_fingerprint);
+
+    drop(client);
+    terminate_and_wait(replacement_pid).await;
+}
+
+#[tokio::test]
 async fn ensure_running_replaces_the_renamed_legacy_daemon() {
     let home = launcher_home();
     let port = unused_port();
