@@ -4,7 +4,8 @@ use anyhow::Result;
 use axum::{body::Body, http::Response};
 
 use super::{
-    Bridge, MessagesRequest, RequestIdentity, request_routing, token_count, trace_request,
+    Bridge, MessagesRequest, RequestIdentity, internal_notification, request_routing, token_count,
+    trace_request,
 };
 
 impl Bridge {
@@ -56,6 +57,12 @@ impl Bridge {
         self.schedule_idle_session_sweep();
         self.agent_efforts
             .retire_terminal_task_notifications(&request);
+        if internal_notification::is_internal_notification_request(&request) {
+            tracing::debug!(
+                "acknowledging an internal SubAgent notification without provider turn"
+            );
+            return Ok(internal_notification::acknowledge(&request));
+        }
         if let Some(response) = self.async_agent_launch_handoff(&request).await {
             return Ok(response);
         }
@@ -106,6 +113,7 @@ impl Bridge {
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use axum::body::to_bytes;
     use std::os::unix::fs::PermissionsExt;
 
     use super::*;
@@ -155,5 +163,80 @@ mod tests {
                 .expect("message wrapper should not hang")
                 .expect("streaming response");
         assert_eq!(response.status(), axum::http::StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn internal_agent_notification_is_acknowledged_without_provider_turn() {
+        let root = tempfile::tempdir().expect("message notification fixture");
+        let source = root.path().join("source");
+        std::fs::create_dir(&source).expect("source home");
+        std::fs::write(source.join("auth.json"), "{}").expect("source auth");
+        let log = root.path().join("provider-input.log");
+        let program = root.path().join("app-server");
+        std::fs::write(
+            &program,
+            format!(
+                "#!/bin/sh\nwhile IFS= read -r line; do printf '%s\\n' \"$line\" >> '{}'; id=$(printf '%s\\n' \"$line\" | sed -n 's/.*\\\"id\\\":\\([0-9]*\\).*/\\1/p'); printf '{{\"id\":%s,\"result\":{{}}}}\\n' \"$id\"; done\n",
+                log.display()
+            ),
+        )
+        .expect("app-server fixture");
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
+            .expect("make app-server fixture executable");
+        let app = crate::app_server::AppServer::spawn_with_program(
+            "main",
+            &program,
+            &source,
+            &root.path().join("isolated"),
+        )
+        .await
+        .expect("start app-server fixture");
+        let bridge = std::sync::Arc::new(Bridge::new_with_backend(
+            crate::agent_backend::AgentBackend::codex(app),
+            "main".to_owned(),
+        ));
+        let before = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            wait_for_log_marker(&log, "\"method\":\"initialized\""),
+        )
+        .await
+        .expect("provider fixture should finish initialization");
+        let request = MessagesRequest {
+            model: "main".to_owned(),
+            system: Value::Null,
+            messages: vec![json!({
+                "role":"user",
+                "content":"<agent-message from=\"general-purpose\">worker output</agent-message>"
+            })],
+            tools: Vec::new(),
+            stream: false,
+            output_config: Value::Null,
+            metadata: Value::Null,
+            working_directory: None,
+            disabled_subagent_models: Default::default(),
+            claudex_collaborator_model: None,
+        };
+        let response =
+            tokio::time::timeout(std::time::Duration::from_secs(2), bridge.messages(request))
+                .await
+                .expect("internal notification should return immediately")
+                .expect("internal notification response");
+        let body = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read internal notification response");
+        let body = String::from_utf8(body.to_vec()).expect("UTF-8 response");
+        let after = std::fs::read_to_string(&log).unwrap_or_default();
+        assert_eq!(before, after, "notification must not start a provider turn");
+        assert!(!body.contains("agent-message"));
+        assert!(body.contains("\"stop_reason\":\"end_turn\""));
+    }
+
+    async fn wait_for_log_marker(path: &std::path::Path, marker: &str) -> String {
+        let mut current = String::new();
+        while !current.contains(marker) {
+            current = std::fs::read_to_string(path).unwrap_or_default();
+            tokio::task::yield_now().await;
+        }
+        current
     }
 }

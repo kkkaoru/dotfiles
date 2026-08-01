@@ -10,6 +10,7 @@ mod content_batch;
 mod content_pending;
 mod error;
 mod health;
+mod internal_notification;
 mod message_router;
 mod model_concurrency;
 mod request_identity;
