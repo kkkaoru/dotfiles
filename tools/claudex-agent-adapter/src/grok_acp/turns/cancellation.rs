@@ -221,17 +221,22 @@ fn settle_cancelled_prompt(ctx: CancelCtx<'_>, response: acp::Result<acp::Prompt
             dispatch_turn_terminal(ctx.events, ctx.session_id, "completed");
         }
         Err(error) => {
-            tracing::debug!(
-                provider = ctx.provider.label(),
-                session_id = ctx.session_id,
-                ?error,
-                "ACP provider reported an error while settling an explicit cancellation"
-            );
+            log_prompt_settlement_error(ctx.provider, ctx.session_id, &error);
             drop(ctx.permit);
             let _ = ctx.cancellation.response.send(Ok(()));
             dispatch_turn_terminal(ctx.events, ctx.session_id, "cancelled");
         }
     }
+}
+
+#[cfg_attr(coverage_nightly, coverage(off))]
+fn log_prompt_settlement_error(provider: AcpProvider, session_id: &str, error: &acp::Error) {
+    tracing::debug!(
+        provider = provider.label(),
+        session_id,
+        ?error,
+        "ACP provider reported an error while settling an explicit cancellation"
+    );
 }
 
 fn fail_cancellation(ctx: CancelCtx<'_>, message: String) {

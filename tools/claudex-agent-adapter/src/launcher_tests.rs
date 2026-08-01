@@ -1,6 +1,7 @@
 #[cfg(test)]
 // Coverage gates measure production code; test implementations are excluded.
 #[cfg_attr(coverage_nightly, coverage(off))]
+#[allow(clippy::excessive_nesting)]
 mod tests {
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
@@ -260,6 +261,21 @@ mod tests {
             .search_worker_routes
             .push("stale-search-worker".to_owned());
         stale.push(health);
+        let mut health = healthy(&config);
+        health.model = "stale-model".to_owned();
+        stale.push(health);
+        let mut health = healthy(&config);
+        health.service_config_fingerprint = "stale-service".to_owned();
+        stale.push(health);
+        let mut health = healthy(&config);
+        health.backend_routes.push("stale-backend".to_owned());
+        stale.push(health);
+        let mut health = healthy(&config);
+        health.subscription_max_processes = 21;
+        stale.push(health);
+        let mut health = healthy(&config);
+        health.subagent_hard_timeout_seconds = Some(1);
+        stale.push(health);
         for health in stale {
             assert!(!config.matches(&health));
         }
@@ -311,6 +327,46 @@ mod tests {
         handover::release_stale_listener(&client, &config, Some(std::process::id()))
             .await
             .expect("current process");
+    }
+
+    #[tokio::test]
+    async fn recovery_readiness_rejects_each_identity_mismatch_before_authentication() {
+        let client = reqwest::Client::new();
+        let mut base = config();
+        let recovery = super::daemon_start::RecoveryProcess {
+            pid: 42,
+            generation: "generation".to_owned(),
+            protocol_version: ADAPTER_PROTOCOL_VERSION,
+            build_id: env!("CLAUDEX_BUILD_ID").to_owned(),
+            model: base.options.model.clone(),
+            codex_config_fingerprint: base.codex_config_fingerprint.clone(),
+            service_config_fingerprint: base.service_config_fingerprint.clone(),
+        };
+        for mismatch in [
+            |health: &mut Health| health.status = "starting".to_owned(),
+            |health: &mut Health| health.pid = Some(7),
+            |health: &mut Health| health.protocol_version += 1,
+            |health: &mut Health| health.build_id = "old-build".to_owned(),
+            |health: &mut Health| health.model = "other-model".to_owned(),
+            |health: &mut Health| health.codex_config_fingerprint = "old-codex".to_owned(),
+            |health: &mut Health| health.service_config_fingerprint = "old-service".to_owned(),
+            |health: &mut Health| health.recovery_generation = Some("old-generation".to_owned()),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").expect("recovery readiness listener");
+            base.options.listen = listener.local_addr().expect("recovery readiness address");
+            let mut health = healthy(&base);
+            health.recovery_generation = Some(recovery.generation.clone());
+            mismatch(&mut health);
+            let server = serve_responses(listener, vec![health_response(&health)]);
+            let timed_out = tokio::time::timeout(
+                std::time::Duration::from_millis(100),
+                wait_until_recovery_ready(&client, &base, &recovery),
+            )
+            .await
+            .is_err();
+            assert!(timed_out, "mismatched recovery health must not authenticate");
+            server.join().expect("recovery readiness server");
+        }
     }
 
     #[tokio::test]

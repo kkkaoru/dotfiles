@@ -82,6 +82,11 @@ fn prepares_and_reuses_only_the_builtin_high_profile() {
 #[test]
 fn rejects_cross_provider_aliases_before_they_reach_the_grok_api() {
     let home = tempfile::tempdir().unwrap();
+    let stale_hook = home
+        .path()
+        .join(".cache/claudex/grok-native-high-plugin-v3/hooks/hooks.json");
+    std::fs::create_dir_all(stale_hook.parent().unwrap()).unwrap();
+    std::fs::write(&stale_hook, "stale process hook").unwrap();
     let agents = home
         .path()
         .join(".cache/claudex/grok-native-high-plugin-v3/agents");
@@ -90,6 +95,7 @@ fn rejects_cross_provider_aliases_before_they_reach_the_grok_api() {
     let plugin = prepare_with(OsStr::new("grok"), None, Some(home.path().to_owned()))
         .unwrap()
         .unwrap();
+    assert!(!stale_hook.exists());
 
     for alias in UNSAFE_CROSS_PROVIDER_ALIASES {
         assert!(!plugin.join("agents").join(format!("{alias}.md")).exists());
@@ -107,6 +113,45 @@ fn rejects_cross_provider_aliases_before_they_reach_the_grok_api() {
     assert!(hook.contains("^spawn_subagent$"));
     assert!(REJECT_UNSAFE_AGENT_SCRIPT.contains("CLAUDEX_GROK_ACP"));
     assert!(REJECT_UNSAFE_AGENT_SCRIPT.contains(QUALIFIED_PROFILE_NAME));
+}
+
+#[test]
+fn rewrites_existing_builtin_plugin_files_and_removes_the_stale_hook() {
+    let home = tempfile::tempdir().unwrap();
+    let root = home
+        .path()
+        .join(".cache/claudex/grok-native-high-plugin-v3");
+    std::fs::create_dir_all(root.join("agents")).unwrap();
+    std::fs::create_dir_all(root.join("bin")).unwrap();
+    std::fs::create_dir_all(root.join("hooks")).unwrap();
+    std::fs::create_dir_all(home.path().join(".grok/hooks")).unwrap();
+    std::fs::write(root.join("agents/claudex-high.md"), "old profile").unwrap();
+    std::fs::write(root.join("bin/reject-cross-provider-agent.sh"), "old guard").unwrap();
+    std::fs::write(root.join("hooks/hooks.json"), "old process hook").unwrap();
+    std::fs::write(
+        home.path().join(".grok/hooks/claudex-agent-adapter.json"),
+        "old user hook",
+    )
+    .unwrap();
+
+    let plugin = prepare_with(OsStr::new("grok"), None, Some(home.path().to_owned()))
+        .unwrap()
+        .unwrap();
+    assert_eq!(plugin, root);
+    assert!(!root.join("hooks/hooks.json").exists());
+    assert_eq!(
+        std::fs::read_to_string(root.join("agents/claudex-high.md")).unwrap(),
+        profile(PROFILE_NAME)
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.join("bin/reject-cross-provider-agent.sh")).unwrap(),
+        REJECT_UNSAFE_AGENT_SCRIPT
+    );
+    assert_eq!(
+        std::fs::read_to_string(home.path().join(".grok/hooks/claudex-agent-adapter.json"))
+            .unwrap(),
+        hooks_json(&root.join("bin/reject-cross-provider-agent.sh")).unwrap()
+    );
 }
 
 #[test]

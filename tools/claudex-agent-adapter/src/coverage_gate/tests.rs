@@ -12,7 +12,8 @@ use super::runner::{
     run_commands, run_with,
 };
 use super::{
-    audit_report, coverage_percent, is_test_only_source, source_branch_percent, source_line_percent,
+    audit_report, coverage_percent, is_non_executable_source, is_test_only_source,
+    source_branch_percent, source_line_percent,
 };
 
 #[test]
@@ -85,6 +86,16 @@ fn prunes_stale_coverage_artifacts_but_keeps_current_and_live_runs() {
             ))
             .expect("age coverage artifact");
     }
+    let non_target = target.join("not-a-coverage-target");
+    fs::create_dir(&non_target).expect("create non-target directory");
+    fs::File::open(&non_target)
+        .expect("open non-target directory")
+        .set_times(fs::FileTimes::new().set_modified(
+            std::time::SystemTime::now()
+                - COVERAGE_ARTIFACT_RETENTION
+                - std::time::Duration::from_secs(1),
+        ))
+        .expect("age non-target directory");
 
     prune_stale_coverage_artifacts(fixture.path(), &current, std::time::SystemTime::now())
         .expect("prune stale coverage artifacts");
@@ -92,6 +103,7 @@ fn prunes_stale_coverage_artifacts_but_keeps_current_and_live_runs() {
     assert!(!stale.exists());
     assert!(current.exists());
     assert!(live.exists());
+    assert!(non_target.exists());
 }
 
 #[test]
@@ -187,7 +199,7 @@ fn rejects_low_branches_and_low_production_lines() {
     let lines = report_fixture(100.0, 94.9);
     let error =
         audit_report(lines.path(), &lines.path().join("report.json")).expect_err("low lines");
-    assert!(error.to_string().contains("src/lib.rs: 94.90%"));
+    assert!(error.to_string().contains("src/module.rs: 94.90%"));
 
     let functions = report_fixture(100.0, 100.0);
     let report = functions.path().join("report.json");
@@ -202,7 +214,7 @@ fn rejects_low_branches_and_low_production_lines() {
 #[test]
 fn merges_duplicate_branch_instances_by_source_location() {
     let root = tempfile::tempdir().expect("branch fixture");
-    let source = root.path().join("src/lib.rs");
+    let source = root.path().join("src/module.rs");
     fs::create_dir_all(source.parent().unwrap()).unwrap();
     fs::write(&source, "pub fn covered() {}\n").unwrap();
     let data = json!({
@@ -217,6 +229,24 @@ fn merges_duplicate_branch_instances_by_source_location() {
         }]
     });
     assert_eq!(source_branch_percent(root.path(), &data).unwrap(), 100.0);
+}
+
+#[test]
+fn rejects_malformed_branch_records_without_falling_back_to_totals() {
+    let root = tempfile::tempdir().expect("branch fixture");
+    let source = root.path().join("src/lib.rs");
+    fs::create_dir_all(source.parent().unwrap()).unwrap();
+    fs::write(&source, "pub fn covered() {}\n").unwrap();
+
+    let object_record = json!({
+        "files":[{"filename":source,"branches":[{"line":1}]}]
+    });
+    assert!(source_branch_percent(root.path(), &object_record).is_err());
+
+    let incomplete_record = json!({
+        "files":[{"filename":source,"branches":[[1, 1, 1]]}]
+    });
+    assert!(source_branch_percent(root.path(), &incomplete_record).is_err());
 }
 
 #[test]
@@ -298,7 +328,7 @@ fn detects_missing_and_unexpected_production_files() {
         !file["filename"]
             .as_str()
             .expect("filename")
-            .ends_with("src/lib.rs")
+            .ends_with("src/module.rs")
     });
     fs::write(&report_path, serde_json::to_vec(&report).expect("JSON")).expect("write");
     assert!(
@@ -347,6 +377,13 @@ fn handles_zero_counts_and_test_source_names() {
     assert!(!is_test_only_source(std::path::Path::new(
         "src/non-utf8-placeholder"
     )));
+    assert!(is_non_executable_source(std::path::Path::new("src/lib.rs")));
+    assert!(is_non_executable_source(std::path::Path::new(
+        "src/anthropic/stream/turn.rs"
+    )));
+    assert!(!is_non_executable_source(std::path::Path::new(
+        "src/module.rs"
+    )));
 }
 
 #[test]
@@ -359,6 +396,10 @@ fn source_lines_use_countable_segments_instead_of_async_summary_artifacts() {
         ]
     });
     assert_eq!(source_line_percent(&mapped).unwrap(), Some(50.0));
+    assert_eq!(
+        source_line_percent(&json!({"segments":[[20, 1, 0, false, false, false]]})).unwrap(),
+        None
+    );
     assert_eq!(source_line_percent(&json!({})).unwrap(), None);
     assert!(source_line_percent(&json!({"segments":[[1]]})).is_err());
 }
@@ -367,7 +408,12 @@ fn report_fixture(branches: f64, lines: f64) -> tempfile::TempDir {
     let fixture = tempfile::tempdir().expect("fixture");
     let root = fixture.path().display().to_string();
     fs::create_dir_all(fixture.path().join("src/anthropic")).expect("source directory");
-    for file in ["src/lib.rs", "src/anthropic/protocol_tests.rs", "build.rs"] {
+    for file in [
+        "src/lib.rs",
+        "src/module.rs",
+        "src/anthropic/protocol_tests.rs",
+        "build.rs",
+    ] {
         fs::write(fixture.path().join(file), "").expect("source file");
     }
     let branch_covered = (branches * 10.0).round() as u64;
@@ -383,6 +429,10 @@ fn report_fixture(branches: f64, lines: f64) -> tempfile::TempDir {
             "files":[
                 {
                     "filename":format!("{root}/src/lib.rs"),
+                    "summary":{"lines":{"covered":line_covered,"count":1000}}
+                },
+                {
+                    "filename":format!("{root}/src/module.rs"),
                     "summary":{"lines":{"covered":line_covered,"count":1000}}
                 },
                 {

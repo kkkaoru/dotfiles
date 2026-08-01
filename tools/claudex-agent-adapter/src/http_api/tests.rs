@@ -91,5 +91,17 @@ fn applies_domain_filters_to_search_urls() {
         &[],
         &blocked
     ));
+    assert!(!domain_allowed("ftp://example.com/path", &[], &[]));
+    assert!(!domain_allowed("https:///path", &[], &[]));
+    assert!(!domain_allowed(
+        "https://example.com/path",
+        &["other.com".to_string()],
+        &[]
+    ));
+    assert!(domain_allowed(
+        "HTTPS://EXAMPLE.COM/path",
+        &[".EXAMPLE.COM".to_string()],
+        &[]
+    ));
     assert!(!domain_allowed("not-a-url", &[], &[]));
 }

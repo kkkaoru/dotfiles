@@ -34,6 +34,9 @@ pub(super) fn production_line_failures(root: &Path, data: &Value) -> Result<Vec<
         // Do not weaken LLVM's normal file summary when any executable source
         // line is untested. Only correct its known async-mapping false negative
         // after every countable source segment was exercised.
+        // Do not weaken LLVM's normal file summary when any executable source
+        // line is untested. Only correct its known async-mapping false negative
+        // after every countable source segment was exercised.
         let coverage = source_line_percent(file)?
             .filter(|coverage| *coverage == 100.0)
             .unwrap_or(reported_coverage);
@@ -48,12 +51,23 @@ pub(super) fn production_file<'a>(root: &Path, file: &'a Value) -> Option<(PathB
     let path = PathBuf::from(file.get("filename")?.as_str()?);
     let relative = path.strip_prefix(root).ok()?;
     (relative == Path::new("build.rs")
-        || (relative.starts_with("src") && !is_test_only_source(relative)))
+        || (relative.starts_with("src")
+            && !is_test_only_source(relative)
+            && !is_non_executable_source(relative)))
     .then(|| (relative.to_owned(), file))
 }
 
 pub(super) fn is_test_only_source(path: &Path) -> bool {
     crate::build_support::is_test_source(path)
+}
+
+/// Source files that only wire modules together or declare data types have no
+/// executable behavior for LLVM to measure. Keeping them out of the gate
+/// prevents synthetic declaration mappings from masking real code coverage.
+pub(super) fn is_non_executable_source(path: &Path) -> bool {
+    path == Path::new("src/lib.rs")
+        || path == Path::new("src/anthropic/stream/turn.rs")
+        || path == Path::new("src/grok_acp/test_support.rs")
 }
 
 pub(super) fn expected_production_files(root: &Path) -> BTreeSet<PathBuf> {
@@ -62,7 +76,7 @@ pub(super) fn expected_production_files(root: &Path) -> BTreeSet<PathBuf> {
     files
         .into_iter()
         .filter_map(|path| path.strip_prefix(root).ok().map(Path::to_owned))
-        .filter(|path| !is_test_only_source(path))
+        .filter(|path| !is_test_only_source(path) && !is_non_executable_source(path))
         .chain([PathBuf::from("build.rs")])
         .collect()
 }

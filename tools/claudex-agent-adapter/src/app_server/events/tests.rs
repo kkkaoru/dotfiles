@@ -40,6 +40,24 @@ fn counts_encoded_bytes_without_materializing_json() {
     }
 }
 
+#[test]
+fn ignores_events_after_overflow_or_terminal_state() {
+    let event = json!({"method":"item/tool/call"});
+    let mut overflowed = QueueState {
+        overflowed: true,
+        ..QueueState::default()
+    };
+    overflowed.push_or_overflow(event.clone(), true);
+    assert!(overflowed.events.is_empty());
+
+    let mut terminal = QueueState {
+        terminal_seen: true,
+        ..QueueState::default()
+    };
+    terminal.push_or_overflow(event, true);
+    assert!(terminal.events.is_empty());
+}
+
 #[tokio::test]
 async fn isolates_threads_and_fans_out_subscribers() {
     let dispatcher = ThreadEventDispatcher::default();
@@ -361,4 +379,66 @@ fn rejects_a_corrupted_coalescible_queue_tail() {
         ..QueueState::default()
     };
     state.append_delta("suffix", true);
+}
+
+#[tokio::test]
+async fn closed_terminal_and_empty_routes_do_not_requeue_events() {
+    let queue = Arc::new(EventQueue {
+        state: Mutex::new(QueueState::default()),
+        ready: Notify::new(),
+    });
+    queue.close();
+    queue.push(delta("closed", "ignored"));
+    queue.push_shared(delta("closed", "ignored"));
+    assert!(queue.recv().await.is_none());
+
+    let mut terminal = QueueState {
+        terminal_seen: true,
+        ..QueueState::default()
+    };
+    terminal.push_or_overflow(delta("terminal", "ignored"), true);
+    assert!(terminal.events.is_empty());
+    assert!(terminal.take_requeueable_backlog().events.is_empty());
+
+    let mut overflow = QueueState {
+        overflowed: true,
+        events: VecDeque::from([QueuedEvent {
+            value: delta("overflow", "kept"),
+            bytes: event_bytes(&delta("overflow", "kept")),
+            requeueable: true,
+        }]),
+        queued_bytes: event_bytes(&delta("overflow", "kept")),
+        ..QueueState::default()
+    };
+    let backlog = overflow.take_requeueable_backlog();
+    assert!(backlog.overflowed);
+    assert_eq!(backlog.events.len(), 1);
+}
+
+#[tokio::test]
+async fn queue_poll_covers_pending_event_and_closed_states() {
+    let queue = EventQueue::default();
+    assert!(matches!(queue.poll(), QueuePoll::Pending));
+    queue.push(delta("poll", "value"));
+    assert!(matches!(queue.poll(), QueuePoll::Event(value) if value["params"]["delta"] == "value"));
+    queue.close();
+    assert!(matches!(queue.poll(), QueuePoll::Closed));
+
+    for state in [
+        QueueState {
+            overflowed: true,
+            ..QueueState::default()
+        },
+        QueueState {
+            terminal_seen: true,
+            ..QueueState::default()
+        },
+    ] {
+        let queue = EventQueue {
+            state: Mutex::new(state),
+            ready: Notify::new(),
+        };
+        queue.push(delta("blocked", "ignored"));
+        assert!(matches!(queue.poll(), QueuePoll::Pending));
+    }
 }

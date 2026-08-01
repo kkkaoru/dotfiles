@@ -31,3 +31,19 @@ impl Write for ByteCounter {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use std::io::Write as _;
+
+    use super::ByteCounter;
+
+    #[test]
+    fn flushes_a_byte_counter_without_changing_its_count() {
+        let mut counter = ByteCounter::default();
+        assert_eq!(counter.write(b"payload").expect("count bytes"), 7);
+        counter.flush().expect("flush is a no-op");
+        assert_eq!(counter.bytes, 7);
+    }
+}

@@ -1,6 +1,7 @@
 #[cfg(test)]
 // Coverage excludes test implementation; production behavior remains measured.
 #[cfg_attr(coverage_nightly, coverage(off))]
+#[allow(clippy::excessive_nesting)]
 mod tests {
     use super::*;
     use crate::grok_acp::client::AcpClient;
@@ -402,6 +403,82 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn configured_without_effort_still_sets_the_model() {
+        LocalSet::new()
+            .run_until(check_configured_model_without_effort())
+            .await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn configured_effort_falls_back_when_the_option_is_rejected() {
+        LocalSet::new()
+            .run_until(check_configured_effort_fallback())
+            .await;
+    }
+
+    #[tokio::test]
+    async fn configured_model_selection_failure_is_reported() {
+        let events = std::sync::Arc::new(ThreadEventDispatcher::default());
+        let receiver = events.subscribe("session");
+        let active = ActiveTurns::default();
+        active.borrow_mut().insert("session".to_owned(), None);
+        let invalidated = InvalidatedSessions::default();
+        let permits = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
+        let (_sender, mut cancellation) = oneshot::channel();
+        let mut permit = Some(permits.acquire_owned().await.unwrap());
+        let mut ctl = TurnCtl {
+            provider: AcpProvider::Configured,
+            session_id: "session",
+            cancellation: &mut cancellation,
+            permit: &mut permit,
+            events: &events,
+            active_turns: &active,
+            invalidated_sessions: &invalidated,
+        };
+        assert!(!apply_effort(
+            &mut ctl,
+            &std::rc::Rc::new(disconnected_connection(std::sync::Arc::clone(&events))),
+            "model",
+            None,
+            &acp::SessionId::new("session".to_owned()),
+        )
+        .await);
+        assert!(permit.is_none());
+        assert_eq!(receiver.recv().await.unwrap()["method"], "error");
+    }
+
+    #[tokio::test]
+    async fn cancellation_wins_before_configured_effort_setup_starts() {
+        let events = std::sync::Arc::new(ThreadEventDispatcher::default());
+        let active = ActiveTurns::default();
+        let invalidated = InvalidatedSessions::default();
+        let permits = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
+        let (cancel_sender, mut cancellation) = oneshot::channel();
+        let (response, result) = oneshot::channel();
+        assert!(cancel_sender.send(CancelRequest { response }).is_ok());
+        let mut permit = Some(permits.acquire_owned().await.unwrap());
+        let mut ctl = TurnCtl {
+            provider: AcpProvider::Configured,
+            session_id: "session",
+            cancellation: &mut cancellation,
+            permit: &mut permit,
+            events: &events,
+            active_turns: &active,
+            invalidated_sessions: &invalidated,
+        };
+        assert!(!apply_effort(
+            &mut ctl,
+            &std::rc::Rc::new(disconnected_connection(std::sync::Arc::clone(&events))),
+            "model",
+            Some("high"),
+            &acp::SessionId::new("session".to_owned()),
+        )
+        .await);
+        assert!(result.await.unwrap().is_ok());
+        assert!(permit.is_none());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn configured_prompt_timeout_recycles_the_provider() {
         LocalSet::new().run_until(check_prompt_timeout()).await;
     }
@@ -505,6 +582,65 @@ mod tests {
         let request = request.await.unwrap();
         assert_eq!(request["method"], "session/set_model");
         assert_eq!(request["params"]["_meta"]["reasoningEffort"], "high");
+    }
+
+    async fn check_configured_model_without_effort() {
+        let events = std::sync::Arc::new(ThreadEventDispatcher::default());
+        let active = ActiveTurns::default();
+        let invalidated = InvalidatedSessions::default();
+        let permits = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
+        let (_sender, mut cancellation) = oneshot::channel();
+        let mut permit = Some(permits.acquire_owned().await.unwrap());
+        let mut ctl = TurnCtl {
+            provider: AcpProvider::Configured,
+            session_id: "session",
+            cancellation: &mut cancellation,
+            permit: &mut permit,
+            events: &events,
+            active_turns: &active,
+            invalidated_sessions: &invalidated,
+        };
+        let (connection, request) = responding_connection(std::sync::Arc::clone(&events));
+        assert!(apply_effort(
+            &mut ctl,
+            &std::rc::Rc::new(connection),
+            "model",
+            None,
+            &acp::SessionId::new("session".to_owned()),
+        )
+        .await);
+        assert_eq!(request.await.unwrap()["method"], "session/set_model");
+    }
+
+    async fn check_configured_effort_fallback() {
+        let events = std::sync::Arc::new(ThreadEventDispatcher::default());
+        let active = ActiveTurns::default();
+        let invalidated = InvalidatedSessions::default();
+        let permits = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
+        let (_sender, mut cancellation) = oneshot::channel();
+        let mut permit = Some(permits.acquire_owned().await.unwrap());
+        let mut ctl = TurnCtl {
+            provider: AcpProvider::Configured,
+            session_id: "session",
+            cancellation: &mut cancellation,
+            permit: &mut permit,
+            events: &events,
+            active_turns: &active,
+            invalidated_sessions: &invalidated,
+        };
+        let (connection, requests) = rejecting_effort_connection(std::sync::Arc::clone(&events));
+        assert!(apply_effort(
+            &mut ctl,
+            &std::rc::Rc::new(connection),
+            "model",
+            Some("high"),
+            &acp::SessionId::new("session".to_owned()),
+        )
+        .await);
+        let requests = requests.await.unwrap();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0]["method"], "session/set_config_option");
+        assert_eq!(requests[1]["method"], "session/set_model");
     }
 
     async fn check_prompt_timeout() {
@@ -629,6 +765,55 @@ mod tests {
                 .expect("response newline");
         }));
         (connection, request)
+    }
+
+    fn rejecting_effort_connection(
+        events: std::sync::Arc<ThreadEventDispatcher>,
+    ) -> (acp::ClientSideConnection, oneshot::Receiver<Vec<Value>>) {
+        let (outgoing, outgoing_peer) = tokio::io::duplex(1024);
+        let (incoming, mut incoming_peer) = tokio::io::duplex(1024);
+        let (connection, io_task) = acp::ClientSideConnection::new(
+            AcpClient::new(events),
+            outgoing.compat_write(),
+            incoming.compat(),
+            |task| {
+                drop(tokio::task::spawn_local(task));
+            },
+        );
+        drop(tokio::task::spawn_local(async move {
+            let _ = io_task.await;
+        }));
+        let (request_sender, requests) = oneshot::channel();
+        drop(tokio::task::spawn_local(async move {
+            let mut lines = BufReader::new(outgoing_peer);
+            let mut captured = Vec::new();
+            for _ in 0..2 {
+                let mut line = String::new();
+                lines.read_line(&mut line).await.expect("ACP request");
+                let request: Value = serde_json::from_str(&line).expect("valid ACP request");
+                let id = request["id"].clone();
+                let response = match request["method"].as_str() {
+                    Some("session/set_config_option") => {
+                        json!({"jsonrpc":"2.0", "id":id, "error":{"code":-32602,"message":"invalid params"}})
+                    }
+                    Some("session/set_model") => {
+                        json!({"jsonrpc":"2.0", "id":id, "result":{}})
+                    }
+                    method => panic!("unexpected ACP method: {method:?}"),
+                };
+                captured.push(request);
+                incoming_peer
+                    .write_all(response.to_string().as_bytes())
+                    .await
+                    .expect("ACP response");
+                incoming_peer
+                    .write_all(b"\n")
+                    .await
+                    .expect("response newline");
+            }
+            request_sender.send(captured).expect("request receiver");
+        }));
+        (connection, requests)
     }
 
     fn stalled_connection(

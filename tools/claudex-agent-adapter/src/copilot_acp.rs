@@ -50,4 +50,11 @@ impl CopilotAcp {
     pub async fn cancel_turn(&self, session_id: &str) -> Result<()> {
         self.inner.cancel_turn(session_id).await
     }
+
+    #[cfg(test)]
+    pub(crate) async fn settled_for_test() -> Arc<Self> {
+        Arc::new(Self {
+            inner: GrokAcp::settled_copilot_for_test().await,
+        })
+    }
 }

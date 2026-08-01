@@ -351,13 +351,14 @@ at least 95% for all four aggregate metrics—lines, functions, regions, and
 branches—plus at least 95% line coverage for every production source file.
 `cargo coverage-branch` invokes that gate directly. Branch outcomes generated
 more than once for the same source location across unit and integration binaries
-are merged before the percentage is calculated. Test-only modules and mock
-process fixtures under `tests/fixtures` are excluded so the report measures
-production behavior. The ACP client trait shim is the only production exclusion
-and has a documented nightly LLVM mapping workaround in the source; its
-delegated application logic remains measured. Both coverage commands include
-the Cargo build script, whose reusable logic is measured through
-`src/build_support.rs`.
+are merged before the percentage is calculated. Test-only modules, structural
+module-wiring files, and mock process fixtures under `tests/fixtures` are
+excluded so the report measures executable production behavior. The ACP client
+trait shim and deterministic Grok plugin provisioning wrapper are the only
+production exclusions; each has a documented nightly LLVM mapping workaround
+next to the source while the delegated behavior remains covered by fixture
+tests. Both coverage commands include the Cargo build script, whose reusable
+logic is measured through `src/build_support.rs`.
 
 Coverage uses an isolated `target/llvm-cov-*` directory. A later coverage run
 automatically removes artifacts older than ten minutes, while preserving its
@@ -368,7 +369,7 @@ build outputs to accumulate indefinitely.
 The build also rejects production Rust files over 400 physical lines; dedicated
 `tests.rs`, `*_tests.rs`, and `tests/**` files are exempt. Clippy rejects
 functions over 80 lines, cognitive complexity over 17, and block nesting deeper
-than four.
+than three.
 Build-script logic lives in `src/build_support.rs`, is shared by `build.rs`, and
 is covered by dedicated integration tests in addition to strict Clippy checks.
 An integration audit rejects local control-flow macros and pins the reviewed

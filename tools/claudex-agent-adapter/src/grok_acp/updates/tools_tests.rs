@@ -335,6 +335,33 @@ mod tests {
         );
     }
 
+    #[test]
+    fn completed_evidence_metadata_is_added_only_for_valid_output() {
+        let events = ThreadEventDispatcher::default();
+        let evidence = ProviderWebEvidence::default();
+        dispatch_provider_tool_call_with_evidence(
+            &events,
+            Some(&evidence),
+            "session",
+            acp::ToolCall::new("completed", "WebSearch")
+                .kind(acp::ToolKind::Search)
+                .status(acp::ToolCallStatus::Completed)
+                .raw_input(json!({"query":"bounded test"}))
+                .raw_output(json!("https://example.com/result"))
+                .content(vec![text("result")]),
+        );
+        dispatch_provider_tool_call_with_evidence(
+            &events,
+            Some(&evidence),
+            "session",
+            acp::ToolCall::new("invalid", "WebSearch")
+                .kind(acp::ToolKind::Search)
+                .status(acp::ToolCallStatus::Completed)
+                .raw_input(json!({"query":"bounded test"}))
+                .raw_output(json!("not a url")),
+        );
+    }
+
     fn assert_dispatched_messages(messages: &[Value]) {
         assert_eq!(
             messages[0]["params"]["arguments"]["description"],

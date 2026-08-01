@@ -145,4 +145,40 @@ mod tests {
         assert!(invalidated.borrow().contains("session"));
         assert_eq!(receiver.recv().await.unwrap()["method"], "error");
     }
+
+    #[test]
+    fn renders_setup_cancellation_timeout_diagnostics() {
+        let error = SetupCancellationSettlementTimeout {
+            provider: AcpProvider::Configured,
+            session_id: "session".to_owned(),
+            timeout: Duration::from_secs(2),
+        };
+        assert!(error.to_string().contains("setup cancellation did not settle"));
+    }
+
+    #[tokio::test]
+    async fn setup_cancellation_timeout_invalidates_the_session() {
+        let events = ThreadEventDispatcher::default();
+        let receiver = events.subscribe("session");
+        let invalidated = InvalidatedSessions::default();
+        let permits = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
+        let (sender, result) = tokio::sync::oneshot::channel();
+        let ctx = CancelCtx {
+            provider: AcpProvider::Configured,
+            session_id: "session",
+            permit: permits.acquire_owned().await.unwrap(),
+            cancellation: CancelRequest { response: sender },
+            events: &events,
+            invalidated_sessions: &invalidated,
+        };
+        tokio::time::timeout(
+            Duration::from_secs(3),
+            cancel_setup(ctx, &ActiveTurns::default(), std::future::pending::<()>()),
+        )
+        .await
+        .expect("setup cancellation timeout should settle");
+        assert!(result.await.unwrap().is_err());
+        assert!(invalidated.borrow().contains("session"));
+        assert_eq!(receiver.recv().await.unwrap()["method"], "error");
+    }
 }

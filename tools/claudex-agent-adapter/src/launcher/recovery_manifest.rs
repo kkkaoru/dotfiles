@@ -367,3 +367,7 @@ fn safe_component(value: &str) -> bool {
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
 }
+
+#[cfg(test)]
+#[path = "recovery_manifest_tests.rs"]
+mod tests;

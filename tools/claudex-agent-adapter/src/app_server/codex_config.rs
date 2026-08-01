@@ -62,6 +62,7 @@ fn hash_provider_file(hasher: &mut DefaultHasher, file: &Path) {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
 
@@ -109,5 +110,16 @@ mod tests {
                 root.path().join("z.config.toml")
             ]
         );
+    }
+
+    #[test]
+    fn fingerprints_unreadable_sources_and_missing_provider_files() {
+        let root = tempfile::tempdir().expect("Codex config fixture");
+        let missing = root.path().join("missing");
+
+        assert!(provider_config_files(&missing).is_err());
+        let fingerprint = provider_config_fingerprint(&missing);
+        assert_eq!(fingerprint.len(), 16);
+        assert!(source_home().is_ok());
     }
 }

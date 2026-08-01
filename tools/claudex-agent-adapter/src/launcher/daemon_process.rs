@@ -278,6 +278,9 @@ mod tests {
         assert!(!is_signalable_pid(u32::MAX));
         assert!(is_signalable_pid(1));
         assert!(is_signalable_pid(i32::MAX as u32));
+        terminate(0);
+        terminate(u32::MAX);
+        terminate(std::process::id());
     }
 
     #[test]
@@ -290,6 +293,8 @@ mod tests {
     #[test]
     fn reports_an_absent_process_group_as_not_alive() {
         assert!(!process_group_is_alive(i32::MAX));
+        assert!(!is_process_still_alive(i32::MAX as u32));
+        assert!(!is_process_zombie(i32::MAX as u32));
     }
 
     #[cfg(unix)]
