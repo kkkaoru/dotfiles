@@ -44,6 +44,7 @@ pub(super) fn validate_providers(providers: &[Provider]) -> Result<()> {
         validate_identity(provider, &mut ids, &mut agents, &mut models)?;
         validate_limits(provider)?;
         validate_backend_fields(provider)?;
+        validate_effort(provider)?;
         validate_web_search_mode(provider)?;
         if !provider
             .model_prefixes
@@ -53,6 +54,15 @@ pub(super) fn validate_providers(providers: &[Provider]) -> Result<()> {
             bail!("enabled provider modelPrefixes must be unique");
         }
         validate_acp(provider)?;
+    }
+    Ok(())
+}
+
+fn validate_effort(provider: &Provider) -> Result<()> {
+    if provider.backend == BackendKind::GrokAcp
+        && !matches!(provider.effort.as_str(), "low" | "medium" | "high")
+    {
+        bail!("grok-acp effort must be one of low, medium, or high");
     }
     Ok(())
 }

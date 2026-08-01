@@ -50,7 +50,7 @@ async fn terminates_the_entire_provider_process_group() {
 fn identifies_each_acp_provider_and_its_model_scope() {
     assert_eq!(AcpProvider::Grok.label(), "Grok");
     assert_eq!(AcpProvider::Grok.driver_name(), "claudex-grok-acp");
-    assert!(!AcpProvider::Grok.model_is_launch_scoped());
+    assert!(AcpProvider::Grok.model_is_launch_scoped());
     assert!(!AcpProvider::Grok.is_session_scoped_configured());
 
     assert_eq!(AcpProvider::Copilot.label(), "Copilot");
@@ -83,10 +83,6 @@ fn converts_backend_prompts_and_effort() {
         prompt::input_text(&json!([{"type":"text","text":"one"},{"content":"two"}])),
         "one\ntwo"
     );
-    assert_eq!(prompt::grok_effort("low"), Some("low"));
-    assert_eq!(prompt::grok_effort("mid"), Some("medium"));
-    assert_eq!(prompt::grok_effort("xhigh"), Some("high"));
-    assert_eq!(prompt::grok_effort("invalid"), None);
     assert_eq!(prompt::copilot_effort("mid"), Some("medium"));
     assert_eq!(prompt::copilot_effort("xhigh"), Some("xhigh"));
     assert_eq!(prompt::copilot_effort("max"), Some("max"));
@@ -105,8 +101,8 @@ fn removes_codex_only_bridge_instructions() {
         "developerInstructions":"backend-only"
     });
     assert!(prompt::provider_instructions(&params, true).starts_with("project rules\n\n"));
-    assert!(prompt::provider_instructions(&params, true).contains("claudex-medium"));
-    assert!(prompt::provider_instructions(&json!({}), true).contains("claudex-xhigh"));
+    assert!(prompt::provider_instructions(&params, true).contains("claudex-high"));
+    assert!(!prompt::provider_instructions(&json!({}), true).contains("claudex-xhigh"));
     assert_eq!(
         prompt::provider_instructions(&params, false),
         "project rules"
@@ -584,6 +580,27 @@ async fn public_spawn_entry_points_report_a_missing_program() {
         .await
         .is_err()
     );
+}
+
+#[tokio::test]
+async fn native_grok_rejects_non_api_reasoning_efforts_before_launch() {
+    for effort in ["mid", "xhigh", "max"] {
+        let error = match GrokAcp::spawn_with_program_and_effort(
+            "grok-4.5",
+            effort,
+            "/definitely/missing/grok",
+            std::env::current_dir().unwrap(),
+        )
+        .await
+        {
+            Err(error) => error,
+            Ok(_) => panic!("invalid Grok effort reached process launch"),
+        };
+        assert!(
+            error.to_string().contains("low, medium, or high"),
+            "unexpected {effort} error: {error}"
+        );
+    }
 }
 
 fn permission_request(options: Vec<acp::PermissionOption>) -> acp::RequestPermissionRequest {

@@ -5,11 +5,11 @@ use crate::{agent_backend::BackendRoute, provider_config::ModelCatalog};
 use super::AdapterOptions;
 
 pub(super) fn daemon_arguments(options: &AdapterOptions) -> Vec<OsString> {
-    let mut arguments = vec![
-        "serve".into(),
-        "--model".into(),
-        options.model.clone().into(),
-    ];
+    let mut arguments = vec!["serve".into()];
+    if !options.model.is_empty() {
+        arguments.push("--model".into());
+        arguments.push(options.model.clone().into());
+    }
     for route in &options.routes {
         arguments.push("--backend-route-json".into());
         arguments.push(route_json(route).into());

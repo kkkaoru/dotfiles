@@ -210,6 +210,14 @@ impl RoutedBackends {
             .unwrap_or_default()
     }
 
+    pub(super) fn launch_scoped_effort(&self, model: &str) -> Option<String> {
+        self.find(model)
+            .map(|route| route.template.clone())
+            .or_else(|| self.prefix_template(model).cloned())
+            .filter(|route| route.backend == BackendKind::GrokAcp)
+            .and_then(|route| route.effort)
+    }
+
     pub(super) fn descriptions(&self) -> Vec<String> {
         self.configured
             .iter()

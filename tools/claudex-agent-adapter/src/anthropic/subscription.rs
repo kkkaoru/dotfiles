@@ -14,6 +14,7 @@ use tokio::{
 
 mod effort;
 mod lifecycle;
+mod retry;
 
 #[cfg(test)]
 pub(super) use super::subscription_request::cwd_from_system;
@@ -29,6 +30,9 @@ use super::{
 use crate::NONINTERACTIVE_CHILD_ENV;
 pub(in crate::anthropic) use lifecycle::terminate_subscription;
 use lifecycle::{collect_subscription_output, terminate_after_subscription_failure};
+pub(super) use retry::with_transient_retries;
+#[cfg(test)]
+pub(super) use retry::{should_retry_subscription, transient_retry_delay};
 pub(crate) const DEFAULT_MAX_PROCESSES: usize = 20;
 pub(crate) const DEFAULT_TIMEOUT_MINUTES: u64 = 120;
 const MAX_PROCESSES_ENV: &str = "CLAUDEX_SUBSCRIPTION_MAX_PROCESSES";
@@ -237,8 +241,20 @@ pub(super) async fn run_subscription_model(
     prompt: &str,
     options: SubscriptionOptions,
 ) -> Result<String> {
+    retry::with_transient_retries(model, || {
+        run_subscription_model_attempt(program, model, prompt, &options)
+    })
+    .await
+}
+
+async fn run_subscription_model_attempt(
+    program: &Path,
+    model: &str,
+    prompt: &str,
+    options: &SubscriptionOptions,
+) -> Result<String> {
     let _permit = acquire_subscription_slot(Arc::clone(&options.slots), options.timeout).await?;
-    let mut command = subscription_command(program, model, &options, OutputMode::Json);
+    let mut command = subscription_command(program, model, options, OutputMode::Json);
     let mut child = spawn_subscription(&mut command, model)?;
     let stdin = take_subscription_stdin(&mut child)?;
     let interaction = collect_subscription_output(&mut child, stdin, prompt);

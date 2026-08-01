@@ -27,6 +27,8 @@ pub struct BackendRoute {
     pub model: String,
     pub backend: BackendKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_provider: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_catalog_json: Option<String>,
@@ -46,6 +48,7 @@ impl BackendRoute {
         Self {
             model: model.into(),
             backend,
+            effort: None,
             model_provider: None,
             model_catalog_json: None,
             max_context_tokens: None,
@@ -57,6 +60,7 @@ impl BackendRoute {
     }
     pub fn description(&self) -> String {
         if self.model_provider.is_none()
+            && self.effort.is_none()
             && self.model_catalog_json.is_none()
             && self.max_context_tokens.is_none()
             && self.max_concurrency.is_none()
@@ -115,6 +119,18 @@ impl AgentBackend {
                 .await?,
             )));
         }
+        if route.backend == BackendKind::GrokAcp {
+            return Ok(Arc::new(Self::Grok(
+                GrokAcp::spawn_with_effort(
+                    &route.model,
+                    route
+                        .effort
+                        .as_deref()
+                        .unwrap_or(crate::grok_acp::DEFAULT_REASONING_EFFORT),
+                )
+                .await?,
+            )));
+        }
         Self::spawn(route.backend, &route.model).await
     }
     pub fn spawn_routes(routes: &[BackendRoute]) -> Arc<Self> {
@@ -158,6 +174,13 @@ impl AgentBackend {
             Self::Codex(_) | Self::ConfiguredAcp(_) | Self::Copilot(_) | Self::Grok(_) => {
                 WebSearchMode::default()
             }
+        }
+    }
+
+    pub(crate) fn launch_scoped_effort(&self, model: &str) -> Option<String> {
+        match self {
+            Self::Routed(routes) => routes.launch_scoped_effort(model),
+            Self::Codex(_) | Self::ConfiguredAcp(_) | Self::Copilot(_) | Self::Grok(_) => None,
         }
     }
     pub fn route_descriptions(&self) -> Vec<String> {

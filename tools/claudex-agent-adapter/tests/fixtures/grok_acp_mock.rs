@@ -253,11 +253,14 @@ impl MockAgent {
         ] {
             self.notify(request.session_id.clone(), update).await?;
         }
+        let output = if self.mode == "nested-boundary" {
+            "GROK_ACP_CHILD_BOUNDARY_MARKER"
+        } else {
+            "GROK_ACP_STREAM_OK"
+        };
         self.notify(
             request.session_id,
-            acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(
-                "GROK_ACP_STREAM_OK".into(),
-            )),
+            acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(output.into())),
         )
         .await?;
         Ok(acp::PromptResponse::new(acp::StopReason::EndTurn))
@@ -521,6 +524,7 @@ async fn main() -> acp::Result<()> {
     let cwd = std::env::current_dir().map_err(|_| acp::Error::internal_error())?;
     let trace = cwd.join(TRACE_FILE);
     let args = std::env::args().skip(1).collect::<Vec<_>>();
+    validate_native_grok_arguments(&args)?;
     let mode = args.get(1).cloned().unwrap_or_default();
     let session_barrier = (mode == "concurrent-sessions-at-limit")
         .then(|| Rc::new(Barrier::new(CONFIGURED_PARALLEL_SESSIONS)));
@@ -560,6 +564,42 @@ async fn main() -> acp::Result<()> {
             io.await
         })
         .await
+}
+
+fn validate_native_grok_arguments(args: &[String]) -> acp::Result<()> {
+    if std::env::var("CLAUDEX_GROK_ACP").as_deref() != Ok("1") {
+        return Ok(());
+    }
+    let valid_prefix = matches!(
+        args,
+        [model_flag, _, effort_flag, effort, ..]
+            if model_flag == "--model"
+                && effort_flag == "--reasoning-effort"
+                && matches!(effort.as_str(), "low" | "medium" | "high")
+    );
+    let valid_tail = matches!(
+        args.get(4..),
+        Some([agent, approve, no_leader, stdio])
+            if agent == "agent"
+                && approve == "--always-approve"
+                && no_leader == "--no-leader"
+                && stdio == "stdio"
+    ) || matches!(
+        args.get(4..),
+        Some([agent, approve, no_leader, plugin_flag, plugin_dir, stdio])
+            if agent == "agent"
+                && approve == "--always-approve"
+                && no_leader == "--no-leader"
+                && plugin_flag == "--plugin-dir"
+                && !plugin_dir.is_empty()
+                && stdio == "stdio"
+    );
+    let valid = valid_prefix && valid_tail;
+    if valid {
+        Ok(())
+    } else {
+        Err(acp::Error::invalid_params())
+    }
 }
 
 fn prompt_contains(request: &acp::PromptRequest, expected: &str) -> bool {

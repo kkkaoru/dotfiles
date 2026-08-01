@@ -47,19 +47,19 @@ mod tests {
     }
 
     #[test]
-    fn remaps_disabled_outer_provider_model_to_main() {
+    fn keeps_disabled_outer_provider_model_authoritative() {
         enable_warning_logs();
         let mut request = request("vendor-a", &["vendor-a"]);
         let decision = resolve(
             &mut request,
             "main-model",
             false,
-            |model| model == "main-model",
+            |model| model == "vendor-a",
             |model| model == "vendor-a" || model == "main-model",
         )
-        .expect("remap");
+        .expect("outer request model remains authoritative");
         assert_eq!(decision, RouteDecision::Provider);
-        assert_eq!(request.model, "main-model");
+        assert_eq!(request.model, "vendor-a");
     }
 
     #[test]
@@ -78,34 +78,36 @@ mod tests {
     }
 
     #[test]
-    fn remaps_unrouted_declared_provider_model_to_main_instead_of_subscription() {
+    fn rejects_unrouted_declared_provider_model_without_remapping() {
         enable_warning_logs();
         let mut request = request("vendor-offline-1", &[]);
-        let decision = resolve(
+        let error = resolve(
             &mut request,
             "main-model",
             false,
-            |_| false,
+            |model| model == "main-model",
             |model| model.starts_with("vendor-"),
         )
-        .expect("remap");
-        assert_eq!(decision, RouteDecision::Provider);
-        assert_eq!(request.model, "main-model");
+        .expect_err("unavailable provider model must fail explicitly");
+        assert!(error.to_string().contains("does not have an active route"));
+        assert_eq!(request.model, "vendor-offline-1");
     }
 
     #[test]
-    fn keeps_subscription_for_undeclared_models() {
-        let mut request = request("claude-sonnet-5", &[]);
-        let decision = resolve(
-            &mut request,
-            "main-model",
-            false,
-            |_| false,
-            |model| model.starts_with("vendor-"),
-        )
-        .expect("subscription");
-        assert_eq!(decision, RouteDecision::Subscription);
-        assert_eq!(request.model, "claude-sonnet-5");
+    fn keeps_subscription_for_each_undeclared_outer_model() {
+        for model in ["claude-opus-5", "claude-sonnet-5", "claude-fable"] {
+            let mut request = request(model, &[model]);
+            let decision = resolve(
+                &mut request,
+                "main-model",
+                false,
+                |_| false,
+                |candidate| candidate.starts_with("vendor-"),
+            )
+            .expect("subscription");
+            assert_eq!(decision, RouteDecision::Subscription);
+            assert_eq!(request.model, model);
+        }
     }
 
     #[test]
@@ -117,7 +119,7 @@ mod tests {
             false,
             true,
             None,
-            |_| false,
+            |model| model == "main-model",
             |_| false,
         )
         .expect("unsupported discovery alias should remain a subscription");
@@ -134,7 +136,7 @@ mod tests {
             false,
             true,
             None,
-            |_| false,
+            |model| model == "main-model",
             |_| false,
         )
         .expect("main discovery alias");
@@ -157,8 +159,8 @@ mod tests {
     }
 
     #[test]
-    fn routes_empty_main_and_supported_models_to_the_provider() {
-        for model in ["", "main-model", "vendor-model"] {
+    fn routes_each_supported_outer_model_to_its_provider() {
+        for model in ["main-model", "vendor-model"] {
             let mut request = request(model, &[]);
             let decision = resolve_request_model(
                 &mut request,
@@ -166,12 +168,29 @@ mod tests {
                 false,
                 true,
                 None,
-                |candidate| candidate == "vendor-model",
+                |candidate| candidate == model,
                 |_| false,
             )
             .expect("provider route");
             assert_eq!(decision, RouteDecision::Provider, "model={model}");
+            assert_eq!(request.model, model);
         }
+    }
+
+    #[test]
+    fn rejects_a_missing_outer_model_instead_of_selecting_a_provider() {
+        let mut request = request("", &[]);
+        let error = resolve_request_model(
+            &mut request,
+            "main-model",
+            false,
+            true,
+            None,
+            |_| true,
+            |_| true,
+        )
+        .expect_err("missing model must fail");
+        assert!(error.to_string().contains("request model is required"));
     }
 
     #[test]
@@ -302,10 +321,7 @@ mod tests {
         )
         .expect("model-less native SubAgent must use the subscription backend");
         assert_eq!(decision, RouteDecision::Subscription);
-        assert_eq!(
-            missing_native.model,
-            super::models::CLAUDE_HAIKU_MODEL
-        );
+        assert_eq!(missing_native.model, super::models::CLAUDE_HAIKU_MODEL);
 
         let mut inherited_native = request("claude-sonnet-5", &[]);
         let decision = resolve_request_model_with_origin(
@@ -335,6 +351,27 @@ mod tests {
     }
 
     #[test]
+    fn routes_an_oversized_native_subagent_to_the_long_context_model() {
+        let mut oversized = request("claude-sonnet-5", &[]);
+        oversized.messages = vec![json!({
+            "role": "user",
+            "content": "x".repeat(400_000)
+        })];
+        let decision = resolve_request_model(
+            &mut oversized,
+            "main-model",
+            true,
+            true,
+            None,
+            |_| false,
+            |_| false,
+        )
+        .expect("oversized native SubAgent must remain on a subscription route");
+        assert_eq!(decision, RouteDecision::Subscription);
+        assert_eq!(oversized.model, super::models::CLAUDE_LONG_CONTEXT_MODEL);
+    }
+
+    #[test]
     fn rejects_unknown_subagent_model() {
         let mut empty = request("", &[]);
         let decision = resolve_request_model(
@@ -347,10 +384,6 @@ mod tests {
             |_| false,
         )
         .expect_err("an unknown SubAgent model must not inherit the main route");
-        assert!(
-            decision
-                .to_string()
-                .contains("does not have a recoverable configured route")
-        );
+        assert!(decision.to_string().contains("request model is required"));
     }
 }

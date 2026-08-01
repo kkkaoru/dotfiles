@@ -64,10 +64,12 @@ fn parse_command(mut arguments: VecDeque<OsString>) -> Result<RuntimeCommand> {
         "launch" => {
             let options = parse_options(&mut arguments)?;
             consume_separator(&mut arguments)?;
+            let inherit_claude_model =
+                options.inherit_claude_model || options.adapter.model.is_empty();
             Ok(RuntimeCommand::Launch(
                 options.adapter,
                 arguments.into(),
-                options.inherit_claude_model,
+                inherit_claude_model,
             ))
         }
         "serve" => {
@@ -155,6 +157,7 @@ fn parse_options(arguments: &mut VecDeque<OsString>) -> Result<ParsedOptions> {
         .as_deref()
         .map(provider_config::load)
         .transpose()?;
+    let has_provider_config = configured.is_some();
     let mut model_catalog = configured
         .as_ref()
         .map(|configured| configured.model_catalog.clone())
@@ -163,9 +166,13 @@ fn parse_options(arguments: &mut VecDeque<OsString>) -> Result<ParsedOptions> {
     if let Some(configured) = &configured {
         routes.splice(0..0, configured.routes.clone());
     }
-    let model = model
-        .or_else(|| configured.map(|configured| configured.main_model))
-        .context("--model or --provider-config is required")?;
+    if model.as_deref().is_some_and(str::is_empty) {
+        bail!("--model must not be empty");
+    }
+    let model = model.unwrap_or_default();
+    if model.is_empty() && !has_provider_config && routes.is_empty() {
+        bail!("--model or --provider-config is required");
+    }
     if routes.is_empty() {
         routes.push(BackendRoute::new(&model, BackendKind::CodexAppServer));
     }
@@ -178,7 +185,7 @@ fn parse_options(arguments: &mut VecDeque<OsString>) -> Result<ParsedOptions> {
     if !search_worker_routes.is_empty() {
         model_catalog.set_search_worker_routes(search_worker_routes)?;
     }
-    validate_routes(&routes, &model)?;
+    validate_routes(&routes)?;
     Ok(ParsedOptions {
         adapter: AdapterOptions {
             routes,
@@ -199,7 +206,7 @@ fn reject_inherit_model(options: &ParsedOptions, command: &str) -> Result<()> {
     Ok(())
 }
 
-fn validate_routes(routes: &[BackendRoute], model: &str) -> Result<()> {
+fn validate_routes(routes: &[BackendRoute]) -> Result<()> {
     if routes.iter().any(|route| {
         route
             .max_concurrency
@@ -213,16 +220,6 @@ fn validate_routes(routes: &[BackendRoute], model: &str) -> Result<()> {
         .collect::<std::collections::HashSet<_>>();
     if unique.len() != routes.len() {
         bail!("--backend-route models must be unique");
-    }
-    let supports_main = routes.iter().any(|route| {
-        route.model == model
-            || route
-                .model_prefixes
-                .iter()
-                .any(|prefix| model.starts_with(prefix))
-    });
-    if !supports_main {
-        bail!("the main --model must have a --backend-route");
     }
     Ok(())
 }

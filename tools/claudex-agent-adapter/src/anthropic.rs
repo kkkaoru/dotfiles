@@ -90,6 +90,7 @@ pub struct MessagesRequest {
 pub struct Bridge {
     app: Arc<AgentBackend>,
     model: String,
+    legacy_main_route: bool,
     model_catalog: crate::provider_config::ModelCatalog,
     advisor_model_override: Option<String>,
     collaborator_model_override: Option<String>,
@@ -169,6 +170,7 @@ impl Bridge {
             None,
             subscription::subscription_limits(),
         )
+        .with_legacy_main_route()
     }
 
     pub(crate) fn new_with_backend_limits(
@@ -220,6 +222,7 @@ impl Bridge {
             collaborator_model_override,
             subscription_limits,
         )
+        .with_legacy_main_route()
     }
 
     fn build(
@@ -235,6 +238,7 @@ impl Bridge {
         Self {
             app,
             model,
+            legacy_main_route: false,
             model_catalog: crate::provider_config::ModelCatalog::default(),
             advisor_model_override,
             collaborator_model_override,
@@ -253,6 +257,10 @@ impl Bridge {
             agent_efforts: Arc::new(agent_effort::AgentEffortIntents::default()),
             model_concurrency,
         }
+    }
+    fn with_legacy_main_route(mut self) -> Self {
+        self.legacy_main_route = true;
+        self
     }
 
     /// Overrides the Claude Code settings source, primarily for isolated runtimes and tests.
@@ -293,7 +301,9 @@ impl Bridge {
                 intent.matched,
                 intent.model_is_inherited,
             ),
-            |model| self.app.supports_model(model),
+            |model| {
+                self.app.supports_model(model) || (self.legacy_main_route && model == self.model)
+            },
             |model| self.model_catalog.matches(model),
         )?;
         let effort = self.resolve_request_effort(&request, intent.effort);

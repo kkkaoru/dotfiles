@@ -35,6 +35,7 @@ const CONFIGURED_TURN_QUEUE_CAPACITY: usize = 2;
 const OUTER_TURN_RESERVE: usize = 1;
 pub(crate) const MAX_MODEL_CONCURRENCY: usize =
     tokio::sync::Semaphore::MAX_PERMITS - OUTER_TURN_RESERVE;
+pub(crate) const DEFAULT_REASONING_EFFORT: &str = "high";
 
 use connection::AcpProvider;
 use driver::run_driver;
@@ -68,6 +69,7 @@ struct DriverSetup {
     program: OsString,
     arguments: Option<Vec<String>>,
     model: String,
+    effort: Option<String>,
     cwd: PathBuf,
     events: Arc<ThreadEventDispatcher>,
     alive: Arc<AtomicBool>,
@@ -87,16 +89,29 @@ pub struct GrokAcp {
 
 impl GrokAcp {
     pub async fn spawn(model: &str) -> Result<Arc<Self>> {
+        Self::spawn_with_effort(model, DEFAULT_REASONING_EFFORT).await
+    }
+
+    pub async fn spawn_with_effort(model: &str, effort: &str) -> Result<Arc<Self>> {
         let program = std::env::var_os("CLAUDEX_GROK_PROGRAM").unwrap_or_else(|| "grok".into());
         let cwd = std::env::current_dir().context("resolve Grok ACP working directory")?;
-        Self::spawn_provider(AcpProvider::Grok, model, program, None, cwd, None).await
+        Self::spawn_provider(
+            AcpProvider::Grok,
+            model,
+            Some(effort),
+            program,
+            None,
+            cwd,
+            None,
+        )
+        .await
     }
 
     pub async fn spawn_copilot(model: &str) -> Result<Arc<Self>> {
         let program =
             std::env::var_os("CLAUDEX_COPILOT_PROGRAM").unwrap_or_else(|| "copilot".into());
         let cwd = std::env::current_dir().context("resolve Copilot ACP working directory")?;
-        Self::spawn_provider(AcpProvider::Copilot, model, program, None, cwd, None).await
+        Self::spawn_provider(AcpProvider::Copilot, model, None, program, None, cwd, None).await
     }
 
     pub async fn spawn_with_program(
@@ -104,7 +119,25 @@ impl GrokAcp {
         program: impl Into<OsString>,
         cwd: PathBuf,
     ) -> Result<Arc<Self>> {
-        Self::spawn_provider(AcpProvider::Grok, model, program, None, cwd, None).await
+        Self::spawn_with_program_and_effort(model, DEFAULT_REASONING_EFFORT, program, cwd).await
+    }
+
+    pub async fn spawn_with_program_and_effort(
+        model: &str,
+        effort: &str,
+        program: impl Into<OsString>,
+        cwd: PathBuf,
+    ) -> Result<Arc<Self>> {
+        Self::spawn_provider(
+            AcpProvider::Grok,
+            model,
+            Some(effort),
+            program,
+            None,
+            cwd,
+            None,
+        )
+        .await
     }
 
     pub async fn spawn_copilot_with_program(
@@ -112,12 +145,13 @@ impl GrokAcp {
         program: impl Into<OsString>,
         cwd: PathBuf,
     ) -> Result<Arc<Self>> {
-        Self::spawn_provider(AcpProvider::Copilot, model, program, None, cwd, None).await
+        Self::spawn_provider(AcpProvider::Copilot, model, None, program, None, cwd, None).await
     }
 
     async fn spawn_provider(
         provider: AcpProvider,
         model: &str,
+        effort: Option<&str>,
         program: impl Into<OsString>,
         arguments: Option<Vec<String>>,
         cwd: PathBuf,
@@ -149,6 +183,7 @@ impl GrokAcp {
         let driver_events = Arc::clone(&events);
         let driver_alive = Arc::clone(&alive);
         let model = model.to_owned();
+        let effort = effort.map(str::to_owned);
         let program = program.into();
         std::thread::Builder::new()
             .name(provider.driver_name().to_owned())
@@ -164,6 +199,7 @@ impl GrokAcp {
                         program,
                         arguments,
                         model,
+                        effort,
                         cwd,
                         events: driver_events,
                         alive: driver_alive,

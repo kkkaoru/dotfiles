@@ -1,18 +1,16 @@
-use std::{convert::Infallible, path::Path, path::PathBuf, sync::Arc, time::Duration};
-
 use anyhow::{Context, Result, anyhow};
 use axum::{
     body::{Body, Bytes},
     http::Response,
 };
 use serde_json::{Value, json};
+use std::{convert::Infallible, path::Path, path::PathBuf, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
     process::Child,
     sync::mpsc,
 };
 use uuid::Uuid;
-
 // Align with the main provider stream: status only after real silence (~30s).
 const INITIAL_ACTIVITY_DELAY: Duration = Duration::from_secs(30);
 const ACTIVITY_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
@@ -22,7 +20,7 @@ use super::{
     subscription::{
         OutputMode, SubscriptionOptions, acquire_subscription_slot, spawn_subscription,
         subscription_command, take_subscription_stdin, terminate_subscription,
-        validate_subscription_result, write_subscription_prompt,
+        validate_subscription_result, with_transient_retries, write_subscription_prompt,
     },
     subscription_activity::SubscriptionActivity,
     subscription_frames::{
@@ -34,12 +32,10 @@ use super::{
 mod lifecycle;
 mod tool_collection;
 mod visibility;
-
+pub(super) use super::subscription_frames::result_output_tokens;
 use lifecycle::{
     read_stderr, terminate_after_stream_failure, terminate_closed_stream, validate_stream_exit,
 };
-
-pub(super) use super::subscription_frames::result_output_tokens;
 pub(super) fn subscription_streaming_response(
     program: PathBuf,
     model: String,
@@ -82,10 +78,16 @@ async fn run_subscription_stream(
     prompt: String,
     options: SubscriptionOptions,
 ) {
-    let result = stream_subscription_model(&sender, &program, &model, &prompt, options).await;
-    if let Err(error) = result {
-        tracing::warn!(%model, error = ?error, "Claude subscription stream failed");
-        send_subscription_error(&sender, error).await;
+    match with_transient_retries(&model, || {
+        stream_subscription_model(&sender, &program, &model, &prompt, &options)
+    })
+    .await
+    {
+        Ok(()) => {}
+        Err(error) => {
+            tracing::warn!(%model, error = ?error, "Claude subscription stream failed");
+            send_subscription_error(&sender, error).await;
+        }
     }
 }
 
@@ -94,7 +96,7 @@ async fn stream_subscription_model(
     program: &Path,
     model: &str,
     prompt: &str,
-    options: SubscriptionOptions,
+    options: &SubscriptionOptions,
 ) -> Result<()> {
     let _permit = acquire_subscription_slot(Arc::clone(&options.slots), options.timeout).await?;
     let mut command = subscription_command(program, model, &options, OutputMode::StreamJson);
@@ -204,7 +206,15 @@ async fn consume_subscription_stream_with_options(
         }
     }
     stream.activity.close(sender).await?;
-    validate_stream_exit(child, stderr_task, stream.saw_result).await
+    validate_stream_exit(child, stderr_task, stream.saw_result)
+        .await
+        .map_err(|error| {
+            if stream.next_index > 0 {
+                anyhow!("{error}; subscription stream already emitted frames")
+            } else {
+                error
+            }
+        })
 }
 
 impl SubscriptionStream {

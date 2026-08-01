@@ -19,7 +19,7 @@ fn prepares_prefixed_prompts_and_provider_specific_effort() {
     )
     .unwrap();
     assert_eq!(turn.prompt, "prefix\n\nprompt");
-    assert_eq!(turn.effort.as_deref(), Some("medium"));
+    assert_eq!(turn.effort, None);
     assert!(instructions.borrow().is_empty());
 
     let copilot = prepare_turn(

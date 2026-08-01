@@ -52,6 +52,7 @@ async fn allows_session_creations_up_to_the_configured_concurrency_limit() {
     let backend = AgentBackend::spawn_routes(&[BackendRoute {
         model: model.to_owned(),
         backend: BackendKind::ConfiguredAcp,
+        effort: None,
         model_provider: None,
         model_catalog_json: None,
         max_context_tokens: None,
@@ -167,6 +168,7 @@ async fn enforces_seven_exact_model_turns_and_queues_the_eighth() {
     let backend = AgentBackend::spawn_routes(&[BackendRoute {
         model: model.to_owned(),
         backend: BackendKind::ConfiguredAcp,
+        effort: None,
         model_provider: None,
         model_catalog_json: None,
         max_context_tokens: None,
@@ -325,6 +327,7 @@ async fn configured_acp_routes_dynamic_models_and_expands_arguments() {
     let route = BackendRoute {
         model: "vendor-default".to_owned(),
         backend: BackendKind::ConfiguredAcp,
+        effort: None,
         model_provider: None,
         model_catalog_json: None,
         max_context_tokens: None,
@@ -407,13 +410,14 @@ async fn configured_acp_routes_dynamic_models_and_expands_arguments() {
 #[tokio::test]
 async fn configured_acp_selects_model_after_session_and_falls_back_for_effort_option() {
     let _cwd_guard = CWD_LOCK.lock().await;
-    let model = "opencode-go/deepseek-v4-pro";
+    let model = "opencode-go/deepseek-v4-flash";
     for (mode, expects_config_option) in [("effort-config", true), ("reject-effort", false)] {
         let root = tempfile::tempdir().expect("configured ACP model fixture");
         std::env::set_current_dir(root.path()).expect("isolate configured ACP model trace");
         let backend = AgentBackend::spawn_routes(&[BackendRoute {
             model: model.to_owned(),
             backend: BackendKind::ConfiguredAcp,
+            effort: None,
             model_provider: None,
             model_catalog_json: None,
             max_context_tokens: None,
@@ -518,6 +522,7 @@ async fn session_scoped_configured_acp_recycles_after_one_failed_stream() {
     let backend = AgentBackend::spawn_routes(&[BackendRoute {
         model: model.to_owned(),
         backend: BackendKind::ConfiguredAcp,
+        effort: None,
         model_provider: None,
         model_catalog_json: None,
         max_context_tokens: None,

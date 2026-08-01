@@ -162,7 +162,7 @@ async fn serves_models_counts_plain_messages_and_continuations() {
         &client,
         &messages_url(&adapter),
         json!({
-            "model":"", "system":"Test system prompt",
+            "model":"test-main-model", "system":"Test system prompt",
             "output_config":{"effort":"low"},
             "messages":[
                 {"role":"user","content":"Say OK"},
@@ -174,6 +174,27 @@ async fn serves_models_counts_plain_messages_and_continuations() {
     .await;
     assert_eq!(continued["content"][0]["text"], "OK");
     assert_eq!(continued["model"], "test-main-model");
+
+    let missing_response = client
+        .post(messages_url(&adapter))
+        .json(&json!({
+            "model":"",
+            "messages":[{"role":"user","content":"Say OK"}]
+        }))
+        .send()
+        .await
+        .expect("send missing-model request");
+    assert_eq!(missing_response.status(), reqwest::StatusCode::BAD_REQUEST);
+    let missing_model: Value = missing_response
+        .json()
+        .await
+        .expect("decode missing-model error");
+    assert_eq!(missing_model["type"], "error");
+    assert!(
+        missing_model["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("request model is required"))
+    );
 
     let mut edge = base_request();
     edge["system"] = json!("");

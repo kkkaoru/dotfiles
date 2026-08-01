@@ -18,7 +18,7 @@ pub(super) async fn apply_effort(
         tracing::debug!(
             session_id = ctl.session_id,
             effort,
-            "skipping Configured ACP set_session_model; model is launch-scoped"
+            "skipping ACP set_session_model; model and effort are launch-scoped"
         );
         return true;
     }

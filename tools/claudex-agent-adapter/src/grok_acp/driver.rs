@@ -107,6 +107,7 @@ pub(super) async fn run_driver(setup: DriverSetup, mut commands: mpsc::Receiver<
         &setup.program,
         setup.arguments.as_deref(),
         &setup.model,
+        setup.effort.as_deref(),
         &setup.cwd,
         Arc::clone(&setup.events),
         Arc::clone(&setup.alive),

@@ -2,6 +2,10 @@
 // Coverage gates measure production code; test implementations are excluded.
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+    #[cfg(unix)]
+    use std::os::unix::process::CommandExt as _;
     use std::{
         io::{Read, Write},
         net::{SocketAddr, TcpListener},
@@ -14,10 +18,6 @@ mod tests {
         thread,
         time::Instant,
     };
-    #[cfg(unix)]
-    use std::os::unix::process::CommandExt as _;
-    #[cfg(unix)]
-    use std::os::unix::fs::PermissionsExt;
 
     use super::*;
     use crate::agent_backend::BackendKind;
@@ -166,9 +166,11 @@ mod tests {
             .into_iter()
             .map(|argument| argument.into_string().expect("UTF-8 argument"))
             .collect::<Vec<_>>();
-        assert!(arguments.windows(2).any(|pair| {
-            pair[0] == "--worker-route-json" && pair[1].contains("claudex-grok")
-        }));
+        assert!(
+            arguments.windows(2).any(|pair| {
+                pair[0] == "--worker-route-json" && pair[1].contains("claudex-grok")
+            })
+        );
 
         config
             .options
@@ -183,6 +185,22 @@ mod tests {
             .into_iter()
             .map(|argument| argument.into_string().expect("UTF-8 argument"))
             .collect::<Vec<_>>();
+        assert!(arguments.windows(2).any(|pair| {
+            pair[0] == "--search-worker-route-json" && pair[1].contains("claudex-search")
+        }));
+
+        config.options.model.clear();
+        let arguments = daemon_arguments(&config.options)
+            .into_iter()
+            .map(|argument| argument.into_string().expect("UTF-8 argument"))
+            .collect::<Vec<_>>();
+        assert_eq!(arguments.first().map(String::as_str), Some("serve"));
+        assert!(!arguments.iter().any(|argument| argument == "--model"));
+        assert!(
+            arguments.windows(2).any(|pair| {
+                pair[0] == "--worker-route-json" && pair[1].contains("claudex-grok")
+            })
+        );
         assert!(arguments.windows(2).any(|pair| {
             pair[0] == "--search-worker-route-json" && pair[1].contains("claudex-search")
         }));
@@ -222,7 +240,9 @@ mod tests {
         health.worker_routes.push("stale-worker".to_owned());
         stale.push(health);
         let mut health = healthy(&config);
-        health.search_worker_routes.push("stale-search-worker".to_owned());
+        health
+            .search_worker_routes
+            .push("stale-search-worker".to_owned());
         stale.push(health);
         for health in stale {
             assert!(!config.matches(&health));
@@ -526,10 +546,7 @@ mod tests {
             return false;
         };
         let output_state = String::from_utf8_lossy(&output.stdout);
-        let Some(state) = output_state
-            .split_whitespace()
-            .next()
-        else {
+        let Some(state) = output_state.split_whitespace().next() else {
             return false;
         };
         if state.starts_with('Z') {
@@ -727,7 +744,8 @@ mod tests {
 
         let extensionless = root.path().join("adapter");
         std::fs::write(&extensionless, "old").expect("extensionless log");
-        super::launcher_logs::archive_previous_log(&extensionless).expect("archive extensionless log");
+        super::launcher_logs::archive_previous_log(&extensionless)
+            .expect("archive extensionless log");
         assert!(!extensionless.exists());
         assert_eq!(
             std::fs::read_dir(root.path())

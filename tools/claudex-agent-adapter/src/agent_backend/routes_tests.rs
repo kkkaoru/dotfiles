@@ -196,6 +196,7 @@ mod tests {
         let route = BackendRoute {
             model: "missing-acp".to_owned(),
             backend: BackendKind::ConfiguredAcp,
+            effort: None,
             model_provider: None,
             model_catalog_json: None,
             max_context_tokens: None,

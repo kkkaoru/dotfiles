@@ -25,6 +25,7 @@ mod tests {
         let configured = BackendRoute {
             model: "configured".to_owned(),
             backend: BackendKind::ConfiguredAcp,
+            effort: None,
             model_provider: None,
             model_catalog_json: None,
             max_context_tokens: None,
@@ -69,6 +70,9 @@ mod tests {
         let mut metadata = BackendRoute::new("model", BackendKind::CodexAppServer);
         metadata.model_provider = Some("provider".to_owned());
         assert!(metadata.description().contains("modelProvider"));
+        let mut effort = BackendRoute::new("model", BackendKind::GrokAcp);
+        effort.effort = Some("high".to_owned());
+        assert!(effort.description().contains("effort"));
 
         let mut catalog = BackendRoute::new("model", BackendKind::CodexAppServer);
         catalog.model_catalog_json = Some("catalog.json".to_owned());

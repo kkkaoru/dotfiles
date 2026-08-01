@@ -46,7 +46,7 @@ impl AcpProvider {
     }
 
     pub(super) const fn model_is_launch_scoped(self) -> bool {
-        matches!(self, Self::ConfiguredLaunchScoped)
+        matches!(self, Self::Grok | Self::ConfiguredLaunchScoped)
     }
 
     pub(super) const fn is_session_scoped_configured(self) -> bool {
@@ -59,6 +59,7 @@ pub(super) async fn start(
     program: &OsString,
     arguments: Option<&[String]>,
     model: &str,
+    effort: Option<&str>,
     cwd: &Path,
     events: Arc<ThreadEventDispatcher>,
     alive: Arc<AtomicBool>,
@@ -68,7 +69,7 @@ pub(super) async fn start(
     oneshot::Receiver<()>,
     u32,
 )> {
-    let command = build_provider_command(program, provider, arguments, model)?;
+    let command = build_provider_command(program, provider, arguments, model, effort)?;
     let (mut child, process_group) = spawn_provider_process(command, provider, cwd)?;
     let (connection, io_stopped_rx) =
         wire_provider_connection(provider, events, &mut child, alive.clone())?;
@@ -85,6 +86,7 @@ fn build_provider_command(
     provider: AcpProvider,
     arguments: Option<&[String]>,
     model: &str,
+    effort: Option<&str>,
 ) -> Result<Command> {
     let mut command = Command::new(program);
     // Provider ACP children must not re-run Claude Code SessionStart / routing
@@ -93,8 +95,20 @@ fn build_provider_command(
     command.env("CLAUDEX_PROVIDER_ACP", "1");
     match provider {
         AcpProvider::Grok => {
+            let effort = effort.context("Grok reasoning effort is required at launch")?;
+            if !matches!(effort, "low" | "medium" | "high") {
+                bail!("Grok reasoning effort must be one of low, medium, or high");
+            }
             command.env("CLAUDEX_GROK_ACP", "1");
-            command.args(["--model", model, "agent", "--always-approve"]);
+            command.args([
+                "--model",
+                model,
+                "--reasoning-effort",
+                effort,
+                "agent",
+                "--always-approve",
+                "--no-leader",
+            ]);
             if let Some(path) = plugin::prepare(program)? {
                 command.arg("--plugin-dir").arg(path);
             }

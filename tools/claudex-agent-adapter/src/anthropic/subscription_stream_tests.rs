@@ -782,6 +782,52 @@ async fn reports_process_failure_and_stderr() {
     assert!(output(&mut receiver).await.is_empty());
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn retries_a_transient_stream_502_before_emitting_error() {
+    let directory = tempfile::tempdir().expect("create stream retry fixture directory");
+    let attempts = directory.path().join("attempts");
+    let program = directory.path().join("stream-retry-fixture.sh");
+    let attempts_path = attempts.display();
+    fs::write(
+        &program,
+        format!(
+            r#"#!/bin/sh
+set -eu
+if [ ! -f '{attempts_path}' ]; then
+    : > '{attempts_path}'
+    cat >/dev/null
+    exit 1
+fi
+cat >/dev/null
+printf '%s\n' '{{"type":"result","subtype":"success","result":"STREAM_RETRIED_OK"}}'
+"#
+        ),
+    )
+    .expect("write stream retry fixture");
+    fs::set_permissions(&program, fs::Permissions::from_mode(0o755))
+        .expect("make stream retry fixture executable");
+    let (sender, mut receiver) = channel();
+    let options = SubscriptionOptions::internal(
+        Arc::new(tokio::sync::Semaphore::new(1)),
+        Duration::from_secs(5),
+    );
+
+    run_subscription_stream(
+        sender,
+        program,
+        "claude-haiku-4-5".to_owned(),
+        "prompt".to_owned(),
+        options,
+    )
+    .await;
+
+    let frames = output(&mut receiver).await;
+    assert!(frames.contains("STREAM_RETRIED_OK"));
+    assert!(!frames.contains("event: error"));
+    assert!(attempts.exists());
+}
+
 #[tokio::test]
 async fn stops_cleanly_when_the_receiver_closes() {
     let (sender, receiver) = channel();
@@ -806,7 +852,7 @@ async fn stream_timeout_terminates_the_entire_subscription_process_group() {
         &directory.path().join("stalled-stream.sh"),
         "model",
         "prompt",
-        options,
+        &options,
     )
     .await
     .expect_err("stalled subscription stream must time out");

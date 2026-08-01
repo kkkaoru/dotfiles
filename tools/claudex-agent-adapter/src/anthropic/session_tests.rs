@@ -1292,6 +1292,7 @@ async fn removes_sessions_for_a_failed_model_backend() {
     let backend = AgentBackend::spawn_routes(&[BackendRoute {
         model: "failed".to_owned(),
         backend: BackendKind::ConfiguredAcp,
+        effort: None,
         model_provider: None,
         model_catalog_json: None,
         max_context_tokens: None,

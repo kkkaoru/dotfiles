@@ -14,7 +14,7 @@ mod tests {
 
     fn parsed() -> ProviderConfig {
         serde_json::from_str(&config(
-            r#"{"id":"p","agent":"w","defaultModel":"m","effort":"h","modelPrefixes":["m-"],"backend":"grok-acp"}"#,
+            r#"{"id":"p","agent":"w","defaultModel":"m","effort":"high","modelPrefixes":["m-"],"backend":"grok-acp"}"#,
         ))
         .unwrap()
     }
@@ -31,8 +31,8 @@ mod tests {
         )
         .unwrap();
         let loaded = load(&path).unwrap();
-        assert_eq!(loaded.main_model, "model");
         assert_eq!(loaded.routes[0].model, "model");
+        assert_eq!(loaded.routes[0].effort.as_deref(), Some("high"));
         assert_eq!(loaded.routes.len(), 1);
         assert_eq!(loaded.routes[0].model_prefixes, ["model-"]);
         // Disabled providers still contribute catalog identities for remaps.
@@ -211,12 +211,12 @@ mod tests {
         std::fs::write(
             &path,
             config(
-                r#"{"id":"p","agent":"worker","defaultModel":"opencode-go/deepseek-v4-pro","effort":"high","enabled":true,"usageProvider":"opencodego","requestBudget":{"estimatedRequests":3450,"windowMinutes":300,"usageWindow":"primary"},"modelPrefixes":["opencode-go/"],"backend":"configured-acp","acp":{"program":"opencode","arguments":["acp"]}}"#,
+                r#"{"id":"p","agent":"worker","defaultModel":"opencode-go/deepseek-v4-flash","effort":"high","enabled":true,"usageProvider":"opencodego","requestBudget":{"estimatedRequests":31650,"windowMinutes":300,"usageWindow":"primary"},"modelPrefixes":["opencode-go/"],"backend":"configured-acp","acp":{"program":"opencode","arguments":["acp"]}}"#,
             ),
         )
         .unwrap();
         let loaded = load(&path).unwrap();
-        assert_eq!(loaded.routes[0].model, "opencode-go/deepseek-v4-pro");
+        assert_eq!(loaded.routes[0].model, "opencode-go/deepseek-v4-flash");
     }
 
     #[test]
@@ -250,7 +250,7 @@ mod tests {
         )
         .unwrap();
         let loaded = load(&path).unwrap();
-        assert_eq!(loaded.main_model, "glm-5.2:cloud");
+        assert_eq!(loaded.routes[0].model, "glm-5.2:cloud");
         assert_eq!(
             loaded.routes[0].model_provider.as_deref(),
             Some("ollama")
@@ -308,6 +308,24 @@ mod tests {
         for json in invalid {
             let parsed: ProviderConfig = serde_json::from_str(&json).unwrap();
             assert!(validate(parsed).is_err());
+        }
+    }
+
+    #[test]
+    fn accepts_only_native_grok_reasoning_efforts() {
+        for effort in ["low", "medium", "high"] {
+            let parsed: ProviderConfig = serde_json::from_str(&config(&format!(
+                r#"{{"id":"p","agent":"w","defaultModel":"grok-4.5","effort":"{effort}","enabled":true,"backend":"grok-acp"}}"#
+            )))
+            .unwrap();
+            assert!(validate(parsed).is_ok(), "rejected Grok effort {effort}");
+        }
+        for effort in ["mid", "xhigh", "max"] {
+            let parsed: ProviderConfig = serde_json::from_str(&config(&format!(
+                r#"{{"id":"p","agent":"w","defaultModel":"grok-4.5","effort":"{effort}","enabled":true,"backend":"grok-acp"}}"#
+            )))
+            .unwrap();
+            assert!(validate(parsed).is_err(), "accepted Grok effort {effort}");
         }
     }
 

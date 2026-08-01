@@ -57,11 +57,11 @@ pub(super) async fn create(
     // Claude Code embeds the active child cwd in its base instructions. Keep ACP sessions scoped
     // to that request instead of leaking the adapter daemon's launch directory.
     let session_cwd = session_cwd(&params, cwd);
-    let request = connection.new_session(
-        acp::NewSessionRequest::new(&session_cwd)
-            .mcp_servers(vec![])
-            .meta(json!({ "modelId": model }).as_object().cloned()),
-    );
+    let mut request = acp::NewSessionRequest::new(&session_cwd).mcp_servers(vec![]);
+    if provider != AcpProvider::Grok {
+        request = request.meta(json!({ "modelId": model }).as_object().cloned());
+    }
+    let request = connection.new_session(request);
     let response = await_setup(provider, SESSION_SETUP_TIMEOUT, request).await?;
     // OpenCode currently ignores the non-standard modelId metadata on session/new. Select the
     // configured model through the ACP model method as soon as the session exists so the first

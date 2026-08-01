@@ -75,7 +75,6 @@ struct AgentChoice {
     effort: String,
 }
 pub struct LoadedConfig {
-    pub main_model: String,
     pub routes: Vec<BackendRoute>,
     /// Exact default models and prefixes declared by any provider entry, including disabled ones.
     /// Used to remap unrouted provider ids onto the main backend without hardcoding vendor names.
@@ -297,15 +296,8 @@ fn validate(config: ProviderConfig) -> Result<LoadedConfig> {
     {
         bail!("mainProviders must name distinct enabled providers");
     }
-    let main_model = providers
-        .iter()
-        .find(|provider| provider.id == config.main_providers[0])
-        .expect("validated main provider")
-        .default_model
-        .clone();
     let routes = providers.into_iter().map(Provider::into_route).collect();
     Ok(LoadedConfig {
-        main_model,
         routes,
         model_catalog,
     })
@@ -326,6 +318,7 @@ impl Provider {
         BackendRoute {
             model: self.default_model,
             backend: self.backend,
+            effort: Some(self.effort),
             model_provider: self.model_provider,
             model_catalog_json: self.model_catalog_json,
             max_context_tokens: self.max_context_tokens,

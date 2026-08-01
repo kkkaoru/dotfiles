@@ -51,12 +51,3 @@ pub(super) fn input_text(input: &Value) -> String {
         value => value.to_string(),
     }
 }
-
-pub(super) fn grok_effort(effort: &str) -> Option<&'static str> {
-    match effort {
-        "low" => Some("low"),
-        "mid" | "medium" => Some("medium"),
-        "high" | "xhigh" | "max" => Some("high"),
-        _ => None,
-    }
-}

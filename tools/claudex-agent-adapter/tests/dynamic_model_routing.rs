@@ -11,7 +11,7 @@ use claudex_agent_adapter::{
 use reqwest::{Client, Response};
 use serde_json::{Value, json};
 
-const DEFAULT_MODEL: &str = "opencode-go/deepseek-v4-pro";
+const DEFAULT_MODEL: &str = "opencode-go/deepseek-v4-flash";
 const DYNAMIC_MODEL: &str = "opencode-go/deepseek-v4-runtime-test";
 const MODEL_LIMIT: usize = 2;
 const POLL_INTERVAL: Duration = Duration::from_millis(10);
@@ -28,6 +28,7 @@ async fn resolves_dynamic_opencode_model_and_reports_exact_model_capacity() {
     let backend = AgentBackend::spawn_routes(&[BackendRoute {
         model: DEFAULT_MODEL.to_owned(),
         backend: BackendKind::ConfiguredAcp,
+        effort: None,
         model_provider: None,
         model_catalog_json: None,
         max_context_tokens: None,

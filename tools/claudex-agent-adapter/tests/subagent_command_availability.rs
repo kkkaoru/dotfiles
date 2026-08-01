@@ -264,6 +264,7 @@ async fn configured_acp_subagent_approves_and_executes_the_git_gh_probe() {
     let backend = AgentBackend::spawn_routes(&[BackendRoute {
         model: model.to_owned(),
         backend: BackendKind::ConfiguredAcp,
+        effort: None,
         model_provider: None,
         model_catalog_json: None,
         max_context_tokens: None,

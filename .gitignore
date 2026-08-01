@@ -130,3 +130,7 @@ coverage_out/
 .codex/*.bak
 
 tmp
+
+# Local runtime binaries and state; never commit credentials or machine-local data.
+.local/
+tools/claudex-agent-adapter/grok-acp-mock.jsonl

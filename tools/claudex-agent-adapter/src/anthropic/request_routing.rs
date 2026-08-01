@@ -1,9 +1,16 @@
-use super::MessagesRequest;
+use super::{MessagesRequest, content::serialized_len};
 use anyhow::{Result, bail};
 
 mod models;
-use models::normalize_claude_model_to_haiku;
 pub(in crate::anthropic) use models::official_claude_haiku_model;
+use models::{CLAUDE_LONG_CONTEXT_MODEL, normalize_claude_model_to_haiku};
+
+// Claude Haiku 4.5 has a 200k context window, but a subscription child also
+// receives Claude's system prompt, tool definitions, and attachments. Keep a
+// 100k conversation budget so a resumed parent cannot repeatedly launch an
+// oversized Haiku child. The observed failure was 117k conversation tokens and
+// 210k total request tokens.
+const HAIKU_CONVERSATION_TOKEN_BUDGET: usize = 100_000;
 
 /// Apply SubAgent intent overrides and policy denylist / unrouted-provider remaps.
 #[cfg(test)]
@@ -50,6 +57,9 @@ pub(super) fn resolve_request_model_with_origin(
     if let Some(model) = model_override {
         request.model = model;
     }
+    if request.model.is_empty() {
+        bail!("request model is required; the adapter does not select a provider main model");
+    }
     if let Some(model) = request
         .model
         .strip_prefix(crate::DISCOVERY_MODEL_PREFIX)
@@ -60,8 +70,24 @@ pub(super) fn resolve_request_model_with_origin(
     }
     if origin.is_subagent
         && (!has_model_override || origin.model_is_inherited)
+        && request.model == CLAUDE_LONG_CONTEXT_MODEL
+    {
+        return Ok(RouteDecision::Subscription);
+    }
+    if origin.is_subagent
+        && (!has_model_override || origin.model_is_inherited)
         && let Some(model) = normalize_claude_model_to_haiku(&request.model)
     {
+        if conversation_exceeds_haiku_budget(request) {
+            tracing::warn!(
+                request_model = %request.model,
+                normalized_model = CLAUDE_LONG_CONTEXT_MODEL,
+                conversation_tokens = conversation_token_count(request),
+                "routing an oversized Claude SubAgent through the long-context subscription model"
+            );
+            request.model = CLAUDE_LONG_CONTEXT_MODEL.to_owned();
+            return Ok(RouteDecision::Subscription);
+        }
         tracing::warn!(
             request_model = %request.model,
             normalized_model = model,
@@ -71,35 +97,36 @@ pub(super) fn resolve_request_model_with_origin(
         return Ok(RouteDecision::Subscription);
     }
 
-    apply_disabled_model_policy(request, main_model, origin.is_subagent)?;
+    apply_disabled_model_policy(request, origin.is_subagent)?;
 
     let explicit_native_claude = has_model_override
         && !origin.model_is_inherited
         && normalize_claude_model_to_haiku(&request.model).is_some();
-    if origin.is_subagent
-        && !explicit_native_claude
-        && (request.model.is_empty()
-            || (request.model != main_model && !supports_model(&request.model)))
-    {
+    if origin.is_subagent && !explicit_native_claude && !supports_model(&request.model) {
         bail!(
             "SubAgent model `{}` does not have a recoverable configured route and must not be launched",
             request.model
         );
     }
 
-    if request.model.is_empty() || request.model == main_model || supports_model(&request.model) {
+    if supports_model(&request.model) {
         return Ok(RouteDecision::Provider);
     }
     if is_declared_provider_model(&request.model) {
-        tracing::warn!(
-            request_model = %request.model,
-            main_model,
-            "remapping request for an unrouted provider model onto the adapter main route"
+        bail!(
+            "configured provider model `{}` does not have an active route",
+            request.model
         );
-        request.model = main_model.to_owned();
-        return Ok(RouteDecision::Provider);
     }
     Ok(RouteDecision::Subscription)
+}
+
+fn conversation_token_count(request: &MessagesRequest) -> usize {
+    serialized_len(&request.messages).div_ceil(4)
+}
+
+fn conversation_exceeds_haiku_budget(request: &MessagesRequest) -> bool {
+    conversation_token_count(request) >= HAIKU_CONVERSATION_TOKEN_BUDGET
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -130,33 +157,17 @@ impl RouteOrigin {
     }
 }
 
-fn apply_disabled_model_policy(
-    request: &mut MessagesRequest,
-    main_model: &str,
-    is_subagent: bool,
-) -> Result<()> {
+fn apply_disabled_model_policy(request: &mut MessagesRequest, is_subagent: bool) -> Result<()> {
     if !request.disabled_subagent_models.contains(&request.model) {
         return Ok(());
     }
-    if is_subagent {
-        bail!(
-            "SubAgent model `{}` is disabled by the active Claudex policy and must not be launched",
-            request.model
-        );
-    }
-    if request.model == main_model {
-        // The dedicated policy controls only spawned workers. A terminal may
-        // keep using a model in its outer session while denying that same
-        // model to SubAgents.
+    if !is_subagent {
         return Ok(());
     }
-    tracing::warn!(
-        disabled_model = %request.model,
-        main_model,
-        "remapping outer request off a policy-disabled model onto the adapter main route"
-    );
-    request.model = main_model.to_owned();
-    Ok(())
+    bail!(
+        "SubAgent model `{}` is disabled by the active Claudex policy and must not be launched",
+        request.model
+    )
 }
 
 #[cfg(test)]

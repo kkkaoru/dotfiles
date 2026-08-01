@@ -27,6 +27,7 @@ impl GrokAcp {
         Self::spawn_provider(
             provider,
             model,
+            None,
             &launch.program,
             Some(launch.arguments.clone()),
             cwd,

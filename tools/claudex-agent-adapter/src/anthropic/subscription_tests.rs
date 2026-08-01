@@ -10,11 +10,11 @@ use serde_json::json;
 
 use super::subscription::{
     OutputMode, SubscriptionOptions, cwd_from_system, request_effort, requested_tools,
-    run_subscription_model, setting_at, subscription_command, subscription_limits_from,
-    subscription_prompt, valid_effort,
+    run_subscription_model, setting_at, should_retry_subscription, subscription_command,
+    subscription_limits_from, subscription_prompt, transient_retry_delay, valid_effort,
 };
 use crate::NONINTERACTIVE_CHILD_ENV;
-use crate::agent_backend::AgentBackend;
+use crate::agent_backend::{AgentBackend, BackendKind, BackendRoute};
 use crate::anthropic::{Bridge, MessagesRequest, agent_effort::AgentEffort};
 use crate::provider_config::WorkerRoute;
 
@@ -167,6 +167,58 @@ async fn subscription_timeout_terminates_and_reaps_the_model_process() {
         .expect_err("stalled subscription must time out");
 
     assert!(error.to_string().contains("timed out"));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn retries_a_transient_subscription_502_before_returning_success() {
+    let directory = tempfile::tempdir().expect("create retry fixture directory");
+    let attempts = directory.path().join("attempts");
+    let program = directory.path().join("retry-fixture.sh");
+    let attempts_path = attempts.display();
+    fs::write(
+        &program,
+        format!(
+            r#"#!/bin/sh
+set -eu
+if [ ! -f '{attempts_path}' ]; then
+    : > '{attempts_path}'
+    cat >/dev/null
+    printf '%s\n' '{{"subtype":"error","is_error":true,"result":"502 Bad Gateway"}}'
+    exit 0
+fi
+cat >/dev/null
+printf '%s\n' '{{"subtype":"success","result":"RETRIED_OK"}}'
+"#
+        ),
+    )
+    .expect("write retry fixture");
+    fs::set_permissions(&program, fs::Permissions::from_mode(0o755))
+        .expect("make retry fixture executable");
+
+    let options = SubscriptionOptions::internal(
+        Arc::new(tokio::sync::Semaphore::new(1)),
+        Duration::from_secs(5),
+    );
+    let result = run_subscription_model(&program, "claude-haiku-4-5", "prompt", options)
+        .await
+        .expect("transient 502 must be retried");
+
+    assert_eq!(result, "RETRIED_OK");
+    assert!(attempts.exists());
+    assert!(should_retry_subscription(&anyhow::anyhow!(
+        "502 Bad Gateway"
+    )));
+    assert!(should_retry_subscription(&anyhow::anyhow!(
+        "Claude subscription model claude-haiku-4-5 exited with exit status: 1: "
+    )));
+    assert!(!should_retry_subscription(&anyhow::anyhow!(
+        "Claude subscription model claude-haiku-4-5 exited with exit status: 1: fixture failure"
+    )));
+    assert!(!should_retry_subscription(&anyhow::anyhow!(
+        "502 Bad Gateway; subscription stream already emitted frames"
+    )));
+    assert_eq!(transient_retry_delay(1), Duration::from_millis(250));
 }
 
 #[test]
@@ -429,5 +481,48 @@ fn configured_worker_effort_replaces_an_unsupported_explicit_effort() {
     assert_eq!(
         bridge.resolve_request_effort(&request, AgentEffort::Explicit("max".to_owned())),
         Some("xhigh".to_owned())
+    );
+}
+
+#[test]
+fn native_grok_route_effort_overrides_explicit_and_unmatched_request_effort() {
+    let mut route = BackendRoute::new("grok-4.5", BackendKind::GrokAcp);
+    route.effort = Some("high".to_owned());
+    let bridge = Bridge::new_with_backend(AgentBackend::spawn_routes(&[route]), "main".to_owned());
+    let mut request = MessagesRequest {
+        model: "grok-4.5".to_owned(),
+        system: json!(null),
+        messages: vec![],
+        tools: vec![],
+        stream: false,
+        output_config: json!({"effort":"low"}),
+        metadata: json!({}),
+        working_directory: None,
+        disabled_subagent_models: Default::default(),
+        claudex_collaborator_model: None,
+    };
+
+    for requested in ["low", "max"] {
+        request.output_config = json!({"effort":requested});
+        assert_eq!(
+            bridge.resolve_request_effort(&request, AgentEffort::Unmatched),
+            Some("high".to_owned())
+        );
+        assert_eq!(
+            bridge.resolve_request_effort(&request, AgentEffort::Explicit(requested.to_owned())),
+            Some("high".to_owned())
+        );
+    }
+
+    let mut configured =
+        BackendRoute::new("opencode-go/deepseek-v4-flash", BackendKind::ConfiguredAcp);
+    configured.effort = Some("max".to_owned());
+    let configured_bridge =
+        Bridge::new_with_backend(AgentBackend::spawn_routes(&[configured]), "main".to_owned());
+    request.model = "opencode-go/deepseek-v4-flash".to_owned();
+    request.output_config = json!({"effort":"low"});
+    assert_eq!(
+        configured_bridge.resolve_request_effort(&request, AgentEffort::Unmatched),
+        Some("low".to_owned())
     );
 }

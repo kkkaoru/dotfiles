@@ -48,7 +48,11 @@ mod tests {
                 "invalid worker route JSON",
             ),
             (
-                vec!["serve", "--provider-config", "/definitely/missing/providers.json"],
+                vec![
+                    "serve",
+                    "--provider-config",
+                    "/definitely/missing/providers.json",
+                ],
                 "read provider config",
             ),
             (
@@ -63,10 +67,7 @@ mod tests {
                 ],
                 "must be unique",
             ),
-            (
-                vec!["serve", "--model", "m", "--backend-route", "other=grok-acp"],
-                "main --model",
-            ),
+            (vec!["serve", "--model", ""], "--model must not be empty"),
             (
                 vec!["serve", "--model", "m", "--subscription-max-processes", "0"],
                 "positive integer",
@@ -232,16 +233,40 @@ mod tests {
             [
                 OsString::from("serve"),
                 OsString::from("--provider-config"),
-                path.into_os_string(),
+                path.clone().into_os_string(),
             ]
             .into_iter()
             .collect(),
         )
-        .expect("provider configuration supplies the main model");
+        .expect("provider configuration supplies routes without a main model");
         let RuntimeCommand::Serve(options) = command else {
             panic!("serve command expected");
         };
-        assert_eq!(options.model, "vendor-default");
+        assert!(options.model.is_empty());
+        assert_eq!(
+            options.model_catalog.worker_fields("worker"),
+            Some(("vendor-default", "high"))
+        );
+
+        let launch = parse_command(
+            [
+                OsString::from("launch"),
+                OsString::from("--provider-config"),
+                path.clone().into_os_string(),
+                OsString::from("--"),
+                OsString::from("--resume"),
+                OsString::from("session-id"),
+            ]
+            .into_iter()
+            .collect(),
+        )
+        .expect("provider launch inherits the Claude Code request model");
+        let RuntimeCommand::Launch(options, arguments, inherit) = launch else {
+            panic!("launch command expected");
+        };
+        assert!(options.model.is_empty());
+        assert!(inherit);
+        assert_eq!(arguments, ["--resume", "session-id"]);
 
         let error = parse_command(
             [
@@ -286,10 +311,16 @@ mod tests {
 
         let route = serde_json::to_string(&options.routes[0]).unwrap();
         let command = parse_command(
-            ["serve", "--model", "vendor-default", "--backend-route-json", &route]
-                .into_iter()
-                .map(OsString::from)
-                .collect(),
+            [
+                "serve",
+                "--model",
+                "vendor-default",
+                "--backend-route-json",
+                &route,
+            ]
+            .into_iter()
+            .map(OsString::from)
+            .collect(),
         )
         .expect("serialized daemon route");
         assert!(matches!(command, RuntimeCommand::Serve(_)));

@@ -175,7 +175,7 @@ fn prepare_turn(
         .get("effort")
         .and_then(Value::as_str)
         .and_then(|effort| match provider {
-            AcpProvider::Grok => prompt::grok_effort(effort),
+            AcpProvider::Grok => None,
             AcpProvider::Configured
             | AcpProvider::ConfiguredLaunchScoped
             | AcpProvider::Copilot => prompt::copilot_effort(effort),

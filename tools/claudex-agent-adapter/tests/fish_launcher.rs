@@ -6,6 +6,8 @@ fn fish_launcher_uses_the_shared_provider_config() {
     let function = launcher_function();
     assert_shared_provider_default(&function, &home);
     assert_no_argument_launch(&function, &home);
+    assert_settings_restore_modes(&function, &home);
+    assert_explicit_model_restore(&function, &home);
     assert_explicit_override(&function, &home);
     assert_explicit_agent_is_preserved(&function, &home);
     assert_routing_marker_is_scoped_to_claudex(&function, &home);
@@ -32,6 +34,19 @@ fn fish_launcher_keeps_command_tools_available_for_new_and_resumed_sessions() {
         "--\n--resume\nretained-session\n--allowedTools\nBash(git *),Bash(gh *)\nresume-command-tool-smoke\n"
     ));
     assert_no_implicit_agent(&resumed);
+    let (adapter_arguments, _) = resumed
+        .split_once("\n--\n")
+        .expect("adapter and Claude arguments");
+    assert!(
+        !adapter_arguments
+            .lines()
+            .any(|argument| argument == "--model")
+    );
+    assert!(
+        adapter_arguments
+            .lines()
+            .any(|argument| argument == "--inherit-claude-model")
+    );
 }
 
 fn run_fish_launcher(
@@ -39,19 +54,33 @@ fn run_fish_launcher(
     home: &tempfile::TempDir,
     command: &str,
 ) -> String {
-    let output = Command::new("fish")
+    let output = run_fish_launcher_output(function, home, command, None);
+    String::from_utf8(output.stdout).expect("UTF-8 adapter arguments")
+}
+
+fn run_fish_launcher_output(
+    function: &std::path::Path,
+    home: &tempfile::TempDir,
+    command: &str,
+    explicit_model: Option<&str>,
+) -> std::process::Output {
+    let mut process = Command::new("fish");
+    process
         .args(["-c", &format!("source '{}'; {command}", function.display())])
         .env("HOME", home.path())
-        .env_remove("CLAUDEX_MODEL")
-        .env_remove("CLAUDEX_PROVIDER_CONFIG")
-        .output()
-        .expect("run fish launcher");
+        .env_remove("CLAUDEX_PROVIDER_CONFIG");
+    if let Some(model) = explicit_model {
+        process.env("CLAUDEX_MODEL", model);
+    } else {
+        process.env_remove("CLAUDEX_MODEL");
+    }
+    let output = process.output().expect("run fish launcher");
     assert!(
         output.status.success(),
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    String::from_utf8(output.stdout).expect("UTF-8 adapter arguments")
+    output
 }
 
 fn assert_command_tools_are_not_filtered(arguments: &str) {
@@ -91,7 +120,7 @@ fn shared_provider_fixture() -> tempfile::TempDir {
     let adapter = home.path().join(".local/bin/claudex-agent-adapter");
     fs::write(
         &adapter,
-        "#!/bin/sh\nprintf 'CLAUDEX_ACTIVE=%s\\n' \"${CLAUDEX_ACTIVE:-}\"\nprintf 'CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=%s\\n' \"${CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY:-}\"\nprintf 'CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS=%s\\n' \"${CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS:-}\"\nprintf 'CLAUDE_CODE_ALWAYS_ENABLE_EFFORT=%s\\n' \"${CLAUDE_CODE_ALWAYS_ENABLE_EFFORT:-}\"\nprintf '%s\\n' \"$@\"\n",
+        "#!/bin/sh\nprintf 'CLAUDEX_ACTIVE=%s\\n' \"${CLAUDEX_ACTIVE:-}\"\nprintf 'CLAUDEX_MAIN_MODEL=%s\\n' \"${CLAUDEX_MAIN_MODEL:-}\"\nprintf 'CLAUDEX_MAIN_MODEL_KNOWN=%s\\n' \"${CLAUDEX_MAIN_MODEL_KNOWN:-}\"\nprintf 'CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=%s\\n' \"${CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY:-}\"\nprintf 'CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS=%s\\n' \"${CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS:-}\"\nprintf 'CLAUDE_CODE_ALWAYS_ENABLE_EFFORT=%s\\n' \"${CLAUDE_CODE_ALWAYS_ENABLE_EFFORT:-}\"\nprintf '%s\\n' \"$@\"\n",
     )
     .expect("fake adapter");
     let mut permissions = fs::metadata(&adapter)
@@ -126,16 +155,111 @@ fn assert_shared_provider_default(function: &std::path::Path, home: &tempfile::T
     let arguments = String::from_utf8(output.stdout).expect("UTF-8 adapter arguments");
     assert!(arguments.contains("--provider-config\n"));
     assert!(arguments.contains("CLAUDEX_ACTIVE=1\n"));
+    assert!(arguments.contains("CLAUDEX_MAIN_MODEL=sonnet[1m]\n"));
+    assert!(arguments.contains("CLAUDEX_MAIN_MODEL_KNOWN=1\n"));
     assert!(arguments.contains("CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1\n"));
     assert!(arguments.contains("CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS=40\n"));
     assert!(arguments.contains(".config/claudex/providers.json\n"));
-    assert!(arguments.contains("--model\nmodel\n"));
+    assert!(!arguments.contains("--model\n"));
     assert!(arguments.contains("--inherit-claude-model\n"));
     assert!(arguments.contains("--subscription-max-processes\n20\n"));
     assert!(arguments.contains("--allowedTools\nWebSearch,WebFetch\n"));
     assert!(arguments.ends_with("--\n--allowedTools\nWebSearch,WebFetch\nsmoke\n"));
     assert_no_implicit_agent(&arguments);
-    assert!(String::from_utf8_lossy(&output.stderr).contains("settings sonnet[1m], high"));
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("current sonnet[1m], high; request model authoritative")
+    );
+}
+
+fn assert_settings_restore_modes(function: &std::path::Path, home: &tempfile::TempDir) {
+    let cases = [
+        (
+            "long resume",
+            "claudex --resume retained-session resume-smoke",
+            "--\n--allowedTools\nWebSearch,WebFetch\n--resume\nretained-session\nresume-smoke\n",
+        ),
+        (
+            "joined resume",
+            "claudex --resume=retained-session resume-equals-smoke",
+            "--\n--allowedTools\nWebSearch,WebFetch\n--resume=retained-session\nresume-equals-smoke\n",
+        ),
+        (
+            "short resume",
+            "claudex -r retained-session short-resume-smoke",
+            "--\n--allowedTools\nWebSearch,WebFetch\n-r\nretained-session\nshort-resume-smoke\n",
+        ),
+        (
+            "long continue",
+            "claudex --continue continue-smoke",
+            "--\n--allowedTools\nWebSearch,WebFetch\n--continue\ncontinue-smoke\n",
+        ),
+        (
+            "short continue",
+            "claudex -c short-continue-smoke",
+            "--\n--allowedTools\nWebSearch,WebFetch\n-c\nshort-continue-smoke\n",
+        ),
+    ];
+
+    for (label, command, expected_tail) in cases {
+        let output = run_fish_launcher_output(function, home, command, None);
+        let arguments = String::from_utf8(output.stdout).expect("UTF-8 restore arguments");
+        let (adapter_arguments, _) = arguments
+            .split_once("\n--\n")
+            .expect("adapter and Claude arguments");
+        assert!(
+            !adapter_arguments
+                .lines()
+                .any(|argument| argument == "--model"),
+            "{label}: {arguments}"
+        );
+        assert!(
+            adapter_arguments
+                .lines()
+                .any(|argument| argument == "--inherit-claude-model"),
+            "{label}: {arguments}"
+        );
+        assert!(
+            arguments.contains("CLAUDEX_MAIN_MODEL=\n"),
+            "{label}: {arguments}"
+        );
+        assert!(
+            arguments.contains("CLAUDEX_MAIN_MODEL_KNOWN=0\n"),
+            "{label}: {arguments}"
+        );
+        assert!(arguments.ends_with(expected_tail), "{label}: {arguments}");
+        let diagnostic = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            diagnostic.contains("resumed orchestration"),
+            "{label}: {diagnostic}"
+        );
+        assert!(
+            diagnostic.contains(
+                "current model restored by Claude Code and unknown to launcher; request model authoritative"
+            ),
+            "{label}: {diagnostic}"
+        );
+    }
+}
+
+fn assert_explicit_model_restore(function: &std::path::Path, home: &tempfile::TempDir) {
+    let output = run_fish_launcher_output(
+        function,
+        home,
+        "claudex --resume retained-session explicit-resume-smoke",
+        Some("vendor-model"),
+    );
+    let arguments = String::from_utf8(output.stdout).expect("UTF-8 explicit restore arguments");
+    let (adapter_arguments, _) = arguments
+        .split_once("\n--\n")
+        .expect("adapter and Claude arguments");
+    assert!(adapter_arguments.contains("--model\nvendor-model\n"));
+    assert!(!adapter_arguments.contains("--inherit-claude-model\n"));
+    assert!(arguments.contains("CLAUDEX_MAIN_MODEL=vendor-model\n"));
+    assert!(arguments.contains("CLAUDEX_MAIN_MODEL_KNOWN=1\n"));
+    assert!(arguments.ends_with(
+        "--\n--effort\nhigh\n--allowedTools\nWebSearch,WebFetch\n--resume\nretained-session\nexplicit-resume-smoke\n"
+    ));
 }
 
 fn assert_explicit_override(function: &std::path::Path, home: &tempfile::TempDir) {
@@ -241,7 +365,7 @@ fn fish_launcher_uses_claude_settings_model_and_effort_when_available() {
     let adapter = home.path().join(".local/bin/claudex-agent-adapter");
     fs::write(
         &adapter,
-        "#!/bin/sh\nprintf 'CLAUDE_CODE_ALWAYS_ENABLE_EFFORT=%s\\n' \"${CLAUDE_CODE_ALWAYS_ENABLE_EFFORT:-}\"\nprintf '%s\\n' \"$@\"\n",
+        "#!/bin/sh\nprintf 'CLAUDEX_MAIN_MODEL=%s\\n' \"${CLAUDEX_MAIN_MODEL:-}\"\nprintf 'CLAUDEX_MAIN_MODEL_KNOWN=%s\\n' \"${CLAUDEX_MAIN_MODEL_KNOWN:-}\"\nprintf 'CLAUDE_CODE_ALWAYS_ENABLE_EFFORT=%s\\n' \"${CLAUDE_CODE_ALWAYS_ENABLE_EFFORT:-}\"\nprintf '%s\\n' \"$@\"\n",
     )
     .expect("fake adapter");
     let mut permissions = fs::metadata(&adapter)
@@ -268,7 +392,9 @@ fn fish_launcher_uses_claude_settings_model_and_effort_when_available() {
         String::from_utf8_lossy(&output.stderr)
     );
     let arguments = String::from_utf8(output.stdout).expect("UTF-8 settings launcher arguments");
-    assert!(arguments.contains("--model\nprovider-model\n"));
+    assert!(arguments.contains("CLAUDEX_MAIN_MODEL=sonnet[1m]\n"));
+    assert!(arguments.contains("CLAUDEX_MAIN_MODEL_KNOWN=1\n"));
+    assert!(!arguments.contains("--model\n"));
     assert!(arguments.contains("--inherit-claude-model\n"));
     assert!(arguments.contains(&format!(
         "--provider-config\n{}\n",
@@ -276,7 +402,10 @@ fn fish_launcher_uses_claude_settings_model_and_effort_when_available() {
     )));
     assert!(arguments.ends_with("--\n--allowedTools\nWebSearch,WebFetch\nsettings-smoke\n"));
     assert_no_implicit_agent(&arguments);
-    assert!(String::from_utf8_lossy(&output.stderr).contains("settings sonnet[1m], high"));
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("current sonnet[1m], high; request model authoritative")
+    );
 }
 
 #[test]
@@ -530,7 +659,10 @@ fn assert_no_argument_launch(function: &std::path::Path, home: &tempfile::TempDi
         String::from_utf8_lossy(&output.stderr)
     );
     let arguments = String::from_utf8(output.stdout).expect("UTF-8 adapter arguments");
-    assert!(arguments.contains("--model\nmodel\n"));
+    assert!(arguments.contains("CLAUDEX_MAIN_MODEL=sonnet[1m]\n"));
+    assert!(arguments.contains("CLAUDEX_MAIN_MODEL_KNOWN=1\n"));
+    assert!(!arguments.contains("--model\n"));
+    assert!(arguments.contains("--inherit-claude-model\n"));
     assert!(arguments.ends_with("--\n--allowedTools\nWebSearch,WebFetch\n"));
     assert_no_implicit_agent(&arguments);
 }

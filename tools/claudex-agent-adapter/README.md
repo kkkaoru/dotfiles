@@ -15,9 +15,11 @@ Claude Code and routes it to built-in or config-defined agent backends:
 
 All routes coexist in one daemon without eagerly starting provider processes.
 Each configured backend starts lazily on its first model request and remains
-available for reuse for the daemon's lifetime. A model switch or a Claude Code SubAgent request is routed from its Messages API
-`model` value, while models without a backend route retain the existing Claude
-subscription subprocess behavior.
+available for reuse for the daemon's lifetime. Every request, including the main
+Claude Code session, is routed from its actual Messages API `model` value. Native
+Claude and genuinely unconfigured models retain the Claude subscription subprocess
+behavior; a configured external-provider model uses its exact route. If that declared
+provider cannot start, the request errors instead of being remapped to another model.
 
 The Codex backend keeps threads alive while Claude Code executes dynamic tool
 calls, then sends Claude Code's `tool_result` blocks back to the pending
@@ -25,7 +27,9 @@ app-server request. The Copilot backend launches
 `copilot --acp --stdio --model MODEL`; Copilot is a backend choice rather than
 a separate model family, so an explicit route such as
 `--backend-route MODEL=copilot-acp` sends that model through the authenticated
-GitHub Copilot CLI. The Grok backend launches `grok --model MODEL agent stdio`,
+GitHub Copilot CLI. The configured Grok route launches
+`grok --model grok-4.5 --reasoning-effort high agent --always-approve stdio`,
+so its `high` effort is launch-scoped rather than prompt metadata. It
 creates ACP sessions, streams agent message chunks, and selects `AllowOnce` when
 either ACP agent requests permission for a tool. The selected ACP provider owns
 execution of its tools; Claude Code remains the outer conversation UI. Independent
@@ -46,9 +50,10 @@ Provider-owned tools are never emitted as executable Anthropic `tool_use` blocks
 so Claude Code cannot re-execute them or send synthetic missing-tool results.
 Progress is streamed for live visibility, then stripped from the committed
 assistant message/transcript so history stays answer-focused like native Claude
-Code turns. Copilot-native SubAgents stay inside the Copilot ACP server's
-provider session. Adapter-routed Agent/Task launches still require an explicit
-`claudex_model`.
+Code turns. Grok-native and Copilot-native nested work stays inside its ACP
+provider session. Adapter-routed cross-provider Agent/Task launches still require
+an explicit `claudex_model`; main orchestration receives their results and performs
+the cross-provider integration.
 
 Streaming requests return their HTTP response immediately. Each Codex
 `item/agentMessage/delta` notification is converted to an Anthropic
@@ -112,9 +117,10 @@ claudex-agent-adapter build-id
 
 Backend values are `codex-app-server`, `configured-acp`, `copilot-acp`, and
 `grok-acp`. The preferred launcher path is `--provider-config
-$HOME/.config/claudex/providers.json`. It defines enabled providers, the main
-provider, default models, effort, model prefixes, quota names, fallback, and
-ACP launch settings. A `configured-acp` provider also supplies a program and argument array;
+$HOME/.config/claudex/providers.json`. It defines enabled providers, default
+models, effort, model prefixes, quota names, fallback, ACP launch settings, and
+the legacy/worker-compatibility `mainProviders` list. `mainProviders` does not
+select or remap the model in a main-session request. A `configured-acp` provider also supplies a program and argument array;
 `{model}` placeholders are replaced directly without invoking a shell.
 `--backend-route` is repeatable, model keys must be unique, and the main
 `--model` must have a route.
@@ -122,6 +128,9 @@ Codex app-server routes may additionally set `modelProvider` and
 `modelCatalogJson`. These values are applied per `thread/start`, allowing
 OpenAI GPT and custom-provider models such as Sakana Fugu to coexist in the
 same persistent app-server process.
+Route-specific `maxContextTokens` limits are evaluated only when the request's
+actual model selects that route; merely declaring a provider or listing it in
+`mainProviders` does not constrain Claude or another provider's request.
 
 Each route may also set `webSearchMode` to `codex-native`, `acp-native`,
 `delegate-ccr`, `delegate-mcp`, or `disabled`. `codex-native` enables the
@@ -148,13 +157,14 @@ Other adapter options are `--listen`, `--subscription-max-processes`, and
 `--subscription-timeout-minutes`; their defaults are `127.0.0.1:8318`, 20, and
 120. The launch-only `--inherit-claude-model` option omits Claude Code's
 `--model` argument, allowing the normal Claude `model` and `effortLevel`
-settings to control the outer conversation while the adapter model remains a
-backend bootstrap route. The fish launcher enables this inheritance by default and marks the outer
-process so the global, claudex-only routing hook can inject capacity context without selecting a
-custom agent or changing the session display name. An explicit `--agent` is still passed through
-unchanged, while the configured main provider remains available as the bootstrap route for Agent
-calls. `CLAUDEX_MODEL` explicitly disables
-inheritance and may override the orchestrator with any model accepted by a configured prefix. The agent reads a
+settings to determine the outer conversation's actual request values. The fish
+launcher enables this inheritance by default and marks the outer process so the
+global, claudex-only routing hook can inject worker capacity context without
+selecting or rewriting the main model, changing the session display name, or
+introducing a hidden bootstrap route. An explicit `--agent` is still passed
+through unchanged. `CLAUDEX_MODEL` explicitly disables inheritance and selects
+the outer request model, which may be native Claude or any model accepted by a
+configured provider prefix. The agent reads a
 sanitized, five-minute Codexbar/Qwen Cloud capacity cache and delegates to available agents in
 the shared provider config. It selects the configured subscription fallback only
 when all capacity-managed providers are unavailable. Claude Code's built-in parameterless
@@ -177,6 +187,13 @@ model/effort pair is persisted separately in the gitignored
 `settings`) to inherit `.claude/settings.json`, or set `source` to `explicit`
 for its `model` and `effort` values.
 
+For `--resume` or `--continue` without an explicit `CLAUDEX_MODEL`, the launcher
+sets `CLAUDEX_MAIN_MODEL_KNOWN=0`. The resumed request's actual `model` remains
+authoritative; routing does not fall back to a current or stale settings model,
+and worker selection does not suppress a candidate based on assumed model
+equality. An explicit `CLAUDEX_MODEL` is the only launcher override that makes
+the resumed main model known for equality-based suppression.
+
 The launcher also merges a reserved, percent-encoded working-directory header into
 `ANTHROPIC_CUSTOM_HEADERS`. The loopback adapter canonicalizes that path per request and uses it
 directly for Codex and subscription subprocesses. ACP session creation first honors a valid
@@ -197,9 +214,10 @@ CLAUDEX_MODEL=MODEL claudex
 secrets are exposed in process listings. API routes accept it as either a
 Bearer token or `x-api-key`; `/health` remains public. A non-loopback listener
 requires a non-default token. Either `--model` or `--provider-config` is
-required; the latter derives the bootstrap main model from the first `mainProviders` entry. The fish
-function uses the shared config by default, while `CLAUDEX_MODEL` may override
-the bootstrap model when one of the configured prefixes supports it.
+required for process configuration. The fish function uses the shared config by
+default, but `mainProviders` remains a legacy/worker compatibility field and does
+not override the model carried by an HTTP request. `CLAUDEX_MODEL` selects the
+outer request model when one of the configured prefixes supports it.
 
 Each request selects effort independently. An explicit Anthropic
 `output_config.effort` wins; otherwise the adapter rereads Claude Code's
@@ -211,16 +229,22 @@ native Agent schema has no effort field; `mid` is normalized to `medium`, and
 the private field is removed before Claude Code executes the Agent. An
 unspecified Agent effort uses the current Claude Code setting instead. The same
 resolution applies to subscription subprocesses and same-model Codex
-app-server child turns, independently of the parent turn. For Grok ACP, low,
-medium, and high are sent through `session/set_model` metadata as
-`reasoningEffort`; xhigh is normalized to Grok's highest advertised level,
-high. Copilot ACP receives low, medium, high, xhigh, or max through the same ACP
-session-model metadata.
+app-server child turns, independently of the parent turn. Grok ACP effort is
+launch-scoped: the configured `grok-4.5` / `high` route starts with
+`--reasoning-effort high`; it is not deferred to `session/set_model` metadata or
+the prompt. Every routed native-Grok request therefore resolves and logs its
+observable effective effort as the configured launch value `high`, rather than
+reporting an unapplied per-turn override. Configured ACP providers, including
+OpenCode, keep their existing per-session ACP effort configuration and are not
+subject to native-Grok normalization. Copilot ACP receives low, medium, high,
+xhigh, or max through ACP session-model metadata.
 
-Requests for the configured main model use the persistent Codex
-app-server. A Claude Code Agent that explicitly requests another model is sent
-through a separate `claude --print` subscription process with that request's
-model and effort. The child process has the local Anthropic routing variables
+Each Messages request uses its actual model: a configured Codex model uses the
+persistent app-server, a configured ACP model uses its ACP route, and a native
+Claude model uses a separate `claude --print` subscription process. There is no
+special configured-main-model remap. A Claude Code Agent that explicitly requests
+a different model follows the same rule with that request's model and effort.
+The subscription child process has the local Anthropic routing variables
 removed, so a Sonnet Agent does not merely display a Sonnet label while still
 running on the Codex model. It loads the normal Claude Code configuration and
 enables and pre-authorizes only tools present in the outer request. This keeps
@@ -242,14 +266,13 @@ The launcher reads persistent exact-model entries from
 `CLAUDEX_DISABLED_SUBAGENT_MODELS`. The launcher sends the merged policy as a reserved per-request
 header so terminals sharing one daemon remain independent. The adapter rejects a resolved disabled
 SubAgent model before starting its provider; outer main-session and advisor requests remain unaffected.
-Other user-explicit, unconfigured model IDs fall back to the Claude subscription
+Other user-explicit, genuinely unconfigured model IDs use the Claude subscription
 process. A correlated Claude Code child uses the exact `claudex_model` recorded
 by its Agent/Task launch. If that metadata is absent or cannot be correlated,
-the adapter routes from the request model instead: active provider models use
-their configured provider, native Claude models use the subscription process,
-and declared-but-unavailable provider models remap to the configured main model.
-This keeps standard agents and Claude-internal children such as `WebSearch`
-running without inheriting an unrelated provider route or failing with 502.
+the adapter routes from the request model instead: configured provider models use
+their exact provider and native Claude models use the subscription process. A
+declared provider that is unavailable returns an error; it does not remap to a
+configured main model, another provider, or Claude subscription.
 
 Agent Teams remains controlled by Claude Code. The adapter preserves named
 Agent arguments and distinguishes persistent mailbox teammates from regular
@@ -286,7 +309,9 @@ adapter routing logs. Nested Agent/Task calls remain supported and must apply th
 `selected_workers` selection rather than defaulting to generic `claude` or blindly inheriting the
 parent provider. Their `subagent_type` must be one of the current `selected_agents`, and their
 `claudex_model` must match the same selected worker entry unless the active user explicitly requested
-that exact model.
+that exact model. Nested work created natively inside Grok remains in the Grok ACP
+session. Cross-provider work is initiated by main orchestration as an explicit routed
+Agent/Task, then returns to the main session for integration.
 
 The adapter's `ensure` command compares the running service's protocol, routes,
 limits, and source-derived build ID with the installed binary. A per-port

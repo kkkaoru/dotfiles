@@ -2,28 +2,27 @@
 mod project_fixture;
 
 use std::{
+    os::unix::fs::{PermissionsExt as _, symlink},
     path::Path,
     sync::Arc,
     time::{Duration, Instant},
 };
 
 use claudex_agent_adapter::{
-    agent_backend::AgentBackend, anthropic::Bridge, grok_acp::GrokAcp, http_router,
+    agent_backend::AgentBackend, anthropic::Bridge, grok_acp::GrokAcp, http_router, provider_config,
 };
 use reqwest::Client;
 use serde_json::{Value, json};
-use tokio::{io::AsyncWriteExt as _, net::UnixStream};
 
 use project_fixture::ProjectFixture;
 
-const SETUP_RELEASE_SOCKET: &str = "grok-acp-setup-release.sock";
 const LOOPBACK_EPHEMERAL_ADDRESS: &str = "127.0.0.1:0";
 const PARALLEL_SESSION_CREATION_TIMEOUT: Duration = Duration::from_secs(1);
 const PARALLEL_SESSION_COUNT: usize = 2;
 const EXPECTED_PROVIDER_PROMPT_COUNT: usize = 1;
 
 #[tokio::test]
-async fn streams_grok_acp_and_forwards_model_effort_and_instructions() {
+async fn streams_grok_acp_with_launch_scoped_model_effort_and_instructions() {
     let root = tempfile::tempdir().expect("Grok ACP fixture");
     let agent = GrokAcp::spawn_with_program(
         "grok-4.5",
@@ -89,6 +88,184 @@ async fn streams_grok_acp_and_forwards_model_effort_and_instructions() {
 }
 
 #[tokio::test]
+async fn provider_config_high_reaches_the_exact_native_grok_argv() {
+    let root = tempfile::tempdir().expect("provider route fixture");
+    let config = root.path().join("providers.json");
+    std::fs::write(
+        &config,
+        r#"{
+            "version":1,
+            "mainProviders":["grok"],
+            "providers":[{
+                "id":"grok",
+                "agent":"claudex-grok",
+                "defaultModel":"grok-4.5",
+                "effort":"high",
+                "backend":"grok-acp"
+            }],
+            "fallback":{"agent":"fallback","model":"claude-sonnet-5","effort":"high"}
+        }"#,
+    )
+    .expect("write provider config");
+    let loaded = provider_config::load(&config).expect("load provider config");
+    assert_eq!(loaded.routes[0].effort.as_deref(), Some("high"));
+
+    let wrapper = root.path().join("grok-wrapper");
+    std::fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\ncd '{}' || exit 1\nexec '{}' \"$@\"\n",
+            root.path().display(),
+            env!("CARGO_BIN_EXE_grok-acp-mock")
+        ),
+    )
+    .expect("write Grok wrapper");
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755))
+        .expect("make Grok wrapper executable");
+
+    let previous = std::env::var_os("CLAUDEX_GROK_PROGRAM");
+    unsafe { std::env::set_var("CLAUDEX_GROK_PROGRAM", &wrapper) };
+    let backend = AgentBackend::spawn_routes(&loaded.routes);
+    let bridge = Arc::new(
+        Bridge::new_with_backend(backend, "grok-4.5".to_owned())
+            .with_model_catalog(loaded.model_catalog.clone()),
+    );
+    let listener = tokio::net::TcpListener::bind(LOOPBACK_EPHEMERAL_ADDRESS)
+        .await
+        .expect("bind configured Grok adapter");
+    let url = format!("http://{}/v1/messages", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        axum::serve(listener, http_router(bridge, "grok-4.5".to_owned(), None))
+            .await
+            .expect("serve configured Grok adapter");
+    });
+    let client = Client::new();
+    let mut responses = Vec::new();
+    for effort in ["low", "max"] {
+        responses.push((
+            effort,
+            client
+                .post(&url)
+                .json(&json!({
+                    "model":"grok-4.5",
+                    "output_config":{"effort":effort},
+                    "messages":[{"role":"user","content":format!("request {effort}")}]
+                }))
+                .send()
+                .await,
+        ));
+    }
+    if let Some(previous) = previous {
+        unsafe { std::env::set_var("CLAUDEX_GROK_PROGRAM", previous) };
+    } else {
+        unsafe { std::env::remove_var("CLAUDEX_GROK_PROGRAM") };
+    }
+    for (effort, response) in responses {
+        let response = response
+            .unwrap_or_else(|error| panic!("send {effort} Grok request: {error}"))
+            .error_for_status()
+            .unwrap_or_else(|error| panic!("{effort} Grok request status: {error}"))
+            .json::<Value>()
+            .await
+            .unwrap_or_else(|error| panic!("decode {effort} Grok response: {error}"));
+        assert_eq!(response["stop_reason"], "end_turn");
+    }
+
+    let trace = read_trace(&root.path().join("grok-acp-mock.jsonl"));
+    assert!(trace.iter().any(|event| event["arguments"]
+        == json!([
+            "--model",
+            "grok-4.5",
+            "--reasoning-effort",
+            "high",
+            "agent",
+            "--always-approve",
+            "--no-leader",
+            "stdio"
+        ])));
+    assert!(trace.iter().all(|event| event.get("set_model").is_none()));
+    assert!(trace.iter().all(|event| event.get("set_effort").is_none()));
+    server.abort();
+}
+
+#[tokio::test]
+async fn generated_plugin_and_parent_child_marker_form_a_grok_boundary_contract() {
+    let root = tempfile::tempdir().expect("Grok plugin boundary fixture");
+    let home = root.path().join("home");
+    std::fs::create_dir(&home).expect("create isolated Grok home");
+    let grok = root.path().join("grok");
+    symlink(env!("CARGO_BIN_EXE_grok-acp-mock"), &grok).expect("symlink mock as grok");
+
+    let previous_home = std::env::var_os("HOME");
+    let previous_plugin = std::env::var_os("CLAUDEX_GROK_PLUGIN_DIR");
+    unsafe {
+        std::env::set_var("HOME", &home);
+        std::env::remove_var("CLAUDEX_GROK_PLUGIN_DIR");
+    }
+    let spawned =
+        GrokAcp::spawn_with_program("nested-boundary", &grok, root.path().to_owned()).await;
+    if let Some(previous) = previous_home {
+        unsafe { std::env::set_var("HOME", previous) };
+    } else {
+        unsafe { std::env::remove_var("HOME") };
+    }
+    if let Some(previous) = previous_plugin {
+        unsafe { std::env::set_var("CLAUDEX_GROK_PLUGIN_DIR", previous) };
+    } else {
+        unsafe { std::env::remove_var("CLAUDEX_GROK_PLUGIN_DIR") };
+    }
+    let agent = spawned.expect("start mock through real grok program-name branch");
+
+    let plugin = home.join(".cache/claudex/grok-native-high-plugin-v3");
+    let profile = std::fs::read_to_string(plugin.join("agents/claudex-high.md"))
+        .expect("read generated provider-local high profile");
+    assert!(profile.contains("effort: high"));
+    assert!(!profile.contains("\nmodel:"));
+    for invalid in ["claudex-xhigh.md", "claudex-max.md", "claudex-gpt.md"] {
+        assert!(!plugin.join("agents").join(invalid).exists());
+    }
+    assert!(
+        home.join(".grok/hooks/claudex-agent-adapter.json")
+            .is_file()
+    );
+    assert!(!plugin.join("hooks/hooks.json").exists());
+    assert!(plugin.join("bin/reject-cross-provider-agent.sh").is_file());
+
+    let response = agent.create_session(json!({})).await.unwrap();
+    let thread_id = response["thread"]["id"].as_str().unwrap();
+    let events = agent.subscribe_thread(thread_id);
+    agent
+        .start_turn(json!({
+            "threadId":thread_id,
+            "input":"Return the mock child boundary marker"
+        }))
+        .await
+        .unwrap();
+    assert_eq!(
+        recv(&events).await["params"]["delta"],
+        "GROK_ACP_CHILD_BOUNDARY_MARKER"
+    );
+    assert_eq!(recv(&events).await["params"]["turn"]["status"], "completed");
+
+    let trace = read_trace(&root.path().join("grok-acp-mock.jsonl"));
+    assert!(trace.iter().any(|event| event["arguments"]
+        == json!([
+            "--model",
+            "nested-boundary",
+            "--reasoning-effort",
+            "high",
+            "agent",
+            "--always-approve",
+            "--no-leader",
+            "--plugin-dir",
+            plugin,
+            "stdio"
+        ])));
+    assert!(trace.iter().all(|event| event.get("set_model").is_none()));
+    assert!(trace.iter().all(|event| event.get("set_effort").is_none()));
+}
+
+#[tokio::test]
 async fn creates_grok_acp_session_in_the_request_working_directory() {
     let root = tempfile::tempdir().expect("request cwd fixture");
     let active_cwd = root.path().join("active-child");
@@ -124,22 +301,24 @@ async fn creates_grok_acp_session_in_the_request_working_directory() {
 
 fn assert_trace(trace: &[Value]) {
     assert!(trace.iter().any(|event| event["arguments"]
-        == json!(["--model", "grok-4.5", "agent", "--always-approve", "stdio"])));
+        == json!([
+            "--model",
+            "grok-4.5",
+            "--reasoning-effort",
+            "high",
+            "agent",
+            "--always-approve",
+            "--no-leader",
+            "stdio"
+        ])));
     assert!(trace.iter().any(|event| event["claudex_grok_acp"] == "1"));
+    assert!(trace.iter().all(|event| event.get("set_model").is_none()));
+    assert!(trace.iter().all(|event| event.get("set_effort").is_none()));
     assert!(
         trace
             .iter()
-            .any(|event| event.pointer("/new_session/_meta/modelId") == Some(&json!("grok-4.5")))
+            .all(|event| event.pointer("/new_session/_meta/modelId").is_none())
     );
-    let efforts = trace
-        .iter()
-        .filter_map(|event| {
-            event
-                .pointer("/set_model/_meta/reasoningEffort")
-                .and_then(Value::as_str)
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(efforts, ["low", "medium", "high", "high"]);
     assert!(trace.iter().any(
         |event| event.pointer("/permission_response/outcome/optionId")
             == Some(&json!("allow-once"))
@@ -152,7 +331,10 @@ fn assert_trace(trace: &[Value]) {
                 .and_then(Value::as_str)
         })
         .expect("prompt trace");
-    assert!(prompt.starts_with("project policy\n\nGrok SubAgent effort routing:"));
+    assert!(prompt.starts_with("project policy\n\nGrok-native SubAgent routing:"));
+    assert!(prompt.contains("plugin-qualified"));
+    assert!(prompt.contains("grok-native-high-plugin-v3:claudex-high"));
+    assert!(!prompt.contains("claudex-xhigh"));
     assert!(prompt.ends_with("\n\nuser prompt"));
 }
 
@@ -189,10 +371,7 @@ async fn reports_acp_startup_effort_and_prompt_failures() {
     let agent = spawn_mock("fail-session", root.path()).await;
     assert!(agent.create_session(json!({})).await.is_err());
 
-    for (model, effort, expected) in [
-        ("fail-effort", Some("high"), "model selection failed"),
-        ("fail-prompt", None, "Internal error"),
-    ] {
+    for (model, effort, expected) in [("fail-prompt", None::<&str>, "Internal error")] {
         let root = tempfile::tempdir().expect("error fixture");
         let agent = spawn_mock(model, root.path()).await;
         let response = agent.create_session(json!({})).await.unwrap();
@@ -363,18 +542,10 @@ async fn streams_two_grok_acp_sessions_concurrently() {
     assert_eq!(second_done["method"], "turn/completed");
 
     let trace = read_trace(&root.path().join("grok-acp-mock.jsonl"));
-    for (session_id, effort) in [(first_id, "medium"), (second_id, "high")] {
-        assert!(
-            trace.iter().any(|event| {
-                event
-                    .pointer("/set_model/sessionId")
-                    .and_then(Value::as_str)
-                    == Some(session_id)
-                    && event.pointer("/set_model/_meta/reasoningEffort") == Some(&json!(effort))
-            }),
-            "missing isolated {effort} setup for {session_id}: {trace:?}"
-        );
-    }
+    assert!(
+        trace.iter().all(|event| event.get("set_model").is_none()),
+        "native Grok turns must not override launch-scoped model/effort: {trace:?}"
+    );
 }
 
 #[tokio::test]
@@ -543,242 +714,28 @@ async fn dropping_http_stream_cancels_the_active_acp_prompt() {
 }
 
 #[tokio::test]
-async fn disconnect_during_effort_setup_does_not_submit_or_cancel_a_prompt() {
-    let root = ProjectFixture::new("setup");
+async fn native_grok_ignores_per_turn_effort_without_session_setup() {
+    let root = ProjectFixture::new("launch-scoped-effort");
     let trace_path = root.path().join("grok-acp-mock.jsonl");
     let agent = spawn_mock("blocked-effort", root.path()).await;
-    let mut setup_release = UnixStream::connect(root.path().join(SETUP_RELEASE_SOCKET))
-        .await
-        .expect("connect blocked setup handshake");
-    let backend = AgentBackend::routed(vec![(
-        "blocked-effort".to_owned(),
-        AgentBackend::grok(Arc::clone(&agent)),
-    )]);
-    let bridge = Arc::new(Bridge::new_with_backend(
-        backend,
-        "blocked-effort".to_owned(),
-    ));
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}/v1/messages", listener.local_addr().unwrap());
-    let server = tokio::spawn(async move {
-        axum::serve(
-            listener,
-            http_router(bridge, "blocked-effort".to_owned(), None),
-        )
-        .await
-        .unwrap();
-    });
+    let response = agent.create_session(json!({})).await.unwrap();
+    let session_id = response["thread"]["id"].as_str().unwrap();
+    let events = agent.subscribe_thread(session_id);
 
-    let client = Client::new();
-    let response = client
-        .post(&url)
-        .json(&json!({
-            "model":"blocked-effort",
-            "stream":true,
-            "output_config":{"effort":"high"},
-            "messages":[{"role":"user","content":"DISCONNECT DURING SETUP"}]
-        }))
-        .send()
-        .await
-        .expect("start blocked effort stream");
-    wait_for_trace_count(&trace_path, "set_model_blocked", 1).await;
-    drop(response);
-    setup_release
-        .write_all(&[1])
-        .await
-        .expect("release blocked setup after disconnect");
-    drop(setup_release);
-    wait_for_trace_count(&trace_path, "set_model_settled", 1).await;
-
-    let completed: Value = client
-        .post(&url)
-        .json(&json!({
-            "model":"blocked-effort",
-            "messages":[{"role":"user","content":"COMPLETE AFTER SETUP CANCEL"}]
-        }))
-        .send()
-        .await
-        .expect("start independent request")
-        .error_for_status()
-        .expect("independent request status")
-        .json()
-        .await
-        .expect("independent response");
-    assert_eq!(completed["stop_reason"], "end_turn");
-
-    let trace = read_trace(&trace_path);
-    assert!(!trace.iter().any(|event| event.get("cancel").is_some()));
-    assert!(
-        !trace
-            .iter()
-            .any(|event| { event.pointer("/prompt/sessionId") == Some(&json!("grok-session-1")) })
-    );
-    server.abort();
-}
-
-#[tokio::test]
-async fn ignored_setup_invalidates_only_that_session_and_recovers_capacity() {
-    let root = ProjectFixture::new("ignored-setup");
-    let trace_path = root.path().join("grok-acp-mock.jsonl");
-    let agent = spawn_mock("ignored-setup", root.path()).await;
-    let capacity = agent.turn_capacity();
-    let (setup_id, setup_events) = start_blocked_setup(&agent, &trace_path).await;
-    fill_remaining_capacity(&agent, &trace_path, capacity).await;
-
-    let (next_id, next_events) = open_capacity_waiting_session(&agent).await;
-    let mut queued = spawn_queued_turn(Arc::clone(&agent), next_id);
-    assert_still_queued(&mut queued, "turn started without available capacity").await;
-
-    let error =
-        cancel_blocked_setup_and_expect_timeout(Arc::clone(&agent), setup_id.clone(), &mut queued)
-            .await;
-    assert!(
-        error
-            .to_string()
-            .contains("setup cancellation did not settle within")
-    );
-    assert_setup_timeout_event(&setup_events).await;
-    await_queued_turn_completion(&mut queued, &next_events).await;
-    assert_session_invalidated(&agent, &setup_id).await;
-    assert!(
-        !read_trace(&trace_path)
-            .iter()
-            .any(|event| event.get("cancel").is_some())
-    );
-}
-
-async fn start_blocked_setup(
-    agent: &GrokAcp,
-    trace_path: &Path,
-) -> (String, claudex_agent_adapter::app_server::ThreadEvents) {
-    let setup = agent.create_session(json!({})).await.unwrap();
-    let setup_id = setup["thread"]["id"].as_str().unwrap().to_owned();
-    let setup_events = agent.subscribe_thread(&setup_id);
     agent
         .start_turn(json!({
-            "threadId":setup_id,
-            "priority":"user",
-            "effort":"high",
-            "input":"SETUP NEVER SETTLES"
+            "threadId":session_id,
+            "effort":"max",
+            "input":"USE THE LAUNCH-SCOPED EFFORT"
         }))
         .await
         .unwrap();
-    wait_for_trace_count(trace_path, "set_model_blocked", 1).await;
-    (setup_id, setup_events)
-}
 
-async fn fill_remaining_capacity(agent: &GrokAcp, trace_path: &Path, capacity: usize) {
-    for index in 1..capacity {
-        let response = agent.create_session(json!({})).await.unwrap();
-        let session_id = response["thread"]["id"].as_str().unwrap();
-        // priority=user can consume the outer reserve + shared pool so tests still
-        // saturate the full turn_capacity after OUTER_TURN_RESERVE landed.
-        agent
-            .start_turn(json!({
-                "threadId":session_id,
-                "priority":"user",
-                "input":format!("BLOCK {index}")
-            }))
-            .await
-            .unwrap();
-    }
-    wait_for_trace_count(trace_path, "prompt_submitted", capacity - 1).await;
-}
-
-async fn open_capacity_waiting_session(
-    agent: &GrokAcp,
-) -> (String, claudex_agent_adapter::app_server::ThreadEvents) {
-    let next = tokio::time::timeout(Duration::from_secs(1), agent.create_session(json!({})))
-        .await
-        .expect("setup settlement blocked independent session creation")
-        .unwrap();
-    let next_id = next["thread"]["id"].as_str().unwrap().to_owned();
-    let next_events = agent.subscribe_thread(&next_id);
-    (next_id, next_events)
-}
-
-fn spawn_queued_turn(
-    agent: Arc<GrokAcp>,
-    session_id: String,
-) -> tokio::task::JoinHandle<anyhow::Result<()>> {
-    tokio::spawn(async move {
-        agent
-            .start_turn(json!({
-                "threadId":session_id,
-                "priority":"user",
-                "input":"COMPLETE AFTER SETUP TIMEOUT"
-            }))
-            .await
-    })
-}
-
-async fn assert_still_queued(
-    queued: &mut tokio::task::JoinHandle<anyhow::Result<()>>,
-    message: &str,
-) {
-    assert!(
-        tokio::time::timeout(Duration::from_millis(50), queued)
-            .await
-            .is_err(),
-        "{message}"
-    );
-}
-
-async fn cancel_blocked_setup_and_expect_timeout(
-    agent: Arc<GrokAcp>,
-    setup_id: String,
-    queued: &mut tokio::task::JoinHandle<anyhow::Result<()>>,
-) -> anyhow::Error {
-    let mut cancellation = tokio::spawn(async move { agent.cancel_turn(&setup_id).await });
-    assert_still_queued(queued, "turn started before setup settlement timed out").await;
-    tokio::time::timeout(Duration::from_secs(3), &mut cancellation)
-        .await
-        .expect("ignored setup did not reach its settlement timeout")
-        .expect("cancellation task failed")
-        .expect_err("ignored setup unexpectedly settled")
-}
-
-async fn assert_setup_timeout_event(
-    setup_events: &claudex_agent_adapter::app_server::ThreadEvents,
-) {
-    let setup_error = recv(setup_events).await;
-    assert_eq!(setup_error["method"], "error");
-    assert!(
-        setup_error["params"]["error"]["message"]
-            .as_str()
-            .is_some_and(|message| message.contains("setup cancellation did not settle within"))
-    );
-}
-
-async fn await_queued_turn_completion(
-    queued: &mut tokio::task::JoinHandle<anyhow::Result<()>>,
-    next_events: &claudex_agent_adapter::app_server::ThreadEvents,
-) {
-    tokio::time::timeout(Duration::from_secs(1), queued)
-        .await
-        .expect("queued turn did not recover released capacity")
-        .expect("queued turn task failed")
-        .expect("queued turn start failed");
-    assert_eq!(
-        recv(next_events).await["params"]["delta"],
-        "GROK_ACP_STREAM_OK"
-    );
-    assert_eq!(
-        recv(next_events).await["params"]["turn"]["status"],
-        "completed"
-    );
-}
-
-async fn assert_session_invalidated(agent: &GrokAcp, setup_id: &str) {
-    let invalidated = agent
-        .start_turn(json!({
-            "threadId":setup_id,
-            "priority":"user",
-            "input":"MUST NOT REUSE"
-        }))
-        .await
-        .expect_err("timed-out setup session was reused");
-    assert!(invalidated.to_string().contains("was invalidated"));
+    assert_eq!(recv(&events).await["params"]["delta"], "GROK_ACP_STREAM_OK");
+    assert_eq!(recv(&events).await["params"]["turn"]["status"], "completed");
+    let trace = read_trace(&trace_path);
+    assert!(trace.iter().all(|event| event.get("set_model").is_none()));
+    assert!(trace.iter().all(|event| event.get("set_effort").is_none()));
 }
 
 #[tokio::test]
