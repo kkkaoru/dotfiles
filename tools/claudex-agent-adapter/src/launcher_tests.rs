@@ -31,10 +31,12 @@ mod tests {
                 model: "test-model".to_owned(),
                 subscription_max_processes: 20,
                 subscription_timeout_minutes: 120,
+                subagent_hard_timeout_seconds: None,
                 model_catalog: crate::provider_config::ModelCatalog::default(),
             },
             token: LOCAL_TOKEN.to_owned(),
             codex_config_fingerprint: "test-fingerprint".to_owned(),
+            service_config_fingerprint: "service-fingerprint".to_owned(),
             executable: PathBuf::from("/tmp/adapter"),
             log_path: PathBuf::from("/tmp/adapter.log"),
             lock_path: PathBuf::from("/tmp/adapter.lock"),
@@ -48,7 +50,7 @@ mod tests {
         assert!(base_config.matches(&healthy(&base_config)));
         let mut alternate_main = config();
         alternate_main.options.model = "alternate-model".to_owned();
-        assert!(alternate_main.matches(&healthy(&base_config)));
+        assert!(!alternate_main.matches(&healthy(&base_config)));
     }
 
     #[test]
@@ -221,12 +223,16 @@ mod tests {
             pid: Some(42),
             protocol_version: ADAPTER_PROTOCOL_VERSION,
             build_id: env!("CLAUDEX_BUILD_ID").to_owned(),
+            model: config.options.model.clone(),
             codex_config_fingerprint: config.codex_config_fingerprint.clone(),
             backend_routes: route_descriptions(&config.options.routes),
             worker_routes: worker_route_descriptions(&config.options.model_catalog),
             search_worker_routes: search_worker_route_descriptions(&config.options.model_catalog),
             subscription_max_processes: 20,
             subscription_timeout_minutes: 120,
+            subagent_hard_timeout_seconds: None,
+            service_config_fingerprint: config.service_config_fingerprint.clone(),
+            recovery_generation: None,
         }
     }
 
@@ -338,7 +344,10 @@ mod tests {
         let server = serve_responses(listener, vec![health_response(&stale)]);
         assert_eq!(
             handover::inspect_service(&client, &reusable).await,
-            handover::ServiceState::Replace(Some(42))
+            handover::ServiceState::Replace {
+                pid: Some(42),
+                recovery_generation: None,
+            }
         );
         server.join().expect("stale server");
 
@@ -353,7 +362,10 @@ mod tests {
         );
         assert_eq!(
             handover::inspect_service(&client, &reusable).await,
-            handover::ServiceState::Replace(Some(42))
+            handover::ServiceState::Replace {
+                pid: Some(42),
+                recovery_generation: None,
+            }
         );
         server.join().expect("authentication server");
     }
@@ -391,9 +403,7 @@ mod tests {
         let stopped = Arc::new(AtomicBool::new(false));
         let server_stopped = Arc::clone(&stopped);
         let stale_health = health_response(&healthy(&occupied));
-        let server = thread::spawn(move || {
-            serve_response_until_stopped(accepting_listener, stale_health, server_stopped)
-        });
+        let server = spawn_response_server(accepting_listener, stale_health, server_stopped);
         let gracefully_terminated = Arc::new(AtomicBool::new(false));
         let gracefully_terminated_for_callback = Arc::clone(&gracefully_terminated);
         let force_terminated = Arc::new(AtomicBool::new(false));
@@ -411,7 +421,7 @@ mod tests {
         .expect_err("occupied stale listener must time out");
         assert!(error.to_string().contains("did not release its listener"));
         assert!(gracefully_terminated.load(Ordering::SeqCst));
-        assert!(force_terminated.load(Ordering::SeqCst));
+        assert!(!force_terminated.load(Ordering::SeqCst));
         stopped.store(true, Ordering::SeqCst);
         server.join().expect("occupied listener server");
         drop(listener);
@@ -462,19 +472,7 @@ mod tests {
 
         daemon_process::terminate(child_id);
         let stop_deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
-        let mut observed_status = None;
-        while std::time::Instant::now() < stop_deadline {
-            if let Ok(Some(status)) = child.try_wait() {
-                observed_status = Some(status);
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
-        if observed_status.is_none() {
-            child.kill().expect("resistant daemon still running");
-            observed_status = Some(child.wait().expect("daemon process terminated"));
-        }
-        let _ = observed_status.expect("daemon process terminated");
+        let _status = wait_for_child_or_kill(&mut child, stop_deadline);
 
         assert!(!process_alive(child_id));
         assert!(!process_alive(child_pid));
@@ -483,15 +481,34 @@ mod tests {
     #[cfg(unix)]
     fn wait_for_child_pid(path: &Path) -> u32 {
         for _ in 0..100 {
-            if let Some(pid) = std::fs::read_to_string(path)
-                .ok()
-                .and_then(|raw_pid| raw_pid.trim().parse::<u32>().ok())
-            {
-                return pid;
+            match read_pid(path) {
+                Some(pid) => return pid,
+                None => std::thread::sleep(std::time::Duration::from_millis(10)),
             }
-            std::thread::sleep(std::time::Duration::from_millis(10));
         }
         panic!("child pid written")
+    }
+
+    #[cfg(unix)]
+    fn read_pid(path: &Path) -> Option<u32> {
+        std::fs::read_to_string(path)
+            .ok()
+            .and_then(|raw_pid| raw_pid.trim().parse::<u32>().ok())
+    }
+
+    #[cfg(unix)]
+    fn wait_for_child_or_kill(
+        child: &mut std::process::Child,
+        deadline: std::time::Instant,
+    ) -> std::process::ExitStatus {
+        while std::time::Instant::now() < deadline {
+            match child.try_wait() {
+                Ok(Some(status)) => return status,
+                _ => std::thread::sleep(std::time::Duration::from_millis(20)),
+            }
+        }
+        child.kill().expect("resistant daemon still running");
+        child.wait().expect("daemon process terminated")
     }
 
     #[cfg(unix)]
@@ -517,16 +534,28 @@ mod tests {
         stopped: Arc<AtomicBool>,
     ) {
         while !stopped.load(Ordering::SeqCst) {
-            match listener.accept() {
-                Ok((mut stream, _)) => {
-                    let _result = stream.write_all(response.as_bytes());
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    thread::sleep(Duration::from_millis(1));
-                }
-                Err(error) => panic!("accept health request: {error}"),
-            }
+            serve_response_attempt(&listener, &response);
         }
+    }
+
+    fn serve_response_attempt(listener: &TcpListener, response: &str) {
+        match listener.accept() {
+            Ok((mut stream, _)) => {
+                let _result = stream.write_all(response.as_bytes());
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(1));
+            }
+            Err(error) => panic!("accept health request: {error}"),
+        }
+    }
+
+    fn spawn_response_server(
+        listener: TcpListener,
+        response: String,
+        stopped: Arc<AtomicBool>,
+    ) -> thread::JoinHandle<()> {
+        thread::spawn(move || serve_response_until_stopped(listener, response, stopped))
     }
 
     fn health_response(health: &Health) -> String {
@@ -537,11 +566,15 @@ mod tests {
                 "pid": health.pid,
                 "protocol_version": health.protocol_version,
                 "build_id": health.build_id,
+                "model": health.model,
                 "codex_config_fingerprint": health.codex_config_fingerprint,
+                "service_config_fingerprint": health.service_config_fingerprint,
                 "backend_routes": health.backend_routes,
                 "worker_routes": health.worker_routes,
                 "subscription_max_processes": health.subscription_max_processes,
                 "subscription_timeout_minutes": health.subscription_timeout_minutes,
+                "subagent_hard_timeout_seconds": health.subagent_hard_timeout_seconds,
+                "recovery_generation": health.recovery_generation,
             })
             .to_string(),
         )
@@ -574,18 +607,20 @@ mod tests {
     }
 
     fn serve_responses(listener: TcpListener, responses: Vec<String>) -> thread::JoinHandle<()> {
-        thread::spawn(move || {
-            for response in responses {
-                let (mut stream, _) = listener.accept().expect("accept request");
-                let mut request = [0; 1_024];
-                let bytes_read = stream.read(&mut request).expect("read request");
-                assert!(bytes_read > 0, "request must contain bytes");
-                stream
-                    .write_all(response.as_bytes())
-                    .expect("write response");
-                stream.flush().expect("flush response");
-            }
-        })
+        thread::spawn(move || serve_all_responses(&listener, responses))
+    }
+
+    fn serve_all_responses(listener: &TcpListener, responses: Vec<String>) {
+        for response in responses {
+            let (mut stream, _) = listener.accept().expect("accept request");
+            let mut request = [0; 1_024];
+            let bytes_read = stream.read(&mut request).expect("read request");
+            assert!(bytes_read > 0, "request must contain bytes");
+            stream
+                .write_all(response.as_bytes())
+                .expect("write response");
+            stream.flush().expect("flush response");
+        }
     }
 
     #[test]
@@ -629,17 +664,82 @@ mod tests {
         config.log_path = root.path().join("adapter.log");
         let _pid = start_adapter(&config).expect("start detached daemon");
 
-        for _ in 0..500 {
-            if arguments.exists() {
-                break;
-            }
-            thread::sleep(Duration::from_millis(10));
-        }
-        assert!(arguments.exists(), "detached daemon did not write arguments");
+        assert!(
+            wait_for_path(&arguments, 500, Duration::from_millis(10)),
+            "detached daemon did not write arguments"
+        );
         let arguments = std::fs::read_to_string(arguments).expect("daemon arguments");
         assert!(arguments.contains("serve\n"));
         assert!(arguments.contains("--model\ntest-model\n"));
         assert!(config.log_path.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn recovery_manifest_restarts_a_private_executable_snapshot() {
+        let root = tempfile::tempdir().expect("recovery fixture");
+        let executable = root.path().join("adapter-script");
+        std::fs::write(
+            &executable,
+            "#!/bin/sh\ntrap 'exit 0' TERM INT\nwhile :; do sleep 1; done\n",
+        )
+        .expect("recovery executable");
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700))
+            .expect("recovery executable permissions");
+        let mut config = config();
+        config.executable = executable;
+        config.log_path = root.path().join("adapter.log");
+        let manifest =
+            super::recovery_manifest::prepare(&config).expect("prepare recovery manifest");
+        assert_eq!(
+            std::fs::metadata(&manifest)
+                .expect("manifest metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        let generation =
+            super::recovery_manifest::generation_from_path(&manifest).expect("manifest generation");
+        let validated = super::recovery_manifest::validate(&config, &generation)
+            .expect("validate private recovery generation");
+        use std::os::unix::fs::MetadataExt;
+        assert_eq!(
+            std::fs::symlink_metadata(&manifest).unwrap().uid(),
+            unsafe { libc::geteuid() }
+        );
+        let recovery = super::daemon_start::start_recovery(&config, &generation)
+            .expect("start recovery snapshot");
+        assert!(process_alive(recovery.pid));
+        daemon_process::terminate(recovery.pid);
+
+        std::fs::set_permissions(&manifest, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(super::recovery_manifest::validate(&config, &generation).is_err());
+        std::fs::set_permissions(&manifest, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::remove_file(&manifest).unwrap();
+        std::os::unix::fs::symlink(&validated.executable, &manifest).unwrap();
+        let error = super::recovery_manifest::validate(&config, &generation)
+            .expect_err("symlinked recovery manifest must be rejected");
+        assert!(error.to_string().contains("symlink"));
+    }
+
+    #[test]
+    fn recovery_generations_include_full_listener_build_and_configuration_identity() {
+        let ipv4 = "127.0.0.1:8318".parse().unwrap();
+        let ipv6 = "[::1]:8318".parse().unwrap();
+        let base = super::recovery_manifest::generation_name(ipv4, "build-a", "config-a");
+        assert_ne!(
+            base,
+            super::recovery_manifest::generation_name(ipv6, "build-a", "config-a")
+        );
+        assert_ne!(
+            base,
+            super::recovery_manifest::generation_name(ipv4, "build-b", "config-a")
+        );
+        assert_ne!(
+            base,
+            super::recovery_manifest::generation_name(ipv4, "build-a", "config-b")
+        );
     }
 
     #[tokio::test]
@@ -790,13 +890,10 @@ mod tests {
             .spawn()
             .expect("start graceful shutdown fixture");
         let _cleanup = ProcessGroupCleanup::for_leader(child.id());
-        for _ in 0..100 {
-            if ready.exists() {
-                break;
-            }
-            thread::sleep(Duration::from_millis(1));
-        }
-        assert!(ready.exists(), "fixture installed its TERM handler");
+        assert!(
+            wait_for_path(&ready, 100, Duration::from_millis(1)),
+            "fixture installed its TERM handler"
+        );
 
         daemon_process::request_graceful_shutdown(child.id());
         assert!(child.wait().expect("reap graceful fixture").success());
@@ -840,13 +937,28 @@ mod tests {
         assert!(parent.wait().expect("reap exited daemon").success());
 
         daemon_process::terminate(parent_pid);
-        for _ in 0..100 {
-            if !process_alive(child_pid) {
-                break;
-            }
-            thread::sleep(Duration::from_millis(10));
-        }
-        assert!(!process_alive(child_pid));
+        assert!(wait_for_process_stop(child_pid));
         daemon_process::terminate(std::process::id());
+    }
+
+    fn wait_for_path(path: &Path, attempts: usize, delay: Duration) -> bool {
+        for _ in 0..attempts {
+            match path.exists() {
+                true => return true,
+                false => thread::sleep(delay),
+            }
+        }
+        false
+    }
+
+    #[cfg(unix)]
+    fn wait_for_process_stop(pid: u32) -> bool {
+        for _ in 0..100 {
+            match process_alive(pid) {
+                false => return true,
+                true => thread::sleep(Duration::from_millis(10)),
+            }
+        }
+        false
     }
 }

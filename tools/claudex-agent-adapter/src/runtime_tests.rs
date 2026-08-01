@@ -163,6 +163,8 @@ mod tests {
                 "3",
                 "--subscription-timeout-minutes",
                 "4",
+                "--subagent-hard-timeout-seconds",
+                "17",
             ]
             .into_iter()
             .map(OsString::from)
@@ -175,6 +177,12 @@ mod tests {
         assert_eq!(options.listen, "127.0.0.1:9000".parse().unwrap());
         assert_eq!(options.subscription_max_processes, 3);
         assert_eq!(options.subscription_timeout_minutes, 4);
+        assert_eq!(
+            options
+                .subagent_hard_timeout_seconds
+                .map(std::num::NonZeroU64::get),
+            Some(17)
+        );
         assert_eq!(
             options.model_catalog.worker_fields("claudex-grok"),
             Some(("grok-4.5", "high"))
@@ -361,6 +369,7 @@ mod tests {
             listen,
             subscription_max_processes: 2,
             subscription_timeout_minutes: 3,
+            subagent_hard_timeout_seconds: None,
             model_catalog: crate::provider_config::ModelCatalog::default(),
         };
         options
@@ -379,13 +388,17 @@ mod tests {
             .await
             .expect("health response");
         assert!(health.status().is_success());
+        let health = health
+            .json::<serde_json::Value>()
+            .await
+            .expect("health JSON");
         assert_eq!(
-            health
-                .json::<serde_json::Value>()
-                .await
-                .expect("health JSON")["worker_routes"][0],
+            health["worker_routes"][0],
             r#"{"agent":"worker","model":"model","effort":"high"}"#
         );
+        assert_eq!(health["active_http_requests"], 0);
+        assert_eq!(health["active_provider_turns"], 0);
+        assert!(health["subagent_hard_timeout_seconds"].is_null());
         server.abort();
     }
 
@@ -413,6 +426,7 @@ mod tests {
             listen: listener.local_addr().expect("listener address"),
             subscription_max_processes: 0,
             subscription_timeout_minutes: 1,
+            subagent_hard_timeout_seconds: None,
             model_catalog: crate::provider_config::ModelCatalog::default(),
         };
         assert!(
@@ -428,6 +442,7 @@ mod tests {
             listen: occupied.local_addr().expect("occupied address"),
             subscription_max_processes: 1,
             subscription_timeout_minutes: 1,
+            subagent_hard_timeout_seconds: None,
             model_catalog: crate::provider_config::ModelCatalog::default(),
         };
         assert!(serve(options).await.is_err());

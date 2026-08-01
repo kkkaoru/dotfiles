@@ -209,10 +209,12 @@ name = "Must not replace the base config"
                 .is_some(),
             "shutdown must reap the direct app-server child"
         );
-        assert!(server
-            .request_detached("turn/start", json!({"threadId":"after-stop"}))
-            .await
-            .is_err());
+        assert!(
+            server
+                .request_detached("turn/start", json!({"threadId":"after-stop"}))
+                .await
+                .is_err()
+        );
     }
 
     #[cfg(unix)]
@@ -243,13 +245,15 @@ name = "Must not replace the base config"
         tokio::time::sleep(Duration::from_millis(20)).await;
         server.stop("completed parent test").await;
 
-        assert!(server
-            .child
-            .lock()
-            .await
-            .try_wait()
-            .expect("inspect completed app-server")
-            .is_some());
+        assert!(
+            server
+                .child
+                .lock()
+                .await
+                .try_wait()
+                .expect("inspect completed app-server")
+                .is_some()
+        );
         assert!(!process_group_exists(process_group));
     }
 
@@ -311,14 +315,10 @@ name = "Must not replace the base config"
         .await
         .expect("start parallel app-server");
 
-        let (first, second) = tokio::time::timeout(PARALLEL_REQUEST_TIMEOUT, async {
-            tokio::join!(
-                server.request("thread/start", json!({"request":"first"})),
-                server.request("thread/start", json!({"request":"second"}))
-            )
-        })
-        .await
-        .expect("parallel requests were serialized");
+        let (first, second) =
+            tokio::time::timeout(PARALLEL_REQUEST_TIMEOUT, parallel_thread_requests(&server))
+                .await
+                .expect("parallel requests were serialized");
 
         assert_eq!(
             response_thread_id(&first.expect("first response")).unwrap(),
@@ -329,6 +329,15 @@ name = "Must not replace the base config"
             "second"
         );
         server.stop("parallel request test complete").await;
+    }
+
+    async fn parallel_thread_requests(
+        server: &AppServer,
+    ) -> (anyhow::Result<Value>, anyhow::Result<Value>) {
+        tokio::join!(
+            server.request("thread/start", json!({"request":"first"})),
+            server.request("thread/start", json!({"request":"second"}))
+        )
     }
 
     fn script(root: &std::path::Path, name: &str, body: &str) -> PathBuf {
