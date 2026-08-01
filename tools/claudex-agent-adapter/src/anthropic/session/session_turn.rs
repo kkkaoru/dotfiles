@@ -5,9 +5,12 @@ use serde_json::{Value, json};
 
 use super::super::{
     ActiveTurn, Bridge, MessagesRequest, SelectedSession, Session,
-    content::ToolResult,
-    turn_input::{full_transcript_input, user_input_from_messages},
+    content::{ToolResult, serialized_len},
+    turn_input::{
+        full_transcript_input, full_transcript_input_with_token_budget, user_input_from_messages,
+    },
 };
+use super::tools::{thread_start_params_for_mode, tool_configuration_for_mode};
 
 pub(super) struct StartContextRetry<'a> {
     pub(super) request: &'a MessagesRequest,
@@ -256,7 +259,7 @@ impl Bridge {
         effort: Option<&str>,
     ) -> Result<()> {
         let input = if existing_len == 0 {
-            full_transcript_input(&request.messages)
+            self.transcript_input(request)
         } else {
             user_input_from_messages(extras)
         };
@@ -273,6 +276,23 @@ impl Bridge {
             params["priority"] = json!("user");
         }
         self.app.request_detached("turn/start", params).await
+    }
+
+    fn transcript_input(&self, request: &MessagesRequest) -> Vec<Value> {
+        let model = self.request_model(request);
+        let Some(limit) = self.app.max_context_tokens_for_model(&model) else {
+            return full_transcript_input(&request.messages);
+        };
+        let web_search_mode = self.app.web_search_mode(&model);
+        let (dynamic_tools, _, _) =
+            tool_configuration_for_mode(request, None, None, web_search_mode);
+        let start_params =
+            thread_start_params_for_mode(request, &model, dynamic_tools, web_search_mode);
+        let setup_tokens = serialized_len(&start_params).div_ceil(4);
+        let token_budget = usize::try_from(limit)
+            .unwrap_or(usize::MAX)
+            .saturating_sub(setup_tokens);
+        full_transcript_input_with_token_budget(&request.messages, token_budget)
     }
 }
 

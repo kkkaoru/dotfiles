@@ -29,6 +29,29 @@ impl Bridge {
         session: &Arc<Session>,
         events: Arc<crate::app_server::ThreadEvents>,
     ) -> StreamTurn {
+        self.disconnect_stream_with_policy(session, events, true)
+            .await
+    }
+
+    /// Disconnect a native background-Agent handoff without aborting the
+    /// provider leaf. Routed Codex app-servers are shared by multiple
+    /// sessions, so the generic visible-tool abort policy would close
+    /// unrelated active streams and surface `event stream closed` errors.
+    pub(in crate::anthropic) async fn disconnect_stream_for_async_handoff(
+        &self,
+        session: &Arc<Session>,
+        events: Arc<crate::app_server::ThreadEvents>,
+    ) -> StreamTurn {
+        self.disconnect_stream_with_policy(session, events, false)
+            .await
+    }
+
+    async fn disconnect_stream_with_policy(
+        &self,
+        session: &Arc<Session>,
+        events: Arc<crate::app_server::ThreadEvents>,
+        abort_visible_tool_provider: bool,
+    ) -> StreamTurn {
         // Cancel before unregistering so a racing outer follow-up can still
         // discover this session, preempt the gate, and reuse the provider thread.
         match self.app.cancel_turn(&session.thread_id).await {
@@ -36,7 +59,8 @@ impl Bridge {
                 self.remove_session(session).await;
             }
             Ok(TurnCancellation::Unsupported) => {
-                self.handle_unsupported_disconnect(session, events).await;
+                self.handle_unsupported_disconnect(session, events, abort_visible_tool_provider)
+                    .await;
             }
             Err(error) => {
                 warn_cancel_failure(&error, &session.thread_id);
@@ -51,10 +75,19 @@ impl Bridge {
         &self,
         session: &Arc<Session>,
         events: Arc<crate::app_server::ThreadEvents>,
+        abort_visible_tool_provider: bool,
     ) {
         if session.pending_tools.lock().await.is_empty() {
             // No tool call has reached Claude Code yet. Keep consuming the
             // non-cancellable turn so a delayed call receives a rejection.
+            self.detach_non_cancellable_turn(session, events).await;
+            self.remove_session(session).await;
+            return;
+        }
+        if !abort_visible_tool_provider {
+            // A native Agent handoff already returned control to Claude Code.
+            // Reject the pending call and drain only this turn so a shared
+            // provider remains available to unrelated sessions.
             self.detach_non_cancellable_turn(session, events).await;
             self.remove_session(session).await;
             return;

@@ -2,8 +2,8 @@ use serde_json::{Value, json};
 
 use super::{
     FULL_HISTORY_HEADER, MAX_TURN_INPUT_BYTES, TRUNCATED_HISTORY_HEADER, TRUNCATED_INPUT_NOTICE,
-    bound_input, full_transcript_input, input_bytes, oversized_latest_message,
-    user_input_from_messages, utf8_suffix,
+    bound_input, full_transcript_input, full_transcript_input_with_token_budget, input_bytes,
+    oversized_latest_message, user_input_from_messages, utf8_suffix,
 };
 
 #[test]
@@ -77,6 +77,34 @@ fn bounds_reconstructed_history_at_complete_message_boundaries() {
         retained.as_array().and_then(|items| items.last()).unwrap()["content"],
         "LATEST_SENTINEL"
     );
+}
+
+#[test]
+fn applies_a_provider_token_budget_to_reconstructed_history() {
+    let messages = (0..20)
+        .map(|index| {
+            json!({
+                "role": if index % 2 == 0 { "assistant" } else { "user" },
+                "content": format!("message-{index}-{}", "x".repeat(500))
+            })
+        })
+        .collect::<Vec<_>>();
+    let input = full_transcript_input_with_token_budget(&messages, 1_000);
+    let text = input[0]["text"].as_str().expect("history text");
+    assert!(text.len() <= 4_000);
+    assert!(text.starts_with(TRUNCATED_HISTORY_HEADER));
+    assert!(text.contains("message-19"));
+}
+
+#[test]
+fn applies_a_provider_token_budget_to_a_single_large_user_message() {
+    let input = full_transcript_input_with_token_budget(
+        &[json!({"role":"user", "content":"x".repeat(10_000)})],
+        1_000,
+    );
+    let text = input.iter().map(input_text_bytes).sum::<usize>();
+    assert!(text <= 4_000);
+    assert_eq!(input[0]["text"], TRUNCATED_INPUT_NOTICE);
 }
 
 #[test]

@@ -12,14 +12,32 @@ const TRUNCATED_INPUT_NOTICE: &str =
     "[Earlier turn input was omitted to fit the provider input limit.]";
 
 pub(super) fn full_transcript_input(messages: &[Value]) -> Vec<Value> {
+    full_transcript_input_with_byte_limit(messages, MAX_TURN_INPUT_BYTES)
+}
+
+pub(super) fn full_transcript_input_with_token_budget(
+    messages: &[Value],
+    token_budget: usize,
+) -> Vec<Value> {
+    full_transcript_input_with_byte_limit(
+        messages,
+        token_budget.saturating_mul(4).min(MAX_TURN_INPUT_BYTES),
+    )
+}
+
+fn full_transcript_input_with_byte_limit(messages: &[Value], max_bytes: usize) -> Vec<Value> {
     if messages.len() == 1 && messages[0].get("role").and_then(Value::as_str) == Some("user") {
-        return user_input_from_messages(messages);
+        return user_input_from_messages_with_byte_limit(messages, max_bytes);
     }
-    let (header, history) = bounded_history(messages);
+    let (header, history) = bounded_history(messages, max_bytes);
     vec![json!({"type":"text", "text":format!("{header}{history}")})]
 }
 
 pub(super) fn user_input_from_messages(messages: &[Value]) -> Vec<Value> {
+    user_input_from_messages_with_byte_limit(messages, MAX_TURN_INPUT_BYTES)
+}
+
+fn user_input_from_messages_with_byte_limit(messages: &[Value], max_bytes: usize) -> Vec<Value> {
     let mut input = messages
         .iter()
         .filter(|message| message.get("role").and_then(Value::as_str) == Some("user"))
@@ -28,18 +46,18 @@ pub(super) fn user_input_from_messages(messages: &[Value]) -> Vec<Value> {
     if input.is_empty() {
         input.push(json!({"type":"text", "text":"Continue."}));
     }
-    bound_input(input)
+    bound_input_with_byte_limit(input, max_bytes)
 }
 
-fn bounded_history(messages: &[Value]) -> (&'static str, String) {
+fn bounded_history(messages: &[Value], max_bytes: usize) -> (&'static str, String) {
     let original_bytes = serialized_len(&messages);
-    if original_bytes + FULL_HISTORY_HEADER.len() <= MAX_TURN_INPUT_BYTES {
+    if original_bytes + FULL_HISTORY_HEADER.len() <= max_bytes {
         return (
             FULL_HISTORY_HEADER,
             serde_json::to_string(messages).unwrap_or_default(),
         );
     }
-    let budget = MAX_TURN_INPUT_BYTES.saturating_sub(TRUNCATED_HISTORY_HEADER.len());
+    let budget = max_bytes.saturating_sub(TRUNCATED_HISTORY_HEADER.len());
     let mut start = messages.len();
     let mut retained_bytes = 2;
     for (index, message) in messages.iter().enumerate().rev() {
@@ -77,12 +95,17 @@ fn oversized_latest_message(message: Option<&Value>, budget: usize) -> String {
     .unwrap_or_else(|_| "[]".to_owned())
 }
 
+#[cfg(test)]
 fn bound_input(input: Vec<Value>) -> Vec<Value> {
+    bound_input_with_byte_limit(input, MAX_TURN_INPUT_BYTES)
+}
+
+fn bound_input_with_byte_limit(input: Vec<Value>, max_bytes: usize) -> Vec<Value> {
     let original_bytes = input.iter().map(input_bytes).sum::<usize>();
-    if original_bytes <= MAX_TURN_INPUT_BYTES {
+    if original_bytes <= max_bytes {
         return input;
     }
-    let mut remaining = MAX_TURN_INPUT_BYTES.saturating_sub(TRUNCATED_INPUT_NOTICE.len());
+    let mut remaining = max_bytes.saturating_sub(TRUNCATED_INPUT_NOTICE.len());
     let mut retained = Vec::new();
     for item in input.into_iter().rev() {
         let size = input_bytes(&item);

@@ -1077,6 +1077,42 @@ async fn unsupported_disconnect_with_a_visible_tool_aborts_without_a_drain() {
 }
 
 #[tokio::test]
+async fn async_handoff_with_a_visible_tool_drains_without_closing_shared_provider() {
+    let (root, app, bridge, session) = disconnect_fixture().await;
+    let events = Arc::new(app.subscribe_thread("thread"));
+    bridge.sessions.lock().await.push(Arc::clone(&session));
+    session
+        .pending_tools
+        .lock()
+        .await
+        .insert("pending".to_owned(), json!(41));
+    *session.pending_since.lock().unwrap() = Some(Instant::now());
+    app.dispatch_test_event(json!({
+        "id":41,"method":"item/tool/call",
+        "params":{"threadId":"thread","callId":"duplicate","tool":"Read"}
+    }));
+    app.dispatch_test_event(json!({
+        "method":"turn/completed","params":{"threadId":"thread","turn":{"status":"completed"}}
+    }));
+
+    assert!(matches!(
+        bridge
+            .disconnect_stream_for_async_handoff(&session, Arc::clone(&events))
+            .await,
+        super::StreamTurn::Disconnected
+    ));
+    assert!(session.pending_tools.lock().await.is_empty());
+    assert!(bridge.sessions.lock().await.is_empty());
+    assert!(
+        app.is_alive(),
+        "async handoff must not stop a shared provider"
+    );
+    wait_for_disconnected_drain(&events).await;
+    drop(session);
+    drop(root);
+}
+
+#[tokio::test]
 async fn disconnected_drain_handles_incremental_events_and_provider_errors() {
     let (root, app, bridge, _session) = disconnect_fixture().await;
     let events = Arc::new(app.subscribe_thread("thread"));

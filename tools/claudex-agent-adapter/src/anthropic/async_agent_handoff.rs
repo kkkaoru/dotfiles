@@ -64,7 +64,9 @@ impl Bridge {
             return false;
         }
         let events = Arc::new(self.app.subscribe_thread(&session.thread_id));
-        self.disconnect_stream(&session, events).await;
+        // Do not abort the shared Codex provider; reject and drain this turn.
+        self.disconnect_stream_for_async_handoff(&session, events)
+            .await;
         true
     }
 }
