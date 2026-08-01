@@ -156,7 +156,13 @@ impl Bridge {
             .select_matching_session(request, &signature, &request.messages)
             .await
         {
-            return Ok(selected);
+            if Self::session_has_recovered_capability(&selected.session, request) {
+                return Ok(selected);
+            }
+            tracing::debug!(
+                thread_id = %selected.session.thread_id,
+                "discarding a resumed provider thread that has no recovered capability schema"
+            );
         }
         // Claude Code can omit the unchanged tool schemas on an ordinary
         // resumed main or SubAgent request. The schemas belong to the provider
@@ -179,6 +185,20 @@ impl Bridge {
             recovered: false,
             gate,
         })
+    }
+
+    pub(super) fn session_has_recovered_capability(
+        session: &Session,
+        request: &MessagesRequest,
+    ) -> bool {
+        let required = super::resume_tools::names_for_request(request);
+        required.is_empty()
+            || required.iter().any(|required| {
+                session
+                    .external_tool_names
+                    .values()
+                    .any(|provided| provided == required)
+            })
     }
 
     async fn select_pending_session(

@@ -37,6 +37,7 @@ pub(in crate::anthropic) fn tool_configuration_for_mode(
 ) -> (Vec<Value>, HashMap<String, String>, HashMap<String, String>) {
     let selected_agents = selected_agents(request);
     let mut provider_tools = search::provider_tools(request);
+    provider_tools.extend(super::super::resume_tools::specs_for_request(request));
     if !super::super::agent_effort::is_subagent_request(request) {
         fallback::append_missing_agent_tools(&mut provider_tools);
     }

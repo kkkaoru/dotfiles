@@ -44,6 +44,10 @@ pub(in crate::anthropic) fn thread_start_params_for_mode(
     developer_instructions.push_str(
         "\n\nCommand execution is available to every routed worker. If Claude Code supplies a shell, Bash, unified-exec, or command tool, use it when the active task requires it; do not refuse an available command tool because the backend is Codex, Grok, or OpenCode.",
     );
+    if let Some(recovery) = super::super::super::resume_tools::recovery_instructions(request) {
+        developer_instructions.push_str("\n\n");
+        developer_instructions.push_str(&recovery);
+    }
     if !super::super::super::agent_effort::is_subagent_request(request) {
         developer_instructions.push_str("\n\n");
         developer_instructions.push_str(super::ORCHESTRATOR_INSTRUCTIONS);

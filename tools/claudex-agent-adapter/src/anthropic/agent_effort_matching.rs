@@ -55,18 +55,21 @@ pub(super) fn correlated_prompt(prompt: &str, tool_use_id: &str, model: Option<&
 }
 
 pub(super) fn is_subagent_request(request: &MessagesRequest) -> bool {
-    if value_contains_billing_marker(&request.system) {
+    if value_contains_billing_marker(&request.system)
+        || value_contains_correlation_marker(&request.system)
+    {
         return true;
     }
-    let has_tool_result = request.messages.iter().any(is_tool_result_message);
-    request.messages.iter().any(|message| {
-        message.get("role").and_then(Value::as_str) == Some("user")
-            && value_contains_subagent_marker(message)
-    }) || (has_tool_result
-        && request
-            .messages
-            .iter()
-            .any(value_contains_correlation_marker))
+    // A resumed main session can contain completed Agent tool calls and their
+    // correlation markers in its historical transcript.  Only the current
+    // user turn is authoritative; never classify the main session from an old
+    // assistant/tool-result pair.
+    request
+        .messages
+        .iter()
+        .rev()
+        .find(|message| message.get("role").and_then(Value::as_str) == Some("user"))
+        .is_some_and(value_contains_subagent_marker)
 }
 
 fn value_contains_subagent_marker(value: &Value) -> bool {
@@ -94,18 +97,6 @@ fn value_contains_correlation_marker(value: &Value) -> bool {
         Value::Object(values) => values.values().any(value_contains_correlation_marker),
         _ => false,
     }
-}
-
-fn is_tool_result_message(value: &Value) -> bool {
-    value.get("role").and_then(Value::as_str) == Some("user")
-        && value
-            .get("content")
-            .and_then(Value::as_array)
-            .is_some_and(|blocks| {
-                blocks
-                    .iter()
-                    .any(|block| block.get("type").and_then(Value::as_str) == Some("tool_result"))
-            })
 }
 
 pub(super) fn value_texts(value: &Value) -> impl Iterator<Item = &str> {
@@ -213,7 +204,7 @@ mod tests {
     fn keeps_a_correlation_marker_for_a_tool_result_continuation() {
         let request = MessagesRequest {
             model: "worker-model".to_owned(),
-            system: json!("child session"),
+            system: json!("<claudex-agent-id>worker-1</claudex-agent-id>"),
             messages: vec![
                 json!({
                     "role":"assistant",
@@ -238,5 +229,39 @@ mod tests {
         };
 
         assert!(is_subagent_request(&request));
+    }
+
+    #[test]
+    fn ignores_historical_agent_markers_when_a_main_resume_continues() {
+        let request = MessagesRequest {
+            model: "claude-opus-5".to_owned(),
+            system: json!("main session"),
+            messages: vec![
+                json!({"role":"user","content":"launch workers"}),
+                json!({
+                    "role":"assistant",
+                    "content":[{
+                        "type":"tool_use",
+                        "name":"Agent",
+                        "id":"toolu_worker-1",
+                        "input":{"prompt":"worker task\nclaudex_launch_id: toolu_worker-1\n<claudex-agent-id>toolu_worker-1</claudex-agent-id>"}
+                    }]
+                }),
+                json!({
+                    "role":"user",
+                    "content":[{"type":"tool_result","tool_use_id":"toolu_worker-1","content":"worker result"}]
+                }),
+                json!({"role":"user","content":"continue the main response"}),
+            ],
+            tools: Vec::new(),
+            stream: false,
+            output_config: Value::Null,
+            metadata: Value::Null,
+            working_directory: None,
+            disabled_subagent_models: Default::default(),
+            claudex_collaborator_model: None,
+        };
+
+        assert!(!is_subagent_request(&request));
     }
 }

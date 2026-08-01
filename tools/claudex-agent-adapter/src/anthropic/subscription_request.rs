@@ -97,11 +97,20 @@ pub(super) fn requested_tools_for_request(
     request: &MessagesRequest,
     omit_task_bookkeeping: bool,
 ) -> Vec<String> {
-    requested_tools_with_native(
+    let mut selected = requested_tools_with_native(
         &request.tools,
         omit_task_bookkeeping,
         is_live_web_retrieval_worker(request),
-    )
+    );
+    for name in super::resume_tools::names_for_request(request) {
+        if (!omit_task_bookkeeping
+            || !matches!(name.as_str(), "TaskCreate" | "TaskUpdate" | "TaskList" | "TaskGet"))
+            && !selected.iter().any(|selected| selected == &name)
+        {
+            selected.push(name);
+        }
+    }
+    selected
 }
 
 fn requested_tools_with_native(

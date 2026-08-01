@@ -24,6 +24,9 @@ pub(super) async fn select_toolless_main_session(
         if !same_main_conversation(&session, &model, client_user_id) {
             continue;
         }
+        if !Bridge::session_has_recovered_capability(&session, request) {
+            continue;
+        }
         let Ok(gate) = Arc::clone(&session.gate).try_lock_owned() else {
             continue;
         };
@@ -97,7 +100,11 @@ mod tests {
             pending_tools: Mutex::new(HashMap::new()),
             consumed_tool_ids: Mutex::new(HashSet::new()),
             internal_tools: HashMap::new(),
-            external_tool_names: HashMap::new(),
+            // A live provider session keeps at least one recovered native
+            // capability even when the continuation omits the schemas.
+            // Stale/no-tool resume behavior is covered separately in the
+            // session tests with an explicitly empty map.
+            external_tool_names: HashMap::from([("cc_Bash_0".to_owned(), "Bash".to_owned())]),
             client_user_id: user_id.map(str::to_owned),
             gate: Arc::new(Mutex::new(())),
             last_activity: std::sync::Mutex::new(Instant::now()),

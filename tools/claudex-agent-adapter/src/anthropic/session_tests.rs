@@ -11,7 +11,8 @@ use tokio::sync::{Mutex, Semaphore};
 use super::{
     candidate_length, codex_tool_name, dynamic_tool, is_better_length, owns_tool_result,
     reservation::reserve_matching_session, session_turn::contains_context_window_marker,
-    thread_start_params, thread_start_params_for_mode, tool_configuration,
+    thread_start_params,
+    thread_start_params_for_mode, tool_configuration,
     tool_configuration_for_mode, transcript_owns_tool_results, validate_tool_result_ownership,
 };
 use crate::agent_backend::WebSearchMode;
@@ -169,7 +170,14 @@ fn configures_external_and_internal_tools_without_duplicates() {
         None,
         Some("ignored"),
     );
-    assert_eq!(configured.0.len(), 1);
+    assert_eq!(configured.0.len(), 11);
+    for expected in ["Bash", "Read", "Write", "Edit", "Agent", "Task"] {
+        assert!(
+            configured.1.values().any(|name| name == expected),
+            "missing resumed capability {expected}"
+        );
+    }
+    assert!(configured.1.values().any(|name| name == "claude_collaborator"));
     assert!(configured.2.is_empty());
 }
 
@@ -514,6 +522,40 @@ fn main_session_gets_fallback_agent_tools_when_claude_omits_the_schemas() {
         tool_configuration_for_mode(&request, None, None, WebSearchMode::CodexNative);
     assert!(names.values().any(|name| *name == "Agent"));
     assert!(names.values().any(|name| *name == "Task"));
+}
+
+#[test]
+fn resumed_codex_request_rehydrates_file_and_delegation_tools() {
+    let mut request = request(json!("resumed main session"), Vec::new());
+    request.messages = vec![json!({
+        "role": "assistant",
+        "content": [{"type": "tool_use", "name": "Bash", "input": {}}]
+    })];
+    let (_, names, _) = tool_configuration(&request, None, None);
+    for expected in ["Bash", "Read", "Write", "Edit", "Agent", "Task"] {
+        assert!(names.values().any(|name| name == expected), "missing {expected}");
+    }
+}
+
+#[test]
+fn failed_resume_without_tool_history_starts_with_full_dynamic_capabilities() {
+    let request = request(json!("resumed main session"), Vec::new());
+    let (dynamic_tools, external_names, _) = tool_configuration(&request, None, None);
+    for expected in ["Bash", "Read", "Write", "Edit", "Agent", "Task"] {
+        assert!(
+            external_names.values().any(|name| name == expected),
+            "missing recovered capability {expected}"
+        );
+        assert!(
+            dynamic_tools.iter().any(|tool| {
+                tool.get("name")
+                    .and_then(Value::as_str)
+                    .and_then(|name| external_names.get(name))
+                    .is_some_and(|name| name == expected)
+            }),
+            "missing dynamic schema for recovered capability {expected}"
+        );
+    }
 }
 
 #[test]
@@ -936,6 +978,39 @@ async fn toolless_main_continuation_reuses_the_session_with_bash_schema() {
         selected.session.external_tool_names.get(&bash_dynamic_name),
         Some(&"Bash".to_owned())
     );
+}
+
+#[test]
+fn stale_resume_session_without_dynamic_capabilities_is_not_reused() {
+    let request = request(json!("main system"), Vec::new());
+    let stale = session("signature", vec![json!({
+        "role": "user",
+        "content": "continue"
+    })]);
+    assert!(!Bridge::session_has_recovered_capability(&stale, &request));
+
+    let mut capable = session("signature", Vec::new());
+    let capable_session = Arc::get_mut(&mut capable).expect("capable session is not yet shared");
+    for (index, name) in ["Bash", "Read", "Write", "Edit", "Agent", "Task"]
+        .into_iter()
+        .enumerate()
+    {
+        capable_session
+            .external_tool_names
+            .insert(format!("cc_{name}_{index}"), name.to_owned());
+    }
+    assert!(Bridge::session_has_recovered_capability(&capable, &request));
+}
+
+#[test]
+fn partially_recovered_resume_session_remains_usable() {
+    let request = request(json!("main system"), Vec::new());
+    let mut partial = session("signature", Vec::new());
+    Arc::get_mut(&mut partial)
+        .expect("partial session is not yet shared")
+        .external_tool_names
+        .insert("cc_Bash_0".to_owned(), "Bash".to_owned());
+    assert!(Bridge::session_has_recovered_capability(&partial, &request));
 }
 
 #[tokio::test]

@@ -130,7 +130,7 @@ fn outer_request(model: &str) -> Value {
                     "type":"tool_use",
                     "id":"archived-agent",
                     "name":"Agent",
-                    "input":{"prompt":"archived work"}
+                    "input":{"prompt":"archived work\nclaudex_launch_id: archived-agent\n<claudex-agent-id>archived-agent</claudex-agent-id>"}
                 }]
             },
             {

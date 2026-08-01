@@ -11,6 +11,7 @@ mod health;
 mod model_concurrency;
 mod request_routing;
 mod retention;
+mod resume_tools;
 mod segment;
 mod session;
 mod stream;
@@ -32,7 +33,6 @@ use std::{
     sync::{Arc, Mutex as StdMutex, Weak},
     time::Instant,
 };
-
 use anyhow::Result;
 use axum::{body::Body, http::Response};
 use serde::Deserialize;

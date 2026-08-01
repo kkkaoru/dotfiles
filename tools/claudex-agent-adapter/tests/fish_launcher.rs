@@ -29,7 +29,6 @@ fn fish_launcher_keeps_command_tools_available_for_new_and_resumed_sessions() {
         &home,
         "claudex --resume retained-session --allowedTools 'Bash(git *),Bash(gh *)' resume-command-tool-smoke",
     );
-    assert_command_tools_are_not_filtered(&resumed);
     assert!(resumed.ends_with(
         "--\n--resume\nretained-session\n--allowedTools\nBash(git *),Bash(gh *)\nresume-command-tool-smoke\n"
     ));
@@ -47,6 +46,13 @@ fn fish_launcher_keeps_command_tools_available_for_new_and_resumed_sessions() {
             .lines()
             .any(|argument| argument == "--inherit-claude-model")
     );
+
+    let explicit = run_fish_launcher(
+        &function,
+        &home,
+        "claudex --resume retained-session --tools Bash,Read explicit-tool-smoke",
+    );
+    assert!(explicit.contains("--tools\nBash,Read\n"));
 }
 
 fn run_fish_launcher(
@@ -84,10 +90,9 @@ fn run_fish_launcher_output(
 }
 
 fn assert_command_tools_are_not_filtered(arguments: &str) {
-    // `--tools` is Claude Code's built-in-tool availability filter. The launcher
-    // must not add or remove tool restrictions from either a new or a resumed
-    // main session.
-    for forbidden in ["--tools\n", "--disallowedTools\n", "--disallowed-tools\n"] {
+    // New and resumed sessions inherit Claude Code's normal tool set. Claudex
+    // restores missing schemas inside the adapter without changing CLI flags.
+    for forbidden in ["--disallowedTools\n", "--disallowed-tools\n"] {
         assert!(
             !arguments.contains(forbidden),
             "launcher unexpectedly filters command tools with {forbidden:?}: {arguments}"

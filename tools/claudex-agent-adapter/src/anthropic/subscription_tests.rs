@@ -350,7 +350,7 @@ fn resolves_effort_from_the_latest_claude_settings_file() {
         model: "claude-sonnet-5".to_owned(),
         system: json!(null),
         messages: vec![],
-        tools: vec![],
+        tools: vec![json!({"name": "claude_collaborator"})],
         stream: false,
         output_config: json!({}),
         metadata: json!({}),
@@ -473,6 +473,30 @@ fn search_worker_receives_native_web_tools_even_when_child_tools_are_empty() {
         super::subscription::requested_tools_for_request(&request, true),
         ["WebSearch", "WebFetch"]
     );
+}
+
+#[test]
+fn resumed_subscription_request_rehydrates_file_and_delegation_tools() {
+    let request = MessagesRequest {
+        model: "claude-opus-5".to_owned(),
+        system: json!("resumed main session"),
+        messages: vec![json!({
+            "role": "assistant",
+            "content": [{"type": "tool_use", "name": "Bash", "input": {}}]
+        })],
+        tools: vec![],
+        stream: true,
+        output_config: json!({}),
+        metadata: json!({}),
+        working_directory: None,
+        disabled_subagent_models: Default::default(),
+        claudex_collaborator_model: None,
+    };
+
+    let tools = super::subscription::requested_tools_for_request(&request, false);
+    for expected in ["Bash", "Read", "Write", "Edit", "Agent", "Task"] {
+        assert!(tools.iter().any(|tool| tool == expected), "missing {expected}");
+    }
 }
 
 #[test]
