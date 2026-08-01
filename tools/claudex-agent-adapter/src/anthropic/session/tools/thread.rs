@@ -35,6 +35,9 @@ pub(in crate::anthropic) fn thread_start_params_for_mode(
     developer_instructions
         .push_str(super::super::super::CODEX_APP_SERVER_PARALLELIZATION_INSTRUCTIONS);
     developer_instructions.push_str("\n\n");
+    developer_instructions
+        .push_str(crate::anthropic::subscription_request::SHARED_WORKSPACE_INSTRUCTIONS);
+    developer_instructions.push_str("\n\n");
     developer_instructions.push_str(&super::parallel_scheduler_instructions(request));
     developer_instructions.push_str("\n\n");
     developer_instructions.push_str(super::SUBAGENT_LIFECYCLE_INSTRUCTIONS);

@@ -7,6 +7,7 @@ use std::{
 use axum::body::to_bytes;
 use serde_json::{Value, json};
 
+use super::subscription_request::SHARED_WORKSPACE_INSTRUCTIONS;
 use super::{
     BRIDGE_INSTRUCTIONS, MessagesRequest, Segment, Session, SignaturePool, Usage,
     WebEvidenceSummary,
@@ -32,6 +33,38 @@ fn bridge_requires_atomic_parallel_subagent_launches() {
     assert!(BRIDGE_INSTRUCTIONS.contains(
         "reuse compatible workers with SendMessage and the exact prior Agent/Task recipient instead of churning processes"
     ));
+    assert!(SHARED_WORKSPACE_INSTRUCTIONS.contains("explicitly disjoint file ownership"));
+    assert!(SHARED_WORKSPACE_INSTRUCTIONS.contains("serialize mutations"));
+    assert!(
+        SHARED_WORKSPACE_INSTRUCTIONS.contains("File content has changed since it was last read")
+    );
+    assert!(
+        SHARED_WORKSPACE_INSTRUCTIONS
+            .contains("missing filesystem access or a provider region/opt-in restriction")
+    );
+}
+
+#[test]
+fn stale_snapshot_edit_errors_require_refresh_before_retry() {
+    assert!(
+        SHARED_WORKSPACE_INSTRUCTIONS
+            .contains("When a tool reports `File content has changed since it was last read`")
+    );
+    assert!(SHARED_WORKSPACE_INSTRUCTIONS.contains("stop the stale edit"));
+    assert!(SHARED_WORKSPACE_INSTRUCTIONS.contains("re-read the latest file"));
+    assert!(SHARED_WORKSPACE_INSTRUCTIONS.contains("coordinate ownership"));
+    assert!(SHARED_WORKSPACE_INSTRUCTIONS.contains("instead of retrying the same patch"));
+}
+
+#[test]
+fn unavailable_worker_errors_are_rerouted_without_retry_churn() {
+    assert!(
+        SHARED_WORKSPACE_INSTRUCTIONS
+            .contains("missing filesystem access or a provider region/opt-in restriction")
+    );
+    assert!(SHARED_WORKSPACE_INSTRUCTIONS.contains("mark that route unavailable for this turn"));
+    assert!(SHARED_WORKSPACE_INSTRUCTIONS.contains("reroute once"));
+    assert!(SHARED_WORKSPACE_INSTRUCTIONS.contains("do not churn retries"));
 }
 
 #[tokio::test]

@@ -4,6 +4,8 @@ use serde_json::Value;
 
 use super::{MessagesRequest, content::system_text};
 
+pub(super) const SHARED_WORKSPACE_INSTRUCTIONS: &str = r"Shared-workspace safety is mandatory: parallelize read-only/research work, or implementation workers only when each has explicitly disjoint file ownership. If ownership overlaps or is unknown, serialize mutations. Never run an auto-fixing formatter, linter, or build alongside an editing worker. When a tool reports `File content has changed since it was last read`, stop the stale edit, re-read the latest file, and coordinate ownership instead of retrying the same patch. If a worker reports missing filesystem access or a provider region/opt-in restriction, mark that route unavailable for this turn and reroute once; do not churn retries.";
+
 pub(super) fn subscription_request_prompt(request: &MessagesRequest) -> String {
     let scheduler_policy = subscription_parallel_scheduler_instructions(request);
     let mut prompt = format!(
@@ -69,6 +71,8 @@ pub(super) fn subscription_request_prompt(request: &MessagesRequest) -> String {
         serde_json::to_string(&request.messages).unwrap_or_default()
     );
     prompt.push('\n');
+    prompt.push_str("\n");
+    prompt.push_str(SHARED_WORKSPACE_INSTRUCTIONS);
     prompt
 }
 

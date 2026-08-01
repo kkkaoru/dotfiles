@@ -699,6 +699,11 @@ fn subscription_prompt_requires_atomic_parallel_launches() {
             .contains("main session must control parallel distribution across multiple SubAgents")
     );
     assert!(prompt.contains("Avoid serial heavy processing by one worker"));
+    assert!(prompt.contains("Shared-workspace safety is mandatory"));
+    assert!(prompt.contains("serialize mutations"));
+    assert!(prompt.contains("Never run an auto-fixing formatter"));
+    assert!(prompt.contains("File content has changed since it was last read"));
+    assert!(prompt.contains("mark that route unavailable for this turn and reroute once"));
     assert!(
         prompt.contains(
             "reuse compatible workers with SendMessage and the exact compatible recipient"

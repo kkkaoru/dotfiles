@@ -42,7 +42,7 @@ pub(super) fn dynamic_tool(tool: &Value, codex_name: &str) -> Option<Value> {
         "type":"function",
         "name":codex_name,
         "description":format!(
-            "Required instead of `{original_name}` when launching at least {minimum} independent SubAgents. Supply every intended launch in one tasks array; the bridge emits them concurrently in one Claude Code tool round."
+            "Required instead of `{original_name}` when launching at least {minimum} independent SubAgents. Supply every intended launch in one tasks array; the bridge emits them concurrently in one Claude Code tool round. For code changes, use this batch only when each task has explicitly disjoint file ownership; serialize overlapping or unknown mutation scopes and never run auto-fixing formatters or linters beside an editing task."
         ),
         "inputSchema":{
             "type":"object",
@@ -125,5 +125,20 @@ mod tests {
         assert_eq!(minimum, 8);
         assert_eq!(maximum, 8);
         assert!(minimum <= maximum);
+    }
+
+    #[test]
+    fn batch_description_requires_disjoint_mutation_ownership() {
+        let tool = json!({
+            "name": "Agent",
+            "input_schema": {"type": "object"}
+        });
+        let description = dynamic_tool(&tool, "Agent_batch").unwrap()["description"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(description.contains("explicitly disjoint file ownership"));
+        assert!(description.contains("serialize overlapping or unknown mutation scopes"));
+        assert!(description.contains("auto-fixing formatters or linters"));
     }
 }
