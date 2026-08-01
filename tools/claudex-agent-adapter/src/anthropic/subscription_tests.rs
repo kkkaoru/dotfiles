@@ -51,12 +51,16 @@ fn subscription_without_explicit_tools_does_not_disable_claude_tools() {
         OutputMode::Json,
     );
     let args = command.as_std().get_args().collect::<Vec<_>>();
-    assert!(!args
-        .iter()
-        .any(|argument| argument.to_str() == Some("--tools")));
-    assert!(!args
-        .iter()
-        .any(|argument| argument.to_str() == Some("--allowedTools")));
+    assert!(
+        !args
+            .iter()
+            .any(|argument| argument.to_str() == Some("--tools"))
+    );
+    assert!(
+        !args
+            .iter()
+            .any(|argument| argument.to_str() == Some("--allowedTools"))
+    );
 }
 
 #[test]
@@ -495,7 +499,10 @@ fn resumed_subscription_request_rehydrates_file_and_delegation_tools() {
 
     let tools = super::subscription::requested_tools_for_request(&request, false);
     for expected in ["Bash", "Read", "Write", "Edit", "Agent", "Task"] {
-        assert!(tools.iter().any(|tool| tool == expected), "missing {expected}");
+        assert!(
+            tools.iter().any(|tool| tool == expected),
+            "missing {expected}"
+        );
     }
 }
 

@@ -100,11 +100,13 @@ fn tool_names_in_value(value: &Value) -> Vec<String> {
 fn is_live_web_worker(request: &MessagesRequest) -> bool {
     let system = system_text(&request.system);
     let messages = serde_json::to_string(&request.messages).unwrap_or_default();
-    [system.as_str(), messages.as_str()].into_iter().any(|text| {
-        text.contains("claudex-haiku-search")
-            || text.contains("Dedicated live-web retrieval worker")
-            || text.contains("tools: WebSearch,WebFetch")
-    })
+    [system.as_str(), messages.as_str()]
+        .into_iter()
+        .any(|text| {
+            text.contains("claudex-haiku-search")
+                || text.contains("Dedicated live-web retrieval worker")
+                || text.contains("tools: WebSearch,WebFetch")
+        })
 }
 
 fn tool_spec(name: &str) -> Value {

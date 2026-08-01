@@ -104,7 +104,10 @@ pub(super) fn requested_tools_for_request(
     );
     for name in super::resume_tools::names_for_request(request) {
         if (!omit_task_bookkeeping
-            || !matches!(name.as_str(), "TaskCreate" | "TaskUpdate" | "TaskList" | "TaskGet"))
+            || !matches!(
+                name.as_str(),
+                "TaskCreate" | "TaskUpdate" | "TaskList" | "TaskGet"
+            ))
             && !selected.iter().any(|selected| selected == &name)
         {
             selected.push(name);

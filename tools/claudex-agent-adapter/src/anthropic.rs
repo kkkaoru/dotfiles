@@ -10,8 +10,8 @@ mod error;
 mod health;
 mod model_concurrency;
 mod request_routing;
-mod retention;
 mod resume_tools;
+mod retention;
 mod segment;
 mod session;
 mod stream;
@@ -26,6 +26,10 @@ pub(crate) mod subscription_request;
 mod subscription_stream;
 mod team_protocol;
 mod turn_input;
+use anyhow::Result;
+use axum::{body::Body, http::Response};
+use serde::Deserialize;
+use serde_json::Value;
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
     hash::{DefaultHasher, Hash, Hasher},
@@ -33,10 +37,6 @@ use std::{
     sync::{Arc, Mutex as StdMutex, Weak},
     time::Instant,
 };
-use anyhow::Result;
-use axum::{body::Body, http::Response};
-use serde::Deserialize;
-use serde_json::Value;
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
 
 pub(super) struct AgentEffortRecord<'a> {

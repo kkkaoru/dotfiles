@@ -262,9 +262,10 @@ fn assert_explicit_model_restore(function: &std::path::Path, home: &tempfile::Te
     assert!(!adapter_arguments.contains("--inherit-claude-model\n"));
     assert!(arguments.contains("CLAUDEX_MAIN_MODEL=vendor-model\n"));
     assert!(arguments.contains("CLAUDEX_MAIN_MODEL_KNOWN=1\n"));
-    assert!(arguments.ends_with(
-        "--\n--effort\nhigh\n--resume\nretained-session\nexplicit-resume-smoke\n"
-    ));
+    assert!(
+        arguments
+            .ends_with("--\n--effort\nhigh\n--resume\nretained-session\nexplicit-resume-smoke\n")
+    );
 }
 
 fn assert_explicit_override(function: &std::path::Path, home: &tempfile::TempDir) {
@@ -291,10 +292,7 @@ fn assert_explicit_override(function: &std::path::Path, home: &tempfile::TempDir
     assert!(!arguments.contains("--inherit-claude-model\n"));
     assert!(arguments.contains("--effort\nhigh\n"));
     assert!(!arguments.contains("--allowedTools\nWebSearch,WebFetch\n"));
-    assert!(
-        arguments
-            .ends_with("--\n--effort\nhigh\noverride-smoke\n")
-    );
+    assert!(arguments.ends_with("--\n--effort\nhigh\noverride-smoke\n"));
     assert_no_implicit_agent(&arguments);
 }
 
@@ -454,10 +452,7 @@ fn assert_explicit_agent_is_preserved(function: &std::path::Path, home: &tempfil
     assert!(output.status.success());
     let arguments = String::from_utf8(output.stdout).expect("UTF-8 explicit-agent arguments");
     assert_eq!(arguments.matches("--agent\n").count(), 1);
-    assert!(
-        arguments
-            .ends_with("--\n--agent\ncustom-subagent\nsmoke\n")
-    );
+    assert!(arguments.ends_with("--\n--agent\ncustom-subagent\nsmoke\n"));
 }
 
 fn assert_routing_marker_is_scoped_to_claudex(
