@@ -13,6 +13,7 @@ mod health;
 mod internal_notification;
 mod message_router;
 mod model_concurrency;
+mod pasted_text;
 mod request_identity;
 mod request_routing;
 mod retention;

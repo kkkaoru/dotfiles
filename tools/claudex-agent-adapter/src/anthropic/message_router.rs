@@ -4,8 +4,8 @@ use anyhow::Result;
 use axum::{body::Body, http::Response};
 
 use super::{
-    Bridge, MessagesRequest, RequestIdentity, internal_notification, request_routing, token_count,
-    trace_request,
+    Bridge, MessagesRequest, RequestIdentity, internal_notification, pasted_text, request_routing,
+    token_count, trace_request,
 };
 
 impl Bridge {
@@ -53,6 +53,7 @@ impl Bridge {
         mut request: MessagesRequest,
         tools_were_provided: bool,
     ) -> Result<Response<Body>> {
+        pasted_text::expand_markers(&mut request);
         trace_request(&request);
         self.schedule_idle_session_sweep();
         self.agent_efforts
