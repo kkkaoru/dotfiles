@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod tests {
     use serde_json::json;
+    use std::{collections::HashMap, sync::{Arc, Barrier}, thread};
 
     use super::*;
 
@@ -261,5 +262,36 @@ mod tests {
             scope_similarity("audit Rust adapter tests", "continue Rust tests")
                 > scope_similarity("review CSS layout", "continue Rust tests")
         );
+    }
+
+    #[test]
+    fn concurrent_persistence_does_not_race_the_atomic_replace() {
+        let root = tempfile::tempdir().expect("reuse registry fixture");
+        let path = root.path().join("reuse.json");
+        let store = Arc::new(Store {
+            path: path.clone(),
+            save_lock: Mutex::new(()),
+        });
+        let barrier = Arc::new(Barrier::new(16));
+        let threads = (0..16)
+            .map(|index| {
+                let store = Arc::clone(&store);
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    barrier.wait();
+                    let mut states = HashMap::new();
+                    states.insert(format!("session-{index}"), SessionState::default());
+                    store.save(states)
+                })
+            })
+            .collect::<Vec<_>>();
+        for thread in threads {
+            thread
+                .join()
+                .expect("persistence thread")
+                .expect("serialized persistence");
+        }
+        let bytes = std::fs::read(path).expect("persisted registry");
+        serde_json::from_slice::<StoredStates>(&bytes).expect("valid registry JSON");
     }
 }

@@ -43,6 +43,10 @@ pub(super) struct SubagentReuseRegistry {
 
 struct Store {
     path: PathBuf,
+    // `persist` is called after releasing the registry state lock, so multiple
+    // concurrent requests can otherwise truncate/rename the same temp file.
+    // Serialize the atomic replacement per adapter process.
+    save_lock: Mutex<()>,
 }
 
 impl Default for SubagentReuseRegistry {
@@ -63,6 +67,7 @@ impl SubagentReuseRegistry {
             path: PathBuf::from(home)
                 .join(".cache/claudex")
                 .join(CACHE_FILE_NAME),
+            save_lock: Mutex::new(()),
         };
         Self {
             states: Mutex::new(store.load()),
@@ -72,7 +77,10 @@ impl SubagentReuseRegistry {
 
     #[cfg(test)]
     pub(super) fn with_store(path: PathBuf) -> Self {
-        let store = Store { path };
+        let store = Store {
+            path,
+            save_lock: Mutex::new(()),
+        };
         Self {
             states: Mutex::new(store.load()),
             store: Some(store),
@@ -156,6 +164,10 @@ impl Store {
     }
 
     fn save(&self, mut states: HashMap<String, SessionState>) -> std::io::Result<()> {
+        let _save_guard = self
+            .save_lock
+            .lock()
+            .expect("SubAgent reuse store poisoned");
         states.values_mut().for_each(prune_persisted_state);
         let parent = self.path.parent().unwrap_or_else(|| Path::new("."));
         fs::create_dir_all(parent)?;
