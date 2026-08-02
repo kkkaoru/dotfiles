@@ -83,6 +83,17 @@ extension SleepControlCoreTests {
     expect(model.isSleepDisabled == false)
   }
 
+  internal static func testUpdateCanInitializeMissingState() {
+    let client = ClientStub(readResult: .success(false))
+    let model = SleepSettingsModel(client: client)
+
+    model.updateSleepDisabled(true)
+
+    expect(client.requestedValues == [true])
+    expect(model.isSleepDisabled == true)
+    expect(model.errorMessage == nil)
+  }
+
   internal static func testToggleStopsAfterReadFailure() {
     let client = ClientStub(readResult: .failure(TestError.readFailed))
     let model = SleepSettingsModel(client: client)

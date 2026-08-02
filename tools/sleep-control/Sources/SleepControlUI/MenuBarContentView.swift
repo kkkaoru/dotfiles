@@ -13,8 +13,8 @@ public struct MenuBarContentView: View {
   public var body: some View {
     Text(statusText)
     Button(toggleTitle, action: model.toggleSleep)
+      .keyboardShortcut(shortcutKeyEquivalent, modifiers: shortcutEventModifiers)
       .disabled(model.isBusy || model.isSleepDisabled == nil)
-    Text(shortcut.displayName)
     Divider()
     Button("button.reload", action: model.refresh)
       .disabled(model.isBusy)
@@ -29,6 +29,32 @@ public struct MenuBarContentView: View {
 
   private var toggleTitle: LocalizedStringKey {
     model.isSleepDisabled == true ? "menu.enable_sleep" : "menu.disable_sleep"
+  }
+
+  private var shortcutKeyEquivalent: KeyEquivalent {
+    KeyEquivalent(Character(shortcut.key.rawValue))
+  }
+
+  private var shortcutEventModifiers: EventModifiers {
+    switch shortcut.modifiers {
+    case .commandOption:
+      [.command, .option]
+
+    case .commandShift:
+      [.command, .shift]
+
+    case .controlCommand:
+      [.control, .command]
+
+    case .controlOption:
+      [.control, .option]
+
+    case .controlOptionCommand:
+      [.control, .option, .command]
+
+    case .controlShift:
+      [.control, .shift]
+    }
   }
 
   @ViewBuilder private var settingsItem: some View {

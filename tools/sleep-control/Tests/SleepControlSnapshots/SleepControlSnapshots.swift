@@ -64,10 +64,10 @@ internal enum SleepControlSnapshots {
   private static func renderSettings(language: String, bundle: Bundle, output: URL) throws {
     let settings = ShortcutSettingsStore(defaults: UserDefaults())
     settings.shortcut = .defaultValue
-    let view = ShortcutSettingsView(
+    let view = SleepControlSettingsView(
       settings: settings,
       isRegistered: true,
-      strings: ShortcutSettingsStrings(bundle: bundle)
+      strings: SleepControlSettingsStrings(bundle: bundle)
     ) { _ in
       // A static snapshot never changes the selected shortcut.
     }

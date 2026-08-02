@@ -13,12 +13,24 @@ internal enum SleepControlCoreTests {
   // swiftlint:enable discouraged_default_parameter
 
   internal static func main() {
+    runParserTests()
+    runModelTests()
+    runSettingsTests()
+    runShortcutTests()
+    runBehaviorSpecTests()
+    print("Swift tests: 40 passed")
+  }
+
+  private static func runParserTests() {
     testParsesEnabled()
     testParsesDisabled()
     testIgnoresSimilarKey()
     testRejectsInvalidValue()
     testRejectsExtraFields()
     testHandlesMissingSetting()
+  }
+
+  private static func runModelTests() {
     testRefreshLoadsCurrentState()
     testRefreshExposesReadError()
     testUpdateStoresAuthenticatedSetting()
@@ -27,9 +39,40 @@ internal enum SleepControlCoreTests {
     testToggleReversesLoadedState()
     testToggleLoadsMissingState()
     testToggleStopsAfterReadFailure()
+    testUpdateCanInitializeMissingState()
+  }
+
+  private static func runSettingsTests() {
+    testUnifiedSettingsDefaults()
+    testUnifiedSettingsPersistence()
     testShortcutDefaults()
     testShortcutPersistence()
+    testShortcutInvalidPersistedValuesFallBackIndependently()
+    testShortcutPersistsEveryCombination()
+    testShortcutFallsBackWhenKeyIsMissing()
+    testShortcutFallsBackWhenModifiersAreMissing()
+    testShortcutFallsBackWhenValuesAreNotStrings()
+    testShortcutWritesRawValuesImmediately()
+    testBooleanSettingsFallBackToLegacyKeys()
+    testBooleanSettingsPreferCurrentKeyOverLegacy()
+    testBooleanSettingsIgnoreNonBooleanLegacyValues()
+    testBooleanSettingsWriteThroughRawValues()
+    testBooleanSettingsExposeBackwardCompatibleNames()
+  }
+
+  private static func runShortcutTests() {
     testShortcutPresentation()
-    print("Swift tests: 17 passed")
+    testShortcutDisplayNamesComposePickerLabels()
+    testKeyDisplayNamesCoverAlphabet()
+    testModifierDisplayNamesAreDistinctGlyphs()
+    testDefaultShortcutIsComposed()
+  }
+
+  private static func runBehaviorSpecTests() {
+    testCapsLockLEDLightsOnlyWhenEnabledAndSleepDisabled()
+    testLidDisplaySleepTransitions()
+    testLidDisplaySleepOnlyWakesOwnSleep()
+    testLidDisplaySleepIgnoresRepeatedEnableAndDisable()
+    testLidDisplaySleepHandlesUnknownState()
   }
 }

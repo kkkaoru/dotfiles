@@ -15,7 +15,7 @@ public final class SleepSettingsModel: ObservableObject {
 
   private let client: any SleepSettingsClient
 
-  /// Creates the model with the system client or a unit-test replacement.
+  /// Creates a model backed by the provided system client.
   public init(client: any SleepSettingsClient) {
     self.client = client
   }
@@ -30,7 +30,8 @@ public final class SleepSettingsModel: ObservableObject {
     defer { isBusy = false }
 
     do {
-      isSleepDisabled = try client.readSleepDisabled()
+      let sleepDisabled = try client.readSleepDisabled()
+      isSleepDisabled = sleepDisabled
       errorMessage = nil
     } catch {
       isSleepDisabled = nil
