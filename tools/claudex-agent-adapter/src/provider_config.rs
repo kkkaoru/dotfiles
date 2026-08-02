@@ -87,6 +87,9 @@ pub struct ModelCatalog {
     prefixes: Vec<String>,
     workers: Vec<WorkerRoute>,
     search_workers: Vec<WorkerRoute>,
+    // Explicit Claude fallback, generic Haiku, and custom-advisor routes are
+    // valid routing identities but are not capacity-managed daemon workers.
+    auxiliary_workers: Vec<WorkerRoute>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -112,6 +115,7 @@ impl ModelCatalog {
             prefixes,
             workers: Vec::new(),
             search_workers: Vec::new(),
+            auxiliary_workers: Vec::new(),
         }
     }
     pub fn from_routes(routes: &[BackendRoute]) -> Self {
@@ -129,6 +133,7 @@ impl ModelCatalog {
             prefixes,
             workers: Vec::new(),
             search_workers: Vec::new(),
+            auxiliary_workers: Vec::new(),
         }
     }
     pub fn matches(&self, model: &str) -> bool {
@@ -142,6 +147,7 @@ impl ModelCatalog {
     pub fn worker_fields(&self, agent: &str) -> Option<(&str, &str)> {
         self.workers
             .iter()
+            .chain(self.auxiliary_workers.iter())
             .find(|worker| worker.agent == agent)
             .map(|worker| (worker.model.as_str(), worker.effort.as_str()))
     }
@@ -150,6 +156,7 @@ impl ModelCatalog {
         self.workers
             .iter()
             .chain(self.search_workers.iter())
+            .chain(self.auxiliary_workers.iter())
             .find(|worker| worker.model == model)
             .map(|worker| worker.effort.as_str())
     }
@@ -176,6 +183,12 @@ impl ModelCatalog {
     pub fn set_worker_routes(&mut self, workers: Vec<WorkerRoute>) -> Result<()> {
         validate_worker_routes(&workers)?;
         self.workers = workers;
+        Ok(())
+    }
+
+    pub(crate) fn set_auxiliary_worker_routes(&mut self, workers: Vec<WorkerRoute>) -> Result<()> {
+        validate_worker_routes(&workers)?;
+        self.auxiliary_workers = workers;
         Ok(())
     }
 
@@ -262,6 +275,26 @@ fn validate(config: ProviderConfig) -> Result<LoadedConfig> {
     }
     validate_providers(&providers)?;
     model_catalog.add_workers(&providers, &config.native_workers)?;
+    let mut auxiliary_workers = vec![
+        WorkerRoute {
+            agent: config.fallback.agent.clone(),
+            model: config.fallback.model.clone(),
+            effort: config.fallback.effort.clone(),
+        },
+        WorkerRoute {
+            agent: "claudex-haiku".to_owned(),
+            model: crate::anthropic::official_claude_haiku_model().to_owned(),
+            effort: "max".to_owned(),
+        },
+    ];
+    if let Some(advisor) = config.advisor.as_ref() {
+        auxiliary_workers.push(WorkerRoute {
+            agent: advisor.agent.clone(),
+            model: advisor.model.clone(),
+            effort: advisor.effort.clone(),
+        });
+    }
+    model_catalog.set_auxiliary_worker_routes(auxiliary_workers)?;
     let search_workers = search_provider_ids
         .iter()
         .map(|id| {

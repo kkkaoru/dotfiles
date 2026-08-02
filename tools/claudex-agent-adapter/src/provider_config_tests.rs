@@ -164,7 +164,19 @@ mod tests {
             "effort": "xhigh"
         });
         let parsed: ProviderConfig = serde_json::from_value(document.clone()).unwrap();
-        assert!(validate(parsed).is_ok());
+        let loaded = validate(parsed).expect("valid advisor config");
+        assert_eq!(
+            loaded.model_catalog.worker_fields("worker"),
+            Some(("model", "high"))
+        );
+        assert_eq!(
+            loaded.model_catalog.worker_fields("claudex-haiku"),
+            Some(("claude-haiku-4-5", "max"))
+        );
+        assert_eq!(
+            loaded.model_catalog.worker_fields("custom-advisor"),
+            Some(("claude-fable-5", "xhigh"))
+        );
 
         document["advisor"]["model"] = serde_json::Value::String(String::new());
         let parsed: ProviderConfig = serde_json::from_value(document).unwrap();

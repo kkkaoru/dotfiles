@@ -16,6 +16,7 @@ mod model_concurrency;
 mod pasted_text;
 mod request_identity;
 mod request_routing;
+pub(crate) use request_routing::official_claude_haiku_model;
 mod retention;
 mod segment;
 mod session;

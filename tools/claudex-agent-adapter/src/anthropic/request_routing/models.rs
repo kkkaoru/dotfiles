@@ -4,7 +4,7 @@
 pub(super) const CLAUDE_HAIKU_MODEL: &str = "claude-haiku-4-5";
 pub(super) const CLAUDE_LONG_CONTEXT_MODEL: &str = concat!("claude-", "opus", "-", "5", "[1m]");
 
-pub(in crate::anthropic) fn official_claude_haiku_model() -> &'static str {
+pub(crate) fn official_claude_haiku_model() -> &'static str {
     CLAUDE_HAIKU_MODEL
 }
 

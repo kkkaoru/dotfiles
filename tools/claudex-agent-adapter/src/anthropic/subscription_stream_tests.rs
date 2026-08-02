@@ -27,7 +27,7 @@ use crate::anthropic::{
     subscription_activity::SubscriptionActivity,
     subscription_stream::post_eof,
 };
-use crate::provider_config::ModelCatalog;
+use crate::provider_config::{ModelCatalog, WorkerRoute};
 
 type Frame = Result<Bytes, Infallible>;
 type FrameChannel = (mpsc::Sender<Frame>, mpsc::Receiver<Frame>);
@@ -1977,4 +1977,68 @@ async fn reports_invalid_json_from_a_process() {
         .await
         .expect_err("invalid process output");
     assert!(error.to_string().contains("invalid stream JSON"));
+}
+
+#[tokio::test]
+async fn hydrates_auxiliary_claude_subagent_routes_without_adapter_fields_in_public_schema() {
+    let mut model_catalog = ModelCatalog::default();
+    model_catalog
+        .set_auxiliary_worker_routes(vec![
+            WorkerRoute {
+                agent: "claudex-haiku".to_owned(),
+                model: "claude-haiku-4-5".to_owned(),
+                effort: "max".to_owned(),
+            },
+            WorkerRoute {
+                agent: "claudex-sonnet".to_owned(),
+                model: "claude-sonnet-5".to_owned(),
+                effort: "high".to_owned(),
+            },
+            WorkerRoute {
+                agent: "custom-advisor".to_owned(),
+                model: "claude-fable-5".to_owned(),
+                effort: "xhigh".to_owned(),
+            },
+        ])
+        .expect("auxiliary routes");
+    let context = super::super::subscription::SubscriptionToolContext {
+        agent_efforts: Arc::new(AgentEffortIntents::default()),
+        model_catalog,
+        client_user_id: None,
+        parent_model: "claude-opus-5".to_owned(),
+        system: json!(null),
+        user_messages: Vec::new(),
+    };
+    let stream = SubscriptionStream {
+        text_started: false,
+        text_closed: false,
+        saw_tool_use: false,
+        seen_tool_ids: HashSet::new(),
+        blocked_subagent: false,
+        saw_result: false,
+        next_index: 0,
+        tools: vec!["Agent".to_owned()],
+        tool_context: Some(context),
+        activity: SubscriptionActivity::default(),
+    };
+
+    for (id, agent) in [
+        ("haiku", "claudex-haiku"),
+        ("sonnet", "claudex-sonnet"),
+        ("advisor", "custom-advisor"),
+    ] {
+        let public = stream
+            .prepare_tool_input(
+                "Agent",
+                id,
+                &json!({"prompt":"work", "subagent_type":agent}),
+            )
+            .expect("configured auxiliary SubAgent route");
+        assert!(public.get("claudex_model").is_none());
+        assert!(
+            public["prompt"]
+                .as_str()
+                .is_some_and(|prompt| prompt.contains(id))
+        );
+    }
 }

@@ -2,7 +2,7 @@ use super::{MessagesRequest, content::serialized_len};
 use anyhow::{Result, bail};
 
 mod models;
-pub(in crate::anthropic) use models::official_claude_haiku_model;
+pub(crate) use models::official_claude_haiku_model;
 use models::{CLAUDE_LONG_CONTEXT_MODEL, normalize_claude_model_to_haiku};
 
 // Claude Haiku 4.5 has a 200k context window, but a subscription child also
