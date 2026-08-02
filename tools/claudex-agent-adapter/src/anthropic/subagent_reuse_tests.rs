@@ -268,6 +268,45 @@ mod tests {
     }
 
     #[test]
+    fn named_agent_input_alone_does_not_enable_agent_teams_mailbox() {
+        let mut ordinary = request(
+            "ordinary-named-worker",
+            vec![json!({
+                "role":"assistant",
+                "content":[{
+                    "type":"tool_use",
+                    "id":"agent-call",
+                    "name":"Agent",
+                    "input":{"name":"research-worker","run_in_background":true}
+                }]
+            })],
+        );
+        ordinary.tools = vec![json!({"name":"Agent"}), json!({"name":"SendMessage"})];
+        assert!(!agent_teams_enabled(&ordinary));
+        let (tools, _, _) = crate::anthropic::session::tool_configuration(
+            &ordinary,
+            None,
+            None,
+        );
+        assert!(tools.iter().all(|tool| {
+            tool.get("name").and_then(Value::as_str) != Some("cc_SendMessage_1")
+        }));
+    }
+
+    #[test]
+    fn generic_agent_teams_documentation_does_not_enable_mailbox_transport() {
+        let mut ordinary = request(
+            "ordinary-documentation",
+            vec![json!({
+                "role":"user",
+                "content":"The Agent Teams documentation is present, but no team was requested."
+            })],
+        );
+        ordinary.tools = vec![json!({"name":"Agent"}), json!({"name":"SendMessage"})];
+        assert!(!agent_teams_enabled(&ordinary));
+    }
+
+    #[test]
     fn explicit_agent_teams_session_restores_mailbox_guidance() {
         let registry = SubagentReuseRegistry::default();
         let mut first = request("team-session", vec![launch("tool-a", "worker-a")]);

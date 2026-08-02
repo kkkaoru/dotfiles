@@ -313,34 +313,11 @@ pub(super) fn agent_teams_enabled(request: &MessagesRequest) -> bool {
                 | "TeamSendMessage"
         ) || name.starts_with("team_")
     });
-    let named_agent_tool = request.messages.iter().any(has_named_agent_input);
     let explicit_team_text = request.messages.iter().any(|message| {
         let text = value_text(Some(message));
-        text.contains("USE_NAMED_TEAM_MAILBOX")
-            || text.contains("<teammate-message")
-            || text.contains("Agent Teams")
+        text.contains("USE_NAMED_TEAM_MAILBOX") || text.contains("<teammate-message")
     });
-    team_tool || named_agent_tool || explicit_team_text
-}
-
-fn has_named_agent_input(value: &Value) -> bool {
-    match value {
-        Value::Object(object) => {
-            let is_agent = object
-                .get("name")
-                .and_then(Value::as_str)
-                .is_some_and(|name| matches!(name, "Agent" | "Task"));
-            let has_name = object
-                .get("input")
-                .and_then(Value::as_object)
-                .and_then(|input| input.get("name"))
-                .and_then(Value::as_str)
-                .is_some_and(|name| !name.trim().is_empty());
-            (is_agent && has_name) || object.values().any(has_named_agent_input)
-        }
-        Value::Array(values) => values.iter().any(has_named_agent_input),
-        _ => false,
-    }
+    team_tool || explicit_team_text
 }
 
 fn system_contains_marker(system: &Value) -> bool {

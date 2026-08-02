@@ -26,7 +26,7 @@ pub(in crate::anthropic) fn thread_start_params_for_mode(
         .or_else(|| cwd_from_system(&system))
         .map(|path| path.to_string_lossy().into_owned())
         .unwrap_or_else(isolated_runtime_cwd);
-    let mut developer_instructions = super::super::super::team_protocol::guidance(&request.tools)
+    let mut developer_instructions = super::super::super::team_protocol::guidance(request)
         .map_or_else(
             || super::super::super::BRIDGE_INSTRUCTIONS.to_owned(),
             |guidance| format!("{}\n\n{guidance}", super::super::super::BRIDGE_INSTRUCTIONS),
