@@ -4,7 +4,7 @@ use std::{
     net::TcpListener,
     os::unix::fs::{PermissionsExt, symlink},
     os::unix::process::CommandExt,
-    process::Command,
+    process::{Command, Stdio},
     sync::{Arc, Barrier},
     thread,
     time::{Duration, Instant},
@@ -976,6 +976,56 @@ async fn run_claude_forwards_arguments_environment_stderr_and_status() {
 
     assert_duplicate_model_is_rejected(&home, port, &claude);
     assert_invalid_subagent_policy_is_rejected(&home, port, &claude);
+}
+
+#[tokio::test]
+async fn duplicate_resume_launch_is_rejected_without_terminating_the_first_process() {
+    let home = launcher_home();
+    let port = unused_port();
+    let _process_cleanup = LauncherProcessCleanup::new(&home, port);
+    let marker = home.path().join("claude-started");
+    let claude = home.path().join("claude-blocking");
+    fs::write(
+        &claude,
+        format!(
+            "#!/bin/sh\nprintf started > '{}'\nsleep 2\n",
+            marker.display()
+        ),
+    )
+    .expect("write blocking Claude fixture");
+    fs::set_permissions(&claude, fs::Permissions::from_mode(0o755))
+        .expect("make blocking Claude fixture executable");
+    let listen = format!("127.0.0.1:{port}");
+    let session_id = "resume-lock-test";
+    let mut first = common_command(&home, port, "20");
+    first
+        .args(["launch", "--model", "test-main-model"])
+        .args(["--listen", &listen])
+        .args(["--subscription-max-processes", "20"])
+        .args(["--subscription-timeout-minutes", "120", "--"])
+        .args(["--resume", session_id])
+        .env("CLAUDEX_CLAUDE_PROGRAM", &claude)
+        .env("CLAUDEX_TEST_MARKER", &marker)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut first = first.spawn().expect("start first resume launcher");
+    wait_for_file(&marker).await;
+
+    let mut second = common_command(&home, port, "20");
+    let second = second
+        .args(["launch", "--model", "test-main-model"])
+        .args(["--listen", &listen])
+        .args(["--subscription-max-processes", "20"])
+        .args(["--subscription-timeout-minutes", "120", "--"])
+        .args(["--resume", session_id])
+        .env("CLAUDEX_CLAUDE_PROGRAM", &claude)
+        .output()
+        .expect("run duplicate resume launcher");
+    assert!(!second.status.success());
+    assert!(String::from_utf8_lossy(&second.stderr).contains("already active"));
+    assert!(first.try_wait().expect("inspect first launcher").is_none());
+    let first_output = first.wait_with_output().expect("reap first launcher");
+    assert_eq!(first_output.status.code(), Some(0));
 }
 
 #[tokio::test]

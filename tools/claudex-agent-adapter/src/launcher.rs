@@ -26,6 +26,7 @@ mod program_identity;
 mod recovery;
 mod recovery_manifest;
 mod resume;
+mod session_process;
 use crate::{
     ADAPTER_PROTOCOL_VERSION, agent_backend::BackendRoute, app_server, subagent_policy as policy,
     working_directory,
@@ -168,9 +169,28 @@ pub async fn run_claude(
     let config = ServiceConfig::new(options)?;
     // Reject invalid launch policy before creating a reusable daemon.
     let policy_header = policy::active_header()?;
-    let base_url = ensure_config_running(&config).await?;
     let cwd = std::env::current_dir().context("resolve Claude Code working directory")?;
     let arguments = prepare_arguments(arguments, &cwd);
+    let _session_lock = if let Some(resume_id) = resume::session_lock_id(&arguments) {
+        if session_process::another_resume_launcher_is_active(&resume_id)? {
+            bail!(
+                "resume session '{resume_id}' is already active; continue in the existing Claude Code process or use --fork-session"
+            );
+        }
+        let cache = config
+            .log_path
+            .parent()
+            .context("adapter log has no parent directory")?;
+        let path = launcher_logs::session_lock_path(cache, &resume_id);
+        Some(launcher_lock::try_acquire(&path)?.ok_or_else(|| {
+            anyhow::anyhow!(
+                "resume session '{resume_id}' is already active; continue in the existing Claude Code process or use --fork-session"
+            )
+        })?)
+    } else {
+        None
+    };
+    let base_url = ensure_config_running(&config).await?;
     let session_id = session_id_for_launch(&arguments, || {
         format!("session_{}", Uuid::new_v4().simple())
     });

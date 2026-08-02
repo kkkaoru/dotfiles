@@ -1,4 +1,13 @@
-use std::{fs, io::Write, net::SocketAddr, path::Path, path::PathBuf, process};
+use std::{
+    collections::hash_map::DefaultHasher,
+    fs,
+    hash::{Hash, Hasher},
+    io::Write,
+    net::SocketAddr,
+    path::Path,
+    path::PathBuf,
+    process,
+};
 
 use anyhow::{Context, Result};
 
@@ -70,6 +79,12 @@ pub(crate) fn adapter_log_path(cache: &Path, listen: &SocketAddr) -> PathBuf {
 
 pub(crate) fn adapter_lock_path(cache: &Path, listen: &SocketAddr) -> PathBuf {
     cache.join(format!("adapter.port-{}.lock", listen.port()))
+}
+
+pub(crate) fn session_lock_path(cache: &Path, session_id: &str) -> PathBuf {
+    let mut hasher = DefaultHasher::new();
+    session_id.hash(&mut hasher);
+    cache.join(format!("session.{:016x}.lock", hasher.finish()))
 }
 
 fn listen_token(listen: &SocketAddr) -> String {

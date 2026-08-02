@@ -625,6 +625,12 @@ resume対象の履歴にClaude Code自身の `Subagent spawn limit reached (.. o
 そのまま同じsession IDを使います。自動forkを明示的に無効化する場合だけ
 `CLAUDEX_AUTO_FORK_SPAWN_LIMIT_RESUME=0 claudex --resume <id>` を指定してください。
 
+同じresume IDを複数の `claudex` プロセスで同時に開くことは禁止しています。launcherは明示的な
+`--resume <id>`（`--fork-session` なし）に対してセッション単位の排他ロックを子プロセスの終了まで保持し、
+二重起動を既存セッションを終了させずに明示的なエラーとして拒否します。別の作業枝を意図的に開く場合は
+`claudex --resume <id> --fork-session` を使ってください。これにより同一transcriptの競合で片方のUIが
+突然終了したように見える状態を防ぎます。
+
 SubAgentの累積起動数はセッション単位で台帳化します。各起動の `agentId` / `agent_id`、モデル、
 promptから抽出した作業scope、active/completed状態を紐付けて管理し、次の作業ではscopeが最も近い
 recipientを動的に選びます。既存の `agentId` / `agent_id` は

@@ -33,6 +33,19 @@ mod tests {
     }
 
     #[test]
+    fn only_an_unforked_explicit_resume_claims_a_session_lock() {
+        assert_eq!(
+            session_lock_id(&args(&["--resume", "session-a"])),
+            Some("session-a".to_owned())
+        );
+        assert_eq!(
+            session_lock_id(&args(&["--resume", "session-a", "--fork-session"])),
+            None
+        );
+        assert_eq!(session_lock_id(&args(&["--continue"])), None);
+    }
+
+    #[test]
     fn forks_only_resume_histories_that_contain_the_spawn_limit_error() {
         let root = tempfile::tempdir().expect("resume fixture");
         let cwd = Path::new("/Users/test/github.com/project");

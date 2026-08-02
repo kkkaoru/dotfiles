@@ -42,6 +42,12 @@ pub(super) fn session_id_for_launch(
     resume_session_id(arguments).unwrap_or_else(random_id)
 }
 
+pub(super) fn session_lock_id(arguments: &[OsString]) -> Option<String> {
+    (!has_fork_session(arguments))
+        .then(|| resume_session_id(arguments))
+        .flatten()
+}
+
 fn auto_fork_enabled() -> bool {
     std::env::var(AUTO_FORK_ENV)
         .map(|value| !matches!(value.to_ascii_lowercase().as_str(), "0" | "false" | "off"))

@@ -139,6 +139,15 @@ mod tests {
     }
 
     #[test]
+    fn session_lock_paths_are_stable_and_private_to_each_resume_id() {
+        let base = std::path::PathBuf::from("/tmp/claudex-session-lock-cache");
+        let first = super::launcher_logs::session_lock_path(&base, "session-a");
+        assert_eq!(first, super::launcher_logs::session_lock_path(&base, "session-a"));
+        assert_ne!(first, super::launcher_logs::session_lock_path(&base, "session-b"));
+        assert!(first.file_name().is_some_and(|name| name != "session-a.lock"));
+    }
+
+    #[test]
     fn acquires_launcher_lock_and_rejects_a_parentless_path() {
         let root = tempfile::tempdir().expect("lock fixture");
         let lock_path = root.path().join("adapter.lock");
@@ -146,6 +155,26 @@ mod tests {
         assert!(lock_path.exists());
         drop(guard);
         assert!(super::launcher_lock::acquire(Path::new("")).is_err());
+    }
+
+    #[test]
+    fn try_acquires_session_lock_without_waiting_and_releases_on_drop() {
+        let root = tempfile::tempdir().expect("session lock fixture");
+        let path = root.path().join("session.lock");
+        let first = super::launcher_lock::try_acquire(&path)
+            .expect("first session lock acquisition")
+            .expect("first owner");
+        assert!(
+            super::launcher_lock::try_acquire(&path)
+                .expect("second session lock probe")
+                .is_none()
+        );
+        drop(first);
+        assert!(
+            super::launcher_lock::try_acquire(&path)
+                .expect("session lock after owner exit")
+                .is_some()
+        );
     }
 
     #[test]
