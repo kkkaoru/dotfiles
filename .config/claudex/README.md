@@ -612,11 +612,20 @@ CLAUDEX_SUBAGENT_REUSE=1 claudex
 CLAUDEX_SUBAGENT_CLEANUP_ON_EXIT=1 claudex
 ```
 
-`claudex` は `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` と上記のSubAgent policyを既定値でexportし、
+`claudex` は `CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS` と
+`CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION=1024`、および上記のSubAgent policyを既定値でexportし、
 外部から指定した値を優先します。通常の `claude` は `.claude/CLAUDE.md` の同じ方針を使いますが、
 fish functionを経由しない場合は必要な環境変数をshell側で設定してください。`claudex` はadapter側の
 `subscription-max-processes` を既定で20、`subscription-timeout-minutes` を120に揃えます。実行中のsessionには
 反映されないため、上限変更後は新しいsessionを起動してください。
+
+SubAgentの累積起動数はセッション単位で台帳化します。各起動の `agentId` / `agent_id`、モデル、
+promptから抽出した作業scope、active/completed状態を紐付けて管理し、次の作業ではscopeが最も近い
+recipientを動的に選びます。既存の `agentId` / `agent_id` は
+`~/.cache/claudex/subagent-recipients-v1.json` に保存し、resumeやcompactで履歴が短くなった場合だけ
+同じ宛先へ `SendMessage` で継続する指示を復元します。通常の継続ターンではプロンプトの固定部分を
+変更しないため、provider側のプロンプトキャッシュを維持します。1024件に到達した場合はClaude Codeの
+`Agent` / `Task` 起動ツールを新たに公開せず、既存SubAgentへの連絡・結果取得・ユーザー対応を継続します。
 
 `CLAUDEX_USAGE_CACHE_SECONDS=0` は調査時だけ使用してください。通常はprovider CLIへの
 不要な問い合わせを避けるため、既定の5分キャッシュを推奨します。

@@ -5,6 +5,8 @@ function claudex --description 'Run Claude Code with config-driven agent backend
     set -l max_parallel 40
     set -q CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS; and set max_parallel "$CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS"
     set -q CLAUDEX_SUBAGENT_MAX_PARALLEL; and set max_parallel "$CLAUDEX_SUBAGENT_MAX_PARALLEL"
+    set -l max_subagents_per_session 1024
+    set -q CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION; and set max_subagents_per_session "$CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION"
     set -l reassess_seconds 600
     set -q CLAUDEX_SUBAGENT_REASSESS_INTERVAL_SECONDS; and set reassess_seconds "$CLAUDEX_SUBAGENT_REASSESS_INTERVAL_SECONDS"
     set -l reevaluate_on_completion 1
@@ -21,6 +23,7 @@ function claudex --description 'Run Claude Code with config-driven agent backend
     set -lx CLAUDE_CODE_ALWAYS_ENABLE_EFFORT 1
     set -lx CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY 1
     set -lx CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS "$max_parallel"
+    set -lx CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION "$max_subagents_per_session"
     set -lx CLAUDEX_SUBAGENT_MAX_PARALLEL "$max_parallel"
     set -lx CLAUDEX_SUBAGENT_REASSESS_INTERVAL_SECONDS "$reassess_seconds"
     set -lx CLAUDEX_SUBAGENT_REEVALUATE_ON_COMPLETION "$reevaluate_on_completion"

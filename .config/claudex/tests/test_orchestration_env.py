@@ -49,10 +49,11 @@ class ClaudexOrchestrationEnvironmentTests(unittest.TestCase):
         output = dict(
             line.split("=", 1)
             for line in result.stdout.splitlines()
-            if line.startswith(("CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS=", "CLAUDEX_SUBAGENT_"))
+            if line.startswith(("CLAUDE_CODE_MAX_", "CLAUDEX_SUBAGENT_"))
         )
         self.assertEqual(output["CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS"], "40")
         self.assertEqual(output["CLAUDEX_SUBAGENT_MAX_PARALLEL"], "40")
+        self.assertEqual(output["CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION"], "1024")
         for obsolete in (
             "CLAUDEX_SUBAGENT_MIN_PARALLEL",
             "CLAUDEX_SUBAGENT_ACTIVE_FLOOR",
@@ -66,6 +67,7 @@ class ClaudexOrchestrationEnvironmentTests(unittest.TestCase):
         output = self.run_launcher({})
 
         self.assertEqual(output["CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS"], "40")
+        self.assertEqual(output["CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION"], "1024")
         self.assertEqual(output["CLAUDEX_SUBAGENT_MAX_PARALLEL"], "40")
         self.assertEqual(output["CLAUDEX_SUBAGENT_REASSESS_INTERVAL_SECONDS"], "600")
         self.assertEqual(output["CLAUDEX_SUBAGENT_REEVALUATE_ON_COMPLETION"], "1")
@@ -185,6 +187,8 @@ class ClaudexOrchestrationEnvironmentTests(unittest.TestCase):
                 "done\n"
                 "printf 'CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS=%s\\n' "
                 "\"${CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS:-}\"\n"
+                "printf 'CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION=%s\\n' "
+                "\"${CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION:-}\"\n"
                 "printf 'CLAUDEX_SUBAGENT_MAX_PARALLEL=%s\\n' "
                 "\"${CLAUDEX_SUBAGENT_MAX_PARALLEL:-}\"\n"
                 "printf 'CLAUDEX_SUBAGENT_REASSESS_INTERVAL_SECONDS=%s\\n' "

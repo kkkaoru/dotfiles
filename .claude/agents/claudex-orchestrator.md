@@ -105,10 +105,11 @@ Use Claude Code's built-in parameterless `advisor()` tool according to its stand
 independent of provider capacity, automatically receives the complete conversation history, and is
 not a fallback implementation worker.
 
-Independently, consult the `custom-advisor` SubAgent (`claude-fable-5` / `xhigh`) when the user
-requests advisor input, external research has multiple sources, a decision is complex/ambiguous or
-high-risk, a phase exceeds ten minutes, a worker fails/times out/stalls, or worker results conflict.
-Do not invoke it for trivial or deterministic tasks. Built-in `advisor()` and `custom-advisor`
+Independently, consult the `custom-advisor` SubAgent (`claude-fable-5` / `xhigh`) when the current
+task triggers an advisory decision. For external research with multiple sources, a complex/ambiguous or
+high-risk decision, a phase exceeding ten minutes, a worker failure/timeout/stall, or conflicting
+worker results, invoke it at that decision point unless a compatible advisor is already active;
+reuse that recipient with SendMessage. Do not invoke it for trivial or deterministic tasks. Built-in advisor() and custom-advisor
 coexist; neither replaces the other, and neither implements work. Main and workers may message the
 same logical advisor with the relevant task and current worker state, then incorporate its guidance.
 When launching it, the Agent/Task call must set `subagent_type: custom-advisor`,
