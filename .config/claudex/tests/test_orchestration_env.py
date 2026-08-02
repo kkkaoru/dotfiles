@@ -17,6 +17,46 @@ FUNCTION = ROOT / ".config/fish/functions/claudex.fish"
 
 
 class ClaudexOrchestrationEnvironmentTests(unittest.TestCase):
+    def test_direnv_does_not_override_standalone_claude_authentication(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="claudex-direnv-auth-") as temporary:
+            workdir = Path(temporary)
+            (workdir / ".env").write_text(
+                "\n".join(
+                    [
+                        "ANTHROPIC_BASE_URL=https://gateway.invalid/remote",
+                        "ANTHROPIC_AUTH_TOKEN=remote-token",
+                        "ANTHROPIC_API_KEY=remote-key",
+                        "ANTHROPIC_CUSTOM_HEADERS=Authorization: Bearer remote-token",
+                        "BRAVE_API_KEY=keep-for-other-tools",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [
+                    "bash",
+                    "-c",
+                    (
+                        "dotenv() { set -a; . .env; set +a; }; "
+                        f"source '{ROOT / '.envrc'}'; "
+                        "env | sort | grep -E '^(ANTHROPIC_|BRAVE_API_KEY=)' || true"
+                    ),
+                ],
+                cwd=workdir,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotRegex(result.stdout, r"(?m)^ANTHROPIC_")
+            self.assertIn("BRAVE_API_KEY=keep-for-other-tools", result.stdout)
+
+    def test_env_example_keeps_anthropic_gateway_opt_in(self) -> None:
+        example = (ROOT / ".env.example").read_text(encoding="utf-8")
+        self.assertNotRegex(example, r"(?m)^ANTHROPIC_(?:BASE_URL|AUTH_TOKEN|API_KEY)=")
+        self.assertIn("Opt into a remote gateway", example)
+
     def test_routing_keeps_two_model_families_and_advisor_separate(self) -> None:
         configuration = json.loads(
             (ROOT / ".config/claudex/providers.json").read_text(encoding="utf-8")
