@@ -1182,6 +1182,8 @@ fn run_mocked_claude(home: &TempDir, port: u16, path: &str) -> std::process::Out
 fn assert_claude_wrapper_output(output: std::process::Output) {
     let stdout = String::from_utf8(output.stdout).expect("Claude stdout");
     assert!(stdout.contains("args=--model test-main-model --continue"));
+    assert!(!stdout.contains("--settings"));
+    assert!(!stdout.contains("agentPushNotifEnabled"));
     assert!(stdout.contains("effort=configured-by-fish subagent=unset"));
     assert!(
         stdout.contains(
