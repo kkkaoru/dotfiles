@@ -121,3 +121,8 @@ if [ -d "${DOTPATH}/.config" ]; then
     esac
   done
 fi
+
+# Provider-backed claudex children must not start their own agmsg watchers.
+# The agmsg skill is installed outside this repository, so apply the guard
+# idempotently when the dotfiles are installed or refreshed.
+"${DOTPATH}/scripts/ensure-agmsg-claudex-guard.sh"

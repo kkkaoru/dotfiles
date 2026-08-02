@@ -11,10 +11,29 @@ import unittest
 
 
 AGMSG_SCRIPTS = Path.home() / ".agents/skills/agmsg/scripts"
+ROOT = Path(__file__).resolve().parents[3]
+GUARD_INSTALLER = ROOT / "scripts/ensure-agmsg-claudex-guard.sh"
 PROJECT = Path.cwd()
 
 
 class AgmsgLifecycleTests(unittest.TestCase):
+    def test_guard_installer_is_idempotent_for_installed_hook_shapes(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="claudex-agmsg-installer-") as temporary:
+            scripts = Path(temporary)
+            for name in ("session-start.sh", "session-end.sh", "check-inbox.sh"):
+                (scripts / name).write_text(
+                    "#!/usr/bin/env bash\nset -euo pipefail\nprintf '%s\\n' body\n",
+                    encoding="utf-8",
+                )
+            environment = {**os.environ, "AGMSG_SCRIPTS_DIR": str(scripts)}
+            first = subprocess.run([str(GUARD_INSTALLER)], env=environment, check=False)
+            self.assertEqual(first.returncode, 0)
+            first_text = (scripts / "session-start.sh").read_text(encoding="utf-8")
+            self.assertEqual(first_text.count("provider-backed children do not own agmsg watchers"), 1)
+            second = subprocess.run([str(GUARD_INSTALLER)], env=environment, check=False)
+            self.assertEqual(second.returncode, 0)
+            self.assertEqual((scripts / "session-start.sh").read_text(encoding="utf-8"), first_text)
+
     def test_noninteractive_hooks_exit_without_waiting_for_stdin(self) -> None:
         scripts = (
             "session-start.sh",
