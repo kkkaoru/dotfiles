@@ -1,19 +1,12 @@
-use std::{
-    collections::{BTreeSet, HashSet},
-    sync::Arc,
-};
+use std::{collections::HashSet, sync::Arc};
 
-use axum::{
-    body::Body,
-    http::{Response, StatusCode, header},
-};
-use serde_json::{Value, json};
+use axum::{body::Body, http::Response};
+use serde_json::Value;
 
 use super::{
-    Bridge, MessagesRequest, Segment, Usage, WebEvidenceSummary,
-    agent_effort::BackgroundLaunchIntent,
-    content::{ToolResult, anthropic_response, collect_tool_results, estimated_tokens, sse},
-    stream::message_start,
+    Bridge, MessagesRequest,
+    content::{ToolResult, collect_tool_results},
+    internal_notification,
 };
 const ASYNC_LAUNCH_PREFIX: &str = "Async agent launched successfully.";
 const BACKGROUND_MARKER: &str = "The agent is working in the background.";
@@ -30,16 +23,15 @@ impl Bridge {
         if !self.cancel_handed_off_provider_session(&results).await {
             return None;
         }
-        let text = launch_status(&launches);
         tracing::info!(
             launch_count = launches.len(),
             "returned control after native Claude Code background Agent launch"
         );
-        Some(handoff_response(
-            request,
-            &text,
-            &self.request_model(request),
-        ))
+        // Claude Code renders the launch/result in its native task panel from
+        // the tool result. Do not add adapter-owned assistant narration: an
+        // empty end_turn keeps the main prompt available without putting a
+        // synthetic status line into the transcript or user-facing queue.
+        Some(internal_notification::acknowledge(request))
     }
     async fn cancel_handed_off_provider_session(&self, results: &[ToolResult]) -> bool {
         let Some(session) = self.find_result_session(results).await else {
@@ -180,88 +172,9 @@ pub(crate) fn tool_round_ids(message: &Value) -> Option<Vec<String>> {
     (!ids.is_empty()).then_some(ids)
 }
 
-fn launch_status(launches: &[BackgroundLaunchIntent]) -> String {
-    let models = launches
-        .iter()
-        .filter_map(|launch| launch.model.as_deref())
-        .collect::<BTreeSet<_>>();
-    let model_status = if models.is_empty() {
-        String::new()
-    } else {
-        format!(
-            " Models: {}.",
-            models.into_iter().collect::<Vec<_>>().join(", ")
-        )
-    };
-    format!(
-        "Claude Code started {} native background SubAgent(s).{} They remain active and visible in Claude Code while the main prompt accepts the next instruction.",
-        launches.len(),
-        model_status
-    )
-}
-
-fn handoff_response(request: &MessagesRequest, text: &str, model: &str) -> Response<Body> {
-    let input_tokens = u64::try_from(super::token_count(request)).unwrap_or(u64::MAX);
-    let output_tokens = estimated_tokens(text);
-    if !request.stream {
-        return anthropic_response(
-            Segment {
-                blocks: vec![json!({"type":"text", "text":text})],
-                stop_reason: "end_turn",
-                usage: Usage {
-                    input_tokens,
-                    output_tokens,
-                    web_search_requests: 0,
-                },
-                web_evidence: WebEvidenceSummary::default(),
-            },
-            model,
-        );
-    }
-    let body = [
-        message_start(model, input_tokens),
-        sse(
-            "content_block_start",
-            json!({
-                "type":"content_block_start", "index":0,
-                "content_block":{"type":"text", "text":""}
-            }),
-        ),
-        sse(
-            "content_block_delta",
-            json!({
-                "type":"content_block_delta", "index":0,
-                "delta":{"type":"text_delta", "text":text}
-            }),
-        ),
-        sse(
-            "content_block_stop",
-            json!({"type":"content_block_stop", "index":0}),
-        ),
-        sse(
-            "message_delta",
-            json!({
-                "type":"message_delta",
-                "delta":{"stop_reason":"end_turn", "stop_sequence":null},
-                "usage":{"output_tokens":output_tokens}
-            }),
-        ),
-        sse("message_stop", json!({"type":"message_stop"})),
-    ]
-    .concat();
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "text/event-stream")
-        .header(header::CACHE_CONTROL, "no-cache")
-        .header("x-accel-buffering", "no")
-        .body(Body::from(body))
-        .expect("valid async Agent handoff response")
-}
-
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use axum::body::to_bytes;
     use serde_json::json;
 
     use super::*;
@@ -362,33 +275,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn emits_valid_dynamic_json_and_streaming_end_turn_responses() {
-        let launches = [
-            BackgroundLaunchIntent {
-                model: Some("worker-a".to_owned()),
-            },
-            BackgroundLaunchIntent {
-                model: Some("worker-b".to_owned()),
-            },
-        ];
-        let text = launch_status(&launches);
-        assert!(text.contains("2 native background SubAgent(s)"));
-        assert!(text.contains("worker-a, worker-b"));
-
+    async fn background_handoff_returns_empty_native_end_turn_without_synthetic_text() {
         let json_request = request(json!([launch_result("one")]));
-        let response = handoff_response(&json_request, &text, "main-model");
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let response = internal_notification::acknowledge(&json_request);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let body: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(body["stop_reason"], "end_turn");
-        assert_eq!(body["content"][0]["text"], text);
+        assert_eq!(body["content"], json!([]));
+        assert!(!body.to_string().contains("Claude Code started"));
 
         let mut stream_request = json_request;
         stream_request.stream = true;
-        let response = handoff_response(&stream_request, &text, "main-model");
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let response = internal_notification::acknowledge(&stream_request);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let body = String::from_utf8(body.to_vec()).unwrap();
         assert!(body.contains("event: message_start"));
-        assert!(body.contains("event: content_block_delta"));
+        assert!(!body.contains("content_block_delta"));
         assert!(body.contains(r#""stop_reason":"end_turn""#));
         assert!(body.contains("event: message_stop"));
     }

@@ -6,7 +6,6 @@ use serde_json::Value;
 mod background_launch;
 mod model;
 mod terminal;
-pub(super) use background_launch::BackgroundLaunchIntent;
 use model::requested_model;
 pub(super) use model::{disabled_subagent_model, is_agent_tool};
 use terminal::terminal_task_notification_ids;

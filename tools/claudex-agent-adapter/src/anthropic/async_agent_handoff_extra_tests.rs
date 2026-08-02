@@ -110,9 +110,6 @@ fn exhausts_async_acknowledgement_and_text_shape_boundaries() {
 }
 
 #[test]
-fn launch_status_without_models_and_invalid_text_items_are_stable() {
-    let text = launch_status(&[BackgroundLaunchIntent { model: None }]);
-    assert!(text.contains("1 native background SubAgent(s)"));
-    assert!(!text.contains("Models:"));
+fn invalid_text_items_are_rejected_without_status_generation() {
     assert!(append_strict_result_text(&mut String::new(), &json!({"type":"image"})).is_none());
 }

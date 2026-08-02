@@ -252,10 +252,8 @@ async fn pure_async_agent_launch_results_return_control_without_task_output_rela
         serde_json::from_str(&handoff_body).expect("decode async launch handoff response");
 
     assert_eq!(handoff["stop_reason"], "end_turn");
-    let text = handoff["content"][0]["text"].as_str().unwrap();
-    assert!(text.contains("3 native background SubAgent(s)"));
-    assert!(text.contains("test-main-model"));
-    assert!(!text.contains("internal-0"));
+    assert_eq!(handoff["content"], json!([]));
+    assert!(!handoff.to_string().contains("Claude Code started"));
     assert!(
         !handoff["content"]
             .as_array()
@@ -306,12 +304,8 @@ async fn accepts_main_input_after_background_handoff_and_keeps_task_retrievable(
     )
     .await;
     assert_eq!(handoff["stop_reason"], "end_turn");
-    assert!(
-        handoff["content"][0]["text"]
-            .as_str()
-            .expect("handoff status")
-            .contains("main prompt accepts the next instruction")
-    );
+    assert_eq!(handoff["content"], json!([]));
+    assert!(!handoff.to_string().contains("Claude Code started"));
 
     // This is the standard Claude Code follow-up shape: the main user sends a
     // new instruction after the background launch turn has ended. It must not
