@@ -8,8 +8,10 @@ import hashlib
 import json
 import math
 import os
+import select
 import shlex
 import subprocess
+import sys
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -86,6 +88,7 @@ SUBAGENT_REUSE_ENV = "CLAUDEX_SUBAGENT_REUSE"
 SUBAGENT_CLEANUP_ON_EXIT_ENV = "CLAUDEX_SUBAGENT_CLEANUP_ON_EXIT"
 SUBAGENT_FIRST_ENV = "CLAUDEX_SUBAGENT_FIRST"
 SUBAGENT_STATUS_POLL_ENV = "CLAUDEX_SUBAGENT_STATUS_POLL_SECONDS"
+AGMSG_AUTO_MONITOR_ENV = "CLAUDEX_AGMSG_AUTO_MONITOR"
 DEFAULT_ADVISOR = {
     "agent": "custom-advisor",
     "model": "claude-fable-5",
@@ -1712,8 +1715,73 @@ def parse_arguments() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def is_internal_notification_prompt(prompt: object) -> bool:
+    """Recognize only pure Claude lifecycle notifications, never literal user text."""
+    if not isinstance(prompt, str):
+        return False
+    text = prompt.strip()
+    if text.startswith("<agent-message") and "</agent-message>" in text:
+        return True
+    if text.startswith("<task-notification") and "</task-notification>" in text:
+        return True
+    prefix = "Another Claude session sent a message:"
+    if not text.startswith(prefix):
+        return False
+    remainder = text[len(prefix) :].lstrip()
+    return (
+        remainder.startswith("<agent-message")
+        and "</agent-message>" in remainder
+    ) or (
+        remainder.startswith("<task-notification")
+        and "</task-notification>" in remainder
+    )
+
+
+def block_internal_notification_from_hook() -> bool:
+    """Consume a native lifecycle notification before it becomes a user turn.
+
+    Claude Code sends hook JSON on a pipe. Read only when bytes are already
+    available so normal CLI invocations and an open stdin never block routing.
+    The parent can explicitly opt into automatic notification delivery.
+    """
+    if os.environ.get("CLAUDEX_ACTIVE") != "1":
+        return False
+    if os.environ.get(AGMSG_AUTO_MONITOR_ENV) == "1":
+        return False
+    try:
+        fd = sys.stdin.fileno()
+        # Claude Code writes the hook payload immediately after spawning the
+        # command, but the pipe can become readable a few scheduling ticks
+        # later. A short bounded wait prevents lifecycle notifications from
+        # slipping through while keeping every real prompt fast.
+        if os.isatty(fd) or not select.select([fd], [], [], 0.5)[0]:
+            return False
+        raw = os.read(fd, 1_048_576)
+        if not raw:
+            return False
+        payload = json.loads(raw.decode("utf-8"))
+    except (AttributeError, BlockingIOError, OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    if not isinstance(payload, dict) or not is_internal_notification_prompt(
+        payload.get("user_prompt")
+    ):
+        return False
+    print(
+        json.dumps(
+            {
+                "decision": "block",
+                "reason": "Claudex internal background notification consumed",
+            },
+            ensure_ascii=False,
+        )
+    )
+    return True
+
+
 def main() -> int:
     arguments = parse_arguments()
+    if block_internal_notification_from_hook():
+        return 0
     now = time.time()
     try:
         config = load_config(config_path(os.environ, arguments.config))

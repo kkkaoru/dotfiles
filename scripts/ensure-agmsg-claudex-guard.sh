@@ -28,6 +28,13 @@ if [ "${{CLAUDEX_ACTIVE:-}}" = 1 ] && [ "${{CLAUDEX_AGMSG_AUTO_MONITOR:-}}" != 1
 fi
 '''
 
+inbox_parent_marker = "# claudex: agmsg turn delivery is opt-in for the interactive parent."
+inbox_parent_guard = f'''{inbox_parent_marker}
+if [ "${{CLAUDEX_ACTIVE:-}}" = 1 ] && [ "${{CLAUDEX_AGMSG_AUTO_MONITOR:-}}" != 1 ]; then
+  exit 0
+fi
+'''
+
 watch_marker = "# claudex: serialize same-session watcher claims."
 watch_parent_marker = "# claudex: automatic agmsg Monitor is opt-in for the interactive parent."
 watch_parent_guard = f'''{watch_parent_marker}
@@ -88,6 +95,8 @@ for name in ("session-start.sh", "session-end.sh", "check-inbox.sh", "watch.sh")
         raise SystemExit(f"unsupported agmsg hook format: {path}")
     if name == "session-start.sh" and parent_marker not in text:
         text = text.replace(shebang, shebang + "\n" + parent_guard, 1)
+    if name == "check-inbox.sh" and inbox_parent_marker not in text:
+        text = text.replace(shebang, shebang + "\n" + inbox_parent_guard, 1)
     if name == "watch.sh" and watch_parent_marker not in text:
         text = text.replace(shebang, shebang + "\n" + watch_parent_guard, 1)
     if name == "watch.sh" and watch_child_marker not in text:

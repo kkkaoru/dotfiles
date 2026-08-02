@@ -50,8 +50,10 @@ class AgmsgLifecycleTests(unittest.TestCase):
             result = subprocess.run([str(GUARD_INSTALLER)], env=environment, check=False)
             self.assertEqual(result.returncode, 0)
             start = (scripts / "session-start.sh").read_text(encoding="utf-8")
+            inbox = (scripts / "check-inbox.sh").read_text(encoding="utf-8")
             watcher = (scripts / "watch.sh").read_text(encoding="utf-8")
             self.assertIn("CLAUDEX_AGMSG_AUTO_MONITOR", start)
+            self.assertIn("agmsg turn delivery is opt-in for the interactive parent", inbox)
             self.assertIn("serialize same-session watcher claims", watcher)
             self.assertIn("provider/noninteractive child watchers are disabled", watcher)
             self.assertIn("resumed claudex sessions do not run agmsg watchers", watcher)
@@ -162,6 +164,28 @@ class AgmsgLifecycleTests(unittest.TestCase):
                     )
                     self.assertEqual(process.returncode, 0, process.stderr)
                     self.assertEqual(process.stdout, "")
+
+    def test_parent_inbox_boundary_does_not_inject_agmsg_into_claudex_turn(self) -> None:
+        inbox = AGMSG_SCRIPTS / "check-inbox.sh"
+        with tempfile.TemporaryDirectory(prefix="claudex-agmsg-inbox-") as temporary:
+            environment = {
+                **os.environ,
+                "CLAUDEX_ACTIVE": "1",
+                "CLAUDEX_AGMSG_AUTO_MONITOR": "0",
+                "AGMSG_STORAGE_PATH": str(Path(temporary) / "store"),
+            }
+            process = subprocess.run(
+                ["bash", str(inbox), "claude-code", str(PROJECT)],
+                input='{"session_id":"45158e6d-1bbb-4e1d-9e1b-e024c49fa216"}',
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=1.0,
+                env=environment,
+            )
+            self.assertEqual(process.returncode, 0, process.stderr)
+            self.assertEqual(process.stdout, "")
+            self.assertEqual(process.stderr, "")
 
 
 if __name__ == "__main__":
