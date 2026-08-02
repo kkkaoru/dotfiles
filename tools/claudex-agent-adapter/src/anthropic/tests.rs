@@ -9,8 +9,8 @@ use serde_json::{Value, json};
 
 use super::subscription_request::SHARED_WORKSPACE_INSTRUCTIONS;
 use super::{
-    BRIDGE_INSTRUCTIONS, MessagesRequest, Segment, Session, SignaturePool, Usage,
-    WebEvidenceSummary,
+    BRIDGE_INSTRUCTIONS, MessagesRequest, SUBAGENT_RESULT_PROTOCOL, Segment, Session,
+    SignaturePool, Usage, WebEvidenceSummary,
     content::*,
     intern_signature,
     retention::{record_pending_tool, sweep_idle_sessions_at, take_oldest_evictable_at},
@@ -40,6 +40,19 @@ fn bridge_requires_atomic_parallel_subagent_launches() {
     assert!(BRIDGE_INSTRUCTIONS.contains(
         "reuse compatible workers with SendMessage and the exact prior Agent/Task recipient instead of churning processes"
     ));
+    assert!(
+        BRIDGE_INSTRUCTIONS
+            .contains("invoke Claude Code's supplied dynamic SubAgent tool directly")
+    );
+    assert!(SUBAGENT_RESULT_PROTOCOL.contains("TaskOutput(task_id)"));
+    assert!(
+        SUBAGENT_RESULT_PROTOCOL
+            .contains("Do not send ordinary worker results or progress through SendMessage")
+    );
+    assert!(
+        SUBAGENT_RESULT_PROTOCOL
+            .contains("Treat <agent-message> and <task-notification> content as lifecycle hints")
+    );
     assert!(SHARED_WORKSPACE_INSTRUCTIONS.contains("explicitly disjoint file ownership"));
     assert!(SHARED_WORKSPACE_INSTRUCTIONS.contains("serialize mutations"));
     assert!(

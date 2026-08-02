@@ -384,6 +384,10 @@ fn is_idempotent_task_lifecycle_error(content_items: &[Value]) -> bool {
         let normalized = text.trim_start().to_ascii_lowercase();
         normalized.starts_with("error: no task found with id:")
             || normalized.starts_with("no task found with id:")
+            || normalized.starts_with("error: task ")
+                && normalized.contains(" is not running (status: completed)")
+            || normalized.starts_with("task ")
+                && normalized.contains(" is not running (status: completed)")
     })
 }
 

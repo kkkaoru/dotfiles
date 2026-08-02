@@ -72,6 +72,19 @@ fn request(messages: Value) -> Value {
     })
 }
 
+async fn post_json_with_body_on_error(client: &Client, url: &str, body: Value) -> Value {
+    let response = client
+        .post(url)
+        .json(&body)
+        .send()
+        .await
+        .expect("send JSON request");
+    let status = response.status();
+    let text = response.text().await.expect("read JSON response");
+    assert!(status.is_success(), "HTTP {status}: {text}");
+    serde_json::from_str(&text).expect("decode JSON response")
+}
+
 #[tokio::test]
 async fn http_bridge_forwards_the_exact_agent_schema_without_a_batch_tool() {
     let adapter = Adapter::start().await;
@@ -249,6 +262,101 @@ async fn pure_async_agent_launch_results_return_control_without_task_output_rela
             .unwrap()
             .iter()
             .any(|block| { block.get("name").and_then(Value::as_str) == Some("TaskOutput") })
+    );
+}
+
+#[tokio::test]
+async fn accepts_main_input_after_background_handoff_and_keeps_task_retrievable() {
+    let adapter = Adapter::start().await;
+    let client = Client::new();
+    let url = format!("{}/v1/messages", adapter.base_url);
+    let user = json!({
+        "role":"user",
+        "content":concat!(
+            "USE_PARALLEL_AGENTS_TASK_OUTPUT with one independent background scope\n",
+            "Claudex routing for this turn: ",
+            r#"{"providers":{},"selected_agents":["general-purpose"],"selected_workers":[{"agent":"general-purpose","model":"test-main-model"}]}"#
+        )
+    });
+    let launched =
+        post_json_with_body_on_error(&client, &url, request(json!([user.clone()]))).await;
+    assert_eq!(launched["stop_reason"], "tool_use");
+    let launch_results = Value::Array(
+        launched["content"]
+            .as_array()
+            .expect("background launch tools")
+            .iter()
+            .map(|block| {
+                json!({
+                    "type":"tool_result",
+                    "tool_use_id":block["id"],
+                    "content":[{"type":"text","text":"Async agent launched successfully.\nagentId: internal-background\nThe agent is working in the background."}]
+                })
+            })
+            .collect(),
+    );
+    let handoff = post_json_with_body_on_error(
+        &client,
+        &url,
+        request(json!([
+            user.clone(),
+            {"role":"assistant","content":launched["content"]},
+            {"role":"user","content":launch_results}
+        ])),
+    )
+    .await;
+    assert_eq!(handoff["stop_reason"], "end_turn");
+    assert!(
+        handoff["content"][0]["text"]
+            .as_str()
+            .expect("handoff status")
+            .contains("main prompt accepts the next instruction")
+    );
+
+    // This is the standard Claude Code follow-up shape: the main user sends a
+    // new instruction after the background launch turn has ended. It must not
+    // be converted into TaskStop or wait for the worker to finish.
+    let continued = post_json_with_body_on_error(
+        &client,
+        &url,
+        request(json!([
+            user.clone(),
+            {"role":"assistant","content":launched["content"]},
+            {"role":"user","content":launch_results},
+            {"role":"assistant","content":handoff["content"]},
+            {"role":"user","content":"CONTROL_SUBAGENTS_CONTINUE: answer this new main-session instruction while the background worker keeps running"}
+        ])),
+    )
+    .await;
+    assert_eq!(continued["stop_reason"], "end_turn");
+    assert_eq!(continued["content"][0]["text"], "MAIN_RESPONSE_CONTINUED");
+    assert!(
+        continued["content"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|block| { block.get("name").is_none() })
+    );
+
+    let task_output = post_json_with_body_on_error(
+        &client,
+        &url,
+        request(json!([
+            user,
+            {"role":"assistant","content":launched["content"]},
+            {"role":"user","content":launch_results},
+            {"role":"assistant","content":handoff["content"]},
+            {"role":"user","content":"CONTROL_SUBAGENTS_CONTINUE: answer this new main-session instruction while the background worker keeps running"},
+            {"role":"assistant","content":continued["content"]},
+            {"role":"user","content":"CONTROL_SUBAGENTS_TASK_OUTPUT: retrieve the background worker result now"}
+        ])),
+    )
+    .await;
+    assert_eq!(task_output["stop_reason"], "tool_use");
+    assert_eq!(task_output["content"][0]["name"], "TaskOutput");
+    assert_eq!(
+        task_output["content"][0]["input"]["task_id"],
+        "agent-profile-7"
     );
 }
 

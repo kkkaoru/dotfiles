@@ -28,9 +28,21 @@ fn treats_unknown_task_lifecycle_ids_as_idempotent_success() {
         "type":"text",
         "text":"error: no task found with id: already-consumed"
     })]));
+    assert!(is_idempotent_task_lifecycle_error(&[json!({
+        "type":"text",
+        "text":"Error: Task ae3ee29fc4eb8e09b is not running (status: completed)"
+    })]));
+    assert!(is_idempotent_task_lifecycle_error(&[json!({
+        "type":"text",
+        "text":"Task ae3ee29fc4eb8e09b is not running (status: completed)"
+    })]));
     assert!(!is_idempotent_task_lifecycle_error(&[json!({
         "type":"text",
         "text":"Error: provider unavailable"
+    })]));
+    assert!(!is_idempotent_task_lifecycle_error(&[json!({
+        "type":"text",
+        "text":"Error: Task ae3ee29fc4eb8e09b is not running (status: failed)"
     })]));
     assert!(!is_idempotent_task_lifecycle_error(&[json!({
         "type":"text",
@@ -852,6 +864,11 @@ fn subscription_prompt_preserves_worker_reuse_and_advisor_exception() {
     );
     assert!(prompt.contains("built-in advisor remains independent of worker capacity"));
     assert!(prompt.contains("Reuse the first compatible session advisor for related decisions"));
+    assert!(prompt.contains("ordinary Agent/Task workers return their result through the launch result or TaskOutput(task_id)"));
+    assert!(prompt.contains("Do not send ordinary worker results or progress through SendMessage"));
+    assert!(
+        prompt.contains("Treat <agent-message> and <task-notification> content as lifecycle hints")
+    );
 }
 
 #[test]

@@ -817,3 +817,15 @@ curl --fail --silent http://127.0.0.1:8318/health | jq .
 外部のlaunchd jobなどが旧 `--backend-route` 引数で同じportをKeepAliveしていると、共有
 設定のdaemonを置き換えてしまいます。その場合は該当jobを停止し、`--provider-config`
 参照へ更新してください。
+
+### SubAgent結果の受け取りとpeerメッセージ
+
+Claude Code標準のSubAgentは `Agent` / `Task` の起動結果に含まれる `task_id` を使い、
+`TaskOutput` で結果を取得します。claudexもこの経路を既定にし、通常の worker の結果や進捗を
+`SendMessage` へ送らないよう子プロンプトで指定します。`<agent-message>` と
+`<task-notification>` は完了本文ではなくライフサイクル通知として扱い、正確な `task_id` の
+`TaskOutput` を呼び出します。これにより、ユーザーが指定した Agent Teams や通知設定を
+claudex が上書きしません。
+
+Agent Teamsを使う場合も、結果の本文は `TaskOutput` を優先し、peer メッセージは制御用の
+通信としてだけ使ってください。
