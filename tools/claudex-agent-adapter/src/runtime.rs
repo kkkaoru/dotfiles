@@ -1,8 +1,5 @@
 use std::{collections::VecDeque, ffi::OsString, path::PathBuf, sync::Arc, time::Duration};
 
-use anyhow::{Context, Result, bail};
-use tracing_subscriber::EnvFilter;
-
 use crate::{
     agent_backend::{AgentBackend, BackendKind, BackendRoute},
     anthropic::{Bridge, DEFAULT_MAX_PROCESSES, DEFAULT_TIMEOUT_MINUTES},
@@ -10,6 +7,7 @@ use crate::{
     launcher::{self, AdapterOptions},
     provider_config::{self, WorkerRoute},
 };
+use anyhow::{Context, Result, bail};
 
 mod hard_timeout;
 mod shutdown;
@@ -297,13 +295,7 @@ fn utf8(value: Option<OsString>, name: &str) -> Result<String> {
 }
 
 pub async fn serve(options: AdapterOptions) -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .with_writer(std::io::stderr)
-        .try_init()
-        .ok();
+    crate::logging::init();
     let auth_token = configured_token();
     if !options.listen.ip().is_loopback() & auth_token.is_none() {
         bail!("ANTHROPIC_AUTH_TOKEN is required for a non-loopback listener");

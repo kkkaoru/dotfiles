@@ -388,6 +388,15 @@ mod tests {
             .await
             .expect("health response");
         assert!(health.status().is_success());
+        let request_id = health
+            .headers()
+            .get("x-claudex-request-id")
+            .and_then(|value| value.to_str().ok())
+            .expect("structured request ID response header");
+        assert!(
+            uuid::Uuid::parse_str(request_id).is_ok(),
+            "request ID must be a UUID: {request_id}"
+        );
         let health = health
             .json::<serde_json::Value>()
             .await

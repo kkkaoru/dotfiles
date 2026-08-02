@@ -165,6 +165,19 @@ impl ModelCatalog {
         &self.workers
     }
 
+    /// Returns the deterministic Claudex-managed route for a generic Agent.
+    /// Generic Agent types must not inherit the outer Claude session model.
+    pub fn default_worker_fields(&self) -> Option<(&str, &str)> {
+        self.workers
+            .first()
+            .map(|route| (route.model.as_str(), route.effort.as_str()))
+            .or_else(|| {
+                self.auxiliary_workers
+                    .first()
+                    .map(|route| (route.model.as_str(), route.effort.as_str()))
+            })
+    }
+
     pub fn search_worker_routes(&self) -> &[WorkerRoute] {
         &self.search_workers
     }

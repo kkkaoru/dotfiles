@@ -7,7 +7,7 @@
     "allow": [],
     "deny": []
   },
-  "model": "claude-fable-5[1m]",
+  "model": "gpt-5.6-luna",
   "enableAllProjectMcpServers": true,
   "hooks": {
     "SessionStart": [

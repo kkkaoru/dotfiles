@@ -133,12 +133,16 @@ fn spawn_adapter(
 fn configure_process_group(command: &mut Command) {
     use std::os::unix::process::CommandExt;
 
-    command.process_group(0);
     // `ensure` may itself be running under `Command::output()`. Close
     // inherited non-stdio descriptors before `nohup` execs the daemon so
     // the caller's output pipes reach EOF when the launcher exits.
     unsafe {
-        command.pre_exec(close_inherited_descriptors);
+        // A process-group boundary alone still permits a parent/PTY teardown
+        // to terminate the daemon. Creating a new session makes the daemon
+        // independent of that lifecycle. `setsid` also makes the child its
+        // own process-group leader, preserving targeted group shutdown via
+        // `kill(-pid, ...)`.
+        command.pre_exec(|| detach_session_and_close_inherited_descriptors());
     }
 }
 
@@ -152,6 +156,14 @@ type Io<T> = std::io::Result<T>;
 // Keep the pre-exec entrypoint as a single delegation; the range logic is tested below.
 #[rustfmt::skip]
 fn close_inherited_descriptors() -> Io<()> { close_system(close_file_descriptor) }
+
+#[cfg(unix)]
+fn detach_session_and_close_inherited_descriptors() -> Io<()> {
+    if unsafe { libc::setsid() } == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    close_inherited_descriptors()
+}
 
 #[cfg(unix)]
 fn close_system(close: impl FnMut(i32)) -> Io<()> {
@@ -195,7 +207,15 @@ fn close_file_descriptor(fd: i32) {
 mod tests {
     use super::{
         bounded_descriptor_limit, close_file_descriptor, close_inherited_descriptors_with,
-        close_system,
+        close_system, configure_process_group,
+    };
+
+    #[cfg(unix)]
+    use std::{
+        fs,
+        process::{Command, Stdio},
+        thread,
+        time::Duration,
     };
 
     #[test]
@@ -213,5 +233,49 @@ mod tests {
         assert_eq!(closed, vec![3, 4, 5]);
         close_system(|_| {}).expect("system descriptor limit is available");
         close_file_descriptor(-1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn daemon_starts_in_its_own_session_and_process_group() {
+        let path =
+            std::env::temp_dir().join(format!("claudex-daemon-session-{}.txt", std::process::id()));
+        let _ = fs::remove_file(&path);
+
+        let script = r#"
+            printf 'ready\n' > "$1"
+            sleep 30
+        "#;
+        let mut command = Command::new("sh");
+        command
+            .args(["-c", script, "claudex-session-test", path.to_str().unwrap()])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        configure_process_group(&mut command);
+        let mut child = command.spawn().expect("spawn detached session fixture");
+
+        let validation = (|| -> Result<(), Box<dyn std::error::Error>> {
+            for _ in 0..40 {
+                if fs::read_to_string(&path).is_ok() {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(25));
+            }
+            if fs::read_to_string(&path).is_err() {
+                return Err("session fixture was not ready".into());
+            }
+            let pid = child.id() as libc::pid_t;
+            let session_id = unsafe { libc::getsid(pid) };
+            let process_group_id = unsafe { libc::getpgid(pid) };
+            assert_eq!(session_id, pid, "session id must be daemon pid");
+            assert_eq!(process_group_id, pid, "process group must be daemon pid");
+            Ok(())
+        })();
+
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = fs::remove_file(&path);
+        validation.expect("daemon must be detached into a new session");
     }
 }

@@ -35,6 +35,17 @@ pub(crate) fn active_header() -> Result<Option<String>> {
     )
 }
 
+/// Resolve the current machine policy for every incoming request. The launcher
+/// snapshots this value into Claude's environment, but an already-running
+/// Claude process may not have that snapshot; the HTTP boundary must still
+/// enforce the current denylist.
+pub(crate) fn active_models() -> Result<BTreeSet<String>> {
+    active_header()?
+        .map(|header| parse(&header))
+        .transpose()
+        .map(Option::unwrap_or_default)
+}
+
 pub(crate) fn header_value(header: &Option<String>) -> &str {
     header.as_deref().unwrap_or_default()
 }
@@ -230,5 +241,17 @@ mod tests {
         assert!(!valid_model_id(""));
         assert!(!valid_model_id("モデル"));
         assert!(!valid_model_id("model\n"));
+    }
+
+    #[test]
+    fn active_models_preserves_the_machine_policy_shape() {
+        let configured = BTreeSet::from(["grok-4.5".to_owned()]);
+        let request = BTreeSet::from(["qwen3.8-max-preview".to_owned()]);
+        let mut merged = configured;
+        merged.extend(request);
+        assert_eq!(
+            merged.into_iter().collect::<Vec<_>>(),
+            ["grok-4.5", "qwen3.8-max-preview"]
+        );
     }
 }

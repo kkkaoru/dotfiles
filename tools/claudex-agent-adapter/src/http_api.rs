@@ -7,6 +7,11 @@ use std::{
     task::{Context as TaskContext, Poll},
 };
 
+use crate::{
+    ADAPTER_PROTOCOL_VERSION,
+    anthropic::{Bridge, MessagesRequest, RequestIdentity, error_response},
+    subagent_policy, working_directory,
+};
 use axum::{
     Json, Router,
     body::{Body, BodyDataStream, Bytes},
@@ -21,11 +26,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio_stream::Stream;
 
-use crate::{
-    ADAPTER_PROTOCOL_VERSION,
-    anthropic::{Bridge, MessagesRequest, RequestIdentity, error_response},
-    subagent_policy, working_directory,
-};
+mod logging;
 
 pub fn http_router(bridge: Arc<Bridge>, model: String, auth_token: Option<String>) -> Router {
     let active_http_requests = Arc::new(AtomicUsize::new(0));
@@ -84,6 +85,7 @@ pub fn http_router(bridge: Arc<Bridge>, model: String, auth_token: Option<String
             }),
         )
         .merge(protected)
+        .layer(middleware::from_fn(logging::trace_http_request))
         .with_state(bridge)
 }
 
@@ -229,10 +231,15 @@ async fn messages(
         Err(error) => return error_response(StatusCode::BAD_REQUEST, error),
     };
     request.working_directory = request_working_directory(&headers);
-    request.disabled_subagent_models = match subagent_policy::request_models(&headers) {
+    let mut disabled_subagent_models = match subagent_policy::active_models() {
         Ok(models) => models,
         Err(error) => return error_response(StatusCode::BAD_REQUEST, error),
     };
+    match subagent_policy::request_models(&headers) {
+        Ok(models) => disabled_subagent_models.extend(models),
+        Err(error) => return error_response(StatusCode::BAD_REQUEST, error),
+    }
+    request.disabled_subagent_models = disabled_subagent_models;
     bridge
         .messages_with_identity(request, identity, tools_were_provided)
         .await

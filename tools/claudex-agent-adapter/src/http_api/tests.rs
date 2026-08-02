@@ -71,6 +71,22 @@ fn rejects_empty_or_oversized_identity_headers() {
 }
 
 #[test]
+fn derives_ccr_session_identity_from_search_path() {
+    assert_eq!(
+        super::logging::path_session_id("/v1/code/sessions/session_search/worker/web-search"),
+        Some("session_search")
+    );
+    assert_eq!(
+        super::logging::path_session_id("/v1/code/sessions/session_search/worker/web-search/extra"),
+        None
+    );
+    assert_eq!(
+        super::logging::path_session_id("/v1/code/sessions//worker/web-search"),
+        None
+    );
+}
+
+#[test]
 fn distinguishes_omitted_tools_from_an_explicit_empty_array() {
     let (_, omitted) = decode_messages_request(json!({"model":"main"})).unwrap();
     let (explicit, provided) = decode_messages_request(json!({"model":"main","tools":[]})).unwrap();

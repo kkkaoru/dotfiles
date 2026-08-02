@@ -10,6 +10,7 @@ pub mod coverage_gate;
 pub mod grok_acp;
 mod http_api;
 pub mod launcher;
+pub(crate) mod logging;
 pub mod parallel_scheduler;
 pub mod path_env;
 pub mod provider_config;
