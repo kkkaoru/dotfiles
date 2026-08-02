@@ -9,9 +9,11 @@
   compaction, resume, context reconstruction, or worker failure. Delegate implementation,
   investigation, review, testing, and validation; keep orchestration and synthesis in main.
   When a routed worker is available, launch it before any substantive main-session tool call;
-  direct execution is fallback-only. A background task is never fire-and-forget: call `TaskList`
-  and non-blocking `TaskOutput` immediately after launch, repeat a status snapshot every 15 seconds
-  and at each user turn, and report task id/worker/model/status when it is still processing. Never
+  direct execution is fallback-only. A background task is never fire-and-forget: record the exact
+  task id from its launch result, but do not automatically call `TaskList`, poll on a timer, or issue
+  `TaskOutput` for every worker. Handle the user's next message first and retrieve only the exact
+  task output required by that message or an unresolved dependency. Use `TaskList` only on an
+  explicit status request or when a dependency cannot be resolved from a completion event. Never
   retry or relaunch a still-processing task solely because its completion notification is delayed.
 - Use the available SubAgent tool (`Task` in current Claude Code, `Agent` in older versions) and
   the orchestration skill. In Claudex, follow `claudex-routing` and delegate primarily to its

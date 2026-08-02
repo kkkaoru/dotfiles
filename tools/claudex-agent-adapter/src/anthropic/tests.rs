@@ -46,6 +46,10 @@ fn bridge_requires_atomic_parallel_subagent_launches() {
     );
     assert!(SUBAGENT_RESULT_PROTOCOL.contains("TaskOutput(task_id)"));
     assert!(SUBAGENT_RESULT_PROTOCOL.contains("never wait for every background task"));
+    assert!(
+        SUBAGENT_RESULT_PROTOCOL
+            .contains("never automatically poll TaskList or TaskOutput on a timer")
+    );
     assert!(SUBAGENT_RESULT_PROTOCOL.contains("accepting another user instruction"));
     assert!(SUBAGENT_RESULT_PROTOCOL.contains("never call TaskOutput or TaskGet merely to drain"));
     assert!(

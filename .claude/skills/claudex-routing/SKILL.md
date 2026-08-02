@@ -64,11 +64,13 @@ retained.
    user-visible status. When completion notifications re-enter the next turn, integrate each available result
    without waiting for the slowest worker; never silently wait or keep hidden reasoning for pending
    notifications.
-   Background workers are never fire-and-forget: immediately call `TaskList` and non-blocking
-   `TaskOutput` for each new task, then repeat the status snapshot every
-   `CLAUDEX_SUBAGENT_STATUS_POLL_SECONDS` seconds (default 15) and at every user turn. If a task is
-   still processing, preserve its task id, report its status, and continue independent work; never
-   retry or relaunch it solely because completion is delayed.
+   Background workers are never fire-and-forget: record the exact task id from each launch result,
+   but do not automatically call `TaskList`, poll on a timer, or issue `TaskOutput` for every task.
+   Handle the user's next message first and retrieve only the exact task output needed by that
+   message or an unresolved dependency. Use `TaskList` only for an explicit status request or when
+   a dependency cannot be resolved from a completion event. If a task is still processing, preserve
+   its task id and continue independent work; never retry or relaunch it solely because completion
+   is delayed.
    Do not mix a long-running foreground worker into a background worker batch: it still holds the
    main session until its slowest foreground result returns. When an interactive permission really
    requires foreground execution, restrict it to that short permission-dependent operation and
