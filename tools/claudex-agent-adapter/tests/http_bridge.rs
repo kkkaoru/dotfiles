@@ -1164,9 +1164,9 @@ async fn subscription_follow_up_stream_distinguishes_launch_from_no_launch() {
         .text()
         .await
         .expect("read subscription launch follow-up");
-    assert!(launch.contains("SubAgent status: Agent launch emitted"));
     assert!(launch.contains(r#""name":"Agent""#));
     assert!(launch.contains(r#""stop_reason":"tool_use""#));
+    assert!(!launch.contains("SubAgent status:"));
 
     let no_launch = client
         .post(messages_url(&adapter))
@@ -1178,9 +1178,7 @@ async fn subscription_follow_up_stream_distinguishes_launch_from_no_launch() {
         .await
         .expect("read subscription no-launch follow-up");
     assert!(no_launch.contains("SUBSCRIPTION_DIRECT_RESULT"));
-    assert!(no_launch.contains(
-        "SubAgent status: no Agent/Task launch or SendMessage reuse was emitted for this follow-up."
-    ));
+    assert!(!no_launch.contains("SubAgent status:"));
     assert!(!no_launch.contains(r#""type":"tool_use""#));
     assert!(no_launch.contains(r#""stop_reason":"end_turn""#));
 }

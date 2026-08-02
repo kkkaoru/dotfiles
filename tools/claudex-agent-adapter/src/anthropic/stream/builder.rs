@@ -7,7 +7,6 @@ use super::{ToolCall, error_flow, turn_flow};
 use crate::anthropic::{
     Bridge, Segment, Session, Usage, WebEvidenceSummary,
     content::{estimated_block_tokens, estimated_tokens},
-    subagent_visibility::SubagentVisibility,
 };
 
 use super::{
@@ -36,7 +35,6 @@ pub(in crate::anthropic) struct SegmentBuilder {
     /// Completed provider-native web calls whose provenance has already been
     /// counted. A provider may repeat its final ToolCallUpdate while reconnecting.
     verified_web_evidence_call_ids: Vec<String>,
-    subagent_visibility: SubagentVisibility,
     injected_output_tokens: u64,
     usage: Usage,
 }
@@ -51,7 +49,6 @@ impl SegmentBuilder {
             provider_tool_calls: Vec::new(),
             requires_verified_web_evidence: false,
             verified_web_evidence_call_ids: Vec::new(),
-            subagent_visibility: SubagentVisibility::default(),
             injected_output_tokens: 0,
             usage: Usage {
                 input_tokens,
@@ -86,8 +83,6 @@ impl SegmentBuilder {
         event: &Value,
         stream: Option<&StreamSender>,
     ) -> Result<ControlFlow<()>> {
-        self.observe_subagent_context(session, current_messages)
-            .await;
         self.record_web_evidence_requirement(current_messages, system);
         if self.model_output_event(event, stream).await? {
             return Ok(ControlFlow::Continue(()));

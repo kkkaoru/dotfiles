@@ -802,12 +802,7 @@ async fn streamed_follow_up_without_a_subagent_is_distinguishable_from_launch_or
         stream.contains("FOLLOW_UP_NO_AGENT_LAUNCHED"),
         "stream={stream}"
     );
-    assert!(
-        stream.contains(
-            "SubAgent status: no Agent/Task launch or SendMessage reuse was emitted for this follow-up."
-        ),
-        "stream={stream}"
-    );
+    assert!(!stream.contains("SubAgent status:"), "stream={stream}");
     assert!(
         stream.contains(r#""stop_reason":"end_turn""#),
         "stream={stream}"

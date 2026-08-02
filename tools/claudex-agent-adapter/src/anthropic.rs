@@ -32,7 +32,6 @@ mod subagent_timeout;
 pub(crate) use subagent_timeout::{
     LEGACY_SUBAGENT_RESPONSE_TIMEOUT_ENV, SUBAGENT_HARD_TIMEOUT_ENV,
 };
-mod subagent_visibility;
 mod subscription;
 mod subscription_activity;
 mod subscription_frames;

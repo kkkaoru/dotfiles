@@ -725,13 +725,9 @@ async fn blocked_agent_after_a_forwarded_tool_uses_a_fresh_text_block() {
     let (block_types, stopped_indices) = collect_block_events(&output);
     assert_eq!(
         block_types,
-        vec![
-            (0, "text".to_owned()),
-            (1, "tool_use".to_owned()),
-            (2, "text".to_owned()),
-        ]
+        vec![(0, "tool_use".to_owned()), (1, "text".to_owned())]
     );
-    for index in [0, 1, 2] {
+    for index in [0, 1] {
         assert_eq!(
             stopped_indices
                 .iter()
