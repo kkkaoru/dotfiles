@@ -41,6 +41,7 @@ pub(super) fn request_signature(
         "tools": request.tools.iter().map(canonical_value).collect::<Vec<_>>(),
         "metadata": request.metadata.get("user_id"),
         "transport_identity": request.metadata.get("_claudex_transport_identity"),
+        "subagent_spawn_limit_reached": request.metadata.get("_claudex_subagent_spawn_limit_reached"),
         "working_directory": request.working_directory,
         "disabled_subagent_models": request.disabled_subagent_models,
         "advisor_model": advisor_model,

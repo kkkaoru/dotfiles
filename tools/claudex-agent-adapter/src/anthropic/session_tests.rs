@@ -644,6 +644,29 @@ fn received_agent_tool_is_forwarded_exactly_without_adding_task_or_routing_field
 }
 
 #[test]
+fn hides_only_new_native_launch_tools_after_the_session_budget_is_reached() {
+    let mut request = request(
+        json!("main session"),
+        vec![
+            json!({"name":"Read","input_schema":{"type":"object"}}),
+            json!({"name":"Agent","input_schema":{"type":"object"}}),
+            json!({"name":"Task","input_schema":{"type":"object"}}),
+            json!({"name":"SendMessage","input_schema":{"type":"object"}}),
+        ],
+    );
+    request.metadata = json!({"_claudex_subagent_spawn_limit_reached":true});
+    let (tools, names, _) = tool_configuration(&request, None, None);
+    assert!(
+        !names
+            .values()
+            .any(|name| matches!(name.as_str(), "Agent" | "Task"))
+    );
+    assert!(names.values().any(|name| name == "Read"));
+    assert!(names.values().any(|name| name == "SendMessage"));
+    assert_eq!(tools.len(), 2);
+}
+
+#[test]
 fn search_worker_preserves_every_received_capability() {
     let mut request = request(
         json!("cc_is_subagent=true; Dedicated live-web retrieval worker: claudex-haiku-search"),
@@ -704,6 +727,9 @@ fn assert_developer_guidance(developer: &str) {
         "reuse compatible workers with SendMessage and the exact prior Agent/Task recipient instead of churning processes",
         "custom-advisor is a separate logical session singleton/capacity channel",
         "built-in advisor remains independent of worker capacity",
+        "complex or ambiguous decisions",
+        "worker stalls/timeouts",
+        "consult one custom-advisor when triggered",
         "Prefer reusing a compatible recipient via SendMessage over launching a replacement process",
         "set run_in_background=true on every launch in the single batch",
         "Do not mix foreground and background launches in one batch",

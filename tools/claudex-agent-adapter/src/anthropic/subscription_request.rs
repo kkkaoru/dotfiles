@@ -59,6 +59,11 @@ pub(super) fn subscription_request_prompt(request: &MessagesRequest) -> String {
             "context, or an unavailable recipient. Before shutdown or replacement, weigh likely ",
             "follow-ups and potential prompt-prefix/cache reuse against slot/resource pressure and ",
             "stale context; neither creation nor termination is categorically forbidden. Treat ",
+            "complex or ambiguous decisions, external research with multiple sources, high-risk ",
+            "configuration changes, work lasting over ten minutes, worker stalls/timeouts, and ",
+            "conflicting worker results as explicit custom-advisor consultation triggers; consult ",
+            "one custom-advisor when triggered and reuse it for follow-ups, but do not use it for ",
+            "trivial work. ",
             "current routing context as authoritative over stale model-policy memory. Every Task or ",
             "Agent launch must include an exact claudex_model from its selected_workers entry or the ",
             "active user's explicit model request. If no such model is available, do not launch or ",
@@ -141,17 +146,25 @@ fn subscription_parallel_scheduler_instructions(request: &MessagesRequest) -> St
 
 #[cfg(test)]
 pub(super) fn requested_tools(tools: &[Value], omit_task_bookkeeping: bool) -> Vec<String> {
-    requested_tools_from_request(tools, omit_task_bookkeeping)
+    requested_tools_from_request(tools, omit_task_bookkeeping, true)
 }
 
 pub(super) fn requested_tools_for_request(
     request: &MessagesRequest,
     omit_task_bookkeeping: bool,
 ) -> Vec<String> {
-    requested_tools_from_request(&request.tools, omit_task_bookkeeping)
+    requested_tools_from_request(
+        &request.tools,
+        omit_task_bookkeeping,
+        crate::anthropic::subagent_reuse::should_expose_launch_tools(request),
+    )
 }
 
-fn requested_tools_from_request(tools: &[Value], omit_task_bookkeeping: bool) -> Vec<String> {
+fn requested_tools_from_request(
+    tools: &[Value],
+    omit_task_bookkeeping: bool,
+    expose_launch_tools: bool,
+) -> Vec<String> {
     let mut selected = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for name in tools
@@ -159,8 +172,9 @@ fn requested_tools_from_request(tools: &[Value], omit_task_bookkeeping: bool) ->
         .filter_map(|tool| tool.get("name").and_then(Value::as_str))
         .filter(|name| !name.is_empty())
         .filter(|name| {
-            !omit_task_bookkeeping
-                || !matches!(*name, "TaskCreate" | "TaskUpdate" | "TaskList" | "TaskGet")
+            !(omit_task_bookkeeping
+                && matches!(*name, "TaskCreate" | "TaskUpdate" | "TaskList" | "TaskGet"))
+                && (expose_launch_tools || !crate::anthropic::subagent_reuse::is_launch_tool(name))
         })
     {
         if seen.insert(name) {

@@ -54,6 +54,7 @@ impl Bridge {
         tools_were_provided: bool,
     ) -> Result<Response<Body>> {
         pasted_text::expand_markers(&mut request);
+        self.subagent_reuse.observe_and_restore(&mut request);
         trace_request(&request);
         self.schedule_idle_session_sweep();
         self.agent_efforts

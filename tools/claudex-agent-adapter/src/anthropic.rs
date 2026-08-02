@@ -22,6 +22,7 @@ mod session;
 mod stream;
 mod stream_batch;
 mod subagent_continuation;
+mod subagent_reuse;
 mod subagent_timeout;
 // Runtime/daemon option plumbing imports these names once normalized CLI
 // configuration is installed on the Bridge. Keep the shared literals available
@@ -125,6 +126,7 @@ pub struct Bridge {
     #[cfg(test)]
     subagent_hard_timeout_cancel_attempts: std::sync::atomic::AtomicUsize,
     agent_efforts: Arc<agent_effort::AgentEffortIntents>,
+    subagent_reuse: Arc<subagent_reuse::SubagentReuseRegistry>,
     tool_schemas: tool_schema_cache::ToolSchemaCache,
     model_concurrency: model_concurrency::ModelConcurrency,
 }
@@ -210,6 +212,7 @@ impl Bridge {
     pub(crate) fn with_persisted_agent_intents(self) -> Self {
         Self {
             agent_efforts: Arc::new(agent_effort::AgentEffortIntents::persistent()),
+            subagent_reuse: Arc::new(subagent_reuse::SubagentReuseRegistry::persistent()),
             tool_schemas: tool_schema_cache::ToolSchemaCache::persistent(),
             ..self
         }
@@ -275,6 +278,7 @@ impl Bridge {
             #[cfg(test)]
             subagent_hard_timeout_cancel_attempts: std::sync::atomic::AtomicUsize::new(0),
             agent_efforts: Arc::new(agent_effort::AgentEffortIntents::default()),
+            subagent_reuse: Arc::new(subagent_reuse::SubagentReuseRegistry::default()),
             tool_schemas: tool_schema_cache::ToolSchemaCache::default(),
             model_concurrency,
         }
