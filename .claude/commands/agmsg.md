@@ -87,6 +87,14 @@ Four possible outputs:
 
 ## Execute
 
+Non-interactive child guard: when CLAUDEX_NONINTERACTIVE_CHILD=1,
+CLAUDEX_PROVIDER_ACP=1, or CLAUDEX_GROK_ACP=1 is present, this is a
+provider-backed child rather than a user-facing session. Do not start an
+agmsg Monitor, inbox check, or persistent watcher in that child. The installed
+SessionStart, SessionEnd, and Stop scripts enforce the same guard before
+reading stdin, so a child cannot keep a parent session busy with an agmsg
+response loop.
+
 **Only use scripts in `~/.agents/skills/agmsg/scripts/` — do not read or modify files under `teams/` or `db/` directly.** Treat the storage layout as internal: never construct a database path or invoke `sqlite3` directly. The scripts resolve the active store, including `AGMSG_STORAGE_PATH` overrides.
 
 **Ensure monitor is running first.** Before processing any subcommand below, check whether this session already has an `agmsg inbox stream` Monitor task in its TaskList. If not, and the project's delivery mode is `monitor` or `both` (check via `~/.agents/skills/agmsg/scripts/delivery.sh status claude-code "$(pwd)"`), invoke the Monitor tool now:
