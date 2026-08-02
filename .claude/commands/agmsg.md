@@ -95,6 +95,13 @@ SessionStart, SessionEnd, and Stop scripts enforce the same guard before
 reading stdin, so a child cannot keep a parent session busy with an agmsg
 response loop.
 
+Claudex parent sessions also keep automatic Monitor delivery disabled by
+default. When `CLAUDEX_ACTIVE=1` is present, do not start a persistent Monitor
+unless `CLAUDEX_AGMSG_AUTO_MONITOR=1` was explicitly set. Use the turn-mode
+inbox commands below for an on-demand result; this keeps cross-session
+`<agent-message>` values out of the main user-input queue while preserving
+native Claude Code Agent/Task cards.
+
 **Only use scripts in `~/.agents/skills/agmsg/scripts/` — do not read or modify files under `teams/` or `db/` directly.** Treat the storage layout as internal: never construct a database path or invoke `sqlite3` directly. The scripts resolve the active store, including `AGMSG_STORAGE_PATH` overrides.
 
 **Ensure monitor is running first.** Before processing any subcommand below, check whether this session already has an `agmsg inbox stream` Monitor task in its TaskList. If not, and the project's delivery mode is `monitor` or `both` (check via `~/.agents/skills/agmsg/scripts/delivery.sh status claude-code "$(pwd)"`), invoke the Monitor tool now:

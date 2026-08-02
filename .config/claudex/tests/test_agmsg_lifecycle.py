@@ -34,6 +34,29 @@ class AgmsgLifecycleTests(unittest.TestCase):
             self.assertEqual(second.returncode, 0)
             self.assertEqual((scripts / "session-start.sh").read_text(encoding="utf-8"), first_text)
 
+    def test_guard_installer_adds_parent_opt_in_and_watcher_claim(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="claudex-agmsg-watcher-") as temporary:
+            scripts = Path(temporary)
+            hook = "#!/usr/bin/env bash\nset -euo pipefail\nprintf '%s\\n' body\n"
+            for name in ("session-start.sh", "session-end.sh", "check-inbox.sh"):
+                (scripts / name).write_text(hook, encoding="utf-8")
+            (scripts / "watch.sh").write_text(
+                hook
+                + 'PIDFILE="$RUN_DIR/watch.$SESSION_ID.pid"\n'
+                + 'echo $$ > "$PIDFILE"\n',
+                encoding="utf-8",
+            )
+            environment = {**os.environ, "AGMSG_SCRIPTS_DIR": str(scripts)}
+            result = subprocess.run([str(GUARD_INSTALLER)], env=environment, check=False)
+            self.assertEqual(result.returncode, 0)
+            start = (scripts / "session-start.sh").read_text(encoding="utf-8")
+            watcher = (scripts / "watch.sh").read_text(encoding="utf-8")
+            self.assertIn("CLAUDEX_AGMSG_AUTO_MONITOR", start)
+            self.assertIn("serialize same-session watcher claims", watcher)
+            self.assertIn("provider/noninteractive child watchers are disabled", watcher)
+            self.assertIn("resumed claudex sessions do not run agmsg watchers", watcher)
+            self.assertIn("CLAIM_DIR", watcher)
+
     def test_noninteractive_hooks_exit_without_waiting_for_stdin(self) -> None:
         scripts = (
             "session-start.sh",
@@ -106,6 +129,39 @@ class AgmsgLifecycleTests(unittest.TestCase):
                     )
                     self.assertEqual(process.returncode, 0, process.stderr)
                     self.assertNotIn("Monitor", process.stdout)
+
+    def test_watcher_boundary_exits_for_parent_and_provider_children(self) -> None:
+        for marker in (
+            "CLAUDEX_ACTIVE",
+            "CLAUDEX_NONINTERACTIVE_CHILD",
+            "CLAUDEX_PROVIDER_ACP",
+            "CLAUDEX_GROK_ACP",
+        ):
+            with self.subTest(marker=marker):
+                with tempfile.TemporaryDirectory(prefix="claudex-agmsg-watch-") as temporary:
+                    environment = {
+                        **os.environ,
+                        "AGMSG_STORAGE_PATH": str(Path(temporary) / "store"),
+                        marker: "1",
+                    }
+                    process = subprocess.run(
+                        [
+                            "bash",
+                            str(AGMSG_SCRIPTS / "watch.sh"),
+                            "claudex-watch-test",
+                            str(PROJECT),
+                            "claude-code",
+                        ],
+                        cwd=PROJECT,
+                        env=environment,
+                        input="",
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                        timeout=1.0,
+                    )
+                    self.assertEqual(process.returncode, 0, process.stderr)
+                    self.assertEqual(process.stdout, "")
 
 
 if __name__ == "__main__":
