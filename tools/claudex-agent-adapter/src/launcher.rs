@@ -270,6 +270,17 @@ async fn ensure_config_running(config: &ServiceConfig) -> Result<String> {
     let client = reqwest::Client::new();
     let recovery_manifest = match handover::inspect_service(&client, config).await {
         ServiceState::Reuse => return Ok(config.base_url()),
+        ServiceState::Defer {
+            pid,
+            active_http_requests,
+            active_provider_turns,
+        } => {
+            eprintln!(
+                "claudex: retaining active adapter pid {:?}; deferring daemon handover ({} HTTP request(s), {} provider turn(s))",
+                pid, active_http_requests, active_provider_turns
+            );
+            return Ok(config.base_url());
+        }
         ServiceState::Replace {
             pid,
             recovery_generation,

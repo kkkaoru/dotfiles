@@ -263,6 +263,8 @@ mod tests {
             subagent_hard_timeout_seconds: None,
             service_config_fingerprint: config.service_config_fingerprint.clone(),
             recovery_generation: None,
+            active_http_requests: 0,
+            active_provider_turns: 0,
         }
     }
 
@@ -435,6 +437,24 @@ mod tests {
             }
         );
         server.join().expect("stale server");
+
+        let mut active = healthy(&reusable);
+        active.build_id = "old-build".to_owned();
+        active.active_provider_turns = 1;
+        let listener = TcpListener::bind("127.0.0.1:0").expect("active listener");
+        reusable.options.listen = listener.local_addr().expect("active address");
+        // Only the health request is served. A busy stale adapter must be
+        // deferred before the launcher probes auth or sends SIGTERM.
+        let server = serve_responses(listener, vec![health_response(&active)]);
+        assert_eq!(
+            handover::inspect_service(&client, &reusable).await,
+            handover::ServiceState::Defer {
+                pid: Some(42),
+                active_http_requests: 0,
+                active_provider_turns: 1,
+            }
+        );
+        server.join().expect("active server");
 
         let listener = TcpListener::bind("127.0.0.1:0").expect("authentication listener");
         reusable.options.listen = listener.local_addr().expect("authentication address");
@@ -660,6 +680,8 @@ mod tests {
                 "subscription_timeout_minutes": health.subscription_timeout_minutes,
                 "subagent_hard_timeout_seconds": health.subagent_hard_timeout_seconds,
                 "recovery_generation": health.recovery_generation,
+                "active_http_requests": health.active_http_requests,
+                "active_provider_turns": health.active_provider_turns,
             })
             .to_string(),
         )

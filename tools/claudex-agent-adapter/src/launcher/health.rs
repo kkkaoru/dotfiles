@@ -35,6 +35,20 @@ pub(super) struct Health {
     pub(super) subagent_hard_timeout_seconds: Option<u64>,
     #[serde(default)]
     pub(super) recovery_generation: Option<String>,
+    /// Number of HTTP requests currently served by the adapter.
+    /// Older adapters omit this field, so deserialization remains compatible.
+    #[serde(default)]
+    pub(super) active_http_requests: usize,
+    /// Number of provider turns currently in flight.
+    /// Older adapters omit this field, so deserialization remains compatible.
+    #[serde(default)]
+    pub(super) active_provider_turns: usize,
+}
+
+impl Health {
+    pub(super) fn has_active_work(&self) -> bool {
+        self.active_http_requests > 0 || self.active_provider_turns > 0
+    }
 }
 
 impl ServiceConfig {

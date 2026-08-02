@@ -12,6 +12,11 @@ const LISTENER_RELEASE_POLL_INTERVAL: Duration = Duration::from_millis(25);
 #[derive(Debug, Eq, PartialEq)]
 pub(super) enum ServiceState {
     Reuse,
+    Defer {
+        pid: Option<u32>,
+        active_http_requests: usize,
+        active_provider_turns: usize,
+    },
     Replace {
         pid: Option<u32>,
         recovery_generation: Option<String>,
@@ -31,6 +36,14 @@ pub(super) async fn inspect_service(
         && authenticates(client, config).await
     {
         ServiceState::Reuse
+    } else if health.status == "ok" && health.has_active_work() {
+        // Never tear down a generation that is still serving a request. The
+        // next ensure invocation will retry the handover after it becomes idle.
+        ServiceState::Defer {
+            pid: health.pid,
+            active_http_requests: health.active_http_requests,
+            active_provider_turns: health.active_provider_turns,
+        }
     } else {
         ServiceState::Replace {
             pid: health.pid,
