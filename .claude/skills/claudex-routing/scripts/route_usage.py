@@ -8,7 +8,6 @@ import hashlib
 import json
 import math
 import os
-import select
 import shlex
 import subprocess
 import sys
@@ -1750,16 +1749,22 @@ def block_internal_notification_from_hook() -> bool:
         return False
     try:
         fd = sys.stdin.fileno()
-        # Claude Code writes the hook payload immediately after spawning the
-        # command, but the pipe can become readable a few scheduling ticks
-        # later. A short bounded wait prevents lifecycle notifications from
-        # slipping through while keeping every real prompt fast.
-        if os.isatty(fd) or not select.select([fd], [], [], 0.5)[0]:
+        if os.isatty(fd):
             return False
-        raw = os.read(fd, 1_048_576)
+        # UserPromptSubmit supplies one complete JSON document on stdin and
+        # closes the pipe after it is written. Do not use a short readiness
+        # timeout here: Claude Code can schedule the hook before the payload
+        # becomes readable, and falling through turns an internal notification
+        # into a visible user-shaped prompt. Reading the hook pipe to EOF is
+        # bounded by the hook invocation itself and preserves every real prompt
+        # while reliably consuming lifecycle notifications first.
+        stream = getattr(sys.stdin, "buffer", sys.stdin)
+        raw = stream.read()
         if not raw:
             return False
-        payload = json.loads(raw.decode("utf-8"))
+        if isinstance(raw, bytes):
+            raw = raw.decode("utf-8")
+        payload = json.loads(raw)
     except (AttributeError, BlockingIOError, OSError, UnicodeDecodeError, json.JSONDecodeError):
         return False
     if not isinstance(payload, dict) or not is_internal_notification_prompt(

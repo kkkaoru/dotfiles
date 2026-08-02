@@ -1963,6 +1963,20 @@ class QwenFallbackTests(unittest.TestCase):
 
 
 class MainTests(unittest.TestCase):
+    class _HookStdin:
+        def __init__(self, payload: dict[str, object]) -> None:
+            self._payload = json.dumps(payload).encode("utf-8")
+
+        def fileno(self) -> int:
+            return 42
+
+        @property
+        def buffer(self) -> MainTests._HookStdin:
+            return self
+
+        def read(self) -> bytes:
+            return self._payload
+
     def test_parses_every_cli_option(self) -> None:
         with mock.patch.object(
             sys,
@@ -1989,6 +2003,47 @@ class MainTests(unittest.TestCase):
         self.assertTrue(arguments.no_cache)
         self.assertEqual(arguments.codexbar_program, "usage-tool")
         self.assertEqual(arguments.curl_program, "curl-tool")
+
+    def test_internal_agent_message_is_blocked_before_it_reaches_the_user_queue(self) -> None:
+        stdin = self._HookStdin(
+            {
+                "user_prompt": (
+                    "Another Claude session sent a message:\n"
+                    '<agent-message from="quality">review complete</agent-message>'
+                )
+            }
+        )
+        stdout = io.StringIO()
+        with (
+            mock.patch.object(sys, "stdin", stdin),
+            mock.patch("route_usage.os.isatty", return_value=False),
+            mock.patch.dict(
+                os.environ,
+                {
+                    "CLAUDEX_ACTIVE": "1",
+                    route_usage.AGMSG_AUTO_MONITOR_ENV: "",
+                },
+                clear=False,
+            ),
+            contextlib.redirect_stdout(stdout),
+        ):
+            self.assertTrue(route_usage.block_internal_notification_from_hook())
+        decision = json.loads(stdout.getvalue())
+        self.assertEqual(decision["decision"], "block")
+        self.assertNotIn("agent-message", decision["reason"])
+
+    def test_real_user_prompt_is_not_blocked_by_internal_notification_filter(self) -> None:
+        stdin = self._HookStdin({"user_prompt": "continue with the next task"})
+        with (
+            mock.patch.object(sys, "stdin", stdin),
+            mock.patch("route_usage.os.isatty", return_value=False),
+            mock.patch.dict(
+                os.environ,
+                {"CLAUDEX_ACTIVE": "1", route_usage.AGMSG_AUTO_MONITOR_ENV: ""},
+                clear=False,
+            ),
+        ):
+            self.assertFalse(route_usage.block_internal_notification_from_hook())
 
     @mock.patch("route_usage.qwen_quota_refresh_due", return_value=False)
     @mock.patch("route_usage.collect_usage")
