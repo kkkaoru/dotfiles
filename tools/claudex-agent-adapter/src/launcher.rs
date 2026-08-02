@@ -25,6 +25,7 @@ mod preflight;
 mod program_identity;
 mod recovery;
 mod recovery_manifest;
+mod resume;
 use crate::{
     ADAPTER_PROTOCOL_VERSION, agent_backend::BackendRoute, app_server, subagent_policy as policy,
     working_directory,
@@ -40,6 +41,7 @@ use handover::ServiceState;
 #[cfg(test)]
 use health::Health;
 use health::{authenticates, fetch_health, wait_until_ready, wait_until_recovery_ready};
+use resume::{prepare_arguments, session_id_for_launch};
 
 const LOCAL_TOKEN: &str = "claudex-local";
 const START_TIMEOUT: Duration = Duration::from_secs(10);
@@ -167,8 +169,12 @@ pub async fn run_claude(
     // Reject invalid launch policy before creating a reusable daemon.
     let policy_header = policy::active_header()?;
     let base_url = ensure_config_running(&config).await?;
-    let program = std::env::var_os("CLAUDEX_CLAUDE_PROGRAM").unwrap_or_else(|| "claude".into());
     let cwd = std::env::current_dir().context("resolve Claude Code working directory")?;
+    let arguments = prepare_arguments(arguments, &cwd);
+    let session_id = session_id_for_launch(&arguments, || {
+        format!("session_{}", Uuid::new_v4().simple())
+    });
+    let program = std::env::var_os("CLAUDEX_CLAUDE_PROGRAM").unwrap_or_else(|| "claude".into());
     let custom_headers = working_directory::custom_headers(
         std::env::var_os("ANTHROPIC_CUSTOM_HEADERS").as_deref(),
         &cwd,
@@ -186,10 +192,7 @@ pub async fn run_claude(
             .env("ANTHROPIC_BASE_URL", base_url)
             .env("ANTHROPIC_AUTH_TOKEN", &config.token)
             .env("CLAUDE_CODE_WEBSEARCH_USE_CCR_PROXY", "1")
-            .env(
-                "CLAUDE_CODE_SESSION_ID",
-                format!("session_{}", Uuid::new_v4().simple()),
-            )
+            .env("CLAUDE_CODE_SESSION_ID", session_id)
             .env("CLAUDE_CODE_SESSION_ACCESS_TOKEN", &config.token)
             .env("ANTHROPIC_CUSTOM_HEADERS", custom_headers)
             .env_remove("ANTHROPIC_API_KEY")

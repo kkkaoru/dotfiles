@@ -619,6 +619,12 @@ fish functionを経由しない場合は必要な環境変数をshell側で設�
 `subscription-max-processes` を既定で20、`subscription-timeout-minutes` を120に揃えます。実行中のsessionには
 反映されないため、上限変更後は新しいsessionを起動してください。
 
+resume対象の履歴にClaude Code自身の `Subagent spawn limit reached (.. of ..)` が残っている場合、
+`claudex` は履歴を保持したまま `--fork-session` を自動付与して新しいsession IDで継続します。
+これにより古いsessionに保存された上限値を再利用せず、元のresume履歴も削除しません。通常のresumeは
+そのまま同じsession IDを使います。自動forkを明示的に無効化する場合だけ
+`CLAUDEX_AUTO_FORK_SPAWN_LIMIT_RESUME=0 claudex --resume <id>` を指定してください。
+
 SubAgentの累積起動数はセッション単位で台帳化します。各起動の `agentId` / `agent_id`、モデル、
 promptから抽出した作業scope、active/completed状態を紐付けて管理し、次の作業ではscopeが最も近い
 recipientを動的に選びます。既存の `agentId` / `agent_id` は
