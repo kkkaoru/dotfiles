@@ -118,7 +118,10 @@ fn notification_text_from_content(content: &Value) -> Option<String> {
     }
     let body = lifecycle_body(&text, "task-notification")?;
     let mut parts = Vec::new();
-    for field in ["summary", "result", "status"] {
+    // Claude Code renders status in its task panel. Only the user-facing
+    // summary and result belong in the assistant turn; exposing `completed`
+    // or `stopped` as prose leaks transport metadata into the main session.
+    for field in ["summary", "result"] {
         if let Some(value) = xml_field(body, field)
             && !value.trim().is_empty()
             && !parts.iter().any(|part: &String| part == value.trim())
@@ -213,6 +216,7 @@ mod tests {
         assert!(!text.contains("task-notification"));
         assert!(text.contains("Agent \"worker\" finished"));
         assert!(text.contains("worker result"));
+        assert!(!text.contains("completed"));
         assert!(!text.contains("internal"));
     }
 }

@@ -254,7 +254,7 @@ async fn pure_async_agent_launch_results_return_control_without_task_output_rela
     assert_eq!(handoff["stop_reason"], "end_turn");
     assert_eq!(
         handoff["content"][0]["text"],
-        "Background agent launched; the main prompt is ready."
+        "3 background agents launched; the main prompt is ready."
     );
     assert!(!handoff.to_string().contains("agent-message"));
     assert!(
@@ -309,7 +309,7 @@ async fn accepts_main_input_after_background_handoff_and_keeps_task_retrievable(
     assert_eq!(handoff["stop_reason"], "end_turn");
     assert_eq!(
         handoff["content"][0]["text"],
-        "Background agent launched; the main prompt is ready."
+        "3 background agents launched; the main prompt is ready."
     );
     assert!(!handoff.to_string().contains("agent-message"));
 

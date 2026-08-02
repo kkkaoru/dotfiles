@@ -315,10 +315,15 @@ Agent/Task, then returns to the main session for integration.
 
 The adapter's `ensure` command compares the running service's protocol, routes,
 limits, and source-derived build ID with the installed binary. A per-port
-cross-process lock serializes concurrent launchers. On a mismatch, `ensure` sends
-SIGTERM so the old listener is released, starts the current build on the same
-address, and lets already accepted responses finish on the old process. Readiness
-requires the current build ID, matching configuration, and successful authentication.
+cross-process lock serializes concurrent launchers. When the listener is idle,
+`ensure` sends SIGTERM so the old listener is released, starts the current build
+on the same address, and lets already accepted responses finish on the old
+process. If the old listener is busy, it is never interrupted: `ensure` starts
+or reuses a current-build loopback fallback listener and returns that URL for the
+new Claude Code process. The fallback state is persisted under `~/.cache/claudex`
+so repeated launches do not accumulate daemons. Existing sessions remain on their
+original generation until they are resumed in a new process. Readiness requires
+the current build ID, matching configuration, and successful authentication.
 This handover replaces idle retained sessions without waiting for their retention
 window and does not interrupt in-flight HTTP responses.
 `launch --model MODEL -- ...` scopes Anthropic routing,

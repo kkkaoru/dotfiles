@@ -17,6 +17,7 @@ mod claude_process;
 mod daemon_arguments;
 mod daemon_process;
 mod daemon_start;
+mod fallback;
 mod handover;
 mod health;
 mod launcher_lock;
@@ -276,10 +277,12 @@ async fn ensure_config_running(config: &ServiceConfig) -> Result<String> {
             active_provider_turns,
         } => {
             eprintln!(
-                "claudex: retaining active adapter pid {:?}; deferring daemon handover ({} HTTP request(s), {} provider turn(s))",
+                "claudex: retaining active adapter pid {:?}; routing this new session to a current-build listener ({} HTTP request(s), {} provider turn(s))",
                 pid, active_http_requests, active_provider_turns
             );
-            return Ok(config.base_url());
+            return fallback::ensure_current_generation(&client, config)
+                .await
+                .context("start current-build listener while stale adapter is active");
         }
         ServiceState::Replace {
             pid,

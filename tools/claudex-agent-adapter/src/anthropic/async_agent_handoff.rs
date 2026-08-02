@@ -10,6 +10,15 @@ use super::{
 };
 const ASYNC_LAUNCH_PREFIX: &str = "Async agent launched successfully.";
 const BACKGROUND_MARKER: &str = "The agent is working in the background.";
+
+fn background_handoff_text(launch_count: usize) -> String {
+    if launch_count == 1 {
+        "Background agent launched; the main prompt is ready.".to_owned()
+    } else {
+        format!("{launch_count} background agents launched; the main prompt is ready.")
+    }
+}
+
 impl Bridge {
     pub(super) async fn async_agent_launch_handoff(
         &self,
@@ -32,10 +41,8 @@ impl Bridge {
         // required: an empty end_turn makes Claude Code inject a synthetic
         // "previous response had no visible output" user message and start a
         // duplicate provider turn, which queues the next user input.
-        Some(internal_notification::acknowledge_with_text(
-            request,
-            "Background agent launched; the main prompt is ready.",
-        ))
+        let text = background_handoff_text(launches.len());
+        Some(internal_notification::acknowledge_with_text(request, &text))
     }
     async fn cancel_handed_off_provider_session(&self, results: &[ToolResult]) -> bool {
         let Some(session) = self.find_result_session(results).await else {
@@ -311,6 +318,18 @@ mod tests {
         assert!(body.contains("main prompt is ready"));
         assert!(body.contains(r#""stop_reason":"end_turn""#));
         assert!(body.contains("event: message_stop"));
+    }
+
+    #[test]
+    fn background_handoff_text_matches_the_native_launch_count() {
+        assert_eq!(
+            background_handoff_text(1),
+            "Background agent launched; the main prompt is ready."
+        );
+        assert_eq!(
+            background_handoff_text(3),
+            "3 background agents launched; the main prompt is ready."
+        );
     }
 }
 
