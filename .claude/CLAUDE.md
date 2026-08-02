@@ -34,9 +34,10 @@
   Do not add `TaskList`, `TaskCreate`, or `TaskUpdate` round trips solely to prepare delegation; use
   task tracking only when the work itself needs persistent dependency tracking.
 - When launching several independent workers, treat unknown or potentially long-running work as
-  asynchronous: emit every Agent/Task call in one background batch (`run_in_background: true`) so
-  one slow worker cannot hold the main turn or delay already-completed peers; integrate each
-  completed result without waiting for the slowest worker. Use foreground only
+  asynchronous: emit each Agent/Task call as its own native background launch
+  (`run_in_background: true`). Multiple launches may be emitted in the same assistant response,
+  but never wrap them in an adapter-only batch or hold one result until the slowest worker; integrate each
+  completed result independently. Use foreground only
   for short, bounded work whose result is required before the next main action, or when the active
   user explicitly requests synchronous completion. Do not use a foreground batch merely to gather
   all results. After background launches succeed, immediately start a concrete independent action
@@ -54,13 +55,14 @@
   to one ordinary worker merely because it is convenient. `custom-advisor` is a separate logical
   session singleton/capacity channel and is excluded from ordinary-worker counts; built-in
   `advisor()` remains independent of worker capacity.
-- Do not mix a long-running foreground worker into a background worker batch: it still holds the
-  main session until its slowest foreground result returns. If an interactive permission really
-  requires foreground execution, restrict it to that short permission-dependent operation and
-  launch all other independent work in a separate background batch.
+- Do not mix a long-running foreground worker into asynchronous background launches: it still
+  holds the main session until its slowest foreground result returns. If an interactive permission
+  really requires foreground execution, restrict it to that short permission-dependent operation
+  and launch all other independent work as separate native background calls.
 - When launching multiple independent workers, emit every intended Agent/Task call in the same
-  assistant response and tool round. Never launch one and defer the rest. Do not announce a worker
-  count unless that same response contains exactly that many launch calls.
+  assistant response and tool round, while keeping each call and lifecycle independent. Never
+  launch one and defer the rest, and never use an adapter-only batch wrapper. Do not announce a
+  worker count unless that same response contains exactly that many launch calls.
 - Start as many SubAgents as useful for real parallelism or independent context. Before shutting
   down, abandoning, or replacing one, weigh likely follow-ups and potential prompt-prefix/cache
   reuse against slot and resource pressure. For a compatible follow-up, reuse compatible workers with

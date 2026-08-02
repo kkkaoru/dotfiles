@@ -434,7 +434,12 @@ class RoutingTests(unittest.TestCase):
             self.assertIn("parallel capacity", instructions, path)
             self.assertIn("user-visible status", instructions, path)
             self.assertIn("unknown or potentially long-running", instructions, path)
-            self.assertIn("without waiting for the slowest worker", instructions, path)
+            self.assertTrue(
+                "without waiting for the slowest worker" in instructions
+                or "hold one result until the slowest worker" in instructions,
+                path,
+            )
+            self.assertIn("never use an adapter-only batch wrapper", instructions, path)
             self.assertIn("subagent_type: custom-advisor", instructions, path)
             self.assertIn("claudex_model: claude-fable-5", instructions, path)
             self.assertIn("claudex_effort: xhigh", instructions, path)
@@ -447,12 +452,14 @@ class RoutingTests(unittest.TestCase):
             self.assertIn("min(independent scopes", lowered, path)
             self.assertIn("one indivisible scope", lowered, path)
             self.assertIn("do not manufacture", lowered, path)
-            self.assertIn(
-                "reuse compatible workers with sendmessage", lowered, path
+            self.assertTrue(
+                "reuse compatible workers with native agent/task results" in lowered
+                or "reuse compatible workers through native agent/task results" in lowered,
+                path,
             )
             self.assertIn("instead of churning processes", lowered, path)
             self.assertIn(
-                "foreground worker into a background worker batch", normalized, path
+                "foreground worker into asynchronous background launches", normalized, path
             )
             self.assertIn("re-evaluate the active set", normalized, path)
             for obsolete in (

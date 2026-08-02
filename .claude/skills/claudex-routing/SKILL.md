@@ -56,8 +56,9 @@ retained.
    worker. A nested launch must use the current selected worker's agent and exact model/effort; it
    must not default to generic `claude` or blindly inherit its parent's provider route.
    For several independent workers, treat unknown or potentially long-running work as asynchronous:
-   emit every call in one background batch (`run_in_background: true`) so a slow worker cannot hold
-   the main turn or delay peers that already finished. Use foreground only for short, bounded work
+   emit each Agent/Task call as its own native background launch (`run_in_background: true`).
+   Multiple launches may be emitted in the same assistant response, but never wrap them in an
+   adapter-only batch or hold peers that already finished. Use foreground only for short, bounded work
    whose result is required before the next main action, or when the active user explicitly asks for
    synchronous completion. Do not use a foreground batch merely to gather all results. After a
    background launch, immediately start a concrete independent action or end the turn with a concise
@@ -71,12 +72,13 @@ retained.
    a dependency cannot be resolved from a completion event. If a task is still processing, preserve
    its task id and continue independent work; never retry or relaunch it solely because completion
    is delayed.
-   Do not mix a long-running foreground worker into a background worker batch: it still holds the
-   main session until its slowest foreground result returns. When an interactive permission really
-   requires foreground execution, restrict it to that short permission-dependent operation and
-   launch all other independent work separately in the background.
-   Emit every intended independent Agent/Task call in the same assistant response and tool round;
-   never launch one and defer the rest. Do not announce a worker count unless that same response
+   Do not mix a long-running foreground worker into asynchronous background launches: it still
+   holds the main session until its slowest foreground result returns. When an interactive permission
+   really requires foreground execution, restrict it to that short permission-dependent operation
+   and launch all other independent work as separate native background calls.
+   Emit every intended independent Agent/Task call in the same assistant response and tool round,
+   while keeping each call and lifecycle independent; never use an adapter-only batch wrapper.
+   Never launch one and defer the rest. Do not announce a worker count unless that same response
    contains exactly that many launch calls.
 4. Use the configured fallback only when every capacity-managed provider is unavailable. If that
    fallback is `claudex-sonnet` and the outer session already uses Sonnet 5, suppress automatic
