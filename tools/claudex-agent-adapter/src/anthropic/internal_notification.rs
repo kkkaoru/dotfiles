@@ -14,6 +14,45 @@ use serde_json::{Value, json};
 use super::{MessagesRequest, Segment, Usage, WebEvidenceSummary, content::anthropic_response};
 use super::{content::sse, stream::message_start};
 
+/// Remove pure Claude Code lifecycle notifications from the transcript before
+/// it is reconstructed for a provider turn. Claude Code delivers these as
+/// user-shaped messages, but they are not user instructions. Keeping them in
+/// the transcript both inflates context and makes a delayed notification look
+/// like a new user turn to a routed provider.
+pub(super) fn remove_from_transcript(request: &mut MessagesRequest) {
+    let messages = std::mem::take(&mut request.messages);
+    request.messages = messages
+        .into_iter()
+        .filter_map(|mut message| {
+            if message.get("role").and_then(Value::as_str) != Some("user") {
+                return Some(message);
+            }
+            let Some(content) = message.get("content").cloned() else {
+                return Some(message);
+            };
+            if is_internal_notification_content(&content) {
+                return None;
+            }
+            let Value::Array(blocks) = content else {
+                return Some(message);
+            };
+            let block_count = blocks.len();
+            let filtered = blocks
+                .into_iter()
+                .filter(|block| !is_internal_text_block(block))
+                .collect::<Vec<_>>();
+            if filtered.is_empty() {
+                None
+            } else if filtered.len() != block_count {
+                message["content"] = Value::Array(filtered);
+                Some(message)
+            } else {
+                Some(message)
+            }
+        })
+        .collect();
+}
+
 pub(super) fn is_internal_notification_request(request: &MessagesRequest) -> bool {
     request
         .messages
@@ -37,12 +76,19 @@ fn is_internal_notification_content(content: &Value) -> bool {
     }
 }
 
+fn is_internal_text_block(block: &Value) -> bool {
+    block.get("type").and_then(Value::as_str) == Some("text")
+        && block
+            .get("text")
+            .and_then(Value::as_str)
+            .is_some_and(is_internal_notification_text)
+}
+
 fn is_internal_notification_text(text: &str) -> bool {
     let text = text.trim();
     [
         ("<agent-message", "</agent-message>"),
         ("<task-notification", "</task-notification>"),
-        ("<teammate-message", "</teammate-message>"),
     ]
     .into_iter()
     .any(|(opening, closing)| text.starts_with(opening) && text.contains(closing))
@@ -126,6 +172,48 @@ mod tests {
             "tool_use_id":"toolu_internal",
             "content":"<agent-message>result</agent-message>"
         }]))));
+    }
+
+    #[test]
+    fn removes_internal_history_and_keeps_real_user_blocks() {
+        let mut request = request(json!([{
+            "type":"text",
+            "text":"real instruction"
+        }]));
+        request.messages = vec![
+            json!({"role":"user","content":"first instruction"}),
+            json!({"role":"user","content":"<agent-message from=\"worker\">done</agent-message>"}),
+            json!({"role":"user","content":[
+                {"type":"text","text":"<task-notification>done</task-notification>"},
+                {"type":"text","text":"latest instruction"}
+            ]}),
+        ];
+
+        remove_from_transcript(&mut request);
+
+        assert_eq!(request.messages.len(), 2);
+        assert_eq!(request.messages[0]["content"], "first instruction");
+        assert_eq!(
+            request.messages[1]["content"][0]["text"],
+            "latest instruction"
+        );
+    }
+
+    #[test]
+    fn preserves_teammate_wrappers_that_carry_a_subagent_prompt() {
+        let mut request = request(
+            "<teammate-message>Use the assigned model and report the result.</teammate-message>"
+                .into(),
+        );
+
+        remove_from_transcript(&mut request);
+
+        assert_eq!(request.messages.len(), 1);
+        assert!(
+            request.messages[0]["content"]
+                .as_str()
+                .is_some_and(|text| text.contains("Use the assigned model"))
+        );
     }
 
     #[tokio::test]
