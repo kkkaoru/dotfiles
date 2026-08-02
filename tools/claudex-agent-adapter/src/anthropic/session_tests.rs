@@ -746,6 +746,8 @@ fn assert_developer_guidance(developer: &str) {
         "set run_in_background=true on every launch in the single batch",
         "Do not mix foreground and background launches in one batch",
         "end the current turn promptly instead of reasoning while waiting",
+        "never wait for every background task before accepting another user instruction",
+        "never call TaskOutput or TaskGet merely to drain pending notifications",
     ];
     for phrase in REQUIRED {
         assert!(
@@ -832,6 +834,8 @@ fn subscription_prompt_requires_atomic_parallel_launches() {
     assert!(prompt.contains("Do not mix foreground and background launches"));
     assert!(prompt.contains("queued to a busy worker does not add parallel capacity"));
     assert!(prompt.contains("end the turn promptly with concise user-visible status"));
+    assert!(prompt.contains("never wait for every background task before accepting another user instruction"));
+    assert!(prompt.contains("never call TaskOutput or TaskGet merely to drain pending notifications"));
     assert!(
         prompt
             .contains("main session must control parallel distribution across multiple SubAgents")

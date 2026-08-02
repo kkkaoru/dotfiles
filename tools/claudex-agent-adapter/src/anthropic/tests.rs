@@ -45,6 +45,9 @@ fn bridge_requires_atomic_parallel_subagent_launches() {
             .contains("invoke Claude Code's supplied dynamic SubAgent tool directly")
     );
     assert!(SUBAGENT_RESULT_PROTOCOL.contains("TaskOutput(task_id)"));
+    assert!(SUBAGENT_RESULT_PROTOCOL.contains("never wait for every background task"));
+    assert!(SUBAGENT_RESULT_PROTOCOL.contains("accepting another user instruction"));
+    assert!(SUBAGENT_RESULT_PROTOCOL.contains("never call TaskOutput or TaskGet merely to drain"));
     assert!(
         SUBAGENT_RESULT_PROTOCOL
             .contains("Do not send ordinary worker results or progress through SendMessage")

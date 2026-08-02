@@ -33,7 +33,8 @@
   task tracking only when the work itself needs persistent dependency tracking.
 - When launching several independent workers, treat unknown or potentially long-running work as
   asynchronous: emit every Agent/Task call in one background batch (`run_in_background: true`) so
-  one slow worker cannot hold the main turn or delay already-completed peers. Use foreground only
+  one slow worker cannot hold the main turn or delay already-completed peers; integrate each
+  completed result without waiting for the slowest worker. Use foreground only
   for short, bounded work whose result is required before the next main action, or when the active
   user explicitly requests synchronous completion. Do not use a foreground batch merely to gather
   all results. After background launches succeed, immediately start a concrete independent action
