@@ -31,10 +31,11 @@ pub const AGENT_LABELS: [&str; 3] = [
     "synthetic-native-beta",
     "synthetic-native-gamma",
 ];
+const LIVE_AGENT_LABEL: &str = "synthetic-native-probe";
+const LIVE_AGENT_MARKER: &str = "NATIVE_AGENT_RESULT_CONFIRMED";
 const NESTED_AGENT_LABEL: &str = "synthetic-nested-delta";
 const WEB_EVIDENCE_URL: &str = "https://www.rfc-editor.org/rfc/rfc9110";
 const WEB_EVIDENCE_MARKER: &str = "RFC9110_WEB_CONFIRMED";
-const CONTROL_EVIDENCE_MARKER: &str = "CONTROL_SENT_WITHOUT_STOP";
 const NESTED_EVIDENCE_MARKER: &str = "NESTED_AGENT_CONFIRMED";
 const CONTEXT_LIMIT_FAILURE: &str = "Context limit reached";
 
@@ -185,6 +186,46 @@ pub fn has_tasks_evidence(text: &str) -> bool {
         && ["running", "inprogress", "background", "finished"]
             .iter()
             .any(|state| text.contains(state))
+}
+
+pub fn has_live_panel_evidence(text: &str) -> bool {
+    let text = canonical_match_text(text);
+    text.contains(&canonical_match_text(LIVE_AGENT_LABEL))
+        && (text.contains("backgroundedagent")
+            || text.contains("backgroundagent")
+            || text.contains("backgroundagentslaunched")
+            || text.contains("agentslaunched")
+            || text.contains("agentsfinished")
+            || text.contains("finished")
+            || text.contains("workermodel"))
+}
+
+pub fn has_live_tasks_evidence(text: &str) -> bool {
+    let text = canonical_match_text(text);
+    text.contains(&canonical_match_text(LIVE_AGENT_LABEL))
+        && (text.contains("localagents(1)") || text.contains("1activeagent"))
+        && [
+            "running",
+            "inprogress",
+            "background",
+            "finished",
+            "completed",
+        ]
+        .iter()
+        .any(|state| text.contains(state))
+}
+
+fn has_assistant_text(text: &str, marker: &str) -> bool {
+    text.rfind('⏺')
+        .is_some_and(|assistant_start| text[assistant_start..].contains(marker))
+}
+
+fn has_live_idle_prompt(text: &str) -> bool {
+    let canonical = canonical_match_text(text);
+    has_live_panel_evidence(text)
+        && has_interactive_prompt(text)
+        && !canonical.contains("waitingfor")
+        && !canonical.contains("esctointerrupt")
 }
 
 fn has_interactive_prompt(text: &str) -> bool {
@@ -989,41 +1030,51 @@ fn shell_quote(value: &OsStr) -> String {
     format!("'{}'", value.to_string_lossy().replace('\'', "'\\''"))
 }
 
-pub fn launch_prompt() -> String {
+pub fn live_launch_prompt() -> String {
     format!(
-        "Use exactly three native Agent tool calls with run_in_background=true, one each with subagent_type `claudex-gpt-spark`, `claudex-grok`, and `claudex-qwen`. Give them the descriptions `{}`, `{}`, and `{}`. Alpha must actually use WebSearch for RFC 9110 on rfc-editor.org, obtain `{WEB_EVIDENCE_URL}`, then run `/bin/sleep 45` and return `{WEB_EVIDENCE_MARKER}` plus that URL. Beta must run `/bin/sleep 45` and then follow any queued user change before returning its matching label. Gamma must itself launch one native child Agent described `{NESTED_AGENT_LABEL}`; that child runs `/bin/sleep 15` and returns `{NESTED_AGENT_LABEL}`. Gamma must obtain the child result, run `/bin/sleep 30`, and return `{NESTED_EVIDENCE_MARKER}` plus `{NESTED_AGENT_LABEL}`. As soon as all three top-level async launch results are available, end the main turn immediately without waiting for task completion.",
-        AGENT_LABELS[0], AGENT_LABELS[1], AGENT_LABELS[2]
+        "Use exactly one native Agent tool call with run_in_background=true and subagent_type `claudex-qwen`. Set its description to `{LIVE_AGENT_LABEL}`. It must run `/bin/sleep 45` and then return `{LIVE_AGENT_MARKER}`. Do not use SendMessage, a name field, or any other agent. As soon as the background launch result is available, end the main turn without waiting for task completion."
     )
 }
 
-fn verify_control_and_child_evidence(
+fn verify_live_agent_control(
     session: &mut PtySession,
     config: &AcceptanceConfig,
 ) -> Result<(), String> {
-    let control = session.mark();
-    session.send_line(&format!(
-        "Send a native follow-up message to the running task `{}`. Change only its final result by appending `USER_CHANGE_APPLIED`; do not stop it or either other task. After the native control tool succeeds, reply with only `{CONTROL_EVIDENCE_MARKER}`.",
-        AGENT_LABELS[1]
-    ))?;
+    let response = session.mark();
+    session.send_line(
+        "The native background Agent is still running. Answer the main user request now: compute the sum of 314159 and 271828 and reply with only 585987. Do not stop or replace the Agent.",
+    )?;
     session.wait_for(
-        control,
+        response,
         config.response_timeout,
-        "user-directed native Agent change",
-        |text| text.contains(CONTROL_EVIDENCE_MARKER),
+        "main prompt response while native Agent is active",
+        |text| has_assistant_text(text, "585987"),
     )?;
 
-    let evidence = session.mark();
-    session.send_line(&format!(
-        "Wait for the native results of `{}` and `{}` without launching replacement tasks. Reply with `{WEB_EVIDENCE_MARKER} {WEB_EVIDENCE_URL} {NESTED_EVIDENCE_MARKER} {NESTED_AGENT_LABEL}` only after their returned results independently prove the WebSearch and nested child completed. Do not perform WebSearch in the main session.",
-        AGENT_LABELS[0], AGENT_LABELS[2]
-    ))?;
+    let tasks = session.mark();
+    session
+        .send_line("Show the current native Agent state with /tasks, then return to the prompt.")?;
     session.wait_for(
-        evidence,
-        config.launch_timeout,
-        "SubAgent WebSearch and nested Agent completion",
-        has_web_and_nested_evidence,
+        tasks,
+        config.response_timeout,
+        "/tasks native Agent state",
+        has_live_tasks_evidence,
     )?;
-    Ok(())
+    session.send_escape()?;
+    thread::sleep(Duration::from_millis(150));
+
+    let result = session.mark();
+    session.send_line(&format!(
+        "Retrieve the exact result of the already-running native Agent `{LIVE_AGENT_LABEL}` without launching a replacement. Reply with `{LIVE_AGENT_MARKER}` only after its result is available."
+    ))?;
+    session
+        .wait_for(
+            result,
+            config.launch_timeout,
+            "native Agent completion result",
+            |text| has_assistant_text(text, LIVE_AGENT_MARKER),
+        )
+        .map(|_| ())
 }
 
 fn compact_resumed_session(
@@ -1107,46 +1158,22 @@ pub fn run_acceptance(config: &AcceptanceConfig) -> Result<String, String> {
         compact_resumed_session(&mut session, config)?;
 
         let launch = session.mark();
-        session.send_line(&launch_prompt())?;
+        session.send_line(&live_launch_prompt())?;
         session.wait_for(
             launch,
             config.launch_timeout,
             "native Agent panel",
-            has_native_panel_evidence,
-        )?;
-        let prompt = session.mark();
-        session.wait_for(
-            prompt,
-            config.launch_timeout,
-            "prompt return after launch",
-            |text| text.contains('❯'),
+            has_live_idle_prompt,
         )?;
 
-        let tasks = session.mark();
-        session.send_line("/tasks")?;
-        session.wait_for(
-            tasks,
-            config.response_timeout,
-            "/tasks native Agent state",
-            has_tasks_evidence,
-        )?;
-        session.send_escape()?;
-        thread::sleep(Duration::from_millis(150));
-
-        let response = session.mark();
-        session.send_line("Compute the sum of 314159 and 271828. Reply with only the number.")?;
-        session.wait_for(
-            response,
-            config.response_timeout,
-            "main prompt response",
-            |text| text.contains("585987"),
-        )?;
-
-        verify_control_and_child_evidence(&mut session, config)?;
+        verify_live_agent_control(&mut session, config)?;
+        let visible = session.capture.all_text();
+        if visible.contains("<agent-message") || visible.contains("<task-notification") {
+            return Err("native UI exposed an internal agent lifecycle tag".to_owned());
+        }
         session.assert_no_known_failure()?;
         Ok(format!(
-            "Claude Code {version}; native panel, /tasks, responsive main prompt, user-directed change, SubAgent WebSearch, and nested Agent verified for {} agents{}",
-            AGENT_LABELS.len(),
+            "Claude Code {version}; native panel, /tasks, responsive main prompt, completion result, and hidden lifecycle tags verified for one Agent{}",
             if config.resume_id.is_some() {
                 " after resume"
             } else {
@@ -1308,6 +1335,20 @@ mod tests {
             "Use three agents with descriptions {} {} {} and report results",
             AGENT_LABELS[0], AGENT_LABELS[1], AGENT_LABELS[2]
         )));
+    }
+
+    #[test]
+    fn live_panel_evidence_accepts_native_single_agent_status_rendering() {
+        assert!(has_live_panel_evidence(
+            r#"synthetic-native-probe
+            ⎿ Backgrounded agent (↓ to manage · ctrl+o to expand)"#
+        ));
+        assert!(has_live_panel_evidence(
+            r#"Agent "synthetic-native-probe" finished · 55s"#
+        ));
+        assert!(!has_live_panel_evidence(
+            "The prompt mentions synthetic-native-probe but no native agent status"
+        ));
     }
 
     #[test]

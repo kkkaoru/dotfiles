@@ -5,14 +5,13 @@
 //! them through provider routing would make the next interactive prompt wait
 //! behind an unnecessary turn.
 
-use axum::{
-    body::Body,
-    http::{Response, StatusCode, header},
-};
-use serde_json::{Value, json};
+use serde_json::Value;
 
-use super::{MessagesRequest, Segment, Usage, WebEvidenceSummary, content::anthropic_response};
-use super::{content::sse, stream::message_start};
+use super::MessagesRequest;
+
+mod ack;
+
+pub(super) use ack::{acknowledge, acknowledge_with_text};
 
 /// Remove pure Claude Code lifecycle notifications from the transcript before
 /// it is reconstructed for a provider turn. Claude Code delivers these as
@@ -94,31 +93,29 @@ fn is_empty_user_content(content: &Value) -> bool {
 fn is_internal_notification_content(content: &Value) -> bool {
     match content {
         Value::String(text) => is_internal_notification_text(text),
-        Value::Array(blocks) if !blocks.is_empty() => {
-            let mut found_notification = false;
-            for block in blocks {
-                let Some(text) = block
-                    .get("text")
-                    .filter(|_| block.get("type").and_then(Value::as_str) == Some("text"))
-                    .and_then(Value::as_str)
-                else {
-                    return false;
-                };
+        Value::Array(blocks) if !blocks.is_empty() => blocks
+            .iter()
+            .try_fold(false, |found_notification, block| {
+                let text = text_block(block)?;
                 if text.trim().is_empty() || is_monitor_hint_text(text) {
-                    continue;
+                    return Some(found_notification);
                 }
                 if is_internal_notification_text(text) {
-                    found_notification = true;
-                    continue;
+                    return Some(true);
                 }
                 // A real user instruction after a lifecycle block must remain
                 // a normal turn rather than being swallowed as a notification.
-                return false;
-            }
-            found_notification
-        }
+                None
+            })
+            .is_some_and(|found_notification| found_notification),
         _ => false,
     }
+}
+
+fn text_block(block: &Value) -> Option<&str> {
+    (block.get("type").and_then(Value::as_str) == Some("text"))
+        .then(|| block.get("text").and_then(Value::as_str))
+        .flatten()
 }
 
 fn is_internal_text_block(block: &Value) -> bool {
@@ -151,48 +148,8 @@ fn is_monitor_hint_text(text: &str) -> bool {
         .starts_with("If this event is something the user would act on now")
 }
 
-/// Return an empty end-turn response without opening a provider turn.
-pub(super) fn acknowledge(request: &MessagesRequest) -> Response<Body> {
-    let input_tokens = u64::try_from(super::token_count(request)).unwrap_or(u64::MAX);
-    if !request.stream {
-        return anthropic_response(
-            Segment {
-                blocks: Vec::new(),
-                stop_reason: "end_turn",
-                usage: Usage {
-                    input_tokens,
-                    ..Usage::default()
-                },
-                web_evidence: WebEvidenceSummary::default(),
-            },
-            &request.model,
-        );
-    }
-    let body = [
-        message_start(&request.model, input_tokens),
-        sse(
-            "message_delta",
-            json!({
-                "type":"message_delta",
-                "delta":{"stop_reason":"end_turn","stop_sequence":null},
-                "usage":{"output_tokens":0}
-            }),
-        ),
-        sse("message_stop", json!({"type":"message_stop"})),
-    ]
-    .concat();
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "text/event-stream")
-        .header(header::CACHE_CONTROL, "no-cache")
-        .header("x-accel-buffering", "no")
-        .body(Body::from(body))
-        .expect("valid internal notification response")
-}
-
 #[cfg(test)]
 mod tests {
-    use axum::body::to_bytes;
     use serde_json::json;
 
     use super::*;
@@ -362,25 +319,5 @@ mod tests {
                 .as_str()
                 .is_some_and(|text| text.contains("Use the assigned model"))
         );
-    }
-
-    #[tokio::test]
-    async fn acknowledges_internal_notification_without_echoing_it() {
-        let request =
-            request("<agent-message from=\"general-purpose\">worker output</agent-message>".into());
-        let response = acknowledge(&request);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let body = String::from_utf8(body.to_vec()).unwrap();
-        assert!(!body.contains("agent-message"));
-        assert!(body.contains("\"stop_reason\":\"end_turn\""));
-
-        let mut streaming = request;
-        streaming.stream = true;
-        let response = acknowledge(&streaming);
-        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        let body = String::from_utf8(body.to_vec()).unwrap();
-        assert!(!body.contains("agent-message"));
-        assert!(body.contains("message_delta"));
-        assert!(body.contains("message_stop"));
     }
 }

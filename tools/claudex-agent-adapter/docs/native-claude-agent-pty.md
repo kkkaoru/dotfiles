@@ -5,8 +5,8 @@ the default CI suite because it requires local authentication and live model pro
 
 The harness is pinned to Claude Code `2.1.220`. It verifies:
 
-- three distinct synthetic native background Agents appear in the prompt Agent panel;
-- `/tasks` shows those same tasks with an observable state;
+- one synthetic native background Agent appears in the prompt Agent panel;
+- `/tasks` shows that task with an observable state;
 - the main prompt accepts and answers a new request while the tasks remain active;
 - known claudex regressions such as empty subscription exits, content-block errors, invisible
   background continuation notices, and Agent request timeouts do not appear.

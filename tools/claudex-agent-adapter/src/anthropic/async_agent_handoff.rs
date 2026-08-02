@@ -28,10 +28,14 @@ impl Bridge {
             "returned control after native Claude Code background Agent launch"
         );
         // Claude Code renders the launch/result in its native task panel from
-        // the tool result. Do not add adapter-owned assistant narration: an
-        // empty end_turn keeps the main prompt available without putting a
-        // synthetic status line into the transcript or user-facing queue.
-        Some(internal_notification::acknowledge(request))
+        // the tool result. A visible, concise acknowledgement is still
+        // required: an empty end_turn makes Claude Code inject a synthetic
+        // "previous response had no visible output" user message and start a
+        // duplicate provider turn, which queues the next user input.
+        Some(internal_notification::acknowledge_with_text(
+            request,
+            "Background agent launched; the main prompt is ready.",
+        ))
     }
     async fn cancel_handed_off_provider_session(&self, results: &[ToolResult]) -> bool {
         let Some(session) = self.find_result_session(results).await else {
@@ -275,26 +279,36 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn background_handoff_returns_empty_native_end_turn_without_synthetic_text() {
+    async fn background_handoff_returns_visible_native_end_turn_without_lifecycle_tags() {
         let json_request = request(json!([launch_result("one")]));
-        let response = internal_notification::acknowledge(&json_request);
+        let response = internal_notification::acknowledge_with_text(
+            &json_request,
+            "Background agent launched; the main prompt is ready.",
+        );
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
         let body: Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(body["stop_reason"], "end_turn");
-        assert_eq!(body["content"], json!([]));
-        assert!(!body.to_string().contains("Claude Code started"));
+        assert_eq!(
+            body["content"][0]["text"],
+            "Background agent launched; the main prompt is ready."
+        );
+        assert!(!body.to_string().contains("agent-message"));
 
         let mut stream_request = json_request;
         stream_request.stream = true;
-        let response = internal_notification::acknowledge(&stream_request);
+        let response = internal_notification::acknowledge_with_text(
+            &stream_request,
+            "Background agent launched; the main prompt is ready.",
+        );
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .unwrap();
         let body = String::from_utf8(body.to_vec()).unwrap();
         assert!(body.contains("event: message_start"));
-        assert!(!body.contains("content_block_delta"));
+        assert!(body.contains("content_block_delta"));
+        assert!(body.contains("main prompt is ready"));
         assert!(body.contains(r#""stop_reason":"end_turn""#));
         assert!(body.contains("event: message_stop"));
     }
