@@ -49,7 +49,9 @@ class ClaudexOrchestrationEnvironmentTests(unittest.TestCase):
                 text=True,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertNotRegex(result.stdout, r"(?m)^ANTHROPIC_")
+            self.assertNotRegex(result.stdout, r"(?m)^ANTHROPIC_(?:BASE_URL|CUSTOM_HEADERS)=")
+            self.assertIn("ANTHROPIC_AUTH_TOKEN=remote-token", result.stdout)
+            self.assertIn("ANTHROPIC_API_KEY=remote-key", result.stdout)
             self.assertIn("BRAVE_API_KEY=keep-for-other-tools", result.stdout)
 
     def test_env_example_keeps_anthropic_gateway_opt_in(self) -> None:
