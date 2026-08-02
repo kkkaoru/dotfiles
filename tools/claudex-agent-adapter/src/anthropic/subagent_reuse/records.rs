@@ -21,14 +21,40 @@ pub(super) fn merge_launches<'a>(
     observed: impl Iterator<Item = &'a LaunchRecord>,
 ) {
     for launch in observed {
-        match launches
-            .iter_mut()
-            .find(|current| current.key == launch.key)
-        {
+        match launches.iter_mut().find(|current| {
+            current.key == launch.key
+                || (same_logical_launch(current, launch) && !terminal_status(&current.status))
+        }) {
             Some(current) => merge_record(current, launch),
             None => launches.push(launch.clone()),
         }
     }
+}
+
+fn same_logical_launch(current: &LaunchRecord, observed: &LaunchRecord) -> bool {
+    if current.scope.is_empty() || observed.scope.is_empty() {
+        return false;
+    }
+    let model_matches = match (&current.model, &observed.model) {
+        (Some(current), Some(observed)) => current == observed,
+        _ => true,
+    };
+    model_matches && normalize_scope(&current.scope) == normalize_scope(&observed.scope)
+}
+
+fn normalize_scope(scope: &str) -> String {
+    scope
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
+}
+
+fn terminal_status(status: &str) -> bool {
+    matches!(
+        status,
+        "completed" | "failed" | "cancelled" | "canceled" | "timeout" | "stopped"
+    )
 }
 
 fn merge_record(current: &mut LaunchRecord, observed: &LaunchRecord) {
@@ -120,16 +146,43 @@ fn launch_record(
 
 pub(super) fn update_status_from_notifications(launches: &mut [LaunchRecord], messages: &[Value]) {
     for message in messages {
-        let Some((task_id, status)) = status_update(message) else {
+        if let Some((task_id, status)) = status_update(message) {
+            set_task_status(launches, &task_id, status);
             continue;
-        };
-        if let Some(launch) = launches
-            .iter_mut()
-            .find(|launch| launch.key == task_id || launch.recipient == task_id)
-        {
-            launch.status = status;
+        }
+        if let Some(recipient) = queued_message_recipient(message) {
+            set_recipient_status(launches, &recipient, "message_queued".to_owned());
         }
     }
+}
+
+fn set_task_status(launches: &mut [LaunchRecord], task_id: &str, status: String) {
+    if let Some(launch) = launches
+        .iter_mut()
+        .find(|launch| launch.key == task_id || launch.recipient == task_id)
+    {
+        launch.status = status;
+    }
+}
+
+fn set_recipient_status(launches: &mut [LaunchRecord], recipient: &str, status: String) {
+    if let Some(launch) = launches
+        .iter_mut()
+        .find(|launch| launch.recipient == recipient)
+    {
+        launch.status = status;
+    }
+}
+
+fn queued_message_recipient(message: &Value) -> Option<String> {
+    let text = value_text(message.get("content"));
+    if !text.contains("had no active task") {
+        return None;
+    }
+    text.split_once("Agent \"")
+        .and_then(|(_, value)| value.split_once('"'))
+        .map(|(recipient, _)| recipient.to_owned())
+        .filter(|recipient| !recipient.is_empty())
 }
 
 fn status_update(message: &Value) -> Option<(String, String)> {

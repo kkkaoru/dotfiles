@@ -54,6 +54,21 @@ mod tests {
         ]
     }
 
+    fn launch_with_scope(tool_use_id: &str, recipient: &str, scope: &str, model: &str) -> Vec<Value> {
+        vec![
+            json!({
+                "role":"assistant",
+                "content":[{
+                    "type":"tool_use",
+                    "id":tool_use_id,
+                    "name":"Agent",
+                    "input":{"prompt":scope,"claudex_model":model}
+                }]
+            }),
+            launch(tool_use_id, recipient),
+        ]
+    }
+
     #[test]
     fn records_recipients_and_persists_across_registry_restart() {
         let root = tempfile::tempdir().expect("reuse registry fixture");
@@ -85,6 +100,115 @@ mod tests {
         );
         registry.observe_and_restore(&mut request);
         assert_eq!(registry.state_for("session-a").expect("state").len(), 1);
+    }
+
+    #[test]
+    fn semantic_duplicate_scope_does_not_create_a_second_worker() {
+        let registry = SubagentReuseRegistry::default();
+        let mut messages = launch_with_scope(
+            "tool-a",
+            "worker-a",
+            "Audit the Rust adapter tests",
+            "worker-model",
+        );
+        messages.extend(launch_with_scope(
+            "tool-b",
+            "worker-b",
+            "  audit   the rust adapter tests  ",
+            "worker-model",
+        ));
+        let mut request = request("session-a", messages);
+        registry.observe_and_restore(&mut request);
+        assert_eq!(registry.state_for("session-a"), Some(vec!["worker-a".to_owned()]));
+    }
+
+    #[test]
+    fn terminal_worker_can_be_relaunched_for_a_new_attempt() {
+        let registry = SubagentReuseRegistry::default();
+        let mut first = request(
+            "session-a",
+            launch_with_scope("tool-a", "worker-a", "Audit the Rust adapter tests", "worker-model"),
+        );
+        registry.observe_and_restore(&mut first);
+        let mut second_messages = launch_with_scope(
+            "tool-b",
+            "worker-b",
+            "Audit the Rust adapter tests",
+            "worker-model",
+        );
+        second_messages.insert(
+            0,
+            json!({"role":"user","content":"<task-id>worker-a</task-id><status>completed</status>"}),
+        );
+        let mut second = request("session-a", second_messages);
+        registry.observe_and_restore(&mut second);
+        assert_eq!(
+            registry.state_for("session-a"),
+            Some(vec!["worker-a".to_owned(), "worker-b".to_owned()])
+        );
+    }
+
+    #[test]
+    fn active_worker_launch_with_same_scope_does_not_create_duplicate() {
+        let registry = SubagentReuseRegistry::default();
+        let mut first = request(
+            "session-a",
+            launch_with_scope("tool-a", "worker-a", "Audit the Rust adapter tests", "worker-model"),
+        );
+        registry.observe_and_restore(&mut first);
+        let mut second = request(
+            "session-a",
+            launch_with_scope("tool-b", "worker-b", "Audit the Rust adapter tests", "worker-model"),
+        );
+        registry.observe_and_restore(&mut second);
+        assert_eq!(
+            registry.state_for("session-a"),
+            Some(vec!["worker-a".to_owned()])
+        );
+    }
+
+    #[test]
+    fn queued_send_message_status_is_preserved_for_reuse() {
+        let registry = SubagentReuseRegistry::default();
+        let mut first = request(
+            "session-a",
+            launch_with_scope("tool-a", "worker-a", "Audit the Rust adapter tests", "worker-model"),
+        );
+        registry.observe_and_restore(&mut first);
+        let mut resumed = request(
+            "session-a",
+            vec![json!({
+                "role":"user",
+                "content":[{"type":"tool_result","tool_use_id":"send-a","content":"Agent \"worker-a\" had no active task; resumed from transcript in the background with your message."}]
+            })],
+        );
+        registry.observe_and_restore(&mut resumed);
+        assert!(resumed.system.to_string().contains("worker-a"));
+        assert!(resumed.system.to_string().contains("message_queued"));
+        assert_eq!(registry.state_for("session-a").expect("state").len(), 1);
+    }
+
+    #[test]
+    fn matching_scope_is_first_in_actual_reuse_guidance() {
+        let registry = SubagentReuseRegistry::default();
+        let mut initial = request(
+            "session-a",
+            [
+                launch_with_scope("tool-a", "worker-css", "Review CSS layout", "css-model"),
+                launch_with_scope("tool-b", "worker-rust", "Audit Rust adapter tests", "rust-model"),
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
+        );
+        registry.observe_and_restore(&mut initial);
+        let mut resumed = request(
+            "session-a",
+            vec![json!({"role":"user","content":"continue Rust adapter tests"})],
+        );
+        registry.observe_and_restore(&mut resumed);
+        let guidance = resumed.system.to_string();
+        assert!(guidance.find("worker-rust").expect("matching worker") < guidance.find("worker-css").expect("unrelated worker"));
     }
 
     #[test]

@@ -89,6 +89,11 @@ impl SubagentReuseRegistry {
             .lock()
             .expect("SubAgent reuse registry poisoned");
         let state = states.entry(session_id).or_default();
+        // Runs before the merge so `merge_launches` sees current statuses: it only
+        // folds a same-scope launch into an existing record while that record is
+        // non-terminal, so a stale status would wrongly block relaunching a
+        // finished worker. Runs again afterwards to status the newly pushed records.
+        update_status_from_notifications(&mut state.launches, &request.messages);
         merge_launches(&mut state.launches, observed.iter());
         update_status_from_notifications(&mut state.launches, &request.messages);
         let limit_reached = state.launches.len() >= max_subagents_per_session();
