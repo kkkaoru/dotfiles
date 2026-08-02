@@ -1034,7 +1034,11 @@ async fn ignores_non_top_level_tool_events_and_exercises_completed_state() {
     );
     assert!(
         stream
-            .prepare_tool_input("Agent", "agent", &json!({"description":"missing prompt"}))
+            .prepare_tool_input(
+                "Agent",
+                "agent",
+                &json!({"subagent_type":"custom-worker", "description":"missing prompt"})
+            )
             .expect_err("missing Agent model")
             .to_string()
             .contains("missing required `claudex_model`")
@@ -1159,13 +1163,21 @@ async fn accepts_a_valid_agent_model_without_a_prompt() {
                 &json!({"claudex_model":"gpt-test"})
             )
             .expect("model-only Agent input"),
-        json!({"claudex_model":"gpt-test"})
+        json!({})
     );
 }
 
 #[tokio::test]
-async fn routes_a_standard_general_purpose_agent_to_the_parent_subscription() {
+async fn routes_a_standard_general_purpose_agent_to_a_claudex_worker() {
     let (_sender, _receiver) = channel();
+    let mut model_catalog = ModelCatalog::default();
+    model_catalog
+        .set_worker_routes(vec![crate::provider_config::WorkerRoute {
+            agent: "claudex-worker".to_owned(),
+            model: "worker-model".to_owned(),
+            effort: "max".to_owned(),
+        }])
+        .expect("valid worker route");
     let stream = SubscriptionStream {
         text_started: false,
         text_closed: false,
@@ -1177,7 +1189,7 @@ async fn routes_a_standard_general_purpose_agent_to_the_parent_subscription() {
         tools: vec!["Agent".to_owned()],
         tool_context: Some(SubscriptionToolContext {
             agent_efforts: Arc::new(AgentEffortIntents::default()),
-            model_catalog: ModelCatalog::default(),
+            model_catalog,
             client_user_id: None,
             parent_model: "claude-sonnet-5".to_owned(),
             system: json!(null),
@@ -1193,10 +1205,20 @@ async fn routes_a_standard_general_purpose_agent_to_the_parent_subscription() {
         )
         .expect("standard Agent input");
     let prompt = routed["prompt"].as_str().expect("correlated prompt");
-    assert!(prompt.contains("claudex_model: claude-sonnet-5"));
+    assert!(prompt.contains("claudex_model: worker-model"));
     assert!(prompt.contains("<claudex-agent-id>agent-standard</claudex-agent-id>"));
     assert_eq!(routed["subagent_type"], "general-purpose");
     assert!(routed.get("claudex_model").is_none());
+    let context = stream.tool_context.as_ref().expect("routing context");
+    let pending = context
+        .agent_efforts
+        .pending
+        .lock()
+        .expect("agent effort intents lock");
+    let intent = pending.back().expect("recorded worker intent");
+    assert_eq!(intent.model_override.as_deref(), Some("worker-model"));
+    assert_eq!(intent.effort.as_deref(), Some("max"));
+    assert!(!intent.model_is_inherited);
 }
 
 fn child(script: &str) -> tokio::process::Child {

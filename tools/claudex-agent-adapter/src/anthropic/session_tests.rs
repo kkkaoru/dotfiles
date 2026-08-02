@@ -342,6 +342,7 @@ fn main_and_worker_sessions_preserve_received_tool_schemas_exactly() {
         json!({"name":"Edit","input_schema":{"type":"object"}}),
         json!({"name":"Agent","input_schema":{"type":"object","properties":{"subagent_type":{"type":"string"},"prompt":{"type":"string"}}}}),
         json!({"name":"SendMessage","input_schema":{"type":"object"}}),
+        json!({"name":"TeamSendMessage","input_schema":{"type":"object"}}),
         json!({"name":"TaskGet","input_schema":{"type":"object"}}),
     ];
     let main = tool_configuration(
@@ -353,6 +354,7 @@ fn main_and_worker_sessions_preserve_received_tool_schemas_exactly() {
     assert!(exposed.iter().any(|name| name == "Agent"));
     assert!(!exposed.iter().any(|name| name.ends_with(":Agent")));
     assert!(exposed.iter().any(|name| name == "SendMessage"));
+    assert!(exposed.iter().any(|name| name == "TeamSendMessage"));
     assert!(exposed.iter().any(|name| name == "TaskGet"));
     for tool_name in ["Read", "Bash", "Edit"] {
         assert!(exposed.iter().any(|name| name == tool_name));
@@ -674,8 +676,32 @@ fn hides_only_new_native_launch_tools_after_the_session_budget_is_reached() {
             .any(|name| matches!(name.as_str(), "Agent" | "Task"))
     );
     assert!(names.values().any(|name| name == "Read"));
-    assert!(names.values().any(|name| name == "SendMessage"));
-    assert_eq!(tools.len(), 2);
+    assert!(!names.values().any(|name| name == "SendMessage"));
+    assert_eq!(tools.len(), 1);
+}
+
+#[test]
+fn ordinary_sessions_hide_mailbox_tools_but_explicit_teams_preserve_them() {
+    let ordinary = request(
+        json!("main session"),
+        vec![
+            json!({"name":"Agent","input_schema":{"type":"object"}}),
+            json!({"name":"SendMessage","input_schema":{"type":"object"}}),
+        ],
+    );
+    let (_, ordinary_names, _) = tool_configuration(&ordinary, None, None);
+    assert!(!ordinary_names.values().any(|name| name == "SendMessage"));
+
+    let team = request(
+        json!("main session"),
+        vec![
+            json!({"name":"Agent","input_schema":{"type":"object"}}),
+            json!({"name":"SendMessage","input_schema":{"type":"object"}}),
+            json!({"name":"TeamSendMessage","input_schema":{"type":"object"}}),
+        ],
+    );
+    let (_, team_names, _) = tool_configuration(&team, None, None);
+    assert!(team_names.values().any(|name| name == "SendMessage"));
 }
 
 #[test]
@@ -736,13 +762,13 @@ fn assert_developer_guidance(developer: &str) {
         "never use generic claude or blindly inherit",
         "main session must control parallel distribution across multiple SubAgents",
         "Avoid serial heavy processing by one worker",
-        "reuse compatible workers with SendMessage and the exact prior Agent/Task recipient instead of churning processes",
+        "native Agent/Task results and TaskOutput",
         "custom-advisor is a separate logical session singleton/capacity channel",
         "built-in advisor remains independent of worker capacity",
         "complex or ambiguous decisions",
         "worker stalls/timeouts",
         "consult one custom-advisor when triggered",
-        "Prefer reusing a compatible recipient via SendMessage over launching a replacement process",
+        "For ordinary follow-ups, reuse the exact Agent/Task recipient through its native result and TaskOutput",
         "set run_in_background=true on every launch in the single batch",
         "Do not mix foreground and background launches in one batch",
         "end the current turn promptly instead of reasoning while waiting",
@@ -776,7 +802,7 @@ fn main_session_orchestration_instructions_are_omitted_for_subagents() {
         "worker turns must not receive main-session orchestration mode"
     );
     assert!(developer.contains(
-        "Prefer reusing a compatible recipient via SendMessage over launching a replacement process"
+        "For ordinary follow-ups, reuse the exact Agent/Task recipient through its native result and TaskOutput"
     ));
 }
 
@@ -834,8 +860,12 @@ fn subscription_prompt_requires_atomic_parallel_launches() {
     assert!(prompt.contains("Do not mix foreground and background launches"));
     assert!(prompt.contains("queued to a busy worker does not add parallel capacity"));
     assert!(prompt.contains("end the turn promptly with concise user-visible status"));
-    assert!(prompt.contains("never wait for every background task before accepting another user instruction"));
-    assert!(prompt.contains("never call TaskOutput or TaskGet merely to drain pending notifications"));
+    assert!(prompt.contains(
+        "never wait for every background task before accepting another user instruction"
+    ));
+    assert!(
+        prompt.contains("never call TaskOutput or TaskGet merely to drain pending notifications")
+    );
     assert!(
         prompt
             .contains("main session must control parallel distribution across multiple SubAgents")
@@ -846,11 +876,7 @@ fn subscription_prompt_requires_atomic_parallel_launches() {
     assert!(prompt.contains("Never run an auto-fixing formatter"));
     assert!(prompt.contains("File content has changed since it was last read"));
     assert!(prompt.contains("mark that route unavailable for this turn and reroute once"));
-    assert!(
-        prompt.contains(
-            "reuse compatible workers with SendMessage and the exact compatible recipient"
-        )
-    );
+    assert!(prompt.contains("ordinary related follow-up, reuse the exact compatible worker"));
     assert!(prompt.contains("instead of churning processes with fresh launches"));
     assert!(
         prompt.contains("custom-advisor is a separate logical session singleton/capacity channel")
@@ -861,7 +887,7 @@ fn subscription_prompt_requires_atomic_parallel_launches() {
 #[test]
 fn subscription_prompt_preserves_worker_reuse_and_advisor_exception() {
     let prompt = subscription_request_prompt(&request(json!("system"), Vec::new()));
-    assert!(prompt.contains("reuse compatible workers with SendMessage"));
+    assert!(prompt.contains("ordinary related follow-up, reuse the exact compatible worker"));
     assert!(prompt.contains("A follow-up queued to a busy worker does not add parallel capacity"));
     assert!(
         prompt.contains("custom-advisor is a separate logical session singleton/capacity channel")

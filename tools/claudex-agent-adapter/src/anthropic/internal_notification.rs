@@ -56,22 +56,67 @@ pub(super) fn remove_from_transcript(request: &mut MessagesRequest) {
 pub(super) fn is_internal_notification_request(request: &MessagesRequest) -> bool {
     request
         .messages
-        .last()
+        // Claude Code can append assistant/tool transcript elements after the
+        // lifecycle user message when resuming a session. The last array
+        // element is therefore not guaranteed to be the last user turn.
+        .iter()
+        .rev()
+        // Empty user elements are transport/history separators, not a newer
+        // instruction. Claude Code emits one of these around a queued
+        // task-notification when a resumed session is refreshed.
         .filter(|message| message.get("role").and_then(Value::as_str) == Some("user"))
-        .and_then(|message| message.get("content"))
+        .filter_map(|message| message.get("content"))
+        .find(|content| !is_empty_user_content(content))
         .is_some_and(is_internal_notification_content)
+}
+
+fn is_empty_user_content(content: &Value) -> bool {
+    match content {
+        Value::Null => true,
+        Value::String(text) => text.trim().is_empty(),
+        Value::Array(blocks) => {
+            blocks.is_empty()
+                || blocks.iter().all(|block| {
+                    block
+                        .get("type")
+                        .and_then(Value::as_str)
+                        .is_some_and(|kind| kind == "text")
+                        && block
+                            .get("text")
+                            .and_then(Value::as_str)
+                            .is_some_and(|text| text.trim().is_empty())
+                })
+        }
+        _ => false,
+    }
 }
 
 fn is_internal_notification_content(content: &Value) -> bool {
     match content {
         Value::String(text) => is_internal_notification_text(text),
-        Value::Array(blocks) if !blocks.is_empty() => blocks.iter().all(|block| {
-            block.get("type").and_then(Value::as_str) == Some("text")
-                && block
+        Value::Array(blocks) if !blocks.is_empty() => {
+            let mut found_notification = false;
+            for block in blocks {
+                let Some(text) = block
                     .get("text")
+                    .filter(|_| block.get("type").and_then(Value::as_str) == Some("text"))
                     .and_then(Value::as_str)
-                    .is_some_and(is_internal_notification_text)
-        }),
+                else {
+                    return false;
+                };
+                if text.trim().is_empty() || is_monitor_hint_text(text) {
+                    continue;
+                }
+                if is_internal_notification_text(text) {
+                    found_notification = true;
+                    continue;
+                }
+                // A real user instruction after a lifecycle block must remain
+                // a normal turn rather than being swallowed as a notification.
+                return false;
+            }
+            found_notification
+        }
         _ => false,
     }
 }
@@ -91,8 +136,19 @@ fn is_internal_notification_text(text: &str) -> bool {
         ("<task-notification", "</task-notification>"),
     ]
     .into_iter()
-    .any(|(opening, closing)| text.starts_with(opening) && text.contains(closing))
-        || text.starts_with("Another Claude session sent a message")
+    .any(|(opening, closing)| {
+        let Some(end) = text.find(closing) else {
+            return false;
+        };
+        text.starts_with(opening)
+            && (text[end + closing.len()..].trim().is_empty()
+                || is_monitor_hint_text(&text[end + closing.len()..]))
+    }) || text.starts_with("Another Claude session sent a message")
+}
+
+fn is_monitor_hint_text(text: &str) -> bool {
+    text.trim_start()
+        .starts_with("If this event is something the user would act on now")
 }
 
 /// Return an empty end-turn response without opening a provider turn.
@@ -172,6 +228,98 @@ mod tests {
             "tool_use_id":"toolu_internal",
             "content":"<agent-message>result</agent-message>"
         }]))));
+    }
+
+    #[test]
+    fn recognizes_notification_with_trailing_transcript_elements() {
+        let mut request =
+            request("<task-notification><status>completed</status></task-notification>".into());
+        request.messages.push(json!({
+            "role": "assistant",
+            "content": [{"type": "text", "text": "acknowledged"}]
+        }));
+
+        assert!(is_internal_notification_request(&request));
+    }
+
+    #[test]
+    fn recognizes_monitor_notification_with_standard_hint_block() {
+        assert!(is_internal_notification_request(&request(json!([
+            {
+                "type":"text",
+                "text":"<task-notification><status>completed</status></task-notification>"
+            },
+            {
+                "type":"text",
+                "text":"If this event is something the user would act on now, send a PushNotification."
+            }
+        ]))));
+    }
+
+    #[test]
+    fn keeps_real_instruction_after_notification_as_a_user_turn() {
+        assert!(!is_internal_notification_request(&request(json!([
+            {
+                "type":"text",
+                "text":"<task-notification><status>completed</status></task-notification>"
+            },
+            {"type":"text","text":"continue with the requested change"}
+        ]))));
+    }
+
+    #[test]
+    fn does_not_ack_notification_when_a_newer_user_turn_exists() {
+        let mut request =
+            request("<task-notification><status>completed</status></task-notification>".into());
+        request.messages.push(json!({
+            "role": "assistant",
+            "content": [{"type": "text", "text": "acknowledged"}]
+        }));
+        request
+            .messages
+            .push(json!({"role": "user", "content": "continue with the requested change"}));
+
+        assert!(!is_internal_notification_request(&request));
+    }
+
+    #[test]
+    fn ignores_empty_user_history_after_notification() {
+        let mut request =
+            request("<task-notification><status>completed</status></task-notification>".into());
+        request.messages.push(json!({"role":"user", "content":""}));
+        request
+            .messages
+            .push(json!({"role":"assistant", "content":[]}));
+
+        assert!(is_internal_notification_request(&request));
+    }
+
+    #[test]
+    fn ignores_empty_text_blocks_after_notification() {
+        let mut request =
+            request("<task-notification><status>completed</status></task-notification>".into());
+        request.messages.push(json!({
+            "role":"user",
+            "content":[{"type":"text","text":""}]
+        }));
+
+        assert!(is_internal_notification_request(&request));
+    }
+
+    #[test]
+    fn keeps_tool_result_after_notification_as_a_real_turn() {
+        let mut request =
+            request("<task-notification><status>completed</status></task-notification>".into());
+        request.messages.push(json!({
+            "role":"user",
+            "content":[{
+                "type":"tool_result",
+                "tool_use_id":"toolu_real",
+                "content":"provider result"
+            }]
+        }));
+
+        assert!(!is_internal_notification_request(&request));
     }
 
     #[test]

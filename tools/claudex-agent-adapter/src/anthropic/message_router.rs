@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
 use anyhow::Result;
 use axum::{body::Body, http::Response};
@@ -62,11 +62,23 @@ impl Bridge {
             tracing::debug!(
                 "acknowledging an internal SubAgent notification without provider turn"
             );
+            tracing::info!(
+                target: "claudex.provider",
+                log_event = "provider_turn_skipped",
+                reason = "internal_notification",
+                "provider turn skipped for an internal notification"
+            );
             return Ok(internal_notification::acknowledge(&request));
         }
         internal_notification::remove_from_transcript(&mut request);
         trace_request(&request);
         if let Some(response) = self.async_agent_launch_handoff(&request).await {
+            tracing::info!(
+                target: "claudex.provider",
+                log_event = "provider_turn_skipped",
+                reason = "native_background_handoff",
+                "provider turn skipped after native background handoff"
+            );
             return Ok(response);
         }
         let intent = self
@@ -96,22 +108,58 @@ impl Bridge {
             ?route,
             "resolved request routing"
         );
-        if route == request_routing::RouteDecision::Subscription {
-            return self
-                .subscription_messages(request, effort, is_subagent, tools_were_provided)
-                .await;
-        }
-        let input_tokens = u64::try_from(token_count(&request)).unwrap_or(u64::MAX);
-        self.provider_messages(
-            request,
-            input_tokens,
-            effort,
+        let turn_started = Instant::now();
+        tracing::info!(
+            target: "claudex.provider",
+            log_event = "provider_turn_start",
+            request_model = %request.model,
+            request_stream = request.stream,
+            request_effort = ?effort,
             is_subagent,
-            intent.run_in_background,
-        )
-        .await
+            route = ?route,
+            "provider turn started"
+        );
+        let response = if route == request_routing::RouteDecision::Subscription {
+            self.subscription_messages(request, effort, is_subagent, tools_were_provided)
+                .await
+        } else {
+            let input_tokens = u64::try_from(token_count(&request)).unwrap_or(u64::MAX);
+            self.provider_messages(
+                request,
+                input_tokens,
+                effort,
+                is_subagent,
+                intent.run_in_background,
+            )
+            .await
+        };
+        let duration_ms = turn_started.elapsed().as_millis();
+        match &response {
+            Ok(response) => tracing::info!(
+                target: "claudex.provider",
+                log_event = "provider_turn_end",
+                status = response.status().as_u16(),
+                duration_ms,
+                outcome = "response_ready",
+                "provider turn response is ready"
+            ),
+            Err(error) => tracing::error!(
+                target: "claudex.provider",
+                log_event = "provider_turn_end",
+                duration_ms,
+                outcome = "error",
+                error = %error,
+                "provider turn failed"
+            ),
+        }
+        response
     }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[path = "message_router_extra_tests.rs"]
+mod extra_tests;
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
@@ -180,10 +228,19 @@ mod tests {
         let request = MessagesRequest {
             model: "main".to_owned(),
             system: Value::Null,
-            messages: vec![json!({
-                "role":"user",
-                "content":"<agent-message from=\"general-purpose\">worker output</agent-message>"
-            })],
+            // Claude Code can append a transcript assistant element after a
+            // lifecycle notification during resume. It must still be handled
+            // as an internal acknowledgement, not a provider turn.
+            messages: vec![
+                json!({
+                    "role":"user",
+                    "content":[
+                        {"type":"text","text":"<task-notification><status>completed</status></task-notification>"},
+                        {"type":"text","text":"If this event is something the user would act on now, send a PushNotification."}
+                    ]
+                }),
+                json!({"role":"assistant","content":[{"type":"text","text":"acknowledged"}]}),
+            ],
             tools: Vec::new(),
             stream: false,
             output_config: Value::Null,
@@ -264,7 +321,7 @@ mod tests {
         assert!(turn_input.contains("latest user instruction"));
     }
 
-    async fn message_fixture() -> (
+    pub(super) async fn message_fixture() -> (
         tempfile::TempDir,
         std::path::PathBuf,
         std::sync::Arc<Bridge>,
@@ -310,7 +367,7 @@ done
         (root, log, bridge)
     }
 
-    async fn wait_for_log_marker(path: &std::path::Path, marker: &str) -> String {
+    pub(super) async fn wait_for_log_marker(path: &std::path::Path, marker: &str) -> String {
         let mut current = String::new();
         while !current.contains(marker) {
             current = std::fs::read_to_string(path).unwrap_or_default();

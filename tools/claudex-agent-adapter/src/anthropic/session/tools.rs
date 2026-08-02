@@ -9,8 +9,8 @@ mod thread;
 pub(in crate::anthropic) use thread::thread_start_params;
 pub(in crate::anthropic) use thread::thread_start_params_for_mode;
 
-const ORCHESTRATOR_INSTRUCTIONS: &str = "Claudex main-session orchestration mode is active. The main session must control parallel distribution across multiple SubAgents for independent work: coordinate, decompose into non-redundant workstreams, choose fan-out for current capacity, delegate, monitor, resolve conflicts, synthesize worker results, and deliver the final response. Claude Code's enabled tools, permission rules, hooks, MCP servers, skills, and Agent Teams remain available in this session. For every substantive investigation, implementation, review, or validation, call a routed Agent/Task worker by default rather than doing the work in main. This remains mandatory after long execution, compaction, resume, context reconstruction, and worker failure. Avoid serial heavy processing by one worker when capacity allows multi-worker fan-out: unless the work is truly indivisible, the user opts out, or only one compatible worker slot is available, launch parallel ordinary workers in the same batch; do not give an entire heavy or unknown-duration task to one ordinary worker merely for convenience. custom-advisor is a separate logical session singleton/capacity channel, not an implementation workstream, and built-in advisor remains independent of worker capacity. For complex or ambiguous decisions, external research or multiple sources, high-risk configuration, phases exceeding ten minutes, worker stalls/timeouts, or conflicting worker results, consult one custom-advisor when triggered unless a compatible advisor is already active; reuse that advisor with SendMessage for related decisions instead of launching a replacement. Do not invoke custom-advisor for trivial work. For related follow-ups, reuse compatible workers with SendMessage and the exact prior Agent/Task recipient instead of churning processes with fresh launches; start a new instance only when true concurrency, clean-room review, a different route/role, incompatible scope, or an unavailable recipient requires it.";
-const SUBAGENT_LIFECYCLE_INSTRUCTIONS: &str = "For independent fan-out that may be long-running or whose duration is unknown, set run_in_background=true on every launch in the single batch unless the active user explicitly requires synchronous results. Do not mix foreground and background launches in one batch. Background completion notifications are integrated incrementally on later turns, so start a concrete independent action or end the current turn promptly instead of reasoning while waiting for the slowest worker. Use foreground only for short bounded work, a dependency-required result, or an explicit synchronous request. This rule supersedes generic foreground advice above when a worker may be heavy. An explicit active user request for an exact worker count is a hard cardinality constraint: emit exactly that many Agent/Task launches, including exactly one for a one-worker request, never duplicate or retry the launch, and override every minimum-parallelism or fan-out default. Prefer reusing a compatible recipient via SendMessage over launching a replacement process solely to continue related work. TaskStop/Stop Task is best-effort and idempotent: use only the exact active task_id returned by the current Agent/Task result, never guessed or stale IDs. Never stop a mailbox name, completion notification, or already-consumed task. If the tool reports `No task found`, treat it as already stopped/completed, do not retry, and continue.";
+const ORCHESTRATOR_INSTRUCTIONS: &str = "Claudex main-session orchestration mode is active. The main session must control parallel distribution across multiple SubAgents for independent work: coordinate, decompose into non-redundant workstreams, choose fan-out for current capacity, delegate, monitor, resolve conflicts, synthesize worker results, and deliver the final response. Claude Code's enabled tools, permission rules, hooks, MCP servers, skills, and Agent Teams remain available in this session. For every substantive investigation, implementation, review, or validation, call a routed Agent/Task worker by default rather than doing the work in main. This remains mandatory after long execution, compaction, resume, context reconstruction, and worker failure. Avoid serial heavy processing by one worker when capacity allows multi-worker fan-out: unless the work is truly indivisible, the user opts out, or only one compatible worker slot is available, launch parallel ordinary workers in the same batch; do not give an entire heavy or unknown-duration task to one ordinary worker merely for convenience. custom-advisor is a separate logical session singleton/capacity channel, not an implementation workstream, and built-in advisor remains independent of worker capacity. For complex or ambiguous decisions, external research or multiple sources, high-risk configuration, phases exceeding ten minutes, worker stalls/timeouts, or conflicting worker results, consult one custom-advisor when triggered unless a compatible advisor is already active; use its native result for related decisions instead of launching a replacement. Do not invoke custom-advisor for trivial work. For ordinary related follow-ups, continue with native Agent/Task results and TaskOutput for the exact prior recipient rather than SendMessage; SendMessage is reserved for an explicitly active Agent Teams session.";
+const SUBAGENT_LIFECYCLE_INSTRUCTIONS: &str = "For independent fan-out that may be long-running or whose duration is unknown, set run_in_background=true on every launch in the single batch unless the active user explicitly requires synchronous results. Do not mix foreground and background launches in one batch. Background completion notifications are integrated incrementally on later turns, so start a concrete independent action or end the current turn promptly instead of reasoning while waiting for the slowest worker. Use foreground only for short bounded work, a dependency-required result, or an explicit synchronous request. This rule supersedes generic foreground advice above when a worker may be heavy. An explicit active user request for an exact worker count is a hard cardinality constraint: emit exactly that many Agent/Task launches, including exactly one for a one-worker request, never duplicate or retry the launch, and override every minimum-parallelism or fan-out default. For ordinary follow-ups, reuse the exact Agent/Task recipient through its native result and TaskOutput; do not send progress or results through SendMessage. TaskStop/Stop Task is best-effort and idempotent: use only the exact active task_id returned by the current Agent/Task result, never guessed or stale IDs. Never stop a mailbox name, completion notification, or already-consumed task. If the tool reports `No task found`, treat it as already stopped/completed, do not retry, and continue. Use SendMessage only when Agent Teams is explicitly active.";
 
 #[cfg(test)]
 pub(in crate::anthropic) fn tool_configuration(
@@ -32,11 +32,12 @@ pub(in crate::anthropic) fn tool_configuration_for_mode(
     _collaborator_model: Option<&str>,
     web_search_mode: WebSearchMode,
 ) -> (Vec<Value>, HashMap<String, String>, HashMap<String, String>) {
-    let provider_tools = request.tools.clone();
+    let allow_team_messages = super::super::subagent_reuse::agent_teams_enabled(request);
     let (tools, external_names) = external_tools(
-        &provider_tools,
+        &request.tools,
         web_search_mode,
         super::super::subagent_reuse::should_expose_launch_tools(request),
+        allow_team_messages,
     );
     // Provider-side tools must be an exact projection of the schemas supplied by
     // Claude Code.  Advisor/collaborator work is therefore exposed only when
@@ -49,6 +50,7 @@ fn external_tools(
     tools: &[Value],
     web_search_mode: WebSearchMode,
     expose_launch_tools: bool,
+    allow_team_messages: bool,
 ) -> (Vec<Value>, HashMap<String, String>) {
     let mut specs = Vec::new();
     let mut names = HashMap::new();
@@ -57,6 +59,13 @@ fn external_tools(
             continue;
         };
         if web_search_mode == WebSearchMode::CodexNative && original_name == "WebSearch" {
+            continue;
+        }
+        // Keep the original index when projecting Claude Code's dynamic tools.
+        // The provider may return a tool call using that index, so filtering a
+        // cloned list before enumerate() would route TaskUpdate/TaskOutput to
+        // the wrong tool.
+        if !allow_team_messages && original_name == "SendMessage" {
             continue;
         }
         if !expose_launch_tools && super::super::subagent_reuse::is_launch_tool(original_name) {
@@ -86,7 +95,7 @@ fn parallel_scheduler_instructions(request: &MessagesRequest) -> String {
         format!(
             "After each SubAgent completion and every {cadence_minutes} minutes, reassess active lanes. If only one active lane remains during ongoing work, interrupt stale work, redirect stale branches, and immediately add or replace workers to restore the floor."
         ),
-        "Prefer reuse over replacement: continue compatible workers with SendMessage and send minimal follow-up context, then launch fresh workers only when reuse is not safe or not possible. For completed sub-tasks, replay same-scope work on fresh workers while expanding context on survivors when needed."
+        "Prefer reuse over replacement: continue compatible workers through native Agent/Task results and TaskOutput, then launch fresh workers only when reuse is not safe or not possible. SendMessage is restricted to explicit Agent Teams. For completed sub-tasks, replay same-scope work on fresh workers while expanding context on survivors when needed."
             .to_string(),
     ];
     lines.push(scheduler.guidance_for_request(request));

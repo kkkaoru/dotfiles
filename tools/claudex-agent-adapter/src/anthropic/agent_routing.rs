@@ -43,6 +43,7 @@ pub(super) fn hydrate_routing_fields_from_context(
     hydrate_routing_fields(arguments);
     let Some((model, effort)) = selected_worker_fields(arguments, messages, system)
         .or_else(|| configured_worker_fields(arguments, model_catalog))
+        .or_else(|| generic_worker_fields(arguments, model_catalog))
     else {
         return;
     };
@@ -59,17 +60,18 @@ pub(super) fn hydrate_routing_fields_from_context(
     }
 }
 
-/// Route native Claude children to the official Haiku alias, and preserve standard agents on
-/// their current parent model when they do not select a routed worker.
+/// Route native Claude children to the official Haiku alias.
+///
+/// Generic Agent types are hydrated by `hydrate_routing_fields_from_context` from a selected or
+/// configured Claudex worker. This function intentionally does not inherit the outer Claude
+/// session model: if no Claudex route exists, validation must report the missing route.
 pub(super) fn hydrate_standard_agent_to_parent(arguments: &mut Value, parent_model: &str) {
-    let Some(subagent_type) = arguments
+    let _ = parent_model;
+    let subagent_type = arguments
         .get("subagent_type")
         .and_then(Value::as_str)
-        .map(str::to_owned)
-    else {
-        return;
-    };
-    if subagent_type == "claude" && arguments.get(ADAPTER_MODEL).is_none() {
+        .map(str::to_owned);
+    if subagent_type.as_deref() == Some("claude") && arguments.get(ADAPTER_MODEL).is_none() {
         let Some(object) = arguments.as_object_mut() else {
             return;
         };
@@ -83,24 +85,6 @@ pub(super) fn hydrate_standard_agent_to_parent(arguments: &mut Value, parent_mod
         );
         return;
     }
-    if !matches!(subagent_type.as_str(), "Explore" | "general-purpose")
-        || parent_model.is_empty()
-        || subagent_type.starts_with("claudex-")
-        || arguments.get(ADAPTER_MODEL).is_some()
-    {
-        return;
-    }
-    let Some(object) = arguments.as_object_mut() else {
-        return;
-    };
-    object.insert(
-        ADAPTER_MODEL.to_owned(),
-        Value::String(parent_model.to_owned()),
-    );
-    object.insert(
-        IMPLICIT_MODEL.to_owned(),
-        Value::String(parent_model.to_owned()),
-    );
 }
 
 fn configured_worker_fields(
@@ -111,18 +95,59 @@ fn configured_worker_fields(
     Some((model.to_owned(), Some(effort.to_owned())))
 }
 
+fn generic_worker_fields(
+    arguments: &Value,
+    model_catalog: &crate::provider_config::ModelCatalog,
+) -> Option<(String, Option<String>)> {
+    if arguments.get(ADAPTER_MODEL).is_some()
+        || !is_generic_agent_type(arguments.get("subagent_type").and_then(Value::as_str))
+    {
+        return None;
+    }
+    model_catalog
+        .default_worker_fields()
+        .map(|(model, effort)| (model.to_owned(), Some(effort.to_owned())))
+}
+
+fn generic_worker_model_matches(
+    arguments: &Value,
+    model_catalog: &crate::provider_config::ModelCatalog,
+    model: &str,
+) -> bool {
+    is_generic_agent_type(arguments.get("subagent_type").and_then(Value::as_str))
+        && model_catalog
+            .default_worker_fields()
+            .is_some_and(|(configured, _)| configured == model)
+}
+
+fn is_generic_agent_type(subagent_type: Option<&str>) -> bool {
+    subagent_type.is_none()
+        || subagent_type
+            .map(str::trim)
+            .is_some_and(|agent| matches!(agent, "Explore" | "general-purpose"))
+}
+
 fn selected_worker_fields(
     arguments: &Value,
     messages: &[Value],
     system: &Value,
 ) -> Option<(String, Option<String>)> {
-    let agent = arguments.get("subagent_type")?.as_str()?;
     let summary = active_routing_summary(messages, system)?;
-    let worker = summary
-        .get("selected_workers")?
-        .as_array()?
-        .iter()
-        .find(|worker| worker.get("agent").and_then(Value::as_str) == Some(agent))?;
+    let workers = summary.get("selected_workers")?.as_array()?;
+    let agent = arguments.get("subagent_type").and_then(Value::as_str);
+    let worker = agent
+        .and_then(|agent| {
+            workers
+                .iter()
+                .find(|worker| worker.get("agent").and_then(Value::as_str) == Some(agent))
+        })
+        .or_else(|| {
+            is_generic_agent_type(agent).then(|| {
+                workers
+                    .iter()
+                    .find(|worker| worker.get("model").and_then(Value::as_str).is_some())
+            })?
+        })?;
     Some((
         worker.get("model")?.as_str()?.to_owned(),
         worker
@@ -179,6 +204,7 @@ pub(super) fn model_is_authorized_with_catalog(
                     .unwrap_or_default(),
             )
             .is_some_and(|(configured, _)| configured == model)
+        || generic_worker_model_matches(arguments, model_catalog, model)
 }
 
 fn selected_worker_model_matches(messages: &[Value], system: &Value, model: &str) -> bool {
@@ -316,4 +342,32 @@ fn value_texts(value: &Value) -> impl Iterator<Item = &str> {
             .flatten()
             .filter_map(|block| block.get("text").and_then(Value::as_str)),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ADAPTER_MODEL, IMPLICIT_MODEL, hydrate_standard_agent_to_parent};
+
+    #[test]
+    fn standard_agent_without_type_does_not_inherit_parent_model() {
+        let mut arguments = serde_json::json!({"prompt": "inspect the current state"});
+
+        hydrate_standard_agent_to_parent(&mut arguments, "gpt-5.6-luna");
+
+        assert!(arguments.get(ADAPTER_MODEL).is_none());
+        assert!(arguments.get(IMPLICIT_MODEL).is_none());
+    }
+
+    #[test]
+    fn configured_worker_type_without_model_is_not_guessed() {
+        let mut arguments = serde_json::json!({
+            "subagent_type": "claudex-gpt",
+            "prompt": "inspect the current state"
+        });
+
+        hydrate_standard_agent_to_parent(&mut arguments, "gpt-5.6-luna");
+
+        assert!(arguments.get(ADAPTER_MODEL).is_none());
+        assert!(arguments.get(IMPLICIT_MODEL).is_none());
+    }
 }

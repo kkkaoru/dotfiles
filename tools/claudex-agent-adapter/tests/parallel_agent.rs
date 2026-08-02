@@ -497,7 +497,7 @@ async fn main_user_follow_up_controls_running_subagents_on_a_fresh_session() {
 }
 
 #[tokio::test]
-async fn main_user_follow_up_sends_message_to_running_subagent_on_a_fresh_session() {
+async fn main_user_follow_up_reads_running_subagent_output_without_mailbox_injection() {
     let _ = Adapter::start_authenticated;
     let _ = support::base_request();
     let adapter = Adapter::start().await;
@@ -527,12 +527,8 @@ async fn main_user_follow_up_sends_message_to_running_subagent_on_a_fresh_sessio
     )
     .await;
     assert_eq!(control["stop_reason"], "tool_use");
-    assert_eq!(control["content"][0]["name"], "SendMessage");
-    assert_eq!(control["content"][0]["input"]["to"], "agent-profile-7");
-    assert_eq!(
-        control["content"][0]["input"]["message"],
-        "Return your current findings and continue the assigned work."
-    );
+    assert_eq!(control["content"][0]["name"], "TaskOutput");
+    assert_eq!(control["content"][0]["input"]["task_id"], "agent-profile-7");
 
     let completed = post_json(
         &client,
@@ -551,7 +547,7 @@ async fn main_user_follow_up_sends_message_to_running_subagent_on_a_fresh_sessio
 }
 
 #[tokio::test]
-async fn main_user_follow_up_updates_running_subagent_on_a_fresh_session() {
+async fn main_user_follow_up_updates_task_lifecycle_on_a_fresh_session() {
     let _ = Adapter::start_authenticated;
     let _ = support::base_request();
     let adapter = Adapter::start().await;
@@ -580,7 +576,10 @@ async fn main_user_follow_up_updates_running_subagent_on_a_fresh_session() {
         ])),
     )
     .await;
-    assert_eq!(control["stop_reason"], "tool_use");
+    assert_eq!(
+        control["stop_reason"], "tool_use",
+        "control response: {control}"
+    );
     assert_eq!(control["content"][0]["name"], "TaskUpdate");
     assert_eq!(control["content"][0]["input"]["task_id"], "agent-profile-7");
     assert_eq!(control["content"][0]["input"]["status"], "in_progress");
@@ -733,7 +732,7 @@ async fn streamed_follow_up_after_a_completed_batch_visibly_launches_a_new_subag
 }
 
 #[tokio::test]
-async fn streamed_related_follow_up_visibly_reuses_an_active_subagent() {
+async fn streamed_related_follow_up_reads_an_active_subagent_without_mailbox_injection() {
     let adapter = Adapter::start().await;
     let client = Client::new();
     let url = format!("{}/v1/messages", adapter.base_url);
@@ -761,9 +760,8 @@ async fn streamed_related_follow_up_visibly_reuses_an_active_subagent() {
 
     for visible_reuse_fragment in [
         "event: content_block_start",
-        r#""name":"SendMessage""#,
+        r#""name":"TaskOutput""#,
         "agent-profile-7",
-        "continue the related investigation",
         r#""stop_reason":"tool_use""#,
         "event: message_stop",
     ] {
@@ -773,8 +771,8 @@ async fn streamed_related_follow_up_visibly_reuses_an_active_subagent() {
         );
     }
     assert!(
-        !stream.contains(r#""name":"Agent""#),
-        "a reuse must be visibly distinct from a fresh launch: {stream}"
+        !stream.contains(r#""name":"SendMessage""#),
+        "ordinary follow-up must not expose the mailbox tool: {stream}"
     );
 }
 

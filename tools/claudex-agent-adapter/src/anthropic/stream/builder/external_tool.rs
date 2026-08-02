@@ -66,16 +66,18 @@ impl SegmentBuilder {
         call: ToolCall<'_>,
     ) -> Result<()> {
         let mut arguments = call.arguments.clone();
-        crate::anthropic::agent_routing::hydrate_routing_fields_from_context(
-            &mut arguments,
-            context.current_messages,
-            context.system,
-            context.bridge.model_catalog(),
-        );
-        crate::anthropic::agent_routing::hydrate_standard_agent_to_parent(
-            &mut arguments,
-            &context.session.model,
-        );
+        if crate::anthropic::agent_effort::is_agent_tool(original_name) {
+            crate::anthropic::agent_routing::hydrate_routing_fields_from_context(
+                &mut arguments,
+                context.current_messages,
+                context.system,
+                context.bridge.model_catalog(),
+            );
+            crate::anthropic::agent_routing::hydrate_standard_agent_to_parent(
+                &mut arguments,
+                &context.session.model,
+            );
+        }
         if self
             .reject_disabled_subagent(context, original_name, &arguments)
             .await?

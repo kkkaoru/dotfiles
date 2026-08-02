@@ -10,7 +10,14 @@ mod tests {
             model: "main".to_owned(),
             system: Value::String("stable system".to_owned()),
             messages,
-            tools: vec![json!({"name":"Agent"}), json!({"name":"SendMessage"})],
+            // These tests exercise explicit Agent Teams reuse. Ordinary
+            // Agent/Task sessions are covered separately and must not receive
+            // mailbox guidance.
+            tools: vec![
+                json!({"name":"Agent"}),
+                json!({"name":"SendMessage"}),
+                json!({"name":"TeamSendMessage"}),
+            ],
             stream: false,
             output_config: Value::Null,
             metadata: json!({
@@ -242,6 +249,37 @@ mod tests {
         set_limit_metadata(&mut reached, true);
         assert!(!should_expose_launch_tools(&reached));
         assert_eq!(DEFAULT_MAX_SUBAGENTS_PER_SESSION, 1_024);
+    }
+
+    #[test]
+    fn ordinary_agent_session_does_not_restore_mailbox_guidance() {
+        let registry = SubagentReuseRegistry::default();
+        let mut first = request("ordinary-session", vec![launch("tool-a", "worker-a")]);
+        first.tools = vec![json!({"name":"Agent"}), json!({"name":"SendMessage"})];
+        registry.observe_and_restore(&mut first);
+
+        let mut resumed = request(
+            "ordinary-session",
+            vec![json!({"role":"user","content":"continue"})],
+        );
+        resumed.tools = vec![json!({"name":"Agent"}), json!({"name":"SendMessage"})];
+        registry.observe_and_restore(&mut resumed);
+        assert!(!resumed.system.to_string().contains(REUSE_GUIDANCE_MARKER));
+    }
+
+    #[test]
+    fn explicit_agent_teams_session_restores_mailbox_guidance() {
+        let registry = SubagentReuseRegistry::default();
+        let mut first = request("team-session", vec![launch("tool-a", "worker-a")]);
+        registry.observe_and_restore(&mut first);
+
+        let mut resumed = request(
+            "team-session",
+            vec![json!({"role":"user","content":"continue"})],
+        );
+        registry.observe_and_restore(&mut resumed);
+        assert!(resumed.system.to_string().contains(REUSE_GUIDANCE_MARKER));
+        assert!(agent_teams_enabled(&resumed));
     }
 
     #[test]

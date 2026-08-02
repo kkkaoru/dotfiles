@@ -501,6 +501,24 @@ mod tests {
     }
 
     #[test]
+    fn strips_adapter_routing_fields_from_non_agent_tool_arguments() {
+        let (_, public) = prepare_arguments_for_user(
+            "Monitor",
+            "tool-monitor",
+            &json!({
+                "path":"/tmp/status",
+                "claudex_model":"gpt-5.6-luna",
+                "claudex_implicit_model":"gpt-5.6-luna",
+                "claudex_effort":"max"
+            }),
+            &[],
+            &json!(null),
+        );
+
+        assert_eq!(public, json!({"path":"/tmp/status"}));
+    }
+
+    #[test]
     fn hydrates_explicit_claudex_model_without_vendor_prefix_inference() {
         let (internal, public) = prepare_arguments(
             "Task",
@@ -581,53 +599,48 @@ mod tests {
     }
 
     #[test]
-    fn standard_agent_types_inherit_only_the_parent_model() {
-        let mut arguments = json!({"subagent_type":"Explore","prompt":"inspect"});
-        super::super::agent_routing::hydrate_standard_agent_to_parent(
-            &mut arguments,
-            "claude-sonnet-5",
-        );
-        assert_eq!(arguments["claudex_model"], "claude-sonnet-5");
-        assert!(
-            super::super::agent_routing::model_is_authorized_with_catalog(
-                &arguments,
-                &[],
-                &json!(null),
-                &crate::provider_config::ModelCatalog::default(),
-                "claude-sonnet-5",
-            )
-        );
+    fn standard_agent_types_use_claudex_worker_model_and_effort() {
+        let mut catalog = crate::provider_config::ModelCatalog::default();
+        catalog
+            .set_worker_routes(vec![crate::provider_config::WorkerRoute {
+                agent: "claudex-worker".to_owned(),
+                model: "worker-model".to_owned(),
+                effort: "max".to_owned(),
+            }])
+            .expect("valid worker route");
 
         let mut general = json!({"subagent_type":"general-purpose","prompt":"inspect"});
-        super::super::agent_routing::hydrate_standard_agent_to_parent(
+        super::super::agent_routing::hydrate_routing_fields_from_context(
             &mut general,
-            "claude-sonnet-5",
+            &[],
+            &json!(null),
+            &catalog,
         );
-        assert_eq!(general["claudex_model"], "claude-sonnet-5");
-        assert!(general["claudex_implicit_model"].as_str().is_some());
-
-        let (intent_arguments, _) = prepare_arguments("Agent", "tool-inherited", &general);
-        let intent_arguments = intent_arguments.expect("inherited Agent intent");
-        let intents = AgentEffortIntents::default();
-        intents.record_from_user_messages(
-            AgentEffortRecord {
-                client_user_id: None,
-                tool_name: "Agent",
-                tool_use_id: "tool-inherited".to_owned(),
-                parent_model: "claude-sonnet-5",
-                arguments: &intent_arguments,
-                user_messages: &[],
-                system: &json!(null),
-            },
-            Some(&crate::provider_config::ModelCatalog::default()),
-        );
-        let intent = intents.take(&request_without_user_id(
-            intent_arguments["prompt"]
-                .as_str()
-                .expect("correlated prompt"),
+        assert_eq!(general["claudex_model"], "worker-model");
+        assert_eq!(general["claudex_effort"], "max");
+        assert!(general.get("claudex_implicit_model").is_none());
+        assert!(super::super::agent_routing::model_is_authorized_with_catalog(
+            &general,
+            &[],
+            &json!(null),
+            &catalog,
+            "worker-model",
         ));
-        assert_eq!(intent.model_override.as_deref(), Some("claude-sonnet-5"));
-        assert!(intent.model_is_inherited);
+
+        let selected_summary = [json!({
+            "role":"user",
+            "content":"Claudex routing for this turn: {\"providers\":{},\"selected_workers\":[{\"agent\":\"claudex-worker\",\"model\":\"selected-model\",\"effort\":\"high\"}]}"
+        })];
+        let mut explore = json!({"subagent_type":"Explore","prompt":"inspect"});
+        super::super::agent_routing::hydrate_routing_fields_from_context(
+            &mut explore,
+            &selected_summary,
+            &json!(null),
+            &catalog,
+        );
+        assert_eq!(explore["claudex_model"], "selected-model");
+        assert_eq!(explore["claudex_effort"], "high");
+        assert!(explore.get("claudex_implicit_model").is_none());
 
         let mut routed = json!({"subagent_type":"claudex-gpt"});
         super::super::agent_routing::hydrate_standard_agent_to_parent(

@@ -900,7 +900,16 @@ async fn forwards_generic_tools_and_blocks_disabled_subagent_models() {
             &json!({
                 "id":1,
                 "method":"item/tool/call",
-                "params":{"callId":"read","tool":"cc_Read_0","arguments":{}}
+                "params":{
+                    "callId":"read",
+                    "tool":"cc_Read_0",
+                    "arguments":{
+                        "path":"README.md",
+                        "claudex_model":"gpt-5.6-luna",
+                        "claudex_implicit_model":"gpt-5.6-luna",
+                        "claudex_effort":"max"
+                    }
+                }
             }),
             None,
         )
@@ -908,6 +917,7 @@ async fn forwards_generic_tools_and_blocks_disabled_subagent_models() {
         .expect("generic external tool");
     assert!(generic.has_external_tool_calls());
     assert_eq!(generic.blocks[0]["name"], "Read");
+    assert_eq!(generic.blocks[0]["input"], json!({"path":"README.md"}));
 
     let disabled = BTreeSet::from(["blocked-model".to_owned()]);
     let (_root, _app, bridge, session) = disconnect_fixture_with_disabled(disabled).await;

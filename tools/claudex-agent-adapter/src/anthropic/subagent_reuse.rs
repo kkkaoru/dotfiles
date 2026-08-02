@@ -110,6 +110,7 @@ impl SubagentReuseRegistry {
         let should_restore = observed.is_empty()
             && !state.launches.is_empty()
             && has_send_message_tool(&request.tools)
+            && agent_teams_enabled(request)
             && !system_contains_marker(&request.system);
         let recipients =
             should_restore.then(|| reuse_recipients(&state.launches, &request.messages));
@@ -295,6 +296,53 @@ fn has_send_message_tool(tools: &[Value]) -> bool {
     })
 }
 
+/// A normal Agent/Task session must not use the mailbox transport for worker
+/// results. Claude exposes SendMessage only for an explicit Agent Teams
+/// session; treating its mere presence as an invitation causes raw
+/// `<agent-message>` attachments to be queued as user input.
+pub(super) fn agent_teams_enabled(request: &MessagesRequest) -> bool {
+    let team_tool = request.tools.iter().any(|tool| {
+        let name = tool.get("name").and_then(Value::as_str).unwrap_or_default();
+        matches!(
+            name,
+            "TeamCreate"
+                | "TeamDelete"
+                | "TeamList"
+                | "TeamRename"
+                | "TeamUpdate"
+                | "TeamSendMessage"
+        ) || name.starts_with("team_")
+    });
+    let named_agent_tool = request.messages.iter().any(has_named_agent_input);
+    let explicit_team_text = request.messages.iter().any(|message| {
+        let text = value_text(Some(message));
+        text.contains("USE_NAMED_TEAM_MAILBOX")
+            || text.contains("<teammate-message")
+            || text.contains("Agent Teams")
+    });
+    team_tool || named_agent_tool || explicit_team_text
+}
+
+fn has_named_agent_input(value: &Value) -> bool {
+    match value {
+        Value::Object(object) => {
+            let is_agent = object
+                .get("name")
+                .and_then(Value::as_str)
+                .is_some_and(|name| matches!(name, "Agent" | "Task"));
+            let has_name = object
+                .get("input")
+                .and_then(Value::as_object)
+                .and_then(|input| input.get("name"))
+                .and_then(Value::as_str)
+                .is_some_and(|name| !name.trim().is_empty());
+            (is_agent && has_name) || object.values().any(has_named_agent_input)
+        }
+        Value::Array(values) => values.iter().any(has_named_agent_input),
+        _ => false,
+    }
+}
+
 fn system_contains_marker(system: &Value) -> bool {
     value_text(Some(system)).contains(REUSE_GUIDANCE_MARKER)
 }
@@ -307,7 +355,7 @@ fn append_reuse_guidance(system: &mut Value, recipients: &[String]) {
         .collect::<Vec<_>>()
         .join(", ");
     let guidance = format!(
-        "{REUSE_GUIDANCE_MARKER}\nThis resumed session already has compatible SubAgents and their recorded scopes: {recipients}. Choose the recipient whose recorded scope best matches the current task, then use SendMessage with that exact recipient so its context and prompt cache remain warm. Do not assign unrelated work to a worker merely because it is available. Do not launch a replacement for the same scope. Create a new Agent/Task only for genuinely independent work or when the existing recipient is unavailable.\n</claudex-subagent-reuse>"
+        "{REUSE_GUIDANCE_MARKER}\nThis resumed Agent Teams session already has compatible teammates and their recorded scopes: {recipients}. Choose the teammate whose recorded scope best matches the current task, then use TeamSendMessage with that exact recipient. Do not assign unrelated work to a teammate merely because it is available. Do not launch a replacement for the same scope. Create a new Agent/Task only for genuinely independent work or when the existing teammate is unavailable.\n</claudex-subagent-reuse>"
     );
     match system {
         Value::String(text) => {

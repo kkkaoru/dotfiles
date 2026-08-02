@@ -177,11 +177,11 @@ impl<W: Write> Fixture<W> {
             self.send_control_tool(
                 message,
                 "call-follow-up-reuse",
-                "cc_SendMessage_3",
+                "cc_TaskOutput_1",
                 json!({
-                    "to":"agent-profile-7",
-                    "summary":"continue the related investigation",
-                    "message":"Incorporate the new instruction and report the delta."
+                    "task_id":"agent-profile-7",
+                    "block":false,
+                    "timeout":0
                 }),
             );
         } else if input.contains("FOLLOW_UP_NO_AGENT") {
@@ -197,11 +197,11 @@ impl<W: Write> Fixture<W> {
             self.send_control_tool(
                 message,
                 "call-control-message",
-                "cc_SendMessage_3",
+                "cc_TaskOutput_1",
                 json!({
-                    "to":"agent-profile-7",
-                    "summary":"request current findings",
-                    "message":"Return your current findings and continue the assigned work."
+                    "task_id":"agent-profile-7",
+                    "block":true,
+                    "timeout":120000
                 }),
             );
         } else if input.contains("CONTROL_SUBAGENTS_TASK_UPDATE") {

@@ -315,7 +315,8 @@ pub(super) fn prepare_arguments_for_user(
 ) -> (Option<Value>, Value) {
     let mut correlated = arguments.clone();
     let Some(prompt) = agent_prompt(tool_name, arguments) else {
-        return (None, correlated);
+        let mut public = correlated.clone();
+        return (None, sanitize_public_tool_arguments(tool_name, &mut public));
     };
     super::agent_routing::hydrate_routing_fields(&mut correlated);
     correlated["prompt"] = Value::String(super::agent_effort_matching::correlated_prompt(
@@ -323,13 +324,11 @@ pub(super) fn prepare_arguments_for_user(
         tool_use_id,
         requested_model(arguments),
     ));
-    let mut claude_arguments = correlated.clone();
+    let mut public_arguments = correlated.clone();
+    let mut claude_arguments = sanitize_public_tool_arguments(tool_name, &mut public_arguments);
     let public = claude_arguments
         .as_object_mut()
         .expect("Agent arguments must be an object");
-    public.remove(ADAPTER_EFFORT);
-    public.remove(ADAPTER_MODEL);
-    public.remove(IMPLICIT_MODEL);
     public.remove("model");
     if public
         .get("name")
@@ -339,6 +338,19 @@ pub(super) fn prepare_arguments_for_user(
         public.remove("name");
     }
     (Some(correlated), claude_arguments)
+}
+
+fn sanitize_public_tool_arguments(tool_name: &str, arguments: &mut Value) -> Value {
+    let Some(public) = arguments.as_object_mut() else {
+        return arguments.clone();
+    };
+    public.remove(ADAPTER_EFFORT);
+    public.remove(ADAPTER_MODEL);
+    public.remove(IMPLICIT_MODEL);
+    if is_agent_tool(tool_name) {
+        public.remove("model");
+    }
+    arguments.clone()
 }
 
 fn active_user_supplied_name(messages: &[Value], name: &str) -> bool {

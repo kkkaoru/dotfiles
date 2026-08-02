@@ -93,10 +93,10 @@ retained.
      failure rather than advisor success.
    - Account for `custom-advisor` separately from `selected_workers` and provider quota headroom. Do
      not spend worker slots on it and do not treat its presence as capacity pressure against workers.
-   - Prefer one logical custom-advisor per session (reuse via `SendMessage`; not a hard process=1
+   - Prefer one logical custom-advisor per session (reuse via native Agent/Task results and `TaskOutput`; not a hard process=1
      OS cap): resume the first compatible instance with the exact Agent/Task recipient, including
      after completion. Start another custom advisor only for true parallel or clean-room review,
-     incompatible context, or an unavailable recipient. Workers may `SendMessage` that same advisor
+     incompatible context, or an unavailable recipient. Workers should retrieve that advisor's result through the native task lifecycle
      when material guidance would change their work.
    - When `CLAUDEX_CUSTOM_ADVISOR` is `0`, `false`, or `off` (case-insensitive), skip only
      custom-advisor launches; built-in `advisor()` remains available. Unset or any other value leaves
@@ -122,8 +122,8 @@ retained.
    after an actual worker reply or completion notification. Never fabricate a selected worker
    response; if execution is unavailable, continue safely in the main session and report it.
 8. Treat worker and custom-advisor lifecycle as a deliberate decision:
-   - For related follow-ups, reuse compatible workers with `SendMessage` instead of churning
-     processes with fresh launches. Prefer a prior instance when the exact `SendMessage` recipient
+   - For related follow-ups, reuse compatible workers through native Agent/Task results and `TaskOutput` instead of churning
+     processes with fresh launches. Prefer a prior instance when the exact native Agent/Task recipient
      specified
      by its Agent/Task result (agent ID or teammate name as applicable) is available in the current
      main-session transcript and its agent, model, effort, role, scope, and authorization remain
@@ -131,10 +131,10 @@ retained.
      delta, including new evidence the recipient has not seen, so the existing context and prompt
      prefix remain reusable.
    - Do not guess a recipient, persist it to memory, or call task-list tools solely to rediscover
-     it. A `SendMessage` delivery acknowledgement is not completion evidence; wait for the actual
+     it. A delivery acknowledgement is not completion evidence; wait for the actual
      reply or completion notification. The TUI's `N queued` is pending main-session input, which may
      include human prompts and background task notifications—not worker capacity, active slots, or
-     `SendMessage` delivery. The latter reports its own worker-bound delivery status separately.
+     delivery. The latter reports its own worker-bound status separately.
      Do not send a mid-flight message merely to repeat scope or restrictions already present in the
      original delegation. A message queued to a busy worker does not add parallel capacity; assign
      genuinely independent work to another routed worker when useful capacity exists.

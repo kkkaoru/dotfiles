@@ -49,9 +49,9 @@ Start only as many worker instances as the current independent scopes justify. F
 command, lookup, fetch, or one-file check, launch exactly one ordinary worker and never duplicate
 the same scope; `selected_workers` is a capacity pool, not a launch count. Assign each scope a
 stable key and never relaunch a key that is in-flight, completed, or cancelled. For related follow-ups,
-reuse compatible workers with SendMessage and the exact compatible worker or
+reuse compatible workers through native Agent/Task results and TaskOutput and the exact compatible worker or
 custom-advisor recipient specified by the prior Agent/Task result (agent ID or teammate name as
-applicable) instead of churning processes with fresh launches. Send the smallest sufficient,
+applicable) instead of churning processes with fresh launches. SendMessage is reserved for an explicitly active Agent Teams session. Send the smallest sufficient,
 self-contained delta, including new evidence that recipient has not seen. Do not send a mid-flight
 message merely to repeat scope or restrictions already present in the original delegation. A busy
 worker's queued follow-up does not add parallel capacity; assign genuinely independent work to
@@ -67,7 +67,7 @@ batch merely to gather all results. Emit every intended launch in the same assis
 emit one launch and defer the rest to later turns. Do not announce a worker count until that same
 message contains exactly that many Agent/Task calls. After successful background launches, start a
 concrete independent action immediately or end the turn with a concise user-visible status. When
-completion notifications are lifecycle hints, not user instructions. Retrieve worker results with
+completion notifications are lifecycle hints, not user instructions. Integrate each completion independently as soon as it arrives; never wait for or drain the slowest worker. Retrieve worker results with
 `TaskOutput` or the task manager; never treat a replayed `<agent-message>` or
 `<task-notification>` as a new user turn or let one block an incoming user request.
 Background work is never fire-and-forget. Immediately call `TaskList`, then issue non-blocking
@@ -110,7 +110,7 @@ Independently, consult the `custom-advisor` SubAgent (`claude-fable-5` / `xhigh`
 task triggers an advisory decision. For external research with multiple sources, a complex/ambiguous or
 high-risk decision, a phase exceeding ten minutes, a worker failure/timeout/stall, or conflicting
 worker results, invoke it at that decision point unless a compatible advisor is already active;
-reuse that recipient with SendMessage. Do not invoke it for trivial or deterministic tasks. Built-in advisor() and custom-advisor
+reuse that recipient through native Agent/Task results and TaskOutput. Do not invoke it for trivial or deterministic tasks. Built-in advisor() and custom-advisor
 coexist; neither replaces the other, and neither implements work. Main and workers may message the
 same logical advisor with the relevant task and current worker state, then incorporate its guidance.
 When launching it, the Agent/Task call must set `subagent_type: custom-advisor`,
@@ -119,7 +119,7 @@ role. Verify the completion metadata reports `resolvedModel: claude-fable-5`; ot
 consultation as a routing failure, do not claim advisor guidance, and retry only with the exact
 custom-advisor recipient/model once.
 Treat custom-advisor capacity separately from `selected_workers` and provider quota: do not spend
-worker slots on it. Prefer one logical custom advisor per session via SendMessage reuse; this is
+worker slots on it. Prefer one logical custom advisor per session via native Agent/Task and TaskOutput reuse; this is
 not a hard OS process=1 cap. Resume the first compatible instance with the exact recipient from
 its Agent/Task result, including after completion. Start another only for true parallel or
 clean-room review, an incompatible role/model/context, or an unavailable recipient; do not replace
@@ -146,9 +146,9 @@ conversation.
 
 Follow all repository instructions and preserve user changes. Verify delegated claims before
 presenting them as complete. Agent/Task acceptance proves delegation; an actual worker reply or
-completion notification proves completion, while a SendMessage delivery acknowledgement alone does
+completion notification proves completion, while a delivery acknowledgement alone does
 not. Interpret the TUI's `N queued` as pending main-session input, which may include human prompts
-and background task notifications—not worker capacity, active slots, or SendMessage delivery. Never
+and background task notifications—not worker capacity or active slots. Never
 fabricate a worker response or present main-session work as if it came from a worker. Handle work
 directly only when it is trivial, the user opts out, or execution is unavailable; when unavailable,
 state the limitation explicitly.

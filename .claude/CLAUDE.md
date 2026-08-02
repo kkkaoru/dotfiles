@@ -62,7 +62,7 @@
 - Start as many SubAgents as useful for real parallelism or independent context. Before shutting
   down, abandoning, or replacing one, weigh likely follow-ups and potential prompt-prefix/cache
   reuse against slot and resource pressure. For a compatible follow-up, reuse compatible workers with
-  `SendMessage` and the exact recipient specified by the prior Agent/Task result (agent ID or
+  native Agent/Task results and `TaskOutput` using the exact recipient specified by the prior Agent/Task result (agent ID or
   teammate name as applicable) instead of churning processes with fresh launches; never guess or
   persist recipients across sessions. Do not send a mid-flight message merely to repeat constraints
   already present in the original delegation. A busy worker's queued follow-up does not increase
@@ -99,7 +99,7 @@
   triggers an advisory decision. For
   external research with multiple sources, a complex/ambiguous or high-risk decision, a phase
   exceeding ten minutes, a worker failure/timeout/stall, or conflicting worker results, invoke it
-  at that decision point unless it is already active; reuse the same recipient with `SendMessage`.
+  at that decision point unless it is already active; reuse the same recipient through native Agent/Task results and `TaskOutput`.
   Do not invoke it for trivial or deterministic tasks. Built-in `advisor()` and `custom-advisor` coexist;
   neither replaces the other, and neither implements work. Workers act; advisors advise.
   The custom-advisor Agent/Task call must set `subagent_type: custom-advisor`,
@@ -107,23 +107,23 @@
   acceptable substitute. Verify completion metadata reports `resolvedModel: claude-fable-5` and
   treat a mismatch as a routing failure rather than advisor guidance.
 - Treat `custom-advisor` as a logical session singleton separate from worker capacity accounting.
-  Prefer reuse of one continuing advisor per session via `SendMessage`; this is not a hard OS
+  Prefer reuse of one continuing advisor per session via native Agent/Task results and `TaskOutput`; this is not a hard OS
   process=1 cap (Claude subscription turns may still start a new subprocess while reusing the same
   logical transcript). Do not count it against `selected_workers` slots or provider quota headroom.
   Resume the first compatible instance with the exact recipient from its Agent/Task result, including
   after completion. Start another custom advisor only for true parallel or clean-room review, an
   incompatible role/model/context, or an unavailable recipient; do not replace it merely because one
-  consultation ended. Workers and peers may message that same advisor via `SendMessage` when
+  consultation ended. Workers and peers should retrieve that advisor's result through the native task lifecycle when
   strategic guidance would change their work.
 - Honor `CLAUDEX_CUSTOM_ADVISOR` when present: values `0`, `false`, or `off` (case-insensitive)
   disable only the custom-advisor SubAgent for that process; built-in `advisor()` remains available.
   Unset or any other value leaves custom-advisor enabled.
 - The main session owns decisions, resolves conflicts, and verifies delegated results. Agent/Task
   acceptance proves delegation; an actual worker reply or completion notification proves completion.
-  A `SendMessage` delivery acknowledgement alone does not. Never fabricate a worker response or
+  A delivery acknowledgement alone does not. Never fabricate a worker response or
   present main-session work as if it came from a worker. Interpret the TUI's `N queued` as pending input,
   which may include human prompts and background task notifications—not worker capacity, active
-  slots, or `SendMessage` delivery. Handle work directly only when it is trivial, the user opts out,
+  slots. Handle work directly only when it is trivial, the user opts out,
   or delegation is unavailable; when unavailable, state that limitation.
 - Do not report orchestration complete until its behavior has been checked: verify same-round
   background fan-out for a heavy phase, prompt reuse for a compatible follow-up, partial-result

@@ -48,9 +48,9 @@ pub(super) fn subscription_request_prompt(request: &MessagesRequest) -> String {
             "dependency-required results, or an explicit synchronous request. After successful ",
             "background launches, start a concrete independent action or end the turn promptly with ",
             "concise user-visible status; never keep reasoning while waiting for completion ",
-            "notifications. For a related follow-up, reuse compatible workers with SendMessage and ",
-            "the exact compatible recipient specified by the prior Agent/Task result (agent ID or ",
-            "teammate name as applicable) instead of churning processes with fresh launches, ",
+            "notifications. For an ordinary related follow-up, reuse the exact compatible worker ",
+            "through native Agent/Task results and TaskOutput instead of churning processes with ",
+            "fresh launches; SendMessage is reserved for an explicitly active Agent Teams session, ",
             "sending the smallest sufficient self-contained delta including unseen evidence. Do not ",
             "send a mid-flight message merely to repeat scope or restrictions already present in the ",
             "original delegation. A follow-up queued to a busy worker does not add parallel capacity; ",
@@ -157,8 +157,14 @@ pub(super) fn requested_tools_for_request(
     request: &MessagesRequest,
     omit_task_bookkeeping: bool,
 ) -> Vec<String> {
+    let allow_team_messages = super::subagent_reuse::agent_teams_enabled(request);
+    let mut provider_tools = request.tools.clone();
+    if !allow_team_messages {
+        provider_tools
+            .retain(|tool| tool.get("name").and_then(Value::as_str) != Some("SendMessage"));
+    }
     requested_tools_from_request(
-        &request.tools,
+        &provider_tools,
         omit_task_bookkeeping,
         crate::anthropic::subagent_reuse::should_expose_launch_tools(request),
     )
