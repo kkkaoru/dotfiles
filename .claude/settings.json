@@ -7,7 +7,7 @@
     "allow": [],
     "deny": []
   },
-  "model": "gpt-5.6-luna",
+  "model": "fugu",
   "enableAllProjectMcpServers": true,
   "hooks": {
     "SessionStart": [
