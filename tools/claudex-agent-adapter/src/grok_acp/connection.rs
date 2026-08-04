@@ -127,11 +127,9 @@ fn build_provider_command(
         AcpProvider::Configured | AcpProvider::ConfiguredLaunchScoped => {
             let arguments = arguments.context("configured ACP arguments are required")?;
             apply_opencode_acp_runtime_config(&mut command, program);
-            command.args(
-                arguments
-                    .iter()
-                    .map(|argument| argument.replace("{model}", model)),
-            );
+            for argument in arguments {
+                command.arg(substitute_configured_argument(argument, model, effort)?);
+            }
         }
     }
     command.env("PATH", path_env::tool_search_path());
@@ -141,6 +139,56 @@ fn build_provider_command(
         command.as_std_mut().process_group(0);
     }
     Ok(command)
+}
+
+fn substitute_configured_argument(
+    argument: &str,
+    model: &str,
+    effort: Option<&str>,
+) -> Result<String> {
+    let mut rendered = argument.replace("{model}", model);
+    if rendered.contains("{effort}") {
+        let effort = effort.context("configured ACP `{effort}` requires launch effort")?;
+        rendered = rendered.replace("{effort}", normalize_launch_effort(effort));
+    }
+    Ok(rendered)
+}
+
+/// Map Claudex effort aliases onto values accepted by launch-scoped CLIs such as
+/// Cline `--thinking` (`none|low|medium|high|xhigh`).
+fn normalize_launch_effort(effort: &str) -> &str {
+    match effort {
+        "mid" => "medium",
+        "max" => "xhigh",
+        other => other,
+    }
+}
+
+#[cfg(test)]
+mod argument_tests {
+    use super::{normalize_launch_effort, substitute_configured_argument};
+
+    #[test]
+    fn substitutes_model_and_thinking_effort() {
+        assert_eq!(normalize_launch_effort("max"), "xhigh");
+        assert_eq!(normalize_launch_effort("high"), "high");
+        let rendered =
+            substitute_configured_argument("--thinking", "qwen/qwen3.8-max", Some("high")).unwrap();
+        assert_eq!(rendered, "--thinking");
+        assert_eq!(
+            substitute_configured_argument("{effort}", "m", Some("max")).unwrap(),
+            "xhigh"
+        );
+        assert_eq!(
+            substitute_configured_argument("-m", "qwen/qwen3.8-max", None).unwrap(),
+            "-m"
+        );
+        assert_eq!(
+            substitute_configured_argument("{model}", "qwen/qwen3.8-max", None).unwrap(),
+            "qwen/qwen3.8-max"
+        );
+        assert!(substitute_configured_argument("{effort}", "m", None).is_err());
+    }
 }
 
 pub(super) fn is_opencode_program(program: &OsString) -> bool {

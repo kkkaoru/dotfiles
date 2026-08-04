@@ -683,8 +683,10 @@ mod tests {
         )
         .await);
         let requests = requests.await.unwrap();
-        assert_eq!(requests.len(), 1);
-        assert_eq!(requests[0]["method"], "session/set_config_option");
+        assert!(
+            requests.is_empty(),
+            "launch-scoped ACP must not reselect model or set effort: {requests:?}"
+        );
         assert!(permit.is_some());
     }
 
@@ -882,9 +884,20 @@ mod tests {
         drop(tokio::task::spawn_local(async move {
             let mut lines = BufReader::new(outgoing_peer);
             let mut line = String::new();
-            lines.read_line(&mut line).await.expect("ACP request");
+            let read = tokio::time::timeout(
+                std::time::Duration::from_millis(200),
+                lines.read_line(&mut line),
+            )
+            .await;
+            let Ok(Ok(_)) = read else {
+                let _ = request_sender.send(Vec::new());
+                return;
+            };
+            if line.is_empty() {
+                let _ = request_sender.send(Vec::new());
+                return;
+            }
             let request: Value = serde_json::from_str(&line).expect("valid ACP request");
-            assert_eq!(request["method"], "session/set_config_option");
             let id = request["id"].clone();
             let response = json!({
                 "jsonrpc":"2.0",
@@ -899,9 +912,7 @@ mod tests {
                 .write_all(b"\n")
                 .await
                 .expect("response newline");
-            request_sender
-                .send(vec![request])
-                .expect("request receiver");
+            let _ = request_sender.send(vec![request]);
         }));
         (connection, requests)
     }

@@ -211,11 +211,16 @@ impl RoutedBackends {
     }
 
     pub(super) fn launch_scoped_effort(&self, model: &str) -> Option<String> {
-        self.find(model)
-            .map(|route| route.template.clone())
-            .or_else(|| self.prefix_template(model).cloned())
-            .filter(|route| route.backend == BackendKind::GrokAcp)
-            .and_then(|route| route.effort)
+        let route = self
+            .find(model)
+            .map(|r| r.template.clone())
+            .or_else(|| self.prefix_template(model).cloned())?;
+        let pins = route.backend == BackendKind::GrokAcp
+            || route
+                .acp
+                .as_ref()
+                .is_some_and(|a| a.arguments.iter().any(|x| x.contains("{effort}")));
+        pins.then_some(route.effort).flatten()
     }
 
     pub(super) fn descriptions(&self) -> Vec<String> {

@@ -109,6 +109,39 @@ mod tests {
     }
 
     #[test]
+    fn launch_scoped_effort_includes_configured_acp_thinking_placeholder() {
+        let mut cline = route("qwen/qwen3.8-max", BackendKind::ConfiguredAcp);
+        cline.effort = Some("high".to_owned());
+        cline.acp = Some(AcpLaunch {
+            program: "cline".to_owned(),
+            arguments: vec![
+                "--thinking".to_owned(),
+                "{effort}".to_owned(),
+                "-m".to_owned(),
+                "{model}".to_owned(),
+                "--acp".to_owned(),
+            ],
+        });
+        let mut cursor = route("auto", BackendKind::ConfiguredAcp);
+        cursor.effort = Some("high".to_owned());
+        cursor.acp = Some(AcpLaunch {
+            program: "cursor-agent".to_owned(),
+            arguments: vec![
+                "--model".to_owned(),
+                "{model}".to_owned(),
+                "--yolo".to_owned(),
+                "acp".to_owned(),
+            ],
+        });
+        let routes = RoutedBackends::lazy(&[cline, cursor]);
+        assert_eq!(
+            routes.launch_scoped_effort("qwen/qwen3.8-max").as_deref(),
+            Some("high")
+        );
+        assert_eq!(routes.launch_scoped_effort("auto"), None);
+    }
+
+    #[test]
     fn applies_codex_provider_and_catalog_to_exact_and_dynamic_routes() {
         let mut fugu = route("fugu", BackendKind::CodexAppServer);
         fugu.model_provider = Some("sakana".to_owned());

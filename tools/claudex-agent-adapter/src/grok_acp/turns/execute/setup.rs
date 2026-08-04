@@ -76,24 +76,16 @@ async fn setup_effort(
 ) -> Result<(), EffortSetupError> {
     setup_started.set(true);
     let session_model = crate::grok_acp::prompt::configured_acp_session_model(model);
-    // Launch-scoped providers already pass `--model` on the CLI and pin the ACP model id
-    // during session/new. Only attempt an optional effort config option; do not reselect
-    // the model (Cursor auto reselection is expensive and can re-route mid-session).
+    // Launch-scoped providers already pass `--model` (and optionally `--thinking` /
+    // `{effort}`) on the CLI and pin the ACP model id during session/new. Do not
+    // reselect the model or push ACP `effort` config options each turn — Cline
+    // rejects unknown `effort` options, and Cursor auto reselection is expensive.
     if provider.model_is_launch_scoped() {
-        let Some(effort) = effort else {
-            return Ok(());
-        };
-        return match set_effort_option(&connection, &id, effort).await {
-            Ok(()) => Ok(()),
-            Err(EffortSetupError::Failed(error)) if effort_option_rejected(&error) => {
-                tracing::debug!(
-                    ?error,
-                    "launch-scoped ACP rejected session effort option; continuing with CLI model"
-                );
-                Ok(())
-            }
-            Err(error) => Err(error),
-        };
+        tracing::debug!(
+            effort,
+            "skipping ACP set_session_model and session effort; launch-scoped CLI pins them"
+        );
+        return Ok(());
     }
     // Session-scoped configured ACP (OpenCode) and Copilot need the model selected before
     // effort options are available. Cursor's `auto` maps to ACP `default[]`.

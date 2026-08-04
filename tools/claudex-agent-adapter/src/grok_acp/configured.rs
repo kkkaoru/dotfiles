@@ -6,13 +6,14 @@ use super::{AcpLaunch, AcpProvider, GrokAcp};
 
 impl GrokAcp {
     pub async fn spawn_configured(model: &str, launch: &AcpLaunch) -> Result<Arc<Self>> {
-        Self::spawn_configured_with_max_concurrency(model, launch, None).await
+        Self::spawn_configured_with_max_concurrency(model, launch, None, None).await
     }
 
     pub(crate) async fn spawn_configured_with_max_concurrency(
         model: &str,
         launch: &AcpLaunch,
         max_concurrency: Option<usize>,
+        effort: Option<&str>,
     ) -> Result<Arc<Self>> {
         let cwd = std::env::current_dir().context("resolve configured ACP working directory")?;
         let provider = if launch
@@ -27,7 +28,7 @@ impl GrokAcp {
         Self::spawn_provider(
             provider,
             model,
-            None,
+            effort,
             &launch.program,
             Some(launch.arguments.clone()),
             cwd,

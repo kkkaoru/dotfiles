@@ -1209,7 +1209,7 @@ mod tests {
     fn accepts_selected_worker_model_when_claude_uses_a_generic_agent_type() {
         let system = json!([{
             "type":"text",
-            "text":"Claudex routing for this turn: {\"providers\":{},\"selected_agents\":[\"claudex-deepseek\"],\"selected_workers\":[{\"agent\":\"claudex-deepseek\",\"model\":\"opencode-go/deepseek-v4-flash\",\"effort\":\"high\"}]} mandatory policy"
+            "text":"Claudex routing for this turn: {\"providers\":{},\"selected_agents\":[\"claudex-deepseek-flash\"],\"selected_workers\":[{\"agent\":\"claudex-deepseek-flash\",\"model\":\"opencode-go/deepseek-v4-flash\",\"effort\":\"high\"}]} mandatory policy"
         }]);
         let messages = [json!({"role":"user","content":"Please run this task"})];
         assert!(validate_routed_agent_arguments(

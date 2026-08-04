@@ -111,14 +111,14 @@ impl AgentBackend {
     }
     async fn spawn_route(route: &BackendRoute) -> Result<Arc<Self>> {
         if let Some(acp) = &route.acp {
-            return Ok(Arc::new(Self::ConfiguredAcp(
-                GrokAcp::spawn_configured_with_max_concurrency(
-                    &route.model,
-                    acp,
-                    route.max_concurrency,
-                )
-                .await?,
-            )));
+            let agent = GrokAcp::spawn_configured_with_max_concurrency(
+                &route.model,
+                acp,
+                route.max_concurrency,
+                route.effort.as_deref(),
+            )
+            .await?;
+            return Ok(Arc::new(Self::ConfiguredAcp(agent)));
         }
         if route.backend == BackendKind::GrokAcp {
             return Ok(Arc::new(Self::Grok(

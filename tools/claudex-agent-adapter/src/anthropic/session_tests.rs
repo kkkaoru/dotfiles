@@ -335,7 +335,7 @@ fn documents_idempotent_task_stop_semantics_in_the_dynamic_schema() {
 
 #[test]
 fn main_and_worker_sessions_preserve_received_tool_schemas_exactly() {
-    let routing = r#"Claudex routing for this turn: {"providers":{},"selected_agents":["claudex-deepseek","claudex-ollama-glm-5-2"],"selected_workers":[{"agent":"claudex-deepseek","model":"deepseek-model"}]} mandatory policy"#;
+    let routing = r#"Claudex routing for this turn: {"providers":{},"selected_agents":["claudex-deepseek-pro","claudex-ollama-glm-5-2"],"selected_workers":[{"agent":"claudex-deepseek-pro","model":"deepseek-model"}]} mandatory policy"#;
     let tools = vec![
         json!({"name":"Read","input_schema":{"type":"object"}}),
         json!({"name":"Bash","input_schema":{"type":"object"}}),
@@ -748,12 +748,8 @@ fn assert_empty_thread_configuration() {
 #[test]
 fn acp_native_modes_use_provider_native_instructions_instead_of_agent_orchestration() {
     let request = request(json!("cursor main"), Vec::new());
-    let params = thread_start_params_for_mode(
-        &request,
-        "auto",
-        Vec::new(),
-        WebSearchMode::AcpNative,
-    );
+    let params =
+        thread_start_params_for_mode(&request, "auto", Vec::new(), WebSearchMode::AcpNative);
     let developer = params["developerInstructions"]
         .as_str()
         .expect("developer instructions");

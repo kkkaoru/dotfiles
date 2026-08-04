@@ -4,8 +4,10 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, fs, path::Path};
 
 mod model_catalog;
+mod types;
 mod validation;
 mod worker_route;
+use types::{AgentChoice, RequestBudget, WebSearchSettings};
 use validation::{validate_choice, validate_providers, validate_worker_routes};
 const CONFIG_VERSION: u64 = 1;
 #[derive(Clone, Debug, Deserialize)]
@@ -22,12 +24,6 @@ struct ProviderConfig {
     #[serde(default)]
     web_search: WebSearchSettings,
 }
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct WebSearchSettings {
-    #[serde(default)]
-    fallback_providers: Vec<String>,
-}
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Provider {
@@ -41,6 +37,8 @@ struct Provider {
     enabled: bool,
     #[serde(default)]
     usage_provider: Option<String>,
+    #[serde(default)]
+    usage_weekly_window_id: Option<String>,
     #[serde(default)]
     model_provider: Option<String>,
     #[serde(default)]
@@ -60,21 +58,6 @@ struct Provider {
     web_search_mode: WebSearchMode,
 }
 
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-#[allow(dead_code)]
-struct RequestBudget {
-    estimated_requests: u64,
-    window_minutes: u64,
-    usage_window: String,
-}
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct AgentChoice {
-    agent: String,
-    model: String,
-    effort: String,
-}
 pub struct LoadedConfig {
     pub routes: Vec<BackendRoute>,
     /// Exact default models and prefixes declared by any provider entry, including disabled ones.
@@ -375,6 +358,7 @@ impl Provider {
     }
     fn into_route(self) -> BackendRoute {
         let _ = self.usage_provider;
+        let _ = self.usage_weekly_window_id;
         let _ = self.request_budget.map(|budget| {
             (
                 budget.estimated_requests,
