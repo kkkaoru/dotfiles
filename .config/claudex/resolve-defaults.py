@@ -26,8 +26,8 @@ import sys
 from typing import Any
 
 
-DEFAULT_MODEL = "sonnet[1m]"
-DEFAULT_EFFORT = "high"
+DEFAULT_MODEL = "opus"
+DEFAULT_EFFORT = "medium"
 VALID_SOURCES = {"explicit", "settings"}
 VALID_EFFORTS = {"low", "medium", "mid", "high", "xhigh", "max"}
 

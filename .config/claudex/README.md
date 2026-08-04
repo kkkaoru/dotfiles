@@ -39,7 +39,7 @@ flowchart LR
 
 | 役割 | Agent | Model | Effort | 選択条件 |
 | --- | --- | --- | --- | --- |
-| Orchestrator | 通常のmain session | requestの実model（既定は `sonnet[1m]`） | requestのeffort（既定は `high`） | Claude Code requestをそのまま使う。Claudeまたは設定済みexternal provider |
+| Orchestrator | 通常のmain session | requestの実model（既定は `opus`） | requestのeffort（既定は `medium`） | Claude Code requestをそのまま使う。Claudeまたは設定済みexternal provider |
 | Codex worker | `claudex-gpt` | `gpt-5.6-luna` | `max` | Codexに空きがある場合 |
 | Codex Spark worker | `claudex-gpt-spark` | `gpt-5.3-codex-spark` | `xhigh` | CodexBar `codex` の `extraRateWindows` `codex-spark-weekly` 残量（通常の Codex weekly とは別）。枯渇時は選択されない |
 | Fugu worker | `claudex-fugu` | `fugu` | `high` | CodexBarのSakana枠に空きがある場合 |
@@ -533,8 +533,8 @@ knownなmain modelとして同じmodelの抑制判断に利用できます。
 {
   "version": 1,
   "source": "explicit",
-  "model": "fugu",
-  "effort": "high"
+  "model": "opus",
+  "effort": "medium"
 }
 ```
 
@@ -545,8 +545,8 @@ knownなmain modelとして同じmodelの抑制判断に利用できます。
 {
   "version": 1,
   "source": "settings",
-  "model": "fugu",
-  "effort": "high"
+  "model": "opus",
+  "effort": "medium"
 }
 ```
 
