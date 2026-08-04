@@ -44,13 +44,20 @@ function herdr-cwd --description "Open a Herdr workspace for the current directo
     while test $attempt -le $retry_limit
         set workspace_json (command herdr workspace list 2>/dev/null)
         if test $status -ne 0
-            # Do not compete with an existing server. If the status probe says
-            # it is absent, a background server is safe: a concurrent server
-            # wins the socket race and this process simply keeps retrying.
+            # Do not compete with a compatible existing server. If the status
+            # probe says it is absent, a background server is safe: a concurrent
+            # server wins the socket race and this process simply keeps retrying.
+            # After a Herdr upgrade the old server can still be running with an
+            # incompatible protocol; stop it once so workspace prep can proceed.
             if test $server_checked -eq 0
                 set server_checked 1
                 set server_status (command herdr status server --json 2>/dev/null)
                 set server_running (printf '%s\n' "$server_status" | command jq -r '.running // false' 2>/dev/null)
+                set server_compatible (printf '%s\n' "$server_status" | command jq -r 'if .compatible == false then "false" else "true" end' 2>/dev/null)
+                if test "$server_running" = true; and test "$server_compatible" = false
+                    command herdr server stop >/dev/null 2>&1
+                    set server_running false
+                end
                 if test "$server_running" != true
                     command herdr server </dev/null >/dev/null 2>&1 &
                     disown $last_pid 2>/dev/null; or true
