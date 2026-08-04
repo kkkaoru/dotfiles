@@ -7,7 +7,7 @@
     "allow": [],
     "deny": []
   },
-  "model": "fugu",
+  "model": "claude-claudex-fugu",
   "enableAllProjectMcpServers": true,
   "hooks": {
     "SessionStart": [
