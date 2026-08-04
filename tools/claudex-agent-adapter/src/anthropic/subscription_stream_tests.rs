@@ -1168,7 +1168,11 @@ async fn routes_a_standard_general_purpose_agent_to_a_claudex_worker() {
     let (_sender, _receiver) = channel();
     let mut model_catalog = ModelCatalog::default();
     model_catalog
-        .set_worker_routes(vec![crate::provider_config::WorkerRoute::new("claudex-worker".to_owned(), "worker-model".to_owned(), "max".to_owned())])
+        .set_worker_routes(vec![crate::provider_config::WorkerRoute::new(
+            "claudex-worker".to_owned(),
+            "worker-model".to_owned(),
+            "max".to_owned(),
+        )])
         .expect("valid worker route");
     let stream = SubscriptionStream {
         text_started: false,
@@ -1998,9 +2002,21 @@ async fn hydrates_auxiliary_claude_subagent_routes_without_adapter_fields_in_pub
     let mut model_catalog = ModelCatalog::default();
     model_catalog
         .set_auxiliary_worker_routes(vec![
-            WorkerRoute::new("claudex-haiku".to_owned(), "claude-haiku-4-5".to_owned(), "max".to_owned()),
-            WorkerRoute::new("claudex-sonnet".to_owned(), "claude-sonnet-5".to_owned(), "high".to_owned()),
-            WorkerRoute::new("custom-advisor".to_owned(), "claude-fable-5".to_owned(), "xhigh".to_owned()),
+            WorkerRoute::new(
+                "claudex-haiku".to_owned(),
+                "claude-haiku-4-5".to_owned(),
+                "max".to_owned(),
+            ),
+            WorkerRoute::new(
+                "claudex-sonnet".to_owned(),
+                "claude-sonnet-5".to_owned(),
+                "high".to_owned(),
+            ),
+            WorkerRoute::new(
+                "custom-advisor".to_owned(),
+                "claude-fable-5".to_owned(),
+                "xhigh".to_owned(),
+            ),
         ])
         .expect("auxiliary routes");
     let context = super::super::subscription::SubscriptionToolContext {

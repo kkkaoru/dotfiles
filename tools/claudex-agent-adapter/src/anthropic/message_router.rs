@@ -108,8 +108,7 @@ impl Bridge {
             ?route,
             "resolved request routing"
         );
-        let route =
-            self.apply_usage_limit_preflight(&mut request, route, &mut effort, is_subagent);
+        let route = self.apply_usage_limit_preflight(&mut request, route, &mut effort, is_subagent);
         let turn_started = Instant::now();
         tracing::info!(
             target: "claudex.provider",

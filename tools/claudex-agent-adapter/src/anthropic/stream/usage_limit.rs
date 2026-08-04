@@ -67,6 +67,8 @@ mod tests {
             "You've hit your usage limit for GPT-5.3-Codex-Spark."
         ));
         assert!(!contains_usage_limit_marker("context window exceeded"));
-        assert!(!is_usage_limit_event(&json!({"params":{"error":{"message":"other"}}})));
+        assert!(!is_usage_limit_event(
+            &json!({"params":{"error":{"message":"other"}}})
+        ));
     }
 }
