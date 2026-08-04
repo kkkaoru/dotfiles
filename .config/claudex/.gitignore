@@ -1,3 +1,4 @@
 providers.local.json
 providers.*.local.json
 defaults.local.json
+claude-config/
