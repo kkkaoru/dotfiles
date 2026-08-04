@@ -129,11 +129,40 @@ fn notification_text_from_content(content: &Value) -> Option<String> {
             parts.push(sanitize_visible_text(value));
         }
     }
-    if parts.is_empty() {
-        Some(sanitize_visible_text(body))
+    let summary = if parts.is_empty() {
+        sanitize_visible_text(body)
     } else {
-        Some(parts.join("\n\n"))
+        parts.join("\n\n")
+    };
+    Some(enrich_task_notification_ack(&summary))
+}
+
+fn enrich_task_notification_ack(summary: &str) -> String {
+    let lower = summary.to_ascii_lowercase();
+    let mut text = summary.to_owned();
+    if lower.contains("previous session") || lower.contains("no completion record") {
+        text.push_str(
+            "\n\nClaudex: these are historical previous-session task IDs. Do not TaskStop them. \
+Inspect saved transcripts or output files if needed; leave live workers alone and continue \
+orchestration.",
+        );
     }
+    if lower.contains("no assistant messages found")
+        || (lower.contains("agent \"") && lower.contains(" failed:"))
+    {
+        text.push_str(
+            "\n\nClaudex: do not cascade TaskStop across unrelated in-flight scopes. Replace only \
+this failed lane if the work is still unresolved, using a different available worker; never \
+duplicate an in-flight scope key.",
+        );
+    }
+    if lower.contains("was stopped by claude") {
+        text.push_str(
+            "\n\nClaudex: acknowledge the stop; relaunch the same scope key only when that work is \
+still unresolved and no peer already covers it.",
+        );
+    }
+    text
 }
 
 fn lifecycle_body<'a>(text: &'a str, tag: &str) -> Option<&'a str> {
@@ -218,5 +247,33 @@ mod tests {
         assert!(text.contains("worker result"));
         assert!(!text.contains("completed"));
         assert!(!text.contains("internal"));
+    }
+
+    #[tokio::test]
+    async fn acknowledges_previous_session_orphan_without_encouraging_taskstop() {
+        let request = request(
+            "<task-notification><status>stopped</status><summary>No completion record was found for 2 background agents from the previous session: \"Fix utterance split and paint key\" (a27155c79179347ce).</summary><note>internal</note></task-notification>".into(),
+        );
+        let response = acknowledge(&request);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let response: Value = serde_json::from_str(&String::from_utf8(body.to_vec()).unwrap()).unwrap();
+        let text = response["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("previous session"));
+        assert!(text.contains("Do not TaskStop"));
+        assert!(!text.contains("stopped</status>"));
+    }
+
+    #[tokio::test]
+    async fn acknowledges_empty_assistant_failure_without_cascade_stop() {
+        let request = request(
+            "<task-notification><status>failed</status><summary>Agent \"Parapper turn boundary split\" failed: No assistant messages found</summary></task-notification>".into(),
+        );
+        let response = acknowledge(&request);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let response: Value = serde_json::from_str(&String::from_utf8(body.to_vec()).unwrap()).unwrap();
+        let text = response["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("No assistant messages found"));
+        assert!(text.contains("do not cascade TaskStop"));
+        assert!(text.contains("in-flight scope key"));
     }
 }
