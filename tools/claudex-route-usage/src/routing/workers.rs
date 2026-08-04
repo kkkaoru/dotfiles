@@ -1,7 +1,7 @@
 //! Worker items, capacity metadata, and main/worker model separation.
 
 use super::orchestration::orchestration_contract;
-use super::quota::effective_window_remaining;
+use super::quota::{effective_window_remaining, selection_remaining};
 use crate::config::Config;
 use crate::util::{copied_fields, is_sonnet_model, number_f64, python_round};
 use anyhow::Result;
@@ -98,40 +98,47 @@ pub const LOW_WEEKLY_REMAINING_PERCENT: f64 = 25.0;
 /// At least one worker at or above this enables depleting low-weekly peers.
 pub const AMPLE_WEEKLY_REMAINING_PERCENT: f64 = 40.0;
 
-/// Prefer high weekly headroom for automatic SubAgent selection.
+/// Prefer high quota headroom for automatic SubAgent selection.
 ///
-/// When any selected worker has ample weekly remaining, drop peers whose weekly
-/// remaining is low. Unknown weekly meters stay eligible. Explicit model
-/// launches can still target a dropped provider via `model_prefixes`.
+/// When any selected worker has ample selection remaining, drop peers whose
+/// selection remaining is low. Selection remaining is weekly when only weekly
+/// is known, and `min(weekly, five-hour)` when a five-hour meter is present.
+/// Unknown meters stay eligible. Explicit model launches can still target a
+/// dropped provider via `model_prefixes`.
 pub fn prefer_weekly_headroom(
     selected: Vec<Value>,
     providers: &Map<String, Value>,
     native_quota: &Map<String, Value>,
 ) -> Vec<Value> {
-    let annotated: Vec<(Value, Option<f64>)> = selected
+    let annotated: Vec<(Value, Option<f64>, Option<f64>, Option<f64>)> = selected
         .into_iter()
         .map(|worker_item| {
-            let weekly = worker_item
+            let (weekly, five_hour) = worker_item
                 .as_object()
                 .and_then(|object| worker_quota(object, providers, native_quota))
-                .map(|quota| effective_window_remaining(quota).0)
-                .unwrap_or(None);
-            (worker_item, weekly)
+                .map(effective_window_remaining)
+                .unwrap_or((None, None));
+            let remaining = selection_remaining(weekly, five_hour);
+            (worker_item, weekly, five_hour, remaining)
         })
         .collect();
-    let has_ample = annotated
-        .iter()
-        .any(|(_, weekly)| weekly.is_some_and(|value| value >= AMPLE_WEEKLY_REMAINING_PERCENT));
+    let has_ample = annotated.iter().any(|(_, _, _, remaining)| {
+        remaining.is_some_and(|value| value >= AMPLE_WEEKLY_REMAINING_PERCENT)
+    });
     let keep_all = !has_ample;
     let mut filtered = Vec::with_capacity(annotated.len());
-    for (mut worker_item, weekly) in annotated {
-        if !keep_all && weekly.is_some_and(|value| value < LOW_WEEKLY_REMAINING_PERCENT) {
+    for (mut worker_item, weekly, five_hour, remaining) in annotated {
+        if !keep_all && remaining.is_some_and(|value| value < LOW_WEEKLY_REMAINING_PERCENT) {
             continue;
         }
         if let Some(object) = worker_item.as_object_mut() {
             object.insert(
                 "weekly_remaining_percent".into(),
                 weekly.map_or(Value::Null, |value| Value::from(python_round(value, 1))),
+            );
+            object.insert(
+                "five_hour_remaining_percent".into(),
+                five_hour.map_or(Value::Null, |value| Value::from(python_round(value, 1))),
             );
         }
         filtered.push(worker_item);

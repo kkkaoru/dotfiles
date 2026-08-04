@@ -238,15 +238,91 @@ fn weekly_remaining_orders_workers() {
           "reason": "available",
           "maxUsedPercent": 10,
           "quotaWindows": [
-            {"name":"five-hour","remainingPercent":10},
+            {"name":"five-hour","remainingPercent":30},
             {"name":"seven-day","remainingPercent":80}
           ]
         },
         {"provider":"qwencloud","available":false,"reason":"exhausted","maxUsedPercent":100}
     ]);
     let summary = routing_summary(&usage, &sample_config(), &BTreeSet::new()).unwrap();
+    // When five-hour is known, ranking uses min(weekly, five-hour): spark=40, grok=30.
+    assert_eq!(summary["selected_workers"][0]["agent"], "claudex-gpt-spark");
+    assert_eq!(summary["selected_workers"][1]["agent"], "claudex-grok");
+}
+
+#[test]
+fn five_hour_bottleneck_outranks_fat_weekly() {
+    let usage = json!([
+        {
+          "provider":"codex",
+          "available": true,
+          "reason": "available",
+          "maxUsedPercent": 50,
+          "quotaWindows": [
+            {"name":"five-hour","remainingPercent":30},
+            {"name":"seven-day","remainingPercent":95}
+          ]
+        },
+        {
+          "provider":"grok",
+          "available": true,
+          "reason": "available",
+          "maxUsedPercent": 40,
+          "quotaWindows": [
+            {"name":"five-hour","remainingPercent":70},
+            {"name":"seven-day","remainingPercent":55}
+          ]
+        },
+        {"provider":"qwencloud","available":false,"reason":"exhausted","maxUsedPercent":100}
+    ]);
+    let summary = routing_summary(&usage, &sample_config(), &BTreeSet::new()).unwrap();
+    // spark min(95,30)=30, grok min(55,70)=55 → grok first.
     assert_eq!(summary["selected_workers"][0]["agent"], "claudex-grok");
     assert_eq!(summary["selected_workers"][1]["agent"], "claudex-gpt-spark");
+}
+
+#[test]
+fn drops_low_five_hour_workers_when_ample_alternatives_exist() {
+    let usage = json!([
+        {
+          "provider":"codex",
+          "available": true,
+          "reason": "available",
+          "maxUsedPercent": 20,
+          "quotaWindows": [
+            {"name":"five-hour","remainingPercent":10},
+            {"name":"seven-day","remainingPercent":90}
+          ]
+        },
+        {
+          "provider":"grok",
+          "available": true,
+          "reason": "available",
+          "maxUsedPercent": 30,
+          "quotaWindows": [
+            {"name":"five-hour","remainingPercent":80},
+            {"name":"seven-day","remainingPercent":50}
+          ]
+        },
+        {
+          "provider":"qwencloud",
+          "available": true,
+          "reason": "available",
+          "maxUsedPercent": 5,
+          "quotaWindows": [
+            {"name":"five-hour","remainingPercent":95},
+            {"name":"seven-day","remainingPercent":95}
+          ]
+        }
+    ]);
+    let summary = routing_summary(&usage, &sample_config(), &BTreeSet::new()).unwrap();
+    let agents = selected_agents(&summary);
+    assert!(agents.contains(&"claudex-qwen"));
+    assert!(agents.contains(&"claudex-grok"));
+    assert!(
+        !agents.contains(&"claudex-gpt-spark"),
+        "high weekly / low five-hour spark must leave automatic selected_workers: {agents:?}"
+    );
 }
 
 #[test]

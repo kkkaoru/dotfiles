@@ -128,9 +128,9 @@ daemonのPATHでは `~/.local/bin` をHomebrewより先に置き、壊れたHome
    `model_concurrency` はpromptごとに再取得し、usage cacheには保存しません。health URLは
    `CLAUDEX_DAEMON_HEALTH_URL`、loopback `ANTHROPIC_BASE_URL` のorigin、既定の
    `http://127.0.0.1:8318/health` の順に解決します。
-3. 各providerを7日（weekly）quota残量が多い順に並べます。quota windowを持つproviderは
-   `seven-day` windowの残量を、windowを持たないproviderは集約使用率の残量を使います。weekly残量が
-   同率の場合は5時間（`five-hour`）残量が多い方を優先します。OpenCode Goのmodel別request budgetと
+3. 各providerをquota残量が多い順に並べます。`five-hour` windowを取得できるproviderは
+   `min(seven-day|集約残量, five-hour)` を、five-hourが無いproviderは `seven-day`（または集約
+   使用率の残量）を使います。OpenCode Goのmodel別request budgetと
    model別並列上限の余裕も同じ比較に加わり、残量0%（`requestBudget` の5時間窓を使い切ったmodelを
    含む）のproviderは
    そのturnの候補から外します。`maxConcurrency` に達したmodelも候補から外します。healthを
@@ -462,9 +462,9 @@ routingを止めません。このスナップショットは5分キャッシュ
 
 #### codexbar使用量による動的なmodel選択
 
-`selected_workers` は7日（weekly）quota残量が多い順で並びます。quota windowを持つproviderは
-`seven-day` windowの残量を、windowを持たないproviderは集約使用率の残量を使い、weekly同率なら
-`five-hour` windowの残量が多い方を優先します（model別concurrencyの余裕も同じ比較に加わります）。
+`selected_workers` はquota残量が多い順で並びます。`five-hour` windowを取得できるproviderは
+`min(seven-day|集約残量, five-hour)` を使い、five-hourが無いproviderは `seven-day`（または集約
+使用率の残量）を使います（model別concurrencyの余裕も同じ比較に加わります）。
 hook出力の `worker_capacity` リストはこの優先順を
 保持し、各workerの `used_percent` / `remaining_percent` / `weekly_remaining_percent` /
 `five_hour_remaining_percent` を公開するため、subagentで起動する
@@ -473,7 +473,7 @@ unknown/unmeteredは `null` になり、既知の空き容量があるmodelよ�
 
 `claudex_model` を指定せずに起動するSubAgent（特にClaude Code組み込みの `general-purpose` type）は、
 本来このランキングを素通りしてadapterへ `native_model=None` で到達し、recoverableなrouteを持ちません。
-hook出力の `default_subagent_route` はトップランクのworker（`selected_workers[0]`、weekly残量が最も多い
+hook出力の `default_subagent_route` はトップランクのworker（`selected_workers[0]`、選択残量が最も多い
 model）を明示するため、こうした起動も除外されず動的な勝者へ解決されます。`agent` / `model` / `effort` に
 加えて `applies_to_subagent_types: ["general-purpose"]` と `applies_when_claudex_model_omitted: true` を
 持ち、選択可能なworkerが1つも無い場合のみ `null` になります。

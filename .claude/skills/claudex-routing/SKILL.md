@@ -20,12 +20,13 @@ retained.
    implicit read-only, plan-only, no-edit, no-build, or no-deploy restriction to the definition or
    delegation prompt. Use foreground execution when background execution would auto-deny an
    interactive permission available to the main session.
-   The list is ordered by weekly remaining headroom descending (the `seven-day` quota window when
-   a provider reports one, otherwise its aggregate usage), with the `five-hour` window breaking
-   ties, then exact-model concurrency headroom; prefer `preferred_worker` for primary work. Treat
+   The list is ordered by remaining headroom descending. When a provider reports a
+   `five-hour` window, headroom is `min(seven-day|aggregate, five-hour)`; otherwise it is
+   the `seven-day` quota window when reported, else aggregate usage. Exact-model concurrency
+   headroom breaks remaining ties; prefer `preferred_worker` for primary work. Treat
    an exact `model_concurrency` entry with `available: false` as unavailable for that turn.
-   Automatic `selected_workers` already drops low weekly remaining peers (under ~25%) when any
-   peer still has ample weekly headroom (at least ~40%); do not reintroduce those depleted models
+   Automatic `selected_workers` already drops low remaining peers (under ~25%) when any
+   peer still has ample remaining headroom (at least ~40%); do not reintroduce those depleted models
    for diversity. Launch in ranking order: fill scopes from the front of `selected_workers` /
    `worker_ranking` before lower-ranked entries. Ollama API-only availability counts as full
    weekly headroom when CodexBar has no meter.
@@ -205,11 +206,11 @@ default. Codex, Grok, Claude, Qwen Cloud (`qwencloud`), and other CodexBar-backe
 from `codexbar usage --json`. Primary/secondary windows are normalized to five-hour / seven-day
 remaining for ranking.
 
-Model selection is dynamic and codexbar-driven: `selected_workers` is ordered by weekly remaining
-headroom descending, so the model with the most weekly capacity left is preferred for each
-subagent launch. The weekly value is the explicit `seven-day` quota window when a provider
-reports one, otherwise the provider's aggregate usage headroom; providers at 0% remaining are
-excluded entirely. A reported `five-hour` window breaks ties between equally-utilized workers.
+Model selection is dynamic and codexbar-driven: `selected_workers` is ordered by remaining
+headroom descending, so the model with the most usable capacity left is preferred for each
+subagent launch. When a provider reports a `five-hour` window, remaining is
+`min(seven-day|aggregate, five-hour)`; otherwise it is the `seven-day` quota window when
+reported, else aggregate usage. Providers at 0% remaining are excluded entirely.
 The hook output's `worker_capacity` list preserves that order and exposes each worker's
 `used_percent`, `remaining_percent`, `weekly_remaining_percent`, and `five_hour_remaining_percent`
 so the model choice is observably a runtime decision; unknown or unmetered usage reports `null`
@@ -218,7 +219,7 @@ for the window values and never outranks known headroom.
 A SubAgent launched without an explicit `claudex_model` — most notably Claude Code's built-in
 `general-purpose` type — would otherwise bypass this ranking and reach the adapter with
 `native_model=None`, which has no recoverable route. The hook output's `default_subagent_route`
-names the top-ranked worker (`selected_workers[0]`, the model with the most weekly capacity) so
+names the top-ranked worker (`selected_workers[0]`, the model with the most selection headroom) so
 those launches resolve to the dynamic winner instead of being excluded from selection. It carries
 `agent`, `model`, `effort`, `applies_to_subagent_types: ["general-purpose"]`, and
 `applies_when_claudex_model_omitted: true`, and is `null` only when no worker is selectable at all.
@@ -236,8 +237,8 @@ If the browser session has expired or quota refresh otherwise fails, use Qwen Co
 compatible API configuration to make a non-generative `GET /models` availability check. A
 successful check keeps Qwen available with unknown headroom, after providers with known remaining
 capacity. A failed check disables only Qwen. A Codexbar failure likewise disables only its
-providers. Qwen with known quota participates in the same weekly-remaining-first ordering as Codex
-and Grok, with its five-hour window breaking weekly ties. Set `CLAUDEX_USAGE_CACHE_SECONDS=0` to
+providers. Qwen with known quota participates in the same remaining-headroom ordering as Codex
+and Grok, using `min(weekly, five-hour)` when its five-hour window is reported. Set `CLAUDEX_USAGE_CACHE_SECONDS=0` to
 disable the five-minute routing-summary cache; the
 one-hour Qwen quota cache remains independent. Missing, unknown, malformed, exhausted, or failed
 usage is treated conservatively for the affected provider.

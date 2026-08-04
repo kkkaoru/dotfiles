@@ -142,7 +142,7 @@ pub fn effective_window_remaining(quota: &Value) -> (Option<f64>, Option<f64>) {
     let weekly = windows
         .and_then(|value| value.get(SEVEN_DAY_WINDOW))
         .and_then(number_f64);
-    let five_hour = windows
+    let mut five_hour = windows
         .and_then(|value| value.get(FIVE_HOUR_WINDOW))
         .and_then(number_f64);
     let weekly = weekly.or_else(|| {
@@ -151,7 +151,40 @@ pub fn effective_window_remaining(quota: &Value) -> (Option<f64>, Option<f64>) {
             .and_then(number_f64)
             .map(|maximum| (100.0 - maximum).max(0.0))
     });
+    // OpenCode Go requestBudget meters the five-hour window. When CodexBar
+    // windows were not attached, reuse that remaining so dynamic selection
+    // still sees the short window.
+    if five_hour.is_none() {
+        five_hour = request_budget_five_hour_remaining(quota);
+    }
     (weekly, five_hour)
+}
+
+fn request_budget_five_hour_remaining(quota: &Value) -> Option<f64> {
+    let budget = quota.get("request_budget")?;
+    if !budget.get("known").and_then(Value::as_bool).unwrap_or(false) {
+        return None;
+    }
+    let window_minutes = budget.get("window_minutes").and_then(Value::as_i64)?;
+    // Only treat the published ~5h request window as five-hour headroom.
+    if window_minutes != 300 {
+        return None;
+    }
+    quota.get("remaining_percent").and_then(number_f64)
+}
+
+/// Remaining headroom for dynamic model selection.
+///
+/// When a five-hour meter is present, the tighter of weekly and five-hour
+/// governs ranking and automatic filtering so a depleted short window cannot
+/// hide behind a fat weekly bucket.
+pub fn selection_remaining(weekly: Option<f64>, five_hour: Option<f64>) -> Option<f64> {
+    match (weekly, five_hour) {
+        (Some(weekly), Some(five_hour)) => Some(weekly.min(five_hour)),
+        (Some(weekly), None) => Some(weekly),
+        (None, Some(five_hour)) => Some(five_hour),
+        (None, None) => None,
+    }
 }
 
 fn push_codexbar_window(windows: &mut Vec<Value>, name: &str, window: &Map<String, Value>) {
@@ -318,15 +351,15 @@ pub fn capacity_priority(quota: &Value, config_index: i64) -> CapacityKey {
         return (1.0, 0.0, 0.0, 0.0, 0.0, 0.0, config_index);
     }
     let (weekly, five_hour) = effective_window_remaining(quota);
-    let Some(weekly) = weekly else {
+    let Some(remaining) = selection_remaining(weekly, five_hour) else {
         return (2.0, 0.0, 0.0, 0.0, 0.0, 0.0, config_index);
     };
     (
         0.0,
-        -weekly,
+        -remaining,
         if five_hour.is_some() { 0.0 } else { 1.0 },
         -five_hour.unwrap_or(0.0),
-        0.0,
+        -weekly.unwrap_or(0.0),
         0.0,
         config_index,
     )
@@ -339,13 +372,6 @@ pub fn combined_capacity_priority(
 ) -> CapacityKey {
     let unmetered = quota.get("reason").and_then(Value::as_str) == Some("unmetered");
     let (mut weekly, mut five_hour) = effective_window_remaining(quota);
-    let tier = if unmetered {
-        1.0
-    } else if weekly.is_none() {
-        2.0
-    } else {
-        0.0
-    };
     let parallel_used = parallel_used_percent(concurrency);
     if parallel_used != 0.0 {
         let parallel_remaining = 100.0 - parallel_used;
@@ -353,6 +379,14 @@ pub fn combined_capacity_priority(
         five_hour =
             Some(five_hour.map_or(parallel_remaining, |value| value.min(parallel_remaining)));
     }
+    let remaining = selection_remaining(weekly, five_hour);
+    let tier = if unmetered {
+        1.0
+    } else if remaining.is_none() {
+        2.0
+    } else {
+        0.0
+    };
     let health_unknown =
         if concurrency.get("reason").and_then(Value::as_str) == Some("daemon-health-unavailable") {
             1.0
@@ -361,8 +395,8 @@ pub fn combined_capacity_priority(
         };
     (
         tier,
-        if weekly.is_some() { 0.0 } else { 1.0 },
-        -weekly.unwrap_or(0.0),
+        if remaining.is_some() { 0.0 } else { 1.0 },
+        -remaining.unwrap_or(0.0),
         if five_hour.is_some() { 0.0 } else { 1.0 },
         -five_hour.unwrap_or(0.0),
         health_unknown,
