@@ -1,0 +1,8 @@
+[build]
+# Keep Rust debug/test artifacts out of the checkout, matching the adapter crate.
+target-dir = "/tmp/claudex-route-usage-target"
+
+[alias]
+fmt-check = "fmt --all -- --check"
+test-all = "test --all-targets"
+lint = "clippy --all-targets --all-features -- -D warnings"

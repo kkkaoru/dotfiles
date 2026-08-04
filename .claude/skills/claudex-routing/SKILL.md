@@ -20,9 +20,10 @@ retained.
    implicit read-only, plan-only, no-edit, no-build, or no-deploy restriction to the definition or
    delegation prompt. Use foreground execution when background execution would auto-deny an
    interactive permission available to the main session.
-   The list is ordered by the tightest known quota or exact-model concurrency headroom; prefer
-   `preferred_worker` for primary work. Treat an exact `model_concurrency` entry with
-   `available: false` as unavailable for that turn.
+   The list is ordered by weekly remaining headroom descending (the `seven-day` quota window when
+   a provider reports one, otherwise its aggregate usage), with the `five-hour` window breaking
+   ties, then exact-model concurrency headroom; prefer `preferred_worker` for primary work. Treat
+   an exact `model_concurrency` entry with `available: false` as unavailable for that turn.
    A selected worker may intentionally use the same model as the outer session; outer and
    SubAgent requests are independent. The one conservation exception is the `claudex-sonnet`
    fallback: when `CLAUDEX_OUTER_MODEL` is a Sonnet 5 alias, automatic routing omits that worker
@@ -165,20 +166,63 @@ retained.
      the main session owns those actions. Its validated controls are
      `CLAUDEX_SUBAGENT_MAX_PARALLEL` is the only parallel control; it is an upper bound, never a
      required launch count.
+   - RAM-aware management is part of the same contract: every hook invocation samples macOS memory
+     once and lowers `max_parallel_workers` when reclaimable RAM (free + inactive + speculative
+     pages as a percent of total) is tight, and forces `reuse_compatible_workers` on at high or
+     critical pressure. The memory cap only ever reduces the configured parallel upper bound and
+     never raises the reuse or fan-out settings; a RAM-starved machine degrades to fewer, reused
+     subagents instead of spawning until macOS kills applications. The per-invocation memory snapshot
+     is independent of the five-minute usage cache because it must reflect live pressure.
+     `memory_management` in the hook output carries `status`, `pressure_level`, `available_percent`,
+     `configured_max_parallel_workers`, `effective_max_parallel_workers`, `management_active`, and
+     `reuse_required`. Default bands (available percent of total RAM): below 10% cap 1, below 20%
+     cap 2, below 30% cap 4, below 40% cap 8, otherwise no memory cap. Set
+     `CLAUDEX_MEMORY_MANAGEMENT=0|false|off` to disable probing; the percentage bands are
+     overridable with `CLAUDEX_MEMORY_AVAILABLE_PCT_CRITICAL|LOW|MEDIUM|MODERATE` and must stay
+     ascending. On probe failure or non-macOS, status is `unavailable` and routing never blocks work
+     on memory checks.
 
-`scripts/route_usage.py` refreshes the capacity snapshot at most once every five minutes by
+`tools/claudex-route-usage` (`claudex-route-usage`, typically installed to `~/.cargo/bin/claudex-route-usage`) refreshes the capacity snapshot at most once every five minutes by
 default. Codex and Grok usage comes from `codexbar usage --json`. Qwen's five-hour and seven-day
 Token Plan utilization comes from the validated Qwen Cloud request saved in `tmp/curl.txt`. Only
 sanitized percentages, reset times, and the acquisition time as UTC ISO 8601 `fetched_at` are saved
 to `~/.cache/claudex/qwen-quota.json` with mode `0600`. Each read parses that stored acquisition
 time; quota acquired less than one hour ago is reused, and at exactly one hour it is refreshed.
 
+Model selection is dynamic and codexbar-driven: `selected_workers` is ordered by weekly remaining
+headroom descending, so the model with the most weekly capacity left is preferred for each
+subagent launch. The weekly value is the explicit `seven-day` quota window when a provider
+reports one, otherwise the provider's aggregate usage headroom; providers at 0% remaining are
+excluded entirely. A reported `five-hour` window breaks ties between equally-utilized workers.
+The hook output's `worker_capacity` list preserves that order and exposes each worker's
+`used_percent`, `remaining_percent`, `weekly_remaining_percent`, and `five_hour_remaining_percent`
+so the model choice is observably a runtime decision; unknown or unmetered usage reports `null`
+for the window values and never outranks known headroom.
+
+A SubAgent launched without an explicit `claudex_model` — most notably Claude Code's built-in
+`general-purpose` type — would otherwise bypass this ranking and reach the adapter with
+`native_model=None`, which has no recoverable route. The hook output's `default_subagent_route`
+names the top-ranked worker (`selected_workers[0]`, the model with the most weekly capacity) so
+those launches resolve to the dynamic winner instead of being excluded from selection. It carries
+`agent`, `model`, `effort`, `applies_to_subagent_types: ["general-purpose"]`, and
+`applies_when_claudex_model_omitted: true`, and is `null` only when no worker is selectable at all.
+
+The routing context is loaded into subagent sessions as well. Claude Code injects
+`UserPromptSubmit` `additionalContext` only into the main session, so the same binary is also
+registered on `SubagentStart` (`claudex-route-usage --event SubagentStart`): Claude Code places that
+event's `additionalContext` at the start of the subagent conversation, giving every routed worker
+the identical sanitized context — `selected_workers`, `disabled_subagent_models`, memory policy,
+and `worker_capacity` — for its own nested Agent/Task launches. The 5-minute usage cache keeps the
+per-spawn cost small, and the daemon denylist remains the authoritative hard enforcement at the
+API boundary regardless of what a worker sees.
+
 If the browser session has expired or quota refresh otherwise fails, use Qwen Code's existing
 compatible API configuration to make a non-generative `GET /models` availability check. A
 successful check keeps Qwen available with unknown headroom, after providers with known remaining
 capacity. A failed check disables only Qwen. A Codexbar failure likewise disables only its
-providers. Qwen with known quota participates in the same lowest-used-percentage ordering as Codex
-and Grok. Set `CLAUDEX_USAGE_CACHE_SECONDS=0` to disable the five-minute routing-summary cache; the
+providers. Qwen with known quota participates in the same weekly-remaining-first ordering as Codex
+and Grok, with its five-hour window breaking weekly ties. Set `CLAUDEX_USAGE_CACHE_SECONDS=0` to
+disable the five-minute routing-summary cache; the
 one-hour Qwen quota cache remains independent. Missing, unknown, malformed, exhausted, or failed
 usage is treated conservatively for the affected provider.
 
