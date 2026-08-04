@@ -26,11 +26,7 @@ async fn ccr_search_returns_results_from_a_configured_worker_and_filters_domains
     .expect("start search worker");
     let backend = AgentBackend::codex(app);
     let catalog = ModelCatalog::default()
-        .with_search_worker_routes(vec![WorkerRoute {
-            agent: "search-worker".to_owned(),
-            model: "search-model".to_owned(),
-            effort: "high".to_owned(),
-        }])
+        .with_search_worker_routes(vec![WorkerRoute::new("search-worker".to_owned(), "search-model".to_owned(), "high".to_owned())])
         .expect("configure search worker");
     let bridge = Arc::new(
         Bridge::new_with_backend(backend, "search-model".to_owned()).with_model_catalog(catalog),

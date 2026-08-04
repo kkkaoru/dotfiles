@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{str::FromStr, sync::Arc};
 mod kind;
+mod model_kind;
 pub use kind::BackendKind;
 mod concurrency;
 mod lifecycle;
@@ -167,7 +168,6 @@ impl AgentBackend {
             Self::Codex(_) | Self::ConfiguredAcp(_) | Self::Copilot(_) | Self::Grok(_) => false,
         }
     }
-
     pub fn web_search_mode(&self, model: &str) -> WebSearchMode {
         match self {
             Self::Routed(routes) => routes.web_search_mode(model),

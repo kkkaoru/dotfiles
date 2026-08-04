@@ -279,6 +279,90 @@ fn response_text(response: &Value) -> &str {
         .expect("response text")
 }
 
+#[tokio::test]
+async fn usage_limit_failsover_from_codex_app_server_to_a_non_codex_route() {
+    let root = tempfile::tempdir().expect("usage-limit routing fixture");
+    let previous_home = std::env::var_os("HOME");
+    unsafe { std::env::set_var("HOME", root.path()) };
+    let source = root.path().join("codex-source");
+    std::fs::create_dir(&source).unwrap();
+    std::fs::write(source.join("auth.json"), "{}").unwrap();
+    let codex = AppServer::spawn_with_program(
+        "fugu",
+        env!("CARGO_BIN_EXE_codex-mock"),
+        &source,
+        &root.path().join("codex-home"),
+    )
+    .await
+    .expect("start Codex backend");
+    let grok = GrokAcp::spawn_with_program(
+        "grok-4.5",
+        env!("CARGO_BIN_EXE_grok-acp-mock"),
+        root.path().to_owned(),
+    )
+    .await
+    .expect("start Grok backend");
+    let backend = AgentBackend::routed(vec![
+        ("fugu".to_owned(), AgentBackend::codex(codex)),
+        ("grok-4.5".to_owned(), AgentBackend::grok(grok)),
+    ]);
+    let bridge = Arc::new(Bridge::new_with_backend(backend, "fugu".to_owned()));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/v1/messages", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        axum::serve(listener, http_router(bridge, "fugu".to_owned(), None))
+            .await
+            .unwrap();
+    });
+
+    let response = Client::new()
+        .post(&url)
+        .json(&json!({
+            "model":"fugu",
+            "messages":[{"role":"user","content":"USAGE_LIMIT_ALWAYS"}]
+        }))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(response["model"], "grok-4.5");
+    assert!(!response_text(&response).is_empty());
+
+    let cooldown = root
+        .path()
+        .join(".cache/claudex/codex-app-server-usage-limit.json");
+    assert!(
+        cooldown.is_file(),
+        "usage-limit cooldown should be persisted for later preflight routing"
+    );
+
+    let preflight = Client::new()
+        .post(&url)
+        .json(&json!({
+            "model":"fugu",
+            "messages":[{"role":"user","content":"hello after cooldown"}]
+        }))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(preflight["model"], "grok-4.5");
+
+    server.abort();
+    match previous_home {
+        Some(value) => unsafe { std::env::set_var("HOME", value) },
+        None => unsafe { std::env::remove_var("HOME") },
+    }
+}
+
 async fn parallel_request(url: &str, model: &str, index: usize) -> Value {
     Client::new()
         .post(url)

@@ -143,7 +143,20 @@ impl Bridge {
                 })
                 .await
             }
+            Ok(StreamTurn::UsageLimit { error, builder }) => {
+                self.retry_usage_limit_stream(ContextRetryStream {
+                    turn,
+                    sender,
+                    error,
+                    builder,
+                    model_permit,
+                    is_subagent,
+                    run_in_background,
+                })
+                .await
+            }
             Ok(StreamTurn::ProviderFailure { error }) => {
+                self.note_usage_limit_failure(&error);
                 self.retry_provider_stream(
                     turn,
                     sender,
@@ -157,6 +170,7 @@ impl Bridge {
             Ok(StreamTurn::Disconnected) => {}
             Err(error) => {
                 tracing::warn!(?error, "streaming turn failed before message_stop");
+                self.note_usage_limit_failure(&error);
                 self.remove_session(&turn.session).await;
                 send_stream_error(&sender, error).await;
             }
@@ -225,6 +239,64 @@ impl Bridge {
             send_stream_error(&input.sender, input.error).await;
             return;
         };
+        let retried = match self
+            .retry_after_context_window(retry, &session, input_tokens)
+            .await
+        {
+            Ok(retried) => retried,
+            Err(error) => {
+                send_stream_error(&input.sender, error).await;
+                return;
+            }
+        };
+        Box::pin(self.drive_subagent_stream(
+            retried,
+            input.sender,
+            input.builder,
+            input.model_permit,
+            input.is_subagent,
+            input.run_in_background,
+        ))
+        .await;
+    }
+
+    async fn retry_usage_limit_stream(self: Arc<Self>, input: ContextRetryStream) {
+        self.note_usage_limit_failure(&input.error);
+        let ActiveTurn {
+            session,
+            input_tokens,
+            retry,
+            gate,
+            ..
+        } = input.turn;
+        drop(gate);
+        let exhausted_model = session.model.clone();
+        let Some(mut retry) = retry else {
+            self.remove_session(&session).await;
+            send_stream_error(&input.sender, input.error).await;
+            return;
+        };
+        let Some(failover) = self.usage_limit_failover_for(&exhausted_model) else {
+            self.remove_session(&session).await;
+            send_stream_error(&input.sender, input.error).await;
+            return;
+        };
+        if failover.route != super::super::request_routing::RouteDecision::Provider {
+            // Subscription failover for the already-open SSE stream is handled
+            // by the next request's preflight after the cooldown is recorded.
+            self.remove_session(&session).await;
+            send_stream_error(&input.sender, input.error).await;
+            return;
+        }
+        tracing::warn!(
+            exhausted_model = %exhausted_model,
+            failover_model = %failover.model,
+            "retrying stream on a non-Codex provider after usageLimitExceeded"
+        );
+        retry.request.model = failover.model;
+        if let Some(effort) = failover.effort {
+            retry.effort = Some(effort);
+        }
         let retried = match self
             .retry_after_context_window(retry, &session, input_tokens)
             .await

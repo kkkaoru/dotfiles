@@ -1,4 +1,4 @@
-use super::RoutedBackends;
+use super::{BackendKind, RoutedBackends};
 
 impl RoutedBackends {
     pub(crate) fn max_concurrency_for_model(&self, model: &str) -> Option<usize> {
@@ -19,5 +19,14 @@ impl RoutedBackends {
                     .map(|limit| (route.model.clone(), limit))
             })
             .collect()
+    }
+
+    pub(in crate::agent_backend) fn backend_kind_for_model(
+        &self,
+        model: &str,
+    ) -> Option<BackendKind> {
+        self.find(model)
+            .map(|route| route.kind)
+            .or_else(|| self.prefix_template(model).map(|template| template.backend))
     }
 }

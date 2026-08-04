@@ -88,35 +88,19 @@ mod tests {
             ModelCatalog::from_routes(&[BackendRoute::new("model", BackendKind::GrokAcp)]);
         assert!(
             catalog
-                .set_worker_routes(vec![WorkerRoute {
-                    agent: String::new(),
-                    model: "model".to_owned(),
-                    effort: "high".to_owned(),
-                }])
+                .set_worker_routes(vec![WorkerRoute::new(String::new(), "model".to_owned(), "high".to_owned())])
                 .is_err()
         );
         assert!(
             catalog
                 .set_worker_routes(vec![
-                    WorkerRoute {
-                        agent: "worker".to_owned(),
-                        model: "model".to_owned(),
-                        effort: "high".to_owned(),
-                    },
-                    WorkerRoute {
-                        agent: "worker".to_owned(),
-                        model: "other".to_owned(),
-                        effort: "low".to_owned(),
-                    },
+                    WorkerRoute::new("worker".to_owned(), "model".to_owned(), "high".to_owned()),
+                    WorkerRoute::new("worker".to_owned(), "other".to_owned(), "low".to_owned()),
                 ])
                 .is_err()
         );
         catalog
-            .set_worker_routes(vec![WorkerRoute {
-                agent: "worker".to_owned(),
-                model: "model".to_owned(),
-                effort: "high".to_owned(),
-            }])
+            .set_worker_routes(vec![WorkerRoute::new("worker".to_owned(), "model".to_owned(), "high".to_owned())])
             .expect("valid worker route");
         assert_eq!(catalog.worker_fields("worker"), Some(("model", "high")));
         assert_eq!(catalog.worker_effort_for_model("model"), Some("high"));
@@ -137,11 +121,7 @@ mod tests {
         let loaded = load(&path).expect("load search fallback");
         assert_eq!(
             loaded.model_catalog.search_worker_routes(),
-            [WorkerRoute {
-                agent: "worker".to_owned(),
-                model: "worker-model".to_owned(),
-                effort: "high".to_owned()
-            }]
+            [WorkerRoute::new("worker".to_owned(), "worker-model".to_owned(), "high".to_owned())]
         );
 
         document["webSearch"] = serde_json::json!({"fallbackProviders":["missing"]});

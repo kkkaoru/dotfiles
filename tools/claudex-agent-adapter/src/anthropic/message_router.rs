@@ -100,7 +100,7 @@ impl Bridge {
             },
             |model| self.model_catalog.matches(model),
         )?;
-        let effort = self.resolve_request_effort(&request, intent.effort);
+        let mut effort = self.resolve_request_effort(&request, intent.effort);
         tracing::debug!(
             request_model = %request.model,
             request_effort = ?effort,
@@ -108,6 +108,8 @@ impl Bridge {
             ?route,
             "resolved request routing"
         );
+        let route =
+            self.apply_usage_limit_preflight(&mut request, route, &mut effort, is_subagent);
         let turn_started = Instant::now();
         tracing::info!(
             target: "claudex.provider",
@@ -123,12 +125,11 @@ impl Bridge {
             self.subscription_messages(request, effort, is_subagent, tools_were_provided)
                 .await
         } else {
-            let input_tokens = u64::try_from(token_count(&request)).unwrap_or(u64::MAX);
-            self.provider_messages(
+            self.provider_messages_with_usage_limit_failover(
                 request,
-                input_tokens,
                 effort,
                 is_subagent,
+                tools_were_provided,
                 intent.run_in_background,
             )
             .await
@@ -143,14 +144,17 @@ impl Bridge {
                 outcome = "response_ready",
                 "provider turn response is ready"
             ),
-            Err(error) => tracing::error!(
-                target: "claudex.provider",
-                log_event = "provider_turn_end",
-                duration_ms,
-                outcome = "error",
-                error = %error,
-                "provider turn failed"
-            ),
+            Err(error) => {
+                self.note_usage_limit_failure(error);
+                tracing::error!(
+                    target: "claudex.provider",
+                    log_event = "provider_turn_end",
+                    duration_ms,
+                    outcome = "error",
+                    error = %error,
+                    "provider turn failed"
+                );
+            }
         }
         response
     }

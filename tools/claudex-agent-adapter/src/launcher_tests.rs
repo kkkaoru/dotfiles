@@ -197,11 +197,7 @@ mod tests {
         config
             .options
             .model_catalog
-            .set_worker_routes(vec![crate::provider_config::WorkerRoute {
-                agent: "claudex-grok".to_owned(),
-                model: "grok-4.5".to_owned(),
-                effort: "high".to_owned(),
-            }])
+            .set_worker_routes(vec![crate::provider_config::WorkerRoute::new("claudex-grok".to_owned(), "grok-4.5".to_owned(), "high".to_owned())])
             .expect("worker route");
         let arguments = daemon_arguments(&config.options)
             .into_iter()
@@ -216,11 +212,7 @@ mod tests {
         config
             .options
             .model_catalog
-            .set_search_worker_routes(vec![crate::provider_config::WorkerRoute {
-                agent: "claudex-search".to_owned(),
-                model: "gpt-search".to_owned(),
-                effort: "xhigh".to_owned(),
-            }])
+            .set_search_worker_routes(vec![crate::provider_config::WorkerRoute::new("claudex-search".to_owned(), "gpt-search".to_owned(), "xhigh".to_owned())])
             .expect("search worker route");
         let arguments = daemon_arguments(&config.options)
             .into_iter()

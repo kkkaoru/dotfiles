@@ -602,11 +602,7 @@ mod tests {
     fn standard_agent_types_use_claudex_worker_model_and_effort() {
         let mut catalog = crate::provider_config::ModelCatalog::default();
         catalog
-            .set_worker_routes(vec![crate::provider_config::WorkerRoute {
-                agent: "claudex-worker".to_owned(),
-                model: "worker-model".to_owned(),
-                effort: "max".to_owned(),
-            }])
+            .set_worker_routes(vec![crate::provider_config::WorkerRoute::new("claudex-worker".to_owned(), "worker-model".to_owned(), "max".to_owned())])
             .expect("valid worker route");
 
         let mut general = json!({"subagent_type":"general-purpose","prompt":"inspect"});

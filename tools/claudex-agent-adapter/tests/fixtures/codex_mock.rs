@@ -127,6 +127,10 @@ impl<W: Write> Fixture<W> {
             self.context_window_once(message);
         } else if input.contains("CONTEXT_WINDOW_ALWAYS") {
             self.context_window_error(message);
+        } else if input.contains("USAGE_LIMIT_ONCE") {
+            self.usage_limit_once(message);
+        } else if input.contains("USAGE_LIMIT_ALWAYS") {
+            self.usage_limit_error(message);
         } else if input.contains("RETRY_THEN_OK") {
             self.retry_then_ok();
         } else if input.contains("TURN_FAILED") {
@@ -319,6 +323,28 @@ impl<W: Write> Fixture<W> {
                 "error":{
                     "codexErrorInfo":"contextWindowExceeded",
                     "message":"Codex ran out of room in the model's context window."
+                }
+            }
+        }));
+    }
+
+    fn usage_limit_once(&mut self, message: &Value) {
+        if self.next_thread == 1 {
+            self.usage_limit_error(message);
+        } else {
+            self.send_text_and_complete("OK_AFTER_USAGE_LIMIT_FAILOVER");
+        }
+    }
+
+    fn usage_limit_error(&mut self, message: &Value) {
+        self.send(json!({
+            "method":"error",
+            "params":{
+                "threadId":message.pointer("/params/threadId"),
+                "turnId":"turn-test", "willRetry":false,
+                "error":{
+                    "codexErrorInfo":"usageLimitExceeded",
+                    "message":"You've hit your usage limit. Try again at 3:20 AM."
                 }
             }
         }));

@@ -40,6 +40,8 @@ mod subscription_stream;
 mod team_protocol;
 mod tool_schema_cache;
 mod turn_input;
+mod usage_limit_cooldown;
+mod usage_limit_failover;
 use anyhow::Result;
 use serde::Deserialize;
 use serde_json::Value;

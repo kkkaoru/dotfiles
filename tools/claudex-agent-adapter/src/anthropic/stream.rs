@@ -21,6 +21,7 @@ mod builder;
 mod context_retry;
 mod context_window;
 mod control;
+pub(super) mod usage_limit;
 mod disconnect;
 mod drive;
 mod non_stream;
@@ -71,10 +72,7 @@ enum StreamEventState {
     Continue,
     Done(Box<StreamTurn>),
     ContextWindow(anyhow::Error),
-}
-
-fn context_window_turn(error: anyhow::Error, builder: SegmentBuilder) -> Result<StreamTurn> {
-    Ok(StreamTurn::ContextWindow { error, builder })
+    UsageLimit(anyhow::Error),
 }
 
 impl Bridge {
@@ -149,6 +147,7 @@ impl Bridge {
             }
             Ok(None) => {}
             Err(error) => {
+                self.note_usage_limit_failure(&error);
                 let _ = builder.close_open_blocks(Some(&sender)).await;
                 send_stream_error(&sender, error).await;
             }
@@ -231,7 +230,10 @@ impl Bridge {
                 StreamEventState::Continue => continue,
                 StreamEventState::Done(turn) => return Ok(*turn),
                 StreamEventState::ContextWindow(error) => {
-                    return context_window_turn(error, builder);
+                    return Ok(StreamTurn::ContextWindow { error, builder });
+                }
+                StreamEventState::UsageLimit(error) => {
+                    return Ok(StreamTurn::UsageLimit { error, builder });
                 }
             }
         }
@@ -324,6 +326,12 @@ impl Bridge {
             {
                 builder.close_open_blocks(Some(sender)).await?;
                 return Ok(StreamEventState::ContextWindow(error));
+            }
+            Err(error)
+                if usage_limit::is_usage_limit_event(event) && !builder.has_committed_output() =>
+            {
+                builder.close_open_blocks(Some(sender)).await?;
+                return Ok(StreamEventState::UsageLimit(error));
             }
             Err(error) => return Err(error),
         };

@@ -676,11 +676,7 @@ fn configured_worker_effort_replaces_an_unsupported_explicit_effort() {
     let mut bridge = Bridge::new_with_backend(AgentBackend::spawn_routes(&[]), "main".to_owned());
     bridge
         .model_catalog
-        .set_worker_routes(vec![WorkerRoute {
-            agent: "claudex-gpt-spark".to_owned(),
-            model: "gpt-5.3-codex-spark".to_owned(),
-            effort: "xhigh".to_owned(),
-        }])
+        .set_worker_routes(vec![WorkerRoute::new("claudex-gpt-spark".to_owned(), "gpt-5.3-codex-spark".to_owned(), "xhigh".to_owned())])
         .expect("worker route");
     let request = MessagesRequest {
         model: "gpt-5.3-codex-spark".to_owned(),

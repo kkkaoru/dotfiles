@@ -329,11 +329,7 @@ mod tests {
         assert!(empty.to_string().contains("must not be empty"));
         let no_workers = run(&backend, &[], "query").await.expect_err("no workers");
         assert!(no_workers.to_string().contains("no WebSearch worker"));
-        let worker = WorkerRoute {
-            agent: "worker".to_owned(),
-            model: "model".to_owned(),
-            effort: "high".to_owned(),
-        };
+        let worker = WorkerRoute::new("worker".to_owned(), "model".to_owned(), "high".to_owned());
         let failed = run(&backend, std::slice::from_ref(&worker), "query")
             .await
             .expect_err("unrouted search worker");

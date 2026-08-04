@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, fs, path::Path};
 
 mod validation;
+mod worker_route;
 use validation::{validate_choice, validate_providers, validate_worker_routes};
 const CONFIG_VERSION: u64 = 1;
 #[derive(Clone, Debug, Deserialize)]
@@ -98,7 +99,12 @@ pub struct WorkerRoute {
     pub agent: String,
     pub model: String,
     pub effort: String,
+    /// Quota association for routing hooks; ignored by the adapter daemon.
+    #[serde(default, skip_serializing)]
+    #[allow(dead_code)]
+    usage_provider: Option<String>,
 }
+
 impl ModelCatalog {
     fn from_providers<'a>(providers: impl IntoIterator<Item = &'a Provider>) -> Self {
         let mut exact = Vec::new();
@@ -178,6 +184,13 @@ impl ModelCatalog {
             })
     }
 
+    /// Configured Claude subscription fallback from `providers.json` (`fallback`).
+    pub fn configured_fallback(&self) -> Option<(&str, &str)> {
+        self.auxiliary_workers
+            .first()
+            .map(|route| (route.model.as_str(), route.effort.as_str()))
+    }
+
     pub fn search_worker_routes(&self) -> &[WorkerRoute] {
         &self.search_workers
     }
@@ -212,14 +225,17 @@ impl ModelCatalog {
     ) -> Result<()> {
         let mut workers = providers
             .iter()
-            .map(|provider| WorkerRoute {
-                agent: provider.agent.clone(),
-                model: provider
-                    .subagent_model
-                    .as_ref()
-                    .unwrap_or(&provider.default_model)
-                    .clone(),
-                effort: provider.effort.clone(),
+            .map(|provider| {
+                WorkerRoute::new(
+                    provider.agent.clone(),
+                    provider
+                        .subagent_model
+                        .as_ref()
+                        .unwrap_or(&provider.default_model)
+                        .clone(),
+                    provider.effort.clone(),
+                )
+                .with_usage_provider(provider.usage_provider.clone())
             })
             .collect::<Vec<_>>();
         workers.extend_from_slice(native_workers);
@@ -289,23 +305,23 @@ fn validate(config: ProviderConfig) -> Result<LoadedConfig> {
     validate_providers(&providers)?;
     model_catalog.add_workers(&providers, &config.native_workers)?;
     let mut auxiliary_workers = vec![
-        WorkerRoute {
-            agent: config.fallback.agent.clone(),
-            model: config.fallback.model.clone(),
-            effort: config.fallback.effort.clone(),
-        },
-        WorkerRoute {
-            agent: "claudex-haiku".to_owned(),
-            model: crate::anthropic::official_claude_haiku_model().to_owned(),
-            effort: "max".to_owned(),
-        },
+        WorkerRoute::new(
+            config.fallback.agent.clone(),
+            config.fallback.model.clone(),
+            config.fallback.effort.clone(),
+        ),
+        WorkerRoute::new(
+            "claudex-haiku",
+            crate::anthropic::official_claude_haiku_model(),
+            "max",
+        ),
     ];
     if let Some(advisor) = config.advisor.as_ref() {
-        auxiliary_workers.push(WorkerRoute {
-            agent: advisor.agent.clone(),
-            model: advisor.model.clone(),
-            effort: advisor.effort.clone(),
-        });
+        auxiliary_workers.push(WorkerRoute::new(
+            advisor.agent.clone(),
+            advisor.model.clone(),
+            advisor.effort.clone(),
+        ));
     }
     model_catalog.set_auxiliary_worker_routes(auxiliary_workers)?;
     let search_workers = search_provider_ids
@@ -318,14 +334,17 @@ fn validate(config: ProviderConfig) -> Result<LoadedConfig> {
         })
         .collect::<Result<Vec<_>>>()?
         .into_iter()
-        .map(|provider| WorkerRoute {
-            agent: provider.agent.clone(),
-            model: provider
-                .subagent_model
-                .as_ref()
-                .unwrap_or(&provider.default_model)
-                .clone(),
-            effort: provider.effort.clone(),
+        .map(|provider| {
+            WorkerRoute::new(
+                provider.agent.clone(),
+                provider
+                    .subagent_model
+                    .as_ref()
+                    .unwrap_or(&provider.default_model)
+                    .clone(),
+                provider.effort.clone(),
+            )
+            .with_usage_provider(provider.usage_provider.clone())
         })
         .collect();
     model_catalog.set_search_worker_routes(search_workers)?;
