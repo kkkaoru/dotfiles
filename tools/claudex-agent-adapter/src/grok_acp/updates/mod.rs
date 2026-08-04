@@ -4,8 +4,8 @@
 //! |---|---|
 //! | AgentThoughtChunk | thinking units (`thinking_delta`, one block per unit) |
 //! | AgentMessageChunk | assistant text |
-//! | ToolCall / ToolCallUpdate | ephemeral WIP progress (never executable `tool_use`) |
-//! | Plan | compact plan status (debounced; not answer text) |
+//! | ToolCall / ToolCallUpdate | visible progress text (never executable `tool_use`) |
+//! | Plan | compact plan status text (debounced) |
 //! | SessionInfo / mode | ignored (noisy vs native Claude Code) |
 //! | xAI SubAgent extensions | compact status |
 
@@ -168,9 +168,9 @@ fn dispatch_thought(
     }
 }
 
-/// Status that must not become answer text. Uses the shared agent-message path
-/// with a dedicated `itemId` suffix so the stream builder can treat it as
-/// ephemeral WIP and strip it from the committed transcript.
+/// Progress status as agent-message deltas with `itemId` `...:status`.
+/// The stream builder commits these as visible assistant text so SubAgent UIs
+/// show native ACP work without inventing executable `tool_use` cards.
 pub(super) fn dispatch_status(events: &ThreadEventDispatcher, session_id: &str, delta: String) {
     dispatch_delta(
         events,

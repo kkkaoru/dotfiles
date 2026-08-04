@@ -107,7 +107,7 @@ fn sanitizes_text_thinking_and_provider_status_variants() {
 }
 
 #[tokio::test]
-async fn thinking_state_handles_reuse_keepalive_and_status_transitions() {
+async fn thinking_state_handles_reuse_keepalive_and_unit_transitions() {
     let mut state = ThinkingState::default();
     let mut blocks = Vec::new();
     state
@@ -122,10 +122,6 @@ async fn thinking_state_handles_reuse_keepalive_and_status_transitions() {
         .activity_keepalive(&mut blocks, None)
         .await
         .expect("model reasoning heartbeat");
-    state
-        .status_progress("ignored while reasoning", &mut blocks, None)
-        .await
-        .expect("status must not close model reasoning");
     state
         .delta(
             &json!({"params":{"itemId":"reasoning","summaryIndex":0,"delta":" two"}}),
@@ -153,19 +149,6 @@ async fn thinking_state_handles_reuse_keepalive_and_status_transitions() {
         .activity_keepalive(&mut visible, None)
         .await
         .expect("visible output keepalive");
-
-    state
-        .status_progress("", &mut blocks, None)
-        .await
-        .expect("empty status");
-    state
-        .status_progress("provider", &mut blocks, None)
-        .await
-        .expect("provider status");
-    state
-        .status_progress("more", &mut blocks, None)
-        .await
-        .expect("continued provider status");
     state
         .delta(
             &json!({"params":{"itemId":"model:status","summaryIndex":0,"delta":"ignored"}}),
@@ -687,7 +670,7 @@ async fn ignores_malformed_empty_raw_and_late_reasoning() {
 }
 
 #[tokio::test]
-async fn streams_native_web_search_status_without_committing_it() {
+async fn streams_native_web_search_status_as_committed_progress_text() {
     let (_root, app, bridge, session) = disconnect_fixture().await;
     let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
     let mut builder = SegmentBuilder::new(1);
@@ -715,7 +698,10 @@ async fn streams_native_web_search_status_without_committing_it() {
     }
     let segment = builder.finish(Some(&sender)).await.expect("segment");
     drop(sender);
-    assert!(segment.blocks.is_empty());
+    assert_eq!(segment.blocks.len(), 1);
+    let text = segment.blocks[0]["text"].as_str().expect("progress text");
+    assert!(text.contains("Example Robotics"));
+    assert!(text.contains("🔎 WebSearch"));
     assert_eq!(segment.usage.web_search_requests, 0);
 
     let mut frames = Vec::new();
@@ -723,13 +709,12 @@ async fn streams_native_web_search_status_without_committing_it() {
         let frame = String::from_utf8(frame.expect("frame").to_vec()).expect("UTF-8 SSE");
         frames.push(frame);
     }
-    assert_eq!(frames.len(), 5);
     assert!(
         frames
             .iter()
             .any(|frame| frame.contains("Example Robotics"))
     );
-    assert!(frames.iter().any(|frame| frame.contains("search")));
+    assert!(frames.iter().any(|frame| frame.contains("WebSearch")));
     app.shutdown().await;
 }
 
@@ -768,7 +753,7 @@ fn parses_tool_calls_and_reports_each_missing_field() {
     let call = parse_tool_call(&valid).expect("valid tool call");
     assert_eq!(call.call_id, "call");
     assert_eq!(call.name, "lookup");
-    assert_eq!(call.arguments, &Value::Null);
+    assert_eq!(call.arguments, Value::Null);
     assert_eq!(call.request_id, json!(8));
 
     for (event, message) in [
@@ -838,6 +823,88 @@ async fn rejects_a_malformed_tool_event_before_dispatch() {
         .await
         .expect_err("malformed tool event");
     assert!(error.to_string().contains("callId missing"));
+}
+
+#[tokio::test]
+async fn bridges_acp_agent_provider_tools_to_tool_use_but_keeps_native_tools_as_wip() {
+    let (_root, _app, bridge, mut session) = disconnect_fixture().await;
+    // disconnect_fixture already maps cc_Agent_0 → Agent; add Bash for native WIP.
+    Arc::get_mut(&mut session)
+        .expect("unique session")
+        .external_tool_names
+        .insert("cc_Bash_0".to_owned(), "Bash".to_owned());
+    // Also accept the plain "Agent" provider label used by some ACP agents.
+    Arc::get_mut(&mut session)
+        .expect("unique session")
+        .external_tool_names
+        .insert("Agent".to_owned(), "Agent".to_owned());
+    let messages = [json!({"role":"user","content":"delegate work"})];
+    let routing = json!(
+        r#"Claudex routing for this turn: {"providers":{},"selected_workers":[{"agent":"worker","model":"worker-model","effort":"high"}]}"#
+    );
+    let mut builder = SegmentBuilder::new(1);
+    let _ = builder
+        .handle_event(
+            &bridge,
+            &session,
+            &messages,
+            &routing,
+            &json!({
+                "method":"item/providerTool/call",
+                "params":{
+                    "callId":"acp-agent-1",
+                    "tool":"Agent",
+                    "status":"pending",
+                    "arguments":{"prompt":"implement feature","subagent_type":"general-purpose"}
+                }
+            }),
+            None,
+        )
+        .await
+        .expect("bridge Agent to tool_use");
+    assert!(builder.has_external_tool_calls());
+    assert_eq!(builder.blocks[0]["type"], "tool_use");
+    assert_eq!(builder.blocks[0]["name"], "Agent");
+    let prompt = builder.blocks[0]["input"]["prompt"]
+        .as_str()
+        .expect("bridged Agent prompt");
+    assert!(prompt.starts_with("implement feature"));
+    assert_eq!(builder.blocks[0]["input"]["subagent_type"], "general-purpose");
+
+    let mut native = SegmentBuilder::new(1);
+    let _ = native
+        .handle_event(
+            &bridge,
+            &session,
+            &messages,
+            &routing,
+            &json!({
+                "method":"item/providerTool/call",
+                "params":{
+                    "callId":"acp-bash-1",
+                    "tool":"Bash",
+                    "status":"pending",
+                    "arguments":{"command":"ls"}
+                }
+            }),
+            None,
+        )
+        .await
+        .expect("native Bash stays WIP");
+    assert!(!native.has_external_tool_calls());
+    assert!(
+        native
+            .blocks
+            .iter()
+            .all(|block| block.get("type").and_then(Value::as_str) != Some("tool_use"))
+    );
+    let progress = native
+        .open_text_block
+        .as_ref()
+        .map(|(_, text)| text.as_str())
+        .expect("native progress text");
+    assert!(progress.contains("▶ Bash"));
+    assert!(progress.contains("ls"));
 }
 
 #[tokio::test]
@@ -1034,26 +1101,39 @@ async fn treats_a_closed_sender_after_batch_finish_as_disconnect() {
 }
 
 #[tokio::test]
-async fn keeps_status_deltas_out_of_committed_text() {
+async fn commits_status_deltas_as_progress_text_after_answer_starts() {
     let mut builder = SegmentBuilder::new(1);
     builder.blocks.push(json!({"type":"text","text":"answer"}));
     assert!(builder.has_committed_output());
     builder
-        .stream_ephemeral_status("", None)
+        .stream_progress_text("", None)
         .await
         .expect("empty status");
+    // Existing closed text block: open a new progress text stream.
     builder
-        .stream_ephemeral_status("provider", None)
+        .stream_progress_text("\n▶ provider\n", None)
         .await
         .expect("visible block status");
+    assert!(
+        builder
+            .open_text_block
+            .as_ref()
+            .expect("progress text")
+            .1
+            .contains("▶ provider")
+    );
 
     builder.blocks.clear();
     builder.open_text_block = Some((0, "answer".to_owned()));
     builder.blocks.push(json!({"type":"text","text":""}));
     builder
-        .stream_ephemeral_status("provider", None)
+        .stream_progress_text("\n▶ provider\n", None)
         .await
         .expect("open text status");
+    assert_eq!(
+        builder.open_text_block.as_ref().map(|(_, text)| text.as_str()),
+        Some("answer\n▶ provider\n")
+    );
 }
 
 #[tokio::test]

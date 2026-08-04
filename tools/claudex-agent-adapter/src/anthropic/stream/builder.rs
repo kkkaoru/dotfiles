@@ -94,7 +94,17 @@ impl SegmentBuilder {
                     .await?;
             }
             Some("item/providerTool/call") => {
-                self.provider_tool_call(event, stream).await?;
+                // Bridge only request-supplied Agent/Task launches to executable tool_use.
+                // Native provider tools stay WIP so Claude Code never double-executes them.
+                if let Some(call) = super::acp_tool_bridge::bridge_provider_tool_call(
+                    &session.external_tool_names,
+                    event,
+                ) {
+                    self.tool_call(bridge, session, current_messages, system, call, stream)
+                        .await?;
+                } else {
+                    self.provider_tool_call(event, stream).await?;
+                }
             }
             Some("item/providerTool/update") => {
                 self.provider_tool_update(event, stream).await?;
@@ -141,13 +151,14 @@ impl SegmentBuilder {
             return Ok(());
         }
         // ACP status lines reuse agentMessage/delta with itemId "...:status".
-        // Keep them live-only so the final answer matches Claude Code more closely.
+        // Commit them as visible text so Cursor/Grok SubAgent panels show progress
+        // instead of a silent multi-minute spinner.
         if event
             .pointer("/params/itemId")
             .and_then(Value::as_str)
             .is_some_and(|id| id.ends_with(":status"))
         {
-            return self.stream_ephemeral_status(delta, stream).await;
+            return self.stream_progress_text(delta, stream).await;
         }
         self.thinking.close(&mut self.blocks, stream).await?;
         let index = match &mut self.open_text_block {
@@ -194,10 +205,13 @@ impl SegmentBuilder {
         .await
     }
 
-    /// Live-only provider progress (ACP tools). Streamed for WIP visibility but
-    /// excluded from committed answer text so history matches Claude Code more
-    /// closely (tool cards are not part of the assistant answer).
-    pub(super) async fn stream_ephemeral_status(
+    /// Provider-native tool / plan progress as durable assistant text.
+    ///
+    /// Cursor and other ACP providers never surface native tools as Claude Code
+    /// `tool_use` cards (double-execution risk). Progress must therefore appear
+    /// as text: stream it live and keep it in the committed segment so SubAgent
+    /// panels and transcripts show work after the first model sentence.
+    pub(super) async fn stream_progress_text(
         &mut self,
         delta: &str,
         stream: Option<&StreamSender>,
@@ -205,17 +219,23 @@ impl SegmentBuilder {
         if delta.is_empty() {
             return Ok(());
         }
-        // Never splice status into open answer text — that scrambled token order
-        // in Claude Code's log (▶ lines mid-sentence). After text has started,
-        // drop chrome; the tool already ran on the provider.
-        if self.open_text_block.is_some()
-            || self.thinking.has_visible_answer(self.blocks.as_slice())
-        {
-            return Ok(());
-        }
-        self.thinking
-            .status_progress(delta, &mut self.blocks, stream)
-            .await
+        // Close thinking first so progress is not buried under thought chrome and
+        // so Claude Code's decoded-event stream stays on visible text deltas.
+        self.thinking.close(&mut self.blocks, stream).await?;
+        let index = match &mut self.open_text_block {
+            Some((index, text)) => {
+                text.push_str(delta);
+                *index
+            }
+            None => self.start_text_block(delta, stream).await?,
+        };
+        send_stream_frame(stream, "content_block_delta", || {
+            json!({
+                "type":"content_block_delta", "index":index,
+                "delta":{"type":"text_delta","text":delta}
+            })
+        })
+        .await
     }
 
     pub(super) async fn start_text_block(
@@ -242,11 +262,11 @@ impl SegmentBuilder {
         session: &Session,
         current_messages: &[Value],
         system: &Value,
-        call: ToolCall<'_>,
+        call: ToolCall,
         stream: Option<&StreamSender>,
     ) -> Result<()> {
         let Some(original_name) =
-            external_tool::requested_external_tool_name(&session.external_tool_names, call.name)
+            external_tool::requested_external_tool_name(&session.external_tool_names, &call.name)
         else {
             external_tool::reject_unrequested_tool(bridge, session, call).await?;
             return Ok(());

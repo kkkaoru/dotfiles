@@ -145,61 +145,6 @@ impl ThinkingState {
         .await
     }
 
-    /// Provider WIP status (ACP tools/plan). Uses a dedicated thinking item so
-    /// real model thoughts are not mixed into the same summary stream, and so
-    /// `finish` can drop pure status blocks from the transcript.
-    pub(super) async fn status_progress(
-        &mut self,
-        delta: &str,
-        blocks: &mut Vec<Value>,
-        stream: Option<&StreamSender>,
-    ) -> Result<()> {
-        if delta.is_empty() {
-            return Ok(());
-        }
-        // Do not tear down an open model-reasoning block for tool chrome. Closing
-        // mid-thought produced signature/stop noise and reordered the UI log.
-        if self
-            .open
-            .as_ref()
-            .is_some_and(|open| is_model_reasoning_item(&open.item_id))
-        {
-            return Ok(());
-        }
-        if self
-            .open
-            .as_ref()
-            .is_some_and(|open| open.item_id != "claudex_provider_status")
-        {
-            self.close(blocks, stream).await?;
-        }
-        if self.open.is_none() {
-            self.start(blocks, "claudex_provider_status", 0, stream)
-                .await?;
-        }
-        let open = self.open.as_mut().expect("status thinking just opened");
-        open.text.push_str(delta);
-        blocks[open.index]["thinking"] = json!(open.text);
-        send_stream_frame(stream, "content_block_delta", || {
-            json!({
-                "type":"content_block_delta", "index":open.index,
-                "delta":{"type":"thinking_delta","thinking":delta}
-            })
-        })
-        .await
-    }
-
-    /// True once any non-thinking content block exists (answer text / tools).
-    pub(super) fn has_visible_answer(&self, blocks: &[Value]) -> bool {
-        has_visible_output(blocks)
-    }
-}
-
-fn is_model_reasoning_item(item_id: &str) -> bool {
-    !matches!(
-        item_id,
-        "claudex_provider_status" | "claudex_activity_keepalive"
-    ) && !item_id.ends_with(":status")
 }
 
 fn summary_delta(event: &Value) -> Option<(&str, i64, &str)> {

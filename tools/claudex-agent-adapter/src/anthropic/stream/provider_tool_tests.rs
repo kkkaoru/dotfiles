@@ -45,22 +45,23 @@ mod tests {
             .await
             .expect("default provider progress");
 
-        // Progress lives in ephemeral thinking, not open answer text.
+        // Progress is committed assistant text (never executable tool_use).
         assert_eq!(builder.blocks.len(), EXPECTED_PROGRESS_BLOCKS);
-        assert!(builder.open_text_block.is_none());
-        let thinking = builder.blocks[0]["thinking"].as_str().expect("status thinking");
-        assert!(thinking.contains("▶ Read"));
-        assert!(thinking.contains("▶ Search docs"));
-        assert!(!thinking.contains("tool_use"));
+        assert!(builder.open_text_block.is_some());
+        let text = builder.open_text_block.as_ref().expect("progress text").1.as_str();
+        assert!(text.contains("▶ Read"));
+        assert!(text.contains("a"));
+        assert!(text.contains("▶ Search docs"));
+        assert!(!text.contains("tool_use"));
         assert_eq!(
             builder.provider_tool_calls.len(),
             EXPECTED_PROVIDER_CALLS
         );
         let segment = builder.finish(None).await.expect("segment");
-        assert!(
-            segment.blocks.is_empty(),
-            "provider progress must not remain in committed answer blocks"
-        );
+        assert_eq!(segment.blocks.len(), 1);
+        let committed = segment.blocks[0]["text"].as_str().expect("committed text");
+        assert!(committed.contains("▶ Read"));
+        assert!(committed.contains("▶ Search docs"));
     }
 
     #[tokio::test]
@@ -110,16 +111,61 @@ mod tests {
         drop(sender);
 
         assert!(segment.blocks.iter().all(|block| block["type"] != "tool_use"));
-        // Live frames carried progress; committed segment stays answer-clean.
-        assert!(
-            segment.blocks.is_empty(),
-            "provider progress is ephemeral and stripped on finish"
-        );
+        // Live frames and committed segment both carry progress text.
+        let committed = segment.blocks[0]["text"].as_str().expect("committed progress");
+        assert!(committed.contains("▶ Bash"));
+        assert!(committed.contains("✗ Build"));
+        // Success markers stay short — never embed tool body payloads.
+        assert!(committed.contains("✓ Read"));
+        assert!(!committed.contains(" done "));
         let (frame_count, output) = collect_frames(&mut receiver).await;
         assert!(output.contains("▶ Bash"));
         assert!(output.contains("✗ Build"));
         assert!(output.contains("✓ Read"));
+        assert!(!output.contains(" done "));
         assert_eq!(frame_count, EXPECTED_PROGRESS_FRAMES);
+    }
+
+    #[tokio::test]
+    async fn completed_progress_omits_large_tool_bodies() {
+        let mut builder = SegmentBuilder::new(1);
+        builder
+            .provider_tool_call(
+                &json!({"params":{
+                    "callId":"shell-1",
+                    "tool":"run_terminal_command",
+                    "title":"run_terminal_command",
+                    "arguments":{"command":"pwd && git status && git branch --show-current && ls -la"}
+                }}),
+                None,
+            )
+            .await
+            .expect("start");
+        builder
+            .provider_tool_update(
+                &json!({"params":{
+                    "callId":"shell-1",
+                    "status":"completed",
+                    "title":"run_terminal_command",
+                    "output":{"command":"pwd && git status","stdout":"huge\n".repeat(200),"exitCode":0}
+                }}),
+                None,
+            )
+            .await
+            .expect("complete");
+        let text = builder
+            .open_text_block
+            .as_ref()
+            .expect("progress text")
+            .1
+            .as_str();
+        assert!(text.contains("▶ run_terminal_command"));
+        assert!(text.contains("✓ run_terminal_command"));
+        assert!(!text.contains("exitCode"));
+        assert!(!text.contains("huge"));
+        assert!(!text.contains("stdout"));
+        // Success line is marker-only (no tool body JSON).
+        assert!(!text.contains("✓ run_terminal_command:"));
     }
 
     #[tokio::test]
@@ -137,29 +183,48 @@ mod tests {
             )
             .await
             .expect("provider completion");
-        // Before finish, progress is in thinking; after finish it is stripped.
+        // Before and after finish, progress remains as committed text once.
         assert_eq!(
-            builder.blocks[0]["thinking"]
-                .as_str()
-                .expect("progress thinking")
+            builder
+                .open_text_block
+                .as_ref()
+                .expect("progress text")
+                .1
                 .matches("▶ WebFetch")
                 .count(),
             1
         );
         let segment = builder.finish(None).await.expect("segment");
-        assert!(segment.blocks.is_empty());
+        assert_eq!(
+            segment.blocks[0]["text"]
+                .as_str()
+                .expect("committed progress")
+                .matches("▶ WebFetch")
+                .count(),
+            1
+        );
+        assert!(
+            segment.blocks[0]["text"]
+                .as_str()
+                .expect("committed progress")
+                .contains("✓ WebFetch")
+        );
+        assert!(
+            !segment.blocks[0]["text"]
+                .as_str()
+                .expect("committed progress")
+                .contains("done")
+        );
     }
 
     #[test]
     fn previews_and_truncates_status_output() {
         const UNREACHED_PREVIEW_CHAR_LIMIT: usize = 20;
         const TRUNCATED_PREVIEW_CHAR_LIMIT: usize = 3;
-        assert_eq!(output_preview(Some(&json!("text")), "fallback"), "text");
-        assert_eq!(
-            output_preview(Some(&json!({"a":1})), "fallback"),
-            "{\"a\":1}"
-        );
-        assert_eq!(output_preview(None, "fallback"), "fallback");
+        assert_eq!(failure_preview(Some(&json!("text"))), "text");
+        assert_eq!(failure_preview(Some(&json!({"error":"boom\nmore"}))), "boom");
+        assert_eq!(failure_preview(None), "failed");
+        assert_eq!(compact_title("run_terminal_command: pwd && git status"), "run_terminal_command");
         assert_eq!(
             truncate_for_status("  short  ", UNREACHED_PREVIEW_CHAR_LIMIT),
             "short"

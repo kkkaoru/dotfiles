@@ -65,7 +65,7 @@ impl SegmentBuilder {
     ) -> Result<()> {
         match native_web_event(event) {
             Some(NativeWebEvent::Started { query }) => {
-                self.stream_ephemeral_status(&format!("\n\n🔎 WebSearch: {query}\n"), stream)
+                self.stream_progress_text(&format!("\n\n🔎 WebSearch: {query}\n"), stream)
                     .await
             }
             Some(NativeWebEvent::Completed { call_id }) => {

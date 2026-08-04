@@ -1,14 +1,18 @@
-//! Ephemeral WIP progress for provider-owned tools (Grok / configured ACP).
+//! Compact text progress for provider-owned tools (Grok / Cursor / configured ACP).
 //!
-//! Progress is streamed for live visibility but not committed as answer text.
+//! Never emitted as Anthropic `tool_use` (Claude Code would re-execute). Only short
+//! status markers are streamed/committed — full tool payloads freeze the TUI when
+//! every Bash/Read result is dumped into assistant text.
 
 use anyhow::{Context, Result};
 use serde_json::Value;
 
 use super::{builder::SegmentBuilder, protocol::StreamSender};
 
-const FAILED_STATUS_PREVIEW_CHAR_LIMIT: usize = 400;
-const COMPLETED_STATUS_PREVIEW_CHAR_LIMIT: usize = 240;
+/// Failures keep a brief hint; successes never attach tool bodies.
+const FAILED_STATUS_PREVIEW_CHAR_LIMIT: usize = 80;
+const TITLE_CHAR_LIMIT: usize = 48;
+const ARG_PREVIEW_CHAR_LIMIT: usize = 48;
 
 impl SegmentBuilder {
     /// Streams provider-owned work as text, never as Anthropic `tool_use`.
@@ -40,8 +44,11 @@ impl SegmentBuilder {
         if !is_new {
             return Ok(());
         }
-        self.stream_ephemeral_status(&format!("\n\n▶ {title}\n"), stream)
-            .await
+        self.stream_progress_text(
+            &progress_start_line(title, params.get("arguments")),
+            stream,
+        )
+        .await
     }
 
     /// Status / output for provider-owned work already streamed.
@@ -69,34 +76,25 @@ impl SegmentBuilder {
         if let Some(call_id) = call_id {
             self.record_provider_web_evidence(call_id, params);
         }
+        let short_title = compact_title(&title);
         match status {
             "failed" => {
-                let detail = output_preview(params.get("output"), "failed");
+                let detail = failure_preview(params.get("output"));
                 let preview = truncate_for_status(&detail, FAILED_STATUS_PREVIEW_CHAR_LIMIT);
-                self.stream_ephemeral_status(&format!("\n✗ {title}: {preview}\n"), stream)
+                self.stream_progress_text(&format!("\n✗ {short_title}: {preview}\n"), stream)
                     .await?;
             }
-            "completed" => self.stream_completed_tool(params, &title, stream).await?,
+            // Success: marker only. Dumping stdout/JSON here flooded the TUI and
+            // made long Grok/Cursor turns look frozen on a wall of tool logs.
+            "completed" => {
+                self.stream_progress_text(&format!("\n✓ {short_title}\n"), stream)
+                    .await?;
+            }
             "pending" | "in_progress" => {
-                self.start_provider_tool_from_update(call_id, &title, stream)
+                self.start_provider_tool_from_update(call_id, &title, params, stream)
                     .await?;
             }
             _ => {}
-        }
-        Ok(())
-    }
-
-    async fn stream_completed_tool(
-        &mut self,
-        params: &Value,
-        title: &str,
-        stream: Option<&StreamSender>,
-    ) -> Result<()> {
-        let detail = output_preview(params.get("output"), "");
-        if !detail.is_empty() {
-            let preview = truncate_for_status(&detail, COMPLETED_STATUS_PREVIEW_CHAR_LIMIT);
-            self.stream_ephemeral_status(&format!("\n✓ {title}: {preview}\n"), stream)
-                .await?;
         }
         Ok(())
     }
@@ -105,6 +103,7 @@ impl SegmentBuilder {
         &mut self,
         call_id: Option<&str>,
         title: &str,
+        params: &Value,
         stream: Option<&StreamSender>,
     ) -> Result<()> {
         let Some(call_id) = call_id else {
@@ -113,8 +112,11 @@ impl SegmentBuilder {
         if !self.remember_provider_tool(call_id, title) {
             return Ok(());
         }
-        self.stream_ephemeral_status(&format!("\n\n▶ {title}\n"), stream)
-            .await
+        self.stream_progress_text(
+            &progress_start_line(title, params.get("arguments")),
+            stream,
+        )
+        .await
     }
 
     fn remember_provider_tool(&mut self, call_id: &str, title: &str) -> bool {
@@ -177,12 +179,84 @@ fn valid_source_url(url: &Value) -> bool {
         .is_some_and(|url| url.starts_with("https://") || url.starts_with("http://"))
 }
 
-fn output_preview(value: Option<&Value>, fallback: &str) -> String {
-    match value {
-        Some(Value::String(text)) => text.clone(),
-        Some(other) => other.to_string(),
-        None => fallback.to_owned(),
+fn progress_start_line(title: &str, arguments: Option<&Value>) -> String {
+    let short_title = compact_title(title);
+    match argument_preview(arguments) {
+        // Prefer a one-line command/path snippet; never dump full argument JSON.
+        Some(detail) if !short_title.contains(detail.as_str()) => {
+            format!("\n▶ {short_title}: {detail}\n")
+        }
+        _ => format!("\n▶ {short_title}\n"),
     }
+}
+
+fn compact_title(title: &str) -> String {
+    let trimmed = title.trim();
+    // Provider titles sometimes embed the whole command; keep the tool name only.
+    let head = trimmed
+        .split_once(':')
+        .map(|(name, _)| name.trim())
+        .filter(|name| !name.is_empty() && name.len() <= TITLE_CHAR_LIMIT)
+        .unwrap_or(trimmed);
+    truncate_for_status(head, TITLE_CHAR_LIMIT)
+}
+
+fn argument_preview(arguments: Option<&Value>) -> Option<String> {
+    let Value::Object(map) = arguments? else {
+        return None;
+    };
+    for key in [
+        "command",
+        "cmd",
+        "path",
+        "file_path",
+        "target_file",
+        "query",
+        "pattern",
+        "url",
+        "description",
+    ] {
+        if let Some(value) = map.get(key).and_then(scalar_preview) {
+            return Some(truncate_for_status(&first_line(&value), ARG_PREVIEW_CHAR_LIMIT));
+        }
+    }
+    None
+}
+
+fn scalar_preview(value: &Value) -> Option<String> {
+    match value {
+        Value::String(text) if !text.trim().is_empty() => Some(text.clone()),
+        Value::Number(number) => Some(number.to_string()),
+        Value::Bool(flag) => Some(flag.to_string()),
+        _ => None,
+    }
+}
+
+fn failure_preview(value: Option<&Value>) -> String {
+    match value {
+        Some(Value::String(text)) => first_line(text),
+        Some(Value::Object(map)) => {
+            for key in ["error", "message", "stderr", "stdout", "reason"] {
+                if let Some(text) = map.get(key).and_then(Value::as_str) {
+                    let line = first_line(text);
+                    if !line.is_empty() {
+                        return line;
+                    }
+                }
+            }
+            "failed".to_owned()
+        }
+        Some(_) => "failed".to_owned(),
+        None => "failed".to_owned(),
+    }
+}
+
+fn first_line(text: &str) -> String {
+    text.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("")
+        .to_owned()
 }
 
 fn truncate_for_status(text: &str, max_chars: usize) -> String {
