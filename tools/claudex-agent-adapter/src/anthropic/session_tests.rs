@@ -48,6 +48,10 @@ fn treats_unknown_task_lifecycle_ids_as_idempotent_success() {
         "type":"text",
         "text":"shell output: Error: No task found with ID: unrelated"
     })]));
+    assert!(is_idempotent_task_lifecycle_error(&[json!({
+        "type":"text",
+        "text":"<tool_use_error>No task found with ID: a27155c79179347ce</tool_use_error>"
+    })]));
 }
 use crate::agent_backend::WebSearchMode;
 use crate::anthropic::{

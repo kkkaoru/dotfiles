@@ -55,6 +55,37 @@ pub(super) fn should_preempt_for_context_limit(
     limit.is_some_and(|limit| !has_tool_results && input_tokens >= limit)
 }
 
+pub(super) fn is_idempotent_task_lifecycle_error(content_items: &[Value]) -> bool {
+    // Claude Code reports a consumed TaskStop/TaskOutput target as an error
+    // string even though the requested lifecycle state is already satisfied.
+    content_items.iter().any(|item| {
+        let Some(text) = item.get("text").and_then(Value::as_str) else {
+            return false;
+        };
+        is_idempotent_task_lifecycle_text(text)
+    })
+}
+
+fn is_idempotent_task_lifecycle_text(text: &str) -> bool {
+    let normalized = text
+        .replace("<tool_use_error>", " ")
+        .replace("</tool_use_error>", " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase();
+    // Reject shell transcripts that merely quote the phrase.
+    if normalized.starts_with("shell output:") {
+        return false;
+    }
+    normalized.starts_with("error: no task found with id:")
+        || normalized.starts_with("no task found with id:")
+        || (normalized.starts_with("error: task ")
+            && normalized.contains(" is not running (status: completed)"))
+        || (normalized.starts_with("task ")
+            && normalized.contains(" is not running (status: completed)"))
+}
+
 pub(super) async fn candidate_length(
     session: &Arc<Session>,
     signature: &Arc<str>,

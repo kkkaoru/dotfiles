@@ -28,8 +28,8 @@ mod session_turn;
 mod tools;
 
 use helpers::{
-    candidate_length, is_better_length, owns_tool_result, should_preempt_for_context_limit,
-    touch_session, validate_tool_result_ownership,
+    candidate_length, is_better_length, is_idempotent_task_lifecycle_error, owns_tool_result,
+    should_preempt_for_context_limit, touch_session, validate_tool_result_ownership,
 };
 pub(in crate::anthropic) use session_turn::is_context_window_exceeded;
 #[cfg(test)]
@@ -374,23 +374,6 @@ async fn session_owns_results(session: &Session, results: &[ToolResult]) -> bool
     results
         .iter()
         .all(|result| owns_tool_result(&pending, &consumed, &result.tool_use_id))
-}
-
-fn is_idempotent_task_lifecycle_error(content_items: &[Value]) -> bool {
-    // Claude Code reports a consumed TaskStop/TaskOutput target as an error
-    // string even though the requested lifecycle state is already satisfied.
-    content_items.iter().any(|item| {
-        let Some(text) = item.get("text").and_then(Value::as_str) else {
-            return false;
-        };
-        let normalized = text.trim_start().to_ascii_lowercase();
-        normalized.starts_with("error: no task found with id:")
-            || normalized.starts_with("no task found with id:")
-            || normalized.starts_with("error: task ")
-                && normalized.contains(" is not running (status: completed)")
-            || normalized.starts_with("task ")
-                && normalized.contains(" is not running (status: completed)")
-    })
 }
 
 #[cfg(test)]
