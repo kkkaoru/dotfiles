@@ -216,10 +216,9 @@ impl RoutedBackends {
             .map(|r| r.template.clone())
             .or_else(|| self.prefix_template(model).cloned())?;
         let pins = route.backend == BackendKind::GrokAcp
-            || route
-                .acp
-                .as_ref()
-                .is_some_and(|a| a.arguments.iter().any(|x| x.contains("{effort}")));
+            || route.acp.as_ref().is_some_and(|a| {
+                a.arguments.iter().any(|x| x.contains("{effort}"))
+            });
         pins.then_some(route.effort).flatten()
     }
 
@@ -294,20 +293,16 @@ impl RoutedBackends {
             .filter(|(_, limit)| limit.is_some())
             .max_by_key(|(len, _)| *len)
             .and_then(|(_, limit)| limit);
-        if exact_limit.is_some() {
-            return exact_limit.map(|(_, limit)| limit);
+        if let Some((_, limit)) = exact_limit {
+            return Some(limit);
         }
-        if let Some(dynamic) = self
-            .dynamic
+        self.dynamic
             .lock()
             .expect("dynamic routes poisoned")
             .iter()
             .find(|route| route.model == model)
             .and_then(|route| route.template.max_context_tokens)
-        {
-            return Some(dynamic);
-        }
-        prefix_limit
+            .or(prefix_limit)
     }
 
     pub(super) fn find(&self, model: &str) -> Option<Arc<RoutedBackend>> {
