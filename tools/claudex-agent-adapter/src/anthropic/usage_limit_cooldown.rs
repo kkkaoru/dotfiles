@@ -46,8 +46,12 @@ pub(crate) fn load_active(path: &Path, now: SystemTime) -> Option<UsageLimitCool
     stored.is_active(now).then_some(stored)
 }
 
-pub(crate) fn record_codex_app_server_limit(message: &str, now: SystemTime) -> Option<PathBuf> {
-    let path = current_cache_path()?;
+pub(crate) fn record_codex_app_server_limit_at(
+    path: Option<&Path>,
+    message: &str,
+    now: SystemTime,
+) -> Option<PathBuf> {
+    let path = path?;
     let cooldown = UsageLimitCooldown {
         version: CACHE_VERSION,
         backend: crate::agent_backend::BackendKind::CodexAppServer
@@ -57,23 +61,22 @@ pub(crate) fn record_codex_app_server_limit(message: &str, now: SystemTime) -> O
         message: message.to_owned(),
         recorded_unix_seconds: unix_seconds(now),
     };
-    write_cooldown(&path, &cooldown);
-    Some(path)
+    write_cooldown(path, &cooldown);
+    Some(path.to_path_buf())
 }
 
-pub(crate) fn codex_app_server_is_cooling_down(now: SystemTime) -> bool {
-    current_cache_path()
-        .and_then(|path| load_active(&path, now))
+pub(crate) fn codex_app_server_is_cooling_down_at(path: Option<&Path>, now: SystemTime) -> bool {
+    path.and_then(|path| load_active(path, now))
         .is_some_and(|cooldown| {
             cooldown.backend == crate::agent_backend::BackendKind::CodexAppServer.as_str()
         })
 }
 
 fn cooldown_duration(message: &str, _now: SystemTime) -> Duration {
-    if let Ok(seconds) = std::env::var(COOLDOWN_ENV) {
-        if let Ok(seconds) = seconds.parse::<u64>() {
-            return Duration::from_secs(seconds.min(MAX_COOLDOWN.as_secs()));
-        }
+    if let Ok(seconds) = std::env::var(COOLDOWN_ENV)
+        && let Ok(seconds) = seconds.parse::<u64>()
+    {
+        return Duration::from_secs(seconds.min(MAX_COOLDOWN.as_secs()));
     }
     // Prefer the configured/default window. Exact clock parsing needs local TZ
     // support the adapter deliberately avoids depending on; re-probe after expiry.
@@ -88,10 +91,7 @@ fn write_cooldown(path: &Path, cooldown: &UsageLimitCooldown) {
     let Ok(payload) = serde_json::to_vec_pretty(cooldown) else {
         return;
     };
-    let temporary = path.with_extension(format!(
-        "tmp-{}",
-        std::process::id()
-    ));
+    let temporary = path.with_extension(format!("tmp-{}", std::process::id()));
     let wrote = OpenOptions::new()
         .create(true)
         .write(true)

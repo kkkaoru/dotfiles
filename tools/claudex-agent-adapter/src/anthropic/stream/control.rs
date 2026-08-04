@@ -33,6 +33,9 @@ pub(in crate::anthropic) fn error_flow(event: &Value) -> Result<ControlFlow<()>>
     if super::usage_limit::is_usage_limit_event(event) {
         tracing::warn!(error = %event.get("params").unwrap_or(event), "codex app-server hit usage limit");
     }
+    if super::super::provider_auth::is_auth_failure_event(event) {
+        tracing::warn!(error = %event.get("params").unwrap_or(event), "codex app-server hit provider auth failure");
+    }
     bail!(
         "codex app-server turn failed: {}",
         event.get("params").unwrap_or(event)

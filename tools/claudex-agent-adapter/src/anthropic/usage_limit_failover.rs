@@ -6,7 +6,7 @@ use axum::{body::Body, http::Response};
 use crate::agent_backend::BackendKind;
 
 use super::{
-    Bridge, MessagesRequest, request_routing::RouteDecision,
+    Bridge, MessagesRequest, provider_auth, provider_auth_cooldown, request_routing::RouteDecision,
     stream::usage_limit::contains_usage_limit_marker, token_count, usage_limit_cooldown,
 };
 
@@ -19,18 +19,47 @@ pub(super) struct UsageLimitFailover {
 
 impl Bridge {
     pub(super) fn note_usage_limit_failure(&self, error: &anyhow::Error) {
+        self.note_provider_exhaustion(error, None);
+    }
+
+    pub(super) fn note_provider_exhaustion(
+        &self,
+        error: &anyhow::Error,
+        exhausted_model: Option<&str>,
+    ) {
         let message = error.to_string();
-        if !contains_usage_limit_marker(&message) {
-            return;
+        if contains_usage_limit_marker(&message) {
+            let cache_path = self.usage_limit_cache_path();
+            if let Some(path) = usage_limit_cooldown::record_codex_app_server_limit_at(
+                cache_path.as_deref(),
+                &message,
+                SystemTime::now(),
+            ) {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %message,
+                    "recorded Codex app-server usage-limit cooldown; routing away from that backend"
+                );
+            }
         }
-        if let Some(path) =
-            usage_limit_cooldown::record_codex_app_server_limit(&message, SystemTime::now())
-        {
-            tracing::warn!(
-                path = %path.display(),
-                error = %message,
-                "recorded Codex app-server usage-limit cooldown; routing away from that backend"
-            );
+        if provider_auth::contains_auth_failure_marker(&message) {
+            let scopes = self.auth_scopes_for(exhausted_model, &message);
+            let cache_path = self.provider_auth_cache_path();
+            for scope in scopes {
+                if let Some(path) = provider_auth_cooldown::record_at(
+                    cache_path.as_deref(),
+                    &scope,
+                    &message,
+                    SystemTime::now(),
+                ) {
+                    tracing::warn!(
+                        path = %path.display(),
+                        auth_scope = %scope,
+                        error = %message,
+                        "recorded provider auth cooldown; routing away from that provider"
+                    );
+                }
+            }
         }
     }
 
@@ -46,16 +75,21 @@ impl Bridge {
         if is_subagent || route != RouteDecision::Provider {
             return route;
         }
-        if !self.model_uses_codex_app_server(&request.model) {
+        let reason = if self.codex_usage_limit_is_active(&request.model) {
+            Some("usage-limit")
+        } else if self.provider_auth_is_cooling_down(&request.model) {
+            Some("auth")
+        } else {
+            None
+        };
+        let Some(reason) = reason else {
             return route;
-        }
-        if !usage_limit_cooldown::codex_app_server_is_cooling_down(SystemTime::now()) {
-            return route;
-        }
+        };
         let Some(failover) = self.usage_limit_failover_for(&request.model) else {
             tracing::warn!(
                 model = %request.model,
-                "Codex app-server is cooling down but no failover target is configured"
+                reason,
+                "provider is cooling down but no failover target is configured"
             );
             return route;
         };
@@ -63,7 +97,8 @@ impl Bridge {
             exhausted_model = %request.model,
             failover_model = %failover.model,
             failover_route = ?failover.route,
-            "preflight failover away from Codex app-server usage-limit cooldown"
+            reason,
+            "preflight failover away from exhausted provider"
         );
         request.model = failover.model;
         if let Some(failover_effort) = failover.effort {
@@ -95,8 +130,8 @@ impl Bridge {
             .await
         {
             Ok(response) => Ok(response),
-            Err(error) if can_failover && is_usage_limit_exceeded(&error) => {
-                self.note_usage_limit_failure(&error);
+            Err(error) if can_failover && should_failover_provider_error(&error) => {
+                self.note_provider_exhaustion(&error, Some(&exhausted_model));
                 let Some(mut retry) = failover_request else {
                     return Err(error);
                 };
@@ -109,7 +144,7 @@ impl Bridge {
                     exhausted_model = %exhausted_model,
                     failover_model = %failover.model,
                     failover_route = ?failover.route,
-                    "failing over outer non-stream turn after usageLimitExceeded"
+                    "failing over outer non-stream turn after provider exhaustion"
                 );
                 retry.model = failover.model;
                 let failover_effort = failover.effort.or(effort);
@@ -131,12 +166,12 @@ impl Bridge {
         exhausted_model: &str,
     ) -> Option<UsageLimitFailover> {
         let _ = exhausted_model;
-        // Always recover outer turns onto Claude subscription. Sibling ACP
-        // providers (Grok, etc.) may also be empty, and Subscription was proven
-        // healthy on this daemon while Codex app-server models were dark.
+        // Recover outer turns onto the configured Claude subscription. Sibling
+        // ACP providers may also be empty while the subscription remains usable.
+        let (model, effort) = self.model_catalog.configured_fallback()?;
         Some(UsageLimitFailover {
-            model: "claude-sonnet-5".to_owned(),
-            effort: Some("high".to_owned()),
+            model: model.to_owned(),
+            effort: Some(effort.to_owned()),
             route: RouteDecision::Subscription,
         })
     }
@@ -147,10 +182,47 @@ impl Bridge {
             None => matches!(&*self.app, crate::agent_backend::AgentBackend::Codex(_)),
         }
     }
+
+    fn codex_usage_limit_is_active(&self, model: &str) -> bool {
+        self.model_uses_codex_app_server(model)
+            && usage_limit_cooldown::codex_app_server_is_cooling_down_at(
+                self.usage_limit_cache_path().as_deref(),
+                SystemTime::now(),
+            )
+    }
+
+    fn provider_auth_is_cooling_down(&self, model: &str) -> bool {
+        let path = self.provider_auth_cache_path();
+        let now = SystemTime::now();
+        self.auth_scopes_for(Some(model), "").iter().any(|scope| {
+            provider_auth_cooldown::scope_is_cooling_down_at(path.as_deref(), scope, now)
+        })
+    }
+
+    fn auth_scopes_for(&self, model: Option<&str>, message: &str) -> Vec<String> {
+        let mut scopes = Vec::new();
+        if let Some(model) = model {
+            scopes.push(model.to_owned());
+            if let Some(provider) = self.app.model_provider_for_model(model) {
+                scopes.push(provider);
+            }
+        }
+        if let Some(scope) = provider_auth::auth_scope_from_message(message) {
+            scopes.push(scope);
+        }
+        scopes.sort();
+        scopes.dedup();
+        scopes
+    }
 }
 
 pub(crate) fn is_usage_limit_exceeded(error: &anyhow::Error) -> bool {
-    contains_usage_limit_marker(&error.to_string())
+    should_failover_provider_error(error)
+}
+
+pub(crate) fn should_failover_provider_error(error: &anyhow::Error) -> bool {
+    let message = error.to_string();
+    contains_usage_limit_marker(&message) || provider_auth::contains_auth_failure_marker(&message)
 }
 
 #[cfg(test)]
@@ -203,5 +275,12 @@ mod tests {
             .expect("subscription failover");
         assert_eq!(failover.model, "claude-sonnet-5");
         assert_eq!(failover.route, RouteDecision::Subscription);
+    }
+
+    #[test]
+    fn treats_sakana_invalid_api_key_as_failover_trigger() {
+        assert!(super::should_failover_provider_error(&anyhow::anyhow!(
+            "codex app-server turn failed: unexpected status 401 Unauthorized: Invalid API key, url: https://api.sakana.ai/v1/responses"
+        )));
     }
 }

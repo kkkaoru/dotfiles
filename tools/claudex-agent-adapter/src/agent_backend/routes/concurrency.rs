@@ -29,4 +29,13 @@ impl RoutedBackends {
             .map(|route| route.kind)
             .or_else(|| self.prefix_template(model).map(|template| template.backend))
     }
+
+    pub(in crate::agent_backend) fn model_provider_for_model(&self, model: &str) -> Option<String> {
+        self.find(model)
+            .and_then(|route| route.template.model_provider.clone())
+            .or_else(|| {
+                self.prefix_template(model)
+                    .and_then(|template| template.model_provider.clone())
+            })
+    }
 }

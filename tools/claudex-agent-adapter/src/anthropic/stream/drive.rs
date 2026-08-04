@@ -261,7 +261,6 @@ impl Bridge {
     }
 
     async fn retry_usage_limit_stream(self: Arc<Self>, input: ContextRetryStream) {
-        self.note_usage_limit_failure(&input.error);
         let ActiveTurn {
             session,
             input_tokens,
@@ -269,6 +268,7 @@ impl Bridge {
             gate,
             ..
         } = input.turn;
+        self.note_provider_exhaustion(&input.error, Some(&session.model));
         drop(gate);
         let exhausted_model = session.model.clone();
         let Some(mut retry) = retry else {

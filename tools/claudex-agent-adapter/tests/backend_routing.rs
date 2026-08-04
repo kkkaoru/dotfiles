@@ -1,8 +1,8 @@
-use std::sync::Arc;
+use std::{fs, os::unix::fs::PermissionsExt, sync::Arc};
 
 use claudex_agent_adapter::{
     agent_backend::AgentBackend, anthropic::Bridge, app_server::AppServer, grok_acp::GrokAcp,
-    http_router,
+    http_router, provider_config,
 };
 use reqwest::Client;
 use serde_json::{Value, json};
@@ -280,13 +280,20 @@ fn response_text(response: &Value) -> &str {
 }
 
 #[tokio::test]
-async fn usage_limit_failsover_from_codex_app_server_to_a_non_codex_route() {
+async fn usage_limit_failsover_from_codex_app_server_to_subscription_route() {
     let root = tempfile::tempdir().expect("usage-limit routing fixture");
-    let previous_home = std::env::var_os("HOME");
-    unsafe { std::env::set_var("HOME", root.path()) };
     let source = root.path().join("codex-source");
     std::fs::create_dir(&source).unwrap();
     std::fs::write(source.join("auth.json"), "{}").unwrap();
+    let subscription_program = root.path().join("claude-mock");
+    fs::write(
+        &subscription_program,
+        "#!/bin/sh\nset -eu\ncat >/dev/null\nprintf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\"SUBSCRIPTION_FAILOVER_OK\"}'\n",
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&subscription_program).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&subscription_program, permissions).unwrap();
     let codex = AppServer::spawn_with_program(
         "fugu",
         env!("CARGO_BIN_EXE_codex-mock"),
@@ -295,18 +302,21 @@ async fn usage_limit_failsover_from_codex_app_server_to_a_non_codex_route() {
     )
     .await
     .expect("start Codex backend");
-    let grok = GrokAcp::spawn_with_program(
-        "grok-4.5",
-        env!("CARGO_BIN_EXE_grok-acp-mock"),
-        root.path().to_owned(),
+    let provider_config = provider_config::load(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.config/claudex/providers.json")
+            .as_path(),
     )
-    .await
-    .expect("start Grok backend");
-    let backend = AgentBackend::routed(vec![
-        ("fugu".to_owned(), AgentBackend::codex(codex)),
-        ("grok-4.5".to_owned(), AgentBackend::grok(grok)),
-    ]);
-    let bridge = Arc::new(Bridge::new_with_backend(backend, "fugu".to_owned()));
+    .expect("load configured subscription fallback");
+    let bridge = Arc::new(
+        Bridge::new_with_subscription_program(
+            Arc::clone(&codex),
+            "fugu".to_owned(),
+            &subscription_program,
+        )
+        .with_model_catalog(provider_config.model_catalog)
+        .with_usage_limit_cache_home(root.path()),
+    );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}/v1/messages", listener.local_addr().unwrap());
     let server = tokio::spawn(async move {
@@ -329,8 +339,8 @@ async fn usage_limit_failsover_from_codex_app_server_to_a_non_codex_route() {
         .json::<Value>()
         .await
         .unwrap();
-    assert_eq!(response["model"], "grok-4.5");
-    assert!(!response_text(&response).is_empty());
+    assert_eq!(response["model"], "claude-sonnet-5");
+    assert_eq!(response_text(&response), "SUBSCRIPTION_FAILOVER_OK");
 
     let cooldown = root
         .path()
@@ -354,13 +364,99 @@ async fn usage_limit_failsover_from_codex_app_server_to_a_non_codex_route() {
         .json::<Value>()
         .await
         .unwrap();
-    assert_eq!(preflight["model"], "grok-4.5");
+    assert_eq!(preflight["model"], "claude-sonnet-5");
 
     server.abort();
-    match previous_home {
-        Some(value) => unsafe { std::env::set_var("HOME", value) },
-        None => unsafe { std::env::remove_var("HOME") },
-    }
+}
+
+#[tokio::test]
+async fn sakana_auth_failure_failsover_to_subscription_and_cools_down_fugu() {
+    let root = tempfile::tempdir().expect("auth failover routing fixture");
+    let source = root.path().join("codex-source");
+    std::fs::create_dir(&source).unwrap();
+    std::fs::write(source.join("auth.json"), "{}").unwrap();
+    let subscription_program = root.path().join("claude-mock");
+    fs::write(
+        &subscription_program,
+        "#!/bin/sh\nset -eu\ncat >/dev/null\nprintf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\"result\":\"AUTH_FAILOVER_OK\"}'\n",
+    )
+    .unwrap();
+    let mut permissions = fs::metadata(&subscription_program).unwrap().permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&subscription_program, permissions).unwrap();
+    let codex = AppServer::spawn_with_program(
+        "fugu",
+        env!("CARGO_BIN_EXE_codex-mock"),
+        &source,
+        &root.path().join("codex-home"),
+    )
+    .await
+    .expect("start Codex backend");
+    let provider_config = provider_config::load(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../.config/claudex/providers.json")
+            .as_path(),
+    )
+    .expect("load configured subscription fallback");
+    let bridge = Arc::new(
+        Bridge::new_with_subscription_program(
+            Arc::clone(&codex),
+            "fugu".to_owned(),
+            &subscription_program,
+        )
+        .with_model_catalog(provider_config.model_catalog)
+        .with_usage_limit_cache_home(root.path()),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/v1/messages", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        axum::serve(listener, http_router(bridge, "fugu".to_owned(), None))
+            .await
+            .unwrap();
+    });
+
+    let response = Client::new()
+        .post(&url)
+        .json(&json!({
+            "model":"fugu",
+            "messages":[{"role":"user","content":"AUTH_FAIL_ALWAYS"}]
+        }))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(response["model"], "claude-sonnet-5");
+    assert_eq!(response_text(&response), "AUTH_FAILOVER_OK");
+
+    let cooldown = root
+        .path()
+        .join(".cache/claudex/provider-auth-cooldown.json");
+    assert!(
+        cooldown.is_file(),
+        "provider auth cooldown should be persisted for later preflight routing"
+    );
+
+    let preflight = Client::new()
+        .post(&url)
+        .json(&json!({
+            "model":"fugu",
+            "messages":[{"role":"user","content":"hello after auth cooldown"}]
+        }))
+        .send()
+        .await
+        .unwrap()
+        .error_for_status()
+        .unwrap()
+        .json::<Value>()
+        .await
+        .unwrap();
+    assert_eq!(preflight["model"], "claude-sonnet-5");
+
+    server.abort();
 }
 
 async fn parallel_request(url: &str, model: &str, index: usize) -> Value {

@@ -131,6 +131,8 @@ impl<W: Write> Fixture<W> {
             self.usage_limit_once(message);
         } else if input.contains("USAGE_LIMIT_ALWAYS") {
             self.usage_limit_error(message);
+        } else if input.contains("AUTH_FAIL_ALWAYS") {
+            self.auth_failure_error(message);
         } else if input.contains("RETRY_THEN_OK") {
             self.retry_then_ok();
         } else if input.contains("TURN_FAILED") {
@@ -345,6 +347,20 @@ impl<W: Write> Fixture<W> {
                 "error":{
                     "codexErrorInfo":"usageLimitExceeded",
                     "message":"You've hit your usage limit. Try again at 3:20 AM."
+                }
+            }
+        }));
+    }
+
+    fn auth_failure_error(&mut self, message: &Value) {
+        self.send(json!({
+            "method":"error",
+            "params":{
+                "threadId":message.pointer("/params/threadId"),
+                "turnId":"turn-test", "willRetry":false,
+                "error":{
+                    "codexErrorInfo":"other",
+                    "message":"unexpected status 401 Unauthorized: Invalid API key, url: https://api.sakana.ai/v1/responses"
                 }
             }
         }));

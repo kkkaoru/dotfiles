@@ -5,6 +5,7 @@ mod agent_intent_store;
 mod agent_routing;
 mod async_agent_handoff;
 pub(crate) use async_agent_handoff::{exact_async_launch_acknowledgement, tool_round_ids};
+mod config;
 mod content;
 mod content_batch;
 mod content_pending;
@@ -32,6 +33,8 @@ mod subagent_timeout;
 pub(crate) use subagent_timeout::{
     LEGACY_SUBAGENT_RESPONSE_TIMEOUT_ENV, SUBAGENT_HARD_TIMEOUT_ENV,
 };
+mod provider_auth;
+mod provider_auth_cooldown;
 mod subscription;
 mod subscription_activity;
 mod subscription_frames;
@@ -113,6 +116,7 @@ pub struct Bridge {
     collaborator_model_override: Option<String>,
     subscription_program: PathBuf,
     settings_path: Option<PathBuf>,
+    usage_limit_cache_home: Option<PathBuf>,
     sessions: Mutex<Vec<Arc<Session>>>,
     /// Sessions whose SubAgent response was handed back to the caller while the
     /// provider turn continues in the background. They must remain discoverable
@@ -267,6 +271,7 @@ impl Bridge {
             collaborator_model_override,
             subscription_program,
             settings_path: subscription::claude_settings_path(),
+            usage_limit_cache_home: None,
             sessions: Mutex::new(Vec::new()),
             detached_sessions: Mutex::new(Vec::new()),
             session_slots: Arc::new(Semaphore::new(MAX_SESSIONS)),
@@ -289,54 +294,6 @@ impl Bridge {
     fn with_legacy_main_route(mut self) -> Self {
         self.legacy_main_route = true;
         self
-    }
-
-    /// Overrides the Claude Code settings source, primarily for isolated runtimes and tests.
-    #[must_use]
-    pub fn with_settings_path(self, settings_path: impl Into<PathBuf>) -> Self {
-        Self {
-            settings_path: Some(settings_path.into()),
-            ..self
-        }
-    }
-
-    /// Install the normalized hard timeout used only for native background
-    /// SubAgent requests. `None` deliberately leaves the Claude Code Agent
-    /// lifecycle unbounded by claudex.
-    #[must_use]
-    pub(crate) fn with_subagent_hard_timeout(
-        self,
-        subagent_hard_timeout: Option<std::time::Duration>,
-    ) -> Self {
-        Self {
-            subagent_hard_timeout,
-            ..self
-        }
-    }
-
-    pub(crate) fn subagent_hard_timeout_seconds(&self) -> Option<u64> {
-        self.subagent_hard_timeout.map(|timeout| timeout.as_secs())
-    }
-
-    /// Install the config-declared model catalog used for unrouted-provider remaps.
-    #[must_use]
-    pub fn with_model_catalog(self, model_catalog: crate::provider_config::ModelCatalog) -> Self {
-        Self {
-            model_catalog,
-            ..self
-        }
-    }
-
-    pub(super) fn request_model(&self, request: &MessagesRequest) -> String {
-        if request.model.is_empty() {
-            self.model.clone()
-        } else {
-            request.model.clone()
-        }
-    }
-
-    fn intern_signature(&self, signature: String) -> Arc<str> {
-        intern_signature(&self.signature_pool, signature)
     }
 }
 

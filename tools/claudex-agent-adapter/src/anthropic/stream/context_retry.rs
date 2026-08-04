@@ -1,9 +1,9 @@
 use anyhow::Result;
 use axum::{body::Body, http::Response};
 
-use super::super::{ActiveTurn, Bridge, ContextRetry, content::anthropic_response};
 use super::super::request_routing::RouteDecision;
 use super::super::usage_limit_failover::is_usage_limit_exceeded;
+use super::super::{ActiveTurn, Bridge, ContextRetry, content::anthropic_response};
 
 impl Bridge {
     pub(in crate::anthropic) async fn retry_after_provider_failure(
@@ -97,9 +97,9 @@ impl Bridge {
         mut turn: ActiveTurn,
         error: anyhow::Error,
     ) -> Result<UsageLimitOutcome> {
-        self.note_usage_limit_failure(&error);
-        let error_text = error.to_string();
         let exhausted_model = turn.session.model.clone();
+        self.note_provider_exhaustion(&error, Some(&exhausted_model));
+        let error_text = error.to_string();
         let Some(mut retry) = turn.retry.take() else {
             self.remove_session(&turn.session).await;
             return Err(error);

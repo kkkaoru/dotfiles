@@ -21,7 +21,6 @@ mod builder;
 mod context_retry;
 mod context_window;
 mod control;
-pub(super) mod usage_limit;
 mod disconnect;
 mod drive;
 mod non_stream;
@@ -29,10 +28,11 @@ mod prepare;
 mod protocol;
 mod provider_tool;
 mod sanitize;
-mod turn;
-pub(in crate::anthropic) use turn::StreamTurn;
 mod thinking;
 mod tool_call_parser;
+mod turn;
+pub(super) mod usage_limit;
+pub(in crate::anthropic) use turn::StreamTurn;
 
 use builder::SegmentBuilder;
 pub(in crate::anthropic) use control::commit_transcript;
@@ -328,7 +328,9 @@ impl Bridge {
                 return Ok(StreamEventState::ContextWindow(error));
             }
             Err(error)
-                if usage_limit::is_usage_limit_event(event) && !builder.has_committed_output() =>
+                if (usage_limit::is_usage_limit_event(event)
+                    || super::provider_auth::is_auth_failure_event(event))
+                    && !builder.has_committed_output() =>
             {
                 builder.close_open_blocks(Some(sender)).await?;
                 return Ok(StreamEventState::UsageLimit(error));

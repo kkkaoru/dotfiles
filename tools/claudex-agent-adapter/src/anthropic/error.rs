@@ -5,6 +5,8 @@ pub(super) const RETRYABLE_ERROR_TYPE: &str = "api_error";
 pub(super) const NON_RETRYABLE_ERROR_TYPE: &str = "invalid_request_error";
 
 const MISSING_ENVIRONMENT_VARIABLE_MARKER: &str = "missing environment variable";
+const INVALID_API_KEY_MARKER: &str = "invalid api key";
+const UNAUTHORIZED_STATUS_MARKER: &str = "unexpected status 401";
 const BLOCKED_SUBAGENT_MARKER: &str = "disabled by the active claudex policy";
 const UNKNOWN_SUBAGENT_MODEL_MARKER: &str = "does not have a recoverable configured route";
 const MISSING_REQUEST_MODEL_MARKER: &str = "request model is required";
@@ -36,17 +38,31 @@ pub(super) fn http_status(fallback: StatusCode, error: &Error) -> StatusCode {
         return StatusCode::from_u16(failure.status_hint())
             .unwrap_or(StatusCode::FAILED_DEPENDENCY);
     }
-    if is_terminal_provider_configuration_error(error) {
+    if is_provider_auth_error(error) {
+        StatusCode::UNAUTHORIZED
+    } else if is_terminal_provider_configuration_error(error) {
         StatusCode::BAD_REQUEST
     } else {
         fallback
     }
 }
 
+fn is_provider_auth_error(error: &Error) -> bool {
+    error.chain().any(|cause| {
+        let message = cause.to_string().to_ascii_lowercase();
+        message.contains(INVALID_API_KEY_MARKER)
+            || message.contains(UNAUTHORIZED_STATUS_MARKER)
+            || message.contains("401 unauthorized")
+    })
+}
+
 fn is_terminal_provider_configuration_error(error: &Error) -> bool {
     error.chain().any(|cause| {
         let message = cause.to_string().to_ascii_lowercase();
         message.contains(MISSING_ENVIRONMENT_VARIABLE_MARKER)
+            || message.contains(INVALID_API_KEY_MARKER)
+            || message.contains(UNAUTHORIZED_STATUS_MARKER)
+            || message.contains("401 unauthorized")
             || message.contains(BLOCKED_SUBAGENT_MARKER)
             || message.contains(UNKNOWN_SUBAGENT_MODEL_MARKER)
             || message.contains(MISSING_REQUEST_MODEL_MARKER)
@@ -72,6 +88,18 @@ mod tests {
         assert_eq!(
             http_status(StatusCode::BAD_GATEWAY, &error),
             StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[test]
+    fn marks_sakana_invalid_api_key_as_unauthorized() {
+        let error = anyhow!(
+            "codex app-server turn failed: unexpected status 401 Unauthorized: Invalid API key, url: https://api.sakana.ai/v1/responses"
+        );
+        assert_eq!(error_type(&error), NON_RETRYABLE_ERROR_TYPE);
+        assert_eq!(
+            http_status(StatusCode::BAD_GATEWAY, &error),
+            StatusCode::UNAUTHORIZED
         );
     }
 

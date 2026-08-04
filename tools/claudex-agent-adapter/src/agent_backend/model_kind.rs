@@ -10,4 +10,11 @@ impl AgentBackend {
             Self::Grok(_) => Some(BackendKind::GrokAcp),
         }
     }
+
+    pub fn model_provider_for_model(&self, model: &str) -> Option<String> {
+        match self {
+            Self::Routed(routes) => routes.model_provider_for_model(model),
+            Self::Codex(_) | Self::ConfiguredAcp(_) | Self::Copilot(_) | Self::Grok(_) => None,
+        }
+    }
 }
