@@ -1,0 +1,76 @@
+//! Enforce claudex main-session delegation and exclusive file locks.
+//!
+//! Claude Code hooks feed one JSON event on stdin. When `CLAUDEX_ACTIVE=1`:
+//!
+//! * PreToolUse in the **main** session only denies file/search tools while routing
+//!   says delegation is required. SubAgents keep the full tool set.
+//! * SubAgent identity is detected via `agent_id` / `agent_type` / subagent transcript
+//!   path so main-session denials never apply to workers.
+//! * PreToolUse Write/Edit acquires a per-path lock for the calling `agent_id` so
+//!   parallel SubAgents cannot mutate the same file at once.
+//! * PostToolUse and SubagentStop release those locks.
+
+mod env;
+mod locks;
+mod policy;
+
+pub use policy::handle_event;
+
+use serde_json::{Map, Value};
+use std::io::{self, Read, Write};
+
+/// Run the hook: read stdin JSON, write decision JSON to stdout.
+pub fn run() -> io::Result<i32> {
+    if !env::env_truthy("CLAUDEX_ACTIVE", false) || env::is_child_runtime() {
+        writeln!(io::stdout(), "{{}}")?;
+        return Ok(0);
+    }
+    let mut raw = String::new();
+    io::stdin().read_to_string(&mut raw)?;
+    if raw.trim().is_empty() {
+        writeln!(io::stdout(), "{{}}")?;
+        return Ok(0);
+    }
+    let Ok(payload) = serde_json::from_str::<Value>(&raw) else {
+        writeln!(io::stdout(), "{{}}")?;
+        return Ok(0);
+    };
+    let Some(obj) = payload.as_object() else {
+        writeln!(io::stdout(), "{{}}")?;
+        return Ok(0);
+    };
+    let result = handle_event(obj);
+    writeln!(io::stdout(), "{}", serde_json::to_string(&result).unwrap_or_else(|_| "{}".into()))?;
+    Ok(0)
+}
+
+pub(crate) fn deny(event_name: &str, reason: &str) -> Value {
+    Value::Object(Map::from_iter([(
+        "hookSpecificOutput".into(),
+        Value::Object(Map::from_iter([
+            ("hookEventName".into(), Value::String(event_name.into())),
+            ("permissionDecision".into(), Value::String("deny".into())),
+            (
+                "permissionDecisionReason".into(),
+                Value::String(reason.into()),
+            ),
+        ])),
+    )]))
+}
+
+pub(crate) fn allow(event_name: Option<&str>, reason: Option<&str>) -> Value {
+    match (event_name, reason) {
+        (Some(event), Some(reason)) => Value::Object(Map::from_iter([(
+            "hookSpecificOutput".into(),
+            Value::Object(Map::from_iter([
+                ("hookEventName".into(), Value::String(event.into())),
+                ("permissionDecision".into(), Value::String("allow".into())),
+                (
+                    "permissionDecisionReason".into(),
+                    Value::String(reason.into()),
+                ),
+            ])),
+        )])),
+        _ => Value::Object(Map::new()),
+    }
+}

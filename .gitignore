@@ -53,8 +53,7 @@ coverage_out/
 !.claude/commands
 !.claude/commands/*
 !.claude/hooks/
-.claude/hooks/*
-!.claude/hooks/herdr-agent-state.sh
+!.claude/hooks/**
 !.claude/skills/
 !.claude/skills/ctx-agent-history-search/
 !.claude/skills/ctx-agent-history-search/SKILL.md

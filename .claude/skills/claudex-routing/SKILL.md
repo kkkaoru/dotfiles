@@ -24,6 +24,11 @@ retained.
    a provider reports one, otherwise its aggregate usage), with the `five-hour` window breaking
    ties, then exact-model concurrency headroom; prefer `preferred_worker` for primary work. Treat
    an exact `model_concurrency` entry with `available: false` as unavailable for that turn.
+   Automatic `selected_workers` already drops low weekly remaining peers (under ~25%) when any
+   peer still has ample weekly headroom (at least ~40%); do not reintroduce those depleted models
+   for diversity. Launch in ranking order: fill scopes from the front of `selected_workers` /
+   `worker_ranking` before lower-ranked entries. Ollama API-only availability counts as full
+   weekly headroom when CodexBar has no meter.
    A selected worker may intentionally use the same model as the outer session; outer and
    SubAgent requests are independent. The one conservation exception is the `claudex-sonnet`
    worker: when `CLAUDEX_OUTER_MODEL` is a Sonnet 5 alias, automatic routing omits that worker
@@ -33,6 +38,14 @@ retained.
    When any selected worker exists, delegation is mandatory before substantive main-session work;
    direct execution is fallback-only when no worker is available or the user explicitly opts out.
    This includes WebSearch/WebFetch, repository reads, and implementation work.
+   Claudex enforces the main-session side with both a UserPromptSubmit reminder and a
+   `PreToolUse` hook (`claudex-tool-policy` Rust binary from `tools/claudex-tool-policy`,
+   injected only into the claudex-isolated settings; plain `claude` is untouched). That hook
+   denies Read/Write/Edit/Grep/Glob/Web tools in main while
+   `delegation_required` is true (Bash stays allowed in main). SubagentStart reminders and
+   PreToolUse both keep the worker's full tool set — main denials are never inherited. Parallel
+   SubAgents still take exclusive file locks on Write/Edit targets; partition scopes so workers
+   never share a mutable path.
    Pass each worker's `model` and `effort` as `claudex_model` and `claudex_effort`. When substantive
    work is clear, invoke the selected SubAgent in the first response rather than merely announcing
    future delegation. Do not use task-list bookkeeping merely as a precondition for delegation.

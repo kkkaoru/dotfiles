@@ -63,6 +63,14 @@ class PrepareClaudeConfigTests(unittest.TestCase):
             self.assertEqual(isolated_settings["model"], "grok-4.5")
             self.assertEqual(isolated_settings["effortLevel"], "high")
             self.assertEqual(isolated_settings["advisorModel"], "opus")
+            isolated_hooks = isolated_settings["hooks"]
+            self.assertIn("PreToolUse", isolated_hooks)
+            self.assertIn("PostToolUse", isolated_hooks)
+            self.assertIn("SubagentStop", isolated_hooks)
+            pre = json.dumps(isolated_hooks["PreToolUse"])
+            self.assertIn("claudex-tool-policy", pre)
+            # Plain shared settings must not gain mechanical tool limits.
+            self.assertNotIn("PreToolUse", shared.get("hooks", {}))
 
             agents_link = isolated / "agents"
             self.assertTrue(agents_link.is_symlink())

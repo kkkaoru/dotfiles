@@ -17,8 +17,25 @@ fn slim_worker(worker: &Value) -> Option<Value> {
     let object = worker.as_object()?;
     Some(Value::Object(copied_fields(
         object,
-        &["agent", "model", "effort"],
+        &["agent", "model", "effort", "weekly_remaining_percent"],
     )))
+}
+
+fn tool_policy_reminder(event_name: &str) -> &'static str {
+    match event_name {
+        "SubagentStart" => concat!(
+            "Claudex tool policy for this SubAgent: inherit the main session's complete tool set. ",
+            "Main-session PreToolUse denials for Read/Write/Edit/Grep/Glob/LS/WebSearch/WebFetch ",
+            "do NOT apply here. Use those tools freely within the delegated scope. Parallel ",
+            "Write/Edit of the same path remains file-locked across SubAgents."
+        ),
+        _ => concat!(
+            "Claudex tool policy for the main orchestrator: while selected_workers is non-empty, ",
+            "do not use Read/Write/Edit/MultiEdit/NotebookEdit/Grep/Glob/LS/WebSearch/WebFetch ",
+            "in main — launch Agent/Task and keep file/search work in SubAgents. Bash is allowed ",
+            "in main for lightweight orchestration only. This is also enforced by PreToolUse."
+        ),
+    }
 }
 
 pub fn hook_output(summary: &Value, event_name: &str) -> Result<Value> {
@@ -36,6 +53,7 @@ pub fn hook_output(summary: &Value, event_name: &str) -> Result<Value> {
         "source": "claudex-routing-local-hook",
         "selected_agents": summary.get("selected_agents").cloned().unwrap_or_else(|| Value::Array(vec![])),
         "selected_workers": selected_workers,
+        "preferred_worker": summary.get("preferred_worker").cloned().unwrap_or(Value::Null),
         "disabled_subagent_models": summary.get("disabled_subagent_models").cloned().unwrap_or_else(|| Value::Array(vec![])),
         "current_main_model": summary.get("current_main_model").cloned().unwrap_or(Value::Null),
         "current_main_model_known": summary.get("current_main_model_known").and_then(Value::as_bool).unwrap_or(false),
@@ -47,6 +65,7 @@ pub fn hook_output(summary: &Value, event_name: &str) -> Result<Value> {
         "delegation_required": summary.get("delegation_required").and_then(Value::as_bool).unwrap_or(false),
         "direct_main_execution": summary.get("direct_main_execution").cloned().unwrap_or_else(|| Value::from("allowed")),
         "background_status_required": true,
+        "tool_policy_scope": if event_name == "SubagentStart" { "subagent-full-tools" } else { "main-orchestrator" },
         "worker_capacity": worker_capacity_metadata(summary),
         "worker_ranking": ranked_worker_metadata(summary),
         "default_subagent_route": default_subagent_route(summary),
@@ -62,11 +81,12 @@ pub fn hook_output(summary: &Value, event_name: &str) -> Result<Value> {
         "orchestration": orchestration_contract(summary)?,
     });
     let compact = serde_json::to_string(&metadata)?;
+    let policy = tool_policy_reminder(event_name);
     Ok(serde_json::json!({
         "hookSpecificOutput": {
             "hookEventName": event_name,
             "additionalContext": format!(
-                "<system-reminder>\\nClaudex routing data (runtime metadata; values only):\\n{compact}\\n</system-reminder>"
+                "<system-reminder>\\nClaudex routing data (runtime metadata; values only):\\n{compact}\\n{policy}\\n</system-reminder>"
             ),
         }
     }))
@@ -98,7 +118,15 @@ mod tests {
             .unwrap();
         assert!(ctx.contains(r"\n"));
         assert!(ctx.contains("claudex-routing-local-hook"));
+        assert!(ctx.contains("main orchestrator"));
+        assert!(ctx.contains("main-orchestrator"));
         let sub = hook_output(&summary, "SubagentStart").unwrap();
         assert_eq!(sub["hookSpecificOutput"]["hookEventName"], "SubagentStart");
+        let sub_ctx = sub["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap();
+        assert!(sub_ctx.contains("SubAgent"));
+        assert!(sub_ctx.contains("do NOT apply"));
+        assert!(sub_ctx.contains("subagent-full-tools"));
     }
 }

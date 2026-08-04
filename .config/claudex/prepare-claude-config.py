@@ -20,6 +20,32 @@ from typing import Any
 SHARED_SETTINGS_NAMES = frozenset({"settings.json", "settings.local.json"})
 DISCOVERY_PREFIX = "claude-claudex-"
 PLAIN_CLAUDE_FALLBACK_MODEL = "sonnet[1m]"
+TOOL_POLICY_HOOK = (
+    'test "${CLAUDEX_ACTIVE:-}" != 1 || '
+    'exec "$HOME/.cargo/bin/claudex-tool-policy"'
+)
+# Registered only on the claudex-isolated settings.json. Plain `claude` keeps
+# using ~/.claude/settings.json without these mechanical tool limits.
+CLAUDEX_TOOL_POLICY_HOOKS: dict[str, list[dict[str, Any]]] = {
+    "PreToolUse": [
+        {
+            "matcher": "Read|Write|Edit|MultiEdit|NotebookEdit|Grep|Glob|LS|WebSearch|WebFetch",
+            "hooks": [{"type": "command", "command": TOOL_POLICY_HOOK, "timeout": 10}],
+        }
+    ],
+    "PostToolUse": [
+        {
+            "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+            "hooks": [{"type": "command", "command": TOOL_POLICY_HOOK, "timeout": 10}],
+        }
+    ],
+    "SubagentStop": [
+        {
+            "matcher": "*",
+            "hooks": [{"type": "command", "command": TOOL_POLICY_HOOK, "timeout": 10}],
+        }
+    ],
+}
 
 
 def load_json_object(path: Path) -> dict[str, Any]:
@@ -73,6 +99,31 @@ def mirror_shared_entries(user_claude: Path, isolated: Path) -> None:
         ensure_symlink(entry, isolated / entry.name)
 
 
+def merge_claudex_tool_policy_hooks(settings: dict[str, Any]) -> None:
+    hooks = settings.get("hooks")
+    if not isinstance(hooks, dict):
+        hooks = {}
+        settings["hooks"] = hooks
+    for event_name, entries in CLAUDEX_TOOL_POLICY_HOOKS.items():
+        existing = hooks.get(event_name)
+        merged: list[Any] = list(existing) if isinstance(existing, list) else []
+        # Drop prior copies of this policy so repeated prepare stays idempotent.
+        retained = [
+            entry
+            for entry in merged
+            if not (
+                isinstance(entry, dict)
+                and isinstance(entry.get("hooks"), list)
+                and any(
+                    isinstance(hook, dict)
+                    and "claudex-tool-policy" in str(hook.get("command", ""))
+                    for hook in entry["hooks"]
+                )
+            )
+        ]
+        hooks[event_name] = retained + entries
+
+
 def write_isolated_settings(
     user_settings_path: Path,
     isolated_settings_path: Path,
@@ -82,6 +133,7 @@ def write_isolated_settings(
     settings = load_json_object(user_settings_path)
     settings["model"] = model
     settings["effortLevel"] = effort
+    merge_claudex_tool_policy_hooks(settings)
     isolated_settings_path.write_text(
         json.dumps(settings, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",

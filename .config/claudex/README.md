@@ -369,7 +369,21 @@ claudex
 
 通常起動では `--agent` を追加せず、`CLAUDEX_ACTIVE` が設定されたプロセスでのみglobal
 `UserPromptSubmit` hookがrouting contextを注入します。このため新規・resumeのどちらでも
-sessionの表示名をagent名へ変更しません。過去に `--agent claudex-orchestrator` が付いた
+sessionの表示名をagent名へ変更しません。加えて `prepare-claude-config.py` が
+claudex 専用の隔離 `settings.json` にだけ `PreToolUse` / `PostToolUse` /
+`SubagentStop`（Rust バイナリ `~/.cargo/bin/claudex-tool-policy`、crate は
+`tools/claudex-tool-policy`）を注入し、routed worker がある
+あいだ main session の Read/Write/Edit/検索ツールを拒否し、SubAgent 同士の同一
+ファイル Write/Edit を排他ロックします（Bash は main でも許可）。これらの拒否は
+`agent_id` / `agent_type` / subagent transcript で判定し **SubAgent には引き継がれません**。
+UserPromptSubmit では main 向け、SubagentStart では worker 向けの tool policy 文言を
+それぞれ注入します。共有の
+`~/.claude/settings.json` には入れないため、素の `claude` にはこの機械的制限は付きません。
+緊急時のみ `CLAUDEX_ALLOW_MAIN_TOOLS=1` で main の file/search 直接実行を許可できます。
+自動 `selected_workers` は weekly 残量が十分ある peer がいるとき、weekly 残量が低い
+（目安 25% 未満）worker を除外します。Ollama が CodexBar 未計測でも API 到達可能なら
+weekly 余裕ありとして上位に並びます。
+過去に `--agent claudex-orchestrator` が付いた
 transcriptをresumeする場合、adapterは残存する `agent-setting` を検知し、slug / 既存title /
 cwd名から `--name` を復元して表示名の固定化を解除します。明示的な `--name` や `--agent`
 はそのまま優先されます。adapterの `--inherit-claude-model` を使うため、outer sessionは
@@ -395,6 +409,7 @@ provider設定がdotfilesにあってもCodex、Grok、Qwen、Sonnetの作業デ
 | `CLAUDEX_SUBAGENT_REUSE` | `1` | model、effort、role、scopeが互換な完了workerを`SendMessage`で再利用 |
 | `CLAUDEX_SUBAGENT_CLEANUP_ON_EXIT` | `1` | main session終了・cancel・error時にlaunch停止、childのcancel/wait/reapを要求 |
 | `CLAUDEX_SUBAGENT_FIRST` | `1` | routed workerがある場合はSubAgent委譲を必須化し、main直接実行をfallback限定にする |
+| `CLAUDEX_ALLOW_MAIN_TOOLS` | unset | `1` のときだけ PreToolUse の main 実行拒否を解除（緊急回避） |
 | `CLAUDEX_SUBAGENT_STATUS_POLL_SECONDS` | `15` | background SubAgentの`TaskList`/非ブロッキング`TaskOutput`状態スナップショット間隔 |
 | `CLAUDEX_MODEL_CONCURRENCY_WAIT_TIMEOUT_MS` | `30000` | 同一modelのadmission待機を有限化し、期限超過時は明示的なエラーを返す |
 
@@ -902,6 +917,10 @@ claudex-route-usage --no-cache \
 
 Routing hook は Rust crate `tools/claudex-route-usage` です。変更後は `cargo test` と
 `cargo install --path tools/claudex-route-usage` で `~/.cargo/bin/claudex-route-usage` を更新します。
+メインの file/search 拒否と SubAgent ファイルロックは Rust crate
+`tools/claudex-tool-policy` です。同様に `cargo test` と
+`cargo install --path tools/claudex-tool-policy` で
+`~/.cargo/bin/claudex-tool-policy` を更新します。
 
 ## トラブルシューティング
 

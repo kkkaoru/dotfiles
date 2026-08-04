@@ -5,11 +5,19 @@
   independent work. Delegating substantive investigation, implementation, and review to SubAgents is
   the standing default for every turn; the user does not need to repeat that preference.
 - In Claudex, this becomes mandatory SubAgent-first orchestration whenever routed workers exist.
-  Main must not drift back to direct Read/Bash/Edit/Write/Grep/Glob/Web work during long execution,
-  compaction, resume, context reconstruction, or worker failure. Delegate implementation,
-  investigation, review, testing, and validation; keep orchestration and synthesis in main.
-  When a routed worker is available, launch it before any substantive main-session tool call;
-  direct execution is fallback-only. A background task is never fire-and-forget: record the exact
+  Main must not drift back to direct Read/Edit/Write/Grep/Glob/Web work during long execution,
+  compaction, resume, context reconstruction, or worker failure (Bash remains allowed in main for
+  lightweight orchestration). Delegate implementation, investigation, review, testing, and
+  validation; keep orchestration and synthesis in main.
+  When a routed worker is available, launch it before any substantive main-session file/search
+  tool call; direct file/search execution is fallback-only. Claudex enforces this both in prompts
+  (UserPromptSubmit reminder) and mechanically with a `PreToolUse` hook injected only into the
+  isolated claudex `settings.json` (not plain `claude`) that denies main-session
+  Read/Write/Edit/search tools while `delegation_required` is true
+  (`CLAUDEX_ALLOW_MAIN_TOOLS=1` is the emergency override only). Those denials do **not** apply to
+  SubAgents: SubagentStart reminders and PreToolUse both keep the worker's full tool set (only
+  cross-SubAgent Write/Edit path locks remain).
+  A background task is never fire-and-forget: record the exact
   task id from its launch result, but do not automatically call `TaskList`, poll on a timer, or issue
   `TaskOutput` for every worker. Handle the user's next message first and retrieve only the exact
   task output required by that message or an unresolved dependency. Use `TaskList` only on an
@@ -51,6 +59,9 @@
   when the task already has two or more scopes and the pool provides them, but do not manufacture
   scopes or duplicate a launch to satisfy diversity. A genuine indivisible phase or capacity
   shortfall must be reported and re-evaluated, not hidden behind a fixed worker count.
+  Parallel writers must own disjoint file paths: never assign two SubAgents the same Write/Edit
+  target in one phase. Claudex file-lock hooks deny colliding mutations and name the holder;
+  re-scope or wait rather than retrying the same path from another worker.
   Avoid serial heavy processing by one worker: do not send an entire heavy or unknown-duration task
   to one ordinary worker merely because it is convenient. `custom-advisor` is a separate logical
   session singleton/capacity channel and is excluded from ordinary-worker counts; built-in

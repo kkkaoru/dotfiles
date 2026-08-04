@@ -233,6 +233,8 @@ fn run() -> Result<()> {
     } else {
         bail!("routing summary must be an object");
     }
+    // Best-effort: PreToolUse policy reads this to deny main-session tools.
+    let _ = util::write_delegation_state(&paths.home, &summary, now);
     println!(
         "{}",
         serde_json::to_string(&hook::hook_output(&summary, arguments.event.as_str())?)?
