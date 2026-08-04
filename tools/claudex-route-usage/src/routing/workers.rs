@@ -93,6 +93,52 @@ pub fn extend_with_native_workers(
     );
 }
 
+/// Weekly remaining below this is treated as depleted for automatic picks.
+pub const LOW_WEEKLY_REMAINING_PERCENT: f64 = 25.0;
+/// At least one worker at or above this enables depleting low-weekly peers.
+pub const AMPLE_WEEKLY_REMAINING_PERCENT: f64 = 40.0;
+
+/// Prefer high weekly headroom for automatic SubAgent selection.
+///
+/// When any selected worker has ample weekly remaining, drop peers whose weekly
+/// remaining is low. Unknown weekly meters stay eligible. Explicit model
+/// launches can still target a dropped provider via `model_prefixes`.
+pub fn prefer_weekly_headroom(
+    selected: Vec<Value>,
+    providers: &Map<String, Value>,
+    native_quota: &Map<String, Value>,
+) -> Vec<Value> {
+    let annotated: Vec<(Value, Option<f64>)> = selected
+        .into_iter()
+        .map(|worker_item| {
+            let weekly = worker_item
+                .as_object()
+                .and_then(|object| worker_quota(object, providers, native_quota))
+                .map(|quota| effective_window_remaining(quota).0)
+                .unwrap_or(None);
+            (worker_item, weekly)
+        })
+        .collect();
+    let has_ample = annotated
+        .iter()
+        .any(|(_, weekly)| weekly.is_some_and(|value| value >= AMPLE_WEEKLY_REMAINING_PERCENT));
+    let keep_all = !has_ample;
+    let mut filtered = Vec::with_capacity(annotated.len());
+    for (mut worker_item, weekly) in annotated {
+        if !keep_all && weekly.is_some_and(|value| value < LOW_WEEKLY_REMAINING_PERCENT) {
+            continue;
+        }
+        if let Some(object) = worker_item.as_object_mut() {
+            object.insert(
+                "weekly_remaining_percent".into(),
+                weekly.map_or(Value::Null, |value| Value::from(python_round(value, 1))),
+            );
+        }
+        filtered.push(worker_item);
+    }
+    filtered
+}
+
 /// Native workers only join the ranking when CodexBar reported real usage.
 pub fn ranked_native_quota(quota: &Value) -> bool {
     quota

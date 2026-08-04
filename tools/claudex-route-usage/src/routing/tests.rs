@@ -250,6 +250,118 @@ fn weekly_remaining_orders_workers() {
 }
 
 #[test]
+fn drops_low_weekly_workers_when_ample_alternatives_exist() {
+    let usage = json!([
+        {
+          "provider":"codex",
+          "available": true,
+          "reason": "available",
+          "maxUsedPercent": 20,
+          "quotaWindows": [
+            {"name":"five-hour","remainingPercent":80},
+            {"name":"seven-day","remainingPercent":80}
+          ]
+        },
+        {
+          "provider":"grok",
+          "available": true,
+          "reason": "available",
+          "maxUsedPercent": 90,
+          "quotaWindows": [
+            {"name":"five-hour","remainingPercent":10},
+            {"name":"seven-day","remainingPercent":10}
+          ]
+        },
+        {
+          "provider":"qwencloud",
+          "available": true,
+          "reason": "available",
+          "maxUsedPercent": 5,
+          "quotaWindows": [
+            {"name":"five-hour","remainingPercent":95},
+            {"name":"seven-day","remainingPercent":95}
+          ]
+        }
+    ]);
+    let summary = routing_summary(&usage, &sample_config(), &BTreeSet::new()).unwrap();
+    let agents = selected_agents(&summary);
+    assert!(agents.contains(&"claudex-qwen"));
+    assert!(agents.contains(&"claudex-gpt-spark"));
+    assert!(
+        !agents.contains(&"claudex-grok"),
+        "low weekly grok must leave automatic selected_workers when ample peers exist: {agents:?}"
+    );
+}
+
+#[test]
+fn ollama_api_only_availability_ranks_as_full_weekly_headroom() {
+    let config = config_from_json(
+        r#"{
+          "version": 1,
+          "mainProviders": ["ollama-glm", "grok"],
+          "providers": [
+            {
+              "id": "ollama-glm",
+              "agent": "claudex-ollama-glm-5-2",
+              "defaultModel": "glm-5.2:cloud",
+              "effort": "max",
+              "enabled": true,
+              "usageProvider": "ollama",
+              "modelPrefixes": ["glm-"],
+              "backend": "configured-acp"
+            },
+            {
+              "id": "grok",
+              "agent": "claudex-grok",
+              "defaultModel": "grok-4.5",
+              "effort": "high",
+              "enabled": true,
+              "usageProvider": "grok",
+              "modelPrefixes": ["grok"],
+              "backend": "grok-acp"
+            }
+          ],
+          "fallback": {
+            "agent": "claudex-sonnet",
+            "model": "claude-sonnet-5",
+            "effort": "high"
+          },
+          "nativeWorkers": [],
+          "advisor": {
+            "agent": "custom-advisor",
+            "model": "claude-fable-5",
+            "effort": "xhigh"
+          }
+        }"#,
+    );
+    let usage = json!([
+        {
+          "provider": "ollama",
+          "available": true,
+          "maxUsedPercent": 0,
+          "reason": "available-ollama-api-only"
+        },
+        {
+          "provider": "grok",
+          "available": true,
+          "reason": "available",
+          "maxUsedPercent": 81,
+          "quotaWindows": [
+            {"name":"five-hour","remainingPercent":19},
+            {"name":"seven-day","remainingPercent":19}
+          ]
+        }
+    ]);
+    let summary = routing_summary(&usage, &config, &BTreeSet::new()).unwrap();
+    assert_eq!(summary["selected_workers"][0]["agent"], "claudex-ollama-glm-5-2");
+    let agents = selected_agents(&summary);
+    assert!(
+        !agents.contains(&"claudex-grok"),
+        "depleted grok should not stay selected beside ample ollama: {agents:?}"
+    );
+}
+
+#[test]
 fn suppresses_sonnet_when_main_is_sonnet() {
     let summary = routing_summary(&json!([]), &sample_config(), &BTreeSet::new()).unwrap();
     let separated =

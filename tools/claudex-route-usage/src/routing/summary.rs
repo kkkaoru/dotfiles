@@ -3,8 +3,8 @@
 use super::orchestration::orchestration_contract;
 use super::quota::{capacity_priority, quota_with_windows, status};
 use super::workers::{
-    extend_with_native_workers, fallback_worker, native_worker_item, ranked_native_quota,
-    selected_agent_values, selected_native_workers, worker,
+    extend_with_native_workers, fallback_worker, native_worker_item, prefer_weekly_headroom,
+    ranked_native_quota, selected_agent_values, selected_native_workers, worker,
 };
 use super::{CapacityKey, rank_selected_workers};
 use crate::config::Config;
@@ -35,6 +35,7 @@ pub fn routing_summary(
         .filter_map(|item| item.get("agent").and_then(Value::as_str).map(str::to_owned))
         .collect();
     extend_with_native_workers(&mut selected, config, disabled_models, &participating);
+    selected = prefer_weekly_headroom(selected, &providers, &native_quota);
     let preferred = selected.first().cloned();
     let mut summary = serde_json::json!({
         "providers": providers,

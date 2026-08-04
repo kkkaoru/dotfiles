@@ -125,9 +125,12 @@ pub fn ollama_usage_entry(curl_program: &str, provider: &str, model: &str) -> Va
     if !found {
         return unavailable_usage_entry(provider);
     }
+    // Local Ollama Cloud/API reachability has no CodexBar meter. Treat as
+    // fully unused so weekly ranking prefers it over depleted providers.
     serde_json::json!({
         "provider": provider,
         "available": true,
+        "maxUsedPercent": 0,
         "reason": "available-ollama-api-only",
     })
 }

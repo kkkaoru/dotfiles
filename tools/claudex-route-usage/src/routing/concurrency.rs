@@ -3,8 +3,8 @@
 use super::orchestration::orchestration_contract;
 use super::quota::combined_capacity_priority;
 use super::workers::{
-    extend_with_native_workers, fallback_worker, native_worker_item, ranked_native_quota,
-    selected_agent_values, worker,
+    extend_with_native_workers, fallback_worker, native_worker_item, prefer_weekly_headroom,
+    ranked_native_quota, selected_agent_values, worker,
 };
 use super::{CapacityKey, rank_selected_workers};
 use crate::config::Config;
@@ -181,6 +181,17 @@ pub fn apply_model_concurrency(
         selected = vec![fallback];
     }
     extend_with_native_workers(&mut selected, config, disabled_models, &participating);
+    let providers = combined
+        .get("providers")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    let native_quota = combined
+        .get("native_worker_quota")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    selected = prefer_weekly_headroom(selected, &providers, &native_quota);
     write_selection(&mut combined, selected, fallback_active, model_capacity);
     let orchestration = orchestration_contract(&combined)?;
     if let Some(object) = combined.as_object_mut() {
