@@ -31,7 +31,7 @@ fn fields_match(program: Option<String>, command: Option<String>, executable: &P
 }
 
 pub(super) fn terminate(pid: u32) {
-    if !is_signalable_pid(pid) || pid == process::id() {
+    if !is_signalable_pid(pid) || pid == process::id() || is_launch_process(pid) {
         return;
     }
     terminate_with_escalation(pid);
@@ -42,10 +42,24 @@ pub(super) fn terminate(pid: u32) {
 /// signal the adapter's process group or escalate to SIGKILL: either action can
 /// cut off an in-flight response before Axum's graceful shutdown completes.
 pub(super) fn request_graceful_shutdown(pid: u32) {
-    if !is_signalable_pid(pid) || pid == process::id() {
+    if !is_signalable_pid(pid) || pid == process::id() || is_launch_process(pid) {
         return;
     }
     request_graceful_shutdown_with_signal(pid);
+}
+
+fn is_launch_process(pid: u32) -> bool {
+    process_field(pid, "command=")
+        .is_some_and(|command| is_launch_command_line(&command))
+}
+
+fn is_launch_command_line(command: &str) -> bool {
+    let mut fields = command.split_whitespace();
+    let Some(executable) = fields.next() else {
+        return false;
+    };
+    executable.rsplit('/').next() == Some("claudex-agent-adapter")
+        && fields.next() == Some("launch")
 }
 
 fn is_signalable_pid(pid: u32) -> bool {
@@ -252,6 +266,12 @@ mod tests {
             "/tmp/claudex-agent-adapter",
             "/tmp/claudex-agent-adapter launch --model current",
             executable
+        ));
+        assert!(is_launch_command_line(
+            "/Users/test/.local/bin/claudex-agent-adapter launch --model opus"
+        ));
+        assert!(!is_launch_command_line(
+            "/Users/test/.local/bin/claudex-agent-adapter serve --model opus"
         ));
         assert!(!command_matches(
             "/usr/local/bin/claudex-app-server-adapter",

@@ -398,7 +398,7 @@ mod tests {
         let mut absent = config();
         absent.options.listen = unused_listen();
         assert_eq!(
-            handover::inspect_service(&client, &absent).await,
+            handover::inspect_service_with(&client, &absent, || false).await,
             handover::ServiceState::Start
         );
 
@@ -411,7 +411,7 @@ mod tests {
             vec![health_response(&health), http_response("200 OK", "{}")],
         );
         assert_eq!(
-            handover::inspect_service(&client, &reusable).await,
+            handover::inspect_service_with(&client, &reusable, || false).await,
             handover::ServiceState::Reuse
         );
         server.join().expect("reuse server");
@@ -422,7 +422,7 @@ mod tests {
         reusable.options.listen = listener.local_addr().expect("stale address");
         let server = serve_responses(listener, vec![health_response(&stale)]);
         assert_eq!(
-            handover::inspect_service(&client, &reusable).await,
+            handover::inspect_service_with(&client, &reusable, || false).await,
             handover::ServiceState::Replace {
                 pid: Some(42),
                 recovery_generation: None,
@@ -439,7 +439,7 @@ mod tests {
         // deferred before the launcher probes auth or sends SIGTERM.
         let server = serve_responses(listener, vec![health_response(&active)]);
         assert_eq!(
-            handover::inspect_service(&client, &reusable).await,
+            handover::inspect_service_with(&client, &reusable, || false).await,
             handover::ServiceState::Defer {
                 pid: Some(42),
                 active_http_requests: 0,
@@ -447,6 +447,21 @@ mod tests {
             }
         );
         server.join().expect("active server");
+
+        let mut attached = healthy(&reusable);
+        attached.build_id = "old-build".to_owned();
+        let listener = TcpListener::bind("127.0.0.1:0").expect("attached listener");
+        reusable.options.listen = listener.local_addr().expect("attached address");
+        let server = serve_responses(listener, vec![health_response(&attached)]);
+        assert_eq!(
+            handover::inspect_service_with(&client, &reusable, || true).await,
+            handover::ServiceState::Defer {
+                pid: Some(42),
+                active_http_requests: 0,
+                active_provider_turns: 0,
+            }
+        );
+        server.join().expect("attached server");
 
         let listener = TcpListener::bind("127.0.0.1:0").expect("authentication listener");
         reusable.options.listen = listener.local_addr().expect("authentication address");
@@ -458,7 +473,7 @@ mod tests {
             ],
         );
         assert_eq!(
-            handover::inspect_service(&client, &reusable).await,
+            handover::inspect_service_with(&client, &reusable, || false).await,
             handover::ServiceState::Replace {
                 pid: Some(42),
                 recovery_generation: None,

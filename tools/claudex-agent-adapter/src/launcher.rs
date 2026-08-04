@@ -277,7 +277,7 @@ async fn ensure_config_running(config: &ServiceConfig) -> Result<String> {
             active_provider_turns,
         } => {
             eprintln!(
-                "claudex: retaining active adapter pid {:?}; routing this new session to a current-build listener ({} HTTP request(s), {} provider turn(s))",
+                "claudex: retaining active adapter pid {:?}; routing this new session to a current-build listener ({} HTTP request(s), {} provider turn(s); live launch sessions kept)",
                 pid, active_http_requests, active_provider_turns
             );
             return fallback::ensure_current_generation(&client, config)

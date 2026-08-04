@@ -5,6 +5,7 @@ use anyhow::{Result, bail};
 use super::daemon_process::{
     matches as process_matches, request_graceful_shutdown, terminate as force_terminate,
 };
+use super::session_process::any_launch_is_active;
 use super::{ServiceConfig, authenticates, fetch_health};
 
 const LISTENER_RELEASE_POLL_INTERVAL: Duration = Duration::from_millis(25);
@@ -28,6 +29,14 @@ pub(super) async fn inspect_service(
     client: &reqwest::Client,
     config: &ServiceConfig,
 ) -> ServiceState {
+    inspect_service_with(client, config, any_launch_is_active).await
+}
+
+pub(super) async fn inspect_service_with(
+    client: &reqwest::Client,
+    config: &ServiceConfig,
+    live_launch_sessions: impl Fn() -> bool,
+) -> ServiceState {
     let Some(health) = fetch_health(client, config).await else {
         return ServiceState::Start;
     };
@@ -36,9 +45,12 @@ pub(super) async fn inspect_service(
         && authenticates(client, config).await
     {
         ServiceState::Reuse
-    } else if health.status == "ok" && health.has_active_work() {
-        // Never tear down a generation that is still serving a request. The
-        // next ensure invocation will retry the handover after it becomes idle.
+    } else if health.status == "ok"
+        && (health.has_active_work() || live_launch_sessions())
+    {
+        // Never tear down a generation that is still serving a request, or that
+        // still has an interactive launch parent attached. Replacing serve while
+        // a TUI is open aborts Claude Code and forces resume from compaction.
         ServiceState::Defer {
             pid: health.pid,
             active_http_requests: health.active_http_requests,
