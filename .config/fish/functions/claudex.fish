@@ -5,6 +5,12 @@ function claudex --description 'Run Claude Code with config-driven agent backend
     set -l max_parallel 40
     set -q CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS; and set max_parallel "$CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS"
     set -q CLAUDEX_SUBAGENT_MAX_PARALLEL; and set max_parallel "$CLAUDEX_SUBAGENT_MAX_PARALLEL"
+    set -l min_parallel 3
+    set -q CLAUDEX_SUBAGENT_MIN_PARALLEL; and set min_parallel "$CLAUDEX_SUBAGENT_MIN_PARALLEL"
+    set -l active_floor 2
+    set -q CLAUDEX_SUBAGENT_ACTIVE_FLOOR; and set active_floor "$CLAUDEX_SUBAGENT_ACTIVE_FLOOR"
+    set -l min_model_families 2
+    set -q CLAUDEX_SUBAGENT_MIN_MODEL_FAMILIES; and set min_model_families "$CLAUDEX_SUBAGENT_MIN_MODEL_FAMILIES"
     set -l max_subagents_per_session 1024
     set -q CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION; and set max_subagents_per_session "$CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION"
     set -l reassess_seconds 600
@@ -25,6 +31,9 @@ function claudex --description 'Run Claude Code with config-driven agent backend
     set -lx CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS "$max_parallel"
     set -lx CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION "$max_subagents_per_session"
     set -lx CLAUDEX_SUBAGENT_MAX_PARALLEL "$max_parallel"
+    set -lx CLAUDEX_SUBAGENT_MIN_PARALLEL "$min_parallel"
+    set -lx CLAUDEX_SUBAGENT_ACTIVE_FLOOR "$active_floor"
+    set -lx CLAUDEX_SUBAGENT_MIN_MODEL_FAMILIES "$min_model_families"
     set -lx CLAUDEX_SUBAGENT_REASSESS_INTERVAL_SECONDS "$reassess_seconds"
     set -lx CLAUDEX_SUBAGENT_REEVALUATE_ON_COMPLETION "$reevaluate_on_completion"
     set -lx CLAUDEX_SUBAGENT_REUSE "$reuse_workers"
@@ -85,6 +94,38 @@ function claudex --description 'Run Claude Code with config-driven agent backend
     # treats the model sent by Claude Code on each request as authoritative, so
     # a resumed session can retain its own effective model without remapping.
     set -lx CLAUDEX_OUTER_MODEL "$outer_model"
+
+    # Isolate Claude Code's user settings for this process. Plain `claude` keeps
+    # using ~/.claude/settings.json; claudex uses CLAUDE_CONFIG_DIR so /model and
+    # outer defaults cannot overwrite each other. Agents, sessions, history, and
+    # hooks remain shared through symlinks prepared by the helper.
+    set -l prepare_claude_config "$HOME/.config/claudex/prepare-claude-config.py"
+    if not test -r "$prepare_claude_config"
+        set -l function_file (status --current-filename)
+        set -l resolved_function_file (realpath "$function_file" 2>/dev/null)
+        if test -n "$resolved_function_file"
+            set -l function_dir (dirname "$resolved_function_file")
+            set -l config_root (dirname (dirname "$function_dir"))
+            set prepare_claude_config "$config_root/claudex/prepare-claude-config.py"
+        end
+    end
+    if not test -r "$prepare_claude_config"
+        echo "claudex: prepare-claude-config is not readable: $prepare_claude_config" >&2
+        return 2
+    end
+    set -l isolated_claude_home "$HOME/.config/claudex/claude-config"
+    set -q CLAUDEX_CLAUDE_CONFIG_DIR; and set isolated_claude_home "$CLAUDEX_CLAUDE_CONFIG_DIR"
+    set -l prepared_config (python3 "$prepare_claude_config" "$HOME/.claude" "$isolated_claude_home" "$outer_model" "$outer_effort" 2>&1)
+    set -l prepare_status $status
+    if test $prepare_status -ne 0
+        printf '%s\n' $prepared_config >&2
+        return 2
+    end
+    if test -z "$prepared_config"
+        echo "claudex: prepare-claude-config returned an empty path" >&2
+        return 2
+    end
+    set -lx CLAUDE_CONFIG_DIR "$prepared_config"
 
     set -l default_provider_config "$HOME/.config/claudex/providers.json"
     set -l provider_override_config "$HOME/.config/claudex/providers.$(hostname -s).local.json"

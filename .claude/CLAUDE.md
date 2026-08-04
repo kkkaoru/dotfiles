@@ -84,9 +84,13 @@
   worker or send concrete additional instructions to an active compatible recipient. A management
   tick every 600 seconds may rebalance unresolved scopes, but it must not create duplicate launches
   or maintain an arbitrary active floor. The routing hook only emits context; it cannot call
-  Agent/Task/SendMessage, so the main Claude Code session owns these actions. The only parallel
-  policy control is the validated `CLAUDEX_SUBAGENT_MAX_PARALLEL` cap; it is an upper bound, never a
-  target.
+  Agent/Task/SendMessage, so the main Claude Code session owns these actions. Parallel policy:
+  `CLAUDEX_SUBAGENT_MAX_PARALLEL` is the upper bound (never a required launch count).
+  `CLAUDEX_SUBAGENT_MIN_PARALLEL` / `ACTIVE_FLOOR` / `MIN_MODEL_FAMILIES` are multi-scope phase
+  targets when work can be decomposed; do not invent scopes for an indivisible single-scope task.
+  Hook `orchestration.task_fanout_default` is the single-scope example only; use
+  `task_fanout_examples` and `min(independent_scopes, max_available_workers, max_parallel_workers)`
+  for real fan-out.
 - Never infer a worker route or effort from the main session. Use the exact `selected_workers`
   entry and its configured model/effort; that entry may intentionally use the same model as the
   main session, because outer and SubAgent requests have independent concurrency.

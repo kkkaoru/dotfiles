@@ -7,7 +7,7 @@
     "allow": [],
     "deny": []
   },
-  "model": "claude-claudex-fugu",
+  "model": "sonnet[1m]",
   "enableAllProjectMcpServers": true,
   "hooks": {
     "SessionStart": [

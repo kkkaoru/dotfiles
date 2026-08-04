@@ -45,7 +45,7 @@ flowchart LR
 | Qwen worker | `claudex-qwen` | `qwen3.8-max-preview` | `high` | Qwen providerが利用可能で、モデル同時実行数の上限内の場合 |
 | DeepSeek worker | `claudex-deepseek` | `opencode-go/deepseek-v4-flash` | `max` | CodexBarのOpenCode Go枠に空きがある場合 |
 | OpenCode GPT Luna worker | `claudex-opencode-gpt` | `opencode-go/gpt-5.6-luna` | `max` | CodexBarのOpenCode Go枠に空きがある場合。Codexの `gpt-5.6-luna` / `claudex-gpt` とは別route |
-| Cursor worker | `claudex-cursor` | `auto` | `high` | CodexBarのCursor枠に空きがある場合。`cursor-agent --model auto --yolo acp` |
+| Cursor worker | `claudex-cursor` | `auto` | `high` | CodexBarのCursor枠に空きがある場合。`cursor-agent --model auto --yolo acp`。`maxConcurrency: 3` で並列SubAgent可。modelはCLI+session/newで固定し、毎turnの `set_session_model` 再選択はしない |
 | Fallback | `claudex-sonnet` | `claude-sonnet-5` | `high` | 自動worker選択で利用可能なcapacity-managed providerがない場合 |
 | Built-in advisor | Claude Code標準 `advisor()` | `opus` | Claude Code標準 | 標準advisor policyに従う。provider capacity非依存 |
 | Custom advisor | `custom-advisor` | `claude-fable-5` | `xhigh` | 明示指定時、または複雑・曖昧・高リスク・長期・停滞時。worker capacityとは別管理の論理 session singleton（hard process=1ではない） |
@@ -369,7 +369,10 @@ claudex
 
 通常起動では `--agent` を追加せず、`CLAUDEX_ACTIVE` が設定されたプロセスでのみglobal
 `UserPromptSubmit` hookがrouting contextを注入します。このため新規・resumeのどちらでも
-sessionの表示名をagent名へ変更しません。adapterの `--inherit-claude-model` を使うため、outer sessionは
+sessionの表示名をagent名へ変更しません。過去に `--agent claudex-orchestrator` が付いた
+transcriptをresumeする場合、adapterは残存する `agent-setting` を検知し、slug / 既存title /
+cwd名から `--name` を復元して表示名の固定化を解除します。明示的な `--name` や `--agent`
+はそのまま優先されます。adapterの `--inherit-claude-model` を使うため、outer sessionは
 `~/.claude/settings.json` の `model` と `effortLevel` を継承します。
 launcherは起動元のcwdを予約済みcustom headerでloopback adapterへ渡すため、daemonや
 provider設定がdotfilesにあってもCodex、Grok、Qwen、Sonnetの作業ディレクトリは実行元を維持します。
@@ -384,6 +387,9 @@ provider設定がdotfilesにあってもCodex、Grok、Qwen、Sonnetの作業デ
 | 環境変数 | 既定値 | 役割 |
 | --- | ---: | --- |
 | `CLAUDEX_SUBAGENT_MAX_PARALLEL` | `40` | 利用可能なworker slotに対する上限。実際の起動数は `min(独立scope数, 利用可能slot数, 上限)` で毎タスク決定 |
+| `CLAUDEX_SUBAGENT_MIN_PARALLEL` | `3` | 分解可能な multi-scope フェーズで目指す preferred scope 数（hook の `minimum_subagents_per_phase`）。不可分な1 scope を水増ししない |
+| `CLAUDEX_SUBAGENT_ACTIVE_FLOOR` | `2` | multi-scope 実行中に維持したい active worker の下限目安（`minimum_active_subagents`） |
+| `CLAUDEX_SUBAGENT_MIN_MODEL_FAMILIES` | `2` | multi-scope 時に望ましい model family 多様性の下限（`minimum_model_kinds`） |
 | `CLAUDEX_SUBAGENT_REEVALUATE_ON_COMPLETION` | `1` | workerの完了・失敗・timeoutごとに残作業、追指示、追加launchを再判定 |
 | `CLAUDEX_SUBAGENT_REASSESS_INTERVAL_SECONDS` | `600` | 10分ごとのactive set・capacity・model familyの再評価間隔 |
 | `CLAUDEX_SUBAGENT_REUSE` | `1` | model、effort、role、scopeが互換な完了workerを`SendMessage`で再利用 |
@@ -400,11 +406,15 @@ CLAUDEX_SUBAGENT_MAX_PARALLEL=12 \
 claudex
 ```
 
-独立scopeが1件ならworkerは1本だけ起動し、空きslotがあっても増やしません。scopeが2件なら最大2本、
-scopeが5件でも利用可能slotと上限を超えて起動しません。各scopeに安定したキーを付け、実行中・完了・
-中断済みのキーを再起動しません。worker完了後に空きslotを自動補充することもせず、未処理で新しい
-キーを持つscopeが既に分解済みの場合だけ起動します。これはcustom-advisorには適用せず、custom-advisor
-は独立した論理session singletonとして必要時に再利用します。
+独立scopeが1件ならworkerは1本だけ起動し、空きslotがあっても増やしません（`task_fanout_default` /
+`single_scope_fanout` は常にこの1 scope ケースの例です）。scopeが2件なら最大2本、scopeが5件でも
+利用可能slotと上限を超えて起動しません。routing hook は `task_fanout_examples` と
+`multi_scope_example_fanout` で multi-scope 時の fan-out を明示し、常に1本だけと誤解されないようにします。
+分解可能な multi-scope フェーズでは `MIN_PARALLEL` / `ACTIVE_FLOOR` / `MIN_MODEL_FAMILIES` を
+preferred target として使い、不可分な単一scopeを水増ししてまで満たしません。各scopeに安定したキーを
+付け、実行中・完了・中断済みのキーを再起動しません。worker完了後に空きslotを自動補充することもせず、
+未処理で新しいキーを持つscopeが既に分解済みの場合だけ起動します。これはcustom-advisorには適用せず、
+custom-advisorは独立した論理session singletonとして必要時に再利用します。
 
 #### RAM圧力に応じた動的なSubAgent管理
 
@@ -416,10 +426,10 @@ routing hookは各呼び出しでmacOSのメモリ状況（free + inactive + spe
 
 | 利用可能率（既定） | 圧力レベル | 動的上限 |
 | ---: | --- | ---: |
-| 10%未満 | critical | 1 |
-| 10–20% | high | 2 |
-| 20–30% | medium | 4 |
-| 30–40% | moderate | 8 |
+| 10%未満 | critical | 2 |
+| 10–20% | high | 6 |
+| 20–30% | medium | 16 |
+| 30–40% | moderate | 32 |
 | 40%以上 | ok | 制限なし |
 
 | 環境変数 | 既定値 | 役割 |
@@ -469,10 +479,24 @@ minimumやmodel familyを満たせない場合は、provider quota、denylist、
 
 ### outer model/effort の既定値を切り替える
 
-`claudex` の outer session は、既定では `$HOME/.claude/settings.json` の `model` と
-`effortLevel` を使います。その値からClaude Code requestに入った実model/effortがroutingの
-authorityです。modelはnative Claudeでも設定済みexternal providerでもよく、`mainProviders` や
-providerの `defaultModel` を使ってhidden `gpt-5.6-luna` bootstrapへ置き換えません。
+`claudex` と素の `claude` の既定 model は分離しています。
+
+| 用途 | 設定場所 | 備考 |
+| --- | --- | --- |
+| 素の `claude` | `~/.claude/settings.json` の `model` / `effortLevel` | native Claude model のみ |
+| `claudex` | `~/.config/claudex/defaults.local.json`（`source: explicit`）または settings 継承 | external provider 可 |
+| `claudex` 実行時の Claude Code 設定 | `CLAUDE_CONFIG_DIR=~/.config/claudex/claude-config` | `/model` の永続化もここ。共有 `~/.claude` へは書かない |
+
+起動時に `prepare-claude-config.py` が agents / sessions / history / hooks などを
+`~/.claude` から symlink し、isolated な `settings.json` だけを claudex 用 model/effort で
+上書きします。共有 settings に残っている `claude-claudex-…` は起動時に
+`sonnet[1m]` へ戻して、素の `claude` が壊れた model id を拾わないようにします。
+
+`claudex` の outer session は、既定では settings 継承モードで `$HOME/.claude/settings.json` の
+`model` と `effortLevel` を使います（isolated tree へ seed）。その値から Claude Code request に
+入った実 model/effort が routing の authority です。model は native Claude でも設定済み
+external provider でもよく、`mainProviders` や provider の `defaultModel` を使って hidden
+`gpt-5.6-luna` bootstrap へ置き換えません。
 
 `--resume` / `--continue` で `CLAUDEX_MODEL` を明示していない場合、launcherは
 `CLAUDEX_MAIN_MODEL_KNOWN=0` を渡します。再開sessionのmain modelは新しいrequestの実modelだけを

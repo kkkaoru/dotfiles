@@ -14,9 +14,18 @@ use std::env;
 pub const FIVE_HOUR_WINDOW: &str = "five-hour";
 pub const SEVEN_DAY_WINDOW: &str = "seven-day";
 pub const DEFAULT_MAX_SUBAGENTS: i64 = 40;
+/// Preferred multi-scope phase size when work can be decomposed (aligned with
+/// `claudex-agent-adapter` parallel_scheduler). Never invents scopes for an
+/// indivisible single-scope task: `task_fanout(1, …)` remains 1.
+pub const DEFAULT_MIN_SUBAGENTS_PER_PHASE: i64 = 3;
+pub const DEFAULT_ACTIVE_SUBAGENT_FLOOR: i64 = 2;
+pub const DEFAULT_MIN_MODEL_KINDS: i64 = 2;
 pub const ORCHESTRATION_REBALANCE_INTERVAL_SECONDS: i64 = 10 * 60;
 pub const DEFAULT_SUBAGENT_STATUS_POLL_SECONDS: i64 = 15;
 pub const SUBAGENT_MAX_PARALLEL_ENV: &str = "CLAUDEX_SUBAGENT_MAX_PARALLEL";
+pub const SUBAGENT_MIN_PARALLEL_ENV: &str = "CLAUDEX_SUBAGENT_MIN_PARALLEL";
+pub const SUBAGENT_ACTIVE_FLOOR_ENV: &str = "CLAUDEX_SUBAGENT_ACTIVE_FLOOR";
+pub const SUBAGENT_MIN_MODEL_FAMILIES_ENV: &str = "CLAUDEX_SUBAGENT_MIN_MODEL_FAMILIES";
 pub const SUBAGENT_REEVALUATE_ON_COMPLETION_ENV: &str = "CLAUDEX_SUBAGENT_REEVALUATE_ON_COMPLETION";
 pub const SUBAGENT_REASSESS_INTERVAL_ENV: &str = "CLAUDEX_SUBAGENT_REASSESS_INTERVAL_SECONDS";
 pub const SUBAGENT_REUSE_ENV: &str = "CLAUDEX_SUBAGENT_REUSE";
@@ -423,15 +432,17 @@ pub fn pressure_level(available_percent: f64, thresholds: (f64, f64, f64, f64)) 
     }
 }
 
+/// Memory pressure caps for `max_parallel_workers`. Kept generous so moderate
+/// RAM pressure still allows multi-scope fan-out (was 1/2/4/8; now 2/6/16/32).
 pub fn memory_parallel_cap(
     available_percent: f64,
     thresholds: (f64, f64, f64, f64),
 ) -> Option<i64> {
     match pressure_level(available_percent, thresholds) {
-        "critical" => Some(1),
-        "high" => Some(2),
-        "medium" => Some(4),
-        "moderate" => Some(8),
+        "critical" => Some(2),
+        "high" => Some(6),
+        "medium" => Some(16),
+        "moderate" => Some(32),
         _ => None,
     }
 }
@@ -440,18 +451,37 @@ pub fn orchestration_settings() -> Result<Map<String, Value>> {
     let max_parallel = env::var(SUBAGENT_MAX_PARALLEL_ENV)
         .ok()
         .or_else(|| env::var("CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS").ok());
+    let max_parallel_workers = positive_or_default(
+        max_parallel.as_deref(),
+        SUBAGENT_MAX_PARALLEL_ENV,
+        DEFAULT_MAX_SUBAGENTS,
+        1,
+    )?;
+    let min_phase = positive_or_default(
+        env::var(SUBAGENT_MIN_PARALLEL_ENV).ok().as_deref(),
+        SUBAGENT_MIN_PARALLEL_ENV,
+        DEFAULT_MIN_SUBAGENTS_PER_PHASE,
+        1,
+    )?
+    .min(max_parallel_workers);
+    let active_floor = positive_or_default(
+        env::var(SUBAGENT_ACTIVE_FLOOR_ENV).ok().as_deref(),
+        SUBAGENT_ACTIVE_FLOOR_ENV,
+        DEFAULT_ACTIVE_SUBAGENT_FLOOR,
+        1,
+    )?
+    .min(max_parallel_workers)
+    .min(min_phase);
+    let min_model_kinds = positive_or_default(
+        env::var(SUBAGENT_MIN_MODEL_FAMILIES_ENV).ok().as_deref(),
+        SUBAGENT_MIN_MODEL_FAMILIES_ENV,
+        DEFAULT_MIN_MODEL_KINDS,
+        1,
+    )?;
     let mut settings = Map::new();
-    settings.insert(
-        "max_parallel_workers".into(),
-        Value::from(positive_or_default(
-            max_parallel.as_deref(),
-            SUBAGENT_MAX_PARALLEL_ENV,
-            DEFAULT_MAX_SUBAGENTS,
-            1,
-        )?),
-    );
-    settings.insert("minimum_subagents_per_phase".into(), Value::from(1));
-    settings.insert("minimum_active_subagents".into(), Value::from(1));
+    settings.insert("max_parallel_workers".into(), Value::from(max_parallel_workers));
+    settings.insert("minimum_subagents_per_phase".into(), Value::from(min_phase));
+    settings.insert("minimum_active_subagents".into(), Value::from(active_floor));
     settings.insert(
         "reevaluate_on_completion".into(),
         Value::from(boolean_env(SUBAGENT_REEVALUATE_ON_COMPLETION_ENV, true)?),
@@ -465,7 +495,7 @@ pub fn orchestration_settings() -> Result<Map<String, Value>> {
             1,
         )?),
     );
-    settings.insert("minimum_model_kinds".into(), Value::from(1));
+    settings.insert("minimum_model_kinds".into(), Value::from(min_model_kinds));
     settings.insert(
         "reuse_compatible_workers".into(),
         Value::from(boolean_env(SUBAGENT_REUSE_ENV, true)?),
@@ -613,9 +643,29 @@ pub fn orchestration_contract(summary: &Value) -> Result<Value> {
         "fanout_rule".into(),
         Value::from("min(independent_scopes, max_available_workers, max_parallel_workers)"),
     );
+    // Single-scope baseline only. Never treat this as a hard launch size for
+    // multi-scope work — use task_fanout_examples / task_fanout(scopes, …).
+    let single_scope_fanout = task_fanout(1, available, Some(summary))?;
+    object.insert("task_fanout_default".into(), Value::from(single_scope_fanout));
+    object.insert("single_scope_fanout".into(), Value::from(single_scope_fanout));
+    let example_scopes = [1_i64, 2, 3, 5, 8];
+    let mut examples = Vec::new();
+    for scopes in example_scopes {
+        let fanout = task_fanout(scopes, available, Some(summary))?;
+        examples.push(serde_json::json!({
+            "independent_scopes": scopes,
+            "fanout": fanout,
+        }));
+    }
+    object.insert("task_fanout_examples".into(), Value::Array(examples));
+    let multi_scope_target = settings["minimum_subagents_per_phase"]
+        .as_i64()
+        .unwrap_or(DEFAULT_MIN_SUBAGENTS_PER_PHASE)
+        .max(2)
+        .min(available.max(1));
     object.insert(
-        "task_fanout_default".into(),
-        Value::from(task_fanout(1, available, Some(summary))?),
+        "multi_scope_example_fanout".into(),
+        Value::from(task_fanout(multi_scope_target, available, Some(summary))?),
     );
     object.insert(
         "available_model_kinds".into(),
@@ -1593,6 +1643,36 @@ mod tests {
     }
 
     #[test]
+    fn multi_scope_fanout_exceeds_one_when_capacity_allows() {
+        let summary = routing_summary(&report(), &sample_config(), &BTreeSet::new()).unwrap();
+        let workers = summary["selected_workers"].as_array().unwrap().len() as i64;
+        assert!(workers >= 2, "fixture must expose multiple workers");
+        assert_eq!(task_fanout(1, workers, Some(&summary)).unwrap(), 1);
+        assert!(task_fanout(3, workers, Some(&summary)).unwrap() >= 2);
+        assert!(task_fanout(5, workers, Some(&summary)).unwrap() >= 2);
+        let orch = summary["orchestration"].as_object().unwrap();
+        assert_eq!(orch["task_fanout_default"], 1);
+        assert_eq!(orch["single_scope_fanout"], 1);
+        let multi = orch["multi_scope_example_fanout"].as_i64().unwrap();
+        assert!(
+            multi >= 2,
+            "multi_scope_example_fanout must be >1 when workers exist, got {multi}"
+        );
+        let examples = orch["task_fanout_examples"].as_array().unwrap();
+        let three = examples
+            .iter()
+            .find(|entry| entry["independent_scopes"] == 3)
+            .unwrap();
+        assert!(three["fanout"].as_i64().unwrap() >= 2);
+        assert!(
+            orch["minimum_subagents_per_phase"].as_i64().unwrap() >= 2,
+            "phase minimum must not stay hard-coded at 1"
+        );
+        assert!(orch["minimum_active_subagents"].as_i64().unwrap() >= 2);
+        assert!(orch["minimum_model_kinds"].as_i64().unwrap() >= 2);
+    }
+
+    #[test]
     fn default_subagent_route_names_top_worker() {
         let summary = routing_summary(&report(), &sample_config(), &BTreeSet::new()).unwrap();
         let route = default_subagent_route(&summary).unwrap();
@@ -1605,10 +1685,10 @@ mod tests {
     fn pressure_bands_map_to_caps() {
         let thresholds = (10.0, 20.0, 30.0, 40.0);
         assert_eq!(pressure_level(5.0, thresholds), "critical");
-        assert_eq!(memory_parallel_cap(5.0, thresholds), Some(1));
-        assert_eq!(memory_parallel_cap(15.0, thresholds), Some(2));
-        assert_eq!(memory_parallel_cap(25.0, thresholds), Some(4));
-        assert_eq!(memory_parallel_cap(35.0, thresholds), Some(8));
+        assert_eq!(memory_parallel_cap(5.0, thresholds), Some(2));
+        assert_eq!(memory_parallel_cap(15.0, thresholds), Some(6));
+        assert_eq!(memory_parallel_cap(25.0, thresholds), Some(16));
+        assert_eq!(memory_parallel_cap(35.0, thresholds), Some(32));
         assert_eq!(memory_parallel_cap(50.0, thresholds), None);
     }
 

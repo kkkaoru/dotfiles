@@ -163,9 +163,13 @@ retained.
      normal completion, cancellation, error, or main-session exit, the runtime must stop launches,
      request cancellation, wait for every owned child to exit, reap it, and then discard its session
      ownership record. The routing hook emits context only and cannot invoke Agent/Task/SendMessage;
-     the main session owns those actions. Its validated controls are
-     `CLAUDEX_SUBAGENT_MAX_PARALLEL` is the only parallel control; it is an upper bound, never a
-     required launch count.
+     the main session owns those actions. Parallel controls: `CLAUDEX_SUBAGENT_MAX_PARALLEL` is the
+     upper bound (never a required launch count). `CLAUDEX_SUBAGENT_MIN_PARALLEL` /
+     `ACTIVE_FLOOR` / `MIN_MODEL_FAMILIES` are multi-scope phase targets when work can be
+     decomposed; they never invent scopes for an indivisible single-scope task. Hook
+     `orchestration.task_fanout_default` is the single-scope example only; use
+     `task_fanout_examples` / `multi_scope_example_fanout` and
+     `min(independent_scopes, max_available_workers, max_parallel_workers)` for real fan-out.
    - RAM-aware management is part of the same contract: every hook invocation samples macOS memory
      once and lowers `max_parallel_workers` when reclaimable RAM (free + inactive + speculative
      pages as a percent of total) is tight, and forces `reuse_compatible_workers` on at high or
@@ -175,8 +179,8 @@ retained.
      is independent of the five-minute usage cache because it must reflect live pressure.
      `memory_management` in the hook output carries `status`, `pressure_level`, `available_percent`,
      `configured_max_parallel_workers`, `effective_max_parallel_workers`, `management_active`, and
-     `reuse_required`. Default bands (available percent of total RAM): below 10% cap 1, below 20%
-     cap 2, below 30% cap 4, below 40% cap 8, otherwise no memory cap. Set
+     `reuse_required`. Default bands (available percent of total RAM): below 10% cap 2, below 20%
+     cap 6, below 30% cap 16, below 40% cap 32, otherwise no memory cap. Set
      `CLAUDEX_MEMORY_MANAGEMENT=0|false|off` to disable probing; the percentage bands are
      overridable with `CLAUDEX_MEMORY_AVAILABLE_PCT_CRITICAL|LOW|MEDIUM|MODERATE` and must stay
      ascending. On probe failure or non-macOS, status is `unavailable` and routing never blocks work

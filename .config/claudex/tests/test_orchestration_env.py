@@ -96,12 +96,9 @@ class ClaudexOrchestrationEnvironmentTests(unittest.TestCase):
         self.assertEqual(output["CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS"], "40")
         self.assertEqual(output["CLAUDEX_SUBAGENT_MAX_PARALLEL"], "40")
         self.assertEqual(output["CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION"], "1024")
-        for obsolete in (
-            "CLAUDEX_SUBAGENT_MIN_PARALLEL",
-            "CLAUDEX_SUBAGENT_ACTIVE_FLOOR",
-            "CLAUDEX_SUBAGENT_MIN_MODEL_FAMILIES",
-        ):
-            self.assertNotIn(obsolete, output)
+        self.assertEqual(output["CLAUDEX_SUBAGENT_MIN_PARALLEL"], "3")
+        self.assertEqual(output["CLAUDEX_SUBAGENT_ACTIVE_FLOOR"], "2")
+        self.assertEqual(output["CLAUDEX_SUBAGENT_MIN_MODEL_FAMILIES"], "2")
         self.assertEqual(output["CLAUDEX_SUBAGENT_FIRST"], "1")
         self.assertEqual(output["CLAUDEX_SUBAGENT_STATUS_POLL_SECONDS"], "15")
 
@@ -111,6 +108,9 @@ class ClaudexOrchestrationEnvironmentTests(unittest.TestCase):
         self.assertEqual(output["CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS"], "40")
         self.assertEqual(output["CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION"], "1024")
         self.assertEqual(output["CLAUDEX_SUBAGENT_MAX_PARALLEL"], "40")
+        self.assertEqual(output["CLAUDEX_SUBAGENT_MIN_PARALLEL"], "3")
+        self.assertEqual(output["CLAUDEX_SUBAGENT_ACTIVE_FLOOR"], "2")
+        self.assertEqual(output["CLAUDEX_SUBAGENT_MIN_MODEL_FAMILIES"], "2")
         self.assertEqual(output["CLAUDEX_SUBAGENT_REASSESS_INTERVAL_SECONDS"], "600")
         self.assertEqual(output["CLAUDEX_SUBAGENT_REEVALUATE_ON_COMPLETION"], "1")
         self.assertEqual(output["CLAUDEX_SUBAGENT_REUSE"], "1")
@@ -123,6 +123,7 @@ class ClaudexOrchestrationEnvironmentTests(unittest.TestCase):
         self.assertEqual(output["CLAUDEX_OUTER_MODEL"], "sonnet[1m]")
         self.assertEqual(output["CLAUDEX_MAIN_MODEL"], "sonnet[1m]")
         self.assertEqual(output["CLAUDEX_MAIN_MODEL_KNOWN"], "1")
+        self.assertIn(".config/claudex/claude-config", output["CLAUDE_CONFIG_DIR"])
         self.assertNotIn("--model", output["CLAUDEX_ADAPTER_ARGS"])
         self.assertIn("--inherit-claude-model", output["CLAUDEX_ADAPTER_ARGS"])
 
@@ -160,6 +161,9 @@ class ClaudexOrchestrationEnvironmentTests(unittest.TestCase):
     def test_external_values_override_defaults_without_shell_evaluation(self) -> None:
         values = {
             "CLAUDEX_SUBAGENT_MAX_PARALLEL": "7",
+            "CLAUDEX_SUBAGENT_MIN_PARALLEL": "4",
+            "CLAUDEX_SUBAGENT_ACTIVE_FLOOR": "3",
+            "CLAUDEX_SUBAGENT_MIN_MODEL_FAMILIES": "1",
             "CLAUDEX_SUBAGENT_REASSESS_INTERVAL_SECONDS": "120",
             "CLAUDEX_SUBAGENT_REEVALUATE_ON_COMPLETION": "0",
             "CLAUDEX_SUBAGENT_REUSE": "0",
@@ -233,6 +237,12 @@ class ClaudexOrchestrationEnvironmentTests(unittest.TestCase):
                 "\"${CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION:-}\"\n"
                 "printf 'CLAUDEX_SUBAGENT_MAX_PARALLEL=%s\\n' "
                 "\"${CLAUDEX_SUBAGENT_MAX_PARALLEL:-}\"\n"
+                "printf 'CLAUDEX_SUBAGENT_MIN_PARALLEL=%s\\n' "
+                "\"${CLAUDEX_SUBAGENT_MIN_PARALLEL:-}\"\n"
+                "printf 'CLAUDEX_SUBAGENT_ACTIVE_FLOOR=%s\\n' "
+                "\"${CLAUDEX_SUBAGENT_ACTIVE_FLOOR:-}\"\n"
+                "printf 'CLAUDEX_SUBAGENT_MIN_MODEL_FAMILIES=%s\\n' "
+                "\"${CLAUDEX_SUBAGENT_MIN_MODEL_FAMILIES:-}\"\n"
                 "printf 'CLAUDEX_SUBAGENT_REASSESS_INTERVAL_SECONDS=%s\\n' "
                 "\"${CLAUDEX_SUBAGENT_REASSESS_INTERVAL_SECONDS:-}\"\n"
                 "printf 'CLAUDEX_SUBAGENT_REEVALUATE_ON_COMPLETION=%s\\n' "
@@ -252,6 +262,8 @@ class ClaudexOrchestrationEnvironmentTests(unittest.TestCase):
                 "\"${CLAUDEX_MAIN_MODEL:-}\"\n"
                 "printf 'CLAUDEX_MAIN_MODEL_KNOWN=%s\\n' "
                 "\"${CLAUDEX_MAIN_MODEL_KNOWN:-}\"\n"
+                "printf 'CLAUDE_CONFIG_DIR=%s\\n' "
+                "\"${CLAUDE_CONFIG_DIR:-}\"\n"
                 "printf 'CLAUDEX_SUBSCRIPTION_MAX_PROCESSES=%s\\n' "
                 "\"${subscription_max_processes}\"\n"
                 "printf 'CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES=%s\\n' "

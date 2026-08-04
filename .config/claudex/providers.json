@@ -158,6 +158,7 @@
       "defaultModel": "auto",
       "subagentModel": "auto",
       "effort": "high",
+      "maxConcurrency": 3,
       "enabled": true,
       "usageProvider": "cursor",
       "modelPrefixes": [

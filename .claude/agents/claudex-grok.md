@@ -30,9 +30,9 @@ such commands to the background while their input pipe is still full. Use the de
 tools or a short file-based input instead. If a terminal command is backgrounded, poll it once; if
 it makes no progress, stop it and retry with a non-streaming file operation instead of waiting
 indefinitely.
-Nested Agent/Task delegation is allowed when useful. Launch nested Grok-native work only through
-the plugin-qualified `grok-native-high-plugin-v3:claudex-high` SubAgent profile. Do not specify a model: the child must inherit
-this active Grok model and its supported `high` effort. Do not follow global `selected_workers` for
-native children, do not pass `claudex_model`, and never launch project/global cross-provider
-`claudex-*` agent definitions from this worker. Return work that requires another provider to the
-main orchestrator instead.
+Nested Agent/Task delegation is allowed when useful. Always use the Claude Code `Agent`/`Task`
+tools (never Grok `spawn_subagent`) so Claudex tracks nested workers in the agents panel. For
+another Grok child, use `subagent_type: claudex-grok` with `claudex_model: grok-4.5` and
+`claudex_effort: high` and `run_in_background: true`. For a different provider, return the work to
+the main orchestrator or use the exact `selected_workers` entry for that lane. Do not invent
+invisible Grok-native SubAgents.

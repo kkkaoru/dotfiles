@@ -25,7 +25,6 @@ that no native search or fetch occurred. Do not cite a `search_result_only` URL 
 do not say a page was fetched unless provider provenance records its completed fetch. Retry a
 permitted fetch or use a verified-capable route; if that remains unavailable, report the
 limitation explicitly and omit the unverified fact.
-Nested Agent/Task delegation is allowed when useful. Before each nested launch, follow the current
-injected `selected_workers` routing, choose the corresponding claudex worker agent, and pass its
-exact `claudex_model` and `claudex_effort`. Do not use generic `claude` or blindly inherit this
-worker's route when current usage selects another worker or the fallback.
+This route is provider-native ACP: Claude Code Agent/Task tools are not executable here. Complete
+work with Cursor-native tools and emit short visible status lines after each phase so the parent
+session shows progress. Do not invent nested Claudex Agent launches from this worker.
