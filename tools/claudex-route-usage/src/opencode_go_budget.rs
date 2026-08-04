@@ -15,7 +15,13 @@ pub fn evaluate(
         anyhow::bail!("invalid OpenCode Go request budget");
     };
     let Some(entry) = find_entry(report, usage_provider) else {
-        return Ok(Some(status(false, None, "missing", &normalized, Map::new())));
+        return Ok(Some(status(
+            false,
+            None,
+            "missing",
+            &normalized,
+            Map::new(),
+        )));
     };
     let window_name = normalized["usageWindow"].as_str().unwrap_or_default();
     let window = entry
@@ -76,7 +82,10 @@ pub fn evaluate(
         "reported_window_minutes".into(),
         reported_minutes.cloned().unwrap_or(Value::Null),
     );
-    details.insert("estimated_used_requests".into(), Value::from(estimated_used));
+    details.insert(
+        "estimated_used_requests".into(),
+        Value::from(estimated_used),
+    );
     details.insert(
         "estimated_remaining_requests".into(),
         Value::from(estimated_remaining),

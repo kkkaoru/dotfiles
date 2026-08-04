@@ -39,7 +39,12 @@ pub fn boolean_value(raw: &str, name: &str, default: bool) -> Result<bool> {
 }
 
 /// Parse one positive orchestration integer and reject unsafe values.
-pub fn positive_or_default(raw: Option<&str>, name: &str, default: i64, minimum: i64) -> Result<i64> {
+pub fn positive_or_default(
+    raw: Option<&str>,
+    name: &str,
+    default: i64,
+    minimum: i64,
+) -> Result<i64> {
     let Some(raw) = raw else {
         return Ok(default);
     };
@@ -61,7 +66,9 @@ pub fn valid_percentage(value: &Value) -> bool {
     if value.is_boolean() {
         return false;
     }
-    value.as_f64().is_some_and(|number| number.is_finite() && number >= 0.0)
+    value
+        .as_f64()
+        .is_some_and(|number| number.is_finite() && number >= 0.0)
 }
 
 /// A JSON number as f64 (booleans are never numbers in JSON).

@@ -49,10 +49,10 @@ fn home_dir() -> Result<PathBuf> {
 /// resolves it from `CLAUDEX_REPOSITORY_ROOT` when set, then the ghq checkout,
 /// so the repository-local config/denylist fallbacks stay reachable.
 fn repository_root() -> PathBuf {
-    if let Some(root) = std::env::var_os("CLAUDEX_REPOSITORY_ROOT") {
-        if !root.is_empty() {
-            return PathBuf::from(root);
-        }
+    if let Some(root) = std::env::var_os("CLAUDEX_REPOSITORY_ROOT")
+        && !root.is_empty()
+    {
+        return PathBuf::from(root);
     }
     if let Some(home) = std::env::var_os("HOME") {
         let checkout = PathBuf::from(home).join("ghq/github.com/kkkaoru/dotfiles");
@@ -77,10 +77,10 @@ pub fn provider_config_path(requested: Option<&Path>, paths: &Paths) -> PathBuf 
     if let Some(path) = requested {
         return path.to_path_buf();
     }
-    if let Ok(configured) = std::env::var("CLAUDEX_PROVIDER_CONFIG") {
-        if !configured.is_empty() {
-            return expand_user(&configured, &paths.home);
-        }
+    if let Ok(configured) = std::env::var("CLAUDEX_PROVIDER_CONFIG")
+        && !configured.is_empty()
+    {
+        return expand_user(&configured, &paths.home);
     }
     let installed = paths.home.join(".config/claudex/providers.json");
     if installed.is_file() {
@@ -128,9 +128,7 @@ pub fn valid_model_id(model: &Value) -> bool {
     let Some(text) = model.as_str() else {
         return false;
     };
-    !text.is_empty()
-        && text.is_ascii()
-        && text.chars().all(|c| ('!'..='~').contains(&c))
+    !text.is_empty() && text.is_ascii() && text.chars().all(|c| ('!'..='~').contains(&c))
 }
 
 fn nonempty_str(value: &Value, field: &str) -> bool {
@@ -179,16 +177,15 @@ fn valid_provider(provider: &Value) -> bool {
     {
         return false;
     }
-    if let Some(subagent) = object.get("subagentModel") {
-        if !valid_model_id(subagent) {
-            return false;
-        }
+    if let Some(subagent) = object.get("subagentModel")
+        && !valid_model_id(subagent)
+    {
+        return false;
     }
     match object.get("maxConcurrency") {
         None | Some(Value::Null) => {}
         Some(value) => {
-            let valid = !value.is_boolean()
-                && value.as_i64().is_some_and(|maximum| maximum > 0);
+            let valid = !value.is_boolean() && value.as_i64().is_some_and(|maximum| maximum > 0);
             if !valid {
                 return false;
             }
@@ -197,7 +194,10 @@ fn valid_provider(provider: &Value) -> bool {
     match object.get("requestBudget") {
         None | Some(Value::Null) => true,
         Some(budget) => {
-            let default_model = object.get("defaultModel").and_then(Value::as_str).unwrap_or("");
+            let default_model = object
+                .get("defaultModel")
+                .and_then(Value::as_str)
+                .unwrap_or("");
             (default_model == OPENCODE_GO_DEFAULT_MODEL
                 || default_model.starts_with("opencode-go/"))
                 && object
@@ -226,7 +226,7 @@ pub fn load_config(path: &Path) -> Result<Config> {
         .filter(|provider| {
             provider
                 .get("enabled")
-                .map_or(true, |value| value.as_bool().unwrap_or(false))
+                .is_none_or(|value| value.as_bool().unwrap_or(false))
         })
         .cloned()
         .collect();

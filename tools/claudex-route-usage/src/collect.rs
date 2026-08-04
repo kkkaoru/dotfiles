@@ -2,10 +2,13 @@
 
 use crate::config::{Config, Paths, valid_model_id};
 use crate::routing::{
-    explicitly_reported_status, memory_management_enabled, memory_pressure_thresholds,
-    pressure_level, provider_status, worker, FIVE_HOUR_WINDOW, SEVEN_DAY_WINDOW,
+    FIVE_HOUR_WINDOW, SEVEN_DAY_WINDOW, explicitly_reported_status, memory_management_enabled,
+    memory_pressure_thresholds, pressure_level, provider_status, worker,
 };
-use crate::util::{format_utc_datetime, number_f64, parse_utc_datetime, python_round, valid_percentage, write_private_json};
+use crate::util::{
+    format_utc_datetime, number_f64, parse_utc_datetime, python_round, valid_percentage,
+    write_private_json,
+};
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
@@ -88,10 +91,8 @@ pub fn strict_json_array(output: &str) -> Result<Value> {
 pub fn run_codexbar(program: &str) -> Result<Value> {
     let mut command = Command::new(program);
     command.args(["usage", "--json"]);
-    let (_code, stdout, _stderr) = run_with_timeout(
-        command,
-        Duration::from_secs(USAGE_COMMAND_TIMEOUT_SECONDS),
-    )?;
+    let (_code, stdout, _stderr) =
+        run_with_timeout(command, Duration::from_secs(USAGE_COMMAND_TIMEOUT_SECONDS))?;
     strict_json_array(&stdout)
 }
 
@@ -160,7 +161,12 @@ fn percent_decode(value: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-pub fn validate_qwen_request(url: &str, cookie: &str, body: &str, content_type: &str) -> Result<()> {
+pub fn validate_qwen_request(
+    url: &str,
+    cookie: &str,
+    body: &str,
+    content_type: &str,
+) -> Result<()> {
     let parsed = Url::parse(url).context("Qwen curl command targets an unexpected endpoint")?;
     if parsed.scheme() != "https"
         || parsed.host_str() != Some(QWEN_CONSOLE_HOST)
@@ -197,7 +203,10 @@ pub fn validate_qwen_request(url: &str, cookie: &str, body: &str, content_type: 
         || single_value(&form, "region")? != "ap-southeast-1"
         || !parameters.is_object()
         || parameters.get("Api").and_then(Value::as_str) != Some(QWEN_QUOTA_API)
-        || !parameters.get("Data").map(Value::is_object).unwrap_or(false)
+        || !parameters
+            .get("Data")
+            .map(Value::is_object)
+            .unwrap_or(false)
         || parameters.get("V").and_then(Value::as_str) != Some("1.0")
         || !cookie.contains('=')
         || content_type != "application/x-www-form-urlencoded"
@@ -251,10 +260,10 @@ pub fn qwen_curl_request(path: &Path) -> Result<BTreeMap<String, String>> {
             };
             index += if separator { 1 } else { 2 };
             if matches!(option, "-H" | "--header") {
-                if let Some((name, header_value)) = value.split_once(':') {
-                    if name.trim().eq_ignore_ascii_case("content-type") {
-                        content_type = header_value.trim().to_ascii_lowercase();
-                    }
+                if let Some((name, header_value)) = value.split_once(':')
+                    && name.trim().eq_ignore_ascii_case("content-type")
+                {
+                    content_type = header_value.trim().to_ascii_lowercase();
                 }
             } else if matches!(option, "-b" | "--cookie") {
                 cookie = unique_curl_value(&cookie, &value, "cookie")?;
@@ -290,8 +299,16 @@ fn quota_reset(value: &Value, name: &str) -> Result<i64> {
     Ok(number as i64)
 }
 
-pub fn qwen_quota_window(quota: &Value, name: &str, percentage_key: &str, reset_key: &str) -> Result<Value> {
-    let used = python_round(quota_fraction(&quota[percentage_key], percentage_key)? * 100.0, 6);
+pub fn qwen_quota_window(
+    quota: &Value,
+    name: &str,
+    percentage_key: &str,
+    reset_key: &str,
+) -> Result<Value> {
+    let used = python_round(
+        quota_fraction(&quota[percentage_key], percentage_key)? * 100.0,
+        6,
+    );
     Ok(serde_json::json!({
         "name": name,
         "usedPercent": used,
@@ -308,8 +325,18 @@ pub fn qwen_quota_entry(payload: &Value, provider: &str) -> Result<Value> {
         bail!("Qwen quota response usage data must be an object");
     }
     let windows = vec![
-        qwen_quota_window(quota, FIVE_HOUR_WINDOW, "per5HourPercentage", "per5HourResetTime")?,
-        qwen_quota_window(quota, SEVEN_DAY_WINDOW, "per1WeekPercentage", "per1WeekResetTime")?,
+        qwen_quota_window(
+            quota,
+            FIVE_HOUR_WINDOW,
+            "per5HourPercentage",
+            "per5HourResetTime",
+        )?,
+        qwen_quota_window(
+            quota,
+            SEVEN_DAY_WINDOW,
+            "per1WeekPercentage",
+            "per1WeekResetTime",
+        )?,
     ];
     let maximum = windows
         .iter()
@@ -376,7 +403,11 @@ pub fn qwen_quota_cache_entry(path: &Path, now: f64) -> Option<Value> {
     ) {
         return None;
     }
-    if !entry.get("quotaWindows").map(Value::is_array).unwrap_or(false) {
+    if !entry
+        .get("quotaWindows")
+        .map(Value::is_array)
+        .unwrap_or(false)
+    {
         return None;
     }
     if explicitly_reported_status(&entry)
@@ -399,7 +430,12 @@ pub fn write_qwen_quota_cache(path: &Path, entry: &Value, now: f64) -> Result<()
     )
 }
 
-pub fn qwen_quota_refresh_due(summary: &Value, config: &Config, cache_path: &Path, now: f64) -> bool {
+pub fn qwen_quota_refresh_due(
+    summary: &Value,
+    config: &Config,
+    cache_path: &Path,
+    now: f64,
+) -> bool {
     let Some(providers) = summary.get("providers").and_then(Value::as_object) else {
         return false;
     };
@@ -430,11 +466,15 @@ pub fn qwen_compatible_configuration(path: &Path, model: &str) -> Result<(String
     let providers = settings
         .get("modelProviders")
         .and_then(Value::as_object)
-        .ok_or_else(|| anyhow::anyhow!("Qwen settings are missing model providers or environment"))?;
+        .ok_or_else(|| {
+            anyhow::anyhow!("Qwen settings are missing model providers or environment")
+        })?;
     let environment = settings
         .get("env")
         .and_then(Value::as_object)
-        .ok_or_else(|| anyhow::anyhow!("Qwen settings are missing model providers or environment"))?;
+        .ok_or_else(|| {
+            anyhow::anyhow!("Qwen settings are missing model providers or environment")
+        })?;
     let mut candidates = Vec::new();
     for items in providers.values() {
         let Some(items) = items.as_array() else {
@@ -473,7 +513,10 @@ pub fn qwen_compatible_configuration(path: &Path, model: &str) -> Result<(String
     {
         bail!("Qwen settings contain an unexpected compatible endpoint");
     }
-    Ok((format!("{}/models", base_url.trim_end_matches('/')), api_key.to_owned()))
+    Ok((
+        format!("{}/models", base_url.trim_end_matches('/')),
+        api_key.to_owned(),
+    ))
 }
 
 pub fn qwen_compatible_available(program: &str, settings: &Path, model: &str) -> Result<bool> {
@@ -530,7 +573,8 @@ pub fn qwen_usage_entry(
 }
 
 pub fn ollama_usage_entry(curl_program: &str, provider: &str, model: &str) -> Value {
-    let base_url = env::var(OLLAMA_BASE_URL_ENV).unwrap_or_else(|_| DEFAULT_OLLAMA_BASE_URL.to_owned());
+    let base_url =
+        env::var(OLLAMA_BASE_URL_ENV).unwrap_or_else(|_| DEFAULT_OLLAMA_BASE_URL.to_owned());
     let base_url = base_url.trim_end_matches('/');
     let Ok(parsed) = Url::parse(base_url) else {
         return unavailable_usage_entry(provider);
@@ -793,16 +837,15 @@ pub fn daemon_health_url() -> Result<String> {
     if let Ok(configured) = env::var(DAEMON_HEALTH_URL_ENV) {
         return validate_daemon_health_url(&configured);
     }
-    if let Ok(base_url) = env::var(ANTHROPIC_BASE_URL_ENV) {
-        if let Ok(parsed) = Url::parse(&base_url) {
-            if matches!(parsed.host_str(), Some("127.0.0.1" | "::1" | "localhost")) {
-                let mut origin = parsed;
-                origin.set_path("/health");
-                origin.set_query(None);
-                origin.set_fragment(None);
-                return validate_daemon_health_url(origin.as_str());
-            }
-        }
+    if let Ok(base_url) = env::var(ANTHROPIC_BASE_URL_ENV)
+        && let Ok(parsed) = Url::parse(&base_url)
+        && matches!(parsed.host_str(), Some("127.0.0.1" | "::1" | "localhost"))
+    {
+        let mut origin = parsed;
+        origin.set_path("/health");
+        origin.set_query(None);
+        origin.set_fragment(None);
+        return validate_daemon_health_url(origin.as_str());
     }
     validate_daemon_health_url(DEFAULT_DAEMON_HEALTH_URL)
 }
@@ -893,7 +936,6 @@ pub fn vm_stat_page_size(output: &str) -> Option<i64> {
         let digits = line
             .split_once(token)?
             .1
-            .trim()
             .split_whitespace()
             .next()?
             .replace(',', "")
@@ -944,8 +986,9 @@ pub fn read_memory_status() -> Value {
         return serde_json::json!({ "status": "unavailable" });
     };
     let total_mb = total_memory.parse::<f64>().unwrap_or_default() / (1024.0 * 1024.0);
-    let available_mb =
-        ((free_pages + inactive_pages + speculative_pages) as f64 * page_size as f64) / (1024.0 * 1024.0);
+    let available_mb = ((free_pages + inactive_pages + speculative_pages) as f64
+        * page_size as f64)
+        / (1024.0 * 1024.0);
     let available_percent = 100.0 * available_mb / total_mb;
     let thresholds = match memory_pressure_thresholds() {
         Ok(value) => value,
@@ -959,8 +1002,6 @@ pub fn read_memory_status() -> Value {
         "pressure_level": pressure_level(available_percent, thresholds),
     })
 }
-
-
 
 #[cfg(test)]
 mod tests {
@@ -985,7 +1026,8 @@ mod tests {
         assert_eq!(sanitized["gpt-5.6-luna"]["available"], true);
         assert_eq!(sanitized["gpt-5.6-luna"]["remaining"].as_i64(), None);
         assert_eq!(sanitized["gpt-5.6-luna"]["active"], 1);
-        let bad = serde_json::json!({"bad model": {"active":1,"queued":0,"limit":1,"available":true}});
+        let bad =
+            serde_json::json!({"bad model": {"active":1,"queued":0,"limit":1,"available":true}});
         assert!(sanitize_model_concurrency(&bad).is_none());
     }
 }

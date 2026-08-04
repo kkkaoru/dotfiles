@@ -106,11 +106,10 @@ fn block_internal_notification_from_hook() -> Result<bool> {
 fn disabled_models(arguments: &Arguments, paths: &config::Paths) -> Result<BTreeSet<String>> {
     let explicit_config = arguments.disabled_models_config.is_some()
         || env::var_os("CLAUDEX_DISABLED_SUBAGENT_MODELS_CONFIG").is_some();
-    if !explicit_config {
-        if let Ok(resolved) = env::var("CLAUDEX_RESOLVED_DISABLED_SUBAGENT_MODELS") {
-            return config::parse_environment_models(&resolved)
-                .context("CLAUDEX_RESOLVED_DISABLED_SUBAGENT_MODELS contains an invalid model ID");
-        }
+    if !explicit_config && let Ok(resolved) = env::var("CLAUDEX_RESOLVED_DISABLED_SUBAGENT_MODELS")
+    {
+        return config::parse_environment_models(&resolved)
+            .context("CLAUDEX_RESOLVED_DISABLED_SUBAGENT_MODELS contains an invalid model ID");
     }
     let path = config::disabled_models_path(arguments.disabled_models_config.as_deref(), paths)?;
     let mut models = config::load_disabled_models(&path)?;
@@ -127,10 +126,14 @@ fn run() -> Result<()> {
     }
     let paths = config::Paths::discover(arguments.config.as_deref())?;
     let config_path = config::provider_config_path(arguments.config.as_deref(), &paths);
-    let config = config::load_config(&config_path)
-        .with_context(|| format!("claudex routing configuration error: {}", config_path.display()))?;
-    let disabled = disabled_models(&arguments, &paths)
-        .context("claudex routing configuration error")?;
+    let config = config::load_config(&config_path).with_context(|| {
+        format!(
+            "claudex routing configuration error: {}",
+            config_path.display()
+        )
+    })?;
+    let disabled =
+        disabled_models(&arguments, &paths).context("claudex routing configuration error")?;
     routing::orchestration_settings().context("claudex routing configuration error")?;
     let now = now_seconds()?;
     let key = config::configuration_key(&config.raw, &disabled);
@@ -175,7 +178,11 @@ fn run() -> Result<()> {
     let main_model = env::var("CLAUDEX_MAIN_MODEL")
         .ok()
         .filter(|value| !value.is_empty())
-        .or_else(|| env::var("CLAUDEX_OUTER_MODEL").ok().filter(|value| !value.is_empty()));
+        .or_else(|| {
+            env::var("CLAUDEX_OUTER_MODEL")
+                .ok()
+                .filter(|value| !value.is_empty())
+        });
     let main_known = util::boolean_env("CLAUDEX_MAIN_MODEL_KNOWN", main_model.is_some())?;
     let allow_sonnet = util::boolean_env("CLAUDEX_ALLOW_SONNET_SUBAGENT", false)?;
     summary = routing::enforce_worker_model_separation(

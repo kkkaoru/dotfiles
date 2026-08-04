@@ -2,9 +2,9 @@
 
 use crate::config::default_advisor;
 use crate::routing::{
-    custom_advisor_enabled, default_subagent_route, effective_orchestration_settings,
-    memory_management_contract, orchestration_contract, ranked_worker_metadata,
-    worker_capacity_metadata, CUSTOM_ADVISOR_CONSULT_WHEN,
+    CUSTOM_ADVISOR_CONSULT_WHEN, custom_advisor_enabled, default_subagent_route,
+    effective_orchestration_settings, memory_management_contract, orchestration_contract,
+    ranked_worker_metadata, worker_capacity_metadata,
 };
 use anyhow::Result;
 use serde_json::{Map, Value};
@@ -72,7 +72,6 @@ pub fn hook_output(summary: &Value, event_name: &str) -> Result<Value> {
     }))
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -90,8 +89,13 @@ mod tests {
             "direct_main_execution": "fallback-only"
         });
         let output = hook_output(&summary, "UserPromptSubmit").unwrap();
-        assert_eq!(output["hookSpecificOutput"]["hookEventName"], "UserPromptSubmit");
-        let ctx = output["hookSpecificOutput"]["additionalContext"].as_str().unwrap();
+        assert_eq!(
+            output["hookSpecificOutput"]["hookEventName"],
+            "UserPromptSubmit"
+        );
+        let ctx = output["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap();
         assert!(ctx.contains(r"\n"));
         assert!(ctx.contains("claudex-routing-local-hook"));
         let sub = hook_output(&summary, "SubagentStart").unwrap();

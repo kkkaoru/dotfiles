@@ -2,7 +2,10 @@
 
 use crate::config::Config;
 use crate::opencode_go_budget;
-use crate::util::{boolean_env, is_sonnet_model, model_family, number_f64, positive_or_default, python_round, valid_percentage};
+use crate::util::{
+    boolean_env, is_sonnet_model, model_family, number_f64, positive_or_default, python_round,
+    valid_percentage,
+};
 use anyhow::Result;
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -143,7 +146,15 @@ pub fn provider_status(report: &Value, provider: &str) -> Value {
         return status(false, None, "unknown");
     }
     let maximum = percentages.into_iter().fold(f64::NEG_INFINITY, f64::max);
-    status(maximum < 100.0, Some(maximum), if maximum < 100.0 { "available" } else { "exhausted" })
+    status(
+        maximum < 100.0,
+        Some(maximum),
+        if maximum < 100.0 {
+            "available"
+        } else {
+            "exhausted"
+        },
+    )
 }
 
 pub fn quota_window_remaining(entry: Option<&Value>) -> Value {
@@ -151,7 +162,10 @@ pub fn quota_window_remaining(entry: Option<&Value>) -> Value {
         FIVE_HOUR_WINDOW: Value::Null,
         SEVEN_DAY_WINDOW: Value::Null,
     });
-    let Some(windows) = entry.and_then(|value| value.get("quotaWindows")).and_then(Value::as_array) else {
+    let Some(windows) = entry
+        .and_then(|value| value.get("quotaWindows"))
+        .and_then(Value::as_array)
+    else {
         return remaining;
     };
     for window in windows {
@@ -202,7 +216,10 @@ pub fn claude_quota_entry(entry: Option<&Value>) -> Option<Value> {
     }
     let usage = entry.get("usage")?.as_object()?;
     let mut windows = Vec::new();
-    for (source, name) in [("primary", FIVE_HOUR_WINDOW), ("secondary", SEVEN_DAY_WINDOW)] {
+    for (source, name) in [
+        ("primary", FIVE_HOUR_WINDOW),
+        ("secondary", SEVEN_DAY_WINDOW),
+    ] {
         let Some(window) = usage.get(source).and_then(Value::as_object) else {
             continue;
         };
@@ -218,12 +235,11 @@ pub fn claude_quota_entry(entry: Option<&Value>) -> Option<Value> {
             "usedPercent": used,
             "remainingPercent": python_round(100.0 - used, 6),
         });
-        if let Some(reset_at) = window.get("resetsAt").and_then(Value::as_str) {
-            if reset_at.ends_with('Z') {
-                if let Ok(parsed) = crate::util::parse_utc_datetime(&Value::from(reset_at)) {
-                    converted["resetAtMilliseconds"] = Value::from((parsed * 1000.0) as i64);
-                }
-            }
+        if let Some(reset_at) = window.get("resetsAt").and_then(Value::as_str)
+            && reset_at.ends_with('Z')
+            && let Ok(parsed) = crate::util::parse_utc_datetime(&Value::from(reset_at))
+        {
+            converted["resetAtMilliseconds"] = Value::from((parsed * 1000.0) as i64);
         }
         windows.push(converted);
     }
@@ -249,15 +265,15 @@ pub fn provider_quota_status(report: &Value, provider: &Value) -> Result<Value> 
     let Some(usage_provider) = usage_provider.filter(|text| !text.is_empty()) else {
         return Ok(status(true, None, "unmetered"));
     };
-    if let Some(budget) = provider.get("requestBudget") {
-        if let Some(evaluated) = opencode_go_budget::evaluate(report, usage_provider, Some(budget))? {
-            return Ok(evaluated);
-        }
+    if let Some(budget) = provider.get("requestBudget")
+        && let Some(evaluated) = opencode_go_budget::evaluate(report, usage_provider, Some(budget))?
+    {
+        return Ok(evaluated);
     }
-    if let Some(entry) = find_report_entry(report, Some(usage_provider)) {
-        if let Some(normalized) = claude_quota_entry(Some(entry)) {
-            return Ok(explicitly_reported_status(&normalized));
-        }
+    if let Some(entry) = find_report_entry(report, Some(usage_provider))
+        && let Some(normalized) = claude_quota_entry(Some(entry))
+    {
+        return Ok(explicitly_reported_status(&normalized));
     }
     Ok(provider_status(report, usage_provider))
 }
@@ -267,7 +283,10 @@ pub fn native_worker_quota(report: &Value, worker: &Value) -> Result<Value> {
     let Some(usage_provider) = usage_provider.filter(|text| !text.is_empty()) else {
         return Ok(status(true, None, "unmetered"));
     };
-    provider_quota_status(report, &serde_json::json!({ "usageProvider": usage_provider }))
+    provider_quota_status(
+        report,
+        &serde_json::json!({ "usageProvider": usage_provider }),
+    )
 }
 
 pub fn worker(provider: &Value) -> Value {
@@ -361,10 +380,22 @@ fn memory_fraction_env(name: &str, default: f64) -> Result<f64> {
 
 pub fn memory_pressure_thresholds() -> Result<(f64, f64, f64, f64)> {
     let thresholds = (
-        memory_fraction_env(MEMORY_AVAILABLE_PCT_CRITICAL_ENV, DEFAULT_MEMORY_AVAILABLE_PCT_CRITICAL)?,
-        memory_fraction_env(MEMORY_AVAILABLE_PCT_LOW_ENV, DEFAULT_MEMORY_AVAILABLE_PCT_LOW)?,
-        memory_fraction_env(MEMORY_AVAILABLE_PCT_MEDIUM_ENV, DEFAULT_MEMORY_AVAILABLE_PCT_MEDIUM)?,
-        memory_fraction_env(MEMORY_AVAILABLE_PCT_MODERATE_ENV, DEFAULT_MEMORY_AVAILABLE_PCT_MODERATE)?,
+        memory_fraction_env(
+            MEMORY_AVAILABLE_PCT_CRITICAL_ENV,
+            DEFAULT_MEMORY_AVAILABLE_PCT_CRITICAL,
+        )?,
+        memory_fraction_env(
+            MEMORY_AVAILABLE_PCT_LOW_ENV,
+            DEFAULT_MEMORY_AVAILABLE_PCT_LOW,
+        )?,
+        memory_fraction_env(
+            MEMORY_AVAILABLE_PCT_MEDIUM_ENV,
+            DEFAULT_MEMORY_AVAILABLE_PCT_MEDIUM,
+        )?,
+        memory_fraction_env(
+            MEMORY_AVAILABLE_PCT_MODERATE_ENV,
+            DEFAULT_MEMORY_AVAILABLE_PCT_MODERATE,
+        )?,
     );
     let sorted = {
         let mut values = [thresholds.0, thresholds.1, thresholds.2, thresholds.3];
@@ -372,9 +403,7 @@ pub fn memory_pressure_thresholds() -> Result<(f64, f64, f64, f64)> {
         values
     };
     if [thresholds.0, thresholds.1, thresholds.2, thresholds.3] != sorted {
-        anyhow::bail!(
-            "memory thresholds must be ascending: critical <= low <= medium <= moderate"
-        );
+        anyhow::bail!("memory thresholds must be ascending: critical <= low <= medium <= moderate");
     }
     Ok(thresholds)
 }
@@ -394,7 +423,10 @@ pub fn pressure_level(available_percent: f64, thresholds: (f64, f64, f64, f64)) 
     }
 }
 
-pub fn memory_parallel_cap(available_percent: f64, thresholds: (f64, f64, f64, f64)) -> Option<i64> {
+pub fn memory_parallel_cap(
+    available_percent: f64,
+    thresholds: (f64, f64, f64, f64),
+) -> Option<i64> {
     match pressure_level(available_percent, thresholds) {
         "critical" => Some(1),
         "high" => Some(2),
@@ -463,7 +495,10 @@ pub fn effective_orchestration_settings(summary: &Value) -> Result<Map<String, V
     let memory = summary.get("memory_status");
     let Some(memory) = memory.filter(|value| {
         value.get("status").and_then(Value::as_str) == Some("available")
-            && value.get("available_percent").and_then(number_f64).is_some()
+            && value
+                .get("available_percent")
+                .and_then(number_f64)
+                .is_some()
     }) else {
         return Ok(settings);
     };
@@ -471,8 +506,13 @@ pub fn effective_orchestration_settings(summary: &Value) -> Result<Map<String, V
     let thresholds = memory_pressure_thresholds()?;
     let available_percent = number_f64(&memory["available_percent"]).unwrap_or_default();
     if let Some(cap) = memory_parallel_cap(available_percent, thresholds) {
-        let configured = settings["max_parallel_workers"].as_i64().unwrap_or(DEFAULT_MAX_SUBAGENTS);
-        effective.insert("max_parallel_workers".into(), Value::from(configured.min(cap)));
+        let configured = settings["max_parallel_workers"]
+            .as_i64()
+            .unwrap_or(DEFAULT_MAX_SUBAGENTS);
+        effective.insert(
+            "max_parallel_workers".into(),
+            Value::from(configured.min(cap)),
+        );
     }
     if matches!(
         memory.get("pressure_level").and_then(Value::as_str),
@@ -484,8 +524,14 @@ pub fn effective_orchestration_settings(summary: &Value) -> Result<Map<String, V
 }
 
 pub fn memory_management_contract(summary: &Value, settings: &Map<String, Value>) -> Result<Value> {
-    let memory = summary.get("memory_status").cloned().unwrap_or(Value::Object(Map::new()));
-    let status_name = memory.get("status").and_then(Value::as_str).unwrap_or("unknown");
+    let memory = summary
+        .get("memory_status")
+        .cloned()
+        .unwrap_or(Value::Object(Map::new()));
+    let status_name = memory
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
     if matches!(status_name, "available" | "disabled" | "unavailable") {
         let mut contract = serde_json::json!({
             "status": status_name,
@@ -527,7 +573,11 @@ pub fn memory_management_contract(summary: &Value, settings: &Map<String, Value>
     }))
 }
 
-pub fn task_fanout(independent_scopes: i64, available_workers: i64, summary: Option<&Value>) -> Result<i64> {
+pub fn task_fanout(
+    independent_scopes: i64,
+    available_workers: i64,
+    summary: Option<&Value>,
+) -> Result<i64> {
     if independent_scopes < 0 || available_workers < 0 {
         anyhow::bail!("scope and worker counts must be non-negative integers");
     }
@@ -535,7 +585,9 @@ pub fn task_fanout(independent_scopes: i64, available_workers: i64, summary: Opt
         Some(summary) => effective_orchestration_settings(summary)?,
         None => orchestration_settings()?,
     };
-    let max_parallel = settings["max_parallel_workers"].as_i64().unwrap_or(DEFAULT_MAX_SUBAGENTS);
+    let max_parallel = settings["max_parallel_workers"]
+        .as_i64()
+        .unwrap_or(DEFAULT_MAX_SUBAGENTS);
     Ok(independent_scopes.min(available_workers).min(max_parallel))
 }
 
@@ -565,7 +617,10 @@ pub fn orchestration_contract(summary: &Value) -> Result<Value> {
         "task_fanout_default".into(),
         Value::from(task_fanout(1, available, Some(summary))?),
     );
-    object.insert("available_model_kinds".into(), Value::from(models.len() as i64));
+    object.insert(
+        "available_model_kinds".into(),
+        Value::from(models.len() as i64),
+    );
     let minimum_kinds = settings["minimum_model_kinds"].as_i64().unwrap_or(1);
     object.insert(
         "model_diversity_satisfied".into(),
@@ -585,8 +640,13 @@ pub fn orchestration_contract(summary: &Value) -> Result<Value> {
                 .collect(),
         ),
     );
-    let minimum_phase = settings["minimum_subagents_per_phase"].as_i64().unwrap_or(1);
-    object.insert("capacity_shortfall".into(), Value::Bool(available < minimum_phase));
+    let minimum_phase = settings["minimum_subagents_per_phase"]
+        .as_i64()
+        .unwrap_or(1);
+    object.insert(
+        "capacity_shortfall".into(),
+        Value::Bool(available < minimum_phase),
+    );
     object.insert("hook_launches_agents".into(), Value::Bool(false));
     object.insert("background_status_required".into(), Value::Bool(true));
     object.insert(
@@ -633,28 +693,42 @@ pub fn routing_summary(
         let mut quota = provider_quota_status(report, provider)?;
         quota["quota_windows"] = quota_window_remaining(normalized.as_ref().or(entry));
         let worker_item = worker(provider);
-        let model = worker_item.get("model").and_then(Value::as_str).unwrap_or_default();
+        let model = worker_item
+            .get("model")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         let disabled = disabled_models.contains(model);
         let effective = if disabled {
             status(false, None, "disabled-by-policy")
         } else {
             quota.clone()
         };
-        let provider_id = provider.get("id").and_then(Value::as_str).unwrap_or_default();
+        let provider_id = provider
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         let mut fields = effective.as_object().cloned().unwrap_or_default();
         if let Some(object) = worker_item.as_object() {
             fields.extend(object.clone());
         }
         fields.insert("disabled".into(), Value::Bool(disabled));
         providers.insert(provider_id.to_owned(), Value::Object(fields));
-        if quota.get("available").and_then(Value::as_bool).unwrap_or(false) && !disabled {
+        if quota
+            .get("available")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+            && !disabled
+        {
             candidates.push((capacity_priority(&quota, index as i64), worker_item));
         }
     }
     let mut native_quota = Map::new();
     for (native_index, native) in config.native_workers.iter().enumerate() {
         let native_item = native_worker_item(native);
-        let model = native_item.get("model").and_then(Value::as_str).unwrap_or_default();
+        let model = native_item
+            .get("model")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         if disabled_models.contains(model) {
             continue;
         }
@@ -663,9 +737,15 @@ pub fn routing_summary(
         let normalized = claude_quota_entry(entry);
         let mut quota = native_worker_quota(report, native)?;
         quota["quota_windows"] = quota_window_remaining(normalized.as_ref().or(entry));
-        let agent = native.get("agent").and_then(Value::as_str).unwrap_or_default();
+        let agent = native
+            .get("agent")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         native_quota.insert(agent.to_owned(), quota.clone());
-        if quota.get("available").and_then(Value::as_bool).unwrap_or(false)
+        if quota
+            .get("available")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
             && quota.get("max_used_percent").and_then(number_f64).is_some()
         {
             candidates.push((
@@ -674,7 +754,11 @@ pub fn routing_summary(
             ));
         }
     }
-    candidates.sort_by(|left, right| left.0.partial_cmp(&right.0).unwrap_or(std::cmp::Ordering::Equal));
+    candidates.sort_by(|left, right| {
+        left.0
+            .partial_cmp(&right.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     let mut selected: Vec<Value> = candidates.into_iter().map(|(_, item)| item).collect();
     let fallback_active = selected.is_empty()
         && config
@@ -736,23 +820,22 @@ pub fn combined_capacity_priority(
         concurrency.get("active").and_then(Value::as_i64),
         concurrency.get("queued").and_then(Value::as_i64),
         concurrency.get("limit").and_then(Value::as_i64),
-    ) {
-        if limit != 0 {
-            parallel_used = 100.0 * (active + queued) as f64 / limit as f64;
-        }
+    ) && limit != 0
+    {
+        parallel_used = 100.0 * (active + queued) as f64 / limit as f64;
     }
     if parallel_used != 0.0 {
         let parallel_remaining = 100.0 - parallel_used;
         weekly = Some(weekly.map_or(parallel_remaining, |value| value.min(parallel_remaining)));
-        five_hour = Some(five_hour.map_or(parallel_remaining, |value| value.min(parallel_remaining)));
+        five_hour =
+            Some(five_hour.map_or(parallel_remaining, |value| value.min(parallel_remaining)));
     }
-    let health_unknown = if concurrency.get("reason").and_then(Value::as_str)
-        == Some("daemon-health-unavailable")
-    {
-        1.0
-    } else {
-        0.0
-    };
+    let health_unknown =
+        if concurrency.get("reason").and_then(Value::as_str) == Some("daemon-health-unavailable") {
+            1.0
+        } else {
+            0.0
+        };
     (
         tier,
         if weekly.is_some() { 0.0 } else { 1.0 },
@@ -810,10 +893,10 @@ pub fn provider_for_model<'a>(config: &'a Config, model: &str) -> Option<&'a Val
             .cloned()
             .unwrap_or_default();
         for prefix in prefixes {
-            if let Some(prefix) = prefix.as_str() {
-                if model.starts_with(prefix) {
-                    matches.push((prefix.len(), -(index as i64), provider));
-                }
+            if let Some(prefix) = prefix.as_str()
+                && model.starts_with(prefix)
+            {
+                matches.push((prefix.len(), -(index as i64), provider));
             }
         }
     }
@@ -843,9 +926,18 @@ pub fn model_concurrency_status(
     let Some(fields) = health.get(model) else {
         return concurrency_status(Some(0), Some(0), Some(configured_limit), true, "idle", true);
     };
-    let active = fields.get("active").and_then(Value::as_i64).unwrap_or_default();
-    let queued = fields.get("queued").and_then(Value::as_i64).unwrap_or_default();
-    let limit = fields.get("limit").and_then(Value::as_i64).unwrap_or_default();
+    let active = fields
+        .get("active")
+        .and_then(Value::as_i64)
+        .unwrap_or_default();
+    let queued = fields
+        .get("queued")
+        .and_then(Value::as_i64)
+        .unwrap_or_default();
+    let limit = fields
+        .get("limit")
+        .and_then(Value::as_i64)
+        .unwrap_or_default();
     if limit != configured_limit {
         let available = active + queued < configured_limit;
         return concurrency_status(
@@ -857,13 +949,20 @@ pub fn model_concurrency_status(
             false,
         );
     }
-    let available = fields.get("available").and_then(Value::as_bool).unwrap_or(false);
+    let available = fields
+        .get("available")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     concurrency_status(
         Some(active),
         Some(queued),
         Some(configured_limit),
         available,
-        if available { "available" } else { "limit-reached" },
+        if available {
+            "available"
+        } else {
+            "limit-reached"
+        },
         true,
     )
 }
@@ -878,7 +977,10 @@ pub fn apply_model_concurrency(
     let mut candidates: Vec<(CapacityKey, Value)> = Vec::new();
     let mut model_capacity = Map::new();
     for (index, provider) in config.providers.iter().enumerate() {
-        let provider_id = provider.get("id").and_then(Value::as_str).unwrap_or_default();
+        let provider_id = provider
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         let Some(fields) = combined
             .get_mut("providers")
             .and_then(Value::as_object_mut)
@@ -899,8 +1001,14 @@ pub fn apply_model_concurrency(
             fields.insert("concurrency_active".into(), concurrency["active"].clone());
             fields.insert("concurrency_queued".into(), concurrency["queued"].clone());
             fields.insert("concurrency_limit".into(), concurrency["limit"].clone());
-            fields.insert("concurrency_remaining".into(), concurrency["remaining"].clone());
-            fields.insert("concurrency_available".into(), concurrency["available"].clone());
+            fields.insert(
+                "concurrency_remaining".into(),
+                concurrency["remaining"].clone(),
+            );
+            fields.insert(
+                "concurrency_available".into(),
+                concurrency["available"].clone(),
+            );
             fields.insert("concurrency_reason".into(), concurrency["reason"].clone());
         }
         let quota = serde_json::json!({
@@ -910,8 +1018,14 @@ pub fn apply_model_concurrency(
             "quota_windows": fields.get("quota_windows").cloned().unwrap_or_else(|| Value::Object(Map::new())),
         });
         let disabled = disabled_models.contains(&model)
-            || fields.get("disabled").and_then(Value::as_bool).unwrap_or(false);
-        let quota_available = quota.get("available").and_then(Value::as_bool).unwrap_or(false);
+            || fields
+                .get("disabled")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+        let quota_available = quota
+            .get("available")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         let concurrency_available = concurrency
             .get("available")
             .and_then(Value::as_bool)
@@ -922,10 +1036,10 @@ pub fn apply_model_concurrency(
         }
         if quota_available && concurrency_available && !disabled {
             let mut selected_worker = current_worker;
-            if provider.get("maxConcurrency").is_some() {
-                if let Some(object) = selected_worker.as_object_mut() {
-                    object.insert("concurrency".into(), concurrency.clone());
-                }
+            if provider.get("maxConcurrency").is_some()
+                && let Some(object) = selected_worker.as_object_mut()
+            {
+                object.insert("concurrency".into(), concurrency.clone());
             }
             candidates.push((
                 combined_capacity_priority(&quota, &concurrency, index as i64),
@@ -935,23 +1049,23 @@ pub fn apply_model_concurrency(
     }
     if let Some(health) = health {
         for model in health.keys() {
-            if let Some(provider) = provider_for_model(config, model) {
-                if provider.get("maxConcurrency").is_some() {
-                    let worker_item = worker(provider);
-                    let worker_model = worker_item
-                        .get("model")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default();
-                    let default_model = provider
-                        .get("defaultModel")
-                        .and_then(Value::as_str)
-                        .unwrap_or_default();
-                    if !(model == default_model && model != worker_model) {
-                        model_capacity.insert(
-                            model.clone(),
-                            model_concurrency_status(provider, model, Some(health)),
-                        );
-                    }
+            if let Some(provider) = provider_for_model(config, model)
+                && provider.get("maxConcurrency").is_some()
+            {
+                let worker_item = worker(provider);
+                let worker_model = worker_item
+                    .get("model")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let default_model = provider
+                    .get("defaultModel")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                if !(model == default_model && model != worker_model) {
+                    model_capacity.insert(
+                        model.clone(),
+                        model_concurrency_status(provider, model, Some(health)),
+                    );
                 }
             }
         }
@@ -964,15 +1078,24 @@ pub fn apply_model_concurrency(
     let mut participating_natives = BTreeSet::new();
     for (native_index, native) in config.native_workers.iter().enumerate() {
         let native_item = native_worker_item(native);
-        let model = native_item.get("model").and_then(Value::as_str).unwrap_or_default();
+        let model = native_item
+            .get("model")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         if disabled_models.contains(model) {
             continue;
         }
-        let agent = native.get("agent").and_then(Value::as_str).unwrap_or_default();
+        let agent = native
+            .get("agent")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         let Some(quota) = native_quota.get(agent) else {
             continue;
         };
-        if quota.get("available").and_then(Value::as_bool).unwrap_or(false)
+        if quota
+            .get("available")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
             && quota.get("max_used_percent").and_then(number_f64).is_some()
         {
             participating_natives.insert(agent.to_owned());
@@ -986,13 +1109,20 @@ pub fn apply_model_concurrency(
             ));
         }
     }
-    candidates.sort_by(|left, right| left.0.partial_cmp(&right.0).unwrap_or(std::cmp::Ordering::Equal));
+    candidates.sort_by(|left, right| {
+        left.0
+            .partial_cmp(&right.0)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     let mut selected: Vec<Value> = candidates.into_iter().map(|(_, item)| item).collect();
     let mut fallback = config.fallback.clone();
     if let Some(object) = fallback.as_object_mut() {
         object.insert("provider".into(), Value::from("fallback"));
     }
-    let fallback_model = fallback.get("model").and_then(Value::as_str).unwrap_or_default();
+    let fallback_model = fallback
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     let fallback_active = selected.is_empty() && !disabled_models.contains(fallback_model);
     if fallback_active {
         selected = vec![fallback];
@@ -1066,15 +1196,21 @@ pub fn worker_capacity_metadata(summary: &Value) -> Vec<Value> {
                 .and_then(Value::as_str)
                 .and_then(|agent| native_quota.get(agent));
         }
-        if let Some(quota) = quota.filter(|value| value.get("max_used_percent").and_then(number_f64).is_some()) {
+        if let Some(quota) =
+            quota.filter(|value| value.get("max_used_percent").and_then(number_f64).is_some())
+        {
             let used = number_f64(&quota["max_used_percent"]).unwrap_or_default();
             entry.insert("used_percent".into(), Value::from(used));
-            entry.insert("remaining_percent".into(), Value::from(python_round(100.0 - used, 1)));
+            entry.insert(
+                "remaining_percent".into(),
+                Value::from(python_round(100.0 - used, 1)),
+            );
         } else {
             entry.insert("used_percent".into(), Value::Null);
             entry.insert("remaining_percent".into(), Value::Null);
         }
-        let (weekly, five_hour) = effective_window_remaining(quota.unwrap_or(&Value::Object(Map::new())));
+        let (weekly, five_hour) =
+            effective_window_remaining(quota.unwrap_or(&Value::Object(Map::new())));
         entry.insert(
             "weekly_remaining_percent".into(),
             weekly.map_or(Value::Null, |value| Value::from(python_round(value, 1))),
@@ -1107,8 +1243,14 @@ pub fn ranked_worker_metadata(summary: &Value) -> Vec<Value> {
 pub fn default_subagent_route(summary: &Value) -> Option<Value> {
     let workers = summary.get("selected_workers")?.as_array()?;
     let top = workers.first()?.as_object()?;
-    if top.get("agent").and_then(Value::as_str).is_none_or(str::is_empty)
-        || top.get("model").and_then(Value::as_str).is_none_or(str::is_empty)
+    if top
+        .get("agent")
+        .and_then(Value::as_str)
+        .is_none_or(str::is_empty)
+        || top
+            .get("model")
+            .and_then(Value::as_str)
+            .is_none_or(str::is_empty)
     {
         return None;
     }
@@ -1122,7 +1264,10 @@ pub fn default_subagent_route(summary: &Value) -> Option<Value> {
         "applies_to_subagent_types".into(),
         Value::Array(vec![Value::from("general-purpose")]),
     );
-    route.insert("applies_when_claudex_model_omitted".into(), Value::Bool(true));
+    route.insert(
+        "applies_when_claudex_model_omitted".into(),
+        Value::Bool(true),
+    );
     Some(Value::Object(route))
 }
 
@@ -1187,7 +1332,10 @@ pub fn enforce_worker_model_separation(
             "automatic_selection_excluded_models".into(),
             Value::Array(excluded_models.into_iter().map(Value::from).collect()),
         );
-        object.insert("sonnet_subagent_suppressed".into(), Value::Bool(sonnet_suppressed));
+        object.insert(
+            "sonnet_subagent_suppressed".into(),
+            Value::Bool(sonnet_suppressed),
+        );
         object.insert(
             "sonnet_subagent_explicit_allowed".into(),
             Value::Bool(allow_sonnet_subagent),
@@ -1205,7 +1353,10 @@ pub fn enforce_worker_model_separation(
             .unwrap_or(true);
     if let Some(object) = separated.as_object_mut() {
         object.insert("orchestration".into(), orchestration);
-        object.insert("delegation_required".into(), Value::Bool(delegation_required));
+        object.insert(
+            "delegation_required".into(),
+            Value::Bool(delegation_required),
+        );
         object.insert(
             "direct_main_execution".into(),
             Value::from(if delegation_required {
@@ -1231,9 +1382,16 @@ pub fn fallback_summary(
     let mut providers = Map::new();
     for provider in &config.providers {
         let worker_item = worker(provider);
-        let model = worker_item.get("model").and_then(Value::as_str).unwrap_or_default();
+        let model = worker_item
+            .get("model")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         let disabled = disabled_models.contains(model);
-        let unavailable_reason = if disabled { "disabled-by-policy" } else { reason };
+        let unavailable_reason = if disabled {
+            "disabled-by-policy"
+        } else {
+            reason
+        };
         let mut fields = status(false, None, unavailable_reason)
             .as_object()
             .cloned()
@@ -1242,14 +1400,20 @@ pub fn fallback_summary(
             fields.extend(object.clone());
         }
         fields.insert("disabled".into(), Value::Bool(disabled));
-        let provider_id = provider.get("id").and_then(Value::as_str).unwrap_or_default();
+        let provider_id = provider
+            .get("id")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
         providers.insert(provider_id.to_owned(), Value::Object(fields));
     }
     let mut fallback = config.fallback.clone();
     if let Some(object) = fallback.as_object_mut() {
         object.insert("provider".into(), Value::from("fallback"));
     }
-    let fallback_model = fallback.get("model").and_then(Value::as_str).unwrap_or_default();
+    let fallback_model = fallback
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     let mut selected = if disabled_models.contains(fallback_model) {
         Vec::new()
     } else {
@@ -1270,7 +1434,6 @@ pub fn fallback_summary(
     summary["orchestration"] = orchestration_contract(&summary)?;
     Ok(summary)
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -1398,7 +1561,8 @@ mod tests {
     #[test]
     fn suppresses_sonnet_when_main_is_sonnet() {
         let summary = routing_summary(&json!([]), &sample_config(), &BTreeSet::new()).unwrap();
-        let separated = enforce_worker_model_separation(summary, Some("claude-sonnet-5"), true, false).unwrap();
+        let separated =
+            enforce_worker_model_separation(summary, Some("claude-sonnet-5"), true, false).unwrap();
         assert!(separated["sonnet_subagent_suppressed"].as_bool().unwrap());
         assert!(separated["selected_workers"].as_array().unwrap().is_empty());
         assert_eq!(separated["direct_main_execution"], "allowed");
@@ -1415,7 +1579,10 @@ mod tests {
             .filter_map(|w| w.get("model").and_then(Value::as_str))
             .collect();
         assert!(!models.contains(&"gpt-5.3-codex-spark"));
-        assert_eq!(summary["providers"]["codex"]["reason"], "disabled-by-policy");
+        assert_eq!(
+            summary["providers"]["codex"]["reason"],
+            "disabled-by-policy"
+        );
     }
 
     #[test]
