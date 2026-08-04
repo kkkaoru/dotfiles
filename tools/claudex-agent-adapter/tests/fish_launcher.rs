@@ -126,7 +126,7 @@ fn shared_provider_fixture() -> tempfile::TempDir {
     let adapter = home.path().join(".local/bin/claudex-agent-adapter");
     fs::write(
         &adapter,
-        "#!/bin/sh\nprintf 'CLAUDEX_ACTIVE=%s\\n' \"${CLAUDEX_ACTIVE:-}\"\nprintf 'CLAUDEX_MAIN_MODEL=%s\\n' \"${CLAUDEX_MAIN_MODEL:-}\"\nprintf 'CLAUDEX_MAIN_MODEL_KNOWN=%s\\n' \"${CLAUDEX_MAIN_MODEL_KNOWN:-}\"\nprintf 'CLAUDEX_SUBAGENT_HARD_TIMEOUT_SECONDS=%s\\n' \"${CLAUDEX_SUBAGENT_HARD_TIMEOUT_SECONDS:-}\"\nprintf 'CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=%s\\n' \"${CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY:-}\"\nprintf 'CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS=%s\\n' \"${CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS:-}\"\nprintf 'CLAUDE_CODE_ALWAYS_ENABLE_EFFORT=%s\\n' \"${CLAUDE_CODE_ALWAYS_ENABLE_EFFORT:-}\"\nprintf '%s\\n' \"$@\"\n",
+        "#!/bin/sh\nprintf 'CLAUDEX_ACTIVE=%s\\n' \"${CLAUDEX_ACTIVE:-}\"\nprintf 'CLAUDEX_MAIN_MODEL=%s\\n' \"${CLAUDEX_MAIN_MODEL:-}\"\nprintf 'CLAUDEX_MAIN_MODEL_KNOWN=%s\\n' \"${CLAUDEX_MAIN_MODEL_KNOWN:-}\"\nprintf 'CLAUDEX_SUBAGENT_HARD_TIMEOUT_SECONDS=%s\\n' \"${CLAUDEX_SUBAGENT_HARD_TIMEOUT_SECONDS:-}\"\nprintf 'CLAUDE_CONFIG_DIR=%s\\n' \"${CLAUDE_CONFIG_DIR:-}\"\nprintf 'CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=%s\\n' \"${CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY:-}\"\nprintf 'CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS=%s\\n' \"${CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS:-}\"\nprintf 'CLAUDE_CODE_ALWAYS_ENABLE_EFFORT=%s\\n' \"${CLAUDE_CODE_ALWAYS_ENABLE_EFFORT:-}\"\nprintf '%s\\n' \"$@\"\n",
     )
     .expect("fake adapter");
     let mut permissions = fs::metadata(&adapter)
@@ -184,11 +184,27 @@ fn assert_shared_provider_default(function: &std::path::Path, home: &tempfile::T
     assert!(arguments.contains("CLAUDEX_ACTIVE=1\n"));
     assert!(arguments.contains("CLAUDEX_MAIN_MODEL=sonnet[1m]\n"));
     assert!(arguments.contains("CLAUDEX_MAIN_MODEL_KNOWN=1\n"));
+    assert!(
+        arguments
+            .lines()
+            .any(|line| line.starts_with("CLAUDE_CONFIG_DIR=")
+                && line.contains(".config/claudex/claude-config"))
+    );
     assert!(arguments.contains("CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1\n"));
     assert!(arguments.contains("CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS=40\n"));
     assert!(arguments.contains(".config/claudex/providers.json\n"));
     assert!(!arguments.contains("--model\n"));
     assert!(arguments.contains("--inherit-claude-model\n"));
+    // Shared plain-claude settings must stay native; isolation seeds a separate tree.
+    let shared_settings = fs::read_to_string(home.path().join(".claude/settings.json"))
+        .expect("shared settings after launch");
+    assert!(shared_settings.contains("\"model\":\"sonnet[1m]\""));
+    let isolated_settings = fs::read_to_string(
+        home.path()
+            .join(".config/claudex/claude-config/settings.json"),
+    )
+    .expect("isolated settings after launch");
+    assert!(isolated_settings.contains("\"model\": \"sonnet[1m]\""));
     assert!(arguments.contains("--subscription-max-processes\n20\n"));
     assert!(!arguments.contains("--allowedTools\nWebSearch,WebFetch\n"));
     assert!(arguments.ends_with("--\nsmoke\n"));

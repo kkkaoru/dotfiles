@@ -1159,7 +1159,7 @@ async fn accepts_a_valid_agent_model_without_a_prompt() {
                 &json!({"claudex_model":"gpt-test"})
             )
             .expect("model-only Agent input"),
-        json!({})
+        json!({"run_in_background": true})
     );
 }
 

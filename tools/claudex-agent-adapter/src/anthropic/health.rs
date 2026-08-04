@@ -55,7 +55,22 @@ impl Bridge {
     }
 
     pub fn routed_models(&self) -> Vec<String> {
-        let models = self.app.models();
+        let mut models = self.app.models();
+        for worker in self
+            .model_catalog
+            .worker_routes()
+            .iter()
+            .chain(self.model_catalog.search_worker_routes().iter())
+        {
+            if !worker.model.is_empty() {
+                models.push(worker.model.clone());
+            }
+        }
+        if let Some((model, _)) = self.model_catalog.configured_fallback() {
+            models.push(model.to_owned());
+        }
+        models.sort();
+        models.dedup();
         if models.is_empty() {
             vec![self.model.clone()]
         } else {

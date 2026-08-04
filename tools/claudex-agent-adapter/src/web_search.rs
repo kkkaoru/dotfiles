@@ -26,6 +26,11 @@ impl WebSearchMode {
     pub const fn is_default(&self) -> bool {
         matches!(self, Self::DelegateCcr)
     }
+    /// Provider owns its agent loop and tools (Grok / OpenCode / Cursor ACP).
+    /// Claude Code Agent/Task schemas are not executable on this path.
+    pub const fn uses_provider_native_agent_loop(self) -> bool {
+        matches!(self, Self::AcpNative | Self::DelegateMcp)
+    }
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::DelegateCcr => "delegate-ccr",
@@ -260,6 +265,10 @@ mod tests {
                 mode
             );
         }
+        assert!(WebSearchMode::AcpNative.uses_provider_native_agent_loop());
+        assert!(WebSearchMode::DelegateMcp.uses_provider_native_agent_loop());
+        assert!(!WebSearchMode::CodexNative.uses_provider_native_agent_loop());
+        assert!(!WebSearchMode::DelegateCcr.uses_provider_native_agent_loop());
     }
 
     #[test]

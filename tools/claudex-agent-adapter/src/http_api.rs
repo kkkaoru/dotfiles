@@ -8,7 +8,7 @@ use std::{
 };
 
 use crate::{
-    ADAPTER_PROTOCOL_VERSION,
+    ADAPTER_PROTOCOL_VERSION, discovery_model_id,
     anthropic::{Bridge, MessagesRequest, RequestIdentity, error_response},
     subagent_policy, working_directory,
 };
@@ -102,8 +102,10 @@ fn protected_router(
                 let data = models
                     .into_iter()
                     .map(|model| {
+                        // Claude Code gateway discovery filters to `^(claude|anthropic)`.
+                        // Advertise a discovery id while keeping the real model as the label.
                         json!({
-                            "id":model,
+                            "id":discovery_model_id(&model),
                             "type":"model",
                             "display_name":model,
                             "description":"Claudex provider model"

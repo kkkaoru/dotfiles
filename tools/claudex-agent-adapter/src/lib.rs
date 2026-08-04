@@ -23,5 +23,16 @@ pub use http_api::http_router;
 
 pub const ADAPTER_PROTOCOL_VERSION: u64 = 24;
 pub(crate) const NONINTERACTIVE_CHILD_ENV: &str = "CLAUDEX_NONINTERACTIVE_CHILD";
-/// Legacy gateway aliases remain accepted on requests from older Claude Code sessions.
+/// Claude Code gateway discovery only keeps model ids that match `^(claude|anthropic)`.
+/// Prefix every non-Anthropic provider model so `/model` can list and select it; request
+/// routing strips this prefix before matching configured backends.
 pub(crate) const DISCOVERY_MODEL_PREFIX: &str = "claude-claudex-";
+
+/// Id advertised on `GET /v1/models` for Claude Code gateway discovery.
+pub(crate) fn discovery_model_id(model: &str) -> String {
+    if model.starts_with("claude") || model.starts_with("anthropic") {
+        model.to_owned()
+    } else {
+        format!("{DISCOVERY_MODEL_PREFIX}{model}")
+    }
+}

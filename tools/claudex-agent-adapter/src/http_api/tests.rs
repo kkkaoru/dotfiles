@@ -1,6 +1,26 @@
 use super::*;
 
 #[test]
+fn prefixes_non_anthropic_models_for_gateway_discovery() {
+    assert_eq!(
+        crate::discovery_model_id("gpt-5.6-luna"),
+        "claude-claudex-gpt-5.6-luna"
+    );
+    assert_eq!(
+        crate::discovery_model_id("opencode-go/deepseek-v4-flash"),
+        "claude-claudex-opencode-go/deepseek-v4-flash"
+    );
+    assert_eq!(
+        crate::discovery_model_id("claude-sonnet-5"),
+        "claude-sonnet-5"
+    );
+    assert_eq!(
+        crate::discovery_model_id("claude-haiku-4-5"),
+        "claude-haiku-4-5"
+    );
+}
+
+#[test]
 fn accepts_only_valid_existing_working_directory_headers() {
     let root = tempfile::tempdir().expect("working directory fixture");
     let canonical = root.path().canonicalize().expect("canonical fixture");

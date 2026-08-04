@@ -8,6 +8,23 @@ mod tests {
         values.iter().map(OsString::from).collect()
     }
 
+    fn prepare(
+        values: &[&str],
+        cwd: &Path,
+        home: &Path,
+        auto_fork: bool,
+    ) -> Vec<OsString> {
+        prepare_arguments_with_home(args(values), cwd, Some(home), None, auto_fork)
+    }
+
+    fn write_transcript(home: &Path, cwd: &Path, session_id: &str, body: &str) {
+        let project = home
+            .join(".claude/projects")
+            .join(project_dir_name(cwd));
+        fs::create_dir_all(&project).expect("project transcript directory");
+        fs::write(project.join(format!("{session_id}.jsonl")), body).expect("transcript");
+    }
+
     #[test]
     fn extracts_resume_ids_without_confusing_other_flags() {
         assert_eq!(resume_session_id(&args(&["--resume", "session-a"])), Some("session-a".to_owned()));
@@ -49,19 +66,163 @@ mod tests {
     fn forks_only_resume_histories_that_contain_the_spawn_limit_error() {
         let root = tempfile::tempdir().expect("resume fixture");
         let cwd = Path::new("/Users/test/github.com/project");
-        let project = root.path().join(".claude/projects/-Users-test-github-com-project");
-        fs::create_dir_all(&project).expect("project transcript directory");
-        fs::write(
-            project.join("session-a.jsonl"),
+        write_transcript(
+            root.path(),
+            cwd,
+            "session-a",
             "{\"message\":\"Subagent spawn limit reached (200 of 200 agents spawned)\"}\n",
-        )
-        .expect("limited transcript");
-        let prepared = prepare_arguments_with_home(args(&["--resume", "session-a"]), cwd, Some(root.path()), true);
+        );
+        let prepared = prepare(&["--resume", "session-a"], cwd, root.path(), true);
         assert!(prepared.iter().any(|argument| argument == "--fork-session"));
 
-        let clean = prepare_arguments_with_home(args(&["--resume", "session-b"]), cwd, Some(root.path()), true);
+        let clean = prepare(&["--resume", "session-b"], cwd, root.path(), true);
         assert!(!clean.iter().any(|argument| argument == "--fork-session"));
-        let disabled = prepare_arguments_with_home(args(&["--resume", "session-a"]), cwd, Some(root.path()), false);
+        let disabled = prepare(&["--resume", "session-a"], cwd, root.path(), false);
         assert!(!disabled.iter().any(|argument| argument == "--fork-session"));
+    }
+
+    #[test]
+    fn restores_display_name_from_slug_when_legacy_orchestrator_agent_setting_remains() {
+        let root = tempfile::tempdir().expect("resume fixture");
+        let cwd = Path::new("/Users/test/github.com/project");
+        write_transcript(
+            root.path(),
+            cwd,
+            "session-legacy",
+            concat!(
+                "{\"type\":\"agent-setting\",\"agentSetting\":\"claudex-orchestrator\"}\n",
+                "{\"type\":\"attachment\",\"slug\":\"humming-sprouting-scroll\"}\n",
+            ),
+        );
+
+        let prepared = prepare(&["--resume", "session-legacy"], cwd, root.path(), false);
+        assert!(prepared.windows(2).any(|window| {
+            window[0] == "--name" && window[1] == "humming-sprouting-scroll"
+        }));
+    }
+
+    #[test]
+    fn prefers_custom_title_and_skips_when_display_name_already_restored() {
+        let root = tempfile::tempdir().expect("resume fixture");
+        let cwd = Path::new("/Users/test/github.com/project");
+        write_transcript(
+            root.path(),
+            cwd,
+            "session-titled",
+            concat!(
+                "{\"type\":\"agent-setting\",\"agentSetting\":\"claudex-orchestrator\"}\n",
+                "{\"type\":\"custom-title\",\"customTitle\":\"already-renamed\"}\n",
+                "{\"type\":\"attachment\",\"slug\":\"humming-sprouting-scroll\"}\n",
+            ),
+        );
+
+        let prepared = prepare(&["--resume", "session-titled"], cwd, root.path(), false);
+        assert!(!prepared.iter().any(|argument| argument == "--name"));
+    }
+
+    #[test]
+    fn falls_back_to_cwd_basename_when_legacy_session_has_no_slug() {
+        let root = tempfile::tempdir().expect("resume fixture");
+        let cwd = Path::new("/Users/test/github.com/avita-platform");
+        write_transcript(
+            root.path(),
+            cwd,
+            "session-bare",
+            "{\"type\":\"agent-setting\",\"agentSetting\":\"claudex-orchestrator\"}\n",
+        );
+
+        let prepared = prepare(&["--resume", "session-bare"], cwd, root.path(), false);
+        assert!(prepared.windows(2).any(|window| {
+            window[0] == "--name" && window[1] == "avita-platform"
+        }));
+    }
+
+    #[test]
+    fn leaves_clean_and_explicit_sessions_untouched() {
+        let root = tempfile::tempdir().expect("resume fixture");
+        let cwd = Path::new("/Users/test/github.com/project");
+        write_transcript(
+            root.path(),
+            cwd,
+            "session-clean",
+            "{\"type\":\"attachment\",\"slug\":\"fresh-session\"}\n",
+        );
+        write_transcript(
+            root.path(),
+            cwd,
+            "session-legacy",
+            concat!(
+                "{\"type\":\"agent-setting\",\"agentSetting\":\"claudex-orchestrator\"}\n",
+                "{\"type\":\"attachment\",\"slug\":\"humming-sprouting-scroll\"}\n",
+            ),
+        );
+
+        let clean = prepare(&["--resume", "session-clean"], cwd, root.path(), false);
+        assert!(!clean.iter().any(|argument| argument == "--name"));
+
+        let named = prepare(
+            &[
+                "--resume",
+                "session-legacy",
+                "--name",
+                "user-chosen",
+            ],
+            cwd,
+            root.path(),
+            false,
+        );
+        assert_eq!(
+            named
+                .iter()
+                .filter(|argument| *argument == "--name")
+                .count(),
+            1
+        );
+        assert!(named.windows(2).any(|window| {
+            window[0] == "--name" && window[1] == "user-chosen"
+        }));
+
+        let agent = prepare(
+            &[
+                "--resume",
+                "session-legacy",
+                "--agent",
+                "claudex-orchestrator",
+            ],
+            cwd,
+            root.path(),
+            false,
+        );
+        assert!(!agent.iter().any(|argument| argument == "--name"));
+    }
+
+    #[test]
+    fn reads_transcripts_from_claude_config_dir_when_present() {
+        let root = tempfile::tempdir().expect("resume fixture");
+        let cwd = Path::new("/Users/test/github.com/project");
+        let config_dir = root.path().join("isolated-config");
+        let project = config_dir
+            .join("projects")
+            .join(project_dir_name(cwd));
+        fs::create_dir_all(&project).expect("isolated project");
+        fs::write(
+            project.join("session-isolated.jsonl"),
+            concat!(
+                "{\"type\":\"agent-setting\",\"agentSetting\":\"claudex-orchestrator\"}\n",
+                "{\"type\":\"agent-name\",\"agentName\":\"preserved-session-name\"}\n",
+            ),
+        )
+        .expect("isolated transcript");
+
+        let prepared = prepare_arguments_with_home(
+            args(&["--resume", "session-isolated"]),
+            cwd,
+            Some(root.path()),
+            Some(config_dir.as_path()),
+            false,
+        );
+        assert!(prepared.windows(2).any(|window| {
+            window[0] == "--name" && window[1] == "preserved-session-name"
+        }));
     }
 }

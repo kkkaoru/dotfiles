@@ -3,6 +3,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, fs, path::Path};
 
+mod model_catalog;
 mod validation;
 mod worker_route;
 use validation::{validate_choice, validate_providers, validate_worker_routes};
@@ -21,7 +22,6 @@ struct ProviderConfig {
     #[serde(default)]
     web_search: WebSearchSettings,
 }
-
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct WebSearchSettings {
