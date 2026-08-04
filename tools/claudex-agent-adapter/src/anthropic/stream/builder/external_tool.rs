@@ -32,10 +32,10 @@ pub(super) fn requested_external_tool_name<'a>(
 pub(super) async fn reject_unrequested_tool(
     bridge: &Bridge,
     session: &Session,
-    call: ToolCall<'_>,
+    call: ToolCall,
 ) -> Result<()> {
     tracing::warn!(
-        provider_tool_name = call.name,
+        provider_tool_name = %call.name,
         "rejected a provider tool that Claude Code did not supply"
     );
     bridge
@@ -63,9 +63,9 @@ impl SegmentBuilder {
         &mut self,
         context: ExternalToolContext<'_>,
         original_name: &str,
-        call: ToolCall<'_>,
+        call: ToolCall,
     ) -> Result<()> {
-        let mut arguments = call.arguments.clone();
+        let mut arguments = call.arguments;
         if crate::anthropic::agent_effort::is_agent_tool(original_name) {
             crate::anthropic::agent_routing::hydrate_routing_fields_from_context(
                 &mut arguments,

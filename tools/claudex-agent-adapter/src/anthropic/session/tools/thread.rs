@@ -26,29 +26,48 @@ pub(in crate::anthropic) fn thread_start_params_for_mode(
         .or_else(|| cwd_from_system(&system))
         .map(|path| path.to_string_lossy().into_owned())
         .unwrap_or_else(isolated_runtime_cwd);
+    let acp_native = web_search_mode.uses_provider_native_agent_loop();
+    let bridge = if acp_native {
+        super::ACP_NATIVE_BRIDGE_INSTRUCTIONS
+    } else {
+        super::super::super::BRIDGE_INSTRUCTIONS
+    };
     let mut developer_instructions = super::super::super::team_protocol::guidance(request)
         .map_or_else(
-            || super::super::super::BRIDGE_INSTRUCTIONS.to_owned(),
-            |guidance| format!("{}\n\n{guidance}", super::super::super::BRIDGE_INSTRUCTIONS),
+            || bridge.to_owned(),
+            |guidance| format!("{bridge}\n\n{guidance}"),
         );
-    developer_instructions.push_str("\n\n");
-    developer_instructions
-        .push_str(super::super::super::CODEX_APP_SERVER_PARALLELIZATION_INSTRUCTIONS);
-    developer_instructions.push_str("\n\n");
-    developer_instructions
-        .push_str(crate::anthropic::subscription_request::SHARED_WORKSPACE_INSTRUCTIONS);
-    developer_instructions.push_str("\n\n");
-    developer_instructions.push_str(&super::parallel_scheduler_instructions(request));
-    developer_instructions.push_str("\n\n");
-    developer_instructions.push_str(super::SUBAGENT_LIFECYCLE_INSTRUCTIONS);
-    developer_instructions.push_str("\n\n");
-    developer_instructions.push_str(super::super::super::SUBAGENT_RESULT_PROTOCOL);
-    developer_instructions.push_str(
-        "\n\nCommand execution is available to every routed worker. If Claude Code supplies a shell, Bash, unified-exec, or command tool, use it when the active task requires it; do not refuse an available command tool because the backend is Codex, Grok, or OpenCode.",
-    );
-    if !super::super::super::agent_effort::is_subagent_request(request) {
+    if !acp_native {
         developer_instructions.push_str("\n\n");
-        developer_instructions.push_str(super::ORCHESTRATOR_INSTRUCTIONS);
+        developer_instructions
+            .push_str(super::super::super::CODEX_APP_SERVER_PARALLELIZATION_INSTRUCTIONS);
+        developer_instructions.push_str("\n\n");
+        developer_instructions
+            .push_str(crate::anthropic::subscription_request::SHARED_WORKSPACE_INSTRUCTIONS);
+        developer_instructions.push_str("\n\n");
+        developer_instructions.push_str(&super::parallel_scheduler_instructions(request));
+        developer_instructions.push_str("\n\n");
+        developer_instructions.push_str(super::SUBAGENT_LIFECYCLE_INSTRUCTIONS);
+        developer_instructions.push_str("\n\n");
+        developer_instructions.push_str(super::super::super::SUBAGENT_RESULT_PROTOCOL);
+        developer_instructions.push_str(
+            "\n\nCommand execution is available to every routed worker. If Claude Code supplies a shell, Bash, unified-exec, or command tool, use it when the active task requires it; do not refuse an available command tool because the backend is Codex, Grok, OpenCode, or Cursor.",
+        );
+        if !super::super::super::agent_effort::is_subagent_request(request) {
+            developer_instructions.push_str("\n\n");
+            developer_instructions.push_str(super::ORCHESTRATOR_INSTRUCTIONS);
+        }
+    } else {
+        developer_instructions.push_str("\n\n");
+        developer_instructions
+            .push_str(crate::anthropic::subscription_request::SHARED_WORKSPACE_INSTRUCTIONS);
+        developer_instructions.push_str("\n\n");
+        // ACP providers execute their own tools; forcing Claude Code Agent/Task causes silence.
+        if super::super::super::agent_effort::is_subagent_request(request) {
+            developer_instructions.push_str(super::ACP_NATIVE_WORKER_INSTRUCTIONS);
+        } else {
+            developer_instructions.push_str(super::ACP_NATIVE_ORCHESTRATOR_INSTRUCTIONS);
+        }
     }
     let base_instructions = if system.is_empty() {
         developer_instructions.clone()

@@ -348,6 +348,9 @@ fn sanitize_public_tool_arguments(tool_name: &str, arguments: &mut Value) -> Val
     public.remove(IMPLICIT_MODEL);
     if is_agent_tool(tool_name) {
         public.remove("model");
+        public
+            .entry("run_in_background".to_owned())
+            .or_insert(Value::Bool(true));
     }
     arguments.clone()
 }

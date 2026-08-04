@@ -8,7 +8,7 @@ pub(super) async fn dispatch(
     builder: &mut SegmentBuilder,
     context: ExternalToolContext<'_>,
     original_name: &str,
-    call: ToolCall<'_>,
+    call: ToolCall,
 ) -> Result<()> {
     let tasks = call
         .arguments
@@ -44,7 +44,7 @@ async fn dispatch_task(
     builder: &mut SegmentBuilder,
     context: ExternalToolContext<'_>,
     original_name: &str,
-    call: &ToolCall<'_>,
+    call: &ToolCall,
     task_count: usize,
     index: usize,
     arguments: &Value,
@@ -52,9 +52,9 @@ async fn dispatch_task(
     let mut nested_arguments = arguments.clone();
     ensure_background_batch_launch(&mut nested_arguments);
     let nested = ToolCall {
-        call_id: call.call_id,
-        name: call.name,
-        arguments: &nested_arguments,
+        call_id: format!("{}-{}", call.call_id, index),
+        name: call.name.clone(),
+        arguments: nested_arguments,
         request_id: crate::anthropic::agent_batch::pending_marker(
             call.request_id.clone(),
             index,

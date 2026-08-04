@@ -14,12 +14,18 @@ pub(super) async fn apply_effort(
     effort: Option<&str>,
     id: &acp::SessionId,
 ) -> bool {
-    if ctl.provider.model_is_launch_scoped() {
+    // Grok and other CLI-model ACP launches pin model (and often effort) at process start.
+    // Session create also pins the ACP model id once. Re-running set_session_model every
+    // turn reselects Cursor's auto router and adds multi-second RPC latency before prompts.
+    if ctl.provider == AcpProvider::Grok {
         tracing::debug!(
             session_id = ctl.session_id,
             effort,
-            "skipping ACP set_session_model; model and effort are launch-scoped"
+            "skipping ACP set_session_model; Grok model and effort are launch-scoped"
         );
+        return true;
+    }
+    if ctl.provider.model_is_launch_scoped() && effort.is_none() {
         return true;
     }
     if effort.is_none() && !ctl.provider.is_session_scoped_configured() {
@@ -69,23 +75,57 @@ async fn setup_effort(
     setup_started: Rc<Cell<bool>>,
 ) -> Result<(), EffortSetupError> {
     setup_started.set(true);
-    if provider.is_session_scoped_configured()
-        && let Some(effort) = effort
-    {
-        match set_effort_option(&connection, &id, effort).await {
-            Ok(()) => return Ok(()),
+    let session_model = crate::grok_acp::prompt::configured_acp_session_model(model);
+    // Launch-scoped providers already pass `--model` on the CLI and pin the ACP model id
+    // during session/new. Only attempt an optional effort config option; do not reselect
+    // the model (Cursor auto reselection is expensive and can re-route mid-session).
+    if provider.model_is_launch_scoped() {
+        let Some(effort) = effort else {
+            return Ok(());
+        };
+        return match set_effort_option(&connection, &id, effort).await {
+            Ok(()) => Ok(()),
             Err(EffortSetupError::Failed(error)) if effort_option_rejected(&error) => {
                 tracing::debug!(
                     ?error,
-                    "configured ACP rejected session effort option; falling back to set_session_model"
+                    "launch-scoped ACP rejected session effort option; continuing with CLI model"
                 );
+                Ok(())
             }
-            Err(error) => return Err(error),
-        }
+            Err(error) => Err(error),
+        };
+    }
+    // Session-scoped configured ACP (OpenCode) and Copilot need the model selected before
+    // effort options are available. Cursor's `auto` maps to ACP `default[]`.
+    if provider.is_session_scoped_configured() {
+        set_model(
+            &connection,
+            acp::SetSessionModelRequest::new(id.clone(), session_model.clone()),
+        )
+        .await?;
+        let Some(effort) = effort else {
+            return Ok(());
+        };
+        return match set_effort_option(&connection, &id, effort).await {
+            Ok(()) => Ok(()),
+            Err(EffortSetupError::Failed(error)) if effort_option_rejected(&error) => {
+                tracing::debug!(
+                    ?error,
+                    "configured ACP rejected session effort option after model select; falling back to set_session_model meta"
+                );
+                set_model(
+                    &connection,
+                    acp::SetSessionModelRequest::new(id, session_model)
+                        .meta(model_meta(Some(effort))),
+                )
+                .await
+            }
+            Err(error) => Err(error),
+        };
     }
     set_model(
         &connection,
-        acp::SetSessionModelRequest::new(id, model.to_owned()).meta(model_meta(effort)),
+        acp::SetSessionModelRequest::new(id, session_model).meta(model_meta(effort)),
     )
     .await
 }

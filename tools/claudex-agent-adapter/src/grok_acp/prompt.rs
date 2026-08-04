@@ -2,6 +2,17 @@ use serde_json::Value;
 
 use super::plugin;
 
+/// Map Claudex model ids onto the ids each configured ACP server actually accepts.
+///
+/// Cursor Agent lists CLI model `auto`, but ACP `session/set_model` and config options reject
+/// `auto` and expect `default[]` for the Auto picker entry.
+pub(super) fn configured_acp_session_model(model: &str) -> String {
+    match model {
+        "auto" | "default" => "default[]".to_owned(),
+        other => other.to_owned(),
+    }
+}
+
 pub(super) fn provider_instructions(params: &Value, include_grok_routing: bool) -> String {
     let base = params
         .get("baseInstructions")

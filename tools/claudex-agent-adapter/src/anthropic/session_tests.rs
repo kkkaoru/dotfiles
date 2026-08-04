@@ -745,6 +745,28 @@ fn assert_empty_thread_configuration() {
     assert_developer_guidance(developer);
 }
 
+#[test]
+fn acp_native_modes_use_provider_native_instructions_instead_of_agent_orchestration() {
+    let request = request(json!("cursor main"), Vec::new());
+    let params = thread_start_params_for_mode(
+        &request,
+        "auto",
+        Vec::new(),
+        WebSearchMode::AcpNative,
+    );
+    let developer = params["developerInstructions"]
+        .as_str()
+        .expect("developer instructions");
+    assert!(developer.contains("provider-native ACP"));
+    assert!(developer.contains("visible assistant status line"));
+    assert!(developer.contains("bridged to Claude Code tool_use"));
+    assert!(developer.contains("spawn_subagent"));
+    assert!(developer.contains("end the turn promptly"));
+    assert!(developer.contains("never block the same turn with get_command_or_subagent_output"));
+    assert!(!developer.contains("call a routed Agent/Task worker by default"));
+    assert!(!developer.contains("run_in_background=true on every Agent/Task launch"));
+}
+
 fn assert_developer_guidance(developer: &str) {
     const REQUIRED: &[&str] = &[
         "never infer from it that Claude Code or its SubAgent tasks are read-only",

@@ -1,6 +1,7 @@
 use std::{
     cell::RefCell,
     collections::HashMap,
+    env, fs,
     future::Future,
     path::{Path, PathBuf},
     rc::Rc,
@@ -8,7 +9,7 @@ use std::{
 };
 
 use agent_client_protocol::{self as acp, Agent as _};
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use serde_json::{Value, json};
 use tokio::sync::oneshot;
 
@@ -16,6 +17,8 @@ use super::{connection::AcpProvider, prompt};
 use crate::anthropic::subscription_request::cwd_from_system;
 
 const SESSION_SETUP_TIMEOUT: Duration = Duration::from_secs(30);
+const LAUNCH_MCP_SCRIPT: &str = include_str!("../../scripts/claudex-launch-mcp.py");
+const LAUNCH_MCP_NAME: &str = "claudex-launch";
 
 pub(super) struct Task {
     pub(super) provider: AcpProvider,
@@ -57,25 +60,50 @@ pub(super) async fn create(
     // Claude Code embeds the active child cwd in its base instructions. Keep ACP sessions scoped
     // to that request instead of leaking the adapter daemon's launch directory.
     let session_cwd = session_cwd(&params, cwd);
-    let mut request = acp::NewSessionRequest::new(&session_cwd).mcp_servers(vec![]);
+    // Attach a tiny MCP server that exposes Agent/Task when Claude Code supplied them.
+    // ACP providers otherwise only see native tools (and Grok's spawn_subagent), so SubAgent
+    // launches never become Claude Code tool_use and stay invisible in the agents panel.
+    // Inject launch MCP only for Grok: Cursor/OpenCode session/new can hang waiting on MCP.
+    let mcp = if provider == AcpProvider::Grok {
+        launch_mcp_servers(&params)
+    } else {
+        Vec::new()
+    };
+    let mut request = acp::NewSessionRequest::new(&session_cwd).mcp_servers(mcp);
     if provider != AcpProvider::Grok {
         request = request.meta(json!({ "modelId": model }).as_object().cloned());
     }
     let request = connection.new_session(request);
     let response = await_setup(provider, SESSION_SETUP_TIMEOUT, request).await?;
-    // OpenCode currently ignores the non-standard modelId metadata on session/new. Select the
-    // configured model through the ACP model method as soon as the session exists so the first
-    // prompt cannot run against the provider default.
-    if provider.is_session_scoped_configured() {
-        await_model_setup(
+    // OpenCode ignores modelId meta on session/new. Cursor accepts CLI `--model auto` but ACP
+    // only accepts ids like `default[]`. Pin the session model through ACP after create so the
+    // first prompt cannot run against a mismatched default. Launch-scoped providers already pass
+    // a CLI model, so a set_session_model failure is non-fatal there.
+    if matches!(
+        provider,
+        AcpProvider::Configured | AcpProvider::ConfiguredLaunchScoped
+    ) {
+        let session_model = prompt::configured_acp_session_model(model);
+        let setup = await_model_setup(
             provider,
             SESSION_SETUP_TIMEOUT,
             connection.set_session_model(acp::SetSessionModelRequest::new(
                 response.session_id.clone(),
-                model.to_owned(),
+                session_model,
             )),
         )
-        .await?;
+        .await;
+        match setup {
+            Ok(_) => {}
+            Err(error) if provider.model_is_launch_scoped() => {
+                tracing::warn!(
+                    %error,
+                    model,
+                    "launch-scoped ACP set_session_model failed; continuing with CLI model"
+                );
+            }
+            Err(error) => return Err(error),
+        }
     }
     let session_id = response.session_id.0.to_string();
     let base = prompt::provider_instructions(&params, provider == AcpProvider::Grok);
@@ -92,6 +120,58 @@ fn session_cwd(params: &Value, fallback: &Path) -> PathBuf {
         .and_then(cwd_from_system)
         .or_else(|| request_cwd(params))
         .unwrap_or_else(|| fallback.to_owned())
+}
+
+fn launch_mcp_servers(params: &Value) -> Vec<acp::McpServer> {
+    if !params_offer_launch_tools(params) {
+        return Vec::new();
+    }
+    let Ok(script) = ensure_launch_mcp_script() else {
+        tracing::warn!("claudex launch MCP script unavailable; ACP Agent/Task tools not injected");
+        return Vec::new();
+    };
+    vec![acp::McpServer::Stdio(
+        acp::McpServerStdio::new(LAUNCH_MCP_NAME, script).args(Vec::new()),
+    )]
+}
+
+fn params_offer_launch_tools(params: &Value) -> bool {
+    params
+        .get("dynamicTools")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .any(|tool| {
+            let name = tool.get("name").and_then(Value::as_str).unwrap_or("");
+            let description = tool.get("description").and_then(Value::as_str).unwrap_or("");
+            name == "Agent"
+                || name == "Task"
+                || name.contains("Agent")
+                || name.contains("Task")
+                || description.contains("`Agent`")
+                || description.contains("`Task`")
+        })
+}
+
+fn ensure_launch_mcp_script() -> Result<PathBuf> {
+    let home = env::var_os("HOME")
+        .map(PathBuf::from)
+        .context("HOME is required for claudex launch MCP cache")?;
+    let path = home.join(".cache/claudex/claudex-launch-mcp.py");
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).context("create claudex MCP cache directory")?;
+    }
+    if fs::read_to_string(&path).ok().as_deref() != Some(LAUNCH_MCP_SCRIPT) {
+        fs::write(&path, LAUNCH_MCP_SCRIPT).context("write claudex launch MCP script")?;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut permissions = fs::metadata(&path)?.permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(&path, permissions).context("chmod claudex launch MCP script")?;
+    }
+    Ok(path)
 }
 
 async fn await_model_setup<T>(

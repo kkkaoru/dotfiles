@@ -416,6 +416,13 @@ mod tests {
             .await;
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn launch_scoped_effort_skips_per_turn_model_reselect() {
+        LocalSet::new()
+            .run_until(check_launch_scoped_effort_skips_model_reselect())
+            .await;
+    }
+
     #[tokio::test]
     async fn configured_model_selection_failure_is_reported() {
         let events = std::sync::Arc::new(ThreadEventDispatcher::default());
@@ -638,9 +645,47 @@ mod tests {
         )
         .await);
         let requests = requests.await.unwrap();
-        assert_eq!(requests.len(), 2);
+        assert_eq!(requests.len(), 3);
+        assert_eq!(requests[0]["method"], "session/set_model");
+        assert!(requests[0].pointer("/params/_meta/reasoningEffort").is_none());
+        assert_eq!(requests[1]["method"], "session/set_config_option");
+        assert_eq!(requests[2]["method"], "session/set_model");
+        assert_eq!(
+            requests[2].pointer("/params/_meta/reasoningEffort"),
+            Some(&json!("high"))
+        );
+    }
+
+    async fn check_launch_scoped_effort_skips_model_reselect() {
+        let events = std::sync::Arc::new(ThreadEventDispatcher::default());
+        let active = ActiveTurns::default();
+        let invalidated = InvalidatedSessions::default();
+        let permits = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
+        let (_sender, mut cancellation) = oneshot::channel();
+        let mut permit = Some(permits.acquire_owned().await.unwrap());
+        let mut ctl = TurnCtl {
+            provider: AcpProvider::ConfiguredLaunchScoped,
+            session_id: "session",
+            cancellation: &mut cancellation,
+            permit: &mut permit,
+            events: &events,
+            active_turns: &active,
+            invalidated_sessions: &invalidated,
+        };
+        let (connection, requests) =
+            rejecting_launch_scoped_effort_connection(std::sync::Arc::clone(&events));
+        assert!(apply_effort(
+            &mut ctl,
+            &std::rc::Rc::new(connection),
+            "auto",
+            Some("high"),
+            &acp::SessionId::new("session".to_owned()),
+        )
+        .await);
+        let requests = requests.await.unwrap();
+        assert_eq!(requests.len(), 1);
         assert_eq!(requests[0]["method"], "session/set_config_option");
-        assert_eq!(requests[1]["method"], "session/set_model");
+        assert!(permit.is_some());
     }
 
     async fn check_prompt_timeout() {
@@ -787,7 +832,8 @@ mod tests {
         drop(tokio::task::spawn_local(async move {
             let mut lines = BufReader::new(outgoing_peer);
             let mut captured = Vec::new();
-            for _ in 0..2 {
+            // model select → rejected effort option → model meta fallback
+            for _ in 0..3 {
                 let mut line = String::new();
                 lines.read_line(&mut line).await.expect("ACP request");
                 let request: Value = serde_json::from_str(&line).expect("valid ACP request");
@@ -812,6 +858,50 @@ mod tests {
                     .expect("response newline");
             }
             request_sender.send(captured).expect("request receiver");
+        }));
+        (connection, requests)
+    }
+
+    fn rejecting_launch_scoped_effort_connection(
+        events: std::sync::Arc<ThreadEventDispatcher>,
+    ) -> (acp::ClientSideConnection, oneshot::Receiver<Vec<Value>>) {
+        let (outgoing, outgoing_peer) = tokio::io::duplex(1024);
+        let (incoming, mut incoming_peer) = tokio::io::duplex(1024);
+        let (connection, io_task) = acp::ClientSideConnection::new(
+            AcpClient::new(events),
+            outgoing.compat_write(),
+            incoming.compat(),
+            |task| {
+                drop(tokio::task::spawn_local(task));
+            },
+        );
+        drop(tokio::task::spawn_local(async move {
+            let _ = io_task.await;
+        }));
+        let (request_sender, requests) = oneshot::channel();
+        drop(tokio::task::spawn_local(async move {
+            let mut lines = BufReader::new(outgoing_peer);
+            let mut line = String::new();
+            lines.read_line(&mut line).await.expect("ACP request");
+            let request: Value = serde_json::from_str(&line).expect("valid ACP request");
+            assert_eq!(request["method"], "session/set_config_option");
+            let id = request["id"].clone();
+            let response = json!({
+                "jsonrpc":"2.0",
+                "id":id,
+                "error":{"code":-32602,"message":"invalid params"}
+            });
+            incoming_peer
+                .write_all(response.to_string().as_bytes())
+                .await
+                .expect("ACP response");
+            incoming_peer
+                .write_all(b"\n")
+                .await
+                .expect("response newline");
+            request_sender
+                .send(vec![request])
+                .expect("request receiver");
         }));
         (connection, requests)
     }

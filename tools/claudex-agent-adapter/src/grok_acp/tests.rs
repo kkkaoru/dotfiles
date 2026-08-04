@@ -47,6 +47,44 @@ async fn terminates_the_entire_provider_process_group() {
 }
 
 #[test]
+fn detects_opencode_programs_and_injects_anti_nesting_runtime_config() {
+    use std::ffi::OsString;
+
+    assert!(super::connection::is_opencode_program(&OsString::from(
+        "opencode"
+    )));
+    assert!(super::connection::is_opencode_program(&OsString::from(
+        "/opt/homebrew/bin/opencode"
+    )));
+    assert!(super::connection::is_opencode_program(&OsString::from(
+        "opencode-dev"
+    )));
+    assert!(!super::connection::is_opencode_program(&OsString::from(
+        "cursor-agent"
+    )));
+    assert!(!super::connection::is_opencode_program(&OsString::from(
+        "/usr/bin/env"
+    )));
+    let config = super::connection::opencode_acp_runtime_config();
+    assert!(config.contains(r#""subagent_depth":0"#));
+    assert!(config.contains(r#""task":"deny""#));
+}
+
+#[test]
+fn maps_cursor_auto_to_the_acp_default_model_id() {
+    assert_eq!(prompt::configured_acp_session_model("auto"), "default[]");
+    assert_eq!(prompt::configured_acp_session_model("default"), "default[]");
+    assert_eq!(
+        prompt::configured_acp_session_model("opencode-go/gpt-5.6-luna"),
+        "opencode-go/gpt-5.6-luna"
+    );
+    assert_eq!(
+        prompt::configured_acp_session_model("default[]"),
+        "default[]"
+    );
+}
+
+#[test]
 fn identifies_each_acp_provider_and_its_model_scope() {
     assert_eq!(AcpProvider::Grok.label(), "Grok");
     assert_eq!(AcpProvider::Grok.driver_name(), "claudex-grok-acp");
@@ -101,7 +139,8 @@ fn removes_codex_only_bridge_instructions() {
         "developerInstructions":"backend-only"
     });
     assert!(prompt::provider_instructions(&params, true).starts_with("project rules\n\n"));
-    assert!(prompt::provider_instructions(&params, true).contains("claudex-high"));
+    assert!(prompt::provider_instructions(&params, true).contains("selected_workers"));
+    assert!(prompt::provider_instructions(&params, true).contains("spawn_subagent"));
     assert!(!prompt::provider_instructions(&json!({}), true).contains("claudex-xhigh"));
     assert_eq!(
         prompt::provider_instructions(&params, false),

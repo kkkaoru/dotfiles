@@ -347,22 +347,24 @@ impl Bridge {
         let (responses, completed_ids) = take_pending_results(session, results).await?;
         self.agent_efforts
             .remove_tool_results(completed_ids.iter().map(String::as_str));
-        let submitted = !responses.is_empty();
+        // ACP-bridged Agent/Task has no app-server request; continue via transcript.
+        let mut backend_submitted = false;
         for (id, result) in responses {
+            if crate::anthropic::stream::acp_tool_bridge::is_acp_bridge_request_id(&id) {
+                continue;
+            }
             let success =
                 !result.is_error || is_idempotent_task_lifecycle_error(&result.content_items);
             self.app
                 .respond_for_model(
                     &session.model,
                     id,
-                    json!({
-                        "contentItems": result.content_items,
-                        "success": success
-                    }),
+                    json!({"contentItems": result.content_items, "success": success}),
                 )
                 .await?;
+            backend_submitted = true;
         }
-        Ok(submitted)
+        Ok(backend_submitted)
     }
 }
 

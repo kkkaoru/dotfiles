@@ -469,15 +469,24 @@ async fn configured_acp_selects_model_after_session_and_falls_back_for_effort_op
                 .iter()
                 .any(|event| event.pointer("/set_model/modelId") == Some(&json!(model)))
         );
-        let effort = trace
+        let effort_index = trace
             .iter()
-            .find(|event| event.get("set_effort").is_some())
+            .position(|event| event.get("set_effort").is_some())
             .expect("effort config attempt");
+        let effort = &trace[effort_index];
         assert_eq!(
             effort.pointer("/set_effort/configId"),
             Some(&json!("effort"))
         );
         assert_eq!(effort.pointer("/set_effort/value"), Some(&json!("max")));
+        // Model must be selected before effort options exist (OpenCode max fails on default model).
+        assert!(
+            trace[..effort_index].iter().any(|event| {
+                event.pointer("/set_model/modelId") == Some(&json!(model))
+                    && event.pointer("/set_model/_meta/reasoningEffort").is_none()
+            }),
+            "model selection without effort meta must precede set_effort"
+        );
         assert_eq!(has_effort_model_metadata(&trace), !expects_config_option);
         backend.shutdown().await;
     }

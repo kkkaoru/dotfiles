@@ -2,15 +2,20 @@ use std::{ffi::OsStr, fs, path::PathBuf};
 
 use anyhow::{Context, Result};
 
-pub(super) const ROUTING_INSTRUCTIONS: &str = "Grok-native SubAgent routing: use only the \
-plugin-qualified subagent_type grok-native-high-plugin-v3:claudex-high for nested tasks. It \
-deliberately omits a model so the child inherits the active Grok model and uses high reasoning \
-effort. Never use project/global cross-provider claudex-* agent definitions, never set \
-claudex_model, and map requests for xhigh or max reasoning to the qualified claudex-high profile. \
-Unsafe unqualified aliases are blocked before execution; retry with the qualified profile.";
+pub(super) const ROUTING_INSTRUCTIONS: &str = "Claudex SubAgent routing on Grok ACP: launch workers \
+through the Agent or Task tool when available (including MCP claudex-launch Agent/Task). Prefer \
+subagent_type from selected_workers (claudex-grok, claudex-cursor, claudex-fugu, …), set \
+claudex_model and claudex_effort to that worker's exact model/effort, and set \
+run_in_background=true unless the user requires a synchronous result. If only spawn_subagent is \
+available, call it with description+prompt and the adapter bridges it to Claude Code Agent tool_use \
+so the Claudex agents panel tracks the worker—do not wait for the Grok-native child. After a \
+background launch, emit a short status and end the turn immediately; do not call \
+get_command_or_subagent_output or TaskOutput with a positive timeout_ms in the same turn. Retrieve \
+results only after a Claude completion notification on a later turn.";
 
 const PROFILE_NAME: &str = "claudex-high";
 const PROFILE_EFFORT: &str = "high";
+/// Legacy profile kept for cache cleanup; Claudex no longer launches via spawn_subagent.
 #[cfg(test)]
 const QUALIFIED_PROFILE_NAME: &str = "grok-native-high-plugin-v3:claudex-high";
 const UNSAFE_CROSS_PROVIDER_ALIASES: &[&str] = &[
@@ -28,17 +33,14 @@ const UNSAFE_CROSS_PROVIDER_ALIASES: &[&str] = &[
     "claudex-haiku",
 ];
 
+/// Prefer Claude-visible Agent launches; still allow spawn_subagent so the adapter can bridge it.
 const REJECT_UNSAFE_AGENT_SCRIPT: &str = r#"#!/bin/sh
 if [ "${CLAUDEX_GROK_ACP:-}" != "1" ]; then
   printf '%s\n' '{"decision":"allow"}'
   exit 0
 fi
-payload=$(cat)
-if printf '%s' "$payload" | grep -Eq '"(subagent_type|subagentType|agent_type|agentType)"[[:space:]]*:[[:space:]]*"(custom-advisor|claudex-orchestrator|claudex-gpt|claudex-gpt-spark|claudex-grok|claudex-deepseek|claudex-haiku-search|claudex-fugu|claudex-sonnet|claudex-ollama-glm-5-2|claudex-qwen|claudex-haiku)"'; then
-  printf '%s\n' '{"decision":"deny","reason":"Cross-provider agent aliases are unsafe in Grok. Retry with subagent_type grok-native-high-plugin-v3:claudex-high; do not set a model or effort."}'
-else
-  printf '%s\n' '{"decision":"allow"}'
-fi
+# Allow spawn_subagent and Agent/Task: adapter bridges them to Claude Code tool_use.
+printf '%s\n' '{"decision":"allow"}'
 "#;
 
 pub(super) fn prepare(program: &OsStr) -> Result<Option<PathBuf>> {

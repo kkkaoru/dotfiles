@@ -125,8 +125,13 @@ fn update_to_tool_call(call_id: &str, fields: acp::ToolCallUpdateFields) -> Opti
     ) {
         return None;
     }
-    let raw_input = fields.raw_input.as_ref()?;
-    let mut call = acp::ToolCall::new(call_id.to_owned(), title);
+    // Cursor and other ACP agents often start tools with only title/status and no rawInput.
+    // Still open a WIP card so Claude Code shows progress instead of a silent spinner.
+    let raw_input = fields
+        .raw_input
+        .clone()
+        .unwrap_or_else(|| json!({}));
+    let mut call = acp::ToolCall::new(call_id.to_owned(), title).raw_input(raw_input);
     if let Some(kind) = fields.kind {
         call = call.kind(kind);
     }
@@ -136,7 +141,7 @@ fn update_to_tool_call(call_id: &str, fields: acp::ToolCallUpdateFields) -> Opti
     if let Some(locations) = fields.locations {
         call = call.locations(locations);
     }
-    Some(call.status(status).raw_input(raw_input.clone()))
+    Some(call.status(status))
 }
 
 fn status_only_params(
@@ -151,7 +156,10 @@ fn status_only_params(
     ) && fields.raw_output.is_none()
         && fields.content.is_none()
     {
-        let title = fields.title.as_ref()?;
+        let title = fields
+            .title
+            .clone()
+            .unwrap_or_else(|| "provider tool".to_owned());
         let mut params = json!({
             "threadId": session_id,
             "callId": call_id,

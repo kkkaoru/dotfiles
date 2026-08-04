@@ -82,6 +82,12 @@ pub(super) async fn start(
     Ok((connection, child, io_stopped_rx, process_group))
 }
 
+/// OpenCode's default `build` agent spawns nested explore/general task subagents. Under Claudex
+/// those children inherit max effort on the same model and compete with the parent stream, so
+/// Claude Code sees almost no output for minutes while OpenCode burns many internal steps.
+/// Runtime config disables task/subagent fan-out only for this ACP child process.
+const OPENCODE_ACP_RUNTIME_CONFIG: &str = r#"{"subagent_depth":0,"permission":{"task":"deny"},"agent":{"build":{"permission":{"task":"deny"}}}}"#;
+
 fn build_provider_command(
     program: &OsString,
     provider: AcpProvider,
@@ -120,6 +126,7 @@ fn build_provider_command(
         }
         AcpProvider::Configured | AcpProvider::ConfiguredLaunchScoped => {
             let arguments = arguments.context("configured ACP arguments are required")?;
+            apply_opencode_acp_runtime_config(&mut command, program);
             command.args(
                 arguments
                     .iter()
@@ -134,6 +141,29 @@ fn build_provider_command(
         command.as_std_mut().process_group(0);
     }
     Ok(command)
+}
+
+pub(super) fn is_opencode_program(program: &OsString) -> bool {
+    Path::new(program)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name == "opencode" || name.starts_with("opencode-"))
+}
+
+#[cfg(test)]
+pub(super) fn opencode_acp_runtime_config() -> &'static str {
+    OPENCODE_ACP_RUNTIME_CONFIG
+}
+
+fn apply_opencode_acp_runtime_config(command: &mut Command, program: &OsString) {
+    if !is_opencode_program(program) {
+        return;
+    }
+    // Leave an explicit user override alone; otherwise inject Claudex's anti-nesting policy.
+    if env::var_os("OPENCODE_CONFIG_CONTENT").is_some() {
+        return;
+    }
+    command.env("OPENCODE_CONFIG_CONTENT", OPENCODE_ACP_RUNTIME_CONFIG);
 }
 
 fn spawn_provider_process(

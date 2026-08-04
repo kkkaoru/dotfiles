@@ -204,7 +204,7 @@ async fn serves_models_counts_plain_messages_and_continuations() {
         .json()
         .await
         .expect("decode models");
-    assert_eq!(models["data"][0]["id"], "test-main-model");
+    assert_eq!(models["data"][0]["id"], "claude-claudex-test-main-model");
     assert_eq!(models["data"][0]["display_name"], "test-main-model");
     assert!(
         models["data"]
@@ -212,7 +212,7 @@ async fn serves_models_counts_plain_messages_and_continuations() {
             .expect("model list")
             .iter()
             .filter_map(|model| model["id"].as_str())
-            .any(|id| id == "test-main-model")
+            .any(|id| id == "claude-claudex-test-main-model")
     );
     assert!(
         models["data"]

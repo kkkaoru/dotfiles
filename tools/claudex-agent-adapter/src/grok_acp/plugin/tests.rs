@@ -13,15 +13,13 @@ fn profile_is_provider_local_model_inheriting_high() {
     assert_eq!(PROFILE_EFFORT, "high");
     assert!(profile.contains("effort: high"));
     assert!(!profile.contains("\nmodel:"));
-    assert!(ROUTING_INSTRUCTIONS.contains("plugin-qualified"));
-    assert!(ROUTING_INSTRUCTIONS.contains(QUALIFIED_PROFILE_NAME));
-    assert!(ROUTING_INSTRUCTIONS.contains("never set claudex_model"));
-    for invalid in [
-        "claudex-xhigh",
-        "claudex-max",
-        "claudex-gpt",
-        "claudex-deepseek",
-    ] {
+    assert!(ROUTING_INSTRUCTIONS.contains("Agent or Task"));
+    assert!(ROUTING_INSTRUCTIONS.contains("selected_workers"));
+    assert!(ROUTING_INSTRUCTIONS.contains("run_in_background=true"));
+    assert!(ROUTING_INSTRUCTIONS.contains("spawn_subagent"));
+    assert!(ROUTING_INSTRUCTIONS.contains("bridges it to Claude Code Agent"));
+    assert!(!ROUTING_INSTRUCTIONS.contains(QUALIFIED_PROFILE_NAME));
+    for invalid in ["claudex-xhigh", "claudex-max"] {
         assert!(!ROUTING_INSTRUCTIONS.contains(invalid));
     }
 }
@@ -31,16 +29,14 @@ fn project_grok_worker_enforces_the_same_nested_contract() {
     let worker = include_str!("../../../../../.claude/agents/claudex-grok.md");
     assert!(worker.contains("model: grok-4.5"));
     assert!(worker.contains("effort: high"));
-    assert!(worker.contains("plugin-qualified `grok-native-high-plugin-v3:claudex-high`"));
-    assert!(worker.contains("Do not specify a model"));
-    assert!(worker.contains("never launch project/global cross-provider"));
-    assert!(worker.contains("Do not follow global `selected_workers`"));
-    assert!(!worker.contains("exact `claudex_model`"));
+    assert!(worker.contains("never Grok `spawn_subagent`"));
+    assert!(worker.contains("subagent_type: claudex-grok"));
+    assert!(worker.contains("claudex_model: grok-4.5"));
+    assert!(worker.contains("run_in_background: true"));
+    assert!(!worker.contains("grok-native-high-plugin-v3:claudex-high"));
     for invalid in [
         "claudex-xhigh",
         "claudex-max",
-        "claudex-gpt",
-        "claudex-deepseek",
     ] {
         assert!(!worker.contains(invalid));
     }
@@ -99,7 +95,6 @@ fn rejects_cross_provider_aliases_before_they_reach_the_grok_api() {
 
     for alias in UNSAFE_CROSS_PROVIDER_ALIASES {
         assert!(!plugin.join("agents").join(format!("{alias}.md")).exists());
-        assert!(REJECT_UNSAFE_AGENT_SCRIPT.contains(alias));
     }
     let guard = plugin.join("bin/reject-cross-provider-agent.sh");
     let hook = std::fs::read_to_string(home.path().join(".grok/hooks/claudex-agent-adapter.json"))
@@ -112,7 +107,8 @@ fn rejects_cross_provider_aliases_before_they_reach_the_grok_api() {
     assert!(hook.contains("PreToolUse"));
     assert!(hook.contains("^spawn_subagent$"));
     assert!(REJECT_UNSAFE_AGENT_SCRIPT.contains("CLAUDEX_GROK_ACP"));
-    assert!(REJECT_UNSAFE_AGENT_SCRIPT.contains(QUALIFIED_PROFILE_NAME));
+    assert!(REJECT_UNSAFE_AGENT_SCRIPT.contains(r#"{"decision":"allow"}"#));
+    assert!(!REJECT_UNSAFE_AGENT_SCRIPT.contains(QUALIFIED_PROFILE_NAME));
 }
 
 #[test]

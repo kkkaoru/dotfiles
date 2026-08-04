@@ -217,8 +217,11 @@ async fn covers_tool_update_progress_and_empty_plan_paths() {
         event["method"] == "item/providerTool/call"
             && event["params"]["arguments"]["path"] == "file"
     }));
+    // Title+status without rawInput still opens a WIP card (Cursor-style starts).
     assert!(messages.iter().any(|event| {
-        event["method"] == "item/providerTool/update" && event["params"]["callId"] == "title-only"
+        event["method"] == "item/providerTool/call"
+            && event["params"]["callId"] == "title-only"
+            && event["params"]["title"] == "Read"
     }));
     assert!(!messages.iter().any(|event| {
         event["method"] == "item/providerTool/update" && event["params"]["callId"] == "content-only"

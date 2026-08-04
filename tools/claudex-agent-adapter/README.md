@@ -162,7 +162,11 @@ launcher enables this inheritance by default and marks the outer process so the
 global, claudex-only routing hook can inject worker capacity context without
 selecting or rewriting the main model, changing the session display name, or
 introducing a hidden bootstrap route. An explicit `--agent` is still passed
-through unchanged. `CLAUDEX_MODEL` explicitly disables inheritance and selects
+through unchanged. On `--resume`, when a transcript still has the legacy
+`agent-setting` value `claudex-orchestrator` and the caller did not pass
+`--name`/`--agent`, the launcher restores a display name via `--name` from
+`customTitle`, `agentName`, `slug`, or the cwd basename so resume does not keep
+showing the orchestrator agent label. `CLAUDEX_MODEL` explicitly disables inheritance and selects
 the outer request model, which may be native Claude or any model accepted by a
 configured provider prefix. The agent reads a
 sanitized, five-minute Codexbar/Qwen Cloud capacity cache and delegates to available agents in

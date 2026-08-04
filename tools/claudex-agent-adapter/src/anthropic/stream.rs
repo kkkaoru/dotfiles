@@ -17,6 +17,7 @@ use super::{
     stream_batch::{NextEvent, next_event},
 };
 
+pub(in crate::anthropic) mod acp_tool_bridge;
 mod builder;
 mod context_retry;
 mod context_window;
@@ -45,15 +46,10 @@ pub(super) use control::{error_flow, turn_flow};
 pub(super) use protocol::tool_use_frames;
 use protocol::{StreamSender, send_stream_completion, send_stream_error, sse_response};
 pub(super) use protocol::{message_start, send_stream_frame, streaming_sse_response};
-// Match Claude Code's quieter idle UX: visible status after long silence, while Anthropic `ping` handles short raw-byte watchdogs.
+// Visible status after long silence; Anthropic `ping` covers short raw-byte watchdogs.
 const ACTIVITY_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
 const INITIAL_ACTIVITY_DELAY: Duration = Duration::from_secs(30);
-struct ToolCall<'a> {
-    call_id: &'a str,
-    name: &'a str,
-    arguments: &'a Value,
-    request_id: Value,
-}
+struct ToolCall { call_id: String, name: String, arguments: Value, request_id: Value, }
 struct StreamWaitInput<'a> {
     session: &'a Arc<Session>,
     events: Arc<crate::app_server::ThreadEvents>,
@@ -306,6 +302,25 @@ impl Bridge {
         }
     }
 
+    async fn external_batch_segment(
+        &self,
+        session: &Arc<Session>,
+        events: Arc<crate::app_server::ThreadEvents>,
+        builder: &mut SegmentBuilder,
+        sender: &StreamSender,
+    ) -> Result<StreamTurn> {
+        let segment = builder.finish(Some(sender)).await?;
+        if sender.is_closed() {
+            return Ok(self.disconnect_stream(session, events).await);
+        }
+        // ACP-bridged Agent/spawn: cancel provider so Grok does not also native-spawn.
+        let bridge = session.pending_tools.lock().await.values().any(acp_tool_bridge::is_acp_bridge_request_id);
+        if segment.stop_reason == "tool_use" && bridge {
+            let _ = self.app.cancel_turn(&session.thread_id).await;
+        }
+        Ok(StreamTurn::Segment { segment, provider_settled: false })
+    }
+
     async fn consume_stream_event(
         &self,
         session: &Arc<Session>,
@@ -362,22 +377,6 @@ impl Bridge {
         true
     }
 
-    async fn external_batch_segment(
-        &self,
-        session: &Arc<Session>,
-        events: Arc<crate::app_server::ThreadEvents>,
-        builder: &mut SegmentBuilder,
-        sender: &StreamSender,
-    ) -> Result<StreamTurn> {
-        let segment = builder.finish(Some(sender)).await?;
-        if sender.is_closed() {
-            return Ok(self.disconnect_stream(session, events).await);
-        }
-        Ok(StreamTurn::Segment {
-            segment,
-            provider_settled: false,
-        })
-    }
 }
 
 pub(super) fn is_provider_stream_closed(error: &anyhow::Error) -> bool {
