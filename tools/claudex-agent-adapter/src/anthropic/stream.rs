@@ -143,7 +143,7 @@ impl Bridge {
             }
             Ok(None) => {}
             Err(error) => {
-                self.note_usage_limit_failure(&error);
+                self.note_provider_exhaustion(&error, Some(&request.model));
                 let _ = builder.close_open_blocks(Some(&sender)).await;
                 send_stream_error(&sender, error).await;
             }

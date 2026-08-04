@@ -7,7 +7,10 @@ use crate::agent_backend::BackendKind;
 
 use super::{
     Bridge, MessagesRequest, provider_auth, provider_auth_cooldown, request_routing::RouteDecision,
-    stream::usage_limit::contains_usage_limit_marker, token_count, usage_limit_cooldown,
+    stream::usage_limit::{
+        contains_classic_usage_limit_marker, contains_rate_limit_marker, contains_usage_limit_marker,
+    },
+    token_count, usage_limit_cooldown,
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -18,17 +21,16 @@ pub(super) struct UsageLimitFailover {
 }
 
 impl Bridge {
-    pub(super) fn note_usage_limit_failure(&self, error: &anyhow::Error) {
-        self.note_provider_exhaustion(error, None);
-    }
-
     pub(super) fn note_provider_exhaustion(
         &self,
         error: &anyhow::Error,
         exhausted_model: Option<&str>,
     ) {
         let message = error.to_string();
-        if contains_usage_limit_marker(&message) {
+        // Classic ChatGPT/Codex usage limits apply to the whole app-server backend.
+        // Provider 429s are model/provider scoped so a glm Ollama limit does not
+        // cool down unrelated Codex GPT routes that share the same backend.
+        if contains_classic_usage_limit_marker(&message) {
             let cache_path = self.usage_limit_cache_path();
             if let Some(path) = usage_limit_cooldown::record_codex_app_server_limit_at(
                 cache_path.as_deref(),
@@ -42,9 +44,16 @@ impl Bridge {
                 );
             }
         }
-        if provider_auth::contains_auth_failure_marker(&message) {
+        if contains_rate_limit_marker(&message)
+            || provider_auth::contains_auth_failure_marker(&message)
+        {
             let scopes = self.auth_scopes_for(exhausted_model, &message);
             let cache_path = self.provider_auth_cache_path();
+            let reason = if contains_rate_limit_marker(&message) {
+                "rate-limit"
+            } else {
+                "auth"
+            };
             for scope in scopes {
                 if let Some(path) = provider_auth_cooldown::record_at(
                     cache_path.as_deref(),
@@ -55,12 +64,17 @@ impl Bridge {
                     tracing::warn!(
                         path = %path.display(),
                         auth_scope = %scope,
+                        reason,
                         error = %message,
-                        "recorded provider auth cooldown; routing away from that provider"
+                        "recorded provider exhaustion cooldown; routing away from that provider"
                     );
                 }
             }
         }
+    }
+
+    pub(super) fn subagent_provider_is_exhausted(&self, model: &str) -> bool {
+        self.provider_auth_is_cooling_down(model) || self.codex_usage_limit_is_active(model)
     }
 
     pub(super) fn apply_usage_limit_preflight(
@@ -282,5 +296,50 @@ mod tests {
         assert!(super::should_failover_provider_error(&anyhow::anyhow!(
             "codex app-server turn failed: unexpected status 401 Unauthorized: Invalid API key, url: https://api.sakana.ai/v1/responses"
         )));
+    }
+
+    #[test]
+    fn treats_429_rate_limit_as_failover_trigger() {
+        assert!(super::should_failover_provider_error(&anyhow::anyhow!(
+            "codex app-server turn failed: exceeded retry limit, last status: 429 Too Many Requests, request id: abc"
+        )));
+        assert!(super::should_failover_provider_error(&anyhow::Error::msg(
+            r#"codex app-server turn failed: {"error":{"codexErrorInfo":{"responseTooManyFailedAttempts":{"httpStatusCode":429}},"message":"exceeded retry limit"}}"#
+        )));
+    }
+
+    #[test]
+    fn records_429_cooldown_per_model_without_backend_usage_limit() {
+        use std::time::SystemTime;
+
+        use crate::anthropic::{provider_auth_cooldown, usage_limit_cooldown};
+
+        let root = tempfile::tempdir().expect("rate-limit cooldown fixture");
+        let mut route = BackendRoute::new("glm-5.2:cloud", BackendKind::CodexAppServer);
+        route.model_provider = Some("ollama".to_owned());
+        let backend = AgentBackend::spawn_routes(&[route]);
+        let bridge = Bridge::new_with_backend(backend, "glm-5.2:cloud".to_owned())
+            .with_usage_limit_cache_home(root.path());
+        bridge.note_provider_exhaustion(
+            &anyhow::anyhow!(
+                "codex app-server turn failed: exceeded retry limit, last status: 429 Too Many Requests"
+            ),
+            Some("glm-5.2:cloud"),
+        );
+        assert!(bridge.subagent_provider_is_exhausted("glm-5.2:cloud"));
+        assert!(provider_auth_cooldown::scope_is_cooling_down_at(
+            bridge.provider_auth_cache_path().as_deref(),
+            "glm-5.2:cloud",
+            SystemTime::now(),
+        ));
+        assert!(provider_auth_cooldown::scope_is_cooling_down_at(
+            bridge.provider_auth_cache_path().as_deref(),
+            "ollama",
+            SystemTime::now(),
+        ));
+        assert!(!usage_limit_cooldown::codex_app_server_is_cooling_down_at(
+            bridge.usage_limit_cache_path().as_deref(),
+            SystemTime::now(),
+        ));
     }
 }

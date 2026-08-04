@@ -156,7 +156,7 @@ impl Bridge {
                 .await
             }
             Ok(StreamTurn::ProviderFailure { error }) => {
-                self.note_usage_limit_failure(&error);
+                self.note_provider_exhaustion(&error, Some(&turn.session.model));
                 self.retry_provider_stream(
                     turn,
                     sender,
@@ -170,7 +170,7 @@ impl Bridge {
             Ok(StreamTurn::Disconnected) => {}
             Err(error) => {
                 tracing::warn!(?error, "streaming turn failed before message_stop");
-                self.note_usage_limit_failure(&error);
+                self.note_provider_exhaustion(&error, Some(&turn.session.model));
                 self.remove_session(&turn.session).await;
                 send_stream_error(&sender, error).await;
             }

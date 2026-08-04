@@ -26,7 +26,7 @@ pub(super) fn error_type(error: &Error) -> &'static str {
             NON_RETRYABLE_ERROR_TYPE
         };
     }
-    if is_terminal_provider_configuration_error(error) {
+    if is_terminal_provider_configuration_error(error) || is_provider_exhaustion_error(error) {
         NON_RETRYABLE_ERROR_TYPE
     } else {
         RETRYABLE_ERROR_TYPE
@@ -40,7 +40,11 @@ pub(super) fn http_status(fallback: StatusCode, error: &Error) -> StatusCode {
     }
     if is_provider_auth_error(error) {
         StatusCode::UNAUTHORIZED
-    } else if is_terminal_provider_configuration_error(error) {
+    } else if super::stream::usage_limit::contains_rate_limit_marker(&error.to_string()) {
+        StatusCode::TOO_MANY_REQUESTS
+    } else if is_terminal_provider_configuration_error(error)
+        || super::stream::usage_limit::contains_classic_usage_limit_marker(&error.to_string())
+    {
         StatusCode::BAD_REQUEST
     } else {
         fallback
@@ -54,6 +58,14 @@ fn is_provider_auth_error(error: &Error) -> bool {
             || message.contains(UNAUTHORIZED_STATUS_MARKER)
             || message.contains("401 unauthorized")
     })
+}
+
+fn is_provider_exhaustion_error(error: &Error) -> bool {
+    super::usage_limit_failover::should_failover_provider_error(error)
+        || error.chain().any(|cause| {
+            let message = cause.to_string().to_ascii_lowercase();
+            message.contains("cooling down after")
+        })
 }
 
 fn is_terminal_provider_configuration_error(error: &Error) -> bool {
@@ -230,6 +242,18 @@ mod tests {
         assert_eq!(
             http_status(StatusCode::BAD_GATEWAY, &local),
             StatusCode::FAILED_DEPENDENCY
+        );
+    }
+
+    #[test]
+    fn marks_provider_429_as_non_retryable_rate_limit() {
+        let error = anyhow::Error::msg(
+            r#"codex app-server turn failed: {"error":{"codexErrorInfo":{"responseTooManyFailedAttempts":{"httpStatusCode":429}},"message":"exceeded retry limit, last status: 429 Too Many Requests"}}"#,
+        );
+        assert_eq!(error_type(&error), NON_RETRYABLE_ERROR_TYPE);
+        assert_eq!(
+            http_status(StatusCode::BAD_GATEWAY, &error),
+            StatusCode::TOO_MANY_REQUESTS
         );
     }
 }

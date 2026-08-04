@@ -109,6 +109,13 @@ impl Bridge {
             "resolved request routing"
         );
         let route = self.apply_usage_limit_preflight(&mut request, route, &mut effort, is_subagent);
+        if is_subagent && self.subagent_provider_is_exhausted(&request.model) {
+            return Err(anyhow::anyhow!(
+                "provider for model `{}` is cooling down after rate/usage limit; orchestrator should re-route",
+                request.model
+            ));
+        }
+        let request_model = request.model.clone();
         let turn_started = Instant::now();
         tracing::info!(
             target: "claudex.provider",
@@ -144,7 +151,7 @@ impl Bridge {
                 "provider turn response is ready"
             ),
             Err(error) => {
-                self.note_usage_limit_failure(error);
+                self.note_provider_exhaustion(error, Some(&request_model));
                 tracing::error!(
                     target: "claudex.provider",
                     log_event = "provider_turn_end",
