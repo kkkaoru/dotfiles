@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "source": "settings",
-  "model": "sonnet[1m]",
+  "source": "explicit",
+  "model": "fugu",
   "effort": "high"
 }

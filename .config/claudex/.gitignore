@@ -1,4 +1,7 @@
 providers.local.json
 providers.*.local.json
 defaults.local.json
+defaults.*.local.json
+disabled-subagent-models.local.json
+disabled-subagent-models.*.local.json
 claude-config/

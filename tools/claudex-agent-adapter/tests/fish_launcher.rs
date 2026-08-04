@@ -13,6 +13,8 @@ fn fish_launcher_uses_the_shared_provider_config() {
     assert_routing_marker_is_scoped_to_claudex(&function, &home);
     assert_user_local_adapter_forwards_hard_timeout(&function, &home);
     assert_local_defaults(&function, &home);
+    assert_hostname_defaults_prefer_scoped_file(&function, &home);
+    assert_hostname_disabled_models_config_is_exported(&function, &home);
 }
 
 #[test]
@@ -387,6 +389,108 @@ fn assert_local_defaults(function: &std::path::Path, home: &tempfile::TempDir) {
     );
 }
 
+fn short_hostname() -> String {
+    let output = Command::new("hostname")
+        .arg("-s")
+        .output()
+        .expect("hostname -s");
+    assert!(output.status.success(), "hostname -s failed");
+    String::from_utf8(output.stdout)
+        .expect("hostname utf-8")
+        .trim()
+        .to_owned()
+}
+
+fn assert_hostname_defaults_prefer_scoped_file(
+    function: &std::path::Path,
+    home: &tempfile::TempDir,
+) {
+    let hostname = short_hostname();
+    fs::write(
+        home.path().join(".config/claudex/defaults.local.json"),
+        "{\"version\":1,\"model\":\"shared-local\",\"effort\":\"low\"}",
+    )
+    .expect("shared local defaults");
+    fs::write(
+        home.path()
+            .join(format!(".config/claudex/defaults.{hostname}.local.json")),
+        "{\"version\":1,\"model\":\"hostname-local\",\"effort\":\"max\"}",
+    )
+    .expect("hostname defaults");
+    let output = Command::new("fish")
+        .args([
+            "-c",
+            &format!(
+                "source '{}'; claudex hostname-default-smoke",
+                function.display()
+            ),
+        ])
+        .env("HOME", home.path())
+        .env_remove("CLAUDEX_MODEL")
+        .env_remove("CLAUDEX_EFFORT")
+        .env_remove("CLAUDEX_DEFAULTS_CONFIG")
+        .output()
+        .expect("run hostname defaults fish launcher");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let arguments = String::from_utf8(output.stdout).expect("UTF-8 hostname defaults arguments");
+    assert!(arguments.contains("--model\nhostname-local\n"));
+    assert!(arguments.contains("--effort\nmax\n"));
+    assert!(!arguments.contains("--model\nshared-local\n"));
+}
+
+fn assert_hostname_disabled_models_config_is_exported(
+    function: &std::path::Path,
+    home: &tempfile::TempDir,
+) {
+    let hostname = short_hostname();
+    let disabled_path = home.path().join(format!(
+        ".config/claudex/disabled-subagent-models.{hostname}.local.json"
+    ));
+    fs::write(
+        &disabled_path,
+        r#"{"version":1,"disabledModels":["hostname-disabled"]}"#,
+    )
+    .expect("hostname disabled models");
+    let adapter = home.path().join(".local/bin/claudex-agent-adapter");
+    fs::write(
+        &adapter,
+        "#!/bin/sh\nprintf 'DISABLED_CONFIG=%s\\n' \"${CLAUDEX_DISABLED_SUBAGENT_MODELS_CONFIG:-}\"\nprintf '%s\\n' \"$@\"\n",
+    )
+    .expect("rewrite fake adapter");
+    let mut permissions = fs::metadata(&adapter)
+        .expect("fake adapter metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&adapter, permissions).expect("executable fake adapter");
+
+    let output = Command::new("fish")
+        .args([
+            "-c",
+            &format!(
+                "source '{}'; claudex disabled-config-smoke",
+                function.display()
+            ),
+        ])
+        .env("HOME", home.path())
+        .env_remove("CLAUDEX_DISABLED_SUBAGENT_MODELS_CONFIG")
+        .output()
+        .expect("run disabled-config fish launcher");
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("UTF-8 disabled-config arguments");
+    assert!(
+        stdout.contains(&format!("DISABLED_CONFIG={}\n", disabled_path.display())),
+        "{stdout}"
+    );
+}
+
 #[test]
 fn fish_launcher_uses_claude_settings_model_and_effort_when_available() {
     let home = tempfile::tempdir().expect("temporary settings launcher home");
@@ -506,6 +610,7 @@ fn assert_routing_marker_is_scoped_to_claudex(
             ),
         ])
         .env("HOME", home.path())
+        .env_remove("CLAUDEX_ACTIVE")
         .output()
         .expect("run routing marker smoke");
     assert!(output.status.success());

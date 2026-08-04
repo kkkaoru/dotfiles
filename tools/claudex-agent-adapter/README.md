@@ -264,7 +264,9 @@ backend routes. Models matching a configured `modelPrefixes` value are added
 lazily and routed through that provider, so manually added model families and
 ACPs need no Rust change. When prefixes overlap, the longest matching prefix
 wins. Legacy `gpt` and `grok` inference remains available for direct CLI routes.
-The launcher reads persistent exact-model entries from
+The launcher prefers a gitignored per-machine denylist
+(`disabled-subagent-models.$(hostname -s).local.json`, then
+`disabled-subagent-models.local.json`) and falls back to the tracked empty
 `~/.config/claudex/disabled-subagent-models.json`. A terminal can select another dedicated file with
 `CLAUDEX_DISABLED_SUBAGENT_MODELS_CONFIG` and add comma-separated entries with
 `CLAUDEX_DISABLED_SUBAGENT_MODELS`. The launcher sends the merged policy as a reserved per-request

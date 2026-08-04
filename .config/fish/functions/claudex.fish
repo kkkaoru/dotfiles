@@ -42,11 +42,15 @@ function claudex --description 'Run Claude Code with config-driven agent backend
     set -lx CLAUDEX_SUBAGENT_STATUS_POLL_SECONDS "$status_poll_seconds"
     set -lx CLAUDEX_ACTIVE 1
 
-    # Keep the frequently changed outer-session defaults outside git.  The
-    # resolver reads JSON only (never evaluates it as fish code) and defaults
-    # to Claude Code's settings.json.  CLAUDEX_DEFAULTS_SOURCE is a convenient
+    # Keep the frequently changed outer-session defaults outside git.  Prefer a
+    # hostname-scoped file, then defaults.local.json. The resolver reads JSON
+    # only (never evaluates it as fish code). CLAUDEX_DEFAULTS_SOURCE is a
     # one-shot selector; CLAUDEX_MODEL/CLAUDEX_EFFORT remain one-shot overrides.
     set -l defaults_config "$HOME/.config/claudex/defaults.local.json"
+    set -l hostname_defaults "$HOME/.config/claudex/defaults.$(hostname -s).local.json"
+    if test -e "$hostname_defaults"
+        set defaults_config "$hostname_defaults"
+    end
     set -q CLAUDEX_DEFAULTS_CONFIG; and set defaults_config "$CLAUDEX_DEFAULTS_CONFIG"
     set -l defaults_config_argument "$defaults_config"
     if not test -e "$defaults_config"
@@ -55,6 +59,26 @@ function claudex --description 'Run Claude Code with config-driven agent backend
         echo "claudex: defaults config is not readable: $defaults_config" >&2
         return 2
     end
+
+    # Prefer a hostname-scoped SubAgent denylist, then the shared .local file.
+    # Leave unset when neither exists so the adapter/hook fall back to the
+    # tracked empty baseline. Explicit CLAUDEX_DISABLED_SUBAGENT_MODELS_CONFIG
+    # remains authoritative when already exported by the caller.
+    # Use `test ...; and set -lx` so the export is function-scoped: `set -lx`
+    # inside an `if`/`begin` block is block-local in fish and would not reach
+    # the adapter child.
+    set -l disabled_config_for_export
+    if not set -q CLAUDEX_DISABLED_SUBAGENT_MODELS_CONFIG
+        set -l disabled_config "$HOME/.config/claudex/disabled-subagent-models.$(hostname -s).local.json"
+        if not test -r "$disabled_config"
+            set disabled_config "$HOME/.config/claudex/disabled-subagent-models.local.json"
+        end
+        if test -r "$disabled_config"
+            set disabled_config_for_export "$disabled_config"
+        end
+    end
+    test -n "$disabled_config_for_export"
+    and set -lx CLAUDEX_DISABLED_SUBAGENT_MODELS_CONFIG "$disabled_config_for_export"
 
     set -l settings_config "$HOME/.claude/settings.json"
     set -l defaults_resolver "$HOME/.config/claudex/resolve-defaults.py"

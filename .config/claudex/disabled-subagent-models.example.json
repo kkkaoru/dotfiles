@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "disabledModels": [
+    "opencode-go/deepseek-v4-flash",
+    "opencode-go/deepseek-v4-pro",
+    "claude-haiku-4-5",
+    "claude-sonnet-5"
+  ]
+}

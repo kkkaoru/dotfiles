@@ -15,7 +15,9 @@ pub(crate) const CONFIG_ENV_NAME: &str = "CLAUDEX_DISABLED_SUBAGENT_MODELS_CONFI
 pub(crate) const RESOLVED_ENV_NAME: &str = "CLAUDEX_RESOLVED_DISABLED_SUBAGENT_MODELS";
 pub(crate) const HEADER_NAME: &str = "x-claudex-disabled-subagent-models";
 const CONFIG_VERSION: u64 = 1;
+const CONFIG_DIR_RELATIVE: &str = ".config/claudex";
 const CONFIG_RELATIVE_PATH: &str = ".config/claudex/disabled-subagent-models.json";
+const LOCAL_CONFIG_NAME: &str = "disabled-subagent-models.local.json";
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -54,6 +56,16 @@ pub(crate) fn apply_snapshot(command: &mut Command, header: &Option<String>) {
     command.env(RESOLVED_ENV_NAME, header_value(header));
 }
 
+fn short_hostname() -> Option<String> {
+    let output = Command::new("hostname").arg("-s").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let name = String::from_utf8(output.stdout).ok()?;
+    let name = name.trim();
+    (!name.is_empty()).then(|| name.to_owned())
+}
+
 fn config_path(explicit: Option<&OsStr>, home: Option<&OsStr>) -> Result<Option<PathBuf>> {
     if let Some(explicit) = explicit {
         if explicit.is_empty() {
@@ -65,7 +77,22 @@ fn config_path(explicit: Option<&OsStr>, home: Option<&OsStr>) -> Result<Option<
         }
         return Ok(Some(path));
     }
-    Ok(home.map(|home| PathBuf::from(home).join(CONFIG_RELATIVE_PATH)))
+    let Some(home) = home else {
+        return Ok(None);
+    };
+    let config_dir = PathBuf::from(home).join(CONFIG_DIR_RELATIVE);
+    if let Some(hostname) = short_hostname() {
+        let hostname_local =
+            config_dir.join(format!("disabled-subagent-models.{hostname}.local.json"));
+        if hostname_local.is_file() {
+            return Ok(Some(hostname_local));
+        }
+    }
+    let shared_local = config_dir.join(LOCAL_CONFIG_NAME);
+    if shared_local.is_file() {
+        return Ok(Some(shared_local));
+    }
+    Ok(Some(PathBuf::from(home).join(CONFIG_RELATIVE_PATH)))
 }
 
 fn load_config(path: Option<&Path>) -> Result<BTreeSet<String>> {
@@ -191,6 +218,36 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["gpt-5.6-sol", "grok-4.5"]
         );
+
+        let shared_local = root
+            .path()
+            .join(CONFIG_DIR_RELATIVE)
+            .join(LOCAL_CONFIG_NAME);
+        std::fs::write(
+            &shared_local,
+            r#"{"version":1,"disabledModels":["shared-local-model"]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            config_path(None, Some(root.path().as_os_str())).unwrap(),
+            Some(shared_local)
+        );
+
+        if let Some(hostname) = short_hostname() {
+            let hostname_local = root
+                .path()
+                .join(CONFIG_DIR_RELATIVE)
+                .join(format!("disabled-subagent-models.{hostname}.local.json"));
+            std::fs::write(
+                &hostname_local,
+                r#"{"version":1,"disabledModels":["hostname-local-model"]}"#,
+            )
+            .unwrap();
+            assert_eq!(
+                config_path(None, Some(root.path().as_os_str())).unwrap(),
+                Some(hostname_local)
+            );
+        }
 
         let alternate = root.path().join("terminal.json");
         std::fs::write(

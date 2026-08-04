@@ -82,7 +82,13 @@ def main() -> int:
     if version is not None and version != 1:
         raise ValueError(f"{defaults_path} field version must be 1")
 
-    configured_source = defaults.get("source", "settings")
+    configured_source = defaults.get("source")
+    if configured_source is None:
+        # A present local defaults file owns the outer model/effort for this
+        # machine. Default to explicit so `model`/`effort` apply without an
+        # easy-to-miss source field. Settings inheritance stays available via
+        # `"source": "settings"`.
+        configured_source = "explicit" if defaults else "settings"
     if not isinstance(configured_source, str):
         raise ValueError(f"{defaults_path} field source must be `explicit` or `settings`")
 
@@ -109,6 +115,11 @@ def main() -> int:
         settings = load_optional(settings_path)
         settings_model = required_string(settings.get("model"), "model", settings_path)
         settings_effort = effort(settings.get("effortLevel"), "effortLevel", settings_path)
+        # Optional per-machine overlays on top of shared Claude settings.
+        if "model" in defaults:
+            settings_model = required_string(defaults.get("model"), "model", defaults_path)
+        if "effort" in defaults:
+            settings_effort = effort(defaults.get("effort"), "effort", defaults_path)
         effective_model = settings_model
         effective_effort = effort_override or settings_effort
         output_settings = (settings_model, settings_effort)
