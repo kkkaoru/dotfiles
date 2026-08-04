@@ -118,6 +118,45 @@ class OpenCodeGoBudgetTests(unittest.TestCase):
     def test_serialized_policy_is_json_safe(self) -> None:
         self.assertEqual(json.loads(json.dumps(FLASH_BUDGET)), FLASH_BUDGET)
 
+    def test_non_list_report_is_missing(self) -> None:
+        actual = opencode_go_budget.evaluate("not-a-report", budget=FLASH_BUDGET)
+        self.assertIsNotNone(actual)
+        assert actual is not None
+        self.assertFalse(actual["available"])
+        self.assertEqual(actual["reason"], "missing")
+        self.assertFalse(actual["request_budget"]["known"])
+
+    def test_invalid_non_none_budget_is_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            opencode_go_budget.evaluate(report(), budget={"estimatedRequests": 0})
+
+    def test_finds_provider_by_casefolded_name_in_any_position(self) -> None:
+        multi = [
+            {"provider": "unrelated", "usage": {}},
+            {
+                "provider": "OpenCodeGo",
+                "usage": {"primary": {"usedPercent": 50.0, "windowMinutes": 300}},
+            },
+        ]
+        actual = opencode_go_budget.evaluate(multi, budget=FLASH_BUDGET)
+        self.assertIsNotNone(actual)
+        assert actual is not None
+        self.assertEqual(actual["max_used_percent"], 50.0)
+        self.assertEqual(actual["reason"], "available")
+
+    def test_missing_resets_at_is_optional(self) -> None:
+        actual = opencode_go_budget.evaluate(report(resets_at=None), budget=FLASH_BUDGET)
+        self.assertIsNotNone(actual)
+        assert actual is not None
+        self.assertEqual(actual["reason"], "available")
+        self.assertIsNone(actual["request_budget"]["resets_at"])
+
+    def test_status_rejects_an_invalid_budget(self) -> None:
+        with self.assertRaises(ValueError):
+            opencode_go_budget._status(
+                True, 1.0, "available", {"estimatedRequests": 0}
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

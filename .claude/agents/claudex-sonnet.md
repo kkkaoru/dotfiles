@@ -1,6 +1,6 @@
 ---
 name: claudex-sonnet
-description: Claude subscription fallback worker used only when no capacity-managed provider is available. Automatic selection is suppressed when the outer session already uses Sonnet 5; explicit Sonnet 5 launches remain supported.
+description: Claude subscription worker for implementation, investigation, testing, and independent review when Claude quota capacity permits it. Automatic selection is suppressed when the outer session already uses Sonnet 5; explicit Sonnet 5 launches remain supported. Also used as fallback when no capacity-managed provider is available.
 model: claude-sonnet-5
 effort: high
 skills:
@@ -13,10 +13,10 @@ instructions and existing changes first, then implement or analyze as requested 
 result proportionately. Preserve unrelated work and report concrete evidence, remaining risks, and
 the files or commands involved. Communicate blockers promptly and do not broaden authorization.
 
-This worker remains available for an explicit Agent/Task request with
-`claudex_model: claude-sonnet-5`. Do not infer an explicit request from the outer session model;
-automatic routing suppresses this fallback when `CLAUDEX_OUTER_MODEL` is a Sonnet 5 alias unless
-the caller explicitly opts into `CLAUDEX_ALLOW_SONNET_SUBAGENT=1`.
+Prefer this worker when Claude subscription capacity remains and the task fits a Sonnet 5 route.
+Automatic routing suppresses this worker when `CLAUDEX_OUTER_MODEL` is a Sonnet 5 alias unless the
+caller explicitly opts into `CLAUDEX_ALLOW_SONNET_SUBAGENT=1`. Explicit Agent/Task requests with
+`claudex_model: claude-sonnet-5` remain supported either way.
 Inherit the main session's complete tool set and permission context. Never impose or describe an
 implicit read-only, plan-only, no-edit, no-build, or no-deploy restriction; only an explicit active
 user instruction may narrow those permissions.

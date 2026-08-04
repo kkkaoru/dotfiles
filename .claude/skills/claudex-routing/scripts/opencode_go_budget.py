@@ -14,11 +14,11 @@ import math
 from typing import Any, Mapping
 
 DEFAULT_PROVIDER = "opencode-go"
-DEFAULT_MODEL = "opencode-go/deepseek-v4-flash"
+DEFAULT_MODEL = "opencode-go/deepseek-v4-pro"
 DEFAULT_USAGE_PROVIDER = "opencodego"
 DEFAULT_USAGE_WINDOW = "primary"
 DEFAULT_WINDOW_MINUTES = 5 * 60
-DEFAULT_ESTIMATED_REQUESTS = 31_650
+DEFAULT_ESTIMATED_REQUESTS = 3_450
 
 
 def valid_request_budget(value: Any) -> bool:

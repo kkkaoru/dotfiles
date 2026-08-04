@@ -26,6 +26,7 @@
       "maxContextTokens": 110000,
       "enabled": true,
       "usageProvider": "codex",
+      "usageWeeklyWindowId": "codex-spark-weekly",
       "modelPrefixes": [
         "gpt-5.3-codex-spark"
       ],
@@ -84,9 +85,9 @@
       "effort": "high",
       "maxConcurrency": 3,
       "enabled": true,
-      "usageProvider": "qwen",
+      "usageProvider": "qwencloud",
       "modelPrefixes": [
-        "qwen"
+        "qwen3"
       ],
       "backend": "configured-acp",
       "webSearchMode": "disabled",
@@ -105,8 +106,34 @@
     },
     {
       "id": "opencode-go",
-      "agent": "claudex-deepseek",
+      "agent": "claudex-deepseek-pro",
+      "defaultModel": "opencode-go/deepseek-v4-pro",
+      "subagentModel": "opencode-go/deepseek-v4-pro",
+      "effort": "max",
+      "enabled": true,
+      "usageProvider": "opencodego",
+      "requestBudget": {
+        "estimatedRequests": 3450,
+        "windowMinutes": 300,
+        "usageWindow": "primary"
+      },
+      "modelPrefixes": [
+        "opencode-go/deepseek-v4-pro"
+      ],
+      "backend": "configured-acp",
+      "webSearchMode": "delegate-mcp",
+      "acp": {
+        "program": "opencode",
+        "arguments": [
+          "acp"
+        ]
+      }
+    },
+    {
+      "id": "opencode-go-flash",
+      "agent": "claudex-deepseek-flash",
       "defaultModel": "opencode-go/deepseek-v4-flash",
+      "subagentModel": "opencode-go/deepseek-v4-flash",
       "effort": "max",
       "enabled": true,
       "usageProvider": "opencodego",
@@ -116,7 +143,7 @@
         "usageWindow": "primary"
       },
       "modelPrefixes": [
-        "opencode-go/"
+        "opencode-go/deepseek-v4-flash"
       ],
       "backend": "configured-acp",
       "webSearchMode": "delegate-mcp",
@@ -158,7 +185,6 @@
       "defaultModel": "auto",
       "subagentModel": "auto",
       "effort": "high",
-      "maxConcurrency": 3,
       "enabled": true,
       "usageProvider": "cursor",
       "modelPrefixes": [
@@ -175,6 +201,62 @@
           "acp"
         ]
       }
+    },
+    {
+      "id": "cline-qwen",
+      "agent": "claudex-cline-qwen",
+      "defaultModel": "qwen/qwen3.8-max",
+      "subagentModel": "qwen/qwen3.8-max",
+      "effort": "xhigh",
+      "enabled": true,
+      "usageProvider": "clinepass",
+      "modelPrefixes": [
+        "qwen/qwen3.8-max"
+      ],
+      "backend": "configured-acp",
+      "webSearchMode": "acp-native",
+      "acp": {
+        "program": "cline",
+        "arguments": [
+          "--auto-approve",
+          "true",
+          "--thinking",
+          "{effort}",
+          "-P",
+          "cline",
+          "-m",
+          "{model}",
+          "--acp"
+        ]
+      }
+    },
+    {
+      "id": "cline-deepseek-flash",
+      "agent": "claudex-cline-deepseek-flash",
+      "defaultModel": "cline-pass/deepseek-v4-flash",
+      "subagentModel": "cline-pass/deepseek-v4-flash",
+      "effort": "xhigh",
+      "enabled": true,
+      "usageProvider": "clinepass",
+      "modelPrefixes": [
+        "cline-pass/deepseek-v4-flash"
+      ],
+      "backend": "configured-acp",
+      "webSearchMode": "acp-native",
+      "acp": {
+        "program": "cline",
+        "arguments": [
+          "--auto-approve",
+          "true",
+          "--thinking",
+          "{effort}",
+          "-P",
+          "cline-pass",
+          "-m",
+          "{model}",
+          "--acp"
+        ]
+      }
     }
   ],
   "fallback": {
@@ -187,6 +269,12 @@
       "agent": "claudex-haiku-search",
       "model": "claude-haiku-4-5",
       "effort": "max",
+      "usageProvider": "claude"
+    },
+    {
+      "agent": "claudex-sonnet",
+      "model": "claude-sonnet-5",
+      "effort": "high",
       "usageProvider": "claude"
     }
   ],

@@ -26,9 +26,10 @@ retained.
    an exact `model_concurrency` entry with `available: false` as unavailable for that turn.
    A selected worker may intentionally use the same model as the outer session; outer and
    SubAgent requests are independent. The one conservation exception is the `claudex-sonnet`
-   fallback: when `CLAUDEX_OUTER_MODEL` is a Sonnet 5 alias, automatic routing omits that worker
-   unless `CLAUDEX_ALLOW_SONNET_SUBAGENT=1` is an explicit policy opt-in. An explicit Agent/Task
-   request with `claudex_model: claude-sonnet-5` remains valid unless the exact model is denylisted.
+   worker: when `CLAUDEX_OUTER_MODEL` is a Sonnet 5 alias, automatic routing omits that worker
+   (including the empty-pool fallback) unless `CLAUDEX_ALLOW_SONNET_SUBAGENT=1` is an explicit
+   policy opt-in. An explicit Agent/Task request with `claudex_model: claude-sonnet-5` remains
+   valid unless the exact model is denylisted.
    When any selected worker exists, delegation is mandatory before substantive main-session work;
    direct execution is fallback-only when no worker is available or the user explicitly opts out.
    This includes WebSearch/WebFetch, repository reads, and implementation work.
@@ -187,11 +188,9 @@ retained.
      on memory checks.
 
 `tools/claudex-route-usage` (`claudex-route-usage`, typically installed to `~/.cargo/bin/claudex-route-usage`) refreshes the capacity snapshot at most once every five minutes by
-default. Codex and Grok usage comes from `codexbar usage --json`. Qwen's five-hour and seven-day
-Token Plan utilization comes from the validated Qwen Cloud request saved in `tmp/curl.txt`. Only
-sanitized percentages, reset times, and the acquisition time as UTC ISO 8601 `fetched_at` are saved
-to `~/.cache/claudex/qwen-quota.json` with mode `0600`. Each read parses that stored acquisition
-time; quota acquired less than one hour ago is reused, and at exactly one hour it is refreshed.
+default. Codex, Grok, Claude, Qwen Cloud (`qwencloud`), and other CodexBar-backed providers come
+from `codexbar usage --json`. Primary/secondary windows are normalized to five-hour / seven-day
+remaining for ranking.
 
 Model selection is dynamic and codexbar-driven: `selected_workers` is ordered by weekly remaining
 headroom descending, so the model with the most weekly capacity left is preferred for each
@@ -239,15 +238,19 @@ default `127.0.0.1:8318` daemon, in that order. If health is temporarily
 unavailable, the worker remains launchable with unknown slot headroom because the adapter enforces
 the hard limit authoritatively.
 
-Define persistent exact model IDs in `.config/claudex/disabled-subagent-models.json`. Set
-`CLAUDEX_DISABLED_SUBAGENT_MODELS_CONFIG` before starting `claudex` to select a different dedicated
-file for one terminal, and use comma-separated `CLAUDEX_DISABLED_SUBAGENT_MODELS` for additional
-terminal-only entries. These settings do not disable the outer main-session model. The merged policy
-participates in the routing cache key and is enforced again by the adapter before provider execution,
-so a stale prompt or an explicit Agent field cannot bypass it.
+Define persistent exact model IDs in a gitignored per-machine denylist:
 
-After changing the routing script, run `uv run tests/run_coverage.py` from this skill directory.
-The test runner measures statements and branches and fails below 95% coverage.
+- `~/.config/claudex/disabled-subagent-models.$(hostname -s).local.json` (preferred)
+- `~/.config/claudex/disabled-subagent-models.local.json`
+- tracked empty baseline: `.config/claudex/disabled-subagent-models.json`
+
+Set `CLAUDEX_DISABLED_SUBAGENT_MODELS_CONFIG` before starting `claudex` to select a different
+dedicated file for one terminal, and use comma-separated `CLAUDEX_DISABLED_SUBAGENT_MODELS` for
+additional terminal-only entries. These settings do not disable the outer main-session model. The
+merged policy participates in the routing cache key and is enforced again by the adapter before
+provider execution, so a stale prompt or an explicit Agent field cannot bypass it.
+
+After changing the routing crate, run `cargo test` from `tools/claudex-route-usage`.
 For orchestration changes, also exercise the acceptance contract: same-round background fan-out for
 a heavy phase, compatible-recipient reuse, partial-result integration without waiting for the
 slowest worker, and normal/cancel/session-exit child reaping in the runtime integration tests.

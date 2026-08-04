@@ -26,7 +26,10 @@ flowchart LR
     Hook --> CodexSpark[claudex-gpt-spark\ngpt-5.3-codex-spark\nCodex app-server]
     Hook --> Grok[claudex-grok\nGrok ACP]
     Hook --> Qwen[claudex-qwen\nQwen Code ACP]
-    Hook --> DeepSeek[claudex-deepseek\nOpenCode Go ACP]
+    Hook --> Cursor[claudex-cursor\nCursor ACP]
+    Hook --> ClineQwen[claudex-cline-qwen\nCline ACP]
+    Hook --> ClineDs[claudex-cline-deepseek-flash\nClinePass ACP]
+    Hook --> Sonnet[claudex-sonnet\nclaude-sonnet-5]
     Hook --> Fallback[claudex-sonnet\nClaude fallback]
     Orchestrator -. 標準機能 .-> BuiltinAdvisor[Claude Code advisor()\nadvisorModel: opus]
     Orchestrator -. 必要時に併用 .-> CustomAdvisor[custom-advisor\nclaude-fable-5 / xhigh]
@@ -38,14 +41,18 @@ flowchart LR
 | --- | --- | --- | --- | --- |
 | Orchestrator | 通常のmain session | requestの実model（既定は `sonnet[1m]`） | requestのeffort（既定は `high`） | Claude Code requestをそのまま使う。Claudeまたは設定済みexternal provider |
 | Codex worker | `claudex-gpt` | `gpt-5.6-luna` | `max` | Codexに空きがある場合 |
-| Codex Spark worker | `claudex-gpt-spark` | `gpt-5.3-codex-spark` | `xhigh` | Codexに空きがある場合 |
+| Codex Spark worker | `claudex-gpt-spark` | `gpt-5.3-codex-spark` | `xhigh` | CodexBar `codex` の `extraRateWindows` `codex-spark-weekly` 残量（通常の Codex weekly とは別）。枯渇時は選択されない |
 | Fugu worker | `claudex-fugu` | `fugu` | `high` | CodexBarのSakana枠に空きがある場合 |
 | Ollama GLM worker | `claudex-ollama-glm-5-2` | `glm-5.2:cloud` | `max` | CodexBarのOllama枠に空きがある場合 |
 | Grok worker | `claudex-grok` | `grok-4.5` | `high` | Grokに空きがある場合 |
-| Qwen worker | `claudex-qwen` | `qwen3.8-max-preview` | `high` | Qwen providerが利用可能で、モデル同時実行数の上限内の場合 |
-| DeepSeek worker | `claudex-deepseek` | `opencode-go/deepseek-v4-flash` | `max` | CodexBarのOpenCode Go枠に空きがある場合 |
+| Qwen worker | `claudex-qwen` | `qwen3.8-max-preview` | `high` | CodexBarの `qwencloud` 枠に空きがあり、モデル同時実行数の上限内の場合 |
+| DeepSeek Pro worker | `claudex-deepseek-pro` | `opencode-go/deepseek-v4-pro` | `max` | CodexBarのOpenCode Go枠に空きがある場合。Flashとは別agent/model |
+| DeepSeek Flash worker | `claudex-deepseek-flash` | `opencode-go/deepseek-v4-flash` | `max` | CodexBarのOpenCode Go枠に空きがあり、denylistに無い場合（このマシンでは無効化維持） |
 | OpenCode GPT Luna worker | `claudex-opencode-gpt` | `opencode-go/gpt-5.6-luna` | `max` | CodexBarのOpenCode Go枠に空きがある場合。Codexの `gpt-5.6-luna` / `claudex-gpt` とは別route |
-| Cursor worker | `claudex-cursor` | `auto` | `high` | CodexBarのCursor枠に空きがある場合。`cursor-agent --model auto --yolo acp`。`maxConcurrency: 3` で並列SubAgent可。modelはCLI+session/newで固定し、毎turnの `set_session_model` 再選択はしない |
+| Cursor worker | `claudex-cursor` | `auto` | `high` | CodexBarのCursor枠に空きがある場合。`cursor-agent --model auto --yolo acp`。modelはCLI+session/newで固定し、毎turnの `set_session_model` 再選択はしない |
+| Cline Qwen worker | `claudex-cline-qwen` | `qwen/qwen3.8-max` | `xhigh` | Cline provider `cline`（CodexBar `clinepass` weekly left）。`--thinking xhigh`。Qwen Cloudの `qwen3.8-max-preview` / `claudex-qwen` とは別ルートで共存 |
+| Cline DeepSeek Flash worker | `claudex-cline-deepseek-flash` | `cline-pass/deepseek-v4-flash` | `xhigh` | ClinePass枠（CodexBar `clinepass` weekly left、Cline Qwenと共有）。`--thinking xhigh`。OpenCode Go DeepSeekとは別 |
+| Sonnet worker | `claudex-sonnet` | `claude-sonnet-5` | `high` | CodexBarのClaude枠（`usageProvider: claude`）残量。`claudex-haiku-search` と同じClaude usage leftを参照。outerがSonnet 5のときは同一modelの自動選択を抑制（明示起動と `CLAUDEX_ALLOW_SONNET_SUBAGENT=1` は可） |
 | Fallback | `claudex-sonnet` | `claude-sonnet-5` | `high` | 自動worker選択で利用可能なcapacity-managed providerがない場合 |
 | Built-in advisor | Claude Code標準 `advisor()` | `opus` | Claude Code標準 | 標準advisor policyに従う。provider capacity非依存 |
 | Custom advisor | `custom-advisor` | `claude-fable-5` | `xhigh` | 明示指定時、または複雑・曖昧・高リスク・長期・停滞時。worker capacityとは別管理の論理 session singleton（hard process=1ではない） |
@@ -84,9 +91,11 @@ effortの `high` です。適用されないrequest-level effortをturn固有値
 Qwen ACPは `--approval-mode yolo` を明示し、provider自身の
 approval待機やauto classifierがSubAgentの権限を狭めないようにします。OpenCode Go ACPは
 `opencode acp` を起動し、モデルは adapter の `session/new` meta `modelId` で渡します
-（CLIの `--model` は `acp` サブコマンドでは受け付けません）。既定のDeepSeek workerは
-`opencode-go/deepseek-v4-flash`、GPT Luna workerは `opencode-go/gpt-5.6-luna`（effort
-`max`）です。後者はCodex app-serverの `gpt-5.6-luna` とmodel ID prefixで区別します。
+（CLIの `--model` は `acp` サブコマンドでは受け付けません）。DeepSeek Pro workerは
+`claudex-deepseek-pro` / `opencode-go/deepseek-v4-pro`、Flash workerは
+`claudex-deepseek-flash` / `opencode-go/deepseek-v4-flash` で区別します（prefixも各ID）。
+GPT Luna workerは `opencode-go/gpt-5.6-luna`（effort `max`）で、Codex app-serverの
+`gpt-5.6-luna` とmodel ID prefixで区別します。Flashはdenylistで無効化できます。
 OpenCode内で実行されるprovider-owned toolはClaude側で再実行しないようAnthropic
 `tool_use`へ変換せず、実行中だけthinkingの進捗として扱います。
 このためClaude Codeの完了結果ではtool数が0に見える場合がありますが、OpenCode側では実行済みです。
@@ -94,6 +103,13 @@ DeepSeek / OpenCode GPT Luna workerは独立した調査をまとめて実行し
 長い処理のフェーズ間で短い進捗を返すよう定義しています。
 Cursor ACPは `cursor-agent --model {model} --yolo acp` を起動し、既定modelは `auto` です。
 `--yolo` はCursor CLIの `--force` 別名で、main sessionの無確認実行と同等のtool権限にします。
+Cline ACPは `cline --auto-approve true --thinking {effort} -P <provider> -m {model} --acp` を起動します。
+Qwen3.8 Maxは provider `cline` / model `qwen/qwen3.8-max`、DeepSeek V4 Flashは
+provider `cline-pass` / model `cline-pass/deepseek-v4-flash` です（いずれも本機の
+`~/.cline/data/settings/providers.json` で確認したID）。reasoning effortはCline CLIの
+`--thinking`（`none|low|medium|high|xhigh`）へ渡し、ACPの `session/set_config_option`
+`effort` は使いません。`{model}` / `{effort}` をCLIへ渡すためlaunch-scopedとして扱い、
+毎turnの `set_session_model` 再選択はしません。
 daemonのPATHでは `~/.local/bin` をHomebrewより先に置き、壊れたHomebrew
 `cursor-agent` shimを避けます。
 
@@ -104,10 +120,10 @@ daemonのPATHでは `~/.local/bin` をHomebrewより先に置き、壊れたHome
    `mainProviders` はlegacy launcher / worker compatibilityのために残す設定で、main modelの選択、
    `gpt-5.6-luna` などへのhidden bootstrap、またはrequest modelのremapには使いません。
    claudex実行時だけglobal hookでworker向けorchestration contextを追加します。
-2. prompt送信時にCodex/Grok/Sakana/Ollama/OpenCode Goは `codexbar usage --json` を使います。Ollamaの
+2. prompt送信時にCodex/Grok/Sakana/Ollama/OpenCode Go/Claude/Qwen Cloudは
+   `codexbar usage --json` を使います。Ollamaの
    usage取得に失敗した場合はlocal Ollama APIのmodel catalogを確認し、対象modelが存在すれば
-   残量不明の候補として維持します。QwenはQwen Cloudの
-   5時間・7日quotaを取得し、成功時刻から1時間未満はlocal cacheを再利用します。routing結果
+   残量不明の候補として維持します。routing結果
    全体は既定で5分間キャッシュされます。共有daemonの `/health` にあるmodel別
    `model_concurrency` はpromptごとに再取得し、usage cacheには保存しません。health URLは
    `CLAUDEX_DAEMON_HEALTH_URL`、loopback `ANTHROPIC_BASE_URL` のorigin、既定の
@@ -117,10 +133,8 @@ daemonのPATHでは `~/.local/bin` をHomebrewより先に置き、壊れたHome
    同率の場合は5時間（`five-hour`）残量が多い方を優先します。OpenCode Goのmodel別request budgetと
    model別並列上限の余裕も同じ比較に加わり、残量0%（`requestBudget` の5時間窓を使い切ったmodelを
    含む）のproviderは
-   そのturnの候補から外します。`maxConcurrency` に達したmodelも候補から外します。Qwen quota更新に失敗した場合は、
-   Qwen Codeに保存済みのAPI keyを使う非生成の
-   compatible `GET /models` で利用可能性を確認します。利用可能でも残量不明なら、既知の残量を
-   持つproviderの後に置きます。healthを取得できない場合はproviderを起動可能な候補として残し、
+   そのturnの候補から外します。`maxConcurrency` に達したmodelも候補から外します。healthを
+   取得できない場合はproviderを起動可能な候補として残し、
    adapter側のhard limitに最終判定を委ねます。片方のusage sourceが失敗しても別providerは
    無効化しません。
 4. mainまたはworkerがAgent/Taskを起動するたび、そのturnへ注入された
@@ -128,7 +142,7 @@ daemonのPATHでは `~/.local/bin` をHomebrewより先に置き、壊れたHome
    `claude`へのdefaultや親providerの無条件継承は行いません。親のmain modelと同じmodelが
    `selected_workers` に明示されている場合は、outer requestとは独立したSubAgentとして起動します。
    ただし、outer main modelがknownで `sonnet[1m]` / `claude-sonnet-5` の場合は、同じSonnet
-   fallbackを自動選択せず利用量を節約します。`CLAUDEX_MAIN_MODEL_KNOWN=0` のresume/continueでは
+   worker（`claudex-sonnet`）を自動選択せず利用量を節約します。`CLAUDEX_MAIN_MODEL_KNOWN=0` のresume/continueでは
    推測したmodel equalityによるこの抑制を行いません。明示的な
    `claudex_model: claude-sonnet-5` は引き続き起動でき、自動選択を明示的に許可する場合だけ
    `CLAUDEX_ALLOW_SONNET_SUBAGENT=1` を指定します。
@@ -136,9 +150,10 @@ daemonのPATHでは `~/.local/bin` をHomebrewより先に置き、壊れたHome
    `modelPrefixes` が一致するproviderへそのIDをそのまま渡します。ただし、専用設定と
    端末固有の追加設定を統合したdeny listに含まれる完全一致モデルは明示指定でも拒否します。
 6. 自動worker選択で利用可能なcapacity-managed providerがない場合はClaude subscriptionの
-   fallbackを使います。ただしouter sessionがSonnet 5のときは同一modelの `claudex-sonnet`
-   fallbackを自動選択から除外します（明示起動は除外しません）。一方、main requestまたは
-   明示的なworker requestが設定済みprovider modelを指定し、そのproviderを起動できない場合は
+   fallback（`claudex-sonnet`）を使います。`claudex-sonnet` は通常のClaude枠候補としても
+   `nativeWorkers` に入り、空きがあれば他workerと並んで選ばれます。ただしouter sessionが
+   Sonnet 5のときは同一modelの自動選択から除外します（明示起動は除外しません）。一方、main
+   requestまたは明示的なworker requestが設定済みprovider modelを指定し、そのproviderを起動できない場合は
    エラーを返し、Claudeや別providerへ黙って切り替えません。
 7. advisorはworkerの代替ではありません。Claude Code標準の `advisor()` はprovider quotaと
    独立して会話履歴全体を自動参照します。`custom-advisor` もworker capacity /
@@ -198,11 +213,9 @@ Claude subscriptionの子プロセスではこれらのlocal CCR変数を除去�
 fallback providerは受け付けません。
 
 生response、アカウント情報、Cookie、API keyはキャッシュしません。
-`~/.cache/claudex/usage-routing.json` にはrouting結果を5分間、
-`~/.cache/claudex/qwen-quota.json` にはQwenのsanitized utilization、reset時刻、取得日時を
-UTC ISO 8601形式の `fetched_at` として保存します。cache参照のたびにこの日時を読み、取得から
-1時間未満なら再利用し、1時間以上なら更新します。いずれもモード `0600` で保存し、後者に
-認証情報は含まれません。
+`~/.cache/claudex/usage-routing.json` にはrouting結果を5分間保存します（モード `0600`）。
+Qwen Cloudを含むCodexBar枠の残量は `codexbar usage --json` から都度取得し、別途の
+`qwen-quota.json` / `tmp/curl.txt` 経路は使いません。
 
 ### SubAgentとcustom-advisorの再利用
 
@@ -261,21 +274,8 @@ brew install --cask claude-code codex codexbar
   timeout後に残るhook processを防ぎます。
 - Qwen Codeは `bun add -g @qwen-code/qwen-code` など公式手順でインストールし、`qwen` の
   `/auth` からToken Planを設定します。API keyはclaudexへ重複設定せず、Qwen Code自身の
-  設定を `qwen --acp --approval-mode yolo --model MODEL` が再利用します。
-
-Qwen Cloudのremaining取得には、Chrome DevToolsのNetworkでToken Plan usage requestを
-「Copy as cURL (bash)」し、repository localの `tmp/curl.txt` に保存します。このファイルは
-login Cookieを含むためgit管理せず、ownerだけが読めるようにします。
-
-```sh
-chmod 600 tmp/curl.txt
-```
-
-別の場所へ保存する場合は `CLAUDEX_QWEN_QUOTA_CURL_FILE` に絶対pathを指定します。Cookieが
-期限切れになった場合は新しいCopy-as-cURLで置き換えます。更新に失敗してもQwen Codeの
-`~/.qwen/settings.json` にあるcompatible API設定でavailabilityを確認するため、routing全体は
-継続します。Copy-as-cURLをshellとして実行することはなく、許可したQwen endpoint、Cookie、
-form dataだけを解析してshellを介さずrequestを再構成します。
+  設定を `qwen --acp --approval-mode yolo --model MODEL` が再利用します。残量はCodexBarの
+  `qwencloud` provider（`usageProvider: "qwencloud"`）から取得します。
 
 インストールと認証を確認します。
 
@@ -289,8 +289,8 @@ codexbar usage --json | jq '[.[] | {provider, has_usage: (.usage != null)}]'
 claudex-route-usage --no-cache | jq .
 ```
 
-CodexBarの出力に `codex` と `grok` が含まれ、それぞれ `has_usage: true` になることを
-確認してください。片方だけ使う場合は、後述の設定で不要なproviderを無効化できます。
+CodexBarの出力に `codex`、`grok`、`qwencloud` などが含まれ、それぞれ `has_usage: true`
+になることを確認してください。片方だけ使う場合は、後述の設定で不要なproviderを無効化できます。
 
 ### 2. dotfilesとClaude Code定義を配置
 
@@ -484,7 +484,7 @@ minimumやmodel familyを満たせない場合は、provider quota、denylist、
 | 用途 | 設定場所 | 備考 |
 | --- | --- | --- |
 | 素の `claude` | `~/.claude/settings.json` の `model` / `effortLevel` | native Claude model のみ |
-| `claudex` | `~/.config/claudex/defaults.local.json`（`source: explicit`）または settings 継承 | external provider 可 |
+| `claudex` | `~/.config/claudex/defaults.$(hostname -s).local.json` または `defaults.local.json`（Git 管理外） | external provider 可。省略時は settings 継承 |
 | `claudex` 実行時の Claude Code 設定 | `CLAUDE_CONFIG_DIR=~/.config/claudex/claude-config` | `/model` の永続化もここ。共有 `~/.claude` へは書かない |
 
 起動時に `prepare-claude-config.py` が agents / sessions / history / hooks などを
@@ -504,25 +504,51 @@ authorityとし、現在または過去のsettings modelをfallbackとして推�
 equalityを前提にしたworker抑制も行いません。`CLAUDEX_MODEL` を明示した場合だけ、その指定modelを
 knownなmain modelとして同じmodelの抑制判断に利用できます。
 
-頻繁に切り替える値は、Git 管理外の `~/.config/claudex/defaults.local.json` に保存できます。
-このファイルは `.config/claudex/.gitignore` で除外され、JSON 以外の内容は実行しません。
-`source` は `settings`（省略時の既定）または `explicit` を指定します。
+頻繁に切り替える値は、Git 管理外の端末別ファイルに保存します。
+
+- 優先: `~/.config/claudex/defaults.$(hostname -s).local.json`
+- 次点: `~/.config/claudex/defaults.local.json`
+- 雛形: `~/.config/claudex/defaults.example.json`
+- Git 除外: `.config/claudex/.gitignore`
+
+このファイルは JSON 以外の内容を実行しません。ファイルがある場合の `source` 省略時は
+`explicit` です（`model` / `effort` がそのまま outer session に効く）。
 
 ```json
 {
   "version": 1,
   "source": "explicit",
-  "model": "gpt-5.6-luna",
-  "effort": "max"
+  "model": "fugu",
+  "effort": "high"
 }
 ```
 
-`explicit` では `model` / `effort` を outer session に渡し、`settings` では両値を
-`~/.claude/settings.json` から読み取って `--inherit-claude-model` で起動します。設定ファイルの
-`source` が不正、JSON が壊れている、または settings に必要な値がない場合は、別のモデルへ
-黙って切り替えず `claudex` を終了します。`CLAUDEX_DEFAULTS_SOURCE=explicit claudex` のような
-一時指定も可能です。既存の `CLAUDEX_MODEL` は explicit mode を選び、`CLAUDEX_EFFORT` は
-model と独立して effort を上書きします。
+`source: "settings"` では共有の `~/.claude/settings.json` を土台にしつつ、同じローカル
+ファイルの `model` / `effort` があれば端末ごとに上書きします。片方だけ書いても構いません。
+
+```json
+{
+  "version": 1,
+  "source": "settings",
+  "model": "fugu",
+  "effort": "high"
+}
+```
+
+```fish
+cp ~/.config/claudex/defaults.example.json \
+  ~/.config/claudex/defaults.(hostname -s).local.json
+# 必要なら model / effort を編集してから
+claudex
+```
+
+`explicit` ではローカルの `model` / `effort` を outer session に渡し、`settings` では共有
+settings を読んでからローカル上書きを適用し、`--inherit-claude-model` で起動します（isolated
+`CLAUDE_CONFIG_DIR` へ seed）。設定ファイルの `source` が不正、JSON が壊れている、または
+settings に必要な値がない場合は、別のモデルへ黙って切り替えず `claudex` を終了します。
+`CLAUDEX_DEFAULTS_SOURCE=explicit claudex` のような一時指定も可能です。既存の `CLAUDEX_MODEL`
+は explicit mode を選び、`CLAUDEX_EFFORT` は model と独立して effort を上書きします。
+`CLAUDEX_DEFAULTS_CONFIG` で別パスを直接指定することもできます。
 
 SubAgentへの委譲はsubstantiveな調査・実装・レビューに対する既定動作なので、promptごとに
 繰り返し指定する必要はありません。Claude Codeの `N queued` はmain conversationの次turnへ
@@ -580,18 +606,32 @@ workerへ暗黙転送しません。cross-provider workはmain orchestrationが 
 
 ### SubAgentモデルを禁止
 
-provider設定とは分離した `~/.config/claudex/disabled-subagent-models.json` に、常に禁止する
-完全一致モデルを定義します。現在は常設の禁止モデルはありません。
+provider設定とは分離した denylist で、常に禁止する完全一致モデルを定義します。共有の追跡
+ファイルは空の baseline で、端末ごとの禁止リストは Git 管理外に置きます。
+
+- 優先: `~/.config/claudex/disabled-subagent-models.$(hostname -s).local.json`
+- 次点: `~/.config/claudex/disabled-subagent-models.local.json`
+- 共有 baseline: `~/.config/claudex/disabled-subagent-models.json`（tracked、既定は空）
+- 雛形: `~/.config/claudex/disabled-subagent-models.example.json`
+- Git 除外: `.config/claudex/.gitignore`
 
 ```json
 {
   "version": 1,
-  "disabledModels": []
+  "disabledModels": [
+    "opencode-go/deepseek-v4-flash",
+    "qwen3.8-max-preview"
+  ]
 }
 ```
 
-main sessionのモデルと標準advisorには影響しません。端末ごとに別の専用ファイルを使う場合や、
-その端末だけ禁止モデルを追加する場合は次のように指定します。
+```fish
+cp ~/.config/claudex/disabled-subagent-models.example.json \
+  ~/.config/claudex/disabled-subagent-models.(hostname -s).local.json
+```
+
+main sessionのモデルと標準advisorには影響しません。一時的に別ファイルや追加禁止を使う場合は
+次のように指定します。
 
 ```fish
 # この端末だけ別の専用ファイルを参照
@@ -765,11 +805,12 @@ model routeにも同じ値を継承します。共有daemonは `/health` の `mo
 
 OpenCode Goの利用枠は並列数ではなくrequest budgetとして別に扱います。`requestBudget` は
 CodexBarの `opencodego` usageにある指定window（現在のPro設定は `primary`、300分）の
-`usedPercent` を、OpenCode Goが公開するFlashの「5時間あたり推定31,650リクエスト」に換算します。
+`usedPercent` を、OpenCode Goが公開するmodel別推定リクエスト数に換算します
+（DeepSeek Proは5時間あたり推定3,450、Flashは31,650。DeepSeek workerの既定はPro）。
 出力の `request_budget` には窓、リセット時刻、推定使用件数、推定残件数を含め、窓が欠落・不一致・
 不明な場合は候補から除外します。これはOpenCode Goの使用量制御であり、DeepSeek APIのレート制限や
 adapterの同時実行制御とは別です。根拠は[OpenCode Go公式の利用枠](https://dev.opencode.ai/docs/go/)
-（Flashの推定31,650リクエスト/5時間）です。
+です。
 healthが一時的に読めない場合も起動候補は維持されますが、
 adapter自身が上限を強制するため超過実行は許可されません。
 
@@ -809,9 +850,8 @@ Rustコードを変更せず、`configured-acp` providerを追加できます。
 IDを受理しないproviderではfrontmatterを `model: inherit` にし、呼び出し時の
 `claudex_model` で固定します。利用率をCodexBarで管理するproviderには `usageProvider` を
 追加します。必要ならmodel別上限としてpositive integerの `maxConcurrency` も追加します。
-Qwen Cloud quotaを使うproviderは `usageProvider: "qwen"` とします。quota更新に
-失敗した場合は `defaultModel` と一致するQwen Codeのcompatible API設定をavailability確認に
-使います。省略したproviderは常に利用可能なunmetered providerとして扱われます。
+Qwen Cloud quotaを使うproviderは `usageProvider: "qwencloud"` とします（CodexBarの
+provider名と一致）。省略したproviderは常に利用可能なunmetered providerとして扱われます。
 
 ## 更新
 
@@ -888,15 +928,12 @@ Claudexをdotfiles repository以外から使うには、AgentとSkillがproject-
 
 ```sh
 codexbar usage --json | jq '[.[] | {provider, usage}]'
-stat -f '%Sp %N' tmp/curl.txt
 env CLAUDEX_USAGE_CACHE_SECONDS=0 \
   claudex-route-usage \
   | jq .
 ```
 
-`qwen-quota.json` の取得時刻から1時間以上経過していればQwen quotaを更新します。更新に
-失敗してもcompatible APIが利用可能ならQwenを残量不明として候補に残します。providerが
-存在しない、quota windowが100%、またはusageとavailabilityの両方を確認できない場合は、その
+providerが存在しない、quota windowが100%、またはusageを確認できない場合は、その
 providerを自動worker候補から外します。全候補が利用不可の場合だけworker fallbackを選びます。
 main requestの実modelが設定済みproviderを指定している場合、そのproviderが利用不可ならエラーにし、
 fallbackや別providerへ黙って切り替えません。
