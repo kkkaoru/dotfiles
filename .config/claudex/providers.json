@@ -126,6 +126,54 @@
           "acp"
         ]
       }
+    },
+    {
+      "id": "opencode-go-luna",
+      "agent": "claudex-opencode-gpt",
+      "defaultModel": "opencode-go/gpt-5.6-luna",
+      "subagentModel": "opencode-go/gpt-5.6-luna",
+      "effort": "max",
+      "enabled": true,
+      "usageProvider": "opencodego",
+      "requestBudget": {
+        "estimatedRequests": 31650,
+        "windowMinutes": 300,
+        "usageWindow": "primary"
+      },
+      "modelPrefixes": [
+        "opencode-go/gpt-5.6-luna"
+      ],
+      "backend": "configured-acp",
+      "webSearchMode": "delegate-mcp",
+      "acp": {
+        "program": "opencode",
+        "arguments": [
+          "acp"
+        ]
+      }
+    },
+    {
+      "id": "cursor",
+      "agent": "claudex-cursor",
+      "defaultModel": "auto",
+      "subagentModel": "auto",
+      "effort": "high",
+      "enabled": true,
+      "usageProvider": "cursor",
+      "modelPrefixes": [
+        "auto"
+      ],
+      "backend": "configured-acp",
+      "webSearchMode": "acp-native",
+      "acp": {
+        "program": "cursor-agent",
+        "arguments": [
+          "--model",
+          "{model}",
+          "--yolo",
+          "acp"
+        ]
+      }
     }
   ],
   "fallback": {
@@ -137,7 +185,8 @@
     {
       "agent": "claudex-haiku-search",
       "model": "claude-haiku-4-5",
-      "effort": "max"
+      "effort": "max",
+      "usageProvider": "claude"
     }
   ],
   "webSearch": {

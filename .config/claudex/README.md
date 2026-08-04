@@ -44,6 +44,8 @@ flowchart LR
 | Grok worker | `claudex-grok` | `grok-4.5` | `high` | Grokに空きがある場合 |
 | Qwen worker | `claudex-qwen` | `qwen3.8-max-preview` | `high` | Qwen providerが利用可能で、モデル同時実行数の上限内の場合 |
 | DeepSeek worker | `claudex-deepseek` | `opencode-go/deepseek-v4-flash` | `max` | CodexBarのOpenCode Go枠に空きがある場合 |
+| OpenCode GPT Luna worker | `claudex-opencode-gpt` | `opencode-go/gpt-5.6-luna` | `max` | CodexBarのOpenCode Go枠に空きがある場合。Codexの `gpt-5.6-luna` / `claudex-gpt` とは別route |
+| Cursor worker | `claudex-cursor` | `auto` | `high` | CodexBarのCursor枠に空きがある場合。`cursor-agent --model auto --yolo acp` |
 | Fallback | `claudex-sonnet` | `claude-sonnet-5` | `high` | 自動worker選択で利用可能なcapacity-managed providerがない場合 |
 | Built-in advisor | Claude Code標準 `advisor()` | `opus` | Claude Code標準 | 標準advisor policyに従う。provider capacity非依存 |
 | Custom advisor | `custom-advisor` | `claude-fable-5` | `xhigh` | 明示指定時、または複雑・曖昧・高リスク・長期・停滞時。worker capacityとは別管理の論理 session singleton（hard process=1ではない） |
@@ -82,12 +84,18 @@ effortの `high` です。適用されないrequest-level effortをturn固有値
 Qwen ACPは `--approval-mode yolo` を明示し、provider自身の
 approval待機やauto classifierがSubAgentの権限を狭めないようにします。OpenCode Go ACPは
 `opencode acp` を起動し、モデルは adapter の `session/new` meta `modelId` で渡します
-（CLIの `--model` は `acp` サブコマンドでは受け付けません）。既定モデルは
-`opencode-go/deepseek-v4-flash` です。OpenCode内で実行されるprovider-owned toolはClaude側で
-再実行しないようAnthropic `tool_use`へ変換せず、実行中だけthinkingの進捗として扱います。
+（CLIの `--model` は `acp` サブコマンドでは受け付けません）。既定のDeepSeek workerは
+`opencode-go/deepseek-v4-flash`、GPT Luna workerは `opencode-go/gpt-5.6-luna`（effort
+`max`）です。後者はCodex app-serverの `gpt-5.6-luna` とmodel ID prefixで区別します。
+OpenCode内で実行されるprovider-owned toolはClaude側で再実行しないようAnthropic
+`tool_use`へ変換せず、実行中だけthinkingの進捗として扱います。
 このためClaude Codeの完了結果ではtool数が0に見える場合がありますが、OpenCode側では実行済みです。
-DeepSeek workerは独立した調査をまとめて実行し、確定済みの判断を反復せず、長い処理のフェーズ間で
-短い進捗を返すよう定義しています。
+DeepSeek / OpenCode GPT Luna workerは独立した調査をまとめて実行し、確定済みの判断を反復せず、
+長い処理のフェーズ間で短い進捗を返すよう定義しています。
+Cursor ACPは `cursor-agent --model {model} --yolo acp` を起動し、既定modelは `auto` です。
+`--yolo` はCursor CLIの `--force` 別名で、main sessionの無確認実行と同等のtool権限にします。
+daemonのPATHでは `~/.local/bin` をHomebrewより先に置き、壊れたHomebrew
+`cursor-agent` shimを避けます。
 
 ## ルーティング
 
@@ -104,8 +112,11 @@ DeepSeek workerは独立した調査をまとめて実行し、確定済みの�
    `model_concurrency` はpromptごとに再取得し、usage cacheには保存しません。health URLは
    `CLAUDEX_DAEMON_HEALTH_URL`、loopback `ANTHROPIC_BASE_URL` のorigin、既定の
    `http://127.0.0.1:8318/health` の順に解決します。
-3. 各providerをquota window、OpenCode Goのmodel別request budget、model別並列上限のうち、
-   より厳しい使用率が低い順に並べます。`requestBudget` の5時間窓を使い切ったmodelは
+3. 各providerを7日（weekly）quota残量が多い順に並べます。quota windowを持つproviderは
+   `seven-day` windowの残量を、windowを持たないproviderは集約使用率の残量を使います。weekly残量が
+   同率の場合は5時間（`five-hour`）残量が多い方を優先します。OpenCode Goのmodel別request budgetと
+   model別並列上限の余裕も同じ比較に加わり、残量0%（`requestBudget` の5時間窓を使い切ったmodelを
+   含む）のproviderは
    そのturnの候補から外します。`maxConcurrency` に達したmodelも候補から外します。Qwen quota更新に失敗した場合は、
    Qwen Codeに保存済みのAPI keyを使う非生成の
    compatible `GET /models` で利用可能性を確認します。利用可能でも残量不明なら、既知の残量を
@@ -275,7 +286,7 @@ codex --version
 grok --version
 qwen --version
 codexbar usage --json | jq '[.[] | {provider, has_usage: (.usage != null)}]'
-python3 .claude/skills/claudex-routing/scripts/route_usage.py --no-cache | jq .
+claudex-route-usage --no-cache | jq .
 ```
 
 CodexBarの出力に `codex` と `grok` が含まれ、それぞれ `has_usage: true` になることを
@@ -394,6 +405,63 @@ scopeが5件でも利用可能slotと上限を超えて起動しません。各s
 中断済みのキーを再起動しません。worker完了後に空きslotを自動補充することもせず、未処理で新しい
 キーを持つscopeが既に分解済みの場合だけ起動します。これはcustom-advisorには適用せず、custom-advisor
 は独立した論理session singletonとして必要時に再利用します。
+
+#### RAM圧力に応じた動的なSubAgent管理
+
+routing hookは各呼び出しでmacOSのメモリ状況（free + inactive + speculativeページの合計を
+`hw.memsize` で割った利用可能率）を1回だけサンプリングし、`orchestration` の
+`max_parallel_workers` を動的に引き下げます。RAMが枯渇してmacOSがアプリケーションを終了させる
+事態を防ぐため、上限は縮める方向にしか作用せず、`reuse_compatible_workers` はhigh/critical
+圧力下で強制的に有効化されます（再利用を促して新規起動を減らす）。
+
+| 利用可能率（既定） | 圧力レベル | 動的上限 |
+| ---: | --- | ---: |
+| 10%未満 | critical | 1 |
+| 10–20% | high | 2 |
+| 20–30% | medium | 4 |
+| 30–40% | moderate | 8 |
+| 40%以上 | ok | 制限なし |
+
+| 環境変数 | 既定値 | 役割 |
+| --- | ---: | --- |
+| `CLAUDEX_MEMORY_MANAGEMENT` | `1` | `0`/`false`/`off` でメモリ管理を無効化 |
+| `CLAUDEX_MEMORY_AVAILABLE_PCT_CRITICAL` | `10` | critical閾値（%）。昇順であること |
+| `CLAUDEX_MEMORY_AVAILABLE_PCT_LOW` | `20` | high閾値（%） |
+| `CLAUDEX_MEMORY_AVAILABLE_PCT_MEDIUM` | `30` | medium閾値（%） |
+| `CLAUDEX_MEMORY_AVAILABLE_PCT_MODERATE` | `40` | moderate閾値（%） |
+
+hook出力の `orchestration.memory_management` に `status`、`pressure_level`、`available_percent`、
+`configured_max_parallel_workers`、`effective_max_parallel_workers`、`management_active`、
+`reuse_required` が入ります。プローブ失敗時は `status: unavailable` となり、メモリチェックで
+routingを止めません。このスナップショットは5分キャッシュとは独立で、毎回の実測です。
+
+#### codexbar使用量による動的なmodel選択
+
+`selected_workers` は7日（weekly）quota残量が多い順で並びます。quota windowを持つproviderは
+`seven-day` windowの残量を、windowを持たないproviderは集約使用率の残量を使い、weekly同率なら
+`five-hour` windowの残量が多い方を優先します（model別concurrencyの余裕も同じ比較に加わります）。
+hook出力の `worker_capacity` リストはこの優先順を
+保持し、各workerの `used_percent` / `remaining_percent` / `weekly_remaining_percent` /
+`five_hour_remaining_percent` を公開するため、subagentで起動する
+modelの選択が実行時に動的に決まっていることが確認できます。残量0%のproviderは候補から除外され、
+unknown/unmeteredは `null` になり、既知の空き容量があるmodelより優先されません。
+
+`claudex_model` を指定せずに起動するSubAgent（特にClaude Code組み込みの `general-purpose` type）は、
+本来このランキングを素通りしてadapterへ `native_model=None` で到達し、recoverableなrouteを持ちません。
+hook出力の `default_subagent_route` はトップランクのworker（`selected_workers[0]`、weekly残量が最も多い
+model）を明示するため、こうした起動も除外されず動的な勝者へ解決されます。`agent` / `model` / `effort` に
+加えて `applies_to_subagent_types: ["general-purpose"]` と `applies_when_claudex_model_omitted: true` を
+持ち、選択可能なworkerが1つも無い場合のみ `null` になります。
+
+#### subagentセッションへのrouting context注入
+
+Claude Codeは `UserPromptSubmit` の `additionalContext` をmain sessionにしか注入しないため、
+`claudex-route-usage` は `SubagentStart` hook（`--event SubagentStart`）でも同じバイナリを実行します。
+`SubagentStart` の `additionalContext` はsubagentの会話開始前にそのセッションへ入るため、
+各routed workerは自分のネストしたAgent/Task起動用に同じsanitized context
+（`selected_workers`、`disabled_subagent_models`、メモリ方針、`worker_capacity`）を読み込めます。
+使用量は5分キャッシュを使うためspawnごとの追加コストは小さく、denylistはadapterがAPI境界で
+常に強制します（workerが見える見えないに関わらず）。
 
 minimumやmodel familyを満たせない場合は、provider quota、denylist、model別concurrency、または
 ユーザーの明示的な単一worker指定という具体的な理由をrouting summaryへ残します。制限を黙って
@@ -761,13 +829,15 @@ cargo coverage-branch
 ### Routing hook
 
 ```sh
-cd .claude/skills/claudex-routing
-uv run tests/run_coverage.py
-python3 scripts/route_usage.py --no-cache \
+cd tools/claudex-route-usage
+cargo test
+cargo build --release
+claudex-route-usage --no-cache \
   | jq -e '.hookSpecificOutput.hookEventName == "UserPromptSubmit"'
 ```
 
-Routing hookのstatement coverageとbranch coverageは、どちらも95%以上を必須とします。
+Routing hook は Rust crate `tools/claudex-route-usage` です。変更後は `cargo test` と
+`cargo install --path tools/claudex-route-usage` で `~/.cargo/bin/claudex-route-usage` を更新します。
 
 ## トラブルシューティング
 
@@ -796,7 +866,7 @@ Claudexをdotfiles repository以外から使うには、AgentとSkillがproject-
 codexbar usage --json | jq '[.[] | {provider, usage}]'
 stat -f '%Sp %N' tmp/curl.txt
 env CLAUDEX_USAGE_CACHE_SECONDS=0 \
-  python3 "$HOME/.claude/skills/claudex-routing/scripts/route_usage.py" \
+  claudex-route-usage \
   | jq .
 ```
 
