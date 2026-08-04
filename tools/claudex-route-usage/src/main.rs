@@ -31,7 +31,7 @@ impl HookEvent {
 }
 
 #[derive(Debug, Parser)]
-#[command(about = "Emit sanitized routing context from Codexbar and Qwen Cloud quota")]
+#[command(about = "Emit sanitized routing context from Codexbar usage")]
 struct Arguments {
     #[arg(long)]
     config: Option<PathBuf>,
@@ -119,6 +119,56 @@ fn disabled_models(arguments: &Arguments, paths: &config::Paths) -> Result<BTree
     Ok(models)
 }
 
+/// Load the usage report from `--input` or by probing every provider.
+fn usage_report(
+    arguments: &Arguments,
+    config: &config::Config,
+    paths: &config::Paths,
+    now: f64,
+    disabled: &BTreeSet<String>,
+) -> Result<Value> {
+    let Some(path) = &arguments.input else {
+        return Ok(Value::Array(collect::collect_usage(
+            config,
+            &arguments.codexbar_program,
+            &arguments.curl_program,
+            paths,
+            now,
+            disabled,
+        )));
+    };
+    Ok(serde_json::from_str::<Value>(&std::fs::read_to_string(
+        path,
+    )?)?)
+}
+
+/// Build a fresh routing summary, caching it when a TTL is configured.
+fn build_summary(
+    arguments: &Arguments,
+    config: &config::Config,
+    paths: &config::Paths,
+    disabled: &BTreeSet<String>,
+    cache: &CacheKey<'_>,
+) -> Result<Value> {
+    let built = usage_report(arguments, config, paths, cache.now, disabled)
+        .and_then(|report| routing::summary::routing_summary(&report, config, disabled));
+    let Ok(built) = built else {
+        return routing::summary::fallback_summary("usage-unavailable", config, disabled);
+    };
+    if cache.ttl > 0 {
+        util::write_routing_cache(cache.path, &built, cache.now, cache.key)?;
+    }
+    Ok(built)
+}
+
+/// Where and how long a built routing summary may be cached.
+struct CacheKey<'a> {
+    path: &'a std::path::Path,
+    now: f64,
+    ttl: i64,
+    key: &'a str,
+}
+
 fn run() -> Result<()> {
     let arguments = Arguments::parse();
     if block_internal_notification_from_hook()? {
@@ -134,7 +184,8 @@ fn run() -> Result<()> {
     })?;
     let disabled =
         disabled_models(&arguments, &paths).context("claudex routing configuration error")?;
-    routing::orchestration_settings().context("claudex routing configuration error")?;
+    routing::orchestration::orchestration_settings()
+        .context("claudex routing configuration error")?;
     let now = now_seconds()?;
     let key = config::configuration_key(&config.raw, &disabled);
     let ttl = if arguments.no_cache || arguments.input.is_some() {
@@ -143,38 +194,24 @@ fn run() -> Result<()> {
         util::cache_seconds()
     };
     let cache_path = paths.home.join(".cache/claudex/usage-routing.json");
-    let qwen_cache = paths.home.join(".cache/claudex/qwen-quota.json");
-    let mut summary = util::read_routing_cache(&cache_path, now, ttl, &key)
-        .filter(|value| !collect::qwen_quota_refresh_due(value, &config, &qwen_cache, now));
-    if summary.is_none() {
-        let built = match (|| -> Result<Value> {
-            let report = if let Some(path) = &arguments.input {
-                serde_json::from_str::<Value>(&std::fs::read_to_string(path)?)?
-            } else {
-                Value::Array(collect::collect_usage(
-                    &config,
-                    &arguments.codexbar_program,
-                    &arguments.curl_program,
-                    &paths,
-                    now,
-                    &disabled,
-                ))
-            };
-            routing::routing_summary(&report, &config, &disabled)
-        })() {
-            Ok(built) => {
-                if ttl > 0 {
-                    util::write_routing_cache(&cache_path, &built, now, &key)?;
-                }
-                built
-            }
-            Err(_) => routing::fallback_summary("usage-unavailable", &config, &disabled)?,
-        };
-        summary = Some(built);
-    }
-    let mut summary = summary.ok_or_else(|| anyhow::anyhow!("routing summary unavailable"))?;
+    let cache = CacheKey {
+        path: &cache_path,
+        now,
+        ttl,
+        key: &key,
+    };
+    let cached = util::read_routing_cache(&cache_path, now, ttl, &key);
+    let mut summary = match cached {
+        Some(summary) => summary,
+        None => build_summary(&arguments, &config, &paths, &disabled, &cache)?,
+    };
     let health = collect::run_daemon_health(&arguments.curl_program);
-    summary = routing::apply_model_concurrency(summary, &config, health.as_ref(), &disabled)?;
+    summary = routing::concurrency::apply_model_concurrency(
+        summary,
+        &config,
+        health.as_ref(),
+        &disabled,
+    )?;
     let main_model = env::var("CLAUDEX_MAIN_MODEL")
         .ok()
         .filter(|value| !value.is_empty())
@@ -185,7 +222,7 @@ fn run() -> Result<()> {
         });
     let main_known = util::boolean_env("CLAUDEX_MAIN_MODEL_KNOWN", main_model.is_some())?;
     let allow_sonnet = util::boolean_env("CLAUDEX_ALLOW_SONNET_SUBAGENT", false)?;
-    summary = routing::enforce_worker_model_separation(
+    summary = routing::workers::enforce_worker_model_separation(
         summary,
         main_model.as_deref(),
         main_known,

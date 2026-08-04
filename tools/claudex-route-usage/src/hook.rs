@@ -1,36 +1,36 @@
 //! Claude Code hook payload wrapping for routing summaries.
 
 use crate::config::default_advisor;
-use crate::routing::{
-    CUSTOM_ADVISOR_CONSULT_WHEN, custom_advisor_enabled, default_subagent_route,
+use crate::routing::orchestration::{
     effective_orchestration_settings, memory_management_contract, orchestration_contract,
-    ranked_worker_metadata, worker_capacity_metadata,
 };
+use crate::routing::workers::{
+    default_subagent_route, ranked_worker_metadata, worker_capacity_metadata,
+};
+use crate::routing::{CUSTOM_ADVISOR_CONSULT_WHEN, custom_advisor_enabled};
+use crate::util::copied_fields;
 use anyhow::Result;
-use serde_json::{Map, Value};
+use serde_json::Value;
+
+/// Keep only the routing fields a worker launch needs.
+fn slim_worker(worker: &Value) -> Option<Value> {
+    let object = worker.as_object()?;
+    Some(Value::Object(copied_fields(
+        object,
+        &["agent", "model", "effort"],
+    )))
+}
 
 pub fn hook_output(summary: &Value, event_name: &str) -> Result<Value> {
     if event_name != "UserPromptSubmit" && event_name != "SubagentStart" {
         anyhow::bail!("hook event must be UserPromptSubmit or SubagentStart");
     }
     let advisor_enabled = custom_advisor_enabled();
-    let selected_workers = summary
+    let selected_workers: Vec<Value> = summary
         .get("selected_workers")
         .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|worker| {
-            let object = worker.as_object()?;
-            let mut slim = Map::new();
-            for key in ["agent", "model", "effort"] {
-                if let Some(value) = object.get(key) {
-                    slim.insert(key.to_owned(), value.clone());
-                }
-            }
-            Some(Value::Object(slim))
-        })
-        .collect::<Vec<_>>();
+        .map(|workers| workers.iter().filter_map(slim_worker).collect())
+        .unwrap_or_default();
     let metadata = serde_json::json!({
         "providers": {},
         "source": "claudex-routing-local-hook",

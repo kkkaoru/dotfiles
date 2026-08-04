@@ -1,7 +1,6 @@
 //! Small shared helpers: env parsing, rounding, cache IO, and time formatting.
 
 use anyhow::{Result, bail};
-use chrono::{SecondsFormat, TimeZone, Utc};
 use serde_json::{Map, Value};
 use std::io::Write as _;
 use std::path::Path;
@@ -88,6 +87,17 @@ pub fn python_round(value: f64, ndigits: i32) -> f64 {
     (value * factor).round() / factor
 }
 
+/// Copy the requested keys, when present, into a fresh object.
+pub fn copied_fields(source: &Map<String, Value>, keys: &[&str]) -> Map<String, Value> {
+    let mut target = Map::new();
+    for key in keys {
+        if let Some(value) = source.get(*key) {
+            target.insert((*key).to_owned(), value.clone());
+        }
+    }
+    target
+}
+
 pub fn model_family(model: &str) -> String {
     let mut current = model;
     for separator in ['/', '-', '_', '.'] {
@@ -106,26 +116,16 @@ pub fn is_sonnet_model(model: Option<&str>) -> bool {
     )
 }
 
-/// Format a Unix timestamp as an explicit UTC ISO-8601 acquisition time.
-pub fn format_utc_datetime(timestamp: f64) -> String {
-    let seconds = timestamp.trunc() as i64;
-    let nanos = ((timestamp - timestamp.trunc()) * 1_000_000_000.0).round() as u32;
-    Utc.timestamp_opt(seconds, nanos)
-        .single()
-        .map(|dt| dt.to_rfc3339_opts(SecondsFormat::Micros, true))
-        .unwrap_or_default()
-}
-
-/// Parse the UTC ISO-8601 acquisition time stored in the quota cache.
+/// Parse a UTC ISO-8601 timestamp (for example CodexBar `resetsAt`).
 pub fn parse_utc_datetime(value: &Value) -> Result<f64> {
     let Some(text) = value.as_str() else {
-        bail!("Qwen quota cache has an invalid acquisition time");
+        bail!("timestamp must be a UTC ISO-8601 string");
     };
     let Some(stripped) = text.strip_suffix('Z') else {
-        bail!("Qwen quota cache has an invalid acquisition time");
+        bail!("timestamp must be a UTC ISO-8601 string");
     };
     let parsed = chrono::DateTime::parse_from_rfc3339(&format!("{stripped}+00:00"))
-        .map_err(|_| anyhow::anyhow!("Qwen quota cache has an invalid acquisition time"))?;
+        .map_err(|_| anyhow::anyhow!("timestamp must be a UTC ISO-8601 string"))?;
     let seconds = parsed.timestamp() as f64;
     let subsec = f64::from(parsed.timestamp_subsec_nanos()) / 1_000_000_000.0;
     Ok(seconds + subsec)

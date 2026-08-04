@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-pub const OPENCODE_GO_DEFAULT_MODEL: &str = "opencode-go/deepseek-v4-flash";
+pub const OPENCODE_GO_DEFAULT_MODEL: &str = "opencode-go/deepseek-v4-pro";
 pub const OPENCODE_GO_DEFAULT_USAGE_PROVIDER: &str = "opencodego";
 /// Bump when worker-selection semantics change so a cached context cannot
 /// retain the old ordering or exclusion rules for the routing-cache TTL.
@@ -101,9 +101,19 @@ pub fn disabled_models_path(requested: Option<&Path>, paths: &Paths) -> Result<P
         }
         return Ok(expand_user(&configured, &paths.home));
     }
-    let installed = paths
-        .home
-        .join(".config/claudex/disabled-subagent-models.json");
+    let config_dir = paths.home.join(".config/claudex");
+    if let Some(hostname) = short_hostname() {
+        let hostname_local =
+            config_dir.join(format!("disabled-subagent-models.{hostname}.local.json"));
+        if hostname_local.is_file() {
+            return Ok(hostname_local);
+        }
+    }
+    let shared_local = config_dir.join("disabled-subagent-models.local.json");
+    if shared_local.is_file() {
+        return Ok(shared_local);
+    }
+    let installed = config_dir.join("disabled-subagent-models.json");
     if installed.is_file() {
         Ok(installed)
     } else {
@@ -111,6 +121,19 @@ pub fn disabled_models_path(requested: Option<&Path>, paths: &Paths) -> Result<P
             .repository_root
             .join(".config/claudex/disabled-subagent-models.json"))
     }
+}
+
+fn short_hostname() -> Option<String> {
+    let output = std::process::Command::new("hostname")
+        .arg("-s")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let name = String::from_utf8(output.stdout).ok()?;
+    let name = name.trim();
+    (!name.is_empty()).then(|| name.to_owned())
 }
 
 /// The validated, normalized routing configuration.
@@ -192,21 +215,28 @@ fn valid_provider(provider: &Value) -> bool {
         }
     }
     match object.get("requestBudget") {
-        None | Some(Value::Null) => true,
+        None | Some(Value::Null) => {}
         Some(budget) => {
             let default_model = object
                 .get("defaultModel")
                 .and_then(Value::as_str)
                 .unwrap_or("");
-            (default_model == OPENCODE_GO_DEFAULT_MODEL
+            if !(default_model == OPENCODE_GO_DEFAULT_MODEL
                 || default_model.starts_with("opencode-go/"))
-                && object
+                || !object
                     .get("usageProvider")
                     .and_then(Value::as_str)
                     .unwrap_or("")
                     .eq_ignore_ascii_case(OPENCODE_GO_DEFAULT_USAGE_PROVIDER)
-                && valid_request_budget(budget)
+                || !valid_request_budget(budget)
+            {
+                return false;
+            }
         }
+    }
+    match object.get("usageWeeklyWindowId") {
+        None | Some(Value::Null) => true,
+        Some(value) => value.as_str().is_some_and(|text| !text.is_empty()),
     }
 }
 
@@ -386,30 +416,34 @@ fn util_canonical(value: &Value) -> String {
 
 fn write_canonical(value: &Value, out: &mut String) {
     match value {
-        Value::Object(map) => {
-            out.push('{');
-            let mut keys: Vec<&String> = map.keys().collect();
-            keys.sort();
-            for (index, key) in keys.iter().enumerate() {
-                if index > 0 {
-                    out.push(',');
-                }
-                out.push_str(&serde_json::to_string(key).unwrap_or_default());
-                out.push(':');
-                write_canonical(&map[*key], out);
-            }
-            out.push('}');
-        }
-        Value::Array(items) => {
-            out.push('[');
-            for (index, item) in items.iter().enumerate() {
-                if index > 0 {
-                    out.push(',');
-                }
-                write_canonical(item, out);
-            }
-            out.push(']');
-        }
+        Value::Object(map) => write_canonical_object(map, out),
+        Value::Array(items) => write_canonical_array(items, out),
         other => out.push_str(&serde_json::to_string(other).unwrap_or_default()),
     }
+}
+
+fn write_canonical_object(map: &Map<String, Value>, out: &mut String) {
+    out.push('{');
+    let mut keys: Vec<&String> = map.keys().collect();
+    keys.sort();
+    for (index, key) in keys.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push_str(&serde_json::to_string(key).unwrap_or_default());
+        out.push(':');
+        write_canonical(&map[*key], out);
+    }
+    out.push('}');
+}
+
+fn write_canonical_array(items: &[Value], out: &mut String) {
+    out.push('[');
+    for (index, item) in items.iter().enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        write_canonical(item, out);
+    }
+    out.push(']');
 }
