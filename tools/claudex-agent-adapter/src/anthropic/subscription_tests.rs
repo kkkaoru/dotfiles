@@ -41,6 +41,33 @@ fn subscription_children_identify_as_noninteractive() {
 }
 
 #[test]
+fn subscription_children_drop_isolated_claude_config_dir() {
+    let options = SubscriptionOptions::internal(
+        Arc::new(tokio::sync::Semaphore::new(1)),
+        Duration::from_secs(1),
+    );
+    let command = subscription_command(
+        Path::new("claude"),
+        "claude-opus-5",
+        &options,
+        OutputMode::Json,
+    );
+    let envs: Vec<_> = command.as_std().get_envs().collect();
+    for name in [
+        "CLAUDE_CONFIG_DIR",
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_API_KEY",
+        "CLAUDEX_ACTIVE",
+    ] {
+        assert!(
+            envs.iter()
+                .any(|(key, value)| *key == std::ffi::OsStr::new(name) && value.is_none()),
+            "subscription child must unset {name} so OAuth login stays on ~/.claude"
+        );
+    }
+}
+
+#[test]
 fn subscription_without_explicit_tools_does_not_disable_claude_tools() {
     let options = SubscriptionOptions::internal(
         Arc::new(tokio::sync::Semaphore::new(1)),

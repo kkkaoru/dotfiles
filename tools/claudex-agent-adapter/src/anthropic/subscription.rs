@@ -365,6 +365,9 @@ fn remove_proxy_environment(command: &mut Command) {
         "ANTHROPIC_AUTH_TOKEN",
         "ANTHROPIC_API_KEY",
         "ANTHROPIC_MODEL",
+        // Isolated claudex CLAUDE_CONFIG_DIR has no OAuth; subscription
+        // children must use the real ~/.claude login instead.
+        "CLAUDE_CONFIG_DIR",
         "CLAUDEX_ACTIVE",
         "CLAUDE_CODE_ENABLE_EXPERIMENTAL_ADVISOR_TOOL",
         "CLAUDE_CODE_SUBAGENT_MODEL",
