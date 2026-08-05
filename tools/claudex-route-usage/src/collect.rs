@@ -9,6 +9,7 @@ use anyhow::{Context, Result, bail};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
+use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
@@ -18,6 +19,7 @@ use url::Url;
 pub const REQUEST_TIMEOUT_SECONDS: u64 = 5;
 pub const SUBPROCESS_GRACE_SECONDS: u64 = 2;
 pub const USAGE_COMMAND_TIMEOUT_SECONDS: u64 = 45;
+pub const CLAUDE_OAUTH_ENSURE_TIMEOUT_SECONDS: u64 = 45;
 pub const DAEMON_HEALTH_TIMEOUT_SECONDS: u64 = 2;
 pub const MEMORY_COMMAND_TIMEOUT_SECONDS: u64 = 5;
 pub const OLLAMA_USAGE_PROVIDER: &str = "ollama";
@@ -84,6 +86,31 @@ pub fn run_codexbar(program: &str) -> Result<Value> {
     strict_json_array(&stdout)
 }
 
+fn claude_oauth_ensure_script() -> Option<PathBuf> {
+    let candidates = [
+        env::var_os("CLAUDE_OAUTH_ENSURE_SCRIPT").map(PathBuf::from),
+        env::var_os("HOME")
+            .map(|home| PathBuf::from(home).join("dotfiles/scripts/ensure-claude-oauth.sh")),
+        Some(PathBuf::from("scripts/ensure-claude-oauth.sh")),
+    ];
+    candidates.into_iter().flatten().find(|path| path.is_file())
+}
+
+fn ensure_claude_oauth() {
+    let Some(script) = claude_oauth_ensure_script() else {
+        return;
+    };
+    let mut command = Command::new(script);
+    command.args(["--refresh-within", "7200"]);
+    let result = run_with_timeout(
+        command,
+        Duration::from_secs(CLAUDE_OAUTH_ENSURE_TIMEOUT_SECONDS),
+    );
+    if let Err(error) = result {
+        eprintln!("claudex-route-usage: Claude OAuth ensure skipped: {error}");
+    }
+}
+
 pub fn ollama_usage_entry(curl_program: &str, provider: &str, model: &str) -> Value {
     let base_url =
         env::var(OLLAMA_BASE_URL_ENV).unwrap_or_else(|_| DEFAULT_OLLAMA_BASE_URL.to_owned());
@@ -139,6 +166,7 @@ pub fn collect_codexbar_report(
     codexbar_program: &str,
     codexbar_names: &BTreeSet<String>,
 ) -> Vec<Value> {
+    ensure_claude_oauth();
     match run_codexbar(codexbar_program) {
         Ok(Value::Array(entries)) => entries,
         _ => codexbar_names
