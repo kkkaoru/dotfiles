@@ -1,5 +1,6 @@
 mod collect;
 mod config;
+mod exhaustion;
 mod hook;
 mod opencode_go_budget;
 mod routing;

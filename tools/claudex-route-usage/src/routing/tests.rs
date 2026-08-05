@@ -1,7 +1,7 @@
 use super::concurrency::apply_model_concurrency;
 use super::orchestration::task_fanout;
 use super::quota::codexbar_window_quota_entry;
-use super::summary::routing_summary;
+use super::summary::{routing_summary, routing_summary_with_exhaustion};
 use super::workers::{
     default_subagent_route, enforce_worker_model_separation, worker_capacity_metadata,
 };
@@ -282,6 +282,50 @@ fn five_hour_bottleneck_outranks_fat_weekly() {
 }
 
 #[test]
+fn drops_low_weekly_workers_when_ample_alternatives_exist() {
+    let usage = json!([
+        {
+          "provider":"codex",
+          "available": true,
+          "reason": "available",
+          "maxUsedPercent": 20,
+          "quotaWindows": [
+            {"name":"five-hour","remainingPercent":80},
+            {"name":"seven-day","remainingPercent":80}
+          ]
+        },
+        {
+          "provider":"grok",
+          "available": true,
+          "reason": "available",
+          "maxUsedPercent": 90,
+          "quotaWindows": [
+            {"name":"five-hour","remainingPercent":10},
+            {"name":"seven-day","remainingPercent":10}
+          ]
+        },
+        {
+          "provider":"qwencloud",
+          "available": true,
+          "reason": "available",
+          "maxUsedPercent": 5,
+          "quotaWindows": [
+            {"name":"five-hour","remainingPercent":95},
+            {"name":"seven-day","remainingPercent":95}
+          ]
+        }
+    ]);
+    let summary = routing_summary(&usage, &sample_config(), &BTreeSet::new()).unwrap();
+    let agents = selected_agents(&summary);
+    assert!(agents.contains(&"claudex-qwen"));
+    assert!(agents.contains(&"claudex-gpt-spark"));
+    assert!(
+        !agents.contains(&"claudex-grok"),
+        "low weekly grok must leave automatic selected_workers when ample peers exist: {agents:?}"
+    );
+}
+
+#[test]
 fn drops_low_five_hour_workers_when_ample_alternatives_exist() {
     let usage = json!([
         {
@@ -326,7 +370,7 @@ fn drops_low_five_hour_workers_when_ample_alternatives_exist() {
 }
 
 #[test]
-fn drops_low_weekly_workers_when_ample_alternatives_exist() {
+fn drops_exhausted_cooldown_providers_from_automatic_selection() {
     let usage = json!([
         {
           "provider":"codex",
@@ -342,10 +386,10 @@ fn drops_low_weekly_workers_when_ample_alternatives_exist() {
           "provider":"grok",
           "available": true,
           "reason": "available",
-          "maxUsedPercent": 90,
+          "maxUsedPercent": 10,
           "quotaWindows": [
-            {"name":"five-hour","remainingPercent":10},
-            {"name":"seven-day","remainingPercent":10}
+            {"name":"five-hour","remainingPercent":90},
+            {"name":"seven-day","remainingPercent":90}
           ]
         },
         {
@@ -357,15 +401,76 @@ fn drops_low_weekly_workers_when_ample_alternatives_exist() {
             {"name":"five-hour","remainingPercent":95},
             {"name":"seven-day","remainingPercent":95}
           ]
+        },
+        {
+          "provider":"ollama",
+          "available": true,
+          "reason": "available",
+          "maxUsedPercent": 1,
+          "quotaWindows": [
+            {"name":"five-hour","remainingPercent":99},
+            {"name":"seven-day","remainingPercent":99}
+          ]
         }
     ]);
-    let summary = routing_summary(&usage, &sample_config(), &BTreeSet::new()).unwrap();
+    let config = config_from_json(
+        r#"{
+          "version": 1,
+          "mainProviders": ["codex", "grok", "ollama-glm"],
+          "providers": [
+            {
+              "id": "codex",
+              "agent": "claudex-gpt-spark",
+              "defaultModel": "gpt-5.3-codex-spark",
+              "effort": "high",
+              "enabled": true,
+              "usageProvider": "codex",
+              "backend": "codex-app-server"
+            },
+            {
+              "id": "grok",
+              "agent": "claudex-grok",
+              "defaultModel": "grok-4.5",
+              "effort": "high",
+              "enabled": true,
+              "usageProvider": "grok",
+              "backend": "grok-acp"
+            },
+            {
+              "id": "ollama-glm",
+              "agent": "claudex-ollama-glm-5-2",
+              "defaultModel": "glm-5.2:cloud",
+              "effort": "max",
+              "enabled": true,
+              "usageProvider": "ollama",
+              "backend": "codex-app-server"
+            }
+          ],
+          "fallback": {
+            "agent": "claudex-sonnet",
+            "model": "claude-sonnet-5",
+            "effort": "high"
+          },
+          "nativeWorkers": [],
+          "advisor": {
+            "agent": "custom-advisor",
+            "model": "claude-fable-5",
+            "effort": "xhigh"
+          }
+        }"#,
+    );
+    let scopes = BTreeSet::from(["ollama".to_owned()]);
+    let summary =
+        routing_summary_with_exhaustion(&usage, &config, &BTreeSet::new(), &scopes, false)
+            .unwrap();
     let agents = selected_agents(&summary);
-    assert!(agents.contains(&"claudex-qwen"));
-    assert!(agents.contains(&"claudex-gpt-spark"));
     assert!(
-        !agents.contains(&"claudex-grok"),
-        "low weekly grok must leave automatic selected_workers when ample peers exist: {agents:?}"
+        !agents.contains(&"claudex-ollama-glm-5-2"),
+        "cooldown ollama must leave automatic selected_workers: {agents:?}"
+    );
+    assert_eq!(
+        summary["providers"]["ollama-glm"]["reason"],
+        "provider-exhaustion-cooldown"
     );
 }
 

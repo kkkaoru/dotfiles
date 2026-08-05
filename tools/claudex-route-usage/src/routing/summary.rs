@@ -8,17 +8,49 @@ use super::workers::{
 };
 use super::{CapacityKey, rank_selected_workers};
 use crate::config::Config;
+use crate::exhaustion;
 use anyhow::Result;
 use serde_json::{Map, Value};
 use std::collections::BTreeSet;
+#[cfg(not(test))]
+use std::time::SystemTime;
 
 pub fn routing_summary(
     report: &Value,
     config: &Config,
     disabled_models: &BTreeSet<String>,
 ) -> Result<Value> {
+    let (exhaustion_scopes, codex_backend_cooling) = live_exhaustion_state();
+    routing_summary_with_exhaustion(
+        report,
+        config,
+        disabled_models,
+        &exhaustion_scopes,
+        codex_backend_cooling,
+    )
+}
+
+/// Assemble a routing summary with explicit exhaustion cool-downs.
+///
+/// Production callers should use [`routing_summary`], which reads adapter cache
+/// files under `$HOME/.cache/claudex`. Tests pass scopes directly so they do not
+/// race on `HOME` or pick up a developer's live cooldown file.
+pub(crate) fn routing_summary_with_exhaustion(
+    report: &Value,
+    config: &Config,
+    disabled_models: &BTreeSet<String>,
+    exhaustion_scopes: &BTreeSet<String>,
+    codex_backend_cooling: bool,
+) -> Result<Value> {
     let mut candidates: Vec<(CapacityKey, Value)> = Vec::new();
-    let providers = provider_quota_fields(report, config, disabled_models, &mut candidates)?;
+    let providers = provider_quota_fields(
+        report,
+        config,
+        disabled_models,
+        exhaustion_scopes,
+        codex_backend_cooling,
+        &mut candidates,
+    )?;
     let native_quota = native_quota_fields(report, config, disabled_models, &mut candidates)?;
     let mut selected = rank_selected_workers(candidates);
     let fallback_active = selected.is_empty()
@@ -51,11 +83,33 @@ pub fn routing_summary(
     Ok(summary)
 }
 
+#[cfg(test)]
+fn live_exhaustion_state() -> (BTreeSet<String>, bool) {
+    // Unit tests must not read the developer's live adapter cooldown cache.
+    (BTreeSet::new(), false)
+}
+
+#[cfg(not(test))]
+fn live_exhaustion_state() -> (BTreeSet<String>, bool) {
+    let now = SystemTime::now();
+    let home = exhaustion::current_home();
+    let scopes = home
+        .as_ref()
+        .map(|path| exhaustion::active_scopes(path, now))
+        .unwrap_or_default();
+    let cooling = home
+        .as_ref()
+        .is_some_and(|path| exhaustion::codex_app_server_cooling_down(path, now));
+    (scopes, cooling)
+}
+
 /// Per-provider quota fields, also ranking every provider with capacity.
 fn provider_quota_fields(
     report: &Value,
     config: &Config,
     disabled_models: &BTreeSet<String>,
+    exhaustion_scopes: &BTreeSet<String>,
+    codex_backend_cooling: bool,
     candidates: &mut Vec<(CapacityKey, Value)>,
 ) -> Result<Map<String, Value>> {
     let mut providers = Map::new();
@@ -66,8 +120,12 @@ fn provider_quota_fields(
             .get("model")
             .and_then(Value::as_str)
             .is_some_and(|model| disabled_models.contains(model));
+        let exhausted =
+            exhaustion::provider_is_exhausted(provider, exhaustion_scopes, codex_backend_cooling);
         let effective = if disabled {
             status(false, None, "disabled-by-policy")
+        } else if exhausted {
+            status(false, None, "provider-exhaustion-cooldown")
         } else {
             quota.clone()
         };
@@ -77,9 +135,10 @@ fn provider_quota_fields(
             .unwrap_or_default();
         providers.insert(
             provider_id.to_owned(),
-            Value::Object(provider_fields(&effective, &worker_item, disabled)),
+            Value::Object(provider_fields(&effective, &worker_item, disabled || exhausted)),
         );
         if !disabled
+            && !exhausted
             && quota
                 .get("available")
                 .and_then(Value::as_bool)
