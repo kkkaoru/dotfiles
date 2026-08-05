@@ -128,6 +128,8 @@ daemonのPATHでは `~/.local/bin` をHomebrewより先に置き、壊れたHome
    `model_concurrency` はpromptごとに再取得し、usage cacheには保存しません。health URLは
    `CLAUDEX_DAEMON_HEALTH_URL`、loopback `ANTHROPIC_BASE_URL` のorigin、既定の
    `http://127.0.0.1:8318/health` の順に解決します。
+   ClaudeのOAuthは `scripts/ensure-claude-oauth.sh` で定期的に同期・更新し、
+   CodexBarのClaude sourceは一時的なOAuth失敗に備えて `auto` を推奨します。
 3. 各providerをquota残量が多い順に並べます。`five-hour` windowを取得できるproviderは
    `min(seven-day|集約残量, five-hour)` を、five-hourが無いproviderは `seven-day`（または集約
    使用率の残量）を使います。OpenCode Goのmodel別request budgetと
