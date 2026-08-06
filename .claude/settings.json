@@ -5,7 +5,12 @@
   },
   "permissions": {
     "allow": [],
-    "deny": []
+    "deny": [
+      "Bash(terraform apply:*)",
+      "Bash(* terraform apply:*)",
+      "Bash(terraform -chdir=* apply:*)",
+      "Bash(* terraform -chdir=* apply:*)"
+    ]
   },
   "model": "sonnet",
   "enableAllProjectMcpServers": true,
@@ -42,6 +47,18 @@
             "type": "command",
             "command": "test \"${CLAUDEX_ACTIVE:-}\" != 1 || exec \"$HOME/.cargo/bin/claudex-route-usage\" --event SubagentStart",
             "timeout": 75
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "exec \"$HOME/.claude/hooks/deny-terraform-apply.sh\"",
+            "timeout": 10
           }
         ]
       }
