@@ -86,6 +86,7 @@ coverage_out/
 .codex/plugins/
 .codex/process_manager/
 .codex/rules/
+.codex/ambient-suggestions/
 .codex/archived_sessions/
 .codex/browser/
 .codex/goals_*.sqlite*
@@ -127,6 +128,9 @@ coverage_out/
 
 # Local Codex backups
 .codex/*.bak
+
+backups/
+sessions/
 
 tmp
 
