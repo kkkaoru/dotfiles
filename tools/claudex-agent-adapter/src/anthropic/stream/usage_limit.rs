@@ -34,10 +34,14 @@ pub(crate) fn contains_usage_limit_marker(value: &str) -> bool {
 
 pub(crate) fn contains_classic_usage_limit_marker(value: &str) -> bool {
     let value = value.to_lowercase();
-    const USAGE_LIMIT_MARKERS: [&str; 5] = [
+    // Include OpenCode Go weekly-cap wording ("Weekly usage limit reached…") so
+    // configured-ACP failures cool down routing instead of silent 502/retry storms.
+    const USAGE_LIMIT_MARKERS: [&str; 7] = [
         "usagelimitexceeded",
         "usage_limit_exceeded",
         "usage limit exceeded",
+        "usage limit reached",
+        "weekly usage limit",
         "hit your usage limit",
         "you've hit your usage limit",
     ];
@@ -101,6 +105,9 @@ mod tests {
         assert!(is_usage_limit_event(&event));
         assert!(contains_usage_limit_marker(
             "You've hit your usage limit for GPT-5.3-Codex-Spark."
+        ));
+        assert!(contains_usage_limit_marker(
+            "AI_APICallError: Weekly usage limit reached. Resets in 4 days."
         ));
         assert!(!contains_usage_limit_marker("context window exceeded"));
         assert!(!is_usage_limit_event(
