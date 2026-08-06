@@ -82,6 +82,10 @@ fn maps_cursor_auto_to_the_acp_default_model_id() {
         prompt::configured_acp_session_model("default[]"),
         "default[]"
     );
+    assert_eq!(
+        prompt::configured_acp_session_model("cline-pass/deepseek-v4-flash"),
+        "deepseek/deepseek-v4-flash"
+    );
 }
 
 #[test]
@@ -141,6 +145,7 @@ fn removes_codex_only_bridge_instructions() {
     assert!(prompt::provider_instructions(&params, true).starts_with("project rules\n\n"));
     assert!(prompt::provider_instructions(&params, true).contains("selected_workers"));
     assert!(prompt::provider_instructions(&params, true).contains("spawn_subagent"));
+    assert!(prompt::provider_instructions(&params, true).contains("provider-native Task"));
     assert!(!prompt::provider_instructions(&json!({}), true).contains("claudex-xhigh"));
     assert_eq!(
         prompt::provider_instructions(&params, false),

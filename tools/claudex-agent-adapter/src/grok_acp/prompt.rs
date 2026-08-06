@@ -6,14 +6,18 @@ use super::plugin;
 ///
 /// Cursor Agent lists CLI model `auto`, but ACP `session/set_model` and config options reject
 /// `auto` and expect `default[]` for the Auto picker entry.
+///
+/// ClinePass CLI accepts `cline-pass/deepseek-v4-flash`, but ACP `session/new` model lists use
+/// `deepseek/deepseek-v4-flash` (and related ids). Pin the ACP session to a listed id.
 pub(super) fn configured_acp_session_model(model: &str) -> String {
     match model {
         "auto" | "default" => "default[]".to_owned(),
+        "cline-pass/deepseek-v4-flash" => "deepseek/deepseek-v4-flash".to_owned(),
         other => other.to_owned(),
     }
 }
 
-pub(super) fn provider_instructions(params: &Value, include_grok_routing: bool) -> String {
+pub(super) fn provider_instructions(params: &Value, include_acp_routing: bool) -> String {
     let base = params
         .get("baseInstructions")
         .and_then(Value::as_str)
@@ -26,7 +30,7 @@ pub(super) fn provider_instructions(params: &Value, include_grok_routing: bool) 
         .strip_suffix(adapter)
         .unwrap_or(base)
         .trim_end_matches(['\n', ' ']);
-    if !include_grok_routing {
+    if !include_acp_routing {
         return base.to_owned();
     }
     if base.is_empty() {

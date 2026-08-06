@@ -51,7 +51,7 @@ too_many_lines = "deny"
 unimplemented = "deny"
 
 [dependencies]
-agent-client-protocol = { version = "=0.10.4", features = ["unstable_session_model"] }
+agent-client-protocol = { version = "=0.10.4", features = ["unstable_session_model", "unstable_boolean_config"] }
 anyhow = "1.0"
 async-trait = "0.1"
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "tokio"] }
