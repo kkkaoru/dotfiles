@@ -1,3 +1,4 @@
+mod active_subagent_models;
 mod agent_batch;
 mod agent_effort;
 mod agent_effort_matching;
@@ -136,6 +137,7 @@ pub struct Bridge {
     subagent_reuse: Arc<subagent_reuse::SubagentReuseRegistry>,
     tool_schemas: tool_schema_cache::ToolSchemaCache,
     model_concurrency: model_concurrency::ModelConcurrency,
+    active_subagent_models: Arc<active_subagent_models::ActiveSubagentModels>,
 }
 
 struct Session {
@@ -289,6 +291,7 @@ impl Bridge {
             subagent_reuse: Arc::new(subagent_reuse::SubagentReuseRegistry::default()),
             tool_schemas: tool_schema_cache::ToolSchemaCache::default(),
             model_concurrency,
+            active_subagent_models: Arc::new(active_subagent_models::ActiveSubagentModels::default()),
         }
     }
     fn with_legacy_main_route(mut self) -> Self {

@@ -113,6 +113,10 @@ impl Bridge {
             run_in_background,
             sender,
         } = prepared;
+        // Hold occupancy for the full spawned stream so concurrent SubAgent
+        // launches soft-demote this model while the provider turn is live.
+        let _active_subagent = is_subagent
+            .then(|| self.active_subagent_models.acquire(&request.model));
         let prepare = async {
             let permit = match concurrency_ticket {
                 Some(ticket) => Some(ticket.acquire_for(!is_subagent).await?),

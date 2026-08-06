@@ -1,4 +1,4 @@
-use super::concurrency::apply_model_concurrency;
+use super::concurrency::apply_model_concurrency_with_inflight;
 use super::orchestration::task_fanout;
 use super::quota::codexbar_window_quota_entry;
 use super::summary::{routing_summary, routing_summary_with_exhaustion};
@@ -8,6 +8,7 @@ use super::workers::{
 use super::{memory_parallel_cap, pressure_level};
 use crate::config::{Config, load_config};
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use tempfile::NamedTempFile;
 
@@ -245,13 +246,13 @@ fn weekly_remaining_orders_workers() {
         {"provider":"qwencloud","available":false,"reason":"exhausted","maxUsedPercent":100}
     ]);
     let summary = routing_summary(&usage, &sample_config(), &BTreeSet::new()).unwrap();
-    // When five-hour is known, ranking uses min(weekly, five-hour): spark=40, grok=30.
-    assert_eq!(summary["selected_workers"][0]["agent"], "claudex-gpt-spark");
-    assert_eq!(summary["selected_workers"][1]["agent"], "claudex-grok");
+    // Ranking prefers weekly remaining: grok=80, spark=40.
+    assert_eq!(summary["selected_workers"][0]["agent"], "claudex-grok");
+    assert_eq!(summary["selected_workers"][1]["agent"], "claudex-gpt-spark");
 }
 
 #[test]
-fn five_hour_bottleneck_outranks_fat_weekly() {
+fn five_hour_bottleneck_does_not_outrank_fatter_weekly() {
     let usage = json!([
         {
           "provider":"codex",
@@ -276,9 +277,9 @@ fn five_hour_bottleneck_outranks_fat_weekly() {
         {"provider":"qwencloud","available":false,"reason":"exhausted","maxUsedPercent":100}
     ]);
     let summary = routing_summary(&usage, &sample_config(), &BTreeSet::new()).unwrap();
-    // spark min(95,30)=30, grok min(55,70)=55 → grok first.
-    assert_eq!(summary["selected_workers"][0]["agent"], "claudex-grok");
-    assert_eq!(summary["selected_workers"][1]["agent"], "claudex-gpt-spark");
+    // Weekly order wins for ranking; five-hour only filters via prefer_weekly_headroom.
+    assert_eq!(summary["selected_workers"][0]["agent"], "claudex-gpt-spark");
+    assert_eq!(summary["selected_workers"][1]["agent"], "claudex-grok");
 }
 
 #[test]
@@ -746,8 +747,59 @@ fn qwencloud_windows_normalize_like_claude() {
 fn concurrency_refresh_preserves_selection_without_daemon_health() {
     let summary = routing_summary(&report(), &sample_config(), &BTreeSet::new()).unwrap();
     let before = selected_agents(&summary).len();
-    let refreshed =
-        apply_model_concurrency(summary, &sample_config(), None, &BTreeSet::new()).unwrap();
+    let refreshed = apply_model_concurrency_with_inflight(
+        summary,
+        &sample_config(),
+        None,
+        &BTreeMap::new(),
+        &BTreeSet::new(),
+    )
+    .unwrap();
     assert_eq!(selected_agents(&refreshed).len(), before);
     assert!(refreshed["model_concurrency"].is_object());
+}
+
+#[test]
+fn inflight_subagents_demote_busy_models_down_the_weekly_order() {
+    let usage = json!([
+        {
+          "provider":"codex",
+          "available": true,
+          "reason": "available",
+          "maxUsedPercent": 10,
+          "quotaWindows": [
+            {"name":"five-hour","remainingPercent":90},
+            {"name":"seven-day","remainingPercent":90}
+          ]
+        },
+        {
+          "provider":"grok",
+          "available": true,
+          "reason": "available",
+          "maxUsedPercent": 40,
+          "quotaWindows": [
+            {"name":"five-hour","remainingPercent":70},
+            {"name":"seven-day","remainingPercent":60}
+          ]
+        },
+        {"provider":"qwencloud","available":false,"reason":"exhausted","maxUsedPercent":100}
+    ]);
+    let summary = routing_summary(&usage, &sample_config(), &BTreeSet::new()).unwrap();
+    assert_eq!(summary["selected_workers"][0]["agent"], "claudex-gpt-spark");
+    let mut inflight = BTreeMap::new();
+    inflight.insert("gpt-5.3-codex-spark".to_owned(), 1);
+    let refreshed = apply_model_concurrency_with_inflight(
+        summary,
+        &sample_config(),
+        None,
+        &inflight,
+        &BTreeSet::new(),
+    )
+    .unwrap();
+    assert_eq!(
+        refreshed["selected_workers"][0]["agent"],
+        "claudex-grok",
+        "busy top weekly worker must yield to the next weekly-ranked peer: {}",
+        refreshed["selected_workers"]
+    );
 }

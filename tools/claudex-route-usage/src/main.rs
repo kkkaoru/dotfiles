@@ -207,10 +207,14 @@ fn run() -> Result<()> {
         None => build_summary(&arguments, &config, &paths, &disabled, &cache)?,
     };
     let health = collect::run_daemon_health(&arguments.curl_program);
-    summary = routing::concurrency::apply_model_concurrency(
+    summary = routing::concurrency::apply_model_concurrency_with_inflight(
         summary,
         &config,
-        health.as_ref(),
+        health.as_ref().map(|value| &value.model_concurrency),
+        health
+            .as_ref()
+            .map(|value| &value.active_subagent_models)
+            .unwrap_or(&std::collections::BTreeMap::new()),
         &disabled,
     )?;
     let main_model = env::var("CLAUDEX_MAIN_MODEL")

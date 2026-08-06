@@ -85,4 +85,8 @@ impl Bridge {
     pub(crate) fn model_concurrency(&self) -> BTreeMap<String, ModelConcurrencyStatus> {
         self.model_concurrency.snapshot()
     }
+
+    pub(crate) fn active_subagent_models(&self) -> BTreeMap<String, usize> {
+        self.active_subagent_models.snapshot()
+    }
 }

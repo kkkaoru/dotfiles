@@ -1,7 +1,7 @@
 //! Daemon concurrency refresh and re-ranking of the selected worker pool.
 
 use super::orchestration::orchestration_contract;
-use super::quota::combined_capacity_priority;
+use super::quota::combined_capacity_priority_with_inflight;
 use super::workers::{
     extend_with_native_workers, fallback_worker, native_worker_item, prefer_weekly_headroom,
     ranked_native_quota, selected_agent_values, worker,
@@ -142,13 +142,15 @@ struct ProviderSlot<'a> {
     provider: &'a Value,
     index: i64,
     health: Option<&'a BTreeMap<String, Value>>,
+    active_subagent_models: &'a BTreeMap<String, i64>,
     disabled_models: &'a BTreeSet<String>,
 }
 
-pub fn apply_model_concurrency(
+pub fn apply_model_concurrency_with_inflight(
     summary: Value,
     config: &Config,
     health: Option<&BTreeMap<String, Value>>,
+    active_subagent_models: &BTreeMap<String, i64>,
     disabled_models: &BTreeSet<String>,
 ) -> Result<Value> {
     let mut combined = summary;
@@ -163,13 +165,19 @@ pub fn apply_model_concurrency(
                 provider,
                 index: index as i64,
                 health,
+                active_subagent_models,
                 disabled_models,
             },
         );
     }
     record_health_only_models(&mut model_capacity, config, health);
-    let participating =
-        collect_native_candidates(&combined, config, disabled_models, &mut candidates);
+    let participating = collect_native_candidates(
+        &combined,
+        config,
+        disabled_models,
+        active_subagent_models,
+        &mut candidates,
+    );
     let mut selected = rank_selected_workers(candidates);
     let fallback = fallback_worker(config);
     let fallback_model = fallback
@@ -251,7 +259,15 @@ fn refresh_provider_slot(
         object.insert("concurrency".into(), concurrency.clone());
     }
     candidates.push((
-        combined_capacity_priority(&quota, &concurrency, slot.index),
+        combined_capacity_priority_with_inflight(
+            &quota,
+            &concurrency,
+            slot.index,
+            *slot
+                .active_subagent_models
+                .get(&model)
+                .unwrap_or(&0),
+        ),
         selected_worker,
     ));
 }
@@ -322,6 +338,7 @@ fn collect_native_candidates(
     combined: &Value,
     config: &Config,
     disabled_models: &BTreeSet<String>,
+    active_subagent_models: &BTreeMap<String, i64>,
     candidates: &mut Vec<(CapacityKey, Value)>,
 ) -> BTreeSet<String> {
     let native_quota = combined
@@ -351,10 +368,11 @@ fn collect_native_candidates(
         };
         participating.insert(agent.to_owned());
         candidates.push((
-            combined_capacity_priority(
+            combined_capacity_priority_with_inflight(
                 quota,
                 &not_limited(),
                 (config.providers.len() + native_index) as i64,
+                *active_subagent_models.get(model).unwrap_or(&0),
             ),
             native_item,
         ));

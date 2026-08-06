@@ -372,7 +372,34 @@ pub fn sanitize_model_concurrency(value: &Value) -> Option<BTreeMap<String, Valu
     Some(sanitized)
 }
 
-pub fn run_daemon_health(curl_program: &str) -> Option<BTreeMap<String, Value>> {
+pub fn sanitize_active_subagent_models(value: &Value) -> Option<BTreeMap<String, i64>> {
+    let object = value.as_object()?;
+    let mut sanitized = BTreeMap::new();
+    for (model, count) in object {
+        if !valid_model_id(&Value::from(model.as_str())) {
+            return None;
+        }
+        let Some(active) = count.as_i64() else {
+            return None;
+        };
+        if active < 0 {
+            return None;
+        }
+        if active > 0 {
+            sanitized.insert(model.clone(), active);
+        }
+    }
+    Some(sanitized)
+}
+
+/// Live daemon capacity signals used to refresh routing between SubAgent launches.
+#[derive(Clone, Debug, Default)]
+pub struct DaemonHealth {
+    pub model_concurrency: BTreeMap<String, Value>,
+    pub active_subagent_models: BTreeMap<String, i64>,
+}
+
+pub fn run_daemon_health(curl_program: &str) -> Option<DaemonHealth> {
     let url = daemon_health_url().ok()?;
     let mut command = Command::new(curl_program);
     command.args([
@@ -395,7 +422,13 @@ pub fn run_daemon_health(curl_program: &str) -> Option<BTreeMap<String, Value>> 
     if payload.get("status").and_then(Value::as_str) != Some("ok") {
         return None;
     }
-    sanitize_model_concurrency(payload.get("model_concurrency")?)
+    Some(DaemonHealth {
+        model_concurrency: sanitize_model_concurrency(payload.get("model_concurrency")?)?,
+        active_subagent_models: payload
+            .get("active_subagent_models")
+            .and_then(sanitize_active_subagent_models)
+            .unwrap_or_default(),
+    })
 }
 
 pub fn parse_vm_stat_value(output: &str, key: &str) -> Option<i64> {

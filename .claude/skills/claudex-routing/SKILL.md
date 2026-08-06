@@ -206,11 +206,12 @@ default. Codex, Grok, Claude, Qwen Cloud (`qwencloud`), and other CodexBar-backe
 from `codexbar usage --json`. Primary/secondary windows are normalized to five-hour / seven-day
 remaining for ranking.
 
-Model selection is dynamic and codexbar-driven: `selected_workers` is ordered by remaining
-headroom descending, so the model with the most usable capacity left is preferred for each
-subagent launch. When a provider reports a `five-hour` window, remaining is
-`min(seven-day|aggregate, five-hour)`; otherwise it is the `seven-day` quota window when
-reported, else aggregate usage. Providers at 0% remaining are excluded entirely.
+Model selection is dynamic and codexbar-driven: `selected_workers` is ordered by weekly
+remaining descending (five-hour is a tie-break and an automatic filter via
+`min(seven-day|aggregate, five-hour)` when that short window is reported). Live SubAgent
+occupancy from the daemon soft-demotes already-busy models so rapid successive launches walk
+that weekly-ordered pool instead of stacking on `selected_workers[0]`. Providers at 0%
+remaining are excluded entirely.
 The hook output's `worker_capacity` list preserves that order and exposes each worker's
 `used_percent`, `remaining_percent`, `weekly_remaining_percent`, and `five_hour_remaining_percent`
 so the model choice is observably a runtime decision; unknown or unmetered usage reports `null`

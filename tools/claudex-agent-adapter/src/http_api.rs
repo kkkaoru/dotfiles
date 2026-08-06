@@ -71,6 +71,7 @@ pub fn http_router(bridge: Arc<Bridge>, model: String, auth_token: Option<String
                         "search_worker_routes":search_worker_routes,
                         "started_models":health_bridge.started_models(),
                         "model_concurrency":health_bridge.model_concurrency(),
+                        "active_subagent_models":health_bridge.active_subagent_models(),
                         "model":health_model,
                         "session_capacity":health_bridge.session_capacity(),
                         "session_slots_used":health_bridge.used_session_slots(),

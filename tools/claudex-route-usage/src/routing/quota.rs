@@ -347,31 +347,59 @@ pub fn quota_with_windows(report: &Value, provider: &Value, native: bool) -> Res
 }
 
 pub fn capacity_priority(quota: &Value, config_index: i64) -> CapacityKey {
+    capacity_priority_with_inflight(quota, config_index, 0)
+}
+
+/// Rank by weekly remaining first, then five-hour as a tie-break.
+///
+/// `inflight` soft-demotes models that already have live SubAgent turns so
+/// rapid successive launches walk the weekly-ordered pool instead of stacking
+/// on `selected_workers[0]`. Each in-flight turn subtracts a full 100 points
+/// from the ranking windows without hard-excluding the model.
+pub fn capacity_priority_with_inflight(
+    quota: &Value,
+    config_index: i64,
+    inflight: i64,
+) -> CapacityKey {
     if quota.get("reason").and_then(Value::as_str) == Some("unmetered") {
         return (1.0, 0.0, 0.0, 0.0, 0.0, 0.0, config_index);
     }
-    let (weekly, five_hour) = effective_window_remaining(quota);
-    let Some(remaining) = selection_remaining(weekly, five_hour) else {
-        return (2.0, 0.0, 0.0, 0.0, 0.0, 0.0, config_index);
+    let (weekly, five_hour) = demote_windows(effective_window_remaining(quota), inflight);
+    let Some(weekly) = weekly else {
+        let Some(five_hour) = five_hour else {
+            return (2.0, 0.0, 0.0, 0.0, 0.0, 0.0, config_index);
+        };
+        // Five-hour-only meters stay eligible, but behind known weekly headroom.
+        return (
+            0.5,
+            -five_hour,
+            0.0,
+            -five_hour,
+            0.0,
+            0.0,
+            config_index,
+        );
     };
     (
         0.0,
-        -remaining,
+        -weekly,
         if five_hour.is_some() { 0.0 } else { 1.0 },
         -five_hour.unwrap_or(0.0),
-        -weekly.unwrap_or(0.0),
+        0.0,
         0.0,
         config_index,
     )
 }
 
-pub fn combined_capacity_priority(
+pub fn combined_capacity_priority_with_inflight(
     quota: &Value,
     concurrency: &Value,
     config_index: i64,
+    inflight: i64,
 ) -> CapacityKey {
     let unmetered = quota.get("reason").and_then(Value::as_str) == Some("unmetered");
-    let (mut weekly, mut five_hour) = effective_window_remaining(quota);
+    let (mut weekly, mut five_hour) =
+        demote_windows(effective_window_remaining(quota), inflight);
     let parallel_used = parallel_used_percent(concurrency);
     if parallel_used != 0.0 {
         let parallel_remaining = 100.0 - parallel_used;
@@ -379,11 +407,12 @@ pub fn combined_capacity_priority(
         five_hour =
             Some(five_hour.map_or(parallel_remaining, |value| value.min(parallel_remaining)));
     }
-    let remaining = selection_remaining(weekly, five_hour);
     let tier = if unmetered {
         1.0
-    } else if remaining.is_none() {
+    } else if weekly.is_none() && five_hour.is_none() {
         2.0
+    } else if weekly.is_none() {
+        0.5
     } else {
         0.0
     };
@@ -395,12 +424,27 @@ pub fn combined_capacity_priority(
         };
     (
         tier,
-        if remaining.is_some() { 0.0 } else { 1.0 },
-        -remaining.unwrap_or(0.0),
+        if weekly.is_some() { 0.0 } else { 1.0 },
+        -weekly.or(five_hour).unwrap_or(0.0),
         if five_hour.is_some() { 0.0 } else { 1.0 },
         -five_hour.unwrap_or(0.0),
         health_unknown,
         config_index,
+    )
+}
+
+fn demote_windows(
+    windows: (Option<f64>, Option<f64>),
+    inflight: i64,
+) -> (Option<f64>, Option<f64>) {
+    let (weekly, five_hour) = windows;
+    if inflight <= 0 {
+        return (weekly, five_hour);
+    }
+    let penalty = 100.0 * inflight as f64;
+    (
+        weekly.map(|value| value - penalty),
+        five_hour.map(|value| value - penalty),
     )
 }
 
