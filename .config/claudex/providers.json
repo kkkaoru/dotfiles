@@ -283,7 +283,7 @@
   },
   "advisor": {
     "agent": "custom-advisor",
-    "model": "claude-fable-5",
-    "effort": "xhigh"
+    "model": "claude-opus-5",
+    "effort": "medium"
   }
 }

@@ -102,14 +102,14 @@ retained.
 5. Advisors are independent of worker capacity and never replace implementation workers:
    - Use Claude Code's built-in parameterless `advisor()` tool according to its standard policy. It
      automatically receives the complete conversation history and does not depend on provider quota.
-   - Independently, invoke the `custom-advisor` SubAgent (`claude-fable-5` / `xhigh`) when explicitly
+   - Independently, invoke the `custom-advisor` SubAgent (`claude-opus-5` / `medium`) when explicitly
      requested, external research has multiple sources, a decision is complex/ambiguous or high-risk,
      a phase exceeds ten minutes, a worker fails/times out/stalls, or worker results conflict. Do not
      invoke it for trivial or deterministic tasks. Built-in `advisor()` and `custom-advisor` coexist;
      neither replaces the other.
-     Its Agent/Task call must set `subagent_type: custom-advisor`, `claudex_model: claude-fable-5`,
-     and `claudex_effort: xhigh`; generic-purpose is not an acceptable substitute. Verify
-     `resolvedModel: claude-fable-5` in the completion result and treat any mismatch as routing
+     Its Agent/Task call must set `subagent_type: custom-advisor`, `claudex_model: claude-opus-5`,
+     and `claudex_effort: medium`; generic-purpose is not an acceptable substitute. Verify
+     `resolvedModel: claude-opus-5` in the completion result and treat any mismatch as routing
      failure rather than advisor success.
    - Account for `custom-advisor` separately from `selected_workers` and provider quota headroom. Do
      not spend worker slots on it and do not treat its presence as capacity pressure against workers.

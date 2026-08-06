@@ -15,7 +15,7 @@ scope, capabilities, and constraints as its argument. Otherwise:
 1. Call the built-in parameterless `advisor()` tool when its standard policy applies. It sees the
    complete conversation history automatically and remains independent of the custom-advisor SubAgent.
 2. Unless `CLAUDEX_CUSTOM_ADVISOR` is `0`, `false`, or `off` (case-insensitive), start or reuse the
-   `custom-advisor` type (`claude-fable-5` / `xhigh`) as a peer SubAgent for strategic requirements,
+   `custom-advisor` type (`claude-opus-5` / `medium`) as a peer SubAgent for strategic requirements,
    risks, and design tradeoffs. Prefer the first compatible session custom advisor and continue it
    with `SendMessage` using the exact prior Agent/Task recipient, including after completion. Start
    another custom advisor only for true parallel or clean-room review, incompatible context, or an

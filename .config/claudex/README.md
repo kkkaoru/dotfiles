@@ -6,7 +6,7 @@ Build、Qwen Code、OpenCode Go、Claude の各モデルへ仕事を振り分け
 [`providers.json`](./providers.json) で一元管理します。
 advisor は2系統を独立して併用します。Claude Code標準の引数なし `advisor()` は
 [`settings.json`](../../.claude/settings.json) の `advisorModel` を使い、
-custom-advisor SubAgent（`claude-fable-5` / `xhigh`）は worker capacity とは別管理の
+custom-advisor SubAgent（`claude-opus-5` / `medium`）は worker capacity とは別管理の
 論理的な session singleton として `SendMessage` で再利用します（hard process=1 ではない）。
 
 このREADMEは日常利用と別のMacへの導入手順を扱います。Anthropic Messages API互換
@@ -32,7 +32,7 @@ flowchart LR
     Hook --> Sonnet[claudex-sonnet\nclaude-sonnet-5]
     Hook --> Fallback[claudex-sonnet\nClaude fallback]
     Orchestrator -. 標準機能 .-> BuiltinAdvisor[Claude Code advisor()\nadvisorModel: opus]
-    Orchestrator -. 必要時に併用 .-> CustomAdvisor[custom-advisor\nclaude-fable-5 / xhigh]
+    Orchestrator -. 必要時に併用 .-> CustomAdvisor[custom-advisor\nclaude-opus-5 / medium]
 ```
 
 現在の既定値は次のとおりです。
@@ -55,7 +55,7 @@ flowchart LR
 | Sonnet worker | `claudex-sonnet` | `claude-sonnet-5` | `high` | CodexBarのClaude枠（`usageProvider: claude`）残量。`claudex-haiku-search` と同じClaude usage leftを参照。outerがSonnet 5のときは同一modelの自動選択を抑制（明示起動と `CLAUDEX_ALLOW_SONNET_SUBAGENT=1` は可） |
 | Fallback | `claudex-sonnet` | `claude-sonnet-5` | `high` | 自動worker選択で利用可能なcapacity-managed providerがない場合 |
 | Built-in advisor | Claude Code標準 `advisor()` | `opus` | Claude Code標準 | 標準advisor policyに従う。provider capacity非依存 |
-| Custom advisor | `custom-advisor` | `claude-fable-5` | `xhigh` | 明示指定時、または複雑・曖昧・高リスク・長期・停滞時。worker capacityとは別管理の論理 session singleton（hard process=1ではない） |
+| Custom advisor | `custom-advisor` | `claude-opus-5` | `medium` | 明示指定時、または複雑・曖昧・高リスク・長期・停滞時。worker capacityとは別管理の論理 session singleton（hard process=1ではない） |
 
 worker のAgent定義と `providers.json` の `subagentModel` に同じ固定モデルを指定します。
 `defaultModel` は設定済みprovider routeの代表modelで、`subagentModel` 省略時はworkerにも
@@ -717,7 +717,7 @@ Claude Code標準の `advisor()` は引数を取らず、呼び出し時点の�
 `providers.json` ではmodel routingせず、`.claude/settings.json` の `advisorModel: opus` を
 使用します。
 
-`custom-advisor` はこれと独立したSubAgentで、`claude-fable-5` / `xhigh` を使い、実装はせず
+`custom-advisor` はこれと独立したSubAgentで、`claude-opus-5` / `medium` を使い、実装はせず
 意思決定・リスク・検証観点とpeer向けの簡潔な助言を返します。session内では最初の互換
 instanceを継続利用し、worker capacityとは別管理です。無効化する場合は次を設定します。
 
