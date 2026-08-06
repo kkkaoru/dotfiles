@@ -27,7 +27,6 @@ flowchart LR
     Hook --> Grok[claudex-grok\nGrok ACP]
     Hook --> Qwen[claudex-qwen\nQwen Code ACP]
     Hook --> Cursor[claudex-cursor\nCursor ACP]
-    Hook --> ClineQwen[claudex-cline-qwen\nCline ACP]
     Hook --> ClineDs[claudex-cline-deepseek-flash\nClinePass ACP]
     Hook --> Sonnet[claudex-sonnet\nclaude-sonnet-5]
     Hook --> Fallback[claudex-sonnet\nClaude fallback]
@@ -50,8 +49,7 @@ flowchart LR
 | DeepSeek Flash worker | `claudex-deepseek-flash` | `opencode-go/deepseek-v4-flash` | `max` | CodexBarのOpenCode Go枠に空きがあり、denylistに無い場合（このマシンでは無効化維持） |
 | OpenCode GPT Luna worker | `claudex-opencode-gpt` | `opencode-go/gpt-5.6-luna` | `max` | CodexBarのOpenCode Go枠に空きがある場合。Codexの `gpt-5.6-luna` / `claudex-gpt` とは別route |
 | Cursor worker | `claudex-cursor` | `auto` | `high` | CodexBarのCursor枠に空きがある場合。`cursor-agent --model auto --yolo acp`。modelはCLI+session/newで固定し、毎turnの `set_session_model` 再選択はしない |
-| Cline Qwen worker | `claudex-cline-qwen` | `qwen/qwen3.8-max` | `xhigh` | Cline provider `cline`（CodexBar `clinepass` weekly left）。`--thinking xhigh`。Qwen Cloudの `qwen3.8-max-preview` / `claudex-qwen` とは別ルートで共存 |
-| Cline DeepSeek Flash worker | `claudex-cline-deepseek-flash` | `cline-pass/deepseek-v4-flash` | `xhigh` | ClinePass枠（CodexBar `clinepass` weekly left、Cline Qwenと共有）。`--thinking xhigh`。OpenCode Go DeepSeekとは別 |
+| Cline DeepSeek Flash worker | `claudex-cline-deepseek-flash` | `cline-pass/deepseek-v4-flash` | `xhigh` | ClinePass枠（CodexBar `clinepass` weekly left）。`--thinking xhigh`。OpenCode Go DeepSeekとは別 |
 | Sonnet worker | `claudex-sonnet` | `claude-sonnet-5` | `high` | CodexBarのClaude枠（`usageProvider: claude`）残量。`claudex-haiku-search` と同じClaude usage leftを参照。outerがSonnet 5のときは同一modelの自動選択を抑制（明示起動と `CLAUDEX_ALLOW_SONNET_SUBAGENT=1` は可） |
 | Fallback | `claudex-sonnet` | `claude-sonnet-5` | `high` | 自動worker選択で利用可能なcapacity-managed providerがない場合 |
 | Built-in advisor | Claude Code標準 `advisor()` | `opus` | Claude Code標準 | 標準advisor policyに従う。provider capacity非依存 |
@@ -104,12 +102,12 @@ DeepSeek / OpenCode GPT Luna workerは独立した調査をまとめて実行し
 Cursor ACPは `cursor-agent --model {model} --yolo acp` を起動し、既定modelは `auto` です。
 `--yolo` はCursor CLIの `--force` 別名で、main sessionの無確認実行と同等のtool権限にします。
 Cline ACPは `cline --auto-approve true --thinking {effort} -P <provider> -m {model} --acp` を起動します。
-Qwen3.8 Maxは provider `cline` / model `qwen/qwen3.8-max`、DeepSeek V4 Flashは
-provider `cline-pass` / model `cline-pass/deepseek-v4-flash` です（いずれも本機の
+DeepSeek V4 Flashは provider `cline-pass` / model `cline-pass/deepseek-v4-flash` です（本機の
 `~/.cline/data/settings/providers.json` で確認したID）。reasoning effortはCline CLIの
 `--thinking`（`none|low|medium|high|xhigh`）へ渡し、ACPの `session/set_config_option`
 `effort` は使いません。`{model}` / `{effort}` をCLIへ渡すためlaunch-scopedとして扱い、
-毎turnの `set_session_model` 再選択はしません。
+毎turnの `set_session_model` 再選択はしません。Qwen は Qwen Cloud の `claudex-qwen`
+（`qwen3.8-max-preview`）を使います。
 daemonのPATHでは `~/.local/bin` をHomebrewより先に置き、壊れたHomebrew
 `cursor-agent` shimを避けます。
 

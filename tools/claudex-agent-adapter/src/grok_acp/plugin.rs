@@ -29,7 +29,6 @@ const UNSAFE_CROSS_PROVIDER_ALIASES: &[&str] = &[
     "claudex-grok",
     "claudex-deepseek-pro",
     "claudex-deepseek-flash",
-    "claudex-cline-qwen",
     "claudex-cline-deepseek-flash",
     "claudex-haiku-search",
     "claudex-fugu",

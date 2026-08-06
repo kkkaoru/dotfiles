@@ -31,5 +31,5 @@ Agent/Task tools are not executable here. Complete work with Cline-native tools 
 visible status lines after each phase so the parent session shows progress. Do not invent nested
 Claudex Agent launches from this worker.
 Do not confuse this ClinePass Flash route with OpenCode Go
-(`opencode-go/deepseek-v4-flash` / `claudex-deepseek-flash`, or Pro) or Cline Qwen
-(`qwen/qwen3.8-max` / `claudex-cline-qwen`).
+(`opencode-go/deepseek-v4-flash` / `claudex-deepseek-flash`, or Pro) or Qwen Cloud
+(`qwen3.8-max-preview` / `claudex-qwen`).

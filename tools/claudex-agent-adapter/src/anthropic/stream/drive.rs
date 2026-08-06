@@ -1,11 +1,14 @@
 use std::{sync::Arc, time::Duration};
 
+use anyhow::anyhow;
+
 use super::{
     SegmentBuilder, StreamSender, StreamTurn, commit_transcript, send_stream_completion,
     send_stream_error,
 };
 use crate::anthropic::{
-    ActiveTurn, Bridge, model_concurrency::ModelPermit, subagent_timeout::completes_within,
+    ActiveTurn, Bridge, model_concurrency::ModelPermit, segment::EMPTY_ACP_END_TURN,
+    subagent_timeout::completes_within,
 };
 
 struct ContextRetryStream {
@@ -124,6 +127,25 @@ impl Bridge {
         run_in_background: bool,
     ) {
         match waited {
+            Ok(StreamTurn::Segment {
+                segment,
+                provider_settled,
+            }) if segment.is_empty_end_turn() => {
+                // Cline Credits $0 (and similar) finishes as empty end_turn; route through
+                // usage-limit failover instead of returning a blank assistant message.
+                let input_tokens = turn.input_tokens;
+                self.retry_usage_limit_stream(ContextRetryStream {
+                    turn,
+                    sender,
+                    error: anyhow!("{EMPTY_ACP_END_TURN}"),
+                    builder: SegmentBuilder::new(input_tokens),
+                    model_permit,
+                    is_subagent,
+                    run_in_background,
+                })
+                .await;
+                let _ = provider_settled;
+            }
             Ok(StreamTurn::Segment {
                 segment,
                 provider_settled,

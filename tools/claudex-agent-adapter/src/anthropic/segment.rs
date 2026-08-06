@@ -46,4 +46,75 @@ impl Segment {
         self.web_evidence = web_evidence;
         self
     }
+
+    /// Cline (and some other ACP providers) can finish with `end_turn` and no
+    /// text/thinking/tools when billing or auth fails (for example Cline Credits
+    /// balance $0). Treat that as an empty completed turn rather than a valid
+    /// assistant reply so Claude Code does not see "No assistant messages found".
+    pub(super) fn is_empty_end_turn(&self) -> bool {
+        self.stop_reason == "end_turn" && !self.blocks.iter().any(block_has_assistant_payload)
+    }
+}
+
+fn block_has_assistant_payload(block: &Value) -> bool {
+    match block.get("type").and_then(Value::as_str) {
+        Some("text") => block
+            .get("text")
+            .and_then(Value::as_str)
+            .is_some_and(|text| !text.trim().is_empty()),
+        Some("thinking") => block
+            .get("thinking")
+            .and_then(Value::as_str)
+            .is_some_and(|text| !text.trim().is_empty()),
+        Some("tool_use") | Some("server_tool_use") => true,
+        Some(_) => true,
+        None => false,
+    }
+}
+
+/// Shared wording for ACP providers that swallow billing/auth failures as empty
+/// `end_turn` responses (observed with Cline when Credits balance is $0).
+pub(super) const EMPTY_ACP_END_TURN: &str = "Configured ACP completed with no assistant content \
+(provider likely unavailable or billing exhausted; Cline Credits models return empty end_turn \
+when balance is $0 — use Qwen Cloud `qwen3.8-max-preview` / `claudex-qwen`, or top up Credits)";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_empty_end_turn_without_blocks() {
+        let empty = Segment {
+            blocks: Vec::new(),
+            stop_reason: "end_turn",
+            usage: Usage::default(),
+            web_evidence: WebEvidenceSummary::default(),
+        };
+        assert!(empty.is_empty_end_turn());
+    }
+
+    #[test]
+    fn keeps_text_thinking_and_tool_turns() {
+        let text = Segment {
+            blocks: vec![json!({"type":"text","text":"PONG"})],
+            stop_reason: "end_turn",
+            usage: Usage::default(),
+            web_evidence: WebEvidenceSummary::default(),
+        };
+        assert!(!text.is_empty_end_turn());
+        let thinking = Segment {
+            blocks: vec![json!({"type":"thinking","thinking":"plan"})],
+            stop_reason: "end_turn",
+            usage: Usage::default(),
+            web_evidence: WebEvidenceSummary::default(),
+        };
+        assert!(!thinking.is_empty_end_turn());
+        let tools = Segment {
+            blocks: vec![json!({"type":"tool_use","id":"1","name":"Bash","input":{}})],
+            stop_reason: "tool_use",
+            usage: Usage::default(),
+            web_evidence: WebEvidenceSummary::default(),
+        };
+        assert!(!tools.is_empty_end_turn());
+    }
 }

@@ -203,34 +203,6 @@
       }
     },
     {
-      "id": "cline-qwen",
-      "agent": "claudex-cline-qwen",
-      "defaultModel": "qwen/qwen3.8-max",
-      "subagentModel": "qwen/qwen3.8-max",
-      "effort": "xhigh",
-      "enabled": true,
-      "usageProvider": "clinepass",
-      "modelPrefixes": [
-        "qwen/qwen3.8-max"
-      ],
-      "backend": "configured-acp",
-      "webSearchMode": "acp-native",
-      "acp": {
-        "program": "cline",
-        "arguments": [
-          "--auto-approve",
-          "true",
-          "--thinking",
-          "{effort}",
-          "-P",
-          "cline",
-          "-m",
-          "{model}",
-          "--acp"
-        ]
-      }
-    },
-    {
       "id": "cline-deepseek-flash",
       "agent": "claudex-cline-deepseek-flash",
       "defaultModel": "cline-pass/deepseek-v4-flash",
