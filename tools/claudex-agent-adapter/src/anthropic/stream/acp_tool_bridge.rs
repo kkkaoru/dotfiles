@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 use super::ToolCall;
 
@@ -17,6 +17,8 @@ pub(super) const ACP_BRIDGE_MARKER: &str = "acpBridge";
 
 const SPAWN_SUBAGENT: &str = "spawn_subagent";
 const GROK_HIGH_PROFILE: &str = "grok-native-high-plugin-v3:claudex-high";
+const PROMPT_ALIASES: &[&str] = &["prompt", "task", "message", "instruction", "query", "input"];
+const DESCRIPTION_ALIASES: &[&str] = &["description", "title", "name", "summary", "subject"];
 
 pub(super) fn is_client_executed_bridge_tool(original_name: &str) -> bool {
     matches!(original_name, "Agent" | "Task")
@@ -85,6 +87,26 @@ fn map_launch_name(candidate: &str, names: &HashMap<String, String>) -> Option<S
     None
 }
 
+fn nonempty_string<'a>(object: &'a Map<String, Value>, key: &str) -> Option<&'a str> {
+    object
+        .get(key)
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn take_alias_string(object: &mut Map<String, Value>, aliases: &[&str]) -> Option<String> {
+    for key in aliases {
+        if let Some(value) = nonempty_string(object, key).map(str::to_owned) {
+            if *key != aliases[0] {
+                object.remove(*key);
+            }
+            return Some(value);
+        }
+    }
+    None
+}
+
 fn normalize_launch_arguments(provider_name: &str, arguments: &Value) -> Value {
     let mut mapped = match arguments {
         Value::Object(map) => Value::Object(map.clone()),
@@ -93,6 +115,23 @@ fn normalize_launch_arguments(provider_name: &str, arguments: &Value) -> Value {
     let Some(object) = mapped.as_object_mut() else {
         return mapped;
     };
+    // Cursor ACP Task/Agent meta — never part of Claude Code's launch schema.
+    object.remove("_toolName");
+    object.remove("_tool_name");
+
+    if let Some(prompt) = take_alias_string(object, PROMPT_ALIASES) {
+        object.insert("prompt".to_owned(), json!(prompt));
+    }
+    if let Some(description) = take_alias_string(object, DESCRIPTION_ALIASES) {
+        object.insert("description".to_owned(), json!(description));
+    }
+    if nonempty_string(object, "description").is_none()
+        && let Some(prompt) = nonempty_string(object, "prompt")
+    {
+        let description: String = prompt.chars().take(60).collect();
+        object.insert("description".to_owned(), json!(description));
+    }
+
     if provider_name.eq_ignore_ascii_case(SPAWN_SUBAGENT)
         || provider_name.to_ascii_lowercase().contains("spawn_subagent")
     {
@@ -106,6 +145,16 @@ fn normalize_launch_arguments(provider_name: &str, arguments: &Value) -> Value {
             .or_insert(json!(true));
     }
     mapped
+}
+
+/// Claude Code Agent/Task require a real prompt. Cursor often opens native Task
+/// cards with only `_toolName` / `run_in_background` (or empty rawInput); bridging
+/// those yields InputValidationError and aborts the main-session turn.
+fn launch_arguments_ready(arguments: &Value) -> bool {
+    arguments
+        .as_object()
+        .and_then(|object| nonempty_string(object, "prompt"))
+        .is_some()
 }
 
 /// If this providerTool event is a request-supplied Agent/Task launch (or Grok
@@ -129,6 +178,9 @@ pub(super) fn bridge_provider_tool_call(
         })?;
     let raw_args = params.get("arguments").unwrap_or(&Value::Null);
     let arguments = normalize_launch_arguments(provider_label, raw_args);
+    if !launch_arguments_ready(&arguments) {
+        return None;
+    }
     Some(ToolCall {
         call_id: call_id.to_owned(),
         name,
@@ -169,6 +221,7 @@ mod tests {
         assert_eq!(bridged.name, "Agent");
         assert!(is_acp_bridge_request_id(&bridged.request_id));
         assert_eq!(bridged.arguments["prompt"], "do work");
+        assert_eq!(bridged.arguments["description"], "do work");
         let task = json!({
             "params":{
                 "callId":"c2",
@@ -247,5 +300,55 @@ mod tests {
         });
         let bridged = bridge_provider_tool_call(&map, &event).expect("title Agent bridges");
         assert_eq!(bridged.name, "Agent");
+    }
+
+    #[test]
+    fn does_not_bridge_incomplete_cursor_native_task() {
+        let map = names();
+        // Observed with Cursor `auto` as the outer/main model: native Task opens with
+        // meta fields only, which previously became Agent tool_use missing prompt.
+        let incomplete = json!({
+            "params":{
+                "callId":"cursor-task-1",
+                "tool":"Task",
+                "title":"Task",
+                "status":"pending",
+                "arguments":{"_toolName":"task","run_in_background":true}
+            }
+        });
+        assert!(bridge_provider_tool_call(&map, &incomplete).is_none());
+
+        let empty = json!({
+            "params":{
+                "callId":"cursor-task-2",
+                "tool":"task",
+                "status":"in_progress",
+                "arguments":{}
+            }
+        });
+        assert!(bridge_provider_tool_call(&map, &empty).is_none());
+    }
+
+    #[test]
+    fn bridges_when_prompt_arrives_via_alias_after_normalize() {
+        let map = names();
+        let event = json!({
+            "params":{
+                "callId":"alias-1",
+                "tool":"Task",
+                "status":"pending",
+                "arguments":{
+                    "_toolName":"task",
+                    "title":"gap fix",
+                    "task":"Investigate the wasm build failure",
+                    "run_in_background":true
+                }
+            }
+        });
+        let bridged = bridge_provider_tool_call(&map, &event).expect("alias prompt bridges");
+        assert_eq!(bridged.name, "Task");
+        assert_eq!(bridged.arguments["prompt"], "Investigate the wasm build failure");
+        assert_eq!(bridged.arguments["description"], "gap fix");
+        assert!(bridged.arguments.get("_toolName").is_none());
     }
 }
