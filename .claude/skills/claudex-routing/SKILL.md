@@ -28,8 +28,9 @@ retained.
    Automatic `selected_workers` already drops low remaining peers (under ~25%) when any
    peer still has ample remaining headroom (at least ~40%); do not reintroduce those depleted models
    for diversity. Launch in ranking order: fill scopes from the front of `selected_workers` /
-   `worker_ranking` before lower-ranked entries. Ollama API-only availability counts as full
-   weekly headroom when CodexBar has no meter.
+   `worker_ranking` before lower-ranked entries. Ollama API-only reachability (local `/api/tags`
+   when CodexBar has no meter) stays eligible but with unknown weekly headroom — it must not
+   outrank providers that report real weekly remaining.
    A selected worker may intentionally use the same model as the outer session; outer and
    SubAgent requests are independent. The one conservation exception is the `claudex-sonnet`
    worker: when `CLAUDEX_OUTER_MODEL` is a Sonnet 5 alias, automatic routing omits that worker

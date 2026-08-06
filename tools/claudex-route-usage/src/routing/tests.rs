@@ -476,7 +476,7 @@ fn drops_exhausted_cooldown_providers_from_automatic_selection() {
 }
 
 #[test]
-fn ollama_api_only_availability_ranks_as_full_weekly_headroom() {
+fn ollama_api_only_availability_ranks_behind_known_weekly() {
     let config = config_from_json(
         r#"{
           "version": 1,
@@ -516,31 +516,81 @@ fn ollama_api_only_availability_ranks_as_full_weekly_headroom() {
           }
         }"#,
     );
+    // API reachability must not invent weekly headroom over a real meter.
     let usage = json!([
         {
           "provider": "ollama",
           "available": true,
-          "maxUsedPercent": 0,
           "reason": "available-ollama-api-only"
         },
         {
           "provider": "grok",
           "available": true,
           "reason": "available",
-          "maxUsedPercent": 81,
+          "maxUsedPercent": 23,
           "quotaWindows": [
-            {"name":"five-hour","remainingPercent":19},
-            {"name":"seven-day","remainingPercent":19}
+            {"name":"five-hour","remainingPercent":100},
+            {"name":"seven-day","remainingPercent":77}
           ]
         }
     ]);
     let summary = routing_summary(&usage, &config, &BTreeSet::new()).unwrap();
-    assert_eq!(summary["selected_workers"][0]["agent"], "claudex-ollama-glm-5-2");
+    assert_eq!(summary["selected_workers"][0]["agent"], "claudex-grok");
+    assert_eq!(
+        summary["selected_workers"][0]["weekly_remaining_percent"],
+        77.0
+    );
     let agents = selected_agents(&summary);
     assert!(
-        !agents.contains(&"claudex-grok"),
-        "depleted grok should not stay selected beside ample ollama: {agents:?}"
+        agents.contains(&"claudex-ollama-glm-5-2"),
+        "api-only ollama stays eligible after known weekly: {agents:?}"
     );
+    assert_ne!(
+        agents.first().copied(),
+        Some("claudex-ollama-glm-5-2"),
+        "api-only ollama must not outrank known weekly headroom: {agents:?}"
+    );
+}
+
+#[test]
+fn ollama_api_only_is_usable_when_no_weekly_meters_exist() {
+    let config = config_from_json(
+        r#"{
+          "version": 1,
+          "mainProviders": ["ollama-glm"],
+          "providers": [
+            {
+              "id": "ollama-glm",
+              "agent": "claudex-ollama-glm-5-2",
+              "defaultModel": "glm-5.2:cloud",
+              "effort": "max",
+              "enabled": true,
+              "usageProvider": "ollama",
+              "modelPrefixes": ["glm-"],
+              "backend": "configured-acp"
+            }
+          ],
+          "fallback": {
+            "agent": "claudex-sonnet",
+            "model": "claude-sonnet-5",
+            "effort": "high"
+          },
+          "nativeWorkers": [],
+          "advisor": {
+            "agent": "custom-advisor",
+            "model": "claude-fable-5",
+            "effort": "xhigh"
+          }
+        }"#,
+    );
+    let usage = json!([{
+      "provider": "ollama",
+      "available": true,
+      "reason": "available-ollama-api-only"
+    }]);
+    let summary = routing_summary(&usage, &config, &BTreeSet::new()).unwrap();
+    assert_eq!(summary["selected_workers"][0]["agent"], "claudex-ollama-glm-5-2");
+    assert!(summary["selected_workers"][0]["weekly_remaining_percent"].is_null());
 }
 
 #[test]
