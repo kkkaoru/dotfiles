@@ -1,0 +1,240 @@
+//! Stdio MCP server that exposes Claude Code Agent/Task launch tools.
+//!
+//! Cursor ACP attaches this as `claudex-launch`. Tool calls are acknowledged
+//! here and also appended to a local queue so the adapter can bridge empty ACP
+//! `providerTool` cards into Claude Code `tool_use`.
+
+use std::{
+    env, fs,
+    io::{self, BufRead, Write},
+    path::PathBuf,
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+use anyhow::{Context, Result};
+use serde_json::{Value, json};
+
+const PROTOCOL_VERSION: &str = "2024-11-05";
+const SERVER_NAME: &str = "claudex-launch";
+const SERVER_VERSION: &str = "2.0.0";
+
+pub fn run_stdio() -> Result<()> {
+    let stdin = io::stdin();
+    let mut stdout = io::stdout();
+    let mut reader = stdin.lock();
+    let mut ndjson = false;
+    loop {
+        let Some((message, mode)) = read_message(&mut reader)? else {
+            break;
+        };
+        if mode {
+            ndjson = true;
+        }
+        handle(&message, ndjson, &mut stdout)?;
+    }
+    Ok(())
+}
+
+fn handle(message: &Value, ndjson: bool, stdout: &mut impl Write) -> Result<()> {
+    let method = message.get("method").and_then(Value::as_str).unwrap_or("");
+    let id = message.get("id").cloned();
+    match method {
+        "initialize" => write_message(
+            stdout,
+            ndjson,
+            json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {
+                    "protocolVersion": PROTOCOL_VERSION,
+                    "capabilities": {"tools": {}},
+                    "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION}
+                }
+            }),
+        ),
+        "notifications/initialized" => Ok(()),
+        "tools/list" => write_message(
+            stdout,
+            ndjson,
+            json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {"tools": tools()}
+            }),
+        ),
+        "tools/call" => {
+            record_tools_call(message);
+            write_message(
+                stdout,
+                ndjson,
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": {
+                        "content": [{
+                            "type": "text",
+                            "text": "Claudex: SubAgent launch handed to Claude Code. End the turn; do not poll TaskOutput."
+                        }],
+                        "isError": false
+                    }
+                }),
+            )
+        }
+        "ping" => write_message(stdout, ndjson, json!({"jsonrpc":"2.0","id":id,"result":{}})),
+        _ if id.is_some() => write_message(
+            stdout,
+            ndjson,
+            json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "error": {"code": -32601, "message": format!("Method not found: {method}")}
+            }),
+        ),
+        _ => Ok(()),
+    }
+}
+
+fn tools() -> Value {
+    let schema = json!({
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+            "description": {"type": "string", "description": "Short 3-5 word description of the task"},
+            "prompt": {"type": "string", "description": "The task for the agent to perform"},
+            "subagent_type": {"type": "string", "description": "Claudex worker type from selected_workers"},
+            "run_in_background": {"type": "boolean", "description": "Prefer true for agents panel tracking"},
+            "claudex_model": {"type": "string", "description": "Exact worker model id from selected_workers"},
+            "claudex_effort": {"type": "string", "description": "Worker effort from selected_workers"}
+        },
+        "required": ["description", "prompt"]
+    });
+    json!([
+        {
+            "name": "Agent",
+            "description": "Launch a Claude Code SubAgent through Claudex. Prefer run_in_background=true and selected_workers subagent_type + claudex_model. After launch, end the turn; do not poll.",
+            "inputSchema": schema
+        },
+        {
+            "name": "Task",
+            "description": "Launch a Claude Code Task SubAgent through Claudex. Prefer run_in_background=true. After launch, end the turn; do not poll.",
+            "inputSchema": schema
+        }
+    ])
+}
+
+fn record_tools_call(message: &Value) {
+    let params = message.get("params").cloned().unwrap_or(Value::Null);
+    let name = params
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("Agent");
+    let arguments = params
+        .get("arguments")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+    let payload = json!({
+        "ts": SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs_f64(),
+        "name": name,
+        "arguments": arguments,
+        "method": message.get("method"),
+        "params": params
+    });
+    for key in ["CLAUDEX_LAUNCH_QUEUE", "CLAUDEX_LAUNCH_MCP_LOG"] {
+        let Some(path) = env::var_os(key).map(PathBuf::from) else {
+            continue;
+        };
+        if let Some(parent) = path.parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        if let Ok(mut file) = fs::OpenOptions::new().create(true).append(true).open(&path)
+            && let Ok(line) = serde_json::to_string(&payload)
+        {
+            let _ = writeln!(file, "{line}");
+        }
+    }
+}
+
+fn write_message(stdout: &mut impl Write, ndjson: bool, message: Value) -> Result<()> {
+    let body = serde_json::to_vec(&message).context("serialize MCP message")?;
+    if ndjson {
+        stdout.write_all(&body)?;
+        stdout.write_all(b"\n")?;
+    } else {
+        write!(stdout, "Content-Length: {}\r\n\r\n", body.len())?;
+        stdout.write_all(&body)?;
+    }
+    stdout.flush()?;
+    Ok(())
+}
+
+fn read_message(reader: &mut impl BufRead) -> Result<Option<(Value, bool)>> {
+    let mut first = String::new();
+    if reader.read_line(&mut first)? == 0 {
+        return Ok(None);
+    }
+    let stripped = first.trim();
+    if stripped.is_empty() {
+        return read_message(reader);
+    }
+    if stripped.starts_with('{') || stripped.starts_with('[') {
+        return Ok(Some((serde_json::from_str(stripped)?, true)));
+    }
+    let mut headers = std::collections::HashMap::new();
+    let mut line = first;
+    loop {
+        if line == "\r\n" || line == "\n" {
+            break;
+        }
+        if let Some((key, value)) = line.split_once(':') {
+            headers.insert(key.trim().to_ascii_lowercase(), value.trim().to_owned());
+        }
+        line.clear();
+        if reader.read_line(&mut line)? == 0 {
+            return Ok(None);
+        }
+    }
+    let length = headers
+        .get("content-length")
+        .and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(0);
+    if length == 0 {
+        return Ok(None);
+    }
+    let mut body = vec![0_u8; length];
+    io::Read::read_exact(reader, &mut body)?;
+    Ok(Some((serde_json::from_slice(&body)?, false)))
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    #[test]
+    fn answers_initialize_and_tools_call_over_ndjson() {
+        let input = concat!(
+            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#,
+            "\n",
+            r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
+            "\n",
+            r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#,
+            "\n",
+            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"Agent","arguments":{"description":"d","prompt":"p"}}}"#,
+            "\n",
+        );
+        let mut reader = Cursor::new(input.as_bytes());
+        let mut stdout = Vec::new();
+        let mut ndjson = false;
+        while let Some((message, mode)) = read_message(&mut reader).expect("read") {
+            if mode {
+                ndjson = true;
+            }
+            handle(&message, ndjson, &mut stdout).expect("handle");
+        }
+        let out = String::from_utf8(stdout).expect("utf8");
+        assert!(out.contains("claudex-launch"));
+        assert!(out.contains("\"name\":\"Agent\""));
+        assert!(out.contains("SubAgent launch handed to Claude Code"));
+    }
+}

@@ -320,6 +320,17 @@ fn tool_content_part(item: &acp::ToolCallContent) -> Option<String> {
 }
 
 fn tool_display_name(call: &acp::ToolCall) -> String {
+    // Prefer explicit tool names from Cursor MCP / provider meta over generic
+    // titles like "MCP" so launch bridging can map Agent/Task correctly.
+    if let Some(name) = call.raw_input.as_ref().and_then(|input| {
+        ["_toolName", "toolName", "name", "tool"]
+            .into_iter()
+            .find_map(|key| input.get(key).and_then(Value::as_str))
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    }) {
+        return name.to_owned();
+    }
     if let Some(from_kind) = tool_kind_name(call.kind) {
         return from_kind.into();
     }

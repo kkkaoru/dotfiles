@@ -17,6 +17,7 @@ use super::{
 
 mod batch;
 mod external_tool;
+mod provider_launch;
 mod visibility;
 #[path = "web_provenance.rs"]
 mod web_provenance;
@@ -31,6 +32,12 @@ pub(in crate::anthropic) struct SegmentBuilder {
     /// Provider call IDs already shown as progress text. ACP can report the same
     /// call first as ToolCall and again as a populated ToolCallUpdate.
     pub(super) provider_tool_calls: Vec<(String, String)>,
+    /// Launch-shaped provider tools already bridged to Claude Code tool_use.
+    /// Cursor may emit call → update → completed for the same callId.
+    bridged_provider_launch_ids: Vec<String>,
+    /// Cursor MCP launch callIds seen with empty args. Later generic
+    /// `provider tool` updates for these ids still consult the MCP launch queue.
+    mcp_provider_call_ids: Vec<String>,
     requires_verified_web_evidence: bool,
     /// Completed provider-native web calls whose provenance has already been
     /// counted. A provider may repeat its final ToolCallUpdate while reconnecting.
@@ -47,6 +54,8 @@ impl SegmentBuilder {
             open_text_block: None,
             external_tool_calls: 0,
             provider_tool_calls: Vec::new(),
+            bridged_provider_launch_ids: Vec::new(),
+            mcp_provider_call_ids: Vec::new(),
             requires_verified_web_evidence: false,
             verified_web_evidence_call_ids: Vec::new(),
             injected_output_tokens: 0,
@@ -93,21 +102,16 @@ impl SegmentBuilder {
                 self.tool_call(bridge, session, current_messages, system, call, stream)
                     .await?;
             }
-            Some("item/providerTool/call") => {
-                // Bridge only request-supplied Agent/Task launches to executable tool_use.
-                // Native provider tools stay WIP so Claude Code never double-executes them.
-                if let Some(call) = super::acp_tool_bridge::bridge_provider_tool_call(
-                    &session.external_tool_names,
+            Some("item/providerTool/call") | Some("item/providerTool/update") => {
+                self.provider_launch_event(
+                    bridge,
+                    session,
+                    current_messages,
+                    system,
                     event,
-                ) {
-                    self.tool_call(bridge, session, current_messages, system, call, stream)
-                        .await?;
-                } else {
-                    self.provider_tool_call(event, stream).await?;
-                }
-            }
-            Some("item/providerTool/update") => {
-                self.provider_tool_update(event, stream).await?;
+                    stream,
+                )
+                .await?;
             }
             Some("item/started") => {
                 self.native_web_search_event(event, stream).await?;

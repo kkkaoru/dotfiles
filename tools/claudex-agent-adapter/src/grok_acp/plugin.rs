@@ -2,16 +2,19 @@ use std::{ffi::OsStr, fs, path::PathBuf};
 
 use anyhow::{Context, Result};
 
-pub(super) const ROUTING_INSTRUCTIONS: &str = "Claudex SubAgent routing on Grok ACP: launch workers \
-through the Agent or Task tool when available (including MCP claudex-launch Agent/Task). Prefer \
-subagent_type from selected_workers (claudex-grok, claudex-cursor, claudex-fugu, …), set \
-claudex_model and claudex_effort to that worker's exact model/effort, and set \
-run_in_background=true unless the user requires a synchronous result. If only spawn_subagent is \
-available, call it with description+prompt and the adapter bridges it to Claude Code Agent tool_use \
-so the Claudex agents panel tracks the worker—do not wait for the Grok-native child. After a \
-background launch, emit a short status and end the turn immediately; do not call \
-get_command_or_subagent_output or TaskOutput with a positive timeout_ms in the same turn. Retrieve \
-results only after a Claude completion notification on a later turn.";
+pub(super) const ROUTING_INSTRUCTIONS: &str = "Claudex SubAgent routing on ACP: launch workers \
+through MCP claudex-launch Agent or Task when that server is attached (preferred), or any other \
+Agent/Task tool that Claude Code supplied. Prefer subagent_type from selected_workers \
+(claudex-grok, claudex-cursor, claudex-fugu, …), set claudex_model and claudex_effort to that \
+worker's exact model/effort, and set run_in_background=true unless the user requires a \
+synchronous result. Do not use provider-native Task/Agent fan-out for Claudex workers: those \
+finish inside Cursor/OpenCode/Grok and never become Claude Code SubAgents (▶ Task / ✓ Task text \
+alone is not a launch). If only spawn_subagent is available, call it with description+prompt and \
+the adapter bridges it to Claude Code Agent tool_use so the Claudex agents panel tracks the \
+worker—do not wait for the provider-native child. After a background launch, emit a short status \
+and end the turn immediately; do not call get_command_or_subagent_output or TaskOutput with a \
+positive timeout_ms in the same turn. Retrieve results only after a Claude completion notification \
+on a later turn.";
 
 const PROFILE_NAME: &str = "claudex-high";
 const PROFILE_EFFORT: &str = "high";

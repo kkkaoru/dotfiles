@@ -33,9 +33,11 @@ pub(super) fn acp_bridge_request_id(call_id: &str) -> Value {
 }
 
 fn bridgeable_status(status: Option<&str>) -> bool {
+    // Cursor often opens Task incomplete, then fills args on update/completed.
+    // Allow completed so a late-ready launch still becomes Claude Code tool_use.
     match status.unwrap_or("pending") {
-        "pending" | "in_progress" | "started" => true,
-        "completed" | "failed" | "cancelled" => false,
+        "pending" | "in_progress" | "started" | "completed" => true,
+        "failed" | "cancelled" => false,
         _ => true,
     }
 }
@@ -63,9 +65,59 @@ fn looks_like_launch_tool(candidate: &str) -> bool {
     lower == "agent"
         || lower == "task"
         || lower == SPAWN_SUBAGENT
+        || lower == "mcp"
+        || lower.contains("claudex-launch")
+        || lower.contains("mcp__claudex")
+        || lower.contains("mcp__") && (lower.contains("agent") || lower.contains("task"))
         || lower.ends_with("__agent")
         || lower.ends_with("__task")
         || lower.contains("spawn_subagent")
+}
+
+/// Cursor surfaces injected MCP tools as title `MCP` (kind=other). Detect launch
+/// intent from argument shape so those calls still become Claude Code Agent/Task.
+fn looks_like_launch_arguments(arguments: &Value) -> bool {
+    let Some(object) = arguments.as_object() else {
+        return false;
+    };
+    let has_prompt = PROMPT_ALIASES
+        .iter()
+        .any(|key| nonempty_string(object, key).is_some());
+    if !has_prompt {
+        return false;
+    }
+    object.contains_key("subagent_type")
+        || object.contains_key("run_in_background")
+        || object.contains_key("claudex_model")
+        || object.contains_key("claudex_effort")
+        || object.contains_key("_toolName")
+        || DESCRIPTION_ALIASES
+            .iter()
+            .any(|key| nonempty_string(object, key).is_some())
+}
+
+fn launch_tool_name_from_arguments(
+    arguments: &Value,
+    names: &HashMap<String, String>,
+) -> Option<String> {
+    if !has_agent_tool(names) {
+        return None;
+    }
+    let object = arguments.as_object()?;
+    let tool_name = object
+        .get("_toolName")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if tool_name == "task"
+        || tool_name.ends_with("__task")
+        || tool_name.contains("task") && names.values().any(|name| name == "Task")
+    {
+        if names.values().any(|name| name == "Task") {
+            return Some("Task".to_owned());
+        }
+    }
+    Some("Agent".to_owned())
 }
 
 fn map_launch_name(candidate: &str, names: &HashMap<String, String>) -> Option<String> {
@@ -157,12 +209,55 @@ fn launch_arguments_ready(arguments: &Value) -> bool {
         .is_some()
 }
 
+/// True when this providerTool event is a launch-shaped Agent/Task/spawn_subagent
+/// card that will not become Claude Code tool_use (incomplete args, or missing
+/// Agent mapping). Suppress WIP text for those so Cursor `auto` cannot fake
+/// `▶ Task` / `▶ MCP` / `✓ Task` as if Claudex workers started.
+pub(super) fn is_unbridged_launch_progress(
+    external_tool_names: &HashMap<String, String>,
+    event: &Value,
+) -> bool {
+    let Some(params) = event.get("params") else {
+        return false;
+    };
+    let tool = params.get("tool").and_then(Value::as_str).unwrap_or("");
+    let title = params.get("title").and_then(Value::as_str).unwrap_or("");
+    let raw_args = params.get("arguments").unwrap_or(&Value::Null);
+    let launch_shaped = [tool, title].into_iter().any(|candidate| {
+        !candidate.is_empty()
+            && (looks_like_launch_tool(candidate)
+                || map_launch_name(candidate, external_tool_names).is_some())
+    }) || looks_like_launch_arguments(raw_args);
+    if !launch_shaped {
+        return false;
+    }
+    bridge_provider_tool_call(external_tool_names, event).is_none()
+}
+
 /// If this providerTool event is a request-supplied Agent/Task launch (or Grok
 /// spawn_subagent when Agent is available), return a ToolCall for Claude Code.
 pub(super) fn bridge_provider_tool_call(
     external_tool_names: &HashMap<String, String>,
     event: &Value,
 ) -> Option<ToolCall> {
+    bridge_provider_tool_call_inner(external_tool_names, event, false)
+}
+
+/// Like [`bridge_provider_tool_call`], but also consults the MCP launch queue when
+/// Cursor later emits a generic `provider tool` update for a known MCP call id.
+pub(super) fn bridge_provider_tool_call_with_mcp_hint(
+    external_tool_names: &HashMap<String, String>,
+    event: &Value,
+) -> Option<ToolCall> {
+    bridge_provider_tool_call_inner(external_tool_names, event, true)
+}
+
+fn bridge_provider_tool_call_inner(
+    external_tool_names: &HashMap<String, String>,
+    event: &Value,
+    force_mcp_queue: bool,
+) -> Option<ToolCall> {
+    trace_launch_shaped_event(event);
     let params = event.get("params")?;
     if !bridgeable_status(params.get("status").and_then(Value::as_str)) {
         return None;
@@ -170,16 +265,46 @@ pub(super) fn bridge_provider_tool_call(
     let call_id = params.get("callId").and_then(Value::as_str)?;
     let tool = params.get("tool").and_then(Value::as_str).unwrap_or("");
     let title = params.get("title").and_then(Value::as_str).unwrap_or("");
+    let raw_args = params.get("arguments").unwrap_or(&Value::Null);
+    let mcp_shaped = force_mcp_queue
+        || [tool, title]
+            .into_iter()
+            .any(|candidate| looks_like_mcp_surface(candidate));
+    let normalized_raw = normalize_launch_arguments("Agent", raw_args);
+    let queued = if mcp_shaped && !launch_arguments_ready(&normalized_raw) {
+        super::acp_launch_queue::peek_pending_launch_arguments()
+    } else {
+        None
+    };
+    let effective_args = queued.as_ref().unwrap_or(raw_args);
     let (provider_label, name) = [tool, title]
         .into_iter()
         .filter(|candidate| !candidate.is_empty())
         .find_map(|candidate| {
             map_launch_name(candidate, external_tool_names).map(|name| (candidate, name))
+        })
+        .or_else(|| {
+            if !looks_like_launch_arguments(effective_args)
+                && ![tool, title]
+                    .into_iter()
+                    .any(|candidate| looks_like_launch_tool(candidate))
+            {
+                return None;
+            }
+            let name = launch_tool_name_from_arguments(effective_args, external_tool_names)?;
+            let label = [tool, title]
+                .into_iter()
+                .find(|candidate| !candidate.is_empty())
+                .unwrap_or("Agent");
+            Some((label, name))
         })?;
-    let raw_args = params.get("arguments").unwrap_or(&Value::Null);
-    let arguments = normalize_launch_arguments(provider_label, raw_args);
+    let arguments = normalize_launch_arguments(provider_label, effective_args);
     if !launch_arguments_ready(&arguments) {
         return None;
+    }
+    if queued.is_some() {
+        let _ = super::acp_launch_queue::take_pending_launch_arguments();
+        tracing::info!("using queued claudex-launch MCP arguments for ACP bridge");
     }
     Some(ToolCall {
         call_id: call_id.to_owned(),
@@ -189,166 +314,47 @@ pub(super) fn bridge_provider_tool_call(
     })
 }
 
-#[cfg(test)]
-#[cfg_attr(coverage_nightly, coverage(off))]
-mod tests {
-    use super::*;
-
-    fn names() -> HashMap<String, String> {
-        HashMap::from([
-            ("cc_Agent_0".to_owned(), "Agent".to_owned()),
-            ("cc_Bash_1".to_owned(), "Bash".to_owned()),
-            ("cc_Task_2".to_owned(), "Task".to_owned()),
-        ])
-    }
-
-    #[test]
-    fn bridges_only_agent_and_task_when_request_supplied() {
-        assert!(is_client_executed_bridge_tool("Agent"));
-        assert!(is_client_executed_bridge_tool("Task"));
-        assert!(!is_client_executed_bridge_tool("Bash"));
-        let map = names();
-        let agent = json!({
-            "params":{
-                "callId":"c1",
-                "tool":"Agent",
-                "status":"pending",
-                "arguments":{"prompt":"do work"}
-            }
-        });
-        let bridged = bridge_provider_tool_call(&map, &agent).expect("Agent bridges");
-        assert_eq!(bridged.call_id, "c1");
-        assert_eq!(bridged.name, "Agent");
-        assert!(is_acp_bridge_request_id(&bridged.request_id));
-        assert_eq!(bridged.arguments["prompt"], "do work");
-        assert_eq!(bridged.arguments["description"], "do work");
-        let task = json!({
-            "params":{
-                "callId":"c2",
-                "tool":"cc_Task_2",
-                "status":"in_progress",
-                "arguments":{"prompt":"explore"}
-            }
-        });
-        assert_eq!(
-            bridge_provider_tool_call(&map, &task)
-                .expect("Task bridges")
-                .name,
-            "Task"
-        );
-    }
-
-    #[test]
-    fn bridges_spawn_subagent_onto_agent_when_claude_supplied_agent() {
-        let map = names();
-        let spawn = json!({
-            "params":{
-                "callId":"s1",
-                "tool":"spawn_subagent",
-                "status":"pending",
-                "arguments":{
-                    "description":"smoke",
-                    "prompt":"CHILD_OK",
-                    "subagent_type":"grok-native-high-plugin-v3:claudex-high"
-                }
-            }
-        });
-        let bridged = bridge_provider_tool_call(&map, &spawn).expect("spawn bridges");
-        assert_eq!(bridged.name, "Agent");
-        assert_eq!(bridged.arguments["subagent_type"], "claudex-grok");
-        assert_eq!(bridged.arguments["run_in_background"], true);
-        assert_eq!(bridged.arguments["description"], "smoke");
-    }
-
-    #[test]
-    fn never_bridges_native_tools_or_completed_calls() {
-        let map = names();
-        let bash = json!({
-            "params":{
-                "callId":"b1",
-                "tool":"Bash",
-                "status":"pending",
-                "arguments":{"command":"ls"}
-            }
-        });
-        assert!(bridge_provider_tool_call(&map, &bash).is_none());
-        let completed = json!({
-            "params":{
-                "callId":"c3",
-                "tool":"Agent",
-                "status":"completed",
-                "arguments":{"prompt":"late"}
-            }
-        });
-        assert!(bridge_provider_tool_call(&map, &completed).is_none());
-        assert!(bridge_provider_tool_call(&HashMap::new(), &json!({
-            "params":{"callId":"c4","tool":"Agent","status":"pending","arguments":{}}
-        })).is_none());
-    }
-
-    #[test]
-    fn matches_title_when_tool_label_is_generic() {
-        let map = names();
-        let event = json!({
-            "params":{
-                "callId":"t1",
-                "tool":"Tool",
-                "title":"Agent",
-                "status":"pending",
-                "arguments":{"prompt":"via title"}
-            }
-        });
-        let bridged = bridge_provider_tool_call(&map, &event).expect("title Agent bridges");
-        assert_eq!(bridged.name, "Agent");
-    }
-
-    #[test]
-    fn does_not_bridge_incomplete_cursor_native_task() {
-        let map = names();
-        // Observed with Cursor `auto` as the outer/main model: native Task opens with
-        // meta fields only, which previously became Agent tool_use missing prompt.
-        let incomplete = json!({
-            "params":{
-                "callId":"cursor-task-1",
-                "tool":"Task",
-                "title":"Task",
-                "status":"pending",
-                "arguments":{"_toolName":"task","run_in_background":true}
-            }
-        });
-        assert!(bridge_provider_tool_call(&map, &incomplete).is_none());
-
-        let empty = json!({
-            "params":{
-                "callId":"cursor-task-2",
-                "tool":"task",
-                "status":"in_progress",
-                "arguments":{}
-            }
-        });
-        assert!(bridge_provider_tool_call(&map, &empty).is_none());
-    }
-
-    #[test]
-    fn bridges_when_prompt_arrives_via_alias_after_normalize() {
-        let map = names();
-        let event = json!({
-            "params":{
-                "callId":"alias-1",
-                "tool":"Task",
-                "status":"pending",
-                "arguments":{
-                    "_toolName":"task",
-                    "title":"gap fix",
-                    "task":"Investigate the wasm build failure",
-                    "run_in_background":true
-                }
-            }
-        });
-        let bridged = bridge_provider_tool_call(&map, &event).expect("alias prompt bridges");
-        assert_eq!(bridged.name, "Task");
-        assert_eq!(bridged.arguments["prompt"], "Investigate the wasm build failure");
-        assert_eq!(bridged.arguments["description"], "gap fix");
-        assert!(bridged.arguments.get("_toolName").is_none());
-    }
+fn looks_like_mcp_surface(candidate: &str) -> bool {
+    let lower = candidate.to_ascii_lowercase();
+    lower == "mcp"
+        || lower.starts_with("mcp:")
+        || lower.starts_with("mcp ")
+        || lower.contains("claudex-launch")
+        || (lower.contains("mcp") && (lower.contains("agent") || lower.contains("task")))
 }
+
+fn trace_launch_shaped_event(event: &Value) {
+    let Some(params) = event.get("params") else {
+        return;
+    };
+    let tool = params.get("tool").and_then(Value::as_str).unwrap_or("");
+    let title = params.get("title").and_then(Value::as_str).unwrap_or("");
+    let status = params.get("status").and_then(Value::as_str).unwrap_or("");
+    let raw_args = params.get("arguments").unwrap_or(&Value::Null);
+    let interesting = [tool, title].into_iter().any(|candidate| {
+        let lower = candidate.to_ascii_lowercase();
+        lower == "mcp"
+            || lower.contains("agent")
+            || lower.contains("task")
+            || looks_like_launch_tool(candidate)
+    }) || looks_like_launch_arguments(raw_args);
+    if !interesting {
+        return;
+    }
+    let arg_keys = raw_args
+        .as_object()
+        .map(|object| object.keys().cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    let acp_method = event.get("method").and_then(Value::as_str).unwrap_or("");
+    tracing::info!(
+        acp_method,
+        tool,
+        title,
+        status,
+        ?arg_keys,
+        "ACP providerTool launch-shaped event"
+    );
+}
+
+#[cfg(test)]
+include!("acp_tool_bridge_tests.rs");

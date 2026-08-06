@@ -17,6 +17,7 @@ enum RuntimeCommand {
     BuildId,
     Ensure(AdapterOptions),
     Launch(AdapterOptions, Vec<OsString>, bool),
+    McpClaudexLaunch,
     Serve(AdapterOptions),
 }
 
@@ -38,6 +39,10 @@ pub async fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<i32> {
         }
         RuntimeCommand::Launch(options, arguments, inherit_claude_model) => {
             launcher::run_claude(options, arguments, inherit_claude_model).await?
+        }
+        RuntimeCommand::McpClaudexLaunch => {
+            crate::launch_mcp::run_stdio()?;
+            0
         }
         RuntimeCommand::Serve(options) => {
             serve(options).await?;
@@ -71,13 +76,19 @@ fn parse_command(mut arguments: VecDeque<OsString>) -> Result<RuntimeCommand> {
                 inherit_claude_model,
             ))
         }
+        "mcp-claudex-launch" => {
+            reject_remaining(&arguments)?;
+            Ok(RuntimeCommand::McpClaudexLaunch)
+        }
         "serve" => {
             let options = parse_options(&mut arguments)?;
             reject_inherit_model(&options, "serve")?;
             reject_remaining(&arguments)?;
             Ok(RuntimeCommand::Serve(options.adapter))
         }
-        _ => bail!("unknown command `{command}`; expected build-id, ensure, launch, or serve"),
+        _ => bail!(
+            "unknown command `{command}`; expected build-id, ensure, launch, mcp-claudex-launch, or serve"
+        ),
     }
 }
 
