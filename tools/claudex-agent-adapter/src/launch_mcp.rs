@@ -123,6 +123,18 @@ fn tools() -> Value {
 }
 
 fn record_tools_call(message: &Value) {
+    let paths = ["CLAUDEX_LAUNCH_QUEUE", "CLAUDEX_LAUNCH_MCP_LOG"]
+        .into_iter()
+        .filter_map(env::var_os)
+        .map(PathBuf::from);
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs_f64();
+    record_tools_call_to(message, timestamp, paths);
+}
+
+fn record_tools_call_to(message: &Value, timestamp: f64, paths: impl IntoIterator<Item = PathBuf>) {
     let params = message.get("params").cloned().unwrap_or(Value::Null);
     let name = params
         .get("name")
@@ -133,16 +145,13 @@ fn record_tools_call(message: &Value) {
         .cloned()
         .unwrap_or_else(|| json!({}));
     let payload = json!({
-        "ts": SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs_f64(),
+        "ts": timestamp,
         "name": name,
         "arguments": arguments,
         "method": message.get("method"),
         "params": params
     });
-    for key in ["CLAUDEX_LAUNCH_QUEUE", "CLAUDEX_LAUNCH_MCP_LOG"] {
-        let Some(path) = env::var_os(key).map(PathBuf::from) else {
-            continue;
-        };
+    for path in paths {
         if let Some(parent) = path.parent() {
             let _ = fs::create_dir_all(parent);
         }
@@ -207,34 +216,5 @@ fn read_message(reader: &mut impl BufRead) -> Result<Option<(Value, bool)>> {
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
-mod tests {
-    use super::*;
-    use std::io::Cursor;
-
-    #[test]
-    fn answers_initialize_and_tools_call_over_ndjson() {
-        let input = concat!(
-            r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#,
-            "\n",
-            r#"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
-            "\n",
-            r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#,
-            "\n",
-            r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"Agent","arguments":{"description":"d","prompt":"p"}}}"#,
-            "\n",
-        );
-        let mut reader = Cursor::new(input.as_bytes());
-        let mut stdout = Vec::new();
-        let mut ndjson = false;
-        while let Some((message, mode)) = read_message(&mut reader).expect("read") {
-            if mode {
-                ndjson = true;
-            }
-            handle(&message, ndjson, &mut stdout).expect("handle");
-        }
-        let out = String::from_utf8(stdout).expect("utf8");
-        assert!(out.contains("claudex-launch"));
-        assert!(out.contains("\"name\":\"Agent\""));
-        assert!(out.contains("SubAgent launch handed to Claude Code"));
-    }
-}
+#[path = "launch_mcp_tests.rs"]
+mod tests;
