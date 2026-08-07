@@ -29,7 +29,10 @@ pub(super) async fn inspect_service(
     client: &reqwest::Client,
     config: &ServiceConfig,
 ) -> ServiceState {
-    inspect_service_with(client, config, any_launch_is_active).await
+    inspect_service_with(client, config, || {
+        any_launch_is_active(config.options.listen.port())
+    })
+    .await
 }
 
 pub(super) async fn inspect_service_with(
@@ -45,9 +48,7 @@ pub(super) async fn inspect_service_with(
         && authenticates(client, config).await
     {
         ServiceState::Reuse
-    } else if health.status == "ok"
-        && (health.has_active_work() || live_launch_sessions())
-    {
+    } else if health.status == "ok" && (health.has_active_work() || live_launch_sessions()) {
         // Never tear down a generation that is still serving a request, or that
         // still has an interactive launch parent attached. Replacing serve while
         // a TUI is open aborts Claude Code and forces resume from compaction.

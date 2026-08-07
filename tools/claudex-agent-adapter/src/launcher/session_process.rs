@@ -12,12 +12,15 @@ pub(super) fn another_resume_launcher_is_active(session_id: &str) -> anyhow::Res
         .any(|pid| pid != current_pid))
 }
 
-/// True when any interactive `claudex-agent-adapter launch` parent is alive.
+const DEFAULT_LISTEN_PORT: u16 = 8318;
+
+/// True when an interactive `claudex-agent-adapter launch` parent using this
+/// listener is alive.
 ///
 /// Handover must not SIGTERM the shared `serve` daemon while a TUI session still
 /// holds that parent: killing the listener mid-session aborts Claude Code and
 /// forces resume to restart from compaction.
-pub(super) fn any_launch_is_active() -> bool {
+pub(super) fn any_launch_is_active(listen_port: u16) -> bool {
     let output = match Command::new("ps").args(["-axo", "pid=,command="]).output() {
         Ok(output) => output,
         Err(_) => return false,
@@ -25,8 +28,18 @@ pub(super) fn any_launch_is_active() -> bool {
     let current_pid = std::process::id();
     String::from_utf8_lossy(&output.stdout)
         .lines()
-        .filter_map(process_line_matches_launch)
+        .filter_map(|line| process_line_matches_launch_on_port(line, listen_port))
         .any(|pid| pid != current_pid)
+}
+
+fn process_line_matches_launch_on_port(line: &str, listen_port: u16) -> Option<u32> {
+    let pid = process_line_matches_launch(line)?;
+    let arguments = line.split_whitespace().skip(2).collect::<Vec<_>>();
+    let configured_port = match arguments.windows(2).find(|pair| pair[0] == "--listen") {
+        Some(pair) => pair[1].parse::<std::net::SocketAddr>().ok()?.port(),
+        None => DEFAULT_LISTEN_PORT,
+    };
+    (configured_port == listen_port).then_some(pid)
 }
 
 fn process_line_matches_launch(line: &str) -> Option<u32> {
@@ -56,7 +69,10 @@ fn process_line_matches_resume_launcher(line: &str, session_id: &str) -> Option<
 
 #[cfg(test)]
 mod tests {
-    use super::{process_line_matches_launch, process_line_matches_resume_launcher};
+    use super::{
+        DEFAULT_LISTEN_PORT, process_line_matches_launch, process_line_matches_launch_on_port,
+        process_line_matches_resume_launcher,
+    };
 
     #[test]
     fn recognizes_launch_parents_without_confusing_them_for_serve() {
@@ -70,6 +86,24 @@ mod tests {
             process_line_matches_launch(
                 "42 /Users/test/.local/bin/claudex-agent-adapter serve --model opus"
             ),
+            None
+        );
+    }
+
+    #[test]
+    fn scopes_launch_parents_to_the_shared_listener_port() {
+        let explicit =
+            "42 /usr/bin/claudex-agent-adapter launch --listen 127.0.0.1:9000 --model opus";
+        let default = "43 /usr/bin/claudex-agent-adapter launch --model opus";
+        let malformed = "44 /usr/bin/claudex-agent-adapter launch --listen invalid --model opus";
+        assert_eq!(
+            process_line_matches_launch_on_port(explicit, 9000),
+            Some(42)
+        );
+        assert_eq!(process_line_matches_launch_on_port(explicit, 8318), None);
+        assert_eq!(process_line_matches_launch_on_port(default, 8318), Some(43));
+        assert_eq!(
+            process_line_matches_launch_on_port(malformed, DEFAULT_LISTEN_PORT),
             None
         );
     }

@@ -340,11 +340,20 @@ async fn ensure_running_starts_reuses_and_replaces_the_daemon() {
         .env("ANTHROPIC_AUTH_TOKEN", "changed-token")
         .output()
         .expect("replace daemon after token change");
-    assert!(authenticated.status.success());
+    assert!(
+        authenticated.status.success(),
+        "{}",
+        String::from_utf8_lossy(&authenticated.stderr)
+    );
     let authenticated_pid = health(&client, &base_url).await["pid"]
         .as_u64()
         .expect("authenticated daemon pid");
-    assert_ne!(authenticated_pid, first_pid);
+    assert_ne!(
+        authenticated_pid,
+        first_pid,
+        "{}",
+        String::from_utf8_lossy(&authenticated.stderr)
+    );
 
     let replaced = ensure_command(&home, port, "7")
         .env("ANTHROPIC_AUTH_TOKEN", "changed-token")
