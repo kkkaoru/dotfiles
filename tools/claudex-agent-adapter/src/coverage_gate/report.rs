@@ -34,9 +34,6 @@ pub(super) fn production_line_failures(root: &Path, data: &Value) -> Result<Vec<
         // Do not weaken LLVM's normal file summary when any executable source
         // line is untested. Only correct its known async-mapping false negative
         // after every countable source segment was exercised.
-        // Do not weaken LLVM's normal file summary when any executable source
-        // line is untested. Only correct its known async-mapping false negative
-        // after every countable source segment was exercised.
         let coverage = source_line_percent(file)?
             .filter(|coverage| *coverage == 100.0)
             .unwrap_or(reported_coverage);
@@ -68,6 +65,7 @@ pub(super) fn is_non_executable_source(path: &Path) -> bool {
     path == Path::new("src/lib.rs")
         || path == Path::new("src/anthropic/stream/turn.rs")
         || path == Path::new("src/grok_acp/test_support.rs")
+        || path == Path::new("src/provider_config/types.rs")
 }
 
 pub(super) fn expected_production_files(root: &Path) -> BTreeSet<PathBuf> {

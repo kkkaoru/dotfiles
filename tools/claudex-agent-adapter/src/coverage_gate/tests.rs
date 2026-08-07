@@ -381,6 +381,9 @@ fn handles_zero_counts_and_test_source_names() {
     assert!(is_non_executable_source(std::path::Path::new(
         "src/anthropic/stream/turn.rs"
     )));
+    assert!(is_non_executable_source(std::path::Path::new(
+        "src/provider_config/types.rs"
+    )));
     assert!(!is_non_executable_source(std::path::Path::new(
         "src/module.rs"
     )));

@@ -3,7 +3,6 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, fs, path::Path};
 
-mod model_catalog;
 mod types;
 mod validation;
 mod worker_route;
