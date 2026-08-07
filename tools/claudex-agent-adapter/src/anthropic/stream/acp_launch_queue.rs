@@ -25,8 +25,11 @@ pub(super) fn queue_path() -> PathBuf {
 
 /// Read the oldest fresh Agent/Task launch args without removing them.
 pub(super) fn peek_pending_launch_arguments() -> Option<Value> {
-    let now = now_secs();
-    read_entries(&queue_path())
+    peek_pending_launch_arguments_from(&queue_path(), now_secs())
+}
+
+fn peek_pending_launch_arguments_from(path: &Path, now: f64) -> Option<Value> {
+    read_entries(path)
         .into_iter()
         .find_map(|entry| launch_args_from_entry(&entry, now))
 }
@@ -34,8 +37,11 @@ pub(super) fn peek_pending_launch_arguments() -> Option<Value> {
 /// Pop the oldest fresh Agent/Task launch args written by `mcp-claudex-launch`.
 pub(super) fn take_pending_launch_arguments() -> Option<Value> {
     let path = queue_path();
-    let now = now_secs();
-    let entries = read_entries(&path);
+    take_pending_launch_arguments_from(&path, now_secs())
+}
+
+fn take_pending_launch_arguments_from(path: &Path, now: f64) -> Option<Value> {
+    let entries = read_entries(path);
     let mut taken = None;
     let mut kept = Vec::new();
     for entry in entries {
@@ -50,7 +56,7 @@ pub(super) fn take_pending_launch_arguments() -> Option<Value> {
             kept.push(entry);
         }
     }
-    rewrite_queue(&path, &kept);
+    rewrite_queue(path, &kept);
     taken
 }
 
@@ -110,3 +116,7 @@ fn rewrite_queue(path: &Path, entries: &[Value]) {
         + "\n";
     let _ = fs::write(path, body);
 }
+
+#[cfg(test)]
+#[path = "acp_launch_queue_tests.rs"]
+mod tests;
