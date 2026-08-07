@@ -1,13 +1,14 @@
 use std::{collections::VecDeque, sync::Mutex, time::Instant};
 
-use anyhow::{Result, bail};
 use serde_json::Value;
 
 mod background_launch;
 mod model;
 mod terminal;
-use model::requested_model;
-pub(super) use model::{disabled_subagent_model, is_agent_tool};
+#[cfg(test)]
+pub(super) use super::agent_route_validation::validate_routed_agent_arguments;
+pub(super) use super::agent_route_validation::validate_routed_agent_arguments_with_catalog;
+pub(super) use model::{disabled_subagent_model, is_agent_tool, requested_model};
 use terminal::terminal_task_notification_ids;
 
 pub(super) use super::AgentEffortRecord;
@@ -247,49 +248,6 @@ fn agent_prompt<'a>(tool_name: &str, arguments: &'a Value) -> Option<&'a str> {
         .then(|| arguments.get("prompt").and_then(Value::as_str))
         .flatten()
 }
-#[cfg(test)]
-pub(super) fn validate_routed_agent_arguments(
-    tool_name: &str,
-    arguments: &Value,
-    user_messages: &[Value],
-    system: &Value,
-) -> Result<()> {
-    validate_routed_agent_arguments_with_catalog(
-        tool_name,
-        arguments,
-        user_messages,
-        system,
-        &crate::provider_config::ModelCatalog::default(),
-    )
-}
-
-pub(super) fn validate_routed_agent_arguments_with_catalog(
-    tool_name: &str,
-    arguments: &Value,
-    user_messages: &[Value],
-    system: &Value,
-    model_catalog: &crate::provider_config::ModelCatalog,
-) -> Result<()> {
-    if !is_agent_tool(tool_name) {
-        return Ok(());
-    }
-    let Some(model) = requested_model(arguments) else {
-        bail!("{tool_name} launch is missing required `claudex_model`");
-    };
-    if !super::agent_routing::model_is_authorized_with_catalog(
-        arguments,
-        user_messages,
-        system,
-        model_catalog,
-        model,
-    ) {
-        bail!(
-            "{tool_name} launch model `{model}` is neither the selected worker's exact model nor an exact model requested by the active user"
-        );
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 pub(super) fn prepare_arguments(
     tool_name: &str,

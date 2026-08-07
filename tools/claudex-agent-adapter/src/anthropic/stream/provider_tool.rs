@@ -44,11 +44,8 @@ impl SegmentBuilder {
         if !is_new {
             return Ok(());
         }
-        self.stream_progress_text(
-            &progress_start_line(title, params.get("arguments")),
-            stream,
-        )
-        .await
+        self.stream_progress_text(&progress_start_line(title, params.get("arguments")), stream)
+            .await
     }
 
     /// Status / output for provider-owned work already streamed.
@@ -112,11 +109,8 @@ impl SegmentBuilder {
         if !self.remember_provider_tool(call_id, title) {
             return Ok(());
         }
-        self.stream_progress_text(
-            &progress_start_line(title, params.get("arguments")),
-            stream,
-        )
-        .await
+        self.stream_progress_text(&progress_start_line(title, params.get("arguments")), stream)
+            .await
     }
 
     fn remember_provider_tool(&mut self, call_id: &str, title: &str) -> bool {
@@ -217,7 +211,10 @@ fn argument_preview(arguments: Option<&Value>) -> Option<String> {
         "description",
     ] {
         if let Some(value) = map.get(key).and_then(scalar_preview) {
-            return Some(truncate_for_status(&first_line(&value), ARG_PREVIEW_CHAR_LIMIT));
+            return Some(truncate_for_status(
+                &first_line(&value),
+                ARG_PREVIEW_CHAR_LIMIT,
+            ));
         }
     }
     None

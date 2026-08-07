@@ -304,7 +304,8 @@ fn assert_explicit_model_restore(function: &std::path::Path, home: &tempfile::Te
     assert!(arguments.contains("CLAUDEX_MAIN_MODEL_KNOWN=1\n"));
     assert!(
         arguments
-            .ends_with("--\n--effort\nhigh\n--resume\nretained-session\nexplicit-resume-smoke\n")
+            .ends_with("--\n--effort\nmedium\n--resume\nretained-session\nexplicit-resume-smoke\n"),
+        "{arguments}"
     );
 }
 
@@ -330,9 +331,9 @@ fn assert_explicit_override(function: &std::path::Path, home: &tempfile::TempDir
     assert!(arguments.contains(&format!("--provider-config\n{}\n", alternate.display())));
     assert!(arguments.contains("--model\nvendor-model\n"));
     assert!(!arguments.contains("--inherit-claude-model\n"));
-    assert!(arguments.contains("--effort\nhigh\n"));
+    assert!(arguments.contains("--effort\nmedium\n"));
     assert!(!arguments.contains("--allowedTools\nWebSearch,WebFetch\n"));
-    assert!(arguments.ends_with("--\n--effort\nhigh\noverride-smoke\n"));
+    assert!(arguments.ends_with("--\n--effort\nmedium\noverride-smoke\n"));
     assert_no_implicit_agent(&arguments);
 }
 

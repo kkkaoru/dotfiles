@@ -4,6 +4,9 @@ use serde_json::Value;
 use super::request_routing::official_claude_haiku_model;
 use super::subscription::valid_effort;
 
+mod explicit;
+use explicit::explicit_model_matches_agent;
+
 const ADAPTER_EFFORT: &str = "claudex_effort";
 const ADAPTER_MODEL: &str = "claudex_model";
 const IMPLICIT_MODEL: &str = "claudex_implicit_model";
@@ -40,24 +43,46 @@ pub(super) fn hydrate_routing_fields_from_context(
     system: &Value,
     model_catalog: &crate::provider_config::ModelCatalog,
 ) {
+    // This marker is adapter-owned. Never let an Agent/Task caller authorize its
+    // own arbitrary model by supplying the private field.
+    if let Some(object) = arguments.as_object_mut() {
+        object.remove(IMPLICIT_MODEL);
+    }
     hydrate_routing_fields(arguments);
-    let Some((model, effort)) = selected_worker_fields(arguments, messages, system)
-        .or_else(|| configured_worker_fields(arguments, model_catalog))
-        .or_else(|| generic_worker_fields(arguments, model_catalog))
+    let Some((model, effort)) = expected_worker_fields(arguments, messages, system, model_catalog)
     else {
         return;
     };
     let Some(object) = arguments.as_object_mut() else {
         return;
     };
-    object
-        .entry(ADAPTER_MODEL.to_owned())
-        .or_insert(Value::String(model));
+    // Model and effort are one route tuple. Always canonicalize both together;
+    // retaining either caller-provided half can combine two different workers.
+    object.insert(ADAPTER_MODEL.to_owned(), Value::String(model));
     if let Some(effort) = effort {
-        object
-            .entry(ADAPTER_EFFORT.to_owned())
-            .or_insert(Value::String(effort));
+        object.insert(ADAPTER_EFFORT.to_owned(), Value::String(effort));
+    } else {
+        object.remove(ADAPTER_EFFORT);
     }
+}
+
+pub(super) fn expected_worker_fields(
+    arguments: &Value,
+    messages: &[Value],
+    system: &Value,
+    model_catalog: &crate::provider_config::ModelCatalog,
+) -> Option<(String, Option<String>)> {
+    let mut fields = selected_worker_fields(arguments, messages, system)
+        .or_else(|| configured_worker_fields(arguments, model_catalog))
+        .or_else(|| generic_worker_fields(arguments, model_catalog))?;
+    if let Some(requested) = arguments
+        .get(ADAPTER_MODEL)
+        .and_then(Value::as_str)
+        .filter(|model| explicit_model_matches_agent(arguments, messages, system, model))
+    {
+        fields.0 = requested.to_owned();
+    }
+    Some(fields)
 }
 
 /// Route native Claude children to the official Haiku alias.
@@ -83,6 +108,7 @@ pub(super) fn hydrate_standard_agent_to_parent(arguments: &mut Value, parent_mod
             IMPLICIT_MODEL.to_owned(),
             Value::String(official_claude_haiku_model().to_owned()),
         );
+        object.insert(ADAPTER_EFFORT.to_owned(), Value::String("max".to_owned()));
         return;
     }
 }
@@ -142,11 +168,9 @@ fn selected_worker_fields(
                 .find(|worker| worker.get("agent").and_then(Value::as_str) == Some(agent))
         })
         .or_else(|| {
-            is_generic_agent_type(agent).then(|| {
-                workers
-                    .iter()
-                    .find(|worker| worker.get("model").and_then(Value::as_str).is_some())
-            })?
+            is_generic_agent_type(agent)
+                .then(|| default_subagent_worker(&summary, workers))
+                .flatten()
         })?;
     Some((
         worker.get("model")?.as_str()?.to_owned(),
@@ -156,6 +180,24 @@ fn selected_worker_fields(
             .filter(|effort| valid_effort(effort))
             .map(str::to_owned),
     ))
+}
+
+fn default_subagent_worker<'a>(summary: &'a Value, workers: &'a [Value]) -> Option<&'a Value> {
+    let route = summary.get("default_subagent_route");
+    route
+        .and_then(|route| {
+            let route_agent = route.get("agent").and_then(Value::as_str)?;
+            let route_model = route.get("model").and_then(Value::as_str)?;
+            workers.iter().find(|worker| {
+                worker.get("agent").and_then(Value::as_str) == Some(route_agent)
+                    && worker.get("model").and_then(Value::as_str) == Some(route_model)
+            })
+        })
+        .or_else(|| {
+            workers
+                .iter()
+                .find(|worker| worker.get("model").and_then(Value::as_str).is_some())
+        })
 }
 
 fn prompt_routing_value(arguments: &Value, key: &str) -> Option<String> {
@@ -182,8 +224,8 @@ pub(super) fn model_is_authorized(
     if advisor_launch_disabled(arguments, messages, system) {
         return false;
     }
-    current_user_requests_model(messages, model)
-        || selected_worker_model_matches(messages, system, model)
+    explicit::active_user_requests_model(messages, model)
+        || selected_worker_model_matches(arguments, messages, system, model)
         || configured_advisor_model_matches(arguments, messages, system, model)
 }
 
@@ -194,28 +236,26 @@ pub(super) fn model_is_authorized_with_catalog(
     model_catalog: &crate::provider_config::ModelCatalog,
     model: &str,
 ) -> bool {
-    model_is_authorized(arguments, messages, system, model)
-        || arguments.get(IMPLICIT_MODEL).and_then(Value::as_str) == Some(model)
-        || model_catalog
-            .worker_fields(
-                arguments
-                    .get("subagent_type")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default(),
-            )
-            .is_some_and(|(configured, _)| configured == model)
+    if advisor_launch_disabled(arguments, messages, system) {
+        return false;
+    }
+    if let Some((expected, _)) = expected_worker_fields(arguments, messages, system, model_catalog)
+    {
+        return expected == model;
+    }
+    arguments.get(IMPLICIT_MODEL).and_then(Value::as_str) == Some(model)
+        || model_is_authorized(arguments, messages, system, model)
         || generic_worker_model_matches(arguments, model_catalog, model)
 }
 
-fn selected_worker_model_matches(messages: &[Value], system: &Value, model: &str) -> bool {
-    active_routing_summary(messages, system).is_some_and(|summary| {
-        summary
-            .get("selected_workers")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .any(|worker| worker.get("model").and_then(Value::as_str) == Some(model))
-    })
+fn selected_worker_model_matches(
+    arguments: &Value,
+    messages: &[Value],
+    system: &Value,
+    model: &str,
+) -> bool {
+    selected_worker_fields(arguments, messages, system)
+        .is_some_and(|(selected, _)| selected == model)
 }
 
 fn advisor_launch_disabled(arguments: &Value, messages: &[Value], system: &Value) -> bool {
@@ -272,46 +312,6 @@ fn active_routing_summary(messages: &[Value], system: &Value) -> Option<Value> {
                 .last()
         })
         .or_else(|| message_texts(messages).filter_map(routing_summary).last())
-}
-
-fn current_user_requests_model(messages: &[Value], model: &str) -> bool {
-    // A resumed Claude Code turn may end with only "continue" after the original model choice.
-    // Keep explicit user authorization across the retained conversation; the request-level
-    // disabled-model policy is still enforced before any provider request is started.
-    user_message_texts(messages).any(|text| {
-        let explicit = text
-            .split_once("{\"providers\":")
-            .map_or(text, |(before_routing_context, _)| before_routing_context);
-        contains_model_id(explicit, model)
-    })
-}
-
-fn contains_model_id(text: &str, model: &str) -> bool {
-    text.match_indices(model).any(|(start, _)| {
-        let end = start + model.len();
-        let before_is_boundary = text[..start]
-            .chars()
-            .next_back()
-            .is_none_or(|character| !is_model_id_character(character));
-        before_is_boundary && model_id_ends_at_boundary(&text[end..])
-    })
-}
-
-fn model_id_ends_at_boundary(remaining: &str) -> bool {
-    let mut characters = remaining.chars();
-    match characters.next() {
-        None => true,
-        Some(character) if !is_model_id_character(character) => true,
-        Some(character @ ('.' | ':')) => characters
-            .next()
-            .is_none_or(|next| !is_model_id_character(next) || next == character),
-        Some(_) => false,
-    }
-}
-
-fn is_model_id_character(character: char) -> bool {
-    character.is_ascii_alphanumeric()
-        || matches!(character, '-' | '_' | '.' | ':' | '/' | '@' | '+')
 }
 
 fn routing_summary(text: &str) -> Option<Value> {

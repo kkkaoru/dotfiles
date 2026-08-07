@@ -23,7 +23,13 @@ pub(super) fn sanitize_committed_blocks(blocks: &mut Vec<Value>) {
     blocks.retain_mut(|block| match block.get("type").and_then(Value::as_str) {
         Some("text") => {
             if let Some(text) = block.get("text").and_then(Value::as_str) {
-                block["text"] = json!(text.replace(ZWSP, ""));
+                let cleaned = text
+                    .replace(ZWSP, "")
+                    .lines()
+                    .filter(|line| !is_provider_status_line(line.trim()))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                block["text"] = json!(cleaned);
             }
             true
         }
@@ -46,21 +52,25 @@ pub(super) fn sanitize_committed_blocks(blocks: &mut Vec<Value>) {
 }
 
 fn is_provider_status_only(text: &str) -> bool {
-    text.lines().all(|line| {
-        let line = line.trim();
-        line.is_empty()
-            || line.starts_with('▶')
-            || line.starts_with('✓')
-            || line.starts_with('✗')
-            || line.starts_with("Plan ")
-            || line.starts_with("Plan:")
-            || line.starts_with('●')
-            || line.starts_with('◎')
-            || line.starts_with('○')
-            || line.starts_with("SubAgent ")
-            || line.starts_with("Retrying provider request")
-            || line.starts_with("Session mode:")
-            || line.starts_with("Session:")
-            || line.starts_with("🔎 WebSearch:")
-    })
+    text.lines()
+        .all(|line| line.trim().is_empty() || is_provider_status_line(line.trim()))
+}
+
+fn is_provider_status_line(line: &str) -> bool {
+    line.starts_with('▶')
+        || line.starts_with('✓')
+        || line.starts_with('✗')
+        || line.starts_with("Plan ")
+        || line.starts_with("Plan:")
+        || line.starts_with('●')
+        || line.starts_with('◎')
+        || line.starts_with('○')
+        || line.starts_with("SubAgent starting:")
+        || line.starts_with("SubAgent started:")
+        || line.starts_with("SubAgent finished")
+        || line.starts_with("SubAgent completed")
+        || line.starts_with("Retrying provider request")
+        || line.starts_with("Session mode:")
+        || line.starts_with("Session:")
+        || line.starts_with("🔎 WebSearch:")
 }

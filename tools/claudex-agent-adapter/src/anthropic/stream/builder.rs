@@ -187,6 +187,16 @@ impl SegmentBuilder {
     /// Heartbeats are stream-only when assistant text is already open so the
     /// final answer/transcript never accumulates zero-width junk the way a
     /// wall-clock injector would. Otherwise use a disposable thinking block.
+    pub(super) async fn subagent_start_status(
+        &mut self,
+        status: &str,
+        stream: Option<&StreamSender>,
+    ) -> Result<()> {
+        self.thinking
+            .activity_status(&mut self.blocks, status, stream)
+            .await
+    }
+
     pub(super) async fn activity_keepalive(&mut self, stream: Option<&StreamSender>) -> Result<()> {
         const HEARTBEAT: &str = "\u{200b}";
         if let Some((index, _)) = self.open_text_block {

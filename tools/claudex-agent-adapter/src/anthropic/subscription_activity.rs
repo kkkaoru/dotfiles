@@ -45,6 +45,18 @@ impl SubscriptionActivity {
         if let Some(activity) = &self.open {
             return send_thinking_delta(sender, activity.index, HEARTBEAT).await;
         }
+        self.start_status(sender, STATUS, next_index).await
+    }
+
+    pub(super) async fn start_status(
+        &mut self,
+        sender: &mpsc::Sender<Result<Bytes, Infallible>>,
+        status: &str,
+        next_index: &mut usize,
+    ) -> Result<()> {
+        if self.open.is_some() || status.is_empty() {
+            return Ok(());
+        }
         let index = *next_index;
         send_stream_frame(Some(sender), "content_block_start", || {
             json!({
@@ -53,7 +65,7 @@ impl SubscriptionActivity {
             })
         })
         .await?;
-        send_thinking_delta(sender, index, STATUS).await?;
+        send_thinking_delta(sender, index, status).await?;
         self.open = Some(OpenActivity {
             index,
             signature: format!("claudex_local_{}", Uuid::new_v4().simple()),

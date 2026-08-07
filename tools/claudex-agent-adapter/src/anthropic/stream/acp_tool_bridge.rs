@@ -57,7 +57,9 @@ fn requested_original_name<'a>(
 fn has_agent_tool(names: &HashMap<String, String>) -> bool {
     names.values().any(|name| name == "Agent")
         || names.contains_key("Agent")
-        || names.keys().any(|key| key.ends_with("Agent") || key.contains("Agent"))
+        || names
+            .keys()
+            .any(|key| key.ends_with("Agent") || key.contains("Agent"))
 }
 
 fn looks_like_launch_tool(candidate: &str) -> bool {
@@ -185,7 +187,9 @@ fn normalize_launch_arguments(provider_name: &str, arguments: &Value) -> Value {
     }
 
     if provider_name.eq_ignore_ascii_case(SPAWN_SUBAGENT)
-        || provider_name.to_ascii_lowercase().contains("spawn_subagent")
+        || provider_name
+            .to_ascii_lowercase()
+            .contains("spawn_subagent")
     {
         if let Some(subagent_type) = object.get("subagent_type").and_then(Value::as_str) {
             if subagent_type == GROK_HIGH_PROFILE || subagent_type.ends_with(":claudex-high") {

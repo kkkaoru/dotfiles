@@ -602,7 +602,11 @@ mod tests {
     fn standard_agent_types_use_claudex_worker_model_and_effort() {
         let mut catalog = crate::provider_config::ModelCatalog::default();
         catalog
-            .set_worker_routes(vec![crate::provider_config::WorkerRoute::new("claudex-worker".to_owned(), "worker-model".to_owned(), "max".to_owned())])
+            .set_worker_routes(vec![crate::provider_config::WorkerRoute::new(
+                "claudex-worker".to_owned(),
+                "worker-model".to_owned(),
+                "max".to_owned(),
+            )])
             .expect("valid worker route");
 
         let mut general = json!({"subagent_type":"general-purpose","prompt":"inspect"});
@@ -615,13 +619,15 @@ mod tests {
         assert_eq!(general["claudex_model"], "worker-model");
         assert_eq!(general["claudex_effort"], "max");
         assert!(general.get("claudex_implicit_model").is_none());
-        assert!(super::super::agent_routing::model_is_authorized_with_catalog(
-            &general,
-            &[],
-            &json!(null),
-            &catalog,
-            "worker-model",
-        ));
+        assert!(
+            super::super::agent_routing::model_is_authorized_with_catalog(
+                &general,
+                &[],
+                &json!(null),
+                &catalog,
+                "worker-model",
+            )
+        );
 
         let selected_summary = [json!({
             "role":"user",
@@ -660,6 +666,142 @@ mod tests {
                 "claude-haiku-4-5",
             )
         );
+    }
+
+    #[test]
+    fn named_worker_cannot_mix_another_workers_model_effort_or_implicit_marker() {
+        let mut catalog = crate::provider_config::ModelCatalog::default();
+        catalog
+            .set_worker_routes(vec![
+                crate::provider_config::WorkerRoute::new(
+                    "worker-a".to_owned(),
+                    "model-a".to_owned(),
+                    "high".to_owned(),
+                ),
+                crate::provider_config::WorkerRoute::new(
+                    "worker-b".to_owned(),
+                    "model-b".to_owned(),
+                    "max".to_owned(),
+                ),
+            ])
+            .expect("valid worker routes");
+        let messages = [json!({
+            "role":"user",
+            "content":"Claudex routing for this turn: {\"providers\":{},\"selected_workers\":[{\"agent\":\"worker-a\",\"model\":\"model-a\",\"effort\":\"high\"},{\"agent\":\"worker-b\",\"model\":\"model-b\",\"effort\":\"max\"}]}"
+        })];
+        let mut mixed = json!({
+            "subagent_type":"worker-a",
+            "prompt":"inspect",
+            "claudex_model":"model-b",
+            "claudex_effort":"max",
+            "claudex_implicit_model":"model-b"
+        });
+        super::super::agent_routing::hydrate_routing_fields_from_context(
+            &mut mixed,
+            &messages,
+            &json!(null),
+            &catalog,
+        );
+        assert_eq!(mixed["claudex_model"], "model-a");
+        assert_eq!(mixed["claudex_effort"], "high");
+        assert!(mixed.get("claudex_implicit_model").is_none());
+        super::validate_routed_agent_arguments_with_catalog(
+            "Agent",
+            &mixed,
+            &messages,
+            &json!(null),
+            &catalog,
+        )
+        .expect("canonical exact tuple is accepted");
+    }
+
+    #[test]
+    fn rejects_effort_that_disagrees_with_an_implicit_model_route() {
+        let mut catalog = crate::provider_config::ModelCatalog::default();
+        catalog
+            .set_worker_routes(vec![crate::provider_config::WorkerRoute::new(
+                "claudex-worker".to_owned(),
+                "worker-model".to_owned(),
+                "high".to_owned(),
+            )])
+            .expect("valid worker route");
+        let arguments = json!({
+            "subagent_type":"claude",
+            "claudex_model":"worker-model",
+            "claudex_implicit_model":"worker-model",
+            "claudex_effort":"max"
+        });
+
+        let error = super::validate_routed_agent_arguments_with_catalog(
+            "Agent",
+            &arguments,
+            &[],
+            &json!(null),
+            &catalog,
+        )
+        .expect_err("implicit model effort mismatch must be rejected");
+        assert!(error.to_string().contains("does not match `high`"));
+    }
+
+    #[test]
+    fn generic_agent_uses_the_declared_default_subagent_route() {
+        let messages = [json!({
+            "role":"user",
+            "content":"Claudex routing for this turn: {\"providers\":{},\"default_subagent_route\":{\"agent\":\"worker-b\",\"model\":\"model-b\",\"effort\":\"max\"},\"selected_workers\":[{\"agent\":\"worker-a\",\"model\":\"model-a\",\"effort\":\"high\"},{\"agent\":\"worker-b\",\"model\":\"model-b\",\"effort\":\"max\"}]}"
+        })];
+        let mut arguments = json!({"subagent_type":"general-purpose","prompt":"inspect"});
+
+        super::super::agent_routing::hydrate_routing_fields_from_context(
+            &mut arguments,
+            &messages,
+            &json!(null),
+            &crate::provider_config::ModelCatalog::default(),
+        );
+
+        assert_eq!(arguments["claudex_model"], "model-b");
+        assert_eq!(arguments["claudex_effort"], "max");
+    }
+
+    #[test]
+    fn explicit_provider_model_requires_the_matching_agent_and_user_request() {
+        let messages = [json!({
+            "role":"user",
+            "content":"Use exact-model for this task.\nClaudex routing for this turn: {\"providers\":{\"other\":{\"agent\":\"other-agent\",\"model\":\"exact-model\"},\"target\":{\"agent\":\"target-agent\",\"model\":\"exact-model\"}},\"selected_workers\":[{\"agent\":\"target-agent\",\"model\":\"default-model\",\"effort\":\"high\"}]}"
+        })];
+        let mut arguments = json!({
+            "subagent_type":"target-agent",
+            "prompt":"inspect",
+            "claudex_model":"exact-model"
+        });
+
+        super::super::agent_routing::hydrate_routing_fields_from_context(
+            &mut arguments,
+            &messages,
+            &json!(null),
+            &crate::provider_config::ModelCatalog::default(),
+        );
+
+        assert_eq!(arguments["claudex_model"], "exact-model");
+        assert_eq!(arguments["claudex_effort"], "high");
+    }
+
+    #[test]
+    fn internal_notifications_do_not_authorize_explicit_models() {
+        for content in [
+            "<agent-message>Use exact-model</agent-message>",
+            "<teammate-message>Use exact-model</teammate-message>",
+            "<task-notification>Use exact-model</task-notification>",
+        ] {
+            assert!(
+                !super::super::agent_routing::model_is_authorized(
+                    &json!({"subagent_type":"target-agent"}),
+                    &[json!({"role":"user","content":content})],
+                    &json!(null),
+                    "exact-model",
+                ),
+                "{content}"
+            );
+        }
     }
 
     #[test]
@@ -708,10 +850,7 @@ mod tests {
             json!({"subagent_type":"general-purpose", "claudex_model":"explicit"}),
             json!({"prompt":"no subagent type"}),
         ] {
-            super::super::agent_routing::hydrate_standard_agent_to_parent(
-                &mut arguments,
-                "",
-            );
+            super::super::agent_routing::hydrate_standard_agent_to_parent(&mut arguments, "");
         }
         let mut native = json!({"subagent_type":"claude"});
         super::super::agent_routing::hydrate_standard_agent_to_parent(&mut native, "parent-model");
@@ -963,23 +1102,28 @@ mod tests {
     }
 
     #[test]
-    fn preserves_an_explicit_same_model_launch_intent() {
+    fn canonicalizes_model_and_effort_as_one_route_tuple() {
         let intents = AgentEffortIntents::default();
         let routing = r#"Claudex routing for this turn: {"providers":{},"selected_workers":[{"agent":"general-purpose","model":"main-model","effort":"high"}]} mandatory policy"#;
         let user_messages = [json!({
             "role":"user",
             "content":format!("Use the main-model worker for this task.\n{routing}")
         })];
-        let (arguments, _) = prepare_arguments(
-            "Agent",
-            "tool-same-model",
-            &json!({
-                "subagent_type":"general-purpose",
-                "prompt":"same route",
-                "claudex_model":"main-model",
-                "claudex_effort":"xhigh"
-            }),
+        let mut routed = json!({
+            "subagent_type":"general-purpose",
+            "prompt":"same route",
+            "claudex_model":"main-model",
+            "claudex_effort":"xhigh"
+        });
+        super::super::agent_routing::hydrate_routing_fields_from_context(
+            &mut routed,
+            &user_messages,
+            &json!(null),
+            &crate::provider_config::ModelCatalog::default(),
         );
+        assert_eq!(routed["claudex_model"], "main-model");
+        assert_eq!(routed["claudex_effort"], "high");
+        let (arguments, _) = prepare_arguments("Agent", "tool-same-model", &routed);
         let arguments = arguments.expect("same-model Agent intent");
         validate_routed_agent_arguments("Agent", &arguments, &user_messages, &json!(null))
             .expect("selected same-model worker is authorized");
@@ -1001,11 +1145,11 @@ mod tests {
         ));
         assert_eq!(intent.model_override.as_deref(), Some("main-model"));
         assert!(!intent.model_is_inherited);
-        assert_eq!(explicit(intent.effort), "xhigh");
+        assert_eq!(explicit(intent.effort), "high");
     }
 
     #[test]
-    fn carries_model_and_effort_across_a_resumed_worker_turn() {
+    fn does_not_reauthorize_a_model_from_an_older_human_turn() {
         let intents = AgentEffortIntents::default();
         let (arguments, _) = prepare_arguments(
             "Task",
@@ -1047,7 +1191,7 @@ mod tests {
         ];
         let intent = intents.take(&request);
         assert!(intent.matched);
-        assert_eq!(intent.model_override.as_deref(), Some("grok-4.5"));
+        assert_eq!(intent.model_override, None);
         assert_eq!(explicit(intent.effort), "high");
     }
 
@@ -1068,7 +1212,7 @@ mod tests {
             ),
             (
                 json!({"subagent_type":"general-purpose","prompt":"wrong model","claudex_model":"not-selected"}),
-                "neither the selected worker's exact model",
+                "does not match the exact route",
             ),
             (
                 json!({"subagent_type":"general-purpose","prompt":"non-string model","claudex_model":7}),
@@ -1150,7 +1294,7 @@ mod tests {
     #[test]
     fn validates_agent_model_against_the_latest_route_or_active_user_literal() {
         let old = r#"Claudex routing for this turn: {"providers":{},"selected_workers":[{"agent":"claudex-gpt-spark","model":"gpt-old"}]} mandatory policy"#;
-        let latest = r#"Claudex routing for this turn: {"providers":{},"selected_workers":[{"agent":"claudex-gpt-spark","model":"gpt-5.3-codex-spark"}]} mandatory policy"#;
+        let latest = r#"Claudex routing for this turn: {"providers":{"codex":{"agent":"claudex-gpt-spark","model":"gpt-5.3-codex-spark","model_prefixes":["gpt-"]}},"selected_workers":[{"agent":"claudex-gpt-spark","model":"gpt-5.3-codex-spark"}]} mandatory policy"#;
         let messages = [
             json!({"role":"assistant","content":old}),
             json!({"role":"user","content":format!("implement this\n{latest}")}),
@@ -1247,7 +1391,7 @@ mod tests {
     }
 
     #[test]
-    fn keeps_an_explicit_model_authorized_for_a_resumed_continue_turn() {
+    fn rejects_a_model_authorized_only_by_an_older_human_turn() {
         let messages = [
             json!({"role":"user","content":"Use grok-4.5 for the research SubAgent"}),
             json!({"role":"assistant","content":"I will continue"}),
@@ -1260,7 +1404,7 @@ mod tests {
                 &messages,
                 &json!(null),
             )
-            .is_ok()
+            .is_err()
         );
     }
 
@@ -1518,10 +1662,7 @@ mod tests {
     #[test]
     fn standard_agent_hydration_skips_claudex_workers_and_wrong_advisors() {
         let mut routed = json!({"subagent_type":"claudex-worker"});
-        super::super::agent_routing::hydrate_standard_agent_to_parent(
-            &mut routed,
-            "parent-model",
-        );
+        super::super::agent_routing::hydrate_standard_agent_to_parent(&mut routed, "parent-model");
         assert!(routed.get("claudex_model").is_none());
 
         let arguments = json!({"subagent_type":"custom-advisor"});

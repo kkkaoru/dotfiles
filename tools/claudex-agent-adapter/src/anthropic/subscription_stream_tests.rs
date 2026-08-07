@@ -1456,6 +1456,8 @@ async fn hidden_provider_events_do_not_starve_client_visible_activity() {
         Arc::new(tokio::sync::Semaphore::new(1)),
         Duration::from_secs(1),
     );
+    options.is_subagent = true;
+    options.effort = Some("high".to_owned());
     options.initial_activity_delay = Duration::ZERO;
     options.activity_keepalive_interval = Duration::from_secs(60);
     let input = [
@@ -1469,7 +1471,13 @@ async fn hidden_provider_events_do_not_starve_client_visible_activity() {
         .await
         .expect("ready hidden events must retain client-visible activity");
     let frames = output(&mut receiver).await;
-    assert_eq!(frames.matches("Claudex is still working").count(), 1);
+    assert_eq!(
+        frames
+            .matches("SubAgent starting: subscription-test")
+            .count(),
+        1
+    );
+    assert!(frames.contains("effort=high"));
     assert!(frames.contains("done"));
     assert_valid_stream(&frames, Some("end_turn"));
     let (block_types, stopped_indices) = collect_block_events(&frames);

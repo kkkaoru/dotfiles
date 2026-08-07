@@ -17,8 +17,8 @@ use super::{
     stream_batch::{NextEvent, next_event},
 };
 
-pub(in crate::anthropic) mod acp_tool_bridge;
 mod acp_launch_queue;
+pub(in crate::anthropic) mod acp_tool_bridge;
 mod builder;
 mod context_retry;
 mod context_window;
@@ -32,13 +32,13 @@ mod provider_tool;
 mod sanitize;
 mod thinking;
 mod tool_call_parser;
-mod turn;pub(super) mod usage_limit;
+mod turn; pub(super) mod usage_limit;
 pub(in crate::anthropic) use turn::StreamTurn;
 
 use builder::SegmentBuilder;
 pub(in crate::anthropic) use control::commit_transcript;
 use control::refresh_activity_keepalive;
-use prepare::{PreparedStream, prepare_with_activity};
+use prepare::{PreparedStream, prepare_with_activity, subagent_start_status};
 use sanitize::is_visible_activity_event;
 
 pub(super) use control::{error_flow, turn_flow};
@@ -46,10 +46,9 @@ pub(super) use control::{error_flow, turn_flow};
 pub(super) use protocol::tool_use_frames;
 use protocol::{StreamSender, send_stream_completion, send_stream_error, sse_response};
 pub(super) use protocol::{message_start, send_stream_frame, streaming_sse_response};
-// Visible status after long silence; Anthropic `ping` covers short raw-byte watchdogs.
 const ACTIVITY_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
 const INITIAL_ACTIVITY_DELAY: Duration = Duration::from_secs(30);
-struct ToolCall { call_id: String, name: String, arguments: Value, request_id: Value, }
+struct ToolCall { call_id: String, name: String, arguments: Value, request_id: Value }
 struct StreamWaitInput<'a> {
     session: &'a Arc<Session>,
     events: Arc<crate::app_server::ThreadEvents>,
@@ -59,17 +58,8 @@ struct StreamWaitInput<'a> {
     builder: SegmentBuilder,
     activity_interval: Duration,
 }
-enum StreamWaitResult {
-    Event(Value),
-    Done(Box<StreamTurn>),
-    NoEvent,
-}
-enum StreamEventState {
-    Continue,
-    Done(Box<StreamTurn>),
-    ContextWindow(anyhow::Error),
-    UsageLimit(anyhow::Error),
-}
+enum StreamWaitResult { Event(Value), Done(Box<StreamTurn>), NoEvent }
+enum StreamEventState { Continue, Done(Box<StreamTurn>), ContextWindow(anyhow::Error), UsageLimit(anyhow::Error) }
 
 impl Bridge {
     pub(super) fn streaming_messages(
@@ -113,10 +103,10 @@ impl Bridge {
             run_in_background,
             sender,
         } = prepared;
-        // Hold occupancy for the full spawned stream so concurrent SubAgent
-        // launches soft-demote this model while the provider turn is live.
-        let _active_subagent = is_subagent
-            .then(|| self.active_subagent_models.acquire(&request.model));
+        // Hold occupancy for the full stream so peers soft-demote this model.
+        let _active_subagent =
+            is_subagent.then(|| self.active_subagent_models.acquire(&request.model));
+        let start_status = subagent_start_status(is_subagent, &request.model, effort.as_deref());
         let prepare = async {
             let permit = match concurrency_ticket {
                 Some(ticket) => Some(ticket.acquire_for(!is_subagent).await?),
@@ -129,6 +119,7 @@ impl Bridge {
             prepare,
             input_tokens,
             &sender,
+            start_status.as_deref(),
             INITIAL_ACTIVITY_DELAY,
             ACTIVITY_KEEPALIVE_INTERVAL,
         )
@@ -318,11 +309,19 @@ impl Bridge {
             return Ok(self.disconnect_stream(session, events).await);
         }
         // ACP-bridged Agent/spawn: cancel provider so Grok does not also native-spawn.
-        let bridge = session.pending_tools.lock().await.values().any(acp_tool_bridge::is_acp_bridge_request_id);
+        let bridge = session
+            .pending_tools
+            .lock()
+            .await
+            .values()
+            .any(acp_tool_bridge::is_acp_bridge_request_id);
         if segment.stop_reason == "tool_use" && bridge {
             let _ = self.app.cancel_turn(&session.thread_id).await;
         }
-        Ok(StreamTurn::Segment { segment, provider_settled: false })
+        Ok(StreamTurn::Segment {
+            segment,
+            provider_settled: false,
+        })
     }
 
     async fn consume_stream_event(
@@ -380,7 +379,6 @@ impl Bridge {
             .await;
         true
     }
-
 }
 
 pub(super) fn is_provider_stream_closed(error: &anyhow::Error) -> bool {

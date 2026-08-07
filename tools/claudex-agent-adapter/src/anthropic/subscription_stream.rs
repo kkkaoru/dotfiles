@@ -267,6 +267,24 @@ impl SubscriptionStream {
         Ok(())
     }
 
+    async fn start_subagent_activity(
+        &mut self,
+        sender: &mpsc::Sender<Result<Bytes, Infallible>>,
+        options: &SubscriptionOptions,
+        model: &str,
+    ) -> Result<()> {
+        if !options.is_subagent {
+            return Ok(());
+        }
+        let effort = options.effort.as_deref().unwrap_or("configured");
+        let status = format!(
+            "SubAgent starting: {model} (effort={effort}); preparing subscription session\u{2026}"
+        );
+        self.activity
+            .start_status(sender, &status, &mut self.next_index)
+            .await
+    }
+
     async fn activity_keepalive(
         &mut self,
         sender: &mpsc::Sender<Result<Bytes, Infallible>>,

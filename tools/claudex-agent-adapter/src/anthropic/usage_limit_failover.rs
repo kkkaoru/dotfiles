@@ -6,9 +6,11 @@ use axum::{body::Body, http::Response};
 use crate::agent_backend::BackendKind;
 
 use super::{
-    Bridge, MessagesRequest, provider_auth, provider_auth_cooldown, request_routing::RouteDecision,
+    Bridge, MessagesRequest, provider_auth, provider_auth_cooldown,
+    request_routing::RouteDecision,
     stream::usage_limit::{
-        contains_classic_usage_limit_marker, contains_rate_limit_marker, contains_usage_limit_marker,
+        contains_classic_usage_limit_marker, contains_rate_limit_marker,
+        contains_usage_limit_marker,
     },
     token_count, usage_limit_cooldown,
 };

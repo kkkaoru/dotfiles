@@ -114,6 +114,34 @@ impl ThinkingState {
     /// Anthropic `ping` frames keep the raw-byte idle timer alive (~180s) but
     /// do not reset the decoded-event timer. Pure keepalive thinking is stripped
     /// from the committed segment so transcripts stay clean.
+    pub(super) async fn activity_status(
+        &mut self,
+        blocks: &mut Vec<Value>,
+        status: &str,
+        stream: Option<&StreamSender>,
+    ) -> Result<()> {
+        if status.is_empty() || has_visible_output(blocks) {
+            return Ok(());
+        }
+        if self.open.is_none() {
+            self.start(blocks, "claudex_activity_keepalive", 0, stream)
+                .await?;
+        }
+        let open = self.open.as_mut().expect("activity block just opened");
+        if open.item_id != "claudex_activity_keepalive" || !open.text.is_empty() {
+            return Ok(());
+        }
+        open.text.push_str(status);
+        blocks[open.index]["thinking"] = json!(open.text);
+        send_stream_frame(stream, "content_block_delta", || {
+            json!({
+                "type":"content_block_delta", "index":open.index,
+                "delta":{"type":"thinking_delta","thinking":status}
+            })
+        })
+        .await
+    }
+
     pub(super) async fn activity_keepalive(
         &mut self,
         blocks: &mut Vec<Value>,
@@ -144,7 +172,6 @@ impl ThinkingState {
         })
         .await
     }
-
 }
 
 fn summary_delta(event: &Value) -> Option<(&str, i64, &str)> {

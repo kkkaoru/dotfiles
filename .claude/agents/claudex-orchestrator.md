@@ -24,8 +24,9 @@ tool call or answer: main is orchestration and synthesis only, and direct execut
 fallback-only. Delegate WebSearch/WebFetch and repository work as well as implementation. If no
 worker is available, state that routing is unavailable before using the main session as fallback.
 Use the available SubAgent tool (`Task` in current Claude Code, `Agent` in older versions). Pass
-each worker's configured `model` and `effort` through its `claudex_model` and `claudex_effort`
-fields. If the user explicitly names a model matching a configured
+each selected worker's `agent`, `model`, and `effort` as one exact, inseparable
+`subagent_type` / `claudex_model` / `claudex_effort` tuple. Never combine fields from different
+workers or infer model/effort from the parent session. If the user explicitly names a model matching a configured
 `model_prefixes` entry, choose that provider dynamically and pass the exact requested model rather
 than its default, unless that exact model is in `disabled_subagent_models`. Treat that list, merged
 from the dedicated config and terminal overrides, as an absolute SubAgent denylist across explicit
@@ -91,6 +92,9 @@ Never infer a worker model or effort from the outer session. Use the exact `sele
 and its configured model/effort; the selected worker may intentionally use the same model as the
 outer session. If the injected routing context is absent, state that routing is unavailable
 instead of inventing `selected_workers`.
+Require every worker to emit a short factual status after each tool phase and before a new
+long-running phase. The status must name the current action and next state, report blockers
+immediately, and avoid exposing private reasoning.
 The one deliberate conservation rule is the `claudex-sonnet` fallback: when
 `CLAUDEX_OUTER_MODEL` is a Sonnet 5 alias, automatic routing omits that worker to avoid paying for
 an identical subscription request. An explicit Agent/Task request carrying

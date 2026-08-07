@@ -40,8 +40,7 @@ impl SegmentBuilder {
                 .iter()
                 .any(|id| id == &call.call_id)
             {
-                self.bridged_provider_launch_ids
-                    .push(call.call_id.clone());
+                self.bridged_provider_launch_ids.push(call.call_id.clone());
                 tracing::info!(
                     call_id = %call.call_id,
                     name = %call.name,

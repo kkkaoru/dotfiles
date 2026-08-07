@@ -169,6 +169,7 @@ impl Bridge {
     ) -> SubscriptionOptions {
         SubscriptionOptions {
             effort,
+            is_subagent,
             tools: requested_tools_for_request(request, !is_subagent),
             disable_tools: (tools_were_provided && request.tools.is_empty())
                 || is_compaction_request(request),

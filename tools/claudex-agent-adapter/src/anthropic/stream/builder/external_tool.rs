@@ -65,6 +65,7 @@ impl SegmentBuilder {
         original_name: &str,
         call: ToolCall,
     ) -> Result<()> {
+        let request_id = call.request_id.clone();
         let mut arguments = call.arguments;
         if crate::anthropic::agent_effort::is_agent_tool(original_name) {
             crate::anthropic::agent_routing::hydrate_routing_fields_from_context(
@@ -79,7 +80,7 @@ impl SegmentBuilder {
             );
         }
         if self
-            .reject_disabled_subagent(context, original_name, &arguments)
+            .reject_disabled_subagent(context, original_name, &arguments, request_id)
             .await?
         {
             return Ok(());
@@ -143,6 +144,7 @@ impl SegmentBuilder {
         context: ExternalToolContext<'_>,
         original_name: &str,
         arguments: &Value,
+        request_id: Value,
     ) -> Result<bool> {
         let Some(model) = crate::anthropic::agent_effort::disabled_subagent_model(
             original_name,
@@ -159,6 +161,19 @@ impl SegmentBuilder {
         self.close_open_blocks(context.stream).await?;
         let notice =
             format!("SubAgent model `{model}` is disabled by policy and was not launched.");
+        context
+            .bridge
+            .app
+            .respond_for_model(
+                &context.session.model,
+                request_id,
+                json!({
+                    "contentItems":[{"type":"inputText","text":notice}],
+                    "success":false
+                }),
+            )
+            .await
+            .context("failed to reject a disabled SubAgent provider tool")?;
         self.text_delta(
             &serde_json::json!({"params":{"delta":notice}}),
             context.stream,

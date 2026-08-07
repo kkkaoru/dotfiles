@@ -69,9 +69,9 @@ fn value_contains_usage_limit(value: &Value) -> bool {
     match value {
         Value::String(text) => contains_usage_limit_marker(text),
         Value::Number(number) => number.as_u64() == Some(429),
-        Value::Object(map) => map
-            .iter()
-            .any(|(key, nested)| contains_usage_limit_marker(key) || value_contains_usage_limit(nested)),
+        Value::Object(map) => map.iter().any(|(key, nested)| {
+            contains_usage_limit_marker(key) || value_contains_usage_limit(nested)
+        }),
         Value::Array(items) => items.iter().any(value_contains_usage_limit),
         _ => false,
     }
@@ -87,8 +87,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        contains_classic_usage_limit_marker, contains_rate_limit_marker, contains_usage_limit_marker,
-        is_usage_limit_event,
+        contains_classic_usage_limit_marker, contains_rate_limit_marker,
+        contains_usage_limit_marker, is_usage_limit_event,
     };
 
     #[test]

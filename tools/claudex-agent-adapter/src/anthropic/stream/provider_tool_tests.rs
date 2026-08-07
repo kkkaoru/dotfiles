@@ -45,7 +45,7 @@ mod tests {
             .await
             .expect("default provider progress");
 
-        // Progress is committed assistant text (never executable tool_use).
+        // Progress is visible before commit (never executable tool_use).
         assert_eq!(builder.blocks.len(), EXPECTED_PROGRESS_BLOCKS);
         assert!(builder.open_text_block.is_some());
         let text = builder.open_text_block.as_ref().expect("progress text").1.as_str();
@@ -60,8 +60,7 @@ mod tests {
         let segment = builder.finish(None).await.expect("segment");
         assert_eq!(segment.blocks.len(), 1);
         let committed = segment.blocks[0]["text"].as_str().expect("committed text");
-        assert!(committed.contains("▶ Read"));
-        assert!(committed.contains("▶ Search docs"));
+        assert!(committed.trim().is_empty());
     }
 
     #[tokio::test]
@@ -111,13 +110,9 @@ mod tests {
         drop(sender);
 
         assert!(segment.blocks.iter().all(|block| block["type"] != "tool_use"));
-        // Live frames and committed segment both carry progress text.
+        // Live frames carry progress; committed output is transcript-clean.
         let committed = segment.blocks[0]["text"].as_str().expect("committed progress");
-        assert!(committed.contains("▶ Bash"));
-        assert!(committed.contains("✗ Build"));
-        // Success markers stay short — never embed tool body payloads.
-        assert!(committed.contains("✓ Read"));
-        assert!(!committed.contains(" done "));
+        assert!(committed.trim().is_empty());
         let (frame_count, output) = collect_frames(&mut receiver).await;
         assert!(output.contains("▶ Bash"));
         assert!(output.contains("✗ Build"));
@@ -183,7 +178,7 @@ mod tests {
             )
             .await
             .expect("provider completion");
-        // Before and after finish, progress remains as committed text once.
+        // Progress is accumulated once, then removed from committed output.
         assert_eq!(
             builder
                 .open_text_block
@@ -195,25 +190,12 @@ mod tests {
             1
         );
         let segment = builder.finish(None).await.expect("segment");
-        assert_eq!(
-            segment.blocks[0]["text"]
-                .as_str()
-                .expect("committed progress")
-                .matches("▶ WebFetch")
-                .count(),
-            1
-        );
         assert!(
             segment.blocks[0]["text"]
                 .as_str()
                 .expect("committed progress")
-                .contains("✓ WebFetch")
-        );
-        assert!(
-            !segment.blocks[0]["text"]
-                .as_str()
-                .expect("committed progress")
-                .contains("done")
+                .trim()
+                .is_empty()
         );
     }
 

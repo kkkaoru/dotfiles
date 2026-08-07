@@ -78,10 +78,7 @@ fn launch_args_from_entry(entry: &Value, now: f64) -> Option<Value> {
     if !(name.eq_ignore_ascii_case("agent") || name.eq_ignore_ascii_case("task")) {
         return None;
     }
-    let mut arguments = entry
-        .get("arguments")
-        .cloned()
-        .unwrap_or_else(|| json!({}));
+    let mut arguments = entry.get("arguments").cloned().unwrap_or_else(|| json!({}));
     if let Some(object) = arguments.as_object_mut() {
         object
             .entry("_toolName".to_owned())

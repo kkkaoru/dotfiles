@@ -130,7 +130,7 @@ impl Bridge {
             Ok(StreamTurn::Segment {
                 segment,
                 provider_settled,
-            }) if segment.is_empty_end_turn() => {
+            }) if is_subagent && segment.is_empty_end_turn() => {
                 // Cline Credits $0 (and similar) finishes as empty end_turn; route through
                 // usage-limit failover instead of returning a blank assistant message.
                 let input_tokens = turn.input_tokens;

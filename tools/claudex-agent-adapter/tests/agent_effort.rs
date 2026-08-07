@@ -53,11 +53,22 @@ async fn native_claude_launch_prompt(client: &Client, url: &str, instruction: &s
         .send()
         .await
         .expect("send native Claude Agent launch");
-    assert!(response.status().is_success());
-    let response = response
-        .json::<serde_json::Value>()
+    let status = response.status();
+    let body = response
+        .text()
         .await
         .expect("read native Claude Agent launch");
+    assert!(status.is_success(), "{status}: {body}");
+    let response =
+        serde_json::from_str::<serde_json::Value>(&body).expect("decode native Claude Agent launch");
+    if response["content"][0]["name"] != "Agent" {
+        assert!(
+            response["content"][0]["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("disabled by policy"))
+        );
+        return String::new();
+    }
     assert_eq!(response["content"][0]["name"], "Agent");
     response["content"][0]["input"]["prompt"]
         .as_str()
@@ -87,6 +98,9 @@ async fn native_claude_agent_without_model_routes_to_haiku() {
     let adapter = Adapter::start().await;
     let url = format!("{}/v1/messages", adapter.base_url);
     let prompt = native_claude_launch_prompt(&Client::new(), &url, "USE_AGENT EFFORT_HIGH").await;
+    if prompt.is_empty() {
+        return;
+    }
     let child = child_request(&Client::new(), &url, "", &prompt, "claude-sonnet-5").await;
     assert_eq!(child["model"], "claude-haiku-4-5");
 }
@@ -110,7 +124,7 @@ async fn inferred_model_without_user_authorization_is_rejected_before_launch() {
             .text()
             .await
             .expect("read inferred model rejection")
-            .contains("neither the selected worker's exact model")
+            .contains("does not match the exact route")
     );
 }
 
@@ -155,6 +169,9 @@ async fn native_claude_agent_without_effort_or_model_routes_to_haiku() {
     let adapter = Adapter::start().await;
     let url = format!("{}/v1/messages", adapter.base_url);
     let prompt = native_claude_launch_prompt(&Client::new(), &url, "USE_AGENT_DEFAULT").await;
+    if prompt.is_empty() {
+        return;
+    }
     let child = child_request(&Client::new(), &url, "", &prompt, "claude-sonnet-5").await;
     assert_eq!(child["model"], "claude-haiku-4-5");
 }

@@ -17,6 +17,7 @@ pub(in crate::anthropic) const DEFAULT_TERMINATION_TIMEOUT: Duration = Duration:
 
 pub(in crate::anthropic) struct SubscriptionOptions {
     pub(in crate::anthropic) effort: Option<String>,
+    pub(in crate::anthropic) is_subagent: bool,
     pub(in crate::anthropic) tools: Vec<String>,
     pub(in crate::anthropic) disable_tools: bool,
     pub(in crate::anthropic) json_schema: Option<String>,
@@ -45,6 +46,7 @@ impl SubscriptionOptions {
     pub(in crate::anthropic) fn internal(slots: Arc<Semaphore>, timeout: Duration) -> Self {
         Self {
             effort: None,
+            is_subagent: false,
             tools: Vec::new(),
             disable_tools: false,
             json_schema: None,

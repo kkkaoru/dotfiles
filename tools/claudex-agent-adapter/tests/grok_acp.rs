@@ -332,7 +332,7 @@ fn assert_trace(trace: &[Value]) {
                 .and_then(Value::as_str)
         })
         .expect("prompt trace");
-    assert!(prompt.starts_with("project policy\n\nClaudex SubAgent routing on Grok ACP:"));
+    assert!(prompt.starts_with("project policy\n\nClaudex SubAgent routing on ACP:"));
     assert!(prompt.contains("Agent or Task"));
     assert!(prompt.contains("selected_workers"));
     assert!(prompt.contains("spawn_subagent"));

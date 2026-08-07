@@ -68,6 +68,9 @@ pub(super) async fn consume_subscription_stream_with_options(
     let stderr_task = tokio::spawn(read_stderr(stderr));
     let mut lines = BufReader::new(stdout).lines();
     let mut stream = SubscriptionStream::from_options(options);
+    stream
+        .start_subagent_activity(sender, options, model)
+        .await?;
     let mut pending_result = None;
     let mut activity_deadline = Box::pin(tokio::time::sleep(options.initial_activity_delay));
     loop {
@@ -212,6 +215,9 @@ where
 {
     let mut lines = reader.lines();
     let mut stream = SubscriptionStream::from_options(options);
+    stream
+        .start_subagent_activity(sender, options, model)
+        .await?;
     let mut pending_result = None;
     let mut activity_deadline = Box::pin(tokio::time::sleep(options.initial_activity_delay));
     loop {

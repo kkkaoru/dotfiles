@@ -3,6 +3,7 @@ mod agent_batch;
 mod agent_effort;
 mod agent_effort_matching;
 mod agent_intent_store;
+mod agent_route_validation;
 mod agent_routing;
 mod async_agent_handoff;
 pub(crate) use async_agent_handoff::{exact_async_launch_acknowledgement, tool_round_ids};
@@ -291,7 +292,9 @@ impl Bridge {
             subagent_reuse: Arc::new(subagent_reuse::SubagentReuseRegistry::default()),
             tool_schemas: tool_schema_cache::ToolSchemaCache::default(),
             model_concurrency,
-            active_subagent_models: Arc::new(active_subagent_models::ActiveSubagentModels::default()),
+            active_subagent_models: Arc::new(
+                active_subagent_models::ActiveSubagentModels::default(),
+            ),
         }
     }
     fn with_legacy_main_route(mut self) -> Self {

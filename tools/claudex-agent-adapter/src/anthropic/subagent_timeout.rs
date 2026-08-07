@@ -65,8 +65,8 @@ impl Bridge {
                 run_in_background,
             ));
         }
-        let _active_subagent = is_subagent
-            .then(|| self.active_subagent_models.acquire(&request.model));
+        let _active_subagent =
+            is_subagent.then(|| self.active_subagent_models.acquire(&request.model));
         let permit = match concurrency_ticket {
             Some(ticket) => Some(ticket.acquire_for(!is_subagent).await?),
             None => None,

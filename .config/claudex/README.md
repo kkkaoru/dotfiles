@@ -97,6 +97,9 @@ GPT Luna workerは `opencode-go/gpt-5.6-luna`（effort `max`）で、Codex app-s
 OpenCode内で実行されるprovider-owned toolはClaude側で再実行しないようAnthropic
 `tool_use`へ変換せず、実行中だけthinkingの進捗として扱います。
 このためClaude Codeの完了結果ではtool数が0に見える場合がありますが、OpenCode側では実行済みです。
+全SubAgent streamはprovider sessionの準備開始時にmodel/effort付きの状態を直ちに表示し、
+以後はprovider-owned tool/planの開始・完了と30秒ごとのactivity heartbeatを表示します。
+これらの一時statusは最終回答と保存transcriptから除去されます。
 DeepSeek / OpenCode GPT Luna workerは独立した調査をまとめて実行し、確定済みの判断を反復せず、
 長い処理のフェーズ間で短い進捗を返すよう定義しています。
 Cursor ACPは `cursor-agent --model {model} --yolo acp` を起動し、既定modelは `auto` です。
@@ -477,6 +480,10 @@ hook出力の `default_subagent_route` はトップランクのworker（`selecte
 model）を明示するため、こうした起動も除外されず動的な勝者へ解決されます。`agent` / `model` / `effort` に
 加えて `applies_to_subagent_types: ["general-purpose"]` と `applies_when_claudex_model_omitted: true` を
 持ち、選択可能なworkerが1つも無い場合のみ `null` になります。
+adapterはAgent/Task境界で `subagent_type` / `claudex_model` / `claudex_effort` を同じ
+`selected_workers` entryの不可分なtupleへ正規化し、別workerのmodel/effortとの混在や
+呼び出し側による内部routing markerの偽装を拒否します。明示model overrideも、最新の人間の
+入力に含まれ、かつ指定agentと同じproviderの `model_prefixes` に一致する場合だけ維持されます。
 
 #### subagentセッションへのrouting context注入
 

@@ -91,7 +91,7 @@ fn sanitizes_text_thinking_and_provider_status_variants() {
         "● step",
         "◎ step",
         "○ step",
-        "SubAgent result",
+        "SubAgent started: worker",
         "Retrying provider request",
         "Session mode: worker",
         "Session: worker",
@@ -536,6 +536,7 @@ async fn reports_slow_stream_preparation_before_the_provider_is_ready() {
         prepare,
         3,
         &sender,
+        Some("SubAgent starting: worker-model (effort=high)"),
         Duration::from_millis(5),
         Duration::from_millis(50),
     )
@@ -554,7 +555,7 @@ async fn reports_slow_stream_preparation_before_the_provider_is_ready() {
     assert!(
         frames
             .iter()
-            .any(|frame| frame.contains("waiting for provider output"))
+            .any(|frame| frame.contains("SubAgent starting: worker-model"))
     );
     assert!(frames.iter().any(|frame| frame.contains("thinking_delta")));
     assert!(
@@ -571,6 +572,7 @@ async fn finishes_fast_or_disconnected_stream_preparation_without_activity_statu
         std::future::ready(Ok::<_, anyhow::Error>("ready")),
         1,
         &sender,
+        None,
         Duration::from_secs(1),
         Duration::from_secs(1),
     )
@@ -583,6 +585,7 @@ async fn finishes_fast_or_disconnected_stream_preparation_without_activity_statu
         std::future::pending::<anyhow::Result<()>>(),
         1,
         &sender,
+        None,
         Duration::from_secs(1),
         Duration::from_secs(1),
     )
@@ -595,6 +598,7 @@ async fn finishes_fast_or_disconnected_stream_preparation_without_activity_statu
         std::future::ready(Err::<(), _>(anyhow!("provider setup failed"))),
         1,
         &error_sender,
+        None,
         Duration::from_secs(1),
         Duration::from_secs(1),
     )
@@ -670,7 +674,7 @@ async fn ignores_malformed_empty_raw_and_late_reasoning() {
 }
 
 #[tokio::test]
-async fn streams_native_web_search_status_as_committed_progress_text() {
+async fn streams_native_web_search_status_without_committing_progress_text() {
     let (_root, app, bridge, session) = disconnect_fixture().await;
     let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
     let mut builder = SegmentBuilder::new(1);
@@ -700,8 +704,7 @@ async fn streams_native_web_search_status_as_committed_progress_text() {
     drop(sender);
     assert_eq!(segment.blocks.len(), 1);
     let text = segment.blocks[0]["text"].as_str().expect("progress text");
-    assert!(text.contains("Example Robotics"));
-    assert!(text.contains("🔎 WebSearch"));
+    assert!(text.trim().is_empty());
     assert_eq!(segment.usage.web_search_requests, 0);
 
     let mut frames = Vec::new();
@@ -869,7 +872,10 @@ async fn bridges_acp_agent_provider_tools_to_tool_use_but_keeps_native_tools_as_
         .as_str()
         .expect("bridged Agent prompt");
     assert!(prompt.starts_with("implement feature"));
-    assert_eq!(builder.blocks[0]["input"]["subagent_type"], "general-purpose");
+    assert_eq!(
+        builder.blocks[0]["input"]["subagent_type"],
+        "general-purpose"
+    );
 
     let mut native = SegmentBuilder::new(1);
     let _ = native
@@ -1131,7 +1137,10 @@ async fn commits_status_deltas_as_progress_text_after_answer_starts() {
         .await
         .expect("open text status");
     assert_eq!(
-        builder.open_text_block.as_ref().map(|(_, text)| text.as_str()),
+        builder
+            .open_text_block
+            .as_ref()
+            .map(|(_, text)| text.as_str()),
         Some("answer\n▶ provider\n")
     );
 }

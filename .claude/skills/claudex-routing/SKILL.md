@@ -48,9 +48,14 @@ retained.
    PreToolUse both keep the worker's full tool set — main denials are never inherited. Parallel
    SubAgents still take exclusive file locks on Write/Edit targets; partition scopes so workers
    never share a mutable path.
-   Pass each worker's `model` and `effort` as `claudex_model` and `claudex_effort`. When substantive
-   work is clear, invoke the selected SubAgent in the first response rather than merely announcing
-   future delegation. Do not use task-list bookkeeping merely as a precondition for delegation.
+   Pass each worker's `agent`, `model`, and `effort` as one inseparable route tuple:
+   `subagent_type`, `claudex_model`, and `claudex_effort` must all come from the same
+   `selected_workers` entry. Never combine a named worker with another worker's model or effort,
+   and never infer either field from the parent session. `general-purpose` / `Explore` may omit the
+   display worker name only when the adapter's `default_subagent_route` supplies the complete tuple.
+   When substantive work is clear, invoke the selected SubAgent in the first response rather than
+   merely announcing future delegation. Do not use task-list bookkeeping merely as a precondition
+   for delegation.
 2. If the user explicitly names a model that matches a provider's `model_prefixes`, select that
    provider dynamically and pass the exact requested model only when it is not listed in
    `disabled_subagent_models` and its exact `model_concurrency` entry is not unavailable. A missing
@@ -72,6 +77,9 @@ retained.
    Apply this selection to every Agent/Task launch, including nested launches made by an existing
    worker. A nested launch must use the current selected worker's agent and exact model/effort; it
    must not default to generic `claude` or blindly inherit its parent's provider route.
+   During delegated work, emit a short factual status after each completed tool phase and before
+   any new long-running phase. Name the current action and next state without exposing private
+   reasoning. Report a blocker immediately; do not remain silent until the final result.
    For several independent workers, treat unknown or potentially long-running work as asynchronous:
    emit each Agent/Task call as its own native background launch (`run_in_background: true`).
    Multiple launches may be emitted in the same assistant response, but never wrap them in an

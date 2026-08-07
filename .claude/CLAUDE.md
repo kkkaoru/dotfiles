@@ -35,8 +35,12 @@
   interactively in the main session.
 - Apply the current `selected_workers` routing to every Agent/Task launch, including launches from
   an already delegated worker. Nested delegation is allowed, but it must select the routed worker
-  agent and pass that worker's exact `claudex_model` and `claudex_effort`; do not default a nested
-  launch to generic `claude` or merely inherit the parent worker's route.
+  agent and pass that same entry's exact `claudex_model` and `claudex_effort` as one inseparable
+  tuple. Never combine one `subagent_type` with another worker's model or effort, default a nested
+  launch to generic `claude`, or merely inherit the parent worker's route.
+  Every worker must emit a short factual status after each tool phase and before a long-running
+  phase so the parent can show the current action, next state, and blockers without exposing private
+  reasoning.
 - When substantive work is clear and the user has not explicitly opted out of delegation, invoke
   the selected SubAgent directly in the first response. Do not merely announce future delegation.
   Do not add `TaskList`, `TaskCreate`, or `TaskUpdate` round trips solely to prepare delegation; use
