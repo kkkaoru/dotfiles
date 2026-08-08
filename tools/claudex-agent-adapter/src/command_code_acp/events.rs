@@ -75,6 +75,12 @@ struct WireEvent {
     error: Option<String>,
     #[serde(default)]
     message: Option<String>,
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default, rename = "turnNumber")]
+    turn_number: Option<u32>,
 }
 
 pub fn parse_stdout_line(line: &str) -> ParsedLine {
@@ -93,6 +99,9 @@ pub fn parse_stdout_line(line: &str) -> ParsedLine {
             description: None,
             error: None,
             message: None,
+            text: None,
+            model: None,
+            turn_number: None,
         })),
         Some("result") => ParsedLine::Result(TurnResult {
             subtype: wire.subtype.unwrap_or_else(|| "success".to_owned()),
@@ -131,7 +140,27 @@ fn parse_event(event: WireEvent) -> ParsedLine {
             name,
             error: nonempty(event.error).or_else(|| nonempty(event.message)),
         }),
-        "" => ParsedLine::Ignored,
+        "thinking_end" => match nonempty(event.text).or_else(|| nonempty(event.message)) {
+            Some(text) => ParsedLine::Progress(ProgressEvent::Note(text)),
+            None => ParsedLine::Ignored,
+        },
+        "turn_start" => ParsedLine::Progress(ProgressEvent::Note(
+            event
+                .turn_number
+                .map(|turn| format!("turn {turn}"))
+                .unwrap_or_else(|| "turn".to_owned()),
+        )),
+        "model_request_start" => ParsedLine::Progress(ProgressEvent::Note(format!(
+            "requesting {}",
+            event
+                .model
+                .filter(|model| !model.is_empty())
+                .unwrap_or_else(|| name)
+        ))),
+        "run_start" | "message_start" | "model_trace" | "thinking_start" | "text_delta"
+        | "message_update" | "model_request_end" | "message_end" | "turn_end" | "run_end" | "" => {
+            ParsedLine::Ignored
+        }
         other => ParsedLine::Progress(ProgressEvent::Note(match nonempty(event.message) {
             Some(message) => format!("{other}: {message}"),
             None => other.to_owned(),

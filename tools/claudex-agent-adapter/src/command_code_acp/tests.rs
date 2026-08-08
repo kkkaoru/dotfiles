@@ -120,6 +120,21 @@ fn argv_includes_headless_flags_and_resume() {
             .windows(2)
             .all(|window| window[0] != "--resume")
     );
+
+    let minimal = LaunchSpec {
+        program: PathBuf::from("cmd"),
+        model: DEFAULT_MODEL.to_owned(),
+        effort: None,
+        max_turns: 1,
+        yolo: false,
+        trust: false,
+        skip_onboarding: false,
+    };
+    let argv = minimal.argv("ping", None);
+    assert!(!argv.iter().any(|flag| flag == "--yolo"));
+    assert!(!argv.iter().any(|flag| flag == "--trust"));
+    assert!(!argv.iter().any(|flag| flag == "--skip-onboarding"));
+    assert!(!argv.iter().any(|flag| flag == "--effort"));
 }
 
 #[test]
@@ -145,6 +160,85 @@ fn parses_json_events_and_plain_progress() {
         parse_stdout_line(r#"{"type":"event","event":{"type":"retry","message":"again"}}"#),
         ParsedLine::Progress(ProgressEvent::Note(note)) if note == "retry: again"
     ));
+}
+
+#[test]
+fn parses_event_aliases_and_error_shapes() {
+    assert!(matches!(
+        parse_stdout_line(r#"{"type":"event","event":{"type":"tool_start","toolName":"Grep"}}"#),
+        ParsedLine::Progress(ProgressEvent::ToolStarted { name, .. }) if name == "Grep"
+    ));
+    assert!(matches!(
+        parse_stdout_line(r#"{"type":"event","event":{"type":"tool_done","toolCallId":"t9","toolName":"Grep"}}"#),
+        ParsedLine::Progress(ProgressEvent::ToolCompleted { id, name }) if id == "t9" && name == "Grep"
+    ));
+    assert!(matches!(
+        parse_stdout_line(r#"{"type":"event","event":{"type":"tool_error","message":"denied"}}"#),
+        ParsedLine::Progress(ProgressEvent::ToolFailed { error, .. }) if error.as_deref() == Some("denied")
+    ));
+    assert_eq!(
+        parse_stdout_line(r#"{"type":"event","event":{"type":""}}"#),
+        ParsedLine::Ignored
+    );
+    assert!(matches!(
+        parse_stdout_line(r#"{"type":"status","message":"ok"}"#),
+        ParsedLine::Progress(ProgressEvent::Note(_))
+    ));
+    let ParsedLine::Result(string_error) =
+        parse_stdout_line(r#"{"type":"result","subtype":"error","finalText":"","error":"plain"}"#)
+    else {
+        panic!("expected string error");
+    };
+    assert_eq!(string_error.error.as_deref(), Some("plain"));
+    let ParsedLine::Result(object_error) = parse_stdout_line(
+        r#"{"type":"result","subtype":"error","finalText":"","error":{"code":10}}"#,
+    ) else {
+        panic!("expected object error");
+    };
+    assert!(
+        object_error
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("code"))
+    );
+}
+
+#[test]
+fn parses_live_command_code_ndjson_without_flooding_tui() {
+    assert_eq!(
+        parse_stdout_line(r#"{"type":"event","event":{"type":"run_start","sessionId":"s"}}"#),
+        ParsedLine::Ignored
+    );
+    assert_eq!(
+        parse_stdout_line(r#"{"type":"event","event":{"type":"text_delta","delta":"PONG"}}"#),
+        ParsedLine::Ignored
+    );
+    assert_eq!(
+        parse_stdout_line(r#"{"type":"event","event":{"type":"thinking_end","text":""}}"#),
+        ParsedLine::Ignored
+    );
+    assert!(matches!(
+        parse_stdout_line(r#"{"type":"event","event":{"type":"thinking_end","text":"planning"}}"#),
+        ParsedLine::Progress(ProgressEvent::Note(note)) if note == "planning"
+    ));
+    assert!(matches!(
+        parse_stdout_line(r#"{"type":"event","event":{"type":"turn_start","turnNumber":1}}"#),
+        ParsedLine::Progress(ProgressEvent::Note(note)) if note == "turn 1"
+    ));
+    assert!(matches!(
+        parse_stdout_line(r#"{"type":"event","event":{"type":"model_request_start","model":"meta/muse-spark-1.2-contributor"}}"#),
+        ParsedLine::Progress(ProgressEvent::Note(note)) if note.contains("meta/muse-spark-1.2-contributor")
+    ));
+    let ParsedLine::Result(result) = parse_stdout_line(
+        r#"{"type":"result","subtype":"success","sessionId":"166f0397-5c8a-4ac0-bb7c-8e7f3287227f","stopReason":"end_turn","finalText":"PONG"}"#,
+    ) else {
+        panic!("expected live result");
+    };
+    assert_eq!(
+        result.session_id.as_deref(),
+        Some("166f0397-5c8a-4ac0-bb7c-8e7f3287227f")
+    );
+    assert_eq!(result.final_text, "PONG");
 }
 
 #[test]
@@ -174,16 +268,14 @@ fn parses_result_lines_and_formats_messages() {
         final_text: String::new(),
         error: None,
     };
-    assert!(
-        super::events::result_message(&empty_error).contains("subtype `error`")
-    );
+    assert!(super::events::result_message(&empty_error).contains("subtype `error`"));
 }
 
 #[test]
 fn progress_updates_include_thought_and_tool_chrome() {
     let started = progress_to_updates(&ProgressEvent::Started {
         model: DEFAULT_MODEL.to_owned(),
-        effort: Some("high".to_owned()),
+        effort: None,
     });
     assert!(matches!(
         started[0],
@@ -212,6 +304,24 @@ fn progress_updates_include_thought_and_tool_chrome() {
     assert!(matches!(failed[1], acp::SessionUpdate::ToolCallUpdate(_)));
     let note = progress_to_updates(&ProgressEvent::Note("retry".to_owned()));
     assert!(matches!(note[0], acp::SessionUpdate::AgentThoughtChunk(_)));
+    let other = progress_to_updates(&ProgressEvent::ToolStarted {
+        id: "5".to_owned(),
+        name: "Planner".to_owned(),
+        description: None,
+    });
+    let acp::SessionUpdate::ToolCall(call) = &other[1] else {
+        panic!("other call");
+    };
+    assert_eq!(call.kind, acp::ToolKind::Other);
+    let failed_no_error = progress_to_updates(&ProgressEvent::ToolFailed {
+        id: "6".to_owned(),
+        name: "shell".to_owned(),
+        error: None,
+    });
+    assert!(matches!(
+        failed_no_error[1],
+        acp::SessionUpdate::ToolCallUpdate(_)
+    ));
 }
 
 #[test]
@@ -292,6 +402,42 @@ async fn run_turn_maps_auth_and_max_turn_exit_codes() {
             .error
             .as_deref()
             .is_some_and(|error| error.contains("insufficient credits"))
+    );
+
+    let unknown = write_executable(root.path(), "unknown", "#!/bin/sh\nexit 42\n");
+    let outcome = run_turn(&spec_with_program(unknown), "hi", None)
+        .await
+        .expect("unknown exit");
+    assert!(
+        outcome.result.error.as_deref().is_some_and(|error| error
+            .contains("without a JSON result")
+            && error.contains("exit 42"))
+    );
+
+    let silent_ok = write_executable(root.path(), "silent", "#!/bin/sh\nexit 0\n");
+    let outcome = run_turn(&spec_with_program(silent_ok), "hi", None)
+        .await
+        .expect("silent success");
+    assert_eq!(outcome.result.subtype, "success");
+    assert!(outcome.result.final_text.is_empty());
+
+    let ignored = write_executable(
+        root.path(),
+        "ignored",
+        "#!/bin/sh\nprintf '\\n \\n'\nexit 0\n",
+    );
+    let outcome = run_turn(&spec_with_program(ignored), "hi", None)
+        .await
+        .expect("ignored blank lines");
+    assert_eq!(outcome.result.subtype, "success");
+
+    let missing = spec_with_program(root.path().join("missing-cmd"));
+    assert!(
+        run_turn(&missing, "hi", None)
+            .await
+            .expect_err("missing binary")
+            .to_string()
+            .contains("failed to spawn")
     );
 }
 

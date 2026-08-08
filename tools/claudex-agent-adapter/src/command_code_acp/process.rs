@@ -7,6 +7,7 @@ use tokio::process::{Child, Command};
 use super::events::{ParsedLine, ProgressEvent, TurnResult, parse_stdout_line};
 use super::launch::LaunchSpec;
 
+#[derive(Debug)]
 pub struct TurnOutcome {
     pub progress: Vec<ProgressEvent>,
     pub result: TurnResult,

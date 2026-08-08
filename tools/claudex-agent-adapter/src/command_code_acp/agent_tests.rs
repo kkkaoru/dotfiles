@@ -150,6 +150,110 @@ async fn serve_io_runs_headless_turn_and_emits_tool_progress() {
 }
 
 #[tokio::test]
+async fn serve_io_cancels_before_prompt_and_maps_max_turns() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (_root, program) = mock_cmd(
+                "#!/bin/sh\ncat <<'EOF'\n{\"type\":\"result\",\"subtype\":\"max_turns\",\"sessionId\":\"cc-max\",\"stopReason\":\"max_turns\",\"finalText\":\"partial\"}\nEOF\n",
+            );
+            let (client_write, server_read) = tokio::io::duplex(16 * 1024);
+            let (server_write, client_read) = tokio::io::duplex(16 * 1024);
+            tokio::task::spawn_local(serve_io(options_for(program), server_read, server_write));
+            let (connection, io) = acp::ClientSideConnection::new(
+                CaptureClient {
+                    updates: Rc::new(RefCell::new(Vec::new())),
+                },
+                client_write.compat_write(),
+                client_read.compat(),
+                |future| {
+                    tokio::task::spawn_local(future);
+                },
+            );
+            tokio::task::spawn_local(async move {
+                let _ = io.await;
+            });
+            connection
+                .initialize(acp::InitializeRequest::new(acp::ProtocolVersion::V1))
+                .await
+                .expect("initialize");
+            let session = connection
+                .new_session(acp::NewSessionRequest::new(
+                    std::env::current_dir().unwrap(),
+                ))
+                .await
+                .expect("session");
+            connection
+                .cancel(acp::CancelNotification::new(session.session_id.clone()))
+                .await
+                .expect("cancel before prompt");
+            let cancelled = connection
+                .prompt(acp::PromptRequest::new(
+                    session.session_id.clone(),
+                    vec![acp::ContentBlock::Text(acp::TextContent::new("later"))],
+                ))
+                .await
+                .expect("cancelled prompt");
+            assert_eq!(cancelled.stop_reason, acp::StopReason::Cancelled);
+
+            let max_turns = connection
+                .prompt(acp::PromptRequest::new(
+                    session.session_id,
+                    vec![acp::ContentBlock::Text(acp::TextContent::new("again"))],
+                ))
+                .await
+                .expect("max turns prompt");
+            assert_eq!(max_turns.stop_reason, acp::StopReason::MaxTokens);
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn serve_io_reports_headless_error_without_final_text() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (_root, program) = mock_cmd(
+                "#!/bin/sh\ncat <<'EOF'\n{\"type\":\"result\",\"subtype\":\"success\",\"stopReason\":\"error\",\"finalText\":\"\"}\nEOF\n",
+            );
+            let (client_write, server_read) = tokio::io::duplex(16 * 1024);
+            let (server_write, client_read) = tokio::io::duplex(16 * 1024);
+            tokio::task::spawn_local(serve_io(options_for(program), server_read, server_write));
+            let (connection, io) = acp::ClientSideConnection::new(
+                CaptureClient {
+                    updates: Rc::new(RefCell::new(Vec::new())),
+                },
+                client_write.compat_write(),
+                client_read.compat(),
+                |future| {
+                    tokio::task::spawn_local(future);
+                },
+            );
+            tokio::task::spawn_local(async move {
+                let _ = io.await;
+            });
+            connection
+                .initialize(acp::InitializeRequest::new(acp::ProtocolVersion::V1))
+                .await
+                .expect("initialize");
+            let session = connection
+                .new_session(acp::NewSessionRequest::new(
+                    std::env::current_dir().unwrap(),
+                ))
+                .await
+                .expect("session");
+            let error = connection
+                .prompt(acp::PromptRequest::new(
+                    session.session_id,
+                    vec![acp::ContentBlock::Text(acp::TextContent::new("boom"))],
+                ))
+                .await;
+            assert!(error.is_err());
+        })
+        .await;
+}
+
+#[tokio::test]
 async fn serve_io_rejects_empty_prompt() {
     let local = tokio::task::LocalSet::new();
     local
