@@ -37,7 +37,7 @@ impl Options {
         }
         let program = program
             .or_else(|| std::env::var_os("COMMAND_CODE_CMD").map(PathBuf::from))
-            .unwrap_or_else(|| PathBuf::from("cmd"));
+            .unwrap_or_else(default_cmd_program);
         Ok(Self {
             spec: LaunchSpec {
                 program,
@@ -50,6 +50,16 @@ impl Options {
             },
         })
     }
+}
+
+fn default_cmd_program() -> PathBuf {
+    if let Some(home) = std::env::var_os("HOME") {
+        let wrapper = PathBuf::from(home).join(".local/bin/cmd");
+        if wrapper.is_file() {
+            return wrapper;
+        }
+    }
+    PathBuf::from("cmd")
 }
 
 fn require_value(flag: &str, value: Option<impl AsRef<str>>) -> Result<String> {

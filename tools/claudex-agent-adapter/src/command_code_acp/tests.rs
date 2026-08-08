@@ -40,7 +40,10 @@ fn write_executable(root: &Path, name: &str, body: &str) -> PathBuf {
 fn parse_options_defaults_and_overrides() {
     let _guard = ENV_LOCK.lock().expect("env lock");
     let previous = std::env::var_os("COMMAND_CODE_CMD");
+    let previous_home = std::env::var_os("HOME");
     unsafe { std::env::remove_var("COMMAND_CODE_CMD") };
+    let isolated = TempDir::new().expect("isolated home");
+    unsafe { std::env::set_var("HOME", isolated.path()) };
     let parsed = Options::parse(["--model", DEFAULT_MODEL, "--effort", "high"]).unwrap();
     assert_eq!(parsed.spec.model, DEFAULT_MODEL);
     assert_eq!(parsed.spec.effort.as_deref(), Some("high"));
@@ -69,6 +72,39 @@ fn parse_options_defaults_and_overrides() {
     match previous {
         Some(value) => unsafe { std::env::set_var("COMMAND_CODE_CMD", value) },
         None => unsafe { std::env::remove_var("COMMAND_CODE_CMD") },
+    }
+    match previous_home {
+        Some(value) => unsafe { std::env::set_var("HOME", value) },
+        None => unsafe { std::env::remove_var("HOME") },
+    }
+}
+
+#[test]
+fn prefers_home_local_cmd_wrapper_when_present() {
+    let _guard = ENV_LOCK.lock().expect("env lock");
+    let previous = std::env::var_os("COMMAND_CODE_CMD");
+    let previous_home = std::env::var_os("HOME");
+    unsafe { std::env::remove_var("COMMAND_CODE_CMD") };
+    let home = TempDir::new().expect("wrapper home");
+    let wrapper = write_executable(
+        &{
+            let bin = home.path().join(".local/bin");
+            fs::create_dir_all(&bin).expect("wrapper bin");
+            bin
+        },
+        "cmd",
+        "#!/bin/sh\nexit 0\n",
+    );
+    unsafe { std::env::set_var("HOME", home.path()) };
+    let parsed = Options::parse(["--model", DEFAULT_MODEL]).unwrap();
+    assert_eq!(parsed.spec.program, wrapper);
+    match previous {
+        Some(value) => unsafe { std::env::set_var("COMMAND_CODE_CMD", value) },
+        None => unsafe { std::env::remove_var("COMMAND_CODE_CMD") },
+    }
+    match previous_home {
+        Some(value) => unsafe { std::env::set_var("HOME", value) },
+        None => unsafe { std::env::remove_var("HOME") },
     }
 }
 
