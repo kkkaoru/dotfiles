@@ -11,6 +11,14 @@ name = "claudex-agent-adapter"
 path = "src/main.rs"
 
 [[bin]]
+name = "command-code-acp"
+path = "bins/command-code-acp.rs"
+
+[[bin]]
+name = "command-code-cmd-mock"
+path = "tests/fixtures/command_code_cmd_mock.rs"
+
+[[bin]]
 name = "claude-mock"
 path = "tests/fixtures/claude_mock.rs"
 
