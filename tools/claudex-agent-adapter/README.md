@@ -95,7 +95,8 @@ outputs cannot accumulate indefinitely.
 tools/claudex-agent-adapter/scripts/cargo-ephemeral.sh +1.97.1 install \
   --path tools/claudex-agent-adapter \
   --root "$HOME/.local" \
-  --bin claudex-agent-adapter
+  --bin claudex-agent-adapter \
+  --bin command-code-acp
 ```
 
 Use the same wrapper for verification, for example:

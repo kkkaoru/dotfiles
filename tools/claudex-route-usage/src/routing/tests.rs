@@ -210,6 +210,52 @@ fn selected_agents(summary: &Value) -> Vec<&str> {
 }
 
 #[test]
+fn command_code_outside_main_providers_is_not_auto_selected() {
+    let config = config_from_json(
+        r#"{
+          "version": 1,
+          "mainProviders": ["codex"],
+          "providers": [
+            {
+              "id": "codex",
+              "agent": "claudex-gpt-spark",
+              "defaultModel": "gpt-5.6-sol",
+              "subagentModel": "gpt-5.3-codex-spark",
+              "effort": "high",
+              "enabled": true,
+              "usageProvider": "codex",
+              "modelPrefixes": ["gpt"],
+              "backend": "codex-app-server"
+            },
+            {
+              "id": "command-code",
+              "agent": "claudex-command-code",
+              "defaultModel": "meta/muse-spark-1.2-contributor",
+              "effort": "high",
+              "enabled": true,
+              "modelPrefixes": ["meta/muse-spark"],
+              "backend": "configured-acp",
+              "acp": {"program":"command-code-acp","arguments":["--model","{model}"]}
+            }
+          ],
+          "fallback": {
+            "agent": "claudex-sonnet",
+            "model": "claude-sonnet-5",
+            "effort": "high"
+          },
+          "nativeWorkers": []
+        }"#,
+    );
+    let summary = routing_summary(&report(), &config, &BTreeSet::new()).unwrap();
+    let agents = selected_agents(&summary);
+    assert!(agents.contains(&"claudex-gpt-spark"));
+    assert!(
+        !agents.contains(&"claudex-command-code"),
+        "unmetered command-code must not steal automatic selected_workers: {agents:?}"
+    );
+}
+
+#[test]
 fn selects_available_workers_and_exposes_orchestration() {
     let summary = routing_summary(&report(), &sample_config(), &BTreeSet::new()).unwrap();
     let agents = selected_agents(&summary);

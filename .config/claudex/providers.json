@@ -229,6 +229,29 @@
           "--acp"
         ]
       }
+    },
+    {
+      "id": "command-code",
+      "agent": "claudex-command-code",
+      "defaultModel": "meta/muse-spark-1.2-contributor",
+      "subagentModel": "meta/muse-spark-1.2-contributor",
+      "effort": "high",
+      "maxConcurrency": 2,
+      "enabled": true,
+      "modelPrefixes": [
+        "meta/muse-spark"
+      ],
+      "backend": "configured-acp",
+      "webSearchMode": "disabled",
+      "acp": {
+        "program": "command-code-acp",
+        "arguments": [
+          "--model",
+          "{model}",
+          "--effort",
+          "{effort}"
+        ]
+      }
     }
   ],
   "fallback": {

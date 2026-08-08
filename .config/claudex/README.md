@@ -28,6 +28,7 @@ flowchart LR
     Hook --> Qwen[claudex-qwen\nQwen Code ACP]
     Hook --> Cursor[claudex-cursor\nCursor ACP]
     Hook --> ClineDs[claudex-cline-deepseek-flash\nClinePass ACP]
+    Hook --> CommandCode[claudex-command-code\ncmd -p Muse Spark]
     Hook --> Sonnet[claudex-sonnet\nclaude-sonnet-5]
     Hook --> Fallback[claudex-sonnet\nClaude fallback]
     Orchestrator -. 標準機能 .-> BuiltinAdvisor[Claude Code advisor()\nadvisorModel: opus]
@@ -50,6 +51,7 @@ flowchart LR
 | OpenCode GPT Luna worker | `claudex-opencode-gpt` | `opencode-go/gpt-5.6-luna` | `max` | CodexBarのOpenCode Go枠に空きがある場合。Codexの `gpt-5.6-luna` / `claudex-gpt` とは別route |
 | Cursor worker | `claudex-cursor` | `auto` | `high` | CodexBarのCursor枠に空きがある場合。`cursor-agent --model auto --yolo acp`。modelはCLI+session/newで固定し、毎turnの `set_session_model` 再選択はしない |
 | Cline DeepSeek Flash worker | `claudex-cline-deepseek-flash` | `cline-pass/deepseek-v4-flash` | `xhigh` | ClinePass枠（CodexBar `clinepass` weekly left）。`--thinking xhigh`。OpenCode Go DeepSeekとは別 |
+| Command Code Muse Spark worker | `claudex-command-code` | `meta/muse-spark-1.2-contributor` | `high` | 明示的な SubAgent のみ。`mainProviders` には入れない（自動選択しない）。公式 `cmd -p` を `command-code-acp` が ACP 化し、既存 `configured-acp` で起動。Provider API / Meta 直接APIは使わない |
 | Sonnet worker | `claudex-sonnet` | `claude-sonnet-5` | `high` | CodexBarのClaude枠（`usageProvider: claude`）残量。`claudex-haiku-search` と同じClaude usage leftを参照。outerがSonnet 5のときは同一modelの自動選択を抑制（明示起動と `CLAUDEX_ALLOW_SONNET_SUBAGENT=1` は可） |
 | Fallback | `claudex-sonnet` | `claude-sonnet-5` | `high` | 自動worker選択で利用可能なcapacity-managed providerがない場合 |
 | Built-in advisor | Claude Code標準 `advisor()` | `opus` | Claude Code標準 | 標準advisor policyに従う。provider capacity非依存 |
@@ -104,6 +106,10 @@ DeepSeek / OpenCode GPT Luna workerは独立した調査をまとめて実行し
 長い処理のフェーズ間で短い進捗を返すよう定義しています。
 Cursor ACPは `cursor-agent --model {model} --yolo acp` を起動し、既定modelは `auto` です。
 `--yolo` はCursor CLIの `--force` 別名で、main sessionの無確認実行と同等のtool権限にします。
+Command Code Muse Sparkは `command-code-acp --model {model} --effort {effort}` を起動し、
+内部で公式 headless `cmd -p --output-format json --yolo --trust --skip-onboarding` を回します。
+進捗（▶/✓）は既存 ACP `ToolCall` / thought chunk 経由で SubAgent TUI に出ます。
+`mainProviders` に追加すると usage 未計測のため他workerを押し出すので、既定では明示起動だけにします。
 Cline ACPは `cline --auto-approve true --thinking {effort} -P <provider> -m {model} --acp` を起動します。
 DeepSeek V4 Flashは provider `cline-pass` / model `cline-pass/deepseek-v4-flash` です（本機の
 `~/.cline/data/settings/providers.json` で確認したID）。reasoning effortはCline CLIの
@@ -332,7 +338,8 @@ repository rootからrelease buildをインストールします。
 cargo install --locked \
   --path tools/claudex-agent-adapter \
   --root "$HOME/.local" \
-  --bin claudex-agent-adapter
+  --bin claudex-agent-adapter \
+  --bin command-code-acp
 ```
 
 `~/.local/bin` が `PATH` に含まれることを確認してください。このdotfilesのfish設定では
@@ -885,7 +892,8 @@ git pull --ff-only
 cargo install --locked --force \
   --path tools/claudex-agent-adapter \
   --root "$HOME/.local" \
-  --bin claudex-agent-adapter
+  --bin claudex-agent-adapter \
+  --bin command-code-acp
 ```
 
 次回の `claudex` 起動時に、protocol、route、process limitが一致しない古いdaemonは
