@@ -104,7 +104,10 @@ fn argv_includes_headless_flags_and_resume() {
     );
     assert!(first.contains(&"--yolo".to_owned()));
     assert!(first.contains(&"--trust".to_owned()));
-    assert!(first.contains(&"--effort".to_owned()));
+    assert!(
+        !first.contains(&"--effort".to_owned()),
+        "Muse Spark rejects --effort; keep it ACP-side only: {first:?}"
+    );
     assert_eq!(first.last().map(String::as_str), Some("hello world"));
     assert!(!first.contains(&"--resume".to_owned()));
 
@@ -402,6 +405,22 @@ async fn run_turn_maps_auth_and_max_turn_exit_codes() {
             .error
             .as_deref()
             .is_some_and(|error| error.contains("insufficient credits"))
+    );
+
+    let unsupported_effort = write_executable(
+        root.path(),
+        "effort",
+        "#!/bin/sh\necho 'Muse Spark 1.2 Contributor has no adjustable reasoning effort.' >&2\nexit 1\n",
+    );
+    let outcome = run_turn(&spec_with_program(unsupported_effort), "hi", None)
+        .await
+        .expect("stderr fallback");
+    assert!(
+        outcome
+            .result
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("no adjustable reasoning effort"))
     );
 
     let unknown = write_executable(root.path(), "unknown", "#!/bin/sh\nexit 42\n");

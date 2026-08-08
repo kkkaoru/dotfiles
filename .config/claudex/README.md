@@ -108,6 +108,7 @@ Cursor ACPは `cursor-agent --model {model} --yolo acp` を起動し、既定mod
 `--yolo` はCursor CLIの `--force` 別名で、main sessionの無確認実行と同等のtool権限にします。
 Command Code Muse Sparkは `command-code-acp --model {model} --effort {effort}` を起動し、
 内部で公式 headless `cmd -p --output-format json --yolo --trust --skip-onboarding` を回します。
+`--effort` は ACP/TUI 表示用だけで、Muse Spark は reasoning effort を受け付けないため `cmd` には渡しません。
 進捗（▶/✓）は既存 ACP `ToolCall` / thought chunk 経由で SubAgent TUI に出ます。
 `mainProviders` に追加すると usage 未計測のため他workerを押し出すので、既定では明示起動だけにします。
 Cline ACPは `cline --auto-approve true --thinking {effort} -P <provider> -m {model} --acp` を起動します。

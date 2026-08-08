@@ -25,6 +25,11 @@ pub async fn run_turn(
         .stdout
         .take()
         .context("command-code headless stdout is unavailable")?;
+    let stderr = child
+        .stderr
+        .take()
+        .context("command-code headless stderr is unavailable")?;
+    let stderr_task = tokio::spawn(async move { read_stderr(stderr).await });
     let mut lines = BufReader::new(stdout).lines();
     let mut progress = vec![ProgressEvent::Started {
         model: spec.model.clone(),
@@ -39,13 +44,24 @@ pub async fn run_turn(
         }
     }
     let status = child.wait().await.context("wait for cmd -p")?;
+    let stderr_text = stderr_task.await.unwrap_or_else(|_| String::new());
     let exit_code = status.code();
-    let result = result.unwrap_or_else(|| fallback_result(exit_code, status.success()));
+    let result =
+        result.unwrap_or_else(|| fallback_result(exit_code, status.success(), stderr_text.trim()));
     Ok(TurnOutcome {
         progress,
         result,
         exit_code,
     })
+}
+
+async fn read_stderr(stderr: impl tokio::io::AsyncRead + Unpin) -> String {
+    let mut lines = BufReader::new(stderr).lines();
+    let mut out = Vec::new();
+    while let Ok(Some(line)) = lines.next_line().await {
+        out.push(line);
+    }
+    out.join("\n")
 }
 
 fn spawn_cmd(spec: &LaunchSpec, argv: &[String]) -> Result<Child> {
@@ -65,7 +81,7 @@ fn spawn_cmd(spec: &LaunchSpec, argv: &[String]) -> Result<Child> {
     })
 }
 
-fn fallback_result(exit_code: Option<i32>, success: bool) -> TurnResult {
+fn fallback_result(exit_code: Option<i32>, success: bool, stderr: &str) -> TurnResult {
     if success {
         return TurnResult {
             subtype: "success".to_owned(),
@@ -84,6 +100,7 @@ fn fallback_result(exit_code: Option<i32>, success: bool) -> TurnResult {
         }
         Some(8) => "Command Code headless hit --max-turns before a final answer.",
         Some(10) => "Command Code headless has insufficient credits.",
+        _ if !stderr.is_empty() => stderr,
         _ => "Command Code headless failed without a JSON result.",
     };
     TurnResult {

@@ -56,10 +56,8 @@ impl TurnLaunch<'_> {
         if self.spec.trust {
             args.push("--trust".to_owned());
         }
-        if let Some(effort) = &self.spec.effort {
-            args.push("--effort".to_owned());
-            args.push(effort.clone());
-        }
+        // Muse Spark 1.2 Contributor rejects `--effort` ("no adjustable reasoning
+        // effort"). Keep effort on the ACP shim for TUI status only.
         match self.resume {
             Some(session_id) if !session_id.is_empty() => {
                 args.push("--resume".to_owned());
