@@ -10,10 +10,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 
 use super::MessagesRequest;
+mod guidance;
 mod records;
+#[cfg(test)]
+use guidance::REUSE_GUIDANCE_MARKER;
+pub(super) use guidance::{agent_teams_enabled, value_text};
+use guidance::{append_reuse_guidance, has_send_message_tool, system_contains_marker};
 use records::{
-    LaunchRecord, latest_user_text, launch_records, merge_launches, scope_similarity,
-    update_status_from_notifications,
+    LaunchRecord, already_has_resume, apply_transcript, find_reusable_launch, latest_user_text,
+    launch_records, scope_similarity,
 };
 
 pub(crate) const MAX_SUBAGENTS_PER_SESSION_ENV: &str = "CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION";
@@ -22,7 +27,6 @@ pub(crate) const DEFAULT_MAX_SUBAGENTS_PER_SESSION: usize = 1_024;
 const CACHE_FILE_NAME: &str = "subagent-recipients-v1.json";
 const CACHE_VERSION: u8 = 1;
 const METADATA_LIMIT_REACHED: &str = "_claudex_subagent_spawn_limit_reached";
-const REUSE_GUIDANCE_MARKER: &str = "<claudex-subagent-reuse>";
 const MAX_PERSISTED_RECIPIENTS: usize = 1_024;
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -88,6 +92,10 @@ impl SubagentReuseRegistry {
     }
 
     pub(super) fn observe_and_restore(&self, request: &mut MessagesRequest) {
+        self.observe_and_restore_with_reuse(request, reuse_enabled());
+    }
+
+    fn observe_and_restore_with_reuse(&self, request: &mut MessagesRequest, reuse: bool) {
         let Some(session_id) = session_id(request).map(str::to_owned) else {
             return;
         };
@@ -97,21 +105,17 @@ impl SubagentReuseRegistry {
             .lock()
             .expect("SubAgent reuse registry poisoned");
         let state = states.entry(session_id).or_default();
-        // Runs before the merge so `merge_launches` sees current statuses: it only
-        // folds a same-scope launch into an existing record while that record is
-        // non-terminal, so a stale status would wrongly block relaunching a
-        // finished worker. Runs again afterwards to status the newly pushed records.
-        update_status_from_notifications(&mut state.launches, &request.messages);
-        merge_launches(&mut state.launches, observed.iter());
-        update_status_from_notifications(&mut state.launches, &request.messages);
+        // Chronological: a later resume launch result must win over an earlier
+        // completion notification still present in the transcript.
+        apply_transcript(&mut state.launches, &request.messages);
         let limit_reached = state.launches.len() >= max_subagents_per_session();
         set_limit_metadata(request, limit_reached);
 
-        let should_restore = observed.is_empty()
+        let should_restore = reuse
+            && observed.is_empty()
             && !state.launches.is_empty()
-            && has_send_message_tool(&request.tools)
-            && agent_teams_enabled(request)
             && !system_contains_marker(&request.system);
+        let teams = agent_teams_enabled(request) && has_send_message_tool(&request.tools);
         let recipients =
             should_restore.then(|| reuse_recipients(&state.launches, &request.messages));
         let snapshot = states.clone();
@@ -119,8 +123,58 @@ impl SubagentReuseRegistry {
         self.persist(snapshot);
 
         if let Some(recipients) = recipients {
-            append_reuse_guidance(&mut request.system, &recipients);
+            append_reuse_guidance(&mut request.system, &recipients, teams);
         }
+    }
+
+    pub(super) fn rewrite_launch_input(
+        &self,
+        session_id: &str,
+        arguments: &mut Value,
+    ) -> Option<String> {
+        self.rewrite_launch_input_with_reuse(session_id, arguments, reuse_enabled())
+    }
+
+    fn rewrite_launch_input_with_reuse(
+        &self,
+        session_id: &str,
+        arguments: &mut Value,
+        reuse: bool,
+    ) -> Option<String> {
+        if !reuse || session_id.is_empty() || already_has_resume(arguments) {
+            return None;
+        }
+        let states = self
+            .states
+            .lock()
+            .expect("SubAgent reuse registry poisoned");
+        let recipient = find_reusable_launch(&states.get(session_id)?.launches, arguments)?
+            .recipient
+            .clone();
+        drop(states);
+        let object = arguments.as_object_mut()?;
+        object.insert("resume".to_owned(), json!(recipient.clone()));
+        tracing::info!(
+            session_id,
+            recipient,
+            "rewrote SubAgent launch into resume of a compatible worker"
+        );
+        Some(recipient)
+    }
+
+    #[cfg(test)]
+    pub(super) fn observe_and_restore_for_test(&self, request: &mut MessagesRequest, reuse: bool) {
+        self.observe_and_restore_with_reuse(request, reuse);
+    }
+
+    #[cfg(test)]
+    pub(super) fn rewrite_launch_input_for_test(
+        &self,
+        session_id: &str,
+        arguments: &mut Value,
+        reuse: bool,
+    ) -> Option<String> {
+        self.rewrite_launch_input_with_reuse(session_id, arguments, reuse)
     }
 
     #[cfg(test)]
@@ -136,6 +190,18 @@ impl SubagentReuseRegistry {
                     .map(|launch| launch.recipient.clone())
                     .collect()
             })
+    }
+
+    #[cfg(test)]
+    pub(super) fn status_for(&self, session: &str, recipient: &str) -> Option<String> {
+        self.states
+            .lock()
+            .expect("SubAgent reuse registry poisoned")
+            .get(session)?
+            .launches
+            .iter()
+            .find(|launch| launch.recipient == recipient)
+            .map(|launch| launch.status.clone())
     }
 
     fn persist(&self, states: HashMap<String, SessionState>) {
@@ -247,7 +313,17 @@ pub(super) fn is_launch_tool(name: &str) -> bool {
     matches!(name, "Agent" | "Task")
 }
 
-fn session_id(request: &MessagesRequest) -> Option<&str> {
+pub(super) fn reuse_enabled() -> bool {
+    match std::env::var(crate::parallel_scheduler::SUBAGENT_REUSE_ENV) {
+        Ok(value) => matches!(
+            value.as_str(),
+            "1" | "true" | "TRUE" | "True" | "yes" | "YES" | "on" | "ON"
+        ),
+        Err(_) => true,
+    }
+}
+
+pub(super) fn session_id(request: &MessagesRequest) -> Option<&str> {
     request
         .metadata
         .pointer("/_claudex_transport_identity/session_id")
@@ -264,84 +340,6 @@ fn set_limit_metadata(request: &mut MessagesRequest, reached: bool) {
         .as_object_mut()
         .expect("metadata object")
         .insert(METADATA_LIMIT_REACHED.to_owned(), Value::Bool(reached));
-}
-
-fn value_text(value: Option<&Value>) -> String {
-    match value {
-        Some(Value::String(text)) => text.clone(),
-        Some(Value::Array(values)) => values
-            .iter()
-            .map(|value| value_text(Some(value)))
-            .collect::<Vec<_>>()
-            .join("\n"),
-        Some(Value::Object(object)) => object
-            .get("text")
-            .map(|text| value_text(Some(text)))
-            .unwrap_or_else(|| {
-                object
-                    .values()
-                    .map(|value| value_text(Some(value)))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            }),
-        _ => String::new(),
-    }
-}
-
-fn has_send_message_tool(tools: &[Value]) -> bool {
-    tools.iter().any(|tool| {
-        tool.get("name")
-            .and_then(Value::as_str)
-            .is_some_and(|name| name == "SendMessage")
-    })
-}
-
-/// A normal Agent/Task session must not use the mailbox transport for worker
-/// results. Claude exposes SendMessage only for an explicit Agent Teams
-/// session; treating its mere presence as an invitation causes raw
-/// `<agent-message>` attachments to be queued as user input.
-pub(super) fn agent_teams_enabled(request: &MessagesRequest) -> bool {
-    let team_tool = request.tools.iter().any(|tool| {
-        let name = tool.get("name").and_then(Value::as_str).unwrap_or_default();
-        matches!(
-            name,
-            "TeamCreate"
-                | "TeamDelete"
-                | "TeamList"
-                | "TeamRename"
-                | "TeamUpdate"
-                | "TeamSendMessage"
-        ) || name.starts_with("team_")
-    });
-    let explicit_team_text = request.messages.iter().any(|message| {
-        let text = value_text(Some(message));
-        text.contains("USE_NAMED_TEAM_MAILBOX") || text.contains("<teammate-message")
-    });
-    team_tool || explicit_team_text
-}
-
-fn system_contains_marker(system: &Value) -> bool {
-    value_text(Some(system)).contains(REUSE_GUIDANCE_MARKER)
-}
-
-fn append_reuse_guidance(system: &mut Value, recipients: &[String]) {
-    let recipients = recipients
-        .iter()
-        .take(32)
-        .map(|recipient| format!("`{recipient}`"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let guidance = format!(
-        "{REUSE_GUIDANCE_MARKER}\nThis resumed Agent Teams session already has compatible teammates and their recorded scopes: {recipients}. Choose the teammate whose recorded scope best matches the current task, then use TeamSendMessage with that exact recipient. Do not assign unrelated work to a teammate merely because it is available. Do not launch a replacement for the same scope. Create a new Agent/Task only for genuinely independent work or when the existing teammate is unavailable.\n</claudex-subagent-reuse>"
-    );
-    match system {
-        Value::String(text) => {
-            text.push_str("\n\n");
-            text.push_str(&guidance);
-        }
-        Value::Array(blocks) => blocks.push(json!({"type":"text","text":guidance})),
-        _ => *system = Value::String(guidance),
-    }
 }
 
 #[cfg(test)]
