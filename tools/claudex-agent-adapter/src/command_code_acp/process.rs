@@ -3,6 +3,7 @@ use std::process::Stdio;
 use anyhow::{Context, Result};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
+use tokio::sync::mpsc;
 
 use super::events::{ParsedLine, ProgressEvent, TurnResult, parse_stdout_line};
 use super::launch::LaunchSpec;
@@ -19,6 +20,15 @@ pub async fn run_turn(
     prompt: &str,
     resume: Option<&str>,
 ) -> Result<TurnOutcome> {
+    run_turn_emitting(spec, prompt, resume, None).await
+}
+
+pub async fn run_turn_emitting(
+    spec: &LaunchSpec,
+    prompt: &str,
+    resume: Option<&str>,
+    sink: Option<mpsc::UnboundedSender<ProgressEvent>>,
+) -> Result<TurnOutcome> {
     let argv = spec.argv(prompt, resume);
     let mut child = spawn_cmd(spec, &argv)?;
     let stdout = child
@@ -31,14 +41,19 @@ pub async fn run_turn(
         .context("command-code headless stderr is unavailable")?;
     let stderr_task = tokio::spawn(async move { read_stderr(stderr).await });
     let mut lines = BufReader::new(stdout).lines();
-    let mut progress = vec![ProgressEvent::Started {
-        model: spec.model.clone(),
-        effort: spec.effort.clone(),
-    }];
+    let mut progress = Vec::new();
+    push_progress(
+        &mut progress,
+        sink.as_ref(),
+        ProgressEvent::Started {
+            model: spec.model.clone(),
+            effort: spec.effort.clone(),
+        },
+    );
     let mut result = None;
     while let Some(line) = lines.next_line().await.context("read cmd -p stdout")? {
         match parse_stdout_line(&line) {
-            ParsedLine::Progress(event) => progress.push(event),
+            ParsedLine::Progress(event) => push_progress(&mut progress, sink.as_ref(), event),
             ParsedLine::Result(parsed) => result = Some(parsed),
             ParsedLine::Ignored => {}
         }
@@ -53,6 +68,17 @@ pub async fn run_turn(
         result,
         exit_code,
     })
+}
+
+fn push_progress(
+    progress: &mut Vec<ProgressEvent>,
+    sink: Option<&mpsc::UnboundedSender<ProgressEvent>>,
+    event: ProgressEvent,
+) {
+    if let Some(sink) = sink {
+        let _ = sink.send(event.clone());
+    }
+    progress.push(event);
 }
 
 async fn read_stderr(stderr: impl tokio::io::AsyncRead + Unpin) -> String {

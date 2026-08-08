@@ -10,9 +10,8 @@ use tokio_util::compat::{TokioAsyncReadCompatExt as _, TokioAsyncWriteCompatExt 
 use uuid::Uuid;
 
 use super::{
-    events::{ProgressEvent, TurnResult, progress_to_updates, result_is_error, result_message},
+    events::{TurnResult, progress_to_updates, result_is_error, result_message},
     options::Options,
-    process::run_turn,
     prompt::prompt_text,
 };
 
@@ -44,19 +43,6 @@ impl HeadlessAgent {
         received.await.map_err(|_| acp::Error::internal_error())
     }
 
-    async fn emit_progress(
-        &self,
-        session_id: &acp::SessionId,
-        events: &[ProgressEvent],
-    ) -> acp::Result<()> {
-        for event in events {
-            for update in progress_to_updates(event) {
-                self.notify(session_id.clone(), update).await?;
-            }
-        }
-        Ok(())
-    }
-
     fn session_key(session_id: &acp::SessionId) -> String {
         session_id.0.to_string()
     }
@@ -66,6 +52,44 @@ impl HeadlessAgent {
             .borrow_mut()
             .remove(session_id)
             .unwrap_or(false)
+    }
+
+    async fn run_prompt_turn(
+        &self,
+        session_id: &acp::SessionId,
+        prompt: &str,
+        resume: Option<&str>,
+    ) -> acp::Result<super::process::TurnOutcome> {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let operations = self.operations.clone();
+        let notify_session = session_id.clone();
+        let emit = tokio::task::spawn_local(async move {
+            while let Some(event) = rx.recv().await {
+                for update in progress_to_updates(&event) {
+                    let (sent, received) = oneshot::channel();
+                    if operations
+                        .send(ClientOperation::Notify(
+                            acp::SessionNotification::new(notify_session.clone(), update),
+                            sent,
+                        ))
+                        .is_err()
+                    {
+                        return;
+                    }
+                    let _ = received.await;
+                }
+            }
+        });
+        let outcome = super::process::run_turn_emitting(
+            &self.options.spec,
+            prompt,
+            resume,
+            Some(tx),
+        )
+        .await
+        .map_err(|error| acp::Error::internal_error().data(error.to_string()))?;
+        let _ = emit.await;
+        Ok(outcome)
     }
 }
 
@@ -127,14 +151,12 @@ impl acp::Agent for HeadlessAgent {
             .get(&session_key)
             .cloned()
             .flatten();
-        let outcome = run_turn(&self.options.spec, &prompt, resume.as_deref())
-            .await
-            .map_err(|error| acp::Error::internal_error().data(error.to_string()))?;
+        let outcome = self
+            .run_prompt_turn(&request.session_id, &prompt, resume.as_deref())
+            .await?;
         if self.take_cancelled(&session_key) {
             return Ok(acp::PromptResponse::new(acp::StopReason::Cancelled));
         }
-        self.emit_progress(&request.session_id, &outcome.progress)
-            .await?;
         if let Some(session_id) = outcome.result.session_id.clone() {
             self.cmd_sessions
                 .borrow_mut()

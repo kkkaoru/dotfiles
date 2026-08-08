@@ -12,7 +12,9 @@ use tempfile::TempDir;
 
 use super::{
     DEFAULT_MAX_TURNS, DEFAULT_MODEL, LaunchSpec, Options, ParsedLine, ProgressEvent,
-    parse_stdout_line, process::run_turn, progress_to_updates, prompt_text,
+    parse_stdout_line,
+    process::{run_turn, run_turn_emitting},
+    progress_to_updates, prompt_text,
 };
 
 fn spec_with_program(program: PathBuf) -> LaunchSpec {
@@ -373,6 +375,29 @@ fn prompt_text_joins_content_blocks() {
         ],
     );
     assert_eq!(prompt_text(&request), "first\nsecond");
+}
+
+#[tokio::test]
+async fn run_turn_emits_started_before_cmd_exits() {
+    let root = TempDir::new().expect("slow cmd dir");
+    let program = write_executable(
+        root.path(),
+        "slow",
+        "#!/bin/sh\nsleep 0.4\nprintf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"finalText\":\"ok\"}'\n",
+    );
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let spec = spec_with_program(program);
+    let mut turn = std::pin::pin!(run_turn_emitting(&spec, "hello", None, Some(tx)));
+    let first = tokio::select! {
+        event = rx.recv() => event.expect("started event"),
+        _ = &mut turn => panic!("cmd finished before Started progress"),
+    };
+    assert!(matches!(
+        first,
+        ProgressEvent::Started { ref model, .. } if model == DEFAULT_MODEL
+    ));
+    let outcome = turn.await.expect("slow turn");
+    assert_eq!(outcome.result.final_text, "ok");
 }
 
 #[tokio::test]
