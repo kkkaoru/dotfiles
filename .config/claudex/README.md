@@ -107,9 +107,11 @@ DeepSeek / OpenCode GPT Luna workerは独立した調査をまとめて実行し
 Cursor ACPは `cursor-agent --model {model} --yolo acp` を起動し、既定modelは `auto` です。
 `--yolo` はCursor CLIの `--force` 別名で、main sessionの無確認実行と同等のtool権限にします。
 Command Code Muse Sparkは `command-code-acp --model {model} --effort {effort}` を起動し、
-内部で公式 headless `cmd -p --output-format json --yolo --trust --skip-onboarding` を回します。
+内部で公式 headless `cmd -p --output-format json --yolo --trust --skip-onboarding --no-skills --no-session` を回します。SubAgent は常に one-shot（`--resume` しない）で、Claudex の ACP_NATIVE / routing dump / 再構成 transcript も `cmd` に載せません。
 `--effort` は ACP/TUI 表示用だけで、Muse Spark は reasoning effort を受け付けないため `cmd` には渡しません。
-進捗（▶/✓）は既存 ACP `ToolCall` / thought chunk 経由で SubAgent TUI に出ます。
+`webSearchMode` は `acp-native`（Claude の巨大 system/routing を `cmd -p` に載せない）。
+agent 定義から skills を外し、`SubagentStart` hook も Command Code だけ短文 reminder にする。
+進捗（▶/✓ と `text_delta` thinking）は既存 ACP `ToolCall` / thought chunk 経由で SubAgent TUI に出ます。
 `mainProviders` に追加すると usage 未計測のため他workerを押し出すので、既定では明示起動だけにします。
 Cline ACPは `cline --auto-approve true --thinking {effort} -P <provider> -m {model} --acp` を起動します。
 DeepSeek V4 Flashは provider `cline-pass` / model `cline-pass/deepseek-v4-flash` です（本機の
@@ -333,21 +335,27 @@ rustup-init
 rustup toolchain install stable --component clippy,rustfmt
 ```
 
-repository rootからrelease buildをインストールします。
+repository rootからrelease buildをインストールします。正本は `~/.cargo/bin` です。
+`./create-symlinks.sh` が `~/.local/bin/claudex-agent-adapter` をそのsymlinkにし、
+zsh向けの `claudex-hot-swap` もリンクします。
 
 ```sh
-cargo install --locked \
+tools/claudex-agent-adapter/scripts/cargo-ephemeral.sh +1.97.1 install \
   --path tools/claudex-agent-adapter \
-  --root "$HOME/.local" \
+  --root "$HOME/.cargo" \
   --bin claudex-agent-adapter \
   --bin command-code-acp
+# または cargo install --locked --path tools/claudex-agent-adapter \
+#   --bin claudex-agent-adapter --bin command-code-acp
+./create-symlinks.sh
 ```
 
 `~/.local/bin` が `PATH` に含まれることを確認してください。このdotfilesのfish設定では
-自動的に追加されます。
+自動的に追加されます。zshから `claudex-hot-swap` を使う場合も同じです。
 
 ```sh
 command -v claudex-agent-adapter
+command -v claudex-hot-swap
 claudex-agent-adapter build-id
 ```
 
@@ -364,8 +372,10 @@ curl --fail --silent http://127.0.0.1:8318/health | jq .
 
 `status` が `ok` で、`backend_routes` にCodex、Grok、Qwen、OpenCode Goが含まれ、上限を設定したmodelが
 `model_concurrency` に `active`、`queued`、`limit`、`available` を持てば準備完了です。
-常設のlaunchd plistは不要です。`claudex` の起動時に互換性のあるdaemonを再利用し、
-存在しなければloopbackの `127.0.0.1:8318` へ自動起動します。
+常設のlaunchd plistは不要です。`claudex` / `ensure` は互換なdaemonを再利用し、
+idleならTUI付きでも同じportへ新buildを差し替え、無ければloopbackの `127.0.0.1:8318`
+へ起動します。差し替えの判定と `claudex-hot-swap` は
+[daemonの差し替え（hot-swap）](#daemonの差し替えhot-swap仕様)を参照してください。
 
 ## 使い方
 
@@ -392,8 +402,9 @@ UserPromptSubmit では main 向け、SubagentStart では worker 向けの tool
 `~/.claude/settings.json` には入れないため、素の `claude` にはこの機械的制限は付きません。
 緊急時のみ `CLAUDEX_ALLOW_MAIN_TOOLS=1` で main の file/search 直接実行を許可できます。
 自動 `selected_workers` は weekly 残量が十分ある peer がいるとき、weekly 残量が低い
-（目安 25% 未満）worker を除外します。Ollama が CodexBar 未計測でも API 到達可能なら
-weekly 余裕ありとして上位に並びます。
+（目安 25% 未満）worker と、残量不明な worker（例: Ollama の API 到達のみ）を除外します。
+Ollama が CodexBar 未計測でも API 到達可能な場合は、他に実測メーター付き peer が無いときだけ
+自動候補に残ります。
 過去に `--agent claudex-orchestrator` が付いた
 transcriptをresumeする場合、adapterは残存する `agent-setting` を検知し、slug / 既存title /
 cwd名から `--name` を復元して表示名の固定化を解除します。明示的な `--name` や `--agent`
@@ -417,7 +428,7 @@ provider設定がdotfilesにあってもCodex、Grok、Qwen、Sonnetの作業デ
 | `CLAUDEX_SUBAGENT_MIN_MODEL_FAMILIES` | `2` | multi-scope 時に望ましい model family 多様性の下限（`minimum_model_kinds`） |
 | `CLAUDEX_SUBAGENT_REEVALUATE_ON_COMPLETION` | `1` | workerの完了・失敗・timeoutごとに残作業、追指示、追加launchを再判定 |
 | `CLAUDEX_SUBAGENT_REASSESS_INTERVAL_SECONDS` | `600` | 10分ごとのactive set・capacity・model familyの再評価間隔 |
-| `CLAUDEX_SUBAGENT_REUSE` | `1` | model、effort、role、scopeが互換な完了workerを`SendMessage`で再利用 |
+| `CLAUDEX_SUBAGENT_REUSE` | `1` | model・scopeが互換な worker を Agent/Task の `resume=<agentId>` で再利用・復活。Agent Teams だけ `SendMessage` |
 | `CLAUDEX_SUBAGENT_CLEANUP_ON_EXIT` | `1` | main session終了・cancel・error時にlaunch停止、childのcancel/wait/reapを要求 |
 | `CLAUDEX_SUBAGENT_FIRST` | `1` | routed workerがある場合はSubAgent委譲を必須化し、main直接実行をfallback限定にする |
 | `CLAUDEX_ALLOW_MAIN_TOOLS` | unset | `1` のときだけ PreToolUse の main 実行拒否を解除（緊急回避） |
@@ -500,6 +511,8 @@ Claude Codeは `UserPromptSubmit` の `additionalContext` をmain sessionにし�
 `SubagentStart` の `additionalContext` はsubagentの会話開始前にそのセッションへ入るため、
 各routed workerは自分のネストしたAgent/Task起動用に同じsanitized context
 （`selected_workers`、`disabled_subagent_models`、メモリ方針、`worker_capacity`）を読み込めます。
+例外: `claudex-command-code` は Muse Spark に巨大 routing/skill dump を載せないため、
+短文 reminder だけを注入し usage collect もスキップします。
 使用量は5分キャッシュを使うためspawnごとの追加コストは小さく、denylistはadapterがAPI境界で
 常に強制します（workerが見える見えないに関わらず）。
 
@@ -796,9 +809,11 @@ resume対象の履歴にClaude Code自身の `Subagent spawn limit reached (.. o
 SubAgentの累積起動数はセッション単位で台帳化します。各起動の `agentId` / `agent_id`、モデル、
 promptから抽出した作業scope、active/completed状態を紐付けて管理し、次の作業ではscopeが最も近い
 recipientを動的に選びます。既存の `agentId` / `agent_id` は
-`~/.cache/claudex/subagent-recipients-v1.json` に保存し、resumeやcompactで履歴が短くなった場合だけ
-同じ宛先へ `SendMessage` で継続する指示を復元します。通常の継続ターンではプロンプトの固定部分を
-変更しないため、provider側のプロンプトキャッシュを維持します。1024件に到達した場合はClaude Codeの
+`~/.cache/claudex/subagent-recipients-v1.json` に保存します。resumeやcompactで履歴が短くなった場合は
+同じ宛先へ `Agent` / `Task` の `resume=<agentId>`（Agent Teams では `SendMessage`）で継続する指示を
+復元します。同じscopeの新規起動は adapter が `resume` へ書き換え、台帳上の新規spawn数を増やしません。
+失敗・cancel・stop した worker と独立scopeだけが新しい起動になります。通常の継続ターンではプロンプトの
+固定部分を変更しないため、provider側のプロンプトキャッシュを維持します。1024件に到達した場合はClaude Codeの
 `Agent` / `Task` 起動ツールを新たに公開せず、既存SubAgentへの連絡・結果取得・ユーザー対応を継続します。
 
 `CLAUDEX_USAGE_CACHE_SECONDS=0` は調査時だけ使用してください。通常はprovider CLIへの
@@ -886,19 +901,102 @@ provider名と一致）。省略したproviderは常に利用可能なunmetered 
 ## 更新
 
 別のMacでdotfilesを更新した場合は、リンクを再確認してadapterを再インストールします。
+daemonの差し替え仕様は次節を参照してください。手動で `:8318` を止めてから起動し直す必要はありません。
 
 ```sh
 git pull --ff-only
 ./create-symlinks.sh
-cargo install --locked --force \
-  --path tools/claudex-agent-adapter \
-  --root "$HOME/.local" \
-  --bin claudex-agent-adapter \
-  --bin command-code-acp
 ```
 
-次回の `claudex` 起動時に、protocol、route、process limitが一致しない古いdaemonは
-自動的に置き換えられます。
+adapterの正本は `~/.cargo/bin/claudex-agent-adapter` です。`create-symlinks.sh` は
+`~/.local/bin/claudex-agent-adapter` をそのsymlinkにし、`claudex-hot-swap` も
+`~/.local/bin` へリンクします。fish / zsh の `claudex` と `claudex-hot-swap` は
+`~/.local/bin` 経由でこの正本を呼びます。`--root "$HOME/.local"` だけに入れると、
+symlink作成後に古いcargo binへ戻るため、install先はcargo bin（または両方）にしてください。
+
+```sh
+tools/claudex-agent-adapter/scripts/cargo-ephemeral.sh +1.97.1 install \
+  --path tools/claudex-agent-adapter \
+  --root "$HOME/.cargo" \
+  --bin claudex-agent-adapter \
+  --bin command-code-acp
+# または cargo install --locked --force --path tools/claudex-agent-adapter \
+#   --bin claudex-agent-adapter --bin command-code-acp
+```
+
+install後は `/health` の `build_id` が新しいバイナリと一致するまで、次節の
+`ensure` / `claudex` / `claudex-hot-swap` でdaemonを差し替えます。バイナリだけ更新して
+daemonを触らないと、既存の `:8318` は旧buildのまま動き続けます。
+
+### daemonの差し替え（hot-swap）仕様
+
+共有daemonは常設launchdではなく、`claudex` / `ensure` / `hot-swap` がport単位で
+管理します。既定listenerは `127.0.0.1:8318`（`CLAUDEX_ADAPTER_LISTEN` で変更可）。
+同一portのlauncherは `~/.cache/claudex` のlockで直列化します。
+
+判定材料は `/health` です。`status`、`protocol_version`、`model`、route、
+`service_config_fingerprint` / `codex_config_fingerprint`、subscription上限、
+source由来の `build_id`、認証が揃い、かつ `build_id` が今動かしているバイナリと
+一致すれば再利用します。一致しない場合でも、進行中のHTTP requestまたは
+provider turnがあるlistenerは切りません。
+
+```mermaid
+flowchart TD
+  Health["GET /health"] --> Absent{"応答なし?"}
+  Absent -->|yes| Start[Start: 新規serve]
+  Absent -->|no| Match{"config一致 かつ build_id一致 かつ auth OK?"}
+  Match -->|yes| Reuse[Reuse: そのまま使う]
+  Match -->|no| Busy{"status=ok かつ active work?"}
+  Busy -->|yes| Defer[Defer]
+  Busy -->|no| Replace["Replace: 同一port差し替え"]
+  Defer --> Mode{"呼び出し?"}
+  Mode -->|ensure / launch| Fallback[fallback listener]
+  Mode -->|hot-swap| Wait["最大45秒 drain待ち"]
+  Wait -->|idleになった| Replace
+  Wait -->|timeout| Error[timeoutで失敗]
+```
+
+`active work` は `active_http_requests > 0` または `active_provider_turns > 0` です。
+idleな `launch` TUIが付いていても Replace します。TUIプロセスはkillしません。
+Claude Codeは同じ `ANTHROPIC_BASE_URL`（同じport）へ接続したままなので、次のturnから
+新daemonを使います。起動中のstreamを切る差し替えはしません。
+
+| 入口 | idle（TUI付き含む） | busy | 備考 |
+| --- | --- | --- | --- |
+| `claudex` / `claudex-agent-adapter launch` | 同一portをReplace | Defer → 新buildのfallback listener | 新しいClaude Code sessionだけfallbackへ。既存TUIは旧portのまま |
+| `claudex-agent-adapter ensure` | 同一portをReplace | Defer → fallback | `claudex` と同じ。stdoutに使うbase URLを出す |
+| `claudex hot-swap` / `claudex-hot-swap` / `claudex-agent-adapter hot-swap` | 同一portをReplace | 最大45秒drain待ち。idleになればReplace、残ればtimeout | fallbackは立てない。同じportへ新buildを載せたいときだけ使う |
+
+Replace時は旧serveへgraceful shutdown（SIGTERM、process groupやSIGKILLへは進めない）を送り、
+listenerが空くまで待ちます。`launch` 親プロセスには信号を送りません。新daemonの
+readinessに失敗し、旧世代のrecovery manifestがある場合は旧世代を戻します。
+
+fallback listenerはloopbackの空きportに新buildを起動し、状態を
+`~/.cache/claudex/fallback.<port>.json` に保存します。同じ世代なら再利用し、
+daemonを増やし続けません。既存sessionの進行中streamは旧daemonに残ります。
+
+日常の更新手順:
+
+```sh
+# 1. 新バイナリを入れる（上のinstall）
+claudex-agent-adapter build-id
+
+# 2. 同一portへ載せる。TUIが付いていてもidleなら差し替わる
+claudex-hot-swap
+# fishなら claudex hot-swap でも同じ。zshは ~/.local/bin/claudex-hot-swap
+
+# 3. 確認。pidが変わり、build_idがinstallした値と一致すること
+curl --fail --silent http://127.0.0.1:8318/health | jq '{pid, build_id, status}'
+```
+
+busy中に `claudex-hot-swap` すると、45秒以内にactive workが消えなければ
+`hot-swap timed out: adapter pid … still has active work` で失敗します。
+進行中のstreamは打ちません。turnが終わってから再実行するか、新しい `claudex`
+sessionだけ今すぐ新buildへ載せたい場合は `ensure` / `claudex` のfallbackを使います。
+
+`providers.json` のrouteやQwen起動引数、subscription上限、Codex credentialも
+fingerprintの対象です。credential変更後は永続app-server childへ新しい起動環境を
+渡すため、同じ差し替え経路でdaemonを更新します。
 
 ## 開発時の検証
 
@@ -975,16 +1073,21 @@ fallbackや別providerへ黙って切り替えません。
 
 ### daemon設定が古い
 
+仕様は[daemonの差し替え（hot-swap）](#daemonの差し替えhot-swap仕様)を参照してください。
+
 ```sh
+claudex-agent-adapter build-id
+claudex-hot-swap
+# または idle なら ensure / 新しい claudex でも同一port差し替え
 claudex-agent-adapter ensure \
   --provider-config "$HOME/.config/claudex/providers.json"
-curl --fail --silent http://127.0.0.1:8318/health | jq .
+curl --fail --silent http://127.0.0.1:8318/health \
+  | jq '{pid, build_id, status, active_http_requests, active_provider_turns}'
 ```
 
-`providers.json` のQwen起動引数を含むroute定義とbuild IDはdaemon切替判定の対象です。
-`ensure` はport単位で多重起動を排他し、旧listenerを解放して同じportへ新buildを
-起動します。旧daemonが受付済みの応答はそのprocess上で完了するため、idle sessionの保持期限を
-待たずに設定とバイナリを反映できます。timeout値を変更した場合も新しいQwen childへ反映します。
+`/health.build_id` がinstallした `build-id` と一致しないときは、まだ旧daemonです。
+busyなら `ensure` はfallbackへ逃がし、`claudex-hot-swap` はdrain待ちまたはtimeoutします。
+TUIをkillしてportを空ける必要はありません。
 
 外部のlaunchd jobなどが旧 `--backend-route` 引数で同じportをKeepAliveしていると、共有
 設定のdaemonを置き換えてしまいます。その場合は該当jobを停止し、`--provider-config`

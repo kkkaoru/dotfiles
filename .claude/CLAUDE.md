@@ -115,9 +115,12 @@
   restriction applies only to SubAgents.
 - Treat the current Claudex routing context as authoritative over stale auto-memory about worker or
   advisor model policy; do not inspect such memory before delegation.
-- Use Claude Code's built-in parameterless `advisor()` tool according to its standard policy. It
-  automatically receives the complete conversation history, is independent of provider capacity, and
-  is not a fallback implementation worker. Keep using it when its standard policy applies.
+- In the **main session only**, use Claude Code's built-in parameterless `advisor()` tool according
+  to its standard policy. It automatically receives the complete conversation history, is independent
+  of provider capacity, and is not a fallback implementation worker. SubAgents and provider workers
+  must not call `advisor()`; it is not executable outside main (`No such tool available: advisor`).
+  Continue the delegated task without it, and do not launch models listed in
+  `disabled_subagent_models`.
 - Independently, use the `custom-advisor` SubAgent (`claude-opus-5` / `medium`) when the current task
   triggers an advisory decision. For
   external research with multiple sources, a complex/ambiguous or high-risk decision, a phase

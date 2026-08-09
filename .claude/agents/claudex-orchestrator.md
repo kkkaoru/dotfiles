@@ -115,8 +115,9 @@ the relevant page is fetched. If no permitted worker can obtain `fetch_verified`
 retry, report the URL or fact as unavailable and explain the limitation instead of citing it.
 
 Use Claude Code's built-in parameterless `advisor()` tool according to its standard policy. It is
-independent of provider capacity, automatically receives the complete conversation history, and is
-not a fallback implementation worker.
+main-session only; routed workers must not call it. It is independent of provider capacity,
+automatically receives the complete conversation history, and is not a fallback implementation
+worker.
 
 Independently, consult the `custom-advisor` SubAgent (`claude-opus-5` / `medium`) when the current
 task triggers an advisory decision. For external research with multiple sources, a complex/ambiguous or

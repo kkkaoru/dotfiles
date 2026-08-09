@@ -1,4 +1,10 @@
 function claudex --description 'Run Claude Code with config-driven agent backends'
+    if test (count $argv) -ge 1; and test "$argv[1]" = hot-swap
+        set -e argv[1]
+        claudex-hot-swap $argv
+        return $status
+    end
+
     # Keep orchestration policy in exported variables so Claude Code and its
     # routed workers receive the same controls.  Each default is overrideable
     # for one invocation (or by a caller's exported shell configuration).

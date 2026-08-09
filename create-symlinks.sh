@@ -82,6 +82,12 @@ mkdir -p "${HOME}/.local/bin"
 link_path "${DOTPATH}/tools/git-hooks/dotfiles-git-quality" \
   "${HOME}/.local/bin/dotfiles-git-quality"
 
+# Command Code: always launch via mise Node, not Homebrew Node 26 / bun global.
+link_path "${DOTPATH}/scripts/command-code-cmd" "${HOME}/.local/bin/cmd"
+link_path "${DOTPATH}/scripts/command-code-cmd" "${HOME}/.local/bin/cmdc"
+link_path "${DOTPATH}/scripts/command-code-cmd" "${HOME}/.local/bin/command-code"
+link_path "${DOTPATH}/scripts/command-code-cmd" "${HOME}/.local/bin/commandcode"
+
 # The Fish launcher executes Cargo's installed adapter directly. Keep the
 # historical local path as a symlink too, so manual invocations cannot select
 # an obsolete copied binary.
@@ -91,6 +97,7 @@ if [ -e "$adapter_link" ] && [ ! -L "$adapter_link" ]; then
   mv -f "$adapter_link" "${adapter_link}.legacy"
 fi
 ln -snfv "$adapter_target" "$adapter_link"
+link_path "${DOTPATH}/scripts/claudex-hot-swap" "${HOME}/.local/bin/claudex-hot-swap"
 
 # .config apps
 mkdir -p "${HOME}/.config"

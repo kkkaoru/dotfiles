@@ -242,7 +242,7 @@
         "meta/muse-spark"
       ],
       "backend": "configured-acp",
-      "webSearchMode": "disabled",
+      "webSearchMode": "acp-native",
       "acp": {
         "program": "command-code-acp",
         "arguments": [

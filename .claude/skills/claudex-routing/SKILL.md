@@ -109,8 +109,14 @@ retained.
    fallback is `claudex-sonnet` and the outer session already uses Sonnet 5, suppress automatic
    selection as described above; direct explicit Sonnet launches remain available.
 5. Advisors are independent of worker capacity and never replace implementation workers:
-   - Use Claude Code's built-in parameterless `advisor()` tool according to its standard policy. It
-     automatically receives the complete conversation history and does not depend on provider quota.
+   - Built-in parameterless `advisor()` is **main-session only**. SubAgents and provider workers
+     (including Codex spark/luna) must not call `advisor()`; Claude Code cannot execute it there
+     (`No such tool available: advisor`). Continue the delegated task without it. For strategic
+     review, launch `custom-advisor` via Agent/Task when enabled, and never launch models listed in
+     `disabled_subagent_models`.
+   - In the main orchestrator only, use Claude Code's built-in parameterless `advisor()` tool
+     according to its standard policy. It automatically receives the complete conversation history
+     and does not depend on provider quota.
    - Independently, invoke the `custom-advisor` SubAgent (`claude-opus-5` / `medium`) when explicitly
      requested, external research has multiple sources, a decision is complex/ambiguous or high-risk,
      a phase exceeds ten minutes, a worker fails/times out/stalls, or worker results conflict. Do not
