@@ -105,7 +105,7 @@ pub const AMPLE_WEEKLY_REMAINING_PERCENT: f64 = 40.0;
 /// only weekly is known, and `min(weekly, five-hour)` when a five-hour meter is
 /// present. Unknown meters (for example Ollama `available-ollama-api-only`) must
 /// not stay in the automatic pool beside peers with real headroom — reachability
-/// is not quota. Intentional unmetered workers such as Command Code stay in the
+/// is not quota. Intentional unmetered workers (no `usageProvider`) stay in the
 /// automatic pool, ranked behind known weekly meters. Explicit model launches
 /// can still target a dropped provider via `model_prefixes` when the active user
 /// names that model.

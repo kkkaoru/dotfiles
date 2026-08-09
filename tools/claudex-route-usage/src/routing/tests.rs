@@ -258,6 +258,84 @@ fn command_code_is_auto_selected_beside_metered_peers() {
 }
 
 #[test]
+fn command_code_uses_codexbar_commandcode_quota() {
+    // Live CodexBar provider id is `commandcode`. Without usageProvider the
+    // worker stayed unmetered even though weekly/five-hour left was available.
+    let config = config_from_json(
+        r#"{
+          "version": 1,
+          "mainProviders": ["codex", "command-code"],
+          "providers": [
+            {
+              "id": "codex",
+              "agent": "claudex-gpt",
+              "defaultModel": "gpt-5.6-luna",
+              "effort": "max",
+              "enabled": true,
+              "usageProvider": "codex",
+              "modelPrefixes": ["gpt"],
+              "backend": "codex-app-server"
+            },
+            {
+              "id": "command-code",
+              "agent": "claudex-command-code-muse-spark-1-2-contributor",
+              "defaultModel": "meta/muse-spark-1.2-contributor",
+              "effort": "high",
+              "enabled": true,
+              "usageProvider": "commandcode",
+              "modelPrefixes": ["meta/muse-spark"],
+              "backend": "configured-acp",
+              "acp": {"program":"command-code-acp","arguments":["--model","{model}"]}
+            }
+          ],
+          "fallback": {
+            "agent": "claudex-sonnet",
+            "model": "claude-sonnet-5",
+            "effort": "high"
+          },
+          "nativeWorkers": []
+        }"#,
+    );
+    let usage = json!([
+        {
+          "provider": "codex",
+          "usage": {"primary": {"usedPercent": 2.0}, "secondary": {"usedPercent": 2.0}}
+        },
+        {
+          "provider": "commandcode",
+          "usage": {
+            "primary": {"usedPercent": 7.4, "windowMinutes": 300},
+            "secondary": {"usedPercent": 10.9, "windowMinutes": 10080}
+          }
+        }
+    ]);
+    let summary = routing_summary(&usage, &config, &BTreeSet::new()).unwrap();
+    let command = &summary["providers"]["command-code"];
+    assert_eq!(command["available"], true);
+    assert_eq!(command["reason"], "available-commandcode-quota");
+    assert_eq!(command["quota_windows"]["five-hour"], 92.6);
+    assert_eq!(command["quota_windows"]["seven-day"], 89.1);
+    let agents = selected_agents(&summary);
+    assert_eq!(agents[0], "claudex-gpt");
+    assert!(
+        agents.iter().any(|agent| agent.contains("command-code")),
+        "metered command-code must stay in automatic selected_workers: {agents:?}"
+    );
+    let worker = summary["selected_workers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| {
+            item.get("agent")
+                .and_then(Value::as_str)
+                .is_some_and(|agent| agent.contains("command-code"))
+        })
+        .expect("command-code worker");
+    assert_eq!(worker["weekly_remaining_percent"], 89.1);
+    assert_eq!(worker["five_hour_remaining_percent"], 92.6);
+}
+
+#[test]
 fn selects_available_workers_and_exposes_orchestration() {
     let summary = routing_summary(&report(), &sample_config(), &BTreeSet::new()).unwrap();
     let agents = selected_agents(&summary);
