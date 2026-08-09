@@ -43,5 +43,14 @@ echo "claudex-hot-swap: replacing $LISTEN with $BUILD ($PROVIDER_CONFIG)" >&2
 "$ADAPTER" hot-swap --provider-config "$PROVIDER_CONFIG" --listen "$LISTEN"
 
 if command -v curl >/dev/null 2>&1; then
-  curl --fail --silent "http://${LISTEN}/health" | python3 -c 'import json,sys; h=json.load(sys.stdin); print("claudex-hot-swap: ready pid=%s build=%s" % (h.get("pid"), h.get("build_id")))'
+  curl --fail --silent "http://${LISTEN}/health" | python3 -c 'import json,sys
+h=json.load(sys.stdin)
+want=sys.argv[1]
+live=h.get("build_id")
+pid=h.get("pid")
+if live==want:
+    print("claudex-hot-swap: ready pid=%s build=%s" % (pid, live))
+else:
+    print("claudex-hot-swap: listener still pid=%s build=%s; idle waiter will swap to %s" % (pid, live, want))
+' "$BUILD"
 fi

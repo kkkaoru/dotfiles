@@ -34,12 +34,22 @@ function claudex-hot-swap --description 'Replace an idle claudex adapter on the 
         return 2
     end
 
-    echo "claudex-hot-swap: replacing $listen with $(command "$adapter" build-id) ($provider_config)" >&2
+    set -l build (command "$adapter" build-id)
+    echo "claudex-hot-swap: replacing $listen with $build ($provider_config)" >&2
     command "$adapter" hot-swap --provider-config "$provider_config" --listen "$listen"
     or return $status
 
     set -l health_url "http://$listen/health"
     if command -q curl
-        curl --fail --silent "$health_url" | python3 -c 'import json,sys; h=json.load(sys.stdin); print("claudex-hot-swap: ready pid=%s build=%s" % (h.get("pid"), h.get("build_id")))'
+        curl --fail --silent "$health_url" | python3 -c 'import json,sys
+h=json.load(sys.stdin)
+want=sys.argv[1]
+live=h.get("build_id")
+pid=h.get("pid")
+if live==want:
+    print("claudex-hot-swap: ready pid=%s build=%s" % (pid, live))
+else:
+    print("claudex-hot-swap: listener still pid=%s build=%s; idle waiter will swap to %s" % (pid, live, want))
+' "$build"
     end
 end
