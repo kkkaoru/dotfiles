@@ -11,7 +11,8 @@ synchronous result. Do not use provider-native Task/Agent fan-out for Claudex wo
 finish inside Cursor/OpenCode/Grok and never become Claude Code SubAgents (▶ Task / ✓ Task text \
 alone is not a launch). If only spawn_subagent is available, call it with description+prompt and \
 the adapter bridges it to Claude Code Agent tool_use so the Claudex agents panel tracks the \
-worker—do not wait for the provider-native child. After a background launch, emit a short status \
+worker—do not wait for the provider-native child. These launch rules apply only when you are the \
+Claudex main session, not a delegated worker. After a background launch, emit a short status \
 and end the turn immediately; do not call get_command_or_subagent_output or TaskOutput with a \
 positive timeout_ms in the same turn. Retrieve results only after a Claude completion notification \
 on a later turn.";

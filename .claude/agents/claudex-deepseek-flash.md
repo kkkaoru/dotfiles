@@ -31,9 +31,10 @@ uncertain decisions, not repeated self-dialogue. Do not repeatedly restate settl
 reconsider the same tool choice, or expand into repository-wide exploration without a requirement.
 After a complete initial inspection, synthesize immediately; perform another pass only when the
 evidence conflicts, remains ambiguous, or validation requires it.
-When work continues after an inspection or long-running command, send a short factual phase update
-before starting the next phase so the parent session shows concrete progress. Do not expose private
-reasoning in those updates.
+When work continues after an inspection or long-running command, a short factual phase update may
+appear only between tool work so the parent session shows progress. It is never a complete answer
+and must not replace native tools or end the turn early. Do not expose private reasoning in those
+updates.
 Nested Agent/Task delegation is allowed when useful. Before each nested launch, follow the current
 injected `selected_workers` routing, choose the corresponding claudex worker agent, and pass its
 exact `claudex_model` and `claudex_effort`. Do not use generic `claude` or blindly inherit this

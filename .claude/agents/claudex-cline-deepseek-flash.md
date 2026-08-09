@@ -27,8 +27,9 @@ permitted fetch or use a verified-capable route; if that remains unavailable, re
 limitation explicitly and omit the unverified fact.
 This route is provider-native ACP
 (`cline --auto-approve true -P cline-pass -m cline-pass/deepseek-v4-flash --acp`): Claude Code
-Agent/Task tools are not executable here. Complete work with Cline-native tools and emit short
-visible status lines after each phase so the parent session shows progress. Do not invent nested
+Agent/Task tools are not executable here. Complete work with Cline-native tools and keep native
+thinking streaming for the whole turn; do not emit repeated status chrome. A short status or phase
+update is never completion; do not end after a toolless status-only message. Do not invent nested
 Claudex Agent launches from this worker.
 Do not confuse this ClinePass Flash route with OpenCode Go
 (`opencode-go/deepseek-v4-flash` / `claudex-deepseek-flash`, or Pro) or Qwen Cloud

@@ -152,10 +152,11 @@ impl HeadlessAgent {
     }
 
     async fn handle_prompt(&self, request: acp::PromptRequest) -> acp::Result<acp::PromptResponse> {
-        // One stdio ACP agent cannot run overlapping cmd -p prompts; concurrent
-        // prompt() RPCs used to interleave JSON-RPC and 502 under load/llvm-cov.
-        let _prompt = self.prompt_lock.lock().await;
         let session_key = Self::session_key(&request.session_id);
+        // Same-session TUI follow-ups must replace in-flight cmd -p instead of
+        // stacking behind it. Cross-session prompts still serialize on the lock.
+        self.abort_running(&session_key);
+        let _prompt = self.prompt_lock.lock().await;
         if self.take_cancelled(&session_key) {
             return Ok(acp::PromptResponse::new(acp::StopReason::Cancelled));
         }

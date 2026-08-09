@@ -179,6 +179,7 @@ fn providers_json_registers_command_code_for_automatic_selection() {
     );
     assert_eq!(provider["defaultModel"], MODEL);
     assert_eq!(provider["subagentModel"], MODEL);
+    assert_eq!(provider["usageProvider"], "commandcode");
     assert_eq!(provider["acp"]["program"], "command-code-acp");
     assert_eq!(
         provider["acp"]["arguments"],
@@ -302,7 +303,7 @@ async fn web_search_uses_shared_query_argument_chrome() {
     }
     assert!(
         stream.contains("web_search") && stream.contains("AVITA株式会社"),
-        "web_search chrome should match Cursor/Qwen ▶ name: query: {stream}"
+        "web_search query must reach the SubAgent stream for TUI cards: {stream}"
     );
     assert!(!stream.contains("ツール結果待ち"));
     assert!(!stream.contains("続きの調査または回答"));
@@ -399,7 +400,11 @@ async fn slim_prompt_drops_routing_dump_before_cmd() {
         "routing dump must not reach cmd: {recorded}"
     );
     assert!(!recorded.contains("claudex_effort"));
-    assert!(recorded.contains("▶ name: query/path/url") || recorded.contains("Do not greet"));
+    assert!(
+        recorded.contains("native thinking/? elapsed and web cards")
+            || recorded.contains("Do not greet")
+    );
+    assert!(!recorded.contains("▶ name: query/path/url"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

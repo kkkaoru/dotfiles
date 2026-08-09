@@ -151,6 +151,11 @@ impl Bridge {
                 segment,
                 provider_settled,
             }) => {
+                let segment = if is_subagent {
+                    super::sanitize::rewrite_premature_status_only_segment(segment)
+                } else {
+                    segment
+                };
                 self.finish_completed_stream(turn, &sender, segment, provider_settled, is_subagent)
                     .await
             }

@@ -38,9 +38,12 @@
   agent and pass that same entry's exact `claudex_model` and `claudex_effort` as one inseparable
   tuple. Never combine one `subagent_type` with another worker's model or effort, default a nested
   launch to generic `claude`, or merely inherit the parent worker's route.
-  Every worker must emit a short factual status after each tool phase and before a long-running
-  phase so the parent can show the current action, next state, and blockers without exposing private
-  reasoning.
+  Workers stream Claude Code native thinking for the whole turn. Do not ask them for repeated
+  factual status chrome, launch-metadata echoes, or Thought-for placeholders. Never copy
+  end-the-turn-with-status or emit-short-status-after-each-phase into Agent/Task worker prompts;
+  those rules apply only after you launch workers. Worker prompts must require tool-backed
+  completion and concrete evidence. Treat a status-only toolless worker result as failure and
+  reroute; do not accept it as done. Report blockers immediately without exposing private reasoning.
 - When substantive work is clear and the user has not explicitly opted out of delegation, invoke
   the selected SubAgent directly in the first response. Do not merely announce future delegation.
   Do not add `TaskList`, `TaskCreate`, or `TaskUpdate` round trips solely to prepare delegation; use

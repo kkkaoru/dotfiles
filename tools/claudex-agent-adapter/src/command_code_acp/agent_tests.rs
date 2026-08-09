@@ -436,6 +436,98 @@ async fn serve_io_cancel_kills_in_flight_cmd_within_two_seconds() {
 }
 
 #[tokio::test]
+async fn serve_io_same_session_follow_up_replaces_in_flight_cmd() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (root, program) = mock_cmd("#!/bin/sh\nexec sleep 30\n");
+            let marker = root.path().join("started");
+            std::fs::write(
+                &program,
+                format!(
+                    "#!/bin/sh\nif [ -f '{0}' ]; then\nprintf '%s\\n' '{{\"type\":\"result\",\"subtype\":\"success\",\"sessionId\":\"cc-2\",\"stopReason\":\"end_turn\",\"finalText\":\"FOLLOW_UP_OK\"}}'\nexit 0\nfi\ntouch '{0}'\nexec sleep 30\n",
+                    marker.display()
+                ),
+            )
+            .expect("rewrite mock");
+            let (client_write, server_read) = tokio::io::duplex(16 * 1024);
+            let (server_write, client_read) = tokio::io::duplex(16 * 1024);
+            tokio::task::spawn_local(serve_io(options_for(program), server_read, server_write));
+            let (connection, io) = acp::ClientSideConnection::new(
+                CaptureClient {
+                    updates: Rc::new(RefCell::new(Vec::new())),
+                },
+                client_write.compat_write(),
+                client_read.compat(),
+                |future| {
+                    tokio::task::spawn_local(future);
+                },
+            );
+            tokio::task::spawn_local(async move {
+                let _ = io.await;
+            });
+            connection
+                .initialize(acp::InitializeRequest::new(acp::ProtocolVersion::V1))
+                .await
+                .expect("initialize");
+            let session = connection
+                .new_session(acp::NewSessionRequest::new(
+                    std::env::current_dir().unwrap(),
+                ))
+                .await
+                .expect("session");
+            let first = connection.prompt(acp::PromptRequest::new(
+                session.session_id.clone(),
+                vec![acp::ContentBlock::Text(acp::TextContent::new("slow"))],
+            ));
+            tokio::pin!(first);
+            tokio::time::timeout(Duration::from_secs(2), async {
+                loop {
+                    tokio::select! {
+                        result = &mut first => {
+                            panic!("first prompt finished before follow-up: {result:?}");
+                        }
+                        () = tokio::time::sleep(Duration::from_millis(20)) => {
+                            if marker.exists() {
+                                return;
+                            }
+                        }
+                    }
+                }
+            })
+            .await
+            .expect("first cmd started");
+            let started_at = Instant::now();
+            connection
+                .cancel(acp::CancelNotification::new(session.session_id.clone()))
+                .await
+                .expect("cancel in-flight before follow-up");
+            let first = tokio::time::timeout(Duration::from_secs(2), first)
+                .await
+                .expect("replaced prompt must settle")
+                .expect("replaced prompt");
+            assert_eq!(first.stop_reason, acp::StopReason::Cancelled);
+            let second = tokio::time::timeout(
+                Duration::from_secs(2),
+                connection.prompt(acp::PromptRequest::new(
+                    session.session_id,
+                    vec![acp::ContentBlock::Text(acp::TextContent::new("follow-up"))],
+                )),
+            )
+            .await
+            .expect("follow-up must start immediately after cancel")
+            .expect("follow-up prompt");
+            assert_eq!(second.stop_reason, acp::StopReason::EndTurn);
+            assert!(
+                started_at.elapsed() < Duration::from_secs(2),
+                "follow-up waited {:?}",
+                started_at.elapsed()
+            );
+        })
+        .await;
+}
+
+#[tokio::test]
 async fn serve_io_streams_text_delta_before_cmd_exits() {
     let local = tokio::task::LocalSet::new();
     local

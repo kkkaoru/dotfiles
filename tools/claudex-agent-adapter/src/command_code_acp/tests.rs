@@ -732,7 +732,11 @@ fn prompt_text_joins_content_blocks() {
     let rendered = prompt_text(&request);
     assert!(rendered.starts_with("first\nsecond"));
     assert!(rendered.contains("Do not greet"));
-    assert!(rendered.contains("▶ name: query/path/url"));
+    assert!(rendered.contains("phase update is not the answer"));
+    assert!(rendered.contains("only between tool calls"));
+    assert!(rendered.contains("native thinking/? elapsed and web cards"));
+    assert!(rendered.contains("Status:"));
+    assert!(!rendered.contains("▶ name: query/path/url"));
     assert!(rendered.contains("assistant text"));
     assert!(!rendered.contains("current/next/blocker"));
 }

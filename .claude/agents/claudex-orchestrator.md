@@ -92,9 +92,12 @@ Never infer a worker model or effort from the outer session. Use the exact `sele
 and its configured model/effort; the selected worker may intentionally use the same model as the
 outer session. If the injected routing context is absent, state that routing is unavailable
 instead of inventing `selected_workers`.
-Require every worker to emit a short factual status after each tool phase and before a new
-long-running phase. The status must name the current action and next state, report blockers
-immediately, and avoid exposing private reasoning.
+Workers stream Claude Code native thinking for the whole turn. Do not require repeated factual
+status chrome, launch-metadata echoes, or Thought-for placeholders. Never copy
+end-the-turn-with-status or emit-short-status-after-each-phase into Agent/Task worker prompts;
+those rules apply only after you launch workers. Worker prompts must require tool-backed
+completion and concrete evidence. Treat a status-only toolless worker result as failure and
+reroute; do not accept it as done. Report blockers immediately without exposing private reasoning.
 The one deliberate conservation rule is the `claudex-sonnet` fallback: when
 `CLAUDEX_OUTER_MODEL` is a Sonnet 5 alias, automatic routing omits that worker to avoid paying for
 an identical subscription request. An explicit Agent/Task request carrying

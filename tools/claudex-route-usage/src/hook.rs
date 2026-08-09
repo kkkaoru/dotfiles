@@ -78,7 +78,7 @@ pub fn slim_command_code_hook(event_name: &str) -> Value {
                 "Command Code Muse Spark worker: use native cmd tools only. ",
                 "Ignore Claudex routing tables and Claude Code skills. ",
                 "Tool chrome matches other ACP workers (▶ name: query/path/url). ",
-                "Write findings in ordinary text. Never print ツール結果待ち or 続きの調査または回答. ",
+                "Write findings in ordinary text. Never print Status:, ツール結果待ち, or 続きの調査または回答. ",
                 "Do not greet or recap git status. Complete only the delegated task.\n",
                 "</system-reminder>"
             ),

@@ -1542,6 +1542,89 @@ async fn prepare_tool_input_rewrites_same_scope_launch_to_resume() {
 }
 
 #[tokio::test]
+async fn same_turn_duplicate_scope_forwards_only_one_agent() {
+    let (sender, mut receiver) = channel();
+    let registry = Arc::new(SubagentReuseRegistry::default());
+    let mut context = SubscriptionToolContext::for_tests(
+        Arc::new(AgentEffortIntents::default()),
+        ModelCatalog::default(),
+        None,
+        "parent-model",
+        vec![json!({"role":"user","content":"Use gpt-test for this worker"})],
+        json!(null),
+    );
+    context.session_id = Some("session-a".to_owned());
+    context.subagent_reuse = Arc::clone(&registry);
+    let mut stream = SubscriptionStream {
+        text_started: false,
+        text_closed: false,
+        saw_tool_use: false,
+        launch_fanout_open: false,
+        seen_tool_ids: HashSet::new(),
+        blocked_subagent: false,
+        saw_result: false,
+        next_index: 0,
+        tools: vec!["Agent".to_owned()],
+        tool_context: Some(context),
+        activity: SubscriptionActivity::default(),
+    };
+    stream
+        .handle_line(
+            &sender,
+            &json!({
+                "type":"assistant", "parent_tool_use_id":null,
+                "message":{"content":[
+                    {
+                        "type":"tool_use", "id":"reproduce-gpt", "name":"Agent",
+                        "input":{
+                            "description":"Reproduce azookey conversion bug",
+                            "prompt":"Use gpt to reproduce はしのはじから.",
+                            "claudex_model":"gpt-test"
+                        }
+                    },
+                    {
+                        "type":"tool_use", "id":"reproduce-cc", "name":"Agent",
+                        "input":{
+                            "description":"Reproduce azookey conversion bug",
+                            "prompt":"Use another provider to reproduce はしのはじから.",
+                            "claudex_model":"gpt-test"
+                        }
+                    },
+                    {
+                        "type":"tool_use", "id":"trace-cursor", "name":"Agent",
+                        "input":{
+                            "description":"Trace azookey conversion pipeline",
+                            "prompt":"Map Vibrato boundaries across three surfaces.",
+                            "claudex_model":"gpt-test"
+                        }
+                    }
+                ]}
+            })
+            .to_string(),
+        )
+        .await
+        .expect("forward independent scopes only");
+    drop(sender);
+    let output = output(&mut receiver).await;
+    assert!(
+        output.contains("reproduce-gpt"),
+        "first same-scope launch must forward: {output}"
+    );
+    assert!(
+        !output.contains("reproduce-cc"),
+        "duplicate same-scope launch must not spawn another worker: {output}"
+    );
+    assert!(
+        output.contains("trace-cursor"),
+        "independent scope must still forward: {output}"
+    );
+    assert!(registry.scope_is_occupied(
+        "session-a",
+        &json!({"description":"Reproduce azookey conversion bug"})
+    ));
+}
+
+#[tokio::test]
 async fn routes_a_standard_general_purpose_agent_to_a_claudex_worker() {
     let (_sender, _receiver) = channel();
     let mut model_catalog = ModelCatalog::default();

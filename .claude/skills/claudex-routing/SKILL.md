@@ -77,9 +77,13 @@ retained.
    Apply this selection to every Agent/Task launch, including nested launches made by an existing
    worker. A nested launch must use the current selected worker's agent and exact model/effort; it
    must not default to generic `claude` or blindly inherit its parent's provider route.
-   During delegated work, emit a short factual status after each completed tool phase and before
-   any new long-running phase. Name the current action and next state without exposing private
-   reasoning. Report a blocker immediately; do not remain silent until the final result.
+   During delegated work, keep Claude Code native thinking streaming for the whole turn. Do not
+   emit repeated factual status chrome, launch-metadata echoes, or Thought-for placeholders.
+   Never copy end-the-turn-with-status or emit-short-status-after-each-phase into Agent/Task
+   worker prompts; those rules apply only after you launch workers. Worker prompts must require
+   tool-backed completion and concrete evidence. Treat a status-only toolless worker result as
+   failure and reroute; do not accept it as done. Report a blocker immediately; do not remain
+   silent until the final result.
    For several independent workers, treat unknown or potentially long-running work as asynchronous:
    emit each Agent/Task call as its own native background launch (`run_in_background: true`).
    Multiple launches may be emitted in the same assistant response, but never wrap them in an
@@ -230,9 +234,9 @@ remaining are excluded entirely.
 The hook output's `worker_capacity` list preserves that order and exposes each worker's
 `used_percent`, `remaining_percent`, `weekly_remaining_percent`, and `five_hour_remaining_percent`
 so the model choice is observably a runtime decision; unknown or unmetered usage reports `null`
-for the window values and never outranks known headroom. Intentional unmetered workers such as
-Command Code stay in automatic `selected_workers`; unknown meters such as Ollama API-only do not
-when ample metered peers exist.
+for the window values and never outranks known headroom. Command Code uses CodexBar provider
+`commandcode`. Unknown meters such as Ollama API-only leave automatic `selected_workers` when
+ample metered peers exist.
 
 A SubAgent launched without an explicit `claudex_model` — most notably Claude Code's built-in
 `general-purpose` type — would otherwise bypass this ranking and reach the adapter with
@@ -265,8 +269,9 @@ The hook reads the shared daemon's loopback `/health` on every prompt, independe
 cache. Providers with `maxConcurrency` inherit that positive exact-model limit for every dynamic
 route selected through `modelPrefixes`. `model_concurrency` exposes only sanitized model IDs and
 `active`, `queued`, `limit`, and `available` state. A full exact model is excluded. The health URL
-comes from explicit `CLAUDEX_DAEMON_HEALTH_URL`, a loopback `ANTHROPIC_BASE_URL` origin, or the
-default `127.0.0.1:8318` daemon, in that order. If health is temporarily
+comes from explicit `CLAUDEX_DAEMON_HEALTH_URL`, a loopback `ANTHROPIC_BASE_URL` origin, the
+current-generation pointer `~/.cache/claudex/live.<port>.json`, or the default `127.0.0.1:8318`
+daemon, in that order. If health is temporarily
 unavailable, the worker remains launchable with unknown slot headroom because the adapter enforces
 the hard limit authoritatively.
 

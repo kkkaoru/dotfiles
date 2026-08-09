@@ -101,6 +101,29 @@ impl SubscriptionStream {
             }
             Err(error) => return Err(error),
         };
+        if super::super::agent_effort::is_agent_tool(&name)
+            && let Some(context) = self.tool_context.as_ref()
+            && let Some(session_id) = context.session_id.as_deref()
+        {
+            let resume = public_input
+                .get("resume")
+                .and_then(Value::as_str)
+                .is_some_and(|value| !value.is_empty());
+            if !resume {
+                if context.subagent_reuse.scope_is_occupied(session_id, &input) {
+                    tracing::info!(
+                        session_id,
+                        tool = name,
+                        tool_use_id = id,
+                        "skipped duplicate same-scope SubAgent launch"
+                    );
+                    return Ok(false);
+                }
+                context
+                    .subagent_reuse
+                    .note_inflight_launch(session_id, &input, id);
+            }
+        }
         if is_task_stop_tool_name(&name) {
             let task_id = public_input
                 .get("task_id")

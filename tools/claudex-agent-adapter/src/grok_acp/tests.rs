@@ -171,6 +171,27 @@ fn command_code_models_skip_acp_routing_prefix() {
         AcpProvider::Copilot,
         "grok-4.5"
     ));
+    assert!(prompt::is_acp_worker_session(&json!({
+        "claudexAcpRole": "worker",
+        "developerInstructions": "You are a provider-native ACP worker. Complete the task."
+    })));
+    assert!(prompt::is_acp_worker_session(&json!({
+        "developerInstructions": "You are a provider-native ACP worker."
+    })));
+    assert!(!prompt::is_acp_worker_session(&json!({
+        "claudexAcpRole": "orchestrator",
+        "developerInstructions": "Claudex provider-native ACP mode is active."
+    })));
+    let worker_params = json!({
+        "claudexAcpRole": "worker",
+        "baseInstructions": "project rules",
+        "developerInstructions": "You are a provider-native ACP worker."
+    });
+    assert_eq!(
+        prompt::provider_instructions(&worker_params, false),
+        "project rules"
+    );
+    assert!(!prompt::provider_instructions(&worker_params, false).contains("emit a short status"));
 }
 
 #[tokio::test]
@@ -386,6 +407,73 @@ async fn bounded_queues_apply_backpressure_at_fixed_capacities() {
     );
     turn_receiver.recv().await.unwrap();
     assert!(Arc::clone(&permits).acquire_owned().await.is_ok());
+}
+
+#[tokio::test]
+async fn queue_turn_replaces_same_session_in_flight_turn() {
+    let permits = Arc::new(tokio::sync::Semaphore::new(3));
+    let instructions = std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()));
+    let active = ActiveTurns::default();
+    let invalidated = InvalidatedSessions::default();
+    let (turns, mut receiver) = tokio::sync::mpsc::channel(2);
+    let (cancel, cancel_rx) = tokio::sync::oneshot::channel();
+    active
+        .borrow_mut()
+        .insert("session".to_owned(), Some(cancel));
+
+    let settle = async {
+        let request = cancel_rx
+            .await
+            .expect("same-session follow-up must cancel the in-flight turn");
+        assert!(request.response.send(Ok(())).is_ok());
+        active.borrow_mut().remove("session");
+    };
+    let queued = queue_turn(
+        AcpProvider::Configured,
+        json!({"threadId":"session","input":"follow-up"}),
+        Arc::clone(&permits).acquire_owned().await.unwrap(),
+        &instructions,
+        &turns,
+        &active,
+        &invalidated,
+    );
+    let (queued, ()) = tokio::join!(queued, settle);
+    queued.expect("same-session follow-up must replace in-flight ACP turn");
+    let turn = receiver.recv().await.expect("replacement turn");
+    assert_eq!(turn.session_id, "session");
+    assert_eq!(turn.prompt, "follow-up");
+    assert!(active.borrow().contains_key("session"));
+}
+
+#[tokio::test]
+async fn queue_turn_does_not_replace_a_different_session() {
+    let permits = Arc::new(tokio::sync::Semaphore::new(3));
+    let instructions = std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()));
+    let active = ActiveTurns::default();
+    let invalidated = InvalidatedSessions::default();
+    let (turns, mut receiver) = tokio::sync::mpsc::channel(2);
+    let (cancel, _cancel_rx) = tokio::sync::oneshot::channel();
+    active
+        .borrow_mut()
+        .insert("session-a".to_owned(), Some(cancel));
+
+    queue_turn(
+        AcpProvider::Configured,
+        json!({"threadId":"session-b","input":"independent"}),
+        Arc::clone(&permits).acquire_owned().await.unwrap(),
+        &instructions,
+        &turns,
+        &active,
+        &invalidated,
+    )
+    .await
+    .expect("independent session must queue without replacing a peer");
+
+    assert!(active.borrow().contains_key("session-a"));
+    assert!(active.borrow().contains_key("session-b"));
+    let turn = receiver.recv().await.expect("independent turn");
+    assert_eq!(turn.session_id, "session-b");
+    assert_eq!(turn.prompt, "independent");
 }
 
 #[tokio::test]

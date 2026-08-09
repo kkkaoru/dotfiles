@@ -18,6 +18,7 @@ fn profile_is_provider_local_model_inheriting_high() {
     assert!(ROUTING_INSTRUCTIONS.contains("run_in_background=true"));
     assert!(ROUTING_INSTRUCTIONS.contains("spawn_subagent"));
     assert!(ROUTING_INSTRUCTIONS.contains("bridges it to Claude Code Agent"));
+    assert!(ROUTING_INSTRUCTIONS.contains("not a delegated worker"));
     assert!(!ROUTING_INSTRUCTIONS.contains(QUALIFIED_PROFILE_NAME));
     for invalid in ["claudex-xhigh", "claudex-max"] {
         assert!(!ROUTING_INSTRUCTIONS.contains(invalid));

@@ -21,6 +21,15 @@ pub(super) fn should_include_acp_routing(
     ) && !crate::command_code_acp::is_command_code_model(model)
 }
 
+/// Delegated ACP workers must not receive main-session launch/end-turn-status routing.
+pub(super) fn is_acp_worker_session(params: &Value) -> bool {
+    params.get("claudexAcpRole").and_then(Value::as_str) == Some("worker")
+        || params
+            .get("developerInstructions")
+            .and_then(Value::as_str)
+            .is_some_and(|text| text.contains("You are a provider-native ACP worker"))
+}
+
 pub(super) fn configured_acp_session_model(model: &str) -> String {
     match model {
         "auto" | "default" => "default[]".to_owned(),

@@ -1,6 +1,6 @@
 ---
 name: claudex-command-code-muse-spark-1-2-contributor
-description: Command Code headless worker for Muse Spark 1.2 Contributor (`meta/muse-spark-1.2-contributor`) via official `cmd -p`. Contributor tier is required in this agent slug. Future Command Code models get their own `claudex-command-code-…` slug. Distinct from Provider API and from other ACP CLIs. Automatic `selected_workers` candidate; unmetered so it ranks behind known quota meters.
+description: Command Code headless worker for Muse Spark 1.2 Contributor (`meta/muse-spark-1.2-contributor`) via official `cmd -p`. Contributor tier is required in this agent slug. Future Command Code models get their own `claudex-command-code-…` slug. Distinct from Provider API and from other ACP CLIs. Automatic `selected_workers` candidate ranked by CodexBar `commandcode` left.
 model: meta/muse-spark-1.2-contributor
 effort: high
 ---
@@ -17,8 +17,11 @@ only changed evidence unless full revalidation is necessary.
 This route is Command Code official headless (`cmd -p --model meta/muse-spark-1.2-contributor`)
 bridged through Claudex `configured-acp` (`command-code-acp`). It is not Command Code Provider API
 and not Meta’s direct API. Claude Code Agent/Task tools are not executable here. Complete work with
-Command Code-native tools and emit short visible `●` status lines after each phase (current work,
-next step, blockers) so the parent session shows progress instead of only thinking/Orbiting.
+Command Code-native tools. A short status or phase update is never completion: if the parent asks
+for status after each phase, emit it only between native tool work, never as the whole reply. Do
+not end after a toolless status-only message. Do not emit canned ●/▶/✓/Status:/still-working
+lines; Claudex already syncs native thinking/? elapsed, last tool, and display-only web cards to
+the parent TUI.
 Do not invent nested Claudex Agent launches from this worker.
 Do not load Claudex routing tables, Claude Code skills, or ctx-agent-history-search; those dumps
 belong to the parent orchestrator, not Muse Spark.

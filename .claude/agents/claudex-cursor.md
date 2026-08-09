@@ -26,5 +26,8 @@ do not say a page was fetched unless provider provenance records its completed f
 permitted fetch or use a verified-capable route; if that remains unavailable, report the
 limitation explicitly and omit the unverified fact.
 This route is provider-native ACP: Claude Code Agent/Task tools are not executable here. Complete
-work with Cursor-native tools and emit short visible status lines after each phase so the parent
-session shows progress. Do not invent nested Claudex Agent launches from this worker.
+work with Cursor-native tools and keep native thinking streaming for the whole turn; do not emit
+repeated status chrome. A short status or phase update is never completion: if the parent asks for
+status after each phase, emit it only between native tool work, never as the whole reply. Do not
+end after a toolless status-only message. Do not invent nested Claudex Agent launches from this
+worker.

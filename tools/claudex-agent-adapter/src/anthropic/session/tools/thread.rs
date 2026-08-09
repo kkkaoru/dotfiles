@@ -27,6 +27,13 @@ pub(in crate::anthropic) fn thread_start_params_for_mode(
         .map(|path| path.to_string_lossy().into_owned())
         .unwrap_or_else(isolated_runtime_cwd);
     let command_code = crate::command_code_acp::is_command_code_model(model);
+    let launch_owner = super::super::super::request_identity::claude_session_id(request);
+    let is_subagent = super::super::super::agent_effort::is_subagent_request(request);
+    let acp_role = if is_subagent {
+        "worker"
+    } else {
+        "orchestrator"
+    };
     if command_code {
         // Muse Spark headless greets / reconstructs dirty git when Claudex
         // ACP_NATIVE dumps land in `cmd -p`. Keep cwd only; the ACP shim slims
@@ -42,6 +49,8 @@ pub(in crate::anthropic) fn thread_start_params_for_mode(
             "approvalPolicy": "never",
             "sandbox": "danger-full-access",
             "personality": "none",
+            "claudexLaunchOwner": launch_owner,
+            "claudexAcpRole": acp_role,
             "config": {
                 "web_search": "disabled",
                 "features": {
@@ -78,7 +87,7 @@ pub(in crate::anthropic) fn thread_start_params_for_mode(
         developer_instructions.push_str(
             "\n\nCommand execution is available to every routed worker. If Claude Code supplies a shell, Bash, unified-exec, or command tool, use it when the active task requires it; do not refuse an available command tool because the backend is Codex, Grok, OpenCode, or Cursor.",
         );
-        if super::super::super::agent_effort::is_subagent_request(request) {
+        if is_subagent {
             developer_instructions.push_str("\n\n");
             developer_instructions.push_str(super::SUBAGENT_MAIN_ONLY_TOOLS_INSTRUCTIONS);
         } else {
@@ -91,7 +100,7 @@ pub(in crate::anthropic) fn thread_start_params_for_mode(
             .push_str(crate::anthropic::subscription_request::SHARED_WORKSPACE_INSTRUCTIONS);
         developer_instructions.push_str("\n\n");
         // ACP providers execute their own tools; forcing Claude Code Agent/Task causes silence.
-        if super::super::super::agent_effort::is_subagent_request(request) {
+        if is_subagent {
             developer_instructions.push_str(super::ACP_NATIVE_WORKER_INSTRUCTIONS);
             developer_instructions.push_str("\n\n");
             developer_instructions.push_str(super::SUBAGENT_MAIN_ONLY_TOOLS_INSTRUCTIONS);
@@ -128,6 +137,8 @@ pub(in crate::anthropic) fn thread_start_params_for_mode(
         "approvalPolicy": "never",
         "sandbox": "danger-full-access",
         "personality": "none",
+        "claudexLaunchOwner": launch_owner,
+        "claudexAcpRole": acp_role,
         "config": {
             "web_search": web_search,
             "features": {
