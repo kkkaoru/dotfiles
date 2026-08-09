@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "mainProviders": ["codex", "codex-spark", "grok", "fugu", "ollama-glm-5-2", "opencode-go"],
+  "mainProviders": ["codex", "codex-spark", "grok", "fugu", "ollama-glm-5-2", "opencode-go", "command-code"],
   "providers": [
     {
       "id": "codex",

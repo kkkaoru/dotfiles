@@ -1,6 +1,6 @@
 ---
 name: claudex-command-code-muse-spark-1-2-contributor
-description: Command Code headless worker for Muse Spark 1.2 Contributor (`meta/muse-spark-1.2-contributor`) via official `cmd -p`. Contributor tier is required in this agent slug. Future Command Code models get their own `claudex-command-code-…` slug. Distinct from Provider API and from other ACP CLIs. Explicit SubAgent only — not an automatic mainProviders candidate.
+description: Command Code headless worker for Muse Spark 1.2 Contributor (`meta/muse-spark-1.2-contributor`) via official `cmd -p`. Contributor tier is required in this agent slug. Future Command Code models get their own `claudex-command-code-…` slug. Distinct from Provider API and from other ACP CLIs. Automatic `selected_workers` candidate; unmetered so it ranks behind known quota meters.
 model: meta/muse-spark-1.2-contributor
 effort: high
 ---

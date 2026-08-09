@@ -230,7 +230,9 @@ remaining are excluded entirely.
 The hook output's `worker_capacity` list preserves that order and exposes each worker's
 `used_percent`, `remaining_percent`, `weekly_remaining_percent`, and `five_hour_remaining_percent`
 so the model choice is observably a runtime decision; unknown or unmetered usage reports `null`
-for the window values and never outranks known headroom.
+for the window values and never outranks known headroom. Intentional unmetered workers such as
+Command Code stay in automatic `selected_workers`; unknown meters such as Ollama API-only do not
+when ample metered peers exist.
 
 A SubAgent launched without an explicit `claudex_model` — most notably Claude Code's built-in
 `general-purpose` type — would otherwise bypass this ranking and reach the adapter with
