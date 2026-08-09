@@ -19,7 +19,6 @@ mod batch;
 mod external_tool;
 mod progress;
 mod provider_launch;
-mod server_chrome;
 mod visibility;
 #[path = "web_provenance.rs"]
 mod web_provenance;
