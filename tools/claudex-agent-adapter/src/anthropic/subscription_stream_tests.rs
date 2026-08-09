@@ -1429,6 +1429,127 @@ async fn forwards_task_stop_for_live_claude_code_agent_ids() {
 }
 
 #[tokio::test]
+async fn skips_stale_task_output_when_live_agents_exist() {
+    let (sender, mut receiver) = channel();
+    let mut stream = SubscriptionStream {
+        text_started: false,
+        text_closed: false,
+        saw_tool_use: false,
+        launch_fanout_open: false,
+        seen_tool_ids: HashSet::new(),
+        blocked_subagent: false,
+        saw_result: false,
+        next_index: 0,
+        tools: vec!["TaskOutput".to_owned()],
+        tool_context: Some(SubscriptionToolContext::for_tests(
+            Arc::new(AgentEffortIntents::default()),
+            ModelCatalog::default(),
+            None,
+            "parent-model",
+            vec![json!({
+                "role":"user",
+                "content":[{
+                    "type":"tool_result",
+                    "tool_use_id":"toolu_live",
+                    "content":[{"type":"text","text":"Async agent launched successfully.\nagentId: a4496564387a2561f"}]
+                }]
+            })],
+            json!(null),
+        )),
+        activity: SubscriptionActivity::default(),
+    };
+    stream
+        .handle_line(
+            &sender,
+            &json!({
+                "type":"assistant", "parent_tool_use_id":null,
+                "message":{"content":[{
+                    "type":"tool_use", "id":"stale-output", "name":"TaskOutput",
+                    "input":{"task_id":"a3d7f2ca50556c9e5","block":false}
+                }]}
+            })
+            .to_string(),
+        )
+        .await
+        .expect("skip stale TaskOutput");
+    stream
+        .finish(
+            &sender,
+            &json!({"type":"result","subtype":"success","result":"done"}),
+        )
+        .await
+        .expect("finish skipped TaskOutput");
+    assert!(!stream.saw_tool_use);
+    let output = output(&mut receiver).await;
+    assert_valid_stream(&output, Some("end_turn"));
+    assert!(!output.contains(r#""type":"tool_use""#));
+    assert!(output.contains("a3d7f2ca50556c9e5"));
+    assert!(output.contains("a4496564387a2561f"));
+    assert!(output.contains("TaskOutput skipped"));
+    assert!(output.contains(r#""stop_reason":"end_turn""#));
+}
+
+#[tokio::test]
+async fn forwards_task_output_for_live_claude_code_agent_ids() {
+    let (sender, mut receiver) = channel();
+    let mut stream = SubscriptionStream {
+        text_started: false,
+        text_closed: false,
+        saw_tool_use: false,
+        launch_fanout_open: false,
+        seen_tool_ids: HashSet::new(),
+        blocked_subagent: false,
+        saw_result: false,
+        next_index: 0,
+        tools: vec!["TaskOutput".to_owned()],
+        tool_context: Some(SubscriptionToolContext::for_tests(
+            Arc::new(AgentEffortIntents::default()),
+            ModelCatalog::default(),
+            None,
+            "parent-model",
+            vec![json!({
+                "role":"user",
+                "content":[{
+                    "type":"tool_result",
+                    "tool_use_id":"toolu_live",
+                    "content":[{"type":"text","text":"Async agent launched successfully.\nagentId: a4496564387a2561f"}]
+                }]
+            })],
+            json!(null),
+        )),
+        activity: SubscriptionActivity::default(),
+    };
+    stream
+        .handle_line(
+            &sender,
+            &json!({
+                "type":"assistant", "parent_tool_use_id":null,
+                "message":{"content":[{
+                    "type":"tool_use", "id":"live-output", "name":"TaskOutput",
+                    "input":{"task_id":"a4496564387a2561f","block":false}
+                }]}
+            })
+            .to_string(),
+        )
+        .await
+        .expect("forward live TaskOutput");
+    stream
+        .finish(
+            &sender,
+            &json!({"type":"result","subtype":"success","result":"done"}),
+        )
+        .await
+        .expect("finish live TaskOutput");
+    assert!(stream.saw_tool_use);
+    let output = output(&mut receiver).await;
+    assert_valid_stream(&output, Some("tool_use"));
+    assert!(output.contains(r#""type":"tool_use""#));
+    assert!(output.contains("a4496564387a2561f"));
+    assert!(!output.contains("TaskOutput skipped"));
+    assert!(output.contains(r#""stop_reason":"tool_use""#));
+}
+
+#[tokio::test]
 async fn accepts_a_valid_agent_model_without_a_prompt() {
     let (_sender, _receiver) = channel();
     let stream = SubscriptionStream {

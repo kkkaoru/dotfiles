@@ -16,6 +16,7 @@ mod records;
 use guidance::REUSE_GUIDANCE_MARKER;
 pub(super) use guidance::{agent_teams_enabled, value_text};
 use guidance::{append_reuse_guidance, has_send_message_tool, system_contains_marker};
+pub(in crate::anthropic) use records::live_agent_task_ids;
 use records::{
     LaunchRecord, already_has_resume, apply_transcript, find_reusable_launch, latest_user_text,
     launch_records, scope_is_occupied, scope_similarity, summarize_scope,

@@ -11,7 +11,8 @@ use crate::anthropic::subscription_frames::{
     mapped_tool_name, send_text_delta, send_text_start, send_tool_block,
 };
 use crate::anthropic::task_ids::{
-    is_claude_code_agent_task_id, is_task_stop_tool_name, skipped_foreign_task_stop_notice,
+    is_claude_code_agent_task_id, is_task_output_tool_name, is_task_stop_tool_name,
+    skipped_foreign_task_stop_notice, stale_task_output_notice,
 };
 
 impl SubscriptionStream {
@@ -133,6 +134,25 @@ impl SubscriptionStream {
                 tracing::info!(task_id, "skipping TaskStop for non-agent task id");
                 if !self.saw_tool_use {
                     self.report_skipped_task_stop(sender, task_id).await?;
+                }
+                return Ok(false);
+            }
+        }
+        if is_task_output_tool_name(&name) {
+            let live_ids = self
+                .tool_context
+                .as_ref()
+                .map(|context| {
+                    crate::anthropic::subagent_reuse::live_agent_task_ids(&context.user_messages)
+                })
+                .unwrap_or_default();
+            if let Some(notice) = stale_task_output_notice(&public_input, &live_ids) {
+                tracing::info!(
+                    task_id = crate::anthropic::task_ids::task_output_id(&public_input),
+                    "skipping TaskOutput for unknown Agent task id"
+                );
+                if !self.saw_tool_use {
+                    self.report_blocked_subagent(sender, &notice).await?;
                 }
                 return Ok(false);
             }

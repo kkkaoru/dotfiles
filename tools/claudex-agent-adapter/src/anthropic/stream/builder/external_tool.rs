@@ -105,7 +105,13 @@ impl SegmentBuilder {
             return Ok(());
         }
         if self
-            .reject_unroutable_subagent(context, original_name, &arguments, request_id)
+            .reject_unroutable_subagent(context, original_name, &arguments, request_id.clone())
+            .await?
+        {
+            return Ok(());
+        }
+        if self
+            .reject_stale_task_output(context, original_name, &arguments, request_id)
             .await?
         {
             return Ok(());
@@ -245,6 +251,44 @@ impl SegmentBuilder {
         )
         .await?;
         self.close_open_blocks(context.stream).await?;
+        Ok(true)
+    }
+
+    async fn reject_stale_task_output(
+        &mut self,
+        context: ExternalToolContext<'_>,
+        original_name: &str,
+        arguments: &Value,
+        request_id: Value,
+    ) -> Result<bool> {
+        if !crate::anthropic::task_ids::is_task_output_tool_name(original_name) {
+            return Ok(false);
+        }
+        let live_ids =
+            crate::anthropic::subagent_reuse::live_agent_task_ids(context.current_messages);
+        let Some(notice) =
+            crate::anthropic::task_ids::stale_task_output_notice(arguments, &live_ids)
+        else {
+            return Ok(false);
+        };
+        tracing::info!(
+            task_id = crate::anthropic::task_ids::task_output_id(arguments),
+            live = live_ids.len(),
+            "skipping TaskOutput for unknown Agent task id"
+        );
+        context
+            .bridge
+            .app
+            .respond_for_model(
+                &context.session.model,
+                request_id,
+                json!({
+                    "contentItems":[{"type":"inputText","text":notice}],
+                    "success":false
+                }),
+            )
+            .await
+            .context("failed to reject a stale TaskOutput provider tool")?;
         Ok(true)
     }
 

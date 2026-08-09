@@ -1471,6 +1471,92 @@ async fn forwards_generic_tools_and_blocks_disabled_subagent_models() {
 }
 
 #[tokio::test]
+async fn skips_stale_task_output_without_painting_claude_tool_use() {
+    let (root, _app, bridge, mut session) = disconnect_fixture().await;
+    Arc::get_mut(&mut session)
+        .expect("unique session")
+        .external_tool_names
+        .insert("cc_TaskOutput_0".to_owned(), "TaskOutput".to_owned());
+    let messages = [json!({
+        "role":"user",
+        "content":[{
+            "type":"tool_result",
+            "tool_use_id":"toolu_live",
+            "content":[{"type":"text","text":"Async agent launched successfully.\nagentId: a4496564387a2561f"}]
+        }]
+    })];
+    let mut builder = SegmentBuilder::new(1);
+    let flow = builder
+        .handle_event(
+            &bridge,
+            &session,
+            &messages,
+            &Value::Null,
+            &json!({
+                "id":7,
+                "method":"item/tool/call",
+                "params":{
+                    "callId":"stale-output",
+                    "tool":"cc_TaskOutput_0",
+                    "arguments":{"task_id":"a3d7f2ca50556c9e5","block":false}
+                }
+            }),
+            None,
+        )
+        .await
+        .expect("stale TaskOutput is a local miss");
+    assert_eq!(flow, ControlFlow::Continue(()));
+    assert!(!builder.has_external_tool_calls());
+    assert!(builder.blocks.is_empty());
+    assert_disconnected_tool_rejections(&root, &[7]).await;
+    let log = std::fs::read_to_string(root.path().join("responses.log")).unwrap_or_default();
+    assert!(log.contains("a3d7f2ca50556c9e5"));
+    assert!(log.contains("a4496564387a2561f"));
+    assert!(log.contains("\"success\":false") || log.contains("\"success\": false"));
+}
+
+#[tokio::test]
+async fn forwards_live_task_output_to_claude_code() {
+    let (_root, _app, bridge, mut session) = disconnect_fixture().await;
+    Arc::get_mut(&mut session)
+        .expect("unique session")
+        .external_tool_names
+        .insert("cc_TaskOutput_0".to_owned(), "TaskOutput".to_owned());
+    let messages = [json!({
+        "role":"user",
+        "content":[{
+            "type":"tool_result",
+            "tool_use_id":"toolu_live",
+            "content":[{"type":"text","text":"Async agent launched successfully.\nagentId: a4496564387a2561f"}]
+        }]
+    })];
+    let mut builder = SegmentBuilder::new(1);
+    let _ = builder
+        .handle_event(
+            &bridge,
+            &session,
+            &messages,
+            &Value::Null,
+            &json!({
+                "id":8,
+                "method":"item/tool/call",
+                "params":{
+                    "callId":"live-output",
+                    "tool":"cc_TaskOutput_0",
+                    "arguments":{"task_id":"a4496564387a2561f","block":false}
+                }
+            }),
+            None,
+        )
+        .await
+        .expect("live TaskOutput is forwarded");
+    assert!(builder.has_external_tool_calls());
+    assert_eq!(builder.blocks[0]["type"], "tool_use");
+    assert_eq!(builder.blocks[0]["name"], "TaskOutput");
+    assert_eq!(builder.blocks[0]["input"]["task_id"], "a4496564387a2561f");
+}
+
+#[tokio::test]
 async fn keeps_parent_stream_after_unroutable_subagent_launch() {
     let (_root, _app, bridge, session) = disconnect_fixture().await;
     let mut builder = SegmentBuilder::new(1);

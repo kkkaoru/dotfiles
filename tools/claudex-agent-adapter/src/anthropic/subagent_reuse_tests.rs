@@ -1,7 +1,11 @@
 #[cfg(test)]
 mod tests {
     use serde_json::json;
-    use std::{collections::HashMap, sync::{Arc, Barrier}, thread};
+    use std::{
+        collections::HashMap,
+        sync::{Arc, Barrier},
+        thread,
+    };
 
     use super::*;
 
@@ -62,7 +66,12 @@ mod tests {
         ]
     }
 
-    fn launch_with_scope(tool_use_id: &str, recipient: &str, scope: &str, model: &str) -> Vec<Value> {
+    fn launch_with_scope(
+        tool_use_id: &str,
+        recipient: &str,
+        scope: &str,
+        model: &str,
+    ) -> Vec<Value> {
         vec![
             json!({
                 "role":"assistant",
@@ -75,6 +84,26 @@ mod tests {
             }),
             launch(tool_use_id, recipient),
         ]
+    }
+
+    #[test]
+    fn live_agent_task_ids_keep_active_claude_code_ids_only() {
+        let mut messages = launch_with_scope(
+            "tool-live",
+            "a4496564387a2561f",
+            "Implement AzooKey pruning fix",
+            "worker-model",
+        );
+        messages.push(launch("tool-name", "worker-a"));
+        messages.push(launch("tool-done", "a906c77ad60469b0a"));
+        messages.push(json!({
+            "role":"user",
+            "content":"<task-id>a906c77ad60469b0a</task-id><status>completed</status>"
+        }));
+        assert_eq!(
+            live_agent_task_ids(&messages),
+            vec!["a4496564387a2561f".to_owned()]
+        );
     }
 
     #[test]
@@ -127,7 +156,10 @@ mod tests {
         ));
         let mut request = request("session-a", messages);
         registry.observe_and_restore(&mut request);
-        assert_eq!(registry.state_for("session-a"), Some(vec!["worker-a".to_owned()]));
+        assert_eq!(
+            registry.state_for("session-a"),
+            Some(vec!["worker-a".to_owned()])
+        );
     }
 
     #[test]
@@ -135,7 +167,12 @@ mod tests {
         let registry = SubagentReuseRegistry::default();
         let mut first = request(
             "session-a",
-            launch_with_scope("tool-a", "worker-a", "Audit the Rust adapter tests", "worker-model"),
+            launch_with_scope(
+                "tool-a",
+                "worker-a",
+                "Audit the Rust adapter tests",
+                "worker-model",
+            ),
         );
         registry.observe_and_restore(&mut first);
         let mut second_messages = launch_with_scope(
@@ -161,12 +198,22 @@ mod tests {
         let registry = SubagentReuseRegistry::default();
         let mut first = request(
             "session-a",
-            launch_with_scope("tool-a", "worker-a", "Audit the Rust adapter tests", "worker-model"),
+            launch_with_scope(
+                "tool-a",
+                "worker-a",
+                "Audit the Rust adapter tests",
+                "worker-model",
+            ),
         );
         registry.observe_and_restore(&mut first);
         let mut second = request(
             "session-a",
-            launch_with_scope("tool-b", "worker-b", "Audit the Rust adapter tests", "worker-model"),
+            launch_with_scope(
+                "tool-b",
+                "worker-b",
+                "Audit the Rust adapter tests",
+                "worker-model",
+            ),
         );
         registry.observe_and_restore(&mut second);
         assert_eq!(
@@ -180,7 +227,12 @@ mod tests {
         let registry = SubagentReuseRegistry::default();
         let mut first = request(
             "session-a",
-            launch_with_scope("tool-a", "worker-a", "Audit the Rust adapter tests", "worker-model"),
+            launch_with_scope(
+                "tool-a",
+                "worker-a",
+                "Audit the Rust adapter tests",
+                "worker-model",
+            ),
         );
         registry.observe_and_restore(&mut first);
         let mut resumed = request(
@@ -203,7 +255,12 @@ mod tests {
             "session-a",
             [
                 launch_with_scope("tool-a", "worker-css", "Review CSS layout", "css-model"),
-                launch_with_scope("tool-b", "worker-rust", "Audit Rust adapter tests", "rust-model"),
+                launch_with_scope(
+                    "tool-b",
+                    "worker-rust",
+                    "Audit Rust adapter tests",
+                    "rust-model",
+                ),
             ]
             .into_iter()
             .flatten()
@@ -216,7 +273,10 @@ mod tests {
         );
         registry.observe_and_restore(&mut resumed);
         let guidance = resumed.system.to_string();
-        assert!(guidance.find("worker-rust").expect("matching worker") < guidance.find("worker-css").expect("unrelated worker"));
+        assert!(
+            guidance.find("worker-rust").expect("matching worker")
+                < guidance.find("worker-css").expect("unrelated worker")
+        );
     }
 
     #[test]
@@ -370,7 +430,9 @@ mod tests {
         registry.observe_and_restore(&mut first);
         let mut completed = request(
             "session-a",
-            vec![json!({"role":"user","content":"<task-id>worker-a</task-id><status>completed</status>"})],
+            vec![
+                json!({"role":"user","content":"<task-id>worker-a</task-id><status>completed</status>"}),
+            ],
         );
         registry.observe_and_restore(&mut completed);
         let mut arguments = launch_arguments("Audit the Rust adapter tests", "worker-model");
@@ -397,7 +459,9 @@ mod tests {
         for status in ["failed", "cancelled", "stopped"] {
             let mut terminal = request(
                 "session-a",
-                vec![json!({"role":"user","content":format!("<task-id>worker-a</task-id><status>{status}</status>")})],
+                vec![
+                    json!({"role":"user","content":format!("<task-id>worker-a</task-id><status>{status}</status>")}),
+                ],
             );
             registry.observe_and_restore(&mut terminal);
             let mut arguments = launch_arguments("Audit the Rust adapter tests", "worker-model");
@@ -415,7 +479,12 @@ mod tests {
         let registry = SubagentReuseRegistry::default();
         let mut first = request(
             "session-a",
-            launch_with_scope("tool-a", "worker-a", "Audit the Rust adapter tests", "worker-model"),
+            launch_with_scope(
+                "tool-a",
+                "worker-a",
+                "Audit the Rust adapter tests",
+                "worker-model",
+            ),
         );
         registry.observe_and_restore(&mut first);
         let mut arguments = launch_arguments("Review CSS layout", "worker-model");
@@ -516,7 +585,11 @@ mod tests {
         });
         registry.note_inflight_launch("session-a", &arguments, "tool-pending");
         assert!(registry.scope_is_occupied("session-a", &arguments));
-        assert!(registry.rewrite_launch_input("session-a", &mut arguments.clone()).is_none());
+        assert!(
+            registry
+                .rewrite_launch_input("session-a", &mut arguments.clone())
+                .is_none()
+        );
         assert_eq!(registry.state_for("session-a"), Some(Vec::<String>::new()));
     }
 
@@ -574,8 +647,18 @@ mod tests {
         let mut first = request(
             "session-a",
             [
-                launch_with_scope("tool-a", "worker-a", "Audit Rust adapter tests", "worker-model"),
-                launch_with_scope("tool-b", "worker-b", "Review Rust error handling", "worker-model"),
+                launch_with_scope(
+                    "tool-a",
+                    "worker-a",
+                    "Audit Rust adapter tests",
+                    "worker-model",
+                ),
+                launch_with_scope(
+                    "tool-b",
+                    "worker-b",
+                    "Review Rust error handling",
+                    "worker-model",
+                ),
             ]
             .into_iter()
             .flatten()
@@ -666,14 +749,12 @@ mod tests {
         );
         ordinary.tools = vec![json!({"name":"Agent"}), json!({"name":"SendMessage"})];
         assert!(!agent_teams_enabled(&ordinary));
-        let (tools, _, _) = crate::anthropic::session::tool_configuration(
-            &ordinary,
-            None,
-            None,
+        let (tools, _, _) = crate::anthropic::session::tool_configuration(&ordinary, None, None);
+        assert!(
+            tools.iter().all(|tool| {
+                tool.get("name").and_then(Value::as_str) != Some("cc_SendMessage_1")
+            })
         );
-        assert!(tools.iter().all(|tool| {
-            tool.get("name").and_then(Value::as_str) != Some("cc_SendMessage_1")
-        }));
     }
 
     #[test]

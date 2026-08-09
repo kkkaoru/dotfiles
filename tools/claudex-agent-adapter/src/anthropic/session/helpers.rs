@@ -56,8 +56,9 @@ pub(super) fn should_preempt_for_context_limit(
 }
 
 pub(super) fn is_idempotent_task_lifecycle_error(content_items: &[Value]) -> bool {
-    // Claude Code reports a consumed TaskStop/TaskOutput target as an error
-    // string even though the requested lifecycle state is already satisfied.
+    // Claude Code reports a consumed TaskStop target as an error even though
+    // the requested stop is already satisfied. TaskOutput `No task found` that
+    // still lists `Running background agents` is a miss, not completed output.
     content_items.iter().any(|item| {
         let Some(text) = item.get("text").and_then(Value::as_str) else {
             return false;
@@ -76,6 +77,9 @@ fn is_idempotent_task_lifecycle_text(text: &str) -> bool {
         .to_ascii_lowercase();
     // Reject shell transcripts that merely quote the phrase.
     if normalized.starts_with("shell output:") {
+        return false;
+    }
+    if normalized.contains("running background agents:") {
         return false;
     }
     normalized.starts_with("error: no task found with id:")

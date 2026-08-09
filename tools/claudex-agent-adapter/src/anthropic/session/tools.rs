@@ -148,6 +148,9 @@ fn task_lifecycle_guidance(tool_name: &str) -> &'static str {
         "TaskStop" | "StopTask" | "Stop Task" => {
             " Task lifecycle: stopping is idempotent; use only the exact active Agent task_id from the current launch (`a` + 16 hex). Never guess IDs, never stop Bash-background nanoids (e.g. b13mjnjlj) or previous-session orphan IDs from `No completion record` notifications, and never cascade stops onto unrelated in-flight workers after one lane fails. A `No task found` response means already stopped/completed; do not retry."
         }
+        "TaskOutput" | "TaskGet" => {
+            " TaskOutput: use only the exact task_id from that Agent/Task launch result (`a` + 16 hex). Never guess, never pass a display name or agentId unless the launch result said it is the TaskOutput task_id, and never reuse a previous-session orphan. If Claude Code returns `No task found` and lists `Running background agents`, the ID was wrong — retry with one of those live ids. That miss is not completed output."
+        }
         _ => "",
     }
 }

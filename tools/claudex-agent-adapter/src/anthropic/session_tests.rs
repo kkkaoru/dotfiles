@@ -52,6 +52,10 @@ fn treats_unknown_task_lifecycle_ids_as_idempotent_success() {
         "type":"text",
         "text":"<tool_use_error>No task found with ID: a27155c79179347ce</tool_use_error>"
     })]));
+    assert!(!is_idempotent_task_lifecycle_error(&[json!({
+        "type":"text",
+        "text":"Error: No task found with ID: a3d7f2ca50556c9e5. Running background agents: a4496564387a2561f (Implement AzooKey pruning fix), a906c77ad60469b0a (Audit AzooKey pruning semantics)"
+    })]));
 }
 use crate::agent_backend::WebSearchMode;
 use crate::anthropic::{
@@ -356,12 +360,20 @@ fn documents_idempotent_task_stop_semantics_in_the_dynamic_schema() {
     }
     let ordinary =
         dynamic_tool(&json!({"name":"TaskGet"}), "cc_task_get_0").expect("ordinary task schema");
-    assert!(
-        !ordinary["description"]
-            .as_str()
-            .expect("ordinary description")
-            .contains("stopping is idempotent")
-    );
+    let ordinary_description = ordinary["description"]
+        .as_str()
+        .expect("ordinary description");
+    assert!(!ordinary_description.contains("stopping is idempotent"));
+    assert!(ordinary_description.contains("Running background agents"));
+    assert!(ordinary_description.contains("not completed output"));
+    let output = dynamic_tool(
+        &json!({"name":"TaskOutput","description":"Read a background task result"}),
+        "cc_task_output_0",
+    )
+    .expect("task-output schema");
+    let output_description = output["description"].as_str().expect("output description");
+    assert!(output_description.contains("exact task_id"));
+    assert!(output_description.contains("Running background agents"));
 }
 
 #[test]
