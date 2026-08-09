@@ -1,0 +1,55 @@
+#!/bin/sh
+# Launch Command Code with mise Node 24+. Homebrew Node 26 + bun's global
+# `cmd` left the Ink TUI blank and unresponsive.
+set -eu
+
+find_node() {
+  if command -v mise >/dev/null 2>&1; then
+    node_bin=$(mise which node 2>/dev/null || true)
+    if [ -n "${node_bin:-}" ] && [ -x "$node_bin" ]; then
+      printf '%s\n' "$node_bin"
+      return 0
+    fi
+  fi
+
+  newest=
+  for candidate in "$HOME"/.local/share/mise/installs/node/24.*/bin/node; do
+    if [ -x "$candidate" ]; then
+      newest=$candidate
+    fi
+  done
+  if [ -n "${newest:-}" ]; then
+    printf '%s\n' "$newest"
+    return 0
+  fi
+
+  return 1
+}
+
+NODE_BIN=$(find_node || true)
+if [ -z "${NODE_BIN:-}" ] || [ ! -x "$NODE_BIN" ]; then
+  echo "cmd: mise Node 24 が見つかりません。mise install node@24 を実行してください。" >&2
+  exit 1
+fi
+
+NODE_DIR=$(CDPATH= cd -- "$(dirname "$NODE_BIN")" && pwd)
+NODE_PREFIX=$(CDPATH= cd -- "$NODE_DIR/.." && pwd)
+ENTRY="$NODE_PREFIX/lib/node_modules/command-code/dist/index.mjs"
+
+if [ ! -f "$ENTRY" ]; then
+  echo "cmd: command-code が $NODE_PREFIX に入っていません。" >&2
+  echo "cmd: \"$NODE_DIR/npm\" i -g --prefix \"$NODE_PREFIX\" command-code" >&2
+  exit 1
+fi
+
+# Shebang is `#!/usr/bin/env node`; keep mise Node ahead of Homebrew 26.
+PATH="$NODE_DIR:$PATH"
+export PATH
+
+# Ghostty/Zellij で OSC 11 が空振りしても dark TUI になるようにする。
+if [ -z "${COLORFGBG:-}" ]; then
+  COLORFGBG="15;0"
+  export COLORFGBG
+fi
+
+exec "$NODE_BIN" "$ENTRY" "$@"

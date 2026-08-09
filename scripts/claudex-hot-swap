@@ -1,0 +1,47 @@
+#!/bin/sh
+# Replace an idle claudex adapter on the same port, even with a launch TUI.
+set -eu
+
+ADAPTER="${HOME}/.local/bin/claudex-agent-adapter"
+if [ ! -x "$ADAPTER" ]; then
+  echo "claudex-hot-swap: installed adapter is not executable: $ADAPTER" >&2
+  exit 127
+fi
+
+LISTEN="${CLAUDEX_ADAPTER_LISTEN:-127.0.0.1:8318}"
+DEFAULT_PROVIDER_CONFIG="${HOME}/.config/claudex/providers.json"
+HOST=$(hostname -s)
+PROVIDER_OVERRIDE_CONFIG="${HOME}/.config/claudex/providers.${HOST}.local.json"
+if [ -n "${CLAUDEX_PROVIDER_CONFIG:-}" ]; then
+  PROVIDER_CONFIG="$CLAUDEX_PROVIDER_CONFIG"
+elif [ -n "${CLAUDEX_PROVIDER_LOCAL_CONFIG:-}" ]; then
+  PROVIDER_OVERRIDE_CONFIG="$CLAUDEX_PROVIDER_LOCAL_CONFIG"
+  PROVIDER_CONFIG="$DEFAULT_PROVIDER_CONFIG"
+else
+  PROVIDER_CONFIG="$DEFAULT_PROVIDER_CONFIG"
+fi
+
+if [ -z "${CLAUDEX_PROVIDER_CONFIG:-}" ] && [ -r "$PROVIDER_OVERRIDE_CONFIG" ]; then
+  CACHE_PATH="${HOME}/.cache/claudex"
+  SCOPED="${CACHE_PATH}/providers.local-resolved.json"
+  RESOLVER="${HOME}/.config/claudex/resolve-provider-local-config.py"
+  if mkdir -p "$CACHE_PATH" && [ -r "$RESOLVER" ]; then
+    EFFECTIVE=$(python3 "$RESOLVER" "$DEFAULT_PROVIDER_CONFIG" "$PROVIDER_OVERRIDE_CONFIG" "$SCOPED") || true
+    if [ -n "${EFFECTIVE:-}" ]; then
+      PROVIDER_CONFIG="$EFFECTIVE"
+    fi
+  fi
+fi
+
+if [ ! -r "$PROVIDER_CONFIG" ]; then
+  echo "claudex-hot-swap: provider config is not readable: $PROVIDER_CONFIG" >&2
+  exit 2
+fi
+
+BUILD=$("$ADAPTER" build-id)
+echo "claudex-hot-swap: replacing $LISTEN with $BUILD ($PROVIDER_CONFIG)" >&2
+"$ADAPTER" hot-swap --provider-config "$PROVIDER_CONFIG" --listen "$LISTEN"
+
+if command -v curl >/dev/null 2>&1; then
+  curl --fail --silent "http://${LISTEN}/health" | python3 -c 'import json,sys; h=json.load(sys.stdin); print("claudex-hot-swap: ready pid=%s build=%s" % (h.get("pid"), h.get("build_id")))'
+fi
