@@ -149,8 +149,8 @@ fn audits_control_flow_hidden_from_clippy_nesting() {
             .iter()
             .map(|source| source.matches("tokio::select!").count())
             .sum::<usize>(),
-        13,
-        "count includes runtime::shutdown and post-EOF lifecycle select! blocks",
+        14,
+        "count includes runtime::shutdown, stream wait, and post-EOF lifecycle select! blocks",
     );
 }
 

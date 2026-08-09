@@ -429,7 +429,7 @@ async fn refreshes_activity_deadlines_and_detects_closed_streams() {
     let mut deadline = Box::pin(tokio::time::sleep(std::time::Duration::from_secs(1)));
     super::refresh_activity_keepalive(
         &mut builder,
-        &sender,
+        Some(&sender),
         deadline.as_mut(),
         Duration::from_secs(1),
     )
@@ -630,6 +630,7 @@ async fn reports_slow_stream_preparation_before_the_provider_is_ready() {
         Duration::from_millis(50),
         true,
         false,
+        false,
     )
     .await;
     assert_eq!(result.expect("prepare result"), Some("ready"));
@@ -657,15 +658,23 @@ async fn reports_slow_stream_preparation_before_the_provider_is_ready() {
 }
 
 #[tokio::test]
-async fn command_code_prepare_start_status_is_live_text_not_doing() {
+async fn command_code_prepare_primes_silent_thinking_not_canned_text() {
     let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
+    assert!(super::prime_subagent_sse(
+        &sender,
+        "meta/muse-spark-1.2-contributor",
+        1,
+        true,
+        Some("high"),
+    ));
     let (result, mut builder) = super::prepare_with_activity(
         std::future::ready(Ok::<_, anyhow::Error>("ready")),
         1,
         &sender,
-        Some("SubAgent starting: meta/muse-spark-1.2-contributor (effort=high)"),
+        None,
         Duration::from_secs(1),
         Duration::from_secs(1),
+        true,
         true,
         true,
     )
@@ -678,9 +687,13 @@ async fn command_code_prepare_start_status_is_live_text_not_doing() {
             !block
                 .get("text")
                 .and_then(Value::as_str)
-                .is_some_and(|text| text.contains("SubAgent starting"))
+                .is_some_and(|text| text.contains("▶") || text.contains("Command Code"))
+                && !block
+                    .get("thinking")
+                    .and_then(Value::as_str)
+                    .is_some_and(|text| text.contains("still working") || text.contains("▶"))
         }),
-        "start chrome must be stripped from transcript: {:?}",
+        "canned chrome must not remain in transcript: {:?}",
         segment.blocks
     );
     let mut frames = Vec::new();
@@ -688,14 +701,21 @@ async fn command_code_prepare_start_status_is_live_text_not_doing() {
         frames.push(String::from_utf8(frame.expect("frame").to_vec()).expect("UTF-8 SSE"));
     }
     assert!(
-        !frames.iter().any(|frame| frame.contains("thinking_delta")),
-        "Command Code start must not open Doing thinking: {frames:?}"
+        frames.iter().any(|frame| frame.contains("thinking_delta")),
+        "Command Code start must open native thinking: {frames:?}"
+    );
+    assert!(
+        !frames
+            .iter()
+            .any(|frame| { frame.contains("text_delta") && frame.contains("Command Code") }),
+        "Command Code must not dump start chrome as text: {frames:?}"
     );
     assert!(
         !frames.iter().any(|frame| {
             frame.contains("ツール結果待ち")
                 || frame.contains("続きの調査または回答")
                 || frame.contains("SubAgent starting")
+                || frame.contains("still working")
         }),
         "Command Code must not invent canned start chrome: {frames:?}"
     );
@@ -713,6 +733,7 @@ async fn finishes_fast_or_disconnected_stream_preparation_without_activity_statu
         Duration::from_secs(1),
         false,
         false,
+        false,
     )
     .await;
     assert_eq!(result.expect("fast prepare"), Some("ready"));
@@ -726,6 +747,7 @@ async fn finishes_fast_or_disconnected_stream_preparation_without_activity_statu
         None,
         Duration::from_secs(1),
         Duration::from_secs(1),
+        false,
         false,
         false,
     )
@@ -743,6 +765,7 @@ async fn finishes_fast_or_disconnected_stream_preparation_without_activity_statu
         Duration::from_secs(1),
         false,
         false,
+        false,
     )
     .await;
     assert!(
@@ -752,6 +775,114 @@ async fn finishes_fast_or_disconnected_stream_preparation_without_activity_statu
             .contains("failed")
     );
     assert!(builder.blocks.is_empty());
+}
+
+#[tokio::test]
+async fn subagent_prepare_continues_after_client_disconnect() {
+    let (sender, receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
+    drop(receiver);
+    let prepare = async {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        Ok::<_, anyhow::Error>("ready")
+    };
+    let (result, _builder) = super::prepare_with_activity(
+        prepare,
+        1,
+        &sender,
+        None,
+        Duration::from_secs(1),
+        Duration::from_secs(1),
+        true,
+        true,
+        true,
+    )
+    .await;
+    assert_eq!(
+        result.expect("subagent prepare must not abort on SSE close"),
+        Some("ready")
+    );
+}
+
+#[tokio::test]
+async fn primes_command_code_thinking_before_the_client_can_disconnect() {
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
+    let primed = super::prime_subagent_sse(
+        &sender,
+        "meta/muse-spark-1.2-contributor",
+        3,
+        true,
+        Some("high"),
+    );
+    drop(sender);
+    assert!(primed, "Command Code must prime thinking heartbeat");
+    let mut frames = Vec::new();
+    while let Some(frame) = receiver.recv().await {
+        frames.push(String::from_utf8(frame.expect("frame").to_vec()).expect("UTF-8 SSE"));
+    }
+    assert!(
+        frames.iter().any(|frame| frame.contains("message_start")),
+        "missing message_start: {frames:?}"
+    );
+    assert!(
+        frames
+            .iter()
+            .any(|frame| frame.contains("thinking_delta") && frame.contains('\u{200b}')),
+        "primed Command Code must open native thinking, not text chrome: {frames:?}"
+    );
+    assert!(
+        !frames
+            .iter()
+            .any(|frame| { frame.contains("text_delta") && frame.contains("Command Code") }),
+        "primed Command Code must not dump start chrome: {frames:?}"
+    );
+}
+
+#[tokio::test]
+async fn subagent_stream_keeps_the_provider_after_sse_disconnect() {
+    let (_root, app, bridge, session) = disconnect_fixture().await;
+    let events = app.subscribe_thread("thread");
+    let (sender, receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
+    drop(receiver);
+    let dispatcher_app = Arc::clone(&app);
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        dispatcher_app.dispatch_test_event(json!({
+            "method":"item/agentMessage/delta",
+            "params":{
+                "threadId":"thread",
+                "itemId":"command-code:message",
+                "delta":"▶ WebSearch tokyo\nTokyo: sunny 33C\n"
+            }
+        }));
+        dispatcher_app.dispatch_test_event(json!({
+            "method":"turn/completed",
+            "params":{"threadId":"thread","turn":{"status":"completed"}}
+        }));
+    });
+
+    let result = bridge
+        .wait_for_stream_segment_with_interval(StreamWaitInput {
+            session: &session,
+            events: Arc::new(events),
+            current_messages: &[],
+            system: &json!(null),
+            sender: &sender,
+            builder: SegmentBuilder::for_turn(1, true, "meta/muse-spark-1.2-contributor"),
+            activity_interval: Duration::from_millis(50),
+        })
+        .await
+        .expect("subagent segment after SSE close");
+    let super::StreamTurn::Segment { segment, .. } = result else {
+        panic!("SubAgent SSE close must not disconnect the provider turn");
+    };
+    assert!(
+        segment.blocks.iter().any(|block| block
+            .get("text")
+            .and_then(Value::as_str)
+            .is_some_and(|text| { text.contains("Tokyo: sunny 33C") })),
+        "native cmd text must remain after SSE close: {:?}",
+        segment.blocks
+    );
 }
 
 #[tokio::test]
@@ -1290,7 +1421,7 @@ async fn treats_a_closed_sender_after_batch_finish_as_disconnect() {
         .await
         .expect("batch tool call");
     let result = bridge
-        .external_batch_segment(&session, events, &mut builder, &sender)
+        .external_batch_segment(&session, events, &mut builder, Some(&sender))
         .await
         .expect("closed batch sender");
     assert!(matches!(result, super::StreamTurn::Disconnected));
@@ -2035,6 +2166,270 @@ async fn subagent_stream_timeout_tolerates_a_disconnected_client() {
     assert!(bridge.detached_sessions.lock().await.is_empty());
 }
 
+#[tokio::test]
+async fn subagent_empty_end_turn_without_retry_reports_billing_error() {
+    let (_root, _app, bridge, session) = disconnect_fixture().await;
+    let bridge = Arc::new(bridge);
+    let dispatcher = crate::app_server::events::ThreadEventDispatcher::default();
+    let events = dispatcher.subscribe("thread");
+    dispatcher.dispatch(json!({
+        "method":"turn/completed",
+        "params":{"threadId":"thread","turn":{"status":"completed"}}
+    }));
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
+    Arc::clone(&bridge)
+        .drive_subagent_stream(
+            drive_turn(session, events, Vec::new(), None).await,
+            sender,
+            SegmentBuilder::for_turn(1, true, "main"),
+            None,
+            true,
+            false,
+        )
+        .await;
+    let mut output = String::new();
+    while let Some(frame) = receiver.recv().await {
+        output.push_str(&String::from_utf8_lossy(&frame.expect("infallible frame")));
+    }
+    assert!(
+        output.contains("no assistant content")
+            || output.contains("billing")
+            || output.contains("error"),
+        "unexpected empty SubAgent stream: {output}"
+    );
+}
+
+#[tokio::test]
+async fn retry_after_provider_failure_requires_closed_stream_and_dead_model() {
+    let (_root, app, bridge, session) = retryable_drive_fixture().await;
+    let dispatcher = ThreadEventDispatcher::default();
+    const CLOSED: &str = "app-server event stream closed";
+
+    let alive = bridge
+        .retry_after_provider_failure(
+            drive_turn(
+                Arc::clone(&session),
+                dispatcher.subscribe("alive"),
+                Vec::new(),
+                None,
+            )
+            .await,
+            anyhow!(CLOSED),
+        )
+        .await;
+    let Err(alive) = alive else {
+        panic!("live model should not recycle");
+    };
+    assert!(alive.to_string().contains(CLOSED));
+
+    let unrelated = bridge
+        .retry_after_provider_failure(
+            drive_turn(
+                Arc::clone(&session),
+                dispatcher.subscribe("unrelated"),
+                Vec::new(),
+                Some(ContextRetry {
+                    request: drive_request(),
+                    effort: None,
+                    advisor_model: None,
+                    collaborator_model: None,
+                }),
+            )
+            .await,
+            anyhow!("some other failure"),
+        )
+        .await;
+    let Err(unrelated) = unrelated else {
+        panic!("unrelated errors should not recycle");
+    };
+    assert!(unrelated.to_string().contains("some other failure"));
+
+    app.shutdown().await;
+    let missing_retry = bridge
+        .retry_after_provider_failure(
+            drive_turn(
+                Arc::clone(&session),
+                dispatcher.subscribe("dead"),
+                Vec::new(),
+                None,
+            )
+            .await,
+            anyhow!(CLOSED),
+        )
+        .await;
+    let Err(missing_retry) = missing_retry else {
+        panic!("recycled model still needs a retry payload");
+    };
+    assert!(missing_retry.to_string().contains(CLOSED));
+
+    let retried = bridge
+        .retry_after_provider_failure(
+            drive_turn(
+                session,
+                dispatcher.subscribe("retry-dead"),
+                Vec::new(),
+                Some(ContextRetry {
+                    request: drive_request(),
+                    effort: None,
+                    advisor_model: None,
+                    collaborator_model: None,
+                }),
+            )
+            .await,
+            anyhow!(CLOSED),
+        )
+        .await;
+    assert!(
+        retried.is_err(),
+        "dead provider retry still needs a live backend"
+    );
+}
+
+#[tokio::test]
+async fn drive_stream_reports_usage_limit_without_a_sibling_provider() {
+    let (root, _app, bridge, session) = disconnect_fixture().await;
+    let bridge = Arc::new(bridge.with_usage_limit_cache_home(root.path()));
+    let dispatcher = ThreadEventDispatcher::default();
+    let events = dispatcher.subscribe("thread");
+    dispatcher.dispatch(json!({
+        "method":"error",
+        "params":{"threadId":"thread","error":{"codexErrorInfo":"usageLimitExceeded"}}
+    }));
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
+    Arc::clone(&bridge)
+        .drive_subagent_stream(
+            drive_turn(
+                session,
+                events,
+                Vec::new(),
+                Some(ContextRetry {
+                    request: drive_request(),
+                    effort: None,
+                    advisor_model: None,
+                    collaborator_model: None,
+                }),
+            )
+            .await,
+            sender,
+            SegmentBuilder::for_turn(1, true, "main"),
+            None,
+            true,
+            false,
+        )
+        .await;
+    let mut output = String::new();
+    while let Some(frame) = receiver.recv().await {
+        output.push_str(&String::from_utf8_lossy(&frame.expect("infallible frame")));
+    }
+    assert!(
+        output.contains("usage") || output.contains("limit") || output.contains("error"),
+        "unexpected usage-limit stream: {output}"
+    );
+}
+
+#[tokio::test]
+async fn drive_stream_retries_a_dead_provider_failure() {
+    let cache = tempfile::tempdir().expect("provider failure cache");
+    let (bridge, session, dispatcher) = grok_disconnect_fixture();
+    let bridge = Arc::new(bridge.with_usage_limit_cache_home(cache.path()));
+    let events = dispatcher.subscribe("thread");
+    dispatcher.close();
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
+    Arc::clone(&bridge)
+        .drive_subagent_stream(
+            drive_turn(
+                session,
+                events,
+                Vec::new(),
+                Some(ContextRetry {
+                    request: drive_request(),
+                    effort: None,
+                    advisor_model: None,
+                    collaborator_model: None,
+                }),
+            )
+            .await,
+            sender,
+            SegmentBuilder::new(1),
+            None,
+            true,
+            false,
+        )
+        .await;
+    let mut output = String::new();
+    while let Some(frame) = receiver.recv().await {
+        output.push_str(&String::from_utf8_lossy(&frame.expect("infallible frame")));
+    }
+    assert!(
+        output.contains("error") || output.contains("closed") || output.contains("fail"),
+        "unexpected provider-failure stream: {output}"
+    );
+}
+
+#[tokio::test]
+async fn context_retry_or_error_requires_window_marker_and_retry() {
+    let (_root, _app, bridge, session) = retryable_drive_fixture().await;
+    let dispatcher = ThreadEventDispatcher::default();
+
+    {
+        let mut turn = drive_turn(
+            Arc::clone(&session),
+            dispatcher.subscribe("no-marker"),
+            Vec::new(),
+            Some(ContextRetry {
+                request: drive_request(),
+                effort: None,
+                advisor_model: None,
+                collaborator_model: None,
+            }),
+        )
+        .await;
+        let unmarked = bridge
+            .context_retry_or_error(&mut turn, anyhow!("boom"))
+            .await;
+        let Err(unmarked) = unmarked else {
+            panic!("unmarked errors should fail");
+        };
+        assert!(unmarked.to_string().contains("boom"));
+    }
+
+    {
+        let mut turn = drive_turn(
+            Arc::clone(&session),
+            dispatcher.subscribe("no-retry"),
+            Vec::new(),
+            None,
+        )
+        .await;
+        let missing = bridge
+            .context_retry_or_error(&mut turn, anyhow!("context window exceeded"))
+            .await;
+        let Err(missing) = missing else {
+            panic!("missing retry should fail");
+        };
+        assert!(missing.to_string().contains("context window"));
+    }
+
+    let mut turn = drive_turn(
+        session,
+        dispatcher.subscribe("retry"),
+        Vec::new(),
+        Some(ContextRetry {
+            request: drive_request(),
+            effort: Some("high".to_owned()),
+            advisor_model: None,
+            collaborator_model: None,
+        }),
+    )
+    .await;
+    let retry = bridge
+        .context_retry_or_error(&mut turn, anyhow!("context window exceeded"))
+        .await
+        .expect("context retry");
+    assert_eq!(retry.request.model, "main");
+    assert_eq!(retry.effort.as_deref(), Some("high"));
+}
+
 async fn drive_turn(
     session: Arc<Session>,
     events: crate::app_server::ThreadEvents,
@@ -2473,6 +2868,7 @@ async fn prepared_stream_releases_its_concurrency_ticket_after_a_prepare_error()
             is_subagent: false,
             run_in_background: false,
             sender,
+            primed_thinking: false,
         })
         .await;
 
@@ -2503,6 +2899,7 @@ async fn prepared_stream_stops_when_the_client_disconnects_during_setup() {
             is_subagent: false,
             run_in_background: false,
             sender,
+            primed_thinking: false,
         })
         .await;
 }
@@ -2519,7 +2916,7 @@ async fn external_batch_segment_returns_an_unsettled_segment_while_stream_is_ope
         .expect("text segment");
 
     let result = bridge
-        .external_batch_segment(&session, events, &mut builder, &sender)
+        .external_batch_segment(&session, events, &mut builder, Some(&sender))
         .await
         .expect("open stream segment");
     let super::StreamTurn::Segment {

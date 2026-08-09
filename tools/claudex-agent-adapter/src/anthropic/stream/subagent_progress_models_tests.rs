@@ -111,19 +111,17 @@ const CASES: &[Case] = &[
     },
     Case {
         name: "command-code-acp",
-        prose: None,
+        prose: Some("AVITA Inc. is an avatar company founded by Hiroshi Ishiguro.\n"),
         prose_item_id: "command-code:message",
-        reasoning: Some(
-            "▶ Command Code headless starting (meta/muse-spark-1.2-contributor, effort=high)\n",
-        ),
+        reasoning: Some("Check AVITA Inc. official site and filings.\n"),
         tool: Some(Tool {
-            call_id: "cmd-read",
-            name: "Read",
-            title: "ReadFile: CLAUDE.md",
-            arg_key: "file_path",
-            arg_value: "/Users/kkk4oru/ghq/github.com/kkkaoru/dotfiles/CLAUDE.md",
+            call_id: "cmd-search",
+            name: "web_search",
+            title: "web_search",
+            arg_key: "query",
+            arg_value: "AVITA株式会社",
         }),
-        expect_visible: &["Command Code headless starting"],
+        expect_visible: &["Check AVITA Inc. official site"],
     },
 ];
 
@@ -186,14 +184,9 @@ async fn command_code_subagent_answer_streams_live_text_not_only_thinking() {
     live.ingest_available(&mut receiver);
     assert!(live.turn_still_open());
     assert!(
-        live.hidden_text.contains("検索中: AVITA"),
-        "● status must stream as live text so Doing does not hide progress: {:?}",
+        !live.hidden_text.contains("検索中: AVITA"),
+        "● status chrome must not dump as text: {:?}",
         live.hidden_text
-    );
-    assert!(
-        !live.visible_thinking.contains("検索中"),
-        "● status must not reopen thinking chrome: {:?}",
-        live.visible_thinking
     );
 
     builder
@@ -276,18 +269,28 @@ async fn run_case(case: &Case) {
     );
     if command_code {
         assert!(
-            live.hidden_text.contains("▶ Read"),
-            "{}: Command Code ▶ must be live text not Doing: thinking={:?} text={:?}",
+            !live.hidden_text.contains('▶') && !live.hidden_text.contains("still working"),
+            "{}: Command Code must not dump ▶/still-working text: thinking={:?} text={:?}",
             case.name,
             live.visible_thinking,
             live.hidden_text
         );
         assert!(
-            live.hidden_text.contains("still working"),
-            "{}: Command Code keepalive must match other ACP workers: thinking={:?} text={:?}",
+            live.hidden_text.contains("AVITA Inc. is an avatar company")
+                || live
+                    .visible_thinking
+                    .contains("Check AVITA Inc. official site"),
+            "{}: native thought or prose must show: thinking={:?} text={:?}",
             case.name,
             live.visible_thinking,
             live.hidden_text
+        );
+        assert!(
+            !live.visible_thinking.contains("still working")
+                && !live.visible_thinking.contains("▶ Command Code"),
+            "{}: keepalive must stay silent thinking, not canned chrome: {:?}",
+            case.name,
+            live.visible_thinking
         );
     } else {
         assert!(

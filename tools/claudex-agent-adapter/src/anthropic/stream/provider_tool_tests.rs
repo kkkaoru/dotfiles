@@ -866,4 +866,61 @@ mod tests {
             assert!(!validated_provider_web_evidence(Some(&invalid)));
         }
     }
+
+    #[tokio::test]
+    async fn command_code_web_search_emits_server_tool_use_not_executable_tool_use() {
+        let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
+        let mut builder = SegmentBuilder::new(1)
+            .with_subagent(true)
+            .with_command_code_progress(true);
+        builder
+            .provider_tool_call(
+                &json!({
+                    "params":{
+                        "callId":"cc-search",
+                        "tool":"web_search",
+                        "title":"web_search",
+                        "arguments":{"query":"名古屋 天気"}
+                    }
+                }),
+                Some(&sender),
+            )
+            .await
+            .expect("cc web_search");
+        drop(sender);
+        let mut sse = String::new();
+        while let Some(frame) = receiver.recv().await {
+            sse.push_str(&String::from_utf8_lossy(&frame.expect("frame")));
+        }
+        assert!(
+            sse.contains("\"type\":\"server_tool_use\"") && sse.contains("web_search"),
+            "CC web_search must paint a server_tool_use card: {sse}"
+        );
+        assert!(
+            sse.contains("srvtoolu_"),
+            "server tool id must use srvtoolu_ prefix: {sse}"
+        );
+        assert!(
+            sse.contains("名古屋 天気"),
+            "query must stream in server tool input: {sse}"
+        );
+        assert!(
+            !sse.contains("\"type\":\"tool_use\""),
+            "must not emit executable tool_use: {sse}"
+        );
+        assert!(
+            !sse.contains("▶") && !sse.contains("still working"),
+            "CC web_search must not dump ▶/still-working text chrome: {sse}"
+        );
+        let segment = builder.finish(None).await.expect("finish");
+        assert_eq!(segment.stop_reason, "end_turn");
+        assert!(
+            segment.blocks.iter().any(|block| {
+                block.get("type").and_then(Value::as_str) == Some("server_tool_use")
+                    && block.get("name").and_then(Value::as_str) == Some("web_search")
+            }),
+            "committed segment keeps display-only server_tool_use: {:?}",
+            segment.blocks
+        );
+    }
 }
