@@ -60,7 +60,8 @@ pub(crate) fn analyze_subagent_work(messages: &[Value]) -> SubagentSnapshot {
             exact_async_acknowledgement,
         );
         if message.get("role").and_then(Value::as_str) == Some("assistant")
-            && let Some(ids) = agent_tool_round_ids(message)
+            && let Some(ids) =
+                agent_tool_round_ids(message).or_else(|| legacy_cc_agent_round_ids(message))
         {
             latest_agent_tool_round = Some(ids);
         }
@@ -80,6 +81,29 @@ pub(crate) fn analyze_subagent_work(messages: &[Value]) -> SubagentSnapshot {
     }
 
     snapshot
+}
+
+fn legacy_cc_agent_round_ids(message: &Value) -> Option<Vec<String>> {
+    let ids = message
+        .get("content")?
+        .as_array()?
+        .iter()
+        .filter(|block| block.get("type").and_then(Value::as_str) == Some("tool_use"))
+        .filter(|block| {
+            block
+                .get("name")
+                .and_then(Value::as_str)
+                .is_some_and(|name| name.starts_with("cc_Agent_") && !name.contains("_batch_"))
+        })
+        .map(|block| {
+            block
+                .get("id")
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty())
+                .map(str::to_owned)
+        })
+        .collect::<Option<Vec<_>>>()?;
+    (!ids.is_empty()).then_some(ids)
 }
 
 fn record_message_content(

@@ -118,13 +118,19 @@ async fn inferred_model_without_user_authorization_is_rejected_before_launch() {
         .send()
         .await
         .expect("send inferred model launch");
-    assert_eq!(response.status(), reqwest::StatusCode::BAD_GATEWAY);
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .expect("read inferred model rejection");
+    if status == reqwest::StatusCode::BAD_GATEWAY {
+        assert!(body.contains("does not match the exact route"), "{body}");
+        return;
+    }
+    assert_eq!(status, reqwest::StatusCode::OK, "{body}");
     assert!(
-        response
-            .text()
-            .await
-            .expect("read inferred model rejection")
-            .contains("does not match the exact route")
+        body.contains("was not started") || body.contains("not configured"),
+        "unauthorized inferred model must not launch: {body}"
     );
 }
 

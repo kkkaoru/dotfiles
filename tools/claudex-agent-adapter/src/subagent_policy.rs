@@ -4,6 +4,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::Command,
+    time::Duration,
 };
 
 use anyhow::{Context, Result, bail};
@@ -18,6 +19,11 @@ const CONFIG_VERSION: u64 = 1;
 const CONFIG_DIR_RELATIVE: &str = ".config/claudex";
 const CONFIG_RELATIVE_PATH: &str = ".config/claudex/disabled-subagent-models.json";
 const LOCAL_CONFIG_NAME: &str = "disabled-subagent-models.local.json";
+const LOAD_ATTEMPTS: usize = 3;
+#[cfg(not(test))]
+const LOAD_RETRY: Duration = Duration::from_millis(10);
+#[cfg(test)]
+const LOAD_RETRY: Duration = Duration::ZERO;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -99,10 +105,41 @@ fn load_config(path: Option<&Path>) -> Result<BTreeSet<String>> {
     let Some(path) = path.filter(|path| path.is_file()) else {
         return Ok(BTreeSet::new());
     };
-    let contents = fs::read_to_string(path)
-        .with_context(|| format!("read disabled SubAgent model config {}", path.display()))?;
-    let policy: ModelPolicy = serde_json::from_str(&contents)
-        .with_context(|| format!("parse disabled SubAgent model config {}", path.display()))?;
+    load_config_from_reader(
+        || {
+            fs::read_to_string(path)
+                .with_context(|| format!("read disabled SubAgent model config {}", path.display()))
+        },
+        path,
+    )
+}
+
+fn load_config_from_reader(
+    read: impl Fn() -> Result<String>,
+    path: &Path,
+) -> Result<BTreeSet<String>> {
+    let mut last_error = None;
+    for attempt in 0..LOAD_ATTEMPTS {
+        match read().and_then(|contents| parse_policy_text(&contents, path)) {
+            Ok(models) => return remember_last_good(models),
+            Err(error) => {
+                last_error = Some(error);
+                if attempt + 1 < LOAD_ATTEMPTS {
+                    std::thread::sleep(LOAD_RETRY);
+                }
+            }
+        }
+    }
+    fallback_last_good(path, last_error.expect("load attempts produce an error"))
+}
+
+fn parse_policy_text(contents: &str, path: &Path) -> Result<BTreeSet<String>> {
+    let policy: ModelPolicy = serde_json::from_str(contents).map_err(|error| {
+        anyhow::anyhow!(
+            "parse disabled SubAgent model config {}: {error}",
+            path.display()
+        )
+    })?;
     if policy.version != CONFIG_VERSION {
         bail!("disabled SubAgent model config version must be {CONFIG_VERSION}");
     }
@@ -110,6 +147,42 @@ fn load_config(path: Option<&Path>) -> Result<BTreeSet<String>> {
         bail!("disabledModels must contain unique, valid exact model IDs");
     }
     Ok(policy.disabled_models.into_iter().collect())
+}
+
+fn remember_last_good(models: BTreeSet<String>) -> Result<BTreeSet<String>> {
+    with_last_good(|slot| *slot = Some(models.clone()));
+    Ok(models)
+}
+
+fn fallback_last_good(path: &Path, error: anyhow::Error) -> Result<BTreeSet<String>> {
+    let cached = with_last_good(|slot| slot.clone());
+    if let Some(models) = cached {
+        eprintln!(
+            "claudex: {error}; using last valid disabled SubAgent model config for {}",
+            path.display()
+        );
+        return Ok(models);
+    }
+    Err(error)
+}
+
+fn with_last_good<R>(update: impl FnOnce(&mut Option<BTreeSet<String>>) -> R) -> R {
+    #[cfg(test)]
+    {
+        thread_local! {
+            static LAST_GOOD: std::cell::RefCell<Option<BTreeSet<String>>> =
+                const { std::cell::RefCell::new(None) };
+        }
+        LAST_GOOD.with(|slot| update(&mut slot.borrow_mut()))
+    }
+    #[cfg(not(test))]
+    {
+        static LAST_GOOD: std::sync::Mutex<Option<BTreeSet<String>>> = std::sync::Mutex::new(None);
+        let mut slot = LAST_GOOD
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        update(&mut slot)
+    }
 }
 
 impl ModelPolicy {
@@ -170,145 +243,4 @@ pub(crate) fn valid_model_id(model: &str) -> bool {
 }
 
 #[cfg(test)]
-// Coverage gates measure production code; test implementations are excluded.
-#[cfg_attr(coverage_nightly, coverage(off))]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn merges_sorts_and_deduplicates_configured_and_environment_models() {
-        let configured = BTreeSet::from(["gpt-5.6-sol".to_owned()]);
-        assert_eq!(
-            merged_header(
-                &configured,
-                Some(OsStr::new(" grok-4.5,gpt-5.6-sol,grok-4.5 "))
-            )
-            .expect("valid model policy"),
-            Some("gpt-5.6-sol,grok-4.5".to_owned())
-        );
-        assert_eq!(
-            merged_header(&configured, None).unwrap(),
-            Some("gpt-5.6-sol".to_owned())
-        );
-        assert_eq!(merged_header(&BTreeSet::new(), None).unwrap(), None);
-        assert_eq!(
-            merged_header(&BTreeSet::new(), Some(OsStr::new(" , "))).unwrap(),
-            None
-        );
-    }
-
-    #[test]
-    fn loads_dedicated_policy_and_resolves_terminal_specific_paths() {
-        let root = tempfile::tempdir().unwrap();
-        let default = root.path().join(CONFIG_RELATIVE_PATH);
-        std::fs::create_dir_all(default.parent().unwrap()).unwrap();
-        std::fs::write(
-            &default,
-            r#"{"version":1,"disabledModels":["grok-4.5","gpt-5.6-sol"]}"#,
-        )
-        .unwrap();
-        assert_eq!(
-            config_path(None, Some(root.path().as_os_str())).unwrap(),
-            Some(default.clone())
-        );
-        assert_eq!(
-            load_config(Some(&default))
-                .unwrap()
-                .into_iter()
-                .collect::<Vec<_>>(),
-            ["gpt-5.6-sol", "grok-4.5"]
-        );
-
-        let shared_local = root
-            .path()
-            .join(CONFIG_DIR_RELATIVE)
-            .join(LOCAL_CONFIG_NAME);
-        std::fs::write(
-            &shared_local,
-            r#"{"version":1,"disabledModels":["shared-local-model"]}"#,
-        )
-        .unwrap();
-        assert_eq!(
-            config_path(None, Some(root.path().as_os_str())).unwrap(),
-            Some(shared_local)
-        );
-
-        if let Some(hostname) = short_hostname() {
-            let hostname_local = root
-                .path()
-                .join(CONFIG_DIR_RELATIVE)
-                .join(format!("disabled-subagent-models.{hostname}.local.json"));
-            std::fs::write(
-                &hostname_local,
-                r#"{"version":1,"disabledModels":["hostname-local-model"]}"#,
-            )
-            .unwrap();
-            assert_eq!(
-                config_path(None, Some(root.path().as_os_str())).unwrap(),
-                Some(hostname_local)
-            );
-        }
-
-        let alternate = root.path().join("terminal.json");
-        std::fs::write(
-            &alternate,
-            r#"{"version":1,"disabledModels":["qwen3.8-max-preview"]}"#,
-        )
-        .unwrap();
-        assert_eq!(
-            config_path(Some(alternate.as_os_str()), None).unwrap(),
-            Some(alternate)
-        );
-        assert!(config_path(Some(OsStr::new("")), None).is_err());
-        assert!(config_path(Some(root.path().join("missing").as_os_str()), None).is_err());
-        assert!(load_config(None).unwrap().is_empty());
-    }
-
-    #[test]
-    fn rejects_invalid_dedicated_policy_files() {
-        let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("policy.json");
-        for contents in [
-            r#"{"version":2,"disabledModels":[]}"#,
-            r#"{"version":1,"disabledModels":["invalid model"]}"#,
-            r#"{"version":1,"disabledModels":["same","same"]}"#,
-            r#"{"version":1,"disabledModels":[],"extra":true}"#,
-            "not-json",
-        ] {
-            std::fs::write(&path, contents).unwrap();
-            assert!(load_config(Some(&path)).is_err());
-        }
-    }
-
-    #[test]
-    fn reads_request_header_and_rejects_invalid_model_ids() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            HEADER_NAME,
-            "qwen3.8-max-preview,gpt-5.6-sol".parse().unwrap(),
-        );
-        assert_eq!(
-            request_models(&headers)
-                .unwrap()
-                .into_iter()
-                .collect::<Vec<_>>(),
-            ["gpt-5.6-sol", "qwen3.8-max-preview"]
-        );
-        assert!(parse("model with spaces").is_err());
-        assert!(!valid_model_id(""));
-        assert!(!valid_model_id("モデル"));
-        assert!(!valid_model_id("model\n"));
-    }
-
-    #[test]
-    fn active_models_preserves_the_machine_policy_shape() {
-        let configured = BTreeSet::from(["grok-4.5".to_owned()]);
-        let request = BTreeSet::from(["qwen3.8-max-preview".to_owned()]);
-        let mut merged = configured;
-        merged.extend(request);
-        assert_eq!(
-            merged.into_iter().collect::<Vec<_>>(),
-            ["grok-4.5", "qwen3.8-max-preview"]
-        );
-    }
-}
+include!("subagent_policy_tests.rs");

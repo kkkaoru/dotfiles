@@ -130,9 +130,9 @@ fn reuses_an_active_compatible_worker_instead_of_churning_sessions() {
     ]));
 
     assert!(
-        decision
-            .guidance(&scheduler.config())
-            .contains("Prefer reusing compatible completed workers via SendMessage")
+        decision.guidance(&scheduler.config()).contains(
+            "Prefer reusing compatible completed workers via Agent/Task resume=<agentId>"
+        )
     );
 }
 
