@@ -44,11 +44,11 @@ pub(in crate::anthropic) fn error_flow(event: &Value) -> Result<ControlFlow<()>>
 
 pub(super) async fn refresh_activity_keepalive(
     builder: &mut SegmentBuilder,
-    sender: &StreamSender,
+    sender: Option<&StreamSender>,
     mut deadline: Pin<&mut Sleep>,
     interval: Duration,
 ) -> Result<()> {
-    builder.activity_keepalive(Some(sender)).await?;
+    builder.activity_keepalive(sender).await?;
     deadline.as_mut().reset(Instant::now() + interval);
     Ok(())
 }

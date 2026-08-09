@@ -1,10 +1,7 @@
 use std::{ops::ControlFlow, sync::Arc, time::Duration};
 
 use anyhow::{Result, bail};
-use axum::{
-    body::{Body, Bytes},
-    http::Response,
-};
+use axum::{body::Body, http::Response};
 use serde_json::Value;
 use tokio::{sync::mpsc, time::sleep};
 
@@ -43,9 +40,9 @@ pub(super) use types::{StreamWaitInput, ToolCall, is_provider_stream_closed};
 use builder::SegmentBuilder;
 pub(in crate::anthropic) use control::commit_transcript;
 use control::refresh_activity_keepalive;
-use prepare::PreparedStream;
 #[cfg(test)]
 use prepare::prepare_with_activity;
+use prepare::{PreparedStream, prime_subagent_sse};
 
 pub(super) use control::{error_flow, turn_flow};
 #[cfg(test)]
@@ -69,12 +66,13 @@ impl Bridge {
     ) -> Response<Body> {
         let (sender, receiver) = mpsc::channel(256);
         let response_model = self.request_model(&request);
-        sender
-            .try_send(Ok(Bytes::from(message_start(
-                &response_model,
-                input_tokens,
-            ))))
-            .expect("new streaming response channel has capacity");
+        let primed_thinking = prime_subagent_sse(
+            &sender,
+            &response_model,
+            input_tokens,
+            is_subagent,
+            effort.as_deref(),
+        );
         tokio::spawn(
             Arc::clone(self).drive_prepared_subagent_stream(PreparedStream {
                 request,
@@ -84,6 +82,7 @@ impl Bridge {
                 is_subagent,
                 run_in_background,
                 sender,
+                primed_thinking,
             }),
         );
         sse_response(receiver)
@@ -98,6 +97,7 @@ impl Bridge {
         sender: &StreamSender,
         builder: SegmentBuilder,
     ) -> Result<StreamTurn> {
+        let activity_interval = ACTIVITY_KEEPALIVE_INTERVAL;
         self.wait_for_stream_segment_with_interval(StreamWaitInput {
             session,
             events,
@@ -105,7 +105,7 @@ impl Bridge {
             system,
             sender,
             builder,
-            activity_interval: ACTIVITY_KEEPALIVE_INTERVAL,
+            activity_interval,
         })
         .await
     }
@@ -129,12 +129,13 @@ impl Bridge {
         // Emit keepalive content during silence to avoid timeout while preserving
         // visible progress semantics during active output.
         let mut activity_deadline = Box::pin(sleep(activity_interval));
+        let mut sse = Some(sender);
         loop {
             let wait = match self
                 .wait_for_stream_event(
                     session,
                     Arc::clone(&events),
-                    sender,
+                    &mut sse,
                     &mut builder,
                     activity_interval,
                     &mut activity_deadline,
@@ -204,28 +205,53 @@ impl Bridge {
         &self,
         session: &Arc<Session>,
         events: Arc<crate::app_server::ThreadEvents>,
-        sender: &StreamSender,
+        sse: &mut Option<&StreamSender>,
         builder: &mut SegmentBuilder,
         activity_interval: Duration,
         activity_deadline: &mut std::pin::Pin<Box<tokio::time::Sleep>>,
     ) -> Result<StreamWaitResult> {
-        let next = tokio::select! {
-            biased;
-            () = sender.closed() => {
-                return Ok(StreamWaitResult::Done(Box::new(
-                    self.disconnect_stream(session, events).await,
-                )));
+        let next = if let Some(sender) = *sse {
+            tokio::select! {
+                biased;
+                () = sender.closed() => {
+                    *sse = None;
+                    if builder.is_subagent {
+                        tracing::info!(
+                            thread_id = %session.thread_id,
+                            "SubAgent SSE disconnected; continuing provider turn"
+                        );
+                        return Ok(StreamWaitResult::NoEvent);
+                    }
+                    return Ok(StreamWaitResult::Done(Box::new(
+                        self.disconnect_stream(session, events).await,
+                    )));
+                }
+                next = next_event(&events, builder.has_external_tool_calls()) => next,
+                () = &mut *activity_deadline => {
+                    refresh_activity_keepalive(
+                        builder,
+                        Some(sender),
+                        activity_deadline.as_mut(),
+                        activity_interval,
+                    )
+                    .await?;
+                    return Ok(StreamWaitResult::NoEvent);
+                }
             }
-            next = next_event(&events, builder.has_external_tool_calls()) => next,
-            () = &mut *activity_deadline => {
-                refresh_activity_keepalive(
-                    builder,
-                    sender,
-                    activity_deadline.as_mut(),
-                    activity_interval,
-                )
-                .await?;
-                return Ok(StreamWaitResult::NoEvent);
+        } else {
+            tokio::select! {
+                biased;
+                next = next_event(&events, builder.has_external_tool_calls()) => next,
+                () = &mut *activity_deadline => {
+                    refresh_activity_keepalive(
+                        builder,
+                        None,
+                        activity_deadline.as_mut(),
+                        activity_interval,
+                    )
+                    .await?;
+                    return Ok(StreamWaitResult::NoEvent);
+                }
             }
         };
         match next {
@@ -234,7 +260,7 @@ impl Bridge {
                 Ok(StreamWaitResult::Event(event))
             }
             NextEvent::ExternalBatchReady => Ok(StreamWaitResult::Done(Box::new(
-                self.external_batch_segment(session, events, builder, sender)
+                self.external_batch_segment(session, events, builder, *sse)
                     .await?,
             ))),
             NextEvent::Closed => bail!("app-server event stream closed"),
@@ -246,10 +272,18 @@ impl Bridge {
         session: &Arc<Session>,
         events: Arc<crate::app_server::ThreadEvents>,
         builder: &mut SegmentBuilder,
-        sender: &StreamSender,
+        sender: Option<&StreamSender>,
     ) -> Result<StreamTurn> {
-        let segment = builder.finish(Some(sender)).await?;
-        if sender.is_closed() {
+        let is_subagent = builder.is_subagent;
+        let segment = builder.finish(sender).await?;
+        let sse_open = sender.is_some_and(|sender| !sender.is_closed());
+        if !sse_open {
+            if is_subagent {
+                return Ok(StreamTurn::Segment {
+                    segment,
+                    provider_settled: false,
+                });
+            }
             return Ok(self.disconnect_stream(session, events).await);
         }
         // ACP-bridged Agent/spawn: cancel provider so Grok does not also native-spawn.
@@ -307,6 +341,33 @@ impl Bridge {
         } else {
             Ok(StreamEventState::Continue)
         }
+    }
+
+    async fn finish_completed_stream(
+        &self,
+        turn: crate::anthropic::ActiveTurn,
+        sender: &StreamSender,
+        segment: Segment,
+        provider_settled: bool,
+        is_subagent: bool,
+    ) {
+        if sender.is_closed() && is_subagent {
+            commit_transcript(&turn.session, turn.extras, &segment).await;
+            if provider_settled {
+                self.remove_session(&turn.session).await;
+            }
+            return;
+        }
+        if self
+            .finish_if_stream_closed(sender, &turn.session, &turn.events, provider_settled)
+            .await
+        {
+            return;
+        }
+        commit_transcript(&turn.session, turn.extras, &segment).await;
+        send_stream_completion(sender, &segment).await;
+        self.finish_if_stream_closed(sender, &turn.session, &turn.events, provider_settled)
+            .await;
     }
 
     async fn finish_if_stream_closed(

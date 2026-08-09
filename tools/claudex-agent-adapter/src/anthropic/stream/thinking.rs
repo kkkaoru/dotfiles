@@ -4,6 +4,8 @@ use uuid::Uuid;
 
 use super::{StreamSender, send_stream_frame};
 
+const HEARTBEAT: &str = "\u{200b}";
+
 #[derive(Default)]
 pub(super) struct ThinkingState {
     open: Option<OpenThinking>,
@@ -182,16 +184,52 @@ impl ThinkingState {
         .await
     }
 
+    pub(super) fn prime_silent_heartbeat(&mut self, blocks: &mut Vec<Value>) {
+        if self.open.is_some() {
+            return;
+        }
+        let index = blocks.len();
+        blocks.push(json!({
+            "type":"thinking",
+            "thinking": HEARTBEAT,
+            "signature":""
+        }));
+        self.open = Some(OpenThinking {
+            index,
+            item_id: "claudex_activity_keepalive".to_owned(),
+            summary_index: 0,
+            signature: thinking_signature("claudex_activity_keepalive"),
+            text: HEARTBEAT.to_owned(),
+        });
+    }
+
     pub(super) async fn activity_keepalive(
         &mut self,
         blocks: &mut Vec<Value>,
         stream: Option<&StreamSender>,
     ) -> Result<()> {
+        self.emit_activity_heartbeat(blocks, stream, false).await
+    }
+
+    /// Watchdog-only thinking tick. No canned "still working" status.
+    pub(super) async fn silent_activity_keepalive(
+        &mut self,
+        blocks: &mut Vec<Value>,
+        stream: Option<&StreamSender>,
+    ) -> Result<()> {
+        self.emit_activity_heartbeat(blocks, stream, true).await
+    }
+
+    async fn emit_activity_heartbeat(
+        &mut self,
+        blocks: &mut Vec<Value>,
+        stream: Option<&StreamSender>,
+        silent: bool,
+    ) -> Result<()> {
         // Keep emitting decoded deltas after text/tool_use. Spark/Codex
         // SubAgents often go silent during native tools once a Bash/WebSearch
         // block exists; stopping heartbeats here used to trip Claude Code's
         // 600s "stream watchdog did not recover".
-        const HEARTBEAT: &str = "\u{200b}";
         const STATUS: &str = "Claudex is still working; waiting for provider output\u{2026}";
         if self.open.as_ref().is_some_and(|open| {
             open.item_id != "claudex_activity_keepalive"
@@ -205,16 +243,18 @@ impl ThinkingState {
                 .await?;
         }
         let open = self.open.as_mut().expect("thinking block just opened");
-        let delta = if open.item_id == "claudex_activity_keepalive" && open.text.is_empty() {
-            STATUS
-        } else {
-            HEARTBEAT
-        };
+        let delta =
+            if !silent && open.item_id == "claudex_activity_keepalive" && open.text.is_empty() {
+                STATUS
+            } else {
+                HEARTBEAT
+            };
         open.text.push_str(delta);
         blocks[open.index]["thinking"] = json!(open.text);
         send_stream_frame(stream, "content_block_delta", || {
             json!({
-                "type":"content_block_delta", "index":open.index,
+                "type":"content_block_delta",
+                "index":open.index,
                 "delta":{"type":"thinking_delta","thinking":delta}
             })
         })
@@ -268,7 +308,10 @@ fn summary_delta(event: &Value) -> Option<(&str, i64, &str)> {
 }
 
 pub(super) fn has_visible_output(blocks: &[Value]) -> bool {
-    blocks
-        .iter()
-        .any(|block| block.get("type").and_then(Value::as_str) != Some("thinking"))
+    blocks.iter().any(|block| {
+        !matches!(
+            block.get("type").and_then(Value::as_str),
+            Some("thinking") | Some("server_tool_use")
+        )
+    })
 }

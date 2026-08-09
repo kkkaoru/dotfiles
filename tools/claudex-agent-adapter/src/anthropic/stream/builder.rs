@@ -19,6 +19,7 @@ mod batch;
 mod external_tool;
 mod progress;
 mod provider_launch;
+mod server_chrome;
 mod visibility;
 #[path = "web_provenance.rs"]
 mod web_provenance;
@@ -33,9 +34,8 @@ pub(in crate::anthropic) struct SegmentBuilder {
     /// thinking; streaming `text_delta` now would hide the panel until finish.
     pub(super) pending_answer: String,
     pub(super) is_subagent: bool,
-    /// Command Code SubAgent: paint ●/▶/keepalive as live `text_delta`.
-    /// Claude Code 2.1 collapses open thinking into "Doing…"; status must not
-    /// ride that chrome.
+    /// Command Code SubAgent: native thinking/`?` elapsed + `server_tool_use`
+    /// cards. Do not dump canned ▶/still-working text chrome.
     paint_command_code_progress: bool,
     turn_started_at: Instant,
     external_tool_calls: usize,
@@ -48,6 +48,8 @@ pub(in crate::anthropic) struct SegmentBuilder {
     /// Cursor MCP launch callIds seen with empty args. Later generic
     /// `provider tool` updates for these ids still consult the MCP launch queue.
     mcp_provider_call_ids: Vec<String>,
+    /// Command Code `server_tool_use` cards (`call_id`, `srvtoolu_…`, name).
+    cc_server_tools: Vec<(String, String, &'static str)>,
     requires_verified_web_evidence: bool,
     /// Completed provider-native web calls whose provenance has already been
     /// counted. A provider may repeat its final ToolCallUpdate while reconnecting.
@@ -70,6 +72,7 @@ impl SegmentBuilder {
             provider_tool_calls: Vec::new(),
             bridged_provider_launch_ids: Vec::new(),
             mcp_provider_call_ids: Vec::new(),
+            cc_server_tools: Vec::new(),
             requires_verified_web_evidence: false,
             verified_web_evidence_call_ids: Vec::new(),
             injected_output_tokens: 0,
@@ -98,8 +101,17 @@ impl SegmentBuilder {
             )
     }
 
-    pub(super) fn paints_progress_as_text(&self) -> bool {
+    pub(super) fn is_command_code_subagent(&self) -> bool {
         self.is_subagent && self.paint_command_code_progress
+    }
+
+    pub(super) fn paints_progress_as_text(&self) -> bool {
+        self.is_command_code_subagent()
+    }
+
+    pub(super) fn with_primed_thinking(mut self) -> Self {
+        self.thinking.prime_silent_heartbeat(&mut self.blocks);
+        self
     }
 
     pub(super) fn has_external_tool_calls(&self) -> bool {

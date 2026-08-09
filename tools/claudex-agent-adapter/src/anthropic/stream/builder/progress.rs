@@ -10,25 +10,23 @@ use crate::anthropic::stream::{
 };
 
 impl SegmentBuilder {
-    /// Stream ACP/Cursor/Qwen tool progress without executable `tool_use`.
+    /// Stream ACP/Cursor/Qwen/Command Code tool progress without executable `tool_use`.
     ///
     /// SubAgent panels paint live thinking chrome and hide assistant text until
     /// end_turn. Qwen often emits `AgentMessageChunk` before `ToolCall`; the old
     /// path then appended ▶ to `text_delta`, so the panel stayed on
-    /// "Thought for Xs" + spinner. Always paint ▶/✓/✗ as `thinking_delta`.
-    /// Command Code is the exception: Claude Code 2.1 collapses open thinking
-    /// into "Doing…", so ●/▶ ride live `text_delta` instead.
+    /// "Thought for Xs" + spinner. Always paint ▶/✓/✗ as `thinking_delta`,
+    /// except Command Code: canned ▶/✓/still-working dumps fight Claude Code's
+    /// native thinking/`?` elapsed UI. Web tools use `server_tool_use`; native
+    /// thought/prose ride AgentThought / AgentMessage.
     /// `sanitize_committed_blocks` still strips those markers from the transcript.
     pub(in crate::anthropic::stream) async fn stream_progress_text(
         &mut self,
         delta: &str,
         stream: Option<&StreamSender>,
     ) -> Result<()> {
-        if delta.is_empty() {
+        if delta.is_empty() || self.is_command_code_subagent() {
             return Ok(());
-        }
-        if self.paints_progress_as_text() {
-            return self.stream_answer_delta(delta, stream).await;
         }
         self.close_text_block(stream).await?;
         self.thinking
@@ -61,10 +59,9 @@ impl SegmentBuilder {
             return self.stream_progress_text(delta, stream).await;
         }
         if self.is_subagent {
-            if is_command_code_item(event) || self.paints_progress_as_text() {
-                // Command Code Muse Spark used to dump the whole answer into
-                // thinking, so the parent Task card stayed on Orbiting/Doing.
-                // Stream assistant prose and ●/▶ status as live text.
+            if self.paints_progress_as_text() {
+                // Native Command Code prose stays text. ●/▶ status lines already
+                // diverted to stream_progress_text (no-op for CC).
                 return self.stream_answer_delta(delta, stream).await;
             }
             // SubAgent TUI hides text_delta until end_turn. Cline/Qwen narrate
@@ -106,8 +103,7 @@ impl SegmentBuilder {
         status: &str,
         stream: Option<&StreamSender>,
     ) -> Result<()> {
-        if self.paints_progress_as_text() {
-            // Native cmd text/tools are the progress; do not invent start chrome.
+        if self.is_command_code_subagent() {
             return Ok(());
         }
         self.thinking
@@ -119,22 +115,17 @@ impl SegmentBuilder {
         &mut self,
         stream: Option<&StreamSender>,
     ) -> Result<()> {
+        if self.is_command_code_subagent() {
+            return self
+                .thinking
+                .silent_activity_keepalive(&mut self.blocks, stream)
+                .await;
+        }
         if self.is_subagent {
             let last_tool = self
                 .provider_tool_calls
                 .last()
                 .map(|(_, title)| compact_keepalive_title(title));
-            if self.paints_progress_as_text() {
-                return self
-                    .stream_answer_delta(
-                        &elapsed_keepalive_line(
-                            self.turn_started_at.elapsed(),
-                            last_tool.as_deref(),
-                        ),
-                        stream,
-                    )
-                    .await;
-            }
             return self
                 .thinking
                 .elapsed_keepalive(
@@ -188,31 +179,6 @@ async fn send_activity_heartbeat(
         })
     })
     .await
-}
-
-fn is_command_code_item(event: &Value) -> bool {
-    event
-        .pointer("/params/itemId")
-        .and_then(Value::as_str)
-        .is_some_and(|id| {
-            let lower = id.to_ascii_lowercase();
-            lower.contains("command-code") || lower.contains("muse-spark")
-        })
-}
-
-fn elapsed_keepalive_line(elapsed: std::time::Duration, last_tool: Option<&str>) -> String {
-    let secs = elapsed.as_secs().max(1);
-    let label = if secs < 60 {
-        format!("{secs}s")
-    } else {
-        format!("{}m", secs / 60)
-    };
-    let tool = last_tool
-        .map(str::trim)
-        .filter(|title| !title.is_empty())
-        .map(|title| format!(" · last: {title}"))
-        .unwrap_or_default();
-    format!("\n… still working ({label}){tool}\n")
 }
 
 fn compact_keepalive_title(title: &str) -> String {

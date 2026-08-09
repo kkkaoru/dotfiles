@@ -2,9 +2,8 @@
 //!
 //! SubAgent TUI shows `thinking_delta` live and often hides `text_delta` until
 //! `end_turn`. Cline/Qwen/Cursor progress must therefore arrive as thinking
-//! frames before `finish` / `message_stop`. Command Code is the opposite:
-//! Claude Code 2.1 collapses open thinking into Doing/Orbiting, so ●/▶ and
-//! answers stream as live `text_delta` instead.
+//! frames before `finish` / `message_stop`. Command Code uses native thinking
+//! (`?` / Thought-for-Xs) plus display-only `server_tool_use`, not dumped ▶ text.
 
 use axum::body::Bytes;
 use serde_json::Value;

@@ -3,11 +3,14 @@ use std::{future::Future, sync::Arc, time::Duration};
 use anyhow::Result;
 use tokio::time::{Instant, sleep};
 
+use axum::body::Bytes;
+use serde_json::json;
+
 use super::super::model_concurrency::{ModelPermit, Ticket, is_concurrency_admission_timeout};
-use super::super::{Bridge, MessagesRequest, request_routing::RouteDecision};
+use super::super::{Bridge, MessagesRequest, content::sse, request_routing::RouteDecision};
 use super::{
     ACTIVITY_KEEPALIVE_INTERVAL, INITIAL_ACTIVITY_DELAY, SegmentBuilder, StreamSender,
-    send_stream_error,
+    message_start, send_stream_error,
 };
 
 pub(super) struct PreparedStream {
@@ -18,6 +21,7 @@ pub(super) struct PreparedStream {
     pub(super) is_subagent: bool,
     pub(super) run_in_background: bool,
     pub(super) sender: StreamSender,
+    pub(super) primed_thinking: bool,
 }
 
 pub(super) fn subagent_start_status(
@@ -25,12 +29,53 @@ pub(super) fn subagent_start_status(
     model: &str,
     effort: Option<&str>,
 ) -> Option<String> {
-    is_subagent.then(|| {
-        format!(
-            "SubAgent starting: {model} (effort={}); preparing provider session\u{2026}",
-            effort.unwrap_or("configured")
-        )
-    })
+    if !is_subagent || crate::command_code_acp::is_command_code_model(model) {
+        return None;
+    }
+    let effort = effort.unwrap_or("configured");
+    Some(format!(
+        "SubAgent starting: {model} (effort={effort}); preparing provider session\u{2026}"
+    ))
+}
+
+pub(super) fn prime_subagent_sse(
+    sender: &StreamSender,
+    model: &str,
+    input_tokens: u64,
+    is_subagent: bool,
+    _effort: Option<&str>,
+) -> bool {
+    sender
+        .try_send(Ok(Bytes::from(message_start(model, input_tokens))))
+        .expect("new streaming response channel has capacity");
+    if !is_subagent || !crate::command_code_acp::is_command_code_model(model) {
+        return false;
+    }
+    for frame in command_code_thinking_prime_sse() {
+        let _ = sender.try_send(Ok(Bytes::from(frame)));
+    }
+    true
+}
+
+fn command_code_thinking_prime_sse() -> [String; 2] {
+    [
+        sse(
+            "content_block_start",
+            json!({
+                "type":"content_block_start",
+                "index":0,
+                "content_block":{"type":"thinking","thinking":"","signature":""}
+            }),
+        ),
+        sse(
+            "content_block_delta",
+            json!({
+                "type":"content_block_delta",
+                "index":0,
+                "delta":{"type":"thinking_delta","thinking":"\u{200b}"}
+            }),
+        ),
+    ]
 }
 
 pub(super) async fn prepare_with_activity<F, T>(
@@ -42,6 +87,7 @@ pub(super) async fn prepare_with_activity<F, T>(
     interval: Duration,
     is_subagent: bool,
     paint_command_code_progress: bool,
+    primed_thinking: bool,
 ) -> (Result<Option<T>>, SegmentBuilder)
 where
     F: Future<Output = Result<T>>,
@@ -49,7 +95,10 @@ where
     let mut builder = SegmentBuilder::new(input_tokens)
         .with_subagent(is_subagent)
         .with_command_code_progress(paint_command_code_progress);
-    if let Some(status) = initial_status
+    let mut sse_open = true;
+    if primed_thinking {
+        builder = builder.with_primed_thinking();
+    } else if let Some(status) = initial_status
         && let Err(error) = builder.subagent_start_status(status, Some(sender)).await
     {
         return (Err(error), builder);
@@ -59,9 +108,17 @@ where
     loop {
         let result = tokio::select! {
             biased;
-            () = sender.closed() => return (Ok(None), builder),
+            () = sender.closed(), if sse_open => {
+                if !is_subagent {
+                    return (Ok(None), builder);
+                }
+                // Claude Code often drops SubAgent SSE immediately after
+                // message_start. Keep preparing so ACP/cmd is not torn down.
+                sse_open = false;
+                continue;
+            }
             result = &mut prepare => return (result.map(Some), builder),
-            () = &mut deadline => builder.activity_keepalive(Some(sender)).await,
+            () = &mut deadline => builder.activity_keepalive(sse_open.then_some(sender)).await,
         };
         if let Err(error) = result {
             return (Err(error), builder);
@@ -80,6 +137,7 @@ impl Bridge {
             is_subagent,
             run_in_background,
             sender,
+            primed_thinking,
         } = prepared;
         self.reticket_saturated_subagent(
             &mut request,
@@ -89,9 +147,13 @@ impl Bridge {
         );
         let _active_subagent =
             is_subagent.then(|| self.active_subagent_models.acquire(&request.model));
-        let start_status = subagent_start_status(is_subagent, &request.model, effort.as_deref());
         let paint_command_code_progress =
             is_subagent && crate::command_code_acp::is_command_code_model(&request.model);
+        let start_status = (!primed_thinking)
+            .then(|| subagent_start_status(is_subagent, &request.model, effort.as_deref()))
+            .flatten();
+        let first_delay = INITIAL_ACTIVITY_DELAY;
+        let interval = ACTIVITY_KEEPALIVE_INTERVAL;
         let prepare = async {
             let permit = self
                 .acquire_prepared_permit(&mut request, &mut effort, concurrency_ticket, is_subagent)
@@ -104,10 +166,11 @@ impl Bridge {
             input_tokens,
             &sender,
             start_status.as_deref(),
-            INITIAL_ACTIVITY_DELAY,
-            ACTIVITY_KEEPALIVE_INTERVAL,
+            first_delay,
+            interval,
             is_subagent,
             paint_command_code_progress,
+            primed_thinking,
         )
         .await;
         match turn {

@@ -44,6 +44,11 @@ impl SegmentBuilder {
         if !is_new {
             return Ok(());
         }
+        self.emit_command_code_server_tool(call_id, name, params.get("arguments"), stream)
+            .await?;
+        if self.is_command_code_subagent() {
+            return Ok(());
+        }
         self.stream_progress_text(&progress_start_line(title, params.get("arguments")), stream)
             .await
     }
@@ -78,14 +83,18 @@ impl SegmentBuilder {
             "failed" => {
                 let detail = failure_preview(params.get("output"));
                 let preview = truncate_for_status(&detail, FAILED_STATUS_PREVIEW_CHAR_LIMIT);
-                self.stream_progress_text(&format!("\n✗ {short_title}: {preview}\n"), stream)
-                    .await?;
+                if !self.is_command_code_subagent() {
+                    self.stream_progress_text(&format!("\n✗ {short_title}: {preview}\n"), stream)
+                        .await?;
+                }
             }
             // Success: marker only. Dumping stdout/JSON here flooded the TUI and
             // made long Grok/Cursor turns look frozen on a wall of tool logs.
             "completed" => {
-                self.stream_progress_text(&format!("\n✓ {short_title}\n"), stream)
-                    .await?;
+                if !self.is_command_code_subagent() {
+                    self.stream_progress_text(&format!("\n✓ {short_title}\n"), stream)
+                        .await?;
+                }
             }
             "pending" | "in_progress" => {
                 self.start_provider_tool_from_update(call_id, &title, params, stream)
@@ -107,6 +116,16 @@ impl SegmentBuilder {
             return Ok(());
         };
         if !self.remember_provider_tool(call_id, title) {
+            return Ok(());
+        }
+        let tool = params
+            .get("tool")
+            .and_then(Value::as_str)
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or(title);
+        self.emit_command_code_server_tool(call_id, tool, params.get("arguments"), stream)
+            .await?;
+        if self.is_command_code_subagent() {
             return Ok(());
         }
         self.stream_progress_text(&progress_start_line(title, params.get("arguments")), stream)

@@ -2,10 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use anyhow::anyhow;
 
-use super::{
-    SegmentBuilder, StreamSender, StreamTurn, commit_transcript, send_stream_completion,
-    send_stream_error,
-};
+use super::{SegmentBuilder, StreamSender, StreamTurn, send_stream_error};
 use crate::anthropic::{
     ActiveTurn, Bridge,
     model_concurrency::ModelPermit,
@@ -154,7 +151,7 @@ impl Bridge {
                 segment,
                 provider_settled,
             }) => {
-                self.finish_completed_stream(turn, &sender, segment, provider_settled)
+                self.finish_completed_stream(turn, &sender, segment, provider_settled, is_subagent)
                     .await
             }
             Ok(StreamTurn::ContextWindow { error, builder }) => {
@@ -249,25 +246,6 @@ impl Bridge {
                 send_stream_error(&sender, retry_error).await;
             }
         }
-    }
-
-    async fn finish_completed_stream(
-        &self,
-        turn: ActiveTurn,
-        sender: &StreamSender,
-        segment: crate::anthropic::Segment,
-        provider_settled: bool,
-    ) {
-        if self
-            .finish_if_stream_closed(sender, &turn.session, &turn.events, provider_settled)
-            .await
-        {
-            return;
-        }
-        commit_transcript(&turn.session, turn.extras, &segment).await;
-        send_stream_completion(sender, &segment).await;
-        self.finish_if_stream_closed(sender, &turn.session, &turn.events, provider_settled)
-            .await;
     }
 
     async fn retry_context_stream(self: Arc<Self>, input: ContextRetryStream) {
