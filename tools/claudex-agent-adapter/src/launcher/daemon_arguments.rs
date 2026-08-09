@@ -6,6 +6,18 @@ use super::AdapterOptions;
 
 pub(super) fn daemon_arguments(options: &AdapterOptions) -> Vec<OsString> {
     let mut arguments = vec!["serve".into()];
+    arguments.extend(option_arguments(options));
+    arguments
+}
+
+pub(super) fn hot_swap_wait_arguments(options: &AdapterOptions) -> Vec<OsString> {
+    let mut arguments = vec!["hot-swap".into(), "--wait-idle".into()];
+    arguments.extend(option_arguments(options));
+    arguments
+}
+
+fn option_arguments(options: &AdapterOptions) -> Vec<OsString> {
+    let mut arguments = Vec::new();
     if !options.model.is_empty() {
         arguments.push("--model".into());
         arguments.push(options.model.clone().into());

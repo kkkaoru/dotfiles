@@ -1,5 +1,6 @@
 use std::{
     fs,
+    os::unix::process::ExitStatusExt,
     path::{Path, PathBuf},
     process::{Command, ExitStatus},
     time::{Duration, SystemTime},
@@ -8,6 +9,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 
 const COVERAGE_TARGET_PREFIX: &str = "llvm-cov-";
+const LLVM_COV_REPORT_THREADS: &str = "--threads=1 --num-threads=1";
 // Failed reports remain available briefly for diagnosis, then a later coverage
 // run reclaims their multi-gigabyte instrumented target directories.
 pub(super) const COVERAGE_ARTIFACT_RETENTION: Duration = Duration::from_secs(10 * 60);
@@ -108,9 +110,15 @@ pub(super) fn command_status(
     target: &Path,
     arguments: &[String],
 ) -> Result<ExitStatus> {
-    coverage_command(root, target, arguments)
+    let mut status = coverage_command(root, target, arguments)
         .status()
-        .context("failed to run cargo")
+        .context("failed to run cargo")?;
+    if should_retry_llvm_cov_export(arguments, status) {
+        status = coverage_command(root, target, arguments)
+            .status()
+            .context("failed to retry cargo llvm-cov export")?;
+    }
+    Ok(status)
 }
 
 pub(super) fn coverage_command(root: &Path, target: &Path, arguments: &[String]) -> Command {
@@ -118,8 +126,17 @@ pub(super) fn coverage_command(root: &Path, target: &Path, arguments: &[String])
     command
         .args(arguments)
         .current_dir(root)
-        .env("CARGO_LLVM_COV_TARGET_DIR", target);
+        .env("CARGO_LLVM_COV_TARGET_DIR", target)
+        // llvm-cov --branch export can SIGSEGV in
+        // CoverageMapping::getInstantiationGroups when it fans out. Keep the
+        // report single-threaded so the gate does not flake on Apple Silicon.
+        .env("LLVM_COV_FLAGS", LLVM_COV_REPORT_THREADS)
+        .env("LLVM_COV_NUM_THREADS", "1");
     command
+}
+
+pub(super) fn should_retry_llvm_cov_export(arguments: &[String], status: ExitStatus) -> bool {
+    status.signal() == Some(libc::SIGSEGV) && arguments.iter().any(|argument| argument == "--json")
 }
 
 pub(super) fn run_commands(

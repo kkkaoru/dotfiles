@@ -136,6 +136,7 @@ fn audits_control_flow_hidden_from_clippy_nesting() {
     build_support::collect_rust_files(&root.join("src"), &mut files);
     let sources = files
         .iter()
+        .filter(|path| !build_support::is_test_source(path))
         .map(|path| fs::read_to_string(path).expect("read production source"))
         .collect::<Vec<_>>();
     assert!(

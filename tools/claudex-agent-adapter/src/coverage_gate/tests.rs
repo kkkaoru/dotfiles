@@ -49,6 +49,48 @@ fn assigns_each_gate_process_an_isolated_llvm_cov_target() {
             .and_then(|(_, value)| value),
         Some(target.as_os_str())
     );
+    assert_eq!(
+        command
+            .get_envs()
+            .find(|(name, _)| *name == "LLVM_COV_FLAGS")
+            .and_then(|(_, value)| value),
+        Some(std::ffi::OsStr::new("--threads=1 --num-threads=1"))
+    );
+    assert_eq!(
+        command
+            .get_envs()
+            .find(|(name, _)| *name == "LLVM_COV_NUM_THREADS")
+            .and_then(|(_, value)| value),
+        Some(std::ffi::OsStr::new("1"))
+    );
+}
+
+#[test]
+fn retries_only_segfaulted_llvm_cov_json_export() {
+    use super::runner::should_retry_llvm_cov_export;
+
+    let json = [
+        "+nightly".to_owned(),
+        "llvm-cov".to_owned(),
+        "--json".to_owned(),
+    ];
+    let clean = [
+        "+nightly".to_owned(),
+        "llvm-cov".to_owned(),
+        "clean".to_owned(),
+    ];
+    assert!(should_retry_llvm_cov_export(
+        &json,
+        std::process::ExitStatus::from_raw(libc::SIGSEGV)
+    ));
+    assert!(!should_retry_llvm_cov_export(
+        &clean,
+        std::process::ExitStatus::from_raw(libc::SIGSEGV)
+    ));
+    assert!(!should_retry_llvm_cov_export(
+        &json,
+        std::process::ExitStatus::from_raw(1 << 8)
+    ));
 }
 
 #[test]

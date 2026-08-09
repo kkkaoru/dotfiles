@@ -23,6 +23,7 @@ mod handover;
 mod health;
 mod launcher_lock;
 mod launcher_logs;
+mod pending_hot_swap;
 mod preflight;
 mod program_identity;
 mod recovery;
@@ -35,7 +36,7 @@ use crate::{
 };
 use claude_process::ClaudeProcess;
 #[cfg(test)]
-use daemon_arguments::daemon_arguments;
+use daemon_arguments::{daemon_arguments, hot_swap_wait_arguments};
 use daemon_arguments::{
     route_descriptions, search_worker_route_descriptions, worker_route_descriptions,
 };
@@ -159,15 +160,23 @@ pub(crate) fn recovery_generation() -> Option<String> {
 
 pub async fn ensure_running(options: AdapterOptions) -> Result<String> {
     let config = ServiceConfig::new(options)?;
-    ensure::run(&config, false).await
+    ensure::run(&config, ensure::Mode::Ensure).await
 }
 
 /// Replace an idle listener in place, even when a `launch` TUI is attached.
-/// Unlike `ensure`, this drain-waits for active work and times out instead of
-/// starting a fallback listener.
-pub async fn hot_swap(options: AdapterOptions) -> Result<String> {
+/// Busy listeners drain briefly, then a detached waiter swaps the same port
+/// once idle instead of timing out.
+pub async fn hot_swap(options: AdapterOptions, wait_idle: bool) -> Result<String> {
     let config = ServiceConfig::new(options)?;
-    ensure::run(&config, true).await
+    ensure::run(
+        &config,
+        if wait_idle {
+            ensure::Mode::WaitIdle
+        } else {
+            ensure::Mode::HotSwap
+        },
+    )
+    .await
 }
 
 pub async fn run_claude(
@@ -200,7 +209,7 @@ pub async fn run_claude(
     } else {
         None
     };
-    let base_url = ensure::run(&config, false).await?;
+    let base_url = ensure::run(&config, ensure::Mode::Ensure).await?;
     let session_id = session_id_for_launch(&arguments, || {
         format!("session_{}", Uuid::new_v4().simple())
     });

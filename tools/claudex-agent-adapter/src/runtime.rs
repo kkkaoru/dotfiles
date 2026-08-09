@@ -16,7 +16,7 @@ mod shutdown;
 enum RuntimeCommand {
     BuildId,
     Ensure(AdapterOptions),
-    HotSwap(AdapterOptions),
+    HotSwap(AdapterOptions, bool),
     Launch(AdapterOptions, Vec<OsString>, bool),
     McpClaudexLaunch,
     Serve(AdapterOptions),
@@ -38,8 +38,8 @@ pub async fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<i32> {
             println!("{}", launcher::ensure_running(options).await?);
             0
         }
-        RuntimeCommand::HotSwap(options) => {
-            println!("{}", launcher::hot_swap(options).await?);
+        RuntimeCommand::HotSwap(options, wait_idle) => {
+            println!("{}", launcher::hot_swap(options, wait_idle).await?);
             0
         }
         RuntimeCommand::Launch(options, arguments, inherit_claude_model) => {
@@ -71,10 +71,11 @@ fn parse_command(mut arguments: VecDeque<OsString>) -> Result<RuntimeCommand> {
             Ok(RuntimeCommand::Ensure(options.adapter))
         }
         "hot-swap" => {
+            let wait_idle = take_flag(&mut arguments, "--wait-idle");
             let options = parse_options(&mut arguments)?;
             reject_inherit_model(&options, "hot-swap")?;
             reject_remaining(&arguments)?;
-            Ok(RuntimeCommand::HotSwap(options.adapter))
+            Ok(RuntimeCommand::HotSwap(options.adapter, wait_idle))
         }
         "launch" => {
             let options = parse_options(&mut arguments)?;
@@ -307,6 +308,17 @@ fn reject_remaining(arguments: &VecDeque<OsString>) -> Result<()> {
         return Ok(());
     }
     bail!("unexpected arguments after adapter options")
+}
+
+fn take_flag(arguments: &mut VecDeque<OsString>, flag: &str) -> bool {
+    arguments
+        .iter()
+        .position(|value| value == flag)
+        .map(|index| {
+            arguments.remove(index);
+            true
+        })
+        .unwrap_or(false)
 }
 
 fn utf8(value: Option<OsString>, name: &str) -> Result<String> {

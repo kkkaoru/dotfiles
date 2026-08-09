@@ -81,6 +81,14 @@ pub(crate) fn adapter_lock_path(cache: &Path, listen: &SocketAddr) -> PathBuf {
     cache.join(format!("adapter.port-{}.lock", listen.port()))
 }
 
+pub(crate) fn pending_hot_swap_state_path(cache: &Path, listen: &SocketAddr) -> PathBuf {
+    cache.join(format!("pending-hot-swap.{}.json", listen_token(listen)))
+}
+
+pub(crate) fn pending_hot_swap_log_path(cache: &Path, listen: &SocketAddr) -> PathBuf {
+    cache.join(format!("pending-hot-swap.{}.log", listen_token(listen)))
+}
+
 pub(crate) fn session_lock_path(cache: &Path, session_id: &str) -> PathBuf {
     let mut hasher = DefaultHasher::new();
     session_id.hash(&mut hasher);

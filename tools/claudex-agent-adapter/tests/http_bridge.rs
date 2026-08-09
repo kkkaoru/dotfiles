@@ -859,11 +859,11 @@ async fn configured_advisor_does_not_create_an_internal_tool() {
         }),
     )
     .await;
+    let text = advisor["content"][0]["text"].as_str().unwrap_or_default();
     assert!(
-        advisor["content"][0]["text"]
-            .as_str()
-            .unwrap()
-            .contains("was not supplied by Claude Code and was not executed")
+        text.contains("was not supplied by Claude Code and was not executed")
+            || text.contains("advisor() is main-session only and was not executed"),
+        "{text}"
     );
 }
 

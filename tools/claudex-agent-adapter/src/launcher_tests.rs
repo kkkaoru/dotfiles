@@ -8,6 +8,7 @@ mod tests {
     #[cfg(unix)]
     use std::os::unix::process::CommandExt as _;
     use std::{
+        collections::BTreeMap,
         io::{Read, Write},
         net::{SocketAddr, TcpListener},
         path::Path,
@@ -246,6 +247,16 @@ mod tests {
             .map(|argument| argument.into_string().expect("UTF-8 argument"))
             .collect::<Vec<_>>();
         assert_eq!(arguments.first().map(String::as_str), Some("serve"));
+        let wait_arguments = hot_swap_wait_arguments(&config.options)
+            .into_iter()
+            .map(|argument| argument.into_string().expect("UTF-8 argument"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            wait_arguments
+                .get(..2)
+                .map(|prefix| prefix.iter().map(String::as_str).collect::<Vec<_>>()),
+            Some(vec!["hot-swap", "--wait-idle"])
+        );
         assert!(!arguments.iter().any(|argument| argument == "--model"));
         assert!(
             arguments.windows(2).any(|pair| {
@@ -275,6 +286,7 @@ mod tests {
             recovery_generation: None,
             active_http_requests: 0,
             active_provider_turns: 0,
+            active_subagent_models: BTreeMap::new(),
         }
     }
 
@@ -423,6 +435,20 @@ mod tests {
             handover::ServiceState::Start
         );
 
+        let mut occupied_silent = config();
+        let silent = TcpListener::bind("127.0.0.1:0").expect("silent listener");
+        occupied_silent.options.listen = silent.local_addr().expect("silent address");
+        assert_eq!(
+            handover::inspect_service_with(&client, &occupied_silent).await,
+            handover::ServiceState::Defer {
+                pid: None,
+                active_http_requests: 0,
+                active_provider_turns: 0,
+                active_subagents: 0,
+            }
+        );
+        drop(silent);
+
         let mut reusable = config();
         let listener = TcpListener::bind("127.0.0.1:0").expect("reuse listener");
         reusable.options.listen = listener.local_addr().expect("reuse address");
@@ -465,6 +491,7 @@ mod tests {
                 pid: Some(42),
                 active_http_requests: 0,
                 active_provider_turns: 1,
+                active_subagents: 0,
             }
         );
         server.join().expect("active server");
@@ -495,9 +522,29 @@ mod tests {
                 pid: Some(42),
                 active_http_requests: 1,
                 active_provider_turns: 0,
+                active_subagents: 0,
             }
         );
         server.join().expect("hot-swap busy server");
+
+        let mut subagent_busy = healthy(&reusable);
+        subagent_busy.build_id = "old-build".to_owned();
+        subagent_busy
+            .active_subagent_models
+            .insert("auto".to_owned(), 2);
+        let listener = TcpListener::bind("127.0.0.1:0").expect("subagent busy listener");
+        reusable.options.listen = listener.local_addr().expect("subagent busy address");
+        let server = serve_responses(listener, vec![health_response(&subagent_busy)]);
+        assert_eq!(
+            handover::inspect_service_with(&client, &reusable).await,
+            handover::ServiceState::Defer {
+                pid: Some(42),
+                active_http_requests: 0,
+                active_provider_turns: 0,
+                active_subagents: 2,
+            }
+        );
+        server.join().expect("subagent busy server");
 
         let listener = TcpListener::bind("127.0.0.1:0").expect("authentication listener");
         reusable.options.listen = listener.local_addr().expect("authentication address");
@@ -516,6 +563,31 @@ mod tests {
             }
         );
         server.join().expect("authentication server");
+    }
+
+    #[tokio::test]
+    async fn hot_swap_arms_an_idle_waiter_instead_of_timing_out_while_busy() {
+        let root = tempfile::tempdir().expect("hot-swap waiter fixture");
+        let mut busy = config();
+        let listener = TcpListener::bind("127.0.0.1:0").expect("busy listener");
+        busy.options.listen = listener.local_addr().expect("busy address");
+        busy.log_path = root.path().join("adapter.log");
+        busy.lock_path = root.path().join("adapter.lock");
+        let mut health = healthy(&busy);
+        health.build_id = "old-build".to_owned();
+        health.active_http_requests = 1;
+        let server = serve_responses(listener, vec![health_response(&health)]);
+        let _spawn = pending_hot_swap::TestSpawnPid::arm(4242);
+        let url = ensure::run(&busy, ensure::Mode::HotSwap)
+            .await
+            .expect("busy hot-swap should arm a waiter instead of timing out");
+        assert_eq!(url, busy.base_url());
+        let pending = pending_hot_swap::read_state_for_tests(&busy)
+            .expect("read pending hot-swap")
+            .expect("pending hot-swap state");
+        assert_eq!(pending.pid, 4242);
+        assert_eq!(pending.build_id, env!("CLAUDEX_BUILD_ID"));
+        server.join().expect("busy hot-swap server");
     }
 
     #[tokio::test]
@@ -725,6 +797,7 @@ mod tests {
                 "recovery_generation": health.recovery_generation,
                 "active_http_requests": health.active_http_requests,
                 "active_provider_turns": health.active_provider_turns,
+                "active_subagent_models": health.active_subagent_models,
             })
             .to_string(),
         )

@@ -1,4 +1,7 @@
-use std::time::{Duration, Instant};
+use std::{
+    net::TcpStream,
+    time::{Duration, Instant},
+};
 
 use anyhow::{Result, bail};
 
@@ -16,6 +19,7 @@ pub(super) enum ServiceState {
         pid: Option<u32>,
         active_http_requests: usize,
         active_provider_turns: usize,
+        active_subagents: usize,
     },
     Replace {
         pid: Option<u32>,
@@ -24,7 +28,10 @@ pub(super) enum ServiceState {
     Start,
 }
 
+#[cfg(not(test))]
 const HOT_SWAP_DRAIN_TIMEOUT: Duration = Duration::from_secs(45);
+#[cfg(test)]
+const HOT_SWAP_DRAIN_TIMEOUT: Duration = Duration::from_millis(0);
 const HOT_SWAP_DRAIN_POLL: Duration = Duration::from_millis(250);
 
 pub(super) async fn inspect_service(
@@ -39,7 +46,16 @@ pub(super) async fn inspect_service_with(
     config: &ServiceConfig,
 ) -> ServiceState {
     let Some(health) = fetch_health(client, config).await else {
-        return ServiceState::Start;
+        return if listener_is_bound(config) {
+            ServiceState::Defer {
+                pid: None,
+                active_http_requests: 0,
+                active_provider_turns: 0,
+                active_subagents: 0,
+            }
+        } else {
+            ServiceState::Start
+        };
     };
     if config.matches(&health)
         && health.build_id == env!("CLAUDEX_BUILD_ID")
@@ -55,6 +71,7 @@ pub(super) async fn inspect_service_with(
             pid: health.pid,
             active_http_requests: health.active_http_requests,
             active_provider_turns: health.active_provider_turns,
+            active_subagents: health.active_subagent_count(),
         }
     } else {
         ServiceState::Replace {
@@ -62,6 +79,10 @@ pub(super) async fn inspect_service_with(
             recovery_generation: health.recovery_generation,
         }
     }
+}
+
+fn listener_is_bound(config: &ServiceConfig) -> bool {
+    TcpStream::connect_timeout(&config.options.listen, Duration::from_millis(100)).is_ok()
 }
 
 pub(super) async fn wait_for_hot_swap_idle(

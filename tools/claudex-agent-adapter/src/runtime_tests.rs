@@ -38,6 +38,14 @@ mod tests {
                 "unexpected arguments",
             ),
             (
+                vec!["ensure", "--model", "m", "--wait-idle"],
+                "unknown adapter option",
+            ),
+            (
+                vec!["serve", "--model", "m", "--wait-idle"],
+                "unknown adapter option",
+            ),
+            (
                 vec!["serve", "--model", "m", "--inherit-claude-model"],
                 "valid only for launch",
             ),
@@ -239,7 +247,27 @@ mod tests {
                     .collect()
             )
             .expect("valid hot-swap command"),
-            RuntimeCommand::HotSwap(_)
+            RuntimeCommand::HotSwap(_, false)
+        ));
+        assert!(matches!(
+            parse_command(
+                ["hot-swap", "--wait-idle", "--model", "m"]
+                    .into_iter()
+                    .map(OsString::from)
+                    .collect()
+            )
+            .expect("hot-swap wait-idle before options"),
+            RuntimeCommand::HotSwap(_, true)
+        ));
+        assert!(matches!(
+            parse_command(
+                ["hot-swap", "--model", "m", "--wait-idle", "--listen", "127.0.0.1:8318"]
+                    .into_iter()
+                    .map(OsString::from)
+                    .collect()
+            )
+            .expect("hot-swap wait-idle after options"),
+            RuntimeCommand::HotSwap(_, true)
         ));
     }
 

@@ -1,4 +1,7 @@
-use std::time::{Duration, Instant};
+use std::{
+    collections::BTreeMap,
+    time::{Duration, Instant},
+};
 
 use anyhow::{Result, bail};
 use serde::Deserialize;
@@ -43,11 +46,21 @@ pub(super) struct Health {
     /// Older adapters omit this field, so deserialization remains compatible.
     #[serde(default)]
     pub(super) active_provider_turns: usize,
+    /// Native Claude Code SubAgents still running after the parent turn ended.
+    /// Older adapters omit this field, so deserialization remains compatible.
+    #[serde(default)]
+    pub(super) active_subagent_models: BTreeMap<String, usize>,
 }
 
 impl Health {
+    pub(super) fn active_subagent_count(&self) -> usize {
+        self.active_subagent_models.values().copied().sum()
+    }
+
     pub(super) fn has_active_work(&self) -> bool {
-        self.active_http_requests > 0 || self.active_provider_turns > 0
+        self.active_http_requests > 0
+            || self.active_provider_turns > 0
+            || self.active_subagent_count() > 0
     }
 }
 
