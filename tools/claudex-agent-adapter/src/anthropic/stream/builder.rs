@@ -34,8 +34,8 @@ pub(in crate::anthropic) struct SegmentBuilder {
     /// thinking; streaming `text_delta` now would hide the panel until finish.
     pub(super) pending_answer: String,
     pub(super) is_subagent: bool,
-    /// Command Code SubAgent: native thinking/`?` elapsed + `server_tool_use`
-    /// cards. Do not dump canned ▶/still-working text chrome.
+    /// Command Code SubAgent: keep native thinking open (no Thought-for flicker).
+    /// Do not dump canned ▶/still-working text chrome.
     paint_command_code_progress: bool,
     turn_started_at: Instant,
     external_tool_calls: usize,
@@ -48,8 +48,6 @@ pub(in crate::anthropic) struct SegmentBuilder {
     /// Cursor MCP launch callIds seen with empty args. Later generic
     /// `provider tool` updates for these ids still consult the MCP launch queue.
     mcp_provider_call_ids: Vec<String>,
-    /// SubAgent display-only `server_tool_use` cards (`call_id`, `srvtoolu_…`, name).
-    server_tools: Vec<(String, String, &'static str)>,
     /// One-line hint already painted for a bulky JSON/tool dump this turn.
     bulk_dump_hinted: bool,
     requires_verified_web_evidence: bool,
@@ -74,7 +72,6 @@ impl SegmentBuilder {
             provider_tool_calls: Vec::new(),
             bridged_provider_launch_ids: Vec::new(),
             mcp_provider_call_ids: Vec::new(),
-            server_tools: Vec::new(),
             bulk_dump_hinted: false,
             requires_verified_web_evidence: false,
             verified_web_evidence_call_ids: Vec::new(),
@@ -106,10 +103,6 @@ impl SegmentBuilder {
 
     pub(super) fn is_command_code_subagent(&self) -> bool {
         self.is_subagent && self.paint_command_code_progress
-    }
-
-    pub(super) fn paints_progress_as_text(&self) -> bool {
-        !self.server_tools.is_empty()
     }
 
     pub(super) fn with_primed_thinking(mut self) -> Self {

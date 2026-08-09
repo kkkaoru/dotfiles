@@ -1,10 +1,10 @@
 //! Compact live progress for provider-owned tools (Grok / Cursor / configured ACP).
 //!
 //! Never emitted as Anthropic `tool_use` (Claude Code would re-execute). ACP
-//! SubAgents keep native thinking open with ▶/✓ markers for the whole turn;
-//! Command Code still paints display-only `server_tool_use` cards. Only short
-//! status markers are committed — full tool payloads freeze the TUI when every
-//! Bash/Read result is dumped into assistant text.
+//! SubAgents, including Command Code, keep native thinking open with ▶/✓
+//! markers for the whole turn. Only short status markers are committed — full
+//! tool payloads freeze the TUI when every Bash/Read result is dumped into
+//! assistant text.
 
 use anyhow::{Context, Result};
 use serde_json::Value;
@@ -17,8 +17,7 @@ const TITLE_CHAR_LIMIT: usize = 48;
 const ARG_PREVIEW_CHAR_LIMIT: usize = 48;
 
 impl SegmentBuilder {
-    /// Streams provider-owned work as thinking chrome (or Command Code
-    /// `server_tool_use` cards), never as Anthropic `tool_use`.
+    /// Streams provider-owned work as thinking chrome, never as Anthropic `tool_use`.
     ///
     /// Claude Code executes every `tool_use` block it receives, even when the
     /// provider already executed that tool and the message ends with `end_turn`.

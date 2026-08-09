@@ -1176,7 +1176,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn command_code_web_search_emits_server_tool_use_not_executable_tool_use() {
+    async fn command_code_web_search_stays_on_native_thinking_not_server_tool_use() {
         let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
         let mut builder = SegmentBuilder::new(1)
             .with_subagent(true)
@@ -1207,44 +1207,40 @@ mod tests {
                 Some(&sender),
             )
             .await
-            .expect("cc unlocked answer");
+            .expect("cc answer");
         drop(sender);
         let mut sse = String::new();
         while let Some(frame) = receiver.recv().await {
             sse.push_str(&String::from_utf8_lossy(&frame.expect("frame")));
         }
         assert!(
-            sse.contains("\"type\":\"server_tool_use\"") && sse.contains("web_search"),
-            "CC web_search must paint a server_tool_use card: {sse}"
+            sse.contains("thinking_delta")
+                && (sse.contains("▶ web_search") || sse.contains("▶ 名古屋")),
+            "CC web_search must stay on native thinking ▶: {sse}"
         );
         assert!(
-            sse.contains("srvtoolu_"),
-            "server tool id must use srvtoolu_ prefix: {sse}"
+            sse.contains("名古屋 天気") || sse.contains("名古屋は晴れ"),
+            "query or answer must stream in thinking chrome: {sse}"
         );
         assert!(
-            sse.contains("名古屋 天気"),
-            "query must stream in server tool input: {sse}"
+            !sse.contains("\"type\":\"server_tool_use\""),
+            "Command Code must not close thinking for server_tool_use: {sse}"
         );
         assert!(
             !sse.contains("\"type\":\"tool_use\""),
             "must not emit executable tool_use: {sse}"
         );
         assert!(
-            sse.contains("text_delta") && sse.contains("名古屋は晴れ"),
-            "after server_tool_use, CC answer must stream visible text_delta: {sse}"
-        );
-        assert!(
-            !sse.contains("▶") && !sse.contains("still working"),
-            "CC web_search must not dump ▶/still-working text chrome: {sse}"
+            sse.matches("\"type\":\"signature_delta\"").count() <= 1,
+            "thinking must stay open mid-turn (no Thought-for flicker): {sse}"
         );
         let segment = builder.finish(None).await.expect("finish");
         assert_eq!(segment.stop_reason, "end_turn");
         assert!(
-            segment.blocks.iter().any(|block| {
-                block.get("type").and_then(Value::as_str) == Some("server_tool_use")
-                    && block.get("name").and_then(Value::as_str) == Some("web_search")
+            segment.blocks.iter().all(|block| {
+                block.get("type").and_then(Value::as_str) != Some("server_tool_use")
             }),
-            "committed segment keeps display-only server_tool_use: {:?}",
+            "committed segment must not keep server_tool_use: {:?}",
             segment.blocks
         );
     }

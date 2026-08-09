@@ -117,7 +117,11 @@ const CASES: &[Case] = &[
             arg_key: "query",
             arg_value: "AVITA株式会社",
         }),
-        expect_visible: &["AVITA Inc. is an avatar", "Check AVITA Inc. official site"],
+        expect_visible: &[
+            "AVITA Inc. is an avatar",
+            "Check AVITA Inc. official site",
+            "▶",
+        ],
     },
 ];
 
@@ -307,29 +311,19 @@ async fn run_case(case: &Case) {
         );
     }
     if case.tool.is_some() {
-        if command_code {
-            assert!(
-                !live.visible_server_tools.is_empty(),
-                "{}: Command Code tools must paint server_tool_use: thinking={:?} server_tools={:?}",
-                case.name,
-                live.visible_thinking,
-                live.visible_server_tools
-            );
-        } else {
-            assert!(
-                live.visible_server_tools.is_empty(),
-                "{}: ACP SubAgent tools stay on native thinking, not server_tool_use: thinking={:?} server_tools={:?}",
-                case.name,
-                live.visible_thinking,
-                live.visible_server_tools
-            );
-            assert!(
-                live.visible_thinking.contains('▶'),
-                "{}: tool progress must stay in the open thinking block: {:?}",
-                case.name,
-                live.visible_thinking
-            );
-        }
+        assert!(
+            live.visible_server_tools.is_empty(),
+            "{}: ACP SubAgent tools stay on native thinking, not server_tool_use: thinking={:?} server_tools={:?}",
+            case.name,
+            live.visible_thinking,
+            live.visible_server_tools
+        );
+        assert!(
+            live.visible_thinking.contains('▶'),
+            "{}: tool progress must stay in the open thinking block: {:?}",
+            case.name,
+            live.visible_thinking
+        );
     }
 
     if let Some(prose) = case.prose {

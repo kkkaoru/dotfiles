@@ -149,8 +149,9 @@ this so Claude system/routing/ACP_NATIVE dumps are not prefixed onto `cmd -p`;
 `command-code-acp` also reads `cmd -p` stdout as bytes so invalid UTF-8 from
 web/tool dumps cannot crash the ACP turn, coalesces tiny NDJSON deltas, and
 syncs human-visible progress via Claude Code native thinking for the whole ACP
-SubAgent turn (▶/✓ stay in that open block; Command Code also uses display-only
-`server_tool_use` cards) — not canned ●/still-working dumps
+SubAgent turn, including Command Code (▶/✓ stay in that open block; do not close
+thinking for `server_tool_use` or `text_delta`, which became repeating Thought-for
+chrome) — not canned ●/still-working dumps
 or ツール結果待ち / 続きの調査または回答);
 `delegate-mcp` leaves search
 to the configured ACP/MCP provider; and `disabled` suppresses search for that

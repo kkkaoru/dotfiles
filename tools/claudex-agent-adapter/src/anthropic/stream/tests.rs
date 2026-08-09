@@ -506,6 +506,77 @@ async fn subagent_reasoning_stays_on_one_thinking_block_across_units() {
 }
 
 #[tokio::test]
+async fn command_code_reasoning_stays_on_one_thinking_block() {
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(32);
+    let mut builder = SegmentBuilder::new(2)
+        .with_subagent(true)
+        .with_command_code_progress(true);
+    for (summary_index, delta) in [
+        (0, "Probe the Viterbi lattice.\n"),
+        (1, "Enumerate dictionary segments.\n"),
+    ] {
+        builder
+            .model_output_event(
+                &json!({
+                    "method":"item/reasoning/summaryTextDelta",
+                    "params":{
+                        "itemId":"command-code:reasoning",
+                        "summaryIndex":summary_index,
+                        "delta":delta
+                    }
+                }),
+                Some(&sender),
+            )
+            .await
+            .expect("command-code reasoning");
+    }
+    builder
+        .model_output_event(
+            &json!({
+                "method":"item/agentMessage/delta",
+                "params":{
+                    "itemId":"command-code:message",
+                    "delta":"Reproducing the malformed conversion next.\n"
+                }
+            }),
+            Some(&sender),
+        )
+        .await
+        .expect("command-code status");
+    let segment = builder.finish(Some(&sender)).await.expect("segment");
+    drop(sender);
+    let thinking_blocks: Vec<_> = segment
+        .blocks
+        .iter()
+        .filter(|block| block.get("type").and_then(Value::as_str) == Some("thinking"))
+        .collect();
+    assert_eq!(
+        thinking_blocks.len(),
+        1,
+        "Command Code must not open/close thinking per unit: {:?}",
+        segment.blocks
+    );
+    let mut sse = String::new();
+    while let Some(frame) = receiver.recv().await {
+        sse.push_str(&String::from_utf8_lossy(&frame.expect("frame")));
+    }
+    assert_eq!(
+        sse.matches("\"thinking\":\"\",\"type\":\"thinking\"").count(),
+        1,
+        "Command Code live stream must open thinking only once: {sse}"
+    );
+    assert_eq!(
+        sse.matches("\"type\":\"signature_delta\"").count(),
+        1,
+        "Command Code thinking must stay open until end_turn: {sse}"
+    );
+    assert!(
+        !sse.contains("Thought for"),
+        "Command Code must not emit Thought-for chrome: {sse}"
+    );
+}
+
+#[tokio::test]
 async fn whitespace_reasoning_delta_does_not_open_blank_thought_chrome() {
     let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
     let mut builder = SegmentBuilder::new(1);

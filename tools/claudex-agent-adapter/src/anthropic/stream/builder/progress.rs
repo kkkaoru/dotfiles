@@ -20,10 +20,11 @@ impl SegmentBuilder {
     /// end_turn. Qwen often emits `AgentMessageChunk` before `ToolCall`; the old
     /// path then appended ▶ to `text_delta`, so the panel stayed on
     /// "Thought for Xs" + spinner. Always paint ▶/✓/✗ as `thinking_delta`.
-    /// ACP SubAgents keep one native thinking block open for the whole turn
-    /// (Command Code still uses display-only `server_tool_use`). Canned ●/still-
-    /// working worker text is still dropped. `sanitize_committed_blocks` strips
-    /// markers from the transcript.
+    /// ACP SubAgents, including Command Code, keep one native thinking block
+    /// open for the whole turn. Closing thinking for `server_tool_use` or
+    /// `text_delta` made Muse Spark dump repeating "Thought for Xs". Canned
+    /// ●/still-working worker text is still dropped. `sanitize_committed_blocks`
+    /// strips markers from the transcript.
     pub(in crate::anthropic::stream) async fn stream_progress_text(
         &mut self,
         delta: &str,
@@ -36,7 +37,7 @@ impl SegmentBuilder {
             return Ok(());
         }
         self.close_text_block(stream).await?;
-        if self.is_subagent && !self.is_command_code_subagent() {
+        if self.is_subagent {
             return self
                 .thinking
                 .progress_status_keep_open(&mut self.blocks, delta, stream)
@@ -88,13 +89,8 @@ impl SegmentBuilder {
                 return Ok(());
             };
             let dump_hint = delta.contains("large tool output omitted");
-            if self.is_command_code_subagent() && self.paints_progress_as_text() && !dump_hint {
-                // Command Code: server_tool_use unlocks live text_delta.
-                return self.stream_answer_delta(&delta, stream).await;
-            }
-            // ACP SubAgents keep native thinking open for the whole turn.
-            // Streaming text_delta here would close thinking and collapse CC 2.1
-            // to repeating "Thought for Xs".
+            // Including Command Code: streaming text_delta closes thinking and
+            // collapses CC 2.1 to repeating "Thought for Xs".
             self.thinking
                 .progress_status_keep_open(&mut self.blocks, &delta, stream)
                 .await?;
@@ -122,7 +118,7 @@ impl SegmentBuilder {
         }
         match self.filter_subagent_live_delta(raw) {
             Some(delta) if delta.contains("large tool output omitted") => {
-                if self.is_subagent && !self.is_command_code_subagent() {
+                if self.is_subagent {
                     self.thinking
                         .progress_status_keep_open(&mut self.blocks, &delta, stream)
                         .await?;
@@ -138,7 +134,7 @@ impl SegmentBuilder {
             }
             Some(delta) => {
                 let was_open = self.thinking.is_open();
-                if self.is_subagent && !self.is_command_code_subagent() {
+                if self.is_subagent {
                     self.thinking
                         .delta_text_coalesced(
                             item_id,
@@ -158,9 +154,7 @@ impl SegmentBuilder {
                 }
             }
             None => {
-                if self.thinking.is_native_thought_open()
-                    && !(self.is_subagent && !self.is_command_code_subagent())
-                {
+                if self.thinking.is_native_thought_open() && !self.is_subagent {
                     self.thinking.close(&mut self.blocks, stream).await?;
                     self.paint_post_thought_status(stream).await?;
                 }
@@ -174,7 +168,7 @@ impl SegmentBuilder {
         status: &str,
         stream: Option<&StreamSender>,
     ) -> Result<()> {
-        if self.is_subagent && !self.is_command_code_subagent() {
+        if self.is_subagent {
             return self
                 .thinking
                 .progress_status_keep_open(&mut self.blocks, status, stream)
