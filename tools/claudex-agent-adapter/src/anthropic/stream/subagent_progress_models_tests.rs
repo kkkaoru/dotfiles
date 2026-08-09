@@ -71,7 +71,7 @@ const CASES: &[Case] = &[
             arg_key: "command",
             arg_value: "ls apps/finish-position-predict-container",
         }),
-        expect_visible: &["Plan the per-race", "▶ ls", "still working"],
+        expect_visible: &["Plan the per-race", "▶ ls"],
     },
     Case {
         name: "copilot-acp",
@@ -103,11 +103,7 @@ const CASES: &[Case] = &[
         prose_item_id: "spark:message",
         reasoning: Some("Trace filter_races_by_scope before editing.\n"),
         tool: None,
-        expect_visible: &[
-            "Trace filter_races_by_scope",
-            "Seasoning per-race",
-            "still working",
-        ],
+        expect_visible: &["Trace filter_races_by_scope", "Seasoning per-race"],
     },
     Case {
         name: "command-code-acp",
@@ -121,7 +117,11 @@ const CASES: &[Case] = &[
             arg_key: "query",
             arg_value: "AVITA株式会社",
         }),
-        expect_visible: &["Check AVITA Inc. official site"],
+        expect_visible: &[
+            "AVITA Inc. is an avatar",
+            "Check AVITA Inc. official site",
+            "still working",
+        ],
     },
 ];
 
@@ -202,8 +202,13 @@ async fn command_code_subagent_answer_streams_live_text_not_only_thinking() {
     live.ingest_available(&mut receiver);
     assert!(live.turn_still_open());
     assert!(
-        live.hidden_text.contains("設立: 2018年"),
-        "Command Code answer must stream as live text_delta so parent Task is not Orbiting-only: {:?}",
+        live.visible_thinking.contains("設立: 2018年"),
+        "CC answer before server_tool_use must stay visible after Thought, not hidden text: {:?}",
+        live.visible_thinking
+    );
+    assert!(
+        !live.hidden_text.contains("設立: 2018年"),
+        "text_delta stays locked until server_tool_use: {:?}",
         live.hidden_text
     );
     let segment = builder.finish(None).await.expect("finish");
@@ -267,28 +272,18 @@ async fn run_case(case: &Case) {
         "{}: progress must stay mid-turn",
         case.name
     );
+    assert!(
+        live.hidden_text.is_empty()
+            || (!live.hidden_text.contains('▶') && !live.hidden_text.contains("still working")),
+        "{}: ▶/still-working must not dump as text: thinking={:?} text={:?}",
+        case.name,
+        live.visible_thinking,
+        live.hidden_text
+    );
     if command_code {
         assert!(
-            !live.hidden_text.contains('▶') && !live.hidden_text.contains("still working"),
-            "{}: Command Code must not dump ▶/still-working text: thinking={:?} text={:?}",
-            case.name,
-            live.visible_thinking,
-            live.hidden_text
-        );
-        assert!(
-            live.hidden_text.contains("AVITA Inc. is an avatar company")
-                || live
-                    .visible_thinking
-                    .contains("Check AVITA Inc. official site"),
-            "{}: native thought or prose must show: thinking={:?} text={:?}",
-            case.name,
-            live.visible_thinking,
-            live.hidden_text
-        );
-        assert!(
-            !live.visible_thinking.contains("still working")
-                && !live.visible_thinking.contains("▶ Command Code"),
-            "{}: keepalive must stay silent thinking, not canned chrome: {:?}",
+            !live.visible_thinking.contains("▶ Command Code"),
+            "{}: keepalive must not dump ▶ Command Code chrome: {:?}",
             case.name,
             live.visible_thinking
         );
@@ -302,11 +297,43 @@ async fn run_case(case: &Case) {
     }
     for needle in case.expect_visible {
         assert!(
-            live.visible_thinking.contains(needle),
-            "{}: missing `{needle}` in live viewer: {:?}",
+            live.visible_thinking.contains(needle)
+                || live.hidden_text.contains(needle)
+                || live
+                    .visible_server_tools
+                    .iter()
+                    .any(|name| name.contains(needle)),
+            "{}: missing `{needle}` in live viewer: thinking={:?} text={:?} server_tools={:?}",
             case.name,
-            live.visible_thinking
+            live.visible_thinking,
+            live.hidden_text,
+            live.visible_server_tools
         );
+    }
+    if case.tool.is_some() {
+        if command_code {
+            assert!(
+                !live.visible_server_tools.is_empty(),
+                "{}: Command Code tools must paint server_tool_use: thinking={:?} server_tools={:?}",
+                case.name,
+                live.visible_thinking,
+                live.visible_server_tools
+            );
+        } else {
+            assert!(
+                live.visible_server_tools.is_empty(),
+                "{}: ACP SubAgent tools stay on native thinking, not server_tool_use: thinking={:?} server_tools={:?}",
+                case.name,
+                live.visible_thinking,
+                live.visible_server_tools
+            );
+            assert!(
+                live.visible_thinking.contains('▶'),
+                "{}: tool progress must stay in the open thinking block: {:?}",
+                case.name,
+                live.visible_thinking
+            );
+        }
     }
 
     if let Some(prose) = case.prose {

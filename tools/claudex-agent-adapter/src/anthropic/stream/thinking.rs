@@ -20,6 +20,17 @@ struct OpenThinking {
 }
 
 impl ThinkingState {
+    pub(super) fn is_open(&self) -> bool {
+        self.open.is_some()
+    }
+
+    pub(super) fn is_native_thought_open(&self) -> bool {
+        self.open.as_ref().is_some_and(|open| {
+            open.item_id != "claudex_provider_progress"
+                && open.item_id != "claudex_activity_keepalive"
+        })
+    }
+
     pub(super) async fn delta(
         &mut self,
         event: &Value,
@@ -29,20 +40,73 @@ impl ThinkingState {
         let Some((item_id, summary_index, delta)) = summary_delta(event) else {
             return Ok(());
         };
+        self.delta_text(item_id, summary_index, delta, blocks, stream)
+            .await
+    }
+
+    pub(super) async fn delta_text(
+        &mut self,
+        item_id: &str,
+        summary_index: i64,
+        delta: &str,
+        blocks: &mut Vec<Value>,
+        stream: Option<&StreamSender>,
+    ) -> Result<()> {
+        self.delta_text_on(item_id, summary_index, delta, false, blocks, stream)
+            .await
+    }
+
+    /// SubAgent turns keep one native thinking block open so Claude Code's
+    /// standard thinking chrome stays live. Closing on every ACP itemId /
+    /// summaryIndex collapse the viewer to repeating "Thought for Xs".
+    pub(super) async fn delta_text_coalesced(
+        &mut self,
+        item_id: &str,
+        summary_index: i64,
+        delta: &str,
+        blocks: &mut Vec<Value>,
+        stream: Option<&StreamSender>,
+    ) -> Result<()> {
+        self.delta_text_on(item_id, summary_index, delta, true, blocks, stream)
+            .await
+    }
+
+    async fn delta_text_on(
+        &mut self,
+        item_id: &str,
+        summary_index: i64,
+        delta: &str,
+        coalesce: bool,
+        blocks: &mut Vec<Value>,
+        stream: Option<&StreamSender>,
+    ) -> Result<()> {
         if delta.trim().is_empty() || has_visible_output(blocks) {
             return Ok(());
         }
-        // One Anthropic thinking block per (itemId, summaryIndex) unit — matching
-        // Claude Code's discrete thinking sections instead of one endless blob.
-        let unit_changed = self
-            .open
-            .as_ref()
-            .is_some_and(|open| open.item_id != item_id || open.summary_index != summary_index);
+        // Main session: one Anthropic thinking block per (itemId, summaryIndex).
+        // SubAgents coalesce so thinking stays synced for the whole turn.
+        let unit_changed = !coalesce
+            && self
+                .open
+                .as_ref()
+                .is_some_and(|open| open.item_id != item_id || open.summary_index != summary_index);
         if unit_changed {
             self.close(blocks, stream).await?;
         }
         if self.open.is_none() {
             self.start(blocks, item_id, summary_index, stream).await?;
+        } else if coalesce
+            && self.open.as_ref().is_some_and(|open| {
+                open.item_id == "claudex_provider_progress"
+                    || open.item_id == "claudex_activity_keepalive"
+            })
+        {
+            // Tool/prose may open progress chrome first. Promote it to native
+            // thought so sanitize keeps the reasoning in the transcript.
+            if let Some(open) = self.open.as_mut() {
+                open.item_id = item_id.to_owned();
+                open.signature = thinking_signature(item_id);
+            }
         }
         let open = self.open.as_mut().expect("thinking block just opened");
         open.summary_index = summary_index;
@@ -122,12 +186,37 @@ impl ThinkingState {
         if status.is_empty() {
             return Ok(());
         }
+        self.progress_status_on(blocks, status, false, stream).await
+    }
+
+    /// Append ▶/✓/elapsed into the open thinking block without closing it.
+    /// Used for ACP SubAgents so Claude Code's native thinking chrome stays live.
+    pub(super) async fn progress_status_keep_open(
+        &mut self,
+        blocks: &mut Vec<Value>,
+        status: &str,
+        stream: Option<&StreamSender>,
+    ) -> Result<()> {
+        if status.is_empty() {
+            return Ok(());
+        }
+        self.progress_status_on(blocks, status, true, stream).await
+    }
+
+    async fn progress_status_on(
+        &mut self,
+        blocks: &mut Vec<Value>,
+        status: &str,
+        keep_open: bool,
+        stream: Option<&StreamSender>,
+    ) -> Result<()> {
         // Cline/DeepSeek often open a blank or long CoT thinking unit first.
-        // Appending ▶/✓ there leaves SubAgent TUI on "Thought for Xs" + spinner.
-        if self
-            .open
-            .as_ref()
-            .is_some_and(|open| open.item_id != "claudex_provider_progress")
+        // Closing it to switch chrome left SubAgent TUI on "Thought for Xs".
+        if !keep_open
+            && self
+                .open
+                .as_ref()
+                .is_some_and(|open| open.item_id != "claudex_provider_progress")
         {
             self.close(blocks, stream).await?;
         }
@@ -208,23 +297,13 @@ impl ThinkingState {
         blocks: &mut Vec<Value>,
         stream: Option<&StreamSender>,
     ) -> Result<()> {
-        self.emit_activity_heartbeat(blocks, stream, false).await
-    }
-
-    /// Watchdog-only thinking tick. No canned "still working" status.
-    pub(super) async fn silent_activity_keepalive(
-        &mut self,
-        blocks: &mut Vec<Value>,
-        stream: Option<&StreamSender>,
-    ) -> Result<()> {
-        self.emit_activity_heartbeat(blocks, stream, true).await
+        self.emit_activity_heartbeat(blocks, stream).await
     }
 
     async fn emit_activity_heartbeat(
         &mut self,
         blocks: &mut Vec<Value>,
         stream: Option<&StreamSender>,
-        silent: bool,
     ) -> Result<()> {
         // Keep emitting decoded deltas after text/tool_use. Spark/Codex
         // SubAgents often go silent during native tools once a Bash/WebSearch
@@ -243,12 +322,11 @@ impl ThinkingState {
                 .await?;
         }
         let open = self.open.as_mut().expect("thinking block just opened");
-        let delta =
-            if !silent && open.item_id == "claudex_activity_keepalive" && open.text.is_empty() {
-                STATUS
-            } else {
-                HEARTBEAT
-            };
+        let delta = if open.item_id == "claudex_activity_keepalive" && open.text.is_empty() {
+            STATUS
+        } else {
+            HEARTBEAT
+        };
         open.text.push_str(delta);
         blocks[open.index]["thinking"] = json!(open.text);
         send_stream_frame(stream, "content_block_delta", || {
@@ -271,6 +349,10 @@ impl ThinkingState {
         last_tool: Option<&str>,
         stream: Option<&StreamSender>,
     ) -> Result<()> {
+        if self.is_native_thought_open() {
+            // Live native thinking already drives Claude Code's elapsed chrome.
+            return Ok(());
+        }
         let secs = elapsed.as_secs().max(1);
         let label = if secs < 60 {
             format!("{secs}s")
@@ -282,7 +364,7 @@ impl ThinkingState {
             .filter(|title| !title.is_empty())
             .map(|title| format!(" · last: {title}"))
             .unwrap_or_default();
-        self.progress_status(
+        self.progress_status_keep_open(
             blocks,
             &format!("\n… still working ({label}){tool}\n"),
             stream,
@@ -298,7 +380,7 @@ fn thinking_signature(item_id: &str) -> String {
     }
 }
 
-fn summary_delta(event: &Value) -> Option<(&str, i64, &str)> {
+pub(super) fn summary_delta(event: &Value) -> Option<(&str, i64, &str)> {
     let params = event.get("params")?;
     Some((
         params.get("itemId")?.as_str()?,

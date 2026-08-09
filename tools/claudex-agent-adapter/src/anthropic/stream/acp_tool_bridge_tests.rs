@@ -605,7 +605,7 @@ mod tests {
                 "arguments": {"run_in_background": true}
             }
         });
-        let result = bridge_provider_tool_call_with_mcp_hint(&map, &mcp_event);
+        let result = bridge_provider_tool_call_with_mcp_hint(&map, &mcp_event, None);
         assert!(result.is_none());
     }
 

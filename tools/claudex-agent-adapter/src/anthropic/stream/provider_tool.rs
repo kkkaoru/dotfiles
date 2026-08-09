@@ -1,8 +1,10 @@
 //! Compact live progress for provider-owned tools (Grok / Cursor / configured ACP).
 //!
-//! Never emitted as Anthropic `tool_use` (Claude Code would re-execute). Only short
-//! status markers are streamed/committed — full tool payloads freeze the TUI when
-//! every Bash/Read result is dumped into assistant text.
+//! Never emitted as Anthropic `tool_use` (Claude Code would re-execute). ACP
+//! SubAgents keep native thinking open with ▶/✓ markers for the whole turn;
+//! Command Code still paints display-only `server_tool_use` cards. Only short
+//! status markers are committed — full tool payloads freeze the TUI when every
+//! Bash/Read result is dumped into assistant text.
 
 use anyhow::{Context, Result};
 use serde_json::Value;
@@ -15,12 +17,11 @@ const TITLE_CHAR_LIMIT: usize = 48;
 const ARG_PREVIEW_CHAR_LIMIT: usize = 48;
 
 impl SegmentBuilder {
-    /// Streams provider-owned work as thinking progress, never as Anthropic `tool_use`.
+    /// Streams provider-owned work as thinking chrome (or Command Code
+    /// `server_tool_use` cards), never as Anthropic `tool_use`.
     ///
     /// Claude Code executes every `tool_use` block it receives, even when the
     /// provider already executed that tool and the message ends with `end_turn`.
-    /// A display-only card would therefore produce a synthetic
-    /// `No such tool available` result and an unnecessary follow-up turn.
     pub(super) async fn provider_tool_call(
         &mut self,
         event: &Value,
@@ -44,9 +45,10 @@ impl SegmentBuilder {
         if !is_new {
             return Ok(());
         }
-        self.emit_command_code_server_tool(call_id, name, params.get("arguments"), stream)
-            .await?;
-        if self.is_command_code_subagent() {
+        if self
+            .emit_subagent_server_tool(call_id, name, params.get("arguments"), stream)
+            .await?
+        {
             return Ok(());
         }
         self.stream_progress_text(&progress_start_line(title, params.get("arguments")), stream)
@@ -83,18 +85,14 @@ impl SegmentBuilder {
             "failed" => {
                 let detail = failure_preview(params.get("output"));
                 let preview = truncate_for_status(&detail, FAILED_STATUS_PREVIEW_CHAR_LIMIT);
-                if !self.is_command_code_subagent() {
-                    self.stream_progress_text(&format!("\n✗ {short_title}: {preview}\n"), stream)
-                        .await?;
-                }
+                self.stream_progress_text(&format!("\n✗ {short_title}: {preview}\n"), stream)
+                    .await?;
             }
             // Success: marker only. Dumping stdout/JSON here flooded the TUI and
             // made long Grok/Cursor turns look frozen on a wall of tool logs.
             "completed" => {
-                if !self.is_command_code_subagent() {
-                    self.stream_progress_text(&format!("\n✓ {short_title}\n"), stream)
-                        .await?;
-                }
+                self.stream_progress_text(&format!("\n✓ {short_title}\n"), stream)
+                    .await?;
             }
             "pending" | "in_progress" => {
                 self.start_provider_tool_from_update(call_id, &title, params, stream)
@@ -123,9 +121,10 @@ impl SegmentBuilder {
             .and_then(Value::as_str)
             .filter(|name| !name.trim().is_empty())
             .unwrap_or(title);
-        self.emit_command_code_server_tool(call_id, tool, params.get("arguments"), stream)
-            .await?;
-        if self.is_command_code_subagent() {
+        if self
+            .emit_subagent_server_tool(call_id, tool, params.get("arguments"), stream)
+            .await?
+        {
             return Ok(());
         }
         self.stream_progress_text(&progress_start_line(title, params.get("arguments")), stream)

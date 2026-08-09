@@ -310,8 +310,7 @@ mod tests {
             segment.blocks.iter().any(|block| {
                 block.get("type").and_then(Value::as_str) == Some("text")
                     && block.get("text").and_then(Value::as_str).is_some_and(|text| {
-                        text.contains("Starting inspection")
-                            && text.contains("Status: CLAUDE.md read")
+                        text.contains("Starting inspection") && !text.contains("Status:")
                     })
             }),
             "answer prose must flush at end_turn: {:?}",
@@ -868,6 +867,244 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn command_code_bash_paints_thinking_progress_like_other_acp() {
+        let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
+        let mut builder = SegmentBuilder::new(1)
+            .with_subagent(true)
+            .with_command_code_progress(true);
+        let mut live = super::super::subagent_live_view::SubAgentLiveView::default();
+        builder
+            .model_output_event(
+                &json!({
+                    "method":"item/agentMessage/delta",
+                    "params":{
+                        "itemId":"command-code:message",
+                        "delta":"Printing date, pausing 45 seconds, then printing TOKEN_QUALITY_BASH.\n"
+                    }
+                }),
+                Some(&sender),
+            )
+            .await
+            .expect("cc bash narration");
+        live.ingest_available(&mut receiver);
+        assert!(
+            live.visible_thinking
+                .contains("Printing date, pausing 45 seconds"),
+            "CC narration before a card must stay in thinking, not vanish after Thought: {:?}",
+            live.visible_thinking
+        );
+        assert!(
+            live.hidden_text.is_empty(),
+            "CC narration must not sit in hidden text_delta: {:?}",
+            live.hidden_text
+        );
+        builder
+            .provider_tool_call(
+                &json!({
+                    "params":{
+                        "callId":"cc-bash",
+                        "tool":"Bash",
+                        "title":"Bash",
+                        "arguments":{"command":"bunx wrangler tail sync-realtime-data --format json"}
+                    }
+                }),
+                Some(&sender),
+            )
+            .await
+            .expect("cc bash start");
+        live.ingest_available(&mut receiver);
+        assert!(live.turn_still_open());
+        assert!(
+            live.visible_server_tools.iter().any(|name| name == "web_search")
+                || (live.visible_thinking.contains("▶ Bash")
+                    && live.visible_thinking.contains("wrangler tail")),
+            "CC Bash must paint a display card or ▶ thinking: thinking={:?} server_tools={:?}",
+            live.visible_thinking,
+            live.visible_server_tools
+        );
+        assert!(
+            !live.hidden_text.contains('▶'),
+            "▶ must not sit in hidden text_delta: {:?}",
+            live.hidden_text
+        );
+        builder
+            .provider_tool_update(
+                &json!({"params":{"callId":"cc-bash","status":"completed","title":"Bash"}}),
+                Some(&sender),
+            )
+            .await
+            .expect("cc bash done");
+        builder
+            .activity_keepalive(Some(&sender))
+            .await
+            .expect("cc elapsed");
+        live.ingest_available(&mut receiver);
+        assert!(
+            live.visible_thinking.contains('✓') || live.visible_thinking.contains("still working"),
+            "CC Bash completion/elapsed must stay visible: {:?}",
+            live.visible_thinking
+        );
+        assert!(
+            !live.hidden_text.contains('▶') && !live.hidden_text.contains("still working"),
+            "CC must not dump tool chrome as text: {:?}",
+            live.hidden_text
+        );
+        drop(sender);
+    }
+
+    #[tokio::test]
+    async fn subagent_keeps_only_latest_status_line_mid_turn() {
+        let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(32);
+        let mut builder = SegmentBuilder::new(1)
+            .with_subagent(true)
+            .with_command_code_progress(true);
+        let mut live = super::super::subagent_live_view::SubAgentLiveView::default();
+        for status in [
+            "Status: inspecting wrangler config. No edits.",
+            "Status: starting live wrangler tail.",
+            "Status: after tail. Cause is catalog 502 r2_sql_unavailable.",
+        ] {
+            builder
+                .model_output_event(
+                    &json!({
+                        "method":"item/agentMessage/delta",
+                        "params":{"itemId":"command-code:message","delta":status}
+                    }),
+                    Some(&sender),
+                )
+                .await
+                .expect("status");
+        }
+        builder
+            .model_output_event(
+                &json!({
+                    "method":"item/agentMessage/delta",
+                    "params":{
+                        "itemId":"command-code:message",
+                        "delta":"Status: prior tails show RS queue.Status: parsing those records.Status: before long-running wrangler tail (~55s)."
+                    }
+                }),
+                Some(&sender),
+            )
+            .await
+            .expect("concat status");
+        live.ingest_available(&mut receiver);
+        assert!(
+            live.visible_thinking
+                .contains("before long-running wrangler tail"),
+            "latest Status must remain visible mid-turn: {:?}",
+            live.visible_thinking
+        );
+        assert!(
+            live.hidden_text.is_empty(),
+            "Status chrome must not dump into hidden text_delta: {:?}",
+            live.hidden_text
+        );
+        assert!(
+            builder.pending_answer.is_empty(),
+            "Status chrome must not become the final answer: {:?}",
+            builder.pending_answer
+        );
+        let segment = builder.finish(None).await.expect("finish");
+        assert!(
+            segment.blocks.iter().all(|block| {
+                !block
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .is_some_and(|text| text.contains("Status:"))
+            }),
+            "Status lines must not remain in the transcript: {:?}",
+            segment.blocks
+        );
+        drop(sender);
+    }
+
+    #[tokio::test]
+    async fn subagent_omits_wrangler_json_dump_after_thought() {
+        let dump = format!(
+            "{{\"type\":\"exception\",\"outcome\":\"exception\",\"exceptions\":[{}]}}",
+            r#"{"name":"TypeError","message":"runningStyle"},"#.repeat(40)
+        );
+        assert!(dump.len() > 200);
+        let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(32);
+        let mut builder = SegmentBuilder::new(1)
+            .with_subagent(true)
+            .with_command_code_progress(true);
+        let mut live = super::super::subagent_live_view::SubAgentLiveView::default();
+        builder
+            .provider_tool_call(
+                &json!({
+                    "params":{
+                        "callId":"cc-tail",
+                        "tool":"Bash",
+                        "title":"Bash",
+                        "arguments":{"command":"bunx wrangler tail sync-realtime-data --format json"}
+                    }
+                }),
+                Some(&sender),
+            )
+            .await
+            .expect("bash");
+        builder
+            .model_output_event(
+                &json!({
+                    "method":"item/reasoning/summaryTextDelta",
+                    "params":{
+                        "itemId":"cc:reasoning",
+                        "summaryIndex":0,
+                        "delta":"The wrangler tail JSON output appears to contain critical information.\n"
+                    }
+                }),
+                Some(&sender),
+            )
+            .await
+            .expect("short thought");
+        builder
+            .model_output_event(
+                &json!({
+                    "method":"item/reasoning/summaryTextDelta",
+                    "params":{"itemId":"cc:reasoning","summaryIndex":1,"delta":dump}
+                }),
+                Some(&sender),
+            )
+            .await
+            .expect("json dump");
+        builder
+            .model_output_event(
+                &json!({
+                    "method":"item/reasoning/summaryTextDelta",
+                    "params":{"itemId":"cc:reasoning","summaryIndex":1,"delta":dump}
+                }),
+                Some(&sender),
+            )
+            .await
+            .expect("json dump repeat");
+        live.ingest_available(&mut receiver);
+        assert!(
+            live.visible_thinking
+                .contains("The wrangler tail JSON output appears to contain critical"),
+            "short thought must remain: {:?}",
+            live.visible_thinking
+        );
+        assert!(
+            live.visible_thinking.contains("large tool output omitted")
+                || live.visible_thinking.contains("still working")
+                || live.visible_thinking.contains('▶'),
+            "after Thought, viewer must show a short status not a blank panel: {:?}",
+            live.visible_thinking
+        );
+        assert!(
+            !live.visible_thinking.contains("TypeError")
+                && !live.hidden_text.contains("TypeError")
+                && !live.hidden_text.contains("runningStyle"),
+            "wrangler JSON must not be synced into the live viewer: thinking={:?} text={:?}",
+            live.visible_thinking,
+            live.hidden_text
+        );
+        drop(sender);
+    }
+
+    #[tokio::test]
     async fn command_code_web_search_emits_server_tool_use_not_executable_tool_use() {
         let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
         let mut builder = SegmentBuilder::new(1)
@@ -887,6 +1124,19 @@ mod tests {
             )
             .await
             .expect("cc web_search");
+        builder
+            .model_output_event(
+                &json!({
+                    "method":"item/agentMessage/delta",
+                    "params":{
+                        "itemId":"command-code:message",
+                        "delta":"名古屋は晴れ、最高35℃です。\n"
+                    }
+                }),
+                Some(&sender),
+            )
+            .await
+            .expect("cc unlocked answer");
         drop(sender);
         let mut sse = String::new();
         while let Some(frame) = receiver.recv().await {
@@ -909,6 +1159,10 @@ mod tests {
             "must not emit executable tool_use: {sse}"
         );
         assert!(
+            sse.contains("text_delta") && sse.contains("名古屋は晴れ"),
+            "after server_tool_use, CC answer must stream visible text_delta: {sse}"
+        );
+        assert!(
             !sse.contains("▶") && !sse.contains("still working"),
             "CC web_search must not dump ▶/still-working text chrome: {sse}"
         );
@@ -921,6 +1175,91 @@ mod tests {
             }),
             "committed segment keeps display-only server_tool_use: {:?}",
             segment.blocks
+        );
+    }
+
+    #[tokio::test]
+    async fn cline_subagent_read_stays_on_native_thinking_not_server_tool_use() {
+        // Closing thinking to paint server_tool_use left the live Cline viewer
+        // (toolu_3a933482…) on "Thought for 9s" with no later resync.
+        let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
+        let mut builder = SegmentBuilder::new(1).with_subagent(true);
+        builder
+            .provider_tool_call(
+                &json!({
+                    "params":{
+                        "callId":"cline-read",
+                        "tool":"Read",
+                        "title":"Read File",
+                        "arguments":{"path":"/Users/kkk4oru/ghq/github.com/kkkaoru/horse-racing-data/apps/local-postgresql/CLAUDE.md"}
+                    }
+                }),
+                Some(&sender),
+            )
+            .await
+            .expect("cline read");
+        drop(sender);
+        let mut sse = String::new();
+        while let Some(frame) = receiver.recv().await {
+            sse.push_str(&String::from_utf8_lossy(&frame.expect("frame")));
+        }
+        assert!(
+            sse.contains("thinking_delta") && sse.contains("▶ Read"),
+            "Cline SubAgent Read must stay on native thinking ▶: {sse}"
+        );
+        assert!(
+            sse.contains("horse-raci") || sse.contains("▶ Read"),
+            "Read path preview must stream in thinking chrome: {sse}"
+        );
+        assert!(
+            !sse.contains("\"type\":\"server_tool_use\""),
+            "ACP SubAgent Read must not close thinking for server_tool_use: {sse}"
+        );
+        assert!(
+            !sse.contains("\"type\":\"tool_use\""),
+            "must not emit executable tool_use: {sse}"
+        );
+        let segment = builder.finish(None).await.expect("finish");
+        assert!(
+            segment.blocks.iter().all(|block| {
+                block.get("type").and_then(Value::as_str) != Some("server_tool_use")
+            }),
+            "committed segment must not keep server_tool_use: {:?}",
+            segment.blocks
+        );
+    }
+
+    #[tokio::test]
+    async fn main_session_acp_read_does_not_emit_server_tool_use() {
+        // Old non-subagent path: thinking ▶ only. Main session can show text.
+        let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
+        let mut builder = SegmentBuilder::new(1);
+        builder
+            .provider_tool_call(
+                &json!({
+                    "params":{
+                        "callId":"main-read",
+                        "tool":"Read",
+                        "title":"Read File",
+                        "arguments":{"path":"CLAUDE.md"}
+                    }
+                }),
+                Some(&sender),
+            )
+            .await
+            .expect("main read");
+        drop(sender);
+        let mut sse = String::new();
+        while let Some(frame) = receiver.recv().await {
+            sse.push_str(&String::from_utf8_lossy(&frame.expect("frame")));
+        }
+        assert!(
+            !sse.contains("\"type\":\"server_tool_use\""),
+            "main session must not paint server_tool_use: {sse}"
+        );
+        assert!(
+            sse.contains("thinking_delta") && sse.contains("▶ Read"),
+            "main session still uses thinking ▶: {sse}"
         );
     }
 }

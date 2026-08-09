@@ -48,8 +48,10 @@ pub(in crate::anthropic) struct SegmentBuilder {
     /// Cursor MCP launch callIds seen with empty args. Later generic
     /// `provider tool` updates for these ids still consult the MCP launch queue.
     mcp_provider_call_ids: Vec<String>,
-    /// Command Code `server_tool_use` cards (`call_id`, `srvtoolu_…`, name).
-    cc_server_tools: Vec<(String, String, &'static str)>,
+    /// SubAgent display-only `server_tool_use` cards (`call_id`, `srvtoolu_…`, name).
+    server_tools: Vec<(String, String, &'static str)>,
+    /// One-line hint already painted for a bulky JSON/tool dump this turn.
+    bulk_dump_hinted: bool,
     requires_verified_web_evidence: bool,
     /// Completed provider-native web calls whose provenance has already been
     /// counted. A provider may repeat its final ToolCallUpdate while reconnecting.
@@ -72,7 +74,8 @@ impl SegmentBuilder {
             provider_tool_calls: Vec::new(),
             bridged_provider_launch_ids: Vec::new(),
             mcp_provider_call_ids: Vec::new(),
-            cc_server_tools: Vec::new(),
+            server_tools: Vec::new(),
+            bulk_dump_hinted: false,
             requires_verified_web_evidence: false,
             verified_web_evidence_call_ids: Vec::new(),
             injected_output_tokens: 0,
@@ -106,7 +109,7 @@ impl SegmentBuilder {
     }
 
     pub(super) fn paints_progress_as_text(&self) -> bool {
-        self.is_command_code_subagent()
+        !self.server_tools.is_empty()
     }
 
     pub(super) fn with_primed_thinking(mut self) -> Self {
@@ -186,7 +189,7 @@ impl SegmentBuilder {
         match event.get("method").and_then(Value::as_str) {
             Some("item/agentMessage/delta") => self.text_delta(event, stream).await?,
             Some("item/reasoning/summaryTextDelta") => {
-                self.thinking.delta(event, &mut self.blocks, stream).await?;
+                self.reasoning_delta(event, stream).await?;
             }
             Some("item/reasoning/textDelta") => {}
             _ => return Ok(false),

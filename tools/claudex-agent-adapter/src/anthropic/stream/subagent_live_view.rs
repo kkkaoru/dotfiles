@@ -1,9 +1,9 @@
 //! Test helper: what a Claude Code SubAgent panel can paint *during* a turn.
 //!
-//! SubAgent TUI shows `thinking_delta` live and often hides `text_delta` until
-//! `end_turn`. Cline/Qwen/Cursor progress must therefore arrive as thinking
-//! frames before `finish` / `message_stop`. Command Code uses native thinking
-//! (`?` / Thought-for-Xs) plus display-only `server_tool_use`, not dumped ▶ text.
+//! SubAgent TUI hides `text_delta` until `end_turn`. Closing thinking mid-turn
+//! collapses Claude Code 2.1 to "Thought for Xs". ACP progress therefore stays
+//! on one native thinking block (▶/✓) before `finish` / `message_stop`. Command
+//! Code still uses display-only `server_tool_use`; Codex paints via `tool_use`.
 
 use axum::body::Bytes;
 use serde_json::Value;
@@ -16,6 +16,8 @@ pub(super) struct SubAgentLiveView {
     pub visible_thinking: String,
     /// Assistant text accumulated but hidden until end_turn.
     pub hidden_text: String,
+    /// Display-only `server_tool_use` cards painted mid-turn (web_search / web_fetch).
+    pub visible_server_tools: Vec<String>,
     pub saw_end_turn: bool,
     pub saw_message_stop: bool,
 }
@@ -24,6 +26,13 @@ impl SubAgentLiveView {
     pub fn ingest_sse(&mut self, sse: &str) {
         for payload in sse_json_payloads(sse) {
             match payload.get("type").and_then(Value::as_str) {
+                Some("content_block_start") => {
+                    if payload["content_block"]["type"].as_str() == Some("server_tool_use")
+                        && let Some(name) = payload["content_block"]["name"].as_str()
+                    {
+                        self.visible_server_tools.push(name.to_owned());
+                    }
+                }
                 Some("content_block_delta") => match payload["delta"]["type"].as_str() {
                     Some("thinking_delta") => {
                         if let Some(delta) = payload["delta"]["thinking"].as_str() {
@@ -88,6 +97,12 @@ mod tests {
         assert!(view.turn_still_open());
         assert_eq!(view.hidden_text, "Phase 1.\n");
         assert_eq!(view.visible_thinking, "\n▶ ReadFile\n");
+        assert!(view.visible_server_tools.is_empty());
+        view.ingest_sse(
+            "event: content_block_start\n\
+             data: {\"type\":\"content_block_start\",\"index\":2,\"content_block\":{\"type\":\"server_tool_use\",\"id\":\"srvtoolu_1\",\"name\":\"web_search\",\"input\":{}}}\n\n",
+        );
+        assert_eq!(view.visible_server_tools, vec!["web_search".to_owned()]);
         view.ingest_sse(
             "event: message_delta\n\
              data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null}}\n\n\

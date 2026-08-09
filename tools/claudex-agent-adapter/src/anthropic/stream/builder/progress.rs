@@ -6,7 +6,10 @@ use serde_json::{Value, json};
 use super::SegmentBuilder;
 use crate::anthropic::stream::{
     protocol::{StreamSender, send_stream_frame},
-    sanitize::is_provider_status_line,
+    sanitize::{
+        compact_live_prose, is_bulk_tool_dump, is_provider_status_line, latest_worker_status,
+    },
+    thinking::summary_delta,
 };
 
 impl SegmentBuilder {
@@ -15,20 +18,29 @@ impl SegmentBuilder {
     /// SubAgent panels paint live thinking chrome and hide assistant text until
     /// end_turn. Qwen often emits `AgentMessageChunk` before `ToolCall`; the old
     /// path then appended ▶ to `text_delta`, so the panel stayed on
-    /// "Thought for Xs" + spinner. Always paint ▶/✓/✗ as `thinking_delta`,
-    /// except Command Code: canned ▶/✓/still-working dumps fight Claude Code's
-    /// native thinking/`?` elapsed UI. Web tools use `server_tool_use`; native
-    /// thought/prose ride AgentThought / AgentMessage.
-    /// `sanitize_committed_blocks` still strips those markers from the transcript.
+    /// "Thought for Xs" + spinner. Always paint ▶/✓/✗ as `thinking_delta`.
+    /// ACP SubAgents keep one native thinking block open for the whole turn
+    /// (Command Code still uses display-only `server_tool_use`). Canned ●/still-
+    /// working worker text is still dropped. `sanitize_committed_blocks` strips
+    /// markers from the transcript.
     pub(in crate::anthropic::stream) async fn stream_progress_text(
         &mut self,
         delta: &str,
         stream: Option<&StreamSender>,
     ) -> Result<()> {
-        if delta.is_empty() || self.is_command_code_subagent() {
+        if delta.is_empty() {
+            return Ok(());
+        }
+        if self.is_command_code_subagent() && !is_adapter_tool_marker(delta) {
             return Ok(());
         }
         self.close_text_block(stream).await?;
+        if self.is_subagent && !self.is_command_code_subagent() {
+            return self
+                .thinking
+                .progress_status_keep_open(&mut self.blocks, delta, stream)
+                .await;
+        }
         self.thinking
             .progress_status(&mut self.blocks, delta, stream)
             .await
@@ -45,35 +57,154 @@ impl SegmentBuilder {
         if delta.is_empty() {
             return Ok(());
         }
+        if self.is_subagent {
+            if let Some(status) = latest_worker_status(delta) {
+                return self.replace_live_worker_status(&status, stream).await;
+            }
+        }
         // ACP status lines (`…:status`) and Qwen/Cursor prose that already
         // contains ▶/✓ must ride thinking chrome. SubAgent TUI hides text_delta.
+        // Mixed ▶ + answer chunks (Command Code) must not dump the answer.
         let status_item = event
             .pointer("/params/itemId")
             .and_then(Value::as_str)
             .is_some_and(|id| id.ends_with(":status"));
+        let non_empty: Vec<&str> = delta
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .collect();
         if status_item
-            || delta
-                .lines()
-                .any(|line| is_provider_status_line(line.trim()))
+            || (!non_empty.is_empty() && non_empty.iter().all(|line| is_provider_status_line(line)))
         {
             return self.stream_progress_text(delta, stream).await;
         }
         if self.is_subagent {
-            if self.paints_progress_as_text() {
-                // Native Command Code prose stays text. ●/▶ status lines already
-                // diverted to stream_progress_text (no-op for CC).
-                return self.stream_answer_delta(delta, stream).await;
+            let Some(delta) = self.filter_subagent_live_delta(delta) else {
+                return Ok(());
+            };
+            let dump_hint = delta.contains("large tool output omitted");
+            if self.is_command_code_subagent() && self.paints_progress_as_text() && !dump_hint {
+                // Command Code: server_tool_use unlocks live text_delta.
+                return self.stream_answer_delta(&delta, stream).await;
             }
-            // SubAgent TUI hides text_delta until end_turn. Cline/Qwen narrate
-            // mid-turn in AgentMessage, so mirror into thinking chrome live and
-            // flush the answer only when the turn completes.
+            // ACP SubAgents keep native thinking open for the whole turn.
+            // Streaming text_delta here would close thinking and collapse CC 2.1
+            // to repeating "Thought for Xs".
             self.thinking
-                .progress_status(&mut self.blocks, delta, stream)
+                .progress_status_keep_open(&mut self.blocks, &delta, stream)
                 .await?;
-            self.pending_answer.push_str(delta);
+            if !dump_hint {
+                self.pending_answer.push_str(&delta);
+            }
             return Ok(());
         }
         self.stream_answer_delta(delta, stream).await
+    }
+
+    pub(in crate::anthropic::stream) async fn reasoning_delta(
+        &mut self,
+        event: &Value,
+        stream: Option<&StreamSender>,
+    ) -> Result<()> {
+        let Some((item_id, summary_index, raw)) = summary_delta(event) else {
+            return Ok(());
+        };
+        if !self.is_subagent {
+            return self.thinking.delta(event, &mut self.blocks, stream).await;
+        }
+        if let Some(status) = latest_worker_status(raw) {
+            return self.replace_live_worker_status(&status, stream).await;
+        }
+        match self.filter_subagent_live_delta(raw) {
+            Some(delta) if delta.contains("large tool output omitted") => {
+                if self.is_subagent && !self.is_command_code_subagent() {
+                    self.thinking
+                        .progress_status_keep_open(&mut self.blocks, &delta, stream)
+                        .await?;
+                } else {
+                    if self.thinking.is_native_thought_open() {
+                        self.thinking.close(&mut self.blocks, stream).await?;
+                    }
+                    self.thinking
+                        .progress_status(&mut self.blocks, &delta, stream)
+                        .await?;
+                    self.paint_post_thought_status(stream).await?;
+                }
+            }
+            Some(delta) => {
+                let was_open = self.thinking.is_open();
+                if self.is_subagent && !self.is_command_code_subagent() {
+                    self.thinking
+                        .delta_text_coalesced(
+                            item_id,
+                            summary_index,
+                            &delta,
+                            &mut self.blocks,
+                            stream,
+                        )
+                        .await?;
+                } else {
+                    self.thinking
+                        .delta_text(item_id, summary_index, &delta, &mut self.blocks, stream)
+                        .await?;
+                    if was_open && !self.thinking.is_open() {
+                        self.paint_post_thought_status(stream).await?;
+                    }
+                }
+            }
+            None => {
+                if self.thinking.is_native_thought_open()
+                    && !(self.is_subagent && !self.is_command_code_subagent())
+                {
+                    self.thinking.close(&mut self.blocks, stream).await?;
+                    self.paint_post_thought_status(stream).await?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    async fn replace_live_worker_status(
+        &mut self,
+        status: &str,
+        stream: Option<&StreamSender>,
+    ) -> Result<()> {
+        if self.is_subagent && !self.is_command_code_subagent() {
+            return self
+                .thinking
+                .progress_status_keep_open(&mut self.blocks, status, stream)
+                .await;
+        }
+        if self.thinking.is_open() {
+            self.thinking.close(&mut self.blocks, stream).await?;
+        }
+        self.thinking
+            .progress_status(&mut self.blocks, status, stream)
+            .await
+    }
+
+    async fn paint_post_thought_status(&mut self, stream: Option<&StreamSender>) -> Result<()> {
+        if let Some((_, title)) = self.provider_tool_calls.last() {
+            let title = compact_keepalive_title(title);
+            self.stream_progress_text(&format!("\n▶ {title}\n"), stream)
+                .await?;
+        }
+        self.activity_keepalive(stream).await
+    }
+
+    fn filter_subagent_live_delta(&mut self, delta: &str) -> Option<String> {
+        if delta.trim().is_empty() {
+            return None;
+        }
+        if is_bulk_tool_dump(delta) {
+            if self.bulk_dump_hinted {
+                return None;
+            }
+            self.bulk_dump_hinted = true;
+            return Some("… large tool output omitted\n".to_owned());
+        }
+        Some(compact_live_prose(delta))
     }
 
     async fn stream_answer_delta(
@@ -115,12 +246,6 @@ impl SegmentBuilder {
         &mut self,
         stream: Option<&StreamSender>,
     ) -> Result<()> {
-        if self.is_command_code_subagent() {
-            return self
-                .thinking
-                .silent_activity_keepalive(&mut self.blocks, stream)
-                .await;
-        }
         if self.is_subagent {
             let last_tool = self
                 .provider_tool_calls
@@ -179,6 +304,13 @@ async fn send_activity_heartbeat(
         })
     })
     .await
+}
+
+fn is_adapter_tool_marker(delta: &str) -> bool {
+    delta.lines().any(|line| {
+        let trimmed = line.trim_start();
+        trimmed.starts_with('▶') || trimmed.starts_with('✓') || trimmed.starts_with('✗')
+    }) && !delta.contains("Command Code")
 }
 
 fn compact_keepalive_title(title: &str) -> String {

@@ -246,7 +246,7 @@ pub(super) fn bridge_provider_tool_call(
     external_tool_names: &HashMap<String, String>,
     event: &Value,
 ) -> Option<ToolCall> {
-    bridge_provider_tool_call_inner(external_tool_names, event, false)
+    bridge_provider_tool_call_inner(external_tool_names, event, false, None)
 }
 
 /// Like [`bridge_provider_tool_call`], but also consults the MCP launch queue when
@@ -254,14 +254,16 @@ pub(super) fn bridge_provider_tool_call(
 pub(super) fn bridge_provider_tool_call_with_mcp_hint(
     external_tool_names: &HashMap<String, String>,
     event: &Value,
+    launch_owner: Option<&str>,
 ) -> Option<ToolCall> {
-    bridge_provider_tool_call_inner(external_tool_names, event, true)
+    bridge_provider_tool_call_inner(external_tool_names, event, true, launch_owner)
 }
 
 fn bridge_provider_tool_call_inner(
     external_tool_names: &HashMap<String, String>,
     event: &Value,
     force_mcp_queue: bool,
+    launch_owner: Option<&str>,
 ) -> Option<ToolCall> {
     trace_launch_shaped_event(event);
     let params = event.get("params")?;
@@ -278,7 +280,7 @@ fn bridge_provider_tool_call_inner(
             .any(|candidate| looks_like_mcp_surface(candidate));
     let normalized_raw = normalize_launch_arguments("Agent", raw_args);
     let queued = if mcp_shaped && !launch_arguments_ready(&normalized_raw) {
-        super::acp_launch_queue::peek_pending_launch_arguments()
+        super::acp_launch_queue::peek_pending_launch_arguments_for(launch_owner)
     } else {
         None
     };
@@ -309,8 +311,11 @@ fn bridge_provider_tool_call_inner(
         return None;
     }
     if queued.is_some() {
-        let _ = super::acp_launch_queue::take_pending_launch_arguments();
-        tracing::info!("using queued claudex-launch MCP arguments for ACP bridge");
+        let _ = super::acp_launch_queue::take_pending_launch_arguments_for(launch_owner);
+        tracing::info!(
+            launch_owner,
+            "using queued claudex-launch MCP arguments for ACP bridge"
+        );
     }
     Some(ToolCall {
         call_id: call_id.to_owned(),
