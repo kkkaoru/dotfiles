@@ -12,41 +12,55 @@ use serde_json::{Value, json};
 
 const QUEUE_MAX_AGE: Duration = Duration::from_secs(120);
 
-pub(super) fn queue_path() -> PathBuf {
+fn queue_path() -> PathBuf {
     env::var_os("CLAUDEX_LAUNCH_QUEUE")
         .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            env::var_os("HOME")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("."))
-                .join(".cache/claudex/launch-queue.jsonl")
-        })
+        .unwrap_or_else(|| default_cache_dir().join("launch-queue.jsonl"))
+}
+
+fn queue_path_for(owner: Option<&str>) -> PathBuf {
+    match owner.map(str::trim).filter(|owner| !owner.is_empty()) {
+        Some(owner) => {
+            let directory = queue_path()
+                .parent()
+                .map(Path::to_path_buf)
+                .unwrap_or_else(default_cache_dir);
+            crate::launch_mcp::launch_queue_path(&directory, Some(owner))
+        }
+        None => queue_path(),
+    }
+}
+
+fn default_cache_dir() -> PathBuf {
+    env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".cache/claudex")
 }
 
 /// Read the oldest fresh Agent/Task launch args without removing them.
-pub(super) fn peek_pending_launch_arguments() -> Option<Value> {
-    peek_pending_launch_arguments_from(&queue_path(), now_secs())
+pub(super) fn peek_pending_launch_arguments_for(owner: Option<&str>) -> Option<Value> {
+    peek_pending_launch_arguments_from(&queue_path_for(owner), now_secs(), owner)
 }
 
-fn peek_pending_launch_arguments_from(path: &Path, now: f64) -> Option<Value> {
+fn peek_pending_launch_arguments_from(path: &Path, now: f64, owner: Option<&str>) -> Option<Value> {
     read_entries(path)
         .into_iter()
-        .find_map(|entry| launch_args_from_entry(&entry, now))
+        .find_map(|entry| launch_args_from_entry(&entry, now, owner))
 }
 
 /// Pop the oldest fresh Agent/Task launch args written by `mcp-claudex-launch`.
-pub(super) fn take_pending_launch_arguments() -> Option<Value> {
-    let path = queue_path();
-    take_pending_launch_arguments_from(&path, now_secs())
+pub(super) fn take_pending_launch_arguments_for(owner: Option<&str>) -> Option<Value> {
+    take_pending_launch_arguments_from(&queue_path_for(owner), now_secs(), owner)
 }
 
-fn take_pending_launch_arguments_from(path: &Path, now: f64) -> Option<Value> {
+fn take_pending_launch_arguments_from(path: &Path, now: f64, owner: Option<&str>) -> Option<Value> {
     let entries = read_entries(path);
     let mut taken = None;
     let mut kept = Vec::new();
     for entry in entries {
         if taken.is_none()
-            && let Some(arguments) = launch_args_from_entry(&entry, now)
+            && let Some(arguments) = launch_args_from_entry(&entry, now, owner)
         {
             taken = Some(arguments);
             continue;
@@ -75,9 +89,12 @@ fn read_entries(path: &Path) -> Vec<Value> {
         .collect()
 }
 
-fn launch_args_from_entry(entry: &Value, now: f64) -> Option<Value> {
+fn launch_args_from_entry(entry: &Value, now: f64, owner: Option<&str>) -> Option<Value> {
     let ts = entry.get("ts").and_then(Value::as_f64).unwrap_or(0.0);
     if now - ts > QUEUE_MAX_AGE.as_secs_f64() {
+        return None;
+    }
+    if !owner_matches(entry, owner) {
         return None;
     }
     let name = entry.get("name").and_then(Value::as_str).unwrap_or("Agent");
@@ -91,6 +108,19 @@ fn launch_args_from_entry(entry: &Value, now: f64) -> Option<Value> {
             .or_insert_with(|| json!(name));
     }
     Some(arguments)
+}
+
+fn owner_matches(entry: &Value, owner: Option<&str>) -> bool {
+    let recorded = entry.get("owner").and_then(Value::as_str);
+    match (
+        owner.map(str::trim).filter(|owner| !owner.is_empty()),
+        recorded,
+    ) {
+        (Some(expected), Some(actual)) => actual == expected,
+        (Some(_), None) => false,
+        (None, Some(_)) => false,
+        (None, None) => true,
+    }
 }
 
 fn now_secs() -> f64 {

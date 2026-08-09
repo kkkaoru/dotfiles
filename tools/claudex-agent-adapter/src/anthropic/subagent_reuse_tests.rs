@@ -281,6 +281,59 @@ mod tests {
     }
 
     #[test]
+    fn reuse_keys_off_user_id_json_session_when_transport_header_is_missing() {
+        let registry = SubagentReuseRegistry::default();
+        let mut first = request("ignored", vec![launch("tool-a", "worker-a")]);
+        first.metadata = json!({"user_id": r#"{"session_id":"from-user"}"#});
+        registry.observe_and_restore(&mut first);
+        assert_eq!(
+            registry.state_for("from-user"),
+            Some(vec!["worker-a".to_owned()])
+        );
+        assert_eq!(registry.state_for("ignored"), None);
+    }
+
+    #[test]
+    fn concurrent_claude_sessions_do_not_reuse_each_others_workers() {
+        let registry = SubagentReuseRegistry::default();
+        let mut first = request(
+            "session-a",
+            launch_with_scope(
+                "tool-a",
+                "worker-a",
+                "Audit the Rust adapter tests",
+                "worker-model",
+            ),
+        );
+        registry.observe_and_restore(&mut first);
+
+        let mut peer = request(
+            "session-b",
+            vec![json!({"role":"user","content":"independent tui"})],
+        );
+        registry.observe_and_restore(&mut peer);
+        assert!(!peer.system.to_string().contains("worker-a"));
+        assert!(
+            registry
+                .state_for("session-b")
+                .unwrap_or_default()
+                .is_empty()
+        );
+
+        let mut arguments = launch_arguments("Audit the Rust adapter tests", "worker-model");
+        assert_eq!(
+            registry.rewrite_launch_input("session-b", &mut arguments),
+            None,
+            "another claudex TUI must not resume this session's SubAgent"
+        );
+        assert!(arguments.get("resume").is_none());
+        assert_eq!(
+            registry.rewrite_launch_input("session-a", &mut arguments),
+            Some("worker-a".to_owned())
+        );
+    }
+
+    #[test]
     fn same_scope_active_launch_is_rewritten_to_resume_instead_of_a_new_spawn() {
         let registry = SubagentReuseRegistry::default();
         let mut first = request(
@@ -399,7 +452,7 @@ mod tests {
     }
 
     #[test]
-    fn incompatible_model_is_not_rewritten_to_resume() {
+    fn same_scope_different_model_resumes_existing_worker() {
         let registry = SubagentReuseRegistry::default();
         let mut first = request(
             "session-a",
@@ -414,8 +467,57 @@ mod tests {
         let mut arguments = launch_arguments("Audit the Rust adapter tests", "other-model");
         assert_eq!(
             registry.rewrite_launch_input("session-a", &mut arguments),
-            None
+            Some("worker-a".to_owned())
         );
+        assert_eq!(arguments["resume"], "worker-a");
+    }
+
+    #[test]
+    fn description_is_preferred_over_prompt_for_same_scope() {
+        let registry = SubagentReuseRegistry::default();
+        let mut first = request(
+            "session-a",
+            vec![
+                json!({
+                    "role":"assistant",
+                    "content":[{
+                        "type":"tool_use",
+                        "id":"tool-a",
+                        "name":"Agent",
+                        "input":{
+                            "description":"Reproduce azookey conversion bug",
+                            "prompt":"Use gpt to map the conversion pipeline.",
+                            "claudex_model":"gpt-test"
+                        }
+                    }]
+                }),
+                launch("tool-a", "worker-a"),
+            ],
+        );
+        registry.observe_and_restore(&mut first);
+        let mut arguments = json!({
+            "description":"Reproduce azookey conversion bug",
+            "prompt":"Use command code to map the conversion pipeline.",
+            "claudex_model":"command-code"
+        });
+        assert_eq!(
+            registry.rewrite_launch_input("session-a", &mut arguments),
+            Some("worker-a".to_owned())
+        );
+    }
+
+    #[test]
+    fn inflight_placeholder_occupies_scope_before_tool_result() {
+        let registry = SubagentReuseRegistry::default();
+        let arguments = json!({
+            "description":"Trace azookey conversion pipeline",
+            "prompt":"Start with Vibrato boundaries.",
+            "claudex_model":"gpt-test"
+        });
+        registry.note_inflight_launch("session-a", &arguments, "tool-pending");
+        assert!(registry.scope_is_occupied("session-a", &arguments));
+        assert!(registry.rewrite_launch_input("session-a", &mut arguments.clone()).is_none());
+        assert_eq!(registry.state_for("session-a"), Some(Vec::<String>::new()));
     }
 
     #[test]

@@ -18,7 +18,7 @@ pub(super) use guidance::{agent_teams_enabled, value_text};
 use guidance::{append_reuse_guidance, has_send_message_tool, system_contains_marker};
 use records::{
     LaunchRecord, already_has_resume, apply_transcript, find_reusable_launch, latest_user_text,
-    launch_records, scope_similarity,
+    launch_records, scope_is_occupied, scope_similarity, summarize_scope,
 };
 
 pub(crate) const MAX_SUBAGENTS_PER_SESSION_ENV: &str = "CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION";
@@ -96,7 +96,7 @@ impl SubagentReuseRegistry {
     }
 
     fn observe_and_restore_with_reuse(&self, request: &mut MessagesRequest, reuse: bool) {
-        let Some(session_id) = session_id(request).map(str::to_owned) else {
+        let Some(session_id) = session_id(request) else {
             return;
         };
         let observed = launch_records(&request.messages);
@@ -162,6 +162,57 @@ impl SubagentReuseRegistry {
         Some(recipient)
     }
 
+    pub(super) fn scope_is_occupied(&self, session_id: &str, arguments: &Value) -> bool {
+        let scope_key = records::launch_scope_key(arguments);
+        if session_id.is_empty() || scope_key.is_empty() {
+            return false;
+        }
+        let states = self
+            .states
+            .lock()
+            .expect("SubAgent reuse registry poisoned");
+        states
+            .get(session_id)
+            .is_some_and(|state| scope_is_occupied(&state.launches, &scope_key))
+    }
+
+    /// Remember a just-forwarded launch before its tool_result exists so a
+    /// same-turn or next-turn duplicate cannot spawn another worker.
+    /// In-memory only: empty-recipient placeholders must not survive restart.
+    pub(super) fn note_inflight_launch(
+        &self,
+        session_id: &str,
+        arguments: &Value,
+        tool_use_id: &str,
+    ) {
+        if !reuse_enabled() || session_id.is_empty() || tool_use_id.is_empty() {
+            return;
+        }
+        let scope = summarize_scope(arguments);
+        if scope.is_empty() {
+            return;
+        }
+        let model = arguments
+            .get("claudex_model")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        let mut states = self
+            .states
+            .lock()
+            .expect("SubAgent reuse registry poisoned");
+        let state = states.entry(session_id.to_owned()).or_default();
+        records::merge_launches(
+            &mut state.launches,
+            std::iter::once(&LaunchRecord {
+                key: tool_use_id.to_owned(),
+                recipient: String::new(),
+                scope,
+                model,
+                status: "pending".to_owned(),
+            }),
+        );
+    }
+
     #[cfg(test)]
     pub(super) fn observe_and_restore_for_test(&self, request: &mut MessagesRequest, reuse: bool) {
         self.observe_and_restore_with_reuse(request, reuse);
@@ -188,6 +239,7 @@ impl SubagentReuseRegistry {
                     .launches
                     .iter()
                     .map(|launch| launch.recipient.clone())
+                    .filter(|recipient| !recipient.is_empty())
                     .collect()
             })
     }
@@ -323,12 +375,8 @@ pub(super) fn reuse_enabled() -> bool {
     }
 }
 
-pub(super) fn session_id(request: &MessagesRequest) -> Option<&str> {
-    request
-        .metadata
-        .pointer("/_claudex_transport_identity/session_id")
-        .and_then(Value::as_str)
-        .filter(|id| !id.is_empty())
+pub(super) fn session_id(request: &MessagesRequest) -> Option<String> {
+    super::request_identity::claude_session_id(request)
 }
 
 fn set_limit_metadata(request: &mut MessagesRequest, reached: bool) {

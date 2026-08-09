@@ -7,7 +7,7 @@
 use std::{
     env, fs,
     io::{self, BufRead, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -17,6 +17,46 @@ use serde_json::{Value, json};
 const PROTOCOL_VERSION: &str = "2024-11-05";
 const SERVER_NAME: &str = "claudex-launch";
 const SERVER_VERSION: &str = "2.0.0";
+const LAUNCH_QUEUE_FILE: &str = "launch-queue.jsonl";
+const MAX_OWNER_FILE_CHARS: usize = 128;
+
+pub(crate) fn sanitize_launch_owner(owner: &str) -> String {
+    let mut sanitized = String::new();
+    for character in owner.chars() {
+        if sanitized.len() >= MAX_OWNER_FILE_CHARS {
+            break;
+        }
+        if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
+            sanitized.push(character);
+        } else {
+            sanitized.push('_');
+        }
+    }
+    if sanitized.is_empty() {
+        "unknown".to_owned()
+    } else {
+        sanitized
+    }
+}
+
+pub(crate) fn launch_queue_path(cache: &Path, owner: Option<&str>) -> PathBuf {
+    match owner.map(str::trim).filter(|owner| !owner.is_empty()) {
+        Some(owner) => cache.join(format!(
+            "launch-queue.{}.jsonl",
+            sanitize_launch_owner(owner)
+        )),
+        None => cache.join(LAUNCH_QUEUE_FILE),
+    }
+}
+
+pub(crate) fn launch_owner_from_params(params: &Value) -> Option<String> {
+    params
+        .get("claudexLaunchOwner")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|owner| !owner.is_empty())
+        .map(str::to_owned)
+}
 
 pub fn run_stdio() -> Result<()> {
     let stdin = io::stdin();
@@ -144,13 +184,22 @@ fn record_tools_call_to(message: &Value, timestamp: f64, paths: impl IntoIterato
         .get("arguments")
         .cloned()
         .unwrap_or_else(|| json!({}));
-    let payload = json!({
+    let owner = env::var("CLAUDEX_LAUNCH_OWNER")
+        .ok()
+        .map(|owner| owner.trim().to_owned())
+        .filter(|owner| !owner.is_empty());
+    let mut payload = json!({
         "ts": timestamp,
         "name": name,
         "arguments": arguments,
         "method": message.get("method"),
         "params": params
     });
+    if let Some(owner) = owner
+        && let Some(object) = payload.as_object_mut()
+    {
+        object.insert("owner".to_owned(), json!(owner));
+    }
     for path in paths {
         if let Some(parent) = path.parent() {
             let _ = fs::create_dir_all(parent);

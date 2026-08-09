@@ -10,11 +10,17 @@ use super::{
 fn missing_and_malformed_queues_have_no_pending_launch() {
     let root = tempfile::tempdir().expect("queue fixture");
     let path = root.path().join("missing/queue.jsonl");
-    assert_eq!(peek_pending_launch_arguments_from(&path, 1_000.0), None);
+    assert_eq!(
+        peek_pending_launch_arguments_from(&path, 1_000.0, None),
+        None
+    );
 
     fs::create_dir_all(path.parent().unwrap()).expect("queue parent");
     fs::write(&path, "\nnot-json\n{}\n").expect("malformed queue");
-    assert_eq!(peek_pending_launch_arguments_from(&path, 1_000.0), None);
+    assert_eq!(
+        peek_pending_launch_arguments_from(&path, 1_000.0, None),
+        None
+    );
 }
 
 #[test]
@@ -35,11 +41,11 @@ fn pops_oldest_fresh_launch_and_rewrites_only_live_entries() {
         + "\n";
     fs::write(&path, body).expect("queue entries");
 
-    let peeked = peek_pending_launch_arguments_from(&path, 1_000.0).expect("peeked Agent");
+    let peeked = peek_pending_launch_arguments_from(&path, 1_000.0, None).expect("peeked Agent");
     assert_eq!(peeked["prompt"], "first");
     assert_eq!(peeked["_toolName"], "agent");
 
-    let first = take_pending_launch_arguments_from(&path, 1_000.0).expect("first Agent");
+    let first = take_pending_launch_arguments_from(&path, 1_000.0, None).expect("first Agent");
     assert_eq!(first, peeked);
     let rewritten = fs::read_to_string(&path).expect("rewritten queue");
     assert!(!rewritten.contains("stale"));
@@ -47,11 +53,14 @@ fn pops_oldest_fresh_launch_and_rewrites_only_live_entries() {
     assert!(rewritten.contains("Bash"));
     assert!(rewritten.contains("second"));
 
-    let second = take_pending_launch_arguments_from(&path, 1_000.0).expect("second Task");
+    let second = take_pending_launch_arguments_from(&path, 1_000.0, None).expect("second Task");
     assert_eq!(second["prompt"], "second");
     assert_eq!(second["_toolName"], "Task");
     assert!(fs::read_to_string(&path).unwrap().contains("Bash"));
-    assert_eq!(take_pending_launch_arguments_from(&path, 1_000.0), None);
+    assert_eq!(
+        take_pending_launch_arguments_from(&path, 1_000.0, None),
+        None
+    );
 }
 
 #[test]
@@ -63,6 +72,7 @@ fn launch_arguments_preserve_explicit_tool_names_and_scalar_values() {
             "arguments":{"prompt":"work","_toolName":"Agent"}
         }),
         1_000.0,
+        None,
     )
     .expect("explicit tool name");
     assert_eq!(explicit["_toolName"], "Agent");
@@ -71,11 +81,48 @@ fn launch_arguments_preserve_explicit_tool_names_and_scalar_values() {
         launch_args_from_entry(
             &json!({"ts":1_000.0,"name":"Agent","arguments":"raw"}),
             1_000.0,
+            None,
         ),
         Some(json!("raw"))
     );
     assert_eq!(
-        launch_args_from_entry(&json!({"ts":1_000.0,"name":"agent"}), 1_000.0),
+        launch_args_from_entry(&json!({"ts":1_000.0,"name":"agent"}), 1_000.0, None),
         Some(json!({"_toolName":"agent"}))
+    );
+}
+
+#[test]
+fn does_not_drain_another_claude_session_launch() {
+    let root = tempfile::tempdir().expect("queue fixture");
+    let path = root.path().join("queue.jsonl");
+    let entries = [
+        json!({"ts":960.0,"name":"Agent","owner":"session-b","arguments":{"prompt":"other-tui"}}),
+        json!({"ts":970.0,"name":"Agent","owner":"session-a","arguments":{"prompt":"this-tui"}}),
+        json!({"ts":980.0,"name":"Agent","arguments":{"prompt":"legacy-global"}}),
+    ];
+    let body = entries
+        .iter()
+        .map(Value::to_string)
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n";
+    fs::write(&path, body).expect("queue entries");
+
+    let taken = take_pending_launch_arguments_from(&path, 1_000.0, Some("session-a"))
+        .expect("session-a launch");
+    assert_eq!(taken["prompt"], "this-tui");
+    let leftover = fs::read_to_string(&path).expect("leftover queue");
+    assert!(leftover.contains("other-tui"));
+    assert!(leftover.contains("legacy-global"));
+    assert!(!leftover.contains("this-tui"));
+
+    assert_eq!(
+        take_pending_launch_arguments_from(&path, 1_000.0, None).expect("untagged global")["prompt"],
+        "legacy-global"
+    );
+    assert!(
+        take_pending_launch_arguments_from(&path, 1_000.0, Some("session-b"))
+            .expect("session-b launch")["prompt"]
+            == "other-tui"
     );
 }

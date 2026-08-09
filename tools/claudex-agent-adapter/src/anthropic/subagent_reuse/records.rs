@@ -36,11 +36,20 @@ fn same_logical_launch(current: &LaunchRecord, observed: &LaunchRecord) -> bool 
     if current.scope.is_empty() || observed.scope.is_empty() {
         return false;
     }
-    let model_matches = match (&current.model, &observed.model) {
-        (Some(current), Some(observed)) => current == observed,
-        _ => true,
-    };
-    model_matches && normalize_scope(&current.scope) == normalize_scope(&observed.scope)
+    // selected_workers is a capacity pool, not a launch count. Same scope stays
+    // one in-flight worker even when the orchestrator picks another model.
+    normalize_scope(&current.scope) == normalize_scope(&observed.scope)
+}
+
+pub(super) fn launch_scope_key(input: &Value) -> String {
+    normalize_scope(&summarize_scope(input))
+}
+
+pub(super) fn scope_is_occupied(launches: &[LaunchRecord], scope_key: &str) -> bool {
+    !scope_key.is_empty()
+        && launches.iter().any(|launch| {
+            !terminal_status(&launch.status) && normalize_scope(&launch.scope) == scope_key
+        })
 }
 
 fn normalize_scope(scope: &str) -> String {
@@ -91,7 +100,9 @@ pub(super) fn find_reusable_launch<'a>(
     let mut exact = launches
         .iter()
         .filter(|current| {
-            reusable_status(&current.status) && same_logical_launch(current, &proposed)
+            reusable_status(&current.status)
+                && !current.recipient.is_empty()
+                && same_logical_launch(current, &proposed)
         })
         .collect::<Vec<_>>();
     if exact.is_empty() {
@@ -281,11 +292,15 @@ pub(super) fn scope_similarity(scope: &str, task: &str) -> usize {
         .count()
 }
 
-fn summarize_scope(input: &Value) -> String {
+pub(super) fn summarize_scope(input: &Value) -> String {
+    // Claude Code's agents panel titles `description`. Two workers with the same
+    // card title are the same scope even when prompts differ by provider.
     let text = input
-        .get("prompt")
-        .or_else(|| input.get("description"))
+        .get("description")
         .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .or_else(|| input.get("prompt").and_then(Value::as_str))
         .unwrap_or_default();
     let summary = text
         .lines()

@@ -142,5 +142,25 @@ fn records_calls_to_each_configured_queue_with_defaults() {
         assert_eq!(payload["arguments"], json!({}));
         assert_eq!(payload["method"], "tools/call");
         assert_eq!(payload["params"], Value::Null);
+        assert!(payload.get("owner").is_none());
+    }
+}
+
+#[test]
+fn records_launch_owner_when_env_is_set() {
+    let previous = std::env::var_os("CLAUDEX_LAUNCH_OWNER");
+    unsafe { std::env::set_var("CLAUDEX_LAUNCH_OWNER", "session-a") };
+    let root = tempfile::tempdir().expect("MCP owner fixture");
+    let queue = root.path().join("queue.jsonl");
+    record_tools_call_to(
+        &json!({"method":"tools/call","params":{"name":"Agent","arguments":{"prompt":"p"}}}),
+        1.0,
+        [queue.clone()],
+    );
+    let payload: Value = serde_json::from_str(fs::read_to_string(queue).unwrap().trim()).unwrap();
+    assert_eq!(payload["owner"], "session-a");
+    match previous {
+        Some(value) => unsafe { std::env::set_var("CLAUDEX_LAUNCH_OWNER", value) },
+        None => unsafe { std::env::remove_var("CLAUDEX_LAUNCH_OWNER") },
     }
 }

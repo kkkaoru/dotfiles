@@ -192,7 +192,7 @@ impl Bridge {
                 parent_model: request.model.clone(),
                 user_messages: request.messages.clone(),
                 system: request.system.clone(),
-                session_id: super::subagent_reuse::session_id(request).map(str::to_owned),
+                session_id: super::subagent_reuse::session_id(request),
                 subagent_reuse: Arc::clone(&self.subagent_reuse),
                 auth_cache: self.provider_auth_cache_path(),
                 disabled_subagent_models: request.disabled_subagent_models.clone(),
