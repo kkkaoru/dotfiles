@@ -98,6 +98,10 @@ fn sanitizes_text_thinking_and_provider_status_variants() {
         "🔎 WebSearch: Example Robotics",
         "… still working (2m) · last: Read foo",
         "Claudex is still working; waiting for provider output\u{2026}",
+        "Thought for 17s",
+        "Working on your request — I'll gather what I need and put together the result.",
+        "Continuing with the next step in the plan.",
+        "I’ll audit the local ctx index and pull the evidence needed for the report.",
     ] {
         let mut status_block = vec![json!({"type":"thinking","thinking":status})];
         sanitize::sanitize_committed_blocks(&mut status_block);
@@ -106,6 +110,29 @@ fn sanitizes_text_thinking_and_provider_status_variants() {
             "status should be removed: {status}"
         );
     }
+}
+
+#[test]
+fn recognizes_cursor_thought_for_filler() {
+    assert!(sanitize::is_canned_worker_filler("Thought for 17s"));
+    assert!(sanitize::is_canned_worker_filler(
+        "Working on your request — I'll gather what I need and put together the result."
+    ));
+    assert!(sanitize::is_canned_worker_filler(
+        "I’ll audit the local ctx index and pull the evidence needed for the report."
+    ));
+    assert!(sanitize::is_canned_worker_filler(
+        "Continuing with the next step in the plan."
+    ));
+    assert!(sanitize::is_canned_worker_filler(
+        "I’ve confirmed local history is indexed and located the session store"
+    ));
+    assert!(!sanitize::is_canned_worker_filler(
+        "型と配信パスを把握しました。既存 finish-prediction-inputs-cache を確認します。"
+    ));
+    assert!(!sanitize::is_canned_worker_filler(
+        "ContextVar は worker スレッドに伝わらないので、スレッド共有のフラグに切り替えます。"
+    ));
 }
 
 #[test]
@@ -155,6 +182,36 @@ fn rewrites_premature_status_only_toolless_worker_replies() {
     assert_eq!(
         real_answer.blocks[0]["text"],
         "The heading is # Claudex adapter."
+    );
+}
+
+#[tokio::test]
+async fn subagent_coalesced_reasoning_continues_after_native_tool_use() {
+    let mut state = ThinkingState::default();
+    let mut blocks = vec![json!({
+        "type":"tool_use",
+        "id":"toolu_read",
+        "name":"Read",
+        "input":{"path":"scripts/CLAUDE.md"}
+    })];
+    state
+        .delta_text_coalesced(
+            "reasoning",
+            0,
+            "Inspect how sync-realtime-data chooses the writable Neon connection.",
+            &mut blocks,
+            None,
+        )
+        .await
+        .expect("subagent reasoning after Read");
+    assert!(
+        blocks.iter().any(|block| {
+            block
+                .get("thinking")
+                .and_then(Value::as_str)
+                .is_some_and(|text| text.contains("writable Neon connection"))
+        }),
+        "Codex/luna reasoning after Read must stay live: {blocks:?}"
     );
 }
 
@@ -1554,6 +1611,62 @@ async fn forwards_live_task_output_to_claude_code() {
     assert_eq!(builder.blocks[0]["type"], "tool_use");
     assert_eq!(builder.blocks[0]["name"], "TaskOutput");
     assert_eq!(builder.blocks[0]["input"]["task_id"], "a4496564387a2561f");
+}
+
+#[tokio::test]
+async fn subagent_codex_tool_use_reopens_thinking_so_viewer_stays_live() {
+    let (_root, _app, bridge, mut session) = disconnect_fixture().await;
+    Arc::get_mut(&mut session)
+        .expect("unique session")
+        .external_tool_names
+        .insert("cc_Read_0".to_owned(), "Read".to_owned());
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
+    let mut builder = SegmentBuilder::for_turn(1, true, "gpt-5.6-luna");
+    let _ = builder
+        .handle_event(
+            &bridge,
+            &session,
+            &[],
+            &Value::Null,
+            &json!({
+                "id":9,
+                "method":"item/tool/call",
+                "params":{
+                    "callId":"read-claude-md",
+                    "tool":"cc_Read_0",
+                    "arguments":{"path":"scripts/CLAUDE.md"}
+                }
+            }),
+            Some(&sender),
+        )
+        .await
+        .expect("subagent Read is forwarded");
+    assert!(builder.has_external_tool_calls());
+    assert!(
+        builder.thinking.is_open(),
+        "Codex/luna Read must reopen thinking so the panel is not frozen"
+    );
+    builder
+        .activity_keepalive(Some(&sender))
+        .await
+        .expect("silence after Read");
+    drop(sender);
+    let mut output = String::new();
+    while let Some(frame) = receiver.recv().await {
+        output.push_str(&String::from_utf8_lossy(&frame.expect("infallible frame")));
+    }
+    assert!(
+        output.contains(r#""type":"tool_use""#) && output.contains("Read"),
+        "native Read card missing: {output}"
+    );
+    assert!(
+        output.contains("thinking_delta") && output.contains("▶ Read"),
+        "live ▶ progress missing after Read: {output}"
+    );
+    assert!(
+        !output.contains("still working") && !output.contains("Thought for"),
+        "Thought-for chrome leaked: {output}"
+    );
 }
 
 #[tokio::test]

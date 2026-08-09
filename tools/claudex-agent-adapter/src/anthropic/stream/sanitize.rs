@@ -32,7 +32,7 @@ pub(super) fn sanitize_committed_blocks(blocks: &mut Vec<Value>) {
                 let cleaned = text
                     .replace(ZWSP, "")
                     .lines()
-                    .filter(|line| !is_provider_status_line(line.trim()))
+                    .filter(|line| !is_live_chrome_line(line.trim()))
                     .collect::<Vec<_>>()
                     .join("\n");
                 block["text"] = json!(cleaned);
@@ -52,7 +52,7 @@ pub(super) fn sanitize_committed_blocks(blocks: &mut Vec<Value>) {
                 .replace(ZWSP, "")
                 .replace(STATUS, "")
                 .lines()
-                .filter(|line| !is_provider_status_line(line.trim()))
+                .filter(|line| !is_live_chrome_line(line.trim()))
                 .collect::<Vec<_>>()
                 .join("\n");
             let trimmed = cleaned.trim();
@@ -70,7 +70,11 @@ pub(super) fn sanitize_committed_blocks(blocks: &mut Vec<Value>) {
 
 fn is_provider_status_only(text: &str) -> bool {
     text.lines()
-        .all(|line| line.trim().is_empty() || is_provider_status_line(line.trim()))
+        .all(|line| line.trim().is_empty() || is_live_chrome_line(line.trim()))
+}
+
+fn is_live_chrome_line(line: &str) -> bool {
+    is_provider_status_line(line) || is_canned_worker_filler(line)
 }
 
 pub(super) fn is_premature_worker_status_reply(text: &str) -> bool {
@@ -152,6 +156,46 @@ pub(super) fn compact_live_prose(text: &str) -> String {
         head
     }
 }
+
+/// Cursor/Claude worker filler that collapses Claude Code 2.1 to repeating
+/// `Thought for Xs` plus mechanical "Working on your request" lines.
+pub(super) fn is_canned_worker_filler(text: &str) -> bool {
+    let lower = normalize_filler_case(text);
+    if lower.is_empty() {
+        return false;
+    }
+    lower.starts_with("thought for ")
+        || CANNED_FILLER_NEEDLES
+            .iter()
+            .any(|needle| lower.contains(needle))
+}
+
+fn normalize_filler_case(text: &str) -> String {
+    text.trim()
+        .chars()
+        .map(|c| match c {
+            '\u{2018}' | '\u{2019}' | '\u{2032}' => '\'',
+            other => other,
+        })
+        .collect::<String>()
+        .to_ascii_lowercase()
+}
+
+const CANNED_FILLER_NEEDLES: &[&str] = &[
+    "working on your request",
+    "i'll gather what i need",
+    "put together the result",
+    "continuing with the next step",
+    "audit the local ctx",
+    "local history is indexed",
+    "scanning local history",
+    "gathering the records for your report",
+    "locating local session evidence",
+    "pull the evidence needed",
+    "pulling event evidence",
+    "pulling the provenance",
+    "checking for provider history",
+];
 
 pub(super) fn is_provider_status_line(line: &str) -> bool {
     let trimmed = line.trim_start();

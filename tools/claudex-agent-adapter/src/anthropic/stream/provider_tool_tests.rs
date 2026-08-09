@@ -309,9 +309,12 @@ mod tests {
         assert!(
             segment.blocks.iter().any(|block| {
                 block.get("type").and_then(Value::as_str) == Some("text")
-                    && block.get("text").and_then(Value::as_str).is_some_and(|text| {
-                        text.contains("Starting inspection") && !text.contains("Status:")
-                    })
+                    && block
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .is_some_and(|text| {
+                            text.contains("Starting inspection") && !text.contains("Status:")
+                        })
             }),
             "answer prose must flush at end_turn: {:?}",
             segment.blocks
@@ -404,7 +407,11 @@ mod tests {
             .await
             .expect("qwen message");
         assert!(builder.open_text_block.is_none());
-        assert!(builder.pending_answer.contains("Phase 1: reading CLAUDE.md"));
+        assert!(
+            builder
+                .pending_answer
+                .contains("Phase 1: reading CLAUDE.md")
+        );
         builder
             .provider_tool_call(
                 &json!({"params":{
@@ -422,7 +429,10 @@ mod tests {
             "SubAgent answer stays pending until end_turn"
         );
         let thinking = thinking_text(&builder);
-        assert!(thinking.contains("Phase 1: reading CLAUDE.md"), "{thinking}");
+        assert!(
+            thinking.contains("Phase 1: reading CLAUDE.md"),
+            "{thinking}"
+        );
         assert!(
             thinking.contains("▶ ReadFile") || thinking.contains("▶ Read"),
             "{thinking}"
@@ -649,8 +659,13 @@ mod tests {
             .expect("elapsed keepalive");
         live.ingest_available(&mut receiver);
         assert!(
-            live.visible_thinking.contains("still working"),
-            "silence after prose must still paint elapsed progress: {:?}",
+            live.visible_thinking.contains("型と配信パスを把握しました"),
+            "silence after prose must keep the open thought live: {:?}",
+            live.visible_thinking
+        );
+        assert!(
+            !live.visible_thinking.contains("still working"),
+            "elapsed ticks must not paint Thought-for chrome: {:?}",
             live.visible_thinking
         );
         assert!(
@@ -663,9 +678,10 @@ mod tests {
         assert_eq!(segment.stop_reason, "end_turn");
         assert!(
             segment.blocks.iter().any(|block| {
-                block.get("text").and_then(Value::as_str).is_some_and(|text| {
-                    text.contains("型と配信パスを把握しました")
-                })
+                block
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .is_some_and(|text| text.contains("型と配信パスを把握しました"))
             }),
             "answer must flush at end_turn: {:?}",
             segment.blocks
@@ -713,19 +729,72 @@ mod tests {
         live.ingest_available(&mut receiver);
         assert!(live.turn_still_open());
         assert!(
-            live.visible_thinking.contains("still working"),
-            "long tool silence must keep painting elapsed ticks: {:?}",
+            live.visible_thinking.contains('▶'),
+            "long tool silence must keep the open ▶ thought live: {:?}",
             live.visible_thinking
         );
         assert!(
-            live.visible_thinking.contains("last:"),
-            "elapsed tick should recall the in-flight tool: {:?}",
+            !live.visible_thinking.contains("still working")
+                && !live.visible_thinking.contains("last:"),
+            "elapsed ticks must not paint Thought-for chrome: {:?}",
             live.visible_thinking
         );
         assert!(
             live.hidden_text.is_empty(),
             "elapsed ticks must not use hidden text_delta: {:?}",
             live.hidden_text
+        );
+        drop(sender);
+        let _ = collect_frames(&mut receiver).await;
+    }
+
+    #[tokio::test]
+    async fn subagent_keepalive_reopens_thinking_after_tool_use_closes_it() {
+        let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
+        let mut builder = SegmentBuilder::new(1).with_subagent(true);
+        let mut live = super::super::subagent_live_view::SubAgentLiveView::default();
+        builder
+            .provider_tool_call(
+                &json!({"params":{
+                    "callId":"read-claude-md",
+                    "tool":"Read",
+                    "title":"Read scripts/CLAUDE.md",
+                    "arguments":{"path":"scripts/CLAUDE.md"}
+                }}),
+                Some(&sender),
+            )
+            .await
+            .expect("tool start");
+        live.ingest_available(&mut receiver);
+        builder
+            .thinking
+            .close(&mut builder.blocks, Some(&sender))
+            .await
+            .expect("Codex tool_use closes thinking");
+        live.ingest_available(&mut receiver);
+        live.visible_thinking.clear();
+        assert!(
+            !builder.thinking.is_open(),
+            "precondition: native tool_use left the thought closed"
+        );
+
+        builder
+            .activity_keepalive(Some(&sender))
+            .await
+            .expect("reopen after silence");
+        live.ingest_available(&mut receiver);
+        assert!(live.turn_still_open());
+        assert!(
+            live.visible_thinking.contains('▶')
+                && live.visible_thinking.contains("Read scripts/CLAUDE.md"),
+            "closed thought after Read must reopen with last ▶ progress: {:?}",
+            live.visible_thinking
+        );
+        assert!(
+            !live.visible_thinking.contains("still working")
+                && !live.visible_thinking.contains("Thought for"),
+            "reopen must not restore Thought-for chrome: {:?}",
+            live.visible_thinking
         );
         drop(sender);
         let _ = collect_frames(&mut receiver).await;
@@ -915,7 +984,9 @@ mod tests {
         live.ingest_available(&mut receiver);
         assert!(live.turn_still_open());
         assert!(
-            live.visible_server_tools.iter().any(|name| name == "web_search")
+            live.visible_server_tools
+                .iter()
+                .any(|name| name == "web_search")
                 || (live.visible_thinking.contains("▶ Bash")
                     && live.visible_thinking.contains("wrangler tail")),
             "CC Bash must paint a display card or ▶ thinking: thinking={:?} server_tools={:?}",
@@ -940,7 +1011,7 @@ mod tests {
             .expect("cc elapsed");
         live.ingest_available(&mut receiver);
         assert!(
-            live.visible_thinking.contains('✓') || live.visible_thinking.contains("still working"),
+            live.visible_thinking.contains('✓') || live.visible_thinking.contains("▶ Bash"),
             "CC Bash completion/elapsed must stay visible: {:?}",
             live.visible_thinking
         );
@@ -1176,6 +1247,120 @@ mod tests {
             "committed segment keeps display-only server_tool_use: {:?}",
             segment.blocks
         );
+    }
+
+    #[tokio::test]
+    async fn cursor_canned_thought_for_filler_is_dropped_from_subagent_viewer() {
+        // Live TUI dump: repeating `Thought for Xs` + Cursor ctx filler around
+        // Agent(Inspect AzooKey Rust tests).
+        let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(32);
+        let mut builder = SegmentBuilder::new(1).with_subagent(true);
+        let mut live = super::super::subagent_live_view::SubAgentLiveView::default();
+        for (method, item_id, delta) in [
+            (
+                "item/reasoning/summaryTextDelta",
+                "cursor:reasoning",
+                "Working on your request — I'll gather what I need and put together the result.\n",
+            ),
+            (
+                "item/agentMessage/delta",
+                "cursor:message",
+                "I’ll audit the local ctx index and pull the evidence needed for the report.\n",
+            ),
+            (
+                "item/agentMessage/delta",
+                "cursor:message",
+                "Continuing with the next step in the plan.\n",
+            ),
+            (
+                "item/agentMessage/delta",
+                "cursor:message",
+                "Gathering the records for your report — running ctx queries and pulling the provenance.\n",
+            ),
+            (
+                "item/reasoning/summaryTextDelta",
+                "cursor:reasoning",
+                "Thought for 17s\n",
+            ),
+        ] {
+            builder
+                .model_output_event(
+                    &json!({"method":method,"params":{"itemId":item_id,"summaryIndex":0,"delta":delta}}),
+                    Some(&sender),
+                )
+                .await
+                .expect("canned filler");
+        }
+        builder
+            .provider_tool_call(
+                &json!({"params":{
+                    "callId":"read-azoo",
+                    "tool":"Read",
+                    "title":"Read AzooKey tests",
+                    "arguments":{"path":"AzooKeyTests.swift"}
+                }}),
+                Some(&sender),
+            )
+            .await
+            .expect("real tool");
+        builder
+            .activity_keepalive(Some(&sender))
+            .await
+            .expect("elapsed");
+        live.ingest_available(&mut receiver);
+        assert!(live.turn_still_open());
+        assert!(
+            live.visible_thinking.contains("▶ Read"),
+            "real tool progress must stay visible: {:?}",
+            live.visible_thinking
+        );
+        for noise in [
+            "Working on your request",
+            "I'll gather what I need",
+            "I’ll gather what I need",
+            "audit the local ctx",
+            "Continuing with the next step",
+            "Gathering the records for your report",
+            "Thought for",
+            "still working",
+        ] {
+            assert!(
+                !live.visible_thinking.contains(noise),
+                "thinking still has `{noise}`: {:?}",
+                live.visible_thinking
+            );
+            assert!(
+                !live.hidden_text.contains(noise),
+                "hidden text still has `{noise}`: {:?}",
+                live.hidden_text
+            );
+        }
+        assert_eq!(
+            builder
+                .blocks
+                .iter()
+                .filter(|block| block.get("type").and_then(Value::as_str) == Some("thinking"))
+                .count(),
+            1,
+            "canned filler must not open extra thinking blocks: {:?}",
+            builder.blocks
+        );
+        let segment = builder.finish(None).await.expect("finish");
+        let transcript = serde_json::to_string(&segment.blocks).expect("transcript json");
+        for noise in [
+            "Working on your request",
+            "audit the local ctx",
+            "Continuing with the next step",
+            "Thought for",
+            "still working",
+        ] {
+            assert!(
+                !transcript.contains(noise),
+                "transcript still has `{noise}`: {transcript}"
+            );
+        }
+        drop(sender);
+        let _ = collect_frames(&mut receiver).await;
     }
 
     #[tokio::test]

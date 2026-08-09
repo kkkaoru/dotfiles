@@ -43,7 +43,7 @@ const CASES: &[Case] = &[
             arg_key: "path",
             arg_value: "apps/finish-position-predict-container/src/predict.py",
         }),
-        expect_visible: &["ContextVar", "▶ Read", "still working"],
+        expect_visible: &["ContextVar", "▶ Read"],
     },
     Case {
         name: "qwen-acp",
@@ -57,7 +57,7 @@ const CASES: &[Case] = &[
             arg_key: "pattern",
             arg_value: "target_race",
         }),
-        expect_visible: &["Phase 1", "▶ Grep", "still working"],
+        expect_visible: &["Phase 1", "▶ Grep"],
     },
     Case {
         name: "grok-acp",
@@ -85,7 +85,7 @@ const CASES: &[Case] = &[
             arg_key: "path",
             arg_value: "apps/finish-position-predict-container/src/cache_seed.py",
         }),
-        expect_visible: &["Inspecting the prediction", "▶ Read", "still working"],
+        expect_visible: &["Inspecting the prediction", "▶ Read"],
     },
     Case {
         name: "cline-acp",
@@ -95,7 +95,7 @@ const CASES: &[Case] = &[
         prose_item_id: "cline:message",
         reasoning: None,
         tool: None,
-        expect_visible: &["型と配信パスを把握しました", "still working"],
+        expect_visible: &["型と配信パスを把握しました"],
     },
     Case {
         name: "spark-codex",
@@ -117,11 +117,7 @@ const CASES: &[Case] = &[
             arg_key: "query",
             arg_value: "AVITA株式会社",
         }),
-        expect_visible: &[
-            "AVITA Inc. is an avatar",
-            "Check AVITA Inc. official site",
-            "still working",
-        ],
+        expect_visible: &["AVITA Inc. is an avatar", "Check AVITA Inc. official site"],
     },
 ];
 

@@ -7,7 +7,8 @@ use super::SegmentBuilder;
 use crate::anthropic::stream::{
     protocol::{StreamSender, send_stream_frame},
     sanitize::{
-        compact_live_prose, is_bulk_tool_dump, is_provider_status_line, latest_worker_status,
+        compact_live_prose, is_bulk_tool_dump, is_canned_worker_filler, is_provider_status_line,
+        latest_worker_status,
     },
     thinking::summary_delta,
 };
@@ -74,6 +75,9 @@ impl SegmentBuilder {
             .map(str::trim)
             .filter(|line| !line.is_empty())
             .collect();
+        if !non_empty.is_empty() && non_empty.iter().all(|line| is_canned_worker_filler(line)) {
+            return Ok(());
+        }
         if status_item
             || (!non_empty.is_empty() && non_empty.iter().all(|line| is_provider_status_line(line)))
         {
@@ -194,17 +198,25 @@ impl SegmentBuilder {
     }
 
     fn filter_subagent_live_delta(&mut self, delta: &str) -> Option<String> {
-        if delta.trim().is_empty() {
+        if delta.trim().is_empty() || is_canned_worker_filler(delta) {
             return None;
         }
-        if is_bulk_tool_dump(delta) {
+        let stripped = delta
+            .lines()
+            .filter(|line| !is_canned_worker_filler(line))
+            .collect::<Vec<_>>()
+            .join("\n");
+        if stripped.trim().is_empty() {
+            return None;
+        }
+        if is_bulk_tool_dump(&stripped) {
             if self.bulk_dump_hinted {
                 return None;
             }
             self.bulk_dump_hinted = true;
             return Some("… large tool output omitted\n".to_owned());
         }
-        Some(compact_live_prose(delta))
+        Some(compact_live_prose(&stripped))
     }
 
     async fn stream_answer_delta(
@@ -251,6 +263,16 @@ impl SegmentBuilder {
                 .provider_tool_calls
                 .last()
                 .map(|(_, title)| compact_keepalive_title(title));
+            if !self.thinking.is_open() {
+                let resume = last_tool
+                    .as_deref()
+                    .filter(|title| !title.is_empty())
+                    .map(|title| format!("▶ {title}\n"))
+                    .unwrap_or_else(|| "\u{200b}".to_owned());
+                self.thinking
+                    .progress_status_keep_open(&mut self.blocks, &resume, stream)
+                    .await?;
+            }
             return self
                 .thinking
                 .elapsed_keepalive(

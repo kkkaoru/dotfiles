@@ -80,11 +80,13 @@ impl ThinkingState {
         blocks: &mut Vec<Value>,
         stream: Option<&StreamSender>,
     ) -> Result<()> {
-        if delta.trim().is_empty() || has_visible_output(blocks) {
+        if delta.trim().is_empty()
+            || (!coalesce && has_visible_output(blocks))
+            || (coalesce && has_answer_text(blocks))
+        {
             return Ok(());
         }
-        // Main session: one Anthropic thinking block per (itemId, summaryIndex).
-        // SubAgents coalesce so thinking stays synced for the whole turn.
+        // Main: one thought per itemId. SubAgents coalesce after Read/Grep.
         let unit_changed = !coalesce
             && self
                 .open
@@ -339,36 +341,26 @@ impl ThinkingState {
         .await
     }
 
-    /// Visible elapsed tick so a silent Cline/Qwen SubAgent does not sit on an
-    /// empty viewer for minutes. Zero-width heartbeats keep the watchdog alive
-    /// but do not paint Claude Code's SubAgent panel.
+    /// Keep an open thought live with ZWSP only; elapsed chrome became Thought-for spam.
     pub(super) async fn elapsed_keepalive(
         &mut self,
         blocks: &mut Vec<Value>,
-        elapsed: std::time::Duration,
-        last_tool: Option<&str>,
+        _elapsed: std::time::Duration,
+        _last_tool: Option<&str>,
         stream: Option<&StreamSender>,
     ) -> Result<()> {
-        if self.is_native_thought_open() {
-            // Live native thinking already drives Claude Code's elapsed chrome.
+        let Some(open) = self.open.as_mut() else {
             return Ok(());
-        }
-        let secs = elapsed.as_secs().max(1);
-        let label = if secs < 60 {
-            format!("{secs}s")
-        } else {
-            format!("{}m", secs / 60)
         };
-        let tool = last_tool
-            .map(str::trim)
-            .filter(|title| !title.is_empty())
-            .map(|title| format!(" · last: {title}"))
-            .unwrap_or_default();
-        self.progress_status_keep_open(
-            blocks,
-            &format!("\n… still working ({label}){tool}\n"),
-            stream,
-        )
+        open.text.push_str(HEARTBEAT);
+        blocks[open.index]["thinking"] = json!(open.text);
+        send_stream_frame(stream, "content_block_delta", || {
+            json!({
+                "type":"content_block_delta",
+                "index":open.index,
+                "delta":{"type":"thinking_delta","thinking":HEARTBEAT}
+            })
+        })
         .await
     }
 }
@@ -396,4 +388,10 @@ pub(super) fn has_visible_output(blocks: &[Value]) -> bool {
             Some("thinking") | Some("server_tool_use")
         )
     })
+}
+
+fn has_answer_text(blocks: &[Value]) -> bool {
+    blocks
+        .iter()
+        .any(|block| block.get("type").and_then(Value::as_str) == Some("text"))
 }

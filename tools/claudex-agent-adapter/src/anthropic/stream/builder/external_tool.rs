@@ -160,6 +160,12 @@ impl SegmentBuilder {
         send_tool_use(context.stream, index, &block).await?;
         self.blocks.push(block);
         self.external_tool_calls += 1;
+        if self.is_subagent && !self.is_command_code_subagent() {
+            self.provider_tool_calls
+                .push((call.call_id.clone(), original_name.to_owned()));
+            self.stream_progress_text(&format!("\n▶ {original_name}\n"), context.stream)
+                .await?;
+        }
         Ok(())
     }
 
