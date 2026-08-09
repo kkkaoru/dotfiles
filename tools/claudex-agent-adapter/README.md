@@ -101,9 +101,10 @@ tools/claudex-agent-adapter/scripts/cargo-ephemeral.sh +1.97.1 install \
 
 `create-symlinks.sh` then points `~/.local/bin/claudex-agent-adapter` at that
 cargo binary and links `claudex-hot-swap`. Installing only under `~/.local`
-leaves a stale cargo bin after the symlink is created. After install, replace
-an idle daemon in place with `claudex-hot-swap` (or `ensure` / `claudex` when
-idle); see [Daemon update and hot-swap](#daemon-update-and-hot-swap).
+leaves a stale cargo bin after the symlink is created. A successful
+`cargo-ephemeral.sh … install` (or `scripts/claudex-install-adapter` /
+`claudex install`) relinks `~/.local/bin` and arms the idle hot-swap waiter
+for the new `build_id`. See [Daemon update and hot-swap](#daemon-update-and-hot-swap).
 
 Use the same wrapper for verification, for example:
 
@@ -288,6 +289,9 @@ The launcher prefers a gitignored per-machine denylist
 `CLAUDEX_DISABLED_SUBAGENT_MODELS`. The launcher sends the merged policy as a reserved per-request
 header so terminals sharing one daemon remain independent. The adapter rejects a resolved disabled
 SubAgent model before starting its provider; outer main-session and advisor requests remain unaffected.
+Live `usage-routing.json` also treats weekly/five-hour remaining below 25% as exhausted when
+another worker still has at least 40% headroom, so explicit `claudex-gpt-spark` launches rewrite
+onto an ACP sibling instead of burning a depleted Spark quota.
 Other user-explicit, genuinely unconfigured model IDs use the Claude subscription
 process. A correlated Claude Code child uses the exact `claudex_model` recorded
 by its Agent/Task launch. If that metadata is absent or cannot be correlated,
@@ -368,6 +372,10 @@ is reused. Pending idle hot-swap state is
 `~/.cache/claudex/pending-hot-swap.<listen>.json` plus a waiter log. A live
 waiter for the current `build_id` is reused; a stale waiter is SIGTERM'd and
 replaced. The waiter does not hold the per-port launcher lock while polling.
+Arming a new idle waiter posts a macOS notification that the build is waiting;
+a successful Replace posts a second notification that the swap completed.
+Reuse, an already-armed waiter, and a repeat of the same listen+build+kind do
+not notify. Waiting followed by complete is at most two notifications.
 Readiness still requires the current build ID, matching
 configuration, and successful authentication. If the new generation fails
 readiness and a recovery manifest exists, the previous generation is restored.
@@ -375,8 +383,11 @@ readiness and a recovery manifest exists, the previous generation is restored.
 User-facing wrappers: fish `claudex hot-swap` → `claudex-hot-swap.fish`; POSIX
 `scripts/claudex-hot-swap` linked to `~/.local/bin/claudex-hot-swap` for zsh.
 Both invoke `claudex-agent-adapter hot-swap --provider-config … --listen …`.
-Canonical binary is `~/.cargo/bin/claudex-agent-adapter`; `~/.local/bin` is a
-symlink created by `create-symlinks.sh`.
+`scripts/claudex-install-adapter` / fish `claudex install` run
+`cargo-ephemeral.sh … install`, which calls `after-install.sh` to relink
+`~/.local/bin` and arm the idle waiter for the new `build_id`. Canonical binary
+is `~/.cargo/bin/claudex-agent-adapter`; `~/.local/bin` is a symlink created by
+`create-symlinks.sh`.
 
 `launch --model MODEL -- ...` scopes Anthropic routing,
 removes conflicting provider and adapter variables, launches Claude Code with

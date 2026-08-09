@@ -89,6 +89,10 @@ pub(crate) fn pending_hot_swap_log_path(cache: &Path, listen: &SocketAddr) -> Pa
     cache.join(format!("pending-hot-swap.{}.log", listen_token(listen)))
 }
 
+pub(crate) fn hot_swap_notify_path(cache: &Path, listen: &SocketAddr) -> PathBuf {
+    cache.join(format!("hot-swap-notify.{}.json", listen_token(listen)))
+}
+
 pub(crate) fn session_lock_path(cache: &Path, session_id: &str) -> PathBuf {
     let mut hasher = DefaultHasher::new();
     session_id.hash(&mut hasher);

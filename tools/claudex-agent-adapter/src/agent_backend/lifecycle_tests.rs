@@ -42,3 +42,27 @@ async fn cancellation_and_abort_cover_each_leaf_and_routed_route() {
     assert!(routed.cancel_turn("0:session").await.is_err());
     assert!(routed.abort_turn_provider("0:session").await.is_err());
 }
+
+#[tokio::test]
+async fn leaf_backends_report_kind_and_omit_model_provider() {
+    let copilot = AgentBackend::Copilot(crate::copilot_acp::CopilotAcp::settled_for_test().await);
+    assert_eq!(
+        copilot.backend_kind_for_model("any"),
+        Some(super::super::BackendKind::CopilotAcp)
+    );
+    assert_eq!(copilot.model_provider_for_model("any"), None);
+
+    let configured = AgentBackend::ConfiguredAcp(crate::grok_acp::GrokAcp::stopped_for_test());
+    assert_eq!(
+        configured.backend_kind_for_model("any"),
+        Some(super::super::BackendKind::ConfiguredAcp)
+    );
+    assert_eq!(configured.model_provider_for_model("any"), None);
+
+    let grok = AgentBackend::Grok(crate::grok_acp::GrokAcp::stopped_for_test());
+    assert_eq!(
+        grok.backend_kind_for_model("any"),
+        Some(super::super::BackendKind::GrokAcp)
+    );
+    assert_eq!(grok.model_provider_for_model("any"), None);
+}

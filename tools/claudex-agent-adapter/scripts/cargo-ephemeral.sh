@@ -4,7 +4,7 @@
 # in a long-lived shared temporary directory.
 set -eu
 
-repo_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+repo_root=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
 tmp_root=${TMPDIR:-/tmp}
 
 checkout_target_in_use() {
@@ -27,6 +27,7 @@ prune_checkout_target() {
 prune_checkout_target
 target_dir=$(mktemp -d "${tmp_root%/}/claudex-agent-adapter-target.XXXXXX")
 
+# shellcheck disable=SC2329
 cleanup() {
     exit_code=$?
     # The target is created exclusively by this invocation. It is safe to
@@ -40,4 +41,25 @@ cleanup() {
 trap cleanup EXIT HUP INT TERM
 
 export CARGO_TARGET_DIR="$target_dir"
+
+cargo_subcommand() {
+    for arg in "$@"; do
+        case "$arg" in
+            +*|--) continue ;;
+            -*) continue ;;
+            *)
+                printf '%s\n' "$arg"
+                return 0
+                ;;
+        esac
+    done
+    return 1
+}
+
 cargo "$@"
+status=$?
+if [ "$status" -eq 0 ] && [ "$(cargo_subcommand "$@")" = install ]; then
+    # cargo install replaces the running waiter inode; re-arm for the new build.
+    "$(dirname -- "$0")/after-install.sh" || true
+fi
+exit "$status"

@@ -73,7 +73,8 @@ impl RoutedBackend {
                     .changed()
                     .await
                     .context("backend startup task stopped without a result")?,
-                StartupState::Ready(Ok(backend)) => return Ok(backend),
+                StartupState::Ready(Ok(backend)) if backend.is_alive() => return Ok(backend),
+                StartupState::Ready(Ok(_)) => startup = self.startup_receiver(),
                 StartupState::Ready(Err(error)) => bail!(error.to_string()),
             }
         }

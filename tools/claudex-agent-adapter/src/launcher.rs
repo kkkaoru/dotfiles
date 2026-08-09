@@ -23,6 +23,7 @@ mod handover;
 mod health;
 mod launcher_lock;
 mod launcher_logs;
+mod macos_notify;
 mod pending_hot_swap;
 mod preflight;
 mod program_identity;
@@ -48,7 +49,10 @@ use health::{authenticates, fetch_health, wait_until_ready, wait_until_recovery_
 use resume::{prepare_arguments, session_id_for_launch};
 
 const LOCAL_TOKEN: &str = "claudex-local";
+#[cfg(not(test))]
 const START_TIMEOUT: Duration = Duration::from_secs(10);
+#[cfg(test)]
+const START_TIMEOUT: Duration = Duration::from_millis(50);
 const START_INITIAL_POLL_DELAY: Duration = Duration::from_millis(10);
 const START_MAX_POLL_DELAY: Duration = Duration::from_millis(250);
 pub(crate) const SERVICE_CONFIG_FINGERPRINT_ENV: &str = "CLAUDEX_SERVICE_CONFIG_FINGERPRINT";

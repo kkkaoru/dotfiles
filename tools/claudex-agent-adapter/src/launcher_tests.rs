@@ -18,7 +18,7 @@ mod tests {
             atomic::{AtomicBool, Ordering},
         },
         thread,
-        time::Instant,
+        time::{Duration, Instant},
     };
 
     use super::*;
@@ -411,14 +411,13 @@ mod tests {
             health.recovery_generation = Some(recovery.generation.clone());
             mismatch(&mut health);
             let server = serve_responses(listener, vec![health_response(&health)]);
-            let timed_out = tokio::time::timeout(
-                std::time::Duration::from_millis(100),
+            let result = tokio::time::timeout(
+                Duration::from_millis(100),
                 wait_until_recovery_ready(&client, &base, &recovery),
             )
-            .await
-            .is_err();
+            .await;
             assert!(
-                timed_out,
+                !matches!(result, Ok(Ok(()))),
                 "mismatched recovery health must not authenticate"
             );
             server.join().expect("recovery readiness server");
@@ -577,17 +576,448 @@ mod tests {
         health.build_id = "old-build".to_owned();
         health.active_http_requests = 1;
         let server = serve_responses(listener, vec![health_response(&health)]);
+        let events = macos_notify::TestEvents::capture();
         let _spawn = pending_hot_swap::TestSpawnPid::arm(4242);
         let url = ensure::run(&busy, ensure::Mode::HotSwap)
             .await
             .expect("busy hot-swap should arm a waiter instead of timing out");
         assert_eq!(url, busy.base_url());
+        assert_eq!(
+            events.take(),
+            vec![macos_notify::Event::WaitingForIdle {
+                listen: busy.options.listen.to_string(),
+                build_id: env!("CLAUDEX_BUILD_ID").to_owned(),
+                waiter_pid: 4242,
+            }],
+            "busy hot-swap must notify that the new build is waiting for idle"
+        );
         let pending = pending_hot_swap::read_state_for_tests(&busy)
             .expect("read pending hot-swap")
             .expect("pending hot-swap state");
         assert_eq!(pending.pid, 4242);
         assert_eq!(pending.build_id, env!("CLAUDEX_BUILD_ID"));
         server.join().expect("busy hot-swap server");
+    }
+
+    #[tokio::test]
+    async fn wait_idle_and_ensure_reuse_a_current_healthy_listener() {
+        let root = tempfile::tempdir().expect("reuse fixture");
+        let mut wait_idle = config();
+        let listener = TcpListener::bind("127.0.0.1:0").expect("wait-idle reuse listener");
+        wait_idle.options.listen = listener.local_addr().expect("wait-idle address");
+        wait_idle.log_path = root.path().join("wait-idle.log");
+        wait_idle.lock_path = root.path().join("wait-idle.lock");
+        let health = healthy(&wait_idle);
+        let events = macos_notify::TestEvents::capture();
+        let server = serve_responses(
+            listener,
+            vec![health_response(&health), http_response("200 OK", "{}")],
+        );
+        let url = ensure::run(&wait_idle, ensure::Mode::WaitIdle)
+            .await
+            .expect("wait-idle reuses the current listener");
+        assert_eq!(url, wait_idle.base_url());
+        assert!(
+            events.take().is_empty(),
+            "reusing the current build must not notify swap complete"
+        );
+        server.join().expect("wait-idle reuse server");
+
+        let mut ensure_cfg = config();
+        let listener = TcpListener::bind("127.0.0.1:0").expect("ensure reuse listener");
+        ensure_cfg.options.listen = listener.local_addr().expect("ensure address");
+        ensure_cfg.log_path = root.path().join("ensure.log");
+        ensure_cfg.lock_path = root.path().join("ensure.lock");
+        let health = healthy(&ensure_cfg);
+        let server = serve_responses(
+            listener,
+            vec![health_response(&health), http_response("200 OK", "{}")],
+        );
+        let url = ensure::run(&ensure_cfg, ensure::Mode::Ensure)
+            .await
+            .expect("ensure reuses the current listener");
+        assert_eq!(url, ensure_cfg.base_url());
+        server.join().expect("ensure reuse server");
+    }
+
+    #[tokio::test]
+    async fn wait_idle_polls_busy_work_until_the_listener_is_reusable() {
+        let root = tempfile::tempdir().expect("wait-idle poll fixture");
+        let mut cfg = config();
+        let listener = TcpListener::bind("127.0.0.1:0").expect("wait-idle poll listener");
+        cfg.options.listen = listener.local_addr().expect("wait-idle poll address");
+        cfg.log_path = root.path().join("adapter.log");
+        cfg.lock_path = root.path().join("adapter.lock");
+        let mut busy = healthy(&cfg);
+        busy.build_id = "old-build".to_owned();
+        busy.active_http_requests = 1;
+        let reusable = healthy(&cfg);
+        let server = serve_responses(
+            listener,
+            vec![
+                health_response(&busy),
+                health_response(&reusable),
+                http_response("200 OK", "{}"),
+            ],
+        );
+        let url = ensure::run(&cfg, ensure::Mode::WaitIdle)
+            .await
+            .expect("wait-idle reuses after busy work drains");
+        assert_eq!(url, cfg.base_url());
+        server.join().expect("wait-idle poll server");
+    }
+
+    #[tokio::test]
+    async fn ensure_routes_a_busy_listener_to_an_existing_current_build_fallback() {
+        let root = tempfile::tempdir().expect("ensure fallback fixture");
+        let mut primary = config();
+        let primary_listener = TcpListener::bind("127.0.0.1:0").expect("primary listener");
+        primary.options.listen = primary_listener.local_addr().expect("primary address");
+        primary.log_path = root.path().join("adapter.log");
+        primary.lock_path = root.path().join("adapter.lock");
+
+        let fallback_listener = TcpListener::bind("127.0.0.1:0").expect("fallback listener");
+        let fallback_listen = fallback_listener.local_addr().expect("fallback address");
+        let fallback = primary.with_listen(fallback_listen);
+        std::fs::write(
+            root.path()
+                .join(format!("fallback.{}.json", primary.options.listen.port())),
+            serde_json::json!({
+                "listen": fallback_listen,
+                "build_id": env!("CLAUDEX_BUILD_ID"),
+                "service_config_fingerprint": fallback.service_config_fingerprint,
+                "pid": 99,
+            })
+            .to_string(),
+        )
+        .expect("write fallback state");
+
+        let mut busy = healthy(&primary);
+        busy.build_id = "old-build".to_owned();
+        busy.active_http_requests = 1;
+        let primary_server = serve_responses(primary_listener, vec![health_response(&busy)]);
+        let fallback_health = healthy(&fallback);
+        let fallback_server = serve_responses(
+            fallback_listener,
+            vec![
+                health_response(&fallback_health),
+                http_response("200 OK", "{}"),
+            ],
+        );
+        let _spawn = pending_hot_swap::TestSpawnPid::arm(4242);
+        let url = ensure::run(&primary, ensure::Mode::Ensure)
+            .await
+            .expect("ensure should reuse the current-build fallback");
+        assert_eq!(url, fallback.base_url());
+        primary_server.join().expect("primary server");
+        fallback_server.join().expect("fallback server");
+    }
+
+    #[test]
+    fn pending_hot_swap_arm_uses_test_spawn_and_rejects_invalid_state() {
+        let root = tempfile::tempdir().expect("pending arm fixture");
+        let mut cfg = config();
+        cfg.log_path = root.path().join("adapter.log");
+        cfg.lock_path = root.path().join("adapter.lock");
+        let _spawn = pending_hot_swap::TestSpawnPid::arm(7777);
+        let first = pending_hot_swap::arm(&cfg).expect("arm waiter");
+        assert_eq!(first.pid(), 7777);
+        let again = pending_hot_swap::arm(&cfg).expect("respawn waiter");
+        assert_eq!(again.pid(), 7777);
+
+        let path =
+            super::launcher_logs::pending_hot_swap_state_path(root.path(), &cfg.options.listen);
+        std::fs::write(
+            &path,
+            br#"{"build_id":"","service_config_fingerprint":"s","pid":1}"#,
+        )
+        .expect("empty build");
+        assert!(pending_hot_swap::read_state_for_tests(&cfg).is_err());
+        std::fs::write(
+            &path,
+            br#"{"build_id":"b","service_config_fingerprint":"s","pid":0}"#,
+        )
+        .expect("pid zero");
+        assert!(pending_hot_swap::read_state_for_tests(&cfg).is_err());
+        let recovered = pending_hot_swap::arm(&cfg).expect("corrupt state must not block arm");
+        assert_eq!(recovered.pid(), 7777);
+    }
+
+    #[test]
+    fn spawn_waiter_starts_a_dummy_and_recognizes_its_command_line() {
+        let root = tempfile::tempdir().expect("spawn waiter fixture");
+        let dummy = root.path().join("claudex-agent-adapter");
+        std::fs::write(&dummy, "#!/bin/sh\nexec sleep 30\n").expect("dummy waiter");
+        #[cfg(unix)]
+        {
+            let mut permissions = std::fs::metadata(&dummy)
+                .expect("dummy metadata")
+                .permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&dummy, permissions).expect("dummy executable");
+        }
+        let mut cfg = config();
+        cfg.executable = dummy;
+        cfg.log_path = root.path().join("adapter.log");
+        cfg.lock_path = root.path().join("adapter.lock");
+        let first = pending_hot_swap::arm(&cfg).expect("spawn waiter");
+        assert!(first.pid() > 1);
+        std::thread::sleep(Duration::from_millis(80));
+        let again = pending_hot_swap::arm(&cfg).expect("re-arm waiter");
+        unsafe {
+            libc::kill(-(first.pid() as i32), libc::SIGTERM);
+            if again.pid() != first.pid() {
+                libc::kill(-(again.pid() as i32), libc::SIGTERM);
+            }
+        }
+        pending_hot_swap::clear_if_current(&cfg);
+    }
+
+    #[tokio::test]
+    async fn idle_stale_listener_stays_replace_when_recovery_snapshot_is_missing() {
+        let root = tempfile::tempdir().expect("wait-idle missing recovery");
+        let mut cfg = config();
+        let listener = TcpListener::bind("127.0.0.1:0").expect("idle old listener");
+        cfg.options.listen = listener.local_addr().expect("idle old address");
+        cfg.log_path = root.path().join("adapter.log");
+        cfg.lock_path = root.path().join("adapter.lock");
+        let mut idle_old = healthy(&cfg);
+        idle_old.build_id = "old-build".to_owned();
+        idle_old.recovery_generation = Some("v1-missing-generation".to_owned());
+        let server = serve_responses(listener, vec![health_response(&idle_old)]);
+        let client = reqwest::Client::new();
+        let state = handover::inspect_service(&client, &cfg).await;
+        match state {
+            handover::ServiceState::Replace {
+                recovery_generation,
+                ..
+            } => {
+                assert_eq!(
+                    recovery_generation.as_deref(),
+                    Some("v1-missing-generation")
+                );
+                assert_eq!(
+                    ensure::usable_recovery_generation(&cfg, recovery_generation.as_deref())
+                        .expect("missing snapshot is preflight-only"),
+                    None,
+                    "pruned recovery snapshot must not turn idle Replace into a waiter abort"
+                );
+            }
+            other => panic!("idle stale listener must be Replace, got {other:?}"),
+        }
+        server.join().expect("idle old listener");
+    }
+
+    #[test]
+    fn swap_complete_notification_fires_only_after_replace() {
+        let root = tempfile::tempdir().expect("swap notify fixture");
+        let mut cfg = config();
+        cfg.log_path = root.path().join("adapter.log");
+        let events = macos_notify::TestEvents::capture();
+        assert!(!ensure::listener_was_replaced(
+            &handover::ServiceState::Reuse
+        ));
+        assert!(!ensure::listener_was_replaced(
+            &handover::ServiceState::Start
+        ));
+        assert!(!ensure::listener_was_replaced(
+            &handover::ServiceState::Defer {
+                pid: None,
+                active_http_requests: 1,
+                active_provider_turns: 0,
+                active_subagents: 0,
+            }
+        ));
+        assert!(ensure::listener_was_replaced(
+            &handover::ServiceState::Replace {
+                pid: Some(1),
+                recovery_generation: None,
+            }
+        ));
+        ensure::notify_swap_if_replaced(false, &cfg);
+        assert!(
+            events.take().is_empty(),
+            "reuse/start must not notify swap complete"
+        );
+        ensure::notify_swap_if_replaced(true, &cfg);
+        assert_eq!(
+            events.take(),
+            vec![macos_notify::Event::SwapComplete {
+                listen: cfg.options.listen.to_string(),
+                build_id: env!("CLAUDEX_BUILD_ID").to_owned(),
+            }]
+        );
+        ensure::notify_swap_if_replaced(true, &cfg);
+        assert!(
+            events.take().is_empty(),
+            "duplicate swap complete for the same build must not notify again"
+        );
+    }
+
+    #[test]
+    fn idle_replace_failures_keep_the_waiter_alive_in_production() {
+        assert!(
+            ensure::should_retry_idle_replace(1, None),
+            "detached waiters must retry Replace after a failed handover"
+        );
+        assert!(
+            ensure::should_retry_idle_replace(8, None),
+            "there is no production retry cap; idle must eventually swap"
+        );
+        assert!(
+            !ensure::should_retry_idle_replace(1, Some(0)),
+            "tests fail immediately so dummy-start fixtures do not spin"
+        );
+        assert!(ensure::should_retry_idle_replace(1, Some(1)));
+        assert!(!ensure::should_retry_idle_replace(2, Some(1)));
+    }
+
+    #[tokio::test]
+    async fn wait_idle_replaces_after_a_bound_unhealthy_listener_stops_responding() {
+        let root = tempfile::tempdir().expect("wait-idle defer-start fixture");
+        let dummy = root.path().join("claudex-agent-adapter");
+        std::fs::write(&dummy, "#!/bin/sh\nexit 0\n").expect("dummy adapter");
+        #[cfg(unix)]
+        {
+            let mut permissions = std::fs::metadata(&dummy)
+                .expect("dummy metadata")
+                .permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&dummy, permissions).expect("dummy executable");
+        }
+        let mut cfg = config();
+        cfg.executable = dummy;
+        let listener = TcpListener::bind("127.0.0.1:0").expect("unhealthy listener");
+        cfg.options.listen = listener.local_addr().expect("unhealthy address");
+        cfg.log_path = root.path().join("adapter.log");
+        cfg.lock_path = root.path().join("adapter.lock");
+        let server = serve_responses(
+            listener,
+            vec![http_response("500 Internal Server Error", "unhealthy")],
+        );
+        let error = ensure::run(&cfg, ensure::Mode::WaitIdle)
+            .await
+            .expect_err("unhealthy bound listener should fall through to start");
+        assert!(!error.to_string().is_empty());
+        server.join().expect("unhealthy listener");
+    }
+
+    #[tokio::test]
+    async fn wait_idle_start_reports_when_the_new_adapter_never_becomes_ready() {
+        let root = tempfile::tempdir().expect("wait-idle start fixture");
+        let dummy = root.path().join("claudex-agent-adapter");
+        std::fs::write(&dummy, "#!/bin/sh\nexit 0\n").expect("dummy adapter");
+        #[cfg(unix)]
+        {
+            let mut permissions = std::fs::metadata(&dummy)
+                .expect("dummy metadata")
+                .permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&dummy, permissions).expect("dummy executable");
+        }
+        let mut cfg = config();
+        cfg.executable = dummy;
+        cfg.options.listen = unused_listen();
+        cfg.log_path = root.path().join("adapter.log");
+        cfg.lock_path = root.path().join("adapter.lock");
+        let error = ensure::run(&cfg, ensure::Mode::WaitIdle)
+            .await
+            .expect_err("unready start should fail");
+        assert!(!error.to_string().is_empty());
+    }
+
+    #[tokio::test]
+    async fn fallback_ignores_corrupt_state_and_still_attempts_a_new_listener() {
+        let root = tempfile::tempdir().expect("fallback corrupt fixture");
+        let dummy = root.path().join("claudex-agent-adapter");
+        std::fs::write(&dummy, "#!/bin/sh\nexit 0\n").expect("dummy adapter");
+        #[cfg(unix)]
+        {
+            let mut permissions = std::fs::metadata(&dummy)
+                .expect("dummy metadata")
+                .permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&dummy, permissions).expect("dummy executable");
+        }
+        let mut cfg = config();
+        cfg.executable = dummy;
+        cfg.options.listen = unused_listen();
+        cfg.log_path = root.path().join("adapter.log");
+        cfg.lock_path = root.path().join("adapter.lock");
+        std::fs::write(
+            root.path()
+                .join(format!("fallback.{}.json", cfg.options.listen.port())),
+            br#"{"listen":"not-a-socket","build_id":"b","service_config_fingerprint":"s","pid":1}"#,
+        )
+        .expect("corrupt fallback state");
+        let error = fallback::ensure_current_generation(&reqwest::Client::new(), &cfg)
+            .await
+            .expect_err("corrupt state should not abort before start");
+        assert!(
+            !error
+                .to_string()
+                .contains("decode current-build fallback state"),
+            "corrupt fallback state leaked into ensure: {error:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn fallback_start_reports_when_the_new_listener_never_becomes_ready() {
+        let root = tempfile::tempdir().expect("fallback start fixture");
+        let dummy = root.path().join("claudex-agent-adapter");
+        std::fs::write(&dummy, "#!/bin/sh\nexit 0\n").expect("dummy adapter");
+        #[cfg(unix)]
+        {
+            let mut permissions = std::fs::metadata(&dummy)
+                .expect("dummy metadata")
+                .permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&dummy, permissions).expect("dummy executable");
+        }
+        let mut cfg = config();
+        cfg.executable = dummy;
+        cfg.options.listen = unused_listen();
+        cfg.log_path = root.path().join("adapter.log");
+        cfg.lock_path = root.path().join("adapter.lock");
+        let error = fallback::ensure_current_generation(&reqwest::Client::new(), &cfg)
+            .await
+            .expect_err("unready fallback should fail");
+        assert!(!error.to_string().is_empty());
+    }
+
+    #[tokio::test]
+    async fn after_update_failure_without_generation_keeps_the_original_error() {
+        let error = recovery::after_update_failure(
+            &reqwest::Client::new(),
+            &config(),
+            None,
+            anyhow::anyhow!("start failed"),
+        )
+        .await
+        .expect_err("missing generation stays failed");
+        assert!(error.to_string().contains("start failed"));
+    }
+
+    #[tokio::test]
+    async fn after_update_failure_with_a_missing_snapshot_keeps_the_update_error() {
+        let error = recovery::after_update_failure(
+            &reqwest::Client::new(),
+            &config(),
+            Some("missing-generation"),
+            anyhow::anyhow!("start failed"),
+        )
+        .await
+        .expect_err("missing snapshot stays failed");
+        let message = format!("{error:#}");
+        assert!(message.contains("start failed"));
+        assert!(message.contains("recovery failed"));
+    }
+
+    #[test]
+    fn reports_a_nonblocking_lock_error_for_an_invalid_file_descriptor() {
+        let error = super::launcher_lock::try_lock_file_descriptor(-1)
+            .expect_err("invalid file descriptor must fail");
+        assert!(error.to_string().contains("try lock launcher state"));
     }
 
     #[tokio::test]
@@ -944,6 +1374,44 @@ mod tests {
         let error = super::recovery_manifest::validate(&config, &generation)
             .expect_err("symlinked recovery manifest must be rejected");
         assert!(error.to_string().contains("symlink"));
+    }
+
+    #[test]
+    fn missing_recovery_snapshot_still_allows_preflight_migration() {
+        let root = tempfile::tempdir().expect("missing recovery fixture");
+        let mut cfg = config();
+        cfg.log_path = root.path().join("adapter.log");
+        assert_eq!(
+            ensure::usable_recovery_generation(&cfg, None).expect("no generation"),
+            None
+        );
+        assert_eq!(
+            ensure::usable_recovery_generation(&cfg, Some("v1-missing-generation"))
+                .expect("missing snapshot"),
+            None,
+            "pruned or deleted recovery snapshot must not block Replace"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unsafe_recovery_snapshot_still_blocks_handover() {
+        let root = tempfile::tempdir().expect("unsafe recovery fixture");
+        let dummy = root.path().join("claudex-agent-adapter");
+        std::fs::write(&dummy, "#!/bin/sh\nexit 0\n").expect("dummy adapter");
+        std::fs::set_permissions(&dummy, std::fs::Permissions::from_mode(0o755))
+            .expect("dummy executable");
+        let mut cfg = config();
+        cfg.executable = dummy;
+        cfg.log_path = root.path().join("adapter.log");
+        let manifest = super::recovery_manifest::prepare(&cfg).expect("prepare recovery manifest");
+        let generation =
+            super::recovery_manifest::generation_from_path(&manifest).expect("manifest generation");
+        std::fs::set_permissions(&manifest, std::fs::Permissions::from_mode(0o644))
+            .expect("unsafe manifest permissions");
+        let error = ensure::usable_recovery_generation(&cfg, Some(&generation))
+            .expect_err("unsafe manifest must block handover");
+        assert!(error.to_string().contains("recovery"));
     }
 
     #[test]

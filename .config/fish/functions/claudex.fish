@@ -4,6 +4,16 @@ function claudex --description 'Run Claude Code with config-driven agent backend
         claudex-hot-swap $argv
         return $status
     end
+    if test (count $argv) -ge 1; and test "$argv[1]" = install
+        set -e argv[1]
+        set -l installer "$HOME/.local/bin/claudex-install-adapter"
+        if not test -x "$installer"
+            echo "claudex: claudex-install-adapter is not executable: $installer" >&2
+            return 127
+        end
+        command "$installer" $argv
+        return $status
+    end
 
     # Keep orchestration policy in exported variables so Claude Code and its
     # routed workers receive the same controls.  Each default is overrideable

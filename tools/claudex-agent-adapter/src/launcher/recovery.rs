@@ -1,6 +1,6 @@
 use std::future::Future;
 
-use anyhow::{Error, Result};
+use anyhow::{Error, Result, anyhow};
 
 use super::{
     ServiceConfig,
@@ -14,6 +14,7 @@ pub(super) async fn after_update_failure(
     generation: Option<&str>,
     update_error: Error,
 ) -> Result<String> {
+    let update_message = format!("{update_error:#}");
     recover_with(
         generation,
         update_error,
@@ -21,7 +22,14 @@ pub(super) async fn after_update_failure(
         |recovery| async move { wait_until_recovery_ready(client, config, &recovery).await },
         daemon_start::terminate_started_recovery,
     )
-    .await
+    .await?;
+    // Previous generation is serving again, but the requested update still
+    // failed. Keep a non-zero ensure/update exit so callers do not treat the
+    // new generation as current.
+    Err(anyhow!(
+        "{update_message}: restored previous generation; {} is still serving",
+        config.base_url()
+    ))
 }
 
 async fn recover_with<Start, Wait, WaitFuture, Stop>(
@@ -30,7 +38,7 @@ async fn recover_with<Start, Wait, WaitFuture, Stop>(
     start: Start,
     wait: Wait,
     stop: Stop,
-) -> Result<String>
+) -> Result<()>
 where
     Start: FnOnce(&str) -> Result<RecoveryProcess>,
     Wait: FnOnce(RecoveryProcess) -> WaitFuture,
@@ -55,9 +63,10 @@ where
             "new adapter failed readiness and previous generation recovery failed: {recovery_error:#}"
         )));
     }
-    Err(update_error.context(format!(
-        "new adapter failed readiness; restored previous generation pid {recovery_pid}"
-    )))
+    eprintln!(
+        "claudex: new adapter failed readiness; restored previous generation pid {recovery_pid}"
+    );
+    Ok(())
 }
 
 #[cfg(test)]
@@ -115,7 +124,7 @@ mod tests {
 
     #[tokio::test]
     async fn readiness_failure_restores_the_previous_generation() {
-        let error = recover_with(
+        recover_with(
             Some("generation"),
             anyhow!("new generation failed"),
             start_expected_recovery,
@@ -123,10 +132,7 @@ mod tests {
             unexpected_stop,
         )
         .await
-        .expect_err("successful recovery still reports the failed update");
-        let message = format!("{error:#}");
-        assert!(message.contains("restored previous generation pid 77"));
-        assert!(message.contains("new generation failed"));
+        .expect("successful recovery should keep the restored listener usable");
     }
 
     #[tokio::test]

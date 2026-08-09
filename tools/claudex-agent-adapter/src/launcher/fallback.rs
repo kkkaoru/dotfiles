@@ -29,18 +29,24 @@ pub(super) async fn ensure_current_generation(
     config: &ServiceConfig,
 ) -> Result<String> {
     let state_path = state_path(config)?;
-    if let Some(state) = read_state(&state_path)? {
-        let fallback = config.with_listen(state.listen);
-        if state.build_id == env!("CLAUDEX_BUILD_ID")
-            && state.service_config_fingerprint == fallback.service_config_fingerprint
-            && matches!(
-                handover::inspect_service(client, &fallback).await,
-                handover::ServiceState::Reuse
-            )
-        {
-            return Ok(fallback.base_url());
+    match read_state(&state_path) {
+        Ok(Some(state)) => {
+            let fallback = config.with_listen(state.listen);
+            if state.build_id == env!("CLAUDEX_BUILD_ID")
+                && state.service_config_fingerprint == fallback.service_config_fingerprint
+                && matches!(
+                    handover::inspect_service(client, &fallback).await,
+                    handover::ServiceState::Reuse
+                )
+            {
+                return Ok(fallback.base_url());
+            }
+            let _ = fs::remove_file(&state_path);
         }
-        let _ = fs::remove_file(&state_path);
+        Ok(None) => {}
+        Err(_) => {
+            let _ = fs::remove_file(&state_path);
+        }
     }
 
     let listen = reserve_listener(config.options.listen)?;
@@ -224,5 +230,35 @@ mod tests {
         assert!(path.ends_with("fallback.8318.json"));
         config.log_path = PathBuf::new();
         assert!(state_path(&config).is_err());
+    }
+
+    #[test]
+    fn read_state_validates_port_and_ip() {
+        let root = tempfile::tempdir().expect("validate port/ip fixture");
+        let path = root.path().join("fallback.invalid.json");
+
+        // Test port == 0 rejection
+        std::fs::write(
+            &path,
+            br#"{"listen":"127.0.0.1:0","build_id":"b","service_config_fingerprint":"s","pid":1}"#,
+        )
+        .expect("write port=0");
+        assert!(read_state(&path).is_err());
+
+        // Test non-loopback IP rejection
+        std::fs::write(
+            &path,
+            br#"{"listen":"192.168.1.1:8000","build_id":"b","service_config_fingerprint":"s","pid":1}"#,
+        )
+        .expect("write non-loopback");
+        assert!(read_state(&path).is_err());
+    }
+
+    #[test]
+    fn reserves_ipv6_loopback_listener() {
+        let listen_v6 = reserve_listener(SocketAddr::new(IpAddr::V6(Ipv6Addr::UNSPECIFIED), 9000))
+            .expect("ipv6 fallback listener");
+        assert!(listen_v6.ip().is_loopback());
+        assert!(matches!(listen_v6.ip(), IpAddr::V6(_)));
     }
 }

@@ -98,6 +98,7 @@ if [ -e "$adapter_link" ] && [ ! -L "$adapter_link" ]; then
 fi
 ln -snfv "$adapter_target" "$adapter_link"
 link_path "${DOTPATH}/scripts/claudex-hot-swap" "${HOME}/.local/bin/claudex-hot-swap"
+link_path "${DOTPATH}/scripts/claudex-install-adapter" "${HOME}/.local/bin/claudex-install-adapter"
 
 # .config apps
 mkdir -p "${HOME}/.config"

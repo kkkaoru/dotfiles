@@ -51,7 +51,7 @@ flowchart LR
 | OpenCode GPT Luna worker | `claudex-opencode-gpt` | `opencode-go/gpt-5.6-luna` | `max` | CodexBarのOpenCode Go枠に空きがある場合。Codexの `gpt-5.6-luna` / `claudex-gpt` とは別route |
 | Cursor worker | `claudex-cursor` | `auto` | `high` | CodexBarのCursor枠に空きがある場合。`cursor-agent --model auto --yolo acp`。modelはCLI+session/newで固定し、毎turnの `set_session_model` 再選択はしない |
 | Cline DeepSeek Flash worker | `claudex-cline-deepseek-flash` | `cline-pass/deepseek-v4-flash` | `xhigh` | ClinePass枠（CodexBar `clinepass` weekly left）。`--thinking xhigh`。OpenCode Go DeepSeekとは別 |
-| Command Code Muse Spark Contributor worker | `claudex-command-code-muse-spark-1-2-contributor` | `meta/muse-spark-1.2-contributor` | `high` | 明示的な SubAgent のみ。`mainProviders` には入れない（自動選択しない）。agent slug に Muse Spark 1.2 と contributor を含める（将来の Command Code 他モデルと区別）。公式 `cmd -p` を `command-code-acp` が ACP 化し、既存 `configured-acp` で起動。Provider API / Meta 直接APIは使わない |
+| Command Code Muse Spark Contributor worker | `claudex-command-code-muse-spark-1-2-contributor` | `meta/muse-spark-1.2-contributor` | `high` | 自動 `selected_workers` 候補。usage 未計測（`unmetered`）のため既知メーター付き worker より後順位。agent slug に Muse Spark 1.2 と contributor を含める（将来の Command Code 他モデルと区別）。公式 `cmd -p` を `command-code-acp` が ACP 化し、既存 `configured-acp` で起動。Provider API / Meta 直接APIは使わない |
 | Sonnet worker | `claudex-sonnet` | `claude-sonnet-5` | `high` | CodexBarのClaude枠（`usageProvider: claude`）残量。`claudex-haiku-search` と同じClaude usage leftを参照。outerがSonnet 5のときは同一modelの自動選択を抑制（明示起動と `CLAUDEX_ALLOW_SONNET_SUBAGENT=1` は可） |
 | Fallback | `claudex-sonnet` | `claude-sonnet-5` | `high` | 自動worker選択で利用可能なcapacity-managed providerがない場合 |
 | Built-in advisor | Claude Code標準 `advisor()` | `opus` | Claude Code標準 | 標準advisor policyに従う。provider capacity非依存 |
@@ -114,7 +114,8 @@ agent 定義から skills を外し、`SubagentStart` hook も Command Code だ�
 進捗（▶/✓ と `text_delta` thinking）は既存 ACP `ToolCall` / thought chunk 経由で SubAgent TUI に出ます。
 `command-code-acp` は Muse Spark の文字単位 NDJSON をまとめて流す。ツール進捗は Cursor/Qwen/Grok/Cline と同じ ACP `ToolCall` 経路（`▶ name: query/path/url` → `✓`/`✗`、無音時は `… still working · last:`）。固定文（`ツール結果待ち` / `続きの調査または回答` / `次: …`）は出さない。ネイティブ `text_delta` は live text。`api_retry` / `tool_queued` / CoT thinking は親 TUI に流さない。
 `cmd -p` stdout はバイト読み + lossy/繰り越し UTF-8 で消費し、Web 調査中の不正バイトや途中切断を ACP Internal error（`read cmd -p stdout`）にしない。
-`mainProviders` に追加すると usage 未計測のため他workerを押し出すので、既定では明示起動だけにします。
+`mainProviders` と自動 `selected_workers` の両方に入ります。usage 未計測なので既知メーター付き
+worker より後順位になり、Ollama API到達のみのような unknown meter とは区別します。
 Cline ACPは `cline --auto-approve true --thinking {effort} -P <provider> -m {model} --acp` を起動します。
 DeepSeek V4 Flashは provider `cline-pass` / model `cline-pass/deepseek-v4-flash` です（本機の
 `~/.cline/data/settings/providers.json` で確認したID）。reasoning effortはCline CLIの
@@ -405,8 +406,10 @@ UserPromptSubmit では main 向け、SubagentStart では worker 向けの tool
 緊急時のみ `CLAUDEX_ALLOW_MAIN_TOOLS=1` で main の file/search 直接実行を許可できます。
 自動 `selected_workers` は weekly 残量が十分ある peer がいるとき、weekly 残量が低い
 （目安 25% 未満）worker と、残量不明な worker（例: Ollama の API 到達のみ）を除外します。
-Ollama が CodexBar 未計測でも API 到達可能な場合は、他に実測メーター付き peer が無いときだけ
-自動候補に残ります。
+adapter も同じ 25% / 40% 目安を `usage-routing.json` から読み、明示的な
+`claudex-gpt-spark` 起動や SubAgent HTTP を sibling provider へ書き換えます。
+残量が少ない Spark を繰り返し起動しません。Ollama が CodexBar 未計測でも API 到達可能な場合は、
+他に実測メーター付き peer が無いときだけ自動候補に残ります。
 過去に `--agent claudex-orchestrator` が付いた
 transcriptをresumeする場合、adapterは残存する `agent-setting` を検知し、slug / 既存title /
 cwd名から `--name` を復元して表示名の固定化を解除します。明示的な `--name` や `--agent`
@@ -493,7 +496,9 @@ hook出力の `worker_capacity` リストはこの優先順を
 保持し、各workerの `used_percent` / `remaining_percent` / `weekly_remaining_percent` /
 `five_hour_remaining_percent` を公開するため、subagentで起動する
 modelの選択が実行時に動的に決まっていることが確認できます。残量0%のproviderは候補から除外され、
-unknown/unmeteredは `null` になり、既知の空き容量があるmodelより優先されません。
+unknown meter（Ollama API到達のみ）は `null` のまま ample peer がいると自動候補から落ちます。
+意図的な unmetered（Command Code Muse Spark）は `null` のまま自動候補に残り、既知メーター付き
+model より後順位です。
 
 `claudex_model` を指定せずに起動するSubAgent（特にClaude Code組み込みの `general-purpose` type）は、
 本来このランキングを素通りしてadapterへ `native_model=None` で到達し、recoverableなrouteを持ちません。
@@ -917,18 +922,18 @@ adapterの正本は `~/.cargo/bin/claudex-agent-adapter` です。`create-symlin
 symlink作成後に古いcargo binへ戻るため、install先はcargo bin（または両方）にしてください。
 
 ```sh
-tools/claudex-agent-adapter/scripts/cargo-ephemeral.sh +1.97.1 install \
-  --path tools/claudex-agent-adapter \
-  --root "$HOME/.cargo" \
-  --bin claudex-agent-adapter \
-  --bin command-code-acp
-# または cargo install --locked --force --path tools/claudex-agent-adapter \
+./scripts/claudex-install-adapter
+# fishなら claudex install
+# または tools/claudex-agent-adapter/scripts/cargo-ephemeral.sh +1.97.1 install \
+#   --force --path tools/claudex-agent-adapter --root "$HOME/.cargo" \
 #   --bin claudex-agent-adapter --bin command-code-acp
 ```
 
-install後は `/health` の `build_id` が新しいバイナリと一致するまで、次節の
-`ensure` / `claudex` / `claudex-hot-swap` でdaemonを差し替えます。バイナリだけ更新して
-daemonを触らないと、既存の `:8318` は旧buildのまま動き続けます。
+`cargo-ephemeral.sh … install` は成功後に `after-install.sh` を呼び、
+`~/.local/bin` を relink して idle hot-swap waiter を新 `build_id` 向けに武装します
+（`cargo install` は実行中 waiter の inode を置き換えて落とすため）。busy な `:8318`
+はそのまま残り、idle 後に差し替わります。生の `cargo install` だけした場合は次節の
+`claudex-hot-swap` を別途実行してください。
 
 ### daemonの差し替え（hot-swap）仕様
 
@@ -983,14 +988,12 @@ daemonを増やし続けません。既存sessionの進行中streamは旧daemon�
 日常の更新手順:
 
 ```sh
-# 1. 新バイナリを入れる（上のinstall）
+# 1. 新バイナリを入れ、idle waiter を新 build_id 向けに武装する
+./scripts/claudex-install-adapter
+# fishなら claudex install
+
+# 2. 確認。idleなら pid が変わり build_id が一致。busyなら waiter 待ち
 claudex-agent-adapter build-id
-
-# 2. 同一portへ載せる。TUIが付いていてもidleなら差し替わる
-claudex-hot-swap
-# fishなら claudex hot-swap でも同じ。zshは ~/.local/bin/claudex-hot-swap
-
-# 3. 確認。pidが変わり、build_idがinstallした値と一致すること
 curl --fail --silent http://127.0.0.1:8318/health | jq '{pid, build_id, status}'
 ```
 
@@ -1001,6 +1004,10 @@ waiterはport lockを持たずにidleを待ち、同じportへReplaceします�
 waiterが生きていれば再spawnしません。新しい `claudex` sessionだけ今すぐ新buildへ
 載せたい場合は `ensure` / `claudex` のfallbackを使います。ensure/launchのDeferも
 同じwaiterを武装するので、本portはidle後に自動で新buildになります。
+新buildのwaiterを武装したときは macOS 通知「ビルド完了・待機中」、同じportへの
+Replaceが完了したときは「差し替え完了」を出します。Reuseや既に武装済みのwaiter、
+同じ listen+build+種別の再武装では通知しません。待機のあとに差し替わったときだけ
+種別が変わるので、短い間隔でも最大2通です。
 
 `providers.json` のrouteやQwen起動引数、subscription上限、Codex credentialも
 fingerprintの対象です。credential変更後は永続app-server childへ新しい起動環境を

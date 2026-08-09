@@ -4,7 +4,7 @@
 mod tests {
     use std::sync::Arc;
 
-    use super::{startup, RoutedBackends, StartupState, MAX_DYNAMIC_ROUTES};
+    use super::{MAX_DYNAMIC_ROUTES, RoutedBackends, StartupState, startup};
     use crate::agent_backend::{AcpLaunch, AgentBackend, BackendKind, BackendRoute, WebSearchMode};
 
     #[test]
@@ -156,9 +156,11 @@ mod tests {
                 "config": {"web_search":"disabled"}
             }));
             assert_eq!(params["modelProvider"], "sakana");
-            assert!(params["config"]["model_catalog_json"]
-                .as_str()
-                .is_some_and(|path| path.ends_with("/.codex/fugu.json")));
+            assert!(
+                params["config"]["model_catalog_json"]
+                    .as_str()
+                    .is_some_and(|path| path.ends_with("/.codex/fugu.json"))
+            );
             assert_eq!(params["config"]["web_search"], "disabled");
         }
         let mut plain = route("plain", BackendKind::CodexAppServer);
@@ -178,7 +180,10 @@ mod tests {
         specific.model_prefixes.push("vendor-codex-".to_owned());
         let routes = RoutedBackends::lazy(&[broad, specific]);
 
-        assert_eq!(routes.web_search_mode("vendor-chat"), WebSearchMode::DelegateCcr);
+        assert_eq!(
+            routes.web_search_mode("vendor-chat"),
+            WebSearchMode::DelegateCcr
+        );
         assert_eq!(
             routes.web_search_mode("vendor-codex-preview"),
             WebSearchMode::CodexNative
@@ -195,7 +200,10 @@ mod tests {
         exact.web_search_mode = WebSearchMode::Disabled;
         let routes = RoutedBackends::lazy(&[template, exact]);
 
-        assert_eq!(routes.web_search_mode("vendor-model"), WebSearchMode::Disabled);
+        assert_eq!(
+            routes.web_search_mode("vendor-model"),
+            WebSearchMode::Disabled
+        );
         assert_eq!(
             routes.web_search_mode("vendor-preview"),
             WebSearchMode::CodexNative
@@ -222,6 +230,24 @@ mod tests {
             Some(200)
         );
         assert_eq!(routes.max_context_tokens_for_model("unknown"), None);
+    }
+
+    #[tokio::test]
+    async fn get_does_not_return_a_dead_ready_backend() {
+        let dead = Arc::new(AgentBackend::Grok(
+            crate::grok_acp::GrokAcp::stopped_for_test(),
+        ));
+        assert!(!dead.is_alive());
+        let route = super::RoutedBackend::ready("dead-grok".into(), dead);
+        assert!(route.ready_backend().is_none());
+        let result = tokio::time::timeout(std::time::Duration::from_millis(80), route.get()).await;
+        match result {
+            Ok(Ok(backend)) => assert!(
+                backend.is_alive(),
+                "get() must not return a dead Ready backend"
+            ),
+            Ok(Err(_)) | Err(_) => {}
+        }
     }
 
     #[tokio::test]
