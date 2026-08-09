@@ -144,7 +144,14 @@ Each route may also set `webSearchMode` to `codex-native`, `acp-native`,
 `delegate-ccr`, `delegate-mcp`, or `disabled`. `codex-native` enables the
 Codex app-server live search flags on `thread/start`; `acp-native` leaves the
 request on an ACP route that owns native search (Command Code Muse Spark uses
-this so Claude system/routing/ACP_NATIVE dumps are not prefixed onto `cmd -p`); `delegate-mcp` leaves search
+this so Claude system/routing/ACP_NATIVE dumps are not prefixed onto `cmd -p`;
+`command-code-acp` also reads `cmd -p` stdout as bytes so invalid UTF-8 from
+web/tool dumps cannot crash the ACP turn, coalesces tiny NDJSON deltas, emits
+the same ACP `▶ name: query/path/url` / `✓` / `✗` chrome as Cursor/Qwen/Grok/Cline,
+plus native Command Code `text_delta` as live assistant text — not canned
+ツール結果待ち / 続きの調査または回答, and not thinking chrome so Claude Code 2.1
+does not collapse mid-turn work into Doing/Orbiting);
+`delegate-mcp` leaves search
 to the configured ACP/MCP provider; and `disabled` suppresses search for that
 route. `delegate-ccr` (the default) exposes the protected
 `/v1/code/sessions/{session_id}/worker/web-search` endpoint. The endpoint
@@ -345,7 +352,7 @@ against `env!("CLAUDEX_BUILD_ID")`. Authentication must succeed before Reuse.
 | --- | --- | --- | --- |
 | `Reuse` | health matches config, current `build_id`, and auth | keep the listener | keep the listener |
 | `Replace` | mismatch or stale build, and no active work | graceful-stop serve, start current binary on the same port | same |
-| `Defer` | `status == "ok"` and `has_active_work()` (`active_http_requests` or `active_provider_turns` > 0) | start or reuse a current-build loopback fallback; leave in-flight streams on the old pid | poll every 250ms up to 45s; then Replace, or timeout without a fallback |
+| `Defer` | `status == "ok"` and `has_active_work()` (`active_http_requests` or `active_provider_turns` > 0) | start or reuse a current-build loopback fallback, arm a detached idle waiter for the configured port, and leave in-flight streams on the old pid | poll every 250ms up to 45s; then Replace, or arm `hot-swap --wait-idle` instead of timing out |
 | `Start` | no health response | start serve on the configured listen address | same |
 
 Idle `launch` TUIs do **not** block Replace. Only in-flight HTTP/provider work
@@ -357,7 +364,11 @@ daemon.
 
 Fallback state is `~/.cache/claudex/fallback.<configured-port>.json` (mode
 `0600`): listen address, `build_id`, fingerprint, pid. A matching live fallback
-is reused. Readiness still requires the current build ID, matching
+is reused. Pending idle hot-swap state is
+`~/.cache/claudex/pending-hot-swap.<listen>.json` plus a waiter log. A live
+waiter for the current `build_id` is reused; a stale waiter is SIGTERM'd and
+replaced. The waiter does not hold the per-port launcher lock while polling.
+Readiness still requires the current build ID, matching
 configuration, and successful authentication. If the new generation fails
 readiness and a recovery manifest exists, the previous generation is restored.
 
@@ -400,10 +411,10 @@ more than once for the same source location across unit and integration binaries
 are merged before the percentage is calculated. Test-only modules, structural
 module-wiring files, and mock process fixtures under `tests/fixtures` are
 excluded so the report measures executable production behavior. The ACP client
-trait shim and deterministic Grok plugin provisioning wrapper are the only
-production exclusions; each has a documented nightly LLVM mapping workaround
-next to the source while the delegated behavior remains covered by fixture
-tests. Both coverage commands include the Cargo build script, whose reusable
+trait shim, Command Code ACP Agent trait shim, and deterministic Grok plugin
+provisioning wrapper are the only production exclusions; each has a documented
+nightly LLVM mapping workaround next to the source while the delegated behavior
+remains covered by fixture tests. Both coverage commands include the Cargo build script, whose reusable
 logic is measured through `src/build_support.rs`.
 
 Coverage uses an isolated `target/llvm-cov-*` directory. A later coverage run

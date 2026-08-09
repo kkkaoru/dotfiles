@@ -83,13 +83,23 @@ impl SubscriptionToolContext {
         if crate::anthropic::provider_auth_cooldown::scope_is_cooling_down_at(cache, model, now) {
             return true;
         }
-        self.model_catalog
+        if self
+            .model_catalog
             .usage_provider_for_model(model)
             .is_some_and(|provider| {
                 crate::anthropic::provider_auth_cooldown::scope_is_cooling_down_at(
                     cache, provider, now,
                 )
             })
+        {
+            return true;
+        }
+        let routing_cache = cache.map(|path| path.with_file_name("usage-routing.json"));
+        crate::anthropic::routing_quota::live_cache_marks_model_exhausted(
+            routing_cache.as_deref(),
+            model,
+            now,
+        )
     }
 }
 

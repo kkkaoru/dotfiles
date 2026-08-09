@@ -1,8 +1,10 @@
 //! Test helper: what a Claude Code SubAgent panel can paint *during* a turn.
 //!
-//! SubAgent TUI shows `thinking_delta` live and hides `text_delta` until
-//! `end_turn`. Progress must therefore arrive as thinking frames before
-//! `finish` / `message_stop`, not only in the committed transcript.
+//! SubAgent TUI shows `thinking_delta` live and often hides `text_delta` until
+//! `end_turn`. Cline/Qwen/Cursor progress must therefore arrive as thinking
+//! frames before `finish` / `message_stop`. Command Code is the opposite:
+//! Claude Code 2.1 collapses open thinking into Doing/Orbiting, so ●/▶ and
+//! answers stream as live `text_delta` instead.
 
 use axum::body::Bytes;
 use serde_json::Value;

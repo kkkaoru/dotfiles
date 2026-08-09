@@ -1,6 +1,8 @@
 use agent_client_protocol as acp;
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Value, json};
+
+use super::tool_chrome::{tool_kind, tool_raw_input};
 
 pub const TURN_TOOL_ID: &str = "command-code-turn";
 
@@ -24,6 +26,12 @@ pub enum ProgressEvent {
         name: String,
         error: Option<String>,
     },
+    /// Coalesced `thinking_delta` / `thinking_end` text.
+    Thought(String),
+    /// Coalesced `text_delta` / `message_update` assistant text.
+    Message(String),
+    /// Explicit phase status (turn/model start).
+    Status(String),
     Note(String),
 }
 
@@ -74,6 +82,10 @@ struct WireEvent {
     #[serde(default)]
     description: Option<String>,
     #[serde(default)]
+    query: Option<String>,
+    #[serde(default)]
+    arguments: Option<Value>,
+    #[serde(default)]
     error: Option<String>,
     #[serde(default)]
     message: Option<String>,
@@ -81,10 +93,6 @@ struct WireEvent {
     text: Option<String>,
     #[serde(default)]
     delta: Option<String>,
-    #[serde(default)]
-    model: Option<String>,
-    #[serde(default, rename = "turnNumber")]
-    turn_number: Option<u32>,
 }
 
 pub fn parse_stdout_line(line: &str) -> ParsedLine {
@@ -109,6 +117,7 @@ pub fn parse_stdout_line(line: &str) -> ParsedLine {
 }
 
 fn parse_event(event: WireEvent) -> ParsedLine {
+    let description = tool_description(&event);
     let text = event_text(&event);
     let kind = event.kind.unwrap_or_default();
     let id = event
@@ -124,7 +133,7 @@ fn parse_event(event: WireEvent) -> ParsedLine {
             ParsedLine::Progress(ProgressEvent::ToolStarted {
                 id,
                 name,
-                description: nonempty(event.description),
+                description,
             })
         }
         "tool_completed" | "tool_complete" | "tool_done" => {
@@ -135,25 +144,31 @@ fn parse_event(event: WireEvent) -> ParsedLine {
             name,
             error: nonempty(event.error).or_else(|| nonempty(event.message)),
         }),
-        "thinking_end" | "text_delta" | "thinking_delta" | "message_update" => match text {
-            Some(text) => ParsedLine::Progress(ProgressEvent::Note(text)),
+        "thinking_end" | "thinking_delta" => match text {
+            Some(text) if has_status_prefix(text.trim()) => {
+                ParsedLine::Progress(ProgressEvent::Status(text))
+            }
+            Some(_) | None => ParsedLine::Ignored,
+        },
+        "text_delta" | "message_update" => match text {
+            Some(text) => ParsedLine::Progress(ProgressEvent::Message(text)),
             None => ParsedLine::Ignored,
         },
-        "turn_start" => ParsedLine::Progress(ProgressEvent::Note(
-            event
-                .turn_number
-                .map(|turn| format!("turn {turn}"))
-                .unwrap_or_else(|| "turn".to_owned()),
-        )),
-        "model_request_start" => ParsedLine::Progress(ProgressEvent::Note(format!(
-            "requesting {}",
-            event
-                .model
-                .filter(|model| !model.is_empty())
-                .unwrap_or_else(|| name)
-        ))),
-        "run_start" | "message_start" | "model_trace" | "thinking_start" | "model_request_end"
-        | "message_end" | "turn_end" | "run_end" | "" => ParsedLine::Ignored,
+        "turn_start"
+        | "model_request_start"
+        | "run_start"
+        | "message_start"
+        | "model_trace"
+        | "thinking_start"
+        | "model_request_end"
+        | "message_end"
+        | "turn_end"
+        | "run_end"
+        | "api_retry"
+        | "tool_queued"
+        | "tool_queue"
+        | "tool_waiting"
+        | "" => ParsedLine::Ignored,
         other => ParsedLine::Progress(ProgressEvent::Note(match nonempty(event.message) {
             Some(message) => format!("{other}: {message}"),
             None => other.to_owned(),
@@ -169,59 +184,59 @@ pub fn progress_to_updates(event: &ProgressEvent) -> Vec<acp::SessionUpdate> {
                 .map(|value| format!(", effort={value}"))
                 .unwrap_or_default();
             let title = format!("Command Code ({model}{effort})");
-            vec![
-                thought(format!(
-                    "▶ Command Code headless starting ({model}{effort})\n"
-                )),
-                acp::SessionUpdate::ToolCall(
-                    acp::ToolCall::new(TURN_TOOL_ID, title)
-                        .kind(acp::ToolKind::Other)
-                        .status(acp::ToolCallStatus::InProgress),
-                ),
-            ]
+            vec![acp::SessionUpdate::ToolCall(
+                acp::ToolCall::new(TURN_TOOL_ID, title)
+                    .kind(acp::ToolKind::Other)
+                    .status(acp::ToolCallStatus::InProgress),
+            )]
         }
         ProgressEvent::ToolStarted {
             id,
             name,
             description,
-        } => {
-            let title = tool_title(name, description.as_deref());
-            vec![
-                thought(format!("▶ {title}\n")),
-                acp::SessionUpdate::ToolCall(
-                    acp::ToolCall::new(id.clone(), title)
-                        .kind(tool_kind(name))
-                        .status(acp::ToolCallStatus::InProgress),
-                ),
-            ]
-        }
+        } => vec![acp::SessionUpdate::ToolCall(
+            acp::ToolCall::new(id.clone(), name.clone())
+                .kind(tool_kind(name))
+                .status(acp::ToolCallStatus::InProgress)
+                .raw_input(tool_raw_input(name, description.as_deref())),
+        )],
         ProgressEvent::ToolCompleted { id, name } => {
-            vec![
-                thought(format!("✓ {name}\n")),
-                acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new(
+            vec![acp::SessionUpdate::ToolCallUpdate(
+                acp::ToolCallUpdate::new(
                     id.clone(),
                     acp::ToolCallUpdateFields::new()
                         .status(acp::ToolCallStatus::Completed)
                         .title(name.clone()),
-                )),
-            ]
+                ),
+            )]
         }
         ProgressEvent::ToolFailed { id, name, error } => {
-            let detail = error
+            let mut fields = acp::ToolCallUpdateFields::new()
+                .status(acp::ToolCallStatus::Failed)
+                .title(name.clone());
+            if let Some(detail) = error
                 .as_deref()
-                .map(|value| format!(": {value}"))
-                .unwrap_or_default();
-            vec![
-                thought(format!("✗ {name}{detail}\n")),
-                acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new(
-                    id.clone(),
-                    acp::ToolCallUpdateFields::new()
-                        .status(acp::ToolCallStatus::Failed)
-                        .title(name.clone()),
-                )),
-            ]
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+            {
+                fields = fields.raw_output(json!(detail));
+            }
+            vec![acp::SessionUpdate::ToolCallUpdate(
+                acp::ToolCallUpdate::new(id.clone(), fields),
+            )]
         }
-        ProgressEvent::Note(note) => vec![thought(format!("{note}\n"))],
+        ProgressEvent::Thought(text)
+            if has_status_prefix(text.trim()) && !is_canned_progress(text) =>
+        {
+            vec![native_message(text)]
+        }
+        ProgressEvent::Status(text) | ProgressEvent::Message(text) if !is_canned_progress(text) => {
+            vec![native_message(text)]
+        }
+        ProgressEvent::Thought(_)
+        | ProgressEvent::Status(_)
+        | ProgressEvent::Message(_)
+        | ProgressEvent::Note(_) => Vec::new(),
     }
 }
 
@@ -250,7 +265,7 @@ pub fn result_is_error(result: &TurnResult) -> bool {
 
 pub fn turn_cancelled_updates() -> Vec<acp::SessionUpdate> {
     vec![
-        thought("✗ Command Code cancelled\n"),
+        native_message("Command Code cancelled"),
         turn_settled_update(true),
     ]
 }
@@ -274,32 +289,61 @@ fn event_text(event: &WireEvent) -> Option<String> {
         .or_else(|| nonempty(event.message.clone()))
 }
 
-fn thought(text: impl Into<String>) -> acp::SessionUpdate {
-    acp::SessionUpdate::AgentThoughtChunk(acp::ContentChunk::new(acp::ContentBlock::Text(
+#[rustfmt::skip]
+fn ensure_trailing_newline(text: &str) -> String {
+    if text.ends_with('\n') { text.to_owned() } else { format!("{text}\n") }
+}
+
+fn native_message(text: &str) -> acp::SessionUpdate {
+    message(ensure_trailing_newline(text.trim()))
+}
+
+fn is_canned_progress(text: &str) -> bool {
+    let t = text.trim().trim_start_matches(['●', '▶', '✓', '✗', ' ']);
+    t.contains("ツール結果待ち")
+        || t.contains("続きの調査または回答")
+        || t.contains("次: タスク実行")
+        || t.contains("次: ツールまたは回答")
+        || t.contains("次: トークン待ち")
+        || t.contains("次: 別手段または報告")
+        || t.contains("次: 中断")
+        || t.starts_with("起動: Command Code")
+        || (t.starts_with("実行中:") && t.contains("。次:"))
+        || (t.starts_with("完了:") && t.contains("。次:"))
+        || (t.starts_with("失敗:") && t.contains("。次:"))
+        || (t.starts_with("ターン") && t.contains("開始"))
+        || t.starts_with("モデル要求中:")
+}
+
+fn has_status_prefix(text: &str) -> bool {
+    text.starts_with('●') || text.starts_with('▶') || text.starts_with('✓') || text.starts_with('✗')
+}
+
+fn message(text: impl Into<String>) -> acp::SessionUpdate {
+    acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(acp::ContentBlock::Text(
         acp::TextContent::new(text.into()),
     )))
 }
 
-fn tool_title(name: &str, description: Option<&str>) -> String {
-    match description {
-        Some(description) if !description.is_empty() => format!("{name}: {description}"),
-        _ => name.to_owned(),
-    }
+fn tool_description(event: &WireEvent) -> Option<String> {
+    nonempty(event.description.clone())
+        .or_else(|| nonempty(event.query.clone()))
+        .or_else(|| preview_arg(event.arguments.as_ref()))
 }
 
-fn tool_kind(name: &str) -> acp::ToolKind {
-    let lower = name.to_ascii_lowercase();
-    if lower.contains("read") || lower.contains("grep") || lower.contains("glob") {
-        acp::ToolKind::Read
-    } else if lower.contains("write") || lower.contains("edit") || lower.contains("patch") {
-        acp::ToolKind::Edit
-    } else if lower.contains("bash") || lower.contains("shell") || lower.contains("exec") {
-        acp::ToolKind::Execute
-    } else if lower.contains("search") || lower.contains("web") {
-        acp::ToolKind::Search
-    } else {
-        acp::ToolKind::Other
-    }
+#[rustfmt::skip]
+fn preview_arg(value: Option<&Value>) -> Option<String> {
+    let Value::Object(map) = value? else { return None };
+    ["query", "q", "url", "uri", "path", "file_path", "pattern", "command"]
+        .into_iter()
+        .find_map(|key| map.get(key).and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .map(|text| {
+            let mut chars = text.chars();
+            let head: String = chars.by_ref().take(80).collect();
+            if chars.next().is_some() { format!("{head}…") } else { head }
+        })
 }
 
 fn nonempty(value: Option<String>) -> Option<String> {

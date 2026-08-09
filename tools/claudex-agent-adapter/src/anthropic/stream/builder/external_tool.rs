@@ -86,9 +86,11 @@ impl SegmentBuilder {
                 &mut arguments,
                 &context.session.model,
             );
-            context
-                .bridge
-                .rewrite_exhausted_agent_launch(&mut arguments);
+            context.bridge.rewrite_exhausted_agent_launch_with_quota(
+                &mut arguments,
+                context.current_messages,
+                context.system,
+            );
         }
         if self
             .reject_disabled_subagent(context, original_name, &arguments, request_id.clone())

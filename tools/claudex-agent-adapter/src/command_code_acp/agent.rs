@@ -12,6 +12,7 @@ use tokio_util::compat::{TokioAsyncReadCompatExt as _, TokioAsyncWriteCompatExt 
 use uuid::Uuid;
 
 use super::{
+    coalesce::{message_text_from_progress, remaining_final_message},
     events::{
         TurnResult, progress_to_updates, result_is_error, result_message, turn_cancelled_updates,
         turn_settled_update,
@@ -139,52 +140,18 @@ impl HeadlessAgent {
             Err(join) => Err(acp::Error::internal_error().data(join.to_string())),
         }
     }
-}
 
-async fn relay_client_operations(
-    connection: acp::AgentSideConnection,
-    mut requests: mpsc::UnboundedReceiver<ClientOperation>,
-) {
-    while let Some(request) = requests.recv().await {
-        match request {
-            ClientOperation::Notify(notification, sent) => {
-                let _ = connection.session_notification(notification).await;
-                let _ = sent.send(());
-            }
-        }
-    }
-}
-
-#[async_trait::async_trait(?Send)]
-impl acp::Agent for HeadlessAgent {
-    async fn initialize(
-        &self,
-        _request: acp::InitializeRequest,
-    ) -> acp::Result<acp::InitializeResponse> {
-        Ok(acp::InitializeResponse::new(acp::ProtocolVersion::V1))
-    }
-
-    async fn authenticate(
-        &self,
-        _request: acp::AuthenticateRequest,
-    ) -> acp::Result<acp::AuthenticateResponse> {
-        Ok(acp::AuthenticateResponse::default())
-    }
-
-    async fn new_session(
-        &self,
-        request: acp::NewSessionRequest,
-    ) -> acp::Result<acp::NewSessionResponse> {
+    fn open_session(&self, cwd: PathBuf) -> String {
         let next = self.next_session.get() + 1;
         self.next_session.set(next);
         let session_id = format!("command-code-{}", Uuid::new_v4());
         self.session_cwds
             .borrow_mut()
-            .insert(session_id.clone(), request.cwd);
-        Ok(acp::NewSessionResponse::new(session_id))
+            .insert(session_id.clone(), cwd);
+        session_id
     }
 
-    async fn prompt(&self, request: acp::PromptRequest) -> acp::Result<acp::PromptResponse> {
+    async fn handle_prompt(&self, request: acp::PromptRequest) -> acp::Result<acp::PromptResponse> {
         let session_key = Self::session_key(&request.session_id);
         if self.take_cancelled(&session_key) {
             return Ok(acp::PromptResponse::new(acp::StopReason::Cancelled));
@@ -206,13 +173,64 @@ impl acp::Agent for HeadlessAgent {
         if self.take_cancelled(&session_key) {
             return emit_cancelled(self, request.session_id).await;
         }
-        emit_result(self, request.session_id, &outcome.result).await
+        let streamed = message_text_from_progress(&outcome.progress);
+        emit_result(self, request.session_id, &outcome.result, &streamed).await
+    }
+
+    fn handle_cancel(&self, session_id: &acp::SessionId) {
+        let key = Self::session_key(session_id);
+        self.cancelled.borrow_mut().insert(key.clone(), true);
+        self.abort_running(&key);
+    }
+}
+
+async fn relay_client_operations(
+    connection: acp::AgentSideConnection,
+    mut requests: mpsc::UnboundedReceiver<ClientOperation>,
+) {
+    while let Some(request) = requests.recv().await {
+        match request {
+            ClientOperation::Notify(notification, sent) => {
+                let _ = connection.session_notification(notification).await;
+                let _ = sent.send(());
+            }
+        }
+    }
+}
+
+// Nightly branch instrumentation emits an invalid mapping for async-trait's
+// generated Agent shim (same llvm-cov getInstantiationGroups crash as Grok's
+// ACP client). Fixture tests still cover the delegated prompt/cancel paths.
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[async_trait::async_trait(?Send)]
+impl acp::Agent for HeadlessAgent {
+    async fn initialize(
+        &self,
+        _request: acp::InitializeRequest,
+    ) -> acp::Result<acp::InitializeResponse> {
+        Ok(acp::InitializeResponse::new(acp::ProtocolVersion::V1))
+    }
+
+    async fn authenticate(
+        &self,
+        _request: acp::AuthenticateRequest,
+    ) -> acp::Result<acp::AuthenticateResponse> {
+        Ok(acp::AuthenticateResponse::default())
+    }
+
+    async fn new_session(
+        &self,
+        request: acp::NewSessionRequest,
+    ) -> acp::Result<acp::NewSessionResponse> {
+        Ok(acp::NewSessionResponse::new(self.open_session(request.cwd)))
+    }
+
+    async fn prompt(&self, request: acp::PromptRequest) -> acp::Result<acp::PromptResponse> {
+        self.handle_prompt(request).await
     }
 
     async fn cancel(&self, request: acp::CancelNotification) -> acp::Result<()> {
-        let key = Self::session_key(&request.session_id);
-        self.cancelled.borrow_mut().insert(key.clone(), true);
-        self.abort_running(&key);
+        self.handle_cancel(&request.session_id);
         Ok(())
     }
 
@@ -245,13 +263,14 @@ async fn emit_result(
     agent: &HeadlessAgent,
     session_id: acp::SessionId,
     result: &TurnResult,
+    streamed_message: &str,
 ) -> acp::Result<acp::PromptResponse> {
     let failed = result_is_error(result);
     agent
         .notify(session_id.clone(), turn_settled_update(failed))
         .await?;
     let text = result_message(result);
-    if !text.is_empty() {
+    if let Some(text) = remaining_final_message(&text, streamed_message) {
         agent
             .notify(
                 session_id,
@@ -260,7 +279,7 @@ async fn emit_result(
                 )),
             )
             .await?;
-    } else if failed {
+    } else if failed && streamed_message.trim().is_empty() {
         return Err(acp::Error::internal_error().data(
             result
                 .error

@@ -41,11 +41,14 @@ pub(super) async fn prepare_with_activity<F, T>(
     first_delay: Duration,
     interval: Duration,
     is_subagent: bool,
+    paint_command_code_progress: bool,
 ) -> (Result<Option<T>>, SegmentBuilder)
 where
     F: Future<Output = Result<T>>,
 {
-    let mut builder = SegmentBuilder::new(input_tokens).with_subagent(is_subagent);
+    let mut builder = SegmentBuilder::new(input_tokens)
+        .with_subagent(is_subagent)
+        .with_command_code_progress(paint_command_code_progress);
     if let Some(status) = initial_status
         && let Err(error) = builder.subagent_start_status(status, Some(sender)).await
     {
@@ -87,6 +90,8 @@ impl Bridge {
         let _active_subagent =
             is_subagent.then(|| self.active_subagent_models.acquire(&request.model));
         let start_status = subagent_start_status(is_subagent, &request.model, effort.as_deref());
+        let paint_command_code_progress =
+            is_subagent && crate::command_code_acp::is_command_code_model(&request.model);
         let prepare = async {
             let permit = self
                 .acquire_prepared_permit(&mut request, &mut effort, concurrency_ticket, is_subagent)
@@ -102,6 +107,7 @@ impl Bridge {
             INITIAL_ACTIVITY_DELAY,
             ACTIVITY_KEEPALIVE_INTERVAL,
             is_subagent,
+            paint_command_code_progress,
         )
         .await;
         match turn {

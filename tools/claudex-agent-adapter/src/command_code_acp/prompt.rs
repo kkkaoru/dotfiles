@@ -19,7 +19,7 @@ fn wrap_one_shot_task(task: &str) -> String {
         return String::new();
     }
     format!(
-        "{task}\n\nThis is a new one-shot SubAgent task. Do not greet, recap git status, or ask what to pick up. Use tools if needed. Output only the answer."
+        "{task}\n\nThis is a new one-shot SubAgent task. Do not greet, recap git status, or ask what to pick up. Use tools if needed. Tool progress is shown automatically like other ACP workers (▶ name: query/path/url, then ✓/✗). Write ordinary findings in assistant text. Do not print fixed phrases such as ツール結果待ち, 続きの調査または回答, or 次: …. Put the final answer in assistant text, not only thinking."
     )
 }
 

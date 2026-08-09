@@ -7,8 +7,11 @@ use super::{
     send_stream_error,
 };
 use crate::anthropic::{
-    ActiveTurn, Bridge, model_concurrency::ModelPermit, segment::EMPTY_ACP_END_TURN,
-    subagent_timeout::completes_within, usage_limit_failover::streaming_provider_retry,
+    ActiveTurn, Bridge,
+    model_concurrency::ModelPermit,
+    segment::EMPTY_ACP_END_TURN,
+    subagent_timeout::completes_within,
+    usage_limit_failover::{is_usage_limit_exceeded, streaming_provider_retry},
 };
 
 struct ContextRetryStream {
@@ -134,11 +137,12 @@ impl Bridge {
                 // Cline Credits $0 (and similar) finishes as empty end_turn; route through
                 // usage-limit failover instead of returning a blank assistant message.
                 let input_tokens = turn.input_tokens;
+                let model = turn.session.model.clone();
                 self.retry_usage_limit_stream(ContextRetryStream {
                     turn,
                     sender,
                     error: anyhow!("{EMPTY_ACP_END_TURN}"),
-                    builder: SegmentBuilder::new(input_tokens).with_subagent(is_subagent),
+                    builder: SegmentBuilder::for_turn(input_tokens, is_subagent, &model),
                     model_permit,
                     is_subagent,
                     run_in_background,
@@ -190,6 +194,24 @@ impl Bridge {
                 .await;
             }
             Ok(StreamTurn::Disconnected) => {}
+            Err(error) if is_usage_limit_exceeded(&error) => {
+                // Qwen token-plan (and similar ACP quota) often fails the wait
+                // before message_stop instead of emitting a usage-limit event.
+                // Treat it like empty-ACP so the current SubAgent retries a
+                // sibling instead of 502-ing every parallel launch onto Qwen.
+                let input_tokens = turn.input_tokens;
+                let model = turn.session.model.clone();
+                self.retry_usage_limit_stream(ContextRetryStream {
+                    turn,
+                    sender,
+                    error,
+                    builder: SegmentBuilder::for_turn(input_tokens, is_subagent, &model),
+                    model_permit,
+                    is_subagent,
+                    run_in_background,
+                })
+                .await;
+            }
             Err(error) => {
                 tracing::warn!(?error, "streaming turn failed before message_stop");
                 self.note_provider_exhaustion(&error, Some(&turn.session.model));
@@ -211,10 +233,11 @@ impl Bridge {
         let input_tokens = turn.input_tokens;
         match self.retry_after_provider_failure(turn, error).await {
             Ok(retried) => {
+                let model = retried.session.model.clone();
                 Box::pin(self.drive_subagent_stream(
                     retried,
                     sender,
-                    SegmentBuilder::new(input_tokens).with_subagent(is_subagent),
+                    SegmentBuilder::for_turn(input_tokens, is_subagent, &model),
                     model_permit,
                     is_subagent,
                     run_in_background,

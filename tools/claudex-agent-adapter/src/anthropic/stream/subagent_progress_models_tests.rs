@@ -123,7 +123,7 @@ const CASES: &[Case] = &[
             arg_key: "file_path",
             arg_value: "/Users/kkk4oru/ghq/github.com/kkkaoru/dotfiles/CLAUDE.md",
         }),
-        expect_visible: &["Command Code headless starting", "▶ Read", "still working"],
+        expect_visible: &["Command Code headless starting"],
     },
 ];
 
@@ -165,9 +165,84 @@ async fn cursor_prose_without_subagent_flag_stays_hidden_until_end_turn() {
     drop(sender);
 }
 
+#[tokio::test]
+async fn command_code_subagent_answer_streams_live_text_not_only_thinking() {
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(32);
+    let mut builder = SegmentBuilder::new(1)
+        .with_subagent(true)
+        .with_command_code_progress(true);
+    let mut live = SubAgentLiveView::default();
+
+    builder
+        .model_output_event(
+            &agent_message(
+                "command-code-abc:message",
+                "● 検索中: AVITA株式会社。次: 公式サイト取得\n",
+            ),
+            Some(&sender),
+        )
+        .await
+        .expect("command-code status");
+    live.ingest_available(&mut receiver);
+    assert!(live.turn_still_open());
+    assert!(
+        live.hidden_text.contains("検索中: AVITA"),
+        "● status must stream as live text so Doing does not hide progress: {:?}",
+        live.hidden_text
+    );
+    assert!(
+        !live.visible_thinking.contains("検索中"),
+        "● status must not reopen thinking chrome: {:?}",
+        live.visible_thinking
+    );
+
+    builder
+        .model_output_event(
+            &agent_message(
+                "command-code-abc:message",
+                "# AVITA株式会社\n設立: 2018年\n",
+            ),
+            Some(&sender),
+        )
+        .await
+        .expect("command-code answer");
+    live.ingest_available(&mut receiver);
+    assert!(live.turn_still_open());
+    assert!(
+        live.hidden_text.contains("設立: 2018年"),
+        "Command Code answer must stream as live text_delta so parent Task is not Orbiting-only: {:?}",
+        live.hidden_text
+    );
+    let segment = builder.finish(None).await.expect("finish");
+    assert!(
+        segment.blocks.iter().any(|block| {
+            block
+                .get("text")
+                .and_then(Value::as_str)
+                .is_some_and(|text| text.contains("設立: 2018年"))
+        }),
+        "answer must remain in transcript: {:?}",
+        segment.blocks
+    );
+    assert!(
+        segment.blocks.iter().all(|block| {
+            !block
+                .get("text")
+                .and_then(Value::as_str)
+                .is_some_and(|text| text.contains('●') || text.contains("検索中"))
+        }),
+        "status chrome must be stripped from transcript: {:?}",
+        segment.blocks
+    );
+    drop(sender);
+}
+
 async fn run_case(case: &Case) {
     let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(32);
-    let mut builder = SegmentBuilder::new(1).with_subagent(true);
+    let command_code = case.name == "command-code-acp";
+    let mut builder = SegmentBuilder::new(1)
+        .with_subagent(true)
+        .with_command_code_progress(command_code);
     let mut live = SubAgentLiveView::default();
 
     if let Some(reasoning) = case.reasoning {
@@ -199,12 +274,29 @@ async fn run_case(case: &Case) {
         "{}: progress must stay mid-turn",
         case.name
     );
-    assert!(
-        live.hidden_text.is_empty(),
-        "{}: SubAgent prose/keepalive must not sit in hidden text_delta: {:?}",
-        case.name,
-        live.hidden_text
-    );
+    if command_code {
+        assert!(
+            live.hidden_text.contains("▶ Read"),
+            "{}: Command Code ▶ must be live text not Doing: thinking={:?} text={:?}",
+            case.name,
+            live.visible_thinking,
+            live.hidden_text
+        );
+        assert!(
+            live.hidden_text.contains("still working"),
+            "{}: Command Code keepalive must match other ACP workers: thinking={:?} text={:?}",
+            case.name,
+            live.visible_thinking,
+            live.hidden_text
+        );
+    } else {
+        assert!(
+            live.hidden_text.is_empty(),
+            "{}: SubAgent prose/keepalive must not sit in hidden text_delta: {:?}",
+            case.name,
+            live.hidden_text
+        );
+    }
     for needle in case.expect_visible {
         assert!(
             live.visible_thinking.contains(needle),

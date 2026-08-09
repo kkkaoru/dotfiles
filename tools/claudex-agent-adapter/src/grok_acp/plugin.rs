@@ -36,6 +36,7 @@ const UNSAFE_CROSS_PROVIDER_ALIASES: &[&str] = &[
     "claudex-ollama-glm-5-2",
     "claudex-qwen",
     "claudex-command-code",
+    "claudex-command-code-muse-spark-1-2-contributor",
     "claudex-haiku",
 ];
 

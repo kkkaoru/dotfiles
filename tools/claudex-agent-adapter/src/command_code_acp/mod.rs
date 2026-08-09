@@ -4,13 +4,16 @@
 //! this shim, which speaks ACP and drives `cmd -p --output-format json`.
 
 mod agent;
+mod coalesce;
 mod events;
 mod launch;
 mod options;
 mod process;
 mod prompt;
+mod tool_chrome;
 
 pub use agent::serve;
+pub use coalesce::{ProgressCoalescer, message_text_from_progress, remaining_final_message};
 pub use events::{ParsedLine, ProgressEvent, TurnResult, parse_stdout_line, progress_to_updates};
 pub use launch::{DEFAULT_MAX_TURNS, DEFAULT_MODEL, LaunchSpec};
 pub use options::Options;

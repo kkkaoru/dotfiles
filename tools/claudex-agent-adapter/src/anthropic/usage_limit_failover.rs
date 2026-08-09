@@ -10,8 +10,8 @@ use super::{
     request_routing::RouteDecision,
     segment::contains_empty_acp_billing_marker,
     stream::usage_limit::{
-        contains_classic_usage_limit_marker, contains_rate_limit_marker,
-        contains_usage_limit_marker,
+        contains_classic_usage_limit_marker, contains_provider_quota_exhausted_marker,
+        contains_rate_limit_marker, contains_usage_limit_marker,
     },
     token_count, usage_limit_cooldown,
 };
@@ -66,19 +66,23 @@ impl Bridge {
         if contains_rate_limit_marker(&message)
             || provider_auth::contains_auth_failure_marker(&message)
             || contains_empty_acp_billing_marker(&message)
+            || contains_provider_quota_exhausted_marker(&message)
         {
             let scopes = self.auth_scopes_for(exhausted_model, &message);
             let cache_path = self.provider_auth_cache_path();
             let rate_limited = contains_rate_limit_marker(&message);
+            let quota_exhausted = contains_provider_quota_exhausted_marker(&message);
             let reason = if rate_limited {
                 "rate-limit"
+            } else if quota_exhausted {
+                "quota"
             } else if contains_empty_acp_billing_marker(&message) {
                 "empty-acp-billing"
             } else {
                 "auth"
             };
             for scope in scopes {
-                let recorded = if rate_limited {
+                let recorded = if rate_limited || quota_exhausted {
                     provider_auth_cooldown::record_rate_limit_at(
                         cache_path.as_deref(),
                         &scope,
@@ -107,7 +111,24 @@ impl Bridge {
     }
 
     pub(super) fn subagent_provider_is_exhausted(&self, model: &str) -> bool {
-        self.provider_auth_is_cooling_down(model) || self.codex_usage_limit_is_active(model)
+        self.subagent_model_is_exhausted(model, None)
+    }
+
+    pub(super) fn subagent_model_is_exhausted(
+        &self,
+        model: &str,
+        quota: Option<&serde_json::Value>,
+    ) -> bool {
+        self.provider_auth_is_cooling_down(model)
+            || self.codex_usage_limit_is_active(model)
+            || super::routing_quota::live_cache_marks_model_exhausted(
+                self.usage_routing_cache_path().as_deref(),
+                model,
+                SystemTime::now(),
+            )
+            || quota.is_some_and(|summary| {
+                super::routing_quota::summary_marks_model_exhausted(summary, model)
+            })
     }
 
     pub(super) fn apply_usage_limit_preflight(
@@ -245,6 +266,14 @@ impl Bridge {
         &self,
         exhausted_model: &str,
     ) -> Option<UsageLimitFailover> {
+        self.subagent_provider_failover_excluding(exhausted_model, None)
+    }
+
+    pub(super) fn subagent_provider_failover_excluding(
+        &self,
+        exhausted_model: &str,
+        quota: Option<&serde_json::Value>,
+    ) -> Option<UsageLimitFailover> {
         let exhausted_kind = self.app.backend_kind_for_model(exhausted_model)?;
         if !matches!(
             exhausted_kind,
@@ -278,7 +307,7 @@ impl Bridge {
         }
         ordered.into_iter().find_map(|model| {
             if model == exhausted_model
-                || self.subagent_provider_is_exhausted(&model)
+                || self.subagent_model_is_exhausted(&model, quota)
                 || self.model_concurrency.is_subagent_at_capacity(&model)
             {
                 return None;

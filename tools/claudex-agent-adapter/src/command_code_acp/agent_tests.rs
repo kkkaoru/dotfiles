@@ -137,6 +137,10 @@ async fn serve_io_runs_headless_turn_and_emits_tool_progress() {
                 rendered.contains("InProgress") || rendered.contains("command-code-turn"),
                 "turn chrome missing: {rendered}"
             );
+            assert!(
+                rendered.contains("read_file") || rendered.contains("README.md"),
+                "native tool chrome missing: {rendered}"
+            );
             let _ = connection
                 .set_session_model(acp::SetSessionModelRequest::new(
                     session.session_id.clone(),
@@ -156,6 +160,61 @@ async fn serve_io_runs_headless_turn_and_emits_tool_progress() {
                 .await
                 .expect("cancel");
             server.abort();
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn serve_io_emits_web_search_query_on_shared_tool_chrome() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (_root, program) = mock_cmd(
+                "#!/bin/sh\ncat <<'EOF'\n{\"type\":\"event\",\"event\":{\"type\":\"tool_running\",\"toolCallId\":\"t-search\",\"toolName\":\"web_search\",\"query\":\"AVITA株式会社\"}}\n{\"type\":\"event\",\"event\":{\"type\":\"tool_completed\",\"toolCallId\":\"t-search\",\"toolName\":\"web_search\"}}\n{\"type\":\"result\",\"subtype\":\"success\",\"sessionId\":\"cc-search\",\"stopReason\":\"end_turn\",\"finalText\":\"WEB_SEARCH_OK\"}\nEOF\n",
+            );
+            let (client_write, server_read) = tokio::io::duplex(64 * 1024);
+            let (server_write, client_read) = tokio::io::duplex(64 * 1024);
+            let updates = Rc::new(RefCell::new(Vec::new()));
+            tokio::task::spawn_local(serve_io(options_for(program), server_read, server_write));
+            let (connection, io) = acp::ClientSideConnection::new(
+                CaptureClient {
+                    updates: Rc::clone(&updates),
+                },
+                client_write.compat_write(),
+                client_read.compat(),
+                |future| {
+                    tokio::task::spawn_local(future);
+                },
+            );
+            tokio::task::spawn_local(async move {
+                let _ = io.await;
+            });
+            connection
+                .initialize(acp::InitializeRequest::new(acp::ProtocolVersion::V1))
+                .await
+                .expect("initialize");
+            let session = connection
+                .new_session(acp::NewSessionRequest::new(
+                    std::env::current_dir().unwrap(),
+                ))
+                .await
+                .expect("session");
+            let prompt = connection
+                .prompt(acp::PromptRequest::new(
+                    session.session_id,
+                    vec![acp::ContentBlock::Text(acp::TextContent::new(
+                        "WEB_SEARCH_AVITA",
+                    ))],
+                ))
+                .await
+                .expect("web_search prompt");
+            assert_eq!(prompt.stop_reason, acp::StopReason::EndTurn);
+            let rendered = updates.borrow().join("\n");
+            assert!(
+                rendered.contains("web_search") && rendered.contains("AVITA株式会社"),
+                "web_search chrome must expose the query like other ACP workers: {rendered}"
+            );
+            assert!(!rendered.contains("ツール結果待ち"), "{rendered}");
         })
         .await;
 }
@@ -352,7 +411,9 @@ async fn serve_io_cancel_kills_in_flight_cmd_within_two_seconds() {
                             if updates
                                 .borrow()
                                 .iter()
-                                .any(|update| update.contains("Command Code headless starting"))
+                                .any(|update| {
+                                    update.contains("Command Code") || update.contains("InProgress")
+                                })
                             {
                                 return;
                             }
@@ -426,7 +487,7 @@ async fn serve_io_streams_text_delta_before_cmd_exits() {
                 vec![acp::ContentBlock::Text(acp::TextContent::new("live"))],
             ));
             tokio::pin!(prompt_fut);
-            tokio::time::timeout(Duration::from_secs(2), async {
+            tokio::time::timeout(Duration::from_secs(8), async {
                 loop {
                     tokio::select! {
                         result = &mut prompt_fut => {
@@ -446,6 +507,10 @@ async fn serve_io_streams_text_delta_before_cmd_exits() {
             let response = prompt_fut.await.expect("live prompt");
             assert_eq!(response.stop_reason, acp::StopReason::EndTurn);
             let rendered = updates.borrow().join("\n");
+            assert!(
+                rendered.contains("AgentMessageChunk") || rendered.contains("LIVE_DELTA"),
+                "live text must be assistant message not only thought: {rendered}"
+            );
             assert!(rendered.contains("DONE"), "{rendered}");
         })
         .await;

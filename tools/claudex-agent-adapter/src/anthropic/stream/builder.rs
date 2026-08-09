@@ -33,6 +33,10 @@ pub(in crate::anthropic) struct SegmentBuilder {
     /// thinking; streaming `text_delta` now would hide the panel until finish.
     pub(super) pending_answer: String,
     pub(super) is_subagent: bool,
+    /// Command Code SubAgent: paint ●/▶/keepalive as live `text_delta`.
+    /// Claude Code 2.1 collapses open thinking into "Doing…"; status must not
+    /// ride that chrome.
+    paint_command_code_progress: bool,
     turn_started_at: Instant,
     external_tool_calls: usize,
     /// Provider call IDs already shown as progress text. ACP can report the same
@@ -60,6 +64,7 @@ impl SegmentBuilder {
             open_text_block: None,
             pending_answer: String::new(),
             is_subagent: false,
+            paint_command_code_progress: false,
             turn_started_at: Instant::now(),
             external_tool_calls: 0,
             provider_tool_calls: Vec::new(),
@@ -78,6 +83,23 @@ impl SegmentBuilder {
     pub(super) fn with_subagent(mut self, is_subagent: bool) -> Self {
         self.is_subagent = is_subagent;
         self
+    }
+
+    pub(super) fn with_command_code_progress(mut self, enabled: bool) -> Self {
+        self.paint_command_code_progress = enabled;
+        self
+    }
+
+    pub(super) fn for_turn(input_tokens: u64, is_subagent: bool, model: &str) -> Self {
+        Self::new(input_tokens)
+            .with_subagent(is_subagent)
+            .with_command_code_progress(
+                is_subagent && crate::command_code_acp::is_command_code_model(model),
+            )
+    }
+
+    pub(super) fn paints_progress_as_text(&self) -> bool {
+        self.is_subagent && self.paint_command_code_progress
     }
 
     pub(super) fn has_external_tool_calls(&self) -> bool {

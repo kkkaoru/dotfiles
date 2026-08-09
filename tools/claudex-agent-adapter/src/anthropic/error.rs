@@ -40,7 +40,9 @@ pub(super) fn http_status(fallback: StatusCode, error: &Error) -> StatusCode {
     }
     if is_provider_auth_error(error) {
         StatusCode::UNAUTHORIZED
-    } else if super::stream::usage_limit::contains_rate_limit_marker(&error.to_string()) {
+    } else if super::stream::usage_limit::contains_rate_limit_marker(&error.to_string())
+        || super::stream::usage_limit::contains_provider_quota_exhausted_marker(&error.to_string())
+    {
         StatusCode::TOO_MANY_REQUESTS
     } else if is_terminal_provider_configuration_error(error)
         || super::stream::usage_limit::contains_classic_usage_limit_marker(&error.to_string())
@@ -250,6 +252,20 @@ mod tests {
     fn marks_provider_429_as_non_retryable_rate_limit() {
         let error = anyhow::Error::msg(
             r#"codex app-server turn failed: {"error":{"codexErrorInfo":{"responseTooManyFailedAttempts":{"httpStatusCode":429}},"message":"exceeded retry limit, last status: 429 Too Many Requests"}}"#,
+        );
+        assert_eq!(error_type(&error), NON_RETRYABLE_ERROR_TYPE);
+        assert_eq!(
+            http_status(StatusCode::BAD_GATEWAY, &error),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+    }
+
+    #[test]
+    fn marks_qwen_token_plan_quota_as_non_retryable_instead_of_502() {
+        let error = anyhow!(
+            "API Error: 502 codex app-server turn failed: Configured ACP prompt failed: \
+Quota exhausted: Your token-plan 1-week quota has been exhausted. \
+The quota will reset at 08-15 01:53:00 UTC."
         );
         assert_eq!(error_type(&error), NON_RETRYABLE_ERROR_TYPE);
         assert_eq!(

@@ -6,14 +6,21 @@ impl Bridge {
     /// After Cline empty-ACP cooldown, a nested Agent still hydrates the stale
     /// `selected_workers` snapshot. Rewrite that launch onto the sibling provider
     /// before validation, including the catalog worker type so exact-route passes.
-    pub(super) fn rewrite_exhausted_agent_launch(&self, arguments: &mut serde_json::Value) {
+    pub(super) fn rewrite_exhausted_agent_launch_with_quota(
+        &self,
+        arguments: &mut serde_json::Value,
+        messages: &[serde_json::Value],
+        system: &serde_json::Value,
+    ) {
         let Some(model) = super::agent_effort::requested_model(arguments).map(str::to_owned) else {
             return;
         };
-        if !self.subagent_provider_is_exhausted(&model) {
+        let quota = super::agent_routing::active_routing_summary(messages, system);
+        if !self.subagent_model_is_exhausted(&model, quota.as_ref()) {
             return;
         }
-        let Some(failover) = self.subagent_provider_failover_for(&model) else {
+        let Some(failover) = self.subagent_provider_failover_excluding(&model, quota.as_ref())
+        else {
             return;
         };
         let agent = self
@@ -54,10 +61,14 @@ impl Bridge {
         effort: &mut Option<String>,
         is_subagent: bool,
     ) -> Result<RouteDecision> {
-        if !is_subagent || !self.subagent_provider_is_exhausted(&request.model) {
+        let quota =
+            super::agent_routing::active_routing_summary(&request.messages, &request.system);
+        if !is_subagent || !self.subagent_model_is_exhausted(&request.model, quota.as_ref()) {
             return Ok(route);
         }
-        let Some(failover) = self.subagent_provider_failover_for(&request.model) else {
+        let Some(failover) =
+            self.subagent_provider_failover_excluding(&request.model, quota.as_ref())
+        else {
             return Err(anyhow::anyhow!(
                 "provider for model `{}` is cooling down after rate/usage/billing limit; orchestrator should re-route",
                 request.model

@@ -8,13 +8,15 @@ use std::{
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 use agent_client_protocol as acp;
+use serde_json::json;
 use tempfile::TempDir;
 
+use super::events::turn_cancelled_updates;
 use super::{
-    DEFAULT_MAX_TURNS, DEFAULT_MODEL, LaunchSpec, Options, ParsedLine, ProgressEvent,
-    parse_stdout_line,
+    DEFAULT_MAX_TURNS, DEFAULT_MODEL, LaunchSpec, Options, ParsedLine, ProgressCoalescer,
+    ProgressEvent, parse_stdout_line,
     process::{run_turn, run_turn_emitting},
-    progress_to_updates, prompt_text, slim_headless_prompt,
+    progress_to_updates, prompt_text, remaining_final_message, slim_headless_prompt,
 };
 
 fn spec_with_program(program: PathBuf) -> LaunchSpec {
@@ -199,6 +201,14 @@ fn parses_json_events_and_plain_progress() {
         ParsedLine::Progress(ProgressEvent::ToolStarted { id, name, .. }) if id == "t1" && name == "read_file"
     ));
     assert!(matches!(
+        parse_stdout_line(r#"{"type":"event","event":{"type":"tool_running","toolCallId":"w1","toolName":"web_search","query":"AVITA株式会社 公式"}}"#),
+        ParsedLine::Progress(ProgressEvent::ToolStarted { name, description, .. }) if name == "web_search" && description.as_deref() == Some("AVITA株式会社 公式")
+    ));
+    assert!(matches!(
+        parse_stdout_line(r#"{"type":"event","event":{"type":"tool_running","toolCallId":"w2","toolName":"web_search","arguments":{"query":"AVITA Inc funding"}}}"#),
+        ParsedLine::Progress(ProgressEvent::ToolStarted { description, .. }) if description.as_deref() == Some("AVITA Inc funding")
+    ));
+    assert!(matches!(
         parse_stdout_line(r#"{"type":"event","event":{"type":"tool_completed","toolCallId":"t1","toolName":"read_file"}}"#),
         ParsedLine::Progress(ProgressEvent::ToolCompleted { id, name }) if id == "t1" && name == "read_file"
     ));
@@ -261,28 +271,54 @@ fn parses_live_command_code_ndjson_without_flooding_tui() {
     );
     assert!(matches!(
         parse_stdout_line(r#"{"type":"event","event":{"type":"text_delta","delta":"PONG"}}"#),
-        ParsedLine::Progress(ProgressEvent::Note(note)) if note == "PONG"
+        ParsedLine::Progress(ProgressEvent::Message(note)) if note == "PONG"
     ));
     assert!(matches!(
-        parse_stdout_line(r#"{"type":"event","event":{"type":"thinking_delta","text":"planning live"}}"#),
-        ParsedLine::Progress(ProgressEvent::Note(note)) if note == "planning live"
+        parse_stdout_line(
+            r#"{"type":"event","event":{"type":"message_update","text":"AVITA findings"}}"#
+        ),
+        ParsedLine::Progress(ProgressEvent::Message(note)) if note == "AVITA findings"
     ));
+    assert_eq!(
+        parse_stdout_line(r#"{"type":"event","event":{"type":"message_update"}}"#),
+        ParsedLine::Ignored
+    );
+    assert_eq!(
+        parse_stdout_line(
+            r#"{"type":"event","event":{"type":"thinking_delta","text":"planning live"}}"#
+        ),
+        ParsedLine::Ignored
+    );
     assert_eq!(
         parse_stdout_line(r#"{"type":"event","event":{"type":"thinking_end","text":""}}"#),
         ParsedLine::Ignored
     );
-    assert!(matches!(
+    assert_eq!(
         parse_stdout_line(r#"{"type":"event","event":{"type":"thinking_end","text":"planning"}}"#),
-        ParsedLine::Progress(ProgressEvent::Note(note)) if note == "planning"
-    ));
+        ParsedLine::Ignored
+    );
     assert!(matches!(
+        parse_stdout_line(r#"{"type":"event","event":{"type":"thinking_delta","text":"● 検索中: AVITA"}}"#),
+        ParsedLine::Progress(ProgressEvent::Status(note)) if note.contains("検索中")
+    ));
+    assert_eq!(
+        parse_stdout_line(r#"{"type":"event","event":{"type":"api_retry"}}"#),
+        ParsedLine::Ignored
+    );
+    assert_eq!(
+        parse_stdout_line(r#"{"type":"event","event":{"type":"tool_queued"}}"#),
+        ParsedLine::Ignored
+    );
+    assert_eq!(
         parse_stdout_line(r#"{"type":"event","event":{"type":"turn_start","turnNumber":1}}"#),
-        ParsedLine::Progress(ProgressEvent::Note(note)) if note == "turn 1"
-    ));
-    assert!(matches!(
-        parse_stdout_line(r#"{"type":"event","event":{"type":"model_request_start","model":"meta/muse-spark-1.2-contributor"}}"#),
-        ParsedLine::Progress(ProgressEvent::Note(note)) if note.contains("meta/muse-spark-1.2-contributor")
-    ));
+        ParsedLine::Ignored
+    );
+    assert_eq!(
+        parse_stdout_line(
+            r#"{"type":"event","event":{"type":"model_request_start","model":"meta/muse-spark-1.2-contributor"}}"#
+        ),
+        ParsedLine::Ignored
+    );
     let ParsedLine::Result(result) = parse_stdout_line(
         r#"{"type":"result","subtype":"success","sessionId":"166f0397-5c8a-4ac0-bb7c-8e7f3287227f","stopReason":"end_turn","finalText":"PONG"}"#,
     ) else {
@@ -325,58 +361,299 @@ fn parses_result_lines_and_formats_messages() {
     assert!(super::events::result_message(&empty_error).contains("subtype `error`"));
 }
 
+fn first_tool_call(updates: &[acp::SessionUpdate]) -> &acp::ToolCall {
+    updates
+        .iter()
+        .find_map(|update| match update {
+            acp::SessionUpdate::ToolCall(call) => Some(call),
+            _ => None,
+        })
+        .expect("tool call")
+}
+
+fn first_tool_update(updates: &[acp::SessionUpdate]) -> &acp::ToolCallUpdate {
+    updates
+        .iter()
+        .find_map(|update| match update {
+            acp::SessionUpdate::ToolCallUpdate(update) => Some(update),
+            _ => None,
+        })
+        .expect("tool update")
+}
+
+fn rendered_messages(updates: &[acp::SessionUpdate]) -> String {
+    updates
+        .iter()
+        .filter_map(|update| match update {
+            acp::SessionUpdate::AgentMessageChunk(chunk) => match &chunk.content {
+                acp::ContentBlock::Text(text) => Some(text.text.as_str()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+#[test]
+fn tool_raw_input_uses_shared_provider_argument_keys() {
+    use super::tool_chrome::tool_raw_input;
+    assert_eq!(
+        tool_raw_input("web_fetch", Some("https://avita.co.jp/")),
+        json!({"url": "https://avita.co.jp/"})
+    );
+    assert_eq!(
+        tool_raw_input("grep", Some("AVITA")),
+        json!({"pattern": "AVITA"})
+    );
+    assert_eq!(
+        tool_raw_input("shell", Some("ls src")),
+        json!({"command": "ls src"})
+    );
+    assert_eq!(
+        tool_raw_input("Glob", Some("**/*.rs")),
+        json!({"path": "**/*.rs"})
+    );
+    assert_eq!(
+        tool_raw_input("Notify", Some("plan")),
+        json!({"description": "plan"})
+    );
+    assert_eq!(
+        tool_raw_input("Read", Some("src/main.rs")),
+        json!({"path": "src/main.rs"})
+    );
+    assert_eq!(
+        tool_raw_input("Write", Some("out.md")),
+        json!({"path": "out.md"})
+    );
+    assert_eq!(
+        tool_raw_input("exec", Some("pwd")),
+        json!({"command": "pwd"})
+    );
+    assert_eq!(
+        tool_raw_input("web_search", Some("  AVITA  ")),
+        json!({"query": "AVITA"})
+    );
+    assert_eq!(tool_raw_input("other", None), json!({}));
+    assert_eq!(tool_raw_input("read_file", Some("   ")), json!({}));
+}
+
 #[test]
 fn progress_updates_include_thought_and_tool_chrome() {
     let started = progress_to_updates(&ProgressEvent::Started {
         model: DEFAULT_MODEL.to_owned(),
         effort: None,
     });
-    assert!(matches!(
-        started[0],
-        acp::SessionUpdate::AgentThoughtChunk(_)
-    ));
-    assert!(matches!(started[1], acp::SessionUpdate::ToolCall(_)));
+    assert!(matches!(started[0], acp::SessionUpdate::ToolCall(_)));
+    assert!(
+        !started
+            .iter()
+            .any(|update| matches!(update, acp::SessionUpdate::AgentThoughtChunk(_)))
+    );
+    assert!(first_tool_call(&started).title.contains("Command Code"));
+    assert!(rendered_messages(&started).is_empty());
     let running = progress_to_updates(&ProgressEvent::ToolStarted {
         id: "t1".to_owned(),
         name: "read_file".to_owned(),
         description: Some("README.md".to_owned()),
     });
-    assert!(matches!(
-        running[0],
-        acp::SessionUpdate::AgentThoughtChunk(_)
-    ));
-    assert!(matches!(running[1], acp::SessionUpdate::ToolCall(_)));
+    assert!(matches!(running[0], acp::SessionUpdate::ToolCall(_)));
+    assert_eq!(&*first_tool_call(&running).tool_call_id.0, "t1");
+    assert_eq!(first_tool_call(&running).title, "read_file");
+    assert_eq!(
+        first_tool_call(&running).raw_input.as_ref(),
+        Some(&json!({"path": "README.md"}))
+    );
+    assert!(rendered_messages(&running).is_empty());
+    let searching = progress_to_updates(&ProgressEvent::ToolStarted {
+        id: "t-search".to_owned(),
+        name: "web_search".to_owned(),
+        description: Some("AVITA株式会社".to_owned()),
+    });
+    assert_eq!(first_tool_call(&searching).title, "web_search");
+    assert_eq!(
+        first_tool_call(&searching).raw_input.as_ref(),
+        Some(&json!({"query": "AVITA株式会社"}))
+    );
     let done = progress_to_updates(&ProgressEvent::ToolCompleted {
         id: "t1".to_owned(),
         name: "read_file".to_owned(),
     });
-    assert!(matches!(done[1], acp::SessionUpdate::ToolCallUpdate(_)));
+    assert!(
+        done.iter()
+            .any(|update| matches!(update, acp::SessionUpdate::ToolCallUpdate(_)))
+    );
+    assert!(rendered_messages(&done).is_empty());
     let failed = progress_to_updates(&ProgressEvent::ToolFailed {
         id: "t2".to_owned(),
         name: "shell".to_owned(),
         error: Some("denied".to_owned()),
     });
-    assert!(matches!(failed[1], acp::SessionUpdate::ToolCallUpdate(_)));
+    let failed_update = first_tool_update(&failed);
+    assert_eq!(failed_update.fields.title.as_deref(), Some("shell"));
+    assert_eq!(
+        failed_update.fields.status,
+        Some(acp::ToolCallStatus::Failed)
+    );
+    assert_eq!(
+        failed_update.fields.raw_output.as_ref(),
+        Some(&json!("denied"))
+    );
+    assert!(rendered_messages(&failed).is_empty());
+    let failed_bare = progress_to_updates(&ProgressEvent::ToolFailed {
+        id: "t3".to_owned(),
+        name: "shell".to_owned(),
+        error: None,
+    });
+    assert_eq!(first_tool_update(&failed_bare).fields.raw_output, None);
     let note = progress_to_updates(&ProgressEvent::Note("retry".to_owned()));
-    assert!(matches!(note[0], acp::SessionUpdate::AgentThoughtChunk(_)));
+    assert!(note.is_empty());
+    let message = progress_to_updates(&ProgressEvent::Message("AVITA report".to_owned()));
+    assert!(matches!(
+        message[0],
+        acp::SessionUpdate::AgentMessageChunk(_)
+    ));
+    assert!(rendered_messages(&message).contains("AVITA report"));
+    let status = progress_to_updates(&ProgressEvent::Status("検索中: AVITA".to_owned()));
+    assert!(rendered_messages(&status).contains("検索中: AVITA"));
+    assert!(!rendered_messages(&status).contains("ツール結果待ち"));
+    let thought = progress_to_updates(&ProgressEvent::Thought("planning".to_owned()));
+    assert!(thought.is_empty());
+    let thought_status = progress_to_updates(&ProgressEvent::Thought("● 検索中".to_owned()));
+    assert!(rendered_messages(&thought_status).contains("● 検索中"));
+    let canned = progress_to_updates(&ProgressEvent::Message(
+        "● 実行中: web_search。次: ツール結果待ち".to_owned(),
+    ));
+    assert!(canned.is_empty());
+    let canned_done = progress_to_updates(&ProgressEvent::Status(
+        "完了: web_search。次: 続きの調査または回答".to_owned(),
+    ));
+    assert!(canned_done.is_empty());
     let other = progress_to_updates(&ProgressEvent::ToolStarted {
         id: "5".to_owned(),
         name: "Planner".to_owned(),
         description: None,
     });
-    let acp::SessionUpdate::ToolCall(call) = &other[1] else {
-        panic!("other call");
-    };
-    assert_eq!(call.kind, acp::ToolKind::Other);
+    assert_eq!(first_tool_call(&other).kind, acp::ToolKind::Other);
     let failed_no_error = progress_to_updates(&ProgressEvent::ToolFailed {
         id: "6".to_owned(),
         name: "shell".to_owned(),
         error: None,
     });
-    assert!(matches!(
-        failed_no_error[1],
-        acp::SessionUpdate::ToolCallUpdate(_)
-    ));
+    assert!(
+        failed_no_error
+            .iter()
+            .any(|update| matches!(update, acp::SessionUpdate::ToolCallUpdate(_)))
+    );
+}
+
+#[test]
+fn drops_canned_command_code_status_phrases() {
+    for canned in [
+        "次: タスク実行",
+        "次: ツールまたは回答",
+        "▶ 次: トークン待ち",
+        "✓ 次: 別手段または報告",
+        "✗ 次: 中断",
+        "起動: Command Code Muse Spark",
+        "失敗: web_search。次: 別手段",
+        "ターン1開始",
+        "モデル要求中: meta/muse-spark-1.2-contributor",
+    ] {
+        assert!(
+            progress_to_updates(&ProgressEvent::Status(canned.to_owned())).is_empty(),
+            "{canned}"
+        );
+    }
+}
+
+#[test]
+fn cancel_updates_settle_turn_and_emit_visible_text() {
+    let updates = turn_cancelled_updates();
+    assert!(rendered_messages(&updates).contains("Command Code cancelled"));
+    assert!(
+        updates
+            .iter()
+            .any(|update| matches!(update, acp::SessionUpdate::ToolCallUpdate(_)))
+    );
+    assert_eq!(
+        first_tool_update(&updates).fields.status,
+        Some(acp::ToolCallStatus::Failed)
+    );
+}
+
+#[test]
+fn coalesces_tiny_deltas_but_flushes_complete_phrases() {
+    let mut coalescer = ProgressCoalescer::default();
+    assert!(
+        coalescer
+            .push(ProgressEvent::Thought("ア".to_owned()))
+            .is_empty()
+    );
+    assert!(
+        coalescer
+            .push(ProgressEvent::Thought("ビ".to_owned()))
+            .is_empty()
+    );
+    let flushed = coalescer.push(ProgressEvent::Thought("TA INC report".to_owned()));
+    assert_eq!(
+        flushed,
+        vec![ProgressEvent::Thought("アビTA INC report".to_owned())]
+    );
+    assert_eq!(
+        coalescer.push(ProgressEvent::Message("調査完了。".to_owned())),
+        vec![ProgressEvent::Message("調査完了。".to_owned())]
+    );
+    let long = "a".repeat(80);
+    assert_eq!(
+        coalescer.push(ProgressEvent::Thought(long.clone())),
+        vec![ProgressEvent::Thought(long)]
+    );
+    assert!(
+        coalescer
+            .push(ProgressEvent::Message("L".to_owned()))
+            .is_empty()
+    );
+    assert_eq!(
+        coalescer.push(ProgressEvent::Message("IVE_DELTA".to_owned())),
+        vec![ProgressEvent::Message("LIVE_DELTA".to_owned())]
+    );
+    coalescer.push(ProgressEvent::Thought("pending".to_owned()));
+    assert_eq!(
+        coalescer.push(ProgressEvent::ToolStarted {
+            id: "t1".to_owned(),
+            name: "web_search".to_owned(),
+            description: None,
+        }),
+        vec![
+            ProgressEvent::Thought("pending".to_owned()),
+            ProgressEvent::ToolStarted {
+                id: "t1".to_owned(),
+                name: "web_search".to_owned(),
+                description: None,
+            }
+        ]
+    );
+    coalescer.push(ProgressEvent::Message("partial".to_owned()));
+    assert_eq!(
+        coalescer.finish(),
+        vec![ProgressEvent::Message("partial".to_owned())]
+    );
+}
+
+#[test]
+fn remaining_final_message_skips_already_streamed_answer() {
+    assert_eq!(
+        remaining_final_message("REPORT", ""),
+        Some("REPORT".to_owned())
+    );
+    assert_eq!(remaining_final_message("REPORT", "REPORT"), None);
+    assert_eq!(remaining_final_message("REPORT", "● 起動\nREPORT"), None);
+    assert_eq!(
+        remaining_final_message("hello world", "hello"),
+        Some("world".to_owned())
+    );
+    assert_eq!(remaining_final_message("", "anything"), None);
 }
 
 #[test]
@@ -391,6 +668,30 @@ fn prompt_text_joins_content_blocks() {
     let rendered = prompt_text(&request);
     assert!(rendered.starts_with("first\nsecond"));
     assert!(rendered.contains("Do not greet"));
+    assert!(rendered.contains("▶ name: query/path/url"));
+    assert!(rendered.contains("assistant text"));
+    assert!(!rendered.contains("current/next/blocker"));
+}
+
+#[test]
+fn recognizes_command_code_model_aliases() {
+    for model in [
+        "meta/muse-spark-1.2-contributor",
+        "Muse-Spark",
+        "command-code",
+        "command-code/muse",
+    ] {
+        assert!(
+            super::is_command_code_model(model),
+            "{model} should route as Command Code"
+        );
+    }
+    for model in ["grok-4.5", "gpt-5.6-luna", "claude-sonnet-5", ""] {
+        assert!(
+            !super::is_command_code_model(model),
+            "{model} must not look like Command Code"
+        );
+    }
 }
 
 #[test]
@@ -419,6 +720,26 @@ fn slims_bloated_claude_dumps_before_cmd() {
     assert!(rendered.contains("PONGCC09"));
     assert!(rendered.contains("Do not greet"));
     assert!(!rendered.contains("ctx-agent-history-search"));
+}
+
+#[test]
+fn slim_prompt_keeps_task_when_reminder_is_unclosed_and_truncates() {
+    let unclosed = slim_headless_prompt(
+        "<system-reminder>\n{\"selected_workers\":[{\"agent\":\"claudex-gpt\"}]}\nRead CLAUDE.md and return the heading.",
+    );
+    assert!(
+        unclosed.contains("Read CLAUDE.md"),
+        "unclosed reminder must not drop the delegated task: {unclosed}"
+    );
+    let truncated = slim_headless_prompt(&format!("keep-tail {}", "x".repeat(2_500)));
+    assert!(truncated.len() <= 2_000, "{}", truncated.len());
+    assert!(truncated.ends_with('x'));
+    assert!(!truncated.contains("keep-tail"));
+    let empty = prompt_text(&acp::PromptRequest::new(
+        "session",
+        vec![acp::ContentBlock::Text(acp::TextContent::new("   \n"))],
+    ));
+    assert!(empty.is_empty(), "{empty}");
 }
 
 #[tokio::test]
@@ -555,6 +876,45 @@ async fn run_turn_maps_auth_and_max_turn_exit_codes() {
         .expect("ignored blank lines");
     assert_eq!(outcome.result.subtype, "success");
 
+    let invalid_utf8 = write_executable(
+        root.path(),
+        "invalid-utf8",
+        "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"event\",\"event\":{\"type\":\"tool_running\",\"toolCallId\":\"t1\",\"toolName\":\"web_fetch\"}}'\nprintf '\\377\\n'\nprintf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"sessionId\":\"cc-utf8\",\"stopReason\":\"end_turn\",\"finalText\":\"AFTER_INVALID_UTF8\"}'\n",
+    );
+    let outcome = run_turn(&spec_with_program(invalid_utf8), "hi", None)
+        .await
+        .expect("invalid utf8 must not fail the ACP turn");
+    assert_eq!(outcome.result.final_text, "AFTER_INVALID_UTF8");
+    assert!(outcome.progress.iter().any(
+        |event| matches!(event, ProgressEvent::ToolStarted { name, .. } if name == "web_fetch")
+    ));
+
+    let partial_eof = write_executable(
+        root.path(),
+        "partial-eof",
+        "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"sessionId\":\"cc-partial\",\"stopReason\":\"end_turn\",\"finalText\":\"RESULT_THEN_PARTIAL\"}'\nprintf '\\343'\nexit 0\n",
+    );
+    let outcome = run_turn(&spec_with_program(partial_eof), "hi", None)
+        .await
+        .expect("trailing incomplete utf8 must keep the JSON result");
+    assert_eq!(outcome.result.final_text, "RESULT_THEN_PARTIAL");
+
+    let crash_utf8 = write_executable(
+        root.path(),
+        "crash-utf8",
+        "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"event\",\"event\":{\"type\":\"tool_running\",\"toolCallId\":\"t1\",\"toolName\":\"web_search\"}}'\nprintf '\\377'\nexit 1\n",
+    );
+    let outcome = run_turn(&spec_with_program(crash_utf8), "hi", None)
+        .await
+        .expect("mid-stream invalid utf8 still yields an outcome");
+    assert_eq!(outcome.exit_code, Some(1));
+    assert!(outcome.result.error.as_deref().is_some_and(|error| {
+        error.contains("without a JSON result") || error.contains("stdout closed")
+    }));
+    assert!(outcome.progress.iter().any(
+        |event| matches!(event, ProgressEvent::ToolStarted { name, .. } if name == "web_search")
+    ));
+
     let missing = spec_with_program(root.path().join("missing-cmd"));
     assert!(
         run_turn(&missing, "hi", None)
@@ -572,40 +932,56 @@ fn tool_kind_mapping_covers_common_command_code_names() {
         name: "Grep".to_owned(),
         description: None,
     });
-    let acp::SessionUpdate::ToolCall(call) = &read[1] else {
-        panic!("tool call");
-    };
-    assert_eq!(call.kind, acp::ToolKind::Read);
+    assert_eq!(first_tool_call(&read).kind, acp::ToolKind::Read);
 
     let edit = progress_to_updates(&ProgressEvent::ToolStarted {
         id: "2".to_owned(),
         name: "WriteFile".to_owned(),
         description: None,
     });
-    let acp::SessionUpdate::ToolCall(call) = &edit[1] else {
-        panic!("edit call");
-    };
-    assert_eq!(call.kind, acp::ToolKind::Edit);
+    assert_eq!(first_tool_call(&edit).kind, acp::ToolKind::Edit);
 
     let shell = progress_to_updates(&ProgressEvent::ToolStarted {
         id: "3".to_owned(),
         name: "Bash".to_owned(),
         description: None,
     });
-    let acp::SessionUpdate::ToolCall(call) = &shell[1] else {
-        panic!("shell call");
-    };
-    assert_eq!(call.kind, acp::ToolKind::Execute);
+    assert_eq!(first_tool_call(&shell).kind, acp::ToolKind::Execute);
 
     let search = progress_to_updates(&ProgressEvent::ToolStarted {
         id: "4".to_owned(),
         name: "WebSearch".to_owned(),
         description: None,
     });
-    let acp::SessionUpdate::ToolCall(call) = &search[1] else {
-        panic!("search call");
-    };
-    assert_eq!(call.kind, acp::ToolKind::Search);
+    assert_eq!(first_tool_call(&search).kind, acp::ToolKind::Search);
+
+    let glob = progress_to_updates(&ProgressEvent::ToolStarted {
+        id: "5".to_owned(),
+        name: "Glob".to_owned(),
+        description: None,
+    });
+    assert_eq!(first_tool_call(&glob).kind, acp::ToolKind::Read);
+
+    let patch = progress_to_updates(&ProgressEvent::ToolStarted {
+        id: "6".to_owned(),
+        name: "ApplyPatch".to_owned(),
+        description: None,
+    });
+    assert_eq!(first_tool_call(&patch).kind, acp::ToolKind::Edit);
+
+    let exec = progress_to_updates(&ProgressEvent::ToolStarted {
+        id: "7".to_owned(),
+        name: "ShellExec".to_owned(),
+        description: None,
+    });
+    assert_eq!(first_tool_call(&exec).kind, acp::ToolKind::Execute);
+
+    let other = progress_to_updates(&ProgressEvent::ToolStarted {
+        id: "8".to_owned(),
+        name: "Notify".to_owned(),
+        description: None,
+    });
+    assert_eq!(first_tool_call(&other).kind, acp::ToolKind::Other);
 }
 
 #[tokio::test]

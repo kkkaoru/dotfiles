@@ -29,7 +29,25 @@ pub(super) fn is_usage_limit_event(event: &Value) -> bool {
 }
 
 pub(crate) fn contains_usage_limit_marker(value: &str) -> bool {
-    contains_classic_usage_limit_marker(value) || contains_rate_limit_marker(value)
+    contains_classic_usage_limit_marker(value)
+        || contains_rate_limit_marker(value)
+        || contains_provider_quota_exhausted_marker(value)
+}
+
+/// Qwen Cloud token-plan / similar ACP billing windows.
+/// Must not be folded into classic Codex usage-limit, which cools down the
+/// whole app-server backend and would take luna/spark with it.
+pub(crate) fn contains_provider_quota_exhausted_marker(value: &str) -> bool {
+    let value = value.to_lowercase();
+    const QUOTA_MARKERS: [&str; 4] = [
+        "quota exhausted",
+        "token-plan",
+        "token plan",
+        "1-week quota",
+    ];
+    QUOTA_MARKERS
+        .into_iter()
+        .any(|marker| value.contains(marker))
 }
 
 pub(crate) fn contains_classic_usage_limit_marker(value: &str) -> bool {
@@ -87,8 +105,8 @@ mod tests {
     use serde_json::json;
 
     use super::{
-        contains_classic_usage_limit_marker, contains_rate_limit_marker,
-        contains_usage_limit_marker, is_usage_limit_event,
+        contains_classic_usage_limit_marker, contains_provider_quota_exhausted_marker,
+        contains_rate_limit_marker, contains_usage_limit_marker, is_usage_limit_event,
     };
 
     #[test]
@@ -138,6 +156,35 @@ mod tests {
         ));
         assert!(!contains_classic_usage_limit_marker(
             "exceeded retry limit, last status: 429 Too Many Requests"
+        ));
+    }
+
+    #[test]
+    fn detects_qwen_token_plan_quota_without_classic_codex_usage_limit() {
+        // Exact TUI / ACP wording from fa522331 multi-SubAgent launch
+        // (`claudex_model: qwen3.8-max-preview`).
+        const TUI_QWEN_QUOTA: &str = "API Error: 502 codex app-server turn failed: \
+Configured ACP prompt failed: Quota exhausted: Your token-plan 1-week quota has been exhausted. \
+The quota will reset at 08-15 01:53:00 UTC.";
+        assert!(contains_provider_quota_exhausted_marker(TUI_QWEN_QUOTA));
+        assert!(contains_usage_limit_marker(TUI_QWEN_QUOTA));
+        assert!(
+            !contains_classic_usage_limit_marker(TUI_QWEN_QUOTA),
+            "Qwen token-plan must not cool down the Codex app-server backend"
+        );
+        assert!(is_usage_limit_event(&json!({
+            "params": {
+                "willRetry": false,
+                "error": {
+                    "message": "Configured ACP prompt failed",
+                    "data": {
+                        "details": "Quota exhausted: Your token-plan 1-week quota has been exhausted."
+                    }
+                }
+            }
+        })));
+        assert!(!contains_provider_quota_exhausted_marker(
+            "context window exceeded"
         ));
     }
 }

@@ -263,12 +263,8 @@ pub(super) fn routing_disables_subagent_model(
     system: &Value,
     model: &str,
 ) -> bool {
-    active_routing_summary(messages, system).is_some_and(|summary| {
-        summary
-            .get("disabled_subagent_models")
-            .and_then(Value::as_array)
-            .is_some_and(|models| models.iter().any(|value| value.as_str() == Some(model)))
-    })
+    active_routing_summary(messages, system)
+        .is_some_and(|summary| super::routing_quota::summary_marks_model_exhausted(&summary, model))
 }
 
 fn selected_worker_model_matches(
@@ -321,7 +317,7 @@ fn configured_advisor_model_matches(
     })
 }
 
-fn active_routing_summary(messages: &[Value], system: &Value) -> Option<Value> {
+pub(super) fn active_routing_summary(messages: &[Value], system: &Value) -> Option<Value> {
     // The hook normally places the current snapshot in a user message, but Claude Code can
     // retain it in an assistant/tool transcript after compaction or a resumed turn. Prefer the
     // request-level system snapshot, then the latest user snapshot, and finally any transcript

@@ -73,4 +73,21 @@ impl Bridge {
             .map(super::provider_auth_cooldown::cache_path_for_home)
             .or_else(super::provider_auth_cooldown::current_cache_path)
     }
+
+    pub(super) fn usage_routing_cache_path(&self) -> Option<PathBuf> {
+        #[cfg(test)]
+        {
+            return self
+                .usage_limit_cache_home
+                .as_deref()
+                .map(super::routing_quota::cache_path_for_home);
+        }
+        #[cfg(not(test))]
+        {
+            self.usage_limit_cache_home
+                .as_deref()
+                .map(super::routing_quota::cache_path_for_home)
+                .or_else(super::routing_quota::current_cache_path)
+        }
+    }
 }

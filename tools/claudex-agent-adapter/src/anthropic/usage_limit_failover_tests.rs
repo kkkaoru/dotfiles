@@ -256,7 +256,7 @@ fn rewrites_exhausted_cline_nested_launch_onto_named_qwen_worker() {
         "prompt": "continue after empty ACP"
     });
 
-    bridge.rewrite_exhausted_agent_launch(&mut arguments);
+    bridge.rewrite_exhausted_agent_launch_with_quota(&mut arguments, &[], &Value::Null);
 
     assert_eq!(arguments["subagent_type"], "claudex-qwen");
     assert_eq!(arguments["claudex_model"], QWEN_CLOUD);
@@ -535,6 +535,112 @@ async fn admission_timeout_retickets_onto_a_free_sibling() {
     assert_eq!(effort.as_deref(), Some("high"));
 }
 
+/// Exact TUI wording from fa522331 multi-SubAgent launch onto Qwen.
+const TUI_QWEN_TOKEN_PLAN: &str = "API Error: 502 codex app-server turn failed: \
+Configured ACP prompt failed: Quota exhausted: Your token-plan 1-week quota has been exhausted. \
+The quota will reset at 08-15 01:53:00 UTC.";
+
+#[test]
+fn treats_qwen_token_plan_quota_as_failover_trigger() {
+    assert!(should_failover_provider_error(&anyhow::anyhow!(
+        TUI_QWEN_TOKEN_PLAN
+    )));
+    assert!(
+        !super::super::stream::usage_limit::contains_classic_usage_limit_marker(
+            TUI_QWEN_TOKEN_PLAN
+        ),
+        "must not classify Qwen token-plan as Codex app-server usage limit"
+    );
+}
+
+#[test]
+fn records_qwen_token_plan_cooldown_without_codex_usage_limit() {
+    use std::time::SystemTime;
+
+    use crate::anthropic::{provider_auth_cooldown, usage_limit_cooldown};
+
+    let root = tempfile::tempdir().expect("qwen quota fixture");
+    let bridge = cline_and_qwen_bridge().with_usage_limit_cache_home(root.path());
+    assert!(!bridge.subagent_provider_is_exhausted(QWEN_CLOUD));
+    bridge.note_provider_exhaustion(&anyhow::anyhow!(TUI_QWEN_TOKEN_PLAN), Some(QWEN_CLOUD));
+    assert!(
+        bridge.subagent_provider_is_exhausted(QWEN_CLOUD),
+        "Qwen token-plan exhaustion must cool down that SubAgent provider"
+    );
+    assert!(provider_auth_cooldown::scope_is_cooling_down_at(
+        bridge.provider_auth_cache_path().as_deref(),
+        QWEN_CLOUD,
+        SystemTime::now(),
+    ));
+    assert!(
+        !bridge.subagent_provider_is_exhausted(CLINE_FLASH),
+        "Qwen quota must not cool down unrelated Cline"
+    );
+    assert!(!usage_limit_cooldown::codex_app_server_is_cooling_down_at(
+        bridge.usage_limit_cache_path().as_deref(),
+        SystemTime::now(),
+    ));
+}
+
+#[test]
+fn multi_subagent_rewrite_skips_qwen_after_token_plan_quota() {
+    // Historical bug: Cline empty-ACP failovers always preferred Qwen, even after
+    // Qwen's token-plan was exhausted, so parallel SubAgent launches 502'd.
+    let root = tempfile::tempdir().expect("multi-subagent quota fixture");
+    let bridge = cline_qwen_cursor_bridge().with_usage_limit_cache_home(root.path());
+    bridge.note_provider_exhaustion(&anyhow::anyhow!(EMPTY_ACP_END_TURN), Some(CLINE_FLASH));
+    bridge.note_provider_exhaustion(&anyhow::anyhow!(TUI_QWEN_TOKEN_PLAN), Some(QWEN_CLOUD));
+
+    let mut arguments = serde_json::json!({
+        "subagent_type": "general-purpose",
+        "claudex_model": CLINE_FLASH,
+        "claudex_effort": "xhigh",
+        "prompt": "continue after quota"
+    });
+    bridge.rewrite_exhausted_agent_launch_with_quota(&mut arguments, &[], &Value::Null);
+    assert_eq!(arguments["subagent_type"], "claudex-cursor");
+    assert_eq!(arguments["claudex_model"], CURSOR_AUTO);
+    assert_eq!(arguments["claudex_effort"], "high");
+
+    let mut request = dummy_request(CLINE_FLASH);
+    let mut effort = Some("xhigh".to_owned());
+    let route = bridge
+        .rewrite_exhausted_subagent_request(
+            &mut request,
+            RouteDecision::Provider,
+            &mut effort,
+            true,
+        )
+        .expect("remaining sibling");
+    assert_eq!(request.model, CURSOR_AUTO);
+    assert_eq!(effort.as_deref(), Some("high"));
+    assert_eq!(route, RouteDecision::Provider);
+
+    let retry = streaming_provider_retry(bridge.failover_for_stream_turn(QWEN_CLOUD, true))
+        .expect("explicit Qwen SubAgent must leave exhausted token-plan");
+    assert_eq!(retry.model, CURSOR_AUTO);
+}
+
+#[test]
+fn explicit_qwen_subagent_is_rewritten_after_token_plan_quota() {
+    let root = tempfile::tempdir().expect("explicit qwen fixture");
+    let bridge = cline_qwen_cursor_bridge().with_usage_limit_cache_home(root.path());
+    bridge.note_provider_exhaustion(&anyhow::anyhow!(TUI_QWEN_TOKEN_PLAN), Some(QWEN_CLOUD));
+    let mut request = dummy_request(QWEN_CLOUD);
+    let mut effort = Some("high".to_owned());
+    let route = bridge
+        .rewrite_exhausted_subagent_request(
+            &mut request,
+            RouteDecision::Provider,
+            &mut effort,
+            true,
+        )
+        .expect("sibling rewrite");
+    assert_eq!(request.model, CURSOR_AUTO);
+    assert_eq!(effort.as_deref(), Some("high"));
+    assert_eq!(route, RouteDecision::Provider);
+}
+
 #[test]
 fn outer_turn_is_not_rewritten_by_concurrency_preflight() {
     let bridge = cline_qwen_cursor_bridge();
@@ -547,6 +653,123 @@ fn outer_turn_is_not_rewritten_by_concurrency_preflight() {
         false,
     );
     assert_eq!(request.model, QWEN_CLOUD);
+    assert_eq!(effort.as_deref(), Some("high"));
+    assert_eq!(route, RouteDecision::Provider);
+}
+
+fn write_usage_routing_qwen_exhausted(home: &std::path::Path) {
+    let dir = home.join(".cache/claudex");
+    std::fs::create_dir_all(&dir).expect("usage-routing dir");
+    let created = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock")
+        .as_secs_f64();
+    let body = serde_json::json!({
+        "created_at": created,
+        "configuration_key": "test",
+        "summary": {
+            "providers": {
+                "qwen": {
+                    "available": false,
+                    "reason": "exhausted",
+                    "model": QWEN_CLOUD,
+                    "agent": "claudex-qwen"
+                },
+                "cursor": {
+                    "available": true,
+                    "reason": "available-cursor-quota",
+                    "model": CURSOR_AUTO,
+                    "agent": "claudex-cursor"
+                }
+            },
+            "selected_workers": [{
+                "agent": "claudex-cursor",
+                "model": CURSOR_AUTO,
+                "effort": "high"
+            }],
+            "disabled_subagent_models": [QWEN_CLOUD]
+        }
+    });
+    std::fs::write(
+        dir.join("usage-routing.json"),
+        serde_json::to_vec(&body).expect("usage-routing json"),
+    )
+    .expect("write usage-routing");
+}
+
+fn qwen_exhausted_routing_messages() -> Vec<Value> {
+    vec![serde_json::json!({
+        "role": "user",
+        "content": format!(
+            r#"Claudex routing for this turn: {{"providers":{{"qwen":{{"available":false,"reason":"exhausted","model":"{QWEN_CLOUD}"}}}},"selected_workers":[{{"agent":"claudex-cursor","model":"{CURSOR_AUTO}","effort":"high"}}],"disabled_subagent_models":["{QWEN_CLOUD}"]}}"#
+        )
+    })]
+}
+
+#[test]
+fn usage_routing_quota_skips_qwen_on_multi_subagent_generation() {
+    // Historical bug: CodexBar/route-usage already marked Qwen token-plan
+    // exhausted, but Cline empty-ACP failover still preferred Qwen so parallel
+    // SubAgent launches 502'd before any cooldown file existed.
+    let root = tempfile::tempdir().expect("usage-routing quota fixture");
+    write_usage_routing_qwen_exhausted(root.path());
+    let bridge = cline_qwen_cursor_bridge().with_usage_limit_cache_home(root.path());
+    assert!(
+        bridge.subagent_provider_is_exhausted(QWEN_CLOUD),
+        "live usage-routing quota must cool down Qwen before any ACP 502"
+    );
+    assert!(!bridge.subagent_provider_is_exhausted(CLINE_FLASH));
+
+    bridge.note_provider_exhaustion(&anyhow::anyhow!(EMPTY_ACP_END_TURN), Some(CLINE_FLASH));
+    let failover = bridge
+        .subagent_provider_failover_for(CLINE_FLASH)
+        .expect("remaining sibling");
+    assert_eq!(failover.model, CURSOR_AUTO);
+
+    let mut arguments = serde_json::json!({
+        "subagent_type": "general-purpose",
+        "claudex_model": CLINE_FLASH,
+        "claudex_effort": "xhigh",
+        "prompt": "parallel after quota view"
+    });
+    bridge.rewrite_exhausted_agent_launch_with_quota(&mut arguments, &[], &Value::Null);
+    assert_eq!(arguments["subagent_type"], "claudex-cursor");
+    assert_eq!(arguments["claudex_model"], CURSOR_AUTO);
+    assert_eq!(arguments["claudex_effort"], "high");
+}
+
+#[test]
+fn prompt_snapshot_quota_rewrites_explicit_qwen_without_cooldown() {
+    let root = tempfile::tempdir().expect("prompt quota fixture");
+    let bridge = cline_qwen_cursor_bridge().with_usage_limit_cache_home(root.path());
+    assert!(
+        !bridge.subagent_provider_is_exhausted(QWEN_CLOUD),
+        "no cooldown file and no usage-routing cache"
+    );
+
+    let mut arguments = serde_json::json!({
+        "subagent_type": "claudex-qwen",
+        "claudex_model": QWEN_CLOUD,
+        "claudex_effort": "high",
+        "prompt": "explicit qwen after quota snapshot"
+    });
+    let messages = qwen_exhausted_routing_messages();
+    bridge.rewrite_exhausted_agent_launch_with_quota(&mut arguments, &messages, &Value::Null);
+    assert_eq!(arguments["subagent_type"], "claudex-cursor");
+    assert_eq!(arguments["claudex_model"], CURSOR_AUTO);
+
+    let mut request = dummy_request(QWEN_CLOUD);
+    request.messages = qwen_exhausted_routing_messages();
+    let mut effort = Some("high".to_owned());
+    let route = bridge
+        .rewrite_exhausted_subagent_request(
+            &mut request,
+            RouteDecision::Provider,
+            &mut effort,
+            true,
+        )
+        .expect("snapshot rewrite");
+    assert_eq!(request.model, CURSOR_AUTO);
     assert_eq!(effort.as_deref(), Some("high"));
     assert_eq!(route, RouteDecision::Provider);
 }

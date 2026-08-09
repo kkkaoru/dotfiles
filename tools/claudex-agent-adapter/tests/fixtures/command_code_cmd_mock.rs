@@ -16,6 +16,19 @@ fn main() {
             .expect("open command-code mock trace");
         writeln!(file, "{}", serde_json::json!({ "args": args })).expect("write mock trace");
     }
+    let prompt = args.last().cloned().unwrap_or_default();
+    if prompt.contains("STREAM_DELAY") {
+        stream_delay();
+        return;
+    }
+    if prompt.contains("WEB_SEARCH_AVITA") {
+        web_search_avita();
+        return;
+    }
+    if prompt.contains("CANNED_STATUS") {
+        canned_then_answer();
+        return;
+    }
     match env::var("COMMAND_CODE_CMD_MOCK_MODE")
         .unwrap_or_default()
         .as_str()
@@ -38,6 +51,7 @@ fn main() {
                 r#"{"type":"result","subtype":"success","sessionId":"cc-slow","stopReason":"end_turn","finalText":"TOO_LATE"}"#,
             );
         }
+        "wait-release" => wait_for_release_then_succeed(),
         "plain-text" => {
             println!("not-json progress");
             emit_line(
@@ -53,6 +67,61 @@ fn main() {
         }
         _ => default_success(&args),
     }
+}
+
+fn stream_delay() {
+    emit_line(
+        r#"{"type":"event","event":{"type":"tool_running","toolCallId":"t-live","toolName":"read_file","description":"README.md"}}"#,
+    );
+    emit_line(
+        r#"{"type":"event","event":{"type":"text_delta","delta":"LIVE_DELTA_BEFORE_SLEEP"}}"#,
+    );
+    let _ = io::stdout().flush();
+    thread::sleep(Duration::from_millis(200));
+    emit_line(r#"{"type":"event","event":{"type":"text_delta","delta":" MORE_AFTER_SLEEP"}}"#);
+    emit_line(
+        r#"{"type":"result","subtype":"success","sessionId":"cc-stream","stopReason":"end_turn","finalText":"STREAM_DELAY_OK"}"#,
+    );
+}
+
+fn web_search_avita() {
+    emit_line(
+        r#"{"type":"event","event":{"type":"tool_running","toolCallId":"t-search","toolName":"web_search","query":"AVITA株式会社"}}"#,
+    );
+    emit_line(
+        r#"{"type":"event","event":{"type":"tool_completed","toolCallId":"t-search","toolName":"web_search"}}"#,
+    );
+    emit_line(
+        r#"{"type":"result","subtype":"success","sessionId":"cc-search","stopReason":"end_turn","finalText":"WEB_SEARCH_OK"}"#,
+    );
+}
+
+fn canned_then_answer() {
+    emit_line(
+        r#"{"type":"event","event":{"type":"text_delta","delta":"● 実行中: web_search。次: ツール結果待ち"}}"#,
+    );
+    emit_line(r#"{"type":"event","event":{"type":"text_delta","delta":"AVITA findings"}}"#);
+    emit_line(
+        r#"{"type":"result","subtype":"success","sessionId":"cc-canned","stopReason":"end_turn","finalText":"CANNED_STATUS_OK"}"#,
+    );
+}
+
+fn wait_for_release_then_succeed() {
+    emit_line(
+        r#"{"type":"event","event":{"type":"tool_running","toolCallId":"t-wait","toolName":"read_file","description":"waiting"}}"#,
+    );
+    let _ = io::stdout().flush();
+    let release = env::var("COMMAND_CODE_CMD_MOCK_RELEASE").unwrap_or_default();
+    let started = std::time::Instant::now();
+    while !release.is_empty() && !PathBuf::from(&release).exists() {
+        if started.elapsed() > Duration::from_secs(8) {
+            break;
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+    emit_line(
+        r#"{"type":"result","subtype":"success","sessionId":"cc-wait","stopReason":"end_turn","finalText":"WAIT_RELEASE_OK"}"#,
+    );
 }
 
 fn default_success(args: &[String]) {

@@ -22,6 +22,7 @@ mod request_identity;
 mod request_routing;
 pub(crate) use request_routing::official_claude_haiku_model;
 mod retention;
+mod routing_quota;
 mod segment;
 mod session;
 mod stream;

@@ -629,6 +629,7 @@ async fn reports_slow_stream_preparation_before_the_provider_is_ready() {
         Duration::from_millis(5),
         Duration::from_millis(50),
         true,
+        false,
     )
     .await;
     assert_eq!(result.expect("prepare result"), Some("ready"));
@@ -656,6 +657,51 @@ async fn reports_slow_stream_preparation_before_the_provider_is_ready() {
 }
 
 #[tokio::test]
+async fn command_code_prepare_start_status_is_live_text_not_doing() {
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
+    let (result, mut builder) = super::prepare_with_activity(
+        std::future::ready(Ok::<_, anyhow::Error>("ready")),
+        1,
+        &sender,
+        Some("SubAgent starting: meta/muse-spark-1.2-contributor (effort=high)"),
+        Duration::from_secs(1),
+        Duration::from_secs(1),
+        true,
+        true,
+    )
+    .await;
+    assert_eq!(result.expect("prepare result"), Some("ready"));
+    let segment = builder.finish(Some(&sender)).await.expect("segment");
+    drop(sender);
+    assert!(
+        segment.blocks.iter().all(|block| {
+            !block
+                .get("text")
+                .and_then(Value::as_str)
+                .is_some_and(|text| text.contains("SubAgent starting"))
+        }),
+        "start chrome must be stripped from transcript: {:?}",
+        segment.blocks
+    );
+    let mut frames = Vec::new();
+    while let Some(frame) = receiver.recv().await {
+        frames.push(String::from_utf8(frame.expect("frame").to_vec()).expect("UTF-8 SSE"));
+    }
+    assert!(
+        !frames.iter().any(|frame| frame.contains("thinking_delta")),
+        "Command Code start must not open Doing thinking: {frames:?}"
+    );
+    assert!(
+        !frames.iter().any(|frame| {
+            frame.contains("ツール結果待ち")
+                || frame.contains("続きの調査または回答")
+                || frame.contains("SubAgent starting")
+        }),
+        "Command Code must not invent canned start chrome: {frames:?}"
+    );
+}
+
+#[tokio::test]
 async fn finishes_fast_or_disconnected_stream_preparation_without_activity_status() {
     let (sender, receiver) = mpsc::channel::<Result<Bytes, Infallible>>(1);
     let (result, builder) = super::prepare_with_activity(
@@ -665,6 +711,7 @@ async fn finishes_fast_or_disconnected_stream_preparation_without_activity_statu
         None,
         Duration::from_secs(1),
         Duration::from_secs(1),
+        false,
         false,
     )
     .await;
@@ -680,6 +727,7 @@ async fn finishes_fast_or_disconnected_stream_preparation_without_activity_statu
         Duration::from_secs(1),
         Duration::from_secs(1),
         false,
+        false,
     )
     .await;
     assert!(result.expect("disconnected prepare").is_none());
@@ -693,6 +741,7 @@ async fn finishes_fast_or_disconnected_stream_preparation_without_activity_statu
         None,
         Duration::from_secs(1),
         Duration::from_secs(1),
+        false,
         false,
     )
     .await;
