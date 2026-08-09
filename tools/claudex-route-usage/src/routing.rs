@@ -17,8 +17,9 @@ pub const FIVE_HOUR_WINDOW: &str = "five-hour";
 pub const SEVEN_DAY_WINDOW: &str = "seven-day";
 pub const DEFAULT_MAX_SUBAGENTS: i64 = 40;
 /// Preferred multi-scope phase size when work can be decomposed (aligned with
-/// `claudex-agent-adapter` parallel_scheduler). Never invents scopes for an
-/// indivisible single-scope task: `task_fanout(1, …)` remains 1.
+/// `claudex-agent-adapter` parallel_scheduler). `task_fanout` follows independent
+/// scopes; the adapter applies `min_parallel` as a floor for substantive one-scope
+/// work so GPT does not collapse to a single Explore.
 pub const DEFAULT_MIN_SUBAGENTS_PER_PHASE: i64 = 3;
 pub const DEFAULT_ACTIVE_SUBAGENT_FLOOR: i64 = 2;
 pub const DEFAULT_MIN_MODEL_KINDS: i64 = 2;

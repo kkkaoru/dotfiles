@@ -30,9 +30,10 @@ pub(super) fn subscription_request_prompt(request: &MessagesRequest) -> String {
             "one inseparable tuple. Never combine a subagent_type with another worker's model or ",
             "effort. Never ",
             "default a nested launch to generic claude or blindly inherit its parent provider when ",
-            "current routing selects another route. Start only as many workers as the current task's ",
-            "independent scopes justify; never duplicate a single bounded command, lookup, fetch, ",
-            "or one-file check. The selected_workers list is a capacity pool, not a launch count. ",
+            "current routing selects another route. For substantive work, choose fan-out dynamically ",
+            "from independent scopes and the minimum parallel floor; never start with a single ",
+            "Explore or do the heavy work in main, and never blindly fill the concurrent cap. Only ",
+            "an atomic lookup/command stays at one worker. ",
             "parallelism. Treat disabled_subagent_models in the current routing context as an ",
             "absolute SubAgent denylist, including explicit, inherited, nested, and reused routes. ",
             "Before a substantive non-trivial phase, split the work into non-redundant streams and ",
@@ -156,7 +157,7 @@ fn subscription_parallel_scheduler_instructions(request: &MessagesRequest) -> St
     let config = scheduler.config();
     let cadence_minutes = (config.reassess_interval.as_secs() / 60).max(1);
     format!(
-        "Choose the worker count dynamically from independent workstreams and current active lanes. {}. When at least three independent scopes exist and capacity permits, fan out to at least {} ordinary workers across at least {} model families; for one indivisible scope use one worker. Recheck lanes after each SubAgent completion and every {cadence_minutes} minutes. If only one lane remains during ongoing work at a completion or cadence tick, interrupt stale work and dispatch replacements immediately. Reuse compatible workers before creating new processes. An explicit active user request for an exact worker count, a single worker, synchronous results, or no delegation overrides these defaults.",
+        "Dynamically size SubAgent fan-out for substantive work. {}. Launch at least {} ordinary workers across at least {} model families when the task can be decomposed; match independent scopes when higher; never exceed max_parallel or selected_workers. Do not start with one Explore and do not blindly use the concurrent cap. Only an atomic lookup/command stays at one worker. Recheck lanes after each SubAgent completion and every {cadence_minutes} minutes. If only one lane remains during ongoing work at a completion or cadence tick, interrupt stale work and dispatch replacements immediately. Reuse compatible workers before creating new processes. An explicit active user request for an exact worker count, a single worker, synchronous results, or no delegation overrides these defaults.",
         scheduler.guidance_for_request(request),
         config.min_parallel_workers,
         config.min_model_families

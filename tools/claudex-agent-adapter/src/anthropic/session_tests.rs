@@ -1105,14 +1105,16 @@ fn subscription_and_session_instructions_report_the_default_parallel_contract() 
 
     let prompt = subscription_request_prompt(&request(json!("parallel contract"), Vec::new()));
     assert!(prompt.contains(&format!(
-        "fan out to at least {} ordinary workers",
+        "Launch at least {} ordinary workers",
         default_config.min_parallel_workers
     )));
     assert!(prompt.contains(&format!(
         "across at least {} model families",
         default_config.min_model_families
     )));
-    assert!(prompt.contains("for one indivisible scope use one worker"));
+    assert!(prompt.contains("Do not start with one Explore"));
+    assert!(prompt.contains("do not blindly use the concurrent cap"));
+    assert!(prompt.contains("Only an atomic lookup/command stays at one worker"));
     assert!(prompt.contains(&format!("every {} minutes", cadence)));
     assert!(prompt.contains("interrupt stale work"));
     assert!(prompt.contains("An explicit active user request for an exact worker count"));
@@ -1122,6 +1124,7 @@ fn subscription_and_session_instructions_report_the_default_parallel_contract() 
 
 fn assert_default_parallel_config(config: &crate::parallel_scheduler::SchedulerConfig) {
     assert_eq!(config.min_parallel_workers, 3);
+    assert_eq!(config.max_parallel_workers, 40);
     assert_eq!(config.active_floor, 2);
     assert_eq!(config.min_model_families, 2);
     assert_eq!(config.reassess_interval.as_secs(), 600);
@@ -1152,19 +1155,14 @@ fn assert_parallel_contract_text(
     config: &crate::parallel_scheduler::SchedulerConfig,
     cadence: u64,
 ) {
-    assert!(
-        text.contains(
-            "Runtime parallel policy: choose one ordinary worker for one indivisible scope"
-        )
-    );
+    assert!(text.contains("Runtime parallel policy: dynamically size substantive work"));
     assert!(text.contains(&format!(
-        "fan out to at least {} ordinary workers",
+        "at least {} ordinary workers",
         config.min_parallel_workers
     )));
-    assert!(text.contains(&format!(
-        "fan out to at least {} ordinary workers",
-        config.min_parallel_workers
-    )));
+    assert!(text.contains(&format!("never more than {}", config.max_parallel_workers)));
+    assert!(text.contains("Do not start with one Explore"));
+    assert!(text.contains("do not blindly launch the concurrent cap"));
     assert!(text.contains(&format!(
         "across at least {} model families",
         config.min_model_families

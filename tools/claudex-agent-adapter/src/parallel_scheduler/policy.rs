@@ -2,7 +2,6 @@ use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use crate::anthropic::MessagesRequest;
-use serde_json::Value;
 
 use super::{SchedulerConfig, SchedulerDecision, core};
 
@@ -223,40 +222,53 @@ pub(crate) fn estimate_target_workers(
     request: &MessagesRequest,
     config: &SchedulerConfig,
 ) -> usize {
-    let requested_scopes = independent_scope_count(request);
     let active = snapshot.active_count();
-    // A reconstructed request can contain only an assistant-side advisor call and no
-    // user scope.  Do not turn that metadata-only state into ordinary worker launches.
-    if active == 0
-        && !request
-            .messages
-            .iter()
-            .any(|message| message.get("role").and_then(Value::as_str) == Some("user"))
-    {
+    // Reconstructed transcripts without a classifiable user turn must not invent
+    // fan-out; floor/replenishment owns those assistant-only states.
+    if !super::scope_count::has_classifiable_user_turn(request) {
         return 0;
     }
-    // The current task shape owns desired concurrency. Existing workers affect
-    // only the launch gap; they must never inflate the target or cause duplicate
-    // launches when a resumed transcript contains more workers than scopes.
-    let target = if requested_scopes >= 2 {
-        requested_scopes
-    } else if active > 0 || super::scope_count::needs_single_worker(request) {
-        1
-    } else {
-        0
-    };
-    target.min(config.max_parallel_workers)
+    if super::scope_count::needs_single_worker(request) {
+        return 1;
+    }
+    if super::scope_count::is_substantive_work(request) {
+        let scopes = independent_scope_count(request).max(1);
+        // Known multi-scope → exact count. Substantive one-scope (GPT Explore) →
+        // min_parallel floor. Never blindly use max_parallel.
+        let desired = if scopes >= 2 {
+            scopes
+        } else {
+            config.min_parallel_workers.max(1)
+        };
+        return desired.min(config.max_parallel_workers);
+    }
+    if active > 0 {
+        return 1;
+    }
+    0
 }
 
 pub(crate) fn scope_guidance(request: &MessagesRequest, decision: &SchedulerDecision) -> String {
+    if super::scope_count::needs_single_worker(request) {
+        return "Task-shape: one bounded or indivisible lookup detected. Launch exactly one ordinary SubAgent; do not fan out.".to_owned();
+    }
+    if super::scope_count::is_substantive_work(request) {
+        let count = independent_scope_count(request);
+        if count >= 2 {
+            return format!(
+                "Task-shape: multiple independent scopes detected. Launch exactly {count} ordinary SubAgents in the same assistant turn; do not stop after the first worker. Do not blindly launch the concurrent cap."
+            );
+        }
+        return format!(
+            "Task-shape: substantive work. Launch {} ordinary background Agent/Task workers from distinct selected_workers in the first tool round (minimum parallel floor, not one Explore, not the concurrent cap).",
+            decision.target_workers.max(1)
+        );
+    }
     if !has_parallel_scope(request) {
         if decision.active_workers > 1 {
-            return "Task-shape: one bounded scope detected. Keep exactly one ordinary SubAgent and stop duplicate same-scope workers; selected_workers is a capacity pool, not a launch count.".to_owned();
+            return "Task-shape: one bounded scope detected. Keep exactly one ordinary SubAgent and stop duplicate same-scope workers.".to_owned();
         }
-        return "Task-shape: one bounded or indivisible scope detected. Launch exactly one ordinary SubAgent; selected_workers is a capacity pool, not a launch count.".to_owned();
+        return "Task-shape: one bounded or indivisible scope detected. Launch exactly one ordinary SubAgent.".to_owned();
     }
-    let count = independent_scope_count(request);
-    format!(
-        "Task-shape: multiple independent scopes detected. Launch exactly {count} ordinary SubAgents in the same assistant turn; do not stop after the first worker. Launch only the number of non-redundant workers justified by those scopes, then reassess as each completes."
-    )
+    "Task-shape: no parallel fan-out required.".to_owned()
 }

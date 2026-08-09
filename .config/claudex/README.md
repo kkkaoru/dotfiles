@@ -445,19 +445,16 @@ provider設定がdotfilesにあってもCodex、Grok、Qwen、Sonnetの作業デ
 設定例:
 
 ```fish
-# 通常workerを最大12件まで。実際の起動数はタスクの独立scope数で決まる
+# 通常workerを最大12件まで。実際の起動数は独立scopeと min_parallel から動的に決まる
 CLAUDEX_SUBAGENT_MAX_PARALLEL=12 \
 claudex
 ```
 
-独立scopeが1件ならworkerは1本だけ起動し、空きslotがあっても増やしません（`task_fanout_default` /
-`single_scope_fanout` は常にこの1 scope ケースの例です）。scopeが2件なら最大2本、scopeが5件でも
-利用可能slotと上限を超えて起動しません。routing hook は `task_fanout_examples` と
-`multi_scope_example_fanout` で multi-scope 時の fan-out を明示し、常に1本だけと誤解されないようにします。
-分解可能な multi-scope フェーズでは `MIN_PARALLEL` / `ACTIVE_FLOOR` / `MIN_MODEL_FAMILIES` を
-preferred target として使い、不可分な単一scopeを水増ししてまで満たしません。各scopeに安定したキーを
-付け、実行中・完了・中断済みのキーを再起動しません。worker完了後に空きslotを自動補充することもせず、
-未処理で新しいキーを持つscopeが既に分解済みの場合だけ起動します。これはcustom-advisorには適用せず、
+実質的な調査・実装・レビューでは独立scope数を優先し、scopeヒューリスティックが1でも
+`MIN_PARALLEL`（既定3）を床にして Explore 1本で止めません。原子的な lookup/command だけが
+1本です。上限 `MAX_PARALLEL` まで常時埋めることはしません。routing hook の `task_fanout` は
+`min(independent_scopes, available, max_parallel)` です。各scopeに安定したキーを付け、
+実行中・完了・中断済みのキーを再起動しません。これはcustom-advisorには適用せず、
 custom-advisorは独立した論理session singletonとして必要時に再利用します。
 
 #### RAM圧力に応じた動的なSubAgent管理

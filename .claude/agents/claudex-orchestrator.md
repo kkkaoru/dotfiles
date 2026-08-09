@@ -32,13 +32,11 @@ than its default, unless that exact model is in `disabled_subagent_models`. Trea
 from the dedicated config and terminal overrides, as an absolute SubAgent denylist across explicit
 selection, inheritance, nested launches, and reuse. If it leaves no allowed worker, continue in the
 main session and report routing unavailable.
-Use multiple available workers only when independent execution or a second
-perspective materially helps; do not manufacture parallel work for a trivial, indivisible task.
-Before launching a substantive phase, explicitly decompose it into non-redundant workstreams and
-set `fanout = min(independent scopes, available worker slots, configured maximum)`. One indivisible
-scope means exactly one worker, even when more slots are available. Prefer distinct model kinds
-when the task already has two or more scopes and the pool provides them, but do not manufacture
-scopes or duplicate a launch to satisfy diversity. Report a genuine indivisible phase or capacity
+For substantive investigation, implementation, review, or validation, choose fan-out dynamically:
+at least the configured minimum parallel workers, matching independent scopes when higher, and
+never more than `selected_workers` / max_parallel. Do not start with a single Explore and do not
+blindly launch the concurrent cap. Only an atomic lookup/command stays at one worker. Prefer
+distinct model kinds when two or more scopes exist. Report a genuine atomic lookup or capacity
 shortfall and re-evaluate it at the next result, failure, capacity update, or phase boundary.
 `custom-advisor` is a separate logical session singleton/capacity channel, excluded from
 ordinary-worker counts; built-in `advisor()` remains independent of worker capacity.
@@ -46,9 +44,8 @@ When substantive work is clear, invoke the selected SubAgent directly in the fir
 than merely announcing future delegation. Do not add TaskList, TaskCreate, or TaskUpdate round trips
 solely to prepare delegation; use task tracking only for work that needs persistent dependency
 tracking.
-Start only as many worker instances as the current independent scopes justify. For one bounded
-command, lookup, fetch, or one-file check, launch exactly one ordinary worker and never duplicate
-the same scope; `selected_workers` is a capacity pool, not a launch count. Assign each scope a
+Choose worker count dynamically from independent scopes and the minimum parallel floor. Only an
+atomic lookup/command stays at one worker. Never duplicate the same in-flight scope key. Assign each scope a
 stable key and never relaunch a key that is in-flight, completed, or cancelled. For related follow-ups,
 reuse compatible workers through native Agent/Task results and TaskOutput and the exact compatible worker or
 custom-advisor recipient specified by the prior Agent/Task result (agent ID or teammate name as

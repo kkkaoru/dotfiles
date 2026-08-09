@@ -755,7 +755,7 @@ fn single_gh_pr_lookup_schedules_exactly_one_worker_on_its_initial_cycle() {
     assert!(
         scheduler
             .guidance_for_request(&request)
-            .contains("Task-shape: one bounded or indivisible scope detected. Launch exactly one")
+            .contains("Task-shape: one bounded or indivisible lookup detected. Launch exactly one")
     );
 }
 
@@ -789,8 +789,30 @@ fn single_gh_pr_lookup_does_not_expand_after_its_worker_starts() {
     assert!(
         scheduler
             .guidance_for_request(&request)
-            .contains("selected_workers is a capacity pool, not a launch count")
+            .contains("Launch exactly one ordinary SubAgent; do not fan out")
     );
+}
+
+#[test]
+fn gpt_style_investigate_prompt_uses_min_parallel_not_one_explore() {
+    let scheduler = ParallelScheduler::for_tests();
+    let request = messages(&[serde_json::json!({
+        "role": "user",
+        "content": [{
+            "type": "text",
+            "text": "Investigate how sync-realtime-data works and implement the missing live update path."
+        }],
+    })]);
+
+    let decision = scheduler.decision_for_request(&request);
+
+    assert_eq!(decision.target_workers, 3);
+    assert_eq!(decision.needs_more_workers, 3);
+    let guidance = scheduler.guidance_for_request(&request);
+    assert!(guidance.contains("Task-shape: substantive work"));
+    assert!(guidance.contains("minimum parallel floor"));
+    assert!(guidance.contains("not one Explore"));
+    assert!(!guidance.contains("Launch exactly one ordinary SubAgent"));
 }
 
 #[test]
