@@ -108,6 +108,72 @@ class PrepareClaudeConfigTests(unittest.TestCase):
             )
             self.assertEqual(isolated_settings["model"], "gpt-5.6-luna")
             self.assertEqual(isolated_settings["effortLevel"], "max")
+            self.assertNotIn(
+                "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
+                isolated_settings.get("env", {}),
+            )
+
+    def test_writes_and_clears_unknown_model_context_window(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="claudex-prepare-window-") as temporary:
+            home = Path(temporary)
+            user_claude = home / ".claude"
+            isolated = home / "isolated"
+            user_claude.mkdir()
+            (user_claude / "settings.json").write_text(
+                json.dumps(
+                    {
+                        "model": "opus",
+                        "effortLevel": "high",
+                        "env": {"KEEP": "1"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(PREPARE),
+                    str(user_claude),
+                    str(isolated),
+                    "gpt-5.6-terra",
+                    "high",
+                    "110000",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            isolated_settings = json.loads(
+                (isolated / "settings.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(isolated_settings["model"], "gpt-5.6-terra")
+            self.assertEqual(
+                isolated_settings["env"]["CLAUDE_CODE_MAX_CONTEXT_TOKENS"], "110000"
+            )
+            self.assertEqual(isolated_settings["env"]["KEEP"], "1")
+
+            cleared = subprocess.run(
+                [
+                    "python3",
+                    str(PREPARE),
+                    str(user_claude),
+                    str(isolated),
+                    "opus",
+                    "high",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(cleared.returncode, 0, cleared.stderr)
+            isolated_settings = json.loads(
+                (isolated / "settings.json").read_text(encoding="utf-8")
+            )
+            self.assertNotIn(
+                "CLAUDE_CODE_MAX_CONTEXT_TOKENS", isolated_settings.get("env", {})
+            )
+            self.assertEqual(isolated_settings["env"]["KEEP"], "1")
 
 
 if __name__ == "__main__":

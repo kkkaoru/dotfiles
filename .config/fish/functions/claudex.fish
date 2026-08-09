@@ -135,38 +135,6 @@ function claudex --description 'Run Claude Code with config-driven agent backend
     # a resumed session can retain its own effective model without remapping.
     set -lx CLAUDEX_OUTER_MODEL "$outer_model"
 
-    # Isolate Claude Code's user settings for this process. Plain `claude` keeps
-    # using ~/.claude/settings.json; claudex uses CLAUDE_CONFIG_DIR so /model and
-    # outer defaults cannot overwrite each other. Agents, sessions, history, and
-    # hooks remain shared through symlinks prepared by the helper.
-    set -l prepare_claude_config "$HOME/.config/claudex/prepare-claude-config.py"
-    if not test -r "$prepare_claude_config"
-        set -l function_file (status --current-filename)
-        set -l resolved_function_file (realpath "$function_file" 2>/dev/null)
-        if test -n "$resolved_function_file"
-            set -l function_dir (dirname "$resolved_function_file")
-            set -l config_root (dirname (dirname "$function_dir"))
-            set prepare_claude_config "$config_root/claudex/prepare-claude-config.py"
-        end
-    end
-    if not test -r "$prepare_claude_config"
-        echo "claudex: prepare-claude-config is not readable: $prepare_claude_config" >&2
-        return 2
-    end
-    set -l isolated_claude_home "$HOME/.config/claudex/claude-config"
-    set -q CLAUDEX_CLAUDE_CONFIG_DIR; and set isolated_claude_home "$CLAUDEX_CLAUDE_CONFIG_DIR"
-    set -l prepared_config (python3 "$prepare_claude_config" "$HOME/.claude" "$isolated_claude_home" "$outer_model" "$outer_effort" 2>&1)
-    set -l prepare_status $status
-    if test $prepare_status -ne 0
-        printf '%s\n' $prepared_config >&2
-        return 2
-    end
-    if test -z "$prepared_config"
-        echo "claudex: prepare-claude-config returned an empty path" >&2
-        return 2
-    end
-    set -lx CLAUDE_CONFIG_DIR "$prepared_config"
-
     set -l default_provider_config "$HOME/.config/claudex/providers.json"
     set -l provider_override_config "$HOME/.config/claudex/providers.$(hostname -s).local.json"
     set -l provider_config $default_provider_config
@@ -205,6 +173,67 @@ function claudex --description 'Run Claude Code with config-driven agent backend
         echo "claudex: provider config is not readable: $provider_config" >&2
         return 2
     end
+
+    set -l context_tokens_script "$HOME/.config/claudex/resolve-context-tokens.py"
+    if not test -r "$context_tokens_script"
+        set -l function_file (status --current-filename)
+        set -l resolved_function_file (realpath "$function_file" 2>/dev/null)
+        if test -n "$resolved_function_file"
+            set -l function_dir (dirname "$resolved_function_file")
+            set -l config_root (dirname (dirname "$function_dir"))
+            set context_tokens_script "$config_root/claudex/resolve-context-tokens.py"
+        end
+    end
+    set -l context_tokens
+    if test -r "$context_tokens_script"
+        set context_tokens (python3 "$context_tokens_script" "$provider_config" "$outer_model" 2>&1)
+        set -l context_status $status
+        if test $context_status -ne 0
+            printf '%s\n' $context_tokens >&2
+            return 2
+        end
+    end
+    # `set -lx` inside `if` is block-local in fish and would not reach Claude Code.
+    test -n "$context_tokens"
+    and set -lx CLAUDE_CODE_MAX_CONTEXT_TOKENS "$context_tokens"
+    test -n "$context_tokens"
+    or set -e CLAUDE_CODE_MAX_CONTEXT_TOKENS
+
+    # Isolate Claude Code's user settings for this process. Plain `claude` keeps
+    # using ~/.claude/settings.json; claudex uses CLAUDE_CONFIG_DIR so /model and
+    # outer defaults cannot overwrite each other. Agents, sessions, history, and
+    # hooks remain shared through symlinks prepared by the helper.
+    set -l prepare_claude_config "$HOME/.config/claudex/prepare-claude-config.py"
+    if not test -r "$prepare_claude_config"
+        set -l function_file (status --current-filename)
+        set -l resolved_function_file (realpath "$function_file" 2>/dev/null)
+        if test -n "$resolved_function_file"
+            set -l function_dir (dirname "$resolved_function_file")
+            set -l config_root (dirname (dirname "$function_dir"))
+            set prepare_claude_config "$config_root/claudex/prepare-claude-config.py"
+        end
+    end
+    if not test -r "$prepare_claude_config"
+        echo "claudex: prepare-claude-config is not readable: $prepare_claude_config" >&2
+        return 2
+    end
+    set -l isolated_claude_home "$HOME/.config/claudex/claude-config"
+    set -q CLAUDEX_CLAUDE_CONFIG_DIR; and set isolated_claude_home "$CLAUDEX_CLAUDE_CONFIG_DIR"
+    set -l prepare_args "$HOME/.claude" "$isolated_claude_home" "$outer_model" "$outer_effort"
+    if test -n "$context_tokens"
+        set -a prepare_args "$context_tokens"
+    end
+    set -l prepared_config (python3 "$prepare_claude_config" $prepare_args 2>&1)
+    set -l prepare_status $status
+    if test $prepare_status -ne 0
+        printf '%s\n' $prepared_config >&2
+        return 2
+    end
+    if test -z "$prepared_config"
+        echo "claudex: prepare-claude-config returned an empty path" >&2
+        return 2
+    end
+    set -lx CLAUDE_CONFIG_DIR "$prepared_config"
 
     # The shared JSON is authoritative for provider commands, model prefixes,
     # worker agents, and fallback selection. Claude Code owns the outer main

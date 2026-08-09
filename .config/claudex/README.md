@@ -641,6 +641,8 @@ CLAUDEX_MODEL=qwen3.8-max-preview claudex
 `gpt-5.6-terra` は Codex `codex` provider の main `/model` 候補（`selectableModels`）です。
 自動 SubAgent は従来どおり `gpt-5.6-luna` / `claudex-gpt` です。Terra を outer にする場合は
 `/model` で `claude-claudex-gpt-5.6-terra` を選ぶか、上記の `CLAUDEX_MODEL` を使います。
+Claude Code は `gpt-5.6-terra` を未知モデルとして 200k compact 前提にするため、launcher は
+provider の `maxContextTokens`（Codex は `110000`）を `CLAUDE_CODE_MAX_CONTEXT_TOKENS` へ渡します。
 
 `CLAUDEX_MODEL` を明示した場合だけClaude Code設定の継承を無効化し、指定モデルをouter
 sessionにも使います。指定値は `modelPrefixes` と照合され、設定にないprefixのモデルは

@@ -124,15 +124,28 @@ def merge_claudex_tool_policy_hooks(settings: dict[str, Any]) -> None:
         hooks[event_name] = retained + entries
 
 
+def apply_context_token_env(settings: dict[str, Any], context_tokens: str) -> None:
+    env = settings.get("env")
+    if not isinstance(env, dict):
+        env = {}
+        settings["env"] = env
+    if context_tokens:
+        env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = context_tokens
+    else:
+        env.pop("CLAUDE_CODE_MAX_CONTEXT_TOKENS", None)
+
+
 def write_isolated_settings(
     user_settings_path: Path,
     isolated_settings_path: Path,
     model: str,
     effort: str,
+    context_tokens: str = "",
 ) -> None:
     settings = load_json_object(user_settings_path)
     settings["model"] = model
     settings["effortLevel"] = effort
+    apply_context_token_env(settings, context_tokens)
     merge_claudex_tool_policy_hooks(settings)
     isolated_settings_path.write_text(
         json.dumps(settings, indent=2, ensure_ascii=False) + "\n",
@@ -158,20 +171,28 @@ def sanitize_shared_settings(user_settings_path: Path) -> None:
 
 
 def main() -> int:
-    if len(sys.argv) != 5:
+    if len(sys.argv) not in {5, 6}:
         raise SystemExit(
-            "usage: prepare-claude-config.py <user-claude-dir> <isolated-dir> <model> <effort>"
+            "usage: prepare-claude-config.py <user-claude-dir> <isolated-dir> "
+            "<model> <effort> [max-context-tokens]"
         )
     user_claude = Path(sys.argv[1]).expanduser()
     isolated = Path(sys.argv[2]).expanduser()
     model = required_single_line(sys.argv[3], "model")
     effort = required_single_line(sys.argv[4], "effort")
+    context_tokens = ""
+    if len(sys.argv) == 6 and sys.argv[5]:
+        context_tokens = required_single_line(sys.argv[5], "max-context-tokens")
+        if not context_tokens.isdigit() or int(context_tokens) <= 0:
+            raise ValueError("max-context-tokens must be a positive integer")
 
     user_settings = user_claude / "settings.json"
     # Keep plain `claude` free of claudex discovery model ids.
     sanitize_shared_settings(user_settings)
     mirror_shared_entries(user_claude, isolated)
-    write_isolated_settings(user_settings, isolated / "settings.json", model, effort)
+    write_isolated_settings(
+        user_settings, isolated / "settings.json", model, effort, context_tokens
+    )
     # Print the absolute isolated path for the fish launcher.
     print(os.path.realpath(isolated))
     return 0

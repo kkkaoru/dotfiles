@@ -126,6 +126,31 @@ class ClaudexOrchestrationEnvironmentTests(unittest.TestCase):
         self.assertIn(".config/claudex/claude-config", output["CLAUDE_CONFIG_DIR"])
         self.assertNotIn("--model", output["CLAUDEX_ADAPTER_ARGS"])
         self.assertIn("--inherit-claude-model", output["CLAUDEX_ADAPTER_ARGS"])
+        self.assertEqual(output.get("CLAUDE_CODE_MAX_CONTEXT_TOKENS", ""), "")
+
+    def test_terra_outer_model_exports_provider_context_window(self) -> None:
+        output = self.run_launcher(
+            {"CLAUDEX_MODEL": "gpt-5.6-terra"},
+            providers={
+                "version": 1,
+                "mainProviders": ["codex"],
+                "providers": [
+                    {
+                        "id": "codex",
+                        "agent": "claudex-gpt",
+                        "defaultModel": "gpt-5.6-luna",
+                        "effort": "max",
+                        "maxContextTokens": 110000,
+                        "modelPrefixes": ["gpt"],
+                        "selectableModels": ["gpt-5.6-terra"],
+                        "backend": "codex-app-server",
+                    }
+                ],
+                "fallback": {"agent": "fallback", "model": "sonnet", "effort": "high"},
+            },
+        )
+        self.assertEqual(output["CLAUDEX_OUTER_MODEL"], "gpt-5.6-terra")
+        self.assertEqual(output["CLAUDE_CODE_MAX_CONTEXT_TOKENS"], "110000")
 
     def test_explicit_sonnet_outer_model_is_forwarded_without_changing_worker_definition(
         self,
@@ -185,6 +210,7 @@ class ClaudexOrchestrationEnvironmentTests(unittest.TestCase):
         self,
         environment: dict[str, str],
         arguments: list[str] | None = None,
+        providers: dict | None = None,
     ) -> dict[str, str]:
         with tempfile.TemporaryDirectory(prefix="claudex-fish-smoke-") as temporary:
             home = Path(temporary)
@@ -193,7 +219,8 @@ class ClaudexOrchestrationEnvironmentTests(unittest.TestCase):
             (home / ".claude").mkdir()
             (home / ".config/claudex/providers.json").write_text(
                 json.dumps(
-                    {
+                    providers
+                    or {
                         "version": 1,
                         "mainProviders": ["provider"],
                         "providers": [
@@ -264,6 +291,8 @@ class ClaudexOrchestrationEnvironmentTests(unittest.TestCase):
                 "\"${CLAUDEX_MAIN_MODEL_KNOWN:-}\"\n"
                 "printf 'CLAUDE_CONFIG_DIR=%s\\n' "
                 "\"${CLAUDE_CONFIG_DIR:-}\"\n"
+                "printf 'CLAUDE_CODE_MAX_CONTEXT_TOKENS=%s\\n' "
+                "\"${CLAUDE_CODE_MAX_CONTEXT_TOKENS:-}\"\n"
                 "printf 'CLAUDEX_SUBSCRIPTION_MAX_PROCESSES=%s\\n' "
                 "\"${subscription_max_processes}\"\n"
                 "printf 'CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES=%s\\n' "
