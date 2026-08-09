@@ -17,6 +17,7 @@ mod claude_process;
 mod daemon_arguments;
 mod daemon_process;
 mod daemon_start;
+mod ensure;
 mod fallback;
 mod handover;
 mod health;
@@ -38,8 +39,8 @@ use daemon_arguments::daemon_arguments;
 use daemon_arguments::{
     route_descriptions, search_worker_route_descriptions, worker_route_descriptions,
 };
+#[cfg(test)]
 use daemon_start::start_adapter;
-use handover::ServiceState;
 #[cfg(test)]
 use health::Health;
 use health::{authenticates, fetch_health, wait_until_ready, wait_until_recovery_ready};
@@ -158,7 +159,15 @@ pub(crate) fn recovery_generation() -> Option<String> {
 
 pub async fn ensure_running(options: AdapterOptions) -> Result<String> {
     let config = ServiceConfig::new(options)?;
-    ensure_config_running(&config).await
+    ensure::run(&config, false).await
+}
+
+/// Replace an idle listener in place, even when a `launch` TUI is attached.
+/// Unlike `ensure`, this drain-waits for active work and times out instead of
+/// starting a fallback listener.
+pub async fn hot_swap(options: AdapterOptions) -> Result<String> {
+    let config = ServiceConfig::new(options)?;
+    ensure::run(&config, true).await
 }
 
 pub async fn run_claude(
@@ -191,7 +200,7 @@ pub async fn run_claude(
     } else {
         None
     };
-    let base_url = ensure_config_running(&config).await?;
+    let base_url = ensure::run(&config, false).await?;
     let session_id = session_id_for_launch(&arguments, || {
         format!("session_{}", Uuid::new_v4().simple())
     });
@@ -264,69 +273,6 @@ fn reject_model_override(arguments: &[OsString]) -> Result<()> {
         bail!("pass the main model to adapter option --model, not to Claude Code arguments");
     }
     Ok(())
-}
-
-async fn ensure_config_running(config: &ServiceConfig) -> Result<String> {
-    let _lock = launcher_lock::acquire(&config.lock_path)?;
-    let client = reqwest::Client::new();
-    let recovery_manifest = match handover::inspect_service(&client, config).await {
-        ServiceState::Reuse => return Ok(config.base_url()),
-        ServiceState::Defer {
-            pid,
-            active_http_requests,
-            active_provider_turns,
-        } => {
-            eprintln!(
-                "claudex: retaining active adapter pid {:?}; routing this new session to a current-build listener ({} HTTP request(s), {} provider turn(s); live launch sessions kept)",
-                pid, active_http_requests, active_provider_turns
-            );
-            return fallback::ensure_current_generation(&client, config)
-                .await
-                .context("start current-build listener while stale adapter is active");
-        }
-        ServiceState::Replace {
-            pid,
-            recovery_generation,
-        } => {
-            if let Some(generation) = recovery_generation.as_deref() {
-                daemon_start::validate_recovery(config, generation)
-                    .context("validate current adapter recovery generation before handover")?;
-            } else {
-                eprintln!(
-                    "claudex: current adapter predates recovery generations; performing a one-time preflight-only migration"
-                );
-            }
-            preflight::verify(&client, config).await?;
-            handover::release_stale_listener(&client, config, pid).await?;
-            recovery_generation
-        }
-        ServiceState::Start => None,
-    };
-    let started_pid = match start_adapter(config) {
-        Ok(pid) => pid,
-        Err(error) => {
-            return recovery::after_update_failure(
-                &client,
-                config,
-                recovery_manifest.as_deref(),
-                error.context("start new adapter generation"),
-            )
-            .await;
-        }
-    };
-    if let Err(error) = wait_until_ready(&client, config).await {
-        if daemon_process::matches(started_pid, &config.executable) {
-            daemon_process::terminate(started_pid);
-        }
-        return recovery::after_update_failure(
-            &client,
-            config,
-            recovery_manifest.as_deref(),
-            error,
-        )
-        .await;
-    }
-    Ok(config.base_url())
 }
 
 fn relay_stderr(stderr: impl std::io::Read, model: &str) -> Result<()> {

@@ -1,4 +1,4 @@
-//! Compact text progress for provider-owned tools (Grok / Cursor / configured ACP).
+//! Compact live progress for provider-owned tools (Grok / Cursor / configured ACP).
 //!
 //! Never emitted as Anthropic `tool_use` (Claude Code would re-execute). Only short
 //! status markers are streamed/committed — full tool payloads freeze the TUI when
@@ -15,7 +15,7 @@ const TITLE_CHAR_LIMIT: usize = 48;
 const ARG_PREVIEW_CHAR_LIMIT: usize = 48;
 
 impl SegmentBuilder {
-    /// Streams provider-owned work as text, never as Anthropic `tool_use`.
+    /// Streams provider-owned work as thinking progress, never as Anthropic `tool_use`.
     ///
     /// Claude Code executes every `tool_use` block it receives, even when the
     /// provider already executed that tool and the message ends with `end_turn`.

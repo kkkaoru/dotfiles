@@ -81,6 +81,10 @@ impl SubscriptionFailure {
         self.kind == SubscriptionFailureKind::UpstreamTransient
     }
 
+    pub(in crate::anthropic) fn is_authentication(&self) -> bool {
+        self.kind == SubscriptionFailureKind::Authentication
+    }
+
     pub(in crate::anthropic) fn status_hint(&self) -> u16 {
         self.status_hint
     }

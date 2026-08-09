@@ -34,10 +34,21 @@ pub(super) fn sanitize_committed_blocks(blocks: &mut Vec<Value>) {
             true
         }
         Some("thinking") => {
+            let signature = block.get("signature").and_then(Value::as_str).unwrap_or("");
+            if signature == "claudex_provider_progress" || signature == "claudex_activity_keepalive"
+            {
+                return false;
+            }
             let Some(thinking) = block.get("thinking").and_then(Value::as_str) else {
                 return true;
             };
-            let cleaned = thinking.replace(ZWSP, "").replace(STATUS, "");
+            let cleaned = thinking
+                .replace(ZWSP, "")
+                .replace(STATUS, "")
+                .lines()
+                .filter(|line| !is_provider_status_line(line.trim()))
+                .collect::<Vec<_>>()
+                .join("\n");
             let trimmed = cleaned.trim();
             // Drop pure keepalive / provider-status thinking so transcript
             // history stays answer-focused like native Claude Code turns.
@@ -56,10 +67,12 @@ fn is_provider_status_only(text: &str) -> bool {
         .all(|line| line.trim().is_empty() || is_provider_status_line(line.trim()))
 }
 
-fn is_provider_status_line(line: &str) -> bool {
+pub(super) fn is_provider_status_line(line: &str) -> bool {
     line.starts_with('▶')
         || line.starts_with('✓')
         || line.starts_with('✗')
+        || line.starts_with("… still working")
+        || line.starts_with("Claudex is still working")
         || line.starts_with("Plan ")
         || line.starts_with("Plan:")
         || line.starts_with('●')

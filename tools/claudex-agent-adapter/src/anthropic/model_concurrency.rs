@@ -99,6 +99,23 @@ impl ModelConcurrency {
             .map(|(model, entry)| (model.clone(), entry.status()))
             .collect()
     }
+
+    /// SubAgent turns only take the non-interactive slot semaphore
+    /// (`limit - 1`). Health `available` still compares active+queued against
+    /// the full limit, so two Qwen SubAgents can look free while the next
+    /// SubAgent waits 30s and surfaces the TUI admission timeout.
+    pub(super) fn is_subagent_at_capacity(&self, model: &str) -> bool {
+        self.entries
+            .lock()
+            .expect("model concurrency registry poisoned")
+            .get(model)
+            .is_some_and(|entry| entry.slots.available_permits() == 0)
+    }
+}
+
+pub(super) fn is_concurrency_admission_timeout(error: &anyhow::Error) -> bool {
+    let message = error.to_string();
+    message.contains("concurrency") && message.contains("admission timed out")
 }
 
 impl LimitedModel {
@@ -253,142 +270,9 @@ fn parse_wait_timeout(value: Option<&str>) -> Duration {
 }
 
 #[cfg(test)]
-// Coverage gates measure production concurrency; this inline module only contains tests.
 #[cfg_attr(coverage_nightly, coverage(off))]
-mod tests {
-    use std::time::Duration;
-
-    use tokio::time::timeout;
-
-    use super::*;
-
-    #[tokio::test]
-    async fn enforces_limit_and_reports_waiters() {
-        let registry = ModelConcurrency::new(vec![("exact".to_owned(), 1)]);
-        let first = registry
-            .ticket("exact", Some(1))
-            .unwrap()
-            .acquire()
-            .await
-            .unwrap();
-        let second = registry.ticket("exact", Some(1)).unwrap();
-        let mut waiting = Box::pin(second.acquire_with_timeout(Duration::from_millis(100)));
-        assert!(
-            timeout(Duration::from_millis(10), waiting.as_mut())
-                .await
-                .is_err()
-        );
-        assert_eq!(
-            registry.snapshot()["exact"],
-            ModelConcurrencyStatus {
-                active: 1,
-                limit: 1,
-                available: false,
-                queued: 1,
-            }
-        );
-        drop(first);
-        let second = timeout(Duration::from_secs(1), waiting)
-            .await
-            .expect("waiting turn should acquire");
-        drop(second.expect("released slot should acquire"));
-        assert_eq!(registry.snapshot()["exact"].active, 0);
-    }
-
-    #[tokio::test]
-    async fn dynamic_exact_models_have_independent_limits() {
-        let registry = ModelConcurrency::new(Vec::new());
-        let first = registry
-            .ticket("prefix-a", Some(1))
-            .unwrap()
-            .acquire()
-            .await
-            .unwrap();
-        let second = timeout(
-            Duration::from_millis(50),
-            registry
-                .ticket("prefix-b", Some(1))
-                .unwrap()
-                .acquire_with_timeout(Duration::from_millis(50)),
-        )
-        .await
-        .expect("a different exact model must not share the permit");
-        assert_eq!(registry.snapshot()["prefix-a"].active, 1);
-        assert_eq!(registry.snapshot()["prefix-b"].active, 1);
-        drop((first, second));
-    }
-
-    #[tokio::test]
-    async fn timeout_releases_queue_and_admission_permits() {
-        let registry = ModelConcurrency::new(vec![("bounded".to_owned(), 1)]);
-        let first = registry
-            .ticket("bounded", Some(1))
-            .unwrap()
-            .acquire()
-            .await
-            .unwrap();
-        let error = match registry
-            .ticket("bounded", Some(1))
-            .unwrap()
-            .acquire_with_timeout(Duration::from_millis(1))
-            .await
-        {
-            Ok(_) => panic!("occupied model should apply finite backpressure"),
-            Err(error) => error,
-        };
-        assert!(error.to_string().contains("model admission timed out"));
-        assert_eq!(registry.snapshot()["bounded"].queued, 0);
-        drop(first);
-        let recovered = registry
-            .ticket("bounded", Some(1))
-            .unwrap()
-            .acquire_with_timeout(Duration::from_millis(50))
-            .await
-            .expect("released model should admit a new turn");
-        drop(recovered);
-    }
-
-    #[tokio::test]
-    async fn zero_wait_timeout_uses_nonblocking_admission() {
-        let registry = ModelConcurrency::new(vec![("zero".to_owned(), 1)]);
-        let first = registry
-            .ticket("zero", Some(1))
-            .unwrap()
-            .acquire()
-            .await
-            .unwrap();
-        let error = match registry
-            .ticket("zero", Some(1))
-            .unwrap()
-            .acquire_with_timeout(Duration::ZERO)
-            .await
-        {
-            Ok(_) => panic!("zero wait must not queue behind an occupied model"),
-            Err(error) => error,
-        };
-        assert!(error.to_string().contains("semaphore is unavailable"));
-        drop(first);
-    }
-
-    #[test]
-    fn parses_configured_wait_timeout_without_accepting_invalid_values() {
-        assert_eq!(parse_wait_timeout(None), DEFAULT_WAIT_TIMEOUT);
-        assert_eq!(parse_wait_timeout(Some("17")), Duration::from_millis(17));
-        assert_eq!(parse_wait_timeout(Some("invalid")), DEFAULT_WAIT_TIMEOUT);
-        assert_eq!(parse_wait_timeout(Some("-1")), DEFAULT_WAIT_TIMEOUT);
-        assert_eq!(
-            parse_wait_timeout(Some(&u64::MAX.to_string())),
-            Duration::from_millis(u64::MAX)
-        );
-    }
-
-    #[test]
-    fn reserves_a_finite_admission_window_per_model() {
-        assert_eq!(admission_capacity(1), 3);
-        assert_eq!(admission_capacity(4), 12);
-        assert_eq!(admission_capacity(0), 0);
-    }
-}
+#[path = "model_concurrency_tests.rs"]
+mod tests;
 
 #[cfg(test)]
 #[path = "model_concurrency_priority_tests.rs"]

@@ -8,7 +8,7 @@ use super::{
 };
 use crate::anthropic::{
     ActiveTurn, Bridge, model_concurrency::ModelPermit, segment::EMPTY_ACP_END_TURN,
-    subagent_timeout::completes_within,
+    subagent_timeout::completes_within, usage_limit_failover::streaming_provider_retry,
 };
 
 struct ContextRetryStream {
@@ -138,7 +138,7 @@ impl Bridge {
                     turn,
                     sender,
                     error: anyhow!("{EMPTY_ACP_END_TURN}"),
-                    builder: SegmentBuilder::new(input_tokens),
+                    builder: SegmentBuilder::new(input_tokens).with_subagent(is_subagent),
                     model_permit,
                     is_subagent,
                     run_in_background,
@@ -214,7 +214,7 @@ impl Bridge {
                 Box::pin(self.drive_subagent_stream(
                     retried,
                     sender,
-                    SegmentBuilder::new(input_tokens),
+                    SegmentBuilder::new(input_tokens).with_subagent(is_subagent),
                     model_permit,
                     is_subagent,
                     run_in_background,
@@ -298,22 +298,22 @@ impl Bridge {
             send_stream_error(&input.sender, input.error).await;
             return;
         };
-        let Some(failover) = self.usage_limit_failover_for(&exhausted_model) else {
+        // SubAgent empty-ACP/billing failures must switch to a sibling Provider
+        // (for example Qwen Cloud). Subscription failover cannot continue an
+        // already-open SubAgent SSE stream, so the old path returned the empty
+        // ACP error to Claude Code and killed the agent.
+        let Some(failover) = streaming_provider_retry(
+            self.failover_for_stream_turn(&exhausted_model, input.is_subagent),
+        ) else {
             self.remove_session(&session).await;
             send_stream_error(&input.sender, input.error).await;
             return;
         };
-        if failover.route != super::super::request_routing::RouteDecision::Provider {
-            // Subscription failover for the already-open SSE stream is handled
-            // by the next request's preflight after the cooldown is recorded.
-            self.remove_session(&session).await;
-            send_stream_error(&input.sender, input.error).await;
-            return;
-        }
         tracing::warn!(
             exhausted_model = %exhausted_model,
             failover_model = %failover.model,
-            "retrying stream on a non-Codex provider after usageLimitExceeded"
+            is_subagent = input.is_subagent,
+            "retrying stream on a sibling provider after provider exhaustion"
         );
         retry.request.model = failover.model;
         if let Some(effort) = failover.effort {

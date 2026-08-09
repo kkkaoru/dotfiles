@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::process::Stdio;
 
 use anyhow::{Context, Result};
@@ -20,7 +21,7 @@ pub async fn run_turn(
     prompt: &str,
     resume: Option<&str>,
 ) -> Result<TurnOutcome> {
-    run_turn_emitting(spec, prompt, resume, None).await
+    run_turn_emitting(spec, prompt, resume, None, None).await
 }
 
 pub async fn run_turn_emitting(
@@ -28,9 +29,11 @@ pub async fn run_turn_emitting(
     prompt: &str,
     resume: Option<&str>,
     sink: Option<mpsc::UnboundedSender<ProgressEvent>>,
+    cwd: Option<&Path>,
 ) -> Result<TurnOutcome> {
     let argv = spec.argv(prompt, resume);
-    let mut child = spawn_cmd(spec, &argv)?;
+    trace_spawn(&argv, cwd);
+    let mut child = spawn_cmd(spec, &argv, cwd)?;
     let stdout = child
         .stdout
         .take()
@@ -90,7 +93,21 @@ async fn read_stderr(stderr: impl tokio::io::AsyncRead + Unpin) -> String {
     out.join("\n")
 }
 
-fn spawn_cmd(spec: &LaunchSpec, argv: &[String]) -> Result<Child> {
+fn trace_spawn(argv: &[String], cwd: Option<&Path>) {
+    let Ok(path) = std::env::var("CLAUDEX_COMMAND_CODE_TRACE") else {
+        return;
+    };
+    if path.trim().is_empty() {
+        return;
+    }
+    let payload = serde_json::json!({
+        "cwd": cwd.map(|path| path.display().to_string()),
+        "argv": argv,
+    });
+    let _ = std::fs::write(path, format!("{payload}\n"));
+}
+
+fn spawn_cmd(spec: &LaunchSpec, argv: &[String], cwd: Option<&Path>) -> Result<Child> {
     let mut command = Command::new(spec.program());
     command
         .args(argv)
@@ -98,6 +115,9 @@ fn spawn_cmd(spec: &LaunchSpec, argv: &[String]) -> Result<Child> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
+    }
     command.spawn().with_context(|| {
         format!(
             "failed to spawn Command Code headless: {} {}",

@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use serde_json::Value;
 
-use crate::anthropic::{MessagesRequest, exact_async_launch_acknowledgement, tool_round_ids};
+use crate::anthropic::{MessagesRequest, agent_tool_round_ids, exact_async_launch_acknowledgement};
 
 #[derive(Clone, Debug)]
 pub(crate) struct LiveThreadState {
@@ -41,16 +41,17 @@ impl SubagentSnapshot {
 pub(crate) fn analyze_subagent_work(messages: &[Value]) -> SubagentSnapshot {
     let mut launched: Vec<Workunit> = Vec::new();
     let mut completed: HashSet<String> = HashSet::new();
-    let mut latest_tool_round: Option<Vec<String>> = None;
+    let mut latest_agent_tool_round: Option<Vec<String>> = None;
 
     for message in messages {
         record_task_notification(message, &mut completed);
         let Some(content) = message.get("content").and_then(Value::as_array) else {
             continue;
         };
-        let exact_async_acknowledgement = latest_tool_round.as_deref().is_some_and(|expected| {
-            exact_async_launch_acknowledgement(message, expected).is_some()
-        });
+        let exact_async_acknowledgement =
+            latest_agent_tool_round.as_deref().is_some_and(|expected| {
+                exact_async_launch_acknowledgement(message, expected).is_some()
+            });
 
         record_message_content(
             content,
@@ -59,9 +60,9 @@ pub(crate) fn analyze_subagent_work(messages: &[Value]) -> SubagentSnapshot {
             exact_async_acknowledgement,
         );
         if message.get("role").and_then(Value::as_str) == Some("assistant")
-            && let Some(ids) = tool_round_ids(message)
+            && let Some(ids) = agent_tool_round_ids(message)
         {
-            latest_tool_round = Some(ids);
+            latest_agent_tool_round = Some(ids);
         }
     }
 

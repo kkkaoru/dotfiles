@@ -22,7 +22,9 @@ use super::{
     result_output_tokens, run_subscription_stream, stream_subscription_model,
 };
 use crate::anthropic::{
+    MessagesRequest,
     agent_effort::AgentEffortIntents,
+    subagent_reuse::SubagentReuseRegistry,
     subscription::{SubscriptionOptions, SubscriptionToolContext},
     subscription_activity::SubscriptionActivity,
     subscription_stream::post_eof,
@@ -230,6 +232,7 @@ async fn handles_ignored_invalid_and_non_text_events() {
         text_started: false,
         text_closed: false,
         saw_tool_use: false,
+        launch_fanout_open: false,
         seen_tool_ids: HashSet::new(),
         blocked_subagent: false,
         saw_result: false,
@@ -268,6 +271,7 @@ async fn forwards_empty_and_regular_deltas_then_finishes_once() {
         text_started: false,
         text_closed: false,
         saw_tool_use: false,
+        launch_fanout_open: false,
         seen_tool_ids: HashSet::new(),
         blocked_subagent: false,
         saw_result: false,
@@ -312,6 +316,7 @@ async fn keeps_native_web_results_inside_the_subscription() {
         text_started: false,
         text_closed: false,
         saw_tool_use: false,
+        launch_fanout_open: false,
         seen_tool_ids: HashSet::new(),
         blocked_subagent: false,
         saw_result: false,
@@ -390,6 +395,7 @@ async fn keeps_structured_output_internal_and_returns_its_json_result_as_text() 
         text_started: false,
         text_closed: false,
         saw_tool_use: false,
+        launch_fanout_open: false,
         seen_tool_ids: HashSet::new(),
         blocked_subagent: false,
         saw_result: false,
@@ -444,6 +450,7 @@ async fn empty_partial_delta_is_not_visible_output_and_remains_eligible_for_stat
         text_started: false,
         text_closed: false,
         saw_tool_use: false,
+        launch_fanout_open: false,
         seen_tool_ids: HashSet::new(),
         blocked_subagent: false,
         saw_result: false,
@@ -480,6 +487,7 @@ async fn shows_activity_status_before_delayed_subscription_output() {
         text_started: false,
         text_closed: false,
         saw_tool_use: false,
+        launch_fanout_open: false,
         seen_tool_ids: HashSet::new(),
         blocked_subagent: false,
         saw_result: false,
@@ -522,6 +530,7 @@ async fn falls_back_to_result_text_and_estimated_tokens() {
         text_started: false,
         text_closed: false,
         saw_tool_use: false,
+        launch_fanout_open: false,
         seen_tool_ids: HashSet::new(),
         blocked_subagent: false,
         saw_result: false,
@@ -554,6 +563,7 @@ async fn rejects_unsuccessful_results() {
         text_started: false,
         text_closed: false,
         saw_tool_use: false,
+        launch_fanout_open: false,
         seen_tool_ids: HashSet::new(),
         blocked_subagent: false,
         saw_result: false,
@@ -580,6 +590,7 @@ async fn collects_sequential_subscription_agents_into_one_outer_tool_round() {
         text_started: false,
         text_closed: false,
         saw_tool_use: false,
+        launch_fanout_open: false,
         seen_tool_ids: HashSet::new(),
         blocked_subagent: false,
         saw_result: false,
@@ -620,7 +631,7 @@ async fn collects_sequential_subscription_agents_into_one_outer_tool_round() {
     stream
         .activity_keepalive(&sender)
         .await
-        .expect("show progress while collecting tools");
+        .expect("keepalive after tool_use must not reopen the turn");
     stream
         .handle_line(
             &sender,
@@ -648,12 +659,43 @@ async fn collects_sequential_subscription_agents_into_one_outer_tool_round() {
     assert!(output.contains(r#""name":"Task""#));
     assert!(output.contains(r#""input":{}"#));
     assert!(output.contains("input_json_delta"));
-    assert!(output.contains("Claudex is still working"));
-    assert!(output.contains("signature_delta"));
+    assert!(!output.contains("Claudex is still working"));
+    assert!(!output.contains("signature_delta"));
     assert!(!output.contains("blocked inner tool"));
     assert_eq!(output.matches(r#""stop_reason":"tool_use""#).count(), 1);
     assert!(output.contains(r#""stop_reason":"tool_use""#));
     assert!(output.find("input_json_delta") < output.find("content_block_stop"));
+}
+
+#[tokio::test]
+async fn consume_reader_forwards_three_sequential_agent_launches() {
+    let (sender, mut receiver) = channel();
+    let mut options = SubscriptionOptions::internal(
+        Arc::new(tokio::sync::Semaphore::new(1)),
+        Duration::from_secs(2),
+    );
+    options.tools = vec!["Task".to_owned()];
+    options.tool_context = Some(explicit_subscription_tool_context());
+    let input = [
+        json!({"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"tool_use","id":"agent-1","name":"Agent","input":{"prompt":"scope a","subagent_type":"claudex-gpt-spark"}}]}}),
+        json!({"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"tool_use","id":"agent-2","name":"Agent","input":{"prompt":"scope b","subagent_type":"claudex-grok"}}]}}),
+        json!({"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"tool_use","id":"agent-3","name":"Agent","input":{"prompt":"scope c","subagent_type":"claudex-gpt-spark"}}]}}),
+        json!({"type":"result","subtype":"success","result":"done"}),
+    ]
+    .into_iter()
+    .map(|value| value.to_string())
+    .collect::<Vec<_>>()
+    .join("\n");
+    SubscriptionStream::consume_reader_for_test(
+        Cursor::new(input),
+        &sender,
+        &options,
+        "subscription-test",
+    )
+    .await
+    .expect("three sequential Agent launches");
+    let output = output(&mut receiver).await;
+    assert_eq!(output.matches(r#""name":"Task""#).count(), 3);
 }
 
 #[tokio::test]
@@ -664,6 +706,7 @@ async fn blocked_agent_after_a_forwarded_tool_uses_a_fresh_text_block() {
         text_started: false,
         text_closed: false,
         saw_tool_use: false,
+        launch_fanout_open: false,
         seen_tool_ids: HashSet::new(),
         blocked_subagent: false,
         saw_result: false,
@@ -748,6 +791,7 @@ async fn resumes_text_on_a_fresh_index_after_internal_web_search() {
         text_started: false,
         text_closed: false,
         saw_tool_use: false,
+        launch_fanout_open: false,
         seen_tool_ids: HashSet::new(),
         blocked_subagent: false,
         saw_result: false,
@@ -805,6 +849,7 @@ async fn deduplicates_replayed_tool_ids_and_preserves_tool_terminal_state() {
         text_started: false,
         text_closed: false,
         saw_tool_use: false,
+        launch_fanout_open: false,
         seen_tool_ids: HashSet::new(),
         blocked_subagent: false,
         saw_result: false,
@@ -860,16 +905,16 @@ async fn deduplicates_replayed_tool_ids_and_preserves_tool_terminal_state() {
 }
 
 fn explicit_subscription_tool_context() -> SubscriptionToolContext {
-    SubscriptionToolContext {
-        agent_efforts: Arc::new(AgentEffortIntents::default()),
-        model_catalog: ModelCatalog::default(),
-        client_user_id: None,
-        parent_model: "parent-model".to_owned(),
-        system: json!(null),
-        user_messages: vec![json!({
+    SubscriptionToolContext::for_tests(
+        Arc::new(AgentEffortIntents::default()),
+        ModelCatalog::default(),
+        None,
+        "parent-model",
+        vec![json!({
             "role":"user", "content":"Claudex routing for this turn: {\"providers\":{},\"selected_workers\":[{\"agent\":\"claudex-gpt-spark\",\"model\":\"gpt-5.3-codex-spark\",\"effort\":\"xhigh\"},{\"agent\":\"claudex-grok\",\"model\":\"grok-4.5\",\"effort\":\"high\"}]}"
         })],
-    }
+        json!(null),
+    )
 }
 
 fn routed_subscription_tool_context() -> SubscriptionToolContext {
@@ -896,19 +941,20 @@ async fn sanitizes_and_records_contextual_agent_tool_input() {
         text_started: true,
         text_closed: false,
         saw_tool_use: false,
+        launch_fanout_open: false,
         seen_tool_ids: HashSet::new(),
         blocked_subagent: false,
         saw_result: false,
         next_index: 1,
         tools: vec!["Agent".to_owned()],
-        tool_context: Some(SubscriptionToolContext {
-            agent_efforts: intents,
-            model_catalog: ModelCatalog::default(),
-            client_user_id: Some("user".to_owned()),
-            parent_model: "parent-model".to_owned(),
-            system: json!([{"type":"text","text":"system message"}]),
+        tool_context: Some(SubscriptionToolContext::for_tests(
+            intents,
+            ModelCatalog::default(),
+            Some("user".to_owned()),
+            "parent-model",
             user_messages,
-        }),
+            json!([{"type":"text","text":"system message"}]),
+        )),
         activity: SubscriptionActivity::default(),
     };
     stream
@@ -945,6 +991,7 @@ async fn rejects_each_malformed_subscription_tool_shape() {
         text_started: false,
         text_closed: false,
         saw_tool_use: false,
+        launch_fanout_open: false,
         seen_tool_ids: HashSet::new(),
         blocked_subagent: false,
         saw_result: false,
@@ -993,19 +1040,20 @@ async fn ignores_non_top_level_tool_events_and_exercises_completed_state() {
         text_started: false,
         text_closed: false,
         saw_tool_use: false,
+        launch_fanout_open: false,
         seen_tool_ids: HashSet::new(),
         blocked_subagent: false,
         saw_result: false,
         next_index: 0,
         tools: vec!["Read".to_owned(), "Agent".to_owned()],
-        tool_context: Some(SubscriptionToolContext {
-            agent_efforts: Arc::new(AgentEffortIntents::default()),
-            model_catalog: ModelCatalog::default(),
-            client_user_id: None,
-            parent_model: "parent-model".to_owned(),
-            system: json!([{"type":"text","text":"system message"}]),
-            user_messages: Vec::new(),
-        }),
+        tool_context: Some(SubscriptionToolContext::for_tests(
+            Arc::new(AgentEffortIntents::default()),
+            ModelCatalog::default(),
+            None,
+            "parent-model",
+            Vec::new(),
+            json!([{"type":"text","text":"system message"}]),
+        )),
         activity: SubscriptionActivity::default(),
     };
     for envelope in [
@@ -1073,19 +1121,20 @@ async fn blocks_an_unsupported_subagent_without_failing_the_parent_stream() {
         text_started: false,
         text_closed: false,
         saw_tool_use: false,
+        launch_fanout_open: false,
         seen_tool_ids: HashSet::new(),
         blocked_subagent: false,
         saw_result: false,
         next_index: 0,
         tools: vec!["Agent".to_owned()],
-        tool_context: Some(SubscriptionToolContext {
-            agent_efforts: Arc::new(AgentEffortIntents::default()),
-            model_catalog: ModelCatalog::default(),
-            client_user_id: None,
-            parent_model: "claude-haiku-4-5".to_owned(),
-            system: json!(null),
-            user_messages: Vec::new(),
-        }),
+        tool_context: Some(SubscriptionToolContext::for_tests(
+            Arc::new(AgentEffortIntents::default()),
+            ModelCatalog::default(),
+            None,
+            "claude-haiku-4-5",
+            Vec::new(),
+            json!(null),
+        )),
         activity: SubscriptionActivity::default(),
     };
     stream
@@ -1127,28 +1176,282 @@ async fn blocks_an_unsupported_subagent_without_failing_the_parent_stream() {
 }
 
 #[tokio::test]
+async fn blocks_exhausted_ollama_glm_launch_without_emitting_tool_use() {
+    use std::time::SystemTime;
+
+    use crate::anthropic::provider_auth_cooldown;
+
+    let root = tempfile::tempdir().expect("ollama cooldown fixture");
+    let cache = provider_auth_cooldown::cache_path_for_home(root.path());
+    assert!(
+        provider_auth_cooldown::record_rate_limit_at(
+            Some(&cache),
+            "ollama",
+            "429 Too Many Requests",
+            SystemTime::now(),
+        )
+        .is_some()
+    );
+    let mut catalog = ModelCatalog::default();
+    catalog
+        .set_worker_routes(vec![
+            WorkerRoute::new("claudex-ollama-glm-5-2", "glm-5.2:cloud", "max")
+                .with_usage_provider(Some("ollama".to_owned())),
+            WorkerRoute::new("claudex-gpt-spark", "gpt-5.3-codex-spark", "xhigh"),
+        ])
+        .expect("install workers");
+    let mut context = SubscriptionToolContext::for_tests(
+        Arc::new(AgentEffortIntents::default()),
+        catalog,
+        None,
+        "claude-opus-5",
+        vec![json!({
+            "role":"user",
+            "content":"Claudex routing for this turn: {\"providers\":{},\"selected_workers\":[{\"agent\":\"claudex-ollama-glm-5-2\",\"model\":\"glm-5.2:cloud\",\"effort\":\"max\"},{\"agent\":\"claudex-gpt-spark\",\"model\":\"gpt-5.3-codex-spark\",\"effort\":\"xhigh\"}],\"disabled_subagent_models\":[]}"
+        })],
+        json!(null),
+    );
+    context.auth_cache = Some(cache);
+    let (sender, mut receiver) = channel();
+    let mut stream = SubscriptionStream {
+        text_started: false,
+        text_closed: false,
+        saw_tool_use: false,
+        launch_fanout_open: false,
+        seen_tool_ids: HashSet::new(),
+        blocked_subagent: false,
+        saw_result: false,
+        next_index: 0,
+        tools: vec!["Agent".to_owned()],
+        tool_context: Some(context),
+        activity: SubscriptionActivity::default(),
+    };
+    stream
+        .handle_line(
+            &sender,
+            &json!({
+                "type":"assistant", "parent_tool_use_id":null,
+                "message":{"content":[{
+                    "type":"tool_use", "id":"ollama-limit", "name":"Agent",
+                    "input":{"prompt":"work", "subagent_type":"claudex-ollama-glm-5-2"}
+                }]}
+            })
+            .to_string(),
+        )
+        .await
+        .expect("exhausted ollama launch must not fail the parent stream");
+    assert!(!stream.saw_tool_use);
+    stream
+        .finish(
+            &sender,
+            &json!({"type":"result", "subtype":"success", "result":""}),
+        )
+        .await
+        .expect("finish parent stream");
+    let output = output(&mut receiver).await;
+    assert!(
+        output.contains("glm-5.2:cloud") && output.contains("cooling down"),
+        "{output}"
+    );
+    assert!(!output.contains(r#""type":"tool_use""#));
+    assert_valid_stream(&output, Some("end_turn"));
+}
+
+#[tokio::test]
+async fn blocks_routing_disabled_ollama_glm_without_cooldown_file() {
+    let mut catalog = ModelCatalog::default();
+    catalog
+        .set_worker_routes(vec![WorkerRoute::new(
+            "claudex-ollama-glm-5-2",
+            "glm-5.2:cloud",
+            "max",
+        )])
+        .expect("install glm worker");
+    let (sender, mut receiver) = channel();
+    let mut stream = SubscriptionStream {
+        text_started: false,
+        text_closed: false,
+        saw_tool_use: false,
+        launch_fanout_open: false,
+        seen_tool_ids: HashSet::new(),
+        blocked_subagent: false,
+        saw_result: false,
+        next_index: 0,
+        tools: vec!["Agent".to_owned()],
+        tool_context: Some(SubscriptionToolContext::for_tests(
+            Arc::new(AgentEffortIntents::default()),
+            catalog,
+            None,
+            "claude-opus-5",
+            vec![json!({
+                "role":"user",
+                "content":"Claudex routing for this turn: {\"providers\":{\"ollama-glm\":{\"available\":false,\"reason\":\"exhausted\",\"model\":\"glm-5.2:cloud\"}},\"selected_workers\":[{\"agent\":\"claudex-gpt-spark\",\"model\":\"gpt-5.3-codex-spark\",\"effort\":\"xhigh\"}],\"disabled_subagent_models\":[\"glm-5.2:cloud\"]}"
+            })],
+            json!(null),
+        )),
+        activity: SubscriptionActivity::default(),
+    };
+    stream
+        .handle_line(
+            &sender,
+            &json!({
+                "type":"assistant", "parent_tool_use_id":null,
+                "message":{"content":[{
+                    "type":"tool_use", "id":"ollama-weekly-limit", "name":"Agent",
+                    "input":{"prompt":"work", "subagent_type":"claudex-ollama-glm-5-2"}
+                }]}
+            })
+            .to_string(),
+        )
+        .await
+        .expect("CodexBar-disabled glm must not fail the parent stream");
+    assert!(!stream.saw_tool_use);
+    stream
+        .finish(
+            &sender,
+            &json!({"type":"result", "subtype":"success", "result":""}),
+        )
+        .await
+        .expect("finish parent stream");
+    let output = output(&mut receiver).await;
+    assert!(
+        output.contains("glm-5.2:cloud") && output.contains("cooling down"),
+        "{output}"
+    );
+    assert!(!output.contains(r#""type":"tool_use""#));
+}
+
+#[tokio::test]
+async fn skips_task_stop_for_background_shell_or_foreign_ids() {
+    let (sender, mut receiver) = channel();
+    let mut stream = SubscriptionStream {
+        text_started: false,
+        text_closed: false,
+        saw_tool_use: false,
+        launch_fanout_open: false,
+        seen_tool_ids: HashSet::new(),
+        blocked_subagent: false,
+        saw_result: false,
+        next_index: 0,
+        tools: vec!["TaskStop".to_owned(), "Stop Task".to_owned()],
+        tool_context: None,
+        activity: SubscriptionActivity::default(),
+    };
+    stream
+        .handle_line(
+            &sender,
+            &json!({
+                "type":"assistant", "parent_tool_use_id":null,
+                "message":{"content":[{
+                    "type":"tool_use", "id":"stop-foreign", "name":"TaskStop",
+                    "input":{"task_id":"b13mjnjlj"}
+                }]}
+            })
+            .to_string(),
+        )
+        .await
+        .expect("skip foreign TaskStop");
+    stream
+        .handle_line(
+            &sender,
+            &json!({
+                "type":"assistant", "parent_tool_use_id":null,
+                "message":{"content":[{
+                    "type":"tool_use", "id":"stop-shell", "name":"Stop Task",
+                    "input":{"task_id":"bjh859kgm"}
+                }]}
+            })
+            .to_string(),
+        )
+        .await
+        .expect("skip bash-background TaskStop");
+    stream
+        .finish(
+            &sender,
+            &json!({"type":"result","subtype":"success","result":"done"}),
+        )
+        .await
+        .expect("finish skipped TaskStop");
+    assert!(!stream.saw_tool_use);
+    let output = output(&mut receiver).await;
+    assert_valid_stream(&output, Some("end_turn"));
+    assert!(!output.contains(r#""type":"tool_use""#));
+    assert!(!output.contains("No task found"));
+    assert!(output.contains("b13mjnjlj"));
+    assert!(output.contains("TaskStop skipped"));
+    assert!(output.contains(r#""stop_reason":"end_turn""#));
+}
+
+#[tokio::test]
+async fn forwards_task_stop_for_live_claude_code_agent_ids() {
+    let (sender, mut receiver) = channel();
+    let mut stream = SubscriptionStream {
+        text_started: false,
+        text_closed: false,
+        saw_tool_use: false,
+        launch_fanout_open: false,
+        seen_tool_ids: HashSet::new(),
+        blocked_subagent: false,
+        saw_result: false,
+        next_index: 0,
+        tools: vec!["TaskStop".to_owned()],
+        tool_context: None,
+        activity: SubscriptionActivity::default(),
+    };
+    stream
+        .handle_line(
+            &sender,
+            &json!({
+                "type":"assistant", "parent_tool_use_id":null,
+                "message":{"content":[{
+                    "type":"tool_use", "id":"stop-agent", "name":"TaskStop",
+                    "input":{"task_id":"a4b2412c427ee5327"}
+                }]}
+            })
+            .to_string(),
+        )
+        .await
+        .expect("forward live Agent TaskStop");
+    stream
+        .finish(
+            &sender,
+            &json!({"type":"result","subtype":"success","result":"done"}),
+        )
+        .await
+        .expect("finish live Agent TaskStop");
+    assert!(stream.saw_tool_use);
+    let output = output(&mut receiver).await;
+    assert_valid_stream(&output, Some("tool_use"));
+    assert!(output.contains(r#""type":"tool_use""#));
+    assert!(output.contains("a4b2412c427ee5327"));
+    assert!(output.contains(r#""stop_reason":"tool_use""#));
+    assert!(!output.contains("TaskStop skipped"));
+}
+
+#[tokio::test]
 async fn accepts_a_valid_agent_model_without_a_prompt() {
     let (_sender, _receiver) = channel();
     let stream = SubscriptionStream {
         text_started: false,
         text_closed: false,
         saw_tool_use: false,
+        launch_fanout_open: false,
         seen_tool_ids: HashSet::new(),
         blocked_subagent: false,
         saw_result: false,
         next_index: 0,
         tools: vec!["Agent".to_owned()],
-        tool_context: Some(SubscriptionToolContext {
-            agent_efforts: Arc::new(AgentEffortIntents::default()),
-            model_catalog: ModelCatalog::default(),
-            client_user_id: None,
-            parent_model: "parent-model".to_owned(),
-            system: json!(null),
-            user_messages: vec![json!({
+        tool_context: Some(SubscriptionToolContext::for_tests(
+            Arc::new(AgentEffortIntents::default()),
+            ModelCatalog::default(),
+            None,
+            "parent-model",
+            vec![json!({
                 "role":"user",
                 "content":"Use gpt-test for this worker"
             })],
-        }),
+            json!(null),
+        )),
         activity: SubscriptionActivity::default(),
     };
     assert_eq!(
@@ -1161,6 +1464,81 @@ async fn accepts_a_valid_agent_model_without_a_prompt() {
             .expect("model-only Agent input"),
         json!({"run_in_background": true})
     );
+}
+
+#[tokio::test]
+async fn prepare_tool_input_rewrites_same_scope_launch_to_resume() {
+    let registry = Arc::new(SubagentReuseRegistry::default());
+    let mut recorded = MessagesRequest {
+        model: "main".to_owned(),
+        system: json!("stable system"),
+        messages: vec![
+            json!({
+                "role":"assistant",
+                "content":[{
+                    "type":"tool_use",
+                    "id":"tool-a",
+                    "name":"Agent",
+                    "input":{
+                        "prompt":"Audit the Rust adapter tests",
+                        "claudex_model":"gpt-test"
+                    }
+                }]
+            }),
+            json!({
+                "role":"user",
+                "content":[{
+                    "type":"tool_result",
+                    "tool_use_id":"tool-a",
+                    "content":[{"type":"text","text":"Async agent launched successfully.\\nagentId: worker-a"}]
+                }]
+            }),
+        ],
+        tools: vec![json!({"name":"Agent"})],
+        stream: false,
+        output_config: Value::Null,
+        metadata: json!({"_claudex_transport_identity":{"session_id":"session-a"}}),
+        working_directory: None,
+        disabled_subagent_models: Default::default(),
+        claudex_collaborator_model: None,
+    };
+    registry.observe_and_restore(&mut recorded);
+
+    let mut context = SubscriptionToolContext::for_tests(
+        Arc::new(AgentEffortIntents::default()),
+        ModelCatalog::default(),
+        None,
+        "parent-model",
+        vec![json!({"role":"user","content":"Use gpt-test for this worker"})],
+        json!(null),
+    );
+    context.session_id = Some("session-a".to_owned());
+    context.subagent_reuse = Arc::clone(&registry);
+    let stream = SubscriptionStream {
+        text_started: false,
+        text_closed: false,
+        saw_tool_use: false,
+        launch_fanout_open: false,
+        seen_tool_ids: HashSet::new(),
+        blocked_subagent: false,
+        saw_result: false,
+        next_index: 0,
+        tools: vec!["Agent".to_owned()],
+        tool_context: Some(context),
+        activity: SubscriptionActivity::default(),
+    };
+    let public = stream
+        .prepare_tool_input(
+            "Agent",
+            "agent-reuse",
+            &json!({
+                "prompt":"Audit the Rust adapter tests",
+                "claudex_model":"gpt-test"
+            }),
+        )
+        .expect("same-scope launch should resume");
+    assert_eq!(public["resume"], "worker-a");
+    assert_eq!(public["run_in_background"], true);
 }
 
 #[tokio::test]
@@ -1178,19 +1556,20 @@ async fn routes_a_standard_general_purpose_agent_to_a_claudex_worker() {
         text_started: false,
         text_closed: false,
         saw_tool_use: false,
+        launch_fanout_open: false,
         seen_tool_ids: HashSet::new(),
         blocked_subagent: false,
         saw_result: false,
         next_index: 0,
         tools: vec!["Agent".to_owned()],
-        tool_context: Some(SubscriptionToolContext {
-            agent_efforts: Arc::new(AgentEffortIntents::default()),
+        tool_context: Some(SubscriptionToolContext::for_tests(
+            Arc::new(AgentEffortIntents::default()),
             model_catalog,
-            client_user_id: None,
-            parent_model: "claude-sonnet-5".to_owned(),
-            system: json!(null),
-            user_messages: Vec::new(),
-        }),
+            None,
+            "claude-sonnet-5",
+            Vec::new(),
+            json!(null),
+        )),
         activity: SubscriptionActivity::default(),
     };
     let routed = stream
@@ -1410,6 +1789,88 @@ async fn fast_subscription_result_skips_activity_status_and_requires_result_even
             .await
             .expect_err("missing result");
     assert!(error.to_string().contains("without a result"));
+}
+
+#[tokio::test]
+async fn keepalive_after_forwarded_tool_use_does_not_inject_still_working() {
+    let (sender, mut receiver) = channel();
+    let mut stream = SubscriptionStream {
+        text_started: false,
+        text_closed: false,
+        saw_tool_use: false,
+        launch_fanout_open: false,
+        seen_tool_ids: HashSet::new(),
+        blocked_subagent: false,
+        saw_result: false,
+        next_index: 0,
+        tools: vec!["Bash".to_owned()],
+        tool_context: None,
+        activity: SubscriptionActivity::default(),
+    };
+    stream
+        .handle_line(
+            &sender,
+            &json!({
+                "type":"assistant",
+                "parent_tool_use_id":null,
+                "message":{"content":[{
+                    "type":"tool_use", "id":"bash-1", "name":"Bash",
+                    "input":{"command":"true"}
+                }]}
+            })
+            .to_string(),
+        )
+        .await
+        .expect("forward Bash");
+    stream
+        .activity_keepalive(&sender)
+        .await
+        .expect("silent keepalive after tool_use");
+    stream
+        .finish(
+            &sender,
+            &json!({"type":"result","subtype":"success","result":"done"}),
+        )
+        .await
+        .expect("finish Bash tool_use");
+    let frames = output(&mut receiver).await;
+    assert_valid_stream(&frames, Some("tool_use"));
+    assert!(!frames.contains("Claudex is still working"));
+    assert!(!frames.contains('\u{200b}'));
+}
+
+#[tokio::test]
+async fn forwarded_tool_use_releases_the_client_before_subscription_result() {
+    let (sender, mut receiver) = channel();
+    let mut options = SubscriptionOptions::internal(
+        Arc::new(tokio::sync::Semaphore::new(1)),
+        Duration::from_secs(8),
+    );
+    options.tools = vec!["Bash".to_owned()];
+    options.initial_activity_delay = Duration::from_millis(30);
+    options.activity_keepalive_interval = Duration::from_millis(30);
+    let started = tokio::time::Instant::now();
+    consume_subscription_stream_with_options(
+        &mut child(
+            r#"printf '%s\n' '{"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"tool_use","id":"bash-1","name":"Bash","input":{"command":"true"}}]}}'; sleep 2.5; printf '%s\n' '{"type":"result","subtype":"success","result":"late"}'"#,
+        ),
+        &sender,
+        &options,
+        "subscription-test",
+    )
+    .await
+    .expect("tool_use must end the SSE turn without waiting for subscription result");
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "client stayed queued for {elapsed:?} after tool_use"
+    );
+    let frames = output(&mut receiver).await;
+    assert_valid_stream(&frames, Some("tool_use"));
+    assert!(frames.contains(r#""name":"Bash""#));
+    assert!(frames.contains("bash-1"));
+    assert!(!frames.contains("Claudex is still working"));
+    assert!(!frames.contains(r#""text":"late""#));
 }
 
 #[tokio::test]
@@ -1701,14 +2162,14 @@ async fn blocked_subagent_terminates_a_hanging_child_and_finishes_the_stream() {
         Duration::from_secs(2),
     );
     options.tools = vec!["Agent".to_owned()];
-    options.tool_context = Some(SubscriptionToolContext {
-        agent_efforts: Arc::new(AgentEffortIntents::default()),
-        model_catalog: ModelCatalog::default(),
-        client_user_id: None,
-        parent_model: "claude-haiku-4-5".to_owned(),
-        system: json!(null),
-        user_messages: Vec::new(),
-    });
+    options.tool_context = Some(SubscriptionToolContext::for_tests(
+        Arc::new(AgentEffortIntents::default()),
+        ModelCatalog::default(),
+        None,
+        "claude-haiku-4-5",
+        Vec::new(),
+        json!(null),
+    ));
     let fixture = BackgroundSleepFixture::new();
     let blocked_event = r#"printf '%s\n' '{"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"tool_use","id":"unsupported","name":"Agent","input":{"prompt":"work","subagent_type":"claudex-sonnet"}}]}}'"#;
     let mut child = child(&fixture.script(blocked_event));
@@ -2027,18 +2488,19 @@ async fn hydrates_auxiliary_claude_subagent_routes_without_adapter_fields_in_pub
             ),
         ])
         .expect("auxiliary routes");
-    let context = super::super::subscription::SubscriptionToolContext {
-        agent_efforts: Arc::new(AgentEffortIntents::default()),
+    let context = super::super::subscription::SubscriptionToolContext::for_tests(
+        Arc::new(AgentEffortIntents::default()),
         model_catalog,
-        client_user_id: None,
-        parent_model: "claude-opus-5".to_owned(),
-        system: json!(null),
-        user_messages: Vec::new(),
-    };
+        None,
+        "claude-opus-5",
+        Vec::new(),
+        json!(null),
+    );
     let stream = SubscriptionStream {
         text_started: false,
         text_closed: false,
         saw_tool_use: false,
+        launch_fanout_open: false,
         seen_tool_ids: HashSet::new(),
         blocked_subagent: false,
         saw_result: false,

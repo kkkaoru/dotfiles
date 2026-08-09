@@ -1,4 +1,11 @@
-use std::{cell::RefCell, fs, os::unix::fs::PermissionsExt, path::PathBuf, rc::Rc};
+use std::{
+    cell::RefCell,
+    fs,
+    os::unix::fs::PermissionsExt,
+    path::PathBuf,
+    rc::Rc,
+    time::{Duration, Instant},
+};
 
 use agent_client_protocol::{self as acp, Agent as _};
 use tempfile::TempDir;
@@ -125,6 +132,10 @@ async fn serve_io_runs_headless_turn_and_emits_tool_progress() {
             assert!(
                 rendered.contains("read_file") || rendered.contains("Command Code headless"),
                 "{rendered}"
+            );
+            assert!(
+                rendered.contains("InProgress") || rendered.contains("command-code-turn"),
+                "turn chrome missing: {rendered}"
             );
             let _ = connection
                 .set_session_model(acp::SetSessionModelRequest::new(
@@ -289,6 +300,153 @@ async fn serve_io_rejects_empty_prompt() {
                 .prompt(acp::PromptRequest::new(session.session_id, Vec::new()))
                 .await;
             assert!(error.is_err());
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn serve_io_cancel_kills_in_flight_cmd_within_two_seconds() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (_root, program) = mock_cmd("#!/bin/sh\nexec sleep 30\n");
+            let (client_write, server_read) = tokio::io::duplex(16 * 1024);
+            let (server_write, client_read) = tokio::io::duplex(16 * 1024);
+            let updates = Rc::new(RefCell::new(Vec::new()));
+            tokio::task::spawn_local(serve_io(options_for(program), server_read, server_write));
+            let (connection, io) = acp::ClientSideConnection::new(
+                CaptureClient {
+                    updates: Rc::clone(&updates),
+                },
+                client_write.compat_write(),
+                client_read.compat(),
+                |future| {
+                    tokio::task::spawn_local(future);
+                },
+            );
+            tokio::task::spawn_local(async move {
+                let _ = io.await;
+            });
+            connection
+                .initialize(acp::InitializeRequest::new(acp::ProtocolVersion::V1))
+                .await
+                .expect("initialize");
+            let session = connection
+                .new_session(acp::NewSessionRequest::new(
+                    std::env::current_dir().unwrap(),
+                ))
+                .await
+                .expect("session");
+            let prompt_fut = connection.prompt(acp::PromptRequest::new(
+                session.session_id.clone(),
+                vec![acp::ContentBlock::Text(acp::TextContent::new("slow"))],
+            ));
+            tokio::pin!(prompt_fut);
+            tokio::time::timeout(Duration::from_secs(2), async {
+                loop {
+                    tokio::select! {
+                        result = &mut prompt_fut => {
+                            panic!("prompt finished before cancel: {result:?}");
+                        }
+                        _ = tokio::time::sleep(Duration::from_millis(10)) => {
+                            if updates
+                                .borrow()
+                                .iter()
+                                .any(|update| update.contains("Command Code headless starting"))
+                            {
+                                return;
+                            }
+                        }
+                    }
+                }
+            })
+            .await
+            .expect("started progress before cancel");
+            let started = Instant::now();
+            connection
+                .cancel(acp::CancelNotification::new(session.session_id.clone()))
+                .await
+                .expect("cancel in flight");
+            let response = tokio::time::timeout(Duration::from_secs(2), prompt_fut)
+                .await
+                .expect("cancel should settle within 2s")
+                .expect("cancelled prompt");
+            assert_eq!(response.stop_reason, acp::StopReason::Cancelled);
+            assert!(
+                started.elapsed() < Duration::from_secs(2),
+                "cancel took {:?}",
+                started.elapsed()
+            );
+            let rendered = updates.borrow().join("\n");
+            assert!(
+                rendered.contains("Command Code cancelled") || rendered.contains("Failed"),
+                "cancel must settle TUI chrome: {rendered}"
+            );
+        })
+        .await;
+}
+
+#[tokio::test]
+async fn serve_io_streams_text_delta_before_cmd_exits() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (_root, program) = mock_cmd(
+                "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"event\",\"event\":{\"type\":\"text_delta\",\"delta\":\"LIVE_DELTA\"}}'\nsleep 0.4\nprintf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"sessionId\":\"cc-live\",\"stopReason\":\"end_turn\",\"finalText\":\"DONE\"}'\n",
+            );
+            let (client_write, server_read) = tokio::io::duplex(64 * 1024);
+            let (server_write, client_read) = tokio::io::duplex(64 * 1024);
+            let updates = Rc::new(RefCell::new(Vec::new()));
+            tokio::task::spawn_local(serve_io(options_for(program), server_read, server_write));
+            let (connection, io) = acp::ClientSideConnection::new(
+                CaptureClient {
+                    updates: Rc::clone(&updates),
+                },
+                client_write.compat_write(),
+                client_read.compat(),
+                |future| {
+                    tokio::task::spawn_local(future);
+                },
+            );
+            tokio::task::spawn_local(async move {
+                let _ = io.await;
+            });
+            connection
+                .initialize(acp::InitializeRequest::new(acp::ProtocolVersion::V1))
+                .await
+                .expect("initialize");
+            let session = connection
+                .new_session(acp::NewSessionRequest::new(
+                    std::env::current_dir().unwrap(),
+                ))
+                .await
+                .expect("session");
+            let prompt_fut = connection.prompt(acp::PromptRequest::new(
+                session.session_id.clone(),
+                vec![acp::ContentBlock::Text(acp::TextContent::new("live"))],
+            ));
+            tokio::pin!(prompt_fut);
+            tokio::time::timeout(Duration::from_secs(2), async {
+                loop {
+                    tokio::select! {
+                        result = &mut prompt_fut => {
+                            panic!("prompt finished before live delta: {result:?}");
+                        }
+                        _ = tokio::time::sleep(Duration::from_millis(20)) => {
+                            if updates.borrow().iter().any(|update| update.contains("LIVE_DELTA"))
+                            {
+                                return;
+                            }
+                        }
+                    }
+                }
+            })
+            .await
+            .expect("text_delta must reach ACP before cmd exits");
+            let response = prompt_fut.await.expect("live prompt");
+            assert_eq!(response.stop_reason, acp::StopReason::EndTurn);
+            let rendered = updates.borrow().join("\n");
+            assert!(rendered.contains("DONE"), "{rendered}");
         })
         .await;
 }

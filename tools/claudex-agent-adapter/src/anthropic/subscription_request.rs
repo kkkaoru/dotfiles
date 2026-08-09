@@ -51,8 +51,9 @@ pub(super) fn subscription_request_prompt(request: &MessagesRequest) -> String {
             "background launches, start a concrete independent action or end the turn promptly with ",
             "concise user-visible status; never keep reasoning while waiting for completion ",
             "notifications. For an ordinary related follow-up, reuse the exact compatible worker ",
-            "through native Agent/Task results and TaskOutput instead of churning processes with ",
-            "fresh launches; SendMessage is reserved for an explicitly active Agent Teams session, ",
+            "by setting resume to its agentId on Agent/Task, then use native results and TaskOutput ",
+            "instead of churning processes with fresh launches; SendMessage is reserved for an ",
+            "explicitly active Agent Teams session, ",
             "sending the smallest sufficient self-contained delta including unseen evidence. Do not ",
             "send a mid-flight message merely to repeat scope or restrictions already present in the ",
             "original delegation. A follow-up queued to a busy worker does not add parallel capacity; ",
@@ -163,10 +164,19 @@ pub(super) fn requested_tools_for_request(
     omit_task_bookkeeping: bool,
 ) -> Vec<String> {
     let allow_team_messages = super::subagent_reuse::agent_teams_enabled(request);
+    let hide_main_only_tools = super::agent_effort::is_subagent_request(request);
     let mut provider_tools = request.tools.clone();
     if !allow_team_messages {
         provider_tools
             .retain(|tool| tool.get("name").and_then(Value::as_str) != Some("SendMessage"));
+    }
+    if hide_main_only_tools {
+        provider_tools.retain(|tool| {
+            !tool
+                .get("name")
+                .and_then(Value::as_str)
+                .is_some_and(super::session::is_main_session_only_tool)
+        });
     }
     requested_tools_from_request(
         &provider_tools,

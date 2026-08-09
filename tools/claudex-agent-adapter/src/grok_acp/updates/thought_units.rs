@@ -24,7 +24,7 @@ struct UnitState {
 }
 
 fn close_paragraph(state: &mut UnitState, head: &str, parts: &mut Vec<(i64, String)>) {
-    if !head.is_empty() {
+    if !head.trim().is_empty() {
         parts.push((state.index, head.to_owned()));
         state.open = false;
         state.index = state.index.saturating_add(1);
@@ -49,7 +49,7 @@ impl ThoughtUnits {
             close_paragraph(state, head, &mut parts);
             remaining = tail;
         }
-        if !remaining.is_empty() {
+        if !remaining.trim().is_empty() {
             parts.push((state.index, remaining.to_owned()));
             state.open = true;
         }
@@ -80,6 +80,17 @@ impl ThoughtUnits {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ignores_whitespace_only_chunks() {
+        let units = ThoughtUnits::default();
+        assert!(units.partition("s", "\n").is_empty());
+        assert!(units.partition("s", "  \n\n  ").is_empty());
+        assert_eq!(
+            units.partition("s", "Read queue-consumer"),
+            vec![(0, "Read queue-consumer".into())]
+        );
+    }
 
     #[test]
     fn keeps_streaming_tokens_in_one_unit() {

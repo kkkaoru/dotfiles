@@ -38,24 +38,32 @@ pub(super) async fn reject_unrequested_tool(
         provider_tool_name = %call.name,
         "rejected a provider tool that Claude Code did not supply"
     );
+    let (text, success) = unrequested_tool_reply(&call.name);
     bridge
         .app
         .respond_for_model(
             &session.model,
             call.request_id,
             json!({
-                "contentItems":[{
-                    "type":"inputText",
-                    "text":format!(
-                        "Tool `{}` was not supplied by Claude Code and was not executed.",
-                        call.name
-                    )
-                }],
-                "success":false
+                "contentItems":[{"type":"inputText","text":text}],
+                "success":success
             }),
         )
         .await
         .context("failed to reject an unrequested provider tool")
+}
+
+pub(in crate::anthropic) fn unrequested_tool_reply(name: &str) -> (String, bool) {
+    if crate::anthropic::session::is_main_session_only_tool(name) {
+        return (
+            "Built-in advisor() is main-session only and was not executed. Continue the delegated task without it. Do not retry advisor(), and do not launch models listed in disabled_subagent_models.".to_owned(),
+            true,
+        );
+    }
+    (
+        format!("Tool `{name}` was not supplied by Claude Code and was not executed."),
+        false,
+    )
 }
 
 impl SegmentBuilder {
@@ -78,20 +86,28 @@ impl SegmentBuilder {
                 &mut arguments,
                 &context.session.model,
             );
+            context
+                .bridge
+                .rewrite_exhausted_agent_launch(&mut arguments);
         }
         if self
-            .reject_disabled_subagent(context, original_name, &arguments, request_id)
+            .reject_disabled_subagent(context, original_name, &arguments, request_id.clone())
             .await?
         {
             return Ok(());
         }
-        crate::anthropic::agent_effort::validate_routed_agent_arguments_with_catalog(
-            original_name,
-            &arguments,
-            context.current_messages,
-            context.system,
-            context.bridge.model_catalog(),
-        )?;
+        if self
+            .reject_exhausted_subagent(context, original_name, &arguments, request_id.clone())
+            .await?
+        {
+            return Ok(());
+        }
+        if self
+            .reject_unroutable_subagent(context, original_name, &arguments, request_id)
+            .await?
+        {
+            return Ok(());
+        }
         let tool_use_id = format!("toolu_{}", Uuid::new_v4().simple());
         let (intent_arguments, claude_arguments) =
             crate::anthropic::agent_effort::prepare_arguments_for_user(
@@ -174,6 +190,103 @@ impl SegmentBuilder {
             )
             .await
             .context("failed to reject a disabled SubAgent provider tool")?;
+        self.text_delta(
+            &serde_json::json!({"params":{"delta":notice}}),
+            context.stream,
+        )
+        .await?;
+        self.close_open_blocks(context.stream).await?;
+        Ok(true)
+    }
+
+    async fn reject_exhausted_subagent(
+        &mut self,
+        context: ExternalToolContext<'_>,
+        original_name: &str,
+        arguments: &Value,
+        request_id: Value,
+    ) -> Result<bool> {
+        if !crate::anthropic::agent_effort::is_agent_tool(original_name) {
+            return Ok(false);
+        }
+        let Some(model) = crate::anthropic::agent_effort::requested_model(arguments) else {
+            return Ok(false);
+        };
+        if !context.bridge.subagent_provider_is_exhausted(model) {
+            return Ok(false);
+        }
+        tracing::warn!(
+            tool_name = original_name,
+            model,
+            "blocked an exhausted SubAgent before emitting its launch tool call"
+        );
+        self.close_open_blocks(context.stream).await?;
+        let notice = format!(
+            "SubAgent model `{model}` is cooling down after a rate/usage/billing limit; pick another selected_workers entry."
+        );
+        context
+            .bridge
+            .app
+            .respond_for_model(
+                &context.session.model,
+                request_id,
+                json!({
+                    "contentItems":[{"type":"inputText","text":notice}],
+                    "success":false
+                }),
+            )
+            .await
+            .context("failed to reject an exhausted SubAgent provider tool")?;
+        self.text_delta(
+            &serde_json::json!({"params":{"delta":notice}}),
+            context.stream,
+        )
+        .await?;
+        self.close_open_blocks(context.stream).await?;
+        Ok(true)
+    }
+
+    async fn reject_unroutable_subagent(
+        &mut self,
+        context: ExternalToolContext<'_>,
+        original_name: &str,
+        arguments: &Value,
+        request_id: Value,
+    ) -> Result<bool> {
+        if !crate::anthropic::agent_effort::is_agent_tool(original_name) {
+            return Ok(false);
+        }
+        if crate::anthropic::agent_effort::validate_routed_agent_arguments_with_catalog(
+            original_name,
+            arguments,
+            context.current_messages,
+            context.system,
+            context.bridge.model_catalog(),
+        )
+        .is_ok()
+        {
+            return Ok(false);
+        }
+        tracing::warn!(
+            tool_name = original_name,
+            subagent_type = ?arguments.get("subagent_type"),
+            "blocked unsupported SubAgent launch"
+        );
+        self.close_open_blocks(context.stream).await?;
+        let notice = crate::anthropic::agent_effort::BLOCKED_SUBAGENT_NOTICE;
+        context
+            .bridge
+            .app
+            .respond_for_model(
+                &context.session.model,
+                request_id,
+                json!({
+                    "contentItems":[{"type":"inputText","text":notice}],
+                    "success":false
+                }),
+            )
+            .await
+            .context("failed to reject an unroutable SubAgent provider tool")?;
         self.text_delta(
             &serde_json::json!({"params":{"delta":notice}}),
             context.stream,

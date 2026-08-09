@@ -9,6 +9,7 @@ use crate::anthropic::MessagesRequest;
 mod core;
 mod env;
 mod policy;
+mod scope_count;
 
 pub(crate) const SUBAGENT_MIN_PARALLEL_ENV: &str = "CLAUDEX_SUBAGENT_MIN_PARALLEL";
 pub(crate) const SUBAGENT_ACTIVE_FLOOR_ENV: &str = "CLAUDEX_SUBAGENT_ACTIVE_FLOOR";

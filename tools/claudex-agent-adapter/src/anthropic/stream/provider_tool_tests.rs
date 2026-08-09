@@ -3,7 +3,7 @@
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use axum::body::Bytes;
-    use serde_json::json;
+    use serde_json::{Value, json};
     use std::convert::Infallible;
     use tokio::sync::mpsc;
 
@@ -45,29 +45,29 @@ mod tests {
             .await
             .expect("default provider progress");
 
-        // Progress is visible before commit (never executable tool_use).
+        // Progress is visible in thinking chrome before commit (never tool_use).
         assert_eq!(builder.blocks.len(), EXPECTED_PROGRESS_BLOCKS);
-        assert!(builder.open_text_block.is_some());
-        let text = builder.open_text_block.as_ref().expect("progress text").1.as_str();
-        assert!(text.contains("▶ Read"));
-        assert!(text.contains("a"));
-        assert!(text.contains("▶ Search docs"));
-        assert!(!text.contains("tool_use"));
-        assert_eq!(
-            builder.provider_tool_calls.len(),
-            EXPECTED_PROVIDER_CALLS
-        );
+        assert!(builder.open_text_block.is_none());
+        let thinking = thinking_text(&builder);
+        assert!(thinking.contains("▶ Read"));
+        assert!(thinking.contains("a"));
+        assert!(thinking.contains("▶ Search docs"));
+        assert!(!thinking.contains("tool_use"));
+        assert_eq!(builder.provider_tool_calls.len(), EXPECTED_PROVIDER_CALLS);
         let segment = builder.finish(None).await.expect("segment");
-        assert_eq!(segment.blocks.len(), 1);
-        let committed = segment.blocks[0]["text"].as_str().expect("committed text");
-        assert!(committed.trim().is_empty());
+        assert!(
+            segment
+                .blocks
+                .iter()
+                .all(|block| !committed_progress_text(block).contains('▶'))
+        );
     }
 
     #[tokio::test]
     async fn streams_provider_progress_and_all_status_variants() {
         const SAMPLE_INPUT_TOKEN_COUNT: u64 = 1;
         const STREAM_CHANNEL_CAPACITY: usize = 32;
-        const EXPECTED_PROGRESS_FRAMES: usize = 6;
+        const EXPECTED_PROGRESS_FRAMES: usize = 7;
         let (sender, mut receiver) =
             mpsc::channel::<Result<Bytes, Infallible>>(STREAM_CHANNEL_CAPACITY);
         let mut builder = SegmentBuilder::new(SAMPLE_INPUT_TOKEN_COUNT);
@@ -109,11 +109,21 @@ mod tests {
         let segment = builder.finish(Some(&sender)).await.expect("segment");
         drop(sender);
 
-        assert!(segment.blocks.iter().all(|block| block["type"] != "tool_use"));
-        // Live frames carry progress; committed output is transcript-clean.
-        let committed = segment.blocks[0]["text"].as_str().expect("committed progress");
-        assert!(committed.trim().is_empty());
+        assert!(
+            segment
+                .blocks
+                .iter()
+                .all(|block| block["type"] != "tool_use")
+        );
+        // Live thinking_delta carries progress; committed output is transcript-clean.
+        assert!(
+            segment
+                .blocks
+                .iter()
+                .all(|block| committed_progress_text(block).trim().is_empty())
+        );
         let (frame_count, output) = collect_frames(&mut receiver).await;
+        assert!(output.contains("thinking_delta"));
         assert!(output.contains("▶ Bash"));
         assert!(output.contains("✗ Build"));
         assert!(output.contains("✓ Read"));
@@ -148,19 +158,14 @@ mod tests {
             )
             .await
             .expect("complete");
-        let text = builder
-            .open_text_block
-            .as_ref()
-            .expect("progress text")
-            .1
-            .as_str();
-        assert!(text.contains("▶ run_terminal_command"));
-        assert!(text.contains("✓ run_terminal_command"));
-        assert!(!text.contains("exitCode"));
-        assert!(!text.contains("huge"));
-        assert!(!text.contains("stdout"));
+        let thinking = thinking_text(&builder);
+        assert!(thinking.contains("▶ run_terminal_command"));
+        assert!(thinking.contains("✓ run_terminal_command"));
+        assert!(!thinking.contains("exitCode"));
+        assert!(!thinking.contains("huge"));
+        assert!(!thinking.contains("stdout"));
         // Success line is marker-only (no tool body JSON).
-        assert!(!text.contains("✓ run_terminal_command:"));
+        assert!(!thinking.contains("✓ run_terminal_command:"));
     }
 
     #[tokio::test]
@@ -178,24 +183,406 @@ mod tests {
             )
             .await
             .expect("provider completion");
-        // Progress is accumulated once, then removed from committed output.
-        assert_eq!(
-            builder
-                .open_text_block
-                .as_ref()
-                .expect("progress text")
-                .1
-                .matches("▶ WebFetch")
-                .count(),
-            1
-        );
+        // Progress is accumulated once in thinking, then removed from commit.
+        assert_eq!(thinking_text(&builder).matches("▶ WebFetch").count(), 1);
         let segment = builder.finish(None).await.expect("segment");
         assert!(
-            segment.blocks[0]["text"]
-                .as_str()
-                .expect("committed progress")
-                .trim()
-                .is_empty()
+            segment
+                .blocks
+                .iter()
+                .all(|block| committed_progress_text(block).trim().is_empty())
+        );
+    }
+
+    #[tokio::test]
+    async fn qwen_mid_turn_status_then_read_then_complete_is_visible_before_finish() {
+        // Live Qwen SubAgent (d2945e45 / a233508547ce0d5c6): AgentMessage status,
+        // then ReadFile, then ✓, then more status — all before end_turn.
+        // Old failure: ▶ arrived only in committed text after finish, so the
+        // panel stayed on blank "Thought for Xs" + spinner during the turn.
+        let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(64);
+        let mut builder = SegmentBuilder::new(1).with_subagent(true);
+        let mut live = super::super::subagent_live_view::SubAgentLiveView::default();
+
+        builder
+            .model_output_event(
+                &json!({
+                    "method":"item/agentMessage/delta",
+                    "params":{
+                        "itemId":"qwen:message",
+                        "delta":"Starting inspection. Current action: reading CLAUDE.md.\n"
+                    }
+                }),
+                Some(&sender),
+            )
+            .await
+            .expect("qwen status");
+        live.ingest_available(&mut receiver);
+        assert!(
+            live.turn_still_open(),
+            "status chunk must not end the SubAgent turn"
+        );
+        assert!(
+            live.visible_thinking.contains("Starting inspection"),
+            "SubAgent prose must paint thinking chrome live: {:?}",
+            live.visible_thinking
+        );
+        assert!(
+            live.hidden_text.is_empty(),
+            "prose must not wait in hidden text_delta: {:?}",
+            live.hidden_text
+        );
+        assert!(
+            !live.visible_thinking.contains('▶'),
+            "no tool chrome yet: {:?}",
+            live.visible_thinking
+        );
+
+        builder
+            .provider_tool_call(
+                &json!({"params":{
+                    "callId":"qwen-read-1",
+                    "tool":"Read",
+                    "title":"ReadFile: CLAUDE.md",
+                    "arguments":{"file_path":"/Users/kkk4oru/ghq/github.com/kkkaoru/dotfiles/CLAUDE.md"}
+                }}),
+                Some(&sender),
+            )
+            .await
+            .expect("qwen read start");
+        live.ingest_available(&mut receiver);
+        assert!(live.turn_still_open(), "tool start is mid-turn");
+        assert!(
+            live.visible_thinking.contains("▶ ReadFile")
+                || live.visible_thinking.contains("▶ Read"),
+            "▶ must be on the wire before finish: {:?}",
+            live.visible_thinking
+        );
+        assert!(
+            !live.hidden_text.contains('▶'),
+            "▶ must not wait in hidden text: {:?}",
+            live.hidden_text
+        );
+
+        builder
+            .provider_tool_update(
+                &json!({"params":{
+                    "callId":"qwen-read-1",
+                    "status":"completed",
+                    "title":"ReadFile: CLAUDE.md"
+                }}),
+                Some(&sender),
+            )
+            .await
+            .expect("qwen read complete");
+        live.ingest_available(&mut receiver);
+        assert!(live.turn_still_open(), "✓ is still mid-turn");
+        assert!(
+            live.visible_thinking.contains('✓'),
+            "✓ must paint live: {:?}",
+            live.visible_thinking
+        );
+
+        builder
+            .model_output_event(
+                &json!({
+                    "method":"item/agentMessage/delta",
+                    "params":{
+                        "itemId":"qwen:message",
+                        "delta":"Status: CLAUDE.md read. Current action: reading create-symlinks.sh.\n"
+                    }
+                }),
+                Some(&sender),
+            )
+            .await
+            .expect("qwen follow-up status");
+        live.ingest_available(&mut receiver);
+        assert!(live.turn_still_open());
+        assert!(
+            live.visible_thinking.contains("Status: CLAUDE.md read"),
+            "{:?}",
+            live.visible_thinking
+        );
+
+        let segment = builder.finish(None).await.expect("segment");
+        assert_eq!(segment.stop_reason, "end_turn");
+        assert!(
+            segment.blocks.iter().any(|block| {
+                block.get("type").and_then(Value::as_str) == Some("text")
+                    && block.get("text").and_then(Value::as_str).is_some_and(|text| {
+                        text.contains("Starting inspection")
+                            && text.contains("Status: CLAUDE.md read")
+                    })
+            }),
+            "answer prose must flush at end_turn: {:?}",
+            segment.blocks
+        );
+        assert!(
+            segment
+                .blocks
+                .iter()
+                .all(|block| !committed_progress_text(block).contains('▶')
+                    && !committed_progress_text(block).contains('✓')),
+            "committed transcript stays clean: {:?}",
+            segment.blocks
+        );
+        live.ingest_available(&mut receiver);
+        assert!(
+            live.turn_still_open(),
+            "SegmentBuilder::finish does not emit message_stop; drive_stream does"
+        );
+        assert!(
+            live.visible_thinking.contains('▶') && live.visible_thinking.contains('✓'),
+            "mid-turn chrome must remain after finish sanitize: {:?}",
+            live.visible_thinking
+        );
+    }
+
+    #[tokio::test]
+    async fn cline_mid_turn_read_progress_is_visible_before_finish() {
+        let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(32);
+        let mut builder = SegmentBuilder::new(1);
+        let mut live = super::super::subagent_live_view::SubAgentLiveView::default();
+        builder
+            .model_output_event(
+                &json!({
+                    "method":"item/reasoning/summaryTextDelta",
+                    "params":{"itemId":"cline:reasoning","summaryIndex":0,"delta":"\n\n\n"}
+                }),
+                Some(&sender),
+            )
+            .await
+            .expect("ignore blank thought");
+        live.ingest_available(&mut receiver);
+        assert!(live.turn_still_open());
+        assert!(
+            live.visible_thinking.trim().is_empty(),
+            "blank Cline thought must not occupy chrome: {:?}",
+            live.visible_thinking
+        );
+
+        builder
+            .provider_tool_call(
+                &json!({"params":{
+                    "callId":"read-queue",
+                    "tool":"Read",
+                    "title":"Read queue-consumer.ts",
+                    "arguments":{"path":"/Users/kkk4oru/ghq/github.com/kkkaoru/horse-racing-data/apps/finish-position-cron/src/queue-consumer.ts"}
+                }}),
+                Some(&sender),
+            )
+            .await
+            .expect("read progress");
+        live.ingest_available(&mut receiver);
+        assert!(live.turn_still_open());
+        assert!(
+            live.visible_thinking.contains("▶ Read"),
+            "{:?}",
+            live.visible_thinking
+        );
+        assert!(
+            live.visible_thinking.contains("queue-consumer.ts"),
+            "{:?}",
+            live.visible_thinking
+        );
+        assert!(!live.hidden_text.contains('▶'));
+    }
+
+    #[tokio::test]
+    async fn qwen_agent_message_then_tool_progress_stays_in_thinking_chrome() {
+        // Live Qwen SubAgent: AgentMessageChunk opens text, then ReadFile/Grep.
+        // Old stream_progress_text appended ▶ to hidden text_delta.
+        let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(32);
+        let mut builder = SegmentBuilder::new(1).with_subagent(true);
+        builder
+            .text_delta(
+                &json!({"params":{
+                    "delta":"Phase 1: reading CLAUDE.md.\n",
+                    "itemId":"qwen:message"
+                }}),
+                Some(&sender),
+            )
+            .await
+            .expect("qwen message");
+        assert!(builder.open_text_block.is_none());
+        assert!(builder.pending_answer.contains("Phase 1: reading CLAUDE.md"));
+        builder
+            .provider_tool_call(
+                &json!({"params":{
+                    "callId":"qwen-read",
+                    "tool":"Read",
+                    "title":"ReadFile: /Users/kkk4oru/ghq/github.com/kkkaoru/dotfiles/CLAUDE.md",
+                    "arguments":{"file_path":"/Users/kkk4oru/ghq/github.com/kkkaoru/dotfiles/CLAUDE.md"}
+                }}),
+                Some(&sender),
+            )
+            .await
+            .expect("qwen read progress");
+        assert!(
+            builder.open_text_block.is_none(),
+            "SubAgent answer stays pending until end_turn"
+        );
+        let thinking = thinking_text(&builder);
+        assert!(thinking.contains("Phase 1: reading CLAUDE.md"), "{thinking}");
+        assert!(
+            thinking.contains("▶ ReadFile") || thinking.contains("▶ Read"),
+            "{thinking}"
+        );
+        drop(sender);
+        let (_, output) = collect_frames(&mut receiver).await;
+        assert!(output.contains("thinking_delta"));
+        assert!(output.contains('▶'));
+        assert!(
+            !output.contains("\"type\":\"text_delta\",\"text\":\"\\n▶"),
+            "▶ must not ride hidden text_delta: {output}"
+        );
+    }
+
+    #[tokio::test]
+    async fn qwen_prose_progress_in_agent_message_becomes_thinking_delta() {
+        let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
+        let mut builder = SegmentBuilder::new(1);
+        builder
+            .text_delta(
+                &json!({"params":{
+                    "delta":"\n▶ ReadFile\n",
+                    "itemId":"qwen:message"
+                }}),
+                Some(&sender),
+            )
+            .await
+            .expect("prose progress");
+        assert!(builder.open_text_block.is_none());
+        let thinking = thinking_text(&builder);
+        assert!(thinking.contains("▶ ReadFile"), "{thinking}");
+        drop(sender);
+        let (_, output) = collect_frames(&mut receiver).await;
+        assert!(output.contains("thinking_delta"));
+        assert!(output.contains("▶ ReadFile"));
+        assert!(!output.contains("\"type\":\"text_delta\""));
+    }
+
+    #[tokio::test]
+    async fn cline_whitespace_thought_then_read_shows_progress_not_blank_thought() {
+        // Live TUI (fa522331 / cline-pass/deepseek-v4-flash):
+        // `Thought for 8s` + blank lines + `Spinning…` with no ▶ Read.
+        let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(32);
+        let mut builder = SegmentBuilder::new(1);
+        builder
+            .model_output_event(
+                &json!({
+                    "method":"item/reasoning/summaryTextDelta",
+                    "params":{"itemId":"cline:reasoning","summaryIndex":0,"delta":"\n\n\n"}
+                }),
+                Some(&sender),
+            )
+            .await
+            .expect("ignore blank thought");
+        builder
+            .provider_tool_call(
+                &json!({"params":{
+                    "callId":"read-queue",
+                    "tool":"Read",
+                    "title":"Read queue-consumer.ts",
+                    "arguments":{"path":"/Users/kkk4oru/ghq/github.com/kkkaoru/horse-racing-data/apps/finish-position-cron/src/queue-consumer.ts"}
+                }}),
+                Some(&sender),
+            )
+            .await
+            .expect("read progress");
+        drop(sender);
+        let thinking = thinking_text(&builder);
+        assert!(thinking.contains("▶ Read"), "{thinking}");
+        assert!(thinking.contains("queue-consumer.ts"), "{thinking}");
+        let (_, output) = collect_frames(&mut receiver).await;
+        assert!(output.contains("thinking_delta"));
+        assert!(output.contains("▶ Read"));
+        assert!(
+            !output.contains("\"thinking\":\"\\n\\n\\n\""),
+            "blank Cline thought must not occupy the SubAgent thinking chrome"
+        );
+    }
+
+    #[tokio::test]
+    async fn provider_tool_progress_closes_model_thought_so_status_is_visible() {
+        let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(32);
+        let mut builder = SegmentBuilder::new(1);
+        builder
+            .model_output_event(
+                &json!({
+                    "method":"item/reasoning/summaryTextDelta",
+                    "params":{"itemId":"cline:reasoning","summaryIndex":0,"delta":"Trace target_race next."}
+                }),
+                Some(&sender),
+            )
+            .await
+            .expect("model thought");
+        builder
+            .provider_tool_call(
+                &json!({"params":{
+                    "callId":"grep-1",
+                    "tool":"Grep",
+                    "title":"Grep target_race",
+                    "arguments":{"pattern":"target_race"}
+                }}),
+                Some(&sender),
+            )
+            .await
+            .expect("grep progress");
+        drop(sender);
+        let (_, output) = collect_frames(&mut receiver).await;
+        assert!(output.contains("Trace target_race next."));
+        assert!(
+            output.contains("signature_delta"),
+            "CoT unit must close before ▶ progress"
+        );
+        assert!(output.contains("▶ Grep"));
+        assert!(output.contains("target_race"));
+    }
+
+    #[tokio::test]
+    async fn bash_title_containing_task_still_streams_thinking_progress() {
+        // Old failure: title `schtasks` / "agent history" looked launch-shaped,
+        // WIP was suppressed or parked in assistant text that SubAgent TUI hides.
+        let mut builder = SegmentBuilder::new(1);
+        let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
+        builder
+            .provider_tool_call(
+                &json!({"params":{
+                    "callId":"bash-schtasks",
+                    "tool":"Bash",
+                    "title":"`cd /repo && prlctl exec Windows cmd.exe /c schtasks /Query /TN \"PC-KEIBA Auto Update\"`",
+                    "arguments":{"command":"prlctl exec Windows schtasks /Query"}
+                }}),
+                Some(&sender),
+            )
+            .await
+            .expect("schtasks bash progress");
+        builder
+            .provider_tool_update(
+                &json!({"params":{
+                    "callId":"bash-schtasks",
+                    "status":"completed",
+                    "title":"`cd /repo && prlctl exec Windows cmd.exe /c schtasks /Query`"
+                }}),
+                Some(&sender),
+            )
+            .await
+            .expect("schtasks bash complete");
+        drop(sender);
+        assert!(builder.open_text_block.is_none());
+        let thinking = thinking_text(&builder);
+        assert!(thinking.contains("▶ Bash") || thinking.contains("▶ `cd"));
+        assert!(thinking.contains('✓'));
+        let (_, output) = collect_frames(&mut receiver).await;
+        assert!(output.contains("thinking_delta"));
+        assert!(output.contains('▶'));
+        let segment = builder.finish(None).await.expect("segment");
+        assert!(
+            segment
+                .blocks
+                .iter()
+                .all(|block| !committed_progress_text(block).contains('▶'))
         );
     }
 
@@ -204,9 +591,15 @@ mod tests {
         const UNREACHED_PREVIEW_CHAR_LIMIT: usize = 20;
         const TRUNCATED_PREVIEW_CHAR_LIMIT: usize = 3;
         assert_eq!(failure_preview(Some(&json!("text"))), "text");
-        assert_eq!(failure_preview(Some(&json!({"error":"boom\nmore"}))), "boom");
+        assert_eq!(
+            failure_preview(Some(&json!({"error":"boom\nmore"}))),
+            "boom"
+        );
         assert_eq!(failure_preview(None), "failed");
-        assert_eq!(compact_title("run_terminal_command: pwd && git status"), "run_terminal_command");
+        assert_eq!(
+            compact_title("run_terminal_command: pwd && git status"),
+            "run_terminal_command"
+        );
         assert_eq!(
             truncate_for_status("  short  ", UNREACHED_PREVIEW_CHAR_LIMIT),
             "short"
@@ -215,6 +608,128 @@ mod tests {
             truncate_for_status("abcdef", TRUNCATED_PREVIEW_CHAR_LIMIT),
             "abc…"
         );
+    }
+
+    #[tokio::test]
+    async fn cline_agent_message_prose_is_visible_before_end_turn() {
+        // Live TUI (fa522331 / cline-pass/deepseek-v4-flash Viewer KV/Cache):
+        // AgentMessage prose stayed in hidden text_delta, so the SubAgent viewer
+        // was blank for 10+ minutes while tokens were still flowing.
+        let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(32);
+        let mut builder = SegmentBuilder::new(1).with_subagent(true);
+        let mut live = super::super::subagent_live_view::SubAgentLiveView::default();
+        builder
+            .model_output_event(
+                &json!({
+                    "method":"item/agentMessage/delta",
+                    "params":{
+                        "itemId":"cline:message",
+                        "delta":"型と配信パスを把握しました。既存 finish-prediction-inputs-cache の接続状況を確認します。\n"
+                    }
+                }),
+                Some(&sender),
+            )
+            .await
+            .expect("cline prose");
+        live.ingest_available(&mut receiver);
+        assert!(live.turn_still_open());
+        assert!(
+            live.visible_thinking.contains("型と配信パスを把握しました"),
+            "Cline narration must show in the SubAgent viewer: {:?}",
+            live.visible_thinking
+        );
+        assert!(
+            live.hidden_text.is_empty(),
+            "prose must not sit in hidden text_delta: {:?}",
+            live.hidden_text
+        );
+
+        builder
+            .activity_keepalive(Some(&sender))
+            .await
+            .expect("elapsed keepalive");
+        live.ingest_available(&mut receiver);
+        assert!(
+            live.visible_thinking.contains("still working"),
+            "silence after prose must still paint elapsed progress: {:?}",
+            live.visible_thinking
+        );
+        assert!(
+            !live.hidden_text.contains('\u{200b}'),
+            "SubAgent keepalive must not hide in text_delta: {:?}",
+            live.hidden_text
+        );
+
+        let segment = builder.finish(None).await.expect("segment");
+        assert_eq!(segment.stop_reason, "end_turn");
+        assert!(
+            segment.blocks.iter().any(|block| {
+                block.get("text").and_then(Value::as_str).is_some_and(|text| {
+                    text.contains("型と配信パスを把握しました")
+                })
+            }),
+            "answer must flush at end_turn: {:?}",
+            segment.blocks
+        );
+        assert!(
+            segment
+                .blocks
+                .iter()
+                .all(|block| !committed_progress_text(block).contains("still working")),
+            "elapsed keepalive must not stay in the transcript: {:?}",
+            segment.blocks
+        );
+        drop(sender);
+        let _ = collect_frames(&mut receiver).await;
+    }
+
+    #[tokio::test]
+    async fn subagent_silence_keepalive_paints_elapsed_progress_not_blank_viewer() {
+        let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
+        let mut builder = SegmentBuilder::new(1).with_subagent(true);
+        let mut live = super::super::subagent_live_view::SubAgentLiveView::default();
+        builder
+            .provider_tool_call(
+                &json!({"params":{
+                    "callId":"bash-ctx",
+                    "tool":"Bash",
+                    "title":"ctx search finish-prediction-inputs-cache",
+                    "arguments":{"command":"ctx search finish-prediction-inputs-cache"}
+                }}),
+                Some(&sender),
+            )
+            .await
+            .expect("tool start");
+        live.ingest_available(&mut receiver);
+        assert!(live.visible_thinking.contains("▶"));
+
+        builder
+            .activity_keepalive(Some(&sender))
+            .await
+            .expect("first elapsed");
+        builder
+            .activity_keepalive(Some(&sender))
+            .await
+            .expect("second elapsed");
+        live.ingest_available(&mut receiver);
+        assert!(live.turn_still_open());
+        assert!(
+            live.visible_thinking.contains("still working"),
+            "long tool silence must keep painting elapsed ticks: {:?}",
+            live.visible_thinking
+        );
+        assert!(
+            live.visible_thinking.contains("last:"),
+            "elapsed tick should recall the in-flight tool: {:?}",
+            live.visible_thinking
+        );
+        assert!(
+            live.hidden_text.is_empty(),
+            "elapsed ticks must not use hidden text_delta: {:?}",
+            live.hidden_text
+        );
+        drop(sender);
+        let _ = collect_frames(&mut receiver).await;
     }
 
     #[tokio::test]
@@ -233,6 +748,23 @@ mod tests {
         send_evidence_updates(&mut builder, evidence).await;
         let segment = builder.finish(None).await.expect("segment");
         assert_eq!(segment.usage.web_search_requests, 1);
+    }
+
+    fn thinking_text(builder: &SegmentBuilder) -> String {
+        builder
+            .blocks
+            .iter()
+            .filter_map(|block| block.get("thinking").and_then(Value::as_str))
+            .collect::<Vec<_>>()
+            .join("")
+    }
+
+    fn committed_progress_text(block: &Value) -> String {
+        ["text", "thinking"]
+            .into_iter()
+            .filter_map(|key| block.get(key).and_then(Value::as_str))
+            .collect::<Vec<_>>()
+            .join("")
     }
 
     async fn collect_frames(

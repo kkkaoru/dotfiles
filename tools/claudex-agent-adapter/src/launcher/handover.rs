@@ -5,7 +5,6 @@ use anyhow::{Result, bail};
 use super::daemon_process::{
     matches as process_matches, request_graceful_shutdown, terminate as force_terminate,
 };
-use super::session_process::any_launch_is_active;
 use super::{ServiceConfig, authenticates, fetch_health};
 
 const LISTENER_RELEASE_POLL_INTERVAL: Duration = Duration::from_millis(25);
@@ -25,20 +24,19 @@ pub(super) enum ServiceState {
     Start,
 }
 
+const HOT_SWAP_DRAIN_TIMEOUT: Duration = Duration::from_secs(45);
+const HOT_SWAP_DRAIN_POLL: Duration = Duration::from_millis(250);
+
 pub(super) async fn inspect_service(
     client: &reqwest::Client,
     config: &ServiceConfig,
 ) -> ServiceState {
-    inspect_service_with(client, config, || {
-        any_launch_is_active(config.options.listen.port())
-    })
-    .await
+    inspect_service_with(client, config).await
 }
 
 pub(super) async fn inspect_service_with(
     client: &reqwest::Client,
     config: &ServiceConfig,
-    live_launch_sessions: impl Fn() -> bool,
 ) -> ServiceState {
     let Some(health) = fetch_health(client, config).await else {
         return ServiceState::Start;
@@ -48,10 +46,11 @@ pub(super) async fn inspect_service_with(
         && authenticates(client, config).await
     {
         ServiceState::Reuse
-    } else if health.status == "ok" && (health.has_active_work() || live_launch_sessions()) {
-        // Never tear down a generation that is still serving a request, or that
-        // still has an interactive launch parent attached. Replacing serve while
-        // a TUI is open aborts Claude Code and forces resume from compaction.
+    } else if health.status == "ok" && health.has_active_work() {
+        // Never tear down a generation that is still serving a request.
+        // Idle listeners, including ones with a launch TUI attached, are
+        // replaced in place so `claudex` / `ensure` / `hot-swap` pick up a
+        // newly installed binary without a fallback port.
         ServiceState::Defer {
             pid: health.pid,
             active_http_requests: health.active_http_requests,
@@ -61,6 +60,22 @@ pub(super) async fn inspect_service_with(
         ServiceState::Replace {
             pid: health.pid,
             recovery_generation: health.recovery_generation,
+        }
+    }
+}
+
+pub(super) async fn wait_for_hot_swap_idle(
+    client: &reqwest::Client,
+    config: &ServiceConfig,
+) -> Result<ServiceState> {
+    let deadline = Instant::now() + HOT_SWAP_DRAIN_TIMEOUT;
+    loop {
+        let state = inspect_service_with(client, config).await;
+        match &state {
+            ServiceState::Defer { .. } if Instant::now() < deadline => {
+                tokio::time::sleep(HOT_SWAP_DRAIN_POLL).await;
+            }
+            _ => return Ok(state),
         }
     }
 }

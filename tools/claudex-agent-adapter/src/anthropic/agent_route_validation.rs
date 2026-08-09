@@ -6,6 +6,15 @@ use super::{
     subscription::valid_effort,
 };
 
+pub(in crate::anthropic) const BLOCKED_SUBAGENT_NOTICE: &str =
+    "The requested SubAgent model is not configured, so it was not started. Continue without it.";
+
+pub(in crate::anthropic) fn exhausted_subagent_notice(model: &str) -> String {
+    format!(
+        "SubAgent model `{model}` is cooling down after a rate/usage/billing limit; pick another selected_workers entry."
+    )
+}
+
 const ADAPTER_EFFORT: &str = "claudex_effort";
 const IMPLICIT_MODEL: &str = "claudex_implicit_model";
 

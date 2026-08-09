@@ -24,6 +24,7 @@ use super::{
 };
 
 mod consume;
+mod consume_fanout;
 mod finish;
 mod lifecycle;
 mod post_eof;
@@ -129,6 +130,7 @@ struct SubscriptionStream {
     text_started: bool,
     text_closed: bool,
     saw_tool_use: bool,
+    launch_fanout_open: bool,
     seen_tool_ids: HashSet<String>,
     blocked_subagent: bool,
     saw_result: bool,
@@ -220,6 +222,33 @@ impl SubscriptionStream {
             &mut routed_input,
             &context.parent_model,
         );
+        if let Some(session_id) = context.session_id.as_deref()
+            && let Some(recipient) = context
+                .subagent_reuse
+                .rewrite_launch_input(session_id, &mut routed_input)
+        {
+            tracing::info!(
+                session_id,
+                recipient,
+                tool = name,
+                "subscription Agent/Task launch reused an existing SubAgent"
+            );
+        }
+        if let Some(model) = super::agent_effort::requested_model(&routed_input) {
+            if context.disabled_subagent_models.contains(model) {
+                anyhow::bail!(super::agent_route_validation::BLOCKED_SUBAGENT_NOTICE);
+            }
+            if super::agent_routing::routing_disables_subagent_model(
+                &context.user_messages,
+                &context.system,
+                model,
+            ) || context.launch_model_is_exhausted(model)
+            {
+                anyhow::bail!(super::agent_route_validation::exhausted_subagent_notice(
+                    model
+                ));
+            }
+        }
         if routed_input.get("claudex_model").is_none() {
             tracing::warn!(
                 tool = name,
@@ -289,14 +318,8 @@ impl SubscriptionStream {
         &mut self,
         sender: &mpsc::Sender<Result<Bytes, Infallible>>,
     ) -> Result<()> {
-        if self.saw_result {
+        if self.saw_result || self.saw_tool_use || self.blocked_subagent {
             return Ok(());
-        }
-        if self.saw_tool_use {
-            return self
-                .activity
-                .keepalive(sender, None, &mut self.next_index)
-                .await;
         }
         if self.text_closed {
             send_text_start(sender, self.next_index).await?;

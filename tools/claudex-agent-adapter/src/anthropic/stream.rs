@@ -6,10 +6,7 @@ use axum::{
     http::Response,
 };
 use serde_json::Value;
-use tokio::{
-    sync::mpsc,
-    time::{Instant, sleep},
-};
+use tokio::{sync::mpsc, time::sleep};
 
 use super::{
     Bridge, MessagesRequest, Segment, Session,
@@ -30,36 +27,35 @@ mod prepare;
 mod protocol;
 mod provider_tool;
 mod sanitize;
+#[cfg(test)]
+mod subagent_live_view;
+#[cfg(test)]
+mod subagent_progress_models_tests;
 mod thinking;
 mod tool_call_parser;
-mod turn; pub(super) mod usage_limit;
+mod turn;
+mod types;
+pub(super) mod usage_limit;
 pub(in crate::anthropic) use turn::StreamTurn;
+use types::{StreamEventState, StreamWaitResult, reset_activity_deadline};
+pub(super) use types::{StreamWaitInput, ToolCall, is_provider_stream_closed};
 
 use builder::SegmentBuilder;
 pub(in crate::anthropic) use control::commit_transcript;
 use control::refresh_activity_keepalive;
-use prepare::{PreparedStream, prepare_with_activity, subagent_start_status};
-use sanitize::is_visible_activity_event;
+use prepare::PreparedStream;
+#[cfg(test)]
+use prepare::prepare_with_activity;
 
 pub(super) use control::{error_flow, turn_flow};
 #[cfg(test)]
 pub(super) use protocol::tool_use_frames;
-use protocol::{StreamSender, send_stream_completion, send_stream_error, sse_response};
-pub(super) use protocol::{message_start, send_stream_frame, streaming_sse_response};
-const ACTIVITY_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
-const INITIAL_ACTIVITY_DELAY: Duration = Duration::from_secs(30);
-struct ToolCall { call_id: String, name: String, arguments: Value, request_id: Value }
-struct StreamWaitInput<'a> {
-    session: &'a Arc<Session>,
-    events: Arc<crate::app_server::ThreadEvents>,
-    current_messages: &'a [Value],
-    system: &'a Value,
-    sender: &'a StreamSender,
-    builder: SegmentBuilder,
-    activity_interval: Duration,
-}
-enum StreamWaitResult { Event(Value), Done(Box<StreamTurn>), NoEvent }
-enum StreamEventState { Continue, Done(Box<StreamTurn>), ContextWindow(anyhow::Error), UsageLimit(anyhow::Error) }
+use protocol::{StreamSender, send_stream_error, sse_response};
+pub(super) use protocol::{
+    message_start, send_stream_completion, send_stream_frame, streaming_sse_response,
+};
+pub(super) const ACTIVITY_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
+pub(super) const INITIAL_ACTIVITY_DELAY: Duration = Duration::from_secs(30);
 
 impl Bridge {
     pub(super) fn streaming_messages(
@@ -91,58 +87,6 @@ impl Bridge {
             }),
         );
         sse_response(receiver)
-    }
-
-    async fn drive_prepared_subagent_stream(self: Arc<Self>, prepared: PreparedStream) {
-        let PreparedStream {
-            request,
-            input_tokens,
-            effort,
-            concurrency_ticket,
-            is_subagent,
-            run_in_background,
-            sender,
-        } = prepared;
-        // Hold occupancy for the full stream so peers soft-demote this model.
-        let _active_subagent =
-            is_subagent.then(|| self.active_subagent_models.acquire(&request.model));
-        let start_status = subagent_start_status(is_subagent, &request.model, effort.as_deref());
-        let prepare = async {
-            let permit = match concurrency_ticket {
-                Some(ticket) => Some(ticket.acquire_for(!is_subagent).await?),
-                None => None,
-            };
-            let turn = self.prepare_turn(&request, input_tokens, effort).await?;
-            Ok((turn, permit))
-        };
-        let (turn, mut builder) = prepare_with_activity(
-            prepare,
-            input_tokens,
-            &sender,
-            start_status.as_deref(),
-            INITIAL_ACTIVITY_DELAY,
-            ACTIVITY_KEEPALIVE_INTERVAL,
-        )
-        .await;
-        match turn {
-            Ok(Some((turn, permit))) => {
-                self.drive_subagent_stream(
-                    turn,
-                    sender,
-                    builder,
-                    permit,
-                    is_subagent,
-                    run_in_background,
-                )
-                .await
-            }
-            Ok(None) => {}
-            Err(error) => {
-                self.note_provider_exhaustion(&error, Some(&request.model));
-                let _ = builder.close_open_blocks(Some(&sender)).await;
-                send_stream_error(&sender, error).await;
-            }
-        }
     }
 
     async fn wait_for_stream_segment(
@@ -381,18 +325,5 @@ impl Bridge {
     }
 }
 
-pub(super) fn is_provider_stream_closed(error: &anyhow::Error) -> bool {
-    error.to_string().contains("app-server event stream closed")
-}
-
-fn reset_activity_deadline(
-    event: &Value,
-    deadline: &mut std::pin::Pin<Box<tokio::time::Sleep>>,
-    interval: Duration,
-) {
-    if is_visible_activity_event(event) {
-        deadline.as_mut().reset(Instant::now() + interval);
-    }
-}
 #[cfg(test)]
 mod tests;

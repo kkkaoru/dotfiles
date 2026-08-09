@@ -36,6 +36,23 @@ fn handles_small_empty_and_mixed_message_inputs() {
             .unwrap()
             .starts_with(FULL_HISTORY_HEADER)
     );
+    let command_code = super::provider_turn_input(
+        "meta/muse-spark-1.2-contributor",
+        &[
+            json!({"role":"assistant","content":"Ready to continue"}),
+            json!({"role":"user","content":"Read CLAUDE.md and output only the first heading."}),
+        ],
+    );
+    assert_eq!(
+        command_code[0]["text"],
+        "Read CLAUDE.md and output only the first heading."
+    );
+    assert!(
+        !command_code[0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("role-tagged history")
+    );
     assert_eq!(
         user_input_from_messages(&[]),
         vec![json!({"type":"text","text":"Continue."})]

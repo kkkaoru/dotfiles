@@ -35,18 +35,16 @@ fn prepare_arguments_with_home(
     if auto_fork
         && resume_session_id(&arguments).is_some()
         && !has_fork_session(&arguments)
-        && home.is_some_and(|home| {
-            transcript_has_spawn_limit(home, config_dir, cwd, &arguments)
-        })
+        && home.is_some_and(|home| transcript_has_spawn_limit(home, config_dir, cwd, &arguments))
     {
         arguments.push(OsString::from("--fork-session"));
         eprintln!(
             "claudex: resume history reached Claude Code's subagent limit; continuing with --fork-session"
         );
     }
-    if let Some(name) = home.and_then(|home| {
-        legacy_orchestrator_display_name(home, config_dir, cwd, &arguments)
-    }) {
+    if let Some(name) =
+        home.and_then(|home| legacy_orchestrator_display_name(home, config_dir, cwd, &arguments))
+    {
         arguments.push(OsString::from("--name"));
         arguments.push(OsString::from(name.clone()));
         eprintln!(
@@ -267,17 +265,12 @@ fn transcript_path(
     let project = project_dir_name(cwd);
     let file_name = format!("{session_id}.jsonl");
     if let Some(config_dir) = config_dir {
-        let candidate = config_dir
-            .join("projects")
-            .join(&project)
-            .join(&file_name);
+        let candidate = config_dir.join("projects").join(&project).join(&file_name);
         if candidate.is_file() {
             return candidate;
         }
     }
-    home.join(".claude/projects")
-        .join(project)
-        .join(file_name)
+    home.join(".claude/projects").join(project).join(file_name)
 }
 
 fn project_dir_name(cwd: &Path) -> String {

@@ -1,4 +1,9 @@
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    collections::BTreeSet,
+    path::PathBuf,
+    sync::Arc,
+    time::{Duration, SystemTime},
+};
 
 use serde_json::Value;
 use tokio::sync::Semaphore;
@@ -39,6 +44,53 @@ pub(in crate::anthropic) struct SubscriptionToolContext {
     pub(in crate::anthropic) parent_model: String,
     pub(in crate::anthropic) user_messages: Vec<Value>,
     pub(in crate::anthropic) system: Value,
+    pub(in crate::anthropic) session_id: Option<String>,
+    pub(in crate::anthropic) subagent_reuse:
+        Arc<crate::anthropic::subagent_reuse::SubagentReuseRegistry>,
+    pub(in crate::anthropic) auth_cache: Option<PathBuf>,
+    pub(in crate::anthropic) disabled_subagent_models: BTreeSet<String>,
+}
+
+impl SubscriptionToolContext {
+    #[cfg(test)]
+    pub(in crate::anthropic) fn for_tests(
+        agent_efforts: Arc<crate::anthropic::agent_effort::AgentEffortIntents>,
+        model_catalog: crate::provider_config::ModelCatalog,
+        client_user_id: Option<String>,
+        parent_model: impl Into<String>,
+        user_messages: Vec<Value>,
+        system: Value,
+    ) -> Self {
+        Self {
+            agent_efforts,
+            model_catalog,
+            client_user_id,
+            parent_model: parent_model.into(),
+            user_messages,
+            system,
+            session_id: None,
+            subagent_reuse: Arc::new(
+                crate::anthropic::subagent_reuse::SubagentReuseRegistry::default(),
+            ),
+            auth_cache: None,
+            disabled_subagent_models: BTreeSet::new(),
+        }
+    }
+
+    pub(in crate::anthropic) fn launch_model_is_exhausted(&self, model: &str) -> bool {
+        let now = SystemTime::now();
+        let cache = self.auth_cache.as_deref();
+        if crate::anthropic::provider_auth_cooldown::scope_is_cooling_down_at(cache, model, now) {
+            return true;
+        }
+        self.model_catalog
+            .usage_provider_for_model(model)
+            .is_some_and(|provider| {
+                crate::anthropic::provider_auth_cooldown::scope_is_cooling_down_at(
+                    cache, provider, now,
+                )
+            })
+    }
 }
 
 impl SubscriptionOptions {

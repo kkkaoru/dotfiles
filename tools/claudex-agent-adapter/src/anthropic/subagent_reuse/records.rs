@@ -23,6 +23,7 @@ pub(super) fn merge_launches<'a>(
     for launch in observed {
         match launches.iter_mut().find(|current| {
             current.key == launch.key
+                || current.recipient == launch.recipient
                 || (same_logical_launch(current, launch) && !terminal_status(&current.status))
         }) {
             Some(current) => merge_record(current, launch),
@@ -50,11 +51,63 @@ fn normalize_scope(scope: &str) -> String {
         .to_ascii_lowercase()
 }
 
-fn terminal_status(status: &str) -> bool {
+pub(super) fn terminal_status(status: &str) -> bool {
     matches!(
         status,
         "completed" | "failed" | "cancelled" | "canceled" | "timeout" | "stopped"
     )
+}
+
+pub(super) fn reusable_status(status: &str) -> bool {
+    matches!(status, "active" | "message_queued" | "completed")
+}
+
+pub(super) fn already_has_resume(arguments: &Value) -> bool {
+    arguments
+        .get("resume")
+        .and_then(Value::as_str)
+        .is_some_and(|value| !value.is_empty())
+}
+
+pub(super) fn find_reusable_launch<'a>(
+    launches: &'a [LaunchRecord],
+    arguments: &Value,
+) -> Option<&'a LaunchRecord> {
+    let scope = summarize_scope(arguments);
+    if scope.is_empty() {
+        return None;
+    }
+    let model = arguments
+        .get("claudex_model")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let proposed = LaunchRecord {
+        key: String::new(),
+        recipient: String::new(),
+        scope,
+        model,
+        status: active_status(),
+    };
+    let mut exact = launches
+        .iter()
+        .filter(|current| {
+            reusable_status(&current.status) && same_logical_launch(current, &proposed)
+        })
+        .collect::<Vec<_>>();
+    if exact.is_empty() {
+        return None;
+    }
+    exact.sort_by_key(|launch| std::cmp::Reverse(reuse_priority(&launch.status)));
+    exact.into_iter().next()
+}
+
+fn reuse_priority(status: &str) -> u8 {
+    match status {
+        "active" => 2,
+        "message_queued" => 1,
+        "completed" => 0,
+        _ => 0,
+    }
 }
 
 fn merge_record(current: &mut LaunchRecord, observed: &LaunchRecord) {
@@ -63,6 +116,9 @@ fn merge_record(current: &mut LaunchRecord, observed: &LaunchRecord) {
     }
     if current.model.is_none() {
         current.model.clone_from(&observed.model);
+    }
+    if !observed.status.is_empty() {
+        current.status.clone_from(&observed.status);
     }
 }
 
@@ -80,6 +136,28 @@ pub(super) fn launch_records(messages: &[Value]) -> Vec<LaunchRecord> {
         }
     }
     records
+}
+
+pub(super) fn apply_transcript(launches: &mut Vec<LaunchRecord>, messages: &[Value]) {
+    let mut contexts = HashMap::new();
+    for message in messages {
+        if let Some(content) = message.get("content") {
+            let blocks = content.as_array().into_iter().flatten();
+            for block in blocks {
+                remember_launch_context(&mut contexts, block);
+                if let Some(record) = launch_record(block, &contexts) {
+                    merge_launches(launches, std::iter::once(&record));
+                }
+            }
+        }
+        if let Some((task_id, status)) = status_update(message) {
+            set_task_status(launches, &task_id, status);
+            continue;
+        }
+        if let Some(recipient) = queued_message_recipient(message) {
+            set_recipient_status(launches, &recipient, "message_queued".to_owned());
+        }
+    }
 }
 
 fn remember_launch_context(
@@ -142,18 +220,6 @@ fn launch_record(
         model: context.1,
         status: active_status(),
     })
-}
-
-pub(super) fn update_status_from_notifications(launches: &mut [LaunchRecord], messages: &[Value]) {
-    for message in messages {
-        if let Some((task_id, status)) = status_update(message) {
-            set_task_status(launches, &task_id, status);
-            continue;
-        }
-        if let Some(recipient) = queued_message_recipient(message) {
-            set_recipient_status(launches, &recipient, "message_queued".to_owned());
-        }
-    }
 }
 
 fn set_task_status(launches: &mut [LaunchRecord], task_id: &str, status: String) {

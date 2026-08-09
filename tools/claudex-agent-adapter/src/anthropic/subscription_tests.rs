@@ -660,6 +660,30 @@ fn selects_subscription_workspace_and_outer_tools() {
 }
 
 #[test]
+fn subagent_subscription_omits_main_only_advisor_tool() {
+    let request = MessagesRequest {
+        model: "gpt-5.3-codex-spark".to_owned(),
+        system: json!("cc_is_subagent=true"),
+        messages: vec![],
+        tools: vec![
+            json!({"name":"Read"}),
+            json!({"name":"advisor"}),
+            json!({"name":"Bash"}),
+        ],
+        stream: true,
+        output_config: json!({}),
+        metadata: json!({}),
+        working_directory: None,
+        disabled_subagent_models: Default::default(),
+        claudex_collaborator_model: None,
+    };
+    assert_eq!(
+        super::subscription::requested_tools_for_request(&request, true),
+        ["Read", "Bash"]
+    );
+}
+
+#[test]
 fn search_worker_does_not_receive_unrequested_native_web_tools() {
     let request = MessagesRequest {
         model: "claude-haiku-4-5".to_owned(),

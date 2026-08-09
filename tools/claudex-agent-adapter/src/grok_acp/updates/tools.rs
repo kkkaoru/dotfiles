@@ -127,10 +127,7 @@ fn update_to_tool_call(call_id: &str, fields: acp::ToolCallUpdateFields) -> Opti
     }
     // Cursor and other ACP agents often start tools with only title/status and no rawInput.
     // Still open a WIP card so Claude Code shows progress instead of a silent spinner.
-    let raw_input = fields
-        .raw_input
-        .clone()
-        .unwrap_or_else(|| json!({}));
+    let raw_input = fields.raw_input.clone().unwrap_or_else(|| json!({}));
     let mut call = acp::ToolCall::new(call_id.to_owned(), title).raw_input(raw_input);
     if let Some(kind) = fields.kind {
         call = call.kind(kind);

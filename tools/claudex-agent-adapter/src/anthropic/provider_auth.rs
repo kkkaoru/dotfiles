@@ -68,6 +68,13 @@ mod tests {
             Some("sakana")
         );
         assert!(!contains_auth_failure_marker("usage limit exceeded"));
+        assert!(
+            !contains_auth_failure_marker(
+                "Please run /login · API Error: 401 Claude subscription model claude-opus-5 failed \
+[authentication; exit status: 1]: Failed to authenticate: OAuth session expired and could not be refreshed"
+            ),
+            "Claude subscription OAuth expiry is handled by subscription_oauth, not provider auth cooldown"
+        );
         assert!(!is_auth_failure_event(
             &json!({"params":{"error":{"message":"other"}}})
         ));

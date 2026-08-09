@@ -78,6 +78,13 @@ pub(super) const EMPTY_ACP_END_TURN: &str = "Configured ACP completed with no as
 (provider likely unavailable or billing exhausted; Cline Credits models return empty end_turn \
 when balance is $0 — use Qwen Cloud `qwen3.8-max-preview` / `claudex-qwen`, or top up Credits)";
 
+/// Detect empty-ACP billing/auth failures so SubAgent turns can cool down the
+/// exhausted provider and failover to a sibling (for example Qwen Cloud).
+pub(crate) fn contains_empty_acp_billing_marker(value: &str) -> bool {
+    let value = value.to_ascii_lowercase();
+    value.contains("configured acp completed with no assistant content")
+        || (value.contains("cline credits") && value.contains("empty end_turn"))
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -91,6 +98,21 @@ mod tests {
             web_evidence: WebEvidenceSummary::default(),
         };
         assert!(empty.is_empty_end_turn());
+    }
+
+    #[test]
+    fn detects_empty_acp_billing_marker_from_shared_wording() {
+        assert!(contains_empty_acp_billing_marker(EMPTY_ACP_END_TURN));
+        assert!(contains_empty_acp_billing_marker(
+            "Agent \"Verify r2-catalog inherited edits\" failed: Agent terminated early due to an API error: API Error: Configured ACP completed with no assistant content (provider likely unavailable or billing exhausted; Cline Credits models return empty end_turn when balance is $0 — use Qwen Cloud `qwen3.8-max-preview` / `claudex-qwen`, or top up Credits)"
+        ));
+        assert!(contains_empty_acp_billing_marker(
+            "Agent \"Verify weight-triggered re-prediction\" failed: Agent terminated early due to an API error: API Error: 502 Configured ACP completed with no assistant content (provider likely unavailable or billing exhausted; Cline Credits models return empty end_turn when balance is $0 — use Qwen Cloud `qwen3.8-max-preview` / `claudex-qwen`, or top up Credits)"
+        ));
+        assert!(!contains_empty_acp_billing_marker("usage limit exceeded"));
+        assert!(!contains_empty_acp_billing_marker(
+            "Unable to connect to API (ConnectionRefused)"
+        ));
     }
 
     #[test]

@@ -56,6 +56,11 @@ impl TurnLaunch<'_> {
         if self.spec.trust {
             args.push("--trust".to_owned());
         }
+        // Muse Spark SubAgents must not inherit Command Code skill dumps.
+        // `--no-session` skips persisting this run; ACP still always launches
+        // without `--resume` so dirty-repo greetings are not replayed.
+        // `--no-session` is incompatible with `--resume`.
+        args.push("--no-skills".to_owned());
         // Muse Spark 1.2 Contributor rejects `--effort` ("no adjustable reasoning
         // effort"). Keep effort on the ACP shim for TUI status only.
         match self.resume {
@@ -63,7 +68,7 @@ impl TurnLaunch<'_> {
                 args.push("--resume".to_owned());
                 args.push(session_id.to_owned());
             }
-            _ => {}
+            _ => args.push("--no-session".to_owned()),
         }
         args.push(self.prompt.to_owned());
         args

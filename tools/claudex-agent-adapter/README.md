@@ -94,10 +94,16 @@ outputs cannot accumulate indefinitely.
 ```sh
 tools/claudex-agent-adapter/scripts/cargo-ephemeral.sh +1.97.1 install \
   --path tools/claudex-agent-adapter \
-  --root "$HOME/.local" \
+  --root "$HOME/.cargo" \
   --bin claudex-agent-adapter \
   --bin command-code-acp
 ```
+
+`create-symlinks.sh` then points `~/.local/bin/claudex-agent-adapter` at that
+cargo binary and links `claudex-hot-swap`. Installing only under `~/.local`
+leaves a stale cargo bin after the symlink is created. After install, replace
+an idle daemon in place with `claudex-hot-swap` (or `ensure` / `claudex` when
+idle); see [Daemon update and hot-swap](#daemon-update-and-hot-swap).
 
 Use the same wrapper for verification, for example:
 
@@ -112,6 +118,7 @@ The public CLI uses explicit subcommands:
 claudex-agent-adapter launch --model MODEL --backend-route MODEL=BACKEND [...] [ADAPTER OPTIONS] [--inherit-claude-model] -- [CLAUDE OPTIONS]
 claudex-agent-adapter launch --provider-config PATH [--model MODEL] [ADAPTER OPTIONS] [--inherit-claude-model] -- [CLAUDE OPTIONS]
 claudex-agent-adapter ensure --model MODEL --backend-route MODEL=BACKEND [...] [ADAPTER OPTIONS]
+claudex-agent-adapter hot-swap --model MODEL --backend-route MODEL=BACKEND [...] [ADAPTER OPTIONS]
 claudex-agent-adapter serve --model MODEL --backend-route MODEL=BACKEND [...] [ADAPTER OPTIONS]
 claudex-agent-adapter build-id
 ```
@@ -136,7 +143,8 @@ actual model selects that route; merely declaring a provider or listing it in
 Each route may also set `webSearchMode` to `codex-native`, `acp-native`,
 `delegate-ccr`, `delegate-mcp`, or `disabled`. `codex-native` enables the
 Codex app-server live search flags on `thread/start`; `acp-native` leaves the
-request on an ACP route that owns native search; `delegate-mcp` leaves search
+request on an ACP route that owns native search (Command Code Muse Spark uses
+this so Claude system/routing/ACP_NATIVE dumps are not prefixed onto `cmd -p`); `delegate-mcp` leaves search
 to the configured ACP/MCP provider; and `disabled` suppresses search for that
 route. `delegate-ccr` (the default) exposes the protected
 `/v1/code/sessions/{session_id}/worker/web-search` endpoint. The endpoint
@@ -300,9 +308,9 @@ dropped.
 Idle provider threads are retained for two hours to support related provider-backed worker
 continuations and prompt-prefix reuse; capacity pressure may evict the oldest idle thread sooner.
 This backend-thread retention is separate from Claude Code's logical agent lifecycle. The main
-session reuses a compatible logical worker or custom-advisor instance with `SendMessage` and the
-exact recipient specified by the prior Agent/Task result, while starting new instances when
-concurrency or independent context requires it. Prefer one continuing custom-advisor per session
+session reuses a compatible logical worker by setting `resume` to the exact prior Agent/Task
+recipient (Agent Teams still uses `SendMessage`), while starting new instances when the prior
+worker failed/stopped or the scope is independent. Prefer one continuing custom-advisor per session
 and account for it separately from `selected_workers` / provider quota headroom.
 Claude subscription workers and advisors still use a new `--no-session-persistence` subprocess per
 provider call. Logical-agent reuse can preserve a reusable transcript prefix but does not guarantee
@@ -320,21 +328,45 @@ that exact model. Nested work created natively inside Grok remains in the Grok A
 session. Cross-provider work is initiated by main orchestration as an explicit routed
 Agent/Task, then returns to the main session for integration.
 
-The adapter's `ensure` command compares the running service's protocol, routes,
-limits, and source-derived build ID with the installed binary. A per-port
-cross-process lock serializes concurrent launchers. When the listener is idle
-**and no interactive `launch` parent is still attached**, `ensure` sends SIGTERM
-so the old listener is released, starts the current build on the same address,
-and lets already accepted responses finish on the old process. If the old
-listener is busy, or any `claudex-agent-adapter launch` TUI parent is alive, it
-is never interrupted: `ensure` starts or reuses a current-build loopback
-fallback listener and returns that URL for the new Claude Code process. The
-fallback state is persisted under `~/.cache/claudex` so repeated launches do not
-accumulate daemons. Existing sessions remain on their original generation until
-they exit; never kill `launch` parents to recycle `serve`. Readiness requires
-the current build ID, matching configuration, and successful authentication.
-This handover replaces idle retained sessions without waiting for their retention
-window and does not interrupt in-flight HTTP responses or open TUIs.
+## Daemon update and hot-swap
+
+End-user commands and the daily update workflow are in the
+[Claudex guide](../../.config/claudex/README.md#daemonの差し替えhot-swap仕様).
+This section is the launcher state machine.
+
+`ensure`, `launch`, and `hot-swap` share `launcher::ensure::run`. A per-port
+lock under `~/.cache/claudex` serializes concurrent launchers. Inspection uses
+`GET /health` plus a probe request. Compatibility (`ServiceConfig::matches`)
+covers protocol, model, Codex/service fingerprints, backend/worker/search
+routes, and subscription limits. Freshness is a separate `build_id` comparison
+against `env!("CLAUDEX_BUILD_ID")`. Authentication must succeed before Reuse.
+
+| `ServiceState` | When | `ensure` / `launch` | `hot-swap` |
+| --- | --- | --- | --- |
+| `Reuse` | health matches config, current `build_id`, and auth | keep the listener | keep the listener |
+| `Replace` | mismatch or stale build, and no active work | graceful-stop serve, start current binary on the same port | same |
+| `Defer` | `status == "ok"` and `has_active_work()` (`active_http_requests` or `active_provider_turns` > 0) | start or reuse a current-build loopback fallback; leave in-flight streams on the old pid | poll every 250ms up to 45s; then Replace, or timeout without a fallback |
+| `Start` | no health response | start serve on the configured listen address | same |
+
+Idle `launch` TUIs do **not** block Replace. Only in-flight HTTP/provider work
+does. The launcher never signals a `claudex-agent-adapter launch` parent; it
+sends SIGTERM only to a matching `serve` pid and does not escalate to the
+process group or SIGKILL, so Axum can drain accepted responses. After Replace,
+the TUI keeps the same `ANTHROPIC_BASE_URL` and the next turn uses the new
+daemon.
+
+Fallback state is `~/.cache/claudex/fallback.<configured-port>.json` (mode
+`0600`): listen address, `build_id`, fingerprint, pid. A matching live fallback
+is reused. Readiness still requires the current build ID, matching
+configuration, and successful authentication. If the new generation fails
+readiness and a recovery manifest exists, the previous generation is restored.
+
+User-facing wrappers: fish `claudex hot-swap` → `claudex-hot-swap.fish`; POSIX
+`scripts/claudex-hot-swap` linked to `~/.local/bin/claudex-hot-swap` for zsh.
+Both invoke `claudex-agent-adapter hot-swap --provider-config … --listen …`.
+Canonical binary is `~/.cargo/bin/claudex-agent-adapter`; `~/.local/bin` is a
+symlink created by `create-symlinks.sh`.
+
 `launch --model MODEL -- ...` scopes Anthropic routing,
 removes conflicting provider and adapter variables, launches Claude Code with
 untouched non-model arguments, and returns Claude Code's exit status. With

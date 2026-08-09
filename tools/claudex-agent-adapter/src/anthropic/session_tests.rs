@@ -315,6 +315,31 @@ fn received_advisor_schema_is_public_instead_of_internal_execution() {
 }
 
 #[test]
+fn subagent_sessions_hide_main_only_advisor_instead_of_forwarding_it() {
+    let schema = json!({
+        "type":"object",
+        "properties":{"question":{"type":"string"}},
+        "required":["question"],
+        "additionalProperties":false
+    });
+    let subagent = request(
+        json!("cc_is_subagent=true"),
+        vec![
+            json!({"name":"Read","input_schema":{"type":"object"}}),
+            json!({"name":"advisor","input_schema":schema}),
+        ],
+    );
+    let (tools, names, internal) = tool_configuration(&subagent, Some("hidden-model"), None);
+    assert!(internal.is_empty());
+    assert!(names.values().any(|name| name == "Read"));
+    assert!(!names.values().any(|name| name == "advisor"));
+    assert_eq!(tools.len(), 1);
+    assert!(super::is_main_session_only_tool("advisor"));
+    assert!(super::is_main_session_only_tool("cc_advisor_0"));
+    assert!(!super::is_main_session_only_tool("Read"));
+}
+
+#[test]
 fn documents_idempotent_task_stop_semantics_in_the_dynamic_schema() {
     for name in ["TaskStop", "StopTask", "Stop Task"] {
         let tool = dynamic_tool(
@@ -324,7 +349,8 @@ fn documents_idempotent_task_stop_semantics_in_the_dynamic_schema() {
         .expect("task-stop schema");
         let description = tool["description"].as_str().expect("description");
         assert!(description.contains("stopping is idempotent"));
-        assert!(description.contains("exact active task_id"));
+        assert!(description.contains("exact active Agent task_id"));
+        assert!(description.contains("b13mjnjlj"));
         assert!(description.contains("No task found"));
     }
     let ordinary =
@@ -767,6 +793,40 @@ fn acp_native_modes_use_provider_native_instructions_instead_of_agent_orchestrat
     assert!(!developer.contains("run_in_background=true on every Agent/Task launch"));
 }
 
+#[test]
+fn command_code_model_omits_claude_system_and_uses_acp_native_instructions() {
+    let mut request = request(
+        json!("HUGE_CLAUDE_SYSTEM selected_workers ctx-agent-history-search"),
+        Vec::new(),
+    );
+    request.messages = vec![json!({
+        "role":"user",
+        "content":"<claudex-agent-id>toolu_cc</claudex-agent-id>\nread CLAUDE.md"
+    })];
+    let params = thread_start_params_for_mode(
+        &request,
+        "meta/muse-spark-1.2-contributor",
+        Vec::new(),
+        WebSearchMode::Disabled,
+    );
+    let base = params["baseInstructions"]
+        .as_str()
+        .expect("command-code base instructions");
+    let developer = params["developerInstructions"]
+        .as_str()
+        .expect("command-code developer instructions");
+    assert!(!base.contains("HUGE_CLAUDE_SYSTEM"));
+    assert!(!base.contains("selected_workers"));
+    assert!(
+        base.is_empty(),
+        "Command Code must not carry ACP_NATIVE dumps: {base}"
+    );
+    assert!(
+        developer.is_empty(),
+        "Command Code must not carry developer ACP dumps: {developer}"
+    );
+}
+
 fn assert_developer_guidance(developer: &str) {
     const REQUIRED: &[&str] = &[
         "never infer from it that Claude Code or its SubAgent tasks are read-only",
@@ -828,6 +888,11 @@ fn main_session_orchestration_instructions_are_omitted_for_subagents() {
     assert!(developer.contains(
         "For ordinary follow-ups, reuse the exact Agent/Task recipient through its native result and TaskOutput"
     ));
+    assert!(
+        developer.contains("advisor() is main-session only"),
+        "workers must be told not to call built-in advisor()"
+    );
+    assert!(developer.contains("disabled_subagent_models"));
 }
 
 fn assert_team_thread_configuration() {

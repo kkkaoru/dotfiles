@@ -11,8 +11,13 @@ use serde::{Deserialize, Serialize};
 const CACHE_FILE_NAME: &str = "provider-auth-cooldown.json";
 const CACHE_VERSION: u8 = 1;
 const DEFAULT_COOLDOWN: Duration = Duration::from_secs(30 * 60);
+/// Provider 429 / weekly-cap cool-downs outlive short auth blips. Ollama Cloud
+/// often stays dark for hours after the first retry storm; 30 minutes caused
+/// automatic re-selection loops.
+const DEFAULT_RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(4 * 60 * 60);
 const MAX_COOLDOWN: Duration = Duration::from_secs(24 * 60 * 60);
 const COOLDOWN_ENV: &str = "CLAUDEX_PROVIDER_AUTH_COOLDOWN_SECONDS";
+const RATE_LIMIT_COOLDOWN_ENV: &str = "CLAUDEX_PROVIDER_RATE_LIMIT_COOLDOWN_SECONDS";
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -44,6 +49,25 @@ pub(crate) fn record_at(
     message: &str,
     now: SystemTime,
 ) -> Option<PathBuf> {
+    record_with_duration(path, scope, message, now, cooldown_duration())
+}
+
+pub(crate) fn record_rate_limit_at(
+    path: Option<&Path>,
+    scope: &str,
+    message: &str,
+    now: SystemTime,
+) -> Option<PathBuf> {
+    record_with_duration(path, scope, message, now, rate_limit_cooldown_duration())
+}
+
+fn record_with_duration(
+    path: Option<&Path>,
+    scope: &str,
+    message: &str,
+    now: SystemTime,
+    duration: Duration,
+) -> Option<PathBuf> {
     if scope.is_empty() {
         return None;
     }
@@ -53,10 +77,18 @@ pub(crate) fn record_at(
         entries: BTreeMap::new(),
     });
     cache.version = CACHE_VERSION;
+    let until = unix_seconds(now + duration);
+    // Keep the longer of an existing cool-down and this one so a later auth
+    // blip cannot shorten an active rate-limit window.
+    let until_unix_seconds = cache
+        .entries
+        .get(scope)
+        .map(|entry| entry.until_unix_seconds.max(until))
+        .unwrap_or(until);
     cache.entries.insert(
         scope.to_owned(),
         AuthCooldownEntry {
-            until_unix_seconds: unix_seconds(now + cooldown_duration()),
+            until_unix_seconds,
             message: message.to_owned(),
             recorded_unix_seconds: unix_seconds(now),
         },
@@ -92,12 +124,18 @@ fn prune_expired(cache: &mut AuthCooldownCache, now: SystemTime) {
 }
 
 fn cooldown_duration() -> Duration {
-    if let Ok(seconds) = std::env::var(COOLDOWN_ENV)
-        && let Ok(seconds) = seconds.parse::<u64>()
-    {
-        return Duration::from_secs(seconds.min(MAX_COOLDOWN.as_secs()));
-    }
-    DEFAULT_COOLDOWN.min(MAX_COOLDOWN)
+    env_cooldown(COOLDOWN_ENV).unwrap_or(DEFAULT_COOLDOWN.min(MAX_COOLDOWN))
+}
+
+fn rate_limit_cooldown_duration() -> Duration {
+    env_cooldown(RATE_LIMIT_COOLDOWN_ENV).unwrap_or(DEFAULT_RATE_LIMIT_COOLDOWN.min(MAX_COOLDOWN))
+}
+
+fn env_cooldown(name: &str) -> Option<Duration> {
+    std::env::var(name)
+        .ok()
+        .and_then(|seconds| seconds.parse::<u64>().ok())
+        .map(|seconds| Duration::from_secs(seconds.min(MAX_COOLDOWN.as_secs())))
 }
 
 fn write_cache(path: &Path, cache: &AuthCooldownCache) {
@@ -146,6 +184,26 @@ mod tests {
             Some(&path),
             "sakana",
             now + DEFAULT_COOLDOWN + Duration::from_secs(1)
+        ));
+    }
+
+    #[test]
+    fn rate_limit_cooldown_outlives_default_auth_window() {
+        let root = tempfile::tempdir().expect("rate limit cooldown fixture");
+        let path = cache_path_for_home(root.path());
+        let now = UNIX_EPOCH + Duration::from_secs(1_000);
+        assert!(
+            record_rate_limit_at(Some(&path), "ollama", "429 Too Many Requests", now).is_some()
+        );
+        assert!(scope_is_cooling_down_at(
+            Some(&path),
+            "ollama",
+            now + DEFAULT_COOLDOWN + Duration::from_secs(1)
+        ));
+        assert!(!scope_is_cooling_down_at(
+            Some(&path),
+            "ollama",
+            now + DEFAULT_RATE_LIMIT_COOLDOWN + Duration::from_secs(1)
         ));
     }
 

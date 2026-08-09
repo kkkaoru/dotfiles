@@ -49,8 +49,7 @@ pub(super) fn request_graceful_shutdown(pid: u32) {
 }
 
 fn is_launch_process(pid: u32) -> bool {
-    process_field(pid, "command=")
-        .is_some_and(|command| is_launch_command_line(&command))
+    process_field(pid, "command=").is_some_and(|command| is_launch_command_line(&command))
 }
 
 fn is_launch_command_line(command: &str) -> bool {

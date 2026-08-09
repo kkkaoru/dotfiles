@@ -153,6 +153,26 @@ fn removes_codex_only_bridge_instructions() {
     );
 }
 
+#[test]
+fn command_code_models_skip_acp_routing_prefix() {
+    assert!(prompt::should_include_acp_routing(
+        AcpProvider::Grok,
+        "grok-4.5"
+    ));
+    assert!(prompt::should_include_acp_routing(
+        AcpProvider::Configured,
+        "auto"
+    ));
+    assert!(!prompt::should_include_acp_routing(
+        AcpProvider::Configured,
+        "meta/muse-spark-1.2-contributor"
+    ));
+    assert!(!prompt::should_include_acp_routing(
+        AcpProvider::Copilot,
+        "grok-4.5"
+    ));
+}
+
 #[tokio::test]
 async fn falls_back_to_the_first_permission_or_cancels() {
     let client = AcpClient::new(Arc::new(ThreadEventDispatcher::default()));

@@ -96,6 +96,8 @@ fn sanitizes_text_thinking_and_provider_status_variants() {
         "Session mode: worker",
         "Session: worker",
         "🔎 WebSearch: Example Robotics",
+        "… still working (2m) · last: Read foo",
+        "Claudex is still working; waiting for provider output\u{2026}",
     ] {
         let mut status_block = vec![json!({"type":"thinking","thinking":status})];
         sanitize::sanitize_committed_blocks(&mut status_block);
@@ -144,11 +146,25 @@ async fn thinking_state_handles_reuse_keepalive_and_unit_transitions() {
         .activity_keepalive(&mut blocks, None)
         .await
         .expect("heartbeat keepalive");
+    state
+        .close(&mut blocks, None)
+        .await
+        .expect("close keepalive before switching buffers");
     let mut visible = vec![json!({"type":"text","text":"answer"})];
     state
         .activity_keepalive(&mut visible, None)
         .await
         .expect("visible output keepalive");
+    assert!(
+        visible
+            .iter()
+            .any(|block| block.get("type").and_then(Value::as_str) == Some("thinking")),
+        "keepalive must continue after visible text so the 600s watchdog stays alive"
+    );
+    state
+        .close(&mut visible, None)
+        .await
+        .expect("close visible keepalive before switching buffers");
     state
         .delta(
             &json!({"params":{"itemId":"model:status","summaryIndex":0,"delta":"ignored"}}),
@@ -275,6 +291,38 @@ async fn streams_summarized_thinking_as_separate_units_before_text() {
 }
 
 #[tokio::test]
+async fn whitespace_reasoning_delta_does_not_open_blank_thought_chrome() {
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
+    let mut builder = SegmentBuilder::new(1);
+    builder
+        .model_output_event(
+            &json!({
+                "method":"item/reasoning/summaryTextDelta",
+                "params":{"itemId":"cline:reasoning","summaryIndex":0,"delta":"\n\n  \n"}
+            }),
+            Some(&sender),
+        )
+        .await
+        .expect("ignore whitespace thought");
+    builder
+        .activity_keepalive(Some(&sender))
+        .await
+        .expect("visible keepalive after blank thought");
+    drop(sender);
+    let mut frames = Vec::new();
+    while let Some(frame) = receiver.recv().await {
+        let frame = String::from_utf8(frame.expect("frame").to_vec()).expect("UTF-8 SSE");
+        let data = frame.lines().find_map(|line| line.strip_prefix("data: "));
+        frames.push(serde_json::from_str::<Value>(data.expect("SSE data")).expect("JSON frame"));
+    }
+    assert!(
+        frames.iter().any(|frame| frame["delta"]["thinking"]
+            == "Claudex is still working; waiting for provider output\u{2026}"),
+        "blank Cline thought must not block the visible keepalive: {frames:?}"
+    );
+}
+
+#[tokio::test]
 async fn activity_keepalive_emits_visible_status_then_zero_width_heartbeat() {
     let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
     let mut builder = SegmentBuilder::new(1);
@@ -309,6 +357,47 @@ async fn activity_keepalive_emits_visible_status_then_zero_width_heartbeat() {
     assert_eq!(
         frames[2]["delta"],
         json!({"type":"thinking_delta","thinking":"\u{200b}"})
+    );
+}
+
+#[tokio::test]
+async fn activity_keepalive_continues_after_bridged_tool_use_so_watchdog_does_not_stall() {
+    // Historical TUI failure (fa522331 / spark a989e556):
+    // `Agent "Verify today's time and live data" failed: Agent stalled: no progress
+    // for 600s (stream watchdog did not recover)` after Bash/WebSearch tool_use.
+    // Old activity_keepalive returned immediately once any non-thinking block
+    // existed, so decoded keepalives stopped for the rest of the turn.
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
+    let mut builder = SegmentBuilder::new(1);
+    builder.blocks.push(json!({
+        "type":"tool_use",
+        "id":"toolu_bash",
+        "name":"Bash",
+        "input":{"command":"date"}
+    }));
+    builder
+        .activity_keepalive(Some(&sender))
+        .await
+        .expect("keepalive after tool_use");
+    builder
+        .activity_keepalive(Some(&sender))
+        .await
+        .expect("second heartbeat after tool_use");
+    let segment = builder.finish(Some(&sender)).await.expect("segment");
+    drop(sender);
+
+    assert_eq!(segment.blocks[0]["name"], "Bash");
+    assert!(
+        segment
+            .blocks
+            .iter()
+            .all(|block| block.get("type").and_then(Value::as_str) != Some("thinking")),
+        "keepalive thinking must stay out of the committed transcript"
+    );
+    let saw_zwsp = stream_contains_zwsp(&mut receiver).await;
+    assert!(
+        saw_zwsp,
+        "bridged tool_use must still emit a decoded keepalive for the 600s watchdog"
     );
 }
 
@@ -539,6 +628,7 @@ async fn reports_slow_stream_preparation_before_the_provider_is_ready() {
         Some("SubAgent starting: worker-model (effort=high)"),
         Duration::from_millis(5),
         Duration::from_millis(50),
+        true,
     )
     .await;
     assert_eq!(result.expect("prepare result"), Some("ready"));
@@ -575,6 +665,7 @@ async fn finishes_fast_or_disconnected_stream_preparation_without_activity_statu
         None,
         Duration::from_secs(1),
         Duration::from_secs(1),
+        false,
     )
     .await;
     assert_eq!(result.expect("fast prepare"), Some("ready"));
@@ -588,6 +679,7 @@ async fn finishes_fast_or_disconnected_stream_preparation_without_activity_statu
         None,
         Duration::from_secs(1),
         Duration::from_secs(1),
+        false,
     )
     .await;
     assert!(result.expect("disconnected prepare").is_none());
@@ -601,6 +693,7 @@ async fn finishes_fast_or_disconnected_stream_preparation_without_activity_statu
         None,
         Duration::from_secs(1),
         Duration::from_secs(1),
+        false,
     )
     .await;
     assert!(
@@ -702,9 +795,14 @@ async fn streams_native_web_search_status_without_committing_progress_text() {
     }
     let segment = builder.finish(Some(&sender)).await.expect("segment");
     drop(sender);
-    assert_eq!(segment.blocks.len(), 1);
-    let text = segment.blocks[0]["text"].as_str().expect("progress text");
-    assert!(text.trim().is_empty());
+    assert!(segment.blocks.iter().all(|block| {
+        ["text", "thinking"].into_iter().all(|key| {
+            block.get(key).and_then(Value::as_str).is_none_or(|text| {
+                text.trim().is_empty()
+                    || !(text.contains("WebSearch") || text.contains('🔎') || text.contains('▶'))
+            })
+        })
+    }));
     assert_eq!(segment.usage.web_search_requests, 0);
 
     let mut frames = Vec::new();
@@ -898,6 +996,7 @@ async fn bridges_acp_agent_provider_tools_to_tool_use_but_keeps_native_tools_as_
         .await
         .expect("native Bash stays WIP");
     assert!(!native.has_external_tool_calls());
+    assert!(native.open_text_block.is_none());
     assert!(
         native
             .blocks
@@ -905,11 +1004,14 @@ async fn bridges_acp_agent_provider_tools_to_tool_use_but_keeps_native_tools_as_
             .all(|block| block.get("type").and_then(Value::as_str) != Some("tool_use"))
     );
     let progress = native
-        .open_text_block
-        .as_ref()
-        .map(|(_, text)| text.as_str())
-        .expect("native progress text");
-    assert!(progress.contains("▶ Bash"));
+        .blocks
+        .iter()
+        .filter_map(|block| block.get("thinking").and_then(Value::as_str))
+        .collect::<String>();
+    assert!(
+        progress.contains("▶ Bash"),
+        "native progress thinking: {progress}"
+    );
     assert!(progress.contains("ls"));
 }
 
@@ -1029,6 +1131,45 @@ async fn forwards_generic_tools_and_blocks_disabled_subagent_models() {
     assert!(output.contains("blocked-model"));
 }
 
+#[tokio::test]
+async fn keeps_parent_stream_after_unroutable_subagent_launch() {
+    let (_root, _app, bridge, session) = disconnect_fixture().await;
+    let mut builder = SegmentBuilder::new(1);
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
+    let flow = builder
+        .handle_event(
+            &bridge,
+            &session,
+            &[],
+            &Value::Null,
+            &json!({
+                "id":3,
+                "method":"item/tool/call",
+                "params":{
+                    "callId":"agent",
+                    "tool":"cc_Agent_0",
+                    "arguments":{"prompt":"delegate","subagent_type":"general-purpose"}
+                }
+            }),
+            Some(&sender),
+        )
+        .await
+        .expect("unroutable SubAgent must not fail the parent stream");
+    assert_eq!(flow, ControlFlow::Continue(()));
+    assert!(!builder.has_external_tool_calls());
+    assert!(builder.blocks.iter().any(|block| {
+        block["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("was not started. Continue without it."))
+    }));
+    drop(sender);
+    let mut output = String::new();
+    while let Some(frame) = receiver.recv().await {
+        output.push_str(&String::from_utf8_lossy(&frame.expect("infallible frame")));
+    }
+    assert!(output.contains("was not started. Continue without it."));
+}
+
 fn worker_task(prompt: &str, run_in_background: Option<bool>) -> Value {
     let mut task = json!({
         "prompt": prompt,
@@ -1107,7 +1248,7 @@ async fn treats_a_closed_sender_after_batch_finish_as_disconnect() {
 }
 
 #[tokio::test]
-async fn commits_status_deltas_as_progress_text_after_answer_starts() {
+async fn commits_status_deltas_as_thinking_progress_even_after_answer_starts() {
     let mut builder = SegmentBuilder::new(1);
     builder.blocks.push(json!({"type":"text","text":"answer"}));
     assert!(builder.has_committed_output());
@@ -1115,33 +1256,42 @@ async fn commits_status_deltas_as_progress_text_after_answer_starts() {
         .stream_progress_text("", None)
         .await
         .expect("empty status");
-    // Existing closed text block: open a new progress text stream.
     builder
         .stream_progress_text("\n▶ provider\n", None)
         .await
-        .expect("visible block status");
+        .expect("thinking progress after closed text");
+    assert!(builder.open_text_block.is_none());
     assert!(
         builder
-            .open_text_block
-            .as_ref()
-            .expect("progress text")
-            .1
-            .contains("▶ provider")
+            .blocks
+            .iter()
+            .any(
+                |block| block.get("type").and_then(Value::as_str) == Some("thinking")
+                    && block
+                        .get("thinking")
+                        .and_then(Value::as_str)
+                        .is_some_and(|text| text.contains("▶ provider"))
+            ),
+        "▶ must stay in thinking chrome after answer text: {:?}",
+        builder.blocks
     );
 
     builder.blocks.clear();
+    builder.thinking = ThinkingState::default();
     builder.open_text_block = Some((0, "answer".to_owned()));
     builder.blocks.push(json!({"type":"text","text":""}));
     builder
         .stream_progress_text("\n▶ provider\n", None)
         .await
-        .expect("open text status");
-    assert_eq!(
-        builder
-            .open_text_block
-            .as_ref()
-            .map(|(_, text)| text.as_str()),
-        Some("answer\n▶ provider\n")
+        .expect("thinking progress after open text");
+    assert!(builder.open_text_block.is_none());
+    assert!(
+        builder.blocks.iter().any(|block| block
+            .get("thinking")
+            .and_then(Value::as_str)
+            .is_some_and(|text| text.contains("▶ provider"))),
+        "open text must close so SubAgent TUI can show ▶: {:?}",
+        builder.blocks
     );
 }
 

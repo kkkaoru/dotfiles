@@ -24,16 +24,27 @@ impl Bridge {
         &self,
         request: &MessagesRequest,
     ) -> Option<Response<Body>> {
-        let round_tool_use_ids = latest_tool_round_ids(request)?;
+        let round_tool_use_ids = latest_agent_tool_round_ids(request)?;
         let message = request.messages.last()?;
         let tool_use_ids = exact_async_launch_acknowledgement(message, &round_tool_use_ids)?;
-        let launches = self.agent_efforts.background_launches(&tool_use_ids)?;
+        // Claude Code's async launch acknowledgement is authoritative. Recorded
+        // agent_efforts intents are optional telemetry only: SubAgent startup may
+        // already have matched routing state, and public tool args may have
+        // defaulted run_in_background after the intent was recorded.
+        let recorded_background = self
+            .agent_efforts
+            .background_launches(&tool_use_ids)
+            .is_some();
         let results = collect_tool_results(std::slice::from_ref(request.messages.last()?));
-        if !self.cancel_handed_off_provider_session(&results).await {
+        if !self
+            .cancel_handed_off_provider_session(&results, &tool_use_ids)
+            .await
+        {
             return None;
         }
         tracing::info!(
-            launch_count = launches.len(),
+            launch_count = tool_use_ids.len(),
+            recorded_background,
             "returned control after native Claude Code background Agent launch"
         );
         // Claude Code renders the launch/result in its native task panel from
@@ -41,10 +52,14 @@ impl Bridge {
         // required: an empty end_turn makes Claude Code inject a synthetic
         // "previous response had no visible output" user message and start a
         // duplicate provider turn, which queues the next user input.
-        let text = background_handoff_text(launches.len());
+        let text = background_handoff_text(tool_use_ids.len());
         Some(internal_notification::acknowledge_with_text(request, &text))
     }
-    async fn cancel_handed_off_provider_session(&self, results: &[ToolResult]) -> bool {
+    async fn cancel_handed_off_provider_session(
+        &self,
+        results: &[ToolResult],
+        async_launch_ids: &[String],
+    ) -> bool {
         let Some(session) = self.find_result_session(results).await else {
             return true;
         };
@@ -55,12 +70,20 @@ impl Bridge {
             .keys()
             .cloned()
             .collect::<Vec<_>>();
-        if self
-            .agent_efforts
-            .background_launches(&pending_ids)
-            .is_none()
-        {
-            return false;
+        if !pending_ids.is_empty() {
+            let async_set = async_launch_ids
+                .iter()
+                .map(String::as_str)
+                .collect::<HashSet<_>>();
+            // Only disconnect when every still-pending tool belongs to this
+            // background launch acknowledgement. Leftover non-agent tools must
+            // keep the provider turn open.
+            if pending_ids
+                .iter()
+                .any(|pending_id| !async_set.contains(pending_id.as_str()))
+            {
+                return false;
+            }
         }
         let ready = self.app.ensure_thread_ready(&session.thread_id).await;
         if ready.is_err() {
@@ -73,7 +96,12 @@ impl Bridge {
         true
     }
 }
-fn pure_async_launch_tool_results(message: &Value) -> Option<Vec<String>> {
+
+/// Collect successful async background-launch tool_result IDs from a user
+/// message. Non-result blocks and ordinary tool results are ignored so a mixed
+/// Claude Code continuation can still hand control back once every Agent/Task
+/// in the latest round is acknowledged as backgrounded.
+fn async_launch_tool_results(message: &Value) -> Option<Vec<String>> {
     if message.get("role").and_then(Value::as_str) != Some("user") {
         return None;
     }
@@ -81,27 +109,31 @@ fn pure_async_launch_tool_results(message: &Value) -> Option<Vec<String>> {
     if blocks.is_empty() {
         return None;
     }
-    blocks
-        .iter()
-        .map(|block| {
-            if block.get("type").and_then(Value::as_str) != Some("tool_result")
-                || block.get("is_error").and_then(Value::as_bool) == Some(true)
-            {
-                return None;
-            }
-            let text = strict_result_text(block.get("content")?)?;
-            if !text.trim_start().starts_with(ASYNC_LAUNCH_PREFIX)
-                || !text.contains(BACKGROUND_MARKER)
-            {
-                return None;
-            }
-            block
-                .get("tool_use_id")
-                .and_then(Value::as_str)
-                .filter(|id| !id.is_empty())
-                .map(str::to_owned)
-        })
-        .collect()
+    let mut ids = Vec::new();
+    for block in blocks {
+        if block.get("type").and_then(Value::as_str) != Some("tool_result")
+            || block.get("is_error").and_then(Value::as_bool) == Some(true)
+        {
+            continue;
+        }
+        let Some(text) = block.get("content").and_then(strict_result_text) else {
+            continue;
+        };
+        if !text.trim_start().starts_with(ASYNC_LAUNCH_PREFIX) || !text.contains(BACKGROUND_MARKER)
+        {
+            continue;
+        }
+        let Some(id) = block
+            .get("tool_use_id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+            .map(str::to_owned)
+        else {
+            continue;
+        };
+        ids.push(id);
+    }
+    (!ids.is_empty()).then_some(ids)
 }
 
 /// Return the successful async launch IDs only when they are a duplicate-free,
@@ -112,7 +144,7 @@ pub(crate) fn exact_async_launch_acknowledgement(
     message: &Value,
     expected_tool_use_ids: &[String],
 ) -> Option<Vec<String>> {
-    let result_ids = pure_async_launch_tool_results(message)?;
+    let result_ids = async_launch_tool_results(message)?;
     if result_ids.len() != expected_tool_use_ids.len() || result_ids.is_empty() {
         return None;
     }
@@ -156,22 +188,28 @@ fn append_strict_result_text(text: &mut String, item: &Value) -> Option<()> {
     Some(())
 }
 
-fn latest_tool_round_ids(request: &MessagesRequest) -> Option<Vec<String>> {
+fn latest_agent_tool_round_ids(request: &MessagesRequest) -> Option<Vec<String>> {
     request
         .messages
         .iter()
         .rev()
         .skip(1)
         .filter(|message| message.get("role").and_then(Value::as_str) == Some("assistant"))
-        .find_map(tool_round_ids)
+        .find_map(agent_tool_round_ids)
 }
 
-pub(crate) fn tool_round_ids(message: &Value) -> Option<Vec<String>> {
+pub(crate) fn agent_tool_round_ids(message: &Value) -> Option<Vec<String>> {
     let ids = message
         .get("content")?
         .as_array()?
         .iter()
         .filter(|block| block.get("type").and_then(Value::as_str) == Some("tool_use"))
+        .filter(|block| {
+            block
+                .get("name")
+                .and_then(Value::as_str)
+                .is_some_and(super::agent_effort::is_agent_tool)
+        })
         .map(|block| {
             block
                 .get("id")
@@ -181,156 +219,6 @@ pub(crate) fn tool_round_ids(message: &Value) -> Option<Vec<String>> {
         })
         .collect::<Option<Vec<_>>>()?;
     (!ids.is_empty()).then_some(ids)
-}
-
-#[cfg(test)]
-#[cfg_attr(coverage_nightly, coverage(off))]
-mod tests {
-    use serde_json::json;
-
-    use super::*;
-
-    fn request(content: Value) -> MessagesRequest {
-        MessagesRequest {
-            model: "main-model".to_owned(),
-            system: Value::Null,
-            messages: vec![json!({"role":"user", "content":content})],
-            tools: Vec::new(),
-            stream: false,
-            output_config: json!({}),
-            metadata: json!({}),
-            working_directory: None,
-            disabled_subagent_models: Default::default(),
-            claudex_collaborator_model: None,
-        }
-    }
-
-    fn launch_result(id: &str) -> Value {
-        json!({
-            "type":"tool_result",
-            "tool_use_id":id,
-            "content":[{"type":"text", "text":format!(
-                "{ASYNC_LAUNCH_PREFIX}\nagentId: internal\n{BACKGROUND_MARKER}"
-            )}]
-        })
-    }
-
-    #[test]
-    fn accepts_only_pure_successful_async_launch_results() {
-        let pure = request(json!([launch_result("one"), launch_result("two")]));
-        assert_eq!(
-            pure_async_launch_tool_results(pure.messages.last().unwrap()),
-            Some(vec!["one".to_owned(), "two".to_owned()])
-        );
-
-        let mixed_text = request(json!([launch_result("one"), {"type":"text", "text":"hi"}]));
-        assert!(pure_async_launch_tool_results(mixed_text.messages.last().unwrap()).is_none());
-        let failed = request(json!([{
-            "type":"tool_result", "tool_use_id":"one", "is_error":true,
-            "content":format!("{ASYNC_LAUNCH_PREFIX} {BACKGROUND_MARKER}")
-        }]));
-        assert!(pure_async_launch_tool_results(failed.messages.last().unwrap()).is_none());
-        let completed = request(json!([{
-            "type":"tool_result", "tool_use_id":"one", "content":"finished"
-        }]));
-        assert!(pure_async_launch_tool_results(completed.messages.last().unwrap()).is_none());
-        let rich = request(json!([{
-            "type":"tool_result", "tool_use_id":"one",
-            "content":[{"type":"image"}, {"type":"text", "text":format!("{ASYNC_LAUNCH_PREFIX} {BACKGROUND_MARKER}")}]
-        }]));
-        assert!(pure_async_launch_tool_results(rich.messages.last().unwrap()).is_none());
-    }
-
-    #[test]
-    fn requires_results_to_belong_to_the_latest_native_tool_round() {
-        let mut correlated = request(json!([launch_result("background")]));
-        correlated.messages.insert(
-            0,
-            json!({
-                "role":"assistant",
-                "content":[
-                    {"type":"text", "text":"Launching delegated work."},
-                    {"type":"tool_use", "id":"background", "name":"Agent", "input":{}},
-                    {"type":"tool_use", "id":"other", "name":"Read", "input":{}}
-                ]
-            }),
-        );
-        assert_eq!(
-            latest_tool_round_ids(&correlated),
-            Some(vec!["background".to_owned(), "other".to_owned()])
-        );
-
-        let uncorrelated = request(json!([launch_result("background")]));
-        assert!(latest_tool_round_ids(&uncorrelated).is_none());
-    }
-
-    #[test]
-    fn requires_an_exact_unique_async_result_set() {
-        let expected = vec!["one".to_owned(), "two".to_owned()];
-        let exact = request(json!([launch_result("two"), launch_result("one")]));
-        assert_eq!(
-            exact_async_launch_acknowledgement(exact.messages.last().unwrap(), &expected),
-            Some(vec!["two".to_owned(), "one".to_owned()])
-        );
-
-        let partial = request(json!([launch_result("one")]));
-        assert!(
-            exact_async_launch_acknowledgement(partial.messages.last().unwrap(), &expected)
-                .is_none()
-        );
-        let duplicate = request(json!([launch_result("one"), launch_result("one")]));
-        assert!(
-            exact_async_launch_acknowledgement(duplicate.messages.last().unwrap(), &expected)
-                .is_none()
-        );
-    }
-
-    #[tokio::test]
-    async fn background_handoff_returns_visible_native_end_turn_without_lifecycle_tags() {
-        let json_request = request(json!([launch_result("one")]));
-        let response = internal_notification::acknowledge_with_text(
-            &json_request,
-            "Background agent launched; the main prompt is ready.",
-        );
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let body: Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(body["stop_reason"], "end_turn");
-        assert_eq!(
-            body["content"][0]["text"],
-            "Background agent launched; the main prompt is ready."
-        );
-        assert!(!body.to_string().contains("agent-message"));
-
-        let mut stream_request = json_request;
-        stream_request.stream = true;
-        let response = internal_notification::acknowledge_with_text(
-            &stream_request,
-            "Background agent launched; the main prompt is ready.",
-        );
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .unwrap();
-        let body = String::from_utf8(body.to_vec()).unwrap();
-        assert!(body.contains("event: message_start"));
-        assert!(body.contains("content_block_delta"));
-        assert!(body.contains("main prompt is ready"));
-        assert!(body.contains(r#""stop_reason":"end_turn""#));
-        assert!(body.contains("event: message_stop"));
-    }
-
-    #[test]
-    fn background_handoff_text_matches_the_native_launch_count() {
-        assert_eq!(
-            background_handoff_text(1),
-            "Background agent launched; the main prompt is ready."
-        );
-        assert_eq!(
-            background_handoff_text(3),
-            "3 background agents launched; the main prompt is ready."
-        );
-    }
 }
 
 #[cfg(test)]

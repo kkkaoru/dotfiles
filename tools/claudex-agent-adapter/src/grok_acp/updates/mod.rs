@@ -155,6 +155,9 @@ fn dispatch_thought(
     let acp::ContentBlock::Text(text) = chunk.content else {
         return;
     };
+    if text.text.trim().is_empty() {
+        return;
+    }
     let item_id = format!("{session_id}:reasoning");
     for (summary_index, piece) in thoughts.partition(session_id, &text.text) {
         dispatch_delta(

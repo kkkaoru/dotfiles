@@ -59,8 +59,8 @@ async fn native_claude_launch_prompt(client: &Client, url: &str, instruction: &s
         .await
         .expect("read native Claude Agent launch");
     assert!(status.is_success(), "{status}: {body}");
-    let response =
-        serde_json::from_str::<serde_json::Value>(&body).expect("decode native Claude Agent launch");
+    let response = serde_json::from_str::<serde_json::Value>(&body)
+        .expect("decode native Claude Agent launch");
     if response["content"][0]["name"] != "Agent" {
         assert!(
             response["content"][0]["text"]

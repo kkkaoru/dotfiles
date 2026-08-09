@@ -8,9 +8,9 @@ use std::{
 };
 
 use crate::{
-    ADAPTER_PROTOCOL_VERSION, discovery_model_id,
+    ADAPTER_PROTOCOL_VERSION,
     anthropic::{Bridge, MessagesRequest, RequestIdentity, error_response},
-    subagent_policy, working_directory,
+    discovery_model_id, subagent_policy, working_directory,
 };
 use axum::{
     Json, Router,

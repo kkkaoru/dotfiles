@@ -5,6 +5,7 @@ use serde_json::Value;
 mod background_launch;
 mod model;
 mod terminal;
+pub(in crate::anthropic) use super::agent_route_validation::BLOCKED_SUBAGENT_NOTICE;
 #[cfg(test)]
 pub(super) use super::agent_route_validation::validate_routed_agent_arguments;
 pub(super) use super::agent_route_validation::validate_routed_agent_arguments_with_catalog;
@@ -107,8 +108,12 @@ impl AgentEffortIntents {
         let model_is_inherited = explicit_model.is_some_and(|model| {
             arguments.get(IMPLICIT_MODEL).and_then(Value::as_str) == Some(model)
         });
-        let run_in_background =
-            arguments.get("run_in_background").and_then(Value::as_bool) == Some(true);
+        // Match sanitize_public_tool_arguments: Agent/Task default to background
+        // when the model omits the field, so handoff still finds the launch.
+        let run_in_background = match arguments.get("run_in_background").and_then(Value::as_bool) {
+            Some(value) => value,
+            None => is_agent_tool(tool_name),
+        };
         let correlated = has_correlation_marker(prompt);
         let mut pending = self.pending.lock().expect("agent effort intents poisoned");
         remove_expired(&mut pending);

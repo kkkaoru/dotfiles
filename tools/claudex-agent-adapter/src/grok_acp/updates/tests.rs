@@ -75,6 +75,53 @@ async fn forwards_thought_as_reasoning_and_tools_as_provider_cards() {
 }
 
 #[tokio::test]
+async fn whitespace_thought_chunks_do_not_hide_later_tool_progress() {
+    // Cline `--thinking xhigh` / DeepSeek often streams `\n` thought chunks.
+    // Those used to open a blank "Thought for Xs" unit so ▶ Read never showed.
+    let events = ThreadEventDispatcher::default();
+    let receiver = events.subscribe("session");
+    let units = thoughts();
+    dispatch_notification(
+        &events,
+        &units,
+        acp::SessionNotification::new(
+            "session",
+            acp::SessionUpdate::AgentThoughtChunk(acp::ContentChunk::new("\n\n\n".into())),
+        ),
+    );
+    dispatch_notification(
+        &events,
+        &units,
+        acp::SessionNotification::new(
+            "session",
+            acp::SessionUpdate::ToolCall(
+                acp::ToolCall::new("call-read", "read_file")
+                    .kind(acp::ToolKind::Read)
+                    .raw_input(json!({"path":"/Users/kkk4oru/ghq/github.com/kkkaoru/horse-racing-data/apps/finish-position-cron/src/queue-consumer.ts"})),
+            ),
+        ),
+    );
+    let drained = drain(&receiver).await;
+    assert!(
+        drained
+            .iter()
+            .all(|event| event["method"] != "item/reasoning/summaryTextDelta"),
+        "whitespace thought must not open reasoning chrome"
+    );
+    let tool = drained
+        .iter()
+        .find(|event| event["method"] == "item/providerTool/call")
+        .expect("tool progress");
+    assert_eq!(tool["params"]["tool"], "Read");
+    assert!(
+        tool["params"]["arguments"]["path"]
+            .as_str()
+            .unwrap()
+            .contains("queue-consumer.ts")
+    );
+}
+
+#[tokio::test]
 async fn forwards_tool_status_updates_with_output() {
     let events = ThreadEventDispatcher::default();
     let receiver = events.subscribe("session");

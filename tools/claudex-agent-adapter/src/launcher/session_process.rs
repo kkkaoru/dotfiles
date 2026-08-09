@@ -17,9 +17,8 @@ const DEFAULT_LISTEN_PORT: u16 = 8318;
 /// True when an interactive `claudex-agent-adapter launch` parent using this
 /// listener is alive.
 ///
-/// Handover must not SIGTERM the shared `serve` daemon while a TUI session still
-/// holds that parent: killing the listener mid-session aborts Claude Code and
-/// forces resume to restart from compaction.
+/// Idle replacements still proceed with a TUI attached so the next turn uses
+/// the new binary. Active HTTP/provider turns remain deferred.
 pub(super) fn any_launch_is_active(listen_port: u16) -> bool {
     let output = match Command::new("ps").args(["-axo", "pid=,command="]).output() {
         Ok(output) => output,

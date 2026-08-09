@@ -599,6 +599,176 @@ mod tests {
     }
 
     #[test]
+    fn live_routing_does_not_reauthorize_capacity_excluded_catalog_workers() {
+        let mut catalog = crate::provider_config::ModelCatalog::default();
+        catalog
+            .set_worker_routes(vec![
+                crate::provider_config::WorkerRoute::new(
+                    "claudex-ollama-glm-5-2".to_owned(),
+                    "glm-5.2:cloud".to_owned(),
+                    "max".to_owned(),
+                ),
+                crate::provider_config::WorkerRoute::new(
+                    "claudex-cline-deepseek-flash".to_owned(),
+                    "cline-pass/deepseek-v4-flash".to_owned(),
+                    "xhigh".to_owned(),
+                ),
+            ])
+            .expect("valid worker routes");
+        let messages = [json!({
+            "role":"user",
+            "content":"Claudex routing for this turn: {\"providers\":{},\"selected_workers\":[{\"agent\":\"claudex-cline-deepseek-flash\",\"model\":\"cline-pass/deepseek-v4-flash\",\"effort\":\"xhigh\"}]} mandatory policy"
+        })];
+        let mut generic = json!({
+            "subagent_type":"general-purpose",
+            "prompt":"should stay on the automatic selected pool"
+        });
+
+        super::super::agent_routing::hydrate_routing_fields_from_context(
+            &mut generic,
+            &messages,
+            &json!(null),
+            &catalog,
+        );
+        assert_eq!(generic["claudex_model"], "cline-pass/deepseek-v4-flash");
+        let error = super::validate_routed_agent_arguments_with_catalog(
+            "Agent",
+            &json!({
+                "subagent_type":"general-purpose",
+                "claudex_model":"glm-5.2:cloud",
+                "claudex_effort":"max",
+                "prompt":"should not inherit a capacity-excluded catalog worker"
+            }),
+            &messages,
+            &json!(null),
+            &catalog,
+        )
+        .expect_err("generic Agent must not use a catalog worker outside selected_workers");
+        assert!(
+            error.to_string().contains("does not match the exact route"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn named_catalog_worker_survives_stale_selected_workers_after_cline_exhaustion() {
+        let mut catalog = crate::provider_config::ModelCatalog::default();
+        catalog
+            .set_worker_routes(vec![
+                crate::provider_config::WorkerRoute::new(
+                    "claudex-cline-deepseek-flash".to_owned(),
+                    "cline-pass/deepseek-v4-flash".to_owned(),
+                    "xhigh".to_owned(),
+                ),
+                crate::provider_config::WorkerRoute::new(
+                    "claudex-ollama-glm-5-2".to_owned(),
+                    "glm-5.2:cloud".to_owned(),
+                    "max".to_owned(),
+                ),
+                crate::provider_config::WorkerRoute::new(
+                    "claudex-qwen".to_owned(),
+                    "qwen3.8-max-preview".to_owned(),
+                    "high".to_owned(),
+                ),
+            ])
+            .expect("valid worker routes");
+        let messages = [json!({
+            "role":"user",
+            "content":"continue\nClaudex routing for this turn: {\"providers\":{},\"selected_agents\":[\"claudex-cline-deepseek-flash\",\"claudex-ollama-glm-5-2\"],\"selected_workers\":[{\"agent\":\"claudex-cline-deepseek-flash\",\"model\":\"cline-pass/deepseek-v4-flash\",\"effort\":\"xhigh\"},{\"agent\":\"claudex-ollama-glm-5-2\",\"model\":\"glm-5.2:cloud\",\"effort\":\"max\"}]} mandatory policy"
+        })];
+
+        let mut unnamed = json!({
+            "subagent_type":"claudex-qwen",
+            "prompt":"reroute after Cline Credits returned empty"
+        });
+        super::super::agent_routing::hydrate_routing_fields_from_context(
+            &mut unnamed,
+            &messages,
+            &json!(null),
+            &catalog,
+        );
+        assert_eq!(unnamed["claudex_model"], "qwen3.8-max-preview");
+        assert_eq!(unnamed["claudex_effort"], "high");
+        super::validate_routed_agent_arguments_with_catalog(
+            "Agent",
+            &unnamed,
+            &messages,
+            &json!(null),
+            &catalog,
+        )
+        .expect("named Qwen worker must launch after Cline exhaustion");
+
+        let explicit = json!({
+            "subagent_type":"claudex-qwen",
+            "claudex_model":"qwen3.8-max-preview",
+            "claudex_effort":"high",
+            "prompt":"reroute after Cline Credits returned empty"
+        });
+        super::validate_routed_agent_arguments_with_catalog(
+            "Agent",
+            &explicit,
+            &messages,
+            &json!(null),
+            &catalog,
+        )
+        .expect("explicit Qwen model must match its catalog route");
+
+        let error = super::validate_routed_agent_arguments_with_catalog(
+            "Agent",
+            &json!({
+                "subagent_type":"claudex-qwen",
+                "claudex_model":"not-a-configured-worker",
+                "prompt":"unknown sibling must still be rejected"
+            }),
+            &messages,
+            &json!(null),
+            &catalog,
+        )
+        .expect_err("unknown Qwen model must keep the old exact-route rejection");
+        assert!(
+            error.to_string().contains("does not match the exact route"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn rewritten_qwen_launch_authorizes_after_stale_cline_snapshot() {
+        let mut catalog = crate::provider_config::ModelCatalog::default();
+        catalog
+            .set_worker_routes(vec![
+                crate::provider_config::WorkerRoute::new(
+                    "claudex-cline-deepseek-flash".to_owned(),
+                    "cline-pass/deepseek-v4-flash".to_owned(),
+                    "xhigh".to_owned(),
+                ),
+                crate::provider_config::WorkerRoute::new(
+                    "claudex-qwen".to_owned(),
+                    "qwen3.8-max-preview".to_owned(),
+                    "high".to_owned(),
+                ),
+            ])
+            .expect("valid worker routes");
+        let messages = [json!({
+            "role":"user",
+            "content":"continue\nClaudex routing for this turn: {\"providers\":{},\"selected_workers\":[{\"agent\":\"claudex-cline-deepseek-flash\",\"model\":\"cline-pass/deepseek-v4-flash\",\"effort\":\"xhigh\"}]} mandatory policy"
+        })];
+        let rewritten = json!({
+            "subagent_type":"claudex-qwen",
+            "claudex_model":"qwen3.8-max-preview",
+            "claudex_effort":"high",
+            "prompt":"nested launch after Cline cooldown"
+        });
+        super::validate_routed_agent_arguments_with_catalog(
+            "Agent",
+            &rewritten,
+            &messages,
+            &json!(null),
+            &catalog,
+        )
+        .expect("rewritten Qwen worker must pass exact-route after Cline cooldown");
+    }
+
+    #[test]
     fn standard_agent_types_use_claudex_worker_model_and_effort() {
         let mut catalog = crate::provider_config::ModelCatalog::default();
         catalog

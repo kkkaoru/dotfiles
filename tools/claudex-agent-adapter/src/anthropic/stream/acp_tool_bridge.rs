@@ -227,11 +227,13 @@ pub(super) fn is_unbridged_launch_progress(
     let tool = params.get("tool").and_then(Value::as_str).unwrap_or("");
     let title = params.get("title").and_then(Value::as_str).unwrap_or("");
     let raw_args = params.get("arguments").unwrap_or(&Value::Null);
-    let launch_shaped = [tool, title].into_iter().any(|candidate| {
-        !candidate.is_empty()
-            && (looks_like_launch_tool(candidate)
-                || map_launch_name(candidate, external_tool_names).is_some())
-    }) || looks_like_launch_arguments(raw_args);
+    let launch_shaped = launch_name_candidates(tool, title)
+        .into_iter()
+        .any(|candidate| {
+            looks_like_launch_tool(candidate)
+                || map_launch_name(candidate, external_tool_names).is_some()
+        })
+        || looks_like_launch_arguments(raw_args);
     if !launch_shaped {
         return false;
     }
@@ -316,6 +318,28 @@ fn bridge_provider_tool_call_inner(
         arguments,
         request_id: acp_bridge_request_id(call_id),
     })
+}
+
+/// Tool labels only. Full shell titles (`schtasks`, "Search local agent history")
+/// must not count as Agent/Task just because they contain those substrings.
+fn launch_name_candidates<'a>(tool: &'a str, title: &'a str) -> Vec<&'a str> {
+    let mut labels = Vec::new();
+    if !tool.is_empty() {
+        labels.push(tool);
+    }
+    if !title.is_empty() && is_compact_tool_label(title) {
+        labels.push(title);
+    }
+    labels
+}
+
+fn is_compact_tool_label(candidate: &str) -> bool {
+    let trimmed = candidate.trim();
+    !trimmed.is_empty()
+        && trimmed.len() <= 64
+        && !trimmed.contains('\n')
+        && !trimmed.starts_with('`')
+        && (!trimmed.chars().any(char::is_whitespace) || looks_like_launch_tool(trimmed))
 }
 
 fn looks_like_mcp_surface(candidate: &str) -> bool {

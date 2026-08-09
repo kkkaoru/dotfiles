@@ -32,6 +32,7 @@ use helpers::{
     should_preempt_for_context_limit, touch_session, validate_tool_result_ownership,
 };
 pub(in crate::anthropic) use session_turn::is_context_window_exceeded;
+pub(in crate::anthropic) use tools::is_main_session_only_tool;
 #[cfg(test)]
 pub(super) use tools::{
     codex_tool_name, dynamic_tool, thread_start_params, thread_start_params_for_mode,

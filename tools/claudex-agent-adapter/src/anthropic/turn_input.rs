@@ -15,6 +15,26 @@ pub(super) fn full_transcript_input(messages: &[Value]) -> Vec<Value> {
     full_transcript_input_with_byte_limit(messages, MAX_TURN_INPUT_BYTES)
 }
 
+/// Command Code Muse Spark is one-shot `cmd -p`. Reconstructed Claude history
+/// makes it greet / ignore the delegated task.
+pub(super) fn provider_turn_input(model: &str, messages: &[Value]) -> Vec<Value> {
+    if crate::command_code_acp::is_command_code_model(model) {
+        return user_input_from_messages(messages);
+    }
+    full_transcript_input(messages)
+}
+
+pub(super) fn provider_turn_input_with_token_budget(
+    model: &str,
+    messages: &[Value],
+    token_budget: usize,
+) -> Vec<Value> {
+    if crate::command_code_acp::is_command_code_model(model) {
+        return user_input_from_messages(messages);
+    }
+    full_transcript_input_with_token_budget(messages, token_budget)
+}
+
 pub(super) fn full_transcript_input_with_token_budget(
     messages: &[Value],
     token_budget: usize,

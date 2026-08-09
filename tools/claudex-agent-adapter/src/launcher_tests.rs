@@ -142,9 +142,19 @@ mod tests {
     fn session_lock_paths_are_stable_and_private_to_each_resume_id() {
         let base = std::path::PathBuf::from("/tmp/claudex-session-lock-cache");
         let first = super::launcher_logs::session_lock_path(&base, "session-a");
-        assert_eq!(first, super::launcher_logs::session_lock_path(&base, "session-a"));
-        assert_ne!(first, super::launcher_logs::session_lock_path(&base, "session-b"));
-        assert!(first.file_name().is_some_and(|name| name != "session-a.lock"));
+        assert_eq!(
+            first,
+            super::launcher_logs::session_lock_path(&base, "session-a")
+        );
+        assert_ne!(
+            first,
+            super::launcher_logs::session_lock_path(&base, "session-b")
+        );
+        assert!(
+            first
+                .file_name()
+                .is_some_and(|name| name != "session-a.lock")
+        );
     }
 
     #[test]
@@ -197,7 +207,11 @@ mod tests {
         config
             .options
             .model_catalog
-            .set_worker_routes(vec![crate::provider_config::WorkerRoute::new("claudex-grok".to_owned(), "grok-4.5".to_owned(), "high".to_owned())])
+            .set_worker_routes(vec![crate::provider_config::WorkerRoute::new(
+                "claudex-grok".to_owned(),
+                "grok-4.5".to_owned(),
+                "high".to_owned(),
+            )])
             .expect("worker route");
         let arguments = daemon_arguments(&config.options)
             .into_iter()
@@ -212,7 +226,11 @@ mod tests {
         config
             .options
             .model_catalog
-            .set_search_worker_routes(vec![crate::provider_config::WorkerRoute::new("claudex-search".to_owned(), "gpt-search".to_owned(), "xhigh".to_owned())])
+            .set_search_worker_routes(vec![crate::provider_config::WorkerRoute::new(
+                "claudex-search".to_owned(),
+                "gpt-search".to_owned(),
+                "xhigh".to_owned(),
+            )])
             .expect("search worker route");
         let arguments = daemon_arguments(&config.options)
             .into_iter()
@@ -387,7 +405,10 @@ mod tests {
             )
             .await
             .is_err();
-            assert!(timed_out, "mismatched recovery health must not authenticate");
+            assert!(
+                timed_out,
+                "mismatched recovery health must not authenticate"
+            );
             server.join().expect("recovery readiness server");
         }
     }
@@ -398,7 +419,7 @@ mod tests {
         let mut absent = config();
         absent.options.listen = unused_listen();
         assert_eq!(
-            handover::inspect_service_with(&client, &absent, || false).await,
+            handover::inspect_service_with(&client, &absent).await,
             handover::ServiceState::Start
         );
 
@@ -411,7 +432,7 @@ mod tests {
             vec![health_response(&health), http_response("200 OK", "{}")],
         );
         assert_eq!(
-            handover::inspect_service_with(&client, &reusable, || false).await,
+            handover::inspect_service_with(&client, &reusable).await,
             handover::ServiceState::Reuse
         );
         server.join().expect("reuse server");
@@ -422,7 +443,7 @@ mod tests {
         reusable.options.listen = listener.local_addr().expect("stale address");
         let server = serve_responses(listener, vec![health_response(&stale)]);
         assert_eq!(
-            handover::inspect_service_with(&client, &reusable, || false).await,
+            handover::inspect_service_with(&client, &reusable).await,
             handover::ServiceState::Replace {
                 pid: Some(42),
                 recovery_generation: None,
@@ -439,7 +460,7 @@ mod tests {
         // deferred before the launcher probes auth or sends SIGTERM.
         let server = serve_responses(listener, vec![health_response(&active)]);
         assert_eq!(
-            handover::inspect_service_with(&client, &reusable, || false).await,
+            handover::inspect_service_with(&client, &reusable).await,
             handover::ServiceState::Defer {
                 pid: Some(42),
                 active_http_requests: 0,
@@ -454,14 +475,29 @@ mod tests {
         reusable.options.listen = listener.local_addr().expect("attached address");
         let server = serve_responses(listener, vec![health_response(&attached)]);
         assert_eq!(
-            handover::inspect_service_with(&client, &reusable, || true).await,
-            handover::ServiceState::Defer {
+            handover::inspect_service_with(&client, &reusable).await,
+            handover::ServiceState::Replace {
                 pid: Some(42),
-                active_http_requests: 0,
-                active_provider_turns: 0,
+                recovery_generation: None,
             }
         );
         server.join().expect("attached server");
+
+        let mut hot_busy = healthy(&reusable);
+        hot_busy.build_id = "old-build".to_owned();
+        hot_busy.active_http_requests = 1;
+        let listener = TcpListener::bind("127.0.0.1:0").expect("hot-swap busy listener");
+        reusable.options.listen = listener.local_addr().expect("hot-swap busy address");
+        let server = serve_responses(listener, vec![health_response(&hot_busy)]);
+        assert_eq!(
+            handover::inspect_service_with(&client, &reusable).await,
+            handover::ServiceState::Defer {
+                pid: Some(42),
+                active_http_requests: 1,
+                active_provider_turns: 0,
+            }
+        );
+        server.join().expect("hot-swap busy server");
 
         let listener = TcpListener::bind("127.0.0.1:0").expect("authentication listener");
         reusable.options.listen = listener.local_addr().expect("authentication address");
@@ -473,7 +509,7 @@ mod tests {
             ],
         );
         assert_eq!(
-            handover::inspect_service_with(&client, &reusable, || false).await,
+            handover::inspect_service_with(&client, &reusable).await,
             handover::ServiceState::Replace {
                 pid: Some(42),
                 recovery_generation: None,

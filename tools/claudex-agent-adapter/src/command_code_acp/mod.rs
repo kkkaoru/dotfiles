@@ -15,7 +15,7 @@ pub use events::{ParsedLine, ProgressEvent, TurnResult, parse_stdout_line, progr
 pub use launch::{DEFAULT_MAX_TURNS, DEFAULT_MODEL, LaunchSpec};
 pub use options::Options;
 pub use process::run_turn;
-pub use prompt::prompt_text;
+pub use prompt::{is_command_code_model, prompt_text, slim_headless_prompt};
 
 use anyhow::Result;
 

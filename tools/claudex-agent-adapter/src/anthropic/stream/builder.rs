@@ -1,4 +1,4 @@
-use std::ops::ControlFlow;
+use std::{ops::ControlFlow, time::Instant};
 
 use anyhow::Result;
 use serde_json::{Value, json};
@@ -17,6 +17,7 @@ use super::{
 
 mod batch;
 mod external_tool;
+mod progress;
 mod provider_launch;
 mod visibility;
 #[path = "web_provenance.rs"]
@@ -28,6 +29,11 @@ pub(in crate::anthropic) struct SegmentBuilder {
     pub(super) blocks: Vec<Value>,
     pub(super) thinking: ThinkingState,
     pub(super) open_text_block: Option<(usize, String)>,
+    /// SubAgent AgentMessage prose held until end_turn. Live viewer sees it as
+    /// thinking; streaming `text_delta` now would hide the panel until finish.
+    pub(super) pending_answer: String,
+    pub(super) is_subagent: bool,
+    turn_started_at: Instant,
     external_tool_calls: usize,
     /// Provider call IDs already shown as progress text. ACP can report the same
     /// call first as ToolCall and again as a populated ToolCallUpdate.
@@ -52,6 +58,9 @@ impl SegmentBuilder {
             blocks: Vec::new(),
             thinking: ThinkingState::default(),
             open_text_block: None,
+            pending_answer: String::new(),
+            is_subagent: false,
+            turn_started_at: Instant::now(),
             external_tool_calls: 0,
             provider_tool_calls: Vec::new(),
             bridged_provider_launch_ids: Vec::new(),
@@ -66,11 +75,19 @@ impl SegmentBuilder {
         }
     }
 
+    pub(super) fn with_subagent(mut self, is_subagent: bool) -> Self {
+        self.is_subagent = is_subagent;
+        self
+    }
+
     pub(super) fn has_external_tool_calls(&self) -> bool {
         self.external_tool_calls > 0
     }
 
     pub(super) fn has_committed_output(&self) -> bool {
+        if !self.pending_answer.is_empty() {
+            return true;
+        }
         if self
             .open_text_block
             .as_ref()
@@ -143,115 +160,6 @@ impl SegmentBuilder {
         Ok(true)
     }
 
-    pub(super) async fn text_delta(
-        &mut self,
-        event: &Value,
-        stream: Option<&StreamSender>,
-    ) -> Result<()> {
-        let Some(delta) = event.pointer("/params/delta").and_then(Value::as_str) else {
-            return Ok(());
-        };
-        if delta.is_empty() {
-            return Ok(());
-        }
-        // ACP status lines reuse agentMessage/delta with itemId "...:status".
-        // Commit them as visible text so Cursor/Grok SubAgent panels show progress
-        // instead of a silent multi-minute spinner.
-        if event
-            .pointer("/params/itemId")
-            .and_then(Value::as_str)
-            .is_some_and(|id| id.ends_with(":status"))
-        {
-            return self.stream_progress_text(delta, stream).await;
-        }
-        self.thinking.close(&mut self.blocks, stream).await?;
-        let index = match &mut self.open_text_block {
-            Some((index, text)) => {
-                text.push_str(delta);
-                *index
-            }
-            None => self.start_text_block(delta, stream).await?,
-        };
-        send_stream_frame(stream, "content_block_delta", || {
-            json!({
-                "type":"content_block_delta", "index":index,
-                "delta":{"type":"text_delta","text":delta}
-            })
-        })
-        .await
-    }
-
-    /// Keep Claude Code's decoded-event idle watchdog alive during provider
-    /// silence (long Grok/Codex tool runs with no model tokens).
-    ///
-    /// Heartbeats are stream-only when assistant text is already open so the
-    /// final answer/transcript never accumulates zero-width junk the way a
-    /// wall-clock injector would. Otherwise use a disposable thinking block.
-    pub(super) async fn subagent_start_status(
-        &mut self,
-        status: &str,
-        stream: Option<&StreamSender>,
-    ) -> Result<()> {
-        self.thinking
-            .activity_status(&mut self.blocks, status, stream)
-            .await
-    }
-
-    pub(super) async fn activity_keepalive(&mut self, stream: Option<&StreamSender>) -> Result<()> {
-        const HEARTBEAT: &str = "\u{200b}";
-        if let Some((index, _)) = self.open_text_block {
-            // Stream-only: do not mutate the committed text buffer.
-            return Self::send_activity_heartbeat(stream, index, HEARTBEAT).await;
-        }
-        self.thinking
-            .activity_keepalive(&mut self.blocks, stream)
-            .await
-    }
-
-    async fn send_activity_heartbeat(
-        stream: Option<&StreamSender>,
-        index: usize,
-        heartbeat: &str,
-    ) -> Result<()> {
-        send_stream_frame(stream, "content_block_delta", || {
-            heartbeat_delta(index, heartbeat)
-        })
-        .await
-    }
-
-    /// Provider-native tool / plan progress as durable assistant text.
-    ///
-    /// Cursor and other ACP providers never surface native tools as Claude Code
-    /// `tool_use` cards (double-execution risk). Progress must therefore appear
-    /// as text: stream it live and keep it in the committed segment so SubAgent
-    /// panels and transcripts show work after the first model sentence.
-    pub(super) async fn stream_progress_text(
-        &mut self,
-        delta: &str,
-        stream: Option<&StreamSender>,
-    ) -> Result<()> {
-        if delta.is_empty() {
-            return Ok(());
-        }
-        // Close thinking first so progress is not buried under thought chrome and
-        // so Claude Code's decoded-event stream stays on visible text deltas.
-        self.thinking.close(&mut self.blocks, stream).await?;
-        let index = match &mut self.open_text_block {
-            Some((index, text)) => {
-                text.push_str(delta);
-                *index
-            }
-            None => self.start_text_block(delta, stream).await?,
-        };
-        send_stream_frame(stream, "content_block_delta", || {
-            json!({
-                "type":"content_block_delta", "index":index,
-                "delta":{"type":"text_delta","text":delta}
-            })
-        })
-        .await
-    }
-
     pub(super) async fn start_text_block(
         &mut self,
         delta: &str,
@@ -298,7 +206,10 @@ impl SegmentBuilder {
         self.external_tool_call(context, original_name, call).await
     }
 
-    async fn close_text_block(&mut self, stream: Option<&StreamSender>) -> Result<()> {
+    pub(in crate::anthropic::stream::builder) async fn close_text_block(
+        &mut self,
+        stream: Option<&StreamSender>,
+    ) -> Result<()> {
         let Some((index, text)) = self.open_text_block.take() else {
             return Ok(());
         };
@@ -313,6 +224,7 @@ impl SegmentBuilder {
 
     pub(super) async fn close_open_blocks(&mut self, stream: Option<&StreamSender>) -> Result<()> {
         self.thinking.close(&mut self.blocks, stream).await?;
+        self.flush_pending_answer(stream).await?;
         self.close_text_block(stream).await
     }
 
@@ -360,13 +272,6 @@ impl SegmentBuilder {
             self.verified_web_evidence_count(),
         )))
     }
-}
-
-fn heartbeat_delta(index: usize, heartbeat: &str) -> Value {
-    json!({
-        "type":"content_block_delta", "index":index,
-        "delta":{"type":"text_delta","text":heartbeat}
-    })
 }
 
 fn estimated_output_tokens(block: &Value) -> u64 {

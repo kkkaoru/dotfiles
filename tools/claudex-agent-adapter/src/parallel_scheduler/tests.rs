@@ -794,6 +794,63 @@ fn single_gh_pr_lookup_does_not_expand_after_its_worker_starts() {
 }
 
 #[test]
+fn explicit_three_independent_scopes_in_prose_are_not_collapsed_to_one() {
+    let scheduler = ParallelScheduler::for_tests();
+    let request = messages(&[
+        serde_json::json!({
+            "role": "user",
+            "content": "3つの独立スコープに分けて並列で着手します。共有ツリーでの相互汚染を避けるため、各ワーカーは担当パスのみを明示 pathspec で commit し、push は全員完了後に私がまとめて実行します。",
+        }),
+        serde_json::json!({
+            "role": "assistant",
+            "content": [tool_use("r2", "cc_Agent_0", "gpt-5.6-sol")],
+        }),
+    ]);
+
+    let decision = scheduler.decision_for_request(&request);
+    assert_eq!(policy::independent_scope_count(&request), 3);
+    assert_eq!(decision.target_workers, 3);
+    assert_eq!(decision.active_workers, 1);
+    assert_eq!(decision.needs_more_workers, 2);
+    let guidance = scheduler.guidance_for_request(&request);
+    assert!(guidance.contains("Launch exactly 3 ordinary SubAgents"));
+    assert!(guidance.contains("do not stop after the first worker"));
+    assert!(!guidance.contains("Launch exactly one ordinary SubAgent"));
+    assert!(
+        decision
+            .actions
+            .iter()
+            .any(|action| action.contains("Launch at least 2")),
+        "one launched worker of three requested scopes must ask for the remaining two"
+    );
+}
+
+#[test]
+fn remaining_two_follow_up_keeps_the_stated_three_scope_total() {
+    let request = messages(&[
+        serde_json::json!({
+            "role":"user",
+            "content":"3つの独立スコープに分けて並列で着手します。",
+        }),
+        serde_json::json!({
+            "role":"assistant",
+            "content":[tool_use("r2", "cc_Agent_0", "gpt-5.6-sol")],
+        }),
+        serde_json::json!({
+            "role":"user",
+            "content":"残り2つを今出します。",
+        }),
+    ]);
+    assert_eq!(policy::independent_scope_count(&request), 3);
+    assert_eq!(
+        ParallelScheduler::for_tests()
+            .decision_for_request(&request)
+            .target_workers,
+        3
+    );
+}
+
+#[test]
 fn explicit_parallel_request_uses_inferred_scope_count_without_list_markers() {
     let scheduler = ParallelScheduler::for_tests();
     let request = messages(&[

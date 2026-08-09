@@ -8,6 +8,7 @@ use crate::agent_backend::BackendKind;
 use super::{
     Bridge, MessagesRequest, provider_auth, provider_auth_cooldown,
     request_routing::RouteDecision,
+    segment::contains_empty_acp_billing_marker,
     stream::usage_limit::{
         contains_classic_usage_limit_marker, contains_rate_limit_marker,
         contains_usage_limit_marker,
@@ -46,23 +47,53 @@ impl Bridge {
                 );
             }
         }
+        if super::subscription_oauth::is_subscription_auth_failure(error) {
+            if let Some(path) = provider_auth_cooldown::record_at(
+                self.provider_auth_cache_path().as_deref(),
+                super::subscription_oauth::SUBSCRIPTION_AUTH_SCOPE,
+                &message,
+                SystemTime::now(),
+            ) {
+                tracing::warn!(
+                    path = %path.display(),
+                    auth_scope = super::subscription_oauth::SUBSCRIPTION_AUTH_SCOPE,
+                    reason = "subscription-oauth",
+                    error = %message,
+                    "recorded Claude subscription OAuth cooldown; routing outer turns onto providers"
+                );
+            }
+        }
         if contains_rate_limit_marker(&message)
             || provider_auth::contains_auth_failure_marker(&message)
+            || contains_empty_acp_billing_marker(&message)
         {
             let scopes = self.auth_scopes_for(exhausted_model, &message);
             let cache_path = self.provider_auth_cache_path();
-            let reason = if contains_rate_limit_marker(&message) {
+            let rate_limited = contains_rate_limit_marker(&message);
+            let reason = if rate_limited {
                 "rate-limit"
+            } else if contains_empty_acp_billing_marker(&message) {
+                "empty-acp-billing"
             } else {
                 "auth"
             };
             for scope in scopes {
-                if let Some(path) = provider_auth_cooldown::record_at(
-                    cache_path.as_deref(),
-                    &scope,
-                    &message,
-                    SystemTime::now(),
-                ) {
+                let recorded = if rate_limited {
+                    provider_auth_cooldown::record_rate_limit_at(
+                        cache_path.as_deref(),
+                        &scope,
+                        &message,
+                        SystemTime::now(),
+                    )
+                } else {
+                    provider_auth_cooldown::record_at(
+                        cache_path.as_deref(),
+                        &scope,
+                        &message,
+                        SystemTime::now(),
+                    )
+                };
+                if let Some(path) = recorded {
                     tracing::warn!(
                         path = %path.display(),
                         auth_scope = %scope,
@@ -192,6 +223,86 @@ impl Bridge {
         })
     }
 
+    /// Choose failover for an already-open SSE stream.
+    /// SubAgents prefer a sibling Provider; outer turns keep subscription fallback.
+    pub(super) fn failover_for_stream_turn(
+        &self,
+        exhausted_model: &str,
+        is_subagent: bool,
+    ) -> Option<UsageLimitFailover> {
+        if is_subagent {
+            self.subagent_provider_failover_for(exhausted_model)
+                .or_else(|| self.usage_limit_failover_for(exhausted_model))
+        } else {
+            self.usage_limit_failover_for(exhausted_model)
+        }
+    }
+
+    /// Sibling provider for SubAgent empty-ACP / billing failures.
+    /// Prefer Qwen Cloud, then other non-exhausted configured ACP routes.
+    /// Codex usage-limit recovery keeps using [`Self::usage_limit_failover_for`].
+    pub(super) fn subagent_provider_failover_for(
+        &self,
+        exhausted_model: &str,
+    ) -> Option<UsageLimitFailover> {
+        let exhausted_kind = self.app.backend_kind_for_model(exhausted_model)?;
+        if !matches!(
+            exhausted_kind,
+            BackendKind::ConfiguredAcp | BackendKind::GrokAcp | BackendKind::CopilotAcp
+        ) {
+            return None;
+        }
+        const PREFERRED: &[&str] = &["qwen3.8-max-preview"];
+        let mut candidates = Vec::new();
+        for model in PREFERRED {
+            candidates.push((*model).to_owned());
+        }
+        for worker in self.model_catalog.worker_routes() {
+            candidates.push(worker.model.clone());
+        }
+        for model in self.app.models() {
+            candidates.push(model);
+        }
+        candidates.sort();
+        candidates.dedup();
+        let mut ordered = Vec::new();
+        for model in PREFERRED {
+            if candidates.iter().any(|candidate| candidate == model) {
+                ordered.push((*model).to_owned());
+            }
+        }
+        for model in candidates {
+            if !ordered.iter().any(|preferred| preferred == &model) {
+                ordered.push(model);
+            }
+        }
+        ordered.into_iter().find_map(|model| {
+            if model == exhausted_model
+                || self.subagent_provider_is_exhausted(&model)
+                || self.model_concurrency.is_subagent_at_capacity(&model)
+            {
+                return None;
+            }
+            let kind = self.app.backend_kind_for_model(&model)?;
+            if !matches!(
+                kind,
+                BackendKind::ConfiguredAcp | BackendKind::GrokAcp | BackendKind::CopilotAcp
+            ) {
+                return None;
+            }
+            let effort = self
+                .model_catalog
+                .worker_effort_for_model(&model)
+                .map(str::to_owned)
+                .or_else(|| self.app.launch_scoped_effort(&model));
+            Some(UsageLimitFailover {
+                model,
+                effort,
+                route: RouteDecision::Provider,
+            })
+        })
+    }
+
     pub(super) fn model_uses_codex_app_server(&self, model: &str) -> bool {
         match self.app.backend_kind_for_model(model) {
             Some(kind) => kind == BackendKind::CodexAppServer,
@@ -238,110 +349,21 @@ pub(crate) fn is_usage_limit_exceeded(error: &anyhow::Error) -> bool {
 
 pub(crate) fn should_failover_provider_error(error: &anyhow::Error) -> bool {
     let message = error.to_string();
-    contains_usage_limit_marker(&message) || provider_auth::contains_auth_failure_marker(&message)
+    contains_usage_limit_marker(&message)
+        || provider_auth::contains_auth_failure_marker(&message)
+        || contains_empty_acp_billing_marker(&message)
+}
+
+/// Streaming turns can only continue on a sibling Provider.
+/// Subscription failover cannot attach to an already-open SubAgent SSE stream,
+/// which is why the old empty-ACP path returned the error to Claude Code.
+pub(super) fn streaming_provider_retry(
+    failover: Option<UsageLimitFailover>,
+) -> Option<UsageLimitFailover> {
+    failover.filter(|candidate| candidate.route == RouteDecision::Provider)
 }
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
-mod tests {
-    use crate::agent_backend::{AgentBackend, BackendKind, BackendRoute};
-    use crate::anthropic::Bridge;
-    use crate::anthropic::request_routing::RouteDecision;
-    use crate::provider_config::ModelCatalog;
-
-    #[test]
-    fn prefers_configured_subscription_fallback_before_other_providers() {
-        let backend = AgentBackend::spawn_routes(&[
-            BackendRoute::new("fugu", BackendKind::CodexAppServer),
-            BackendRoute::new("grok-4.5", BackendKind::GrokAcp),
-        ]);
-        let mut catalog = ModelCatalog::default();
-        catalog
-            .set_auxiliary_worker_routes(vec![crate::provider_config::WorkerRoute::new(
-                "claudex-sonnet",
-                "claude-sonnet-5",
-                "high",
-            )])
-            .expect("install fallback");
-        let bridge =
-            Bridge::new_with_backend(backend, "fugu".to_owned()).with_model_catalog(catalog);
-        let failover = bridge
-            .usage_limit_failover_for("fugu")
-            .expect("failover target");
-        assert_eq!(failover.model, "claude-sonnet-5");
-        assert_eq!(failover.route, RouteDecision::Subscription);
-    }
-
-    #[test]
-    fn falls_back_to_configured_subscription_when_only_codex_remains() {
-        let backend =
-            AgentBackend::spawn_routes(&[BackendRoute::new("fugu", BackendKind::CodexAppServer)]);
-        let mut catalog = ModelCatalog::default();
-        catalog
-            .set_auxiliary_worker_routes(vec![crate::provider_config::WorkerRoute::new(
-                "claudex-sonnet",
-                "claude-sonnet-5",
-                "high",
-            )])
-            .expect("install fallback");
-        let bridge =
-            Bridge::new_with_backend(backend, "fugu".to_owned()).with_model_catalog(catalog);
-        let failover = bridge
-            .usage_limit_failover_for("fugu")
-            .expect("subscription failover");
-        assert_eq!(failover.model, "claude-sonnet-5");
-        assert_eq!(failover.route, RouteDecision::Subscription);
-    }
-
-    #[test]
-    fn treats_sakana_invalid_api_key_as_failover_trigger() {
-        assert!(super::should_failover_provider_error(&anyhow::anyhow!(
-            "codex app-server turn failed: unexpected status 401 Unauthorized: Invalid API key, url: https://api.sakana.ai/v1/responses"
-        )));
-    }
-
-    #[test]
-    fn treats_429_rate_limit_as_failover_trigger() {
-        assert!(super::should_failover_provider_error(&anyhow::anyhow!(
-            "codex app-server turn failed: exceeded retry limit, last status: 429 Too Many Requests, request id: abc"
-        )));
-        assert!(super::should_failover_provider_error(&anyhow::Error::msg(
-            r#"codex app-server turn failed: {"error":{"codexErrorInfo":{"responseTooManyFailedAttempts":{"httpStatusCode":429}},"message":"exceeded retry limit"}}"#
-        )));
-    }
-
-    #[test]
-    fn records_429_cooldown_per_model_without_backend_usage_limit() {
-        use std::time::SystemTime;
-
-        use crate::anthropic::{provider_auth_cooldown, usage_limit_cooldown};
-
-        let root = tempfile::tempdir().expect("rate-limit cooldown fixture");
-        let mut route = BackendRoute::new("glm-5.2:cloud", BackendKind::CodexAppServer);
-        route.model_provider = Some("ollama".to_owned());
-        let backend = AgentBackend::spawn_routes(&[route]);
-        let bridge = Bridge::new_with_backend(backend, "glm-5.2:cloud".to_owned())
-            .with_usage_limit_cache_home(root.path());
-        bridge.note_provider_exhaustion(
-            &anyhow::anyhow!(
-                "codex app-server turn failed: exceeded retry limit, last status: 429 Too Many Requests"
-            ),
-            Some("glm-5.2:cloud"),
-        );
-        assert!(bridge.subagent_provider_is_exhausted("glm-5.2:cloud"));
-        assert!(provider_auth_cooldown::scope_is_cooling_down_at(
-            bridge.provider_auth_cache_path().as_deref(),
-            "glm-5.2:cloud",
-            SystemTime::now(),
-        ));
-        assert!(provider_auth_cooldown::scope_is_cooling_down_at(
-            bridge.provider_auth_cache_path().as_deref(),
-            "ollama",
-            SystemTime::now(),
-        ));
-        assert!(!usage_limit_cooldown::codex_app_server_is_cooling_down_at(
-            bridge.usage_limit_cache_path().as_deref(),
-            SystemTime::now(),
-        ));
-    }
-}
+#[path = "usage_limit_failover_tests.rs"]
+mod tests;

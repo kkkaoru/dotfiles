@@ -7,7 +7,7 @@ use super::super::{
     ActiveTurn, Bridge, MessagesRequest, SelectedSession, Session,
     content::{ToolResult, serialized_len},
     turn_input::{
-        full_transcript_input, full_transcript_input_with_token_budget, user_input_from_messages,
+        provider_turn_input, provider_turn_input_with_token_budget, user_input_from_messages,
     },
 };
 use super::tools::{thread_start_params_for_mode, tool_configuration_for_mode};
@@ -280,8 +280,11 @@ impl Bridge {
 
     fn transcript_input(&self, request: &MessagesRequest) -> Vec<Value> {
         let model = self.request_model(request);
+        if crate::command_code_acp::is_command_code_model(&model) {
+            return user_input_from_messages(&request.messages);
+        }
         let Some(limit) = self.app.max_context_tokens_for_model(&model) else {
-            return full_transcript_input(&request.messages);
+            return provider_turn_input(&model, &request.messages);
         };
         let web_search_mode = self.app.web_search_mode(&model);
         let (dynamic_tools, _, _) =
@@ -292,7 +295,7 @@ impl Bridge {
         let token_budget = usize::try_from(limit)
             .unwrap_or(usize::MAX)
             .saturating_sub(setup_tokens);
-        full_transcript_input_with_token_budget(&request.messages, token_budget)
+        provider_turn_input_with_token_budget(&model, &request.messages, token_budget)
     }
 }
 

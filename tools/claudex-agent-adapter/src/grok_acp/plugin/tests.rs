@@ -34,10 +34,7 @@ fn project_grok_worker_enforces_the_same_nested_contract() {
     assert!(worker.contains("claudex_model: grok-4.5"));
     assert!(worker.contains("run_in_background: true"));
     assert!(!worker.contains("grok-native-high-plugin-v3:claudex-high"));
-    for invalid in [
-        "claudex-xhigh",
-        "claudex-max",
-    ] {
+    for invalid in ["claudex-xhigh", "claudex-max"] {
         assert!(!worker.contains(invalid));
     }
 }

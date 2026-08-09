@@ -109,12 +109,10 @@ impl Bridge {
             "resolved request routing"
         );
         let route = self.apply_usage_limit_preflight(&mut request, route, &mut effort, is_subagent);
-        if is_subagent && self.subagent_provider_is_exhausted(&request.model) {
-            return Err(anyhow::anyhow!(
-                "provider for model `{}` is cooling down after rate/usage limit; orchestrator should re-route",
-                request.model
-            ));
-        }
+        let route =
+            self.rewrite_exhausted_subagent_request(&mut request, route, &mut effort, is_subagent)?;
+        let route = self.apply_concurrency_preflight(&mut request, route, &mut effort, is_subagent);
+        let route = self.apply_subscription_auth_preflight(&mut request, route, &mut effort);
         let request_model = request.model.clone();
         let turn_started = Instant::now();
         tracing::info!(
@@ -128,8 +126,13 @@ impl Bridge {
             "provider turn started"
         );
         let response = if route == request_routing::RouteDecision::Subscription {
-            self.subscription_messages(request, effort, is_subagent, tools_were_provided)
-                .await
+            self.subscription_messages_with_auth_failover(
+                request,
+                effort,
+                is_subagent,
+                tools_were_provided,
+            )
+            .await
         } else {
             self.provider_messages_with_usage_limit_failover(
                 request,

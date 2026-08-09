@@ -6,12 +6,13 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 
 use super::SubscriptionStream;
+use crate::anthropic::agent_effort::BLOCKED_SUBAGENT_NOTICE;
 use crate::anthropic::subscription_frames::{
     mapped_tool_name, send_text_delta, send_text_start, send_tool_block,
 };
-
-const BLOCKED_SUBAGENT_NOTICE: &str =
-    "The requested SubAgent model is not configured, so it was not started. Continue without it.";
+use crate::anthropic::task_ids::{
+    is_claude_code_agent_task_id, is_task_stop_tool_name, skipped_foreign_task_stop_notice,
+};
 
 impl SubscriptionStream {
     pub(super) async fn forward_tool_uses(
@@ -85,7 +86,13 @@ impl SubscriptionStream {
             Err(error) if super::super::agent_effort::is_agent_tool(&name) => {
                 tracing::warn!(%error, tool = name, "blocked unsupported SubAgent launch");
                 self.blocked_subagent = true;
-                self.report_blocked_subagent(sender).await?;
+                let notice = error.to_string();
+                let notice = if notice.contains("cooling down") {
+                    notice
+                } else {
+                    BLOCKED_SUBAGENT_NOTICE.to_owned()
+                };
+                self.report_blocked_subagent(sender, &notice).await?;
                 // The notice is ordinary assistant text, not a tool_use block.
                 // Marking it as forwarded would emit stop_reason=tool_use with
                 // no corresponding tool block, leaving Claude Code waiting for
@@ -94,15 +101,49 @@ impl SubscriptionStream {
             }
             Err(error) => return Err(error),
         };
+        if is_task_stop_tool_name(&name) {
+            let task_id = public_input
+                .get("task_id")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if !is_claude_code_agent_task_id(task_id) {
+                tracing::info!(task_id, "skipping TaskStop for non-agent task id");
+                if !self.saw_tool_use {
+                    self.report_skipped_task_stop(sender, task_id).await?;
+                }
+                return Ok(false);
+            }
+        }
         self.report_subagent_action(sender, &name, &input).await?;
         send_tool_block(sender, self.next_index, id, &name, public_input).await?;
         self.next_index += 1;
+        self.saw_tool_use = true;
+        self.launch_fanout_open = crate::anthropic::agent_effort::is_agent_tool(&name);
         Ok(true)
+    }
+
+    async fn report_skipped_task_stop(
+        &mut self,
+        sender: &mpsc::Sender<Result<Bytes, Infallible>>,
+        task_id: &str,
+    ) -> Result<()> {
+        self.close_text(sender).await?;
+        send_text_start(sender, self.next_index).await?;
+        self.text_started = true;
+        self.text_closed = false;
+        self.next_index += 1;
+        send_text_delta(
+            sender,
+            self.next_index.saturating_sub(1),
+            &skipped_foreign_task_stop_notice(task_id),
+        )
+        .await
     }
 
     async fn report_blocked_subagent(
         &mut self,
         sender: &mpsc::Sender<Result<Bytes, Infallible>>,
+        notice: &str,
     ) -> Result<()> {
         // A preceding tool can have advanced `next_index` past the last text
         // block while leaving `text_started` set. Never append the blocked
@@ -113,11 +154,6 @@ impl SubscriptionStream {
         self.text_started = true;
         self.text_closed = false;
         self.next_index += 1;
-        send_text_delta(
-            sender,
-            self.next_index.saturating_sub(1),
-            BLOCKED_SUBAGENT_NOTICE,
-        )
-        .await
+        send_text_delta(sender, self.next_index.saturating_sub(1), notice).await
     }
 }

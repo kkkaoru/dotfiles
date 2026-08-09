@@ -14,7 +14,7 @@ use super::{
     DEFAULT_MAX_TURNS, DEFAULT_MODEL, LaunchSpec, Options, ParsedLine, ProgressEvent,
     parse_stdout_line,
     process::{run_turn, run_turn_emitting},
-    progress_to_updates, prompt_text,
+    progress_to_updates, prompt_text, slim_headless_prompt,
 };
 
 fn spec_with_program(program: PathBuf) -> LaunchSpec {
@@ -142,6 +142,8 @@ fn argv_includes_headless_flags_and_resume() {
     );
     assert!(first.contains(&"--yolo".to_owned()));
     assert!(first.contains(&"--trust".to_owned()));
+    assert!(first.contains(&"--no-skills".to_owned()));
+    assert!(first.contains(&"--no-session".to_owned()));
     assert!(
         !first.contains(&"--effort".to_owned()),
         "Muse Spark rejects --effort; keep it ACP-side only: {first:?}"
@@ -154,6 +156,11 @@ fn argv_includes_headless_flags_and_resume() {
         resumed
             .windows(2)
             .any(|window| window == ["--resume", "cc-session-1"])
+    );
+    assert!(resumed.contains(&"--no-skills".to_owned()));
+    assert!(
+        !resumed.contains(&"--no-session".to_owned()),
+        "--no-session is incompatible with --resume: {resumed:?}"
     );
     assert_eq!(resumed.last().map(String::as_str), Some("follow up"));
     assert!(
@@ -176,6 +183,8 @@ fn argv_includes_headless_flags_and_resume() {
     assert!(!argv.iter().any(|flag| flag == "--trust"));
     assert!(!argv.iter().any(|flag| flag == "--skip-onboarding"));
     assert!(!argv.iter().any(|flag| flag == "--effort"));
+    assert!(argv.iter().any(|flag| flag == "--no-skills"));
+    assert!(argv.iter().any(|flag| flag == "--no-session"));
 }
 
 #[test]
@@ -250,10 +259,14 @@ fn parses_live_command_code_ndjson_without_flooding_tui() {
         parse_stdout_line(r#"{"type":"event","event":{"type":"run_start","sessionId":"s"}}"#),
         ParsedLine::Ignored
     );
-    assert_eq!(
+    assert!(matches!(
         parse_stdout_line(r#"{"type":"event","event":{"type":"text_delta","delta":"PONG"}}"#),
-        ParsedLine::Ignored
-    );
+        ParsedLine::Progress(ProgressEvent::Note(note)) if note == "PONG"
+    ));
+    assert!(matches!(
+        parse_stdout_line(r#"{"type":"event","event":{"type":"thinking_delta","text":"planning live"}}"#),
+        ParsedLine::Progress(ProgressEvent::Note(note)) if note == "planning live"
+    ));
     assert_eq!(
         parse_stdout_line(r#"{"type":"event","event":{"type":"thinking_end","text":""}}"#),
         ParsedLine::Ignored
@@ -322,6 +335,7 @@ fn progress_updates_include_thought_and_tool_chrome() {
         started[0],
         acp::SessionUpdate::AgentThoughtChunk(_)
     ));
+    assert!(matches!(started[1], acp::SessionUpdate::ToolCall(_)));
     let running = progress_to_updates(&ProgressEvent::ToolStarted {
         id: "t1".to_owned(),
         name: "read_file".to_owned(),
@@ -374,7 +388,37 @@ fn prompt_text_joins_content_blocks() {
             acp::ContentBlock::Text(acp::TextContent::new("second")),
         ],
     );
-    assert_eq!(prompt_text(&request), "first\nsecond");
+    let rendered = prompt_text(&request);
+    assert!(rendered.starts_with("first\nsecond"));
+    assert!(rendered.contains("Do not greet"));
+}
+
+#[test]
+fn slims_bloated_claude_dumps_before_cmd() {
+    assert!(super::is_command_code_model(
+        "meta/muse-spark-1.2-contributor"
+    ));
+    assert!(!super::is_command_code_model("grok-4.5"));
+    let slim = slim_headless_prompt(
+        "<system-reminder>\nClaudex routing data (runtime metadata; values only):\n{\"source\":\"claudex-routing-local-hook\",\"selected_workers\":[]}\n</system-reminder>\nclaudex_effort: high\nclaudex_model: meta/muse-spark-1.2-contributor\n<claudex-agent-id>toolu_cc</claudex-agent-id>\nYou are the model inside Claudex on a provider-native ACP backend.\nShared-workspace safety is mandatory: serialize mutations.\nYou are a provider-native ACP worker. Complete the delegated task.\nRead CLAUDE.md and return the first heading.",
+    );
+    assert_eq!(slim, "Read CLAUDE.md and return the first heading.");
+    let reconstructed = slim_headless_prompt(
+        "Continue this Claude Code conversation. The role-tagged history follows:\n[{\"role\":\"user\",\"content\":\"Read CLAUDE.md and output only the first heading.\"}]",
+    );
+    assert!(reconstructed.contains("Read CLAUDE.md"), "{reconstructed}");
+    assert!(!reconstructed.contains("Continue this Claude Code conversation"));
+    assert!(!slim.contains("selected_workers"));
+    let request = acp::PromptRequest::new(
+        "session",
+        vec![acp::ContentBlock::Text(acp::TextContent::new(
+            "<system-reminder>\nctx-agent-history-search dump\n</system-reminder>\nPONGCC09",
+        ))],
+    );
+    let rendered = prompt_text(&request);
+    assert!(rendered.contains("PONGCC09"));
+    assert!(rendered.contains("Do not greet"));
+    assert!(!rendered.contains("ctx-agent-history-search"));
 }
 
 #[tokio::test]
@@ -387,7 +431,7 @@ async fn run_turn_emits_started_before_cmd_exits() {
     );
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let spec = spec_with_program(program);
-    let mut turn = std::pin::pin!(run_turn_emitting(&spec, "hello", None, Some(tx)));
+    let mut turn = std::pin::pin!(run_turn_emitting(&spec, "hello", None, Some(tx), None));
     let first = tokio::select! {
         event = rx.recv() => event.expect("started event"),
         _ = &mut turn => panic!("cmd finished before Started progress"),
@@ -562,4 +606,24 @@ fn tool_kind_mapping_covers_common_command_code_names() {
         panic!("search call");
     };
     assert_eq!(call.kind, acp::ToolKind::Search);
+}
+
+#[tokio::test]
+async fn run_turn_abort_kills_sleeping_cmd_quickly() {
+    let root = TempDir::new().expect("sleep cmd dir");
+    let program = write_executable(root.path(), "cmd", "#!/bin/sh\nexec sleep 30\n");
+    let spec = spec_with_program(program);
+    let started = std::time::Instant::now();
+    let run = tokio::spawn(async move { run_turn(&spec, "hello", None).await });
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    run.abort();
+    let joined = tokio::time::timeout(std::time::Duration::from_secs(2), run)
+        .await
+        .expect("aborted cmd should drop within 2s");
+    assert!(joined.expect_err("join after abort").is_cancelled());
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(2),
+        "abort took {:?}",
+        started.elapsed()
+    );
 }

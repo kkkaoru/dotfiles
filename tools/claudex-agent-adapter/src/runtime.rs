@@ -16,6 +16,7 @@ mod shutdown;
 enum RuntimeCommand {
     BuildId,
     Ensure(AdapterOptions),
+    HotSwap(AdapterOptions),
     Launch(AdapterOptions, Vec<OsString>, bool),
     McpClaudexLaunch,
     Serve(AdapterOptions),
@@ -35,6 +36,10 @@ pub async fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<i32> {
         }
         RuntimeCommand::Ensure(options) => {
             println!("{}", launcher::ensure_running(options).await?);
+            0
+        }
+        RuntimeCommand::HotSwap(options) => {
+            println!("{}", launcher::hot_swap(options).await?);
             0
         }
         RuntimeCommand::Launch(options, arguments, inherit_claude_model) => {
@@ -65,6 +70,12 @@ fn parse_command(mut arguments: VecDeque<OsString>) -> Result<RuntimeCommand> {
             reject_remaining(&arguments)?;
             Ok(RuntimeCommand::Ensure(options.adapter))
         }
+        "hot-swap" => {
+            let options = parse_options(&mut arguments)?;
+            reject_inherit_model(&options, "hot-swap")?;
+            reject_remaining(&arguments)?;
+            Ok(RuntimeCommand::HotSwap(options.adapter))
+        }
         "launch" => {
             let options = parse_options(&mut arguments)?;
             consume_separator(&mut arguments)?;
@@ -87,7 +98,7 @@ fn parse_command(mut arguments: VecDeque<OsString>) -> Result<RuntimeCommand> {
             Ok(RuntimeCommand::Serve(options.adapter))
         }
         _ => bail!(
-            "unknown command `{command}`; expected build-id, ensure, launch, mcp-claudex-launch, or serve"
+            "unknown command `{command}`; expected build-id, ensure, hot-swap, launch, mcp-claudex-launch, or serve"
         ),
     }
 }

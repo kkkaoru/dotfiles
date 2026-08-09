@@ -16,7 +16,27 @@ fn prefers_structured_stdout_and_redacts_diagnostics() {
     assert!(failure.diagnostic.contains("Authentication failed"));
     assert!(!failure.diagnostic.contains("fixture-secret"));
     assert_eq!(failure.status_hint(), 401);
+    assert!(failure.is_authentication());
     assert!(!failure.is_outer_retryable());
+}
+
+#[test]
+fn horse_racing_oauth_expiry_is_authentication_and_subscription_auth_failure() {
+    let error = process_failure_from_parts(
+        "claude-opus-5",
+        "exit status: 1".to_owned(),
+        br#"{"subtype":"error","is_error":true,"result":"Failed to authenticate: OAuth session expired and could not be refreshed"}"#,
+        b"",
+    );
+    let failure = subscription_failure(&error).expect("typed oauth failure");
+    assert_eq!(failure.kind, SubscriptionFailureKind::Authentication);
+    assert!(failure.is_authentication());
+    assert_eq!(failure.status_hint(), 401);
+    assert!(!failure.is_outer_retryable());
+    assert!(crate::anthropic::subscription_oauth::is_subscription_auth_failure(&error));
+    let display = error.to_string().to_ascii_lowercase();
+    assert!(display.contains("claude subscription model claude-opus-5 failed [authentication"));
+    assert!(display.contains("oauth session expired and could not be refreshed"));
 }
 
 #[test]

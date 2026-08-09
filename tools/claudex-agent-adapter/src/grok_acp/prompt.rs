@@ -9,6 +9,18 @@ use super::plugin;
 ///
 /// ClinePass CLI accepts `cline-pass/deepseek-v4-flash`, but ACP `session/new` model lists use
 /// `deepseek/deepseek-v4-flash` (and related ids). Pin the ACP session to a listed id.
+pub(super) fn should_include_acp_routing(
+    provider: super::connection::AcpProvider,
+    model: &str,
+) -> bool {
+    matches!(
+        provider,
+        super::connection::AcpProvider::Grok
+            | super::connection::AcpProvider::Configured
+            | super::connection::AcpProvider::ConfiguredLaunchScoped
+    ) && !crate::command_code_acp::is_command_code_model(model)
+}
+
 pub(super) fn configured_acp_session_model(model: &str) -> String {
     match model {
         "auto" | "default" => "default[]".to_owned(),

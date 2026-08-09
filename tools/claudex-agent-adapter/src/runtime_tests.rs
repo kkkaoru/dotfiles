@@ -30,6 +30,14 @@ mod tests {
                 "valid only for launch",
             ),
             (
+                vec!["hot-swap", "--model", "m", "--inherit-claude-model"],
+                "valid only for launch",
+            ),
+            (
+                vec!["hot-swap", "--model", "m", "--"],
+                "unexpected arguments",
+            ),
+            (
                 vec!["serve", "--model", "m", "--inherit-claude-model"],
                 "valid only for launch",
             ),
@@ -189,7 +197,11 @@ mod tests {
         );
         assert_eq!(
             options.model_catalog.search_worker_routes(),
-            &[crate::provider_config::WorkerRoute::new("claudex-search".to_owned(), "gpt-search".to_owned(), "xhigh".to_owned())]
+            &[crate::provider_config::WorkerRoute::new(
+                "claudex-search".to_owned(),
+                "gpt-search".to_owned(),
+                "xhigh".to_owned()
+            )]
         );
 
         let launch = parse_command(
@@ -218,6 +230,16 @@ mod tests {
             )
             .expect("valid ensure command"),
             RuntimeCommand::Ensure(_)
+        ));
+        assert!(matches!(
+            parse_command(
+                ["hot-swap", "--model", "m"]
+                    .into_iter()
+                    .map(OsString::from)
+                    .collect()
+            )
+            .expect("valid hot-swap command"),
+            RuntimeCommand::HotSwap(_)
         ));
     }
 
@@ -370,7 +392,11 @@ mod tests {
         };
         options
             .model_catalog
-            .set_worker_routes(vec![crate::provider_config::WorkerRoute::new("worker".to_owned(), "model".to_owned(), "high".to_owned())])
+            .set_worker_routes(vec![crate::provider_config::WorkerRoute::new(
+                "worker".to_owned(),
+                "model".to_owned(),
+                "high".to_owned(),
+            )])
             .expect("worker route");
         let backend = AgentBackend::codex(app_server);
         let server = tokio::spawn(serve_on_listener(options, None, backend, listener));

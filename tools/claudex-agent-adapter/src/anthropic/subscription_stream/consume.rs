@@ -1,18 +1,22 @@
-use std::{collections::HashSet, convert::Infallible, pin::Pin, time::Duration};
+use std::{collections::HashSet, convert::Infallible, pin::Pin};
 
 #[cfg(test)]
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
 use axum::body::Bytes;
 use serde_json::{Value, json};
 use tokio::{
-    io::{AsyncBufRead, AsyncBufReadExt, BufReader, Lines},
+    io::{AsyncBufReadExt, BufReader},
     process::Child,
     sync::mpsc,
     time::Sleep,
 };
 
+#[cfg(test)]
+use tokio::io::AsyncBufRead;
+
+use super::consume_fanout::{StreamIteration, consume_stream_iteration};
 #[cfg(test)]
 use super::lifecycle::terminate_after_stream_failure;
 use super::{
@@ -24,6 +28,8 @@ use crate::anthropic::{
     subscription::{SubscriptionOptions, failure},
     subscription_activity::SubscriptionActivity,
 };
+
+pub(super) use super::consume_fanout::reset_activity_deadline;
 
 #[cfg(test)]
 pub(super) async fn consume_subscription_stream(
@@ -96,7 +102,7 @@ pub(super) async fn consume_subscription_stream_with_options(
                 )
                 .await;
             }
-            StreamIteration::Blocked => {
+            StreamIteration::EndEarly => {
                 return finish_blocked_stream(
                     child,
                     process_group,
@@ -123,69 +129,6 @@ pub(super) async fn consume_subscription_stream_with_options(
         },
     )
     .await
-}
-
-async fn consume_stream_iteration<R>(
-    lines: &mut Lines<R>,
-    sender: &mpsc::Sender<Result<Bytes, Infallible>>,
-    model: &str,
-    stream: &mut SubscriptionStream,
-    pending_result: &mut Option<Value>,
-    activity_deadline: &mut Pin<Box<Sleep>>,
-    activity_keepalive_interval: Duration,
-) -> Result<StreamIteration>
-where
-    R: AsyncBufRead + Unpin,
-{
-    // Prefer output lines over keepalives so an already-buffered provider event
-    // is ordered first. Expired activity is still applied after a hidden line.
-    let ready = tokio::select! {
-        biased;
-        () = sender.closed() => IterationReady::SenderClosed,
-        line = lines.next_line() => IterationReady::Line(line),
-        () = activity_deadline.as_mut() => IterationReady::ActivityDeadline,
-    };
-    match ready {
-        IterationReady::SenderClosed => Ok(StreamIteration::SenderClosed),
-        IterationReady::Line(line) => {
-            let outcome = handle_next_line(line?, sender, model, stream, pending_result).await?;
-            apply_line_outcome(
-                outcome,
-                sender,
-                stream,
-                activity_deadline,
-                activity_keepalive_interval,
-            )
-            .await
-        }
-        IterationReady::ActivityDeadline => {
-            stream.activity_keepalive(sender).await?;
-            reset_activity_deadline(activity_deadline, activity_keepalive_interval);
-            Ok(StreamIteration::Continue)
-        }
-    }
-}
-
-async fn apply_line_outcome(
-    outcome: LineOutcome,
-    sender: &mpsc::Sender<Result<Bytes, Infallible>>,
-    stream: &mut SubscriptionStream,
-    activity_deadline: &mut Pin<Box<Sleep>>,
-    activity_keepalive_interval: Duration,
-) -> Result<StreamIteration> {
-    match outcome {
-        LineOutcome::End => return Ok(StreamIteration::End),
-        LineOutcome::Blocked => return Ok(StreamIteration::Blocked),
-        LineOutcome::Visible => {
-            reset_activity_deadline(activity_deadline, activity_keepalive_interval);
-        }
-        LineOutcome::Hidden if activity_deadline.deadline() <= tokio::time::Instant::now() => {
-            stream.activity_keepalive(sender).await?;
-            reset_activity_deadline(activity_deadline, activity_keepalive_interval);
-        }
-        LineOutcome::Hidden => {}
-    }
-    Ok(StreamIteration::Continue)
 }
 
 #[cfg(test)]
@@ -235,8 +178,18 @@ where
             StreamIteration::Continue => {}
             StreamIteration::End => break,
             StreamIteration::SenderClosed => return Ok(()),
-            StreamIteration::Blocked => {
-                anyhow::bail!("test reader emitted a blocked SubAgent");
+            StreamIteration::EndEarly => {
+                if stream.blocked_subagent {
+                    anyhow::bail!("test reader emitted a blocked SubAgent");
+                }
+                stream.activity.close(sender).await?;
+                stream
+                    .finish(
+                        sender,
+                        &json!({"type":"result","subtype":"success","is_error":false,"result":""}),
+                    )
+                    .await?;
+                return Ok(());
             }
         }
     }
@@ -251,6 +204,7 @@ impl SubscriptionStream {
             text_started: false,
             text_closed: false,
             saw_tool_use: false,
+            launch_fanout_open: false,
             seen_tool_ids: HashSet::new(),
             blocked_subagent: false,
             saw_result: false,
@@ -260,55 +214,6 @@ impl SubscriptionStream {
             activity: SubscriptionActivity::default(),
         }
     }
-}
-
-async fn handle_next_line(
-    line: Option<String>,
-    sender: &mpsc::Sender<Result<Bytes, Infallible>>,
-    model: &str,
-    stream: &mut SubscriptionStream,
-    pending_result: &mut Option<Value>,
-) -> Result<LineOutcome> {
-    let Some(line) = line else {
-        return Ok(LineOutcome::End);
-    };
-    if pending_result.is_some() {
-        return Ok(LineOutcome::Hidden);
-    }
-    let envelope = failure::parse_stream_envelope(Some(model), &line)?;
-    if envelope.get("type").and_then(Value::as_str) == Some("result") {
-        *pending_result = Some(envelope);
-        return Ok(LineOutcome::Hidden);
-    }
-    let visible = stream.handle_envelope(sender, &envelope).await?;
-    if stream.blocked_subagent {
-        return Ok(LineOutcome::Blocked);
-    }
-    Ok(if visible {
-        LineOutcome::Visible
-    } else {
-        LineOutcome::Hidden
-    })
-}
-
-enum LineOutcome {
-    End,
-    Hidden,
-    Visible,
-    Blocked,
-}
-
-enum IterationReady {
-    SenderClosed,
-    Line(std::io::Result<Option<String>>),
-    ActivityDeadline,
-}
-
-enum StreamIteration {
-    Continue,
-    End,
-    SenderClosed,
-    Blocked,
 }
 
 async fn finish_blocked_stream(
@@ -384,10 +289,4 @@ async fn stream_error(
     } else {
         error
     }
-}
-
-pub(super) fn reset_activity_deadline(deadline: &mut Pin<Box<Sleep>>, interval: Duration) {
-    deadline
-        .as_mut()
-        .reset(tokio::time::Instant::now() + interval);
 }

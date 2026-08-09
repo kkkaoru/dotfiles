@@ -38,7 +38,7 @@ fn bridge_requires_atomic_parallel_subagent_launches() {
     assert!(BRIDGE_INSTRUCTIONS.contains("end the turn promptly with concise user-visible status"));
     assert!(BRIDGE_INSTRUCTIONS.contains("Avoid serial heavy processing by one worker"));
     assert!(BRIDGE_INSTRUCTIONS.contains(
-        "reuse compatible workers with SendMessage and the exact prior Agent/Task recipient instead of churning processes"
+        "reuse compatible workers by setting resume to the exact prior Agent/Task recipient instead of churning processes"
     ));
     assert!(
         BRIDGE_INSTRUCTIONS

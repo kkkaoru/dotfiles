@@ -122,67 +122,7 @@ pub(crate) fn apply_floor_action(
     decision.actions.push(action.to_owned());
 }
 
-pub(crate) fn has_parallel_scope(request: &MessagesRequest) -> bool {
-    independent_scope_count(request) >= 2
-}
-
-pub(crate) fn independent_scope_count(request: &MessagesRequest) -> usize {
-    let user_text = request
-        .messages
-        .iter()
-        .filter(|message| message.get("role").and_then(Value::as_str) == Some("user"))
-        .filter_map(|message| message.get("content").and_then(Value::as_str))
-        .filter(|content| !content.trim_start().starts_with("<task-notification>"))
-        .collect::<Vec<_>>();
-    let Some(content) = user_text.last() else {
-        // A reconstructed request without a user turn cannot be classified safely. Keep the
-        // existing conservative behavior until the next user turn supplies a scope.
-        return 2;
-    };
-    if contains_single_scope_request(content) {
-        return 1;
-    }
-    let explicit_blocks = count_explicit_blocks(content);
-    if explicit_blocks >= 2 {
-        return explicit_blocks;
-    }
-    if contains_parallel_intent(content) {
-        2
-    } else {
-        1
-    }
-}
-
-fn contains_single_scope_request(content: &str) -> bool {
-    let normalized = content.to_ascii_lowercase();
-    [
-        "exactly one",
-        "one worker",
-        "one subagent",
-        "1つのsubagent",
-        "1つのsub agent",
-        "単一",
-    ]
-    .iter()
-    .any(|hint| normalized.contains(hint))
-}
-
-fn contains_parallel_intent(content: &str) -> bool {
-    let normalized = content.to_ascii_lowercase();
-    [
-        "parallel",
-        "multiple",
-        "independent",
-        "in parallel",
-        "複数",
-        "並列",
-        "分担",
-        "各観点",
-        "比較",
-    ]
-    .iter()
-    .any(|hint| normalized.contains(hint))
-}
+pub(crate) use super::scope_count::{has_parallel_scope, independent_scope_count};
 
 pub(crate) fn apply_diversity_action(
     decision: &mut SchedulerDecision,
@@ -212,7 +152,7 @@ pub(crate) fn apply_reuse_actions(
     }
     if config.allow_reuse && decision.has_work() {
         decision.actions.push(
-            "Prefer reusing compatible completed workers via SendMessage; add new tasks to the same workers when their context fits."
+            "Prefer reusing compatible completed workers via Agent/Task resume=<agentId>; add new tasks to the same workers when their context fits. Independent scopes still need distinct launches."
                 .to_owned(),
         );
     }
@@ -300,7 +240,7 @@ pub(crate) fn estimate_target_workers(
     // launches when a resumed transcript contains more workers than scopes.
     let target = if requested_scopes >= 2 {
         requested_scopes
-    } else if active > 0 || needs_single_worker(request) {
+    } else if active > 0 || super::scope_count::needs_single_worker(request) {
         1
     } else {
         0
@@ -308,78 +248,15 @@ pub(crate) fn estimate_target_workers(
     target.min(config.max_parallel_workers)
 }
 
-fn needs_single_worker(request: &MessagesRequest) -> bool {
-    request
-        .messages
-        .iter()
-        .filter(|message| message.get("role").and_then(Value::as_str) == Some("user"))
-        .filter_map(|message| message.get("content").and_then(Value::as_str))
-        .any(|content| {
-            let normalized = content.to_ascii_lowercase();
-            [
-                "gh ",
-                "git ",
-                "bash",
-                "shell",
-                "command",
-                "http://",
-                "https://",
-                "調査",
-                "取得",
-                "確認",
-                "実行",
-                "修正",
-                "テスト",
-                "review",
-                "research",
-                "investigate",
-                "fetch",
-                "implement",
-                "fix",
-                "test",
-            ]
-            .iter()
-            .any(|hint| normalized.contains(hint))
-        })
-}
-
-pub(crate) fn scope_guidance(
-    request: &MessagesRequest,
-    decision: &SchedulerDecision,
-) -> &'static str {
+pub(crate) fn scope_guidance(request: &MessagesRequest, decision: &SchedulerDecision) -> String {
     if !has_parallel_scope(request) {
         if decision.active_workers > 1 {
-            return "Task-shape: one bounded scope detected. Keep exactly one ordinary SubAgent and stop duplicate same-scope workers; selected_workers is a capacity pool, not a launch count.";
+            return "Task-shape: one bounded scope detected. Keep exactly one ordinary SubAgent and stop duplicate same-scope workers; selected_workers is a capacity pool, not a launch count.".to_owned();
         }
-        return "Task-shape: one bounded or indivisible scope detected. Launch exactly one ordinary SubAgent; selected_workers is a capacity pool, not a launch count.";
+        return "Task-shape: one bounded or indivisible scope detected. Launch exactly one ordinary SubAgent; selected_workers is a capacity pool, not a launch count.".to_owned();
     }
-    "Task-shape: multiple independent scopes detected. Launch only the number of non-redundant workers justified by those scopes, then reassess as each completes."
-}
-
-fn count_explicit_blocks(content: &str) -> usize {
-    content
-        .lines()
-        .filter(|line| is_explicit_block(line))
-        .count()
-}
-
-fn is_explicit_block(line: &str) -> bool {
-    let trimmed = line.trim_start();
-    trimmed.starts_with("- ")
-        || trimmed.starts_with("* ")
-        || trimmed.starts_with("・")
-        || is_numbered_block(trimmed)
-}
-
-fn is_numbered_block(trimmed: &str) -> bool {
-    let Some(character) = trimmed.chars().next() else {
-        return false;
-    };
-    if !character.is_ascii_digit() {
-        return false;
-    }
-    trimmed
-        .char_indices()
-        .nth(1)
-        .is_some_and(|(index, _)| trimmed[index..].starts_with(". "))
+    let count = independent_scope_count(request);
+    format!(
+        "Task-shape: multiple independent scopes detected. Launch exactly {count} ordinary SubAgents in the same assistant turn; do not stop after the first worker. Launch only the number of non-redundant workers justified by those scopes, then reassess as each completes."
+    )
 }

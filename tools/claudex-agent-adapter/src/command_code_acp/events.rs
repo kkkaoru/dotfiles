@@ -2,6 +2,8 @@ use agent_client_protocol as acp;
 use serde::Deserialize;
 use serde_json::Value;
 
+pub const TURN_TOOL_ID: &str = "command-code-turn";
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ProgressEvent {
     Started {
@@ -61,7 +63,7 @@ struct WireLine {
     message: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct WireEvent {
     #[serde(rename = "type")]
     kind: Option<String>,
@@ -78,6 +80,8 @@ struct WireEvent {
     #[serde(default)]
     text: Option<String>,
     #[serde(default)]
+    delta: Option<String>,
+    #[serde(default)]
     model: Option<String>,
     #[serde(default, rename = "turnNumber")]
     turn_number: Option<u32>,
@@ -92,17 +96,7 @@ pub fn parse_stdout_line(line: &str) -> ParsedLine {
         return ParsedLine::Progress(ProgressEvent::Note(trimmed.to_owned()));
     };
     match wire.kind.as_deref() {
-        Some("event") => parse_event(wire.event.unwrap_or(WireEvent {
-            kind: None,
-            tool_call_id: None,
-            tool_name: None,
-            description: None,
-            error: None,
-            message: None,
-            text: None,
-            model: None,
-            turn_number: None,
-        })),
+        Some("event") => parse_event(wire.event.unwrap_or_default()),
         Some("result") => ParsedLine::Result(TurnResult {
             subtype: wire.subtype.unwrap_or_else(|| "success".to_owned()),
             session_id: nonempty(wire.session_id),
@@ -115,6 +109,7 @@ pub fn parse_stdout_line(line: &str) -> ParsedLine {
 }
 
 fn parse_event(event: WireEvent) -> ParsedLine {
+    let text = event_text(&event);
     let kind = event.kind.unwrap_or_default();
     let id = event
         .tool_call_id
@@ -140,7 +135,7 @@ fn parse_event(event: WireEvent) -> ParsedLine {
             name,
             error: nonempty(event.error).or_else(|| nonempty(event.message)),
         }),
-        "thinking_end" => match nonempty(event.text).or_else(|| nonempty(event.message)) {
+        "thinking_end" | "text_delta" | "thinking_delta" | "message_update" => match text {
             Some(text) => ParsedLine::Progress(ProgressEvent::Note(text)),
             None => ParsedLine::Ignored,
         },
@@ -157,10 +152,8 @@ fn parse_event(event: WireEvent) -> ParsedLine {
                 .filter(|model| !model.is_empty())
                 .unwrap_or_else(|| name)
         ))),
-        "run_start" | "message_start" | "model_trace" | "thinking_start" | "text_delta"
-        | "message_update" | "model_request_end" | "message_end" | "turn_end" | "run_end" | "" => {
-            ParsedLine::Ignored
-        }
+        "run_start" | "message_start" | "model_trace" | "thinking_start" | "model_request_end"
+        | "message_end" | "turn_end" | "run_end" | "" => ParsedLine::Ignored,
         other => ParsedLine::Progress(ProgressEvent::Note(match nonempty(event.message) {
             Some(message) => format!("{other}: {message}"),
             None => other.to_owned(),
@@ -175,9 +168,17 @@ pub fn progress_to_updates(event: &ProgressEvent) -> Vec<acp::SessionUpdate> {
                 .as_deref()
                 .map(|value| format!(", effort={value}"))
                 .unwrap_or_default();
-            vec![thought(format!(
-                "▶ Command Code headless starting ({model}{effort})\n"
-            ))]
+            let title = format!("Command Code ({model}{effort})");
+            vec![
+                thought(format!(
+                    "▶ Command Code headless starting ({model}{effort})\n"
+                )),
+                acp::SessionUpdate::ToolCall(
+                    acp::ToolCall::new(TURN_TOOL_ID, title)
+                        .kind(acp::ToolKind::Other)
+                        .status(acp::ToolCallStatus::InProgress),
+                ),
+            ]
         }
         ProgressEvent::ToolStarted {
             id,
@@ -245,6 +246,32 @@ pub fn result_is_error(result: &TurnResult) -> bool {
     result.subtype == "error"
         || result.error.is_some()
         || matches!(result.stop_reason.as_deref(), Some("error"))
+}
+
+pub fn turn_cancelled_updates() -> Vec<acp::SessionUpdate> {
+    vec![
+        thought("✗ Command Code cancelled\n"),
+        turn_settled_update(true),
+    ]
+}
+
+pub fn turn_settled_update(failed: bool) -> acp::SessionUpdate {
+    acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new(
+        TURN_TOOL_ID,
+        acp::ToolCallUpdateFields::new()
+            .status(if failed {
+                acp::ToolCallStatus::Failed
+            } else {
+                acp::ToolCallStatus::Completed
+            })
+            .title("Command Code"),
+    ))
+}
+
+fn event_text(event: &WireEvent) -> Option<String> {
+    nonempty(event.text.clone())
+        .or_else(|| nonempty(event.delta.clone()))
+        .or_else(|| nonempty(event.message.clone()))
 }
 
 fn thought(text: impl Into<String>) -> acp::SessionUpdate {

@@ -44,6 +44,7 @@ pub(super) fn http_status(fallback: StatusCode, error: &Error) -> StatusCode {
         StatusCode::TOO_MANY_REQUESTS
     } else if is_terminal_provider_configuration_error(error)
         || super::stream::usage_limit::contains_classic_usage_limit_marker(&error.to_string())
+        || super::segment::contains_empty_acp_billing_marker(&error.to_string())
     {
         StatusCode::BAD_REQUEST
     } else {
@@ -254,6 +255,16 @@ mod tests {
         assert_eq!(
             http_status(StatusCode::BAD_GATEWAY, &error),
             StatusCode::TOO_MANY_REQUESTS
+        );
+    }
+
+    #[test]
+    fn marks_empty_acp_billing_as_non_retryable_instead_of_502() {
+        let error = anyhow!(super::super::segment::EMPTY_ACP_END_TURN);
+        assert_eq!(error_type(&error), NON_RETRYABLE_ERROR_TYPE);
+        assert_eq!(
+            http_status(StatusCode::BAD_GATEWAY, &error),
+            StatusCode::BAD_REQUEST
         );
     }
 }

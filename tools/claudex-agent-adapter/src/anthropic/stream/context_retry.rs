@@ -104,7 +104,10 @@ impl Bridge {
             self.remove_session(&turn.session).await;
             return Err(error);
         };
-        let Some(failover) = self.usage_limit_failover_for(&exhausted_model) else {
+        let Some(failover) = self
+            .subagent_provider_failover_for(&exhausted_model)
+            .or_else(|| self.usage_limit_failover_for(&exhausted_model))
+        else {
             self.remove_session(&turn.session).await;
             return Err(error);
         };
@@ -114,7 +117,7 @@ impl Bridge {
                     error = %error_text,
                     exhausted_model = %exhausted_model,
                     failover_model = %failover.model,
-                    "retrying completed turn on a non-Codex provider after usageLimitExceeded"
+                    "retrying completed turn on a sibling provider after provider exhaustion"
                 );
                 retry.request.model = failover.model;
                 if let Some(effort) = failover.effort {

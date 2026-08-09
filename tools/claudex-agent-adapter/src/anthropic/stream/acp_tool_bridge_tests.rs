@@ -176,6 +176,38 @@ mod tests {
     }
 
     #[test]
+    fn bash_titles_with_task_or_agent_substrings_are_not_unbridged_launches() {
+        let map = names();
+        let schtasks = json!({
+            "params":{
+                "callId":"bash-schtasks",
+                "tool":"Bash",
+                "title":"`cd /repo && prlctl exec 'Windows 11' cmd.exe /c schtasks /Query /TN \"PC-KEIBA Auto Update\"`",
+                "status":"in_progress",
+                "arguments":{"command":"prlctl exec Windows schtasks /Query"}
+            }
+        });
+        assert!(bridge_provider_tool_call(&map, &schtasks).is_none());
+        assert!(!is_unbridged_launch_progress(&map, &schtasks));
+
+        let history = json!({
+            "params":{
+                "callId":"bash-ctx",
+                "tool":"Bash",
+                "title":"Shell: ctx search (Search local agent history for RESCORE_ENABLED)",
+                "status":"pending",
+                "arguments":{
+                    "command":"ctx search RESCORE_ENABLED",
+                    "description":"Search local agent history",
+                    "timeout":60_000
+                }
+            }
+        });
+        assert!(bridge_provider_tool_call(&map, &history).is_none());
+        assert!(!is_unbridged_launch_progress(&map, &history));
+    }
+
+    #[test]
     fn bridges_cursor_mcp_title_with_launch_arguments() {
         let map = names();
         let event = json!({

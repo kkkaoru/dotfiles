@@ -69,18 +69,14 @@ pub(super) async fn create(
     // happens, retry once without launch MCP so the turn still starts.
     let mcp = launch_mcp_servers(&params);
     let injected_launch_mcp = !mcp.is_empty();
-    let response = match new_session_with_mcp(
-        provider,
-        connection,
-        model,
-        &session_cwd,
-        mcp,
-    )
-    .await
+    let response = match new_session_with_mcp(provider, connection, model, &session_cwd, mcp).await
     {
         Ok(response) => {
             if injected_launch_mcp {
-                tracing::info!(provider = provider.label(), "ACP session/new with launch MCP succeeded");
+                tracing::info!(
+                    provider = provider.label(),
+                    "ACP session/new with launch MCP succeeded"
+                );
             }
             response
         }
@@ -91,14 +87,7 @@ pub(super) async fn create(
                 provider = provider.label(),
                 "ACP session/new with launch MCP failed; retrying without MCP"
             );
-            new_session_with_mcp(
-                provider,
-                connection,
-                model,
-                &session_cwd,
-                Vec::new(),
-            )
-            .await?
+            new_session_with_mcp(provider, connection, model, &session_cwd, Vec::new()).await?
         }
     };
     // OpenCode ignores modelId meta on session/new. Cursor accepts CLI `--model auto` but ACP
@@ -132,13 +121,12 @@ pub(super) async fn create(
         }
     }
     let session_id = response.session_id.0.to_string();
-    let include_acp_routing = matches!(
-        provider,
-        AcpProvider::Grok | AcpProvider::Configured | AcpProvider::ConfiguredLaunchScoped
-    );
-    let base = prompt::provider_instructions(&params, include_acp_routing);
-    if !base.is_empty() {
-        instructions.borrow_mut().insert(session_id.clone(), base);
+    if !crate::command_code_acp::is_command_code_model(model) {
+        let include_acp_routing = prompt::should_include_acp_routing(provider, model);
+        let base = prompt::provider_instructions(&params, include_acp_routing);
+        if !base.is_empty() {
+            instructions.borrow_mut().insert(session_id.clone(), base);
+        }
     }
     Ok(json!({"thread":{"id":session_id}}))
 }
@@ -214,7 +202,10 @@ fn params_offer_launch_tools(params: &Value) -> bool {
         .flatten()
         .any(|tool| {
             let name = tool.get("name").and_then(Value::as_str).unwrap_or("");
-            let description = tool.get("description").and_then(Value::as_str).unwrap_or("");
+            let description = tool
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or("");
             name == "Agent"
                 || name == "Task"
                 || name.contains("Agent")

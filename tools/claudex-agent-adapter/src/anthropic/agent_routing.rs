@@ -72,9 +72,19 @@ pub(super) fn expected_worker_fields(
     system: &Value,
     model_catalog: &crate::provider_config::ModelCatalog,
 ) -> Option<(String, Option<String>)> {
+    // Generic Agent types stay bound to live selected_workers. A named catalog
+    // worker such as `claudex-qwen` is an explicit launch: after Cline Credits
+    // exhaustion the orchestrator reroutes to that sibling even when the stale
+    // snapshot still lists only the depleted automatic pool. Adapter exhaustion
+    // cooldown still blocks a truly spent provider at launch time.
+    let routing_present = active_routing_summary(messages, system).is_some();
     let mut fields = selected_worker_fields(arguments, messages, system)
         .or_else(|| configured_worker_fields(arguments, model_catalog))
-        .or_else(|| generic_worker_fields(arguments, model_catalog))?;
+        .or_else(|| {
+            (!routing_present)
+                .then(|| generic_worker_fields(arguments, model_catalog))
+                .flatten()
+        })?;
     if let Some(requested) = arguments
         .get(ADAPTER_MODEL)
         .and_then(Value::as_str)
@@ -246,6 +256,19 @@ pub(super) fn model_is_authorized_with_catalog(
     arguments.get(IMPLICIT_MODEL).and_then(Value::as_str) == Some(model)
         || model_is_authorized(arguments, messages, system, model)
         || generic_worker_model_matches(arguments, model_catalog, model)
+}
+
+pub(super) fn routing_disables_subagent_model(
+    messages: &[Value],
+    system: &Value,
+    model: &str,
+) -> bool {
+    active_routing_summary(messages, system).is_some_and(|summary| {
+        summary
+            .get("disabled_subagent_models")
+            .and_then(Value::as_array)
+            .is_some_and(|models| models.iter().any(|value| value.as_str() == Some(model)))
+    })
 }
 
 fn selected_worker_model_matches(

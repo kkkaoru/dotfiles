@@ -1,16 +1,21 @@
 use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
+    path::PathBuf,
 };
 
 use agent_client_protocol::{self as acp, Client as _};
 use anyhow::Result;
 use tokio::sync::{mpsc, oneshot};
+use tokio::task::AbortHandle;
 use tokio_util::compat::{TokioAsyncReadCompatExt as _, TokioAsyncWriteCompatExt as _};
 use uuid::Uuid;
 
 use super::{
-    events::{TurnResult, progress_to_updates, result_is_error, result_message},
+    events::{
+        TurnResult, progress_to_updates, result_is_error, result_message, turn_cancelled_updates,
+        turn_settled_update,
+    },
     options::Options,
     prompt::prompt_text,
 };
@@ -23,8 +28,9 @@ struct HeadlessAgent {
     options: Options,
     operations: mpsc::UnboundedSender<ClientOperation>,
     next_session: Cell<u64>,
-    cmd_sessions: RefCell<HashMap<String, Option<String>>>,
+    session_cwds: RefCell<HashMap<String, PathBuf>>,
     cancelled: RefCell<HashMap<String, bool>>,
+    running: RefCell<HashMap<String, AbortHandle>>,
 }
 
 impl HeadlessAgent {
@@ -54,19 +60,47 @@ impl HeadlessAgent {
             .unwrap_or(false)
     }
 
+    fn track_running(&self, session_id: &str, handle: AbortHandle) {
+        let abort_now = {
+            self.running
+                .borrow_mut()
+                .insert(session_id.to_owned(), handle.clone());
+            self.cancelled
+                .borrow()
+                .get(session_id)
+                .copied()
+                .unwrap_or(false)
+        };
+        if abort_now {
+            handle.abort();
+        }
+    }
+
+    fn untrack_running(&self, session_id: &str) {
+        self.running.borrow_mut().remove(session_id);
+    }
+
+    fn abort_running(&self, session_id: &str) {
+        if let Some(handle) = self.running.borrow().get(session_id) {
+            handle.abort();
+        }
+    }
+
     async fn run_prompt_turn(
         &self,
         session_id: &acp::SessionId,
         prompt: &str,
         resume: Option<&str>,
-    ) -> acp::Result<super::process::TurnOutcome> {
+    ) -> acp::Result<Option<super::process::TurnOutcome>> {
         let (tx, mut rx) = mpsc::unbounded_channel();
         let operations = self.operations.clone();
         let notify_session = session_id.clone();
         let emit = tokio::task::spawn_local(async move {
             while let Some(event) = rx.recv().await {
                 for update in progress_to_updates(&event) {
-                    let (sent, received) = oneshot::channel();
+                    // Fire-and-forget: waiting for ACP ack serializes live ▶/thinking
+                    // behind prompt() completion on the client.
+                    let (sent, _received) = oneshot::channel();
                     if operations
                         .send(ClientOperation::Notify(
                             acp::SessionNotification::new(notify_session.clone(), update),
@@ -76,20 +110,34 @@ impl HeadlessAgent {
                     {
                         return;
                     }
-                    let _ = received.await;
                 }
             }
         });
-        let outcome = super::process::run_turn_emitting(
-            &self.options.spec,
-            prompt,
-            resume,
-            Some(tx),
-        )
-        .await
-        .map_err(|error| acp::Error::internal_error().data(error.to_string()))?;
+        let spec = self.options.spec.clone();
+        let prompt = prompt.to_owned();
+        let resume = resume.map(str::to_owned);
+        let key = Self::session_key(session_id);
+        let cwd = self.session_cwds.borrow().get(&key).cloned();
+        let run = tokio::task::spawn_local(async move {
+            super::process::run_turn_emitting(
+                &spec,
+                &prompt,
+                resume.as_deref(),
+                Some(tx),
+                cwd.as_deref(),
+            )
+            .await
+        });
+        self.track_running(&key, run.abort_handle());
+        let joined = run.await;
+        self.untrack_running(&key);
         let _ = emit.await;
-        Ok(outcome)
+        match joined {
+            Ok(Ok(outcome)) => Ok(Some(outcome)),
+            Ok(Err(error)) => Err(acp::Error::internal_error().data(error.to_string())),
+            Err(join) if join.is_cancelled() => Ok(None),
+            Err(join) => Err(acp::Error::internal_error().data(join.to_string())),
+        }
     }
 }
 
@@ -125,14 +173,14 @@ impl acp::Agent for HeadlessAgent {
 
     async fn new_session(
         &self,
-        _request: acp::NewSessionRequest,
+        request: acp::NewSessionRequest,
     ) -> acp::Result<acp::NewSessionResponse> {
         let next = self.next_session.get() + 1;
         self.next_session.set(next);
         let session_id = format!("command-code-{}", Uuid::new_v4());
-        self.cmd_sessions
+        self.session_cwds
             .borrow_mut()
-            .insert(session_id.clone(), None);
+            .insert(session_id.clone(), request.cwd);
         Ok(acp::NewSessionResponse::new(session_id))
     }
 
@@ -145,30 +193,26 @@ impl acp::Agent for HeadlessAgent {
         if prompt.trim().is_empty() {
             return Err(acp::Error::invalid_params());
         }
-        let resume = self
-            .cmd_sessions
-            .borrow()
-            .get(&session_key)
-            .cloned()
-            .flatten();
-        let outcome = self
-            .run_prompt_turn(&request.session_id, &prompt, resume.as_deref())
-            .await?;
+        // SubAgent turns are one-shot. Resuming cmd's last project session is
+        // what produced Muse Spark's "Ready to continue — I see ~N modified
+        // files" greeting instead of the delegated task.
+        let Some(outcome) = self
+            .run_prompt_turn(&request.session_id, &prompt, None)
+            .await?
+        else {
+            self.take_cancelled(&session_key);
+            return emit_cancelled(self, request.session_id).await;
+        };
         if self.take_cancelled(&session_key) {
-            return Ok(acp::PromptResponse::new(acp::StopReason::Cancelled));
-        }
-        if let Some(session_id) = outcome.result.session_id.clone() {
-            self.cmd_sessions
-                .borrow_mut()
-                .insert(session_key, Some(session_id));
+            return emit_cancelled(self, request.session_id).await;
         }
         emit_result(self, request.session_id, &outcome.result).await
     }
 
     async fn cancel(&self, request: acp::CancelNotification) -> acp::Result<()> {
-        self.cancelled
-            .borrow_mut()
-            .insert(Self::session_key(&request.session_id), true);
+        let key = Self::session_key(&request.session_id);
+        self.cancelled.borrow_mut().insert(key.clone(), true);
+        self.abort_running(&key);
         Ok(())
     }
 
@@ -187,11 +231,25 @@ impl acp::Agent for HeadlessAgent {
     }
 }
 
+async fn emit_cancelled(
+    agent: &HeadlessAgent,
+    session_id: acp::SessionId,
+) -> acp::Result<acp::PromptResponse> {
+    for update in turn_cancelled_updates() {
+        agent.notify(session_id.clone(), update).await?;
+    }
+    Ok(acp::PromptResponse::new(acp::StopReason::Cancelled))
+}
+
 async fn emit_result(
     agent: &HeadlessAgent,
     session_id: acp::SessionId,
     result: &TurnResult,
 ) -> acp::Result<acp::PromptResponse> {
+    let failed = result_is_error(result);
+    agent
+        .notify(session_id.clone(), turn_settled_update(failed))
+        .await?;
     let text = result_message(result);
     if !text.is_empty() {
         agent
@@ -202,7 +260,7 @@ async fn emit_result(
                 )),
             )
             .await?;
-    } else if result_is_error(result) {
+    } else if failed {
         return Err(acp::Error::internal_error().data(
             result
                 .error
@@ -233,8 +291,9 @@ where
         options,
         operations,
         next_session: Cell::new(0),
-        cmd_sessions: RefCell::new(HashMap::new()),
+        session_cwds: RefCell::new(HashMap::new()),
         cancelled: RefCell::new(HashMap::new()),
+        running: RefCell::new(HashMap::new()),
     };
     let (connection, io) =
         acp::AgentSideConnection::new(agent, stdout.compat_write(), stdin.compat(), |future| {
