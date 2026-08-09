@@ -1450,6 +1450,38 @@ async fn expands_valid_parallel_agent_batches_and_rejects_short_batches() {
     assert_eq!(builder.blocks.len(), 6);
     assert_background_batch(&builder, 3, 3);
 
+    let mut explore = SegmentBuilder::new(1);
+    let _ = explore
+        .handle_event(
+            &bridge,
+            &session,
+            &[json!({
+                "role":"user",
+                "content":"Investigate how sync-realtime-data chooses the writable Neon connection."
+            })],
+            &routing,
+            &json!({
+                "id":4,
+                "method":"item/tool/call",
+                "params":{
+                    "callId":"explore",
+                    "tool":"cc_Agent_0",
+                    "arguments":{
+                        "prompt":"Assess production configuration paths",
+                        "subagent_type":"worker",
+                        "claudex_model":"worker-model",
+                        "run_in_background":false
+                    }
+                }
+            }),
+            None,
+        )
+        .await
+        .expect("Explore launch");
+    assert!(explore.has_external_tool_calls());
+    assert_eq!(explore.blocks[0]["name"], "Agent");
+    assert_eq!(explore.blocks[0]["input"]["run_in_background"], true);
+
     let short = agent_batch_event("short-call", [worker_task("only", None)]);
     let error = builder
         .handle_event(&bridge, &session, &messages, &routing, &short, None)

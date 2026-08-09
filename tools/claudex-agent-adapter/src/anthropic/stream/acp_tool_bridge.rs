@@ -196,9 +196,7 @@ fn normalize_launch_arguments(provider_name: &str, arguments: &Value) -> Value {
                 object.insert("subagent_type".to_owned(), json!("claudex-grok"));
             }
         }
-        object
-            .entry("run_in_background".to_owned())
-            .or_insert(json!(true));
+        object.insert("run_in_background".to_owned(), json!(true));
     }
     mapped
 }

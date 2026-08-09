@@ -108,11 +108,15 @@ impl AgentEffortIntents {
         let model_is_inherited = explicit_model.is_some_and(|model| {
             arguments.get(IMPLICIT_MODEL).and_then(Value::as_str) == Some(model)
         });
-        // Match sanitize_public_tool_arguments: Agent/Task default to background
-        // when the model omits the field, so handoff still finds the launch.
-        let run_in_background = match arguments.get("run_in_background").and_then(Value::as_bool) {
-            Some(value) => value,
-            None => is_agent_tool(tool_name),
+        // Match public Claude Code args: Agent/Task stay background unless the
+        // active user explicitly required a synchronous result.
+        let run_in_background = if is_agent_tool(tool_name) {
+            background_launch::agent_launch_is_background(tool_name, user_messages)
+        } else {
+            arguments
+                .get("run_in_background")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
         };
         let correlated = has_correlation_marker(prompt);
         let mut pending = self.pending.lock().expect("agent effort intents poisoned");
@@ -278,7 +282,10 @@ pub(super) fn prepare_arguments_for_user(
     let mut correlated = arguments.clone();
     let Some(prompt) = agent_prompt(tool_name, arguments) else {
         let mut public = correlated.clone();
-        return (None, sanitize_public_tool_arguments(tool_name, &mut public));
+        return (
+            None,
+            sanitize_public_tool_arguments(tool_name, &mut public, user_messages),
+        );
     };
     super::agent_routing::hydrate_routing_fields(&mut correlated);
     correlated["prompt"] = Value::String(super::agent_effort_matching::correlated_prompt(
@@ -287,7 +294,8 @@ pub(super) fn prepare_arguments_for_user(
         requested_model(arguments),
     ));
     let mut public_arguments = correlated.clone();
-    let mut claude_arguments = sanitize_public_tool_arguments(tool_name, &mut public_arguments);
+    let mut claude_arguments =
+        sanitize_public_tool_arguments(tool_name, &mut public_arguments, user_messages);
     let public = claude_arguments
         .as_object_mut()
         .expect("Agent arguments must be an object");
@@ -302,7 +310,11 @@ pub(super) fn prepare_arguments_for_user(
     (Some(correlated), claude_arguments)
 }
 
-fn sanitize_public_tool_arguments(tool_name: &str, arguments: &mut Value) -> Value {
+fn sanitize_public_tool_arguments(
+    tool_name: &str,
+    arguments: &mut Value,
+    user_messages: &[Value],
+) -> Value {
     let Some(public) = arguments.as_object_mut() else {
         return arguments.clone();
     };
@@ -311,9 +323,13 @@ fn sanitize_public_tool_arguments(tool_name: &str, arguments: &mut Value) -> Val
     public.remove(IMPLICIT_MODEL);
     if is_agent_tool(tool_name) {
         public.remove("model");
-        public
-            .entry("run_in_background".to_owned())
-            .or_insert(Value::Bool(true));
+        public.insert(
+            "run_in_background".to_owned(),
+            Value::Bool(background_launch::agent_launch_is_background(
+                tool_name,
+                user_messages,
+            )),
+        );
     }
     arguments.clone()
 }

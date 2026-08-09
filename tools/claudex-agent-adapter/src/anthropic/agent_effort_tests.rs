@@ -195,25 +195,85 @@ mod tests {
     #[test]
     fn preserves_claude_code_foreground_and_background_launch_modes() {
         let intents = AgentEffortIntents::default();
-        intents.record(
-            Some("session"),
-            "Agent",
-            "foreground".to_owned(),
-            "main-model",
-            &json!({"prompt":"foreground","run_in_background":false}),
+        intents.record_from_user_messages(
+            AgentEffortRecord {
+                client_user_id: Some("session"),
+                tool_name: "Agent",
+                tool_use_id: "foreground".to_owned(),
+                parent_model: "main-model",
+                arguments: &json!({"prompt":"foreground","run_in_background":false}),
+                user_messages: &[
+                    json!({"role":"user","content":"同期で結果を待ってから次へ進めて"}),
+                ],
+                system: &json!(null),
+            },
+            None,
         );
-        intents.record(
-            Some("session"),
-            "Agent",
-            "background".to_owned(),
-            "main-model",
-            &json!({"prompt":"background","run_in_background":true}),
+        intents.record_from_user_messages(
+            AgentEffortRecord {
+                client_user_id: Some("session"),
+                tool_name: "Agent",
+                tool_use_id: "background".to_owned(),
+                parent_model: "main-model",
+                arguments: &json!({"prompt":"background","run_in_background":false}),
+                user_messages: &[json!({
+                    "role":"user",
+                    "content":"Investigate how sync-realtime-data chooses the writable Neon connection."
+                })],
+                system: &json!(null),
+            },
+            None,
         );
 
         let foreground = intents.take(&request("session", "foreground", true));
         let background = intents.take(&request("session", "background", true));
         assert!(!foreground.run_in_background);
         assert!(background.run_in_background);
+    }
+
+    #[test]
+    fn forces_explore_background_unless_user_requires_sync() {
+        let (_, queued) = prepare_arguments_for_user(
+            "Agent",
+            "tool-explore",
+            &json!({
+                "prompt":"Assess production configuration paths",
+                "subagent_type":"Explore",
+                "run_in_background":false
+            }),
+            &[json!({
+                "role":"user",
+                "content":"Investigate how sync-realtime-data chooses the writable Neon connection."
+            })],
+            &json!(null),
+        );
+        assert_eq!(queued["run_in_background"], true);
+
+        let (_, hurry) = prepare_arguments_for_user(
+            "Agent",
+            "tool-hurry",
+            &json!({
+                "prompt":"Assess production configuration paths",
+                "subagent_type":"Explore",
+                "run_in_background":false
+            }),
+            &[json!({"role":"user","content":"さっさとやれ"})],
+            &json!(null),
+        );
+        assert_eq!(hurry["run_in_background"], true);
+
+        let (_, sync) = prepare_arguments_for_user(
+            "Agent",
+            "tool-sync",
+            &json!({
+                "prompt":"Assess production configuration paths",
+                "subagent_type":"Explore",
+                "run_in_background":false
+            }),
+            &[json!({"role":"user","content":"同期で結果を待ってから次へ進めて"})],
+            &json!(null),
+        );
+        assert_eq!(sync["run_in_background"], false);
     }
 
     #[test]

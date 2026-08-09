@@ -61,7 +61,8 @@ mod tests {
                 "arguments":{
                     "description":"smoke",
                     "prompt":"CHILD_OK",
-                    "subagent_type":"grok-native-high-plugin-v3:claudex-high"
+                    "subagent_type":"grok-native-high-plugin-v3:claudex-high",
+                    "run_in_background":false
                 }
             }
         });
@@ -104,13 +105,15 @@ mod tests {
         let bridged =
             bridge_provider_tool_call(&map, &completed).expect("completed launch bridges");
         assert_eq!(bridged.name, "Agent");
-        assert!(bridge_provider_tool_call(
-            &HashMap::new(),
-            &json!({
-                "params":{"callId":"c4","tool":"Agent","status":"pending","arguments":{}}
-            })
-        )
-        .is_none());
+        assert!(
+            bridge_provider_tool_call(
+                &HashMap::new(),
+                &json!({
+                    "params":{"callId":"c4","tool":"Agent","status":"pending","arguments":{}}
+                })
+            )
+            .is_none()
+        );
     }
 
     #[test]

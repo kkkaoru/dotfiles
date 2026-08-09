@@ -1,6 +1,59 @@
 use std::collections::HashSet;
 
-use super::{AgentEffortIntents, remove_expired};
+use serde_json::Value;
+
+use super::{AgentEffortIntents, is_agent_tool, remove_expired};
+
+const SYNC_NEEDLES: &[&str] = &[
+    "synchronously",
+    "synchronous result",
+    "run in foreground",
+    "don't background",
+    "do not background",
+    "wait for the result",
+    "wait for results",
+    "同期で",
+    "同期完了",
+    "フォアグラウンド",
+    "結果を待って",
+    "終わるまで待って",
+];
+
+pub(in crate::anthropic) fn user_requires_synchronous_results(messages: &[Value]) -> bool {
+    active_user_text(messages).is_some_and(|text| {
+        let haystack = format!("{}\n{}", text, text.to_ascii_lowercase());
+        SYNC_NEEDLES.iter().any(|needle| haystack.contains(needle))
+    })
+}
+
+pub(in crate::anthropic) fn agent_launch_is_background(
+    tool_name: &str,
+    user_messages: &[Value],
+) -> bool {
+    is_agent_tool(tool_name) && !user_requires_synchronous_results(user_messages)
+}
+
+fn active_user_text(messages: &[Value]) -> Option<String> {
+    messages.iter().rev().find_map(|message| {
+        if message.get("role").and_then(Value::as_str) != Some("user") {
+            return None;
+        }
+        let text = match message.get("content") {
+            Some(Value::String(text)) => text.clone(),
+            Some(Value::Array(blocks)) => blocks
+                .iter()
+                .find_map(|block| block.get("text").and_then(Value::as_str).map(str::to_owned))?,
+            _ => return None,
+        };
+        if text.contains("<agent-message")
+            || text.contains("<teammate-message")
+            || text.starts_with("Another Claude session sent a message")
+        {
+            return None;
+        }
+        Some(text)
+    })
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::anthropic) struct BackgroundLaunchIntent {
@@ -52,28 +105,46 @@ mod tests {
     #[test]
     fn requires_unique_known_background_agent_launches() {
         let intents = AgentEffortIntents::default();
-        let user_messages = [json!({
+        let background_messages = [json!({
             "role":"user",
             "content":"delegate synthetic work with worker-model"
         })];
-        for (id, background) in [("background", true), ("foreground", false)] {
-            intents.record_from_user_messages(
-                AgentEffortRecord {
-                    client_user_id: Some("main"),
-                    tool_name: "Agent",
-                    tool_use_id: id.to_owned(),
-                    parent_model: "main-model",
-                    arguments: &json!({
-                        "prompt":format!("synthetic {id}"),
-                        "claudex_model":"worker-model",
-                        "run_in_background":background
-                    }),
-                    user_messages: &user_messages,
-                    system: &Value::Null,
-                },
-                None,
-            );
-        }
+        let sync_messages = [json!({
+            "role":"user",
+            "content":"同期で結果を待ってから次へ進めて"
+        })];
+        intents.record_from_user_messages(
+            AgentEffortRecord {
+                client_user_id: Some("main"),
+                tool_name: "Agent",
+                tool_use_id: "background".to_owned(),
+                parent_model: "main-model",
+                arguments: &json!({
+                    "prompt":"synthetic background",
+                    "claudex_model":"worker-model",
+                    "run_in_background":false
+                }),
+                user_messages: &background_messages,
+                system: &Value::Null,
+            },
+            None,
+        );
+        intents.record_from_user_messages(
+            AgentEffortRecord {
+                client_user_id: Some("main"),
+                tool_name: "Agent",
+                tool_use_id: "foreground".to_owned(),
+                parent_model: "main-model",
+                arguments: &json!({
+                    "prompt":"synthetic foreground",
+                    "claudex_model":"worker-model",
+                    "run_in_background":false
+                }),
+                user_messages: &sync_messages,
+                system: &Value::Null,
+            },
+            None,
+        );
 
         let launches = intents
             .background_launches(&["background".to_owned()])
