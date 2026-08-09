@@ -1,0 +1,12 @@
+#!/bin/sh
+# Install the adapter into ~/.cargo/bin, relink ~/.local/bin, and arm the idle
+# hot-swap waiter for the new build_id.
+set -eu
+
+DOTPATH=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+exec "$DOTPATH/tools/claudex-agent-adapter/scripts/cargo-ephemeral.sh" +1.97.1 install \
+    --force \
+    --path "$DOTPATH/tools/claudex-agent-adapter" \
+    --root "${CARGO_HOME:-$HOME/.cargo}" \
+    --bin claudex-agent-adapter \
+    --bin command-code-acp
