@@ -239,8 +239,8 @@ mod tests {
             "selected_workers": [{"agent":"claudex-gpt","model":"gpt-5.6-luna"}]
         });
         write_delegation_state(dir.path(), &summary, 12.0).unwrap();
-        let text =
-            std::fs::read_to_string(dir.path().join(".cache/claudex/delegation-state.json")).unwrap();
+        let text = std::fs::read_to_string(dir.path().join(".cache/claudex/delegation-state.json"))
+            .unwrap();
         let value: Value = serde_json::from_str(&text).unwrap();
         assert_eq!(value["delegation_required"], true);
         assert_eq!(value["selected_workers_count"], 1);

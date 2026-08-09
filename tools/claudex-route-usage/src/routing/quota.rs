@@ -162,7 +162,11 @@ pub fn effective_window_remaining(quota: &Value) -> (Option<f64>, Option<f64>) {
 
 fn request_budget_five_hour_remaining(quota: &Value) -> Option<f64> {
     let budget = quota.get("request_budget")?;
-    if !budget.get("known").and_then(Value::as_bool).unwrap_or(false) {
+    if !budget
+        .get("known")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
         return None;
     }
     let window_minutes = budget.get("window_minutes").and_then(Value::as_i64)?;
@@ -370,15 +374,7 @@ pub fn capacity_priority_with_inflight(
             return (2.0, 0.0, 0.0, 0.0, 0.0, 0.0, config_index);
         };
         // Five-hour-only meters stay eligible, but behind known weekly headroom.
-        return (
-            0.5,
-            -five_hour,
-            0.0,
-            -five_hour,
-            0.0,
-            0.0,
-            config_index,
-        );
+        return (0.5, -five_hour, 0.0, -five_hour, 0.0, 0.0, config_index);
     };
     (
         0.0,
@@ -398,8 +394,7 @@ pub fn combined_capacity_priority_with_inflight(
     inflight: i64,
 ) -> CapacityKey {
     let unmetered = quota.get("reason").and_then(Value::as_str) == Some("unmetered");
-    let (mut weekly, mut five_hour) =
-        demote_windows(effective_window_remaining(quota), inflight);
+    let (mut weekly, mut five_hour) = demote_windows(effective_window_remaining(quota), inflight);
     let parallel_used = parallel_used_percent(concurrency);
     if parallel_used != 0.0 {
         let parallel_remaining = 100.0 - parallel_used;

@@ -15,7 +15,7 @@ use std::io::{self, IsTerminal, Read};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[derive(Clone, Copy, Debug, ValueEnum)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 #[value(rename_all = "PascalCase")]
 enum HookEvent {
     UserPromptSubmit,
@@ -73,35 +73,28 @@ fn is_internal_notification_prompt(prompt: &str) -> bool {
             && remainder.contains("</task-notification>"))
 }
 
-fn block_internal_notification_from_hook() -> Result<bool> {
-    if env::var("CLAUDEX_ACTIVE").as_deref() != Ok("1")
-        || env::var("CLAUDEX_AGMSG_AUTO_MONITOR").as_deref() == Ok("1")
-        || io::stdin().is_terminal()
-    {
-        return Ok(false);
+fn read_stdin_payload() -> Result<Option<Value>> {
+    if io::stdin().is_terminal() {
+        return Ok(None);
     }
     let mut raw = String::new();
     io::stdin().read_to_string(&mut raw)?;
-    if raw.is_empty() {
-        return Ok(false);
+    if raw.trim().is_empty() {
+        return Ok(None);
     }
-    let Ok(payload) = serde_json::from_str::<Value>(&raw) else {
-        return Ok(false);
-    };
-    let Some(prompt) = payload.get("user_prompt").and_then(Value::as_str) else {
-        return Ok(false);
-    };
-    if !is_internal_notification_prompt(prompt) {
-        return Ok(false);
+    Ok(serde_json::from_str(&raw).ok())
+}
+
+fn should_block_internal_notification(payload: &Value) -> bool {
+    if env::var("CLAUDEX_ACTIVE").as_deref() != Ok("1")
+        || env::var("CLAUDEX_AGMSG_AUTO_MONITOR").as_deref() == Ok("1")
+    {
+        return false;
     }
-    println!(
-        "{}",
-        serde_json::json!({
-            "decision": "block",
-            "reason": "Claudex internal background notification consumed"
-        })
-    );
-    Ok(true)
+    payload
+        .get("user_prompt")
+        .and_then(Value::as_str)
+        .is_some_and(is_internal_notification_prompt)
 }
 
 fn disabled_models(arguments: &Arguments, paths: &config::Paths) -> Result<BTreeSet<String>> {
@@ -172,7 +165,27 @@ struct CacheKey<'a> {
 
 fn run() -> Result<()> {
     let arguments = Arguments::parse();
-    if block_internal_notification_from_hook()? {
+    let payload = read_stdin_payload()?;
+    if arguments.event == HookEvent::UserPromptSubmit
+        && payload
+            .as_ref()
+            .is_some_and(should_block_internal_notification)
+    {
+        println!(
+            "{}",
+            serde_json::json!({
+                "decision": "block",
+                "reason": "Claudex internal background notification consumed"
+            })
+        );
+        return Ok(());
+    }
+    let agent_type = payload.as_ref().and_then(hook::agent_type_from_payload);
+    if arguments.event == HookEvent::SubagentStart && hook::is_command_code_agent(agent_type) {
+        println!(
+            "{}",
+            serde_json::to_string(&hook::slim_command_code_hook(arguments.event.as_str()))?
+        );
         return Ok(());
     }
     let paths = config::Paths::discover(arguments.config.as_deref())?;
@@ -242,7 +255,11 @@ fn run() -> Result<()> {
     let _ = util::write_delegation_state(&paths.home, &summary, now);
     println!(
         "{}",
-        serde_json::to_string(&hook::hook_output(&summary, arguments.event.as_str())?)?
+        serde_json::to_string(&hook::hook_output_for_agent(
+            &summary,
+            arguments.event.as_str(),
+            agent_type,
+        )?)?
     );
     Ok(())
 }

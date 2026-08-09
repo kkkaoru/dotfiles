@@ -20,7 +20,10 @@ const CACHE_VERSION: u64 = 1;
 pub fn active_scopes(home: impl AsRef<Path>, now: SystemTime) -> BTreeSet<String> {
     let now = unix_seconds(now);
     let mut scopes = BTreeSet::new();
-    let path = home.as_ref().join(".cache/claudex").join(AUTH_COOLDOWN_FILE);
+    let path = home
+        .as_ref()
+        .join(".cache/claudex")
+        .join(AUTH_COOLDOWN_FILE);
     let Some(cache) = read_json(&path) else {
         return scopes;
     };

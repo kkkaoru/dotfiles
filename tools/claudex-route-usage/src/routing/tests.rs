@@ -508,8 +508,7 @@ fn drops_exhausted_cooldown_providers_from_automatic_selection() {
     );
     let scopes = BTreeSet::from(["ollama".to_owned()]);
     let summary =
-        routing_summary_with_exhaustion(&usage, &config, &BTreeSet::new(), &scopes, false)
-            .unwrap();
+        routing_summary_with_exhaustion(&usage, &config, &BTreeSet::new(), &scopes, false).unwrap();
     let agents = selected_agents(&summary);
     assert!(
         !agents.contains(&"claudex-ollama-glm-5-2"),
@@ -518,6 +517,85 @@ fn drops_exhausted_cooldown_providers_from_automatic_selection() {
     assert_eq!(
         summary["providers"]["ollama-glm"]["reason"],
         "provider-exhaustion-cooldown"
+    );
+    let disabled = summary["disabled_subagent_models"]
+        .as_array()
+        .expect("disabled models");
+    assert!(
+        disabled
+            .iter()
+            .any(|model| model.as_str() == Some("glm-5.2:cloud")),
+        "cooldown ollama must denylist glm-5.2:cloud: {disabled:?}"
+    );
+}
+
+#[test]
+fn drops_codexbar_weekly_limit_ollama_and_disables_glm() {
+    let usage = json!([{
+        "provider": "codex",
+        "usage": {
+            "primary": {"usedPercent": 10.0},
+            "secondary": {"usedPercent": 20.0}
+        }
+    }, {
+        "provider": "ollama",
+        "usage": {
+            "primary": {"usedPercent": 0.0, "resetsAt": "2026-08-10T00:00:00Z"},
+            "secondary": {"usedPercent": 100.0, "resetsAt": "2026-08-10T00:00:00Z"}
+        }
+    }]);
+    let config = config_from_json(
+        r#"{
+          "version": 1,
+          "mainProviders": ["codex", "ollama-glm"],
+          "providers": [
+            {
+              "id": "codex",
+              "agent": "claudex-gpt-spark",
+              "defaultModel": "gpt-5.3-codex-spark",
+              "effort": "high",
+              "enabled": true,
+              "usageProvider": "codex",
+              "backend": "codex-app-server"
+            },
+            {
+              "id": "ollama-glm",
+              "agent": "claudex-ollama-glm-5-2",
+              "defaultModel": "glm-5.2:cloud",
+              "effort": "max",
+              "enabled": true,
+              "usageProvider": "ollama",
+              "backend": "codex-app-server"
+            }
+          ],
+          "fallback": {
+            "agent": "claudex-sonnet",
+            "model": "claude-sonnet-5",
+            "effort": "high"
+          },
+          "nativeWorkers": [],
+          "advisor": {
+            "agent": "custom-advisor",
+            "model": "claude-fable-5",
+            "effort": "xhigh"
+          }
+        }"#,
+    );
+    let summary = routing_summary(&usage, &config, &BTreeSet::new()).unwrap();
+    let agents = selected_agents(&summary);
+    assert!(
+        !agents.contains(&"claudex-ollama-glm-5-2"),
+        "CodexBar weekly 100% ollama must leave automatic selected_workers: {agents:?}"
+    );
+    assert_eq!(summary["providers"]["ollama-glm"]["reason"], "exhausted");
+    let disabled = summary["disabled_subagent_models"]
+        .as_array()
+        .expect("disabled models");
+    assert!(
+        disabled
+            .iter()
+            .any(|model| model.as_str() == Some("glm-5.2:cloud")),
+        "CodexBar weekly limit must denylist glm-5.2:cloud: {disabled:?}"
     );
 }
 
@@ -588,13 +666,8 @@ fn ollama_api_only_availability_ranks_behind_known_weekly() {
     );
     let agents = selected_agents(&summary);
     assert!(
-        agents.contains(&"claudex-ollama-glm-5-2"),
-        "api-only ollama stays eligible after known weekly: {agents:?}"
-    );
-    assert_ne!(
-        agents.first().copied(),
-        Some("claudex-ollama-glm-5-2"),
-        "api-only ollama must not outrank known weekly headroom: {agents:?}"
+        !agents.contains(&"claudex-ollama-glm-5-2"),
+        "api-only ollama must leave automatic selected_workers when metered peers have ample headroom: {agents:?}"
     );
 }
 
@@ -635,7 +708,10 @@ fn ollama_api_only_is_usable_when_no_weekly_meters_exist() {
       "reason": "available-ollama-api-only"
     }]);
     let summary = routing_summary(&usage, &config, &BTreeSet::new()).unwrap();
-    assert_eq!(summary["selected_workers"][0]["agent"], "claudex-ollama-glm-5-2");
+    assert_eq!(
+        summary["selected_workers"][0]["agent"],
+        "claudex-ollama-glm-5-2"
+    );
     assert!(summary["selected_workers"][0]["weekly_remaining_percent"].is_null());
 }
 
@@ -893,8 +969,7 @@ fn inflight_subagents_demote_busy_models_down_the_weekly_order() {
     )
     .unwrap();
     assert_eq!(
-        refreshed["selected_workers"][0]["agent"],
-        "claudex-grok",
+        refreshed["selected_workers"][0]["agent"], "claudex-grok",
         "busy top weekly worker must yield to the next weekly-ranked peer: {}",
         refreshed["selected_workers"]
     );

@@ -263,10 +263,7 @@ fn refresh_provider_slot(
             &quota,
             &concurrency,
             slot.index,
-            *slot
-                .active_subagent_models
-                .get(&model)
-                .unwrap_or(&0),
+            *slot.active_subagent_models.get(&model).unwrap_or(&0),
         ),
         selected_worker,
     ));

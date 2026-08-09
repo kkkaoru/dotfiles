@@ -76,7 +76,7 @@ pub(crate) fn routing_summary_with_exhaustion(
         "selected_workers": selected,
         "preferred_worker": preferred,
         "fallback_active": fallback_active,
-        "disabled_subagent_models": disabled_models.iter().cloned().collect::<Vec<_>>(),
+        "disabled_subagent_models": disabled_models_with_exhaustion(disabled_models, &providers),
         "advisor": config.advisor.clone(),
     });
     summary["orchestration"] = orchestration_contract(&summary)?;
@@ -101,6 +101,27 @@ fn live_exhaustion_state() -> (BTreeSet<String>, bool) {
         .as_ref()
         .is_some_and(|path| exhaustion::codex_app_server_cooling_down(path, now));
     (scopes, cooling)
+}
+
+fn disabled_models_with_exhaustion(
+    disabled_models: &BTreeSet<String>,
+    providers: &Map<String, Value>,
+) -> Vec<String> {
+    let mut disabled = disabled_models.clone();
+    for fields in providers.values() {
+        let reason = fields.get("reason").and_then(Value::as_str).unwrap_or("");
+        if !matches!(reason, "exhausted" | "provider-exhaustion-cooldown") {
+            continue;
+        }
+        if let Some(model) = fields
+            .get("model")
+            .and_then(Value::as_str)
+            .filter(|model| !model.is_empty())
+        {
+            disabled.insert(model.to_owned());
+        }
+    }
+    disabled.into_iter().collect()
 }
 
 /// Per-provider quota fields, also ranking every provider with capacity.
@@ -135,7 +156,11 @@ fn provider_quota_fields(
             .unwrap_or_default();
         providers.insert(
             provider_id.to_owned(),
-            Value::Object(provider_fields(&effective, &worker_item, disabled || exhausted)),
+            Value::Object(provider_fields(
+                &effective,
+                &worker_item,
+                disabled || exhausted,
+            )),
         );
         if !disabled
             && !exhausted
@@ -242,7 +267,7 @@ pub fn fallback_summary(
         "selected_workers": selected,
         "preferred_worker": preferred,
         "fallback_active": fallback_active,
-        "disabled_subagent_models": disabled_models.iter().cloned().collect::<Vec<_>>(),
+        "disabled_subagent_models": disabled_models_with_exhaustion(disabled_models, &providers),
         "advisor": config.advisor.clone(),
     });
     summary["orchestration"] = orchestration_contract(&summary)?;

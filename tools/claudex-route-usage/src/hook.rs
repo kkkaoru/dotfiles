@@ -27,7 +27,9 @@ fn tool_policy_reminder(event_name: &str) -> &'static str {
             "Claudex tool policy for this SubAgent: inherit the main session's complete tool set. ",
             "Main-session PreToolUse denials for Read/Write/Edit/Grep/Glob/LS/WebSearch/WebFetch ",
             "do NOT apply here. Use those tools freely within the delegated scope. Parallel ",
-            "Write/Edit of the same path remains file-locked across SubAgents."
+            "Write/Edit of the same path remains file-locked across SubAgents. ",
+            "Do not call Claude Code's built-in advisor() — it is main-session only and is not ",
+            "executable here. Do not launch models listed in disabled_subagent_models."
         ),
         _ => concat!(
             "Claudex tool policy for the main orchestrator: while selected_workers is non-empty, ",
@@ -38,9 +40,58 @@ fn tool_policy_reminder(event_name: &str) -> &'static str {
     }
 }
 
-pub fn hook_output(summary: &Value, event_name: &str) -> Result<Value> {
+pub fn agent_type_from_payload(payload: &Value) -> Option<&str> {
+    for key in ["agent_type", "agentType", "subagent_type"] {
+        if let Some(value) = payload.get(key).and_then(Value::as_str) {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed);
+            }
+        }
+    }
+    payload.get("agent").and_then(|agent| {
+        agent
+            .get("agent_type")
+            .or_else(|| agent.get("type"))
+            .or_else(|| agent.get("name"))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+    })
+}
+
+pub fn is_command_code_agent(agent_type: Option<&str>) -> bool {
+    agent_type.is_some_and(|agent| {
+        let lower = agent.trim().to_ascii_lowercase();
+        lower == "claudex-command-code" || lower == "command-code"
+    })
+}
+
+pub fn slim_command_code_hook(event_name: &str) -> Value {
+    serde_json::json!({
+        "hookSpecificOutput": {
+            "hookEventName": event_name,
+            "additionalContext": concat!(
+                "<system-reminder>\n",
+                "Command Code Muse Spark worker: use native cmd tools only. ",
+                "Ignore Claudex routing tables and Claude Code skills. ",
+                "Do not greet or recap git status. Complete only the delegated task.\n",
+                "</system-reminder>"
+            ),
+        }
+    })
+}
+
+pub fn hook_output_for_agent(
+    summary: &Value,
+    event_name: &str,
+    agent_type: Option<&str>,
+) -> Result<Value> {
     if event_name != "UserPromptSubmit" && event_name != "SubagentStart" {
         anyhow::bail!("hook event must be UserPromptSubmit or SubagentStart");
+    }
+    if event_name == "SubagentStart" && is_command_code_agent(agent_type) {
+        return Ok(slim_command_code_hook(event_name));
     }
     let advisor_enabled = custom_advisor_enabled();
     let selected_workers: Vec<Value> = summary
@@ -108,7 +159,7 @@ mod tests {
             "delegation_required": true,
             "direct_main_execution": "fallback-only"
         });
-        let output = hook_output(&summary, "UserPromptSubmit").unwrap();
+        let output = hook_output_for_agent(&summary, "UserPromptSubmit", None).unwrap();
         assert_eq!(
             output["hookSpecificOutput"]["hookEventName"],
             "UserPromptSubmit"
@@ -120,7 +171,7 @@ mod tests {
         assert!(ctx.contains("claudex-routing-local-hook"));
         assert!(ctx.contains("main orchestrator"));
         assert!(ctx.contains("main-orchestrator"));
-        let sub = hook_output(&summary, "SubagentStart").unwrap();
+        let sub = hook_output_for_agent(&summary, "SubagentStart", None).unwrap();
         assert_eq!(sub["hookSpecificOutput"]["hookEventName"], "SubagentStart");
         let sub_ctx = sub["hookSpecificOutput"]["additionalContext"]
             .as_str()
@@ -128,5 +179,48 @@ mod tests {
         assert!(sub_ctx.contains("SubAgent"));
         assert!(sub_ctx.contains("do NOT apply"));
         assert!(sub_ctx.contains("subagent-full-tools"));
+        assert!(sub_ctx.contains("advisor()"));
+        assert!(sub_ctx.contains("main-session only"));
+        assert!(sub_ctx.contains("disabled_subagent_models"));
+        assert!(!ctx.contains("advisor() — it is main-session only"));
+    }
+
+    #[test]
+    fn slims_command_code_subagent_start_without_routing_json() {
+        let summary = json!({
+            "selected_agents": ["claudex-gpt"],
+            "selected_workers": [{"agent":"claudex-gpt","model":"gpt-5.6-luna","effort":"max"}],
+            "disabled_subagent_models": [],
+            "advisor": {"agent":"custom-advisor","model":"claude-fable-5","effort":"xhigh"},
+            "orchestration_mode": "subagent-first",
+            "delegation_required": true,
+            "direct_main_execution": "fallback-only"
+        });
+        assert!(is_command_code_agent(Some("claudex-command-code")));
+        assert!(is_command_code_agent(Some("command-code")));
+        assert!(!is_command_code_agent(Some("claudex-grok")));
+        assert_eq!(
+            agent_type_from_payload(&json!({"agent_type":"claudex-command-code"})),
+            Some("claudex-command-code")
+        );
+        assert_eq!(
+            agent_type_from_payload(&json!({"agent":{"name":"claudex-command-code"}})),
+            Some("claudex-command-code")
+        );
+        let slim =
+            hook_output_for_agent(&summary, "SubagentStart", Some("claudex-command-code")).unwrap();
+        let ctx = slim["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap();
+        assert!(ctx.contains("Command Code Muse Spark"));
+        assert!(ctx.contains("Do not greet"));
+        assert!(!ctx.contains("claudex-routing-local-hook"));
+        assert!(!ctx.contains("selected_workers"));
+        assert!(ctx.len() < 500);
+        let other = hook_output_for_agent(&summary, "SubagentStart", Some("claudex-grok")).unwrap();
+        let other_ctx = other["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap();
+        assert!(other_ctx.contains("claudex-routing-local-hook"));
     }
 }
