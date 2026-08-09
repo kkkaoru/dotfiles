@@ -20,6 +20,69 @@ mod tests {
     }
 
     #[test]
+    fn advertises_enabled_selectable_models_without_creating_workers() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("providers.json");
+        std::fs::write(
+            &path,
+            config(
+                r#"{"id":"p","agent":"worker","defaultModel":"model","subagentModel":"model-spark","effort":"high","enabled":true,"modelPrefixes":["model-"],"selectableModels":["model-terra"],"backend":"codex-app-server"},{"id":"off","agent":"off","defaultModel":"off","effort":"low","enabled":false,"selectableModels":["off-terra"],"backend":"grok-acp"}"#,
+            ),
+        )
+        .unwrap();
+        let loaded = load(&path).unwrap();
+        assert_eq!(
+            loaded.model_catalog.selectable_models(),
+            &["model-terra".to_owned()]
+        );
+        assert!(loaded.model_catalog.matches("model-terra"));
+        assert!(loaded.model_catalog.matches("off-terra"));
+        assert_eq!(
+            loaded.model_catalog.worker_fields("worker"),
+            Some(("model-spark", "high"))
+        );
+        assert_eq!(loaded.model_catalog.worker_fields("off"), None);
+        assert!(
+            loaded
+                .model_catalog
+                .worker_routes()
+                .iter()
+                .all(|worker| worker.model != "model-terra")
+        );
+    }
+
+    #[test]
+    fn installed_codex_provider_exposes_terra_as_main_selectable_only() {
+        let loaded = load(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../.config/claudex/providers.json")
+                .as_path(),
+        )
+        .expect("load repository providers.json");
+        assert!(
+            loaded
+                .model_catalog
+                .selectable_models()
+                .iter()
+                .any(|model| model == "gpt-5.6-terra"),
+            "gpt-5.6-terra must be advertised for /model"
+        );
+        assert!(loaded.model_catalog.matches("gpt-5.6-terra"));
+        assert!(
+            loaded
+                .model_catalog
+                .worker_routes()
+                .iter()
+                .all(|worker| worker.model != "gpt-5.6-terra"),
+            "terra must not become an automatic SubAgent worker"
+        );
+        assert_eq!(
+            loaded.model_catalog.worker_fields("claudex-gpt"),
+            Some(("gpt-5.6-luna", "max"))
+        );
+    }
+
+    #[test]
     fn loads_enabled_routes_and_ignores_disabled_routes() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("providers.json");
@@ -88,7 +151,11 @@ mod tests {
             ModelCatalog::from_routes(&[BackendRoute::new("model", BackendKind::GrokAcp)]);
         assert!(
             catalog
-                .set_worker_routes(vec![WorkerRoute::new(String::new(), "model".to_owned(), "high".to_owned())])
+                .set_worker_routes(vec![WorkerRoute::new(
+                    String::new(),
+                    "model".to_owned(),
+                    "high".to_owned()
+                )])
                 .is_err()
         );
         assert!(
@@ -100,7 +167,11 @@ mod tests {
                 .is_err()
         );
         catalog
-            .set_worker_routes(vec![WorkerRoute::new("worker".to_owned(), "model".to_owned(), "high".to_owned())])
+            .set_worker_routes(vec![WorkerRoute::new(
+                "worker".to_owned(),
+                "model".to_owned(),
+                "high".to_owned(),
+            )])
             .expect("valid worker route");
         assert_eq!(catalog.worker_fields("worker"), Some(("model", "high")));
         assert_eq!(catalog.worker_effort_for_model("model"), Some("high"));
@@ -121,7 +192,11 @@ mod tests {
         let loaded = load(&path).expect("load search fallback");
         assert_eq!(
             loaded.model_catalog.search_worker_routes(),
-            [WorkerRoute::new("worker".to_owned(), "worker-model".to_owned(), "high".to_owned())]
+            [WorkerRoute::new(
+                "worker".to_owned(),
+                "worker-model".to_owned(),
+                "high".to_owned()
+            )]
         );
 
         document["webSearch"] = serde_json::json!({"fallbackProviders":["missing"]});
@@ -350,6 +425,9 @@ mod tests {
         config.providers[0].model_prefixes = vec![String::new()];
         invalid.push(config);
         let mut config = parsed();
+        config.providers[0].selectable_models = vec![String::new()];
+        invalid.push(config);
+        let mut config = parsed();
         config.providers[0].max_concurrency = Some(crate::grok_acp::MAX_MODEL_CONCURRENCY + 1);
         invalid.push(config);
         for field in ["id", "model", "prefix"] {
@@ -398,7 +476,10 @@ mod tests {
             r#"{"id":"p","agent":"w","defaultModel":"m","effort":"high","backend":"codex-app-server","webSearchMode":"acp-native"}"#,
         ] {
             let parsed: ProviderConfig = serde_json::from_str(&config(provider)).unwrap();
-            assert!(validate(parsed).is_err(), "accepted invalid provider: {provider}");
+            assert!(
+                validate(parsed).is_err(),
+                "accepted invalid provider: {provider}"
+            );
         }
     }
 

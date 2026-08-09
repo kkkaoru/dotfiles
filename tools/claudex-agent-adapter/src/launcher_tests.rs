@@ -233,6 +233,10 @@ mod tests {
                 "xhigh".to_owned(),
             )])
             .expect("search worker route");
+        config
+            .options
+            .model_catalog
+            .set_selectable_models(vec!["gpt-5.6-terra".to_owned()]);
         let arguments = daemon_arguments(&config.options)
             .into_iter()
             .map(|argument| argument.into_string().expect("UTF-8 argument"))
@@ -240,6 +244,11 @@ mod tests {
         assert!(arguments.windows(2).any(|pair| {
             pair[0] == "--search-worker-route-json" && pair[1].contains("claudex-search")
         }));
+        assert!(
+            arguments
+                .windows(2)
+                .any(|pair| { pair[0] == "--selectable-model" && pair[1] == "gpt-5.6-terra" })
+        );
 
         config.options.model.clear();
         let arguments = daemon_arguments(&config.options)
@@ -266,6 +275,11 @@ mod tests {
         assert!(arguments.windows(2).any(|pair| {
             pair[0] == "--search-worker-route-json" && pair[1].contains("claudex-search")
         }));
+        assert!(
+            arguments
+                .windows(2)
+                .any(|pair| { pair[0] == "--selectable-model" && pair[1] == "gpt-5.6-terra" })
+        );
     }
 
     fn healthy(config: &ServiceConfig) -> Health {
@@ -287,6 +301,9 @@ mod tests {
             active_http_requests: 0,
             active_provider_turns: 0,
             active_subagent_models: BTreeMap::new(),
+            listener_handover: false,
+            listen: None,
+            active_claude_session_ids: Vec::new(),
         }
     }
 
@@ -572,31 +589,69 @@ mod tests {
         busy.options.listen = listener.local_addr().expect("busy address");
         busy.log_path = root.path().join("adapter.log");
         busy.lock_path = root.path().join("adapter.lock");
+
+        let fallback_listener = TcpListener::bind("127.0.0.1:0").expect("fallback listener");
+        let fallback_listen = fallback_listener.local_addr().expect("fallback address");
+        let fallback = busy.with_listen(fallback_listen);
+        std::fs::write(
+            root.path()
+                .join(format!("fallback.{}.json", busy.options.listen.port())),
+            serde_json::json!({
+                "listen": fallback_listen,
+                "build_id": env!("CLAUDEX_BUILD_ID"),
+                "service_config_fingerprint": fallback.service_config_fingerprint,
+                "pid": 99,
+            })
+            .to_string(),
+        )
+        .expect("write fallback state");
+
         let mut health = healthy(&busy);
         health.build_id = "old-build".to_owned();
         health.active_http_requests = 1;
         let server = serve_responses(listener, vec![health_response(&health)]);
+        let fallback_health = healthy(&fallback);
+        let fallback_server = serve_responses(
+            fallback_listener,
+            vec![
+                health_response(&fallback_health),
+                http_response("200 OK", "{}"),
+            ],
+        );
         let events = macos_notify::TestEvents::capture();
         let _spawn = pending_hot_swap::TestSpawnPid::arm(4242);
         let url = ensure::run(&busy, ensure::Mode::HotSwap)
             .await
-            .expect("busy hot-swap should arm a waiter instead of timing out");
-        assert_eq!(url, busy.base_url());
+            .expect("busy hot-swap should arm a waiter and return the current-build fallback");
+        assert_eq!(url, fallback.base_url());
         assert_eq!(
             events.take(),
-            vec![macos_notify::Event::WaitingForIdle {
-                listen: busy.options.listen.to_string(),
-                build_id: env!("CLAUDEX_BUILD_ID").to_owned(),
-                waiter_pid: 4242,
-            }],
-            "busy hot-swap must notify that the new build is waiting for idle"
+            vec![
+                macos_notify::Event::WaitingForIdle {
+                    listen: busy.options.listen.to_string(),
+                    build_id: env!("CLAUDEX_BUILD_ID").to_owned(),
+                    waiter_pid: 4242,
+                },
+                macos_notify::Event::LiveReady {
+                    listen: fallback_listen.to_string(),
+                    build_id: env!("CLAUDEX_BUILD_ID").to_owned(),
+                    waiting: busy.options.listen.to_string(),
+                },
+            ],
+            "busy hot-swap must notify waiting and that the live generation is ready now"
         );
         let pending = pending_hot_swap::read_state_for_tests(&busy)
             .expect("read pending hot-swap")
             .expect("pending hot-swap state");
         assert_eq!(pending.pid, 4242);
         assert_eq!(pending.build_id, env!("CLAUDEX_BUILD_ID"));
+        let live = super::live::read(&busy)
+            .expect("read live state")
+            .expect("live state after busy hot-swap");
+        assert_eq!(live.listen, fallback_listen);
+        assert_eq!(live.build_id, env!("CLAUDEX_BUILD_ID"));
         server.join().expect("busy hot-swap server");
+        fallback_server.join().expect("fallback server");
     }
 
     #[tokio::test]
@@ -1228,6 +1283,9 @@ mod tests {
                 "active_http_requests": health.active_http_requests,
                 "active_provider_turns": health.active_provider_turns,
                 "active_subagent_models": health.active_subagent_models,
+                "listener_handover": health.listener_handover,
+                "listen": health.listen,
+                "active_claude_session_ids": health.active_claude_session_ids,
             })
             .to_string(),
         )

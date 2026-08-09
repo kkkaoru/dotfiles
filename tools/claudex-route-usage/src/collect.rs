@@ -336,7 +336,25 @@ pub fn daemon_health_url() -> Result<String> {
         origin.set_fragment(None);
         return validate_daemon_health_url(origin.as_str());
     }
+    if let Some(live) = live_generation_health_url() {
+        return validate_daemon_health_url(&live);
+    }
     validate_daemon_health_url(DEFAULT_DAEMON_HEALTH_URL)
+}
+
+fn live_generation_health_url() -> Option<String> {
+    let home = env::var_os("HOME")?;
+    let listen = env::var("CLAUDEX_ADAPTER_LISTEN").unwrap_or_else(|_| "127.0.0.1:8318".to_owned());
+    let port = listen.rsplit(':').next()?;
+    let path = PathBuf::from(home)
+        .join(".cache/claudex")
+        .join(format!("live.{port}.json"));
+    let state: Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+    let listen = state.get("listen")?.as_str()?;
+    if listen.is_empty() {
+        return None;
+    }
+    Some(format!("http://{listen}/health"))
 }
 
 pub fn sanitize_model_concurrency(value: &Value) -> Option<BTreeMap<String, Value>> {
@@ -537,6 +555,42 @@ mod tests {
         assert_eq!(parse_vm_stat_value(output, "Pages inactive"), Some(2000));
         assert_eq!(parse_vm_stat_value(output, "Pages speculative"), Some(50));
         assert_eq!(parse_vm_stat_value(output, "Pages wired down"), None);
+    }
+
+    #[test]
+    fn prefers_live_generation_health_over_the_canonical_port() {
+        let root = tempfile::tempdir().unwrap();
+        let cache = root.path().join(".cache/claudex");
+        std::fs::create_dir_all(&cache).unwrap();
+        std::fs::write(
+            cache.join("live.8318.json"),
+            r#"{"listen":"127.0.0.1:52890","build_id":"new","pid":9}"#,
+        )
+        .unwrap();
+        let previous_home = env::var_os("HOME");
+        let previous_health = env::var_os("CLAUDEX_DAEMON_HEALTH_URL");
+        let previous_base = env::var_os("ANTHROPIC_BASE_URL");
+        unsafe {
+            env::set_var("HOME", root.path());
+            env::remove_var("CLAUDEX_DAEMON_HEALTH_URL");
+            env::remove_var("ANTHROPIC_BASE_URL");
+        }
+        let url = daemon_health_url().unwrap();
+        unsafe {
+            match previous_home {
+                Some(home) => env::set_var("HOME", home),
+                None => env::remove_var("HOME"),
+            }
+            match previous_health {
+                Some(value) => env::set_var("CLAUDEX_DAEMON_HEALTH_URL", value),
+                None => env::remove_var("CLAUDEX_DAEMON_HEALTH_URL"),
+            }
+            match previous_base {
+                Some(value) => env::set_var("ANTHROPIC_BASE_URL", value),
+                None => env::remove_var("ANTHROPIC_BASE_URL"),
+            }
+        }
+        assert_eq!(url, "http://127.0.0.1:52890/health");
     }
 
     #[test]

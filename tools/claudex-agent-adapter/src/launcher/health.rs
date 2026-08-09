@@ -50,6 +50,16 @@ pub(super) struct Health {
     /// Older adapters omit this field, so deserialization remains compatible.
     #[serde(default)]
     pub(super) active_subagent_models: BTreeMap<String, usize>,
+    /// Current binary can rebind its listen socket without exiting.
+    /// Older adapters omit this field.
+    #[serde(default)]
+    pub(super) listener_handover: bool,
+    /// Advertised listen address after an in-process rebind.
+    #[serde(default)]
+    pub(super) listen: Option<String>,
+    /// Claude Code session ids currently attached to this generation.
+    #[serde(default)]
+    pub(super) active_claude_session_ids: Vec<String>,
 }
 
 impl Health {

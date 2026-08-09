@@ -7,6 +7,10 @@ fn prefixes_non_anthropic_models_for_gateway_discovery() {
         "claude-claudex-gpt-5.6-luna"
     );
     assert_eq!(
+        crate::discovery_model_id("gpt-5.6-terra"),
+        "claude-claudex-gpt-5.6-terra"
+    );
+    assert_eq!(
         crate::discovery_model_id("opencode-go/deepseek-v4-flash"),
         "claude-claudex-opencode-go/deepseek-v4-flash"
     );
@@ -117,6 +121,7 @@ fn distinguishes_omitted_tools_from_an_explicit_empty_array() {
 
 #[test]
 fn applies_domain_filters_to_search_urls() {
+    use super::web_search::domain_allowed;
     let allowed = vec!["example.com".to_owned()];
     let blocked = vec!["blocked.example.com".to_owned()];
     assert!(domain_allowed("https://example.com/a", &allowed, &[]));

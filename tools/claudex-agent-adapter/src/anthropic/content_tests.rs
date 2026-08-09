@@ -349,6 +349,7 @@ mod tests {
             consumed_tool_ids: Mutex::new(consumed_tool_ids),
             external_tool_names: HashMap::new(),
             client_user_id: None,
+            claude_session_id: None,
             gate: Arc::new(Mutex::new(())),
             last_activity: std::sync::Mutex::new(Instant::now()),
             pending_since: std::sync::Mutex::new(Some(Instant::now())),

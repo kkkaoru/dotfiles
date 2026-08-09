@@ -14,6 +14,9 @@
       "modelPrefixes": [
         "gpt"
       ],
+      "selectableModels": [
+        "gpt-5.6-terra"
+      ],
       "backend": "codex-app-server",
       "webSearchMode": "codex-native"
     },
@@ -238,6 +241,7 @@
       "effort": "high",
       "maxConcurrency": 2,
       "enabled": true,
+      "usageProvider": "commandcode",
       "modelPrefixes": [
         "meta/muse-spark"
       ],

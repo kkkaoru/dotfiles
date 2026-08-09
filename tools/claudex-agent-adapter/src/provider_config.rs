@@ -3,9 +3,11 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, fs, path::Path};
 
+mod identities;
 mod types;
 mod validation;
 mod worker_route;
+use identities::{collect_provider_models, collect_route_models};
 use types::{AgentChoice, RequestBudget, WebSearchSettings};
 use validation::{validate_choice, validate_providers, validate_worker_routes};
 const CONFIG_VERSION: u64 = 1;
@@ -50,6 +52,8 @@ struct Provider {
     request_budget: Option<RequestBudget>,
     #[serde(default)]
     model_prefixes: Vec<String>,
+    #[serde(default)]
+    selectable_models: Vec<String>,
     backend: BackendKind,
     #[serde(default)]
     acp: Option<AcpLaunch>,
@@ -68,6 +72,7 @@ pub struct LoadedConfig {
 pub struct ModelCatalog {
     exact: Vec<String>,
     prefixes: Vec<String>,
+    selectable: Vec<String>,
     workers: Vec<WorkerRoute>,
     search_workers: Vec<WorkerRoute>,
     // Explicit Claude fallback, generic Haiku, and custom-advisor routes are
@@ -91,16 +96,20 @@ impl ModelCatalog {
     fn from_providers<'a>(providers: impl IntoIterator<Item = &'a Provider>) -> Self {
         let mut exact = Vec::new();
         let mut prefixes = Vec::new();
+        let mut selectable = Vec::new();
         for provider in providers {
-            collect_provider_models(provider, &mut exact, &mut prefixes);
+            collect_provider_models(provider, &mut exact, &mut prefixes, &mut selectable);
         }
         exact.sort();
         exact.dedup();
         prefixes.sort();
         prefixes.dedup();
+        selectable.sort();
+        selectable.dedup();
         Self {
             exact,
             prefixes,
+            selectable,
             workers: Vec::new(),
             search_workers: Vec::new(),
             auxiliary_workers: Vec::new(),
@@ -119,10 +128,24 @@ impl ModelCatalog {
         Self {
             exact,
             prefixes,
+            selectable: Vec::new(),
             workers: Vec::new(),
             search_workers: Vec::new(),
             auxiliary_workers: Vec::new(),
         }
+    }
+    pub fn selectable_models(&self) -> &[String] {
+        &self.selectable
+    }
+
+    pub fn set_selectable_models(&mut self, models: Vec<String>) {
+        let mut models: Vec<String> = models
+            .into_iter()
+            .filter(|model| !model.is_empty())
+            .collect();
+        models.sort();
+        models.dedup();
+        self.selectable = models;
     }
     pub fn matches(&self, model: &str) -> bool {
         self.exact.iter().any(|exact| exact == model)
@@ -231,33 +254,6 @@ impl ModelCatalog {
         workers.extend_from_slice(native_workers);
         self.set_worker_routes(workers)
     }
-}
-
-fn collect_provider_models(
-    provider: &Provider,
-    exact: &mut Vec<String>,
-    prefixes: &mut Vec<String>,
-) {
-    push_nonempty(exact, &provider.default_model);
-    if let Some(model) = provider.subagent_model.as_deref() {
-        push_nonempty(exact, model);
-    }
-    extend_nonempty(prefixes, &provider.model_prefixes);
-}
-
-fn collect_route_models(route: &BackendRoute, exact: &mut Vec<String>, prefixes: &mut Vec<String>) {
-    push_nonempty(exact, &route.model);
-    extend_nonempty(prefixes, &route.model_prefixes);
-}
-
-fn push_nonempty(values: &mut Vec<String>, value: &str) {
-    if !value.is_empty() {
-        values.push(value.to_owned());
-    }
-}
-
-fn extend_nonempty(values: &mut Vec<String>, candidates: &[String]) {
-    values.extend(candidates.iter().filter(|value| !value.is_empty()).cloned());
 }
 
 const fn enabled_by_default() -> bool {

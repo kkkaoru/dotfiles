@@ -21,6 +21,14 @@ fn complete(build: &str) -> Event {
     }
 }
 
+fn live(build: &str) -> Event {
+    Event::LiveReady {
+        listen: "127.0.0.1:62789".to_owned(),
+        build_id: build.to_owned(),
+        waiting: listen().to_string(),
+    }
+}
+
 #[test]
 fn waiting_notification_describes_build_listen_and_waiter() {
     let notification = notification(&waiting("abc123", 4242));
@@ -30,6 +38,17 @@ fn waiting_notification_describes_build_listen_and_waiter() {
     assert!(notification.body.contains("abc123"));
     assert!(notification.body.contains("4242"));
     assert!(notification.body.contains("待機中"));
+}
+
+#[test]
+fn live_ready_notification_describes_live_listen_build_and_waiting_port() {
+    let notification = notification(&live("abc123"));
+    assert_eq!(notification.title, TITLE);
+    assert_eq!(notification.subtitle, LIVE_SUBTITLE);
+    assert!(notification.body.contains("127.0.0.1:62789"));
+    assert!(notification.body.contains("abc123"));
+    assert!(notification.body.contains("127.0.0.1:8318"));
+    assert!(notification.body.contains("即時利用"));
 }
 
 #[test]
@@ -87,6 +106,18 @@ fn same_build_and_kind_are_not_emitted_twice() {
         "duplicate waiting for the same build must not notify"
     );
     assert!(
+        should_emit(&live("abc"), Some(&LastNotify::from(&first_waiting))),
+        "live ready after waiting must still notify"
+    );
+    assert!(
+        !should_emit(&live("abc"), Some(&LastNotify::from(&live("abc")))),
+        "duplicate live ready for the same build must not notify"
+    );
+    assert!(
+        should_emit(&first_complete, Some(&LastNotify::from(&live("abc")))),
+        "swap complete after live ready must still notify"
+    );
+    assert!(
         should_emit(&first_complete, Some(&LastNotify::from(&first_waiting))),
         "swap complete after waiting must still notify"
     );
@@ -107,12 +138,14 @@ fn post_emits_waiting_then_complete_once_each() {
     let events = TestEvents::capture();
     post(root.path(), &listen, waiting("abc", 9));
     post(root.path(), &listen, waiting("abc", 10));
+    post(root.path(), &listen, live("abc"));
+    post(root.path(), &listen, live("abc"));
     post(root.path(), &listen, complete("abc"));
     post(root.path(), &listen, complete("abc"));
     assert_eq!(
         events.take(),
-        vec![waiting("abc", 9), complete("abc")],
-        "old failure notified every arm/replace; new dedup keeps one waiting and one complete"
+        vec![waiting("abc", 9), live("abc"), complete("abc")],
+        "busy fallback must notify live ready, then one complete after canonical replace"
     );
 }
 

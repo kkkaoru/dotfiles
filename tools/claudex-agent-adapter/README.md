@@ -147,11 +147,11 @@ Codex app-server live search flags on `thread/start`; `acp-native` leaves the
 request on an ACP route that owns native search (Command Code Muse Spark uses
 this so Claude system/routing/ACP_NATIVE dumps are not prefixed onto `cmd -p`;
 `command-code-acp` also reads `cmd -p` stdout as bytes so invalid UTF-8 from
-web/tool dumps cannot crash the ACP turn, coalesces tiny NDJSON deltas, emits
-the same ACP `▶ name: query/path/url` / `✓` / `✗` chrome as Cursor/Qwen/Grok/Cline,
-plus native Command Code `text_delta` as live assistant text — not canned
-ツール結果待ち / 続きの調査または回答, and not thinking chrome so Claude Code 2.1
-does not collapse mid-turn work into Doing/Orbiting);
+web/tool dumps cannot crash the ACP turn, coalesces tiny NDJSON deltas, and
+syncs human-visible progress via Claude Code native thinking for the whole ACP
+SubAgent turn (▶/✓ stay in that open block; Command Code also uses display-only
+`server_tool_use` cards) — not canned ●/still-working dumps
+or ツール結果待ち / 続きの調査または回答);
 `delegate-mcp` leaves search
 to the configured ACP/MCP provider; and `disabled` suppresses search for that
 route. `delegate-ccr` (the default) exposes the protected
@@ -356,7 +356,7 @@ against `env!("CLAUDEX_BUILD_ID")`. Authentication must succeed before Reuse.
 | --- | --- | --- | --- |
 | `Reuse` | health matches config, current `build_id`, and auth | keep the listener | keep the listener |
 | `Replace` | mismatch or stale build, and no active work | graceful-stop serve, start current binary on the same port | same |
-| `Defer` | `status == "ok"` and `has_active_work()` (`active_http_requests` or `active_provider_turns` > 0) | start or reuse a current-build loopback fallback, arm a detached idle waiter for the configured port, and leave in-flight streams on the old pid | poll every 250ms up to 45s; then Replace, or arm `hot-swap --wait-idle` instead of timing out |
+| `Defer` | `status == "ok"` and `has_active_work()` (`active_http_requests`, `active_provider_turns`, or active SubAgents > 0) | if `/health.listener_handover` is true, rebind the old daemon to an ephemeral port and promote the current build onto the canonical listen (old Claude Code sessions stay on the retained generation). Otherwise start or reuse a current-build fallback, arm an idle waiter, and publish `~/.cache/claudex/live.<port>.json` so new sessions and routing health use the current generation immediately | same |
 | `Start` | no health response | start serve on the configured listen address | same |
 
 Idle `launch` TUIs do **not** block Replace. Only in-flight HTTP/provider work
@@ -373,9 +373,11 @@ is reused. Pending idle hot-swap state is
 waiter for the current `build_id` is reused; a stale waiter is SIGTERM'd and
 replaced. The waiter does not hold the per-port launcher lock while polling.
 Arming a new idle waiter posts a macOS notification that the build is waiting;
-a successful Replace posts a second notification that the swap completed.
-Reuse, an already-armed waiter, and a repeat of the same listen+build+kind do
-not notify. Waiting followed by complete is at most two notifications.
+starting the current-build fallback posts that live generation is ready now
+(listen, build, immediate use); a successful Replace posts that the swap
+completed. Reuse, an already-armed waiter, and a repeat of the same
+listen+build+kind do not notify. Waiting, live ready, then complete is at most
+three notifications.
 Readiness still requires the current build ID, matching
 configuration, and successful authentication. If the new generation fails
 readiness and a recovery manifest exists, the previous generation is restored.
@@ -385,7 +387,8 @@ User-facing wrappers: fish `claudex hot-swap` → `claudex-hot-swap.fish`; POSIX
 Both invoke `claudex-agent-adapter hot-swap --provider-config … --listen …`.
 `scripts/claudex-install-adapter` / fish `claudex install` run
 `cargo-ephemeral.sh … install`, which calls `after-install.sh` to relink
-`~/.local/bin` and arm the idle waiter for the new `build_id`. Canonical binary
+`~/.local/bin` and apply the new `build_id` immediately via fallback when the
+canonical port is busy (idle waiter still Replace later). Canonical binary
 is `~/.cargo/bin/claudex-agent-adapter`; `~/.local/bin` is a symlink created by
 `create-symlinks.sh`.
 

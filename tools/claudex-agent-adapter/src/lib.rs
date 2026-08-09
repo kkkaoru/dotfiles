@@ -12,6 +12,7 @@ pub mod grok_acp;
 mod http_api;
 mod launch_mcp;
 pub mod launcher;
+pub(crate) mod listen_handover;
 pub(crate) mod logging;
 pub mod parallel_scheduler;
 pub mod path_env;

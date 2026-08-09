@@ -23,6 +23,17 @@ pub(super) struct RecoveryProcess {
 }
 
 pub(super) fn start_adapter(config: &ServiceConfig) -> Result<u32> {
+    start_with_retained(config, None)
+}
+
+pub(super) fn start_adapter_with_retained(
+    config: &ServiceConfig,
+    retained_path: &Path,
+) -> Result<u32> {
+    start_with_retained(config, Some(retained_path))
+}
+
+fn start_with_retained(config: &ServiceConfig, retained_path: Option<&Path>) -> Result<u32> {
     let manifest_path = recovery_manifest::prepare(config)?;
     spawn_adapter(
         config,
@@ -31,6 +42,7 @@ pub(super) fn start_adapter(config: &ServiceConfig) -> Result<u32> {
         &config.codex_config_fingerprint,
         &config.service_config_fingerprint,
         Some(&manifest_path),
+        retained_path,
     )
 }
 
@@ -41,6 +53,7 @@ pub(super) fn start_ephemeral_adapter(config: &ServiceConfig) -> Result<u32> {
         daemon_arguments(&config.options),
         &config.codex_config_fingerprint,
         &config.service_config_fingerprint,
+        None,
         None,
     )
 }
@@ -61,6 +74,7 @@ pub(super) fn start_recovery(config: &ServiceConfig, generation: &str) -> Result
         &recovery.codex_config_fingerprint,
         &recovery.service_config_fingerprint,
         Some(&recovery.manifest_path),
+        None,
     )?;
     Ok(RecoveryProcess {
         pid,
@@ -84,6 +98,7 @@ fn spawn_adapter(
     codex_config_fingerprint: &str,
     service_config_fingerprint: &str,
     manifest_path: Option<&Path>,
+    retained_path: Option<&Path>,
 ) -> Result<u32> {
     let log_dir = config
         .log_path
@@ -117,6 +132,11 @@ fn spawn_adapter(
         command.env(RECOVERY_MANIFEST_ENV, manifest_path);
     } else {
         command.env_remove(RECOVERY_MANIFEST_ENV);
+    }
+    if let Some(retained_path) = retained_path {
+        command.env(super::RETAINED_STATE_ENV, retained_path);
+    } else {
+        command.env_remove(super::RETAINED_STATE_ENV);
     }
     let child = command
         .env_remove(crate::anthropic::SUBAGENT_HARD_TIMEOUT_ENV)

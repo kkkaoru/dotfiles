@@ -27,6 +27,7 @@ impl SegmentBuilder {
             super::super::acp_tool_bridge::bridge_provider_tool_call_with_mcp_hint(
                 &session.external_tool_names,
                 event,
+                session.claude_session_id.as_deref(),
             )
         } else {
             super::super::acp_tool_bridge::bridge_provider_tool_call(

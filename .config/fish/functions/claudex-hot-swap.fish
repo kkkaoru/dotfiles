@@ -36,20 +36,25 @@ function claudex-hot-swap --description 'Replace an idle claudex adapter on the 
 
     set -l build (command "$adapter" build-id)
     echo "claudex-hot-swap: replacing $listen with $build ($provider_config)" >&2
-    command "$adapter" hot-swap --provider-config "$provider_config" --listen "$listen"
+    set -l url (command "$adapter" hot-swap --provider-config "$provider_config" --listen "$listen")
     or return $status
+    echo "claudex-hot-swap: active listener $url" >&2
 
     set -l health_url "http://$listen/health"
     if command -q curl
         curl --fail --silent "$health_url" | python3 -c 'import json,sys
 h=json.load(sys.stdin)
 want=sys.argv[1]
+active=sys.argv[2]
+listen=sys.argv[3]
 live=h.get("build_id")
 pid=h.get("pid")
 if live==want:
     print("claudex-hot-swap: ready pid=%s build=%s" % (pid, live))
+elif active and not active.endswith("://"+listen) and not active.endswith("://"+listen+"/"):
+    print("claudex-hot-swap: listener still pid=%s build=%s; live generation is %s; new claudex sessions use it immediately; idle waiter or handover will update %s to %s" % (pid, live, active, listen, want))
 else:
     print("claudex-hot-swap: listener still pid=%s build=%s; idle waiter will swap to %s" % (pid, live, want))
-' "$build"
+' "$build" "$url" "$listen"
     end
 end

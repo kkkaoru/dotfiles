@@ -261,10 +261,17 @@ mod tests {
         ));
         assert!(matches!(
             parse_command(
-                ["hot-swap", "--model", "m", "--wait-idle", "--listen", "127.0.0.1:8318"]
-                    .into_iter()
-                    .map(OsString::from)
-                    .collect()
+                [
+                    "hot-swap",
+                    "--model",
+                    "m",
+                    "--wait-idle",
+                    "--listen",
+                    "127.0.0.1:8318"
+                ]
+                .into_iter()
+                .map(OsString::from)
+                .collect()
             )
             .expect("hot-swap wait-idle after options"),
             RuntimeCommand::HotSwap(_, true)
@@ -342,7 +349,7 @@ mod tests {
         let path = root.path().join("providers.json");
         std::fs::write(
             &path,
-            r#"{"version":1,"mainProviders":["vendor"],"providers":[{"id":"vendor","agent":"worker","defaultModel":"vendor-default","effort":"high","modelPrefixes":["vendor-"],"backend":"configured-acp","acp":{"program":"vendor","arguments":["--model","{model}"]}}],"fallback":{"agent":"fallback","model":"sonnet","effort":"high"}}"#,
+            r#"{"version":1,"mainProviders":["vendor"],"providers":[{"id":"vendor","agent":"worker","defaultModel":"vendor-default","effort":"high","modelPrefixes":["vendor-"],"selectableModels":["vendor-terra"],"backend":"configured-acp","acp":{"program":"vendor","arguments":["--model","{model}"]}}],"fallback":{"agent":"fallback","model":"sonnet","effort":"high"}}"#,
         )
         .expect("provider config");
         let command = parse_command(
@@ -362,6 +369,10 @@ mod tests {
         };
         assert_eq!(options.model, "vendor-next");
         assert_eq!(options.routes[0].backend, BackendKind::ConfiguredAcp);
+        assert_eq!(
+            options.model_catalog.selectable_models(),
+            &["vendor-terra".to_owned()]
+        );
 
         let route = serde_json::to_string(&options.routes[0]).unwrap();
         let command = parse_command(
@@ -371,13 +382,21 @@ mod tests {
                 "vendor-default",
                 "--backend-route-json",
                 &route,
+                "--selectable-model",
+                "vendor-terra",
             ]
             .into_iter()
             .map(OsString::from)
             .collect(),
         )
         .expect("serialized daemon route");
-        assert!(matches!(command, RuntimeCommand::Serve(_)));
+        let RuntimeCommand::Serve(served) = command else {
+            panic!("serve command expected");
+        };
+        assert_eq!(
+            served.model_catalog.selectable_models(),
+            &["vendor-terra".to_owned()]
+        );
     }
 
     #[tokio::test]

@@ -34,6 +34,10 @@ fn option_arguments(options: &AdapterOptions) -> Vec<OsString> {
         arguments.push("--search-worker-route-json".into());
         arguments.push(worker_json(worker).into());
     }
+    for model in options.model_catalog.selectable_models() {
+        arguments.push("--selectable-model".into());
+        arguments.push(model.clone().into());
+    }
     arguments.extend([
         "--listen".into(),
         options.listen.to_string().into(),

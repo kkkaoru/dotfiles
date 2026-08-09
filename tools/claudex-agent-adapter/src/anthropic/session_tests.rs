@@ -103,6 +103,7 @@ fn session_with_slot(
         consumed_tool_ids: Mutex::new(std::collections::HashSet::new()),
         external_tool_names: HashMap::new(),
         client_user_id: None,
+        claude_session_id: None,
         gate: Arc::new(Mutex::new(())),
         last_activity: std::sync::Mutex::new(Instant::now()),
         pending_since: std::sync::Mutex::new(None),
@@ -773,6 +774,16 @@ fn assert_empty_thread_configuration() {
         .as_str()
         .expect("developer instructions");
     assert_developer_guidance(developer);
+    assert!(empty["claudexLaunchOwner"].is_null());
+}
+
+#[test]
+fn thread_start_params_include_claude_session_launch_owner() {
+    let mut scoped = request(Value::Null, Vec::new());
+    crate::anthropic::RequestIdentity::new(Some("session-a".to_owned()), None, None)
+        .attach(&mut scoped);
+    let params = thread_start_params(&scoped, "main", Vec::new());
+    assert_eq!(params["claudexLaunchOwner"], "session-a");
 }
 
 #[test]
@@ -784,13 +795,39 @@ fn acp_native_modes_use_provider_native_instructions_instead_of_agent_orchestrat
         .as_str()
         .expect("developer instructions");
     assert!(developer.contains("provider-native ACP"));
-    assert!(developer.contains("visible assistant status line"));
+    assert!(developer.contains("native thinking streaming"));
     assert!(developer.contains("bridged to Claude Code tool_use"));
     assert!(developer.contains("spawn_subagent"));
     assert!(developer.contains("end the turn promptly"));
     assert!(developer.contains("never block the same turn with get_command_or_subagent_output"));
     assert!(!developer.contains("call a routed Agent/Task worker by default"));
     assert!(!developer.contains("run_in_background=true on every Agent/Task launch"));
+    assert_eq!(params["claudexAcpRole"], "orchestrator");
+}
+
+#[test]
+fn acp_native_workers_omit_end_turn_status_and_keep_tool_completion() {
+    let mut request = request(
+        json!("x-anthropic-billing-header: cc_version=1; cc_is_subagent=true;"),
+        Vec::new(),
+    );
+    request.messages = vec![json!({
+        "role":"user",
+        "content":"<claudex-agent-id>toolu_cursor</claudex-agent-id>\ninspect and fix the adapter"
+    })];
+    let params =
+        thread_start_params_for_mode(&request, "auto", Vec::new(), WebSearchMode::AcpNative);
+    let developer = params["developerInstructions"]
+        .as_str()
+        .expect("developer instructions");
+    assert_eq!(params["claudexAcpRole"], "worker");
+    assert!(developer.contains("You are a provider-native ACP worker"));
+    assert!(developer.contains("never a complete answer"));
+    assert!(developer.contains("toolless status-only message"));
+    assert!(!developer.contains("end the turn promptly"));
+    assert!(!developer.contains("post a brief status"));
+    assert!(!developer.contains("Return the answer directly when no tool is needed"));
+    assert!(!developer.contains("Never copy end-the-turn-with-status"));
 }
 
 #[test]
@@ -825,6 +862,7 @@ fn command_code_model_omits_claude_system_and_uses_acp_native_instructions() {
         developer.is_empty(),
         "Command Code must not carry developer ACP dumps: {developer}"
     );
+    assert_eq!(params["claudexAcpRole"], "worker");
 }
 
 fn assert_developer_guidance(developer: &str) {
@@ -851,6 +889,16 @@ fn assert_developer_guidance(developer: &str) {
         "worker stalls/timeouts",
         "consult one custom-advisor when triggered",
         "For ordinary follow-ups, reuse the exact Agent/Task recipient through its native result and TaskOutput",
+        "do not leave the instruction queued for the next tool round",
+        "TaskStop the exact active Agent id immediately",
+        "running Command Code or other one-shot ACP worker",
+        "no Claude tool round",
+        "parent Task card often shows tool_uses: 0",
+        "do not tell the user the worker did no search or tool work",
+        "Human-visible sync is the agents panel",
+        "Never copy end-the-turn-with-status",
+        "agents panel shows queued",
+        "▶/✓ tool markers",
         "set run_in_background=true on every Agent/Task launch",
         "Keep each launch as an independent native call",
         "never use an adapter-only batch wrapper",
@@ -889,10 +937,35 @@ fn main_session_orchestration_instructions_are_omitted_for_subagents() {
         "For ordinary follow-ups, reuse the exact Agent/Task recipient through its native result and TaskOutput"
     ));
     assert!(
+        !developer.contains("do not leave the instruction queued for the next tool round"),
+        "workers must not receive main-only TaskStop follow-up guidance"
+    );
+    assert!(
+        !developer.contains("one-shot ACP worker"),
+        "workers must not receive main-only Command Code TaskStop guidance"
+    );
+    assert!(
+        !developer.contains("TaskStop the exact active Agent id immediately"),
+        "workers must not receive main-only immediate TaskStop guidance"
+    );
+    assert!(
+        !developer.contains("parent Task card often shows tool_uses: 0"),
+        "workers must not receive main-only tool_uses:0 guidance"
+    );
+    assert!(
+        !developer.contains("Human-visible sync is the agents panel"),
+        "workers must not receive main-only TUI sync guidance"
+    );
+    assert!(
+        !developer.contains("agents panel shows queued"),
+        "workers must not receive main-only queued-inbox TaskStop guidance"
+    );
+    assert!(
         developer.contains("advisor() is main-session only"),
         "workers must be told not to call built-in advisor()"
     );
     assert!(developer.contains("disabled_subagent_models"));
+    assert!(developer.contains("never a complete SubAgent answer"));
 }
 
 fn assert_team_thread_configuration() {
@@ -934,6 +1007,12 @@ fn bridge_instructions_support_every_configured_provider() {
 fn subscription_prompt_keeps_external_provider_models_out_of_the_native_field() {
     let prompt = subscription_request_prompt(&request(json!("system"), Vec::new()));
     assert!(prompt.contains("external provider model ID in the native model field"));
+    assert!(prompt.contains("Delegated workers stream Claude Code native thinking"));
+    assert!(prompt.contains("do not prefix the visible worker prompt"));
+    assert!(!prompt.contains("claudex_effort: <effort>"));
+    assert!(!prompt.contains("Every delegated worker must emit a short factual status"));
+    assert!(prompt.contains("Never copy end-the-turn-with-status"));
+    assert!(prompt.contains("status-only toolless worker"));
 }
 
 #[test]
@@ -948,6 +1027,11 @@ fn subscription_prompt_requires_atomic_parallel_launches() {
     assert!(prompt.contains("run_in_background=true"));
     assert!(prompt.contains("Do not mix foreground and background launches"));
     assert!(prompt.contains("queued to a busy worker does not add parallel capacity"));
+    assert!(prompt.contains("Command Code or another one-shot ACP route"));
+    assert!(prompt.contains("no Claude tool round"));
+    assert!(prompt.contains("TaskStop immediately and resume or relaunch"));
+    assert!(prompt.contains("agents panel shows queued"));
+    assert!(prompt.contains("instead of waiting for cmd -p to finish"));
     assert!(prompt.contains("end the turn promptly with concise user-visible status"));
     assert!(prompt.contains(
         "never wait for every background task before accepting another user instruction"
@@ -1308,6 +1392,7 @@ async fn finds_busy_matching_session_for_outer_preempt() {
         std::slice::from_ref(&message),
         Some("model"),
         None,
+        None,
     )
     .await
     .expect("busy match");
@@ -1321,6 +1406,7 @@ async fn finds_busy_matching_session_for_outer_preempt() {
         &Arc::from("different-signature"),
         std::slice::from_ref(&message),
         Some("main-model"),
+        None,
         None,
     )
     .await

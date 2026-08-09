@@ -1,6 +1,6 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-use super::{Bridge, MAX_SESSIONS, model_concurrency::ModelConcurrencyStatus};
+use super::{Bridge, MAX_SESSIONS, Session, model_concurrency::ModelConcurrencyStatus};
 
 impl Bridge {
     pub(super) fn model_catalog(&self) -> &crate::provider_config::ModelCatalog {
@@ -56,6 +56,7 @@ impl Bridge {
 
     pub fn routed_models(&self) -> Vec<String> {
         let mut models = self.app.models();
+        models.extend(self.model_catalog.selectable_models().iter().cloned());
         for worker in self
             .model_catalog
             .worker_routes()
@@ -89,4 +90,26 @@ impl Bridge {
     pub(crate) fn active_subagent_models(&self) -> BTreeMap<String, usize> {
         self.active_subagent_models.snapshot()
     }
+
+    pub async fn active_claude_session_ids(&self) -> Vec<String> {
+        let mut ids = BTreeSet::new();
+        collect_session_ids(&self.sessions.lock().await, &mut ids);
+        collect_session_ids(&self.detached_sessions.lock().await, &mut ids);
+        ids.into_iter().collect()
+    }
 }
+
+fn collect_session_ids(sessions: &[std::sync::Arc<Session>], ids: &mut BTreeSet<String>) {
+    for session in sessions {
+        if let Some(id) = session.claude_session_id.as_deref()
+            && !id.is_empty()
+        {
+            ids.insert(id.to_owned());
+        }
+    }
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[path = "health_tests.rs"]
+mod health_tests;

@@ -1,4 +1,4 @@
-//! Cancel-and-reuse for outer user follow-ups while a turn is still streaming.
+//! Cancel-and-reuse for outer and same-SubAgent follow-ups while a turn is still streaming.
 
 use std::sync::Arc;
 
@@ -6,7 +6,9 @@ use serde_json::Value;
 
 use super::{
     SelectedSession, Session,
-    reservation::{find_busy_matching_session, take_gate_after_preempt},
+    reservation::{
+        find_busy_matching_session, find_busy_signature_matching_session, take_gate_after_preempt,
+    },
 };
 use crate::{
     agent_backend::{AgentBackend, TurnCancellation},
@@ -25,13 +27,12 @@ pub(super) async fn select_matching_session(
     {
         return Some(selected);
     }
-    // Outer (non-SubAgent) follow-ups cancel-and-reuse the busy main session
-    // instead of cold-starting a second provider thread. Parallel SubAgents
-    // keep the skip-busy fork so they do not preempt each other.
-    if crate::anthropic::agent_effort::is_subagent_request(request) {
-        return None;
-    }
-    preempt_busy_matching_session(sessions, request, signature, messages, app).await
+    // Follow-ups cancel-and-reuse a busy matching session. Independent parallel
+    // SubAgents have distinct `_claudex_transport_identity` signatures, so they
+    // do not match. Same-SubAgent TUI follow-ups must preempt so the new user
+    // instruction is not stacked behind the in-flight provider turn.
+    let is_subagent = crate::anthropic::agent_effort::is_subagent_request(request);
+    preempt_busy_matching_session(sessions, request, signature, messages, app, is_subagent).await
 }
 
 async fn preempt_busy_matching_session(
@@ -40,26 +41,42 @@ async fn preempt_busy_matching_session(
     signature: &Arc<str>,
     messages: &[Value],
     app: &AgentBackend,
+    is_subagent: bool,
 ) -> Option<SelectedSession> {
-    let model = if request.model.is_empty() {
-        None
+    let (session, prior_len) = if is_subagent {
+        find_busy_signature_matching_session(sessions, signature, messages).await?
     } else {
-        Some(request.model.as_str())
+        let model = if request.model.is_empty() {
+            None
+        } else {
+            Some(request.model.as_str())
+        };
+        let user_id = request.metadata.get("user_id").and_then(Value::as_str);
+        let claude_session_id = super::super::request_identity::claude_session_id(request);
+        find_busy_matching_session(
+            sessions,
+            signature,
+            messages,
+            model,
+            user_id,
+            claude_session_id.as_deref(),
+        )
+        .await?
     };
-    let user_id = request.metadata.get("user_id").and_then(Value::as_str);
-    let (session, prior_len) =
-        find_busy_matching_session(sessions, signature, messages, model, user_id).await?;
-    if prior_len == 0 {
+    if prior_len == 0 && !is_subagent {
         // An in-flight first turn still has an empty transcript. That prefix
         // matches every new request, so preemption would cancel independent
         // parallel outer turns (Command Code maxConcurrency, multi-tab). Real
-        // follow-ups arrive after at least one committed transcript entry.
+        // outer follow-ups arrive after at least one committed transcript entry.
+        // SubAgent signatures include agent_id, so an empty transcript still
+        // uniquely identifies the same worker follow-up.
         return None;
     }
     tracing::info!(
         thread_id = %session.thread_id,
         prior_transcript_len = prior_len,
-        "preempting in-flight session for outer user follow-up"
+        is_subagent,
+        "preempting in-flight session for user follow-up"
     );
     let cancellation = app.cancel_turn(&session.thread_id).await;
     if matches!(cancellation, Ok(TurnCancellation::Unsupported)) {
@@ -102,295 +119,5 @@ fn report_cancellation(cancellation: anyhow::Result<TurnCancellation>, thread_id
 // Coverage excludes test implementation; production behavior remains measured.
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use std::{
-        collections::HashMap,
-        os::unix::fs::PermissionsExt,
-        sync::Arc,
-        time::{Duration, Instant},
-    };
-
-    use serde_json::json;
-    use tokio::sync::{Mutex, Semaphore};
-
-    use super::*;
-    use crate::{agent_backend::AgentBackend, app_server::AppServer};
-
-    #[tokio::test]
-    async fn skips_busy_codex_reuse_after_an_unsupported_cancellation() {
-        let app = test_app().await;
-        let session = session("main-model", Some("client"));
-        let gate = Arc::clone(&session.gate).lock_owned().await;
-        let request = request("");
-        assert!(
-            find_busy_matching_session(
-                vec![Arc::clone(&session)],
-                &Arc::from("signature"),
-                &request.messages,
-                Some(&request.model),
-                Some("client"),
-            )
-            .await
-            .is_some(),
-            "fixture must be eligible for busy-session preemption"
-        );
-        let task = start_preemption(Arc::clone(&app), Arc::clone(&session), request);
-        let selected = tokio::time::timeout(Duration::from_millis(100), task)
-            .await
-            .expect("unsupported cancellation must not wait on the busy gate")
-            .expect("preemption task");
-        assert!(selected.is_none());
-        drop(gate);
-        app.shutdown().await;
-    }
-
-    #[tokio::test]
-    async fn does_not_preempt_a_busy_first_turn_for_a_parallel_request() {
-        let app = test_app().await;
-        let busy = session("main-model", Some("client"));
-        busy.transcript.lock().await.clear();
-        let gate = Arc::clone(&busy.gate).lock_owned().await;
-        let mut parallel = request("main-model");
-        parallel.messages = vec![json!({"role":"user","content":"independent"})];
-        assert!(
-            select_matching_session(
-                vec![busy],
-                &parallel,
-                &Arc::from("signature"),
-                &parallel.messages,
-                &app,
-            )
-            .await
-            .is_none(),
-            "parallel first turns must not cancel each other"
-        );
-        drop(gate);
-        app.shutdown().await;
-    }
-
-    #[tokio::test]
-    async fn reuses_idle_sessions_but_never_preempts_subagents() {
-        let app = test_app().await;
-        let request = request("main-model");
-        let idle = session("main-model", Some("client"));
-        let selected = select_matching_session(
-            vec![Arc::clone(&idle)],
-            &request,
-            &Arc::from("signature"),
-            &request.messages,
-            &app,
-        )
-        .await
-        .expect("idle session must be reused");
-        assert!(Arc::ptr_eq(&selected.session, &idle));
-        drop(selected);
-
-        let busy = session("main-model", Some("client"));
-        let gate = Arc::clone(&busy.gate).lock_owned().await;
-        let mut subagent = request;
-        subagent.system = json!("cc_is_subagent=true");
-        assert!(
-            select_matching_session(
-                vec![busy],
-                &subagent,
-                &Arc::from("signature"),
-                &subagent.messages,
-                &app,
-            )
-            .await
-            .is_none()
-        );
-        drop(gate);
-        app.shutdown().await;
-    }
-
-    #[tokio::test]
-    async fn reuses_a_busy_session_after_an_acp_cancellation_failure() {
-        let app = stopped_acp_app();
-        let session = session("main-model", Some("client"));
-        let gate = Arc::clone(&session.gate).lock_owned().await;
-        let request = request("main-model");
-        let task = start_preemption(Arc::clone(&app), Arc::clone(&session), request);
-
-        tokio::time::sleep(Duration::from_millis(10)).await;
-        assert!(
-            !task.is_finished(),
-            "preemption must wait for the busy gate"
-        );
-        drop(gate);
-
-        let selected = tokio::time::timeout(Duration::from_secs(1), task)
-            .await
-            .expect("cancellation failure must not stall preemption")
-            .expect("preemption task")
-            .expect("released busy session");
-        assert!(Arc::ptr_eq(&selected.session, &session));
-        drop(selected);
-        app.shutdown().await;
-    }
-
-    #[tokio::test]
-    async fn stale_busy_gate_holds_do_not_block_preemption_forever() {
-        let request = request("main-model");
-        let session = session("main-model", Some("client"));
-        let _hold = Arc::clone(&session.gate).lock_owned().await;
-        let messages = request.messages.clone();
-
-        let selection = tokio::spawn(wait_for_preemption(Arc::clone(&session), messages.clone()));
-
-        tokio::time::sleep(std::time::Duration::from_secs(4)).await;
-        let selection = selection
-            .await
-            .expect("take_gate_after_preempt must complete");
-        drop(_hold);
-        assert!(selection.is_none());
-    }
-
-    async fn wait_for_preemption(
-        session: Arc<Session>,
-        messages: Vec<Value>,
-    ) -> Option<SelectedSession> {
-        take_gate_after_preempt(&session, &messages).await
-    }
-
-    #[tokio::test]
-    async fn pending_busy_tools_prevent_session_reuse_after_gate_release() {
-        let session = session("main-model", Some("client"));
-        session
-            .pending_tools
-            .lock()
-            .await
-            .insert("tool-1".to_owned(), serde_json::json!({"id":"tool-1"}));
-        assert!(
-            take_gate_after_preempt(&session, &[json!({"role":"user","content":"first"})])
-                .await
-                .is_none()
-        );
-    }
-
-    #[tokio::test]
-    async fn cancellation_failure_never_reuses_a_busy_session_with_pending_tools() {
-        let app = stopped_acp_app();
-        let session = session("main-model", Some("client"));
-        let gate = Arc::clone(&session.gate).lock_owned().await;
-        let request = request("main-model");
-        let task = start_preemption(Arc::clone(&app), Arc::clone(&session), request);
-
-        tokio::time::sleep(Duration::from_millis(10)).await;
-        assert!(
-            !task.is_finished(),
-            "preemption must wait for the active turn before checking pending tools"
-        );
-        session
-            .pending_tools
-            .lock()
-            .await
-            .insert("tool-1".to_owned(), json!({"id":"tool-1"}));
-        drop(gate);
-
-        let selected = tokio::time::timeout(Duration::from_secs(1), task)
-            .await
-            .expect("cancellation failure must not stall preemption")
-            .expect("preemption task");
-        assert!(
-            selected.is_none(),
-            "pending tool state makes busy-session reuse unsafe"
-        );
-        app.shutdown().await;
-    }
-
-    #[test]
-    fn reports_all_preemption_cancellation_outcomes() {
-        for cancellation in [
-            Ok(TurnCancellation::Settled),
-            Ok(TurnCancellation::Unsupported),
-            Err(anyhow::anyhow!("provider failure")),
-        ] {
-            report_cancellation(cancellation, "thread");
-        }
-    }
-
-    fn start_preemption(
-        app: Arc<AgentBackend>,
-        session: Arc<Session>,
-        request: MessagesRequest,
-    ) -> tokio::task::JoinHandle<Option<SelectedSession>> {
-        let messages = request.messages.clone();
-        tokio::spawn(run_preemption(app, session, request, messages))
-    }
-
-    async fn run_preemption(
-        app: Arc<AgentBackend>,
-        session: Arc<Session>,
-        request: MessagesRequest,
-        messages: Vec<Value>,
-    ) -> Option<SelectedSession> {
-        select_matching_session(
-            vec![session],
-            &request,
-            &Arc::from("signature"),
-            &messages,
-            &app,
-        )
-        .await
-    }
-
-    async fn test_app() -> Arc<AgentBackend> {
-        let root = tempfile::tempdir().expect("app-server fixture");
-        let source = root.path().join("source");
-        std::fs::create_dir(&source).expect("source home");
-        std::fs::write(source.join("auth.json"), "{}").expect("auth file");
-        let program = root.path().join("codex");
-        std::fs::write(
-            &program,
-            "#!/bin/sh\nread line\nprintf '%s\\n' '{\"id\":1,\"result\":{}}'\nwhile read line; do :; done\n",
-        )
-        .expect("mock program");
-        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
-            .expect("mock program permissions");
-        let server = AppServer::spawn_with_program("main-model", &program, &source, root.path())
-            .await
-            .expect("mock app server");
-        AgentBackend::codex(server)
-    }
-
-    fn stopped_acp_app() -> Arc<AgentBackend> {
-        AgentBackend::grok(crate::grok_acp::GrokAcp::stopped_for_test())
-    }
-
-    fn request(model: &str) -> MessagesRequest {
-        MessagesRequest {
-            model: model.to_owned(),
-            system: json!("system"),
-            messages: vec![
-                json!({"role":"user","content":"first"}),
-                json!({"role":"user","content":"follow-up"}),
-            ],
-            tools: Vec::new(),
-            stream: true,
-            output_config: json!({}),
-            metadata: json!({"user_id":"client"}),
-            working_directory: None,
-            disabled_subagent_models: Default::default(),
-            claudex_collaborator_model: None,
-        }
-    }
-
-    fn session(model: &str, user_id: Option<&str>) -> Arc<Session> {
-        let slots = Arc::new(Semaphore::new(1));
-        Arc::new(Session {
-            thread_id: "thread".to_owned(),
-            model: model.to_owned(),
-            disabled_subagent_models: Default::default(),
-            signature: Arc::from("signature"),
-            transcript: Mutex::new(vec![json!({"role":"user","content":"first"})]),
-            pending_tools: Mutex::new(HashMap::new()),
-            consumed_tool_ids: Mutex::new(Default::default()),
-            external_tool_names: HashMap::new(),
-            client_user_id: user_id.map(str::to_owned),
-            gate: Arc::new(Mutex::new(())),
-            last_activity: std::sync::Mutex::new(Instant::now()),
-            pending_since: std::sync::Mutex::new(None),
-            _slot: slots.try_acquire_owned().expect("session slot"),
-        })
-    }
+    include!("preempt_tests.rs");
 }

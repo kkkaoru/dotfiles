@@ -21,6 +21,9 @@ mod ensure;
 mod fallback;
 mod handover;
 mod health;
+mod live;
+mod promote;
+pub(crate) use live::{RETAINED_STATE_ENV, RetainedGeneration, load_retained_from_env};
 mod launcher_lock;
 mod launcher_logs;
 mod macos_notify;
@@ -168,8 +171,11 @@ pub async fn ensure_running(options: AdapterOptions) -> Result<String> {
 }
 
 /// Replace an idle listener in place, even when a `launch` TUI is attached.
-/// Busy listeners drain briefly, then a detached waiter swaps the same port
-/// once idle instead of timing out.
+/// Busy listeners keep serving in-flight work; handover-capable daemons rebind off
+/// the canonical port immediately so live `:port` becomes the new build while old
+/// sessions stay on the retained generation. Legacy busy daemons still get a
+/// current-build fallback plus an idle waiter, and `live.<port>.json` always
+/// points at the generation new sessions should use.
 pub async fn hot_swap(options: AdapterOptions, wait_idle: bool) -> Result<String> {
     let config = ServiceConfig::new(options)?;
     ensure::run(

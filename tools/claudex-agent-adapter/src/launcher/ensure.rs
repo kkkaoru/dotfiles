@@ -31,11 +31,7 @@ pub(super) async fn run(config: &ServiceConfig, mode: Mode) -> Result<String> {
     }
     let _lock = launcher_lock::acquire(&config.lock_path)?;
     let client = reqwest::Client::new();
-    let state = if mode == Mode::HotSwap {
-        handover::wait_for_hot_swap_idle(&client, config).await?
-    } else {
-        handover::inspect_service(&client, config).await
-    };
+    let state = handover::inspect_service(&client, config).await;
     apply_inspected_state(config, &client, mode, state).await
 }
 
@@ -115,6 +111,7 @@ async fn apply_inspected_state(
     let recovery_manifest = match state {
         ServiceState::Reuse => {
             pending_hot_swap::clear_if_current(config);
+            let _ = super::live::publish_listen(config, config.options.listen, None);
             return Ok(config.base_url());
         }
         ServiceState::Defer {
@@ -184,6 +181,7 @@ async fn apply_inspected_state(
     }
     pending_hot_swap::clear_if_current(config);
     notify_swap_if_replaced(replaced, config);
+    let _ = super::live::publish_listen(config, config.options.listen, Some(started_pid));
     Ok(config.base_url())
 }
 
@@ -199,23 +197,33 @@ async fn defer_busy_listener(
     let outcome = pending_hot_swap::arm(config)?;
     match mode {
         Mode::WaitIdle => unreachable!("wait-idle polls Defer without arming"),
-        Mode::HotSwap => {
+        Mode::HotSwap | Mode::Ensure => {
             eprintln!(
-                "claudex: adapter pid {pid:?} still has active work ({active_http_requests} HTTP request(s), {active_provider_turns} provider turn(s), {active_subagents} SubAgent(s)); armed idle hot-swap waiter pid {} for build {}",
+                "claudex: retaining active adapter pid {pid:?}; routing new sessions to a current-build listener ({active_http_requests} HTTP request(s), {active_provider_turns} provider turn(s), {active_subagents} SubAgent(s); live launch sessions kept; idle hot-swap waiter pid {} for build {})",
                 outcome.pid(),
                 env!("CLAUDEX_BUILD_ID"),
             );
-            Ok(config.base_url())
-        }
-        Mode::Ensure => {
-            eprintln!(
-                "claudex: retaining active adapter pid {pid:?}; routing this new session to a current-build listener ({active_http_requests} HTTP request(s), {active_provider_turns} provider turn(s), {active_subagents} SubAgent(s); live launch sessions kept; idle hot-swap waiter pid {} for build {})",
-                outcome.pid(),
-                env!("CLAUDEX_BUILD_ID"),
-            );
-            fallback::ensure_current_generation(client, config)
+            if let Some(health) = super::health::fetch_health(client, config).await
+                && let Some(url) = super::promote::try_canonical(client, config, &health).await?
+            {
+                pending_hot_swap::clear_if_current(config);
+                notify_swap_if_replaced(true, config);
+                return Ok(url);
+            }
+            let url = fallback::ensure_current_generation(client, config)
                 .await
-                .context("start current-build listener while stale adapter is active")
+                .context("start current-build listener while stale adapter is active")?;
+            let _ = super::live::publish_url(config, &url);
+            if let Ok(live_listen) = super::live::parse_listen_url(&url) {
+                macos_notify::live_ready(config, live_listen);
+            }
+            if let Ok(Some(live)) = super::live::read(config) {
+                eprintln!(
+                    "claudex: live generation {} on {}",
+                    live.build_id, live.listen
+                );
+            }
+            Ok(url)
         }
     }
 }

@@ -18,10 +18,16 @@ pub(super) async fn select_toolless_main_session(
         .metadata
         .get("user_id")
         .and_then(serde_json::Value::as_str);
+    let claude_session_id = super::super::request_identity::claude_session_id(request);
     let sessions = bridge.sessions.lock().await.clone();
     let mut best: Option<SelectedSession> = None;
     for session in sessions {
-        if !same_main_conversation(&session, &model, client_user_id) {
+        if !same_main_conversation(
+            &session,
+            &model,
+            client_user_id,
+            claude_session_id.as_deref(),
+        ) {
             continue;
         }
         let Ok(gate) = Arc::clone(&session.gate).try_lock_owned() else {
@@ -51,7 +57,18 @@ pub(super) async fn select_toolless_main_session(
     best
 }
 
-fn same_main_conversation(session: &Session, model: &str, client_user_id: Option<&str>) -> bool {
+fn same_main_conversation(
+    session: &Session,
+    model: &str,
+    client_user_id: Option<&str>,
+    claude_session_id: Option<&str>,
+) -> bool {
+    match (session.claude_session_id.as_deref(), claude_session_id) {
+        (Some(left), Some(right)) if left != right => return false,
+        (None, None) => {}
+        (Some(_), Some(_)) => {}
+        _ => return false,
+    }
     session.model == model && session.client_user_id.as_deref() == client_user_id
 }
 
@@ -102,6 +119,7 @@ mod tests {
             // session tests with an explicitly empty map.
             external_tool_names: HashMap::from([("cc_Bash_0".to_owned(), "Bash".to_owned())]),
             client_user_id: user_id.map(str::to_owned),
+            claude_session_id: None,
             gate: Arc::new(Mutex::new(())),
             last_activity: std::sync::Mutex::new(Instant::now()),
             pending_since: std::sync::Mutex::new(None),
@@ -152,5 +170,28 @@ mod tests {
         assert_eq!(selected.existing_len, 3);
         drop(selected);
         drop(busy_gate);
+    }
+
+    #[tokio::test]
+    async fn toolless_continuation_skips_another_claude_session() {
+        let messages = vec![json!({"role":"user","content":"first"})];
+        let bridge = Bridge::new_with_backend(AgentBackend::spawn_routes(&[]), "main".to_owned());
+        let mut other = session("main", Some("outer"), messages.clone());
+        Arc::get_mut(&mut other)
+            .expect("unique session")
+            .claude_session_id = Some("session-b".to_owned());
+        bridge.sessions.lock().await.push(other);
+
+        let mut request = request(messages);
+        request.metadata = json!({
+            "user_id":"outer",
+            "_claudex_transport_identity":{"session_id":"session-a"}
+        });
+        assert!(
+            select_toolless_main_session(&bridge, &request)
+                .await
+                .is_none(),
+            "toolless continuation must not attach another claudex TUI"
+        );
     }
 }

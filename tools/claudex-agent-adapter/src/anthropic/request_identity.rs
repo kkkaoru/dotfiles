@@ -88,3 +88,85 @@ pub(super) fn authoritative_is_subagent(request: &MessagesRequest) -> Option<boo
 fn nonempty_string(value: &Value) -> bool {
     value.as_str().is_some_and(|value| !value.is_empty())
 }
+
+/// Claude Code conversation id for isolating SubAgents across concurrent TUIs.
+///
+/// Prefer the `x-claude-code-session-id` transport header. Fall back to a
+/// `user_id` JSON blob's `session_id` when older clients omit the header.
+pub(crate) fn claude_session_id(request: &MessagesRequest) -> Option<String> {
+    transport_session_id(request).or_else(|| user_id_session_id(request))
+}
+
+fn transport_session_id(request: &MessagesRequest) -> Option<String> {
+    request
+        .metadata
+        .pointer("/_claudex_transport_identity/session_id")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+}
+
+fn user_id_session_id(request: &MessagesRequest) -> Option<String> {
+    let raw = request.metadata.get("user_id")?.as_str()?;
+    serde_json::from_str::<Value>(raw)
+        .ok()?
+        .get("session_id")?
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+    use crate::anthropic::MessagesRequest;
+
+    fn request(metadata: Value) -> MessagesRequest {
+        MessagesRequest {
+            model: "main".to_owned(),
+            system: Value::Null,
+            messages: Vec::new(),
+            tools: Vec::new(),
+            stream: false,
+            output_config: Value::Null,
+            metadata,
+            working_directory: None,
+            disabled_subagent_models: Default::default(),
+            claudex_collaborator_model: None,
+        }
+    }
+
+    #[test]
+    fn prefers_transport_session_id_over_user_id_blob() {
+        let request = request(json!({
+            "user_id": r#"{"device_id":"dev","session_id":"from-user"}"#,
+            "_claudex_transport_identity":{"session_id":"from-header"}
+        }));
+        assert_eq!(claude_session_id(&request).as_deref(), Some("from-header"));
+    }
+
+    #[test]
+    fn falls_back_to_user_id_json_session_id() {
+        let request = request(json!({
+            "user_id": r#"{"device_id":"dev","session_id":"from-user"}"#
+        }));
+        assert_eq!(claude_session_id(&request).as_deref(), Some("from-user"));
+    }
+
+    #[test]
+    fn ignores_plain_user_id_and_empty_ids() {
+        assert_eq!(
+            claude_session_id(&request(json!({"user_id":"client"}))),
+            None
+        );
+        assert_eq!(
+            claude_session_id(&request(json!({
+                "_claudex_transport_identity":{"session_id":""}
+            }))),
+            None
+        );
+        assert_eq!(claude_session_id(&request(json!({}))), None);
+    }
+}

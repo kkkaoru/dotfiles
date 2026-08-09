@@ -3,15 +3,23 @@ use std::future::Future;
 use anyhow::{Context, Result};
 use axum::Router;
 
-pub(super) async fn serve(listener: tokio::net::TcpListener, router: Router) -> Result<()> {
+pub(super) async fn serve<L>(listener: L, router: Router) -> Result<()>
+where
+    L: axum::serve::Listener + Send + 'static,
+    L::Addr: std::fmt::Debug + Send + Sync + 'static,
+{
     serve_until(listener, router, termination_signal()).await
 }
 
-async fn serve_until(
-    listener: tokio::net::TcpListener,
+async fn serve_until<L>(
+    listener: L,
     router: Router,
     shutdown: impl Future<Output = ()> + Send + 'static,
-) -> Result<()> {
+) -> Result<()>
+where
+    L: axum::serve::Listener + Send + 'static,
+    L::Addr: std::fmt::Debug + Send + Sync + 'static,
+{
     axum::serve(listener, router)
         .with_graceful_shutdown(shutdown)
         .await

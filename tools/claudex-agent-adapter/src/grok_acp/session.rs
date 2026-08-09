@@ -122,7 +122,8 @@ pub(super) async fn create(
     }
     let session_id = response.session_id.0.to_string();
     if !crate::command_code_acp::is_command_code_model(model) {
-        let include_acp_routing = prompt::should_include_acp_routing(provider, model);
+        let include_acp_routing = prompt::should_include_acp_routing(provider, model)
+            && !prompt::is_acp_worker_session(&params);
         let base = prompt::provider_instructions(&params, include_acp_routing);
         if !base.is_empty() {
             instructions.borrow_mut().insert(session_id.clone(), base);
@@ -177,20 +178,25 @@ fn launch_mcp_servers(params: &Value) -> Vec<acp::McpServer> {
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".cache/claudex");
     let log_path = cache.join("claudex-launch-mcp.log");
-    let queue_path = cache.join("launch-queue.jsonl");
+    let owner = crate::launch_mcp::launch_owner_from_params(params);
+    let queue_path = crate::launch_mcp::launch_queue_path(&cache, owner.as_deref());
+    let mut env = vec![
+        acp::EnvVariable::new(
+            "CLAUDEX_LAUNCH_MCP_LOG",
+            log_path.to_string_lossy().into_owned(),
+        ),
+        acp::EnvVariable::new(
+            "CLAUDEX_LAUNCH_QUEUE",
+            queue_path.to_string_lossy().into_owned(),
+        ),
+    ];
+    if let Some(owner) = owner {
+        env.push(acp::EnvVariable::new("CLAUDEX_LAUNCH_OWNER", owner));
+    }
     vec![acp::McpServer::Stdio(
         acp::McpServerStdio::new(LAUNCH_MCP_NAME, exe)
             .args(vec![LAUNCH_MCP_COMMAND.to_owned()])
-            .env(vec![
-                acp::EnvVariable::new(
-                    "CLAUDEX_LAUNCH_MCP_LOG",
-                    log_path.to_string_lossy().into_owned(),
-                ),
-                acp::EnvVariable::new(
-                    "CLAUDEX_LAUNCH_QUEUE",
-                    queue_path.to_string_lossy().into_owned(),
-                ),
-            ]),
+            .env(env),
     )]
 }
 
@@ -263,136 +269,6 @@ fn request_cwd(params: &Value) -> Option<PathBuf> {
 }
 
 #[cfg(test)]
-// Coverage gates measure production ACP sessions; this inline module only contains tests.
 #[cfg_attr(coverage_nightly, coverage(off))]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn bounds_session_setup_and_reports_provider_failures() {
-        let timeout = await_setup(
-            AcpProvider::Configured,
-            Duration::from_millis(1),
-            std::future::pending::<acp::Result<()>>(),
-        )
-        .await
-        .unwrap_err();
-        assert!(timeout.to_string().contains("timed out"));
-        let failed = await_setup(
-            AcpProvider::Copilot,
-            Duration::from_secs(1),
-            std::future::ready(Err::<(), _>(acp::Error::internal_error())),
-        )
-        .await
-        .unwrap_err();
-        assert!(failed.to_string().contains("session/new failed"));
-    }
-
-    #[tokio::test]
-    async fn bounds_model_setup_and_reports_provider_failures() {
-        let timeout = await_model_setup(
-            AcpProvider::Configured,
-            Duration::from_millis(1),
-            std::future::pending::<acp::Result<()>>(),
-        )
-        .await
-        .unwrap_err();
-        assert!(timeout.to_string().contains("session/set_model timed out"));
-
-        let failed = await_model_setup(
-            AcpProvider::Grok,
-            Duration::from_secs(1),
-            std::future::ready(Err::<(), _>(acp::Error::internal_error())),
-        )
-        .await
-        .unwrap_err();
-        assert!(failed.to_string().contains("session/set_model failed"));
-    }
-
-    #[test]
-    fn accepts_only_existing_absolute_request_directories() {
-        let root = tempfile::tempdir().unwrap();
-        assert_eq!(
-            request_cwd(&json!({"cwd":root.path()})),
-            Some(root.path().to_owned())
-        );
-        assert!(request_cwd(&json!({"cwd":"relative"})).is_none());
-        assert!(request_cwd(&json!({"cwd":"/definitely/missing"})).is_none());
-        assert!(request_cwd(&Value::Null).is_none());
-    }
-
-    #[test]
-    fn falls_back_from_invalid_system_and_request_directories() {
-        let fallback = tempfile::tempdir().unwrap();
-        let request = tempfile::tempdir().unwrap();
-        assert_eq!(
-            session_cwd(
-                &json!({
-                    "baseInstructions":"CWD: /definitely/missing",
-                    "cwd":request.path()
-                }),
-                fallback.path(),
-            ),
-            request.path()
-        );
-        assert_eq!(
-            session_cwd(
-                &json!({
-                    "baseInstructions":"CWD: relative/path",
-                    "cwd":"/definitely/missing"
-                }),
-                fallback.path(),
-            ),
-            fallback.path()
-        );
-    }
-
-    #[test]
-    fn detects_claude_code_launch_tools_for_mcp_injection() {
-        assert!(params_offer_launch_tools(&json!({
-            "dynamicTools":[{"name":"Task","description":"Launch a SubAgent"}]
-        })));
-        assert!(params_offer_launch_tools(&json!({
-            "dynamicTools":[{"name":"cc_Agent_0","description":"use `Agent`"}]
-        })));
-        assert!(!params_offer_launch_tools(&json!({
-            "dynamicTools":[{"name":"Bash","description":"run a shell command"}]
-        })));
-        assert!(!params_offer_launch_tools(&json!({})));
-    }
-
-    #[test]
-    fn injects_launch_mcp_when_agent_tools_are_offered() {
-        let previous_home = std::env::var_os("HOME");
-        let home = tempfile::tempdir().expect("launch mcp home");
-        unsafe { std::env::set_var("HOME", home.path()) };
-        let servers = launch_mcp_servers(&json!({
-            "dynamicTools":[{"name":"Agent","description":"Launch a SubAgent"}]
-        }));
-        assert_eq!(servers.len(), 1);
-        match &servers[0] {
-            acp::McpServer::Stdio(stdio) => {
-                assert_eq!(stdio.name, LAUNCH_MCP_NAME);
-                assert!(stdio.args.iter().any(|arg| arg == LAUNCH_MCP_COMMAND));
-                assert!(
-                    stdio
-                        .env
-                        .iter()
-                        .any(|var| var.name == "CLAUDEX_LAUNCH_MCP_LOG")
-                );
-                assert!(
-                    stdio
-                        .env
-                        .iter()
-                        .any(|var| var.name == "CLAUDEX_LAUNCH_QUEUE")
-                );
-            }
-            other => panic!("expected stdio MCP, got {other:?}"),
-        }
-        assert!(launch_mcp_servers(&json!({})).is_empty());
-        match previous_home {
-            Some(value) => unsafe { std::env::set_var("HOME", value) },
-            None => unsafe { std::env::remove_var("HOME") },
-        }
-    }
-}
+#[path = "session_tests.rs"]
+mod tests;

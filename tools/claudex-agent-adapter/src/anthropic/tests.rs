@@ -36,6 +36,8 @@ fn bridge_requires_atomic_parallel_subagent_launches() {
             .contains("A follow-up queued to a busy worker does not add parallel capacity")
     );
     assert!(BRIDGE_INSTRUCTIONS.contains("end the turn promptly with concise user-visible status"));
+    assert!(BRIDGE_INSTRUCTIONS.contains("never a complete SubAgent answer"));
+    assert!(BRIDGE_INSTRUCTIONS.contains("Never copy end-the-turn-with-status"));
     assert!(BRIDGE_INSTRUCTIONS.contains("Avoid serial heavy processing by one worker"));
     assert!(BRIDGE_INSTRUCTIONS.contains(
         "reuse compatible workers by setting resume to the exact prior Agent/Task recipient instead of churning processes"
@@ -148,6 +150,7 @@ fn test_session_at(
         consumed_tool_ids: tokio::sync::Mutex::new(std::collections::HashSet::new()),
         external_tool_names: HashMap::new(),
         client_user_id: None,
+        claude_session_id: None,
         gate: Arc::new(tokio::sync::Mutex::new(())),
         last_activity: std::sync::Mutex::new(last_activity),
         pending_since: std::sync::Mutex::new(has_pending_tool.then_some(last_activity)),

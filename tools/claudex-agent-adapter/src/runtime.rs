@@ -3,7 +3,7 @@ use std::{collections::VecDeque, ffi::OsString, path::PathBuf, sync::Arc, time::
 use crate::{
     agent_backend::{AgentBackend, BackendKind, BackendRoute},
     anthropic::{Bridge, DEFAULT_MAX_PROCESSES, DEFAULT_TIMEOUT_MINUTES},
-    http_router,
+    http_api::http_router_with_handover,
     launcher::{self, AdapterOptions},
     provider_config::{self, WorkerRoute},
 };
@@ -111,6 +111,7 @@ fn parse_options(arguments: &mut VecDeque<OsString>) -> Result<ParsedOptions> {
     let mut routes = Vec::new();
     let mut worker_routes = Vec::new();
     let mut search_worker_routes = Vec::new();
+    let mut selectable_models = Vec::new();
     let mut model = None;
     let mut provider_config = None;
     let mut inherit_claude_model = false;
@@ -144,6 +145,9 @@ fn parse_options(arguments: &mut VecDeque<OsString>) -> Result<ParsedOptions> {
                     serde_json::from_str::<WorkerRoute>(&value)
                         .context("invalid search worker route JSON")?,
                 );
+            }
+            "--selectable-model" => {
+                selectable_models.push(option_value(arguments, "--selectable-model")?)
             }
             "--provider-config" => {
                 provider_config =
@@ -211,6 +215,9 @@ fn parse_options(arguments: &mut VecDeque<OsString>) -> Result<ParsedOptions> {
     }
     if !search_worker_routes.is_empty() {
         model_catalog.set_search_worker_routes(search_worker_routes)?;
+    }
+    if !selectable_models.is_empty() {
+        model_catalog.set_selectable_models(selectable_models);
     }
     validate_routes(&routes)?;
     Ok(ParsedOptions {
@@ -361,9 +368,20 @@ async fn serve_on_listener(
         .with_model_catalog(options.model_catalog.clone()),
     );
     tracing::info!(listen = %options.listen, routes = ?options.routes, model = %options.model, "claudex agent adapter is ready");
+    let cache = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".cache/claudex");
+    let (handover, rx) = crate::listen_handover::ListenHandover::new(options.listen, cache);
+    let handover_listener = crate::listen_handover::HandoverListener::new(listener, &handover, rx);
     let result = shutdown::serve(
-        listener,
-        http_router(Arc::clone(&bridge), options.model, auth_token),
+        handover_listener,
+        http_router_with_handover(
+            Arc::clone(&bridge),
+            options.model,
+            auth_token,
+            Some(handover),
+        ),
     )
     .await;
     backend.shutdown().await;

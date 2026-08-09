@@ -44,6 +44,16 @@ pub(super) async fn reserve_matching_session(
     best
 }
 
+/// Busy SubAgent follow-ups must match `_claudex_transport_identity` exactly.
+/// Model+user fallback would cancel an unrelated parallel worker.
+pub(super) async fn find_busy_signature_matching_session(
+    sessions: Vec<Arc<Session>>,
+    signature: &Arc<str>,
+    messages: &[Value],
+) -> Option<(Arc<Session>, usize)> {
+    find_busy_by_signature(sessions, signature, messages).await
+}
+
 /// Find the best transcript-matching session that is currently busy (gate held).
 ///
 /// Outer follow-ups first require an exact signature match. If tools/system drift
@@ -55,26 +65,15 @@ pub(super) async fn find_busy_matching_session(
     messages: &[Value],
     model: Option<&str>,
     user_id: Option<&str>,
+    claude_session_id: Option<&str>,
 ) -> Option<(Arc<Session>, usize)> {
-    let mut best: Option<(Arc<Session>, usize)> = None;
-    for session in sessions.iter() {
-        if has_pending_tools(session).await {
-            continue;
-        }
-        let Some(existing_len) = candidate_length(session, signature, messages).await else {
-            continue;
-        };
-        if Arc::clone(&session.gate).try_lock_owned().is_ok() {
-            continue;
-        }
-        if is_better_length(best.as_ref().map(|(_, len)| *len), existing_len) {
-            best = Some((Arc::clone(session), existing_len));
-        }
+    if let Some(best) = find_busy_by_signature(sessions.iter().cloned(), signature, messages).await
+    {
+        return Some(best);
     }
-    if best.is_some() {
-        return best;
-    }
-    // Signature miss: still reclaim a busy conversation for the same human.
+    // Signature miss: still reclaim a busy conversation for the same human
+    // *and* the same Claude Code session. Model+user alone would mix SubAgents
+    // across concurrent claudex TUIs on one daemon.
     let mut best: Option<(Arc<Session>, usize)> = None;
     for session in sessions {
         if has_pending_tools(&session).await {
@@ -83,7 +82,7 @@ pub(super) async fn find_busy_matching_session(
         if Arc::clone(&session.gate).try_lock_owned().is_ok() {
             continue;
         }
-        if !conversation_matches(&session, model, user_id) {
+        if !conversation_matches(&session, model, user_id, claude_session_id) {
             continue;
         }
         align_transcript_to_request(&session, messages).await;
@@ -97,7 +96,38 @@ pub(super) async fn find_busy_matching_session(
     best
 }
 
-fn conversation_matches(session: &Session, model: Option<&str>, user_id: Option<&str>) -> bool {
+async fn find_busy_by_signature(
+    sessions: impl IntoIterator<Item = Arc<Session>>,
+    signature: &Arc<str>,
+    messages: &[Value],
+) -> Option<(Arc<Session>, usize)> {
+    let mut best: Option<(Arc<Session>, usize)> = None;
+    for session in sessions {
+        if has_pending_tools(&session).await {
+            continue;
+        }
+        let Some(existing_len) = candidate_length(&session, signature, messages).await else {
+            continue;
+        };
+        if Arc::clone(&session.gate).try_lock_owned().is_ok() {
+            continue;
+        }
+        if is_better_length(best.as_ref().map(|(_, len)| *len), existing_len) {
+            best = Some((session, existing_len));
+        }
+    }
+    best
+}
+
+fn conversation_matches(
+    session: &Session,
+    model: Option<&str>,
+    user_id: Option<&str>,
+    claude_session_id: Option<&str>,
+) -> bool {
+    if !claude_session_ids_match(session.claude_session_id.as_deref(), claude_session_id) {
+        return false;
+    }
     if model.is_some_and(|model| session.model != model) {
         return false;
     }
@@ -105,6 +135,14 @@ fn conversation_matches(session: &Session, model: Option<&str>, user_id: Option<
         (Some(left), Some(right)) => left == right,
         // Without a client session id, only allow the fallback when model matches
         // and we have a single busy candidate (checked by caller scoring).
+        (None, None) => true,
+        _ => false,
+    }
+}
+
+fn claude_session_ids_match(stored: Option<&str>, requested: Option<&str>) -> bool {
+    match (stored, requested) {
+        (Some(left), Some(right)) => left == right,
         (None, None) => true,
         _ => false,
     }
@@ -161,239 +199,5 @@ fn transcript_is_prefix(transcript: &[Value], messages: &[Value]) -> bool {
 // Coverage excludes test implementation; production behavior remains measured.
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
-    use super::*;
-    use serde_json::json;
-    use std::{collections::HashMap, sync::Arc, time::Instant};
-    use tokio::sync::{Mutex, Semaphore};
-
-    fn session(model: &str, client_user_id: Option<&str>) -> Session {
-        let slots = Arc::new(Semaphore::new(1));
-        Session {
-            thread_id: "thread".to_owned(),
-            model: model.to_owned(),
-            disabled_subagent_models: Default::default(),
-            signature: Arc::from("signature"),
-            transcript: Mutex::new(Vec::new()),
-            pending_tools: Mutex::new(HashMap::new()),
-            consumed_tool_ids: Mutex::new(Default::default()),
-            external_tool_names: HashMap::new(),
-            client_user_id: client_user_id.map(str::to_owned),
-            gate: Arc::new(Mutex::new(())),
-            last_activity: std::sync::Mutex::new(Instant::now()),
-            pending_since: std::sync::Mutex::new(None),
-            _slot: slots.try_acquire_owned().expect("session slot"),
-        }
-    }
-
-    // Lightweight fixtures exercise align/prefix helpers without a full Session.
-    #[test]
-    fn transcript_prefix_ignores_cache_control_via_canonical_eq() {
-        let left = json!({"role":"user","content":"hi","cache_control":{"type":"ephemeral"}});
-        let right = json!({"role":"user","content":"hi"});
-        assert!(canonical_eq(&left, &right));
-        assert!(transcript_is_prefix(std::slice::from_ref(&left), &[right]));
-    }
-
-    #[test]
-    fn fallback_identity_checks_model_and_client_user_id() {
-        let identified = session("main", Some("client"));
-        assert!(conversation_matches(
-            &identified,
-            Some("main"),
-            Some("client")
-        ));
-        assert!(conversation_matches(&identified, None, Some("client")));
-        assert!(!conversation_matches(
-            &identified,
-            Some("other"),
-            Some("client")
-        ));
-        assert!(!conversation_matches(
-            &identified,
-            Some("main"),
-            Some("other")
-        ));
-
-        let anonymous = session("main", None);
-        assert!(conversation_matches(&anonymous, Some("main"), None));
-        assert!(!conversation_matches(
-            &anonymous,
-            Some("main"),
-            Some("client")
-        ));
-    }
-
-    #[tokio::test]
-    async fn busy_fallback_rejects_incompatible_candidates() {
-        let wrong_model = Arc::new(session("other", Some("client")));
-        let anonymous = Arc::new(session("main", None));
-        let _wrong_model_gate = Arc::clone(&wrong_model.gate).lock_owned().await;
-        let _anonymous_gate = Arc::clone(&anonymous.gate).lock_owned().await;
-        let message = json!({"role":"user","content":"follow-up"});
-
-        let found = find_busy_matching_session(
-            vec![wrong_model, anonymous],
-            &Arc::from("different-signature"),
-            &[message],
-            Some("main"),
-            Some("client"),
-        )
-        .await;
-
-        assert!(found.is_none());
-    }
-
-    #[tokio::test]
-    async fn find_busy_skips_idle_sessions() {
-        let gate = Arc::new(Mutex::new(()));
-        let _hold = gate.lock().await;
-        assert!(gate.clone().try_lock_owned().is_err());
-        drop(_hold);
-        assert!(gate.try_lock_owned().is_ok());
-    }
-
-    #[tokio::test]
-    async fn reserve_skips_a_session_with_pending_subagent_tools() {
-        let session = Arc::new(session("main", Some("client")));
-        session
-            .pending_tools
-            .lock()
-            .await
-            .insert("tool-1".to_owned(), json!(1));
-        let selected = reserve_matching_session(
-            vec![session],
-            &Arc::from("signature"),
-            &[json!({"role":"user","content":"follow-up"})],
-        )
-        .await;
-        assert!(selected.is_none());
-    }
-
-    #[tokio::test]
-    async fn busy_selection_skips_a_session_with_pending_subagent_tools() {
-        let messages = messages();
-        let session = session_with("main", Some("client"), "signature", messages.clone());
-        session
-            .pending_tools
-            .lock()
-            .await
-            .insert("tool-1".to_owned(), json!(1));
-        let _gate = Arc::clone(&session.gate).lock_owned().await;
-
-        let found = find_busy_matching_session(
-            vec![session],
-            &Arc::from("signature"),
-            &messages,
-            Some("main"),
-            Some("client"),
-        )
-        .await;
-
-        assert!(found.is_none());
-    }
-
-    #[tokio::test]
-    async fn reserve_prefers_the_longest_idle_matching_transcript() {
-        let messages = messages();
-        let busy = session_with("main", Some("client"), "signature", messages.clone());
-        let _busy_gate = Arc::clone(&busy.gate).lock_owned().await;
-        let wrong_signature = session_with("main", Some("client"), "other", messages.clone());
-        let longest = session_with("main", Some("client"), "signature", messages.clone());
-        let shortest = session_with("main", Some("client"), "signature", messages[..1].to_vec());
-
-        let selected = reserve_matching_session(
-            vec![wrong_signature, busy, Arc::clone(&longest), shortest],
-            &Arc::from("signature"),
-            &messages,
-        )
-        .await
-        .expect("matching idle session");
-
-        assert!(Arc::ptr_eq(&selected.session, &longest));
-        assert_eq!(selected.existing_len, messages.len());
-    }
-
-    #[tokio::test]
-    async fn busy_selection_skips_idle_sessions_and_keeps_the_longest_match() {
-        let messages = messages();
-        let idle = session_with("main", Some("client"), "signature", messages.clone());
-        let wrong_signature = session_with("main", Some("client"), "other", messages.clone());
-        let shortest = session_with("main", Some("client"), "signature", messages[..1].to_vec());
-        let longest = session_with("main", Some("client"), "signature", messages.clone());
-        let trailing = session_with("main", Some("client"), "signature", messages[..1].to_vec());
-        let _wrong_signature_gate = Arc::clone(&wrong_signature.gate).lock_owned().await;
-        let _shortest_gate = Arc::clone(&shortest.gate).lock_owned().await;
-        let _longest_gate = Arc::clone(&longest.gate).lock_owned().await;
-        let _trailing_gate = Arc::clone(&trailing.gate).lock_owned().await;
-
-        let found = find_busy_matching_session(
-            vec![
-                idle,
-                wrong_signature,
-                shortest,
-                Arc::clone(&longest),
-                trailing,
-            ],
-            &Arc::from("signature"),
-            &messages,
-            Some("main"),
-            Some("client"),
-        )
-        .await
-        .expect("busy matching session");
-
-        assert!(Arc::ptr_eq(&found.0, &longest));
-        assert_eq!(found.1, messages.len());
-    }
-
-    #[tokio::test]
-    async fn busy_fallback_realigns_a_matching_conversation_after_signature_drift() {
-        let messages = messages();
-        let wrong_model = session_with("other", Some("client"), "other", messages.clone());
-        let realigned = session_with(
-            "main",
-            Some("client"),
-            "other",
-            vec![
-                messages[0].clone(),
-                json!({"role":"assistant","content":"stale"}),
-            ],
-        );
-        let equally_good = session_with("main", Some("client"), "other", messages[..1].to_vec());
-        let _wrong_model_gate = Arc::clone(&wrong_model.gate).lock_owned().await;
-        let _realigned_gate = Arc::clone(&realigned.gate).lock_owned().await;
-        let _equally_good_gate = Arc::clone(&equally_good.gate).lock_owned().await;
-
-        let found = find_busy_matching_session(
-            vec![wrong_model, Arc::clone(&realigned), equally_good],
-            &Arc::from("signature"),
-            &messages,
-            Some("main"),
-            Some("client"),
-        )
-        .await
-        .expect("matching busy fallback");
-
-        assert!(Arc::ptr_eq(&found.0, &realigned));
-        assert_eq!(found.1, 1);
-        assert_eq!(*realigned.transcript.lock().await, messages[..1]);
-    }
-    fn messages() -> Vec<Value> {
-        vec![
-            json!({"role":"user","content":"first"}),
-            json!({"role":"user","content":"follow-up"}),
-        ]
-    }
-
-    fn session_with(
-        model: &str,
-        client_user_id: Option<&str>,
-        signature: &str,
-        transcript: Vec<Value>,
-    ) -> Arc<Session> {
-        let mut session = session(model, client_user_id);
-        session.signature = Arc::from(signature);
-        session.transcript = Mutex::new(transcript);
-        Arc::new(session)
-    }
+    include!("reservation_tests.rs");
 }

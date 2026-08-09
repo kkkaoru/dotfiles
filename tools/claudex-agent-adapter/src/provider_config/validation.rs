@@ -92,6 +92,9 @@ fn validate_identity(
     if provider.model_prefixes.iter().any(String::is_empty) {
         bail!("modelPrefixes must not contain an empty value");
     }
+    if provider.selectable_models.iter().any(String::is_empty) {
+        bail!("selectableModels must not contain an empty value");
+    }
     Ok(())
 }
 

@@ -108,6 +108,56 @@ fn sanitizes_text_thinking_and_provider_status_variants() {
     }
 }
 
+#[test]
+fn rewrites_premature_status_only_toolless_worker_replies() {
+    assert!(sanitize::is_premature_worker_status_reply(
+        "フェーズ1の短いステータス: 調査開始"
+    ));
+    assert!(sanitize::is_premature_worker_status_reply(
+        "short status after each phase"
+    ));
+    assert!(sanitize::is_premature_worker_status_reply(
+        "Status: inspecting"
+    ));
+    assert!(!sanitize::is_premature_worker_status_reply(
+        "Read CLAUDE.md and the first heading is # Claudex."
+    ));
+    assert!(!sanitize::is_premature_worker_status_reply(""));
+
+    let premature = sanitize::rewrite_premature_status_only_segment(super::super::Segment {
+        blocks: vec![json!({"type":"text","text":"各フェーズ後の短いステータスです"})],
+        stop_reason: "end_turn",
+        usage: super::super::Usage::default(),
+        web_evidence: super::super::WebEvidenceSummary::default(),
+    });
+    assert_eq!(
+        premature.blocks[0]["text"],
+        sanitize::PREMATURE_STATUS_ONLY_NOTICE
+    );
+
+    let with_tool = sanitize::rewrite_premature_status_only_segment(super::super::Segment {
+        blocks: vec![
+            json!({"type":"tool_use","id":"1","name":"Read","input":{}}),
+            json!({"type":"text","text":"フェーズ1完了"}),
+        ],
+        stop_reason: "end_turn",
+        usage: super::super::Usage::default(),
+        web_evidence: super::super::WebEvidenceSummary::default(),
+    });
+    assert_eq!(with_tool.blocks[1]["text"], "フェーズ1完了");
+
+    let real_answer = sanitize::rewrite_premature_status_only_segment(super::super::Segment {
+        blocks: vec![json!({"type":"text","text":"The heading is # Claudex adapter."})],
+        stop_reason: "end_turn",
+        usage: super::super::Usage::default(),
+        web_evidence: super::super::WebEvidenceSummary::default(),
+    });
+    assert_eq!(
+        real_answer.blocks[0]["text"],
+        "The heading is # Claudex adapter."
+    );
+}
+
 #[tokio::test]
 async fn thinking_state_handles_reuse_keepalive_and_unit_transitions() {
     let mut state = ThinkingState::default();
@@ -288,6 +338,114 @@ async fn streams_summarized_thinking_as_separate_units_before_text() {
         json!({"type":"text_delta","text":"Answer"})
     );
     assert_eq!(frames[10], json!({"type":"content_block_stop","index":2}));
+}
+
+#[tokio::test]
+async fn subagent_reasoning_stays_on_one_thinking_block_across_units() {
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(32);
+    let mut builder = SegmentBuilder::new(2).with_subagent(true);
+    for (summary_index, delta) in [
+        (0, "Map the conversion path.\n"),
+        (1, "Check Vibrato boundaries.\n"),
+    ] {
+        assert!(
+            builder
+                .model_output_event(
+                    &json!({
+                        "method":"item/reasoning/summaryTextDelta",
+                        "params":{
+                            "itemId":"worker:reasoning",
+                            "summaryIndex":summary_index,
+                            "delta":delta
+                        }
+                    }),
+                    Some(&sender),
+                )
+                .await
+                .expect("subagent reasoning delta")
+        );
+    }
+    builder
+        .provider_tool_call(
+            &json!({
+                "params":{
+                    "callId":"read-1",
+                    "tool":"Read",
+                    "title":"Read convert.ts",
+                    "arguments":{"path":"packages/azookey/convert.ts"}
+                }
+            }),
+            Some(&sender),
+        )
+        .await
+        .expect("tool progress");
+    builder
+        .model_output_event(
+            &json!({
+                "method":"item/reasoning/summaryTextDelta",
+                "params":{
+                    "itemId":"worker:reasoning-2",
+                    "summaryIndex":0,
+                    "delta":"Hypothesis: boundaries were dropped.\n"
+                }
+            }),
+            Some(&sender),
+        )
+        .await
+        .expect("later reasoning unit");
+    let segment = builder.finish(Some(&sender)).await.expect("segment");
+    drop(sender);
+
+    let thinking_blocks: Vec<_> = segment
+        .blocks
+        .iter()
+        .filter(|block| block.get("type").and_then(Value::as_str) == Some("thinking"))
+        .collect();
+    assert_eq!(
+        thinking_blocks.len(),
+        1,
+        "SubAgent turn must keep one native thinking block: {:?}",
+        segment.blocks
+    );
+    let thinking = thinking_blocks[0]["thinking"].as_str().unwrap_or("");
+    assert!(thinking.contains("Map the conversion path."));
+    assert!(thinking.contains("Check Vibrato boundaries."));
+    assert!(thinking.contains("Hypothesis: boundaries were dropped."));
+    assert!(
+        !thinking.contains('▶'),
+        "▶ chrome must be stripped from the transcript: {thinking}"
+    );
+    assert!(
+        segment
+            .blocks
+            .iter()
+            .all(|block| { block.get("type").and_then(Value::as_str) != Some("server_tool_use") }),
+        "ACP SubAgent must not close thinking for server_tool_use: {:?}",
+        segment.blocks
+    );
+
+    let mut sse = String::new();
+    while let Some(frame) = receiver.recv().await {
+        sse.push_str(&String::from_utf8_lossy(&frame.expect("frame")));
+    }
+    assert_eq!(
+        sse.matches("\"type\":\"content_block_start\"").count(),
+        1,
+        "live stream must open thinking only once: {sse}"
+    );
+    assert_eq!(
+        sse.matches("\"type\":\"signature_delta\"").count(),
+        1,
+        "thinking must stay open until end_turn: {sse}"
+    );
+    assert!(
+        sse.contains("▶ Read") || sse.contains("▶ convert.ts"),
+        "tool progress must append into the open thinking block: {sse}"
+    );
+    assert!(
+        !sse.contains("\"type\":\"server_tool_use\""),
+        "live stream must not paint server_tool_use: {sse}"
+    );
 }
 
 #[tokio::test]
@@ -1087,6 +1245,7 @@ async fn rejects_a_malformed_tool_event_before_dispatch() {
         consumed_tool_ids: Mutex::new(HashSet::new()),
         external_tool_names: HashMap::new(),
         client_user_id: None,
+        claude_session_id: None,
         gate: Arc::new(Mutex::new(())),
         last_activity: std::sync::Mutex::new(Instant::now()),
         pending_since: std::sync::Mutex::new(None),
@@ -2486,6 +2645,7 @@ fn grok_disconnect_fixture() -> (Bridge, Arc<Session>, Arc<ThreadEventDispatcher
         consumed_tool_ids: Mutex::new(HashSet::new()),
         external_tool_names: HashMap::new(),
         client_user_id: None,
+        claude_session_id: None,
         gate: Arc::new(Mutex::new(())),
         last_activity: std::sync::Mutex::new(Instant::now()),
         pending_since: std::sync::Mutex::new(None),
@@ -2552,6 +2712,7 @@ async fn disconnect_fixture_with_disabled(
             ("cc_Read_0".to_owned(), "Read".to_owned()),
         ]),
         client_user_id: None,
+        claude_session_id: None,
         gate: Arc::new(Mutex::new(())),
         last_activity: std::sync::Mutex::new(Instant::now()),
         pending_since: std::sync::Mutex::new(None),
@@ -2674,6 +2835,7 @@ while read line; do :; done
         consumed_tool_ids: Mutex::new(HashSet::new()),
         external_tool_names: HashMap::new(),
         client_user_id: None,
+        claude_session_id: None,
         gate: Arc::new(Mutex::new(())),
         last_activity: std::sync::Mutex::new(Instant::now()),
         pending_since: std::sync::Mutex::new(None),
@@ -2713,6 +2875,7 @@ async fn retry_failure_drive_fixture()
         consumed_tool_ids: Mutex::new(HashSet::new()),
         external_tool_names: HashMap::new(),
         client_user_id: None,
+        claude_session_id: None,
         gate: Arc::new(Mutex::new(())),
         last_activity: std::sync::Mutex::new(Instant::now()),
         pending_since: std::sync::Mutex::new(None),

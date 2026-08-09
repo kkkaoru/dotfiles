@@ -320,6 +320,7 @@ impl Bridge {
                 .get("user_id")
                 .and_then(Value::as_str)
                 .map(str::to_owned),
+            claude_session_id: super::request_identity::claude_session_id(request),
             gate: Arc::new(Mutex::new(())),
             last_activity: std::sync::Mutex::new(Instant::now()),
             pending_since: std::sync::Mutex::new(None),

@@ -12,12 +12,14 @@ use super::{ServiceConfig, launcher_logs};
 
 const TITLE: &str = "claudex";
 const WAITING_SUBTITLE: &str = "ビルド完了・待機中";
+const LIVE_SUBTITLE: &str = "live 更新完了";
 const COMPLETE_SUBTITLE: &str = "差し替え完了";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum NotifyKind {
     Waiting,
+    Live,
     Complete,
 }
 
@@ -34,6 +36,11 @@ pub(super) enum Event {
         listen: String,
         build_id: String,
         waiter_pid: u32,
+    },
+    LiveReady {
+        listen: String,
+        build_id: String,
+        waiting: String,
     },
     SwapComplete {
         listen: String,
@@ -52,19 +59,24 @@ impl Event {
     pub(super) fn kind(&self) -> NotifyKind {
         match self {
             Self::WaitingForIdle { .. } => NotifyKind::Waiting,
+            Self::LiveReady { .. } => NotifyKind::Live,
             Self::SwapComplete { .. } => NotifyKind::Complete,
         }
     }
 
     pub(super) fn listen(&self) -> &str {
         match self {
-            Self::WaitingForIdle { listen, .. } | Self::SwapComplete { listen, .. } => listen,
+            Self::WaitingForIdle { listen, .. }
+            | Self::LiveReady { listen, .. }
+            | Self::SwapComplete { listen, .. } => listen,
         }
     }
 
     pub(super) fn build_id(&self) -> &str {
         match self {
-            Self::WaitingForIdle { build_id, .. } | Self::SwapComplete { build_id, .. } => build_id,
+            Self::WaitingForIdle { build_id, .. }
+            | Self::LiveReady { build_id, .. }
+            | Self::SwapComplete { build_id, .. } => build_id,
         }
     }
 }
@@ -90,6 +102,24 @@ pub(super) fn waiting_for_idle(config: &ServiceConfig, waiter_pid: u32) {
             listen: config.options.listen.to_string(),
             build_id: env!("CLAUDEX_BUILD_ID").to_owned(),
             waiter_pid,
+        },
+    );
+}
+
+pub(super) fn live_ready(config: &ServiceConfig, live_listen: SocketAddr) {
+    if live_listen == config.options.listen {
+        return;
+    }
+    let Some(cache) = config.log_path.parent() else {
+        return;
+    };
+    post(
+        cache,
+        &config.options.listen,
+        Event::LiveReady {
+            listen: live_listen.to_string(),
+            build_id: env!("CLAUDEX_BUILD_ID").to_owned(),
+            waiting: config.options.listen.to_string(),
         },
     );
 }
@@ -126,6 +156,17 @@ pub(super) fn notification(event: &Event) -> Notification {
             subtitle: WAITING_SUBTITLE.to_owned(),
             body: format!(
                 "{listen} を build {build_id} へ差し替え待機中（waiter pid {waiter_pid}）"
+            ),
+        },
+        Event::LiveReady {
+            listen,
+            build_id,
+            waiting,
+        } => Notification {
+            title: TITLE.to_owned(),
+            subtitle: LIVE_SUBTITLE.to_owned(),
+            body: format!(
+                "新セッションは {listen} (build {build_id}) を即時利用。{waiting} は idle 待ち"
             ),
         },
         Event::SwapComplete { listen, build_id } => Notification {

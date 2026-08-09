@@ -15,20 +15,30 @@ use crate::{
 use axum::{
     Json, Router,
     body::{Body, BodyDataStream, Bytes},
-    extract::{Path, Request, State},
+    extract::{Request, State},
     http::{HeaderMap, Response, StatusCode},
     middleware,
     middleware::Next,
     response::IntoResponse,
     routing::{get, post},
 };
-use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio_stream::Stream;
 
+mod handover;
 mod logging;
+mod web_search;
 
 pub fn http_router(bridge: Arc<Bridge>, model: String, auth_token: Option<String>) -> Router {
+    http_router_with_handover(bridge, model, auth_token, None)
+}
+
+pub(crate) fn http_router_with_handover(
+    bridge: Arc<Bridge>,
+    model: String,
+    auth_token: Option<String>,
+    handover: Option<crate::listen_handover::ListenHandover>,
+) -> Router {
     let active_http_requests = Arc::new(AtomicUsize::new(0));
     let health_active_http_requests = Arc::clone(&active_http_requests);
     let active_provider_turns = Arc::new(AtomicUsize::new(0));
@@ -42,12 +52,19 @@ pub fn http_router(bridge: Arc<Bridge>, model: String, auth_token: Option<String
     let search_worker_routes = bridge.search_worker_routes();
     let subagent_hard_timeout_seconds = bridge.subagent_hard_timeout_seconds();
     let models = bridge.routed_models();
+    let (handover_state, admin) = handover::layer(handover.clone());
     let protected = protected_router(
         models,
         active_provider_turns,
         active_http_requests,
         auth_token,
-    );
+    )
+    .layer(middleware::from_fn_with_state(
+        handover_state,
+        handover::proxy_retained_sessions,
+    ))
+    .with_state(Arc::clone(&bridge));
+    let handover_for_health = handover;
     Router::new()
         .route(
             "/health",
@@ -57,6 +74,10 @@ pub fn http_router(bridge: Arc<Bridge>, model: String, auth_token: Option<String
                 } else {
                     StatusCode::SERVICE_UNAVAILABLE
                 };
+                let session_ids = health_bridge.active_claude_session_ids().await;
+                let listen = handover_for_health
+                    .as_ref()
+                    .map(|handover| handover.advertised_addr().to_string());
                 (
                     status,
                     Json(json!({
@@ -80,14 +101,17 @@ pub fn http_router(bridge: Arc<Bridge>, model: String, auth_token: Option<String
                         "subscription_max_processes":subscription_max_processes,
                         "subscription_timeout_minutes":subscription_timeout_minutes,
                         "subagent_hard_timeout_seconds":subagent_hard_timeout_seconds,
-                        "recovery_generation":crate::launcher::recovery_generation()
+                        "recovery_generation":crate::launcher::recovery_generation(),
+                        "listener_handover":handover_for_health.is_some(),
+                        "listen":listen,
+                        "active_claude_session_ids":session_ids
                     })),
                 )
             }),
         )
         .merge(protected)
+        .merge(admin)
         .layer(middleware::from_fn(logging::trace_http_request))
-        .with_state(bridge)
 }
 
 fn protected_router(
@@ -126,7 +150,7 @@ fn protected_router(
         .route("/v1/messages/count_tokens", post(count_tokens_handler))
         .route(
             "/v1/code/sessions/{session_id}/worker/web-search",
-            post(ccr_web_search),
+            post(web_search::ccr_web_search),
         )
         .route_layer(middleware::from_fn_with_state(
             active_http_requests,
@@ -313,65 +337,6 @@ async fn count_tokens_handler(
     };
     let input_tokens = bridge.count_tokens_with_identity(request, &identity, tools_were_provided);
     Json(json!({ "input_tokens": input_tokens })).into_response()
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct CcrWebSearchRequest {
-    query: String,
-    #[serde(default)]
-    allowed_domains: Vec<String>,
-    #[serde(default)]
-    blocked_domains: Vec<String>,
-}
-
-async fn ccr_web_search(
-    State(bridge): State<Arc<Bridge>>,
-    Path(session_id): Path<String>,
-    Json(request): Json<CcrWebSearchRequest>,
-) -> Response<axum::body::Body> {
-    if session_id.is_empty() {
-        return error_response(
-            StatusCode::BAD_REQUEST,
-            anyhow::anyhow!("session_id is empty"),
-        );
-    }
-    match bridge.run_web_search(&request.query).await {
-        Ok(mut response) => {
-            response.results.retain(|result| {
-                domain_allowed(
-                    &result.url,
-                    &request.allowed_domains,
-                    &request.blocked_domains,
-                )
-            });
-            response.search_count = u64::try_from(response.results.len()).unwrap_or(u64::MAX);
-            Json(json!({"results": response.results, "error": Value::Null})).into_response()
-        }
-        Err(error) => error_response(StatusCode::BAD_GATEWAY, error),
-    }
-}
-
-fn domain_allowed(url: &str, allowed: &[String], blocked: &[String]) -> bool {
-    let Some((scheme, rest)) = url.split_once("://") else {
-        return false;
-    };
-    if !matches!(scheme.to_ascii_lowercase().as_str(), "http" | "https") {
-        return false;
-    }
-    let host = rest
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or_default()
-        .trim()
-        .to_ascii_lowercase();
-    if host.is_empty() {
-        return false;
-    }
-    let matches = |domain: &String| {
-        let domain = domain.trim_start_matches(".").to_ascii_lowercase();
-        host == domain || host.ends_with(&format!(".{domain}"))
-    };
-    !blocked.iter().any(matches) && (allowed.is_empty() || allowed.iter().any(matches))
 }
 
 #[cfg(test)]

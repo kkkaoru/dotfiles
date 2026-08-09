@@ -1,7 +1,8 @@
 #!/bin/sh
-# Relink ~/.local/bin and arm the idle hot-swap waiter after cargo install.
-# Replacing ~/.cargo/bin/claudex-agent-adapter invalidates any waiter running
-# that inode, so install itself must re-arm for the new build_id.
+# Relink ~/.local/bin and apply the new build without waiting for canonical idle.
+# Busy listeners keep serving. Handover-capable daemons promote :port immediately;
+# legacy busy daemons get a current-build fallback + live.<port>.json + idle waiter
+# (install invalidates any waiter on the old inode).
 set -eu
 
 cargo_bin="${CARGO_HOME:-$HOME/.cargo}/bin/claudex-agent-adapter"
