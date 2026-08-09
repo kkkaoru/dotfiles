@@ -232,7 +232,7 @@
     },
     {
       "id": "command-code",
-      "agent": "claudex-command-code",
+      "agent": "claudex-command-code-muse-spark-1-2-contributor",
       "defaultModel": "meta/muse-spark-1.2-contributor",
       "subagentModel": "meta/muse-spark-1.2-contributor",
       "effort": "high",

@@ -63,7 +63,9 @@ pub fn agent_type_from_payload(payload: &Value) -> Option<&str> {
 pub fn is_command_code_agent(agent_type: Option<&str>) -> bool {
     agent_type.is_some_and(|agent| {
         let lower = agent.trim().to_ascii_lowercase();
-        lower == "claudex-command-code" || lower == "command-code"
+        lower == "command-code"
+            || lower == "claudex-command-code"
+            || lower.starts_with("claudex-command-code-")
     })
 }
 
@@ -75,6 +77,8 @@ pub fn slim_command_code_hook(event_name: &str) -> Value {
                 "<system-reminder>\n",
                 "Command Code Muse Spark worker: use native cmd tools only. ",
                 "Ignore Claudex routing tables and Claude Code skills. ",
+                "Tool chrome matches other ACP workers (▶ name: query/path/url). ",
+                "Write findings in ordinary text. Never print ツール結果待ち or 続きの調査または回答. ",
                 "Do not greet or recap git status. Complete only the delegated task.\n",
                 "</system-reminder>"
             ),
@@ -196,24 +200,37 @@ mod tests {
             "delegation_required": true,
             "direct_main_execution": "fallback-only"
         });
+        assert!(is_command_code_agent(Some(
+            "claudex-command-code-muse-spark-1-2-contributor"
+        )));
         assert!(is_command_code_agent(Some("claudex-command-code")));
         assert!(is_command_code_agent(Some("command-code")));
         assert!(!is_command_code_agent(Some("claudex-grok")));
         assert_eq!(
-            agent_type_from_payload(&json!({"agent_type":"claudex-command-code"})),
-            Some("claudex-command-code")
+            agent_type_from_payload(&json!({
+                "agent_type":"claudex-command-code-muse-spark-1-2-contributor"
+            })),
+            Some("claudex-command-code-muse-spark-1-2-contributor")
         );
         assert_eq!(
-            agent_type_from_payload(&json!({"agent":{"name":"claudex-command-code"}})),
-            Some("claudex-command-code")
+            agent_type_from_payload(&json!({
+                "agent":{"name":"claudex-command-code-muse-spark-1-2-contributor"}
+            })),
+            Some("claudex-command-code-muse-spark-1-2-contributor")
         );
-        let slim =
-            hook_output_for_agent(&summary, "SubagentStart", Some("claudex-command-code")).unwrap();
+        let slim = hook_output_for_agent(
+            &summary,
+            "SubagentStart",
+            Some("claudex-command-code-muse-spark-1-2-contributor"),
+        )
+        .unwrap();
         let ctx = slim["hookSpecificOutput"]["additionalContext"]
             .as_str()
             .unwrap();
         assert!(ctx.contains("Command Code Muse Spark"));
         assert!(ctx.contains("Do not greet"));
+        assert!(ctx.contains("▶ name: query/path/url"));
+        assert!(!ctx.contains("● status"));
         assert!(!ctx.contains("claudex-routing-local-hook"));
         assert!(!ctx.contains("selected_workers"));
         assert!(ctx.len() < 500);

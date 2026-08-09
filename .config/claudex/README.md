@@ -28,7 +28,7 @@ flowchart LR
     Hook --> Qwen[claudex-qwen\nQwen Code ACP]
     Hook --> Cursor[claudex-cursor\nCursor ACP]
     Hook --> ClineDs[claudex-cline-deepseek-flash\nClinePass ACP]
-    Hook --> CommandCode[claudex-command-code\ncmd -p Muse Spark]
+    Hook --> CommandCode[claudex-command-code-muse-spark-1-2-contributor\ncmd -p Muse Spark Contributor]
     Hook --> Sonnet[claudex-sonnet\nclaude-sonnet-5]
     Hook --> Fallback[claudex-sonnet\nClaude fallback]
     Orchestrator -. 標準機能 .-> BuiltinAdvisor[Claude Code advisor()\nadvisorModel: opus]
@@ -51,7 +51,7 @@ flowchart LR
 | OpenCode GPT Luna worker | `claudex-opencode-gpt` | `opencode-go/gpt-5.6-luna` | `max` | CodexBarのOpenCode Go枠に空きがある場合。Codexの `gpt-5.6-luna` / `claudex-gpt` とは別route |
 | Cursor worker | `claudex-cursor` | `auto` | `high` | CodexBarのCursor枠に空きがある場合。`cursor-agent --model auto --yolo acp`。modelはCLI+session/newで固定し、毎turnの `set_session_model` 再選択はしない |
 | Cline DeepSeek Flash worker | `claudex-cline-deepseek-flash` | `cline-pass/deepseek-v4-flash` | `xhigh` | ClinePass枠（CodexBar `clinepass` weekly left）。`--thinking xhigh`。OpenCode Go DeepSeekとは別 |
-| Command Code Muse Spark worker | `claudex-command-code` | `meta/muse-spark-1.2-contributor` | `high` | 明示的な SubAgent のみ。`mainProviders` には入れない（自動選択しない）。公式 `cmd -p` を `command-code-acp` が ACP 化し、既存 `configured-acp` で起動。Provider API / Meta 直接APIは使わない |
+| Command Code Muse Spark Contributor worker | `claudex-command-code-muse-spark-1-2-contributor` | `meta/muse-spark-1.2-contributor` | `high` | 明示的な SubAgent のみ。`mainProviders` には入れない（自動選択しない）。agent slug に Muse Spark 1.2 と contributor を含める（将来の Command Code 他モデルと区別）。公式 `cmd -p` を `command-code-acp` が ACP 化し、既存 `configured-acp` で起動。Provider API / Meta 直接APIは使わない |
 | Sonnet worker | `claudex-sonnet` | `claude-sonnet-5` | `high` | CodexBarのClaude枠（`usageProvider: claude`）残量。`claudex-haiku-search` と同じClaude usage leftを参照。outerがSonnet 5のときは同一modelの自動選択を抑制（明示起動と `CLAUDEX_ALLOW_SONNET_SUBAGENT=1` は可） |
 | Fallback | `claudex-sonnet` | `claude-sonnet-5` | `high` | 自動worker選択で利用可能なcapacity-managed providerがない場合 |
 | Built-in advisor | Claude Code標準 `advisor()` | `opus` | Claude Code標準 | 標準advisor policyに従う。provider capacity非依存 |
@@ -112,6 +112,8 @@ Command Code Muse Sparkは `command-code-acp --model {model} --effort {effort}` 
 `webSearchMode` は `acp-native`（Claude の巨大 system/routing を `cmd -p` に載せない）。
 agent 定義から skills を外し、`SubagentStart` hook も Command Code だけ短文 reminder にする。
 進捗（▶/✓ と `text_delta` thinking）は既存 ACP `ToolCall` / thought chunk 経由で SubAgent TUI に出ます。
+`command-code-acp` は Muse Spark の文字単位 NDJSON をまとめて流す。ツール進捗は Cursor/Qwen/Grok/Cline と同じ ACP `ToolCall` 経路（`▶ name: query/path/url` → `✓`/`✗`、無音時は `… still working · last:`）。固定文（`ツール結果待ち` / `続きの調査または回答` / `次: …`）は出さない。ネイティブ `text_delta` は live text。`api_retry` / `tool_queued` / CoT thinking は親 TUI に流さない。
+`cmd -p` stdout はバイト読み + lossy/繰り越し UTF-8 で消費し、Web 調査中の不正バイトや途中切断を ACP Internal error（`read cmd -p stdout`）にしない。
 `mainProviders` に追加すると usage 未計測のため他workerを押し出すので、既定では明示起動だけにします。
 Cline ACPは `cline --auto-approve true --thinking {effort} -P <provider> -m {model} --acp` を起動します。
 DeepSeek V4 Flashは provider `cline-pass` / model `cline-pass/deepseek-v4-flash` です（本機の
@@ -511,7 +513,7 @@ Claude Codeは `UserPromptSubmit` の `additionalContext` をmain sessionにし�
 `SubagentStart` の `additionalContext` はsubagentの会話開始前にそのセッションへ入るため、
 各routed workerは自分のネストしたAgent/Task起動用に同じsanitized context
 （`selected_workers`、`disabled_subagent_models`、メモリ方針、`worker_capacity`）を読み込めます。
-例外: `claudex-command-code` は Muse Spark に巨大 routing/skill dump を載せないため、
+例外: `claudex-command-code-muse-spark-1-2-contributor`（および将来の `claudex-command-code-*`）は Muse Spark に巨大 routing/skill dump を載せないため、
 短文 reminder だけを注入し usage collect もスキップします。
 使用量は5分キャッシュを使うためspawnごとの追加コストは小さく、denylistはadapterがAPI境界で
 常に強制します（workerが見える見えないに関わらず）。
@@ -950,10 +952,13 @@ flowchart TD
   Busy -->|yes| Defer[Defer]
   Busy -->|no| Replace["Replace: 同一port差し替え"]
   Defer --> Mode{"呼び出し?"}
-  Mode -->|ensure / launch| Fallback[fallback listener]
+  Mode -->|ensure / launch| Fallback["fallback listener + idle waiter"]
   Mode -->|hot-swap| Wait["最大45秒 drain待ち"]
   Wait -->|idleになった| Replace
-  Wait -->|timeout| Error[timeoutで失敗]
+  Wait -->|まだbusy| Arm["detached idle waiter"]
+  Arm --> IdleWait{"listener が idle?"}
+  IdleWait -->|yes| Replace
+  Fallback --> IdleWait
 ```
 
 `active work` は `active_http_requests > 0` または `active_provider_turns > 0` です。
@@ -963,9 +968,9 @@ Claude Codeは同じ `ANTHROPIC_BASE_URL`（同じport）へ接続したまま�
 
 | 入口 | idle（TUI付き含む） | busy | 備考 |
 | --- | --- | --- | --- |
-| `claudex` / `claudex-agent-adapter launch` | 同一portをReplace | Defer → 新buildのfallback listener | 新しいClaude Code sessionだけfallbackへ。既存TUIは旧portのまま |
-| `claudex-agent-adapter ensure` | 同一portをReplace | Defer → fallback | `claudex` と同じ。stdoutに使うbase URLを出す |
-| `claudex hot-swap` / `claudex-hot-swap` / `claudex-agent-adapter hot-swap` | 同一portをReplace | 最大45秒drain待ち。idleになればReplace、残ればtimeout | fallbackは立てない。同じportへ新buildを載せたいときだけ使う |
+| `claudex` / `claudex-agent-adapter launch` | 同一portをReplace | Defer → 新buildのfallback listener + idle waiter | 新しいClaude Code sessionだけfallbackへ。既存TUIは旧portのまま。waiterがidle後に本portを差し替える |
+| `claudex-agent-adapter ensure` | 同一portをReplace | Defer → fallback + idle waiter | `claudex` と同じ。stdoutに使うbase URLを出す |
+| `claudex hot-swap` / `claudex-hot-swap` / `claudex-agent-adapter hot-swap` | 同一portをReplace | 最大45秒drain待ち。idleになればReplace、残れば同一portのidle waiterをdetach起動して成功終了 | fallbackは立てない。同じportへ新buildを載せたいときだけ使う。waiterはlockを持たず `/health` を見てidleになったら差し替える |
 
 Replace時は旧serveへgraceful shutdown（SIGTERM、process groupやSIGKILLへは進めない）を送り、
 listenerが空くまで待ちます。`launch` 親プロセスには信号を送りません。新daemonの
@@ -990,9 +995,12 @@ curl --fail --silent http://127.0.0.1:8318/health | jq '{pid, build_id, status}'
 ```
 
 busy中に `claudex-hot-swap` すると、45秒以内にactive workが消えなければ
-`hot-swap timed out: adapter pid … still has active work` で失敗します。
-進行中のstreamは打ちません。turnが終わってから再実行するか、新しい `claudex`
-sessionだけ今すぐ新buildへ載せたい場合は `ensure` / `claudex` のfallbackを使います。
+timeoutでは失敗せず、`~/.cache/claudex/pending-hot-swap.<listen>.json` に状態を書いて
+`hot-swap --wait-idle` waiterをdetachします。進行中のstreamは打ちません。
+waiterはport lockを持たずにidleを待ち、同じportへReplaceします。同じbuildの
+waiterが生きていれば再spawnしません。新しい `claudex` sessionだけ今すぐ新buildへ
+載せたい場合は `ensure` / `claudex` のfallbackを使います。ensure/launchのDeferも
+同じwaiterを武装するので、本portはidle後に自動で新buildになります。
 
 `providers.json` のrouteやQwen起動引数、subscription上限、Codex credentialも
 fingerprintの対象です。credential変更後は永続app-server childへ新しい起動環境を

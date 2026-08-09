@@ -229,7 +229,7 @@ fn command_code_outside_main_providers_is_not_auto_selected() {
             },
             {
               "id": "command-code",
-              "agent": "claudex-command-code",
+              "agent": "claudex-command-code-muse-spark-1-2-contributor",
               "defaultModel": "meta/muse-spark-1.2-contributor",
               "effort": "high",
               "enabled": true,
@@ -250,7 +250,7 @@ fn command_code_outside_main_providers_is_not_auto_selected() {
     let agents = selected_agents(&summary);
     assert!(agents.contains(&"claudex-gpt-spark"));
     assert!(
-        !agents.contains(&"claudex-command-code"),
+        !agents.iter().any(|agent| agent.contains("command-code")),
         "unmetered command-code must not steal automatic selected_workers: {agents:?}"
     );
 }
