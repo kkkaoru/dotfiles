@@ -6,11 +6,13 @@ use crate::anthropic::{Bridge, MessagesRequest};
 use crate::provider_config::ModelCatalog;
 
 use super::super::segment::EMPTY_ACP_END_TURN;
-use super::{should_failover_provider_error, streaming_provider_retry};
+use super::{UsageLimitFailover, should_failover_provider_error, streaming_provider_retry};
 
 const CLINE_FLASH: &str = "cline-pass/deepseek-v4-flash";
 const QWEN_CLOUD: &str = "qwen3.8-max-preview";
 const CURSOR_AUTO: &str = "auto";
+const SPARK: &str = "gpt-5.3-codex-spark";
+const LUNA: &str = "gpt-5.6-luna";
 
 /// Exact Claude Code / TUI wording from session `fa522331-…`
 /// (`Verify r2-catalog inherited edits` / `Verify weight-triggered re-prediction`).
@@ -472,6 +474,65 @@ fn concurrency_admission_timeout_is_not_a_usage_limit_failover() {
     assert!(super::super::model_concurrency::is_concurrency_admission_timeout(&error));
 }
 
+#[test]
+fn concurrency_preflight_skips_non_subagent_and_non_provider_routes() {
+    let bridge = cline_and_qwen_bridge();
+    let mut request = dummy_request(QWEN_CLOUD);
+    let mut effort = Some("high".to_owned());
+    assert_eq!(
+        bridge.apply_concurrency_preflight(
+            &mut request,
+            RouteDecision::Provider,
+            &mut effort,
+            false,
+        ),
+        RouteDecision::Provider
+    );
+    assert_eq!(request.model, QWEN_CLOUD);
+    assert_eq!(
+        bridge.apply_concurrency_preflight(
+            &mut request,
+            RouteDecision::Subscription,
+            &mut effort,
+            true,
+        ),
+        RouteDecision::Subscription
+    );
+}
+
+#[tokio::test]
+async fn saturated_model_without_sibling_stays_on_the_same_provider() {
+    let mut qwen = BackendRoute::new(QWEN_CLOUD, BackendKind::ConfiguredAcp);
+    qwen.max_concurrency = Some(3);
+    let backend = AgentBackend::spawn_routes(&[qwen]);
+    let mut catalog = ModelCatalog::default();
+    catalog
+        .set_worker_routes(vec![crate::provider_config::WorkerRoute::new(
+            "claudex-qwen",
+            QWEN_CLOUD,
+            "high",
+        )])
+        .expect("qwen worker");
+    let bridge =
+        Bridge::new_with_backend(backend, QWEN_CLOUD.to_owned()).with_model_catalog(catalog);
+    let _permits = saturate_qwen_subagent_slots(&bridge).await;
+    let mut request = dummy_request(QWEN_CLOUD);
+    let mut effort = Some("high".to_owned());
+    let route = bridge.apply_concurrency_preflight(
+        &mut request,
+        RouteDecision::Provider,
+        &mut effort,
+        true,
+    );
+    assert_eq!(request.model, QWEN_CLOUD);
+    assert_eq!(route, RouteDecision::Provider);
+    assert!(
+        bridge
+            .reticket_after_concurrency_timeout(&mut request, &mut effort)
+            .is_none()
+    );
+}
+
 #[tokio::test]
 async fn saturated_qwen_subagent_preflight_moves_to_a_free_sibling() {
     let bridge = cline_qwen_cursor_bridge();
@@ -769,6 +830,338 @@ fn prompt_snapshot_quota_rewrites_explicit_qwen_without_cooldown() {
             true,
         )
         .expect("snapshot rewrite");
+    assert_eq!(request.model, CURSOR_AUTO);
+    assert_eq!(effort.as_deref(), Some("high"));
+    assert_eq!(route, RouteDecision::Provider);
+}
+
+#[test]
+fn should_failover_provider_error_returns_false_for_non_failover_errors() {
+    assert!(!should_failover_provider_error(&anyhow::anyhow!(
+        "Some generic error"
+    )));
+    assert!(!should_failover_provider_error(&anyhow::anyhow!(
+        "Connection timeout"
+    )));
+    assert!(!should_failover_provider_error(&anyhow::anyhow!(
+        "Model not found"
+    )));
+    assert!(!should_failover_provider_error(&anyhow::anyhow!(
+        "Invalid request format"
+    )));
+}
+
+#[test]
+fn should_failover_provider_error_returns_true_for_usage_limit() {
+    assert!(should_failover_provider_error(&anyhow::anyhow!(
+        "codex app-server turn failed: exceeded retry limit, last status: 429 Too Many Requests"
+    )));
+}
+
+#[test]
+fn should_failover_provider_error_returns_true_for_auth_failure() {
+    assert!(should_failover_provider_error(&anyhow::anyhow!(
+        "codex app-server turn failed: unexpected status 401 Unauthorized: Invalid API key"
+    )));
+}
+
+#[test]
+fn should_failover_provider_error_returns_true_for_empty_acp_billing() {
+    assert!(should_failover_provider_error(&anyhow::anyhow!(
+        EMPTY_ACP_END_TURN
+    )));
+}
+
+#[test]
+fn streaming_provider_retry_returns_none_for_subscription_failover() {
+    let subscription_failover = Some(UsageLimitFailover {
+        model: "claude-opus-5".to_owned(),
+        effort: Some("high".to_owned()),
+        route: RouteDecision::Subscription,
+    });
+    assert!(streaming_provider_retry(subscription_failover).is_none());
+}
+
+#[test]
+fn streaming_provider_retry_returns_some_for_provider_failover() {
+    let provider_failover = Some(UsageLimitFailover {
+        model: QWEN_CLOUD.to_owned(),
+        effort: Some("high".to_owned()),
+        route: RouteDecision::Provider,
+    });
+    let retry = streaming_provider_retry(provider_failover).expect("provider should stream-retry");
+    assert_eq!(retry.model, QWEN_CLOUD);
+    assert_eq!(retry.route, RouteDecision::Provider);
+}
+
+#[test]
+fn streaming_provider_retry_returns_none_for_none_failover() {
+    assert!(streaming_provider_retry(None).is_none());
+}
+
+#[test]
+fn subagent_provider_failover_for_non_acp_returns_none() {
+    let backend = AgentBackend::spawn_routes(&[BackendRoute::new(
+        "claude-opus-5",
+        BackendKind::CodexAppServer,
+    )]);
+    let bridge = Bridge::new_with_backend(backend, "claude-opus-5".to_owned());
+    assert!(
+        bridge
+            .subagent_provider_failover_for("claude-opus-5")
+            .is_none()
+    );
+}
+
+#[test]
+fn usage_limit_failover_for_returns_configured_fallback() {
+    let backend =
+        AgentBackend::spawn_routes(&[BackendRoute::new(CLINE_FLASH, BackendKind::ConfiguredAcp)]);
+    let mut catalog = ModelCatalog::default();
+    catalog
+        .set_auxiliary_worker_routes(vec![crate::provider_config::WorkerRoute::new(
+            "claudex-sonnet",
+            "claude-sonnet-5",
+            "high",
+        )])
+        .expect("install fallback");
+    let bridge =
+        Bridge::new_with_backend(backend, CLINE_FLASH.to_owned()).with_model_catalog(catalog);
+    let failover = bridge
+        .usage_limit_failover_for(CLINE_FLASH)
+        .expect("fallback target");
+    assert_eq!(failover.model, "claude-sonnet-5");
+    assert_eq!(failover.effort.as_deref(), Some("high"));
+}
+
+#[test]
+fn failover_for_stream_turn_subagent_true_uses_provider_then_subscription() {
+    let bridge = cline_and_qwen_bridge();
+    let sibling = bridge
+        .failover_for_stream_turn(CLINE_FLASH, true)
+        .expect("subagent stream failover");
+    assert_eq!(sibling.route, RouteDecision::Provider);
+}
+
+#[test]
+fn failover_for_stream_turn_subagent_false_uses_subscription() {
+    let bridge = cline_and_qwen_bridge();
+    let subscription = bridge
+        .failover_for_stream_turn(CLINE_FLASH, false)
+        .expect("outer stream failover");
+    assert_eq!(subscription.route, RouteDecision::Subscription);
+}
+
+#[test]
+fn model_uses_codex_app_server_true_branch() {
+    let backend =
+        AgentBackend::spawn_routes(&[BackendRoute::new("fugu", BackendKind::CodexAppServer)]);
+    let bridge = Bridge::new_with_backend(backend, "fugu".to_owned());
+    assert!(bridge.model_uses_codex_app_server("fugu"));
+}
+
+#[test]
+fn model_uses_codex_app_server_false_branch() {
+    let bridge = cline_and_qwen_bridge();
+    assert!(!bridge.model_uses_codex_app_server(CLINE_FLASH));
+    assert!(!bridge.model_uses_codex_app_server(QWEN_CLOUD));
+}
+
+#[test]
+fn apply_usage_limit_preflight_skips_subagent() {
+    let bridge = cline_and_qwen_bridge();
+    let mut request = dummy_request(CLINE_FLASH);
+    let mut effort = None;
+    let route = bridge.apply_usage_limit_preflight(
+        &mut request,
+        RouteDecision::Provider,
+        &mut effort,
+        true,
+    );
+    assert_eq!(request.model, CLINE_FLASH);
+    assert_eq!(route, RouteDecision::Provider);
+}
+
+#[test]
+fn apply_usage_limit_preflight_skips_non_provider_route() {
+    let bridge = cline_and_qwen_bridge();
+    let mut request = dummy_request(CLINE_FLASH);
+    let mut effort = None;
+    let route = bridge.apply_usage_limit_preflight(
+        &mut request,
+        RouteDecision::Subscription,
+        &mut effort,
+        false,
+    );
+    assert_eq!(request.model, CLINE_FLASH);
+    assert_eq!(route, RouteDecision::Subscription);
+}
+
+#[test]
+fn apply_usage_limit_preflight_activates_when_auth_cooling_down() {
+    let root = tempfile::tempdir().expect("preflight auth fixture");
+    let bridge = cline_and_qwen_bridge().with_usage_limit_cache_home(root.path());
+    bridge.note_provider_exhaustion(
+        &anyhow::anyhow!("codex app-server turn failed: 401 Unauthorized"),
+        Some(CLINE_FLASH),
+    );
+    let mut request = dummy_request(CLINE_FLASH);
+    let mut effort = Some("xhigh".to_owned());
+    let route = bridge.apply_usage_limit_preflight(
+        &mut request,
+        RouteDecision::Provider,
+        &mut effort,
+        false,
+    );
+    assert_eq!(request.model, "claude-sonnet-5");
+    assert_eq!(route, RouteDecision::Subscription);
+}
+
+#[test]
+fn provider_auth_is_cooling_down_true() {
+    let root = tempfile::tempdir().expect("auth cooling fixture");
+    let bridge = cline_and_qwen_bridge().with_usage_limit_cache_home(root.path());
+    bridge.note_provider_exhaustion(
+        &anyhow::anyhow!("codex app-server turn failed: 401 Unauthorized"),
+        Some(CLINE_FLASH),
+    );
+    assert!(bridge.provider_auth_is_cooling_down(CLINE_FLASH));
+    assert!(!bridge.provider_auth_is_cooling_down(QWEN_CLOUD));
+}
+
+#[test]
+fn codex_usage_limit_is_active_true() {
+    let root = tempfile::tempdir().expect("codex limit fixture");
+    let backend = AgentBackend::spawn_routes(&[
+        BackendRoute::new("fugu", BackendKind::CodexAppServer),
+        BackendRoute::new(QWEN_CLOUD, BackendKind::ConfiguredAcp),
+    ]);
+    let bridge = Bridge::new_with_backend(backend, "fugu".to_owned())
+        .with_usage_limit_cache_home(root.path());
+    bridge.note_provider_exhaustion(
+        &anyhow::anyhow!("You've hit your usage limit."),
+        Some("fugu"),
+    );
+    assert!(bridge.codex_usage_limit_is_active("fugu"));
+    assert!(!bridge.codex_usage_limit_is_active(QWEN_CLOUD));
+}
+
+fn spark_luna_cursor_bridge() -> Bridge {
+    let backend = AgentBackend::spawn_routes(&[
+        BackendRoute::new(SPARK, BackendKind::CodexAppServer),
+        BackendRoute::new(LUNA, BackendKind::CodexAppServer),
+        BackendRoute::new(CURSOR_AUTO, BackendKind::ConfiguredAcp),
+    ]);
+    let mut catalog = ModelCatalog::default();
+    catalog
+        .set_worker_routes(vec![
+            crate::provider_config::WorkerRoute::new("claudex-gpt-spark", SPARK, "xhigh"),
+            crate::provider_config::WorkerRoute::new("claudex-gpt", LUNA, "max"),
+            crate::provider_config::WorkerRoute::new("claudex-cursor", CURSOR_AUTO, "high"),
+        ])
+        .expect("install spark workers");
+    Bridge::new_with_backend(backend, SPARK.to_owned()).with_model_catalog(catalog)
+}
+
+fn write_usage_routing_spark_low_remaining(home: &std::path::Path) {
+    let dir = home.join(".cache/claudex");
+    std::fs::create_dir_all(&dir).expect("usage-routing dir");
+    let created = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock")
+        .as_secs_f64();
+    let body = serde_json::json!({
+        "created_at": created,
+        "configuration_key": "test",
+        "summary": {
+            "providers": {
+                "codex-spark": {
+                    "available": true,
+                    "reason": "available-codex-quota",
+                    "model": SPARK,
+                    "remaining_percent": 17.0,
+                    "quota_windows": {"five-hour": null, "seven-day": 17.0}
+                },
+                "codex": {
+                    "available": true,
+                    "reason": "available-codex-quota",
+                    "model": LUNA,
+                    "remaining_percent": 98.0,
+                    "quota_windows": {"five-hour": null, "seven-day": 98.0}
+                },
+                "cursor": {
+                    "available": true,
+                    "reason": "available-cursor-quota",
+                    "model": CURSOR_AUTO,
+                    "remaining_percent": 99.9
+                }
+            },
+            "selected_workers": [{
+                "agent": "claudex-cursor",
+                "model": CURSOR_AUTO,
+                "effort": "high"
+            }],
+            "disabled_subagent_models": []
+        }
+    });
+    std::fs::write(
+        dir.join("usage-routing.json"),
+        serde_json::to_vec(&body).expect("usage-routing json"),
+    )
+    .expect("write usage-routing");
+}
+
+#[test]
+fn low_remaining_spark_is_not_exhausted_without_usage_snapshot() {
+    let root = tempfile::tempdir().expect("spark no snapshot fixture");
+    let bridge = spark_luna_cursor_bridge().with_usage_limit_cache_home(root.path());
+    assert!(
+        !bridge.subagent_provider_is_exhausted(SPARK),
+        "old behavior: spark stays launchable when CodexBar still says available"
+    );
+}
+
+#[test]
+fn low_remaining_spark_launch_rewrites_onto_cursor() {
+    // Historical TUI bug: automatic selected_workers already dropped spark at
+    // 17% weekly remaining, but explicit `claudex-gpt-spark` kept starting.
+    let root = tempfile::tempdir().expect("spark low remaining fixture");
+    write_usage_routing_spark_low_remaining(root.path());
+    let bridge = spark_luna_cursor_bridge().with_usage_limit_cache_home(root.path());
+    assert!(
+        bridge.subagent_provider_is_exhausted(SPARK),
+        "live usage-routing low remaining must cool down spark before another launch"
+    );
+    assert!(!bridge.subagent_provider_is_exhausted(LUNA));
+    assert!(!bridge.subagent_provider_is_exhausted(CURSOR_AUTO));
+
+    let mut arguments = serde_json::json!({
+        "subagent_type": "claudex-gpt-spark",
+        "claudex_model": SPARK,
+        "claudex_effort": "xhigh",
+        "prompt": "continue after low spark quota"
+    });
+    bridge.rewrite_exhausted_agent_launch_with_quota(&mut arguments, &[], &Value::Null);
+    assert_eq!(arguments["subagent_type"], "claudex-cursor");
+    assert_eq!(arguments["claudex_model"], CURSOR_AUTO);
+    assert_eq!(arguments["claudex_effort"], "high");
+}
+
+#[test]
+fn low_remaining_spark_http_subagent_rewrites_onto_cursor() {
+    let root = tempfile::tempdir().expect("spark http rewrite fixture");
+    write_usage_routing_spark_low_remaining(root.path());
+    let bridge = spark_luna_cursor_bridge().with_usage_limit_cache_home(root.path());
+    let mut request = dummy_request(SPARK);
+    let mut effort = Some("xhigh".to_owned());
+    let route = bridge
+        .rewrite_exhausted_subagent_request(
+            &mut request,
+            RouteDecision::Provider,
+            &mut effort,
+            true,
+        )
+        .expect("spark must leave onto an ACP sibling");
     assert_eq!(request.model, CURSOR_AUTO);
     assert_eq!(effort.as_deref(), Some("high"));
     assert_eq!(route, RouteDecision::Provider);

@@ -105,8 +105,10 @@ pub const AMPLE_WEEKLY_REMAINING_PERCENT: f64 = 40.0;
 /// only weekly is known, and `min(weekly, five-hour)` when a five-hour meter is
 /// present. Unknown meters (for example Ollama `available-ollama-api-only`) must
 /// not stay in the automatic pool beside peers with real headroom — reachability
-/// is not quota. Explicit model launches can still target a dropped provider via
-/// `model_prefixes` when the active user names that model.
+/// is not quota. Intentional unmetered workers such as Command Code stay in the
+/// automatic pool, ranked behind known weekly meters. Explicit model launches
+/// can still target a dropped provider via `model_prefixes` when the active user
+/// names that model.
 pub fn prefer_weekly_headroom(
     selected: Vec<Value>,
     providers: &Map<String, Value>,
@@ -130,7 +132,16 @@ pub fn prefer_weekly_headroom(
     let keep_all = !has_ample;
     let mut filtered = Vec::with_capacity(annotated.len());
     for (mut worker_item, weekly, five_hour, remaining) in annotated {
-        if !keep_all && remaining.is_none_or(|value| value < LOW_WEEKLY_REMAINING_PERCENT) {
+        let unmetered = worker_item.as_object().is_some_and(|object| {
+            worker_quota(object, providers, native_quota)
+                .and_then(|quota| quota.get("reason"))
+                .and_then(Value::as_str)
+                == Some("unmetered")
+        });
+        if !keep_all
+            && remaining.is_none_or(|value| value < LOW_WEEKLY_REMAINING_PERCENT)
+            && !unmetered
+        {
             continue;
         }
         if let Some(object) = worker_item.as_object_mut() {

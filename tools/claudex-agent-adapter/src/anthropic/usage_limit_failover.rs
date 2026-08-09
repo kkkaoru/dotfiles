@@ -275,10 +275,7 @@ impl Bridge {
         quota: Option<&serde_json::Value>,
     ) -> Option<UsageLimitFailover> {
         let exhausted_kind = self.app.backend_kind_for_model(exhausted_model)?;
-        if !matches!(
-            exhausted_kind,
-            BackendKind::ConfiguredAcp | BackendKind::GrokAcp | BackendKind::CopilotAcp
-        ) {
+        if !super::exhausted_subagent::subagent_failover_source_ok(exhausted_kind) {
             return None;
         }
         const PREFERRED: &[&str] = &["qwen3.8-max-preview"];
@@ -313,10 +310,7 @@ impl Bridge {
                 return None;
             }
             let kind = self.app.backend_kind_for_model(&model)?;
-            if !matches!(
-                kind,
-                BackendKind::ConfiguredAcp | BackendKind::GrokAcp | BackendKind::CopilotAcp
-            ) {
+            if !super::exhausted_subagent::subagent_failover_target_ok(kind) {
                 return None;
             }
             let effort = self

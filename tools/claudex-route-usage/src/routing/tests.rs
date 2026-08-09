@@ -210,11 +210,13 @@ fn selected_agents(summary: &Value) -> Vec<&str> {
 }
 
 #[test]
-fn command_code_outside_main_providers_is_not_auto_selected() {
+fn command_code_is_auto_selected_beside_metered_peers() {
+    // Historical bug: unmetered command-code was dropped whenever any peer had
+    // >=40% weekly remaining, so orchestrators never auto-launched Muse Spark.
     let config = config_from_json(
         r#"{
           "version": 1,
-          "mainProviders": ["codex"],
+          "mainProviders": ["codex", "command-code"],
           "providers": [
             {
               "id": "codex",
@@ -248,10 +250,10 @@ fn command_code_outside_main_providers_is_not_auto_selected() {
     );
     let summary = routing_summary(&report(), &config, &BTreeSet::new()).unwrap();
     let agents = selected_agents(&summary);
-    assert!(agents.contains(&"claudex-gpt-spark"));
+    assert_eq!(agents[0], "claudex-gpt-spark");
     assert!(
-        !agents.iter().any(|agent| agent.contains("command-code")),
-        "unmetered command-code must not steal automatic selected_workers: {agents:?}"
+        agents.iter().any(|agent| agent.contains("command-code")),
+        "unmetered command-code must stay in automatic selected_workers: {agents:?}"
     );
 }
 
