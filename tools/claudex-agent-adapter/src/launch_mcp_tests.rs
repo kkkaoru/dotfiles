@@ -91,6 +91,18 @@ fn reads_ndjson_and_content_length_frames_with_blank_prefixes() {
         );
     }
     assert!(read_message(&mut Cursor::new("{bad}\n")).is_err());
+
+    let ping = br#"{"jsonrpc":"2.0","id":3,"method":"ping"}"#;
+    let zero_then_ping = format!(
+        "Content-Length: 0\r\n\r\nContent-Length: {}\r\n\r\n{}",
+        ping.len(),
+        String::from_utf8_lossy(ping)
+    );
+    let (message, mode) = read_message(&mut Cursor::new(zero_then_ping))
+        .unwrap()
+        .expect("empty Content-Length must not stop the MCP server");
+    assert_eq!(message["id"], 3);
+    assert!(!mode);
 }
 
 #[test]

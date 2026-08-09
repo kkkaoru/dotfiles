@@ -70,6 +70,8 @@ fn parse_options_defaults_and_overrides() {
     assert!(Options::parse(["--unknown"]).is_err());
     assert!(Options::parse(["--model"]).is_err());
     assert!(Options::parse(["--model", ""]).is_err());
+    let defaulted = Options::parse(Vec::<&str>::new()).unwrap();
+    assert_eq!(defaulted.spec.model, DEFAULT_MODEL);
     assert!(Options::parse(["--max-turns", "0"]).is_err());
     assert!(Options::parse(["--max-turns", "nope"]).is_err());
     assert!(Options::parse(["--effort", "--high"]).is_err());
@@ -102,6 +104,26 @@ fn prefers_home_local_cmd_wrapper_when_present() {
     unsafe { std::env::set_var("HOME", home.path()) };
     let parsed = Options::parse(["--model", DEFAULT_MODEL]).unwrap();
     assert_eq!(parsed.spec.program, wrapper);
+    match previous {
+        Some(value) => unsafe { std::env::set_var("COMMAND_CODE_CMD", value) },
+        None => unsafe { std::env::remove_var("COMMAND_CODE_CMD") },
+    }
+    match previous_home {
+        Some(value) => unsafe { std::env::set_var("HOME", value) },
+        None => unsafe { std::env::remove_var("HOME") },
+    }
+}
+
+#[test]
+fn default_cmd_without_wrapper_uses_bare_cmd() {
+    let _guard = ENV_LOCK.lock().expect("env lock");
+    let previous = std::env::var_os("COMMAND_CODE_CMD");
+    let previous_home = std::env::var_os("HOME");
+    unsafe { std::env::remove_var("COMMAND_CODE_CMD") };
+    let home = TempDir::new().expect("home without wrapper");
+    unsafe { std::env::set_var("HOME", home.path()) };
+    let parsed = Options::parse(["--model", DEFAULT_MODEL]).unwrap();
+    assert_eq!(parsed.spec.program, PathBuf::from("cmd"));
     match previous {
         Some(value) => unsafe { std::env::set_var("COMMAND_CODE_CMD", value) },
         None => unsafe { std::env::remove_var("COMMAND_CODE_CMD") },
@@ -187,6 +209,43 @@ fn argv_includes_headless_flags_and_resume() {
     assert!(!argv.iter().any(|flag| flag == "--effort"));
     assert!(argv.iter().any(|flag| flag == "--no-skills"));
     assert!(argv.iter().any(|flag| flag == "--no-session"));
+}
+
+#[tokio::test]
+async fn run_turn_writes_optional_command_code_trace() {
+    let _guard = ENV_LOCK.lock().expect("env lock");
+    let root = TempDir::new().expect("trace dir");
+    let trace = root.path().join("cc-trace.json");
+    let previous = std::env::var_os("CLAUDEX_COMMAND_CODE_TRACE");
+    unsafe { std::env::set_var("CLAUDEX_COMMAND_CODE_TRACE", &trace) };
+    let program = write_executable(
+        root.path(),
+        "ok",
+        "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"finalText\":\"ok\"}'\n",
+    );
+    let outcome = run_turn_emitting(
+        &spec_with_program(program.clone()),
+        "traced-task",
+        None,
+        None,
+        Some(root.path()),
+    )
+    .await
+    .expect("traced turn");
+    assert_eq!(outcome.result.final_text, "ok");
+    let recorded = fs::read_to_string(&trace).expect("trace file");
+    assert!(
+        recorded.contains("traced-task") || recorded.contains("-p"),
+        "{recorded}"
+    );
+    unsafe { std::env::set_var("CLAUDEX_COMMAND_CODE_TRACE", "   ") };
+    run_turn(&spec_with_program(program), "blank-trace", None)
+        .await
+        .expect("blank trace env is ignored");
+    match previous {
+        Some(value) => unsafe { std::env::set_var("CLAUDEX_COMMAND_CODE_TRACE", value) },
+        None => unsafe { std::env::remove_var("CLAUDEX_COMMAND_CODE_TRACE") },
+    }
 }
 
 #[test]
@@ -395,6 +454,20 @@ fn rendered_messages(updates: &[acp::SessionUpdate]) -> String {
         .join("")
 }
 
+fn rendered_thoughts(updates: &[acp::SessionUpdate]) -> String {
+    updates
+        .iter()
+        .filter_map(|update| match update {
+            acp::SessionUpdate::AgentThoughtChunk(chunk) => match &chunk.content {
+                acp::ContentBlock::Text(text) => Some(text.text.as_str()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
 #[test]
 fn tool_raw_input_uses_shared_provider_argument_keys() {
     use super::tool_chrome::tool_raw_input;
@@ -444,14 +517,7 @@ fn progress_updates_include_thought_and_tool_chrome() {
         model: DEFAULT_MODEL.to_owned(),
         effort: None,
     });
-    assert!(matches!(started[0], acp::SessionUpdate::ToolCall(_)));
-    assert!(
-        !started
-            .iter()
-            .any(|update| matches!(update, acp::SessionUpdate::AgentThoughtChunk(_)))
-    );
-    assert!(first_tool_call(&started).title.contains("Command Code"));
-    assert!(rendered_messages(&started).is_empty());
+    assert!(started.is_empty());
     let running = progress_to_updates(&ProgressEvent::ToolStarted {
         id: "t1".to_owned(),
         name: "read_file".to_owned(),
@@ -515,12 +581,14 @@ fn progress_updates_include_thought_and_tool_chrome() {
     ));
     assert!(rendered_messages(&message).contains("AVITA report"));
     let status = progress_to_updates(&ProgressEvent::Status("検索中: AVITA".to_owned()));
-    assert!(rendered_messages(&status).contains("検索中: AVITA"));
-    assert!(!rendered_messages(&status).contains("ツール結果待ち"));
+    assert!(rendered_thoughts(&status).contains("検索中: AVITA"));
+    assert!(rendered_messages(&status).is_empty());
     let thought = progress_to_updates(&ProgressEvent::Thought("planning".to_owned()));
-    assert!(thought.is_empty());
+    assert!(rendered_thoughts(&thought).contains("planning"));
+    assert!(rendered_messages(&thought).is_empty());
     let thought_status = progress_to_updates(&ProgressEvent::Thought("● 検索中".to_owned()));
-    assert!(rendered_messages(&thought_status).contains("● 検索中"));
+    assert!(rendered_thoughts(&thought_status).contains("● 検索中"));
+    assert!(rendered_messages(&thought_status).is_empty());
     let canned = progress_to_updates(&ProgressEvent::Message(
         "● 実行中: web_search。次: ツール結果待ち".to_owned(),
     ));
@@ -568,17 +636,13 @@ fn drops_canned_command_code_status_phrases() {
 }
 
 #[test]
-fn cancel_updates_settle_turn_and_emit_visible_text() {
+fn cancel_updates_emit_visible_text_without_turn_chrome() {
     let updates = turn_cancelled_updates();
     assert!(rendered_messages(&updates).contains("Command Code cancelled"));
     assert!(
         updates
             .iter()
-            .any(|update| matches!(update, acp::SessionUpdate::ToolCallUpdate(_)))
-    );
-    assert_eq!(
-        first_tool_update(&updates).fields.status,
-        Some(acp::ToolCallStatus::Failed)
+            .all(|update| !matches!(update, acp::SessionUpdate::ToolCallUpdate(_)))
     );
 }
 
@@ -742,6 +806,165 @@ fn slim_prompt_keeps_task_when_reminder_is_unclosed_and_truncates() {
     assert!(empty.is_empty(), "{empty}");
 }
 
+#[test]
+fn slim_prompt_filters_every_instruction_prefix_and_falls_back() {
+    let slim = slim_headless_prompt(
+        "\n\
+claudex-routing dump\n\
+selected_workers appear here\n\
+ctx-agent-history-search dump\n\
+You are the model inside the Claude Code agent harness.\n\
+You are a provider-native ACP worker.\n\
+Claudex SubAgent routing on ACP.\n\
+Claudex provider-native ACP.\n\
+Command Code Muse Spark worker.\n\
+Ignore Claudex routing tables.\n\
+Keep this delegated task.\n",
+    );
+    assert_eq!(slim, "Keep this delegated task.");
+    let fallback = slim_headless_prompt(
+        "claudex_effort: high\nYou are the model inside Claudex on ACP.\nShared-workspace safety is mandatory.\n",
+    );
+    assert!(
+        fallback.contains("You are the model inside Claudex")
+            || fallback.contains("Shared-workspace safety"),
+        "{fallback}"
+    );
+    assert!(!fallback.contains("claudex_effort"));
+}
+
+#[test]
+fn collect_text_walks_arrays_objects_and_ignores_other_json() {
+    let request = acp::PromptRequest::new(
+        "session",
+        vec![
+            acp::ContentBlock::Text(acp::TextContent::new("alpha")),
+            acp::ContentBlock::Text(acp::TextContent::new("")),
+        ],
+    );
+    let wrapped = prompt_text(&request);
+    assert!(wrapped.starts_with("alpha"));
+    assert!(slim_headless_prompt("   \n\n").is_empty());
+}
+
+#[test]
+fn coalesces_on_newlines_and_ascii_punctuation() {
+    let mut coalescer = ProgressCoalescer::default();
+    assert_eq!(
+        coalescer.push(ProgressEvent::Message("line\n".to_owned())),
+        vec![ProgressEvent::Message("line\n".to_owned())]
+    );
+    assert_eq!(
+        coalescer.push(ProgressEvent::Thought("done!".to_owned())),
+        vec![ProgressEvent::Thought("done!".to_owned())]
+    );
+    assert_eq!(
+        coalescer.push(ProgressEvent::Thought("ok?".to_owned())),
+        vec![ProgressEvent::Thought("ok?".to_owned())]
+    );
+    assert_eq!(
+        coalescer.push(ProgressEvent::Message("調査完了！".to_owned())),
+        vec![ProgressEvent::Message("調査完了！".to_owned())]
+    );
+    assert_eq!(
+        coalescer.push(ProgressEvent::Message("次は？".to_owned())),
+        vec![ProgressEvent::Message("次は？".to_owned())]
+    );
+    assert_eq!(
+        remaining_final_message("REPORT", "other live text"),
+        Some("REPORT".to_owned())
+    );
+    assert_eq!(remaining_final_message("hello world", "hello world"), None);
+    assert_eq!(remaining_final_message("hello ", "hello"), None);
+}
+
+#[test]
+fn events_cover_canned_variants_result_shapes_and_previews() {
+    assert!(
+        rendered_thoughts(&progress_to_updates(&ProgressEvent::Thought(
+            "plain thinking".to_owned()
+        )))
+        .contains("plain thinking")
+    );
+    assert!(
+        rendered_thoughts(&progress_to_updates(&ProgressEvent::Thought(
+            "▶ searching AVITA".to_owned()
+        )))
+        .contains("searching AVITA")
+    );
+    assert!(
+        rendered_messages(&progress_to_updates(&ProgressEvent::Thought(
+            "▶ searching AVITA".to_owned()
+        )))
+        .is_empty()
+    );
+    for canned in [
+        "次: タスク実行",
+        "次: ツールまたは回答",
+        "次: トークン待ち",
+        "次: 別手段または報告",
+        "次: 中断",
+        "起動: Command Code headless",
+        "実行中: web_search。次: 読む",
+        "完了: Read。次: 書く",
+        "失敗: shell。次: 報告",
+    ] {
+        assert!(
+            progress_to_updates(&ProgressEvent::Status(canned.to_owned())).is_empty(),
+            "{canned}"
+        );
+    }
+    let ok = super::events::TurnResult {
+        subtype: "success".to_owned(),
+        session_id: None,
+        stop_reason: Some("end_turn".to_owned()),
+        final_text: "   ".to_owned(),
+        error: None,
+    };
+    assert!(!super::events::result_is_error(&ok));
+    assert!(super::events::result_message(&ok).is_empty());
+    let stop_error = super::events::TurnResult {
+        subtype: "success".to_owned(),
+        session_id: None,
+        stop_reason: Some("error".to_owned()),
+        final_text: String::new(),
+        error: None,
+    };
+    assert!(super::events::result_is_error(&stop_error));
+    let subtype = super::events::TurnResult {
+        subtype: "cancelled".to_owned(),
+        session_id: None,
+        stop_reason: None,
+        final_text: String::new(),
+        error: None,
+    };
+    assert!(super::events::result_message(&subtype).contains("cancelled"));
+    let long_query = "x".repeat(90);
+    let line = format!(
+        r#"{{"type":"event","event":{{"type":"tool_running","toolCallId":"t1","toolName":"web_search","arguments":{{"q":"{long_query}"}}}}}}"#
+    );
+    assert!(matches!(
+        parse_stdout_line(&line),
+        ParsedLine::Progress(ProgressEvent::ToolStarted { description, .. })
+            if description.as_deref().is_some_and(|text| text.ends_with('…'))
+    ));
+    assert!(matches!(
+        parse_stdout_line(
+            r#"{"type":"event","event":{"type":"tool_running","toolName":"read_file","arguments":["not-an-object"]}}"#
+        ),
+        ParsedLine::Progress(ProgressEvent::ToolStarted {
+            description: None,
+            ..
+        })
+    ));
+    let ParsedLine::Result(number_error) =
+        parse_stdout_line(r#"{"type":"result","subtype":"error","error":12}"#)
+    else {
+        panic!("expected numeric error");
+    };
+    assert_eq!(number_error.error.as_deref(), Some("12"));
+}
+
 #[tokio::test]
 async fn run_turn_emits_started_before_cmd_exits() {
     let root = TempDir::new().expect("slow cmd dir");
@@ -848,6 +1071,16 @@ async fn run_turn_maps_auth_and_max_turn_exit_codes() {
             .as_deref()
             .is_some_and(|error| error.contains("no adjustable reasoning effort"))
     );
+
+    let crlf_stderr = write_executable(
+        root.path(),
+        "crlf-stderr",
+        "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"finalText\":\"STDERR_OK\"}'\nprintf 'warn\\r\\nmore\\n' >&2\nexit 0\n",
+    );
+    let outcome = run_turn(&spec_with_program(crlf_stderr), "hi", None)
+        .await
+        .expect("stderr crlf is drained with stdout");
+    assert_eq!(outcome.result.final_text, "STDERR_OK");
 
     let unknown = write_executable(root.path(), "unknown", "#!/bin/sh\nexit 42\n");
     let outcome = run_turn(&spec_with_program(unknown), "hi", None)

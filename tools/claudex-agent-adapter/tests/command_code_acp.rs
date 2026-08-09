@@ -151,7 +151,7 @@ fn traced_args(trace: &Path) -> String {
 }
 
 #[test]
-fn providers_json_registers_command_code_without_auto_selecting_it() {
+fn providers_json_registers_command_code_for_automatic_selection() {
     let config: Value = serde_json::from_str(
         &fs::read_to_string(repository_root().join(".config/claudex/providers.json"))
             .expect("providers.json"),
@@ -191,8 +191,8 @@ fn providers_json_registers_command_code_without_auto_selecting_it() {
         .filter_map(Value::as_str)
         .collect::<Vec<_>>();
     assert!(
-        !main.contains(&"command-code"),
-        "command-code must stay out of automatic mainProviders so existing workers are unchanged"
+        main.contains(&"command-code"),
+        "command-code must be an automatic mainProviders candidate: {main:?}"
     );
     let definition = fs::read_to_string(
         repository_root().join(".claude/agents/claudex-command-code-muse-spark-1-2-contributor.md"),
@@ -257,7 +257,7 @@ async fn streamed_turn_paints_shared_read_chrome_before_end_turn() {
         &mut response,
         &mut stream,
         "LIVE_DELTA_BEFORE_SLEEP",
-        "stream ended before live text_delta",
+        "stream ended before live chrome",
     )
     .await;
     let first_text_at = started.elapsed();
@@ -448,7 +448,7 @@ async fn max_concurrency_two_queues_the_third_command_code_turn() {
         let client = client.clone();
         let url = adapter.url.clone();
         requests.push(tokio::spawn(async move {
-            client
+            let response = client
                 .post(url)
                 .json(&json!({
                     "model": MODEL,
@@ -458,17 +458,22 @@ async fn max_concurrency_two_queues_the_third_command_code_turn() {
                 }))
                 .send()
                 .await
-                .expect("send concurrent command-code turn")
-                .error_for_status()
-                .expect("concurrent turn status")
+                .expect("send concurrent command-code turn");
+            let status = response.status();
+            let body = response
                 .json::<Value>()
                 .await
-                .expect("decode concurrent turn")
+                .expect("decode concurrent turn");
+            assert!(
+                status.is_success(),
+                "concurrent turn status {status}: {body}"
+            );
+            body
         }));
     }
 
     let mut last_health = Value::Null;
-    let saturated = tokio::time::timeout(Duration::from_secs(8), async {
+    let saturated = tokio::time::timeout(Duration::from_secs(20), async {
         loop {
             last_health = client
                 .get(&adapter.health_url)

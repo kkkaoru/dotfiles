@@ -4,8 +4,6 @@ use serde_json::{Value, json};
 
 use super::tool_chrome::{tool_kind, tool_raw_input};
 
-pub const TURN_TOOL_ID: &str = "command-code-turn";
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ProgressEvent {
     Started {
@@ -178,18 +176,7 @@ fn parse_event(event: WireEvent) -> ParsedLine {
 
 pub fn progress_to_updates(event: &ProgressEvent) -> Vec<acp::SessionUpdate> {
     match event {
-        ProgressEvent::Started { model, effort } => {
-            let effort = effort
-                .as_deref()
-                .map(|value| format!(", effort={value}"))
-                .unwrap_or_default();
-            let title = format!("Command Code ({model}{effort})");
-            vec![acp::SessionUpdate::ToolCall(
-                acp::ToolCall::new(TURN_TOOL_ID, title)
-                    .kind(acp::ToolKind::Other)
-                    .status(acp::ToolCallStatus::InProgress),
-            )]
-        }
+        ProgressEvent::Started { .. } => Vec::new(),
         ProgressEvent::ToolStarted {
             id,
             name,
@@ -225,13 +212,15 @@ pub fn progress_to_updates(event: &ProgressEvent) -> Vec<acp::SessionUpdate> {
                 acp::ToolCallUpdate::new(id.clone(), fields),
             )]
         }
-        ProgressEvent::Thought(text)
-            if has_status_prefix(text.trim()) && !is_canned_progress(text) =>
-        {
-            vec![native_message(text)]
+        ProgressEvent::Thought(text) | ProgressEvent::Status(text) if !is_canned_progress(text) => {
+            vec![thought_chunk(text)]
         }
-        ProgressEvent::Status(text) | ProgressEvent::Message(text) if !is_canned_progress(text) => {
-            vec![native_message(text)]
+        ProgressEvent::Message(text) if !is_canned_progress(text) => {
+            if has_status_prefix(text.trim()) {
+                vec![thought_chunk(text)]
+            } else {
+                vec![native_message(text)]
+            }
         }
         ProgressEvent::Thought(_)
         | ProgressEvent::Status(_)
@@ -264,23 +253,7 @@ pub fn result_is_error(result: &TurnResult) -> bool {
 }
 
 pub fn turn_cancelled_updates() -> Vec<acp::SessionUpdate> {
-    vec![
-        native_message("Command Code cancelled"),
-        turn_settled_update(true),
-    ]
-}
-
-pub fn turn_settled_update(failed: bool) -> acp::SessionUpdate {
-    acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new(
-        TURN_TOOL_ID,
-        acp::ToolCallUpdateFields::new()
-            .status(if failed {
-                acp::ToolCallStatus::Failed
-            } else {
-                acp::ToolCallStatus::Completed
-            })
-            .title("Command Code"),
-    ))
+    vec![native_message("Command Code cancelled")]
 }
 
 fn event_text(event: &WireEvent) -> Option<String> {
@@ -296,6 +269,12 @@ fn ensure_trailing_newline(text: &str) -> String {
 
 fn native_message(text: &str) -> acp::SessionUpdate {
     message(ensure_trailing_newline(text.trim()))
+}
+
+fn thought_chunk(text: &str) -> acp::SessionUpdate {
+    acp::SessionUpdate::AgentThoughtChunk(acp::ContentChunk::new(acp::ContentBlock::Text(
+        acp::TextContent::new(ensure_trailing_newline(text.trim())),
+    )))
 }
 
 fn is_canned_progress(text: &str) -> bool {

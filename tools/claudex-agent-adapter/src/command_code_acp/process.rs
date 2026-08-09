@@ -46,7 +46,35 @@ pub async fn run_turn_emitting(
         .stderr
         .take()
         .context("command-code headless stderr is unavailable")?;
-    let stderr_task = tokio::spawn(async move { read_stderr(stderr).await });
+    // current_thread + LocalSet (command-code-acp) does not poll `tokio::spawn`
+    // while a local prompt is running. Drain stdout/stderr on this task instead
+    // so a full stderr pipe cannot deadlock cmd, and llvm-cov/LocalSet cannot
+    // strand the reader.
+    let stdout_drain = drain_stdout(spec, sink, stdout);
+    let ((progress, result, stdout_error), stderr_text) =
+        tokio::join!(stdout_drain, read_stderr(stderr));
+    let status = child.wait().await.context("wait for cmd -p")?;
+    let exit_code = status.code();
+    let result = result.unwrap_or_else(|| {
+        fallback_after_stdout(
+            exit_code,
+            status.success(),
+            stderr_text.trim(),
+            stdout_error.as_ref(),
+        )
+    });
+    Ok(TurnOutcome {
+        progress,
+        result,
+        exit_code,
+    })
+}
+
+async fn drain_stdout(
+    spec: &LaunchSpec,
+    sink: Option<mpsc::UnboundedSender<ProgressEvent>>,
+    stdout: impl AsyncRead + Unpin,
+) -> (Vec<ProgressEvent>, Option<TurnResult>, Option<io::Error>) {
     let mut reader = BufReader::new(stdout);
     let mut progress = Vec::new();
     let mut coalescer = ProgressCoalescer::default();
@@ -96,22 +124,7 @@ pub async fn run_turn_emitting(
     for event in coalescer.finish() {
         push_progress(&mut progress, sink.as_ref(), event);
     }
-    let status = child.wait().await.context("wait for cmd -p")?;
-    let stderr_text = stderr_task.await.unwrap_or_else(|_| String::new());
-    let exit_code = status.code();
-    let result = result.unwrap_or_else(|| {
-        fallback_after_stdout(
-            exit_code,
-            status.success(),
-            stderr_text.trim(),
-            stdout_error.as_ref(),
-        )
-    });
-    Ok(TurnOutcome {
-        progress,
-        result,
-        exit_code,
-    })
+    (progress, result, stdout_error)
 }
 
 fn push_coalesced(

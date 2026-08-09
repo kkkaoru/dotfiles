@@ -114,7 +114,7 @@ fn wait_for_release_then_succeed() {
     let release = env::var("COMMAND_CODE_CMD_MOCK_RELEASE").unwrap_or_default();
     let started = std::time::Instant::now();
     while !release.is_empty() && !PathBuf::from(&release).exists() {
-        if started.elapsed() > Duration::from_secs(8) {
+        if started.elapsed() > Duration::from_secs(30) {
             break;
         }
         thread::sleep(Duration::from_millis(20));

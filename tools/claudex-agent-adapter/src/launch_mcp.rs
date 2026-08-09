@@ -202,13 +202,13 @@ fn read_message(reader: &mut impl BufRead) -> Result<Option<(Value, bool)>> {
             return Ok(None);
         }
     }
-    let length = headers
+    let Some(length) = headers
         .get("content-length")
         .and_then(|value| value.parse::<usize>().ok())
-        .unwrap_or(0);
-    if length == 0 {
-        return Ok(None);
-    }
+        .filter(|length| *length > 0)
+    else {
+        return read_message(reader);
+    };
     let mut body = vec![0_u8; length];
     io::Read::read_exact(reader, &mut body)?;
     Ok(Some((serde_json::from_slice(&body)?, false)))

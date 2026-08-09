@@ -49,6 +49,13 @@ async fn preempt_busy_matching_session(
     let user_id = request.metadata.get("user_id").and_then(Value::as_str);
     let (session, prior_len) =
         find_busy_matching_session(sessions, signature, messages, model, user_id).await?;
+    if prior_len == 0 {
+        // An in-flight first turn still has an empty transcript. That prefix
+        // matches every new request, so preemption would cancel independent
+        // parallel outer turns (Command Code maxConcurrency, multi-tab). Real
+        // follow-ups arrive after at least one committed transcript entry.
+        return None;
+    }
     tracing::info!(
         thread_id = %session.thread_id,
         prior_transcript_len = prior_len,
@@ -132,6 +139,30 @@ mod tests {
             .expect("unsupported cancellation must not wait on the busy gate")
             .expect("preemption task");
         assert!(selected.is_none());
+        drop(gate);
+        app.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn does_not_preempt_a_busy_first_turn_for_a_parallel_request() {
+        let app = test_app().await;
+        let busy = session("main-model", Some("client"));
+        busy.transcript.lock().await.clear();
+        let gate = Arc::clone(&busy.gate).lock_owned().await;
+        let mut parallel = request("main-model");
+        parallel.messages = vec![json!({"role":"user","content":"independent"})];
+        assert!(
+            select_matching_session(
+                vec![busy],
+                &parallel,
+                &Arc::from("signature"),
+                &parallel.messages,
+                &app,
+            )
+            .await
+            .is_none(),
+            "parallel first turns must not cancel each other"
+        );
         drop(gate);
         app.shutdown().await;
     }

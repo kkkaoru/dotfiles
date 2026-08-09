@@ -6,7 +6,7 @@ use std::{
 
 use agent_client_protocol::{self as acp, Client as _};
 use anyhow::Result;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio::task::AbortHandle;
 use tokio_util::compat::{TokioAsyncReadCompatExt as _, TokioAsyncWriteCompatExt as _};
 use uuid::Uuid;
@@ -15,7 +15,6 @@ use super::{
     coalesce::{message_text_from_progress, remaining_final_message},
     events::{
         TurnResult, progress_to_updates, result_is_error, result_message, turn_cancelled_updates,
-        turn_settled_update,
     },
     options::Options,
     prompt::prompt_text,
@@ -32,6 +31,7 @@ struct HeadlessAgent {
     session_cwds: RefCell<HashMap<String, PathBuf>>,
     cancelled: RefCell<HashMap<String, bool>>,
     running: RefCell<HashMap<String, AbortHandle>>,
+    prompt_lock: Mutex<()>,
 }
 
 impl HeadlessAgent {
@@ -152,6 +152,9 @@ impl HeadlessAgent {
     }
 
     async fn handle_prompt(&self, request: acp::PromptRequest) -> acp::Result<acp::PromptResponse> {
+        // One stdio ACP agent cannot run overlapping cmd -p prompts; concurrent
+        // prompt() RPCs used to interleave JSON-RPC and 502 under load/llvm-cov.
+        let _prompt = self.prompt_lock.lock().await;
         let session_key = Self::session_key(&request.session_id);
         if self.take_cancelled(&session_key) {
             return Ok(acp::PromptResponse::new(acp::StopReason::Cancelled));
@@ -266,9 +269,6 @@ async fn emit_result(
     streamed_message: &str,
 ) -> acp::Result<acp::PromptResponse> {
     let failed = result_is_error(result);
-    agent
-        .notify(session_id.clone(), turn_settled_update(failed))
-        .await?;
     let text = result_message(result);
     if let Some(text) = remaining_final_message(&text, streamed_message) {
         agent
@@ -313,6 +313,7 @@ where
         session_cwds: RefCell::new(HashMap::new()),
         cancelled: RefCell::new(HashMap::new()),
         running: RefCell::new(HashMap::new()),
+        prompt_lock: Mutex::new(()),
     };
     let (connection, io) =
         acp::AgentSideConnection::new(agent, stdout.compat_write(), stdin.compat(), |future| {

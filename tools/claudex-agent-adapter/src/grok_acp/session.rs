@@ -360,4 +360,39 @@ mod tests {
         })));
         assert!(!params_offer_launch_tools(&json!({})));
     }
+
+    #[test]
+    fn injects_launch_mcp_when_agent_tools_are_offered() {
+        let previous_home = std::env::var_os("HOME");
+        let home = tempfile::tempdir().expect("launch mcp home");
+        unsafe { std::env::set_var("HOME", home.path()) };
+        let servers = launch_mcp_servers(&json!({
+            "dynamicTools":[{"name":"Agent","description":"Launch a SubAgent"}]
+        }));
+        assert_eq!(servers.len(), 1);
+        match &servers[0] {
+            acp::McpServer::Stdio(stdio) => {
+                assert_eq!(stdio.name, LAUNCH_MCP_NAME);
+                assert!(stdio.args.iter().any(|arg| arg == LAUNCH_MCP_COMMAND));
+                assert!(
+                    stdio
+                        .env
+                        .iter()
+                        .any(|var| var.name == "CLAUDEX_LAUNCH_MCP_LOG")
+                );
+                assert!(
+                    stdio
+                        .env
+                        .iter()
+                        .any(|var| var.name == "CLAUDEX_LAUNCH_QUEUE")
+                );
+            }
+            other => panic!("expected stdio MCP, got {other:?}"),
+        }
+        assert!(launch_mcp_servers(&json!({})).is_empty());
+        match previous_home {
+            Some(value) => unsafe { std::env::set_var("HOME", value) },
+            None => unsafe { std::env::remove_var("HOME") },
+        }
+    }
 }
