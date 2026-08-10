@@ -46,7 +46,12 @@ pub(super) fn resolve_request_model_with_origin(
     // True when the model matches any provider identity declared in config (enabled or not).
     is_declared_provider_model: impl Fn(&str) -> bool,
 ) -> Result<RouteDecision> {
-    if origin.is_subagent && (!origin.intent_matched || model_override.is_none()) {
+    // Stream painting may still treat historical `cc_is_subagent` as a child so
+    // Muse Spark keeps live Thinking. Model routing must not: a session_id-only
+    // transport header means the outer main asked for this model.
+    let is_subagent =
+        super::request_identity::authoritative_is_subagent(request).unwrap_or(origin.is_subagent);
+    if is_subagent && (!origin.intent_matched || model_override.is_none()) {
         tracing::warn!(
             request_model = %request.model,
             intent_matched = origin.intent_matched,
@@ -69,13 +74,13 @@ pub(super) fn resolve_request_model_with_origin(
     {
         request.model = model;
     }
-    if origin.is_subagent
+    if is_subagent
         && (!has_model_override || origin.model_is_inherited)
         && request.model == CLAUDE_LONG_CONTEXT_MODEL
     {
         return Ok(RouteDecision::Subscription);
     }
-    if origin.is_subagent
+    if is_subagent
         && (!has_model_override || origin.model_is_inherited)
         && let Some(model) = normalize_claude_model_to_haiku(&request.model)
     {
@@ -98,12 +103,12 @@ pub(super) fn resolve_request_model_with_origin(
         return Ok(RouteDecision::Subscription);
     }
 
-    apply_disabled_model_policy(request, origin.is_subagent)?;
+    apply_disabled_model_policy(request, is_subagent)?;
 
     let explicit_native_claude = has_model_override
         && !origin.model_is_inherited
         && normalize_claude_model_to_haiku(&request.model).is_some();
-    if origin.is_subagent && !explicit_native_claude && !supports_model(&request.model) {
+    if is_subagent && !explicit_native_claude && !supports_model(&request.model) {
         bail!(
             "SubAgent model `{}` does not have a recoverable configured route and must not be launched",
             request.model

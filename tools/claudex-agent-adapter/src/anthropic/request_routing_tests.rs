@@ -351,6 +351,87 @@ mod tests {
     }
 
     #[test]
+    fn session_id_header_keeps_oversized_outer_claude_model() {
+        let mut request = request("claude-fable-5", &[]);
+        request.system = json!(
+            "cc_is_subagent=true\n<claudex-agent-id>archived-system-agent</claudex-agent-id>"
+        );
+        request.messages = vec![json!({
+            "role": "user",
+            "content": "x".repeat(400_000)
+        })];
+        crate::anthropic::RequestIdentity::new(
+            Some("outer-model-authority".to_owned()),
+            None,
+            None,
+        )
+        .attach(&mut request);
+
+        let decision = resolve_request_model(
+            &mut request,
+            "gpt-5.6-luna",
+            true,
+            false,
+            None,
+            |_| false,
+            |_| false,
+        )
+        .expect("session_id-only outer continue must keep the requested Claude model");
+        assert_eq!(decision, RouteDecision::Subscription);
+        assert_eq!(request.model, "claude-fable-5");
+    }
+
+    #[test]
+    fn session_id_header_keeps_a_provider_model_disabled_only_for_subagents() {
+        let mut request = request("gpt-5.6-luna", &["gpt-5.6-luna"]);
+        request.system =
+            json!("cc_is_subagent=true\n<claudex-agent-id>archived-child</claudex-agent-id>");
+        crate::anthropic::RequestIdentity::new(Some("main-session-only".to_owned()), None, None)
+            .attach(&mut request);
+
+        let decision = resolve_request_model(
+            &mut request,
+            "gpt-5.6-luna",
+            true,
+            false,
+            None,
+            |model| model == "gpt-5.6-luna",
+            |_| false,
+        )
+        .expect("outer main may use a model that is disabled only for SubAgents");
+        assert_eq!(decision, RouteDecision::Provider);
+        assert_eq!(request.model, "gpt-5.6-luna");
+    }
+
+    #[test]
+    fn agent_id_header_still_rewrites_an_oversized_native_child() {
+        let mut request = request("claude-fable-5", &[]);
+        request.messages = vec![json!({
+            "role": "user",
+            "content": "x".repeat(400_000)
+        })];
+        crate::anthropic::RequestIdentity::new(
+            Some("main-session".to_owned()),
+            Some("agent-child".to_owned()),
+            None,
+        )
+        .attach(&mut request);
+
+        let decision = resolve_request_model(
+            &mut request,
+            "gpt-5.6-luna",
+            true,
+            false,
+            None,
+            |_| false,
+            |_| false,
+        )
+        .expect("a live child still uses the long-context subscription model");
+        assert_eq!(decision, RouteDecision::Subscription);
+        assert_eq!(request.model, super::models::CLAUDE_LONG_CONTEXT_MODEL);
+    }
+
+    #[test]
     fn routes_an_oversized_native_subagent_to_the_long_context_model() {
         let mut oversized = request("claude-sonnet-5", &[]);
         oversized.messages = vec![json!({

@@ -10,7 +10,6 @@ const OUTER_MODELS: [&str; 3] = ["claude-opus-5[1m]", "claude-fable-5", "claude-
 
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
-#[cfg_attr(coverage_nightly, ignore = "subscription mock reuse flakes under llvm-cov")]
 async fn outer_models_keep_authority_across_a_long_continue() {
     let fixture = tempfile::tempdir().expect("create outer-model fixture");
     let source = fixture.path().join("provider-source");
@@ -103,7 +102,6 @@ async fn outer_models_keep_authority_across_a_long_continue() {
 }
 
 #[tokio::test]
-#[cfg_attr(coverage_nightly, ignore = "session-identity HTTP flakes under llvm-cov")]
 async fn session_id_only_header_overrides_historical_child_markers_over_http() {
     let fixture = tempfile::tempdir().expect("create request-identity fixture");
     let source = fixture.path().join("provider-source");
