@@ -317,6 +317,9 @@ mod tests {
         assert!(looks_like_launch_tool("prefix_spawn_subagent"));
         assert!(!looks_like_launch_tool("Bash"));
         assert!(!looks_like_launch_tool("Read"));
+        // mcp__ without agent/task must not match the compound clause.
+        assert!(!looks_like_launch_tool("mcp__other"));
+        assert!(!looks_like_launch_tool("mcp__tool"));
     }
 
     #[test]
