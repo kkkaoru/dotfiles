@@ -49,25 +49,37 @@ pub(super) async fn ensure_current_generation(
         }
     }
 
-    let listen = reserve_loopback_listen(config.options.listen)?;
-    let fallback = config.with_listen(listen);
-    let pid = daemon_start::start_adapter(&fallback).context("start current-build fallback")?;
-    if let Err(error) = wait_until_ready(client, &fallback).await {
-        if daemon_process::matches(pid, &fallback.executable) {
-            daemon_process::terminate(pid);
+    // Reserving port 0 then releasing it before spawn races with parallel
+    // listeners under the coverage suite. Retry a few times before failing.
+    let mut last_error = None;
+    for _ in 0..5 {
+        let listen = reserve_loopback_listen(config.options.listen)?;
+        let fallback = config.with_listen(listen);
+        let pid = daemon_start::start_adapter(&fallback).context("start current-build fallback")?;
+        match wait_until_ready(client, &fallback).await {
+            Ok(()) => {
+                write_state(
+                    &state_path,
+                    &FallbackState {
+                        listen,
+                        build_id: env!("CLAUDEX_BUILD_ID").to_owned(),
+                        service_config_fingerprint: fallback.service_config_fingerprint.clone(),
+                        pid,
+                    },
+                )?;
+                return Ok(fallback.base_url());
+            }
+            Err(error) => {
+                if daemon_process::matches(pid, &fallback.executable) {
+                    daemon_process::terminate(pid);
+                }
+                last_error = Some(error);
+            }
         }
-        return Err(error.context("wait for current-build fallback"));
     }
-    write_state(
-        &state_path,
-        &FallbackState {
-            listen,
-            build_id: env!("CLAUDEX_BUILD_ID").to_owned(),
-            service_config_fingerprint: fallback.service_config_fingerprint.clone(),
-            pid,
-        },
-    )?;
-    Ok(fallback.base_url())
+    Err(last_error
+        .unwrap_or_else(|| anyhow::anyhow!("current-build fallback failed to start"))
+        .context("wait for current-build fallback"))
 }
 
 pub(super) fn reserve_loopback_listen(configured: SocketAddr) -> Result<SocketAddr> {
