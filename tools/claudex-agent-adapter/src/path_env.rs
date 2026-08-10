@@ -57,6 +57,7 @@ pub(crate) fn apply_daemon_env<'a>(command: &'a mut Command, token: &str) -> &'a
         .env_remove("CLAUDEX_BACKEND")
         .env_remove("CLAUDEX_CLAUDE_PROGRAM")
         .env_remove("CLAUDEX_MODEL")
+        .env_remove("CLAUDEX_MACOS_NOTIFY")
         .env_remove("CLAUDEX_SUBSCRIPTION_MAX_PROCESSES")
         .env_remove("CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES")
 }

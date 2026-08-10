@@ -132,6 +132,7 @@ fn spawn_waiter(config: &ServiceConfig) -> Result<u32> {
             .args(daemon_arguments::hot_swap_wait_arguments(&config.options)),
         &config.token,
     )
+    .env_remove(super::macos_notify_dispatch::MACOS_NOTIFY_ENV)
     .stdin(Stdio::null())
     .stdout(Stdio::from(stdout))
     .stderr(Stdio::from(stderr))

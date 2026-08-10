@@ -14,6 +14,7 @@ cargo_bin="${CARGO_HOME:-$HOME/.cargo}/bin/claudex-agent-adapter"
 local_bin="$HOME/.local/bin/claudex-agent-adapter"
 hot_swap="$HOME/.local/bin/claudex-hot-swap"
 cache_dir="${CLAUDEX_CACHE_DIR:-$HOME/.cache/claudex}"
+listen="${CLAUDEX_ADAPTER_LISTEN:-127.0.0.1:8318}"
 
 mkdir -p "$(dirname -- "$cargo_bin")" "$HOME/.local/bin"
 
@@ -30,7 +31,8 @@ if [ ! -x "$cargo_bin" ]; then
 fi
 
 ln -snf "$cargo_bin" "$local_bin"
-echo "claudex after-install: linked $local_bin -> $cargo_bin ($("$cargo_bin" build-id))" >&2
+build_id=$("$cargo_bin" build-id)
+echo "claudex after-install: linked $local_bin -> $cargo_bin ($build_id)" >&2
 
 # Drop legacy per-listen notify state so only the shared dedupe file remains.
 rm -f "$cache_dir"/hot-swap-notify.*.json "$cache_dir"/hot-swap-notify.*.lock 2>/dev/null || true
@@ -47,10 +49,12 @@ if [ ! -x "$hot_swap" ]; then
   exit 0
 fi
 
-# Opt-in macOS banner for this intentional swap only. ensure/mcp/waiters stay
-# silent so multi-listen replace storms cannot spam Notification Center.
-export CLAUDEX_MACOS_NOTIFY=1
-
-if ! "$hot_swap"; then
+# Keep the swap itself silent. Waiters inherit the parent env, so enabling
+# banners during hot-swap produced promote + idle-replace double alerts.
+# Emit exactly one banner after the swap attempt finishes.
+if CLAUDEX_MACOS_NOTIFY=0 "$hot_swap"; then
+  CLAUDEX_MACOS_NOTIFY=1 "$cargo_bin" __internal-notify complete \
+    "$cache_dir" "$listen" "$build_id" || true
+else
   echo "claudex after-install: hot-swap exited $?; idle waiter may need a later claudex / claudex-hot-swap" >&2
 fi
