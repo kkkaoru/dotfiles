@@ -34,8 +34,12 @@ ln -snf "$cargo_bin" "$local_bin"
 build_id=$("$cargo_bin" build-id)
 echo "claudex after-install: linked $local_bin -> $cargo_bin ($build_id)" >&2
 
-# Drop legacy per-listen notify state so only the shared dedupe file remains.
-rm -f "$cache_dir"/hot-swap-notify.*.json "$cache_dir"/hot-swap-notify.*.lock 2>/dev/null || true
+# Drop notify dedupe so the post-install banner is not eaten by a recent
+# interactive/test Complete still inside the 5-minute quiet window.
+rm -f "$cache_dir"/hot-swap-notify.json \
+  "$cache_dir"/hot-swap-notify.lock \
+  "$cache_dir"/hot-swap-notify.*.json \
+  "$cache_dir"/hot-swap-notify.*.lock 2>/dev/null || true
 
 # Long-lived mcp-claudex-launch parents keep in-memory notify/dedupe code from
 # before this install. Restart them so the next ensure re-execs the cargo-bin
