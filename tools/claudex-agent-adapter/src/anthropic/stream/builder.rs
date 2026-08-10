@@ -17,6 +17,7 @@ use super::{
 
 mod batch;
 mod external_tool;
+mod external_tool_reject;
 mod progress;
 mod provider_launch;
 mod visibility;
