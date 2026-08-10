@@ -20,6 +20,12 @@ use crate::anthropic::{
 };
 use crate::provider_config::WorkerRoute;
 
+/// llvm-cov parallel load can stall shell fixtures past the default 5s child bound.
+#[cfg(coverage_nightly)]
+const SUBSCRIPTION_FIXTURE_TIMEOUT: Duration = Duration::from_secs(45);
+#[cfg(not(coverage_nightly))]
+const SUBSCRIPTION_FIXTURE_TIMEOUT: Duration = Duration::from_secs(5);
+
 #[test]
 fn subscription_children_identify_as_noninteractive() {
     let options = SubscriptionOptions::internal(
@@ -225,7 +231,7 @@ printf '%s\n' '{"type":"result","subtype":"success","result":"SUBSCRIPTION_COMMA
         .expect("make subscription command fixture executable");
     let mut options = SubscriptionOptions::internal(
         Arc::new(tokio::sync::Semaphore::new(1)),
-        Duration::from_secs(5),
+        SUBSCRIPTION_FIXTURE_TIMEOUT,
     );
     options.tools = vec!["Bash".to_owned()];
 
@@ -349,7 +355,7 @@ printf '%s\n' '{{"subtype":"success","is_error":false,"result":"RETRIED_OK"}}'
         .expect("make local retry fixture executable");
     let options = SubscriptionOptions::internal(
         Arc::new(tokio::sync::Semaphore::new(1)),
-        Duration::from_secs(5),
+        SUBSCRIPTION_FIXTURE_TIMEOUT,
     );
 
     let result = run_subscription_model(&program, "claude-test", "prompt", options)
@@ -390,7 +396,7 @@ printf '%s\n' '{{"subtype":"error","is_error":true,"result":"502 Bad Gateway"}}'
 
     let options = SubscriptionOptions::internal(
         Arc::new(tokio::sync::Semaphore::new(1)),
-        Duration::from_secs(5),
+        SUBSCRIPTION_FIXTURE_TIMEOUT,
     );
     let error = run_subscription_model(&program, "claude-haiku-4-5", "prompt", options)
         .await
@@ -437,7 +443,7 @@ exit 1
         .expect("make failure fixture executable");
     let options = SubscriptionOptions::internal(
         Arc::new(tokio::sync::Semaphore::new(1)),
-        Duration::from_secs(5),
+        SUBSCRIPTION_FIXTURE_TIMEOUT,
     );
 
     let error = run_subscription_model(&program, "claude-test", "prompt", options)

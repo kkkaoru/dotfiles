@@ -38,6 +38,12 @@ use crate::provider_config::{ModelCatalog, WorkerRoute};
 type Frame = Result<Bytes, Infallible>;
 type FrameChannel = (mpsc::Sender<Frame>, mpsc::Receiver<Frame>);
 
+/// llvm-cov parallel load can stall shell fixtures past the default 5s child bound.
+#[cfg(coverage_nightly)]
+const SUBSCRIPTION_FIXTURE_TIMEOUT: Duration = Duration::from_secs(45);
+#[cfg(not(coverage_nightly))]
+const SUBSCRIPTION_FIXTURE_TIMEOUT: Duration = Duration::from_secs(5);
+
 fn channel() -> FrameChannel {
     mpsc::channel(16)
 }
@@ -2586,7 +2592,7 @@ printf '%s\n' '{{"type":"result","subtype":"success","result":"STREAM_RETRIED_OK
     let (sender, mut receiver) = channel();
     let options = SubscriptionOptions::internal(
         Arc::new(tokio::sync::Semaphore::new(1)),
-        Duration::from_secs(5),
+        SUBSCRIPTION_FIXTURE_TIMEOUT,
     );
 
     run_subscription_stream(
@@ -2635,7 +2641,7 @@ exit 1
     let (sender, mut receiver) = channel();
     let options = SubscriptionOptions::internal(
         Arc::new(tokio::sync::Semaphore::new(1)),
-        Duration::from_secs(5),
+        SUBSCRIPTION_FIXTURE_TIMEOUT,
     );
 
     run_subscription_stream(
@@ -2680,7 +2686,7 @@ async fn ignores_prompt_write_failure_after_the_response_disconnects() {
     drop(receiver);
     let options = SubscriptionOptions::internal(
         Arc::new(tokio::sync::Semaphore::new(1)),
-        Duration::from_secs(5),
+        SUBSCRIPTION_FIXTURE_TIMEOUT,
     );
 
     stream_subscription_model(
@@ -2702,15 +2708,22 @@ async fn stream_timeout_terminates_the_entire_subscription_process_group() {
     let (sender, _receiver) = channel();
     let options = SubscriptionOptions::internal(
         Arc::new(tokio::sync::Semaphore::new(1)),
-        Duration::from_secs(5),
+        SUBSCRIPTION_FIXTURE_TIMEOUT,
     );
 
-    let (result, background) = tokio::time::timeout(Duration::from_secs(10), async {
-        tokio::join!(
-            stream_subscription_model(&sender, &program, "model", "prompt", &options),
-            fixture.release_after_pid(),
-        )
-    })
+    let (result, background) = tokio::time::timeout(
+        if cfg!(coverage_nightly) {
+            Duration::from_secs(90)
+        } else {
+            Duration::from_secs(10)
+        },
+        async {
+            tokio::join!(
+                stream_subscription_model(&sender, &program, "model", "prompt", &options),
+                fixture.release_after_pid(),
+            )
+        },
+    )
     .await
     .expect("stalled subscription test must finish within its cleanup bound");
     let mut background = background.unwrap_or_else(|| {
