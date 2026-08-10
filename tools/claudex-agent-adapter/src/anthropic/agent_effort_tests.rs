@@ -10,6 +10,7 @@ mod tests {
         AgentEffort, AgentEffortIntents, AgentEffortRecord, prepare_arguments,
         prepare_arguments_for_user, tool_schema, validate_routed_agent_arguments,
     };
+    use super::background_launch::agent_launch_is_background;
     use crate::anthropic::MessagesRequest;
 
     fn request(user_id: &str, prompt: &str, subagent: bool) -> MessagesRequest {
@@ -229,6 +230,25 @@ mod tests {
         let background = intents.take(&request("session", "background", true));
         assert!(!foreground.run_in_background);
         assert!(background.run_in_background);
+    }
+
+    #[test]
+    fn synchronous_result_detection_skips_non_user_and_mailbox_wrappers() {
+        let messages = [
+            json!({"role":"assistant","content":"同期で待って"}),
+            json!({"role":"user","content":"<agent-message>同期で待って</agent-message>"}),
+            json!({"role":"user","content":"<teammate-message>結果を待って</teammate-message>"}),
+            json!({
+                "role":"user",
+                "content":"Another Claude session sent a message: 同期で待って"
+            }),
+            json!({"role":"user","content":"Investigate the cache without waiting"}),
+        ];
+        assert!(agent_launch_is_background("Agent", &messages));
+
+        let sync = [json!({"role":"user","content":"Please wait for the result before continuing"})];
+        assert!(!agent_launch_is_background("Agent", &sync));
+        assert!(!agent_launch_is_background("Bash", &sync));
     }
 
     #[test]
