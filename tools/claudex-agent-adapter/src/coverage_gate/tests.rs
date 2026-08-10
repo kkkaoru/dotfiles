@@ -114,6 +114,20 @@ fn removes_only_successful_isolated_coverage_artifacts() {
 }
 
 #[test]
+fn discard_reports_when_successful_artifact_removal_fails() {
+    let fixture = tempfile::tempdir().expect("coverage fixture");
+    let not_a_directory = fixture.path().join("not-a-directory");
+    fs::write(&not_a_directory, "leave me").expect("write non-directory artifact");
+    let error = discard_successful_artifacts(&not_a_directory, Ok(()))
+        .expect_err("removing a file path must surface the IO failure");
+    assert!(
+        error.to_string().contains("failed to remove"),
+        "{error:#}"
+    );
+    assert!(not_a_directory.is_file());
+}
+
+#[test]
 fn prunes_stale_coverage_artifacts_but_keeps_current_and_live_runs() {
     let fixture = tempfile::tempdir().expect("coverage fixture");
     let target = fixture.path().join("target");
