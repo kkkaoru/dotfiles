@@ -1484,6 +1484,64 @@ fn rewrite_exhausted_launch_without_sibling_keeps_original() {
 }
 
 #[test]
+fn rewrite_exhausted_http_subagent_without_catalog_effort_keeps_caller_effort() {
+    let root = tempfile::tempdir().expect("unnamed http failover fixture");
+    let backend = AgentBackend::spawn_routes(&[
+        BackendRoute::new(CLINE_FLASH, BackendKind::ConfiguredAcp),
+        BackendRoute::new(CURSOR_AUTO, BackendKind::ConfiguredAcp),
+    ]);
+    let bridge = Bridge::new_with_backend(backend, CLINE_FLASH.to_owned())
+        .with_usage_limit_cache_home(root.path());
+    bridge.note_provider_exhaustion(&anyhow::anyhow!(EMPTY_ACP_END_TURN), Some(CLINE_FLASH));
+    let mut request = dummy_request(CLINE_FLASH);
+    let mut effort = Some("xhigh".to_owned());
+    let route = bridge
+        .rewrite_exhausted_subagent_request(
+            &mut request,
+            RouteDecision::Provider,
+            &mut effort,
+            true,
+        )
+        .expect("sibling rewrite");
+    assert_eq!(request.model, CURSOR_AUTO);
+    assert_eq!(effort.as_deref(), Some("xhigh"));
+    assert_eq!(route, RouteDecision::Provider);
+}
+
+#[tokio::test]
+async fn saturated_preflight_and_reticket_without_catalog_effort_keep_caller_effort() {
+    let mut qwen = BackendRoute::new(QWEN_CLOUD, BackendKind::ConfiguredAcp);
+    qwen.max_concurrency = Some(3);
+    let backend = AgentBackend::spawn_routes(&[
+        qwen,
+        BackendRoute::new(CURSOR_AUTO, BackendKind::ConfiguredAcp),
+    ]);
+    let bridge = Bridge::new_with_backend(backend, QWEN_CLOUD.to_owned());
+    let _permits = saturate_qwen_subagent_slots(&bridge).await;
+
+    let mut request = dummy_request(QWEN_CLOUD);
+    let mut effort = Some("high".to_owned());
+    let route = bridge.apply_concurrency_preflight(
+        &mut request,
+        RouteDecision::Provider,
+        &mut effort,
+        true,
+    );
+    assert_eq!(request.model, CURSOR_AUTO);
+    assert_eq!(effort.as_deref(), Some("high"));
+    assert_eq!(route, RouteDecision::Provider);
+
+    let mut retry = dummy_request(QWEN_CLOUD);
+    let mut retry_effort = Some("high".to_owned());
+    let ticket = bridge
+        .reticket_after_concurrency_timeout(&mut retry, &mut retry_effort)
+        .expect("sibling reticket");
+    assert!(ticket.is_none());
+    assert_eq!(retry.model, CURSOR_AUTO);
+    assert_eq!(retry_effort.as_deref(), Some("high"));
+}
+
+#[test]
 fn subagent_failover_without_preferred_qwen_still_picks_a_sibling() {
     let backend = AgentBackend::spawn_routes(&[
         BackendRoute::new(CLINE_FLASH, BackendKind::ConfiguredAcp),
