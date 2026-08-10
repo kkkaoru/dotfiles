@@ -12,11 +12,12 @@ const WAIT_IDLE_POLL: Duration = Duration::from_secs(1);
 #[cfg(test)]
 const WAIT_IDLE_POLL: Duration = Duration::from_millis(0);
 /// Production waiters keep retrying Replace after a failed handover. Tests
-/// fail immediately so dummy-start fixtures do not spin forever.
+/// allow one retry so the sleep/continue arm stays measurable under llvm-cov,
+/// then fail closed.
 #[cfg(not(test))]
 const WAIT_IDLE_REPLACE_RETRIES: Option<u32> = None;
 #[cfg(test)]
-const WAIT_IDLE_REPLACE_RETRIES: Option<u32> = Some(0);
+const WAIT_IDLE_REPLACE_RETRIES: Option<u32> = Some(1);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Mode {

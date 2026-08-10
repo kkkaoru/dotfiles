@@ -185,9 +185,11 @@ type Io<T> = std::io::Result<T>;
 #[cfg(unix)]
 // Keep the pre-exec entrypoint as a single delegation; the range logic is tested below.
 #[rustfmt::skip]
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn close_inherited_descriptors() -> Io<()> { close_system(close_file_descriptor) }
 
 #[cfg(unix)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 fn detach_session_and_close_inherited_descriptors() -> Io<()> {
     if unsafe { libc::setsid() } == -1 {
         return Err(std::io::Error::last_os_error());

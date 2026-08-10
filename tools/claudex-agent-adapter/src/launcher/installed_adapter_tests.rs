@@ -463,6 +463,15 @@ fn unify_reports_copy_and_symlink_failures() {
         format!("{error:#}").contains("replace") || format!("{error:#}").contains("symlink"),
         "{error:#}"
     );
+
+    fs::remove_dir_all(&local).unwrap();
+    fs::set_permissions(&local_bin, fs::Permissions::from_mode(0o555)).unwrap();
+    let error = unify_install_paths().expect_err("readonly local bin blocks symlink");
+    let _ = fs::set_permissions(&local_bin, fs::Permissions::from_mode(0o755));
+    assert!(
+        format!("{error:#}").contains("symlink") || format!("{error:#}").contains("Permission"),
+        "{error:#}"
+    );
 }
 
 #[test]

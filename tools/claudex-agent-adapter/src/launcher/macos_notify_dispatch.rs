@@ -130,6 +130,12 @@ fn delegate_complete_notify(cache: &Path, event: &Event) -> bool {
         ])
         .status()
     {
+        result => interpret_delegate_status(result),
+    }
+}
+
+fn interpret_delegate_status(result: std::io::Result<std::process::ExitStatus>) -> bool {
+    match result {
         Ok(status) if status.success() => true,
         Ok(status) => {
             eprintln!("claudex: delegated macOS notify exited {status}");

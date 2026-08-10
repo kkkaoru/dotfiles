@@ -220,3 +220,14 @@ fn injects_launch_mcp_when_agent_tools_are_offered() {
         None => unsafe { std::env::remove_var("HOME") },
     }
 }
+
+#[test]
+fn launch_mcp_skips_injection_when_adapter_executable_is_unavailable() {
+    let servers = launch_mcp_servers_from(
+        &json!({
+            "dynamicTools":[{"name":"Agent","description":"Launch a SubAgent"}]
+        }),
+        Err(std::io::Error::other("no exe")),
+    );
+    assert!(servers.is_empty());
+}

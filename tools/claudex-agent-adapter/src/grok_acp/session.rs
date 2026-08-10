@@ -160,10 +160,17 @@ fn session_cwd(params: &Value, fallback: &Path) -> PathBuf {
 }
 
 fn launch_mcp_servers(params: &Value) -> Vec<acp::McpServer> {
+    launch_mcp_servers_from(params, env::current_exe())
+}
+
+fn launch_mcp_servers_from(
+    params: &Value,
+    exe: std::io::Result<PathBuf>,
+) -> Vec<acp::McpServer> {
     if !params_offer_launch_tools(params) {
         return Vec::new();
     }
-    let Ok(exe) = env::current_exe() else {
+    let Ok(exe) = exe else {
         tracing::warn!("adapter executable unavailable; ACP Agent/Task tools not injected");
         return Vec::new();
     };

@@ -171,7 +171,15 @@ async fn set_effort_option(
     )
     .await
     {
-        Ok(Ok(_)) => Ok(()),
+        result => map_effort_setup_result(result).map(|_| ()),
+    }
+}
+
+fn map_effort_setup_result<T>(
+    result: Result<Result<T, acp::Error>, tokio::time::error::Elapsed>,
+) -> Result<T, EffortSetupError> {
+    match result {
+        Ok(Ok(value)) => Ok(value),
         Ok(Err(error)) => Err(EffortSetupError::Failed(error)),
         Err(_) => Err(EffortSetupError::TimedOut),
     }
@@ -182,9 +190,7 @@ async fn set_model(
     request: acp::SetSessionModelRequest,
 ) -> Result<(), EffortSetupError> {
     match tokio::time::timeout(EFFORT_SETUP_TIMEOUT, connection.set_session_model(request)).await {
-        Ok(Ok(_)) => Ok(()),
-        Ok(Err(error)) => Err(EffortSetupError::Failed(error)),
-        Err(_) => Err(EffortSetupError::TimedOut),
+        result => map_effort_setup_result(result).map(|_| ()),
     }
 }
 
@@ -195,4 +201,29 @@ fn model_meta(effort: Option<&str>) -> Option<Map<String, Value>> {
             Value::String(effort.to_owned()),
         )])
     })
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn map_effort_setup_result_covers_ok_error_and_timeout() {
+        assert!(map_effort_setup_result(Ok(Ok(()))).is_ok());
+        assert!(matches!(
+            map_effort_setup_result::<()>(Ok(Err(acp::Error::internal_error()))),
+            Err(EffortSetupError::Failed(_))
+        ));
+        let timed_out = tokio::time::timeout(Duration::from_millis(1), async {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            Ok::<(), acp::Error>(())
+        })
+        .await;
+        assert!(matches!(
+            map_effort_setup_result(timed_out),
+            Err(EffortSetupError::TimedOut)
+        ));
+    }
 }

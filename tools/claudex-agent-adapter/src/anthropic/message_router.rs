@@ -25,10 +25,13 @@ impl Bridge {
         identity: RequestIdentity,
         tools_were_provided: bool,
     ) -> Result<Response<Body>> {
+        let session_id = identity.session_id();
+        let agent_id = identity.agent_id();
+        let parent_agent_id = identity.parent_agent_id();
         tracing::debug!(
-            session_id = identity.session_id(),
-            agent_id = identity.agent_id(),
-            parent_agent_id = identity.parent_agent_id(),
+            session_id,
+            agent_id,
+            parent_agent_id,
             "received Claude Code transport identity"
         );
         self.tool_schemas
@@ -145,14 +148,17 @@ impl Bridge {
         };
         let duration_ms = turn_started.elapsed().as_millis();
         match &response {
-            Ok(response) => tracing::info!(
-                target: "claudex.provider",
-                log_event = "provider_turn_end",
-                status = response.status().as_u16(),
-                duration_ms,
-                outcome = "response_ready",
-                "provider turn response is ready"
-            ),
+            Ok(response) => {
+                let status = response.status().as_u16();
+                tracing::info!(
+                    target: "claudex.provider",
+                    log_event = "provider_turn_end",
+                    status,
+                    duration_ms,
+                    outcome = "response_ready",
+                    "provider turn response is ready"
+                );
+            }
             Err(error) => {
                 self.note_provider_exhaustion(error, Some(&request_model));
                 tracing::error!(

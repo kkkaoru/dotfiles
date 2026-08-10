@@ -5,8 +5,8 @@ use std::{
 };
 
 use super::{
-    DelegateForceGuard, NotifyForceGuard, delegate_complete_notify, notifications_enabled,
-    parse_notify_env, post, run_internal,
+    DelegateForceGuard, NotifyForceGuard, delegate_complete_notify, interpret_delegate_status,
+    notifications_enabled, parse_notify_env, post, run_internal,
 };
 use crate::launcher::{installed_adapter, launcher_logs, macos_notify::Event};
 
@@ -16,6 +16,23 @@ fn env_lock() -> MutexGuard<'static, ()> {
     ENV_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+#[test]
+fn interpret_delegate_status_covers_success_failure_and_spawn_errors() {
+    assert!(interpret_delegate_status(Ok(
+        std::process::Command::new("true")
+            .status()
+            .expect("true")
+    )));
+    assert!(!interpret_delegate_status(Ok(
+        std::process::Command::new("false")
+            .status()
+            .expect("false")
+    )));
+    assert!(!interpret_delegate_status(Err(std::io::Error::other(
+        "spawn failed"
+    ))));
 }
 
 #[test]
