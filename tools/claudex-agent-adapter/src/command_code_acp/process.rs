@@ -338,34 +338,5 @@ async fn read_stderr(stderr: impl AsyncRead + Unpin) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::Utf8LineDecoder;
-
-    #[test]
-    fn decoder_replaces_invalid_bytes_and_keeps_following_json() {
-        let mut decoder = Utf8LineDecoder::default();
-        assert_eq!(decoder.push_line(b"\xff\n"), "\u{FFFD}");
-        let result = decoder.push_line(
-            br#"{"type":"result","subtype":"success","finalText":"AFTER_INVALID_UTF8"}"#,
-        );
-        assert!(result.contains("AFTER_INVALID_UTF8"));
-        assert!(!decoder.has_pending());
-    }
-
-    #[test]
-    fn decoder_carries_incomplete_utf8_across_reads() {
-        let mut decoder = Utf8LineDecoder::default();
-        assert!(decoder.push_line(&[0xe3]).is_empty());
-        assert!(decoder.has_pending());
-        assert_eq!(decoder.push_line(&[0x81, 0x82, b'\n']), "あ");
-        assert!(!decoder.has_pending());
-    }
-
-    #[test]
-    fn decoder_flush_lossy_decodes_trailing_incomplete_utf8() {
-        let mut decoder = Utf8LineDecoder::default();
-        assert!(decoder.push_line(&[0xe3]).is_empty());
-        assert_eq!(decoder.flush().as_deref(), Some("\u{FFFD}"));
-        assert!(!decoder.has_pending());
-    }
-}
+#[path = "process_tests.rs"]
+mod tests;
