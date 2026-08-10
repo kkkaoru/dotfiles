@@ -278,4 +278,44 @@ mod tests {
         assert!(text.contains("do not cascade TaskStop"));
         assert!(text.contains("in-flight scope key"));
     }
+
+    #[tokio::test]
+    async fn acknowledge_with_blank_text_uses_default_notification() {
+        let request = request("ignored".into());
+        let response = acknowledge_with_text(&request, "   \n");
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let response: Value =
+            serde_json::from_str(&String::from_utf8(body.to_vec()).unwrap()).unwrap();
+        assert_eq!(response["content"][0]["text"], DEFAULT_NOTIFICATION_TEXT);
+    }
+
+    #[tokio::test]
+    async fn task_notification_skips_empty_and_duplicate_summary_fields() {
+        let request = request(
+            "<task-notification><summary>   </summary><result>same note</result><summary>same note</summary></task-notification>"
+                .into(),
+        );
+        let response = acknowledge(&request);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let response: Value =
+            serde_json::from_str(&String::from_utf8(body.to_vec()).unwrap()).unwrap();
+        let text = response["content"][0]["text"].as_str().unwrap();
+        assert_eq!(text, "same note");
+    }
+
+    #[tokio::test]
+    async fn enriches_no_completion_record_agent_failure_and_claude_stop() {
+        let request = request(
+            "<task-notification><summary>No completion record. Agent \"lane-a\" failed: timeout. Worker was stopped by Claude.</summary></task-notification>"
+                .into(),
+        );
+        let response = acknowledge(&request);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let response: Value =
+            serde_json::from_str(&String::from_utf8(body.to_vec()).unwrap()).unwrap();
+        let text = response["content"][0]["text"].as_str().unwrap();
+        assert!(text.contains("historical previous-session task IDs"));
+        assert!(text.contains("do not cascade TaskStop"));
+        assert!(text.contains("acknowledge the stop"));
+    }
 }
