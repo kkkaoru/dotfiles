@@ -8,30 +8,35 @@ mod tests {
         values.iter().map(OsString::from).collect()
     }
 
-    fn prepare(
-        values: &[&str],
-        cwd: &Path,
-        home: &Path,
-        auto_fork: bool,
-    ) -> Vec<OsString> {
+    fn prepare(values: &[&str], cwd: &Path, home: &Path, auto_fork: bool) -> Vec<OsString> {
         prepare_arguments_with_home(args(values), cwd, Some(home), None, auto_fork)
     }
 
     fn write_transcript(home: &Path, cwd: &Path, session_id: &str, body: &str) {
-        let project = home
-            .join(".claude/projects")
-            .join(project_dir_name(cwd));
+        let project = home.join(".claude/projects").join(project_dir_name(cwd));
         fs::create_dir_all(&project).expect("project transcript directory");
         fs::write(project.join(format!("{session_id}.jsonl")), body).expect("transcript");
     }
 
     #[test]
     fn extracts_resume_ids_without_confusing_other_flags() {
-        assert_eq!(resume_session_id(&args(&["--resume", "session-a"])), Some("session-a".to_owned()));
-        assert_eq!(resume_session_id(&args(&["--resume=session-b"])), Some("session-b".to_owned()));
-        assert_eq!(resume_session_id(&args(&["-r", "session-c"])), Some("session-c".to_owned()));
+        assert_eq!(
+            resume_session_id(&args(&["--resume", "session-a"])),
+            Some("session-a".to_owned())
+        );
+        assert_eq!(
+            resume_session_id(&args(&["--resume=session-b"])),
+            Some("session-b".to_owned())
+        );
+        assert_eq!(
+            resume_session_id(&args(&["-r", "session-c"])),
+            Some("session-c".to_owned())
+        );
         assert_eq!(resume_session_id(&args(&["--continue"])), None);
-        assert_eq!(resume_session_id(&args(&["--resume", "--fork-session"])), None);
+        assert_eq!(
+            resume_session_id(&args(&["--resume", "--fork-session"])),
+            None
+        );
     }
 
     #[test]
@@ -41,10 +46,9 @@ mod tests {
             "session-a"
         );
         assert_eq!(
-            session_id_for_launch(
-                &args(&["--resume", "session-a", "--fork-session"]),
-                || "random".to_owned()
-            ),
+            session_id_for_launch(&args(&["--resume", "session-a", "--fork-session"]), || {
+                "random".to_owned()
+            }),
             "random"
         );
     }
@@ -96,9 +100,11 @@ mod tests {
         );
 
         let prepared = prepare(&["--resume", "session-legacy"], cwd, root.path(), false);
-        assert!(prepared.windows(2).any(|window| {
-            window[0] == "--name" && window[1] == "humming-sprouting-scroll"
-        }));
+        assert!(
+            prepared
+                .windows(2)
+                .any(|window| { window[0] == "--name" && window[1] == "humming-sprouting-scroll" })
+        );
     }
 
     #[test]
@@ -132,9 +138,11 @@ mod tests {
         );
 
         let prepared = prepare(&["--resume", "session-bare"], cwd, root.path(), false);
-        assert!(prepared.windows(2).any(|window| {
-            window[0] == "--name" && window[1] == "avita-platform"
-        }));
+        assert!(
+            prepared
+                .windows(2)
+                .any(|window| { window[0] == "--name" && window[1] == "avita-platform" })
+        );
     }
 
     #[test]
@@ -161,12 +169,7 @@ mod tests {
         assert!(!clean.iter().any(|argument| argument == "--name"));
 
         let named = prepare(
-            &[
-                "--resume",
-                "session-legacy",
-                "--name",
-                "user-chosen",
-            ],
+            &["--resume", "session-legacy", "--name", "user-chosen"],
             cwd,
             root.path(),
             false,
@@ -178,9 +181,11 @@ mod tests {
                 .count(),
             1
         );
-        assert!(named.windows(2).any(|window| {
-            window[0] == "--name" && window[1] == "user-chosen"
-        }));
+        assert!(
+            named
+                .windows(2)
+                .any(|window| { window[0] == "--name" && window[1] == "user-chosen" })
+        );
 
         let agent = prepare(
             &[
@@ -194,6 +199,103 @@ mod tests {
             false,
         );
         assert!(!agent.iter().any(|argument| argument == "--name"));
+
+        let named_equals = prepare(
+            &["--resume", "session-legacy", "--name=user-chosen"],
+            cwd,
+            root.path(),
+            false,
+        );
+        assert!(
+            !named_equals
+                .windows(2)
+                .any(|window| { window[0] == "--name" && window[1] == "humming-sprouting-scroll" })
+        );
+
+        let agent_equals = prepare(
+            &["--resume", "session-legacy", "--agent=claudex-orchestrator"],
+            cwd,
+            root.path(),
+            false,
+        );
+        assert!(!agent_equals.iter().any(|argument| argument == "--name"));
+
+        let empty_equals = prepare(
+            &["--resume", "session-legacy", "--name="],
+            cwd,
+            root.path(),
+            false,
+        );
+        assert!(
+            empty_equals
+                .windows(2)
+                .any(|window| { window[0] == "--name" && window[1] == "humming-sprouting-scroll" })
+        );
+
+        let dash_value = prepare(
+            &["--resume", "session-legacy", "--name", "--fork-session"],
+            cwd,
+            root.path(),
+            false,
+        );
+        assert!(
+            dash_value
+                .windows(2)
+                .any(|window| { window[0] == "--name" && window[1] == "humming-sprouting-scroll" })
+        );
+    }
+
+    #[test]
+    fn skips_non_utf8_flags_invalid_transcript_lines_and_missing_config_dir_files() {
+        let root = tempfile::tempdir().expect("resume fixture");
+        let cwd = Path::new("/Users/test/github.com/project");
+        write_transcript(
+            root.path(),
+            cwd,
+            "session-messy",
+            concat!(
+                "{\"type\":\"agent-setting\" not-json\n",
+                "{\"type\":\"agent-setting\",\"agentSetting\":\"claudex-orchestrator\"}\n",
+                "{\"type\":\"attachment\",\"slug\":\"messy-scroll\"}\n",
+            ),
+        );
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::ffi::OsStringExt;
+            let mut values = args(&["--resume", "session-messy"]);
+            values.push(OsString::from_vec(vec![0xff, 0xfe]));
+            values.push(OsString::from("--name=user-chosen"));
+            let prepared = prepare_arguments_with_home(values, cwd, Some(root.path()), None, false);
+            assert!(
+                !prepared
+                    .windows(2)
+                    .any(|window| { window[0] == "--name" && window[1] == "messy-scroll" })
+            );
+        }
+
+        let config_dir = root.path().join("isolated-config");
+        fs::create_dir_all(config_dir.join("projects")).expect("empty config projects");
+        let prepared = prepare_arguments_with_home(
+            args(&["--resume", "session-messy"]),
+            cwd,
+            Some(root.path()),
+            Some(config_dir.as_path()),
+            false,
+        );
+        assert!(
+            prepared
+                .windows(2)
+                .any(|window| { window[0] == "--name" && window[1] == "messy-scroll" })
+        );
+
+        let no_resume = prepare(&["--continue"], cwd, root.path(), true);
+        assert!(
+            !no_resume
+                .iter()
+                .any(|argument| argument == "--fork-session")
+        );
+        assert!(!no_resume.iter().any(|argument| argument == "--name"));
     }
 
     #[test]
@@ -201,9 +303,7 @@ mod tests {
         let root = tempfile::tempdir().expect("resume fixture");
         let cwd = Path::new("/Users/test/github.com/project");
         let config_dir = root.path().join("isolated-config");
-        let project = config_dir
-            .join("projects")
-            .join(project_dir_name(cwd));
+        let project = config_dir.join("projects").join(project_dir_name(cwd));
         fs::create_dir_all(&project).expect("isolated project");
         fs::write(
             project.join("session-isolated.jsonl"),
@@ -221,8 +321,10 @@ mod tests {
             Some(config_dir.as_path()),
             false,
         );
-        assert!(prepared.windows(2).any(|window| {
-            window[0] == "--name" && window[1] == "preserved-session-name"
-        }));
+        assert!(
+            prepared
+                .windows(2)
+                .any(|window| { window[0] == "--name" && window[1] == "preserved-session-name" })
+        );
     }
 }
