@@ -788,6 +788,155 @@ mod tests {
         server.join().expect("stale handover server");
     }
 
+    #[cfg(unix)]
+    fn write_current_build_dummy(root: &Path) -> PathBuf {
+        let dummy = root.join("claudex-agent-adapter");
+        let script = format!(
+            r#"#!/usr/bin/python3
+import json, sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+def listen_addr():
+    args = sys.argv
+    for i, arg in enumerate(args):
+        if arg == "--listen" and i + 1 < len(args):
+            return args[i + 1]
+    raise SystemExit("missing --listen")
+
+host, port = listen_addr().rsplit(":", 1)
+host = host.strip("[]")
+BUILD = {build:?}
+
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, *_args):
+        return
+    def do_GET(self):
+        if self.path.split("?", 1)[0] != "/health":
+            self.send_error(404)
+            return
+        body = json.dumps({{
+            "status": "ok",
+            "pid": None,
+            "protocol_version": {protocol},
+            "build_id": BUILD,
+            "subscription_max_processes": 20,
+            "subscription_timeout_minutes": 120,
+            "listener_handover": True,
+        }}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    def do_POST(self):
+        self.send_error(501)
+
+HTTPServer((host, int(port)), Handler).serve_forever()
+"#,
+            build = env!("CLAUDEX_BUILD_ID"),
+            protocol = ADAPTER_PROTOCOL_VERSION,
+        );
+        std::fs::write(&dummy, script).expect("dummy script");
+        std::fs::set_permissions(&dummy, std::fs::Permissions::from_mode(0o755))
+            .expect("dummy executable");
+        dummy
+    }
+
+    #[cfg(unix)]
+    fn kill_dummy(executable: &Path) {
+        let _ = Command::new("pkill")
+            .args(["-f", &executable.to_string_lossy()])
+            .status();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn ensure_keeps_the_old_listener_when_live_update_rebind_is_rejected() {
+        let root = tempfile::tempdir().expect("ensure keep-old fixture");
+        let dummy = write_current_build_dummy(root.path());
+        let mut cfg = config();
+        cfg.executable = dummy.clone();
+        let listener = TcpListener::bind("127.0.0.1:0").expect("stale handover listener");
+        cfg.options.listen = listener.local_addr().expect("stale handover address");
+        cfg.log_path = root.path().join("adapter.log");
+        cfg.lock_path = root.path().join("adapter.lock");
+        let mut old = healthy(&cfg);
+        old.build_id = "old-build".to_owned();
+        old.listener_handover = true;
+        let server = serve_responses(
+            listener,
+            vec![
+                health_response(&old),
+                health_response(&old),
+                http_response("500 Internal Server Error", "{}"),
+            ],
+        );
+        let url = ensure::run(&cfg, ensure::Mode::Ensure)
+            .await
+            .expect("rejected rebind must keep the connected listener");
+        assert_eq!(url, cfg.base_url());
+        server.join().expect("stale handover server");
+        kill_dummy(&dummy);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn busy_ensure_falls_back_when_live_update_rebind_is_rejected() {
+        let root = tempfile::tempdir().expect("busy live-update fallback fixture");
+        let dummy = write_current_build_dummy(root.path());
+        let mut primary = config();
+        primary.executable = dummy.clone();
+        let primary_listener = TcpListener::bind("127.0.0.1:0").expect("primary listener");
+        primary.options.listen = primary_listener.local_addr().expect("primary address");
+        primary.log_path = root.path().join("adapter.log");
+        primary.lock_path = root.path().join("adapter.lock");
+
+        let fallback_listener = TcpListener::bind("127.0.0.1:0").expect("fallback listener");
+        let fallback_listen = fallback_listener.local_addr().expect("fallback address");
+        let fallback = primary.with_listen(fallback_listen);
+        std::fs::write(
+            root.path()
+                .join(format!("fallback.{}.json", primary.options.listen.port())),
+            serde_json::json!({
+                "listen": fallback_listen,
+                "build_id": env!("CLAUDEX_BUILD_ID"),
+                "service_config_fingerprint": fallback.service_config_fingerprint,
+                "pid": 99,
+            })
+            .to_string(),
+        )
+        .expect("write fallback state");
+
+        let mut busy = healthy(&primary);
+        busy.build_id = "old-build".to_owned();
+        busy.active_http_requests = 1;
+        busy.listener_handover = true;
+        let primary_server = serve_responses(
+            primary_listener,
+            vec![
+                health_response(&busy),
+                health_response(&busy),
+                http_response("500 Internal Server Error", "{}"),
+            ],
+        );
+        let fallback_health = healthy(&fallback);
+        let fallback_server = serve_responses(
+            fallback_listener,
+            vec![
+                health_response(&fallback_health),
+                http_response("200 OK", "{}"),
+            ],
+        );
+        let _spawn = pending_hot_swap::TestSpawnPid::arm(4242);
+        let url = ensure::run(&primary, ensure::Mode::Ensure)
+            .await
+            .expect("busy live-update must keep the session and fall back");
+        assert_eq!(url, fallback.base_url());
+        primary_server.join().expect("primary server");
+        fallback_server.join().expect("fallback server");
+        kill_dummy(&dummy);
+    }
+
     #[tokio::test]
     async fn ensure_routes_a_busy_listener_to_an_existing_current_build_fallback() {
         let root = tempfile::tempdir().expect("ensure fallback fixture");

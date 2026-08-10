@@ -71,6 +71,35 @@ fn live_update_requires_the_same_service_fingerprints() {
 }
 
 #[tokio::test]
+async fn try_canonical_skips_missing_or_zero_pids() {
+    let config = ServiceConfig {
+        options: AdapterOptions {
+            routes: vec![BackendRoute::new("test-model", BackendKind::CodexAppServer)],
+            listen: "127.0.0.1:8318".parse().unwrap(),
+            model: "test-model".to_owned(),
+            subscription_max_processes: 20,
+            subscription_timeout_minutes: 120,
+            subagent_hard_timeout_seconds: None,
+            model_catalog: crate::provider_config::ModelCatalog::default(),
+        },
+        token: LOCAL_TOKEN.to_owned(),
+        codex_config_fingerprint: "codex".to_owned(),
+        service_config_fingerprint: "service".to_owned(),
+        executable: PathBuf::from("/tmp/claudex-agent-adapter"),
+        log_path: PathBuf::from("/tmp/claudex/adapter.log"),
+        lock_path: PathBuf::from("/tmp/claudex/adapter.lock"),
+    };
+    let missing = try_canonical(&reqwest::Client::new(), &config, &health(true, None))
+        .await
+        .expect("missing pid skip");
+    assert_eq!(missing, None);
+    let zero = try_canonical(&reqwest::Client::new(), &config, &health(true, Some(0)))
+        .await
+        .expect("zero pid skip");
+    assert_eq!(zero, None);
+}
+
+#[tokio::test]
 async fn try_canonical_skips_legacy_daemons_without_handover() {
     let config = ServiceConfig {
         options: AdapterOptions {
@@ -125,6 +154,9 @@ fn current_build_ready_ignores_fingerprint_and_requires_this_build() {
     );
     health.build_id = "old-build".to_owned();
     assert!(!current_build_ready(&health, Some(12)));
+    health.build_id = env!("CLAUDEX_BUILD_ID").to_owned();
+    health.status = "unavailable".to_owned();
+    assert!(!current_build_ready(&health, None));
 }
 
 #[test]
@@ -188,6 +220,8 @@ fn release_previous_ignores_non_adapter_pids() {
         lock_path: PathBuf::from("/tmp/claudex/adapter.lock"),
     };
     release_previous(&config, std::process::id());
+    let _ = publish_promoted(&config, 99, 12, config.options.listen, 0);
+    let _ = publish_promoted(&config, 99, 12, config.options.listen, 2);
 }
 
 fn config_at(listen: SocketAddr, root: &Path, executable: PathBuf) -> ServiceConfig {
@@ -274,6 +308,31 @@ async fn request_rebind_parses_success_and_skips_unreachable_listeners() {
 }
 
 #[tokio::test]
+async fn request_rebind_skips_non_success_responses() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("rebind listener");
+    let listen = listener.local_addr().expect("rebind address");
+    tokio::spawn(async move {
+        let Ok((mut stream, _)) = listener.accept().await else {
+            return;
+        };
+        let mut buf = vec![0; 4096];
+        let _ = stream.read(&mut buf).await;
+        let response = "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}";
+        let _ = stream.write_all(response.as_bytes()).await;
+    });
+    let root = tempfile::tempdir().expect("rebind fixture");
+    let rejected = request_ephemeral_rebind(
+        &reqwest::Client::new(),
+        &config_at(listen, root.path(), PathBuf::from("/tmp/adapter")),
+    )
+    .await
+    .expect("rejected rebind");
+    assert!(rejected.is_none());
+}
+
+#[tokio::test]
 async fn wait_until_canonical_released_returns_when_the_port_is_free() {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("free listen");
     let listen = listener.local_addr().expect("free address");
@@ -302,4 +361,93 @@ async fn wait_until_canonical_released_times_out_while_the_port_is_busy() {
     .expect_err("busy port must time out");
     assert!(error.to_string().contains("did not release"));
     drop(listener);
+}
+
+#[cfg(unix)]
+fn write_current_build_dummy(root: &Path) -> PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let executable = root.join("claudex-agent-adapter");
+    let script = format!(
+        r#"#!/usr/bin/python3
+import json, sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+def listen_addr():
+    args = sys.argv
+    for i, arg in enumerate(args):
+        if arg == "--listen" and i + 1 < len(args):
+            return args[i + 1]
+    raise SystemExit("missing --listen")
+
+host, port = listen_addr().rsplit(":", 1)
+host = host.strip("[]")
+BUILD = {build:?}
+PROTOCOL = {protocol}
+
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, *_args):
+        return
+    def do_GET(self):
+        if self.path.split("?", 1)[0] != "/health":
+            self.send_error(404)
+            return
+        body = json.dumps({{
+            "status": "ok",
+            "pid": None,
+            "protocol_version": PROTOCOL,
+            "build_id": BUILD,
+            "subscription_max_processes": 20,
+            "subscription_timeout_minutes": 120,
+            "listener_handover": True,
+        }}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    def do_POST(self):
+        self.send_error(501)
+
+HTTPServer((host, int(port)), Handler).serve_forever()
+"#,
+        build = env!("CLAUDEX_BUILD_ID"),
+        protocol = ADAPTER_PROTOCOL_VERSION,
+    );
+    std::fs::write(&executable, script).expect("dummy script");
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755))
+        .expect("dummy executable");
+    executable
+}
+
+#[cfg(unix)]
+fn kill_dummy(executable: &Path) {
+    let _ = std::process::Command::new("pkill")
+        .args(["-f", &executable.to_string_lossy()])
+        .status();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn try_canonical_keeps_the_old_listener_when_rebind_is_rejected() {
+    let root = tempfile::tempdir().expect("rebind-reject fixture");
+    let dummy = write_current_build_dummy(root.path());
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("canonical listen");
+    let listen = listener.local_addr().expect("canonical address");
+    tokio::spawn(async move {
+        let Ok((mut stream, _)) = listener.accept().await else {
+            return;
+        };
+        let mut buf = vec![0; 4096];
+        let _ = stream.read(&mut buf).await;
+        let response = "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}";
+        let _ = stream.write_all(response.as_bytes()).await;
+    });
+    let config = config_at(listen, root.path(), dummy.clone());
+    let kept = try_canonical(&reqwest::Client::new(), &config, &health(true, Some(12)))
+        .await
+        .expect("rejected rebind must keep the old listener");
+    assert_eq!(kept, None);
+    kill_dummy(&dummy);
 }

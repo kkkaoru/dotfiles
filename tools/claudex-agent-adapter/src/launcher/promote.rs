@@ -16,7 +16,7 @@ use super::{
 #[cfg(not(test))]
 const HANDOVER_TIMEOUT: Duration = Duration::from_secs(10);
 #[cfg(test)]
-const HANDOVER_TIMEOUT: Duration = Duration::from_millis(50);
+const HANDOVER_TIMEOUT: Duration = Duration::from_secs(2);
 const HANDOVER_POLL: Duration = Duration::from_millis(25);
 
 #[derive(Debug, Deserialize)]
@@ -52,12 +52,12 @@ pub(super) async fn try_canonical(
     config: &ServiceConfig,
     health: &Health,
 ) -> Result<Option<String>> {
-    if !handover_supported(health) {
-        return Ok(None);
-    }
-    let Some(old_pid) = health.pid else {
+    let Some(old_pid) = health.pid.filter(|&pid| pid != 0) else {
         return Ok(None);
     };
+    if !health.listener_handover {
+        return Ok(None);
+    }
     super::pending_hot_swap::disarm(config);
     let session_ids = retained_session_ids(health);
     let advertised = advertised_listen(config, health);

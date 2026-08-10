@@ -214,10 +214,20 @@ async fn defer_busy_listener(
             pending_hot_swap::disarm(config);
             if let Some(health) = super::health::fetch_health(client, config).await
                 && super::promote::live_update_eligible(&health, config)
-                && let Some(url) = super::promote::try_canonical(client, config, &health).await?
             {
-                notify_swap_if_replaced(true, config);
-                return Ok(url);
+                match super::promote::try_canonical(client, config, &health).await {
+                    Ok(Some(url)) => {
+                        notify_swap_if_replaced(true, config);
+                        return Ok(url);
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        eprintln!(
+                            "claudex: live update handover failed ({error:#}); retaining pid {pid:?} on {} so Claude Code stays connected",
+                            config.base_url()
+                        );
+                    }
+                }
             }
             let outcome = pending_hot_swap::arm(config)?;
             eprintln!(
