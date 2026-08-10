@@ -142,12 +142,18 @@ fn parse_event(event: WireEvent) -> ParsedLine {
             name,
             error: nonempty(event.error).or_else(|| nonempty(event.message)),
         }),
-        "thinking_end" | "thinking_delta" => match text {
+        "thinking_delta" => match text {
             Some(text) if has_status_prefix(text.trim()) => {
                 ParsedLine::Progress(ProgressEvent::Status(text))
             }
-            Some(_) | None => ParsedLine::Ignored,
+            Some(text) if is_canned_progress(&text) || is_thought_for_chrome(&text) => {
+                ParsedLine::Ignored
+            }
+            Some(text) => ParsedLine::Progress(ProgressEvent::Thought(text)),
+            None => ParsedLine::Ignored,
         },
+        // Muse Spark `thinking_end` is a full snapshot, not a delta.
+        "thinking_end" => ParsedLine::Ignored,
         "text_delta" | "message_update" => match text {
             Some(text) => ParsedLine::Progress(ProgressEvent::Message(text)),
             None => ParsedLine::Ignored,
@@ -277,9 +283,14 @@ fn thought_chunk(text: &str) -> acp::SessionUpdate {
     )))
 }
 
+fn is_thought_for_chrome(text: &str) -> bool {
+    text.trim().to_ascii_lowercase().starts_with("thought for ")
+}
+
 fn is_canned_progress(text: &str) -> bool {
     let t = text.trim().trim_start_matches(['●', '▶', '✓', '✗', ' ']);
-    t.contains("ツール結果待ち")
+    is_thought_for_chrome(t)
+        || t.contains("ツール結果待ち")
         || t.contains("続きの調査または回答")
         || t.contains("次: タスク実行")
         || t.contains("次: ツールまたは回答")

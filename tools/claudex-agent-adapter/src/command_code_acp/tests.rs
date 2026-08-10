@@ -342,9 +342,15 @@ fn parses_live_command_code_ndjson_without_flooding_tui() {
         parse_stdout_line(r#"{"type":"event","event":{"type":"message_update"}}"#),
         ParsedLine::Ignored
     );
-    assert_eq!(
+    assert!(matches!(
         parse_stdout_line(
             r#"{"type":"event","event":{"type":"thinking_delta","text":"planning live"}}"#
+        ),
+        ParsedLine::Progress(ProgressEvent::Thought(note)) if note == "planning live"
+    ));
+    assert_eq!(
+        parse_stdout_line(
+            r#"{"type":"event","event":{"type":"thinking_delta","text":"Thought for 15s"}}"#
         ),
         ParsedLine::Ignored
     );
@@ -627,6 +633,8 @@ fn drops_canned_command_code_status_phrases() {
         "失敗: web_search。次: 別手段",
         "ターン1開始",
         "モデル要求中: meta/muse-spark-1.2-contributor",
+        "Thought for 15s",
+        "Thought for 19s",
     ] {
         assert!(
             progress_to_updates(&ProgressEvent::Status(canned.to_owned())).is_empty(),

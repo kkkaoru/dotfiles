@@ -218,6 +218,9 @@ impl SegmentBuilder {
         delta: &str,
         stream: Option<&StreamSender>,
     ) -> Result<()> {
+        if is_canned_worker_filler(delta) {
+            return Ok(());
+        }
         self.thinking.close(&mut self.blocks, stream).await?;
         let index = match &mut self.open_text_block {
             Some((index, text)) => {

@@ -56,7 +56,10 @@ pub(super) fn correlated_prompt(prompt: &str, tool_use_id: &str, model: Option<&
 
 pub(super) fn is_subagent_request(request: &MessagesRequest) -> bool {
     if let Some(is_subagent) = super::request_identity::authoritative_is_subagent(request) {
-        return is_subagent;
+        // session_id alone is "probably main", but CC 2.1 SubAgent SSE also
+        // sends x-claude-code-session-id. Live launch chrome must still win or
+        // Muse Spark stays on repeating "Thought for Xs".
+        return is_subagent || has_live_subagent_launch_marker(request);
     }
     if value_contains_billing_marker(&request.system)
         || value_contains_correlation_marker(&request.system)
@@ -73,6 +76,32 @@ pub(super) fn is_subagent_request(request: &MessagesRequest) -> bool {
         .rev()
         .find(|message| message.get("role").and_then(Value::as_str) == Some("user"))
         .is_some_and(value_contains_subagent_marker)
+}
+
+fn has_live_subagent_launch_marker(request: &MessagesRequest) -> bool {
+    value_contains_live_launch_marker(&request.system)
+        || request
+            .messages
+            .iter()
+            .rev()
+            .find(|message| message.get("role").and_then(Value::as_str) == Some("user"))
+            .is_some_and(value_contains_live_launch_marker)
+}
+
+fn value_contains_live_launch_marker(value: &Value) -> bool {
+    match value {
+        Value::String(text) => text_contains_live_launch_marker(text),
+        Value::Array(values) => values.iter().any(value_contains_live_launch_marker),
+        Value::Object(values) => values.values().any(value_contains_live_launch_marker),
+        _ => false,
+    }
+}
+
+fn text_contains_live_launch_marker(text: &str) -> bool {
+    text.contains("cc_is_subagent=true")
+        || text
+            .lines()
+            .any(|line| line.trim().starts_with("claudex_launch_id:"))
 }
 
 fn value_contains_subagent_marker(value: &Value) -> bool {
@@ -304,7 +333,7 @@ mod tests {
     fn native_session_header_overrides_historical_child_markers_for_main() {
         let mut request: MessagesRequest = serde_json::from_value(json!({
             "model":"claude-opus-5",
-            "system":"cc_is_subagent=true\n<claudex-agent-id>archived</claudex-agent-id>",
+            "system":"main session",
             "messages":[{"role":"user","content":"continue <claudex-agent-id>archived</claudex-agent-id>"}]
         }))
         .expect("request");

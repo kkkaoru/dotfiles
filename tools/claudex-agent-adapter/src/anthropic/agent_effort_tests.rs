@@ -1890,6 +1890,34 @@ mod tests {
     }
 
     #[test]
+    fn session_id_header_does_not_hide_a_live_muse_spark_launch() {
+        let mut request: MessagesRequest = serde_json::from_value(json!({
+            "model":"meta/muse-spark-1.2-contributor",
+            "system":"ordinary system",
+            "messages":[{"role":"user","content":"Within horse-racing-data, run the pooler GUC checks.\n\nclaudex_launch_id: toolu_9472e7fc33464570a065847cb744fedc\nclaudex_model: meta/muse-spark-1.2-contributor\n\n<claudex-agent-id>toolu_9472e7fc33464570a065847cb744fedc</claudex-agent-id>"}]
+        }))
+        .expect("request");
+        super::super::RequestIdentity::new(Some("session-child".to_owned()), None, None)
+            .attach(&mut request);
+
+        assert!(super::is_subagent_request(&request));
+    }
+
+    #[test]
+    fn session_id_header_does_not_hide_cc_is_subagent_billing() {
+        let mut request: MessagesRequest = serde_json::from_value(json!({
+            "model":"meta/muse-spark-1.2-contributor",
+            "system":"cc_is_subagent=true",
+            "messages":[{"role":"user","content":"ordinary delegated task"}]
+        }))
+        .expect("request");
+        super::super::RequestIdentity::new(Some("session-child".to_owned()), None, None)
+            .attach(&mut request);
+
+        assert!(super::is_subagent_request(&request));
+    }
+
+    #[test]
     fn standard_agent_hydration_skips_claudex_workers_and_wrong_advisors() {
         let mut routed = json!({"subagent_type":"claudex-worker"});
         super::super::agent_routing::hydrate_standard_agent_to_parent(&mut routed, "parent-model");

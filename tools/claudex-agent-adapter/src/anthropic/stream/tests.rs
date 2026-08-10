@@ -37,6 +37,10 @@ async fn ignores_missing_and_empty_text_deltas() {
         .text_delta(&json!({"params":{"delta":""}}), None)
         .await
         .expect("empty delta");
+    builder
+        .text_delta(&json!({"params":{"delta":"Thought for 15s\n"}}), None)
+        .await
+        .expect("thought-for chrome");
     let segment = builder.finish(None).await.expect("empty segment");
     assert!(segment.blocks.is_empty());
     assert_eq!(segment.usage.input_tokens, 7);
@@ -561,7 +565,8 @@ async fn command_code_reasoning_stays_on_one_thinking_block() {
         sse.push_str(&String::from_utf8_lossy(&frame.expect("frame")));
     }
     assert_eq!(
-        sse.matches("\"thinking\":\"\",\"type\":\"thinking\"").count(),
+        sse.matches("\"thinking\":\"\",\"type\":\"thinking\"")
+            .count(),
         1,
         "Command Code live stream must open thinking only once: {sse}"
     );
@@ -573,6 +578,88 @@ async fn command_code_reasoning_stays_on_one_thinking_block() {
     assert!(
         !sse.contains("Thought for"),
         "Command Code must not emit Thought-for chrome: {sse}"
+    );
+}
+
+#[tokio::test]
+async fn command_code_muse_spark_status_bursts_stay_on_one_thinking_block() {
+    // Live dump: Muse Spark SubAgent card flickered `Thought for 15s/19s/5s…`
+    // between "I'm setting up your pooled-primary…" status lines.
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(32);
+    let mut builder = SegmentBuilder::for_turn(1, true, "meta/muse-spark-1.2-contributor");
+    for (summary_index, delta) in [
+        (
+            0,
+            "I'm setting up your pooled-primary runtime checks A/B/C.\n",
+        ),
+        (1, "Thought for 15s\n"),
+        (2, "Polling the pooled primary next — fresh connections.\n"),
+        (3, "Thought for 19s\n"),
+        (0, "Running the live pooled-primary A/B/C checks.\n"),
+    ] {
+        builder
+            .model_output_event(
+                &json!({
+                    "method":"item/reasoning/summaryTextDelta",
+                    "params":{
+                        "itemId":"command-code:reasoning",
+                        "summaryIndex":summary_index,
+                        "delta":delta
+                    }
+                }),
+                Some(&sender),
+            )
+            .await
+            .expect("muse spark reasoning");
+    }
+    builder
+        .model_output_event(
+            &json!({
+                "method":"item/agentMessage/delta",
+                "params":{
+                    "itemId":"command-code:message",
+                    "delta":"I'm setting up your pooled-primary runtime checks A/B/C — loading the key with safe redacted parsing.\n"
+                }
+            }),
+            Some(&sender),
+        )
+        .await
+        .expect("muse spark status");
+    let segment = builder.finish(Some(&sender)).await.expect("segment");
+    drop(sender);
+    let thinking_blocks: Vec<_> = segment
+        .blocks
+        .iter()
+        .filter(|block| block.get("type").and_then(Value::as_str) == Some("thinking"))
+        .collect();
+    assert_eq!(
+        thinking_blocks.len(),
+        1,
+        "Muse Spark dump must not open/close thinking per burst: {:?}",
+        segment.blocks
+    );
+    let mut sse = String::new();
+    while let Some(frame) = receiver.recv().await {
+        sse.push_str(&String::from_utf8_lossy(&frame.expect("frame")));
+    }
+    assert_eq!(
+        sse.matches("\"thinking\":\"\",\"type\":\"thinking\"")
+            .count(),
+        1,
+        "Muse Spark live stream must open thinking only once: {sse}"
+    );
+    assert_eq!(
+        sse.matches("\"type\":\"signature_delta\"").count(),
+        1,
+        "Muse Spark thinking must stay open until end_turn: {sse}"
+    );
+    assert!(
+        !sse.contains("Thought for"),
+        "Muse Spark must not emit Thought-for chrome: {sse}"
+    );
+    assert!(
+        sse.contains("pooled-primary"),
+        "status prose must stay on thinking: {sse}"
     );
 }
 
