@@ -91,15 +91,12 @@ pub(super) async fn create(
         }
     };
     // OpenCode ignores modelId meta on session/new. Cursor accepts CLI `--model auto` but ACP
-    // only accepts ids like `default[]`. Pin the session model through ACP after create so the
-    // first prompt cannot run against a mismatched default. Launch-scoped providers already pass
-    // a CLI model, so a set_session_model failure is non-fatal there.
-    if matches!(
-        provider,
-        AcpProvider::Configured | AcpProvider::ConfiguredLaunchScoped
-    ) {
+    // only accepts ids like `default[]`. Pin session-scoped configured ACP after create so the
+    // first prompt cannot run against a mismatched default. Launch-scoped CLIs already pass
+    // `--model`; a post-create set_session_model RPC only adds seconds of Nucleating delay.
+    if pins_acp_model_after_create(provider) {
         let session_model = prompt::configured_acp_session_model(model);
-        let setup = await_model_setup(
+        await_model_setup(
             provider,
             SESSION_SETUP_TIMEOUT,
             connection.set_session_model(acp::SetSessionModelRequest::new(
@@ -107,18 +104,7 @@ pub(super) async fn create(
                 session_model,
             )),
         )
-        .await;
-        match setup {
-            Ok(_) => {}
-            Err(error) if provider.model_is_launch_scoped() => {
-                tracing::warn!(
-                    %error,
-                    model,
-                    "launch-scoped ACP set_session_model failed; continuing with CLI model"
-                );
-            }
-            Err(error) => return Err(error),
-        }
+        .await?;
     }
     let session_id = response.session_id.0.to_string();
     if !crate::command_code_acp::is_command_code_model(model) {
@@ -130,6 +116,10 @@ pub(super) async fn create(
         }
     }
     Ok(json!({"thread":{"id":session_id}}))
+}
+
+fn pins_acp_model_after_create(provider: AcpProvider) -> bool {
+    matches!(provider, AcpProvider::Configured)
 }
 
 async fn new_session_with_mcp(

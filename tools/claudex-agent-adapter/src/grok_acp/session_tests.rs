@@ -1,6 +1,16 @@
 use super::*;
 use serde_json::{Value, json};
 
+#[test]
+fn launch_scoped_session_does_not_pin_model_after_create() {
+    assert!(pins_acp_model_after_create(AcpProvider::Configured));
+    assert!(!pins_acp_model_after_create(
+        AcpProvider::ConfiguredLaunchScoped
+    ));
+    assert!(!pins_acp_model_after_create(AcpProvider::Grok));
+    assert!(!pins_acp_model_after_create(AcpProvider::Copilot));
+}
+
 #[tokio::test]
 async fn bounds_session_setup_and_reports_provider_failures() {
     let timeout = await_setup(

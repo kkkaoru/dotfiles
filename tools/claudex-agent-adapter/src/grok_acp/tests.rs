@@ -108,7 +108,10 @@ fn identifies_each_acp_provider_and_its_model_scope() {
     assert!(!AcpProvider::Configured.model_is_launch_scoped());
     assert!(AcpProvider::Configured.is_session_scoped_configured());
 
-    assert_eq!(AcpProvider::ConfiguredLaunchScoped.label(), "Configured");
+    assert_eq!(
+        AcpProvider::ConfiguredLaunchScoped.label(),
+        "ConfiguredLaunch"
+    );
     assert_eq!(
         AcpProvider::ConfiguredLaunchScoped.driver_name(),
         "claudex-configured-acp"

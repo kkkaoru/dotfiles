@@ -33,7 +33,8 @@ impl AcpProvider {
         match self {
             Self::Grok => "Grok",
             Self::Copilot => "Copilot",
-            Self::Configured | Self::ConfiguredLaunchScoped => "Configured",
+            Self::Configured => "Configured",
+            Self::ConfiguredLaunchScoped => "ConfiguredLaunch",
         }
     }
 
