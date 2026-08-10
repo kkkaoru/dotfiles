@@ -178,6 +178,8 @@ pub(super) fn apply_transcript(launches: &mut Vec<LaunchRecord>, messages: &[Val
                 remember_launch_context(&mut contexts, block);
                 if let Some(record) = launch_record(block, &contexts) {
                     merge_launches(launches, std::iter::once(&record));
+                } else {
+                    mark_failed_launch_result(launches, block);
                 }
             }
         }
@@ -251,6 +253,20 @@ fn launch_record(
         model: context.1,
         status: active_status(),
     })
+}
+fn mark_failed_launch_result(launches: &mut [LaunchRecord], block: &Value) {
+    if block.get("type").and_then(Value::as_str) != Some("tool_result") {
+        return;
+    }
+    let Some(tool_use_id) = block.get("tool_use_id").and_then(Value::as_str) else {
+        return;
+    };
+    if let Some(launch) = launches
+        .iter_mut()
+        .find(|launch| launch.key == tool_use_id && launch.status == "pending")
+    {
+        launch.status = "failed".to_owned();
+    }
 }
 
 fn set_task_status(launches: &mut [LaunchRecord], task_id: &str, status: String) {

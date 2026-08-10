@@ -650,6 +650,42 @@ mod tests {
     }
 
     #[test]
+    fn failed_launch_result_releases_inflight_scope() {
+        let registry = SubagentReuseRegistry::default();
+        let arguments = json!({
+            "description":"Trace azookey conversion pipeline",
+            "prompt":"Start with Vibrato boundaries.",
+            "claudex_model":"gpt-test"
+        });
+        registry.note_inflight_launch("session-a", &arguments, "tool-failed");
+        let mut request = request(
+            "session-a",
+            vec![
+                json!({
+                    "role":"assistant",
+                    "content":[{
+                        "type":"tool_use",
+                        "id":"tool-failed",
+                        "name":"Agent",
+                        "input":arguments
+                    }]
+                }),
+                json!({
+                    "role":"user",
+                    "content":[{
+                        "type":"tool_result",
+                        "tool_use_id":"tool-failed",
+                        "is_error":true,
+                        "content":"provider launch failed"
+                    }]
+                }),
+            ],
+        );
+        registry.observe_and_restore(&mut request);
+        assert!(!registry.scope_is_occupied("session-a", &arguments));
+    }
+
+    #[test]
     fn unique_fuzzy_scope_overlap_does_not_rewrite_independent_fanout() {
         let registry = SubagentReuseRegistry::default();
         let mut first = request(
