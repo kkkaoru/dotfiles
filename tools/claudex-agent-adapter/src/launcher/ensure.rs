@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 use anyhow::{Context, Result};
 
 use super::{
@@ -7,26 +5,11 @@ use super::{
     health::wait_until_ready, launcher_lock, macos_notify, pending_hot_swap, preflight, recovery,
 };
 
-/// Production recheck cadence while a busy listener is `Defer`ing idle hot-swap.
-/// Keep far under 1s so installs promote promptly after in-flight work drains.
-pub(super) const WAIT_IDLE_POLL_INTERVAL: Duration = Duration::from_millis(100);
-#[cfg(not(test))]
-const WAIT_IDLE_POLL: Duration = WAIT_IDLE_POLL_INTERVAL;
+#[path = "ensure_wait_idle.rs"]
+mod wait_idle;
+
 #[cfg(test)]
-const WAIT_IDLE_POLL: Duration = Duration::from_millis(0);
-/// Production waiters keep retrying Replace after a failed handover. Tests
-/// allow one retry so the sleep/continue arm stays measurable under llvm-cov,
-/// then fail closed.
-#[cfg(not(test))]
-const WAIT_IDLE_REPLACE_RETRIES: Option<u32> = None;
-#[cfg(test)]
-const WAIT_IDLE_REPLACE_RETRIES: Option<u32> = Some(1);
-#[cfg(test)]
-std::thread_local! {
-    // Lets fixtures bind a current-build listener between the outer Start
-    // observation and wait_for_hot_swap_idle's re-inspect.
-    static WAIT_IDLE_INSPECT_PAUSE: std::cell::Cell<Duration> = const { std::cell::Cell::new(Duration::ZERO) };
-}
+pub(super) use wait_idle::{WAIT_IDLE_POLL_INTERVAL, WaitIdleInspectPause};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Mode {
@@ -37,7 +20,7 @@ pub(super) enum Mode {
 
 pub(super) async fn run(config: &ServiceConfig, mode: Mode) -> Result<String> {
     if mode == Mode::WaitIdle {
-        return wait_until_idle_then_replace(config).await;
+        return wait_idle::wait_until_idle_then_replace(config).await;
     }
     let _lock = launcher_lock::acquire(&config.lock_path)?;
     let client = reqwest::Client::new();
@@ -45,75 +28,7 @@ pub(super) async fn run(config: &ServiceConfig, mode: Mode) -> Result<String> {
     apply_inspected_state(config, &client, mode, state).await
 }
 
-async fn wait_until_idle_then_replace(config: &ServiceConfig) -> Result<String> {
-    let client = reqwest::Client::new();
-    let mut replace_failures: u32 = 0;
-    loop {
-        match handover::inspect_service(&client, config).await {
-            ServiceState::Reuse => {
-                pending_hot_swap::clear_if_current(config);
-                return Ok(config.base_url());
-            }
-            ServiceState::Defer { .. } => {
-                tokio::time::sleep(WAIT_IDLE_POLL).await;
-            }
-            ServiceState::Start => {
-                let _lock = launcher_lock::acquire(&config.lock_path)?;
-                wait_idle_inspect_pause().await;
-                let state = handover::wait_for_hot_swap_idle(&client, config).await?;
-                match state {
-                    ServiceState::Defer { .. } => {}
-                    ServiceState::Reuse => {
-                        pending_hot_swap::clear_if_current(config);
-                        return Ok(config.base_url());
-                    }
-                    state => {
-                        let url =
-                            apply_inspected_state(config, &client, Mode::HotSwap, state).await?;
-                        pending_hot_swap::clear_if_current(config);
-                        return Ok(url);
-                    }
-                }
-            }
-            ServiceState::Replace { .. } => {
-                let outcome = {
-                    let _lock = launcher_lock::acquire(&config.lock_path)?;
-                    wait_idle_inspect_pause().await;
-                    let state = handover::wait_for_hot_swap_idle(&client, config).await?;
-                    match state {
-                        ServiceState::Defer { .. } => None,
-                        ServiceState::Reuse => {
-                            pending_hot_swap::clear_if_current(config);
-                            return Ok(config.base_url());
-                        }
-                        state => {
-                            Some(apply_inspected_state(config, &client, Mode::HotSwap, state).await)
-                        }
-                    }
-                };
-                match outcome {
-                    None => {}
-                    Some(Ok(url)) => {
-                        pending_hot_swap::clear_if_current(config);
-                        return Ok(url);
-                    }
-                    Some(Err(error)) => {
-                        replace_failures = replace_failures.saturating_add(1);
-                        eprintln!(
-                            "claudex: idle hot-swap replace failed ({error:#}); waiting to retry"
-                        );
-                        if !should_retry_idle_replace(replace_failures, WAIT_IDLE_REPLACE_RETRIES) {
-                            return Err(error);
-                        }
-                        tokio::time::sleep(WAIT_IDLE_POLL).await;
-                    }
-                }
-            }
-        }
-    }
-}
-
-async fn apply_inspected_state(
+pub(super) async fn apply_inspected_state(
     config: &ServiceConfig,
     client: &reqwest::Client,
     mode: Mode,
@@ -147,46 +62,82 @@ async fn apply_inspected_state(
         ServiceState::Replace {
             pid,
             recovery_generation,
-        } => {
-            if let Some(health) = super::health::fetch_health(client, config).await
-                && super::promote::live_update_eligible(&health, config)
-            {
-                if let Some(url) = super::promote::try_canonical(client, config, &health).await? {
-                    pending_hot_swap::clear_if_current(config);
-                    notify_swap_if_replaced(true, config);
-                    return Ok(url);
-                }
-                eprintln!(
-                    "claudex: live update handover failed; keeping pid {pid:?} on {} so Claude Code stays connected",
-                    config.base_url()
-                );
-                return Ok(config.base_url());
-            }
-            let recovery_generation =
-                usable_recovery_generation(config, recovery_generation.as_deref())?;
-            let attached =
-                super::session_process::any_launch_is_active(config.options.listen.port());
-            eprintln!(
-                "claudex: replacing adapter pid {pid:?} on {} with build {}{}{}",
-                config.base_url(),
-                env!("CLAUDEX_BUILD_ID"),
-                if mode == Mode::HotSwap {
-                    " (hot-swap)"
-                } else {
-                    ""
-                },
-                if attached {
-                    "; launch TUI kept on this port"
-                } else {
-                    ""
-                }
-            );
-            preflight::verify(client, config).await?;
-            handover::release_stale_listener(client, config, pid).await?;
-            recovery_generation
-        }
+        } => match prepare_replace_recovery(config, client, mode, pid, recovery_generation).await?
+        {
+            ReplacePrep::Finished(url) => return Ok(url),
+            ReplacePrep::Continue(manifest) => manifest,
+        },
         ServiceState::Start => None,
     };
+    start_and_wait_for_adapter(config, client, recovery_manifest, replaced).await
+}
+
+enum ReplacePrep {
+    Finished(String),
+    Continue(Option<String>),
+}
+
+async fn prepare_replace_recovery(
+    config: &ServiceConfig,
+    client: &reqwest::Client,
+    mode: Mode,
+    pid: Option<u32>,
+    recovery_generation: Option<String>,
+) -> Result<ReplacePrep> {
+    if let Some(url) = try_live_replace_update(config, client, pid).await? {
+        return Ok(ReplacePrep::Finished(url));
+    }
+    let recovery_generation = usable_recovery_generation(config, recovery_generation.as_deref())?;
+    let attached = super::session_process::any_launch_is_active(config.options.listen.port());
+    eprintln!(
+        "claudex: replacing adapter pid {pid:?} on {} with build {}{}{}",
+        config.base_url(),
+        env!("CLAUDEX_BUILD_ID"),
+        if mode == Mode::HotSwap {
+            " (hot-swap)"
+        } else {
+            ""
+        },
+        if attached {
+            "; launch TUI kept on this port"
+        } else {
+            ""
+        }
+    );
+    preflight::verify(client, config).await?;
+    handover::release_stale_listener(client, config, pid).await?;
+    Ok(ReplacePrep::Continue(recovery_generation))
+}
+
+async fn try_live_replace_update(
+    config: &ServiceConfig,
+    client: &reqwest::Client,
+    pid: Option<u32>,
+) -> Result<Option<String>> {
+    let Some(health) = super::health::fetch_health(client, config).await else {
+        return Ok(None);
+    };
+    if !super::promote::live_update_eligible(&health, config) {
+        return Ok(None);
+    }
+    if let Some(url) = super::promote::try_canonical(client, config, &health).await? {
+        pending_hot_swap::clear_if_current(config);
+        notify_swap_if_replaced(true, config);
+        return Ok(Some(url));
+    }
+    eprintln!(
+        "claudex: live update handover failed; keeping pid {pid:?} on {} so Claude Code stays connected",
+        config.base_url()
+    );
+    Ok(Some(config.base_url()))
+}
+
+async fn start_and_wait_for_adapter(
+    config: &ServiceConfig,
+    client: &reqwest::Client,
+    recovery_manifest: Option<String>,
+    replaced: bool,
+) -> Result<String> {
     let started_pid = match daemon_start::start_adapter(config) {
         Ok(pid) => pid,
         Err(error) => {
@@ -225,22 +176,8 @@ async fn defer_busy_listener(
     debug_assert!(matches!(mode, Mode::HotSwap | Mode::Ensure));
     let _ = mode;
     pending_hot_swap::disarm(config);
-    if let Some(health) = super::health::fetch_health(client, config).await
-        && super::promote::live_update_eligible(&health, config)
-    {
-        match super::promote::try_canonical(client, config, &health).await {
-            Ok(Some(url)) => {
-                notify_swap_if_replaced(true, config);
-                return Ok(url);
-            }
-            Ok(None) => {}
-            Err(error) => {
-                eprintln!(
-                    "claudex: live update handover failed ({error:#}); retaining pid {pid:?} on {} so Claude Code stays connected",
-                    config.base_url()
-                );
-            }
-        }
+    if let Some(url) = try_defer_live_update(config, client, pid).await? {
+        return Ok(url);
     }
     let outcome = pending_hot_swap::arm(config)?;
     eprintln!(
@@ -255,6 +192,33 @@ async fn defer_busy_listener(
     notify_live_listener(config, &url);
     log_live_listener(config);
     Ok(url)
+}
+
+async fn try_defer_live_update(
+    config: &ServiceConfig,
+    client: &reqwest::Client,
+    pid: Option<u32>,
+) -> Result<Option<String>> {
+    let Some(health) = super::health::fetch_health(client, config).await else {
+        return Ok(None);
+    };
+    if !super::promote::live_update_eligible(&health, config) {
+        return Ok(None);
+    }
+    match super::promote::try_canonical(client, config, &health).await {
+        Ok(Some(url)) => {
+            notify_swap_if_replaced(true, config);
+            Ok(Some(url))
+        }
+        Ok(None) => Ok(None),
+        Err(error) => {
+            eprintln!(
+                "claudex: live update handover failed ({error:#}); retaining pid {pid:?} on {} so Claude Code stays connected",
+                config.base_url()
+            );
+            Ok(None)
+        }
+    }
 }
 
 pub(super) fn notify_live_listener(config: &ServiceConfig, url: &str) {
@@ -274,34 +238,6 @@ pub(super) fn log_live_listener(config: &ServiceConfig) {
 
 pub(super) fn should_retry_idle_replace(failures: u32, limit: Option<u32>) -> bool {
     limit.is_none_or(|limit| failures <= limit)
-}
-
-#[cfg(test)]
-pub(super) struct WaitIdleInspectPause;
-
-#[cfg(test)]
-impl WaitIdleInspectPause {
-    pub(super) fn arm(pause: Duration) -> Self {
-        WAIT_IDLE_INSPECT_PAUSE.with(|cell| cell.set(pause));
-        Self
-    }
-}
-
-#[cfg(test)]
-impl Drop for WaitIdleInspectPause {
-    fn drop(&mut self) {
-        WAIT_IDLE_INSPECT_PAUSE.with(|cell| cell.set(Duration::ZERO));
-    }
-}
-
-async fn wait_idle_inspect_pause() {
-    #[cfg(test)]
-    {
-        let pause = WAIT_IDLE_INSPECT_PAUSE.with(|cell| cell.get());
-        if !pause.is_zero() {
-            tokio::time::sleep(pause).await;
-        }
-    }
 }
 
 pub(super) fn listener_was_replaced(state: &ServiceState) -> bool {
