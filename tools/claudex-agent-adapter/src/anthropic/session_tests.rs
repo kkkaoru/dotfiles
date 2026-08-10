@@ -799,6 +799,27 @@ fn thread_start_params_include_claude_session_launch_owner() {
 }
 
 #[test]
+fn codex_terra_main_omits_self_implement_parallelization_and_requires_subagent_first() {
+    let params = thread_start_params(
+        &request(Value::Null, Vec::new()),
+        "gpt-5.6-terra",
+        Vec::new(),
+    );
+    let developer = params["developerInstructions"]
+        .as_str()
+        .expect("developer instructions");
+    assert_eq!(params["claudexAcpRole"], "orchestrator");
+    assert!(developer.contains("You are the orchestrator, not an implementation worker"));
+    assert!(developer.contains("including when the outer model is Codex Terra"));
+    assert!(developer.contains("Agent/Task launch must be the first tool call"));
+    assert!(
+        !developer.contains("In Code tasks, avoid serializing independent operations"),
+        "Terra main must not receive Codex self-implement parallelization"
+    );
+    assert!(developer.contains("never a substitute for launching SubAgents"));
+}
+
+#[test]
 fn acp_native_modes_use_provider_native_instructions_instead_of_agent_orchestration() {
     let request = request(json!("cursor main"), Vec::new());
     let params =
@@ -883,10 +904,10 @@ fn assert_developer_guidance(developer: &str) {
         "do not copy restrictions from an unrelated earlier task",
         "preserve that authority in SubAgent prompts",
         "explicitly requires live WebSearch",
-        "run independent calls, fetches, or checks in parallel",
-        "Promise.all",
-        "avoid serializing independent operations",
         "unless they are explicitly active for the current task",
+        "You are the orchestrator, not an implementation worker",
+        "Agent/Task launch must be the first tool call",
+        "do not start with Read, Bash, Edit, Grep, Glob",
         "Omit the SubAgent name field for ordinary SubAgents",
         "only when the active user explicitly supplies that teammate name",
         "Use only fields present in the exact Agent or Task schema supplied by Claude Code",
@@ -944,6 +965,18 @@ fn main_session_orchestration_instructions_are_omitted_for_subagents() {
     assert!(
         !developer.contains("Claudex main-session orchestration mode is active"),
         "worker turns must not receive main-session orchestration mode"
+    );
+    assert!(
+        developer.contains("In Code tasks, avoid serializing independent operations"),
+        "workers keep Codex parallel-execution guidance"
+    );
+    assert!(
+        developer.contains("Promise.all"),
+        "workers keep Promise.all batching guidance"
+    );
+    assert!(
+        !developer.contains("You are the orchestrator, not an implementation worker"),
+        "workers must not receive main-only Terra/Codex orchestrator guard"
     );
     assert!(developer.contains(
         "For ordinary follow-ups, reuse the exact Agent/Task recipient through its native result and TaskOutput"
