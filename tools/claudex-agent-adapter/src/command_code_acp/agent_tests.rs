@@ -81,7 +81,9 @@ fn options_for(program: PathBuf) -> Options {
 }
 
 fn instrumented_timeout(fast: Duration, slow: Duration) -> Duration {
-    if std::env::var_os("CARGO_LLVM_COV").is_some()
+    if cfg!(coverage)
+        || std::env::var_os("CARGO_LLVM_COV").is_some()
+        || std::env::var_os("CARGO_LLVM_COV_TARGET_DIR").is_some()
         || std::env::var_os("LLVM_PROFILE_FILE").is_some()
     {
         slow
