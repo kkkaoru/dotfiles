@@ -364,6 +364,30 @@ mod tests {
         );
     }
 
+    #[test]
+    fn multi_tool_result_steering_attaches_to_the_last_result_only() {
+        let message = json!({
+            "role":"user",
+            "content":[
+                {"type":"tool_result","tool_use_id":"tool-a","content":"a"},
+                {"type":"tool_result","tool_use_id":"tool-b","content":"b"},
+                {"type":"text","text":"The user sent a new message while you were working:\n先に tool-b の続きを優先\n\nAddress the message above as you continue this turn."}
+            ]
+        });
+        let steering = mid_turn_user_steering(&message).expect("mid-turn steering");
+        let mut results = vec![result("tool-a"), result("tool-b")];
+        attach_mid_turn_steering(&mut results, &steering);
+        assert_eq!(results[0].content_items.len(), 0, "earlier tools stay clean");
+        assert_eq!(
+            results[1]
+                .content_items
+                .last()
+                .and_then(|item| item.get("text")),
+            Some(&json!(steering)),
+            "steering lands on the last tool_result so provider sees it after prior outputs"
+        );
+    }
+
     fn result(tool_use_id: &str) -> ToolResult {
         ToolResult {
             tool_use_id: tool_use_id.to_owned(),
