@@ -496,6 +496,13 @@ fn recognizes_cursor_thought_for_filler() {
         super::types::fail_if_subagent_provider_silent(&SegmentBuilder::new(1).with_subagent(false))
             .is_ok()
     );
+    let mut silent = SegmentBuilder::new(1).with_subagent(true);
+    silent.backdate_last_visible_provider_activity(
+        super::types::SUBAGENT_PROVIDER_SILENCE_JUDGMENT + Duration::from_secs(1),
+    );
+    let error = super::types::fail_if_subagent_provider_silent(&silent)
+        .expect_err("silent SubAgent must end the turn");
+    assert!(error.to_string().contains("provider produced no progress"));
 }
 
 #[tokio::test]

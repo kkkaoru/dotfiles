@@ -1,7 +1,30 @@
+use std::path::PathBuf;
 use std::time::Duration;
 
-use super::*;
 use super::handover::ServiceState;
+use super::*;
+use crate::agent_backend::{BackendKind, BackendRoute};
+use crate::launcher::{AdapterOptions, LOCAL_TOKEN, ServiceConfig};
+
+fn config(root: &std::path::Path) -> ServiceConfig {
+    ServiceConfig {
+        options: AdapterOptions {
+            routes: vec![BackendRoute::new("test-model", BackendKind::CodexAppServer)],
+            listen: "127.0.0.1:8318".parse().unwrap(),
+            model: "test-model".to_owned(),
+            subscription_max_processes: 20,
+            subscription_timeout_minutes: 120,
+            subagent_hard_timeout_seconds: None,
+            model_catalog: crate::provider_config::ModelCatalog::default(),
+        },
+        token: LOCAL_TOKEN.to_owned(),
+        codex_config_fingerprint: "codex".to_owned(),
+        service_config_fingerprint: "service".to_owned(),
+        executable: PathBuf::from("/tmp/claudex-agent-adapter"),
+        log_path: root.join("adapter.log"),
+        lock_path: root.join("adapter.lock"),
+    }
+}
 
 #[test]
 fn wait_idle_poll_stays_snappy_while_listeners_are_busy() {
@@ -64,4 +87,12 @@ fn recovery_snapshot_is_missing_detects_not_found_io_errors() {
         "denied",
     ));
     assert!(!recovery_snapshot_is_missing(&other_io));
+}
+
+#[test]
+fn live_listener_helpers_ignore_invalid_url_and_missing_state() {
+    let root = tempfile::tempdir().expect("listener helper fixture");
+    let config = config(root.path());
+    notify_live_listener(&config, "not-a-listen");
+    log_live_listener(&config);
 }

@@ -252,16 +252,24 @@ async fn defer_busy_listener(
         .await
         .context("start current-build listener while stale adapter is active")?;
     let _ = super::live::publish_url(config, &url);
-    if let Ok(live_listen) = super::live::parse_listen_url(&url) {
+    notify_live_listener(config, &url);
+    log_live_listener(config);
+    Ok(url)
+}
+
+pub(super) fn notify_live_listener(config: &ServiceConfig, url: &str) {
+    if let Ok(live_listen) = super::live::parse_listen_url(url) {
         macos_notify::live_ready(config, live_listen);
     }
+}
+
+pub(super) fn log_live_listener(config: &ServiceConfig) {
     if let Ok(Some(live)) = super::live::read(config) {
         eprintln!(
             "claudex: live generation {} on {}",
             live.build_id, live.listen
         );
     }
-    Ok(url)
 }
 
 pub(super) fn should_retry_idle_replace(failures: u32, limit: Option<u32>) -> bool {

@@ -149,6 +149,13 @@ impl SegmentBuilder {
         self.last_visible_provider_at = Instant::now();
     }
 
+    #[cfg(test)]
+    pub(super) fn backdate_last_visible_provider_activity(&mut self, elapsed: std::time::Duration) {
+        self.last_visible_provider_at = Instant::now()
+            .checked_sub(elapsed)
+            .expect("test backdate must fit within Instant range");
+    }
+
     /// Activity-based SubAgent bound: synthetic keepalives do not refresh this.
     pub(super) fn subagent_provider_silence_exceeded(
         &self,
