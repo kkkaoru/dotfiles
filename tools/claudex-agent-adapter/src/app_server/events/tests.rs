@@ -19,6 +19,16 @@ fn reasoning_delta(thread_id: &str, index: u64, text: &str) -> Value {
     })
 }
 
+fn reasoning_text_delta(thread_id: &str, index: u64, text: &str) -> Value {
+    json!({
+        "method":"item/reasoning/textDelta",
+        "params":{
+            "threadId":thread_id,"turnId":"turn","itemId":"reasoning",
+            "contentIndex":index,"delta":text
+        }
+    })
+}
+
 #[test]
 fn counts_encoded_bytes_without_materializing_json() {
     for value in [
@@ -168,6 +178,23 @@ async fn coalesces_reasoning_bursts_but_preserves_summary_boundaries() {
     let second = events.recv().await.unwrap();
     assert_eq!(first["params"]["delta"].as_str().unwrap().len(), 4096);
     assert_eq!(second["params"]["delta"], "next");
+}
+
+#[tokio::test]
+async fn coalesces_reasoning_text_deltas_but_preserves_content_boundaries() {
+    let dispatcher = ThreadEventDispatcher::default();
+    let events = dispatcher.subscribe("reasoning-text");
+    for _ in 0..64 {
+        dispatcher.dispatch(reasoning_text_delta("reasoning-text", 0, "a"));
+    }
+    dispatcher.dispatch(reasoning_text_delta("reasoning-text", 1, "b"));
+
+    let first = events.recv().await.unwrap();
+    let second = events.recv().await.unwrap();
+    assert_eq!(first["params"]["delta"].as_str().unwrap().len(), 64);
+    assert_eq!(first["params"]["contentIndex"], 0);
+    assert_eq!(second["params"]["delta"], "b");
+    assert_eq!(second["params"]["contentIndex"], 1);
 }
 
 #[tokio::test]
