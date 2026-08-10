@@ -10,7 +10,7 @@ use super::daemon_process::{
 };
 use super::{ServiceConfig, authenticates, fetch_health};
 
-const LISTENER_RELEASE_POLL_INTERVAL: Duration = Duration::from_millis(25);
+const LISTENER_RELEASE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 
 #[derive(Debug, Eq, PartialEq)]
 pub(super) enum ServiceState {
@@ -32,7 +32,7 @@ pub(super) enum ServiceState {
 const HOT_SWAP_DRAIN_TIMEOUT: Duration = Duration::from_secs(45);
 #[cfg(test)]
 const HOT_SWAP_DRAIN_TIMEOUT: Duration = Duration::from_millis(0);
-const HOT_SWAP_DRAIN_POLL: Duration = Duration::from_millis(250);
+const HOT_SWAP_DRAIN_POLL: Duration = Duration::from_millis(100);
 
 pub(super) async fn inspect_service(
     client: &reqwest::Client,

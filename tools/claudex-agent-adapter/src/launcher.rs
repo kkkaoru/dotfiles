@@ -62,7 +62,7 @@ const START_TIMEOUT: Duration = Duration::from_secs(10);
 #[cfg(test)]
 const START_TIMEOUT: Duration = Duration::from_secs(2);
 const START_INITIAL_POLL_DELAY: Duration = Duration::from_millis(10);
-const START_MAX_POLL_DELAY: Duration = Duration::from_millis(250);
+const START_MAX_POLL_DELAY: Duration = Duration::from_millis(100);
 pub(crate) const SERVICE_CONFIG_FINGERPRINT_ENV: &str = "CLAUDEX_SERVICE_CONFIG_FINGERPRINT";
 pub(crate) const RECOVERY_MANIFEST_ENV: &str = "CLAUDEX_RECOVERY_MANIFEST";
 

@@ -25,7 +25,7 @@ const WARM_START_TIMEOUT: Duration = Duration::from_secs(10);
 const WARM_START_TIMEOUT: Duration = Duration::from_secs(45);
 #[cfg(all(test, not(coverage_nightly)))]
 const WARM_START_TIMEOUT: Duration = Duration::from_secs(2);
-const HANDOVER_POLL: Duration = Duration::from_millis(25);
+const HANDOVER_POLL: Duration = Duration::from_millis(10);
 
 #[derive(Debug, Deserialize)]
 struct RebindResponse {
