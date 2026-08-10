@@ -87,7 +87,10 @@ pub(super) fn write_retained(
 ) -> Result<PathBuf> {
     #[cfg(test)]
     if RETAINED_WRITE_FAILURE_AFTER.with(|cell| match cell.get() {
-        Some(0) => true,
+        Some(0) => {
+            cell.set(None);
+            true
+        }
         Some(remaining) => {
             cell.set(Some(remaining - 1));
             false
@@ -110,13 +113,21 @@ pub(super) fn write_retained(
 }
 
 #[cfg(test)]
-pub(super) fn fail_retained_write_after(successes: u32) {
-    RETAINED_WRITE_FAILURE_AFTER.with(|cell| cell.set(Some(successes)));
+pub(super) struct FailRetainedWriteAfter;
+
+#[cfg(test)]
+impl FailRetainedWriteAfter {
+    pub(super) fn arm(successes: u32) -> Self {
+        RETAINED_WRITE_FAILURE_AFTER.with(|cell| cell.set(Some(successes)));
+        Self
+    }
 }
 
 #[cfg(test)]
-pub(super) fn clear_retained_write_failure() {
-    RETAINED_WRITE_FAILURE_AFTER.with(|cell| cell.set(None));
+impl Drop for FailRetainedWriteAfter {
+    fn drop(&mut self) {
+        RETAINED_WRITE_FAILURE_AFTER.with(|cell| cell.set(None));
+    }
 }
 
 pub(super) fn parse_listen_url(url: &str) -> Result<SocketAddr> {

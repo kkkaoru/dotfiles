@@ -349,14 +349,13 @@ async fn try_canonical_reports_retained_state_write_failure() {
         let _ = stream.write_all(response.as_bytes()).await;
     });
     let config = config_at(listen, root.path(), dummy.clone());
-    live::fail_retained_write_after(1);
+    let _fail = live::FailRetainedWriteAfter::arm(1);
     let error = try_canonical(&reqwest::Client::new(), &config, &health(true, Some(12)))
         .await
         .expect_err("retained state write must fail");
-    live::clear_retained_write_failure();
     kill_dummy(&dummy);
     assert!(
-        error.to_string().contains("state") || error.to_string().contains("directory"),
+        error.to_string().contains("state") || error.to_string().contains("injected"),
         "{error:#}"
     );
 }
