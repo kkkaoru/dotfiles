@@ -385,3 +385,140 @@ fn subscription_oauth_usability_follows_credentials_then_cooldown() {
         "fresh credentials after /login must clear the unusable state"
     );
 }
+
+#[test]
+fn is_subscription_auth_failure_true_oauth_expired() {
+    assert!(is_subscription_auth_failure(&anyhow::anyhow!(
+        "oauth session expired and could not be refreshed"
+    )));
+}
+
+#[test]
+fn is_subscription_auth_failure_true_login_prompt() {
+    assert!(is_subscription_auth_failure(&anyhow::anyhow!(
+        "please run /login"
+    )));
+}
+
+#[test]
+fn is_subscription_auth_failure_true_oauth_and_expired() {
+    assert!(is_subscription_auth_failure(&anyhow::anyhow!(
+        "provider oauth token expired; refresh required"
+    )));
+}
+
+#[test]
+fn is_subscription_auth_failure_false_unrelated_401() {
+    assert!(!is_subscription_auth_failure(&anyhow::anyhow!(
+        PROVIDER_401
+    )));
+}
+
+#[test]
+fn credentials_access_expired_at_with_u64_past_expiry() {
+    let root = tempfile::tempdir().expect("u64 fixture");
+    let path = root.path().join(".credentials.json");
+    let past_ms = millis(UNIX_EPOCH + Duration::from_secs(1_700_000_000));
+    std::fs::write(
+        &path,
+        format!(r#"{{"claudeAiOauth":{{"expiresAt":{past_ms}}}}}"#),
+    )
+    .expect("write u64 expiry");
+    assert_eq!(
+        credentials_access_expired_at(&path, UNIX_EPOCH + Duration::from_secs(1_800_000_000)),
+        Some(true)
+    );
+}
+
+#[test]
+fn credentials_access_expired_at_with_future_expiry() {
+    let root = tempfile::tempdir().expect("future fixture");
+    let path = root.path().join(".credentials.json");
+    let future_ms = millis(SystemTime::now() + Duration::from_secs(24 * 60 * 60));
+    std::fs::write(
+        &path,
+        format!(r#"{{"claudeAiOauth":{{"expiresAt":{future_ms}}}}}"#),
+    )
+    .expect("write future credentials");
+    assert_eq!(
+        credentials_access_expired_at(&path, SystemTime::now()),
+        Some(false)
+    );
+}
+
+#[test]
+fn subscription_oauth_is_unusable_with_expired_credentials() {
+    let root = tempfile::tempdir().expect("unusable expired fixture");
+    write_credentials(root.path(), millis(UNIX_EPOCH + Duration::from_secs(1)));
+    let bridge = opus_and_luna_bridge().with_usage_limit_cache_home(root.path());
+    assert!(bridge.subscription_oauth_is_unusable());
+}
+
+#[test]
+fn subscription_oauth_is_unusable_with_valid_future_credentials() {
+    let root = tempfile::tempdir().expect("unusable valid fixture");
+    write_credentials(
+        root.path(),
+        millis(SystemTime::now() + Duration::from_secs(24 * 60 * 60)),
+    );
+    let bridge = opus_and_luna_bridge().with_usage_limit_cache_home(root.path());
+    assert!(!bridge.subscription_oauth_is_unusable());
+}
+
+#[test]
+fn apply_subscription_auth_preflight_non_subscription_route_no_rewrite() {
+    let bridge = opus_and_luna_bridge();
+    let mut request = dummy_request("gpt-5.6-luna");
+    let mut effort = Some("max".to_owned());
+    let route = bridge.apply_subscription_auth_preflight(
+        &mut request,
+        RouteDecision::Provider,
+        &mut effort,
+    );
+    assert_eq!(request.model, "gpt-5.6-luna");
+    assert_eq!(route, RouteDecision::Provider);
+}
+
+#[test]
+fn apply_subscription_auth_preflight_subscription_unusable_no_failover() {
+    let root = tempfile::tempdir().expect("no failover fixture");
+    write_credentials(root.path(), millis(UNIX_EPOCH + Duration::from_secs(1)));
+    let mut catalog = ModelCatalog::default();
+    catalog
+        .set_auxiliary_worker_routes(vec![crate::provider_config::WorkerRoute::new(
+            "claudex-sonnet",
+            "claude-sonnet-5",
+            "high",
+        )])
+        .expect("install subscription fallback");
+    let bridge =
+        Bridge::new_with_backend(AgentBackend::spawn_routes(&[]), "claude-opus-5".to_owned())
+            .with_model_catalog(catalog)
+            .with_usage_limit_cache_home(root.path());
+
+    let mut request = dummy_request("claude-opus-5");
+    let mut effort = Some("medium".to_owned());
+    let route = bridge.apply_subscription_auth_preflight(
+        &mut request,
+        RouteDecision::Subscription,
+        &mut effort,
+    );
+    assert_eq!(request.model, "claude-opus-5");
+    assert_eq!(route, RouteDecision::Subscription);
+}
+
+#[test]
+fn subscription_auth_failover_skips_models_without_backend() {
+    let backend = AgentBackend::spawn_routes(&[]);
+    let mut catalog = ModelCatalog::default();
+    catalog
+        .set_worker_routes(vec![crate::provider_config::WorkerRoute::new(
+            "claudex-gpt",
+            "gpt-5.6-luna",
+            "max",
+        )])
+        .expect("install luna worker");
+    let bridge =
+        Bridge::new_with_backend(backend, "gpt-5.6-luna".to_owned()).with_model_catalog(catalog);
+    assert!(bridge.subscription_auth_failover_for().is_none());
+}
