@@ -387,3 +387,6 @@ fn has_answer_text(blocks: &[Value]) -> bool {
         .iter()
         .any(|block| block.get("type").and_then(Value::as_str) == Some("text"))
 }
+
+#[cfg(test)]
+include!("thinking_tests.rs");
