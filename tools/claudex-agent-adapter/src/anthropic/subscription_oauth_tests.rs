@@ -171,6 +171,13 @@ fn malformed_or_tokenless_credentials_file_is_unknown_not_expired() {
     )
     .expect("write negative expiry");
     assert_eq!(credentials_access_expired_at(&negative, now), None);
+    let negative_float = root.path().join("negative-float.json");
+    std::fs::write(
+        &negative_float,
+        r#"{"claudeAiOauth":{"accessToken":"redacted","refreshToken":"redacted","expiresAt":-1.5}}"#,
+    )
+    .expect("write negative float expiry");
+    assert_eq!(credentials_access_expired_at(&negative_float, now), None);
     let infinite = root.path().join("infinite.json");
     std::fs::write(
         &infinite,

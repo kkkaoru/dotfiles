@@ -39,9 +39,12 @@ pub(super) fn credentials_access_expired_at(
     let expires_ms = value
         .pointer("/claudeAiOauth/expiresAt")
         .and_then(|expires| {
-            expires
-                .as_f64()
-                .or_else(|| expires.as_u64().map(|millis| millis as f64))
+            expires.as_f64().or_else(|| {
+                expires
+                    .as_i64()
+                    .map(|millis| millis as f64)
+                    .or_else(|| expires.as_u64().map(|millis| millis as f64))
+            })
         })?;
     if !expires_ms.is_finite() || expires_ms < 0.0 {
         return None;
