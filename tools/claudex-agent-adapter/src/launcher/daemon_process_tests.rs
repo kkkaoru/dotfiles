@@ -56,6 +56,12 @@ fn recognizes_current_and_renamed_adapter_daemons() {
         None,
         executable
     ));
+    assert!(!fields_match(
+        None,
+        Some("/tmp/claudex-agent-adapter serve".to_owned()),
+        executable
+    ));
+    assert!(!fields_match(None, None, executable));
 }
 
 #[test]
@@ -81,6 +87,54 @@ fn reports_an_absent_process_group_as_not_alive() {
     assert!(!process_group_is_alive(i32::MAX));
     assert!(!is_process_still_alive(i32::MAX as u32));
     assert!(!is_process_zombie(i32::MAX as u32));
+}
+
+#[cfg(unix)]
+#[test]
+#[allow(clippy::zombie_processes)]
+fn skips_terminate_and_graceful_shutdown_for_launch_process() {
+    let root = tempfile::tempdir().expect("launch process fixture");
+    let program = root.path().join("claudex-agent-adapter");
+    let mut compile = Command::new("cc")
+        .args(["-x", "c", "-o"])
+        .arg(&program)
+        .arg("-")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("start cc for launch fixture");
+    {
+        use std::io::Write as _;
+        let stdin = compile.stdin.as_mut().expect("cc stdin");
+        stdin
+            .write_all(b"#include <unistd.h>\nint main(void){for(;;) sleep(1); return 0;}\n")
+            .expect("write launch fixture source");
+    }
+    let status = compile.wait_with_output().expect("wait for cc");
+    assert!(
+        status.status.success(),
+        "cc failed: {}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+
+    let mut child = Command::new(&program)
+        .args(["launch", "--model", "main"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("start launch process fixture");
+    let pid = child.id();
+    assert!(is_launch_process(pid));
+    terminate(pid);
+    request_graceful_shutdown(pid);
+    assert!(
+        process_is_alive(pid),
+        "launch processes must not be signalled by daemon helpers"
+    );
+    kill_process(libc::SIGKILL, pid);
+    let _ = child.wait();
 }
 
 #[cfg(unix)]
