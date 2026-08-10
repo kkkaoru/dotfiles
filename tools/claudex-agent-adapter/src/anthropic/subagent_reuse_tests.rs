@@ -921,4 +921,291 @@ mod tests {
         let bytes = std::fs::read(path).expect("persisted registry");
         serde_json::from_slice::<StoredStates>(&bytes).expect("valid registry JSON");
     }
+
+    #[test]
+    fn find_reusable_launch_with_empty_scope_returns_none() {
+        let launches = vec![LaunchRecord {
+            key: "key-1".to_owned(),
+            recipient: "worker-1".to_owned(),
+            scope: String::new(),
+            model: Some("model-1".to_owned()),
+            status: "active".to_owned(),
+        }];
+        let args = json!({"prompt": "", "claudex_model": "model-1"});
+        assert!(find_reusable_launch(&launches, &args).is_none());
+    }
+
+    #[test]
+    fn find_reusable_launch_requires_nonempty_recipient() {
+        let launches = vec![LaunchRecord {
+            key: "key-1".to_owned(),
+            recipient: String::new(),
+            scope: "Test scope".to_owned(),
+            model: Some("model-1".to_owned()),
+            status: "active".to_owned(),
+        }];
+        let args = json!({"prompt": "Test scope", "claudex_model": "model-1"});
+        assert!(find_reusable_launch(&launches, &args).is_none());
+    }
+
+    #[test]
+    fn already_has_resume_with_nonempty_value() {
+        assert!(already_has_resume(&json!({"resume": "worker-a"})));
+        assert!(already_has_resume(&json!({"resume": "some-agent"})));
+    }
+
+    #[test]
+    fn apply_transcript_empty_transcript() {
+        let mut launches = vec![];
+        apply_transcript(&mut launches, &[]);
+        assert!(launches.is_empty());
+    }
+
+    #[test]
+    fn apply_transcript_with_status_update() {
+        let mut launches = vec![LaunchRecord {
+            key: "tool-a".to_owned(),
+            recipient: "worker-a".to_owned(),
+            scope: "Test scope".to_owned(),
+            model: Some("model-1".to_owned()),
+            status: "active".to_owned(),
+        }];
+        let messages = vec![json!({
+            "role": "user",
+            "content": "<task-id>worker-a</task-id><status>completed</status>"
+        })];
+        apply_transcript(&mut launches, &messages);
+        assert_eq!(launches[0].status, "completed");
+    }
+
+    #[test]
+    fn latest_user_text_empty_messages() {
+        assert!(latest_user_text(&[]).is_empty());
+    }
+
+    #[test]
+    fn latest_user_text_with_text_content() {
+        let messages = vec![json!({
+            "role": "user",
+            "content": [{"type": "text", "text": "user message"}]
+        })];
+        assert_eq!(latest_user_text(&messages), "user message");
+    }
+
+    #[test]
+    fn latest_user_text_skips_non_user_roles() {
+        let messages = vec![
+            json!({"role": "assistant", "content": [{"type": "text", "text": "assistant message"}]}),
+            json!({"role": "user", "content": [{"type": "text", "text": "user message"}]}),
+        ];
+        assert_eq!(latest_user_text(&messages), "user message");
+    }
+
+    #[test]
+    fn scope_similarity_zero_when_no_overlap() {
+        let similarity = scope_similarity("audit rust adapter", "review css layout");
+        assert_eq!(similarity, 0);
+    }
+
+    #[test]
+    fn scope_similarity_nonzero_with_matches() {
+        let similarity = scope_similarity("audit rust tests", "continue rust work");
+        assert!(similarity > 0);
+    }
+
+    #[test]
+    fn scope_similarity_filters_short_words() {
+        let similarity = scope_similarity("a b c test adapter", "x y z test");
+        assert!(similarity == 1);
+    }
+
+    #[test]
+    fn rewrite_launch_input_with_already_has_resume() {
+        let registry = SubagentReuseRegistry::default();
+        let mut arguments = json!({
+            "prompt": "Test",
+            "claudex_model": "model-1",
+            "resume": "existing-worker"
+        });
+        assert!(
+            registry
+                .rewrite_launch_input("session-a", &mut arguments)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn rewrite_launch_input_empty_session_id() {
+        let registry = SubagentReuseRegistry::default();
+        let mut arguments = json!({"prompt": "Test", "claudex_model": "model-1"});
+        assert!(registry.rewrite_launch_input("", &mut arguments).is_none());
+    }
+
+    #[test]
+    fn find_reusable_launch_prioritizes_active_over_completed() {
+        let launches = vec![
+            LaunchRecord {
+                key: "key-1".to_owned(),
+                recipient: "worker-completed".to_owned(),
+                scope: "Test scope".to_owned(),
+                model: Some("model-1".to_owned()),
+                status: "completed".to_owned(),
+            },
+            LaunchRecord {
+                key: "key-2".to_owned(),
+                recipient: "worker-active".to_owned(),
+                scope: "Test scope".to_owned(),
+                model: Some("model-1".to_owned()),
+                status: "active".to_owned(),
+            },
+        ];
+        let args = json!({"prompt": "Test scope", "claudex_model": "model-1"});
+        let result = find_reusable_launch(&launches, &args);
+        assert_eq!(result.map(|r| r.recipient.as_str()), Some("worker-active"));
+    }
+
+    #[test]
+    fn apply_transcript_merge_same_recipient() {
+        let mut launches = vec![LaunchRecord {
+            key: "key-1".to_owned(),
+            recipient: "worker-a".to_owned(),
+            scope: String::new(),
+            model: None,
+            status: "active".to_owned(),
+        }];
+        let messages = vec![
+            json!({
+                "role": "assistant",
+                "content": [{
+                    "type": "tool_use",
+                    "id": "tool-a",
+                    "name": "Agent",
+                    "input": {"prompt": "New scope"}
+                }]
+            }),
+            json!({
+                "role": "user",
+                "content": [{
+                    "type": "tool_result",
+                    "tool_use_id": "tool-a",
+                    "content": [{"type": "text", "text": "Async agent launched successfully.\nagentId: worker-a"}]
+                }]
+            }),
+        ];
+        apply_transcript(&mut launches, &messages);
+        assert_eq!(launches.len(), 1);
+        assert_eq!(launches[0].scope, "New scope");
+    }
+
+    #[test]
+    fn queued_message_recipient_extraction() {
+        let mut launches = vec![LaunchRecord {
+            key: "key-a".to_owned(),
+            recipient: "worker-a".to_owned(),
+            scope: "Test".to_owned(),
+            model: Some("model".to_owned()),
+            status: "active".to_owned(),
+        }];
+        let messages = vec![json!({
+            "role": "user",
+            "content": [{"type": "tool_result", "tool_use_id": "send-a", "content": "Agent \"worker-a\" had no active task; resumed from transcript in the background."}]
+        })];
+        apply_transcript(&mut launches, &messages);
+        assert_eq!(launches[0].status, "message_queued");
+    }
+
+    #[test]
+    fn scope_is_occupied_empty_scope_key() {
+        let launches = vec![LaunchRecord {
+            key: "key-1".to_owned(),
+            recipient: "worker-a".to_owned(),
+            scope: "Test".to_owned(),
+            model: None,
+            status: "active".to_owned(),
+        }];
+        assert!(!scope_is_occupied(&launches, ""));
+    }
+
+    #[test]
+    fn scope_is_occupied_terminal_status_ignored() {
+        let launches = vec![LaunchRecord {
+            key: "key-1".to_owned(),
+            recipient: "worker-a".to_owned(),
+            scope: "Test scope".to_owned(),
+            model: None,
+            status: "completed".to_owned(),
+        }];
+        assert!(!scope_is_occupied(&launches, "test scope"));
+    }
+
+    #[test]
+    fn note_inflight_launch_empty_scope() {
+        let registry = SubagentReuseRegistry::default();
+        let arguments = json!({"prompt": "", "claudex_model": "model"});
+        registry.note_inflight_launch("session-a", &arguments, "tool-a");
+        assert!(
+            registry
+                .state_for("session-a")
+                .unwrap_or_default()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn find_reusable_launch_no_exact_match_returns_none() {
+        let launches = vec![LaunchRecord {
+            key: "key-1".to_owned(),
+            recipient: "worker-a".to_owned(),
+            scope: "Audit rust tests".to_owned(),
+            model: Some("model-1".to_owned()),
+            status: "active".to_owned(),
+        }];
+        let args = json!({"prompt": "Review CSS", "claudex_model": "model-1"});
+        assert!(find_reusable_launch(&launches, &args).is_none());
+    }
+
+    #[test]
+    fn latest_user_text_prefers_latest_user_message() {
+        let messages = vec![
+            json!({"role": "user", "content": [{"type": "text", "text": "first"}]}),
+            json!({"role": "assistant", "content": [{"type": "text", "text": "response"}]}),
+            json!({"role": "user", "content": [{"type": "text", "text": "second"}]}),
+        ];
+        assert_eq!(latest_user_text(&messages), "second");
+    }
+
+    #[test]
+    fn scope_similarity_case_insensitive() {
+        let sim1 = scope_similarity("Audit RUST Adapter", "audit rust tests");
+        let sim2 = scope_similarity("audit rust adapter", "audit rust tests");
+        assert_eq!(sim1, sim2);
+    }
+
+    #[test]
+    fn apply_transcript_empty_content() {
+        let mut launches = vec![];
+        let messages = vec![json!({"role": "user", "content": []})];
+        apply_transcript(&mut launches, &messages);
+        assert!(launches.is_empty());
+    }
+
+    #[test]
+    fn find_reusable_launch_with_model_none() {
+        let launches = vec![LaunchRecord {
+            key: "key-1".to_owned(),
+            recipient: "worker-a".to_owned(),
+            scope: "Test scope".to_owned(),
+            model: None,
+            status: "active".to_owned(),
+        }];
+        let args = json!({"prompt": "Test scope"});
+        let result = find_reusable_launch(&launches, &args);
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn scope_similarity_minimum_word_length_filter() {
+        let similarity = scope_similarity("ab cd audit", "audit test");
+        assert!(similarity == 1);
+    }
 }
