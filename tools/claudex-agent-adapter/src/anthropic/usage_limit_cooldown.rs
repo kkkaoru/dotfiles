@@ -33,6 +33,7 @@ pub(crate) fn cache_path_for_home(home: impl AsRef<Path>) -> PathBuf {
     home.as_ref().join(".cache/claudex").join(CACHE_FILE_NAME)
 }
 
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) fn current_cache_path() -> Option<PathBuf> {
     std::env::var_os("HOME").map(cache_path_for_home)
 }

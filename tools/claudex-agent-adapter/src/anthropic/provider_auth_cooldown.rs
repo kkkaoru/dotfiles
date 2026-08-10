@@ -39,6 +39,7 @@ pub(crate) fn cache_path_for_home(home: impl AsRef<Path>) -> PathBuf {
     home.as_ref().join(".cache/claudex").join(CACHE_FILE_NAME)
 }
 
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) fn current_cache_path() -> Option<PathBuf> {
     std::env::var_os("HOME").map(cache_path_for_home)
 }
@@ -204,6 +205,20 @@ mod tests {
             Some(&path),
             "ollama",
             now + DEFAULT_RATE_LIMIT_COOLDOWN + Duration::from_secs(1)
+        ));
+    }
+
+    #[test]
+    fn record_without_path_or_scope_is_a_noop() {
+        let now = UNIX_EPOCH + Duration::from_secs(1_000);
+        assert!(record_at(None, "sakana", "Invalid API key", now).is_none());
+        assert!(record_rate_limit_at(None, "ollama", "429", now).is_none());
+        assert!(record_at(Some(Path::new("/tmp/unused")), "", "Invalid API key", now).is_none());
+        assert!(!scope_is_cooling_down_at(None, "sakana", now));
+        assert!(!scope_is_cooling_down_at(
+            Some(Path::new("/tmp/unused")),
+            "",
+            now
         ));
     }
 
