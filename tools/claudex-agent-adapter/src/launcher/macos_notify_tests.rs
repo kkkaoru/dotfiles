@@ -15,8 +15,12 @@ fn waiting(build: &str, waiter_pid: u32) -> Event {
 }
 
 fn complete(build: &str) -> Event {
+    complete_on(listen(), build)
+}
+
+fn complete_on(addr: SocketAddr, build: &str) -> Event {
     Event::SwapComplete {
-        listen: listen().to_string(),
+        listen: addr.to_string(),
         build_id: build.to_owned(),
     }
 }
@@ -213,6 +217,62 @@ fn post_emits_only_one_complete_for_waiting_live_complete_flow() {
         events.take(),
         vec![complete("abc")],
         "same build must notify swap complete once, never waiting/live"
+    );
+}
+
+#[test]
+fn post_emits_exactly_one_notification_for_four_same_build_completes() {
+    let root = tempfile::tempdir().expect("notify cache");
+    let listen = listen();
+    let events = TestEvents::capture();
+    for _ in 0..4 {
+        post(root.path(), &listen, complete("same-build"));
+    }
+    let emitted = events.take();
+    assert_eq!(
+        emitted.len(),
+        1,
+        "four Completes for one build_id must emit exactly one notification (got {})",
+        emitted.len()
+    );
+    assert_eq!(emitted, vec![complete("same-build")]);
+}
+
+#[test]
+fn post_dedupes_same_build_across_different_listen_ports() {
+    // cargo install can hot-swap several listeners; each used to notify once
+    // via a per-listen dedup file → N banners with the same build_id.
+    let root = tempfile::tempdir().expect("notify cache");
+    let ports: [SocketAddr; 4] = [
+        "127.0.0.1:8318".parse().expect("listen"),
+        "127.0.0.1:53087".parse().expect("listen"),
+        "127.0.0.1:59787".parse().expect("listen"),
+        "127.0.0.1:62789".parse().expect("listen"),
+    ];
+    let events = TestEvents::capture();
+    for addr in ports {
+        post(root.path(), &addr, complete_on(addr, "shared-build"));
+    }
+    let emitted = events.take();
+    assert_eq!(
+        emitted.len(),
+        1,
+        "same build_id across {} listen ports must notify once (got {})",
+        ports.len(),
+        emitted.len()
+    );
+    assert_eq!(emitted, vec![complete_on(ports[0], "shared-build")]);
+    assert_eq!(
+        launcher_logs::hot_swap_notify_path(root.path(), &ports[0]),
+        root.path().join("hot-swap-notify.json"),
+        "dedup state must be shared for the whole cache, not per listen"
+    );
+    assert!(
+        !root
+            .path()
+            .join("hot-swap-notify.127_0_0_1_8318.json")
+            .exists(),
+        "legacy per-listen notify files must not be written"
     );
 }
 

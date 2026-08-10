@@ -89,8 +89,14 @@ pub(crate) fn pending_hot_swap_log_path(cache: &Path, listen: &SocketAddr) -> Pa
     cache.join(format!("pending-hot-swap.{}.log", listen_token(listen)))
 }
 
-pub(crate) fn hot_swap_notify_path(cache: &Path, listen: &SocketAddr) -> PathBuf {
-    cache.join(format!("hot-swap-notify.{}.json", listen_token(listen)))
+pub(crate) fn hot_swap_notify_path(cache: &Path, _listen: &SocketAddr) -> PathBuf {
+    // One shared dedup file per cache so the same build_id cannot notify once
+    // per listen port when cargo install / ensure races across adapters.
+    cache.join("hot-swap-notify.json")
+}
+
+pub(crate) fn hot_swap_notify_lock_path(cache: &Path) -> PathBuf {
+    cache.join("hot-swap-notify.lock")
 }
 
 pub(crate) fn live_state_path(cache: &Path, listen: &SocketAddr) -> PathBuf {

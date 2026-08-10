@@ -15,7 +15,7 @@ const WAITING_SUBTITLE: &str = "ビルド完了・待機中";
 const LIVE_SUBTITLE: &str = "live 更新完了";
 const COMPLETE_SUBTITLE: &str = "差し替え完了";
 /// Rapid `cargo install` / hot-swap bursts mint a new build_id each time.
-/// Keep macOS alerts quiet until this gap of silence on the same port.
+/// Keep macOS alerts quiet until this gap of silence across all listen ports.
 const RAPID_REBUILD_COOLDOWN_SECS: u64 = 5 * 60;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -247,7 +247,7 @@ pub(super) fn deliver_status(status: ExitStatus) -> Result<()> {
 }
 
 pub(super) fn post(cache: &Path, listen: &SocketAddr, event: Event) {
-    let lock_path = launcher_logs::hot_swap_notify_path(cache, listen).with_extension("lock");
+    let lock_path = launcher_logs::hot_swap_notify_lock_path(cache);
     let _lock = match launcher_lock::acquire(&lock_path) {
         Ok(lock) => lock,
         Err(error) => {
