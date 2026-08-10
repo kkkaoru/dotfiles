@@ -15,7 +15,11 @@ use std::path::{Path, PathBuf};
 
 use axum::body::Bytes;
 use serde_json::{Value, json};
-use tokio::{io::BufReader, process::Command, sync::mpsc};
+use tokio::{
+    io::{AsyncWriteExt, BufReader},
+    process::Command,
+    sync::mpsc,
+};
 
 use super::{
     SubscriptionStream, consume_subscription_stream, consume_subscription_stream_with_options,
@@ -696,6 +700,39 @@ async fn consume_reader_forwards_three_sequential_agent_launches() {
     .expect("three sequential Agent launches");
     let output = output(&mut receiver).await;
     assert_eq!(output.matches(r#""name":"Task""#).count(), 3);
+}
+
+#[tokio::test]
+async fn launch_fanout_drain_ends_when_no_sibling_launch_arrives() {
+    let (sender, mut receiver) = channel();
+    let mut options = SubscriptionOptions::internal(
+        Arc::new(tokio::sync::Semaphore::new(1)),
+        Duration::from_secs(2),
+    );
+    options.tools = vec!["Task".to_owned()];
+    options.tool_context = Some(explicit_subscription_tool_context());
+    let input = json!({
+        "type":"assistant",
+        "parent_tool_use_id":null,
+        "message":{"content":[{"type":"tool_use","id":"agent-1","name":"Agent","input":{"prompt":"solo","subagent_type":"claudex-gpt-spark"}}]}
+    })
+    .to_string();
+    let (mut writer, reader) = tokio::io::duplex(1024);
+    tokio::spawn(async move {
+        let _ = writer.write_all(format!("{input}\n").as_bytes()).await;
+        tokio::time::sleep(Duration::from_secs(5)).await;
+    });
+    SubscriptionStream::consume_reader_for_test(
+        BufReader::new(reader),
+        &sender,
+        &options,
+        "subscription-test",
+    )
+    .await
+    .expect("fanout drain after a lone Agent launch");
+    let output = output(&mut receiver).await;
+    assert!(output.contains(r#""name":"Task""#));
+    assert!(output.contains(r#""stop_reason":"tool_use""#) || output.contains("end_turn"));
 }
 
 #[tokio::test]
