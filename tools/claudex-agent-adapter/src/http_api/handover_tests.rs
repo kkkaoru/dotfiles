@@ -209,6 +209,32 @@ async fn rebind_listener_returns_the_ephemeral_listen() {
 }
 
 #[tokio::test]
+async fn rebind_listener_times_out_when_advertised_listen_does_not_change() {
+    let cache = tempfile::tempdir().expect("rebind timeout cache");
+    let (handover, _rx) =
+        ListenHandover::new("127.0.0.1:0".parse().unwrap(), cache.path().to_path_buf());
+    let started = std::time::Instant::now();
+    let response = rebind_listener(
+        State(handover.clone()),
+        Json(RebindRequest {
+            ephemeral: true,
+            listen: None,
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::GATEWAY_TIMEOUT);
+    assert!(
+        started.elapsed() >= Duration::from_secs(4),
+        "timeout path must wait for the rebind deadline"
+    );
+    assert_eq!(
+        handover.advertised_addr(),
+        "127.0.0.1:0".parse().unwrap(),
+        "failed rebind must keep the original advertised listen"
+    );
+}
+
+#[tokio::test]
 async fn proxy_middleware_forwards_owned_sessions_and_passes_through_others() {
     let upstream = serve_http_once(b"from-previous").await;
     let root = tempfile::tempdir().expect("middleware fixture");
