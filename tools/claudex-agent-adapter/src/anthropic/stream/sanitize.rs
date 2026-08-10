@@ -254,3 +254,7 @@ pub(super) fn strip_worker_status_lines(text: &str) -> String {
         joined
     }
 }
+
+#[cfg(test)]
+#[path = "sanitize_tests.rs"]
+mod tests;
