@@ -92,7 +92,7 @@ impl Bridge {
         }
     }
 
-    async fn failover_usage_limit_turn(
+    pub(super) async fn failover_usage_limit_turn(
         &self,
         mut turn: ActiveTurn,
         error: anyhow::Error,
@@ -152,7 +152,7 @@ impl Bridge {
     }
 }
 
-enum UsageLimitOutcome {
+pub(super) enum UsageLimitOutcome {
     Continue(ActiveTurn),
     Response(Response<Body>),
 }

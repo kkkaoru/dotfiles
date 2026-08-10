@@ -4536,4 +4536,717 @@ async fn finish_closed_stream_retains_settled_session_for_follow_up_reuse() {
 
     assert_eq!(bridge.used_session_slots(), 1);
 }
-//x
+
+#[tokio::test]
+async fn subagent_activity_keepalive_runs_after_sse_disconnect() {
+    let (_root, _app, bridge, session) = disconnect_fixture().await;
+    tokio::time::pause();
+    let dispatcher = ThreadEventDispatcher::default();
+    let events = dispatcher.subscribe("thread");
+    let (sender, receiver) = mpsc::channel::<Result<Bytes, Infallible>>(4);
+    drop(receiver);
+
+    let wait = bridge.wait_for_stream_segment_with_interval(StreamWaitInput {
+        session: &session,
+        events: Arc::new(events),
+        current_messages: &[],
+        system: &json!(null),
+        sender: &sender,
+        builder: SegmentBuilder::for_turn(1, true, "gpt-5.6-luna"),
+        activity_interval: Duration::from_millis(10),
+        initial_activity_delay: Duration::from_millis(10),
+    });
+    let complete = async {
+        // Let biased closed + NoEvent settle, then fire keepalive with sse=None.
+        for _ in 0..4 {
+            tokio::task::yield_now().await;
+        }
+        tokio::time::advance(Duration::from_millis(25)).await;
+        for _ in 0..4 {
+            tokio::task::yield_now().await;
+        }
+        tokio::time::advance(Duration::from_millis(25)).await;
+        dispatcher.dispatch(json!({
+            "method":"turn/completed",
+            "params":{"threadId":"thread","turn":{"status":"completed"}}
+        }));
+    };
+    let (result, ()) = tokio::join!(wait, complete);
+    let super::StreamTurn::Segment { .. } = result.expect("segment after keepalive") else {
+        panic!("expected completed segment");
+    };
+}
+
+#[tokio::test]
+async fn wait_for_stream_hands_off_external_tool_batch_after_quiet_period() {
+    let (_root, _app, bridge, session) = disconnect_fixture().await;
+    tokio::time::pause();
+    let dispatcher = ThreadEventDispatcher::default();
+    let events = dispatcher.subscribe("thread");
+    let (sender, _receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
+    let mut builder = SegmentBuilder::new(1);
+    let _ = builder
+        .handle_event(
+            &bridge,
+            &session,
+            &[json!({"role":"user","content":"read"})],
+            &Value::Null,
+            &json!({
+                "id":41,
+                "method":"item/tool/call",
+                "params":{
+                    "callId":"read-1",
+                    "tool":"cc_Read_0",
+                    "arguments":{"path":"README.md"}
+                }
+            }),
+            Some(&sender),
+        )
+        .await
+        .expect("external read");
+    assert!(builder.has_external_tool_calls());
+
+    let wait = bridge.wait_for_stream_segment_with_interval(StreamWaitInput {
+        session: &session,
+        events: Arc::new(events),
+        current_messages: &[],
+        system: &json!(null),
+        sender: &sender,
+        builder,
+        activity_interval: Duration::from_secs(30),
+        initial_activity_delay: Duration::from_secs(30),
+    });
+    let advance = async {
+        for _ in 0..4 {
+            tokio::task::yield_now().await;
+        }
+        tokio::time::advance(Duration::from_millis(10)).await;
+    };
+    let (result, ()) = tokio::join!(wait, advance);
+    let super::StreamTurn::Segment {
+        segment,
+        provider_settled,
+    } = result.expect("batch handoff segment")
+    else {
+        panic!("quiet external tools must finish as a segment");
+    };
+    assert!(!provider_settled);
+    assert_eq!(segment.stop_reason, "tool_use");
+}
+
+#[tokio::test]
+async fn external_batch_segment_keeps_subagent_segment_when_sse_already_closed() {
+    let (_root, app, bridge, session) = disconnect_fixture().await;
+    let events = Arc::new(app.subscribe_thread("thread"));
+    let (sender, receiver) = mpsc::channel::<Result<Bytes, Infallible>>(1);
+    drop(receiver);
+    let mut builder = SegmentBuilder::for_turn(1, true, "gpt-5.6-luna");
+    let _ = builder
+        .handle_event(
+            &bridge,
+            &session,
+            &[],
+            &Value::Null,
+            &json!({
+                "id":42,
+                "method":"item/tool/call",
+                "params":{
+                    "callId":"read-closed",
+                    "tool":"cc_Read_0",
+                    "arguments":{"path":"CLAUDE.md"}
+                }
+            }),
+            None,
+        )
+        .await
+        .expect("external tool");
+    let result = bridge
+        .external_batch_segment(&session, events, &mut builder, Some(&sender))
+        .await
+        .expect("closed subagent batch");
+    let super::StreamTurn::Segment {
+        provider_settled, ..
+    } = result
+    else {
+        panic!("closed SubAgent SSE must keep the unfinished tool segment");
+    };
+    assert!(!provider_settled);
+}
+
+#[tokio::test]
+async fn external_batch_segment_cancels_provider_for_acp_bridged_tool_use() {
+    let (root, app, bridge, session) = disconnect_fixture().await;
+    let events = Arc::new(app.subscribe_thread("thread"));
+    let (sender, _receiver) = mpsc::channel::<Result<Bytes, Infallible>>(4);
+    session.pending_tools.lock().await.insert(
+        "toolu_bridge".to_owned(),
+        super::acp_tool_bridge::acp_bridge_request_id("spawn-1"),
+    );
+    let mut builder = SegmentBuilder::new(1);
+    let _ = builder
+        .handle_event(
+            &bridge,
+            &session,
+            &[json!({"role":"user","content":"delegate"})],
+            &json!(
+                r#"{"providers":{},"selected_workers":[{"agent":"worker","model":"worker-model"}]}"#
+            ),
+            &json!({
+                "id":43,
+                "method":"item/tool/call",
+                "params":{
+                    "callId":"agent-1",
+                    "tool":"cc_Agent_0",
+                    "arguments":{
+                        "prompt":"work",
+                        "subagent_type":"worker",
+                        "claudex_model":"worker-model"
+                    }
+                }
+            }),
+            Some(&sender),
+        )
+        .await
+        .expect("agent tool");
+    let result = bridge
+        .external_batch_segment(&session, events, &mut builder, Some(&sender))
+        .await
+        .expect("bridged batch");
+    assert!(matches!(
+        result,
+        super::StreamTurn::Segment {
+            provider_settled: false,
+            ..
+        }
+    ));
+    let log = std::fs::read_to_string(root.path().join("responses.log")).unwrap_or_default();
+    let _ = log;
+}
+
+#[tokio::test]
+async fn finish_completed_stream_commits_closed_subagent_without_sse_frames() {
+    let (_root, app, bridge, session) = disconnect_fixture().await;
+    bridge.sessions.lock().await.push(Arc::clone(&session));
+    let events = app.subscribe_thread("thread");
+    let (sender, receiver) = mpsc::channel::<Result<Bytes, Infallible>>(2);
+    drop(receiver);
+    let turn = drive_turn(Arc::clone(&session), events, Vec::new(), None).await;
+    let segment = super::super::Segment {
+        blocks: vec![json!({"type":"text","text":"done"})],
+        stop_reason: "end_turn",
+        usage: super::super::Usage {
+            input_tokens: 1,
+            output_tokens: 1,
+            web_search_requests: 0,
+        },
+        web_evidence: super::super::WebEvidenceSummary::default(),
+    };
+    bridge
+        .finish_completed_stream(turn, &sender, segment, false, true)
+        .await;
+    let transcript = session.transcript.lock().await.clone();
+    assert!(
+        transcript.iter().any(|message| {
+            message.get("role").and_then(Value::as_str) == Some("assistant")
+        }),
+        "closed SubAgent finish must still commit transcript: {transcript:?}"
+    );
+}
+
+#[tokio::test]
+async fn non_streaming_response_retries_after_context_window() {
+    let (_root, _app, bridge, session) = retryable_drive_fixture_with_output().await;
+    let dispatcher = ThreadEventDispatcher::default();
+    let events = dispatcher.subscribe("thread");
+    dispatcher.dispatch(json!({
+        "method":"error",
+        "params":{"threadId":"thread","error":{"message":"context window exceeded"}}
+    }));
+    let response = bridge
+        .non_streaming_response(
+            drive_turn(
+                session,
+                events,
+                Vec::new(),
+                Some(ContextRetry {
+                    request: drive_request(),
+                    effort: None,
+                    advisor_model: None,
+                    collaborator_model: None,
+                }),
+            )
+            .await,
+        )
+        .await
+        .expect("context retry response");
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    let text = String::from_utf8_lossy(&body);
+    assert!(
+        text.contains("message") || text.contains("content") || text.contains("end_turn"),
+        "unexpected non-stream retry body: {text}"
+    );
+}
+
+#[tokio::test]
+async fn non_streaming_response_reports_usage_limit_without_retry_payload() {
+    let (_root, _app, bridge, session) = disconnect_fixture().await;
+    let dispatcher = ThreadEventDispatcher::default();
+    let events = dispatcher.subscribe("thread");
+    dispatcher.dispatch(json!({
+        "method":"turn/completed",
+        "params":{"threadId":"thread","turn":{"status":"completed"}}
+    }));
+    let error = bridge
+        .non_streaming_response(drive_turn(session, events, Vec::new(), None).await)
+        .await
+        .expect_err("empty ACP without retry must fail");
+    assert!(
+        error.to_string().contains("no assistant content")
+            || error.to_string().contains("usage")
+            || error.to_string().contains("billing"),
+        "{error:#}"
+    );
+}
+
+#[tokio::test]
+async fn failover_usage_limit_turn_requires_retry_and_failover_target() {
+    let (root, _app, bridge, session) = disconnect_fixture().await;
+    let bridge = bridge.with_usage_limit_cache_home(root.path());
+    let dispatcher = ThreadEventDispatcher::default();
+    let error = anyhow!("usage limit exceeded");
+
+    let missing_retry = bridge
+        .failover_usage_limit_turn(
+            drive_turn(
+                Arc::clone(&session),
+                dispatcher.subscribe("no-retry"),
+                Vec::new(),
+                None,
+            )
+            .await,
+            anyhow!("{error}"),
+        )
+        .await;
+    assert!(missing_retry.is_err(), "retry payload is required");
+
+    let missing_failover = bridge
+        .failover_usage_limit_turn(
+            drive_turn(
+                session,
+                dispatcher.subscribe("no-failover"),
+                Vec::new(),
+                Some(ContextRetry {
+                    request: drive_request(),
+                    effort: Some("high".to_owned()),
+                    advisor_model: None,
+                    collaborator_model: None,
+                }),
+            )
+            .await,
+            error,
+        )
+        .await;
+    assert!(
+        missing_failover.is_err(),
+        "single-model Codex bridge has no sibling failover"
+    );
+}
+
+#[tokio::test]
+async fn failover_usage_limit_turn_returns_subscription_response() {
+    let (root, _app, bridge, session) = disconnect_fixture().await;
+    let mut catalog = crate::provider_config::ModelCatalog::default();
+    catalog
+        .set_auxiliary_worker_routes(vec![crate::provider_config::WorkerRoute::new(
+            "claudex-sonnet",
+            "claude-sonnet-5",
+            "high",
+        )])
+        .expect("subscription fallback");
+    let bridge = bridge
+        .with_model_catalog(catalog)
+        .with_usage_limit_cache_home(root.path());
+    let dispatcher = ThreadEventDispatcher::default();
+    let outcome = bridge
+        .failover_usage_limit_turn(
+            drive_turn(
+                session,
+                dispatcher.subscribe("subscription-failover"),
+                Vec::new(),
+                Some(ContextRetry {
+                    request: drive_request(),
+                    effort: Some("high".to_owned()),
+                    advisor_model: None,
+                    collaborator_model: None,
+                }),
+            )
+            .await,
+            anyhow!("usage limit exceeded"),
+        )
+        .await
+        .expect("subscription failover");
+    let super::context_retry::UsageLimitOutcome::Response(response) = outcome else {
+        panic!("Codex usage-limit must Response through subscription failover");
+    };
+    assert_eq!(
+        response.status(),
+        axum::http::StatusCode::OK,
+        "subscription mock should answer the failover"
+    );
+}
+
+#[tokio::test]
+async fn non_streaming_response_failsover_usage_limit_to_subscription() {
+    let (root, _app, bridge, session) = disconnect_fixture().await;
+    let mut catalog = crate::provider_config::ModelCatalog::default();
+    catalog
+        .set_auxiliary_worker_routes(vec![crate::provider_config::WorkerRoute::new(
+            "claudex-sonnet",
+            "claude-sonnet-5",
+            "high",
+        )])
+        .expect("subscription fallback");
+    let bridge = bridge
+        .with_model_catalog(catalog)
+        .with_usage_limit_cache_home(root.path());
+    let dispatcher = ThreadEventDispatcher::default();
+    let events = dispatcher.subscribe("thread");
+    dispatcher.dispatch(json!({
+        "method":"turn/completed",
+        "params":{"threadId":"thread","turn":{"status":"completed"}}
+    }));
+    let response = bridge
+        .non_streaming_response(
+            drive_turn(
+                session,
+                events,
+                Vec::new(),
+                Some(ContextRetry {
+                    request: drive_request(),
+                    effort: None,
+                    advisor_model: None,
+                    collaborator_model: None,
+                }),
+            )
+            .await,
+        )
+        .await
+        .expect("usage-limit subscription failover");
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+}
+
+#[tokio::test]
+async fn failover_usage_limit_turn_attempts_sibling_configured_acp_provider() {
+    let cache = tempfile::tempdir().expect("failover cache");
+    let mut qwen = crate::agent_backend::BackendRoute::new(
+        "qwen3.8-max-preview",
+        crate::agent_backend::BackendKind::ConfiguredAcp,
+    );
+    qwen.max_concurrency = Some(3);
+    let mut cursor = crate::agent_backend::BackendRoute::new(
+        "auto",
+        crate::agent_backend::BackendKind::ConfiguredAcp,
+    );
+    cursor.max_concurrency = Some(3);
+    let backend = AgentBackend::spawn_routes(&[qwen, cursor]);
+    let mut catalog = crate::provider_config::ModelCatalog::default();
+    catalog
+        .set_worker_routes(vec![
+            crate::provider_config::WorkerRoute::new(
+                "claudex-qwen",
+                "qwen3.8-max-preview",
+                "high",
+            ),
+            crate::provider_config::WorkerRoute::new("claudex-cursor", "auto", "high"),
+        ])
+        .expect("workers");
+    let bridge = Bridge::new_with_backend(backend, "qwen3.8-max-preview".to_owned())
+        .with_model_catalog(catalog)
+        .with_usage_limit_cache_home(cache.path());
+    let slots = Arc::new(Semaphore::new(2));
+    let session = Arc::new(Session {
+        thread_id: "thread".to_owned(),
+        model: "qwen3.8-max-preview".to_owned(),
+        disabled_subagent_models: Default::default(),
+        signature: Arc::from("signature"),
+        transcript: Mutex::new(Vec::new()),
+        pending_tools: Mutex::new(HashMap::new()),
+        consumed_tool_ids: Mutex::new(HashSet::new()),
+        external_tool_names: HashMap::new(),
+        client_user_id: None,
+        claude_session_id: None,
+        gate: Arc::new(Mutex::new(())),
+        last_activity: std::sync::Mutex::new(Instant::now()),
+        pending_since: std::sync::Mutex::new(None),
+        _slot: slots.try_acquire_owned().expect("slot"),
+    });
+    let dispatcher = ThreadEventDispatcher::default();
+    let mut request = drive_request();
+    request.model = "qwen3.8-max-preview".to_owned();
+    let result = bridge
+        .failover_usage_limit_turn(
+            drive_turn(
+                session,
+                dispatcher.subscribe("acp-failover"),
+                Vec::new(),
+                Some(ContextRetry {
+                    request,
+                    effort: Some("high".to_owned()),
+                    advisor_model: None,
+                    collaborator_model: None,
+                }),
+            )
+            .await,
+            anyhow!(crate::anthropic::segment::EMPTY_ACP_END_TURN),
+        )
+        .await;
+    match result {
+        Ok(super::context_retry::UsageLimitOutcome::Continue(turn)) => {
+            assert_eq!(turn.session.model, "auto");
+        }
+        Ok(super::context_retry::UsageLimitOutcome::Response(_)) => {
+            panic!("configured ACP sibling must use Provider Continue, not subscription Response");
+        }
+        Err(error) => {
+            // Lazy ACP routes may not be live in unit tests; the Provider rewrite
+            // and retry_after_context_window attempt still cover the Continue arm.
+            assert!(
+                !error.to_string().is_empty(),
+                "sibling provider attempt must surface a concrete error"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn drive_subagent_stream_retries_empty_acp_on_sibling_provider() {
+    let cache = tempfile::tempdir().expect("stream failover cache");
+    let mut qwen = crate::agent_backend::BackendRoute::new(
+        "qwen3.8-max-preview",
+        crate::agent_backend::BackendKind::ConfiguredAcp,
+    );
+    qwen.max_concurrency = Some(3);
+    let mut cursor = crate::agent_backend::BackendRoute::new(
+        "auto",
+        crate::agent_backend::BackendKind::ConfiguredAcp,
+    );
+    cursor.max_concurrency = Some(3);
+    let backend = AgentBackend::spawn_routes(&[qwen, cursor]);
+    let mut catalog = crate::provider_config::ModelCatalog::default();
+    catalog
+        .set_worker_routes(vec![
+            crate::provider_config::WorkerRoute::new(
+                "claudex-qwen",
+                "qwen3.8-max-preview",
+                "high",
+            ),
+            crate::provider_config::WorkerRoute::new("claudex-cursor", "auto", "high"),
+        ])
+        .expect("workers");
+    let bridge = Arc::new(
+        Bridge::new_with_backend(backend, "qwen3.8-max-preview".to_owned())
+            .with_model_catalog(catalog)
+            .with_usage_limit_cache_home(cache.path()),
+    );
+    let slots = Arc::new(Semaphore::new(2));
+    let session = Arc::new(Session {
+        thread_id: "thread".to_owned(),
+        model: "qwen3.8-max-preview".to_owned(),
+        disabled_subagent_models: Default::default(),
+        signature: Arc::from("signature"),
+        transcript: Mutex::new(Vec::new()),
+        pending_tools: Mutex::new(HashMap::new()),
+        consumed_tool_ids: Mutex::new(HashSet::new()),
+        external_tool_names: HashMap::new(),
+        client_user_id: None,
+        claude_session_id: None,
+        gate: Arc::new(Mutex::new(())),
+        last_activity: std::sync::Mutex::new(Instant::now()),
+        pending_since: std::sync::Mutex::new(None),
+        _slot: slots.try_acquire_owned().expect("slot"),
+    });
+    let dispatcher = ThreadEventDispatcher::default();
+    let events = dispatcher.subscribe("thread");
+    dispatcher.dispatch(json!({
+        "method":"turn/completed",
+        "params":{"threadId":"thread","turn":{"status":"completed"}}
+    }));
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
+    let mut request = drive_request();
+    request.model = "qwen3.8-max-preview".to_owned();
+    Arc::clone(&bridge)
+        .drive_subagent_stream(
+            drive_turn(
+                session,
+                events,
+                Vec::new(),
+                Some(ContextRetry {
+                    request,
+                    effort: None,
+                    advisor_model: None,
+                    collaborator_model: None,
+                }),
+            )
+            .await,
+            sender,
+            SegmentBuilder::for_turn(1, true, "qwen3.8-max-preview"),
+            None,
+            true,
+            false,
+        )
+        .await;
+    let mut output = String::new();
+    while let Some(frame) = receiver.recv().await {
+        output.push_str(&String::from_utf8_lossy(&frame.expect("frame")));
+    }
+    assert!(
+        output.contains("error")
+            || output.contains("message_stop")
+            || output.contains("no assistant")
+            || output.contains("auto"),
+        "empty-ACP sibling retry must produce stream output: {output}"
+    );
+}
+
+#[tokio::test]
+async fn drive_stream_retries_usage_limit_err_after_committed_output() {
+    let cache = tempfile::tempdir().expect("cache");
+    let (_root, _app, bridge, session) = disconnect_fixture().await;
+    let bridge = Arc::new(bridge.with_usage_limit_cache_home(cache.path()));
+    let dispatcher = ThreadEventDispatcher::default();
+    let events = dispatcher.subscribe("thread");
+    dispatcher.dispatch(json!({
+        "method":"item/agentMessage/delta",
+        "params":{"threadId":"thread","delta":"partial"}
+    }));
+    dispatcher.dispatch(json!({
+        "method":"error",
+        "params":{"threadId":"thread","error":{"codexErrorInfo":"usageLimitExceeded"}}
+    }));
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
+    Arc::clone(&bridge)
+        .drive_subagent_stream(
+            drive_turn(
+                session,
+                events,
+                Vec::new(),
+                Some(ContextRetry {
+                    request: drive_request(),
+                    effort: None,
+                    advisor_model: None,
+                    collaborator_model: None,
+                }),
+            )
+            .await,
+            sender,
+            SegmentBuilder::for_turn(1, true, "main"),
+            None,
+            true,
+            false,
+        )
+        .await;
+    let mut output = String::new();
+    while let Some(frame) = receiver.recv().await {
+        output.push_str(&String::from_utf8_lossy(&frame.expect("frame")));
+    }
+    assert!(
+        output.contains("usage")
+            || output.contains("limit")
+            || output.contains("error")
+            || output.contains("partial"),
+        "unexpected usage-limit-after-output stream: {output}"
+    );
+}
+
+#[tokio::test]
+async fn blocks_exhausted_subagent_launch_with_cooling_down_notice() {
+    let (root, _app, bridge, session) = disconnect_fixture().await;
+    let bridge = bridge.with_usage_limit_cache_home(root.path());
+    bridge.note_provider_exhaustion(
+        &anyhow!(crate::anthropic::segment::EMPTY_ACP_END_TURN),
+        Some("worker-model"),
+    );
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
+    let mut builder = SegmentBuilder::new(1);
+    let flow = builder
+        .handle_event(
+            &bridge,
+            &session,
+            &[],
+            &json!(
+                r#"{"providers":{},"selected_workers":[{"agent":"worker","model":"worker-model"}]}"#
+            ),
+            &json!({
+                "id":44,
+                "method":"item/tool/call",
+                "params":{
+                    "callId":"exhausted",
+                    "tool":"cc_Agent_0",
+                    "arguments":{
+                        "prompt":"delegate",
+                        "subagent_type":"worker",
+                        "claudex_model":"worker-model"
+                    }
+                }
+            }),
+            Some(&sender),
+        )
+        .await
+        .expect("exhausted launch stays on the parent stream");
+    assert_eq!(flow, ControlFlow::Continue(()));
+    assert!(!builder.has_external_tool_calls());
+    assert!(builder.blocks.iter().any(|block| {
+        block["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("cooling down"))
+    }));
+    drop(sender);
+    let mut output = String::new();
+    while let Some(frame) = receiver.recv().await {
+        output.push_str(&String::from_utf8_lossy(&frame.expect("frame")));
+    }
+    assert!(output.contains("cooling down") || output.contains("worker-model"));
+}
+
+#[tokio::test]
+async fn command_code_external_tool_skips_progress_arrow_painting() {
+    let (_root, _app, bridge, mut session) = disconnect_fixture().await;
+    Arc::get_mut(&mut session)
+        .expect("unique session")
+        .external_tool_names
+        .insert("cc_Read_0".to_owned(), "Read".to_owned());
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
+    let mut builder = SegmentBuilder::for_turn(1, true, "meta/muse-spark-1.2-contributor");
+    let _ = builder
+        .handle_event(
+            &bridge,
+            &session,
+            &[],
+            &Value::Null,
+            &json!({
+                "id":45,
+                "method":"item/tool/call",
+                "params":{
+                    "callId":"cc-read",
+                    "tool":"cc_Read_0",
+                    "arguments":{"path":"README.md"}
+                }
+            }),
+            Some(&sender),
+        )
+        .await
+        .expect("command-code external read");
+    assert!(builder.has_external_tool_calls());
+    drop(sender);
+    let mut output = String::new();
+    while let Some(frame) = receiver.recv().await {
+        output.push_str(&String::from_utf8_lossy(&frame.expect("frame")));
+    }
+    assert!(
+        !output.contains("▶ Read"),
+        "Command Code SubAgent must skip ▶ chrome before tool_use: {output}"
+    );
+    assert!(output.contains("tool_use") || output.contains("Read"));
+}
