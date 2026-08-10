@@ -69,7 +69,7 @@ fn count_for_content(content: &str) -> usize {
     }
 }
 
-pub(super) fn needs_single_worker(request: &MessagesRequest) -> bool {
+pub(crate) fn needs_single_worker(request: &MessagesRequest) -> bool {
     if independent_scope_count(request) >= 2 {
         return false;
     }

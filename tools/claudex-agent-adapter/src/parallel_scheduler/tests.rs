@@ -1364,6 +1364,18 @@ fn covers_malformed_work_units_and_policy_boundaries() {
     let parallel =
         messages(&[serde_json::json!({"role":"user", "content":"compare these in parallel"})]);
     assert_eq!(policy::independent_scope_count(&parallel), 2);
+    assert!(super::scope_count::needs_single_worker(&messages(&[
+        serde_json::json!({"role":"user", "content":"https://example.com/docs"})
+    ])));
+    assert!(super::scope_count::needs_single_worker(&messages(&[
+        serde_json::json!({"role":"user", "content":"http://example.com/a b"})
+    ])));
+    assert!(super::scope_count::needs_single_worker(&messages(&[
+        serde_json::json!({"role":"user", "content":"gh pr view 12"})
+    ])));
+    assert!(!super::scope_count::needs_single_worker(&messages(&[
+        serde_json::json!({"role":"user", "content":"https://example.com/docs\ninvestigate the second repo"})
+    ])));
     let plain = messages(&[serde_json::json!({"role":"user", "content":"one bounded task"})]);
 
     let mut decision = SchedulerDecision::no_action();
