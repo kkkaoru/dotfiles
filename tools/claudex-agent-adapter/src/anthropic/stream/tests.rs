@@ -471,11 +471,11 @@ fn recognizes_cursor_thought_for_filler() {
         )
     );
     assert_eq!(
-        super::SUBAGENT_PROVIDER_SILENCE_JUDGMENT,
+        super::types::SUBAGENT_PROVIDER_SILENCE_JUDGMENT,
         Duration::from_secs(20 * 60)
     );
     assert!(
-        super::SUBAGENT_PROVIDER_SILENCE_JUDGMENT > Duration::from_secs(600),
+        super::types::SUBAGENT_PROVIDER_SILENCE_JUDGMENT > Duration::from_secs(600),
         "judgment window must exceed Claude Code's ~600s watchdog so keepalives can cover real quiet work"
     );
     let mut subagent = SegmentBuilder::new(1).with_subagent(true);

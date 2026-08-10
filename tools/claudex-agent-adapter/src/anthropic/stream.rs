@@ -37,7 +37,7 @@ pub(in crate::anthropic) use turn::StreamTurn;
 use types::{StreamEventState, StreamWaitResult, stream_activity_delays};
 pub(super) use types::{
     ACTIVITY_KEEPALIVE_INTERVAL, INITIAL_ACTIVITY_DELAY, SUBAGENT_INITIAL_ACTIVITY_DELAY,
-    SUBAGENT_PROVIDER_SILENCE_JUDGMENT, StreamWaitInput, ToolCall, is_provider_stream_closed,
+    StreamWaitInput, ToolCall, is_provider_stream_closed,
 };
 
 use builder::SegmentBuilder;
