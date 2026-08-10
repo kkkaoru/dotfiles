@@ -75,6 +75,7 @@ pub(crate) fn http_router_with_handover(
                     StatusCode::SERVICE_UNAVAILABLE
                 };
                 let session_ids = health_bridge.active_claude_session_ids().await;
+                let busy_session_ids = health_bridge.busy_claude_session_ids().await;
                 let listen = handover_for_health
                     .as_ref()
                     .map(|handover| handover.advertised_addr().to_string());
@@ -104,7 +105,8 @@ pub(crate) fn http_router_with_handover(
                         "recovery_generation":crate::launcher::recovery_generation(),
                         "listener_handover":handover_for_health.is_some(),
                         "listen":listen,
-                        "active_claude_session_ids":session_ids
+                        "active_claude_session_ids":session_ids,
+                        "busy_claude_session_ids":busy_session_ids
                     })),
                 )
             }),

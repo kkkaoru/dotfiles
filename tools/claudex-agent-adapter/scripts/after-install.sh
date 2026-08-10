@@ -1,7 +1,7 @@
 #!/bin/sh
-# Relink ~/.local/bin and apply the new build without waiting for canonical idle.
-# Busy listeners keep serving. Handover-capable daemons promote :port immediately;
-# legacy busy daemons get a current-build fallback + live.<port>.json + idle waiter
+# Relink ~/.local/bin and apply the new build without ending Claude Code sessions.
+# Handover-capable daemons warm-start then cut :port over; idle TUI stays connected.
+# Legacy busy daemons get a current-build fallback + live.<port>.json + idle waiter
 # (install invalidates any waiter on the old inode).
 set -eu
 

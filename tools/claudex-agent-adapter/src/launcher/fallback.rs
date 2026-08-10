@@ -49,7 +49,7 @@ pub(super) async fn ensure_current_generation(
         }
     }
 
-    let listen = reserve_listener(config.options.listen)?;
+    let listen = reserve_loopback_listen(config.options.listen)?;
     let fallback = config.with_listen(listen);
     let pid = daemon_start::start_adapter(&fallback).context("start current-build fallback")?;
     if let Err(error) = wait_until_ready(client, &fallback).await {
@@ -68,6 +68,10 @@ pub(super) async fn ensure_current_generation(
         },
     )?;
     Ok(fallback.base_url())
+}
+
+pub(super) fn reserve_loopback_listen(configured: SocketAddr) -> Result<SocketAddr> {
+    reserve_listener(configured)
 }
 
 fn reserve_listener(configured: SocketAddr) -> Result<SocketAddr> {

@@ -97,6 +97,13 @@ impl Bridge {
         collect_session_ids(&self.detached_sessions.lock().await, &mut ids);
         ids.into_iter().collect()
     }
+
+    pub async fn busy_claude_session_ids(&self) -> Vec<String> {
+        let mut ids = BTreeSet::new();
+        collect_busy_session_ids(&self.sessions.lock().await, &mut ids);
+        collect_session_ids(&self.detached_sessions.lock().await, &mut ids);
+        ids.into_iter().collect()
+    }
 }
 
 fn collect_session_ids(sessions: &[std::sync::Arc<Session>], ids: &mut BTreeSet<String>) {
@@ -107,6 +114,30 @@ fn collect_session_ids(sessions: &[std::sync::Arc<Session>], ids: &mut BTreeSet<
             ids.insert(id.to_owned());
         }
     }
+}
+
+fn collect_busy_session_ids(sessions: &[std::sync::Arc<Session>], ids: &mut BTreeSet<String>) {
+    for session in sessions {
+        if !session_is_busy(session) {
+            continue;
+        }
+        if let Some(id) = session.claude_session_id.as_deref()
+            && !id.is_empty()
+        {
+            ids.insert(id.to_owned());
+        }
+    }
+}
+
+fn session_is_busy(session: &Session) -> bool {
+    if session.gate.try_lock().is_err() {
+        return true;
+    }
+    session
+        .pending_tools
+        .try_lock()
+        .map(|pending| !pending.is_empty())
+        .unwrap_or(true)
 }
 
 #[cfg(test)]

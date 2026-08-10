@@ -75,3 +75,16 @@ fn round_trips_retained_generation_state() {
     assert_eq!(loaded.session_ids, ["session-a", "session-b"]);
     assert_eq!(loaded.listen, listen);
 }
+
+#[test]
+fn publishes_canonical_rebind_state_beside_the_adapter_log() {
+    let root = tempfile::tempdir().expect("rebind fixture");
+    let config = config(root.path());
+    let listen = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 8318);
+    publish_canonical_rebind(&config, listen, 42).expect("publish rebind");
+    let path = crate::listen_handover::rebind_state_path(root.path(), &config.options.listen);
+    let state: crate::listen_handover::RebindState =
+        serde_json::from_slice(&std::fs::read(path).expect("read rebind")).expect("decode");
+    assert_eq!(state.listen, listen);
+    assert_eq!(state.pid, 42);
+}

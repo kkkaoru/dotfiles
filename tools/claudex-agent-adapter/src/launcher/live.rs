@@ -52,9 +52,21 @@ pub(super) fn read(config: &ServiceConfig) -> Result<Option<LiveState>> {
     read_live(&state_path(config)?)
 }
 
-pub(crate) fn load_retained_from_env() -> Option<RetainedGeneration> {
-    let path = std::env::var_os(RETAINED_STATE_ENV).map(PathBuf::from)?;
-    read_retained(&path).ok().flatten()
+pub(crate) fn load_retained_from_env() -> Option<(PathBuf, RetainedGeneration)> {
+    let path = PathBuf::from(std::env::var_os(RETAINED_STATE_ENV)?);
+    let generation = read_retained(&path).ok().flatten()?;
+    Some((path, generation))
+}
+
+pub(super) fn publish_canonical_rebind(
+    config: &ServiceConfig,
+    listen: SocketAddr,
+    pid: u32,
+) -> Result<()> {
+    write_json(
+        &crate::listen_handover::rebind_state_path(cache_dir(config)?, &config.options.listen),
+        &crate::listen_handover::RebindState { listen, pid },
+    )
 }
 
 pub(super) fn write_retained(
@@ -122,7 +134,7 @@ fn read_live(path: &Path) -> Result<Option<LiveState>> {
     Ok(Some(state))
 }
 
-fn read_retained(path: &Path) -> Result<Option<RetainedGeneration>> {
+pub(crate) fn read_retained(path: &Path) -> Result<Option<RetainedGeneration>> {
     if !path.exists() {
         return Ok(None);
     }

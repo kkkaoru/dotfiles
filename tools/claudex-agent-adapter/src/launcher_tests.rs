@@ -304,6 +304,7 @@ mod tests {
             listener_handover: false,
             listen: None,
             active_claude_session_ids: Vec::new(),
+            busy_claude_session_ids: Vec::new(),
         }
     }
 
@@ -1286,6 +1287,7 @@ mod tests {
                 "listener_handover": health.listener_handover,
                 "listen": health.listen,
                 "active_claude_session_ids": health.active_claude_session_ids,
+                "busy_claude_session_ids": health.busy_claude_session_ids,
             })
             .to_string(),
         )

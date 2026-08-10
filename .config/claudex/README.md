@@ -964,30 +964,37 @@ flowchart TD
   Match -->|yes| Reuse[Reuse: そのまま使う]
   Match -->|no| Busy{"status=ok かつ active work?"}
   Busy -->|yes| Defer[Defer]
-  Busy -->|no| Replace["Replace: 同一port差し替え"]
+  Busy -->|no| Replace["Replace: live update"]
+  Replace --> HandoverIdle{"listener_handover?"}
+  HandoverIdle -->|yes| PromoteIdle["warm-start → :8318 cutover / idle TUIは新build"]
+  HandoverIdle -->|no| Sigterm["SIGTERM 旧serve → 同一port起動"]
   Defer --> Handover{"listener_handover?"}
-  Handover -->|yes| Promote["canonical port を新buildへ即時昇格 / 旧sessionは retained"]
+  Handover -->|yes| Promote["warm-start → :8318 cutover / inflight sessionだけ retained"]
   Handover -->|no| Fallback["fallback listener + live.json + idle waiter"]
   Fallback --> IdleWait{"canonical listener が idle?"}
   IdleWait -->|yes| Replace
 ```
 
 `active work` は `active_http_requests > 0`、`active_provider_turns > 0`、または
-`active_subagent_models` の合計 > 0 です。idleな `launch` TUIが付いていても Replace します。
-TUIプロセスはkillしません。`listener_handover: true` のdaemonは busy でも canonical port
-を即時手放し、新buildが同じportで live になります。旧sessionは retained generation へ
-sticky proxy されます。handover非対応の旧daemonでは fallback listener + idle waiter のまま
-で、`~/.cache/claudex/live.<port>.json` が今使う世代を指します。起動中のstreamは切りません。
+`active_subagent_models` の合計 > 0 です。idleな `launch` TUIは active work ではありません。
+TUIプロセスはkillしません。`listener_handover: true` のdaemonは idle / busy どちらでも
+新buildを先に ephemeral で warm-start し、旧listenerが `:8318` を手放した直後に
+cutover します。ギャップは rebind RTT だけです。次の idle turn は新buildへ行き、
+in-flight / pending-tool / detached の session だけ旧世代へ sticky proxy されます。
+handover非対応の旧daemonでは、idleなら SIGTERM Replace、busyなら fallback listener +
+idle waiter のままです。`~/.cache/claudex/live.<port>.json` が今使う世代を指します。
+起動中のstreamは切りません。
 
 | 入口 | idle（TUI付き含む） | busy | 備考 |
 | --- | --- | --- | --- |
-| `claudex` / `claudex-agent-adapter launch` | 同一portをReplace | Defer → 新buildのfallback listener + idle waiter | 新しいClaude Code sessionだけfallbackへ。既存TUIは旧portのまま。waiterがidle後に本portを差し替える |
-| `claudex-agent-adapter ensure` | 同一portをReplace | Defer → fallback + idle waiter | `claudex` と同じ。stdoutに使うbase URLを出す |
-| `claudex hot-swap` / `claudex-hot-swap` / `claudex-agent-adapter hot-swap` | 同一portをReplace | Defer → fallback + idle waiter（drain待ちなし） | stdoutは今すぐ使うbase URL。既存作業は旧portのまま。waiterがidle後に本portを差し替える |
+| `claudex` / `claudex-agent-adapter launch` | handoverなら `:8318` を新buildへcutover。失敗時は旧daemonを維持 | Defer → promote、だめなら fallback + idle waiter | Claude Code sessionは終了しない。次のidle turnは新build |
+| `claudex-agent-adapter ensure` | 同上 | 同上 | stdoutに使うbase URLを出す |
+| `claudex hot-swap` / `claudex-hot-swap` / `claudex-agent-adapter hot-swap` | 同上 | 同上（drain待ちなし） | 作業中にadapterを直してもTUIを落とさない |
 
-Replace時は旧serveへgraceful shutdown（SIGTERM、process groupやSIGKILLへは進めない）を送り、
-listenerが空くまで待ちます。`launch` 親プロセスには信号を送りません。新daemonの
-readinessに失敗し、旧世代のrecovery manifestがある場合は旧世代を戻します。
+handover非対応の Replace だけ旧serveへgraceful shutdown（SIGTERM、process groupや
+SIGKILLへは進めない）を送り、listenerが空くまで待ちます。`launch` 親プロセスには
+信号を送りません。新daemonのreadinessに失敗し、旧世代のrecovery manifestがある場合は
+旧世代を戻します。
 
 fallback listenerはloopbackの空きportに新buildを起動し、状態を
 `~/.cache/claudex/fallback.<port>.json` に保存します。同じ世代なら再利用し、
@@ -996,23 +1003,21 @@ daemonを増やし続けません。既存sessionの進行中streamは旧daemon�
 日常の更新手順:
 
 ```sh
-# 1. 新バイナリを入れ、idle waiter を新 build_id 向けに武装する
+# 1. 新バイナリを入れ、起動中の Claude Code を落とさず :8318 を新 build にする
 ./scripts/claudex-install-adapter
 # fishなら claudex install
 
-# 2. 確認。idleなら :8318 の pid が変わり build_id が一致。
-#    busyなら新 claudex / hot-swap stdout の fallback が新 build。:8318 は waiter 待ち
+# 2. 確認。TUIはそのまま。:8318 の pid / build_id が新世代。
+#    in-flight session だけ busy_claude_session_ids として旧世代へ sticky。
 claudex-agent-adapter build-id
-curl --fail --silent http://127.0.0.1:8318/health | jq '{pid, build_id, status}'
+curl --fail --silent http://127.0.0.1:8318/health | jq '{pid, build_id, status, busy_claude_session_ids}'
 ```
 
-busy中に `claudex-hot-swap` すると、進行中のstreamは打たず、今すぐ新buildの
-fallback listenerへルーティングし、`~/.cache/claudex/pending-hot-swap.<listen>.json`
-に状態を書いて `hot-swap --wait-idle` waiterをdetachします。stdoutのURLが
-新しいsessionの接続先です。waiterはport lockを持たずにidleを待ち、同じportへ
-Replaceします。同じbuildのwaiterが生きていれば再spawnしません。ensure / launch /
-hot-swap のDeferは同じfallback+waiterなので、作業中のclaudexとadapter回収を
-同時に進められます。本portはidle後に自動で新buildになります。
+handover非対応の旧daemonが busy のときだけ、`claudex-hot-swap` は進行中streamを
+打たず fallback listener へルーティングし、`pending-hot-swap.<listen>.json` に
+状態を書いて `hot-swap --wait-idle` waiterをdetachします。stdoutのURLが新しい
+sessionの接続先です。waiterはport lockを持たずにidleを待ち、同じportへ
+Replaceします。同じbuildのwaiterが生きていれば再spawnしません。
 新buildのwaiterを武装したときは macOS 通知「ビルド完了・待機中」、busy中に現行
 世代fallbackが立ち上がったときは「live 更新完了」（listen・build・即時利用可）、
 同じportへの Replaceが完了したときは「差し替え完了」を出します。Reuseや既に武装済み

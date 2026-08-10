@@ -60,6 +60,11 @@ pub(super) struct Health {
     /// Claude Code session ids currently attached to this generation.
     #[serde(default)]
     pub(super) active_claude_session_ids: Vec<String>,
+    /// Claude Code session ids with in-flight turns or pending tools.
+    /// Older adapters omit this field; when absent, busy work falls back to
+    /// `active_claude_session_ids` only while `has_active_work()` is true.
+    #[serde(default)]
+    pub(super) busy_claude_session_ids: Vec<String>,
 }
 
 impl Health {

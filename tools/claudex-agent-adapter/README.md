@@ -356,16 +356,17 @@ against `env!("CLAUDEX_BUILD_ID")`. Authentication must succeed before Reuse.
 | `ServiceState` | When | `ensure` / `launch` | `hot-swap` |
 | --- | --- | --- | --- |
 | `Reuse` | health matches config, current `build_id`, and auth | keep the listener | keep the listener |
-| `Replace` | mismatch or stale build, and no active work | graceful-stop serve, start current binary on the same port | same |
-| `Defer` | `status == "ok"` and `has_active_work()` (`active_http_requests`, `active_provider_turns`, or active SubAgents > 0) | if `/health.listener_handover` is true, rebind the old daemon to an ephemeral port and promote the current build onto the canonical listen (old Claude Code sessions stay on the retained generation). Otherwise start or reuse a current-build fallback, arm an idle waiter, and publish `~/.cache/claudex/live.<port>.json` so new sessions and routing health use the current generation immediately | same |
+| `Replace` | mismatch or stale build, and no active work | if `/health.listener_handover` is true, warm-start the new build then cut `:port` over (idle TUI stays connected). Otherwise graceful-stop serve and start the current binary on the same port | same |
+| `Defer` | `status == "ok"` and `has_active_work()` (`active_http_requests`, `active_provider_turns`, or active SubAgents > 0) | if `/health.listener_handover` is true, warm-start then cut `:port` over; only `busy_claude_session_ids` stay sticky on the retained generation. Otherwise start or reuse a current-build fallback, arm an idle waiter, and publish `~/.cache/claudex/live.<port>.json` so new sessions and routing health use the current generation immediately | same |
 | `Start` | no health response | start serve on the configured listen address | same |
 
-Idle `launch` TUIs do **not** block Replace. Only in-flight HTTP/provider work
-does. The launcher never signals a `claudex-agent-adapter launch` parent; it
-sends SIGTERM only to a matching `serve` pid and does not escalate to the
-process group or SIGKILL, so Axum can drain accepted responses. After Replace,
-the TUI keeps the same `ANTHROPIC_BASE_URL` and the next turn uses the new
-daemon.
+Idle `launch` TUIs do **not** block Replace and must not be SIGTERM'd on a
+handover-capable daemon. Only in-flight HTTP/provider/SubAgent work, pending
+tools, or detached sessions stay on the old generation. The launcher never
+signals a `claudex-agent-adapter launch` parent; SIGTERM is only for legacy
+daemons without `listener_handover`, and only to a matching `serve` pid. After
+a successful live update, the TUI keeps the same `ANTHROPIC_BASE_URL` and the
+next idle turn uses the new daemon.
 
 Fallback state is `~/.cache/claudex/fallback.<configured-port>.json` (mode
 `0600`): listen address, `build_id`, fingerprint, pid. A matching live fallback

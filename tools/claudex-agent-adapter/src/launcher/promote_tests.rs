@@ -29,6 +29,7 @@ fn health(listener_handover: bool, pid: Option<u32>) -> Health {
         listener_handover,
         listen: Some("127.0.0.1:8318".to_owned()),
         active_claude_session_ids: vec!["session-a".to_owned()],
+        busy_claude_session_ids: Vec::new(),
     }
 }
 
@@ -63,4 +64,30 @@ async fn try_canonical_skips_legacy_daemons_without_handover() {
         .await
         .expect("legacy skip");
     assert_eq!(url, None);
+}
+
+#[test]
+fn retains_only_busy_sessions_when_the_new_health_field_is_present() {
+    let mut health = health(true, Some(12));
+    health.busy_claude_session_ids = vec!["busy-a".to_owned()];
+    health.active_claude_session_ids = vec!["busy-a".to_owned(), "idle-tui".to_owned()];
+    assert_eq!(retained_session_ids(&health), ["busy-a"]);
+}
+
+#[test]
+fn retains_all_active_sessions_on_legacy_busy_health() {
+    let mut health = health(true, Some(12));
+    health.active_http_requests = 1;
+    health.busy_claude_session_ids.clear();
+    assert_eq!(retained_session_ids(&health), ["session-a"]);
+}
+
+#[test]
+fn retains_no_sessions_for_an_idle_tui() {
+    let mut health = health(true, Some(12));
+    health.active_http_requests = 0;
+    health.active_provider_turns = 0;
+    health.busy_claude_session_ids.clear();
+    health.active_claude_session_ids = vec!["idle-tui".to_owned()];
+    assert!(retained_session_ids(&health).is_empty());
 }

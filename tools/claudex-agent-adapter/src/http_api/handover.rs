@@ -1,4 +1,8 @@
-use std::{collections::HashSet, sync::Arc};
+use std::{
+    collections::HashSet,
+    path::PathBuf,
+    sync::{Arc, RwLock},
+};
 
 use axum::{
     Json, Router,
@@ -12,7 +16,7 @@ use axum::{
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::launcher::{RetainedGeneration, load_retained_from_env};
+use crate::launcher::{RetainedGeneration, load_retained_from_env, read_retained};
 use crate::listen_handover::ListenHandover;
 
 use super::CLAUDE_CODE_SESSION_ID_HEADER;
@@ -23,8 +27,9 @@ pub(super) struct HandoverState {
 }
 
 pub(super) struct RetainedProxy {
-    listen: std::net::SocketAddr,
-    sessions: HashSet<String>,
+    path: PathBuf,
+    listen: RwLock<std::net::SocketAddr>,
+    sessions: RwLock<HashSet<String>>,
     client: reqwest::Client,
 }
 
@@ -37,25 +42,53 @@ struct RebindRequest {
 }
 
 impl RetainedProxy {
-    fn from_generation(generation: RetainedGeneration) -> Self {
+    fn from_path(path: PathBuf, generation: RetainedGeneration) -> Self {
         Self {
-            listen: generation.listen,
-            sessions: generation.session_ids.into_iter().collect(),
+            path,
+            listen: RwLock::new(generation.listen),
+            sessions: RwLock::new(generation.session_ids.into_iter().collect()),
             client: reqwest::Client::new(),
         }
     }
 
+    fn refresh(&self) {
+        let Ok(Some(generation)) = read_retained(&self.path) else {
+            return;
+        };
+        if let Ok(mut listen) = self.listen.write() {
+            *listen = generation.listen;
+        }
+        if let Ok(mut sessions) = self.sessions.write() {
+            *sessions = generation.session_ids.into_iter().collect();
+        }
+    }
+
     fn owns(&self, session_id: &str) -> bool {
-        self.sessions.contains(session_id)
+        self.refresh();
+        self.sessions
+            .read()
+            .map(|sessions| sessions.contains(session_id))
+            .unwrap_or(false)
     }
 
     async fn proxy(&self, request: Request) -> Response {
+        self.refresh();
+        let listen = match self.listen.read() {
+            Ok(listen) => *listen,
+            Err(_) => {
+                return (
+                    StatusCode::BAD_GATEWAY,
+                    Json(json!({"error": {"message": "retained listen lock poisoned"}})),
+                )
+                    .into_response();
+            }
+        };
         let path = request
             .uri()
             .path_and_query()
             .map(|value| value.as_str())
             .unwrap_or(request.uri().path());
-        let url = format!("http://{}{path}", self.listen);
+        let url = format!("http://{listen}{path}");
         let mut upstream = self.client.request(request.method().clone(), url);
         for (name, value) in request.headers() {
             upstream = upstream.header(name, value);
@@ -117,7 +150,7 @@ pub(super) fn layer(handover: Option<ListenHandover>) -> (Option<HandoverState>,
         return (None, Router::new());
     };
     let retained = load_retained_from_env()
-        .map(RetainedProxy::from_generation)
+        .map(|(path, generation)| RetainedProxy::from_path(path, generation))
         .map(Arc::new);
     let state = HandoverState {
         retained: retained.clone(),

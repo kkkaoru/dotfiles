@@ -1,5 +1,5 @@
 use std::{
-    net::TcpStream,
+    net::{SocketAddr, TcpStream},
     time::{Duration, Instant},
 };
 
@@ -8,7 +8,7 @@ use serde::Deserialize;
 use serde_json::json;
 
 use super::{
-    ServiceConfig, daemon_process, daemon_start,
+    ServiceConfig, daemon_process, daemon_start, fallback,
     health::{self, Health},
     live,
 };
@@ -28,6 +28,17 @@ pub(super) fn handover_supported(health: &Health) -> bool {
     health.listener_handover && health.pid.is_some_and(|pid| pid != 0)
 }
 
+pub(super) fn retained_session_ids(health: &Health) -> Vec<String> {
+    if !health.busy_claude_session_ids.is_empty() {
+        return health.busy_claude_session_ids.clone();
+    }
+    if health.has_active_work() {
+        health.active_claude_session_ids.clone()
+    } else {
+        Vec::new()
+    }
+}
+
 pub(super) async fn try_canonical(
     client: &reqwest::Client,
     config: &ServiceConfig,
@@ -36,49 +47,115 @@ pub(super) async fn try_canonical(
     if !handover_supported(health) {
         return Ok(None);
     }
-    let Some(pid) = health.pid else {
+    let Some(old_pid) = health.pid else {
         return Ok(None);
     };
+    let session_ids = retained_session_ids(health);
+    let advertised = advertised_listen(config, health);
+    let warm_listen = fallback::reserve_loopback_listen(config.options.listen)?;
+    let warm = config.with_listen(warm_listen);
+    let retained_path = live::write_retained(
+        config,
+        advertised,
+        old_pid,
+        &health.build_id,
+        session_ids.clone(),
+    )?;
+    let started = daemon_start::start_adapter_with_retained(&warm, &retained_path)
+        .context("warm-start current-build listener before canonical cutover")?;
+    if let Err(error) = health::wait_until_ready(client, &warm).await {
+        terminate_started(started, &warm);
+        return Err(error.context("wait for warm-start listener"));
+    }
     let Some(rebind) = request_ephemeral_rebind(client, config).await? else {
+        terminate_started(started, &warm);
         return Ok(None);
     };
     let retained_listen = live::parse_listen_url(&format!("http://{}", rebind.listen))?;
-    wait_until_canonical_released(config).await?;
-    let retained_path = live::write_retained(
+    live::write_retained(
         config,
         retained_listen,
-        pid,
+        old_pid,
         &health.build_id,
-        health.active_claude_session_ids.clone(),
+        session_ids.clone(),
     )?;
-    let started = daemon_start::start_adapter_with_retained(config, &retained_path)
-        .context("start current-build listener on the canonical port")?;
+    wait_until_canonical_released(config).await?;
+    if request_bind_listen(client, &warm, config.options.listen)
+        .await?
+        .is_none()
+    {
+        restore_old_canonical(client, config, retained_listen).await;
+        terminate_started(started, &warm);
+        return Ok(None);
+    }
     if let Err(error) = health::wait_until_ready(client, config).await {
-        if daemon_process::matches(started, &config.executable) {
-            daemon_process::terminate(started);
-        }
+        restore_old_canonical(client, config, retained_listen).await;
+        terminate_started(started, &warm);
         return Err(error.context("wait for promoted canonical listener"));
     }
-    live::publish_listen(config, config.options.listen, Some(started))?;
+    let _ = live::publish_listen(config, config.options.listen, Some(started));
+    let _ = live::publish_canonical_rebind(config, config.options.listen, started);
     eprintln!(
-        "claudex: promoted build {} to {} (previous pid {pid} listen {} retained on {} for {} session(s))",
+        "claudex: promoted build {} to {} (previous pid {old_pid} retained on {} for {} in-flight session(s); launch TUI kept)",
         env!("CLAUDEX_BUILD_ID"),
         config.base_url(),
-        health.listen.as_deref().unwrap_or("unknown"),
         retained_listen,
-        health.active_claude_session_ids.len()
+        session_ids.len()
     );
     Ok(Some(config.base_url()))
+}
+
+fn advertised_listen(config: &ServiceConfig, health: &Health) -> SocketAddr {
+    health
+        .listen
+        .as_deref()
+        .and_then(|listen| live::parse_listen_url(&format!("http://{listen}")).ok())
+        .unwrap_or(config.options.listen)
+}
+
+fn terminate_started(pid: u32, config: &ServiceConfig) {
+    if daemon_process::matches(pid, &config.executable) {
+        daemon_process::terminate(pid);
+    }
+}
+
+async fn restore_old_canonical(
+    client: &reqwest::Client,
+    config: &ServiceConfig,
+    retained_listen: SocketAddr,
+) {
+    let _ = request_bind_listen(
+        client,
+        &config.with_listen(retained_listen),
+        config.options.listen,
+    )
+    .await;
 }
 
 async fn request_ephemeral_rebind(
     client: &reqwest::Client,
     config: &ServiceConfig,
 ) -> Result<Option<RebindResponse>> {
+    request_rebind(client, config, json!({ "ephemeral": true })).await
+}
+
+async fn request_bind_listen(
+    client: &reqwest::Client,
+    target: &ServiceConfig,
+    listen: SocketAddr,
+) -> Result<Option<RebindResponse>> {
+    request_rebind(client, target, json!({ "listen": listen.to_string() })).await
+}
+
+async fn request_rebind(
+    client: &reqwest::Client,
+    target: &ServiceConfig,
+    body: serde_json::Value,
+) -> Result<Option<RebindResponse>> {
     let response = match client
-        .post(format!("{}/admin/rebind-listener", config.base_url()))
-        .bearer_auth(&config.token)
-        .json(&json!({ "ephemeral": true }))
+        .post(format!("{}/admin/rebind-listener", target.base_url()))
+        .bearer_auth(&target.token)
+        .json(&body)
         .timeout(HANDOVER_TIMEOUT)
         .send()
         .await
