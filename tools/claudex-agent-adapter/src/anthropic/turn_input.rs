@@ -16,10 +16,12 @@ pub(super) fn full_transcript_input(messages: &[Value]) -> Vec<Value> {
 }
 
 /// Command Code Muse Spark is one-shot `cmd -p`. Reconstructed Claude history
-/// makes it greet / ignore the delegated task.
+/// makes it greet / ignore the delegated task. Follow-ups must keep only the
+/// latest user instruction; concatenating earlier user turns caused Spark to
+/// keep working the stale task.
 pub(super) fn provider_turn_input(model: &str, messages: &[Value]) -> Vec<Value> {
     if crate::command_code_acp::is_command_code_model(model) {
-        return user_input_from_messages(messages);
+        return latest_user_input_from_messages(messages);
     }
     full_transcript_input(messages)
 }
@@ -30,9 +32,30 @@ pub(super) fn provider_turn_input_with_token_budget(
     token_budget: usize,
 ) -> Vec<Value> {
     if crate::command_code_acp::is_command_code_model(model) {
-        return user_input_from_messages(messages);
+        return latest_user_input_from_messages_with_byte_limit(
+            messages,
+            token_budget.saturating_mul(4).min(MAX_TURN_INPUT_BYTES),
+        );
     }
     full_transcript_input_with_token_budget(messages, token_budget)
+}
+
+fn latest_user_input_from_messages(messages: &[Value]) -> Vec<Value> {
+    latest_user_input_from_messages_with_byte_limit(messages, MAX_TURN_INPUT_BYTES)
+}
+
+fn latest_user_input_from_messages_with_byte_limit(
+    messages: &[Value],
+    max_bytes: usize,
+) -> Vec<Value> {
+    let Some(latest) = messages
+        .iter()
+        .rev()
+        .find(|message| message.get("role").and_then(Value::as_str) == Some("user"))
+    else {
+        return user_input_from_messages_with_byte_limit(&[], max_bytes);
+    };
+    user_input_from_messages_with_byte_limit(std::slice::from_ref(latest), max_bytes)
 }
 
 pub(super) fn full_transcript_input_with_token_budget(

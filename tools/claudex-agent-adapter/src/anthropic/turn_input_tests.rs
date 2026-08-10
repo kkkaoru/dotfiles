@@ -3,7 +3,8 @@ use serde_json::{Value, json};
 use super::{
     FULL_HISTORY_HEADER, MAX_TURN_INPUT_BYTES, TRUNCATED_HISTORY_HEADER, TRUNCATED_INPUT_NOTICE,
     bound_input, full_transcript_input, full_transcript_input_with_token_budget, input_bytes,
-    oversized_latest_message, user_input_from_messages, utf8_suffix,
+    oversized_latest_message, provider_turn_input, provider_turn_input_with_token_budget,
+    user_input_from_messages, utf8_suffix,
 };
 
 #[test]
@@ -36,7 +37,7 @@ fn handles_small_empty_and_mixed_message_inputs() {
             .unwrap()
             .starts_with(FULL_HISTORY_HEADER)
     );
-    let command_code = super::provider_turn_input(
+    let command_code = provider_turn_input(
         "meta/muse-spark-1.2-contributor",
         &[
             json!({"role":"assistant","content":"Ready to continue"}),
@@ -67,6 +68,49 @@ fn handles_small_empty_and_mixed_message_inputs() {
     ]);
     assert_eq!(input[0]["text"], "visible");
     assert_eq!(input[1]["url"], "data:image/png;base64,abc");
+}
+
+#[test]
+fn command_code_follow_up_uses_only_the_latest_user_instruction() {
+    let messages = [
+        json!({"role":"user","content":"OLD_TASK read the whole repository"}),
+        json!({"role":"assistant","content":"Scanning files"}),
+        json!({"role":"user","content":"Stop. Output only the first heading of CLAUDE.md."}),
+    ];
+    let concatenated = user_input_from_messages(&messages)
+        .iter()
+        .filter_map(|item| item["text"].as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        concatenated.contains("OLD_TASK"),
+        "old failure concatenated every user turn: {concatenated}"
+    );
+
+    let input = provider_turn_input("meta/muse-spark-1.2-contributor", &messages);
+    assert_eq!(
+        input[0]["text"],
+        "Stop. Output only the first heading of CLAUDE.md."
+    );
+    assert!(
+        input
+            .iter()
+            .all(|item| !item["text"].as_str().unwrap_or("").contains("OLD_TASK")),
+        "Command Code follow-up must not replay the stale user task: {input:?}"
+    );
+    assert_eq!(
+        provider_turn_input(
+            "meta/muse-spark-1.2-contributor",
+            &[json!({"role":"assistant","content":"Ready"})]
+        ),
+        vec![json!({"type":"text","text":"Continue."})]
+    );
+    let budgeted =
+        provider_turn_input_with_token_budget("meta/muse-spark-1.2-contributor", &messages, 1_000);
+    assert_eq!(
+        budgeted[0]["text"],
+        "Stop. Output only the first heading of CLAUDE.md."
+    );
 }
 
 #[test]
