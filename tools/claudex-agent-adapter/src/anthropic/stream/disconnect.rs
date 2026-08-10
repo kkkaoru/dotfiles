@@ -3,7 +3,10 @@ use std::{collections::HashSet, ops::ControlFlow, sync::Arc};
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
 
-use super::{StreamTurn, builder::parse_tool_call, error_flow, turn_flow};
+use super::{
+    StreamTurn, StreamWaitResult, builder::SegmentBuilder, builder::parse_tool_call, error_flow,
+    turn_flow,
+};
 use crate::anthropic::content::pending_request_id;
 use crate::{
     agent_backend::TurnCancellation,
@@ -22,6 +25,31 @@ impl Bridge {
         } else {
             self.disconnect_stream(session, Arc::clone(events)).await;
         }
+    }
+
+    /// Claude Code often drops SubAgent SSE right after `message_start`. Keep
+    /// ACP alive in that window. Once ▶ tools or bridged tool_use exist, treat
+    /// SSE close as stop/interrupt and cancel the provider leaf.
+    pub(in crate::anthropic::stream) async fn subagent_sse_closed(
+        &self,
+        session: &Arc<Session>,
+        events: Arc<crate::app_server::ThreadEvents>,
+        builder: &SegmentBuilder,
+    ) -> StreamWaitResult {
+        if builder.has_live_provider_work() {
+            tracing::info!(
+                thread_id = %session.thread_id,
+                "SubAgent SSE disconnected after provider work; cancelling turn"
+            );
+            return StreamWaitResult::Done(Box::new(
+                self.disconnect_stream(session, events).await,
+            ));
+        }
+        tracing::info!(
+            thread_id = %session.thread_id,
+            "SubAgent SSE disconnected; continuing provider turn"
+        );
+        StreamWaitResult::NoEvent
     }
 
     pub(in crate::anthropic) async fn disconnect_stream(

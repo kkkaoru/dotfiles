@@ -221,11 +221,7 @@ impl Bridge {
                 () = sender.closed() => {
                     *sse = None;
                     if builder.is_subagent {
-                        tracing::info!(
-                            thread_id = %session.thread_id,
-                            "SubAgent SSE disconnected; continuing provider turn"
-                        );
-                        return Ok(StreamWaitResult::NoEvent);
+                        return Ok(self.subagent_sse_closed(session, events, builder).await);
                     }
                     return Ok(StreamWaitResult::Done(Box::new(
                         self.disconnect_stream(session, events).await,

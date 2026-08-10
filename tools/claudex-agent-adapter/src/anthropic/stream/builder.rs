@@ -117,6 +117,13 @@ impl SegmentBuilder {
         self.external_tool_calls > 0
     }
 
+    /// True once the SubAgent has painted provider ▶ tools or bridged Claude
+    /// tool_use. Early Claude Code SSE drops (message_start only) must keep ACP
+    /// alive; a later drop after live work is treated as user stop/interrupt.
+    pub(super) fn has_live_provider_work(&self) -> bool {
+        self.external_tool_calls > 0 || !self.provider_tool_calls.is_empty()
+    }
+
     pub(super) fn has_committed_output(&self) -> bool {
         if !self.pending_answer.is_empty() {
             return true;

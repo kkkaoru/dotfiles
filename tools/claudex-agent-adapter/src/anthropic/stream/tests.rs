@@ -1965,6 +1965,49 @@ async fn subagent_stream_keeps_the_provider_after_sse_disconnect() {
 }
 
 #[tokio::test]
+async fn subagent_stream_cancels_provider_when_sse_drops_after_tools() {
+    let (_root, app, bridge, session) = disconnect_fixture().await;
+    let events = app.subscribe_thread("thread");
+    let (sender, receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
+    let mut builder = SegmentBuilder::for_turn(1, true, "meta/muse-spark-1.2-contributor");
+    builder
+        .provider_tool_call(
+            &json!({"params":{
+                "callId":"bash-1",
+                "tool":"Bash",
+                "title":"Bash ls",
+                "arguments":{"command":"ls"}
+            }}),
+            Some(&sender),
+        )
+        .await
+        .expect("tool chrome");
+    assert!(
+        builder.has_live_provider_work(),
+        "▶ tool chrome must count as live provider work"
+    );
+    drop(receiver);
+
+    let result = bridge
+        .wait_for_stream_segment_with_interval(StreamWaitInput {
+            session: &session,
+            events: Arc::new(events),
+            current_messages: &[],
+            system: &json!(null),
+            sender: &sender,
+            builder,
+            activity_interval: Duration::from_millis(50),
+            initial_activity_delay: Duration::from_millis(50),
+        })
+        .await
+        .expect("stop after tools");
+    assert!(
+        matches!(result, super::StreamTurn::Disconnected),
+        "SSE close after ▶ tools must cancel the SubAgent provider"
+    );
+}
+
+#[tokio::test]
 async fn ignores_malformed_empty_raw_and_late_reasoning() {
     let mut builder = SegmentBuilder::new(1);
     for event in [
