@@ -389,10 +389,7 @@ fn corrupt_dedup_state_does_not_block_the_next_notification() {
 
 #[test]
 fn post_respects_macos_notify_opt_out_even_in_tests() {
-    let _guard = NotifyEnvGuard::push();
-    unsafe {
-        std::env::set_var(super::super::macos_notify_dispatch::MACOS_NOTIFY_ENV, "0")
-    };
+    let _guard = super::super::macos_notify_dispatch::NotifyForceGuard::push(false);
     let root = tempfile::tempdir().expect("notify cache");
     let events = TestEvents::capture();
     post(root.path(), &listen(), complete("gated"));
@@ -404,29 +401,4 @@ fn post_respects_macos_notify_opt_out_even_in_tests() {
         !root.path().join("hot-swap-notify.json").exists(),
         "opted-out posts must not write dedupe state"
     );
-}
-
-struct NotifyEnvGuard {
-    previous: Option<std::ffi::OsString>,
-}
-
-impl NotifyEnvGuard {
-    fn push() -> Self {
-        Self {
-            previous: std::env::var_os(super::super::macos_notify_dispatch::MACOS_NOTIFY_ENV),
-        }
-    }
-}
-
-impl Drop for NotifyEnvGuard {
-    fn drop(&mut self) {
-        match &self.previous {
-            Some(value) => unsafe {
-                std::env::set_var(super::super::macos_notify_dispatch::MACOS_NOTIFY_ENV, value)
-            },
-            None => unsafe {
-                std::env::remove_var(super::super::macos_notify_dispatch::MACOS_NOTIFY_ENV)
-            },
-        }
-    }
 }
