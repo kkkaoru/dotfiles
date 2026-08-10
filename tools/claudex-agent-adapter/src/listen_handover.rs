@@ -41,6 +41,7 @@ pub(crate) struct RebindState {
 }
 
 impl ListenHandover {
+    #[cfg(test)]
     pub(crate) fn new(
         canonical: SocketAddr,
         cache: PathBuf,
@@ -78,6 +79,7 @@ impl ListenHandover {
         *self.advertised.read().expect("listen handover lock")
     }
 
+    #[cfg(test)]
     pub(crate) fn canonical_addr(&self) -> SocketAddr {
         self.canonical
     }
