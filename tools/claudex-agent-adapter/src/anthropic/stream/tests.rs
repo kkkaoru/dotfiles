@@ -65,6 +65,153 @@ fn subagent_start_status_skips_main_and_command_code() {
         .expect("luna subagent start");
     assert!(status.contains("gpt-5.6-luna"));
     assert!(status.contains("effort=max"));
+    let default_effort =
+        super::prepare::subagent_start_status(true, "auto", None).expect("cursor subagent start");
+    assert!(default_effort.contains("effort=configured"));
+}
+
+#[tokio::test]
+async fn status_item_and_provider_status_lines_paint_thinking_progress() {
+    let mut builder = SegmentBuilder::for_turn(1, true, "auto");
+    builder
+        .text_delta(
+            &json!({"params":{"itemId":"call-1:status","delta":"Plan: searching files"}}),
+            None,
+        )
+        .await
+        .expect("status itemId");
+    builder
+        .text_delta(
+            &json!({"params":{"delta":"Session: ready\nPlan: continue"}}),
+            None,
+        )
+        .await
+        .expect("provider status lines");
+    assert!(
+        builder.thinking.is_open(),
+        "ACP :status and Plan/Session lines must stay on thinking chrome"
+    );
+}
+
+#[tokio::test]
+async fn command_code_progress_skips_non_markers_and_command_code_labeled_arrows() {
+    let mut builder = SegmentBuilder::for_turn(1, true, "meta/muse-spark-1.2-contributor");
+    builder
+        .stream_progress_text("Working on Command Code task", None)
+        .await
+        .expect("non-marker");
+    builder
+        .stream_progress_text("▶ Command Code still working", None)
+        .await
+        .expect("labeled arrow is not an adapter marker");
+    assert!(
+        builder.blocks.iter().all(|block| {
+            !block
+                .get("thinking")
+                .and_then(Value::as_str)
+                .is_some_and(|text| text.contains("Working on") || text.contains("still working"))
+        }),
+        "Command Code must not dump unlabeled/canned chrome: {:?}",
+        builder.blocks
+    );
+    builder
+        .stream_progress_text("▶ Read CLAUDE.md", None)
+        .await
+        .expect("adapter marker");
+    assert!(
+        builder.thinking.is_open()
+            || builder.blocks.iter().any(|block| block
+                .get("thinking")
+                .and_then(Value::as_str)
+                .is_some_and(|text| text.contains("▶ Read CLAUDE.md"))),
+        "▶ tool markers must still paint: {:?}",
+        builder.blocks
+    );
+}
+
+#[tokio::test]
+async fn flushes_pending_subagent_answer_and_keeps_main_keepalive_on_open_text() {
+    let mut subagent = SegmentBuilder::for_turn(1, true, "gpt-5.6-luna");
+    subagent
+        .text_delta(
+            &json!({"params":{"delta":"Only the first heading is Usage.\n"}}),
+            None,
+        )
+        .await
+        .expect("pending answer");
+    let segment = subagent.finish(None).await.expect("flush pending answer");
+    assert!(
+        segment.blocks.iter().any(|block| block
+            .get("text")
+            .and_then(Value::as_str)
+            .is_some_and(|text| { text.contains("Only the first heading is Usage.") })),
+        "subagent live prose must flush as text at end_turn: {:?}",
+        segment.blocks
+    );
+
+    let mut main = SegmentBuilder::new(1);
+    main.text_delta(&json!({"params":{"delta":"hello"}}), None)
+        .await
+        .expect("open text");
+    main.activity_keepalive(None)
+        .await
+        .expect("keepalive on open text");
+    let mut idle = SegmentBuilder::new(1);
+    idle.activity_keepalive(None)
+        .await
+        .expect("keepalive without open text");
+    let mut empty = SegmentBuilder::for_turn(1, true, "gpt-5.6-luna");
+    empty.finish(None).await.expect("empty pending flush");
+}
+
+#[tokio::test]
+async fn summarized_reasoning_skips_raw_text_delta_and_subagent_raw_cot() {
+    let mut main = SegmentBuilder::new(1);
+    main.model_output_event(
+        &json!({
+            "method":"item/reasoning/summaryTextDelta",
+            "params":{"itemId":"r-sum","summaryIndex":0,"delta":"short summary"}
+        }),
+        None,
+    )
+    .await
+    .expect("summary delta");
+    main.model_output_event(
+        &json!({
+            "method":"item/reasoning/textDelta",
+            "params":{"itemId":"r-sum","delta":"duplicate raw chain of thought"}
+        }),
+        None,
+    )
+    .await
+    .expect("summarized raw skip");
+    main.model_output_event(
+        &json!({"method":"item/reasoning/textDelta","params":{}}),
+        None,
+    )
+    .await
+    .expect("missing item id");
+    let mut subagent = SegmentBuilder::for_turn(1, true, "gpt-5.6-luna");
+    subagent
+        .model_output_event(
+            &json!({
+                "method":"item/reasoning/textDelta",
+                "params":{"itemId":"r-raw","delta":"long subagent chain of thought"}
+            }),
+            None,
+        )
+        .await
+        .expect("subagent raw skip");
+    assert!(
+        subagent.blocks.iter().all(|block| {
+            !block
+                .get("thinking")
+                .and_then(Value::as_str)
+                .is_some_and(|text| text.contains("long subagent chain of thought"))
+        }),
+        "subagent raw CoT must not bury tool chrome: {:?}",
+        subagent.blocks
+    );
 }
 
 #[tokio::test]
@@ -1409,6 +1556,21 @@ async fn reports_slow_stream_preparation_before_the_provider_is_ready() {
 #[tokio::test]
 async fn command_code_prepare_primes_silent_thinking_not_canned_text() {
     let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
+    let (probe, _rx) = mpsc::channel::<Result<Bytes, Infallible>>(8);
+    assert!(!super::prime_subagent_sse(
+        &probe,
+        "gpt-5.6-luna",
+        1,
+        false,
+        None
+    ));
+    assert!(!super::prime_subagent_sse(
+        &probe,
+        "gpt-5.6-luna",
+        1,
+        true,
+        None
+    ));
     assert!(super::prime_subagent_sse(
         &sender,
         "meta/muse-spark-1.2-contributor",
