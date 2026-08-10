@@ -268,15 +268,20 @@ impl Bridge {
             return;
         }
         drop(pending);
-        
+
         let mut detached = self.detached_sessions.lock().await;
-        if let Some(index) = detached.iter().position(|s| Arc::ptr_eq(s, finished)) {
-            let session = detached.remove(index);
-            drop(detached);
-            let mut active = self.sessions.lock().await;
-            if !active.iter().any(|s| Arc::ptr_eq(s, &session)) {
-                active.push(session);
-            }
+        let Some(index) = detached.iter().position(|s| Arc::ptr_eq(s, finished)) else {
+            return;
+        };
+        let session = detached.remove(index);
+        drop(detached);
+        self.reattach_finished_session(session).await;
+    }
+
+    async fn reattach_finished_session(&self, session: Arc<Session>) {
+        let mut active = self.sessions.lock().await;
+        if !active.iter().any(|s| Arc::ptr_eq(s, &session)) {
+            active.push(session);
         }
     }
 
@@ -365,10 +370,10 @@ impl Bridge {
             .remove_tool_results(completed_ids.iter().map(String::as_str));
         // ACP-bridged Agent/Task has no app-server request; continue via transcript.
         let mut backend_submitted = false;
+        let responses = responses.into_iter().filter(|(id, _)| {
+            !crate::anthropic::stream::acp_tool_bridge::is_acp_bridge_request_id(id)
+        });
         for (id, result) in responses {
-            if crate::anthropic::stream::acp_tool_bridge::is_acp_bridge_request_id(&id) {
-                continue;
-            }
             let success =
                 !result.is_error || is_idempotent_task_lifecycle_error(&result.content_items);
             self.app
