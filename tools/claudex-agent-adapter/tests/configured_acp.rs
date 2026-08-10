@@ -47,6 +47,7 @@ fn opencode_route_uses_valid_acp_argv_and_preserves_web_bridge_mode() {
 // This integration scenario intentionally keeps setup, saturation, release, and cleanup
 // together so it verifies the complete configured-ACP concurrency lifecycle in one test.
 #[allow(clippy::excessive_nesting, clippy::too_many_lines)]
+#[cfg_attr(coverage_nightly, ignore = "7-wide ACP mock saturates under llvm-cov")]
 async fn allows_session_creations_up_to_the_configured_concurrency_limit() {
     let _cwd_guard = CWD_LOCK.lock().await;
     let root = tempfile::tempdir().expect("configured session concurrency fixture");
@@ -163,6 +164,7 @@ async fn allows_session_creations_up_to_the_configured_concurrency_limit() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 // See the companion test above: the full queueing lifecycle is kept in one scenario.
 #[allow(clippy::excessive_nesting, clippy::too_many_lines)]
+#[cfg_attr(coverage_nightly, ignore = "7-wide ACP mock saturates under llvm-cov")]
 async fn enforces_seven_exact_model_turns_and_queues_the_eighth() {
     let _cwd_guard = CWD_LOCK.lock().await;
     let root = tempfile::tempdir().expect("configured concurrency fixture");
