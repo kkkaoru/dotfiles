@@ -357,6 +357,12 @@ fn documents_idempotent_task_stop_semantics_in_the_dynamic_schema() {
         assert!(description.contains("exact active Agent task_id"));
         assert!(description.contains("b13mjnjlj"));
         assert!(description.contains("No task found"));
+        assert!(description.contains("stop remaining session SubAgents"));
+        assert!(
+            description.contains("do not inspect OS processes or kill the claudex serve daemon")
+        );
+        assert!(description.contains("claudex serve daemon"));
+        assert!(description.contains("ACP unavailable or dropped response"));
     }
     let ordinary =
         dynamic_tool(&json!({"name":"TaskGet"}), "cc_task_get_0").expect("ordinary task schema");
@@ -833,6 +839,8 @@ fn acp_native_modes_use_provider_native_instructions_instead_of_agent_orchestrat
     assert!(developer.contains("spawn_subagent"));
     assert!(developer.contains("end the turn promptly"));
     assert!(developer.contains("never block the same turn with get_command_or_subagent_output"));
+    assert!(developer.contains("stop remaining SubAgents in this session"));
+    assert!(developer.contains("do not kill the claudex serve daemon"));
     assert!(!developer.contains("call a routed Agent/Task worker by default"));
     assert!(!developer.contains("run_in_background=true on every Agent/Task launch"));
     assert_eq!(params["claudexAcpRole"], "orchestrator");
@@ -861,6 +869,8 @@ fn acp_native_workers_omit_end_turn_status_and_keep_tool_completion() {
     assert!(!developer.contains("post a brief status"));
     assert!(!developer.contains("Return the answer directly when no tool is needed"));
     assert!(!developer.contains("Never copy end-the-turn-with-status"));
+    assert!(!developer.contains("stop remaining SubAgents in this session"));
+    assert!(!developer.contains("do not kill the claudex serve daemon"));
 }
 
 #[test]
@@ -939,6 +949,11 @@ fn assert_developer_guidance(developer: &str) {
         "never wait for every background task before accepting another user instruction",
         "never automatically poll TaskList or TaskOutput on a timer",
         "never call TaskOutput or TaskGet merely to drain pending notifications",
+        "stop remaining SubAgents in this session",
+        "do not kill the claudex serve daemon",
+        "Do not inspect OS processes",
+        "ACP driver dropped its response",
+        "exception to never cascading stops",
     ];
     for phrase in REQUIRED {
         assert!(
@@ -992,6 +1007,15 @@ fn main_session_orchestration_instructions_are_omitted_for_subagents() {
     assert!(
         !developer.contains("TaskStop the exact active Agent id immediately"),
         "workers must not receive main-only immediate TaskStop guidance"
+    );
+    assert!(
+        !developer.contains("stop remaining SubAgents in this session"),
+        "workers must not receive main-only stop-remaining guidance"
+    );
+    assert!(
+        !developer.contains("do not kill the claudex serve daemon")
+            && !developer.contains("Do not inspect OS processes"),
+        "workers must not receive main-only serve-daemon stop guidance"
     );
     assert!(
         !developer.contains("parent Task card often shows tool_uses: 0"),
@@ -1088,6 +1112,9 @@ fn subscription_prompt_requires_atomic_parallel_launches() {
         prompt
             .contains("main session must control parallel distribution across multiple SubAgents")
     );
+    assert!(prompt.contains("stop remaining SubAgents in this session"));
+    assert!(prompt.contains("do not kill the claudex serve daemon"));
+    assert!(prompt.contains("ACP driver dropped its response"));
     assert!(prompt.contains("Avoid serial heavy processing by one worker"));
     assert!(prompt.contains("Shared-workspace safety is mandatory"));
     assert!(prompt.contains("serialize mutations"));

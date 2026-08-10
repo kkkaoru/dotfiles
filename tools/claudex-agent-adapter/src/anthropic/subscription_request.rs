@@ -89,7 +89,12 @@ pub(super) fn subscription_request_prompt(request: &MessagesRequest) -> String {
             "worker prompts; those rules apply only after you launch workers. Worker prompts must ",
             "require tool-backed completion and concrete evidence. Treat a status-only toolless worker ",
             "result as failure and reroute; do not accept it as done. Report blockers immediately ",
-            "instead of remaining silent.\n\n",
+            "instead of remaining silent. When the active user asks to stop remaining SubAgents in this ",
+            "session, or leftover Agent cards remain after `ACP driver dropped its response`, ",
+            "`ACP driver is unavailable`, or `Server error mid-response`: TaskList once, then TaskStop ",
+            "every live `a`+16-hex Agent id in the same turn. Do not inspect OS processes, do not kill ",
+            "the claudex serve daemon, and do not touch other-session interactive Claude. TaskStop is ",
+            "idempotent; `No task found`, ACP unavailable, or channel closed means already stopped.\n\n",
             "Adapter orchestration defaults (runtime metadata):\n",
             "{}\n\nSystem:\n{}\n\nMessages:\n{}"
         ),
