@@ -138,6 +138,12 @@ Failed to authenticate: OAuth session expired and could not be refreshed"
         !is_subscription_auth_failure(&anyhow::anyhow!(PROVIDER_401)),
         "Sakana/provider 401 must not be treated as Claude subscription OAuth expiry"
     );
+    assert!(is_subscription_auth_failure(&anyhow::anyhow!(
+        "please run /login before retrying the subscription model"
+    )));
+    assert!(is_subscription_auth_failure(&anyhow::anyhow!(
+        "provider oauth token expired; refresh required"
+    )));
 }
 
 #[test]
@@ -158,6 +164,20 @@ fn malformed_or_tokenless_credentials_file_is_unknown_not_expired() {
         credentials_access_expired_at(&root.path().join("missing.json"), now),
         None
     );
+    let negative = root.path().join("negative.json");
+    std::fs::write(
+        &negative,
+        r#"{"claudeAiOauth":{"accessToken":"redacted","refreshToken":"redacted","expiresAt":-1}}"#,
+    )
+    .expect("write negative expiry");
+    assert_eq!(credentials_access_expired_at(&negative, now), None);
+    let infinite = root.path().join("infinite.json");
+    std::fs::write(
+        &infinite,
+        r#"{"claudeAiOauth":{"accessToken":"redacted","refreshToken":"redacted","expiresAt":1e309}}"#,
+    )
+    .expect("write infinite expiry");
+    assert_eq!(credentials_access_expired_at(&infinite, now), None);
 }
 
 #[test]
