@@ -1232,6 +1232,40 @@ HTTPServer((host, int(port)), Handler).serve_forever()
     }
 
     #[tokio::test]
+    async fn fallback_reuses_a_matching_current_build_listener() {
+        let root = tempfile::tempdir().expect("fallback reuse fixture");
+        let mut cfg = config();
+        let listener = TcpListener::bind("127.0.0.1:0").expect("fallback reuse listener");
+        let fallback_listen = listener.local_addr().expect("fallback reuse address");
+        cfg.options.listen = unused_listen();
+        cfg.log_path = root.path().join("adapter.log");
+        cfg.lock_path = root.path().join("adapter.lock");
+        let fallback = cfg.with_listen(fallback_listen);
+        let health = healthy(&fallback);
+        let server = serve_responses(
+            listener,
+            vec![health_response(&health), http_response("200 OK", "{}")],
+        );
+        std::fs::write(
+            root.path()
+                .join(format!("fallback.{}.json", cfg.options.listen.port())),
+            serde_json::json!({
+                "listen": fallback_listen.to_string(),
+                "build_id": env!("CLAUDEX_BUILD_ID"),
+                "service_config_fingerprint": fallback.service_config_fingerprint,
+                "pid": 42,
+            })
+            .to_string(),
+        )
+        .expect("write matching fallback state");
+        let url = fallback::ensure_current_generation(&reqwest::Client::new(), &cfg)
+            .await
+            .expect("matching fallback listener should be reused");
+        assert_eq!(url, fallback.base_url());
+        server.join().expect("fallback reuse listener");
+    }
+
+    #[tokio::test]
     async fn fallback_start_reports_when_the_new_listener_never_becomes_ready() {
         let root = tempfile::tempdir().expect("fallback start fixture");
         let dummy = root.path().join("claudex-agent-adapter");
