@@ -1,7 +1,7 @@
 use axum::body::to_bytes;
 use serde_json::{Value, json};
 
-use super::{MessagesRequest, tests};
+use super::{MessagesRequest, RequestIdentity, tests};
 
 #[tokio::test]
 async fn independent_notifications_are_acknowledged_one_by_one_without_batching() {
@@ -116,5 +116,60 @@ async fn concurrent_notifications_are_acknowledged_independently() {
     assert_eq!(
         provider_turns, 0,
         "lifecycle notifications must never reach the provider"
+    );
+}
+
+#[tokio::test]
+async fn messages_with_identity_acknowledges_notifications_and_counts_tokens() {
+    let (_root, log, bridge) = tests::message_fixture().await;
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        tests::wait_for_log_marker(&log, "\"method\":\"initialized\""),
+    )
+    .await
+    .expect("provider fixture should finish initialization");
+
+    let request = MessagesRequest {
+        model: "main".to_owned(),
+        system: Value::Null,
+        messages: vec![json!({
+            "role":"user",
+            "content":"<task-notification><status>completed</status></task-notification>"
+        })],
+        tools: Vec::new(),
+        stream: false,
+        output_config: Value::Null,
+        metadata: Value::Null,
+        working_directory: None,
+        disabled_subagent_models: Default::default(),
+        claudex_collaborator_model: None,
+    };
+    let identity = RequestIdentity::new(
+        Some("session-identity".to_owned()),
+        Some("agent-identity".to_owned()),
+        Some("parent-identity".to_owned()),
+    );
+    let before = std::fs::read_to_string(&log).unwrap_or_default();
+    let tokens = bridge.count_tokens_with_identity(request.clone(), &identity, true);
+    assert!(
+        tokens > 0,
+        "transport identity token counting must see the notification body"
+    );
+
+    let response = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        bridge.messages_with_identity(request, identity, true),
+    )
+    .await
+    .expect("identity notification should return immediately")
+    .expect("identity notification response");
+    let body = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read identity notification");
+    assert!(String::from_utf8_lossy(&body).contains("\"stop_reason\":\"end_turn\""));
+    let after = std::fs::read_to_string(&log).unwrap_or_default();
+    assert_eq!(
+        before, after,
+        "identity notifications must not start a provider turn"
     );
 }

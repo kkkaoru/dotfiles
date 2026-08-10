@@ -1,11 +1,14 @@
 use std::{
+    os::unix::fs::PermissionsExt,
     path::Path,
+    sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use crate::agent_backend::{AgentBackend, BackendKind, BackendRoute};
 use crate::anthropic::request_routing::RouteDecision;
 use crate::anthropic::{Bridge, MessagesRequest};
+use crate::app_server::AppServer;
 use crate::provider_config::ModelCatalog;
 
 use super::{SUBSCRIPTION_AUTH_SCOPE, credentials_access_expired_at, is_subscription_auth_failure};
@@ -567,4 +570,174 @@ fn subscription_auth_failover_skips_models_without_backend() {
     let bridge =
         Bridge::new_with_backend(backend, "gpt-5.6-luna".to_owned()).with_model_catalog(catalog);
     assert!(bridge.subscription_auth_failover_for().is_none());
+}
+
+fn oauth_failing_subscription_program(root: &Path) -> std::path::PathBuf {
+    let program = root.join("claude-oauth-fail");
+    std::fs::write(
+        &program,
+        "#!/bin/sh\nprintf '%s\\n' 'oauth session expired and could not be refreshed' >&2\nexit 1\n",
+    )
+    .expect("write oauth-fail subscription");
+    let mut permissions = std::fs::metadata(&program)
+        .expect("oauth-fail metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&program, permissions).expect("oauth-fail executable");
+    program
+}
+
+fn unrelated_failing_subscription_program(root: &Path) -> std::path::PathBuf {
+    let program = root.join("claude-boom");
+    std::fs::write(&program, "#!/bin/sh\nprintf '%s\\n' 'boom' >&2\nexit 1\n")
+        .expect("write boom subscription");
+    let mut permissions = std::fs::metadata(&program)
+        .expect("boom metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&program, permissions).expect("boom executable");
+    program
+}
+
+async fn subscription_bridge(
+    root: &Path,
+    program: std::path::PathBuf,
+    exhaust_luna: bool,
+) -> Arc<Bridge> {
+    let source = root.join("source");
+    std::fs::create_dir(&source).expect("source home");
+    std::fs::write(source.join("auth.json"), "{}").expect("source auth");
+    let app_server = root.join("app-server");
+    std::fs::write(
+        &app_server,
+        "#!/bin/sh\nwhile IFS= read -r line; do id=$(printf '%s\\n' \"$line\" | sed -n 's/.*\"id\":\\([0-9]*\\).*/\\1/p'); printf '{\"id\":%s,\"result\":{}}\\n' \"$id\"; done\n",
+    )
+    .expect("app-server fixture");
+    let mut permissions = std::fs::metadata(&app_server)
+        .expect("app-server metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&app_server, permissions).expect("app-server executable");
+    let app =
+        AppServer::spawn_with_program("gpt-5.6-luna", &app_server, &source, &root.join("isolated"))
+            .await
+            .expect("start app-server fixture");
+    let mut catalog = ModelCatalog::default();
+    catalog
+        .set_worker_routes(vec![crate::provider_config::WorkerRoute::new(
+            "claudex-gpt",
+            "gpt-5.6-luna",
+            "max",
+        )])
+        .expect("install luna worker");
+    let bridge = Bridge::new_with_subscription_program(app, "gpt-5.6-luna".to_owned(), program)
+        .with_model_catalog(catalog);
+    if exhaust_luna {
+        bridge.note_provider_exhaustion(&anyhow::anyhow!(PROVIDER_401), Some("gpt-5.6-luna"));
+    }
+    Arc::new(bridge)
+}
+
+#[tokio::test]
+async fn streaming_subscription_auth_failover_returns_the_stream_without_retry() {
+    let bridge = Arc::new(opus_and_luna_bridge());
+    let request = dummy_request("claude-opus-5");
+    let response = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        bridge.subscription_messages_with_auth_failover(
+            request,
+            Some("medium".to_owned()),
+            false,
+            false,
+        ),
+    )
+    .await
+    .expect("streaming subscription should return immediately")
+    .expect("streaming response");
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+}
+
+#[tokio::test]
+async fn non_stream_subscription_auth_failure_without_failover_keeps_the_error() {
+    let root = tempfile::tempdir().expect("oauth no-failover fixture");
+    let bridge = subscription_bridge(
+        root.path(),
+        oauth_failing_subscription_program(root.path()),
+        true,
+    )
+    .await;
+    assert!(bridge.subscription_auth_failover_for().is_none());
+    let mut request = dummy_request("claude-opus-5");
+    request.stream = false;
+    let error = tokio::time::timeout(
+        std::time::Duration::from_secs(8),
+        bridge.subscription_messages_with_auth_failover(
+            request,
+            Some("medium".to_owned()),
+            false,
+            false,
+        ),
+    )
+    .await
+    .expect("oauth failure should finish")
+    .expect_err("oauth failure without failover");
+    assert!(is_subscription_auth_failure(&error), "{error:#}");
+}
+
+#[tokio::test]
+async fn non_stream_subscription_auth_failure_failsover_to_a_provider() {
+    let root = tempfile::tempdir().expect("oauth failover fixture");
+    let bridge = subscription_bridge(
+        root.path(),
+        oauth_failing_subscription_program(root.path()),
+        false,
+    )
+    .await;
+    assert!(bridge.subscription_auth_failover_for().is_some());
+    let mut request = dummy_request("claude-opus-5");
+    request.stream = false;
+    let outcome = tokio::time::timeout(
+        std::time::Duration::from_secs(8),
+        bridge.subscription_messages_with_auth_failover(
+            request,
+            Some("medium".to_owned()),
+            false,
+            false,
+        ),
+    )
+    .await
+    .expect("oauth failover should finish");
+    match outcome {
+        Ok(response) => assert_eq!(response.status(), axum::http::StatusCode::OK),
+        Err(error) => assert!(
+            !is_subscription_auth_failure(&error),
+            "provider failover must leave the subscription OAuth error behind: {error:#}"
+        ),
+    }
+}
+
+#[tokio::test]
+async fn non_stream_unrelated_subscription_failure_does_not_failover() {
+    let root = tempfile::tempdir().expect("unrelated subscription fixture");
+    let bridge = subscription_bridge(
+        root.path(),
+        unrelated_failing_subscription_program(root.path()),
+        false,
+    )
+    .await;
+    let mut request = dummy_request("claude-opus-5");
+    request.stream = false;
+    let error = tokio::time::timeout(
+        std::time::Duration::from_secs(8),
+        bridge.subscription_messages_with_auth_failover(
+            request,
+            Some("medium".to_owned()),
+            false,
+            false,
+        ),
+    )
+    .await
+    .expect("unrelated failure should finish")
+    .expect_err("unrelated subscription failure");
+    assert!(!is_subscription_auth_failure(&error), "{error:#}");
 }
