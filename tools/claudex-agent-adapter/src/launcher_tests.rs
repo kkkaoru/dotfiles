@@ -9,6 +9,7 @@ mod tests {
     use std::os::unix::process::CommandExt as _;
     use std::{
         collections::BTreeMap,
+        ffi::OsString,
         io::{Read, Write},
         net::{SocketAddr, TcpListener},
         path::Path,
@@ -744,6 +745,42 @@ mod tests {
             expected
         );
         server.join().expect("public ensure server");
+    }
+
+    #[tokio::test]
+    async fn run_claude_rejects_a_held_resume_session_lock() {
+        let listen = unused_listen();
+        let options = AdapterOptions {
+            routes: vec![BackendRoute::new("test-model", BackendKind::CodexAppServer)],
+            listen,
+            model: "test-model".to_owned(),
+            subscription_max_processes: 20,
+            subscription_timeout_minutes: 120,
+            subagent_hard_timeout_seconds: None,
+            model_catalog: crate::provider_config::ModelCatalog::default(),
+        };
+        let cfg = ServiceConfig::new(options.clone()).expect("resume lock config");
+        let resume_id = format!("coverage-resume-{}", uuid::Uuid::new_v4().simple());
+        let cache = cfg
+            .log_path
+            .parent()
+            .expect("adapter log parent for resume lock");
+        let path = launcher_logs::session_lock_path(cache, &resume_id);
+        let _held = launcher_lock::try_acquire(&path)
+            .expect("acquire resume lock")
+            .expect("resume lock available");
+        let error = run_claude(
+            options,
+            vec![OsString::from("--resume"), OsString::from(&resume_id)],
+            false,
+        )
+        .await
+        .expect_err("held resume lock must fail closed before ensure");
+        let message = error.to_string();
+        assert!(
+            message.contains(&resume_id) && message.contains("already active"),
+            "{message}"
+        );
     }
 
     #[tokio::test]
