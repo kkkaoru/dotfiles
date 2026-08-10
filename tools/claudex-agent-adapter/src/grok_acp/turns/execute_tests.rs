@@ -430,6 +430,13 @@ mod tests {
             .await;
     }
 
+    #[tokio::test(flavor = "current_thread")]
+    async fn invalidated_session_forgets_applied_effort_and_retries_setup() {
+        LocalSet::new()
+            .run_until(check_invalidated_session_forgets_applied_effort())
+            .await;
+    }
+
     #[tokio::test]
     async fn configured_model_selection_failure_is_reported() {
         let events = std::sync::Arc::new(ThreadEventDispatcher::default());
@@ -731,6 +738,72 @@ mod tests {
             "same-session follow-up must not re-RPC effort against a dead connection"
         );
         assert!(follow_up_permit.is_some());
+    }
+
+    async fn check_invalidated_session_forgets_applied_effort() {
+        let events = std::sync::Arc::new(ThreadEventDispatcher::default());
+        let active = ActiveTurns::default();
+        let invalidated = InvalidatedSessions::default();
+        let permits = std::sync::Arc::new(tokio::sync::Semaphore::new(2));
+        let (_sender, mut cancellation) = oneshot::channel();
+        let mut permit = Some(
+            std::sync::Arc::clone(&permits)
+                .acquire_owned()
+                .await
+                .unwrap(),
+        );
+        let mut ctl = TurnCtl {
+            provider: AcpProvider::Configured,
+            session_id: "session",
+            cancellation: &mut cancellation,
+            permit: &mut permit,
+            events: &events,
+            active_turns: &active,
+            invalidated_sessions: &invalidated,
+        };
+        let (connection, requests) = rejecting_effort_connection(std::sync::Arc::clone(&events));
+        assert!(
+            apply_effort(
+                &mut ctl,
+                &std::rc::Rc::new(connection),
+                "model",
+                Some("high"),
+                &acp::SessionId::new("session".to_owned()),
+            )
+            .await,
+            "first turn still applies effort"
+        );
+        assert_eq!(requests.await.unwrap().len(), 2);
+        invalidated.borrow_mut().insert("session".to_owned());
+
+        let mut retry_permit = Some(
+            std::sync::Arc::clone(&permits)
+                .acquire_owned()
+                .await
+                .unwrap(),
+        );
+        let (_retry_sender, mut retry_cancellation) = oneshot::channel();
+        let mut retry = TurnCtl {
+            provider: AcpProvider::Configured,
+            session_id: "session",
+            cancellation: &mut retry_cancellation,
+            permit: &mut retry_permit,
+            events: &events,
+            active_turns: &active,
+            invalidated_sessions: &invalidated,
+        };
+        assert!(
+            !apply_effort(
+                &mut retry,
+                &std::rc::Rc::new(disconnected_connection(std::sync::Arc::clone(&events))),
+                "model",
+                Some("high"),
+                &acp::SessionId::new("session".to_owned()),
+            )
+            .await,
+            "invalidated session must forget pinned effort and retry setup"
+        );
+        assert!(retry_permit.is_none());
     }
 
     async fn check_launch_scoped_effort_skips_model_reselect() {
