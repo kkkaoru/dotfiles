@@ -84,11 +84,15 @@ pub(super) async fn try_canonical(
         session_ids.clone(),
     )?;
     wait_until_canonical_released(config).await?;
-    let _ = request_bind_listen(client, &warm, config.options.listen).await;
-    if !wait_until_current_build(client, config, None).await {
-        restore_old_canonical(client, config, retained_listen).await;
+    let probe = reqwest::Client::builder()
+        .pool_max_idle_per_host(0)
+        .build()
+        .context("build live-update probe client")?;
+    let _ = request_bind_listen(&probe, &warm, config.options.listen).await;
+    if !wait_until_current_build(&probe, config, None).await {
+        restore_old_canonical(&probe, config, retained_listen).await;
     }
-    if canonical_serves_current_build(client, config, None).await {
+    if canonical_serves_current_build(&probe, config, None).await {
         return Ok(Some(publish_promoted(
             config,
             started,
@@ -101,7 +105,7 @@ pub(super) async fn try_canonical(
     if TcpStream::connect_timeout(&config.options.listen, Duration::from_millis(50)).is_err() {
         let pid = daemon_start::start_adapter(config)
             .context("start current-build listener after empty canonical port")?;
-        if wait_until_current_build(client, config, None).await {
+        if wait_until_current_build(&probe, config, None).await {
             return Ok(Some(publish_promoted(
                 config,
                 pid,
