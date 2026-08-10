@@ -277,6 +277,54 @@ mod tests {
     }
 
     #[test]
+    fn cc_array_user_blocks_drive_sync_and_background() {
+        let reminder = json!({
+            "type":"text",
+            "text":"<system-reminder>\nClaudex routing\n</system-reminder>"
+        });
+        let (_, queued) = prepare_arguments_for_user(
+            "Agent",
+            "tool-cc-array",
+            &json!({
+                "prompt":"Assess production configuration paths",
+                "subagent_type":"Explore",
+                "run_in_background":false
+            }),
+            &[json!({
+                "role":"user",
+                "content":[
+                    reminder.clone(),
+                    {"type":"text","text":"Investigate how sync-realtime-data chooses the writable Neon connection."}
+                ]
+            })],
+            &json!(null),
+        );
+        assert_eq!(queued["run_in_background"], true);
+
+        let (_, sync) = prepare_arguments_for_user(
+            "Agent",
+            "tool-cc-sync-array",
+            &json!({
+                "prompt":"Assess production configuration paths",
+                "subagent_type":"Explore",
+                "run_in_background":false
+            }),
+            &[json!({
+                "role":"user",
+                "content":[
+                    reminder,
+                    {"type":"text","text":"同期で結果を待ってから次へ進めて"}
+                ]
+            })],
+            &json!(null),
+        );
+        assert_eq!(
+            sync["run_in_background"], false,
+            "sync request after a CC reminder block must not stay background"
+        );
+    }
+
+    #[test]
     fn correlation_marker_identifies_subagent_without_billing_header() {
         let intents = AgentEffortIntents::default();
         let (internal, _) = prepare_arguments(

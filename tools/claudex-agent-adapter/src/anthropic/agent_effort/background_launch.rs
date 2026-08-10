@@ -38,21 +38,33 @@ fn active_user_text(messages: &[Value]) -> Option<String> {
         if message.get("role").and_then(Value::as_str) != Some("user") {
             return None;
         }
-        let text = match message.get("content") {
-            Some(Value::String(text)) => text.clone(),
-            Some(Value::Array(blocks)) => blocks
-                .iter()
-                .find_map(|block| block.get("text").and_then(Value::as_str).map(str::to_owned))?,
-            _ => return None,
-        };
+        let text = user_message_text(message)?;
         if text.contains("<agent-message")
             || text.contains("<teammate-message")
-            || text.starts_with("Another Claude session sent a message")
+            || text
+                .trim_start()
+                .starts_with("Another Claude session sent a message")
         {
             return None;
         }
         Some(text)
     })
+}
+
+fn user_message_text(message: &Value) -> Option<String> {
+    match message.get("content")? {
+        Value::String(text) => Some(text.clone()),
+        Value::Array(blocks) => {
+            let text = blocks
+                .iter()
+                .filter_map(|block| block.get("text").and_then(Value::as_str))
+                .filter(|text| !text.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n");
+            (!text.is_empty()).then_some(text)
+        }
+        _ => None,
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -167,5 +179,27 @@ mod tests {
                 .is_none()
         );
         assert!(intents.background_launches(&[]).is_none());
+    }
+
+    #[test]
+    fn cc_array_content_joins_reminder_and_user_text_for_sync_detection() {
+        let reminder = json!({
+            "type":"text",
+            "text":"<system-reminder>\nClaudex routing\n</system-reminder>"
+        });
+        assert!(!user_requires_synchronous_results(&[json!({
+            "role":"user",
+            "content":[
+                reminder.clone(),
+                {"type":"text","text":"Investigate the neon pooler next."}
+            ]
+        })]));
+        assert!(user_requires_synchronous_results(&[json!({
+            "role":"user",
+            "content":[
+                reminder,
+                {"type":"text","text":"同期で結果を待ってから次へ進めて"}
+            ]
+        })]));
     }
 }
