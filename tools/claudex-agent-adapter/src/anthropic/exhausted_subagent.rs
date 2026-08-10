@@ -4,16 +4,6 @@ use crate::agent_backend::BackendKind;
 
 use super::{Bridge, MessagesRequest, model_concurrency::Ticket, request_routing::RouteDecision};
 
-pub(super) fn subagent_failover_source_ok(kind: BackendKind) -> bool {
-    matches!(
-        kind,
-        BackendKind::ConfiguredAcp
-            | BackendKind::GrokAcp
-            | BackendKind::CopilotAcp
-            | BackendKind::CodexAppServer
-    )
-}
-
 pub(super) fn subagent_failover_target_ok(kind: BackendKind) -> bool {
     matches!(
         kind,

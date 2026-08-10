@@ -274,10 +274,7 @@ impl Bridge {
         exhausted_model: &str,
         quota: Option<&serde_json::Value>,
     ) -> Option<UsageLimitFailover> {
-        let exhausted_kind = self.app.backend_kind_for_model(exhausted_model)?;
-        if !super::exhausted_subagent::subagent_failover_source_ok(exhausted_kind) {
-            return None;
-        }
+        self.app.backend_kind_for_model(exhausted_model)?;
         const PREFERRED: &[&str] = &["qwen3.8-max-preview"];
         let mut candidates = Vec::new();
         for model in PREFERRED {
