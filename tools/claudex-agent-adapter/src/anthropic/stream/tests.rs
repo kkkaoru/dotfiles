@@ -101,6 +101,85 @@ async fn subagent_progress_drops_canned_filler_and_paints_status() {
         .expect("command-code start status");
 }
 
+#[tokio::test]
+async fn subagent_and_main_cover_bulk_dump_empty_delta_and_keepalive_title() {
+    let dump = format!("{{\"{}\":1}}", "k".repeat(120));
+    let mut subagent = SegmentBuilder::for_turn(1, true, "gpt-5.6-luna");
+    subagent
+        .text_delta(&json!({"params":{"delta":""}}), None)
+        .await
+        .expect("empty subagent delta");
+    subagent
+        .text_delta(&json!({"params":{"delta":dump.clone()}}), None)
+        .await
+        .expect("first bulk dump");
+    subagent
+        .text_delta(&json!({"params":{"delta":dump.clone()}}), None)
+        .await
+        .expect("second bulk dump");
+    subagent
+        .provider_tool_calls
+        .push(("call".to_owned(), format!("Read {}", "a".repeat(60))));
+    subagent
+        .activity_keepalive(None)
+        .await
+        .expect("long keepalive title");
+    subagent
+        .provider_tool_calls
+        .push(("short".to_owned(), "Read src/lib.rs".to_owned()));
+    subagent
+        .activity_keepalive(None)
+        .await
+        .expect("short keepalive title");
+
+    let mut main = SegmentBuilder::new(1);
+    main.reasoning_delta(
+        &json!({"params":{"itemId":"r","summaryIndex":0,"delta":"Inspect the neon pooler next.\n"}}),
+        None,
+    )
+    .await
+    .expect("open native thought");
+    main.reasoning_delta(
+        &json!({"params":{"itemId":"r","summaryIndex":0,"delta":dump}}),
+        None,
+    )
+    .await
+    .expect("main bulk dump while thought is open");
+    main.reasoning_delta(
+        &json!({"params":{"itemId":"r","summaryIndex":0,"delta":"Thought for 12s"}}),
+        None,
+    )
+    .await
+    .expect("canned reasoning after thought");
+    main.reasoning_delta(
+        &json!({"params":{"itemId":"r","summaryIndex":0,"delta":"Status: still working"}}),
+        None,
+    )
+    .await
+    .expect("status while thought may be open");
+    main.text_delta(
+        &json!({"params":{"delta":"Thought for 12s\nhello from main"}}),
+        None,
+    )
+    .await
+    .expect("mixed canned answer delta");
+    main.model_output_event(
+        &json!({"method":"item/reasoning/textDelta","params":{}}),
+        None,
+    )
+    .await
+    .expect("raw reasoning without item id");
+
+    let mut closed = SegmentBuilder::new(1);
+    closed
+        .reasoning_delta(
+            &json!({"params":{"itemId":"r2","summaryIndex":0,"delta":"Status: inspecting"}}),
+            None,
+        )
+        .await
+        .expect("status without open thought");
+}
+
 #[test]
 fn recognizes_context_markers_in_every_provider_error_field() {
     let events = [
