@@ -241,12 +241,11 @@ mod tests {
         let route = super::RoutedBackend::ready("dead-grok".into(), dead);
         assert!(route.ready_backend().is_none());
         let result = tokio::time::timeout(std::time::Duration::from_millis(80), route.get()).await;
-        match result {
-            Ok(Ok(backend)) => assert!(
+        if let Ok(Ok(backend)) = result {
+            assert!(
                 backend.is_alive(),
                 "get() must not return a dead Ready backend"
-            ),
-            Ok(Err(_)) | Err(_) => {}
+            );
         }
     }
 
