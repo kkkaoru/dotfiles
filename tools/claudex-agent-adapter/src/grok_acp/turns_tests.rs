@@ -12,6 +12,40 @@ fn replace_settle_timeout_stays_tight_for_mid_turn_steering() {
     );
 }
 
+#[tokio::test(start_paused = true)]
+async fn replace_shares_one_settle_budget_when_worker_never_exits() {
+    let active_turns = ActiveTurns::default();
+    let (cancel, cancel_receiver) = oneshot::channel();
+    active_turns
+        .borrow_mut()
+        .insert("session".to_owned(), Some(cancel));
+    // Accept the cancel request but never ack or clear active_turns so both
+    // phases compete for the same REPLACE_SETTLE_TIMEOUT budget.
+    let hold = tokio::spawn(async move {
+        let _ = cancel_receiver.await;
+        std::future::pending::<()>().await;
+    });
+
+    let started = tokio::time::Instant::now();
+    let replace = replace_active_turn(AcpProvider::Grok, &active_turns, "session");
+    let advance = async {
+        tokio::time::sleep(REPLACE_SETTLE_TIMEOUT + Duration::from_millis(25)).await;
+    };
+    let (result, ()) = tokio::join!(replace, advance);
+    let elapsed = started.elapsed();
+    hold.abort();
+
+    assert!(result.is_err(), "stuck replace must fail closed: {result:?}");
+    assert!(
+        elapsed < REPLACE_SETTLE_TIMEOUT.saturating_mul(2),
+        "stacked cancel+clear budgets would approach 2x; elapsed={elapsed:?}"
+    );
+    assert!(
+        elapsed <= REPLACE_SETTLE_TIMEOUT + Duration::from_millis(50),
+        "replace must release within one shared settle budget; elapsed={elapsed:?}"
+    );
+}
+
 #[test]
 fn prepares_prefixed_prompts_and_provider_specific_effort() {
     let instructions = Rc::new(RefCell::new(HashMap::from([(

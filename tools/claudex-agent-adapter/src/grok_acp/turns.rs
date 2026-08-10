@@ -11,7 +11,7 @@ use agent_client_protocol as acp;
 use anyhow::{Context, Result, anyhow};
 use serde_json::{Value, json};
 use tokio::sync::{mpsc, oneshot};
-use tokio::time::{sleep, timeout};
+use tokio::time::{Instant, sleep, timeout_at};
 
 use super::{connection::AcpProvider, prompt};
 use crate::app_server::events::ThreadEventDispatcher;
@@ -85,9 +85,12 @@ async fn replace_active_turn(
         provider = provider.label(),
         "replacing in-flight ACP turn for a newer request on the same session"
     );
+    // One shared budget for cancel ack + active_turns clear. Stacking two
+    // REPLACE_SETTLE_TIMEOUT waits doubled mid-turn steering latency.
+    let deadline = Instant::now() + REPLACE_SETTLE_TIMEOUT;
     let (response_tx, response_rx) = oneshot::channel();
     cancel_turn(active_turns, session_id, response_tx);
-    match timeout(REPLACE_SETTLE_TIMEOUT, response_rx).await {
+    match timeout_at(deadline, response_rx).await {
         Ok(Ok(Ok(()))) => {}
         Ok(Ok(Err(error))) => {
             tracing::warn!(
@@ -110,9 +113,8 @@ async fn replace_active_turn(
             );
         }
     }
-    let deadline = tokio::time::Instant::now() + REPLACE_SETTLE_TIMEOUT;
     while active_turns.borrow().contains_key(session_id) {
-        if tokio::time::Instant::now() >= deadline {
+        if Instant::now() >= deadline {
             return Err(anyhow!(
                 "{} ACP session `{}` still has an active turn after replace cancel",
                 provider.label(),
