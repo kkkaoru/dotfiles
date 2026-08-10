@@ -267,6 +267,10 @@ async fn pure_async_agent_launch_results_return_control_without_task_output_rela
 }
 
 #[tokio::test]
+#[cfg_attr(
+    coverage_nightly,
+    ignore = "instrumented mock parallel batch races native HTTP handoff follow-up"
+)]
 async fn accepts_main_input_after_background_handoff_and_keeps_task_retrievable() {
     let adapter = Adapter::start().await;
     let client = Client::new();
