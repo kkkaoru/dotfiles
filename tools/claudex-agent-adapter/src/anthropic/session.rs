@@ -261,11 +261,16 @@ impl Bridge {
 
     pub(super) async fn finish_detached_session(&self, finished: &Arc<Session>) {
         // Move completed detached session back to active list for idle reuse.
-        // This enables background SubAgent follow-ups to reclaim the provider thread
-        // for prompt-cache reuse, matching finish_closed_stream(provider_settled=true).
+        // SAFETY: pending tools must be empty; unresolved tool_use blocks reattach.
+        let pending = finished.pending_tools.lock().await;
+        if !pending.is_empty() {
+            tracing::warn!(session_id = %finished.thread_id, "cannot reattach with pending tools");
+            return;
+        }
+        drop(pending);
+        
         let mut detached = self.detached_sessions.lock().await;
-        let was_detached = detached.iter().position(|s| Arc::ptr_eq(s, finished));
-        if let Some(index) = was_detached {
+        if let Some(index) = detached.iter().position(|s| Arc::ptr_eq(s, finished)) {
             let session = detached.remove(index);
             drop(detached);
             let mut active = self.sessions.lock().await;

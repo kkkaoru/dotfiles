@@ -2326,3 +2326,47 @@ async fn detach_and_finish_are_idempotent_when_lists_already_hold_the_session() 
     assert!(bridge.detached_sessions.lock().await.is_empty());
     assert_eq!(bridge.sessions.lock().await.len(), 1);
 }
+
+#[tokio::test]
+async fn finish_detached_session_keeps_session_detached_if_pending_tools_exist() {
+    let bridge = Bridge::new_with_backend(AgentBackend::spawn_routes(&[]), "main".to_owned());
+    let slot = Arc::clone(&bridge.session_slots)
+        .try_acquire_owned()
+        .expect("session slot");
+    let session = Arc::new(Session {
+        thread_id: "pending-tools-thread".to_owned(),
+        model: "main".to_owned(),
+        disabled_subagent_models: Default::default(),
+        signature: Arc::from("sig"),
+        transcript: Mutex::new(Vec::new()),
+        pending_tools: Mutex::new(HashMap::new()),
+        consumed_tool_ids: Mutex::new(Default::default()),
+        external_tool_names: HashMap::new(),
+        client_user_id: None,
+        claude_session_id: None,
+        gate: Arc::new(Mutex::new(())),
+        last_activity: std::sync::Mutex::new(Instant::now()),
+        pending_since: std::sync::Mutex::new(None),
+        _slot: slot,
+    });
+    
+    bridge.detach_session(&session).await;
+    assert_eq!(bridge.detached_sessions.lock().await.len(), 1);
+    
+    // Add pending tool to simulate unresolved tool_use.
+    session.pending_tools.lock().await.insert(
+        "tool_id".to_owned(),
+        json!({"name": "bash", "id": "tool_id"}),
+    );
+    
+    // finish_detached_session should skip reattach.
+    bridge.finish_detached_session(&session).await;
+    
+    // Session must remain detached.
+    assert_eq!(
+        bridge.detached_sessions.lock().await.len(),
+        1,
+        "detached session with pending tools must not be reattached"
+    );
+    assert_eq!(bridge.sessions.lock().await.len(), 0);
+}
