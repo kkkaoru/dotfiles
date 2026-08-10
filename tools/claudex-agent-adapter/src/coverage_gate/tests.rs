@@ -166,6 +166,17 @@ fn pruning_reports_a_non_directory_target_root() {
 }
 
 #[test]
+fn pruning_a_missing_target_root_is_a_no_op() {
+    let fixture = tempfile::tempdir().expect("coverage fixture");
+    prune_stale_coverage_artifacts(
+        fixture.path(),
+        &fixture.path().join("target/llvm-cov-current"),
+        std::time::SystemTime::now(),
+    )
+    .expect("missing target root must not fail the gate");
+}
+
+#[test]
 fn production_entrypoint_preserves_failed_isolated_artifacts() {
     if env::var_os("CLAUDEX_COVERAGE_GATE_CHILD").is_some() {
         let root = tempfile::tempdir().expect("coverage fixture");
