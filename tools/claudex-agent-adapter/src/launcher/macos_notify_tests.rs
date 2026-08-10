@@ -197,6 +197,37 @@ fn live_ready_is_a_no_op_when_listen_did_not_move() {
 }
 
 #[test]
+fn notify_helpers_return_early_when_log_path_has_no_parent() {
+    let listen = listen();
+    let config = super::super::ServiceConfig {
+        options: crate::launcher::AdapterOptions {
+            routes: Vec::new(),
+            listen,
+            model: "test-model".to_owned(),
+            subscription_max_processes: 20,
+            subscription_timeout_minutes: 120,
+            subagent_hard_timeout_seconds: None,
+            model_catalog: crate::provider_config::ModelCatalog::default(),
+        },
+        token: super::super::LOCAL_TOKEN.to_owned(),
+        codex_config_fingerprint: "fp".to_owned(),
+        service_config_fingerprint: "svc".to_owned(),
+        executable: std::path::PathBuf::from("/tmp/claudex-agent-adapter"),
+        // Empty path has no parent, so waiting/live/swap helpers must no-op.
+        log_path: std::path::PathBuf::new(),
+        lock_path: std::path::PathBuf::from("adapter.lock"),
+    };
+    let events = TestEvents::capture();
+    waiting_for_idle(&config, 4242);
+    live_ready(&config, "127.0.0.1:62789".parse().expect("live listen"));
+    swap_complete(&config);
+    assert!(
+        events.take().is_empty(),
+        "notify helpers must not emit when cache parent is absent"
+    );
+}
+
+#[test]
 fn corrupt_dedup_state_does_not_block_the_next_notification() {
     let root = tempfile::tempdir().expect("notify cache");
     let listen = listen();
