@@ -28,6 +28,14 @@ pub(super) fn handover_supported(health: &Health) -> bool {
     health.listener_handover && health.pid.is_some_and(|pid| pid != 0)
 }
 
+/// Warm-start cutover is only for a new adapter binary on the same service
+/// config. Fingerprint changes still need isolated preflight and recovery.
+pub(super) fn live_update_eligible(health: &Health, config: &ServiceConfig) -> bool {
+    handover_supported(health)
+        && health.codex_config_fingerprint == config.codex_config_fingerprint
+        && health.service_config_fingerprint == config.service_config_fingerprint
+}
+
 pub(super) fn retained_session_ids(health: &Health) -> Vec<String> {
     if !health.busy_claude_session_ids.is_empty() {
         return health.busy_claude_session_ids.clone();

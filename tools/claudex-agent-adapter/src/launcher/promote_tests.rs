@@ -41,6 +41,32 @@ fn handover_requires_a_capable_daemon_pid() {
     assert!(handover_supported(&health(true, Some(12))));
 }
 
+#[test]
+fn live_update_requires_the_same_service_fingerprints() {
+    let config = ServiceConfig {
+        options: AdapterOptions {
+            routes: vec![BackendRoute::new("test-model", BackendKind::CodexAppServer)],
+            listen: "127.0.0.1:8318".parse().unwrap(),
+            model: "test-model".to_owned(),
+            subscription_max_processes: 20,
+            subscription_timeout_minutes: 120,
+            subagent_hard_timeout_seconds: None,
+            model_catalog: crate::provider_config::ModelCatalog::default(),
+        },
+        token: LOCAL_TOKEN.to_owned(),
+        codex_config_fingerprint: "codex".to_owned(),
+        service_config_fingerprint: "service".to_owned(),
+        executable: PathBuf::from("/tmp/claudex-agent-adapter"),
+        log_path: PathBuf::from("/tmp/claudex/adapter.log"),
+        lock_path: PathBuf::from("/tmp/claudex/adapter.lock"),
+    };
+    let matching = health(true, Some(12));
+    assert!(live_update_eligible(&matching, &config));
+    let mut timeout_changed = matching;
+    timeout_changed.service_config_fingerprint = "other-service".to_owned();
+    assert!(!live_update_eligible(&timeout_changed, &config));
+}
+
 #[tokio::test]
 async fn try_canonical_skips_legacy_daemons_without_handover() {
     let config = ServiceConfig {

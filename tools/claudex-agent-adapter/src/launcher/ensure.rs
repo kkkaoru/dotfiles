@@ -135,19 +135,19 @@ async fn apply_inspected_state(
             pid,
             recovery_generation,
         } => {
-            if let Some(health) = super::health::fetch_health(client, config).await {
+            if let Some(health) = super::health::fetch_health(client, config).await
+                && super::promote::live_update_eligible(&health, config)
+            {
                 if let Some(url) = super::promote::try_canonical(client, config, &health).await? {
                     pending_hot_swap::clear_if_current(config);
                     notify_swap_if_replaced(true, config);
                     return Ok(url);
                 }
-                if health.listener_handover {
-                    eprintln!(
-                        "claudex: live update handover failed; keeping pid {pid:?} on {} so Claude Code stays connected",
-                        config.base_url()
-                    );
-                    return Ok(config.base_url());
-                }
+                eprintln!(
+                    "claudex: live update handover failed; keeping pid {pid:?} on {} so Claude Code stays connected",
+                    config.base_url()
+                );
+                return Ok(config.base_url());
             }
             let recovery_generation =
                 usable_recovery_generation(config, recovery_generation.as_deref())?;
@@ -213,6 +213,7 @@ async fn defer_busy_listener(
         Mode::HotSwap | Mode::Ensure => {
             pending_hot_swap::disarm(config);
             if let Some(health) = super::health::fetch_health(client, config).await
+                && super::promote::live_update_eligible(&health, config)
                 && let Some(url) = super::promote::try_canonical(client, config, &health).await?
             {
                 notify_swap_if_replaced(true, config);
