@@ -1185,6 +1185,17 @@ fn policy_helpers_cover_live_reuse_and_single_scope_guidance_boundaries() {
             .any(|action| action.contains("completion-aware"))
     );
 
+    let mut completed_without_work = SchedulerDecision::no_action();
+    completed_without_work.completed_recently = 1;
+    policy::apply_reuse_actions(&mut completed_without_work, &parallel_request, &config);
+    assert!(
+        completed_without_work
+            .actions
+            .iter()
+            .all(|action| !action.contains("completion-aware")),
+        "completed-but-idle reuse must stop before follow-up launch guidance"
+    );
+
     let mut pending = SchedulerDecision::no_action();
     pending.needs_more_workers = 1;
     policy::clear_empty_decision(&mut pending, &core::SubagentSnapshot::default());
