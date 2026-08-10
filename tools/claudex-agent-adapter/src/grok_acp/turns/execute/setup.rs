@@ -18,7 +18,7 @@ pub(super) async fn apply_effort(
     // Session create also pins the ACP model id once. Re-running set_session_model every
     // turn reselects Cursor's auto router and adds multi-second RPC latency before prompts.
     if ctl.provider == AcpProvider::Grok || ctl.provider.model_is_launch_scoped() {
-        tracing::debug!(
+        tracing::info!(
             session_id = ctl.session_id,
             effort,
             provider = ctl.provider.label(),
@@ -27,7 +27,7 @@ pub(super) async fn apply_effort(
         return true;
     }
     if effort.is_none() {
-        tracing::debug!(
+        tracing::info!(
             session_id = ctl.session_id,
             provider = ctl.provider.label(),
             "skipping ACP set_session_model; session/new already pinned the model"
