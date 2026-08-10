@@ -738,6 +738,24 @@ mod tests {
             "run_terminal_command"
         );
         assert_eq!(
+            compact_title(": only-detail"),
+            ": only-detail",
+            "empty names after ':' must keep the full title"
+        );
+        assert_eq!(
+            progress_start_line("Shell", Some(&json!(["not-an-object"]))),
+            "\n▶ Shell\n"
+        );
+        assert_eq!(
+            progress_start_line("Shell", Some(&json!({"command":"  "}))),
+            "\n▶ Shell\n"
+        );
+        assert_eq!(failure_preview(Some(&json!(["x"]))), "failed");
+        assert_eq!(failure_preview(Some(&json!(42))), "failed");
+        assert!(scalar_preview(&json!(null)).is_none());
+        assert!(scalar_preview(&json!([])).is_none());
+        assert!(scalar_preview(&json!("   ")).is_none());
+        assert_eq!(
             truncate_for_status("  short  ", UNREACHED_PREVIEW_CHAR_LIMIT),
             "short"
         );
