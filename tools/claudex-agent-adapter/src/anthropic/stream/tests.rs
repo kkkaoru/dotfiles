@@ -419,6 +419,11 @@ fn recognizes_cursor_thought_for_filler() {
         "ContextVar は worker スレッドに伝わらないので、スレッド共有のフラグに切り替えます。"
     ));
     assert!(!sanitize::is_canned_worker_filler("   "));
+    assert!(
+        sanitize::is_canned_worker_filler("Nucleating…"),
+        "Cursor SubAgent chrome must not freeze the panel on Nucleating"
+    );
+    assert!(sanitize::is_canned_worker_filler("Nucleating"));
 }
 
 #[test]

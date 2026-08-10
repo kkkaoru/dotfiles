@@ -595,6 +595,54 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn nucleating_cursor_subagent_is_replaced_by_bash_thinking_progress() {
+        // Old failure: Cursor SubAgent panel stayed on "Nucleating…" while Bash
+        // ran, because canned chrome was kept and ▶ was not painted as thinking.
+        let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(32);
+        let mut builder = SegmentBuilder::new(1).with_subagent(true);
+        builder
+            .model_output_event(
+                &json!({
+                    "method":"item/reasoning/summaryTextDelta",
+                    "params":{
+                        "itemId":"cursor:reasoning",
+                        "summaryIndex":0,
+                        "delta":"Nucleating…"
+                    }
+                }),
+                Some(&sender),
+            )
+            .await
+            .expect("nucleating chrome");
+        builder
+            .provider_tool_call(
+                &json!({"params":{
+                    "callId":"bash-ls",
+                    "tool":"Bash",
+                    "title":"`ls /tmp/claude-5a7a0dcd/tasks`",
+                    "arguments":{"command":"ls /tmp/claude-5a7a0dcd/tasks"}
+                }}),
+                Some(&sender),
+            )
+            .await
+            .expect("bash progress");
+        drop(sender);
+        let thinking = thinking_text(&builder);
+        assert!(
+            thinking.contains("▶ Bash") || thinking.contains("▶ `ls"),
+            "{thinking}"
+        );
+        assert!(
+            !thinking.to_ascii_lowercase().contains("nucleating"),
+            "Nucleating must not freeze SubAgent thinking chrome: {thinking}"
+        );
+        let (_, output) = collect_frames(&mut receiver).await;
+        assert!(output.contains("thinking_delta"));
+        assert!(output.contains('▶'));
+        assert!(!output.to_ascii_lowercase().contains("nucleating"));
+    }
+
     #[test]
     fn previews_and_truncates_status_output() {
         const UNREACHED_PREVIEW_CHAR_LIMIT: usize = 20;

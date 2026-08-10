@@ -166,6 +166,7 @@ pub(super) fn is_canned_worker_filler(text: &str) -> bool {
         return false;
     }
     lower.starts_with("thought for ")
+        || lower.starts_with("nucleating")
         || CANNED_FILLER_NEEDLES
             .iter()
             .any(|needle| lower.contains(needle))

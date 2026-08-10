@@ -70,22 +70,25 @@ pub(super) fn is_subagent_request(request: &MessagesRequest) -> bool {
     // correlation markers in its historical transcript.  Only the current
     // user turn is authoritative; never classify the main session from an old
     // assistant/tool-result pair.
-    request
-        .messages
-        .iter()
-        .rev()
-        .find(|message| message.get("role").and_then(Value::as_str) == Some("user"))
-        .is_some_and(value_contains_subagent_marker)
+    current_turn_user_messages(&request.messages).any(value_contains_subagent_marker)
 }
 
 fn has_live_subagent_launch_marker(request: &MessagesRequest) -> bool {
     value_contains_live_launch_marker(&request.system)
-        || request
-            .messages
-            .iter()
-            .rev()
-            .find(|message| message.get("role").and_then(Value::as_str) == Some("user"))
-            .is_some_and(value_contains_live_launch_marker)
+        || current_turn_user_messages(&request.messages).any(value_contains_live_launch_marker)
+}
+
+/// Claude Code injects skills / hook context as extra user messages after the
+/// delegated prompt. The latest user blob is often `ctx-agent-history-search`
+/// without `claudex_launch_id`, which used to hide live SubAgent chrome.
+fn current_turn_user_messages(messages: &[Value]) -> impl Iterator<Item = &Value> {
+    let start = messages
+        .iter()
+        .rposition(|message| message.get("role").and_then(Value::as_str) == Some("assistant"))
+        .map_or(0, |index| index + 1);
+    messages[start..]
+        .iter()
+        .filter(|message| message.get("role").and_then(Value::as_str) == Some("user"))
 }
 
 fn value_contains_live_launch_marker(value: &Value) -> bool {

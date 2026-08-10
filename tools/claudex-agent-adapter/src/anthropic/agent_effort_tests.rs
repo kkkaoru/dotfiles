@@ -1974,6 +1974,48 @@ mod tests {
     }
 
     #[test]
+    fn skill_injection_after_launch_marker_still_counts_as_subagent() {
+        let mut request: MessagesRequest = serde_json::from_value(json!({
+            "model":"auto",
+            "system":"ordinary system",
+            "messages":[
+                {"role":"user","content":"Review the AzooKey copular diff.\n\nclaudex_launch_id: toolu_619426437290414f825a63ed3c6154eb\nclaudex_model: auto\n\n<claudex-agent-id>toolu_619426437290414f825a63ed3c6154eb</claudex-agent-id>"},
+                {"role":"user","content":"<command-message>ctx-agent-history-search</command-message>\n# ctx Agent History Search\nUse ctx whenever you need to reference previous coding-agent sessions."}
+            ]
+        }))
+        .expect("request");
+        super::super::RequestIdentity::new(
+            Some("5a7a0dcd-9f77-496f-882b-a46550373479".to_owned()),
+            None,
+            None,
+        )
+        .attach(&mut request);
+
+        assert!(
+            super::is_subagent_request(&request),
+            "old failure: latest skill dump hid claudex_launch_id so Cursor SubAgent stayed on Nucleating"
+        );
+    }
+
+    #[test]
+    fn historical_launch_marker_before_assistant_does_not_mark_main_follow_up() {
+        let mut request: MessagesRequest = serde_json::from_value(json!({
+            "model":"auto",
+            "system":"ordinary system",
+            "messages":[
+                {"role":"user","content":"old task\nclaudex_launch_id: old-tool"},
+                {"role":"assistant","content":"done"},
+                {"role":"user","content":"ordinary follow-up without launch id"}
+            ]
+        }))
+        .expect("request");
+        super::super::RequestIdentity::new(Some("main-session".to_owned()), None, None)
+            .attach(&mut request);
+
+        assert!(!super::is_subagent_request(&request));
+    }
+
+    #[test]
     fn session_id_header_does_not_hide_cc_is_subagent_billing() {
         let mut request: MessagesRequest = serde_json::from_value(json!({
             "model":"meta/muse-spark-1.2-contributor",
