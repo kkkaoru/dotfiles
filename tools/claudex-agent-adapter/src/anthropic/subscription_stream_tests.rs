@@ -2201,14 +2201,22 @@ async fn forwarded_tool_use_releases_the_client_before_subscription_result() {
 
 #[tokio::test]
 async fn delayed_subscription_result_stays_quiet_under_activity_threshold() {
-    // Initial activity delay is 30s (Claude-like quieter idle). A ~2s silent wait
-    // must not inject a "still working" thinking block.
+    // Keep the quiet window above the ~2s silent wait regardless of the
+    // production INITIAL_ACTIVITY_DELAY (currently snappier than Claude-native).
     let (sender, mut receiver) = channel();
-    consume_subscription_stream(
-        child(
+    let mut options = SubscriptionOptions::internal(
+        Arc::new(tokio::sync::Semaphore::new(1)),
+        Duration::from_secs(8),
+    );
+    options.initial_activity_delay = Duration::from_secs(30);
+    options.activity_keepalive_interval = Duration::from_secs(30);
+    consume_subscription_stream_with_options(
+        &mut child(
             r#"sleep 2.1; printf '%s\n' '{"type":"result","subtype":"success","result":"done"}'"#,
         ),
         &sender,
+        &options,
+        "subscription-test",
     )
     .await
     .expect("delayed subscription stream");
@@ -2706,24 +2714,19 @@ async fn stream_timeout_terminates_the_entire_subscription_process_group() {
     let fixture = BackgroundSleepFixture::new();
     let program = fixture.program();
     let (sender, _receiver) = channel();
+    // Keep this below the fixture's `sleep 30` background so the child is
+    // killed by the subscription timeout rather than exiting empty-handed.
     let options = SubscriptionOptions::internal(
         Arc::new(tokio::sync::Semaphore::new(1)),
-        SUBSCRIPTION_FIXTURE_TIMEOUT,
+        Duration::from_secs(5),
     );
 
-    let (result, background) = tokio::time::timeout(
-        if cfg!(coverage_nightly) {
-            Duration::from_secs(90)
-        } else {
-            Duration::from_secs(10)
-        },
-        async {
-            tokio::join!(
-                stream_subscription_model(&sender, &program, "model", "prompt", &options),
-                fixture.release_after_pid(),
-            )
-        },
-    )
+    let (result, background) = tokio::time::timeout(Duration::from_secs(15), async {
+        tokio::join!(
+            stream_subscription_model(&sender, &program, "model", "prompt", &options),
+            fixture.release_after_pid(),
+        )
+    })
     .await
     .expect("stalled subscription test must finish within its cleanup bound");
     let mut background = background.unwrap_or_else(|| {
@@ -2732,7 +2735,11 @@ async fn stream_timeout_terminates_the_entire_subscription_process_group() {
     let error = result.expect_err("stalled subscription stream must time out");
     background.assert_exited().await;
 
-    assert!(error.to_string().contains("timed out"));
+    let message = error.to_string();
+    assert!(
+        message.contains("timed out"),
+        "unexpected stream timeout error: {message}"
+    );
     let failure = crate::anthropic::subscription::subscription_failure(&error)
         .expect("stream timeout must be typed");
     assert_eq!(failure.status_hint(), 424);
