@@ -237,7 +237,7 @@ fn close_file_descriptor(fd: i32) {
 mod tests {
     use super::{
         bounded_descriptor_limit, close_file_descriptor, close_inherited_descriptors_with,
-        close_system, configure_process_group,
+        close_system, configure_process_group, terminate_started_recovery,
     };
 
     #[cfg(unix)]
@@ -247,6 +247,29 @@ mod tests {
         thread,
         time::Duration,
     };
+
+    #[cfg(unix)]
+    #[test]
+    fn terminate_started_recovery_stops_a_detached_child() {
+        let mut child = Command::new("sleep")
+            .arg("30")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn recovery terminate fixture");
+        let pid = child.id();
+        terminate_started_recovery(pid);
+        for _ in 0..50 {
+            if child.try_wait().expect("poll recovery child").is_some() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!("terminate_started_recovery must stop pid {pid}");
+    }
 
     #[test]
     fn bounds_descriptor_limits_before_closing_inherited_fds() {
