@@ -694,6 +694,45 @@ fn subagent_subscription_omits_main_only_advisor_tool() {
 }
 
 #[test]
+fn subagent_subscription_options_select_a_short_initial_activity_delay() {
+    use crate::anthropic::subscription_stream::{
+        ACTIVITY_KEEPALIVE_INTERVAL, INITIAL_ACTIVITY_DELAY, SUBAGENT_INITIAL_ACTIVITY_DELAY,
+    };
+
+    let bridge = Bridge::new_with_backend(AgentBackend::spawn_routes(&[]), "main".to_owned());
+    let request = MessagesRequest {
+        model: "claude-sonnet-5".to_owned(),
+        system: json!(null),
+        messages: vec![],
+        tools: vec![],
+        stream: true,
+        output_config: json!({}),
+        metadata: json!({}),
+        working_directory: None,
+        disabled_subagent_models: Default::default(),
+        claudex_collaborator_model: None,
+    };
+
+    let main_options = bridge.subscription_options(&request, None, false, false);
+    assert_eq!(main_options.initial_activity_delay, INITIAL_ACTIVITY_DELAY);
+
+    let subagent_options = bridge.subscription_options(&request, None, true, false);
+    assert_eq!(
+        subagent_options.initial_activity_delay,
+        SUBAGENT_INITIAL_ACTIVITY_DELAY
+    );
+    assert!(subagent_options.initial_activity_delay < main_options.initial_activity_delay);
+    assert_eq!(
+        main_options.activity_keepalive_interval,
+        ACTIVITY_KEEPALIVE_INTERVAL
+    );
+    assert_eq!(
+        subagent_options.activity_keepalive_interval,
+        ACTIVITY_KEEPALIVE_INTERVAL
+    );
+}
+
+#[test]
 fn search_worker_does_not_receive_unrequested_native_web_tools() {
     let request = MessagesRequest {
         model: "claude-haiku-4-5".to_owned(),

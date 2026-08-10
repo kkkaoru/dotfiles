@@ -34,7 +34,8 @@ use super::{
         subscription_request_prompt,
     },
     subscription_stream::{
-        ACTIVITY_KEEPALIVE_INTERVAL, INITIAL_ACTIVITY_DELAY, subscription_streaming_response,
+        ACTIVITY_KEEPALIVE_INTERVAL, INITIAL_ACTIVITY_DELAY, SUBAGENT_INITIAL_ACTIVITY_DELAY,
+        subscription_streaming_response,
     },
 };
 use crate::NONINTERACTIVE_CHILD_ENV;
@@ -160,7 +161,7 @@ impl Bridge {
         Ok(anthropic_response(segment, &request.model))
     }
 
-    fn subscription_options(
+    pub(super) fn subscription_options(
         &self,
         request: &MessagesRequest,
         effort: Option<String>,
@@ -177,7 +178,11 @@ impl Bridge {
             cwd: subscription_request_cwd(request),
             slots: Arc::clone(&self.subscription_slots),
             timeout: self.subscription_timeout,
-            initial_activity_delay: INITIAL_ACTIVITY_DELAY,
+            initial_activity_delay: if is_subagent {
+                SUBAGENT_INITIAL_ACTIVITY_DELAY
+            } else {
+                INITIAL_ACTIVITY_DELAY
+            },
             activity_keepalive_interval: ACTIVITY_KEEPALIVE_INTERVAL,
             stderr_drain_grace: DEFAULT_STDERR_DRAIN_GRACE,
             termination_timeout: DEFAULT_TERMINATION_TIMEOUT,

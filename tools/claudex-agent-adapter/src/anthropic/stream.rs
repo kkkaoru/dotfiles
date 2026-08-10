@@ -52,7 +52,10 @@ pub(super) use protocol::{
     message_start, send_stream_completion, send_stream_frame, streaming_sse_response,
 };
 pub(super) const ACTIVITY_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
-pub(super) const INITIAL_ACTIVITY_DELAY: Duration = Duration::from_secs(30);
+/// Main-turn callers (Claude Code TUI, curl, etc.) sit on a blank response
+/// until the first byte. Ten seconds bounds that silent wait without
+/// spamming keepalives during the common sub-10s provider turnaround.
+pub(super) const INITIAL_ACTIVITY_DELAY: Duration = Duration::from_secs(10);
 /// SubAgent TUI stays on Nucleating until the first keepalive/tool chrome.
 pub(super) const SUBAGENT_INITIAL_ACTIVITY_DELAY: Duration = Duration::from_secs(5);
 

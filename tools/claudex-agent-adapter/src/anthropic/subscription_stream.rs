@@ -8,9 +8,12 @@ use std::{
     collections::HashSet, convert::Infallible, path::Path, path::PathBuf, sync::Arc, time::Duration,
 };
 use tokio::sync::mpsc;
-// Align with the main provider stream: status only after real silence (~30s).
+// Main-turn subscription callers: status only after real silence (~30s).
 pub(super) const INITIAL_ACTIVITY_DELAY: Duration = Duration::from_secs(30);
 pub(super) const ACTIVITY_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
+/// Mirrors the ACP SubAgent delay: keep the SubAgent panel lit while a
+/// subscription child process boots instead of freezing on Nucleating.
+pub(super) const SUBAGENT_INITIAL_ACTIVITY_DELAY: Duration = Duration::from_secs(5);
 use super::{
     stream::streaming_sse_response,
     subscription::{

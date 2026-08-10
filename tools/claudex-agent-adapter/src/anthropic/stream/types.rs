@@ -63,7 +63,7 @@ pub(in crate::anthropic::stream) fn stream_activity_delays(
     let initial = if is_subagent {
         super::SUBAGENT_INITIAL_ACTIVITY_DELAY
     } else {
-        interval
+        super::INITIAL_ACTIVITY_DELAY
     };
     (initial, interval)
 }

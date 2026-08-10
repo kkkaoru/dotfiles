@@ -428,7 +428,9 @@ fn recognizes_cursor_thought_for_filler() {
         super::SUBAGENT_INITIAL_ACTIVITY_DELAY,
         Duration::from_secs(5)
     );
+    assert_eq!(super::INITIAL_ACTIVITY_DELAY, Duration::from_secs(10));
     assert!(super::SUBAGENT_INITIAL_ACTIVITY_DELAY < super::INITIAL_ACTIVITY_DELAY);
+    assert!(super::INITIAL_ACTIVITY_DELAY < super::ACTIVITY_KEEPALIVE_INTERVAL);
     assert_eq!(
         super::types::stream_activity_delays(true),
         (
@@ -439,7 +441,7 @@ fn recognizes_cursor_thought_for_filler() {
     assert_eq!(
         super::types::stream_activity_delays(false),
         (
-            super::ACTIVITY_KEEPALIVE_INTERVAL,
+            super::INITIAL_ACTIVITY_DELAY,
             super::ACTIVITY_KEEPALIVE_INTERVAL
         )
     );
@@ -483,6 +485,47 @@ async fn honors_short_initial_activity_delay_before_steady_interval() {
     assert!(
         output.contains('\u{200b}') || output.contains("waiting for provider"),
         "first keepalive must fire on the short initial delay: {output}"
+    );
+}
+
+#[tokio::test]
+async fn honors_short_main_turn_initial_activity_delay_before_steady_interval() {
+    let (_root, _app, bridge, session) = disconnect_fixture().await;
+    let dispatcher = crate::app_server::events::ThreadEventDispatcher::default();
+    let events = dispatcher.subscribe("thread");
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
+    let wait = bridge.wait_for_stream_segment_with_interval(StreamWaitInput {
+        session: &session,
+        events: Arc::new(events),
+        current_messages: &[],
+        system: &json!(null),
+        sender: &sender,
+        builder: SegmentBuilder::new(1).with_subagent(false),
+        activity_interval: Duration::from_secs(30),
+        initial_activity_delay: Duration::from_millis(15),
+    });
+    let complete = async {
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        dispatcher.dispatch(json!({
+            "method":"turn/completed",
+            "params":{"threadId":"thread","turn":{"status":"completed"}}
+        }));
+    };
+    let started = Instant::now();
+    let (result, ()) = tokio::join!(wait, complete);
+    result.expect("stream segment");
+    drop(sender);
+    let mut output = String::new();
+    while let Some(frame) = receiver.recv().await {
+        output.push_str(&String::from_utf8_lossy(&frame.expect("frame")));
+    }
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "short initial delay must not wait for the 30s steady interval"
+    );
+    assert!(
+        output.contains("waiting for provider output"),
+        "main-turn keepalive must fire on the short initial delay: {output}"
     );
 }
 
@@ -2004,6 +2047,44 @@ async fn subagent_stream_cancels_provider_when_sse_drops_after_tools() {
     assert!(
         matches!(result, super::StreamTurn::Disconnected),
         "SSE close after ▶ tools must cancel the SubAgent provider"
+    );
+}
+
+#[tokio::test]
+async fn subagent_stream_cancels_provider_when_sse_drops_after_status() {
+    let (_root, app, bridge, session) = disconnect_fixture().await;
+    let events = app.subscribe_thread("thread");
+    let (sender, receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
+    let mut builder = SegmentBuilder::for_turn(1, true, "auto");
+    builder
+        .text_delta(
+            &json!({"params":{"delta":"Status: inspecting local history\n"}}),
+            None,
+        )
+        .await
+        .expect("provider status");
+    assert!(
+        builder.has_live_provider_work(),
+        "Status chrome must count as live provider work"
+    );
+    drop(receiver);
+
+    let result = bridge
+        .wait_for_stream_segment_with_interval(StreamWaitInput {
+            session: &session,
+            events: Arc::new(events),
+            current_messages: &[],
+            system: &json!(null),
+            sender: &sender,
+            builder,
+            activity_interval: Duration::from_millis(50),
+            initial_activity_delay: Duration::from_millis(50),
+        })
+        .await
+        .expect("stop after status");
+    assert!(
+        matches!(result, super::StreamTurn::Disconnected),
+        "SSE close after provider Status must cancel the SubAgent provider"
     );
 }
 
