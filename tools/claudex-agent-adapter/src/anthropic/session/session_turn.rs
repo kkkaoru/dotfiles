@@ -7,7 +7,7 @@ use super::super::{
     ActiveTurn, Bridge, MessagesRequest, SelectedSession, Session,
     content::{ToolResult, serialized_len},
     turn_input::{
-        provider_turn_input, provider_turn_input_with_token_budget, user_input_from_messages,
+        provider_turn_input, provider_turn_input_with_token_budget, provider_user_turn_input,
     },
 };
 use super::tools::{thread_start_params_for_mode, tool_configuration_for_mode};
@@ -261,7 +261,7 @@ impl Bridge {
         let input = if existing_len == 0 {
             self.transcript_input(request)
         } else {
-            user_input_from_messages(extras)
+            provider_user_turn_input(&self.request_model(request), extras)
         };
         let mut params = json!({
             "threadId": session.thread_id,
@@ -281,7 +281,7 @@ impl Bridge {
     fn transcript_input(&self, request: &MessagesRequest) -> Vec<Value> {
         let model = self.request_model(request);
         if crate::command_code_acp::is_command_code_model(&model) {
-            return user_input_from_messages(&request.messages);
+            return provider_user_turn_input(&model, &request.messages);
         }
         let Some(limit) = self.app.max_context_tokens_for_model(&model) else {
             return provider_turn_input(&model, &request.messages);

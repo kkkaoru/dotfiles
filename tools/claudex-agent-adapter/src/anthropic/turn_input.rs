@@ -80,6 +80,17 @@ pub(super) fn user_input_from_messages(messages: &[Value]) -> Vec<Value> {
     user_input_from_messages_with_byte_limit(messages, MAX_TURN_INPUT_BYTES)
 }
 
+/// `turn/start` user payload. Command Code must never concatenate prior user
+/// turns, including the new-session transcript path that used to bypass
+/// [`provider_turn_input`].
+pub(super) fn provider_user_turn_input(model: &str, messages: &[Value]) -> Vec<Value> {
+    if crate::command_code_acp::is_command_code_model(model) {
+        latest_user_input_from_messages(messages)
+    } else {
+        user_input_from_messages(messages)
+    }
+}
+
 fn user_input_from_messages_with_byte_limit(messages: &[Value], max_bytes: usize) -> Vec<Value> {
     let mut input = messages
         .iter()

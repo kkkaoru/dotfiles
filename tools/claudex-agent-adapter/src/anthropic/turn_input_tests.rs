@@ -4,7 +4,7 @@ use super::{
     FULL_HISTORY_HEADER, MAX_TURN_INPUT_BYTES, TRUNCATED_HISTORY_HEADER, TRUNCATED_INPUT_NOTICE,
     bound_input, full_transcript_input, full_transcript_input_with_token_budget, input_bytes,
     oversized_latest_message, provider_turn_input, provider_turn_input_with_token_budget,
-    user_input_from_messages, utf8_suffix,
+    provider_user_turn_input, user_input_from_messages, utf8_suffix,
 };
 
 #[test]
@@ -90,6 +90,20 @@ fn command_code_follow_up_uses_only_the_latest_user_instruction() {
     let input = provider_turn_input("meta/muse-spark-1.2-contributor", &messages);
     assert_eq!(
         input[0]["text"],
+        "Stop. Output only the first heading of CLAUDE.md."
+    );
+    let new_session = provider_user_turn_input("meta/muse-spark-1.2-contributor", &messages);
+    assert_eq!(
+        new_session[0]["text"], "Stop. Output only the first heading of CLAUDE.md.",
+        "new-session transcript_input must not concat prior Command Code user turns"
+    );
+    let extras = &messages[2..];
+    assert_eq!(
+        provider_user_turn_input("meta/muse-spark-1.2-contributor", extras)[0]["text"],
+        "Stop. Output only the first heading of CLAUDE.md."
+    );
+    assert_eq!(
+        provider_user_turn_input("gpt-5.6-luna", extras)[0]["text"],
         "Stop. Output only the first heading of CLAUDE.md."
     );
     assert!(
