@@ -179,11 +179,7 @@ impl ThinkingState {
         .await
     }
 
-    /// Append provider tool progress to the open thinking chrome.
-    ///
-    /// Unlike [`activity_status`], this keeps emitting ▶/✓/✗ lines for each ACP
-    /// tool. Claude Code SubAgent panels show thinking live; assistant text is
-    /// often hidden until end_turn and then stripped by sanitize.
+    /// Append ▶/✓/✗ tool progress into open thinking (SubAgent live chrome).
     pub(super) async fn progress_status(
         &mut self,
         blocks: &mut Vec<Value>,
@@ -196,8 +192,7 @@ impl ThinkingState {
         self.progress_status_on(blocks, status, false, stream).await
     }
 
-    /// Append ▶/✓/elapsed into the open thinking block without closing it.
-    /// Used for ACP SubAgents so Claude Code's native thinking chrome stays live.
+    /// Same as [`progress_status`] but never closes an open thought first.
     pub(super) async fn progress_status_keep_open(
         &mut self,
         blocks: &mut Vec<Value>,
@@ -217,8 +212,7 @@ impl ThinkingState {
         keep_open: bool,
         stream: Option<&StreamSender>,
     ) -> Result<()> {
-        // Cline/DeepSeek often open a blank or long CoT thinking unit first.
-        // Closing it to switch chrome left SubAgent TUI on "Thought for Xs".
+        // Closing blank CoT chrome left SubAgent TUI on "Thought for Xs".
         if !keep_open
             && self
                 .open
@@ -232,6 +226,10 @@ impl ThinkingState {
                 .await?;
         }
         let open = self.open.as_mut().expect("progress block just opened");
+        // Skip duplicate Status chrome; SSE can only append.
+        if open.text.ends_with(status) {
+            return Ok(());
+        }
         open.text.push_str(status);
         blocks[open.index]["thinking"] = json!(open.text);
         send_stream_frame(stream, "content_block_delta", || {
