@@ -152,3 +152,14 @@ fn stop_waiter_ignores_missing_self_and_dead_pids() {
     stop_waiter(std::process::id(), |_| true);
     stop_waiter(1, |_| false);
 }
+
+#[test]
+fn clear_and_disarm_are_noops_when_log_has_no_parent() {
+    let mut cfg = config(
+        tempfile::tempdir().expect("orphan log fixture").path(),
+        "127.0.0.1:8320".parse().expect("listen"),
+    );
+    cfg.log_path = PathBuf::from("/");
+    clear_if_current(&cfg);
+    disarm(&cfg);
+}
