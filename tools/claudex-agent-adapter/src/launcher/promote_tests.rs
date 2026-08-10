@@ -270,6 +270,29 @@ async fn try_canonical_fails_closed_when_warm_start_never_becomes_ready() {
 }
 
 #[tokio::test]
+async fn try_canonical_reports_retained_state_write_failure() {
+    let root = tempfile::tempdir().expect("retained write fixture");
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("canonical listen");
+    let listen = listener.local_addr().expect("canonical address");
+    drop(listener);
+    let config = config_at(listen, root.path(), PathBuf::from("/tmp/adapter"));
+    std::fs::create_dir(
+        root.path()
+            .join(format!("retained.{}.json", config.options.listen.port())),
+    )
+    .expect("block retained state path");
+    let error = try_canonical(&reqwest::Client::new(), &config, &health(true, Some(12)))
+        .await
+        .expect_err("retained state write must fail");
+    assert!(
+        error.to_string().contains("state") || error.to_string().contains("directory"),
+        "{error:#}"
+    );
+}
+
+#[tokio::test]
 async fn request_rebind_parses_success_and_skips_unreachable_listeners() {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
