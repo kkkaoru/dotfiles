@@ -498,4 +498,23 @@ mod tests {
         .expect_err("an unknown SubAgent model must not inherit the main route");
         assert!(decision.to_string().contains("request model is required"));
     }
+
+    #[test]
+    fn direct_subagent_with_explicit_model_debugs_instead_of_warns() {
+        enable_warning_logs();
+        let mut req = request("gpt-5.6-luna", &[]);
+        // Direct SubAgent request with explicit model (no prior Agent/Task intent).
+        // This should route normally without a WARN-level noise.
+        let decision = resolve_request_model_with_origin(
+            &mut req,
+            "main-model",
+            None,
+            RouteOrigin::new(true, false, false),
+            |model| model == "gpt-5.6-luna",
+            |_| false,
+        )
+        .expect("direct SubAgent with valid model");
+        assert_eq!(decision, RouteDecision::Provider);
+        assert_eq!(req.model, "gpt-5.6-luna");
+    }
 }

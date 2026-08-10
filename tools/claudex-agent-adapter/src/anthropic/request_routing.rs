@@ -52,12 +52,21 @@ pub(super) fn resolve_request_model_with_origin(
     let is_subagent =
         super::request_identity::authoritative_is_subagent(request).unwrap_or(origin.is_subagent);
     if is_subagent && (!origin.intent_matched || model_override.is_none()) {
-        tracing::warn!(
-            request_model = %request.model,
-            intent_matched = origin.intent_matched,
-            has_explicit_model = model_override.is_some(),
-            "routing a SubAgent from its request model because launch metadata is incomplete"
-        );
+        // Warn only if the request model is missing entirely; if a model is provided,
+        // direct routing from Claude Code to a SubAgent is normal (e.g., nested SubAgent
+        // or direct child launch). Debug-log when metadata is incomplete but model is explicit.
+        if request.model.is_empty() {
+            tracing::warn!(
+                intent_matched = origin.intent_matched,
+                has_explicit_model = model_override.is_some(),
+                "SubAgent routing request lacks a model; using request default"
+            );
+        } else if !origin.intent_matched && model_override.is_none() {
+            tracing::debug!(
+                request_model = %request.model,
+                "SubAgent routing: no prior Agent/Task intent; using request model directly"
+            );
+        }
     }
     let has_model_override = model_override.is_some();
     if let Some(model) = model_override {
