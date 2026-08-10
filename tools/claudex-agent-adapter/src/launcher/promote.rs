@@ -84,39 +84,55 @@ pub(super) async fn try_canonical(
         session_ids.clone(),
     )?;
     wait_until_canonical_released(config).await?;
-    let bound = request_bind_listen(client, &warm, config.options.listen)
-        .await?
-        .is_some()
-        || canonical_serves_current_build(client, config, Some(started)).await;
-    if !bound {
-        restore_old_canonical(client, config, retained_listen).await;
-        terminate_started(started, &warm);
-        return Ok(None);
-    }
+    let _ = request_bind_listen(client, &warm, config.options.listen).await;
     if !wait_until_current_build(client, config, None).await {
-        if canonical_serves_current_build(client, config, None).await {
-            // New generation already owns the canonical port; do not roll back.
-        } else {
-            restore_old_canonical(client, config, retained_listen).await;
-            if !canonical_serves_current_build(client, config, None).await {
-                terminate_started(started, &warm);
-            }
-            bail!(
-                "wait for promoted canonical listener; see {}",
-                config.log_path.display()
-            );
+        restore_old_canonical(client, config, retained_listen).await;
+    }
+    if canonical_serves_current_build(client, config, None).await {
+        return Ok(Some(publish_promoted(
+            config,
+            started,
+            old_pid,
+            retained_listen,
+            session_ids.len(),
+        )));
+    }
+    terminate_started(started, &warm);
+    if TcpStream::connect_timeout(&config.options.listen, Duration::from_millis(50)).is_err() {
+        let pid = daemon_start::start_adapter(config)
+            .context("start current-build listener after empty canonical port")?;
+        if wait_until_current_build(client, config, None).await {
+            return Ok(Some(publish_promoted(
+                config,
+                pid,
+                old_pid,
+                retained_listen,
+                session_ids.len(),
+            )));
         }
     }
-    let _ = live::publish_listen(config, config.options.listen, Some(started));
-    let _ = live::publish_canonical_rebind(config, config.options.listen, started);
+    bail!(
+        "wait for promoted canonical listener; see {}",
+        config.log_path.display()
+    );
+}
+
+fn publish_promoted(
+    config: &ServiceConfig,
+    pid: u32,
+    old_pid: u32,
+    retained_listen: SocketAddr,
+    retained_sessions: usize,
+) -> String {
+    let _ = live::publish_listen(config, config.options.listen, Some(pid));
+    let _ = live::publish_canonical_rebind(config, config.options.listen, pid);
     eprintln!(
-        "claudex: promoted build {} to {} (previous pid {old_pid} retained on {} for {} in-flight session(s); launch TUI kept)",
+        "claudex: promoted build {} to {} (previous pid {old_pid} retained on {} for {retained_sessions} in-flight session(s); launch TUI kept)",
         env!("CLAUDEX_BUILD_ID"),
         config.base_url(),
-        retained_listen,
-        session_ids.len()
+        retained_listen
     );
-    Ok(Some(config.base_url()))
+    config.base_url()
 }
 
 pub(super) fn current_build_ready(health: &Health, expected_pid: Option<u32>) -> bool {
