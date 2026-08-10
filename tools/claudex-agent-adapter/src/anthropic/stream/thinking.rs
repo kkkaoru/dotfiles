@@ -227,7 +227,10 @@ impl ThinkingState {
         }
         let open = self.open.as_mut().expect("progress block just opened");
         // Skip duplicate Status chrome; SSE can only append.
-        if open.text.ends_with(status) {
+        // Use trimmed comparison to handle trailing newlines from rewrite.
+        let status_trimmed = status.trim_end();
+        let buffer_trimmed = open.text.trim_end();
+        if buffer_trimmed.ends_with(status_trimmed) && !status_trimmed.is_empty() {
             return Ok(());
         }
         open.text.push_str(status);

@@ -94,4 +94,37 @@ mod tests {
                 .is_some_and(|open| open.text.contains("promoted"))
         );
     }
+
+    #[tokio::test]
+    async fn progress_status_dedup_with_trailing_newline_after_rewrite() {
+        // Edge case: after strip_worker_status_lines, buffer may end with \n.
+        // Appending same status again should dedup, not double-emit.
+        let mut state = ThinkingState {
+            open: Some(OpenThinking {
+                index: 0,
+                item_id: "claudex_provider_progress".to_owned(),
+                summary_index: 0,
+                signature: "sig".to_owned(),
+                text: "Status: old line\n".to_owned(), // trailing \n from rewrite
+            }),
+        };
+        let mut blocks = vec![json!({
+            "type":"thinking",
+            "thinking":"Status: old line\n",
+            "signature":"sig"
+        })];
+        // Now append the same status (simulating replace_live_worker_status).
+        let status = "Status: old line\n"; // same status with newline
+        state
+            .progress_status_on(&mut blocks, status, true, None)
+            .await
+            .expect("dedup with trailing newline");
+        // Verify text didn't duplicate.
+        let text = state.open.as_ref().map(|open| open.text.as_str());
+        assert_eq!(
+            text,
+            Some("Status: old line\n"),
+            "duplicate status with trailing newline should be deduplicated"
+        );
+    }
 }
