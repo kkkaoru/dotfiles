@@ -149,6 +149,24 @@ fn stop_waiter_ignores_missing_self_and_dead_pids() {
 }
 
 #[test]
+fn arm_respawns_when_existing_waiter_build_differs() {
+    let root = tempfile::tempdir().expect("pending hot-swap fixture");
+    let config = config(root.path(), "127.0.0.1:8321".parse().expect("listen"));
+    let path = state_path(&config).expect("state path");
+    write_state(
+        &path,
+        &PendingHotSwap {
+            build_id: "other-build".to_owned(),
+            service_config_fingerprint: config.service_config_fingerprint.clone(),
+            pid: 6161,
+        },
+    )
+    .expect("foreign build");
+    let respawn = arm_with(&config, |_| Ok(6262), |pid| pid == 6161).expect("foreign build arm");
+    assert_eq!(respawn, ArmOutcome::Spawned { pid: 6262 });
+}
+
+#[test]
 fn clear_and_disarm_are_noops_when_log_has_no_parent() {
     let mut cfg = config(
         tempfile::tempdir().expect("orphan log fixture").path(),
