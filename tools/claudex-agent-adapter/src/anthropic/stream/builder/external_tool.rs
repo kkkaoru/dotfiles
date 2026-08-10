@@ -1,10 +1,13 @@
 use std::collections::HashMap;
+
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
 use uuid::Uuid;
+
 use super::{SegmentBuilder, ToolCall};
 use crate::anthropic::stream::protocol::{StreamSender, send_tool_use};
 use crate::anthropic::{Bridge, Session, retention::record_pending_tool};
+
 #[derive(Clone, Copy)]
 pub(super) struct ExternalToolContext<'a> {
     pub(super) bridge: &'a Bridge,
@@ -13,6 +16,7 @@ pub(super) struct ExternalToolContext<'a> {
     pub(super) system: &'a Value,
     pub(super) stream: Option<&'a StreamSender>,
 }
+
 pub(super) fn requested_external_tool_name<'a>(
     names: &'a HashMap<String, String>,
     provider_name: &str,
@@ -24,6 +28,7 @@ pub(super) fn requested_external_tool_name<'a>(
             .map(String::as_str)
     })
 }
+
 pub(super) async fn reject_unrequested_tool(
     bridge: &Bridge,
     session: &Session,
@@ -47,6 +52,7 @@ pub(super) async fn reject_unrequested_tool(
         .await
         .context("failed to reject an unrequested provider tool")
 }
+
 pub(in crate::anthropic) fn unrequested_tool_reply(name: &str) -> (String, bool) {
     if crate::anthropic::session::is_main_session_only_tool(name) {
         return (
@@ -59,6 +65,7 @@ pub(in crate::anthropic) fn unrequested_tool_reply(name: &str) -> (String, bool)
         false,
     )
 }
+
 fn hydrate_external_tool_arguments(
     context: &ExternalToolContext<'_>,
     original_name: &str,
@@ -84,6 +91,7 @@ fn hydrate_external_tool_arguments(
     );
     arguments
 }
+
 impl SegmentBuilder {
     pub(super) async fn external_tool_call(
         &mut self,
@@ -141,6 +149,7 @@ impl SegmentBuilder {
         self.emit_external_tool_use(context, original_name, call_id, request_id, arguments)
             .await
     }
+
     async fn emit_external_tool_use(
         &mut self,
         context: ExternalToolContext<'_>,
@@ -196,6 +205,7 @@ impl SegmentBuilder {
         self.external_tool_calls += 1;
         Ok(())
     }
+
     async fn prepare_blocks_for_external_tool(
         &mut self,
         original_name: &str,
