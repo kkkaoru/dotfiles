@@ -13,9 +13,11 @@ const SYNC_NEEDLES: &[&str] = &[
     "wait for the result",
     "wait for results",
     "同期で",
+    "同期して",
     "同期完了",
     "フォアグラウンド",
     "結果を待って",
+    "待ってから",
     "終わるまで待って",
 ];
 
@@ -197,8 +199,22 @@ mod tests {
         assert!(user_requires_synchronous_results(&[json!({
             "role":"user",
             "content":[
-                reminder,
+                reminder.clone(),
                 {"type":"text","text":"同期で結果を待ってから次へ進めて"}
+            ]
+        })]));
+        assert!(user_requires_synchronous_results(&[json!({
+            "role":"user",
+            "content":[
+                reminder.clone(),
+                {"type":"text","text":"待ってから次へ進めて"}
+            ]
+        })]));
+        assert!(user_requires_synchronous_results(&[json!({
+            "role":"user",
+            "content":[
+                reminder,
+                {"type":"text","text":"同期して結果を見てから続けて"}
             ]
         })]));
     }

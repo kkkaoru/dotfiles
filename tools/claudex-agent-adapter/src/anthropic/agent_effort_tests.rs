@@ -312,7 +312,7 @@ mod tests {
             &[json!({
                 "role":"user",
                 "content":[
-                    reminder,
+                    reminder.clone(),
                     {"type":"text","text":"同期で結果を待ってから次へ進めて"}
                 ]
             })],
@@ -321,6 +321,28 @@ mod tests {
         assert_eq!(
             sync["run_in_background"], false,
             "sync request after a CC reminder block must not stay background"
+        );
+
+        let (_, wait_then) = prepare_arguments_for_user(
+            "Agent",
+            "tool-cc-wait-then",
+            &json!({
+                "prompt":"Assess production configuration paths",
+                "subagent_type":"Explore",
+                "run_in_background":false
+            }),
+            &[json!({
+                "role":"user",
+                "content":[
+                    reminder.clone(),
+                    {"type":"text","text":"待ってから次へ進めて"}
+                ]
+            })],
+            &json!(null),
+        );
+        assert_eq!(
+            wait_then["run_in_background"], false,
+            "待ってから after a CC reminder must stay foreground"
         );
     }
 
