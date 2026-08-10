@@ -145,6 +145,13 @@ fn applies_domain_filters_to_search_urls() {
         &[]
     ));
     assert!(!domain_allowed("not-a-url", &[], &[]));
+    // Empty allow-list means any https host is allowed (unless blocked).
+    assert!(domain_allowed("https://anywhere.example/a", &[], &[]));
+    assert!(!domain_allowed(
+        "https://blocked.example.com/a",
+        &[],
+        &blocked
+    ));
 }
 
 #[tokio::test]
