@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::Arc,
     time::Instant,
 };
@@ -7,7 +7,7 @@ use std::{
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, Semaphore};
 
-use crate::agent_backend::AgentBackend;
+use crate::agent_backend::{AcpLaunch, AgentBackend, BackendKind, BackendRoute, WebSearchMode};
 
 use super::*;
 
@@ -383,15 +383,23 @@ fn async_launch_results_skip_blank_tool_use_ids() {
 }
 
 fn handoff_session(pending: HashMap<String, Value>) -> Arc<super::super::Session> {
+    handoff_session_with("handoff-thread", pending, HashSet::new())
+}
+
+fn handoff_session_with(
+    thread_id: &str,
+    pending: HashMap<String, Value>,
+    consumed: HashSet<String>,
+) -> Arc<super::super::Session> {
     let slots = Arc::new(Semaphore::new(1));
     Arc::new(super::super::Session {
-        thread_id: "handoff-thread".to_owned(),
+        thread_id: thread_id.to_owned(),
         model: "main-model".to_owned(),
         disabled_subagent_models: Default::default(),
         signature: Arc::from("handoff-signature"),
         transcript: Mutex::new(Vec::new()),
         pending_tools: Mutex::new(pending),
-        consumed_tool_ids: Mutex::new(Default::default()),
+        consumed_tool_ids: Mutex::new(consumed),
         external_tool_names: HashMap::new(),
         client_user_id: None,
         claude_session_id: None,
@@ -455,5 +463,40 @@ async fn hands_control_back_when_no_session_owns_the_async_results() {
             .as_str()
             .unwrap_or_default()
             .contains("Background agent launched")
+    );
+}
+
+#[tokio::test]
+async fn keeps_provider_open_when_thread_ensure_fails() {
+    let backend = AgentBackend::spawn_routes(&[BackendRoute {
+        model: "failed".to_owned(),
+        backend: BackendKind::ConfiguredAcp,
+        effort: None,
+        model_provider: None,
+        model_catalog_json: None,
+        max_context_tokens: None,
+        max_concurrency: None,
+        model_prefixes: Vec::new(),
+        acp: Some(AcpLaunch {
+            program: "/definitely/missing/claudex-acp".to_owned(),
+            arguments: Vec::new(),
+        }),
+        web_search_mode: WebSearchMode::default(),
+    }]);
+    let bridge = Bridge::new_with_backend(backend, "failed".to_owned());
+    let mut consumed = HashSet::new();
+    consumed.insert("background".to_owned());
+    bridge.sessions.lock().await.push(handoff_session_with(
+        "0:missing-thread",
+        HashMap::new(),
+        consumed,
+    ));
+
+    let response = bridge
+        .async_agent_launch_handoff(&background_agent_request("background"))
+        .await;
+    assert!(
+        response.is_none(),
+        "handoff must abort when the owning thread cannot be ensured"
     );
 }
