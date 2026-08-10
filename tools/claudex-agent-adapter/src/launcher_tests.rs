@@ -850,6 +850,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn wait_idle_start_defers_when_a_busy_listener_appears_during_pause() {
+        let root = tempfile::tempdir().expect("wait-idle start defer fixture");
+        let mut cfg = config();
+        cfg.options.listen = unused_listen();
+        cfg.log_path = root.path().join("adapter.log");
+        cfg.lock_path = root.path().join("adapter.lock");
+        let listen = cfg.options.listen;
+        let mut busy = healthy(&cfg);
+        busy.build_id = "old-build".to_owned();
+        busy.active_http_requests = 1;
+        let reusable = healthy(&cfg);
+        let responses = vec![
+            health_response(&busy),
+            health_response(&reusable),
+            http_response("200 OK", "{}"),
+        ];
+        let _pause = ensure::WaitIdleInspectPause::arm(Duration::from_millis(80));
+        let server = thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(40));
+            let listener = TcpListener::bind(listen).expect("busy defer listener");
+            serve_all_responses(&listener, responses);
+        });
+        let url = ensure::run(&cfg, ensure::Mode::WaitIdle)
+            .await
+            .expect("wait-idle Start→Defer should keep polling until Reuse");
+        assert_eq!(url, cfg.base_url());
+        server.join().expect("busy defer server");
+    }
+
+    #[tokio::test]
     async fn wait_idle_replace_defers_when_work_returns_then_reuses() {
         let root = tempfile::tempdir().expect("wait-idle replace defer fixture");
         let mut cfg = config();
