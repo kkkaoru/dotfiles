@@ -20,9 +20,14 @@ pub(super) async fn reserve_matching_session(
         let Ok(gate) = Arc::clone(&session.gate).try_lock_owned() else {
             continue;
         };
-        // Pure mid-turn follow-ups arrive while Claude tools are still pending.
-        // Skipping those sessions forced a cold start and dropped the user text;
-        // callers settle/reject pending tools before starting the new turn.
+        // Idle sessions that still own Claude tool_use blocks are waiting for
+        // tool_result (or TaskStop/TaskOutput control). Reclaiming them here
+        // would settle those launches and break parallel-agent follow-ups.
+        // Busy/preempt paths may still abandon pending tools after a settled
+        // cancel so a true mid-turn interrupt can continue on the same thread.
+        if has_pending_tools(&session).await {
+            continue;
+        }
         let Some(existing_len) = candidate_length(&session, signature, messages).await else {
             continue;
         };

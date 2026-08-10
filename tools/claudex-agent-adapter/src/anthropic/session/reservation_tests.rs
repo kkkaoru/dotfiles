@@ -256,7 +256,7 @@ async fn find_busy_skips_idle_sessions() {
 }
 
 #[tokio::test]
-async fn reserve_reclaims_idle_session_with_pending_tools_for_pure_mid_turn() {
+async fn reserve_skips_idle_session_with_pending_tools() {
     let session = Arc::new(session("main", Some("client")));
     session
         .pending_tools
@@ -268,9 +268,11 @@ async fn reserve_reclaims_idle_session_with_pending_tools_for_pure_mid_turn() {
         &Arc::from("signature"),
         &[json!({"role":"user","content":"follow-up"})],
     )
-    .await
-    .expect("pure mid-turn must reclaim the pending-tool session");
-    assert!(Arc::ptr_eq(&selected.session, &session));
+    .await;
+    assert!(
+        selected.is_none(),
+        "idle pending-tool sessions stay reserved for tool_result / Task* control"
+    );
 }
 
 #[tokio::test]
