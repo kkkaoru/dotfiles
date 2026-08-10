@@ -124,6 +124,7 @@ async fn apply_inspected_state(
         ServiceState::Reuse => {
             pending_hot_swap::clear_if_current(config);
             let _ = super::live::publish_listen(config, config.options.listen, None);
+            super::promote::release_idle_retained(client, config).await;
             return Ok(config.base_url());
         }
         ServiceState::Defer {

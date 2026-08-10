@@ -470,6 +470,32 @@ fn recognizes_cursor_thought_for_filler() {
             super::ACTIVITY_KEEPALIVE_INTERVAL
         )
     );
+    assert_eq!(
+        super::SUBAGENT_PROVIDER_SILENCE_JUDGMENT,
+        Duration::from_secs(20 * 60)
+    );
+    assert!(
+        super::SUBAGENT_PROVIDER_SILENCE_JUDGMENT > Duration::from_secs(600),
+        "judgment window must exceed Claude Code's ~600s watchdog so keepalives can cover real quiet work"
+    );
+    let mut subagent = SegmentBuilder::new(1).with_subagent(true);
+    assert!(
+        subagent.subagent_provider_silence_exceeded(Duration::ZERO),
+        "SubAgents must be eligible for silence judgment"
+    );
+    subagent.note_visible_provider_activity();
+    assert!(
+        !subagent.subagent_provider_silence_exceeded(Duration::from_secs(60)),
+        "visible provider activity must reset the silence clock"
+    );
+    assert!(
+        !SegmentBuilder::new(1).subagent_provider_silence_exceeded(Duration::ZERO),
+        "main turns must not use SubAgent silence judgment"
+    );
+    assert!(
+        super::types::fail_if_subagent_provider_silent(&SegmentBuilder::new(1).with_subagent(false))
+            .is_ok()
+    );
 }
 
 #[tokio::test]
@@ -1555,7 +1581,7 @@ async fn refreshes_activity_deadlines_and_detects_closed_streams() {
     let (sender, receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
     let mut builder = SegmentBuilder::new(1);
     let mut deadline = Box::pin(tokio::time::sleep(std::time::Duration::from_secs(1)));
-    super::refresh_activity_keepalive(
+    super::control::refresh_activity_keepalive(
         &mut builder,
         Some(&sender),
         deadline.as_mut(),

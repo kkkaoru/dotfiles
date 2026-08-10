@@ -37,6 +37,9 @@ pub(in crate::anthropic) struct SegmentBuilder {
     /// Do not dump canned ▶/still-working text chrome.
     paint_command_code_progress: bool,
     turn_started_at: Instant,
+    /// Last decoded provider event that counts as real progress (not synthetic
+    /// keepalive). SubAgent silence judgment keys off this instant.
+    last_visible_provider_at: Instant,
     external_tool_calls: usize,
     /// Provider call IDs already shown as progress text. ACP can report the same
     /// call first as ToolCall and again as a populated ToolCallUpdate.
@@ -77,6 +80,7 @@ impl SegmentBuilder {
             is_subagent: false,
             paint_command_code_progress: false,
             turn_started_at: Instant::now(),
+            last_visible_provider_at: Instant::now(),
             external_tool_calls: 0,
             provider_tool_calls: Vec::new(),
             provider_tool_terminal_ids: HashSet::new(),
@@ -138,6 +142,24 @@ impl SegmentBuilder {
 
     pub(in crate::anthropic::stream::builder) fn note_provider_turn_activity(&mut self) {
         self.saw_provider_turn_activity = true;
+        self.note_visible_provider_activity();
+    }
+
+    pub(super) fn note_visible_provider_activity(&mut self) {
+        self.last_visible_provider_at = Instant::now();
+    }
+
+    /// Activity-based SubAgent bound: synthetic keepalives do not refresh this.
+    pub(super) fn subagent_provider_silence_exceeded(
+        &self,
+        judgment: std::time::Duration,
+    ) -> bool {
+        self.is_subagent
+            && self
+                .last_visible_provider_at
+                .elapsed()
+                .checked_sub(judgment)
+                .is_some()
     }
 
     pub(super) fn has_committed_output(&self) -> bool {

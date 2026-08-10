@@ -1,6 +1,6 @@
-use std::{ops::ControlFlow, sync::Arc, time::Duration};
+use std::{ops::ControlFlow, sync::Arc};
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use axum::{body::Body, http::Response};
 use serde_json::Value;
 use tokio::{sync::mpsc, time::sleep};
@@ -8,7 +8,6 @@ use tokio::{sync::mpsc, time::sleep};
 use super::{
     Bridge, MessagesRequest, Segment, Session,
     model_concurrency::Ticket,
-    stream_batch::{NextEvent, next_event},
 };
 
 mod acp_launch_queue;
@@ -32,31 +31,29 @@ mod thinking;
 mod tool_call_parser;
 mod turn;
 mod types;
+mod wait_event;
 pub(super) mod usage_limit;
 pub(in crate::anthropic) use turn::StreamTurn;
-use types::{StreamEventState, StreamWaitResult, reset_activity_deadline, stream_activity_delays};
-pub(super) use types::{StreamWaitInput, ToolCall, is_provider_stream_closed};
+use types::{StreamEventState, StreamWaitResult, stream_activity_delays};
+pub(super) use types::{
+    ACTIVITY_KEEPALIVE_INTERVAL, INITIAL_ACTIVITY_DELAY, SUBAGENT_INITIAL_ACTIVITY_DELAY,
+    SUBAGENT_PROVIDER_SILENCE_JUDGMENT, StreamWaitInput, ToolCall, is_provider_stream_closed,
+};
 
 use builder::SegmentBuilder;
 pub(in crate::anthropic) use control::commit_transcript;
-use control::refresh_activity_keepalive;
 #[cfg(test)]
 use prepare::prepare_with_activity;
 use prepare::{PreparedStream, prime_subagent_sse};
 
 pub(super) use control::{error_flow, turn_flow};
+pub(super) use crate::anthropic::stream_batch::{NextEvent, next_event};
 #[cfg(test)]
 pub(super) use protocol::tool_use_frames;
 use protocol::{StreamSender, send_stream_error, sse_response};
 pub(super) use protocol::{
     message_start, send_stream_completion, send_stream_frame, streaming_sse_response,
 };
-pub(super) const ACTIVITY_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(4);
-/// Main-turn callers sit blank until the first decoded event. Sub-second paint
-/// keeps Claude Code / GPT / Codex hops feeling live without keepalive spam.
-pub(super) const INITIAL_ACTIVITY_DELAY: Duration = Duration::from_millis(250);
-/// SubAgent TUI stays on Nucleating until the first keepalive/tool chrome.
-pub(super) const SUBAGENT_INITIAL_ACTIVITY_DELAY: Duration = Duration::from_millis(100);
 
 impl Bridge {
     pub(super) fn streaming_messages(
@@ -208,69 +205,7 @@ impl Bridge {
         }
     }
 
-    async fn wait_for_stream_event(
-        &self,
-        session: &Arc<Session>,
-        events: Arc<crate::app_server::ThreadEvents>,
-        sse: &mut Option<&StreamSender>,
-        builder: &mut SegmentBuilder,
-        activity_interval: Duration,
-        activity_deadline: &mut std::pin::Pin<Box<tokio::time::Sleep>>,
-    ) -> Result<StreamWaitResult> {
-        let next = if let Some(sender) = *sse {
-            tokio::select! {
-                biased;
-                () = sender.closed() => {
-                    *sse = None;
-                    if builder.is_subagent {
-                        return Ok(self.subagent_sse_closed(session, events, builder).await);
-                    }
-                    return Ok(StreamWaitResult::Done(Box::new(
-                        self.disconnect_stream(session, events).await,
-                    )));
-                }
-                next = next_event(&events, builder.has_external_tool_calls()) => next,
-                () = &mut *activity_deadline => {
-                    refresh_activity_keepalive(
-                        builder,
-                        Some(sender),
-                        activity_deadline.as_mut(),
-                        activity_interval,
-                    )
-                    .await?;
-                    return Ok(StreamWaitResult::NoEvent);
-                }
-            }
-        } else {
-            tokio::select! {
-                biased;
-                next = next_event(&events, builder.has_external_tool_calls()) => next,
-                () = &mut *activity_deadline => {
-                    refresh_activity_keepalive(
-                        builder,
-                        None,
-                        activity_deadline.as_mut(),
-                        activity_interval,
-                    )
-                    .await?;
-                    return Ok(StreamWaitResult::NoEvent);
-                }
-            }
-        };
-        match next {
-            NextEvent::Event(event) => {
-                reset_activity_deadline(&event, activity_deadline, activity_interval);
-                Ok(StreamWaitResult::Event(event))
-            }
-            NextEvent::ExternalBatchReady => Ok(StreamWaitResult::Done(Box::new(
-                self.external_batch_segment(session, events, builder, *sse)
-                    .await?,
-            ))),
-            NextEvent::Closed => bail!("app-server event stream closed"),
-        }
-    }
-
-    async fn external_batch_segment(
+    pub(super) async fn external_batch_segment(
         &self,
         session: &Arc<Session>,
         events: Arc<crate::app_server::ThreadEvents>,

@@ -170,6 +170,37 @@ fn release_previous(config: &ServiceConfig, old_pid: u32) {
     }
 }
 
+/// Live-update may keep the previous daemon on an ephemeral port for sticky
+/// sessions. Once that generation is idle (or already gone), release it so
+/// orphan ACP children cannot accumulate across installs.
+pub(super) async fn release_idle_retained(client: &reqwest::Client, config: &ServiceConfig) {
+    let Some((path, generation)) = live::load_retained(config) else {
+        return;
+    };
+    let retained = config.with_listen(generation.listen);
+    let live_pid = health::fetch_health(client, config)
+        .await
+        .and_then(|health| health.pid);
+    if live_pid == Some(generation.pid) {
+        return;
+    }
+    match health::fetch_health(client, &retained).await {
+        Some(health) if health.pid == Some(generation.pid) && health.has_active_work() => {}
+        Some(health) if health.pid == Some(generation.pid) => {
+            release_previous(config, generation.pid);
+            let _ = std::fs::remove_file(&path);
+            eprintln!(
+                "claudex: released idle retained adapter pid {} on {}",
+                generation.pid, generation.listen
+            );
+        }
+        _ => {
+            release_previous(config, generation.pid);
+            let _ = std::fs::remove_file(&path);
+        }
+    }
+}
+
 pub(super) fn current_build_ready(health: &Health, expected_pid: Option<u32>) -> bool {
     health.status == "ok"
         && health.build_id == env!("CLAUDEX_BUILD_ID")

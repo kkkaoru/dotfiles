@@ -148,6 +148,14 @@ pub(crate) fn read_retained(path: &Path) -> Result<Option<RetainedGeneration>> {
     Ok(Some(state))
 }
 
+pub(super) fn load_retained(
+    config: &ServiceConfig,
+) -> Option<(PathBuf, RetainedGeneration)> {
+    let path = retained_path(config).ok()?;
+    let generation = read_retained(&path).ok().flatten()?;
+    Some((path, generation))
+}
+
 fn write_live(path: &Path, state: &LiveState) -> Result<()> {
     write_json(path, state)
 }
