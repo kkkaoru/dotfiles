@@ -56,6 +56,11 @@ fn treats_unknown_task_lifecycle_ids_as_idempotent_success() {
         "type":"text",
         "text":"Error: No task found with ID: a3d7f2ca50556c9e5. Running background agents: a4496564387a2561f (Implement AzooKey pruning fix), a906c77ad60469b0a (Audit AzooKey pruning semantics)"
     })]));
+    assert!(!is_idempotent_task_lifecycle_error(&[
+        json!({"type":"text"}),
+        json!({"text":123}),
+        json!({"type":"tool_result"})
+    ]));
 }
 use crate::agent_backend::WebSearchMode;
 use crate::anthropic::{
