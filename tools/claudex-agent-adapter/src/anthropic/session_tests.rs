@@ -1707,12 +1707,16 @@ async fn detached_background_sessions_are_not_selected_but_route_one_late_result
         .expect("late result owner remains discoverable");
     assert!(Arc::ptr_eq(&found, &session));
 
+    // Settled background turns clear pending ownership before finish reattaches.
+    session.pending_tools.lock().await.clear();
     bridge.finish_detached_session(&session).await;
     assert!(bridge.detached_sessions.lock().await.is_empty());
+    assert_eq!(bridge.sessions.lock().await.len(), 1);
     assert!(bridge.find_result_session(&[result]).await.is_none());
     // Repeated completion is intentionally harmless when a late notification
     // races the background task's final cleanup.
     bridge.finish_detached_session(&session).await;
+    assert_eq!(bridge.sessions.lock().await.len(), 1);
 }
 
 #[tokio::test]
