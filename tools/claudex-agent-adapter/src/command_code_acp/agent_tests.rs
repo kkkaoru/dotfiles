@@ -224,6 +224,56 @@ async fn serve_io_emits_web_search_query_on_shared_tool_chrome() {
 }
 
 #[tokio::test]
+async fn serve_io_errors_when_failed_result_has_no_streamed_text() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (_root, program) = mock_cmd(
+                "#!/bin/sh\ncat <<'EOF'\n{\"type\":\"result\",\"subtype\":\"error\",\"sessionId\":\"cc-fail\",\"stopReason\":\"error\",\"finalText\":\"\",\"error\":\"boom\"}\nEOF\n",
+            );
+            let (client_write, server_read) = tokio::io::duplex(16 * 1024);
+            let (server_write, client_read) = tokio::io::duplex(16 * 1024);
+            tokio::task::spawn_local(serve_io(options_for(program), server_read, server_write));
+            let (connection, io) = acp::ClientSideConnection::new(
+                CaptureClient {
+                    updates: Rc::new(RefCell::new(Vec::new())),
+                },
+                client_write.compat_write(),
+                client_read.compat(),
+                |future| {
+                    tokio::task::spawn_local(future);
+                },
+            );
+            tokio::task::spawn_local(async move {
+                let _ = io.await;
+            });
+            connection
+                .initialize(acp::InitializeRequest::new(acp::ProtocolVersion::V1))
+                .await
+                .expect("initialize");
+            let session = connection
+                .new_session(acp::NewSessionRequest::new(
+                    std::env::current_dir().unwrap(),
+                ))
+                .await
+                .expect("session");
+            let err = connection
+                .prompt(acp::PromptRequest::new(
+                    session.session_id.clone(),
+                    vec![acp::ContentBlock::Text(acp::TextContent::new("hi"))],
+                ))
+                .await
+                .expect_err("empty failed result must surface as ACP error");
+            let rendered = format!("{err:?}");
+            assert!(
+                rendered.contains("boom") || rendered.to_lowercase().contains("internal"),
+                "{rendered}"
+            );
+        })
+        .await;
+}
+
+#[tokio::test]
 async fn serve_io_maps_max_turns_from_stop_reason_alone() {
     let local = tokio::task::LocalSet::new();
     local

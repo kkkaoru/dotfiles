@@ -270,8 +270,9 @@ async fn emit_result(
     streamed_message: &str,
 ) -> acp::Result<acp::PromptResponse> {
     let failed = result_is_error(result);
-    let text = result_message(result);
-    if let Some(text) = remaining_final_message(&text, streamed_message) {
+    // Only `finalText` may become an assistant chunk. Error payloads from
+    // `result_message` must not masquerade as a successful EndTurn answer.
+    if let Some(text) = remaining_final_message(&result.final_text, streamed_message) {
         agent
             .notify(
                 session_id,
@@ -285,6 +286,10 @@ async fn emit_result(
             result
                 .error
                 .clone()
+                .or_else(|| {
+                    let text = result_message(result);
+                    (!text.trim().is_empty()).then_some(text)
+                })
                 .unwrap_or_else(|| "Command Code headless failed".to_owned()),
         ));
     }
