@@ -23,7 +23,8 @@ mod execute;
 use execute::{TurnExecution, execute_turn};
 
 /// How long a same-session replace waits for the prior turn to leave `active_turns`.
-const REPLACE_SETTLE_TIMEOUT: Duration = Duration::from_millis(500);
+/// Bound tightly so mid-turn user steering does not stall the Claude Code UI.
+pub(super) const REPLACE_SETTLE_TIMEOUT: Duration = Duration::from_millis(200);
 
 pub(super) struct PreparedTurn {
     pub(super) session_id: String,

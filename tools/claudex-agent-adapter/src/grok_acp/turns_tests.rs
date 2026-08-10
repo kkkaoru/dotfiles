@@ -4,6 +4,15 @@ use anyhow::anyhow;
 use tokio_util::compat::{TokioAsyncReadCompatExt as _, TokioAsyncWriteCompatExt as _};
 
 #[test]
+fn replace_settle_timeout_stays_tight_for_mid_turn_steering() {
+    assert_eq!(REPLACE_SETTLE_TIMEOUT, Duration::from_millis(200));
+    assert!(
+        REPLACE_SETTLE_TIMEOUT <= Duration::from_millis(250),
+        "same-session replace must not stall Claude Code mid-turn steering"
+    );
+}
+
+#[test]
 fn prepares_prefixed_prompts_and_provider_specific_effort() {
     let instructions = Rc::new(RefCell::new(HashMap::from([(
         "session".to_owned(),
