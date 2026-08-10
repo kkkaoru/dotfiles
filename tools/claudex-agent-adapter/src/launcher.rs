@@ -58,7 +58,7 @@ const LOCAL_TOKEN: &str = "claudex-local";
 #[cfg(not(test))]
 const START_TIMEOUT: Duration = Duration::from_secs(10);
 #[cfg(test)]
-const START_TIMEOUT: Duration = Duration::from_millis(50);
+const START_TIMEOUT: Duration = Duration::from_millis(500);
 const START_INITIAL_POLL_DELAY: Duration = Duration::from_millis(10);
 const START_MAX_POLL_DELAY: Duration = Duration::from_millis(250);
 pub(crate) const SERVICE_CONFIG_FINGERPRINT_ENV: &str = "CLAUDEX_SERVICE_CONFIG_FINGERPRINT";

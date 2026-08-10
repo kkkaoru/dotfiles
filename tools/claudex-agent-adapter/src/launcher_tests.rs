@@ -1417,6 +1417,101 @@ HTTPServer((host, int(port)), Handler).serve_forever()
         assert!(!error.to_string().is_empty());
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn fallback_persists_state_after_a_matching_listener_becomes_ready() {
+        let root = tempfile::tempdir().expect("fallback ready fixture");
+        let mut cfg = config();
+        cfg.options.listen = unused_listen();
+        cfg.log_path = root.path().join("adapter.log");
+        cfg.lock_path = root.path().join("adapter.lock");
+        let dummy = root.path().join("claudex-agent-adapter");
+        // Fingerprints must match the reserved fallback listen config; listen is not
+        // part of the service fingerprint, so the primary cfg values remain valid.
+        let script = format!(
+            r#"#!/usr/bin/python3
+import json, os, sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+def listen_addr():
+    args = sys.argv
+    for i, arg in enumerate(args):
+        if arg == "--listen" and i + 1 < len(args):
+            return args[i + 1]
+    raise SystemExit("missing --listen")
+
+host, port = listen_addr().rsplit(":", 1)
+host = host.strip("[]")
+BODY = {{
+    "status": "ok",
+    "pid": os.getpid(),
+    "protocol_version": {protocol},
+    "build_id": {build:?},
+    "model": {model:?},
+    "codex_config_fingerprint": {codex:?},
+    "service_config_fingerprint": {service:?},
+    "backend_routes": {routes},
+    "worker_routes": [],
+    "search_worker_routes": [],
+    "subscription_max_processes": {max_proc},
+    "subscription_timeout_minutes": {timeout},
+}}
+
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, *_args):
+        return
+    def do_GET(self):
+        path = self.path.split("?", 1)[0]
+        if path == "/health":
+            payload = json.dumps(BODY).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+            return
+        if path == "/v1/models":
+            self.send_response(200)
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"{{}}")
+            return
+        self.send_error(404)
+
+HTTPServer((host, int(port)), Handler).serve_forever()
+"#,
+            protocol = ADAPTER_PROTOCOL_VERSION,
+            build = env!("CLAUDEX_BUILD_ID"),
+            model = cfg.options.model,
+            codex = cfg.codex_config_fingerprint,
+            service = cfg.service_config_fingerprint,
+            routes = serde_json::to_string(&route_descriptions(&cfg.options.routes))
+                .expect("routes json"),
+            max_proc = cfg.options.subscription_max_processes,
+            timeout = cfg.options.subscription_timeout_minutes,
+        );
+        std::fs::write(&dummy, script).expect("ready fallback dummy");
+        std::fs::set_permissions(&dummy, std::fs::Permissions::from_mode(0o755))
+            .expect("ready fallback executable");
+        cfg.executable = dummy.clone();
+        let url = fallback::ensure_current_generation(&reqwest::Client::new(), &cfg)
+            .await
+            .expect("ready fallback listener should be persisted");
+        let state_path = root
+            .path()
+            .join(format!("fallback.{}.json", cfg.options.listen.port()));
+        let state: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&state_path).expect("read fallback state"))
+                .expect("decode fallback state");
+        assert_eq!(state["build_id"], env!("CLAUDEX_BUILD_ID"));
+        assert_eq!(
+            state["service_config_fingerprint"],
+            cfg.service_config_fingerprint
+        );
+        assert_eq!(url, format!("http://{}", state["listen"].as_str().unwrap()));
+        kill_dummy(&dummy);
+    }
+
     #[tokio::test]
     async fn after_update_failure_without_generation_keeps_the_original_error() {
         let error = recovery::after_update_failure(
