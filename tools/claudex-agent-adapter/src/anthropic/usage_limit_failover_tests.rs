@@ -1507,3 +1507,69 @@ fn subagent_failover_without_preferred_qwen_still_picks_a_sibling() {
         .expect("cursor sibling");
     assert_eq!(failover.model, CURSOR_AUTO);
 }
+
+#[tokio::test]
+async fn provider_messages_failover_keeps_usage_limit_when_no_target_is_configured() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::Arc;
+
+    let root = tempfile::tempdir().expect("failover no-target fixture");
+    let source = root.path().join("source");
+    std::fs::create_dir(&source).expect("source home");
+    std::fs::write(source.join("auth.json"), "{}").expect("auth");
+    let program = root.path().join("app-server");
+    std::fs::write(
+        &program,
+        r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s\n' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$line" in
+    *'"method":"thread/start"'*)
+      printf '{"id":%s,"error":{"message":"You'\''ve hit your usage limit."}}\n' "$id"
+      ;;
+    *)
+      printf '{"id":%s,"result":{}}\n' "$id"
+      ;;
+  esac
+done
+"#,
+    )
+    .expect("usage-limit app-server");
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
+        .expect("executable app-server");
+    let app = crate::app_server::AppServer::spawn_with_program(
+        "main",
+        &program,
+        &source,
+        &root.path().join("isolated"),
+    )
+    .await
+    .expect("start usage-limit app-server");
+    let bridge = Arc::new(
+        Bridge::new_with_backend(AgentBackend::codex(app), "main".to_owned())
+            .with_usage_limit_cache_home(root.path()),
+    );
+    let request = MessagesRequest {
+        model: "main".to_owned(),
+        system: Value::Null,
+        messages: vec![serde_json::json!({"role":"user","content":"ping"})],
+        tools: Vec::new(),
+        stream: false,
+        output_config: Value::Null,
+        metadata: Value::Null,
+        working_directory: None,
+        disabled_subagent_models: Default::default(),
+        claudex_collaborator_model: None,
+    };
+    let error = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        bridge.provider_messages_with_usage_limit_failover(request, None, false, false, false),
+    )
+    .await
+    .expect("failover without target should not hang")
+    .expect_err("usage-limit without failover target must stay failed");
+    assert!(
+        error.to_string().contains("usage limit"),
+        "{error:#}"
+    );
+}
