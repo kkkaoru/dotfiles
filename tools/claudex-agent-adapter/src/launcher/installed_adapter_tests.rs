@@ -217,4 +217,148 @@ fn is_executable_rejects_missing_and_non_executable_files() {
         fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
         assert!(!is_executable(&file));
     }
+    let dir = root.path().join("dir");
+    fs::create_dir(&dir).unwrap();
+    assert!(!is_executable(&dir), "directories are not executable adapters");
+}
+
+#[test]
+fn unify_errors_when_canonical_binary_is_missing() {
+    let _guard = EnvGuard::push();
+    let root = tempfile::tempdir().expect("home");
+    let home = root.path();
+    fs::create_dir_all(home.join(".cargo/bin")).unwrap();
+    fs::create_dir_all(home.join(".local/bin")).unwrap();
+    unsafe {
+        env::set_var("HOME", home);
+        env::set_var("CARGO_HOME", home.join(".cargo"));
+        env::remove_var(ADAPTER_EXECUTABLE_ENV);
+    }
+    let error = unify_install_paths().expect_err("missing canonical");
+    assert!(
+        error.to_string().contains("canonical adapter is missing"),
+        "{error:#}"
+    );
+}
+
+#[test]
+fn unify_promotes_when_local_is_newer_than_canonical() {
+    let _guard = EnvGuard::push();
+    let root = tempfile::tempdir().expect("home");
+    let home = root.path();
+    let cargo_bin = home.join(".cargo/bin");
+    let local_bin = home.join(".local/bin");
+    fs::create_dir_all(&cargo_bin).unwrap();
+    fs::create_dir_all(&local_bin).unwrap();
+    let local = local_bin.join("claudex-agent-adapter");
+    let cargo = cargo_bin.join("claudex-agent-adapter");
+    fs::write(&cargo, b"old-canonical").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    fs::write(&local, b"newer-local").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&local, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    unsafe {
+        env::set_var("HOME", home);
+        env::set_var("CARGO_HOME", home.join(".cargo"));
+        env::remove_var(ADAPTER_EXECUTABLE_ENV);
+    }
+    let resolved = unify_install_paths().expect("unify newer local");
+    assert_eq!(resolved, cargo);
+    assert_eq!(fs::read(&cargo).unwrap(), b"newer-local");
+    assert!(local.is_symlink());
+}
+
+#[test]
+fn relink_replaces_a_stale_symlink_and_accepts_relative_targets() {
+    let _guard = EnvGuard::push();
+    let root = tempfile::tempdir().expect("home");
+    let home = root.path();
+    let cargo_bin = home.join(".cargo/bin");
+    let local_bin = home.join(".local/bin");
+    fs::create_dir_all(&cargo_bin).unwrap();
+    fs::create_dir_all(&local_bin).unwrap();
+    let local = local_bin.join("claudex-agent-adapter");
+    let cargo = cargo_bin.join("claudex-agent-adapter");
+    let stale = cargo_bin.join("stale-adapter");
+    fs::write(&cargo, b"canonical").unwrap();
+    fs::write(&stale, b"stale").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::set_permissions(&stale, fs::Permissions::from_mode(0o755)).unwrap();
+        std::os::unix::fs::symlink(&stale, &local).unwrap();
+    }
+    unsafe {
+        env::set_var("HOME", home);
+        env::set_var("CARGO_HOME", home.join(".cargo"));
+        env::remove_var(ADAPTER_EXECUTABLE_ENV);
+    }
+    let resolved = unify_install_paths().expect("relink stale");
+    assert_eq!(resolved, cargo);
+    assert_eq!(fs::read_link(&local).unwrap(), cargo);
+
+    // Relative symlink that still resolves to canonical should be kept.
+    fs::remove_file(&local).unwrap();
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink("../../.cargo/bin/claudex-agent-adapter", &local).unwrap();
+    }
+    let resolved = unify_install_paths().expect("keep relative");
+    assert_eq!(resolved, cargo);
+    assert!(local.is_symlink());
+}
+
+#[test]
+fn notify_delegate_ignores_non_executable_override() {
+    let _guard = EnvGuard::push();
+    let root = tempfile::tempdir().expect("home");
+    let exe = root.path().join("not-exec");
+    fs::write(&exe, b"x").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&exe, fs::Permissions::from_mode(0o644)).unwrap();
+    }
+    unsafe {
+        env::set_var("HOME", root.path());
+        env::set_var(ADAPTER_EXECUTABLE_ENV, &exe);
+        env::remove_var(NOTIFY_IN_PROCESS_ENV);
+    }
+    assert!(notify_delegate_executable().is_none());
+}
+
+#[test]
+fn notify_delegate_uses_unified_install_when_override_absent() {
+    let _guard = EnvGuard::push();
+    let root = tempfile::tempdir().expect("home");
+    let home = root.path();
+    let cargo_bin = home.join(".cargo/bin");
+    fs::create_dir_all(&cargo_bin).unwrap();
+    fs::create_dir_all(home.join(".local/bin")).unwrap();
+    let cargo = cargo_bin.join("claudex-agent-adapter");
+    fs::write(&cargo, b"canonical").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    unsafe {
+        env::set_var("HOME", home);
+        env::set_var("CARGO_HOME", home.join(".cargo"));
+        env::remove_var(ADAPTER_EXECUTABLE_ENV);
+        env::remove_var(NOTIFY_IN_PROCESS_ENV);
+    }
+    assert_eq!(
+        notify_delegate_executable().as_deref(),
+        Some(cargo.as_path())
+    );
 }
