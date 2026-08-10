@@ -1,8 +1,10 @@
-use std::{fs, io::Cursor};
+use std::{fs, io::Cursor, sync::Mutex};
 
 use serde_json::{Value, json};
 
 use super::{handle, read_message, record_tools_call_to, tools, write_message};
+
+static LAUNCH_OWNER_ENV_LOCK: Mutex<()> = Mutex::new(());
 
 fn ndjson_response(message: Value) -> Value {
     let mut output = Vec::new();
@@ -125,6 +127,9 @@ fn writes_both_transport_encodings() {
 
 #[test]
 fn records_calls_to_each_configured_queue_with_defaults() {
+    let _guard = LAUNCH_OWNER_ENV_LOCK.lock().expect("launch owner env lock");
+    let previous = std::env::var_os("CLAUDEX_LAUNCH_OWNER");
+    unsafe { std::env::remove_var("CLAUDEX_LAUNCH_OWNER") };
     let root = tempfile::tempdir().expect("MCP log fixture");
     let queue = root.path().join("nested/queue.jsonl");
     let log = root.path().join("launch.log");
@@ -144,10 +149,15 @@ fn records_calls_to_each_configured_queue_with_defaults() {
         assert_eq!(payload["params"], Value::Null);
         assert!(payload.get("owner").is_none());
     }
+    match previous {
+        Some(value) => unsafe { std::env::set_var("CLAUDEX_LAUNCH_OWNER", value) },
+        None => unsafe { std::env::remove_var("CLAUDEX_LAUNCH_OWNER") },
+    }
 }
 
 #[test]
 fn records_launch_owner_when_env_is_set() {
+    let _guard = LAUNCH_OWNER_ENV_LOCK.lock().expect("launch owner env lock");
     let previous = std::env::var_os("CLAUDEX_LAUNCH_OWNER");
     unsafe { std::env::set_var("CLAUDEX_LAUNCH_OWNER", "session-a") };
     let root = tempfile::tempdir().expect("MCP owner fixture");
