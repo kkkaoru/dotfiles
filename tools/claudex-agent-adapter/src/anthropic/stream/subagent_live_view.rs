@@ -113,4 +113,26 @@ mod tests {
         assert!(view.saw_end_turn);
         assert!(view.saw_message_stop);
     }
+
+    #[test]
+    fn live_view_skips_incomplete_payload_fields() {
+        let mut view = SubAgentLiveView::default();
+        view.ingest_sse(
+            "event: content_block_start\n\
+             data: {\"type\":\"content_block_start\",\"content_block\":{\"type\":\"server_tool_use\",\"id\":\"1\",\"input\":{}}}\n\n\
+             event: content_block_delta\n\
+             data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"thinking_delta\"}}\n\n\
+             event: content_block_delta\n\
+             data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\"}}\n\n\
+             event: message_delta\n\
+             data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"max_tokens\"}}\n\n\
+             event: content_block_delta\n\
+             data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"signature_delta\",\"signature\":\"x\"}}\n\n",
+        );
+        assert!(view.visible_server_tools.is_empty());
+        assert!(view.visible_thinking.is_empty());
+        assert!(view.hidden_text.is_empty());
+        assert!(!view.saw_end_turn);
+        assert!(view.turn_still_open());
+    }
 }
