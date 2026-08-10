@@ -402,7 +402,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         body = json.dumps({{
             "status": "ok",
-            "pid": None,
+            "pid": __import__("os").getpid(),
             "protocol_version": PROTOCOL,
             "build_id": BUILD,
             "subscription_max_processes": 20,
