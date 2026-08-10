@@ -24,13 +24,6 @@ impl ThinkingState {
         self.open.is_some()
     }
 
-    pub(super) fn is_native_thought_open(&self) -> bool {
-        self.open.as_ref().is_some_and(|open| {
-            open.item_id != "claudex_provider_progress"
-                && open.item_id != "claudex_activity_keepalive"
-        })
-    }
-
     pub(super) async fn delta(
         &mut self,
         event: &Value,

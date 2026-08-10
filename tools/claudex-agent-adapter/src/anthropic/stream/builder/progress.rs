@@ -149,47 +149,16 @@ impl SegmentBuilder {
         }
         match self.filter_subagent_live_delta(raw) {
             Some(delta) if delta.contains("large tool output omitted") => {
-                if self.is_subagent {
-                    self.thinking
-                        .progress_status_keep_open(&mut self.blocks, &delta, stream)
-                        .await?;
-                } else {
-                    if self.thinking.is_native_thought_open() {
-                        self.thinking.close(&mut self.blocks, stream).await?;
-                    }
-                    self.thinking
-                        .progress_status(&mut self.blocks, &delta, stream)
-                        .await?;
-                    self.paint_post_thought_status(stream).await?;
-                }
+                self.thinking
+                    .progress_status_keep_open(&mut self.blocks, &delta, stream)
+                    .await?;
             }
             Some(delta) => {
-                let was_open = self.thinking.is_open();
-                if self.is_subagent {
-                    self.thinking
-                        .delta_text_coalesced(
-                            item_id,
-                            summary_index,
-                            &delta,
-                            &mut self.blocks,
-                            stream,
-                        )
-                        .await?;
-                } else {
-                    self.thinking
-                        .delta_text(item_id, summary_index, &delta, &mut self.blocks, stream)
-                        .await?;
-                    if was_open && !self.thinking.is_open() {
-                        self.paint_post_thought_status(stream).await?;
-                    }
-                }
+                self.thinking
+                    .delta_text_coalesced(item_id, summary_index, &delta, &mut self.blocks, stream)
+                    .await?;
             }
-            None => {
-                if self.thinking.is_native_thought_open() && !self.is_subagent {
-                    self.thinking.close(&mut self.blocks, stream).await?;
-                    self.paint_post_thought_status(stream).await?;
-                }
-            }
+            None => {}
         }
         Ok(())
     }
@@ -199,39 +168,21 @@ impl SegmentBuilder {
         status: &str,
         stream: Option<&StreamSender>,
     ) -> Result<()> {
-        if self.is_subagent {
-            return self
-                .thinking
-                .progress_status_keep_open(&mut self.blocks, status, stream)
-                .await;
-        }
-        if self.thinking.is_open() {
-            self.thinking.close(&mut self.blocks, stream).await?;
-        }
         self.thinking
-            .progress_status(&mut self.blocks, status, stream)
+            .progress_status_keep_open(&mut self.blocks, status, stream)
             .await
     }
 
-    async fn paint_post_thought_status(&mut self, stream: Option<&StreamSender>) -> Result<()> {
-        if let Some((_, title)) = self.provider_tool_calls.last() {
-            let title = compact_keepalive_title(title);
-            self.stream_progress_text(&format!("\n▶ {title}\n"), stream)
-                .await?;
-        }
-        self.activity_keepalive(stream).await
-    }
-
     fn filter_subagent_live_delta(&mut self, delta: &str) -> Option<String> {
-        if delta.trim().is_empty() || is_canned_worker_filler(delta) {
+        if delta.trim().is_empty() {
             return None;
         }
         let stripped = delta
             .lines()
-            .filter(|line| !is_canned_worker_filler(line))
+            .filter(|line| !line.trim().is_empty() && !is_canned_worker_filler(line))
             .collect::<Vec<_>>()
             .join("\n");
-        if stripped.trim().is_empty() {
+        if stripped.is_empty() {
             return None;
         }
         if is_bulk_tool_dump(&stripped) {

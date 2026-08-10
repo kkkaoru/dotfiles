@@ -131,6 +131,34 @@ async fn subagent_and_main_cover_bulk_dump_empty_delta_and_keepalive_title() {
         .activity_keepalive(None)
         .await
         .expect("short keepalive title");
+    subagent
+        .reasoning_delta(
+            &json!({"params":{"itemId":"r","summaryIndex":0,"delta":""}}),
+            None,
+        )
+        .await
+        .expect("empty subagent reasoning");
+    subagent
+        .reasoning_delta(
+            &json!({"params":{"itemId":"r","summaryIndex":0,"delta":"Thought for 12s"}}),
+            None,
+        )
+        .await
+        .expect("canned subagent reasoning");
+    subagent
+        .reasoning_delta(
+            &json!({"params":{"itemId":"r","summaryIndex":0,"delta":dump}}),
+            None,
+        )
+        .await
+        .expect("subagent reasoning dump");
+    subagent
+        .reasoning_delta(
+            &json!({"params":{"itemId":"r","summaryIndex":0,"delta":"Inspect the neon pooler next.\n"}}),
+            None,
+        )
+        .await
+        .expect("subagent live reasoning");
 
     let mut main = SegmentBuilder::new(1);
     main.reasoning_delta(
@@ -139,24 +167,6 @@ async fn subagent_and_main_cover_bulk_dump_empty_delta_and_keepalive_title() {
     )
     .await
     .expect("open native thought");
-    main.reasoning_delta(
-        &json!({"params":{"itemId":"r","summaryIndex":0,"delta":dump}}),
-        None,
-    )
-    .await
-    .expect("main bulk dump while thought is open");
-    main.reasoning_delta(
-        &json!({"params":{"itemId":"r","summaryIndex":0,"delta":"Thought for 12s"}}),
-        None,
-    )
-    .await
-    .expect("canned reasoning after thought");
-    main.reasoning_delta(
-        &json!({"params":{"itemId":"r","summaryIndex":0,"delta":"Status: still working"}}),
-        None,
-    )
-    .await
-    .expect("status while thought may be open");
     main.text_delta(
         &json!({"params":{"delta":"Thought for 12s\nhello from main"}}),
         None,
@@ -169,15 +179,6 @@ async fn subagent_and_main_cover_bulk_dump_empty_delta_and_keepalive_title() {
     )
     .await
     .expect("raw reasoning without item id");
-
-    let mut closed = SegmentBuilder::new(1);
-    closed
-        .reasoning_delta(
-            &json!({"params":{"itemId":"r2","summaryIndex":0,"delta":"Status: inspecting"}}),
-            None,
-        )
-        .await
-        .expect("status without open thought");
 }
 
 #[test]
@@ -1938,6 +1939,47 @@ async fn bridges_acp_agent_provider_tools_to_tool_use_but_keeps_native_tools_as_
         "native progress thinking: {progress}"
     );
     assert!(progress.contains("ls"));
+
+    let mut mcp = SegmentBuilder::new(1);
+    let _ = mcp
+        .handle_event(
+            &bridge,
+            &session,
+            &messages,
+            &routing,
+            &json!({
+                "method":"item/providerTool/call",
+                "params":{
+                    "callId":"mcp-1",
+                    "tool":"mcp",
+                    "title":"MCP claudex-launch",
+                    "status":"pending"
+                }
+            }),
+            None,
+        )
+        .await
+        .expect("remember MCP call id");
+    let _ = mcp
+        .handle_event(
+            &bridge,
+            &session,
+            &messages,
+            &routing,
+            &json!({
+                "method":"item/providerTool/update",
+                "params":{
+                    "callId":"mcp-1",
+                    "tool":"mcp",
+                    "title":"MCP claudex-launch",
+                    "status":"in_progress"
+                }
+            }),
+            None,
+        )
+        .await
+        .expect("suppress MCP launch progress");
+    assert!(!mcp.has_external_tool_calls());
 }
 
 #[tokio::test]
