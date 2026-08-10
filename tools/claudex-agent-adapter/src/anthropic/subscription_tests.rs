@@ -537,6 +537,32 @@ async fn closing_an_activity_that_never_opened_sends_no_frame() {
     );
 }
 
+#[tokio::test]
+async fn start_status_is_a_noop_when_empty_or_already_open() {
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(8);
+    let mut activity = super::subscription_activity::SubscriptionActivity::default();
+    let mut next_index = 0;
+    activity
+        .start_status(&sender, "", &mut next_index)
+        .await
+        .expect("empty status is ignored");
+    assert_eq!(next_index, 0);
+    assert!(!activity.is_open());
+
+    activity
+        .start_status(&sender, "working", &mut next_index)
+        .await
+        .expect("open status");
+    assert!(activity.is_open());
+    assert_eq!(next_index, 1);
+    activity
+        .start_status(&sender, "again", &mut next_index)
+        .await
+        .expect("second open is ignored");
+    assert_eq!(next_index, 1);
+    assert!(receiver.recv().await.is_some());
+}
+
 #[test]
 fn builds_subscription_prompts() {
     assert!(subscription_prompt("advisor", &json!({}), &[]).contains("rigorous advisor"));
