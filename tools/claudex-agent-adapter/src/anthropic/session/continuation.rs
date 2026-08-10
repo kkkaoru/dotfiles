@@ -194,4 +194,25 @@ mod tests {
             "toolless continuation must not attach another claudex TUI"
         );
     }
+
+    #[tokio::test]
+    async fn toolless_continuation_reuses_matching_claude_session_ids() {
+        let messages = vec![json!({"role":"user","content":"first"})];
+        let bridge = Bridge::new_with_backend(AgentBackend::spawn_routes(&[]), "main".to_owned());
+        let mut matching = session("main", Some("outer"), messages.clone());
+        Arc::get_mut(&mut matching)
+            .expect("unique session")
+            .claude_session_id = Some("session-a".to_owned());
+        bridge.sessions.lock().await.push(Arc::clone(&matching));
+
+        let mut request = request(messages);
+        request.metadata = json!({
+            "user_id":"outer",
+            "_claudex_transport_identity":{"session_id":"session-a"}
+        });
+        let selected = select_toolless_main_session(&bridge, &request)
+            .await
+            .expect("matching Claude session id may continue");
+        assert!(Arc::ptr_eq(&selected.session, &matching));
+    }
 }
