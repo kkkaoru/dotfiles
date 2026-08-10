@@ -146,9 +146,7 @@ fn parse_event(event: WireEvent) -> ParsedLine {
             Some(text) if has_status_prefix(text.trim()) => {
                 ParsedLine::Progress(ProgressEvent::Status(text))
             }
-            Some(text) if is_canned_progress(&text) || is_thought_for_chrome(&text) => {
-                ParsedLine::Ignored
-            }
+            Some(text) if is_canned_progress(&text) => ParsedLine::Ignored,
             Some(text) => ParsedLine::Progress(ProgressEvent::Thought(text)),
             None => ParsedLine::Ignored,
         },

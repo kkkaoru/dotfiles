@@ -314,6 +314,12 @@ fn parses_event_aliases_and_error_shapes() {
     ) else {
         panic!("expected object error");
     };
+    let ParsedLine::Result(message_error) = parse_stdout_line(
+        r#"{"type":"result","subtype":"error","finalText":"","message":"from-message","error":"from-error"}"#,
+    ) else {
+        panic!("expected message error");
+    };
+    assert_eq!(message_error.error.as_deref(), Some("from-message"));
     assert!(
         object_error
             .error
