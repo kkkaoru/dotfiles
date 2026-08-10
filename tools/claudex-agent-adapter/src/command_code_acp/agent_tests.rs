@@ -1,5 +1,3 @@
-#![allow(clippy::excessive_nesting, clippy::too_many_lines)]
-
 use std::{
     cell::RefCell,
     fs,

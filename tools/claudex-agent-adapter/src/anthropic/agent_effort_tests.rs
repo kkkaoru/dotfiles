@@ -313,7 +313,7 @@ mod tests {
             &[json!({
                 "role":"user",
                 "content":[
-                    reminder.clone(),
+                    &reminder,
                     {"type":"text","text":"Investigate how sync-realtime-data chooses the writable Neon connection."}
                 ]
             })],
@@ -332,7 +332,7 @@ mod tests {
             &[json!({
                 "role":"user",
                 "content":[
-                    reminder.clone(),
+                    &reminder,
                     {"type":"text","text":"同期で結果を待ってから次へ進めて"}
                 ]
             })],
@@ -354,7 +354,7 @@ mod tests {
             &[json!({
                 "role":"user",
                 "content":[
-                    reminder.clone(),
+                    &reminder,
                     {"type":"text","text":"待ってから次へ進めて"}
                 ]
             })],
