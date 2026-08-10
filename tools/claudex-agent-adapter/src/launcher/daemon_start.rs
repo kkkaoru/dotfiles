@@ -23,24 +23,29 @@ pub(super) struct RecoveryProcess {
 }
 
 pub(super) fn start_adapter(config: &ServiceConfig) -> Result<u32> {
-    start_with_retained(config, None)
+    start_with_retained(config, None, config)
 }
 
 pub(super) fn start_adapter_with_retained(
-    config: &ServiceConfig,
+    listen_config: &ServiceConfig,
     retained_path: &Path,
+    manifest_config: &ServiceConfig,
 ) -> Result<u32> {
-    start_with_retained(config, Some(retained_path))
+    start_with_retained(listen_config, Some(retained_path), manifest_config)
 }
 
-fn start_with_retained(config: &ServiceConfig, retained_path: Option<&Path>) -> Result<u32> {
-    let manifest_path = recovery_manifest::prepare(config)?;
+fn start_with_retained(
+    listen_config: &ServiceConfig,
+    retained_path: Option<&Path>,
+    manifest_config: &ServiceConfig,
+) -> Result<u32> {
+    let manifest_path = recovery_manifest::prepare(manifest_config)?;
     spawn_adapter(
-        config,
-        &config.executable,
-        daemon_arguments(&config.options),
-        &config.codex_config_fingerprint,
-        &config.service_config_fingerprint,
+        listen_config,
+        &listen_config.executable,
+        daemon_arguments(&listen_config.options),
+        &listen_config.codex_config_fingerprint,
+        &listen_config.service_config_fingerprint,
         Some(&manifest_path),
         retained_path,
     )

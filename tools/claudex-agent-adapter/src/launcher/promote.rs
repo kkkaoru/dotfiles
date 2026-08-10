@@ -70,7 +70,7 @@ pub(super) async fn try_canonical(
         &health.build_id,
         session_ids.clone(),
     )?;
-    let started = daemon_start::start_adapter_with_retained(&warm, &retained_path)
+    let started = daemon_start::start_adapter_with_retained(&warm, &retained_path, config)
         .context("warm-start current-build listener before canonical cutover")?;
     if !wait_until_current_build(client, &warm, Some(started)).await {
         terminate_started(started, &warm);
