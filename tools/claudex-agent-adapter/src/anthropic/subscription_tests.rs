@@ -420,7 +420,7 @@ printf '%s\n' '{{"subtype":"error","is_error":true,"result":"502 Bad Gateway"}}'
     assert!(!should_retry_subscription(&anyhow::anyhow!(
         "502 Bad Gateway; subscription stream already emitted frames"
     )));
-    assert_eq!(transient_retry_delay(1), Duration::from_millis(250));
+    assert_eq!(transient_retry_delay(1), Duration::from_millis(100));
 }
 
 #[cfg(unix)]

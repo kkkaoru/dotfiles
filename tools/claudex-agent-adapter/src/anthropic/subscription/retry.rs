@@ -3,7 +3,7 @@ use std::{future::Future, time::Duration};
 use anyhow::{Error, Result};
 
 pub(in crate::anthropic) const MAX_TRANSIENT_RETRIES: usize = 1;
-const BASE_DELAY: Duration = Duration::from_millis(250);
+const BASE_DELAY: Duration = Duration::from_millis(100);
 const STREAM_OUTPUT_MARKER: &str = "subscription stream already emitted frames";
 
 pub(in crate::anthropic) fn should_retry_subscription(error: &Error) -> bool {

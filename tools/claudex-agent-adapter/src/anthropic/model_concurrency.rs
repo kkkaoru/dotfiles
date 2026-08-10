@@ -19,7 +19,7 @@ pub(super) const MODEL_CONCURRENCY_WAIT_TIMEOUT_ENV: &str =
 /// Bound SubAgent admission waits so stacked workers fail over quickly instead
 /// of freezing the TUI for half a minute. Override with
 /// `CLAUDEX_MODEL_CONCURRENCY_WAIT_TIMEOUT_MS`.
-const DEFAULT_WAIT_TIMEOUT: Duration = Duration::from_secs(10);
+const DEFAULT_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct ModelConcurrencyStatus {

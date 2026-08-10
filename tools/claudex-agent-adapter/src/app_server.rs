@@ -33,7 +33,7 @@ mod protocol;
 mod provider_environment;
 use pending::{PendingRequest, PendingResponse, await_response};
 
-const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(15);
+const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(8);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// A persistent JSON-RPC connection to `codex app-server` over JSONL stdio.

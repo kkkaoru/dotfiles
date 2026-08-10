@@ -204,8 +204,8 @@ fn detects_tui_qwen_concurrency_admission_timeout() {
 
 #[test]
 fn default_wait_timeout_is_ten_seconds() {
-    assert_eq!(DEFAULT_WAIT_TIMEOUT, Duration::from_secs(10));
-    assert_eq!(parse_wait_timeout(None), Duration::from_secs(10));
+    assert_eq!(DEFAULT_WAIT_TIMEOUT, Duration::from_secs(5));
+    assert_eq!(parse_wait_timeout(None), Duration::from_secs(5));
 }
 
 #[tokio::test]
