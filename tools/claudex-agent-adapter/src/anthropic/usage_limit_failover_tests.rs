@@ -1749,3 +1749,26 @@ fn subagent_provider_failover_skips_missing_preferred_qwen_candidate() {
     assert_eq!(failover.model, CURSOR_AUTO);
     assert_eq!(failover.route, RouteDecision::Provider);
 }
+
+#[test]
+fn usage_limit_failover_for_returns_subscription_fallback() {
+    let backend = AgentBackend::spawn_routes(&[
+        BackendRoute::new(CLINE_FLASH, BackendKind::ConfiguredAcp),
+    ]);
+    let mut catalog = ModelCatalog::default();
+    catalog
+        .set_auxiliary_worker_routes(vec![crate::provider_config::WorkerRoute::new(
+            "claudex-sonnet",
+            LUNA,
+            "high",
+        )])
+        .expect("install fallback");
+    let bridge = Bridge::new_with_backend(backend, CLINE_FLASH.to_owned())
+        .with_model_catalog(catalog);
+    let failover = bridge
+        .usage_limit_failover_for(CLINE_FLASH)
+        .expect("configured subscription fallback");
+    assert_eq!(failover.model, LUNA);
+    assert_eq!(failover.route, RouteDecision::Subscription);
+    assert_eq!(failover.effort, Some("high".to_owned()));
+}
