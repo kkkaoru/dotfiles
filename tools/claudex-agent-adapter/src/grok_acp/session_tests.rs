@@ -96,6 +96,9 @@ fn detects_claude_code_launch_tools_for_mcp_injection() {
         "dynamicTools":[{"name":"Task","description":"Launch a SubAgent"}]
     })));
     assert!(params_offer_launch_tools(&json!({
+        "dynamicTools":[{"name":"TaskOutput","description":"read task output"}]
+    })));
+    assert!(params_offer_launch_tools(&json!({
         "dynamicTools":[{"name":"cc_Agent_0","description":"use `Agent`"}]
     })));
     assert!(params_offer_launch_tools(&json!({
