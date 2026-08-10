@@ -1573,3 +1573,92 @@ done
         "{error:#}"
     );
 }
+
+#[tokio::test]
+async fn provider_messages_failover_attempts_configured_subscription_target() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::Arc;
+
+    let root = tempfile::tempdir().expect("failover subscription fixture");
+    let source = root.path().join("source");
+    std::fs::create_dir(&source).expect("source home");
+    std::fs::write(source.join("auth.json"), "{}").expect("auth");
+    let app_server = root.path().join("app-server");
+    std::fs::write(
+        &app_server,
+        r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s\n' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  case "$line" in
+    *'"method":"thread/start"'*)
+      printf '{"id":%s,"error":{"message":"You'\''ve hit your usage limit."}}\n' "$id"
+      ;;
+    *)
+      printf '{"id":%s,"result":{}}\n' "$id"
+      ;;
+  esac
+done
+"#,
+    )
+    .expect("usage-limit app-server");
+    std::fs::set_permissions(&app_server, std::fs::Permissions::from_mode(0o755))
+        .expect("executable app-server");
+    let claude = root.path().join("claude-fail");
+    std::fs::write(
+        &claude,
+        "#!/bin/sh\nprintf '%s\\n' 'boom' >&2\nexit 1\n",
+    )
+    .expect("write failing claude");
+    std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755))
+        .expect("executable claude");
+    let app = crate::app_server::AppServer::spawn_with_program(
+        "main",
+        &app_server,
+        &source,
+        &root.path().join("isolated"),
+    )
+    .await
+    .expect("start usage-limit app-server");
+    let mut catalog = ModelCatalog::default();
+    catalog
+        .set_auxiliary_worker_routes(vec![crate::provider_config::WorkerRoute::new(
+            "claudex-sonnet",
+            "claude-sonnet-5",
+            "high",
+        )])
+        .expect("install subscription failover");
+    let bridge = Arc::new(
+        Bridge::new_with_subscription_program(app, "main".to_owned(), claude)
+            .with_model_catalog(catalog)
+            .with_usage_limit_cache_home(root.path()),
+    );
+    let request = MessagesRequest {
+        model: "main".to_owned(),
+        system: Value::Null,
+        messages: vec![serde_json::json!({"role":"user","content":"ping"})],
+        tools: Vec::new(),
+        stream: false,
+        output_config: Value::Null,
+        metadata: Value::Null,
+        working_directory: None,
+        disabled_subagent_models: Default::default(),
+        claudex_collaborator_model: None,
+    };
+    let error = tokio::time::timeout(
+        std::time::Duration::from_secs(3),
+        bridge.provider_messages_with_usage_limit_failover(
+            request,
+            Some("xhigh".to_owned()),
+            false,
+            false,
+            false,
+        ),
+    )
+    .await
+    .expect("subscription failover should not hang")
+    .expect_err("failing subscription program must fail closed after failover");
+    assert!(
+        !error.to_string().is_empty(),
+        "failover attempt must surface the subscription failure"
+    );
+}
