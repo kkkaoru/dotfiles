@@ -153,16 +153,27 @@ async fn does_not_replay_fanout_copies_or_events_from_a_terminal_turn() {
 }
 
 #[tokio::test]
-async fn coalesces_a_stalled_burst_larger_than_the_queue_limit() {
+async fn coalesces_a_stalled_burst_into_progress_sized_chunks() {
     let dispatcher = ThreadEventDispatcher::default();
     let events = dispatcher.subscribe("burst");
     for _ in 0..4096 {
         dispatcher.dispatch(delta("burst", "x"));
     }
 
-    let event = events.recv().await.unwrap();
-    assert_eq!(event["params"]["delta"].as_str().unwrap().len(), 4096);
-    assert!(events.queue.state.lock().unwrap().events.is_empty());
+    let mut total = 0usize;
+    let mut chunks = 0usize;
+    loop {
+        if events.queue.state.lock().unwrap().events.is_empty() {
+            break;
+        }
+        let event = events.recv().await.unwrap();
+        let len = event["params"]["delta"].as_str().unwrap().len();
+        assert!(len <= MAX_COALESCED_DELTA_CHARS);
+        total += len;
+        chunks += 1;
+    }
+    assert_eq!(total, 4096);
+    assert!(chunks >= 4096 / MAX_COALESCED_DELTA_CHARS);
 }
 
 #[tokio::test]
@@ -174,10 +185,18 @@ async fn coalesces_reasoning_bursts_but_preserves_summary_boundaries() {
     }
     dispatcher.dispatch(reasoning_delta("reasoning", 1, "next"));
 
-    let first = events.recv().await.unwrap();
-    let second = events.recv().await.unwrap();
-    assert_eq!(first["params"]["delta"].as_str().unwrap().len(), 4096);
-    assert_eq!(second["params"]["delta"], "next");
+    let mut summary0 = 0usize;
+    loop {
+        let event = events.recv().await.unwrap();
+        if event["params"]["summaryIndex"] == 1 {
+            assert_eq!(event["params"]["delta"], "next");
+            break;
+        }
+        let len = event["params"]["delta"].as_str().unwrap().len();
+        assert!(len <= MAX_COALESCED_DELTA_CHARS);
+        summary0 += len;
+    }
+    assert_eq!(summary0, 4096);
 }
 
 #[tokio::test]

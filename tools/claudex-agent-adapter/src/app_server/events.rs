@@ -18,6 +18,9 @@ mod event_shape;
 
 const MAX_QUEUED_EVENTS: usize = 256;
 const MAX_QUEUED_BYTES: usize = 1024 * 1024;
+/// Cap coalesced text-delta size so Claude Code paints GPT/Codex progress in
+/// frequent chunks instead of one stalled mega-frame when the consumer lags.
+const MAX_COALESCED_DELTA_CHARS: usize = 256;
 
 type Subscribers = Vec<(u64, Arc<EventQueue>)>;
 type Registry = HashMap<String, ThreadRoute>;
@@ -145,6 +148,17 @@ impl QueueState {
         else {
             return false;
         };
+        let current_len = self
+            .events
+            .back()
+            .and_then(|last| last.value.pointer("/params/delta"))
+            .and_then(Value::as_str)
+            .map_or(0, str::len);
+        if current_len > 0
+            && current_len.saturating_add(suffix.len()) > MAX_COALESCED_DELTA_CHARS
+        {
+            return false;
+        }
         if self.append_delta(suffix, requeueable) {
             return true;
         }

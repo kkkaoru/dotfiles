@@ -444,11 +444,15 @@ fn recognizes_cursor_thought_for_filler() {
     assert!(sanitize::is_canned_worker_filler("Nucleating"));
     assert_eq!(
         super::SUBAGENT_INITIAL_ACTIVITY_DELAY,
-        Duration::from_secs(5)
+        Duration::from_secs(1)
     );
-    assert_eq!(super::INITIAL_ACTIVITY_DELAY, Duration::from_secs(10));
+    assert_eq!(super::INITIAL_ACTIVITY_DELAY, Duration::from_secs(2));
     assert!(super::SUBAGENT_INITIAL_ACTIVITY_DELAY < super::INITIAL_ACTIVITY_DELAY);
     assert!(super::INITIAL_ACTIVITY_DELAY < super::ACTIVITY_KEEPALIVE_INTERVAL);
+    assert_eq!(
+        super::ACTIVITY_KEEPALIVE_INTERVAL,
+        Duration::from_secs(10)
+    );
     assert_eq!(
         super::types::stream_activity_delays(true),
         (

@@ -8,13 +8,13 @@ use std::{
     collections::HashSet, convert::Infallible, path::Path, path::PathBuf, sync::Arc, time::Duration,
 };
 use tokio::sync::mpsc;
-// Main-turn subscription callers: align with ACP stream.rs (10s) so Claude
-// Code is not blank for a full half-minute while the child boots.
-pub(super) const INITIAL_ACTIVITY_DELAY: Duration = Duration::from_secs(10);
-pub(super) const ACTIVITY_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
+// Main-turn subscription callers: align with ACP stream.rs so Claude Code is
+// not blank while the child boots (Codex/GPT hops feel snappier than 10s).
+pub(super) const INITIAL_ACTIVITY_DELAY: Duration = Duration::from_secs(2);
+pub(super) const ACTIVITY_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
 /// Mirrors the ACP SubAgent delay: keep the SubAgent panel lit while a
 /// subscription child process boots instead of freezing on Nucleating.
-pub(super) const SUBAGENT_INITIAL_ACTIVITY_DELAY: Duration = Duration::from_secs(5);
+pub(super) const SUBAGENT_INITIAL_ACTIVITY_DELAY: Duration = Duration::from_secs(1);
 use super::{
     stream::streaming_sse_response,
     subscription::{
