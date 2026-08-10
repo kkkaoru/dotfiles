@@ -1,4 +1,8 @@
-use std::{cell::Cell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    collections::HashMap,
+    rc::Rc,
+};
 
 use agent_client_protocol::{self as acp, Agent as _};
 use serde_json::{Map, Value};
@@ -7,6 +11,12 @@ use super::{
     EFFORT_SETUP_TIMEOUT, EffortSetupError, TurnCtl, finish_effort_setup, handle_setup_cancellation,
 };
 use crate::grok_acp::connection::AcpProvider;
+
+thread_local! {
+    static APPLIED_SESSION_EFFORT: RefCell<HashMap<String, String>> =
+        RefCell::new(HashMap::new());
+}
+
 pub(super) async fn apply_effort(
     ctl: &mut TurnCtl<'_>,
     connection: &Rc<acp::ClientSideConnection>,
@@ -26,11 +36,25 @@ pub(super) async fn apply_effort(
         );
         return true;
     }
+    if ctl.invalidated_sessions.borrow().contains(ctl.session_id) {
+        forget_applied_effort(ctl.session_id);
+    }
     if effort.is_none() {
         tracing::info!(
             session_id = ctl.session_id,
             provider = ctl.provider.label(),
             "skipping ACP set_session_model; session/new already pinned the model"
+        );
+        return true;
+    }
+    if let Some(effort) = effort
+        && effort_already_applied(ctl.session_id, effort)
+    {
+        tracing::info!(
+            session_id = ctl.session_id,
+            effort,
+            provider = ctl.provider.label(),
+            "skipping ACP effort setup; session already pinned"
         );
         return true;
     }
@@ -57,9 +81,31 @@ pub(super) async fn apply_effort(
         result = &mut setup => result,
     };
     if setup_result.is_ok() {
+        if let Some(effort) = effort {
+            remember_applied_effort(ctl.session_id, effort);
+        }
         tokio::task::yield_now().await;
     }
     finish_effort_setup(ctl, setup_result)
+}
+
+fn effort_already_applied(session_id: &str, effort: &str) -> bool {
+    APPLIED_SESSION_EFFORT
+        .with(|applied| applied.borrow().get(session_id).map(String::as_str) == Some(effort))
+}
+
+fn remember_applied_effort(session_id: &str, effort: &str) {
+    APPLIED_SESSION_EFFORT.with(|applied| {
+        applied
+            .borrow_mut()
+            .insert(session_id.to_owned(), effort.to_owned());
+    });
+}
+
+fn forget_applied_effort(session_id: &str) {
+    APPLIED_SESSION_EFFORT.with(|applied| {
+        applied.borrow_mut().remove(session_id);
+    });
 }
 
 fn effort_option_rejected(error: &acp::Error) -> bool {
