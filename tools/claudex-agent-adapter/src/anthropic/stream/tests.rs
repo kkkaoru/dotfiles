@@ -387,6 +387,7 @@ fn sanitizes_text_thinking_and_provider_status_variants() {
         "Working on your request — I'll gather what I need and put together the result.",
         "Continuing with the next step in the plan.",
         "I’ll audit the local ctx index and pull the evidence needed for the report.",
+        "\u{200b}\u{200b}",
     ] {
         let mut status_block = vec![json!({"type":"thinking","thinking":status})];
         sanitize::sanitize_committed_blocks(&mut status_block);
@@ -395,6 +396,22 @@ fn sanitizes_text_thinking_and_provider_status_variants() {
             "status should be removed: {status}"
         );
     }
+
+    assert!(sanitize::is_premature_worker_status_reply(
+        "Status: inspecting\n\nStatus: still going"
+    ));
+    assert_eq!(
+        sanitize::strip_worker_status_lines("keep\nStatus: inspecting\n"),
+        "keep\n"
+    );
+    assert_eq!(
+        sanitize::strip_worker_status_lines("keep\nStatus: inspecting"),
+        "keep"
+    );
+    assert_eq!(
+        sanitize::strip_worker_status_lines("keep\n\nStatus: inspecting\n"),
+        "keep\n"
+    );
 }
 
 #[test]
