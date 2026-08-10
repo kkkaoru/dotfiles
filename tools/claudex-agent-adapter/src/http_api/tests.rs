@@ -146,3 +146,60 @@ fn applies_domain_filters_to_search_urls() {
     ));
     assert!(!domain_allowed("not-a-url", &[], &[]));
 }
+
+#[tokio::test]
+async fn trace_http_request_covers_identity_and_body_error_paths() {
+    use std::time::Duration;
+
+    use axum::http::HeaderValue;
+    use tokio::net::TcpListener;
+
+    let app = Router::new()
+        .route("/ok", get(|| async { "ok" }))
+        .route(
+            "/err",
+            get(|| async {
+                let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(1);
+                tx.try_send(Err(std::io::Error::other("boom")))
+                    .expect("enqueue body error");
+                drop(tx);
+                Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx))
+            }),
+        )
+        .route(
+            "/slow",
+            get(|| async {
+                let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(1);
+                std::mem::forget(tx);
+                Body::from_stream(tokio_stream::wrappers::ReceiverStream::new(rx))
+            }),
+        )
+        .layer(middleware::from_fn(logging::trace_http_request));
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("logging listener");
+    let addr = listener.local_addr().expect("logging address");
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.ok();
+    });
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let client = reqwest::Client::new();
+    let invalid = HeaderValue::from_bytes(&[0xff]).expect("invalid utf8 header");
+    let ok = client
+        .get(format!("http://{addr}/ok"))
+        .header(CLAUDE_CODE_SESSION_ID_HEADER, invalid)
+        .send()
+        .await
+        .expect("ok request");
+    assert_eq!(ok.text().await.expect("ok body"), "ok");
+    let err = client.get(format!("http://{addr}/err")).send().await;
+    match err {
+        Ok(response) => {
+            let _ = response.bytes().await;
+        }
+        Err(_) => {}
+    }
+    if let Ok(slow) = client.get(format!("http://{addr}/slow")).send().await {
+        drop(slow);
+    }
+}
