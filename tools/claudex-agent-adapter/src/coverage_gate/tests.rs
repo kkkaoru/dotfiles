@@ -389,6 +389,57 @@ fn executes_clean_before_coverage_and_reports_command_failures() {
 }
 
 #[test]
+fn command_status_retries_llvm_cov_json_export_after_a_merge_flake() {
+    if env::var_os("CLAUDEX_COVERAGE_GATE_RETRY_CHILD").is_some() {
+        let root = tempfile::tempdir().expect("retry fixture");
+        let target = root.path().join("target/llvm-cov-retry");
+        fs::create_dir_all(&target).expect("retry target");
+        let status = command_status(
+            root.path(),
+            &target,
+            &[
+                "+nightly".to_owned(),
+                "llvm-cov".to_owned(),
+                "--json".to_owned(),
+            ],
+        )
+        .expect("retryable json export");
+        assert!(status.success(), "retried export must succeed");
+        assert!(
+            target.join(".retried").is_file(),
+            "fake cargo must observe the retry"
+        );
+        return;
+    }
+
+    let fixture = tempfile::tempdir().expect("retry PATH fixture");
+    let cargo = fixture.path().join("cargo");
+    fs::write(
+        &cargo,
+        "#!/bin/sh\nmkdir -p \"$CARGO_LLVM_COV_TARGET_DIR\"\nif printf '%s' \"$*\" | grep -q -- '--json'; then\n  if [ ! -f \"$CARGO_LLVM_COV_TARGET_DIR/.retried\" ]; then\n    touch \"$CARGO_LLVM_COV_TARGET_DIR/.retried\"\n    exit 1\n  fi\nfi\nexit 0\n",
+    )
+    .expect("fake cargo");
+    fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755)).expect("executable cargo");
+    let original_path = env::var_os("PATH").unwrap_or_default();
+    let path = env::join_paths(
+        std::iter::once(fixture.path().to_path_buf()).chain(
+            env::split_paths(&original_path).filter(|path| !path.as_os_str().is_empty()),
+        ),
+    )
+    .expect("test PATH");
+    let status = Command::new(env::current_exe().expect("test executable"))
+        .args([
+            "--exact",
+            "coverage_gate::tests::command_status_retries_llvm_cov_json_export_after_a_merge_flake",
+        ])
+        .env("CLAUDEX_COVERAGE_GATE_RETRY_CHILD", "1")
+        .env("PATH", path)
+        .status()
+        .expect("run retry child");
+    assert!(status.success());
+}
+
+#[test]
 fn detects_missing_and_unexpected_production_files() {
     let missing = report_fixture(100.0, 100.0);
     let report_path = missing.path().join("report.json");
