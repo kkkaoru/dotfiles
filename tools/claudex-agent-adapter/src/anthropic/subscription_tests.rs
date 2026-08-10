@@ -582,6 +582,16 @@ fn resolves_effort_from_the_latest_claude_settings_file() {
         bridge.resolve_request_effort(&request, AgentEffort::Unmatched),
         None
     );
+    fs::write(&settings_path, r#"{"effortLevel":"high"}"#).expect("restore high settings");
+    assert_eq!(
+        bridge.resolve_request_effort(&request, AgentEffort::ConfiguredDefault),
+        Some("high".to_owned())
+    );
+    fs::write(&settings_path, r#"{"effortLevel":"invalid"}"#).expect("write invalid default");
+    assert_eq!(
+        bridge.resolve_request_effort(&request, AgentEffort::ConfiguredDefault),
+        None
+    );
 }
 
 #[test]
