@@ -47,6 +47,26 @@ async fn ignores_missing_and_empty_text_deltas() {
     assert_eq!(segment.usage.output_tokens, 0);
 }
 
+#[test]
+fn subagent_start_status_skips_main_and_command_code() {
+    assert_eq!(
+        super::prepare::subagent_start_status(false, "gpt-5.6-luna", None),
+        None
+    );
+    assert_eq!(
+        super::prepare::subagent_start_status(
+            true,
+            "meta/muse-spark-1.2-contributor",
+            Some("high")
+        ),
+        None
+    );
+    let status = super::prepare::subagent_start_status(true, "gpt-5.6-luna", Some("max"))
+        .expect("luna subagent start");
+    assert!(status.contains("gpt-5.6-luna"));
+    assert!(status.contains("effort=max"));
+}
+
 #[tokio::test]
 async fn ignores_whitespace_only_text_deltas() {
     let mut builder = SegmentBuilder::new(7);
@@ -54,6 +74,31 @@ async fn ignores_whitespace_only_text_deltas() {
         .text_delta(&json!({"params":{"delta":"  \n\n  "}}), None)
         .await
         .expect("whitespace-only delta");
+}
+
+#[tokio::test]
+async fn subagent_progress_drops_canned_filler_and_paints_status() {
+    let mut builder = SegmentBuilder::for_turn(1, true, "gpt-5.6-luna");
+    builder
+        .text_delta(&json!({"params":{"delta":"Thought for 12s"}}), None)
+        .await
+        .expect("canned filler");
+    builder
+        .reasoning_delta(
+            &json!({"params":{"itemId":"reasoning","summaryIndex":0,"delta":"Status: inspecting"}}),
+            None,
+        )
+        .await
+        .expect("worker status");
+    builder
+        .subagent_start_status("SubAgent starting: gpt-5.6-luna", None)
+        .await
+        .expect("start status");
+    let mut command_code = SegmentBuilder::for_turn(1, true, "meta/muse-spark-1.2-contributor");
+    command_code
+        .subagent_start_status("should skip", None)
+        .await
+        .expect("command-code start status");
 }
 
 #[test]
