@@ -208,49 +208,47 @@ async fn defer_busy_listener(
     active_provider_turns: usize,
     active_subagents: usize,
 ) -> Result<String> {
-    match mode {
-        Mode::WaitIdle => unreachable!("wait-idle polls Defer without arming"),
-        Mode::HotSwap | Mode::Ensure => {
-            pending_hot_swap::disarm(config);
-            if let Some(health) = super::health::fetch_health(client, config).await
-                && super::promote::live_update_eligible(&health, config)
-            {
-                match super::promote::try_canonical(client, config, &health).await {
-                    Ok(Some(url)) => {
-                        notify_swap_if_replaced(true, config);
-                        return Ok(url);
-                    }
-                    Ok(None) => {}
-                    Err(error) => {
-                        eprintln!(
-                            "claudex: live update handover failed ({error:#}); retaining pid {pid:?} on {} so Claude Code stays connected",
-                            config.base_url()
-                        );
-                    }
-                }
+    // WaitIdle polls Defer without calling this arm helper.
+    debug_assert!(matches!(mode, Mode::HotSwap | Mode::Ensure));
+    let _ = mode;
+    pending_hot_swap::disarm(config);
+    if let Some(health) = super::health::fetch_health(client, config).await
+        && super::promote::live_update_eligible(&health, config)
+    {
+        match super::promote::try_canonical(client, config, &health).await {
+            Ok(Some(url)) => {
+                notify_swap_if_replaced(true, config);
+                return Ok(url);
             }
-            let outcome = pending_hot_swap::arm(config)?;
-            eprintln!(
-                "claudex: retaining active adapter pid {pid:?}; routing new sessions to a current-build listener ({active_http_requests} HTTP request(s), {active_provider_turns} provider turn(s), {active_subagents} SubAgent(s); live launch sessions kept; idle hot-swap waiter pid {} for build {})",
-                outcome.pid(),
-                env!("CLAUDEX_BUILD_ID"),
-            );
-            let url = fallback::ensure_current_generation(client, config)
-                .await
-                .context("start current-build listener while stale adapter is active")?;
-            let _ = super::live::publish_url(config, &url);
-            if let Ok(live_listen) = super::live::parse_listen_url(&url) {
-                macos_notify::live_ready(config, live_listen);
-            }
-            if let Ok(Some(live)) = super::live::read(config) {
+            Ok(None) => {}
+            Err(error) => {
                 eprintln!(
-                    "claudex: live generation {} on {}",
-                    live.build_id, live.listen
+                    "claudex: live update handover failed ({error:#}); retaining pid {pid:?} on {} so Claude Code stays connected",
+                    config.base_url()
                 );
             }
-            Ok(url)
         }
     }
+    let outcome = pending_hot_swap::arm(config)?;
+    eprintln!(
+        "claudex: retaining active adapter pid {pid:?}; routing new sessions to a current-build listener ({active_http_requests} HTTP request(s), {active_provider_turns} provider turn(s), {active_subagents} SubAgent(s); live launch sessions kept; idle hot-swap waiter pid {} for build {})",
+        outcome.pid(),
+        env!("CLAUDEX_BUILD_ID"),
+    );
+    let url = fallback::ensure_current_generation(client, config)
+        .await
+        .context("start current-build listener while stale adapter is active")?;
+    let _ = super::live::publish_url(config, &url);
+    if let Ok(live_listen) = super::live::parse_listen_url(&url) {
+        macos_notify::live_ready(config, live_listen);
+    }
+    if let Ok(Some(live)) = super::live::read(config) {
+        eprintln!(
+            "claudex: live generation {} on {}",
+            live.build_id, live.listen
+        );
+    }
+    Ok(url)
 }
 
 pub(super) fn should_retry_idle_replace(failures: u32, limit: Option<u32>) -> bool {

@@ -236,8 +236,9 @@ fn close_file_descriptor(fd: i32) {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::{
-        bounded_descriptor_limit, close_file_descriptor, close_inherited_descriptors_with,
-        close_system, configure_process_group, terminate_started_recovery,
+        bounded_descriptor_limit, close_file_descriptor, close_inherited_descriptors,
+        close_inherited_descriptors_with, close_system, configure_process_group,
+        detach_session_and_close_inherited_descriptors, terminate_started_recovery,
     };
 
     #[cfg(unix)]
@@ -286,6 +287,14 @@ mod tests {
         assert_eq!(closed, vec![3, 4, 5]);
         close_system(|_| {}).expect("system descriptor limit is available");
         close_file_descriptor(-1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn detach_session_entrypoint_handles_already_being_a_session_leader() {
+        close_inherited_descriptors().expect("close inherited descriptors");
+        // Test processes are usually already session leaders, so setsid fails.
+        let _ = detach_session_and_close_inherited_descriptors();
     }
 
     #[cfg(unix)]

@@ -246,4 +246,17 @@ mod tests {
         let now = UNIX_EPOCH + Duration::from_secs(1_000);
         assert!(!scope_is_cooling_down_at(Some(&path), "sakana", now));
     }
+
+    #[test]
+    fn write_cache_skips_rename_when_the_target_cannot_be_written() {
+        let root = tempfile::tempdir().expect("unwritable cooldown fixture");
+        let as_directory = root.path().join("cooldown.json");
+        std::fs::create_dir_all(&as_directory).expect("dir target");
+        let cache = AuthCooldownCache {
+            version: CACHE_VERSION,
+            entries: BTreeMap::new(),
+        };
+        write_cache(&as_directory, &cache);
+        write_cache(Path::new("/"), &cache);
+    }
 }

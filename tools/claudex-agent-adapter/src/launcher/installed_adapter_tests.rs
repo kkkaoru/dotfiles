@@ -426,6 +426,45 @@ fn relink_replaces_a_broken_local_symlink() {
     assert_eq!(fs::read_link(&local).unwrap(), cargo);
 }
 
+#[cfg(unix)]
+#[test]
+fn unify_reports_copy_and_symlink_failures() {
+    let _guard = EnvGuard::push();
+    let root = tempfile::tempdir().expect("home");
+    let home = root.path();
+    let cargo_bin = home.join(".cargo/bin");
+    let local_bin = home.join(".local/bin");
+    fs::create_dir_all(&cargo_bin).unwrap();
+    fs::create_dir_all(&local_bin).unwrap();
+    let local = local_bin.join("claudex-agent-adapter");
+    let cargo = cargo_bin.join("claudex-agent-adapter");
+    fs::create_dir_all(&cargo).unwrap();
+    fs::write(&local, b"fresh-local").unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&local, fs::Permissions::from_mode(0o755)).unwrap();
+    unsafe {
+        env::set_var("HOME", home);
+        env::set_var("CARGO_HOME", home.join(".cargo"));
+        env::remove_var(ADAPTER_EXECUTABLE_ENV);
+    }
+    let error = unify_install_paths().expect_err("copy onto directory");
+    assert!(
+        error.to_string().contains("copy fresher adapter") || format!("{error:#}").contains("copy"),
+        "{error:#}"
+    );
+
+    fs::remove_dir_all(&cargo).unwrap();
+    fs::write(&cargo, b"canonical").unwrap();
+    fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::remove_file(&local).unwrap();
+    fs::create_dir_all(&local).unwrap();
+    let error = unify_install_paths().expect_err("replace directory link");
+    assert!(
+        format!("{error:#}").contains("replace") || format!("{error:#}").contains("symlink"),
+        "{error:#}"
+    );
+}
+
 #[test]
 fn notify_delegate_uses_unified_install_when_override_absent() {
     let _guard = EnvGuard::push();

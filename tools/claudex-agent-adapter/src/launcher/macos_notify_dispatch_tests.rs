@@ -225,6 +225,47 @@ fn post_returns_early_when_delegation_succeeds() {
     restore_os(installed_adapter::NOTIFY_IN_PROCESS_ENV, previous_notify);
 }
 
+#[cfg(unix)]
+#[test]
+fn delegate_complete_notify_handles_non_utf8_cache_and_spawn_errors() {
+    use std::ffi::OsString;
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+
+    let _lock = env_lock();
+    let previous_adapter = std::env::var_os(installed_adapter::ADAPTER_EXECUTABLE_ENV);
+    let previous_notify = std::env::var_os(installed_adapter::NOTIFY_IN_PROCESS_ENV);
+    let root = tempfile::tempdir().expect("spawn error fixture");
+    let bogus = root.path().join("bogus-bin");
+    std::fs::write(&bogus, b"not-an-executable-image").expect("bogus bin");
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&bogus, std::fs::Permissions::from_mode(0o755)).unwrap();
+    unsafe {
+        std::env::set_var(installed_adapter::ADAPTER_EXECUTABLE_ENV, &bogus);
+        std::env::remove_var(installed_adapter::NOTIFY_IN_PROCESS_ENV);
+    }
+    assert!(!delegate_complete_notify(
+        root.path(),
+        &Event::SwapComplete {
+            listen: "127.0.0.1:8318".to_owned(),
+            build_id: "bogus-build".to_owned(),
+        }
+    ));
+
+    let mut bytes = root.path().as_os_str().as_bytes().to_vec();
+    bytes.push(0xff);
+    let non_utf8 = std::path::PathBuf::from(OsString::from_vec(bytes));
+    assert!(!delegate_complete_notify(
+        &non_utf8,
+        &Event::SwapComplete {
+            listen: "127.0.0.1:8318".to_owned(),
+            build_id: "non-utf8".to_owned(),
+        }
+    ));
+
+    restore_os(installed_adapter::ADAPTER_EXECUTABLE_ENV, previous_adapter);
+    restore_os(installed_adapter::NOTIFY_IN_PROCESS_ENV, previous_notify);
+}
+
 fn restore_os(key: &str, value: Option<OsString>) {
     match value {
         Some(value) => unsafe { std::env::set_var(key, value) },
