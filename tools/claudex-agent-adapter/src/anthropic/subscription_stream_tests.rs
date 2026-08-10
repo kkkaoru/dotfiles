@@ -1837,7 +1837,8 @@ impl BackgroundSleepFixture {
             r#"set -eu
 sleep 30 &
 background_pid=$!
-printf '%s\n' "$background_pid" > '{pid_file}'
+printf '%s\n' "$background_pid" > '{pid_file}.tmp'
+mv '{pid_file}.tmp' '{pid_file}'
 while [ ! -f '{release_file}' ]; do
     sleep 0.01
 done
@@ -1854,7 +1855,8 @@ wait "$background_pid"
             r#"set -eu
 sleep 30 >/dev/null &
 background_pid=$!
-printf '%s\n' "$background_pid" > '{pid_file}'
+printf '%s\n' "$background_pid" > '{pid_file}.tmp'
+mv '{pid_file}.tmp' '{pid_file}'
 while [ ! -f '{release_file}' ]; do
     sleep 0.01
 done
@@ -1942,13 +1944,12 @@ async fn wait_for_process_exit(pid: libc::pid_t) -> std::io::Result<bool> {
 
 #[cfg(unix)]
 async fn wait_for_background_process(pid_file: &Path) -> Option<BackgroundProcessGuard> {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
     while tokio::time::Instant::now() < deadline {
-        if let Ok(raw_pid) = fs::read_to_string(pid_file) {
-            let pid = raw_pid
-                .trim()
-                .parse()
-                .expect("valid background process PID");
+        if let Ok(raw_pid) = fs::read_to_string(pid_file)
+            && let Ok(pid) = raw_pid.trim().parse::<libc::pid_t>()
+            && pid > 1
+        {
             return Some(BackgroundProcessGuard { pid, active: true });
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
