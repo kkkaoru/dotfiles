@@ -13,6 +13,12 @@ fn wait_idle_poll_stays_snappy_while_listeners_are_busy() {
 }
 
 #[test]
+fn wait_idle_inspect_pause_guard_arms_without_changing_poll_interval() {
+    let _pause = WaitIdleInspectPause::arm(Duration::from_millis(5));
+    assert_eq!(WAIT_IDLE_POLL_INTERVAL, Duration::from_millis(100));
+}
+
+#[test]
 fn should_retry_idle_replace_respects_optional_limits() {
     assert!(should_retry_idle_replace(0, None));
     assert!(should_retry_idle_replace(9, None));
