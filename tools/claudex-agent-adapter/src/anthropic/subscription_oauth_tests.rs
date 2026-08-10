@@ -631,7 +631,8 @@ async fn subscription_bridge(
         )])
         .expect("install luna worker");
     let bridge = Bridge::new_with_subscription_program(app, "gpt-5.6-luna".to_owned(), program)
-        .with_model_catalog(catalog);
+        .with_model_catalog(catalog)
+        .with_usage_limit_cache_home(root);
     if exhaust_luna {
         bridge.note_provider_exhaustion(&anyhow::anyhow!(PROVIDER_401), Some("gpt-5.6-luna"));
     }
