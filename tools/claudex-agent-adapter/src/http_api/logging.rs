@@ -252,5 +252,10 @@ mod tests {
             None
         );
         assert_eq!(path_session_id("/health"), None);
+        assert_eq!(
+            path_session_id("/v1/code/sessions//worker/web-search"),
+            None,
+            "empty session id segment must be rejected"
+        );
     }
 }
