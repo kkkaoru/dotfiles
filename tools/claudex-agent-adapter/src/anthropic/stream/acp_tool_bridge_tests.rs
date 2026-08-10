@@ -537,6 +537,13 @@ mod tests {
             launch_tool_name_from_arguments(&args, &agent_only).as_deref(),
             Some("Agent")
         );
+
+        // contains("task") is false: fall through to Agent without Task remap.
+        let plain = json!({"_toolName": "cursor_card", "prompt": "go"});
+        assert_eq!(
+            launch_tool_name_from_arguments(&plain, &with_task).as_deref(),
+            Some("Agent")
+        );
     }
 
     #[test]
@@ -627,6 +634,21 @@ mod tests {
     #[test]
     fn covers_bridge_provider_tool_call_with_mcp_hint_queue_path() {
         let map = names();
+        let root = tempfile::tempdir().expect("queue fixture");
+        let path = root.path().join("launch-queue.jsonl");
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_secs_f64();
+        let entry = json!({
+            "ts": now,
+            "name": "Agent",
+            "arguments": {"prompt": "queued-mcp-work", "description": "queued"}
+        });
+        std::fs::write(&path, format!("{entry}\n")).expect("queue write");
+        let previous = std::env::var_os("CLAUDEX_LAUNCH_QUEUE");
+        unsafe { std::env::set_var("CLAUDEX_LAUNCH_QUEUE", &path) };
+
         let mcp_event = json!({
             "params": {
                 "callId": "mcp-queue",
@@ -635,8 +657,14 @@ mod tests {
                 "arguments": {"run_in_background": true}
             }
         });
-        let result = bridge_provider_tool_call_with_mcp_hint(&map, &mcp_event, None);
-        assert!(result.is_none());
+        let bridged = bridge_provider_tool_call_with_mcp_hint(&map, &mcp_event, None)
+            .expect("queued MCP args bridge");
+        assert_eq!(bridged.name, "Agent");
+        assert_eq!(bridged.arguments["prompt"], "queued-mcp-work");
+        match previous {
+            Some(value) => unsafe { std::env::set_var("CLAUDEX_LAUNCH_QUEUE", value) },
+            None => unsafe { std::env::remove_var("CLAUDEX_LAUNCH_QUEUE") },
+        }
     }
 
     #[test]
