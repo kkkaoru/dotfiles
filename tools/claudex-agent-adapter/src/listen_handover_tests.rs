@@ -30,6 +30,15 @@ fn canonical_addr_stays_fixed_after_advertised_rebind() {
 }
 
 #[test]
+fn parse_service_listen_keeps_client_port_off_warm_start_ephemeral() {
+    let warm = "127.0.0.1:62486".parse().unwrap();
+    let service = "127.0.0.1:8318".parse().unwrap();
+    assert_eq!(parse_service_listen(Some("127.0.0.1:8318"), warm), service);
+    assert_eq!(parse_service_listen(None, warm), warm);
+    assert_eq!(parse_service_listen(Some("not-a-socket"), warm), warm);
+}
+
+#[test]
 fn service_addr_stays_on_client_port_after_warm_start_promote() {
     let warm = "127.0.0.1:62486".parse().unwrap();
     let service = "127.0.0.1:8318".parse().unwrap();

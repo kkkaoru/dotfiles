@@ -104,8 +104,7 @@ fn parse_command(mut arguments: VecDeque<OsString>) -> Result<RuntimeCommand> {
     }
 }
 
-// Keep the option table in one place so each supported CLI flag has a single,
-// auditable parsing branch; the build gate still limits this file to 400 lines.
+// Keep CLI flags in one table so each parsing branch stays auditable.
 #[allow(clippy::too_many_lines)]
 fn parse_options(arguments: &mut VecDeque<OsString>) -> Result<ParsedOptions> {
     let mut routes = Vec::new();
@@ -372,7 +371,8 @@ async fn serve_on_listener(
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".cache/claudex");
-    let (handover, rx) = crate::listen_handover::ListenHandover::new(options.listen, cache);
+    let (handover, rx) =
+        crate::listen_handover::ListenHandover::from_runtime_bind(options.listen, cache);
     let handover_listener = crate::listen_handover::HandoverListener::new(listener, &handover, rx);
     let result = shutdown::serve(
         handover_listener,

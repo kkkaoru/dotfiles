@@ -48,6 +48,7 @@ fn start_with_retained(
         &listen_config.service_config_fingerprint,
         Some(&manifest_path),
         retained_path,
+        manifest_config.options.listen,
     )
 }
 
@@ -60,6 +61,7 @@ pub(super) fn start_ephemeral_adapter(config: &ServiceConfig) -> Result<u32> {
         &config.service_config_fingerprint,
         None,
         None,
+        config.options.listen,
     )
 }
 
@@ -80,6 +82,7 @@ pub(super) fn start_recovery(config: &ServiceConfig, generation: &str) -> Result
         &recovery.service_config_fingerprint,
         Some(&recovery.manifest_path),
         None,
+        config.options.listen,
     )?;
     Ok(RecoveryProcess {
         pid,
@@ -104,6 +107,7 @@ fn spawn_adapter(
     service_config_fingerprint: &str,
     manifest_path: Option<&Path>,
     retained_path: Option<&Path>,
+    service_listen: std::net::SocketAddr,
 ) -> Result<u32> {
     let log_dir = config
         .log_path
@@ -143,6 +147,7 @@ fn spawn_adapter(
     } else {
         command.env_remove(super::RETAINED_STATE_ENV);
     }
+    command.env(super::SERVICE_LISTEN_ENV, service_listen.to_string());
     let child = command
         .env_remove(crate::anthropic::SUBAGENT_HARD_TIMEOUT_ENV)
         .env_remove(crate::anthropic::LEGACY_SUBAGENT_RESPONSE_TIMEOUT_ENV)

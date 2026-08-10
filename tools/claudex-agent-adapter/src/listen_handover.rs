@@ -12,6 +12,12 @@ use serde::{Deserialize, Serialize};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
 
+pub(crate) const SERVICE_LISTEN_ENV: &str = "CLAUDEX_SERVICE_LISTEN";
+
+pub(crate) fn parse_service_listen(raw: Option<&str>, bind: SocketAddr) -> SocketAddr {
+    raw.and_then(|value| value.parse().ok()).unwrap_or(bind)
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum HandoverCommand {
     None,
@@ -25,6 +31,7 @@ pub(crate) struct ListenHandover {
     advertised: Arc<RwLock<SocketAddr>>,
     cache: PathBuf,
     canonical: SocketAddr,
+    service: SocketAddr,
 }
 
 #[derive(Debug, Deserialize, Serialize, Eq, PartialEq)]
@@ -38,13 +45,30 @@ impl ListenHandover {
         canonical: SocketAddr,
         cache: PathBuf,
     ) -> (Self, watch::Receiver<HandoverCommand>) {
+        Self::new_with_service(canonical, canonical, cache)
+    }
+
+    pub(crate) fn from_runtime_bind(
+        bind: SocketAddr,
+        cache: PathBuf,
+    ) -> (Self, watch::Receiver<HandoverCommand>) {
+        let service = parse_service_listen(std::env::var(SERVICE_LISTEN_ENV).ok().as_deref(), bind);
+        Self::new_with_service(bind, service, cache)
+    }
+
+    pub(crate) fn new_with_service(
+        initial: SocketAddr,
+        service: SocketAddr,
+        cache: PathBuf,
+    ) -> (Self, watch::Receiver<HandoverCommand>) {
         let (request, rx) = watch::channel(HandoverCommand::None);
         (
             Self {
                 request,
-                advertised: Arc::new(RwLock::new(canonical)),
+                advertised: Arc::new(RwLock::new(initial)),
                 cache,
-                canonical,
+                canonical: initial,
+                service,
             },
             rx,
         )
@@ -56,6 +80,10 @@ impl ListenHandover {
 
     pub(crate) fn canonical_addr(&self) -> SocketAddr {
         self.canonical
+    }
+
+    pub(crate) fn service_addr(&self) -> SocketAddr {
+        self.service
     }
 
     #[cfg(test)]

@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use super::{ServiceConfig, launcher_logs};
 
 pub(crate) const RETAINED_STATE_ENV: &str = "CLAUDEX_RETAINED_STATE";
+pub(crate) use crate::listen_handover::SERVICE_LISTEN_ENV;
 
 #[derive(Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 pub(super) struct LiveState {

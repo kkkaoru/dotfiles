@@ -314,6 +314,51 @@ async fn rebound_daemon_forwards_idle_keepalive_to_canonical() {
 }
 
 #[tokio::test]
+async fn promoted_warm_start_does_not_proxy_to_dead_ephemeral() {
+    // Old failure: after cutover, the new daemon still treated its warm-start
+    // port as canonical and proxied :8318 /v1/messages to dead :62486 → 502.
+    let cache = tempfile::tempdir().expect("promoted cache");
+    let service = "127.0.0.1:8318".parse().unwrap();
+    let (advertised, _rx) = ListenHandover::new_with_service(
+        "127.0.0.1:62486".parse().unwrap(),
+        service,
+        cache.path().to_path_buf(),
+    );
+    advertised.set_advertised_for_test(service);
+    let state = Some(HandoverState {
+        retained: None,
+        advertised: Some(advertised),
+        client: proxy_http_client(),
+    });
+    let app = Router::new()
+        .route("/v1/messages", post(|| async { "promoted-primary" }))
+        .layer(middleware::from_fn_with_state(
+            state,
+            proxy_retained_sessions,
+        ));
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("promoted listener");
+    let addr = listener.local_addr().expect("promoted address");
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.ok();
+    });
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let response = reqwest::Client::new()
+        .post(format!("http://{addr}/v1/messages"))
+        .header("x-claude-code-session-id", "5a7a0dcd-idle-tui")
+        .body("{}")
+        .send()
+        .await
+        .expect("promoted primary");
+    assert_eq!(
+        response.text().await.expect("local primary body"),
+        "promoted-primary",
+        "promoted daemon must serve locally instead of proxying to its dead warm-start port"
+    );
+}
+
+#[tokio::test]
 async fn rebound_daemon_keeps_in_flight_retained_sessions_local() {
     let canonical_upstream = serve_http_once(b"from-canonical").await;
     let cache = tempfile::tempdir().expect("rebound busy cache");

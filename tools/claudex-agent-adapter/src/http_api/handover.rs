@@ -207,12 +207,13 @@ pub(super) async fn proxy_retained_sessions(
         .filter(|value| !value.is_empty());
     if let Some(advertised) = state.advertised.as_ref() {
         let current = advertised.advertised_addr();
-        let canonical = advertised.canonical_addr();
-        if current != canonical {
-            // Claude Code keep-alives the TCP socket across live-update. After
-            // rebind, idle SubAgent launches would otherwise stay on this old
-            // binary and look silent. Forward them to the new canonical listen
-            // unless this process still owns an in-flight retained session.
+        let service = advertised.service_addr();
+        if current != service {
+            // Old daemon left the client-facing service port. Idle keep-alives
+            // must ride to that service listen. A promoted warm-start daemon
+            // has service=:8318 and advertised=:8318 after cutover — do not
+            // proxy back to the dead warm-start port (that 502'd TUI as
+            // http://127.0.0.1:62486/v1/messages).
             let keep_local = session_id.is_some_and(|id| {
                 state
                     .retained
@@ -220,7 +221,7 @@ pub(super) async fn proxy_retained_sessions(
                     .is_some_and(|retained| retained.owns(id) && retained.targets(current))
             });
             if !keep_local {
-                return proxy_request(&state.client, canonical, request).await;
+                return proxy_request(&state.client, service, request).await;
             }
             return next.run(request).await;
         }
