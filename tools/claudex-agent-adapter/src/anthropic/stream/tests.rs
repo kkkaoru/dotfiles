@@ -171,6 +171,53 @@ fn compact_live_prose_and_worker_status_cover_both_truncation_sides() {
         "Retrying provider request"
     ));
     assert!(!sanitize::is_provider_status_line("real assistant prose"));
+    assert!(sanitize::is_provider_status_line("▶ running"));
+    assert!(sanitize::is_provider_status_line("✓ done"));
+    assert!(sanitize::is_provider_status_line("✗ failed"));
+    assert!(sanitize::is_provider_status_line("… still working"));
+    assert!(sanitize::is_provider_status_line(
+        "Claudex is still working; waiting"
+    ));
+    assert!(sanitize::is_provider_status_line("Session mode: agent"));
+    assert!(sanitize::is_provider_status_line("Session: live"));
+    assert!(sanitize::is_provider_status_line("🔎 WebSearch: query"));
+    assert!(sanitize::is_premature_worker_status_reply(
+        "phase update: still drafting"
+    ));
+    assert!(sanitize::is_premature_worker_status_reply(
+        "starting phase 2"
+    ));
+    assert!(sanitize::is_premature_worker_status_reply(
+        "still working on it"
+    ));
+    assert!(sanitize::is_premature_worker_status_reply(
+        "Status: chrome only"
+    ));
+    assert!(!sanitize::is_premature_worker_status_reply(
+        &"x".repeat(161)
+    ));
+    assert!(!sanitize::is_bulk_tool_dump("short dump"));
+    assert!(sanitize::is_bulk_tool_dump(&format!(
+        "{{{}{}}}",
+        "\"k\":1,".repeat(20),
+        ""
+    )));
+    assert!(sanitize::is_bulk_tool_dump(&format!(
+        "[{}]",
+        "1,".repeat(60)
+    )));
+    assert!(sanitize::is_bulk_tool_dump(
+        "not json {a}{b}{c} extra braces wrap this dump and then more filler text for the length gate...."
+    ));
+    let mut chrome_only = vec![json!({
+        "type": "thinking",
+        "thinking": "Status: inspecting\n▶ running"
+    })];
+    sanitize::sanitize_committed_blocks(&mut chrome_only);
+    assert!(
+        chrome_only.is_empty(),
+        "provider-status-only thinking must drop: {chrome_only:?}"
+    );
 }
 
 #[test]
