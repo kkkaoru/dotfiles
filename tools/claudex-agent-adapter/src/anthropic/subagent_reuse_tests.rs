@@ -798,6 +798,59 @@ mod tests {
     }
 
     #[test]
+    fn launch_records_cover_empty_scope_and_background_spawn_text() {
+        assert!(summarize_scope(&json!({})).is_empty());
+        assert!(
+            summarize_scope(
+                &json!({"prompt":"\nclaudex_hidden\n<claudex-note>skip</claudex-note>\n"})
+            )
+            .is_empty()
+        );
+        assert!(!already_has_resume(&json!({})));
+        assert!(!already_has_resume(&json!({"resume":""})));
+        assert!(already_has_resume(&json!({"resume":"session-1"})));
+        assert!(find_reusable_launch(&[], &json!({})).is_none());
+        assert!(!scope_is_occupied(&[], ""));
+
+        let records = launch_records(&[
+            json!({"role":"assistant"}),
+            json!({
+                "role":"assistant",
+                "content":[{
+                    "type":"tool_use",
+                    "id":"call-read",
+                    "name":"Read",
+                    "input":{"path":"CLAUDE.md"}
+                }]
+            }),
+            json!({
+                "role":"user",
+                "content":[{
+                    "type":"tool_result",
+                    "tool_use_id":"call-a",
+                    "content":[{"type":"text","text":"teammate_spawned agentId: worker-b"}]
+                }]
+            }),
+            json!({
+                "role":"user",
+                "content":[{
+                    "type":"tool_result",
+                    "tool_use_id":"call-c",
+                    "content":[{"type":"text","text":"working in the background\nagent_id: worker-c"}]
+                }]
+            }),
+        ]);
+        assert!(
+            records.iter().any(|record| record.recipient == "worker-b"),
+            "{records:?}"
+        );
+        assert!(
+            records.iter().any(|record| record.recipient == "worker-c"),
+            "{records:?}"
+        );
+    }
+
+    #[test]
     fn scope_similarity_prioritizes_the_matching_worker() {
         assert!(
             scope_similarity("audit Rust adapter tests", "continue Rust tests")
