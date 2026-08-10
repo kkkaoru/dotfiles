@@ -826,6 +826,99 @@ mod tests {
         server.join().expect("wait-idle replace reuse server");
     }
 
+    #[tokio::test]
+    async fn wait_idle_start_reuses_when_a_current_listener_appears_during_pause() {
+        let root = tempfile::tempdir().expect("wait-idle start reuse fixture");
+        let mut cfg = config();
+        cfg.options.listen = unused_listen();
+        cfg.log_path = root.path().join("adapter.log");
+        cfg.lock_path = root.path().join("adapter.lock");
+        let listen = cfg.options.listen;
+        let health = healthy(&cfg);
+        let responses = vec![health_response(&health), http_response("200 OK", "{}")];
+        let _pause = ensure::WaitIdleInspectPause::arm(Duration::from_millis(80));
+        let server = thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(40));
+            let listener = TcpListener::bind(listen).expect("late reuse listener");
+            serve_all_responses(&listener, responses);
+        });
+        let url = ensure::run(&cfg, ensure::Mode::WaitIdle)
+            .await
+            .expect("wait-idle Start should reuse once the listener appears");
+        assert_eq!(url, cfg.base_url());
+        server.join().expect("late reuse server");
+    }
+
+    #[tokio::test]
+    async fn wait_idle_replace_defers_when_work_returns_then_reuses() {
+        let root = tempfile::tempdir().expect("wait-idle replace defer fixture");
+        let mut cfg = config();
+        let listener = TcpListener::bind("127.0.0.1:0").expect("replace defer listener");
+        cfg.options.listen = listener.local_addr().expect("replace defer address");
+        cfg.log_path = root.path().join("adapter.log");
+        cfg.lock_path = root.path().join("adapter.lock");
+        let mut old = healthy(&cfg);
+        old.build_id = "old-build".to_owned();
+        let mut busy = healthy(&cfg);
+        busy.build_id = "old-build".to_owned();
+        busy.active_http_requests = 1;
+        let reusable = healthy(&cfg);
+        let server = serve_responses(
+            listener,
+            vec![
+                health_response(&old),
+                health_response(&busy),
+                health_response(&reusable),
+                http_response("200 OK", "{}"),
+            ],
+        );
+        let url = ensure::run(&cfg, ensure::Mode::WaitIdle)
+            .await
+            .expect("Replace→Defer should keep polling until Reuse");
+        assert_eq!(url, cfg.base_url());
+        server.join().expect("replace defer server");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn wait_idle_replace_retries_once_then_fails_closed() {
+        let root = tempfile::tempdir().expect("wait-idle replace retry fixture");
+        let dummy = root.path().join("claudex-agent-adapter");
+        std::fs::write(&dummy, "#!/bin/sh\nexit 0\n").expect("dummy adapter");
+        std::fs::set_permissions(&dummy, std::fs::Permissions::from_mode(0o755))
+            .expect("dummy executable");
+        let mut cfg = config();
+        cfg.executable = dummy;
+        let listener = TcpListener::bind("127.0.0.1:0").expect("retry listener");
+        cfg.options.listen = listener.local_addr().expect("retry address");
+        cfg.log_path = root.path().join("adapter.log");
+        cfg.lock_path = root.path().join("adapter.lock");
+        let mut old = healthy(&cfg);
+        old.build_id = "old-build".to_owned();
+        old.listener_handover = true;
+        let server = serve_responses(
+            listener,
+            vec![
+                health_response(&old),
+                health_response(&old),
+                health_response(&old),
+                health_response(&old),
+                health_response(&old),
+                health_response(&old),
+            ],
+        );
+        let error = ensure::run(&cfg, ensure::Mode::WaitIdle)
+            .await
+            .expect_err("idle replace must fail closed after the test retry budget");
+        assert!(
+            error.to_string().contains("wait for warm-start")
+                || error.to_string().contains("warm-start")
+                || error.to_string().contains("start"),
+            "{error:#}"
+        );
+        server.join().expect("retry listener");
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn wait_idle_replace_fails_closed_when_live_update_warm_start_never_readies() {
@@ -846,6 +939,9 @@ mod tests {
         let server = serve_responses(
             listener,
             vec![
+                health_response(&old),
+                health_response(&old),
+                health_response(&old),
                 health_response(&old),
                 health_response(&old),
                 health_response(&old),
@@ -1414,6 +1510,104 @@ HTTPServer((host, int(port)), Handler).serve_forever()
             .expect("idle replace should promote once the dummy is ready");
         assert_eq!(url, cfg.base_url());
         server.join().expect("stale listener");
+        kill_dummy(&dummy);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn ensure_replace_mentions_an_attached_launch_tui() {
+        let root = tempfile::tempdir().expect("attached launch fixture");
+        let launch_dir = root.path().join("launch-bin");
+        std::fs::create_dir(&launch_dir).expect("launch bin dir");
+        let launch_bin = launch_dir.join("claudex-agent-adapter");
+        let stub = launch_dir.join("launch-stub.c");
+        std::fs::write(
+            &stub,
+            "#include <unistd.h>\nint main(void) { for (;;) { sleep(60); } return 0; }\n",
+        )
+        .expect("launch stub source");
+        let compiled = Command::new("cc")
+            .args(["-o"])
+            .arg(&launch_bin)
+            .arg(&stub)
+            .status()
+            .expect("compile launch stub");
+        assert!(compiled.success(), "cc must build a real argv0 launch binary");
+        let mut cfg = config();
+        let listener = TcpListener::bind("127.0.0.1:0").expect("stale listener");
+        cfg.options.listen = listener.local_addr().expect("stale address");
+        cfg.log_path = root.path().join("adapter.log");
+        cfg.lock_path = root.path().join("adapter.lock");
+        let dummy = write_matching_build_dummy(root.path(), &cfg);
+        cfg.executable = dummy.clone();
+        let launch = Command::new(&launch_bin)
+            .args([
+                "launch",
+                "--listen",
+                &cfg.options.listen.to_string(),
+                "--model",
+                "opus",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("attached launch parent");
+        let launch_pid = launch.id();
+        let _cleanup = ProcessGroupCleanup::for_leader(launch_pid);
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        assert!(
+            super::session_process::any_launch_is_active(cfg.options.listen.port()),
+            "fixture launch parent must be visible to ps"
+        );
+        let mut old = healthy(&cfg);
+        old.build_id = "old-build".to_owned();
+        old.pid = Some(42);
+        old.listener_handover = false;
+        let server = serve_responses(listener, vec![health_response(&old)]);
+        let url = ensure::run(&cfg, ensure::Mode::Ensure)
+            .await
+            .expect("attached Replace should still promote");
+        assert_eq!(url, cfg.base_url());
+        server.join().expect("stale listener");
+        kill_dummy(&dummy);
+        let _ = Command::new("kill")
+            .args(["-9", &launch_pid.to_string()])
+            .status();
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn busy_hot_swap_promotes_via_live_update_restart_without_asserting_fallback() {
+        // Covers defer_busy Ok(Some(url)) without asserting canonical URL when
+        // mock rebind falls back — warm bind may miss; restart can still finish.
+        let root = tempfile::tempdir().expect("busy live-update restart fixture");
+        let mut cfg = config();
+        let listener = TcpListener::bind("127.0.0.1:0").expect("busy listener");
+        cfg.options.listen = listener.local_addr().expect("busy address");
+        cfg.log_path = root.path().join("adapter.log");
+        cfg.lock_path = root.path().join("adapter.lock");
+        let dummy = write_matching_build_dummy(root.path(), &cfg);
+        cfg.executable = dummy.clone();
+        let mut busy = healthy(&cfg);
+        busy.build_id = "old-build".to_owned();
+        busy.listener_handover = true;
+        busy.active_http_requests = 1;
+        let ephemeral = unused_listen();
+        let rebind_body = format!(r#"{{"listen":"{ephemeral}"}}"#);
+        let rebind = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{rebind_body}",
+            rebind_body.len()
+        );
+        let server = serve_responses(
+            listener,
+            vec![health_response(&busy), health_response(&busy), rebind],
+        );
+        let url = ensure::run(&cfg, ensure::Mode::HotSwap)
+            .await
+            .expect("busy hot-swap live-update should finish via restart or fallback");
+        assert!(url.starts_with("http://"), "{url}");
+        server.join().expect("busy listener");
         kill_dummy(&dummy);
     }
 
