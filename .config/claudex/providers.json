@@ -188,6 +188,7 @@
       "defaultModel": "auto",
       "subagentModel": "auto",
       "effort": "high",
+      "maxContextTokens": 200000,
       "enabled": true,
       "usageProvider": "cursor",
       "modelPrefixes": [

@@ -639,8 +639,9 @@ CLAUDEX_MODEL=qwen3.8-max-preview claudex
 自動 SubAgent は従来どおり `gpt-5.6-luna` / `claudex-gpt` です。Terra を outer にしても
 main は実装せず、実質作業は Agent/Task で worker へ委譲します。Terra を outer にする場合は
 `/model` で `claude-claudex-gpt-5.6-terra` を選ぶか、上記の `CLAUDEX_MODEL` を使います。
-Claude Code は `gpt-5.6-terra` を未知モデルとして 200k compact 前提にするため、launcher は
-provider の `maxContextTokens`（Codex は `110000`）を `CLAUDE_CODE_MAX_CONTEXT_TOKENS` へ渡します。
+Claude Code は `gpt-5.6-terra` や `auto` を未知モデルとして 200k compact 前提にするため、launcher は
+provider の `maxContextTokens`（Codex は `110000`、Cursor `auto` は `200000`）を
+`CLAUDE_CODE_MAX_CONTEXT_TOKENS` へ渡します。
 
 `CLAUDEX_MODEL` を明示した場合だけClaude Code設定の継承を無効化し、指定モデルをouter
 sessionにも使います。指定値は `modelPrefixes` と照合され、設定にないprefixのモデルは
@@ -855,7 +856,9 @@ threadを先に開始し、`contextWindowExceeded` を事前回避します。�
 2026-07-26 の実運用ログで約116k入力トークン時に上限へ到達したため、再構築時の
 システム指示やtool schemaの余白を確保して `110000` を採用しています。
 `fugu` はCodex catalogの1M context windowに合わせて
-`1000000` を指定しています。いずれもproviderが実際の上限を先に返した場合は、
+`1000000` を指定しています。Cursor `auto` は Claude Code が未知モデルに仮定する
+200k と同じ `200000` を指定し、起動時の unrecognized-model 警告を env で明示します。
+いずれもproviderが実際の上限を先に返した場合は、
 非streaming turnを新規threadで1回だけ自動再試行します。
 
 `maxConcurrency` はpositive integerのmodel別並列上限です。`subagentModel`（省略時は

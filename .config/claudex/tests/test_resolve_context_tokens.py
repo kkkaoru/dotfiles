@@ -22,6 +22,10 @@ class ResolveContextTokensTests(unittest.TestCase):
     def test_fugu_uses_one_million_window(self) -> None:
         self.assertEqual(self.resolve(str(PROVIDERS), "fugu"), "1000000")
 
+    def test_cursor_auto_uses_two_hundred_thousand_window(self) -> None:
+        for model in ["auto", "claude-claudex-auto"]:
+            self.assertEqual(self.resolve(str(PROVIDERS), model), "200000", model)
+
     def test_native_claude_and_grok_have_no_override(self) -> None:
         for model in ["opus", "sonnet[1m]", "claude-sonnet-5", "grok-4.5"]:
             self.assertEqual(self.resolve(str(PROVIDERS), model), "", model)
