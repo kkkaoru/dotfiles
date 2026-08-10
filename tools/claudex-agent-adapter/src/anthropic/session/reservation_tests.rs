@@ -206,7 +206,7 @@ async fn signature_only_busy_match_accepts_empty_transcript() {
 }
 
 #[tokio::test]
-async fn signature_only_busy_match_skips_pending_tools() {
+async fn signature_only_busy_match_finds_session_with_pending_tools() {
     let messages = messages();
     let session = session_with("main", Some("client"), "signature", messages.clone());
     session
@@ -215,12 +215,14 @@ async fn signature_only_busy_match_skips_pending_tools() {
         .await
         .insert("tool-1".to_owned(), json!(1));
     let _gate = Arc::clone(&session.gate).lock_owned().await;
-    assert!(
-        find_busy_signature_matching_session(vec![session], &Arc::from("signature"), &messages,)
-            .await
-            .is_none(),
-        "busy SubAgent with pending tools must not be preempted"
-    );
+    let found = find_busy_signature_matching_session(
+        vec![Arc::clone(&session)],
+        &Arc::from("signature"),
+        &messages,
+    )
+    .await
+    .expect("pure mid-turn must discover the busy session despite pending tools");
+    assert!(Arc::ptr_eq(&found.0, &session));
 }
 
 #[tokio::test]
@@ -254,7 +256,7 @@ async fn find_busy_skips_idle_sessions() {
 }
 
 #[tokio::test]
-async fn reserve_skips_a_session_with_pending_subagent_tools() {
+async fn reserve_reclaims_idle_session_with_pending_tools_for_pure_mid_turn() {
     let session = Arc::new(session("main", Some("client")));
     session
         .pending_tools
@@ -262,16 +264,17 @@ async fn reserve_skips_a_session_with_pending_subagent_tools() {
         .await
         .insert("tool-1".to_owned(), json!(1));
     let selected = reserve_matching_session(
-        vec![session],
+        vec![Arc::clone(&session)],
         &Arc::from("signature"),
         &[json!({"role":"user","content":"follow-up"})],
     )
-    .await;
-    assert!(selected.is_none());
+    .await
+    .expect("pure mid-turn must reclaim the pending-tool session");
+    assert!(Arc::ptr_eq(&selected.session, &session));
 }
 
 #[tokio::test]
-async fn busy_selection_skips_a_session_with_pending_subagent_tools() {
+async fn busy_selection_finds_session_with_pending_subagent_tools() {
     let messages = messages();
     let session = session_with("main", Some("client"), "signature", messages.clone());
     session
@@ -289,9 +292,10 @@ async fn busy_selection_skips_a_session_with_pending_subagent_tools() {
         Some("client"),
         None,
     )
-    .await;
+    .await
+    .expect("busy match must not hide behind pending tools");
 
-    assert!(found.is_none());
+    assert_eq!(found.1, messages.len());
 }
 
 #[tokio::test]

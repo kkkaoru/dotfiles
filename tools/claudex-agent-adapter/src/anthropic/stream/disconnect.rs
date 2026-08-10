@@ -145,6 +145,20 @@ impl Bridge {
         rejected_request_ids
     }
 
+    /// Pure mid-turn follow-ups reclaim a session that still owns Claude tool
+    /// calls from the prior segment. Reject those calls so the provider can
+    /// accept the new user turn instead of waiting forever for tool_result.
+    pub(in crate::anthropic) async fn settle_abandoned_pending_tools(&self, session: &Session) {
+        if session.pending_tools.lock().await.is_empty() {
+            return;
+        }
+        tracing::info!(
+            thread_id = %session.thread_id,
+            "settling abandoned pending tools before pure mid-turn follow-up"
+        );
+        let _ = self.reject_pending_disconnected_tools(session).await;
+    }
+
     async fn discard_pending_disconnected_tools(&self, session: &Session) {
         let pending = take_pending_disconnected_tools(session).await;
         self.agent_efforts
@@ -172,6 +186,9 @@ async fn reject_disconnected_tool_with_warning(
     session: &Session,
     request_id: Value,
 ) {
+    if crate::anthropic::stream::acp_tool_bridge::is_acp_bridge_request_id(&request_id) {
+        return;
+    }
     if let Err(error) = reject_disconnected_tool(&bridge.app, &session.model, request_id).await {
         warn_disconnect_failure(
             &error,

@@ -1492,7 +1492,7 @@ async fn take_gate_after_preempt_drops_orphaned_assistant_tail() {
     let follow = json!({"role":"user","content":"again"});
     let target = session("signature", vec![user.clone(), orphan]);
     // Gate is free so take_gate can lock immediately (cancel already settled).
-    let selected = take_gate_after_preempt(&target, &[user.clone(), follow.clone()])
+    let selected = take_gate_after_preempt(&target, &[user.clone(), follow.clone()], false)
         .await
         .expect("aligned session");
     assert_eq!(selected.existing_len, 1);
@@ -2165,6 +2165,40 @@ async fn folds_mid_turn_user_steering_into_submitted_tool_results() {
                 .is_some_and(|text| text.contains("追加調査して"))
         }),
         "provider tool response must carry mid-turn user steering: {items:?}"
+    );
+}
+
+#[tokio::test]
+async fn pure_mid_turn_follow_up_settles_abandoned_pending_tools() {
+    let root = tempfile::tempdir().expect("mock app-server fixture");
+    let trace = root.path().join("pure-mid-turn-settle.jsonl");
+    let script = format!(
+        "#!/bin/sh\nread initialize\nprintf '%s\\n' '{{\"id\":1,\"result\":{{}}}}'\nread initialized\nwhile read line; do printf '%s\\n' \"$line\" >> '{}'; done\n",
+        trace.display()
+    );
+    let (_server_root, app) = mock_app_server(&script).await;
+    let bridge = Bridge::new_with_backend(AgentBackend::codex(app), "main".to_owned());
+    let session = session("signature", Vec::new());
+    session
+        .pending_tools
+        .lock()
+        .await
+        .insert("tool-1".to_owned(), json!(99));
+
+    bridge.settle_abandoned_pending_tools(&session).await;
+
+    assert!(
+        session.pending_tools.lock().await.is_empty(),
+        "pure mid-turn settle must clear abandoned pending tools"
+    );
+    let trace = mock_trace(&trace, 1).await;
+    assert_eq!(trace[0]["id"], 99);
+    assert_eq!(trace[0]["result"]["success"], false);
+    assert!(
+        trace[0]["result"]["contentItems"][0]["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("disconnected before returning")),
+        "provider must be released from the abandoned tool wait: {trace:?}"
     );
 }
 

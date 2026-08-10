@@ -20,9 +20,9 @@ pub(super) async fn reserve_matching_session(
         let Ok(gate) = Arc::clone(&session.gate).try_lock_owned() else {
             continue;
         };
-        if has_pending_tools(&session).await {
-            continue;
-        }
+        // Pure mid-turn follow-ups arrive while Claude tools are still pending.
+        // Skipping those sessions forced a cold start and dropped the user text;
+        // callers settle/reject pending tools before starting the new turn.
         let Some(existing_len) = candidate_length(&session, signature, messages).await else {
             continue;
         };
@@ -76,9 +76,6 @@ pub(super) async fn find_busy_matching_session(
     // across concurrent claudex TUIs on one daemon.
     let mut best: Option<(Arc<Session>, usize)> = None;
     for session in sessions {
-        if has_pending_tools(&session).await {
-            continue;
-        }
         if Arc::clone(&session.gate).try_lock_owned().is_ok() {
             continue;
         }
@@ -103,9 +100,6 @@ async fn find_busy_by_signature(
 ) -> Option<(Arc<Session>, usize)> {
     let mut best: Option<(Arc<Session>, usize)> = None;
     for session in sessions {
-        if has_pending_tools(&session).await {
-            continue;
-        }
         let Some(existing_len) = candidate_length(&session, signature, messages).await else {
             continue;
         };
@@ -150,15 +144,23 @@ fn claude_session_ids_match(stored: Option<&str>, requested: Option<&str>) -> bo
 
 /// Wait for a cancelled turn to release its session gate, then realign the
 /// transcript if a partial assistant message was committed after interrupt.
+///
+/// When `settle_pending` is true (provider cancel settled), abandon local
+/// pending-tool ownership so a pure mid-turn follow-up can reuse the thread.
+/// When false, leftover pending tools still block reuse after a failed cancel.
 pub(super) async fn take_gate_after_preempt(
     session: &Arc<Session>,
     messages: &[Value],
+    settle_pending: bool,
 ) -> Option<SelectedSession> {
     let gate = tokio::time::timeout(PREEMPT_GATE_TIMEOUT, Arc::clone(&session.gate).lock_owned())
         .await
         .ok()?;
     if has_pending_tools(session).await {
-        return None;
+        if !settle_pending {
+            return None;
+        }
+        clear_pending_tools(session).await;
     }
     align_transcript_to_request(session, messages).await;
     let existing_len = matching_transcript_len(session, messages).await?;
@@ -170,8 +172,17 @@ pub(super) async fn take_gate_after_preempt(
         gate,
     })
 }
-async fn has_pending_tools(session: &Session) -> bool {
+
+pub(super) async fn has_pending_tools(session: &Session) -> bool {
     !session.pending_tools.lock().await.is_empty()
+}
+
+async fn clear_pending_tools(session: &Session) {
+    session.pending_tools.lock().await.clear();
+    *session
+        .pending_since
+        .lock()
+        .expect("pending tool clock poisoned") = None;
 }
 
 /// Drop trailing transcript entries that the client did not keep after interrupt

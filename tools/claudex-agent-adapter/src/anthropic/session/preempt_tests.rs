@@ -226,11 +226,11 @@
         session: Arc<Session>,
         messages: Vec<Value>,
     ) -> Option<SelectedSession> {
-        take_gate_after_preempt(&session, &messages).await
+        take_gate_after_preempt(&session, &messages, false).await
     }
 
     #[tokio::test]
-    async fn pending_busy_tools_prevent_session_reuse_after_gate_release() {
+    async fn pending_busy_tools_prevent_session_reuse_after_failed_cancel() {
         let session = session("main-model", Some("client"));
         session
             .pending_tools
@@ -238,14 +238,38 @@
             .await
             .insert("tool-1".to_owned(), serde_json::json!({"id":"tool-1"}));
         assert!(
-            take_gate_after_preempt(&session, &[json!({"role":"user","content":"first"})])
-                .await
-                .is_none()
+            take_gate_after_preempt(
+                &session,
+                &[json!({"role":"user","content":"first"})],
+                false
+            )
+            .await
+            .is_none(),
+            "failed cancel must not reuse a session that still owns pending tools"
         );
     }
 
     #[tokio::test]
-    async fn cancellation_failure_never_reuses_a_busy_session_with_pending_tools() {
+    async fn settled_preempt_clears_pending_tools_for_pure_mid_turn() {
+        let session = session("main-model", Some("client"));
+        session
+            .pending_tools
+            .lock()
+            .await
+            .insert("tool-1".to_owned(), serde_json::json!({"id":"tool-1"}));
+        let selected = take_gate_after_preempt(
+            &session,
+            &[json!({"role":"user","content":"first"})],
+            true,
+        )
+        .await
+        .expect("settled cancel may abandon pending tools for the follow-up");
+        assert!(Arc::ptr_eq(&selected.session, &session));
+        assert!(selected.session.pending_tools.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn dead_driver_settle_clears_pending_tools_and_reuses_for_follow_up() {
         let app = stopped_acp_app();
         let session = session("main-model", Some("client"));
         let gate = Arc::clone(&session.gate).lock_owned().await;
@@ -255,7 +279,7 @@
         tokio::time::sleep(Duration::from_millis(10)).await;
         assert!(
             !task.is_finished(),
-            "preemption must wait for the active turn before checking pending tools"
+            "preemption must wait for the active turn before settling pending tools"
         );
         session
             .pending_tools
@@ -266,12 +290,15 @@
 
         let selected = tokio::time::timeout(Duration::from_secs(1), task)
             .await
-            .expect("cancellation failure must not stall preemption")
-            .expect("preemption task");
+            .expect("dead-driver settle must not stall preemption")
+            .expect("preemption task")
+            .expect("pure mid-turn reuses the settled session");
+        assert!(Arc::ptr_eq(&selected.session, &session));
         assert!(
-            selected.is_none(),
-            "pending tool state makes busy-session reuse unsafe"
+            selected.session.pending_tools.lock().await.is_empty(),
+            "settled cancel abandons local pending-tool ownership for the follow-up"
         );
+        drop(selected);
         app.shutdown().await;
     }
 

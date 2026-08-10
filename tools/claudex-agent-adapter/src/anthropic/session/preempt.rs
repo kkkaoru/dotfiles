@@ -90,8 +90,9 @@ async fn preempt_busy_matching_session(
         );
         return None;
     }
+    let settle_pending = matches!(cancellation, Ok(TurnCancellation::Settled));
     report_cancellation(cancellation, &session.thread_id);
-    take_gate_after_preempt(&session, messages).await
+    take_gate_after_preempt(&session, messages, settle_pending).await
 }
 
 fn report_cancellation(cancellation: anyhow::Result<TurnCancellation>, thread_id: &str) {

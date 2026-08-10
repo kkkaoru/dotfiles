@@ -44,6 +44,12 @@ impl Bridge {
         self.app
             .ensure_thread_ready(&selected.session.thread_id)
             .await?;
+        // Idle sessions can still own pending Claude tools from the prior
+        // segment. A pure follow-up (no tool_result payload) must settle them
+        // before start_model_turn, or the provider stays blocked on the old call.
+        if !has_tool_results {
+            self.settle_abandoned_pending_tools(&selected.session).await;
+        }
         let events = Arc::new(self.app.subscribe_thread(&selected.session.thread_id));
         let start = if tool_results.is_empty() || selected.recovered {
             self.start_model_turn(
