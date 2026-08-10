@@ -159,7 +159,10 @@ async fn provider_request(base_url: &str, model: &str, index: usize) -> Value {
 
 async fn read_health(client: &Client, base_url: &str) -> Value {
     // Parallel integration tests and coverage-instrumented binaries can make
-    // the first runtime spawn exceed the old five-second probe window.
+    // the first runtime spawn exceed a short probe window.
+    #[cfg(coverage_nightly)]
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(45);
+    #[cfg(not(coverage_nightly))]
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     loop {
         let Ok(response) = client.get(format!("{base_url}/health")).send().await else {
