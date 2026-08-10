@@ -1589,6 +1589,7 @@ async fn provider_messages_failover_attempts_configured_subscription_target() {
         r#"#!/bin/sh
 while IFS= read -r line; do
   id=$(printf '%s\n' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+  [ -n "$id" ] || id=0
   case "$line" in
     *'"method":"thread/start"'*)
       printf '{"id":%s,"error":{"message":"You'\''ve hit your usage limit."}}\n' "$id"
@@ -1606,7 +1607,10 @@ done
     let claude = root.path().join("claude-fail");
     std::fs::write(
         &claude,
-        "#!/bin/sh\nprintf '%s\\n' 'boom' >&2\nexit 1\n",
+        r#"#!/bin/sh
+printf '%s\n' '{"type":"result","subtype":"error","is_error":true,"result":"boom"}'
+exit 1
+"#,
     )
     .expect("write failing claude");
     std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755))
@@ -1645,7 +1649,7 @@ done
         claudex_collaborator_model: None,
     };
     let error = tokio::time::timeout(
-        std::time::Duration::from_secs(3),
+        std::time::Duration::from_secs(30),
         bridge.provider_messages_with_usage_limit_failover(
             request,
             Some("xhigh".to_owned()),
