@@ -88,4 +88,11 @@ mod tests {
         drop(other);
         assert!(registry.snapshot().is_empty());
     }
+
+    #[test]
+    fn release_ignores_models_that_were_never_acquired() {
+        let registry = Arc::new(ActiveSubagentModels::default());
+        registry.release("never-seen");
+        assert!(registry.snapshot().is_empty());
+    }
 }
