@@ -1,3 +1,15 @@
+mod support;
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests;
+
+pub(crate) use support::{is_usage_limit_exceeded, should_failover_provider_error};
+pub(super) use support::streaming_provider_retry;
+use support::{
+    is_scoped_provider_exhaustion, ordered_subagent_failover_candidates, push_model_auth_scopes,
+    record_scoped_exhaustion, scoped_exhaustion_reason,
+};
+
 use std::{sync::Arc, time::SystemTime};
 
 use anyhow::Result;
@@ -8,10 +20,9 @@ use crate::agent_backend::BackendKind;
 use super::{
     Bridge, MessagesRequest, provider_auth, provider_auth_cooldown,
     request_routing::RouteDecision,
-    segment::contains_empty_acp_billing_marker,
     stream::usage_limit::{
         contains_classic_usage_limit_marker, contains_provider_quota_exhausted_marker,
-        contains_rate_limit_marker, contains_usage_limit_marker,
+        contains_rate_limit_marker,
     },
     token_count, usage_limit_cooldown,
 };
@@ -33,79 +44,68 @@ impl Bridge {
         // Classic ChatGPT/Codex usage limits apply to the whole app-server backend.
         // Provider 429s are model/provider scoped so a glm Ollama limit does not
         // cool down unrelated Codex GPT routes that share the same backend.
-        if contains_classic_usage_limit_marker(&message) {
-            let cache_path = self.usage_limit_cache_path();
-            if let Some(path) = usage_limit_cooldown::record_codex_app_server_limit_at(
-                cache_path.as_deref(),
-                &message,
-                SystemTime::now(),
-            ) {
-                tracing::warn!(
-                    path = %path.display(),
-                    error = %message,
-                    "recorded Codex app-server usage-limit cooldown; routing away from that backend"
-                );
-            }
+        self.note_classic_usage_limit(&message);
+        self.note_subscription_auth_cooldown(error, &message);
+        self.note_scoped_provider_exhaustion(exhausted_model, &message);
+    }
+
+    fn note_classic_usage_limit(&self, message: &str) {
+        if !contains_classic_usage_limit_marker(message) {
+            return;
         }
-        if super::subscription_oauth::is_subscription_auth_failure(error)
-            && let Some(path) = provider_auth_cooldown::record_at(
-                self.provider_auth_cache_path().as_deref(),
-                super::subscription_oauth::SUBSCRIPTION_AUTH_SCOPE,
-                &message,
-                SystemTime::now(),
-            ) {
-                tracing::warn!(
-                    path = %path.display(),
-                    auth_scope = super::subscription_oauth::SUBSCRIPTION_AUTH_SCOPE,
-                    reason = "subscription-oauth",
-                    error = %message,
-                    "recorded Claude subscription OAuth cooldown; routing outer turns onto providers"
-                );
-            }
-        if contains_rate_limit_marker(&message)
-            || provider_auth::contains_auth_failure_marker(&message)
-            || contains_empty_acp_billing_marker(&message)
-            || contains_provider_quota_exhausted_marker(&message)
-        {
-            let scopes = self.auth_scopes_for(exhausted_model, &message);
-            let cache_path = self.provider_auth_cache_path();
-            let rate_limited = contains_rate_limit_marker(&message);
-            let quota_exhausted = contains_provider_quota_exhausted_marker(&message);
-            let reason = if rate_limited {
-                "rate-limit"
-            } else if quota_exhausted {
-                "quota"
-            } else if contains_empty_acp_billing_marker(&message) {
-                "empty-acp-billing"
-            } else {
-                "auth"
-            };
-            for scope in scopes {
-                let recorded = if rate_limited || quota_exhausted {
-                    provider_auth_cooldown::record_rate_limit_at(
-                        cache_path.as_deref(),
-                        &scope,
-                        &message,
-                        SystemTime::now(),
-                    )
-                } else {
-                    provider_auth_cooldown::record_at(
-                        cache_path.as_deref(),
-                        &scope,
-                        &message,
-                        SystemTime::now(),
-                    )
-                };
-                if let Some(path) = recorded {
-                    tracing::warn!(
-                        path = %path.display(),
-                        auth_scope = %scope,
-                        reason,
-                        error = %message,
-                        "recorded provider exhaustion cooldown; routing away from that provider"
-                    );
-                }
-            }
+        let cache_path = self.usage_limit_cache_path();
+        let Some(path) = usage_limit_cooldown::record_codex_app_server_limit_at(
+            cache_path.as_deref(),
+            message,
+            SystemTime::now(),
+        ) else {
+            return;
+        };
+        tracing::warn!(
+            path = %path.display(),
+            error = %message,
+            "recorded Codex app-server usage-limit cooldown; routing away from that backend"
+        );
+    }
+
+    fn note_subscription_auth_cooldown(&self, error: &anyhow::Error, message: &str) {
+        if !super::subscription_oauth::is_subscription_auth_failure(error) {
+            return;
+        }
+        let Some(path) = provider_auth_cooldown::record_at(
+            self.provider_auth_cache_path().as_deref(),
+            super::subscription_oauth::SUBSCRIPTION_AUTH_SCOPE,
+            message,
+            SystemTime::now(),
+        ) else {
+            return;
+        };
+        tracing::warn!(
+            path = %path.display(),
+            auth_scope = super::subscription_oauth::SUBSCRIPTION_AUTH_SCOPE,
+            reason = "subscription-oauth",
+            error = %message,
+            "recorded Claude subscription OAuth cooldown; routing outer turns onto providers"
+        );
+    }
+
+    fn note_scoped_provider_exhaustion(&self, exhausted_model: Option<&str>, message: &str) {
+        if !is_scoped_provider_exhaustion(message) {
+            return;
+        }
+        let scopes = self.auth_scopes_for(exhausted_model, message);
+        let cache_path = self.provider_auth_cache_path();
+        let rate_limited = contains_rate_limit_marker(message);
+        let quota_exhausted = contains_provider_quota_exhausted_marker(message);
+        let reason = scoped_exhaustion_reason(message, rate_limited, quota_exhausted);
+        for scope in scopes {
+            record_scoped_exhaustion(
+                cache_path.as_deref(),
+                &scope,
+                message,
+                reason,
+                rate_limited || quota_exhausted,
+            );
         }
     }
 
@@ -198,34 +198,63 @@ impl Bridge {
         {
             Ok(response) => Ok(response),
             Err(error) if can_failover && should_failover_provider_error(&error) => {
-                self.note_provider_exhaustion(&error, Some(&exhausted_model));
-                let Some(mut retry) = failover_request else {
-                    return Err(error);
-                };
-                let Some(failover) = self.usage_limit_failover_for(&exhausted_model) else {
-                    return Err(error);
-                };
-                tracing::warn!(
-                    target: "claudex.provider",
-                    log_event = "provider_failover",
-                    exhausted_model = %exhausted_model,
-                    failover_model = %failover.model,
-                    failover_route = ?failover.route,
-                    "failing over outer non-stream turn after provider exhaustion"
-                );
-                retry.model = failover.model;
-                let failover_effort = failover.effort.or(effort);
-                if failover.route == RouteDecision::Subscription {
-                    self.subscription_messages(retry, failover_effort, false, tools_were_provided)
-                        .await
-                } else {
-                    let input_tokens = u64::try_from(token_count(&retry)).unwrap_or(u64::MAX);
-                    self.provider_messages(retry, input_tokens, failover_effort, false, false)
-                        .await
-                }
+                self.retry_after_provider_exhaustion(
+                    error,
+                    failover_request,
+                    &exhausted_model,
+                    effort,
+                    tools_were_provided,
+                )
+                .await
             }
             Err(error) => Err(error),
         }
+    }
+
+    async fn retry_after_provider_exhaustion(
+        self: &Arc<Self>,
+        error: anyhow::Error,
+        failover_request: Option<MessagesRequest>,
+        exhausted_model: &str,
+        effort: Option<String>,
+        tools_were_provided: bool,
+    ) -> Result<Response<Body>> {
+        self.note_provider_exhaustion(&error, Some(exhausted_model));
+        let Some(mut retry) = failover_request else {
+            return Err(error);
+        };
+        let Some(failover) = self.usage_limit_failover_for(exhausted_model) else {
+            return Err(error);
+        };
+        tracing::warn!(
+            target: "claudex.provider",
+            log_event = "provider_failover",
+            exhausted_model = %exhausted_model,
+            failover_model = %failover.model,
+            failover_route = ?failover.route,
+            "failing over outer non-stream turn after provider exhaustion"
+        );
+        retry.model = failover.model;
+        let failover_effort = failover.effort.or(effort);
+        self.dispatch_failover_messages(retry, failover.route, failover_effort, tools_were_provided)
+            .await
+    }
+
+    async fn dispatch_failover_messages(
+        self: &Arc<Self>,
+        retry: MessagesRequest,
+        route: RouteDecision,
+        failover_effort: Option<String>,
+        tools_were_provided: bool,
+    ) -> Result<Response<Body>> {
+        if route == RouteDecision::Subscription {
+            return self
+                .subscription_messages(retry, failover_effort, false, tools_were_provided)
+                .await;
+        }
+        let input_tokens = u64::try_from(token_count(&retry)).unwrap_or(u64::MAX);
+        self.provider_messages(retry, input_tokens, failover_effort, false, false)
+            .await
     }
 
     pub(super) fn usage_limit_failover_for(
@@ -274,51 +303,37 @@ impl Bridge {
         quota: Option<&serde_json::Value>,
     ) -> Option<UsageLimitFailover> {
         self.app.backend_kind_for_model(exhausted_model)?;
-        const PREFERRED: &[&str] = &["qwen3.8-max-preview"];
-        let mut candidates = Vec::new();
-        for model in PREFERRED {
-            candidates.push((*model).to_owned());
-        }
-        for worker in self.model_catalog.worker_routes() {
-            candidates.push(worker.model.clone());
-        }
-        for model in self.app.models() {
-            candidates.push(model);
-        }
-        candidates.sort();
-        candidates.dedup();
-        let mut ordered = Vec::new();
-        for model in PREFERRED {
-            if candidates.iter().any(|candidate| candidate == model) {
-                ordered.push((*model).to_owned());
-            }
-        }
-        for model in candidates {
-            if !ordered.iter().any(|preferred| preferred == &model) {
-                ordered.push(model);
-            }
-        }
+        let ordered = ordered_subagent_failover_candidates(self);
         ordered.into_iter().find_map(|model| {
-            if model == exhausted_model
-                || self.subagent_model_is_exhausted(&model, quota)
-                || self.model_concurrency.is_subagent_at_capacity(&model)
-            {
-                return None;
-            }
-            let kind = self.app.backend_kind_for_model(&model)?;
-            if !super::exhausted_subagent::subagent_failover_target_ok(kind) {
-                return None;
-            }
-            let effort = self
-                .model_catalog
-                .worker_effort_for_model(&model)
-                .map(str::to_owned)
-                .or_else(|| self.app.launch_scoped_effort(&model));
-            Some(UsageLimitFailover {
-                model,
-                effort,
-                route: RouteDecision::Provider,
-            })
+            self.subagent_failover_candidate(exhausted_model, quota, model)
+        })
+    }
+
+    fn subagent_failover_candidate(
+        &self,
+        exhausted_model: &str,
+        quota: Option<&serde_json::Value>,
+        model: String,
+    ) -> Option<UsageLimitFailover> {
+        if model == exhausted_model
+            || self.subagent_model_is_exhausted(&model, quota)
+            || self.model_concurrency.is_subagent_at_capacity(&model)
+        {
+            return None;
+        }
+        let kind = self.app.backend_kind_for_model(&model)?;
+        if !super::exhausted_subagent::subagent_failover_target_ok(kind) {
+            return None;
+        }
+        let effort = self
+            .model_catalog
+            .worker_effort_for_model(&model)
+            .map(str::to_owned)
+            .or_else(|| self.app.launch_scoped_effort(&model));
+        Some(UsageLimitFailover {
+            model,
+            effort,
+            route: RouteDecision::Provider,
         })
     }
 
@@ -347,12 +362,7 @@ impl Bridge {
 
     fn auth_scopes_for(&self, model: Option<&str>, message: &str) -> Vec<String> {
         let mut scopes = Vec::new();
-        if let Some(model) = model {
-            scopes.push(model.to_owned());
-            if let Some(provider) = self.app.model_provider_for_model(model) {
-                scopes.push(provider);
-            }
-        }
+        push_model_auth_scopes(self, model, &mut scopes);
         if let Some(scope) = provider_auth::auth_scope_from_message(message) {
             scopes.push(scope);
         }
@@ -361,28 +371,3 @@ impl Bridge {
         scopes
     }
 }
-
-pub(crate) fn is_usage_limit_exceeded(error: &anyhow::Error) -> bool {
-    should_failover_provider_error(error)
-}
-
-pub(crate) fn should_failover_provider_error(error: &anyhow::Error) -> bool {
-    let message = error.to_string();
-    contains_usage_limit_marker(&message)
-        || provider_auth::contains_auth_failure_marker(&message)
-        || contains_empty_acp_billing_marker(&message)
-}
-
-/// Streaming turns can only continue on a sibling Provider.
-/// Subscription failover cannot attach to an already-open SubAgent SSE stream,
-/// which is why the old empty-ACP path returned the error to Claude Code.
-pub(super) fn streaming_provider_retry(
-    failover: Option<UsageLimitFailover>,
-) -> Option<UsageLimitFailover> {
-    failover.filter(|candidate| candidate.route == RouteDecision::Provider)
-}
-
-#[cfg(test)]
-#[cfg_attr(coverage_nightly, coverage(off))]
-#[path = "usage_limit_failover_tests.rs"]
-mod tests;

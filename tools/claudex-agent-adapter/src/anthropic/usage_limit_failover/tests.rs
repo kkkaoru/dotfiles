@@ -1634,14 +1634,36 @@ done
 
 #[tokio::test]
 async fn provider_messages_failover_attempts_configured_subscription_target() {
-    use std::os::unix::fs::PermissionsExt;
-    use std::sync::Arc;
-
     let root = tempfile::tempdir().expect("failover subscription fixture");
-    let source = root.path().join("source");
+    let (bridge, request) = failover_subscription_bridge_and_request(root.path()).await;
+    let error = tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        bridge.provider_messages_with_usage_limit_failover(
+            request,
+            Some("xhigh".to_owned()),
+            false,
+            false,
+            false,
+        ),
+    )
+    .await
+    .expect("subscription failover should not hang")
+    .expect_err("failing subscription program must fail closed after failover");
+    assert!(
+        !error.to_string().is_empty(),
+        "failover attempt must surface the subscription failure"
+    );
+}
+
+async fn failover_subscription_bridge_and_request(
+    root: &std::path::Path,
+) -> (std::sync::Arc<Bridge>, MessagesRequest) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let source = root.join("source");
     std::fs::create_dir(&source).expect("source home");
     std::fs::write(source.join("auth.json"), "{}").expect("auth");
-    let app_server = root.path().join("app-server");
+    let app_server = root.join("app-server");
     std::fs::write(
         &app_server,
         r#"#!/bin/sh
@@ -1662,7 +1684,7 @@ done
     .expect("usage-limit app-server");
     std::fs::set_permissions(&app_server, std::fs::Permissions::from_mode(0o755))
         .expect("executable app-server");
-    let claude = root.path().join("claude-fail");
+    let claude = root.join("claude-fail");
     std::fs::write(
         &claude,
         r#"#!/bin/sh
@@ -1677,7 +1699,7 @@ exit 1
         "main",
         &app_server,
         &source,
-        &root.path().join("isolated"),
+        &root.join("isolated"),
     )
     .await
     .expect("start usage-limit app-server");
@@ -1689,10 +1711,10 @@ exit 1
             "high",
         )])
         .expect("install subscription failover");
-    let bridge = Arc::new(
+    let bridge = std::sync::Arc::new(
         Bridge::new_with_subscription_program(app, "main".to_owned(), claude)
             .with_model_catalog(catalog)
-            .with_usage_limit_cache_home(root.path()),
+            .with_usage_limit_cache_home(root),
     );
     let request = MessagesRequest {
         model: "main".to_owned(),
@@ -1706,23 +1728,7 @@ exit 1
         disabled_subagent_models: Default::default(),
         claudex_collaborator_model: None,
     };
-    let error = tokio::time::timeout(
-        std::time::Duration::from_secs(30),
-        bridge.provider_messages_with_usage_limit_failover(
-            request,
-            Some("xhigh".to_owned()),
-            false,
-            false,
-            false,
-        ),
-    )
-    .await
-    .expect("subscription failover should not hang")
-    .expect_err("failing subscription program must fail closed after failover");
-    assert!(
-        !error.to_string().is_empty(),
-        "failover attempt must surface the subscription failure"
-    );
+    (bridge, request)
 }
 
 #[test]

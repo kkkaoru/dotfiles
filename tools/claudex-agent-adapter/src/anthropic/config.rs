@@ -64,50 +64,52 @@ impl Bridge {
         self.usage_limit_cache_home
             .as_deref()
             .map(usage_limit_cooldown::cache_path_for_home)
-            .or_else(|| {
-                #[cfg(test)]
-                {
-                    None
-                }
-                #[cfg(not(test))]
-                {
-                    usage_limit_cooldown::current_cache_path()
-                }
-            })
+            .or_else(default_usage_limit_cache_path)
     }
 
     pub(super) fn provider_auth_cache_path(&self) -> Option<PathBuf> {
         self.usage_limit_cache_home
             .as_deref()
             .map(super::provider_auth_cooldown::cache_path_for_home)
-            .or_else(|| {
-                #[cfg(test)]
-                {
-                    None
-                }
-                #[cfg(not(test))]
-                {
-                    super::provider_auth_cooldown::current_cache_path()
-                }
-            })
+            .or_else(default_provider_auth_cache_path)
     }
 
     pub(super) fn usage_routing_cache_path(&self) -> Option<PathBuf> {
-        #[cfg(test)]
-        {
-            return self
-                .usage_limit_cache_home
-                .as_deref()
-                .map(super::routing_quota::cache_path_for_home);
-        }
-        #[cfg(not(test))]
-        {
-            self.usage_limit_cache_home
-                .as_deref()
-                .map(super::routing_quota::cache_path_for_home)
-                .or_else(super::routing_quota::current_cache_path)
-        }
+        self.usage_limit_cache_home
+            .as_deref()
+            .map(super::routing_quota::cache_path_for_home)
+            .or_else(default_usage_routing_cache_path)
     }
+}
+
+#[cfg(test)]
+fn default_usage_limit_cache_path() -> Option<PathBuf> {
+    None
+}
+
+#[cfg(not(test))]
+fn default_usage_limit_cache_path() -> Option<PathBuf> {
+    usage_limit_cooldown::current_cache_path()
+}
+
+#[cfg(test)]
+fn default_provider_auth_cache_path() -> Option<PathBuf> {
+    None
+}
+
+#[cfg(not(test))]
+fn default_provider_auth_cache_path() -> Option<PathBuf> {
+    super::provider_auth_cooldown::current_cache_path()
+}
+
+#[cfg(test)]
+fn default_usage_routing_cache_path() -> Option<PathBuf> {
+    None
+}
+
+#[cfg(not(test))]
+fn default_usage_routing_cache_path() -> Option<PathBuf> {
+    super::routing_quota::current_cache_path()
 }
 
 #[cfg(test)]
