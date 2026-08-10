@@ -224,6 +224,52 @@ async fn serve_io_emits_web_search_query_on_shared_tool_chrome() {
 }
 
 #[tokio::test]
+async fn serve_io_maps_max_turns_from_stop_reason_alone() {
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let (_root, program) = mock_cmd(
+                "#!/bin/sh\ncat <<'EOF'\n{\"type\":\"result\",\"subtype\":\"error\",\"sessionId\":\"cc-max\",\"stopReason\":\"max_turns\",\"finalText\":\"partial\",\"error\":\"hit max\"}\nEOF\n",
+            );
+            let (client_write, server_read) = tokio::io::duplex(16 * 1024);
+            let (server_write, client_read) = tokio::io::duplex(16 * 1024);
+            tokio::task::spawn_local(serve_io(options_for(program), server_read, server_write));
+            let (connection, io) = acp::ClientSideConnection::new(
+                CaptureClient {
+                    updates: Rc::new(RefCell::new(Vec::new())),
+                },
+                client_write.compat_write(),
+                client_read.compat(),
+                |future| {
+                    tokio::task::spawn_local(future);
+                },
+            );
+            tokio::task::spawn_local(async move {
+                let _ = io.await;
+            });
+            connection
+                .initialize(acp::InitializeRequest::new(acp::ProtocolVersion::V1))
+                .await
+                .expect("initialize");
+            let session = connection
+                .new_session(acp::NewSessionRequest::new(
+                    std::env::current_dir().unwrap(),
+                ))
+                .await
+                .expect("session");
+            let response = connection
+                .prompt(acp::PromptRequest::new(
+                    session.session_id.clone(),
+                    vec![acp::ContentBlock::Text(acp::TextContent::new("hi"))],
+                ))
+                .await
+                .expect("prompt");
+            assert_eq!(response.stop_reason, acp::StopReason::MaxTokens);
+        })
+        .await;
+}
+
+#[tokio::test]
 async fn serve_io_cancels_before_prompt_and_maps_max_turns() {
     let local = tokio::task::LocalSet::new();
     local
