@@ -120,6 +120,44 @@ async fn concurrent_notifications_are_acknowledged_independently() {
 }
 
 #[tokio::test]
+async fn messages_with_identity_logs_transport_ids_for_a_provider_turn() {
+    let (_root, log, bridge) = tests::message_fixture().await;
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        tests::wait_for_log_marker(&log, "\"method\":\"initialized\""),
+    )
+    .await
+    .expect("provider fixture should finish initialization");
+
+    let request = MessagesRequest {
+        model: "main".to_owned(),
+        system: Value::Null,
+        messages: vec![json!({"role":"user","content":"identity turn"})],
+        tools: Vec::new(),
+        stream: true,
+        output_config: Value::Null,
+        metadata: Value::Null,
+        working_directory: None,
+        disabled_subagent_models: Default::default(),
+        claudex_collaborator_model: None,
+    };
+    let identity = RequestIdentity::new(Some("session-provider".to_owned()), None, None);
+    let _response = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        bridge.messages_with_identity(request, identity, false),
+    )
+    .await
+    .expect("identity provider turn should not hang")
+    .expect("identity provider response");
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        tests::wait_for_log_marker(&log, "\"method\":\"turn/start\""),
+    )
+    .await
+    .expect("provider should receive the identity turn");
+}
+
+#[tokio::test]
 async fn messages_with_identity_acknowledges_notifications_and_counts_tokens() {
     let (_root, log, bridge) = tests::message_fixture().await;
     tokio::time::timeout(
