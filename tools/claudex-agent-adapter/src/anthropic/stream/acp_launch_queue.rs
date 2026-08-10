@@ -58,19 +58,23 @@ fn take_pending_launch_arguments_from(path: &Path, now: f64, owner: Option<&str>
     let entries = read_entries(path);
     let mut taken = None;
     let mut kept = Vec::new();
-    for entry in entries {
+    for entry in entries.iter() {
         if taken.is_none()
-            && let Some(arguments) = launch_args_from_entry(&entry, now, owner)
+            && let Some(arguments) = launch_args_from_entry(entry, now, owner)
         {
             taken = Some(arguments);
             continue;
         }
         let ts = entry.get("ts").and_then(Value::as_f64).unwrap_or(0.0);
         if now - ts <= QUEUE_MAX_AGE.as_secs_f64() {
-            kept.push(entry);
+            kept.push(entry.clone());
         }
     }
-    rewrite_queue(path, &kept);
+    // Polling take() with no match used to rewrite the JSONL every time, which
+    // contended with mcp-claudex-launch appends and slowed SubAgent nucleating.
+    if taken.is_some() || kept.len() != entries.len() {
+        rewrite_queue(path, &kept);
+    }
     taken
 }
 

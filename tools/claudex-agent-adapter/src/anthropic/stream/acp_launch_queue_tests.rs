@@ -129,6 +129,28 @@ fn does_not_drain_another_claude_session_launch() {
 }
 
 #[test]
+fn unmatched_take_does_not_rewrite_live_queue() {
+    let root = tempfile::tempdir().expect("queue fixture");
+    let path = root.path().join("queue.jsonl");
+    let body = json!({"ts":970.0,"name":"Agent","owner":"session-b","arguments":{"prompt":"other"}})
+        .to_string()
+        + "\n";
+    fs::write(&path, &body).expect("queue");
+    let inode = std::os::unix::fs::MetadataExt::ino(&fs::metadata(&path).expect("meta"));
+
+    assert_eq!(
+        take_pending_launch_arguments_from(&path, 1_000.0, Some("session-a")),
+        None
+    );
+    assert_eq!(
+        std::os::unix::fs::MetadataExt::ino(&fs::metadata(&path).expect("meta")),
+        inode,
+        "polling take with no match must not rewrite the launch queue"
+    );
+    assert_eq!(fs::read_to_string(&path).expect("unchanged"), body);
+}
+
+#[test]
 fn owner_scoped_queue_reads_the_per_session_file() {
     let root = tempfile::tempdir().expect("owner queue fixture");
     let global = root.path().join("launch-queue.jsonl");
