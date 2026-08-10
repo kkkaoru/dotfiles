@@ -149,9 +149,12 @@ impl SubagentReuseRegistry {
             .states
             .lock()
             .expect("SubAgent reuse registry poisoned");
-        let recipient = find_reusable_launch(&states.get(session_id)?.launches, arguments)?
-            .recipient
-            .clone();
+        let launch = find_reusable_launch(&states.get(session_id)?.launches, arguments)?;
+        // Skip resume injection if recipient is empty (pending or in-flight without confirmation)
+        if launch.recipient.is_empty() {
+            return None;
+        }
+        let recipient = launch.recipient.clone();
         drop(states);
         let object = arguments.as_object_mut()?;
         object.insert("resume".to_owned(), json!(recipient.clone()));

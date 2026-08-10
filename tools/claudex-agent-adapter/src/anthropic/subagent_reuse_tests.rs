@@ -1295,4 +1295,48 @@ mod tests {
             vec!["a4496564387a2561f".to_owned()]
         );
     }
+
+    #[test]
+    fn rewrite_launch_input_skips_empty_recipient() {
+        let registry = SubagentReuseRegistry::default();
+        let messages = vec![
+            json!({"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Task","input":{"prompt":"test"}}]}),
+            json!({"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"launching"}]}),
+        ];
+        let mut request = MessagesRequest {
+            model: "main".to_owned(),
+            system: Value::String("".to_owned()),
+            messages: messages.clone(),
+            tools: vec![],
+            stream: false,
+            output_config: Value::Null,
+            metadata: json!({"_claudex_transport_identity":{"session_id":"sess-1"}}),
+            working_directory: None,
+            disabled_subagent_models: Default::default(),
+            claudex_collaborator_model: None,
+        };
+        registry.observe_and_restore(&mut request);
+        
+        // Simulate a pending launch record with empty recipient
+        let mut states = registry.states.lock().unwrap();
+        states.entry("sess-1".to_owned()).or_insert_with(|| {
+            SessionState {
+                launches: vec![LaunchRecord {
+                    key: "t1".to_owned(),
+                    recipient: String::new(),  // EMPTY recipient (pending)
+                    scope: "test".to_owned(),
+                    model: Some("model-1".to_owned()),
+                    status: "pending".to_owned(),
+                }],
+            }
+        });
+        drop(states);
+
+        // Try to rewrite launch - should return None due to empty recipient
+        let mut arguments = json!({"prompt":"test","claudex_model":"model-1"});
+        let result = registry.rewrite_launch_input("sess-1", &mut arguments);
+        
+        assert!(result.is_none(), "should not inject resume for empty recipient (pending launch)");
+        assert_eq!(arguments.get("resume"), None, "resume field should not be added");
+    }
 }
