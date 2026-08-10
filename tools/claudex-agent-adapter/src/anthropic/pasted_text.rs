@@ -198,9 +198,11 @@ mod tests {
         let root = tempfile::tempdir().expect("attachment fixture");
         let directory = root.path().join(".codex/attachments");
         std::fs::create_dir_all(&directory).expect("attachment directory");
+        let dir_target = directory.join("pasted-dir");
+        std::fs::create_dir(&dir_target).expect("directory attachment");
         let dir_marker = format!(
             "pasted text file: {}. Read this file before continuing.",
-            directory.display()
+            dir_target.display()
         );
         let huge = directory.join("huge.txt");
         std::fs::write(&huge, vec![b'x'; (MAX_INLINE_BYTES as usize) + 1]).expect("huge file");
@@ -208,12 +210,20 @@ mod tests {
             "pasted text file: {}. Read this file before continuing.",
             huge.display()
         );
-        let mut request = request(json!(dir_marker));
+        let mut request = request(json!(dir_marker.clone()));
         request
             .messages
-            .push(json!({"role":"user", "content":huge_marker}));
+            .push(json!({"role":"user", "content":huge_marker.clone()}));
         expand_markers(&mut request);
         assert_eq!(request.messages[0]["content"], dir_marker);
         assert_eq!(request.messages[1]["content"], huge_marker);
+        assert!(
+            marker_contents(&dir_marker).is_none(),
+            "directory attachments must not inline"
+        );
+        assert!(
+            marker_contents(&huge_marker).is_none(),
+            "oversized attachments must not inline"
+        );
     }
 }
