@@ -130,6 +130,29 @@ mod tests {
     }
 
     #[test]
+    fn unchanged_transcript_skips_redundant_persistence() {
+        let root = tempfile::tempdir().expect("reuse registry fixture");
+        let path = root.path().join("reuse.json");
+        let registry =
+            SubagentReuseRegistry::with_store(path.clone());
+        let messages = vec![launch("tool-a", "worker-a")];
+
+        registry.observe_and_restore(&mut request("session-a", messages.clone()));
+        let inode = std::os::unix::fs::MetadataExt::ino(
+            &std::fs::metadata(&path).expect("persisted registry"),
+        );
+
+        registry.observe_and_restore(&mut request("session-a", messages));
+        assert_eq!(
+            std::os::unix::fs::MetadataExt::ino(
+                &std::fs::metadata(&path).expect("persisted registry")
+            ),
+            inode,
+            "replaying the same transcript must not fsync the cache again"
+        );
+    }
+
+    #[test]
     fn duplicate_history_does_not_inflate_cumulative_spawn_count() {
         let registry = SubagentReuseRegistry::default();
         let mut request = request(

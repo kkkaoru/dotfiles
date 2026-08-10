@@ -106,12 +106,12 @@ impl SubagentReuseRegistry {
             .lock()
             .expect("SubAgent reuse registry poisoned");
         let state = states.entry(session_id).or_default();
+        let previous_launches = state.launches.clone(); // Avoid fsync when the transcript is unchanged.
         // Chronological: a later resume launch result must win over an earlier
         // completion notification still present in the transcript.
         apply_transcript(&mut state.launches, &request.messages);
         let limit_reached = state.launches.len() >= max_subagents_per_session();
         set_limit_metadata(request, limit_reached);
-
         let should_restore = reuse
             && observed.is_empty()
             && !state.launches.is_empty()
@@ -119,10 +119,10 @@ impl SubagentReuseRegistry {
         let teams = agent_teams_enabled(request) && has_send_message_tool(&request.tools);
         let recipients =
             should_restore.then(|| reuse_recipients(&state.launches, &request.messages));
+        let launches_changed = state.launches != previous_launches;
         let snapshot = states.clone();
         drop(states);
-        self.persist(snapshot);
-
+        if launches_changed { self.persist(snapshot); }
         if let Some(recipients) = recipients {
             append_reuse_guidance(&mut request.system, &recipients, teams);
         }
