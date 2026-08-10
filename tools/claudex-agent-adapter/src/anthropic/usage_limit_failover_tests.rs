@@ -1352,3 +1352,113 @@ fn subagent_failover_is_none_when_no_provider_route_and_no_fallback() {
         "subagent stream failover is None when all sibling providers exhausted and no fallback"
     );
 }
+
+#[test]
+fn note_provider_exhaustion_without_cache_home_does_not_record() {
+    let bridge = Bridge::new_with_backend(
+        AgentBackend::spawn_routes(&[BackendRoute::new(CLINE_FLASH, BackendKind::ConfiguredAcp)]),
+        CLINE_FLASH.to_owned(),
+    );
+    bridge.note_provider_exhaustion(
+        &anyhow::anyhow!("You've hit your usage limit. Try again later."),
+        Some(CLINE_FLASH),
+    );
+    bridge.note_provider_exhaustion(
+        &anyhow::anyhow!("Please run /login · OAuth session expired and could not be refreshed"),
+        Some("claude-opus-5"),
+    );
+    bridge.note_provider_exhaustion(&anyhow::anyhow!(EMPTY_ACP_END_TURN), Some(CLINE_FLASH));
+    assert!(
+        !bridge.subagent_provider_is_exhausted(CLINE_FLASH),
+        "without a cache home, exhaustion must not persist a cooldown"
+    );
+}
+
+#[test]
+fn rewrite_exhausted_launch_ignores_non_object_and_fresh_models() {
+    let root = tempfile::tempdir().expect("rewrite noop fixture");
+    let bridge = cline_and_qwen_bridge().with_usage_limit_cache_home(root.path());
+    let mut missing_model = serde_json::json!({"prompt": "no model key"});
+    bridge.rewrite_exhausted_agent_launch_with_quota(&mut missing_model, &[], &Value::Null);
+    assert_eq!(missing_model["prompt"], "no model key");
+
+    let mut fresh = serde_json::json!({
+        "claudex_model": CLINE_FLASH,
+        "claudex_effort": "xhigh"
+    });
+    bridge.rewrite_exhausted_agent_launch_with_quota(&mut fresh, &[], &Value::Null);
+    assert_eq!(fresh["claudex_model"], CLINE_FLASH);
+
+    bridge.note_provider_exhaustion(&anyhow::anyhow!(EMPTY_ACP_END_TURN), Some(CLINE_FLASH));
+    let mut not_object = serde_json::json!(["not-an-object"]);
+    bridge.rewrite_exhausted_agent_launch_with_quota(&mut not_object, &[], &Value::Null);
+    assert_eq!(not_object, serde_json::json!(["not-an-object"]));
+}
+
+#[test]
+fn rewrite_exhausted_launch_without_named_worker_drops_effort() {
+    let root = tempfile::tempdir().expect("unnamed failover fixture");
+    let backend = AgentBackend::spawn_routes(&[
+        BackendRoute::new(CLINE_FLASH, BackendKind::ConfiguredAcp),
+        BackendRoute::new(CURSOR_AUTO, BackendKind::ConfiguredAcp),
+    ]);
+    let bridge = Bridge::new_with_backend(backend, CLINE_FLASH.to_owned())
+        .with_usage_limit_cache_home(root.path());
+    bridge.note_provider_exhaustion(&anyhow::anyhow!(EMPTY_ACP_END_TURN), Some(CLINE_FLASH));
+    let mut arguments = serde_json::json!({
+        "claudex_model": CLINE_FLASH,
+        "claudex_effort": "xhigh",
+        "prompt": "continue"
+    });
+    bridge.rewrite_exhausted_agent_launch_with_quota(&mut arguments, &[], &Value::Null);
+    assert_eq!(arguments["claudex_model"], CURSOR_AUTO);
+    assert!(
+        arguments.get("subagent_type").is_none(),
+        "unnamed sibling must not invent a catalog worker type: {arguments:?}"
+    );
+    assert!(
+        arguments.get("claudex_effort").is_none(),
+        "unnamed sibling without launch effort must drop stale effort: {arguments:?}"
+    );
+}
+
+#[test]
+fn rewrite_exhausted_launch_without_sibling_keeps_original() {
+    let root = tempfile::tempdir().expect("no sibling fixture");
+    let backend =
+        AgentBackend::spawn_routes(&[BackendRoute::new(CLINE_FLASH, BackendKind::ConfiguredAcp)]);
+    let bridge = Bridge::new_with_backend(backend, CLINE_FLASH.to_owned())
+        .with_usage_limit_cache_home(root.path());
+    bridge.note_provider_exhaustion(&anyhow::anyhow!(EMPTY_ACP_END_TURN), Some(CLINE_FLASH));
+    let mut arguments = serde_json::json!({
+        "claudex_model": CLINE_FLASH,
+        "claudex_effort": "xhigh"
+    });
+    bridge.rewrite_exhausted_agent_launch_with_quota(&mut arguments, &[], &Value::Null);
+    assert_eq!(arguments["claudex_model"], CLINE_FLASH);
+}
+
+#[test]
+fn subagent_failover_without_preferred_qwen_still_picks_a_sibling() {
+    let backend = AgentBackend::spawn_routes(&[
+        BackendRoute::new(CLINE_FLASH, BackendKind::ConfiguredAcp),
+        BackendRoute::new(CURSOR_AUTO, BackendKind::ConfiguredAcp),
+    ]);
+    let mut catalog = ModelCatalog::default();
+    catalog
+        .set_worker_routes(vec![
+            crate::provider_config::WorkerRoute::new(
+                "claudex-cline-deepseek-flash",
+                CLINE_FLASH,
+                "xhigh",
+            ),
+            crate::provider_config::WorkerRoute::new("claudex-cursor", CURSOR_AUTO, "high"),
+        ])
+        .expect("install workers");
+    let bridge =
+        Bridge::new_with_backend(backend, CLINE_FLASH.to_owned()).with_model_catalog(catalog);
+    let failover = bridge
+        .subagent_provider_failover_for(CLINE_FLASH)
+        .expect("cursor sibling");
+    assert_eq!(failover.model, CURSOR_AUTO);
+}

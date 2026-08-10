@@ -187,4 +187,29 @@ The quota will reset at 08-15 01:53:00 UTC.";
             "context window exceeded"
         ));
     }
+
+    #[test]
+    fn detects_usage_limit_markers_on_each_error_field() {
+        assert!(is_usage_limit_event(&json!({
+            "params": {"message": "You've hit your usage limit"}
+        })));
+        assert!(is_usage_limit_event(&json!({
+            "params": {"error": {"code": "usage_limit_exceeded"}}
+        })));
+        assert!(is_usage_limit_event(&json!({
+            "params": {"error": {"type": "rate limit"}}
+        })));
+        assert!(is_usage_limit_event(&json!({
+            "params": {"error": {"name": "UsageLimitExceeded"}}
+        })));
+        assert!(is_usage_limit_event(&json!({
+            "params": {"error": {"additionalDetails": "quota exhausted token-plan"}}
+        })));
+        assert!(is_usage_limit_event(
+            &json!({"error": "weekly usage limit reached"})
+        ));
+        assert!(!is_usage_limit_event(
+            &json!({"params": {"error": {"code": "other"}}})
+        ));
+    }
 }

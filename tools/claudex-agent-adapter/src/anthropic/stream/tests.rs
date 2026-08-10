@@ -674,6 +674,25 @@ async fn thinking_state_handles_reuse_keepalive_and_unit_transitions() {
         )
         .await
         .expect("status-like thought");
+    state
+        .delta(&json!({"params":{"delta":"no-item"}}), &mut blocks, None)
+        .await
+        .expect("summary-less delta is ignored");
+    let mut visible_status = vec![json!({"type":"text","text":"answer"})];
+    state
+        .activity_status(&mut visible_status, "still working", None)
+        .await
+        .expect("visible activity status");
+    assert!(
+        !visible_status
+            .iter()
+            .any(|block| block.get("type").and_then(Value::as_str) == Some("thinking")),
+        "non-empty activity_status must not open thinking after visible output"
+    );
+    ThinkingState::default()
+        .elapsed_keepalive(&mut blocks, Duration::from_secs(1), None, None)
+        .await
+        .expect("elapsed keepalive without an open block");
 }
 
 #[tokio::test]

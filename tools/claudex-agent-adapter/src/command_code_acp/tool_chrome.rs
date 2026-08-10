@@ -49,3 +49,50 @@ fn argument_key(name: &str) -> &'static str {
         "description"
     }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn classifies_each_tool_kind_and_argument_key() {
+        assert_eq!(tool_kind("ReadFile"), acp::ToolKind::Read);
+        assert_eq!(tool_kind("Grep"), acp::ToolKind::Read);
+        assert_eq!(tool_kind("Glob"), acp::ToolKind::Read);
+        assert_eq!(tool_kind("WriteFile"), acp::ToolKind::Edit);
+        assert_eq!(tool_kind("EditFile"), acp::ToolKind::Edit);
+        assert_eq!(tool_kind("ApplyPatch"), acp::ToolKind::Edit);
+        assert_eq!(tool_kind("Bash"), acp::ToolKind::Execute);
+        assert_eq!(tool_kind("Shell"), acp::ToolKind::Execute);
+        assert_eq!(tool_kind("Exec"), acp::ToolKind::Execute);
+        assert_eq!(tool_kind("WebSearch"), acp::ToolKind::Search);
+        assert_eq!(tool_kind("SearchWeb"), acp::ToolKind::Search);
+        assert_eq!(tool_kind("Notify"), acp::ToolKind::Other);
+
+        assert_eq!(argument_key("Grep"), "pattern");
+        assert_eq!(argument_key("WebFetch"), "url");
+        assert_eq!(argument_key("WebSearch"), "query");
+        assert_eq!(argument_key("SearchDocs"), "query");
+        assert_eq!(argument_key("Bash"), "command");
+        assert_eq!(argument_key("Shell"), "command");
+        assert_eq!(argument_key("Exec"), "command");
+        assert_eq!(argument_key("ReadFile"), "path");
+        assert_eq!(argument_key("WriteFile"), "path");
+        assert_eq!(argument_key("EditFile"), "path");
+        assert_eq!(argument_key("Glob"), "path");
+        assert_eq!(argument_key("Notify"), "description");
+
+        assert_eq!(
+            tool_raw_input("Bash", Some(" ls -la ")),
+            json!({"command": "ls -la"})
+        );
+        assert_eq!(tool_raw_input("Read", None), json!({}));
+        assert_eq!(tool_raw_input("Read", Some("   ")), json!({}));
+        assert_eq!(
+            tool_raw_input("Notify", Some("hi")),
+            json!({"description": "hi"})
+        );
+    }
+}

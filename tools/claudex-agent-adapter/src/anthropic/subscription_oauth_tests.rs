@@ -508,6 +508,45 @@ fn apply_subscription_auth_preflight_subscription_unusable_no_failover() {
 }
 
 #[test]
+fn subscription_auth_failover_without_worker_effort_still_rewrites() {
+    let root = tempfile::tempdir().expect("oauth failover without effort");
+    write_credentials(root.path(), millis(UNIX_EPOCH + Duration::from_secs(1)));
+    let backend =
+        AgentBackend::spawn_routes(&[BackendRoute::new("auto", BackendKind::ConfiguredAcp)]);
+    let bridge = Bridge::new_with_backend(backend, "claude-opus-5".to_owned())
+        .with_usage_limit_cache_home(root.path());
+    let mut request = dummy_request("claude-opus-5");
+    let mut effort = Some("high".to_owned());
+    let route = bridge.apply_subscription_auth_preflight(
+        &mut request,
+        RouteDecision::Subscription,
+        &mut effort,
+    );
+    assert_eq!(request.model, "auto");
+    assert_eq!(route, RouteDecision::Provider);
+}
+
+#[test]
+fn nan_expires_at_is_unknown_not_expired() {
+    let root = tempfile::tempdir().expect("nan expiry fixture");
+    let path = root.path().join("nan.json");
+    std::fs::write(
+        &path,
+        r#"{"claudeAiOauth":{"accessToken":"x","refreshToken":"y","expiresAt":null}}"#,
+    )
+    .expect("write null expiry");
+    let now = UNIX_EPOCH + Duration::from_secs(1_800_000_000);
+    assert_eq!(credentials_access_expired_at(&path, now), None);
+    let nan = root.path().join("nan-number.json");
+    std::fs::write(
+        &nan,
+        r#"{"claudeAiOauth":{"accessToken":"x","refreshToken":"y","expiresAt":"NaN"}}"#,
+    )
+    .expect("write nan expiry");
+    assert_eq!(credentials_access_expired_at(&nan, now), None);
+}
+
+#[test]
 fn subscription_auth_failover_skips_models_without_backend() {
     let backend = AgentBackend::spawn_routes(&[]);
     let mut catalog = ModelCatalog::default();
