@@ -24,6 +24,7 @@ use super::CLAUDE_CODE_SESSION_ID_HEADER;
 #[derive(Clone)]
 pub(super) struct HandoverState {
     pub retained: Option<Arc<RetainedProxy>>,
+    pub advertised: Option<ListenHandover>,
 }
 
 pub(super) struct RetainedProxy {
@@ -47,8 +48,19 @@ impl RetainedProxy {
             path,
             listen: RwLock::new(generation.listen),
             sessions: RwLock::new(generation.session_ids.into_iter().collect()),
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .pool_max_idle_per_host(0)
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new()),
         }
+    }
+
+    fn targets(&self, listen: std::net::SocketAddr) -> bool {
+        self.refresh();
+        self.listen
+            .read()
+            .map(|current| *current == listen)
+            .unwrap_or(false)
     }
 
     fn refresh(&self) {
@@ -91,6 +103,9 @@ impl RetainedProxy {
         let url = format!("http://{listen}{path}");
         let mut upstream = self.client.request(request.method().clone(), url);
         for (name, value) in request.headers() {
+            if is_hop_by_hop_header(name) {
+                continue;
+            }
             upstream = upstream.header(name, value);
         }
         let body = match axum::body::to_bytes(request.into_body(), 32 * 1024 * 1024).await {
@@ -154,6 +169,7 @@ pub(super) fn layer(handover: Option<ListenHandover>) -> (Option<HandoverState>,
         .map(Arc::new);
     let state = HandoverState {
         retained: retained.clone(),
+        advertised: Some(listen.clone()),
     };
     let router = Router::new()
         .route("/admin/rebind-listener", post(rebind_listener))
@@ -179,9 +195,29 @@ pub(super) async fn proxy_retained_sessions(
         return next.run(request).await;
     };
     if retained.owns(session_id) {
+        if let Some(advertised) = state.as_ref().and_then(|state| state.advertised.as_ref())
+            && retained.targets(advertised.advertised_addr())
+        {
+            return next.run(request).await;
+        }
         return retained.proxy(request).await;
     }
     next.run(request).await
+}
+
+fn is_hop_by_hop_header(name: &axum::http::HeaderName) -> bool {
+    matches!(
+        name.as_str(),
+        "connection"
+            | "keep-alive"
+            | "proxy-authenticate"
+            | "proxy-authorization"
+            | "te"
+            | "trailers"
+            | "transfer-encoding"
+            | "upgrade"
+            | "host"
+    )
 }
 
 async fn rebind_listener(

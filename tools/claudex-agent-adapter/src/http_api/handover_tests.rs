@@ -220,12 +220,18 @@ async fn proxy_middleware_forwards_owned_sessions_and_passes_through_others() {
         ),
     )
     .expect("write retained");
+    let cache = tempfile::tempdir().expect("advertised cache");
+    let (advertised, _rx) = ListenHandover::new(
+        "127.0.0.1:8318".parse().unwrap(),
+        cache.path().to_path_buf(),
+    );
     let state = Some(HandoverState {
         retained: Some(Arc::new(retained(
             &path,
             &upstream.to_string(),
             &["session-a"],
         ))),
+        advertised: Some(advertised),
     });
     let app = Router::new()
         .route("/v1/messages", post(|| async { "local" }))
@@ -263,6 +269,76 @@ async fn proxy_middleware_forwards_owned_sessions_and_passes_through_others() {
         .await
         .expect("missing session header");
     assert_eq!(missing.text().await.expect("missing body"), "local");
+}
+
+#[tokio::test]
+async fn proxy_middleware_serves_locally_when_retained_listen_is_self() {
+    let cache = tempfile::tempdir().expect("self proxy fixture");
+    let listen = "127.0.0.1:8318".parse().unwrap();
+    let (handover, _rx) = ListenHandover::new(listen, cache.path().to_path_buf());
+    let path = cache.path().join("retained.json");
+    std::fs::write(
+        &path,
+        br#"{"listen":"127.0.0.1:8318","pid":1,"build_id":"old","session_ids":["session-a"]}"#,
+    )
+    .expect("write retained");
+    let state = Some(HandoverState {
+        retained: Some(Arc::new(retained(&path, "127.0.0.1:8318", &["session-a"]))),
+        advertised: Some(handover),
+    });
+    let app = Router::new()
+        .route("/v1/messages", post(|| async { "local" }))
+        .layer(middleware::from_fn_with_state(
+            state,
+            proxy_retained_sessions,
+        ));
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("self-proxy listener");
+    let addr = listener.local_addr().expect("self-proxy address");
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.ok();
+    });
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let response = reqwest::Client::new()
+        .post(format!("http://{addr}/v1/messages"))
+        .header("x-claude-code-session-id", "session-a")
+        .body("{}")
+        .send()
+        .await
+        .expect("self-owned session");
+    assert_eq!(
+        response.text().await.expect("self-owned body"),
+        "local",
+        "retained generation must serve locally instead of proxying to itself"
+    );
+}
+
+#[test]
+fn hop_by_hop_headers_are_not_forwarded() {
+    assert!(is_hop_by_hop_header(&axum::http::HeaderName::from_static(
+        "host"
+    )));
+    assert!(is_hop_by_hop_header(&axum::http::HeaderName::from_static(
+        "connection"
+    )));
+    assert!(!is_hop_by_hop_header(&axum::http::HeaderName::from_static(
+        "x-claude-code-session-id"
+    )));
+}
+
+#[test]
+fn retained_proxy_targets_the_current_listen() {
+    let root = tempfile::tempdir().expect("targets fixture");
+    let path = root.path().join("retained.json");
+    std::fs::write(
+        &path,
+        br#"{"listen":"127.0.0.1:52864","pid":1,"build_id":"old","session_ids":["session-a"]}"#,
+    )
+    .expect("write retained");
+    let proxy = retained(&path, "127.0.0.1:52864", &["session-a"]);
+    assert!(proxy.targets("127.0.0.1:52864".parse().unwrap()));
+    assert!(!proxy.targets("127.0.0.1:8318".parse().unwrap()));
 }
 
 async fn serve_http_once(body: &'static [u8]) -> SocketAddr {
