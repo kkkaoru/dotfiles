@@ -53,6 +53,8 @@ pub(super) use protocol::{
 };
 pub(super) const ACTIVITY_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
 pub(super) const INITIAL_ACTIVITY_DELAY: Duration = Duration::from_secs(30);
+/// SubAgent TUI stays on Nucleating until the first keepalive/tool chrome.
+pub(super) const SUBAGENT_INITIAL_ACTIVITY_DELAY: Duration = Duration::from_secs(5);
 
 impl Bridge {
     pub(super) fn streaming_messages(

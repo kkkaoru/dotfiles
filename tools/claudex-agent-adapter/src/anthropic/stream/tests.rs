@@ -424,6 +424,11 @@ fn recognizes_cursor_thought_for_filler() {
         "Cursor SubAgent chrome must not freeze the panel on Nucleating"
     );
     assert!(sanitize::is_canned_worker_filler("Nucleating"));
+    assert_eq!(
+        super::SUBAGENT_INITIAL_ACTIVITY_DELAY,
+        Duration::from_secs(5)
+    );
+    assert!(super::SUBAGENT_INITIAL_ACTIVITY_DELAY < super::INITIAL_ACTIVITY_DELAY);
 }
 
 #[test]

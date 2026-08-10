@@ -9,8 +9,8 @@ use serde_json::json;
 use super::super::model_concurrency::{ModelPermit, Ticket, is_concurrency_admission_timeout};
 use super::super::{Bridge, MessagesRequest, content::sse, request_routing::RouteDecision};
 use super::{
-    ACTIVITY_KEEPALIVE_INTERVAL, INITIAL_ACTIVITY_DELAY, SegmentBuilder, StreamSender,
-    message_start, send_stream_error,
+    ACTIVITY_KEEPALIVE_INTERVAL, INITIAL_ACTIVITY_DELAY, SUBAGENT_INITIAL_ACTIVITY_DELAY,
+    SegmentBuilder, StreamSender, message_start, send_stream_error,
 };
 
 pub(super) struct PreparedStream {
@@ -152,7 +152,11 @@ impl Bridge {
         let start_status = (!primed_thinking)
             .then(|| subagent_start_status(is_subagent, &request.model, effort.as_deref()))
             .flatten();
-        let first_delay = INITIAL_ACTIVITY_DELAY;
+        let first_delay = if is_subagent {
+            SUBAGENT_INITIAL_ACTIVITY_DELAY
+        } else {
+            INITIAL_ACTIVITY_DELAY
+        };
         let interval = ACTIVITY_KEEPALIVE_INTERVAL;
         let prepare = async {
             let permit = self
