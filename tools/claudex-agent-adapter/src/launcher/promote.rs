@@ -15,7 +15,11 @@ use super::{
 
 #[cfg(not(test))]
 const HANDOVER_TIMEOUT: Duration = Duration::from_secs(10);
-#[cfg(test)]
+// llvm-cov parallel load delays dummy warm-start HTTP; keep the gate from
+// treating a slow Python listener as a live-update failure.
+#[cfg(all(test, coverage_nightly))]
+const HANDOVER_TIMEOUT: Duration = Duration::from_secs(15);
+#[cfg(all(test, not(coverage_nightly)))]
 const HANDOVER_TIMEOUT: Duration = Duration::from_secs(2);
 const HANDOVER_POLL: Duration = Duration::from_millis(25);
 
