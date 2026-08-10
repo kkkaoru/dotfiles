@@ -82,86 +82,159 @@ impl SubscriptionStream {
             .filter(|input| input.is_object())
             .cloned()
             .context("Claude subscription emitted non-object tool input")?;
-        let public_input = match self.prepare_tool_input(&name, id, &input) {
-            Ok(input) => input,
-            Err(error) if super::super::agent_effort::is_agent_tool(&name) => {
-                tracing::warn!(%error, tool = name, "blocked unsupported SubAgent launch");
-                self.blocked_subagent = true;
-                let notice = error.to_string();
-                let notice = if notice.contains("cooling down") {
-                    notice
-                } else {
-                    BLOCKED_SUBAGENT_NOTICE.to_owned()
-                };
-                self.report_blocked_subagent(sender, &notice).await?;
-                // The notice is ordinary assistant text, not a tool_use block.
-                // Marking it as forwarded would emit stop_reason=tool_use with
-                // no corresponding tool block, leaving Claude Code waiting for
-                // a tool result and eventually stalling the response stream.
-                return Ok(false);
-            }
-            Err(error) => return Err(error),
+        let public_input = match self.prepare_public_tool_input(sender, &name, id, &input).await? {
+            Some(input) => input,
+            None => return Ok(false),
         };
-        if super::super::agent_effort::is_agent_tool(&name)
-            && let Some(context) = self.tool_context.as_ref()
-            && let Some(session_id) = context.session_id.as_deref()
+        if self.skip_duplicate_subagent_launch(&name, id, &input, &public_input)? {
+            return Ok(false);
+        }
+        if self
+            .skip_foreign_task_stop(sender, &name, &public_input)
+            .await?
         {
-            let resume = public_input
-                .get("resume")
-                .and_then(Value::as_str)
-                .is_some_and(|value| !value.is_empty());
-            if !resume {
-                if context.subagent_reuse.scope_is_occupied(session_id, &input) {
-                    tracing::info!(
-                        session_id,
-                        tool = name,
-                        tool_use_id = id,
-                        "skipped duplicate same-scope SubAgent launch"
-                    );
-                    return Ok(false);
-                }
-                context
-                    .subagent_reuse
-                    .note_inflight_launch(session_id, &input, id);
-            }
+            return Ok(false);
         }
-        if is_task_stop_tool_name(&name) {
-            let task_id = public_input
-                .get("task_id")
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            if !is_claude_code_agent_task_id(task_id) {
-                tracing::info!(task_id, "skipping TaskStop for non-agent task id");
-                if !self.saw_tool_use {
-                    self.report_skipped_task_stop(sender, task_id).await?;
-                }
-                return Ok(false);
-            }
-        }
-        if is_task_output_tool_name(&name) {
-            let live_ids = self
-                .tool_context
-                .as_ref()
-                .map(|context| {
-                    crate::anthropic::subagent_reuse::live_agent_task_ids(&context.user_messages)
-                })
-                .unwrap_or_default();
-            if let Some(notice) = stale_task_output_notice(&public_input, &live_ids) {
-                tracing::info!(
-                    task_id = crate::anthropic::task_ids::task_output_id(&public_input),
-                    "skipping TaskOutput for unknown Agent task id"
-                );
-                if !self.saw_tool_use {
-                    self.report_blocked_subagent(sender, &notice).await?;
-                }
-                return Ok(false);
-            }
+        if self
+            .skip_stale_task_output(sender, &name, &public_input)
+            .await?
+        {
+            return Ok(false);
         }
         self.report_subagent_action(sender, &name, &input).await?;
         send_tool_block(sender, self.next_index, id, &name, public_input).await?;
         self.next_index += 1;
         self.saw_tool_use = true;
         self.launch_fanout_open = crate::anthropic::agent_effort::is_agent_tool(&name);
+        Ok(true)
+    }
+
+    async fn prepare_public_tool_input(
+        &mut self,
+        sender: &mpsc::Sender<Result<Bytes, Infallible>>,
+        name: &str,
+        id: &str,
+        input: &Value,
+    ) -> Result<Option<Value>> {
+        match self.prepare_tool_input(name, id, input) {
+            Ok(input) => Ok(Some(input)),
+            Err(error) if super::super::agent_effort::is_agent_tool(name) => {
+                self.emit_blocked_subagent(sender, name, error).await?;
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn emit_blocked_subagent(
+        &mut self,
+        sender: &mpsc::Sender<Result<Bytes, Infallible>>,
+        name: &str,
+        error: anyhow::Error,
+    ) -> Result<()> {
+        tracing::warn!(%error, tool = name, "blocked unsupported SubAgent launch");
+        self.blocked_subagent = true;
+        let notice = error.to_string();
+        let notice = if notice.contains("cooling down") {
+            notice
+        } else {
+            BLOCKED_SUBAGENT_NOTICE.to_owned()
+        };
+        self.report_blocked_subagent(sender, &notice).await?;
+        // The notice is ordinary assistant text, not a tool_use block.
+        // Marking it as forwarded would emit stop_reason=tool_use with
+        // no corresponding tool block, leaving Claude Code waiting for
+        // a tool result and eventually stalling the response stream.
+        Ok(())
+    }
+
+    fn skip_duplicate_subagent_launch(
+        &self,
+        name: &str,
+        id: &str,
+        input: &Value,
+        public_input: &Value,
+    ) -> Result<bool> {
+        if !super::super::agent_effort::is_agent_tool(name) {
+            return Ok(false);
+        }
+        let Some(context) = self.tool_context.as_ref() else {
+            return Ok(false);
+        };
+        let Some(session_id) = context.session_id.as_deref() else {
+            return Ok(false);
+        };
+        let resume = public_input
+            .get("resume")
+            .and_then(Value::as_str)
+            .is_some_and(|value| !value.is_empty());
+        if resume {
+            return Ok(false);
+        }
+        if context.subagent_reuse.scope_is_occupied(session_id, input) {
+            tracing::info!(
+                session_id,
+                tool = name,
+                tool_use_id = id,
+                "skipped duplicate same-scope SubAgent launch"
+            );
+            return Ok(true);
+        }
+        context
+            .subagent_reuse
+            .note_inflight_launch(session_id, input, id);
+        Ok(false)
+    }
+
+    async fn skip_foreign_task_stop(
+        &mut self,
+        sender: &mpsc::Sender<Result<Bytes, Infallible>>,
+        name: &str,
+        public_input: &Value,
+    ) -> Result<bool> {
+        if !is_task_stop_tool_name(name) {
+            return Ok(false);
+        }
+        let task_id = public_input
+            .get("task_id")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        if is_claude_code_agent_task_id(task_id) {
+            return Ok(false);
+        }
+        tracing::info!(task_id, "skipping TaskStop for non-agent task id");
+        if !self.saw_tool_use {
+            self.report_skipped_task_stop(sender, task_id).await?;
+        }
+        Ok(true)
+    }
+
+    async fn skip_stale_task_output(
+        &mut self,
+        sender: &mpsc::Sender<Result<Bytes, Infallible>>,
+        name: &str,
+        public_input: &Value,
+    ) -> Result<bool> {
+        if !is_task_output_tool_name(name) {
+            return Ok(false);
+        }
+        let live_ids = self
+            .tool_context
+            .as_ref()
+            .map(|context| {
+                crate::anthropic::subagent_reuse::live_agent_task_ids(&context.user_messages)
+            })
+            .unwrap_or_default();
+        let Some(notice) = stale_task_output_notice(public_input, &live_ids) else {
+            return Ok(false);
+        };
+        tracing::info!(
+            task_id = crate::anthropic::task_ids::task_output_id(public_input),
+            "skipping TaskOutput for unknown Agent task id"
+        );
+        if !self.saw_tool_use {
+            self.report_blocked_subagent(sender, &notice).await?;
+        }
         Ok(true)
     }
 

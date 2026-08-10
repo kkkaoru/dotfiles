@@ -94,17 +94,14 @@ async fn drain_stdout(
         match read_stdout_line(&mut reader).await {
             Ok(None) => break,
             Ok(Some(bytes)) => {
-                let line = decoder.push_line(&bytes);
-                if line.is_empty() && decoder.has_pending() {
-                    continue;
-                }
-                match parse_stdout_line(&line) {
-                    ParsedLine::Progress(event) => {
-                        push_coalesced(&mut progress, sink.as_ref(), &mut coalescer, event)
-                    }
-                    ParsedLine::Result(parsed) => result = Some(parsed),
-                    ParsedLine::Ignored => {}
-                }
+                apply_stdout_bytes(
+                    &mut progress,
+                    sink.as_ref(),
+                    &mut coalescer,
+                    &mut decoder,
+                    &mut result,
+                    &bytes,
+                );
             }
             Err(error) => {
                 stdout_error = Some(error);
@@ -113,18 +110,53 @@ async fn drain_stdout(
         }
     }
     if let Some(line) = decoder.flush() {
-        match parse_stdout_line(&line) {
-            ParsedLine::Progress(event) => {
-                push_coalesced(&mut progress, sink.as_ref(), &mut coalescer, event)
-            }
-            ParsedLine::Result(parsed) => result = Some(parsed),
-            ParsedLine::Ignored => {}
-        }
+        apply_parsed_line(
+            &mut progress,
+            sink.as_ref(),
+            &mut coalescer,
+            &mut result,
+            parse_stdout_line(&line),
+        );
     }
     for event in coalescer.finish() {
         push_progress(&mut progress, sink.as_ref(), event);
     }
     (progress, result, stdout_error)
+}
+
+fn apply_stdout_bytes(
+    progress: &mut Vec<ProgressEvent>,
+    sink: Option<&mpsc::UnboundedSender<ProgressEvent>>,
+    coalescer: &mut ProgressCoalescer,
+    decoder: &mut Utf8LineDecoder,
+    result: &mut Option<TurnResult>,
+    bytes: &[u8],
+) {
+    let line = decoder.push_line(bytes);
+    if line.is_empty() && decoder.has_pending() {
+        return;
+    }
+    apply_parsed_line(
+        progress,
+        sink,
+        coalescer,
+        result,
+        parse_stdout_line(&line),
+    );
+}
+
+fn apply_parsed_line(
+    progress: &mut Vec<ProgressEvent>,
+    sink: Option<&mpsc::UnboundedSender<ProgressEvent>>,
+    coalescer: &mut ProgressCoalescer,
+    result: &mut Option<TurnResult>,
+    parsed: ParsedLine,
+) {
+    match parsed {
+        ParsedLine::Progress(event) => push_coalesced(progress, sink, coalescer, event),
+        ParsedLine::Result(parsed) => *result = Some(parsed),
+        ParsedLine::Ignored => {}
+    }
 }
 
 fn push_coalesced(
@@ -156,11 +188,7 @@ async fn read_stdout_line(
     loop {
         let available = reader.fill_buf().await?;
         if available.is_empty() {
-            return if buf.is_empty() {
-                Ok(None)
-            } else {
-                Ok(Some(buf))
-            };
+            return Ok(eof_stdout_buf(buf));
         }
         if let Some(pos) = available.iter().position(|byte| *byte == b'\n') {
             buf.extend_from_slice(&available[..=pos]);
@@ -176,6 +204,10 @@ async fn read_stdout_line(
             return Ok(Some(buf));
         }
     }
+}
+
+fn eof_stdout_buf(buf: Vec<u8>) -> Option<Vec<u8>> {
+    if buf.is_empty() { None } else { Some(buf) }
 }
 
 #[derive(Default)]
@@ -322,19 +354,22 @@ async fn read_stderr(stderr: impl AsyncRead + Unpin) -> String {
         buf.clear();
         match reader.read_until(b'\n', &mut buf).await {
             Ok(0) => break,
-            Ok(_) => {
-                if buf.last() == Some(&b'\n') {
-                    buf.pop();
-                }
-                if buf.last() == Some(&b'\r') {
-                    buf.pop();
-                }
-                out.push(String::from_utf8_lossy(&buf).into_owned());
-            }
+            Ok(_) => out.push(trim_stderr_line(&buf)),
             Err(_) => break,
         }
     }
     out.join("\n")
+}
+
+fn trim_stderr_line(buf: &[u8]) -> String {
+    let mut line = buf;
+    if line.last() == Some(&b'\n') {
+        line = &line[..line.len() - 1];
+    }
+    if line.last() == Some(&b'\r') {
+        line = &line[..line.len() - 1];
+    }
+    String::from_utf8_lossy(line).into_owned()
 }
 
 #[cfg(test)]
