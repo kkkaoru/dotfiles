@@ -3,9 +3,12 @@ use crate::ADAPTER_PROTOCOL_VERSION;
 use crate::agent_backend::{BackendKind, BackendRoute};
 use crate::launcher::health::Health;
 use std::collections::BTreeMap;
-use std::path::PathBuf;
+use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
 
 use super::super::{AdapterOptions, LOCAL_TOKEN, ServiceConfig};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpListener;
 
 fn health(listener_handover: bool, pid: Option<u32>) -> Health {
     Health {
@@ -185,4 +188,118 @@ fn release_previous_ignores_non_adapter_pids() {
         lock_path: PathBuf::from("/tmp/claudex/adapter.lock"),
     };
     release_previous(&config, std::process::id());
+}
+
+fn config_at(listen: SocketAddr, root: &Path, executable: PathBuf) -> ServiceConfig {
+    ServiceConfig {
+        options: AdapterOptions {
+            routes: vec![BackendRoute::new("test-model", BackendKind::CodexAppServer)],
+            listen,
+            model: "test-model".to_owned(),
+            subscription_max_processes: 20,
+            subscription_timeout_minutes: 120,
+            subagent_hard_timeout_seconds: None,
+            model_catalog: crate::provider_config::ModelCatalog::default(),
+        },
+        token: LOCAL_TOKEN.to_owned(),
+        codex_config_fingerprint: "codex".to_owned(),
+        service_config_fingerprint: "service".to_owned(),
+        executable,
+        log_path: root.join("adapter.log"),
+        lock_path: root.join("adapter.lock"),
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn try_canonical_fails_closed_when_warm_start_never_becomes_ready() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().expect("warm-start fixture");
+    let executable = root.path().join("daemon.sh");
+    std::fs::write(&executable, "#!/bin/sh\nexit 0\n").expect("daemon script");
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755))
+        .expect("daemon executable");
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("canonical listen");
+    let listen = listener.local_addr().expect("canonical address");
+    drop(listener);
+    let config = config_at(listen, root.path(), executable);
+    let error = try_canonical(&reqwest::Client::new(), &config, &health(true, Some(12)))
+        .await
+        .expect_err("warm-start must fail closed");
+    assert!(
+        error.to_string().contains("wait for warm-start"),
+        "{error:#}"
+    );
+}
+
+#[tokio::test]
+async fn request_rebind_parses_success_and_skips_unreachable_listeners() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("rebind listener");
+    let listen = listener.local_addr().expect("rebind address");
+    tokio::spawn(async move {
+        let Ok((mut stream, _)) = listener.accept().await else {
+            return;
+        };
+        let mut buf = vec![0; 4096];
+        let _ = stream.read(&mut buf).await;
+        let body = r#"{"listen":"127.0.0.1:65100"}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let _ = stream.write_all(response.as_bytes()).await;
+    });
+    let root = tempfile::tempdir().expect("rebind fixture");
+    let config = config_at(listen, root.path(), PathBuf::from("/tmp/adapter"));
+    let rebound = request_ephemeral_rebind(&reqwest::Client::new(), &config)
+        .await
+        .expect("ephemeral rebind");
+    assert_eq!(rebound.expect("rebind listen").listen, "127.0.0.1:65100");
+    let missing = request_bind_listen(
+        &reqwest::Client::new(),
+        &config_at(
+            "127.0.0.1:1".parse().unwrap(),
+            root.path(),
+            PathBuf::from("/tmp/adapter"),
+        ),
+        "127.0.0.1:8318".parse().unwrap(),
+    )
+    .await
+    .expect("unreachable rebind");
+    assert!(missing.is_none());
+}
+
+#[tokio::test]
+async fn wait_until_canonical_released_returns_when_the_port_is_free() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("free listen");
+    let listen = listener.local_addr().expect("free address");
+    drop(listener);
+    let root = tempfile::tempdir().expect("released fixture");
+    wait_until_canonical_released(&config_at(
+        listen,
+        root.path(),
+        PathBuf::from("/tmp/adapter"),
+    ))
+    .await
+    .expect("free port");
+}
+
+#[tokio::test]
+async fn wait_until_canonical_released_times_out_while_the_port_is_busy() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("busy listen");
+    let listen = listener.local_addr().expect("busy address");
+    let root = tempfile::tempdir().expect("busy fixture");
+    let error = wait_until_canonical_released(&config_at(
+        listen,
+        root.path(),
+        PathBuf::from("/tmp/adapter"),
+    ))
+    .await
+    .expect_err("busy port must time out");
+    assert!(error.to_string().contains("did not release"));
+    drop(listener);
 }

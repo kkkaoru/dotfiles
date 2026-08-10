@@ -2,14 +2,17 @@ use super::*;
 use crate::launcher::RetainedGeneration;
 use crate::listen_handover::{HandoverListener, ListenHandover};
 use axum::{
-    Json,
+    Json, Router,
     body::Body,
     extract::{Request, State},
     http::StatusCode,
+    middleware,
+    routing::post,
     serve::Listener,
 };
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
+    sync::Arc,
     time::Duration,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -203,6 +206,63 @@ async fn rebind_listener_returns_the_ephemeral_listen() {
     assert_eq!(response.status(), StatusCode::OK);
     assert_ne!(handover.advertised_addr(), canonical);
     driver.abort();
+}
+
+#[tokio::test]
+async fn proxy_middleware_forwards_owned_sessions_and_passes_through_others() {
+    let upstream = serve_http_once(b"from-previous").await;
+    let root = tempfile::tempdir().expect("middleware fixture");
+    let path = root.path().join("retained.json");
+    std::fs::write(
+        &path,
+        format!(
+            r#"{{"listen":"{upstream}","pid":1,"build_id":"old","session_ids":["session-a"]}}"#
+        ),
+    )
+    .expect("write retained");
+    let state = Some(HandoverState {
+        retained: Some(Arc::new(retained(
+            &path,
+            &upstream.to_string(),
+            &["session-a"],
+        ))),
+    });
+    let app = Router::new()
+        .route("/v1/messages", post(|| async { "local" }))
+        .layer(middleware::from_fn_with_state(
+            state,
+            proxy_retained_sessions,
+        ));
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("middleware listener");
+    let addr = listener.local_addr().expect("middleware address");
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.ok();
+    });
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let client = reqwest::Client::new();
+    let owned = client
+        .post(format!("http://{addr}/v1/messages"))
+        .header("x-claude-code-session-id", "session-a")
+        .body("{}")
+        .send()
+        .await
+        .expect("owned session");
+    assert_eq!(owned.text().await.expect("owned body"), "from-previous");
+    let passthrough = client
+        .post(format!("http://{addr}/v1/messages"))
+        .header("x-claude-code-session-id", "session-b")
+        .send()
+        .await
+        .expect("unowned session");
+    assert_eq!(passthrough.text().await.expect("local body"), "local");
+    let missing = client
+        .post(format!("http://{addr}/v1/messages"))
+        .send()
+        .await
+        .expect("missing session header");
+    assert_eq!(missing.text().await.expect("missing body"), "local");
 }
 
 async fn serve_http_once(body: &'static [u8]) -> SocketAddr {
