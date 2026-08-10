@@ -760,6 +760,11 @@ fn configured_worker_effort_replaces_an_unsupported_explicit_effort() {
         bridge.resolve_request_effort(&request, AgentEffort::Explicit("max".to_owned())),
         Some("xhigh".to_owned())
     );
+    assert_eq!(
+        bridge.resolve_request_effort(&request, AgentEffort::ConfiguredDefault),
+        Some("xhigh".to_owned()),
+        "ConfiguredDefault must use the worker route effort when settings are absent"
+    );
 }
 
 #[test]
