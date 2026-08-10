@@ -520,6 +520,23 @@ async fn emits_subscription_activity_for_text_and_thinking_paths() {
     assert!(receiver.recv().await.is_some());
 }
 
+#[tokio::test]
+async fn closing_an_activity_that_never_opened_sends_no_frame() {
+    let (sender, mut receiver) = tokio::sync::mpsc::channel(8);
+    let mut activity = super::subscription_activity::SubscriptionActivity::default();
+    assert!(!activity.is_open());
+    activity
+        .close(&sender)
+        .await
+        .expect("close on a never-opened activity is a no-op");
+    assert!(!activity.is_open());
+    drop(sender);
+    assert!(
+        receiver.recv().await.is_none(),
+        "closing an unopened activity must not emit a signature_delta or block_stop frame"
+    );
+}
+
 #[test]
 fn builds_subscription_prompts() {
     assert!(subscription_prompt("advisor", &json!({}), &[]).contains("rigorous advisor"));
