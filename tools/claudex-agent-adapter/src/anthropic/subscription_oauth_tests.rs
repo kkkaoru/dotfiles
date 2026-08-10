@@ -11,7 +11,10 @@ use crate::anthropic::{Bridge, MessagesRequest};
 use crate::app_server::AppServer;
 use crate::provider_config::ModelCatalog;
 
-use super::{SUBSCRIPTION_AUTH_SCOPE, credentials_access_expired_at, is_subscription_auth_failure};
+use super::{
+    SUBSCRIPTION_AUTH_SCOPE, credentials_access_expired_at, credentials_oauth_unusable_at,
+    is_subscription_auth_failure,
+};
 
 /// Exact Claude Code / TUI wording from horse-racing `fa522331-…`.
 const TUI_OAUTH: &str = "Please run /login · API Error: 401 Claude subscription model \
@@ -107,12 +110,23 @@ fn opus_and_luna_bridge() -> Bridge {
 }
 
 fn write_credentials(root: &Path, expires_at_ms: u64) {
+    write_credentials_with_refresh(root, expires_at_ms, None);
+}
+
+fn write_credentials_with_refresh(
+    root: &Path,
+    expires_at_ms: u64,
+    refresh_expires_at_ms: Option<u64>,
+) {
     let dir = root.join(".claude");
     std::fs::create_dir_all(&dir).expect("credentials dir");
+    let refresh = refresh_expires_at_ms
+        .map(|ms| format!(r#","refreshTokenExpiresAt":{ms}"#))
+        .unwrap_or_default();
     std::fs::write(
         dir.join(".credentials.json"),
         format!(
-            r#"{{"claudeAiOauth":{{"accessToken":"redacted","refreshToken":"redacted","expiresAt":{expires_at_ms}}}}}"#
+            r#"{{"claudeAiOauth":{{"accessToken":"redacted","refreshToken":"redacted","expiresAt":{expires_at_ms}{refresh}}}}}"#
         ),
     )
     .expect("write credentials");
@@ -225,7 +239,11 @@ fn subscription_auth_failover_skips_native_claude_and_picks_a_provider() {
 #[test]
 fn expired_credentials_preflight_rewrites_opus_onto_luna() {
     let root = tempfile::tempdir().expect("preflight fixture");
-    write_credentials(root.path(), millis(UNIX_EPOCH + Duration::from_secs(1)));
+    write_credentials_with_refresh(
+        root.path(),
+        millis(UNIX_EPOCH + Duration::from_secs(1)),
+        Some(millis(UNIX_EPOCH + Duration::from_secs(2))),
+    );
     let bridge = opus_and_luna_bridge().with_usage_limit_cache_home(root.path());
 
     let mut request = dummy_request("claude-opus-5");
@@ -238,6 +256,54 @@ fn expired_credentials_preflight_rewrites_opus_onto_luna() {
     assert_eq!(request.model, "gpt-5.6-luna");
     assert_eq!(effort.as_deref(), Some("max"));
     assert_eq!(route, RouteDecision::Provider);
+}
+
+#[test]
+fn access_expired_with_valid_refresh_keeps_native_claude_subscription() {
+    let root = tempfile::tempdir().expect("refreshable fixture");
+    let now = SystemTime::now();
+    write_credentials_with_refresh(
+        root.path(),
+        millis(now - Duration::from_secs(3600)),
+        Some(millis(now + Duration::from_secs(7 * 24 * 3600))),
+    );
+    let bridge = opus_and_luna_bridge().with_usage_limit_cache_home(root.path());
+    assert!(
+        !bridge.subscription_oauth_is_unusable(),
+        "refreshable Claude OAuth must stay on the native subscription path"
+    );
+
+    let mut request = dummy_request("claude-opus-5");
+    let mut effort = Some("medium".to_owned());
+    let route = bridge.apply_subscription_auth_preflight(
+        &mut request,
+        RouteDecision::Subscription,
+        &mut effort,
+    );
+    assert_eq!(request.model, "claude-opus-5");
+    assert_eq!(effort.as_deref(), Some("medium"));
+    assert_eq!(route, RouteDecision::Subscription);
+}
+
+#[test]
+fn credentials_oauth_unusable_follows_refresh_lifetime_not_access_alone() {
+    let root = tempfile::tempdir().expect("refresh lifetime fixture");
+    let now = UNIX_EPOCH + Duration::from_secs(1_800_000_000);
+    let path = root.path().join(".claude/.credentials.json");
+    write_credentials_with_refresh(
+        root.path(),
+        millis(UNIX_EPOCH + Duration::from_secs(1)),
+        Some(millis(UNIX_EPOCH + Duration::from_secs(2_000_000_000))),
+    );
+    assert_eq!(credentials_access_expired_at(&path, now), Some(true));
+    assert_eq!(credentials_oauth_unusable_at(&path, now), Some(false));
+
+    write_credentials_with_refresh(
+        root.path(),
+        millis(UNIX_EPOCH + Duration::from_secs(1)),
+        Some(millis(UNIX_EPOCH + Duration::from_secs(1))),
+    );
+    assert_eq!(credentials_oauth_unusable_at(&path, now), Some(true));
 }
 
 #[test]
@@ -303,7 +369,11 @@ fn provider_route_is_not_rewritten_by_subscription_oauth_preflight() {
 #[test]
 fn expired_oauth_without_provider_backend_keeps_subscription() {
     let root = tempfile::tempdir().expect("no-provider fixture");
-    write_credentials(root.path(), millis(UNIX_EPOCH + Duration::from_secs(1)));
+    write_credentials_with_refresh(
+        root.path(),
+        millis(UNIX_EPOCH + Duration::from_secs(1)),
+        Some(millis(UNIX_EPOCH + Duration::from_secs(2))),
+    );
     let mut catalog = ModelCatalog::default();
     catalog
         .set_auxiliary_worker_routes(vec![crate::provider_config::WorkerRoute::new(
@@ -350,7 +420,11 @@ fn subscription_auth_failover_skips_exhausted_luna_and_picks_cursor() {
 #[test]
 fn exhausted_provider_then_expired_oauth_returns_to_a_sibling_provider() {
     let root = tempfile::tempdir().expect("usage then oauth fixture");
-    write_credentials(root.path(), millis(UNIX_EPOCH + Duration::from_secs(1)));
+    write_credentials_with_refresh(
+        root.path(),
+        millis(UNIX_EPOCH + Duration::from_secs(1)),
+        Some(millis(UNIX_EPOCH + Duration::from_secs(2))),
+    );
     let bridge = fugu_luna_bridge().with_usage_limit_cache_home(root.path());
     bridge.note_provider_exhaustion(&anyhow::anyhow!(PROVIDER_401), Some("fugu"));
 
@@ -459,7 +533,11 @@ fn credentials_access_expired_at_with_future_expiry() {
 #[test]
 fn subscription_oauth_is_unusable_with_expired_credentials() {
     let root = tempfile::tempdir().expect("unusable expired fixture");
-    write_credentials(root.path(), millis(UNIX_EPOCH + Duration::from_secs(1)));
+    write_credentials_with_refresh(
+        root.path(),
+        millis(UNIX_EPOCH + Duration::from_secs(1)),
+        Some(millis(UNIX_EPOCH + Duration::from_secs(2))),
+    );
     let bridge = opus_and_luna_bridge().with_usage_limit_cache_home(root.path());
     assert!(bridge.subscription_oauth_is_unusable());
 }
@@ -492,7 +570,11 @@ fn apply_subscription_auth_preflight_non_subscription_route_no_rewrite() {
 #[test]
 fn apply_subscription_auth_preflight_subscription_unusable_no_failover() {
     let root = tempfile::tempdir().expect("no failover fixture");
-    write_credentials(root.path(), millis(UNIX_EPOCH + Duration::from_secs(1)));
+    write_credentials_with_refresh(
+        root.path(),
+        millis(UNIX_EPOCH + Duration::from_secs(1)),
+        Some(millis(UNIX_EPOCH + Duration::from_secs(2))),
+    );
     let mut catalog = ModelCatalog::default();
     catalog
         .set_auxiliary_worker_routes(vec![crate::provider_config::WorkerRoute::new(
@@ -520,7 +602,11 @@ fn apply_subscription_auth_preflight_subscription_unusable_no_failover() {
 #[test]
 fn subscription_auth_failover_without_worker_effort_still_rewrites() {
     let root = tempfile::tempdir().expect("oauth failover without effort");
-    write_credentials(root.path(), millis(UNIX_EPOCH + Duration::from_secs(1)));
+    write_credentials_with_refresh(
+        root.path(),
+        millis(UNIX_EPOCH + Duration::from_secs(1)),
+        Some(millis(UNIX_EPOCH + Duration::from_secs(2))),
+    );
     let backend =
         AgentBackend::spawn_routes(&[BackendRoute::new("auto", BackendKind::ConfiguredAcp)]);
     let bridge = Bridge::new_with_backend(backend, "claude-opus-5".to_owned())
