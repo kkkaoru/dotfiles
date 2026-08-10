@@ -1,6 +1,6 @@
 use super::*;
 use axum::serve::Listener;
-use std::time::Duration;
+use std::{net::SocketAddr, time::Duration};
 use tokio::net::{TcpListener, TcpStream};
 
 #[test]
@@ -36,6 +36,31 @@ fn parse_service_listen_keeps_client_port_off_warm_start_ephemeral() {
     assert_eq!(parse_service_listen(Some("127.0.0.1:8318"), warm), service);
     assert_eq!(parse_service_listen(None, warm), warm);
     assert_eq!(parse_service_listen(Some("not-a-socket"), warm), warm);
+}
+
+#[test]
+fn from_runtime_bind_reads_service_listen_env() {
+    let bind: SocketAddr = "127.0.0.1:62486".parse().unwrap();
+    let service: SocketAddr = "127.0.0.1:8318".parse().unwrap();
+    let cache = tempfile::tempdir().expect("runtime bind cache");
+    let previous = std::env::var_os(SERVICE_LISTEN_ENV);
+    unsafe { std::env::set_var(SERVICE_LISTEN_ENV, service.to_string()) };
+    let (handover, _rx) = ListenHandover::from_runtime_bind(bind, cache.path().to_path_buf());
+    assert_eq!(handover.advertised_addr(), bind);
+    assert_eq!(handover.service_addr(), service);
+    match previous {
+        Some(value) => unsafe { std::env::set_var(SERVICE_LISTEN_ENV, value) },
+        None => unsafe { std::env::remove_var(SERVICE_LISTEN_ENV) },
+    }
+
+    let cache = tempfile::tempdir().expect("runtime bind fallback");
+    let previous = std::env::var_os(SERVICE_LISTEN_ENV);
+    unsafe { std::env::remove_var(SERVICE_LISTEN_ENV) };
+    let (handover, _rx) = ListenHandover::from_runtime_bind(bind, cache.path().to_path_buf());
+    assert_eq!(handover.service_addr(), bind);
+    if let Some(value) = previous {
+        unsafe { std::env::set_var(SERVICE_LISTEN_ENV, value) };
+    }
 }
 
 #[test]
