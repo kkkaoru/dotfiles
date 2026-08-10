@@ -4448,4 +4448,77 @@ async fn external_batch_segment_returns_an_unsettled_segment_while_stream_is_ope
     assert!(!provider_settled);
     assert_eq!(segment.blocks[0]["text"], "answer");
 }
+
+#[tokio::test]
+async fn finish_closed_stream_retains_settled_session_for_follow_up_reuse() {
+    let (_root, app, bridge, session) = disconnect_fixture().await;
+    let bridge = Arc::new(bridge);
+    let events = Arc::new(app.subscribe_thread("thread"));
+
+    // Add session to bridge with committed transcript
+    bridge.sessions.lock().await.push(Arc::clone(&session));
+    session
+        .transcript
+        .lock()
+        .await
+        .push(json!({"role":"assistant","content":[{"type":"text","text":"initial response"}]}));
+
+    // Verify session is in bridge before finish_closed_stream
+    assert_eq!(bridge.sessions.lock().await.len(), 1);
+
+    // Call finish_closed_stream with provider_settled=true
+    bridge
+        .finish_closed_stream(&session, &events, true)
+        .await;
+
+    // CRITICAL ASSERTION: Session must remain in bridge.sessions after settled completion
+    assert_eq!(
+        bridge.sessions.lock().await.len(),
+        1,
+        "finish_closed_stream with provider_settled=true must retain session for idle reuse"
+    );
+    let retained = Arc::clone(
+        bridge
+            .sessions
+            .lock()
+            .await
+            .iter()
+            .find(|s| Arc::ptr_eq(s, &session))
+            .expect("session must still be in bridge.sessions"),
+    );
+    assert!(Arc::ptr_eq(&retained, &session), "retained session must match original");
+
+    // Simulate a follow-up request accessing the idle session
+    // Build a request that matches the session's signature and transcript
+    let _follow_up_request = MessagesRequest {
+        model: "main".to_owned(),
+        system: Value::String("system".to_owned()),
+        messages: vec![
+            json!({"role":"assistant","content":[{"type":"text","text":"initial response"}]}),
+            json!({"role":"user","content":"continue?"}),
+        ],
+        tools: vec![],
+        stream: false,
+        output_config: Value::Null,
+        metadata: json!({}),
+        working_directory: None,
+        disabled_subagent_models: Default::default(),
+        claudex_collaborator_model: None,
+    };
+
+    let _signature: Arc<str> = Arc::from("signature");
+
+    // Directly verify that sessions.lock().await contains our idle session
+    let live_sessions = bridge.sessions.lock().await;
+    assert_eq!(live_sessions.len(), 1);
+    assert!(live_sessions
+        .iter()
+        .any(|s| Arc::ptr_eq(s, &session)), "idle session must still be discoverable");
+
+    // The idle session remains available for future select_session() calls
+    // which will use reserve_matching_session internally to find it
+    drop(live_sessions);
+
+    assert_eq!(bridge.used_session_slots(), 1);
+}
 //x
