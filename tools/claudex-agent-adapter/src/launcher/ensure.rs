@@ -298,3 +298,8 @@ fn recovery_snapshot_is_missing(error: &anyhow::Error) -> bool {
             .is_some_and(|io_error| io_error.kind() == std::io::ErrorKind::NotFound)
     })
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[path = "ensure_tests.rs"]
+mod tests;
