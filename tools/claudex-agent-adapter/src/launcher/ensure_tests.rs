@@ -34,6 +34,17 @@ fn recovery_snapshot_is_missing_detects_not_found_io_errors() {
         "missing snapshot",
     ));
     assert!(recovery_snapshot_is_missing(&missing));
+    let nested = anyhow::Error::new(std::io::Error::new(
+        std::io::ErrorKind::NotFound,
+        "inner missing",
+    ))
+    .context("validate recovery generation");
+    assert!(recovery_snapshot_is_missing(&nested));
     let other = anyhow::anyhow!("unrelated");
     assert!(!recovery_snapshot_is_missing(&other));
+    let other_io = anyhow::Error::new(std::io::Error::new(
+        std::io::ErrorKind::PermissionDenied,
+        "denied",
+    ));
+    assert!(!recovery_snapshot_is_missing(&other_io));
 }

@@ -1059,6 +1059,62 @@ HTTPServer((host, int(port)), Handler).serve_forever()
         kill_dummy(&dummy);
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn busy_hot_swap_falls_back_when_live_update_warm_start_fails() {
+        let root = tempfile::tempdir().expect("busy warm-start fail fixture");
+        let dummy = root.path().join("claudex-agent-adapter");
+        std::fs::write(&dummy, "#!/bin/sh\nexit 0\n").expect("dummy adapter");
+        std::fs::set_permissions(&dummy, std::fs::Permissions::from_mode(0o755))
+            .expect("dummy executable");
+        let mut primary = config();
+        primary.executable = dummy;
+        let primary_listener = TcpListener::bind("127.0.0.1:0").expect("primary listener");
+        primary.options.listen = primary_listener.local_addr().expect("primary address");
+        primary.log_path = root.path().join("adapter.log");
+        primary.lock_path = root.path().join("adapter.lock");
+
+        let fallback_listener = TcpListener::bind("127.0.0.1:0").expect("fallback listener");
+        let fallback_listen = fallback_listener.local_addr().expect("fallback address");
+        let fallback = primary.with_listen(fallback_listen);
+        std::fs::write(
+            root.path()
+                .join(format!("fallback.{}.json", primary.options.listen.port())),
+            serde_json::json!({
+                "listen": fallback_listen,
+                "build_id": env!("CLAUDEX_BUILD_ID"),
+                "service_config_fingerprint": fallback.service_config_fingerprint,
+                "pid": 99,
+            })
+            .to_string(),
+        )
+        .expect("write fallback state");
+
+        let mut busy = healthy(&primary);
+        busy.build_id = "old-build".to_owned();
+        busy.active_http_requests = 1;
+        busy.listener_handover = true;
+        let primary_server = serve_responses(
+            primary_listener,
+            vec![health_response(&busy), health_response(&busy)],
+        );
+        let fallback_health = healthy(&fallback);
+        let fallback_server = serve_responses(
+            fallback_listener,
+            vec![
+                health_response(&fallback_health),
+                http_response("200 OK", "{}"),
+            ],
+        );
+        let _spawn = pending_hot_swap::TestSpawnPid::arm(5252);
+        let url = ensure::run(&primary, ensure::Mode::HotSwap)
+            .await
+            .expect("warm-start failure must retain the busy listener and fall back");
+        assert_eq!(url, fallback.base_url());
+        primary_server.join().expect("primary server");
+        fallback_server.join().expect("fallback server");
+    }
+
     #[tokio::test]
     async fn ensure_routes_a_busy_listener_to_an_existing_current_build_fallback() {
         let root = tempfile::tempdir().expect("ensure fallback fixture");
