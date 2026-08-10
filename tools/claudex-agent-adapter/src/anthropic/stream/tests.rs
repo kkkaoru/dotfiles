@@ -388,6 +388,7 @@ fn sanitizes_text_thinking_and_provider_status_variants() {
         "Continuing with the next step in the plan.",
         "I’ll audit the local ctx index and pull the evidence needed for the report.",
         "\u{200b}\u{200b}",
+        "  \n\t\n  ",
     ] {
         let mut status_block = vec![json!({"type":"thinking","thinking":status})];
         sanitize::sanitize_committed_blocks(&mut status_block);
