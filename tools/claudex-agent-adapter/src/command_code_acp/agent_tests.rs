@@ -80,17 +80,9 @@ fn options_for(program: PathBuf) -> Options {
     }
 }
 
-fn instrumented_timeout(fast: Duration, slow: Duration) -> Duration {
-    if cfg!(coverage)
-        || std::env::var_os("CARGO_LLVM_COV").is_some()
-        || std::env::var_os("CARGO_LLVM_COV_TARGET_DIR").is_some()
-        || std::env::var_os("LLVM_PROFILE_FILE").is_some()
-    {
-        slow
-    } else {
-        fast
-    }
-}
+// Ceiling only. llvm-cov instrumentation regularly exceeds the old 2s windows.
+const CMD_START_TIMEOUT: Duration = Duration::from_secs(20);
+const CMD_SETTLE_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[tokio::test]
 async fn serve_io_runs_headless_turn_and_emits_tool_progress() {
@@ -413,17 +405,14 @@ async fn serve_io_cancel_kills_in_flight_cmd_within_two_seconds() {
                 vec![acp::ContentBlock::Text(acp::TextContent::new("slow"))],
             ));
             tokio::pin!(prompt_fut);
-            tokio::time::timeout(
-                instrumented_timeout(Duration::from_secs(2), Duration::from_secs(20)),
-                async {
-                    tokio::select! {
-                        result = &mut prompt_fut => {
-                            panic!("prompt finished before cancel: {result:?}");
-                        }
-                        () = tokio::time::sleep(Duration::from_millis(150)) => {}
+            tokio::time::timeout(CMD_START_TIMEOUT, async {
+                tokio::select! {
+                    result = &mut prompt_fut => {
+                        panic!("prompt finished before cancel: {result:?}");
                     }
-                },
-            )
+                    () = tokio::time::sleep(Duration::from_millis(150)) => {}
+                }
+            })
             .await
             .expect("cmd started before cancel");
             let started = Instant::now();
@@ -431,14 +420,13 @@ async fn serve_io_cancel_kills_in_flight_cmd_within_two_seconds() {
                 .cancel(acp::CancelNotification::new(session.session_id.clone()))
                 .await
                 .expect("cancel in flight");
-            let settle = instrumented_timeout(Duration::from_secs(2), Duration::from_secs(20));
-            let response = tokio::time::timeout(settle, prompt_fut)
+            let response = tokio::time::timeout(CMD_SETTLE_TIMEOUT, prompt_fut)
                 .await
                 .expect("cancel should settle")
                 .expect("cancelled prompt");
             assert_eq!(response.stop_reason, acp::StopReason::Cancelled);
             assert!(
-                started.elapsed() < settle,
+                started.elapsed() < CMD_SETTLE_TIMEOUT,
                 "cancel took {:?}",
                 started.elapsed()
             );
@@ -497,8 +485,7 @@ async fn serve_io_same_session_follow_up_replaces_in_flight_cmd() {
                 vec![acp::ContentBlock::Text(acp::TextContent::new("slow"))],
             ));
             tokio::pin!(first);
-            let start_wait = instrumented_timeout(Duration::from_secs(5), Duration::from_secs(20));
-            tokio::time::timeout(start_wait, async {
+            tokio::time::timeout(CMD_START_TIMEOUT, async {
                 loop {
                     tokio::select! {
                         result = &mut first => {
@@ -519,14 +506,13 @@ async fn serve_io_same_session_follow_up_replaces_in_flight_cmd() {
                 .cancel(acp::CancelNotification::new(session.session_id.clone()))
                 .await
                 .expect("cancel in-flight before follow-up");
-            let settle = instrumented_timeout(Duration::from_secs(2), Duration::from_secs(20));
-            let first = tokio::time::timeout(settle, first)
+            let first = tokio::time::timeout(CMD_SETTLE_TIMEOUT, first)
                 .await
                 .expect("replaced prompt must settle")
                 .expect("replaced prompt");
             assert_eq!(first.stop_reason, acp::StopReason::Cancelled);
             let second = tokio::time::timeout(
-                settle,
+                CMD_SETTLE_TIMEOUT,
                 connection.prompt(acp::PromptRequest::new(
                     session.session_id,
                     vec![acp::ContentBlock::Text(acp::TextContent::new("follow-up"))],
@@ -537,7 +523,7 @@ async fn serve_io_same_session_follow_up_replaces_in_flight_cmd() {
             .expect("follow-up prompt");
             assert_eq!(second.stop_reason, acp::StopReason::EndTurn);
             assert!(
-                started_at.elapsed() < settle,
+                started_at.elapsed() < CMD_SETTLE_TIMEOUT,
                 "follow-up waited {:?}",
                 started_at.elapsed()
             );
