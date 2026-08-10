@@ -192,11 +192,20 @@ fn reserves_a_finite_admission_window_per_model() {
 #[test]
 fn detects_tui_qwen_concurrency_admission_timeout() {
     assert!(is_concurrency_admission_timeout(&anyhow!(
+        "model `qwen3.8-max-preview` concurrency model admission timed out after 9.999999375s"
+    )));
+    assert!(is_concurrency_admission_timeout(&anyhow!(
         "model `qwen3.8-max-preview` concurrency model admission timed out after 29.999999375s"
     )));
     assert!(!is_concurrency_admission_timeout(&anyhow!(
         "Configured ACP completed with no assistant content"
     )));
+}
+
+#[test]
+fn default_wait_timeout_is_ten_seconds() {
+    assert_eq!(DEFAULT_WAIT_TIMEOUT, Duration::from_secs(10));
+    assert_eq!(parse_wait_timeout(None), Duration::from_secs(10));
 }
 
 #[tokio::test]
