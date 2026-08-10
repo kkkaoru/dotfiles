@@ -724,6 +724,71 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn wait_idle_replace_reuses_once_the_current_build_returns() {
+        let root = tempfile::tempdir().expect("wait-idle replace reuse fixture");
+        let mut cfg = config();
+        let listener = TcpListener::bind("127.0.0.1:0").expect("wait-idle replace listener");
+        cfg.options.listen = listener.local_addr().expect("wait-idle replace address");
+        cfg.log_path = root.path().join("adapter.log");
+        cfg.lock_path = root.path().join("adapter.lock");
+        let mut old = healthy(&cfg);
+        old.build_id = "old-build".to_owned();
+        old.listener_handover = true;
+        let mut current = healthy(&cfg);
+        current.listener_handover = true;
+        let server = serve_responses(
+            listener,
+            vec![
+                health_response(&old),
+                health_response(&current),
+                http_response("200 OK", "{}"),
+            ],
+        );
+        let url = ensure::run(&cfg, ensure::Mode::WaitIdle)
+            .await
+            .expect("wait-idle should reuse after the current build comes back");
+        assert_eq!(url, cfg.base_url());
+        server.join().expect("wait-idle replace reuse server");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn wait_idle_replace_fails_closed_when_live_update_warm_start_never_readies() {
+        let root = tempfile::tempdir().expect("wait-idle replace fail fixture");
+        let dummy = root.path().join("claudex-agent-adapter");
+        std::fs::write(&dummy, "#!/bin/sh\nexit 0\n").expect("dummy adapter");
+        std::fs::set_permissions(&dummy, std::fs::Permissions::from_mode(0o755))
+            .expect("dummy executable");
+        let mut cfg = config();
+        cfg.executable = dummy;
+        let listener = TcpListener::bind("127.0.0.1:0").expect("stale handover listener");
+        cfg.options.listen = listener.local_addr().expect("stale handover address");
+        cfg.log_path = root.path().join("adapter.log");
+        cfg.lock_path = root.path().join("adapter.lock");
+        let mut old = healthy(&cfg);
+        old.build_id = "old-build".to_owned();
+        old.listener_handover = true;
+        let server = serve_responses(
+            listener,
+            vec![
+                health_response(&old),
+                health_response(&old),
+                health_response(&old),
+            ],
+        );
+        let error = ensure::run(&cfg, ensure::Mode::WaitIdle)
+            .await
+            .expect_err("warm-start failure must fail the idle waiter");
+        assert!(
+            error.to_string().contains("wait for warm-start")
+                || error.to_string().contains("warm-start")
+                || error.to_string().contains("start"),
+            "{error:#}"
+        );
+        server.join().expect("stale handover server");
+    }
+
+    #[tokio::test]
     async fn ensure_routes_a_busy_listener_to_an_existing_current_build_fallback() {
         let root = tempfile::tempdir().expect("ensure fallback fixture");
         let mut primary = config();
