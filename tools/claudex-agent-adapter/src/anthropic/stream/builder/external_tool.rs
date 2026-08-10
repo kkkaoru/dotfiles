@@ -66,6 +66,32 @@ pub(in crate::anthropic) fn unrequested_tool_reply(name: &str) -> (String, bool)
     )
 }
 
+fn hydrate_external_tool_arguments(
+    context: &ExternalToolContext<'_>,
+    original_name: &str,
+    mut arguments: Value,
+) -> Value {
+    if !crate::anthropic::agent_effort::is_agent_tool(original_name) {
+        return arguments;
+    }
+    crate::anthropic::agent_routing::hydrate_routing_fields_from_context(
+        &mut arguments,
+        context.current_messages,
+        context.system,
+        context.bridge.model_catalog(),
+    );
+    crate::anthropic::agent_routing::hydrate_standard_agent_to_parent(
+        &mut arguments,
+        &context.session.model,
+    );
+    context.bridge.rewrite_exhausted_agent_launch_with_quota(
+        &mut arguments,
+        context.current_messages,
+        context.system,
+    );
+    arguments
+}
+
 impl SegmentBuilder {
     pub(super) async fn external_tool_call(
         &mut self,
@@ -73,49 +99,65 @@ impl SegmentBuilder {
         original_name: &str,
         call: ToolCall,
     ) -> Result<()> {
-        let request_id = call.request_id.clone();
-        let mut arguments = call.arguments;
-        if crate::anthropic::agent_effort::is_agent_tool(original_name) {
-            crate::anthropic::agent_routing::hydrate_routing_fields_from_context(
-                &mut arguments,
-                context.current_messages,
-                context.system,
-                context.bridge.model_catalog(),
-            );
-            crate::anthropic::agent_routing::hydrate_standard_agent_to_parent(
-                &mut arguments,
-                &context.session.model,
-            );
-            context.bridge.rewrite_exhausted_agent_launch_with_quota(
-                &mut arguments,
-                context.current_messages,
-                context.system,
-            );
-        }
+        let ToolCall {
+            call_id,
+            request_id,
+            arguments,
+            ..
+        } = call;
+        let reject_request_id = request_id.clone();
+        let arguments = hydrate_external_tool_arguments(&context, original_name, arguments);
         if self
-            .reject_disabled_subagent(context, original_name, &arguments, request_id.clone())
+            .reject_disabled_subagent(
+                context,
+                original_name,
+                &arguments,
+                reject_request_id.clone(),
+            )
             .await?
         {
             return Ok(());
         }
         if self
-            .reject_exhausted_subagent(context, original_name, &arguments, request_id.clone())
+            .reject_exhausted_subagent(
+                context,
+                original_name,
+                &arguments,
+                reject_request_id.clone(),
+            )
             .await?
         {
             return Ok(());
         }
         if self
-            .reject_unroutable_subagent(context, original_name, &arguments, request_id.clone())
+            .reject_unroutable_subagent(
+                context,
+                original_name,
+                &arguments,
+                reject_request_id.clone(),
+            )
             .await?
         {
             return Ok(());
         }
         if self
-            .reject_stale_task_output(context, original_name, &arguments, request_id)
+            .reject_stale_task_output(context, original_name, &arguments, reject_request_id)
             .await?
         {
             return Ok(());
         }
+        self.emit_external_tool_use(context, original_name, call_id, request_id, arguments)
+            .await
+    }
+
+    async fn emit_external_tool_use(
+        &mut self,
+        context: ExternalToolContext<'_>,
+        original_name: &str,
+        call_id: String,
+        request_id: Value,
+        arguments: Value,
+    ) -> Result<()> {
         let tool_use_id = format!("toolu_{}", Uuid::new_v4().simple());
         let (intent_arguments, claude_arguments) =
             crate::anthropic::agent_effort::prepare_arguments_for_user(
@@ -139,17 +181,17 @@ impl SegmentBuilder {
                 Some(context.bridge.model_catalog()),
             );
         }
-        tracing::debug!(call_id = %call.call_id, %tool_use_id, "mapped app-server tool call");
+        tracing::debug!(%call_id, %tool_use_id, "mapped app-server tool call");
         record_pending_tool(
             context.session,
             tool_use_id.clone(),
-            call.request_id,
+            request_id,
             std::time::Instant::now(),
         )
         .await;
         self.report_subagent_action(original_name, &arguments, context.stream)
             .await?;
-        self.prepare_blocks_for_external_tool(original_name, &call.call_id, context.stream)
+        self.prepare_blocks_for_external_tool(original_name, &call_id, context.stream)
             .await?;
         let block = json!({
             "type": "tool_use",
@@ -280,7 +322,7 @@ impl SegmentBuilder {
     }
 
     async fn reject_stale_task_output(
-        &mut self,
+        &self,
         context: ExternalToolContext<'_>,
         original_name: &str,
         arguments: &Value,
