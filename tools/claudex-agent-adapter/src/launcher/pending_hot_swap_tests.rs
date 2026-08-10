@@ -43,6 +43,9 @@ fn recognizes_wait_idle_command_lines_including_nohup() {
     assert!(!is_wait_idle_command_line(
         "/Users/test/.cargo/bin/claudex-agent-adapter launch --wait-idle --"
     ));
+    assert!(!is_wait_idle_command_line(""));
+    assert!(!is_wait_idle_command_line("   "));
+    assert!(!is_wait_idle_command_line("nohup"));
 }
 
 #[test]
