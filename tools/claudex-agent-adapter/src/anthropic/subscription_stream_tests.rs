@@ -39,10 +39,11 @@ type Frame = Result<Bytes, Infallible>;
 type FrameChannel = (mpsc::Sender<Frame>, mpsc::Receiver<Frame>);
 
 /// llvm-cov parallel load can stall shell fixtures past the default 5s child bound.
+/// When running full suite (1500+ tests), even non-coverage needs headroom for spawn delays.
 #[cfg(coverage_nightly)]
 const SUBSCRIPTION_FIXTURE_TIMEOUT: Duration = Duration::from_secs(45);
 #[cfg(not(coverage_nightly))]
-const SUBSCRIPTION_FIXTURE_TIMEOUT: Duration = Duration::from_secs(5);
+const SUBSCRIPTION_FIXTURE_TIMEOUT: Duration = Duration::from_secs(15);
 
 fn channel() -> FrameChannel {
     mpsc::channel(16)
