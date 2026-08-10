@@ -665,10 +665,10 @@ async fn command_code_muse_spark_status_bursts_stay_on_one_thinking_block() {
 
 #[tokio::test]
 async fn gpt_textdelta_without_summary_paints_native_thinking() {
-    // GPT/Codex often streams `item/reasoning/textDelta` with no summary.
-    // Dropping it left Claude Code Thinking blank while Cursor ACP thought chunks worked.
+    // Main Codex still surfaces raw `textDelta` as Thinking. SubAgents must not;
+    // see `gpt_subagent_textdelta_does_not_bury_live_tool_progress`.
     let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
-    let mut builder = SegmentBuilder::for_turn(1, true, "gpt-5.6-luna");
+    let mut builder = SegmentBuilder::for_turn(1, false, "gpt-5.6-luna");
     builder
         .model_output_event(
             &json!({
@@ -707,6 +707,68 @@ async fn gpt_textdelta_without_summary_paints_native_thinking() {
     assert!(
         !sse.contains("raw secret"),
         "summary-backed items must still hide raw textDelta: {sse}"
+    );
+}
+
+#[tokio::test]
+async fn gpt_subagent_textdelta_does_not_bury_live_tool_progress() {
+    let (_root, _app, bridge, mut session) = disconnect_fixture().await;
+    Arc::get_mut(&mut session)
+        .expect("unique session")
+        .external_tool_names
+        .insert("cc_Read_0".to_owned(), "Read".to_owned());
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(32);
+    let mut builder = SegmentBuilder::for_turn(1, true, "gpt-5.6-luna");
+    let cot = "Inspect the neon pooler GUCs on a fresh connection.\n".repeat(40);
+    builder
+        .model_output_event(
+            &json!({
+                "method":"item/reasoning/textDelta",
+                "params":{
+                    "itemId":"gpt:reasoning",
+                    "contentIndex":0,
+                    "delta":cot
+                }
+            }),
+            Some(&sender),
+        )
+        .await
+        .expect("gpt textdelta");
+    let _ = builder
+        .handle_event(
+            &bridge,
+            &session,
+            &[],
+            &Value::Null,
+            &json!({
+                "id":9,
+                "method":"item/tool/call",
+                "params":{
+                    "callId":"read-claude-md",
+                    "tool":"cc_Read_0",
+                    "arguments":{"path":"scripts/CLAUDE.md"}
+                }
+            }),
+            Some(&sender),
+        )
+        .await
+        .expect("subagent Read after textdelta");
+    assert!(
+        builder.thinking.is_open(),
+        "Read must keep thinking open after GPT textDelta"
+    );
+    drop(sender);
+    let mut sse = String::new();
+    while let Some(frame) = receiver.recv().await {
+        sse.push_str(&String::from_utf8_lossy(&frame.expect("frame")));
+    }
+    assert!(
+        sse.contains("thinking_delta") && sse.contains("▶ Read"),
+        "live ▶ must stay visible after GPT textDelta: {sse}"
+    );
+    assert!(
+        !sse.contains("Inspect the neon pooler GUCs"),
+        "raw GPT CoT must not bury SubAgent live chrome: {sse}"
     );
 }
 

@@ -122,6 +122,14 @@ impl SegmentBuilder {
         if self.summarized_reasoning_ids.iter().any(|id| id == item_id) {
             return Ok(());
         }
+        // GPT/Codex SubAgents stream long raw CoT as `textDelta`. Dumping it
+        // into live thinking buried ▶ Read/Bash and left Claude Code 2.1 on
+        // "Thought for Xs" with no mid-turn body. Keep thinking free for tool
+        // chrome; textDelta still counts as watchdog activity. Main sessions
+        // still surface textDelta as native Thinking.
+        if self.is_subagent {
+            return Ok(());
+        }
         self.reasoning_delta(event, stream).await
     }
 
