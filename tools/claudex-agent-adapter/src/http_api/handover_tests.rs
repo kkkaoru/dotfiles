@@ -406,14 +406,213 @@ async fn proxy_middleware_serves_locally_when_retained_listen_is_self() {
     );
 }
 
+#[tokio::test]
+async fn rebound_daemon_forwards_requests_without_session_header() {
+    let canonical_upstream = serve_http_once(b"from-canonical").await;
+    let cache = tempfile::tempdir().expect("rebound anonymous cache");
+    let (advertised, _rx) = ListenHandover::new(canonical_upstream, cache.path().to_path_buf());
+    advertised.set_advertised_for_test("127.0.0.1:61915".parse().unwrap());
+    let addr = serve_rebound_proxy(None, advertised, "old-binary").await;
+    let response = reqwest::Client::new()
+        .post(format!("http://{addr}/v1/messages"))
+        .body("{}")
+        .send()
+        .await
+        .expect("anonymous keepalive");
+    assert_eq!(
+        response.text().await.expect("proxied body"),
+        "from-canonical"
+    );
+}
+
+#[tokio::test]
+async fn rebound_daemon_forwards_unowned_retained_sessions() {
+    let canonical_upstream = serve_http_once(b"from-canonical").await;
+    let cache = tempfile::tempdir().expect("rebound unowned cache");
+    let path = cache.path().join("retained.json");
+    std::fs::write(
+        &path,
+        br#"{"listen":"127.0.0.1:61915","pid":1,"build_id":"old","session_ids":["busy-session"]}"#,
+    )
+    .expect("write retained");
+    let (advertised, _rx) = ListenHandover::new(canonical_upstream, cache.path().to_path_buf());
+    advertised.set_advertised_for_test("127.0.0.1:61915".parse().unwrap());
+    let addr = serve_rebound_proxy(
+        Some(retained(&path, "127.0.0.1:61915", &["busy-session"])),
+        advertised,
+        "old-binary",
+    )
+    .await;
+    let response = reqwest::Client::new()
+        .post(format!("http://{addr}/v1/messages"))
+        .header("x-claude-code-session-id", "idle-other")
+        .body("{}")
+        .send()
+        .await
+        .expect("unowned rebound session");
+    assert_eq!(
+        response.text().await.expect("proxied unowned body"),
+        "from-canonical"
+    );
+}
+
+#[tokio::test]
+async fn rebound_daemon_forwards_when_retained_listen_is_not_self() {
+    let canonical_upstream = serve_http_once(b"from-canonical").await;
+    let cache = tempfile::tempdir().expect("rebound foreign cache");
+    let path = cache.path().join("retained.json");
+    std::fs::write(
+        &path,
+        br#"{"listen":"127.0.0.1:9","pid":1,"build_id":"old","session_ids":["busy-session"]}"#,
+    )
+    .expect("write retained");
+    let (advertised, _rx) = ListenHandover::new(canonical_upstream, cache.path().to_path_buf());
+    advertised.set_advertised_for_test("127.0.0.1:61915".parse().unwrap());
+    let addr = serve_rebound_proxy(
+        Some(retained(&path, "127.0.0.1:9", &["busy-session"])),
+        advertised,
+        "old-binary",
+    )
+    .await;
+    let response = reqwest::Client::new()
+        .post(format!("http://{addr}/v1/messages"))
+        .header("x-claude-code-session-id", "busy-session")
+        .body("{}")
+        .send()
+        .await
+        .expect("foreign retained session");
+    assert_eq!(
+        response.text().await.expect("proxied foreign body"),
+        "from-canonical"
+    );
+}
+
+#[tokio::test]
+async fn proxy_middleware_without_advertised_listen_uses_retained_only() {
+    let upstream = serve_http_once(b"from-previous").await;
+    let root = tempfile::tempdir().expect("no advertised fixture");
+    let path = root.path().join("retained.json");
+    std::fs::write(
+        &path,
+        format!(
+            r#"{{"listen":"{upstream}","pid":1,"build_id":"old","session_ids":["session-a"]}}"#
+        ),
+    )
+    .expect("write retained");
+    let state = Some(HandoverState {
+        retained: Some(Arc::new(retained(
+            &path,
+            &upstream.to_string(),
+            &["session-a"],
+        ))),
+        advertised: None,
+        client: proxy_http_client(),
+    });
+    let app = Router::new()
+        .route("/v1/messages", post(|| async { "local" }))
+        .layer(middleware::from_fn_with_state(
+            state,
+            proxy_retained_sessions,
+        ));
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("no-advertised listener");
+    let addr = listener.local_addr().expect("no-advertised address");
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.ok();
+    });
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let client = reqwest::Client::new();
+    let owned = client
+        .post(format!("http://{addr}/v1/messages"))
+        .header("x-claude-code-session-id", "session-a")
+        .body("{}")
+        .send()
+        .await
+        .expect("owned without advertised");
+    assert_eq!(owned.text().await.expect("owned body"), "from-previous");
+    let local = client
+        .post(format!("http://{addr}/v1/messages"))
+        .send()
+        .await
+        .expect("anonymous without advertised");
+    assert_eq!(local.text().await.expect("local body"), "local");
+}
+
+#[tokio::test]
+async fn proxy_request_reports_unreadable_body() {
+    let listen = serve_http_once(b"unused").await;
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(1);
+    tx.try_send(Err(std::io::Error::other("broken body")))
+        .expect("enqueue broken body");
+    drop(tx);
+    let request = Request::builder()
+        .uri("/v1/messages?stream=true")
+        .method("POST")
+        .header("connection", "keep-alive")
+        .header("host", "127.0.0.1")
+        .header("transfer-encoding", "chunked")
+        .header("x-claude-code-session-id", "session-a")
+        .body(Body::from_stream(
+            tokio_stream::wrappers::ReceiverStream::new(rx),
+        ))
+        .expect("broken body request");
+    let response = proxy_request(&proxy_http_client(), listen, request).await;
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+}
+
+#[tokio::test]
+async fn proxy_request_forwards_query_and_strips_hop_by_hop_headers() {
+    let listen = serve_http_once(b"from-previous").await;
+    let request = Request::builder()
+        .uri("/v1/messages?stream=true")
+        .method("POST")
+        .header("content-type", "application/json")
+        .header("connection", "keep-alive")
+        .header("host", "127.0.0.1")
+        .header("transfer-encoding", "chunked")
+        .header("upgrade", "websocket")
+        .body(Body::from("{}"))
+        .expect("hop-by-hop request");
+    let response = proxy_request(&proxy_http_client(), listen, request).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = axum::body::to_bytes(response.into_body(), 1024)
+        .await
+        .expect("proxy body");
+    assert_eq!(&body[..], b"from-previous");
+}
+
+#[tokio::test]
+async fn proxy_request_surfaces_truncated_upstream_chunks() {
+    let listen = serve_http_then_reset().await;
+    let request = Request::builder()
+        .uri("/v1/messages")
+        .method("POST")
+        .body(Body::from("{}"))
+        .expect("truncated upstream request");
+    let response = proxy_request(&proxy_http_client(), listen, request).await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let _ = axum::body::to_bytes(response.into_body(), 1024).await;
+}
+
 #[test]
 fn hop_by_hop_headers_are_not_forwarded() {
-    assert!(is_hop_by_hop_header(&axum::http::HeaderName::from_static(
-        "host"
-    )));
-    assert!(is_hop_by_hop_header(&axum::http::HeaderName::from_static(
-        "connection"
-    )));
+    for name in [
+        "connection",
+        "keep-alive",
+        "proxy-authenticate",
+        "proxy-authorization",
+        "te",
+        "trailers",
+        "transfer-encoding",
+        "upgrade",
+        "host",
+    ] {
+        assert!(
+            is_hop_by_hop_header(&axum::http::HeaderName::from_static(name)),
+            "{name} must be treated as hop-by-hop"
+        );
+    }
     assert!(!is_hop_by_hop_header(&axum::http::HeaderName::from_static(
         "x-claude-code-session-id"
     )));
@@ -433,6 +632,40 @@ fn retained_proxy_targets_the_current_listen() {
     assert!(!proxy.targets("127.0.0.1:8318".parse().unwrap()));
 }
 
+async fn serve_rebound_proxy(
+    retained: Option<RetainedProxy>,
+    advertised: ListenHandover,
+    local_body: &'static str,
+) -> SocketAddr {
+    let local_body = local_body.to_owned();
+    let state = Some(HandoverState {
+        retained: retained.map(Arc::new),
+        advertised: Some(advertised),
+        client: proxy_http_client(),
+    });
+    let app = Router::new()
+        .route(
+            "/v1/messages",
+            post(move || {
+                let local_body = local_body.clone();
+                async move { local_body }
+            }),
+        )
+        .layer(middleware::from_fn_with_state(
+            state,
+            proxy_retained_sessions,
+        ));
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("rebound listener");
+    let addr = listener.local_addr().expect("rebound address");
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.ok();
+    });
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    addr
+}
+
 async fn serve_http_once(body: &'static [u8]) -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
@@ -450,6 +683,25 @@ async fn serve_http_once(body: &'static [u8]) -> SocketAddr {
         );
         let _ = stream.write_all(header.as_bytes()).await;
         let _ = stream.write_all(body).await;
+    });
+    listen
+}
+
+async fn serve_http_then_reset() -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("reset listener");
+    let listen = listener.local_addr().expect("reset address");
+    tokio::spawn(async move {
+        let Ok((mut stream, _)) = listener.accept().await else {
+            return;
+        };
+        let mut buf = vec![0; 2048];
+        let _ = stream.read(&mut buf).await;
+        let _ = stream
+            .write_all(b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nhello")
+            .await;
+        drop(stream);
     });
     listen
 }
