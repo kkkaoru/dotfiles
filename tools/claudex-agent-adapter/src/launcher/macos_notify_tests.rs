@@ -171,6 +171,32 @@ fn deliver_fails_when_osascript_exits_nonzero() {
 }
 
 #[test]
+fn live_ready_is_a_no_op_when_listen_did_not_move() {
+    let root = tempfile::tempdir().expect("notify cache");
+    let listen = listen();
+    let config = super::super::ServiceConfig {
+        options: crate::launcher::AdapterOptions {
+            routes: Vec::new(),
+            listen,
+            model: "test-model".to_owned(),
+            subscription_max_processes: 20,
+            subscription_timeout_minutes: 120,
+            subagent_hard_timeout_seconds: None,
+            model_catalog: crate::provider_config::ModelCatalog::default(),
+        },
+        token: super::super::LOCAL_TOKEN.to_owned(),
+        codex_config_fingerprint: "fp".to_owned(),
+        service_config_fingerprint: "svc".to_owned(),
+        executable: std::path::PathBuf::from("/tmp/claudex-agent-adapter"),
+        log_path: root.path().join("adapter.log"),
+        lock_path: root.path().join("adapter.lock"),
+    };
+    let events = TestEvents::capture();
+    live_ready(&config, listen);
+    assert!(events.take().is_empty());
+}
+
+#[test]
 fn corrupt_dedup_state_does_not_block_the_next_notification() {
     let root = tempfile::tempdir().expect("notify cache");
     let listen = listen();

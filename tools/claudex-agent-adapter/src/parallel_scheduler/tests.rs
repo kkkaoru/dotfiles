@@ -1478,3 +1478,34 @@ fn normalizes_scheduler_scopes_and_task_notifications_without_false_duplicates()
             .any(|unit| unit.starts_with("scope:scope "))
     );
 }
+
+#[test]
+fn scope_count_covers_single_worker_remaining_and_substantive_sides() {
+    assert!(super::scope_count::needs_single_worker(&messages(&[
+        serde_json::json!({"role":"user", "content":"exactly one worker"})
+    ])));
+    assert!(super::scope_count::is_substantive_work(&messages(&[
+        serde_json::json!({"role":"user", "content":"- one\n* two"})
+    ])));
+    assert_eq!(
+        policy::independent_scope_count(&messages(&[serde_json::json!({
+            "role":"user",
+            "content":"remaining 12 workers"
+        })])),
+        12
+    );
+    assert_eq!(
+        policy::independent_scope_count(&messages(&[
+            serde_json::json!({"role":"user", "content":"compare rust and go in parallel"}),
+            serde_json::json!({"role":"user", "content":"remaining follow-up\n1. first\n2. second"}),
+        ])),
+        2
+    );
+    assert_eq!(
+        policy::independent_scope_count(&messages(&[
+            serde_json::json!({"role":"user", "content":"compare rust and go in parallel"}),
+            serde_json::json!({"role":"user", "content":"remaining only"}),
+        ])),
+        2
+    );
+}

@@ -696,6 +696,58 @@ async fn thinking_state_handles_reuse_keepalive_and_unit_transitions() {
 }
 
 #[tokio::test]
+async fn thinking_state_covers_answer_text_prime_and_heartbeat_guards() {
+    let mut coalesced = ThinkingState::default();
+    let mut answer = vec![json!({"type":"text","text":"done"})];
+    coalesced
+        .delta_text_coalesced("reasoning", 0, "should stay quiet", &mut answer, None)
+        .await
+        .expect("coalesced delta after answer text");
+    assert_eq!(answer.len(), 1);
+
+    let mut primed = ThinkingState::default();
+    let mut blocks = Vec::new();
+    primed
+        .delta(
+            &json!({"params":{"itemId":"reasoning","summaryIndex":0,"delta":"open"}}),
+            &mut blocks,
+            None,
+        )
+        .await
+        .expect("open thought");
+    primed.prime_silent_heartbeat(&mut blocks);
+    assert_eq!(
+        blocks
+            .iter()
+            .filter(|block| block.get("type").and_then(Value::as_str) == Some("thinking"))
+            .count(),
+        1
+    );
+    primed
+        .activity_keepalive(&mut blocks, None)
+        .await
+        .expect("heartbeat on open thought");
+
+    let mut activity = ThinkingState::default();
+    let mut keepalive = Vec::new();
+    activity
+        .activity_status(&mut keepalive, "still working", None)
+        .await
+        .expect("open activity status");
+    activity
+        .activity_status(&mut keepalive, "again", None)
+        .await
+        .expect("ignore later activity status");
+    assert_eq!(
+        keepalive
+            .iter()
+            .filter(|block| block.get("type").and_then(Value::as_str) == Some("thinking"))
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
 async fn joins_text_deltas_and_estimates_usage() {
     let mut builder = SegmentBuilder::new(2);
     assert!(!builder.has_external_tool_calls());

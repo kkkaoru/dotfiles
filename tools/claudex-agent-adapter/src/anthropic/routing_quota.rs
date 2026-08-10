@@ -366,3 +366,8 @@ mod tests {
         assert!(!live_cache_marks_model_exhausted(Some(&path), QWEN, now));
     }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[path = "routing_quota_tests.rs"]
+mod extra_tests;
