@@ -460,3 +460,30 @@ async fn try_canonical_keeps_the_old_listener_when_rebind_is_rejected() {
     assert_eq!(kept, None);
     kill_dummy(&dummy);
 }
+
+#[tokio::test]
+async fn restore_old_canonical_ignores_unreachable_retained_listeners() {
+    let root = tempfile::tempdir().expect("restore fixture");
+    let config = config_at(
+        "127.0.0.1:1".parse().unwrap(),
+        root.path(),
+        PathBuf::from("/tmp/adapter"),
+    );
+    restore_old_canonical(
+        &reqwest::Client::new(),
+        &config,
+        "127.0.0.1:1".parse().unwrap(),
+    )
+    .await;
+}
+
+#[test]
+fn terminate_started_ignores_non_adapter_pids() {
+    let root = tempfile::tempdir().expect("terminate fixture");
+    let config = config_at(
+        "127.0.0.1:8318".parse().unwrap(),
+        root.path(),
+        PathBuf::from("/tmp/claudex-agent-adapter"),
+    );
+    terminate_started(std::process::id(), &config);
+}
