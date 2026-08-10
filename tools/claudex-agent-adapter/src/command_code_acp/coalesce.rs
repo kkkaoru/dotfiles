@@ -112,3 +112,8 @@ pub fn message_text_from_progress(progress: &[ProgressEvent]) -> String {
 fn nonempty(value: String) -> Option<String> {
     if value.is_empty() { None } else { Some(value) }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[path = "coalesce_tests.rs"]
+mod tests;
