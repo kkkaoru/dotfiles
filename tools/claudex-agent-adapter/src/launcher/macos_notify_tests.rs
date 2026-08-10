@@ -151,6 +151,28 @@ fn rapid_rebuilds_on_the_same_port_are_suppressed_until_cooldown() {
         ),
         "after the quiet gap a newer build may notify again"
     );
+    assert!(
+        should_emit_at(
+            &waiting("def", 2),
+            Some(&last),
+            last.emitted_unix + RAPID_REBUILD_COOLDOWN_SECS + 1
+        ),
+        "past the quiet gap a newer build may notify again"
+    );
+}
+
+#[test]
+fn same_kind_on_a_different_listen_still_notifies() {
+    let previous = LastNotify::from(&waiting("abc", 1));
+    let moved = Event::WaitingForIdle {
+        listen: "127.0.0.1:9999".to_owned(),
+        build_id: "abc".to_owned(),
+        waiter_pid: 2,
+    };
+    assert!(
+        should_emit_at(&moved, Some(&previous), previous.emitted_unix + 1),
+        "same build/kind on another listen must not be treated as a duplicate"
+    );
 }
 
 #[test]
