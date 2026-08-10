@@ -91,4 +91,15 @@ mod tests {
             Some("sakana")
         );
     }
+
+    #[test]
+    fn detects_auth_markers_serialized_outside_error_message_fields() {
+        assert!(is_auth_failure_event(&json!({
+            "note":"gateway returned 401 unauthorized without structured fields"
+        })));
+        assert_eq!(
+            auth_scope_from_message("provider sakana_ai rejected the key").as_deref(),
+            Some("sakana")
+        );
+    }
 }

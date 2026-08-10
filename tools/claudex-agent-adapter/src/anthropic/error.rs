@@ -303,4 +303,24 @@ The quota will reset at 08-15 01:53:00 UTC."
             StatusCode::UNAUTHORIZED
         );
     }
+
+    #[test]
+    fn marks_classic_usage_limit_wording_as_bad_request() {
+        let error = anyhow!("You've hit your usage limit. Try again later.");
+        assert_eq!(error_type(&error), NON_RETRYABLE_ERROR_TYPE);
+        assert_eq!(
+            http_status(StatusCode::BAD_GATEWAY, &error),
+            StatusCode::BAD_REQUEST
+        );
+    }
+
+    #[test]
+    fn marks_unexpected_status_401_marker_as_auth_failure() {
+        let error = anyhow!("provider request failed: unexpected status 401 from gateway");
+        assert_eq!(error_type(&error), NON_RETRYABLE_ERROR_TYPE);
+        assert_eq!(
+            http_status(StatusCode::BAD_GATEWAY, &error),
+            StatusCode::UNAUTHORIZED
+        );
+    }
 }
