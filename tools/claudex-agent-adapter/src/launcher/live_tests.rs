@@ -58,6 +58,48 @@ fn parses_loopback_http_urls_and_rejects_invalid_live_records() {
 }
 
 #[test]
+fn rejects_live_and_retained_records_with_zero_port_empty_build_or_zero_pid() {
+    let root = tempfile::tempdir().expect("invalid live sides");
+    for (name, body) in [
+        (
+            "live-port0.json",
+            br#"{"listen":"127.0.0.1:0","build_id":"b","pid":1}"#.as_slice(),
+        ),
+        (
+            "live-empty-build.json",
+            br#"{"listen":"127.0.0.1:52891","build_id":"","pid":1}"#.as_slice(),
+        ),
+    ] {
+        let path = root.path().join(name);
+        std::fs::write(&path, body).expect("write live");
+        assert!(read_live(&path).is_err(), "{name}");
+    }
+    for (name, body) in [
+        (
+            "retained-port0.json",
+            br#"{"listen":"127.0.0.1:0","build_id":"b","pid":7,"session_ids":[]}"#.as_slice(),
+        ),
+        (
+            "retained-non-loopback.json",
+            br#"{"listen":"8.8.8.8:80","build_id":"b","pid":7,"session_ids":[]}"#.as_slice(),
+        ),
+        (
+            "retained-pid0.json",
+            br#"{"listen":"127.0.0.1:52892","build_id":"b","pid":0,"session_ids":[]}"#.as_slice(),
+        ),
+    ] {
+        let path = root.path().join(name);
+        std::fs::write(&path, body).expect("write retained");
+        assert!(read_retained(&path).is_err(), "{name}");
+    }
+    assert!(
+        read_retained(&root.path().join("missing-retained.json"))
+            .expect("missing retained")
+            .is_none()
+    );
+}
+
+#[test]
 fn round_trips_retained_generation_state() {
     let root = tempfile::tempdir().expect("retained fixture");
     let config = config(root.path());
