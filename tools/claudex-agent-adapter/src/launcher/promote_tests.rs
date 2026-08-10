@@ -109,6 +109,37 @@ fn retains_no_sessions_for_an_idle_tui() {
 }
 
 #[test]
+fn advertised_listen_prefers_health_and_falls_back_to_config() {
+    let config = ServiceConfig {
+        options: AdapterOptions {
+            routes: vec![BackendRoute::new("test-model", BackendKind::CodexAppServer)],
+            listen: "127.0.0.1:8318".parse().unwrap(),
+            model: "test-model".to_owned(),
+            subscription_max_processes: 20,
+            subscription_timeout_minutes: 120,
+            subagent_hard_timeout_seconds: None,
+            model_catalog: crate::provider_config::ModelCatalog::default(),
+        },
+        token: LOCAL_TOKEN.to_owned(),
+        codex_config_fingerprint: "codex".to_owned(),
+        service_config_fingerprint: "service".to_owned(),
+        executable: PathBuf::from("/tmp/claudex-agent-adapter"),
+        log_path: PathBuf::from("/tmp/claudex/adapter.log"),
+        lock_path: PathBuf::from("/tmp/claudex/adapter.lock"),
+    };
+    let mut health = health(true, Some(12));
+    health.listen = Some("127.0.0.1:9999".to_owned());
+    assert_eq!(
+        advertised_listen(&config, &health),
+        "127.0.0.1:9999".parse().unwrap()
+    );
+    health.listen = Some("not-a-listen".to_owned());
+    assert_eq!(advertised_listen(&config, &health), config.options.listen);
+    health.listen = None;
+    assert_eq!(advertised_listen(&config, &health), config.options.listen);
+}
+
+#[test]
 fn release_previous_ignores_non_adapter_pids() {
     let config = ServiceConfig {
         options: AdapterOptions {
