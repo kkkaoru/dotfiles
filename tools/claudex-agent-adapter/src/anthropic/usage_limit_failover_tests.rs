@@ -1023,6 +1023,27 @@ fn apply_usage_limit_preflight_activates_when_auth_cooling_down() {
 }
 
 #[test]
+fn apply_usage_limit_preflight_rewrites_effort_from_configured_fallback() {
+    let root = tempfile::tempdir().expect("preflight effort fixture");
+    let bridge = cline_and_qwen_bridge().with_usage_limit_cache_home(root.path());
+    bridge.note_provider_exhaustion(
+        &anyhow::anyhow!("codex app-server turn failed: 401 Unauthorized"),
+        Some(CLINE_FLASH),
+    );
+    let mut request = dummy_request(CLINE_FLASH);
+    let mut effort = Some("xhigh".to_owned());
+    let route = bridge.apply_usage_limit_preflight(
+        &mut request,
+        RouteDecision::Provider,
+        &mut effort,
+        false,
+    );
+    assert_eq!(request.model, "claude-sonnet-5");
+    assert_eq!(effort.as_deref(), Some("high"));
+    assert_eq!(route, RouteDecision::Subscription);
+}
+
+#[test]
 fn apply_usage_limit_preflight_keeps_provider_when_cooling_down_without_failover() {
     let root = tempfile::tempdir().expect("preflight no failover fixture");
     let backend =
