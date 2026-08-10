@@ -387,3 +387,8 @@ fn remove_proxy_environment(command: &mut Command) {
     }
     crate::web_search::clear_local_ccr_environment(command);
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[path = "subscription_settings_tests.rs"]
+mod settings_tests;
