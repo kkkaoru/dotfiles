@@ -109,3 +109,41 @@ impl Bridge {
         }
     }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use serde_json::Value;
+
+    use crate::agent_backend::{AgentBackend, BackendKind, BackendRoute};
+    use crate::anthropic::{Bridge, MessagesRequest};
+
+    #[test]
+    fn request_model_falls_back_to_bridge_default_when_empty() {
+        let bridge = Bridge::new_with_backend(
+            AgentBackend::spawn_routes(&[BackendRoute::new(
+                "gpt-5.6-luna",
+                BackendKind::CodexAppServer,
+            )]),
+            "gpt-5.6-luna".to_owned(),
+        );
+        let request = MessagesRequest {
+            model: String::new(),
+            system: Value::Null,
+            messages: Vec::new(),
+            tools: Vec::new(),
+            stream: false,
+            output_config: Value::Null,
+            metadata: Value::Null,
+            working_directory: None,
+            disabled_subagent_models: Default::default(),
+            claudex_collaborator_model: None,
+        };
+        assert_eq!(bridge.request_model(&request), "gpt-5.6-luna");
+        let named = MessagesRequest {
+            model: "gpt-5.6-terra".to_owned(),
+            ..request
+        };
+        assert_eq!(bridge.request_model(&named), "gpt-5.6-terra");
+    }
+}

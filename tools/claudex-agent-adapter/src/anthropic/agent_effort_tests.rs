@@ -2053,4 +2053,11 @@ mod tests {
         request.metadata = json!({});
         request
     }
+
+    #[test]
+    fn prepare_arguments_clones_non_object_payloads() {
+        let (correlated, public) = prepare_arguments("Bash", "tool-1", &json!("plain"));
+        assert!(correlated.is_none());
+        assert_eq!(public, json!("plain"));
+    }
 }

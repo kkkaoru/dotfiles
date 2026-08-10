@@ -232,4 +232,18 @@ mod tests {
             None => unsafe { std::env::remove_var(COOLDOWN_ENV) },
         }
     }
+
+    #[test]
+    fn ignores_auth_cooldown_cache_with_unexpected_version() {
+        let root = tempfile::tempdir().expect("auth cooldown version fixture");
+        let path = cache_path_for_home(root.path());
+        std::fs::create_dir_all(path.parent().expect("cache parent")).expect("cache dir");
+        std::fs::write(
+            &path,
+            r#"{"version":99,"entries":{"sakana":{"untilUnixSeconds":9999999999,"message":"Invalid API key","recordedUnixSeconds":1}}}"#,
+        )
+        .expect("write stale version cache");
+        let now = UNIX_EPOCH + Duration::from_secs(1_000);
+        assert!(!scope_is_cooling_down_at(Some(&path), "sakana", now));
+    }
 }

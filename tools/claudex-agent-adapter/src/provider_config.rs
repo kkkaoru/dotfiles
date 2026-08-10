@@ -225,6 +225,11 @@ impl ModelCatalog {
         Ok(())
     }
 
+    #[cfg(test)]
+    pub(crate) fn push_worker_unchecked_for_tests(&mut self, worker: WorkerRoute) {
+        self.workers.push(worker);
+    }
+
     pub(crate) fn set_auxiliary_worker_routes(&mut self, workers: Vec<WorkerRoute>) -> Result<()> {
         validate_worker_routes(&workers)?;
         self.auxiliary_workers = workers;

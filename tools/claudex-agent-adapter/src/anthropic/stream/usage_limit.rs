@@ -212,4 +212,14 @@ The quota will reset at 08-15 01:53:00 UTC.";
             &json!({"params": {"error": {"code": "other"}}})
         ));
     }
+
+    #[test]
+    fn detects_numeric_429_inside_codex_error_info() {
+        assert!(is_usage_limit_event(&json!({
+            "params":{"error":{"codexErrorInfo":429}}
+        })));
+        assert!(!is_usage_limit_event(&json!({
+            "params":{"error":{"codexErrorInfo":200}}
+        })));
+    }
 }

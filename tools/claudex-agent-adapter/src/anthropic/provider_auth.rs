@@ -102,4 +102,14 @@ mod tests {
             Some("sakana")
         );
     }
+
+    #[test]
+    fn detects_auth_markers_in_params_message_details() {
+        assert!(is_auth_failure_event(&json!({
+            "params":{"message":"unexpected status 401 from upstream"}
+        })));
+        assert!(!is_auth_failure_event(&json!({
+            "params":{"message":"transient upstream timeout"}
+        })));
+    }
 }

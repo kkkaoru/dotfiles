@@ -1662,3 +1662,28 @@ done
         "failover attempt must surface the subscription failure"
     );
 }
+
+#[test]
+fn subagent_provider_failover_skips_missing_preferred_qwen_candidate() {
+    let backend = AgentBackend::spawn_routes(&[
+        BackendRoute::new(CLINE_FLASH, BackendKind::ConfiguredAcp),
+        BackendRoute::new(CURSOR_AUTO, BackendKind::ConfiguredAcp),
+    ]);
+    let mut catalog = ModelCatalog::default();
+    catalog
+        .set_worker_routes(vec![
+            crate::provider_config::WorkerRoute::new(
+                "claudex-cline-deepseek-flash",
+                CLINE_FLASH,
+                "xhigh",
+            ),
+            crate::provider_config::WorkerRoute::new("claudex-cursor", CURSOR_AUTO, "high"),
+        ])
+        .expect("install workers without preferred qwen");
+    let bridge = Bridge::new_with_backend(backend, CLINE_FLASH.to_owned()).with_model_catalog(catalog);
+    let failover = bridge
+        .subagent_provider_failover_excluding(CLINE_FLASH, None)
+        .expect("cursor sibling");
+    assert_eq!(failover.model, CURSOR_AUTO);
+    assert_eq!(failover.route, RouteDecision::Provider);
+}

@@ -113,6 +113,9 @@ mod tests {
         assert!(!contains_empty_acp_billing_marker(
             "Unable to connect to API (ConnectionRefused)"
         ));
+        assert!(contains_empty_acp_billing_marker(
+            "Cline Credits models return empty end_turn when balance is $0"
+        ));
     }
 
     #[test]

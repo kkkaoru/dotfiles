@@ -99,3 +99,56 @@ async fn busy_claude_session_ids_skip_idle_tui_sessions() {
         ]
     );
 }
+
+#[tokio::test]
+async fn session_id_helpers_skip_blank_claude_session_ids() {
+    let bridge = Bridge::new_with_backend(
+        AgentBackend::spawn_routes(&[BackendRoute::new(
+            "gpt-5.6-luna",
+            BackendKind::CodexAppServer,
+        )]),
+        "gpt-5.6-luna".to_owned(),
+    );
+    let blank = session_with_id("");
+    let named = session_with_id("named");
+    let _guard = named.gate.clone().try_lock_owned().expect("lock gate");
+    bridge
+        .sessions
+        .lock()
+        .await
+        .extend([blank, Arc::clone(&named)]);
+    assert_eq!(
+        bridge.active_claude_session_ids().await,
+        vec!["named".to_owned()]
+    );
+    assert_eq!(
+        bridge.busy_claude_session_ids().await,
+        vec!["named".to_owned()]
+    );
+}
+
+#[test]
+fn routed_models_skip_workers_with_blank_model_fields() {
+    let mut catalog = provider_config::ModelCatalog::default();
+    catalog.push_worker_unchecked_for_tests(provider_config::WorkerRoute::new(
+        "claudex-blank",
+        "",
+        "high",
+    ));
+    catalog.push_worker_unchecked_for_tests(provider_config::WorkerRoute::new(
+        "claudex-keep",
+        "kept-model",
+        "high",
+    ));
+    let bridge = Bridge::new_with_backend(
+        AgentBackend::spawn_routes(&[BackendRoute::new(
+            "kept-model",
+            BackendKind::CodexAppServer,
+        )]),
+        "fallback-model".to_owned(),
+    )
+    .with_model_catalog(catalog);
+    let models = bridge.routed_models();
+    assert!(models.contains(&"kept-model".to_owned()));
+    assert!(!models.iter().any(String::is_empty));
+}

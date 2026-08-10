@@ -323,4 +323,14 @@ The quota will reset at 08-15 01:53:00 UTC."
             StatusCode::UNAUTHORIZED
         );
     }
+
+    #[test]
+    fn marks_401_unauthorized_wording_as_auth_and_terminal() {
+        let error = anyhow!("gateway rejected the key: 401 Unauthorized");
+        assert_eq!(error_type(&error), NON_RETRYABLE_ERROR_TYPE);
+        assert_eq!(
+            http_status(StatusCode::BAD_GATEWAY, &error),
+            StatusCode::UNAUTHORIZED
+        );
+    }
 }
