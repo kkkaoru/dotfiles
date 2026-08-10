@@ -1,4 +1,13 @@
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    time::Instant,
+};
+
 use serde_json::{Value, json};
+use tokio::sync::{Mutex, Semaphore};
+
+use crate::agent_backend::AgentBackend;
 
 use super::*;
 
@@ -370,5 +379,81 @@ fn async_launch_results_skip_blank_tool_use_ids() {
             "content":[launch_result("")]
         }))
         .is_none()
+    );
+}
+
+fn handoff_session(pending: HashMap<String, Value>) -> Arc<super::super::Session> {
+    let slots = Arc::new(Semaphore::new(1));
+    Arc::new(super::super::Session {
+        thread_id: "handoff-thread".to_owned(),
+        model: "main-model".to_owned(),
+        disabled_subagent_models: Default::default(),
+        signature: Arc::from("handoff-signature"),
+        transcript: Mutex::new(Vec::new()),
+        pending_tools: Mutex::new(pending),
+        consumed_tool_ids: Mutex::new(Default::default()),
+        external_tool_names: HashMap::new(),
+        client_user_id: None,
+        claude_session_id: None,
+        gate: Arc::new(Mutex::new(())),
+        last_activity: std::sync::Mutex::new(Instant::now()),
+        pending_since: std::sync::Mutex::new(None),
+        _slot: slots.try_acquire_owned().expect("session slot"),
+    })
+}
+
+fn background_agent_request(agent_id: &str) -> MessagesRequest {
+    let mut request = request(json!([launch_result(agent_id)]));
+    request.messages.insert(
+        0,
+        json!({
+            "role":"assistant",
+            "content":[
+                {"type":"text", "text":"Launching background work."},
+                {"type":"tool_use", "id":agent_id, "name":"Agent", "input":{}}
+            ]
+        }),
+    );
+    request
+}
+
+#[tokio::test]
+async fn keeps_provider_open_when_non_async_tools_remain_pending() {
+    let bridge = Bridge::new_with_backend(AgentBackend::spawn_routes(&[]), "main-model".to_owned());
+    let mut pending = HashMap::new();
+    pending.insert("background".to_owned(), json!(1));
+    pending.insert("bash-1".to_owned(), json!(2));
+    bridge
+        .sessions
+        .lock()
+        .await
+        .push(handoff_session(pending));
+
+    let response = bridge
+        .async_agent_launch_handoff(&background_agent_request("background"))
+        .await;
+    assert!(
+        response.is_none(),
+        "leftover pending tools must keep the provider turn open"
+    );
+}
+
+#[tokio::test]
+async fn hands_control_back_when_no_session_owns_the_async_results() {
+    let bridge = Bridge::new_with_backend(AgentBackend::spawn_routes(&[]), "main-model".to_owned());
+    let response = bridge
+        .async_agent_launch_handoff(&background_agent_request("background"))
+        .await
+        .expect("unowned async launch acknowledgement still hands control back");
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(body["stop_reason"], "end_turn");
+    assert!(
+        body["content"][0]["text"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("Background agent launched")
     );
 }
