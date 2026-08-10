@@ -112,6 +112,62 @@ async fn zero_wait_timeout_uses_nonblocking_admission() {
     drop(first);
 }
 
+#[tokio::test]
+async fn interactive_zero_wait_falls_back_to_shared_slots() {
+    let registry = ModelConcurrency::new(vec![("interactive-zero".to_owned(), 1)]);
+    let first = registry
+        .ticket("interactive-zero", Some(1))
+        .unwrap()
+        .acquire_with_timeout_for(Duration::from_millis(50), false)
+        .await
+        .unwrap();
+    let error = match registry
+        .ticket("interactive-zero", Some(1))
+        .unwrap()
+        .acquire_with_timeout_for(Duration::ZERO, true)
+        .await
+    {
+        Ok(_) => panic!("interactive zero-wait must not block on a saturated model"),
+        Err(error) => error,
+    };
+    assert!(
+        error.to_string().contains("semaphore is unavailable"),
+        "{error:#}"
+    );
+    drop(first);
+}
+
+#[tokio::test]
+async fn interactive_admission_times_out_when_both_pools_are_busy() {
+    let registry = ModelConcurrency::new(vec![("interactive-timeout".to_owned(), 2)]);
+    let interactive = registry
+        .ticket("interactive-timeout", Some(2))
+        .unwrap()
+        .acquire_with_timeout_for(Duration::from_millis(50), true)
+        .await
+        .unwrap();
+    let shared = registry
+        .ticket("interactive-timeout", Some(2))
+        .unwrap()
+        .acquire_with_timeout_for(Duration::from_millis(50), false)
+        .await
+        .unwrap();
+    let error = match registry
+        .ticket("interactive-timeout", Some(2))
+        .unwrap()
+        .acquire_with_timeout_for(Duration::from_millis(1), true)
+        .await
+    {
+        Ok(_) => panic!("busy interactive+shared pools must time out"),
+        Err(error) => error,
+    };
+    assert!(
+        error.to_string().contains("model admission timed out"),
+        "{error:#}"
+    );
+    drop((interactive, shared));
+}
+
 #[test]
 fn parses_configured_wait_timeout_without_accepting_invalid_values() {
     assert_eq!(parse_wait_timeout(None), DEFAULT_WAIT_TIMEOUT);
