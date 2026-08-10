@@ -2240,3 +2240,50 @@ async fn retries_completed_turns_on_a_new_session() {
     assert_eq!(trace[1]["method"], "turn/start");
     assert_eq!(trace[1]["params"]["effort"], "high");
 }
+
+#[tokio::test]
+async fn finish_detached_session_retains_for_follow_up_reuse() {
+    let bridge = Bridge::new_with_backend(AgentBackend::spawn_routes(&[]), "main".to_owned());
+    let slot = Arc::clone(&bridge.session_slots)
+        .try_acquire_owned()
+        .expect("session slot");
+    let session = Arc::new(Session {
+        thread_id: "detached-thread".to_owned(),
+        model: "main".to_owned(),
+        disabled_subagent_models: Default::default(),
+        signature: Arc::from("sig"),
+        transcript: Mutex::new(vec![json!({"role":"assistant","content":"bg response"})]),
+        pending_tools: Mutex::new(HashMap::new()),
+        consumed_tool_ids: Mutex::new(Default::default()),
+        external_tool_names: HashMap::new(),
+        client_user_id: None,
+        claude_session_id: None,
+        gate: Arc::new(Mutex::new(())),
+        last_activity: std::sync::Mutex::new(Instant::now()),
+        pending_since: std::sync::Mutex::new(None),
+        _slot: slot,
+    });
+
+    // Simulate background SubAgent flow: detach, then complete
+    bridge.detach_session(&session).await;
+    assert!(bridge.sessions.lock().await.is_empty());
+    assert_eq!(bridge.detached_sessions.lock().await.len(), 1);
+
+    // Call finish_detached_session - should reattach to active sessions
+    bridge.finish_detached_session(&session).await;
+
+    // CRITICAL ASSERTION: detached session must return to active list for reuse
+    assert!(
+        bridge.detached_sessions.lock().await.is_empty(),
+        "finish_detached_session must remove from detached_sessions"
+    );
+    assert_eq!(
+        bridge.sessions.lock().await.len(),
+        1,
+        "finish_detached_session must move completed session back to active sessions"
+    );
+
+    // Verify the session is discoverable for follow-up
+    let live = bridge.sessions.lock().await;
+    assert!(live.iter().any(|s| Arc::ptr_eq(s, &session)));
+}

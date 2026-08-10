@@ -260,10 +260,19 @@ impl Bridge {
     }
 
     pub(super) async fn finish_detached_session(&self, finished: &Arc<Session>) {
-        self.detached_sessions
-            .lock()
-            .await
-            .retain(|session| !Arc::ptr_eq(session, finished));
+        // Move completed detached session back to active list for idle reuse.
+        // This enables background SubAgent follow-ups to reclaim the provider thread
+        // for prompt-cache reuse, matching finish_closed_stream(provider_settled=true).
+        let mut detached = self.detached_sessions.lock().await;
+        let was_detached = detached.iter().position(|s| Arc::ptr_eq(s, finished));
+        if let Some(index) = was_detached {
+            let session = detached.remove(index);
+            drop(detached);
+            let mut active = self.sessions.lock().await;
+            if !active.iter().any(|s| Arc::ptr_eq(s, &session)) {
+                active.push(session);
+            }
+        }
     }
 
     pub(super) async fn is_detached_session(&self, candidate: &Arc<Session>) -> bool {
