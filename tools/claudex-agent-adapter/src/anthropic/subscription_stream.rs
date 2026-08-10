@@ -8,8 +8,9 @@ use std::{
     collections::HashSet, convert::Infallible, path::Path, path::PathBuf, sync::Arc, time::Duration,
 };
 use tokio::sync::mpsc;
-// Main-turn subscription callers: status only after real silence (~30s).
-pub(super) const INITIAL_ACTIVITY_DELAY: Duration = Duration::from_secs(30);
+// Main-turn subscription callers: align with ACP stream.rs (10s) so Claude
+// Code is not blank for a full half-minute while the child boots.
+pub(super) const INITIAL_ACTIVITY_DELAY: Duration = Duration::from_secs(10);
 pub(super) const ACTIVITY_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
 /// Mirrors the ACP SubAgent delay: keep the SubAgent panel lit while a
 /// subscription child process boots instead of freezing on Nucleating.

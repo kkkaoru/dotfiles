@@ -62,7 +62,7 @@ Subscription subprocesses likewise use Claude Code's `stream-json` output and
 forward text deltas as they arrive. Streaming responses open immediately with
 `message_start` so Anthropic `ping` SSE events keep Claude Code's ~180s raw-byte
 idle watchdog alive while the provider session is still being prepared. Activity
-heartbeats are silence-only: after about 30s without visible provider output the
+heartbeats are silence-only: after about 10s without visible provider output the
 adapter emits a waiting status, then zero-width heartbeats every 30s. Real text,
 thinking, or tool progress resets that timer. Heartbeats never accumulate into
 the final answer text.
