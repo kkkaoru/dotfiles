@@ -129,6 +129,36 @@ mod tests {
         assert_eq!(terminated.load(std::sync::atomic::Ordering::Relaxed), 77);
     }
 
+    #[test]
+    fn successful_preflight_release_does_not_force_terminate() {
+        let result = finish_preflight_shutdown(81, Ok(()), |_| {
+            panic!("successful release must not force terminate")
+        });
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn verify_reports_when_isolated_preflight_cannot_start() {
+        let config = test_config();
+        let result = verify_with_hooks(
+            &reqwest::Client::new(),
+            &config,
+            |_| Err(anyhow::anyhow!("cannot bind dummy")),
+            |_, _| Box::pin(async { Ok(()) }),
+            |_, _, _| Box::pin(async { Ok(()) }),
+            |_, _| true,
+            |_| panic!("start failure must not terminate"),
+        )
+        .await;
+        let error = result.expect_err("isolated start failure");
+        assert!(
+            error
+                .to_string()
+                .contains("start isolated adapter preflight"),
+            "{error:#}"
+        );
+    }
+
     #[tokio::test]
     async fn verify_runs_the_full_successful_preflight_lifecycle() {
         let config = test_config();
