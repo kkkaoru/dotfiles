@@ -1266,6 +1266,47 @@ HTTPServer((host, int(port)), Handler).serve_forever()
     }
 
     #[tokio::test]
+    async fn fallback_discards_stale_generation_state_before_starting() {
+        let root = tempfile::tempdir().expect("fallback stale fixture");
+        let dummy = root.path().join("claudex-agent-adapter");
+        std::fs::write(&dummy, "#!/bin/sh\nexit 0\n").expect("dummy adapter");
+        #[cfg(unix)]
+        {
+            let mut permissions = std::fs::metadata(&dummy)
+                .expect("dummy metadata")
+                .permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&dummy, permissions).expect("dummy executable");
+        }
+        let mut cfg = config();
+        cfg.executable = dummy;
+        cfg.options.listen = unused_listen();
+        cfg.log_path = root.path().join("adapter.log");
+        cfg.lock_path = root.path().join("adapter.lock");
+        let state_path = root
+            .path()
+            .join(format!("fallback.{}.json", cfg.options.listen.port()));
+        std::fs::write(
+            &state_path,
+            serde_json::json!({
+                "listen": "127.0.0.1:1",
+                "build_id": "old-build",
+                "service_config_fingerprint": cfg.service_config_fingerprint,
+                "pid": 42,
+            })
+            .to_string(),
+        )
+        .expect("write stale fallback state");
+        let error = fallback::ensure_current_generation(&reqwest::Client::new(), &cfg)
+            .await
+            .expect_err("stale fallback state must not be reused");
+        assert!(
+            !error.to_string().is_empty(),
+            "start after discarding stale state should still report readiness failure"
+        );
+    }
+
+    #[tokio::test]
     async fn fallback_start_reports_when_the_new_listener_never_becomes_ready() {
         let root = tempfile::tempdir().expect("fallback start fixture");
         let dummy = root.path().join("claudex-agent-adapter");
