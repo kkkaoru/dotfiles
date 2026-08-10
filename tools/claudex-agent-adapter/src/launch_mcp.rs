@@ -61,16 +61,19 @@ pub(crate) fn launch_owner_from_params(params: &Value) -> Option<String> {
 pub fn run_stdio() -> Result<()> {
     let stdin = io::stdin();
     let mut stdout = io::stdout();
-    let mut reader = stdin.lock();
+    run_with_io(&mut stdin.lock(), &mut stdout)
+}
+
+fn run_with_io(reader: &mut impl BufRead, stdout: &mut impl Write) -> Result<()> {
     let mut ndjson = false;
     loop {
-        let Some((message, mode)) = read_message(&mut reader)? else {
+        let Some((message, mode)) = read_message(reader)? else {
             break;
         };
         if mode {
             ndjson = true;
         }
-        handle(&message, ndjson, &mut stdout)?;
+        handle(&message, ndjson, stdout)?;
     }
     Ok(())
 }

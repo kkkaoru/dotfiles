@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 
 use super::{
     handle, launch_owner_from_params, launch_queue_path, read_message, record_tools_call_to,
-    sanitize_launch_owner, tools, write_message,
+    run_with_io, sanitize_launch_owner, tools, write_message,
 };
 
 static LAUNCH_OWNER_ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -108,6 +108,33 @@ fn reads_ndjson_and_content_length_frames_with_blank_prefixes() {
         .expect("empty Content-Length must not stop the MCP server");
     assert_eq!(message["id"], 3);
     assert!(!mode);
+
+    let header_without_colon = format!(
+        "NotAHeader\r\nContent-Length: {}\r\n\r\n{}",
+        ping.len(),
+        String::from_utf8_lossy(ping)
+    );
+    let (message, mode) = read_message(&mut Cursor::new(header_without_colon))
+        .unwrap()
+        .expect("header without colon must be ignored");
+    assert_eq!(message["id"], 3);
+    assert!(!mode);
+}
+
+#[test]
+fn run_with_io_switches_to_ndjson_then_stops_on_eof() {
+    let ping = br#"{"jsonrpc":"2.0","id":8,"method":"ping"}"#;
+    let input = format!(
+        "{{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"ping\"}}\nContent-Length: {}\r\n\r\n{}",
+        ping.len(),
+        String::from_utf8_lossy(ping)
+    );
+    let mut stdout = Vec::new();
+    run_with_io(&mut Cursor::new(input), &mut stdout).expect("stdio loop");
+    let text = String::from_utf8(stdout).expect("utf8");
+    assert!(text.contains("\"id\":7"));
+    assert!(text.contains("\"id\":8"));
+    run_with_io(&mut Cursor::new(""), &mut Vec::new()).expect("empty stdin");
 }
 
 #[test]
