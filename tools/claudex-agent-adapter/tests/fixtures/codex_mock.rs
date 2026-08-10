@@ -391,7 +391,9 @@ impl<W: Write> Fixture<W> {
     fn send_delayed_parallel_tools(&mut self) {
         self.pending_tool = true;
         self.send_tool_event(900, "call-test-a");
-        thread::sleep(Duration::from_millis(50));
+        // Stay under EXTERNAL_TOOL_BATCH_HANDOFF_QUIET_PERIOD (40ms) so both
+        // tools land in one Claude Code tool_use batch.
+        thread::sleep(Duration::from_millis(15));
         self.send_tool_event(901, "call-test-b");
     }
 
