@@ -142,6 +142,22 @@ pub(super) async fn send_stream_error(sender: &StreamSender, error: anyhow::Erro
         })
     })
     .await;
+    // Claude Code keeps a SubAgent card running after a mid-response API/ACP
+    // drop unless the SSE also ends with a terminal stop_reason + message_stop.
+    let _ = send_stream_frame(Some(sender), "message_delta", || {
+        json!({
+            "type":"message_delta",
+            "delta":{"stop_reason":"error","stop_sequence":null},
+            "usage":{"output_tokens":0,"server_tool_use":{"web_search_requests":0}}
+        })
+    })
+    .await;
+    let _ = send_stream_frame(
+        Some(sender),
+        "message_stop",
+        || json!({"type":"message_stop"}),
+    )
+    .await;
 }
 
 pub(in crate::anthropic) async fn send_stream_frame(
@@ -232,20 +248,22 @@ mod lazy_tests {
 
     #[tokio::test]
     async fn marks_missing_provider_environment_as_non_retryable() {
-        let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(1);
+        let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
 
         send_stream_error(
             &sender,
             anyhow::anyhow!("Missing environment variable: SAKANA_AI_API_KEY"),
         )
         .await;
+        drop(sender);
 
-        let frame = receiver
-            .recv()
-            .await
-            .expect("error frame")
-            .expect("infallible frame");
-        assert!(String::from_utf8_lossy(&frame).contains("invalid_request_error"));
+        let mut output = String::new();
+        while let Some(frame) = receiver.recv().await {
+            output.push_str(&String::from_utf8_lossy(&frame.expect("infallible frame")));
+        }
+        assert!(output.contains("invalid_request_error"));
+        assert!(output.contains("\"stop_reason\":\"error\""));
+        assert!(output.contains("event: message_stop"));
     }
 
     #[tokio::test]

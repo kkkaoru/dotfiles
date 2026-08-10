@@ -347,11 +347,22 @@ impl GrokAcp {
     }
 
     pub async fn cancel_turn(&self, session_id: &str) -> Result<()> {
-        self.call(|response| DriverCommand::CancelTurn {
-            session_id: session_id.to_owned(),
-            response,
-        })
-        .await
+        if let Err(error) = self
+            .call(|response| DriverCommand::CancelTurn {
+                session_id: session_id.to_owned(),
+                response,
+            })
+            .await
+        {
+            let message = error.to_string();
+            if !(message.contains("ACP driver is unavailable")
+                || message.contains("ACP driver dropped its response"))
+            {
+                return Err(error);
+            }
+            tracing::info!(session_id, %error, "ACP cancel settled after driver loss");
+        }
+        Ok(())
     }
 
     pub async fn shutdown(&self) {

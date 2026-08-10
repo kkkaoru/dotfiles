@@ -22,24 +22,36 @@ async fn cancellation_and_abort_cover_each_leaf_and_routed_route() {
     copilot.abort_turn_provider("session").await.unwrap();
 
     let configured = AgentBackend::ConfiguredAcp(crate::grok_acp::GrokAcp::stopped_for_test());
-    assert!(configured.cancel_turn("session").await.is_err());
+    assert_eq!(
+        configured.cancel_turn("session").await.unwrap(),
+        super::super::TurnCancellation::Settled
+    );
     configured.abort_turn_provider("session").await.unwrap();
 
     let grok = AgentBackend::Grok(crate::grok_acp::GrokAcp::stopped_for_test());
-    assert!(grok.cancel_turn("session").await.is_err());
+    assert_eq!(
+        grok.cancel_turn("session").await.unwrap(),
+        super::super::TurnCancellation::Settled
+    );
     grok.abort_turn_provider("session").await.unwrap();
 
     let leaf = Arc::new(AgentBackend::Grok(
         crate::grok_acp::GrokAcp::alive_for_test(),
     ));
     let routed = AgentBackend::routed(vec![("worker".to_owned(), leaf)]);
-    assert!(routed.cancel_turn("0:session").await.is_err());
+    assert_eq!(
+        routed.cancel_turn("0:session").await.unwrap(),
+        super::super::TurnCancellation::Settled
+    );
     routed.abort_turn_provider("0:session").await.unwrap();
     // A concurrent event subscriber must observe a closed stream, not panic,
     // after the routed leaf has been retired by the abort path.
     let events = routed.subscribe_thread("0:session");
     assert!(events.recv().await.is_none());
-    assert!(routed.cancel_turn("0:session").await.is_err());
+    assert_eq!(
+        routed.cancel_turn("0:session").await.unwrap(),
+        super::super::TurnCancellation::Settled
+    );
     assert!(routed.abort_turn_provider("0:session").await.is_err());
 }
 

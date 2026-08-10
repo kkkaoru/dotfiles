@@ -56,6 +56,7 @@ impl Bridge {
         // discover this session, preempt the gate, and reuse the provider thread.
         match self.app.cancel_turn(&session.thread_id).await {
             Ok(TurnCancellation::Settled) => {
+                let _ = self.reject_pending_disconnected_tools(session).await;
                 self.remove_session(session).await;
             }
             Ok(TurnCancellation::Unsupported) => {

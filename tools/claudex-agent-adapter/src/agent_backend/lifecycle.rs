@@ -20,10 +20,9 @@ impl AgentBackend {
             }
             Self::Routed(routes) => {
                 let (index, raw_id) = routed_thread(thread_id);
-                let backend = routes
-                    .route(index)
-                    .ready_backend()
-                    .context("thread route backend is unavailable during cancellation")?;
+                let Some(backend) = routes.route(index).ready_backend() else {
+                    return Ok(TurnCancellation::Settled);
+                };
                 Box::pin(backend.cancel_turn(raw_id)).await
             }
         }

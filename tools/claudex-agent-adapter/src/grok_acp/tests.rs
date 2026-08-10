@@ -233,7 +233,36 @@ async fn reports_a_closed_driver_for_each_command_response_type() {
 
     assert!(agent.create_session(json!({})).await.is_err());
     assert!(agent.start_turn(json!({})).await.is_err());
-    assert!(agent.cancel_turn("session").await.is_err());
+    assert!(
+        agent.cancel_turn("session").await.is_ok(),
+        "dead-driver cancel must be idempotent so leftover SubAgent cards can settle"
+    );
+}
+
+#[tokio::test]
+async fn cancel_turn_settles_when_the_driver_drops_its_response() {
+    let (commands, mut receiver) = tokio::sync::mpsc::channel(1);
+    let agent = GrokAcp {
+        provider: AcpProvider::Grok,
+        commands,
+        session_permits: Arc::new(tokio::sync::Semaphore::new(SESSION_QUEUE_CAPACITY)),
+        turn_permits: Arc::new(tokio::sync::Semaphore::new(TURN_QUEUE_CAPACITY)),
+        outer_permits: Arc::new(tokio::sync::Semaphore::new(1)),
+        turn_capacity: TURN_QUEUE_CAPACITY,
+        events: Arc::new(ThreadEventDispatcher::default()),
+        alive: Arc::new(AtomicBool::new(true)),
+        driver: DriverThread::completed(),
+    };
+    tokio::spawn(async move {
+        if let Some(DriverCommand::CancelTurn { response, .. }) = receiver.recv().await {
+            drop(response);
+        }
+    });
+
+    assert!(
+        agent.cancel_turn("session").await.is_ok(),
+        "dropped ACP cancel response must settle instead of leaving TaskStop failing"
+    );
 }
 
 #[tokio::test]

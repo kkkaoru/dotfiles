@@ -2361,7 +2361,7 @@ async fn cancellation_failure_detaches_and_warns_for_pending_tools() {
 }
 
 #[tokio::test]
-async fn grok_cancellation_failure_rejects_pending_tools_and_detaches() {
+async fn grok_dead_driver_cancel_settles_and_rejects_pending_tools() {
     let (bridge, session, dispatcher) = grok_disconnect_fixture();
     let events = Arc::new(dispatcher.subscribe("thread"));
     session
@@ -2379,6 +2379,7 @@ async fn grok_cancellation_failure_rejects_pending_tools_and_detaches() {
         super::StreamTurn::Disconnected
     ));
     assert!(bridge.sessions.lock().await.is_empty());
+    assert!(bridge.detached_sessions.lock().await.is_empty());
     assert!(session.pending_tools.lock().await.is_empty());
     dispatcher.close();
     wait_for_disconnected_drain(&events).await;
@@ -2422,7 +2423,7 @@ async fn drive_stream_reports_unretryable_context_window_errors() {
         "method":"error",
         "params":{"threadId":"thread","error":{"message":"context window exceeded"}}
     }));
-    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(2);
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
 
     Arc::clone(&bridge)
         .drive_stream(
@@ -2433,12 +2434,13 @@ async fn drive_stream_reports_unretryable_context_window_errors() {
         )
         .await;
 
-    let error = receiver
-        .recv()
-        .await
-        .expect("context window error frame")
-        .expect("infallible frame");
-    assert!(String::from_utf8_lossy(&error).contains("context window"));
+    let mut output = String::new();
+    while let Some(frame) = receiver.recv().await {
+        output.push_str(&String::from_utf8_lossy(&frame.expect("infallible frame")));
+    }
+    assert!(output.contains("context window"));
+    assert!(output.contains("\"stop_reason\":\"error\""));
+    assert!(output.contains("event: message_stop"));
 }
 
 #[tokio::test]
@@ -2619,7 +2621,7 @@ async fn drive_stream_reports_context_retry_setup_errors() {
         "method":"error",
         "params":{"threadId":"thread","error":{"message":"context window exceeded"}}
     }));
-    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(1);
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
 
     Arc::clone(&bridge)
         .drive_stream(
@@ -2641,12 +2643,13 @@ async fn drive_stream_reports_context_retry_setup_errors() {
         )
         .await;
 
-    let error = receiver
-        .recv()
-        .await
-        .expect("context retry setup error frame")
-        .expect("infallible frame");
-    assert!(String::from_utf8_lossy(&error).contains("retry setup failed"));
+    let mut output = String::new();
+    while let Some(frame) = receiver.recv().await {
+        output.push_str(&String::from_utf8_lossy(&frame.expect("infallible frame")));
+    }
+    assert!(output.contains("retry setup failed"));
+    assert!(output.contains("\"stop_reason\":\"error\""));
+    assert!(output.contains("event: message_stop"));
     assert!(bridge.sessions.lock().await.is_empty());
 }
 
@@ -2679,7 +2682,7 @@ async fn drive_stream_reports_closed_provider_event_streams() {
     let dispatcher = crate::app_server::events::ThreadEventDispatcher::default();
     let events = dispatcher.subscribe("thread");
     dispatcher.close();
-    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(1);
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
 
     Arc::clone(&bridge)
         .drive_stream(
@@ -2690,12 +2693,13 @@ async fn drive_stream_reports_closed_provider_event_streams() {
         )
         .await;
 
-    let error = receiver
-        .recv()
-        .await
-        .expect("closed event stream error frame")
-        .expect("infallible frame");
-    assert!(String::from_utf8_lossy(&error).contains("event stream closed"));
+    let mut output = String::new();
+    while let Some(frame) = receiver.recv().await {
+        output.push_str(&String::from_utf8_lossy(&frame.expect("infallible frame")));
+    }
+    assert!(output.contains("event stream closed"));
+    assert!(output.contains("\"stop_reason\":\"error\""));
+    assert!(output.contains("event: message_stop"));
 }
 
 #[tokio::test]
@@ -3474,6 +3478,26 @@ async fn emits_completion_error_and_optional_frames() {
     assert!(output.contains("event: message_stop"));
     assert!(output.contains("event: error"));
     assert!(output.contains("boom"));
+    assert!(output.contains("\"stop_reason\":\"error\""));
+}
+
+#[tokio::test]
+async fn stream_error_closes_the_agent_card_with_message_stop() {
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
+    send_stream_error(
+        &sender,
+        anyhow!("ACP driver dropped its response: channel closed"),
+    )
+    .await;
+    drop(sender);
+    let mut output = String::new();
+    while let Some(frame) = receiver.recv().await {
+        output.push_str(&String::from_utf8_lossy(&frame.expect("frame")));
+    }
+    assert!(output.contains("event: error"));
+    assert!(output.contains("ACP driver dropped its response"));
+    assert!(output.contains("\"stop_reason\":\"error\""));
+    assert!(output.contains("event: message_stop"));
 }
 
 #[tokio::test]
