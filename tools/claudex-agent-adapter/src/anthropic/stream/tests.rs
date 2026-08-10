@@ -137,6 +137,40 @@ fn recognizes_cursor_thought_for_filler() {
     assert!(!sanitize::is_canned_worker_filler(
         "ContextVar は worker スレッドに伝わらないので、スレッド共有のフラグに切り替えます。"
     ));
+    assert!(!sanitize::is_canned_worker_filler("   "));
+}
+
+#[test]
+fn compact_live_prose_and_worker_status_cover_both_truncation_sides() {
+    assert_eq!(sanitize::compact_live_prose("short"), "short");
+    let long = "あ".repeat(sanitize::LIVE_PROSE_CHAR_LIMIT + 3);
+    let compact = sanitize::compact_live_prose(&long);
+    assert!(compact.ends_with('…'));
+    assert_eq!(compact.chars().count(), sanitize::LIVE_PROSE_CHAR_LIMIT + 1);
+    assert_eq!(sanitize::latest_worker_status("   "), None);
+    assert_eq!(sanitize::latest_worker_status("Working on it"), None);
+    assert_eq!(
+        sanitize::latest_worker_status("Status: inspecting\n"),
+        Some("Status: inspecting\n".to_owned())
+    );
+    assert_eq!(
+        sanitize::latest_worker_status("Status: one Status: two"),
+        Some("Status: two\n".to_owned())
+    );
+    assert!(sanitize::is_provider_status_line("Plan next"));
+    assert!(sanitize::is_provider_status_line("Plan: drafted"));
+    assert!(sanitize::is_provider_status_line("● running"));
+    assert!(sanitize::is_provider_status_line("◎ queued"));
+    assert!(sanitize::is_provider_status_line("○ idle"));
+    assert!(sanitize::is_provider_status_line("status: lower"));
+    assert!(sanitize::is_provider_status_line("SubAgent starting: x"));
+    assert!(sanitize::is_provider_status_line("SubAgent started: x"));
+    assert!(sanitize::is_provider_status_line("SubAgent finished"));
+    assert!(sanitize::is_provider_status_line("SubAgent completed"));
+    assert!(sanitize::is_provider_status_line(
+        "Retrying provider request"
+    ));
+    assert!(!sanitize::is_provider_status_line("real assistant prose"));
 }
 
 #[test]
