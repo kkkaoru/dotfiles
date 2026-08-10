@@ -66,7 +66,7 @@ fn assigns_each_gate_process_an_isolated_llvm_cov_target() {
 }
 
 #[test]
-fn retries_only_segfaulted_llvm_cov_json_export() {
+fn retries_llvm_cov_json_export_on_segfault_or_corrupt_profraw() {
     use super::runner::should_retry_llvm_cov_export;
 
     let json = [
@@ -83,14 +83,18 @@ fn retries_only_segfaulted_llvm_cov_json_export() {
         &json,
         std::process::ExitStatus::from_raw(libc::SIGSEGV)
     ));
+    assert!(
+        should_retry_llvm_cov_export(&json, std::process::ExitStatus::from_raw(1 << 8)),
+        "corrupt profraw merge (exit 1) must retry the json export"
+    );
     assert!(!should_retry_llvm_cov_export(
         &clean,
         std::process::ExitStatus::from_raw(libc::SIGSEGV)
     ));
-    assert!(!should_retry_llvm_cov_export(
-        &json,
-        std::process::ExitStatus::from_raw(1 << 8)
-    ));
+    assert!(
+        !should_retry_llvm_cov_export(&json, std::process::ExitStatus::from_raw(101 << 8)),
+        "failing tests (exit 101) must not look like a merge flake"
+    );
 }
 
 #[test]

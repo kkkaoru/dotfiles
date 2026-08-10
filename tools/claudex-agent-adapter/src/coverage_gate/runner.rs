@@ -136,7 +136,12 @@ pub(super) fn coverage_command(root: &Path, target: &Path, arguments: &[String])
 }
 
 pub(super) fn should_retry_llvm_cov_export(arguments: &[String], status: ExitStatus) -> bool {
-    status.signal() == Some(libc::SIGSEGV) && arguments.iter().any(|argument| argument == "--json")
+    if !arguments.iter().any(|argument| argument == "--json") {
+        return false;
+    }
+    // SIGSEGV is the known Apple Silicon export flake. Exit 1 is llvm-profdata
+    // refusing a corrupt .profraw header after an otherwise green test run.
+    status.signal() == Some(libc::SIGSEGV) || status.code() == Some(1)
 }
 
 pub(super) fn run_commands(
