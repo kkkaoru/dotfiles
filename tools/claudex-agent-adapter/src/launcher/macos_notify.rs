@@ -14,6 +14,9 @@ const TITLE: &str = "claudex";
 const WAITING_SUBTITLE: &str = "ビルド完了・待機中";
 const LIVE_SUBTITLE: &str = "live 更新完了";
 const COMPLETE_SUBTITLE: &str = "差し替え完了";
+/// Rapid `cargo install` / hot-swap bursts mint a new build_id each time.
+/// Keep macOS alerts quiet until this gap of silence on the same port.
+const RAPID_REBUILD_COOLDOWN_SECS: u64 = 5 * 60;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -28,6 +31,10 @@ pub(super) struct LastNotify {
     pub kind: NotifyKind,
     pub listen: String,
     pub build_id: String,
+    /// Unix seconds of the last emit or suppressed rebuild attempt.
+    /// Missing in older cache files → treated as 0 (cooldown inactive).
+    #[serde(default)]
+    pub emitted_unix: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -87,6 +94,7 @@ impl From<&Event> for LastNotify {
             kind: event.kind(),
             listen: event.listen().to_owned(),
             build_id: event.build_id().to_owned(),
+            emitted_unix: 0,
         }
     }
 }
@@ -138,11 +146,41 @@ pub(super) fn swap_complete(config: &ServiceConfig) {
     );
 }
 
+#[cfg(test)]
 pub(super) fn should_emit(event: &Event, last: Option<&LastNotify>) -> bool {
+    should_emit_at(event, last, now_unix())
+}
+
+pub(super) fn should_emit_at(event: &Event, last: Option<&LastNotify>, now_unix: u64) -> bool {
     let Some(last) = last else {
         return true;
     };
-    last.listen != event.listen() || last.build_id != event.build_id() || last.kind != event.kind()
+    if last.listen == event.listen()
+        && last.build_id == event.build_id()
+        && last.kind == event.kind()
+    {
+        return false;
+    }
+    // One install may progress Waiting → Live → Complete (listen strings can
+    // differ between canonical and fallback). Always allow that progression.
+    if last.build_id == event.build_id() && last.kind != event.kind() {
+        return true;
+    }
+    // Newer build on the same port within the cooldown: stay quiet.
+    if last.build_id != event.build_id()
+        && last.emitted_unix > 0
+        && now_unix.saturating_sub(last.emitted_unix) < RAPID_REBUILD_COOLDOWN_SECS
+    {
+        return false;
+    }
+    true
+}
+
+fn now_unix() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs())
+        .unwrap_or(0)
 }
 
 pub(super) fn notification(event: &Event) -> Notification {
@@ -212,11 +250,23 @@ pub(super) fn deliver_status(status: ExitStatus) -> Result<()> {
 }
 
 pub(super) fn post(cache: &Path, listen: &SocketAddr, event: Event) {
-    if !should_emit(&event, read_last(cache, listen).as_ref()) {
+    let now = now_unix();
+    let previous = read_last(cache, listen);
+    if !should_emit_at(&event, previous.as_ref(), now) {
+        // Slide the cooldown while installs keep racing so a burst stays quiet
+        // until there is a real gap without swap attempts.
+        if let Some(mut last) = previous {
+            last.emitted_unix = now;
+            if let Err(error) = write_last(cache, listen, &last) {
+                eprintln!("claudex: macOS notification dedup state failed ({error:#})");
+            }
+        }
         return;
     }
     record_event(&event);
-    if let Err(error) = write_last(cache, listen, &LastNotify::from(&event)) {
+    let mut last = LastNotify::from(&event);
+    last.emitted_unix = now;
+    if let Err(error) = write_last(cache, listen, &last) {
         eprintln!("claudex: macOS notification dedup state failed ({error:#})");
     }
     let notification = notification(&event);

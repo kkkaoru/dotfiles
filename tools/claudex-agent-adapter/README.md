@@ -381,8 +381,10 @@ Arming a new idle waiter posts a macOS notification that the build is waiting;
 starting the current-build fallback posts that live generation is ready now
 (listen, build, immediate use); a successful Replace posts that the swap
 completed. Reuse, an already-armed waiter, and a repeat of the same
-listen+build+kind do not notify. Waiting, live ready, then complete is at most
-three notifications.
+listen+build+kind do not notify. Waiting → live → complete for one build is at
+most three notifications. Rapid successive builds on the same port (install /
+hot-swap bursts) stay quiet for five minutes of swap attempts; the cooldown
+slides while attempts continue so only a real quiet gap notifies again.
 Readiness still requires the current build ID, matching
 configuration, and successful authentication. If the new generation fails
 readiness and a recovery manifest exists, the previous generation is restored.

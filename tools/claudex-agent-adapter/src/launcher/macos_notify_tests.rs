@@ -127,7 +127,45 @@ fn same_build_and_kind_are_not_emitted_twice() {
     );
     assert!(
         should_emit(&waiting("def", 2), Some(&LastNotify::from(&first_complete))),
-        "a newer build must notify waiting again"
+        "a newer build with no cooldown timestamp must still notify"
+    );
+}
+
+#[test]
+fn rapid_rebuilds_on_the_same_port_are_suppressed_until_cooldown() {
+    let mut last = LastNotify::from(&complete("abc"));
+    last.emitted_unix = 1_700_000_000;
+    assert!(
+        !should_emit_at(&waiting("def", 2), Some(&last), last.emitted_unix + 30),
+        "a newer build within 5 minutes must not spam waiting"
+    );
+    assert!(
+        !should_emit_at(&complete("def"), Some(&last), last.emitted_unix + 60),
+        "a newer build within 5 minutes must not spam swap complete"
+    );
+    assert!(
+        should_emit_at(
+            &waiting("def", 2),
+            Some(&last),
+            last.emitted_unix + RAPID_REBUILD_COOLDOWN_SECS
+        ),
+        "after the quiet gap a newer build may notify again"
+    );
+}
+
+#[test]
+fn same_build_kind_progression_still_notifies_during_cooldown_window() {
+    let mut last = LastNotify::from(&waiting("abc", 1));
+    last.emitted_unix = 1_700_000_000;
+    assert!(
+        should_emit_at(&live("abc"), Some(&last), last.emitted_unix + 5),
+        "Waiting → Live on the same build must still notify"
+    );
+    last = LastNotify::from(&live("abc"));
+    last.emitted_unix = 1_700_000_005;
+    assert!(
+        should_emit_at(&complete("abc"), Some(&last), last.emitted_unix + 5),
+        "Live → Complete on the same build must still notify"
     );
 }
 
@@ -147,6 +185,24 @@ fn post_emits_waiting_then_complete_once_each() {
         vec![waiting("abc", 9), live("abc"), complete("abc")],
         "busy fallback must notify live ready, then one complete after canonical replace"
     );
+}
+
+#[test]
+fn post_suppresses_rapid_rebuild_complete_and_slides_cooldown() {
+    let root = tempfile::tempdir().expect("notify cache");
+    let listen = listen();
+    let events = TestEvents::capture();
+    post(root.path(), &listen, complete("abc"));
+    post(root.path(), &listen, complete("def"));
+    post(root.path(), &listen, complete("ghi"));
+    assert_eq!(
+        events.take(),
+        vec![complete("abc")],
+        "rapid successive builds must notify swap complete only once"
+    );
+    let last = read_last(root.path(), &listen).expect("dedup state");
+    assert_eq!(last.build_id, "abc");
+    assert!(last.emitted_unix > 0, "suppressed attempts must slide cooldown");
 }
 
 #[test]
