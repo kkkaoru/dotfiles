@@ -1,6 +1,7 @@
 use super::*;
 use axum::serve::Listener;
 use std::time::Duration;
+use tokio::net::{TcpListener, TcpStream};
 
 #[test]
 fn ephemeral_bind_addr_stays_on_loopback() {
@@ -21,10 +22,25 @@ fn canonical_addr_stays_fixed_after_advertised_rebind() {
     assert_eq!(handover.advertised_addr(), canonical);
     handover.set_advertised_for_test("127.0.0.1:60104".parse().unwrap());
     assert_eq!(handover.canonical_addr(), canonical);
+    assert_eq!(handover.service_addr(), canonical);
     assert_eq!(
         handover.advertised_addr(),
         "127.0.0.1:60104".parse().unwrap()
     );
+}
+
+#[test]
+fn service_addr_stays_on_client_port_after_warm_start_promote() {
+    let warm = "127.0.0.1:62486".parse().unwrap();
+    let service = "127.0.0.1:8318".parse().unwrap();
+    let cache = tempfile::tempdir().expect("service cache");
+    let (handover, _rx) =
+        ListenHandover::new_with_service(warm, service, cache.path().to_path_buf());
+    assert_eq!(handover.canonical_addr(), warm);
+    assert_eq!(handover.service_addr(), service);
+    handover.set_advertised_for_test(service);
+    assert_eq!(handover.advertised_addr(), service);
+    assert_eq!(handover.service_addr(), service);
 }
 
 #[test]
@@ -59,4 +75,69 @@ async fn ephemeral_rebind_releases_the_canonical_port() {
     )
     .expect("decode rebind state");
     assert_eq!(state.listen, handover.advertised_addr());
+}
+
+#[tokio::test]
+async fn handover_listener_accepts_a_tcp_connection() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("canonical listener");
+    let canonical = listener.local_addr().expect("canonical address");
+    let cache = tempfile::tempdir().expect("accept cache");
+    let (handover, rx) = ListenHandover::new(canonical, cache.path().to_path_buf());
+    let mut handover_listener = HandoverListener::new(listener, &handover, rx);
+    assert_eq!(
+        Listener::local_addr(&handover_listener).expect("advertised addr"),
+        canonical
+    );
+    let connect = tokio::spawn(async move { TcpStream::connect(canonical).await });
+    let (_stream, _peer) = tokio::time::timeout(Duration::from_secs(2), handover_listener.accept())
+        .await
+        .expect("accept timeout");
+    connect.await.expect("join connector").expect("connected");
+}
+
+#[tokio::test]
+async fn bind_rebind_moves_to_the_requested_listen() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("canonical listener");
+    let canonical = listener.local_addr().expect("canonical address");
+    let reserved = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("reserve target");
+    let target = reserved.local_addr().expect("target address");
+    drop(reserved);
+    let cache = tempfile::tempdir().expect("bind cache");
+    let (handover, rx) = ListenHandover::new(canonical, cache.path().to_path_buf());
+    let mut handover_listener = HandoverListener::new(listener, &handover, rx);
+    handover.request_bind(target);
+    tokio::time::timeout(Duration::from_secs(2), handover_listener.accept())
+        .await
+        .ok();
+    assert_eq!(handover.advertised_addr(), target);
+    assert_eq!(handover.canonical_addr(), canonical);
+}
+
+#[tokio::test]
+async fn failed_rebind_keeps_accepting_on_canonical() {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("canonical listener");
+    let canonical = listener.local_addr().expect("canonical address");
+    let cache_file = tempfile::NamedTempFile::new().expect("rebind file cache");
+    let (handover, rx) = ListenHandover::new(canonical, cache_file.path().to_path_buf());
+    let mut handover_listener = HandoverListener::new(listener, &handover, rx);
+    handover.request_ephemeral();
+    let connect = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        TcpStream::connect(canonical).await
+    });
+    let accepted = tokio::time::timeout(Duration::from_secs(2), handover_listener.accept()).await;
+    assert!(
+        accepted.is_ok(),
+        "listener must keep accepting after a failed rebind"
+    );
+    assert_eq!(handover.advertised_addr(), canonical);
+    connect.await.expect("join connector").expect("connected");
 }
