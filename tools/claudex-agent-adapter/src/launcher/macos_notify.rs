@@ -8,7 +8,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-use super::{ServiceConfig, launcher_logs};
+use super::{ServiceConfig, launcher_lock, launcher_logs};
 
 const TITLE: &str = "claudex";
 const WAITING_SUBTITLE: &str = "ビルド完了・待機中";
@@ -151,24 +151,26 @@ pub(super) fn should_emit(event: &Event, last: Option<&LastNotify>) -> bool {
     should_emit_at(event, last, now_unix())
 }
 
+fn kind_advances(from: NotifyKind, to: NotifyKind) -> bool {
+    matches!(
+        (from, to),
+        (NotifyKind::Waiting, NotifyKind::Live)
+            | (NotifyKind::Waiting, NotifyKind::Complete)
+            | (NotifyKind::Live, NotifyKind::Complete)
+    )
+}
+
 pub(super) fn should_emit_at(event: &Event, last: Option<&LastNotify>, now_unix: u64) -> bool {
     let Some(last) = last else {
         return true;
     };
-    if last.listen == event.listen()
-        && last.build_id == event.build_id()
-        && last.kind == event.kind()
-    {
-        return false;
+    if last.build_id == event.build_id() {
+        // One install may advance Waiting → Live → Complete. Never regress
+        // (Complete → Waiting) or repeat the same kind for that build.
+        return kind_advances(last.kind, event.kind());
     }
-    // One install may progress Waiting → Live → Complete (listen strings can
-    // differ between canonical and fallback). Always allow that progression.
-    if last.build_id == event.build_id() && last.kind != event.kind() {
-        return true;
-    }
-    // Newer build on the same port within the cooldown: stay quiet.
-    if last.build_id != event.build_id()
-        && last.emitted_unix > 0
+    // Newer build within the quiet gap: stay quiet (burst cargo install).
+    if last.emitted_unix > 0
         && now_unix.saturating_sub(last.emitted_unix) < RAPID_REBUILD_COOLDOWN_SECS
     {
         return false;
@@ -190,10 +192,10 @@ pub(super) fn notification(event: &Event) -> Notification {
             build_id,
             waiter_pid,
         } => Notification {
-            title: TITLE.to_owned(),
-            subtitle: WAITING_SUBTITLE.to_owned(),
+            title: format!("{TITLE} · {listen}"),
+            subtitle: format!("{WAITING_SUBTITLE} · build {build_id}"),
             body: format!(
-                "{listen} を build {build_id} へ差し替え待機中（waiter pid {waiter_pid}）"
+                "build {build_id} へ差し替え待機中 · listen {listen} · waiter pid {waiter_pid}"
             ),
         },
         Event::LiveReady {
@@ -201,16 +203,16 @@ pub(super) fn notification(event: &Event) -> Notification {
             build_id,
             waiting,
         } => Notification {
-            title: TITLE.to_owned(),
-            subtitle: LIVE_SUBTITLE.to_owned(),
+            title: format!("{TITLE} · {listen}"),
+            subtitle: format!("{LIVE_SUBTITLE} · build {build_id}"),
             body: format!(
-                "新セッションは {listen} (build {build_id}) を即時利用。{waiting} は idle 待ち"
+                "build {build_id} を即時利用 · live {listen} · waiting {waiting}"
             ),
         },
         Event::SwapComplete { listen, build_id } => Notification {
-            title: TITLE.to_owned(),
-            subtitle: COMPLETE_SUBTITLE.to_owned(),
-            body: format!("{listen} を build {build_id} へ差し替えました"),
+            title: format!("{TITLE} · {listen}"),
+            subtitle: format!("{COMPLETE_SUBTITLE} · build {build_id}"),
+            body: format!("build {build_id} へ差し替えました · listen {listen}"),
         },
     }
 }
@@ -250,6 +252,14 @@ pub(super) fn deliver_status(status: ExitStatus) -> Result<()> {
 }
 
 pub(super) fn post(cache: &Path, listen: &SocketAddr, event: Event) {
+    let lock_path = launcher_logs::hot_swap_notify_path(cache, listen).with_extension("lock");
+    let _lock = match launcher_lock::acquire(&lock_path) {
+        Ok(lock) => lock,
+        Err(error) => {
+            eprintln!("claudex: macOS notification lock failed ({error:#})");
+            return;
+        }
+    };
     let now = now_unix();
     let previous = read_last(cache, listen);
     if !should_emit_at(&event, previous.as_ref(), now) {

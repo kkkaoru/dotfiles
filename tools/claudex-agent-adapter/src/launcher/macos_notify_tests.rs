@@ -32,8 +32,8 @@ fn live(build: &str) -> Event {
 #[test]
 fn waiting_notification_describes_build_listen_and_waiter() {
     let notification = notification(&waiting("abc123", 4242));
-    assert_eq!(notification.title, TITLE);
-    assert_eq!(notification.subtitle, WAITING_SUBTITLE);
+    assert_eq!(notification.title, "claudex · 127.0.0.1:8318");
+    assert_eq!(notification.subtitle, "ビルド完了・待機中 · build abc123");
     assert!(notification.body.contains("127.0.0.1:8318"));
     assert!(notification.body.contains("abc123"));
     assert!(notification.body.contains("4242"));
@@ -43,8 +43,8 @@ fn waiting_notification_describes_build_listen_and_waiter() {
 #[test]
 fn live_ready_notification_describes_live_listen_build_and_waiting_port() {
     let notification = notification(&live("abc123"));
-    assert_eq!(notification.title, TITLE);
-    assert_eq!(notification.subtitle, LIVE_SUBTITLE);
+    assert_eq!(notification.title, "claudex · 127.0.0.1:62789");
+    assert_eq!(notification.subtitle, "live 更新完了 · build abc123");
     assert!(notification.body.contains("127.0.0.1:62789"));
     assert!(notification.body.contains("abc123"));
     assert!(notification.body.contains("127.0.0.1:8318"));
@@ -54,8 +54,8 @@ fn live_ready_notification_describes_live_listen_build_and_waiting_port() {
 #[test]
 fn swap_complete_notification_describes_build_and_listen() {
     let notification = notification(&complete("abc123"));
-    assert_eq!(notification.title, TITLE);
-    assert_eq!(notification.subtitle, COMPLETE_SUBTITLE);
+    assert_eq!(notification.title, "claudex · 127.0.0.1:8318");
+    assert_eq!(notification.subtitle, "差し替え完了 · build abc123");
     assert!(notification.body.contains("127.0.0.1:8318"));
     assert!(notification.body.contains("abc123"));
     assert!(notification.body.contains("差し替えました"));
@@ -80,8 +80,8 @@ fn osascript_command_uses_display_notification() {
         .collect();
     assert_eq!(args[0], "-e");
     assert!(args[1].starts_with("display notification \""));
-    assert!(args[1].contains("with title \"claudex\""));
-    assert!(args[1].contains("subtitle \"差し替え完了\""));
+    assert!(args[1].contains("with title \"claudex · 127.0.0.1:8318\""));
+    assert!(args[1].contains("subtitle \"差し替え完了 · build q\\\"w\""));
     assert!(args[1].contains(r#"q\"w"#));
 }
 
@@ -162,7 +162,7 @@ fn rapid_rebuilds_on_the_same_port_are_suppressed_until_cooldown() {
 }
 
 #[test]
-fn same_kind_on_a_different_listen_still_notifies() {
+fn same_build_and_kind_are_suppressed_even_on_different_listen() {
     let previous = LastNotify::from(&waiting("abc", 1));
     let moved = Event::WaitingForIdle {
         listen: "127.0.0.1:9999".to_owned(),
@@ -170,8 +170,8 @@ fn same_kind_on_a_different_listen_still_notifies() {
         waiter_pid: 2,
     };
     assert!(
-        should_emit_at(&moved, Some(&previous), previous.emitted_unix + 1),
-        "same build/kind on another listen must not be treated as a duplicate"
+        !should_emit_at(&moved, Some(&previous), previous.emitted_unix + 1),
+        "same build/kind must stay quiet even when listen text differs"
     );
 }
 
@@ -188,6 +188,20 @@ fn same_build_kind_progression_still_notifies_during_cooldown_window() {
     assert!(
         should_emit_at(&complete("abc"), Some(&last), last.emitted_unix + 5),
         "Live → Complete on the same build must still notify"
+    );
+}
+
+#[test]
+fn same_build_does_not_regress_from_complete_to_waiting() {
+    let mut last = LastNotify::from(&complete("abc"));
+    last.emitted_unix = 1_700_000_000;
+    assert!(
+        !should_emit_at(&waiting("abc", 2), Some(&last), last.emitted_unix + 5),
+        "Complete → Waiting for the same build must not spam"
+    );
+    assert!(
+        !should_emit_at(&live("abc"), Some(&last), last.emitted_unix + 5),
+        "Complete → Live for the same build must not spam"
     );
 }
 
