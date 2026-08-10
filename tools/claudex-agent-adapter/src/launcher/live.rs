@@ -10,6 +10,14 @@ use serde::{Deserialize, Serialize};
 
 use super::{ServiceConfig, launcher_logs};
 
+#[cfg(test)]
+use std::cell::Cell;
+
+#[cfg(test)]
+std::thread_local! {
+    static RETAINED_WRITE_FAILURE_AFTER: Cell<Option<u32>> = const { Cell::new(None) };
+}
+
 pub(crate) const RETAINED_STATE_ENV: &str = "CLAUDEX_RETAINED_STATE";
 pub(crate) use crate::listen_handover::SERVICE_LISTEN_ENV;
 
@@ -77,6 +85,17 @@ pub(super) fn write_retained(
     build_id: &str,
     session_ids: Vec<String>,
 ) -> Result<PathBuf> {
+    #[cfg(test)]
+    if RETAINED_WRITE_FAILURE_AFTER.with(|cell| match cell.get() {
+        Some(0) => true,
+        Some(remaining) => {
+            cell.set(Some(remaining - 1));
+            false
+        }
+        None => false,
+    }) {
+        bail!("injected retained state write failure");
+    }
     let path = retained_path(config)?;
     write_json(
         &path,
@@ -88,6 +107,16 @@ pub(super) fn write_retained(
         },
     )?;
     Ok(path)
+}
+
+#[cfg(test)]
+pub(super) fn fail_retained_write_after(successes: u32) {
+    RETAINED_WRITE_FAILURE_AFTER.with(|cell| cell.set(Some(successes)));
+}
+
+#[cfg(test)]
+pub(super) fn clear_retained_write_failure() {
+    RETAINED_WRITE_FAILURE_AFTER.with(|cell| cell.set(None));
 }
 
 pub(super) fn parse_listen_url(url: &str) -> Result<SocketAddr> {
@@ -148,9 +177,7 @@ pub(crate) fn read_retained(path: &Path) -> Result<Option<RetainedGeneration>> {
     Ok(Some(state))
 }
 
-pub(super) fn load_retained(
-    config: &ServiceConfig,
-) -> Option<(PathBuf, RetainedGeneration)> {
+pub(super) fn load_retained(config: &ServiceConfig) -> Option<(PathBuf, RetainedGeneration)> {
     let path = retained_path(config).ok()?;
     let generation = read_retained(&path).ok().flatten()?;
     Some((path, generation))

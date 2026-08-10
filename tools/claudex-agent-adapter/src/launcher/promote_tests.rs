@@ -245,6 +245,65 @@ fn config_at(listen: SocketAddr, root: &Path, executable: PathBuf) -> ServiceCon
     }
 }
 
+fn health_body(pid: Option<u32>, active: bool) -> String {
+    serde_json::json!({
+        "status": "ok", "pid": pid, "protocol_version": ADAPTER_PROTOCOL_VERSION,
+        "build_id": "old-build", "subscription_max_processes": 20,
+        "subscription_timeout_minutes": 120, "active_http_requests": active as usize,
+    }).to_string()
+}
+
+async fn health_server(
+    canonical: String,
+    retained: String,
+) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("health server");
+    let address = listener.local_addr().expect("health address");
+    let task = tokio::spawn(async move {
+        for body in [canonical, retained] {
+            let Ok((mut stream, _)) = listener.accept().await else { return };
+            let mut request = [0; 1024];
+            let _ = stream.read(&mut request).await;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(response.as_bytes()).await;
+        }
+    });
+    (address, task)
+}
+
+#[tokio::test]
+async fn release_idle_retained_keeps_generation_used_by_canonical_listener() {
+    let root = tempfile::tempdir().expect("retained release fixture");
+    let (server, task) = health_server(health_body(Some(77), false), health_body(None, false)).await;
+    let config = config_at(server, root.path(), PathBuf::from("/tmp/adapter"));
+    let path = live::write_retained(&config, server, 77, "old", Vec::new()).unwrap();
+    release_idle_retained(&reqwest::Client::new(), &config).await;
+    assert!(path.exists());
+    task.abort();
+}
+
+#[tokio::test]
+async fn release_idle_retained_releases_idle_active_and_unknown_generations() {
+    for (retained_pid, retained_body, expect_removed) in [
+        (78, health_body(Some(78), true), false),
+        (79, health_body(Some(79), false), true),
+        (80, health_body(Some(81), false), true),
+    ] {
+        let root = tempfile::tempdir().expect("retained release fixture");
+        let (server, task) =
+            health_server(health_body(Some(999), false), retained_body).await;
+        let config = config_at(server, root.path(), PathBuf::from("/tmp/adapter"));
+        let path =
+            live::write_retained(&config, server, retained_pid, "old", Vec::new()).unwrap();
+        release_idle_retained(&reqwest::Client::new(), &config).await;
+        assert_eq!(path.exists(), !expect_removed);
+        task.abort();
+    }
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn try_canonical_fails_closed_when_warm_start_never_becomes_ready() {
@@ -269,23 +328,33 @@ async fn try_canonical_fails_closed_when_warm_start_never_becomes_ready() {
     );
 }
 
+#[cfg(unix)]
 #[tokio::test]
 async fn try_canonical_reports_retained_state_write_failure() {
     let root = tempfile::tempdir().expect("retained write fixture");
+    let dummy = write_current_build_dummy(root.path());
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("canonical listen");
     let listen = listener.local_addr().expect("canonical address");
-    drop(listener);
-    let config = config_at(listen, root.path(), PathBuf::from("/tmp/adapter"));
-    std::fs::create_dir(
-        root.path()
-            .join(format!("retained.{}.json", config.options.listen.port())),
-    )
-    .expect("block retained state path");
+    tokio::spawn(async move {
+        let Ok((mut stream, _)) = listener.accept().await else { return };
+        let mut request = [0; 4096];
+        let _ = stream.read(&mut request).await;
+        let body = r#"{"listen":"127.0.0.1:65100"}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let _ = stream.write_all(response.as_bytes()).await;
+    });
+    let config = config_at(listen, root.path(), dummy.clone());
+    live::fail_retained_write_after(1);
     let error = try_canonical(&reqwest::Client::new(), &config, &health(true, Some(12)))
         .await
         .expect_err("retained state write must fail");
+    live::clear_retained_write_failure();
+    kill_dummy(&dummy);
     assert!(
         error.to_string().contains("state") || error.to_string().contains("directory"),
         "{error:#}"
