@@ -1171,3 +1171,184 @@ fn low_remaining_spark_http_subagent_rewrites_onto_cursor() {
     assert_eq!(effort.as_deref(), Some("high"));
     assert_eq!(route, RouteDecision::Provider);
 }
+
+#[test]
+fn note_provider_exhaustion_skips_non_failure_errors() {
+    let root = tempfile::tempdir().expect("note-exhaustion unrelated error fixture");
+    let bridge = cline_and_qwen_bridge().with_usage_limit_cache_home(root.path());
+    assert!(!bridge.subagent_provider_is_exhausted(CLINE_FLASH));
+    bridge.note_provider_exhaustion(
+        &anyhow::anyhow!("some generic network error"),
+        Some(CLINE_FLASH),
+    );
+    assert!(
+        !bridge.subagent_provider_is_exhausted(CLINE_FLASH),
+        "unrelated error must not trigger cooldown"
+    );
+}
+
+#[test]
+fn usage_limit_failover_for_with_no_configured_fallback() {
+    let backend =
+        AgentBackend::spawn_routes(&[BackendRoute::new(CLINE_FLASH, BackendKind::ConfiguredAcp)]);
+    let bridge = Bridge::new_with_backend(backend, CLINE_FLASH.to_owned());
+    let failover = bridge.usage_limit_failover_for(CLINE_FLASH);
+    assert!(
+        failover.is_none(),
+        "no failover target when no auxiliary fallback configured"
+    );
+}
+
+#[test]
+fn auth_scopes_for_model_none_and_empty_message() {
+    let bridge = cline_and_qwen_bridge();
+    let scopes = bridge.auth_scopes_for(None, "");
+    assert!(
+        scopes.is_empty(),
+        "no scopes when model is None and message is empty"
+    );
+}
+
+#[test]
+fn auth_scopes_for_model_none_with_sakana_message() {
+    let bridge = cline_and_qwen_bridge();
+    let message_with_sakana = "API Error: 401 sakana api key failure";
+    let scopes = bridge.auth_scopes_for(None, message_with_sakana);
+    assert!(
+        scopes.iter().any(|s| s == "sakana"),
+        "scope must extract sakana from message even when model is None"
+    );
+}
+
+#[test]
+fn model_uses_codex_app_server_with_none_backend_kind() {
+    let backend = AgentBackend::spawn_routes(&[]);
+    let bridge = Bridge::new_with_backend(backend, "unknown-model".to_owned());
+    let result = bridge.model_uses_codex_app_server("unknown-model");
+    assert!(
+        !result,
+        "model with no backend kind should return false (not default to codex)"
+    );
+}
+
+#[test]
+fn model_uses_codex_app_server_codex_backend() {
+    let backend =
+        AgentBackend::spawn_routes(&[BackendRoute::new("fugu", BackendKind::CodexAppServer)]);
+    let bridge = Bridge::new_with_backend(backend, "fugu".to_owned());
+    assert!(bridge.model_uses_codex_app_server("fugu"));
+}
+
+#[test]
+fn model_uses_codex_app_server_non_codex_backend() {
+    let backend =
+        AgentBackend::spawn_routes(&[BackendRoute::new(CLINE_FLASH, BackendKind::ConfiguredAcp)]);
+    let bridge = Bridge::new_with_backend(backend, CLINE_FLASH.to_owned());
+    assert!(!bridge.model_uses_codex_app_server(CLINE_FLASH));
+}
+
+#[test]
+fn subagent_provider_failover_excluding_with_exhausted_model_skipped() {
+    let root = tempfile::tempdir().expect("failover exclude fixture");
+    let bridge = cline_and_qwen_bridge().with_usage_limit_cache_home(root.path());
+    bridge.note_provider_exhaustion(&anyhow::anyhow!(EMPTY_ACP_END_TURN), Some(CLINE_FLASH));
+    let failover = bridge.subagent_provider_failover_excluding(CLINE_FLASH, None);
+    assert!(
+        failover.as_ref().is_some_and(|f| f.model == QWEN_CLOUD),
+        "must skip exhausted Cline and select Qwen"
+    );
+    assert_eq!(
+        failover.as_ref().map(|f| f.route),
+        Some(RouteDecision::Provider)
+    );
+}
+
+#[tokio::test]
+async fn subagent_provider_failover_excluding_with_capacity_skip() {
+    let bridge = cline_qwen_cursor_bridge();
+    let _permits = saturate_qwen_subagent_slots(&bridge).await;
+    let failover = bridge.subagent_provider_failover_excluding(CLINE_FLASH, None);
+    assert!(
+        failover.as_ref().is_some_and(|f| f.model == CURSOR_AUTO),
+        "must skip capacity-saturated Qwen and select Cursor"
+    );
+    assert_eq!(
+        failover.as_ref().map(|f| f.route),
+        Some(RouteDecision::Provider)
+    );
+}
+
+#[test]
+fn subagent_provider_failover_excluding_with_non_ok_target_kind() {
+    let backend = AgentBackend::spawn_routes(&[
+        BackendRoute::new(CLINE_FLASH, BackendKind::ConfiguredAcp),
+        BackendRoute::new("codex", BackendKind::CodexAppServer),
+    ]);
+    let mut catalog = ModelCatalog::default();
+    catalog
+        .set_worker_routes(vec![crate::provider_config::WorkerRoute::new(
+            "claudex-cline-deepseek-flash",
+            CLINE_FLASH,
+            "xhigh",
+        )])
+        .expect("install cline worker");
+    let bridge =
+        Bridge::new_with_backend(backend, CLINE_FLASH.to_owned()).with_model_catalog(catalog);
+    let failover = bridge.subagent_provider_failover_excluding(CLINE_FLASH, None);
+    assert!(
+        failover.is_none(),
+        "must skip exhausted model and CodexAppServer (non-ok target), returning None"
+    );
+}
+
+#[test]
+fn failover_for_stream_turn_subagent_prefers_provider_with_fallback() {
+    let bridge = cline_and_qwen_bridge();
+    let failover = bridge.failover_for_stream_turn(CLINE_FLASH, true);
+    assert_eq!(
+        failover.as_ref().map(|f| f.route),
+        Some(RouteDecision::Provider),
+        "subagent stream must prefer provider route"
+    );
+}
+
+#[test]
+fn failover_for_stream_turn_outer_uses_subscription_fallback() {
+    let bridge = cline_and_qwen_bridge();
+    let failover = bridge.failover_for_stream_turn(CLINE_FLASH, false);
+    assert_eq!(
+        failover.as_ref().map(|f| f.route),
+        Some(RouteDecision::Subscription),
+        "outer stream must use subscription fallback"
+    );
+}
+
+#[test]
+fn subagent_failover_is_none_when_no_provider_route_and_no_fallback() {
+    let backend = AgentBackend::spawn_routes(&[
+        BackendRoute::new(CLINE_FLASH, BackendKind::ConfiguredAcp),
+        BackendRoute::new(QWEN_CLOUD, BackendKind::ConfiguredAcp),
+    ]);
+    let mut catalog = ModelCatalog::default();
+    catalog
+        .set_worker_routes(vec![
+            crate::provider_config::WorkerRoute::new(
+                "claudex-cline-deepseek-flash",
+                CLINE_FLASH,
+                "xhigh",
+            ),
+            crate::provider_config::WorkerRoute::new("claudex-qwen", QWEN_CLOUD, "high"),
+        ])
+        .expect("install workers");
+    let bridge =
+        Bridge::new_with_backend(backend, CLINE_FLASH.to_owned()).with_model_catalog(catalog);
+    let root = tempfile::tempdir().expect("no-fallback fixture");
+    let bridge = bridge.with_usage_limit_cache_home(root.path());
+    bridge.note_provider_exhaustion(&anyhow::anyhow!(EMPTY_ACP_END_TURN), Some(CLINE_FLASH));
+    bridge.note_provider_exhaustion(&anyhow::anyhow!(EMPTY_ACP_END_TURN), Some(QWEN_CLOUD));
+    let failover = bridge.failover_for_stream_turn(CLINE_FLASH, true);
+    assert!(
+        failover.is_none(),
+        "subagent stream failover is None when all sibling providers exhausted and no fallback"
+    );
+}
