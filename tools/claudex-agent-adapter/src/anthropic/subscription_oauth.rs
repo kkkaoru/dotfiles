@@ -50,6 +50,7 @@ fn expiry_ms_is_past(expires_ms: f64, now: SystemTime) -> bool {
     expires <= now
 }
 
+#[cfg(test)]
 pub(super) fn credentials_access_expired_at(
     credentials_path: &Path,
     now: SystemTime,
