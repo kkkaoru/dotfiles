@@ -268,12 +268,7 @@ pub(super) fn post_in_process(cache: &Path, listen: &SocketAddr, event: Event) {
     let now = now_unix();
     let previous = read_last(cache, listen);
     if !should_emit_at(&event, previous.as_ref(), now) {
-        if let Some(mut last) = previous {
-            last.emitted_unix = now;
-            if let Err(error) = write_last(cache, listen, &last) {
-                eprintln!("claudex: macOS notification dedup state failed ({error:#})");
-            }
-        }
+        touch_dedup_state(cache, listen, previous, now);
         return;
     }
     record_event(&event);
@@ -285,6 +280,21 @@ pub(super) fn post_in_process(cache: &Path, listen: &SocketAddr, event: Event) {
     let notification = notification(&event);
     if let Err(error) = deliver(&notification) {
         eprintln!("claudex: macOS notification failed ({error:#})");
+    }
+}
+
+fn touch_dedup_state(
+    cache: &Path,
+    listen: &SocketAddr,
+    previous: Option<LastNotify>,
+    now: u64,
+) {
+    let Some(mut last) = previous else {
+        return;
+    };
+    last.emitted_unix = now;
+    if let Err(error) = write_last(cache, listen, &last) {
+        eprintln!("claudex: macOS notification dedup state failed ({error:#})");
     }
 }
 
@@ -314,7 +324,7 @@ fn spawn_notification(notification: &Notification) -> std::io::Result<ExitStatus
             return spawn(notification);
         }
         let _ = notification;
-        return Ok(synthetic_success());
+        Ok(synthetic_success())
     }
     #[cfg(not(test))]
     osascript_command(notification).status()
@@ -327,10 +337,12 @@ fn record_event(event: &Event) {
 }
 
 #[cfg(test)]
+type TestSpawnFn = fn(&Notification) -> std::io::Result<ExitStatus>;
+
+#[cfg(test)]
 thread_local! {
     static EVENTS: std::cell::RefCell<Vec<Event>> = const { std::cell::RefCell::new(Vec::new()) };
-    static TEST_SPAWN: std::cell::Cell<Option<fn(&Notification) -> std::io::Result<ExitStatus>>> =
-        const { std::cell::Cell::new(None) };
+    static TEST_SPAWN: std::cell::Cell<Option<TestSpawnFn>> = const { std::cell::Cell::new(None) };
 }
 
 #[cfg(test)]
@@ -345,50 +357,10 @@ fn synthetic_success() -> ExitStatus {
 }
 
 #[cfg(test)]
-pub(super) struct TestEvents;
-
+#[path = "macos_notify_test_hooks.rs"]
+mod test_hooks;
 #[cfg(test)]
-impl TestEvents {
-    pub(super) fn capture() -> Self {
-        take_events();
-        Self
-    }
-
-    pub(super) fn take(&self) -> Vec<Event> {
-        take_events()
-    }
-}
-
-#[cfg(test)]
-impl Drop for TestEvents {
-    fn drop(&mut self) {
-        take_events();
-    }
-}
-
-#[cfg(test)]
-pub(super) struct TestSpawn;
-
-#[cfg(test)]
-impl TestSpawn {
-    pub(super) fn arm(spawn: fn(&Notification) -> std::io::Result<ExitStatus>) -> Self {
-        take_events();
-        TEST_SPAWN.with(|cell| cell.set(Some(spawn)));
-        Self
-    }
-
-    pub(super) fn take_events(&self) -> Vec<Event> {
-        take_events()
-    }
-}
-
-#[cfg(test)]
-impl Drop for TestSpawn {
-    fn drop(&mut self) {
-        TEST_SPAWN.with(|cell| cell.set(None));
-        take_events();
-    }
-}
+pub(crate) use test_hooks::{TestEvents, TestSpawn};
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]

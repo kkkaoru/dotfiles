@@ -13,29 +13,31 @@ const IMMEDIATE_CHARS: usize = 8;
 impl ProgressCoalescer {
     pub fn push(&mut self, event: ProgressEvent) -> Vec<ProgressEvent> {
         match event {
-            ProgressEvent::Thought(text) => {
-                let appended = text.chars().count();
-                self.thought.push_str(&text);
-                if should_flush(&self.thought, appended) {
-                    self.take_thought().into_iter().collect()
-                } else {
-                    Vec::new()
-                }
-            }
-            ProgressEvent::Message(text) => {
-                let appended = text.chars().count();
-                self.message.push_str(&text);
-                if should_flush(&self.message, appended) {
-                    self.take_message().into_iter().collect()
-                } else {
-                    Vec::new()
-                }
-            }
+            ProgressEvent::Thought(text) => self.push_text(true, text),
+            ProgressEvent::Message(text) => self.push_text(false, text),
             other => {
                 let mut out = self.flush_all();
                 out.push(other);
                 out
             }
+        }
+    }
+
+    fn push_text(&mut self, thought: bool, text: String) -> Vec<ProgressEvent> {
+        let appended = text.chars().count();
+        let buf = if thought {
+            &mut self.thought
+        } else {
+            &mut self.message
+        };
+        buf.push_str(&text);
+        if !should_flush(buf, appended) {
+            return Vec::new();
+        }
+        if thought {
+            self.take_thought().into_iter().collect()
+        } else {
+            self.take_message().into_iter().collect()
         }
     }
 

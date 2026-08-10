@@ -133,43 +133,55 @@ async fn proxy_request(
         }
     };
     match upstream.body(body).send().await {
-        Ok(mut response) => {
-            let status =
-                StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
-            let headers = response.headers().clone();
-            let (tx, rx) =
-                tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(8);
-            tokio::spawn(async move {
-                loop {
-                    match response.chunk().await {
-                        Ok(Some(chunk)) => {
-                            if tx.send(Ok(chunk)).await.is_err() {
-                                break;
-                            }
-                        }
-                        Ok(None) => break,
-                        Err(error) => {
-                            let _ = tx.send(Err(std::io::Error::other(error))).await;
-                            break;
-                        }
-                    }
-                }
-            });
-            let mut mapped = Response::builder().status(status);
-            for (name, value) in headers.iter() {
-                mapped = mapped.header(name, value);
-            }
-            mapped
-                .body(Body::from_stream(
-                    tokio_stream::wrappers::ReceiverStream::new(rx),
-                ))
-                .unwrap_or_else(|_| StatusCode::BAD_GATEWAY.into_response())
-        }
+        Ok(response) => map_upstream_response(response).await,
         Err(error) => (
             StatusCode::BAD_GATEWAY,
             Json(json!({"error": {"message": error.to_string()}})),
         )
             .into_response(),
+    }
+}
+
+async fn map_upstream_response(response: reqwest::Response) -> Response {
+    let status =
+        StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+    let headers = response.headers().clone();
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(8);
+    spawn_forward_response_chunks(response, tx);
+    let mut mapped = Response::builder().status(status);
+    for (name, value) in headers.iter() {
+        mapped = mapped.header(name, value);
+    }
+    mapped
+        .body(Body::from_stream(
+            tokio_stream::wrappers::ReceiverStream::new(rx),
+        ))
+        .unwrap_or_else(|_| StatusCode::BAD_GATEWAY.into_response())
+}
+
+fn spawn_forward_response_chunks(
+    response: reqwest::Response,
+    tx: tokio::sync::mpsc::Sender<Result<axum::body::Bytes, std::io::Error>>,
+) {
+    tokio::spawn(forward_response_chunks(response, tx));
+}
+
+async fn forward_response_chunks(
+    mut response: reqwest::Response,
+    tx: tokio::sync::mpsc::Sender<Result<axum::body::Bytes, std::io::Error>>,
+) {
+    loop {
+        let chunk = match response.chunk().await {
+            Ok(Some(chunk)) => chunk,
+            Ok(None) => break,
+            Err(error) => {
+                let _ = tx.send(Err(std::io::Error::other(error))).await;
+                break;
+            }
+        };
+        if tx.send(Ok(chunk)).await.is_err() {
+            break;
+        }
     }
 }
 
@@ -181,7 +193,7 @@ pub(super) fn layer(handover: Option<ListenHandover>) -> (Option<HandoverState>,
         .map(|(path, generation)| RetainedProxy::from_path(path, generation))
         .map(Arc::new);
     let state = HandoverState {
-        retained: retained,
+        retained,
         advertised: Some(listen.clone()),
         client: proxy_http_client(),
     };
@@ -205,42 +217,85 @@ pub(super) async fn proxy_retained_sessions(
         .and_then(|value| value.to_str().ok())
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    if let Some(advertised) = state.advertised.as_ref() {
-        let current = advertised.advertised_addr();
-        let service = advertised.service_addr();
-        if current != service {
-            // Old daemon left the client-facing service port. Idle keep-alives
-            // must ride to that service listen. A promoted warm-start daemon
-            // has service=:8318 and advertised=:8318 after cutover — do not
-            // proxy back to the dead warm-start port (that 502'd TUI as
-            // http://127.0.0.1:62486/v1/messages).
-            let keep_local = session_id.is_some_and(|id| {
-                state
-                    .retained
-                    .as_ref()
-                    .is_some_and(|retained| retained.owns(id) && retained.targets(current))
-            });
-            if !keep_local {
-                return proxy_request(&state.client, service, request).await;
-            }
-            return next.run(request).await;
+    match diverted_service_action(state, session_id, request).await {
+        DivertedService::NotDiverted(request) => {
+            proxy_or_run_retained(state, session_id, request, next).await
         }
+        DivertedService::RunLocal(request) => next.run(request).await,
+        DivertedService::Proxy(response) => response,
     }
+}
+
+enum DivertedService {
+    NotDiverted(Request),
+    RunLocal(Request),
+    Proxy(Response),
+}
+
+async fn diverted_service_action(
+    state: &HandoverState,
+    session_id: Option<&str>,
+    request: Request,
+) -> DivertedService {
+    let Some(advertised) = state.advertised.as_ref() else {
+        return DivertedService::NotDiverted(request);
+    };
+    let current = advertised.advertised_addr();
+    let service = advertised.service_addr();
+    if current == service {
+        return DivertedService::NotDiverted(request);
+    }
+    // Old daemon left the client-facing service port. Idle keep-alives
+    // must ride to that service listen. A promoted warm-start daemon
+    // has service=:8318 and advertised=:8318 after cutover — do not
+    // proxy back to the dead warm-start port (that 502'd TUI as
+    // http://127.0.0.1:62486/v1/messages).
+    if retain_session_locally(state, session_id, current) {
+        return DivertedService::RunLocal(request);
+    }
+    DivertedService::Proxy(proxy_request(&state.client, service, request).await)
+}
+
+async fn proxy_or_run_retained(
+    state: &HandoverState,
+    session_id: Option<&str>,
+    request: Request,
+    next: Next,
+) -> Response {
     let Some(retained) = state.retained.as_ref() else {
         return next.run(request).await;
     };
     let Some(session_id) = session_id else {
         return next.run(request).await;
     };
-    if retained.owns(session_id) {
-        if let Some(advertised) = state.advertised.as_ref()
-            && retained.targets(advertised.advertised_addr())
-        {
-            return next.run(request).await;
-        }
-        return retained.proxy(request).await;
+    if !retained.owns(session_id) {
+        return next.run(request).await;
     }
-    next.run(request).await
+    if retained_targets_advertised(retained, state.advertised.as_ref()) {
+        return next.run(request).await;
+    }
+    retained.proxy(request).await
+}
+
+fn retained_targets_advertised(
+    retained: &RetainedProxy,
+    advertised: Option<&ListenHandover>,
+) -> bool {
+    advertised.is_some_and(|handover| retained.targets(handover.advertised_addr()))
+}
+
+fn retain_session_locally(
+    state: &HandoverState,
+    session_id: Option<&str>,
+    current: std::net::SocketAddr,
+) -> bool {
+    let Some(id) = session_id else {
+        return false;
+    };
+    let Some(retained) = state.retained.as_ref() else {
+        return false;
+    };
+    retained.owns(id) && retained.targets(current)
 }
 
 fn is_hop_by_hop_header(name: &axum::http::HeaderName) -> bool {

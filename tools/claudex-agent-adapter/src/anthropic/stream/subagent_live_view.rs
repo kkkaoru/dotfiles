@@ -25,35 +25,44 @@ pub(super) struct SubAgentLiveView {
 impl SubAgentLiveView {
     pub fn ingest_sse(&mut self, sse: &str) {
         for payload in sse_json_payloads(sse) {
-            match payload.get("type").and_then(Value::as_str) {
-                Some("content_block_start") => {
-                    if payload["content_block"]["type"].as_str() == Some("server_tool_use")
-                        && let Some(name) = payload["content_block"]["name"].as_str()
-                    {
-                        self.visible_server_tools.push(name.to_owned());
-                    }
-                }
-                Some("content_block_delta") => match payload["delta"]["type"].as_str() {
-                    Some("thinking_delta") => {
-                        if let Some(delta) = payload["delta"]["thinking"].as_str() {
-                            self.visible_thinking.push_str(delta);
-                        }
-                    }
-                    Some("text_delta") => {
-                        if let Some(delta) = payload["delta"]["text"].as_str() {
-                            self.hidden_text.push_str(delta);
-                        }
-                    }
-                    _ => {}
-                },
-                Some("message_delta") => {
-                    if payload["delta"]["stop_reason"].as_str() == Some("end_turn") {
-                        self.saw_end_turn = true;
-                    }
-                }
-                Some("message_stop") => self.saw_message_stop = true,
-                _ => {}
-            }
+            self.ingest_payload(&payload);
+        }
+    }
+
+    fn ingest_payload(&mut self, payload: &Value) {
+        match payload.get("type").and_then(Value::as_str) {
+            Some("content_block_start") => self.ingest_block_start(payload),
+            Some("content_block_delta") => self.ingest_block_delta(payload),
+            Some("message_delta") => self.ingest_message_delta(payload),
+            Some("message_stop") => self.saw_message_stop = true,
+            _ => {}
+        }
+    }
+
+    fn ingest_block_start(&mut self, payload: &Value) {
+        if payload["content_block"]["type"].as_str() != Some("server_tool_use") {
+            return;
+        }
+        let Some(name) = payload["content_block"]["name"].as_str() else {
+            return;
+        };
+        self.visible_server_tools.push(name.to_owned());
+    }
+
+    fn ingest_block_delta(&mut self, payload: &Value) {
+        let Some(kind) = payload["delta"]["type"].as_str() else {
+            return;
+        };
+        match kind {
+            "thinking_delta" => append_str_field(&mut self.visible_thinking, payload, "thinking"),
+            "text_delta" => append_str_field(&mut self.hidden_text, payload, "text"),
+            _ => {}
+        }
+    }
+
+    fn ingest_message_delta(&mut self, payload: &Value) {
+        if payload["delta"]["stop_reason"].as_str() == Some("end_turn") {
+            self.saw_end_turn = true;
         }
     }
 
@@ -79,6 +88,12 @@ pub(super) fn sse_json_payloads(sse: &str) -> Vec<Value> {
         .filter_map(|line| line.strip_prefix("data: "))
         .filter_map(|data| serde_json::from_str(data).ok())
         .collect()
+}
+
+fn append_str_field(target: &mut String, payload: &Value, field: &str) {
+    if let Some(delta) = payload["delta"][field].as_str() {
+        target.push_str(delta);
+    }
 }
 
 #[cfg(test)]

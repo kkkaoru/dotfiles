@@ -257,7 +257,7 @@ mod tests {
         let response = acknowledge(&request);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let response: Value =
-            serde_json::from_str(&String::from_utf8(body.to_vec()).unwrap()).unwrap();
+            serde_json::from_slice(&body).unwrap();
         let text = response["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("previous session"));
         assert!(text.contains("Do not TaskStop"));
@@ -272,7 +272,7 @@ mod tests {
         let response = acknowledge(&request);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let response: Value =
-            serde_json::from_str(&String::from_utf8(body.to_vec()).unwrap()).unwrap();
+            serde_json::from_slice(&body).unwrap();
         let text = response["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("No assistant messages found"));
         assert!(text.contains("do not cascade TaskStop"));
@@ -285,7 +285,7 @@ mod tests {
         let response = acknowledge_with_text(&request, "   \n");
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let response: Value =
-            serde_json::from_str(&String::from_utf8(body.to_vec()).unwrap()).unwrap();
+            serde_json::from_slice(&body).unwrap();
         assert_eq!(response["content"][0]["text"], DEFAULT_NOTIFICATION_TEXT);
     }
 
@@ -298,7 +298,7 @@ mod tests {
         let response = acknowledge(&request);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let response: Value =
-            serde_json::from_str(&String::from_utf8(body.to_vec()).unwrap()).unwrap();
+            serde_json::from_slice(&body).unwrap();
         let text = response["content"][0]["text"].as_str().unwrap();
         assert_eq!(text, "same note");
     }
@@ -312,7 +312,7 @@ mod tests {
         let response = acknowledge(&request);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let response: Value =
-            serde_json::from_str(&String::from_utf8(body.to_vec()).unwrap()).unwrap();
+            serde_json::from_slice(&body).unwrap();
         let text = response["content"][0]["text"].as_str().unwrap();
         assert!(text.contains("historical previous-session task IDs"));
         assert!(text.contains("do not cascade TaskStop"));

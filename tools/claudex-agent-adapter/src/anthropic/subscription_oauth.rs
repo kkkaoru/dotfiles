@@ -92,6 +92,13 @@ fn default_credentials_path() -> Option<PathBuf> {
     std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".claude/.credentials.json"))
 }
 
+fn push_unique(candidates: &mut Vec<String>, model: String) {
+    if candidates.iter().any(|existing| existing == &model) {
+        return;
+    }
+    candidates.push(model);
+}
+
 /// Avoid spamming Claude Code logs when refresh is truly dead and every outer
 /// turn still arrives as a native Opus subscription request.
 fn warn_preflight_oauth_failover(exhausted_model: &str, failover_model: &str) {
@@ -176,25 +183,25 @@ impl Bridge {
             candidates.push(worker.model.clone());
         }
         for model in self.app.models() {
-            if !candidates.iter().any(|existing| existing == &model) {
-                candidates.push(model);
-            }
+            push_unique(&mut candidates, model);
         }
-        candidates.into_iter().find_map(|model| {
-            if self.subagent_provider_is_exhausted(&model) {
-                return None;
-            }
-            self.app.backend_kind_for_model(&model)?;
-            let effort = self
-                .model_catalog
-                .worker_effort_for_model(&model)
-                .map(str::to_owned)
-                .or_else(|| self.app.launch_scoped_effort(&model));
-            Some(UsageLimitFailover {
-                effort,
-                model,
-                route: RouteDecision::Provider,
-            })
+        candidates.into_iter().find_map(|model| self.provider_failover_candidate(model))
+    }
+
+    fn provider_failover_candidate(&self, model: String) -> Option<UsageLimitFailover> {
+        if self.subagent_provider_is_exhausted(&model) {
+            return None;
+        }
+        self.app.backend_kind_for_model(&model)?;
+        let effort = self
+            .model_catalog
+            .worker_effort_for_model(&model)
+            .map(str::to_owned)
+            .or_else(|| self.app.launch_scoped_effort(&model));
+        Some(UsageLimitFailover {
+            effort,
+            model,
+            route: RouteDecision::Provider,
         })
     }
 
@@ -213,25 +220,41 @@ impl Bridge {
         {
             Ok(response) => Ok(response),
             Err(error) if can_failover && is_subscription_auth_failure(&error) => {
-                self.note_provider_exhaustion(&error, None);
-                let Some(mut retry) = failover_request else {
-                    return Err(error);
-                };
-                let Some(failover) = self.subscription_auth_failover_for() else {
-                    return Err(error);
-                };
-                tracing::warn!(
-                    failover_model = %failover.model,
-                    "failing over outer non-stream turn after Claude subscription OAuth failure"
-                );
-                retry.model = failover.model;
-                let failover_effort = failover.effort.or(effort);
-                let input_tokens = u64::try_from(token_count(&retry)).unwrap_or(u64::MAX);
-                self.provider_messages(retry, input_tokens, failover_effort, is_subagent, false)
-                    .await
+                self.retry_after_subscription_auth_failure(
+                    error,
+                    failover_request,
+                    effort,
+                    is_subagent,
+                )
+                .await
             }
             Err(error) => Err(error),
         }
+    }
+
+    async fn retry_after_subscription_auth_failure(
+        self: &Arc<Self>,
+        error: anyhow::Error,
+        failover_request: Option<MessagesRequest>,
+        effort: Option<String>,
+        is_subagent: bool,
+    ) -> Result<Response<Body>> {
+        self.note_provider_exhaustion(&error, None);
+        let Some(mut retry) = failover_request else {
+            return Err(error);
+        };
+        let Some(failover) = self.subscription_auth_failover_for() else {
+            return Err(error);
+        };
+        tracing::warn!(
+            failover_model = %failover.model,
+            "failing over outer non-stream turn after Claude subscription OAuth failure"
+        );
+        retry.model = failover.model;
+        let failover_effort = failover.effort.or(effort);
+        let input_tokens = u64::try_from(token_count(&retry)).unwrap_or(u64::MAX);
+        self.provider_messages(retry, input_tokens, failover_effort, is_subagent, false)
+            .await
     }
 }
 

@@ -40,29 +40,29 @@ fn start_with_retained(
     manifest_config: &ServiceConfig,
 ) -> Result<u32> {
     let manifest_path = recovery_manifest::prepare(manifest_config)?;
-    spawn_adapter(
-        listen_config,
-        &listen_config.executable,
-        daemon_arguments(&listen_config.options),
-        &listen_config.codex_config_fingerprint,
-        &listen_config.service_config_fingerprint,
-        Some(&manifest_path),
+    spawn_adapter(SpawnRequest {
+        config: listen_config,
+        executable: &listen_config.executable,
+        arguments: daemon_arguments(&listen_config.options),
+        codex_config_fingerprint: &listen_config.codex_config_fingerprint,
+        service_config_fingerprint: &listen_config.service_config_fingerprint,
+        manifest_path: Some(&manifest_path),
         retained_path,
-        manifest_config.options.listen,
-    )
+        service_listen: manifest_config.options.listen,
+    })
 }
 
 pub(super) fn start_ephemeral_adapter(config: &ServiceConfig) -> Result<u32> {
-    spawn_adapter(
+    spawn_adapter(SpawnRequest {
         config,
-        &config.executable,
-        daemon_arguments(&config.options),
-        &config.codex_config_fingerprint,
-        &config.service_config_fingerprint,
-        None,
-        None,
-        config.options.listen,
-    )
+        executable: &config.executable,
+        arguments: daemon_arguments(&config.options),
+        codex_config_fingerprint: &config.codex_config_fingerprint,
+        service_config_fingerprint: &config.service_config_fingerprint,
+        manifest_path: None,
+        retained_path: None,
+        service_listen: config.options.listen,
+    })
 }
 
 pub(super) fn validate_recovery(
@@ -74,16 +74,16 @@ pub(super) fn validate_recovery(
 
 pub(super) fn start_recovery(config: &ServiceConfig, generation: &str) -> Result<RecoveryProcess> {
     let recovery = validate_recovery(config, generation)?;
-    let pid = spawn_adapter(
+    let pid = spawn_adapter(SpawnRequest {
         config,
-        &recovery.executable,
-        recovery.arguments,
-        &recovery.codex_config_fingerprint,
-        &recovery.service_config_fingerprint,
-        Some(&recovery.manifest_path),
-        None,
-        config.options.listen,
-    )?;
+        executable: &recovery.executable,
+        arguments: recovery.arguments,
+        codex_config_fingerprint: &recovery.codex_config_fingerprint,
+        service_config_fingerprint: &recovery.service_config_fingerprint,
+        manifest_path: Some(&recovery.manifest_path),
+        retained_path: None,
+        service_listen: config.options.listen,
+    })?;
     Ok(RecoveryProcess {
         pid,
         generation: recovery.generation,
@@ -99,16 +99,28 @@ pub(super) fn terminate_started_recovery(pid: u32) {
     super::daemon_process::terminate(pid);
 }
 
-fn spawn_adapter(
-    config: &ServiceConfig,
-    executable: &Path,
+struct SpawnRequest<'a> {
+    config: &'a ServiceConfig,
+    executable: &'a Path,
     arguments: Vec<std::ffi::OsString>,
-    codex_config_fingerprint: &str,
-    service_config_fingerprint: &str,
-    manifest_path: Option<&Path>,
-    retained_path: Option<&Path>,
+    codex_config_fingerprint: &'a str,
+    service_config_fingerprint: &'a str,
+    manifest_path: Option<&'a Path>,
+    retained_path: Option<&'a Path>,
     service_listen: std::net::SocketAddr,
-) -> Result<u32> {
+}
+
+fn spawn_adapter(request: SpawnRequest<'_>) -> Result<u32> {
+    let SpawnRequest {
+        config,
+        executable,
+        arguments,
+        codex_config_fingerprint,
+        service_config_fingerprint,
+        manifest_path,
+        retained_path,
+        service_listen,
+    } = request;
     let log_dir = config
         .log_path
         .parent()
@@ -234,6 +246,48 @@ fn close_file_descriptor(fd: i32) {
     }
 }
 
+#[cfg(unix)]
+#[cfg(test)]
+fn wait_until_exited(child: &mut std::process::Child, attempts: usize) -> bool {
+    for _ in 0..attempts {
+        match child.try_wait().expect("poll recovery child") {
+            Some(_) => return true,
+            None => std::thread::sleep(std::time::Duration::from_millis(10)),
+        }
+    }
+    false
+}
+
+#[cfg(unix)]
+#[cfg(test)]
+fn wait_for_ready_file(
+    path: &std::path::Path,
+    attempts: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    for _ in 0..attempts {
+        if std::fs::read_to_string(path).is_ok() {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    Err("session fixture was not ready".into())
+}
+
+#[cfg(unix)]
+#[cfg(test)]
+fn validate_detached_session(
+    path: &std::path::Path,
+    child_pid: u32,
+) -> Result<(), Box<dyn std::error::Error>> {
+    wait_for_ready_file(path, 40)?;
+    let pid = child_pid as libc::pid_t;
+    let session_id = unsafe { libc::getsid(pid) };
+    let process_group_id = unsafe { libc::getpgid(pid) };
+    assert_eq!(session_id, pid, "session id must be daemon pid");
+    assert_eq!(process_group_id, pid, "process group must be daemon pid");
+    Ok(())
+}
+
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
@@ -246,8 +300,6 @@ mod tests {
     use std::{
         fs,
         process::{Command, Stdio},
-        thread,
-        time::Duration,
     };
 
     #[cfg(unix)]
@@ -262,11 +314,8 @@ mod tests {
             .expect("spawn recovery terminate fixture");
         let pid = child.id();
         terminate_started_recovery(pid);
-        for _ in 0..50 {
-            if child.try_wait().expect("poll recovery child").is_some() {
-                return;
-            }
-            thread::sleep(Duration::from_millis(10));
+        if super::wait_until_exited(&mut child, 50) {
+            return;
         }
         let _ = child.kill();
         let _ = child.wait();
@@ -310,23 +359,7 @@ mod tests {
         configure_process_group(&mut command);
         let mut child = command.spawn().expect("spawn detached session fixture");
 
-        let validation = (|| -> Result<(), Box<dyn std::error::Error>> {
-            for _ in 0..40 {
-                if fs::read_to_string(&path).is_ok() {
-                    break;
-                }
-                thread::sleep(Duration::from_millis(25));
-            }
-            if fs::read_to_string(&path).is_err() {
-                return Err("session fixture was not ready".into());
-            }
-            let pid = child.id() as libc::pid_t;
-            let session_id = unsafe { libc::getsid(pid) };
-            let process_group_id = unsafe { libc::getpgid(pid) };
-            assert_eq!(session_id, pid, "session id must be daemon pid");
-            assert_eq!(process_group_id, pid, "process group must be daemon pid");
-            Ok(())
-        })();
+        let validation = super::validate_detached_session(&path, child.id());
 
         let _ = child.kill();
         let _ = child.wait();

@@ -85,22 +85,30 @@ impl SegmentBuilder {
             return self.stream_progress_text(delta, stream).await;
         }
         if self.is_subagent {
-            let Some(delta) = self.filter_subagent_live_delta(delta) else {
-                return Ok(());
-            };
-            let dump_hint = delta.contains("large tool output omitted");
-            // Including Command Code: streaming text_delta closes thinking and
-            // collapses CC 2.1 to repeating "Thought for Xs".
-            self.note_provider_turn_activity();
-            self.thinking
-                .progress_status_keep_open(&mut self.blocks, &delta, stream)
-                .await?;
-            if !dump_hint {
-                self.pending_answer.push_str(&delta);
-            }
-            return Ok(());
+            return self.stream_subagent_text_delta(delta, stream).await;
         }
         self.stream_answer_delta(delta, stream).await
+    }
+
+    async fn stream_subagent_text_delta(
+        &mut self,
+        delta: &str,
+        stream: Option<&StreamSender>,
+    ) -> Result<()> {
+        let Some(delta) = self.filter_subagent_live_delta(delta) else {
+            return Ok(());
+        };
+        let dump_hint = delta.contains("large tool output omitted");
+        // Including Command Code: streaming text_delta closes thinking and
+        // collapses CC 2.1 to repeating "Thought for Xs".
+        self.note_provider_turn_activity();
+        self.thinking
+            .progress_status_keep_open(&mut self.blocks, &delta, stream)
+            .await?;
+        if !dump_hint {
+            self.pending_answer.push_str(&delta);
+        }
+        Ok(())
     }
 
     pub(super) fn note_summarized_reasoning(&mut self, event: &Value) {
@@ -148,22 +156,30 @@ impl SegmentBuilder {
         if let Some(status) = latest_worker_status(raw) {
             return self.replace_live_worker_status(&status, stream).await;
         }
-        match self.filter_subagent_live_delta(raw) {
-            Some(delta) if delta.contains("large tool output omitted") => {
-                self.note_provider_turn_activity();
-                self.thinking
-                    .progress_status_keep_open(&mut self.blocks, &delta, stream)
-                    .await?;
-            }
-            Some(delta) => {
-                self.note_provider_turn_activity();
-                self.thinking
-                    .delta_text_coalesced(item_id, summary_index, &delta, &mut self.blocks, stream)
-                    .await?;
-            }
-            None => {}
+        if let Some(delta) = self.filter_subagent_live_delta(raw) {
+            self.emit_subagent_reasoning_delta(item_id, summary_index, &delta, stream)
+                .await?;
         }
         Ok(())
+    }
+
+    async fn emit_subagent_reasoning_delta(
+        &mut self,
+        item_id: &str,
+        summary_index: i64,
+        delta: &str,
+        stream: Option<&StreamSender>,
+    ) -> Result<()> {
+        self.note_provider_turn_activity();
+        if delta.contains("large tool output omitted") {
+            return self
+                .thinking
+                .progress_status_keep_open(&mut self.blocks, delta, stream)
+                .await;
+        }
+        self.thinking
+            .delta_text_coalesced(item_id, summary_index, delta, &mut self.blocks, stream)
+            .await
     }
 
     async fn replace_live_worker_status(
@@ -194,13 +210,17 @@ impl SegmentBuilder {
             return None;
         }
         if is_bulk_tool_dump(&stripped) {
-            if self.bulk_dump_hinted {
-                return None;
-            }
-            self.bulk_dump_hinted = true;
-            return Some("… large tool output omitted\n".to_owned());
+            return self.bulk_dump_hint();
         }
         Some(compact_live_prose(&stripped))
+    }
+
+    fn bulk_dump_hint(&mut self) -> Option<String> {
+        if self.bulk_dump_hinted {
+            return None;
+        }
+        self.bulk_dump_hinted = true;
+        Some("… large tool output omitted\n".to_owned())
     }
 
     async fn stream_answer_delta(
@@ -247,29 +267,7 @@ impl SegmentBuilder {
         stream: Option<&StreamSender>,
     ) -> Result<()> {
         if self.is_subagent {
-            let last_tool = self
-                .provider_tool_calls
-                .last()
-                .map(|(_, title)| compact_keepalive_title(title));
-            if !self.thinking.is_open() {
-                let resume = last_tool
-                    .as_deref()
-                    .filter(|title| !title.is_empty())
-                    .map(|title| format!("▶ {title}\n"))
-                    .unwrap_or_else(|| "\u{200b}".to_owned());
-                self.thinking
-                    .progress_status_keep_open(&mut self.blocks, &resume, stream)
-                    .await?;
-            }
-            return self
-                .thinking
-                .elapsed_keepalive(
-                    &mut self.blocks,
-                    self.turn_started_at.elapsed(),
-                    last_tool.as_deref(),
-                    stream,
-                )
-                .await;
+            return self.subagent_activity_keepalive(stream).await;
         }
         const HEARTBEAT: &str = "\u{200b}";
         if let Some((index, _)) = self.open_text_block {
@@ -278,6 +276,30 @@ impl SegmentBuilder {
         }
         self.thinking
             .activity_keepalive(&mut self.blocks, stream)
+            .await
+    }
+
+    async fn subagent_activity_keepalive(
+        &mut self,
+        stream: Option<&StreamSender>,
+    ) -> Result<()> {
+        let last_tool = self
+            .provider_tool_calls
+            .last()
+            .map(|(_, title)| compact_keepalive_title(title));
+        if !self.thinking.is_open() {
+            let resume = keepalive_resume_chrome(last_tool.as_deref());
+            self.thinking
+                .progress_status_keep_open(&mut self.blocks, &resume, stream)
+                .await?;
+        }
+        self.thinking
+            .elapsed_keepalive(
+                &mut self.blocks,
+                self.turn_started_at.elapsed(),
+                last_tool.as_deref(),
+                stream,
+            )
             .await
     }
 
@@ -332,4 +354,11 @@ fn compact_keepalive_title(title: &str) -> String {
     } else {
         head
     }
+}
+
+fn keepalive_resume_chrome(last_tool: Option<&str>) -> String {
+    last_tool
+        .filter(|title| !title.is_empty())
+        .map(|title| format!("▶ {title}\n"))
+        .unwrap_or_else(|| "\u{200b}".to_owned())
 }
