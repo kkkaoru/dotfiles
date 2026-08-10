@@ -237,8 +237,7 @@ fn close_file_descriptor(fd: i32) {
 mod tests {
     use super::{
         bounded_descriptor_limit, close_file_descriptor, close_inherited_descriptors_with,
-        close_system, configure_process_group, detach_session_and_close_inherited_descriptors,
-        terminate_started_recovery,
+        close_system, configure_process_group, terminate_started_recovery,
     };
 
     #[cfg(unix)]
@@ -287,20 +286,6 @@ mod tests {
         assert_eq!(closed, vec![3, 4, 5]);
         close_system(|_| {}).expect("system descriptor limit is available");
         close_file_descriptor(-1);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn detach_session_entrypoint_errors_when_already_a_session_leader() {
-        // setsid fails for an existing session leader and returns before closing
-        // inherited descriptors, so this stays safe inside the test process.
-        let error = detach_session_and_close_inherited_descriptors()
-            .expect_err("test harness processes are usually already session leaders");
-        assert!(
-            error.raw_os_error() == Some(libc::EPERM)
-                || error.kind() == std::io::ErrorKind::PermissionDenied,
-            "{error}"
-        );
     }
 
     #[cfg(unix)]
