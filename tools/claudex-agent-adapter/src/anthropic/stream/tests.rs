@@ -429,6 +429,61 @@ fn recognizes_cursor_thought_for_filler() {
         Duration::from_secs(5)
     );
     assert!(super::SUBAGENT_INITIAL_ACTIVITY_DELAY < super::INITIAL_ACTIVITY_DELAY);
+    assert_eq!(
+        super::types::stream_activity_delays(true),
+        (
+            super::SUBAGENT_INITIAL_ACTIVITY_DELAY,
+            super::ACTIVITY_KEEPALIVE_INTERVAL
+        )
+    );
+    assert_eq!(
+        super::types::stream_activity_delays(false),
+        (
+            super::ACTIVITY_KEEPALIVE_INTERVAL,
+            super::ACTIVITY_KEEPALIVE_INTERVAL
+        )
+    );
+}
+
+#[tokio::test]
+async fn honors_short_initial_activity_delay_before_steady_interval() {
+    let (_root, _app, bridge, session) = disconnect_fixture().await;
+    let dispatcher = crate::app_server::events::ThreadEventDispatcher::default();
+    let events = dispatcher.subscribe("thread");
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
+    let wait = bridge.wait_for_stream_segment_with_interval(StreamWaitInput {
+        session: &session,
+        events: Arc::new(events),
+        current_messages: &[],
+        system: &json!(null),
+        sender: &sender,
+        builder: SegmentBuilder::new(1).with_subagent(true),
+        activity_interval: Duration::from_secs(30),
+        initial_activity_delay: Duration::from_millis(15),
+    });
+    let complete = async {
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        dispatcher.dispatch(json!({
+            "method":"turn/completed",
+            "params":{"threadId":"thread","turn":{"status":"completed"}}
+        }));
+    };
+    let started = Instant::now();
+    let (result, ()) = tokio::join!(wait, complete);
+    result.expect("stream segment");
+    drop(sender);
+    let mut output = String::new();
+    while let Some(frame) = receiver.recv().await {
+        output.push_str(&String::from_utf8_lossy(&frame.expect("frame")));
+    }
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "short initial delay must not wait for the 30s steady interval"
+    );
+    assert!(
+        output.contains('\u{200b}') || output.contains("waiting for provider"),
+        "first keepalive must fire on the short initial delay: {output}"
+    );
 }
 
 #[test]
@@ -1453,6 +1508,7 @@ async fn hidden_provider_events_do_not_postpone_visible_activity() {
         sender: &sender,
         builder: SegmentBuilder::new(1),
         activity_interval: Duration::from_millis(10),
+        initial_activity_delay: Duration::from_millis(10),
     });
     let dispatch = dispatch_hidden_events(&dispatcher);
     let (result, ()) = tokio::join!(wait, dispatch);
@@ -1508,6 +1564,7 @@ async fn reports_a_closed_provider_event_stream() {
             sender: &sender,
             builder: SegmentBuilder::new(1),
             activity_interval: Duration::from_secs(1),
+            initial_activity_delay: Duration::from_secs(1),
         })
         .await;
     let Err(error) = result else {
@@ -1532,6 +1589,7 @@ async fn classifies_a_dead_provider_stream_closure_for_one_retry() {
             sender: &sender,
             builder: SegmentBuilder::new(1),
             activity_interval: Duration::from_secs(1),
+            initial_activity_delay: Duration::from_secs(1),
         })
         .await;
     assert!(matches!(
@@ -1559,6 +1617,7 @@ async fn retries_context_window_errors_only_before_committed_output() {
             sender: &sender,
             builder: SegmentBuilder::new(1),
             activity_interval: Duration::from_secs(1),
+            initial_activity_delay: Duration::from_secs(1),
         })
         .await
         .expect("context error should request retry");
@@ -1583,6 +1642,7 @@ async fn retries_context_window_errors_only_before_committed_output() {
             sender: &sender,
             builder: SegmentBuilder::new(1),
             activity_interval: Duration::from_secs(1),
+            initial_activity_delay: Duration::from_secs(1),
         })
         .await;
     let Err(error) = result else {
@@ -1887,6 +1947,7 @@ async fn subagent_stream_keeps_the_provider_after_sse_disconnect() {
             sender: &sender,
             builder: SegmentBuilder::for_turn(1, true, "meta/muse-spark-1.2-contributor"),
             activity_interval: Duration::from_millis(50),
+            initial_activity_delay: Duration::from_millis(50),
         })
         .await
         .expect("subagent segment after SSE close");

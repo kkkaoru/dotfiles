@@ -34,7 +34,7 @@ mod turn;
 mod types;
 pub(super) mod usage_limit;
 pub(in crate::anthropic) use turn::StreamTurn;
-use types::{StreamEventState, StreamWaitResult, reset_activity_deadline};
+use types::{StreamEventState, StreamWaitResult, reset_activity_deadline, stream_activity_delays};
 pub(super) use types::{StreamWaitInput, ToolCall, is_provider_stream_closed};
 
 use builder::SegmentBuilder;
@@ -99,7 +99,8 @@ impl Bridge {
         sender: &StreamSender,
         builder: SegmentBuilder,
     ) -> Result<StreamTurn> {
-        let activity_interval = ACTIVITY_KEEPALIVE_INTERVAL;
+        let (initial_activity_delay, activity_interval) =
+            stream_activity_delays(builder.is_subagent);
         self.wait_for_stream_segment_with_interval(StreamWaitInput {
             session,
             events,
@@ -108,6 +109,7 @@ impl Bridge {
             sender,
             builder,
             activity_interval,
+            initial_activity_delay,
         })
         .await
     }
@@ -127,10 +129,11 @@ impl Bridge {
             sender,
             mut builder,
             activity_interval,
+            initial_activity_delay,
         } = input;
         // Emit keepalive content during silence to avoid timeout while preserving
         // visible progress semantics during active output.
-        let mut activity_deadline = Box::pin(sleep(activity_interval));
+        let mut activity_deadline = Box::pin(sleep(initial_activity_delay));
         let mut sse = Some(sender);
         loop {
             let wait = match self

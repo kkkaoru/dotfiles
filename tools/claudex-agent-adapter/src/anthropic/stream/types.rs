@@ -23,6 +23,10 @@ pub(in crate::anthropic) struct StreamWaitInput<'a> {
     pub(in crate::anthropic::stream) sender: &'a StreamSender,
     pub(in crate::anthropic::stream) builder: SegmentBuilder,
     pub(in crate::anthropic::stream) activity_interval: Duration,
+    /// First silence before keepalive; SubAgents use a shorter delay than the
+    /// steady `activity_interval` so mid-turn provider quiet does not freeze
+    /// Claude Code on Nucleating / Thought-for chrome.
+    pub(in crate::anthropic::stream) initial_activity_delay: Duration,
 }
 
 pub(in crate::anthropic::stream) enum StreamWaitResult {
@@ -50,4 +54,16 @@ pub(in crate::anthropic::stream) fn reset_activity_deadline(
     if is_visible_activity_event(event) {
         deadline.as_mut().reset(Instant::now() + interval);
     }
+}
+
+pub(in crate::anthropic::stream) fn stream_activity_delays(
+    is_subagent: bool,
+) -> (Duration, Duration) {
+    let interval = super::ACTIVITY_KEEPALIVE_INTERVAL;
+    let initial = if is_subagent {
+        super::SUBAGENT_INITIAL_ACTIVITY_DELAY
+    } else {
+        interval
+    };
+    (initial, interval)
 }
