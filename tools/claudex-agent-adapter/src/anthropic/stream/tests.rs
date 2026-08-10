@@ -3822,6 +3822,74 @@ async fn retry_after_provider_failure_requires_closed_stream_and_dead_model() {
 }
 
 #[tokio::test]
+async fn drive_stream_retries_provider_failure_onto_a_live_sibling_route() {
+    let (_root, app, _seed_bridge, _seed_session) =
+        retryable_drive_fixture_with_output().await;
+    let backend = AgentBackend::routed(vec![
+        (
+            "main".to_owned(),
+            AgentBackend::grok(GrokAcp::stopped_for_test()),
+        ),
+        ("retry-target".to_owned(), AgentBackend::codex(app)),
+    ]);
+    let bridge = Arc::new(Bridge::new_with_backend(backend, "main".to_owned()));
+    assert!(!bridge.app.model_is_alive("main"));
+    assert!(bridge.app.model_is_alive("retry-target"));
+    let slots = Arc::new(Semaphore::new(2));
+    let session = Arc::new(Session {
+        thread_id: "0:dead".to_owned(),
+        model: "main".to_owned(),
+        disabled_subagent_models: Default::default(),
+        signature: Arc::from("signature"),
+        transcript: Mutex::new(Vec::new()),
+        pending_tools: Mutex::new(HashMap::new()),
+        consumed_tool_ids: Mutex::new(HashSet::new()),
+        external_tool_names: HashMap::new(),
+        client_user_id: None,
+        claude_session_id: None,
+        gate: Arc::new(Mutex::new(())),
+        last_activity: std::sync::Mutex::new(Instant::now()),
+        pending_since: std::sync::Mutex::new(None),
+        _slot: slots.try_acquire_owned().expect("session slot"),
+    });
+    bridge.sessions.lock().await.push(Arc::clone(&session));
+    let dispatcher = ThreadEventDispatcher::default();
+    let events = dispatcher.subscribe("0:dead");
+    dispatcher.close();
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
+    let mut request = drive_request();
+    request.model = "retry-target".to_owned();
+    let drive = Arc::clone(&bridge).drive_stream(
+        drive_turn(
+            session,
+            events,
+            Vec::new(),
+            Some(ContextRetry {
+                request,
+                effort: Some("high".to_owned()),
+                advisor_model: None,
+                collaborator_model: None,
+            }),
+        )
+        .await,
+        sender,
+        SegmentBuilder::for_turn(1, false, "main"),
+        None,
+    );
+    tokio::time::timeout(Duration::from_secs(12), drive)
+        .await
+        .expect("provider-failure drive retry must finish promptly");
+    let mut output = String::new();
+    while let Some(frame) = receiver.recv().await {
+        output.push_str(&String::from_utf8_lossy(&frame.expect("frame")));
+    }
+    assert!(
+        output.contains("retried answer") || output.contains("message_stop"),
+        "provider failure must resume on the live sibling route: {output}"
+    );
+}
+
+#[tokio::test]
 async fn drive_stream_reports_usage_limit_without_a_sibling_provider() {
     let (root, _app, bridge, session) = disconnect_fixture().await;
     let bridge = Arc::new(bridge.with_usage_limit_cache_home(root.path()));
