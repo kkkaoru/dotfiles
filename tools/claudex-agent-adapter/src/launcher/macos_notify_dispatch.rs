@@ -4,6 +4,21 @@ use anyhow::{Context, Result, bail};
 
 use super::macos_notify::{Event, post_in_process};
 
+/// Opt-in gate for user-visible banners. ensure/mcp stay silent unless
+/// `claudex install` / `claudex-hot-swap` export this.
+pub(crate) const MACOS_NOTIFY_ENV: &str = "CLAUDEX_MACOS_NOTIFY";
+
+pub(super) fn notifications_enabled() -> bool {
+    match std::env::var_os(MACOS_NOTIFY_ENV)
+        .as_deref()
+        .and_then(|value| value.to_str())
+    {
+        Some("0" | "false" | "FALSE" | "no" | "NO") => false,
+        Some("1" | "true" | "TRUE" | "yes" | "YES") => true,
+        _ => cfg!(test),
+    }
+}
+
 pub(super) fn post(cache: &Path, listen: &SocketAddr, event: Event) {
     if delegate_post(cache, &event) {
         return;

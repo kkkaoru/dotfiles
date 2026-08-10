@@ -247,10 +247,16 @@ pub(super) fn deliver_status(status: ExitStatus) -> Result<()> {
 }
 
 pub(super) fn post(cache: &Path, listen: &SocketAddr, event: Event) {
+    if !super::macos_notify_dispatch::notifications_enabled() {
+        return;
+    }
     super::macos_notify_dispatch::post(cache, listen, event);
 }
 
 pub(super) fn post_in_process(cache: &Path, listen: &SocketAddr, event: Event) {
+    if !super::macos_notify_dispatch::notifications_enabled() {
+        return;
+    }
     let lock_path = launcher_logs::hot_swap_notify_lock_path(cache);
     let _lock = match launcher_lock::acquire(&lock_path) {
         Ok(lock) => lock,

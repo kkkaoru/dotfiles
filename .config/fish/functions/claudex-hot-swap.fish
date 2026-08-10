@@ -36,7 +36,8 @@ function claudex-hot-swap --description 'Replace an idle claudex adapter on the 
 
     set -l build (command "$adapter" build-id)
     echo "claudex-hot-swap: replacing $listen with $build ($provider_config)" >&2
-    set -l url (command "$adapter" hot-swap --provider-config "$provider_config" --listen "$listen")
+    # User-visible banner only for this explicit swap (not ensure/mcp storms).
+    set -l url (env CLAUDEX_MACOS_NOTIFY=1 command "$adapter" hot-swap --provider-config "$provider_config" --listen "$listen")
     or return $status
     echo "claudex-hot-swap: active listener $url" >&2
 

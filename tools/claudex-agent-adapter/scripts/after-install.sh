@@ -47,6 +47,10 @@ if [ ! -x "$hot_swap" ]; then
   exit 0
 fi
 
+# Opt-in macOS banner for this intentional swap only. ensure/mcp/waiters stay
+# silent so multi-listen replace storms cannot spam Notification Center.
+export CLAUDEX_MACOS_NOTIFY=1
+
 if ! "$hot_swap"; then
   echo "claudex after-install: hot-swap exited $?; idle waiter may need a later claudex / claudex-hot-swap" >&2
 fi

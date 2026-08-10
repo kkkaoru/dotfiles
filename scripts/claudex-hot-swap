@@ -40,7 +40,8 @@ fi
 
 BUILD=$("$ADAPTER" build-id)
 echo "claudex-hot-swap: replacing $LISTEN with $BUILD ($PROVIDER_CONFIG)" >&2
-URL=$("$ADAPTER" hot-swap --provider-config "$PROVIDER_CONFIG" --listen "$LISTEN")
+# User-visible banner only for this explicit swap (not ensure/mcp storms).
+URL=$(CLAUDEX_MACOS_NOTIFY=1 "$ADAPTER" hot-swap --provider-config "$PROVIDER_CONFIG" --listen "$LISTEN")
 echo "claudex-hot-swap: active listener $URL" >&2
 
 if command -v curl >/dev/null 2>&1; then

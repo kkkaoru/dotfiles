@@ -386,3 +386,47 @@ fn corrupt_dedup_state_does_not_block_the_next_notification() {
     post(root.path(), &listen, complete("abc"));
     assert_eq!(events.take(), vec![complete("abc")]);
 }
+
+#[test]
+fn post_respects_macos_notify_opt_out_even_in_tests() {
+    let _guard = NotifyEnvGuard::push();
+    unsafe {
+        std::env::set_var(super::super::macos_notify_dispatch::MACOS_NOTIFY_ENV, "0")
+    };
+    let root = tempfile::tempdir().expect("notify cache");
+    let events = TestEvents::capture();
+    post(root.path(), &listen(), complete("gated"));
+    assert!(
+        events.take().is_empty(),
+        "CLAUDEX_MACOS_NOTIFY=0 must suppress banners"
+    );
+    assert!(
+        !root.path().join("hot-swap-notify.json").exists(),
+        "opted-out posts must not write dedupe state"
+    );
+}
+
+struct NotifyEnvGuard {
+    previous: Option<std::ffi::OsString>,
+}
+
+impl NotifyEnvGuard {
+    fn push() -> Self {
+        Self {
+            previous: std::env::var_os(super::super::macos_notify_dispatch::MACOS_NOTIFY_ENV),
+        }
+    }
+}
+
+impl Drop for NotifyEnvGuard {
+    fn drop(&mut self) {
+        match &self.previous {
+            Some(value) => unsafe {
+                std::env::set_var(super::super::macos_notify_dispatch::MACOS_NOTIFY_ENV, value)
+            },
+            None => unsafe {
+                std::env::remove_var(super::super::macos_notify_dispatch::MACOS_NOTIFY_ENV)
+            },
+        }
+    }
+}
