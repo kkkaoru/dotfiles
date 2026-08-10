@@ -94,40 +94,31 @@ fn deliver_status_accepts_success_and_rejects_failure() {
 }
 
 #[test]
-fn same_build_and_kind_are_not_emitted_twice() {
-    let first_waiting = waiting("abc", 1);
+fn only_swap_complete_notifies_and_dedupes_same_build() {
     let first_complete = complete("abc");
     assert!(
-        should_emit(&first_waiting, None),
-        "first waiting must notify"
+        !should_emit(&waiting("abc", 1), None),
+        "waiting must stay silent"
     );
     assert!(
-        !should_emit(&first_waiting, Some(&LastNotify::from(&first_waiting))),
-        "duplicate waiting for the same build must not notify"
+        !should_emit(&live("abc"), None),
+        "live ready must stay silent"
     );
     assert!(
-        should_emit(&live("abc"), Some(&LastNotify::from(&first_waiting))),
-        "live ready after waiting must still notify"
-    );
-    assert!(
-        !should_emit(&live("abc"), Some(&LastNotify::from(&live("abc")))),
-        "duplicate live ready for the same build must not notify"
-    );
-    assert!(
-        should_emit(&first_complete, Some(&LastNotify::from(&live("abc")))),
-        "swap complete after live ready must still notify"
-    );
-    assert!(
-        should_emit(&first_complete, Some(&LastNotify::from(&first_waiting))),
-        "swap complete after waiting must still notify"
+        should_emit(&first_complete, None),
+        "first swap complete must notify"
     );
     assert!(
         !should_emit(&first_complete, Some(&LastNotify::from(&first_complete))),
         "duplicate swap complete for the same build must not notify"
     );
     assert!(
-        should_emit(&waiting("def", 2), Some(&LastNotify::from(&first_complete))),
-        "a newer build with no cooldown timestamp must still notify"
+        !should_emit(&waiting("def", 2), Some(&LastNotify::from(&first_complete))),
+        "waiting for a newer build must stay silent"
+    );
+    assert!(
+        should_emit(&complete("def"), Some(&LastNotify::from(&first_complete))),
+        "a newer build complete with no cooldown timestamp may notify"
     );
 }
 
@@ -137,57 +128,59 @@ fn rapid_rebuilds_on_the_same_port_are_suppressed_until_cooldown() {
     last.emitted_unix = 1_700_000_000;
     assert!(
         !should_emit_at(&waiting("def", 2), Some(&last), last.emitted_unix + 30),
-        "a newer build within 5 minutes must not spam waiting"
+        "waiting never notifies"
     );
     assert!(
         !should_emit_at(&complete("def"), Some(&last), last.emitted_unix + 60),
         "a newer build within 5 minutes must not spam swap complete"
     );
     assert!(
-        should_emit_at(
-            &waiting("def", 2),
-            Some(&last),
-            last.emitted_unix + RAPID_REBUILD_COOLDOWN_SECS
-        ),
-        "after the quiet gap a newer build may notify again"
-    );
-    assert!(
-        should_emit_at(
+        !should_emit_at(
             &waiting("def", 2),
             Some(&last),
             last.emitted_unix + RAPID_REBUILD_COOLDOWN_SECS + 1
         ),
-        "past the quiet gap a newer build may notify again"
+        "waiting stays silent even after the quiet gap"
+    );
+    assert!(
+        should_emit_at(
+            &complete("def"),
+            Some(&last),
+            last.emitted_unix + RAPID_REBUILD_COOLDOWN_SECS + 1
+        ),
+        "past the quiet gap a newer build complete may notify again"
     );
 }
 
 #[test]
-fn same_build_and_kind_are_suppressed_even_on_different_listen() {
-    let previous = LastNotify::from(&waiting("abc", 1));
+fn waiting_and_live_never_notify_even_on_different_listen() {
+    let previous = LastNotify::from(&complete("abc"));
     let moved = Event::WaitingForIdle {
         listen: "127.0.0.1:9999".to_owned(),
         build_id: "abc".to_owned(),
         waiter_pid: 2,
     };
-    assert!(
-        !should_emit_at(&moved, Some(&previous), previous.emitted_unix + 1),
-        "same build/kind must stay quiet even when listen text differs"
-    );
+    assert!(!should_emit_at(&moved, Some(&previous), previous.emitted_unix + 1));
+    assert!(!should_emit_at(&live("abc"), Some(&previous), previous.emitted_unix + 1));
 }
 
 #[test]
-fn same_build_kind_progression_still_notifies_during_cooldown_window() {
+fn same_build_waiting_live_complete_collapse_to_one_complete() {
     let mut last = LastNotify::from(&waiting("abc", 1));
     last.emitted_unix = 1_700_000_000;
     assert!(
-        should_emit_at(&live("abc"), Some(&last), last.emitted_unix + 5),
-        "Waiting → Live on the same build must still notify"
+        !should_emit_at(&live("abc"), Some(&last), last.emitted_unix + 5),
+        "Waiting → Live must not notify"
     );
-    last = LastNotify::from(&live("abc"));
-    last.emitted_unix = 1_700_000_005;
     assert!(
         should_emit_at(&complete("abc"), Some(&last), last.emitted_unix + 5),
-        "Live → Complete on the same build must still notify"
+        "Complete may notify once if only Waiting/Live was recorded"
+    );
+    last = LastNotify::from(&complete("abc"));
+    last.emitted_unix = 1_700_000_010;
+    assert!(
+        !should_emit_at(&complete("abc"), Some(&last), last.emitted_unix + 5),
+        "second Complete for the same build must stay quiet"
     );
 }
 
@@ -206,7 +199,7 @@ fn same_build_does_not_regress_from_complete_to_waiting() {
 }
 
 #[test]
-fn post_emits_waiting_then_complete_once_each() {
+fn post_emits_only_one_complete_for_waiting_live_complete_flow() {
     let root = tempfile::tempdir().expect("notify cache");
     let listen = listen();
     let events = TestEvents::capture();
@@ -218,8 +211,8 @@ fn post_emits_waiting_then_complete_once_each() {
     post(root.path(), &listen, complete("abc"));
     assert_eq!(
         events.take(),
-        vec![waiting("abc", 9), live("abc"), complete("abc")],
-        "busy fallback must notify live ready, then one complete after canonical replace"
+        vec![complete("abc")],
+        "same build must notify swap complete once, never waiting/live"
     );
 }
 
@@ -250,8 +243,8 @@ fn post_records_the_event_even_when_osascript_cannot_start() {
             "osascript",
         ))
     });
-    post(root.path(), &listen(), waiting("dead", 1));
-    assert_eq!(spawn.take_events(), vec![waiting("dead", 1)]);
+    post(root.path(), &listen(), complete("dead"));
+    assert_eq!(spawn.take_events(), vec![complete("dead")]);
 }
 
 #[test]
@@ -330,6 +323,6 @@ fn corrupt_dedup_state_does_not_block_the_next_notification() {
     .expect("corrupt dedup state");
     assert!(read_last(root.path(), &listen).is_none());
     let events = TestEvents::capture();
-    post(root.path(), &listen, waiting("abc", 3));
-    assert_eq!(events.take(), vec![waiting("abc", 3)]);
+    post(root.path(), &listen, complete("abc"));
+    assert_eq!(events.take(), vec![complete("abc")]);
 }

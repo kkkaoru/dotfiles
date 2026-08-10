@@ -151,25 +151,20 @@ pub(super) fn should_emit(event: &Event, last: Option<&LastNotify>) -> bool {
     should_emit_at(event, last, now_unix())
 }
 
-fn kind_advances(from: NotifyKind, to: NotifyKind) -> bool {
-    matches!(
-        (from, to),
-        (NotifyKind::Waiting, NotifyKind::Live)
-            | (NotifyKind::Waiting, NotifyKind::Complete)
-            | (NotifyKind::Live, NotifyKind::Complete)
-    )
-}
-
 pub(super) fn should_emit_at(event: &Event, last: Option<&LastNotify>, now_unix: u64) -> bool {
+    // Waiting/Live were notifying alongside Complete for the same build_id
+    // (three banners per install). Only swap-complete is user-facing now.
+    if event.kind() != NotifyKind::Complete {
+        return false;
+    }
     let Some(last) = last else {
         return true;
     };
     if last.build_id == event.build_id() {
-        // One install may advance Waiting → Live → Complete. Never regress
-        // (Complete → Waiting) or repeat the same kind for that build.
-        return kind_advances(last.kind, event.kind());
+        // One Complete per build. If an older binary recorded Waiting/Live only,
+        // still allow the eventual Complete once.
+        return last.kind != NotifyKind::Complete;
     }
-    // Newer build within the quiet gap: stay quiet (burst cargo install).
     if last.emitted_unix > 0
         && now_unix.saturating_sub(last.emitted_unix) < RAPID_REBUILD_COOLDOWN_SECS
     {

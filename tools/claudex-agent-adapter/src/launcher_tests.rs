@@ -626,21 +626,9 @@ mod tests {
             .await
             .expect("busy hot-swap should arm a waiter and return the current-build fallback");
         assert_eq!(url, fallback.base_url());
-        assert_eq!(
-            events.take(),
-            vec![
-                macos_notify::Event::WaitingForIdle {
-                    listen: busy.options.listen.to_string(),
-                    build_id: env!("CLAUDEX_BUILD_ID").to_owned(),
-                    waiter_pid: 4242,
-                },
-                macos_notify::Event::LiveReady {
-                    listen: fallback_listen.to_string(),
-                    build_id: env!("CLAUDEX_BUILD_ID").to_owned(),
-                    waiting: busy.options.listen.to_string(),
-                },
-            ],
-            "busy hot-swap must notify waiting and that the live generation is ready now"
+        assert!(
+            events.take().is_empty(),
+            "busy hot-swap must not macOS-notify waiting/live; only swap-complete alerts"
         );
         let pending = pending_hot_swap::read_state_for_tests(&busy)
             .expect("read pending hot-swap")

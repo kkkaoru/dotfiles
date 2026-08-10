@@ -55,14 +55,9 @@ fn arms_once_per_live_build_and_respawns_stale_waiters() {
     let events = super::super::macos_notify::TestEvents::capture();
     let first = arm_with(&config, |_| Ok(4242), |_| false).expect("first arm");
     assert_eq!(first, ArmOutcome::Spawned { pid: 4242 });
-    assert_eq!(
-        events.take(),
-        vec![super::super::macos_notify::Event::WaitingForIdle {
-            listen: "127.0.0.1:8318".to_owned(),
-            build_id: env!("CLAUDEX_BUILD_ID").to_owned(),
-            waiter_pid: 4242,
-        }],
-        "new waiter must notify that the build is waiting for idle"
+    assert!(
+        events.take().is_empty(),
+        "arming a waiter must not macOS-notify; only swap-complete alerts"
     );
     let again = arm_with(&config, |_| Ok(4343), |pid| pid == 4242).expect("reuse live waiter");
     assert_eq!(again, ArmOutcome::AlreadyArmed { pid: 4242 });
