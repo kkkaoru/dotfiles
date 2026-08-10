@@ -783,6 +783,8 @@ async fn ensure_running_replaces_the_renamed_legacy_daemon() {
         .args(["serve", "--model", "legacy-model"])
         .args(["--listen", &format!("127.0.0.1:{port}")])
         .env("HOME", home.path())
+        .env_remove("CARGO_HOME")
+        .env("CLAUDEX_ADAPTER_EXECUTABLE", &legacy_binary)
         .env("ANTHROPIC_AUTH_TOKEN", "claudex-local")
         .env("CLAUDEX_CODEX_PROGRAM", env!("CARGO_BIN_EXE_codex-mock"))
         .spawn()
@@ -807,6 +809,8 @@ async fn ensure_running_replaces_the_renamed_legacy_daemon() {
         .args(["--subscription-max-processes", "20"])
         .args(["--subscription-timeout-minutes", "120"])
         .env("HOME", home.path())
+        .env_remove("CARGO_HOME")
+        .env("CLAUDEX_ADAPTER_EXECUTABLE", &current_binary)
         .env("ANTHROPIC_AUTH_TOKEN", "claudex-local")
         .env("CLAUDEX_CODEX_PROGRAM", env!("CARGO_BIN_EXE_codex-mock"))
         .output()
@@ -890,6 +894,11 @@ fn ensure_running_rejects_non_loopback_without_a_real_token() {
         .args(["ensure", "--model", "test-main-model"])
         .args(["--listen", "0.0.0.0:8318"])
         .env("HOME", home.path())
+        .env_remove("CARGO_HOME")
+        .env(
+            "CLAUDEX_ADAPTER_EXECUTABLE",
+            env!("CARGO_BIN_EXE_claudex-agent-adapter"),
+        )
         .env("ANTHROPIC_AUTH_TOKEN", "claudex-local")
         .output()
         .expect("run rejected ensure command");
@@ -906,6 +915,11 @@ async fn ensure_running_connects_through_loopback_for_an_exposed_listener() {
         .args(["ensure", "--model", "test-main-model"])
         .args(["--listen", &format!("0.0.0.0:{port}")])
         .env("HOME", home.path())
+        .env_remove("CARGO_HOME")
+        .env(
+            "CLAUDEX_ADAPTER_EXECUTABLE",
+            env!("CARGO_BIN_EXE_claudex-agent-adapter"),
+        )
         .env("ANTHROPIC_AUTH_TOKEN", "real-token")
         .env("CLAUDEX_CODEX_PROGRAM", env!("CARGO_BIN_EXE_codex-mock"))
         .output()
@@ -1289,6 +1303,13 @@ fn common_command(home: &TempDir, _port: u16, _max_processes: &str) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_claudex-agent-adapter"));
     command
         .env("HOME", home.path())
+        // Host CARGO_HOME would make resolve_service_executable swap onto the
+        // developer's ~/.cargo/bin image and break fixture isolation.
+        .env_remove("CARGO_HOME")
+        .env(
+            "CLAUDEX_ADAPTER_EXECUTABLE",
+            env!("CARGO_BIN_EXE_claudex-agent-adapter"),
+        )
         .env("ANTHROPIC_AUTH_TOKEN", "claudex-local")
         .env("CLAUDEX_CODEX_PROGRAM", env!("CARGO_BIN_EXE_codex-mock"));
     command
