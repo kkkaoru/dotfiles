@@ -349,3 +349,15 @@ fn background_handoff_text_matches_the_native_launch_count() {
         "3 background agents launched; the main prompt is ready."
     );
 }
+
+#[test]
+fn async_launch_results_ignore_empty_array_content() {
+    assert!(
+        async_launch_tool_results(&json!({
+            "role":"user",
+            "content":[{"type":"tool_result","tool_use_id":"x","content":[]}]
+        }))
+        .is_none()
+    );
+    assert!(strict_result_text(&json!([])).is_none());
+}

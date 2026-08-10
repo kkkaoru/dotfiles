@@ -1208,4 +1208,91 @@ mod tests {
         let similarity = scope_similarity("ab cd audit", "audit test");
         assert!(similarity == 1);
     }
+
+    #[test]
+    fn merge_launches_keeps_status_when_observed_status_is_blank() {
+        let mut launches = vec![LaunchRecord {
+            key: "tool-a".to_owned(),
+            recipient: "worker-a".to_owned(),
+            scope: "Audit rust".to_owned(),
+            model: Some("gpt-test".to_owned()),
+            status: "active".to_owned(),
+        }];
+        super::records::merge_launches(
+            &mut launches,
+            std::iter::once(&LaunchRecord {
+                key: "tool-a".to_owned(),
+                recipient: "worker-a".to_owned(),
+                scope: "Audit rust".to_owned(),
+                model: None,
+                status: String::new(),
+            }),
+        );
+        assert_eq!(launches[0].status, "active");
+        assert_eq!(launches[0].model.as_deref(), Some("gpt-test"));
+    }
+
+    #[test]
+    fn apply_transcript_skips_messages_without_content_and_unknown_status_ids() {
+        let mut launches = vec![LaunchRecord {
+            key: "tool-a".to_owned(),
+            recipient: "worker-a".to_owned(),
+            scope: "Audit rust".to_owned(),
+            model: None,
+            status: "active".to_owned(),
+        }];
+        apply_transcript(
+            &mut launches,
+            &[
+                json!({"role":"user"}),
+                json!({"role":"assistant","content":[{"type":"tool_use","name":"Agent"}]}),
+                json!({"role":"assistant","content":[{"type":"tool_use","id":"tool-b"}]}),
+                json!({
+                    "role":"user",
+                    "content":"<task-id>missing-task</task-id><status>failed</status>"
+                }),
+                json!({
+                    "role":"user",
+                    "content":"Agent \"ghost-worker\" had no active task"
+                }),
+            ],
+        );
+        assert_eq!(launches[0].status, "active");
+        assert_eq!(launches.len(), 1);
+    }
+
+    #[test]
+    fn apply_transcript_marks_status_by_launch_key() {
+        let mut launches = vec![LaunchRecord {
+            key: "tool-a".to_owned(),
+            recipient: "worker-a".to_owned(),
+            scope: "Audit rust".to_owned(),
+            model: None,
+            status: "active".to_owned(),
+        }];
+        apply_transcript(
+            &mut launches,
+            &[json!({
+                "role":"user",
+                "content":"<task-id>tool-a</task-id><status>timeout</status>"
+            })],
+        );
+        assert_eq!(launches[0].status, "timeout");
+    }
+
+    #[test]
+    fn live_agent_task_ids_dedupes_matching_key_and_recipient() {
+        let messages = vec![json!({
+            "role":"user",
+            "content":[{
+                "type":"tool_result",
+                "tool_use_id":"a4496564387a2561f",
+                "content":[{"type":"text","text":"Async agent launched successfully.\nagentId: a4496564387a2561f"}]
+            }]
+        })];
+        assert_eq!(
+            live_agent_task_ids(&messages),
+            vec!["a4496564387a2561f".to_owned()]
+        );
+    }
 }

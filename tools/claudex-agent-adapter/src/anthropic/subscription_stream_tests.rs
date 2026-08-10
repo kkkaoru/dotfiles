@@ -2850,3 +2850,192 @@ async fn hydrates_auxiliary_claude_subagent_routes_without_adapter_fields_in_pub
         );
     }
 }
+
+fn bare_subscription_stream(tools: Vec<String>) -> SubscriptionStream {
+    SubscriptionStream {
+        text_started: false,
+        text_closed: false,
+        saw_tool_use: false,
+        launch_fanout_open: false,
+        seen_tool_ids: HashSet::new(),
+        blocked_subagent: false,
+        saw_result: false,
+        next_index: 0,
+        tools,
+        tool_context: None,
+        activity: SubscriptionActivity::default(),
+    }
+}
+
+#[tokio::test]
+async fn forward_tool_uses_stops_after_result_or_blocked_subagent() {
+    let (sender, mut receiver) = channel();
+    let envelope = json!({
+        "type":"assistant",
+        "parent_tool_use_id":null,
+        "message":{"content":[{"type":"tool_use","id":"bash-1","name":"Bash","input":{"command":"true"}}]}
+    });
+    let mut finished = bare_subscription_stream(vec!["Bash".to_owned()]);
+    finished.saw_result = true;
+    assert!(
+        !finished
+            .forward_tool_uses(&sender, &envelope)
+            .await
+            .expect("finished stream ignores tools")
+    );
+    let mut blocked = bare_subscription_stream(vec!["Bash".to_owned()]);
+    blocked.blocked_subagent = true;
+    assert!(
+        !blocked
+            .forward_tool_uses(&sender, &envelope)
+            .await
+            .expect("blocked stream ignores tools")
+    );
+    assert!(output(&mut receiver).await.is_empty());
+}
+
+#[tokio::test]
+async fn forward_tool_uses_closes_open_text_before_a_bash_tool() {
+    let (sender, mut receiver) = channel();
+    let mut stream = bare_subscription_stream(vec!["Bash".to_owned()]);
+    stream.text_started = true;
+    stream.text_closed = false;
+    stream.next_index = 1;
+    let forwarded = stream
+        .forward_tool_uses(
+            &sender,
+            &json!({
+                "type":"assistant",
+                "parent_tool_use_id":null,
+                "message":{"content":[{"type":"tool_use","id":"bash-open","name":"Bash","input":{"command":"true"}}]}
+            }),
+        )
+        .await
+        .expect("open text plus Bash");
+    assert!(forwarded);
+    assert!(stream.saw_tool_use);
+    let output = output(&mut receiver).await;
+    assert!(output.contains(r#""type":"tool_use""#));
+    assert!(output.contains("bash-open"));
+}
+
+#[tokio::test]
+async fn skips_foreign_task_stop_notice_after_a_live_agent_stop() {
+    let (sender, mut receiver) = channel();
+    let mut stream = bare_subscription_stream(vec!["TaskStop".to_owned()]);
+    stream
+        .handle_line(
+            &sender,
+            &json!({
+                "type":"assistant", "parent_tool_use_id":null,
+                "message":{"content":[{
+                    "type":"tool_use", "id":"stop-agent", "name":"TaskStop",
+                    "input":{"task_id":"a4b2412c427ee5327"}
+                }]}
+            })
+            .to_string(),
+        )
+        .await
+        .expect("forward live Agent TaskStop");
+    stream
+        .handle_line(
+            &sender,
+            &json!({
+                "type":"assistant", "parent_tool_use_id":null,
+                "message":{"content":[{
+                    "type":"tool_use", "id":"stop-foreign", "name":"TaskStop",
+                    "input":{"task_id":"b13mjnjlj"}
+                }]}
+            })
+            .to_string(),
+        )
+        .await
+        .expect("skip foreign TaskStop after a live stop");
+    assert!(stream.saw_tool_use);
+    let output = output(&mut receiver).await;
+    assert!(output.contains("a4b2412c427ee5327"));
+    assert!(!output.contains("TaskStop skipped"));
+}
+
+#[tokio::test]
+async fn skips_stale_task_output_notice_after_a_live_output() {
+    let (sender, mut receiver) = channel();
+    let mut stream = bare_subscription_stream(vec!["TaskOutput".to_owned()]);
+    stream.tool_context = Some(SubscriptionToolContext::for_tests(
+        Arc::new(AgentEffortIntents::default()),
+        ModelCatalog::default(),
+        None,
+        "parent-model",
+        vec![json!({
+            "role":"user",
+            "content":[{
+                "type":"tool_result",
+                "tool_use_id":"toolu_live",
+                "content":[{"type":"text","text":"Async agent launched successfully.\nagentId: a4496564387a2561f"}]
+            }]
+        })],
+        json!(null),
+    ));
+    stream
+        .handle_line(
+            &sender,
+            &json!({
+                "type":"assistant", "parent_tool_use_id":null,
+                "message":{"content":[{
+                    "type":"tool_use", "id":"live-output", "name":"TaskOutput",
+                    "input":{"task_id":"a4496564387a2561f","block":false}
+                }]}
+            })
+            .to_string(),
+        )
+        .await
+        .expect("forward live TaskOutput");
+    stream
+        .handle_line(
+            &sender,
+            &json!({
+                "type":"assistant", "parent_tool_use_id":null,
+                "message":{"content":[{
+                    "type":"tool_use", "id":"stale-output", "name":"TaskOutput",
+                    "input":{"task_id":"a3d7f2ca50556c9e5","block":false}
+                }]}
+            })
+            .to_string(),
+        )
+        .await
+        .expect("skip stale TaskOutput after a live output");
+    assert!(stream.saw_tool_use);
+    let output = output(&mut receiver).await;
+    assert!(output.contains("a4496564387a2561f"));
+    assert!(!output.contains("TaskOutput skipped"));
+}
+
+#[tokio::test]
+async fn resumes_an_existing_subscription_agent_without_duplicate_scope_check() {
+    let (sender, mut receiver) = channel();
+    let mut context = explicit_subscription_tool_context();
+    context.session_id = Some("session-resume".to_owned());
+    let mut stream = bare_subscription_stream(vec!["Agent".to_owned(), "Task".to_owned()]);
+    stream.tool_context = Some(context);
+    stream
+        .handle_line(
+            &sender,
+            &json!({
+                "type":"assistant", "parent_tool_use_id":null,
+                "message":{"content":[{
+                    "type":"tool_use", "id":"resume-agent", "name":"Agent",
+                    "input":{
+                        "prompt":"scope a",
+                        "subagent_type":"claudex-gpt-spark",
+                        "resume":"worker-a"
+                    }
+                }]}
+            })
+            .to_string(),
+        )
+        .await
+        .expect("resume Agent launch");
+    assert!(stream.saw_tool_use);
+    let output = output(&mut receiver).await;
+    assert!(output.contains(r#""type":"tool_use""#) || output.contains("Task"));
+}
