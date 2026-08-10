@@ -252,3 +252,20 @@ fn records_launch_owner_when_env_is_set() {
         None => unsafe { std::env::remove_var("CLAUDEX_LAUNCH_OWNER") },
     }
 }
+
+#[test]
+fn record_tools_call_tolerates_root_and_unwritable_targets() {
+    let root = tempfile::tempdir().expect("unwritable MCP fixture");
+    let blocker = root.path().join("not-a-directory");
+    fs::write(&blocker, "x").expect("file blocker");
+    let nested = blocker.join("queue.jsonl");
+    record_tools_call_to(
+        &json!({"method":"tools/call"}),
+        1.0,
+        [std::path::PathBuf::from("/"), nested.clone()],
+    );
+    assert!(
+        !nested.exists(),
+        "parent-as-file targets must not create a queue file"
+    );
+}
