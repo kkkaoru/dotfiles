@@ -2,7 +2,10 @@ use std::{fs, io::Cursor, sync::Mutex};
 
 use serde_json::{Value, json};
 
-use super::{handle, read_message, record_tools_call_to, tools, write_message};
+use super::{
+    handle, launch_owner_from_params, launch_queue_path, read_message, record_tools_call_to,
+    sanitize_launch_owner, tools, write_message,
+};
 
 static LAUNCH_OWNER_ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -104,6 +107,54 @@ fn reads_ndjson_and_content_length_frames_with_blank_prefixes() {
         .unwrap()
         .expect("empty Content-Length must not stop the MCP server");
     assert_eq!(message["id"], 3);
+    assert!(!mode);
+}
+
+#[test]
+fn sanitizes_launch_owner_and_queue_paths() {
+    assert_eq!(sanitize_launch_owner("@@@"), "___");
+    assert_eq!(sanitize_launch_owner(""), "unknown");
+    assert_eq!(sanitize_launch_owner("session-a_1.0"), "session-a_1.0");
+    let long = "a".repeat(200);
+    let sanitized = sanitize_launch_owner(&long);
+    assert_eq!(sanitized.len(), 128);
+    assert!(sanitized.chars().all(|c| c == 'a'));
+
+    let cache = std::path::Path::new("/tmp/claudex-cache");
+    assert_eq!(
+        launch_queue_path(cache, None),
+        cache.join("launch-queue.jsonl")
+    );
+    assert_eq!(
+        launch_queue_path(cache, Some("  session a  ")),
+        cache.join("launch-queue.session_a.jsonl")
+    );
+    assert_eq!(
+        launch_owner_from_params(&json!({"claudexLaunchOwner":"  "})),
+        None
+    );
+    assert_eq!(
+        launch_owner_from_params(&json!({"claudexLaunchOwner":"session-a"})),
+        Some("session-a".to_owned())
+    );
+}
+
+#[test]
+fn reads_array_ndjson_and_lf_only_content_length_frames() {
+    let (message, mode) = read_message(&mut Cursor::new(b"[{\"id\":9}]\n".as_slice()))
+        .unwrap()
+        .expect("array NDJSON");
+    assert_eq!(message[0]["id"], 9);
+    assert!(mode);
+
+    let body = br#"{"jsonrpc":"2.0","id":4,"method":"ping"}"#;
+    let framed = format!(
+        "Content-Length: {}\n\n{}",
+        body.len(),
+        String::from_utf8_lossy(body)
+    );
+    let (message, mode) = read_message(&mut Cursor::new(framed)).unwrap().unwrap();
+    assert_eq!(message["id"], 4);
     assert!(!mode);
 }
 
