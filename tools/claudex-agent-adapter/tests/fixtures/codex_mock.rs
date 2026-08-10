@@ -31,8 +31,13 @@ struct ParallelAgents {
 
 impl<W: Write> Fixture<W> {
     fn send(&mut self, message: Value) {
-        writeln!(self.stdout, "{message}").expect("write mock app-server message");
-        self.stdout.flush().expect("flush mock app-server message");
+        // A previous HTTP handoff can close the adapter pipe while this mock
+        // still thinks a parallel batch is in flight. Ignore EPIPE so leftover
+        // completions cannot crash the fixture mid-follow-up.
+        if writeln!(self.stdout, "{message}").is_err() {
+            return;
+        }
+        let _ = self.stdout.flush();
     }
 
     fn thread_id(&self) -> String {
@@ -73,6 +78,10 @@ impl<W: Write> Fixture<W> {
 
     fn start_turn(&mut self, message: &Value) {
         const MAX_INPUT_CHARS: usize = 1_048_576;
+        // Native background handoff returns over HTTP without closing the
+        // mock-side parallel batch. A new provider turn must not inherit it.
+        self.parallel_agents = None;
+        self.pending_tool = false;
         let input = message
             .pointer("/params/input")
             .unwrap_or(&Value::Null)
@@ -222,6 +231,8 @@ impl<W: Write> Fixture<W> {
                 }),
             );
         } else if input.contains("CONTROL_SUBAGENTS_CONTINUE") {
+            self.parallel_agents = None;
+            self.pending_tool = false;
             self.send_text_and_complete(orchestration_response(self.orchestrator_mode));
         } else if input.contains("CONTROL_SUBAGENTS_STOP") {
             self.send_control_tool(
