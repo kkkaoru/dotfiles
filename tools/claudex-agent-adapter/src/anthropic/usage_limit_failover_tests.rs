@@ -1023,6 +1023,30 @@ fn apply_usage_limit_preflight_activates_when_auth_cooling_down() {
 }
 
 #[test]
+fn apply_usage_limit_preflight_keeps_provider_when_cooling_down_without_failover() {
+    let root = tempfile::tempdir().expect("preflight no failover fixture");
+    let backend =
+        AgentBackend::spawn_routes(&[BackendRoute::new(CLINE_FLASH, BackendKind::ConfiguredAcp)]);
+    let bridge = Bridge::new_with_backend(backend, CLINE_FLASH.to_owned())
+        .with_usage_limit_cache_home(root.path());
+    bridge.note_provider_exhaustion(
+        &anyhow::anyhow!("codex app-server turn failed: 401 Unauthorized"),
+        Some(CLINE_FLASH),
+    );
+    let mut request = dummy_request(CLINE_FLASH);
+    let mut effort = Some("xhigh".to_owned());
+    let route = bridge.apply_usage_limit_preflight(
+        &mut request,
+        RouteDecision::Provider,
+        &mut effort,
+        false,
+    );
+    assert_eq!(request.model, CLINE_FLASH);
+    assert_eq!(effort.as_deref(), Some("xhigh"));
+    assert_eq!(route, RouteDecision::Provider);
+}
+
+#[test]
 fn provider_auth_is_cooling_down_true() {
     let root = tempfile::tempdir().expect("auth cooling fixture");
     let bridge = cline_and_qwen_bridge().with_usage_limit_cache_home(root.path());
