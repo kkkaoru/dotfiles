@@ -98,8 +98,17 @@ fn detects_claude_code_launch_tools_for_mcp_injection() {
     assert!(params_offer_launch_tools(&json!({
         "dynamicTools":[{"name":"cc_Agent_0","description":"use `Agent`"}]
     })));
+    assert!(params_offer_launch_tools(&json!({
+        "dynamicTools":[{"name":"helper","description":"call `Task` for background work"}]
+    })));
+    assert!(params_offer_launch_tools(&json!({
+        "dynamicTools":[{"name":"helper","description":"call `Agent` for background work"}]
+    })));
     assert!(!params_offer_launch_tools(&json!({
         "dynamicTools":[{"name":"Bash","description":"run a shell command"}]
+    })));
+    assert!(!params_offer_launch_tools(&json!({
+        "dynamicTools":"not-an-array"
     })));
     assert!(!params_offer_launch_tools(&json!({})));
 }
