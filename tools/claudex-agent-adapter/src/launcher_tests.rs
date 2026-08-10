@@ -697,6 +697,56 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn ensure_running_and_hot_swap_reuse_a_current_healthy_listener() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("public ensure listener");
+        let listen = listener.local_addr().expect("public ensure address");
+        let options = AdapterOptions {
+            routes: vec![BackendRoute::new("test-model", BackendKind::CodexAppServer)],
+            listen,
+            model: "test-model".to_owned(),
+            subscription_max_processes: 20,
+            subscription_timeout_minutes: 120,
+            subagent_hard_timeout_seconds: None,
+            model_catalog: crate::provider_config::ModelCatalog::default(),
+        };
+        let cfg = ServiceConfig::new(options.clone()).expect("public ensure config");
+        let health = healthy(&cfg);
+        let response = health_response(&health);
+        let auth = http_response("200 OK", "{}");
+        let server = serve_responses(
+            listener,
+            vec![
+                response.clone(),
+                auth.clone(),
+                response.clone(),
+                auth.clone(),
+                response,
+                auth,
+            ],
+        );
+        let expected = cfg.base_url();
+        assert_eq!(
+            ensure_running(options.clone())
+                .await
+                .expect("ensure_running reuses the current listener"),
+            expected
+        );
+        assert_eq!(
+            hot_swap(options.clone(), false)
+                .await
+                .expect("hot_swap reuses without waiting for idle"),
+            expected
+        );
+        assert_eq!(
+            hot_swap(options, true)
+                .await
+                .expect("hot_swap wait-idle reuses the current listener"),
+            expected
+        );
+        server.join().expect("public ensure server");
+    }
+
+    #[tokio::test]
     async fn wait_idle_polls_busy_work_until_the_listener_is_reusable() {
         let root = tempfile::tempdir().expect("wait-idle poll fixture");
         let mut cfg = config();
