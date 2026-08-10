@@ -16,7 +16,7 @@ use crate::{
 
 // Session creation is bounded; effort setup must not hang a turn forever when a
 // provider ignores or stalls on set_session_model (observed with configured ACP).
-const EFFORT_SETUP_TIMEOUT: Duration = Duration::from_secs(8);
+const EFFORT_SETUP_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub(super) enum EffortSetupError {
     TimedOut,

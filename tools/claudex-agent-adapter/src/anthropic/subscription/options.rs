@@ -11,10 +11,10 @@ use tokio::sync::Semaphore;
 #[cfg(test)]
 use crate::anthropic::subscription_stream::{ACTIVITY_KEEPALIVE_INTERVAL, INITIAL_ACTIVITY_DELAY};
 
-// A healthy pipe reaches EOF immediately after the last writer exits. One
-// second permits normal descriptor teardown without retaining an orphaned
+// A healthy pipe reaches EOF immediately after the last writer exits. A short
+// grace permits normal descriptor teardown without retaining an orphaned
 // process group when a descendant accidentally keeps stderr open.
-pub(in crate::anthropic) const DEFAULT_STDERR_DRAIN_GRACE: Duration = Duration::from_secs(1);
+pub(in crate::anthropic) const DEFAULT_STDERR_DRAIN_GRACE: Duration = Duration::from_millis(200);
 // SIGKILL normally makes wait(2) immediately reapable. Keep a finite five
 // second ceiling for abnormal kernels/process supervisors instead of waiting
 // forever during response cleanup.
