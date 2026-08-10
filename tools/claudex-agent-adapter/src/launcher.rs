@@ -59,7 +59,9 @@ use resume::{prepare_arguments, session_id_for_launch};
 const LOCAL_TOKEN: &str = "claudex-local";
 #[cfg(not(test))]
 const START_TIMEOUT: Duration = Duration::from_secs(10);
-#[cfg(test)]
+#[cfg(all(test, coverage_nightly))]
+const START_TIMEOUT: Duration = Duration::from_secs(45);
+#[cfg(all(test, not(coverage_nightly)))]
 const START_TIMEOUT: Duration = Duration::from_secs(2);
 const START_INITIAL_POLL_DELAY: Duration = Duration::from_millis(10);
 const START_MAX_POLL_DELAY: Duration = Duration::from_millis(100);
