@@ -392,3 +392,8 @@ mod lazy_tests {
             .count()
     }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[path = "protocol_handler_tests.rs"]
+mod handler_tests;
