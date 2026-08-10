@@ -3,6 +3,11 @@ use std::{os::unix::fs::PermissionsExt, path::PathBuf, time::Duration};
 use claudex_agent_adapter::app_server::AppServer;
 use serde_json::json;
 
+#[cfg(coverage_nightly)]
+const EVENT_WAIT: Duration = Duration::from_secs(10);
+#[cfg(not(coverage_nightly))]
+const EVENT_WAIT: Duration = Duration::from_secs(1);
+
 struct Fixture {
     _root: tempfile::TempDir,
     source: PathBuf,
@@ -89,7 +94,7 @@ while read line; do :; done
         .request_detached("turn/start", json!({"threadId":"thread-detached"}))
         .await
         .unwrap();
-    let event = tokio::time::timeout(Duration::from_secs(1), events.recv())
+    let event = tokio::time::timeout(EVENT_WAIT, events.recv())
         .await
         .expect("detached error event")
         .expect("event dispatcher remains open");
@@ -141,7 +146,7 @@ read line
         .request_detached("turn/start", json!({"threadId":"detached-close"}))
         .await
         .expect("flush detached request");
-    let event = tokio::time::timeout(Duration::from_secs(1), events.recv())
+    let event = tokio::time::timeout(EVENT_WAIT, events.recv())
         .await
         .expect("provider exit event")
         .expect("queued error before close");
