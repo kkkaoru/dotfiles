@@ -129,7 +129,16 @@ async fn new_session_with_mcp(
     session_cwd: &Path,
     mcp: Vec<acp::McpServer>,
 ) -> Result<acp::NewSessionResponse> {
-    let timeout = if mcp.is_empty() {
+    let timeout = session_setup_timeout(provider, mcp.is_empty());
+    let mut request = acp::NewSessionRequest::new(session_cwd).mcp_servers(mcp);
+    if provider != AcpProvider::Grok {
+        request = request.meta(json!({ "modelId": model }).as_object().cloned());
+    }
+    await_setup(provider, timeout, connection.new_session(request)).await
+}
+
+fn session_setup_timeout(provider: AcpProvider, mcp_empty: bool) -> Duration {
+    if mcp_empty {
         SESSION_SETUP_TIMEOUT
     } else if matches!(
         provider,
@@ -138,12 +147,7 @@ async fn new_session_with_mcp(
         SESSION_SETUP_WITH_MCP_TIMEOUT
     } else {
         SESSION_SETUP_TIMEOUT
-    };
-    let mut request = acp::NewSessionRequest::new(session_cwd).mcp_servers(mcp);
-    if provider != AcpProvider::Grok {
-        request = request.meta(json!({ "modelId": model }).as_object().cloned());
     }
-    await_setup(provider, timeout, connection.new_session(request)).await
 }
 
 fn session_cwd(params: &Value, fallback: &Path) -> PathBuf {

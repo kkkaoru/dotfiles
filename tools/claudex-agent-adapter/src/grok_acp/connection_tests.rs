@@ -1,5 +1,5 @@
 use super::*;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 
 #[test]
 fn marks_provider_dead_before_notifying_the_driver() {
@@ -23,11 +23,11 @@ fn injects_opencode_runtime_config_unless_already_set() {
     let injected = command
         .as_std()
         .get_envs()
-        .find(|(key, _)| *key == "OPENCODE_CONFIG_CONTENT")
+        .find(|(key, _)| *key == OsStr::new("OPENCODE_CONFIG_CONTENT"))
         .and_then(|(_, value)| value.map(|value| value.to_owned()));
     assert_eq!(
         injected.as_deref(),
-        Some(OsString::from(OPENCODE_ACP_RUNTIME_CONFIG).as_os_str())
+        Some(OsStr::new(OPENCODE_ACP_RUNTIME_CONFIG))
     );
 
     // SAFETY: test restores the process-wide override before returning.
@@ -39,7 +39,7 @@ fn injects_opencode_runtime_config_unless_already_set() {
     let preserved = command
         .as_std()
         .get_envs()
-        .find(|(key, _)| *key == "OPENCODE_CONFIG_CONTENT");
+        .find(|(key, _)| *key == OsStr::new("OPENCODE_CONFIG_CONTENT"));
     assert!(
         preserved.is_none(),
         "explicit OPENCODE_CONFIG_CONTENT must not be overwritten"
@@ -59,7 +59,7 @@ fn injects_opencode_runtime_config_unless_already_set() {
         skipped
             .as_std()
             .get_envs()
-            .find(|(key, _)| *key == "OPENCODE_CONFIG_CONTENT")
+            .find(|(key, _)| *key == OsStr::new("OPENCODE_CONFIG_CONTENT"))
             .is_none()
     );
 }

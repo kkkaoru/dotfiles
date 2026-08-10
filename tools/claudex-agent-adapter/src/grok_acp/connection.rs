@@ -340,17 +340,6 @@ async fn initialize(provider: AcpProvider, connection: &acp::ClientSideConnectio
 }
 
 #[cfg(test)]
-// Coverage gates measure production ACP I/O; this inline module only contains tests.
 #[cfg_attr(coverage_nightly, coverage(off))]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn marks_provider_dead_before_notifying_the_driver() {
-        let alive = AtomicBool::new(true);
-        let (stopped, mut stopped_rx) = oneshot::channel();
-        mark_io_stopped(&alive, stopped);
-        assert!(!alive.load(Ordering::Relaxed));
-        assert_eq!(stopped_rx.try_recv(), Ok(()));
-    }
-}
+#[path = "connection_tests.rs"]
+mod tests;
