@@ -1389,6 +1389,37 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn warm_start_recovery_snapshot_uses_the_canonical_listen() {
+        let root = tempfile::tempdir().expect("warm-start recovery fixture");
+        let executable = root.path().join("daemon.sh");
+        std::fs::write(&executable, "#!/bin/sh\nexit 0\n").expect("daemon script");
+        std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755))
+            .expect("daemon executable");
+        let retained = root.path().join("retained.json");
+        std::fs::write(&retained, "{}").expect("retained state");
+
+        let mut canonical = config();
+        canonical.executable = executable;
+        canonical.log_path = root.path().join("adapter.log");
+        let warm = canonical.with_listen("127.0.0.1:18318".parse().expect("warm listen"));
+
+        super::daemon_start::start_adapter_with_retained(&warm, &retained, &canonical)
+            .expect("warm-start with canonical recovery snapshot");
+
+        let generation = super::recovery_manifest::generation_name(
+            canonical.options.listen,
+            env!("CLAUDEX_BUILD_ID"),
+            &canonical.service_config_fingerprint,
+        );
+        super::recovery_manifest::validate(&canonical, &generation)
+            .expect("canonical listen must validate after live-update warm-start");
+        let mismatch = super::recovery_manifest::validate(&warm, &generation)
+            .expect_err("ephemeral listen must not own the live-update snapshot");
+        assert!(mismatch.to_string().contains("recovery listener mismatch"));
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn recovery_manifest_restarts_a_private_executable_snapshot() {
         let root = tempfile::tempdir().expect("recovery fixture");
         let executable = root.path().join("adapter-script");
