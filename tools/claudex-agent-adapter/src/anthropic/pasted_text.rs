@@ -168,4 +168,52 @@ mod tests {
         assert_eq!(request.messages[1]["content"], missing);
         assert_eq!(request.messages[2]["content"], missing);
     }
+
+    #[test]
+    fn skips_user_messages_without_content_and_non_string_text_blocks() {
+        let mut request = request(json!([{"type":"text", "text":null}]));
+        request.messages.insert(0, json!({"role":"user"}));
+        expand_markers(&mut request);
+        assert!(request.messages[0].get("content").is_none());
+        assert_eq!(request.messages[1]["content"][0]["text"], Value::Null);
+    }
+
+    #[test]
+    fn leaves_relative_and_non_attachment_absolute_markers_alone() {
+        let relative =
+            "pasted text file: .codex/attachments/local.txt. Read this file before continuing.";
+        let other_absolute =
+            "pasted text file: /tmp/not-an-attachment.txt. Read this file before continuing.";
+        let mut request = request(json!(relative));
+        request
+            .messages
+            .push(json!({"role":"user", "content":other_absolute}));
+        expand_markers(&mut request);
+        assert_eq!(request.messages[0]["content"], relative);
+        assert_eq!(request.messages[1]["content"], other_absolute);
+    }
+
+    #[test]
+    fn leaves_directory_and_oversized_attachment_markers_alone() {
+        let root = tempfile::tempdir().expect("attachment fixture");
+        let directory = root.path().join(".codex/attachments");
+        std::fs::create_dir_all(&directory).expect("attachment directory");
+        let dir_marker = format!(
+            "pasted text file: {}. Read this file before continuing.",
+            directory.display()
+        );
+        let huge = directory.join("huge.txt");
+        std::fs::write(&huge, vec![b'x'; (MAX_INLINE_BYTES as usize) + 1]).expect("huge file");
+        let huge_marker = format!(
+            "pasted text file: {}. Read this file before continuing.",
+            huge.display()
+        );
+        let mut request = request(json!(dir_marker));
+        request
+            .messages
+            .push(json!({"role":"user", "content":huge_marker}));
+        expand_markers(&mut request);
+        assert_eq!(request.messages[0]["content"], dir_marker);
+        assert_eq!(request.messages[1]["content"], huge_marker);
+    }
 }
