@@ -752,6 +752,11 @@ mod tests {
         );
         assert_eq!(failure_preview(Some(&json!(["x"]))), "failed");
         assert_eq!(failure_preview(Some(&json!(42))), "failed");
+        assert_eq!(
+            failure_preview(Some(&json!({"error":"","message":" \n","stderr":"\t"}))),
+            "failed",
+            "blank object fields must fall through to the generic failure label"
+        );
         assert!(scalar_preview(&json!(null)).is_none());
         assert!(scalar_preview(&json!([])).is_none());
         assert!(scalar_preview(&json!("   ")).is_none());
