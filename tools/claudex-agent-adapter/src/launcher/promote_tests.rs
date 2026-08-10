@@ -107,3 +107,25 @@ fn retains_no_sessions_for_an_idle_tui() {
     health.active_claude_session_ids = vec!["idle-tui".to_owned()];
     assert!(retained_session_ids(&health).is_empty());
 }
+
+#[test]
+fn release_previous_ignores_non_adapter_pids() {
+    let config = ServiceConfig {
+        options: AdapterOptions {
+            routes: vec![BackendRoute::new("test-model", BackendKind::CodexAppServer)],
+            listen: "127.0.0.1:8318".parse().unwrap(),
+            model: "test-model".to_owned(),
+            subscription_max_processes: 20,
+            subscription_timeout_minutes: 120,
+            subagent_hard_timeout_seconds: None,
+            model_catalog: crate::provider_config::ModelCatalog::default(),
+        },
+        token: LOCAL_TOKEN.to_owned(),
+        codex_config_fingerprint: "codex".to_owned(),
+        service_config_fingerprint: "service".to_owned(),
+        executable: PathBuf::from("/tmp/claudex-agent-adapter"),
+        log_path: PathBuf::from("/tmp/claudex/adapter.log"),
+        lock_path: PathBuf::from("/tmp/claudex/adapter.lock"),
+    };
+    release_previous(&config, std::process::id());
+}

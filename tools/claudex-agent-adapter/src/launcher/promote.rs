@@ -130,13 +130,28 @@ fn publish_promoted(
 ) -> String {
     let _ = live::publish_listen(config, config.options.listen, Some(pid));
     let _ = live::publish_canonical_rebind(config, config.options.listen, pid);
-    eprintln!(
-        "claudex: promoted build {} to {} (previous pid {old_pid} retained on {} for {retained_sessions} in-flight session(s); launch TUI kept)",
-        env!("CLAUDEX_BUILD_ID"),
-        config.base_url(),
-        retained_listen
-    );
+    if retained_sessions == 0 {
+        release_previous(config, old_pid);
+        eprintln!(
+            "claudex: promoted build {} to {} (previous pid {old_pid} released; launch TUI kept)",
+            env!("CLAUDEX_BUILD_ID"),
+            config.base_url(),
+        );
+    } else {
+        eprintln!(
+            "claudex: promoted build {} to {} (previous pid {old_pid} retained on {} for {retained_sessions} in-flight session(s); launch TUI kept)",
+            env!("CLAUDEX_BUILD_ID"),
+            config.base_url(),
+            retained_listen
+        );
+    }
     config.base_url()
+}
+
+fn release_previous(config: &ServiceConfig, old_pid: u32) {
+    if daemon_process::matches(old_pid, &config.executable) {
+        daemon_process::terminate(old_pid);
+    }
 }
 
 pub(super) fn current_build_ready(health: &Health, expected_pid: Option<u32>) -> bool {
