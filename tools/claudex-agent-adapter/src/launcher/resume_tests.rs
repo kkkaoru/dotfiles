@@ -37,6 +37,86 @@ mod tests {
             resume_session_id(&args(&["--resume", "--fork-session"])),
             None
         );
+        assert_eq!(resume_session_id(&args(&["--resume="])), None);
+        assert_eq!(resume_session_id(&args(&["--resume=-dash"])), None);
+        assert_eq!(resume_session_id(&args(&["-r="])), None);
+        assert_eq!(resume_session_id(&args(&["-r", "-n"])), None);
+        assert_eq!(resume_session_id(&args(&["--resume", ""])), None);
+    }
+
+    #[test]
+    fn treats_empty_or_dash_flag_values_as_absent_session_names() {
+        assert!(!has_session_name(&args(&["--name", ""])));
+        assert!(!has_session_name(&args(&["--name", "-n"])));
+        assert!(!has_session_name(&args(&["--name="])));
+        assert!(!has_agent(&args(&["--agent", ""])));
+        assert!(!has_agent(&args(&["--agent", "-x"])));
+        assert!(!has_agent(&args(&["--agent="])));
+        assert!(has_session_name(&args(&["--name=kept"])));
+        assert!(has_agent(&args(&["--agent=kept"])));
+        assert!(usable_display_name("kept"));
+        assert!(!usable_display_name(""));
+        assert!(!usable_display_name("   "));
+        assert!(!usable_display_name(LEGACY_ORCHESTRATOR_AGENT));
+    }
+
+    #[test]
+    fn auto_fork_skips_when_fork_session_already_present() {
+        let root = tempfile::tempdir().expect("resume fixture");
+        let cwd = Path::new("/Users/test/github.com/project");
+        write_transcript(
+            root.path(),
+            cwd,
+            "session-forked",
+            "{\"message\":\"Subagent spawn limit reached (200 of 200 agents spawned)\"}\n",
+        );
+        let prepared = prepare(
+            &["--resume", "session-forked", "--fork-session"],
+            cwd,
+            root.path(),
+            true,
+        );
+        assert_eq!(
+            prepared
+                .iter()
+                .filter(|argument| *argument == "--fork-session")
+                .count(),
+            1,
+            "existing --fork-session must not be duplicated"
+        );
+        assert_eq!(
+            session_id_for_launch(&prepared, || "random".to_owned()),
+            "random"
+        );
+    }
+
+    #[test]
+    fn skips_unusable_legacy_titles_and_falls_back_to_cwd_name() {
+        let root = tempfile::tempdir().expect("resume fixture");
+        let cwd = Path::new("/Users/test/github.com/project");
+        write_transcript(
+            root.path(),
+            cwd,
+            "session-empty-names",
+            concat!(
+                "{\"type\":\"agent-setting\",\"agentSetting\":\"claudex-orchestrator\"}\n",
+                "{\"type\":\"custom-title\",\"customTitle\":\"   \"}\n",
+                "{\"type\":\"agent-name\",\"agentName\":\"\"}\n",
+                "{\"type\":\"attachment\",\"slug\":\"claudex-orchestrator\"}\n",
+            ),
+        );
+        let prepared = prepare(
+            &["--resume", "session-empty-names"],
+            cwd,
+            root.path(),
+            false,
+        );
+        assert!(
+            prepared
+                .windows(2)
+                .any(|window| window[0] == "--name" && window[1] == "project"),
+            "cwd basename should become the restored display name: {prepared:?}"
+        );
     }
 
     #[test]
