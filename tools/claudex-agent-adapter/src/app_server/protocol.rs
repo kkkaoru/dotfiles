@@ -87,6 +87,93 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stops_a_live_app_server_when_stdout_ends() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::Arc;
+
+        let root = tempfile::tempdir().expect("protocol stop fixture");
+        let source = root.path().join("source");
+        std::fs::create_dir(&source).expect("source home");
+        std::fs::write(source.join("auth.json"), "{}").expect("auth");
+        let program = root.path().join("protocol-eof");
+        std::fs::write(
+            &program,
+            "#!/bin/sh\nread initialize\nprintf '%s\\n' '{\"id\":1,\"result\":{}}'\nread initialized\nwhile read line; do :; done\n",
+        )
+        .expect("write fixture");
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
+            .expect("executable fixture");
+        let server = AppServer::spawn_with_program(
+            "model",
+            &program,
+            &source,
+            &root.path().join("protocol-eof-home"),
+        )
+        .await
+        .expect("start protocol fixture");
+        let weak = Arc::downgrade(&server);
+        let mut pipe = Command::new("sh")
+            .args(["-c", "printf 'bye\\n'"])
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("spawn eof pipe");
+        let stdout = pipe.stdout.take().expect("stdout");
+        let mut lines = tokio::io::BufReader::new(stdout).lines();
+        assert_eq!(
+            next_output_line(&weak, &mut lines).await.as_deref(),
+            Some("bye")
+        );
+        assert!(next_output_line(&weak, &mut lines).await.is_none());
+        assert!(!server.is_alive());
+        let _ = pipe.wait().await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stops_a_live_app_server_on_stdout_read_error() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::Arc;
+
+        struct ErrorReader;
+
+        impl tokio::io::AsyncRead for ErrorReader {
+            fn poll_read(
+                self: std::pin::Pin<&mut Self>,
+                _cx: &mut std::task::Context<'_>,
+                _buffer: &mut tokio::io::ReadBuf<'_>,
+            ) -> std::task::Poll<std::io::Result<()>> {
+                std::task::Poll::Ready(Err(std::io::Error::other("synthetic live read failure")))
+            }
+        }
+
+        let root = tempfile::tempdir().expect("protocol error fixture");
+        let source = root.path().join("source");
+        std::fs::create_dir(&source).expect("source home");
+        std::fs::write(source.join("auth.json"), "{}").expect("auth");
+        let program = root.path().join("protocol-error");
+        std::fs::write(
+            &program,
+            "#!/bin/sh\nread initialize\nprintf '%s\\n' '{\"id\":1,\"result\":{}}'\nread initialized\nwhile read line; do :; done\n",
+        )
+        .expect("write fixture");
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
+            .expect("executable fixture");
+        let server = AppServer::spawn_with_program(
+            "model",
+            &program,
+            &source,
+            &root.path().join("protocol-error-home"),
+        )
+        .await
+        .expect("start protocol fixture");
+        let weak = Arc::downgrade(&server);
+        let mut lines = tokio::io::BufReader::new(ErrorReader).lines();
+        assert!(next_output_line(&weak, &mut lines).await.is_none());
+        assert!(!server.is_alive());
+    }
+
     #[test]
     fn resolves_result_and_error_json_rpc_frames() {
         assert_eq!(
