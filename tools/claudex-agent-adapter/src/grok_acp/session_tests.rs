@@ -69,7 +69,7 @@ async fn session_setup_timeout_error_includes_configured_duration() {
     .unwrap_err();
     let message = error.to_string();
     assert!(
-        message.contains("timed out after 15s"),
+        message.contains(&format!("timed out after {SESSION_SETUP_TIMEOUT:?}")),
         "expected SESSION_SETUP_TIMEOUT in error, got {message}"
     );
 }
