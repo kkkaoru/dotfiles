@@ -30,7 +30,7 @@ impl Bridge {
     /// Claude Code often drops SubAgent SSE right after `message_start`. Keep
     /// ACP alive in that window. Once ▶ tools or bridged tool_use exist, treat
     /// SSE close as stop/interrupt and cancel the provider leaf.
-    pub(in crate::anthropic::stream) async fn subagent_sse_closed(
+    pub(super) async fn subagent_sse_closed(
         &self,
         session: &Arc<Session>,
         events: Arc<crate::app_server::ThreadEvents>,
