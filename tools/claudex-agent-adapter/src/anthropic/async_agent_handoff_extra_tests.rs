@@ -361,3 +361,14 @@ fn async_launch_results_ignore_empty_array_content() {
     );
     assert!(strict_result_text(&json!([])).is_none());
 }
+
+#[test]
+fn async_launch_results_skip_blank_tool_use_ids() {
+    assert!(
+        async_launch_tool_results(&json!({
+            "role":"user",
+            "content":[launch_result("")]
+        }))
+        .is_none()
+    );
+}

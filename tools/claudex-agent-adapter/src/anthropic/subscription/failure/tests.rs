@@ -228,6 +228,11 @@ fn classifies_status_and_marker_variants_without_guessing_local_errors() {
         ),
         (
             serde_json::json!({}),
+            "upstream returned bad gateway",
+            SubscriptionFailureKind::UpstreamTransient,
+        ),
+        (
+            serde_json::json!({}),
             "protocol framing failed",
             SubscriptionFailureKind::Protocol,
         ),
