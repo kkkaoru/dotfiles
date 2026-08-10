@@ -89,6 +89,11 @@ fn current_build_ready_ignores_fingerprint_and_requires_this_build() {
     health.model = "unrelated-model".to_owned();
     assert!(current_build_ready(&health, Some(12)));
     assert!(!current_build_ready(&health, Some(99)));
+    health.pid = None;
+    assert!(
+        current_build_ready(&health, Some(12)),
+        "missing pid must not roll back a current-build listener"
+    );
     health.build_id = "old-build".to_owned();
     assert!(!current_build_ready(&health, Some(12)));
 }

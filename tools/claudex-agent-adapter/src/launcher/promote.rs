@@ -93,12 +93,14 @@ pub(super) async fn try_canonical(
         terminate_started(started, &warm);
         return Ok(None);
     }
-    if !wait_until_current_build(client, config, Some(started)).await {
-        if canonical_serves_current_build(client, config, Some(started)).await {
+    if !wait_until_current_build(client, config, None).await {
+        if canonical_serves_current_build(client, config, None).await {
             // New generation already owns the canonical port; do not roll back.
         } else {
             restore_old_canonical(client, config, retained_listen).await;
-            terminate_started(started, &warm);
+            if !canonical_serves_current_build(client, config, None).await {
+                terminate_started(started, &warm);
+            }
             bail!(
                 "wait for promoted canonical listener; see {}",
                 config.log_path.display()
@@ -120,7 +122,7 @@ pub(super) async fn try_canonical(
 pub(super) fn current_build_ready(health: &Health, expected_pid: Option<u32>) -> bool {
     health.status == "ok"
         && health.build_id == env!("CLAUDEX_BUILD_ID")
-        && expected_pid.is_none_or(|pid| health.pid == Some(pid))
+        && expected_pid.is_none_or(|pid| health.pid.is_none_or(|actual| actual == pid))
 }
 
 async fn canonical_serves_current_build(
