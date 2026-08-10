@@ -42,6 +42,12 @@ mod tests {
         assert_eq!(resume_session_id(&args(&["-r="])), None);
         assert_eq!(resume_session_id(&args(&["-r", "-n"])), None);
         assert_eq!(resume_session_id(&args(&["--resume", ""])), None);
+        assert!(!transcript_has_spawn_limit(
+            Path::new("/tmp"),
+            None,
+            Path::new("/tmp"),
+            &args(&["--continue"])
+        ));
     }
 
     #[test]
