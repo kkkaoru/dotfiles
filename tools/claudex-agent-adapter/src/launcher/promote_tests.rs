@@ -83,6 +83,17 @@ fn retains_all_active_sessions_on_legacy_busy_health() {
 }
 
 #[test]
+fn current_build_ready_ignores_fingerprint_and_requires_this_build() {
+    let mut health = health(true, Some(12));
+    health.build_id = env!("CLAUDEX_BUILD_ID").to_owned();
+    health.model = "unrelated-model".to_owned();
+    assert!(current_build_ready(&health, Some(12)));
+    assert!(!current_build_ready(&health, Some(99)));
+    health.build_id = "old-build".to_owned();
+    assert!(!current_build_ready(&health, Some(12)));
+}
+
+#[test]
 fn retains_no_sessions_for_an_idle_tui() {
     let mut health = health(true, Some(12));
     health.active_http_requests = 0;

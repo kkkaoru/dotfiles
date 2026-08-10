@@ -80,18 +80,26 @@ pub(super) async fn try_canonical(
         session_ids.clone(),
     )?;
     wait_until_canonical_released(config).await?;
-    if request_bind_listen(client, &warm, config.options.listen)
+    let bound = request_bind_listen(client, &warm, config.options.listen)
         .await?
-        .is_none()
-    {
+        .is_some()
+        || canonical_serves_current_build(client, config, Some(started)).await;
+    if !bound {
         restore_old_canonical(client, config, retained_listen).await;
         terminate_started(started, &warm);
         return Ok(None);
     }
-    if let Err(error) = health::wait_until_ready(client, config).await {
-        restore_old_canonical(client, config, retained_listen).await;
-        terminate_started(started, &warm);
-        return Err(error.context("wait for promoted canonical listener"));
+    if !wait_until_current_build(client, config, Some(started)).await {
+        if canonical_serves_current_build(client, config, Some(started)).await {
+            // New generation already owns the canonical port; do not roll back.
+        } else {
+            restore_old_canonical(client, config, retained_listen).await;
+            terminate_started(started, &warm);
+            bail!(
+                "wait for promoted canonical listener; see {}",
+                config.log_path.display()
+            );
+        }
     }
     let _ = live::publish_listen(config, config.options.listen, Some(started));
     let _ = live::publish_canonical_rebind(config, config.options.listen, started);
@@ -103,6 +111,39 @@ pub(super) async fn try_canonical(
         session_ids.len()
     );
     Ok(Some(config.base_url()))
+}
+
+pub(super) fn current_build_ready(health: &Health, expected_pid: Option<u32>) -> bool {
+    health.status == "ok"
+        && health.build_id == env!("CLAUDEX_BUILD_ID")
+        && expected_pid.is_none_or(|pid| health.pid == Some(pid))
+}
+
+async fn canonical_serves_current_build(
+    client: &reqwest::Client,
+    config: &ServiceConfig,
+    expected_pid: Option<u32>,
+) -> bool {
+    health::fetch_health(client, config)
+        .await
+        .is_some_and(|health| current_build_ready(&health, expected_pid))
+}
+
+async fn wait_until_current_build(
+    client: &reqwest::Client,
+    config: &ServiceConfig,
+    expected_pid: Option<u32>,
+) -> bool {
+    let deadline = Instant::now() + HANDOVER_TIMEOUT;
+    loop {
+        if canonical_serves_current_build(client, config, expected_pid).await {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        tokio::time::sleep(HANDOVER_POLL).await;
+    }
 }
 
 fn advertised_listen(config: &ServiceConfig, health: &Health) -> SocketAddr {
