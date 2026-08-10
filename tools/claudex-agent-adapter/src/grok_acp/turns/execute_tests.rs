@@ -424,6 +424,13 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn grok_effort_skips_per_turn_model_reselect() {
+        LocalSet::new()
+            .run_until(check_grok_effort_skips_model_reselect())
+            .await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn follow_up_skips_unchanged_configured_effort_rpc() {
         LocalSet::new()
             .run_until(check_follow_up_skips_unchanged_configured_effort())
@@ -838,6 +845,42 @@ mod tests {
         assert!(
             requests.is_empty(),
             "launch-scoped ACP must not reselect model or set effort: {requests:?}"
+        );
+        assert!(permit.is_some());
+    }
+
+    async fn check_grok_effort_skips_model_reselect() {
+        let events = std::sync::Arc::new(ThreadEventDispatcher::default());
+        let active = ActiveTurns::default();
+        let invalidated = InvalidatedSessions::default();
+        let permits = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
+        let (_sender, mut cancellation) = oneshot::channel();
+        let mut permit = Some(permits.acquire_owned().await.unwrap());
+        let mut ctl = TurnCtl {
+            provider: AcpProvider::Grok,
+            session_id: "session",
+            cancellation: &mut cancellation,
+            permit: &mut permit,
+            events: &events,
+            active_turns: &active,
+            invalidated_sessions: &invalidated,
+        };
+        let (connection, requests) =
+            rejecting_launch_scoped_effort_connection(std::sync::Arc::clone(&events));
+        assert!(
+            apply_effort(
+                &mut ctl,
+                &std::rc::Rc::new(connection),
+                "grok-4.5",
+                Some("high"),
+                &acp::SessionId::new("session".to_owned()),
+            )
+            .await
+        );
+        let requests = requests.await.unwrap();
+        assert!(
+            requests.is_empty(),
+            "Grok must not reselect model or set effort per turn: {requests:?}"
         );
         assert!(permit.is_some());
     }
