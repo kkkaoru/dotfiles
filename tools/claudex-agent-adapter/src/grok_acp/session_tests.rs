@@ -3,8 +3,8 @@ use serde_json::{Value, json};
 
 #[test]
 fn session_setup_timeouts_fail_fast_without_mcp_hang() {
-    assert_eq!(SESSION_SETUP_TIMEOUT, Duration::from_secs(15));
-    assert_eq!(SESSION_SETUP_WITH_MCP_TIMEOUT, Duration::from_secs(8));
+    assert_eq!(SESSION_SETUP_TIMEOUT, Duration::from_secs(12));
+    assert_eq!(SESSION_SETUP_WITH_MCP_TIMEOUT, Duration::from_secs(5));
     assert!(SESSION_SETUP_WITH_MCP_TIMEOUT < SESSION_SETUP_TIMEOUT);
     assert_eq!(
         session_setup_timeout(AcpProvider::Configured, true),

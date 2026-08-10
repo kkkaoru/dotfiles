@@ -3,7 +3,7 @@ use std::time::Duration;
 use crate::app_server::ThreadEvents;
 use serde_json::Value;
 
-const EXTERNAL_TOOL_BATCH_HANDOFF_QUIET_PERIOD: Duration = Duration::from_millis(40);
+const EXTERNAL_TOOL_BATCH_HANDOFF_QUIET_PERIOD: Duration = Duration::from_millis(15);
 
 pub(super) enum NextEvent {
     Event(Value),

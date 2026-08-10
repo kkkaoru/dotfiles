@@ -2202,7 +2202,7 @@ async fn forwarded_tool_use_releases_the_client_before_subscription_result() {
 
 #[tokio::test]
 async fn delayed_subscription_result_stays_quiet_under_activity_threshold() {
-    // Keep the quiet window above the ~2s silent wait regardless of the
+    // Keep the quiet window above the silent wait regardless of the
     // production INITIAL_ACTIVITY_DELAY (currently snappier than Claude-native).
     let (sender, mut receiver) = channel();
     let mut options = SubscriptionOptions::internal(

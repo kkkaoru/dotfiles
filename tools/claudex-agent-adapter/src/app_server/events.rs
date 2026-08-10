@@ -18,9 +18,9 @@ mod event_shape;
 
 const MAX_QUEUED_EVENTS: usize = 256;
 const MAX_QUEUED_BYTES: usize = 1024 * 1024;
-/// Cap coalesced text-delta size so Claude Code paints GPT/Codex progress in
+/// Cap coalesced text-delta size so Claude Code paints provider progress in
 /// frequent chunks instead of one stalled mega-frame when the consumer lags.
-const MAX_COALESCED_DELTA_CHARS: usize = 256;
+const MAX_COALESCED_DELTA_CHARS: usize = 96;
 
 type Subscribers = Vec<(u64, Arc<EventQueue>)>;
 type Registry = HashMap<String, ThreadRoute>;

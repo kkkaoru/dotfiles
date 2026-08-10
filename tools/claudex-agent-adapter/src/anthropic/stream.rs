@@ -51,13 +51,12 @@ use protocol::{StreamSender, send_stream_error, sse_response};
 pub(super) use protocol::{
     message_start, send_stream_completion, send_stream_frame, streaming_sse_response,
 };
-pub(super) const ACTIVITY_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
-/// Main-turn callers (Claude Code TUI, curl, etc.) sit on a blank response
-/// until the first byte. Two seconds paints progress chrome quickly for GPT /
-/// Codex hops through the adapter without spamming keepalives on fast turns.
-pub(super) const INITIAL_ACTIVITY_DELAY: Duration = Duration::from_secs(2);
+pub(super) const ACTIVITY_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(4);
+/// Main-turn callers sit blank until the first decoded event. Sub-second paint
+/// keeps Claude Code / GPT / Codex hops feeling live without keepalive spam.
+pub(super) const INITIAL_ACTIVITY_DELAY: Duration = Duration::from_millis(250);
 /// SubAgent TUI stays on Nucleating until the first keepalive/tool chrome.
-pub(super) const SUBAGENT_INITIAL_ACTIVITY_DELAY: Duration = Duration::from_secs(1);
+pub(super) const SUBAGENT_INITIAL_ACTIVITY_DELAY: Duration = Duration::from_millis(100);
 
 impl Bridge {
     pub(super) fn streaming_messages(

@@ -48,18 +48,18 @@ pub(super) fn prime_subagent_sse(
     sender
         .try_send(Ok(Bytes::from(message_start(model, input_tokens))))
         .expect("new streaming response channel has capacity");
-    if !is_subagent {
-        return false;
-    }
-    // Claude Code 2.1 drops SubAgent SSE after message_start unless a thinking
-    // block is in the same first flush. Cursor/Grok then sit on Working… with no
-    // ▶ chrome for the whole ACP session/new + first tool (15s+). Command Code
-    // keeps a silent ZWSP heartbeat; other SubAgents paint a visible start line.
-    let first_delta = if crate::command_code_acp::is_command_code_model(model) {
-        "\u{200b}".to_owned()
+    // Claude Code drops SSE after message_start unless a thinking block lands in
+    // the same first flush. Main turns also sit blank during ACP session/new +
+    // permit acquire; paint immediately for every provider hop through claudex.
+    let first_delta = if is_subagent {
+        if crate::command_code_acp::is_command_code_model(model) {
+            "\u{200b}".to_owned()
+        } else {
+            subagent_start_status(true, model, effort)
+                .unwrap_or_else(|| "SubAgent starting\u{2026}".to_owned())
+        }
     } else {
-        subagent_start_status(true, model, effort)
-            .unwrap_or_else(|| "SubAgent starting\u{2026}".to_owned())
+        "Preparing provider session\u{2026}".to_owned()
     };
     for frame in subagent_thinking_prime_sse(&first_delta) {
         let _ = sender.try_send(Ok(Bytes::from(frame)));

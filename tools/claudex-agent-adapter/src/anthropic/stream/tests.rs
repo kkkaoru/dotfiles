@@ -444,14 +444,17 @@ fn recognizes_cursor_thought_for_filler() {
     assert!(sanitize::is_canned_worker_filler("Nucleating"));
     assert_eq!(
         super::SUBAGENT_INITIAL_ACTIVITY_DELAY,
-        Duration::from_secs(1)
+        Duration::from_millis(100)
     );
-    assert_eq!(super::INITIAL_ACTIVITY_DELAY, Duration::from_secs(2));
+    assert_eq!(
+        super::INITIAL_ACTIVITY_DELAY,
+        Duration::from_millis(250)
+    );
     assert!(super::SUBAGENT_INITIAL_ACTIVITY_DELAY < super::INITIAL_ACTIVITY_DELAY);
     assert!(super::INITIAL_ACTIVITY_DELAY < super::ACTIVITY_KEEPALIVE_INTERVAL);
     assert_eq!(
         super::ACTIVITY_KEEPALIVE_INTERVAL,
-        Duration::from_secs(10)
+        Duration::from_secs(4)
     );
     assert_eq!(
         super::types::stream_activity_delays(true),
@@ -1790,14 +1793,21 @@ async fn reports_slow_stream_preparation_before_the_provider_is_ready() {
 #[tokio::test]
 async fn command_code_prepare_primes_silent_thinking_not_canned_text() {
     let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
-    let (probe, _rx) = mpsc::channel::<Result<Bytes, Infallible>>(8);
-    assert!(!super::prime_subagent_sse(
-        &probe,
+    let (main_sender, mut main_receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
+    assert!(super::prime_subagent_sse(
+        &main_sender,
         "gpt-5.6-luna",
         1,
         false,
         None
     ));
+    let _ = main_receiver.recv().await.expect("message_start");
+    let _ = main_receiver.recv().await.expect("thinking start");
+    let main_delta = main_receiver.recv().await.expect("preparing delta");
+    assert!(
+        String::from_utf8_lossy(&main_delta.expect("frame")).contains("Preparing provider session"),
+        "main turns must prime preparing chrome immediately"
+    );
     assert!(super::prime_subagent_sse(
         &sender,
         "meta/muse-spark-1.2-contributor",

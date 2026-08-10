@@ -24,8 +24,8 @@ use super::super::{Segment, content::sse};
 // Anthropic `ping` frames keep Claude Code's ~180s raw-byte idle watchdog
 // happy. They do NOT reset the ~300s decoded-event idle watchdog; that path
 // needs content_block_delta heartbeats from wait_for_stream_segment.
-// 15s worked in isolation; 10s leaves more margin under load.
-const SSE_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
+// Keep raw-byte pings ahead of Claude Code's idle watchdog under load.
+const SSE_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(5);
 const SSE_KEEPALIVE_FRAME: &[u8] = b"event: ping\ndata: {\"type\":\"ping\"}\n\n";
 
 pub(in crate::anthropic) type StreamSender = mpsc::Sender<Result<Bytes, Infallible>>;
