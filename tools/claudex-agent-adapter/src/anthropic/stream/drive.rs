@@ -217,7 +217,12 @@ impl Bridge {
             Err(error) => {
                 tracing::warn!(?error, "streaming turn failed before message_stop");
                 self.note_provider_exhaustion(&error, Some(&turn.session.model));
-                self.remove_session(&turn.session).await;
+                // Cancel the provider leaf before unregistering. Silence judgment
+                // and other mid-wait failures used to remove_session only, which
+                // left orphan ACP children that blocked SubAgent prompt-cache reuse.
+                let _ = self
+                    .disconnect_stream(&turn.session, Arc::clone(&turn.events))
+                    .await;
                 send_stream_error(&sender, error).await;
             }
         }

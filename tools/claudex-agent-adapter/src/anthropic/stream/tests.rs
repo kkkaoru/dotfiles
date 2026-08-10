@@ -3545,6 +3545,55 @@ async fn drive_stream_reports_closed_provider_event_streams() {
 }
 
 #[tokio::test]
+async fn drive_stream_cancels_provider_leaf_when_wait_fails() {
+    // Regression: mid-wait failures (including SubAgent silence judgment) used to
+    // remove_session without cancel_turn, leaving orphan ACP processes that
+    // blocked prompt-cache reuse and looked hung in Claude Code.
+    let (_root, _app, bridge, session) = disconnect_fixture().await;
+    let bridge = Arc::new(bridge);
+    bridge.sessions.lock().await.push(Arc::clone(&session));
+    let dispatcher = crate::app_server::events::ThreadEventDispatcher::default();
+    let events = dispatcher.subscribe("thread");
+    dispatcher.close();
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
+
+    Arc::clone(&bridge)
+        .drive_stream(
+            drive_turn(Arc::clone(&session), events, Vec::new(), None).await,
+            sender,
+            SegmentBuilder::new(1).with_subagent(true),
+            None,
+        )
+        .await;
+
+    let mut output = String::new();
+    while let Some(frame) = receiver.recv().await {
+        output.push_str(&String::from_utf8_lossy(&frame.expect("infallible frame")));
+    }
+    assert!(
+        output.contains("event stream closed") || output.contains("\"stop_reason\":\"error\""),
+        "wait failure must surface to Claude Code: {output}"
+    );
+    assert!(
+        bridge.sessions.lock().await.is_empty(),
+        "failed stream must cancel and unregister the session (not orphan ACP)"
+    );
+    let cancellation = bridge
+        .app
+        .cancel_turn("thread")
+        .await
+        .expect("cancel after disconnect");
+    assert!(
+        matches!(
+            cancellation,
+            crate::agent_backend::TurnCancellation::Settled
+                | crate::agent_backend::TurnCancellation::Unsupported
+        ),
+        "provider cancel path must stay healthy after stream failure cleanup"
+    );
+}
+
+#[tokio::test]
 async fn drive_stream_stops_before_commit_when_client_closes_after_segment() {
     let (_root, _app, bridge, session) = disconnect_fixture().await;
     let bridge = Arc::new(bridge);
