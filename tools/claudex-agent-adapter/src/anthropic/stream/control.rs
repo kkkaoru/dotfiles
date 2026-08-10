@@ -62,3 +62,8 @@ pub(in crate::anthropic) async fn commit_transcript(
     transcript.extend(extras);
     transcript.push(json!({"role":"assistant","content":segment.blocks}));
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[path = "control_tests.rs"]
+mod tests;
