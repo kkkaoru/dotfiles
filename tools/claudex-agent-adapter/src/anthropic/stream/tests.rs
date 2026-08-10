@@ -1593,13 +1593,6 @@ async fn command_code_prepare_primes_silent_thinking_not_canned_text() {
         false,
         None
     ));
-    assert!(!super::prime_subagent_sse(
-        &probe,
-        "gpt-5.6-luna",
-        1,
-        true,
-        None
-    ));
     assert!(super::prime_subagent_sse(
         &sender,
         "meta/muse-spark-1.2-contributor",
@@ -1774,6 +1767,39 @@ async fn primes_command_code_thinking_before_the_client_can_disconnect() {
             .iter()
             .any(|frame| { frame.contains("text_delta") && frame.contains("Command Code") }),
         "primed Command Code must not dump start chrome: {frames:?}"
+    );
+}
+
+#[tokio::test]
+async fn cursor_subagent_primes_thinking_in_the_same_flush_as_message_start() {
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
+    let primed = super::prime_subagent_sse(&sender, "auto", 3, true, Some("high"));
+    drop(sender);
+    assert!(
+        primed,
+        "Cursor SubAgent must prime thinking in the first SSE flush"
+    );
+    let mut frames = Vec::new();
+    while let Some(frame) = receiver.recv().await {
+        frames.push(String::from_utf8(frame.expect("frame").to_vec()).expect("UTF-8 SSE"));
+    }
+    assert!(
+        frames.iter().any(|frame| frame.contains("message_start")),
+        "missing message_start: {frames:?}"
+    );
+    assert!(
+        frames.iter().any(|frame| {
+            frame.contains("thinking_delta")
+                && frame.contains("SubAgent starting: auto")
+                && frame.contains("effort=high")
+        }),
+        "old failure: Cursor SubAgent only sent message_start, so CC dropped SSE and the panel stayed silent: {frames:?}"
+    );
+    assert!(
+        !frames
+            .iter()
+            .any(|frame| frame.contains("\"type\":\"text_delta\"")),
+        "Cursor start chrome must ride thinking, not text: {frames:?}"
     );
 }
 

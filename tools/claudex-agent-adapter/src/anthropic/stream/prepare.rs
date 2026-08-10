@@ -43,21 +43,31 @@ pub(super) fn prime_subagent_sse(
     model: &str,
     input_tokens: u64,
     is_subagent: bool,
-    _effort: Option<&str>,
+    effort: Option<&str>,
 ) -> bool {
     sender
         .try_send(Ok(Bytes::from(message_start(model, input_tokens))))
         .expect("new streaming response channel has capacity");
-    if !is_subagent || !crate::command_code_acp::is_command_code_model(model) {
+    if !is_subagent {
         return false;
     }
-    for frame in command_code_thinking_prime_sse() {
+    // Claude Code 2.1 drops SubAgent SSE after message_start unless a thinking
+    // block is in the same first flush. Cursor/Grok then sit on Working… with no
+    // ▶ chrome for the whole ACP session/new + first tool (15s+). Command Code
+    // keeps a silent ZWSP heartbeat; other SubAgents paint a visible start line.
+    let first_delta = if crate::command_code_acp::is_command_code_model(model) {
+        "\u{200b}".to_owned()
+    } else {
+        subagent_start_status(true, model, effort)
+            .unwrap_or_else(|| "SubAgent starting\u{2026}".to_owned())
+    };
+    for frame in subagent_thinking_prime_sse(&first_delta) {
         let _ = sender.try_send(Ok(Bytes::from(frame)));
     }
     true
 }
 
-fn command_code_thinking_prime_sse() -> [String; 2] {
+fn subagent_thinking_prime_sse(first_delta: &str) -> [String; 2] {
     [
         sse(
             "content_block_start",
@@ -72,7 +82,7 @@ fn command_code_thinking_prime_sse() -> [String; 2] {
             json!({
                 "type":"content_block_delta",
                 "index":0,
-                "delta":{"type":"thinking_delta","thinking":"\u{200b}"}
+                "delta":{"type":"thinking_delta","thinking":first_delta}
             }),
         ),
     ]
