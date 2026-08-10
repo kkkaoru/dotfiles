@@ -54,8 +54,19 @@ pub(super) fn clear_if_current(config: &ServiceConfig) {
     if let Ok(Some(existing)) = read_state(&path)
         && existing.build_id == env!("CLAUDEX_BUILD_ID")
     {
+        stop_waiter(existing.pid, waiter_is_alive);
         let _ = fs::remove_file(path);
     }
+}
+
+pub(super) fn disarm(config: &ServiceConfig) {
+    let Ok(path) = state_path(config) else {
+        return;
+    };
+    if let Ok(Some(existing)) = read_state(&path) {
+        stop_waiter(existing.pid, waiter_is_alive);
+    }
+    let _ = fs::remove_file(path);
 }
 
 fn arm_with(

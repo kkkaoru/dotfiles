@@ -208,22 +208,22 @@ async fn defer_busy_listener(
     active_provider_turns: usize,
     active_subagents: usize,
 ) -> Result<String> {
-    let outcome = pending_hot_swap::arm(config)?;
     match mode {
         Mode::WaitIdle => unreachable!("wait-idle polls Defer without arming"),
         Mode::HotSwap | Mode::Ensure => {
+            pending_hot_swap::disarm(config);
+            if let Some(health) = super::health::fetch_health(client, config).await
+                && let Some(url) = super::promote::try_canonical(client, config, &health).await?
+            {
+                notify_swap_if_replaced(true, config);
+                return Ok(url);
+            }
+            let outcome = pending_hot_swap::arm(config)?;
             eprintln!(
                 "claudex: retaining active adapter pid {pid:?}; routing new sessions to a current-build listener ({active_http_requests} HTTP request(s), {active_provider_turns} provider turn(s), {active_subagents} SubAgent(s); live launch sessions kept; idle hot-swap waiter pid {} for build {})",
                 outcome.pid(),
                 env!("CLAUDEX_BUILD_ID"),
             );
-            if let Some(health) = super::health::fetch_health(client, config).await
-                && let Some(url) = super::promote::try_canonical(client, config, &health).await?
-            {
-                pending_hot_swap::clear_if_current(config);
-                notify_swap_if_replaced(true, config);
-                return Ok(url);
-            }
             let url = fallback::ensure_current_generation(client, config)
                 .await
                 .context("start current-build listener while stale adapter is active")?;

@@ -135,6 +135,12 @@ fn respawns_when_fingerprint_changes_and_ignores_foreign_builds() {
             .build_id,
         "other-build"
     );
+    disarm(&config);
+    assert!(
+        read_state_for_tests(&config)
+            .expect("disarm removes any waiter")
+            .is_none()
+    );
 }
 
 #[test]

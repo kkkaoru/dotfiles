@@ -50,6 +50,7 @@ pub(super) async fn try_canonical(
     let Some(old_pid) = health.pid else {
         return Ok(None);
     };
+    super::pending_hot_swap::disarm(config);
     let session_ids = retained_session_ids(health);
     let advertised = advertised_listen(config, health);
     let warm_listen = fallback::reserve_loopback_listen(config.options.listen)?;
@@ -63,9 +64,12 @@ pub(super) async fn try_canonical(
     )?;
     let started = daemon_start::start_adapter_with_retained(&warm, &retained_path)
         .context("warm-start current-build listener before canonical cutover")?;
-    if let Err(error) = health::wait_until_ready(client, &warm).await {
+    if !wait_until_current_build(client, &warm, Some(started)).await {
         terminate_started(started, &warm);
-        return Err(error.context("wait for warm-start listener"));
+        bail!(
+            "wait for warm-start listener; see {}",
+            warm.log_path.display()
+        );
     }
     let Some(rebind) = request_ephemeral_rebind(client, config).await? else {
         terminate_started(started, &warm);
