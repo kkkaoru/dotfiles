@@ -91,5 +91,9 @@ mod tests {
         assert!(intent.is_subagent && intent.matched);
         assert_eq!(intent.model_override.as_deref(), Some("gpt-worker"));
         assert!(matches!(intent.effort, AgentEffort::Explicit(ref value) if value == "xhigh"));
+        assert!(
+            correlated_intent(&intents, &request, Vec::new()).is_none(),
+            "empty retained transcripts must not invent a continuation intent"
+        );
     }
 }
