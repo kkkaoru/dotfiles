@@ -161,6 +161,117 @@ async fn allows_session_creations_up_to_the_configured_concurrency_limit() {
     server.abort();
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn allows_two_session_creations_and_queues_the_third() {
+    const LIMIT: usize = 2;
+    let _cwd_guard = CWD_LOCK.lock().await;
+    let root = tempfile::tempdir().expect("configured session width-2 fixture");
+    std::env::set_current_dir(root.path()).expect("isolate configured session trace");
+    let model = "opencode-go/deepseek-v4-flash";
+    let backend = AgentBackend::spawn_routes(&[BackendRoute {
+        model: model.to_owned(),
+        backend: BackendKind::ConfiguredAcp,
+        effort: None,
+        model_provider: None,
+        model_catalog_json: None,
+        max_context_tokens: None,
+        max_concurrency: Some(LIMIT),
+        model_prefixes: vec!["opencode-go/".to_owned()],
+        acp: Some(AcpLaunch {
+            program: env!("CARGO_BIN_EXE_grok-acp-mock").to_owned(),
+            arguments: vec![
+                "--mode".to_owned(),
+                "concurrent-sessions-at-limit".to_owned(),
+                "--parallel-limit".to_owned(),
+                LIMIT.to_string(),
+            ],
+        }),
+        web_search_mode: WebSearchMode::default(),
+    }]);
+    let bridge = Arc::new(Bridge::new_with_backend(backend, model.to_owned()));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind session width-2 adapter");
+    let address = listener
+        .local_addr()
+        .expect("session width-2 adapter address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, http_router(bridge, model.to_owned(), None))
+            .await
+            .expect("serve session width-2 adapter");
+    });
+
+    let client = Client::new();
+    let url = format!("http://{address}/v1/messages");
+    let health_url = format!("http://{address}/health");
+    let mut requests = Vec::new();
+    for index in 0..=LIMIT {
+        let client = client.clone();
+        let url = url.clone();
+        requests.push(tokio::spawn(async move {
+            client
+                .post(url)
+                .json(&json!({
+                    "model":model,
+                    "max_tokens":128,
+                    "messages":[{"role":"user","content":format!("session {index}")}]
+                }))
+                .send()
+                .await
+                .expect("send session width-2 turn")
+                .error_for_status()
+                .expect("session width-2 turn status")
+                .json::<Value>()
+                .await
+                .expect("decode session width-2 turn")
+        }));
+    }
+
+    let saturated = tokio::time::timeout(SATURATION_TIMEOUT, async {
+        loop {
+            let health = client
+                .get(&health_url)
+                .send()
+                .await
+                .expect("session width-2 health")
+                .json::<Value>()
+                .await
+                .expect("decode session width-2 health");
+            let status = &health["model_concurrency"][model];
+            if status["active"] == LIMIT
+                && status["queued"] == EXPECTED_QUEUED_REQUESTS
+                && session_count(root.path()) == LIMIT
+            {
+                break health;
+            }
+            tokio::time::sleep(TRACE_POLL_INTERVAL).await;
+        }
+    })
+    .await
+    .expect("session/new calls should reach the width-2 limit");
+    assert_eq!(
+        saturated["model_concurrency"][model],
+        json!({
+            "active":LIMIT,
+            "limit":LIMIT,
+            "available":false,
+            "queued":EXPECTED_QUEUED_REQUESTS
+        })
+    );
+
+    std::fs::write(root.path().join(PARALLEL_RELEASE_FILE), b"release")
+        .expect("release width-2 sessions");
+    for request in requests {
+        let response = tokio::time::timeout(ACP_EVENT_TIMEOUT, request)
+            .await
+            .expect("session width-2 turn timed out")
+            .expect("session width-2 task failed");
+        assert_eq!(response["content"][0]["text"], "GROK_ACP_STREAM_OK");
+    }
+    assert_eq!(prompt_count(root.path()), LIMIT + EXPECTED_QUEUED_REQUESTS);
+    server.abort();
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 // See the companion test above: the full queueing lifecycle is kept in one scenario.
 #[allow(clippy::excessive_nesting, clippy::too_many_lines)]

@@ -34,6 +34,7 @@ struct MockAgent {
     both_prompts_started: Notify,
     cancellable_prompts: RefCell<HashMap<String, Rc<Notify>>>,
     cancelled_sessions: RefCell<HashSet<String>>,
+    parallel_limit: usize,
     // Consumed on the first blocked set_model so later requests are not stuck.
     setup_release: RefCell<Option<UnixListener>>,
 }
@@ -394,7 +395,7 @@ impl acp::Agent for MockAgent {
         if let Some(barrier) = &self.session_barrier {
             let count = self.concurrent_sessions.get() + 1;
             self.concurrent_sessions.set(count);
-            if count <= CONFIGURED_PARALLEL_SESSIONS {
+            if count <= self.parallel_limit {
                 barrier.wait().await;
                 let release = self.trace.with_file_name(PARALLEL_RELEASE_FILE);
                 while !release.exists() {
@@ -449,7 +450,7 @@ impl acp::Agent for MockAgent {
             self.wait_for_concurrent_prompt(2).await;
         }
         if self.mode == "concurrent-turns-seven" {
-            self.wait_for_concurrent_prompt(7).await;
+            self.wait_for_concurrent_prompt(self.parallel_limit).await;
         }
         if let Some(response) = self.maybe_cancellable_prompt(&request).await? {
             return Ok(response);
@@ -543,8 +544,9 @@ async fn main() -> acp::Result<()> {
     let args = std::env::args().skip(1).collect::<Vec<_>>();
     validate_native_grok_arguments(&args)?;
     let mode = args.get(1).cloned().unwrap_or_default();
-    let session_barrier = (mode == "concurrent-sessions-at-limit")
-        .then(|| Rc::new(Barrier::new(CONFIGURED_PARALLEL_SESSIONS)));
+    let parallel_limit = parallel_limit_from_args(&args);
+    let session_barrier =
+        (mode == "concurrent-sessions-at-limit").then(|| Rc::new(Barrier::new(parallel_limit)));
     let setup_release = if mode == "blocked-effort" {
         Some(UnixListener::bind(SETUP_RELEASE_SOCKET).map_err(|_| acp::Error::internal_error())?)
     } else {
@@ -562,6 +564,7 @@ async fn main() -> acp::Result<()> {
         both_prompts_started: Notify::new(),
         cancellable_prompts: RefCell::new(HashMap::new()),
         cancelled_sessions: RefCell::new(HashSet::new()),
+        parallel_limit,
         setup_release: RefCell::new(setup_release),
     };
     agent.record("arguments", &args)?;
@@ -604,6 +607,14 @@ fn validate_native_grok_arguments(args: &[String]) -> acp::Result<()> {
     } else {
         Err(acp::Error::invalid_params())
     }
+}
+
+fn parallel_limit_from_args(args: &[String]) -> usize {
+    args.windows(2)
+        .find(|pair| pair[0] == "--parallel-limit")
+        .and_then(|pair| pair[1].parse().ok())
+        .filter(|limit| *limit > 0)
+        .unwrap_or(CONFIGURED_PARALLEL_SESSIONS)
 }
 
 fn prompt_contains(request: &acp::PromptRequest, expected: &str) -> bool {
