@@ -5,6 +5,7 @@ use crate::launcher::health::Health;
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use super::super::{AdapterOptions, LOCAL_TOKEN, ServiceConfig};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -338,7 +339,18 @@ async fn listen_is_free_matches_whether_the_port_can_be_bound() {
     let listen = listener.local_addr().expect("busy address");
     assert!(!listen_is_free(listen));
     drop(listener);
-    assert!(listen_is_free(listen));
+    // Parallel llvm-cov suites can briefly keep the port busy after drop.
+    let became_free = tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            if listen_is_free(listen) {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap_or(false);
+    assert!(became_free, "port should become free after the listener drops");
 }
 
 #[tokio::test]
