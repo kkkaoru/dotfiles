@@ -1,5 +1,16 @@
+use std::time::Duration;
+
 use super::*;
 use super::handover::ServiceState;
+
+#[test]
+fn wait_idle_poll_stays_snappy_while_listeners_are_busy() {
+    assert_eq!(WAIT_IDLE_POLL_INTERVAL, Duration::from_millis(100));
+    assert!(
+        WAIT_IDLE_POLL_INTERVAL < Duration::from_secs(1),
+        "busy wait-idle must not sleep a full second between rechecks"
+    );
+}
 
 #[test]
 fn should_retry_idle_replace_respects_optional_limits() {

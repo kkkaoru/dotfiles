@@ -7,8 +7,11 @@ use super::{
     health::wait_until_ready, launcher_lock, macos_notify, pending_hot_swap, preflight, recovery,
 };
 
+/// Production recheck cadence while a busy listener is `Defer`ing idle hot-swap.
+/// Keep far under 1s so installs promote promptly after in-flight work drains.
+pub(super) const WAIT_IDLE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 #[cfg(not(test))]
-const WAIT_IDLE_POLL: Duration = Duration::from_secs(1);
+const WAIT_IDLE_POLL: Duration = WAIT_IDLE_POLL_INTERVAL;
 #[cfg(test)]
 const WAIT_IDLE_POLL: Duration = Duration::from_millis(0);
 /// Production waiters keep retrying Replace after a failed handover. Tests
@@ -18,6 +21,12 @@ const WAIT_IDLE_POLL: Duration = Duration::from_millis(0);
 const WAIT_IDLE_REPLACE_RETRIES: Option<u32> = None;
 #[cfg(test)]
 const WAIT_IDLE_REPLACE_RETRIES: Option<u32> = Some(1);
+#[cfg(test)]
+std::thread_local! {
+    // Lets fixtures bind a current-build listener between the outer Start
+    // observation and wait_for_hot_swap_idle's re-inspect.
+    static WAIT_IDLE_INSPECT_PAUSE: std::cell::Cell<Duration> = const { std::cell::Cell::new(Duration::ZERO) };
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Mode {
@@ -50,6 +59,7 @@ async fn wait_until_idle_then_replace(config: &ServiceConfig) -> Result<String> 
             }
             ServiceState::Start => {
                 let _lock = launcher_lock::acquire(&config.lock_path)?;
+                wait_idle_inspect_pause().await;
                 let state = handover::wait_for_hot_swap_idle(&client, config).await?;
                 match state {
                     ServiceState::Defer { .. } => {}
@@ -68,6 +78,7 @@ async fn wait_until_idle_then_replace(config: &ServiceConfig) -> Result<String> 
             ServiceState::Replace { .. } => {
                 let outcome = {
                     let _lock = launcher_lock::acquire(&config.lock_path)?;
+                    wait_idle_inspect_pause().await;
                     let state = handover::wait_for_hot_swap_idle(&client, config).await?;
                     match state {
                         ServiceState::Defer { .. } => None,
@@ -254,6 +265,34 @@ async fn defer_busy_listener(
 
 pub(super) fn should_retry_idle_replace(failures: u32, limit: Option<u32>) -> bool {
     limit.is_none_or(|limit| failures <= limit)
+}
+
+#[cfg(test)]
+pub(super) struct WaitIdleInspectPause;
+
+#[cfg(test)]
+impl WaitIdleInspectPause {
+    pub(super) fn arm(pause: Duration) -> Self {
+        WAIT_IDLE_INSPECT_PAUSE.with(|cell| cell.set(pause));
+        Self
+    }
+}
+
+#[cfg(test)]
+impl Drop for WaitIdleInspectPause {
+    fn drop(&mut self) {
+        WAIT_IDLE_INSPECT_PAUSE.with(|cell| cell.set(Duration::ZERO));
+    }
+}
+
+async fn wait_idle_inspect_pause() {
+    #[cfg(test)]
+    {
+        let pause = WAIT_IDLE_INSPECT_PAUSE.with(|cell| cell.get());
+        if !pause.is_zero() {
+            tokio::time::sleep(pause).await;
+        }
+    }
 }
 
 pub(super) fn listener_was_replaced(state: &ServiceState) -> bool {
