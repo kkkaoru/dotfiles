@@ -865,10 +865,24 @@ mod tests {
 
     #[cfg(unix)]
     fn write_current_build_dummy(root: &Path) -> PathBuf {
+        write_matching_build_dummy(root, &config())
+    }
+
+    #[cfg(unix)]
+    fn write_matching_build_dummy(root: &Path, config: &ServiceConfig) -> PathBuf {
         let dummy = root.join("claudex-agent-adapter");
+        let backend_routes = route_descriptions(&config.options.routes);
+        let worker_routes = worker_route_descriptions(&config.options.model_catalog);
+        let search_worker_routes =
+            search_worker_route_descriptions(&config.options.model_catalog);
+        let hard_timeout = config
+            .options
+            .subagent_hard_timeout_seconds
+            .map(|value| value.get().to_string())
+            .unwrap_or_else(|| "None".to_owned());
         let script = format!(
             r#"#!/usr/bin/python3
-import json, sys
+import json, os, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 def listen_addr():
@@ -881,34 +895,67 @@ def listen_addr():
 host, port = listen_addr().rsplit(":", 1)
 host = host.strip("[]")
 BUILD = {build:?}
+MODEL = {model:?}
+CODEX_FP = {codex_fp:?}
+SERVICE_FP = {service_fp:?}
+BACKEND_ROUTES = {backend_routes}
+WORKER_ROUTES = {worker_routes}
+SEARCH_WORKER_ROUTES = {search_worker_routes}
+MAX_PROCESSES = {max_processes}
+TIMEOUT_MINUTES = {timeout_minutes}
+HARD_TIMEOUT = {hard_timeout}
+PROTOCOL = {protocol}
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_args):
         return
-    def do_GET(self):
-        if self.path.split("?", 1)[0] != "/health":
-            self.send_error(404)
-            return
-        body = json.dumps({{
-            "status": "ok",
-            "pid": None,
-            "protocol_version": {protocol},
-            "build_id": BUILD,
-            "subscription_max_processes": 20,
-            "subscription_timeout_minutes": 120,
-            "listener_handover": True,
-        }}).encode()
-        self.send_response(200)
+    def _json(self, code, body):
+        payload = json.dumps(body).encode()
+        self.send_response(code)
         self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
-        self.wfile.write(body)
+        self.wfile.write(payload)
+    def do_GET(self):
+        path = self.path.split("?", 1)[0]
+        if path == "/health":
+            self._json(200, {{
+                "status": "ok",
+                "pid": os.getpid(),
+                "protocol_version": PROTOCOL,
+                "build_id": BUILD,
+                "model": MODEL,
+                "codex_config_fingerprint": CODEX_FP,
+                "service_config_fingerprint": SERVICE_FP,
+                "backend_routes": BACKEND_ROUTES,
+                "worker_routes": WORKER_ROUTES,
+                "search_worker_routes": SEARCH_WORKER_ROUTES,
+                "subscription_max_processes": MAX_PROCESSES,
+                "subscription_timeout_minutes": TIMEOUT_MINUTES,
+                "subagent_hard_timeout_seconds": HARD_TIMEOUT,
+                "listener_handover": True,
+            }})
+            return
+        if path == "/v1/models":
+            self._json(200, {{"data": []}})
+            return
+        self.send_error(404)
     def do_POST(self):
         self.send_error(501)
 
 HTTPServer((host, int(port)), Handler).serve_forever()
 "#,
             build = env!("CLAUDEX_BUILD_ID"),
+            model = config.options.model,
+            codex_fp = config.codex_config_fingerprint,
+            service_fp = config.service_config_fingerprint,
+            backend_routes = serde_json::to_string(&backend_routes).expect("backend routes json"),
+            worker_routes = serde_json::to_string(&worker_routes).expect("worker routes json"),
+            search_worker_routes =
+                serde_json::to_string(&search_worker_routes).expect("search routes json"),
+            max_processes = config.options.subscription_max_processes,
+            timeout_minutes = config.options.subscription_timeout_minutes,
+            hard_timeout = hard_timeout,
             protocol = ADAPTER_PROTOCOL_VERSION,
         );
         std::fs::write(&dummy, script).expect("dummy script");
@@ -1269,6 +1316,49 @@ HTTPServer((host, int(port)), Handler).serve_forever()
             .await
             .expect_err("unready start should fail");
         assert!(!error.to_string().is_empty());
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn wait_idle_start_promotes_when_dummy_becomes_ready() {
+        let root = tempfile::tempdir().expect("wait-idle start ready fixture");
+        let mut cfg = config();
+        cfg.options.listen = unused_listen();
+        cfg.log_path = root.path().join("adapter.log");
+        cfg.lock_path = root.path().join("adapter.lock");
+        let dummy = write_matching_build_dummy(root.path(), &cfg);
+        cfg.executable = dummy.clone();
+        let url = ensure::run(&cfg, ensure::Mode::WaitIdle)
+            .await
+            .expect("idle start should promote a ready dummy");
+        assert_eq!(url, cfg.base_url());
+        kill_dummy(&dummy);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn wait_idle_replace_promotes_stale_listener_when_dummy_is_ready() {
+        let root = tempfile::tempdir().expect("wait-idle replace ready fixture");
+        let mut cfg = config();
+        let listener = TcpListener::bind("127.0.0.1:0").expect("stale listener");
+        cfg.options.listen = listener.local_addr().expect("stale address");
+        cfg.log_path = root.path().join("adapter.log");
+        cfg.lock_path = root.path().join("adapter.lock");
+        let dummy = write_matching_build_dummy(root.path(), &cfg);
+        cfg.executable = dummy.clone();
+        let mut old = healthy(&cfg);
+        old.build_id = "old-build".to_owned();
+        old.listener_handover = true;
+        let server = serve_responses(
+            listener,
+            vec![health_response(&old), health_response(&old)],
+        );
+        let url = ensure::run(&cfg, ensure::Mode::WaitIdle)
+            .await
+            .expect("idle replace should promote once the dummy is ready");
+        assert_eq!(url, cfg.base_url());
+        server.join().expect("stale listener");
+        kill_dummy(&dummy);
     }
 
     #[tokio::test]
