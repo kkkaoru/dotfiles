@@ -157,7 +157,7 @@ impl SubagentReuseRegistry {
         let recipient = launch.recipient.clone();
         drop(states);
         let object = arguments.as_object_mut()?;
-        object.insert("resume".to_owned(), json!(recipient.clone()));
+        object.insert("resume".to_owned(), json!(recipient));
         tracing::info!(
             session_id,
             recipient,

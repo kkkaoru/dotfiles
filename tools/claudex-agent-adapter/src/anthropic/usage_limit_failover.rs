@@ -47,8 +47,8 @@ impl Bridge {
                 );
             }
         }
-        if super::subscription_oauth::is_subscription_auth_failure(error) {
-            if let Some(path) = provider_auth_cooldown::record_at(
+        if super::subscription_oauth::is_subscription_auth_failure(error)
+            && let Some(path) = provider_auth_cooldown::record_at(
                 self.provider_auth_cache_path().as_deref(),
                 super::subscription_oauth::SUBSCRIPTION_AUTH_SCOPE,
                 &message,
@@ -62,7 +62,6 @@ impl Bridge {
                     "recorded Claude subscription OAuth cooldown; routing outer turns onto providers"
                 );
             }
-        }
         if contains_rate_limit_marker(&message)
             || provider_auth::contains_auth_failure_marker(&message)
             || contains_empty_acp_billing_marker(&message)

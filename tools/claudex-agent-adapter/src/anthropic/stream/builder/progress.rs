@@ -60,11 +60,10 @@ impl SegmentBuilder {
         if delta.is_empty() {
             return Ok(());
         }
-        if self.is_subagent {
-            if let Some(status) = latest_worker_status(delta) {
+        if self.is_subagent
+            && let Some(status) = latest_worker_status(delta) {
                 return self.replace_live_worker_status(&status, stream).await;
             }
-        }
         // ACP status lines (`…:status`) and Qwen/Cursor prose that already
         // contains ▶/✓ must ride thinking chrome. SubAgent TUI hides text_delta.
         // Mixed ▶ + answer chunks (Command Code) must not dump the answer.

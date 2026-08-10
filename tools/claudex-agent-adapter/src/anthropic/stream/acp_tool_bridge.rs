@@ -111,14 +111,12 @@ fn launch_tool_name_from_arguments(
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_ascii_lowercase();
-    if tool_name == "task"
+    if (tool_name == "task"
         || tool_name.ends_with("__task")
-        || tool_name.contains("task") && names.values().any(|name| name == "Task")
-    {
-        if names.values().any(|name| name == "Task") {
+        || tool_name.contains("task") && names.values().any(|name| name == "Task"))
+        && names.values().any(|name| name == "Task") {
             return Some("Task".to_owned());
         }
-    }
     Some("Agent".to_owned())
 }
 
@@ -129,13 +127,11 @@ fn map_launch_name(candidate: &str, names: &HashMap<String, String>) -> Option<S
         return Some(original.to_owned());
     }
     if looks_like_launch_tool(candidate) && has_agent_tool(names) {
-        if candidate.eq_ignore_ascii_case("task")
-            || candidate.to_ascii_lowercase().ends_with("__task")
-        {
-            if names.values().any(|name| name == "Task") {
+        if (candidate.eq_ignore_ascii_case("task")
+            || candidate.to_ascii_lowercase().ends_with("__task"))
+            && names.values().any(|name| name == "Task") {
                 return Some("Task".to_owned());
             }
-        }
         return Some("Agent".to_owned());
     }
     None
@@ -191,11 +187,10 @@ fn normalize_launch_arguments(provider_name: &str, arguments: &Value) -> Value {
             .to_ascii_lowercase()
             .contains("spawn_subagent")
     {
-        if let Some(subagent_type) = object.get("subagent_type").and_then(Value::as_str) {
-            if subagent_type == GROK_HIGH_PROFILE || subagent_type.ends_with(":claudex-high") {
+        if let Some(subagent_type) = object.get("subagent_type").and_then(Value::as_str)
+            && (subagent_type == GROK_HIGH_PROFILE || subagent_type.ends_with(":claudex-high")) {
                 object.insert("subagent_type".to_owned(), json!("claudex-grok"));
             }
-        }
         object.insert("run_in_background".to_owned(), json!(true));
     }
     mapped
@@ -275,7 +270,7 @@ fn bridge_provider_tool_call_inner(
     let mcp_shaped = force_mcp_queue
         || [tool, title]
             .into_iter()
-            .any(|candidate| looks_like_mcp_surface(candidate));
+            .any(looks_like_mcp_surface);
     let normalized_raw = normalize_launch_arguments("Agent", raw_args);
     let queued = if mcp_shaped && !launch_arguments_ready(&normalized_raw) {
         super::acp_launch_queue::peek_pending_launch_arguments_for(launch_owner)
@@ -293,7 +288,7 @@ fn bridge_provider_tool_call_inner(
             if !looks_like_launch_arguments(effective_args)
                 && ![tool, title]
                     .into_iter()
-                    .any(|candidate| looks_like_launch_tool(candidate))
+                    .any(looks_like_launch_tool)
             {
                 return None;
             }

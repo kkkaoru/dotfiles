@@ -181,7 +181,7 @@ pub(super) fn layer(handover: Option<ListenHandover>) -> (Option<HandoverState>,
         .map(|(path, generation)| RetainedProxy::from_path(path, generation))
         .map(Arc::new);
     let state = HandoverState {
-        retained: retained.clone(),
+        retained: retained,
         advertised: Some(listen.clone()),
         client: proxy_http_client(),
     };

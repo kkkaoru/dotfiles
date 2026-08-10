@@ -119,7 +119,6 @@ pub(super) fn hydrate_standard_agent_to_parent(arguments: &mut Value, parent_mod
             Value::String(official_claude_haiku_model().to_owned()),
         );
         object.insert(ADAPTER_EFFORT.to_owned(), Value::String("max".to_owned()));
-        return;
     }
 }
 

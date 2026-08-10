@@ -109,10 +109,7 @@ fn segment_has_tool_payload(blocks: &[Value]) -> bool {
 fn segment_visible_text(blocks: &[Value]) -> String {
     blocks
         .iter()
-        .filter_map(|block| {
-            (block.get("type").and_then(Value::as_str) == Some("text"))
-                .then(|| block.get("text").and_then(Value::as_str).unwrap_or(""))
-        })
+        .filter(|&block| (block.get("type").and_then(Value::as_str) == Some("text"))).map(|block| block.get("text").and_then(Value::as_str).unwrap_or(""))
         .collect::<Vec<_>>()
         .join("\n")
 }

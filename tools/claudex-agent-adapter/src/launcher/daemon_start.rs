@@ -172,7 +172,7 @@ fn configure_process_group(command: &mut Command) {
         // independent of that lifecycle. `setsid` also makes the child its
         // own process-group leader, preserving targeted group shutdown via
         // `kill(-pid, ...)`.
-        command.pre_exec(|| detach_session_and_close_inherited_descriptors());
+        command.pre_exec(detach_session_and_close_inherited_descriptors);
     }
 }
 

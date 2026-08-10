@@ -1340,8 +1340,8 @@ mod tests {
     #[test]
     fn live_panel_evidence_accepts_native_single_agent_status_rendering() {
         assert!(has_live_panel_evidence(
-            r#"synthetic-native-probe
-            ⎿ Backgrounded agent (↓ to manage · ctrl+o to expand)"#
+            r"synthetic-native-probe
+            ⎿ Backgrounded agent (↓ to manage · ctrl+o to expand)"
         ));
         assert!(has_live_panel_evidence(
             r#"Agent "synthetic-native-probe" finished · 55s"#
