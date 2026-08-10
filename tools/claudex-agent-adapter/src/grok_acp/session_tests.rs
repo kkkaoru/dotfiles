@@ -4,8 +4,12 @@ use serde_json::{Value, json};
 #[test]
 fn session_setup_timeouts_fail_fast_without_mcp_hang() {
     assert_eq!(SESSION_SETUP_TIMEOUT, Duration::from_secs(8));
-    assert_eq!(SESSION_SETUP_WITH_MCP_TIMEOUT, Duration::from_secs(5));
+    assert_eq!(SESSION_SETUP_WITH_MCP_TIMEOUT, Duration::from_secs(2));
     assert!(SESSION_SETUP_WITH_MCP_TIMEOUT < SESSION_SETUP_TIMEOUT);
+    assert!(
+        SESSION_SETUP_WITH_MCP_TIMEOUT <= Duration::from_secs(3),
+        "MCP-first session/new must fail fast so Nucleating is not stuck for seconds on hung MCP"
+    );
     assert_eq!(
         session_setup_timeout(AcpProvider::Configured, true),
         SESSION_SETUP_TIMEOUT
