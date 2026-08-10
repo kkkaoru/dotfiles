@@ -27,6 +27,9 @@ Cline Credits models return empty end_turn when balance is $0 — use Qwen Cloud
 If it persists, check your inference gateway (127.0.0.1:54304).";
 
 fn cline_and_qwen_bridge() -> Bridge {
+    let cache_home = Box::leak(Box::new(
+        tempfile::tempdir().expect("isolated failover cache"),
+    ));
     let backend = AgentBackend::spawn_routes(&[
         BackendRoute::new(CLINE_FLASH, BackendKind::ConfiguredAcp),
         BackendRoute::new(QWEN_CLOUD, BackendKind::ConfiguredAcp),
@@ -49,7 +52,9 @@ fn cline_and_qwen_bridge() -> Bridge {
             "high",
         )])
         .expect("install subscription fallback");
-    Bridge::new_with_backend(backend, CLINE_FLASH.to_owned()).with_model_catalog(catalog)
+    Bridge::new_with_backend(backend, CLINE_FLASH.to_owned())
+        .with_model_catalog(catalog)
+        .with_usage_limit_cache_home(cache_home.path())
 }
 
 #[test]
