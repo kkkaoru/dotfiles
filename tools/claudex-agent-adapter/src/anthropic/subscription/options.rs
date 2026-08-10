@@ -123,3 +123,34 @@ impl SubscriptionOptions {
         }
     }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use super::*;
+    use crate::provider_config::ModelCatalog;
+
+    #[test]
+    fn launch_model_is_exhausted_when_auth_scope_is_cooling_down() {
+        let root = tempfile::tempdir().expect("auth cooldown fixture");
+        let cache = crate::anthropic::provider_auth_cooldown::cache_path_for_home(root.path());
+        crate::anthropic::provider_auth_cooldown::record_at(
+            Some(cache.as_path()),
+            "auto",
+            "auth expired",
+            SystemTime::now(),
+        )
+        .expect("record cooldown");
+        let mut context = SubscriptionToolContext::for_tests(
+            Arc::new(crate::anthropic::agent_effort::AgentEffortIntents::default()),
+            ModelCatalog::default(),
+            None,
+            "main",
+            Vec::new(),
+            Value::Null,
+        );
+        context.auth_cache = Some(cache);
+        assert!(context.launch_model_is_exhausted("auto"));
+        assert!(!context.launch_model_is_exhausted("fresh-model"));
+    }
+}
