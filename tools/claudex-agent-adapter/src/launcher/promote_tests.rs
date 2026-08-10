@@ -333,6 +333,15 @@ async fn request_rebind_skips_non_success_responses() {
 }
 
 #[tokio::test]
+async fn listen_is_free_matches_whether_the_port_can_be_bound() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("busy listen");
+    let listen = listener.local_addr().expect("busy address");
+    assert!(!listen_is_free(listen));
+    drop(listener);
+    assert!(listen_is_free(listen));
+}
+
+#[tokio::test]
 async fn wait_until_canonical_released_returns_when_the_port_is_free() {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("free listen");
     let listen = listener.local_addr().expect("free address");

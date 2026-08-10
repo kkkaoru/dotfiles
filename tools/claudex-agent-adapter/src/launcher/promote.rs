@@ -1,5 +1,5 @@
 use std::{
-    net::{SocketAddr, TcpStream},
+    net::{SocketAddr, TcpListener as StdTcpListener},
     time::{Duration, Instant},
 };
 
@@ -15,12 +15,16 @@ use super::{
 
 #[cfg(not(test))]
 const HANDOVER_TIMEOUT: Duration = Duration::from_secs(10);
+#[cfg(test)]
+const HANDOVER_TIMEOUT: Duration = Duration::from_secs(2);
 // llvm-cov parallel load delays dummy warm-start HTTP; keep the gate from
 // treating a slow Python listener as a live-update failure.
+#[cfg(not(test))]
+const WARM_START_TIMEOUT: Duration = Duration::from_secs(10);
 #[cfg(all(test, coverage_nightly))]
-const HANDOVER_TIMEOUT: Duration = Duration::from_secs(15);
+const WARM_START_TIMEOUT: Duration = Duration::from_secs(15);
 #[cfg(all(test, not(coverage_nightly)))]
-const HANDOVER_TIMEOUT: Duration = Duration::from_secs(2);
+const WARM_START_TIMEOUT: Duration = Duration::from_secs(2);
 const HANDOVER_POLL: Duration = Duration::from_millis(25);
 
 #[derive(Debug, Deserialize)]
@@ -114,7 +118,7 @@ pub(super) async fn try_canonical(
         )));
     }
     terminate_started(started, &warm);
-    if TcpStream::connect_timeout(&config.options.listen, Duration::from_millis(50)).is_err() {
+    if listen_is_free(config.options.listen) {
         let pid = daemon_start::start_adapter(config)
             .context("start current-build listener after empty canonical port")?;
         if wait_until_current_build(&probe, config, None).await {
@@ -187,7 +191,7 @@ async fn wait_until_current_build(
     config: &ServiceConfig,
     expected_pid: Option<u32>,
 ) -> bool {
-    let deadline = Instant::now() + HANDOVER_TIMEOUT;
+    let deadline = Instant::now() + WARM_START_TIMEOUT;
     loop {
         if canonical_serves_current_build(client, config, expected_pid).await {
             return true;
@@ -263,10 +267,14 @@ async fn request_rebind(
     Ok(response.json().await.ok())
 }
 
+fn listen_is_free(listen: SocketAddr) -> bool {
+    StdTcpListener::bind(listen).is_ok()
+}
+
 async fn wait_until_canonical_released(config: &ServiceConfig) -> Result<()> {
     let deadline = Instant::now() + HANDOVER_TIMEOUT;
     loop {
-        if TcpStream::connect_timeout(&config.options.listen, Duration::from_millis(50)).is_err() {
+        if listen_is_free(config.options.listen) {
             return Ok(());
         }
         if Instant::now() >= deadline {
