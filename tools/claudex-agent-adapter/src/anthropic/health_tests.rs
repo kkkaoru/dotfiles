@@ -110,20 +110,27 @@ async fn session_id_helpers_skip_blank_claude_session_ids() {
         "gpt-5.6-luna".to_owned(),
     );
     let blank = session_with_id("");
+    let blank_busy = session_with_id("");
     let named = session_with_id("named");
+    let _blank_busy_guard = blank_busy
+        .gate
+        .clone()
+        .try_lock_owned()
+        .expect("lock blank busy gate");
     let _guard = named.gate.clone().try_lock_owned().expect("lock gate");
     bridge
         .sessions
         .lock()
         .await
-        .extend([blank, Arc::clone(&named)]);
+        .extend([blank, blank_busy, Arc::clone(&named)]);
     assert_eq!(
         bridge.active_claude_session_ids().await,
         vec!["named".to_owned()]
     );
     assert_eq!(
         bridge.busy_claude_session_ids().await,
-        vec!["named".to_owned()]
+        vec!["named".to_owned()],
+        "busy sessions with blank claude ids must stay out of the busy id list"
     );
 }
 
