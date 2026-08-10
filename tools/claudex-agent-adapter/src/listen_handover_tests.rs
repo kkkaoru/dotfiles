@@ -13,6 +13,21 @@ fn ephemeral_bind_addr_stays_on_loopback() {
 }
 
 #[test]
+fn canonical_addr_stays_fixed_after_advertised_rebind() {
+    let canonical = "127.0.0.1:8318".parse().unwrap();
+    let cache = tempfile::tempdir().expect("canonical cache");
+    let (handover, _rx) = ListenHandover::new(canonical, cache.path().to_path_buf());
+    assert_eq!(handover.canonical_addr(), canonical);
+    assert_eq!(handover.advertised_addr(), canonical);
+    handover.set_advertised_for_test("127.0.0.1:60104".parse().unwrap());
+    assert_eq!(handover.canonical_addr(), canonical);
+    assert_eq!(
+        handover.advertised_addr(),
+        "127.0.0.1:60104".parse().unwrap()
+    );
+}
+
+#[test]
 fn rebind_state_path_uses_the_canonical_listen_token() {
     let path = rebind_state_path(
         std::path::Path::new("/tmp/claudex"),

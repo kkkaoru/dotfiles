@@ -232,6 +232,7 @@ async fn proxy_middleware_forwards_owned_sessions_and_passes_through_others() {
             &["session-a"],
         ))),
         advertised: Some(advertised),
+        client: proxy_http_client(),
     });
     let app = Router::new()
         .route("/v1/messages", post(|| async { "local" }))
@@ -272,6 +273,96 @@ async fn proxy_middleware_forwards_owned_sessions_and_passes_through_others() {
 }
 
 #[tokio::test]
+async fn rebound_daemon_forwards_idle_keepalive_to_canonical() {
+    // Old failure: after live-update rebind, Claude Code keep-alive stayed on
+    // the old binary. Cursor SubAgent /v1/messages then never reached :8318.
+    let canonical_upstream = serve_http_once(b"from-canonical").await;
+    let cache = tempfile::tempdir().expect("rebound cache");
+    let (advertised, _rx) = ListenHandover::new(canonical_upstream, cache.path().to_path_buf());
+    advertised.set_advertised_for_test("127.0.0.1:61915".parse().unwrap());
+    let state = Some(HandoverState {
+        retained: None,
+        advertised: Some(advertised),
+        client: proxy_http_client(),
+    });
+    let app = Router::new()
+        .route("/v1/messages", post(|| async { "old-binary" }))
+        .layer(middleware::from_fn_with_state(
+            state,
+            proxy_retained_sessions,
+        ));
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("rebound listener");
+    let addr = listener.local_addr().expect("rebound address");
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.ok();
+    });
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let response = reqwest::Client::new()
+        .post(format!("http://{addr}/v1/messages"))
+        .header("x-claude-code-session-id", "5a7a0dcd-idle-tui")
+        .body("{}")
+        .send()
+        .await
+        .expect("idle keepalive");
+    assert_eq!(
+        response.text().await.expect("proxied body"),
+        "from-canonical",
+        "rebound daemon must send idle Cursor SubAgent launches to the new canonical listener"
+    );
+}
+
+#[tokio::test]
+async fn rebound_daemon_keeps_in_flight_retained_sessions_local() {
+    let canonical_upstream = serve_http_once(b"from-canonical").await;
+    let cache = tempfile::tempdir().expect("rebound busy cache");
+    let path = cache.path().join("retained.json");
+    std::fs::write(
+        &path,
+        br#"{"listen":"127.0.0.1:61915","pid":1,"build_id":"old","session_ids":["busy-session"]}"#,
+    )
+    .expect("write retained");
+    let (advertised, _rx) = ListenHandover::new(canonical_upstream, cache.path().to_path_buf());
+    advertised.set_advertised_for_test("127.0.0.1:61915".parse().unwrap());
+    let state = Some(HandoverState {
+        retained: Some(Arc::new(retained(
+            &path,
+            "127.0.0.1:61915",
+            &["busy-session"],
+        ))),
+        advertised: Some(advertised),
+        client: proxy_http_client(),
+    });
+    let app = Router::new()
+        .route("/v1/messages", post(|| async { "old-inflight" }))
+        .layer(middleware::from_fn_with_state(
+            state,
+            proxy_retained_sessions,
+        ));
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("rebound busy listener");
+    let addr = listener.local_addr().expect("rebound busy address");
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.ok();
+    });
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let response = reqwest::Client::new()
+        .post(format!("http://{addr}/v1/messages"))
+        .header("x-claude-code-session-id", "busy-session")
+        .body("{}")
+        .send()
+        .await
+        .expect("busy session");
+    assert_eq!(
+        response.text().await.expect("local inflight body"),
+        "old-inflight",
+        "in-flight retained sessions must stay on the rebound daemon"
+    );
+}
+
+#[tokio::test]
 async fn proxy_middleware_serves_locally_when_retained_listen_is_self() {
     let cache = tempfile::tempdir().expect("self proxy fixture");
     let listen = "127.0.0.1:8318".parse().unwrap();
@@ -285,6 +376,7 @@ async fn proxy_middleware_serves_locally_when_retained_listen_is_self() {
     let state = Some(HandoverState {
         retained: Some(Arc::new(retained(&path, "127.0.0.1:8318", &["session-a"]))),
         advertised: Some(handover),
+        client: proxy_http_client(),
     });
     let app = Router::new()
         .route("/v1/messages", post(|| async { "local" }))

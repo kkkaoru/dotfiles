@@ -25,6 +25,14 @@ use super::CLAUDE_CODE_SESSION_ID_HEADER;
 pub(super) struct HandoverState {
     pub retained: Option<Arc<RetainedProxy>>,
     pub advertised: Option<ListenHandover>,
+    client: reqwest::Client,
+}
+
+fn proxy_http_client() -> reqwest::Client {
+    reqwest::Client::builder()
+        .pool_max_idle_per_host(0)
+        .build()
+        .unwrap_or_else(|_| reqwest::Client::new())
 }
 
 pub(super) struct RetainedProxy {
@@ -48,10 +56,7 @@ impl RetainedProxy {
             path,
             listen: RwLock::new(generation.listen),
             sessions: RwLock::new(generation.session_ids.into_iter().collect()),
-            client: reqwest::Client::builder()
-                .pool_max_idle_per_host(0)
-                .build()
-                .unwrap_or_else(|_| reqwest::Client::new()),
+            client: proxy_http_client(),
         }
     }
 
@@ -95,68 +100,76 @@ impl RetainedProxy {
                     .into_response();
             }
         };
-        let path = request
-            .uri()
-            .path_and_query()
-            .map(|value| value.as_str())
-            .unwrap_or(request.uri().path());
-        let url = format!("http://{listen}{path}");
-        let mut upstream = self.client.request(request.method().clone(), url);
-        for (name, value) in request.headers() {
-            if is_hop_by_hop_header(name) {
-                continue;
-            }
-            upstream = upstream.header(name, value);
+        proxy_request(&self.client, listen, request).await
+    }
+}
+
+async fn proxy_request(
+    client: &reqwest::Client,
+    listen: std::net::SocketAddr,
+    request: Request,
+) -> Response {
+    let path = request
+        .uri()
+        .path_and_query()
+        .map(|value| value.as_str())
+        .unwrap_or(request.uri().path());
+    let url = format!("http://{listen}{path}");
+    let mut upstream = client.request(request.method().clone(), url);
+    for (name, value) in request.headers() {
+        if is_hop_by_hop_header(name) {
+            continue;
         }
-        let body = match axum::body::to_bytes(request.into_body(), 32 * 1024 * 1024).await {
-            Ok(body) => body,
-            Err(error) => {
-                return (
-                    StatusCode::BAD_GATEWAY,
-                    Json(json!({"error": {"message": error.to_string()}})),
-                )
-                    .into_response();
-            }
-        };
-        match upstream.body(body).send().await {
-            Ok(mut response) => {
-                let status = StatusCode::from_u16(response.status().as_u16())
-                    .unwrap_or(StatusCode::BAD_GATEWAY);
-                let headers = response.headers().clone();
-                let (tx, rx) =
-                    tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(8);
-                tokio::spawn(async move {
-                    loop {
-                        match response.chunk().await {
-                            Ok(Some(chunk)) => {
-                                if tx.send(Ok(chunk)).await.is_err() {
-                                    break;
-                                }
-                            }
-                            Ok(None) => break,
-                            Err(error) => {
-                                let _ = tx.send(Err(std::io::Error::other(error))).await;
-                                break;
-                            }
-                        }
-                    }
-                });
-                let mut mapped = Response::builder().status(status);
-                for (name, value) in headers.iter() {
-                    mapped = mapped.header(name, value);
-                }
-                mapped
-                    .body(Body::from_stream(
-                        tokio_stream::wrappers::ReceiverStream::new(rx),
-                    ))
-                    .unwrap_or_else(|_| StatusCode::BAD_GATEWAY.into_response())
-            }
-            Err(error) => (
+        upstream = upstream.header(name, value);
+    }
+    let body = match axum::body::to_bytes(request.into_body(), 32 * 1024 * 1024).await {
+        Ok(body) => body,
+        Err(error) => {
+            return (
                 StatusCode::BAD_GATEWAY,
                 Json(json!({"error": {"message": error.to_string()}})),
             )
-                .into_response(),
+                .into_response();
         }
+    };
+    match upstream.body(body).send().await {
+        Ok(mut response) => {
+            let status =
+                StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
+            let headers = response.headers().clone();
+            let (tx, rx) =
+                tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(8);
+            tokio::spawn(async move {
+                loop {
+                    match response.chunk().await {
+                        Ok(Some(chunk)) => {
+                            if tx.send(Ok(chunk)).await.is_err() {
+                                break;
+                            }
+                        }
+                        Ok(None) => break,
+                        Err(error) => {
+                            let _ = tx.send(Err(std::io::Error::other(error))).await;
+                            break;
+                        }
+                    }
+                }
+            });
+            let mut mapped = Response::builder().status(status);
+            for (name, value) in headers.iter() {
+                mapped = mapped.header(name, value);
+            }
+            mapped
+                .body(Body::from_stream(
+                    tokio_stream::wrappers::ReceiverStream::new(rx),
+                ))
+                .unwrap_or_else(|_| StatusCode::BAD_GATEWAY.into_response())
+        }
+        Err(error) => (
+            StatusCode::BAD_GATEWAY,
+            Json(json!({"error": {"message": error.to_string()}})),
+        )
+            .into_response(),
     }
 }
 
@@ -170,6 +183,7 @@ pub(super) fn layer(handover: Option<ListenHandover>) -> (Option<HandoverState>,
     let state = HandoverState {
         retained: retained.clone(),
         advertised: Some(listen.clone()),
+        client: proxy_http_client(),
     };
     let router = Router::new()
         .route("/admin/rebind-listener", post(rebind_listener))
@@ -183,19 +197,42 @@ pub(super) async fn proxy_retained_sessions(
     request: Request,
     next: Next,
 ) -> Response {
-    let Some(retained) = state.as_ref().and_then(|state| state.retained.as_ref()) else {
+    let Some(state) = state.as_ref() else {
         return next.run(request).await;
     };
-    let Some(session_id) = headers
+    let session_id = headers
         .get(CLAUDE_CODE_SESSION_ID_HEADER)
         .and_then(|value| value.to_str().ok())
         .map(str::trim)
-        .filter(|value| !value.is_empty())
-    else {
+        .filter(|value| !value.is_empty());
+    if let Some(advertised) = state.advertised.as_ref() {
+        let current = advertised.advertised_addr();
+        let canonical = advertised.canonical_addr();
+        if current != canonical {
+            // Claude Code keep-alives the TCP socket across live-update. After
+            // rebind, idle SubAgent launches would otherwise stay on this old
+            // binary and look silent. Forward them to the new canonical listen
+            // unless this process still owns an in-flight retained session.
+            let keep_local = session_id.is_some_and(|id| {
+                state
+                    .retained
+                    .as_ref()
+                    .is_some_and(|retained| retained.owns(id) && retained.targets(current))
+            });
+            if !keep_local {
+                return proxy_request(&state.client, canonical, request).await;
+            }
+            return next.run(request).await;
+        }
+    }
+    let Some(retained) = state.retained.as_ref() else {
+        return next.run(request).await;
+    };
+    let Some(session_id) = session_id else {
         return next.run(request).await;
     };
     if retained.owns(session_id) {
-        if let Some(advertised) = state.as_ref().and_then(|state| state.advertised.as_ref())
+        if let Some(advertised) = state.advertised.as_ref()
             && retained.targets(advertised.advertised_addr())
         {
             return next.run(request).await;

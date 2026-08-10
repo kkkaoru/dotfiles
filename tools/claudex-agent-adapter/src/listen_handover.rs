@@ -54,6 +54,15 @@ impl ListenHandover {
         *self.advertised.read().expect("listen handover lock")
     }
 
+    pub(crate) fn canonical_addr(&self) -> SocketAddr {
+        self.canonical
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_advertised_for_test(&self, listen: SocketAddr) {
+        *self.advertised.write().expect("listen handover lock") = listen;
+    }
+
     pub(crate) fn request_ephemeral(&self) {
         let _ = self.request.send(HandoverCommand::Ephemeral);
     }
