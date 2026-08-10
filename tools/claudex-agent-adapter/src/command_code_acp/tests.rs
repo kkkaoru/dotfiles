@@ -86,6 +86,16 @@ fn parse_options_defaults_and_overrides() {
 }
 
 #[test]
+fn rejects_whitespace_only_model() {
+    // Empty `--model` fails in require_value; whitespace-only reaches trim().
+    let err = Options::parse(["--model", "   \t  "]).expect_err("whitespace model");
+    assert!(
+        err.to_string().contains("--model must not be empty"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn prefers_home_local_cmd_wrapper_when_present() {
     let _guard = ENV_LOCK.lock().expect("env lock");
     let previous = std::env::var_os("COMMAND_CODE_CMD");
