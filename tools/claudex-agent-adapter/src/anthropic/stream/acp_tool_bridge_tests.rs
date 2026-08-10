@@ -506,6 +506,14 @@ mod tests {
         assert_eq!(result["subagent_type"], "claudex-grok");
         assert_eq!(result["run_in_background"], true);
 
+        // ends_with(":claudex-high") without equaling the grok high profile constant
+        let suffix_only = json!({
+            "prompt": "go",
+            "subagent_type": "custom-worker:claudex-high"
+        });
+        let result = normalize_launch_arguments("spawn_subagent", &suffix_only);
+        assert_eq!(result["subagent_type"], "claudex-grok");
+
         let mcp_spawn = json!({"prompt": "x", "subagent_type": "other"});
         let result = normalize_launch_arguments("MCP__Spawn_Subagent", &mcp_spawn);
         assert_eq!(result["run_in_background"], true);
@@ -513,6 +521,22 @@ mod tests {
         let no_subagent = json!({"prompt": "y"});
         let result = normalize_launch_arguments("spawn_subagent", &no_subagent);
         assert_eq!(result["run_in_background"], true);
+    }
+
+    #[test]
+    fn launch_tool_name_from_arguments_matches_embedded_task_tokens() {
+        let with_task = names();
+        let args = json!({"_toolName": "cursor_task_card", "prompt": "go"});
+        assert_eq!(
+            launch_tool_name_from_arguments(&args, &with_task).as_deref(),
+            Some("Task")
+        );
+
+        let agent_only = HashMap::from([("cc_Agent_0".to_owned(), "Agent".to_owned())]);
+        assert_eq!(
+            launch_tool_name_from_arguments(&args, &agent_only).as_deref(),
+            Some("Agent")
+        );
     }
 
     #[test]
