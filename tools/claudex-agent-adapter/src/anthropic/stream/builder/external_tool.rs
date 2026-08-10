@@ -149,7 +149,8 @@ impl SegmentBuilder {
         .await;
         self.report_subagent_action(original_name, &arguments, context.stream)
             .await?;
-        self.close_open_blocks(context.stream).await?;
+        self.prepare_blocks_for_external_tool(original_name, &call.call_id, context.stream)
+            .await?;
         let block = json!({
             "type": "tool_use",
             "id": tool_use_id,
@@ -160,13 +161,31 @@ impl SegmentBuilder {
         send_tool_use(context.stream, index, &block).await?;
         self.blocks.push(block);
         self.external_tool_calls += 1;
-        if self.is_subagent && !self.is_command_code_subagent() {
-            self.provider_tool_calls
-                .push((call.call_id.clone(), original_name.to_owned()));
-            self.stream_progress_text(&format!("\n▶ {original_name}\n"), context.stream)
-                .await?;
-        }
         Ok(())
+    }
+
+    async fn prepare_blocks_for_external_tool(
+        &mut self,
+        original_name: &str,
+        call_id: &str,
+        stream: Option<&StreamSender>,
+    ) -> Result<()> {
+        if !self.is_subagent {
+            return self.close_open_blocks(stream).await;
+        }
+        // CC 2.1 SubAgent viewer paints one live thinking block and hides
+        // tool_use until end_turn. Closing thinking for Read/Bash left only
+        // "Thought for Xs" with no ▶ body. Keep thinking open and paint ▶
+        // before the tool_use card.
+        self.flush_pending_answer(stream).await?;
+        self.close_text_block(stream).await?;
+        if self.is_command_code_subagent() {
+            return Ok(());
+        }
+        self.provider_tool_calls
+            .push((call_id.to_owned(), original_name.to_owned()));
+        self.stream_progress_text(&format!("\n▶ {original_name}\n"), stream)
+            .await
     }
 
     async fn reject_disabled_subagent(

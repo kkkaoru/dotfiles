@@ -1943,7 +1943,7 @@ async fn forwards_live_task_output_to_claude_code() {
 }
 
 #[tokio::test]
-async fn subagent_codex_tool_use_reopens_thinking_so_viewer_stays_live() {
+async fn subagent_codex_tool_use_keeps_thinking_open_so_viewer_stays_live() {
     let (_root, _app, bridge, mut session) = disconnect_fixture().await;
     Arc::get_mut(&mut session)
         .expect("unique session")
@@ -1973,7 +1973,7 @@ async fn subagent_codex_tool_use_reopens_thinking_so_viewer_stays_live() {
     assert!(builder.has_external_tool_calls());
     assert!(
         builder.thinking.is_open(),
-        "Codex/luna Read must reopen thinking so the panel is not frozen"
+        "Codex/luna Read must keep thinking open so the panel is not frozen"
     );
     builder
         .activity_keepalive(Some(&sender))
@@ -1991,6 +1991,16 @@ async fn subagent_codex_tool_use_reopens_thinking_so_viewer_stays_live() {
     assert!(
         output.contains("thinking_delta") && output.contains("▶ Read"),
         "live ▶ progress missing after Read: {output}"
+    );
+    let thinking_start = output.find(r#""type":"thinking""#).expect("thinking start");
+    let tool_use = output.find(r#""type":"tool_use""#).expect("tool_use");
+    assert!(
+        thinking_start < tool_use,
+        "▶ thinking must precede tool_use: {output}"
+    );
+    assert!(
+        !output[..tool_use].contains("content_block_stop"),
+        "SubAgent thinking must stay open across Read: {output}"
     );
     assert!(
         !output.contains("still working") && !output.contains("Thought for"),
