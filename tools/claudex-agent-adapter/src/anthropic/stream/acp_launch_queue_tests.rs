@@ -3,7 +3,8 @@ use std::fs;
 use serde_json::{Value, json};
 
 use super::{
-    launch_args_from_entry, peek_pending_launch_arguments_from, take_pending_launch_arguments_from,
+    launch_args_from_entry, peek_pending_launch_arguments_for, peek_pending_launch_arguments_from,
+    take_pending_launch_arguments_for, take_pending_launch_arguments_from,
 };
 
 #[test]
@@ -125,4 +126,39 @@ fn does_not_drain_another_claude_session_launch() {
             .expect("session-b launch")["prompt"]
             == "other-tui"
     );
+}
+
+#[test]
+fn owner_scoped_queue_reads_the_per_session_file() {
+    let root = tempfile::tempdir().expect("owner queue fixture");
+    let global = root.path().join("launch-queue.jsonl");
+    let owner_path = crate::launch_mcp::launch_queue_path(root.path(), Some("session-a"));
+    let ts = super::now_secs();
+    fs::write(
+        &owner_path,
+        json!({"ts":ts,"name":"Agent","owner":"session-a","arguments":{"prompt":"owned"}})
+            .to_string()
+            + "\n",
+    )
+    .expect("owner queue");
+    fs::write(
+        &global,
+        json!({"ts":ts,"name":"Agent","arguments":{"prompt":"global"}}).to_string() + "\n",
+    )
+    .expect("global queue");
+    let previous = std::env::var_os("CLAUDEX_LAUNCH_QUEUE");
+    unsafe { std::env::set_var("CLAUDEX_LAUNCH_QUEUE", &global) };
+    let peeked = peek_pending_launch_arguments_for(Some("session-a")).expect("owned peek");
+    assert_eq!(peeked["prompt"], "owned");
+    let taken = take_pending_launch_arguments_for(Some("session-a")).expect("owned take");
+    assert_eq!(taken["prompt"], "owned");
+    assert_eq!(take_pending_launch_arguments_for(Some("session-a")), None);
+    assert_eq!(
+        take_pending_launch_arguments_for(None).expect("global take")["prompt"],
+        "global"
+    );
+    match previous {
+        Some(value) => unsafe { std::env::set_var("CLAUDEX_LAUNCH_QUEUE", value) },
+        None => unsafe { std::env::remove_var("CLAUDEX_LAUNCH_QUEUE") },
+    }
 }
