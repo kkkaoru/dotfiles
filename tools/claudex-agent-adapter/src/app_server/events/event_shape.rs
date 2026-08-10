@@ -5,12 +5,16 @@ pub(super) fn coalescible_suffix<'a>(last: &Value, next: &'a Value) -> Option<&'
     if next.get("method")?.as_str()? != method
         || !matches!(
             method,
-            "item/agentMessage/delta" | "item/reasoning/summaryTextDelta"
+            "item/agentMessage/delta"
+                | "item/reasoning/summaryTextDelta"
+                | "item/reasoning/textDelta"
         )
         || last.pointer("/params/turnId") != next.pointer("/params/turnId")
         || last.pointer("/params/itemId") != next.pointer("/params/itemId")
         || (method == "item/reasoning/summaryTextDelta"
             && last.pointer("/params/summaryIndex") != next.pointer("/params/summaryIndex"))
+        || (method == "item/reasoning/textDelta"
+            && last.pointer("/params/contentIndex") != next.pointer("/params/contentIndex"))
     {
         return None;
     }
@@ -29,6 +33,7 @@ pub(super) fn is_bridge_event(event: &Value) -> bool {
         Some(
             "item/agentMessage/delta"
             | "item/reasoning/summaryTextDelta"
+            | "item/reasoning/textDelta"
             | "item/tool/call"
             | "item/providerTool/call"
             | "item/providerTool/update"

@@ -313,6 +313,7 @@ fn accepts_only_events_used_by_the_anthropic_bridge() {
     for method in [
         "item/agentMessage/delta",
         "item/reasoning/summaryTextDelta",
+        "item/reasoning/textDelta",
         "item/tool/call",
         "thread/tokenUsage/updated",
         "turn/completed",
@@ -320,7 +321,7 @@ fn accepts_only_events_used_by_the_anthropic_bridge() {
     ] {
         assert!(is_bridge_event(&json!({ "method": method })));
     }
-    for method in ["thread/started", "turn/started", "item/reasoning/textDelta"] {
+    for method in ["thread/started", "turn/started"] {
         assert!(!is_bridge_event(&json!({ "method": method })));
     }
     for method in ["item/started", "item/completed"] {

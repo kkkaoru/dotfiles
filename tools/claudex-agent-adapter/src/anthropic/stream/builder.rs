@@ -53,6 +53,9 @@ pub(in crate::anthropic) struct SegmentBuilder {
     /// Completed provider-native web calls whose provenance has already been
     /// counted. A provider may repeat its final ToolCallUpdate while reconnecting.
     verified_web_evidence_call_ids: Vec<String>,
+    /// Codex itemIds that already streamed `summaryTextDelta`. Raw `textDelta`
+    /// for those items stays hidden so summaries are not duplicated.
+    summarized_reasoning_ids: Vec<String>,
     injected_output_tokens: u64,
     usage: Usage,
 }
@@ -74,6 +77,7 @@ impl SegmentBuilder {
             bulk_dump_hinted: false,
             requires_verified_web_evidence: false,
             verified_web_evidence_call_ids: Vec::new(),
+            summarized_reasoning_ids: Vec::new(),
             injected_output_tokens: 0,
             usage: Usage {
                 input_tokens,
@@ -181,9 +185,12 @@ impl SegmentBuilder {
         match event.get("method").and_then(Value::as_str) {
             Some("item/agentMessage/delta") => self.text_delta(event, stream).await?,
             Some("item/reasoning/summaryTextDelta") => {
+                self.note_summarized_reasoning(event);
                 self.reasoning_delta(event, stream).await?;
             }
-            Some("item/reasoning/textDelta") => {}
+            Some("item/reasoning/textDelta") => {
+                self.raw_reasoning_delta(event, stream).await?;
+            }
             _ => return Ok(false),
         }
         Ok(true)

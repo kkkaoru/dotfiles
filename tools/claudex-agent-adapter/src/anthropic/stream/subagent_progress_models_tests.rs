@@ -93,9 +93,9 @@ const CASES: &[Case] = &[
             "型と配信パスを把握しました。既存 finish-prediction-inputs-cache を確認します。\n",
         ),
         prose_item_id: "cline:message",
-        reasoning: None,
+        reasoning: Some("Check the cache seed path before editing.\n"),
         tool: None,
-        expect_visible: &["型と配信パスを把握しました"],
+        expect_visible: &["型と配信パスを把握しました", "cache seed path"],
     },
     Case {
         name: "spark-codex",

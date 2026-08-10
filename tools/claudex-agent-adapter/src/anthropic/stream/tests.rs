@@ -664,6 +664,87 @@ async fn command_code_muse_spark_status_bursts_stay_on_one_thinking_block() {
 }
 
 #[tokio::test]
+async fn gpt_textdelta_without_summary_paints_native_thinking() {
+    // GPT/Codex often streams `item/reasoning/textDelta` with no summary.
+    // Dropping it left Claude Code Thinking blank while Cursor ACP thought chunks worked.
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
+    let mut builder = SegmentBuilder::for_turn(1, true, "gpt-5.6-luna");
+    builder
+        .model_output_event(
+            &json!({
+                "method":"item/reasoning/textDelta",
+                "params":{
+                    "itemId":"gpt:reasoning",
+                    "contentIndex":0,
+                    "delta":"Inspect the neon pooler GUCs on a fresh connection.\n"
+                }
+            }),
+            Some(&sender),
+        )
+        .await
+        .expect("gpt textdelta");
+    let segment = builder.finish(Some(&sender)).await.expect("segment");
+    drop(sender);
+    assert!(
+        segment.blocks.iter().any(|block| {
+            block.get("type").and_then(Value::as_str) == Some("thinking")
+                && block
+                    .get("thinking")
+                    .and_then(Value::as_str)
+                    .is_some_and(|text| text.contains("neon pooler GUCs"))
+        }),
+        "GPT textDelta must become native thinking: {:?}",
+        segment.blocks
+    );
+    let mut sse = String::new();
+    while let Some(frame) = receiver.recv().await {
+        sse.push_str(&String::from_utf8_lossy(&frame.expect("frame")));
+    }
+    assert!(
+        sse.contains("thinking_delta") && sse.contains("neon pooler GUCs"),
+        "Claude Code Thinking must stream GPT textDelta live: {sse}"
+    );
+    assert!(
+        !sse.contains("raw secret"),
+        "summary-backed items must still hide raw textDelta: {sse}"
+    );
+}
+
+#[tokio::test]
+async fn gpt_summary_still_hides_raw_textdelta() {
+    let mut builder = SegmentBuilder::for_turn(1, true, "gpt-5.6-luna");
+    builder
+        .model_output_event(
+            &json!({
+                "method":"item/reasoning/summaryTextDelta",
+                "params":{"itemId":"gpt:reasoning","summaryIndex":0,"delta":"Inspect the neon pooler next.\n"}
+            }),
+            None,
+        )
+        .await
+        .expect("summary");
+    builder
+        .model_output_event(
+            &json!({
+                "method":"item/reasoning/textDelta",
+                "params":{"itemId":"gpt:reasoning","contentIndex":0,"delta":"raw secret"}
+            }),
+            None,
+        )
+        .await
+        .expect("raw textdelta");
+    let segment = builder.finish(None).await.expect("segment");
+    let thinking = segment
+        .blocks
+        .iter()
+        .find(|block| block.get("type").and_then(Value::as_str) == Some("thinking"))
+        .and_then(|block| block.get("thinking").and_then(Value::as_str))
+        .unwrap_or_default();
+    assert!(thinking.contains("Inspect the neon pooler next"));
+    assert!(!thinking.contains("raw secret"));
+}
+
+#[tokio::test]
 async fn whitespace_reasoning_delta_does_not_open_blank_thought_chrome() {
     let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
     let mut builder = SegmentBuilder::new(1);
@@ -1286,10 +1367,6 @@ async fn ignores_malformed_empty_raw_and_late_reasoning() {
         json!({
             "method":"item/reasoning/summaryTextDelta",
             "params":{"itemId":"reasoning","summaryIndex":0,"delta":""}
-        }),
-        json!({
-            "method":"item/reasoning/textDelta",
-            "params":{"itemId":"reasoning","contentIndex":0,"delta":"raw"}
         }),
     ] {
         assert!(

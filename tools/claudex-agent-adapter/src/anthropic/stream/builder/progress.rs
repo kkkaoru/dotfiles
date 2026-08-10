@@ -102,6 +102,29 @@ impl SegmentBuilder {
         self.stream_answer_delta(delta, stream).await
     }
 
+    pub(super) fn note_summarized_reasoning(&mut self, event: &Value) {
+        let Some(item_id) = event.pointer("/params/itemId").and_then(Value::as_str) else {
+            return;
+        };
+        if !self.summarized_reasoning_ids.iter().any(|id| id == item_id) {
+            self.summarized_reasoning_ids.push(item_id.to_owned());
+        }
+    }
+
+    pub(super) async fn raw_reasoning_delta(
+        &mut self,
+        event: &Value,
+        stream: Option<&StreamSender>,
+    ) -> Result<()> {
+        let Some(item_id) = event.pointer("/params/itemId").and_then(Value::as_str) else {
+            return Ok(());
+        };
+        if self.summarized_reasoning_ids.iter().any(|id| id == item_id) {
+            return Ok(());
+        }
+        self.reasoning_delta(event, stream).await
+    }
+
     pub(in crate::anthropic::stream) async fn reasoning_delta(
         &mut self,
         event: &Value,

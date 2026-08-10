@@ -372,20 +372,19 @@ fn thinking_signature(item_id: &str) -> String {
     }
 }
 
+#[rustfmt::skip]
 pub(super) fn summary_delta(event: &Value) -> Option<(&str, i64, &str)> {
     let params = event.get("params")?;
-    Some((
-        params.get("itemId")?.as_str()?,
-        params.get("summaryIndex")?.as_i64()?,
-        params.get("delta")?.as_str()?,
-    ))
+    let index = params.get("summaryIndex").and_then(Value::as_i64)
+        .or_else(|| params.get("contentIndex").and_then(Value::as_i64))?;
+    Some((params.get("itemId")?.as_str()?, index, params.get("delta")?.as_str()?))
 }
 
 pub(super) fn has_visible_output(blocks: &[Value]) -> bool {
     blocks.iter().any(|block| {
         !matches!(
             block.get("type").and_then(Value::as_str),
-            Some("thinking") | Some("server_tool_use")
+            Some("thinking" | "server_tool_use")
         )
     })
 }
