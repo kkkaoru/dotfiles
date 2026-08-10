@@ -162,6 +162,10 @@ async fn allows_session_creations_up_to_the_configured_concurrency_limit() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[cfg_attr(
+    coverage_nightly,
+    ignore = "width-2 ACP mock admission/queue exceeds llvm-cov budgets"
+)]
 async fn allows_two_session_creations_and_queues_the_third() {
     const LIMIT: usize = 2;
     let _cwd_guard = CWD_LOCK.lock().await;
