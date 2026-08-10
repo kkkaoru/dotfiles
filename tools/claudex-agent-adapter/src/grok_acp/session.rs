@@ -16,9 +16,9 @@ use tokio::sync::oneshot;
 use super::{connection::AcpProvider, prompt};
 use crate::anthropic::subscription_request::cwd_from_system;
 
-const SESSION_SETUP_TIMEOUT: Duration = Duration::from_secs(30);
+const SESSION_SETUP_TIMEOUT: Duration = Duration::from_secs(15);
 /// Cursor/OpenCode often hang on MCP during session/new. Fail the MCP-first attempt
-/// quickly and retry without MCP rather than blocking a full 30s every turn.
+/// quickly and retry without MCP rather than blocking a full SESSION_SETUP_TIMEOUT every turn.
 const SESSION_SETUP_WITH_MCP_TIMEOUT: Duration = Duration::from_secs(8);
 const LAUNCH_MCP_NAME: &str = "claudex-launch";
 const LAUNCH_MCP_COMMAND: &str = "mcp-claudex-launch";

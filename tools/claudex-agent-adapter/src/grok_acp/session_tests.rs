@@ -2,6 +2,13 @@ use super::*;
 use serde_json::{Value, json};
 
 #[test]
+fn session_setup_timeouts_fail_fast_without_mcp_hang() {
+    assert_eq!(SESSION_SETUP_TIMEOUT, Duration::from_secs(15));
+    assert_eq!(SESSION_SETUP_WITH_MCP_TIMEOUT, Duration::from_secs(8));
+    assert!(SESSION_SETUP_WITH_MCP_TIMEOUT < SESSION_SETUP_TIMEOUT);
+}
+
+#[test]
 fn launch_scoped_session_does_not_pin_model_after_create() {
     assert!(pins_acp_model_after_create(AcpProvider::Configured));
     assert!(!pins_acp_model_after_create(
@@ -29,6 +36,22 @@ async fn bounds_session_setup_and_reports_provider_failures() {
     .await
     .unwrap_err();
     assert!(failed.to_string().contains("session/new failed"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn session_setup_timeout_error_includes_configured_duration() {
+    let error = await_setup(
+        AcpProvider::Configured,
+        SESSION_SETUP_TIMEOUT,
+        std::future::pending::<acp::Result<()>>(),
+    )
+    .await
+    .unwrap_err();
+    let message = error.to_string();
+    assert!(
+        message.contains("timed out after 15s"),
+        "expected SESSION_SETUP_TIMEOUT in error, got {message}"
+    );
 }
 
 #[tokio::test]
