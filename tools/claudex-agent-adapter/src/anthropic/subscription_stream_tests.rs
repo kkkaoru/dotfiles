@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use axum::body::Bytes;
 use serde_json::{Value, json};
 use tokio::{
-    io::{AsyncWriteExt, BufReader},
+    io::{AsyncBufReadExt as _, AsyncWriteExt, BufReader},
     process::Command,
     sync::mpsc,
 };
@@ -733,6 +733,84 @@ async fn launch_fanout_drain_ends_when_no_sibling_launch_arrives() {
     let output = output(&mut receiver).await;
     assert!(output.contains(r#""name":"Task""#));
     assert!(output.contains(r#""stop_reason":"tool_use""#) || output.contains("end_turn"));
+}
+
+#[tokio::test]
+async fn consume_iteration_emits_keepalive_when_activity_deadline_elapses() {
+    let (sender, _receiver) = channel();
+    let mut stream = SubscriptionStream {
+        text_started: false,
+        text_closed: false,
+        saw_tool_use: false,
+        launch_fanout_open: false,
+        seen_tool_ids: HashSet::new(),
+        blocked_subagent: false,
+        saw_result: false,
+        next_index: 0,
+        tools: Vec::new(),
+        tool_context: None,
+        activity: SubscriptionActivity::default(),
+    };
+    let (_writer, reader) = tokio::io::duplex(64);
+    let mut lines = BufReader::new(reader).lines();
+    let mut pending = None;
+    let mut deadline = Box::pin(tokio::time::sleep(Duration::from_millis(5)));
+    let iteration = super::consume_fanout::consume_stream_iteration(
+        &mut lines,
+        &sender,
+        "claude-sonnet-5",
+        &mut stream,
+        &mut pending,
+        &mut deadline,
+        Duration::from_millis(50),
+    )
+    .await
+    .expect("activity deadline keepalive");
+    assert!(matches!(
+        iteration,
+        super::consume_fanout::StreamIteration::Continue
+    ));
+}
+
+#[tokio::test]
+async fn consume_iteration_hides_lines_after_a_pending_result() {
+    let (sender, _receiver) = channel();
+    let mut stream = SubscriptionStream {
+        text_started: false,
+        text_closed: false,
+        saw_tool_use: false,
+        launch_fanout_open: false,
+        seen_tool_ids: HashSet::new(),
+        blocked_subagent: false,
+        saw_result: false,
+        next_index: 0,
+        tools: Vec::new(),
+        tool_context: None,
+        activity: SubscriptionActivity::default(),
+    };
+    let (mut writer, reader) = tokio::io::duplex(256);
+    writer
+        .write_all(b"{\"type\":\"assistant\"}\n")
+        .await
+        .expect("write pending-result line");
+    let mut lines = BufReader::new(reader).lines();
+    let mut pending = Some(json!({"type": "result"}));
+    let mut deadline = Box::pin(tokio::time::sleep(Duration::from_secs(30)));
+    let iteration = super::consume_fanout::consume_stream_iteration(
+        &mut lines,
+        &sender,
+        "claude-sonnet-5",
+        &mut stream,
+        &mut pending,
+        &mut deadline,
+        Duration::from_secs(30),
+    )
+    .await
+    .expect("hidden pending result");
+    assert!(matches!(
+        iteration,
+        super::consume_fanout::StreamIteration::Continue
+    ));
 }
 
 #[tokio::test]
