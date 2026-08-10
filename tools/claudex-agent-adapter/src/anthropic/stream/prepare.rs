@@ -267,3 +267,8 @@ impl Bridge {
         send_stream_error(sender, error).await;
     }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[path = "prepare_tests.rs"]
+mod tests;
