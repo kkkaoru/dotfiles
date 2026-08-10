@@ -1826,6 +1826,11 @@ HTTPServer((host, int(port)), Handler).serve_forever()
         let graceful_callback = Arc::clone(&graceful);
         let forced = Arc::new(AtomicBool::new(false));
         let forced_callback = Arc::clone(&forced);
+        let stale_deadline = if cfg!(coverage_nightly) {
+            Instant::now() + Duration::from_secs(15)
+        } else {
+            Instant::now() + Duration::from_secs(1)
+        };
         handover::release_stale_listener_with(
             &client,
             &released,
@@ -1833,7 +1838,7 @@ HTTPServer((host, int(port)), Handler).serve_forever()
             |pid, executable| pid == 42 && executable == Path::new("/tmp/adapter"),
             move |pid| mark_terminated(pid, &graceful_callback),
             move |pid| mark_terminated(pid, &forced_callback),
-            Instant::now() + Duration::from_secs(1),
+            stale_deadline,
         )
         .await
         .expect("stale listener releases after its health response");

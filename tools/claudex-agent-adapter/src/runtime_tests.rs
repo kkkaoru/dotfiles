@@ -447,11 +447,17 @@ mod tests {
             .expect("worker route");
         let backend = AgentBackend::codex(app_server);
         let server = tokio::spawn(serve_on_listener(options, None, backend, listener));
-        let health = Client::new()
-            .get(format!("http://{listen}/health"))
-            .send()
-            .await
-            .expect("health response");
+        let url = format!("http://{listen}/health");
+        let client = Client::new();
+        let mut health = None;
+        for _ in 0..if cfg!(coverage_nightly) { 80 } else { 30 } {
+            if let Ok(response) = client.get(&url).send().await {
+                health = Some(response);
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+        let health = health.expect("health response");
         assert!(health.status().is_success());
         let request_id = health
             .headers()
