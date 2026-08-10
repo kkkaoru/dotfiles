@@ -3039,3 +3039,70 @@ async fn resumes_an_existing_subscription_agent_without_duplicate_scope_check() 
     let output = output(&mut receiver).await;
     assert!(output.contains(r#""type":"tool_use""#) || output.contains("Task"));
 }
+
+#[tokio::test]
+async fn suppresses_text_deltas_after_tool_use_or_blocked_subagent() {
+    let (sender, mut receiver) = channel();
+    let delta = r#"{"type":"stream_event","event":{"delta":{"type":"text_delta","text":"late"}}}"#;
+
+    let mut after_tool = bare_subscription_stream(Vec::new());
+    after_tool.saw_tool_use = true;
+    after_tool
+        .handle_line(&sender, delta)
+        .await
+        .expect("tool-use stream ignores late text");
+    assert!(!after_tool.text_started);
+
+    let mut blocked = bare_subscription_stream(Vec::new());
+    blocked.blocked_subagent = true;
+    blocked
+        .handle_line(&sender, delta)
+        .await
+        .expect("blocked stream ignores late text");
+    assert!(!blocked.text_started);
+    assert!(output(&mut receiver).await.is_empty());
+}
+
+#[test]
+fn prepare_tool_input_rejects_disabled_subagent_models() {
+    let mut context = SubscriptionToolContext::for_tests(
+        Arc::new(AgentEffortIntents::default()),
+        ModelCatalog::default(),
+        None,
+        "parent-model",
+        vec![json!({"role":"user","content":"launch worker"})],
+        json!(null),
+    );
+    context
+        .disabled_subagent_models
+        .insert("gpt-test".to_owned());
+    let stream = SubscriptionStream {
+        text_started: false,
+        text_closed: false,
+        saw_tool_use: false,
+        launch_fanout_open: false,
+        seen_tool_ids: HashSet::new(),
+        blocked_subagent: false,
+        saw_result: false,
+        next_index: 0,
+        tools: vec!["Agent".to_owned()],
+        tool_context: Some(context),
+        activity: SubscriptionActivity::default(),
+    };
+    let error = stream
+        .prepare_tool_input(
+            "Agent",
+            "agent-disabled",
+            &json!({"prompt":"do work","claudex_model":"gpt-test"}),
+        )
+        .expect_err("disabled model must be rejected");
+    assert!(
+        error
+            .to_string()
+            .contains(super::super::agent_route_validation::BLOCKED_SUBAGENT_NOTICE)
+            || error.to_string().to_lowercase().contains("disabled")
+            || error.to_string().contains("BLOCKED")
+            || error.to_string().contains("blocked"),
+        "{error:#}"
+    );
+}
