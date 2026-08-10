@@ -247,6 +247,10 @@ pub(super) fn deliver_status(status: ExitStatus) -> Result<()> {
 }
 
 pub(super) fn post(cache: &Path, listen: &SocketAddr, event: Event) {
+    super::macos_notify_dispatch::post(cache, listen, event);
+}
+
+pub(super) fn post_in_process(cache: &Path, listen: &SocketAddr, event: Event) {
     let lock_path = launcher_logs::hot_swap_notify_lock_path(cache);
     let _lock = match launcher_lock::acquire(&lock_path) {
         Ok(lock) => lock,
@@ -258,8 +262,6 @@ pub(super) fn post(cache: &Path, listen: &SocketAddr, event: Event) {
     let now = now_unix();
     let previous = read_last(cache, listen);
     if !should_emit_at(&event, previous.as_ref(), now) {
-        // Slide the cooldown while installs keep racing so a burst stays quiet
-        // until there is a real gap without swap attempts.
         if let Some(mut last) = previous {
             last.emitted_unix = now;
             if let Err(error) = write_last(cache, listen, &last) {

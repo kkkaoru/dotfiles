@@ -4,15 +4,16 @@
 # Legacy busy daemons get a current-build fallback + live.<port>.json + idle waiter
 # (install invalidates any waiter on the old inode).
 #
-# cargo install may land in either:
-#   - default CARGO_HOME/bin (then we only symlink ~/.local/bin), or
-#   - --root ~/.local (a real binary in ~/.local/bin that must be copied into
-#     CARGO_HOME before the symlink, or after-install would discard the fresh build).
+# Canonical install path is always "$CARGO_HOME/bin/claudex-agent-adapter".
+# ~/.local/bin/claudex-agent-adapter must be a symlink to that path. cargo install
+# may land in either CARGO_HOME (preferred) or --root ~/.local (real binary that
+# we promote into CARGO_HOME before relinking).
 set -eu
 
 cargo_bin="${CARGO_HOME:-$HOME/.cargo}/bin/claudex-agent-adapter"
 local_bin="$HOME/.local/bin/claudex-agent-adapter"
 hot_swap="$HOME/.local/bin/claudex-hot-swap"
+cache_dir="${CLAUDEX_CACHE_DIR:-$HOME/.cache/claudex}"
 
 mkdir -p "$(dirname -- "$cargo_bin")" "$HOME/.local/bin"
 
@@ -30,6 +31,16 @@ fi
 
 ln -snf "$cargo_bin" "$local_bin"
 echo "claudex after-install: linked $local_bin -> $cargo_bin ($("$cargo_bin" build-id))" >&2
+
+# Drop legacy per-listen notify state so only the shared dedupe file remains.
+rm -f "$cache_dir"/hot-swap-notify.*.json "$cache_dir"/hot-swap-notify.*.lock 2>/dev/null || true
+
+# Long-lived mcp-claudex-launch parents keep in-memory notify/dedupe code from
+# before this install. Restart them so the next ensure re-execs the cargo-bin
+# binary (Claude Code sessions on :8318 are not touched).
+if command -v pkill >/dev/null 2>&1; then
+  pkill -f '/claudex-agent-adapter mcp-claudex-launch' 2>/dev/null || true
+fi
 
 if [ ! -x "$hot_swap" ]; then
   echo "claudex after-install: claudex-hot-swap is missing; skip waiter arm" >&2

@@ -27,9 +27,11 @@ pub(crate) use live::{
     RETAINED_STATE_ENV, RetainedGeneration, SERVICE_LISTEN_ENV, load_retained_from_env,
     read_retained,
 };
+mod installed_adapter;
 mod launcher_lock;
 mod launcher_logs;
 mod macos_notify;
+mod macos_notify_dispatch;
 mod pending_hot_swap;
 mod preflight;
 mod program_identity;
@@ -95,7 +97,9 @@ impl ServiceConfig {
         if requires_authentication(&options.listen, &token) {
             bail!("ANTHROPIC_AUTH_TOKEN is required for a non-loopback listener");
         }
-        let executable = std::env::current_exe().context("locate adapter executable")?;
+        let executable = installed_adapter::resolve_service_executable(
+            std::env::current_exe().context("locate adapter executable")?,
+        );
         let home = std::env::var_os("HOME").context("HOME is required")?;
         let source_home = std::env::var_os("CODEX_HOME")
             .map(PathBuf::from)
@@ -171,6 +175,11 @@ pub(crate) fn recovery_generation() -> Option<String> {
 pub async fn ensure_running(options: AdapterOptions) -> Result<String> {
     let config = ServiceConfig::new(options)?;
     ensure::run(&config, ensure::Mode::Ensure).await
+}
+
+/// Run macOS notify dedupe/delivery in the on-disk install binary.
+pub fn run_internal_notify(arguments: Vec<OsString>) -> Result<()> {
+    macos_notify_dispatch::run_internal(arguments)
 }
 
 /// Update the listener without ending Claude Code / claudex sessions.
