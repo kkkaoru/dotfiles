@@ -473,6 +473,96 @@ async fn try_canonical_keeps_the_old_listener_when_rebind_is_rejected() {
     kill_dummy(&dummy);
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn try_canonical_restarts_on_canonical_after_warm_bind_misses() {
+    let root = tempfile::tempdir().expect("canonical restart fixture");
+    let dummy = write_current_build_dummy(root.path());
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("canonical listen");
+    let listen = listener.local_addr().expect("canonical address");
+    let ephemeral = {
+        let spare = TcpListener::bind("127.0.0.1:0").await.expect("ephemeral");
+        spare.local_addr().expect("ephemeral address")
+    };
+    tokio::spawn(async move {
+        let Ok((mut stream, _)) = listener.accept().await else {
+            return;
+        };
+        let mut buf = vec![0; 4096];
+        let _ = stream.read(&mut buf).await;
+        let body = format!(r#"{{"listen":"{ephemeral}"}}"#);
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let _ = stream.write_all(response.as_bytes()).await;
+    });
+    let config = config_at(listen, root.path(), dummy.clone());
+    let promoted = try_canonical(&reqwest::Client::new(), &config, &health(true, Some(12)))
+        .await
+        .expect("canonical restart after warm miss");
+    assert_eq!(promoted, Some(config.base_url()));
+    kill_dummy(&dummy);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn try_canonical_bails_when_restart_on_canonical_never_readies() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = tempfile::tempdir().expect("canonical bail fixture");
+    let real_dummy = write_current_build_dummy(root.path());
+    let wrapper = root.path().join("claudex-agent-adapter-once");
+    let counter = root.path().join("start-count");
+    std::fs::write(&counter, "0").expect("start counter");
+    let script = format!(
+        "#!/bin/sh\n\
+         count=$(cat '{counter}')\n\
+         next=$((count + 1))\n\
+         echo \"$next\" > '{counter}'\n\
+         if [ \"$count\" -ge 1 ]; then\n\
+           exit 0\n\
+         fi\n\
+         exec '{real}' \"$@\"\n",
+        counter = counter.display(),
+        real = real_dummy.display(),
+    );
+    std::fs::write(&wrapper, script).expect("once wrapper");
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755))
+        .expect("wrapper executable");
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("canonical listen");
+    let listen = listener.local_addr().expect("canonical address");
+    let ephemeral = {
+        let spare = TcpListener::bind("127.0.0.1:0").await.expect("ephemeral");
+        spare.local_addr().expect("ephemeral address")
+    };
+    tokio::spawn(async move {
+        let Ok((mut stream, _)) = listener.accept().await else {
+            return;
+        };
+        let mut buf = vec![0; 4096];
+        let _ = stream.read(&mut buf).await;
+        let body = format!(r#"{{"listen":"{ephemeral}"}}"#);
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let _ = stream.write_all(response.as_bytes()).await;
+    });
+    let config = config_at(listen, root.path(), wrapper);
+    let error = try_canonical(&reqwest::Client::new(), &config, &health(true, Some(12)))
+        .await
+        .expect_err("failed canonical restart must fail closed");
+    assert!(
+        error.to_string().contains("wait for promoted canonical"),
+        "{error:#}"
+    );
+    kill_dummy(&real_dummy);
+}
+
 #[tokio::test]
 async fn restore_old_canonical_ignores_unreachable_retained_listeners() {
     let root = tempfile::tempdir().expect("restore fixture");
