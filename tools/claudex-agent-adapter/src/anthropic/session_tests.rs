@@ -2095,6 +2095,80 @@ async fn submits_fresh_tool_results_without_starting_another_turn() {
 }
 
 #[tokio::test]
+async fn folds_mid_turn_user_steering_into_submitted_tool_results() {
+    let root = tempfile::tempdir().expect("mock app-server fixture");
+    let trace = root.path().join("mid-turn-tool-results.jsonl");
+    let script = format!(
+        "#!/bin/sh\nread initialize\nprintf '%s\\n' '{{\"id\":1,\"result\":{{}}}}'\nread initialized\nwhile read line; do printf '%s\\n' \"$line\" >> '{}'; done\n",
+        trace.display()
+    );
+    let (_server_root, app) = mock_app_server(&script).await;
+    let bridge = Bridge::new_with_backend(AgentBackend::codex(app), "main".to_owned());
+    let mut request = request(Value::Null, Vec::new());
+    request.messages = vec![
+        json!({"role":"user","content":"start"}),
+        json!({
+            "role":"assistant",
+            "content":[{"type":"tool_use","id":"tool-1","name":"Bash","input":{}}]
+        }),
+        json!({
+            "role":"user",
+            "content":[
+                {"type":"tool_result","tool_use_id":"tool-1","content":"done"},
+                {
+                    "type":"text",
+                    "text":"The user sent a new message while you were working:\n追加調査して\n\nAddress the message above as you continue this turn."
+                }
+            ]
+        }),
+    ];
+    let session = session("signature", request.messages[..2].to_vec());
+    session
+        .pending_tools
+        .lock()
+        .await
+        .insert("tool-1".to_owned(), json!(77));
+    let gate = Arc::clone(&session.gate).lock_owned().await;
+
+    bridge
+        .start_selected_turn(
+            &request,
+            9,
+            None,
+            SelectedSession {
+                session,
+                existing_len: 2,
+                recovered: false,
+                gate,
+            },
+            vec![ToolResult {
+                tool_use_id: "tool-1".to_owned(),
+                content_items: vec![json!({"type":"inputText","text":"done"})],
+                is_error: false,
+            }],
+            None,
+            None,
+            false,
+        )
+        .await
+        .expect("submit tool result with mid-turn steering");
+
+    let trace = mock_trace(&trace, 1).await;
+    assert_eq!(trace[0]["id"], 77);
+    let items = trace[0]["result"]["contentItems"]
+        .as_array()
+        .expect("content items");
+    assert!(
+        items.iter().any(|item| {
+            item.get("text")
+                .and_then(Value::as_str)
+                .is_some_and(|text| text.contains("追加調査して"))
+        }),
+        "provider tool response must carry mid-turn user steering: {items:?}"
+    );
+}
+
+#[tokio::test]
 async fn retries_completed_turns_on_a_new_session() {
     let root = tempfile::tempdir().expect("mock app-server fixture");
     let trace = root.path().join("retry.jsonl");

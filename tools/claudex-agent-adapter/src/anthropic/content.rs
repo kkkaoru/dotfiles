@@ -161,6 +161,37 @@ pub(super) fn collect_tool_results(messages: &[Value]) -> Vec<ToolResult> {
         .collect()
 }
 
+/// Claude Code may attach a mid-turn user instruction to the same user message
+/// as `tool_result` blocks. Tool-result submission alone would drop that text
+/// from the live provider turn, so callers must fold it into content items.
+pub(super) fn mid_turn_user_steering(message: &Value) -> Option<String> {
+    if message.get("role").and_then(Value::as_str) != Some("user") {
+        return None;
+    }
+    let blocks = message.get("content")?.as_array()?;
+    let has_tool_result = blocks
+        .iter()
+        .any(|block| block.get("type").and_then(Value::as_str) == Some("tool_result"));
+    if !has_tool_result {
+        return None;
+    }
+    let text = blocks
+        .iter()
+        .filter_map(text_block)
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n");
+    (!text.is_empty()).then_some(text)
+}
+
+pub(super) fn attach_mid_turn_steering(results: &mut [ToolResult], steering: &str) {
+    let Some(last) = results.last_mut() else {
+        return;
+    };
+    last.content_items.push(input_text(steering));
+}
+
 pub(super) fn transcript_owns_tool_results(messages: &[Value], results: &[ToolResult]) -> bool {
     let tool_use_ids = messages
         .iter()

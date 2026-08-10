@@ -12,11 +12,12 @@ mod tests {
     use tokio::sync::{Mutex, Semaphore};
 
     use super::{
-        MAX_CONSUMED_TOOL_IDS, ToolResult, content_text, matching_transcript_len,
-        remember_consumed_tool_id, take_pending_results,
+        MAX_CONSUMED_TOOL_IDS, ToolResult, attach_mid_turn_steering, content_text,
+        matching_transcript_len, mid_turn_user_steering, remember_consumed_tool_id,
+        take_pending_results,
     };
-    use crate::anthropic::{Session, agent_batch::pending_marker};
     use crate::anthropic::content_batch::{batch_progress, store_batch_result};
+    use crate::anthropic::{Session, agent_batch::pending_marker};
 
     #[tokio::test]
     async fn accepts_pending_and_already_consumed_results() {
@@ -59,7 +60,12 @@ mod tests {
 
         let (responses, completed) = take_pending_results(
             &active,
-            vec![result("one"), error_result("one"), result("two"), result("three")],
+            vec![
+                result("one"),
+                error_result("one"),
+                result("two"),
+                result("three"),
+            ],
         )
         .await
         .expect("duplicate batch members are retained until the batch completes");
@@ -316,6 +322,46 @@ mod tests {
             &json!({"cache_control":{"type":"ephemeral"}}),
             &json!({})
         ));
+    }
+
+    #[test]
+    fn extracts_and_attaches_mid_turn_user_steering_beside_tool_results() {
+        let message = json!({
+            "role":"user",
+            "content":[
+                {"type":"tool_result","tool_use_id":"tool-1","content":"done"},
+                {
+                    "type":"text",
+                    "text":"The user sent a new message while you were working:\n追加調査して\n\nAddress the message above as you continue this turn."
+                }
+            ]
+        });
+        let steering = mid_turn_user_steering(&message).expect("mid-turn steering");
+        assert!(steering.contains("追加調査して"));
+        assert!(
+            mid_turn_user_steering(&json!({
+                "role":"user",
+                "content":[{"type":"tool_result","tool_use_id":"tool-1","content":"done"}]
+            }))
+            .is_none()
+        );
+        assert!(
+            mid_turn_user_steering(&json!({
+                "role":"user",
+                "content":[{"type":"text","text":"plain follow-up"}]
+            }))
+            .is_none()
+        );
+
+        let mut results = vec![result("tool-1")];
+        attach_mid_turn_steering(&mut results, &steering);
+        assert_eq!(
+            results[0]
+                .content_items
+                .last()
+                .and_then(|item| item.get("text")),
+            Some(&json!(steering))
+        );
     }
 
     fn result(tool_use_id: &str) -> ToolResult {

@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 
 use super::super::{
     ActiveTurn, Bridge, MessagesRequest, SelectedSession, Session,
-    content::{ToolResult, serialized_len},
+    content::{ToolResult, attach_mid_turn_steering, mid_turn_user_steering, serialized_len},
     turn_input::{
         provider_turn_input, provider_turn_input_with_token_budget, provider_user_turn_input,
     },
@@ -30,7 +30,7 @@ impl Bridge {
         input_tokens: u64,
         effort: Option<String>,
         selected: SelectedSession,
-        tool_results: Vec<ToolResult>,
+        mut tool_results: Vec<ToolResult>,
         advisor_model: Option<&str>,
         collaborator_model: Option<&str>,
         allow_context_retry: bool,
@@ -38,6 +38,9 @@ impl Bridge {
         let existing_len = selected.existing_len;
         let extras = request.messages[existing_len..].to_vec();
         let has_tool_results = !tool_results.is_empty();
+        if let Some(steering) = request.messages.last().and_then(mid_turn_user_steering) {
+            attach_mid_turn_steering(&mut tool_results, &steering);
+        }
         self.app
             .ensure_thread_ready(&selected.session.thread_id)
             .await?;
