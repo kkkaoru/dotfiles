@@ -283,4 +283,24 @@ The quota will reset at 08-15 01:53:00 UTC."
             StatusCode::BAD_REQUEST
         );
     }
+
+    #[test]
+    fn marks_cooling_down_provider_as_non_retryable_exhaustion() {
+        let error = anyhow!("provider is cooling down after usage limit");
+        assert_eq!(error_type(&error), NON_RETRYABLE_ERROR_TYPE);
+        assert_eq!(
+            http_status(StatusCode::BAD_GATEWAY, &error),
+            StatusCode::BAD_GATEWAY
+        );
+    }
+
+    #[test]
+    fn marks_plain_401_unauthorized_phrase_as_auth_failure() {
+        let error = anyhow!("upstream rejected the call: 401 Unauthorized");
+        assert_eq!(error_type(&error), NON_RETRYABLE_ERROR_TYPE);
+        assert_eq!(
+            http_status(StatusCode::BAD_GATEWAY, &error),
+            StatusCode::UNAUTHORIZED
+        );
+    }
 }
