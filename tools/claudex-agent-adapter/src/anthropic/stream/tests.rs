@@ -373,6 +373,18 @@ async fn thinking_state_handles_reuse_keepalive_and_unit_transitions() {
         .await
         .expect("close visible keepalive before switching buffers");
     state
+        .progress_status(&mut blocks, "", None)
+        .await
+        .expect("empty progress");
+    state
+        .progress_status_keep_open(&mut blocks, "", None)
+        .await
+        .expect("empty keep-open progress");
+    state
+        .activity_status(&mut blocks, "", None)
+        .await
+        .expect("empty activity");
+    state
         .delta(
             &json!({"params":{"itemId":"model:status","summaryIndex":0,"delta":"ignored"}}),
             &mut blocks,
