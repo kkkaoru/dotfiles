@@ -234,9 +234,5 @@ pub(super) fn latest_worker_status(delta: &str) -> Option<String> {
     }
     let last = lower.rmatch_indices("status:").next()?.0;
     let status = compact_live_prose(trimmed[last..].trim());
-    Some(if status.ends_with('\n') {
-        status
-    } else {
-        format!("{status}\n")
-    })
+    Some(format!("{}\n", status.trim_end()))
 }

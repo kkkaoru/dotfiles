@@ -47,6 +47,15 @@ async fn ignores_missing_and_empty_text_deltas() {
     assert_eq!(segment.usage.output_tokens, 0);
 }
 
+#[tokio::test]
+async fn ignores_whitespace_only_text_deltas() {
+    let mut builder = SegmentBuilder::new(7);
+    builder
+        .text_delta(&json!({"params":{"delta":"  \n\n  "}}), None)
+        .await
+        .expect("whitespace-only delta");
+}
+
 #[test]
 fn recognizes_context_markers_in_every_provider_error_field() {
     let events = [
@@ -192,6 +201,12 @@ fn compact_live_prose_and_worker_status_cover_both_truncation_sides() {
     ));
     assert!(sanitize::is_premature_worker_status_reply(
         "Status: chrome only"
+    ));
+    assert!(sanitize::is_premature_worker_status_reply(
+        "after each phase we continue"
+    ));
+    assert!(sanitize::is_premature_worker_status_reply(
+        "Status: inspecting\nHere is the actual answer."
     ));
     assert!(!sanitize::is_premature_worker_status_reply(
         &"x".repeat(161)
