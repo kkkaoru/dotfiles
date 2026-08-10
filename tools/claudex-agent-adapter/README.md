@@ -325,8 +325,11 @@ recipient (Agent Teams still uses `SendMessage`), while starting new instances w
 worker failed/stopped or the scope is independent. Prefer one continuing custom-advisor per session
 and account for it separately from `selected_workers` / provider quota headroom.
 Claude subscription workers and advisors still use a new `--no-session-persistence` subprocess per
-provider call. Logical-agent reuse can preserve a reusable transcript prefix but does not guarantee
-a provider prompt-cache hit.
+provider call. Settled provider-backed SubAgent sessions stay registered after `message_stop` so a
+follow-up Task `resume` can match the transcript and reuse the provider thread (prompt-cache /
+prefix reuse). Capacity pressure and the idle TTL still reclaim those sessions. Logical-agent reuse
+via `resume` injection is complementary: it points Claude Code at the prior recipient while the
+adapter keeps the matching idle backend thread when possible.
 
 Claude Code's UI and Agent `resolvedModel` metadata describe the native custom-agent profile. Every
 claudex worker fixes the same model in its frontmatter and the shared provider config. The adapter

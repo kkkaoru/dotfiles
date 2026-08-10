@@ -21,7 +21,16 @@ impl Bridge {
         provider_settled: bool,
     ) {
         if provider_settled {
-            self.remove_session(session).await;
+            // Keep the idle provider thread so Claude Code Task `resume` can
+            // match the transcript and reuse prompt-cache prefixes. Capacity
+            // pressure and IDLE_SESSION_TTL still reclaim these sessions.
+            if let Ok(mut activity) = session.last_activity.lock() {
+                *activity = std::time::Instant::now();
+            }
+            tracing::debug!(
+                thread_id = %session.thread_id,
+                "retaining settled session for SubAgent resume reuse"
+            );
         } else {
             self.disconnect_stream(session, Arc::clone(events)).await;
         }

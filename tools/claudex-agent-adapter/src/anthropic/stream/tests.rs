@@ -811,6 +811,34 @@ async fn thinking_state_handles_reuse_keepalive_and_unit_transitions() {
 }
 
 #[tokio::test]
+async fn progress_status_dedupes_identical_status_lines() {
+    let mut state = ThinkingState::default();
+    let mut blocks = Vec::new();
+    let status = "Status: inspecting local history\n";
+    state
+        .progress_status_keep_open(&mut blocks, status, None)
+        .await
+        .expect("first status");
+    state
+        .progress_status_keep_open(&mut blocks, status, None)
+        .await
+        .expect("duplicate status");
+    let thinking = blocks[0]["thinking"].as_str().expect("thinking text");
+    assert_eq!(
+        thinking.matches("Status: inspecting local history").count(),
+        1,
+        "identical Status chrome must not append twice: {thinking:?}"
+    );
+    state
+        .progress_status_keep_open(&mut blocks, "Status: next step\n", None)
+        .await
+        .expect("distinct status");
+    let thinking = blocks[0]["thinking"].as_str().expect("thinking text");
+    assert!(thinking.contains("Status: inspecting local history"));
+    assert!(thinking.contains("Status: next step"));
+}
+
+#[tokio::test]
 async fn thinking_state_covers_answer_text_prime_and_heartbeat_guards() {
     let mut coalesced = ThinkingState::default();
     let mut answer = vec![json!({"type":"text","text":"done"})];
@@ -3060,6 +3088,27 @@ async fn unsupported_disconnect_drains_without_closing_the_provider() {
     }));
     bridge.finish_closed_stream(&session, &events, false).await;
     wait_for_disconnected_drain(&events).await;
+    assert!(app.is_alive());
+}
+
+#[tokio::test]
+async fn settled_stream_close_retains_session_for_subagent_resume() {
+    let (_root, app, bridge, session) = disconnect_fixture().await;
+    bridge.sessions.lock().await.push(Arc::clone(&session));
+    let events = Arc::new(app.subscribe_thread("thread"));
+    let before = *session.last_activity.lock().unwrap();
+    tokio::time::sleep(Duration::from_millis(5)).await;
+
+    bridge.finish_closed_stream(&session, &events, true).await;
+
+    let sessions = bridge.sessions.lock().await;
+    assert_eq!(
+        sessions.len(),
+        1,
+        "settled SubAgent sessions must stay idle for Task resume / prompt-cache"
+    );
+    assert!(Arc::ptr_eq(&sessions[0], &session));
+    assert!(*session.last_activity.lock().unwrap() > before);
     assert!(app.is_alive());
 }
 

@@ -357,9 +357,14 @@ impl Bridge {
     ) {
         if sender.is_closed() && is_subagent {
             commit_transcript(&turn.session, turn.extras, &segment).await;
-            if provider_settled {
-                self.remove_session(&turn.session).await;
-            }
+            // Settled turns stay registered so follow-up `resume` can reuse the
+            // provider thread (prompt-cache). Unsettled closes still tear down.
+            self.finish_closed_stream(
+                &turn.session,
+                &turn.events,
+                provider_settled,
+            )
+            .await;
             return;
         }
         if self
