@@ -64,6 +64,86 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn dedupes_replayed_provider_completion_marker_by_call_id() {
+        let mut builder = SegmentBuilder::new(1);
+        for _ in 0..2 {
+            builder
+                .provider_tool_update(
+                    &json!({"params":{
+                        "callId":"replayed-completion",
+                        "status":"completed",
+                        "title":"Read"
+                    }}),
+                    None,
+                )
+                .await
+                .expect("provider completion");
+        }
+        assert_eq!(thinking_text(&builder).matches("✓ Read").count(), 1);
+    }
+
+    #[tokio::test]
+    async fn dedupes_replayed_provider_failure_marker_by_call_id() {
+        let mut builder = SegmentBuilder::new(1);
+        for _ in 0..2 {
+            builder
+                .provider_tool_update(
+                    &json!({"params":{
+                        "callId":"replayed-failure",
+                        "status":"failed",
+                        "title":"Bash",
+                        "output":"boom"
+                    }}),
+                    None,
+                )
+                .await
+                .expect("provider failure");
+        }
+        assert_eq!(thinking_text(&builder).matches("✗ Bash").count(), 1);
+    }
+
+    #[tokio::test]
+    async fn provider_tool_start_update_complete_paints_one_start_and_terminal_marker() {
+        let mut builder = SegmentBuilder::new(1);
+        builder
+            .provider_tool_call(
+                &json!({"params":{
+                    "callId":"one-lifecycle",
+                    "tool":"Read",
+                    "title":"Read"
+                }}),
+                None,
+            )
+            .await
+            .expect("provider tool call");
+        builder
+            .provider_tool_update(
+                &json!({"params":{
+                    "callId":"one-lifecycle",
+                    "status":"in_progress",
+                    "title":"Read"
+                }}),
+                None,
+            )
+            .await
+            .expect("provider tool update");
+        builder
+            .provider_tool_update(
+                &json!({"params":{
+                    "callId":"one-lifecycle",
+                    "status":"completed",
+                    "title":"Read"
+                }}),
+                None,
+            )
+            .await
+            .expect("provider completion");
+        let thinking = thinking_text(&builder);
+        assert_eq!(thinking.matches("▶ Read").count(), 1);
+        assert_eq!(thinking.matches("✓ Read").count(), 1);
+    }
+
+    #[tokio::test]
     async fn streams_provider_progress_and_all_status_variants() {
         const SAMPLE_INPUT_TOKEN_COUNT: u64 = 1;
         const STREAM_CHANNEL_CAPACITY: usize = 32;

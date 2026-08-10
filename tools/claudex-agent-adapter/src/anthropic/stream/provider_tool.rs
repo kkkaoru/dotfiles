@@ -76,6 +76,11 @@ impl SegmentBuilder {
         let short_title = compact_title(&title);
         match status {
             "failed" => {
+                if let Some(call_id) = call_id
+                    && !self.provider_tool_terminal_ids.insert(call_id.to_owned())
+                {
+                    return Ok(());
+                }
                 let detail = failure_preview(params.get("output"));
                 let preview = truncate_for_status(&detail, FAILED_STATUS_PREVIEW_CHAR_LIMIT);
                 self.stream_progress_text(&format!("\n✗ {short_title}: {preview}\n"), stream)
@@ -84,6 +89,11 @@ impl SegmentBuilder {
             // Success: marker only. Dumping stdout/JSON here flooded the TUI and
             // made long Grok/Cursor turns look frozen on a wall of tool logs.
             "completed" => {
+                if let Some(call_id) = call_id
+                    && !self.provider_tool_terminal_ids.insert(call_id.to_owned())
+                {
+                    return Ok(());
+                }
                 self.stream_progress_text(&format!("\n✓ {short_title}\n"), stream)
                     .await?;
             }

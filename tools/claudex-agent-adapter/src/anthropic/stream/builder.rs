@@ -1,4 +1,4 @@
-use std::{ops::ControlFlow, time::Instant};
+use std::{collections::HashSet, ops::ControlFlow, time::Instant};
 
 use anyhow::Result;
 use serde_json::{Value, json};
@@ -41,6 +41,9 @@ pub(in crate::anthropic) struct SegmentBuilder {
     /// Provider call IDs already shown as progress text. ACP can report the same
     /// call first as ToolCall and again as a populated ToolCallUpdate.
     pub(super) provider_tool_calls: Vec<(String, String)>,
+    /// Provider call IDs whose terminal status marker was already painted.
+    /// ACP reconnect/replay can repeat the final ToolCallUpdate.
+    pub(super) provider_tool_terminal_ids: HashSet<String>,
     /// Launch-shaped provider tools already bridged to Claude Code tool_use.
     /// Cursor may emit call → update → completed for the same callId.
     bridged_provider_launch_ids: Vec<String>,
@@ -72,6 +75,7 @@ impl SegmentBuilder {
             turn_started_at: Instant::now(),
             external_tool_calls: 0,
             provider_tool_calls: Vec::new(),
+            provider_tool_terminal_ids: HashSet::new(),
             bridged_provider_launch_ids: Vec::new(),
             mcp_provider_call_ids: Vec::new(),
             bulk_dump_hinted: false,
