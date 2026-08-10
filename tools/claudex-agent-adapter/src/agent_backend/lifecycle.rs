@@ -1,6 +1,14 @@
 use anyhow::{Context, Result};
 
-use super::{AgentBackend, TurnCancellation, routed_thread};
+use super::{AgentBackend, RoutedBackends, TurnCancellation, routed_thread};
+
+async fn cancel_routed_turn(routes: &RoutedBackends, thread_id: &str) -> Result<TurnCancellation> {
+    let (index, raw_id) = routed_thread(thread_id);
+    let Some(backend) = routes.route(index).ready_backend() else {
+        return Ok(TurnCancellation::Settled);
+    };
+    Box::pin(backend.cancel_turn(raw_id)).await
+}
 
 impl AgentBackend {
     pub(crate) async fn cancel_turn(&self, thread_id: &str) -> Result<TurnCancellation> {
@@ -18,13 +26,7 @@ impl AgentBackend {
                 agent.cancel_turn(thread_id).await?;
                 Ok(TurnCancellation::Settled)
             }
-            Self::Routed(routes) => {
-                let (index, raw_id) = routed_thread(thread_id);
-                let Some(backend) = routes.route(index).ready_backend() else {
-                    return Ok(TurnCancellation::Settled);
-                };
-                Box::pin(backend.cancel_turn(raw_id)).await
-            }
+            Self::Routed(routes) => cancel_routed_turn(routes, thread_id).await,
         }
     }
 
