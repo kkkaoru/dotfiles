@@ -8,7 +8,7 @@ use crate::anthropic::stream::{
     protocol::{StreamSender, send_stream_frame},
     sanitize::{
         compact_live_prose, is_bulk_tool_dump, is_canned_worker_filler, is_provider_status_line,
-        latest_worker_status,
+        latest_worker_status, strip_worker_status_lines,
     },
     thinking::summary_delta,
 };
@@ -36,6 +36,7 @@ impl SegmentBuilder {
         if self.is_command_code_subagent() && !is_adapter_tool_marker(delta) {
             return Ok(());
         }
+        self.note_provider_turn_activity();
         self.close_text_block(stream).await?;
         if self.is_subagent {
             return self
@@ -91,6 +92,7 @@ impl SegmentBuilder {
             let dump_hint = delta.contains("large tool output omitted");
             // Including Command Code: streaming text_delta closes thinking and
             // collapses CC 2.1 to repeating "Thought for Xs".
+            self.note_provider_turn_activity();
             self.thinking
                 .progress_status_keep_open(&mut self.blocks, &delta, stream)
                 .await?;
@@ -149,11 +151,13 @@ impl SegmentBuilder {
         }
         match self.filter_subagent_live_delta(raw) {
             Some(delta) if delta.contains("large tool output omitted") => {
+                self.note_provider_turn_activity();
                 self.thinking
                     .progress_status_keep_open(&mut self.blocks, &delta, stream)
                     .await?;
             }
             Some(delta) => {
+                self.note_provider_turn_activity();
                 self.thinking
                     .delta_text_coalesced(item_id, summary_index, &delta, &mut self.blocks, stream)
                     .await?;
@@ -168,6 +172,11 @@ impl SegmentBuilder {
         status: &str,
         stream: Option<&StreamSender>,
     ) -> Result<()> {
+        self.note_provider_turn_activity();
+        // SSE can only append, but keep the open thinking buffer to a single
+        // Status line so mid-turn chrome / Thought-for length stay coherent.
+        self.thinking
+            .rewrite_open_text(&mut self.blocks, strip_worker_status_lines);
         self.thinking
             .progress_status_keep_open(&mut self.blocks, status, stream)
             .await
@@ -203,6 +212,7 @@ impl SegmentBuilder {
         if is_canned_worker_filler(delta) {
             return Ok(());
         }
+        self.note_provider_turn_activity();
         self.thinking.close(&mut self.blocks, stream).await?;
         let index = match &mut self.open_text_block {
             Some((index, text)) => {

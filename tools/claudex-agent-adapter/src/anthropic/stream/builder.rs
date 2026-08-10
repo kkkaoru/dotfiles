@@ -44,6 +44,10 @@ pub(in crate::anthropic) struct SegmentBuilder {
     /// Provider call IDs whose terminal status marker was already painted.
     /// ACP reconnect/replay can repeat the final ToolCallUpdate.
     pub(super) provider_tool_terminal_ids: HashSet<String>,
+    /// True after the provider painted mid-turn output (Status / prose / ▶).
+    /// Early Claude Code SSE drops after `message_start` must keep ACP alive;
+    /// a later Stop once the worker is visibly working cancels the leaf.
+    saw_provider_turn_activity: bool,
     /// Launch-shaped provider tools already bridged to Claude Code tool_use.
     /// Cursor may emit call → update → completed for the same callId.
     bridged_provider_launch_ids: Vec<String>,
@@ -76,6 +80,7 @@ impl SegmentBuilder {
             external_tool_calls: 0,
             provider_tool_calls: Vec::new(),
             provider_tool_terminal_ids: HashSet::new(),
+            saw_provider_turn_activity: false,
             bridged_provider_launch_ids: Vec::new(),
             mcp_provider_call_ids: Vec::new(),
             bulk_dump_hinted: false,
@@ -121,11 +126,18 @@ impl SegmentBuilder {
         self.external_tool_calls > 0
     }
 
-    /// True once the SubAgent has painted provider ▶ tools or bridged Claude
-    /// tool_use. Early Claude Code SSE drops (message_start only) must keep ACP
-    /// alive; a later drop after live work is treated as user stop/interrupt.
+    /// True once the SubAgent has painted provider ▶ tools, bridged Claude
+    /// tool_use, or other provider turn output (Status / answer chrome). Early
+    /// Claude Code SSE drops (message_start only) must keep ACP alive; a later
+    /// drop after live work is treated as user stop/interrupt.
     pub(super) fn has_live_provider_work(&self) -> bool {
-        self.external_tool_calls > 0 || !self.provider_tool_calls.is_empty()
+        self.external_tool_calls > 0
+            || !self.provider_tool_calls.is_empty()
+            || self.saw_provider_turn_activity
+    }
+
+    pub(in crate::anthropic::stream::builder) fn note_provider_turn_activity(&mut self) {
+        self.saw_provider_turn_activity = true;
     }
 
     pub(super) fn has_committed_output(&self) -> bool {

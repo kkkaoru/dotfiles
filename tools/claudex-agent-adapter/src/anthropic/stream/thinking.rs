@@ -24,6 +24,18 @@ impl ThinkingState {
         self.open.is_some()
     }
 
+    pub(super) fn rewrite_open_text(
+        &mut self,
+        blocks: &mut Vec<Value>,
+        rewrite: impl FnOnce(&str) -> String,
+    ) {
+        let Some(open) = self.open.as_mut() else {
+            return;
+        };
+        open.text = rewrite(&open.text);
+        blocks[open.index]["thinking"] = json!(open.text);
+    }
+
     pub(super) async fn delta(
         &mut self,
         event: &Value,
@@ -231,15 +243,9 @@ impl ThinkingState {
         .await
     }
 
-    /// Emit a decoded content event so Claude Code's SubAgent stream watchdog
-    /// (~600s decoded-event idle) does not fire during long provider-side tool
-    /// waits. The first heartbeat is visible so a silent provider does not leave
-    /// the user with only a spinner; later heartbeats stay zero-width to avoid
-    /// noisy repetition.
-    ///
-    /// Anthropic `ping` frames keep the raw-byte idle timer alive (~180s) but
-    /// do not reset the decoded-event timer. Pure keepalive thinking is stripped
-    /// from the committed segment so transcripts stay clean.
+    /// First heartbeat is visible; later ones are ZWSP. Pure keepalive thinking
+    /// is stripped from the committed segment. Anthropic `ping` does not reset
+    /// Claude Code's decoded-event idle timer (~600s).
     pub(super) async fn activity_status(
         &mut self,
         blocks: &mut Vec<Value>,

@@ -237,3 +237,20 @@ pub(super) fn latest_worker_status(delta: &str) -> Option<String> {
     let status = compact_live_prose(trimmed[last..].trim());
     Some(format!("{}\n", status.trim_end()))
 }
+
+/// Drop prior `Status:` chrome so mid-turn updates replace instead of stacking.
+pub(super) fn strip_worker_status_lines(text: &str) -> String {
+    let kept = text
+        .lines()
+        .filter(|line| !line.trim_start().to_ascii_lowercase().starts_with("status:"))
+        .collect::<Vec<_>>();
+    if kept.iter().all(|line| line.trim().is_empty()) {
+        return String::new();
+    }
+    let joined = kept.join("\n");
+    if text.ends_with('\n') && !joined.ends_with('\n') {
+        format!("{joined}\n")
+    } else {
+        joined
+    }
+}

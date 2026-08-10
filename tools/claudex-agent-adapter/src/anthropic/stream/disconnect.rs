@@ -28,8 +28,9 @@ impl Bridge {
     }
 
     /// Claude Code often drops SubAgent SSE right after `message_start`. Keep
-    /// ACP alive in that window. Once ▶ tools or bridged tool_use exist, treat
-    /// SSE close as stop/interrupt and cancel the provider leaf.
+    /// ACP alive in that window. Once ▶ tools, bridged tool_use, or other
+    /// provider turn output (Status / answer chrome) exists, treat SSE close as
+    /// stop/interrupt and cancel the provider leaf.
     pub(super) async fn subagent_sse_closed(
         &self,
         session: &Arc<Session>,
