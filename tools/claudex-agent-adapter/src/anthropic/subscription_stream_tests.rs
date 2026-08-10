@@ -2599,10 +2599,14 @@ printf '%s\n' '{{"type":"result","subtype":"success","result":"STREAM_RETRIED_OK
     fs::set_permissions(&program, fs::Permissions::from_mode(0o755))
         .expect("make stream retry fixture executable");
     let (sender, mut receiver) = channel();
-    let options = SubscriptionOptions::internal(
+    let mut options = SubscriptionOptions::internal(
         Arc::new(tokio::sync::Semaphore::new(1)),
         SUBSCRIPTION_FIXTURE_TIMEOUT,
     );
+    // Keep activity quiet so the first empty exit has no SSE frames and stays retryable
+    // under llvm-cov load (snappier production delays would otherwise paint first).
+    options.initial_activity_delay = Duration::from_secs(3600);
+    options.activity_keepalive_interval = Duration::from_secs(3600);
 
     run_subscription_stream(
         sender,
