@@ -367,6 +367,76 @@ fn parses_live_command_code_ndjson_without_flooding_tui() {
         ParsedLine::Progress(ProgressEvent::Status(note)) if note.contains("検索中")
     ));
     assert_eq!(
+        parse_stdout_line(r#"{"type":"event","event":{"type":"thinking_delta"}}"#),
+        ParsedLine::Ignored
+    );
+    assert!(matches!(
+        parse_stdout_line(
+            r#"{"type":"event","event":{"type":"thinking_delta","text":"起動: Command Code Muse Spark"}}"#
+        ),
+        ParsedLine::Ignored
+    ));
+    assert!(matches!(
+        parse_stdout_line(
+            r#"{"type":"event","event":{"type":"thinking_delta","text":"実行中: web_search。次: ツール結果待ち"}}"#
+        ),
+        ParsedLine::Ignored
+    ));
+    assert!(matches!(
+        parse_stdout_line(
+            r#"{"type":"event","event":{"type":"thinking_delta","text":"完了: web_search。次: 続きの調査または回答"}}"#
+        ),
+        ParsedLine::Ignored
+    ));
+    assert!(matches!(
+        parse_stdout_line(
+            r#"{"type":"event","event":{"type":"thinking_delta","text":"失敗: web_search。次: 別手段"}}"#
+        ),
+        ParsedLine::Ignored
+    ));
+    assert!(matches!(
+        parse_stdout_line(
+            r#"{"type":"event","event":{"type":"thinking_delta","text":"ターン1開始"}}"#
+        ),
+        ParsedLine::Ignored
+    ));
+    assert!(matches!(
+        parse_stdout_line(
+            r#"{"type":"event","event":{"type":"thinking_delta","text":"実行中: still working"}}"#
+        ),
+        ParsedLine::Progress(ProgressEvent::Thought(_))
+    ));
+    assert!(matches!(
+        parse_stdout_line(
+            r#"{"type":"event","event":{"type":"thinking_delta","text":"完了: web_search"}}"#
+        ),
+        ParsedLine::Progress(ProgressEvent::Thought(_))
+    ));
+    assert!(matches!(
+        parse_stdout_line(
+            r#"{"type":"event","event":{"type":"thinking_delta","text":"失敗: web_search"}}"#
+        ),
+        ParsedLine::Progress(ProgressEvent::Thought(_))
+    ));
+    assert!(matches!(
+        parse_stdout_line(
+            r#"{"type":"event","event":{"type":"thinking_delta","text":"ターン1 準備中"}}"#
+        ),
+        ParsedLine::Progress(ProgressEvent::Thought(_))
+    ));
+    assert!(matches!(
+        parse_stdout_line(r#"{"type":"event","event":{"type":"thinking_delta","text":"▶ searching"}}"#),
+        ParsedLine::Progress(ProgressEvent::Status(note)) if note.starts_with('▶')
+    ));
+    assert!(matches!(
+        parse_stdout_line(r#"{"type":"event","event":{"type":"thinking_delta","text":"✓ done"}}"#),
+        ParsedLine::Progress(ProgressEvent::Status(note)) if note.starts_with('✓')
+    ));
+    assert!(matches!(
+        parse_stdout_line(r#"{"type":"event","event":{"type":"thinking_delta","text":"✗ failed"}}"#),
+        ParsedLine::Progress(ProgressEvent::Status(note)) if note.starts_with('✗')
+    ));
+    assert_eq!(
         parse_stdout_line(r#"{"type":"event","event":{"type":"api_retry"}}"#),
         ParsedLine::Ignored
     );
@@ -416,6 +486,23 @@ fn parses_result_lines_and_formats_messages() {
     };
     assert!(!super::events::result_is_error(&ok));
     assert_eq!(super::events::result_message(&ok), "done");
+    let error_field_only = super::events::TurnResult {
+        subtype: "success".to_owned(),
+        session_id: None,
+        stop_reason: Some("end_turn".to_owned()),
+        final_text: String::new(),
+        error: Some("boom".to_owned()),
+    };
+    assert!(super::events::result_is_error(&error_field_only));
+    assert_eq!(super::events::result_message(&error_field_only), "boom");
+    let stop_reason_only = super::events::TurnResult {
+        subtype: "success".to_owned(),
+        session_id: None,
+        stop_reason: Some("error".to_owned()),
+        final_text: String::new(),
+        error: None,
+    };
+    assert!(super::events::result_is_error(&stop_reason_only));
     let empty_error = super::events::TurnResult {
         subtype: "error".to_owned(),
         session_id: None,
@@ -595,6 +682,11 @@ fn progress_updates_include_thought_and_tool_chrome() {
     let thought_status = progress_to_updates(&ProgressEvent::Thought("● 検索中".to_owned()));
     assert!(rendered_thoughts(&thought_status).contains("● 検索中"));
     assert!(rendered_messages(&thought_status).is_empty());
+    for prefix in ["▶ searching", "✓ done", "✗ failed"] {
+        let updates = progress_to_updates(&ProgressEvent::Message(prefix.to_owned()));
+        assert!(rendered_thoughts(&updates).contains(prefix), "{prefix}");
+        assert!(rendered_messages(&updates).is_empty(), "{prefix}");
+    }
     let canned = progress_to_updates(&ProgressEvent::Message(
         "● 実行中: web_search。次: ツール結果待ち".to_owned(),
     ));

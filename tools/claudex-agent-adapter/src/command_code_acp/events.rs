@@ -268,9 +268,8 @@ fn event_text(event: &WireEvent) -> Option<String> {
         .or_else(|| nonempty(event.message.clone()))
 }
 
-#[rustfmt::skip]
 fn ensure_trailing_newline(text: &str) -> String {
-    if text.ends_with('\n') { text.to_owned() } else { format!("{text}\n") }
+    format!("{text}\n")
 }
 
 fn native_message(text: &str) -> acp::SessionUpdate {
