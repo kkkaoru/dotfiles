@@ -3,6 +3,7 @@ mod tests {
     use serde_json::json;
     use std::{
         collections::HashMap,
+        fs,
         sync::{Arc, Barrier},
         thread,
     };
@@ -309,6 +310,38 @@ mod tests {
         set_limit_metadata(&mut reached, true);
         assert!(!should_expose_launch_tools(&reached));
         assert_eq!(DEFAULT_MAX_SUBAGENTS_PER_SESSION, 1_024);
+        let mut null_metadata = request("session-a", Vec::new());
+        null_metadata.metadata = Value::Null;
+        set_limit_metadata(&mut null_metadata, true);
+        assert!(null_metadata.metadata.is_object());
+    }
+
+    #[test]
+    fn empty_ids_and_corrupt_store_do_not_rewrite_or_occupy_scope() {
+        let registry = SubagentReuseRegistry::default();
+        let mut arguments = launch_arguments("Audit the Rust adapter tests", "worker-model");
+        assert_eq!(registry.rewrite_launch_input("", &mut arguments), None);
+        assert!(!registry.scope_is_occupied("", &arguments));
+        assert!(!registry.scope_is_occupied("session-a", &json!({})));
+        registry.note_inflight_launch("", &arguments, "tool-a");
+        registry.note_inflight_launch("session-a", &arguments, "");
+        registry.note_inflight_launch("session-a", &json!({}), "tool-a");
+        assert!(!registry.scope_is_occupied("session-a", &arguments));
+
+        let root = tempfile::tempdir().expect("reuse store fixture");
+        let corrupt = root.path().join("corrupt.json");
+        fs::write(&corrupt, "{not json").expect("corrupt cache");
+        let _ignored = SubagentReuseRegistry::with_store(corrupt);
+
+        let incompatible = root.path().join("old.json");
+        fs::write(&incompatible, r#"{"version":0,"sessions":{}}"#).expect("old cache");
+        let _ignored = SubagentReuseRegistry::with_store(incompatible);
+
+        let not_a_dir = root.path().join("not-a-dir");
+        fs::write(&not_a_dir, "x").expect("file where directory should be");
+        let failing = SubagentReuseRegistry::with_store(not_a_dir.join("cache.json"));
+        let mut first = request("session-a", launch_with_context("tool-a", "worker-a"));
+        failing.observe_and_restore(&mut first);
     }
 
     #[test]

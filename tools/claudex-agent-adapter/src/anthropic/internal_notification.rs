@@ -305,6 +305,29 @@ mod tests {
     }
 
     #[test]
+    fn drops_empty_user_arrays_and_keeps_contentless_user_messages() {
+        let mut req = request("keep me".into());
+        req.messages = vec![
+            json!({"role":"user"}),
+            json!({"role":"user","content":[]}),
+            json!({"role":"user","content":[
+                {"type":"text","text":"  "},
+                {"type":"text","text":"<agent-message from=\"w\">done</agent-message>"}
+            ]}),
+            json!({"role":"user","content":"keep me"}),
+        ];
+        assert!(is_internal_notification_request(&request(json!([
+            {"type":"text","text":"  "},
+            {"type":"text","text":"<agent-message from=\"w\">done</agent-message>"}
+        ]))));
+        assert!(!is_internal_notification_request(&request(json!([]))));
+        remove_from_transcript(&mut req);
+        assert_eq!(req.messages.len(), 2);
+        assert_eq!(req.messages[0], json!({"role":"user"}));
+        assert_eq!(req.messages[1]["content"], "keep me");
+    }
+
+    #[test]
     fn preserves_teammate_wrappers_that_carry_a_subagent_prompt() {
         let mut request = request(
             "<teammate-message>Use the assigned model and report the result.</teammate-message>"
