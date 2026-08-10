@@ -403,7 +403,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
-    async fn configured_without_effort_still_sets_the_model() {
+    async fn configured_without_effort_skips_per_turn_model_reselect() {
         LocalSet::new()
             .run_until(check_configured_model_without_effort())
             .await;
@@ -442,14 +442,16 @@ mod tests {
             active_turns: &active,
             invalidated_sessions: &invalidated,
         };
-        assert!(!apply_effort(
-            &mut ctl,
-            &std::rc::Rc::new(disconnected_connection(std::sync::Arc::clone(&events))),
-            "model",
-            None,
-            &acp::SessionId::new("session".to_owned()),
-        )
-        .await);
+        assert!(
+            !apply_effort(
+                &mut ctl,
+                &std::rc::Rc::new(disconnected_connection(std::sync::Arc::clone(&events))),
+                "model",
+                Some("high"),
+                &acp::SessionId::new("session".to_owned()),
+            )
+            .await
+        );
         assert!(permit.is_none());
         assert_eq!(receiver.recv().await.unwrap()["method"], "error");
     }
@@ -473,14 +475,16 @@ mod tests {
             active_turns: &active,
             invalidated_sessions: &invalidated,
         };
-        assert!(!apply_effort(
-            &mut ctl,
-            &std::rc::Rc::new(disconnected_connection(std::sync::Arc::clone(&events))),
-            "model",
-            Some("high"),
-            &acp::SessionId::new("session".to_owned()),
-        )
-        .await);
+        assert!(
+            !apply_effort(
+                &mut ctl,
+                &std::rc::Rc::new(disconnected_connection(std::sync::Arc::clone(&events))),
+                "model",
+                Some("high"),
+                &acp::SessionId::new("session".to_owned()),
+            )
+            .await
+        );
         assert!(result.await.unwrap().is_ok());
         assert!(permit.is_none());
     }
@@ -607,16 +611,17 @@ mod tests {
             active_turns: &active,
             invalidated_sessions: &invalidated,
         };
-        let (connection, request) = responding_connection(std::sync::Arc::clone(&events));
-        assert!(apply_effort(
-            &mut ctl,
-            &std::rc::Rc::new(connection),
-            "model",
-            None,
-            &acp::SessionId::new("session".to_owned()),
-        )
-        .await);
-        assert_eq!(request.await.unwrap()["method"], "session/set_model");
+        assert!(
+            apply_effort(
+                &mut ctl,
+                &std::rc::Rc::new(disconnected_connection(std::sync::Arc::clone(&events))),
+                "model",
+                None,
+                &acp::SessionId::new("session".to_owned()),
+            )
+            .await
+        );
+        assert!(permit.is_some());
     }
 
     async fn check_configured_effort_fallback() {
@@ -636,22 +641,22 @@ mod tests {
             invalidated_sessions: &invalidated,
         };
         let (connection, requests) = rejecting_effort_connection(std::sync::Arc::clone(&events));
-        assert!(apply_effort(
-            &mut ctl,
-            &std::rc::Rc::new(connection),
-            "model",
-            Some("high"),
-            &acp::SessionId::new("session".to_owned()),
-        )
-        .await);
+        assert!(
+            apply_effort(
+                &mut ctl,
+                &std::rc::Rc::new(connection),
+                "model",
+                Some("high"),
+                &acp::SessionId::new("session".to_owned()),
+            )
+            .await
+        );
         let requests = requests.await.unwrap();
-        assert_eq!(requests.len(), 3);
-        assert_eq!(requests[0]["method"], "session/set_model");
-        assert!(requests[0].pointer("/params/_meta/reasoningEffort").is_none());
-        assert_eq!(requests[1]["method"], "session/set_config_option");
-        assert_eq!(requests[2]["method"], "session/set_model");
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[0]["method"], "session/set_config_option");
+        assert_eq!(requests[1]["method"], "session/set_model");
         assert_eq!(
-            requests[2].pointer("/params/_meta/reasoningEffort"),
+            requests[1].pointer("/params/_meta/reasoningEffort"),
             Some(&json!("high"))
         );
     }
@@ -674,14 +679,16 @@ mod tests {
         };
         let (connection, requests) =
             rejecting_launch_scoped_effort_connection(std::sync::Arc::clone(&events));
-        assert!(apply_effort(
-            &mut ctl,
-            &std::rc::Rc::new(connection),
-            "auto",
-            Some("high"),
-            &acp::SessionId::new("session".to_owned()),
-        )
-        .await);
+        assert!(
+            apply_effort(
+                &mut ctl,
+                &std::rc::Rc::new(connection),
+                "auto",
+                Some("high"),
+                &acp::SessionId::new("session".to_owned()),
+            )
+            .await
+        );
         let requests = requests.await.unwrap();
         assert!(
             requests.is_empty(),
@@ -834,8 +841,8 @@ mod tests {
         drop(tokio::task::spawn_local(async move {
             let mut lines = BufReader::new(outgoing_peer);
             let mut captured = Vec::new();
-            // model select → rejected effort option → model meta fallback
-            for _ in 0..3 {
+            // rejected effort option → model meta fallback
+            for _ in 0..2 {
                 let mut line = String::new();
                 lines.read_line(&mut line).await.expect("ACP request");
                 let request: Value = serde_json::from_str(&line).expect("valid ACP request");
