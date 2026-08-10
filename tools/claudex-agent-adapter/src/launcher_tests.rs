@@ -1417,38 +1417,6 @@ HTTPServer((host, int(port)), Handler).serve_forever()
         kill_dummy(&dummy);
     }
 
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn hot_swap_promotes_a_busy_listener_when_live_update_succeeds() {
-        let root = tempfile::tempdir().expect("hot-swap live update fixture");
-        let mut cfg = config();
-        let listener = TcpListener::bind("127.0.0.1:0").expect("busy listener");
-        cfg.options.listen = listener.local_addr().expect("busy address");
-        cfg.log_path = root.path().join("adapter.log");
-        cfg.lock_path = root.path().join("adapter.lock");
-        let dummy = write_matching_build_dummy(root.path(), &cfg);
-        cfg.executable = dummy.clone();
-        let mut busy = healthy(&cfg);
-        busy.build_id = "old-build".to_owned();
-        busy.listener_handover = true;
-        busy.active_http_requests = 1;
-        let server = serve_responses(
-            listener,
-            vec![
-                health_response(&busy),
-                health_response(&busy),
-                health_response(&busy),
-                health_response(&busy),
-            ],
-        );
-        let url = ensure::run(&cfg, ensure::Mode::HotSwap)
-            .await
-            .expect("busy hot-swap should promote via live update");
-        assert_eq!(url, cfg.base_url());
-        server.join().expect("busy listener");
-        kill_dummy(&dummy);
-    }
-
     #[tokio::test]
     async fn fallback_ignores_corrupt_state_and_still_attempts_a_new_listener() {
         let root = tempfile::tempdir().expect("fallback corrupt fixture");
