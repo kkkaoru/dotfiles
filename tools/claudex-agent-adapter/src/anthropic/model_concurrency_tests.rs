@@ -140,16 +140,18 @@ async fn interactive_zero_wait_falls_back_to_shared_slots() {
 #[tokio::test]
 async fn interactive_admission_times_out_when_both_pools_are_busy() {
     let registry = ModelConcurrency::new(vec![("interactive-timeout".to_owned(), 2)]);
-    let interactive = registry
-        .ticket("interactive-timeout", Some(2))
-        .unwrap()
-        .acquire_with_timeout_for(Duration::from_millis(50), true)
-        .await
-        .unwrap();
+    // Fill the shared slot first so the interactive acquire cannot steal it via
+    // select!. Under llvm-cov load the reverse order flaked by taking slots.
     let shared = registry
         .ticket("interactive-timeout", Some(2))
         .unwrap()
-        .acquire_with_timeout_for(Duration::from_millis(50), false)
+        .acquire_with_timeout_for(Duration::from_secs(1), false)
+        .await
+        .unwrap();
+    let interactive = registry
+        .ticket("interactive-timeout", Some(2))
+        .unwrap()
+        .acquire_with_timeout_for(Duration::from_secs(1), true)
         .await
         .unwrap();
     let error = match registry
