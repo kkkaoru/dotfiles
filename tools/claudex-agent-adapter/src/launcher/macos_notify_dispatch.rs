@@ -2,7 +2,7 @@ use std::{net::SocketAddr, path::Path};
 
 use anyhow::{Context, Result, bail};
 
-use super::macos_notify::{Event, post_in_process};
+use super::macos_notify::{Event, NotifyKind, post_in_process};
 
 /// Opt-in gate for user-visible banners. ensure/mcp stay silent unless
 /// `claudex install` / `claudex-hot-swap` export this.
@@ -11,6 +11,7 @@ pub(crate) const MACOS_NOTIFY_ENV: &str = "CLAUDEX_MACOS_NOTIFY";
 #[cfg(test)]
 std::thread_local! {
     static TEST_FORCE_ENABLED: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+    static TEST_FORCE_DELEGATE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 pub(super) fn notifications_enabled() -> bool {
@@ -62,6 +63,27 @@ impl Drop for NotifyForceGuard {
     }
 }
 
+#[cfg(test)]
+pub(super) struct DelegateForceGuard {
+    previous: bool,
+}
+
+#[cfg(test)]
+impl DelegateForceGuard {
+    pub(super) fn push(enabled: bool) -> Self {
+        let previous = TEST_FORCE_DELEGATE.with(std::cell::Cell::get);
+        TEST_FORCE_DELEGATE.with(|cell| cell.set(enabled));
+        Self { previous }
+    }
+}
+
+#[cfg(test)]
+impl Drop for DelegateForceGuard {
+    fn drop(&mut self) {
+        TEST_FORCE_DELEGATE.with(|cell| cell.set(self.previous));
+    }
+}
+
 pub(super) fn post(cache: &Path, listen: &SocketAddr, event: Event) {
     if delegate_post(cache, &event) {
         return;
@@ -72,47 +94,50 @@ pub(super) fn post(cache: &Path, listen: &SocketAddr, event: Event) {
 fn delegate_post(cache: &Path, event: &Event) -> bool {
     #[cfg(test)]
     {
-        let _ = (cache, event);
-        false
-    }
-    #[cfg(not(test))]
-    {
-        use std::process::Command;
-
-        use super::{
-            installed_adapter,
-            macos_notify::NotifyKind,
-        };
-
-        if event.kind() != NotifyKind::Complete {
+        // Keep unit suites in-process by default. Opt into the production
+        // spawn path explicitly so delegation stays measurable under llvm-cov.
+        if !TEST_FORCE_DELEGATE.with(std::cell::Cell::get) {
+            let _ = (cache, event);
             return false;
         }
-        let Some(exe) = installed_adapter::notify_delegate_executable() else {
-            return false;
-        };
-        let Some(cache) = cache.to_str() else {
-            return false;
-        };
-        match Command::new(&exe)
-            .env(installed_adapter::NOTIFY_IN_PROCESS_ENV, "1")
-            .args([
-                "__internal-notify",
-                "complete",
-                cache,
-                event.listen(),
-                event.build_id(),
-            ])
-            .status()
-        {
-            Ok(status) if status.success() => true,
-            Ok(status) => {
-                eprintln!("claudex: delegated macOS notify exited {status}");
-                false
-            }
-            Err(error) => {
-                eprintln!("claudex: delegated macOS notify failed ({error})");
-                false
-            }
+    }
+    delegate_complete_notify(cache, event)
+}
+
+/// Spawn the installed adapter to post a completion banner out-of-process.
+fn delegate_complete_notify(cache: &Path, event: &Event) -> bool {
+    use std::process::Command;
+
+    use super::installed_adapter;
+
+    if event.kind() != NotifyKind::Complete {
+        return false;
+    }
+    let Some(exe) = installed_adapter::notify_delegate_executable() else {
+        return false;
+    };
+    let Some(cache) = cache.to_str() else {
+        return false;
+    };
+    match Command::new(&exe)
+        .env(installed_adapter::NOTIFY_IN_PROCESS_ENV, "1")
+        .args([
+            "__internal-notify",
+            "complete",
+            cache,
+            event.listen(),
+            event.build_id(),
+        ])
+        .status()
+    {
+        Ok(status) if status.success() => true,
+        Ok(status) => {
+            eprintln!("claudex: delegated macOS notify exited {status}");
+            false
+        }
+        Err(error) => {
+            eprintln!("claudex: delegated macOS notify failed ({error})");
+            false
         }
     }
 }
