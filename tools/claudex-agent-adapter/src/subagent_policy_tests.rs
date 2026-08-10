@@ -96,6 +96,7 @@ mod tests {
             config_path(Some(alternate.as_os_str()), None).unwrap(),
             Some(alternate)
         );
+        assert_eq!(config_path(None, None).unwrap(), None);
         assert!(config_path(Some(OsStr::new("")), None).is_err());
         assert!(config_path(Some(root.path().join("missing").as_os_str()), None).is_err());
         assert!(load_config(None).unwrap().is_empty());
