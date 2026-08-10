@@ -9,7 +9,24 @@ use claudex_agent_adapter::{
 use reqwest::Client;
 use serde_json::{Value, json};
 
-const ACP_EVENT_TIMEOUT: Duration = Duration::from_secs(5);
+fn acp_event_timeout() -> Duration {
+    instrumented_timeout(Duration::from_secs(5), Duration::from_secs(20))
+}
+
+fn saturation_timeout() -> Duration {
+    instrumented_timeout(Duration::from_secs(5), Duration::from_secs(20))
+}
+
+fn instrumented_timeout(fast: Duration, slow: Duration) -> Duration {
+    if std::env::var_os("CARGO_LLVM_COV").is_some()
+        || std::env::var_os("LLVM_PROFILE_FILE").is_some()
+    {
+        slow
+    } else {
+        fast
+    }
+}
+
 const CONFIGURED_PARALLEL_LIMIT: usize = 7;
 const EXPECTED_QUEUED_REQUESTS: usize = 1;
 const TRACE_POLL_INTERVAL: Duration = Duration::from_millis(10);
@@ -106,7 +123,7 @@ async fn allows_session_creations_up_to_the_configured_concurrency_limit() {
         }));
     }
 
-    let saturated = tokio::time::timeout(Duration::from_secs(5), async {
+    let saturated = tokio::time::timeout(saturation_timeout(), async {
         loop {
             let health = client
                 .get(&health_url)
@@ -142,7 +159,7 @@ async fn allows_session_creations_up_to_the_configured_concurrency_limit() {
     std::fs::write(root.path().join(PARALLEL_RELEASE_FILE), b"release")
         .expect("release parallel sessions");
     for request in requests {
-        let response = tokio::time::timeout(ACP_EVENT_TIMEOUT, request)
+        let response = tokio::time::timeout(acp_event_timeout(), request)
             .await
             .expect("session concurrency turn timed out")
             .expect("session concurrency task failed");
@@ -240,7 +257,7 @@ async fn enforces_seven_exact_model_turns_and_queues_the_eighth() {
         }));
     }
 
-    let saturated = tokio::time::timeout(Duration::from_secs(5), async {
+    let saturated = tokio::time::timeout(saturation_timeout(), async {
         loop {
             let health = client_a
                 .get(&health_url)
@@ -275,7 +292,7 @@ async fn enforces_seven_exact_model_turns_and_queues_the_eighth() {
     std::fs::write(root.path().join(PARALLEL_RELEASE_FILE), b"release")
         .expect("release parallel prompts");
     for turn in turns {
-        let response = tokio::time::timeout(ACP_EVENT_TIMEOUT, turn)
+        let response = tokio::time::timeout(acp_event_timeout(), turn)
             .await
             .expect("parallel turn timed out")
             .expect("parallel turn task failed");
@@ -493,7 +510,7 @@ async fn configured_acp_selects_model_after_session_and_falls_back_for_effort_op
 }
 
 async fn wait_for_turn_completion(events: ThreadEvents) {
-    tokio::time::timeout(ACP_EVENT_TIMEOUT, receive_turn_completion(&events))
+    tokio::time::timeout(acp_event_timeout(), receive_turn_completion(&events))
         .await
         .expect("configured ACP turn completion");
 }
@@ -554,7 +571,7 @@ async fn session_scoped_configured_acp_recycles_after_one_failed_stream() {
         )
         .await
         .expect("start failing turn");
-    let failed = tokio::time::timeout(ACP_EVENT_TIMEOUT, receiver.recv())
+    let failed = tokio::time::timeout(acp_event_timeout(), receiver.recv())
         .await
         .expect("failed turn event")
         .expect("failed turn event dispatcher");
@@ -580,7 +597,7 @@ async fn session_scoped_configured_acp_recycles_after_one_failed_stream() {
         .await
         .expect("start turn on recycled provider");
     tokio::time::timeout(
-        ACP_EVENT_TIMEOUT,
+        acp_event_timeout(),
         receive_recycled_turn_completion(&restarted_receiver),
     )
     .await
