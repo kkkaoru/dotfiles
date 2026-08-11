@@ -104,7 +104,8 @@ async fn shutdown_scoped_pool(backend: &AgentBackend) {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
-    use crate::agent_backend::{BackendKind, BackendRoute};
+    use crate::agent_backend::{BackendKind, BackendRoute, AgentBackend};
+    use std::sync::Arc;
 
     #[test]
     fn scope_key_uses_anonymous_for_missing_ids() {
@@ -139,5 +140,38 @@ mod tests {
         assert_eq!(scopes.scope_count(), 1);
         scopes.release_scope(Some("session-a")).await;
         assert_eq!(scopes.scope_count(), 0);
+    }
+
+    #[test]
+    fn empty_scopes_report_models_alive_and_catalog_metadata() {
+        let scopes = SessionScopedBackends::new(&[BackendRoute::new(
+            "main",
+            BackendKind::CodexAppServer,
+        )]);
+        assert!(scopes.model_is_alive("main"));
+        assert!(scopes.started_models().is_empty());
+        assert!(scopes.catalog().supports("main"));
+    }
+
+    #[tokio::test]
+    async fn shutdown_all_clears_every_scope() {
+        let scopes = SessionScopedBackends::new(&[BackendRoute::new(
+            "main",
+            BackendKind::CodexAppServer,
+        )]);
+        let _ = scopes.scope(Some("a"));
+        let _ = scopes.scope(Some("b"));
+        assert_eq!(scopes.scope_count(), 2);
+        scopes.shutdown_all().await;
+        assert_eq!(scopes.scope_count(), 0);
+    }
+
+    #[test]
+    fn scope_or_self_clones_non_scoped_backends() {
+        let leaf = AgentBackend::spawn_routes(&[]);
+        let scoped = leaf.scope_or_self(Some("sess"));
+        assert!(!Arc::ptr_eq(&leaf, &scoped));
+        let codex = AgentBackend::routed(Vec::new());
+        assert!(Arc::ptr_eq(&codex, &codex.scope_or_self(Some("sess"))));
     }
 }

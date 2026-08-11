@@ -123,6 +123,45 @@ async fn bridge_sweep_releases_session_scoped_provider_pool() {
     );
 }
 
+#[tokio::test]
+async fn release_keeps_scope_while_a_detached_session_still_references_it() {
+    let bridge = Bridge::new_with_backend(
+        AgentBackend::spawn_routes(&[BackendRoute::new(
+            "main",
+            BackendKind::CodexAppServer,
+        )]),
+        "main".to_owned(),
+    );
+    let _ = bridge.app_for(Some("kept-scope"));
+    let detached = session_with_claude_id(Instant::now(), "kept-scope");
+    detached.pending_tools.lock().await.clear();
+    *detached.pending_since.lock().unwrap() = None;
+    bridge.detached_sessions.lock().await.push(detached);
+
+    bridge
+        .release_provider_scope_if_unused(Some("kept-scope"))
+        .await;
+    let AgentBackend::SessionScoped(scopes) = bridge.app.as_ref() else {
+        panic!("spawn_routes must build SessionScoped");
+    };
+    assert_eq!(
+        scopes.scope_count(),
+        1,
+        "detached Claude sessions must keep their provider pool"
+    );
+    assert!(Arc::ptr_eq(
+        &bridge.app_for(Some("kept-scope")),
+        &bridge.app_for_session(
+            bridge
+                .detached_sessions
+                .lock()
+                .await
+                .first()
+                .expect("detached session")
+        )
+    ));
+}
+
 fn session(activity: Instant) -> Arc<Session> {
     session_with_claude_id(activity, "")
 }
