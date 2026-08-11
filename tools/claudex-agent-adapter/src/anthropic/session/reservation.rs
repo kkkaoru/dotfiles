@@ -8,7 +8,7 @@ use crate::anthropic::content::matching_transcript_len;
 /// How long a follow-up may wait for an in-flight same-session turn to release
 /// its gate after cancellation. Kept short so cold create_session remains an
 /// option when the prior turn cannot settle.
-pub(super) const PREEMPT_GATE_TIMEOUT: Duration = Duration::from_secs(3);
+pub(super) const PREEMPT_GATE_TIMEOUT: Duration = Duration::from_millis(500);
 
 pub(super) async fn reserve_matching_session(
     sessions: Vec<Arc<Session>>,

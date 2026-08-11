@@ -3,6 +3,15 @@ use serde_json::json;
 use std::{collections::HashMap, sync::Arc, time::Instant};
 use tokio::sync::{Mutex, Semaphore};
 
+#[test]
+fn preempt_gate_timeout_stays_subsecond() {
+    assert_eq!(PREEMPT_GATE_TIMEOUT, Duration::from_millis(500));
+    assert!(
+        PREEMPT_GATE_TIMEOUT <= Duration::from_secs(1),
+        "same-session preempt must not stall follow-ups for multi-second gate waits"
+    );
+}
+
 fn session(model: &str, client_user_id: Option<&str>) -> Session {
     let slots = Arc::new(Semaphore::new(1));
     Session {
