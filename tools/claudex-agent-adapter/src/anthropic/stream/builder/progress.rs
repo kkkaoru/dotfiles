@@ -39,6 +39,14 @@ impl SegmentBuilder {
         self.note_provider_turn_activity();
         self.close_text_block(stream).await?;
         if self.is_subagent {
+            // If the open thought still holds launch prose (legacy prime or
+            // non-primed start status), close it before ▶ so CC 2.1 does not
+            // keep the tool chrome folded inside "Wandering…".
+            if is_adapter_tool_marker(delta)
+                && self.thinking.open_holds_collapsed_subagent_launch()
+            {
+                self.thinking.close(&mut self.blocks, stream).await?;
+            }
             return self
                 .thinking
                 .progress_status_keep_open(&mut self.blocks, delta, stream)
@@ -308,6 +316,9 @@ impl SegmentBuilder {
         // into stream-only ZWSP. CC 2.1 otherwise freezes on the first ▶ line
         // for the whole Bash/CoT silence window.
         let tip = keepalive_elapsed_chrome(last_tool.as_deref(), self.turn_started_at.elapsed());
+        if self.thinking.open_holds_collapsed_subagent_launch() {
+            self.thinking.close(&mut self.blocks, stream).await?;
+        }
         self.thinking
             .progress_status_keep_open(&mut self.blocks, &tip, stream)
             .await?;

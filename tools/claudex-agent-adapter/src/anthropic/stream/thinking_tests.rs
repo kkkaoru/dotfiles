@@ -174,6 +174,44 @@ mod tests {
         assert_eq!(zwsp_deltas, 1);
     }
 
+    #[tokio::test]
+    async fn closes_effort_launch_thought_before_progress_marker() {
+        let mut state = ThinkingState {
+            open: Some(OpenThinking {
+                index: 0,
+                item_id: "claudex_activity_keepalive".to_owned(),
+                summary_index: 0,
+                signature: "sig".to_owned(),
+                text: "SubAgent starting: auto (effort=high); preparing provider session…".to_owned(),
+            }),
+        };
+        let mut blocks = vec![json!({
+            "type":"thinking",
+            "thinking":"SubAgent starting: auto (effort=high); preparing provider session…",
+            "signature":"sig"
+        })];
+        assert!(state.open_holds_collapsed_subagent_launch());
+        state.close(&mut blocks, None).await.expect("close");
+        assert!(state.open.is_none(), "launch prose must close before ▶");
+        state
+            .progress_status_keep_open(&mut blocks, "▶ Bash\n", None)
+            .await
+            .expect("fresh ▶");
+        assert_eq!(
+            state.open.as_ref().map(|open| open.item_id.as_str()),
+            Some("claudex_provider_progress")
+        );
+        assert!(
+            blocks.last().is_some_and(|block| {
+                block
+                    .get("thinking")
+                    .and_then(Value::as_str)
+                    .is_some_and(|text| text.contains('▶') && !text.contains("effort="))
+            }),
+            "▶ must open outside the Wandering launch block: {blocks:?}"
+        );
+    }
+
     async fn count_tip_and_zwsp_deltas(
         receiver: &mut tokio::sync::mpsc::Receiver<Result<Bytes, Infallible>>,
     ) -> (usize, usize) {

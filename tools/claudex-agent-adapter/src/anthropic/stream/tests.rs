@@ -113,10 +113,14 @@ fn subagent_start_status_skips_main_and_command_code() {
     let status = super::prepare::subagent_start_status(true, "gpt-5.6-luna", Some("max"))
         .expect("luna subagent start");
     assert!(status.contains("gpt-5.6-luna"));
-    assert!(status.contains("effort=max"));
+    assert!(
+        !status.contains("effort="),
+        "effort= in start prose collapses CC 2.1 to Wandering: {status}"
+    );
     let default_effort =
         super::prepare::subagent_start_status(true, "auto", None).expect("cursor subagent start");
-    assert!(default_effort.contains("effort=configured"));
+    assert!(default_effort.contains("auto"));
+    assert!(!default_effort.contains("effort="));
 }
 
 #[tokio::test]
@@ -1885,7 +1889,7 @@ async fn reports_slow_stream_preparation_before_the_provider_is_ready() {
         super::PrepareActivityOptions {
             input_tokens: 3,
             sender: &sender,
-            initial_status: Some("SubAgent starting: worker-model (effort=high)"),
+            initial_status: Some("SubAgent starting: worker-model; preparing provider session…"),
             first_delay: Duration::from_millis(5),
             interval: Duration::from_millis(50),
             is_subagent: true,
@@ -2141,12 +2145,18 @@ async fn cursor_subagent_primes_thinking_in_the_same_flush_as_message_start() {
         "missing message_start: {frames:?}"
     );
     assert!(
-        frames.iter().any(|frame| {
-            frame.contains("thinking_delta")
-                && frame.contains("SubAgent starting: auto")
-                && frame.contains("effort=high")
+        frames
+            .iter()
+            .any(|frame| frame.contains("thinking_delta") && frame.contains('\u{200b}')),
+        "Cursor SubAgent must ZWSP-prime like Command Code so CC does not collapse to Wandering: {frames:?}"
+    );
+    assert!(
+        !frames.iter().any(|frame| {
+            frame.contains("SubAgent starting")
+                || frame.contains("effort=high")
+                || frame.contains("effort=")
         }),
-        "old failure: Cursor SubAgent only sent message_start, so CC dropped SSE and the panel stayed silent: {frames:?}"
+        "old failure: prose+effort prime collapsed CC 2.1 to Wandering while ACP Bash kept running: {frames:?}"
     );
     assert!(
         !frames

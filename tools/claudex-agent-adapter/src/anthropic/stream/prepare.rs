@@ -27,14 +27,18 @@ pub(in crate::anthropic) struct PreparedStream {
 pub(super) fn subagent_start_status(
     is_subagent: bool,
     model: &str,
-    effort: Option<&str>,
+    _effort: Option<&str>,
 ) -> Option<String> {
     if !is_subagent || crate::command_code_acp::is_command_code_model(model) {
         return None;
     }
-    let effort = effort.unwrap_or("configured");
+    // Do not embed `effort=` here. Claude Code 2.1 treats the first thinking
+    // prose that mentions high effort as collapsed "Wandering… still thinking
+    // with high effort", and later ▶ tool chrome appended to the same block
+    // stays hidden for ACP SubAgents (cursor/auto). Native Subscription workers
+    // still show progress via real tool_use cards.
     Some(format!(
-        "SubAgent starting: {model} (effort={effort}); preparing provider session\u{2026}"
+        "SubAgent starting: {model}; preparing provider session\u{2026}"
     ))
 }
 
@@ -43,7 +47,7 @@ pub(super) fn prime_subagent_sse(
     model: &str,
     input_tokens: u64,
     is_subagent: bool,
-    effort: Option<&str>,
+    _effort: Option<&str>,
 ) -> bool {
     sender
         .try_send(Ok(Bytes::from(message_start(model, input_tokens))))
@@ -51,13 +55,13 @@ pub(super) fn prime_subagent_sse(
     // Claude Code drops SSE after message_start unless a thinking block lands in
     // the same first flush. Main turns also sit blank during ACP session/new +
     // permit acquire; paint immediately for every provider hop through claudex.
+    //
+    // SubAgents must prime with ZWSP only (same as Command Code). A visible
+    // "SubAgent starting… (effort=high)" tip made CC 2.1 collapse the whole
+    // thinking block to Wandering, so Cursor ACP ▶ Bash never appeared live
+    // even though providerTool events kept firing.
     let first_delta = if is_subagent {
-        if crate::command_code_acp::is_command_code_model(model) {
-            "\u{200b}".to_owned()
-        } else {
-            subagent_start_status(true, model, effort)
-                .unwrap_or_else(|| "SubAgent starting\u{2026}".to_owned())
-        }
+        "\u{200b}".to_owned()
     } else {
         "Preparing provider session\u{2026}".to_owned()
     };

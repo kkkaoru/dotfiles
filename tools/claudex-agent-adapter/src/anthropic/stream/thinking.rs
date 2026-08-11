@@ -170,7 +170,20 @@ impl ThinkingState {
         )
         .await
     }
-    /// Append ▶/✓/✗ tool progress into open thinking (SubAgent live chrome).
+    /// Launch prose (`SubAgent starting` / `effort=`) that CC 2.1 folds away.
+    pub(super) fn open_holds_collapsed_subagent_launch(&self) -> bool {
+        let Some(open) = self.open.as_ref() else {
+            return false;
+        };
+        if open.item_id == "claudex_provider_progress" {
+            return false;
+        }
+        let text = open.text.as_str();
+        text.contains("SubAgent starting")
+            || text.contains("effort=")
+            || text.contains("still thinking with high effort")
+    }
+
     pub(super) async fn progress_status(
         &mut self,
         blocks: &mut Vec<Value>,
