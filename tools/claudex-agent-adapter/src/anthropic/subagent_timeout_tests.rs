@@ -187,7 +187,10 @@ async fn explicit_hard_timeout_cancels_without_detaching_or_processing_late_even
     );
     assert!(bridge.sessions.lock().await.is_empty());
     assert!(bridge.detached_sessions.lock().await.is_empty());
-    assert!(!bridge.app.is_alive());
+    assert!(
+        bridge.app.is_alive(),
+        "hard timeout must clear the session without killing the shared Codex app-server"
+    );
     assert_eq!(
         bridge
             .subagent_hard_timeout_cancel_attempts
@@ -228,7 +231,10 @@ async fn failed_cancel_settlement_aborts_the_provider_before_returning() {
 
     assert!(bridge.sessions.lock().await.is_empty());
     assert!(bridge.detached_sessions.lock().await.is_empty());
-    assert!(!bridge.app.is_alive());
+    assert!(
+        bridge.app.is_alive(),
+        "failed cancel settlement must drop the session without killing the shared Codex app-server"
+    );
 }
 
 #[tokio::test]

@@ -355,7 +355,10 @@ mod tests {
         )
         .await;
 
-        assert!(!alive.load(std::sync::atomic::Ordering::Acquire));
+        assert!(
+            alive.load(std::sync::atomic::Ordering::Acquire),
+            "configured prompt failure must invalidate the session without killing the shared ACP driver"
+        );
         assert!(invalidated.borrow().contains("session"));
         assert!(!active.borrow().contains_key("session"));
         assert!(permit.is_none());
@@ -913,7 +916,10 @@ mod tests {
             &alive,
         )
         .await;
-        assert!(!alive.load(std::sync::atomic::Ordering::Acquire));
+        assert!(
+            alive.load(std::sync::atomic::Ordering::Acquire),
+            "configured prompt timeout must invalidate the session without killing the shared ACP driver"
+        );
         assert!(invalidated.borrow().contains("session"));
         assert!(!active.borrow().contains_key("session"));
         assert!(permit.is_none());

@@ -152,7 +152,12 @@ fn seed_recent_agents_skips_blanks() {
 fn published_idle_seconds_drive_grace_without_local_clock() {
     let within = probe(0, &["session-a"], Some(&[]), Some(10));
     assert!(within.within_sticky_grace(None, Instant::now()));
-    let expired = probe(0, &["session-a"], Some(&[]), Some(60));
+    let expired = probe(
+        0,
+        &["session-a"],
+        Some(&[]),
+        Some(crate::sticky_grace::STICKY_IDLE_GRACE_SECS + 1),
+    );
     assert!(!expired.within_sticky_grace(None, Instant::now()));
     assert!(
         expired.within_sticky_grace(Some(Instant::now()), Instant::now()),

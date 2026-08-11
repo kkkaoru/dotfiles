@@ -3270,11 +3270,12 @@ async fn unsupported_disconnect_with_a_visible_tool_aborts_without_a_drain() {
     assert!(session.pending_since.lock().unwrap().is_none());
     assert!(bridge.sessions.lock().await.is_empty());
     assert!(bridge.detached_sessions.lock().await.is_empty());
-    assert!(!app.is_alive());
+    assert!(
+        app.is_alive(),
+        "Codex disconnect abort must not kill the shared app-server"
+    );
     assert_eq!(Arc::strong_count(&events), 1, "no hidden drain owns events");
-    tokio::time::timeout(Duration::from_secs(1), wait_for_disconnected_drain(&events))
-        .await
-        .expect("provider abort must close the event channel after queued events");
+    // Session was removed; the provider leaf stays up for unrelated threads.
     assert_eq!(bridge.used_session_slots(), 1);
     drop(session);
     assert_eq!(bridge.used_session_slots(), 0);
