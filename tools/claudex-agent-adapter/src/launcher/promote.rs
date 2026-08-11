@@ -1,22 +1,27 @@
 use std::{
-    net::{SocketAddr, TcpListener as StdTcpListener},
+    net::SocketAddr,
     time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
-use serde_json::json;
-
 use super::{
     ServiceConfig, daemon_process, daemon_start, fallback,
     health::{self, Health},
     live,
 };
 
+mod rebind;
+use rebind::{
+    request_bind_listen, request_ephemeral_rebind, restore_old_canonical,
+    wait_until_canonical_released,
+};
+use rebind::listen_is_free;
+
 #[cfg(not(test))]
-const HANDOVER_TIMEOUT: Duration = Duration::from_secs(10);
+pub(super) const HANDOVER_TIMEOUT: Duration = Duration::from_secs(10);
 #[cfg(test)]
-const HANDOVER_TIMEOUT: Duration = Duration::from_secs(2);
+pub(super) const HANDOVER_TIMEOUT: Duration = Duration::from_secs(2);
 // llvm-cov parallel load delays dummy warm-start HTTP; keep the gate from
 // treating a slow Python listener as a live-update failure.
 #[cfg(not(test))]
@@ -25,11 +30,11 @@ const WARM_START_TIMEOUT: Duration = Duration::from_secs(10);
 const WARM_START_TIMEOUT: Duration = Duration::from_secs(45);
 #[cfg(all(test, not(coverage_nightly)))]
 const WARM_START_TIMEOUT: Duration = Duration::from_secs(2);
-const HANDOVER_POLL: Duration = Duration::from_millis(10);
+pub(super) const HANDOVER_POLL: Duration = Duration::from_millis(10);
 
 #[derive(Debug, Deserialize)]
-struct RebindResponse {
-    listen: String,
+pub(super) struct RebindResponse {
+    pub(super) listen: String,
 }
 
 pub(super) fn handover_supported(health: &Health) -> bool {
@@ -291,76 +296,6 @@ fn advertised_listen(config: &ServiceConfig, health: &Health) -> SocketAddr {
 fn terminate_started(pid: u32, config: &ServiceConfig) {
     if daemon_process::matches(pid, &config.executable) {
         daemon_process::terminate(pid);
-    }
-}
-
-async fn restore_old_canonical(
-    client: &reqwest::Client,
-    config: &ServiceConfig,
-    retained_listen: SocketAddr,
-) {
-    let _ = request_bind_listen(
-        client,
-        &config.with_listen(retained_listen),
-        config.options.listen,
-    )
-    .await;
-}
-
-async fn request_ephemeral_rebind(
-    client: &reqwest::Client,
-    config: &ServiceConfig,
-) -> Result<Option<RebindResponse>> {
-    request_rebind(client, config, json!({ "ephemeral": true })).await
-}
-
-async fn request_bind_listen(
-    client: &reqwest::Client,
-    target: &ServiceConfig,
-    listen: SocketAddr,
-) -> Result<Option<RebindResponse>> {
-    request_rebind(client, target, json!({ "listen": listen.to_string() })).await
-}
-
-async fn request_rebind(
-    client: &reqwest::Client,
-    target: &ServiceConfig,
-    body: serde_json::Value,
-) -> Result<Option<RebindResponse>> {
-    let response = match client
-        .post(format!("{}/admin/rebind-listener", target.base_url()))
-        .bearer_auth(&target.token)
-        .json(&body)
-        .timeout(HANDOVER_TIMEOUT)
-        .send()
-        .await
-    {
-        Ok(response) => response,
-        Err(_) => return Ok(None),
-    };
-    if !response.status().is_success() {
-        return Ok(None);
-    }
-    Ok(response.json().await.ok())
-}
-
-fn listen_is_free(listen: SocketAddr) -> bool {
-    StdTcpListener::bind(listen).is_ok()
-}
-
-async fn wait_until_canonical_released(config: &ServiceConfig) -> Result<()> {
-    let deadline = Instant::now() + HANDOVER_TIMEOUT;
-    loop {
-        if listen_is_free(config.options.listen) {
-            return Ok(());
-        }
-        if Instant::now() >= deadline {
-            bail!(
-                "canonical listener {} did not release after handover",
-                config.options.listen
-            );
-        }
-        tokio::time::sleep(HANDOVER_POLL).await;
     }
 }
 
