@@ -224,9 +224,15 @@ fn retains_recent_sessions_within_sticky_idle_grace() {
         "brief idle between turns must keep sessions for retained cutover"
     );
     health.idle_seconds = Some(600);
+    assert_eq!(
+        retained_session_ids(&health),
+        ["session-a"],
+        "idle within adapter session TTL must keep sessions for retained cutover"
+    );
+    health.idle_seconds = Some(crate::sticky_grace::STICKY_IDLE_GRACE_SECS + 1);
     assert!(
         retained_session_ids(&health).is_empty(),
-        "idle past sticky grace must still release"
+        "idle past sticky/session TTL must still release"
     );
     health.idle_seconds = None;
     assert!(
@@ -395,9 +401,10 @@ async fn release_idle_retained_keeps_generation_within_sticky_idle_grace() {
 #[tokio::test]
 async fn release_idle_retained_releases_when_sticky_idle_grace_expires() {
     let root = tempfile::tempdir().expect("retained grace expired fixture");
+    let past_grace = crate::sticky_grace::STICKY_IDLE_GRACE_SECS + 1;
     let (server, task) = health_server(
         health_body(Some(999), false),
-        health_body_with_idle(Some(91), false, Some(60)),
+        health_body_with_idle(Some(91), false, Some(past_grace)),
     )
     .await;
     let config = config_at(server, root.path(), PathBuf::from("/tmp/adapter"));
