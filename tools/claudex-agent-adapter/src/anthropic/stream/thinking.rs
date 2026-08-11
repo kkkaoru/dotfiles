@@ -333,7 +333,7 @@ impl ThinkingState {
     /// Stream-only ZWSP; leave tip buffer unchanged so ▶ stays last-visible.
     pub(super) async fn elapsed_keepalive(
         &self,
-        _blocks: &mut [Value],
+        _blocks: &[Value],
         _elapsed: std::time::Duration,
         _last_tool: Option<&str>,
         stream: Option<&StreamSender>,

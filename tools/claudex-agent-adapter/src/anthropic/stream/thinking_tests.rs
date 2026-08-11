@@ -148,7 +148,7 @@ mod tests {
             .expect("tip");
         let before = blocks[0]["thinking"].as_str().expect("tip text").to_owned();
         state
-            .elapsed_keepalive(&mut blocks, Duration::from_secs(4), Some("Read"), Some(&sender))
+            .elapsed_keepalive(&blocks, Duration::from_secs(4), Some("Read"), Some(&sender))
             .await
             .expect("zwsp");
         assert_eq!(

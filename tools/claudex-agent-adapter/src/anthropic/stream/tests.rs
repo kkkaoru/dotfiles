@@ -895,7 +895,7 @@ async fn progress_status_dedupes_tool_tip_after_zwsp_keepalive_tail() {
         .await
         .expect("first tip");
     state
-        .elapsed_keepalive(&mut blocks, Duration::from_secs(4), Some("Read"), None)
+        .elapsed_keepalive(&blocks, Duration::from_secs(4), Some("Read"), None)
         .await
         .expect("zwsp keepalive");
     state
@@ -903,7 +903,7 @@ async fn progress_status_dedupes_tool_tip_after_zwsp_keepalive_tail() {
         .await
         .expect("re-tip after zwsp");
     state
-        .elapsed_keepalive(&mut blocks, Duration::from_secs(8), Some("Read"), None)
+        .elapsed_keepalive(&blocks, Duration::from_secs(8), Some("Read"), None)
         .await
         .expect("second zwsp");
     state

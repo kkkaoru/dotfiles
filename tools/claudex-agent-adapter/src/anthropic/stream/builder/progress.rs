@@ -295,7 +295,7 @@ impl SegmentBuilder {
         }
         self.thinking
             .elapsed_keepalive(
-                &mut self.blocks,
+                &self.blocks,
                 self.turn_started_at.elapsed(),
                 last_tool.as_deref(),
                 stream,
