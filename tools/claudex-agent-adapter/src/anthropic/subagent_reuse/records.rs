@@ -341,6 +341,15 @@ fn mark_failed_launch_result(
         launch.status = "failed".to_owned();
         return;
     }
+    // Only error tool_results retire a resume target. Successful resume prose
+    // often lacks the spawn launch phrases, and must not mark the agent failed.
+    if !block
+        .get("is_error")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return;
+    }
     // Auto-resume failures must retire the target recipient or rewrite keeps
     // reinjecting the same dead agentId on every same-scope follow-up.
     if let Some((_, _, Some(resume))) = contexts.get(tool_use_id) {

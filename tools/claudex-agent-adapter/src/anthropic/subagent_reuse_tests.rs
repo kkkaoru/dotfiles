@@ -411,6 +411,55 @@ fn failed_auto_resume_retires_recipient_so_rewrite_stops() {
 }
 
 #[test]
+fn successful_resume_without_spawn_phrase_keeps_recipient_reusable() {
+    let registry = SubagentReuseRegistry::default();
+    let mut first = request(
+        "session-a",
+        launch_with_scope(
+            "tool-a",
+            "worker-a",
+            "Audit the Rust adapter tests",
+            "worker-model",
+        ),
+    );
+    registry.observe_and_restore(&mut first);
+    let mut resumed = request(
+        "session-a",
+        vec![
+            json!({
+                "role":"assistant",
+                "content":[{
+                    "type":"tool_use",
+                    "id":"tool-resume",
+                    "name":"Agent",
+                    "input":{
+                        "prompt":"Audit the Rust adapter tests",
+                        "claudex_model":"worker-model",
+                        "resume":"worker-a"
+                    }
+                }]
+            }),
+            json!({
+                "role":"user",
+                "content":[{
+                    "type":"tool_result",
+                    "tool_use_id":"tool-resume",
+                    "content":"Resumed agent worker-a; work continues."
+                }]
+            }),
+        ],
+    );
+    registry.observe_and_restore(&mut resumed);
+    let mut follow = launch_arguments("Audit the Rust adapter tests", "worker-model");
+    assert_eq!(
+        registry.rewrite_launch_input("session-a", &mut follow),
+        Some("worker-a".to_owned()),
+        "successful resume prose must not retire the recipient"
+    );
+    assert_eq!(follow.get("resume").and_then(Value::as_str), Some("worker-a"));
+}
+
+#[test]
 fn launch_tools_are_hidden_only_after_the_session_budget_is_reached() {
     let mut below = request("session-a", Vec::new());
     set_limit_metadata(&mut below, false);
