@@ -811,6 +811,7 @@ async fn ensure_running_replaces_the_renamed_legacy_daemon() {
         .env("HOME", home.path())
         .env_remove("CARGO_HOME")
         .env("CLAUDEX_ADAPTER_EXECUTABLE", &current_binary)
+        .env("CLAUDEX_MACOS_NOTIFY", "0")
         .env("ANTHROPIC_AUTH_TOKEN", "claudex-local")
         .env("CLAUDEX_CODEX_PROGRAM", env!("CARGO_BIN_EXE_codex-mock"))
         .output()
@@ -905,6 +906,7 @@ fn ensure_running_rejects_non_loopback_without_a_real_token() {
             "CLAUDEX_ADAPTER_EXECUTABLE",
             env!("CARGO_BIN_EXE_claudex-agent-adapter"),
         )
+        .env("CLAUDEX_MACOS_NOTIFY", "0")
         .env("ANTHROPIC_AUTH_TOKEN", "claudex-local")
         .output()
         .expect("run rejected ensure command");
@@ -926,6 +928,7 @@ async fn ensure_running_connects_through_loopback_for_an_exposed_listener() {
             "CLAUDEX_ADAPTER_EXECUTABLE",
             env!("CARGO_BIN_EXE_claudex-agent-adapter"),
         )
+        .env("CLAUDEX_MACOS_NOTIFY", "0")
         .env("ANTHROPIC_AUTH_TOKEN", "real-token")
         .env("CLAUDEX_CODEX_PROGRAM", env!("CARGO_BIN_EXE_codex-mock"))
         .output()
@@ -1316,6 +1319,9 @@ fn common_command(home: &TempDir, _port: u16, _max_processes: &str) -> Command {
             "CLAUDEX_ADAPTER_EXECUTABLE",
             env!("CARGO_BIN_EXE_claudex-agent-adapter"),
         )
+        // Integration ensure/hot-swap binaries are not cfg(test); without this,
+        // CLI opt-in posts real macOS "差し替え完了" banners during coverage.
+        .env("CLAUDEX_MACOS_NOTIFY", "0")
         .env("ANTHROPIC_AUTH_TOKEN", "claudex-local")
         .env("CLAUDEX_CODEX_PROGRAM", env!("CARGO_BIN_EXE_codex-mock"));
     command
