@@ -4,6 +4,13 @@ use serde_json::Value;
 
 use super::{AgentEffortIntents, is_agent_tool, remove_expired};
 
+
+#[path = "background_launch_text.rs"]
+mod text;
+use text::active_user_text;
+pub(in crate::anthropic) use text::is_hook_or_mailbox_only;
+
+
 const SYNC_NEEDLES: &[&str] = &[
     "synchronously",
     "synchronous result",
@@ -33,64 +40,6 @@ pub(in crate::anthropic) fn agent_launch_is_background(
     user_messages: &[Value],
 ) -> bool {
     is_agent_tool(tool_name) && !user_requires_synchronous_results(user_messages)
-}
-
-fn active_user_text(messages: &[Value]) -> Option<String> {
-    let start = messages
-        .iter()
-        .rposition(|message| message.get("role").and_then(Value::as_str) == Some("assistant"))
-        .map_or(0, |index| index + 1);
-    let texts = messages[start..]
-        .iter()
-        .filter(|message| message.get("role").and_then(Value::as_str) == Some("user"))
-        .filter_map(user_message_text)
-        .filter(|text| !is_hook_or_mailbox_only(text))
-        .collect::<Vec<_>>();
-    (!texts.is_empty()).then(|| texts.join("\n"))
-}
-
-pub(in crate::anthropic) fn is_hook_or_mailbox_only(text: &str) -> bool {
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        return true;
-    }
-    if text.contains("<agent-message")
-        || text.contains("<teammate-message")
-        || trimmed.starts_with("Another Claude session sent a message")
-    {
-        return true;
-    }
-    // Trailing CC hook / routing reminders must not hide the real user ask.
-    let without_reminders = strip_system_reminders(text);
-    without_reminders.trim().is_empty()
-}
-
-fn strip_system_reminders(text: &str) -> String {
-    let mut rest = text.to_owned();
-    while let Some(start) = rest.find("<system-reminder>") {
-        let Some(end_rel) = rest[start..].find("</system-reminder>") else {
-            break;
-        };
-        let end = start + end_rel + "</system-reminder>".len();
-        rest.replace_range(start..end, " ");
-    }
-    rest
-}
-
-fn user_message_text(message: &Value) -> Option<String> {
-    match message.get("content")? {
-        Value::String(text) => Some(text.clone()),
-        Value::Array(blocks) => {
-            let text = blocks
-                .iter()
-                .filter_map(|block| block.get("text").and_then(Value::as_str))
-                .filter(|text| !text.is_empty())
-                .collect::<Vec<_>>()
-                .join("\n");
-            (!text.is_empty()).then_some(text)
-        }
-        _ => None,
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -134,122 +83,6 @@ fn background_launch_intent<'a>(
 }
 
 #[cfg(test)]
-mod tests {
-    use serde_json::{Value, json};
-
-    use super::*;
-    use crate::anthropic::AgentEffortRecord;
-
-    #[test]
-    fn requires_unique_known_background_agent_launches() {
-        let intents = AgentEffortIntents::default();
-        let background_messages = [json!({
-            "role":"user",
-            "content":"delegate synthetic work with worker-model"
-        })];
-        let sync_messages = [json!({
-            "role":"user",
-            "content":"同期で結果を待ってから次へ進めて"
-        })];
-        intents.record_from_user_messages(
-            AgentEffortRecord {
-                client_user_id: Some("main"),
-                tool_name: "Agent",
-                tool_use_id: "background".to_owned(),
-                parent_model: "main-model",
-                arguments: &json!({
-                    "prompt":"synthetic background",
-                    "claudex_model":"worker-model",
-                    "run_in_background":false
-                }),
-                user_messages: &background_messages,
-                system: &Value::Null,
-            },
-            None,
-        );
-        intents.record_from_user_messages(
-            AgentEffortRecord {
-                client_user_id: Some("main"),
-                tool_name: "Agent",
-                tool_use_id: "foreground".to_owned(),
-                parent_model: "main-model",
-                arguments: &json!({
-                    "prompt":"synthetic foreground",
-                    "claudex_model":"worker-model",
-                    "run_in_background":false
-                }),
-                user_messages: &sync_messages,
-                system: &Value::Null,
-            },
-            None,
-        );
-
-        let launches = intents
-            .background_launches(&["background".to_owned()])
-            .expect("known background launch");
-        assert_eq!(launches.len(), 1);
-        assert_eq!(launches[0].model.as_deref(), Some("worker-model"));
-        assert!(
-            intents
-                .background_launches(&["foreground".to_owned()])
-                .is_none()
-        );
-        assert!(
-            intents
-                .background_launches(&["unknown".to_owned()])
-                .is_none()
-        );
-        assert!(
-            intents
-                .background_launches(&["background".to_owned(), "background".to_owned()])
-                .is_none()
-        );
-        assert!(intents.background_launches(&[]).is_none());
-    }
-
-    #[test]
-    fn cc_array_content_joins_reminder_and_user_text_for_sync_detection() {
-        fn with_reminder(text: &str) -> Value {
-            json!({
-                "role":"user",
-                "content":[
-                    {
-                        "type":"text",
-                        "text":"<system-reminder>\nClaudex routing\n</system-reminder>"
-                    },
-                    {"type":"text","text":text}
-                ]
-            })
-        }
-        assert!(!user_requires_synchronous_results(&[with_reminder(
-            "Investigate the neon pooler next."
-        )]));
-        assert!(user_requires_synchronous_results(&[with_reminder(
-            "同期で結果を待ってから次へ進めて"
-        )]));
-        assert!(user_requires_synchronous_results(&[with_reminder(
-            "待ってから次へ進めて"
-        )]));
-        assert!(user_requires_synchronous_results(&[with_reminder(
-            "同期して結果を見てから続けて"
-        )]));
-    }
-
-    #[test]
-    fn trailing_system_reminder_message_does_not_hide_sync_instruction() {
-        let messages = vec![
-            json!({
-                "role":"user",
-                "content":"結果を待ってから次へ進めて"
-            }),
-            json!({
-                "role":"user",
-                "content":"<system-reminder>\nPostToolUse hook noise\n</system-reminder>"
-            }),
-        ];
-        assert!(
-            user_requires_synchronous_results(&messages),
-            "hook-only trailing user message must not force background launches"
-        );
-    }
-}
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[path = "background_launch_tests.rs"]
+mod tests;

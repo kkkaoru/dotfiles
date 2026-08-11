@@ -46,7 +46,7 @@ mod tests {
             events: &events,
             invalidated_sessions: &invalidated,
         };
-        fail_cancellation(ctx, "cancel failed".to_owned());
+        settle::fail_cancellation(ctx, "cancel failed".to_owned());
         assert!(result.await.unwrap().is_err());
         assert!(invalidated.borrow().contains("session"));
         assert_eq!(receiver.recv().await.unwrap()["method"], "error");

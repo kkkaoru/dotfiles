@@ -1,8 +1,10 @@
 use super::*;
 use std::{
+    env,
     ffi::{OsStr, OsString},
     sync::atomic::Ordering,
 };
+use tokio::process::Command;
 
 #[test]
 fn marks_provider_dead_before_notifying_the_driver() {
