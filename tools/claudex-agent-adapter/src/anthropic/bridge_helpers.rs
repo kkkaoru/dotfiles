@@ -1,4 +1,4 @@
-use super::{MAX_SIGNATURE_BUCKETS, Bridge, MessagesRequest, Session, SignaturePool};
+use super::{Bridge, MAX_SIGNATURE_BUCKETS, MessagesRequest, Session, SignaturePool};
 use std::{
     hash::{DefaultHasher, Hash, Hasher},
     sync::Arc,

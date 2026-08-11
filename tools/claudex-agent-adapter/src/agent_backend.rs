@@ -119,7 +119,9 @@ impl AgentBackend {
         }
     }
 
-    pub(crate) fn provider_session_scopes(&self) -> Vec<crate::agent_backend::ProviderSessionScopeSnapshot> {
+    pub(crate) fn provider_session_scopes(
+        &self,
+    ) -> Vec<crate::agent_backend::ProviderSessionScopeSnapshot> {
         match self {
             Self::SessionScoped(scopes) => scopes.scope_snapshots(),
             _ => Vec::new(),

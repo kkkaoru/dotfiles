@@ -51,8 +51,7 @@ impl SessionScopedBackends {
                 backend
             }
             Entry::Vacant(entry) => {
-                let backend =
-                    Arc::new(AgentBackend::Routed(RoutedBackends::lazy(&self.templates)));
+                let backend = Arc::new(AgentBackend::Routed(RoutedBackends::lazy(&self.templates)));
                 entry.insert(Arc::clone(&backend));
                 tracing::info!(
                     target: "claudex.provider",
@@ -139,7 +138,10 @@ impl SessionScopedBackends {
                     "shutting down every Claude-session provider pool"
                 );
             }
-            drained.into_iter().map(|(_, backend)| backend).collect::<Vec<_>>()
+            drained
+                .into_iter()
+                .map(|(_, backend)| backend)
+                .collect::<Vec<_>>()
         };
         for backend in backends {
             shutdown_scoped_pool(&backend).await;
@@ -165,12 +167,15 @@ async fn shutdown_scoped_pool(backend: &AgentBackend) {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
-    use crate::agent_backend::{BackendKind, BackendRoute, AgentBackend};
+    use crate::agent_backend::{AgentBackend, BackendKind, BackendRoute};
     use std::sync::Arc;
 
     #[test]
     fn scope_key_uses_anonymous_for_missing_ids() {
-        assert_eq!(SessionScopedBackends::scope_key(None), ANONYMOUS_SESSION_SCOPE);
+        assert_eq!(
+            SessionScopedBackends::scope_key(None),
+            ANONYMOUS_SESSION_SCOPE
+        );
         assert_eq!(
             SessionScopedBackends::scope_key(Some("")),
             ANONYMOUS_SESSION_SCOPE
@@ -180,10 +185,8 @@ mod tests {
 
     #[test]
     fn distinct_claude_sessions_get_independent_routed_pools() {
-        let scopes = SessionScopedBackends::new(&[BackendRoute::new(
-            "main",
-            BackendKind::CodexAppServer,
-        )]);
+        let scopes =
+            SessionScopedBackends::new(&[BackendRoute::new("main", BackendKind::CodexAppServer)]);
         let a = scopes.scope(Some("session-a"));
         let b = scopes.scope(Some("session-b"));
         assert!(!Arc::ptr_eq(&a, &b));
@@ -193,10 +196,8 @@ mod tests {
 
     #[tokio::test]
     async fn release_scope_drops_the_pool() {
-        let scopes = SessionScopedBackends::new(&[BackendRoute::new(
-            "main",
-            BackendKind::CodexAppServer,
-        )]);
+        let scopes =
+            SessionScopedBackends::new(&[BackendRoute::new("main", BackendKind::CodexAppServer)]);
         let _ = scopes.scope(Some("session-a"));
         assert_eq!(scopes.scope_count(), 1);
         scopes.release_scope(Some("session-a")).await;
@@ -205,10 +206,8 @@ mod tests {
 
     #[test]
     fn empty_scopes_report_models_alive_and_catalog_metadata() {
-        let scopes = SessionScopedBackends::new(&[BackendRoute::new(
-            "main",
-            BackendKind::CodexAppServer,
-        )]);
+        let scopes =
+            SessionScopedBackends::new(&[BackendRoute::new("main", BackendKind::CodexAppServer)]);
         assert!(scopes.model_is_alive("main"));
         assert!(scopes.started_models().is_empty());
         assert!(scopes.catalog().supports("main"));
@@ -216,10 +215,8 @@ mod tests {
 
     #[tokio::test]
     async fn shutdown_all_clears_every_scope() {
-        let scopes = SessionScopedBackends::new(&[BackendRoute::new(
-            "main",
-            BackendKind::CodexAppServer,
-        )]);
+        let scopes =
+            SessionScopedBackends::new(&[BackendRoute::new("main", BackendKind::CodexAppServer)]);
         let _ = scopes.scope(Some("a"));
         let _ = scopes.scope(Some("b"));
         assert_eq!(scopes.scope_count(), 2);
@@ -229,10 +226,8 @@ mod tests {
 
     #[test]
     fn scope_snapshots_sort_and_report_started_models() {
-        let scopes = SessionScopedBackends::new(&[BackendRoute::new(
-            "main",
-            BackendKind::CodexAppServer,
-        )]);
+        let scopes =
+            SessionScopedBackends::new(&[BackendRoute::new("main", BackendKind::CodexAppServer)]);
         let _ = scopes.scope(Some("sess-b"));
         let _ = scopes.scope(Some("sess-a"));
         let snapshots = scopes.scope_snapshots();
@@ -243,7 +238,11 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["sess-a", "sess-b"]
         );
-        assert!(snapshots.iter().all(|snapshot| snapshot.started_models.is_empty()));
+        assert!(
+            snapshots
+                .iter()
+                .all(|snapshot| snapshot.started_models.is_empty())
+        );
     }
 
     #[test]
@@ -283,10 +282,8 @@ mod tests {
             .with_ansi(false)
             .finish();
         let _guard = tracing::subscriber::set_default(subscriber);
-        let scopes = SessionScopedBackends::new(&[BackendRoute::new(
-            "main",
-            BackendKind::CodexAppServer,
-        )]);
+        let scopes =
+            SessionScopedBackends::new(&[BackendRoute::new("main", BackendKind::CodexAppServer)]);
         let _ = scopes.scope(Some("log-sess"));
         let _ = scopes.scope(Some("log-sess"));
         let text = String::from_utf8(buffer.lock().expect("log buffer").clone()).unwrap();
@@ -298,7 +295,10 @@ mod tests {
             text.contains("provider_session_scope_reuse"),
             "missing reuse event in logs: {text}"
         );
-        assert!(text.contains("log-sess"), "missing session id in logs: {text}");
+        assert!(
+            text.contains("log-sess"),
+            "missing session id in logs: {text}"
+        );
     }
 
     #[tokio::test]
@@ -329,10 +329,8 @@ mod tests {
             .with_ansi(false)
             .finish();
         let _guard = tracing::subscriber::set_default(subscriber);
-        let scopes = SessionScopedBackends::new(&[BackendRoute::new(
-            "main",
-            BackendKind::CodexAppServer,
-        )]);
+        let scopes =
+            SessionScopedBackends::new(&[BackendRoute::new("main", BackendKind::CodexAppServer)]);
         let _ = scopes.scope(Some("release-sess"));
         scopes.release_scope(Some("release-sess")).await;
         let text = String::from_utf8(buffer.lock().expect("log buffer").clone()).unwrap();
@@ -340,6 +338,9 @@ mod tests {
             text.contains("provider_session_scope_release"),
             "missing release event in logs: {text}"
         );
-        assert!(text.contains("release-sess"), "missing session id in logs: {text}");
+        assert!(
+            text.contains("release-sess"),
+            "missing session id in logs: {text}"
+        );
     }
 }
