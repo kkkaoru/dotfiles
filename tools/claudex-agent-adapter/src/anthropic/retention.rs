@@ -3,23 +3,28 @@ use std::{
     time::{Duration, Instant},
 };
 
-use serde_json::{Value, json};
-use tokio::sync::Mutex;
+use super::Bridge;
 
-use super::{Bridge, Session};
-use crate::anthropic::content::pending_request_id;
+#[cfg(test)]
+use super::Session;
+#[cfg(test)]
+use tokio::sync::Mutex;
 
 // An abandoned Claude tool request must not reserve a session slot forever.
 // Thirty minutes allows long interactive tool work while bounding leaked slots.
-const PENDING_SESSION_TTL: Duration = Duration::from_secs(30 * 60);
+pub(super) const PENDING_SESSION_TTL: Duration = Duration::from_secs(30 * 60);
 // A session without pending tools can be reconstructed from Claude Code's next full transcript.
 // Two hours preserves provider threads across substantial interactive pauses so related Agent and
 // advisor follow-ups can reuse context and prompt prefixes. Capacity pressure can still evict the
 // oldest idle session immediately, and pending or actively-owned sessions remain protected.
-const IDLE_SESSION_TTL: Duration = Duration::from_secs(120 * 60);
+pub(super) const IDLE_SESSION_TTL: Duration = Duration::from_secs(120 * 60);
 // Capacity pressure has its own immediate eviction path. Periodic sweeps only reclaim old idle
 // transcripts, so scanning every session on every request wastes work during large Agent bursts.
 pub(super) const SESSION_SWEEP_INTERVAL: Duration = Duration::from_secs(60);
+
+mod eviction;
+use eviction::{drain_cancellation_responses, respond_to_evicted_request, session_sweep_due};
+pub(crate) use eviction::{record_pending_tool, sweep_idle_sessions_at, take_oldest_evictable_at};
 
 impl Bridge {
     pub(super) fn schedule_idle_session_sweep(self: &Arc<Self>) {
@@ -52,143 +57,6 @@ impl Bridge {
             respond_to_evicted_request(self, &session.model, request_id, result).await;
         }
     }
-}
-
-fn session_sweep_due(clock: &std::sync::Mutex<Instant>, now: Instant) -> bool {
-    let mut next = clock.lock().expect("session sweep clock poisoned");
-    if now < *next {
-        return false;
-    }
-    *next = now + SESSION_SWEEP_INTERVAL;
-    true
-}
-
-async fn respond_to_evicted_request(
-    bridge: &Bridge,
-    model: &str,
-    request_id: Value,
-    result: Value,
-) {
-    if let Err(error) = bridge
-        .app
-        .respond_for_model(model, request_id, result)
-        .await
-    {
-        tracing::warn!(%error, "failed to cancel an expired Claude tool request");
-    }
-}
-
-pub(super) async fn sweep_idle_sessions_at(
-    sessions: &Mutex<Vec<Arc<Session>>>,
-    now: Instant,
-) -> usize {
-    let mut sessions = sessions.lock().await;
-    let before = sessions.len();
-    let mut index = 0;
-    while index < sessions.len() {
-        if Arc::strong_count(&sessions[index]) != 1 {
-            index += 1;
-            continue;
-        }
-        let pending = sessions[index].pending_tools.lock().await;
-        let idle = pending.is_empty()
-            && now.saturating_duration_since(session_activity(&sessions[index]))
-                >= IDLE_SESSION_TTL;
-        drop(pending);
-        if idle {
-            sessions.remove(index);
-        } else {
-            index += 1;
-        }
-    }
-    before - sessions.len()
-}
-
-pub(super) async fn record_pending_tool(
-    session: &Session,
-    tool_use_id: String,
-    request_id: Value,
-    emitted_at: Instant,
-) {
-    session
-        .pending_tools
-        .lock()
-        .await
-        .insert(tool_use_id, request_id);
-    *session
-        .pending_since
-        .lock()
-        .expect("pending tool clock poisoned") = Some(emitted_at);
-    *session
-        .last_activity
-        .lock()
-        .expect("session clock poisoned") = emitted_at;
-}
-
-pub(super) async fn take_oldest_evictable_at(
-    sessions: &Mutex<Vec<Arc<Session>>>,
-    now: Instant,
-) -> Option<Arc<Session>> {
-    let mut sessions = sessions.lock().await;
-    let mut oldest = None;
-    for index in 0..sessions.len() {
-        let Some(activity) = evictable_activity(&sessions[index], now).await else {
-            continue;
-        };
-        if oldest.is_none_or(|(_, oldest_activity)| activity < oldest_activity) {
-            oldest = Some((index, activity));
-        }
-    }
-    oldest.map(|(index, _)| sessions.remove(index))
-}
-
-async fn evictable_activity(session: &Arc<Session>, now: Instant) -> Option<Instant> {
-    if Arc::strong_count(session) != 1 {
-        return None;
-    }
-    let pending = session.pending_tools.lock().await;
-    let expired = !pending.is_empty() && pending_expired(session, now);
-    (pending.is_empty() || expired).then(|| session_activity(session))
-}
-
-pub(super) async fn drain_cancellation_responses(session: &Session) -> Vec<(Value, Value)> {
-    let responses = session
-        .pending_tools
-        .lock()
-        .await
-        .drain()
-        .map(|(_, id)| (pending_request_id(&id), cancellation_result()))
-        .collect();
-    *session
-        .pending_since
-        .lock()
-        .expect("pending tool clock poisoned") = None;
-    responses
-}
-
-fn cancellation_result() -> Value {
-    json!({
-        "contentItems":[{
-            "type":"inputText",
-            "text":"Claude Code did not return this tool result before the session expired."
-        }],
-        "success":false
-    })
-}
-
-fn session_activity(session: &Session) -> Instant {
-    *session
-        .last_activity
-        .lock()
-        .expect("session clock poisoned")
-}
-
-fn pending_expired(session: &Session, now: Instant) -> bool {
-    session
-        .pending_since
-        .lock()
-        .expect("pending tool clock poisoned")
-        .is_some_and(|since| now.saturating_duration_since(since) >= PENDING_SESSION_TTL)
 }
 
 #[cfg(test)]
