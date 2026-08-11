@@ -97,6 +97,16 @@ pub(crate) fn claude_session_id(request: &MessagesRequest) -> Option<String> {
     transport_session_id(request).or_else(|| user_id_session_id(request))
 }
 
+pub(crate) fn request_agent_id(request: &MessagesRequest) -> Option<String> {
+    request
+        .metadata
+        .pointer("/_claudex_transport_identity/agent_id")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+}
+
 fn transport_session_id(request: &MessagesRequest) -> Option<String> {
     request
         .metadata

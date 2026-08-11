@@ -505,8 +505,9 @@ async fn should_proxy_forgets_one_session_while_retained_is_busy_elsewhere() {
     )
     .expect("write retained");
     let proxy = retained(&path, &upstream.to_string(), &["session-a", "session-b"]);
+    let sticky = proxy.should_proxy_session("session-a", None).await;
     assert!(
-        !proxy.should_proxy_session("session-a").await,
+        !sticky,
         "session absent from live busy list must not stay sticky"
     );
     assert!(!proxy.owns("session-a"));
@@ -529,7 +530,8 @@ async fn should_proxy_keeps_empty_retained_when_last_session_is_forgotten() {
     )
     .expect("write retained");
     let proxy = retained(&path, &upstream.to_string(), &["session-a"]);
-    assert!(!proxy.should_proxy_session("session-a").await);
+    let sticky = proxy.should_proxy_session("session-a", None).await;
+    assert!(!sticky);
     assert!(!proxy.owns("session-a"));
     let kept = crate::launcher::read_retained(&path)
         .expect("read")
@@ -551,7 +553,8 @@ async fn should_proxy_clears_when_retained_health_status_is_not_ok() {
     )
     .expect("write retained");
     let proxy = retained(&path, &upstream.to_string(), &["session-a"]);
-    assert!(!proxy.should_proxy_session("session-a").await);
+    let sticky = proxy.should_proxy_session("session-a", None).await;
+    assert!(!sticky);
     assert!(!proxy.owns("session-a"));
     assert!(!path.exists(), "unhealthy retained snapshot must be cleared");
 }
@@ -569,9 +572,69 @@ async fn should_proxy_uses_active_session_list_when_busy_list_is_empty() {
     )
     .expect("write retained");
     let proxy = retained(&path, &upstream.to_string(), &["session-a"]);
+    let sticky = proxy.should_proxy_session("session-a", None).await;
     assert!(
-        proxy.should_proxy_session("session-a").await,
+        sticky,
         "active_claude_session_ids must keep sticky when busy list is empty"
+    );
+}
+
+#[tokio::test]
+async fn new_subagent_in_retained_parent_session_runs_live_without_unsticking_old_subagent() {
+    let upstream =
+        serve_retained_generation_with_agents(b"from-retained", &["parent"], &["agent-old"]).await;
+    let root = tempfile::tempdir().expect("agent sticky fixture");
+    let path = root.path().join("retained.json");
+    std::fs::write(
+        &path,
+        format!(
+            r#"{{"listen":"{upstream}","pid":1,"build_id":"old","session_ids":["parent"]}}"#
+        ),
+    )
+    .expect("write retained");
+    let proxy = retained(&path, &upstream.to_string(), &["parent"]);
+    assert!(
+        proxy
+            .should_proxy_session("parent", Some("agent-old"))
+            .await,
+        "in-flight retained SubAgent must stay sticky"
+    );
+    assert!(
+        !proxy
+            .should_proxy_session("parent", Some("agent-new"))
+            .await,
+        "newly launched SubAgent id must run on the live binary"
+    );
+    assert!(
+        proxy.owns("parent"),
+        "rejecting a new agent id must not forget the parent session"
+    );
+    assert!(
+        proxy
+            .should_proxy_session("parent", Some("agent-old"))
+            .await,
+        "old SubAgent must remain sticky after a new peer launched"
+    );
+}
+
+#[tokio::test]
+async fn should_proxy_falls_back_to_session_scope_when_agent_ids_field_absent() {
+    let upstream = serve_retained_generation(b"from-retained", &["parent"]).await;
+    let root = tempfile::tempdir().expect("legacy retained fixture");
+    let path = root.path().join("retained.json");
+    std::fs::write(
+        &path,
+        format!(
+            r#"{{"listen":"{upstream}","pid":1,"build_id":"old","session_ids":["parent"]}}"#
+        ),
+    )
+    .expect("write retained");
+    let proxy = retained(&path, &upstream.to_string(), &["parent"]);
+    assert!(
+        proxy
+            .should_proxy_session("parent", Some("agent-new"))
+            .await,
+        "pre-agent-id retained health must keep conservative session sticky"
     );
 }
 
@@ -1039,22 +1102,36 @@ async fn serve_retained_generation(
     body: &'static [u8],
     busy_sessions: &'static [&'static str],
 ) -> SocketAddr {
+    serve_retained_generation_with_agents(body, busy_sessions, &[]).await
+}
+
+async fn serve_retained_generation_with_agents(
+    body: &'static [u8],
+    busy_sessions: &'static [&'static str],
+    agent_ids: &'static [&'static str],
+) -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("retained upstream listener");
     let listen = listener.local_addr().expect("retained upstream address");
     let sessions = serde_json::to_string(busy_sessions).expect("busy sessions json");
-    tokio::spawn(run_retained_accept_loop(listener, sessions, body));
+    let agents = if agent_ids.is_empty() {
+        None
+    } else {
+        Some(serde_json::to_string(agent_ids).expect("agent ids json"))
+    };
+    tokio::spawn(run_retained_accept_loop(listener, sessions, agents, body));
     listen
 }
 
 async fn run_retained_accept_loop(
     listener: TcpListener,
     sessions: String,
+    agents: Option<String>,
     body: &'static [u8],
 ) {
     while let Some(mut stream) = accept_stream(&listener).await {
-        respond_retained_request(&mut stream, &sessions, body).await;
+        respond_retained_request(&mut stream, &sessions, agents.as_deref(), body).await;
     }
 }
 
@@ -1065,25 +1142,35 @@ async fn accept_stream(listener: &TcpListener) -> Option<tokio::net::TcpStream> 
 async fn respond_retained_request(
     stream: &mut tokio::net::TcpStream,
     sessions: &str,
+    agents: Option<&str>,
     body: &[u8],
 ) {
     let mut buf = vec![0; 4096];
     let n = stream.read(&mut buf).await.unwrap_or(0);
     let request = String::from_utf8_lossy(&buf[..n]);
-    let (status_line, payload) = retained_response_for(&request, sessions, body);
+    let (status_line, payload) = retained_response_for(&request, sessions, agents, body);
     write_http_response(stream, status_line, &payload).await;
 }
 
-fn retained_response_for(request: &str, sessions: &str, body: &[u8]) -> (&'static str, Vec<u8>) {
+fn retained_response_for(
+    request: &str,
+    sessions: &str,
+    agents: Option<&str>,
+    body: &[u8],
+) -> (&'static str, Vec<u8>) {
     if request.starts_with("GET /health") {
+        let agents_field = agents
+            .map(|ids| format!(r#","active_subagent_agent_ids":{ids}"#))
+            .unwrap_or_default();
         let payload = format!(
             concat!(
                 r#"{{"status":"ok","pid":1,"protocol_version":1,"build_id":"old","#,
                 r#""subscription_max_processes":20,"subscription_timeout_minutes":120,"#,
                 r#""active_http_requests":1,"active_provider_turns":1,"#,
-                r#""busy_claude_session_ids":{sessions},"active_claude_session_ids":{sessions}}}"#
+                r#""busy_claude_session_ids":{sessions},"active_claude_session_ids":{sessions}{agents}}}"#
             ),
-            sessions = sessions
+            sessions = sessions,
+            agents = agents_field
         );
         ("HTTP/1.1 200 OK", payload.into_bytes())
     } else {

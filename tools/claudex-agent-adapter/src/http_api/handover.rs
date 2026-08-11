@@ -17,6 +17,8 @@ use crate::listen_handover::ListenHandover;
 use super::CLAUDE_CODE_SESSION_ID_HEADER;
 use super::retained_proxy::{RetainedProxy, proxy_http_client, proxy_request};
 
+const CLAUDE_CODE_AGENT_ID_HEADER: &str = "x-claude-code-agent-id";
+
 #[derive(Clone)]
 pub(super) struct HandoverState {
     pub retained: Option<Arc<RetainedProxy>>,
@@ -64,9 +66,14 @@ pub(super) async fn proxy_retained_sessions(
         .and_then(|value| value.to_str().ok())
         .map(str::trim)
         .filter(|value| !value.is_empty());
+    let agent_id = headers
+        .get(CLAUDE_CODE_AGENT_ID_HEADER)
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
     match diverted_service_action(state, session_id, request).await {
         DivertedService::NotDiverted(request) => {
-            proxy_or_run_retained(state, session_id, request, next).await
+            proxy_or_run_retained(state, session_id, agent_id, request, next).await
         }
         DivertedService::RunLocal(request) => next.run(request).await,
         DivertedService::Proxy(response) => response,
@@ -106,6 +113,7 @@ async fn diverted_service_action(
 async fn proxy_or_run_retained(
     state: &HandoverState,
     session_id: Option<&str>,
+    agent_id: Option<&str>,
     request: Request,
     next: Next,
 ) -> Response {
@@ -115,13 +123,15 @@ async fn proxy_or_run_retained(
     let Some(session_id) = session_id else {
         return next.run(request).await;
     };
-    if !retained.owns(session_id) {
+    // One disk snapshot per request — owns/targets/proxy used to each refresh.
+    retained.refresh();
+    if !retained.owns_cached(session_id) {
         return next.run(request).await;
     }
     if retained_targets_advertised(retained, state.advertised.as_ref()) {
         return next.run(request).await;
     }
-    if !retained.should_proxy_session(session_id).await {
+    if !retained.should_proxy_session(session_id, agent_id).await {
         return next.run(request).await;
     }
     retained.proxy(request).await
@@ -131,7 +141,7 @@ fn retained_targets_advertised(
     retained: &RetainedProxy,
     advertised: Option<&ListenHandover>,
 ) -> bool {
-    advertised.is_some_and(|handover| retained.targets(handover.advertised_addr()))
+    advertised.is_some_and(|handover| retained.targets_cached(handover.advertised_addr()))
 }
 
 fn retain_session_locally(

@@ -41,6 +41,10 @@ struct RetainedHealthProbe {
     active_provider_turns: usize,
     #[serde(default)]
     active_subagent_models: BTreeMap<String, usize>,
+    /// Present on builds that publish live SubAgent agent IDs. `None` means the
+    /// retained daemon predates this field and sticky must stay session-scoped.
+    #[serde(default)]
+    active_subagent_agent_ids: Option<Vec<String>>,
     #[serde(default)]
     active_claude_session_ids: Vec<String>,
     #[serde(default)]
@@ -73,11 +77,20 @@ impl RetainedHealthProbe {
     }
 }
 
+fn agent_still_on_retained(health: &RetainedHealthProbe, agent_id: Option<&str>) -> bool {
+    let Some(agent_id) = agent_id.filter(|id| !id.is_empty()) else {
+        return true;
+    };
+    let Some(active_agents) = health.active_subagent_agent_ids.as_ref() else {
+        return true;
+    };
+    active_agents.iter().any(|owned| owned == agent_id)
+}
+
 pub(super) fn proxy_http_client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .pool_max_idle_per_host(0)
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new())
+    // Keep a normal idle pool: sticky proxy /health and SSE reuse the same
+    // retained listen for the life of a parent session.
+    reqwest::Client::new()
 }
 
 impl RetainedProxy {
@@ -93,6 +106,10 @@ impl RetainedProxy {
 
     pub(super) fn targets(&self, listen: std::net::SocketAddr) -> bool {
         self.refresh();
+        self.targets_cached(listen)
+    }
+
+    pub(super) fn targets_cached(&self, listen: std::net::SocketAddr) -> bool {
         self.listen
             .read()
             .map(|current| *current == listen)
@@ -104,7 +121,7 @@ impl RetainedProxy {
         *self.listen.read().expect("listen")
     }
 
-    fn refresh(&self) {
+    pub(super) fn refresh(&self) {
         // Missing or invalid snapshots must drop sticky ownership. Keeping a
         // stale in-memory map after reboot / operator cleanup made :8318 proxy
         // dead retained listeners and 502 the TUI / SubAgents forever.
@@ -134,6 +151,10 @@ impl RetainedProxy {
 
     pub(super) fn owns(&self, session_id: &str) -> bool {
         self.refresh();
+        self.owns_cached(session_id)
+    }
+
+    pub(super) fn owns_cached(&self, session_id: &str) -> bool {
         self.sessions
             .read()
             .map(|sessions| sessions.contains(session_id))
@@ -161,51 +182,81 @@ impl RetainedProxy {
     /// Sticky proxy only while the retained generation is reachable and still
     /// reports this Claude session as busy/active. Idle or dead retained
     /// generations fall through to the live listener instead of 502 loops.
-    pub(super) async fn should_proxy_session(&self, session_id: &str) -> bool {
-        self.refresh();
-        if !self
-            .sessions
+    ///
+    /// When `agent_id` is set and the retained `/health` publishes
+    /// `active_subagent_agent_ids`, only those in-flight SubAgents stay sticky.
+    /// Newly launched agent IDs run on the live binary without forgetting the
+    /// parent session (other retained SubAgents may still be active).
+    pub(super) async fn should_proxy_session(
+        &self,
+        session_id: &str,
+        agent_id: Option<&str>,
+    ) -> bool {
+        if !self.tracks_session(session_id) {
+            return false;
+        }
+        let Some((listen, expected_pid)) = self.listen_and_pid() else {
+            return false;
+        };
+        let Some(health) = self.probe_health(listen).await else {
+            self.clear_all_sessions();
+            return false;
+        };
+        self.decide_sticky_proxy(&health, expected_pid, session_id, agent_id)
+    }
+
+    fn tracks_session(&self, session_id: &str) -> bool {
+        self.sessions
             .read()
             .map(|sessions| sessions.contains(session_id))
             .unwrap_or(false)
-        {
-            return false;
+    }
+
+    fn listen_and_pid(&self) -> Option<(std::net::SocketAddr, u32)> {
+        match (self.listen.read(), self.pid.read()) {
+            (Ok(listen), Ok(pid)) => Some((*listen, *pid)),
+            _ => None,
         }
-        let (listen, expected_pid) = match (self.listen.read(), self.pid.read()) {
-            (Ok(listen), Ok(pid)) => (*listen, *pid),
-            _ => return false,
-        };
-        let probe = match self
+    }
+
+    async fn probe_health(&self, listen: std::net::SocketAddr) -> Option<RetainedHealthProbe> {
+        let response = self
             .client
             .get(format!("http://{listen}/health"))
             .timeout(Duration::from_millis(400))
             .send()
             .await
-        {
-            Ok(response) => response.json::<RetainedHealthProbe>().await.ok(),
-            Err(_) => None,
-        };
-        let Some(health) = probe else {
-            self.clear_all_sessions();
-            return false;
-        };
+            .ok()?;
+        response.json::<RetainedHealthProbe>().await.ok()
+    }
+
+    fn decide_sticky_proxy(
+        &self,
+        health: &RetainedHealthProbe,
+        expected_pid: u32,
+        session_id: &str,
+        agent_id: Option<&str>,
+    ) -> bool {
         if health.status != "ok" || health.pid != Some(expected_pid) {
             self.clear_all_sessions();
             return false;
         }
-        if health.still_owns(session_id) {
-            return true;
+        if !health.still_owns(session_id) {
+            self.release_unowned_session(session_id, health.has_active_work());
+            return false;
         }
-        if health.has_active_work() {
+        agent_still_on_retained(health, agent_id)
+    }
+
+    fn release_unowned_session(&self, session_id: &str, has_active_work: bool) {
+        if has_active_work {
             self.forget_session(session_id);
         } else {
             self.clear_all_sessions();
         }
-        false
     }
 
     pub(super) async fn proxy(&self, request: Request) -> Response {
-        self.refresh();
         let listen = match self.listen.read() {
             Ok(listen) => *listen,
             Err(_) => {

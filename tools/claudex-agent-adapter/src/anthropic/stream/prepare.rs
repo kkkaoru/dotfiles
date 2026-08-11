@@ -173,8 +173,7 @@ impl Bridge {
             &mut concurrency_ticket,
             is_subagent,
         );
-        let _active_subagent =
-            is_subagent.then(|| self.active_subagent_models.acquire(&request.model));
+        let _active_subagent = self.track_active_subagent(is_subagent, &request);
         let paint_command_code_progress =
             is_subagent && crate::command_code_acp::is_command_code_model(&request.model);
         let start_status = (!primed_thinking)

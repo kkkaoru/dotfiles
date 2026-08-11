@@ -95,6 +95,7 @@ pub(crate) fn http_router_with_handover(
                         "started_models":health_bridge.started_models(),
                         "model_concurrency":health_bridge.model_concurrency(),
                         "active_subagent_models":health_bridge.active_subagent_models(),
+                        "active_subagent_agent_ids":health_bridge.active_subagent_agent_ids(),
                         "model":health_model,
                         "session_capacity":health_bridge.session_capacity(),
                         "session_slots_used":health_bridge.used_session_slots(),

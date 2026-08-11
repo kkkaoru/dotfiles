@@ -65,8 +65,7 @@ impl Bridge {
                 run_in_background,
             ));
         }
-        let _active_subagent =
-            is_subagent.then(|| self.active_subagent_models.acquire(&request.model));
+        let _active_subagent = self.track_active_subagent(is_subagent, &request);
         let permit = match concurrency_ticket {
             Some(ticket) => Some(ticket.acquire_for(!is_subagent).await?),
             None => None,
@@ -89,7 +88,6 @@ impl Bridge {
     }
 
     // This bounded retry loop retains ActiveTurn until completion or provider cleanup.
-    #[allow(clippy::excessive_nesting)]
     pub(super) async fn non_streaming_subagent_response_with_timeout(
         self: &Arc<Self>,
         mut turn: ActiveTurn,
@@ -97,27 +95,50 @@ impl Bridge {
         timeout: Option<Duration>,
     ) -> Result<Response<Body>> {
         loop {
-            let segment = completes_within(
-                timeout,
-                self.wait_for_segment(
-                    &turn.session,
-                    &turn.events,
-                    turn.input_tokens,
-                    &turn.extras,
-                    &turn.routing_system,
-                    None,
-                ),
-            )
-            .await;
-            let Some(segment) = segment else {
-                let timeout = timeout.expect("elapsed wait has a configured timeout");
-                return Err(self.expire_subagent_turn(&turn, timeout).await);
-            };
-            match segment {
+            match self.next_subagent_segment(&turn, timeout).await? {
                 Ok(segment) => return Ok(completion::finish(self, turn, segment).await),
                 Err(error) => turn = self.retry_subagent_context(&mut turn, error).await?,
             }
         }
+    }
+
+    async fn next_subagent_segment(
+        self: &Arc<Self>,
+        turn: &ActiveTurn,
+        timeout: Option<Duration>,
+    ) -> Result<Result<super::Segment, anyhow::Error>> {
+        let Some(segment) = completes_within(
+            timeout,
+            self.wait_for_segment(
+                &turn.session,
+                &turn.events,
+                turn.input_tokens,
+                &turn.extras,
+                &turn.routing_system,
+                None,
+            ),
+        )
+        .await
+        else {
+            let timeout = timeout.expect("elapsed wait has a configured timeout");
+            return Err(self.expire_subagent_turn(turn, timeout).await);
+        };
+        Ok(segment)
+    }
+
+    pub(super) fn track_active_subagent(
+        &self,
+        is_subagent: bool,
+        request: &super::MessagesRequest,
+    ) -> Option<super::active_subagent_models::ActiveSubagentGuard> {
+        if !is_subagent {
+            return None;
+        }
+        let agent_id = super::request_identity::request_agent_id(request);
+        Some(
+            self.active_subagent_models
+                .acquire(&request.model, agent_id.as_deref()),
+        )
     }
 
     async fn retry_subagent_context(

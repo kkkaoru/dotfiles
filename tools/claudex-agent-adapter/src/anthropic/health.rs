@@ -90,6 +90,10 @@ impl Bridge {
         self.active_subagent_models.snapshot()
     }
 
+    pub(crate) fn active_subagent_agent_ids(&self) -> Vec<String> {
+        self.active_subagent_models.active_agent_ids()
+    }
+
     pub async fn active_claude_session_ids(&self) -> Vec<String> {
         let mut ids = BTreeSet::new();
         collect_session_ids(&self.sessions.lock().await, &mut ids);
