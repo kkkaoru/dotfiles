@@ -21,9 +21,7 @@ fn rate_limit_cooldown_outlives_default_auth_window() {
     let root = tempfile::tempdir().expect("rate limit cooldown fixture");
     let path = cache_path_for_home(root.path());
     let now = UNIX_EPOCH + Duration::from_secs(1_000);
-    assert!(
-        record_rate_limit_at(Some(&path), "ollama", "429 Too Many Requests", now).is_some()
-    );
+    assert!(record_rate_limit_at(Some(&path), "ollama", "429 Too Many Requests", now).is_some());
     assert!(scope_is_cooling_down_at(
         Some(&path),
         "ollama",

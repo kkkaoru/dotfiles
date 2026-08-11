@@ -91,22 +91,20 @@ const SUBSCRIPTION_PROMPT_PREAMBLE: &str = concat!(
     "Adapter orchestration defaults (runtime metadata):\n"
 );
 
-
 #[path = "subscription_request_compaction.rs"]
 mod compaction;
 use compaction::{is_compaction_text, message_text};
 
 #[path = "subscription_request_tools.rs"]
 mod tools;
-pub(super) use tools::requested_tools_for_request;
 #[cfg(test)]
 pub(super) use tools::requested_tools;
+pub(super) use tools::requested_tools_for_request;
 
 #[path = "subscription_request_prompt.rs"]
 mod prompt;
-pub(super) use prompt::{
-    is_compaction_request, request_json_schema, subscription_request_cwd, subscription_request_prompt,
-};
 pub(crate) use prompt::cwd_from_system;
-
-
+pub(super) use prompt::{
+    is_compaction_request, request_json_schema, subscription_request_cwd,
+    subscription_request_prompt,
+};

@@ -9,13 +9,15 @@ use std::sync::Mutex;
 
 #[path = "web_evidence_format.rs"]
 mod format;
-pub(super) use format::{completion_evidence, web_operation};
 #[cfg(test)]
 use agent_client_protocol::{self as acp};
+pub(super) use format::{completion_evidence, web_operation};
+#[cfg(test)]
+use format::{
+    extract_source_urls, is_http_url, meaningful_provider_output, provider_output, summary,
+};
 #[cfg(test)]
 use serde_json::json;
-#[cfg(test)]
-use format::{extract_source_urls, is_http_url, meaningful_provider_output, provider_output, summary};
 
 pub(super) const MAX_TRACKED_CALLS: usize = 256;
 pub(super) const MAX_RESULT_SUMMARY_CHARS: usize = 320;
@@ -120,7 +122,6 @@ impl ProviderWebEvidence {
         calls.retain(|(session, _), _| session != session_id);
     }
 }
-
 
 #[cfg(test)]
 // Coverage excludes test implementation; production behavior remains measured.

@@ -15,9 +15,7 @@ impl SubscriptionStream {
     #[cfg(test)]
     pub(super) async fn handle_line(
         &mut self,
-        sender: &tokio::sync::mpsc::Sender<
-            Result<axum::body::Bytes, std::convert::Infallible>,
-        >,
+        sender: &tokio::sync::mpsc::Sender<Result<axum::body::Bytes, std::convert::Infallible>>,
         line: &str,
     ) -> anyhow::Result<()> {
         if self.saw_result {

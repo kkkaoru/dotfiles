@@ -138,4 +138,3 @@ fn apply_option(
     }
     Ok(())
 }
-

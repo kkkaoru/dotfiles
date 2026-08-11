@@ -7,8 +7,8 @@ use std::{
 use anyhow::{Context, Result, bail};
 use serde_json;
 
-use super::{FallbackState, STATE_PREFIX, STATE_SUFFIX};
 use super::super::ServiceConfig;
+use super::{FallbackState, STATE_PREFIX, STATE_SUFFIX};
 
 pub(super) fn state_path(config: &ServiceConfig) -> Result<PathBuf> {
     let parent = config

@@ -2,24 +2,24 @@ use std::time::Instant;
 
 use serde_json::Value;
 
-use super::{
-    ADAPTER_EFFORT, AgentEffort, AgentEffortIntent, AgentEffortIntents, AgentIntent, IMPLICIT_MODEL,
-    MAX_PENDING_INTENTS, agent_prompt, is_agent_tool, is_subagent_request, normalized_effort,
-    requested_model,
-};
-use super::background_launch;
-use super::terminal::terminal_task_notification_ids;
 use super::super::{
     AgentEffortRecord, MessagesRequest,
     agent_effort_matching::{has_correlation_marker, request_matches_intent_with_system},
     agent_intent_store::{persistence_snapshot, remove_expired, unix_seconds},
 };
+use super::background_launch;
+use super::terminal::terminal_task_notification_ids;
+use super::{
+    ADAPTER_EFFORT, AgentEffort, AgentEffortIntent, AgentEffortIntents, AgentIntent,
+    IMPLICIT_MODEL, MAX_PENDING_INTENTS, agent_prompt, is_agent_tool, is_subagent_request,
+    normalized_effort, requested_model,
+};
 
 #[path = "intents_helpers.rs"]
 mod intents_helpers;
-use intents_helpers::{authorized_model, unique_correlated_candidate};
 #[cfg(test)]
 pub(super) use intents_helpers::retain_terminal_intent;
+use intents_helpers::{authorized_model, unique_correlated_candidate};
 
 impl AgentEffortIntents {
     pub(in crate::anthropic) fn record_from_user_messages(

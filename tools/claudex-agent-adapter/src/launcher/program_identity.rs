@@ -108,6 +108,5 @@ fn executable(path: &Path) -> bool {
     }
 }
 
-
 #[cfg(test)]
 include!("program_identity_tests.rs");

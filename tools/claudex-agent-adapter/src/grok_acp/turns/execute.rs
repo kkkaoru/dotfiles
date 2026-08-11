@@ -29,13 +29,13 @@ pub(super) struct TurnCtl<'a> {
 }
 
 mod effort;
-mod setup;
 #[path = "execute_prompt.rs"]
 mod prompt;
-use prompt::run_prompt;
+mod setup;
+use effort::finish_effort_setup;
 #[cfg(test)]
 use prompt::handle_prompt_cancellation;
-use effort::finish_effort_setup;
+use prompt::run_prompt;
 use setup::apply_effort;
 
 pub(super) struct TurnExecution<'a> {
@@ -140,7 +140,6 @@ pub(super) async fn handle_setup_cancellation<F, T>(
         ctl.active_turns,
     );
 }
-
 
 #[cfg(test)]
 include!("execute_tests.rs");

@@ -1,8 +1,8 @@
 use std::{collections::HashSet, time::Instant};
 
-use super::SegmentBuilder;
 use super::super::sanitize::sanitize_committed_blocks;
 use super::super::thinking::ThinkingState;
+use super::SegmentBuilder;
 use crate::anthropic::Usage;
 
 impl SegmentBuilder {
@@ -39,7 +39,10 @@ impl SegmentBuilder {
         self
     }
 
-    pub(in crate::anthropic::stream) fn with_command_code_progress(mut self, enabled: bool) -> Self {
+    pub(in crate::anthropic::stream) fn with_command_code_progress(
+        mut self,
+        enabled: bool,
+    ) -> Self {
         self.paint_command_code_progress = enabled;
         self
     }
@@ -49,7 +52,11 @@ impl SegmentBuilder {
         self.turn_started_at = Instant::now() - age;
     }
 
-    pub(in crate::anthropic::stream) fn for_turn(input_tokens: u64, is_subagent: bool, model: &str) -> Self {
+    pub(in crate::anthropic::stream) fn for_turn(
+        input_tokens: u64,
+        is_subagent: bool,
+        model: &str,
+    ) -> Self {
         Self::new(input_tokens)
             .with_subagent(is_subagent)
             .with_command_code_progress(
@@ -90,14 +97,20 @@ impl SegmentBuilder {
     }
 
     #[cfg(test)]
-    pub(in crate::anthropic::stream) fn backdate_last_visible_provider_activity(&mut self, elapsed: std::time::Duration) {
+    pub(in crate::anthropic::stream) fn backdate_last_visible_provider_activity(
+        &mut self,
+        elapsed: std::time::Duration,
+    ) {
         self.last_visible_provider_at = Instant::now()
             .checked_sub(elapsed)
             .expect("test backdate must fit within Instant range");
     }
 
     /// Activity-based SubAgent bound: synthetic keepalives do not refresh this.
-    pub(in crate::anthropic::stream) fn subagent_provider_silence_exceeded(&self, judgment: std::time::Duration) -> bool {
+    pub(in crate::anthropic::stream) fn subagent_provider_silence_exceeded(
+        &self,
+        judgment: std::time::Duration,
+    ) -> bool {
         self.is_subagent
             && self
                 .last_visible_provider_at

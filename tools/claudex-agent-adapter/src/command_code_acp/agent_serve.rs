@@ -8,16 +8,17 @@ use anyhow::Result;
 use tokio::sync::{Mutex, mpsc};
 use tokio_util::compat::{TokioAsyncReadCompatExt as _, TokioAsyncWriteCompatExt as _};
 
-use super::{
-    HeadlessAgent, Options,
-    progress::relay_client_operations,
-};
+use super::{HeadlessAgent, Options, progress::relay_client_operations};
 
 pub async fn serve(options: Options) -> Result<()> {
     serve_io(options, tokio::io::stdin(), tokio::io::stdout()).await
 }
 
-pub(in crate::command_code_acp) async fn serve_io<R, W>(options: Options, stdin: R, stdout: W) -> Result<()>
+pub(in crate::command_code_acp) async fn serve_io<R, W>(
+    options: Options,
+    stdin: R,
+    stdout: W,
+) -> Result<()>
 where
     R: tokio::io::AsyncRead + Unpin + 'static,
     W: tokio::io::AsyncWrite + Unpin + 'static,
@@ -38,6 +39,8 @@ where
     io.await.map_err(|error| anyhow::anyhow!("{error}"))
 }
 
-pub(super) fn spawn_local(future: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + 'static>>) {
+pub(super) fn spawn_local(
+    future: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + 'static>>,
+) {
     tokio::task::spawn_local(future);
 }

@@ -2,12 +2,8 @@ use std::{cell::Cell, future::Future, rc::Rc, sync::atomic::AtomicBool, time::Du
 
 use agent_client_protocol::{self as acp, Agent as _};
 
+use super::super::{CancelRequest, cancellation::cancel_prompt, configured_prompt};
 use super::TurnCtl;
-use super::super::{
-    CancelRequest,
-    cancellation::cancel_prompt,
-    configured_prompt,
-};
 
 pub(super) async fn run_prompt(
     mut ctl: TurnCtl<'_>,

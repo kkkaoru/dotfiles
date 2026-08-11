@@ -6,7 +6,6 @@ use super::Session;
 use super::content::{ToolResult, remember_consumed_tool_id};
 use super::content_batch::is_batch_request;
 
-
 fn validate_results(
     results: &[ToolResult],
     pending: &HashMap<String, Value>,

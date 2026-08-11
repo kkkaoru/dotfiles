@@ -9,9 +9,9 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use serde_json::json;
 #[cfg(test)]
 use serde_json::Value;
+use serde_json::json;
 use tokio::process::{Child, ChildStdin};
 use tokio::sync::Mutex;
 
@@ -27,8 +27,8 @@ mod lifecycle;
 mod pending;
 mod protocol;
 mod provider_environment;
-mod spawn;
 mod rpc;
+mod spawn;
 use pending::PendingResponse;
 pub use spawn::response_thread_id;
 use spawn::{initialize_params, prepare_isolated_codex_home, spawn_child};
@@ -106,7 +106,6 @@ impl AppServer {
         Ok(server)
     }
 }
-
 
 #[cfg(test)]
 include!("app_server_tests.rs");

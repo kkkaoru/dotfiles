@@ -4,7 +4,7 @@ use anyhow::{Result, anyhow};
 use tokio::sync::oneshot;
 use tokio::time::{Instant, sleep, timeout_at};
 
-use super::{ActiveTurns, AcpProvider, REPLACE_SETTLE_TIMEOUT, cancel_turn};
+use super::{AcpProvider, ActiveTurns, REPLACE_SETTLE_TIMEOUT, cancel_turn};
 
 pub(super) async fn replace_active_turn(
     provider: AcpProvider,

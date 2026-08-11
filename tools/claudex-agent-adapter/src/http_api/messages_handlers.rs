@@ -88,7 +88,10 @@ pub(crate) fn request_identity(headers: &HeaderMap) -> anyhow::Result<RequestIde
     ))
 }
 
-pub(crate) fn request_identity_header(headers: &HeaderMap, name: &str) -> anyhow::Result<Option<String>> {
+pub(crate) fn request_identity_header(
+    headers: &HeaderMap,
+    name: &str,
+) -> anyhow::Result<Option<String>> {
     let Some(value) = headers.get(name) else {
         return Ok(None);
     };

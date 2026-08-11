@@ -1,7 +1,10 @@
 //! Strip adapter-only WIP noise from committed assistant segments.
 
 mod filler;
-pub(in crate::anthropic::stream) use filler::{compact_live_prose, is_canned_worker_filler, strip_canned_preserving_structure, is_provider_status_line, latest_worker_status, strip_worker_status_lines};
+pub(in crate::anthropic::stream) use filler::{
+    compact_live_prose, is_canned_worker_filler, is_provider_status_line, latest_worker_status,
+    strip_canned_preserving_structure, strip_worker_status_lines,
+};
 
 use serde_json::{Value, json};
 
@@ -148,7 +151,6 @@ pub(super) fn is_bulk_tool_dump(text: &str) -> bool {
         .count()
         >= 6
 }
-
 
 #[cfg(test)]
 #[path = "sanitize_tests.rs"]

@@ -10,7 +10,6 @@ use std::sync::Arc;
 
 use crate::{agent_backend::AgentBackend, provider_config::WorkerRoute};
 
-
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SearchResult {
     pub title: String,
@@ -64,9 +63,9 @@ pub(crate) async fn run(
 // Live provider I/O and scheduler timeout outcomes are validated by the CCR
 // integration test; excluding this transport boundary keeps coverage stable
 // without depending on external credentials or wall-clock scheduling.
+mod mode;
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod parse;
-mod mode;
 pub use mode::WebSearchMode;
 use parse::{append_answer_delta, collect_item_results, fallback_results, is_web_search};
 #[cfg(test)]

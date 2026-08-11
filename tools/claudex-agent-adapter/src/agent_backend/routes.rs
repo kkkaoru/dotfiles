@@ -9,10 +9,10 @@ use super::{AgentBackend, BackendKind, BackendRoute, WebSearchMode};
 
 mod backends;
 mod concurrency;
+mod query;
 mod resolve;
 mod shutdown;
 mod startup;
-mod query;
 
 pub use backends::RoutedBackends;
 use startup::{provider_startup, start_backend};

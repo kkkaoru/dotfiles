@@ -2,15 +2,16 @@ use std::{fs, net::SocketAddr, path::Path, process::ExitStatus};
 
 use anyhow::{Context, Result};
 
-use super::{
-    Event, LastNotify, Notification, now_unix, should_emit_at,
-    script::{deliver_status, notification},
-};
+use super::super::{launcher_lock, launcher_logs, macos_notify_dispatch};
 #[cfg(not(test))]
 use super::script::osascript_command;
 #[cfg(test)]
 use super::{EVENTS, TEST_SPAWN, synthetic_success};
-use super::super::{launcher_lock, launcher_logs, macos_notify_dispatch};
+use super::{
+    Event, LastNotify, Notification, now_unix,
+    script::{deliver_status, notification},
+    should_emit_at,
+};
 
 pub(in crate::launcher) fn post(cache: &Path, listen: &SocketAddr, event: Event) {
     if !macos_notify_dispatch::notifications_enabled() {

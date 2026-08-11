@@ -4,10 +4,7 @@ use std::{error::Error, fmt, future::Future, time::Duration};
 use agent_client_protocol as acp;
 
 use super::{ActiveTurns, CancelRequest, InvalidatedSessions, dispatch_turn_terminal};
-use crate::{
-    app_server::events::ThreadEventDispatcher,
-    grok_acp::connection::AcpProvider,
-};
+use crate::{app_server::events::ThreadEventDispatcher, grok_acp::connection::AcpProvider};
 
 const CANCELLATION_SETTLEMENT_TIMEOUT: Duration = Duration::from_secs(2);
 

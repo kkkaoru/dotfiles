@@ -39,4 +39,3 @@ pub(super) fn awaited_result(message: &Value) -> Result<Value, String> {
 
 #[cfg(test)]
 include!("protocol_tests.rs");
-

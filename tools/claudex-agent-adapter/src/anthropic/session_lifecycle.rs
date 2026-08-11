@@ -1,8 +1,6 @@
 use std::sync::Arc;
 
-use super::{
-    Bridge, Session, ToolResult, first_session_owning_results,
-};
+use super::{Bridge, Session, ToolResult, first_session_owning_results};
 
 impl Bridge {
     pub(super) async fn remove_failed_model_sessions(&self, model: &str) {

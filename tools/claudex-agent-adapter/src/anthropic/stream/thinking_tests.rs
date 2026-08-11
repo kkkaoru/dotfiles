@@ -134,8 +134,8 @@ mod tests {
 
     #[tokio::test]
     async fn elapsed_keepalive_is_stream_only_so_tip_stays_last_visible() {
-        use std::{convert::Infallible, time::Duration};
         use axum::body::Bytes;
+        use std::{convert::Infallible, time::Duration};
         use tokio::sync::mpsc;
 
         let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
@@ -182,7 +182,8 @@ mod tests {
                 item_id: "claudex_activity_keepalive".to_owned(),
                 summary_index: 0,
                 signature: "sig".to_owned(),
-                text: "SubAgent starting: auto (effort=high); preparing provider session…".to_owned(),
+                text: "SubAgent starting: auto (effort=high); preparing provider session…"
+                    .to_owned(),
             }),
         };
         let mut blocks = vec![json!({
@@ -224,12 +225,20 @@ mod tests {
         let mut tip_deltas = 0usize;
         let mut zwsp_deltas = 0usize;
         while let Some(frame) = receiver.recv().await {
-            classify_thinking_delta_frame(&frame.expect("frame"), &mut tip_deltas, &mut zwsp_deltas);
+            classify_thinking_delta_frame(
+                &frame.expect("frame"),
+                &mut tip_deltas,
+                &mut zwsp_deltas,
+            );
         }
         (tip_deltas, zwsp_deltas)
     }
 
-    fn classify_thinking_delta_frame(frame: &Bytes, tip_deltas: &mut usize, zwsp_deltas: &mut usize) {
+    fn classify_thinking_delta_frame(
+        frame: &Bytes,
+        tip_deltas: &mut usize,
+        zwsp_deltas: &mut usize,
+    ) {
         let frame = String::from_utf8(frame.to_vec()).expect("utf8");
         let data = frame.lines().find_map(|line| line.strip_prefix("data: "));
         let value = serde_json::from_str::<Value>(data.expect("data")).expect("json");

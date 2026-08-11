@@ -2,7 +2,6 @@ use agent_client_protocol as acp;
 
 use super::HeadlessAgent;
 
-
 // Nightly branch instrumentation emits an invalid mapping for async-trait's
 // generated Agent shim (same llvm-cov getInstantiationGroups crash as Grok's
 // ACP client). Fixture tests still cover the delegated prompt/cancel paths.
@@ -53,4 +52,3 @@ impl acp::Agent for HeadlessAgent {
         Err(acp::Error::method_not_found())
     }
 }
-

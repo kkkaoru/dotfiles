@@ -62,7 +62,6 @@ pub struct GrokAcp {
 }
 
 impl GrokAcp {
-
     pub fn subscribe_thread(&self, thread_id: &str) -> ThreadEvents {
         self.events.subscribe(thread_id)
     }

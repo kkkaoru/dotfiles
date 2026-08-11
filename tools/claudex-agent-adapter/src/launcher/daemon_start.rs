@@ -97,9 +97,9 @@ pub(super) fn terminate_started_recovery(pid: u32) {
 
 #[path = "daemon_start_spawn.rs"]
 mod spawn;
-use spawn::{SpawnRequest, spawn_adapter};
 #[cfg(test)]
 use spawn::configure_process_group;
+use spawn::{SpawnRequest, spawn_adapter};
 
 #[cfg(unix)]
 #[path = "daemon_start_descriptors.rs"]
@@ -108,10 +108,8 @@ mod descriptors;
 use descriptors::detach_session_and_close_inherited_descriptors;
 #[cfg(all(test, unix))]
 use descriptors::{
-    bounded_descriptor_limit, close_file_descriptor, close_inherited_descriptors_with,
-    close_system,
+    bounded_descriptor_limit, close_file_descriptor, close_inherited_descriptors_with, close_system,
 };
-
 
 #[cfg(test)]
 #[path = "daemon_start_tests.rs"]

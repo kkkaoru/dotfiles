@@ -5,7 +5,11 @@ pub(in crate::launcher) fn should_emit(event: &Event, last: Option<&LastNotify>)
     should_emit_at(event, last, now_unix())
 }
 
-pub(in crate::launcher) fn should_emit_at(event: &Event, last: Option<&LastNotify>, now_unix: u64) -> bool {
+pub(in crate::launcher) fn should_emit_at(
+    event: &Event,
+    last: Option<&LastNotify>,
+    now_unix: u64,
+) -> bool {
     let _ = now_unix;
     // Waiting/Live were notifying alongside Complete for the same build_id
     // (three banners per install). Only swap-complete is user-facing now.

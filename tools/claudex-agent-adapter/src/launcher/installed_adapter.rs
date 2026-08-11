@@ -11,9 +11,9 @@ use super::RECOVERY_MANIFEST_ENV;
 
 #[path = "installed_adapter_paths.rs"]
 mod paths;
-use paths::{promote_local_file_into_canonical, relink_local_to_canonical};
 #[cfg(test)]
 pub(in crate::launcher) use paths::{is_newer, same_file};
+use paths::{promote_local_file_into_canonical, relink_local_to_canonical};
 
 /// Override for tests and explicit pinning. When set, ensure/hot-swap/spawn use
 /// this path instead of the unified cargo-bin install.

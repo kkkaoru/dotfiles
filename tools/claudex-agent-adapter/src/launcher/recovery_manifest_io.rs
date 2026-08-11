@@ -7,8 +7,8 @@ use std::{
 use anyhow::{Context, Result, ensure};
 
 use super::{
-    MANIFEST_PREFIX, MANIFEST_SUFFIX, RecoveryManifest, ServiceConfig,
-    ensure_private_directory, set_private_permissions, validate_private_file,
+    MANIFEST_PREFIX, MANIFEST_SUFFIX, RecoveryManifest, ServiceConfig, ensure_private_directory,
+    set_private_permissions, validate_private_file,
 };
 
 pub(super) fn validate_arguments(manifest: &RecoveryManifest) -> Result<()> {

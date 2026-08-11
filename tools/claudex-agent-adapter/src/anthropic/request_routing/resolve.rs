@@ -20,8 +20,8 @@ pub(in crate::anthropic) fn resolve_request_model_with_origin(
     // Stream painting may still treat historical `cc_is_subagent` as a child so
     // Muse Spark keeps live Thinking. Model routing must not: a session_id-only
     // transport header means the outer main asked for this model.
-    let is_subagent =
-        super::super::request_identity::authoritative_is_subagent(request).unwrap_or(origin.is_subagent);
+    let is_subagent = super::super::request_identity::authoritative_is_subagent(request)
+        .unwrap_or(origin.is_subagent);
     if is_subagent && (!origin.intent_matched || model_override.is_none()) {
         // Warn only if the request model is missing entirely; if a model is provided,
         // direct routing from Claude Code to a SubAgent is normal (e.g., nested SubAgent

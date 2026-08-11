@@ -6,8 +6,8 @@ use std::{
 
 use anyhow::{Context, Result};
 
-use super::PendingHotSwap;
 use super::super::{ServiceConfig, launcher_logs};
+use super::PendingHotSwap;
 
 pub(super) fn cache_dir(config: &ServiceConfig) -> Result<&Path> {
     config

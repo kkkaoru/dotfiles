@@ -101,7 +101,6 @@ pub(super) async fn wait_for_hot_swap_idle(
     }
 }
 
-
 #[path = "handover_release.rs"]
 mod release;
 pub(super) use release::release_stale_listener;

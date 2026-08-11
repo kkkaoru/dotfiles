@@ -116,7 +116,6 @@ impl RetainedProxy {
         }
     }
 
-
     #[cfg(test)]
     pub(super) fn mark_recent_work_for_test(&self) {
         if let Ok(mut last_work_at) = self.last_work_at.write() {

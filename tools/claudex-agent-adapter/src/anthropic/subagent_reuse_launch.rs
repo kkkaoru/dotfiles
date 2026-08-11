@@ -2,15 +2,19 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
+#[cfg(test)]
+use super::MessagesRequest;
 use super::{
     LaunchRecord, SessionState, SubagentReuseRegistry, launch_model, records, reuse_enabled,
     scope_is_occupied, summarize_scope,
 };
-#[cfg(test)]
-use super::MessagesRequest;
 
 impl SubagentReuseRegistry {
-    pub(in crate::anthropic) fn scope_is_occupied(&self, session_id: &str, arguments: &Value) -> bool {
+    pub(in crate::anthropic) fn scope_is_occupied(
+        &self,
+        session_id: &str,
+        arguments: &Value,
+    ) -> bool {
         let scope_key = records::launch_scope_key(arguments);
         if session_id.is_empty() || scope_key.is_empty() {
             return false;
@@ -108,5 +112,3 @@ impl SubagentReuseRegistry {
         }
     }
 }
-
-

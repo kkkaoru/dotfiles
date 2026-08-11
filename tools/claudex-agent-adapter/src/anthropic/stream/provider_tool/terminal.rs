@@ -90,7 +90,11 @@ impl SegmentBuilder {
             .map(|(_, title)| title.as_str())
     }
 
-    pub(in crate::anthropic::stream) fn record_provider_web_evidence(&mut self, call_id: &str, params: &Value) {
+    pub(in crate::anthropic::stream) fn record_provider_web_evidence(
+        &mut self,
+        call_id: &str,
+        params: &Value,
+    ) {
         if !validated_provider_web_evidence(params.get("evidence")) {
             return;
         }

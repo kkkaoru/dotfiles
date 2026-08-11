@@ -16,12 +16,12 @@ pub(super) const PROTOCOL_VERSION: &str = "2024-11-05";
 pub(super) const SERVER_NAME: &str = "claudex-launch";
 pub(super) const SERVER_VERSION: &str = "2.0.0";
 const LAUNCH_QUEUE_FILE: &str = "launch-queue.jsonl";
+mod message_io;
 #[path = "launch_mcp_protocol.rs"]
 mod protocol;
-mod message_io;
-use message_io::{read_message, record_tools_call, write_message};
 #[cfg(test)]
 use message_io::record_tools_call_to;
+use message_io::{read_message, record_tools_call, write_message};
 use protocol::handle;
 #[cfg(test)]
 use protocol::tools;

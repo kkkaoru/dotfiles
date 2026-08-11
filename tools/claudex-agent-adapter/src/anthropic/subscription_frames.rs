@@ -90,7 +90,8 @@ pub(super) async fn send_text_finish(
 #[path = "subscription_frames_tools.rs"]
 mod tools;
 pub(super) use tools::{
-    result_output_tokens, send_block_stop, send_subscription_error, send_tool_block, send_tool_finish,
+    result_output_tokens, send_block_stop, send_subscription_error, send_tool_block,
+    send_tool_finish,
 };
 
 #[cfg(test)]

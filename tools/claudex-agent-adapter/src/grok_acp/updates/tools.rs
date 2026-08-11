@@ -1,9 +1,9 @@
 //! ACP ToolCall / Plan → Claude Code display helpers (shared Grok + Copilot).
 
 use agent_client_protocol::{self as acp};
-use serde_json::json;
 #[cfg(test)]
 use serde_json::Value;
+use serde_json::json;
 
 use crate::app_server::events::ThreadEventDispatcher;
 
@@ -12,13 +12,13 @@ use args::build_tool_input;
 #[cfg(test)]
 use args::{combine_output, enrich_arguments};
 
-use super::web_evidence::{ProviderWebEvidence, completion_evidence, web_operation};
-use super::{PROVIDER_TOOL_CALL, PROVIDER_TOOL_UPDATE, dispatch_status};
-use super::tools_labels::{tool_display_name, tool_kind_label, tool_status_label};
 #[cfg(test)]
 use super::tools_labels::tool_content_text;
 #[cfg(test)]
 use super::tools_labels::tool_kind_name;
+use super::tools_labels::{tool_display_name, tool_kind_label, tool_status_label};
+use super::web_evidence::{ProviderWebEvidence, completion_evidence, web_operation};
+use super::{PROVIDER_TOOL_CALL, PROVIDER_TOOL_UPDATE, dispatch_status};
 
 #[cfg(test)]
 pub(super) fn dispatch_provider_tool_call(
@@ -142,7 +142,6 @@ pub(super) fn dispatch_plan(events: &ThreadEventDispatcher, session_id: &str, pl
     };
     dispatch_status(events, session_id, text);
 }
-
 
 #[cfg(test)]
 include!("tools_tests.rs");

@@ -66,11 +66,11 @@ use bridge_instructions::{
 };
 
 mod bridge_types;
-pub use bridge_types::{Bridge, MessagesRequest};
 pub(crate) use bridge_types::{
-    ActiveTurn, AgentEffortRecord, ContextRetry, MAX_SESSIONS, MAX_SIGNATURE_BUCKETS, SelectedSession,
-    Session, SignaturePool,
+    ActiveTurn, AgentEffortRecord, ContextRetry, MAX_SESSIONS, MAX_SIGNATURE_BUCKETS,
+    SelectedSession, Session, SignaturePool,
 };
+pub use bridge_types::{Bridge, MessagesRequest};
 
 mod bridge_ctors;
 

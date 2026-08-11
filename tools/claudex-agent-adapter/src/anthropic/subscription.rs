@@ -79,7 +79,6 @@ impl Bridge {
 #[path = "subscription_bridge.rs"]
 mod bridge;
 
-
 pub(super) fn claude_settings_path() -> Option<PathBuf> {
     std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".claude/settings.json"))
 }

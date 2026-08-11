@@ -114,10 +114,9 @@ mod truncate;
 use truncate::bounded_history;
 #[allow(unused_imports)] // turn_input_tests via super::
 pub(in crate::anthropic) use truncate::oversized_latest_message;
-use bound::{bound_input_with_byte_limit, message_input, utf8_suffix};
 #[cfg(test)]
 use bound::input_bytes;
-
+use bound::{bound_input_with_byte_limit, message_input, utf8_suffix};
 
 #[cfg(test)]
 #[path = "turn_input_tests.rs"]

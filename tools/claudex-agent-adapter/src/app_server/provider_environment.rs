@@ -6,11 +6,11 @@ use std::{
 
 mod dotenv;
 #[cfg(test)]
-use std::collections::HashSet;
-#[cfg(test)]
 #[allow(unused_imports)]
 use dotenv::{DOTENV_FILE_NAME, dotenv_values, quoted_value, valid_environment_name};
 use dotenv::{dotenv_fallbacks, dotenv_paths};
+#[cfg(test)]
+use std::collections::HashSet;
 
 pub(super) const MODEL_PROVIDERS_ROOT_SECTION: &str = "[model_providers]";
 pub(super) const MODEL_PROVIDER_SECTION_PREFIX: &str = "[model_providers.";

@@ -57,4 +57,3 @@ pub(super) fn prepare_turn(
         _permit: permit,
     })
 }
-

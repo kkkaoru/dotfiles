@@ -67,7 +67,11 @@ impl Bridge {
         );
     }
 
-    pub(super) fn note_scoped_provider_exhaustion(&self, exhausted_model: Option<&str>, message: &str) {
+    pub(super) fn note_scoped_provider_exhaustion(
+        &self,
+        exhausted_model: Option<&str>,
+        message: &str,
+    ) {
         if !is_scoped_provider_exhaustion(message) {
             return;
         }

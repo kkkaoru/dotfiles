@@ -8,7 +8,12 @@ use super::launch_prep::{
 
 impl SubscriptionStream {
     #[cfg(test)]
-    pub(in crate::anthropic) fn prepare_tool_input(&self, name: &str, id: &str, input: &Value) -> Result<Value> {
+    pub(in crate::anthropic) fn prepare_tool_input(
+        &self,
+        name: &str,
+        id: &str,
+        input: &Value,
+    ) -> Result<Value> {
         Ok(self.route_agent_tool_input(name, id, input)?.1)
     }
 

@@ -1,7 +1,7 @@
-mod select;
-mod support;
 mod note;
 mod retry;
+mod select;
+mod support;
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests;
@@ -85,5 +85,4 @@ impl Bridge {
         }
         failover.route
     }
-
 }

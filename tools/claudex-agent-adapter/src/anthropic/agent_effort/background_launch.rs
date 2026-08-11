@@ -4,12 +4,10 @@ use serde_json::Value;
 
 use super::{AgentEffortIntents, is_agent_tool, remove_expired};
 
-
 #[path = "background_launch_text.rs"]
 mod text;
 use text::active_user_text;
 pub(in crate::anthropic) use text::is_hook_or_mailbox_only;
-
 
 const SYNC_NEEDLES: &[&str] = &[
     "synchronously",

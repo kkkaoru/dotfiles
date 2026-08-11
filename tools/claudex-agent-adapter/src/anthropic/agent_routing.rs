@@ -3,20 +3,20 @@ use serde_json::Value;
 use super::request_routing::official_claude_haiku_model;
 use super::subscription::valid_effort;
 
+mod authorize;
 mod explicit;
 mod summary;
 mod texts;
 mod workers;
-mod authorize;
 pub(in crate::anthropic) use authorize::{
     model_is_authorized, model_is_authorized_with_catalog, routing_disables_subagent_model,
-};
-use workers::{
-    configured_worker_fields, generic_worker_fields, is_generic_agent_type, selected_worker_fields,
 };
 use explicit::explicit_model_matches_agent;
 pub(in crate::anthropic) use summary::active_routing_summary;
 use texts::user_message_texts;
+use workers::{
+    configured_worker_fields, generic_worker_fields, is_generic_agent_type, selected_worker_fields,
+};
 
 const ADAPTER_EFFORT: &str = "claudex_effort";
 pub(super) const ADAPTER_MODEL: &str = "claudex_model";

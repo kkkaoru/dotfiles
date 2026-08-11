@@ -3,9 +3,7 @@ use std::path::PathBuf;
 use agent_client_protocol as acp;
 use uuid::Uuid;
 
-use super::{
-    HeadlessAgent, emit_cancelled, emit_result, message_text_from_progress, prompt_text,
-};
+use super::{HeadlessAgent, emit_cancelled, emit_result, message_text_from_progress, prompt_text};
 
 impl HeadlessAgent {
     pub(super) fn open_session(&self, cwd: PathBuf) -> String {

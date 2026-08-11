@@ -31,7 +31,10 @@ pub(super) fn short_hostname() -> Option<String> {
     (!name.is_empty()).then(|| name.to_owned())
 }
 
-pub(super) fn config_path(explicit: Option<&OsStr>, home: Option<&OsStr>) -> Result<Option<PathBuf>> {
+pub(super) fn config_path(
+    explicit: Option<&OsStr>,
+    home: Option<&OsStr>,
+) -> Result<Option<PathBuf>> {
     if let Some(explicit) = explicit {
         if explicit.is_empty() {
             bail!("{CONFIG_ENV_NAME} must not be empty");

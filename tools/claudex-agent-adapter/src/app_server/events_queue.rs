@@ -68,4 +68,3 @@ impl EventQueue {
         self.ready.notify_waiters();
     }
 }
-

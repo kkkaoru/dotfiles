@@ -6,9 +6,7 @@ use serde_json::json;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt};
 use tokio::sync::mpsc;
 
-use super::{
-    StreamIteration, SubscriptionStream, consume_stream_iteration,
-};
+use super::{StreamIteration, SubscriptionStream, consume_stream_iteration};
 use crate::anthropic::subscription::SubscriptionOptions;
 
 impl SubscriptionStream {
@@ -82,4 +80,3 @@ async fn finish_end_early(
         )
         .await
 }
-

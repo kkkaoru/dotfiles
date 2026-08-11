@@ -1,17 +1,19 @@
-use std::collections::HashSet;
 #[cfg(test)]
 use std::collections::HashMap;
+use std::collections::HashSet;
 
 use serde_json::Value;
 
-use super::{LaunchRecord, apply_transcript, terminal_status};
 #[cfg(test)]
 use super::launch_record;
 #[cfg(test)]
 use super::transcript::remember_launch_context;
+use super::{LaunchRecord, apply_transcript, terminal_status};
 
 #[cfg(test)]
-pub(in crate::anthropic::subagent_reuse) fn launch_records(messages: &[Value]) -> Vec<LaunchRecord> {
+pub(in crate::anthropic::subagent_reuse) fn launch_records(
+    messages: &[Value],
+) -> Vec<LaunchRecord> {
     let mut records = Vec::new();
     let mut contexts = HashMap::new();
     for message in messages {

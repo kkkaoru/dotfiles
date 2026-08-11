@@ -1,7 +1,4 @@
-use std::{
-    sync::atomic::Ordering,
-    time::Duration,
-};
+use std::{sync::atomic::Ordering, time::Duration};
 
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
@@ -73,7 +70,11 @@ impl AppServer {
         Ok(())
     }
 
-    pub(super) async fn begin_request(&self, method: &str, params: Value) -> Result<PendingRequest> {
+    pub(super) async fn begin_request(
+        &self,
+        method: &str,
+        params: Value,
+    ) -> Result<PendingRequest> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
         self.pending
@@ -107,6 +108,4 @@ impl AppServer {
         stdin.flush().await?;
         Ok(())
     }
-
-
 }

@@ -1,9 +1,6 @@
 use serde_json::Value;
 
-use super::{
-    ParsedLine, ProgressEvent, WireEvent, has_status_prefix, is_canned_progress,
-};
-
+use super::{ParsedLine, ProgressEvent, WireEvent, has_status_prefix, is_canned_progress};
 
 pub(super) fn parse_event(event: WireEvent) -> ParsedLine {
     let description = tool_description(&event);

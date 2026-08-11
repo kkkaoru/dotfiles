@@ -156,10 +156,7 @@ mod tests {
         )
         .expect("torn read should retry");
         assert_eq!(reads.get(), 2);
-        assert_eq!(
-            models.into_iter().collect::<Vec<_>>(),
-            ["fugu", "grok-4.5"]
-        );
+        assert_eq!(models.into_iter().collect::<Vec<_>>(), ["fugu", "grok-4.5"]);
 
         let cached = load_config_from_reader(|| Ok("not-json".to_owned()), path)
             .expect("last good policy should survive a later parse failure");

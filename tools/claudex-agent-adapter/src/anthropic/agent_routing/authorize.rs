@@ -2,9 +2,7 @@ use serde_json::Value;
 
 use super::{
     IMPLICIT_MODEL, expected_worker_fields, explicit, selected_worker_fields,
-    summary::{
-        active_routing_summary, advisor_launch_disabled, configured_advisor_model_matches,
-    },
+    summary::{active_routing_summary, advisor_launch_disabled, configured_advisor_model_matches},
     workers::generic_worker_model_matches,
 };
 

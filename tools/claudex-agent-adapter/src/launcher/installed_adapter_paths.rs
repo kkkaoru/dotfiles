@@ -1,8 +1,4 @@
-use std::{
-    fs,
-    path::Path,
-    time::SystemTime,
-};
+use std::{fs, path::Path, time::SystemTime};
 
 use anyhow::{Context, Result};
 

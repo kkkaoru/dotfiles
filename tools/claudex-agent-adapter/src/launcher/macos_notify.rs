@@ -2,19 +2,21 @@ use serde::{Deserialize, Serialize};
 
 use super::ServiceConfig;
 #[cfg(test)]
-use std::process::ExitStatus;
-#[cfg(test)]
 use super::launcher_logs;
+#[cfg(test)]
+use std::process::ExitStatus;
 
-mod script;
-mod delivery;
 mod banners;
+mod delivery;
+mod script;
 pub(super) use banners::{live_ready, swap_complete, waiting_for_idle};
-pub(super) use delivery::{post, post_in_process};
 #[cfg(test)]
 use delivery::{deliver, read_last};
+pub(super) use delivery::{post, post_in_process};
 #[cfg(test)]
-use script::{deliver_status, escape_applescript, notification, osascript_command, osascript_program};
+use script::{
+    deliver_status, escape_applescript, notification, osascript_command, osascript_program,
+};
 
 /// One Complete banner per build_id. Waiting/Live stay silent (see should_emit).
 pub(super) const TITLE: &str = "claudex";
@@ -103,11 +105,10 @@ impl From<&Event> for LastNotify {
     }
 }
 
-
 mod emit;
-pub(super) use emit::{now_unix, should_emit_at};
 #[cfg(test)]
 pub(super) use emit::should_emit;
+pub(super) use emit::{now_unix, should_emit_at};
 
 #[cfg(test)]
 type TestSpawnFn = fn(&Notification) -> std::io::Result<ExitStatus>;

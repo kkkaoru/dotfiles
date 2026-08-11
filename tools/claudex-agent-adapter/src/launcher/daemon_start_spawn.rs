@@ -4,11 +4,9 @@ use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result};
 
-use super::{
-    RECOVERY_MANIFEST_ENV, SERVICE_CONFIG_FINGERPRINT_ENV, ServiceConfig, launcher_logs,
-};
 #[cfg(unix)]
 use super::detach_session_and_close_inherited_descriptors;
+use super::{RECOVERY_MANIFEST_ENV, SERVICE_CONFIG_FINGERPRINT_ENV, ServiceConfig, launcher_logs};
 
 pub(super) struct SpawnRequest<'a> {
     pub(super) config: &'a ServiceConfig,
@@ -101,4 +99,3 @@ pub(super) fn configure_process_group(command: &mut Command) {
 
 #[cfg(not(unix))]
 fn configure_process_group(_command: &mut Command) {}
-

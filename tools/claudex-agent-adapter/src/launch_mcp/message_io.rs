@@ -20,7 +20,11 @@ pub(super) fn record_tools_call(message: &Value) {
     record_tools_call_to(message, timestamp, paths);
 }
 
-pub(super) fn record_tools_call_to(message: &Value, timestamp: f64, paths: impl IntoIterator<Item = PathBuf>) {
+pub(super) fn record_tools_call_to(
+    message: &Value,
+    timestamp: f64,
+    paths: impl IntoIterator<Item = PathBuf>,
+) {
     let params = message.get("params").cloned().unwrap_or(Value::Null);
     let name = params
         .get("name")

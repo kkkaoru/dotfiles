@@ -94,11 +94,10 @@ impl Bridge {
 
 #[path = "async_agent_handoff_parse.rs"]
 mod parse;
-use parse::{latest_agent_tool_round_ids, pending_tools_outside_async_launches};
 pub(crate) use parse::{agent_tool_round_ids, exact_async_launch_acknowledgement};
 #[cfg(test)]
 use parse::{append_strict_result_text, async_launch_tool_results, strict_result_text};
-
+use parse::{latest_agent_tool_round_ids, pending_tools_outside_async_launches};
 
 #[cfg(test)]
 #[path = "async_agent_handoff_extra_tests.rs"]

@@ -312,12 +312,7 @@ mod tests {
         );
         assert!(!agent_equals.iter().any(|argument| argument == "--name"));
 
-        let empty_equals = prepare(
-            &["--resume", "session-legacy", "--name="],
-            cwd,
-            home,
-            false,
-        );
+        let empty_equals = prepare(&["--resume", "session-legacy", "--name="], cwd, home, false);
         assert!(
             empty_equals
                 .windows(2)

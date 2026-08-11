@@ -142,7 +142,6 @@ fn signatures_compatible(stored: &str, requested: &str) -> bool {
     }
 }
 
-
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[path = "helpers_tests.rs"]

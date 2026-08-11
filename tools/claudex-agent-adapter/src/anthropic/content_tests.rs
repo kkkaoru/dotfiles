@@ -336,7 +336,8 @@ mod tests {
                 }
             ]
         });
-        let steering = mid_turn_user_steering(std::slice::from_ref(&message)).expect("mid-turn steering");
+        let steering =
+            mid_turn_user_steering(std::slice::from_ref(&message)).expect("mid-turn steering");
         assert!(steering.contains("追加調査して"));
         assert!(
             mid_turn_user_steering(&[json!({
@@ -384,7 +385,11 @@ mod tests {
         let steering = mid_turn_user_steering(&[message]).expect("mid-turn steering");
         let mut results = vec![result("tool-a"), result("tool-b")];
         attach_mid_turn_steering(&mut results, &steering);
-        assert_eq!(results[0].content_items.len(), 0, "earlier tools stay clean");
+        assert_eq!(
+            results[0].content_items.len(),
+            0,
+            "earlier tools stay clean"
+        );
         assert_eq!(
             results[1]
                 .content_items
@@ -419,12 +424,10 @@ mod tests {
         let mut attached = results;
         attach_mid_turn_steering(&mut attached, &steering);
         assert!(
-            attached[0]
-                .content_items
-                .iter()
-                .any(|item| item.get("text").and_then(Value::as_str).is_some_and(|text| {
-                    text.contains("追加調査して")
-                })),
+            attached[0].content_items.iter().any(|item| item
+                .get("text")
+                .and_then(Value::as_str)
+                .is_some_and(|text| { text.contains("追加調査して") })),
             "steering from the trailing text-only user message must fold onto the tool result"
         );
     }

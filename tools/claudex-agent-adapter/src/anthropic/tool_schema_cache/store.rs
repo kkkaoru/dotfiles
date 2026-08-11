@@ -6,7 +6,6 @@ use super::persist::{
 };
 use super::{CACHE_FILE_NAME, StoredSchema};
 
-
 pub(super) struct ToolSchemaStore {
     path: PathBuf,
 }
@@ -49,4 +48,3 @@ impl ToolSchemaStore {
         }
     }
 }
-

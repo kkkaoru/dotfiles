@@ -105,9 +105,8 @@ impl Bridge {
             detached: false,
         })
     }
-
 }
 
-pub(in crate::anthropic) use turn_model::is_context_window_exceeded;
 #[cfg(test)]
 pub(in crate::anthropic) use turn_model::contains_context_window_marker;
+pub(in crate::anthropic) use turn_model::is_context_window_exceeded;

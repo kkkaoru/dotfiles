@@ -60,13 +60,13 @@ mod tests {
         let mut optional_values = stored("optional-values", 0);
         optional_values.effort = None;
         optional_values.model_override = None;
-        write_document(
-            &path,
-            vec![invalid_effort, invalid_model, optional_values],
-        );
+        write_document(&path, vec![invalid_effort, invalid_model, optional_values]);
         let loaded = AgentIntentStore::at(path).load();
         assert_eq!(loaded.len(), 1);
-        assert_eq!(loaded.front().expect("valid intent").tool_use_id, "optional-values");
+        assert_eq!(
+            loaded.front().expect("valid intent").tool_use_id,
+            "optional-values"
+        );
     }
 
     #[test]
@@ -107,8 +107,14 @@ mod tests {
             .collect();
         store.save(intents);
         let loaded = store.load();
-        assert_eq!(loaded.len(), super::super::agent_effort::MAX_PENDING_INTENTS);
-        assert_eq!(loaded.front().expect("bounded intent").tool_use_id, "tool-1");
+        assert_eq!(
+            loaded.len(),
+            super::super::agent_effort::MAX_PENDING_INTENTS
+        );
+        assert_eq!(
+            loaded.front().expect("bounded intent").tool_use_id,
+            "tool-1"
+        );
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -158,7 +164,9 @@ mod tests {
         let temporary_files = fs::read_dir(root.path().join("nested"))
             .expect("cache directory")
             .filter_map(Result::ok)
-            .filter(|entry| entry.path().extension().and_then(|value| value.to_str()) == Some("tmp"))
+            .filter(|entry| {
+                entry.path().extension().and_then(|value| value.to_str()) == Some("tmp")
+            })
             .count();
         assert_eq!(temporary_files, 0);
     }
@@ -209,7 +217,10 @@ mod tests {
         let restored = AgentEffortIntents::with_store(path);
         let pending = restored.pending.lock().expect("pending intents");
         assert_eq!(pending.len(), 1);
-        assert_eq!(pending.front().expect("restored intent").tool_use_id, "persisted");
+        assert_eq!(
+            pending.front().expect("restored intent").tool_use_id,
+            "persisted"
+        );
         assert!(pending.front().expect("restored intent").correlated);
     }
 
@@ -221,18 +232,20 @@ mod tests {
             .pending
             .lock()
             .expect("pending intents")
-            .extend(["session-a", "session-b"].map(|client_user_id| AgentEffortIntent {
-                client_user_id: Some(client_user_id.to_owned()),
-                prompt: String::new(),
-                correlated: true,
-                effort: Some("high".to_owned()),
-                model_override: Some("worker".to_owned()),
-                model_is_inherited: false,
-                run_in_background: true,
-                tool_use_id: "tool-shared".to_owned(),
-                created_at: std::time::Instant::now(),
-                created_unix_seconds: now,
-            }));
+            .extend(
+                ["session-a", "session-b"].map(|client_user_id| AgentEffortIntent {
+                    client_user_id: Some(client_user_id.to_owned()),
+                    prompt: String::new(),
+                    correlated: true,
+                    effort: Some("high".to_owned()),
+                    model_override: Some("worker".to_owned()),
+                    model_is_inherited: false,
+                    run_in_background: true,
+                    tool_use_id: "tool-shared".to_owned(),
+                    created_at: std::time::Instant::now(),
+                    created_unix_seconds: now,
+                }),
+            );
         let request = super::super::MessagesRequest {
             model: "main".to_owned(),
             system: serde_json::Value::Null,
@@ -253,7 +266,10 @@ mod tests {
 
         let pending = intents.pending.lock().expect("pending intents");
         assert_eq!(pending.len(), 1);
-        assert_eq!(pending.front().unwrap().client_user_id.as_deref(), Some("session-b"));
+        assert_eq!(
+            pending.front().unwrap().client_user_id.as_deref(),
+            Some("session-b")
+        );
     }
 
     #[test]

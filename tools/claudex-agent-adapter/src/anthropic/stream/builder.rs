@@ -10,13 +10,13 @@ use super::{protocol::StreamSender, thinking::ThinkingState};
 
 mod batch;
 mod close_finish;
+mod construct;
 mod external_tool;
 mod external_tool_reject;
 mod progress;
 mod progress_keepalive;
 mod provider_launch;
 mod visibility;
-mod construct;
 #[path = "web_provenance.rs"]
 mod web_provenance;
 
@@ -68,7 +68,6 @@ pub(in crate::anthropic) struct SegmentBuilder {
 }
 
 impl SegmentBuilder {
-
     pub(super) async fn handle_event(
         &mut self,
         bridge: &Bridge,

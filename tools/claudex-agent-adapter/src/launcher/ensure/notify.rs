@@ -1,8 +1,6 @@
 use anyhow::{Context, Result};
 
-use super::super::{
-    ServiceConfig, daemon_start, handover::ServiceState, live, macos_notify,
-};
+use super::super::{ServiceConfig, daemon_start, handover::ServiceState, live, macos_notify};
 
 pub(in crate::launcher) fn notify_live_listener(config: &ServiceConfig, url: &str) {
     if let Ok(live_listen) = live::parse_listen_url(url) {

@@ -1,8 +1,6 @@
 use serde_json::Value;
 
-use super::{
-    LaunchRecord, active_status, reusable_status, same_logical_launch, summarize_scope,
-};
+use super::{LaunchRecord, active_status, reusable_status, same_logical_launch, summarize_scope};
 
 pub(in crate::anthropic) fn find_reusable_launch<'a>(
     launches: &'a [LaunchRecord],

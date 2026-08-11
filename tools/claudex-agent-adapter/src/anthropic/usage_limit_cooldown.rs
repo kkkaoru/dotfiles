@@ -116,4 +116,3 @@ fn unix_seconds(time: SystemTime) -> u64 {
 
 #[cfg(test)]
 include!("usage_limit_cooldown_tests.rs");
-

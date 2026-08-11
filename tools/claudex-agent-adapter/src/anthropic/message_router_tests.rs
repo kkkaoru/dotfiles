@@ -1,5 +1,3 @@
-#![cfg_attr(coverage_nightly, coverage(off))]
-
 use axum::body::to_bytes;
 use std::os::unix::fs::PermissionsExt;
 

@@ -32,7 +32,10 @@ pub(super) fn continue_after_cancel_request(
     }
 }
 
-pub(super) fn settle_cancelled_prompt(ctx: CancelCtx<'_>, response: acp::Result<acp::PromptResponse>) {
+pub(super) fn settle_cancelled_prompt(
+    ctx: CancelCtx<'_>,
+    response: acp::Result<acp::PromptResponse>,
+) {
     match response {
         Ok(response) if response.stop_reason == acp::StopReason::Cancelled => {
             drop(ctx.permit);
@@ -59,7 +62,11 @@ pub(super) fn settle_cancelled_prompt(ctx: CancelCtx<'_>, response: acp::Result<
 }
 
 #[cfg_attr(coverage_nightly, coverage(off))]
-pub(super) fn log_prompt_settlement_error(provider: AcpProvider, session_id: &str, error: &acp::Error) {
+pub(super) fn log_prompt_settlement_error(
+    provider: AcpProvider,
+    session_id: &str,
+    error: &acp::Error,
+) {
     tracing::debug!(
         provider = provider.label(),
         session_id,

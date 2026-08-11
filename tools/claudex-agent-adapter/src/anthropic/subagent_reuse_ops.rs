@@ -1,8 +1,8 @@
 use serde_json::{Value, json};
 
 use super::{
-    MessagesRequest, SubagentReuseRegistry, append_reuse_guidance, apply_transcript,
-    already_has_resume, agent_teams_enabled, find_reusable_launch, has_send_message_tool,
+    MessagesRequest, SubagentReuseRegistry, agent_teams_enabled, already_has_resume,
+    append_reuse_guidance, apply_transcript, find_reusable_launch, has_send_message_tool,
     max_subagents_per_session, reuse_enabled, reuse_recipients, session_id, set_limit_metadata,
     system_contains_marker,
 };
@@ -12,7 +12,11 @@ impl SubagentReuseRegistry {
         self.observe_and_restore_with_reuse(request, reuse_enabled());
     }
 
-    pub(super) fn observe_and_restore_with_reuse(&self, request: &mut MessagesRequest, reuse: bool) {
+    pub(super) fn observe_and_restore_with_reuse(
+        &self,
+        request: &mut MessagesRequest,
+        reuse: bool,
+    ) {
         let Some(session_id) = session_id(request) else {
             return;
         };

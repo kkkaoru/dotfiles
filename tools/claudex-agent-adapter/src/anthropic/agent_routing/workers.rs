@@ -1,6 +1,6 @@
-use serde_json::Value;
-use super::{ADAPTER_MODEL, active_routing_summary};
 use super::super::subscription::valid_effort;
+use super::{ADAPTER_MODEL, active_routing_summary};
+use serde_json::Value;
 
 pub(in crate::anthropic) fn configured_worker_fields(
     arguments: &Value,
@@ -71,7 +71,10 @@ pub(in crate::anthropic) fn selected_worker_fields(
     ))
 }
 
-pub(in crate::anthropic) fn default_subagent_worker<'a>(summary: &'a Value, workers: &'a [Value]) -> Option<&'a Value> {
+pub(in crate::anthropic) fn default_subagent_worker<'a>(
+    summary: &'a Value,
+    workers: &'a [Value],
+) -> Option<&'a Value> {
     let route = summary.get("default_subagent_route");
     route
         .and_then(|route| {

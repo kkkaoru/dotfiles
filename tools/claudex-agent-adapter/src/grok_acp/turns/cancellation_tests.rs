@@ -153,7 +153,11 @@ mod tests {
             session_id: "session".to_owned(),
             timeout: Duration::from_secs(2),
         };
-        assert!(error.to_string().contains("setup cancellation did not settle"));
+        assert!(
+            error
+                .to_string()
+                .contains("setup cancellation did not settle")
+        );
     }
 
     #[tokio::test]

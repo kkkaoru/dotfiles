@@ -1876,6 +1876,16 @@ async fn retries_context_window_errors_only_before_committed_output() {
     assert!(error.to_string().contains("context window"));
 }
 
+async fn collect_sse_frame_strings(
+    mut receiver: mpsc::Receiver<Result<Bytes, Infallible>>,
+) -> Vec<String> {
+    let mut frames = Vec::new();
+    while let Some(frame) = receiver.recv().await {
+        frames.push(String::from_utf8(frame.expect("frame").to_vec()).expect("UTF-8 SSE"));
+    }
+    frames
+}
+
 #[tokio::test]
 async fn reports_slow_stream_preparation_before_the_provider_is_ready() {
     let (sender, receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
@@ -1903,11 +1913,11 @@ async fn reports_slow_stream_preparation_before_the_provider_is_ready() {
     assert_eq!(result.expect("prepare result"), Some("ready"));
     let segment = builder.finish(Some(&sender)).await.expect("segment");
     drop(sender);
+    let frames = drain.await.expect("frame drain");
 
     assert_eq!(segment.usage.input_tokens, 3);
     // Keepalive thinking is live-only; committed segment stays clean.
     assert!(segment.blocks.is_empty());
-    let frames = drain.await.expect("drain keepalive frames");
     assert!(
         frames
             .iter()

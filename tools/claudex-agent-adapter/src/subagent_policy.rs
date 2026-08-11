@@ -1,9 +1,4 @@
-use std::{
-    collections::BTreeSet,
-    ffi::OsStr,
-    process::Command,
-    time::Duration,
-};
+use std::{collections::BTreeSet, ffi::OsStr, process::Command, time::Duration};
 
 use anyhow::{Context, Result, bail};
 use axum::http::HeaderMap;
@@ -22,14 +17,11 @@ pub(super) const LOAD_RETRY: Duration = Duration::from_millis(10);
 #[cfg(test)]
 pub(super) const LOAD_RETRY: Duration = Duration::ZERO;
 
-
-
 #[path = "subagent_policy_load.rs"]
 mod load;
 use load::{config_path, load_config};
 #[cfg(test)]
 use load::{load_config_from_reader, short_hostname, with_last_good};
-
 
 pub(crate) fn active_header() -> Result<Option<String>> {
     let path = config_path(

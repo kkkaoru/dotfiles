@@ -55,4 +55,3 @@ fn is_teammate_result(text: &str) -> bool {
 
 #[cfg(test)]
 include!("team_protocol_tests.rs");
-

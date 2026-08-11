@@ -1,12 +1,7 @@
-use std::{
-    collections::HashSet,
-    ffi::OsString,
-};
+use std::{collections::HashSet, ffi::OsString};
 
-use super::{
-    MODEL_PROVIDER_SECTION_PREFIX, MODEL_PROVIDERS_ROOT_SECTION, PROVIDER_ENV_KEY,
-};
 use super::dotenv::{quoted_value, valid_environment_name};
+use super::{MODEL_PROVIDER_SECTION_PREFIX, MODEL_PROVIDERS_ROOT_SECTION, PROVIDER_ENV_KEY};
 
 pub(super) fn inherited_environment_keys(
     required: &HashSet<String>,

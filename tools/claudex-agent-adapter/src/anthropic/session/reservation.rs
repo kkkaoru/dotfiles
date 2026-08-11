@@ -100,14 +100,14 @@ pub(super) async fn find_busy_matching_session(
 
 #[path = "reservation_match.rs"]
 mod reservation_match;
+#[cfg(test)]
+use crate::anthropic::content::canonical_eq;
 use reservation_match::{
     align_transcript_to_request, conversation_matches, find_busy_by_signature,
 };
-pub(super) use reservation_match::{has_pending_tools, take_gate_after_preempt};
 #[cfg(test)]
 use reservation_match::{claude_session_ids_match, transcript_is_prefix};
-#[cfg(test)]
-use crate::anthropic::content::canonical_eq;
+pub(super) use reservation_match::{has_pending_tools, take_gate_after_preempt};
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]

@@ -8,8 +8,8 @@ use std::{
 use anyhow::{Context as _, Result, bail};
 use tokio::process::Command;
 
-use super::AcpProvider;
 use super::super::plugin;
+use super::AcpProvider;
 use crate::path_env;
 
 /// OpenCode's default `build` agent spawns nested explore/general task subagents. Under Claudex
@@ -94,8 +94,6 @@ pub(in crate::grok_acp) fn normalize_launch_effort(effort: &str) -> &str {
     }
 }
 
-
-
 pub(in crate::grok_acp) fn is_opencode_program(program: &OsString) -> bool {
     Path::new(program)
         .file_name()
@@ -108,7 +106,10 @@ pub(in crate::grok_acp) fn opencode_acp_runtime_config() -> &'static str {
     OPENCODE_ACP_RUNTIME_CONFIG
 }
 
-pub(in crate::grok_acp) fn apply_opencode_acp_runtime_config(command: &mut Command, program: &OsString) {
+pub(in crate::grok_acp) fn apply_opencode_acp_runtime_config(
+    command: &mut Command,
+    program: &OsString,
+) {
     if !is_opencode_program(program) {
         return;
     }

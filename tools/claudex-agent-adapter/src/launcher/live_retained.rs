@@ -1,14 +1,12 @@
 use std::{net::SocketAddr, path::PathBuf};
 
-use anyhow::{Context, Result};
 #[cfg(test)]
 use anyhow::bail;
+use anyhow::{Context, Result};
 
-use super::{
-    RetainedGeneration, ServiceConfig, retained_path, write_json,
-};
 #[cfg(test)]
 use super::RETAINED_WRITE_FAILURE_AFTER;
+use super::{RetainedGeneration, ServiceConfig, retained_path, write_json};
 
 #[cfg(test)]
 pub(in crate::launcher) fn write_retained(

@@ -19,14 +19,12 @@ pub(super) fn authorized_model(
             catalog,
             model,
         ),
-        None => {
-            crate::anthropic::agent_routing::model_is_authorized(
-                arguments,
-                user_messages,
-                system,
-                model,
-            )
-        }
+        None => crate::anthropic::agent_routing::model_is_authorized(
+            arguments,
+            user_messages,
+            system,
+            model,
+        ),
     }
 }
 

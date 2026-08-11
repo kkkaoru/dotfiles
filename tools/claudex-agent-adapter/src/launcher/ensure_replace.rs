@@ -1,9 +1,9 @@
 use anyhow::{Context, Result};
 
+use super::super::health::wait_until_ready;
 use super::super::{
     daemon_process, daemon_start, fallback, handover, pending_hot_swap, preflight, recovery,
 };
-use super::super::health::wait_until_ready;
 use super::{
     Mode, ServiceConfig, log_live_listener, notify_live_listener, notify_swap_if_replaced,
     usable_recovery_generation,
@@ -25,7 +25,8 @@ pub(super) async fn prepare_replace_recovery(
         return Ok(ReplacePrep::Finished(url));
     }
     let recovery_generation = usable_recovery_generation(config, recovery_generation.as_deref())?;
-    let attached = super::super::session_process::any_launch_is_active(config.options.listen.port());
+    let attached =
+        super::super::session_process::any_launch_is_active(config.options.listen.port());
     eprintln!(
         "claudex: replacing adapter pid {pid:?} on {} with build {}{}{}",
         config.base_url(),
@@ -157,5 +158,3 @@ pub(super) async fn try_defer_live_update(
         }
     }
 }
-
-

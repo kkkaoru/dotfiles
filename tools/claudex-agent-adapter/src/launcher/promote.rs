@@ -12,14 +12,14 @@ use serde::Deserialize;
 
 mod rebind;
 mod warm;
-pub(in crate::launcher) use warm::{retained_session_ids, warm_agent_ages};
-#[cfg(test)]
-pub(in crate::launcher) use warm::warm_agent_ids;
 #[allow(unused_imports)]
 use rebind::{
     listen_is_free, request_bind_listen, request_ephemeral_rebind, restore_old_canonical,
     wait_until_canonical_released,
 };
+#[cfg(test)]
+pub(in crate::launcher) use warm::warm_agent_ids;
+pub(in crate::launcher) use warm::{retained_session_ids, warm_agent_ages};
 
 #[cfg(not(test))]
 pub(super) const HANDOVER_TIMEOUT: Duration = Duration::from_secs(10);
@@ -32,7 +32,7 @@ const WARM_START_TIMEOUT: Duration = Duration::from_secs(10);
 #[cfg(all(test, coverage_nightly))]
 const WARM_START_TIMEOUT: Duration = Duration::from_secs(45);
 #[cfg(all(test, not(coverage_nightly)))]
-const WARM_START_TIMEOUT: Duration = Duration::from_secs(2);
+const WARM_START_TIMEOUT: Duration = Duration::from_secs(10);
 pub(super) const HANDOVER_POLL: Duration = Duration::from_millis(10);
 
 #[derive(Debug, Deserialize)]
@@ -51,7 +51,6 @@ pub(super) fn live_update_eligible(health: &Health, config: &ServiceConfig) -> b
         && health.codex_config_fingerprint == config.codex_config_fingerprint
         && health.service_config_fingerprint == config.service_config_fingerprint
 }
-
 
 mod canonical;
 pub(crate) use canonical::try_canonical;

@@ -59,7 +59,6 @@ pub async fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<i32> {
 }
 
 
-
 pub async fn serve(options: AdapterOptions) -> Result<()> {
     crate::logging::init();
     let auth_token = configured_token();

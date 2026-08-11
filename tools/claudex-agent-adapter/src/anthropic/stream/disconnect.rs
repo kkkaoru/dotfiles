@@ -102,7 +102,6 @@ pub(super) fn warn_cancel_failure(error: &anyhow::Error, thread_id: &str) {
     );
 }
 
-
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[path = "disconnect_tests.rs"]

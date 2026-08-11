@@ -7,14 +7,14 @@ use std::{
 use anyhow::{Context, Result, bail};
 use uuid::Uuid;
 
-use crate::{subagent_policy as policy, working_directory};
+use super::claude_relay::{reject_model_override, relay_stderr};
+use super::process_io::exit_code;
+use super::resume::{prepare_arguments, session_id_for_launch};
 use super::{
     AdapterOptions, ClaudeProcess, ServiceConfig, claude_process, ensure, launcher_lock,
     launcher_logs, resume, session_process,
 };
-use super::claude_relay::{reject_model_override, relay_stderr};
-use super::process_io::exit_code;
-use super::resume::{prepare_arguments, session_id_for_launch};
+use crate::{subagent_policy as policy, working_directory};
 
 pub(super) fn acquire_resume_session_lock(
     config: &ServiceConfig,

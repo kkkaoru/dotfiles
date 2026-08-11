@@ -123,9 +123,7 @@ pub(super) async fn create(
 
 #[path = "session_setup.rs"]
 mod setup;
-use setup::{
-    await_model_setup, new_session_with_mcp, pins_acp_model_after_create, session_cwd,
-};
+use setup::{await_model_setup, new_session_with_mcp, pins_acp_model_after_create, session_cwd};
 #[cfg(test)]
 use setup::{await_setup, request_cwd, session_setup_timeout};
 

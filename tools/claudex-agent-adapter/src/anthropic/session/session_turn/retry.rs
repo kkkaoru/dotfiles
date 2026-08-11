@@ -4,8 +4,7 @@ use anyhow::Result;
 use serde_json::Value;
 
 use super::super::super::{
-    ActiveTurn, Bridge, MessagesRequest, SelectedSession, Session,
-    content::ToolResult,
+    ActiveTurn, Bridge, MessagesRequest, SelectedSession, Session, content::ToolResult,
 };
 use super::StartSelectedTurn;
 

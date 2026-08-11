@@ -6,8 +6,8 @@ use super::{
     PREEMPT_GATE_TIMEOUT, SelectedSession, Session, candidate_length, is_better_length,
     touch_session,
 };
-use crate::anthropic::content::matching_transcript_len;
 use crate::anthropic::content::canonical_eq;
+use crate::anthropic::content::matching_transcript_len;
 
 pub(super) async fn find_busy_by_signature(
     sessions: impl IntoIterator<Item = Arc<Session>>,
@@ -121,4 +121,3 @@ pub(super) fn transcript_is_prefix(transcript: &[Value], messages: &[Value]) -> 
             .zip(messages)
             .all(|(left, right)| canonical_eq(left, right))
 }
-

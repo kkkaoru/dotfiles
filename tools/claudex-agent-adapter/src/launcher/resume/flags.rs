@@ -1,8 +1,6 @@
 use std::ffi::OsString;
 
-use super::{
-    AUTO_FORK_ENV,
-};
+use super::AUTO_FORK_ENV;
 
 pub(super) fn auto_fork_enabled() -> bool {
     std::env::var(AUTO_FORK_ENV)

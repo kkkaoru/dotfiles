@@ -5,7 +5,10 @@ use super::{
     take_alias_string,
 };
 
-pub(in crate::anthropic::stream::acp_tool_bridge) fn normalize_launch_arguments(provider_name: &str, arguments: &Value) -> Value {
+pub(in crate::anthropic::stream::acp_tool_bridge) fn normalize_launch_arguments(
+    provider_name: &str,
+    arguments: &Value,
+) -> Value {
     let mut mapped = match arguments {
         Value::Object(map) => Value::Object(map.clone()),
         other => json!({"value": other}),
@@ -48,7 +51,9 @@ pub(in crate::anthropic::stream::acp_tool_bridge) fn normalize_launch_arguments(
 /// Claude Code Agent/Task require a real prompt. Cursor often opens native Task
 /// cards with only `_toolName` / `run_in_background` (or empty rawInput); bridging
 /// those yields InputValidationError and aborts the main-session turn.
-pub(in crate::anthropic::stream::acp_tool_bridge) fn launch_arguments_ready(arguments: &Value) -> bool {
+pub(in crate::anthropic::stream::acp_tool_bridge) fn launch_arguments_ready(
+    arguments: &Value,
+) -> bool {
     arguments
         .as_object()
         .and_then(|object| nonempty_string(object, "prompt"))

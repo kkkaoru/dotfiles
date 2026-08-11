@@ -1,11 +1,6 @@
-
 use serde_json::Value;
 
-use super::{
-    is_launch_tool,
-    records_scope::active_status,
-    records_status::launch_record,
-};
+use super::{is_launch_tool, records_scope::active_status, records_status::launch_record};
 
 pub(super) use super::records_scope::summarize_scope;
 

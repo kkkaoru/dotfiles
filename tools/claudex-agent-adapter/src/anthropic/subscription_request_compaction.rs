@@ -1,8 +1,6 @@
 use serde_json::Value;
 
-use super::{
-    COMPACTION_COMMAND_TAG, COMPACTION_SUMMARY_TASK, COMPACTION_TEXT_ONLY_PREFIX,
-};
+use super::{COMPACTION_COMMAND_TAG, COMPACTION_SUMMARY_TASK, COMPACTION_TEXT_ONLY_PREFIX};
 
 pub(super) fn message_text(content: &Value) -> String {
     match content {

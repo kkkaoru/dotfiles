@@ -128,4 +128,3 @@ pub(super) fn take_alias_string(
 #[path = "detect_normalize.rs"]
 mod normalize;
 pub(super) use normalize::{launch_arguments_ready, normalize_launch_arguments};
-

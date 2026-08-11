@@ -47,9 +47,9 @@ pub(in crate::anthropic) fn streaming_sse_response(
 
 #[path = "protocol_keepalive.rs"]
 mod keepalive;
-use keepalive::streaming_sse_response_with_interval;
 #[cfg(test)]
 use keepalive::KeepaliveStream;
+use keepalive::streaming_sse_response_with_interval;
 
 pub(in crate::anthropic) async fn send_stream_completion(sender: &StreamSender, segment: &Segment) {
     let _ = send_stream_frame(Some(sender), "message_delta", || {
@@ -105,9 +105,9 @@ pub(super) async fn send_stream_error(sender: &StreamSender, error: anyhow::Erro
 #[path = "protocol_frames.rs"]
 mod frames;
 pub(in crate::anthropic) use frames::send_stream_frame;
+pub(super) use frames::send_tool_use;
 #[allow(unused_imports)] // re-exported via stream.rs
 pub(in crate::anthropic) use frames::tool_use_frames;
-pub(super) use frames::send_tool_use;
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]

@@ -7,12 +7,12 @@ use std::time::Duration;
 mod signals;
 #[cfg(unix)]
 use signals::process_is_alive;
-use signals::{request_graceful_shutdown_with_signal, terminate_with_escalation};
 #[cfg(all(test, unix))]
 use signals::{
     is_process_still_alive, is_process_zombie, kill_process, kill_process_group,
     process_group_is_alive,
 };
+use signals::{request_graceful_shutdown_with_signal, terminate_with_escalation};
 
 const LEGACY_ADAPTER_NAMES: &[&str] = &["claudex-app-server-adapter"];
 #[cfg(unix)]
@@ -108,7 +108,6 @@ fn is_launch_command_line(command: &str) -> bool {
 fn is_signalable_pid(pid: u32) -> bool {
     pid != 0 && pid <= i32::MAX as u32
 }
-
 
 fn process_field(pid: u32, field: &str) -> Option<String> {
     let output = Command::new("ps")

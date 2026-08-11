@@ -9,11 +9,10 @@ mod classification;
 mod process;
 mod results;
 mod sanitize;
+use classification::{classify_failure, extract_diagnostic, status_hint};
 pub(in crate::anthropic) use process::process_failure;
 #[cfg(test)]
 use process::process_failure_from_parts;
-use classification::{classify_failure, extract_diagnostic, status_hint};
-use sanitize::sanitize_diagnostic;
 #[allow(unused_imports)] // re-exported for crate::anthropic::subscription callers
 pub(in crate::anthropic) use results::{
     after_stream_output, local_failure, protocol_failure, result_failure,
@@ -22,6 +21,7 @@ pub(in crate::anthropic) use results::{
 };
 #[cfg(test)]
 pub(in crate::anthropic) use results::{subscription_result, validate_subscription_result};
+use sanitize::sanitize_diagnostic;
 
 const MAX_DIAGNOSTIC_CHARS: usize = 1_024;
 

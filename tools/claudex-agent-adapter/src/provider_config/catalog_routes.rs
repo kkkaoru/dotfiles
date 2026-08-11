@@ -1,7 +1,7 @@
 use anyhow::Result;
 
-use super::{ModelCatalog, Provider, WorkerRoute};
 use super::super::validation::validate_worker_routes;
+use super::{ModelCatalog, Provider, WorkerRoute};
 
 impl ModelCatalog {
     pub fn worker_effort_for_model(&self, model: &str) -> Option<&str> {

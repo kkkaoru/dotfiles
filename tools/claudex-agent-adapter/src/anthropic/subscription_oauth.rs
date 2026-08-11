@@ -1,22 +1,17 @@
-use std::{
-    path::PathBuf,
-    time::SystemTime,
-};
+use std::{path::PathBuf, time::SystemTime};
 
 use anyhow::Error;
 
 use super::subscription::failure::subscription_failure;
-use super::{
-    Bridge, MessagesRequest, provider_auth_cooldown, request_routing::RouteDecision,
-};
+use super::{Bridge, MessagesRequest, provider_auth_cooldown, request_routing::RouteDecision};
 
 #[path = "subscription_oauth_expiry.rs"]
 mod expiry;
-#[allow(unused_imports)] // failover submodule reads super::push_unique
-use expiry::{default_credentials_path, push_unique, warn_preflight_oauth_failover};
-pub(super) use expiry::credentials_oauth_unusable_at;
 #[cfg(test)]
 pub(super) use expiry::credentials_access_expired_at;
+pub(super) use expiry::credentials_oauth_unusable_at;
+#[allow(unused_imports)] // failover submodule reads super::push_unique
+use expiry::{default_credentials_path, push_unique, warn_preflight_oauth_failover};
 
 pub(super) const SUBSCRIPTION_AUTH_SCOPE: &str = "claude-subscription";
 
@@ -33,7 +28,6 @@ pub(super) fn is_subscription_auth_failure(error: &Error) -> bool {
         || message.contains(TUI_LOGIN_PROMPT)
         || (message.contains("oauth") && message.contains("expired"))
 }
-
 
 #[path = "subscription_oauth_failover.rs"]
 mod failover;
@@ -84,7 +78,6 @@ impl Bridge {
         }
         failover.route
     }
-
 }
 
 #[cfg(test)]

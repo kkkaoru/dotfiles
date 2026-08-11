@@ -5,11 +5,13 @@ use std::{
     path::Path,
 };
 
-use super::{MAX_AGE_SECONDS, StoredAgentIntent, unix_seconds};
 use super::super::agent_effort::{AgentEffortIntent, MAX_PENDING_INTENTS};
 use super::super::subscription::valid_effort;
+use super::{MAX_AGE_SECONDS, StoredAgentIntent, unix_seconds};
 
-pub(super) fn bound_intents(mut intents: VecDeque<StoredAgentIntent>) -> VecDeque<StoredAgentIntent> {
+pub(super) fn bound_intents(
+    mut intents: VecDeque<StoredAgentIntent>,
+) -> VecDeque<StoredAgentIntent> {
     while intents.len() > MAX_PENDING_INTENTS {
         intents.pop_front();
     }
@@ -17,9 +19,7 @@ pub(super) fn bound_intents(mut intents: VecDeque<StoredAgentIntent>) -> VecDequ
 }
 
 pub(super) fn bound_vec(mut intents: Vec<StoredAgentIntent>) -> Vec<StoredAgentIntent> {
-    let excess = intents
-        .len()
-        .saturating_sub(MAX_PENDING_INTENTS);
+    let excess = intents.len().saturating_sub(MAX_PENDING_INTENTS);
     if excess > 0 {
         intents.drain(..excess);
     }
@@ -39,7 +39,10 @@ pub(super) fn is_fresh(intent: &StoredAgentIntent) -> bool {
     unix_seconds().saturating_sub(intent.created_unix_seconds) <= MAX_AGE_SECONDS
 }
 
-pub(super) fn cache_read_failure(path: &Path, error: std::io::Error) -> VecDeque<StoredAgentIntent> {
+pub(super) fn cache_read_failure(
+    path: &Path,
+    error: std::io::Error,
+) -> VecDeque<StoredAgentIntent> {
     if error.kind() != std::io::ErrorKind::NotFound {
         tracing::warn!(%error, path = %path.display(), "could not restore persisted Agent intents");
     }

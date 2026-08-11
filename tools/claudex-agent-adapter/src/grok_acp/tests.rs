@@ -122,9 +122,13 @@ fn identifies_each_acp_provider_and_its_model_scope() {
 
 #[test]
 fn configured_acp_defaults_to_parallel_session_slots_when_max_concurrency_omitted() {
-    assert_eq!(SESSION_QUEUE_CAPACITY, 1, "native Grok/Copilot stay serial by default");
     assert_eq!(
-        super::DEFAULT_CONFIGURED_MAX_CONCURRENCY, 3,
+        SESSION_QUEUE_CAPACITY, 1,
+        "native Grok/Copilot stay serial by default"
+    );
+    assert_eq!(
+        super::DEFAULT_CONFIGURED_MAX_CONCURRENCY,
+        3,
         "configured ACP must not collapse to a single session when providers omit maxConcurrency"
     );
 }

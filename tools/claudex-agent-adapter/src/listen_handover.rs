@@ -111,10 +111,9 @@ mod listener;
 
 #[path = "listen_handover_support.rs"]
 mod support;
-pub(crate) use support::rebind_state_path;
 #[cfg(test)]
 use support::ephemeral_bind_addr;
-
+pub(crate) use support::rebind_state_path;
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]

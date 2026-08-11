@@ -143,11 +143,10 @@ pub(super) fn post(cache: &Path, listen: &SocketAddr, event: Event) {
 mod delegate;
 #[path = "macos_notify_dispatch_run.rs"]
 mod run;
-pub(crate) use run::run_internal;
 use delegate::delegate_post;
 #[cfg(test)]
 use delegate::{delegate_complete_notify, interpret_delegate_status};
-
+pub(crate) use run::run_internal;
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]

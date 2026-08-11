@@ -2,19 +2,19 @@ use std::{collections::HashMap, path::PathBuf, sync::Mutex};
 
 use super::MessagesRequest;
 mod guidance;
+mod limits;
 mod records;
 mod records_scope;
 mod records_status;
 mod store;
-mod limits;
-pub(super) use limits::{
-    is_launch_tool, max_subagents_per_session, reuse_enabled, session_id,
-    should_expose_launch_tools,
-};
 #[cfg(test)]
 use guidance::REUSE_GUIDANCE_MARKER;
 pub(super) use guidance::{agent_teams_enabled, value_text};
 use guidance::{append_reuse_guidance, has_send_message_tool, system_contains_marker};
+pub(super) use limits::{
+    is_launch_tool, max_subagents_per_session, reuse_enabled, session_id,
+    should_expose_launch_tools,
+};
 pub(in crate::anthropic) use records::live_agent_task_ids;
 use records::{
     LaunchRecord, already_has_resume, apply_transcript, find_reusable_launch, launch_model,
@@ -22,10 +22,7 @@ use records::{
 };
 #[cfg(test)]
 use store::StoredStates;
-use store::{
-    CACHE_FILE_NAME, SessionState, Store, reuse_recipients,
-    set_limit_metadata,
-};
+use store::{CACHE_FILE_NAME, SessionState, Store, reuse_recipients, set_limit_metadata};
 
 pub(crate) const MAX_SUBAGENTS_PER_SESSION_ENV: &str = "CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION";
 pub(crate) const DEFAULT_MAX_SUBAGENTS_PER_SESSION: usize = 1_024;

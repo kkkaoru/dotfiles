@@ -11,7 +11,10 @@ use super::{
     io::{manifest_file_name, read_manifest, recovery_root, validate_arguments},
 };
 
-pub(in crate::launcher) fn validate(config: &ServiceConfig, generation: &str) -> Result<ValidatedRecovery> {
+pub(in crate::launcher) fn validate(
+    config: &ServiceConfig,
+    generation: &str,
+) -> Result<ValidatedRecovery> {
     ensure!(safe_component(generation), "invalid recovery generation");
     let root = recovery_root(config)?;
     validate_private_directory(&root, "recovery directory")?;

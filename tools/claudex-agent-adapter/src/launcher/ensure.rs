@@ -1,18 +1,16 @@
 use anyhow::Result;
 
-use super::{
-    ServiceConfig, handover, handover::ServiceState, launcher_lock, pending_hot_swap,
-};
+use super::{ServiceConfig, handover, handover::ServiceState, launcher_lock, pending_hot_swap};
 
+mod notify;
 #[path = "ensure_wait_idle.rs"]
 mod wait_idle;
-mod notify;
+#[cfg(test)]
+use notify::recovery_snapshot_is_missing;
 pub(super) use notify::{
     listener_was_replaced, log_live_listener, notify_live_listener, notify_swap_if_replaced,
     should_retry_idle_replace, usable_recovery_generation,
 };
-#[cfg(test)]
-use notify::recovery_snapshot_is_missing;
 
 #[cfg(test)]
 pub(super) use wait_idle::{WAIT_IDLE_POLL_INTERVAL, WaitIdleInspectPause};
@@ -81,11 +79,11 @@ pub(super) async fn apply_inspected_state(
 
 #[path = "ensure_replace.rs"]
 mod replace;
+#[cfg(test)]
+use replace::try_defer_live_update;
 use replace::{
     ReplacePrep, defer_busy_listener, prepare_replace_recovery, start_and_wait_for_adapter,
 };
-#[cfg(test)]
-use replace::try_defer_live_update;
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]

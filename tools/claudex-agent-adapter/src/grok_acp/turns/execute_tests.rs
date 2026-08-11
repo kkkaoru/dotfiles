@@ -1095,11 +1095,9 @@ mod tests {
             let _ = io_task.await;
         }));
         let (request_sender, requests) = oneshot::channel();
-        drop(tokio::task::spawn_local(serve_rejecting_launch_scoped_peer(
-            outgoing_peer,
-            incoming_peer,
-            request_sender,
-        )));
+        drop(tokio::task::spawn_local(
+            serve_rejecting_launch_scoped_peer(outgoing_peer, incoming_peer, request_sender),
+        ));
         (connection, requests)
     }
 

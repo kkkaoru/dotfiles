@@ -31,7 +31,11 @@ pub(super) fn ephemeral_bind_addr(canonical: SocketAddr) -> SocketAddr {
     }
 }
 
-pub(super) fn write_rebind_state(cache: &Path, canonical: SocketAddr, listen: SocketAddr) -> Result<()> {
+pub(super) fn write_rebind_state(
+    cache: &Path,
+    canonical: SocketAddr,
+    listen: SocketAddr,
+) -> Result<()> {
     fs::create_dir_all(cache).context("create rebind state directory")?;
     let path = rebind_state_path(cache, &canonical);
     let temporary = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4().simple()));

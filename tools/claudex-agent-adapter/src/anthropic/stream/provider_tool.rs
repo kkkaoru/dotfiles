@@ -13,13 +13,13 @@ use super::{builder::SegmentBuilder, protocol::StreamSender};
 
 mod preview;
 mod terminal;
-use preview::{compact_title, progress_start_line};
 #[cfg(test)]
 #[allow(unused_imports)]
 use preview::{
     argument_preview, failure_preview, first_line, object_failure_preview, scalar_preview,
     truncate_for_status, valid_source_url, valid_source_urls, validated_provider_web_evidence,
 };
+use preview::{compact_title, progress_start_line};
 
 impl SegmentBuilder {
     /// Streams provider-owned work as thinking chrome, never as Anthropic `tool_use`.
@@ -98,7 +98,6 @@ impl SegmentBuilder {
         }
         Ok(())
     }
-
 }
 
 #[cfg(test)]

@@ -133,8 +133,8 @@ fn opencode_provider_starts_the_acp_subcommand() {
 fn configured_worker_routes_are_command_capable() {
     let root = repository_root();
     let codex_config =
-        fs::read_to_string(root.join("tools/claudex-agent-adapter/src/app_server.rs"))
-            .expect("Codex app-server source");
+        fs::read_to_string(root.join("tools/claudex-agent-adapter/src/app_server/spawn.rs"))
+            .expect("Codex app-server spawn source");
     for feature in [
         "shell_tool = true",
         "unified_exec = true",
@@ -145,9 +145,10 @@ fn configured_worker_routes_are_command_capable() {
             "Codex app-server routes must enable {feature}"
         );
     }
-    let grok_command =
-        fs::read_to_string(root.join("tools/claudex-agent-adapter/src/grok_acp/connection.rs"))
-            .expect("Grok ACP source");
+    let grok_command = fs::read_to_string(
+        root.join("tools/claudex-agent-adapter/src/grok_acp/connection_command.rs"),
+    )
+    .expect("Grok ACP command source");
     assert!(
         grok_command.contains("--always-approve"),
         "Grok ACP routes must allow command tools"

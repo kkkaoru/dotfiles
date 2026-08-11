@@ -13,12 +13,9 @@ use serde::Serialize;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 mod acquire;
-use acquire::{
-    admission_capacity,
-    model_concurrency_wait_timeout,
-};
 #[cfg(test)]
 use acquire::parse_wait_timeout;
+use acquire::{admission_capacity, model_concurrency_wait_timeout};
 
 pub(super) const MODEL_CONCURRENCY_WAIT_TIMEOUT_ENV: &str =
     "CLAUDEX_MODEL_CONCURRENCY_WAIT_TIMEOUT_MS";

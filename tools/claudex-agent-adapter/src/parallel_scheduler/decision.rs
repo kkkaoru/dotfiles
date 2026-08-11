@@ -57,4 +57,3 @@ impl SchedulerDecision {
         lines.join("\n")
     }
 }
-

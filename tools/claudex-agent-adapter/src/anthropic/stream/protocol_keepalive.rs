@@ -38,7 +38,10 @@ pub(super) struct KeepaliveStream {
 }
 
 impl KeepaliveStream {
-    pub(super) fn new(receiver: mpsc::Receiver<Result<Bytes, Infallible>>, interval: Duration) -> Self {
+    pub(super) fn new(
+        receiver: mpsc::Receiver<Result<Bytes, Infallible>>,
+        interval: Duration,
+    ) -> Self {
         Self {
             receiver,
             interval,
@@ -71,4 +74,3 @@ impl Stream for KeepaliveStream {
         Poll::Pending
     }
 }
-

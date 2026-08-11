@@ -2,7 +2,10 @@ use serde_json::Value;
 
 use super::Workunit;
 
-pub(in crate::parallel_scheduler::core) fn parse_subagent_tool_use(block: &Value, launched: &mut Vec<Workunit>) {
+pub(in crate::parallel_scheduler::core) fn parse_subagent_tool_use(
+    block: &Value,
+    launched: &mut Vec<Workunit>,
+) {
     let Some(name) = block.get("name").and_then(Value::as_str) else {
         return;
     };

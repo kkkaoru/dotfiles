@@ -60,7 +60,6 @@ impl SubscriptionStream {
         Ok(true)
     }
 
-
     pub(super) async fn close_text(
         &mut self,
         sender: &mpsc::Sender<Result<Bytes, Infallible>>,

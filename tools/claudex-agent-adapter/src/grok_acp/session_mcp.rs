@@ -1,7 +1,4 @@
-use std::{
-    env,
-    path::PathBuf,
-};
+use std::{env, path::PathBuf};
 
 use agent_client_protocol as acp;
 use serde_json::Value;
@@ -12,7 +9,10 @@ pub(super) fn launch_mcp_servers(params: &Value) -> Vec<acp::McpServer> {
     launch_mcp_servers_from(params, env::current_exe())
 }
 
-pub(super) fn launch_mcp_servers_from(params: &Value, exe: std::io::Result<PathBuf>) -> Vec<acp::McpServer> {
+pub(super) fn launch_mcp_servers_from(
+    params: &Value,
+    exe: std::io::Result<PathBuf>,
+) -> Vec<acp::McpServer> {
     if !params_offer_launch_tools(params) {
         return Vec::new();
     }

@@ -9,23 +9,23 @@
 //! | SessionInfo / mode | ignored (noisy vs native Claude Code) |
 //! | xAI SubAgent extensions | compact status |
 
+mod extension_status;
 mod thought_units;
 mod tools;
 mod tools_labels;
 mod web_evidence;
-mod extension_status;
 
 use agent_client_protocol::{self as acp};
 use serde_json::{Value, json};
 
 use crate::app_server::events::ThreadEventDispatcher;
 
-pub(crate) use thought_units::ThoughtUnits;
+pub(in crate::grok_acp) use extension_status::dispatch_status;
 use extension_status::{
     dispatch_delta, dispatch_retry, dispatch_subagent_finished, dispatch_subagent_started,
     dispatch_usage,
 };
-pub(in crate::grok_acp) use extension_status::dispatch_status;
+pub(crate) use thought_units::ThoughtUnits;
 use tools::{
     dispatch_plan, dispatch_provider_tool_call_with_evidence,
     dispatch_provider_tool_update_with_evidence,

@@ -1,10 +1,10 @@
 use std::path::Path;
 
 use super::Event;
-use crate::launcher::macos_notify::NotifyKind;
 #[cfg(test)]
 use super::TEST_FORCE_DELEGATE;
 use crate::launcher::installed_adapter;
+use crate::launcher::macos_notify::NotifyKind;
 
 pub(super) fn delegate_post(cache: &Path, event: &Event) -> bool {
     #[cfg(test)]
@@ -22,7 +22,6 @@ pub(super) fn delegate_post(cache: &Path, event: &Event) -> bool {
 /// Spawn the installed adapter to post a completion banner out-of-process.
 pub(super) fn delegate_complete_notify(cache: &Path, event: &Event) -> bool {
     use std::process::Command;
-
 
     if event.kind() != NotifyKind::Complete {
         return false;

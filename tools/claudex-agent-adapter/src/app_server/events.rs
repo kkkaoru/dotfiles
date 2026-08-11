@@ -1,9 +1,6 @@
 use std::{
     collections::{HashMap, VecDeque},
-    sync::{
-        Arc, Mutex,
-        atomic::AtomicU64,
-    },
+    sync::{Arc, Mutex, atomic::AtomicU64},
 };
 
 use serde_json::Value;

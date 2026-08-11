@@ -2,13 +2,16 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
-use super::{LaunchRecord, is_launch_tool, launch_record, merge_launches};
 use super::super::records_status::{
     mark_failed_launch_result, queued_message_recipient, set_recipient_status, set_task_status,
     status_update,
 };
+use super::{LaunchRecord, is_launch_tool, launch_record, merge_launches};
 
-pub(in crate::anthropic::subagent_reuse) fn apply_transcript(launches: &mut Vec<LaunchRecord>, messages: &[Value]) {
+pub(in crate::anthropic::subagent_reuse) fn apply_transcript(
+    launches: &mut Vec<LaunchRecord>,
+    messages: &[Value],
+) {
     let mut contexts = HashMap::new();
     for message in messages {
         apply_message_content(launches, &mut contexts, message);

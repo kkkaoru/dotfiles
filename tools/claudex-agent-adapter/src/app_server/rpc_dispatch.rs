@@ -6,7 +6,10 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use super::super::{AppServer, pending::PendingResponse, protocol};
 
 impl AppServer {
-    pub(in crate::app_server) async fn read_loop(server: Weak<Self>, stdout: tokio::process::ChildStdout) {
+    pub(in crate::app_server) async fn read_loop(
+        server: Weak<Self>,
+        stdout: tokio::process::ChildStdout,
+    ) {
         let mut lines = BufReader::new(stdout).lines();
         while Self::dispatch_next_line(&server, &mut lines).await {}
     }

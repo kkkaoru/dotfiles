@@ -79,4 +79,3 @@ impl ModelCatalog {
 
 #[path = "catalog_routes.rs"]
 mod routes;
-

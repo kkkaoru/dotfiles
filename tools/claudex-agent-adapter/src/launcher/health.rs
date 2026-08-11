@@ -3,8 +3,7 @@ use std::{collections::BTreeMap, time::Duration};
 use serde::Deserialize;
 
 use super::{
-    ServiceConfig, route_descriptions, search_worker_route_descriptions,
-    worker_route_descriptions,
+    ServiceConfig, route_descriptions, search_worker_route_descriptions, worker_route_descriptions,
 };
 use crate::ADAPTER_PROTOCOL_VERSION;
 
@@ -138,6 +137,6 @@ pub(super) async fn authenticates(client: &reqwest::Client, config: &ServiceConf
 
 #[path = "health_wait.rs"]
 mod wait;
-pub(super) use wait::{wait_until_ready, wait_until_recovery_ready};
 #[cfg(test)]
 pub(super) use wait::wait_until_ready_with;
+pub(super) use wait::{wait_until_ready, wait_until_recovery_ready};

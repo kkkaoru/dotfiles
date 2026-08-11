@@ -1,6 +1,6 @@
 use serde_json::{Value, json};
 
-use super::{TRUNCATED_INPUT_NOTICE};
+use super::TRUNCATED_INPUT_NOTICE;
 use crate::anthropic::content::{image_data_url, serialized_len};
 
 pub(super) fn bound_input_with_byte_limit(input: Vec<Value>, max_bytes: usize) -> Vec<Value> {

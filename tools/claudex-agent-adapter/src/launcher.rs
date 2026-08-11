@@ -128,7 +128,6 @@ pub async fn hot_swap(options: AdapterOptions, wait_idle: bool) -> Result<String
 mod claude_launch;
 pub use claude_launch::run_claude;
 
-
 #[cfg(test)]
 use health::wait_until_ready_with;
 

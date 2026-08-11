@@ -6,11 +6,11 @@ mod tests {
 
     use serde_json::{Value, json};
 
+    use super::background_launch::agent_launch_is_background;
     use super::{
         AgentEffort, AgentEffortIntents, AgentEffortRecord, prepare_arguments,
         prepare_arguments_for_user, tool_schema, validate_routed_agent_arguments,
     };
-    use super::background_launch::agent_launch_is_background;
     use crate::anthropic::MessagesRequest;
 
     fn request(user_id: &str, prompt: &str, subagent: bool) -> MessagesRequest {
@@ -246,7 +246,8 @@ mod tests {
         ];
         assert!(agent_launch_is_background("Agent", &messages));
 
-        let sync = [json!({"role":"user","content":"Please wait for the result before continuing"})];
+        let sync =
+            [json!({"role":"user","content":"Please wait for the result before continuing"})];
         assert!(!agent_launch_is_background("Agent", &sync));
         assert!(!agent_launch_is_background("Bash", &sync));
     }

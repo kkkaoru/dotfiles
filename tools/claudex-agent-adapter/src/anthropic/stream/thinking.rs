@@ -156,6 +156,5 @@ impl ThinkingState {
 #[path = "thinking_progress.rs"]
 mod progress;
 
-
 #[cfg(test)]
 include!("thinking_tests.rs");

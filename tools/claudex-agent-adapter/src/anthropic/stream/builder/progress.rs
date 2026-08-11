@@ -155,5 +155,4 @@ impl SegmentBuilder {
         self.emit_filtered_subagent_reasoning(item_id, summary_index, raw, stream)
             .await
     }
-
 }

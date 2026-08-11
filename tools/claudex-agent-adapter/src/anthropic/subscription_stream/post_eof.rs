@@ -5,9 +5,7 @@ use axum::body::Bytes;
 use tokio::{process::Child, sync::mpsc, task::JoinHandle, time::Sleep};
 
 use super::SubscriptionStream;
-use crate::anthropic::{
-    subscription::{SubscriptionOptions, terminate_subscription_process_group},
-};
+use crate::anthropic::subscription::{SubscriptionOptions, terminate_subscription_process_group};
 
 pub(super) type StderrTask = JoinHandle<std::io::Result<Vec<u8>>>;
 
@@ -122,4 +120,3 @@ async fn drain_stderr_after_exit(
         }
     }
 }
-

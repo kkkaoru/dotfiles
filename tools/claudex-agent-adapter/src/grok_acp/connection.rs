@@ -17,15 +17,15 @@ use handshake::{initialize, wire_provider_connection};
 
 #[path = "connection_command.rs"]
 mod command;
-use command::{build_provider_command, spawn_provider_process};
-pub(super) use command::terminate_process_group;
 #[cfg(test)]
 pub(super) use command::is_opencode_program;
+pub(super) use command::terminate_process_group;
 #[cfg(test)]
 pub(super) use command::{
-    apply_opencode_acp_runtime_config, normalize_launch_effort, opencode_acp_runtime_config,
-    substitute_configured_argument, OPENCODE_ACP_RUNTIME_CONFIG,
+    OPENCODE_ACP_RUNTIME_CONFIG, apply_opencode_acp_runtime_config, normalize_launch_effort,
+    opencode_acp_runtime_config, substitute_configured_argument,
 };
+use command::{build_provider_command, spawn_provider_process};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum AcpProvider {
@@ -109,7 +109,6 @@ pub(super) async fn start(
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[path = "connection_argument_tests.rs"]
 mod argument_tests;
-
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]

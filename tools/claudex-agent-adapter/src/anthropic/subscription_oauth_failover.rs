@@ -3,14 +3,16 @@ use std::sync::Arc;
 use anyhow::Result;
 use axum::{body::Body, http::Response};
 
-use super::{is_subscription_auth_failure, push_unique};
 use super::super::{
     Bridge, MessagesRequest, request_routing::RouteDecision, token_count,
     usage_limit_failover::UsageLimitFailover,
 };
+use super::{is_subscription_auth_failure, push_unique};
 
 impl Bridge {
-    pub(in crate::anthropic) fn subscription_auth_failover_for(&self) -> Option<UsageLimitFailover> {
+    pub(in crate::anthropic) fn subscription_auth_failover_for(
+        &self,
+    ) -> Option<UsageLimitFailover> {
         let mut candidates = Vec::new();
         for worker in self.model_catalog.worker_routes() {
             candidates.push(worker.model.clone());

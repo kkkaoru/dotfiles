@@ -3,7 +3,6 @@ use std::collections::HashSet;
 
 use super::{AgentChoice, BackendKind, Provider, WebSearchMode, WorkerRoute};
 
-
 #[path = "validation_fields.rs"]
 mod fields;
 use fields::{

@@ -3,7 +3,10 @@ use serde_json::Value;
 use crate::anthropic::MessagesRequest;
 
 #[cfg(test)]
-pub(in crate::anthropic) fn requested_tools(tools: &[Value], omit_task_bookkeeping: bool) -> Vec<String> {
+pub(in crate::anthropic) fn requested_tools(
+    tools: &[Value],
+    omit_task_bookkeeping: bool,
+) -> Vec<String> {
     requested_tools_from_request(tools, omit_task_bookkeeping, true)
 }
 

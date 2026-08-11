@@ -82,4 +82,3 @@ pub(in crate::anthropic) fn image_data_url(block: &Value) -> Option<String> {
         _ => None,
     }
 }
-

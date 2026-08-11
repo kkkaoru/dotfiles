@@ -11,7 +11,6 @@ mod thread;
 pub(in crate::anthropic) use thread::thread_start_params;
 pub(in crate::anthropic) use thread::thread_start_params_for_mode;
 
-
 #[cfg(test)]
 pub(in crate::anthropic) fn tool_configuration(
     request: &MessagesRequest,
@@ -97,7 +96,6 @@ fn external_tools(
     }
     (specs, names)
 }
-
 
 pub(in crate::anthropic) fn dynamic_tool(tool: &Value, codex_name: &str) -> Option<Value> {
     let original_name = tool.get("name")?.as_str()?;

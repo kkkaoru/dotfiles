@@ -9,11 +9,11 @@ use std::{
 use agent_client_protocol as acp;
 use tokio::sync::{mpsc, oneshot};
 
+use super::workers::{process_driver_command, spawn_driver_workers, stop_driver_workers};
 use super::{
     ActiveTurns, DriverCommand, DriverCommandContext, DriverWorkerContext, InvalidatedSessions,
     connection,
 };
-use super::workers::{process_driver_command, spawn_driver_workers, stop_driver_workers};
 use crate::app_server::events::ThreadEventDispatcher;
 
 pub(super) async fn drive_commands(

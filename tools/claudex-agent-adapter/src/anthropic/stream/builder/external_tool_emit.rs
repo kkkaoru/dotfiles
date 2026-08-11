@@ -7,7 +7,6 @@ use crate::anthropic::retention::record_pending_tool;
 use crate::anthropic::stream::protocol::{StreamSender, send_tool_use};
 
 impl SegmentBuilder {
-
     pub(super) async fn emit_external_tool_use(
         &mut self,
         context: ExternalToolContext<'_>,

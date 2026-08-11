@@ -1,9 +1,9 @@
 use agent_client_protocol as acp;
 use serde_json::{Value, json};
 
+use super::super::web_evidence::{ProviderWebEvidence, WebOperation, web_operation};
 use super::args::{combine_output, enrich_arguments};
 use super::tool_status_label;
-use super::super::web_evidence::{ProviderWebEvidence, WebOperation, web_operation};
 
 pub(super) fn completed_web_operation(
     evidence: &ProviderWebEvidence,
@@ -19,7 +19,10 @@ pub(super) fn completed_web_operation(
     evidence.completion_candidate(session_id, call_id, direct_operation)
 }
 
-pub(super) fn update_to_tool_call(call_id: &str, fields: acp::ToolCallUpdateFields) -> Option<acp::ToolCall> {
+pub(super) fn update_to_tool_call(
+    call_id: &str,
+    fields: acp::ToolCallUpdateFields,
+) -> Option<acp::ToolCall> {
     let title = fields.title?;
     let status = fields.status?;
     if !matches!(

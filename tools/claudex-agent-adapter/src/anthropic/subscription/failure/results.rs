@@ -77,7 +77,10 @@ pub(in crate::anthropic) fn subscription_result(stdout: &[u8]) -> Result<String>
     subscription_result_for_model(stdout, None)
 }
 
-pub(in crate::anthropic) fn subscription_result_for_model(stdout: &[u8], model: Option<&str>) -> Result<String> {
+pub(in crate::anthropic) fn subscription_result_for_model(
+    stdout: &[u8],
+    model: Option<&str>,
+) -> Result<String> {
     let value: Value = serde_json::from_slice(stdout)
         .map_err(|_| protocol_failure(model, "returned invalid JSON"))?;
     validate_subscription_result_for_model(&value, model)?;

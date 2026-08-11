@@ -7,8 +7,8 @@ use std::{
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
-use super::{LiveState, RetainedGeneration};
 use super::super::{ServiceConfig, launcher_logs};
+use super::{LiveState, RetainedGeneration};
 
 pub(super) fn state_path(config: &ServiceConfig) -> Result<PathBuf> {
     Ok(launcher_logs::live_state_path(

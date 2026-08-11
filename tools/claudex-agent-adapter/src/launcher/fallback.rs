@@ -80,10 +80,10 @@ pub(super) async fn ensure_current_generation(
 
 #[path = "fallback_listen.rs"]
 mod listen;
-pub(super) use listen::reserve_loopback_listen;
-use listen::terminate_failed_fallback;
 #[cfg(test)]
 use listen::reserve_listener;
+pub(super) use listen::reserve_loopback_listen;
+use listen::terminate_failed_fallback;
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]

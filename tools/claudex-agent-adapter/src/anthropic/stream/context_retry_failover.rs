@@ -6,7 +6,6 @@ use super::super::super::{ActiveTurn, Bridge, ContextRetry};
 use super::UsageLimitOutcome;
 
 impl Bridge {
-
     pub(in crate::anthropic::stream) async fn failover_usage_limit_turn(
         &self,
         mut turn: ActiveTurn,

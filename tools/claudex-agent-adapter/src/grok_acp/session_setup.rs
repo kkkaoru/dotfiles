@@ -51,7 +51,6 @@ pub(super) fn session_cwd(params: &Value, fallback: &Path) -> PathBuf {
         .unwrap_or_else(|| fallback.to_owned())
 }
 
-
 pub(super) async fn await_model_setup<T>(
     provider: AcpProvider,
     timeout: Duration,
@@ -98,4 +97,3 @@ pub(super) fn request_cwd(params: &Value) -> Option<PathBuf> {
         .map(PathBuf::from)
         .filter(|path| path.is_absolute() && path.is_dir())
 }
-

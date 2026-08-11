@@ -105,11 +105,9 @@ fn arm_with(
 
 #[path = "pending_hot_swap_process.rs"]
 mod process;
-use process::{spawn_waiter, stop_waiter, waiter_is_alive};
 #[cfg(test)]
 use process::is_wait_idle_command_line;
-
-
+use process::{spawn_waiter, stop_waiter, waiter_is_alive};
 
 #[cfg(test)]
 pub(super) struct TestSpawnPid;

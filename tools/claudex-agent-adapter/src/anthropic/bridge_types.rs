@@ -79,7 +79,8 @@ pub struct Bridge {
     pub(in crate::anthropic) subagent_reuse: Arc<subagent_reuse::SubagentReuseRegistry>,
     pub(in crate::anthropic) tool_schemas: tool_schema_cache::ToolSchemaCache,
     pub(in crate::anthropic) model_concurrency: model_concurrency::ModelConcurrency,
-    pub(in crate::anthropic) active_subagent_models: Arc<active_subagent_models::ActiveSubagentModels>,
+    pub(in crate::anthropic) active_subagent_models:
+        Arc<active_subagent_models::ActiveSubagentModels>,
 }
 
 pub(crate) struct Session {

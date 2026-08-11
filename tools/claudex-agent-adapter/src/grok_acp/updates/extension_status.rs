@@ -9,7 +9,11 @@ use super::AGENT_MESSAGE_METHOD;
 /// Progress status as agent-message deltas with `itemId` `...:status`.
 /// The stream builder commits these as visible assistant text so SubAgent UIs
 /// show native ACP work without inventing executable `tool_use` cards.
-pub(in crate::grok_acp) fn dispatch_status(events: &ThreadEventDispatcher, session_id: &str, delta: String) {
+pub(in crate::grok_acp) fn dispatch_status(
+    events: &ThreadEventDispatcher,
+    session_id: &str,
+    delta: String,
+) {
     dispatch_delta(
         events,
         session_id,
@@ -42,7 +46,11 @@ pub(super) fn dispatch_delta(
     }));
 }
 
-pub(super) fn dispatch_subagent_started(events: &ThreadEventDispatcher, session_id: &str, update: &Value) {
+pub(super) fn dispatch_subagent_started(
+    events: &ThreadEventDispatcher,
+    session_id: &str,
+    update: &Value,
+) {
     let description = string_field(update, "description", "SubAgent");
     let model = string_field(update, "model", "unknown model");
     let effort = update
@@ -56,7 +64,11 @@ pub(super) fn dispatch_subagent_started(events: &ThreadEventDispatcher, session_
     );
 }
 
-pub(super) fn dispatch_subagent_finished(events: &ThreadEventDispatcher, session_id: &str, update: &Value) {
+pub(super) fn dispatch_subagent_finished(
+    events: &ThreadEventDispatcher,
+    session_id: &str,
+    update: &Value,
+) {
     let status = string_field(update, "status", "finished");
     let duration = update
         .get("duration_ms")

@@ -4,8 +4,7 @@ use anyhow::{Error, anyhow};
 use serde_json::Value;
 
 use super::{
-    SubscriptionFailure, SubscriptionFailureKind, classify_failure, extract_diagnostic,
-    status_hint,
+    SubscriptionFailure, SubscriptionFailureKind, classify_failure, extract_diagnostic, status_hint,
 };
 
 pub(in crate::anthropic) fn process_failure(
@@ -17,7 +16,12 @@ pub(in crate::anthropic) fn process_failure(
     process_failure_from_parts(model, status.to_string(), stdout, stderr)
 }
 
-pub(super) fn process_failure_from_parts(model: &str, status: String, stdout: &[u8], stderr: &[u8]) -> Error {
+pub(super) fn process_failure_from_parts(
+    model: &str,
+    status: String,
+    stdout: &[u8],
+    stderr: &[u8],
+) -> Error {
     let structured = serde_json::from_slice::<Value>(stdout).ok();
     let stdout_diagnostic = structured.as_ref().and_then(|value| {
         let explicitly_successful = value.get("subtype").and_then(Value::as_str) == Some("success")

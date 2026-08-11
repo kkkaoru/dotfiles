@@ -1,8 +1,4 @@
-use std::{
-    fs,
-    net::SocketAddr,
-    path::PathBuf,
-};
+use std::{fs, net::SocketAddr, path::PathBuf};
 
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
@@ -13,17 +9,15 @@ mod fs_guard;
 mod prune;
 #[path = "recovery_manifest_validate.rs"]
 mod validate;
-pub(super) use validate::{generation_from_environment, generation_name, validate};
-#[allow(unused_imports)] // exercised via recovery_manifest_tests / launcher_tests
-pub(super) use validate::generation_from_path;
-use fs_guard::{
-    ensure_private_directory, set_private_permissions, validate_private_file,
-};
 #[cfg(test)]
 use fs_guard::safe_component;
+use fs_guard::{ensure_private_directory, set_private_permissions, validate_private_file};
 use prune::cleanup;
 #[cfg(test)]
 use prune::{manifest_entry, manifests};
+#[allow(unused_imports)] // exercised via recovery_manifest_tests / launcher_tests
+pub(super) use validate::generation_from_path;
+pub(super) use validate::{generation_from_environment, generation_name, validate};
 
 pub(super) const EXECUTABLE_NAME: &str = "claudex-agent-adapter";
 pub(super) const MANIFEST_PREFIX: &str = "manifest.";
@@ -112,10 +106,9 @@ pub(super) fn prepare(config: &ServiceConfig) -> Result<PathBuf> {
 
 #[path = "recovery_manifest_io.rs"]
 mod io;
-use io::{ensure_recovery_root, manifest_file_name, publish_manifest, read_manifest};
 #[cfg(test)]
 use io::validate_arguments;
-
+use io::{ensure_recovery_root, manifest_file_name, publish_manifest, read_manifest};
 
 #[cfg(test)]
 #[path = "recovery_manifest_tests.rs"]

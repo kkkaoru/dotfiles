@@ -54,7 +54,8 @@ pub(super) fn spawn_child(
         .current_dir(codex_home)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
+        // The daemon may close inherited descriptors, making stderr EBADF.
+        .stderr(Stdio::null())
         .kill_on_drop(true)
         .spawn()
         .context("failed to start `codex app-server`")

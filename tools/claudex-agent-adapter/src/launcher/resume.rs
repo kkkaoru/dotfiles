@@ -1,9 +1,9 @@
-mod transcript;
 mod flags;
+mod transcript;
 use flags::{auto_fork_enabled, has_agent, has_fork_session, has_session_name};
-use transcript::{read_transcript_identity, transcript_has_spawn_limit};
 #[cfg(test)]
 use transcript::project_dir_name;
+use transcript::{read_transcript_identity, transcript_has_spawn_limit};
 
 use std::{
     ffi::OsString,
@@ -75,7 +75,6 @@ pub(super) fn session_lock_id(arguments: &[OsString]) -> Option<String> {
         .flatten()
 }
 
-
 pub(super) fn resume_session_id(arguments: &[OsString]) -> Option<String> {
     for (index, argument) in arguments.iter().enumerate() {
         let argument = argument.to_str()?;
@@ -143,7 +142,6 @@ fn fallback_session_name(cwd: &Path, session_id: &str) -> Option<String> {
             usable_display_name(&short).then_some(short)
         })
 }
-
 
 #[cfg(test)]
 include!("resume_tests.rs");

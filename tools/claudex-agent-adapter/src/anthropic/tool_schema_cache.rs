@@ -1,9 +1,6 @@
-use std::{
-    collections::VecDeque,
-    sync::Mutex,
-};
 #[cfg(test)]
 use std::path::PathBuf;
+use std::{collections::VecDeque, sync::Mutex};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -88,7 +85,6 @@ impl ToolSchemaCache {
             store: Some(store),
         }
     }
-
 }
 
 mod store;

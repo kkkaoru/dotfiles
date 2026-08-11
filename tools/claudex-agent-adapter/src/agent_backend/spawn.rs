@@ -1,8 +1,4 @@
-use crate::{
-    app_server::AppServer,
-    copilot_acp::CopilotAcp,
-    grok_acp::GrokAcp,
-};
+use crate::{app_server::AppServer, copilot_acp::CopilotAcp, grok_acp::GrokAcp};
 use anyhow::{Result, bail};
 use std::sync::Arc;
 

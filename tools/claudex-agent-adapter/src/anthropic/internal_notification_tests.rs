@@ -178,8 +178,7 @@ fn drops_empty_user_arrays_and_keeps_contentless_user_messages() {
 #[test]
 fn preserves_teammate_wrappers_that_carry_a_subagent_prompt() {
     let mut request = request(
-        "<teammate-message>Use the assigned model and report the result.</teammate-message>"
-            .into(),
+        "<teammate-message>Use the assigned model and report the result.</teammate-message>".into(),
     );
 
     remove_from_transcript(&mut request);

@@ -4,34 +4,37 @@ use std::{
 };
 
 use crate::{anthropic::Bridge, discovery_model_id};
-use axum::{Json, Router, middleware, routing::{get, post}};
+use axum::{
+    Json, Router, middleware,
+    routing::{get, post},
+};
 use serde_json::json;
 
+#[cfg(test)]
+use crate::{subagent_policy, working_directory};
 #[cfg(test)]
 use axum::{
     body::{Body, Bytes},
     http::HeaderMap,
 };
-#[cfg(test)]
-use crate::{subagent_policy, working_directory};
 
 mod active;
 mod handover;
 mod health_route;
 mod logging;
+mod messages_handlers;
 mod retained_health;
 mod retained_proxy;
 mod web_search;
-mod messages_handlers;
-use messages_handlers::{
-    authorize, count_tokens_handler, messages, request_identity, CLAUDE_CODE_SESSION_ID_HEADER,
-};
+use active::{ActiveWorkState, track_active_http_request, track_active_provider_turn};
 #[cfg(test)]
 use messages_handlers::{
     CLAUDE_CODE_AGENT_ID_HEADER, CLAUDE_CODE_PARENT_AGENT_ID_HEADER, MAX_CLAUDE_CODE_ID_BYTES,
     decode_messages_request, request_working_directory,
 };
-use active::{ActiveWorkState, track_active_http_request, track_active_provider_turn};
+use messages_handlers::{
+    CLAUDE_CODE_SESSION_ID_HEADER, authorize, count_tokens_handler, messages, request_identity,
+};
 
 pub fn http_router(bridge: Arc<Bridge>, model: String, auth_token: Option<String>) -> Router {
     http_router_with_handover(bridge, model, auth_token, None)
@@ -141,7 +144,6 @@ fn protected_router(
         ))
         .route_layer(middleware::from_fn_with_state(auth_token, authorize))
 }
-
 
 #[cfg(test)]
 // Coverage gates measure production code; test implementations are excluded.

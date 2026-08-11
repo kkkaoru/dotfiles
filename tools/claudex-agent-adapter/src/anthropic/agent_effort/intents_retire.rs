@@ -29,9 +29,8 @@ impl AgentEffortIntents {
         let client_user_id = request.metadata.get("user_id").and_then(Value::as_str);
         let mut pending = self.pending.lock().expect("agent effort intents poisoned");
         remove_expired(&mut pending);
-        pending.retain(|intent| {
-            intents_helpers::retain_terminal_intent(intent, &ids, client_user_id)
-        });
+        pending
+            .retain(|intent| intents_helpers::retain_terminal_intent(intent, &ids, client_user_id));
         let snapshot = persistence_snapshot(&pending);
         drop(pending);
         self.persist(snapshot);

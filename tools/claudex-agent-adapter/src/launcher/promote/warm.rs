@@ -18,7 +18,9 @@ pub(in crate::launcher) fn retained_session_ids(health: &Health) -> Vec<String> 
         .collect()
 }
 
-pub(in crate::launcher) fn warm_agent_ages(health: &Health) -> std::collections::BTreeMap<String, u64> {
+pub(in crate::launcher) fn warm_agent_ages(
+    health: &Health,
+) -> std::collections::BTreeMap<String, u64> {
     let mut ages = std::collections::BTreeMap::new();
     for id in &health.active_subagent_agent_ids {
         if !id.is_empty() {

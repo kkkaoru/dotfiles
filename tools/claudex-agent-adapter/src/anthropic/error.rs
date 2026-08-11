@@ -6,8 +6,7 @@ pub(super) const NON_RETRYABLE_ERROR_TYPE: &str = "invalid_request_error";
 
 mod classify;
 use classify::{
-    is_provider_auth_error, is_provider_exhaustion_error,
-    is_terminal_provider_configuration_error,
+    is_provider_auth_error, is_provider_exhaustion_error, is_terminal_provider_configuration_error,
 };
 
 pub(super) fn error_type(error: &Error) -> &'static str {
