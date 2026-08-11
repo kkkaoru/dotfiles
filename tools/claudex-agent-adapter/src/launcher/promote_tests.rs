@@ -314,19 +314,39 @@ async fn release_idle_retained_keeps_generation_used_by_canonical_listener() {
 
 #[tokio::test]
 async fn release_idle_retained_releases_idle_active_and_unknown_generations() {
-    for (retained_pid, retained_body, expect_removed) in [
-        (78, health_body(Some(78), true), false),
-        (79, health_body(Some(79), false), true),
-        (80, health_body(Some(81), false), true),
+    for (retained_pid, sessions, retained_body, expect_removed) in [
+        (
+            78,
+            vec!["busy-session".to_owned()],
+            health_body(Some(78), true),
+            false,
+        ),
+        (
+            79,
+            vec!["idle-session".to_owned()],
+            health_body(Some(79), false),
+            true,
+        ),
+        (
+            80,
+            vec!["gone-session".to_owned()],
+            health_body(Some(81), false),
+            true,
+        ),
+        (81, Vec::new(), health_body(Some(81), true), true),
     ] {
         let root = tempfile::tempdir().expect("retained release fixture");
         let (server, task) =
             health_server(health_body(Some(999), false), retained_body).await;
         let config = config_at(server, root.path(), PathBuf::from("/tmp/adapter"));
         let path =
-            live::write_retained(&config, server, retained_pid, "old", Vec::new()).unwrap();
+            live::write_retained(&config, server, retained_pid, "old", sessions).unwrap();
         release_idle_retained(&reqwest::Client::new(), &config).await;
-        assert_eq!(path.exists(), !expect_removed);
+        assert_eq!(
+            path.exists(),
+            !expect_removed,
+            "pid={retained_pid} expect_removed={expect_removed}"
+        );
         task.abort();
     }
 }

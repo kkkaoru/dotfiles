@@ -148,6 +148,12 @@ fn publish_promoted(
     let _ = live::publish_canonical_rebind(config, config.options.listen, pid);
     if retained_sessions == 0 {
         release_previous(config, old_pid);
+        // Cutover wrote retained.json before we knew the generation was idle.
+        // Drop the empty snapshot so sticky middleware does not keep probing a
+        // released ephemeral listen after reboot / zero-session promotes.
+        if let Some((path, _)) = live::load_retained(config) {
+            let _ = live::clear_retained(&path);
+        }
         eprintln!(
             "claudex: promoted build {} to {} (previous pid {old_pid} released; launch TUI kept)",
             env!("CLAUDEX_BUILD_ID"),
@@ -184,11 +190,22 @@ pub(super) async fn release_idle_retained(client: &reqwest::Client, config: &Ser
     if live_pid == Some(generation.pid) {
         return;
     }
+    // No sticky sessions left → always drop the snapshot + daemon. An empty
+    // file after zero-session cutover previously left a dead listen forever.
+    if generation.session_ids.is_empty() {
+        release_previous(config, generation.pid);
+        let _ = live::clear_retained(&path);
+        eprintln!(
+            "claudex: released empty retained adapter pid {} on {}",
+            generation.pid, generation.listen
+        );
+        return;
+    }
     match health::fetch_health(client, &retained).await {
         Some(health) if health.pid == Some(generation.pid) && health.has_active_work() => {}
         Some(health) if health.pid == Some(generation.pid) => {
             release_previous(config, generation.pid);
-            let _ = std::fs::remove_file(&path);
+            let _ = live::clear_retained(&path);
             eprintln!(
                 "claudex: released idle retained adapter pid {} on {}",
                 generation.pid, generation.listen
@@ -196,7 +213,7 @@ pub(super) async fn release_idle_retained(client: &reqwest::Client, config: &Ser
         }
         _ => {
             release_previous(config, generation.pid);
-            let _ = std::fs::remove_file(&path);
+            let _ = live::clear_retained(&path);
         }
     }
 }
