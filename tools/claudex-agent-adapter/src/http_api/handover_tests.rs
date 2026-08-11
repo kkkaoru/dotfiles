@@ -49,6 +49,7 @@ fn retained_with_agents(
             build_id: "old".to_owned(),
             session_ids: sessions.iter().map(|id| (*id).to_owned()).collect(),
             agent_ids: agents.iter().map(|id| (*id).to_owned()).collect(),
+            agent_ages: std::collections::BTreeMap::new(),
         },
     )
 }

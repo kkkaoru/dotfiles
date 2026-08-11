@@ -80,6 +80,7 @@ pub(super) fn warm_agent_ages(health: &Health) -> std::collections::BTreeMap<Str
     ages
 }
 
+#[cfg(test)]
 pub(super) fn warm_agent_ids(health: &Health) -> Vec<String> {
     warm_agent_ages(health).into_keys().collect()
 }

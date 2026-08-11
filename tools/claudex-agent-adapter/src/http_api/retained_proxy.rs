@@ -13,7 +13,7 @@ use axum::{
 };
 use serde_json::json;
 
-use super::retained_health::seed_recent_agents;
+use super::retained_health::seed_recent_from_snapshot;
 use crate::launcher::{
     RetainedGeneration, clear_retained, forget_retained_session, read_retained,
     terminate_retained_serve,
@@ -59,7 +59,11 @@ impl RetainedProxy {
             pid: RwLock::new(generation.pid),
             sessions: RwLock::new(generation.session_ids.into_iter().collect()),
             last_work_at: RwLock::new(None),
-            recent_agents: RwLock::new(seed_recent_agents(&generation.agent_ids, now)),
+            recent_agents: RwLock::new(seed_recent_from_snapshot(
+                &generation.agent_ids,
+                &generation.agent_ages,
+                now,
+            )),
             client: proxy_http_client(),
         }
     }
@@ -97,6 +101,8 @@ impl RetainedProxy {
             .read()
             .ok()
             .is_none_or(|current| *current != generation.pid);
+        let agent_ids = generation.agent_ids;
+        let agent_ages = generation.agent_ages;
         if let Ok(mut listen) = self.listen.write() {
             *listen = generation.listen;
         }
@@ -108,14 +114,18 @@ impl RetainedProxy {
         }
         // Do not carry sticky grace / agent memory across retained generations.
         if pid_changed {
-            self.replace_grace_memory_for_generation(&generation.agent_ids);
+            self.replace_grace_memory_for_generation(&agent_ids, &agent_ages);
         }
     }
 
-    fn replace_grace_memory_for_generation(&self, agent_ids: &[String]) {
+    fn replace_grace_memory_for_generation(
+        &self,
+        agent_ids: &[String],
+        agent_ages: &std::collections::BTreeMap<String, u64>,
+    ) {
         self.clear_grace_memory();
         if let Ok(mut recent_agents) = self.recent_agents.write() {
-            *recent_agents = seed_recent_agents(agent_ids, Instant::now());
+            *recent_agents = seed_recent_from_snapshot(agent_ids, agent_ages, Instant::now());
         }
     }
 

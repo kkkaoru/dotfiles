@@ -160,6 +160,35 @@ pub(super) fn seed_recent_agents(agent_ids: &[String], now: Instant) -> HashMap<
         .collect()
 }
 
+/// Prefer published ages so promote does not reset remaining sticky grace to
+/// a full window. Legacy snapshots without ages fall back to `agent_ids` at now.
+pub(super) fn seed_recent_from_snapshot(
+    agent_ids: &[String],
+    agent_ages: &BTreeMap<String, u64>,
+    now: Instant,
+) -> HashMap<String, Instant> {
+    if agent_ages.is_empty() {
+        return seed_recent_agents(agent_ids, now);
+    }
+    seed_recent_agents_with_ages(agent_ages, now)
+}
+
+pub(super) fn seed_recent_agents_with_ages(
+    agent_ages: &BTreeMap<String, u64>,
+    now: Instant,
+) -> HashMap<String, Instant> {
+    agent_ages
+        .iter()
+        .filter(|(id, _)| !id.is_empty())
+        .map(|(id, age)| {
+            let seen_at = now
+                .checked_sub(Duration::from_secs(*age))
+                .unwrap_or(now);
+            (id.clone(), seen_at)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
