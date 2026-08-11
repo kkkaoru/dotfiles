@@ -5,16 +5,11 @@ use std::{sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
 use axum::body::Bytes;
-#[cfg(test)]
-use serde_json::json;
 use tokio::{
     io::{AsyncBufReadExt, BufReader},
     process::Child,
     sync::mpsc,
 };
-
-#[cfg(test)]
-use tokio::io::AsyncBufRead;
 
 use super::consume_fanout::{StreamIteration, consume_stream_iteration};
 #[cfg(test)]
@@ -128,82 +123,11 @@ pub(super) async fn consume_subscription_stream_with_options(
 }
 
 #[cfg(test)]
-impl SubscriptionStream {
-    pub(crate) async fn consume_reader_for_test<R>(
-        reader: R,
-        sender: &mpsc::Sender<Result<Bytes, Infallible>>,
-        options: &SubscriptionOptions,
-        model: &str,
-    ) -> Result<()>
-    where
-        R: AsyncBufRead + Unpin,
-    {
-        consume_test_reader(reader, sender, options, model).await
-    }
-}
-
-#[cfg(test)]
-async fn consume_test_reader<R>(
-    reader: R,
-    sender: &mpsc::Sender<Result<Bytes, Infallible>>,
-    options: &SubscriptionOptions,
-    model: &str,
-) -> Result<()>
-where
-    R: AsyncBufRead + Unpin,
-{
-    let mut lines = reader.lines();
-    let mut stream = SubscriptionStream::from_options(options);
-    stream
-        .start_subagent_activity(sender, options, model)
-        .await?;
-    let mut pending_result = None;
-    let mut activity_deadline = Box::pin(tokio::time::sleep(options.initial_activity_delay));
-    loop {
-        let iteration = consume_stream_iteration(
-            &mut lines,
-            sender,
-            model,
-            &mut stream,
-            &mut pending_result,
-            &mut activity_deadline,
-            options.activity_keepalive_interval,
-        )
-        .await?;
-        match iteration {
-            StreamIteration::Continue => {}
-            StreamIteration::End => break,
-            StreamIteration::SenderClosed => return Ok(()),
-            StreamIteration::EndEarly => {
-                finish_end_early(sender, &mut stream).await?;
-                return Ok(());
-            }
-        }
-    }
-    stream.activity.close(sender).await?;
-    let result = pending_result.context("test reader ended without a result")?;
-    stream.finish(sender, &result).await
-}
-
-#[cfg(test)]
-async fn finish_end_early(
-    sender: &mpsc::Sender<Result<Bytes, Infallible>>,
-    stream: &mut SubscriptionStream,
-) -> Result<()> {
-    if stream.blocked_subagent {
-        anyhow::bail!("test reader emitted a blocked SubAgent");
-    }
-    stream.activity.close(sender).await?;
-    stream
-        .finish(
-            sender,
-            &json!({"type":"result","subtype":"success","is_error":false,"result":""}),
-        )
-        .await
-}
+#[path = "consume_test.rs"]
+mod test_support;
 
 impl SubscriptionStream {
-    fn from_options(options: &SubscriptionOptions) -> Self {
+    pub(super) fn from_options(options: &SubscriptionOptions) -> Self {
         Self {
             text_started: false,
             text_closed: false,

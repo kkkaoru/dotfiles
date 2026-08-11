@@ -1,9 +1,10 @@
 use std::{
     collections::VecDeque,
-    path::PathBuf,
     sync::Mutex,
     time::{SystemTime, UNIX_EPOCH},
 };
+#[cfg(test)]
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -16,10 +17,7 @@ pub(super) const MAX_ENTRIES: usize = 1_024;
 pub(super) const MAX_AGE_SECONDS: u64 = 2 * 60 * 60;
 
 mod persist;
-use persist::{
-    StoreLock, bound_entries, create_private_directory, load_entries, load_entries_at, merge_entry,
-    parent_directory, retain_fresh, write_entries,
-};
+use persist::{bound_entries, retain_fresh};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub(super) struct SchemaIdentity {
@@ -166,48 +164,8 @@ impl ToolSchemaCache {
     }
 }
 
-struct ToolSchemaStore {
-    path: PathBuf,
-}
-
-impl ToolSchemaStore {
-    fn for_current_user() -> Option<Self> {
-        std::env::var_os("HOME").map(|home| Self {
-            path: PathBuf::from(home)
-                .join(".cache/claudex")
-                .join(CACHE_FILE_NAME),
-        })
-    }
-
-    #[cfg(test)]
-    fn at(path: PathBuf) -> Self {
-        Self { path }
-    }
-
-    fn load(&self) -> VecDeque<StoredSchema> {
-        load_entries(&self.path)
-    }
-
-    fn save(&self, current: StoredSchema, now: u64) -> StoredSchema {
-        let fallback = current.clone();
-        let result = create_private_directory(parent_directory(&self.path)).and_then(|()| {
-            let _lock = StoreLock::acquire(&self.path)?;
-            let mut merged = load_entries_at(&self.path, now);
-            let persisted = merge_entry(&mut merged, current);
-            retain_fresh(&mut merged, now);
-            bound_entries(&mut merged);
-            write_entries(&self.path, merged)?;
-            Ok(persisted)
-        });
-        match result {
-            Ok(persisted) => persisted,
-            Err(error) => {
-                tracing::warn!(%error, path = %self.path.display(), "could not persist Claude Code tool schemas");
-                fallback
-            }
-        }
-    }
-}
+mod store;
+use store::ToolSchemaStore;
 
 pub(super) fn schema_sort_key(tools: &[Value]) -> Vec<u8> {
     serde_json::to_vec(tools).unwrap_or_default()
