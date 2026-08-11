@@ -335,6 +335,7 @@ async fn release_idle_retained_releases_idle_active_and_unknown_generations() {
 #[tokio::test]
 async fn try_canonical_fails_closed_when_warm_start_never_becomes_ready() {
     use std::os::unix::fs::PermissionsExt;
+    use std::time::Instant;
     let root = tempfile::tempdir().expect("warm-start fixture");
     let executable = root.path().join("daemon.sh");
     std::fs::write(&executable, "#!/bin/sh\nexit 0\n").expect("daemon script");
@@ -346,12 +347,18 @@ async fn try_canonical_fails_closed_when_warm_start_never_becomes_ready() {
     let listen = listener.local_addr().expect("canonical address");
     drop(listener);
     let config = config_at(listen, root.path(), executable);
+    let started = Instant::now();
     let error = try_canonical(&reqwest::Client::new(), &config, &health(true, Some(12)))
         .await
         .expect_err("warm-start must fail closed");
     assert!(
         error.to_string().contains("wait for warm-start"),
         "{error:#}"
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(500),
+        "dead warm-start child must fail fast, not wait the full timeout ({:?})",
+        started.elapsed()
     );
 }
 

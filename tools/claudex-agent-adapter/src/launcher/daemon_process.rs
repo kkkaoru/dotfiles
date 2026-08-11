@@ -20,6 +20,20 @@ pub(super) fn matches(pid: u32, executable: &Path) -> bool {
     )
 }
 
+/// Whether `pid` still exists (and is not a zombie). Used to fail warm-start
+/// waits early when the child exits before `/health` can answer.
+pub(super) fn is_alive(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        process_is_alive(pid)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        true
+    }
+}
+
 fn fields_match(program: Option<String>, command: Option<String>, executable: &Path) -> bool {
     let Some(program) = program else {
         return false;

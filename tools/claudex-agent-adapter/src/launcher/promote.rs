@@ -227,6 +227,11 @@ async fn wait_until_current_build(
         if canonical_serves_current_build(client, config, expected_pid).await {
             return true;
         }
+        // Spawn-path / preflight crashes exit before /health is up. Do not burn
+        // the full warm-start budget polling a dead pid.
+        if expected_pid.is_some_and(|pid| !daemon_process::is_alive(pid)) {
+            return false;
+        }
         if Instant::now() >= deadline {
             return false;
         }
