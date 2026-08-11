@@ -593,26 +593,26 @@ async fn new_subagent_in_retained_parent_session_runs_live_without_unsticking_ol
     )
     .expect("write retained");
     let proxy = retained(&path, &upstream.to_string(), &["parent"]);
+    let sticky_old = proxy
+        .should_proxy_session("parent", Some("agent-old"))
+        .await;
+    assert!(sticky_old, "in-flight retained SubAgent must stay sticky");
+    let sticky_new = proxy
+        .should_proxy_session("parent", Some("agent-new"))
+        .await;
     assert!(
-        proxy
-            .should_proxy_session("parent", Some("agent-old"))
-            .await,
-        "in-flight retained SubAgent must stay sticky"
-    );
-    assert!(
-        !proxy
-            .should_proxy_session("parent", Some("agent-new"))
-            .await,
+        !sticky_new,
         "newly launched SubAgent id must run on the live binary"
     );
     assert!(
         proxy.owns("parent"),
         "rejecting a new agent id must not forget the parent session"
     );
+    let sticky_old_again = proxy
+        .should_proxy_session("parent", Some("agent-old"))
+        .await;
     assert!(
-        proxy
-            .should_proxy_session("parent", Some("agent-old"))
-            .await,
+        sticky_old_again,
         "old SubAgent must remain sticky after a new peer launched"
     );
 }
@@ -630,10 +630,11 @@ async fn should_proxy_falls_back_to_session_scope_when_agent_ids_field_absent() 
     )
     .expect("write retained");
     let proxy = retained(&path, &upstream.to_string(), &["parent"]);
+    let sticky_new = proxy
+        .should_proxy_session("parent", Some("agent-new"))
+        .await;
     assert!(
-        proxy
-            .should_proxy_session("parent", Some("agent-new"))
-            .await,
+        sticky_new,
         "pre-agent-id retained health must keep conservative session sticky"
     );
 }
