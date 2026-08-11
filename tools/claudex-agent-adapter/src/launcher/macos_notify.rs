@@ -10,13 +10,11 @@ use serde::{Deserialize, Serialize};
 
 use super::{ServiceConfig, launcher_lock, launcher_logs};
 
+/// One Complete banner per build_id. Waiting/Live stay silent (see should_emit).
 const TITLE: &str = "claudex";
 const WAITING_SUBTITLE: &str = "ビルド完了・待機中";
 const LIVE_SUBTITLE: &str = "live 更新完了";
 const COMPLETE_SUBTITLE: &str = "差し替え完了";
-/// Rapid `cargo install` / hot-swap bursts mint a new build_id each time.
-/// Keep macOS alerts quiet until this gap of silence across all listen ports.
-const RAPID_REBUILD_COOLDOWN_SECS: u64 = 5 * 60;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -152,6 +150,7 @@ pub(super) fn should_emit(event: &Event, last: Option<&LastNotify>) -> bool {
 }
 
 pub(super) fn should_emit_at(event: &Event, last: Option<&LastNotify>, now_unix: u64) -> bool {
+    let _ = now_unix;
     // Waiting/Live were notifying alongside Complete for the same build_id
     // (three banners per install). Only swap-complete is user-facing now.
     if event.kind() != NotifyKind::Complete {
@@ -165,11 +164,8 @@ pub(super) fn should_emit_at(event: &Event, last: Option<&LastNotify>, now_unix:
         // still allow the eventual Complete once.
         return last.kind != NotifyKind::Complete;
     }
-    if last.emitted_unix > 0
-        && now_unix.saturating_sub(last.emitted_unix) < RAPID_REBUILD_COOLDOWN_SECS
-    {
-        return false;
-    }
+    // A newer build always gets its own Complete. Loop/hot-swap bursts used to
+    // share a 5-minute quiet window and dropped real "差し替え完了" banners.
     true
 }
 

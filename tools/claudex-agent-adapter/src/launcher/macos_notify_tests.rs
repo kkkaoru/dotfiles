@@ -127,7 +127,7 @@ fn only_swap_complete_notifies_and_dedupes_same_build() {
 }
 
 #[test]
-fn rapid_rebuilds_on_the_same_port_are_suppressed_until_cooldown() {
+fn newer_build_complete_notifies_even_during_rapid_rebuilds() {
     let mut last = LastNotify::from(&complete("abc"));
     last.emitted_unix = 1_700_000_000;
     assert!(
@@ -135,24 +135,12 @@ fn rapid_rebuilds_on_the_same_port_are_suppressed_until_cooldown() {
         "waiting never notifies"
     );
     assert!(
-        !should_emit_at(&complete("def"), Some(&last), last.emitted_unix + 60),
-        "a newer build within 5 minutes must not spam swap complete"
+        should_emit_at(&complete("def"), Some(&last), last.emitted_unix + 60),
+        "a newer build complete must notify even seconds after the previous swap"
     );
     assert!(
-        !should_emit_at(
-            &waiting("def", 2),
-            Some(&last),
-            last.emitted_unix + RAPID_REBUILD_COOLDOWN_SECS + 1
-        ),
-        "waiting stays silent even after the quiet gap"
-    );
-    assert!(
-        should_emit_at(
-            &complete("def"),
-            Some(&last),
-            last.emitted_unix + RAPID_REBUILD_COOLDOWN_SECS + 1
-        ),
-        "past the quiet gap a newer build complete may notify again"
+        !should_emit_at(&waiting("def", 2), Some(&last), last.emitted_unix + 10_000),
+        "waiting stays silent regardless of elapsed time"
     );
 }
 
@@ -277,7 +265,7 @@ fn post_dedupes_same_build_across_different_listen_ports() {
 }
 
 #[test]
-fn post_suppresses_rapid_rebuild_complete_and_slides_cooldown() {
+fn post_emits_complete_for_each_distinct_build() {
     let root = tempfile::tempdir().expect("notify cache");
     let listen = listen();
     let events = TestEvents::capture();
@@ -286,12 +274,11 @@ fn post_suppresses_rapid_rebuild_complete_and_slides_cooldown() {
     post(root.path(), &listen, complete("ghi"));
     assert_eq!(
         events.take(),
-        vec![complete("abc")],
-        "rapid successive builds must notify swap complete only once"
+        vec![complete("abc"), complete("def"), complete("ghi")],
+        "each distinct build_id gets its own swap-complete banner"
     );
     let last = read_last(root.path(), &listen).expect("dedup state");
-    assert_eq!(last.build_id, "abc");
-    assert!(last.emitted_unix > 0, "suppressed attempts must slide cooldown");
+    assert_eq!(last.build_id, "ghi");
 }
 
 #[test]
