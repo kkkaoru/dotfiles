@@ -22,8 +22,6 @@ use records::{
     LaunchRecord, already_has_resume, apply_transcript, find_reusable_launch, launch_model,
     reusable_status, scope_is_occupied, summarize_scope,
 };
-#[cfg(test)]
-pub(super) use records::launch_records;
 
 pub(crate) const MAX_SUBAGENTS_PER_SESSION_ENV: &str = "CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION";
 pub(crate) const DEFAULT_MAX_SUBAGENTS_PER_SESSION: usize = 1_024;
