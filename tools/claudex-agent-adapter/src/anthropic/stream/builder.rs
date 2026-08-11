@@ -1,4 +1,4 @@
-use std::{collections::HashSet, ops::ControlFlow, time::{Duration, Instant}};
+use std::{collections::HashSet, ops::ControlFlow, time::Instant};
 
 use anyhow::Result;
 use serde_json::{Value, json};
@@ -111,7 +111,7 @@ impl SegmentBuilder {
     }
 
     #[cfg(test)]
-    pub(in crate::anthropic::stream) fn age_turn_for_test(&mut self, age: Duration) {
+    pub(in crate::anthropic::stream) fn age_turn_for_test(&mut self, age: std::time::Duration) {
         self.turn_started_at = Instant::now() - age;
     }
 

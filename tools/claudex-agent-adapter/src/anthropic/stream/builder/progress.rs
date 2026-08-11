@@ -292,6 +292,18 @@ impl SegmentBuilder {
             .provider_tool_calls
             .last()
             .map(|(_, title)| compact_keepalive_title(title));
+        // Stream-only ZWSP keeps the decoded-event watchdog fed even when the
+        // tip text would otherwise be unchanged for a fraction of a second.
+        if self.thinking.is_open() {
+            self.thinking
+                .elapsed_keepalive(
+                    &self.blocks,
+                    self.turn_started_at.elapsed(),
+                    last_tool.as_deref(),
+                    stream,
+                )
+                .await?;
+        }
         // Advancing clock keeps progress_status_keep_open from deduping the tip
         // into stream-only ZWSP. CC 2.1 otherwise freezes on the first ▶ line
         // for the whole Bash/CoT silence window.
