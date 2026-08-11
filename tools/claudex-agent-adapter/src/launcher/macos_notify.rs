@@ -264,33 +264,19 @@ pub(super) fn post_in_process(cache: &Path, listen: &SocketAddr, event: Event) {
     let now = now_unix();
     let previous = read_last(cache, listen);
     if !should_emit_at(&event, previous.as_ref(), now) {
-        touch_dedup_state(cache, listen, previous, now);
+        // Do not slide emitted_unix on suppress: that extended quiet windows and
+        // also made it look like a second Complete had been recorded.
         return;
     }
     record_event(&event);
     let mut last = LastNotify::from(&event);
     last.emitted_unix = now;
     if let Err(error) = write_last(cache, listen, &last) {
-        eprintln!("claudex: macOS notification dedup state failed ({error:#})");
+        eprintln!("claudex: macOS notification dedupe state failed ({error:#})");
     }
     let notification = notification(&event);
     if let Err(error) = deliver(&notification) {
         eprintln!("claudex: macOS notification failed ({error:#})");
-    }
-}
-
-fn touch_dedup_state(
-    cache: &Path,
-    listen: &SocketAddr,
-    previous: Option<LastNotify>,
-    now: u64,
-) {
-    let Some(mut last) = previous else {
-        return;
-    };
-    last.emitted_unix = now;
-    if let Err(error) = write_last(cache, listen, &last) {
-        eprintln!("claudex: macOS notification dedup state failed ({error:#})");
     }
 }
 

@@ -14,6 +14,7 @@ use anyhow::{Context, Result, bail};
 use uuid::Uuid;
 
 mod claude_process;
+mod cli_swap;
 mod daemon_arguments;
 mod daemon_process;
 mod daemon_start;
@@ -178,6 +179,8 @@ pub async fn ensure_running(options: AdapterOptions) -> Result<String> {
     let config = ServiceConfig::new(options)?;
     ensure::run(&config, ensure::Mode::Ensure).await
 }
+
+pub use cli_swap::{ensure_running_cli, hot_swap_cli};
 
 /// Run macOS notify dedupe/delivery in the on-disk install binary.
 pub fn run_internal_notify(arguments: Vec<OsString>) -> Result<()> {

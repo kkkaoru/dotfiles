@@ -12,11 +12,42 @@ use super::macos_notify::{Event, NotifyKind, post_in_process};
 /// `__internal-notify` itself to avoid promote + idle-replace double alerts.
 pub(crate) const MACOS_NOTIFY_ENV: &str = "CLAUDEX_MACOS_NOTIFY";
 
+/// Whether interactive CLI `ensure` / `hot-swap` should show a swap banner.
+///
+/// Unset defaults to on for CLI wrappers. Explicit `0` (after-install) stays off
+/// so the wrapper can post exactly one `__internal-notify` itself.
+pub(crate) fn cli_wants_swap_banner() -> bool {
+    match std::env::var(MACOS_NOTIFY_ENV) {
+        Err(_) => true,
+        Ok(value) => parse_notify_env(Some(value.as_str())),
+    }
+}
+
+/// Silence mid-replace banners so promote cannot pair with a post-swap notify.
+pub(crate) fn silence_swap_banners_for_replace(banner: bool) {
+    if !banner {
+        return;
+    }
+    // CLI entry is single-threaded before ensure/hot-swap work begins.
+    unsafe {
+        std::env::set_var(MACOS_NOTIFY_ENV, "0");
+    }
+}
+
+/// Enable banners and emit exactly one Complete for the current build_id.
+/// Same build_id is deduped by [`super::macos_notify::should_emit_at`].
+pub(crate) fn emit_cli_swap_complete_banner(config: &super::ServiceConfig) {
+    unsafe {
+        std::env::set_var(MACOS_NOTIFY_ENV, "1");
+    }
+    super::macos_notify::swap_complete(config);
+}
+
 /// Enable swap-complete banners for interactive CLI ensure/hot-swap.
 ///
-/// No-op when `CLAUDEX_MACOS_NOTIFY` is already set (including explicit `0`
-/// from after-install). Idle waiters must not call this: they inherit a
-/// cleared env and should stay silent until install posts one banner.
+/// Prefer [`cli_wants_swap_banner`] + [`silence_swap_banners_for_replace`] +
+/// [`emit_cli_swap_complete_banner`] so replace stays silent until one final
+/// Complete. Kept for unit coverage of the unset→1 / explicit-0 contract.
 pub(crate) fn opt_in_cli_swap_notify() {
     if std::env::var_os(MACOS_NOTIFY_ENV).is_some() {
         return;

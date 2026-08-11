@@ -6,10 +6,14 @@ use std::{
 
 use super::{
     DelegateForceGuard, MACOS_NOTIFY_ENV, NotifyForceGuard, delegate_complete_notify,
-    interpret_delegate_status, notifications_enabled, opt_in_cli_swap_notify, parse_notify_env,
+    cli_wants_swap_banner, emit_cli_swap_complete_banner, interpret_delegate_status,
+    notifications_enabled, opt_in_cli_swap_notify, parse_notify_env, silence_swap_banners_for_replace,
     post, run_internal,
 };
-use crate::launcher::{installed_adapter, launcher_logs, macos_notify::Event};
+use crate::launcher::{
+    installed_adapter, launcher_logs,
+    macos_notify::{Event, TestEvents},
+};
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 
@@ -63,6 +67,10 @@ fn opt_in_cli_swap_notify_defaults_on_only_when_unset() {
     unsafe {
         std::env::remove_var(MACOS_NOTIFY_ENV);
     }
+    assert!(
+        cli_wants_swap_banner(),
+        "unset CLAUDEX_MACOS_NOTIFY must default CLI banners on"
+    );
     opt_in_cli_swap_notify();
     assert_eq!(
         std::env::var_os(MACOS_NOTIFY_ENV).as_deref(),
@@ -73,6 +81,10 @@ fn opt_in_cli_swap_notify_defaults_on_only_when_unset() {
     unsafe {
         std::env::set_var(MACOS_NOTIFY_ENV, "0");
     }
+    assert!(
+        !cli_wants_swap_banner(),
+        "after-install CLAUDEX_MACOS_NOTIFY=0 must keep banners off"
+    );
     opt_in_cli_swap_notify();
     assert_eq!(
         std::env::var_os(MACOS_NOTIFY_ENV).as_deref(),
@@ -80,6 +92,59 @@ fn opt_in_cli_swap_notify_defaults_on_only_when_unset() {
         "after-install CLAUDEX_MACOS_NOTIFY=0 must not be overridden"
     );
 
+    match previous {
+        Some(value) => unsafe {
+            std::env::set_var(MACOS_NOTIFY_ENV, value);
+        },
+        None => unsafe {
+            std::env::remove_var(MACOS_NOTIFY_ENV);
+        },
+    }
+}
+
+#[test]
+fn emit_cli_swap_complete_banner_dedupes_same_build() {
+    let _lock = env_lock();
+    let previous = std::env::var_os(MACOS_NOTIFY_ENV);
+    let root = tempfile::tempdir().expect("cli banner fixture");
+    let listen: SocketAddr = "127.0.0.1:8318".parse().expect("listen");
+    let config = super::super::ServiceConfig {
+        options: crate::launcher::AdapterOptions {
+            routes: Vec::new(),
+            listen,
+            model: "test-model".to_owned(),
+            subscription_max_processes: 20,
+            subscription_timeout_minutes: 120,
+            subagent_hard_timeout_seconds: None,
+            model_catalog: crate::provider_config::ModelCatalog::default(),
+        },
+        token: "claudex-local".to_owned(),
+        codex_config_fingerprint: "fp".to_owned(),
+        service_config_fingerprint: "svc".to_owned(),
+        executable: std::path::PathBuf::from("/tmp/claudex-agent-adapter"),
+        log_path: root.path().join("adapter.log"),
+        lock_path: root.path().join("adapter.lock"),
+    };
+    let events = TestEvents::capture();
+    unsafe {
+        std::env::set_var(MACOS_NOTIFY_ENV, "0");
+    }
+    silence_swap_banners_for_replace(true);
+    assert_eq!(
+        std::env::var_os(MACOS_NOTIFY_ENV).as_deref(),
+        Some(std::ffi::OsStr::new("0")),
+        "replace phase must stay silent"
+    );
+    emit_cli_swap_complete_banner(&config);
+    emit_cli_swap_complete_banner(&config);
+    assert_eq!(
+        events.take(),
+        vec![Event::SwapComplete {
+            listen: listen.to_string(),
+            build_id: env!("CLAUDEX_BUILD_ID").to_owned(),
+        }],
+        "CLI must emit exactly one Complete per build_id"
+    );
     match previous {
         Some(value) => unsafe {
             std::env::set_var(MACOS_NOTIFY_ENV, value);
