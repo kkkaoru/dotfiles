@@ -2,7 +2,7 @@
 
 use axum::body::Bytes;
 use serde_json::{Value, json};
-use std::convert::Infallible;
+use std::{convert::Infallible, time::Duration};
 use tokio::sync::mpsc;
 
 use super::*;
@@ -763,6 +763,7 @@ async fn subagent_silence_keepalive_paints_elapsed_progress_not_blank_viewer() {
         .activity_keepalive(Some(&sender))
         .await
         .expect("first elapsed");
+    builder.age_turn_for_test(Duration::from_secs(8));
     builder
         .activity_keepalive(Some(&sender))
         .await
@@ -772,6 +773,12 @@ async fn subagent_silence_keepalive_paints_elapsed_progress_not_blank_viewer() {
     assert!(
         live.visible_thinking.contains('▶'),
         "long tool silence must keep the open ▶ thought live: {:?}",
+        live.visible_thinking
+    );
+    assert!(
+        live.visible_thinking.contains('·')
+            && live.visible_thinking.contains('s'),
+        "keepalive must advance a visible elapsed clock: {:?}",
         live.visible_thinking
     );
     let tip = live
@@ -784,8 +791,8 @@ async fn subagent_silence_keepalive_paints_elapsed_progress_not_blank_viewer() {
             .lines()
             .rev()
             .find(|line| !line.trim().is_empty())
-            .is_some_and(|line| line.contains('▶')),
-        "keepalive must re-tip ▶ so CC does not flash blank Perambulating: {tip:?}"
+            .is_some_and(|line| line.contains('▶') && line.contains('·')),
+        "keepalive must re-tip ▶ with elapsed clock so CC does not flash blank Perambulating: {tip:?}"
     );
     assert!(
         !live.visible_thinking.contains("still working")
@@ -813,8 +820,9 @@ async fn subagent_keepalive_without_tools_paints_thinking_tip() {
         .expect("silent keepalive");
     live.ingest_available(&mut receiver);
     assert!(
-        live.visible_thinking.contains("▶ Thinking"),
-        "tool-less silence must reopen with Thinking tip, not blank ZWSP: {:?}",
+        live.visible_thinking.contains("▶ Thinking")
+            && live.visible_thinking.contains('·'),
+        "tool-less silence must reopen with Thinking tip + clock, not blank ZWSP: {:?}",
         live.visible_thinking
     );
     drop(sender);

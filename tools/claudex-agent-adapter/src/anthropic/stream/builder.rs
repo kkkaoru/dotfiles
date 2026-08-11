@@ -1,4 +1,4 @@
-use std::{collections::HashSet, ops::ControlFlow, time::Instant};
+use std::{collections::HashSet, ops::ControlFlow, time::{Duration, Instant}};
 
 use anyhow::Result;
 use serde_json::{Value, json};
@@ -108,6 +108,11 @@ impl SegmentBuilder {
     pub(super) fn with_command_code_progress(mut self, enabled: bool) -> Self {
         self.paint_command_code_progress = enabled;
         self
+    }
+
+    #[cfg(test)]
+    pub(in crate::anthropic::stream) fn age_turn_for_test(&mut self, age: Duration) {
+        self.turn_started_at = Instant::now() - age;
     }
 
     pub(super) fn for_turn(input_tokens: u64, is_subagent: bool, model: &str) -> Self {

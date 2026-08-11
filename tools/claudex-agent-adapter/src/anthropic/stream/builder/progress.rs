@@ -292,27 +292,10 @@ impl SegmentBuilder {
             .provider_tool_calls
             .last()
             .map(|(_, title)| compact_keepalive_title(title));
-        if !self.thinking.is_open() {
-            let resume = keepalive_resume_chrome(last_tool.as_deref());
-            self.thinking
-                .progress_status_keep_open(&mut self.blocks, &resume, stream)
-                .await?;
-        }
-        self.thinking
-            .elapsed_keepalive(
-                &self.blocks,
-                self.turn_started_at.elapsed(),
-                last_tool.as_deref(),
-                stream,
-            )
-            .await?;
-        // After ZWSP, re-tip the open thought so CC 2.1's collapsed SubAgent
-        // view keeps showing ▶ Read/Bash / Thinking instead of blank
-        // "Perambulating…" between provider events.
-        let tip = match last_tool.filter(|title| !title.is_empty()) {
-            Some(title) => format!("▶ {title}\n"),
-            None => "▶ Thinking…\n".to_owned(),
-        };
+        // Advancing clock keeps progress_status_keep_open from deduping the tip
+        // into stream-only ZWSP. CC 2.1 otherwise freezes on the first ▶ line
+        // for the whole Bash/CoT silence window.
+        let tip = keepalive_elapsed_chrome(last_tool.as_deref(), self.turn_started_at.elapsed());
         self.thinking
             .progress_status_keep_open(&mut self.blocks, &tip, stream)
             .await?;
@@ -372,9 +355,19 @@ fn compact_keepalive_title(title: &str) -> String {
     }
 }
 
-fn keepalive_resume_chrome(last_tool: Option<&str>) -> String {
-    last_tool
-        .filter(|title| !title.is_empty())
-        .map(|title| format!("▶ {title}\n"))
-        .unwrap_or_else(|| "▶ Thinking…\n".to_owned())
+fn keepalive_elapsed_chrome(last_tool: Option<&str>, elapsed: std::time::Duration) -> String {
+    let clock = format_keepalive_clock(elapsed);
+    match last_tool.filter(|title| !title.is_empty()) {
+        Some(title) => format!("▶ {title} · {clock}\n"),
+        None => format!("▶ Thinking… · {clock}\n"),
+    }
+}
+
+fn format_keepalive_clock(elapsed: std::time::Duration) -> String {
+    let secs = elapsed.as_secs();
+    if secs >= 60 {
+        format!("{}m{:02}s", secs / 60, secs % 60)
+    } else {
+        format!("{secs}s")
+    }
 }
