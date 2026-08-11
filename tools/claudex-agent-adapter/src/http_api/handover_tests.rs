@@ -21,6 +21,16 @@ use std::{
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
+async fn hold_accepted_connections(silent: TcpListener) {
+    while let Ok((stream, _)) = silent.accept().await {
+        // Hold the socket open until the client times out.
+        tokio::spawn(async move {
+            let _ = stream;
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        });
+    }
+}
+
 fn retained(path: &std::path::Path, listen: &str, sessions: &[&str]) -> RetainedProxy {
     RetainedProxy::from_path(
         path.to_path_buf(),
@@ -387,15 +397,7 @@ async fn proxy_middleware_keeps_retained_when_health_probe_times_out() {
         .await
         .expect("silent retained listener");
     let silent_addr = silent.local_addr().expect("silent retained address");
-    tokio::spawn(async move {
-        while let Ok((stream, _)) = silent.accept().await {
-            // Hold the socket open until the client times out.
-            tokio::spawn(async move {
-                let _ = stream;
-                tokio::time::sleep(Duration::from_secs(2)).await;
-            });
-        }
-    });
+    tokio::spawn(hold_accepted_connections(silent));
     let root = tempfile::tempdir().expect("slow retained fixture");
     let path = root.path().join("retained.json");
     std::fs::write(
