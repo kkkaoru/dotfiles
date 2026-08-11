@@ -1,8 +1,8 @@
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{HashMap, HashSet},
     path::PathBuf,
     sync::RwLock,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use axum::{
@@ -12,9 +12,11 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use serde::Deserialize;
 use serde_json::json;
 
+use super::retained_health::{
+    RetainedHealthProbe, agent_still_on_retained, note_retained_activity, within_sticky_grace,
+};
 use crate::launcher::{
     RetainedGeneration, clear_retained, forget_retained_session, read_retained,
     terminate_retained_serve,
@@ -25,66 +27,9 @@ pub(super) struct RetainedProxy {
     listen: RwLock<std::net::SocketAddr>,
     pid: RwLock<u32>,
     sessions: RwLock<HashSet<String>>,
+    last_work_at: RwLock<Option<Instant>>,
+    recent_agents: RwLock<HashMap<String, Instant>>,
     client: reqwest::Client,
-}
-
-/// Minimal `/health` view used to decide whether sticky proxying is still safe.
-#[derive(Debug, Deserialize)]
-struct RetainedHealthProbe {
-    #[serde(default)]
-    status: String,
-    #[serde(default)]
-    pid: Option<u32>,
-    #[serde(default)]
-    active_http_requests: usize,
-    #[serde(default)]
-    active_provider_turns: usize,
-    #[serde(default)]
-    active_subagent_models: BTreeMap<String, usize>,
-    /// Present on builds that publish live SubAgent agent IDs. `None` means the
-    /// retained daemon predates this field and sticky must stay session-scoped.
-    #[serde(default)]
-    active_subagent_agent_ids: Option<Vec<String>>,
-    #[serde(default)]
-    active_claude_session_ids: Vec<String>,
-    #[serde(default)]
-    busy_claude_session_ids: Vec<String>,
-}
-
-impl RetainedHealthProbe {
-    fn has_active_work(&self) -> bool {
-        self.active_http_requests > 0
-            || self.active_provider_turns > 0
-            || self.active_subagent_models.values().copied().sum::<usize>() > 0
-    }
-
-    fn still_owns(&self, session_id: &str) -> bool {
-        // Busy/active session id lists can linger after the retained generation
-        // goes quiet (reboot, drained turn). Require live work, matching
-        // release_idle_retained, or sticky traffic 502s on a dead ACP.
-        if !self.has_active_work() {
-            return false;
-        }
-        if !self.busy_claude_session_ids.is_empty() {
-            return self
-                .busy_claude_session_ids
-                .iter()
-                .any(|owned| owned == session_id);
-        }
-        self.active_claude_session_ids
-            .iter()
-            .any(|owned| owned == session_id)
-    }
-}
-
-fn agent_still_on_retained(health: &RetainedHealthProbe, agent_id: Option<&str>) -> bool {
-    let Some(agent_id) = agent_id.filter(|id| !id.is_empty()) else {
-        return true;
-    };
-    let Some(active_agents) = health.active_subagent_agent_ids.as_ref() else {
-        return true;
-    };
-    active_agents.iter().any(|owned| owned == agent_id)
 }
 
 pub(super) fn proxy_http_client() -> reqwest::Client {
@@ -100,6 +45,8 @@ impl RetainedProxy {
             listen: RwLock::new(generation.listen),
             pid: RwLock::new(generation.pid),
             sessions: RwLock::new(generation.session_ids.into_iter().collect()),
+            last_work_at: RwLock::new(None),
+            recent_agents: RwLock::new(HashMap::new()),
             client: proxy_http_client(),
         }
     }
@@ -180,13 +127,14 @@ impl RetainedProxy {
     }
 
     /// Sticky proxy only while the retained generation is reachable and still
-    /// reports this Claude session as busy/active. Idle or dead retained
-    /// generations fall through to the live listener instead of 502 loops.
+    /// reports this Claude session as busy/active (or within a brief idle grace
+    /// after live work). Idle or dead retained generations fall through to the
+    /// live listener instead of 502 loops.
     ///
     /// When `agent_id` is set and the retained `/health` publishes
-    /// `active_subagent_agent_ids`, only those in-flight SubAgents stay sticky.
-    /// Newly launched agent IDs run on the live binary without forgetting the
-    /// parent session (other retained SubAgents may still be active).
+    /// `active_subagent_agent_ids`, only those in-flight / recently-seen
+    /// SubAgents stay sticky. Newly launched agent IDs run on the live binary
+    /// without forgetting the parent session.
     pub(super) async fn should_proxy_session(
         &self,
         session_id: &str,
@@ -241,15 +189,52 @@ impl RetainedProxy {
             self.clear_all_sessions();
             return false;
         }
-        if !health.still_owns(session_id) {
-            self.release_unowned_session(session_id, health.has_active_work());
+        let now = Instant::now();
+        self.note_probe(health, now);
+        let within_grace = self
+            .last_work_at
+            .read()
+            .ok()
+            .is_some_and(|guard| within_sticky_grace(*guard, now));
+        if !health.still_owns(session_id, within_grace) {
+            self.release_unowned_session(session_id, health.has_active_work() || within_grace);
             return false;
         }
-        agent_still_on_retained(health, agent_id)
+        let recent = self.recent_agents.read().ok();
+        agent_still_on_retained(
+            health,
+            agent_id,
+            recent.as_deref().unwrap_or(&HashMap::new()),
+            now,
+        )
     }
 
-    fn release_unowned_session(&self, session_id: &str, has_active_work: bool) {
-        if has_active_work {
+    #[cfg(test)]
+    pub(super) fn mark_recent_work_for_test(&self) {
+        if let Ok(mut last_work_at) = self.last_work_at.write() {
+            *last_work_at = Some(Instant::now());
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn remember_agent_for_test(&self, agent_id: &str) {
+        if let Ok(mut recent_agents) = self.recent_agents.write() {
+            recent_agents.insert(agent_id.to_owned(), Instant::now());
+        }
+    }
+
+    fn note_probe(&self, health: &RetainedHealthProbe, now: Instant) {
+        let Ok(mut last_work_at) = self.last_work_at.write() else {
+            return;
+        };
+        let Ok(mut recent_agents) = self.recent_agents.write() else {
+            return;
+        };
+        note_retained_activity(health, &mut last_work_at, &mut recent_agents, now);
+    }
+
+    fn release_unowned_session(&self, session_id: &str, keep_generation: bool) {
+        if keep_generation {
             self.forget_session(session_id);
         } else {
             self.clear_all_sessions();

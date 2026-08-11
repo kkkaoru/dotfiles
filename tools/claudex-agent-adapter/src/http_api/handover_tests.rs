@@ -640,6 +640,68 @@ async fn should_proxy_falls_back_to_session_scope_when_agent_ids_field_absent() 
 }
 
 #[tokio::test]
+async fn should_proxy_keeps_recent_agent_when_active_ids_drain() {
+    let upstream = serve_retained_generation_with_agent_field(
+        b"from-retained",
+        &["parent"],
+        Some(&[]),
+    )
+    .await;
+    let root = tempfile::tempdir().expect("drained agents fixture");
+    let path = root.path().join("retained.json");
+    std::fs::write(
+        &path,
+        format!(
+            r#"{{"listen":"{upstream}","pid":1,"build_id":"old","session_ids":["parent"]}}"#
+        ),
+    )
+    .expect("write retained");
+    let proxy = retained(&path, &upstream.to_string(), &["parent"]);
+    proxy.remember_agent_for_test("agent-old");
+    let sticky_old = proxy
+        .should_proxy_session("parent", Some("agent-old"))
+        .await;
+    assert!(
+        sticky_old,
+        "recently-seen SubAgent must stay sticky while active_subagent_agent_ids is empty"
+    );
+    let sticky_new = proxy
+        .should_proxy_session("parent", Some("agent-new"))
+        .await;
+    assert!(
+        !sticky_new,
+        "unknown SubAgent id must still run on the live binary"
+    );
+    assert!(
+        proxy.owns("parent"),
+        "rejecting a new agent id must not forget the parent session"
+    );
+}
+
+#[tokio::test]
+async fn should_proxy_keeps_session_within_idle_grace_after_work() {
+    let upstream = serve_stale_busy_retained_generation(&["session-a"]).await;
+    let root = tempfile::tempdir().expect("idle grace fixture");
+    let path = root.path().join("retained.json");
+    std::fs::write(
+        &path,
+        format!(
+            r#"{{"listen":"{upstream}","pid":1,"build_id":"old","session_ids":["session-a"]}}"#
+        ),
+    )
+    .expect("write retained");
+    let proxy = retained(&path, &upstream.to_string(), &["session-a"]);
+    proxy.mark_recent_work_for_test();
+    let sticky = proxy.should_proxy_session("session-a", None).await;
+    assert!(
+        sticky,
+        "brief idle after live work must keep sticky ownership"
+    );
+    assert!(proxy.owns("session-a"));
+    assert!(path.exists(), "grace window must not terminate retained");
+}
+
+#[tokio::test]
 async fn rebound_daemon_forwards_idle_keepalive_to_canonical() {
     // Old failure: after live-update rebind, Claude Code keep-alive stayed on
     // the old binary. Cursor SubAgent /v1/messages then never reached :8318.
@@ -1103,7 +1165,8 @@ async fn serve_retained_generation(
     body: &'static [u8],
     busy_sessions: &'static [&'static str],
 ) -> SocketAddr {
-    serve_retained_generation_with_agents(body, busy_sessions, &[]).await
+    // Legacy retained health omitted active_subagent_agent_ids entirely.
+    serve_retained_generation_with_agent_field(body, busy_sessions, None).await
 }
 
 async fn serve_retained_generation_with_agents(
@@ -1111,16 +1174,20 @@ async fn serve_retained_generation_with_agents(
     busy_sessions: &'static [&'static str],
     agent_ids: &'static [&'static str],
 ) -> SocketAddr {
+    serve_retained_generation_with_agent_field(body, busy_sessions, Some(agent_ids)).await
+}
+
+async fn serve_retained_generation_with_agent_field(
+    body: &'static [u8],
+    busy_sessions: &'static [&'static str],
+    agent_ids: Option<&'static [&'static str]>,
+) -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .expect("retained upstream listener");
     let listen = listener.local_addr().expect("retained upstream address");
     let sessions = serde_json::to_string(busy_sessions).expect("busy sessions json");
-    let agents = if agent_ids.is_empty() {
-        None
-    } else {
-        Some(serde_json::to_string(agent_ids).expect("agent ids json"))
-    };
+    let agents = agent_ids.map(|ids| serde_json::to_string(ids).expect("agent ids json"));
     tokio::spawn(run_retained_accept_loop(listener, sessions, agents, body));
     listen
 }

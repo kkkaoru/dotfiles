@@ -28,6 +28,7 @@ use tokio_stream::Stream;
 mod handover;
 mod logging;
 mod retained_proxy;
+mod retained_health;
 mod web_search;
 
 pub fn http_router(bridge: Arc<Bridge>, model: String, auth_token: Option<String>) -> Router {
