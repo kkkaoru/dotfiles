@@ -159,3 +159,19 @@ fn published_idle_seconds_drive_grace_without_local_clock() {
         "local observation must still keep grace when published idle is stale"
     );
 }
+
+#[test]
+fn seed_recent_from_snapshot_prefers_published_ages() {
+    let now = Instant::now();
+    let ages = BTreeMap::from([
+        ("agent-a".to_owned(), 12_u64),
+        ("".to_owned(), 1_u64),
+        ("agent-b".to_owned(), 0_u64),
+    ]);
+    let seeded = seed_recent_from_snapshot(&["ignored-when-ages-present".to_owned()], &ages, now);
+    assert_eq!(seeded.len(), 2);
+    assert!(seeded.contains_key("agent-a"));
+    assert!(seeded.contains_key("agent-b"));
+    let empty_ages = seed_recent_from_snapshot(&["legacy".to_owned()], &BTreeMap::new(), now);
+    assert_eq!(empty_ages, seed_recent_agents(&["legacy".to_owned()], now));
+}

@@ -266,3 +266,19 @@ fn record_tools_call_tolerates_root_and_unwritable_targets() {
         "parent-as-file targets must not create a queue file"
     );
 }
+
+#[test]
+fn run_with_io_drains_ndjson_until_eof() {
+    let input = concat!(
+        r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#,
+        "\n",
+        r#"{"jsonrpc":"2.0","id":2,"method":"ping"}"#,
+        "\n",
+    );
+    let mut reader = Cursor::new(input.as_bytes());
+    let mut stdout = Vec::new();
+    run_with_io(&mut reader, &mut stdout).expect("stdio MCP loop");
+    let text = String::from_utf8(stdout).expect("utf8");
+    assert!(text.contains("claudex-launch"));
+    assert!(text.contains("\"id\":2"));
+}
