@@ -1,7 +1,7 @@
 // Coverage gates measure production code; test implementations are excluded.
 #![cfg_attr(coverage_nightly, coverage(off))]
 
-use serde_json::json;
+use serde_json::{Value, json};
 use std::{
     collections::HashMap,
     fs,

@@ -1,7 +1,6 @@
 use std::{
     collections::VecDeque,
     sync::Mutex,
-    time::{SystemTime, UNIX_EPOCH},
 };
 #[cfg(test)]
 use std::path::PathBuf;
@@ -167,14 +166,9 @@ impl ToolSchemaCache {
 mod store;
 use store::ToolSchemaStore;
 
-pub(super) fn schema_sort_key(tools: &[Value]) -> Vec<u8> {
-    serde_json::to_vec(tools).unwrap_or_default()
-}
-pub(super) fn unix_seconds() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_secs())
-}
+#[path = "tool_schema_cache_keys.rs"]
+mod keys;
+pub(super) use keys::{schema_sort_key, unix_seconds};
 
 #[cfg(test)]
 mod tests;
