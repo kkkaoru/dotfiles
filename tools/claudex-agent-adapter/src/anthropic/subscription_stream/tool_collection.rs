@@ -82,11 +82,13 @@ impl SubscriptionStream {
             .filter(|input| input.is_object())
             .cloned()
             .context("Claude subscription emitted non-object tool input")?;
-        let (private_input, public_input) =
-            match self.prepare_routed_tool_input(sender, &name, id, &input).await? {
-                Some(inputs) => inputs,
-                None => return Ok(false),
-            };
+        let (private_input, public_input) = match self
+            .prepare_routed_tool_input(sender, &name, id, &input)
+            .await?
+        {
+            Some(inputs) => inputs,
+            None => return Ok(false),
+        };
         if self.skip_duplicate_subagent_launch(&name, id, &private_input, &public_input)? {
             return Ok(false);
         }
@@ -102,11 +104,16 @@ impl SubscriptionStream {
         {
             return Ok(false);
         }
-        self.report_subagent_action(sender, &name, &private_input).await?;
+        self.report_subagent_action(sender, &name, &private_input)
+            .await?;
         send_tool_block(sender, self.next_index, id, &name, public_input).await?;
         self.next_index += 1;
         self.saw_tool_use = true;
-        self.launch_fanout_open = crate::anthropic::agent_effort::is_agent_tool(&name);
+        if crate::anthropic::agent_effort::is_agent_tool(&name) {
+            self.arm_launch_fanout();
+        } else {
+            self.clear_launch_fanout();
+        }
         Ok(true)
     }
 

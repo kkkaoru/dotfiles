@@ -1,9 +1,4 @@
-use std::{
-    fs,
-    net::SocketAddr,
-    path::Path,
-    process::ExitStatus,
-};
+use std::{fs, net::SocketAddr, path::Path, process::ExitStatus};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -14,7 +9,6 @@ mod script;
 use script::{deliver_status, notification, osascript_command};
 #[cfg(test)]
 use script::{escape_applescript, osascript_program};
-
 
 /// One Complete banner per build_id. Waiting/Live stay silent (see should_emit).
 pub(super) const TITLE: &str = "claudex";

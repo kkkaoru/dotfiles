@@ -113,7 +113,11 @@ impl ActiveSubagentModels {
     }
 
     fn release(&self, model: &str, agent_id: Option<&str>) {
-        decrement_count(&self.counts, model, "active subagent model registry poisoned");
+        decrement_count(
+            &self.counts,
+            model,
+            "active subagent model registry poisoned",
+        );
         let Some(agent_id) = agent_id else {
             return;
         };
@@ -140,8 +144,7 @@ fn decrement_count(map: &Mutex<BTreeMap<String, usize>>, key: &str, poison: &str
 
 impl Drop for ActiveSubagentGuard {
     fn drop(&mut self) {
-        self.registry
-            .release(&self.model, self.agent_id.as_deref());
+        self.registry.release(&self.model, self.agent_id.as_deref());
     }
 }
 

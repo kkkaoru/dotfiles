@@ -372,7 +372,6 @@ async fn assert_finished_transcript(case: &Case, builder: &mut SegmentBuilder) {
     );
 }
 
-
 fn agent_message(item_id: &str, delta: &str) -> Value {
     json!({
         "method":"item/agentMessage/delta",

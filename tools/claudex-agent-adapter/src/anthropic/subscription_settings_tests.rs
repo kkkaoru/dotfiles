@@ -29,8 +29,7 @@ fn setting_at_extracts_string_value() {
     let temp = TempDir::new().expect("temp dir");
     let path = temp.path().join("settings.json");
     let settings = json!({"model":"claude-opus-4","other":123});
-    std::fs::write(&path, serde_json::to_string(&settings).unwrap())
-        .expect("write settings");
+    std::fs::write(&path, serde_json::to_string(&settings).unwrap()).expect("write settings");
 
     let result = super::setting_at(&path, "model");
     assert_eq!(result, Some("claude-opus-4".to_owned()));
@@ -50,8 +49,7 @@ fn setting_at_returns_none_for_non_string_value() {
     let temp = TempDir::new().expect("temp dir");
     let path = temp.path().join("settings.json");
     let settings = json!({"value":123});
-    std::fs::write(&path, serde_json::to_string(&settings).unwrap())
-        .expect("write settings");
+    std::fs::write(&path, serde_json::to_string(&settings).unwrap()).expect("write settings");
 
     assert!(super::setting_at(&path, "value").is_none());
 }
@@ -61,8 +59,7 @@ fn setting_at_skips_empty_strings() {
     let temp = TempDir::new().expect("temp dir");
     let path = temp.path().join("settings.json");
     let settings = json!({"model":""});
-    std::fs::write(&path, serde_json::to_string(&settings).unwrap())
-        .expect("write settings");
+    std::fs::write(&path, serde_json::to_string(&settings).unwrap()).expect("write settings");
 
     assert!(super::setting_at(&path, "model").is_none());
 }

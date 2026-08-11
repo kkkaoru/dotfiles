@@ -1626,10 +1626,7 @@ done
     .await
     .expect("failover without target should not hang")
     .expect_err("usage-limit without failover target must stay failed");
-    assert!(
-        error.to_string().contains("usage limit"),
-        "{error:#}"
-    );
+    assert!(error.to_string().contains("usage limit"), "{error:#}");
 }
 
 #[tokio::test]
@@ -1748,7 +1745,8 @@ fn subagent_provider_failover_skips_missing_preferred_qwen_candidate() {
             crate::provider_config::WorkerRoute::new("claudex-cursor", CURSOR_AUTO, "high"),
         ])
         .expect("install workers without preferred qwen");
-    let bridge = Bridge::new_with_backend(backend, CLINE_FLASH.to_owned()).with_model_catalog(catalog);
+    let bridge =
+        Bridge::new_with_backend(backend, CLINE_FLASH.to_owned()).with_model_catalog(catalog);
     let failover = bridge
         .subagent_provider_failover_excluding(CLINE_FLASH, None)
         .expect("cursor sibling");
@@ -1758,9 +1756,8 @@ fn subagent_provider_failover_skips_missing_preferred_qwen_candidate() {
 
 #[test]
 fn usage_limit_failover_for_returns_subscription_fallback() {
-    let backend = AgentBackend::spawn_routes(&[
-        BackendRoute::new(CLINE_FLASH, BackendKind::ConfiguredAcp),
-    ]);
+    let backend =
+        AgentBackend::spawn_routes(&[BackendRoute::new(CLINE_FLASH, BackendKind::ConfiguredAcp)]);
     let mut catalog = ModelCatalog::default();
     catalog
         .set_auxiliary_worker_routes(vec![crate::provider_config::WorkerRoute::new(
@@ -1769,8 +1766,8 @@ fn usage_limit_failover_for_returns_subscription_fallback() {
             "high",
         )])
         .expect("install fallback");
-    let bridge = Bridge::new_with_backend(backend, CLINE_FLASH.to_owned())
-        .with_model_catalog(catalog);
+    let bridge =
+        Bridge::new_with_backend(backend, CLINE_FLASH.to_owned()).with_model_catalog(catalog);
     let failover = bridge
         .usage_limit_failover_for(CLINE_FLASH)
         .expect("configured subscription fallback");

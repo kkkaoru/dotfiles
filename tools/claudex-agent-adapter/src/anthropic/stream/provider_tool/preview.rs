@@ -118,7 +118,10 @@ pub(super) fn object_failure_preview(map: &serde_json::Map<String, Value>) -> St
     "failed".to_owned()
 }
 
-pub(super) fn terminal_already_emitted(ids: &mut std::collections::HashSet<String>, call_id: Option<&str>) -> bool {
+pub(super) fn terminal_already_emitted(
+    ids: &mut std::collections::HashSet<String>,
+    call_id: Option<&str>,
+) -> bool {
     call_id.is_some_and(|call_id| !ids.insert(call_id.to_owned()))
 }
 

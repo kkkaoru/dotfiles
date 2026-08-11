@@ -9,7 +9,10 @@ mod types;
 mod validation;
 mod worker_route;
 use types::{AgentChoice, RequestBudget, WebSearchSettings};
-use validation::{auxiliary_worker_routes, search_workers_from_providers, validate_choice, validate_main_providers, validate_providers, validate_worker_routes};
+use validation::{
+    auxiliary_worker_routes, search_workers_from_providers, validate_choice,
+    validate_main_providers, validate_providers, validate_worker_routes,
+};
 const CONFIG_VERSION: u64 = 1;
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -133,7 +136,10 @@ fn enabled_providers_catalog(providers: Vec<Provider>) -> Result<(Vec<Provider>,
     // Keep identities for disabled providers so exhausted/denied backends can still be
     // recognized and remapped instead of falling through to Claude subscription.
     let model_catalog = ModelCatalog::from_providers(&providers);
-    let providers = providers.into_iter().filter(|provider| provider.enabled).collect::<Vec<_>>();
+    let providers = providers
+        .into_iter()
+        .filter(|provider| provider.enabled)
+        .collect::<Vec<_>>();
     if providers.is_empty() {
         bail!("provider config must enable at least one provider");
     }

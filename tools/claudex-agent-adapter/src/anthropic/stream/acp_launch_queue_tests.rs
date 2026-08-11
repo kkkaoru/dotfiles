@@ -133,8 +133,7 @@ fn unmatched_take_does_not_rewrite_live_queue() {
     let root = tempfile::tempdir().expect("queue fixture");
     let path = root.path().join("queue.jsonl");
     let body = json!({"ts":970.0,"name":"Agent","owner":"session-b","arguments":{"prompt":"other"}})
-        .to_string()
-        + "\n";
+        .to_string() + "\n";
     fs::write(&path, &body).expect("queue");
     let inode = std::os::unix::fs::MetadataExt::ino(&fs::metadata(&path).expect("meta"));
 

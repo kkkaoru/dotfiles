@@ -3,7 +3,10 @@ use anyhow::anyhow;
 use super::{EFFORT_SETUP_TIMEOUT, EffortSetupError, TurnCtl};
 use crate::grok_acp::updates;
 
-pub(super) fn finish_effort_setup(ctl: &mut TurnCtl<'_>, setup_result: Result<(), EffortSetupError>) -> bool {
+pub(super) fn finish_effort_setup(
+    ctl: &mut TurnCtl<'_>,
+    setup_result: Result<(), EffortSetupError>,
+) -> bool {
     match setup_result {
         Ok(()) => {
             if let Ok(cancellation) = ctl.cancellation.try_recv() {

@@ -235,7 +235,10 @@ pub(super) fn validate_main_providers(
         .iter()
         .map(|provider| provider.id.as_str())
         .collect::<HashSet<_>>();
-    let main_ids = main_providers.iter().map(String::as_str).collect::<HashSet<_>>();
+    let main_ids = main_providers
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
     if main_ids.is_empty()
         || main_ids.len() != main_providers.len()
         || !main_ids.is_subset(&enabled_ids)

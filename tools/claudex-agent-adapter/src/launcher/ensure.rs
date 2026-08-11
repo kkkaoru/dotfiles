@@ -62,11 +62,12 @@ pub(super) async fn apply_inspected_state(
         ServiceState::Replace {
             pid,
             recovery_generation,
-        } => match prepare_replace_recovery(config, client, mode, pid, recovery_generation).await?
-        {
-            ReplacePrep::Finished(url) => return Ok(url),
-            ReplacePrep::Continue(manifest) => manifest,
-        },
+        } => {
+            match prepare_replace_recovery(config, client, mode, pid, recovery_generation).await? {
+                ReplacePrep::Finished(url) => return Ok(url),
+                ReplacePrep::Continue(manifest) => manifest,
+            }
+        }
         ServiceState::Start => None,
     };
     start_and_wait_for_adapter(config, client, recovery_manifest, replaced).await

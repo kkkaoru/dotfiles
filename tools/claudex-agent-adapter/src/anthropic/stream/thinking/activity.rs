@@ -1,13 +1,9 @@
 use anyhow::Result;
 use serde_json::{Value, json};
 
-use super::{
-    HEARTBEAT, OpenThinking, ThinkingState,
-};
 use super::super::thinking_support::{has_visible_output, thinking_signature};
-use crate::anthropic::stream::{
-    StreamSender, send_stream_frame,
-};
+use super::{HEARTBEAT, OpenThinking, ThinkingState};
+use crate::anthropic::stream::{StreamSender, send_stream_frame};
 
 impl ThinkingState {
     /// First heartbeat is visible; later ones are ZWSP. Pure keepalive thinking

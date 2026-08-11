@@ -91,7 +91,11 @@ impl Bridge {
         }
     }
 
-    async fn finish_non_streaming_turn(&self, turn: ActiveTurn, segment: Segment) -> Response<Body> {
+    async fn finish_non_streaming_turn(
+        &self,
+        turn: ActiveTurn,
+        segment: Segment,
+    ) -> Response<Body> {
         super::commit_transcript(&turn.session, turn.extras, &segment).await;
         anthropic_response(segment, &turn.response_model)
     }

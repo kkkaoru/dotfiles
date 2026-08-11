@@ -20,7 +20,6 @@ async fn wait_for_health(client: &Client, url: &str) -> reqwest::Response {
     panic!("health response");
 }
 
-
 #[test]
 fn parses_token_helpers() {
     assert_eq!(
@@ -32,8 +31,6 @@ fn parses_token_helpers() {
     assert!(utf8(Some("model".into()), "model").is_ok());
     assert!(utf8(None, "model").is_err());
 }
-
-
 
 fn assert_cli_shape_failures_basic() {
     let failures = [
@@ -147,8 +144,6 @@ fn assert_cli_shape_failures_routes_and_limits() {
     }
 }
 
-
-
 #[test]
 fn validates_cli_shape_and_limits() {
     assert_cli_shape_failures_basic();
@@ -194,7 +189,6 @@ fn rejects_an_invalid_backend_route_concurrency_limit() {
             .contains("maxConcurrency")
     );
 }
-
 
 fn assert_parses_valid_cli_options_part1() {
     let serve = parse_command(
@@ -266,7 +260,8 @@ fn assert_parses_valid_cli_options_part1() {
     };
 }
 
-fn assert_parses_valid_cli_options_part2() {    assert!(matches!(
+fn assert_parses_valid_cli_options_part2() {
+    assert!(matches!(
         parse_command(
             ["ensure", "--model", "m"]
                 .into_iter()
@@ -320,7 +315,6 @@ fn parses_valid_cli_options_and_commands() {
     assert_parses_valid_cli_options_part1();
     assert_parses_valid_cli_options_part2();
 }
-
 
 #[cfg(unix)]
 #[test]
@@ -567,7 +561,6 @@ async fn rejects_invalid_limits_before_serving() {
 fn script(root: &std::path::Path, name: &str, body: &str) -> PathBuf {
     let path = root.join(name);
     std::fs::write(&path, format!("#!/bin/sh\n{body}")).expect("script");
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
-        .expect("executable");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).expect("executable");
     path
 }

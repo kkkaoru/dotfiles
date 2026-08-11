@@ -31,7 +31,10 @@ pub(super) fn load_entries_at(path: &Path, now: u64) -> VecDeque<StoredSchema> {
     entries
 }
 
-pub(super) fn merge_entry(entries: &mut VecDeque<StoredSchema>, current: StoredSchema) -> StoredSchema {
+pub(super) fn merge_entry(
+    entries: &mut VecDeque<StoredSchema>,
+    current: StoredSchema,
+) -> StoredSchema {
     let merged = match entries
         .iter()
         .position(|stored| stored.identity == current.identity)

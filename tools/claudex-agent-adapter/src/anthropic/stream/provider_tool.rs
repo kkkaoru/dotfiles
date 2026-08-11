@@ -13,8 +13,8 @@ use super::{builder::SegmentBuilder, protocol::StreamSender};
 
 mod preview;
 use preview::{
-    compact_title, failure_preview, progress_start_line, terminal_already_emitted,
-    truncate_for_status, validated_provider_web_evidence, FAILED_STATUS_PREVIEW_CHAR_LIMIT,
+    FAILED_STATUS_PREVIEW_CHAR_LIMIT, compact_title, failure_preview, progress_start_line,
+    terminal_already_emitted, truncate_for_status, validated_provider_web_evidence,
 };
 #[cfg(test)]
 #[allow(unused_imports)]
@@ -110,7 +110,9 @@ impl SegmentBuilder {
         stream: Option<&StreamSender>,
     ) -> Result<()> {
         if success {
-            return self.emit_terminal_success(call_id, short_title, stream).await;
+            return self
+                .emit_terminal_success(call_id, short_title, stream)
+                .await;
         }
         self.emit_terminal_failure(call_id, short_title, params, stream)
             .await

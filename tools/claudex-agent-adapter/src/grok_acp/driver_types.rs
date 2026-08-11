@@ -1,10 +1,7 @@
 use std::{
     ffi::OsString,
     path::PathBuf,
-    sync::{
-        Arc,
-        atomic::AtomicBool,
-    },
+    sync::{Arc, atomic::AtomicBool},
 };
 
 use anyhow::Result;

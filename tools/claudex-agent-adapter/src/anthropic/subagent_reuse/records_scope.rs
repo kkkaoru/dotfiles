@@ -59,10 +59,7 @@ pub(super) fn summarize_scope(input: &Value) -> String {
 pub(super) fn find_recipient(value: &Value) -> Option<String> {
     match value {
         Value::Object(object) => object.iter().find_map(|(key, value)| {
-            if matches!(
-                key.as_str(),
-                "agentId" | "agent_id" | "taskId" | "task_id"
-            ) {
+            if matches!(key.as_str(), "agentId" | "agent_id" | "taskId" | "task_id") {
                 return value
                     .as_str()
                     .filter(|recipient| !recipient.is_empty())
@@ -84,9 +81,7 @@ pub(super) fn parse_recipient(text: &str) -> Option<String> {
                 .split_whitespace()
                 .next()
                 .unwrap_or_default()
-                .trim_matches(|character: char| {
-                    matches!(character, '\'' | '"' | '`' | ',' | ')')
-                });
+                .trim_matches(|character: char| matches!(character, '\'' | '"' | '`' | ',' | ')'));
             (!value.is_empty()).then(|| value.to_owned())
         })
 }

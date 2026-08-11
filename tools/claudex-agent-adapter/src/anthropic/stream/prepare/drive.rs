@@ -2,13 +2,13 @@ use std::sync::Arc;
 
 use anyhow::Result;
 
-use super::{
-    PreparedStream, PrepareActivityOptions, SegmentBuilder, StreamSender, prepare_with_activity,
-    subagent_start_status,
-};
 use super::super::{
     ACTIVITY_KEEPALIVE_INTERVAL, INITIAL_ACTIVITY_DELAY, SUBAGENT_INITIAL_ACTIVITY_DELAY,
     send_stream_error,
+};
+use super::{
+    PrepareActivityOptions, PreparedStream, SegmentBuilder, StreamSender, prepare_with_activity,
+    subagent_start_status,
 };
 use crate::anthropic::{
     Bridge, MessagesRequest,
@@ -17,7 +17,10 @@ use crate::anthropic::{
 };
 
 impl Bridge {
-    pub(in crate::anthropic) async fn drive_prepared_subagent_stream(self: Arc<Self>, prepared: PreparedStream) {
+    pub(in crate::anthropic) async fn drive_prepared_subagent_stream(
+        self: Arc<Self>,
+        prepared: PreparedStream,
+    ) {
         let PreparedStream {
             mut request,
             input_tokens,

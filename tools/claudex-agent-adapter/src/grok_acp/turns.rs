@@ -210,9 +210,9 @@ pub(super) struct TurnDriver {
 }
 
 mod drive;
-pub(super) use drive::{acquire_turn_permit, dispatch_turn_terminal, drive_turns};
 #[cfg(test)]
 pub(super) use drive::drive_turn_tasks;
+pub(super) use drive::{acquire_turn_permit, dispatch_turn_terminal, drive_turns};
 
 #[cfg(test)]
 // Coverage excludes test implementation; production behavior remains measured.

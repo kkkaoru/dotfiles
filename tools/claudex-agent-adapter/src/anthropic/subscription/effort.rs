@@ -28,9 +28,7 @@ impl Bridge {
             AgentEffort::Explicit(effort) => {
                 explicit_effort(&request.model, &effort, configured.as_deref())
             }
-            AgentEffort::ConfiguredDefault => {
-                configured.or_else(|| self.claude_effort())
-            }
+            AgentEffort::ConfiguredDefault => configured.or_else(|| self.claude_effort()),
             AgentEffort::Unmatched => {
                 unmatched_effort(self, request, launch_scoped, configured.as_deref())
             }

@@ -104,7 +104,11 @@ pub(super) fn reuse_recipients(launches: &[LaunchRecord], _messages: &[Value]) -
         .filter(|launch| reusable_status(&launch.status) && !launch.recipient.is_empty())
         .cloned()
         .collect::<Vec<_>>();
-    sorted.sort_by(|left, right| left.recipient.cmp(&right.recipient).then(left.key.cmp(&right.key)));
+    sorted.sort_by(|left, right| {
+        left.recipient
+            .cmp(&right.recipient)
+            .then(left.key.cmp(&right.key))
+    });
     sorted.iter().map(format_reuse_recipient).collect()
 }
 

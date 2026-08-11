@@ -1,3 +1,5 @@
+#[cfg(test)]
+use std::path::PathBuf;
 use std::{
     ffi::OsString,
     net::SocketAddr,
@@ -5,19 +7,17 @@ use std::{
     thread,
     time::Duration,
 };
-#[cfg(test)]
-use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
 use uuid::Uuid;
 
 mod claude_process;
 mod claude_relay;
-use claude_relay::{reject_model_override, relay_stderr};
-#[allow(unused_imports)]
-use claude_relay::requires_authentication;
 #[cfg(test)]
 use claude_relay::relay_filtered;
+#[allow(unused_imports)]
+use claude_relay::requires_authentication;
+use claude_relay::{reject_model_override, relay_stderr};
 mod cli_swap;
 mod daemon_arguments;
 #[allow(unused_imports)]
@@ -34,11 +34,11 @@ mod process_io;
 use process_io::exit_code;
 mod live;
 mod promote;
+pub(crate) use daemon_process::terminate_retained_serve;
 pub(crate) use live::{
     RETAINED_STATE_ENV, RetainedGeneration, SERVICE_LISTEN_ENV, clear_retained,
     forget_retained_session, load_retained_from_env, read_retained,
 };
-pub(crate) use daemon_process::terminate_retained_serve;
 mod installed_adapter;
 mod launcher_lock;
 mod launcher_logs;
@@ -51,11 +51,9 @@ mod recovery;
 mod recovery_manifest;
 mod resume;
 mod session_process;
-use crate::{
-    agent_backend::BackendRoute, subagent_policy as policy, working_directory,
-};
 #[allow(unused_imports)]
 use crate::ADAPTER_PROTOCOL_VERSION;
+use crate::{agent_backend::BackendRoute, subagent_policy as policy, working_directory};
 use claude_process::ClaudeProcess;
 #[cfg(test)]
 use daemon_arguments::{daemon_arguments, hot_swap_wait_arguments};

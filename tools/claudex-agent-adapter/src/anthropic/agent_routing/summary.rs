@@ -2,7 +2,11 @@ use serde_json::Value;
 
 use super::texts::{message_texts, routing_summary, user_message_texts, value_texts};
 
-pub(super) fn advisor_launch_disabled(arguments: &Value, messages: &[Value], system: &Value) -> bool {
+pub(super) fn advisor_launch_disabled(
+    arguments: &Value,
+    messages: &[Value],
+    system: &Value,
+) -> bool {
     let Some(agent) = arguments.get("subagent_type").and_then(Value::as_str) else {
         return false;
     };
@@ -42,7 +46,10 @@ pub(super) fn configured_advisor_model_matches(
     })
 }
 
-pub(in crate::anthropic) fn active_routing_summary(messages: &[Value], system: &Value) -> Option<Value> {
+pub(in crate::anthropic) fn active_routing_summary(
+    messages: &[Value],
+    system: &Value,
+) -> Option<Value> {
     // The hook normally places the current snapshot in a user message, but Claude Code can
     // retain it in an assistant/tool transcript after compaction or a resumed turn. Prefer the
     // request-level system snapshot, then the latest user snapshot, and finally any transcript

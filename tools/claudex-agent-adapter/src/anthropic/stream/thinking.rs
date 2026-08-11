@@ -1,10 +1,10 @@
-use anyhow::Result;
-use serde_json::{Value, json};
+pub(super) use super::thinking_support::{has_visible_output, summary_delta};
 use super::{
     StreamSender, send_stream_frame,
     thinking_support::{has_answer_text, thinking_signature},
 };
-pub(super) use super::thinking_support::{has_visible_output, summary_delta};
+use anyhow::Result;
+use serde_json::{Value, json};
 mod activity;
 pub(super) const HEARTBEAT: &str = "\u{200b}";
 #[derive(Default)]
@@ -233,9 +233,11 @@ impl ThinkingState {
         }
         let open = self.open.as_mut().expect("progress block just opened");
         // Dedupe Status/▶; strip keepalive ZWSP (not whitespace) so tips stick.
-        let status_trimmed = status.trim_end_matches(|c: char| c == '\u{200b}' || c.is_whitespace());
-        let buffer_trimmed =
-            open.text.trim_end_matches(|c: char| c == '\u{200b}' || c.is_whitespace());
+        let status_trimmed =
+            status.trim_end_matches(|c: char| c == '\u{200b}' || c.is_whitespace());
+        let buffer_trimmed = open
+            .text
+            .trim_end_matches(|c: char| c == '\u{200b}' || c.is_whitespace());
         if !status_trimmed.is_empty() && buffer_trimmed.ends_with(status_trimmed) {
             return Ok(());
         }

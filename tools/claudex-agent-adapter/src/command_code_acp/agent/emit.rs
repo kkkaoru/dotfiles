@@ -1,10 +1,10 @@
 use agent_client_protocol as acp;
 
-use super::HeadlessAgent;
 use super::super::{
     coalesce::remaining_final_message,
     events::{TurnResult, result_is_error, result_message, turn_cancelled_updates},
 };
+use super::HeadlessAgent;
 
 pub(super) async fn emit_cancelled(
     agent: &HeadlessAgent,

@@ -228,9 +228,7 @@ pub(crate) fn forget_retained_session(path: &Path, session_id: &str) -> Result<(
         return Ok(());
     };
     let before = generation.session_ids.len();
-    generation
-        .session_ids
-        .retain(|owned| owned != session_id);
+    generation.session_ids.retain(|owned| owned != session_id);
     if generation.session_ids.len() == before {
         return Ok(());
     }

@@ -22,9 +22,9 @@ use crate::launcher::{
 mod forward;
 mod sticky;
 
-pub(super) use forward::proxy_request;
 #[cfg(test)]
 pub(super) use forward::is_hop_by_hop_header;
+pub(super) use forward::proxy_request;
 
 enum ProbeOutcome {
     Ready(super::retained_health::RetainedHealthProbe),

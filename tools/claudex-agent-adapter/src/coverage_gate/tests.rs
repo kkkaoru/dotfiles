@@ -120,10 +120,7 @@ fn discard_reports_when_successful_artifact_removal_fails() {
     fs::write(&not_a_directory, "leave me").expect("write non-directory artifact");
     let error = discard_successful_artifacts(&not_a_directory, Ok(()))
         .expect_err("removing a file path must surface the IO failure");
-    assert!(
-        error.to_string().contains("failed to remove"),
-        "{error:#}"
-    );
+    assert!(error.to_string().contains("failed to remove"), "{error:#}");
     assert!(not_a_directory.is_file());
 }
 
@@ -422,9 +419,8 @@ fn command_status_retries_llvm_cov_json_export_after_a_merge_flake() {
     fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755)).expect("executable cargo");
     let original_path = env::var_os("PATH").unwrap_or_default();
     let path = env::join_paths(
-        std::iter::once(fixture.path().to_path_buf()).chain(
-            env::split_paths(&original_path).filter(|path| !path.as_os_str().is_empty()),
-        ),
+        std::iter::once(fixture.path().to_path_buf())
+            .chain(env::split_paths(&original_path).filter(|path| !path.as_os_str().is_empty())),
     )
     .expect("test PATH");
     let status = Command::new(env::current_exe().expect("test executable"))

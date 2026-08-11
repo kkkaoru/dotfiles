@@ -3,12 +3,12 @@ use std::{
     time::{Duration, Instant},
 };
 
-use serde::Deserialize;
 use super::{
     ServiceConfig, daemon_process,
     health::{self, Health},
     live,
 };
+use serde::Deserialize;
 
 mod rebind;
 #[allow(unused_imports)]
@@ -113,8 +113,8 @@ pub(super) async fn release_idle_retained(client: &reqwest::Client, config: &Ser
     // leave a dead listen forever.
     match health::fetch_health(client, &retained).await {
         Some(health) if health.pid == Some(generation.pid) && health.has_active_work() => {}
-        Some(health)
-            if health.pid == Some(generation.pid) && health.within_sticky_idle_grace() => {}
+        Some(health) if health.pid == Some(generation.pid) && health.within_sticky_idle_grace() => {
+        }
         Some(health) if health.pid == Some(generation.pid) => {
             release_previous(config, generation.pid);
             let _ = live::clear_retained(&path);

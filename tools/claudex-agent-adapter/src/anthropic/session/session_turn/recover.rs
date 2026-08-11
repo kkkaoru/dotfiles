@@ -90,5 +90,4 @@ impl Bridge {
             .await;
         Ok((selected, extras, events, start))
     }
-
 }

@@ -242,7 +242,6 @@ async fn reports_a_closed_driver_for_each_command_response_type() {
     );
 }
 
-
 async fn drop_cancel_turn_response(receiver: &mut tokio::sync::mpsc::Receiver<DriverCommand>) {
     let Some(DriverCommand::CancelTurn { response, .. }) = receiver.recv().await else {
         return;

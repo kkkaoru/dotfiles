@@ -5,9 +5,8 @@ use std::io;
 fn decoder_replaces_invalid_bytes_and_keeps_following_json() {
     let mut decoder = Utf8LineDecoder::default();
     assert_eq!(decoder.push_line(b"\xff\n"), "\u{FFFD}");
-    let result = decoder.push_line(
-        br#"{"type":"result","subtype":"success","finalText":"AFTER_INVALID_UTF8"}"#,
-    );
+    let result = decoder
+        .push_line(br#"{"type":"result","subtype":"success","finalText":"AFTER_INVALID_UTF8"}"#);
     assert!(result.contains("AFTER_INVALID_UTF8"));
     assert!(!decoder.has_pending());
 }

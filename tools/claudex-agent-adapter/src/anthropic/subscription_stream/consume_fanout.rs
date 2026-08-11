@@ -14,7 +14,8 @@ use crate::anthropic::subscription::failure;
 
 /// After an Agent/Task launch, keep reading briefly so sibling launches in the
 /// same subscription turn are forwarded before the SSE turn closes.
-const LAUNCH_FANOUT_DRAIN: Duration = Duration::from_secs(3);
+/// Absolute per open window (refreshed only on a new launch), not per hidden line.
+pub(super) const LAUNCH_FANOUT_DRAIN: Duration = Duration::from_millis(250);
 
 pub(super) enum StreamIteration {
     Continue,
@@ -57,10 +58,12 @@ where
 {
     // Prefer output lines over keepalives so an already-buffered provider event
     // is ordered first. Expired activity is still applied after a hidden line.
-    let drain_deadline = stream
+    let drain_until = stream
         .launch_fanout_open
-        .then(|| Box::pin(tokio::time::sleep(LAUNCH_FANOUT_DRAIN)));
-    let ready = if let Some(mut drain_deadline) = drain_deadline {
+        .then_some(stream.launch_fanout_deadline)
+        .flatten();
+    let ready = if let Some(deadline) = drain_until {
+        let mut drain_deadline = Box::pin(tokio::time::sleep_until(deadline));
         tokio::select! {
             biased;
             () = sender.closed() => IterationReady::SenderClosed,
@@ -135,6 +138,8 @@ async fn handle_next_line(
     let envelope = failure::parse_stream_envelope(Some(model), &line)?;
     if envelope.get("type").and_then(Value::as_str) == Some("result") {
         *pending_result = Some(envelope);
+        // Result ends the provider turn; do not keep the fan-out drain open.
+        stream.clear_launch_fanout();
         return Ok(LineOutcome::Hidden);
     }
     let visible = stream.handle_envelope(sender, &envelope).await?;

@@ -3,16 +3,15 @@ use std::net::SocketAddr;
 use anyhow::{Context, Result, bail};
 
 use super::super::{
-    ServiceConfig, daemon_process, daemon_start, fallback, live, pending_hot_swap,
-    health::Health,
-};
-use super::{
-    advertised_listen, canonical_serves_current_build, retained_session_ids, terminate_started,
-    wait_until_current_build, warm_agent_ages,
+    ServiceConfig, daemon_process, daemon_start, fallback, health::Health, live, pending_hot_swap,
 };
 use super::rebind::{
     listen_is_free, request_bind_listen, request_ephemeral_rebind, restore_old_canonical,
     wait_until_canonical_released,
+};
+use super::{
+    advertised_listen, canonical_serves_current_build, retained_session_ids, terminate_started,
+    wait_until_current_build, warm_agent_ages,
 };
 
 pub(crate) async fn try_canonical(
@@ -138,5 +137,3 @@ pub(crate) fn release_previous(config: &ServiceConfig, old_pid: u32) {
         daemon_process::terminate(old_pid);
     }
 }
-
-

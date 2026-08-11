@@ -7,13 +7,13 @@ use tokio::{
 };
 
 use super::{
-    OutputMode, SubscriptionOptions, subscription_command,
+    OutputMode, SubscriptionOptions,
     failure::{
         local_failure, local_result, process_failure, spawn_child, subscription_result_for_model,
         timeout_failure,
     },
     lifecycle::{collect_subscription_output, terminate_after_subscription_failure},
-    retry,
+    retry, subscription_command,
 };
 
 pub(in crate::anthropic) async fn run_subscription_model(
@@ -71,7 +71,10 @@ pub(in crate::anthropic) async fn acquire_subscription_slot(
         .map_err(|_| anyhow!("Claude subscription capacity is closed"))
 }
 
-pub(in crate::anthropic) fn spawn_subscription(command: &mut Command, model: &str) -> Result<Child> {
+pub(in crate::anthropic) fn spawn_subscription(
+    command: &mut Command,
+    model: &str,
+) -> Result<Child> {
     command
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())

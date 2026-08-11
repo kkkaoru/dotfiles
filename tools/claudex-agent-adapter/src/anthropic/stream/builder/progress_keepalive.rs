@@ -37,7 +37,10 @@ pub(super) fn compact_keepalive_title(title: &str) -> String {
     }
 }
 
-pub(super) fn keepalive_elapsed_chrome(last_tool: Option<&str>, elapsed: std::time::Duration) -> String {
+pub(super) fn keepalive_elapsed_chrome(
+    last_tool: Option<&str>,
+    elapsed: std::time::Duration,
+) -> String {
     let clock = format_keepalive_clock(elapsed);
     match last_tool.filter(|title| !title.is_empty()) {
         Some(title) => format!("▶ {title} · {clock}\n"),

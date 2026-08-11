@@ -17,7 +17,10 @@ impl Bridge {
         self.evict_oldest_idle_session().await;
         match Arc::clone(&self.session_slots).try_acquire_owned() {
             Ok(slot) => Ok(slot),
-            Err(_) => bail!("claudex session capacity ({}) is busy", super::super::MAX_SESSIONS),
+            Err(_) => bail!(
+                "claudex session capacity ({}) is busy",
+                super::super::MAX_SESSIONS
+            ),
         }
     }
 

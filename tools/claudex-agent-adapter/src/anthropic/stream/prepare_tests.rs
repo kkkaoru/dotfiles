@@ -1,7 +1,4 @@
-use std::{
-    sync::Mutex,
-    time::Duration,
-};
+use std::{sync::Mutex, time::Duration};
 
 use anyhow::anyhow;
 use serde_json::json;
@@ -54,7 +51,9 @@ fn qwen_cursor_bridge() -> Bridge {
     Bridge::new_with_backend(backend, QWEN_CLOUD.to_owned()).with_model_catalog(catalog)
 }
 
-async fn saturate_qwen_subagent_slots(bridge: &Bridge) -> Vec<crate::anthropic::model_concurrency::ModelPermit> {
+async fn saturate_qwen_subagent_slots(
+    bridge: &Bridge,
+) -> Vec<crate::anthropic::model_concurrency::ModelPermit> {
     let mut permits = Vec::new();
     for _ in 0..2 {
         permits.push(
@@ -113,7 +112,10 @@ async fn reticket_saturated_subagent_rewrites_model_and_ticket() {
 
     bridge.reticket_saturated_subagent(&mut request, &mut effort, &mut ticket, true);
     assert_eq!(request.model, CURSOR_AUTO);
-    assert!(ticket.is_some(), "rewritten model keeps a concurrency ticket");
+    assert!(
+        ticket.is_some(),
+        "rewritten model keeps a concurrency ticket"
+    );
 }
 
 #[tokio::test]

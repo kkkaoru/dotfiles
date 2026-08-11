@@ -3,9 +3,7 @@ use std::{collections::HashSet, ops::ControlFlow, sync::Arc};
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
 
-use super::super::{
-    builder::parse_tool_call, error_flow, turn_flow,
-};
+use super::super::{builder::parse_tool_call, error_flow, turn_flow};
 use super::warn_disconnect_failure;
 use crate::anthropic::content::pending_request_id;
 use crate::anthropic::{Bridge, Session};

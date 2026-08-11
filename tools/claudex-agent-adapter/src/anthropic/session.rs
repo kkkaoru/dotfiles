@@ -14,19 +14,19 @@ mod preempt;
 pub(super) mod reservation;
 #[cfg(not(test))]
 mod reservation;
+mod results;
 mod select;
 mod session_turn;
 mod tools;
-mod results;
 use helpers::{first_session_owning_results, should_preempt_for_context_limit};
 // Child modules and session_tests reach these through the parent namespace.
+#[allow(unused_imports)]
+use super::content::transcript_owns_tool_results;
 #[allow(unused_imports)]
 use helpers::{
     candidate_length, is_better_length, is_idempotent_task_lifecycle_error, touch_session,
     validate_tool_result_ownership,
 };
-#[allow(unused_imports)]
-use super::content::transcript_owns_tool_results;
 pub(in crate::anthropic) use session_turn::is_context_window_exceeded;
 pub(in crate::anthropic) use tools::is_main_session_only_tool;
 #[cfg(test)]

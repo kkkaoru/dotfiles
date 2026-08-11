@@ -11,22 +11,21 @@ use serde_json::{Value, json};
 
 use super::ToolCall;
 
-mod launch;
 mod detect;
-use launch::{launch_name_candidates, looks_like_mcp_surface, trace_launch_shaped_event};
+mod launch;
+#[allow(unused_imports)]
+use detect::{has_agent_tool, requested_original_name};
 use detect::{
     launch_arguments_ready, launch_tool_name_from_arguments, looks_like_launch_arguments,
     looks_like_launch_tool, map_launch_name, normalize_launch_arguments,
 };
-#[allow(unused_imports)]
-use detect::{has_agent_tool, requested_original_name};
 #[cfg(test)]
 use launch::is_compact_tool_label;
+use launch::{launch_name_candidates, looks_like_mcp_surface, trace_launch_shaped_event};
 
 /// Pending-tool request id marker: ACP cannot accept Codex-style tool results on the
 /// app-server channel; follow-up turns continue via transcript + `turn/start`.
 pub(super) const ACP_BRIDGE_MARKER: &str = "acpBridge";
-
 
 pub(super) fn is_client_executed_bridge_tool(original_name: &str) -> bool {
     matches!(original_name, "Agent" | "Task")
@@ -111,10 +110,7 @@ fn bridge_provider_tool_call_inner(
     let tool = params.get("tool").and_then(Value::as_str).unwrap_or("");
     let title = params.get("title").and_then(Value::as_str).unwrap_or("");
     let raw_args = params.get("arguments").unwrap_or(&Value::Null);
-    let mcp_shaped = force_mcp_queue
-        || [tool, title]
-            .into_iter()
-            .any(looks_like_mcp_surface);
+    let mcp_shaped = force_mcp_queue || [tool, title].into_iter().any(looks_like_mcp_surface);
     let normalized_raw = normalize_launch_arguments("Agent", raw_args);
     let queued = if mcp_shaped && !launch_arguments_ready(&normalized_raw) {
         super::acp_launch_queue::peek_pending_launch_arguments_for(launch_owner)
@@ -130,9 +126,7 @@ fn bridge_provider_tool_call_inner(
         })
         .or_else(|| {
             if !looks_like_launch_arguments(effective_args)
-                && ![tool, title]
-                    .into_iter()
-                    .any(looks_like_launch_tool)
+                && ![tool, title].into_iter().any(looks_like_launch_tool)
             {
                 return None;
             }

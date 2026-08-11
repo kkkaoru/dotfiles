@@ -36,8 +36,15 @@ impl SegmentBuilder {
             )
         };
         if let Some(call) = bridged {
-            self.record_bridged_provider_launch(bridge, session, current_messages, system, call, stream)
-                .await?;
+            self.record_bridged_provider_launch(
+                bridge,
+                session,
+                current_messages,
+                system,
+                call,
+                stream,
+            )
+            .await?;
             return Ok(());
         }
         let params = event.get("params");

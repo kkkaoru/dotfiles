@@ -12,13 +12,13 @@ use super::{ServiceConfig, daemon_arguments::daemon_arguments};
 
 mod fs_guard;
 mod prune;
-use prune::cleanup;
-#[cfg(test)]
-use prune::{manifest_entry, manifests};
 use fs_guard::{
     ensure_private_directory, safe_component, set_private_permissions, validate_private_directory,
     validate_private_file,
 };
+use prune::cleanup;
+#[cfg(test)]
+use prune::{manifest_entry, manifests};
 
 const EXECUTABLE_NAME: &str = "claudex-agent-adapter";
 const MANIFEST_PREFIX: &str = "manifest.";

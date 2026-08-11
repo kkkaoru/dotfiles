@@ -279,7 +279,6 @@ fn response_text(response: &Value) -> &str {
         .expect("response text")
 }
 
-
 async fn spawn_subscription_failover_bridge(
     root: &std::path::Path,
     subscription_result: &str,

@@ -431,11 +431,7 @@ async fn keeps_provider_open_when_non_async_tools_remain_pending() {
     let mut pending = HashMap::new();
     pending.insert("background".to_owned(), json!(1));
     pending.insert("bash-1".to_owned(), json!(2));
-    bridge
-        .sessions
-        .lock()
-        .await
-        .push(handoff_session(pending));
+    bridge.sessions.lock().await.push(handoff_session(pending));
 
     let response = bridge
         .async_agent_launch_handoff(&background_agent_request("background"))

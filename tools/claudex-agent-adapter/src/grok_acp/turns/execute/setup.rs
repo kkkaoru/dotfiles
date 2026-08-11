@@ -224,8 +224,8 @@ mod tests {
         ));
     }
 
-    async fn effort_setup_timeout_fixture(
-    ) -> Result<Result<(), acp::Error>, tokio::time::error::Elapsed> {
+    async fn effort_setup_timeout_fixture()
+    -> Result<Result<(), acp::Error>, tokio::time::error::Elapsed> {
         tokio::time::timeout(Duration::from_millis(1), async {
             tokio::time::sleep(Duration::from_secs(1)).await;
             Ok::<(), acp::Error>(())

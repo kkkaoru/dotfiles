@@ -38,9 +38,7 @@ async fn marks_missing_provider_environment_as_non_retryable() {
     assert!(output.contains("event: message_stop"));
 }
 
-async fn drain_frames(
-    receiver: &mut mpsc::Receiver<Result<Bytes, Infallible>>,
-) -> String {
+async fn drain_frames(receiver: &mut mpsc::Receiver<Result<Bytes, Infallible>>) -> String {
     let mut output = String::new();
     while let Some(frame) = receiver.recv().await {
         output.push_str(&String::from_utf8_lossy(&frame.expect("infallible frame")));
@@ -173,4 +171,3 @@ fn count_frames(wire: &[u8], frame: &[u8]) -> usize {
         .filter(|window| *window == frame)
         .count()
 }
-

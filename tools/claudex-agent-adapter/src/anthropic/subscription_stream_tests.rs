@@ -244,6 +244,7 @@ async fn handles_ignored_invalid_and_non_text_events() {
         text_closed: false,
         saw_tool_use: false,
         launch_fanout_open: false,
+        launch_fanout_deadline: None,
         seen_tool_ids: HashSet::new(),
         blocked_subagent: false,
         saw_result: false,
@@ -283,6 +284,7 @@ async fn forwards_empty_and_regular_deltas_then_finishes_once() {
         text_closed: false,
         saw_tool_use: false,
         launch_fanout_open: false,
+        launch_fanout_deadline: None,
         seen_tool_ids: HashSet::new(),
         blocked_subagent: false,
         saw_result: false,
@@ -328,6 +330,7 @@ async fn keeps_native_web_results_inside_the_subscription() {
         text_closed: false,
         saw_tool_use: false,
         launch_fanout_open: false,
+        launch_fanout_deadline: None,
         seen_tool_ids: HashSet::new(),
         blocked_subagent: false,
         saw_result: false,
@@ -407,6 +410,7 @@ async fn keeps_structured_output_internal_and_returns_its_json_result_as_text() 
         text_closed: false,
         saw_tool_use: false,
         launch_fanout_open: false,
+        launch_fanout_deadline: None,
         seen_tool_ids: HashSet::new(),
         blocked_subagent: false,
         saw_result: false,
@@ -462,6 +466,7 @@ async fn empty_partial_delta_is_not_visible_output_and_remains_eligible_for_stat
         text_closed: false,
         saw_tool_use: false,
         launch_fanout_open: false,
+        launch_fanout_deadline: None,
         seen_tool_ids: HashSet::new(),
         blocked_subagent: false,
         saw_result: false,
@@ -499,6 +504,7 @@ async fn shows_activity_status_before_delayed_subscription_output() {
         text_closed: false,
         saw_tool_use: false,
         launch_fanout_open: false,
+        launch_fanout_deadline: None,
         seen_tool_ids: HashSet::new(),
         blocked_subagent: false,
         saw_result: false,
@@ -542,6 +548,7 @@ async fn falls_back_to_result_text_and_estimated_tokens() {
         text_closed: false,
         saw_tool_use: false,
         launch_fanout_open: false,
+        launch_fanout_deadline: None,
         seen_tool_ids: HashSet::new(),
         blocked_subagent: false,
         saw_result: false,
@@ -575,6 +582,7 @@ async fn rejects_unsuccessful_results() {
         text_closed: false,
         saw_tool_use: false,
         launch_fanout_open: false,
+        launch_fanout_deadline: None,
         seen_tool_ids: HashSet::new(),
         blocked_subagent: false,
         saw_result: false,
@@ -597,19 +605,8 @@ async fn rejects_unsuccessful_results() {
 #[tokio::test]
 async fn collects_sequential_subscription_agents_into_one_outer_tool_round() {
     let (sender, mut receiver) = channel();
-    let mut stream = SubscriptionStream {
-        text_started: false,
-        text_closed: false,
-        saw_tool_use: false,
-        launch_fanout_open: false,
-        seen_tool_ids: HashSet::new(),
-        blocked_subagent: false,
-        saw_result: false,
-        next_index: 0,
-        tools: vec!["Task".to_owned()],
-        tool_context: Some(explicit_subscription_tool_context()),
-        activity: SubscriptionActivity::default(),
-    };
+    let mut stream = bare_subscription_stream(vec!["Task".to_owned()]);
+    stream.tool_context = Some(explicit_subscription_tool_context());
     stream
         .handle_line(
             &sender,
@@ -729,6 +726,7 @@ async fn launch_fanout_drain_ends_when_no_sibling_launch_arrives() {
         let _ = writer.write_all(format!("{input}\n").as_bytes()).await;
         tokio::time::sleep(Duration::from_secs(5)).await;
     });
+    let started = std::time::Instant::now();
     SubscriptionStream::consume_reader_for_test(
         BufReader::new(reader),
         &sender,
@@ -737,6 +735,10 @@ async fn launch_fanout_drain_ends_when_no_sibling_launch_arrives() {
     )
     .await
     .expect("fanout drain after a lone Agent launch");
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "absolute fan-out drain must end well under the old 3s-per-hidden-line window"
+    );
     let output = output(&mut receiver).await;
     assert!(output.contains(r#""name":"Task""#));
     assert!(output.contains(r#""stop_reason":"tool_use""#) || output.contains("end_turn"));
@@ -750,6 +752,7 @@ async fn consume_iteration_emits_keepalive_when_activity_deadline_elapses() {
         text_closed: false,
         saw_tool_use: false,
         launch_fanout_open: false,
+        launch_fanout_deadline: None,
         seen_tool_ids: HashSet::new(),
         blocked_subagent: false,
         saw_result: false,
@@ -787,6 +790,7 @@ async fn consume_iteration_hides_lines_after_a_pending_result() {
         text_closed: false,
         saw_tool_use: false,
         launch_fanout_open: false,
+        launch_fanout_deadline: None,
         seen_tool_ids: HashSet::new(),
         blocked_subagent: false,
         saw_result: false,
@@ -846,6 +850,7 @@ fn blocked_agent_subscription_stream() -> SubscriptionStream {
         text_closed: false,
         saw_tool_use: false,
         launch_fanout_open: false,
+        launch_fanout_deadline: None,
         seen_tool_ids: HashSet::new(),
         blocked_subagent: false,
         saw_result: false,
@@ -921,6 +926,7 @@ async fn resumes_text_on_a_fresh_index_after_internal_web_search() {
         text_closed: false,
         saw_tool_use: false,
         launch_fanout_open: false,
+        launch_fanout_deadline: None,
         seen_tool_ids: HashSet::new(),
         blocked_subagent: false,
         saw_result: false,
@@ -979,6 +985,7 @@ async fn deduplicates_replayed_tool_ids_and_preserves_tool_terminal_state() {
         text_closed: false,
         saw_tool_use: false,
         launch_fanout_open: false,
+        launch_fanout_deadline: None,
         seen_tool_ids: HashSet::new(),
         blocked_subagent: false,
         saw_result: false,
@@ -1071,6 +1078,7 @@ async fn sanitizes_and_records_contextual_agent_tool_input() {
         text_closed: false,
         saw_tool_use: false,
         launch_fanout_open: false,
+        launch_fanout_deadline: None,
         seen_tool_ids: HashSet::new(),
         blocked_subagent: false,
         saw_result: false,
@@ -1121,6 +1129,7 @@ async fn rejects_each_malformed_subscription_tool_shape() {
         text_closed: false,
         saw_tool_use: false,
         launch_fanout_open: false,
+        launch_fanout_deadline: None,
         seen_tool_ids: HashSet::new(),
         blocked_subagent: false,
         saw_result: false,
@@ -1170,6 +1179,7 @@ async fn ignores_non_top_level_tool_events_and_exercises_completed_state() {
         text_closed: false,
         saw_tool_use: false,
         launch_fanout_open: false,
+        launch_fanout_deadline: None,
         seen_tool_ids: HashSet::new(),
         blocked_subagent: false,
         saw_result: false,
@@ -1251,6 +1261,7 @@ async fn blocks_an_unsupported_subagent_without_failing_the_parent_stream() {
         text_closed: false,
         saw_tool_use: false,
         launch_fanout_open: false,
+        launch_fanout_deadline: None,
         seen_tool_ids: HashSet::new(),
         blocked_subagent: false,
         saw_result: false,
@@ -1347,6 +1358,7 @@ async fn blocks_exhausted_ollama_glm_launch_without_emitting_tool_use() {
         text_closed: false,
         saw_tool_use: false,
         launch_fanout_open: false,
+        launch_fanout_deadline: None,
         seen_tool_ids: HashSet::new(),
         blocked_subagent: false,
         saw_result: false,
@@ -1402,6 +1414,7 @@ async fn blocks_routing_disabled_ollama_glm_without_cooldown_file() {
         text_closed: false,
         saw_tool_use: false,
         launch_fanout_open: false,
+        launch_fanout_deadline: None,
         seen_tool_ids: HashSet::new(),
         blocked_subagent: false,
         saw_result: false,
@@ -1458,6 +1471,7 @@ async fn skips_task_stop_for_background_shell_or_foreign_ids() {
         text_closed: false,
         saw_tool_use: false,
         launch_fanout_open: false,
+        launch_fanout_deadline: None,
         seen_tool_ids: HashSet::new(),
         blocked_subagent: false,
         saw_result: false,
@@ -1519,6 +1533,7 @@ async fn forwards_task_stop_for_live_claude_code_agent_ids() {
         text_closed: false,
         saw_tool_use: false,
         launch_fanout_open: false,
+        launch_fanout_deadline: None,
         seen_tool_ids: HashSet::new(),
         blocked_subagent: false,
         saw_result: false,
@@ -1565,6 +1580,7 @@ async fn skips_stale_task_output_when_live_agents_exist() {
         text_closed: false,
         saw_tool_use: false,
         launch_fanout_open: false,
+        launch_fanout_deadline: None,
         seen_tool_ids: HashSet::new(),
         blocked_subagent: false,
         saw_result: false,
@@ -1626,6 +1642,7 @@ async fn forwards_task_output_for_live_claude_code_agent_ids() {
         text_closed: false,
         saw_tool_use: false,
         launch_fanout_open: false,
+        launch_fanout_deadline: None,
         seen_tool_ids: HashSet::new(),
         blocked_subagent: false,
         saw_result: false,
@@ -1686,6 +1703,7 @@ async fn accepts_a_valid_agent_model_without_a_prompt() {
         text_closed: false,
         saw_tool_use: false,
         launch_fanout_open: false,
+        launch_fanout_deadline: None,
         seen_tool_ids: HashSet::new(),
         blocked_subagent: false,
         saw_result: false,
@@ -1769,6 +1787,7 @@ async fn prepare_tool_input_rewrites_same_scope_launch_to_resume() {
         text_closed: false,
         saw_tool_use: false,
         launch_fanout_open: false,
+        launch_fanout_deadline: None,
         seen_tool_ids: HashSet::new(),
         blocked_subagent: false,
         saw_result: false,
@@ -2033,6 +2052,7 @@ async fn routes_a_standard_general_purpose_agent_to_a_claudex_worker() {
         text_closed: false,
         saw_tool_use: false,
         launch_fanout_open: false,
+        launch_fanout_deadline: None,
         seen_tool_ids: HashSet::new(),
         blocked_subagent: false,
         saw_result: false,
@@ -2276,6 +2296,7 @@ async fn keepalive_after_forwarded_tool_use_does_not_inject_still_working() {
         text_closed: false,
         saw_tool_use: false,
         launch_fanout_open: false,
+        launch_fanout_deadline: None,
         seen_tool_ids: HashSet::new(),
         blocked_subagent: false,
         saw_result: false,
@@ -2998,6 +3019,7 @@ async fn hydrates_auxiliary_claude_subagent_routes_without_adapter_fields_in_pub
         text_closed: false,
         saw_tool_use: false,
         launch_fanout_open: false,
+        launch_fanout_deadline: None,
         seen_tool_ids: HashSet::new(),
         blocked_subagent: false,
         saw_result: false,
@@ -3034,6 +3056,7 @@ fn bare_subscription_stream(tools: Vec<String>) -> SubscriptionStream {
         text_closed: false,
         saw_tool_use: false,
         launch_fanout_open: false,
+        launch_fanout_deadline: None,
         seen_tool_ids: HashSet::new(),
         blocked_subagent: false,
         saw_result: false,
@@ -3258,6 +3281,7 @@ fn prepare_tool_input_rejects_disabled_subagent_models() {
         text_closed: false,
         saw_tool_use: false,
         launch_fanout_open: false,
+        launch_fanout_deadline: None,
         seen_tool_ids: HashSet::new(),
         blocked_subagent: false,
         saw_result: false,

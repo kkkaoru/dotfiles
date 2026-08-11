@@ -85,4 +85,3 @@ pub(super) fn estimated_output_tokens(block: &Value) -> u64 {
         .map_or(0, estimated_tokens);
     estimated_block_tokens(block).saturating_add(thinking)
 }
-

@@ -161,8 +161,6 @@ async fn allows_session_creations_up_to_the_configured_concurrency_limit() {
     server.abort();
 }
 
-
-
 async fn spawn_configured_session_adapter(
     model: &str,
     max_concurrency: usize,
@@ -205,7 +203,12 @@ async fn spawn_configured_session_adapter(
     (server, client, url, health_url)
 }
 
-async fn post_session_turn(client: Client, url: String, model: &'static str, index: usize) -> Value {
+async fn post_session_turn(
+    client: Client,
+    url: String,
+    model: &'static str,
+    index: usize,
+) -> Value {
     client
         .post(url)
         .json(&json!({

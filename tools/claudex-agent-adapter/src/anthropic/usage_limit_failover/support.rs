@@ -11,7 +11,11 @@ use super::super::{
 };
 use super::UsageLimitFailover;
 
-pub(super) fn push_model_auth_scopes(bridge: &Bridge, model: Option<&str>, scopes: &mut Vec<String>) {
+pub(super) fn push_model_auth_scopes(
+    bridge: &Bridge,
+    model: Option<&str>,
+    scopes: &mut Vec<String>,
+) {
     let Some(model) = model else {
         return;
     };
@@ -58,7 +62,11 @@ pub(super) fn is_scoped_provider_exhaustion(message: &str) -> bool {
         || contains_provider_quota_exhausted_marker(message)
 }
 
-pub(super) fn scoped_exhaustion_reason(message: &str, rate_limited: bool, quota_exhausted: bool) -> &'static str {
+pub(super) fn scoped_exhaustion_reason(
+    message: &str,
+    rate_limited: bool,
+    quota_exhausted: bool,
+) -> &'static str {
     if rate_limited {
         return "rate-limit";
     }
@@ -79,12 +87,7 @@ pub(super) fn record_scoped_exhaustion(
     use_rate_limit_record: bool,
 ) {
     let recorded = if use_rate_limit_record {
-        provider_auth_cooldown::record_rate_limit_at(
-            cache_path,
-            scope,
-            message,
-            SystemTime::now(),
-        )
+        provider_auth_cooldown::record_rate_limit_at(cache_path, scope, message, SystemTime::now())
     } else {
         provider_auth_cooldown::record_at(cache_path, scope, message, SystemTime::now())
     };
@@ -119,4 +122,3 @@ pub fn streaming_provider_retry(
 ) -> Option<UsageLimitFailover> {
     failover.filter(|candidate| candidate.route == RouteDecision::Provider)
 }
-

@@ -53,8 +53,8 @@ impl SegmentBuilder {
         delta: &str,
         stream: Option<&StreamSender>,
     ) -> Result<()> {
-        let should_close = is_adapter_tool_marker(delta)
-            && self.thinking.open_holds_collapsed_subagent_launch();
+        let should_close =
+            is_adapter_tool_marker(delta) && self.thinking.open_holds_collapsed_subagent_launch();
         if should_close {
             self.thinking.close(&mut self.blocks, stream).await?;
         }
@@ -72,10 +72,7 @@ impl SegmentBuilder {
         if delta.is_empty() {
             return Ok(());
         }
-        if let Some(remainder) = self
-            .take_subagent_status_remainder(delta, stream)
-            .await?
-        {
+        if let Some(remainder) = self.take_subagent_status_remainder(delta, stream).await? {
             return self.stream_subagent_text_delta(&remainder, stream).await;
         }
         // ACP status lines (`…:status`) and Qwen/Cursor prose that already

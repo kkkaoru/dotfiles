@@ -19,7 +19,6 @@ use super::{
     progress_to_updates, prompt_text, remaining_final_message, slim_headless_prompt,
 };
 
-
 fn assert_headless_base_flags(argv: &[String]) {
     assert_eq!(
         argv[..8],
@@ -277,7 +276,6 @@ async fn run_turn_writes_optional_command_code_trace() {
     }
 }
 
-
 fn assert_tool_running_parse() {
     assert!(matches!(
         parse_stdout_line(r#"{"type":"event","event":{"type":"tool_running","toolCallId":"t1","toolName":"read_file","description":"A"}}"#),
@@ -365,7 +363,6 @@ fn parses_event_aliases_and_error_shapes() {
             .is_some_and(|error| error.contains("code"))
     );
 }
-
 
 fn assert_live_message_and_thinking_deltas() {
     assert_eq!(
@@ -641,7 +638,6 @@ fn tool_raw_input_uses_shared_provider_argument_keys() {
     assert_eq!(tool_raw_input("other", None), json!({}));
     assert_eq!(tool_raw_input("read_file", Some("   ")), json!({}));
 }
-
 
 fn assert_tool_started_chrome() {
     let started = progress_to_updates(&ProgressEvent::Started {
@@ -1041,7 +1037,6 @@ fn coalesces_on_newlines_and_ascii_punctuation() {
     assert_eq!(remaining_final_message("hello ", "hello"), None);
 }
 
-
 fn assert_thought_and_canned_status_coverage() {
     assert!(
         rendered_thoughts(&progress_to_updates(&ProgressEvent::Thought(
@@ -1188,7 +1183,6 @@ async fn run_turn_parses_mock_cmd_success_and_resume_argv() {
     assert!(recorded.contains(DEFAULT_MODEL));
 }
 
-
 async fn assert_exit_and_stderr_mappings(root: &Path) {
     let auth = write_executable(root, "auth", "#!/bin/sh\nexit 3\n");
     let outcome = run_turn(&spec_with_program(auth), "hi", None)
@@ -1227,7 +1221,11 @@ async fn assert_exit_and_stderr_mappings(root: &Path) {
             .is_some_and(|error| error.contains("insufficient credits"))
     );
 
-    let unsupported_effort = write_executable(root, "effort", "#!/bin/sh\necho 'Muse Spark 1.2 Contributor has no adjustable reasoning effort.' >&2\nexit 1\n");
+    let unsupported_effort = write_executable(
+        root,
+        "effort",
+        "#!/bin/sh\necho 'Muse Spark 1.2 Contributor has no adjustable reasoning effort.' >&2\nexit 1\n",
+    );
     let outcome = run_turn(&spec_with_program(unsupported_effort), "hi", None)
         .await
         .expect("stderr fallback");
@@ -1239,7 +1237,11 @@ async fn assert_exit_and_stderr_mappings(root: &Path) {
             .is_some_and(|error| error.contains("no adjustable reasoning effort"))
     );
 
-    let crlf_stderr = write_executable(root, "crlf-stderr", "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"finalText\":\"STDERR_OK\"}'\nprintf 'warn\\r\\nmore\\n' >&2\nexit 0\n");
+    let crlf_stderr = write_executable(
+        root,
+        "crlf-stderr",
+        "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"finalText\":\"STDERR_OK\"}'\nprintf 'warn\\r\\nmore\\n' >&2\nexit 0\n",
+    );
     let outcome = run_turn(&spec_with_program(crlf_stderr), "hi", None)
         .await
         .expect("stderr crlf is drained with stdout");
@@ -1270,7 +1272,11 @@ async fn assert_stream_edge_case_mappings(root: &Path) {
         .expect("ignored blank lines");
     assert_eq!(outcome.result.subtype, "success");
 
-    let invalid_utf8 = write_executable(root, "invalid-utf8", "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"event\",\"event\":{\"type\":\"tool_running\",\"toolCallId\":\"t1\",\"toolName\":\"web_fetch\"}}'\nprintf '\\377\\n'\nprintf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"sessionId\":\"cc-utf8\",\"stopReason\":\"end_turn\",\"finalText\":\"AFTER_INVALID_UTF8\"}'\n");
+    let invalid_utf8 = write_executable(
+        root,
+        "invalid-utf8",
+        "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"event\",\"event\":{\"type\":\"tool_running\",\"toolCallId\":\"t1\",\"toolName\":\"web_fetch\"}}'\nprintf '\\377\\n'\nprintf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"sessionId\":\"cc-utf8\",\"stopReason\":\"end_turn\",\"finalText\":\"AFTER_INVALID_UTF8\"}'\n",
+    );
     let outcome = run_turn(&spec_with_program(invalid_utf8), "hi", None)
         .await
         .expect("invalid utf8 must not fail the ACP turn");
@@ -1279,13 +1285,21 @@ async fn assert_stream_edge_case_mappings(root: &Path) {
         |event| matches!(event, ProgressEvent::ToolStarted { name, .. } if name == "web_fetch")
     ));
 
-    let partial_eof = write_executable(root, "partial-eof", "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"sessionId\":\"cc-partial\",\"stopReason\":\"end_turn\",\"finalText\":\"RESULT_THEN_PARTIAL\"}'\nprintf '\\343'\nexit 0\n");
+    let partial_eof = write_executable(
+        root,
+        "partial-eof",
+        "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"sessionId\":\"cc-partial\",\"stopReason\":\"end_turn\",\"finalText\":\"RESULT_THEN_PARTIAL\"}'\nprintf '\\343'\nexit 0\n",
+    );
     let outcome = run_turn(&spec_with_program(partial_eof), "hi", None)
         .await
         .expect("trailing incomplete utf8 must keep the JSON result");
     assert_eq!(outcome.result.final_text, "RESULT_THEN_PARTIAL");
 
-    let crash_utf8 = write_executable(root, "crash-utf8", "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"event\",\"event\":{\"type\":\"tool_running\",\"toolCallId\":\"t1\",\"toolName\":\"web_search\"}}'\nprintf '\\377'\nexit 1\n");
+    let crash_utf8 = write_executable(
+        root,
+        "crash-utf8",
+        "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"event\",\"event\":{\"type\":\"tool_running\",\"toolCallId\":\"t1\",\"toolName\":\"web_search\"}}'\nprintf '\\377'\nexit 1\n",
+    );
     let outcome = run_turn(&spec_with_program(crash_utf8), "hi", None)
         .await
         .expect("mid-stream invalid utf8 still yields an outcome");

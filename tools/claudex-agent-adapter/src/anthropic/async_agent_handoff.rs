@@ -93,7 +93,10 @@ impl Bridge {
     }
 }
 
-fn pending_tools_outside_async_launches(pending_ids: &[String], async_launch_ids: &[String]) -> bool {
+fn pending_tools_outside_async_launches(
+    pending_ids: &[String],
+    async_launch_ids: &[String],
+) -> bool {
     let async_set = async_launch_ids
         .iter()
         .map(String::as_str)

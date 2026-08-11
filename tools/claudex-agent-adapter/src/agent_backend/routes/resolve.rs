@@ -2,12 +2,13 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 
-use super::{
-    BackendRoute, MAX_DYNAMIC_ROUTES, RoutedBackend, RoutedBackends, provider_startup,
-};
+use super::{BackendRoute, MAX_DYNAMIC_ROUTES, RoutedBackend, RoutedBackends, provider_startup};
 
 impl RoutedBackends {
-    pub(in crate::agent_backend) fn max_context_tokens_for_model(&self, model: &str) -> Option<u64> {
+    pub(in crate::agent_backend) fn max_context_tokens_for_model(
+        &self,
+        model: &str,
+    ) -> Option<u64> {
         let exact_limit = self
             .configured
             .iter()
@@ -57,7 +58,10 @@ impl RoutedBackends {
             })
     }
 
-    pub(in crate::agent_backend) fn resolve(&self, model: &str) -> Result<(usize, Arc<RoutedBackend>)> {
+    pub(in crate::agent_backend) fn resolve(
+        &self,
+        model: &str,
+    ) -> Result<(usize, Arc<RoutedBackend>)> {
         if let Some(index) = self
             .configured
             .iter()

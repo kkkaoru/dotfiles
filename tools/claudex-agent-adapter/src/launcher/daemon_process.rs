@@ -70,8 +70,7 @@ fn is_serve_command_line(command: &str) -> bool {
     let Some(executable) = fields.next() else {
         return false;
     };
-    executable.rsplit('/').next() == Some("claudex-agent-adapter")
-        && fields.next() == Some("serve")
+    executable.rsplit('/').next() == Some("claudex-agent-adapter") && fields.next() == Some("serve")
 }
 
 /// Ask an adapter to stop accepting new requests while its HTTP server drains
@@ -262,9 +261,8 @@ fn command_matches(program: &str, command: &str, executable: &Path) -> bool {
     let program = Path::new(program);
     let current = argv0 == executable || program == executable;
     let expected = executable.file_name();
-    let same_binary_name = expected.is_some_and(|name| {
-        argv0.file_name() == Some(name) || program.file_name() == Some(name)
-    });
+    let same_binary_name = expected
+        .is_some_and(|name| argv0.file_name() == Some(name) || program.file_name() == Some(name));
     let renamed = (argv0.parent() == executable.parent()
         || program.parent() == executable.parent())
         && LEGACY_ADAPTER_NAMES.iter().any(|legacy| {

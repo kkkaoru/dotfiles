@@ -1,19 +1,14 @@
-use std::{
-    collections::BTreeMap,
-    time::Instant,
-};
+use std::{collections::BTreeMap, time::Instant};
 
 use serde::Deserialize;
 
 use crate::sticky_grace::{STICKY_IDLE_GRACE, within_sticky_idle_grace_secs};
 
 mod seed;
-pub(super) use seed::{
-    agent_still_on_retained, note_retained_activity, seed_recent_from_snapshot,
-};
 #[cfg(test)]
 #[allow(unused_imports)]
 use seed::seed_recent_agents;
+pub(super) use seed::{agent_still_on_retained, note_retained_activity, seed_recent_from_snapshot};
 
 /// Minimal `/health` view used to decide whether sticky proxying is still safe.
 #[derive(Debug, Deserialize)]
@@ -51,7 +46,11 @@ impl RetainedHealthProbe {
             || self.active_subagent_models.values().copied().sum::<usize>() > 0
     }
 
-    pub(super) fn within_sticky_grace(&self, local_last_work: Option<Instant>, now: Instant) -> bool {
+    pub(super) fn within_sticky_grace(
+        &self,
+        local_last_work: Option<Instant>,
+        now: Instant,
+    ) -> bool {
         let from_health = within_sticky_idle_grace_secs(self.idle_seconds);
         let from_local = local_last_work
             .is_some_and(|seen| now.saturating_duration_since(seen) <= STICKY_IDLE_GRACE);

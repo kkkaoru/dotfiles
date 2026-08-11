@@ -1,14 +1,12 @@
-mod support;
 mod select;
+mod support;
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests;
 
-pub(crate) use support::{is_usage_limit_exceeded, should_failover_provider_error};
 pub(super) use support::streaming_provider_retry;
-use support::{
-    is_scoped_provider_exhaustion, record_scoped_exhaustion, scoped_exhaustion_reason,
-};
+use support::{is_scoped_provider_exhaustion, record_scoped_exhaustion, scoped_exhaustion_reason};
+pub(crate) use support::{is_usage_limit_exceeded, should_failover_provider_error};
 
 use std::{sync::Arc, time::SystemTime};
 

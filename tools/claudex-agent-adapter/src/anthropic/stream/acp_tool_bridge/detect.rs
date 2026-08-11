@@ -79,9 +79,10 @@ pub(super) fn launch_tool_name_from_arguments(
     if (tool_name == "task"
         || tool_name.ends_with("__task")
         || tool_name.contains("task") && names.values().any(|name| name == "Task"))
-        && names.values().any(|name| name == "Task") {
-            return Some("Task".to_owned());
-        }
+        && names.values().any(|name| name == "Task")
+    {
+        return Some("Task".to_owned());
+    }
     Some("Agent".to_owned())
 }
 
@@ -94,9 +95,10 @@ pub(super) fn map_launch_name(candidate: &str, names: &HashMap<String, String>) 
     if looks_like_launch_tool(candidate) && has_agent_tool(names) {
         if (candidate.eq_ignore_ascii_case("task")
             || candidate.to_ascii_lowercase().ends_with("__task"))
-            && names.values().any(|name| name == "Task") {
-                return Some("Task".to_owned());
-            }
+            && names.values().any(|name| name == "Task")
+        {
+            return Some("Task".to_owned());
+        }
         return Some("Agent".to_owned());
     }
     None
@@ -110,7 +112,10 @@ pub(super) fn nonempty_string<'a>(object: &'a Map<String, Value>, key: &str) -> 
         .filter(|value| !value.is_empty())
 }
 
-pub(super) fn take_alias_string(object: &mut Map<String, Value>, aliases: &[&str]) -> Option<String> {
+pub(super) fn take_alias_string(
+    object: &mut Map<String, Value>,
+    aliases: &[&str],
+) -> Option<String> {
     let (index, value) = aliases.iter().enumerate().find_map(|(index, key)| {
         nonempty_string(object, key).map(|value| (index, value.to_owned()))
     })?;
@@ -151,9 +156,10 @@ pub(super) fn normalize_launch_arguments(provider_name: &str, arguments: &Value)
             .contains("spawn_subagent")
     {
         if let Some(subagent_type) = object.get("subagent_type").and_then(Value::as_str)
-            && (subagent_type == GROK_HIGH_PROFILE || subagent_type.ends_with(":claudex-high")) {
-                object.insert("subagent_type".to_owned(), json!("claudex-grok"));
-            }
+            && (subagent_type == GROK_HIGH_PROFILE || subagent_type.ends_with(":claudex-high"))
+        {
+            object.insert("subagent_type".to_owned(), json!("claudex-grok"));
+        }
         object.insert("run_in_background".to_owned(), json!(true));
     }
     mapped
@@ -168,4 +174,3 @@ pub(super) fn launch_arguments_ready(arguments: &Value) -> bool {
         .and_then(|object| nonempty_string(object, "prompt"))
         .is_some()
 }
-

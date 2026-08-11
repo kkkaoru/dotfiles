@@ -6,8 +6,8 @@ use tokio::time::{Instant, sleep};
 use axum::body::Bytes;
 use serde_json::json;
 
-use super::super::{MessagesRequest, content::sse};
 use super::super::model_concurrency::Ticket;
+use super::super::{MessagesRequest, content::sse};
 use super::{SegmentBuilder, StreamSender, message_start};
 
 mod drive;

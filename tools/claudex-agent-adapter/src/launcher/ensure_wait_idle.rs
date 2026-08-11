@@ -128,7 +128,6 @@ async fn finish_wait_idle_replace(
     }
 }
 
-
 async fn wait_idle_inspect_pause() {
     #[cfg(test)]
     {

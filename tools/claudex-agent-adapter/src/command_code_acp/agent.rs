@@ -11,16 +11,12 @@ use tokio::task::AbortHandle;
 use tokio_util::compat::{TokioAsyncReadCompatExt as _, TokioAsyncWriteCompatExt as _};
 use uuid::Uuid;
 
-use super::{
-    coalesce::message_text_from_progress,
-    options::Options,
-    prompt::prompt_text,
-};
+use super::{coalesce::message_text_from_progress, options::Options, prompt::prompt_text};
 
 mod emit;
 mod progress;
-use progress::{emit_progress_events, relay_client_operations};
 use emit::{emit_cancelled, emit_result};
+use progress::{emit_progress_events, relay_client_operations};
 
 pub(super) enum ClientOperation {
     Notify(acp::SessionNotification, oneshot::Sender<()>),

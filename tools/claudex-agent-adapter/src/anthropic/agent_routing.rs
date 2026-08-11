@@ -7,8 +7,8 @@ mod explicit;
 mod summary;
 mod texts;
 use explicit::explicit_model_matches_agent;
-use summary::{advisor_launch_disabled, configured_advisor_model_matches};
 pub(in crate::anthropic) use summary::active_routing_summary;
+use summary::{advisor_launch_disabled, configured_advisor_model_matches};
 use texts::user_message_texts;
 
 const ADAPTER_EFFORT: &str = "claudex_effort";

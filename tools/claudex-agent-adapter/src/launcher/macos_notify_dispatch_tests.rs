@@ -5,10 +5,10 @@ use std::{
 };
 
 use super::{
-    DelegateForceGuard, MACOS_NOTIFY_ENV, NotifyForceGuard, delegate_complete_notify,
-    cli_wants_swap_banner, emit_cli_swap_complete_banner, interpret_delegate_status,
-    notifications_enabled, opt_in_cli_swap_notify, parse_notify_env, silence_swap_banners_for_replace,
-    post, run_internal,
+    DelegateForceGuard, MACOS_NOTIFY_ENV, NotifyForceGuard, cli_wants_swap_banner,
+    delegate_complete_notify, emit_cli_swap_complete_banner, interpret_delegate_status,
+    notifications_enabled, opt_in_cli_swap_notify, parse_notify_env, post, run_internal,
+    silence_swap_banners_for_replace,
 };
 use crate::launcher::{
     installed_adapter, launcher_logs,
@@ -25,16 +25,16 @@ fn env_lock() -> MutexGuard<'static, ()> {
 
 #[test]
 fn interpret_delegate_status_covers_success_failure_and_spawn_errors() {
-    assert!(interpret_delegate_status(Ok(
-        std::process::Command::new("true")
-            .status()
-            .expect("true")
-    )));
-    assert!(!interpret_delegate_status(Ok(
-        std::process::Command::new("false")
-            .status()
-            .expect("false")
-    )));
+    assert!(interpret_delegate_status(Ok(std::process::Command::new(
+        "true"
+    )
+    .status()
+    .expect("true"))));
+    assert!(!interpret_delegate_status(Ok(std::process::Command::new(
+        "false"
+    )
+    .status()
+    .expect("false"))));
     assert!(!interpret_delegate_status(Err(std::io::Error::other(
         "spawn failed"
     ))));
@@ -46,7 +46,10 @@ fn notifications_enabled_respects_test_force_guard() {
     let _disabled = NotifyForceGuard::push(false);
     assert!(!notifications_enabled(), "force guard must opt out");
     drop(_disabled);
-    assert!(notifications_enabled(), "force guard restore re-enables notify");
+    assert!(
+        notifications_enabled(),
+        "force guard restore re-enables notify"
+    );
 }
 
 #[test]

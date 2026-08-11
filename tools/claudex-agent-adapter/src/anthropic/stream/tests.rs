@@ -1,4 +1,3 @@
-
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
     convert::Infallible,
@@ -25,8 +24,6 @@ use crate::{
     grok_acp::GrokAcp,
 };
 
-
-
 fn block_lacks_websearch_chrome(block: &Value) -> bool {
     ["text", "thinking"].into_iter().all(|key| {
         block.get(key).and_then(Value::as_str).is_none_or(|text| {
@@ -35,7 +32,6 @@ fn block_lacks_websearch_chrome(block: &Value) -> bool {
         })
     })
 }
-
 
 fn track_content_block_frame(
     payload: &Value,
@@ -488,9 +484,7 @@ fn sanitizes_text_thinking_and_provider_status_variants() {
     );
 }
 
-
 fn assert_cursor_thought_for_filler_phrases() {
-
     assert!(sanitize::is_canned_worker_filler("Thought for 17s"));
     assert!(sanitize::is_canned_worker_filler(
         "Working on your request — I'll gather what I need and put together the result."
@@ -519,20 +513,14 @@ fn assert_cursor_thought_for_filler_phrases() {
 }
 
 fn assert_subagent_activity_and_silence_policy() {
-assert_eq!(
+    assert_eq!(
         super::SUBAGENT_INITIAL_ACTIVITY_DELAY,
         Duration::from_millis(100)
     );
-    assert_eq!(
-        super::INITIAL_ACTIVITY_DELAY,
-        Duration::from_millis(250)
-    );
+    assert_eq!(super::INITIAL_ACTIVITY_DELAY, Duration::from_millis(250));
     assert!(super::SUBAGENT_INITIAL_ACTIVITY_DELAY < super::INITIAL_ACTIVITY_DELAY);
     assert!(super::INITIAL_ACTIVITY_DELAY < super::ACTIVITY_KEEPALIVE_INTERVAL);
-    assert_eq!(
-        super::ACTIVITY_KEEPALIVE_INTERVAL,
-        Duration::from_secs(4)
-    );
+    assert_eq!(super::ACTIVITY_KEEPALIVE_INTERVAL, Duration::from_secs(4));
     assert_eq!(
         super::types::stream_activity_delays(true),
         (
@@ -570,8 +558,10 @@ assert_eq!(
         "main turns must not use SubAgent silence judgment"
     );
     assert!(
-        super::types::fail_if_subagent_provider_silent(&SegmentBuilder::new(1).with_subagent(false))
-            .is_ok()
+        super::types::fail_if_subagent_provider_silent(
+            &SegmentBuilder::new(1).with_subagent(false)
+        )
+        .is_ok()
     );
     let mut silent = SegmentBuilder::new(1).with_subagent(true);
     silent.backdate_last_visible_provider_activity(
@@ -587,7 +577,6 @@ fn recognizes_cursor_thought_for_filler() {
     assert_cursor_thought_for_filler_phrases();
     assert_subagent_activity_and_silence_policy();
 }
-
 
 fn assert_compact_live_prose_basics() {
     assert_eq!(sanitize::compact_live_prose("short"), "short");
@@ -640,7 +629,7 @@ fn assert_compact_live_prose_truncation() {
 }
 
 fn assert_compact_worker_status_truncation() {
-assert!(sanitize::is_premature_worker_status_reply(
+    assert!(sanitize::is_premature_worker_status_reply(
         "phase update: still drafting"
     ));
     assert!(sanitize::is_premature_worker_status_reply(
@@ -690,8 +679,6 @@ fn compact_live_prose_and_worker_status_cover_both_truncation_sides() {
     assert_compact_live_prose_truncation();
     assert_compact_worker_status_truncation();
 }
-
-
 
 #[test]
 fn rewrites_premature_status_only_toolless_worker_replies() {
@@ -879,7 +866,6 @@ async fn thinking_state_handles_reuse_keepalive_and_unit_transitions() {
     let (mut state, mut blocks) = run_thinking_keepalive_phase().await;
     run_thinking_status_phase(&mut state, &mut blocks).await;
 }
-
 
 #[tokio::test]
 async fn progress_status_dedupes_identical_status_lines() {
@@ -1114,10 +1100,16 @@ async fn feed_subagent_reasoning_across_units(
     sender: &mpsc::Sender<Result<Bytes, Infallible>>,
 ) {
     for (summary_index, delta) in [
-        (0, "Map the conversion path.
-"),
-        (1, "Check Vibrato boundaries.
-"),
+        (
+            0,
+            "Map the conversion path.
+",
+        ),
+        (
+            1,
+            "Check Vibrato boundaries.
+",
+        ),
     ] {
         assert!(
             builder
@@ -1158,7 +1150,7 @@ async fn feed_subagent_reasoning_across_units(
                     "itemId":"worker:reasoning-2",
                     "summaryIndex":0,
                     "delta":"Hypothesis: boundaries were dropped.
-"
+            "
                 }
             }),
             Some(sender),
@@ -1213,7 +1205,7 @@ async fn collect_sse_frames(receiver: &mut mpsc::Receiver<Result<Bytes, Infallib
 }
 
 fn assert_subagent_reasoning_sse(sse: &str) {
-assert_eq!(
+    assert_eq!(
         sse.matches("\"type\":\"content_block_start\"").count(),
         1,
         "live stream must open thinking only once: {sse}"
@@ -1231,7 +1223,6 @@ assert_eq!(
         !sse.contains("\"type\":\"server_tool_use\""),
         "live stream must not paint server_tool_use: {sse}"
     );
-
 }
 
 #[tokio::test]
@@ -1245,7 +1236,6 @@ async fn subagent_reasoning_stays_on_one_thinking_block_across_units() {
     let sse = collect_sse_frames(&mut receiver).await;
     assert_subagent_reasoning_sse(&sse);
 }
-
 
 #[tokio::test]
 async fn command_code_reasoning_stays_on_one_thinking_block() {
@@ -1293,8 +1283,7 @@ async fn command_code_reasoning_stays_on_one_thinking_block() {
         .filter(|block| block.get("type").and_then(Value::as_str) == Some("thinking"))
         .count();
     assert_eq!(
-        thinking_block_count,
-        1,
+        thinking_block_count, 1,
         "Command Code must not open/close thinking per unit: {:?}",
         segment.blocks
     );
@@ -1371,8 +1360,7 @@ async fn command_code_muse_spark_status_bursts_stay_on_one_thinking_block() {
         .filter(|block| block.get("type").and_then(Value::as_str) == Some("thinking"))
         .count();
     assert_eq!(
-        thinking_block_count,
-        1,
+        thinking_block_count, 1,
         "Muse Spark dump must not open/close thinking per burst: {:?}",
         segment.blocks
     );
@@ -2382,9 +2370,12 @@ async fn streams_native_web_search_status_without_committing_progress_text() {
     }
     let segment = builder.finish(Some(&sender)).await.expect("segment");
     drop(sender);
-    assert!(segment.blocks.iter().all(|block| {
-        block_lacks_websearch_chrome(block)
-    }));
+    assert!(
+        segment
+            .blocks
+            .iter()
+            .all(|block| { block_lacks_websearch_chrome(block) })
+    );
     assert_eq!(segment.usage.web_search_requests, 0);
 
     let mut frames = Vec::new();
@@ -2546,7 +2537,6 @@ async fn assert_agent_tool_use_path(
         builder.blocks[0]["input"]["subagent_type"],
         "general-purpose"
     );
-
 }
 
 async fn assert_native_tool_wip_path(
@@ -2593,7 +2583,6 @@ async fn assert_native_tool_wip_path(
         "native progress thinking: {progress}"
     );
     assert!(progress.contains("ls"));
-
 }
 
 async fn assert_mcp_tool_wip_path(
@@ -2665,8 +2654,6 @@ async fn bridges_acp_agent_provider_tools_to_tool_use_but_keeps_native_tools_as_
     assert_native_tool_wip_path(&bridge, &session, &messages, &routing).await;
     assert_mcp_tool_wip_path(&bridge, &session, &messages, &routing).await;
 }
-
-
 
 #[tokio::test]
 async fn expands_valid_parallel_agent_batches_and_rejects_short_batches() {
@@ -3175,8 +3162,8 @@ async fn unsupported_disconnect_with_a_visible_tool_aborts_without_a_drain() {
     assert!(!app.is_alive());
     assert_eq!(Arc::strong_count(&events), 1, "no hidden drain owns events");
     tokio::time::timeout(Duration::from_secs(1), wait_for_disconnected_drain(&events))
-    .await
-    .expect("provider abort must close the event channel after queued events");
+        .await
+        .expect("provider abort must close the event channel after queued events");
     assert_eq!(bridge.used_session_slots(), 1);
     drop(session);
     assert_eq!(bridge.used_session_slots(), 0);
@@ -3514,7 +3501,12 @@ async fn drive_stream_keeps_content_indices_monotonic_across_context_retry() {
         let frame = String::from_utf8(frame.expect("frame").to_vec()).expect("UTF-8 SSE");
         let data = frame.lines().find_map(|line| line.strip_prefix("data: "));
         let payload = serde_json::from_str::<Value>(data.expect("SSE data")).expect("JSON frame");
-        track_content_block_frame(&payload, &mut open_index, &mut next_index, &mut started_types);
+        track_content_block_frame(
+            &payload,
+            &mut open_index,
+            &mut next_index,
+            &mut started_types,
+        );
     }
 
     assert_eq!(started_types, vec![json!("thinking"), json!("text")]);
@@ -3997,8 +3989,7 @@ async fn retry_after_provider_failure_requires_closed_stream_and_dead_model() {
 
 #[tokio::test]
 async fn drive_stream_retries_provider_failure_onto_a_live_sibling_route() {
-    let (_root, app, _seed_bridge, _seed_session) =
-        retryable_drive_fixture_with_output().await;
+    let (_root, app, _seed_bridge, _seed_session) = retryable_drive_fixture_with_output().await;
     let backend = AgentBackend::routed(vec![
         (
             "main".to_owned(),
@@ -4361,9 +4352,12 @@ async fn wait_for_response_ids(log: &std::path::Path, expected: &[u64]) -> Vec<u
 
 async fn assert_disconnected_tool_rejections(root: &tempfile::TempDir, expected: &[u64]) {
     let log = root.path().join("responses.log");
-    let actual = tokio::time::timeout(Duration::from_secs(1), wait_for_response_ids(&log, expected))
-        .await
-        .expect("disconnected tool responses should be written promptly");
+    let actual = tokio::time::timeout(
+        Duration::from_secs(1),
+        wait_for_response_ids(&log, expected),
+    )
+    .await
+    .expect("disconnected tool responses should be written promptly");
     assert_eq!(actual, expected);
 }
 
@@ -4760,9 +4754,7 @@ async fn finish_closed_stream_retains_settled_session_for_follow_up_reuse() {
     assert_eq!(bridge.sessions.lock().await.len(), 1);
 
     // Call finish_closed_stream with provider_settled=true
-    bridge
-        .finish_closed_stream(&session, &events, true)
-        .await;
+    bridge.finish_closed_stream(&session, &events, true).await;
 
     // CRITICAL ASSERTION: Session must remain in bridge.sessions after settled completion
     assert_eq!(
@@ -4779,7 +4771,10 @@ async fn finish_closed_stream_retains_settled_session_for_follow_up_reuse() {
             .find(|s| Arc::ptr_eq(s, &session))
             .expect("session must still be in bridge.sessions"),
     );
-    assert!(Arc::ptr_eq(&retained, &session), "retained session must match original");
+    assert!(
+        Arc::ptr_eq(&retained, &session),
+        "retained session must match original"
+    );
 
     // Simulate a follow-up request accessing the idle session
     // Build a request that matches the session's signature and transcript
@@ -4804,9 +4799,10 @@ async fn finish_closed_stream_retains_settled_session_for_follow_up_reuse() {
     // Directly verify that sessions.lock().await contains our idle session
     let live_sessions = bridge.sessions.lock().await;
     assert_eq!(live_sessions.len(), 1);
-    assert!(live_sessions
-        .iter()
-        .any(|s| Arc::ptr_eq(s, &session)), "idle session must still be discoverable");
+    assert!(
+        live_sessions.iter().any(|s| Arc::ptr_eq(s, &session)),
+        "idle session must still be discoverable"
+    );
 
     // The idle session remains available for future select_session() calls
     // which will use reserve_matching_session internally to find it
@@ -5018,9 +5014,9 @@ async fn finish_completed_stream_commits_closed_subagent_without_sse_frames() {
         .await;
     let transcript = session.transcript.lock().await.clone();
     assert!(
-        transcript.iter().any(|message| {
-            message.get("role").and_then(Value::as_str) == Some("assistant")
-        }),
+        transcript
+            .iter()
+            .any(|message| { message.get("role").and_then(Value::as_str) == Some("assistant") }),
         "closed SubAgent finish must still commit transcript: {transcript:?}"
     );
 }
@@ -5226,11 +5222,7 @@ async fn failover_usage_limit_turn_attempts_sibling_configured_acp_provider() {
     let mut catalog = crate::provider_config::ModelCatalog::default();
     catalog
         .set_worker_routes(vec![
-            crate::provider_config::WorkerRoute::new(
-                "claudex-qwen",
-                "qwen3.8-max-preview",
-                "high",
-            ),
+            crate::provider_config::WorkerRoute::new("claudex-qwen", "qwen3.8-max-preview", "high"),
             crate::provider_config::WorkerRoute::new("claudex-cursor", "auto", "high"),
         ])
         .expect("workers");
@@ -5292,8 +5284,12 @@ async fn failover_usage_limit_turn_attempts_sibling_configured_acp_provider() {
     }
 }
 
-
-async fn empty_acp_sibling_retry_bridge() -> (tempfile::TempDir, Arc<Bridge>, Arc<Session>, ThreadEventDispatcher) {
+async fn empty_acp_sibling_retry_bridge() -> (
+    tempfile::TempDir,
+    Arc<Bridge>,
+    Arc<Session>,
+    ThreadEventDispatcher,
+) {
     let cache = tempfile::tempdir().expect("stream failover cache");
     let mut qwen = crate::agent_backend::BackendRoute::new(
         "qwen3.8-max-preview",
@@ -5309,11 +5305,7 @@ async fn empty_acp_sibling_retry_bridge() -> (tempfile::TempDir, Arc<Bridge>, Ar
     let mut catalog = crate::provider_config::ModelCatalog::default();
     catalog
         .set_worker_routes(vec![
-            crate::provider_config::WorkerRoute::new(
-                "claudex-qwen",
-                "qwen3.8-max-preview",
-                "high",
-            ),
+            crate::provider_config::WorkerRoute::new("claudex-qwen", "qwen3.8-max-preview", "high"),
             crate::provider_config::WorkerRoute::new("claudex-cursor", "auto", "high"),
         ])
         .expect("workers");
@@ -5384,7 +5376,6 @@ async fn drive_subagent_stream_retries_empty_acp_on_sibling_provider() {
         "empty-ACP sibling retry must produce stream output: {output}"
     );
 }
-
 
 #[tokio::test]
 async fn drive_stream_retries_usage_limit_err_after_committed_output() {

@@ -34,10 +34,7 @@ impl Drop for EnvGuard {
         restore("CARGO_HOME", self.cargo_home.as_ref());
         restore(ADAPTER_EXECUTABLE_ENV, self.adapter.as_ref());
         restore(NOTIFY_IN_PROCESS_ENV, self.notify.as_ref());
-        restore(
-            super::super::RECOVERY_MANIFEST_ENV,
-            self.recovery.as_ref(),
-        );
+        restore(super::super::RECOVERY_MANIFEST_ENV, self.recovery.as_ref());
     }
 }
 
@@ -152,7 +149,10 @@ fn resolve_keeps_recovery_manifest_and_recovery_path_images() {
     let recovery = PathBuf::from("/tmp/recovery/claudex-agent-adapter");
     unsafe {
         env::remove_var(ADAPTER_EXECUTABLE_ENV);
-        env::set_var(super::super::RECOVERY_MANIFEST_ENV, "/tmp/recovery/manifest.json");
+        env::set_var(
+            super::super::RECOVERY_MANIFEST_ENV,
+            "/tmp/recovery/manifest.json",
+        );
     };
     assert_eq!(resolve_service_executable(recovery.clone()), recovery);
     unsafe { env::remove_var(super::super::RECOVERY_MANIFEST_ENV) };
@@ -219,7 +219,10 @@ fn is_executable_rejects_missing_and_non_executable_files() {
     }
     let dir = root.path().join("dir");
     fs::create_dir(&dir).unwrap();
-    assert!(!is_executable(&dir), "directories are not executable adapters");
+    assert!(
+        !is_executable(&dir),
+        "directories are not executable adapters"
+    );
 }
 
 #[test]
@@ -397,7 +400,10 @@ fn same_file_falls_back_when_canonicalize_fails() {
     let other = root.path().join("missing-b");
     assert!(same_file(&missing, &missing));
     assert!(!same_file(&missing, &other));
-    assert!(is_newer(&missing, &other), "missing mtimes default to newer");
+    assert!(
+        is_newer(&missing, &other),
+        "missing mtimes default to newer"
+    );
 }
 
 #[cfg(unix)]

@@ -23,7 +23,6 @@ enum RuntimeCommand {
     Serve(AdapterOptions),
 }
 
-
 pub async fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<i32> {
     let code = match parse_command(arguments.into_iter().skip(1).collect())? {
         RuntimeCommand::BuildId => {

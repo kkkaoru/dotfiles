@@ -35,7 +35,10 @@ async fn replace_shares_one_settle_budget_when_worker_never_exits() {
     let elapsed = started.elapsed();
     hold.abort();
 
-    assert!(result.is_err(), "stuck replace must fail closed: {result:?}");
+    assert!(
+        result.is_err(),
+        "stuck replace must fail closed: {result:?}"
+    );
     assert!(
         elapsed < REPLACE_SETTLE_TIMEOUT.saturating_mul(2),
         "stacked cancel+clear budgets would approach 2x; elapsed={elapsed:?}"

@@ -9,7 +9,10 @@ fn remaining_final_message_skips_when_streamed_already_covers_result() {
     );
     assert_eq!(remaining_final_message("hello", "hello"), None);
     assert_eq!(remaining_final_message("hello", "hello world"), None);
-    assert_eq!(remaining_final_message("hello", "hel"), Some("lo".to_owned()));
+    assert_eq!(
+        remaining_final_message("hello", "hel"),
+        Some("lo".to_owned())
+    );
     assert_eq!(remaining_final_message("hello", "hello   "), None);
     assert_eq!(
         remaining_final_message("fresh answer", "old"),

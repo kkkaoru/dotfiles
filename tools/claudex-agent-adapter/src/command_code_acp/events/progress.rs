@@ -1,8 +1,8 @@
 use agent_client_protocol as acp;
 use serde_json::json;
 
-use super::{ProgressEvent, TurnResult};
 use super::chrome::{has_status_prefix, is_canned_progress, native_message, thought_chunk};
+use super::{ProgressEvent, TurnResult};
 use crate::command_code_acp::tool_chrome::{tool_kind, tool_raw_input};
 
 pub fn progress_to_updates(event: &ProgressEvent) -> Vec<acp::SessionUpdate> {

@@ -1,10 +1,10 @@
 use anyhow::Result;
 use serde_json::json;
 
-use super::SegmentBuilder;
 use super::super::progress_keepalive::{
     compact_keepalive_title, keepalive_elapsed_chrome, send_activity_heartbeat,
 };
+use super::SegmentBuilder;
 use crate::anthropic::stream::{
     protocol::{StreamSender, send_stream_frame},
     sanitize::is_canned_worker_filler,
@@ -67,10 +67,7 @@ impl SegmentBuilder {
             .await
     }
 
-    async fn subagent_activity_keepalive(
-        &mut self,
-        stream: Option<&StreamSender>,
-    ) -> Result<()> {
+    async fn subagent_activity_keepalive(&mut self, stream: Option<&StreamSender>) -> Result<()> {
         let last_tool = self
             .provider_tool_calls
             .last()

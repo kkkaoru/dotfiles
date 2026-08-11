@@ -39,9 +39,7 @@ pub(super) fn reject_unavailable_subagent_model(
         model,
     ) || context.launch_model_is_exhausted(model);
     if exhausted {
-        anyhow::bail!(crate::anthropic::agent_route_validation::exhausted_subagent_notice(
-            model
-        ));
+        anyhow::bail!(crate::anthropic::agent_route_validation::exhausted_subagent_notice(model));
     }
     Ok(())
 }

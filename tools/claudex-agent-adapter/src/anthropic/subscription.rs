@@ -8,17 +8,17 @@ use std::{
 };
 use tokio::sync::Semaphore;
 
+mod command;
 mod effort;
 pub(super) mod failure;
 mod lifecycle;
 mod options;
-mod command;
 mod retry;
 mod run;
+pub(in crate::anthropic) use command::{OutputMode, subscription_command};
 #[cfg(test)]
 pub(super) use effort::request_effort;
 pub(super) use effort::valid_effort;
-pub(in crate::anthropic) use command::{OutputMode, subscription_command};
 
 #[cfg(test)]
 pub(super) use super::subscription_request::cwd_from_system;
@@ -53,8 +53,8 @@ pub(super) use retry::with_transient_retries;
 #[cfg(test)]
 pub(super) use retry::{should_retry_subscription, transient_retry_delay};
 pub(super) use run::{
-    acquire_subscription_slot, run_subscription_model, spawn_subscription,
-    take_subscription_stdin, write_subscription_prompt,
+    acquire_subscription_slot, run_subscription_model, spawn_subscription, take_subscription_stdin,
+    write_subscription_prompt,
 };
 pub(crate) const DEFAULT_MAX_PROCESSES: usize = 20;
 pub(crate) const DEFAULT_TIMEOUT_MINUTES: u64 = 120;

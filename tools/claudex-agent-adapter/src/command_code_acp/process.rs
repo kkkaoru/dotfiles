@@ -142,13 +142,7 @@ fn apply_stdout_bytes(
     if line.is_empty() && decoder.has_pending() {
         return;
     }
-    apply_parsed_line(
-        progress,
-        sink,
-        coalescer,
-        result,
-        parse_stdout_line(&line),
-    );
+    apply_parsed_line(progress, sink, coalescer, result, parse_stdout_line(&line));
 }
 
 fn apply_parsed_line(

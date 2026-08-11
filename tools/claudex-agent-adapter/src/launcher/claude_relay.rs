@@ -1,15 +1,8 @@
-use std::{
-    ffi::OsString,
-    io::Write,
-    net::SocketAddr,
-};
+use std::{ffi::OsString, io::Write, net::SocketAddr};
 
 use anyhow::{Result, bail};
 
-use super::{
-    LOCAL_TOKEN,
-    process_io::relay_filtered_io,
-};
+use super::{LOCAL_TOKEN, process_io::relay_filtered_io};
 
 pub(super) fn requires_authentication(listen: &SocketAddr, token: &str) -> bool {
     !listen.ip().is_loopback() && token == LOCAL_TOKEN

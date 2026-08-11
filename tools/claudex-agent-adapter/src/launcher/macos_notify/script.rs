@@ -5,9 +5,7 @@ use std::{
 
 use anyhow::{Result, bail};
 
-use super::{
-    COMPLETE_SUBTITLE, Event, LIVE_SUBTITLE, Notification, TITLE, WAITING_SUBTITLE,
-};
+use super::{COMPLETE_SUBTITLE, Event, LIVE_SUBTITLE, Notification, TITLE, WAITING_SUBTITLE};
 
 pub(super) fn notification(event: &Event) -> Notification {
     match event {
@@ -29,9 +27,7 @@ pub(super) fn notification(event: &Event) -> Notification {
         } => Notification {
             title: format!("{TITLE} · {listen}"),
             subtitle: format!("{LIVE_SUBTITLE} · build {build_id}"),
-            body: format!(
-                "build {build_id} を即時利用 · live {listen} · waiting {waiting}"
-            ),
+            body: format!("build {build_id} を即時利用 · live {listen} · waiting {waiting}"),
         },
         Event::SwapComplete { listen, build_id } => Notification {
             title: format!("{TITLE} · {listen}"),

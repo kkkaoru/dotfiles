@@ -135,7 +135,9 @@ fn forget_retained_session_rewrites_or_keeps_empty_snapshot() {
     let loaded = read_retained(&path).expect("read").expect("present");
     assert_eq!(loaded.session_ids, ["session-b"]);
     forget_retained_session(&path, "session-b").expect("forget last");
-    let empty = read_retained(&path).expect("read").expect("empty snapshot kept");
+    let empty = read_retained(&path)
+        .expect("read")
+        .expect("empty snapshot kept");
     assert!(
         empty.session_ids.is_empty(),
         "last forget must keep listen/pid so release_idle can still find busy retained"

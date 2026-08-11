@@ -1,8 +1,4 @@
-use std::{
-    future::Future,
-    rc::Rc,
-    sync::Arc,
-};
+use std::{future::Future, rc::Rc, sync::Arc};
 
 use anyhow::{Result, anyhow};
 use serde_json::json;
@@ -14,7 +10,10 @@ use super::{
 };
 use crate::app_server::events::ThreadEventDispatcher;
 
-pub(in crate::grok_acp) async fn drive_turns(driver: TurnDriver, turns: mpsc::Receiver<PreparedTurn>) {
+pub(in crate::grok_acp) async fn drive_turns(
+    driver: TurnDriver,
+    turns: mpsc::Receiver<PreparedTurn>,
+) {
     let TurnDriver {
         provider,
         connection,
@@ -52,8 +51,10 @@ pub(in crate::grok_acp) async fn drive_turns(driver: TurnDriver, turns: mpsc::Re
     .await;
 }
 
-pub(in crate::grok_acp) async fn drive_turn_tasks<F, Fut>(mut turns: mpsc::Receiver<PreparedTurn>, mut start: F)
-where
+pub(in crate::grok_acp) async fn drive_turn_tasks<F, Fut>(
+    mut turns: mpsc::Receiver<PreparedTurn>,
+    mut start: F,
+) where
     F: FnMut(PreparedTurn) -> Fut,
     Fut: Future<Output = ()> + 'static,
 {

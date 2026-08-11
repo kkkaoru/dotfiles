@@ -8,9 +8,7 @@ use super::{
     cancellation::cancel_prompt, cancellation::cancel_setup,
     cancellation::finish_setup_cancellation, configured_prompt,
 };
-use crate::{
-    app_server::events::ThreadEventDispatcher, grok_acp::connection::AcpProvider,
-};
+use crate::{app_server::events::ThreadEventDispatcher, grok_acp::connection::AcpProvider};
 
 // Session creation is bounded; effort setup must not hang a turn forever when a
 // provider ignores or stalls on set_session_model (observed with configured ACP).
@@ -31,8 +29,8 @@ pub(super) struct TurnCtl<'a> {
     invalidated_sessions: &'a InvalidatedSessions,
 }
 
-mod setup;
 mod effort;
+mod setup;
 use effort::finish_effort_setup;
 use setup::apply_effort;
 

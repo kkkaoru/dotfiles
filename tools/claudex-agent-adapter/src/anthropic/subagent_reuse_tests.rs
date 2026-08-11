@@ -9,9 +9,9 @@ use std::{
     thread,
 };
 
-use super::*;
 use super::records::launch_records;
 use super::records_scope::{latest_user_text, scope_similarity};
+use super::*;
 
 fn request(session: &str, messages: Vec<Value>) -> MessagesRequest {
     MessagesRequest {
@@ -70,12 +70,7 @@ fn launch_with_context(tool_use_id: &str, recipient: &str) -> Vec<Value> {
     ]
 }
 
-fn launch_with_scope(
-    tool_use_id: &str,
-    recipient: &str,
-    scope: &str,
-    model: &str,
-) -> Vec<Value> {
+fn launch_with_scope(tool_use_id: &str, recipient: &str, scope: &str, model: &str) -> Vec<Value> {
     vec![
         json!({
             "role":"assistant",
@@ -136,20 +131,16 @@ fn records_recipients_and_persists_across_registry_restart() {
 fn unchanged_transcript_skips_redundant_persistence() {
     let root = tempfile::tempdir().expect("reuse registry fixture");
     let path = root.path().join("reuse.json");
-    let registry =
-        SubagentReuseRegistry::with_store(path.clone());
+    let registry = SubagentReuseRegistry::with_store(path.clone());
     let messages = vec![launch("tool-a", "worker-a")];
 
     registry.observe_and_restore(&mut request("session-a", messages.clone()));
-    let inode = std::os::unix::fs::MetadataExt::ino(
-        &std::fs::metadata(&path).expect("persisted registry"),
-    );
+    let inode =
+        std::os::unix::fs::MetadataExt::ino(&std::fs::metadata(&path).expect("persisted registry"));
 
     registry.observe_and_restore(&mut request("session-a", messages));
     assert_eq!(
-        std::os::unix::fs::MetadataExt::ino(
-            &std::fs::metadata(&path).expect("persisted registry")
-        ),
+        std::os::unix::fs::MetadataExt::ino(&std::fs::metadata(&path).expect("persisted registry")),
         inode,
         "replaying the same transcript must not fsync the cache again"
     );
@@ -456,7 +447,10 @@ fn successful_resume_without_spawn_phrase_keeps_recipient_reusable() {
         Some("worker-a".to_owned()),
         "successful resume prose must not retire the recipient"
     );
-    assert_eq!(follow.get("resume").and_then(Value::as_str), Some("worker-a"));
+    assert_eq!(
+        follow.get("resume").and_then(Value::as_str),
+        Some("worker-a")
+    );
 }
 
 #[test]
@@ -1064,9 +1058,9 @@ fn named_agent_input_alone_does_not_enable_agent_teams_mailbox() {
     assert!(!agent_teams_enabled(&ordinary));
     let (tools, _, _) = crate::anthropic::session::tool_configuration(&ordinary, None, None);
     assert!(
-        tools.iter().all(|tool| {
-            tool.get("name").and_then(Value::as_str) != Some("cc_SendMessage_1")
-        })
+        tools
+            .iter()
+            .all(|tool| { tool.get("name").and_then(Value::as_str) != Some("cc_SendMessage_1") })
     );
 }
 
@@ -1114,10 +1108,8 @@ fn only_native_launch_results_are_recorded() {
 fn launch_records_cover_empty_scope_and_background_spawn_text() {
     assert!(summarize_scope(&json!({})).is_empty());
     assert!(
-        summarize_scope(
-            &json!({"prompt":"\nclaudex_hidden\n<claudex-note>skip</claudex-note>\n"})
-        )
-        .is_empty()
+        summarize_scope(&json!({"prompt":"\nclaudex_hidden\n<claudex-note>skip</claudex-note>\n"}))
+            .is_empty()
     );
     assert!(!already_has_resume(&json!({})));
     assert!(!already_has_resume(&json!({"resume":""})));
@@ -1757,7 +1749,7 @@ fn rewrite_launch_input_skips_empty_recipient() {
         SessionState {
             launches: vec![LaunchRecord {
                 key: "t1".to_owned(),
-                recipient: String::new(),  // EMPTY recipient (pending)
+                recipient: String::new(), // EMPTY recipient (pending)
                 scope: "test".to_owned(),
                 model: Some("model-1".to_owned()),
                 status: "pending".to_owned(),
@@ -1769,9 +1761,16 @@ fn rewrite_launch_input_skips_empty_recipient() {
     // Try to rewrite launch - should return None due to empty recipient
     let mut arguments = json!({"prompt":"test","claudex_model":"model-1"});
     let result = registry.rewrite_launch_input("sess-1", &mut arguments);
-    
-    assert!(result.is_none(), "should not inject resume for empty recipient (pending launch)");
-    assert_eq!(arguments.get("resume"), None, "resume field should not be added");
+
+    assert!(
+        result.is_none(),
+        "should not inject resume for empty recipient (pending launch)"
+    );
+    assert_eq!(
+        arguments.get("resume"),
+        None,
+        "resume field should not be added"
+    );
 }
 
 #[test]

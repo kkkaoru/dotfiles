@@ -13,8 +13,9 @@ use super::super::{
     content::{ToolResult, transcript_owns_tool_results},
 };
 use super::{
-    continuation, preempt,
+    continuation,
     helpers::{touch_session, validate_tool_result_ownership},
+    preempt,
     tools::{thread_start_params_for_mode, tool_configuration_for_mode},
 };
 use crate::app_server::response_thread_id;

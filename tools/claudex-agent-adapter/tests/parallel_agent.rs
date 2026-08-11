@@ -379,7 +379,6 @@ fn background_launch_results(launched: &Value) -> Value {
     )
 }
 
-
 async fn stream_follow_up(client: &Client, url: &str, messages: Value) -> String {
     client
         .post(url)

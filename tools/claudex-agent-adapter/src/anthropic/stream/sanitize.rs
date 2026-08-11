@@ -109,7 +109,8 @@ fn segment_has_tool_payload(blocks: &[Value]) -> bool {
 fn segment_visible_text(blocks: &[Value]) -> String {
     blocks
         .iter()
-        .filter(|&block| block.get("type").and_then(Value::as_str) == Some("text")).map(|block| block.get("text").and_then(Value::as_str).unwrap_or(""))
+        .filter(|&block| block.get("type").and_then(Value::as_str) == Some("text"))
+        .map(|block| block.get("text").and_then(Value::as_str).unwrap_or(""))
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -257,7 +258,12 @@ pub(super) fn latest_worker_status(delta: &str) -> Option<String> {
 pub(super) fn strip_worker_status_lines(text: &str) -> String {
     let kept = text
         .lines()
-        .filter(|line| !line.trim_start().to_ascii_lowercase().starts_with("status:"))
+        .filter(|line| {
+            !line
+                .trim_start()
+                .to_ascii_lowercase()
+                .starts_with("status:")
+        })
         .collect::<Vec<_>>();
     if kept.iter().all(|line| line.trim().is_empty()) {
         return String::new();

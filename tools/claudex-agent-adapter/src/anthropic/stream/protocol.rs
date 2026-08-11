@@ -226,7 +226,6 @@ pub(in crate::anthropic) fn tool_use_frames(
 #[path = "protocol_lazy_tests.rs"]
 mod lazy_tests;
 
-
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[path = "protocol_handler_tests.rs"]

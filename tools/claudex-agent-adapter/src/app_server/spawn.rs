@@ -60,10 +60,7 @@ pub(super) fn spawn_child(
         .context("failed to start `codex app-server`")
 }
 
-pub(super) fn prepare_isolated_codex_home(
-    source_home: &Path,
-    isolated: &Path,
-) -> Result<PathBuf> {
+pub(super) fn prepare_isolated_codex_home(source_home: &Path, isolated: &Path) -> Result<PathBuf> {
     std::fs::create_dir_all(isolated)?;
 
     let source_auth = source_home.join("auth.json");

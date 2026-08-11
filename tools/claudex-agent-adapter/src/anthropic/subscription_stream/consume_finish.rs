@@ -3,17 +3,9 @@ use std::{convert::Infallible, pin::Pin};
 use anyhow::Result;
 use axum::body::Bytes;
 use serde_json::{Value, json};
-use tokio::{
-    process::Child,
-    sync::mpsc,
-    time::Sleep,
-};
+use tokio::{process::Child, sync::mpsc, time::Sleep};
 
-use super::{
-    SubscriptionStream,
-    lifecycle::validate_stream_exit,
-    post_eof::await_post_eof,
-};
+use super::{SubscriptionStream, lifecycle::validate_stream_exit, post_eof::await_post_eof};
 use crate::anthropic::subscription::{SubscriptionOptions, failure};
 
 pub(super) async fn finish_blocked_stream(

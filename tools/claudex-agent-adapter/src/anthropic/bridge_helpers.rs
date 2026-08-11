@@ -1,9 +1,8 @@
-use super::{MessagesRequest, SignaturePool, MAX_SIGNATURE_BUCKETS};
+use super::{MAX_SIGNATURE_BUCKETS, MessagesRequest, SignaturePool};
 use std::{
     hash::{DefaultHasher, Hash, Hasher},
     sync::Arc,
 };
-
 
 pub(super) fn intern_signature(pool: &SignaturePool, signature: String) -> Arc<str> {
     let mut hasher = DefaultHasher::new();

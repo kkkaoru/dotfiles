@@ -131,8 +131,6 @@ mod tests {
             stale_task_output_notice(&serde_json::json!({"task_id":"a3d7f2ca50556c9e5"}), &[],)
                 .is_none()
         );
-        assert!(
-            stale_task_output_notice(&serde_json::json!({"task_id":""}), &live,).is_none()
-        );
+        assert!(stale_task_output_notice(&serde_json::json!({"task_id":""}), &live,).is_none());
     }
 }

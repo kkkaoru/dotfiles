@@ -35,4 +35,3 @@ pub(super) fn exit_code(status: std::process::ExitStatus) -> i32 {
         }
     })
 }
-

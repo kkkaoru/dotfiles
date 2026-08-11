@@ -21,9 +21,7 @@ pub(super) use super::AgentEffortRecord;
 pub(super) use super::agent_effort_matching::is_subagent_request;
 use super::{
     MessagesRequest,
-    agent_effort_matching::{
-        has_correlation_marker, request_matches_intent_with_system,
-    },
+    agent_effort_matching::{has_correlation_marker, request_matches_intent_with_system},
     agent_intent_store::{persistence_snapshot, remove_expired, unix_seconds},
     subscription::valid_effort,
 };

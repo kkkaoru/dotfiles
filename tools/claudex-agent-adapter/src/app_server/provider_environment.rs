@@ -5,10 +5,10 @@ use std::{
 };
 
 mod dotenv;
-use dotenv::{dotenv_fallbacks, dotenv_paths, quoted_value, valid_environment_name};
 #[cfg(test)]
 #[allow(unused_imports)]
-use dotenv::{dotenv_values, DOTENV_FILE_NAME};
+use dotenv::{DOTENV_FILE_NAME, dotenv_values};
+use dotenv::{dotenv_fallbacks, dotenv_paths, quoted_value, valid_environment_name};
 
 const MODEL_PROVIDERS_ROOT_SECTION: &str = "[model_providers]";
 const MODEL_PROVIDER_SECTION_PREFIX: &str = "[model_providers.";

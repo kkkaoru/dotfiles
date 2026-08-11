@@ -2,7 +2,7 @@ use anyhow::anyhow;
 use std::sync::Arc;
 
 use super::{
-    SegmentBuilder, StreamSender, StreamTurn, send_stream_error, drive::ContextRetryStream,
+    SegmentBuilder, StreamSender, StreamTurn, drive::ContextRetryStream, send_stream_error,
 };
 use crate::anthropic::{
     ActiveTurn, Bridge, model_concurrency::ModelPermit, segment::EMPTY_ACP_END_TURN,
@@ -133,5 +133,3 @@ impl Bridge {
         send_stream_error(&sender, error).await;
     }
 }
-
-

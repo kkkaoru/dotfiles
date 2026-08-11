@@ -45,4 +45,3 @@ impl Drop for TestSpawn {
         take_events();
     }
 }
-

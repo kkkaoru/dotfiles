@@ -1,10 +1,10 @@
 use serde_json::{Value, json};
 
+use super::encoding::{encoded_string_content_bytes, event_bytes};
+use super::event_shape::{coalescible_suffix, event_thread_id, is_terminal_event};
 use super::{
     MAX_COALESCED_DELTA_CHARS, MAX_QUEUED_BYTES, MAX_QUEUED_EVENTS, QueueState, QueuedEvent,
 };
-use super::encoding::{encoded_string_content_bytes, event_bytes};
-use super::event_shape::{coalescible_suffix, event_thread_id, is_terminal_event};
 
 impl QueueState {
     pub(super) fn push_or_overflow(&mut self, event: Value, requeueable: bool) {
@@ -50,9 +50,7 @@ impl QueueState {
             .and_then(|last| last.value.pointer("/params/delta"))
             .and_then(Value::as_str)
             .map_or(0, str::len);
-        if current_len > 0
-            && current_len.saturating_add(suffix.len()) > MAX_COALESCED_DELTA_CHARS
-        {
+        if current_len > 0 && current_len.saturating_add(suffix.len()) > MAX_COALESCED_DELTA_CHARS {
             return false;
         }
         if self.append_delta(suffix, requeueable) {

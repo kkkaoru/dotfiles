@@ -6,8 +6,8 @@ use std::{
 use anyhow::{Result, bail};
 use serde_json::json;
 
-use super::{HANDOVER_POLL, HANDOVER_TIMEOUT, RebindResponse};
 use super::super::ServiceConfig;
+use super::{HANDOVER_POLL, HANDOVER_TIMEOUT, RebindResponse};
 
 pub(super) async fn restore_old_canonical(
     client: &reqwest::Client,

@@ -272,7 +272,6 @@ impl RoutedBackends {
             .cloned()
             .expect("routed backend index must exist")
     }
-
 }
 
 #[cfg(test)]

@@ -6,11 +6,7 @@ use serde_json::Value;
 use super::{ToolCall, error_flow, turn_flow};
 use crate::anthropic::{Bridge, Session, Usage};
 
-use super::{
-    protocol::StreamSender,
-    sanitize::sanitize_committed_blocks,
-    thinking::ThinkingState,
-};
+use super::{protocol::StreamSender, sanitize::sanitize_committed_blocks, thinking::ThinkingState};
 
 mod batch;
 mod close_finish;
@@ -162,10 +158,7 @@ impl SegmentBuilder {
     }
 
     /// Activity-based SubAgent bound: synthetic keepalives do not refresh this.
-    pub(super) fn subagent_provider_silence_exceeded(
-        &self,
-        judgment: std::time::Duration,
-    ) -> bool {
+    pub(super) fn subagent_provider_silence_exceeded(&self, judgment: std::time::Duration) -> bool {
         self.is_subagent
             && self
                 .last_visible_provider_at
@@ -253,7 +246,6 @@ impl SegmentBuilder {
         Ok(true)
     }
 }
-
 
 #[cfg(test)]
 // Coverage gates measure production behavior; this inline test is excluded.

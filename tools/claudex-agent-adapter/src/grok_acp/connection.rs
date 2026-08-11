@@ -14,9 +14,9 @@ use super::plugin;
 use crate::{app_server::events::ThreadEventDispatcher, path_env};
 
 mod handshake;
-use handshake::{initialize, wire_provider_connection};
 #[cfg(test)]
 use handshake::mark_io_stopped;
+use handshake::{initialize, wire_provider_connection};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum AcpProvider {

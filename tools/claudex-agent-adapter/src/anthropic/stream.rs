@@ -5,10 +5,7 @@ use axum::{body::Body, http::Response};
 use serde_json::Value;
 use tokio::{sync::mpsc, time::sleep};
 
-use super::{
-    Bridge, MessagesRequest, Segment, Session,
-    model_concurrency::Ticket,
-};
+use super::{Bridge, MessagesRequest, Segment, Session, model_concurrency::Ticket};
 
 mod acp_launch_queue;
 pub(in crate::anthropic) mod acp_tool_bridge;
@@ -34,14 +31,14 @@ mod thinking_support;
 mod tool_call_parser;
 mod turn;
 mod types;
-mod wait_event;
 pub(super) mod usage_limit;
+mod wait_event;
 pub(in crate::anthropic) use turn::StreamTurn;
-use types::{StreamEventState, StreamWaitResult, stream_activity_delays};
 pub(super) use types::{
     ACTIVITY_KEEPALIVE_INTERVAL, INITIAL_ACTIVITY_DELAY, SUBAGENT_INITIAL_ACTIVITY_DELAY,
     StreamWaitInput, ToolCall, is_provider_stream_closed,
 };
+use types::{StreamEventState, StreamWaitResult, stream_activity_delays};
 
 use builder::SegmentBuilder;
 pub(in crate::anthropic) use control::commit_transcript;
@@ -50,8 +47,8 @@ use event_consume::{finish_stream_event_state, stream_provider_failure};
 use prepare::{PrepareActivityOptions, prepare_with_activity};
 use prepare::{PreparedStream, prime_subagent_sse};
 
-pub(super) use control::{error_flow, turn_flow};
 pub(super) use crate::anthropic::stream_batch::{NextEvent, next_event};
+pub(super) use control::{error_flow, turn_flow};
 #[cfg(test)]
 pub(super) use protocol::tool_use_frames;
 use protocol::{StreamSender, send_stream_error, sse_response};

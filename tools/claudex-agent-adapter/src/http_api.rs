@@ -26,8 +26,8 @@ mod active;
 mod handover;
 mod health_route;
 mod logging;
-mod retained_proxy;
 mod retained_health;
+mod retained_proxy;
 mod web_search;
 use active::{ActiveWorkState, track_active_http_request, track_active_provider_turn};
 

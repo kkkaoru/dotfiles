@@ -59,8 +59,7 @@ impl Bridge {
         is_subagent: bool,
     ) -> Result<request_routing::RouteDecision> {
         let route = self.apply_usage_limit_preflight(request, route, effort, is_subagent);
-        let route =
-            self.rewrite_exhausted_subagent_request(request, route, effort, is_subagent)?;
+        let route = self.rewrite_exhausted_subagent_request(request, route, effort, is_subagent)?;
         let route = self.apply_concurrency_preflight(request, route, effort, is_subagent);
         Ok(self.apply_subscription_auth_preflight(request, route, effort))
     }
@@ -76,7 +75,9 @@ impl Bridge {
         self.agent_efforts
             .retire_terminal_task_notifications(&request);
         if internal_notification::is_internal_notification_request(&request) {
-            return Ok(message_router_dispatch::acknowledge_internal_notification(&request));
+            return Ok(message_router_dispatch::acknowledge_internal_notification(
+                &request,
+            ));
         }
         internal_notification::remove_from_transcript(&mut request);
         trace_request(&request);

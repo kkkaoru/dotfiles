@@ -152,8 +152,16 @@ fn waiting_and_live_never_notify_even_on_different_listen() {
         build_id: "abc".to_owned(),
         waiter_pid: 2,
     };
-    assert!(!should_emit_at(&moved, Some(&previous), previous.emitted_unix + 1));
-    assert!(!should_emit_at(&live("abc"), Some(&previous), previous.emitted_unix + 1));
+    assert!(!should_emit_at(
+        &moved,
+        Some(&previous),
+        previous.emitted_unix + 1
+    ));
+    assert!(!should_emit_at(
+        &live("abc"),
+        Some(&previous),
+        previous.emitted_unix + 1
+    ));
 }
 
 #[test]

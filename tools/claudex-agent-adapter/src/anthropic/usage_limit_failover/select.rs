@@ -1,6 +1,4 @@
-use super::{
-    UsageLimitFailover,
-};
+use super::UsageLimitFailover;
 use super::support::{ordered_subagent_failover_candidates, push_model_auth_scopes};
 use crate::agent_backend::BackendKind;
 use crate::anthropic::{
@@ -57,9 +55,9 @@ impl Bridge {
     ) -> Option<UsageLimitFailover> {
         self.app.backend_kind_for_model(exhausted_model)?;
         let ordered = ordered_subagent_failover_candidates(self);
-        ordered.into_iter().find_map(|model| {
-            self.subagent_failover_candidate(exhausted_model, quota, model)
-        })
+        ordered
+            .into_iter()
+            .find_map(|model| self.subagent_failover_candidate(exhausted_model, quota, model))
     }
 
     fn subagent_failover_candidate(

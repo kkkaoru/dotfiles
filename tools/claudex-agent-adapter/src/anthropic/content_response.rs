@@ -97,4 +97,3 @@ pub fn error_response(status: StatusCode, error: anyhow::Error) -> Response<Body
         .body(Body::from(body.to_string()))
         .expect("valid error response")
 }
-

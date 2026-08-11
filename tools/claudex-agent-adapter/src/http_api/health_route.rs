@@ -4,11 +4,7 @@ use std::sync::{
 };
 use std::time::Instant;
 
-use axum::{
-    Json, Router,
-    http::StatusCode,
-    routing::get,
-};
+use axum::{Json, Router, http::StatusCode, routing::get};
 use serde_json::json;
 
 use crate::{ADAPTER_PROTOCOL_VERSION, anthropic::Bridge, listen_handover::ListenHandover};
@@ -73,9 +69,7 @@ async fn health_response(state: HealthRouteState) -> (StatusCode, Json<serde_jso
     let active_subagent_models = state.bridge.active_subagent_models();
     let http = state.active_http_requests.load(Ordering::Relaxed);
     let turns = state.active_provider_turns.load(Ordering::Relaxed);
-    let busy = http > 0
-        || turns > 0
-        || active_subagent_models.values().copied().sum::<usize>() > 0;
+    let busy = http > 0 || turns > 0 || active_subagent_models.values().copied().sum::<usize>() > 0;
     let idle_seconds = idle_seconds(&state.last_work_at, busy);
     (
         status,
@@ -135,4 +129,3 @@ mod tests {
         assert!(idle_seconds(&last_work_at, false) <= 1);
     }
 }
-

@@ -1,7 +1,7 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::{Mutex, Arc},
+    sync::{Arc, Mutex},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -185,7 +185,9 @@ impl Bridge {
         for model in self.app.models() {
             push_unique(&mut candidates, model);
         }
-        candidates.into_iter().find_map(|model| self.provider_failover_candidate(model))
+        candidates
+            .into_iter()
+            .find_map(|model| self.provider_failover_candidate(model))
     }
 
     fn provider_failover_candidate(&self, model: String) -> Option<UsageLimitFailover> {

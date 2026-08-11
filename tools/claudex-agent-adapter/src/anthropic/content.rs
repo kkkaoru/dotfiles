@@ -10,8 +10,8 @@ use super::{MessagesRequest, Session};
 mod content_steering;
 #[path = "content_tool_result.rs"]
 mod content_tool_result;
-use content_tool_result::tool_result;
 pub(in crate::anthropic) use content_steering::mid_turn_user_steering;
+use content_tool_result::tool_result;
 
 // consumed IDs suppress replays of completed results.
 const MAX_CONSUMED_TOOL_IDS: usize = 4_096;
@@ -166,9 +166,7 @@ pub(super) fn collect_tool_results(messages: &[Value]) -> Vec<ToolResult> {
 /// Contiguous trailing user messages after the last non-user turn.
 pub(super) fn trailing_user_messages(messages: &[Value]) -> &[Value] {
     let mut start = messages.len();
-    while start > 0
-        && messages[start - 1].get("role").and_then(Value::as_str) == Some("user")
-    {
+    while start > 0 && messages[start - 1].get("role").and_then(Value::as_str) == Some("user") {
         start -= 1;
     }
     &messages[start..]

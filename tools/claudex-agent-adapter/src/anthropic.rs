@@ -72,22 +72,19 @@ pub(super) struct AgentEffortRecord<'a> {
     pub(super) system: &'a Value,
 }
 
-use crate::{
-    agent_backend::AgentBackend,
-    app_server::ThreadEvents,
-};
+use crate::{agent_backend::AgentBackend, app_server::ThreadEvents};
 
 pub use content::{error_response, token_count};
 pub use request_identity::RequestIdentity;
 use segment::{Segment, Usage, WebEvidenceSummary};
 pub(crate) use subscription::{DEFAULT_MAX_PROCESSES, DEFAULT_TIMEOUT_MINUTES};
 
-mod bridge_instructions;
 mod bridge_helpers;
+mod bridge_instructions;
+use bridge_helpers::{intern_signature, trace_request};
 use bridge_instructions::{
     BRIDGE_INSTRUCTIONS, CODEX_APP_SERVER_PARALLELIZATION_INSTRUCTIONS, SUBAGENT_RESULT_PROTOCOL,
 };
-use bridge_helpers::{intern_signature, trace_request};
 
 const MAX_SESSIONS: usize = 1_024;
 pub(super) const MAX_SIGNATURE_BUCKETS: usize = MAX_SESSIONS * 2;

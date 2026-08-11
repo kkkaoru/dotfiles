@@ -102,11 +102,8 @@ async fn open_session(script: &str, buffer: usize, track_server: bool) -> TestSe
     let (client_write, server_read) = tokio::io::duplex(buffer);
     let (server_write, client_read) = tokio::io::duplex(buffer);
     let updates = Rc::new(RefCell::new(Vec::new()));
-    let server = tokio::task::spawn_local(serve_io(
-        options_for(program),
-        server_read,
-        server_write,
-    ));
+    let server =
+        tokio::task::spawn_local(serve_io(options_for(program), server_read, server_write));
     let (connection, io) = acp::ClientSideConnection::new(
         CaptureClient {
             updates: Rc::clone(&updates),

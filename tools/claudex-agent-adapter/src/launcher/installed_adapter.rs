@@ -62,7 +62,10 @@ fn keeps_current_image(current: &Path) -> bool {
     if env::var_os(RECOVERY_MANIFEST_ENV).is_some() {
         return true;
     }
-    if current.components().any(|part| part.as_os_str() == "recovery") {
+    if current
+        .components()
+        .any(|part| part.as_os_str() == "recovery")
+    {
         return true;
     }
     current
@@ -128,9 +131,8 @@ fn relink_local_to_canonical(local: &Path, canonical: &Path) -> Result<()> {
     }
     #[cfg(unix)]
     {
-        std::os::unix::fs::symlink(canonical, local).with_context(|| {
-            format!("symlink {} -> {}", local.display(), canonical.display())
-        })?;
+        std::os::unix::fs::symlink(canonical, local)
+            .with_context(|| format!("symlink {} -> {}", local.display(), canonical.display()))?;
     }
     #[cfg(not(unix))]
     {

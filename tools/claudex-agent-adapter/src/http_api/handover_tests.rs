@@ -360,11 +360,7 @@ async fn proxy_middleware_serves_locally_when_retained_is_unreachable() {
         cache.path().to_path_buf(),
     );
     let state = Some(HandoverState {
-        retained: Some(Arc::new(retained(
-            &path,
-            "127.0.0.1:1",
-            &["session-a"],
-        ))),
+        retained: Some(Arc::new(retained(&path, "127.0.0.1:1", &["session-a"]))),
         advertised: Some(advertised),
         client: proxy_http_client(),
     });
@@ -574,7 +570,10 @@ async fn proxy_middleware_serves_locally_when_busy_list_is_stale_without_work() 
         "live-after-stale-busy",
         "stale busy_claude_session_ids without active work must fall through"
     );
-    assert!(!path.exists(), "stale busy retained snapshot must be cleared");
+    assert!(
+        !path.exists(),
+        "stale busy retained snapshot must be cleared"
+    );
 }
 
 #[tokio::test]
@@ -641,7 +640,10 @@ async fn should_proxy_clears_when_retained_health_status_is_not_ok() {
     let sticky = proxy.should_proxy_session("session-a", None).await;
     assert!(!sticky);
     assert!(!proxy.owns("session-a"));
-    assert!(!path.exists(), "unhealthy retained snapshot must be cleared");
+    assert!(
+        !path.exists(),
+        "unhealthy retained snapshot must be cleared"
+    );
 }
 
 #[tokio::test]
@@ -672,9 +674,7 @@ async fn new_subagent_in_retained_parent_session_runs_live_without_unsticking_ol
     let path = root.path().join("retained.json");
     std::fs::write(
         &path,
-        format!(
-            r#"{{"listen":"{upstream}","pid":1,"build_id":"old","session_ids":["parent"]}}"#
-        ),
+        format!(r#"{{"listen":"{upstream}","pid":1,"build_id":"old","session_ids":["parent"]}}"#),
     )
     .expect("write retained");
     let proxy = retained(&path, &upstream.to_string(), &["parent"]);
@@ -709,9 +709,7 @@ async fn should_proxy_falls_back_to_session_scope_when_agent_ids_field_absent() 
     let path = root.path().join("retained.json");
     std::fs::write(
         &path,
-        format!(
-            r#"{{"listen":"{upstream}","pid":1,"build_id":"old","session_ids":["parent"]}}"#
-        ),
+        format!(r#"{{"listen":"{upstream}","pid":1,"build_id":"old","session_ids":["parent"]}}"#),
     )
     .expect("write retained");
     let proxy = retained(&path, &upstream.to_string(), &["parent"]);
@@ -726,19 +724,13 @@ async fn should_proxy_falls_back_to_session_scope_when_agent_ids_field_absent() 
 
 #[tokio::test]
 async fn should_proxy_keeps_recent_agent_when_active_ids_drain() {
-    let upstream = serve_retained_generation_with_agent_field(
-        b"from-retained",
-        &["parent"],
-        Some(&[]),
-    )
-    .await;
+    let upstream =
+        serve_retained_generation_with_agent_field(b"from-retained", &["parent"], Some(&[])).await;
     let root = tempfile::tempdir().expect("drained agents fixture");
     let path = root.path().join("retained.json");
     std::fs::write(
         &path,
-        format!(
-            r#"{{"listen":"{upstream}","pid":1,"build_id":"old","session_ids":["parent"]}}"#
-        ),
+        format!(r#"{{"listen":"{upstream}","pid":1,"build_id":"old","session_ids":["parent"]}}"#),
     )
     .expect("write retained");
     let proxy = retained(&path, &upstream.to_string(), &["parent"]);
@@ -765,12 +757,8 @@ async fn should_proxy_keeps_recent_agent_when_active_ids_drain() {
 
 #[tokio::test]
 async fn promote_snapshot_agent_ids_seed_sticky_before_health_refresh() {
-    let upstream = serve_retained_generation_with_agent_field(
-        b"from-retained",
-        &["parent"],
-        Some(&[]),
-    )
-    .await;
+    let upstream =
+        serve_retained_generation_with_agent_field(b"from-retained", &["parent"], Some(&[])).await;
     let root = tempfile::tempdir().expect("promote seed fixture");
     let path = root.path().join("retained.json");
     std::fs::write(
@@ -780,12 +768,7 @@ async fn promote_snapshot_agent_ids_seed_sticky_before_health_refresh() {
         ),
     )
     .expect("write retained");
-    let proxy = retained_with_agents(
-        &path,
-        &upstream.to_string(),
-        &["parent"],
-        &["agent-seeded"],
-    );
+    let proxy = retained_with_agents(&path, &upstream.to_string(), &["parent"], &["agent-seeded"]);
     let sticky_seeded = proxy
         .should_proxy_session("parent", Some("agent-seeded"))
         .await;
@@ -1370,7 +1353,11 @@ fn retained_response_for(
     }
 }
 
-async fn write_http_response(stream: &mut tokio::net::TcpStream, status_line: &str, payload: &[u8]) {
+async fn write_http_response(
+    stream: &mut tokio::net::TcpStream,
+    status_line: &str,
+    payload: &[u8],
+) {
     let header = format!(
         "{status_line}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         payload.len()

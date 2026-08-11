@@ -4,13 +4,13 @@ use serde_json::Value;
 use std::convert::Infallible;
 use tokio::sync::mpsc;
 
-use crate::anthropic::{
-    subscription::SubscriptionOptions,
-    subscription_frames::{send_block_stop, send_text_delta, send_text_start},
-};
 use super::SubscriptionStream;
 use super::launch_prep::{
     note_reused_subagent_launch, record_prepared_agent_intent, reject_unavailable_subagent_model,
+};
+use crate::anthropic::{
+    subscription::SubscriptionOptions,
+    subscription_frames::{send_block_stop, send_text_delta, send_text_start},
 };
 
 impl SubscriptionStream {
@@ -123,7 +123,10 @@ impl SubscriptionStream {
         Ok((routed_input, public))
     }
 
-    pub(super) async fn close_text(&mut self, sender: &mpsc::Sender<Result<Bytes, Infallible>>) -> Result<()> {
+    pub(super) async fn close_text(
+        &mut self,
+        sender: &mpsc::Sender<Result<Bytes, Infallible>>,
+    ) -> Result<()> {
         if self.text_started && !self.text_closed {
             send_block_stop(sender, self.next_index.saturating_sub(1)).await?;
             self.text_closed = true;

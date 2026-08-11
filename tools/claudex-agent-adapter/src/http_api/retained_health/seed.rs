@@ -60,9 +60,7 @@ pub(in crate::http_api) fn note_retained_activity(
         if agent_id.is_empty() {
             continue;
         }
-        let seen_at = now
-            .checked_sub(Duration::from_secs(*age))
-            .unwrap_or(now);
+        let seen_at = now.checked_sub(Duration::from_secs(*age)).unwrap_or(now);
         recent_agents.entry(agent_id.clone()).or_insert(seen_at);
     }
     recent_agents.retain(|_, seen| now.saturating_duration_since(*seen) <= STICKY_IDLE_GRACE);
@@ -102,9 +100,7 @@ pub(in crate::http_api) fn seed_recent_agents_with_ages(
         .iter()
         .filter(|(id, _)| !id.is_empty())
         .map(|(id, age)| {
-            let seen_at = now
-                .checked_sub(Duration::from_secs(*age))
-                .unwrap_or(now);
+            let seen_at = now.checked_sub(Duration::from_secs(*age)).unwrap_or(now);
             (id.clone(), seen_at)
         })
         .collect()

@@ -1,7 +1,7 @@
 use serde_json::Value;
 
-use super::background_launch;
 use super::super::agent_effort_matching::value_texts;
+use super::background_launch;
 
 pub(super) fn active_user_supplied_name(messages: &[Value], name: &str) -> bool {
     let start = messages

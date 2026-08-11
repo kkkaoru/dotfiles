@@ -20,19 +20,19 @@ use super::{
         with_transient_retries, write_subscription_prompt,
     },
     subscription_activity::SubscriptionActivity,
-    subscription_frames::{send_subscription_error},
+    subscription_frames::send_subscription_error,
 };
 
 mod consume;
 mod consume_fanout;
 mod consume_finish;
 mod finish;
+mod handle;
+mod launch_prep;
 mod lifecycle;
 mod post_eof;
 mod tool_collection;
 mod visibility;
-mod launch_prep;
-mod handle;
 pub(super) use super::subscription_frames::{result_output_tokens, subscription_start_frame};
 #[cfg(test)]
 use consume::consume_subscription_stream;
@@ -134,6 +134,7 @@ struct SubscriptionStream {
     text_closed: bool,
     saw_tool_use: bool,
     launch_fanout_open: bool,
+    launch_fanout_deadline: Option<tokio::time::Instant>,
     seen_tool_ids: HashSet<String>,
     blocked_subagent: bool,
     saw_result: bool,
@@ -143,6 +144,17 @@ struct SubscriptionStream {
     activity: SubscriptionActivity,
 }
 impl SubscriptionStream {
+    pub(super) fn arm_launch_fanout(&mut self) {
+        self.launch_fanout_open = true;
+        self.launch_fanout_deadline =
+            Some(tokio::time::Instant::now() + consume_fanout::LAUNCH_FANOUT_DRAIN);
+    }
+
+    pub(super) fn clear_launch_fanout(&mut self) {
+        self.launch_fanout_open = false;
+        self.launch_fanout_deadline = None;
+    }
+
     #[cfg(test)]
     async fn handle_line(
         &mut self,
@@ -156,9 +168,7 @@ impl SubscriptionStream {
         self.handle_envelope(sender, &envelope).await?;
         Ok(())
     }
-
 }
-
 
 #[cfg(test)]
 #[path = "subscription_stream_tests.rs"]

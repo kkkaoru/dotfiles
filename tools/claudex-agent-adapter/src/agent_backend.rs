@@ -11,9 +11,9 @@ mod kind;
 mod model_kind;
 pub use kind::BackendKind;
 mod concurrency;
+mod dispatch;
 mod lifecycle;
 mod request;
-mod dispatch;
 mod route_config;
 mod routes;
 use request::{routed_thread, subscribe_routed_thread};
@@ -251,7 +251,6 @@ impl AgentBackend {
             }
         }
     }
-
 }
 
 #[cfg(test)]

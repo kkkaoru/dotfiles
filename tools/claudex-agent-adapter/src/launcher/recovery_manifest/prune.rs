@@ -7,11 +7,11 @@ use std::{
 
 use anyhow::{Context, Result};
 
+use super::fs_guard::{safe_component, validate_private_file};
 use super::{
     MANIFEST_PREFIX, MANIFEST_SUFFIX, RETAINED_GENERATIONS_PER_LISTENER, RecoveryManifest,
     read_manifest,
 };
-use super::fs_guard::{safe_component, validate_private_file};
 
 pub(super) fn cleanup(root: &Path, listen: SocketAddr, current_generation: &str) -> Result<()> {
     let mut matching = manifests(root)
@@ -71,4 +71,3 @@ pub(super) fn manifest_entry(
     let modified = entry.metadata().ok()?.modified().ok()?;
     Some((path, manifest, modified))
 }
-

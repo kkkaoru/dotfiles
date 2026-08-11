@@ -148,10 +148,7 @@ fn routed_models_skip_workers_with_blank_model_fields() {
         "high",
     ));
     let bridge = Bridge::new_with_backend(
-        AgentBackend::spawn_routes(&[BackendRoute::new(
-            "kept-model",
-            BackendKind::CodexAppServer,
-        )]),
+        AgentBackend::spawn_routes(&[BackendRoute::new("kept-model", BackendKind::CodexAppServer)]),
         "fallback-model".to_owned(),
     )
     .with_model_catalog(catalog);

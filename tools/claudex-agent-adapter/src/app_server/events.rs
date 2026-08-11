@@ -16,9 +16,9 @@ mod encoding;
 mod event_shape;
 mod queue_state;
 mod unsubscribe;
-use unsubscribe::unsubscribe;
 #[cfg(test)]
 use encoding::{encoded_string_content_bytes, event_bytes};
+use unsubscribe::unsubscribe;
 
 pub(super) const MAX_QUEUED_EVENTS: usize = 256;
 pub(super) const MAX_QUEUED_BYTES: usize = 1024 * 1024;
@@ -233,7 +233,6 @@ impl Drop for ThreadEvents {
         self.queue.close();
     }
 }
-
 
 #[cfg(test)]
 // Coverage gates measure production code; test implementations are excluded.

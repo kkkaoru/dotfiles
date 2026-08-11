@@ -517,7 +517,6 @@ async fn max_concurrency_two_queues_the_third_command_code_turn() {
     }
 }
 
-
 async fn wait_for_active_provider_turns(client: &Client, health_url: &str, expected: u64) {
     loop {
         let health = client

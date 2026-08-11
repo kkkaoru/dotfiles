@@ -1,11 +1,9 @@
 use std::{sync::Arc, time::Duration};
 
-use super::{ContextRetryStream, StreamDriveOptions, response_timeout};
 use super::super::{SegmentBuilder, StreamSender, StreamTurn, send_stream_error};
+use super::{ContextRetryStream, StreamDriveOptions, response_timeout};
 use crate::anthropic::{
-    ActiveTurn, Bridge,
-    model_concurrency::ModelPermit,
-    subagent_timeout::completes_within,
+    ActiveTurn, Bridge, model_concurrency::ModelPermit, subagent_timeout::completes_within,
     usage_limit_failover::streaming_provider_retry,
 };
 
@@ -133,7 +131,6 @@ impl Bridge {
         }
     }
 
-
     pub(in crate::anthropic::stream) async fn retry_provider_stream(
         self: Arc<Self>,
         turn: ActiveTurn,
@@ -164,7 +161,10 @@ impl Bridge {
         }
     }
 
-    pub(in crate::anthropic::stream) async fn retry_context_stream(self: Arc<Self>, input: ContextRetryStream) {
+    pub(in crate::anthropic::stream) async fn retry_context_stream(
+        self: Arc<Self>,
+        input: ContextRetryStream,
+    ) {
         let ActiveTurn {
             session,
             input_tokens,
@@ -199,7 +199,10 @@ impl Bridge {
         .await;
     }
 
-    pub(in crate::anthropic::stream) async fn retry_usage_limit_stream(self: Arc<Self>, input: ContextRetryStream) {
+    pub(in crate::anthropic::stream) async fn retry_usage_limit_stream(
+        self: Arc<Self>,
+        input: ContextRetryStream,
+    ) {
         let ActiveTurn {
             session,
             input_tokens,

@@ -19,13 +19,9 @@ use tokio::io::AsyncBufRead;
 use super::consume_fanout::{StreamIteration, consume_stream_iteration};
 #[cfg(test)]
 use super::lifecycle::terminate_after_stream_failure;
-use super::{
-    SubscriptionStream,
-    lifecycle::read_stderr,
-};
+use super::{SubscriptionStream, lifecycle::read_stderr};
 use crate::anthropic::{
-    subscription::SubscriptionOptions,
-    subscription_activity::SubscriptionActivity,
+    subscription::SubscriptionOptions, subscription_activity::SubscriptionActivity,
 };
 
 pub(super) use super::consume_fanout::reset_activity_deadline;
@@ -213,6 +209,7 @@ impl SubscriptionStream {
             text_closed: false,
             saw_tool_use: false,
             launch_fanout_open: false,
+            launch_fanout_deadline: None,
             seen_tool_ids: HashSet::new(),
             blocked_subagent: false,
             saw_result: false,

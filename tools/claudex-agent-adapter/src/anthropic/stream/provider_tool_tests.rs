@@ -781,8 +781,7 @@ async fn subagent_silence_keepalive_paints_elapsed_progress_not_blank_viewer() {
         live.visible_thinking
     );
     assert!(
-        live.visible_thinking.contains('·')
-            && live.visible_thinking.contains('s'),
+        live.visible_thinking.contains('·') && live.visible_thinking.contains('s'),
         "keepalive must advance a visible elapsed clock: {:?}",
         live.visible_thinking
     );
@@ -825,8 +824,7 @@ async fn subagent_keepalive_without_tools_paints_thinking_tip() {
         .expect("silent keepalive");
     live.ingest_available(&mut receiver);
     assert!(
-        live.visible_thinking.contains("▶ Thinking")
-            && live.visible_thinking.contains('·'),
+        live.visible_thinking.contains("▶ Thinking") && live.visible_thinking.contains('·'),
         "tool-less silence must reopen with Thinking tip + clock, not blank ZWSP: {:?}",
         live.visible_thinking
     );
@@ -904,7 +902,6 @@ async fn counts_only_validated_provider_web_evidence_once() {
     assert_eq!(segment.usage.web_search_requests, 1);
 }
 
-
 type LiveView = super::super::subagent_live_view::SubAgentLiveView;
 type FrameTx = mpsc::Sender<Result<Bytes, Infallible>>;
 type FrameRx = mpsc::Receiver<Result<Bytes, Infallible>>;
@@ -963,7 +960,10 @@ fn assert_no_noise(haystack: &str, noises: &[&str], label: &str) {
 }
 
 fn assert_qwen_status_live(live: &LiveView) {
-    assert!(live.turn_still_open(), "status chunk must not end the SubAgent turn");
+    assert!(
+        live.turn_still_open(),
+        "status chunk must not end the SubAgent turn"
+    );
     assert!(
         live.visible_thinking.contains("Starting inspection"),
         "SubAgent prose must paint thinking chrome live: {:?}",
@@ -984,8 +984,7 @@ fn assert_qwen_status_live(live: &LiveView) {
 fn assert_qwen_read_live(live: &LiveView) {
     assert!(live.turn_still_open(), "tool start is mid-turn");
     assert!(
-        live.visible_thinking.contains("▶ ReadFile")
-            || live.visible_thinking.contains("▶ Read"),
+        live.visible_thinking.contains("▶ ReadFile") || live.visible_thinking.contains("▶ Read"),
         "▶ must be on the wire before finish: {:?}",
         live.visible_thinking
     );
@@ -1161,11 +1160,7 @@ async fn run_cc_bash_paint(
     );
 }
 
-async fn run_wrangler_dump_events(
-    builder: &mut SegmentBuilder,
-    sender: &FrameTx,
-    dump: &str,
-) {
+async fn run_wrangler_dump_events(builder: &mut SegmentBuilder, sender: &FrameTx, dump: &str) {
     builder
         .provider_tool_call(
             &json!({
@@ -1444,8 +1439,7 @@ async fn subagent_keeps_full_pending_answer_when_live_prose_is_compacted() {
     let mut live = super::super::subagent_live_view::SubAgentLiveView::default();
     live.ingest_available(&mut receiver);
     assert!(
-        live.visible_thinking.chars().count()
-            <= super::super::sanitize::LIVE_PROSE_CHAR_LIMIT + 2,
+        live.visible_thinking.chars().count() <= super::super::sanitize::LIVE_PROSE_CHAR_LIMIT + 2,
         "live tip must stay compacted: {}",
         live.visible_thinking.chars().count()
     );

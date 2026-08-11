@@ -38,7 +38,13 @@ pub(in crate::anthropic) fn thread_start_params_for_mode(
         // Muse Spark headless greets / reconstructs dirty git when Claudex
         // ACP_NATIVE dumps land in `cmd -p`. Keep cwd only; the ACP shim slims
         // the delegated task itself.
-        return command_code_thread_start_params(model, &cwd, dynamic_tools, &launch_owner, acp_role);
+        return command_code_thread_start_params(
+            model,
+            &cwd,
+            dynamic_tools,
+            &launch_owner,
+            acp_role,
+        );
     }
     let acp_native = web_search_mode.uses_provider_native_agent_loop();
     let developer_instructions = build_developer_instructions(request, is_subagent, acp_native);

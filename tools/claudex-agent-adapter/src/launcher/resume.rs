@@ -99,7 +99,9 @@ fn has_flag(arguments: &[OsString], flags: &[&str]) -> bool {
 }
 
 fn flag_present(arguments: &[OsString], index: usize, argument: &str, flags: &[&str]) -> bool {
-    flags.iter().any(|flag| matches_flag(arguments, index, argument, flag))
+    flags
+        .iter()
+        .any(|flag| matches_flag(arguments, index, argument, flag))
 }
 
 fn matches_flag(arguments: &[OsString], index: usize, argument: &str, flag: &str) -> bool {

@@ -10,8 +10,8 @@
 //! | xAI SubAgent extensions | compact status |
 
 mod thought_units;
-mod tools_labels;
 mod tools;
+mod tools_labels;
 mod web_evidence;
 
 use std::time::Duration;

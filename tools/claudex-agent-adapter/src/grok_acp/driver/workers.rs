@@ -7,8 +7,8 @@ use super::super::{
     turns::{TurnDriver, cancel_turn, drive_turns},
 };
 use super::{
-    DriverCommandContext, DriverWorkerContext, DriverWorkers, StartTurnRequest,
-    drive_start_turns, schedule_start_turn,
+    DriverCommandContext, DriverWorkerContext, DriverWorkers, StartTurnRequest, drive_start_turns,
+    schedule_start_turn,
 };
 
 pub(super) fn spawn_driver_workers(context: DriverWorkerContext) -> DriverWorkers {

@@ -8,9 +8,7 @@ use super::{
     control::refresh_activity_keepalive,
     protocol::StreamSender,
     sanitize::is_visible_activity_event,
-    types::{
-        StreamWaitResult, fail_if_subagent_provider_silent, reset_activity_deadline,
-    },
+    types::{StreamWaitResult, fail_if_subagent_provider_silent, reset_activity_deadline},
 };
 use crate::anthropic::stream_batch::{NextEvent, next_event};
 

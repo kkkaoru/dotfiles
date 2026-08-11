@@ -225,9 +225,9 @@ fn daemon_arguments_preserve_configured_worker_routes() {
         .map(|argument| argument.into_string().expect("UTF-8 argument"))
         .collect::<Vec<_>>();
     assert!(
-        arguments.windows(2).any(|pair| {
-            pair[0] == "--worker-route-json" && pair[1].contains("claudex-grok")
-        })
+        arguments
+            .windows(2)
+            .any(|pair| { pair[0] == "--worker-route-json" && pair[1].contains("claudex-grok") })
     );
 
     config
@@ -274,9 +274,9 @@ fn daemon_arguments_preserve_configured_worker_routes() {
     );
     assert!(!arguments.iter().any(|argument| argument == "--model"));
     assert!(
-        arguments.windows(2).any(|pair| {
-            pair[0] == "--worker-route-json" && pair[1].contains("claudex-grok")
-        })
+        arguments
+            .windows(2)
+            .any(|pair| { pair[0] == "--worker-route-json" && pair[1].contains("claudex-grok") })
     );
     assert!(arguments.windows(2).any(|pair| {
         pair[0] == "--search-worker-route-json" && pair[1].contains("claudex-search")
@@ -451,7 +451,6 @@ async fn recovery_readiness_rejects_each_identity_mismatch_before_authentication
     }
 }
 
-
 async fn inspect_absent_and_silent_states(client: &reqwest::Client) {
     let mut absent = config();
     absent.options.listen = unused_listen();
@@ -473,7 +472,6 @@ async fn inspect_absent_and_silent_states(client: &reqwest::Client) {
         }
     );
     drop(silent);
-
 }
 
 async fn inspect_reusable_and_attached_states(client: &reqwest::Client) -> ServiceConfig {
@@ -577,7 +575,6 @@ async fn inspect_hot_busy_state(client: &reqwest::Client, reusable: &mut Service
         }
     );
     server.join().expect("subagent busy server");
-
 }
 
 async fn inspect_authentication_state(client: &reqwest::Client, reusable: &mut ServiceConfig) {
@@ -608,7 +605,6 @@ async fn inspects_start_reuse_and_replacement_service_states() {
     inspect_hot_busy_state(&client, &mut reusable).await;
     inspect_authentication_state(&client, &mut reusable).await;
 }
-
 
 #[tokio::test]
 async fn hot_swap_arms_an_idle_waiter_instead_of_timing_out_while_busy() {
@@ -1118,8 +1114,7 @@ fn write_current_build_dummy(root: &Path) -> PathBuf {
 fn matching_build_dummy_script(config: &ServiceConfig) -> String {
     let backend_routes = route_descriptions(&config.options.routes);
     let worker_routes = worker_route_descriptions(&config.options.model_catalog);
-    let search_worker_routes =
-        search_worker_route_descriptions(&config.options.model_catalog);
+    let search_worker_routes = search_worker_route_descriptions(&config.options.model_catalog);
     let hard_timeout = config
         .options
         .subagent_hard_timeout_seconds
@@ -1150,11 +1145,6 @@ fn write_matching_build_dummy(root: &Path, config: &ServiceConfig) -> PathBuf {
         .expect("dummy executable");
     dummy
 }
-
-
-
-
-
 
 #[cfg(unix)]
 fn kill_dummy(executable: &Path) {
@@ -1365,8 +1355,7 @@ fn pending_hot_swap_arm_uses_test_spawn_and_rejects_invalid_state() {
     let again = pending_hot_swap::arm(&cfg).expect("respawn waiter");
     assert_eq!(again.pid(), 7777);
 
-    let path =
-        super::launcher_logs::pending_hot_swap_state_path(root.path(), &cfg.options.listen);
+    let path = super::launcher_logs::pending_hot_swap_state_path(root.path(), &cfg.options.listen);
     std::fs::write(
         &path,
         br#"{"build_id":"","service_config_fingerprint":"s","pid":1}"#,
@@ -1597,10 +1586,7 @@ async fn wait_idle_replace_promotes_stale_listener_when_dummy_is_ready() {
     let mut old = healthy(&cfg);
     old.build_id = "old-build".to_owned();
     old.listener_handover = true;
-    let server = serve_responses(
-        listener,
-        vec![health_response(&old), health_response(&old)],
-    );
+    let server = serve_responses(listener, vec![health_response(&old), health_response(&old)]);
     let url = ensure::run(&cfg, ensure::Mode::WaitIdle)
         .await
         .expect("idle replace should promote once the dummy is ready");
@@ -1628,7 +1614,10 @@ async fn ensure_replace_mentions_an_attached_launch_tui() {
         .arg(&stub)
         .status()
         .expect("compile launch stub");
-    assert!(compiled.success(), "cc must build a real argv0 launch binary");
+    assert!(
+        compiled.success(),
+        "cc must build a real argv0 launch binary"
+    );
     let mut cfg = config();
     let listener = TcpListener::bind("127.0.0.1:0").expect("stale listener");
     cfg.options.listen = listener.local_addr().expect("stale address");
@@ -1900,8 +1889,8 @@ HTTPServer((host, int(port)), Handler).serve_forever()
         model = cfg.options.model,
         codex = cfg.codex_config_fingerprint,
         service = cfg.service_config_fingerprint,
-        routes = serde_json::to_string(&route_descriptions(&cfg.options.routes))
-            .expect("routes json"),
+        routes =
+            serde_json::to_string(&route_descriptions(&cfg.options.routes)).expect("routes json"),
         max_proc = cfg.options.subscription_max_processes,
         timeout = cfg.options.subscription_timeout_minutes,
     )
@@ -2136,11 +2125,7 @@ impl Drop for ProcessGroupCleanup {
     }
 }
 
-fn serve_response_until_stopped(
-    listener: TcpListener,
-    response: String,
-    stopped: Arc<AtomicBool>,
-) {
+fn serve_response_until_stopped(listener: TcpListener, response: String, stopped: Arc<AtomicBool>) {
     while !stopped.load(Ordering::SeqCst) {
         serve_response_attempt(&listener, &response);
     }
@@ -2395,8 +2380,7 @@ fn recovery_manifest_restarts_a_private_executable_snapshot() {
     let mut config = config();
     config.executable = executable;
     config.log_path = root.path().join("adapter.log");
-    let manifest =
-        super::recovery_manifest::prepare(&config).expect("prepare recovery manifest");
+    let manifest = super::recovery_manifest::prepare(&config).expect("prepare recovery manifest");
     assert_eq!(
         std::fs::metadata(&manifest)
             .expect("manifest metadata")
@@ -2414,8 +2398,8 @@ fn recovery_manifest_restarts_a_private_executable_snapshot() {
         std::fs::symlink_metadata(&manifest).unwrap().uid(),
         unsafe { libc::geteuid() }
     );
-    let recovery = super::daemon_start::start_recovery(&config, &generation)
-        .expect("start recovery snapshot");
+    let recovery =
+        super::daemon_start::start_recovery(&config, &generation).expect("start recovery snapshot");
     assert!(process_alive(recovery.pid));
     daemon_process::terminate(recovery.pid);
 
@@ -2605,8 +2589,7 @@ fn keeps_non_file_logs_and_archives_extensionless_logs() {
 
     let extensionless = root.path().join("adapter");
     std::fs::write(&extensionless, "old").expect("extensionless log");
-    super::launcher_logs::archive_previous_log(&extensionless)
-        .expect("archive extensionless log");
+    super::launcher_logs::archive_previous_log(&extensionless).expect("archive extensionless log");
     assert!(!extensionless.exists());
     assert_eq!(
         std::fs::read_dir(root.path())

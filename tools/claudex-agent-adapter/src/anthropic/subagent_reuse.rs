@@ -1,8 +1,4 @@
-use std::{
-    collections::HashMap,
-    path::PathBuf,
-    sync::Mutex,
-};
+use std::{collections::HashMap, path::PathBuf, sync::Mutex};
 
 use serde_json::{Value, json};
 
@@ -21,12 +17,12 @@ use records::{
     LaunchRecord, already_has_resume, apply_transcript, find_reusable_launch, launch_model,
     scope_is_occupied, summarize_scope,
 };
+#[cfg(test)]
+use store::StoredStates;
 use store::{
     CACHE_FILE_NAME, METADATA_LIMIT_REACHED, SessionState, Store, reuse_recipients,
     set_limit_metadata,
 };
-#[cfg(test)]
-use store::StoredStates;
 
 pub(crate) const MAX_SUBAGENTS_PER_SESSION_ENV: &str = "CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION";
 pub(crate) const DEFAULT_MAX_SUBAGENTS_PER_SESSION: usize = 1_024;
@@ -91,16 +87,17 @@ impl SubagentReuseRegistry {
         set_limit_metadata(request, limit_reached);
         // Restore even when the transcript still lists launches: system may be
         // rebuilt without the marker while messages keep prior agentIds.
-        let should_restore = reuse
-            && !state.launches.is_empty()
-            && !system_contains_marker(&request.system);
+        let should_restore =
+            reuse && !state.launches.is_empty() && !system_contains_marker(&request.system);
         let teams = agent_teams_enabled(request) && has_send_message_tool(&request.tools);
         let recipients =
             should_restore.then(|| reuse_recipients(&state.launches, &request.messages));
         let launches_changed = state.launches != previous_launches;
         let snapshot = states.clone();
         drop(states);
-        if launches_changed { self.persist(snapshot); }
+        if launches_changed {
+            self.persist(snapshot);
+        }
         if let Some(recipients) = recipients {
             append_reuse_guidance(&mut request.system, &recipients, teams);
         }
@@ -276,7 +273,6 @@ pub(super) fn reuse_enabled() -> bool {
 pub(super) fn session_id(request: &MessagesRequest) -> Option<String> {
     super::request_identity::claude_session_id(request)
 }
-
 
 #[cfg(test)]
 #[path = "subagent_reuse_tests.rs"]

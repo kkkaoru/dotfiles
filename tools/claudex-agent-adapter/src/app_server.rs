@@ -30,8 +30,8 @@ mod protocol;
 mod provider_environment;
 mod spawn;
 use pending::{PendingRequest, PendingResponse, await_response};
-use spawn::{initialize_params, prepare_isolated_codex_home, spawn_child};
 pub use spawn::response_thread_id;
+use spawn::{initialize_params, prepare_isolated_codex_home, spawn_child};
 
 #[cfg(not(coverage_nightly))]
 const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(8);
@@ -288,7 +288,6 @@ impl AppServer {
         }));
     }
 }
-
 
 #[cfg(test)]
 include!("app_server_tests.rs");

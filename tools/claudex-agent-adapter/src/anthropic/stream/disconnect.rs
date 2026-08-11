@@ -1,19 +1,19 @@
 use std::{collections::HashSet, sync::Arc};
 
+use super::{StreamTurn, StreamWaitResult, builder::SegmentBuilder};
 use crate::{
     agent_backend::TurnCancellation,
     anthropic::{Bridge, Session},
 };
-use super::{StreamTurn, StreamWaitResult, builder::SegmentBuilder};
 
 mod helpers;
+#[cfg(test)]
+#[allow(unused_imports)]
+use helpers::reject_disconnected_tool_once;
 use helpers::{
     drain_disconnected_turn_with_warning, reject_disconnected_tool_with_warning, request_id_keys,
     take_pending_disconnected_tools,
 };
-#[cfg(test)]
-#[allow(unused_imports)]
-use helpers::reject_disconnected_tool_once;
 
 impl Bridge {
     pub(super) async fn finish_closed_stream(
@@ -59,9 +59,7 @@ impl Bridge {
                 thread_id = %session.thread_id,
                 "SubAgent SSE disconnected after provider work; cancelling turn"
             );
-            return StreamWaitResult::Done(Box::new(
-                self.disconnect_stream(session, events).await,
-            ));
+            return StreamWaitResult::Done(Box::new(self.disconnect_stream(session, events).await));
         }
         tracing::info!(
             thread_id = %session.thread_id,

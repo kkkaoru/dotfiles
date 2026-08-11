@@ -73,7 +73,10 @@ impl SegmentBuilder {
         .await
     }
 
-    pub(in crate::anthropic::stream) async fn close_open_blocks(&mut self, stream: Option<&StreamSender>) -> Result<()> {
+    pub(in crate::anthropic::stream) async fn close_open_blocks(
+        &mut self,
+        stream: Option<&StreamSender>,
+    ) -> Result<()> {
         self.thinking.close(&mut self.blocks, stream).await?;
         self.flush_pending_answer(stream).await?;
         self.close_text_block(stream).await
@@ -96,7 +99,10 @@ impl SegmentBuilder {
         }
     }
 
-    pub(in crate::anthropic::stream) async fn finish(&mut self, stream: Option<&StreamSender>) -> Result<Segment> {
+    pub(in crate::anthropic::stream) async fn finish(
+        &mut self,
+        stream: Option<&StreamSender>,
+    ) -> Result<Segment> {
         self.report_no_subagent_action(stream).await?;
         self.close_open_blocks(stream).await?;
         sanitize_committed_blocks(&mut self.blocks);

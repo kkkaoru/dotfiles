@@ -44,7 +44,6 @@ async fn serve_http_once(listener: TcpListener, response: String) {
     accept_and_write(&listener, &response).await;
 }
 
-
 fn health(listener_handover: bool, pid: Option<u32>) -> Health {
     Health {
         status: "ok".to_owned(),
@@ -313,7 +312,10 @@ fn publish_promoted_clears_empty_retained_snapshot() {
     let listen = "127.0.0.1:8318".parse().unwrap();
     let config = config_at(listen, root.path(), PathBuf::from("/tmp/adapter"));
     let path = live::write_retained(&config, listen, 12, "old", Vec::new()).unwrap();
-    assert!(path.exists(), "precondition: empty retained snapshot exists");
+    assert!(
+        path.exists(),
+        "precondition: empty retained snapshot exists"
+    );
     let _ = publish_promoted(&config, 99, 12, listen, 0);
     assert!(
         !path.exists(),
@@ -351,14 +353,17 @@ fn health_body_with_idle(pid: Option<u32>, active: bool, idle_seconds: Option<u6
         "build_id": "old-build", "subscription_max_processes": 20,
         "subscription_timeout_minutes": 120, "active_http_requests": active as usize,
         "idle_seconds": idle_seconds,
-    }).to_string()
+    })
+    .to_string()
 }
 
 async fn health_server(
     canonical: String,
     retained: String,
 ) -> (SocketAddr, tokio::task::JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("health server");
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("health server");
     let address = listener.local_addr().expect("health address");
     let task = tokio::spawn(async move {
         for body in [canonical, retained] {
@@ -377,14 +382,8 @@ async fn release_idle_retained_keeps_generation_within_sticky_idle_grace() {
     )
     .await;
     let config = config_at(server, root.path(), PathBuf::from("/tmp/adapter"));
-    let path = live::write_retained(
-        &config,
-        server,
-        90,
-        "old",
-        vec!["grace-session".to_owned()],
-    )
-    .unwrap();
+    let path =
+        live::write_retained(&config, server, 90, "old", vec!["grace-session".to_owned()]).unwrap();
     release_idle_retained(&reqwest::Client::new(), &config).await;
     assert!(
         path.exists(),
@@ -421,7 +420,8 @@ async fn release_idle_retained_releases_when_sticky_idle_grace_expires() {
 #[tokio::test]
 async fn release_idle_retained_keeps_generation_used_by_canonical_listener() {
     let root = tempfile::tempdir().expect("retained release fixture");
-    let (server, task) = health_server(health_body(Some(77), false), health_body(None, false)).await;
+    let (server, task) =
+        health_server(health_body(Some(77), false), health_body(None, false)).await;
     let config = config_at(server, root.path(), PathBuf::from("/tmp/adapter"));
     let path = live::write_retained(&config, server, 77, "old", Vec::new()).unwrap();
     release_idle_retained(&reqwest::Client::new(), &config).await;
@@ -450,25 +450,13 @@ async fn release_idle_retained_releases_idle_active_and_unknown_generations() {
             health_body(Some(81), false),
             true,
         ),
-        (
-            81,
-            Vec::new(),
-            health_body(Some(81), true),
-            false,
-        ),
-        (
-            82,
-            Vec::new(),
-            health_body(Some(82), false),
-            true,
-        ),
+        (81, Vec::new(), health_body(Some(81), true), false),
+        (82, Vec::new(), health_body(Some(82), false), true),
     ] {
         let root = tempfile::tempdir().expect("retained release fixture");
-        let (server, task) =
-            health_server(health_body(Some(999), false), retained_body).await;
+        let (server, task) = health_server(health_body(Some(999), false), retained_body).await;
         let config = config_at(server, root.path(), PathBuf::from("/tmp/adapter"));
-        let path =
-            live::write_retained(&config, server, retained_pid, "old", sessions).unwrap();
+        let path = live::write_retained(&config, server, retained_pid, "old", sessions).unwrap();
         release_idle_retained(&reqwest::Client::new(), &config).await;
         assert_eq!(
             path.exists(),
@@ -573,7 +561,8 @@ async fn request_rebind_skips_non_success_responses() {
     let listen = listener.local_addr().expect("rebind address");
     tokio::spawn(serve_http_once(
         listener,
-        "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}".to_owned(),
+        "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}"
+            .to_owned(),
     ));
     let root = tempfile::tempdir().expect("rebind fixture");
     let rejected = request_ephemeral_rebind(
@@ -595,7 +584,10 @@ async fn listen_is_free_matches_whether_the_port_can_be_bound() {
     let became_free = tokio::time::timeout(Duration::from_secs(2), wait_until_listen_free(listen))
         .await
         .unwrap_or(false);
-    assert!(became_free, "port should become free after the listener drops");
+    assert!(
+        became_free,
+        "port should become free after the listener drops"
+    );
 }
 
 #[tokio::test]
@@ -703,7 +695,8 @@ async fn try_canonical_keeps_the_old_listener_when_rebind_is_rejected() {
     let listen = listener.local_addr().expect("canonical address");
     tokio::spawn(serve_http_once(
         listener,
-        "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}".to_owned(),
+        "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}"
+            .to_owned(),
     ));
     let config = config_at(listen, root.path(), dummy.clone());
     let kept = try_canonical(&reqwest::Client::new(), &config, &health(true, Some(12)))

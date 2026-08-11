@@ -163,10 +163,7 @@ fn launch_mcp_servers(params: &Value) -> Vec<acp::McpServer> {
     launch_mcp_servers_from(params, env::current_exe())
 }
 
-fn launch_mcp_servers_from(
-    params: &Value,
-    exe: std::io::Result<PathBuf>,
-) -> Vec<acp::McpServer> {
+fn launch_mcp_servers_from(params: &Value, exe: std::io::Result<PathBuf>) -> Vec<acp::McpServer> {
     if !params_offer_launch_tools(params) {
         return Vec::new();
     }

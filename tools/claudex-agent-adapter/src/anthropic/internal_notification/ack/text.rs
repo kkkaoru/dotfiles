@@ -100,4 +100,3 @@ pub(super) fn sanitize_visible_text(text: &str) -> String {
         .trim()
         .to_owned()
 }
-

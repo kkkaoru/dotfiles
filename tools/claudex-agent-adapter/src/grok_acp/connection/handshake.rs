@@ -12,8 +12,8 @@ use serde_json::{Value, json};
 use tokio::sync::oneshot;
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 
-use super::AcpProvider;
 use super::super::client::AcpClient;
+use super::AcpProvider;
 use crate::app_server::events::ThreadEventDispatcher;
 
 pub(super) fn wire_provider_connection(

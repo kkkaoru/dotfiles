@@ -65,4 +65,3 @@ pub(super) fn trace_launch_shaped_event(event: &Value) {
         "ACP providerTool launch-shaped event"
     );
 }
-

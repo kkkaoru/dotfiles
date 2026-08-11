@@ -62,12 +62,13 @@ fn treats_unknown_task_lifecycle_ids_as_idempotent_success() {
         json!({"type":"tool_result"})
     ]));
 }
+use super::session_turn::StartSelectedTurn;
 use crate::agent_backend::WebSearchMode;
 use crate::anthropic::{
-    Bridge, MessagesRequest, SelectedSession, Session, content::ToolResult,
+    Bridge, MessagesRequest, SelectedSession, Session,
+    content::ToolResult,
     subscription_request::{SHARED_WORKSPACE_INSTRUCTIONS, subscription_request_prompt},
 };
-use super::session_turn::StartSelectedTurn;
 use crate::{
     agent_backend::{AcpLaunch, AgentBackend, BackendKind, BackendRoute},
     app_server::AppServer,
@@ -1202,9 +1203,7 @@ fn subscription_and_session_instructions_report_the_default_parallel_contract() 
 #[test]
 fn subscription_prompt_keeps_turn_varying_scheduler_after_messages() {
     let prompt = subscription_request_prompt(&request(json!("cache-prefix"), Vec::new()));
-    let messages = prompt
-        .find("\nMessages:\n")
-        .expect("Messages section");
+    let messages = prompt.find("\nMessages:\n").expect("Messages section");
     let scheduler = prompt
         .find("Dynamically size SubAgent fan-out")
         .expect("scheduler policy");
@@ -2379,19 +2378,19 @@ async fn finish_detached_session_keeps_session_detached_if_pending_tools_exist()
         pending_since: std::sync::Mutex::new(None),
         _slot: slot,
     });
-    
+
     bridge.detach_session(&session).await;
     assert_eq!(bridge.detached_sessions.lock().await.len(), 1);
-    
+
     // Add pending tool to simulate unresolved tool_use.
     session.pending_tools.lock().await.insert(
         "tool_id".to_owned(),
         json!({"name": "bash", "id": "tool_id"}),
     );
-    
+
     // finish_detached_session should skip reattach.
     bridge.finish_detached_session(&session).await;
-    
+
     // Session must remain detached.
     assert_eq!(
         bridge.detached_sessions.lock().await.len(),

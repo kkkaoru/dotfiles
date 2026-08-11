@@ -8,11 +8,12 @@ use std::{
 use anyhow::{Context, Result, bail};
 
 use super::{
-    AdapterOptions, LOCAL_TOKEN, installed_adapter, launcher_logs, program_identity,
+    AdapterOptions, LOCAL_TOKEN,
     claude_relay::requires_authentication,
     daemon_arguments::{
         route_descriptions, search_worker_route_descriptions, worker_route_descriptions,
     },
+    installed_adapter, launcher_logs, program_identity,
 };
 use crate::{ADAPTER_PROTOCOL_VERSION, app_server};
 

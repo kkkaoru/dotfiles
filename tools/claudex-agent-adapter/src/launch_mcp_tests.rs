@@ -191,10 +191,7 @@ fn writes_both_transport_encodings() {
     let mut ndjson = Vec::new();
     write_message(&mut ndjson, true, message.clone()).unwrap();
     assert!(ndjson.ends_with(b"\n"));
-    assert_eq!(
-        serde_json::from_slice::<Value>(&ndjson).unwrap(),
-        message
-    );
+    assert_eq!(serde_json::from_slice::<Value>(&ndjson).unwrap(), message);
 
     let mut framed = Vec::new();
     write_message(&mut framed, false, message).unwrap();
