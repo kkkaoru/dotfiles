@@ -718,7 +718,10 @@ async fn session_scoped_configured_acp_recycles_after_one_failed_stream() {
             .as_str()
             .is_some_and(|message| message.contains("recycling provider"))
     );
-    assert!(backend.started_models().is_empty());
+    // Session-scoped invalidate must drop that session without killing the
+    // shared stdio driver — started_models stays populated for reuse.
+    assert_eq!(backend.started_models(), [model]);
+    assert!(backend.is_alive());
 
     let restarted = backend
         .request("thread/start", json!({"model":model,"cwd":root.path()}))
