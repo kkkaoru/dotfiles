@@ -8,31 +8,31 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-const CACHE_FILE_NAME: &str = "provider-auth-cooldown.json";
-const CACHE_VERSION: u8 = 1;
-const DEFAULT_COOLDOWN: Duration = Duration::from_secs(30 * 60);
+pub(super) const CACHE_FILE_NAME: &str = "provider-auth-cooldown.json";
+pub(super) const CACHE_VERSION: u8 = 1;
+pub(super) const DEFAULT_COOLDOWN: Duration = Duration::from_secs(30 * 60);
 /// Provider 429 / weekly-cap cool-downs outlive short auth blips. Ollama Cloud
 /// often stays dark for hours after the first retry storm; 30 minutes caused
 /// automatic re-selection loops.
-const DEFAULT_RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(4 * 60 * 60);
-const MAX_COOLDOWN: Duration = Duration::from_secs(24 * 60 * 60);
-const COOLDOWN_ENV: &str = "CLAUDEX_PROVIDER_AUTH_COOLDOWN_SECONDS";
-const RATE_LIMIT_COOLDOWN_ENV: &str = "CLAUDEX_PROVIDER_RATE_LIMIT_COOLDOWN_SECONDS";
+pub(super) const DEFAULT_RATE_LIMIT_COOLDOWN: Duration = Duration::from_secs(4 * 60 * 60);
+pub(super) const MAX_COOLDOWN: Duration = Duration::from_secs(24 * 60 * 60);
+pub(super) const COOLDOWN_ENV: &str = "CLAUDEX_PROVIDER_AUTH_COOLDOWN_SECONDS";
+pub(super) const RATE_LIMIT_COOLDOWN_ENV: &str = "CLAUDEX_PROVIDER_RATE_LIMIT_COOLDOWN_SECONDS";
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct AuthCooldownEntry {
-    until_unix_seconds: u64,
-    message: String,
-    recorded_unix_seconds: u64,
+pub(super) struct AuthCooldownEntry {
+    pub(super) until_unix_seconds: u64,
+    pub(super) message: String,
+    pub(super) recorded_unix_seconds: u64,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct AuthCooldownCache {
-    version: u8,
+pub(super) struct AuthCooldownCache {
+    pub(super) version: u8,
     #[serde(default)]
-    entries: BTreeMap<String, AuthCooldownEntry>,
+    pub(super) entries: BTreeMap<String, AuthCooldownEntry>,
 }
 
 pub(crate) fn cache_path_for_home(home: impl AsRef<Path>) -> PathBuf {
@@ -112,34 +112,34 @@ pub(crate) fn scope_is_cooling_down_at(path: Option<&Path>, scope: &str, now: Sy
     })
 }
 
-fn load_cache(path: &Path) -> Option<AuthCooldownCache> {
+pub(super) fn load_cache(path: &Path) -> Option<AuthCooldownCache> {
     let bytes = fs::read(path).ok()?;
     serde_json::from_slice(&bytes).ok()
 }
 
-fn prune_expired(cache: &mut AuthCooldownCache, now: SystemTime) {
+pub(super) fn prune_expired(cache: &mut AuthCooldownCache, now: SystemTime) {
     let now = unix_seconds(now);
     cache
         .entries
         .retain(|_, entry| now < entry.until_unix_seconds);
 }
 
-fn cooldown_duration() -> Duration {
+pub(super) fn cooldown_duration() -> Duration {
     env_cooldown(COOLDOWN_ENV).unwrap_or(DEFAULT_COOLDOWN.min(MAX_COOLDOWN))
 }
 
-fn rate_limit_cooldown_duration() -> Duration {
+pub(super) fn rate_limit_cooldown_duration() -> Duration {
     env_cooldown(RATE_LIMIT_COOLDOWN_ENV).unwrap_or(DEFAULT_RATE_LIMIT_COOLDOWN.min(MAX_COOLDOWN))
 }
 
-fn env_cooldown(name: &str) -> Option<Duration> {
+pub(super) fn env_cooldown(name: &str) -> Option<Duration> {
     std::env::var(name)
         .ok()
         .and_then(|seconds| seconds.parse::<u64>().ok())
         .map(|seconds| Duration::from_secs(seconds.min(MAX_COOLDOWN.as_secs())))
 }
 
-fn write_cache(path: &Path, cache: &AuthCooldownCache) {
+pub(super) fn write_cache(path: &Path, cache: &AuthCooldownCache) {
     if let Some(parent) = path.parent() {
         let _ = fs::create_dir_all(parent);
     }
@@ -162,7 +162,7 @@ fn write_cache(path: &Path, cache: &AuthCooldownCache) {
     let _ = fs::remove_file(&temporary);
 }
 
-fn unix_seconds(time: SystemTime) -> u64 {
+pub(super) fn unix_seconds(time: SystemTime) -> u64 {
     time.duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs()
@@ -170,93 +170,5 @@ fn unix_seconds(time: SystemTime) -> u64 {
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn records_and_expires_provider_scoped_auth_cooldown() {
-        let root = tempfile::tempdir().expect("auth cooldown fixture");
-        let path = cache_path_for_home(root.path());
-        let now = UNIX_EPOCH + Duration::from_secs(1_000);
-        assert!(record_at(Some(&path), "sakana", "Invalid API key", now).is_some());
-        assert!(scope_is_cooling_down_at(Some(&path), "sakana", now));
-        assert!(!scope_is_cooling_down_at(Some(&path), "other", now));
-        assert!(!scope_is_cooling_down_at(
-            Some(&path),
-            "sakana",
-            now + DEFAULT_COOLDOWN + Duration::from_secs(1)
-        ));
-    }
-
-    #[test]
-    fn rate_limit_cooldown_outlives_default_auth_window() {
-        let root = tempfile::tempdir().expect("rate limit cooldown fixture");
-        let path = cache_path_for_home(root.path());
-        let now = UNIX_EPOCH + Duration::from_secs(1_000);
-        assert!(
-            record_rate_limit_at(Some(&path), "ollama", "429 Too Many Requests", now).is_some()
-        );
-        assert!(scope_is_cooling_down_at(
-            Some(&path),
-            "ollama",
-            now + DEFAULT_COOLDOWN + Duration::from_secs(1)
-        ));
-        assert!(!scope_is_cooling_down_at(
-            Some(&path),
-            "ollama",
-            now + DEFAULT_RATE_LIMIT_COOLDOWN + Duration::from_secs(1)
-        ));
-    }
-
-    #[test]
-    fn record_without_path_or_scope_is_a_noop() {
-        let now = UNIX_EPOCH + Duration::from_secs(1_000);
-        assert!(record_at(None, "sakana", "Invalid API key", now).is_none());
-        assert!(record_rate_limit_at(None, "ollama", "429", now).is_none());
-        assert!(record_at(Some(Path::new("/tmp/unused")), "", "Invalid API key", now).is_none());
-        assert!(!scope_is_cooling_down_at(None, "sakana", now));
-        assert!(!scope_is_cooling_down_at(
-            Some(Path::new("/tmp/unused")),
-            "",
-            now
-        ));
-    }
-
-    #[test]
-    fn honors_explicit_auth_cooldown_override() {
-        let previous = std::env::var_os(COOLDOWN_ENV);
-        unsafe { std::env::set_var(COOLDOWN_ENV, "45") };
-        assert_eq!(cooldown_duration(), Duration::from_secs(45));
-        match previous {
-            Some(value) => unsafe { std::env::set_var(COOLDOWN_ENV, value) },
-            None => unsafe { std::env::remove_var(COOLDOWN_ENV) },
-        }
-    }
-
-    #[test]
-    fn ignores_auth_cooldown_cache_with_unexpected_version() {
-        let root = tempfile::tempdir().expect("auth cooldown version fixture");
-        let path = cache_path_for_home(root.path());
-        std::fs::create_dir_all(path.parent().expect("cache parent")).expect("cache dir");
-        std::fs::write(
-            &path,
-            r#"{"version":99,"entries":{"sakana":{"untilUnixSeconds":9999999999,"message":"Invalid API key","recordedUnixSeconds":1}}}"#,
-        )
-        .expect("write stale version cache");
-        let now = UNIX_EPOCH + Duration::from_secs(1_000);
-        assert!(!scope_is_cooling_down_at(Some(&path), "sakana", now));
-    }
-
-    #[test]
-    fn write_cache_skips_rename_when_the_target_cannot_be_written() {
-        let root = tempfile::tempdir().expect("unwritable cooldown fixture");
-        let as_directory = root.path().join("cooldown.json");
-        std::fs::create_dir_all(&as_directory).expect("dir target");
-        let cache = AuthCooldownCache {
-            version: CACHE_VERSION,
-            entries: BTreeMap::new(),
-        };
-        write_cache(&as_directory, &cache);
-        write_cache(Path::new("/"), &cache);
-    }
-}
+#[path = "provider_auth_cooldown_tests.rs"]
+mod tests;
