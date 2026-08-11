@@ -1,7 +1,6 @@
 #[cfg(test)]
 // Coverage excludes test implementation; production behavior remains measured.
 #[cfg_attr(coverage_nightly, coverage(off))]
-#[allow(clippy::excessive_nesting)]
 mod tests {
     use super::*;
     use crate::grok_acp::client::AcpClient;
@@ -1013,7 +1012,7 @@ mod tests {
         events: std::sync::Arc<ThreadEventDispatcher>,
     ) -> (acp::ClientSideConnection, oneshot::Receiver<Vec<Value>>) {
         let (outgoing, outgoing_peer) = tokio::io::duplex(1024);
-        let (incoming, mut incoming_peer) = tokio::io::duplex(1024);
+        let (incoming, incoming_peer) = tokio::io::duplex(1024);
         let (connection, io_task) = acp::ClientSideConnection::new(
             AcpClient::new(events),
             outgoing.compat_write(),
@@ -1026,44 +1025,64 @@ mod tests {
             let _ = io_task.await;
         }));
         let (request_sender, requests) = oneshot::channel();
-        drop(tokio::task::spawn_local(async move {
-            let mut lines = BufReader::new(outgoing_peer);
-            let mut captured = Vec::new();
-            // rejected effort option → model meta fallback
-            for _ in 0..2 {
-                let mut line = String::new();
-                lines.read_line(&mut line).await.expect("ACP request");
-                let request: Value = serde_json::from_str(&line).expect("valid ACP request");
-                let id = request["id"].clone();
-                let response = match request["method"].as_str() {
-                    Some("session/set_config_option") => {
-                        json!({"jsonrpc":"2.0", "id":id, "error":{"code":-32602,"message":"invalid params"}})
-                    }
-                    Some("session/set_model") => {
-                        json!({"jsonrpc":"2.0", "id":id, "result":{}})
-                    }
-                    method => panic!("unexpected ACP method: {method:?}"),
-                };
-                captured.push(request);
-                incoming_peer
-                    .write_all(response.to_string().as_bytes())
-                    .await
-                    .expect("ACP response");
-                incoming_peer
-                    .write_all(b"\n")
-                    .await
-                    .expect("response newline");
-            }
-            request_sender.send(captured).expect("request receiver");
-        }));
+        drop(tokio::task::spawn_local(serve_rejecting_effort_peer(
+            outgoing_peer,
+            incoming_peer,
+            request_sender,
+        )));
         (connection, requests)
+    }
+
+    async fn serve_rejecting_effort_peer(
+        outgoing_peer: tokio::io::DuplexStream,
+        mut incoming_peer: tokio::io::DuplexStream,
+        request_sender: oneshot::Sender<Vec<Value>>,
+    ) {
+        let mut lines = BufReader::new(outgoing_peer);
+        let mut captured = Vec::new();
+        for _ in 0..2 {
+            captured.push(answer_rejecting_effort_request(&mut lines, &mut incoming_peer).await);
+        }
+        request_sender.send(captured).expect("request receiver");
+    }
+
+    async fn answer_rejecting_effort_request(
+        lines: &mut BufReader<tokio::io::DuplexStream>,
+        incoming_peer: &mut tokio::io::DuplexStream,
+    ) -> Value {
+        let mut line = String::new();
+        lines.read_line(&mut line).await.expect("ACP request");
+        let request: Value = serde_json::from_str(&line).expect("valid ACP request");
+        let response = rejecting_effort_response(&request);
+        incoming_peer
+            .write_all(response.to_string().as_bytes())
+            .await
+            .expect("ACP response");
+        incoming_peer
+            .write_all(b"\n")
+            .await
+            .expect("response newline");
+        request
+    }
+
+    fn rejecting_effort_response(request: &Value) -> Value {
+        let id = request["id"].clone();
+        match request["method"].as_str() {
+            Some("session/set_config_option") => {
+                json!({"jsonrpc":"2.0", "id":id, "error":{"code":-32602,"message":"invalid params"}})
+            }
+            Some("session/set_model") => {
+                json!({"jsonrpc":"2.0", "id":id, "result":{}})
+            }
+            method => panic!("unexpected ACP method: {method:?}"),
+        }
     }
 
     fn rejecting_launch_scoped_effort_connection(
         events: std::sync::Arc<ThreadEventDispatcher>,
     ) -> (acp::ClientSideConnection, oneshot::Receiver<Vec<Value>>) {
         let (outgoing, outgoing_peer) = tokio::io::duplex(1024);
-        let (incoming, mut incoming_peer) = tokio::io::duplex(1024);
+        let (incoming, incoming_peer) = tokio::io::duplex(1024);
         let (connection, io_task) = acp::ClientSideConnection::new(
             AcpClient::new(events),
             outgoing.compat_write(),
@@ -1076,40 +1095,58 @@ mod tests {
             let _ = io_task.await;
         }));
         let (request_sender, requests) = oneshot::channel();
-        drop(tokio::task::spawn_local(async move {
-            let mut lines = BufReader::new(outgoing_peer);
-            let mut line = String::new();
-            let read = tokio::time::timeout(
-                std::time::Duration::from_millis(200),
-                lines.read_line(&mut line),
-            )
-            .await;
-            let Ok(Ok(_)) = read else {
-                let _ = request_sender.send(Vec::new());
-                return;
-            };
-            if line.is_empty() {
-                let _ = request_sender.send(Vec::new());
-                return;
-            }
-            let request: Value = serde_json::from_str(&line).expect("valid ACP request");
-            let id = request["id"].clone();
-            let response = json!({
-                "jsonrpc":"2.0",
-                "id":id,
-                "error":{"code":-32602,"message":"invalid params"}
-            });
-            incoming_peer
-                .write_all(response.to_string().as_bytes())
-                .await
-                .expect("ACP response");
-            incoming_peer
-                .write_all(b"\n")
-                .await
-                .expect("response newline");
-            let _ = request_sender.send(vec![request]);
-        }));
+        drop(tokio::task::spawn_local(serve_rejecting_launch_scoped_peer(
+            outgoing_peer,
+            incoming_peer,
+            request_sender,
+        )));
         (connection, requests)
+    }
+
+    async fn serve_rejecting_launch_scoped_peer(
+        outgoing_peer: tokio::io::DuplexStream,
+        mut incoming_peer: tokio::io::DuplexStream,
+        request_sender: oneshot::Sender<Vec<Value>>,
+    ) {
+        let mut lines = BufReader::new(outgoing_peer);
+        let mut line = String::new();
+        let read = tokio::time::timeout(
+            std::time::Duration::from_millis(200),
+            lines.read_line(&mut line),
+        )
+        .await;
+        let Some(request) = launch_scoped_request_from_read(read, &line) else {
+            let _ = request_sender.send(Vec::new());
+            return;
+        };
+        let id = request["id"].clone();
+        let response = json!({
+            "jsonrpc":"2.0",
+            "id":id,
+            "error":{"code":-32602,"message":"invalid params"}
+        });
+        incoming_peer
+            .write_all(response.to_string().as_bytes())
+            .await
+            .expect("ACP response");
+        incoming_peer
+            .write_all(b"\n")
+            .await
+            .expect("response newline");
+        let _ = request_sender.send(vec![request]);
+    }
+
+    fn launch_scoped_request_from_read(
+        read: Result<std::io::Result<usize>, tokio::time::error::Elapsed>,
+        line: &str,
+    ) -> Option<Value> {
+        let Ok(Ok(_)) = read else {
+            return None;
+        };
+        if line.is_empty() {
+            return None;
+        }
+        Some(serde_json::from_str(line).expect("valid ACP request"))
     }
 
     fn stalled_connection(
