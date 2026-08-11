@@ -52,27 +52,6 @@ mod tool_schema_cache;
 mod turn_input;
 mod usage_limit_cooldown;
 mod usage_limit_failover;
-use serde::Deserialize;
-use serde_json::Value;
-use std::{
-    collections::{BTreeSet, HashMap, HashSet},
-    path::PathBuf,
-    sync::{Arc, Mutex as StdMutex, Weak},
-    time::Instant,
-};
-use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
-
-pub(super) struct AgentEffortRecord<'a> {
-    pub(super) client_user_id: Option<&'a str>,
-    pub(super) tool_name: &'a str,
-    pub(super) tool_use_id: String,
-    pub(super) parent_model: &'a str,
-    pub(super) arguments: &'a Value,
-    pub(super) user_messages: &'a [Value],
-    pub(super) system: &'a Value,
-}
-
-use crate::{agent_backend::AgentBackend, app_server::ThreadEvents};
 
 pub use content::{error_response, token_count};
 pub use request_identity::RequestIdentity;
@@ -86,108 +65,12 @@ use bridge_instructions::{
     BRIDGE_INSTRUCTIONS, CODEX_APP_SERVER_PARALLELIZATION_INSTRUCTIONS, SUBAGENT_RESULT_PROTOCOL,
 };
 
-const MAX_SESSIONS: usize = 1_024;
-pub(super) const MAX_SIGNATURE_BUCKETS: usize = MAX_SESSIONS * 2;
-pub(super) type SignaturePool = StdMutex<HashMap<u64, Vec<Weak<str>>>>;
-#[derive(Clone, Debug, Deserialize)]
-pub struct MessagesRequest {
-    #[serde(default)]
-    pub model: String,
-    #[serde(default)]
-    pub system: Value,
-    #[serde(default)]
-    pub messages: Vec<Value>,
-    #[serde(default)]
-    pub tools: Vec<Value>,
-    #[serde(default)]
-    pub stream: bool,
-    #[serde(default)]
-    pub output_config: Value,
-    #[serde(default)]
-    pub metadata: Value,
-    #[serde(skip)]
-    pub working_directory: Option<PathBuf>,
-    #[serde(skip)]
-    pub disabled_subagent_models: BTreeSet<String>,
-    #[serde(default)]
-    pub claudex_collaborator_model: Option<String>,
-}
-
-pub struct Bridge {
-    app: Arc<AgentBackend>,
-    model: String,
-    legacy_main_route: bool,
-    model_catalog: crate::provider_config::ModelCatalog,
-    advisor_model_override: Option<String>,
-    collaborator_model_override: Option<String>,
-    subscription_program: PathBuf,
-    settings_path: Option<PathBuf>,
-    usage_limit_cache_home: Option<PathBuf>,
-    sessions: Mutex<Vec<Arc<Session>>>,
-    /// Sessions whose SubAgent response was handed back to the caller while the
-    /// provider turn continues in the background. They must remain discoverable
-    /// for late Claude tool results, but must not be considered for a new main
-    /// turn or hold up active-session matching.
-    detached_sessions: Mutex<Vec<Arc<Session>>>,
-    session_slots: Arc<Semaphore>,
-    next_session_sweep: std::sync::Mutex<Instant>,
-    signature_pool: SignaturePool,
-    subscription_slots: Arc<Semaphore>,
-    subscription_max_processes: usize,
-    subscription_timeout: std::time::Duration,
-    subagent_hard_timeout: Option<std::time::Duration>,
-    #[cfg(test)]
-    subagent_hard_timeout_cancel_attempts: std::sync::atomic::AtomicUsize,
-    agent_efforts: Arc<agent_effort::AgentEffortIntents>,
-    subagent_reuse: Arc<subagent_reuse::SubagentReuseRegistry>,
-    tool_schemas: tool_schema_cache::ToolSchemaCache,
-    model_concurrency: model_concurrency::ModelConcurrency,
-    active_subagent_models: Arc<active_subagent_models::ActiveSubagentModels>,
-}
-
-struct Session {
-    thread_id: String,
-    model: String,
-    disabled_subagent_models: BTreeSet<String>,
-    signature: Arc<str>,
-    transcript: Mutex<Vec<Value>>,
-    pending_tools: Mutex<HashMap<String, Value>>,
-    consumed_tool_ids: Mutex<HashSet<String>>,
-    external_tool_names: HashMap<String, String>,
-    client_user_id: Option<String>,
-    claude_session_id: Option<String>,
-    gate: Arc<Mutex<()>>,
-    last_activity: std::sync::Mutex<Instant>,
-    pending_since: std::sync::Mutex<Option<Instant>>,
-    _slot: OwnedSemaphorePermit,
-}
-
-struct SelectedSession {
-    session: Arc<Session>,
-    existing_len: usize,
-    recovered: bool,
-    gate: tokio::sync::OwnedMutexGuard<()>,
-}
-
-struct ActiveTurn {
-    session: Arc<Session>,
-    events: Arc<ThreadEvents>,
-    response_model: String,
-    extras: Vec<Value>,
-    routing_system: Value,
-    input_tokens: u64,
-    retry: Option<ContextRetry>,
-    gate: tokio::sync::OwnedMutexGuard<()>,
-    detached: bool,
-}
-
-#[derive(Clone)]
-struct ContextRetry {
-    request: MessagesRequest,
-    effort: Option<String>,
-    advisor_model: Option<String>,
-    collaborator_model: Option<String>,
-}
+mod bridge_types;
+pub use bridge_types::{Bridge, MessagesRequest};
+pub(crate) use bridge_types::{
+    ActiveTurn, AgentEffortRecord, ContextRetry, MAX_SESSIONS, MAX_SIGNATURE_BUCKETS, SelectedSession,
+    Session, SignaturePool,
+};
 
 mod bridge_ctors;
 
