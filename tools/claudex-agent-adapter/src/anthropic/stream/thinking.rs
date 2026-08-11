@@ -226,11 +226,11 @@ impl ThinkingState {
                 .await?;
         }
         let open = self.open.as_mut().expect("progress block just opened");
-        // Skip duplicate Status chrome; SSE can only append.
-        // Use trimmed comparison to handle trailing newlines from rewrite.
-        let status_trimmed = status.trim_end();
-        let buffer_trimmed = open.text.trim_end();
-        if buffer_trimmed.ends_with(status_trimmed) && !status_trimmed.is_empty() {
+        // Dedupe Status/▶; strip keepalive ZWSP (not whitespace) so tips stick.
+        let status_trimmed = status.trim_end_matches(|c: char| c == '\u{200b}' || c.is_whitespace());
+        let buffer_trimmed =
+            open.text.trim_end_matches(|c: char| c == '\u{200b}' || c.is_whitespace());
+        if !status_trimmed.is_empty() && buffer_trimmed.ends_with(status_trimmed) {
             return Ok(());
         }
         open.text.push_str(status);

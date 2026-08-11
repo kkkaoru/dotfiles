@@ -880,6 +880,39 @@ async fn progress_status_dedupes_identical_status_lines() {
 }
 
 #[tokio::test]
+async fn progress_status_dedupes_tool_tip_after_zwsp_keepalive_tail() {
+    let mut state = ThinkingState::default();
+    let mut blocks = Vec::new();
+    let tip = "▶ Read\n";
+    state
+        .progress_status_keep_open(&mut blocks, tip, None)
+        .await
+        .expect("first tip");
+    state
+        .elapsed_keepalive(&mut blocks, Duration::from_secs(4), Some("Read"), None)
+        .await
+        .expect("zwsp keepalive");
+    state
+        .progress_status_keep_open(&mut blocks, tip, None)
+        .await
+        .expect("re-tip after zwsp");
+    state
+        .elapsed_keepalive(&mut blocks, Duration::from_secs(8), Some("Read"), None)
+        .await
+        .expect("second zwsp");
+    state
+        .progress_status_keep_open(&mut blocks, tip, None)
+        .await
+        .expect("second re-tip after zwsp");
+    let thinking = blocks[0]["thinking"].as_str().expect("thinking text");
+    assert_eq!(
+        thinking.matches("▶ Read").count(),
+        1,
+        "ZWSP keepalive must not defeat ▶ tip dedupe: {thinking:?}"
+    );
+}
+
+#[tokio::test]
 async fn thinking_state_covers_answer_text_prime_and_heartbeat_guards() {
     let mut coalesced = ThinkingState::default();
     let mut answer = vec![json!({"type":"text","text":"done"})];

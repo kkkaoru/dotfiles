@@ -869,6 +869,13 @@ mod tests {
         live.ingest_available(&mut receiver);
         assert!(live.visible_thinking.contains("▶"));
 
+        let tip_before = live
+            .visible_thinking
+            .chars()
+            .filter(|ch| *ch != '\u{200b}')
+            .collect::<String>()
+            .matches('▶')
+            .count();
         builder
             .activity_keepalive(Some(&sender))
             .await
@@ -877,6 +884,10 @@ mod tests {
             .activity_keepalive(Some(&sender))
             .await
             .expect("second elapsed");
+        builder
+            .activity_keepalive(Some(&sender))
+            .await
+            .expect("third elapsed");
         live.ingest_available(&mut receiver);
         assert!(live.turn_still_open());
         assert!(
@@ -896,6 +907,11 @@ mod tests {
                 .find(|line| !line.trim().is_empty())
                 .is_some_and(|line| line.contains('▶')),
             "keepalive must re-tip ▶ so CC does not flash blank Perambulating: {tip:?}"
+        );
+        assert_eq!(
+            tip.matches('▶').count(),
+            tip_before.max(1),
+            "ZWSP keepalive must not stack duplicate ▶ tips: before={tip_before} after={tip:?}"
         );
         assert!(
             !live.visible_thinking.contains("still working")
