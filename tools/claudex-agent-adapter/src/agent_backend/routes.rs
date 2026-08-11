@@ -11,7 +11,7 @@ mod concurrency;
 mod shutdown;
 mod startup;
 
-use startup::start_backend;
+use startup::{provider_startup, start_backend};
 
 const MAX_DYNAMIC_ROUTES: usize = 32;
 
@@ -24,7 +24,7 @@ pub(super) struct RoutedBackend {
 }
 
 #[derive(Default)]
-struct BackendStartup {
+pub(super) struct BackendStartup {
     receiver: Mutex<Option<tokio::sync::watch::Receiver<StartupState>>>,
 }
 
@@ -383,15 +383,6 @@ impl RoutedBackends {
                     .find(|route| route.kind == kind && route.ready_backend().is_some())
                     .and_then(|route| route.ready_backend())
             })
-    }
-}
-
-fn provider_startup(kind: BackendKind, codex_startup: &Arc<BackendStartup>) -> Arc<BackendStartup> {
-    match kind {
-        BackendKind::CodexAppServer => Arc::clone(codex_startup),
-        BackendKind::ConfiguredAcp | BackendKind::CopilotAcp | BackendKind::GrokAcp => {
-            Arc::new(BackendStartup::default())
-        }
     }
 }
 
