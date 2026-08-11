@@ -69,6 +69,9 @@ pub(super) struct Health {
     /// the field; sticky / release_idle then treat quiet health as immediately idle.
     #[serde(default)]
     pub(super) idle_seconds: Option<u64>,
+    /// In-flight SubAgent agentIds. Older adapters omit this field.
+    #[serde(default)]
+    pub(super) active_subagent_agent_ids: Vec<String>,
 }
 
 impl Health {

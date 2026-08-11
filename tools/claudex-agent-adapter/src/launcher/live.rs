@@ -36,6 +36,10 @@ pub(crate) struct RetainedGeneration {
     pub build_id: String,
     #[serde(default)]
     pub session_ids: Vec<String>,
+    /// SubAgent agentIds in-flight at promote time. Seeded into sticky
+    /// `recent_agents` so cutover does not send warm workers to the live binary.
+    #[serde(default)]
+    pub agent_ids: Vec<String>,
 }
 
 pub(super) fn publish_listen(
@@ -78,12 +82,24 @@ pub(super) fn publish_canonical_rebind(
     )
 }
 
+#[cfg(test)]
 pub(super) fn write_retained(
     config: &ServiceConfig,
     listen: SocketAddr,
     pid: u32,
     build_id: &str,
     session_ids: Vec<String>,
+) -> Result<PathBuf> {
+    write_retained_with_agents(config, listen, pid, build_id, session_ids, Vec::new())
+}
+
+pub(super) fn write_retained_with_agents(
+    config: &ServiceConfig,
+    listen: SocketAddr,
+    pid: u32,
+    build_id: &str,
+    session_ids: Vec<String>,
+    agent_ids: Vec<String>,
 ) -> Result<PathBuf> {
     #[cfg(test)]
     if RETAINED_WRITE_FAILURE_AFTER.with(|cell| match cell.get() {
@@ -107,6 +123,7 @@ pub(super) fn write_retained(
             pid,
             build_id: build_id.to_owned(),
             session_ids,
+            agent_ids,
         },
     )?;
     Ok(path)

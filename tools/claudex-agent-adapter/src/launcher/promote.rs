@@ -68,15 +68,17 @@ pub(super) async fn try_canonical(
     }
     super::pending_hot_swap::disarm(config);
     let session_ids = retained_session_ids(health);
+    let agent_ids = health.active_subagent_agent_ids.clone();
     let advertised = advertised_listen(config, health);
     let warm_listen = fallback::reserve_loopback_listen(config.options.listen)?;
     let warm = config.with_listen(warm_listen);
-    let retained_path = live::write_retained(
+    let retained_path = live::write_retained_with_agents(
         config,
         advertised,
         old_pid,
         &health.build_id,
         session_ids.clone(),
+        agent_ids.clone(),
     )?;
     let started = daemon_start::start_adapter_with_retained(&warm, &retained_path, config)
         .context("warm-start current-build listener before canonical cutover")?;
@@ -92,12 +94,13 @@ pub(super) async fn try_canonical(
         return Ok(None);
     };
     let retained_listen = live::parse_listen_url(&format!("http://{}", rebind.listen))?;
-    live::write_retained(
+    live::write_retained_with_agents(
         config,
         retained_listen,
         old_pid,
         &health.build_id,
         session_ids.clone(),
+        agent_ids,
     )?;
     wait_until_canonical_released(config).await?;
     let probe = reqwest::Client::builder()

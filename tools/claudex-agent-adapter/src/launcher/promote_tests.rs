@@ -69,6 +69,7 @@ fn health(listener_handover: bool, pid: Option<u32>) -> Health {
         active_claude_session_ids: vec!["session-a".to_owned()],
         busy_claude_session_ids: Vec::new(),
         idle_seconds: None,
+        active_subagent_agent_ids: Vec::new(),
     }
 }
 

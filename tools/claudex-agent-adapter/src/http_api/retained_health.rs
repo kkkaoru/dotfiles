@@ -122,6 +122,16 @@ pub(super) fn note_retained_activity(
     recent_agents.retain(|_, seen| now.saturating_duration_since(*seen) <= STICKY_IDLE_GRACE);
 }
 
+/// Seed sticky memory from promote-time agentIds so cutover does not forget
+/// warm SubAgents before the first retained /health sample refreshes them.
+pub(super) fn seed_recent_agents(agent_ids: &[String], now: Instant) -> HashMap<String, Instant> {
+    agent_ids
+        .iter()
+        .filter(|id| !id.is_empty())
+        .map(|id| (id.clone(), now))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -172,6 +182,18 @@ mod tests {
             &recent,
             now
         ));
+    }
+
+    #[test]
+    fn seed_recent_agents_skips_blanks() {
+        let now = Instant::now();
+        let seeded = seed_recent_agents(
+            &["agent-a".to_owned(), "".to_owned(), "agent-b".to_owned()],
+            now,
+        );
+        assert_eq!(seeded.len(), 2);
+        assert!(seeded.contains_key("agent-a"));
+        assert!(seeded.contains_key("agent-b"));
     }
 
     #[test]

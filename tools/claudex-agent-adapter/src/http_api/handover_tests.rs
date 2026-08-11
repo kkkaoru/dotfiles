@@ -32,6 +32,15 @@ async fn hold_accepted_connections(silent: TcpListener) {
 }
 
 fn retained(path: &std::path::Path, listen: &str, sessions: &[&str]) -> RetainedProxy {
+    retained_with_agents(path, listen, sessions, &[])
+}
+
+fn retained_with_agents(
+    path: &std::path::Path,
+    listen: &str,
+    sessions: &[&str],
+    agents: &[&str],
+) -> RetainedProxy {
     RetainedProxy::from_path(
         path.to_path_buf(),
         RetainedGeneration {
@@ -39,6 +48,7 @@ fn retained(path: &std::path::Path, listen: &str, sessions: &[&str]) -> Retained
             pid: 1,
             build_id: "old".to_owned(),
             session_ids: sessions.iter().map(|id| (*id).to_owned()).collect(),
+            agent_ids: agents.iter().map(|id| (*id).to_owned()).collect(),
         },
     )
 }
@@ -749,6 +759,45 @@ async fn should_proxy_keeps_recent_agent_when_active_ids_drain() {
     assert!(
         proxy.owns("parent"),
         "rejecting a new agent id must not forget the parent session"
+    );
+}
+
+#[tokio::test]
+async fn promote_snapshot_agent_ids_seed_sticky_before_health_refresh() {
+    let upstream = serve_retained_generation_with_agent_field(
+        b"from-retained",
+        &["parent"],
+        Some(&[]),
+    )
+    .await;
+    let root = tempfile::tempdir().expect("promote seed fixture");
+    let path = root.path().join("retained.json");
+    std::fs::write(
+        &path,
+        format!(
+            r#"{{"listen":"{upstream}","pid":1,"build_id":"old","session_ids":["parent"],"agent_ids":["agent-seeded"]}}"#
+        ),
+    )
+    .expect("write retained");
+    let proxy = retained_with_agents(
+        &path,
+        &upstream.to_string(),
+        &["parent"],
+        &["agent-seeded"],
+    );
+    let sticky_seeded = proxy
+        .should_proxy_session("parent", Some("agent-seeded"))
+        .await;
+    assert!(
+        sticky_seeded,
+        "promote-time agent_ids must seed recent_agents across empty active_subagent_agent_ids"
+    );
+    let sticky_new = proxy
+        .should_proxy_session("parent", Some("agent-new"))
+        .await;
+    assert!(
+        !sticky_new,
+        "unknown SubAgent id must still run on the live binary after promote seed"
     );
 }
 
