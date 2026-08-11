@@ -1,8 +1,4 @@
-use std::{
-    collections::VecDeque,
-    fs,
-    path::Path,
-};
+use std::{collections::VecDeque, fs, path::Path};
 
 use super::{
     CACHE_VERSION, MAX_AGE_SECONDS, MAX_ENTRIES, StoredSchema, StoredSchemas, schema_sort_key,
@@ -89,7 +85,8 @@ pub(super) fn bound_entries(entries: &mut VecDeque<StoredSchema>) {
     }
 }
 
-
 #[path = "persist_io.rs"]
 mod persist_io;
-pub(in crate::anthropic) use persist_io::{StoreLock, create_private_directory, parent_directory, write_private};
+pub(in crate::anthropic) use persist_io::{
+    StoreLock, create_private_directory, parent_directory, write_private,
+};

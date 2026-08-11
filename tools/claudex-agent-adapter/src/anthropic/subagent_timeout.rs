@@ -43,7 +43,6 @@ pub(super) async fn completes_within<T>(
     }
 }
 
-
 mod expire;
 #[cfg(test)]
 use expire::provider_cancellation_within;

@@ -3,9 +3,9 @@ use std::{sync::Arc, time::Duration};
 use anyhow::Result;
 use axum::{body::Body, http::Response};
 
-use super::completion;
-use super::completes_within;
 use super::super::{ActiveTurn, Bridge, MessagesRequest, model_concurrency::ModelPermit};
+use super::completes_within;
+use super::completion;
 
 impl Bridge {
     pub(in crate::anthropic) async fn provider_messages(

@@ -75,4 +75,3 @@ impl Drop for StoreLock {
         }
     }
 }
-

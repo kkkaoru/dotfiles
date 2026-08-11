@@ -52,12 +52,12 @@ pub(super) use run::{
 
 #[path = "subscription_limits.rs"]
 mod limits;
+#[allow(unused_imports)]
+pub(in crate::anthropic) use limits::subscription_limits_from;
 pub(crate) use limits::{DEFAULT_MAX_PROCESSES, DEFAULT_TIMEOUT_MINUTES};
 pub(in crate::anthropic) use limits::{SubscriptionLimits, subscription_limits};
 #[allow(unused_imports)] // settings_tests via super::
 pub(in crate::anthropic) use limits::{positive_u64, positive_usize};
-#[allow(unused_imports)]
-pub(in crate::anthropic) use limits::subscription_limits_from;
 
 impl Bridge {
     pub(super) fn claude_setting(&self, key: &str) -> Option<String> {

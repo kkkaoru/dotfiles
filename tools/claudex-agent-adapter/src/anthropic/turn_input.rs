@@ -101,7 +101,6 @@ fn user_input_from_messages_with_byte_limit(messages: &[Value], max_bytes: usize
     bound_input_with_byte_limit(input, max_bytes)
 }
 
-
 #[cfg(test)]
 fn bound_input(input: Vec<Value>) -> Vec<Value> {
     bound_input_with_byte_limit(input, MAX_TURN_INPUT_BYTES)
@@ -111,12 +110,12 @@ fn bound_input(input: Vec<Value>) -> Vec<Value> {
 mod bound;
 #[path = "turn_input_truncate.rs"]
 mod truncate;
-use truncate::bounded_history;
-#[allow(unused_imports)] // turn_input_tests via super::
-pub(in crate::anthropic) use truncate::oversized_latest_message;
 #[cfg(test)]
 use bound::input_bytes;
 use bound::{bound_input_with_byte_limit, message_input, utf8_suffix};
+use truncate::bounded_history;
+#[allow(unused_imports)] // turn_input_tests via super::
+pub(in crate::anthropic) use truncate::oversized_latest_message;
 
 #[cfg(test)]
 #[path = "turn_input_tests.rs"]

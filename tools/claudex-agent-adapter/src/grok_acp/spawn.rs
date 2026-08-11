@@ -1,13 +1,9 @@
-use std::{
-    ffi::OsString,
-    path::PathBuf,
-    sync::Arc,
-};
+use std::{ffi::OsString, path::PathBuf, sync::Arc};
 
 use anyhow::{Context, Result};
 
-use super::{DEFAULT_REASONING_EFFORT, GrokAcp};
 use super::connection::AcpProvider;
+use super::{DEFAULT_REASONING_EFFORT, GrokAcp};
 
 #[path = "spawn_provider.rs"]
 mod spawn_provider;
@@ -72,5 +68,4 @@ impl GrokAcp {
     ) -> Result<Arc<Self>> {
         Self::spawn_provider(AcpProvider::Copilot, model, None, program, None, cwd, None).await
     }
-
 }

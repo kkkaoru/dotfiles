@@ -31,7 +31,9 @@ pub(in crate::anthropic) fn subscription_limits() -> SubscriptionLimits {
     subscription_limits_from(|name| std::env::var(name).ok())
 }
 
-pub(in crate::anthropic) fn subscription_limits_from(get: impl Fn(&str) -> Option<String>) -> SubscriptionLimits {
+pub(in crate::anthropic) fn subscription_limits_from(
+    get: impl Fn(&str) -> Option<String>,
+) -> SubscriptionLimits {
     let max_processes = positive_usize(get(MAX_PROCESSES_ENV)).unwrap_or(DEFAULT_MAX_PROCESSES);
     let timeout_seconds = positive_u64(get(TIMEOUT_MINUTES_ENV))
         .and_then(|minutes| minutes.checked_mul(60))
@@ -52,4 +54,3 @@ pub(in crate::anthropic) fn positive_usize(value: Option<String>) -> Option<usiz
 pub(in crate::anthropic) fn positive_u64(value: Option<String>) -> Option<u64> {
     value?.parse().ok().filter(|value| *value > 0)
 }
-

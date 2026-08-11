@@ -8,9 +8,9 @@ use crate::anthropic::MessagesRequest;
 
 mod config;
 mod core;
+mod decide;
 mod env;
 mod policy;
-mod decide;
 mod scope_count;
 
 #[allow(unused_imports)]
@@ -74,7 +74,6 @@ impl ParallelScheduler {
             .clone()
     }
 }
-
 
 // These modules contain only scheduler assertions; production scheduling code
 // remains covered by the integration and stream tests.

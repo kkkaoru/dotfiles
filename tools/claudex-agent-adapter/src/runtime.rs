@@ -10,14 +10,14 @@ use anyhow::{Result, bail};
 
 mod command_helpers;
 mod hard_timeout;
-mod parse_options;
-mod shutdown;
 #[path = "runtime_parse_command.rs"]
 mod parse_command;
-use parse_command::parse_command;
+mod parse_options;
+mod shutdown;
 #[cfg(test)]
 #[allow(unused_imports)]
 use command_helpers::utf8;
+use parse_command::parse_command;
 
 #[derive(Debug)]
 pub(super) enum RuntimeCommand {
@@ -57,7 +57,6 @@ pub async fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<i32> {
     };
     Ok(code)
 }
-
 
 pub async fn serve(options: AdapterOptions) -> Result<()> {
     crate::logging::init();

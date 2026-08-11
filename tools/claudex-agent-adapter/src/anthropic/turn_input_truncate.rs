@@ -3,7 +3,10 @@ use serde_json::{Value, json};
 use super::super::content::serialized_len;
 use super::{FULL_HISTORY_HEADER, MAX_TURN_INPUT_BYTES, TRUNCATED_HISTORY_HEADER, utf8_suffix};
 
-pub(in crate::anthropic) fn bounded_history(messages: &[Value], max_bytes: usize) -> (&'static str, String) {
+pub(in crate::anthropic) fn bounded_history(
+    messages: &[Value],
+    max_bytes: usize,
+) -> (&'static str, String) {
     let original_bytes = serialized_len(&messages);
     if original_bytes + FULL_HISTORY_HEADER.len() <= max_bytes {
         return (
@@ -36,7 +39,10 @@ pub(in crate::anthropic) fn bounded_history(messages: &[Value], max_bytes: usize
     (TRUNCATED_HISTORY_HEADER, history)
 }
 
-pub(in crate::anthropic) fn oversized_latest_message(message: Option<&Value>, budget: usize) -> String {
+pub(in crate::anthropic) fn oversized_latest_message(
+    message: Option<&Value>,
+    budget: usize,
+) -> String {
     let Some(message) = message else {
         return "[]".to_owned();
     };
@@ -48,4 +54,3 @@ pub(in crate::anthropic) fn oversized_latest_message(message: Option<&Value>, bu
     }]))
     .unwrap_or_else(|_| "[]".to_owned())
 }
-

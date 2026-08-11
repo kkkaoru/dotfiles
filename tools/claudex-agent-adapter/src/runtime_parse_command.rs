@@ -2,11 +2,11 @@ use std::{collections::VecDeque, ffi::OsString};
 
 use anyhow::{Result, bail};
 
+use super::RuntimeCommand;
 use super::command_helpers::{
     consume_separator, reject_inherit_model, reject_remaining, take_flag, utf8,
 };
 use super::parse_options::parse_options;
-use super::RuntimeCommand;
 
 pub(super) fn parse_command(mut arguments: VecDeque<OsString>) -> Result<RuntimeCommand> {
     let command = utf8(arguments.pop_front(), "command")?;
@@ -54,4 +54,3 @@ pub(super) fn parse_command(mut arguments: VecDeque<OsString>) -> Result<Runtime
         ),
     }
 }
-

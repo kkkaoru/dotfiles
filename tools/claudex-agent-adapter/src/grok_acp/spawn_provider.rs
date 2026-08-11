@@ -9,13 +9,13 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::app_server::events::ThreadEventDispatcher;
 
-use super::super::{
-    COMMAND_QUEUE_CAPACITY, DEFAULT_CONFIGURED_MAX_CONCURRENCY, OUTER_TURN_RESERVE,
-    SESSION_QUEUE_CAPACITY, TURN_QUEUE_CAPACITY, GrokAcp,
-};
 use super::super::connection::AcpProvider;
 use super::super::driver::run_driver;
 use super::super::driver_types::{DriverSetup, DriverThread};
+use super::super::{
+    COMMAND_QUEUE_CAPACITY, DEFAULT_CONFIGURED_MAX_CONCURRENCY, GrokAcp, OUTER_TURN_RESERVE,
+    SESSION_QUEUE_CAPACITY, TURN_QUEUE_CAPACITY,
+};
 
 impl GrokAcp {
     pub(in crate::grok_acp) async fn spawn_provider(
@@ -39,8 +39,9 @@ impl GrokAcp {
             AcpProvider::Configured | AcpProvider::ConfiguredLaunchScoped => {
                 max_concurrency.unwrap_or(DEFAULT_CONFIGURED_MAX_CONCURRENCY) + OUTER_TURN_RESERVE
             }
-            AcpProvider::Grok | AcpProvider::Copilot => max_concurrency
-                .map_or(TURN_QUEUE_CAPACITY, |limit| limit + OUTER_TURN_RESERVE),
+            AcpProvider::Grok | AcpProvider::Copilot => {
+                max_concurrency.map_or(TURN_QUEUE_CAPACITY, |limit| limit + OUTER_TURN_RESERVE)
+            }
         };
         let turn_permits = Arc::new(tokio::sync::Semaphore::new(
             turn_capacity.saturating_sub(OUTER_TURN_RESERVE).max(1),
