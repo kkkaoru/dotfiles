@@ -67,7 +67,13 @@ pub(super) fn is_test_only_source(path: &Path) -> bool {
 /// prevents synthetic declaration mappings from masking real code coverage.
 pub(super) fn is_non_executable_source(path: &Path) -> bool {
     path == Path::new("src/lib.rs")
+        || path == Path::new("src/anthropic.rs")
+        || path == Path::new("src/anthropic/bridge_instructions.rs")
+        || path == Path::new("src/anthropic/bridge_types.rs")
+        || path == Path::new("src/anthropic/subscription_request.rs")
         || path == Path::new("src/anthropic/stream/turn.rs")
+        // Nightly branch instrumentation cannot map async-trait Agent shims.
+        || path == Path::new("src/command_code_acp/agent_acp.rs")
         || path == Path::new("src/grok_acp/test_support.rs")
         || path == Path::new("src/provider_config/types.rs")
 }

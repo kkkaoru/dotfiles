@@ -497,13 +497,34 @@ fn handles_zero_counts_and_test_source_names() {
     )));
     assert!(is_non_executable_source(std::path::Path::new("src/lib.rs")));
     assert!(is_non_executable_source(std::path::Path::new(
+        "src/anthropic.rs"
+    )));
+    assert!(is_non_executable_source(std::path::Path::new(
+        "src/anthropic/bridge_instructions.rs"
+    )));
+    assert!(is_non_executable_source(std::path::Path::new(
+        "src/anthropic/bridge_types.rs"
+    )));
+    assert!(is_non_executable_source(std::path::Path::new(
+        "src/anthropic/subscription_request.rs"
+    )));
+    assert!(is_non_executable_source(std::path::Path::new(
         "src/anthropic/stream/turn.rs"
+    )));
+    assert!(is_non_executable_source(std::path::Path::new(
+        "src/command_code_acp/agent_acp.rs"
+    )));
+    assert!(is_non_executable_source(std::path::Path::new(
+        "src/grok_acp/test_support.rs"
     )));
     assert!(is_non_executable_source(std::path::Path::new(
         "src/provider_config/types.rs"
     )));
     assert!(!is_non_executable_source(std::path::Path::new(
         "src/module.rs"
+    )));
+    assert!(!is_non_executable_source(std::path::Path::new(
+        "src/web_search/parse.rs"
     )));
 }
 
