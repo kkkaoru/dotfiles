@@ -203,9 +203,13 @@ fn detects_tui_qwen_concurrency_admission_timeout() {
 }
 
 #[test]
-fn default_wait_timeout_is_ten_seconds() {
-    assert_eq!(DEFAULT_WAIT_TIMEOUT, Duration::from_secs(5));
-    assert_eq!(parse_wait_timeout(None), Duration::from_secs(5));
+fn default_wait_timeout_fails_over_within_one_second() {
+    assert_eq!(DEFAULT_WAIT_TIMEOUT, Duration::from_secs(1));
+    assert_eq!(parse_wait_timeout(None), Duration::from_secs(1));
+    assert!(
+        DEFAULT_WAIT_TIMEOUT <= Duration::from_secs(1),
+        "saturated SubAgent admission must fail over before multi-second Nucleating freezes"
+    );
 }
 
 #[tokio::test]
