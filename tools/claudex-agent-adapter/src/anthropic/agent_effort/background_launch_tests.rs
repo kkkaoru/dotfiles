@@ -115,3 +115,13 @@ fn trailing_system_reminder_message_does_not_hide_sync_instruction() {
         "hook-only trailing user message must not force background launches"
     );
 }
+
+#[test]
+fn hook_or_mailbox_only_covers_empty_and_unclosed_reminder() {
+    assert!(is_hook_or_mailbox_only(" \t "));
+    assert_eq!(
+        super::text::strip_system_reminders("<system-reminder>unterminated"),
+        "<system-reminder>unterminated"
+    );
+    assert!(!is_hook_or_mailbox_only("real user ask"));
+}
