@@ -242,6 +242,14 @@ async fn reports_a_closed_driver_for_each_command_response_type() {
     );
 }
 
+
+async fn drop_cancel_turn_response(receiver: &mut tokio::sync::mpsc::Receiver<DriverCommand>) {
+    let Some(DriverCommand::CancelTurn { response, .. }) = receiver.recv().await else {
+        return;
+    };
+    drop(response);
+}
+
 #[tokio::test]
 async fn cancel_turn_settles_when_the_driver_drops_its_response() {
     let (commands, mut receiver) = tokio::sync::mpsc::channel(1);
@@ -257,9 +265,7 @@ async fn cancel_turn_settles_when_the_driver_drops_its_response() {
         driver: DriverThread::completed(),
     };
     tokio::spawn(async move {
-        if let Some(DriverCommand::CancelTurn { response, .. }) = receiver.recv().await {
-            drop(response);
-        }
+        drop_cancel_turn_response(&mut receiver).await;
     });
 
     assert!(

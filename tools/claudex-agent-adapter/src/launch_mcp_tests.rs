@@ -193,7 +193,7 @@ fn writes_both_transport_encodings() {
     assert!(ndjson.ends_with(b"\n"));
     assert_eq!(
         serde_json::from_slice::<Value>(&ndjson).unwrap(),
-        message.clone()
+        message
     );
 
     let mut framed = Vec::new();

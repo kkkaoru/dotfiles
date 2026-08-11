@@ -517,6 +517,24 @@ async fn max_concurrency_two_queues_the_third_command_code_turn() {
     }
 }
 
+
+async fn wait_for_active_provider_turns(client: &Client, health_url: &str, expected: u64) {
+    loop {
+        let health = client
+            .get(health_url)
+            .send()
+            .await
+            .expect("provider-turn health")
+            .json::<Value>()
+            .await
+            .expect("decode provider-turn health");
+        if health["active_provider_turns"].as_u64() == Some(expected) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn configured_acp_disconnect_kills_slow_cmd_within_two_seconds() {
     let root = tempfile::TempDir::new().expect("slow cmd dir");
@@ -540,42 +558,18 @@ async fn configured_acp_disconnect_kills_slow_cmd_within_two_seconds() {
         .send()
         .await
         .expect("start slow command-code stream");
-    tokio::time::timeout(ACP_TIMEOUT, async {
-        loop {
-            let health = client
-                .get(&adapter.health_url)
-                .send()
-                .await
-                .expect("slow turn health")
-                .json::<Value>()
-                .await
-                .expect("decode slow turn health");
-            if health["active_provider_turns"].as_u64() == Some(1) {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
+    tokio::time::timeout(
+        ACP_TIMEOUT,
+        wait_for_active_provider_turns(&client, &adapter.health_url, 1),
+    )
     .await
     .expect("slow command-code turn should start");
     drop(response);
 
-    tokio::time::timeout(Duration::from_secs(2), async {
-        loop {
-            let health = client
-                .get(&adapter.health_url)
-                .send()
-                .await
-                .expect("cancel health")
-                .json::<Value>()
-                .await
-                .expect("decode cancel health");
-            if health["active_provider_turns"].as_u64() == Some(0) {
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        wait_for_active_provider_turns(&client, &adapter.health_url, 0),
+    )
     .await
     .expect("disconnect cancel should settle within 2s");
 }

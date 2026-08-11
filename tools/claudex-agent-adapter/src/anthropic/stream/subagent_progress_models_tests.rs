@@ -241,32 +241,44 @@ async fn run_case(case: &Case) {
     let mut builder = SegmentBuilder::new(1)
         .with_subagent(true)
         .with_command_code_progress(command_code);
+    feed_case_events(&mut builder, case, &sender).await;
     let mut live = SubAgentLiveView::default();
+    live.ingest_available(&mut receiver);
+    assert_live_progress(case, &live, command_code);
+    assert_finished_transcript(case, &mut builder).await;
+    drop(sender);
+}
 
+async fn feed_case_events(
+    builder: &mut SegmentBuilder,
+    case: &Case,
+    sender: &mpsc::Sender<Result<Bytes, Infallible>>,
+) {
     if let Some(reasoning) = case.reasoning {
         builder
-            .model_output_event(&reasoning_delta(case.name, reasoning), Some(&sender))
+            .model_output_event(&reasoning_delta(case.name, reasoning), Some(sender))
             .await
             .unwrap_or_else(|error| panic!("{} reasoning: {error}", case.name));
     }
     if let Some(prose) = case.prose {
         builder
-            .model_output_event(&agent_message(case.prose_item_id, prose), Some(&sender))
+            .model_output_event(&agent_message(case.prose_item_id, prose), Some(sender))
             .await
             .unwrap_or_else(|error| panic!("{} prose: {error}", case.name));
     }
     if let Some(tool) = &case.tool {
         builder
-            .provider_tool_call(&provider_tool(tool), Some(&sender))
+            .provider_tool_call(&provider_tool(tool), Some(sender))
             .await
             .unwrap_or_else(|error| panic!("{} tool: {error}", case.name));
     }
     builder
-        .activity_keepalive(Some(&sender))
+        .activity_keepalive(Some(sender))
         .await
         .unwrap_or_else(|error| panic!("{} keepalive: {error}", case.name));
+}
 
-    live.ingest_available(&mut receiver);
+fn assert_live_progress(case: &Case, live: &SubAgentLiveView, command_code: bool) {
     assert!(
         live.turn_still_open(),
         "{}: progress must stay mid-turn",
@@ -325,38 +337,41 @@ async fn run_case(case: &Case) {
             live.visible_thinking
         );
     }
+}
 
-    if let Some(prose) = case.prose {
-        let segment = builder.finish(None).await.expect(case.name);
-        assert!(
-            segment.blocks.iter().any(|block| {
-                block
+async fn assert_finished_transcript(case: &Case, builder: &mut SegmentBuilder) {
+    let Some(prose) = case.prose else {
+        return;
+    };
+    let segment = builder.finish(None).await.expect(case.name);
+    assert!(
+        segment.blocks.iter().any(|block| {
+            block
+                .get("text")
+                .and_then(Value::as_str)
+                .is_some_and(|text| text.contains(prose.trim()))
+        }),
+        "{}: answer prose must flush at end_turn: {:?}",
+        case.name,
+        segment.blocks
+    );
+    assert!(
+        segment.blocks.iter().all(|block| {
+            !block
+                .get("thinking")
+                .and_then(Value::as_str)
+                .is_some_and(|text| text.contains("still working"))
+                && !block
                     .get("text")
                     .and_then(Value::as_str)
-                    .is_some_and(|text| text.contains(prose.trim()))
-            }),
-            "{}: answer prose must flush at end_turn: {:?}",
-            case.name,
-            segment.blocks
-        );
-        assert!(
-            segment.blocks.iter().all(|block| {
-                !block
-                    .get("thinking")
-                    .and_then(Value::as_str)
-                    .is_some_and(|text| text.contains("still working"))
-                    && !block
-                        .get("text")
-                        .and_then(Value::as_str)
-                        .is_some_and(|text| text.contains("still working") || text.contains('▶'))
-            }),
-            "{}: live chrome must not remain in transcript: {:?}",
-            case.name,
-            segment.blocks
-        );
-    }
-    drop(sender);
+                    .is_some_and(|text| text.contains("still working") || text.contains('▶'))
+        }),
+        "{}: live chrome must not remain in transcript: {:?}",
+        case.name,
+        segment.blocks
+    );
 }
+
 
 fn agent_message(item_id: &str, delta: &str) -> Value {
     json!({

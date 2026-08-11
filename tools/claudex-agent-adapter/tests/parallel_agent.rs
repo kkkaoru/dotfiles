@@ -286,20 +286,7 @@ async fn accepts_main_input_after_background_handoff_and_keeps_task_retrievable(
     let launched =
         post_json_with_body_on_error(&client, &url, request(json!([user.clone()]))).await;
     assert_eq!(launched["stop_reason"], "tool_use");
-    let launch_results = Value::Array(
-        launched["content"]
-            .as_array()
-            .expect("background launch tools")
-            .iter()
-            .map(|block| {
-                json!({
-                    "type":"tool_result",
-                    "tool_use_id":block["id"],
-                    "content":[{"type":"text","text":"Async agent launched successfully.\nagentId: internal-background\nThe agent is working in the background."}]
-                })
-            })
-            .collect(),
-    );
+    let launch_results = background_launch_results(&launched);
     let handoff = post_json_with_body_on_error(
         &client,
         &url,
@@ -316,13 +303,24 @@ async fn accepts_main_input_after_background_handoff_and_keeps_task_retrievable(
         "3 background agents launched; the main prompt is ready."
     );
     assert!(!handoff.to_string().contains("agent-message"));
+    assert_follow_up_and_task_output(&client, &url, &user, &launched, &launch_results, &handoff)
+        .await;
+}
 
+async fn assert_follow_up_and_task_output(
+    client: &Client,
+    url: &str,
+    user: &Value,
+    launched: &Value,
+    launch_results: &Value,
+    handoff: &Value,
+) {
     // This is the standard Claude Code follow-up shape: the main user sends a
     // new instruction after the background launch turn has ended. It must not
     // be converted into TaskStop or wait for the worker to finish.
     let continued = post_json_with_body_on_error(
-        &client,
-        &url,
+        client,
+        url,
         request(json!([
             user.clone(),
             {"role":"assistant","content":launched["content"]},
@@ -339,12 +337,12 @@ async fn accepts_main_input_after_background_handoff_and_keeps_task_retrievable(
             .as_array()
             .unwrap()
             .iter()
-            .all(|block| { block.get("name").is_none() })
+            .all(|block| block.get("name").is_none())
     );
 
     let task_output = post_json_with_body_on_error(
-        &client,
-        &url,
+        client,
+        url,
         request(json!([
             user,
             {"role":"assistant","content":launched["content"]},
@@ -363,6 +361,24 @@ async fn accepts_main_input_after_background_handoff_and_keeps_task_retrievable(
         "agent-profile-7"
     );
 }
+
+fn background_launch_results(launched: &Value) -> Value {
+    Value::Array(
+        launched["content"]
+            .as_array()
+            .expect("background launch tools")
+            .iter()
+            .map(|block| {
+                json!({
+                    "type":"tool_result",
+                    "tool_use_id":block["id"],
+                    "content":[{"type":"text","text":"Async agent launched successfully.\nagentId: internal-background\nThe agent is working in the background."}]
+                })
+            })
+            .collect(),
+    )
+}
+
 
 async fn stream_follow_up(client: &Client, url: &str, messages: Value) -> String {
     client

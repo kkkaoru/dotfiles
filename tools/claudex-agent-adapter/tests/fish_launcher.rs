@@ -182,6 +182,11 @@ fn assert_shared_provider_default(function: &std::path::Path, home: &tempfile::T
         String::from_utf8_lossy(&output.stderr)
     );
     let arguments = String::from_utf8(output.stdout).expect("UTF-8 adapter arguments");
+    assert_shared_provider_args(&arguments);
+    assert_shared_provider_settings(home, &output.stderr);
+}
+
+fn assert_shared_provider_args(arguments: &str) {
     assert!(arguments.contains("--provider-config\n"));
     assert!(arguments.contains("CLAUDEX_ACTIVE=1\n"));
     assert!(arguments.contains("CLAUDEX_MAIN_MODEL=sonnet[1m]\n"));
@@ -197,6 +202,13 @@ fn assert_shared_provider_default(function: &std::path::Path, home: &tempfile::T
     assert!(arguments.contains(".config/claudex/providers.json\n"));
     assert!(!arguments.contains("--model\n"));
     assert!(arguments.contains("--inherit-claude-model\n"));
+    assert!(arguments.contains("--subscription-max-processes\n20\n"));
+    assert!(!arguments.contains("--allowedTools\nWebSearch,WebFetch\n"));
+    assert!(arguments.ends_with("--\nsmoke\n"));
+    assert_no_implicit_agent(arguments);
+}
+
+fn assert_shared_provider_settings(home: &tempfile::TempDir, stderr: &[u8]) {
     // Shared plain-claude settings must stay native; isolation seeds a separate tree.
     let shared_settings = fs::read_to_string(home.path().join(".claude/settings.json"))
         .expect("shared settings after launch");
@@ -207,12 +219,8 @@ fn assert_shared_provider_default(function: &std::path::Path, home: &tempfile::T
     )
     .expect("isolated settings after launch");
     assert!(isolated_settings.contains("\"model\": \"sonnet[1m]\""));
-    assert!(arguments.contains("--subscription-max-processes\n20\n"));
-    assert!(!arguments.contains("--allowedTools\nWebSearch,WebFetch\n"));
-    assert!(arguments.ends_with("--\nsmoke\n"));
-    assert_no_implicit_agent(&arguments);
     assert!(
-        String::from_utf8_lossy(&output.stderr)
+        String::from_utf8_lossy(stderr)
             .contains("current sonnet[1m], high; request model authoritative")
     );
 }

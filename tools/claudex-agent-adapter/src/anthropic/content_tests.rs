@@ -336,7 +336,7 @@ mod tests {
                 }
             ]
         });
-        let steering = mid_turn_user_steering(&[message.clone()]).expect("mid-turn steering");
+        let steering = mid_turn_user_steering(std::slice::from_ref(&message)).expect("mid-turn steering");
         assert!(steering.contains("追加調査して"));
         assert!(
             mid_turn_user_steering(&[json!({

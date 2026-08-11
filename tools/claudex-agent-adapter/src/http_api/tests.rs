@@ -200,11 +200,8 @@ async fn trace_http_request_covers_identity_and_body_error_paths() {
         .expect("ok request");
     assert_eq!(ok.text().await.expect("ok body"), "ok");
     let err = client.get(format!("http://{addr}/err")).send().await;
-    match err {
-        Ok(response) => {
-            let _ = response.bytes().await;
-        }
-        Err(_) => {}
+    if let Ok(response) = err {
+        let _ = response.bytes().await;
     }
     if let Ok(slow) = client.get(format!("http://{addr}/slow")).send().await {
         drop(slow);

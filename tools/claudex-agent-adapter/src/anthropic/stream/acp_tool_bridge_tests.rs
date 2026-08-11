@@ -302,6 +302,11 @@ mod tests {
 
     #[test]
     fn covers_looks_like_launch_tool_variants() {
+        assert_launch_tool_positives();
+        assert_launch_tool_negatives();
+    }
+
+    fn assert_launch_tool_positives() {
         assert!(looks_like_launch_tool("agent"));
         assert!(looks_like_launch_tool("AGENT"));
         assert!(looks_like_launch_tool("Task"));
@@ -315,6 +320,9 @@ mod tests {
         assert!(looks_like_launch_tool("foo__agent"));
         assert!(looks_like_launch_tool("bar__task"));
         assert!(looks_like_launch_tool("prefix_spawn_subagent"));
+    }
+
+    fn assert_launch_tool_negatives() {
         assert!(!looks_like_launch_tool("Bash"));
         assert!(!looks_like_launch_tool("Read"));
         // mcp__ without agent/task must not match the compound clause.

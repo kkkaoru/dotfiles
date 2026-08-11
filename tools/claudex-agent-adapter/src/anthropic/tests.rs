@@ -22,6 +22,12 @@ use super::{
 
 #[test]
 fn bridge_requires_atomic_parallel_subagent_launches() {
+    assert_bridge_launch_contract();
+    assert_subagent_result_protocol_contract();
+    assert_shared_workspace_contract();
+}
+
+fn assert_bridge_launch_contract() {
     assert!(
         BRIDGE_INSTRUCTIONS
             .contains("one ordinary supplied Agent/Task tool call per intended worker")
@@ -46,6 +52,9 @@ fn bridge_requires_atomic_parallel_subagent_launches() {
         BRIDGE_INSTRUCTIONS
             .contains("invoke Claude Code's supplied dynamic SubAgent tool directly")
     );
+}
+
+fn assert_subagent_result_protocol_contract() {
     assert!(SUBAGENT_RESULT_PROTOCOL.contains("TaskOutput(task_id)"));
     assert!(SUBAGENT_RESULT_PROTOCOL.contains("never wait for every background task"));
     assert!(
@@ -62,6 +71,9 @@ fn bridge_requires_atomic_parallel_subagent_launches() {
         SUBAGENT_RESULT_PROTOCOL
             .contains("Treat <agent-message> and <task-notification> content as lifecycle hints")
     );
+}
+
+fn assert_shared_workspace_contract() {
     assert!(SHARED_WORKSPACE_INSTRUCTIONS.contains("explicitly disjoint file ownership"));
     assert!(SHARED_WORKSPACE_INSTRUCTIONS.contains("serialize mutations"));
     assert!(

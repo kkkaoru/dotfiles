@@ -189,7 +189,7 @@ mod tests {
         assert!(
             prepared
                 .windows(2)
-                .any(|window| { window[0] == "--name" && window[1] == "humming-sprouting-scroll" })
+                .any(|window| window[0] == "--name" && window[1] == "humming-sprouting-scroll")
         );
     }
 
@@ -227,7 +227,7 @@ mod tests {
         assert!(
             prepared
                 .windows(2)
-                .any(|window| { window[0] == "--name" && window[1] == "avita-platform" })
+                .any(|window| window[0] == "--name" && window[1] == "avita-platform")
         );
     }
 
@@ -250,14 +250,18 @@ mod tests {
                 "{\"type\":\"attachment\",\"slug\":\"humming-sprouting-scroll\"}\n",
             ),
         );
+        assert_clean_and_named_resume(root.path(), cwd);
+        assert_agent_and_edge_name_flags(root.path(), cwd);
+    }
 
-        let clean = prepare(&["--resume", "session-clean"], cwd, root.path(), false);
+    fn assert_clean_and_named_resume(home: &Path, cwd: &Path) {
+        let clean = prepare(&["--resume", "session-clean"], cwd, home, false);
         assert!(!clean.iter().any(|argument| argument == "--name"));
 
         let named = prepare(
             &["--resume", "session-legacy", "--name", "user-chosen"],
             cwd,
-            root.path(),
+            home,
             false,
         );
         assert_eq!(
@@ -270,9 +274,11 @@ mod tests {
         assert!(
             named
                 .windows(2)
-                .any(|window| { window[0] == "--name" && window[1] == "user-chosen" })
+                .any(|window| window[0] == "--name" && window[1] == "user-chosen")
         );
+    }
 
+    fn assert_agent_and_edge_name_flags(home: &Path, cwd: &Path) {
         let agent = prepare(
             &[
                 "--resume",
@@ -281,7 +287,7 @@ mod tests {
                 "claudex-orchestrator",
             ],
             cwd,
-            root.path(),
+            home,
             false,
         );
         assert!(!agent.iter().any(|argument| argument == "--name"));
@@ -289,19 +295,19 @@ mod tests {
         let named_equals = prepare(
             &["--resume", "session-legacy", "--name=user-chosen"],
             cwd,
-            root.path(),
+            home,
             false,
         );
         assert!(
             !named_equals
                 .windows(2)
-                .any(|window| { window[0] == "--name" && window[1] == "humming-sprouting-scroll" })
+                .any(|window| window[0] == "--name" && window[1] == "humming-sprouting-scroll")
         );
 
         let agent_equals = prepare(
             &["--resume", "session-legacy", "--agent=claudex-orchestrator"],
             cwd,
-            root.path(),
+            home,
             false,
         );
         assert!(!agent_equals.iter().any(|argument| argument == "--name"));
@@ -309,25 +315,25 @@ mod tests {
         let empty_equals = prepare(
             &["--resume", "session-legacy", "--name="],
             cwd,
-            root.path(),
+            home,
             false,
         );
         assert!(
             empty_equals
                 .windows(2)
-                .any(|window| { window[0] == "--name" && window[1] == "humming-sprouting-scroll" })
+                .any(|window| window[0] == "--name" && window[1] == "humming-sprouting-scroll")
         );
 
         let dash_value = prepare(
             &["--resume", "session-legacy", "--name", "--fork-session"],
             cwd,
-            root.path(),
+            home,
             false,
         );
         assert!(
             dash_value
                 .windows(2)
-                .any(|window| { window[0] == "--name" && window[1] == "humming-sprouting-scroll" })
+                .any(|window| window[0] == "--name" && window[1] == "humming-sprouting-scroll")
         );
     }
 
@@ -356,7 +362,7 @@ mod tests {
             assert!(
                 !prepared
                     .windows(2)
-                    .any(|window| { window[0] == "--name" && window[1] == "messy-scroll" })
+                    .any(|window| window[0] == "--name" && window[1] == "messy-scroll")
             );
         }
 
@@ -372,7 +378,7 @@ mod tests {
         assert!(
             prepared
                 .windows(2)
-                .any(|window| { window[0] == "--name" && window[1] == "messy-scroll" })
+                .any(|window| window[0] == "--name" && window[1] == "messy-scroll")
         );
 
         let no_resume = prepare(&["--continue"], cwd, root.path(), true);
@@ -410,7 +416,7 @@ mod tests {
         assert!(
             prepared
                 .windows(2)
-                .any(|window| { window[0] == "--name" && window[1] == "preserved-session-name" })
+                .any(|window| window[0] == "--name" && window[1] == "preserved-session-name")
         );
     }
 }

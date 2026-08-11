@@ -161,6 +161,106 @@ async fn allows_session_creations_up_to_the_configured_concurrency_limit() {
     server.abort();
 }
 
+
+
+async fn spawn_configured_session_adapter(
+    model: &str,
+    max_concurrency: usize,
+    parallel_limit: usize,
+) -> (tokio::task::JoinHandle<()>, Client, String, String) {
+    let backend = AgentBackend::spawn_routes(&[BackendRoute {
+        model: model.to_owned(),
+        backend: BackendKind::ConfiguredAcp,
+        effort: None,
+        model_provider: None,
+        model_catalog_json: None,
+        max_context_tokens: None,
+        max_concurrency: Some(max_concurrency),
+        model_prefixes: vec!["opencode-go/".to_owned()],
+        acp: Some(AcpLaunch {
+            program: env!("CARGO_BIN_EXE_grok-acp-mock").to_owned(),
+            arguments: vec![
+                "--mode".to_owned(),
+                "concurrent-sessions-at-limit".to_owned(),
+                "--parallel-limit".to_owned(),
+                parallel_limit.to_string(),
+            ],
+        }),
+        web_search_mode: WebSearchMode::default(),
+    }]);
+    let bridge = Arc::new(Bridge::new_with_backend(backend, model.to_owned()));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind session adapter");
+    let address = listener.local_addr().expect("session adapter address");
+    let model_owned = model.to_owned();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, http_router(bridge, model_owned, None))
+            .await
+            .expect("serve session adapter");
+    });
+    let client = Client::new();
+    let url = format!("http://{address}/v1/messages");
+    let health_url = format!("http://{address}/health");
+    (server, client, url, health_url)
+}
+
+async fn post_session_turn(client: Client, url: String, model: &'static str, index: usize) -> Value {
+    client
+        .post(url)
+        .json(&json!({
+            "model":model,
+            "max_tokens":128,
+            "messages":[{"role":"user","content":format!("session {index}")}]
+        }))
+        .send()
+        .await
+        .expect("send session turn")
+        .error_for_status()
+        .expect("session turn status")
+        .json::<Value>()
+        .await
+        .expect("decode session turn")
+}
+
+async fn wait_until_model_saturated(
+    client: &Client,
+    health_url: &str,
+    model: &str,
+    root: &std::path::Path,
+    active: usize,
+) -> Value {
+    loop {
+        let health = client
+            .get(health_url)
+            .send()
+            .await
+            .expect("session health")
+            .json::<Value>()
+            .await
+            .expect("decode session health");
+        let status = &health["model_concurrency"][model];
+        let saturated = status["active"] == active
+            && status["queued"] == EXPECTED_QUEUED_REQUESTS
+            && session_count(root) == active;
+        if saturated {
+            return health;
+        }
+        tokio::time::sleep(TRACE_POLL_INTERVAL).await;
+    }
+}
+
+fn assert_model_selected_before_effort(trace: &[Value], model: &str, effort_index: usize) {
+    let selected = trace[..effort_index].iter().any(|event| {
+        event.pointer("/set_model/modelId") == Some(&json!(model))
+            && event.pointer("/set_model/_meta/reasoningEffort").is_none()
+    });
+    assert!(
+        selected,
+        "model selection without effort meta must precede set_effort"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[cfg_attr(
     coverage_nightly,
@@ -172,85 +272,22 @@ async fn allows_two_session_creations_and_queues_the_third() {
     let root = tempfile::tempdir().expect("configured session width-2 fixture");
     std::env::set_current_dir(root.path()).expect("isolate configured session trace");
     let model = "opencode-go/deepseek-v4-flash";
-    let backend = AgentBackend::spawn_routes(&[BackendRoute {
-        model: model.to_owned(),
-        backend: BackendKind::ConfiguredAcp,
-        effort: None,
-        model_provider: None,
-        model_catalog_json: None,
-        max_context_tokens: None,
-        max_concurrency: Some(LIMIT),
-        model_prefixes: vec!["opencode-go/".to_owned()],
-        acp: Some(AcpLaunch {
-            program: env!("CARGO_BIN_EXE_grok-acp-mock").to_owned(),
-            arguments: vec![
-                "--mode".to_owned(),
-                "concurrent-sessions-at-limit".to_owned(),
-                "--parallel-limit".to_owned(),
-                LIMIT.to_string(),
-            ],
-        }),
-        web_search_mode: WebSearchMode::default(),
-    }]);
-    let bridge = Arc::new(Bridge::new_with_backend(backend, model.to_owned()));
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .expect("bind session width-2 adapter");
-    let address = listener
-        .local_addr()
-        .expect("session width-2 adapter address");
-    let server = tokio::spawn(async move {
-        axum::serve(listener, http_router(bridge, model.to_owned(), None))
-            .await
-            .expect("serve session width-2 adapter");
-    });
-
-    let client = Client::new();
-    let url = format!("http://{address}/v1/messages");
-    let health_url = format!("http://{address}/health");
+    let (server, client, url, health_url) =
+        spawn_configured_session_adapter(model, LIMIT, LIMIT).await;
     let mut requests = Vec::new();
     for index in 0..=LIMIT {
-        let client = client.clone();
-        let url = url.clone();
-        requests.push(tokio::spawn(async move {
-            client
-                .post(url)
-                .json(&json!({
-                    "model":model,
-                    "max_tokens":128,
-                    "messages":[{"role":"user","content":format!("session {index}")}]
-                }))
-                .send()
-                .await
-                .expect("send session width-2 turn")
-                .error_for_status()
-                .expect("session width-2 turn status")
-                .json::<Value>()
-                .await
-                .expect("decode session width-2 turn")
-        }));
+        requests.push(tokio::spawn(post_session_turn(
+            client.clone(),
+            url.clone(),
+            model,
+            index,
+        )));
     }
 
-    let saturated = tokio::time::timeout(SATURATION_TIMEOUT, async {
-        loop {
-            let health = client
-                .get(&health_url)
-                .send()
-                .await
-                .expect("session width-2 health")
-                .json::<Value>()
-                .await
-                .expect("decode session width-2 health");
-            let status = &health["model_concurrency"][model];
-            if status["active"] == LIMIT
-                && status["queued"] == EXPECTED_QUEUED_REQUESTS
-                && session_count(root.path()) == LIMIT
-            {
-                break health;
-            }
-            tokio::time::sleep(TRACE_POLL_INTERVAL).await;
-        }
-    })
+    let saturated = tokio::time::timeout(
+        SATURATION_TIMEOUT,
+        wait_until_model_saturated(&client, &health_url, model, root.path(), LIMIT),
+    )
     .await
     .expect("session/new calls should reach the width-2 limit");
     assert_eq!(
@@ -600,13 +637,7 @@ async fn configured_acp_selects_model_after_session_and_falls_back_for_effort_op
         );
         assert_eq!(effort.pointer("/set_effort/value"), Some(&json!("max")));
         // Model must be selected before effort options exist (OpenCode max fails on default model).
-        assert!(
-            trace[..effort_index].iter().any(|event| {
-                event.pointer("/set_model/modelId") == Some(&json!(model))
-                    && event.pointer("/set_model/_meta/reasoningEffort").is_none()
-            }),
-            "model selection without effort meta must precede set_effort"
-        );
+        assert_model_selected_before_effort(&trace, model, effort_index);
         assert_eq!(has_effort_model_metadata(&trace), !expects_config_option);
         backend.shutdown().await;
     }

@@ -80,7 +80,7 @@ fn unify_promotes_real_local_binary_and_relinks_symlink() {
     assert!(local.is_symlink());
     assert_eq!(fs::read_link(&local).unwrap(), cargo);
     assert_eq!(
-        resolve_service_executable(local.clone()),
+        resolve_service_executable(local),
         cargo,
         "service spawn must use cargo-bin even when started via ~/.local/bin"
     );

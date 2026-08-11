@@ -1,6 +1,10 @@
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
+    use std::convert::Infallible;
+
+    use axum::body::Bytes;
+
     use super::*;
 
     #[tokio::test]
@@ -165,19 +169,30 @@ mod tests {
             1
         );
         drop(sender);
+        let (tip_deltas, zwsp_deltas) = count_tip_and_zwsp_deltas(&mut receiver).await;
+        assert_eq!(tip_deltas, 1);
+        assert_eq!(zwsp_deltas, 1);
+    }
+
+    async fn count_tip_and_zwsp_deltas(
+        receiver: &mut tokio::sync::mpsc::Receiver<Result<Bytes, Infallible>>,
+    ) -> (usize, usize) {
         let mut tip_deltas = 0usize;
         let mut zwsp_deltas = 0usize;
         while let Some(frame) = receiver.recv().await {
-            let frame = String::from_utf8(frame.expect("frame").to_vec()).expect("utf8");
-            let data = frame.lines().find_map(|line| line.strip_prefix("data: "));
-            let value = serde_json::from_str::<Value>(data.expect("data")).expect("json");
-            match value.pointer("/delta/thinking").and_then(Value::as_str) {
-                Some(text) if text.contains("▶ Read") => tip_deltas += 1,
-                Some("\u{200b}") => zwsp_deltas += 1,
-                _ => {}
-            }
+            classify_thinking_delta_frame(&frame.expect("frame"), &mut tip_deltas, &mut zwsp_deltas);
         }
-        assert_eq!(tip_deltas, 1);
-        assert_eq!(zwsp_deltas, 1);
+        (tip_deltas, zwsp_deltas)
+    }
+
+    fn classify_thinking_delta_frame(frame: &Bytes, tip_deltas: &mut usize, zwsp_deltas: &mut usize) {
+        let frame = String::from_utf8(frame.to_vec()).expect("utf8");
+        let data = frame.lines().find_map(|line| line.strip_prefix("data: "));
+        let value = serde_json::from_str::<Value>(data.expect("data")).expect("json");
+        match value.pointer("/delta/thinking").and_then(Value::as_str) {
+            Some(text) if text.contains("▶ Read") => *tip_deltas += 1,
+            Some("​") => *zwsp_deltas += 1,
+            _ => {}
+        }
     }
 }

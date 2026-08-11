@@ -142,15 +142,15 @@ mod tests {
         clear_last_good();
         let path = Path::new("/tmp/disabled-subagent-models.torn.json");
         let reads = Cell::new(0);
+        let responses = [
+            "{".to_owned(),
+            r#"{"version":1,"disabledModels":["grok-4.5","fugu"]}"#.to_owned(),
+        ];
         let models = load_config_from_reader(
             || {
                 let attempt = reads.get();
                 reads.set(attempt + 1);
-                if attempt == 0 {
-                    Ok("{".to_owned())
-                } else {
-                    Ok(r#"{"version":1,"disabledModels":["grok-4.5","fugu"]}"#.to_owned())
-                }
+                Ok(responses[attempt].clone())
             },
             path,
         )
@@ -178,23 +178,28 @@ mod tests {
             r#"{"version":1,"disabledModels":[],"extra":true}"#,
             "not-json",
         ] {
-            std::fs::write(&path, contents).unwrap();
-            let error = load_config(Some(&path)).expect_err("invalid policy must fail");
-            if contents == "not-json" {
-                let message = error.to_string();
-                assert!(
-                    message.contains("parse disabled SubAgent model config"),
-                    "{message}"
-                );
-                assert!(
-                    message.contains("expected")
-                        || message.contains("EOF")
-                        || message.contains("key")
-                        || message.contains("value"),
-                    "{message}"
-                );
-            }
+            assert_rejects_invalid_policy(&path, contents);
         }
+    }
+
+    fn assert_rejects_invalid_policy(path: &Path, contents: &str) {
+        std::fs::write(path, contents).unwrap();
+        let error = load_config(Some(path)).expect_err("invalid policy must fail");
+        if contents != "not-json" {
+            return;
+        }
+        let message = error.to_string();
+        assert!(
+            message.contains("parse disabled SubAgent model config"),
+            "{message}"
+        );
+        assert!(
+            message.contains("expected")
+                || message.contains("EOF")
+                || message.contains("key")
+                || message.contains("value"),
+            "{message}"
+        );
     }
 
     #[test]

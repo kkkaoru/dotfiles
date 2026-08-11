@@ -162,10 +162,7 @@ async fn coalesces_a_stalled_burst_into_progress_sized_chunks() {
 
     let mut total = 0usize;
     let mut chunks = 0usize;
-    loop {
-        if events.queue.state.lock().unwrap().events.is_empty() {
-            break;
-        }
+    while !events.queue.state.lock().unwrap().events.is_empty() {
         let event = events.recv().await.unwrap();
         let len = event["params"]["delta"].as_str().unwrap().len();
         assert!(len <= MAX_COALESCED_DELTA_CHARS);
@@ -185,18 +182,26 @@ async fn coalesces_reasoning_bursts_but_preserves_summary_boundaries() {
     }
     dispatcher.dispatch(reasoning_delta("reasoning", 1, "next"));
 
-    let mut summary0 = 0usize;
+    let summary0 = sum_coalesced_deltas_until_summary(&events, 1, "next").await;
+    assert_eq!(summary0, 4096);
+}
+
+async fn sum_coalesced_deltas_until_summary(
+    events: &ThreadEvents,
+    summary_index: i64,
+    expected_delta: &str,
+) -> usize {
+    let mut total = 0usize;
     loop {
         let event = events.recv().await.unwrap();
-        if event["params"]["summaryIndex"] == 1 {
-            assert_eq!(event["params"]["delta"], "next");
-            break;
+        if event["params"]["summaryIndex"] == summary_index {
+            assert_eq!(event["params"]["delta"], expected_delta);
+            return total;
         }
         let len = event["params"]["delta"].as_str().unwrap().len();
         assert!(len <= MAX_COALESCED_DELTA_CHARS);
-        summary0 += len;
+        total += len;
     }
-    assert_eq!(summary0, 4096);
 }
 
 #[tokio::test]
