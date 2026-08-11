@@ -39,7 +39,6 @@ pub(super) fn awaited_result(message: &Value) -> Result<Value, String> {
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
-#[allow(clippy::excessive_nesting)]
 mod tests {
     use std::{process::Stdio, sync::Weak};
 
@@ -47,6 +46,18 @@ mod tests {
 
     use super::*;
     use crate::app_server::AppServer;
+
+    struct ErrorReader(&'static str);
+
+    impl tokio::io::AsyncRead for ErrorReader {
+        fn poll_read(
+            self: std::pin::Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+            _buffer: &mut tokio::io::ReadBuf<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::task::Poll::Ready(Err(std::io::Error::other(self.0)))
+        }
+    }
 
     #[tokio::test]
     async fn reads_a_line_and_handles_clean_output_eof() {
@@ -67,19 +78,7 @@ mod tests {
 
     #[tokio::test]
     async fn reports_a_closed_stdout_read_error() {
-        struct ErrorReader;
-
-        impl tokio::io::AsyncRead for ErrorReader {
-            fn poll_read(
-                self: std::pin::Pin<&mut Self>,
-                _cx: &mut std::task::Context<'_>,
-                _buffer: &mut tokio::io::ReadBuf<'_>,
-            ) -> std::task::Poll<std::io::Result<()>> {
-                std::task::Poll::Ready(Err(std::io::Error::other("synthetic read failure")))
-            }
-        }
-
-        let mut lines = tokio::io::BufReader::new(ErrorReader).lines();
+        let mut lines = tokio::io::BufReader::new(ErrorReader("synthetic read failure")).lines();
         assert!(
             next_output_line(&Weak::<AppServer>::new(), &mut lines)
                 .await
@@ -136,18 +135,6 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         use std::sync::Arc;
 
-        struct ErrorReader;
-
-        impl tokio::io::AsyncRead for ErrorReader {
-            fn poll_read(
-                self: std::pin::Pin<&mut Self>,
-                _cx: &mut std::task::Context<'_>,
-                _buffer: &mut tokio::io::ReadBuf<'_>,
-            ) -> std::task::Poll<std::io::Result<()>> {
-                std::task::Poll::Ready(Err(std::io::Error::other("synthetic live read failure")))
-            }
-        }
-
         let root = tempfile::tempdir().expect("protocol error fixture");
         let source = root.path().join("source");
         std::fs::create_dir(&source).expect("source home");
@@ -169,7 +156,8 @@ mod tests {
         .await
         .expect("start protocol fixture");
         let weak = Arc::downgrade(&server);
-        let mut lines = tokio::io::BufReader::new(ErrorReader).lines();
+        let mut lines =
+            tokio::io::BufReader::new(ErrorReader("synthetic live read failure")).lines();
         assert!(next_output_line(&weak, &mut lines).await.is_none());
         assert!(!server.is_alive());
     }

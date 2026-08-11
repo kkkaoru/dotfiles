@@ -11,7 +11,6 @@ use crate::app_server::events::ThreadEventDispatcher;
 // This module exists only to construct deterministic unit-test providers; it
 // is not a production execution path and must not dilute production coverage.
 #[cfg_attr(coverage_nightly, coverage(off))]
-#[allow(clippy::excessive_nesting)]
 impl GrokAcp {
     pub(crate) fn stopped_for_test() -> Arc<Self> {
         Self::for_test(false)
@@ -22,26 +21,8 @@ impl GrokAcp {
     }
 
     async fn settled_for_test(provider: AcpProvider) -> Arc<Self> {
-        let (commands, mut receiver) = mpsc::channel(4);
-        tokio::spawn(async move {
-            while let Some(command) = receiver.recv().await {
-                match command {
-                    DriverCommand::CancelTurn { response, .. } => {
-                        let _ = response.send(Ok(()));
-                    }
-                    DriverCommand::Shutdown { response } => {
-                        let _ = response.send(());
-                        break;
-                    }
-                    DriverCommand::CreateSession { response, .. } => {
-                        let _ = response.send(Err(anyhow::anyhow!("test session unavailable")));
-                    }
-                    DriverCommand::StartTurn { response, .. } => {
-                        let _ = response.send(Err(anyhow::anyhow!("test turn unavailable")));
-                    }
-                }
-            }
-        });
+        let (commands, receiver) = mpsc::channel(4);
+        tokio::spawn(drain_settled_commands(receiver));
         Self::for_test_with_commands(provider, commands, true)
     }
 
@@ -71,5 +52,34 @@ impl GrokAcp {
             alive: Arc::new(AtomicBool::new(alive)),
             driver: DriverThread::completed(),
         })
+    }
+}
+
+fn answer_settled_command(command: DriverCommand) -> bool {
+    match command {
+        DriverCommand::CancelTurn { response, .. } => {
+            let _ = response.send(Ok(()));
+            false
+        }
+        DriverCommand::Shutdown { response } => {
+            let _ = response.send(());
+            true
+        }
+        DriverCommand::CreateSession { response, .. } => {
+            let _ = response.send(Err(anyhow::anyhow!("test session unavailable")));
+            false
+        }
+        DriverCommand::StartTurn { response, .. } => {
+            let _ = response.send(Err(anyhow::anyhow!("test turn unavailable")));
+            false
+        }
+    }
+}
+
+async fn drain_settled_commands(mut receiver: mpsc::Receiver<DriverCommand>) {
+    while let Some(command) = receiver.recv().await {
+        if answer_settled_command(command) {
+            break;
+        }
     }
 }
