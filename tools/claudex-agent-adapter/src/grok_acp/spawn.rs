@@ -7,6 +7,8 @@ use super::{DEFAULT_REASONING_EFFORT, GrokAcp};
 
 #[path = "spawn_provider.rs"]
 mod spawn_provider;
+#[cfg(test)]
+pub(in crate::grok_acp) use spawn_provider::session_create_capacity;
 
 impl GrokAcp {
     pub async fn spawn(model: &str) -> Result<Arc<Self>> {

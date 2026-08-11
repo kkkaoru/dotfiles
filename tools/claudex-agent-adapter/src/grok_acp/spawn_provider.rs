@@ -17,6 +17,23 @@ use super::super::{
     SESSION_QUEUE_CAPACITY, TURN_QUEUE_CAPACITY,
 };
 
+/// How many concurrent `session/new` calls this ACP provider permits.
+pub(in crate::grok_acp) fn session_create_capacity(
+    provider: AcpProvider,
+    max_concurrency: Option<usize>,
+) -> usize {
+    match provider {
+        AcpProvider::Configured | AcpProvider::ConfiguredLaunchScoped => {
+            max_concurrency.unwrap_or(DEFAULT_CONFIGURED_MAX_CONCURRENCY)
+        }
+        // Honor route maxConcurrency for session/new too. Leaving this at 1
+        // while turn permits scale serialized parallel SubAgent create_session.
+        AcpProvider::Grok | AcpProvider::Copilot => {
+            max_concurrency.unwrap_or(SESSION_QUEUE_CAPACITY).max(1)
+        }
+    }
+}
+
 impl GrokAcp {
     pub(in crate::grok_acp) async fn spawn_provider(
         provider: AcpProvider,
@@ -28,12 +45,7 @@ impl GrokAcp {
         max_concurrency: Option<usize>,
     ) -> Result<Arc<Self>> {
         let (command_tx, command_rx) = mpsc::channel(COMMAND_QUEUE_CAPACITY);
-        let session_capacity = match provider {
-            AcpProvider::Configured | AcpProvider::ConfiguredLaunchScoped => {
-                max_concurrency.unwrap_or(DEFAULT_CONFIGURED_MAX_CONCURRENCY)
-            }
-            AcpProvider::Grok | AcpProvider::Copilot => SESSION_QUEUE_CAPACITY,
-        };
+        let session_capacity = session_create_capacity(provider, max_concurrency);
         let session_permits = Arc::new(tokio::sync::Semaphore::new(session_capacity));
         let turn_capacity = match provider {
             AcpProvider::Configured | AcpProvider::ConfiguredLaunchScoped => {

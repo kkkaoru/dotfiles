@@ -131,6 +131,19 @@ fn configured_acp_defaults_to_parallel_session_slots_when_max_concurrency_omitte
         3,
         "configured ACP must not collapse to a single session when providers omit maxConcurrency"
     );
+    assert_eq!(
+        super::spawn::session_create_capacity(AcpProvider::Grok, None),
+        1
+    );
+    assert_eq!(
+        super::spawn::session_create_capacity(AcpProvider::Grok, Some(3)),
+        3,
+        "Grok/Copilot session/new must honor maxConcurrency for parallel SubAgents"
+    );
+    assert_eq!(
+        super::spawn::session_create_capacity(AcpProvider::Copilot, Some(4)),
+        4
+    );
 }
 
 #[test]
