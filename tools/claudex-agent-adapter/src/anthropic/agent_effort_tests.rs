@@ -469,6 +469,62 @@ mod tests {
     }
 
     #[test]
+    fn take_prefers_newest_when_old_and_new_correlation_markers_coexist() {
+        let intents = AgentEffortIntents::default();
+        let (old_args, _) = prepare_arguments(
+            "Agent",
+            "tool-old",
+            &json!({"prompt":"first attempt", "claudex_model":"gpt-old", "claudex_effort":"low"}),
+        );
+        let old_args = old_args.expect("old correlated intent");
+        intents.record_from_user_messages(
+            AgentEffortRecord {
+                client_user_id: Some("session"),
+                tool_name: "Agent",
+                tool_use_id: "tool-old".to_owned(),
+                parent_model: "main-model",
+                arguments: &old_args,
+                user_messages: &[json!({"role":"user","content":"Use gpt-old for this SubAgent"})],
+                system: &json!(null),
+            },
+            None,
+        );
+        // Correlated take requeues the old intent at the back of the deque.
+        let _ = intents.take(&request(
+            "session",
+            "first attempt\nclaudex_launch_id: tool-old",
+            true,
+        ));
+        let (new_args, _) = prepare_arguments(
+            "Agent",
+            "tool-new",
+            &json!({"prompt":"retry attempt", "claudex_model":"gpt-new", "claudex_effort":"xhigh"}),
+        );
+        let new_args = new_args.expect("new correlated intent");
+        intents.record_from_user_messages(
+            AgentEffortRecord {
+                client_user_id: Some("session"),
+                tool_name: "Agent",
+                tool_use_id: "tool-new".to_owned(),
+                parent_model: "main-model",
+                arguments: &new_args,
+                user_messages: &[json!({"role":"user","content":"Use gpt-new for this SubAgent"})],
+                system: &json!(null),
+            },
+            None,
+        );
+        let request = request(
+            "session",
+            "compacted history still has\nclaudex_launch_id: tool-old\nand\nclaudex_launch_id: tool-new",
+            true,
+        );
+        let intent = intents.take(&request);
+        assert!(intent.matched);
+        assert_eq!(intent.model_override.as_deref(), Some("gpt-new"));
+        assert_eq!(explicit(intent.effort), "xhigh");
+    }
+
+    #[test]
     fn restores_correlated_launch_intents_after_adapter_handover() {
         let root = tempfile::tempdir().expect("intent journal directory");
         let path = root.path().join("agent-intents.json");

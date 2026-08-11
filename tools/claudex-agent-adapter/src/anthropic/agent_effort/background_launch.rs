@@ -36,21 +36,45 @@ pub(in crate::anthropic) fn agent_launch_is_background(
 }
 
 fn active_user_text(messages: &[Value]) -> Option<String> {
-    messages.iter().rev().find_map(|message| {
-        if message.get("role").and_then(Value::as_str) != Some("user") {
-            return None;
-        }
-        let text = user_message_text(message)?;
-        if text.contains("<agent-message")
-            || text.contains("<teammate-message")
-            || text
-                .trim_start()
-                .starts_with("Another Claude session sent a message")
-        {
-            return None;
-        }
-        Some(text)
-    })
+    let start = messages
+        .iter()
+        .rposition(|message| message.get("role").and_then(Value::as_str) == Some("assistant"))
+        .map_or(0, |index| index + 1);
+    let texts = messages[start..]
+        .iter()
+        .filter(|message| message.get("role").and_then(Value::as_str) == Some("user"))
+        .filter_map(user_message_text)
+        .filter(|text| !is_hook_or_mailbox_only(text))
+        .collect::<Vec<_>>();
+    (!texts.is_empty()).then(|| texts.join("\n"))
+}
+
+pub(in crate::anthropic) fn is_hook_or_mailbox_only(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    if text.contains("<agent-message")
+        || text.contains("<teammate-message")
+        || trimmed.starts_with("Another Claude session sent a message")
+    {
+        return true;
+    }
+    // Trailing CC hook / routing reminders must not hide the real user ask.
+    let without_reminders = strip_system_reminders(text);
+    without_reminders.trim().is_empty()
+}
+
+fn strip_system_reminders(text: &str) -> String {
+    let mut rest = text.to_owned();
+    while let Some(start) = rest.find("<system-reminder>") {
+        let Some(end_rel) = rest[start..].find("</system-reminder>") else {
+            break;
+        };
+        let end = start + end_rel + "</system-reminder>".len();
+        rest.replace_range(start..end, " ");
+    }
+    rest
 }
 
 fn user_message_text(message: &Value) -> Option<String> {
@@ -209,5 +233,23 @@ mod tests {
         assert!(user_requires_synchronous_results(&[with_reminder(
             "同期して結果を見てから続けて"
         )]));
+    }
+
+    #[test]
+    fn trailing_system_reminder_message_does_not_hide_sync_instruction() {
+        let messages = vec![
+            json!({
+                "role":"user",
+                "content":"結果を待ってから次へ進めて"
+            }),
+            json!({
+                "role":"user",
+                "content":"<system-reminder>\nPostToolUse hook noise\n</system-reminder>"
+            }),
+        ];
+        assert!(
+            user_requires_synchronous_results(&messages),
+            "hook-only trailing user message must not force background launches"
+        );
     }
 }

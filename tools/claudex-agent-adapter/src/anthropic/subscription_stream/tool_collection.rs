@@ -82,11 +82,12 @@ impl SubscriptionStream {
             .filter(|input| input.is_object())
             .cloned()
             .context("Claude subscription emitted non-object tool input")?;
-        let public_input = match self.prepare_public_tool_input(sender, &name, id, &input).await? {
-            Some(input) => input,
-            None => return Ok(false),
-        };
-        if self.skip_duplicate_subagent_launch(&name, id, &input, &public_input)? {
+        let (private_input, public_input) =
+            match self.prepare_routed_tool_input(sender, &name, id, &input).await? {
+                Some(inputs) => inputs,
+                None => return Ok(false),
+            };
+        if self.skip_duplicate_subagent_launch(&name, id, &private_input, &public_input)? {
             return Ok(false);
         }
         if self
@@ -101,7 +102,7 @@ impl SubscriptionStream {
         {
             return Ok(false);
         }
-        self.report_subagent_action(sender, &name, &input).await?;
+        self.report_subagent_action(sender, &name, &private_input).await?;
         send_tool_block(sender, self.next_index, id, &name, public_input).await?;
         self.next_index += 1;
         self.saw_tool_use = true;
@@ -109,15 +110,15 @@ impl SubscriptionStream {
         Ok(true)
     }
 
-    async fn prepare_public_tool_input(
+    async fn prepare_routed_tool_input(
         &mut self,
         sender: &mpsc::Sender<Result<Bytes, Infallible>>,
         name: &str,
         id: &str,
         input: &Value,
-    ) -> Result<Option<Value>> {
-        match self.prepare_tool_input(name, id, input) {
-            Ok(input) => Ok(Some(input)),
+    ) -> Result<Option<(Value, Value)>> {
+        match self.route_agent_tool_input(name, id, input) {
+            Ok(inputs) => Ok(Some(inputs)),
             Err(error) if super::super::agent_effort::is_agent_tool(name) => {
                 self.emit_blocked_subagent(sender, name, error).await?;
                 Ok(None)

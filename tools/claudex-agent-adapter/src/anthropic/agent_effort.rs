@@ -151,12 +151,24 @@ impl AgentEffortIntents {
         let client_user_id = request.metadata.get("user_id").and_then(Value::as_str);
         let mut pending = self.pending.lock().expect("agent effort intents poisoned");
         remove_expired(&mut pending);
-        let index = pending
+        let matches = pending
             .iter()
-            .position(|intent| {
+            .enumerate()
+            .filter(|(_, intent)| {
                 request_matches_intent_with_system(&request.system, &request.messages, intent)
                     && (intent.correlated || intent.client_user_id.as_deref() == client_user_id)
             })
+            .map(|(index, intent)| (index, intent.correlated))
+            .collect::<Vec<_>>();
+        // Correlated markers can coexist after compaction; prefer the newest.
+        // Uncorrelated identical prompts stay FIFO so parallel launches dequeue
+        // in launch order.
+        let index = matches
+            .iter()
+            .rev()
+            .find(|(_, correlated)| *correlated)
+            .map(|(index, _)| *index)
+            .or_else(|| matches.first().map(|(index, _)| *index))
             .or_else(|| unique_correlated_candidate(&pending, client_user_id));
         let Some(index) = index else {
             return AgentIntent::unmatched(true);
@@ -335,17 +347,17 @@ fn sanitize_public_tool_arguments(
 }
 
 fn active_user_supplied_name(messages: &[Value], name: &str) -> bool {
-    messages
+    let start = messages
+        .iter()
+        .rposition(|message| message.get("role").and_then(Value::as_str) == Some("assistant"))
+        .map_or(0, |index| index + 1);
+    messages[start..]
         .iter()
         .rev()
         .filter(|message| message.get("role").and_then(Value::as_str) == Some("user"))
         .filter_map(|message| message.get("content"))
         .flat_map(value_texts)
-        .find(|text| {
-            !text.contains("<agent-message")
-                && !text.contains("<teammate-message")
-                && !text.starts_with("Another Claude session sent a message")
-        })
+        .find(|text| !background_launch::is_hook_or_mailbox_only(text))
         .is_some_and(|text| explicitly_names_agent(text, name))
 }
 

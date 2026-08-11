@@ -206,9 +206,22 @@ impl SubscriptionStream {
         Ok(true)
     }
 
+    #[cfg(test)]
     fn prepare_tool_input(&self, name: &str, id: &str, input: &Value) -> Result<Value> {
+        Ok(self.route_agent_tool_input(name, id, input)?.1)
+    }
+
+    /// Returns `(private_routed, public)` so occupancy / reuse can see hydrated
+    /// `claudex_model` before public schema stripping.
+    fn route_agent_tool_input(
+        &self,
+        name: &str,
+        id: &str,
+        input: &Value,
+    ) -> Result<(Value, Value)> {
         if !super::agent_effort::is_agent_tool(name) {
-            return Ok(input.clone());
+            let cloned = input.clone();
+            return Ok((cloned.clone(), cloned));
         }
         let context = self
             .tool_context
@@ -250,7 +263,7 @@ impl SubscriptionStream {
             &context.system,
         );
         record_prepared_agent_intent(context, name, id, intent.as_ref());
-        Ok(public)
+        Ok((routed_input, public))
     }
 
     async fn close_text(&mut self, sender: &mpsc::Sender<Result<Bytes, Infallible>>) -> Result<()> {
@@ -270,11 +283,11 @@ impl SubscriptionStream {
         if !options.is_subagent {
             return Ok(());
         }
-        let status = format!(
-            "SubAgent starting: {model}; preparing subscription session\u{2026}"
-        );
+        // ZWSP-only prime matches ACP SubAgents: prose like "SubAgent starting"
+        // collapses Claude Code 2.1 into Wandering until the first tool_use.
+        let _ = model;
         self.activity
-            .start_status(sender, &status, &mut self.next_index)
+            .start_status(sender, "\u{200b}", &mut self.next_index)
             .await
     }
 

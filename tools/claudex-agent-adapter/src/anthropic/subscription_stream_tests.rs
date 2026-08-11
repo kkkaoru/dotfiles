@@ -1956,6 +1956,61 @@ async fn same_turn_same_scope_different_models_all_forward() {
 }
 
 #[tokio::test]
+async fn same_turn_hydrated_models_without_private_field_all_forward() {
+    // Native Agent schema often omits adapter-only claudex_model; occupancy must
+    // use hydrated private input or multi-model fan-out collapses to one worker.
+    let (sender, mut receiver) = channel();
+    let registry = Arc::new(SubagentReuseRegistry::default());
+    let routing = concat!(
+        "Claudex routing for this turn: ",
+        r#"{"providers":{},"selected_workers":["#,
+        r#"{"agent":"claudex-gpt","model":"gpt-test","effort":"max"},"#,
+        r#"{"agent":"claudex-cursor","model":"cursor-test","effort":"max"},"#,
+        r#"{"agent":"claudex-muse","model":"muse-test","effort":"max"}"#,
+        r#"],"disabled_subagent_models":[]}"#
+    );
+    let mut stream = reuse_stream(Arc::clone(&registry), fanout_worker_catalog(), routing);
+    let line = assistant_agent_batch(vec![
+        agent_tool_use(
+            "recover-gpt",
+            json!({
+                "description":"Recover post-reboot state",
+                "prompt":"Check ComfyUI.",
+                "subagent_type":"claudex-gpt"
+            }),
+        ),
+        agent_tool_use(
+            "recover-cursor",
+            json!({
+                "description":"Recover post-reboot state",
+                "prompt":"Check ComfyUI.",
+                "subagent_type":"claudex-cursor"
+            }),
+        ),
+        agent_tool_use(
+            "recover-muse",
+            json!({
+                "description":"Recover post-reboot state",
+                "prompt":"Check ComfyUI.",
+                "subagent_type":"claudex-muse"
+            }),
+        ),
+    ]);
+    stream
+        .handle_line(&sender, &line)
+        .await
+        .expect("forward hydrated multi-model fan-out");
+    drop(sender);
+    let out = output(&mut receiver).await;
+    assert!(
+        out.contains("recover-gpt")
+            && out.contains("recover-cursor")
+            && out.contains("recover-muse"),
+        "hydrated claudex_model must drive occupancy, not raw public input: {out}"
+    );
+}
+
+#[tokio::test]
 async fn routes_a_standard_general_purpose_agent_to_a_claudex_worker() {
     let (_sender, _receiver) = channel();
     let mut model_catalog = ModelCatalog::default();
@@ -2355,11 +2410,13 @@ async fn hidden_provider_events_do_not_starve_client_visible_activity() {
         .await
         .expect("ready hidden events must retain client-visible activity");
     let frames = output(&mut receiver).await;
-    assert_eq!(
-        frames
-            .matches("SubAgent starting: subscription-test")
-            .count(),
-        1
+    assert!(
+        frames.contains("\\u200b") || frames.contains('\u{200b}'),
+        "subscription SubAgents must ZWSP-prime like ACP, not collapse to Wandering: {frames}"
+    );
+    assert!(
+        !frames.contains("SubAgent starting:"),
+        "prose start status collapses CC 2.1 high-effort UI: {frames}"
     );
     assert!(!frames.contains("effort="));
     assert!(frames.contains("done"));
