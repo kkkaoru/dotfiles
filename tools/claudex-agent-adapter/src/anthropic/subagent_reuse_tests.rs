@@ -1225,10 +1225,7 @@ fn scope_similarity_prioritizes_the_matching_worker() {
 fn concurrent_persistence_does_not_race_the_atomic_replace() {
     let root = tempfile::tempdir().expect("reuse registry fixture");
     let path = root.path().join("reuse.json");
-    let store = Arc::new(Store {
-        path: path.clone(),
-        save_lock: Mutex::new(()),
-    });
+    let store = Arc::new(Store::new(path.clone()));
     let barrier = Arc::new(Barrier::new(16));
     let threads = (0..16)
         .map(|index| {

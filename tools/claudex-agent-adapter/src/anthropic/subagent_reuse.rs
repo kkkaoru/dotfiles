@@ -1,19 +1,17 @@
 use std::{
     collections::HashMap,
-    fs::{self, OpenOptions},
-    io::Write,
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::Mutex,
 };
 
-use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
 use super::MessagesRequest;
 mod guidance;
 mod records;
 mod records_scope;
 mod records_status;
+mod store;
 #[cfg(test)]
 use guidance::REUSE_GUIDANCE_MARKER;
 pub(super) use guidance::{agent_teams_enabled, value_text};
@@ -21,39 +19,21 @@ use guidance::{append_reuse_guidance, has_send_message_tool, system_contains_mar
 pub(in crate::anthropic) use records::live_agent_task_ids;
 use records::{
     LaunchRecord, already_has_resume, apply_transcript, find_reusable_launch, launch_model,
-    reusable_status, scope_is_occupied, summarize_scope,
+    scope_is_occupied, summarize_scope,
 };
+use store::{
+    CACHE_FILE_NAME, METADATA_LIMIT_REACHED, SessionState, Store, reuse_recipients,
+    set_limit_metadata,
+};
+#[cfg(test)]
+use store::StoredStates;
 
 pub(crate) const MAX_SUBAGENTS_PER_SESSION_ENV: &str = "CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION";
 pub(crate) const DEFAULT_MAX_SUBAGENTS_PER_SESSION: usize = 1_024;
 
-const CACHE_FILE_NAME: &str = "subagent-recipients-v1.json";
-const CACHE_VERSION: u8 = 1;
-const METADATA_LIMIT_REACHED: &str = "_claudex_subagent_spawn_limit_reached";
-const MAX_PERSISTED_RECIPIENTS: usize = 1_024;
-
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-struct SessionState {
-    launches: Vec<LaunchRecord>,
-}
-
-#[derive(Default, Deserialize, Serialize)]
-struct StoredStates {
-    version: u8,
-    sessions: HashMap<String, SessionState>,
-}
-
 pub(super) struct SubagentReuseRegistry {
     states: Mutex<HashMap<String, SessionState>>,
     store: Option<Store>,
-}
-
-struct Store {
-    path: PathBuf,
-    // `persist` is called after releasing the registry state lock, so multiple
-    // concurrent requests can otherwise truncate/rename the same temp file.
-    // Serialize the atomic replacement per adapter process.
-    save_lock: Mutex<()>,
 }
 
 impl Default for SubagentReuseRegistry {
@@ -70,12 +50,11 @@ impl SubagentReuseRegistry {
         let Some(home) = std::env::var_os("HOME") else {
             return Self::default();
         };
-        let store = Store {
-            path: PathBuf::from(home)
+        let store = Store::new(
+            PathBuf::from(home)
                 .join(".cache/claudex")
                 .join(CACHE_FILE_NAME),
-            save_lock: Mutex::new(()),
-        };
+        );
         Self {
             states: Mutex::new(store.load()),
             store: Some(store),
@@ -84,10 +63,7 @@ impl SubagentReuseRegistry {
 
     #[cfg(test)]
     pub(super) fn with_store(path: PathBuf) -> Self {
-        let store = Store {
-            path,
-            save_lock: Mutex::new(()),
-        };
+        let store = Store::new(path);
         Self {
             states: Mutex::new(store.load()),
             store: Some(store),
@@ -267,57 +243,6 @@ impl SubagentReuseRegistry {
     }
 }
 
-impl Store {
-    fn load(&self) -> HashMap<String, SessionState> {
-        let Ok(bytes) = fs::read(&self.path) else {
-            return HashMap::new();
-        };
-        let Ok(stored) = serde_json::from_slice::<StoredStates>(&bytes) else {
-            tracing::warn!(path = %self.path.display(), "could not decode SubAgent reuse registry");
-            return HashMap::new();
-        };
-        if stored.version != CACHE_VERSION {
-            tracing::warn!(path = %self.path.display(), "ignored incompatible SubAgent reuse registry");
-            return HashMap::new();
-        }
-        stored.sessions
-    }
-
-    fn save(&self, mut states: HashMap<String, SessionState>) -> std::io::Result<()> {
-        let _save_guard = self
-            .save_lock
-            .lock()
-            .expect("SubAgent reuse store poisoned");
-        states.values_mut().for_each(prune_persisted_state);
-        let parent = self.path.parent().unwrap_or_else(|| Path::new("."));
-        fs::create_dir_all(parent)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(parent, fs::Permissions::from_mode(0o700))?;
-        }
-        let temporary = self
-            .path
-            .with_extension(format!("{}.tmp", std::process::id()));
-        let bytes = serde_json::to_vec(&StoredStates {
-            version: CACHE_VERSION,
-            sessions: states,
-        })
-        .map_err(std::io::Error::other)?;
-        let mut options = OpenOptions::new();
-        options.create(true).write(true).truncate(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.mode(0o600);
-        }
-        let mut file = options.open(&temporary)?;
-        file.write_all(&bytes)?;
-        file.sync_all()?;
-        fs::rename(temporary, &self.path)
-    }
-}
-
 pub(super) fn max_subagents_per_session() -> usize {
     std::env::var(MAX_SUBAGENTS_PER_SESSION_ENV)
         .ok()
@@ -332,32 +257,6 @@ pub(super) fn should_expose_launch_tools(request: &MessagesRequest) -> bool {
         .get(METADATA_LIMIT_REACHED)
         .and_then(Value::as_bool)
         .is_none_or(|reached| !reached)
-}
-
-fn reuse_recipients(launches: &[LaunchRecord], _messages: &[Value]) -> Vec<String> {
-    // Omit empty agentId / failures; stable order keeps prompt-cache signatures.
-    let mut sorted = launches
-        .iter()
-        .filter(|launch| reusable_status(&launch.status) && !launch.recipient.is_empty())
-        .cloned()
-        .collect::<Vec<_>>();
-    sorted.sort_by(|left, right| left.recipient.cmp(&right.recipient).then(left.key.cmp(&right.key)));
-    sorted.iter().map(format_reuse_recipient).collect()
-}
-
-fn format_reuse_recipient(launch: &LaunchRecord) -> String {
-    let scope = if launch.scope.is_empty() { "scope unknown" } else { launch.scope.as_str() };
-    let model = launch.model.as_deref().unwrap_or("model unknown");
-    // Omit status so active→queued→completed churn does not bust prompt-cache.
-    format!("{} ({}; {})", launch.recipient, scope, model)
-}
-
-fn prune_persisted_state(state: &mut SessionState) {
-    let excess = state
-        .launches
-        .len()
-        .saturating_sub(MAX_PERSISTED_RECIPIENTS);
-    state.launches.drain(..excess);
 }
 
 pub(super) fn is_launch_tool(name: &str) -> bool {
@@ -378,16 +277,6 @@ pub(super) fn session_id(request: &MessagesRequest) -> Option<String> {
     super::request_identity::claude_session_id(request)
 }
 
-fn set_limit_metadata(request: &mut MessagesRequest, reached: bool) {
-    if !request.metadata.is_object() {
-        request.metadata = Value::Object(Map::new());
-    }
-    request
-        .metadata
-        .as_object_mut()
-        .expect("metadata object")
-        .insert(METADATA_LIMIT_REACHED.to_owned(), Value::Bool(reached));
-}
 
 #[cfg(test)]
 #[path = "subagent_reuse_tests.rs"]

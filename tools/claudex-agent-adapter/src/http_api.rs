@@ -9,7 +9,6 @@ use std::{
 };
 
 use crate::{
-    ADAPTER_PROTOCOL_VERSION,
     anthropic::{Bridge, MessagesRequest, RequestIdentity, error_response},
     discovery_model_id, subagent_policy, working_directory,
 };
@@ -27,6 +26,7 @@ use serde_json::{Value, json};
 use tokio_stream::Stream;
 
 mod handover;
+mod health_route;
 mod logging;
 mod retained_proxy;
 mod retained_health;
@@ -43,13 +43,8 @@ pub(crate) fn http_router_with_handover(
     handover: Option<crate::listen_handover::ListenHandover>,
 ) -> Router {
     let active_http_requests = Arc::new(AtomicUsize::new(0));
-    let health_active_http_requests = Arc::clone(&active_http_requests);
     let active_provider_turns = Arc::new(AtomicUsize::new(0));
-    let health_active_provider_turns = Arc::clone(&active_provider_turns);
     let last_work_at = Arc::new(Mutex::new(Instant::now()));
-    let health_last_work_at = Arc::clone(&last_work_at);
-    let health_model = model;
-    let health_bridge = Arc::clone(&bridge);
     let subscription_max_processes = bridge.subscription_max_processes();
     let subscription_timeout_minutes = bridge.subscription_timeout_minutes();
     let backend_routes = bridge.backend_routes();
@@ -60,8 +55,8 @@ pub(crate) fn http_router_with_handover(
     let (handover_state, admin) = handover::layer(handover.clone());
     let protected = protected_router(
         models,
-        active_provider_turns,
-        active_http_requests,
+        Arc::clone(&active_provider_turns),
+        Arc::clone(&active_http_requests),
         auth_token,
     )
     .layer(middleware::from_fn_with_state(
@@ -69,75 +64,26 @@ pub(crate) fn http_router_with_handover(
         handover::proxy_retained_sessions,
     ))
     .with_state(Arc::clone(&bridge));
-    let handover_for_health = handover;
-    Router::new()
-        .route(
-            "/health",
-            get(move || async move {
-                let status = if health_bridge.is_alive() {
-                    StatusCode::OK
-                } else {
-                    StatusCode::SERVICE_UNAVAILABLE
-                };
-                let session_ids = health_bridge.active_claude_session_ids().await;
-                let busy_session_ids = health_bridge.busy_claude_session_ids().await;
-                let listen = handover_for_health
-                    .as_ref()
-                    .map(|handover| handover.advertised_addr().to_string());
-                let active_subagent_models = health_bridge.active_subagent_models();
-                let http = health_active_http_requests.load(Ordering::Relaxed);
-                let turns = health_active_provider_turns.load(Ordering::Relaxed);
-                let busy = http > 0
-                    || turns > 0
-                    || active_subagent_models.values().copied().sum::<usize>() > 0;
-                let idle_seconds = {
-                    let mut last = health_last_work_at
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner());
-                    if busy {
-                        *last = Instant::now();
-                        0
-                    } else {
-                        last.elapsed().as_secs()
-                    }
-                };
-                (
-                    status,
-                    Json(json!({
-                        "status":if status.is_success() { "ok" } else { "unavailable" },
-                        "pid":std::process::id(),
-                        "protocol_version":ADAPTER_PROTOCOL_VERSION,
-                        "build_id":env!("CLAUDEX_BUILD_ID"),
-                        "codex_config_fingerprint":std::env::var(crate::app_server::CODEX_CONFIG_FINGERPRINT_ENV).unwrap_or_default(),
-                        "service_config_fingerprint":std::env::var(crate::launcher::SERVICE_CONFIG_FINGERPRINT_ENV).unwrap_or_default(),
-                        "backend_routes":backend_routes,
-                        "worker_routes":worker_routes,
-                        "search_worker_routes":search_worker_routes,
-                        "started_models":health_bridge.started_models(),
-                        "model_concurrency":health_bridge.model_concurrency(),
-                        "active_subagent_models":active_subagent_models,
-                        "active_subagent_agent_ids":health_bridge.active_subagent_agent_ids(),
-                        "model":health_model,
-                        "session_capacity":health_bridge.session_capacity(),
-                        "session_slots_used":health_bridge.used_session_slots(),
-                        "active_provider_turns":turns,
-                        "active_http_requests":http,
-                        "idle_seconds":idle_seconds,
-                        "subscription_max_processes":subscription_max_processes,
-                        "subscription_timeout_minutes":subscription_timeout_minutes,
-                        "subagent_hard_timeout_seconds":subagent_hard_timeout_seconds,
-                        "recovery_generation":crate::launcher::recovery_generation(),
-                        "listener_handover":handover_for_health.is_some(),
-                        "listen":listen,
-                        "active_claude_session_ids":session_ids,
-                        "busy_claude_session_ids":busy_session_ids
-                    })),
-                )
-            }),
-        )
-        .merge(protected)
-        .merge(admin)
-        .layer(middleware::from_fn(logging::trace_http_request))
+    health_route::mount_health_route(
+        Router::new(),
+        health_route::HealthRouteState {
+            bridge: Arc::clone(&bridge),
+            model,
+            active_http_requests,
+            active_provider_turns,
+            last_work_at,
+            subscription_max_processes,
+            subscription_timeout_minutes,
+            backend_routes,
+            worker_routes,
+            search_worker_routes,
+            subagent_hard_timeout_seconds,
+            handover,
+        },
+    )
+    .merge(protected)
+    .merge(admin)
+    .layer(middleware::from_fn(logging::trace_http_request))
 }
 
 fn protected_router(

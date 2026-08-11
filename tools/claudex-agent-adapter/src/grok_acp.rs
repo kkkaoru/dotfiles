@@ -21,6 +21,7 @@ mod client;
 mod configured;
 mod connection;
 mod driver;
+mod driver_types;
 mod plugin;
 mod prompt;
 mod queue;
@@ -42,110 +43,11 @@ pub(crate) const DEFAULT_REASONING_EFFORT: &str = "high";
 
 use connection::AcpProvider;
 use driver::run_driver;
+use driver_types::{DriverCommand, DriverSetup, DriverThread};
 use turns::acquire_turn_permit;
 
 #[cfg(test)]
 use turns::{CancelRequest, PreparedTurn};
-
-enum DriverCommand {
-    CreateSession {
-        params: Value,
-        _permit: tokio::sync::OwnedSemaphorePermit,
-        response: oneshot::Sender<Result<Value>>,
-    },
-    StartTurn {
-        params: Value,
-        permit: tokio::sync::OwnedSemaphorePermit,
-        response: oneshot::Sender<Result<()>>,
-    },
-    CancelTurn {
-        session_id: String,
-        response: oneshot::Sender<Result<()>>,
-    },
-    Shutdown {
-        response: oneshot::Sender<()>,
-    },
-}
-
-struct DriverSetup {
-    provider: AcpProvider,
-    program: OsString,
-    arguments: Option<Vec<String>>,
-    model: String,
-    effort: Option<String>,
-    cwd: PathBuf,
-    events: Arc<ThreadEventDispatcher>,
-    alive: Arc<AtomicBool>,
-    ready: oneshot::Sender<Result<()>>,
-}
-
-struct DriverThread {
-    handle: std::sync::Mutex<Option<std::thread::JoinHandle<()>>>,
-    joined: tokio::sync::watch::Sender<bool>,
-}
-
-fn finish_driver_thread(
-    handle: std::thread::JoinHandle<()>,
-    joined: tokio::sync::watch::Sender<bool>,
-) -> std::thread::Result<()> {
-    let result = handle.join();
-    joined.send_replace(true);
-    result
-}
-
-async fn join_driver_thread(
-    handle: std::thread::JoinHandle<()>,
-    joined: tokio::sync::watch::Sender<bool>,
-) {
-    let join = tokio::task::spawn_blocking(move || finish_driver_thread(handle, joined));
-    if let Err(error) = join.await {
-        tracing::error!(?error, "failed to join ACP driver thread");
-    }
-}
-
-impl DriverThread {
-    fn new(handle: std::thread::JoinHandle<()>) -> Self {
-        let (joined, _) = tokio::sync::watch::channel(false);
-        Self {
-            handle: std::sync::Mutex::new(Some(handle)),
-            joined,
-        }
-    }
-
-    async fn join(&self) {
-        let handle = self
-            .handle
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take();
-        if let Some(handle) = handle {
-            join_driver_thread(handle, self.joined.clone()).await;
-            return;
-        }
-
-        if *self.joined.borrow() {
-            return;
-        }
-        let mut joined = self.joined.subscribe();
-        if !*joined.borrow_and_update() {
-            let _ = joined.changed().await;
-        }
-    }
-
-    #[cfg(test)]
-    fn completed() -> Self {
-        let (joined, _) = tokio::sync::watch::channel(true);
-        Self {
-            handle: std::sync::Mutex::new(None),
-            joined,
-        }
-    }
-
-    #[cfg(test)]
-    fn is_joined(&self) -> bool {
-        *self.joined.borrow()
-    }
-}
 
 pub struct GrokAcp {
     provider: AcpProvider,
