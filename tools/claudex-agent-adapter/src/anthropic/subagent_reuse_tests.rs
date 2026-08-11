@@ -10,6 +10,7 @@ use std::{
 };
 
 use super::*;
+use super::records::launch_records;
 use super::records_scope::{latest_user_text, scope_similarity};
 
 fn request(session: &str, messages: Vec<Value>) -> MessagesRequest {
