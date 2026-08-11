@@ -35,6 +35,11 @@ class GitFixture(unittest.TestCase):
             cwd=self.root,
             check=True,
         )
+        subprocess.run(
+            ("git", "config", "hook.staged-whitespace.enabled", "false"),
+            cwd=self.root,
+            check=True,
+        )
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
@@ -171,6 +176,19 @@ class MainTests(unittest.TestCase):
         self.assertIn("hook.dotfiles-pre-commit.event pre-commit", output)
         self.assertIn("hook.dotfiles-pre-push.event pre-push", output)
         self.assertIn("dotfiles-git-quality", output)
+        hooks_path = subprocess.run(
+            (
+                "git",
+                "config",
+                "--file",
+                str(repository / ".gitconfig"),
+                "--get",
+                "core.hooksPath",
+            ),
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(hooks_path.returncode, 0)
 
     def test_launcher_resolves_its_python_module_through_a_symlink(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -204,6 +222,31 @@ class MainTests(unittest.TestCase):
         ):
             self.assertEqual(quality.main(["pre-push", "origin"], stream), 0)
         pushed.assert_called_once_with(Path("/repo"), stream)
+
+    def test_main_returns_nonzero_when_quality_fails(self) -> None:
+        with (
+            mock.patch.object(quality, "git", return_value="/repo"),
+            mock.patch.object(quality, "pre_commit_paths", return_value={"bad.json"}),
+            mock.patch.object(
+                quality,
+                "validate_changed_files",
+                side_effect=ValueError("invalid agent frontmatter"),
+            ),
+        ):
+            self.assertEqual(quality.main(["pre-commit"]), 1)
+
+    def test_main_returns_nonzero_when_check_command_fails(self) -> None:
+        failed = subprocess.CalledProcessError(1, ("cargo", "lint"))
+        with (
+            mock.patch.object(quality, "git", return_value="/repo"),
+            mock.patch.object(
+                quality, "pre_commit_paths", return_value={"tools/x/a.rs"}
+            ),
+            mock.patch.object(quality, "validate_changed_files"),
+            mock.patch.object(quality, "checks", return_value=[]),
+            mock.patch.object(quality, "run_checks", side_effect=failed),
+        ):
+            self.assertEqual(quality.main(["pre-commit"]), 1)
 
 
 if __name__ == "__main__":

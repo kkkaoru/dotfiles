@@ -13,4 +13,20 @@ if [ -L "$launcher_path" ]; then
 fi
 launcher_directory=$(unset CDPATH; cd -- "$(dirname -- "$launcher_path")" && pwd)
 
-exec python3 "$launcher_directory/quality_hook.py" "$@"
+# GUI / agent shells often resolve `python3` to macOS 3.9 (no tomllib).
+export PATH="/opt/homebrew/bin:/usr/local/bin:${PATH:-/usr/bin:/bin}"
+
+pick_python() {
+  candidate=$1
+  command -v "$candidate" >/dev/null 2>&1 || return 1
+  "$candidate" -c 'import tomllib' >/dev/null 2>&1
+}
+
+for candidate in python3.14 python3.13 python3.12 python3.11 python3; do
+  if pick_python "$candidate"; then
+    exec "$candidate" "$launcher_directory/quality_hook.py" "$@"
+  fi
+done
+
+echo "dotfiles-git-quality: need Python 3.11+ with tomllib on PATH" >&2
+exit 1

@@ -220,15 +220,25 @@ def parse_arguments(arguments: list[str] | None = None) -> argparse.Namespace:
 
 
 def main(arguments: list[str] | None = None, stream: TextIO = sys.stdin) -> int:
-    options = parse_arguments(arguments)
-    root = Path(git(Path.cwd(), "rev-parse", "--show-toplevel"))
-    paths = (
-        pre_commit_paths(root)
-        if options.event == "pre-commit"
-        else pre_push_paths(root, stream)
-    )
-    validate_changed_files(root, paths)
-    run_checks(root, checks(options.event, paths))
+    try:
+        options = parse_arguments(arguments)
+        root = Path(git(Path.cwd(), "rev-parse", "--show-toplevel"))
+        paths = (
+            pre_commit_paths(root)
+            if options.event == "pre-commit"
+            else pre_push_paths(root, stream)
+        )
+        validate_changed_files(root, paths)
+        run_checks(root, checks(options.event, paths))
+    except (
+        json.JSONDecodeError,
+        OSError,
+        subprocess.CalledProcessError,
+        tomllib.TOMLDecodeError,
+        ValueError,
+    ) as error:
+        print(f"quality: {error}", file=sys.stderr, flush=True)
+        return 1
     return 0
 
 

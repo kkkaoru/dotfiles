@@ -3,6 +3,7 @@
 set -euo pipefail
 
 DOTPATH=$(cd "$(dirname "$0")" || exit 1; pwd)
+cd "$DOTPATH"
 
 link_path() {
   local src="$1"
@@ -77,10 +78,20 @@ for name in agents commands hooks skills; do
   fi
 done
 
-# Git's config-based hooks invoke this stable per-user path from every repository.
+# Git 2.54+ config-based hooks invoke this stable per-user path from every repository.
 mkdir -p "${HOME}/.local/bin"
 link_path "${DOTPATH}/tools/git-hooks/dotfiles-git-quality" \
   "${HOME}/.local/bin/dotfiles-git-quality"
+# Prefer Homebrew Git over Apple Xcode Git when ~/.local/bin is early on PATH.
+if [ -x /opt/homebrew/bin/git ]; then
+  link_path /opt/homebrew/bin/git "${HOME}/.local/bin/git"
+elif [ -x /usr/local/bin/git ]; then
+  link_path /usr/local/bin/git "${HOME}/.local/bin/git"
+fi
+# Drop the previous traditional hooksPath install if present.
+if [ -L "${HOME}/.local/share/dotfiles/git-hooks" ]; then
+  rm -f "${HOME}/.local/share/dotfiles/git-hooks"
+fi
 
 # Command Code: always launch via mise Node, not Homebrew Node 26 / bun global.
 link_path "${DOTPATH}/scripts/command-code-cmd" "${HOME}/.local/bin/cmd"
