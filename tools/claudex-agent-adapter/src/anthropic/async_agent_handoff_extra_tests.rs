@@ -467,6 +467,28 @@ async fn hands_control_back_when_no_session_owns_the_async_results() {
 }
 
 #[tokio::test]
+async fn hands_control_back_when_steering_user_message_follows_async_ack() {
+    let bridge = Bridge::new_with_backend(AgentBackend::spawn_routes(&[]), "main-model".to_owned());
+    let mut request = background_agent_request("background");
+    request.messages.push(json!({
+        "role":"user",
+        "content":[{
+            "type":"text",
+            "text":"The user sent a new message while you were working:\n優先して調査\n\nAddress the message above as you continue this turn."
+        }]
+    }));
+    let response = bridge
+        .async_agent_launch_handoff(&request)
+        .await
+        .expect("async ack before trailing steering must still hand control back");
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(body["stop_reason"], "end_turn");
+}
+
+#[tokio::test]
 async fn keeps_provider_open_when_thread_ensure_fails() {
     let backend = AgentBackend::spawn_routes(&[BackendRoute {
         model: "failed".to_owned(),

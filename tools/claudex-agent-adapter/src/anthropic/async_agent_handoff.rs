@@ -5,7 +5,7 @@ use serde_json::Value;
 
 use super::{
     Bridge, MessagesRequest,
-    content::{ToolResult, collect_tool_results},
+    content::{ToolResult, collect_turn_tool_results, trailing_user_messages},
     internal_notification,
 };
 const ASYNC_LAUNCH_PREFIX: &str = "Async agent launched successfully.";
@@ -25,8 +25,11 @@ impl Bridge {
         request: &MessagesRequest,
     ) -> Option<Response<Body>> {
         let round_tool_use_ids = latest_agent_tool_round_ids(request)?;
-        let message = request.messages.last()?;
-        let tool_use_ids = exact_async_launch_acknowledgement(message, &round_tool_use_ids)?;
+        // Ack may sit on an earlier trailing user message when Claude Code
+        // appends a text-only steering message after the tool_results.
+        let tool_use_ids = trailing_user_messages(&request.messages)
+            .iter()
+            .find_map(|message| exact_async_launch_acknowledgement(message, &round_tool_use_ids))?;
         // Claude Code's async launch acknowledgement is authoritative. Recorded
         // agent_efforts intents are optional telemetry only: SubAgent startup may
         // already have matched routing state, and public tool args may have
@@ -35,7 +38,7 @@ impl Bridge {
             .agent_efforts
             .background_launches(&tool_use_ids)
             .is_some();
-        let results = collect_tool_results(std::slice::from_ref(request.messages.last()?));
+        let results = collect_turn_tool_results(&request.messages);
         if !self
             .cancel_handed_off_provider_session(&results, &tool_use_ids)
             .await
