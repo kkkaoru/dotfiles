@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::Result;
 
@@ -15,6 +16,21 @@ use crate::anthropic::{
     model_concurrency::{ModelPermit, Ticket, is_concurrency_admission_timeout},
     request_routing::RouteDecision,
 };
+
+pub(in crate::anthropic::stream) fn prepare_first_activity_delay(
+    is_subagent: bool,
+    primed_thinking: bool,
+) -> Duration {
+    if primed_thinking {
+        // ZWSP already opened thinking; waiting 100–250ms before the first
+        // visible tip leaves SubAgent TUI on Nucleating/Frolicking.
+        Duration::ZERO
+    } else if is_subagent {
+        SUBAGENT_INITIAL_ACTIVITY_DELAY
+    } else {
+        INITIAL_ACTIVITY_DELAY
+    }
+}
 
 impl Bridge {
     pub(in crate::anthropic) async fn drive_prepared_subagent_stream(
@@ -43,11 +59,7 @@ impl Bridge {
         let start_status = (!primed_thinking)
             .then(|| subagent_start_status(is_subagent, &request.model, effort.as_deref()))
             .flatten();
-        let first_delay = if is_subagent {
-            SUBAGENT_INITIAL_ACTIVITY_DELAY
-        } else {
-            INITIAL_ACTIVITY_DELAY
-        };
+        let first_delay = prepare_first_activity_delay(is_subagent, primed_thinking);
         let interval = ACTIVITY_KEEPALIVE_INTERVAL;
         let prepare = async {
             let permit = self

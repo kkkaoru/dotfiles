@@ -550,6 +550,19 @@ fn assert_subagent_activity_and_silence_policy() {
         )
     );
     assert_eq!(
+        super::prepare::prepare_first_activity_delay(true, true),
+        Duration::ZERO,
+        "ZWSP-primed SubAgent must paint the first keepalive tip immediately"
+    );
+    assert_eq!(
+        super::prepare::prepare_first_activity_delay(true, false),
+        super::SUBAGENT_INITIAL_ACTIVITY_DELAY
+    );
+    assert_eq!(
+        super::prepare::prepare_first_activity_delay(false, false),
+        super::INITIAL_ACTIVITY_DELAY
+    );
+    assert_eq!(
         super::types::SUBAGENT_PROVIDER_SILENCE_JUDGMENT,
         Duration::from_secs(20 * 60)
     );
