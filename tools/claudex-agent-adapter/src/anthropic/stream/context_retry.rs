@@ -3,7 +3,6 @@ use std::ops::ControlFlow;
 use anyhow::Result;
 use axum::{body::Body, http::Response};
 
-use super::super::request_routing::RouteDecision;
 use super::super::usage_limit_failover::is_usage_limit_exceeded;
 use super::super::{ActiveTurn, Bridge, ContextRetry, content::anthropic_response};
 use super::Segment;
@@ -126,102 +125,10 @@ impl Bridge {
         self.retry_after_context_window(retry, &turn.session, turn.input_tokens)
             .await
     }
-
-    pub(super) async fn failover_usage_limit_turn(
-        &self,
-        mut turn: ActiveTurn,
-        error: anyhow::Error,
-    ) -> Result<UsageLimitOutcome> {
-        let exhausted_model = turn.session.model.clone();
-        self.note_provider_exhaustion(&error, Some(&exhausted_model));
-        let error_text = error.to_string();
-        let Some(retry) = turn.retry.take() else {
-            self.remove_session(&turn.session).await;
-            return Err(error);
-        };
-        let Some(failover) = self
-            .subagent_provider_failover_for(&exhausted_model)
-            .or_else(|| self.usage_limit_failover_for(&exhausted_model))
-        else {
-            self.remove_session(&turn.session).await;
-            return Err(error);
-        };
-        match failover.route {
-            RouteDecision::Provider => {
-                self.continue_on_sibling_provider(
-                    turn,
-                    retry,
-                    failover,
-                    exhausted_model,
-                    &error_text,
-                )
-                .await
-            }
-            RouteDecision::Subscription => {
-                self.failover_completed_to_subscription(
-                    turn,
-                    retry,
-                    failover,
-                    exhausted_model,
-                    &error_text,
-                )
-                .await
-            }
-        }
-    }
-
-    async fn continue_on_sibling_provider(
-        &self,
-        turn: ActiveTurn,
-        mut retry: ContextRetry,
-        failover: super::super::usage_limit_failover::UsageLimitFailover,
-        exhausted_model: String,
-        error_text: &str,
-    ) -> Result<UsageLimitOutcome> {
-        tracing::warn!(
-            error = %error_text,
-            exhausted_model = %exhausted_model,
-            failover_model = %failover.model,
-            "retrying completed turn on a sibling provider after provider exhaustion"
-        );
-        retry.request.model = failover.model;
-        if let Some(effort) = failover.effort {
-            retry.effort = Some(effort);
-        }
-        let input_tokens = turn.input_tokens;
-        let previous = std::sync::Arc::clone(&turn.session);
-        drop(turn);
-        Ok(UsageLimitOutcome::Continue(Box::new(
-            self.retry_after_context_window(retry, &previous, input_tokens)
-                .await?,
-        )))
-    }
-
-    async fn failover_completed_to_subscription(
-        &self,
-        turn: ActiveTurn,
-        retry: ContextRetry,
-        failover: super::super::usage_limit_failover::UsageLimitFailover,
-        exhausted_model: String,
-        error_text: &str,
-    ) -> Result<UsageLimitOutcome> {
-        tracing::warn!(
-            error = %error_text,
-            exhausted_model = %exhausted_model,
-            failover_model = %failover.model,
-            "failing over completed turn to subscription after usageLimitExceeded"
-        );
-        let mut request = retry.request;
-        request.model = failover.model;
-        let effort = failover.effort.or(retry.effort);
-        let tools_were_provided = !request.tools.is_empty();
-        self.remove_session(&turn.session).await;
-        Ok(UsageLimitOutcome::Response(Box::new(
-            self.subscription_messages(request, effort, false, tools_were_provided)
-                .await?,
-        )))
-    }
 }
+
+#[path = "context_retry_failover.rs"]
+mod failover;
 
 pub(super) enum UsageLimitOutcome {
     Continue(Box<ActiveTurn>),

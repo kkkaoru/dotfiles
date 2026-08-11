@@ -2,11 +2,10 @@ use std::collections::HashMap;
 
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
-use uuid::Uuid;
 
 use super::{SegmentBuilder, ToolCall};
-use crate::anthropic::stream::protocol::{StreamSender, send_tool_use};
-use crate::anthropic::{Bridge, Session, retention::record_pending_tool};
+use crate::anthropic::stream::protocol::StreamSender;
+use crate::anthropic::{Bridge, Session};
 
 #[derive(Clone, Copy)]
 pub(super) struct ExternalToolContext<'a> {
@@ -149,84 +148,7 @@ impl SegmentBuilder {
         self.emit_external_tool_use(context, original_name, call_id, request_id, arguments)
             .await
     }
-
-    async fn emit_external_tool_use(
-        &mut self,
-        context: ExternalToolContext<'_>,
-        original_name: &str,
-        call_id: String,
-        request_id: Value,
-        arguments: Value,
-    ) -> Result<()> {
-        let tool_use_id = format!("toolu_{}", Uuid::new_v4().simple());
-        let (intent_arguments, claude_arguments) =
-            crate::anthropic::agent_effort::prepare_arguments_for_user(
-                original_name,
-                &tool_use_id,
-                &arguments,
-                context.current_messages,
-                context.system,
-            );
-        if let Some(arguments) = intent_arguments.as_ref() {
-            context.bridge.agent_efforts.record_from_user_messages(
-                crate::anthropic::agent_effort::AgentEffortRecord {
-                    client_user_id: context.session.client_user_id.as_deref(),
-                    tool_name: original_name,
-                    tool_use_id: tool_use_id.clone(),
-                    parent_model: &context.session.model,
-                    arguments,
-                    user_messages: context.current_messages,
-                    system: context.system,
-                },
-                Some(context.bridge.model_catalog()),
-            );
-        }
-        tracing::debug!(%call_id, %tool_use_id, "mapped app-server tool call");
-        record_pending_tool(
-            context.session,
-            tool_use_id.clone(),
-            request_id,
-            std::time::Instant::now(),
-        )
-        .await;
-        self.report_subagent_action(original_name, &arguments, context.stream)
-            .await?;
-        self.prepare_blocks_for_external_tool(original_name, &call_id, context.stream)
-            .await?;
-        let block = json!({
-            "type": "tool_use",
-            "id": tool_use_id,
-            "name": original_name,
-            "input": claude_arguments
-        });
-        let index = self.blocks.len();
-        send_tool_use(context.stream, index, &block).await?;
-        self.blocks.push(block);
-        self.external_tool_calls += 1;
-        Ok(())
-    }
-
-    async fn prepare_blocks_for_external_tool(
-        &mut self,
-        original_name: &str,
-        call_id: &str,
-        stream: Option<&StreamSender>,
-    ) -> Result<()> {
-        if !self.is_subagent {
-            return self.close_open_blocks(stream).await;
-        }
-        // CC 2.1 SubAgent viewer paints one live thinking block and hides
-        // tool_use until end_turn. Keep thinking open and paint ▶ before the
-        // tool_use card. Do not flush pending_answer mid-turn — emitting
-        // text_delta while thinking is open makes ▶ Read flash then collapse
-        // to "Perambulating…". Answer text stays buffered until finish.
-        self.close_text_block(stream).await?;
-        if self.is_command_code_subagent() {
-            return Ok(());
-        }
-        self.provider_tool_calls
-            .push((call_id.to_owned(), original_name.to_owned()));
-        self.stream_progress_text(&format!("\n▶ {original_name}\n"), stream)
-            .await
-    }
 }
+
+#[path = "external_tool_emit.rs"]
+mod emit;

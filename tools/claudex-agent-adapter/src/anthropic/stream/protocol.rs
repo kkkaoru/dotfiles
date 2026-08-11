@@ -1,22 +1,12 @@
-use std::{
-    convert::Infallible,
-    future::Future,
-    pin::Pin,
-    task::{Context, Poll},
-    time::Duration,
-};
+use std::{convert::Infallible, time::Duration};
 
 use anyhow::Result;
 use axum::{
     body::{Body, Bytes},
-    http::{Response, StatusCode, header},
+    http::Response,
 };
 use serde_json::{Value, json};
-use tokio::{
-    sync::mpsc,
-    time::{Instant, Sleep, sleep},
-};
-use tokio_stream::Stream;
+use tokio::sync::mpsc;
 use uuid::Uuid;
 
 use super::super::{Segment, content::sse};
@@ -25,8 +15,8 @@ use super::super::{Segment, content::sse};
 // happy. They do NOT reset the ~300s decoded-event idle watchdog; that path
 // needs content_block_delta heartbeats from wait_for_stream_segment.
 // Keep raw-byte pings ahead of Claude Code's idle watchdog under load.
-const SSE_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(5);
-const SSE_KEEPALIVE_FRAME: &[u8] = b"event: ping\ndata: {\"type\":\"ping\"}\n\n";
+pub(super) const SSE_KEEPALIVE_INTERVAL: Duration = Duration::from_secs(5);
+pub(super) const SSE_KEEPALIVE_FRAME: &[u8] = b"event: ping\ndata: {\"type\":\"ping\"}\n\n";
 
 pub(in crate::anthropic) type StreamSender = mpsc::Sender<Result<Bytes, Infallible>>;
 
@@ -55,59 +45,11 @@ pub(in crate::anthropic) fn streaming_sse_response(
     streaming_sse_response_with_interval(receiver, SSE_KEEPALIVE_INTERVAL)
 }
 
-fn streaming_sse_response_with_interval(
-    receiver: mpsc::Receiver<Result<Bytes, Infallible>>,
-    interval: Duration,
-) -> Response<Body> {
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "text/event-stream")
-        .header(header::CACHE_CONTROL, "no-cache")
-        .header("x-accel-buffering", "no")
-        .body(Body::from_stream(KeepaliveStream::new(receiver, interval)))
-        .expect("valid streaming response")
-}
-
-struct KeepaliveStream {
-    receiver: mpsc::Receiver<Result<Bytes, Infallible>>,
-    interval: Duration,
-    deadline: Pin<Box<Sleep>>,
-}
-
-impl KeepaliveStream {
-    fn new(receiver: mpsc::Receiver<Result<Bytes, Infallible>>, interval: Duration) -> Self {
-        Self {
-            receiver,
-            interval,
-            deadline: Box::pin(sleep(interval)),
-        }
-    }
-
-    fn reset_deadline(&mut self) {
-        self.deadline.as_mut().reset(Instant::now() + self.interval);
-    }
-}
-
-impl Stream for KeepaliveStream {
-    type Item = Result<Bytes, Infallible>;
-
-    fn poll_next(self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<Option<Self::Item>> {
-        let stream = self.get_mut();
-        match stream.receiver.poll_recv(context) {
-            Poll::Ready(Some(frame)) => {
-                stream.reset_deadline();
-                return Poll::Ready(Some(frame));
-            }
-            Poll::Ready(None) => return Poll::Ready(None),
-            Poll::Pending => {}
-        }
-        if stream.deadline.as_mut().poll(context).is_ready() {
-            stream.reset_deadline();
-            return Poll::Ready(Some(Ok(Bytes::from_static(SSE_KEEPALIVE_FRAME))));
-        }
-        Poll::Pending
-    }
-}
+#[path = "protocol_keepalive.rs"]
+mod keepalive;
+use keepalive::streaming_sse_response_with_interval;
+#[cfg(test)]
+use keepalive::KeepaliveStream;
 
 pub(in crate::anthropic) async fn send_stream_completion(sender: &StreamSender, segment: &Segment) {
     let _ = send_stream_frame(Some(sender), "message_delta", || {
