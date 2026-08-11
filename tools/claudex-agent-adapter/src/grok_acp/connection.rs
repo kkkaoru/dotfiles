@@ -55,22 +55,35 @@ impl AcpProvider {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+pub(super) struct StartConnection<'a> {
+    pub(super) provider: AcpProvider,
+    pub(super) program: &'a OsString,
+    pub(super) arguments: Option<&'a [String]>,
+    pub(super) model: &'a str,
+    pub(super) effort: Option<&'a str>,
+    pub(super) cwd: &'a Path,
+    pub(super) events: Arc<ThreadEventDispatcher>,
+    pub(super) alive: Arc<AtomicBool>,
+}
+
 pub(super) async fn start(
-    provider: AcpProvider,
-    program: &OsString,
-    arguments: Option<&[String]>,
-    model: &str,
-    effort: Option<&str>,
-    cwd: &Path,
-    events: Arc<ThreadEventDispatcher>,
-    alive: Arc<AtomicBool>,
+    args: StartConnection<'_>,
 ) -> Result<(
     acp::ClientSideConnection,
     tokio::process::Child,
     oneshot::Receiver<()>,
     u32,
 )> {
+    let StartConnection {
+        provider,
+        program,
+        arguments,
+        model,
+        effort,
+        cwd,
+        events,
+        alive,
+    } = args;
     let command = build_provider_command(program, provider, arguments, model, effort)?;
     let (mut child, process_group) = spawn_provider_process(command, provider, cwd)?;
     let (connection, io_stopped_rx) =

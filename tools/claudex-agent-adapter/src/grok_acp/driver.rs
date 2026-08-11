@@ -102,16 +102,16 @@ pub(super) async fn drive_start_turns(
 }
 
 pub(super) async fn run_driver(setup: DriverSetup, mut commands: mpsc::Receiver<DriverCommand>) {
-    let started = connection::start(
-        setup.provider,
-        &setup.program,
-        setup.arguments.as_deref(),
-        &setup.model,
-        setup.effort.as_deref(),
-        &setup.cwd,
-        Arc::clone(&setup.events),
-        Arc::clone(&setup.alive),
-    )
+    let started = connection::start(connection::StartConnection {
+        provider: setup.provider,
+        program: &setup.program,
+        arguments: setup.arguments.as_deref(),
+        model: &setup.model,
+        effort: setup.effort.as_deref(),
+        cwd: &setup.cwd,
+        events: Arc::clone(&setup.events),
+        alive: Arc::clone(&setup.alive),
+    })
     .await;
     let Ok((connection, mut child, io_stopped, process_group)) = started else {
         let _ = setup.ready.send(started.map(|_| ()));
