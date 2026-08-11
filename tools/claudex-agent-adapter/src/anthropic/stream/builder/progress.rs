@@ -1,21 +1,21 @@
 //! Live provider progress for ACP tools that must not become `tool_use`.
 
 use anyhow::Result;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use super::SegmentBuilder;
-use super::progress_keepalive::{
-    compact_keepalive_title, is_adapter_tool_marker, keepalive_elapsed_chrome,
-    send_activity_heartbeat,
-};
+use super::progress_keepalive::is_adapter_tool_marker;
 use crate::anthropic::stream::{
-    protocol::{StreamSender, send_stream_frame},
+    protocol::StreamSender,
     sanitize::{
         compact_live_prose, is_bulk_tool_dump, is_canned_worker_filler, is_provider_status_line,
         latest_worker_status, strip_canned_preserving_structure, strip_worker_status_lines,
     },
     thinking::summary_delta,
 };
+
+#[path = "progress_activity.rs"]
+mod progress_activity;
 
 impl SegmentBuilder {
     /// Stream ACP tool progress as thinking chrome (not executable `tool_use`).
@@ -279,95 +279,4 @@ impl SegmentBuilder {
         self.bulk_dump_hinted = true;
         Some("… large tool output omitted\n".to_owned())
     }
-
-    async fn stream_answer_delta(
-        &mut self,
-        delta: &str,
-        stream: Option<&StreamSender>,
-    ) -> Result<()> {
-        if is_canned_worker_filler(delta) {
-            return Ok(());
-        }
-        self.note_provider_turn_activity();
-        self.thinking.close(&mut self.blocks, stream).await?;
-        let index = match &mut self.open_text_block {
-            Some((index, text)) => {
-                text.push_str(delta);
-                *index
-            }
-            None => self.start_text_block(delta, stream).await?,
-        };
-        send_stream_frame(stream, "content_block_delta", || {
-            json!({
-                "type":"content_block_delta", "index":index,
-                "delta":{"type":"text_delta","text":delta}
-            })
-        })
-        .await
-    }
-
-    pub(in crate::anthropic::stream) async fn subagent_start_status(
-        &mut self,
-        status: &str,
-        stream: Option<&StreamSender>,
-    ) -> Result<()> {
-        if self.is_command_code_subagent() {
-            return Ok(());
-        }
-        self.thinking
-            .activity_status(&mut self.blocks, status, stream)
-            .await
-    }
-
-    pub(in crate::anthropic::stream) async fn activity_keepalive(
-        &mut self,
-        stream: Option<&StreamSender>,
-    ) -> Result<()> {
-        if self.is_subagent {
-            return self.subagent_activity_keepalive(stream).await;
-        }
-        const HEARTBEAT: &str = "\u{200b}";
-        if let Some((index, _)) = self.open_text_block {
-            // Stream-only: do not mutate the committed text buffer.
-            return send_activity_heartbeat(stream, index, HEARTBEAT).await;
-        }
-        self.thinking
-            .activity_keepalive(&mut self.blocks, stream)
-            .await
-    }
-
-    async fn subagent_activity_keepalive(
-        &mut self,
-        stream: Option<&StreamSender>,
-    ) -> Result<()> {
-        let last_tool = self
-            .provider_tool_calls
-            .last()
-            .map(|(_, title)| compact_keepalive_title(title));
-        // Stream-only ZWSP keeps the decoded-event watchdog fed even when the
-        // tip text would otherwise be unchanged for a fraction of a second.
-        if self.thinking.is_open() {
-            self.thinking
-                .elapsed_keepalive(
-                    &self.blocks,
-                    self.turn_started_at.elapsed(),
-                    last_tool.as_deref(),
-                    stream,
-                )
-                .await?;
-        }
-        // Advancing clock keeps progress_status_keep_open from deduping the tip
-        // into stream-only ZWSP. CC 2.1 otherwise freezes on the first ▶ line
-        // for the whole Bash/CoT silence window.
-        let tip = keepalive_elapsed_chrome(last_tool.as_deref(), self.turn_started_at.elapsed());
-        if self.thinking.open_holds_collapsed_subagent_launch() {
-            self.thinking.close(&mut self.blocks, stream).await?;
-        }
-        self.thinking
-            .progress_status_keep_open(&mut self.blocks, &tip, stream)
-            .await?;
-        Ok(())
-    }
-
-
 }
