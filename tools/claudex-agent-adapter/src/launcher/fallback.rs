@@ -1,11 +1,9 @@
 use std::{
-    fs::{self, OpenOptions},
-    io::Write,
+    fs,
     net::{IpAddr, SocketAddr, TcpListener},
-    path::PathBuf,
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use super::{ServiceConfig, daemon_process, daemon_start, handover, health::wait_until_ready};
@@ -13,8 +11,11 @@ use super::{ServiceConfig, daemon_process, daemon_start, handover, health::wait_
 const STATE_PREFIX: &str = "fallback.";
 const STATE_SUFFIX: &str = ".json";
 
+mod state;
+use state::{read_state, state_path, write_state};
+
 #[derive(Debug, Deserialize, Serialize)]
-struct FallbackState {
+pub(super) struct FallbackState {
     listen: SocketAddr,
     build_id: String,
     service_config_fingerprint: String,
@@ -101,52 +102,6 @@ fn reserve_listener(configured: SocketAddr) -> Result<SocketAddr> {
         .context("read current-build fallback listener")
 }
 
-fn state_path(config: &ServiceConfig) -> Result<PathBuf> {
-    let parent = config
-        .log_path
-        .parent()
-        .context("adapter log has no parent")?;
-    Ok(parent.join(format!(
-        "{STATE_PREFIX}{}{}",
-        config.options.listen.port(),
-        STATE_SUFFIX
-    )))
-}
-
-fn read_state(path: &PathBuf) -> Result<Option<FallbackState>> {
-    if !path.exists() {
-        return Ok(None);
-    }
-    let state: FallbackState =
-        serde_json::from_slice(&fs::read(path).context("read current-build fallback state")?)
-            .context("decode current-build fallback state")?;
-    if !state.listen.ip().is_loopback() || state.listen.port() == 0 || state.pid == 0 {
-        bail!("invalid current-build fallback state");
-    }
-    Ok(Some(state))
-}
-
-fn write_state(path: &PathBuf, state: &FallbackState) -> Result<()> {
-    let temporary = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4().simple()));
-    let mut output = OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(&temporary)
-        .context("create current-build fallback state")?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&temporary, fs::Permissions::from_mode(0o600))
-            .context("secure current-build fallback state")?;
-    }
-    output
-        .write_all(&serde_json::to_vec(state).context("encode current-build fallback state")?)
-        .context("write current-build fallback state")?;
-    output
-        .sync_all()
-        .context("sync current-build fallback state")?;
-    fs::rename(&temporary, path).context("publish current-build fallback state")
-}
 
 #[cfg(test)]
 mod tests {

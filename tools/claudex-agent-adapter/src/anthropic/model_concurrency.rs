@@ -7,19 +7,29 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
+#[cfg(test)]
+use anyhow::anyhow;
 use serde::Serialize;
 use tokio::{
     sync::{OwnedSemaphorePermit, Semaphore},
-    time::{Instant, timeout},
+    time::Instant,
 };
+
+mod acquire;
+use acquire::{
+    acquire_interactive_permit, acquire_permit, admission_capacity,
+    model_concurrency_wait_timeout,
+};
+#[cfg(test)]
+use acquire::parse_wait_timeout;
 
 pub(super) const MODEL_CONCURRENCY_WAIT_TIMEOUT_ENV: &str =
     "CLAUDEX_MODEL_CONCURRENCY_WAIT_TIMEOUT_MS";
 /// Bound SubAgent admission waits so stacked workers fail over quickly instead
 /// of freezing the TUI for half a minute. Override with
 /// `CLAUDEX_MODEL_CONCURRENCY_WAIT_TIMEOUT_MS`.
-const DEFAULT_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
+pub(super) const DEFAULT_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct ModelConcurrencyStatus {
@@ -199,78 +209,6 @@ impl Ticket {
     }
 }
 
-async fn acquire_interactive_permit(
-    entry: &LimitedModel,
-    wait_timeout: Duration,
-    model: &str,
-) -> Result<OwnedSemaphorePermit> {
-    if wait_timeout.is_zero() {
-        return entry
-            .interactive
-            .clone()
-            .try_acquire_owned()
-            .or_else(|_| entry.slots.clone().try_acquire_owned())
-            .map_err(|_| anyhow!("model `{model}` concurrency semaphore is unavailable"));
-    }
-    timeout(wait_timeout, async {
-        tokio::select! {
-            permit = entry.interactive.clone().acquire_owned() => permit,
-            permit = entry.slots.clone().acquire_owned() => permit,
-        }
-    })
-    .await
-    .map_err(|_| {
-        anyhow!("model `{model}` concurrency model admission timed out after {wait_timeout:?}")
-    })?
-    .map_err(|_| anyhow!("model `{model}` concurrency semaphore is unavailable"))
-}
-
-async fn acquire_permit(
-    semaphore: Arc<Semaphore>,
-    wait_timeout: Duration,
-    stage: &str,
-    model: &str,
-) -> Result<OwnedSemaphorePermit> {
-    if wait_timeout.is_zero() {
-        semaphore
-            .try_acquire_owned()
-            .map_err(|_| anyhow!("model `{model}` concurrency semaphore is unavailable"))
-    } else {
-        timeout(wait_timeout, semaphore.acquire_owned())
-            .await
-            .map_err(|_| {
-                anyhow!(
-                    "model `{model}` concurrency {stage} admission timed out after {wait_timeout:?}"
-                )
-            })?
-            .map_err(|_| anyhow!("model `{model}` concurrency semaphore is unavailable"))
-    }
-}
-
-fn admission_capacity(limit: usize) -> usize {
-    limit
-        .saturating_mul(3)
-        .min(Semaphore::MAX_PERMITS)
-        .max(limit)
-}
-
-fn model_concurrency_wait_timeout() -> Duration {
-    parse_wait_timeout(
-        std::env::var(MODEL_CONCURRENCY_WAIT_TIMEOUT_ENV)
-            .ok()
-            .as_deref(),
-    )
-}
-
-fn parse_wait_timeout(value: Option<&str>) -> Duration {
-    let Some(value) = value else {
-        return DEFAULT_WAIT_TIMEOUT;
-    };
-    let Ok(milliseconds) = value.parse::<u64>() else {
-        return DEFAULT_WAIT_TIMEOUT;
-    };
-    Duration::from_millis(milliseconds)
-}
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
