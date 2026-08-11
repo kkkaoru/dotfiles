@@ -1,16 +1,20 @@
-use std::{convert::Infallible, future::pending, pin::Pin, process::ExitStatus, time::Duration};
+use std::{convert::Infallible, pin::Pin, process::ExitStatus};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use axum::body::Bytes;
 use tokio::{process::Child, sync::mpsc, task::JoinHandle, time::Sleep};
 
 use super::SubscriptionStream;
 use crate::anthropic::{
     subscription::{SubscriptionOptions, terminate_subscription_process_group},
-    subscription_stream::consume::reset_activity_deadline,
 };
 
-type StderrTask = JoinHandle<std::io::Result<Vec<u8>>>;
+pub(super) type StderrTask = JoinHandle<std::io::Result<Vec<u8>>>;
+
+#[path = "post_eof_reap.rs"]
+mod reap;
+use reap::{DrainReady, LeaderReady, cleanup_process_group, keepalive};
+pub(in crate::anthropic) use reap::{await_stderr, reap_stderr, take_stderr};
 
 pub(super) struct PostEofOutput {
     pub(super) status: ExitStatus,
@@ -119,80 +123,3 @@ async fn drain_stderr_after_exit(
     }
 }
 
-async fn cleanup_process_group(
-    child: &mut Child,
-    process_group: Option<u32>,
-    stderr_task: &mut Option<StderrTask>,
-    options: &SubscriptionOptions,
-) -> Result<()> {
-    let termination =
-        terminate_subscription_process_group(child, process_group, options.termination_timeout)
-            .await;
-    let stderr = reap_stderr(stderr_task, options.termination_timeout).await;
-    termination?;
-    stderr?;
-    Ok(())
-}
-
-pub(super) async fn reap_stderr(
-    task: &mut Option<StderrTask>,
-    timeout: Duration,
-) -> Result<Vec<u8>> {
-    let Some(mut task) = task.take() else {
-        return Ok(Vec::new());
-    };
-    match tokio::time::timeout(timeout, &mut task).await {
-        Ok(output) => output
-            .context("Claude stderr task failed")?
-            .map_err(Into::into),
-        Err(_) => {
-            task.abort();
-            let _ = task.await;
-            Ok(Vec::new())
-        }
-    }
-}
-
-pub(super) async fn await_stderr(
-    task: &mut Option<StderrTask>,
-) -> Result<std::io::Result<Vec<u8>>, tokio::task::JoinError> {
-    match task {
-        Some(task) => task.await,
-        None => pending().await,
-    }
-}
-
-pub(super) fn take_stderr(
-    task: &mut Option<StderrTask>,
-    output: Result<std::io::Result<Vec<u8>>, tokio::task::JoinError>,
-) -> Result<Vec<u8>> {
-    task.take();
-    output
-        .context("Claude stderr task failed")?
-        .map_err(Into::into)
-}
-
-async fn keepalive(
-    stream: &mut SubscriptionStream,
-    sender: &mpsc::Sender<Result<Bytes, Infallible>>,
-    activity_deadline: &mut Pin<Box<Sleep>>,
-    options: &SubscriptionOptions,
-) -> Result<()> {
-    stream.activity_keepalive(sender).await?;
-    reset_activity_deadline(activity_deadline, options.activity_keepalive_interval);
-    Ok(())
-}
-
-enum LeaderReady {
-    SenderClosed,
-    Status(std::io::Result<ExitStatus>),
-    Stderr(Result<std::io::Result<Vec<u8>>, tokio::task::JoinError>),
-    Activity,
-}
-
-enum DrainReady {
-    SenderClosed,
-    Stderr(Result<std::io::Result<Vec<u8>>, tokio::task::JoinError>),
-    GraceExpired,
-    Activity,
-}

@@ -7,12 +7,14 @@ use anyhow::{Context, Result, bail};
 
 use super::{AgentBackend, BackendKind, BackendRoute, WebSearchMode};
 
+mod backends;
 mod concurrency;
 mod resolve;
 mod shutdown;
 mod startup;
 mod query;
 
+pub use backends::RoutedBackends;
 use startup::{provider_startup, start_backend};
 
 pub(super) const MAX_DYNAMIC_ROUTES: usize = 32;
@@ -37,7 +39,7 @@ pub(super) enum StartupState {
 }
 
 impl RoutedBackend {
-    fn lazy(route: BackendRoute, startup: Arc<BackendStartup>) -> Self {
+    pub(super) fn lazy(route: BackendRoute, startup: Arc<BackendStartup>) -> Self {
         Self {
             model: route.model.clone(),
             kind: route.backend,
@@ -47,7 +49,7 @@ impl RoutedBackend {
         }
     }
 
-    fn ready(model: String, backend: Arc<AgentBackend>) -> Self {
+    pub(super) fn ready(model: String, backend: Arc<AgentBackend>) -> Self {
         let kind = backend.kind();
         let (sender, receiver) = tokio::sync::watch::channel(StartupState::Starting);
         sender.send_replace(StartupState::Ready(Ok(backend)));
@@ -147,48 +149,6 @@ impl RoutedBackend {
             StartupState::Starting => true,
             StartupState::Ready(Ok(backend)) => backend.is_alive(),
             StartupState::Ready(Err(_)) => false,
-        }
-    }
-}
-
-pub struct RoutedBackends {
-    configured: Vec<Arc<RoutedBackend>>,
-    dynamic: Mutex<Vec<Arc<RoutedBackend>>>,
-    codex_startup: Arc<BackendStartup>,
-}
-
-impl RoutedBackends {
-    pub(super) fn lazy(routes: &[BackendRoute]) -> Self {
-        let codex_startup = Arc::new(BackendStartup::default());
-        Self {
-            configured: routes
-                .iter()
-                .map(|route| {
-                    Arc::new(RoutedBackend::lazy(
-                        route.clone(),
-                        provider_startup(route.backend, &codex_startup),
-                    ))
-                })
-                .collect(),
-            dynamic: Mutex::new(Vec::new()),
-            codex_startup,
-        }
-    }
-
-    pub(super) fn ready(routes: Vec<(String, Arc<AgentBackend>)>) -> Self {
-        let configured = routes
-            .into_iter()
-            .map(|(model, backend)| Arc::new(RoutedBackend::ready(model, backend)))
-            .collect::<Vec<_>>();
-        let codex_startup = configured
-            .iter()
-            .find(|route| route.kind == BackendKind::CodexAppServer)
-            .map(|route| Arc::clone(&route.startup))
-            .unwrap_or_else(|| Arc::new(BackendStartup::default()));
-        Self {
-            configured,
-            dynamic: Mutex::new(Vec::new()),
-            codex_startup,
         }
     }
 }
