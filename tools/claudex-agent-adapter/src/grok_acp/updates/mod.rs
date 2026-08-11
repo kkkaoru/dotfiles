@@ -31,6 +31,9 @@ use tools::{
     dispatch_provider_tool_update_with_evidence,
 };
 
+mod message_thought;
+use message_thought::{dispatch_message, dispatch_thought};
+
 pub(super) const AGENT_MESSAGE_METHOD: &str = "item/agentMessage/delta";
 pub(super) const REASONING_METHOD: &str = "item/reasoning/summaryTextDelta";
 pub(super) const PROVIDER_TOOL_CALL: &str = "item/providerTool/call";
@@ -137,45 +140,6 @@ fn dispatch_extension_value(
         _ => {}
     }
 }
-
-fn dispatch_message(events: &ThreadEventDispatcher, session_id: &str, chunk: acp::ContentChunk) {
-    if let acp::ContentBlock::Text(text) = chunk.content {
-        dispatch_delta(
-            events,
-            session_id,
-            AGENT_MESSAGE_METHOD,
-            &format!("{session_id}:message"),
-            0,
-            &text.text,
-        );
-    }
-}
-
-fn dispatch_thought(
-    events: &ThreadEventDispatcher,
-    thoughts: &ThoughtUnits,
-    session_id: &str,
-    chunk: acp::ContentChunk,
-) {
-    let acp::ContentBlock::Text(text) = chunk.content else {
-        return;
-    };
-    if text.text.trim().is_empty() {
-        return;
-    }
-    let item_id = format!("{session_id}:reasoning");
-    for (summary_index, piece) in thoughts.partition(session_id, &text.text) {
-        dispatch_delta(
-            events,
-            session_id,
-            REASONING_METHOD,
-            &item_id,
-            summary_index,
-            &piece,
-        );
-    }
-}
-
 
 #[cfg(test)]
 mod tests;
