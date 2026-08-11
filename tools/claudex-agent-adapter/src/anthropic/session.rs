@@ -94,16 +94,16 @@ impl Bridge {
                 )
                 .await?;
         }
-        self.start_selected_turn(
+        self.start_selected_turn(session_turn::StartSelectedTurn {
             request,
             input_tokens,
             effort,
             selected,
             tool_results,
-            advisor_model.as_deref(),
-            collaborator_model.as_deref(),
-            true,
-        )
+            advisor_model: advisor_model.as_deref(),
+            collaborator_model: collaborator_model.as_deref(),
+            allow_context_retry: true,
+        })
         .await
     }
 
@@ -288,18 +288,10 @@ impl Bridge {
             .any(|session| Arc::ptr_eq(session, candidate))
     }
 
-    // Sequential locking preserves deterministic ownership when active and detached
-    // sessions race to report the same tool result.
-    #[allow(clippy::excessive_nesting)]
     pub(super) async fn find_result_session(&self, results: &[ToolResult]) -> Option<Arc<Session>> {
         let mut sessions = self.sessions.lock().await.clone();
         sessions.extend(self.detached_sessions.lock().await.iter().cloned());
-        for session in sessions {
-            if session_owns_results(&session, results).await {
-                return Some(session);
-            }
-        }
-        None
+        first_session_owning_results(sessions, results).await
     }
 
     async fn create_session(
@@ -383,6 +375,18 @@ impl Bridge {
         Ok(backend_submitted)
     }
 }
+async fn first_session_owning_results(
+    sessions: Vec<Arc<Session>>,
+    results: &[ToolResult],
+) -> Option<Arc<Session>> {
+    for session in sessions {
+        if session_owns_results(&session, results).await {
+            return Some(session);
+        }
+    }
+    None
+}
+
 async fn session_owns_results(session: &Session, results: &[ToolResult]) -> bool {
     let pending = session.pending_tools.lock().await;
     let consumed = session.consumed_tool_ids.lock().await;

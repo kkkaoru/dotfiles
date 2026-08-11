@@ -67,6 +67,7 @@ use crate::anthropic::{
     Bridge, MessagesRequest, SelectedSession, Session, content::ToolResult,
     subscription_request::subscription_request_prompt,
 };
+use super::session_turn::StartSelectedTurn;
 use crate::{
     agent_backend::{AcpLaunch, AgentBackend, BackendKind, BackendRoute},
     app_server::AppServer,
@@ -1887,21 +1888,21 @@ async fn removes_the_selected_session_when_turn_start_fails_immediately() {
     bridge.sessions.lock().await.push(Arc::clone(&session));
     let gate = Arc::clone(&session.gate).lock_owned().await;
     let result = bridge
-        .start_selected_turn(
-            &request(Value::Null, Vec::new()),
-            1,
-            None,
-            SelectedSession {
+        .start_selected_turn(StartSelectedTurn {
+            request: &request(Value::Null, Vec::new()),
+            input_tokens: 1,
+            effort: None,
+            selected: SelectedSession {
                 session,
                 existing_len: 0,
                 recovered: false,
                 gate,
             },
-            Vec::new(),
-            None,
-            None,
-            false,
-        )
+            tool_results: Vec::new(),
+            advisor_model: None,
+            collaborator_model: None,
+            allow_context_retry: false,
+        })
         .await;
     let error = match result {
         Ok(_) => panic!("stopped app-server should reject turn start"),
@@ -1927,21 +1928,21 @@ async fn starts_outer_turns_with_full_input_priority_and_retry() {
     let gate = Arc::clone(&session.gate).lock_owned().await;
 
     let turn = bridge
-        .start_selected_turn(
-            &request,
-            7,
-            None,
-            SelectedSession {
+        .start_selected_turn(StartSelectedTurn {
+            request: &request,
+            input_tokens: 7,
+            effort: None,
+            selected: SelectedSession {
                 session,
                 existing_len: 0,
                 recovered: false,
                 gate,
             },
-            Vec::new(),
-            None,
-            None,
-            true,
-        )
+            tool_results: Vec::new(),
+            advisor_model: None,
+            collaborator_model: None,
+            allow_context_retry: true,
+        })
         .await
         .expect("start outer turn");
     assert!(turn.retry.is_some());
@@ -1970,25 +1971,25 @@ async fn starts_recovered_tool_results_as_a_full_transcript() {
     let gate = Arc::clone(&session.gate).lock_owned().await;
 
     bridge
-        .start_selected_turn(
-            &request,
-            7,
-            None,
-            SelectedSession {
+        .start_selected_turn(StartSelectedTurn {
+            request: &request,
+            input_tokens: 7,
+            effort: None,
+            selected: SelectedSession {
                 session,
                 existing_len: 0,
                 recovered: true,
                 gate,
             },
-            vec![ToolResult {
+            tool_results: vec![ToolResult {
                 tool_use_id: "restored-tool".to_owned(),
                 content_items: Vec::new(),
                 is_error: false,
             }],
-            None,
-            None,
-            true,
-        )
+            advisor_model: None,
+            collaborator_model: None,
+            allow_context_retry: true,
+        })
         .await
         .expect("start recovered turn");
 
@@ -2023,25 +2024,25 @@ async fn starts_incremental_turn_for_a_replayed_tool_result() {
     let gate = Arc::clone(&session.gate).lock_owned().await;
 
     bridge
-        .start_selected_turn(
-            &request,
-            8,
-            Some("high".to_owned()),
-            SelectedSession {
+        .start_selected_turn(StartSelectedTurn {
+            request: &request,
+            input_tokens: 8,
+            effort: Some("high".to_owned()),
+            selected: SelectedSession {
                 session,
                 existing_len: 1,
                 recovered: false,
                 gate,
             },
-            vec![ToolResult {
+            tool_results: vec![ToolResult {
                 tool_use_id: "tool-1".to_owned(),
                 content_items: Vec::new(),
                 is_error: false,
             }],
-            None,
-            None,
-            false,
-        )
+            advisor_model: None,
+            collaborator_model: None,
+            allow_context_retry: false,
+        })
         .await
         .expect("start replay follow-up");
 
@@ -2075,25 +2076,25 @@ async fn submits_fresh_tool_results_without_starting_another_turn() {
     let gate = Arc::clone(&session.gate).lock_owned().await;
 
     bridge
-        .start_selected_turn(
-            &request,
-            9,
-            None,
-            SelectedSession {
+        .start_selected_turn(StartSelectedTurn {
+            request: &request,
+            input_tokens: 9,
+            effort: None,
+            selected: SelectedSession {
                 session,
                 existing_len: 1,
                 recovered: false,
                 gate,
             },
-            vec![ToolResult {
+            tool_results: vec![ToolResult {
                 tool_use_id: "tool-1".to_owned(),
                 content_items: vec![json!({"type":"text","text":"done"})],
                 is_error: false,
             }],
-            None,
-            None,
-            false,
-        )
+            advisor_model: None,
+            collaborator_model: None,
+            allow_context_retry: false,
+        })
         .await
         .expect("submit tool result");
 
@@ -2140,25 +2141,25 @@ async fn folds_mid_turn_user_steering_into_submitted_tool_results() {
     let gate = Arc::clone(&session.gate).lock_owned().await;
 
     bridge
-        .start_selected_turn(
-            &request,
-            9,
-            None,
-            SelectedSession {
+        .start_selected_turn(StartSelectedTurn {
+            request: &request,
+            input_tokens: 9,
+            effort: None,
+            selected: SelectedSession {
                 session,
                 existing_len: 2,
                 recovered: false,
                 gate,
             },
-            vec![ToolResult {
+            tool_results: vec![ToolResult {
                 tool_use_id: "tool-1".to_owned(),
                 content_items: vec![json!({"type":"inputText","text":"done"})],
                 is_error: false,
             }],
-            None,
-            None,
-            false,
-        )
+            advisor_model: None,
+            collaborator_model: None,
+            allow_context_retry: false,
+        })
         .await
         .expect("submit tool result with mid-turn steering");
 

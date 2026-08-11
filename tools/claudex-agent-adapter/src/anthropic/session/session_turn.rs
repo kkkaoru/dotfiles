@@ -20,21 +20,32 @@ pub(super) struct StartContextRetry<'a> {
     pub(super) has_tool_results: bool,
 }
 
+pub(super) struct StartSelectedTurn<'a> {
+    pub(super) request: &'a MessagesRequest,
+    pub(super) input_tokens: u64,
+    pub(super) effort: Option<String>,
+    pub(super) selected: SelectedSession,
+    pub(super) tool_results: Vec<ToolResult>,
+    pub(super) advisor_model: Option<&'a str>,
+    pub(super) collaborator_model: Option<&'a str>,
+    pub(super) allow_context_retry: bool,
+}
+
 impl Bridge {
-    // This method mirrors the complete session-turn state assembled by the
-    // request router; explicit fields keep ownership and retry context visible.
-    #[allow(clippy::too_many_arguments)]
     pub(super) async fn start_selected_turn(
         &self,
-        request: &MessagesRequest,
-        input_tokens: u64,
-        effort: Option<String>,
-        selected: SelectedSession,
-        mut tool_results: Vec<ToolResult>,
-        advisor_model: Option<&str>,
-        collaborator_model: Option<&str>,
-        allow_context_retry: bool,
+        args: StartSelectedTurn<'_>,
     ) -> Result<ActiveTurn> {
+        let StartSelectedTurn {
+            request,
+            input_tokens,
+            effort,
+            selected,
+            mut tool_results,
+            advisor_model,
+            collaborator_model,
+            allow_context_retry,
+        } = args;
         let existing_len = selected.existing_len;
         let extras = request.messages[existing_len..].to_vec();
         let has_tool_results = !tool_results.is_empty();
@@ -51,36 +62,22 @@ impl Bridge {
             self.settle_abandoned_pending_tools(&selected.session).await;
         }
         let events = Arc::new(self.app.subscribe_thread(&selected.session.thread_id));
-        let start = if tool_results.is_empty() || selected.recovered {
-            self.start_model_turn(
+        let turn_start = self
+            .kick_off_selected_turn(
                 request,
-                &selected.session,
+                &selected,
                 existing_len,
                 &extras,
                 effort.as_deref(),
+                tool_results,
             )
-            .await
-        } else if self
-            .submit_tool_results(&selected.session, tool_results)
-            .await?
-        {
-            Ok(())
-        } else {
-            self.start_model_turn(
-                request,
-                &selected.session,
-                existing_len,
-                &extras,
-                effort.as_deref(),
-            )
-            .await
-        };
+            .await;
         let (selected, extras, events) = self
             .recover_turn_start(
                 selected,
                 extras,
                 events,
-                start,
+                turn_start,
                 StartContextRetry {
                     request,
                     effort: effort.as_deref(),
@@ -107,6 +104,30 @@ impl Bridge {
             gate: selected.gate,
             detached: false,
         })
+    }
+
+    async fn kick_off_selected_turn(
+        &self,
+        request: &MessagesRequest,
+        selected: &SelectedSession,
+        existing_len: usize,
+        extras: &[Value],
+        effort: Option<&str>,
+        tool_results: Vec<ToolResult>,
+    ) -> Result<()> {
+        if tool_results.is_empty() || selected.recovered {
+            return self
+                .start_model_turn(request, &selected.session, existing_len, extras, effort)
+                .await;
+        }
+        if self
+            .submit_tool_results(&selected.session, tool_results)
+            .await?
+        {
+            return Ok(());
+        }
+        self.start_model_turn(request, &selected.session, existing_len, extras, effort)
+            .await
     }
 
     pub(super) async fn recover_turn_start(
@@ -215,21 +236,21 @@ impl Bridge {
         let gate = std::sync::Arc::clone(&session.gate).lock_owned().await;
         let detached = self.is_detached_session(previous).await;
         let mut turn = self
-            .start_selected_turn(
-                &retry.request,
+            .start_selected_turn(StartSelectedTurn {
+                request: &retry.request,
                 input_tokens,
                 effort,
-                SelectedSession {
+                selected: SelectedSession {
                     session,
                     existing_len: 0,
                     recovered: false,
                     gate,
                 },
-                Vec::new(),
-                advisor_model.as_deref(),
-                collaborator_model.as_deref(),
-                false,
-            )
+                tool_results: Vec::new(),
+                advisor_model: advisor_model.as_deref(),
+                collaborator_model: collaborator_model.as_deref(),
+                allow_context_retry: false,
+            })
             .await?;
         if detached {
             self.detach_session(&turn.session).await;
