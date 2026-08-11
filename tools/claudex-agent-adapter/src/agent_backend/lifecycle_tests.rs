@@ -95,6 +95,24 @@ async fn cancellation_and_abort_cover_each_leaf_and_routed_route() {
 }
 
 #[tokio::test]
+async fn session_scoped_cancel_abort_and_shutdown_reach_inner_routes() {
+    use crate::agent_backend::{BackendKind, BackendRoute};
+
+    let scoped = AgentBackend::spawn_routes(&[BackendRoute::new(
+        "worker",
+        BackendKind::ConfiguredAcp,
+    )]);
+    assert_eq!(
+        scoped.cancel_turn("0:session").await.unwrap(),
+        super::super::TurnCancellation::Settled
+    );
+    // Configured ACP is lazy — abort before the leaf is ready surfaces unavailable.
+    assert!(scoped.abort_turn_provider("0:session").await.is_err());
+    scoped.shutdown_leaf().await;
+    scoped.shutdown().await;
+}
+
+#[tokio::test]
 async fn leaf_backends_report_kind_and_omit_model_provider() {
     let copilot = AgentBackend::Copilot(crate::copilot_acp::CopilotAcp::settled_for_test().await);
     assert_eq!(

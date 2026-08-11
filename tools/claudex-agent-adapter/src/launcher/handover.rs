@@ -78,11 +78,6 @@ pub(super) async fn inspect_service_with(
                 tokio::time::sleep(delay).await;
             }
         }
-        // Under llvm-cov, auth probes can exhaust while the mock/daemon is still
-        // the matching generation; prefer Reuse over Replace/preflight flakes.
-        if cfg!(all(test, coverage_nightly)) && listener_is_bound(config) {
-            return ServiceState::Reuse;
-        }
     }
     if health.status == "ok" && health.has_active_work() {
         // Never tear down a generation that is still serving a request.
