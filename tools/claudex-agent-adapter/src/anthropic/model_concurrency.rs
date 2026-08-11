@@ -7,18 +7,14 @@ use std::{
     time::Duration,
 };
 
-use anyhow::Result;
 #[cfg(test)]
 use anyhow::anyhow;
 use serde::Serialize;
-use tokio::{
-    sync::{OwnedSemaphorePermit, Semaphore},
-    time::Instant,
-};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 mod acquire;
 use acquire::{
-    acquire_interactive_permit, acquire_permit, admission_capacity,
+    admission_capacity,
     model_concurrency_wait_timeout,
 };
 #[cfg(test)]
@@ -155,60 +151,7 @@ impl LimitedModel {
     }
 }
 
-impl Ticket {
-    #[cfg(test)]
-    pub(super) async fn acquire(self) -> Result<ModelPermit> {
-        self.acquire_with_timeout(model_concurrency_wait_timeout())
-            .await
-    }
-
-    pub(super) async fn acquire_for(self, interactive: bool) -> Result<ModelPermit> {
-        self.acquire_with_timeout_for(model_concurrency_wait_timeout(), interactive)
-            .await
-    }
-
-    #[cfg(test)]
-    async fn acquire_with_timeout(self, wait_timeout: Duration) -> Result<ModelPermit> {
-        self.acquire_with_timeout_for(wait_timeout, false).await
-    }
-
-    async fn acquire_with_timeout_for(
-        self,
-        wait_timeout: Duration,
-        interactive: bool,
-    ) -> Result<ModelPermit> {
-        let started = Instant::now();
-        let admission = acquire_permit(
-            Arc::clone(&self.entry.admission),
-            wait_timeout,
-            "admission",
-            &self.model,
-        )
-        .await?;
-        self.entry.queued.fetch_add(1, Ordering::Relaxed);
-        let queued = QueueGuard(&self.entry.queued);
-        let remaining = wait_timeout.saturating_sub(started.elapsed());
-        let permit = if interactive {
-            acquire_interactive_permit(&self.entry, remaining, &self.model).await?
-        } else {
-            acquire_permit(
-                Arc::clone(&self.entry.slots),
-                remaining,
-                "model",
-                &self.model,
-            )
-            .await?
-        };
-        drop(queued);
-        self.entry.active.fetch_add(1, Ordering::Relaxed);
-        Ok(ModelPermit {
-            _admission: admission,
-            _permit: permit,
-            entry: Arc::clone(&self.entry),
-        })
-    }
-}
-
+mod ticket;
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
