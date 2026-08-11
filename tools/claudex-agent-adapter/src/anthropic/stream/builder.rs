@@ -4,10 +4,7 @@ use anyhow::Result;
 use serde_json::{Value, json};
 
 use super::{ToolCall, error_flow, turn_flow};
-use crate::anthropic::{
-    Bridge, Segment, Session, Usage, WebEvidenceSummary,
-    content::{estimated_block_tokens, estimated_tokens},
-};
+use crate::anthropic::{Bridge, Segment, Session, Usage, WebEvidenceSummary};
 
 use super::{
     protocol::{StreamSender, send_stream_frame},
@@ -16,6 +13,7 @@ use super::{
 };
 
 mod batch;
+use batch::estimated_output_tokens;
 mod external_tool;
 mod external_tool_reject;
 mod progress;
@@ -369,13 +367,6 @@ impl SegmentBuilder {
     }
 }
 
-fn estimated_output_tokens(block: &Value) -> u64 {
-    let thinking = block
-        .get("thinking")
-        .and_then(Value::as_str)
-        .map_or(0, estimated_tokens);
-    estimated_block_tokens(block).saturating_add(thinking)
-}
 
 #[cfg(test)]
 // Coverage gates measure production behavior; this inline test is excluded.

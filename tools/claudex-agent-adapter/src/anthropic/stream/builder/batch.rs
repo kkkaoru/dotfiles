@@ -1,6 +1,8 @@
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
+use crate::anthropic::content::{estimated_block_tokens, estimated_tokens};
+
 use super::{SegmentBuilder, ToolCall};
 use crate::anthropic::stream::builder::external_tool::ExternalToolContext;
 
@@ -75,3 +77,12 @@ async fn dispatch_task(
         .external_tool_call(context, original_name, nested)
         .await
 }
+
+pub(super) fn estimated_output_tokens(block: &Value) -> u64 {
+    let thinking = block
+        .get("thinking")
+        .and_then(Value::as_str)
+        .map_or(0, estimated_tokens);
+    estimated_block_tokens(block).saturating_add(thinking)
+}
+

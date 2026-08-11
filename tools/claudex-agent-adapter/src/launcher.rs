@@ -2,7 +2,7 @@ use std::{
     collections::hash_map::DefaultHasher,
     ffi::OsString,
     hash::{Hash, Hasher},
-    io::{BufRead, BufReader, Write},
+    io::Write,
     net::SocketAddr,
     path::PathBuf,
     process::{Command, Stdio},
@@ -22,6 +22,8 @@ mod ensure;
 mod fallback;
 mod handover;
 mod health;
+mod process_io;
+use process_io::{exit_code, relay_filtered_io};
 mod live;
 mod promote;
 pub(crate) use live::{
@@ -338,39 +340,6 @@ fn relay_filtered(
     relay_filtered_io(&mut input, model, output)
 }
 
-fn relay_filtered_io(
-    input: &mut dyn std::io::Read,
-    model: &str,
-    output: &mut dyn Write,
-) -> Result<()> {
-    let advisor_warning = format!("Advisor disabled — base model '{model}' has no advisor rank");
-    let connector_warning = "claude.ai connectors are disabled because";
-    let mut reader = BufReader::new(input);
-    let mut line = Vec::new();
-    while reader.read_until(b'\n', &mut line)? > 0 {
-        let text = String::from_utf8_lossy(&line);
-        if !text.contains(&advisor_warning) && !text.contains(connector_warning) {
-            output.write_all(&line)?;
-            output.flush()?;
-        }
-        line.clear();
-    }
-    Ok(())
-}
-
-fn exit_code(status: std::process::ExitStatus) -> i32 {
-    status.code().unwrap_or_else(|| {
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::ExitStatusExt;
-            status.signal().map_or(1, |signal| 128 + signal)
-        }
-        #[cfg(not(unix))]
-        {
-            1
-        }
-    })
-}
 
 #[cfg(test)]
 use health::wait_until_ready_with;
