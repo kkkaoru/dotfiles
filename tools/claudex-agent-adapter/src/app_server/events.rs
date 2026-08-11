@@ -15,6 +15,8 @@ use self::event_shape::{coalescible_suffix, event_thread_id, is_bridge_event, is
 
 mod encoding;
 mod event_shape;
+mod unsubscribe;
+use unsubscribe::unsubscribe;
 
 const MAX_QUEUED_EVENTS: usize = 256;
 const MAX_QUEUED_BYTES: usize = 1024 * 1024;
@@ -23,16 +25,16 @@ const MAX_QUEUED_BYTES: usize = 1024 * 1024;
 const MAX_COALESCED_DELTA_CHARS: usize = 96;
 
 type Subscribers = Vec<(u64, Arc<EventQueue>)>;
-type Registry = HashMap<String, ThreadRoute>;
+pub(super) type Registry = HashMap<String, ThreadRoute>;
 
 #[derive(Default)]
-struct ThreadRoute {
+pub(super) struct ThreadRoute {
     subscribers: Subscribers,
     backlog: QueueState,
 }
 
 #[derive(Default)]
-struct QueueState {
+pub(super) struct QueueState {
     events: VecDeque<QueuedEvent>,
     queued_bytes: usize,
     closed: bool,
@@ -47,8 +49,8 @@ struct QueuedEvent {
 }
 
 #[derive(Default)]
-struct EventQueue {
-    state: Mutex<QueueState>,
+pub(super) struct EventQueue {
+    pub(super) state: Mutex<QueueState>,
     ready: Notify,
 }
 
@@ -210,7 +212,7 @@ impl QueueState {
         self.overflowed = true;
     }
 
-    fn take_requeueable_backlog(&mut self) -> Self {
+    pub(super) fn take_requeueable_backlog(&mut self) -> Self {
         if self.terminal_seen {
             self.events.clear();
             self.queued_bytes = 0;
@@ -349,32 +351,6 @@ impl Drop for ThreadEvents {
     }
 }
 
-fn unsubscribe(channels: &mut Registry, thread_id: &str, channel_id: u64, queue: &EventQueue) {
-    let remove_route = match channels.get_mut(thread_id) {
-        Some(route) => requeue_if_last_subscriber(route, channel_id, queue),
-        None => false,
-    };
-    if remove_route {
-        channels.remove(thread_id);
-    }
-}
-
-fn requeue_if_last_subscriber(
-    route: &mut ThreadRoute,
-    channel_id: u64,
-    queue: &EventQueue,
-) -> bool {
-    route
-        .subscribers
-        .retain(|(registered_id, _)| *registered_id != channel_id);
-    if !route.subscribers.is_empty() {
-        return false;
-    }
-    let mut state = queue.state.lock().expect("thread event queue poisoned");
-    debug_assert!(route.backlog.events.is_empty());
-    route.backlog = state.take_requeueable_backlog();
-    route.backlog.events.is_empty()
-}
 
 #[cfg(test)]
 // Coverage gates measure production code; test implementations are excluded.

@@ -5,14 +5,13 @@ use std::{
 };
 
 use anyhow::{Result, bail};
-use serde_json::{Value, json};
+use serde_json::Value;
 use tokio::sync::Mutex;
 
 use super::{
     ActiveTurn, Bridge, MessagesRequest, SelectedSession, Session,
     content::{
-        ToolResult, collect_turn_tool_results, request_signature, take_pending_results,
-        transcript_owns_tool_results,
+        ToolResult, collect_turn_tool_results, request_signature, transcript_owns_tool_results,
     },
 };
 use crate::app_server::response_thread_id;
@@ -26,11 +25,14 @@ pub(super) mod reservation;
 mod reservation;
 mod session_turn;
 mod tools;
+mod results;
 use helpers::{
     candidate_length, first_session_owning_results, is_better_length,
-    is_idempotent_task_lifecycle_error, should_preempt_for_context_limit, touch_session,
-    validate_tool_result_ownership,
+    should_preempt_for_context_limit, touch_session, validate_tool_result_ownership,
 };
+#[cfg(test)]
+#[allow(unused_imports)]
+use helpers::is_idempotent_task_lifecycle_error;
 pub(in crate::anthropic) use session_turn::is_context_window_exceeded;
 pub(in crate::anthropic) use tools::is_main_session_only_tool;
 #[cfg(test)]
@@ -337,44 +339,7 @@ impl Bridge {
         Ok(session)
     }
 
-    async fn acquire_session_slot(&self) -> Result<tokio::sync::OwnedSemaphorePermit> {
-        if let Ok(slot) = Arc::clone(&self.session_slots).try_acquire_owned() {
-            return Ok(slot);
-        }
-        self.evict_oldest_idle_session().await;
-        match Arc::clone(&self.session_slots).try_acquire_owned() {
-            Ok(slot) => Ok(slot),
-            Err(_) => bail!("claudex session capacity ({}) is busy", super::MAX_SESSIONS),
-        }
-    }
 
-    async fn submit_tool_results(
-        &self,
-        session: &Session,
-        results: Vec<ToolResult>,
-    ) -> Result<bool> {
-        let (responses, completed_ids) = take_pending_results(session, results).await?;
-        self.agent_efforts
-            .remove_tool_results(completed_ids.iter().map(String::as_str));
-        // ACP-bridged Agent/Task has no app-server request; continue via transcript.
-        let mut backend_submitted = false;
-        let responses = responses.into_iter().filter(|(id, _)| {
-            !crate::anthropic::stream::acp_tool_bridge::is_acp_bridge_request_id(id)
-        });
-        for (id, result) in responses {
-            let success =
-                !result.is_error || is_idempotent_task_lifecycle_error(&result.content_items);
-            self.app
-                .respond_for_model(
-                    &session.model,
-                    id,
-                    json!({"contentItems": result.content_items, "success": success}),
-                )
-                .await?;
-            backend_submitted = true;
-        }
-        Ok(backend_submitted)
-    }
 }
 
 #[cfg(test)]
