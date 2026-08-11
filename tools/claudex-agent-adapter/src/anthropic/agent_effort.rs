@@ -5,13 +5,16 @@ use serde_json::Value;
 mod background_launch;
 mod model;
 mod names;
+mod prepare;
 mod terminal;
 pub(in crate::anthropic) use super::agent_route_validation::BLOCKED_SUBAGENT_NOTICE;
 #[cfg(test)]
 pub(super) use super::agent_route_validation::validate_routed_agent_arguments;
 pub(super) use super::agent_route_validation::validate_routed_agent_arguments_with_catalog;
 pub(super) use model::{disabled_subagent_model, is_agent_tool, requested_model};
-use names::active_user_supplied_name;
+#[cfg(test)]
+pub(in crate::anthropic) use prepare::prepare_arguments;
+pub(in crate::anthropic) use prepare::prepare_arguments_for_user;
 use terminal::terminal_task_notification_ids;
 
 pub(super) use super::AgentEffortRecord;
@@ -27,9 +30,9 @@ use super::{
 
 pub(super) const INTENT_TTL: std::time::Duration = std::time::Duration::from_secs(10 * 60);
 pub(super) const MAX_PENDING_INTENTS: usize = 1_024;
-const ADAPTER_EFFORT: &str = "claudex_effort";
-const ADAPTER_MODEL: &str = "claudex_model";
-const IMPLICIT_MODEL: &str = "claudex_implicit_model";
+pub(super) const ADAPTER_EFFORT: &str = "claudex_effort";
+pub(super) const ADAPTER_MODEL: &str = "claudex_model";
+pub(super) const IMPLICIT_MODEL: &str = "claudex_implicit_model";
 #[derive(Clone)]
 pub(super) struct AgentEffortIntent {
     pub(super) client_user_id: Option<String>,
@@ -266,88 +269,11 @@ fn retain_terminal_intent(
         || client_user_id.is_some_and(|id| intent.client_user_id.as_deref() != Some(id))
 }
 
-fn agent_prompt<'a>(tool_name: &str, arguments: &'a Value) -> Option<&'a str> {
+pub(super) fn agent_prompt<'a>(tool_name: &str, arguments: &'a Value) -> Option<&'a str> {
     is_agent_tool(tool_name)
         .then(|| arguments.get("prompt").and_then(Value::as_str))
         .flatten()
 }
-#[cfg(test)]
-pub(super) fn prepare_arguments(
-    tool_name: &str,
-    tool_use_id: &str,
-    arguments: &Value,
-) -> (Option<Value>, Value) {
-    prepare_arguments_for_user(
-        tool_name,
-        tool_use_id,
-        arguments,
-        &[],
-        &serde_json::json!(null),
-    )
-}
-
-pub(super) fn prepare_arguments_for_user(
-    tool_name: &str,
-    tool_use_id: &str,
-    arguments: &Value,
-    user_messages: &[Value],
-    _system: &Value,
-) -> (Option<Value>, Value) {
-    let mut correlated = arguments.clone();
-    let Some(prompt) = agent_prompt(tool_name, arguments) else {
-        let mut public = correlated.clone();
-        return (
-            None,
-            sanitize_public_tool_arguments(tool_name, &mut public, user_messages),
-        );
-    };
-    super::agent_routing::hydrate_routing_fields(&mut correlated);
-    correlated["prompt"] = Value::String(super::agent_effort_matching::correlated_prompt(
-        prompt,
-        tool_use_id,
-        requested_model(arguments),
-    ));
-    let mut public_arguments = correlated.clone();
-    let mut claude_arguments =
-        sanitize_public_tool_arguments(tool_name, &mut public_arguments, user_messages);
-    let public = claude_arguments
-        .as_object_mut()
-        .expect("Agent arguments must be an object");
-    public.remove("model");
-    if public
-        .get("name")
-        .and_then(Value::as_str)
-        .is_some_and(|name| !active_user_supplied_name(user_messages, name))
-    {
-        public.remove("name");
-    }
-    (Some(correlated), claude_arguments)
-}
-
-fn sanitize_public_tool_arguments(
-    tool_name: &str,
-    arguments: &mut Value,
-    user_messages: &[Value],
-) -> Value {
-    let Some(public) = arguments.as_object_mut() else {
-        return arguments.clone();
-    };
-    public.remove(ADAPTER_EFFORT);
-    public.remove(ADAPTER_MODEL);
-    public.remove(IMPLICIT_MODEL);
-    if is_agent_tool(tool_name) {
-        public.remove("model");
-        public.insert(
-            "run_in_background".to_owned(),
-            Value::Bool(background_launch::agent_launch_is_background(
-                tool_name,
-                user_messages,
-            )),
-        );
-    }
-    arguments.clone()
-}
-
 
 #[cfg(test)]
 fn tool_schema(_tool_name: &str, schema: Value) -> Value {

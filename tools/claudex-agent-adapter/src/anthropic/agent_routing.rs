@@ -4,13 +4,16 @@ use super::request_routing::official_claude_haiku_model;
 use super::subscription::valid_effort;
 
 mod explicit;
+mod summary;
 mod texts;
 use explicit::explicit_model_matches_agent;
-use texts::{message_texts, routing_summary, user_message_texts, value_texts};
+use summary::{advisor_launch_disabled, configured_advisor_model_matches};
+pub(in crate::anthropic) use summary::active_routing_summary;
+use texts::user_message_texts;
 
 const ADAPTER_EFFORT: &str = "claudex_effort";
-const ADAPTER_MODEL: &str = "claudex_model";
-const IMPLICIT_MODEL: &str = "claudex_implicit_model";
+pub(super) const ADAPTER_MODEL: &str = "claudex_model";
+pub(super) const IMPLICIT_MODEL: &str = "claudex_implicit_model";
 
 pub(super) fn hydrate_routing_fields(arguments: &mut Value) {
     // Only explicit claudex_model fields / prompt headers are trusted. Do not infer from the
@@ -277,87 +280,6 @@ fn selected_worker_model_matches(
         .is_some_and(|(selected, _)| selected == model)
 }
 
-fn advisor_launch_disabled(arguments: &Value, messages: &[Value], system: &Value) -> bool {
-    let Some(agent) = arguments.get("subagent_type").and_then(Value::as_str) else {
-        return false;
-    };
-    active_routing_summary(messages, system).is_some_and(|summary| {
-        summary
-            .get("custom_advisor_enabled")
-            .and_then(Value::as_bool)
-            .is_some_and(|enabled| {
-                !enabled
-                    && summary
-                        .get("advisor")
-                        .and_then(|advisor| advisor.get("agent"))
-                        .and_then(Value::as_str)
-                        == Some(agent)
-            })
-    })
-}
-
-fn configured_advisor_model_matches(
-    arguments: &Value,
-    messages: &[Value],
-    system: &Value,
-    model: &str,
-) -> bool {
-    let Some(agent) = arguments.get("subagent_type").and_then(Value::as_str) else {
-        return false;
-    };
-    active_routing_summary(messages, system).is_some_and(|summary| {
-        summary
-            .get("custom_advisor_enabled")
-            .and_then(Value::as_bool)
-            .unwrap_or(true)
-            && summary.get("advisor").is_some_and(|advisor| {
-                advisor.get("agent").and_then(Value::as_str) == Some(agent)
-                    && advisor.get("model").and_then(Value::as_str) == Some(model)
-            })
-    })
-}
-
-pub(super) fn active_routing_summary(messages: &[Value], system: &Value) -> Option<Value> {
-    // The hook normally places the current snapshot in a user message, but Claude Code can
-    // retain it in an assistant/tool transcript after compaction or a resumed turn. Prefer the
-    // request-level system snapshot, then the latest user snapshot, and finally any transcript
-    // snapshot so an otherwise valid routed worker is not rejected after context reshaping.
-    value_texts(system)
-        .filter_map(routing_summary)
-        .last()
-        .or_else(|| {
-            user_message_texts(messages)
-                .filter_map(routing_summary)
-                .last()
-        })
-        .or_else(|| message_texts(messages).filter_map(routing_summary).last())
-}
-
-
 #[cfg(test)]
-mod tests {
-    use super::{ADAPTER_MODEL, IMPLICIT_MODEL, hydrate_standard_agent_to_parent};
-
-    #[test]
-    fn standard_agent_without_type_does_not_inherit_parent_model() {
-        let mut arguments = serde_json::json!({"prompt": "inspect the current state"});
-
-        hydrate_standard_agent_to_parent(&mut arguments, "gpt-5.6-luna");
-
-        assert!(arguments.get(ADAPTER_MODEL).is_none());
-        assert!(arguments.get(IMPLICIT_MODEL).is_none());
-    }
-
-    #[test]
-    fn configured_worker_type_without_model_is_not_guessed() {
-        let mut arguments = serde_json::json!({
-            "subagent_type": "claudex-gpt",
-            "prompt": "inspect the current state"
-        });
-
-        hydrate_standard_agent_to_parent(&mut arguments, "gpt-5.6-luna");
-
-        assert!(arguments.get(ADAPTER_MODEL).is_none());
-        assert!(arguments.get(IMPLICIT_MODEL).is_none());
-    }
-}
+#[path = "agent_routing_tests.rs"]
+mod tests;
