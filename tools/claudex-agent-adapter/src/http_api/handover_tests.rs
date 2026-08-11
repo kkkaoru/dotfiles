@@ -435,6 +435,64 @@ async fn proxy_middleware_serves_locally_when_retained_session_is_idle() {
 }
 
 #[tokio::test]
+async fn proxy_middleware_serves_locally_when_busy_list_is_stale_without_work() {
+    // Retained /health can still list a session in busy_claude_session_ids after
+    // the turn drained (active_* counters are zero). Sticky must not keep
+    // proxying that quiet generation.
+    let upstream = serve_stale_busy_retained_generation(&["session-a"]).await;
+    let root = tempfile::tempdir().expect("stale busy fixture");
+    let path = root.path().join("retained.json");
+    std::fs::write(
+        &path,
+        format!(
+            r#"{{"listen":"{upstream}","pid":1,"build_id":"old","session_ids":["session-a"]}}"#
+        ),
+    )
+    .expect("write retained");
+    let cache = tempfile::tempdir().expect("advertised cache");
+    let (advertised, _rx) = ListenHandover::new(
+        "127.0.0.1:8318".parse().unwrap(),
+        cache.path().to_path_buf(),
+    );
+    let state = Some(HandoverState {
+        retained: Some(Arc::new(retained(
+            &path,
+            &upstream.to_string(),
+            &["session-a"],
+        ))),
+        advertised: Some(advertised),
+        client: proxy_http_client(),
+    });
+    let app = Router::new()
+        .route("/v1/messages", post(|| async { "live-after-stale-busy" }))
+        .layer(middleware::from_fn_with_state(
+            state,
+            proxy_retained_sessions,
+        ));
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("stale busy listener");
+    let addr = listener.local_addr().expect("stale busy address");
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.ok();
+    });
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let response = reqwest::Client::new()
+        .post(format!("http://{addr}/v1/messages"))
+        .header("x-claude-code-session-id", "session-a")
+        .body("{}")
+        .send()
+        .await
+        .expect("sticky after stale busy");
+    assert_eq!(
+        response.text().await.expect("live body"),
+        "live-after-stale-busy",
+        "stale busy_claude_session_ids without active work must fall through"
+    );
+    assert!(!path.exists(), "stale busy retained snapshot must be cleared");
+}
+
+#[tokio::test]
 async fn rebound_daemon_forwards_idle_keepalive_to_canonical() {
     // Old failure: after live-update rebind, Claude Code keep-alive stayed on
     // the old binary. Cursor SubAgent /v1/messages then never reached :8318.
@@ -903,37 +961,60 @@ async fn serve_retained_generation(
         .expect("retained upstream listener");
     let listen = listener.local_addr().expect("retained upstream address");
     let sessions = serde_json::to_string(busy_sessions).expect("busy sessions json");
-    tokio::spawn(async move {
-        loop {
-            let Ok((mut stream, _)) = listener.accept().await else {
-                break;
-            };
-            let mut buf = vec![0; 4096];
-            let n = stream.read(&mut buf).await.unwrap_or(0);
-            let request = String::from_utf8_lossy(&buf[..n]);
-            let (status_line, payload) = if request.starts_with("GET /health") {
-                let payload = format!(
-                    concat!(
-                        r#"{{"status":"ok","pid":1,"protocol_version":1,"build_id":"old","#,
-                        r#""subscription_max_processes":20,"subscription_timeout_minutes":120,"#,
-                        r#""active_http_requests":1,"active_provider_turns":1,"#,
-                        r#""busy_claude_session_ids":{sessions},"active_claude_session_ids":{sessions}}}"#
-                    ),
-                    sessions = sessions
-                );
-                ("HTTP/1.1 200 OK", payload.into_bytes())
-            } else {
-                ("HTTP/1.1 200 OK", body.to_vec())
-            };
-            let header = format!(
-                "{status_line}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                payload.len()
-            );
-            let _ = stream.write_all(header.as_bytes()).await;
-            let _ = stream.write_all(&payload).await;
-        }
-    });
+    tokio::spawn(run_retained_accept_loop(listener, sessions, body));
     listen
+}
+
+async fn run_retained_accept_loop(
+    listener: TcpListener,
+    sessions: String,
+    body: &'static [u8],
+) {
+    while let Some(mut stream) = accept_stream(&listener).await {
+        respond_retained_request(&mut stream, &sessions, body).await;
+    }
+}
+
+async fn accept_stream(listener: &TcpListener) -> Option<tokio::net::TcpStream> {
+    listener.accept().await.ok().map(|(stream, _)| stream)
+}
+
+async fn respond_retained_request(
+    stream: &mut tokio::net::TcpStream,
+    sessions: &str,
+    body: &[u8],
+) {
+    let mut buf = vec![0; 4096];
+    let n = stream.read(&mut buf).await.unwrap_or(0);
+    let request = String::from_utf8_lossy(&buf[..n]);
+    let (status_line, payload) = retained_response_for(&request, sessions, body);
+    write_http_response(stream, status_line, &payload).await;
+}
+
+fn retained_response_for(request: &str, sessions: &str, body: &[u8]) -> (&'static str, Vec<u8>) {
+    if request.starts_with("GET /health") {
+        let payload = format!(
+            concat!(
+                r#"{{"status":"ok","pid":1,"protocol_version":1,"build_id":"old","#,
+                r#""subscription_max_processes":20,"subscription_timeout_minutes":120,"#,
+                r#""active_http_requests":1,"active_provider_turns":1,"#,
+                r#""busy_claude_session_ids":{sessions},"active_claude_session_ids":{sessions}}}"#
+            ),
+            sessions = sessions
+        );
+        ("HTTP/1.1 200 OK", payload.into_bytes())
+    } else {
+        ("HTTP/1.1 200 OK", body.to_vec())
+    }
+}
+
+async fn write_http_response(stream: &mut tokio::net::TcpStream, status_line: &str, payload: &[u8]) {
+    let header = format!(
+        "{status_line}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        payload.len()
+    );
+    let _ = stream.write_all(header.as_bytes()).await;
+    let _ = stream.write_all(payload).await;
 }
 
 async fn serve_idle_retained_generation() -> SocketAddr {
@@ -941,34 +1022,71 @@ async fn serve_idle_retained_generation() -> SocketAddr {
         .await
         .expect("idle retained listener");
     let listen = listener.local_addr().expect("idle retained address");
-    tokio::spawn(async move {
-        loop {
-            let Ok((mut stream, _)) = listener.accept().await else {
-                break;
-            };
-            let mut buf = vec![0; 4096];
-            let n = stream.read(&mut buf).await.unwrap_or(0);
-            let request = String::from_utf8_lossy(&buf[..n]);
-            if !request.starts_with("GET /health") {
-                let header = "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-                let _ = stream.write_all(header.as_bytes()).await;
-                continue;
-            }
-            let payload = concat!(
-                r#"{"status":"ok","pid":1,"protocol_version":1,"build_id":"old","#,
-                r#""subscription_max_processes":20,"subscription_timeout_minutes":120,"#,
-                r#""active_http_requests":0,"active_provider_turns":0,"#,
-                r#""busy_claude_session_ids":[],"active_claude_session_ids":[]}"#
-            );
-            let header = format!(
-                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                payload.len()
-            );
-            let _ = stream.write_all(header.as_bytes()).await;
-            let _ = stream.write_all(payload.as_bytes()).await;
-        }
-    });
+    tokio::spawn(run_idle_retained_accept_loop(listener));
     listen
+}
+
+async fn run_idle_retained_accept_loop(listener: TcpListener) {
+    while let Some(mut stream) = accept_stream(&listener).await {
+        respond_idle_retained_request(&mut stream).await;
+    }
+}
+
+async fn respond_idle_retained_request(stream: &mut tokio::net::TcpStream) {
+    let mut buf = vec![0; 4096];
+    let n = stream.read(&mut buf).await.unwrap_or(0);
+    let request = String::from_utf8_lossy(&buf[..n]);
+    if !request.starts_with("GET /health") {
+        let header = "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        let _ = stream.write_all(header.as_bytes()).await;
+        return;
+    }
+    let payload = concat!(
+        r#"{"status":"ok","pid":1,"protocol_version":1,"build_id":"old","#,
+        r#""subscription_max_processes":20,"subscription_timeout_minutes":120,"#,
+        r#""active_http_requests":0,"active_provider_turns":0,"#,
+        r#""busy_claude_session_ids":[],"active_claude_session_ids":[]}"#
+    );
+    write_http_response(stream, "HTTP/1.1 200 OK", payload.as_bytes()).await;
+}
+
+async fn serve_stale_busy_retained_generation(
+    busy_sessions: &'static [&'static str],
+) -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("stale busy retained listener");
+    let listen = listener.local_addr().expect("stale busy retained address");
+    let sessions = serde_json::to_string(busy_sessions).expect("busy sessions json");
+    tokio::spawn(run_stale_busy_retained_accept_loop(listener, sessions));
+    listen
+}
+
+async fn run_stale_busy_retained_accept_loop(listener: TcpListener, sessions: String) {
+    while let Some(mut stream) = accept_stream(&listener).await {
+        respond_stale_busy_retained_request(&mut stream, &sessions).await;
+    }
+}
+
+async fn respond_stale_busy_retained_request(stream: &mut tokio::net::TcpStream, sessions: &str) {
+    let mut buf = vec![0; 4096];
+    let n = stream.read(&mut buf).await.unwrap_or(0);
+    let request = String::from_utf8_lossy(&buf[..n]);
+    if !request.starts_with("GET /health") {
+        let header = "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        let _ = stream.write_all(header.as_bytes()).await;
+        return;
+    }
+    let payload = format!(
+        concat!(
+            r#"{{"status":"ok","pid":1,"protocol_version":1,"build_id":"old","#,
+            r#""subscription_max_processes":20,"subscription_timeout_minutes":120,"#,
+            r#""active_http_requests":0,"active_provider_turns":0,"#,
+            r#""busy_claude_session_ids":{sessions},"active_claude_session_ids":{sessions}}}"#
+        ),
+        sessions = sessions
+    );
+    write_http_response(stream, "HTTP/1.1 200 OK", payload.as_bytes()).await;
 }
 
 async fn serve_http_then_reset() -> SocketAddr {

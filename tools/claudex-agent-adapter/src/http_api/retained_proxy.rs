@@ -54,17 +54,21 @@ impl RetainedHealthProbe {
     }
 
     fn still_owns(&self, session_id: &str) -> bool {
+        // Busy/active session id lists can linger after the retained generation
+        // goes quiet (reboot, drained turn). Require live work, matching
+        // release_idle_retained, or sticky traffic 502s on a dead ACP.
+        if !self.has_active_work() {
+            return false;
+        }
         if !self.busy_claude_session_ids.is_empty() {
             return self
                 .busy_claude_session_ids
                 .iter()
                 .any(|owned| owned == session_id);
         }
-        self.has_active_work()
-            && self
-                .active_claude_session_ids
-                .iter()
-                .any(|owned| owned == session_id)
+        self.active_claude_session_ids
+            .iter()
+            .any(|owned| owned == session_id)
     }
 }
 
@@ -104,22 +108,26 @@ impl RetainedProxy {
         // stale in-memory map after reboot / operator cleanup made :8318 proxy
         // dead retained listeners and 502 the TUI / SubAgents forever.
         match read_retained(&self.path) {
-            Ok(Some(generation)) => {
-                if let Ok(mut listen) = self.listen.write() {
-                    *listen = generation.listen;
-                }
-                if let Ok(mut pid) = self.pid.write() {
-                    *pid = generation.pid;
-                }
-                if let Ok(mut sessions) = self.sessions.write() {
-                    *sessions = generation.session_ids.into_iter().collect();
-                }
-            }
-            Ok(None) | Err(_) => {
-                if let Ok(mut sessions) = self.sessions.write() {
-                    sessions.clear();
-                }
-            }
+            Ok(Some(generation)) => self.apply_generation(generation),
+            Ok(None) | Err(_) => self.clear_session_memory(),
+        }
+    }
+
+    fn apply_generation(&self, generation: RetainedGeneration) {
+        if let Ok(mut listen) = self.listen.write() {
+            *listen = generation.listen;
+        }
+        if let Ok(mut pid) = self.pid.write() {
+            *pid = generation.pid;
+        }
+        if let Ok(mut sessions) = self.sessions.write() {
+            *sessions = generation.session_ids.into_iter().collect();
+        }
+    }
+
+    fn clear_session_memory(&self) {
+        if let Ok(mut sessions) = self.sessions.write() {
+            sessions.clear();
         }
     }
 
@@ -132,15 +140,23 @@ impl RetainedProxy {
     }
 
     fn forget_session(&self, session_id: &str) {
-        if let Ok(mut sessions) = self.sessions.write() {
-            sessions.remove(session_id);
-            if sessions.is_empty() {
-                let _ = clear_retained(&self.path);
-                return;
-            }
+        if self.remove_owned_session(session_id) {
+            return;
         }
         let _ = forget_retained_session(&self.path, session_id);
         self.refresh();
+    }
+
+    fn remove_owned_session(&self, session_id: &str) -> bool {
+        let Ok(mut sessions) = self.sessions.write() else {
+            return false;
+        };
+        sessions.remove(session_id);
+        if !sessions.is_empty() {
+            return false;
+        }
+        let _ = clear_retained(&self.path);
+        true
     }
 
     fn clear_all_sessions(&self) {

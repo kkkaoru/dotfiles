@@ -100,8 +100,11 @@ fn live_listener_helpers_ignore_invalid_url_and_missing_state() {
 #[tokio::test]
 async fn try_defer_live_update_skips_ineligible_health() {
     use std::{
-        io::{Read, Write},
         net::TcpListener,
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
         thread,
     };
 
@@ -121,20 +124,49 @@ async fn try_defer_live_update_skips_ineligible_health() {
         "listener_handover": true,
     })
     .to_string();
-    let server = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().expect("health accept");
-        let mut request = [0_u8; 1024];
-        let _ = stream.read(&mut request);
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            body.len()
-        );
-        stream.write_all(response.as_bytes()).expect("health write");
-    });
+    let stopped = Arc::new(AtomicBool::new(false));
+    let stop_flag = Arc::clone(&stopped);
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    let server = thread::spawn(move || serve_ineligible_health(listener, response, stop_flag));
 
     let result = try_defer_live_update(&config, &reqwest::Client::new(), Some(42))
         .await
         .expect("ineligible health is not an error");
     assert_eq!(result, None);
+    stopped.store(true, Ordering::SeqCst);
     server.join().expect("health server");
+}
+
+fn serve_ineligible_health(
+    listener: std::net::TcpListener,
+    response: String,
+    stop_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) {
+    use std::{sync::atomic::Ordering, thread, time::Duration};
+    listener
+        .set_nonblocking(true)
+        .expect("nonblocking health listener");
+    while !stop_flag.load(Ordering::SeqCst) {
+        if accept_ineligible_health(&listener, &response) {
+            break;
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+}
+
+fn accept_ineligible_health(listener: &std::net::TcpListener, response: &str) -> bool {
+    use std::io::{Read, Write};
+    let (mut stream, _) = match listener.accept() {
+        Ok(accepted) => accepted,
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => return false,
+        Err(error) => panic!("health accept: {error}"),
+    };
+    let _ = stream.set_nonblocking(false);
+    let mut request = [0_u8; 1024];
+    let _ = stream.read(&mut request);
+    let _ = stream.write_all(response.as_bytes());
+    true
 }
