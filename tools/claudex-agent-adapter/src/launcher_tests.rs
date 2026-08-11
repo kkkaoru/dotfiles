@@ -733,12 +733,6 @@ async fn ensure_running_and_hot_swap_reuse_a_current_healthy_listener() {
             auth.clone(),
             response.clone(),
             auth.clone(),
-            response.clone(),
-            auth.clone(),
-            response.clone(),
-            auth.clone(),
-            response.clone(),
-            auth.clone(),
             response,
             auth,
         ],
@@ -751,15 +745,45 @@ async fn ensure_running_and_hot_swap_reuse_a_current_healthy_listener() {
         expected
     );
     assert_eq!(
-        ensure_running_cli(options.clone())
-            .await
-            .expect("ensure_running_cli reuses the current listener"),
-        expected
-    );
-    assert_eq!(
         hot_swap(options.clone(), false)
             .await
             .expect("hot_swap reuses without waiting for idle"),
+        expected
+    );
+    assert_eq!(
+        hot_swap(options, true)
+            .await
+            .expect("hot_swap wait-idle reuses the current listener"),
+        expected
+    );
+    server.join().expect("public ensure server");
+}
+
+#[tokio::test]
+async fn ensure_running_cli_and_hot_swap_cli_reuse_a_current_healthy_listener() {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("cli ensure listener");
+    let listen = listener.local_addr().expect("cli ensure address");
+    let options = AdapterOptions {
+        routes: vec![BackendRoute::new("test-model", BackendKind::CodexAppServer)],
+        listen,
+        model: "test-model".to_owned(),
+        subscription_max_processes: 20,
+        subscription_timeout_minutes: 120,
+        subagent_hard_timeout_seconds: None,
+        model_catalog: crate::provider_config::ModelCatalog::default(),
+    };
+    let cfg = ServiceConfig::new(options.clone()).expect("cli ensure config");
+    let health = healthy(&cfg);
+    let response = health_response(&health);
+    let auth = http_response("200 OK", "{}");
+    let stopped = Arc::new(AtomicBool::new(false));
+    let server =
+        serve_health_and_auth_until_stopped(listener, response, auth, Arc::clone(&stopped));
+    let expected = cfg.base_url();
+    assert_eq!(
+        ensure_running_cli(options.clone())
+            .await
+            .expect("ensure_running_cli reuses the current listener"),
         expected
     );
     assert_eq!(
@@ -769,18 +793,13 @@ async fn ensure_running_and_hot_swap_reuse_a_current_healthy_listener() {
         expected
     );
     assert_eq!(
-        hot_swap(options.clone(), true)
-            .await
-            .expect("hot_swap wait-idle reuses the current listener"),
-        expected
-    );
-    assert_eq!(
         hot_swap_cli(options, true)
             .await
             .expect("hot_swap_cli wait-idle reuses the current listener"),
         expected
     );
-    server.join().expect("public ensure server");
+    stopped.store(true, Ordering::SeqCst);
+    server.join().expect("cli ensure server");
 }
 
 #[tokio::test]
@@ -2151,6 +2170,66 @@ fn http_response(status: &str, body: &str) -> String {
 
 fn serve_responses(listener: TcpListener, responses: Vec<String>) -> thread::JoinHandle<()> {
     thread::spawn(move || serve_all_responses(&listener, responses))
+}
+
+fn serve_health_and_auth_until_stopped(
+    listener: TcpListener,
+    health: String,
+    auth: String,
+    stopped: Arc<AtomicBool>,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking health listener");
+        while !stopped.load(Ordering::SeqCst) {
+            serve_one_health_or_auth(&listener, &health, &auth, &stopped);
+        }
+    })
+}
+
+fn serve_one_health_or_auth(
+    listener: &TcpListener,
+    health: &str,
+    auth: &str,
+    stopped: &AtomicBool,
+) {
+    let (mut stream, _) = match listener.accept() {
+        Ok(accepted) => accepted,
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+            thread::sleep(Duration::from_millis(1));
+            return;
+        }
+        Err(error) => panic!("accept health request: {error}"),
+    };
+    if stopped.load(Ordering::SeqCst) {
+        return;
+    }
+    let _ = stream.set_nonblocking(false);
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+    let request = read_http_headers(&mut stream);
+    let body = if request.contains(" /v1/models") {
+        auth
+    } else {
+        health
+    };
+    let _ = stream.write_all(body.as_bytes());
+    let _ = stream.flush();
+}
+
+fn read_http_headers(stream: &mut impl Read) -> String {
+    let mut request = Vec::new();
+    let mut buffer = [0; 1_024];
+    while let Ok(bytes_read) = stream.read(&mut buffer) {
+        if bytes_read == 0 {
+            break;
+        }
+        request.extend_from_slice(&buffer[..bytes_read]);
+        if request.windows(4).any(|window| window == b"\r\n\r\n") {
+            break;
+        }
+    }
+    String::from_utf8_lossy(&request).into_owned()
 }
 
 fn serve_all_responses(listener: &TcpListener, responses: Vec<String>) {

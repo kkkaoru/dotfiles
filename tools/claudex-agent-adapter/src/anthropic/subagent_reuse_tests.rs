@@ -941,7 +941,10 @@ fn launch_records_cover_empty_scope_and_background_spawn_text() {
         records.iter().any(|record| record.recipient == "worker-c"),
         "{records:?}"
     );
+}
 
+#[test]
+fn launch_records_accept_agent_and_task_id_json_fields() {
     let json_id = launch_records(&[json!({
         "role":"user",
         "content":[{
