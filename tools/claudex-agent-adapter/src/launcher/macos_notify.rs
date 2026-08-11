@@ -1,14 +1,19 @@
-use std::{fs, net::SocketAddr, path::Path, process::ExitStatus};
-
-use anyhow::{Context, Result};
+use std::net::SocketAddr;
+#[cfg(test)]
+use std::process::ExitStatus;
 use serde::{Deserialize, Serialize};
 
-use super::{ServiceConfig, launcher_lock, launcher_logs};
+use super::ServiceConfig;
+#[cfg(test)]
+use super::launcher_logs;
 
 mod script;
-use script::{deliver_status, notification, osascript_command};
+mod delivery;
+pub(super) use delivery::{post, post_in_process};
 #[cfg(test)]
-use script::{escape_applescript, osascript_program};
+use delivery::{deliver, read_last};
+#[cfg(test)]
+use script::{deliver_status, escape_applescript, notification, osascript_command, osascript_program};
 
 /// One Complete banner per build_id. Waiting/Live stay silent (see should_emit).
 pub(super) const TITLE: &str = "claudex";
@@ -169,96 +174,21 @@ pub(super) fn should_emit_at(event: &Event, last: Option<&LastNotify>, now_unix:
     true
 }
 
-fn now_unix() -> u64 {
+pub(super) fn now_unix() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|elapsed| elapsed.as_secs())
         .unwrap_or(0)
 }
 
-pub(super) fn post(cache: &Path, listen: &SocketAddr, event: Event) {
-    if !super::macos_notify_dispatch::notifications_enabled() {
-        return;
-    }
-    super::macos_notify_dispatch::post(cache, listen, event);
-}
-
-pub(super) fn post_in_process(cache: &Path, listen: &SocketAddr, event: Event) {
-    if !super::macos_notify_dispatch::notifications_enabled() {
-        return;
-    }
-    let lock_path = launcher_logs::hot_swap_notify_lock_path(cache);
-    let _lock = match launcher_lock::acquire(&lock_path) {
-        Ok(lock) => lock,
-        Err(error) => {
-            eprintln!("claudex: macOS notification lock failed ({error:#})");
-            return;
-        }
-    };
-    let now = now_unix();
-    let previous = read_last(cache, listen);
-    if !should_emit_at(&event, previous.as_ref(), now) {
-        // Do not slide emitted_unix on suppress: that extended quiet windows and
-        // also made it look like a second Complete had been recorded.
-        return;
-    }
-    record_event(&event);
-    let mut last = LastNotify::from(&event);
-    last.emitted_unix = now;
-    if let Err(error) = write_last(cache, listen, &last) {
-        eprintln!("claudex: macOS notification dedupe state failed ({error:#})");
-    }
-    let notification = notification(&event);
-    if let Err(error) = deliver(&notification) {
-        eprintln!("claudex: macOS notification failed ({error:#})");
-    }
-}
-
-pub(super) fn deliver(notification: &Notification) -> Result<()> {
-    let status = spawn_notification(notification).context("start osascript")?;
-    deliver_status(status)
-}
-
-pub(super) fn read_last(cache: &Path, listen: &SocketAddr) -> Option<LastNotify> {
-    let bytes = fs::read(launcher_logs::hot_swap_notify_path(cache, listen)).ok()?;
-    serde_json::from_slice(&bytes).ok()
-}
-
-fn write_last(cache: &Path, listen: &SocketAddr, last: &LastNotify) -> Result<()> {
-    fs::create_dir_all(cache).context("create macOS notification cache")?;
-    fs::write(
-        launcher_logs::hot_swap_notify_path(cache, listen),
-        serde_json::to_vec(last).context("encode macOS notification dedup state")?,
-    )
-    .context("write macOS notification dedup state")
-}
-
-fn spawn_notification(notification: &Notification) -> std::io::Result<ExitStatus> {
-    #[cfg(test)]
-    {
-        if let Some(spawn) = TEST_SPAWN.with(std::cell::Cell::get) {
-            return spawn(notification);
-        }
-        let _ = notification;
-        Ok(synthetic_success())
-    }
-    #[cfg(not(test))]
-    osascript_command(notification).status()
-}
-
-fn record_event(event: &Event) {
-    #[cfg(test)]
-    EVENTS.with(|events| events.borrow_mut().push(event.clone()));
-    let _ = event;
-}
 
 #[cfg(test)]
 type TestSpawnFn = fn(&Notification) -> std::io::Result<ExitStatus>;
 
 #[cfg(test)]
 thread_local! {
-    static EVENTS: std::cell::RefCell<Vec<Event>> = const { std::cell::RefCell::new(Vec::new()) };
-    static TEST_SPAWN: std::cell::Cell<Option<TestSpawnFn>> = const { std::cell::Cell::new(None) };
+    pub(super) static EVENTS: std::cell::RefCell<Vec<Event>> = const { std::cell::RefCell::new(Vec::new()) };
+    pub(super) static TEST_SPAWN: std::cell::Cell<Option<TestSpawnFn>> = const { std::cell::Cell::new(None) };
 }
 
 #[cfg(test)]
@@ -267,7 +197,7 @@ fn take_events() -> Vec<Event> {
 }
 
 #[cfg(test)]
-fn synthetic_success() -> ExitStatus {
+pub(super) fn synthetic_success() -> ExitStatus {
     use std::os::unix::process::ExitStatusExt;
     ExitStatus::from_raw(0)
 }
