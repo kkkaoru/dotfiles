@@ -12,7 +12,7 @@ use crate::anthropic::stream::{
     protocol::{StreamSender, send_stream_frame},
     sanitize::{
         compact_live_prose, is_bulk_tool_dump, is_canned_worker_filler, is_provider_status_line,
-        latest_worker_status, strip_worker_status_lines,
+        latest_worker_status, strip_canned_preserving_structure, strip_worker_status_lines,
     },
     thinking::summary_delta,
 };
@@ -256,19 +256,20 @@ impl SegmentBuilder {
         if delta.trim().is_empty() {
             return None;
         }
-        let stripped = delta
-            .lines()
-            .filter(|line| !line.trim().is_empty() && !is_canned_worker_filler(line))
-            .collect::<Vec<_>>()
-            .join("\n");
-        if stripped.is_empty() {
+        let committed = strip_canned_preserving_structure(delta);
+        if committed.trim().is_empty() {
             return None;
         }
-        if is_bulk_tool_dump(&stripped) {
+        if is_bulk_tool_dump(committed.trim()) {
             return self.bulk_dump_hint().map(|hint| (hint.clone(), hint));
         }
-        // Display chrome is compacted; committed answer keeps the full prose.
-        Some((compact_live_prose(&stripped), stripped))
+        // Live tip drops blank lines; pending_answer keeps paragraph breaks.
+        let display_source = committed
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+        Some((compact_live_prose(&display_source), committed))
     }
 
     fn bulk_dump_hint(&mut self) -> Option<String> {

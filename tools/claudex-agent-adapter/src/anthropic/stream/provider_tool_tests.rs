@@ -1460,6 +1460,36 @@ async fn subagent_keeps_full_pending_answer_when_live_prose_is_compacted() {
 }
 
 #[tokio::test]
+async fn subagent_pending_answer_preserves_blank_lines_across_deltas() {
+    let (sender, _receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
+    let mut builder = SegmentBuilder::new(1)
+        .with_subagent(true)
+        .with_command_code_progress(true);
+    for delta in ["## Summary\n\n", "- item one\n", "- item two"] {
+        builder
+            .text_delta(
+                &json!({"params":{"delta": delta, "itemId":"command-code:message"}}),
+                Some(&sender),
+            )
+            .await
+            .expect("delta");
+    }
+    assert_eq!(
+        builder.pending_answer, "## Summary\n\n- item one\n- item two",
+        "blank lines and trailing newlines must survive across deltas: {:?}",
+        builder.pending_answer
+    );
+    let segment = builder.finish(None).await.expect("finish");
+    let answer = segment
+        .blocks
+        .iter()
+        .find_map(|block| block.get("text").and_then(Value::as_str))
+        .unwrap_or_default();
+    assert_eq!(answer, "## Summary\n\n- item one\n- item two");
+    drop(sender);
+}
+
+#[tokio::test]
 async fn subagent_splits_status_prefix_from_answer_in_same_delta() {
     let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
     let mut builder = SegmentBuilder::new(1)

@@ -169,6 +169,15 @@ pub(super) fn is_canned_worker_filler(text: &str) -> bool {
             .any(|needle| lower.contains(needle))
 }
 
+/// Drop canned filler lines while keeping blank lines and trailing newlines so
+/// multi-delta SubAgent answers do not glue headings onto the next bullet.
+pub(super) fn strip_canned_preserving_structure(delta: &str) -> String {
+    delta
+        .split_inclusive('\n')
+        .filter(|chunk| !is_canned_worker_filler(chunk.trim_end_matches('\n')))
+        .collect()
+}
+
 fn normalize_filler_case(text: &str) -> String {
     text.trim()
         .chars()
