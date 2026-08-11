@@ -1,8 +1,18 @@
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
-use super::{SegmentBuilder, ToolCall, ensure_background_batch_launch};
+use super::{SegmentBuilder, ToolCall};
 use crate::anthropic::stream::builder::external_tool::ExternalToolContext;
+
+pub(super) fn ensure_background_batch_launch(arguments: &mut Value) {
+    // A batch is the adapter's explicit parallel primitive. Normalize every
+    // member to a background launch so one slow worker cannot hold the
+    // Claude Code turn open, while leaving ordinary single Agent/Task calls
+    // untouched.
+    if let Some(arguments) = arguments.as_object_mut() {
+        arguments.insert("run_in_background".to_owned(), Value::Bool(true));
+    }
+}
 
 pub(super) async fn dispatch(
     builder: &mut SegmentBuilder,

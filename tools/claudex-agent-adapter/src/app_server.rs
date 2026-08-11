@@ -1,9 +1,6 @@
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
 use std::{
     collections::HashMap,
     path::PathBuf,
-    process::Stdio,
     sync::{
         Arc, Weak,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -11,11 +8,11 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-    process::{Child, ChildStdin, Command},
+    process::{Child, ChildStdin},
     sync::{Mutex, oneshot},
 };
 
@@ -31,7 +28,10 @@ mod lifecycle;
 mod pending;
 mod protocol;
 mod provider_environment;
+mod spawn;
 use pending::{PendingRequest, PendingResponse, await_response};
+use spawn::{initialize_params, prepare_isolated_codex_home, spawn_child};
+pub use spawn::response_thread_id;
 
 #[cfg(not(coverage_nightly))]
 const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(8);
@@ -289,106 +289,6 @@ impl AppServer {
     }
 }
 
-fn initialize_params() -> Value {
-    json!({
-        "clientInfo": {
-            "name": "claudex",
-            "title": "claudex Anthropic compatibility adapter",
-            "version": env!("CARGO_PKG_VERSION")
-        },
-        "capabilities": { "experimentalApi": true }
-    })
-}
-
-fn spawn_child(
-    model: &str,
-    program: impl AsRef<std::ffi::OsStr>,
-    source_home: &std::path::Path,
-    codex_home: &std::path::Path,
-) -> Result<Child> {
-    let mut command = Command::new(program);
-    #[cfg(unix)]
-    command.process_group(0);
-    command
-        .args([
-            "app-server",
-            "--stdio",
-            "--disable",
-            "apps",
-            "--disable",
-            "multi_agent",
-            "--disable",
-            "plugins",
-            "--disable",
-            "remote_control",
-            "-c",
-            &format!("model={model:?}"),
-            "-c",
-            "web_search=\"disabled\"",
-        ])
-        .env("CODEX_HOME", codex_home)
-        .envs(provider_environment::credentials(source_home, codex_home))
-        .env("RUST_LOG", "error")
-        .current_dir(codex_home)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
-        .kill_on_drop(true)
-        .spawn()
-        .context("failed to start `codex app-server`")
-}
-
-fn prepare_isolated_codex_home(
-    source_home: &std::path::Path,
-    isolated: &std::path::Path,
-) -> Result<PathBuf> {
-    std::fs::create_dir_all(isolated)?;
-
-    let source_auth = source_home.join("auth.json");
-    if !source_auth.is_file() {
-        bail!(
-            "Codex authentication was not found at {}; run `codex login` first",
-            source_auth.display()
-        );
-    }
-    std::fs::copy(&source_auth, isolated.join("auth.json"))
-        .with_context(|| format!("failed to copy {}", source_auth.display()))?;
-
-    #[cfg(unix)]
-    let _ = std::fs::set_permissions(
-        isolated.join("auth.json"),
-        std::fs::Permissions::from_mode(0o600),
-    );
-
-    // An isolated home prevents the Codex runtime from loading the user's MCP
-    // servers, hooks, skills, and AGENTS instructions alongside Claude Code's
-    // equivalent tools and context.
-    let mut config = String::from(
-        r#"web_search = "disabled"
-
-[features]
-apps = false
-multi_agent = false
-plugins = false
-remote_control = false
-shell_tool = true
-tool_search = true
-unified_exec = true
-web_search = true
-"#,
-    );
-    isolated_config::append_model_providers(source_home, &mut config)?;
-    std::fs::write(isolated.join("config.toml"), config)?;
-    Ok(isolated.to_path_buf())
-}
-
-pub fn response_thread_id(value: &Value) -> Result<String> {
-    value
-        .pointer("/thread/id")
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .ok_or_else(|| anyhow!("thread/start response did not contain thread.id: {value}"))
-}
 
 #[cfg(test)]
 include!("app_server_tests.rs");

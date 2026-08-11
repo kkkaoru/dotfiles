@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use serde_json::json;
 
 use super::{
-    ensure_background_batch_launch,
+    batch::ensure_background_batch_launch,
     external_tool::{requested_external_tool_name, unrequested_tool_reply},
 };
 

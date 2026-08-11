@@ -377,16 +377,6 @@ fn estimated_output_tokens(block: &Value) -> u64 {
     estimated_block_tokens(block).saturating_add(thinking)
 }
 
-fn ensure_background_batch_launch(arguments: &mut Value) {
-    // A batch is the adapter's explicit parallel primitive. Normalize every
-    // member to a background launch so one slow worker cannot hold the
-    // Claude Code turn open, while leaving ordinary single Agent/Task calls
-    // untouched.
-    if let Some(arguments) = arguments.as_object_mut() {
-        arguments.insert("run_in_background".to_owned(), Value::Bool(true));
-    }
-}
-
 #[cfg(test)]
 // Coverage gates measure production behavior; this inline test is excluded.
 #[cfg_attr(coverage_nightly, coverage(off))]
