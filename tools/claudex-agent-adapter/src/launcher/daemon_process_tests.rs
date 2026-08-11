@@ -9,6 +9,23 @@ use std::{
 };
 
 #[test]
+fn matches_live_daemon_when_spawn_path_differs() {
+    // Regression: ensure spawn under ~/.cache/claudex/bin must still recognize
+    // the live ~/.cargo/bin serve process so handover can release :8318.
+    let spawn = Path::new("/Users/test/.cache/claudex/bin/claudex-agent-adapter");
+    assert!(command_matches(
+        "/Users/test/.cargo/bin/claudex-agent-adapter",
+        "/Users/test/.cargo/bin/claudex-agent-adapter serve --listen 127.0.0.1:8318",
+        spawn
+    ));
+    assert!(command_matches(
+        "claudex-agent-ad",
+        "/Users/test/.cargo/bin/claudex-agent-adapter serve --model auto",
+        spawn
+    ));
+}
+
+#[test]
 fn recognizes_current_and_renamed_adapter_daemons() {
     let executable = Path::new("/tmp/claudex-agent-adapter");
     assert!(command_matches(

@@ -1956,7 +1956,10 @@ HTTPServer((host, int(port)), Handler).serve_forever()
         .expect_err("occupied stale listener must time out");
         assert!(error.to_string().contains("did not release its listener"));
         assert!(gracefully_terminated.load(Ordering::SeqCst));
-        assert!(!force_terminated.load(Ordering::SeqCst));
+        assert!(
+            force_terminated.load(Ordering::SeqCst),
+            "drain timeout must escalate to force terminate before failing handover"
+        );
         stopped.store(true, Ordering::SeqCst);
         server.join().expect("occupied listener server");
         drop(listener);

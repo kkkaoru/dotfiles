@@ -124,7 +124,7 @@ pub(super) async fn release_stale_listener_with(
     pid: Option<u32>,
     process_matches: impl Fn(u32, &std::path::Path) -> bool,
     request_graceful_shutdown: impl Fn(u32),
-    _force_terminate: impl Fn(u32),
+    force_terminate: impl Fn(u32),
     deadline: Instant,
 ) -> Result<()> {
     let Some(pid) = pid else {
@@ -135,7 +135,22 @@ pub(super) async fn release_stale_listener_with(
     }
     eprintln!("claudex: draining active requests on stale adapter pid {pid} during handover");
     request_graceful_shutdown(pid);
-    if let Err(error) = wait_until_listener_released_by(client, config, pid, deadline).await {
+    if wait_until_listener_released_by(client, config, pid, deadline)
+        .await
+        .is_ok()
+    {
+        return Ok(());
+    }
+    eprintln!("claudex: forcing terminate of stale adapter pid {pid} after drain timeout");
+    force_terminate(pid);
+    if let Err(error) = wait_until_listener_released_by(
+        client,
+        config,
+        pid,
+        Instant::now() + Duration::from_secs(2),
+    )
+    .await
+    {
         eprintln!(
             "claudex: handover aborted because stale adapter pid {pid} retained its listener"
         );

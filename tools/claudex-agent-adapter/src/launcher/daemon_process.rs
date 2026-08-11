@@ -214,18 +214,26 @@ fn process_field(pid: u32, field: &str) -> Option<String> {
 }
 
 fn command_matches(program: &str, command: &str, executable: &Path) -> bool {
+    // Prefer argv0 from `command=` — macOS `comm=` truncates, and ensure may
+    // spawn from ~/.cache/claudex/bin while the live daemon is still under
+    // ~/.cargo/bin.
+    let mut fields = command.split_whitespace();
+    let Some(argv0) = fields.next().map(Path::new) else {
+        return false;
+    };
+    let subcommand = fields.next();
     let program = Path::new(program);
-    let current = program == executable;
-    let same_binary_name = program.file_name() == executable.file_name();
-    let renamed = program.parent() == executable.parent()
-        && program.file_name().is_some_and(|name| {
-            LEGACY_ADAPTER_NAMES
-                .iter()
-                .any(|legacy| name == OsStr::new(legacy))
+    let current = argv0 == executable || program == executable;
+    let expected = executable.file_name();
+    let same_binary_name = expected.is_some_and(|name| {
+        argv0.file_name() == Some(name) || program.file_name() == Some(name)
+    });
+    let renamed = (argv0.parent() == executable.parent()
+        || program.parent() == executable.parent())
+        && LEGACY_ADAPTER_NAMES.iter().any(|legacy| {
+            let legacy = OsStr::new(legacy);
+            argv0.file_name() == Some(legacy) || program.file_name() == Some(legacy)
         });
-    let subcommand = command
-        .strip_prefix(&program.to_string_lossy().to_string())
-        .and_then(|arguments| arguments.split_ascii_whitespace().next());
     (current || renamed || same_binary_name) && subcommand == Some("serve")
 }
 
