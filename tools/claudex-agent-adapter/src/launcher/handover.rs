@@ -60,12 +60,22 @@ pub(super) async fn inspect_service_with(
     if config.matches(&health) && health.build_id == env!("CLAUDEX_BUILD_ID") {
         // A single auth probe can time out under llvm-cov / busy hosts; retry
         // briefly before tearing down an otherwise matching generation.
-        for attempt in 0..3u8 {
+        let retries = if cfg!(all(test, coverage_nightly)) {
+            8u8
+        } else {
+            3u8
+        };
+        let delay = if cfg!(all(test, coverage_nightly)) {
+            Duration::from_millis(50)
+        } else {
+            Duration::from_millis(20)
+        };
+        for attempt in 0..retries {
             if authenticates(client, config).await {
                 return ServiceState::Reuse;
             }
-            if attempt + 1 < 3 {
-                tokio::time::sleep(Duration::from_millis(20)).await;
+            if attempt + 1 < retries {
+                tokio::time::sleep(delay).await;
             }
         }
     }

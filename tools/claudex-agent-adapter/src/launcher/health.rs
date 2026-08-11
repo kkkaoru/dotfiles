@@ -126,10 +126,15 @@ pub(super) async fn fetch_health(
 }
 
 pub(super) async fn authenticates(client: &reqwest::Client, config: &ServiceConfig) -> bool {
+    let timeout = if cfg!(all(test, coverage_nightly)) {
+        Duration::from_millis(2_000)
+    } else {
+        Duration::from_millis(500)
+    };
     client
         .get(format!("{}/v1/models", config.base_url()))
         .bearer_auth(&config.token)
-        .timeout(Duration::from_millis(500))
+        .timeout(timeout)
         .send()
         .await
         .is_ok_and(|response| response.status().is_success())
