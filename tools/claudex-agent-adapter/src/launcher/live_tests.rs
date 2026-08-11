@@ -119,7 +119,7 @@ fn round_trips_retained_generation_state() {
 }
 
 #[test]
-fn forget_retained_session_rewrites_or_removes_snapshot() {
+fn forget_retained_session_rewrites_or_keeps_empty_snapshot() {
     let root = tempfile::tempdir().expect("forget retained fixture");
     let config = config(root.path());
     let listen = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 54322);
@@ -135,7 +135,12 @@ fn forget_retained_session_rewrites_or_removes_snapshot() {
     let loaded = read_retained(&path).expect("read").expect("present");
     assert_eq!(loaded.session_ids, ["session-b"]);
     forget_retained_session(&path, "session-b").expect("forget last");
-    assert!(!path.exists(), "empty retained snapshot must be removed");
+    let empty = read_retained(&path).expect("read").expect("empty snapshot kept");
+    assert!(
+        empty.session_ids.is_empty(),
+        "last forget must keep listen/pid so release_idle can still find busy retained"
+    );
+    assert_eq!(empty.pid, 77);
     clear_retained(&path).expect("clear missing is ok");
 }
 

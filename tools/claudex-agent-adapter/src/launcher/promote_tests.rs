@@ -347,7 +347,18 @@ async fn release_idle_retained_releases_idle_active_and_unknown_generations() {
             health_body(Some(81), false),
             true,
         ),
-        (81, Vec::new(), health_body(Some(81), true), true),
+        (
+            81,
+            Vec::new(),
+            health_body(Some(81), true),
+            false,
+        ),
+        (
+            82,
+            Vec::new(),
+            health_body(Some(82), false),
+            true,
+        ),
     ] {
         let root = tempfile::tempdir().expect("retained release fixture");
         let (server, task) =

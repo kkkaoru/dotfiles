@@ -190,25 +190,24 @@ pub(super) async fn release_idle_retained(client: &reqwest::Client, config: &Ser
     if live_pid == Some(generation.pid) {
         return;
     }
-    // No sticky sessions left → always drop the snapshot + daemon. An empty
-    // file after zero-session cutover previously left a dead listen forever.
-    if generation.session_ids.is_empty() {
-        release_previous(config, generation.pid);
-        let _ = live::clear_retained(&path);
-        eprintln!(
-            "claudex: released empty retained adapter pid {} on {}",
-            generation.pid, generation.listen
-        );
-        return;
-    }
+    // Empty sticky maps still need a health probe: forgetting the last owner
+    // while retained is busy elsewhere must not kill/lose the daemon. Idle or
+    // unreachable empty snapshots are released so zero-session cutovers do not
+    // leave a dead listen forever.
     match health::fetch_health(client, &retained).await {
         Some(health) if health.pid == Some(generation.pid) && health.has_active_work() => {}
         Some(health) if health.pid == Some(generation.pid) => {
             release_previous(config, generation.pid);
             let _ = live::clear_retained(&path);
             eprintln!(
-                "claudex: released idle retained adapter pid {} on {}",
-                generation.pid, generation.listen
+                "claudex: released {} retained adapter pid {} on {}",
+                if generation.session_ids.is_empty() {
+                    "empty"
+                } else {
+                    "idle"
+                },
+                generation.pid,
+                generation.listen
             );
         }
         _ => {

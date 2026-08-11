@@ -517,7 +517,7 @@ async fn should_proxy_forgets_one_session_while_retained_is_busy_elsewhere() {
 }
 
 #[tokio::test]
-async fn should_proxy_clears_retained_when_last_session_is_forgotten() {
+async fn should_proxy_keeps_empty_retained_when_last_session_is_forgotten() {
     let upstream = serve_retained_generation(b"from-other", &["session-other"]).await;
     let root = tempfile::tempdir().expect("forget last fixture");
     let path = root.path().join("retained.json");
@@ -531,10 +531,11 @@ async fn should_proxy_clears_retained_when_last_session_is_forgotten() {
     let proxy = retained(&path, &upstream.to_string(), &["session-a"]);
     assert!(!proxy.should_proxy_session("session-a").await);
     assert!(!proxy.owns("session-a"));
-    assert!(
-        !path.exists(),
-        "forgetting the last sticky session must clear the retained snapshot"
-    );
+    let kept = crate::launcher::read_retained(&path)
+        .expect("read")
+        .expect("empty snapshot must remain while retained reports active work");
+    assert!(kept.session_ids.is_empty());
+    assert_eq!(kept.pid, 1);
 }
 
 #[tokio::test]

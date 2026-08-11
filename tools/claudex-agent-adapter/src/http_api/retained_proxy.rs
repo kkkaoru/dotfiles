@@ -141,23 +141,8 @@ impl RetainedProxy {
     }
 
     fn forget_session(&self, session_id: &str) {
-        if self.remove_owned_session(session_id) {
-            return;
-        }
         let _ = forget_retained_session(&self.path, session_id);
         self.refresh();
-    }
-
-    fn remove_owned_session(&self, session_id: &str) -> bool {
-        let Ok(mut sessions) = self.sessions.write() else {
-            return false;
-        };
-        sessions.remove(session_id);
-        if !sessions.is_empty() {
-            return false;
-        }
-        let _ = clear_retained(&self.path);
-        true
     }
 
     fn clear_all_sessions(&self) {

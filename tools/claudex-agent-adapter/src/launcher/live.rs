@@ -188,8 +188,11 @@ pub(crate) fn read_retained(path: &Path) -> Result<Option<RetainedGeneration>> {
     Ok(Some(state))
 }
 
-/// Drop one sticky session from a retained snapshot. Empty snapshots are removed
-/// so the live generation stops proxying and can garbage-collect the daemon.
+/// Drop one sticky session from a retained snapshot.
+///
+/// Empty `session_ids` still keep listen/pid so `release_idle_retained` can find
+/// a busy orphan after the last sticky owner forgets. Deleting the file here
+/// leaked retained daemons that still had active work for other traffic.
 pub(crate) fn forget_retained_session(path: &Path, session_id: &str) -> Result<()> {
     let Some(mut generation) = read_retained(path)? else {
         return Ok(());
@@ -199,10 +202,6 @@ pub(crate) fn forget_retained_session(path: &Path, session_id: &str) -> Result<(
         .session_ids
         .retain(|owned| owned != session_id);
     if generation.session_ids.len() == before {
-        return Ok(());
-    }
-    if generation.session_ids.is_empty() {
-        let _ = fs::remove_file(path);
         return Ok(());
     }
     write_json(path, &generation)
