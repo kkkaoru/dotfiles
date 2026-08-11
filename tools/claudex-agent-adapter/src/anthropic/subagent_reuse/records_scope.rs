@@ -55,7 +55,10 @@ pub(super) fn summarize_scope(input: &Value) -> String {
 pub(super) fn find_recipient(value: &Value) -> Option<String> {
     match value {
         Value::Object(object) => object.iter().find_map(|(key, value)| {
-            if matches!(key.as_str(), "agentId" | "agent_id") {
+            if matches!(
+                key.as_str(),
+                "agentId" | "agent_id" | "taskId" | "task_id"
+            ) {
                 return value
                     .as_str()
                     .filter(|recipient| !recipient.is_empty())
@@ -69,15 +72,19 @@ pub(super) fn find_recipient(value: &Value) -> Option<String> {
 }
 
 pub(super) fn parse_recipient(text: &str) -> Option<String> {
-    ["agentId:", "agent_id:"].into_iter().find_map(|marker| {
-        let value = text.split_once(marker)?.1.lines().next()?.trim();
-        let value = value
-            .split_whitespace()
-            .next()
-            .unwrap_or_default()
-            .trim_matches(|character: char| matches!(character, '\'' | '"' | '`' | ',' | ')'));
-        (!value.is_empty()).then(|| value.to_owned())
-    })
+    ["agentId:", "agent_id:", "taskId:", "task_id:"]
+        .into_iter()
+        .find_map(|marker| {
+            let value = text.split_once(marker)?.1.lines().next()?.trim();
+            let value = value
+                .split_whitespace()
+                .next()
+                .unwrap_or_default()
+                .trim_matches(|character: char| {
+                    matches!(character, '\'' | '"' | '`' | ',' | ')')
+                });
+            (!value.is_empty()).then(|| value.to_owned())
+        })
 }
 
 pub(super) fn is_launch_result(text: &str) -> bool {

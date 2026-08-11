@@ -957,6 +957,37 @@ fn launch_records_cover_empty_scope_and_background_spawn_text() {
             .any(|record| record.recipient == "worker-json"),
         "{json_id:?}"
     );
+
+    let task_json = launch_records(&[json!({
+        "role":"user",
+        "content":[{
+            "type":"tool_result",
+            "tool_use_id":"call-task",
+            "taskId":"worker-task",
+            "content":[{"type":"text","text":"Async agent launched successfully."}]
+        }]
+    })]);
+    assert!(
+        task_json
+            .iter()
+            .any(|record| record.recipient == "worker-task"),
+        "taskId JSON field must seed resume recipient: {task_json:?}"
+    );
+
+    let task_text = launch_records(&[json!({
+        "role":"user",
+        "content":[{
+            "type":"tool_result",
+            "tool_use_id":"call-task-text",
+            "content":[{"type":"text","text":"Async agent launched successfully.\ntaskId: worker-task-text"}]
+        }]
+    })]);
+    assert!(
+        task_text
+            .iter()
+            .any(|record| record.recipient == "worker-task-text"),
+        "taskId text marker must seed resume recipient: {task_text:?}"
+    );
 }
 
 #[test]
