@@ -1,8 +1,9 @@
 //! Live SubAgent viewer progress across provider models.
 //!
 //! Cline was the first blank-viewer report, but Cursor (nested under Spark),
-//! Qwen, Grok, Copilot, Command Code, and Spark/Codex all hide AgentMessage as
-//! `text_delta` until end_turn unless `is_subagent` mirrors it to thinking.
+//! Qwen, Grok, Copilot, Command Code, and Spark/Codex all must keep mid-turn
+//! chrome tip-only (`▶ Working` / `▶ Thinking`) so full AgentMessage/CoT does
+//! not collapse Claude Code 2.1 to Frolicking. Bodies flush at end_turn.
 
 use axum::body::Bytes;
 use serde_json::{Value, json};
@@ -43,7 +44,8 @@ const CASES: &[Case] = &[
             arg_key: "path",
             arg_value: "apps/finish-position-predict-container/src/predict.py",
         }),
-        expect_visible: &["ContextVar", "▶ Read"],
+        // Live tip only — full AgentMessage prose collapses CC 2.1 chrome.
+        expect_visible: &["▶ Working", "▶ Read"],
     },
     Case {
         name: "qwen-acp",
@@ -57,7 +59,7 @@ const CASES: &[Case] = &[
             arg_key: "pattern",
             arg_value: "target_race",
         }),
-        expect_visible: &["Phase 1", "▶ Grep"],
+        expect_visible: &["▶ Working", "▶ Grep"],
     },
     Case {
         name: "grok-acp",
@@ -86,7 +88,7 @@ const CASES: &[Case] = &[
             arg_key: "path",
             arg_value: "apps/finish-position-predict-container/src/cache_seed.py",
         }),
-        expect_visible: &["Inspecting the prediction", "▶ Read"],
+        expect_visible: &["▶ Working", "▶ Read"],
     },
     Case {
         name: "cline-acp",
@@ -96,7 +98,7 @@ const CASES: &[Case] = &[
         prose_item_id: "cline:message",
         reasoning: Some("Check the cache seed path before editing.\n"),
         tool: None,
-        expect_visible: &["型と配信パスを把握しました", "▶ Thinking"],
+        expect_visible: &["▶ Working", "▶ Thinking"],
     },
     Case {
         name: "spark-codex",
@@ -104,7 +106,7 @@ const CASES: &[Case] = &[
         prose_item_id: "spark:message",
         reasoning: Some("Trace filter_races_by_scope before editing.\n"),
         tool: None,
-        expect_visible: &["▶ Thinking", "Seasoning per-race"],
+        expect_visible: &["▶ Thinking", "▶ Working"],
     },
     Case {
         name: "command-code-acp",

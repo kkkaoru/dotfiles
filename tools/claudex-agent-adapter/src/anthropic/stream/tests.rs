@@ -2995,6 +2995,75 @@ async fn subagent_codex_tool_use_keeps_thinking_open_so_viewer_stays_live() {
 }
 
 #[tokio::test]
+async fn subagent_codex_external_batch_finish_keeps_thinking_open_on_sse() {
+    // Quiet→batch finish used to call thinking.close() after tool_use, which
+    // collapsed Claude Code 2.1 SubAgent chrome to Thought-for while Read/Bash
+    // ran on the client. ACP native tools never close thinking mid-turn.
+    let (_root, app, bridge, mut session) = disconnect_fixture().await;
+    Arc::get_mut(&mut session)
+        .expect("unique session")
+        .external_tool_names
+        .insert("cc_Read_0".to_owned(), "Read".to_owned());
+    let events = Arc::new(app.subscribe_thread("thread"));
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(32);
+    let mut builder = SegmentBuilder::for_turn(1, true, "gpt-5.6-luna");
+    let _ = builder
+        .handle_event(
+            &bridge,
+            &session,
+            &[],
+            &Value::Null,
+            &json!({
+                "id":44,
+                "method":"item/tool/call",
+                "params":{
+                    "callId":"read-handoff",
+                    "tool":"cc_Read_0",
+                    "arguments":{"path":"scripts/CLAUDE.md"}
+                }
+            }),
+            Some(&sender),
+        )
+        .await
+        .expect("subagent Read");
+    assert!(builder.has_external_tool_calls());
+    assert!(builder.thinking.is_open());
+
+    let result = bridge
+        .external_batch_segment(&session, events, &mut builder, Some(&sender))
+        .await
+        .expect("Codex batch handoff");
+    let super::StreamTurn::Segment {
+        segment,
+        provider_settled,
+    } = result
+    else {
+        panic!("expected tool_use segment");
+    };
+    assert!(!provider_settled);
+    assert_eq!(segment.stop_reason, "tool_use");
+    assert!(
+        builder.thinking.is_open(),
+        "finish must leave thinking open across Codex tool handoff"
+    );
+
+    drop(sender);
+    let mut output = String::new();
+    while let Some(frame) = receiver.recv().await {
+        output.push_str(&String::from_utf8_lossy(&frame.expect("infallible frame")));
+    }
+    assert!(
+        !output.contains("signature_delta"),
+        "thinking signature close must not fire on tool handoff: {output}"
+    );
+    assert!(
+        !output.contains(r#"{"index":0,"type":"content_block_stop"}"#)
+            && !output.contains(r#"{"type":"content_block_stop","index":0}"#),
+        "thinking (index 0) must not stop on Codex batch finish: {output}"
+    );
+}
+
+#[tokio::test]
 async fn keeps_parent_stream_after_unroutable_subagent_launch() {
     let (_root, _app, bridge, session) = disconnect_fixture().await;
     let mut builder = SegmentBuilder::new(1);

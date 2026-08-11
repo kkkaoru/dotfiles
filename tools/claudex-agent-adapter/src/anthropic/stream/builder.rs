@@ -26,8 +26,8 @@ pub(in crate::anthropic) struct SegmentBuilder {
     pub(super) blocks: Vec<Value>,
     pub(super) thinking: ThinkingState,
     pub(super) open_text_block: Option<(usize, String)>,
-    /// SubAgent AgentMessage prose held until end_turn. Live viewer sees it as
-    /// thinking; streaming `text_delta` now would hide the panel until finish.
+    /// SubAgent AgentMessage prose held until end_turn. Live viewer sees tip-only
+    /// `▶ Working…` so full prose does not collapse Claude Code 2.1 chrome.
     pub(super) pending_answer: String,
     /// ACP `AgentThoughtChunk` / summary CoT buffered for the transcript only.
     /// Live SubAgent SSE stays on ▶ tips so Claude Code 2.1 does not collapse

@@ -1,10 +1,11 @@
 use anyhow::Result;
 
+use super::super::progress_keepalive::is_adapter_tool_marker;
 use super::SegmentBuilder;
 use crate::anthropic::stream::{
     protocol::StreamSender,
     sanitize::{
-        compact_live_prose, is_bulk_tool_dump, latest_worker_status,
+        compact_live_prose, is_bulk_tool_dump, is_provider_status_line, latest_worker_status,
         strip_canned_preserving_structure, strip_worker_status_lines,
     },
 };
@@ -41,14 +42,30 @@ impl SegmentBuilder {
         // Including Command Code: streaming text_delta closes thinking and
         // collapses CC 2.1 to repeating "Thought for Xs".
         self.note_provider_turn_activity();
-        self.thinking
-            .progress_status_keep_open(&mut self.blocks, &display, stream)
-            .await?;
         if !dump_hint {
             // Keep the full answer for flush; display chrome may be compacted.
             self.pending_answer.push_str(&committed);
         }
-        Ok(())
+        let live = if dump_hint {
+            display
+        } else if self.is_command_code_subagent() {
+            // Command Code keeps answer chrome visible in thinking before tools.
+            display
+        } else if is_adapter_tool_marker(&display)
+            || display
+                .lines()
+                .any(|line| is_provider_status_line(line.trim()))
+        {
+            display
+        } else {
+            // Full AgentMessage prose collapses Claude Code 2.1 SubAgent chrome
+            // to Frolicking/Wandering and hides later ▶ Bash (same class as CoT
+            // dump). Tip-only; body stays in pending_answer until finish.
+            "▶ Working…\n".to_owned()
+        };
+        self.thinking
+            .progress_status_keep_open(&mut self.blocks, &live, stream)
+            .await
     }
 
     pub(super) async fn emit_filtered_subagent_reasoning(

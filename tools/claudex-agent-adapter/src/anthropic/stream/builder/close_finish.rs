@@ -118,8 +118,21 @@ impl SegmentBuilder {
     ) -> Result<Segment> {
         self.report_incomplete_launches(stream).await?;
         self.report_no_subagent_action(stream).await?;
-        self.commit_pending_reasoning_for_transcript(stream).await?;
-        self.close_open_blocks(stream).await?;
+        let tool_handoff = self.is_subagent && self.external_tool_calls > 0;
+        if tool_handoff {
+            // Codex SubAgent tool_use handoff: keep thinking open on the live
+            // SSE so Claude Code 2.1 does not collapse to Thought-for while the
+            // client executes Read/Bash (ACP native tools never close thinking
+            // either). Still materialize buffered CoT/answer into the segment
+            // for transcript — answer flush uses stream=None so text_delta does
+            // not ride the open Thought chrome.
+            self.commit_pending_reasoning_for_transcript(stream).await?;
+            self.flush_pending_answer(None).await?;
+            self.close_text_block(stream).await?;
+        } else {
+            self.commit_pending_reasoning_for_transcript(stream).await?;
+            self.close_open_blocks(stream).await?;
+        }
         sanitize_committed_blocks(&mut self.blocks);
         let stop_reason = if self.external_tool_calls > 0 {
             "tool_use"

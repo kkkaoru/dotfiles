@@ -405,8 +405,12 @@ async fn qwen_agent_message_then_tool_progress_stays_in_thinking_chrome() {
     );
     let thinking = thinking_text(&builder);
     assert!(
-        thinking.contains("Phase 1: reading CLAUDE.md"),
-        "{thinking}"
+        thinking.contains("▶ Working"),
+        "AgentMessage prose must stay tip-only live: {thinking}"
+    );
+    assert!(
+        !thinking.contains("Phase 1: reading CLAUDE.md"),
+        "full AgentMessage must not dump into live thinking: {thinking}"
     );
     assert!(
         thinking.contains("▶ ReadFile") || thinking.contains("▶ Read"),
@@ -689,8 +693,13 @@ async fn cline_agent_message_prose_is_visible_before_end_turn() {
     live.ingest_available(&mut receiver);
     assert!(live.turn_still_open());
     assert!(
-        live.visible_thinking.contains("型と配信パスを把握しました"),
-        "Cline narration must show in the SubAgent viewer: {:?}",
+        live.visible_thinking.contains("▶ Working"),
+        "Cline narration must show tip-only in the SubAgent viewer: {:?}",
+        live.visible_thinking
+    );
+    assert!(
+        !live.visible_thinking.contains("型と配信パスを把握しました"),
+        "full AgentMessage prose collapses CC 2.1 chrome: {:?}",
         live.visible_thinking
     );
     assert!(
@@ -705,7 +714,7 @@ async fn cline_agent_message_prose_is_visible_before_end_turn() {
         .expect("elapsed keepalive");
     live.ingest_available(&mut receiver);
     assert!(
-        live.visible_thinking.contains("型と配信パスを把握しました"),
+        live.visible_thinking.contains("▶ Working"),
         "silence after prose must keep the open thought live: {:?}",
         live.visible_thinking
     );
@@ -965,19 +974,19 @@ fn assert_qwen_status_live(live: &LiveView) {
         "status chunk must not end the SubAgent turn"
     );
     assert!(
-        live.visible_thinking.contains("Starting inspection"),
-        "SubAgent prose must paint thinking chrome live: {:?}",
+        live.visible_thinking.contains("▶ Working"),
+        "SubAgent prose must paint tip-only thinking chrome live: {:?}",
+        live.visible_thinking
+    );
+    assert!(
+        !live.visible_thinking.contains("Starting inspection"),
+        "full AgentMessage prose collapses CC 2.1 chrome: {:?}",
         live.visible_thinking
     );
     assert!(
         live.hidden_text.is_empty(),
         "prose must not wait in hidden text_delta: {:?}",
         live.hidden_text
-    );
-    assert!(
-        !live.visible_thinking.contains('▶'),
-        "no tool chrome yet: {:?}",
-        live.visible_thinking
     );
 }
 
