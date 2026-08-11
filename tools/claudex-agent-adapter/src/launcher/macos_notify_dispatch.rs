@@ -4,9 +4,28 @@ use anyhow::{Context, Result, bail};
 
 use super::macos_notify::{Event, NotifyKind, post_in_process};
 
-/// Opt-in gate for user-visible banners. ensure/mcp stay silent unless
-/// `claudex install` / `claudex-hot-swap` export this.
+/// Opt-in gate for user-visible banners.
+///
+/// Defaults off so mcp/launch/`hot-swap --wait-idle` waiters stay silent.
+/// CLI `ensure` / interactive `hot-swap` call [`opt_in_cli_swap_notify`] when
+/// the env is unset. `claudex install` forces `0` during swap then posts one
+/// `__internal-notify` itself to avoid promote + idle-replace double alerts.
 pub(crate) const MACOS_NOTIFY_ENV: &str = "CLAUDEX_MACOS_NOTIFY";
+
+/// Enable swap-complete banners for interactive CLI ensure/hot-swap.
+///
+/// No-op when `CLAUDEX_MACOS_NOTIFY` is already set (including explicit `0`
+/// from after-install). Idle waiters must not call this: they inherit a
+/// cleared env and should stay silent until install posts one banner.
+pub(crate) fn opt_in_cli_swap_notify() {
+    if std::env::var_os(MACOS_NOTIFY_ENV).is_some() {
+        return;
+    }
+    // CLI entry is single-threaded before ensure/hot-swap work begins.
+    unsafe {
+        std::env::set_var(MACOS_NOTIFY_ENV, "1");
+    }
+}
 
 #[cfg(test)]
 std::thread_local! {
@@ -37,7 +56,7 @@ pub(super) fn parse_notify_env(value: Option<&str>) -> bool {
         Some("0" | "false" | "FALSE" | "no" | "NO") => false,
         Some("1" | "true" | "TRUE" | "yes" | "YES") => true,
         // Unit tests default on so notify coverage stays independent of host env.
-        // Production defaults off until install/hot-swap opt in.
+        // Production defaults off until CLI ensure/hot-swap or install opt in.
         _ => cfg!(test),
     }
 }

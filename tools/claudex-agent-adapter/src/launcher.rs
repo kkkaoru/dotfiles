@@ -184,6 +184,11 @@ pub fn run_internal_notify(arguments: Vec<OsString>) -> Result<()> {
     macos_notify_dispatch::run_internal(arguments)
 }
 
+/// Opt interactive CLI `ensure` / `hot-swap` into macOS swap banners when unset.
+pub fn opt_in_cli_swap_notify() {
+    macos_notify_dispatch::opt_in_cli_swap_notify()
+}
+
 /// Update the listener without ending Claude Code / claudex sessions.
 /// Handover-capable daemons warm-start the new build, then cut `:port` over so
 /// idle TUI turns use the new generation immediately. Only in-flight sessions

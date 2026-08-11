@@ -5,8 +5,9 @@ use std::{
 };
 
 use super::{
-    DelegateForceGuard, NotifyForceGuard, delegate_complete_notify, interpret_delegate_status,
-    notifications_enabled, parse_notify_env, post, run_internal,
+    DelegateForceGuard, MACOS_NOTIFY_ENV, NotifyForceGuard, delegate_complete_notify,
+    interpret_delegate_status, notifications_enabled, opt_in_cli_swap_notify, parse_notify_env,
+    post, run_internal,
 };
 use crate::launcher::{installed_adapter, launcher_logs, macos_notify::Event};
 
@@ -51,6 +52,41 @@ fn parse_notify_env_honors_explicit_tokens() {
     }
     for value in ["1", "true", "TRUE", "yes", "YES"] {
         assert!(parse_notify_env(Some(value)), "{value} must opt in");
+    }
+}
+
+#[test]
+fn opt_in_cli_swap_notify_defaults_on_only_when_unset() {
+    let _lock = env_lock();
+    let previous = std::env::var_os(MACOS_NOTIFY_ENV);
+    // SAFETY: test restores previous value under ENV_LOCK.
+    unsafe {
+        std::env::remove_var(MACOS_NOTIFY_ENV);
+    }
+    opt_in_cli_swap_notify();
+    assert_eq!(
+        std::env::var_os(MACOS_NOTIFY_ENV).as_deref(),
+        Some(std::ffi::OsStr::new("1")),
+        "interactive ensure/hot-swap must default CLAUDEX_MACOS_NOTIFY=1"
+    );
+
+    unsafe {
+        std::env::set_var(MACOS_NOTIFY_ENV, "0");
+    }
+    opt_in_cli_swap_notify();
+    assert_eq!(
+        std::env::var_os(MACOS_NOTIFY_ENV).as_deref(),
+        Some(std::ffi::OsStr::new("0")),
+        "after-install CLAUDEX_MACOS_NOTIFY=0 must not be overridden"
+    );
+
+    match previous {
+        Some(value) => unsafe {
+            std::env::set_var(MACOS_NOTIFY_ENV, value);
+        },
+        None => unsafe {
+            std::env::remove_var(MACOS_NOTIFY_ENV);
+        },
     }
 }
 

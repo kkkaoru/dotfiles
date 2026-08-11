@@ -9,9 +9,9 @@ use crate::{
 };
 use anyhow::{Context, Result, bail};
 
+mod cli_swap;
 mod hard_timeout;
 mod shutdown;
-
 #[derive(Debug)]
 enum RuntimeCommand {
     BuildId,
@@ -35,11 +35,11 @@ pub async fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<i32> {
             0
         }
         RuntimeCommand::Ensure(options) => {
-            println!("{}", launcher::ensure_running(options).await?);
+            println!("{}", cli_swap::run_ensure(options).await?);
             0
         }
         RuntimeCommand::HotSwap(options, wait_idle) => {
-            println!("{}", launcher::hot_swap(options, wait_idle).await?);
+            println!("{}", cli_swap::run_hot_swap(options, wait_idle).await?);
             0
         }
         RuntimeCommand::Launch(options, arguments, inherit_claude_model) => {
