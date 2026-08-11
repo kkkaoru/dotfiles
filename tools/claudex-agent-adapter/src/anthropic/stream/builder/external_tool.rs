@@ -216,10 +216,10 @@ impl SegmentBuilder {
             return self.close_open_blocks(stream).await;
         }
         // CC 2.1 SubAgent viewer paints one live thinking block and hides
-        // tool_use until end_turn. Closing thinking for Read/Bash left only
-        // "Thought for Xs" with no ▶ body. Keep thinking open and paint ▶
-        // before the tool_use card.
-        self.flush_pending_answer(stream).await?;
+        // tool_use until end_turn. Keep thinking open and paint ▶ before the
+        // tool_use card. Do not flush pending_answer mid-turn — emitting
+        // text_delta while thinking is open makes ▶ Read flash then collapse
+        // to "Perambulating…". Answer text stays buffered until finish.
         self.close_text_block(stream).await?;
         if self.is_command_code_subagent() {
             return Ok(());

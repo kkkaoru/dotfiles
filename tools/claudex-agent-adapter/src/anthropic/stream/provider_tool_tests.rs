@@ -884,6 +884,19 @@ mod tests {
             "long tool silence must keep the open ▶ thought live: {:?}",
             live.visible_thinking
         );
+        let tip = live
+            .visible_thinking
+            .chars()
+            .filter(|ch| *ch != '\u{200b}')
+            .collect::<String>();
+        assert!(
+            tip.trim_end()
+                .lines()
+                .rev()
+                .find(|line| !line.trim().is_empty())
+                .is_some_and(|line| line.contains('▶')),
+            "keepalive must re-tip ▶ so CC does not flash blank Perambulating: {tip:?}"
+        );
         assert!(
             !live.visible_thinking.contains("still working")
                 && !live.visible_thinking.contains("last:"),

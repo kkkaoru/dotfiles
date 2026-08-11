@@ -300,7 +300,17 @@ impl SegmentBuilder {
                 last_tool.as_deref(),
                 stream,
             )
-            .await
+            .await?;
+        // After ZWSP, re-tip the open thought with the active tool so CC 2.1's
+        // collapsed SubAgent view keeps showing ▶ Read/Bash instead of blank
+        // "Perambulating…" between provider events.
+        if let Some(title) = last_tool.filter(|title| !title.is_empty()) {
+            let tip = format!("▶ {title}\n");
+            self.thinking
+                .progress_status_keep_open(&mut self.blocks, &tip, stream)
+                .await?;
+        }
+        Ok(())
     }
 
     pub(in crate::anthropic::stream::builder) async fn flush_pending_answer(
