@@ -556,3 +556,24 @@ fn cleans_empty_signature_buckets_at_the_bound() {
     assert_eq!(value.as_ref(), "after-cleanup");
     assert_eq!(pool.lock().expect("signature pool").len(), 1);
 }
+
+#[test]
+fn intern_signature_scans_past_hash_colliding_candidates() {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+
+    let pool = SignaturePool::default();
+    let mut hasher = DefaultHasher::new();
+    "keep-scanning".hash(&mut hasher);
+    let key = hasher.finish();
+    let decoy = Arc::<str>::from("decoy-signature");
+    {
+        let mut buckets = pool.lock().expect("signature pool");
+        buckets.insert(key, vec![Arc::downgrade(&decoy)]);
+    }
+    let matched = intern_signature(&pool, "keep-scanning".to_owned());
+    assert_eq!(matched.as_ref(), "keep-scanning");
+    assert!(
+        !Arc::ptr_eq(&matched, &decoy),
+        "hash-bucket peers must not be reused across distinct signatures"
+    );
+}

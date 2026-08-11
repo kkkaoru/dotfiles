@@ -621,6 +621,40 @@ mod tests {
     }
 
     #[test]
+    fn covers_trace_launch_shaped_event_prefix_and_missing_params() {
+        let map = names();
+        // Titles that miss looks_like_launch_tool exact match still trip the
+        // agent/task prefix / colon branches inside trace_launch_shaped_event.
+        for title in ["agent follow-up", "task follow-up", "agent:spawn", "task:spawn"] {
+            let _ = bridge_provider_tool_call(
+                &map,
+                &json!({
+                    "params": {
+                        "callId": "trace-1",
+                        "tool": "Bash",
+                        "title": title,
+                        "status": "pending",
+                        "arguments": {"prompt": "ping"}
+                    }
+                }),
+            );
+        }
+        let _ = bridge_provider_tool_call(&map, &json!({}));
+        let _ = bridge_provider_tool_call(
+            &map,
+            &json!({
+                "params": {
+                    "callId": "trace-2",
+                    "tool": "Bash",
+                    "title": "plain shell",
+                    "status": "pending",
+                    "arguments": {"command": "true"}
+                }
+            }),
+        );
+    }
+
+    #[test]
     fn covers_is_unbridged_launch_progress_missing_params() {
         let map = names();
         assert!(!is_unbridged_launch_progress(&map, &json!({})));

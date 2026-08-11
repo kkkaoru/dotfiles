@@ -465,6 +465,23 @@ mod tests {
             .is_none(),
             "reminder-only trailing text must not invent steering"
         );
+        assert!(
+            mid_turn_user_steering(&[json!({
+                "role":"user",
+                "content":[
+                    {"type":"tool_result","tool_use_id":"tool-1","content":"done"},
+                    {"type":"text","text":"<agent-message>lifecycle only</agent-message>"},
+                    {"type":"text","text":"Another Claude session sent a message"},
+                    {
+                        "type":"text",
+                        "text":"The user sent a new message while you were working:\n実作業を続けて\n\nAddress the message above as you continue this turn."
+                    }
+                ]
+            })])
+            .as_deref()
+            == Some("実作業を続けて"),
+            "agent/session chrome must be filtered while real steering remains"
+        );
     }
 
     fn result(tool_use_id: &str) -> ToolResult {

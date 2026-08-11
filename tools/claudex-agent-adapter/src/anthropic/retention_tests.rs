@@ -124,6 +124,34 @@ async fn bridge_sweep_releases_session_scoped_provider_pool() {
 }
 
 #[tokio::test]
+async fn release_provider_scope_shuts_down_when_no_sessions_reference_it() {
+    let bridge = Bridge::new_with_backend(
+        AgentBackend::spawn_routes(&[BackendRoute::new(
+            "main",
+            BackendKind::CodexAppServer,
+        )]),
+        "main".to_owned(),
+    );
+    let _ = bridge.app_for(Some("orphan-scope"));
+    let AgentBackend::SessionScoped(scopes) = bridge.app.as_ref() else {
+        panic!("spawn_routes must build SessionScoped");
+    };
+    assert_eq!(scopes.scope_count(), 1);
+
+    bridge
+        .release_provider_scope_if_unused(Some("orphan-scope"))
+        .await;
+    let AgentBackend::SessionScoped(scopes) = bridge.app.as_ref() else {
+        panic!("spawn_routes must build SessionScoped");
+    };
+    assert_eq!(
+        scopes.scope_count(),
+        0,
+        "unused Claude session scopes must shut down their provider pool"
+    );
+}
+
+#[tokio::test]
 async fn release_keeps_scope_while_a_detached_session_still_references_it() {
     let bridge = Bridge::new_with_backend(
         AgentBackend::spawn_routes(&[BackendRoute::new(

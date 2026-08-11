@@ -72,3 +72,25 @@ fn extract_steering_body(text: &str) -> String {
         .unwrap_or(body)
         .to_owned()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{steering_noise, strip_system_reminders};
+
+    #[test]
+    fn steering_noise_covers_empty_markers_and_unclosed_reminders() {
+        assert!(steering_noise("   \t"));
+        assert!(steering_noise("<agent-message id=\"1\">ping</agent-message>"));
+        assert!(steering_noise(
+            "<teammate-message from=\"x\">ping</teammate-message>"
+        ));
+        assert!(steering_noise(
+            "Another Claude session sent a message while you were working"
+        ));
+        assert_eq!(
+            strip_system_reminders("<system-reminder>still open").trim(),
+            "<system-reminder>still open"
+        );
+        assert!(!steering_noise("keep this steering body"));
+    }
+}

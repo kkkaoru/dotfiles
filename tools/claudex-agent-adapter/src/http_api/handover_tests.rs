@@ -809,6 +809,118 @@ async fn should_proxy_keeps_session_within_idle_grace_after_work() {
 }
 
 #[tokio::test]
+async fn should_proxy_rejects_sessions_that_are_not_tracked() {
+    let root = tempfile::tempdir().expect("untracked sticky fixture");
+    let path = root.path().join("retained.json");
+    std::fs::write(
+        &path,
+        br#"{"listen":"127.0.0.1:9","pid":1,"build_id":"old","session_ids":["session-a"]}"#,
+    )
+    .expect("write retained");
+    let proxy = retained(&path, "127.0.0.1:9", &["session-a"]);
+    assert!(
+        !proxy.should_proxy_session("session-other", None).await,
+        "untracked Claude sessions must never sticky-proxy"
+    );
+}
+
+#[tokio::test]
+async fn should_proxy_clears_when_retained_pid_mismatches() {
+    let upstream = serve_retained_generation(b"from-other", &["session-a"]).await;
+    let root = tempfile::tempdir().expect("pid mismatch fixture");
+    let path = root.path().join("retained.json");
+    std::fs::write(
+        &path,
+        format!(
+            r#"{{"listen":"{upstream}","pid":42,"build_id":"old","session_ids":["session-a"]}}"#
+        ),
+    )
+    .expect("write retained");
+    // Snapshot pid differs from /health pid (1) so sticky must drop ownership.
+    let proxy = RetainedProxy::from_path(
+        path.clone(),
+        RetainedGeneration {
+            listen: upstream,
+            pid: 42,
+            build_id: "old".to_owned(),
+            session_ids: vec!["session-a".to_owned()],
+            agent_ids: Vec::new(),
+            agent_ages: std::collections::BTreeMap::new(),
+        },
+    );
+    assert!(!proxy.should_proxy_session("session-a", None).await);
+    assert!(!proxy.owns("session-a"));
+    assert!(
+        !path.exists(),
+        "pid mismatch must clear the retained snapshot"
+    );
+}
+
+#[tokio::test]
+async fn should_proxy_times_out_health_without_clearing_retained() {
+    let silent = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("silent retained listener");
+    let silent_addr = silent.local_addr().expect("silent retained address");
+    // Read the request then stall so reqwest's 400ms probe timeout fires
+    // (is_timeout), rather than a connect refusal.
+    tokio::spawn(async move {
+        while let Ok((mut stream, _)) = silent.accept().await {
+            tokio::spawn(async move {
+                let mut buf = [0; 1024];
+                let _ = stream.read(&mut buf).await;
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            });
+        }
+    });
+    let root = tempfile::tempdir().expect("direct slow health fixture");
+    let path = root.path().join("retained.json");
+    std::fs::write(
+        &path,
+        format!(
+            r#"{{"listen":"{silent_addr}","pid":1,"build_id":"old","session_ids":["session-a"]}}"#
+        ),
+    )
+    .expect("write retained");
+    let proxy = retained(&path, &silent_addr.to_string(), &["session-a"]);
+    let started = std::time::Instant::now();
+    assert!(
+        !proxy.should_proxy_session("session-a", None).await,
+        "timed-out /health must fall through without sticky"
+    );
+    assert!(
+        started.elapsed() >= Duration::from_millis(300),
+        "health probe must wait for the request timeout"
+    );
+    assert!(
+        path.exists(),
+        "timed-out /health must keep the retained snapshot"
+    );
+    assert!(proxy.owns("session-a"));
+}
+
+#[test]
+fn retained_proxy_resets_grace_memory_when_pid_changes() {
+    let root = tempfile::tempdir().expect("pid change fixture");
+    let path = root.path().join("retained.json");
+    std::fs::write(
+        &path,
+        br#"{"listen":"127.0.0.1:9","pid":1,"build_id":"old","session_ids":["session-a"],"agent_ids":["agent-old"]}"#,
+    )
+    .expect("write retained");
+    let proxy = retained_with_agents(&path, "127.0.0.1:9", &["session-a"], &["agent-old"]);
+    proxy.mark_recent_work_for_test();
+    proxy.remember_agent_for_test("agent-local");
+    std::fs::write(
+        &path,
+        br#"{"listen":"127.0.0.1:9","pid":2,"build_id":"new","session_ids":["session-b"],"agent_ids":["agent-new"],"agent_ages":{"agent-new":1}}"#,
+    )
+    .expect("update retained generation");
+    assert!(proxy.owns("session-b"));
+    assert!(!proxy.owns("session-a"));
+}
+
+#[tokio::test]
 async fn rebound_daemon_forwards_idle_keepalive_to_canonical() {
     // Old failure: after live-update rebind, Claude Code keep-alive stayed on
     // the old binary. Cursor SubAgent /v1/messages then never reached :8318.
