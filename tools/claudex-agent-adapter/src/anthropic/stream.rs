@@ -116,7 +116,6 @@ impl Bridge {
 
     // This event loop owns the live SegmentBuilder across keepalive, completion,
     // disconnect, and context-window transitions.
-    #[allow(clippy::excessive_nesting)]
     async fn wait_for_stream_segment_with_interval(
         &self,
         input: StreamWaitInput<'_>,
@@ -137,7 +136,7 @@ impl Bridge {
         let mut sse = Some(sender);
         loop {
             let wait = match self
-                .wait_for_stream_event(
+                .take_stream_wait(
                     session,
                     Arc::clone(&events),
                     &mut sse,
@@ -145,17 +144,10 @@ impl Bridge {
                     activity_interval,
                     &mut activity_deadline,
                 )
-                .await
+                .await?
             {
-                Ok(wait) => wait,
-                Err(error)
-                    if is_provider_stream_closed(&error)
-                        && !self.app.model_is_alive(&session.model)
-                        && !builder.has_committed_output() =>
-                {
-                    return Ok(StreamTurn::ProviderFailure { error });
-                }
-                Err(error) => return Err(error),
+                ControlFlow::Break(turn) => return Ok(turn),
+                ControlFlow::Continue(wait) => wait,
             };
             let state = self
                 .resolve_stream_wait(
@@ -167,16 +159,38 @@ impl Bridge {
                     &mut builder,
                 )
                 .await?;
-            match state {
-                StreamEventState::Continue => continue,
-                StreamEventState::Done(turn) => return Ok(*turn),
-                StreamEventState::ContextWindow(error) => {
-                    return Ok(StreamTurn::ContextWindow { error, builder });
-                }
-                StreamEventState::UsageLimit(error) => {
-                    return Ok(StreamTurn::UsageLimit { error, builder });
-                }
+            match finish_stream_event_state(state, builder) {
+                ControlFlow::Break(turn) => return Ok(turn),
+                ControlFlow::Continue(next) => builder = next,
             }
+        }
+    }
+
+    async fn take_stream_wait(
+        &self,
+        session: &Arc<Session>,
+        events: Arc<crate::app_server::ThreadEvents>,
+        sse: &mut Option<&StreamSender>,
+        builder: &mut SegmentBuilder,
+        activity_interval: std::time::Duration,
+        activity_deadline: &mut std::pin::Pin<Box<tokio::time::Sleep>>,
+    ) -> Result<ControlFlow<StreamTurn, StreamWaitResult>> {
+        match self
+            .wait_for_stream_event(
+                session,
+                events,
+                sse,
+                builder,
+                activity_interval,
+                activity_deadline,
+            )
+            .await
+        {
+            Ok(wait) => Ok(ControlFlow::Continue(wait)),
+            Err(error) if stream_provider_failure(&error, self, session, builder) => {
+                Ok(ControlFlow::Break(StreamTurn::ProviderFailure { error }))
+            }
+            Err(error) => Err(error),
         }
     }
 
@@ -327,6 +341,33 @@ impl Bridge {
         self.finish_closed_stream(session, events, provider_settled)
             .await;
         true
+    }
+}
+
+fn stream_provider_failure(
+    error: &anyhow::Error,
+    bridge: &Bridge,
+    session: &Session,
+    builder: &SegmentBuilder,
+) -> bool {
+    is_provider_stream_closed(error)
+        && !bridge.app.model_is_alive(&session.model)
+        && !builder.has_committed_output()
+}
+
+fn finish_stream_event_state(
+    state: StreamEventState,
+    builder: SegmentBuilder,
+) -> ControlFlow<StreamTurn, SegmentBuilder> {
+    match state {
+        StreamEventState::Continue => ControlFlow::Continue(builder),
+        StreamEventState::Done(turn) => ControlFlow::Break(*turn),
+        StreamEventState::ContextWindow(error) => {
+            ControlFlow::Break(StreamTurn::ContextWindow { error, builder })
+        }
+        StreamEventState::UsageLimit(error) => {
+            ControlFlow::Break(StreamTurn::UsageLimit { error, builder })
+        }
     }
 }
 
