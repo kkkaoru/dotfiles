@@ -208,6 +208,32 @@ pub async fn hot_swap(options: AdapterOptions, wait_idle: bool) -> Result<String
     .await
 }
 
+fn acquire_resume_session_lock(
+    config: &ServiceConfig,
+    arguments: &[OsString],
+) -> Result<Option<launcher_lock::LauncherLock>> {
+    let Some(resume_id) = resume::session_lock_id(arguments) else {
+        return Ok(None);
+    };
+    if session_process::another_resume_launcher_is_active(&resume_id)? {
+        bail!("{}", resume_session_busy_message(&resume_id));
+    }
+    let cache = config
+        .log_path
+        .parent()
+        .context("adapter log has no parent directory")?;
+    let path = launcher_logs::session_lock_path(cache, &resume_id);
+    let lock = launcher_lock::try_acquire(&path)?
+        .ok_or_else(|| anyhow::anyhow!("{}", resume_session_busy_message(&resume_id)))?;
+    Ok(Some(lock))
+}
+
+fn resume_session_busy_message(resume_id: &str) -> String {
+    format!(
+        "resume session '{resume_id}' is already active; continue in the existing Claude Code process or use --fork-session"
+    )
+}
+
 pub async fn run_claude(
     options: AdapterOptions,
     arguments: Vec<OsString>,
@@ -219,25 +245,7 @@ pub async fn run_claude(
     let policy_header = policy::active_header()?;
     let cwd = std::env::current_dir().context("resolve Claude Code working directory")?;
     let arguments = prepare_arguments(arguments, &cwd);
-    let _session_lock = if let Some(resume_id) = resume::session_lock_id(&arguments) {
-        if session_process::another_resume_launcher_is_active(&resume_id)? {
-            bail!(
-                "resume session '{resume_id}' is already active; continue in the existing Claude Code process or use --fork-session"
-            );
-        }
-        let cache = config
-            .log_path
-            .parent()
-            .context("adapter log has no parent directory")?;
-        let path = launcher_logs::session_lock_path(cache, &resume_id);
-        Some(launcher_lock::try_acquire(&path)?.ok_or_else(|| {
-            anyhow::anyhow!(
-                "resume session '{resume_id}' is already active; continue in the existing Claude Code process or use --fork-session"
-            )
-        })?)
-    } else {
-        None
-    };
+    let _session_lock = acquire_resume_session_lock(&config, &arguments)?;
     let base_url = ensure::run(&config, ensure::Mode::Ensure).await?;
     let session_id = session_id_for_launch(&arguments, || {
         format!("session_{}", Uuid::new_v4().simple())

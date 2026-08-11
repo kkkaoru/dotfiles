@@ -165,14 +165,14 @@ async fn set_effort_option(
         "effort",
         acp::SessionConfigValueId::new(effort),
     );
-    match tokio::time::timeout(
-        EFFORT_SETUP_TIMEOUT,
-        connection.set_session_config_option(request),
+    map_effort_setup_result(
+        tokio::time::timeout(
+            EFFORT_SETUP_TIMEOUT,
+            connection.set_session_config_option(request),
+        )
+        .await,
     )
-    .await
-    {
-        result => map_effort_setup_result(result).map(|_| ()),
-    }
+    .map(|_| ())
 }
 
 fn map_effort_setup_result<T>(
@@ -189,9 +189,10 @@ async fn set_model(
     connection: &acp::ClientSideConnection,
     request: acp::SetSessionModelRequest,
 ) -> Result<(), EffortSetupError> {
-    match tokio::time::timeout(EFFORT_SETUP_TIMEOUT, connection.set_session_model(request)).await {
-        result => map_effort_setup_result(result).map(|_| ()),
-    }
+    map_effort_setup_result(
+        tokio::time::timeout(EFFORT_SETUP_TIMEOUT, connection.set_session_model(request)).await,
+    )
+    .map(|_| ())
 }
 
 fn model_meta(effort: Option<&str>) -> Option<Map<String, Value>> {
@@ -216,14 +217,19 @@ mod tests {
             map_effort_setup_result::<()>(Ok(Err(acp::Error::internal_error()))),
             Err(EffortSetupError::Failed(_))
         ));
-        let timed_out = tokio::time::timeout(Duration::from_millis(1), async {
-            tokio::time::sleep(Duration::from_secs(1)).await;
-            Ok::<(), acp::Error>(())
-        })
-        .await;
+        let timed_out = effort_setup_timeout_fixture().await;
         assert!(matches!(
             map_effort_setup_result(timed_out),
             Err(EffortSetupError::TimedOut)
         ));
+    }
+
+    async fn effort_setup_timeout_fixture(
+    ) -> Result<Result<(), acp::Error>, tokio::time::error::Elapsed> {
+        tokio::time::timeout(Duration::from_millis(1), async {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            Ok::<(), acp::Error>(())
+        })
+        .await
     }
 }

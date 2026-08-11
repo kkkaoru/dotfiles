@@ -70,20 +70,13 @@ impl Bridge {
             .keys()
             .cloned()
             .collect::<Vec<_>>();
-        if !pending_ids.is_empty() {
-            let async_set = async_launch_ids
-                .iter()
-                .map(String::as_str)
-                .collect::<HashSet<_>>();
+        if !pending_ids.is_empty()
+            && pending_tools_outside_async_launches(&pending_ids, async_launch_ids)
+        {
             // Only disconnect when every still-pending tool belongs to this
             // background launch acknowledgement. Leftover non-agent tools must
             // keep the provider turn open.
-            if pending_ids
-                .iter()
-                .any(|pending_id| !async_set.contains(pending_id.as_str()))
-            {
-                return false;
-            }
+            return false;
         }
         let ready = self.app.ensure_thread_ready(&session.thread_id).await;
         if ready.is_err() {
@@ -95,6 +88,16 @@ impl Bridge {
             .await;
         true
     }
+}
+
+fn pending_tools_outside_async_launches(pending_ids: &[String], async_launch_ids: &[String]) -> bool {
+    let async_set = async_launch_ids
+        .iter()
+        .map(String::as_str)
+        .collect::<HashSet<_>>();
+    pending_ids
+        .iter()
+        .any(|pending_id| !async_set.contains(pending_id.as_str()))
 }
 
 /// Collect successful async background-launch tool_result IDs from a user

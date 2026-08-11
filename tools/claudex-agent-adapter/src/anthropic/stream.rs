@@ -18,6 +18,7 @@ mod context_window;
 mod control;
 mod disconnect;
 mod drive;
+mod drive_finish;
 mod non_stream;
 mod prepare;
 mod protocol;
@@ -43,7 +44,7 @@ pub(super) use types::{
 use builder::SegmentBuilder;
 pub(in crate::anthropic) use control::commit_transcript;
 #[cfg(test)]
-use prepare::prepare_with_activity;
+use prepare::{PrepareActivityOptions, prepare_with_activity};
 use prepare::{PreparedStream, prime_subagent_sse};
 
 pub(super) use control::{error_flow, turn_flow};
@@ -215,13 +216,13 @@ impl Bridge {
         let is_subagent = builder.is_subagent;
         let segment = builder.finish(sender).await?;
         let sse_open = sender.is_some_and(|sender| !sender.is_closed());
+        if !sse_open && is_subagent {
+            return Ok(StreamTurn::Segment {
+                segment,
+                provider_settled: false,
+            });
+        }
         if !sse_open {
-            if is_subagent {
-                return Ok(StreamTurn::Segment {
-                    segment,
-                    provider_settled: false,
-                });
-            }
             return Ok(self.disconnect_stream(session, events).await);
         }
         // ACP-bridged Agent/spawn: cancel provider so Grok does not also native-spawn.

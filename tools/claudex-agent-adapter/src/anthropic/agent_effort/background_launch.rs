@@ -185,37 +185,29 @@ mod tests {
 
     #[test]
     fn cc_array_content_joins_reminder_and_user_text_for_sync_detection() {
-        let reminder = json!({
-            "type":"text",
-            "text":"<system-reminder>\nClaudex routing\n</system-reminder>"
-        });
-        assert!(!user_requires_synchronous_results(&[json!({
-            "role":"user",
-            "content":[
-                reminder.clone(),
-                {"type":"text","text":"Investigate the neon pooler next."}
-            ]
-        })]));
-        assert!(user_requires_synchronous_results(&[json!({
-            "role":"user",
-            "content":[
-                reminder.clone(),
-                {"type":"text","text":"同期で結果を待ってから次へ進めて"}
-            ]
-        })]));
-        assert!(user_requires_synchronous_results(&[json!({
-            "role":"user",
-            "content":[
-                reminder.clone(),
-                {"type":"text","text":"待ってから次へ進めて"}
-            ]
-        })]));
-        assert!(user_requires_synchronous_results(&[json!({
-            "role":"user",
-            "content":[
-                reminder,
-                {"type":"text","text":"同期して結果を見てから続けて"}
-            ]
-        })]));
+        fn with_reminder(text: &str) -> Value {
+            json!({
+                "role":"user",
+                "content":[
+                    {
+                        "type":"text",
+                        "text":"<system-reminder>\nClaudex routing\n</system-reminder>"
+                    },
+                    {"type":"text","text":text}
+                ]
+            })
+        }
+        assert!(!user_requires_synchronous_results(&[with_reminder(
+            "Investigate the neon pooler next."
+        )]));
+        assert!(user_requires_synchronous_results(&[with_reminder(
+            "同期で結果を待ってから次へ進めて"
+        )]));
+        assert!(user_requires_synchronous_results(&[with_reminder(
+            "待ってから次へ進めて"
+        )]));
+        assert!(user_requires_synchronous_results(&[with_reminder(
+            "同期して結果を見てから続けて"
+        )]));
     }
 }

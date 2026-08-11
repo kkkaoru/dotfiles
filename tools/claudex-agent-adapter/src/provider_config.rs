@@ -1,7 +1,7 @@
 use crate::agent_backend::{AcpLaunch, BackendKind, BackendRoute, WebSearchMode};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashSet, fs, path::Path};
+use std::{fs, path::Path};
 
 mod identities;
 mod types;
@@ -9,7 +9,7 @@ mod validation;
 mod worker_route;
 use identities::{collect_provider_models, collect_route_models};
 use types::{AgentChoice, RequestBudget, WebSearchSettings};
-use validation::{validate_choice, validate_providers, validate_worker_routes};
+use validation::{auxiliary_worker_routes, search_workers_from_providers, validate_choice, validate_main_providers, validate_providers, validate_worker_routes};
 const CONFIG_VERSION: u64 = 1;
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
@@ -280,86 +280,36 @@ fn validate(config: ProviderConfig) -> Result<LoadedConfig> {
     if let Some(advisor) = config.advisor.as_ref() {
         validate_choice(advisor, "advisor")?;
     }
-    // Keep identities for disabled providers so exhausted/denied backends can still be
-    // recognized and remapped instead of falling through to Claude subscription under a
-    // stale provider model id.
-    let mut model_catalog = ModelCatalog::from_providers(&config.providers);
     let search_provider_ids = config.web_search.fallback_providers.clone();
-    let providers = config
-        .providers
-        .into_iter()
-        .filter(|provider| provider.enabled)
-        .collect::<Vec<_>>();
-    if providers.is_empty() {
-        bail!("provider config must enable at least one provider");
-    }
-    validate_providers(&providers)?;
+    let (providers, mut model_catalog) = enabled_providers_catalog(config.providers)?;
     model_catalog.add_workers(&providers, &config.native_workers)?;
-    let mut auxiliary_workers = vec![
-        WorkerRoute::new(
-            config.fallback.agent.clone(),
-            config.fallback.model.clone(),
-            config.fallback.effort.clone(),
-        ),
-        WorkerRoute::new(
-            "claudex-haiku",
-            crate::anthropic::official_claude_haiku_model(),
-            "max",
-        ),
-    ];
-    if let Some(advisor) = config.advisor.as_ref() {
-        auxiliary_workers.push(WorkerRoute::new(
-            advisor.agent.clone(),
-            advisor.model.clone(),
-            advisor.effort.clone(),
-        ));
-    }
-    model_catalog.set_auxiliary_worker_routes(auxiliary_workers)?;
-    let search_workers = search_provider_ids
-        .iter()
-        .map(|id| {
-            providers
-                .iter()
-                .find(|provider| &provider.id == id)
-                .with_context(|| format!("webSearch fallback provider `{id}` is not enabled"))
-        })
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
-        .map(|provider| {
-            WorkerRoute::new(
-                provider.agent.clone(),
-                provider
-                    .subagent_model
-                    .as_ref()
-                    .unwrap_or(&provider.default_model)
-                    .clone(),
-                provider.effort.clone(),
-            )
-            .with_usage_provider(provider.usage_provider.clone())
-        })
-        .collect();
-    model_catalog.set_search_worker_routes(search_workers)?;
-    let enabled_ids = providers
-        .iter()
-        .map(|provider| provider.id.as_str())
-        .collect::<HashSet<_>>();
-    let main_ids = config
-        .main_providers
-        .iter()
-        .map(String::as_str)
-        .collect::<HashSet<_>>();
-    if main_ids.is_empty()
-        || main_ids.len() != config.main_providers.len()
-        || !main_ids.is_subset(&enabled_ids)
-    {
-        bail!("mainProviders must name distinct enabled providers");
-    }
+    model_catalog.set_auxiliary_worker_routes(auxiliary_worker_routes(
+        &config.fallback,
+        config.advisor.as_ref(),
+    ))?;
+    model_catalog.set_search_worker_routes(search_workers_from_providers(
+        &providers,
+        &search_provider_ids,
+    )?)?;
+    validate_main_providers(&providers, &config.main_providers)?;
     let routes = providers.into_iter().map(Provider::into_route).collect();
     Ok(LoadedConfig {
         routes,
         model_catalog,
     })
 }
+fn enabled_providers_catalog(providers: Vec<Provider>) -> Result<(Vec<Provider>, ModelCatalog)> {
+    // Keep identities for disabled providers so exhausted/denied backends can still be
+    // recognized and remapped instead of falling through to Claude subscription.
+    let model_catalog = ModelCatalog::from_providers(&providers);
+    let providers = providers.into_iter().filter(|provider| provider.enabled).collect::<Vec<_>>();
+    if providers.is_empty() {
+        bail!("provider config must enable at least one provider");
+    }
+    validate_providers(&providers)?;
+    Ok((providers, model_catalog))
+}
+
 impl Provider {
     fn required_fields(&self) -> [&str; 4] {
         [&self.id, &self.agent, &self.default_model, &self.effort]

@@ -141,34 +141,35 @@ impl HandoverListener {
         tracing::info!(%listen, "adapter listener rebound");
         Ok(())
     }
+
+    async fn apply_changed_request(
+        &mut self,
+        changed: Result<(), tokio::sync::watch::error::RecvError>,
+    ) {
+        if changed.is_err() {
+            return;
+        }
+        let command = self.request.borrow().clone();
+        if let Err(error) = self.apply(command).await {
+            tracing::error!(%error, "listener handover failed");
+        }
+    }
 }
 
 impl axum::serve::Listener for HandoverListener {
     type Io = TcpStream;
     type Addr = SocketAddr;
 
-    fn accept(&mut self) -> impl std::future::Future<Output = (Self::Io, Self::Addr)> + Send {
-        async move {
-            loop {
-                tokio::select! {
-                    biased;
-                    changed = self.request.changed() => {
-                        if changed.is_err() {
-                            continue;
-                        }
-                        let command = self.request.borrow().clone();
-                        if let Err(error) = self.apply(command).await {
-                            tracing::error!(%error, "listener handover failed");
-                        }
-                    }
-                    result = self.listener.accept() => {
-                        match result {
-                            Ok(accepted) => return accepted,
-                            Err(error) => {
-                                tracing::error!(%error, "adapter accept failed");
-                                tokio::time::sleep(Duration::from_millis(10)).await;
-                            }
-                        }
+    async fn accept(&mut self) -> (Self::Io, Self::Addr) {
+        loop {
+            tokio::select! {
+                biased;
+                changed = self.request.changed() => {
+                    self.apply_changed_request(changed).await;
+                }
+                result = self.listener.accept() => {
+                    if let Some(accepted) = accept_or_backoff(result).await {
+                        return accepted;
                     }
                 }
             }
@@ -177,6 +178,19 @@ impl axum::serve::Listener for HandoverListener {
 
     fn local_addr(&self) -> std::io::Result<Self::Addr> {
         Ok(*self.advertised.read().expect("listen handover lock"))
+    }
+}
+
+async fn accept_or_backoff(
+    result: std::io::Result<(TcpStream, SocketAddr)>,
+) -> Option<(TcpStream, SocketAddr)> {
+    match result {
+        Ok(accepted) => Some(accepted),
+        Err(error) => {
+            tracing::error!(%error, "adapter accept failed");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            None
+        }
     }
 }
 

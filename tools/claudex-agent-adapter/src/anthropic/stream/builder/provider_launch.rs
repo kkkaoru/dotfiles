@@ -36,20 +36,8 @@ impl SegmentBuilder {
             )
         };
         if let Some(call) = bridged {
-            if !self
-                .bridged_provider_launch_ids
-                .iter()
-                .any(|id| id == &call.call_id)
-            {
-                self.bridged_provider_launch_ids.push(call.call_id.clone());
-                tracing::info!(
-                    call_id = %call.call_id,
-                    name = %call.name,
-                    "bridging ACP providerTool launch to Claude Code tool_use"
-                );
-                self.tool_call(bridge, session, current_messages, system, call, stream)
-                    .await?;
-            }
+            self.record_bridged_provider_launch(bridge, session, current_messages, system, call, stream)
+                .await?;
             return Ok(());
         }
         let params = event.get("params");
@@ -80,5 +68,31 @@ impl SegmentBuilder {
         } else {
             self.provider_tool_update(event, stream).await
         }
+    }
+
+    async fn record_bridged_provider_launch(
+        &mut self,
+        bridge: &Bridge,
+        session: &Session,
+        current_messages: &[Value],
+        system: &Value,
+        call: crate::anthropic::stream::ToolCall,
+        stream: Option<&StreamSender>,
+    ) -> Result<()> {
+        if self
+            .bridged_provider_launch_ids
+            .iter()
+            .any(|id| id == &call.call_id)
+        {
+            return Ok(());
+        }
+        self.bridged_provider_launch_ids.push(call.call_id.clone());
+        tracing::info!(
+            call_id = %call.call_id,
+            name = %call.name,
+            "bridging ACP providerTool launch to Claude Code tool_use"
+        );
+        self.tool_call(bridge, session, current_messages, system, call, stream)
+            .await
     }
 }

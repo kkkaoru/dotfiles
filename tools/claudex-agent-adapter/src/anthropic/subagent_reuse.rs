@@ -12,6 +12,7 @@ use serde_json::{Map, Value, json};
 use super::MessagesRequest;
 mod guidance;
 mod records;
+mod records_scope;
 #[cfg(test)]
 use guidance::REUSE_GUIDANCE_MARKER;
 pub(super) use guidance::{agent_teams_enabled, value_text};

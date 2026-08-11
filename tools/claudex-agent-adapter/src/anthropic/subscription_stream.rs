@@ -225,33 +225,8 @@ impl SubscriptionStream {
             &mut routed_input,
             &context.parent_model,
         );
-        if let Some(session_id) = context.session_id.as_deref()
-            && let Some(recipient) = context
-                .subagent_reuse
-                .rewrite_launch_input(session_id, &mut routed_input)
-        {
-            tracing::info!(
-                session_id,
-                recipient,
-                tool = name,
-                "subscription Agent/Task launch reused an existing SubAgent"
-            );
-        }
-        if let Some(model) = super::agent_effort::requested_model(&routed_input) {
-            if context.disabled_subagent_models.contains(model) {
-                anyhow::bail!(super::agent_route_validation::BLOCKED_SUBAGENT_NOTICE);
-            }
-            if super::agent_routing::routing_disables_subagent_model(
-                &context.user_messages,
-                &context.system,
-                model,
-            ) || context.launch_model_is_exhausted(model)
-            {
-                anyhow::bail!(super::agent_route_validation::exhausted_subagent_notice(
-                    model
-                ));
-            }
-        }
+        note_reused_subagent_launch(context, name, &mut routed_input);
+        reject_unavailable_subagent_model(context, &routed_input)?;
         if routed_input.get("claudex_model").is_none() {
             tracing::warn!(
                 tool = name,
@@ -274,20 +249,7 @@ impl SubscriptionStream {
             &context.user_messages,
             &context.system,
         );
-        if let Some(intent) = intent.as_ref() {
-            context.agent_efforts.record_from_user_messages(
-                super::agent_effort::AgentEffortRecord {
-                    client_user_id: context.client_user_id.as_deref(),
-                    tool_name: name,
-                    tool_use_id: id.to_owned(),
-                    parent_model: &context.parent_model,
-                    arguments: intent,
-                    user_messages: &context.user_messages,
-                    system: &context.system,
-                },
-                Some(&context.model_catalog),
-            );
-        }
+        record_prepared_agent_intent(context, name, id, intent.as_ref());
         Ok(public)
     }
 
@@ -335,6 +297,74 @@ impl SubscriptionStream {
             .keepalive(sender, text_index, &mut self.next_index)
             .await
     }
+}
+
+fn note_reused_subagent_launch(
+    context: &super::subscription::SubscriptionToolContext,
+    name: &str,
+    routed_input: &mut Value,
+) {
+    let Some(session_id) = context.session_id.as_deref() else {
+        return;
+    };
+    let Some(recipient) = context
+        .subagent_reuse
+        .rewrite_launch_input(session_id, routed_input)
+    else {
+        return;
+    };
+    tracing::info!(
+        session_id,
+        recipient,
+        tool = name,
+        "subscription Agent/Task launch reused an existing SubAgent"
+    );
+}
+
+fn reject_unavailable_subagent_model(
+    context: &super::subscription::SubscriptionToolContext,
+    routed_input: &Value,
+) -> Result<()> {
+    let Some(model) = super::agent_effort::requested_model(routed_input) else {
+        return Ok(());
+    };
+    if context.disabled_subagent_models.contains(model) {
+        anyhow::bail!(super::agent_route_validation::BLOCKED_SUBAGENT_NOTICE);
+    }
+    let exhausted = super::agent_routing::routing_disables_subagent_model(
+        &context.user_messages,
+        &context.system,
+        model,
+    ) || context.launch_model_is_exhausted(model);
+    if exhausted {
+        anyhow::bail!(super::agent_route_validation::exhausted_subagent_notice(
+            model
+        ));
+    }
+    Ok(())
+}
+
+fn record_prepared_agent_intent(
+    context: &super::subscription::SubscriptionToolContext,
+    name: &str,
+    id: &str,
+    intent: Option<&Value>,
+) {
+    let Some(intent) = intent else {
+        return;
+    };
+    context.agent_efforts.record_from_user_messages(
+        super::agent_effort::AgentEffortRecord {
+            client_user_id: context.client_user_id.as_deref(),
+            tool_name: name,
+            tool_use_id: id.to_owned(),
+            parent_model: &context.parent_model,
+            arguments: intent,
+            user_messages: &context.user_messages,
+            system: &context.system,
+        },
+        Some(&context.model_catalog),
+    );
 }
 
 #[cfg(test)]

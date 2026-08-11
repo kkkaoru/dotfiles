@@ -30,10 +30,7 @@ impl Bridge {
                 .await?
             {
                 ControlFlow::Continue(()) => continue,
-                ControlFlow::Break(segment) if segment.is_empty_end_turn() => {
-                    bail!("{EMPTY_ACP_END_TURN}");
-                }
-                ControlFlow::Break(segment) => return Ok(segment),
+                ControlFlow::Break(segment) => return break_segment_or_empty(segment),
             }
         }
     }
@@ -62,4 +59,11 @@ impl Bridge {
             ControlFlow::Break(()) => Ok(ControlFlow::Break(builder.finish(stream).await?)),
         }
     }
+}
+
+fn break_segment_or_empty(segment: Segment) -> Result<Segment> {
+    if segment.is_empty_end_turn() {
+        bail!("{EMPTY_ACP_END_TURN}");
+    }
+    Ok(segment)
 }

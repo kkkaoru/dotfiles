@@ -146,15 +146,13 @@ fn nonempty_string<'a>(object: &'a Map<String, Value>, key: &str) -> Option<&'a 
 }
 
 fn take_alias_string(object: &mut Map<String, Value>, aliases: &[&str]) -> Option<String> {
-    for key in aliases {
-        if let Some(value) = nonempty_string(object, key).map(str::to_owned) {
-            if *key != aliases[0] {
-                object.remove(*key);
-            }
-            return Some(value);
-        }
+    let (index, value) = aliases.iter().enumerate().find_map(|(index, key)| {
+        nonempty_string(object, key).map(|value| (index, value.to_owned()))
+    })?;
+    if index != 0 {
+        object.remove(aliases[index]);
     }
-    None
+    Some(value)
 }
 
 fn normalize_launch_arguments(provider_name: &str, arguments: &Value) -> Value {

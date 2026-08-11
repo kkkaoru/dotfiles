@@ -2,7 +2,13 @@ use std::collections::{HashMap, HashSet};
 
 use serde_json::Value;
 
-use super::{is_launch_tool, value_text};
+use super::{
+    is_launch_tool,
+    records_scope::{active_status, find_recipient, is_launch_result, parse_recipient, xml_value},
+    value_text,
+};
+
+pub(super) use super::records_scope::{latest_user_text, scope_similarity, summarize_scope};
 
 #[derive(Clone, Debug, Default, serde::Deserialize, Eq, PartialEq, serde::Serialize)]
 pub(super) struct LaunchRecord {
@@ -42,7 +48,7 @@ fn same_logical_launch(current: &LaunchRecord, observed: &LaunchRecord) -> bool 
 }
 
 pub(super) fn launch_scope_key(input: &Value) -> String {
-    normalize_scope(&summarize_scope(input))
+    normalize_scope(&super::records_scope::summarize_scope(input))
 }
 
 pub(super) fn scope_is_occupied(launches: &[LaunchRecord], scope_key: &str) -> bool {
@@ -160,37 +166,49 @@ pub(in crate::anthropic) fn live_agent_task_ids(messages: &[Value]) -> Vec<Strin
         if terminal_status(&launch.status) {
             continue;
         }
-        for candidate in [&launch.recipient, &launch.key] {
-            if crate::anthropic::task_ids::is_claude_code_agent_task_id(candidate)
-                && seen.insert(candidate.to_ascii_lowercase())
-            {
-                ids.push(candidate.clone());
-            }
-        }
+        push_live_candidates(&mut ids, &mut seen, &launch);
     }
     ids
+}
+
+fn push_live_candidates(ids: &mut Vec<String>, seen: &mut HashSet<String>, launch: &LaunchRecord) {
+    for candidate in [&launch.recipient, &launch.key] {
+        if !crate::anthropic::task_ids::is_claude_code_agent_task_id(candidate) {
+            continue;
+        }
+        if seen.insert(candidate.to_ascii_lowercase()) {
+            ids.push(candidate.clone());
+        }
+    }
 }
 
 pub(super) fn apply_transcript(launches: &mut Vec<LaunchRecord>, messages: &[Value]) {
     let mut contexts = HashMap::new();
     for message in messages {
-        if let Some(content) = message.get("content") {
-            let blocks = content.as_array().into_iter().flatten();
-            for block in blocks {
-                remember_launch_context(&mut contexts, block);
-                if let Some(record) = launch_record(block, &contexts) {
-                    merge_launches(launches, std::iter::once(&record));
-                } else {
-                    mark_failed_launch_result(launches, block);
-                }
-            }
-        }
+        apply_message_content(launches, &mut contexts, message);
         if let Some((task_id, status)) = status_update(message) {
             set_task_status(launches, &task_id, status);
             continue;
         }
         if let Some(recipient) = queued_message_recipient(message) {
             set_recipient_status(launches, &recipient, "message_queued".to_owned());
+        }
+    }
+}
+
+fn apply_message_content(
+    launches: &mut Vec<LaunchRecord>,
+    contexts: &mut HashMap<String, (String, Option<String>)>,
+    message: &Value,
+) {
+    let Some(content) = message.get("content") else {
+        return;
+    };
+    for block in content.as_array().into_iter().flatten() {
+        remember_launch_context(contexts, block);
+        match launch_record(block, contexts) {
+            Some(record) => merge_launches(launches, std::iter::once(&record)),
+            None => mark_failed_launch_result(launches, block),
         }
     }
 }
@@ -215,7 +233,7 @@ fn remember_launch_context(
     contexts.insert(
         id.to_owned(),
         (
-            summarize_scope(input),
+            super::records_scope::summarize_scope(input),
             input
                 .get("claudex_model")
                 .and_then(Value::as_str)
@@ -305,96 +323,4 @@ fn status_update(message: &Value) -> Option<(String, String)> {
     let task_id = xml_value(&text, "task-id")?;
     let status = xml_value(&text, "status")?;
     Some((task_id, status))
-}
-
-pub(super) fn latest_user_text(messages: &[Value]) -> String {
-    messages
-        .iter()
-        .rev()
-        .find(|message| message.get("role").and_then(Value::as_str) == Some("user"))
-        .map(|message| value_text(message.get("content")))
-        .unwrap_or_default()
-}
-
-pub(super) fn scope_similarity(scope: &str, task: &str) -> usize {
-    let task_words = task
-        .split(|character: char| !character.is_alphanumeric())
-        .filter(|word| word.len() >= 3)
-        .map(str::to_ascii_lowercase)
-        .collect::<HashSet<_>>();
-    scope
-        .split(|character: char| !character.is_alphanumeric())
-        .filter(|word| word.len() >= 3)
-        .map(str::to_ascii_lowercase)
-        .filter(|word| task_words.contains(word))
-        .count()
-}
-
-pub(super) fn summarize_scope(input: &Value) -> String {
-    // Claude Code's agents panel titles `description`. Two workers with the same
-    // card title are the same scope even when prompts differ by provider.
-    let text = input
-        .get("description")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .or_else(|| input.get("prompt").and_then(Value::as_str))
-        .unwrap_or_default();
-    let summary = text
-        .lines()
-        .filter(|line| {
-            let trimmed = line.trim();
-            !trimmed.is_empty()
-                && !trimmed.starts_with("claudex_")
-                && !trimmed.starts_with("<claudex-")
-        })
-        .take(2)
-        .map(str::trim)
-        .collect::<Vec<_>>()
-        .join(" ");
-    summary.chars().take(180).collect()
-}
-
-fn find_recipient(value: &Value) -> Option<String> {
-    match value {
-        Value::Object(object) => object.iter().find_map(|(key, value)| {
-            if matches!(key.as_str(), "agentId" | "agent_id") {
-                return value
-                    .as_str()
-                    .filter(|recipient| !recipient.is_empty())
-                    .map(str::to_owned);
-            }
-            find_recipient(value)
-        }),
-        Value::Array(values) => values.iter().find_map(find_recipient),
-        _ => None,
-    }
-}
-
-fn parse_recipient(text: &str) -> Option<String> {
-    ["agentId:", "agent_id:"].into_iter().find_map(|marker| {
-        let value = text.split_once(marker)?.1.lines().next()?.trim();
-        let value = value
-            .split_whitespace()
-            .next()
-            .unwrap_or_default()
-            .trim_matches(|character: char| matches!(character, '\'' | '"' | '`' | ',' | ')'));
-        (!value.is_empty()).then(|| value.to_owned())
-    })
-}
-
-fn is_launch_result(text: &str) -> bool {
-    text.contains("Async agent launched")
-        || text.contains("teammate_spawned")
-        || text.contains("working in the background")
-        || text.contains("receives instructions via mailbox")
-}
-fn xml_value(text: &str, tag: &str) -> Option<String> {
-    let open = format!("<{tag}>");
-    let close = format!("</{tag}>");
-    let value = text.split_once(&open)?.1.split_once(&close)?.0.trim();
-    (!value.is_empty()).then(|| value.to_owned())
-}
-fn active_status() -> String {
-    "active".to_owned()
 }

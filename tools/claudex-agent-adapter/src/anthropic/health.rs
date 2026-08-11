@@ -62,10 +62,9 @@ impl Bridge {
             .worker_routes()
             .iter()
             .chain(self.model_catalog.search_worker_routes().iter())
+            .filter(|worker| !worker.model.is_empty())
         {
-            if !worker.model.is_empty() {
-                models.push(worker.model.clone());
-            }
+            models.push(worker.model.clone());
         }
         if let Some((model, _)) = self.model_catalog.configured_fallback() {
             models.push(model.to_owned());

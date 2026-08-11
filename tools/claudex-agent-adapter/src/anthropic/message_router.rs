@@ -4,8 +4,8 @@ use anyhow::Result;
 use axum::{body::Body, http::Response};
 
 use super::{
-    Bridge, MessagesRequest, RequestIdentity, internal_notification, pasted_text, request_routing,
-    token_count, trace_request,
+    Bridge, MessagesRequest, RequestIdentity, internal_notification, message_router_dispatch,
+    pasted_text, request_routing, token_count, trace_request,
 };
 
 impl Bridge {
@@ -51,6 +51,20 @@ impl Bridge {
         token_count(&request)
     }
 
+    fn apply_turn_preflights(
+        self: &Arc<Self>,
+        request: &mut MessagesRequest,
+        route: request_routing::RouteDecision,
+        effort: &mut Option<String>,
+        is_subagent: bool,
+    ) -> Result<request_routing::RouteDecision> {
+        let route = self.apply_usage_limit_preflight(request, route, effort, is_subagent);
+        let route =
+            self.rewrite_exhausted_subagent_request(request, route, effort, is_subagent)?;
+        let route = self.apply_concurrency_preflight(request, route, effort, is_subagent);
+        Ok(self.apply_subscription_auth_preflight(request, route, effort))
+    }
+
     async fn messages_inner(
         self: &Arc<Self>,
         mut request: MessagesRequest,
@@ -62,26 +76,12 @@ impl Bridge {
         self.agent_efforts
             .retire_terminal_task_notifications(&request);
         if internal_notification::is_internal_notification_request(&request) {
-            tracing::debug!(
-                "acknowledging an internal SubAgent notification without provider turn"
-            );
-            tracing::info!(
-                target: "claudex.provider",
-                log_event = "provider_turn_skipped",
-                reason = "internal_notification",
-                "provider turn skipped for an internal notification"
-            );
-            return Ok(internal_notification::acknowledge(&request));
+            return Ok(message_router_dispatch::acknowledge_internal_notification(&request));
         }
         internal_notification::remove_from_transcript(&mut request);
         trace_request(&request);
         if let Some(response) = self.async_agent_launch_handoff(&request).await {
-            tracing::info!(
-                target: "claudex.provider",
-                log_event = "provider_turn_skipped",
-                reason = "native_background_handoff",
-                "provider turn skipped after native background handoff"
-            );
+            message_router_dispatch::log_native_background_handoff();
             return Ok(response);
         }
         let intent = self
@@ -111,11 +111,7 @@ impl Bridge {
             ?route,
             "resolved request routing"
         );
-        let route = self.apply_usage_limit_preflight(&mut request, route, &mut effort, is_subagent);
-        let route =
-            self.rewrite_exhausted_subagent_request(&mut request, route, &mut effort, is_subagent)?;
-        let route = self.apply_concurrency_preflight(&mut request, route, &mut effort, is_subagent);
-        let route = self.apply_subscription_auth_preflight(&mut request, route, &mut effort);
+        let route = self.apply_turn_preflights(&mut request, route, &mut effort, is_subagent)?;
         let request_model = request.model.clone();
         let turn_started = Instant::now();
         tracing::info!(
@@ -128,49 +124,22 @@ impl Bridge {
             route = ?route,
             "provider turn started"
         );
-        let response = if route == request_routing::RouteDecision::Subscription {
-            self.subscription_messages_with_auth_failover(
-                request,
-                effort,
-                is_subagent,
-                tools_were_provided,
-            )
-            .await
-        } else {
-            self.provider_messages_with_usage_limit_failover(
-                request,
-                effort,
-                is_subagent,
-                tools_were_provided,
-                intent.run_in_background,
-            )
-            .await
-        };
-        let duration_ms = turn_started.elapsed().as_millis();
-        match &response {
-            Ok(response) => {
-                let status = response.status().as_u16();
-                tracing::info!(
-                    target: "claudex.provider",
-                    log_event = "provider_turn_end",
-                    status,
-                    duration_ms,
-                    outcome = "response_ready",
-                    "provider turn response is ready"
-                );
-            }
-            Err(error) => {
-                self.note_provider_exhaustion(error, Some(&request_model));
-                tracing::error!(
-                    target: "claudex.provider",
-                    log_event = "provider_turn_end",
-                    duration_ms,
-                    outcome = "error",
-                    error = %error,
-                    "provider turn failed"
-                );
-            }
-        }
+        let response = message_router_dispatch::dispatch_routed_messages(
+            self,
+            request,
+            effort,
+            is_subagent,
+            tools_were_provided,
+            intent.run_in_background,
+            route,
+        )
+        .await;
+        message_router_dispatch::log_provider_turn_end(
+            self,
+            &response,
+            &request_model,
+            turn_started.elapsed(),
+        );
         response
     }
 }

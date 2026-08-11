@@ -69,9 +69,7 @@ impl Bridge {
         match next {
             NextEvent::Event(event) => {
                 reset_activity_deadline(&event, activity_deadline, activity_interval);
-                if is_visible_activity_event(&event) {
-                    builder.note_visible_provider_activity();
-                }
+                note_visible_activity(builder, &event);
                 Ok(StreamWaitResult::Event(event))
             }
             NextEvent::ExternalBatchReady => Ok(StreamWaitResult::Done(Box::new(
@@ -80,5 +78,11 @@ impl Bridge {
             ))),
             NextEvent::Closed => bail!("app-server event stream closed"),
         }
+    }
+}
+
+fn note_visible_activity(builder: &mut SegmentBuilder, event: &serde_json::Value) {
+    if is_visible_activity_event(event) {
+        builder.note_visible_provider_activity();
     }
 }

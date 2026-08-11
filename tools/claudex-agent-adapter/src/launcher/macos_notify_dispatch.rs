@@ -41,7 +41,7 @@ pub(super) fn notifications_enabled() -> bool {
         }
         // Ignore process env on the default test path so a parallel opt-out
         // suite cannot disable banners for unrelated threads.
-        return true;
+        true
     }
     #[cfg(not(test))]
     parse_notify_env(
@@ -138,19 +138,18 @@ fn delegate_complete_notify(cache: &Path, event: &Event) -> bool {
     let Some(cache) = cache.to_str() else {
         return false;
     };
-    match Command::new(&exe)
-        .env(installed_adapter::NOTIFY_IN_PROCESS_ENV, "1")
-        .args([
-            "__internal-notify",
-            "complete",
-            cache,
-            event.listen(),
-            event.build_id(),
-        ])
-        .status()
-    {
-        result => interpret_delegate_status(result),
-    }
+    interpret_delegate_status(
+        Command::new(&exe)
+            .env(installed_adapter::NOTIFY_IN_PROCESS_ENV, "1")
+            .args([
+                "__internal-notify",
+                "complete",
+                cache,
+                event.listen(),
+                event.build_id(),
+            ])
+            .status(),
+    )
 }
 
 fn interpret_delegate_status(result: std::io::Result<std::process::ExitStatus>) -> bool {

@@ -16,6 +16,7 @@ use crate::{
     app_server::{ThreadEvents, events::ThreadEventDispatcher},
 };
 
+mod cancel_settle;
 mod client;
 mod configured;
 mod connection;
@@ -354,13 +355,7 @@ impl GrokAcp {
             })
             .await
         {
-            let message = error.to_string();
-            if !(message.contains("ACP driver is unavailable")
-                || message.contains("ACP driver dropped its response"))
-            {
-                return Err(error);
-            }
-            tracing::info!(session_id, %error, "ACP cancel settled after driver loss");
+            return cancel_settle::settle_cancel_after_driver_loss(session_id, error);
         }
         Ok(())
     }

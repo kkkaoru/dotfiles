@@ -13,15 +13,15 @@ use super::{
     SegmentBuilder, StreamSender, message_start, send_stream_error,
 };
 
-pub(super) struct PreparedStream {
-    pub(super) request: MessagesRequest,
-    pub(super) input_tokens: u64,
-    pub(super) effort: Option<String>,
-    pub(super) concurrency_ticket: Option<Ticket>,
-    pub(super) is_subagent: bool,
-    pub(super) run_in_background: bool,
-    pub(super) sender: StreamSender,
-    pub(super) primed_thinking: bool,
+pub(in crate::anthropic) struct PreparedStream {
+    pub(in crate::anthropic) request: MessagesRequest,
+    pub(in crate::anthropic) input_tokens: u64,
+    pub(in crate::anthropic) effort: Option<String>,
+    pub(in crate::anthropic) concurrency_ticket: Option<Ticket>,
+    pub(in crate::anthropic) is_subagent: bool,
+    pub(in crate::anthropic) run_in_background: bool,
+    pub(in crate::anthropic) sender: StreamSender,
+    pub(in crate::anthropic) primed_thinking: bool,
 }
 
 pub(super) fn subagent_start_status(
@@ -88,20 +88,34 @@ fn subagent_thinking_prime_sse(first_delta: &str) -> [String; 2] {
     ]
 }
 
+pub(super) struct PrepareActivityOptions<'a> {
+    pub(in crate::anthropic) input_tokens: u64,
+    pub(in crate::anthropic) sender: &'a StreamSender,
+    pub(in crate::anthropic) initial_status: Option<&'a str>,
+    pub(in crate::anthropic) first_delay: Duration,
+    pub(in crate::anthropic) interval: Duration,
+    pub(in crate::anthropic) is_subagent: bool,
+    pub(in crate::anthropic) paint_command_code_progress: bool,
+    pub(in crate::anthropic) primed_thinking: bool,
+}
+
 pub(super) async fn prepare_with_activity<F, T>(
     prepare: F,
-    input_tokens: u64,
-    sender: &StreamSender,
-    initial_status: Option<&str>,
-    first_delay: Duration,
-    interval: Duration,
-    is_subagent: bool,
-    paint_command_code_progress: bool,
-    primed_thinking: bool,
+    options: PrepareActivityOptions<'_>,
 ) -> (Result<Option<T>>, SegmentBuilder)
 where
     F: Future<Output = Result<T>>,
 {
+    let PrepareActivityOptions {
+        input_tokens,
+        sender,
+        initial_status,
+        first_delay,
+        interval,
+        is_subagent,
+        paint_command_code_progress,
+        primed_thinking,
+    } = options;
     let mut builder = SegmentBuilder::new(input_tokens)
         .with_subagent(is_subagent)
         .with_command_code_progress(paint_command_code_progress);
@@ -138,7 +152,7 @@ where
 }
 
 impl Bridge {
-    pub(super) async fn drive_prepared_subagent_stream(self: Arc<Self>, prepared: PreparedStream) {
+    pub(in crate::anthropic) async fn drive_prepared_subagent_stream(self: Arc<Self>, prepared: PreparedStream) {
         let PreparedStream {
             mut request,
             input_tokens,
@@ -177,14 +191,16 @@ impl Bridge {
         };
         let (turn, mut builder) = prepare_with_activity(
             prepare,
-            input_tokens,
-            &sender,
-            start_status.as_deref(),
-            first_delay,
-            interval,
-            is_subagent,
-            paint_command_code_progress,
-            primed_thinking,
+            PrepareActivityOptions {
+                input_tokens,
+                sender: &sender,
+                initial_status: start_status.as_deref(),
+                first_delay,
+                interval,
+                is_subagent,
+                paint_command_code_progress,
+                primed_thinking,
+            },
         )
         .await;
         match turn {
@@ -240,16 +256,25 @@ impl Bridge {
         match ticket.acquire_for(!is_subagent).await {
             Ok(permit) => Ok(Some(permit)),
             Err(error) if is_subagent && is_concurrency_admission_timeout(&error) => {
-                let Some(retry_ticket) = self.reticket_after_concurrency_timeout(request, effort)
-                else {
-                    return Err(error);
-                };
-                match retry_ticket {
-                    Some(ticket) => Ok(Some(ticket.acquire_for(false).await?)),
-                    None => Ok(None),
-                }
+                self.retry_after_concurrency_timeout(request, effort, error)
+                    .await
             }
             Err(error) => Err(error),
+        }
+    }
+
+    async fn retry_after_concurrency_timeout(
+        &self,
+        request: &mut MessagesRequest,
+        effort: &mut Option<String>,
+        error: anyhow::Error,
+    ) -> Result<Option<ModelPermit>> {
+        let Some(retry_ticket) = self.reticket_after_concurrency_timeout(request, effort) else {
+            return Err(error);
+        };
+        match retry_ticket {
+            Some(ticket) => Ok(Some(ticket.acquire_for(false).await?)),
+            None => Ok(None),
         }
     }
 

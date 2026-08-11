@@ -57,7 +57,7 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn classifies_each_tool_kind_and_argument_key() {
+    fn classifies_tool_kinds() {
         assert_eq!(tool_kind("ReadFile"), acp::ToolKind::Read);
         assert_eq!(tool_kind("Grep"), acp::ToolKind::Read);
         assert_eq!(tool_kind("Glob"), acp::ToolKind::Read);
@@ -70,7 +70,10 @@ mod tests {
         assert_eq!(tool_kind("WebSearch"), acp::ToolKind::Search);
         assert_eq!(tool_kind("SearchWeb"), acp::ToolKind::Search);
         assert_eq!(tool_kind("Notify"), acp::ToolKind::Other);
+    }
 
+    #[test]
+    fn maps_argument_keys_for_known_tools() {
         assert_eq!(argument_key("Grep"), "pattern");
         assert_eq!(argument_key("WebFetch"), "url");
         assert_eq!(argument_key("WebSearch"), "query");
@@ -83,7 +86,10 @@ mod tests {
         assert_eq!(argument_key("EditFile"), "path");
         assert_eq!(argument_key("Glob"), "path");
         assert_eq!(argument_key("Notify"), "description");
+    }
 
+    #[test]
+    fn builds_raw_input_objects_from_argument_text() {
         assert_eq!(
             tool_raw_input("Bash", Some(" ls -la ")),
             json!({"command": "ls -la"})

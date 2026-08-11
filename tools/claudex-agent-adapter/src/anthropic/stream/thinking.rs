@@ -1,16 +1,12 @@
 use anyhow::Result;
 use serde_json::{Value, json};
 use uuid::Uuid;
-
 use super::{StreamSender, send_stream_frame};
-
 const HEARTBEAT: &str = "\u{200b}";
-
 #[derive(Default)]
 pub(super) struct ThinkingState {
     open: Option<OpenThinking>,
 }
-
 struct OpenThinking {
     index: usize,
     item_id: String,
@@ -18,15 +14,25 @@ struct OpenThinking {
     signature: String,
     text: String,
 }
-
 impl ThinkingState {
+    fn promote_keepalive_progress(&mut self, item_id: &str) {
+        let Some(open) = self.open.as_mut() else {
+            return;
+        };
+        if open.item_id != "claudex_provider_progress"
+            && open.item_id != "claudex_activity_keepalive"
+        {
+            return;
+        }
+        open.item_id = item_id.to_owned();
+        open.signature = thinking_signature(item_id);
+    }
     pub(super) fn is_open(&self) -> bool {
         self.open.is_some()
     }
-
     pub(super) fn rewrite_open_text(
         &mut self,
-        blocks: &mut Vec<Value>,
+        blocks: &mut [Value],
         rewrite: impl FnOnce(&str) -> String,
     ) {
         let Some(open) = self.open.as_mut() else {
@@ -35,7 +41,6 @@ impl ThinkingState {
         open.text = rewrite(&open.text);
         blocks[open.index]["thinking"] = json!(open.text);
     }
-
     pub(super) async fn delta(
         &mut self,
         event: &Value,
@@ -48,7 +53,6 @@ impl ThinkingState {
         self.delta_text(item_id, summary_index, delta, blocks, stream)
             .await
     }
-
     pub(super) async fn delta_text(
         &mut self,
         item_id: &str,
@@ -60,7 +64,6 @@ impl ThinkingState {
         self.delta_text_on(item_id, summary_index, delta, false, blocks, stream)
             .await
     }
-
     /// SubAgent turns keep one native thinking block open so Claude Code's
     /// standard thinking chrome stays live. Closing on every ACP itemId /
     /// summaryIndex collapse the viewer to repeating "Thought for Xs".
@@ -75,7 +78,6 @@ impl ThinkingState {
         self.delta_text_on(item_id, summary_index, delta, true, blocks, stream)
             .await
     }
-
     async fn delta_text_on(
         &mut self,
         item_id: &str,
@@ -102,18 +104,10 @@ impl ThinkingState {
         }
         if self.open.is_none() {
             self.start(blocks, item_id, summary_index, stream).await?;
-        } else if coalesce
-            && self.open.as_ref().is_some_and(|open| {
-                open.item_id == "claudex_provider_progress"
-                    || open.item_id == "claudex_activity_keepalive"
-            })
-        {
+        } else if coalesce {
             // Tool/prose may open progress chrome first. Promote it to native
             // thought so sanitize keeps the reasoning in the transcript.
-            if let Some(open) = self.open.as_mut() {
-                open.item_id = item_id.to_owned();
-                open.signature = thinking_signature(item_id);
-            }
+            self.promote_keepalive_progress(item_id);
         }
         let open = self.open.as_mut().expect("thinking block just opened");
         open.summary_index = summary_index;
@@ -127,7 +121,6 @@ impl ThinkingState {
         })
         .await
     }
-
     async fn start(
         &mut self,
         blocks: &mut Vec<Value>,
@@ -153,7 +146,6 @@ impl ThinkingState {
         });
         Ok(())
     }
-
     pub(super) async fn close(
         &mut self,
         blocks: &mut [Value],
@@ -178,7 +170,6 @@ impl ThinkingState {
         )
         .await
     }
-
     /// Append ▶/✓/✗ tool progress into open thinking (SubAgent live chrome).
     pub(super) async fn progress_status(
         &mut self,
@@ -191,7 +182,6 @@ impl ThinkingState {
         }
         self.progress_status_on(blocks, status, false, stream).await
     }
-
     /// Same as [`progress_status`] but never closes an open thought first.
     pub(super) async fn progress_status_keep_open(
         &mut self,
@@ -204,7 +194,6 @@ impl ThinkingState {
         }
         self.progress_status_on(blocks, status, true, stream).await
     }
-
     async fn progress_status_on(
         &mut self,
         blocks: &mut Vec<Value>,
@@ -344,7 +333,7 @@ impl ThinkingState {
     /// Keep an open thought live with ZWSP only; elapsed chrome became Thought-for spam.
     pub(super) async fn elapsed_keepalive(
         &mut self,
-        blocks: &mut Vec<Value>,
+        blocks: &mut [Value],
         _elapsed: std::time::Duration,
         _last_tool: Option<&str>,
         stream: Option<&StreamSender>,

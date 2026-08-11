@@ -12,10 +12,7 @@ const COMPACTION_SUMMARY_TASK: &str =
     "Your task is to create a detailed summary of the conversation so far";
 const COMPACTION_COMMAND_TAG: &str = "<command-name>/compact</command-name>";
 
-pub(super) fn subscription_request_prompt(request: &MessagesRequest) -> String {
-    let scheduler_policy = subscription_parallel_scheduler_instructions(request);
-    let mut prompt = format!(
-        concat!(
+const SUBSCRIPTION_PROMPT_PREAMBLE: &str = concat!(
             "Act as the requested Claude Code model. Follow the system instructions and complete ",
             "the conversation below. Use only the enabled tools when needed; shell and command ",
             "tools must remain usable whenever they are supplied. For an explicit live ",
@@ -95,13 +92,18 @@ pub(super) fn subscription_request_prompt(request: &MessagesRequest) -> String {
             "every live `a`+16-hex Agent id in the same turn. Do not inspect OS processes, do not kill ",
             "the claudex serve daemon, and do not touch other-session interactive Claude. TaskStop is ",
             "idempotent; `No task found`, ACP unavailable, or channel closed means already stopped.\n\n",
-            "Adapter orchestration defaults (runtime metadata):\n",
-            "{}\n\nSystem:\n{}\n\nMessages:\n{}"
-        ),
+            "Adapter orchestration defaults (runtime metadata):\n"
+        );
+
+pub(super) fn subscription_request_prompt(request: &MessagesRequest) -> String {
+    let scheduler_policy = subscription_parallel_scheduler_instructions(request);
+    let mut prompt = String::from(SUBSCRIPTION_PROMPT_PREAMBLE);
+    prompt.push_str(&format!(
+        "{}\n\nSystem:\n{}\n\nMessages:\n{}",
         scheduler_policy,
         system_text(&request.system),
         serde_json::to_string(&request.messages).unwrap_or_default()
-    );
+    ));
     prompt.push('\n');
     prompt.push('\n');
     prompt.push_str(SHARED_WORKSPACE_INSTRUCTIONS);
@@ -110,6 +112,7 @@ pub(super) fn subscription_request_prompt(request: &MessagesRequest) -> String {
     prompt.push_str(SUBAGENT_RESULT_PROTOCOL);
     prompt
 }
+
 
 pub(super) fn request_json_schema(output_config: &Value) -> Option<String> {
     let format = output_config.get("format")?;

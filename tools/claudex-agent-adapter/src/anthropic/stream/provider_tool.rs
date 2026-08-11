@@ -76,25 +76,13 @@ impl SegmentBuilder {
         let short_title = compact_title(&title);
         match status {
             "failed" => {
-                if let Some(call_id) = call_id
-                    && !self.provider_tool_terminal_ids.insert(call_id.to_owned())
-                {
-                    return Ok(());
-                }
-                let detail = failure_preview(params.get("output"));
-                let preview = truncate_for_status(&detail, FAILED_STATUS_PREVIEW_CHAR_LIMIT);
-                self.stream_progress_text(&format!("\n✗ {short_title}: {preview}\n"), stream)
+                self.emit_terminal_failure(call_id, &short_title, params, stream)
                     .await?;
             }
             // Success: marker only. Dumping stdout/JSON here flooded the TUI and
             // made long Grok/Cursor turns look frozen on a wall of tool logs.
             "completed" => {
-                if let Some(call_id) = call_id
-                    && !self.provider_tool_terminal_ids.insert(call_id.to_owned())
-                {
-                    return Ok(());
-                }
-                self.stream_progress_text(&format!("\n✓ {short_title}\n"), stream)
+                self.emit_terminal_success(call_id, &short_title, stream)
                     .await?;
             }
             "pending" | "in_progress" => {
@@ -104,6 +92,35 @@ impl SegmentBuilder {
             _ => {}
         }
         Ok(())
+    }
+
+    async fn emit_terminal_failure(
+        &mut self,
+        call_id: Option<&str>,
+        short_title: &str,
+        params: &Value,
+        stream: Option<&StreamSender>,
+    ) -> Result<()> {
+        if terminal_already_emitted(&mut self.provider_tool_terminal_ids, call_id) {
+            return Ok(());
+        }
+        let detail = failure_preview(params.get("output"));
+        let preview = truncate_for_status(&detail, FAILED_STATUS_PREVIEW_CHAR_LIMIT);
+        self.stream_progress_text(&format!("\n✗ {short_title}: {preview}\n"), stream)
+            .await
+    }
+
+    async fn emit_terminal_success(
+        &mut self,
+        call_id: Option<&str>,
+        short_title: &str,
+        stream: Option<&StreamSender>,
+    ) -> Result<()> {
+        if terminal_already_emitted(&mut self.provider_tool_terminal_ids, call_id) {
+            return Ok(());
+        }
+        self.stream_progress_text(&format!("\n✓ {short_title}\n"), stream)
+            .await
     }
 
     async fn start_provider_tool_from_update(
@@ -242,20 +259,26 @@ fn scalar_preview(value: &Value) -> Option<String> {
 fn failure_preview(value: Option<&Value>) -> String {
     match value {
         Some(Value::String(text)) => first_line(text),
-        Some(Value::Object(map)) => {
-            for key in ["error", "message", "stderr", "stdout", "reason"] {
-                if let Some(text) = map.get(key).and_then(Value::as_str) {
-                    let line = first_line(text);
-                    if !line.is_empty() {
-                        return line;
-                    }
-                }
-            }
-            "failed".to_owned()
-        }
-        Some(_) => "failed".to_owned(),
-        None => "failed".to_owned(),
+        Some(Value::Object(map)) => object_failure_preview(map),
+        Some(_) | None => "failed".to_owned(),
     }
+}
+
+fn object_failure_preview(map: &serde_json::Map<String, Value>) -> String {
+    for key in ["error", "message", "stderr", "stdout", "reason"] {
+        let Some(text) = map.get(key).and_then(Value::as_str) else {
+            continue;
+        };
+        let line = first_line(text);
+        if !line.is_empty() {
+            return line;
+        }
+    }
+    "failed".to_owned()
+}
+
+fn terminal_already_emitted(ids: &mut std::collections::HashSet<String>, call_id: Option<&str>) -> bool {
+    call_id.is_some_and(|call_id| !ids.insert(call_id.to_owned()))
 }
 
 fn first_line(text: &str) -> String {

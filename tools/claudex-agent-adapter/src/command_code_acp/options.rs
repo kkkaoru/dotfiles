@@ -25,9 +25,7 @@ impl Options {
                 "--model" => model = Some(require_value("--model", args.next())?),
                 "--effort" => effort = Some(require_value("--effort", args.next())?),
                 "--cmd" => program = Some(PathBuf::from(require_value("--cmd", args.next())?)),
-                "--max-turns" => {
-                    max_turns = parse_max_turns(&require_value("--max-turns", args.next())?)?;
-                }
+                "--max-turns" => apply_max_turns_arg(&mut max_turns, args.next())?,
                 unknown => bail!("unsupported command-code-acp argument: {unknown}"),
             }
         }
@@ -50,6 +48,11 @@ impl Options {
             },
         })
     }
+}
+
+fn apply_max_turns_arg(max_turns: &mut u32, raw: Option<impl AsRef<str>>) -> anyhow::Result<()> {
+    *max_turns = parse_max_turns(&require_value("--max-turns", raw)?)?;
+    Ok(())
 }
 
 fn default_cmd_program() -> PathBuf {

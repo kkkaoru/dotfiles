@@ -70,9 +70,7 @@ pub(super) async fn ensure_current_generation(
                 return Ok(fallback.base_url());
             }
             Err(error) => {
-                if daemon_process::matches(pid, &fallback.executable) {
-                    daemon_process::terminate(pid);
-                }
+                terminate_failed_fallback(pid, &fallback.executable);
                 last_error = Some(error);
             }
         }
@@ -80,6 +78,12 @@ pub(super) async fn ensure_current_generation(
     Err(last_error
         .unwrap_or_else(|| anyhow::anyhow!("current-build fallback failed to start"))
         .context("wait for current-build fallback"))
+}
+
+fn terminate_failed_fallback(pid: u32, executable: &std::path::Path) {
+    if daemon_process::matches(pid, executable) {
+        daemon_process::terminate(pid);
+    }
 }
 
 pub(super) fn reserve_loopback_listen(configured: SocketAddr) -> Result<SocketAddr> {

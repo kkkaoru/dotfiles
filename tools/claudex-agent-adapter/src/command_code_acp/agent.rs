@@ -93,27 +93,10 @@ impl HeadlessAgent {
         prompt: &str,
         resume: Option<&str>,
     ) -> acp::Result<Option<super::process::TurnOutcome>> {
-        let (tx, mut rx) = mpsc::unbounded_channel();
+        let (tx, rx) = mpsc::unbounded_channel();
         let operations = self.operations.clone();
         let notify_session = session_id.clone();
-        let emit = tokio::task::spawn_local(async move {
-            while let Some(event) = rx.recv().await {
-                for update in progress_to_updates(&event) {
-                    // Fire-and-forget: waiting for ACP ack serializes live ▶/thinking
-                    // behind prompt() completion on the client.
-                    let (sent, _received) = oneshot::channel();
-                    if operations
-                        .send(ClientOperation::Notify(
-                            acp::SessionNotification::new(notify_session.clone(), update),
-                            sent,
-                        ))
-                        .is_err()
-                    {
-                        return;
-                    }
-                }
-            }
-        });
+        let emit = tokio::task::spawn_local(emit_progress_events(rx, operations, notify_session));
         let spec = self.options.spec.clone();
         let prompt = prompt.to_owned();
         let resume = resume.map(str::to_owned);
@@ -200,6 +183,47 @@ async fn relay_client_operations(
             }
         }
     }
+}
+
+fn forward_progress_updates(
+    operations: &mpsc::UnboundedSender<ClientOperation>,
+    session_id: &acp::SessionId,
+    event: &super::events::ProgressEvent,
+) -> bool {
+    for update in progress_to_updates(event) {
+        // Fire-and-forget: waiting for ACP ack serializes live ▶/thinking
+        // behind prompt() completion on the client.
+        let (sent, _received) = oneshot::channel();
+        if operations
+            .send(ClientOperation::Notify(
+                acp::SessionNotification::new(session_id.clone(), update),
+                sent,
+            ))
+            .is_err()
+        {
+            return false;
+        }
+    }
+    true
+}
+
+async fn emit_progress_events(
+    mut rx: mpsc::UnboundedReceiver<super::events::ProgressEvent>,
+    operations: mpsc::UnboundedSender<ClientOperation>,
+    notify_session: acp::SessionId,
+) {
+    while keep_emitting_progress(&mut rx, &operations, &notify_session).await {}
+}
+
+async fn keep_emitting_progress(
+    rx: &mut mpsc::UnboundedReceiver<super::events::ProgressEvent>,
+    operations: &mpsc::UnboundedSender<ClientOperation>,
+    notify_session: &acp::SessionId,
+) -> bool {
+    let Some(event) = rx.recv().await else {
+        return false;
+    };
+    forward_progress_updates(operations, notify_session, &event)
 }
 
 // Nightly branch instrumentation emits an invalid mapping for async-trait's
@@ -322,9 +346,11 @@ where
         prompt_lock: Mutex::new(()),
     };
     let (connection, io) =
-        acp::AgentSideConnection::new(agent, stdout.compat_write(), stdin.compat(), |future| {
-            tokio::task::spawn_local(future);
-        });
+        acp::AgentSideConnection::new(agent, stdout.compat_write(), stdin.compat(), spawn_local);
     tokio::task::spawn_local(relay_client_operations(connection, requests));
     io.await.map_err(|error| anyhow::anyhow!("{error}"))
+}
+
+fn spawn_local(future: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + 'static>>) {
+    tokio::task::spawn_local(future);
 }

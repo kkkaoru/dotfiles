@@ -124,13 +124,17 @@ fn load_config_from_reader(
             Ok(models) => return remember_last_good(models),
             Err(error) => {
                 last_error = Some(error);
-                if attempt + 1 < LOAD_ATTEMPTS {
-                    std::thread::sleep(LOAD_RETRY);
-                }
+                sleep_before_policy_retry(attempt);
             }
         }
     }
     fallback_last_good(path, last_error.expect("load attempts produce an error"))
+}
+
+fn sleep_before_policy_retry(attempt: usize) {
+    if attempt + 1 < LOAD_ATTEMPTS {
+        std::thread::sleep(LOAD_RETRY);
+    }
 }
 
 fn parse_policy_text(contents: &str, path: &Path) -> Result<BTreeSet<String>> {

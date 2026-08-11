@@ -21,21 +21,27 @@ impl Bridge {
         provider_settled: bool,
     ) {
         if provider_settled {
-            // Keep the idle provider thread so Claude Code Task `resume` can
-            // match the transcript and reuse prompt-cache prefixes. Capacity
-            // pressure and IDLE_SESSION_TTL still reclaim these sessions.
-            if let Ok(mut activity) = session.last_activity.lock() {
-                *activity = std::time::Instant::now();
-            }
-            tracing::debug!(
-                thread_id = %session.thread_id,
-                "retaining settled session for SubAgent resume reuse"
-            );
-        } else {
-            self.disconnect_stream(session, Arc::clone(events)).await;
+            retain_settled_session_activity(session);
+            return;
         }
+        self.disconnect_stream(session, Arc::clone(events)).await;
     }
+}
 
+fn retain_settled_session_activity(session: &Session) {
+    // Keep the idle provider thread so Claude Code Task `resume` can
+    // match the transcript and reuse prompt-cache prefixes. Capacity
+    // pressure and IDLE_SESSION_TTL still reclaim these sessions.
+    if let Ok(mut activity) = session.last_activity.lock() {
+        *activity = std::time::Instant::now();
+    }
+    tracing::debug!(
+        thread_id = %session.thread_id,
+        "retaining settled session for SubAgent resume reuse"
+    );
+}
+
+impl Bridge {
     /// Claude Code often drops SubAgent SSE right after `message_start`. Keep
     /// ACP alive in that window. Once ▶ tools, bridged tool_use, or other
     /// provider turn output (Status / answer chrome) exists, treat SSE close as

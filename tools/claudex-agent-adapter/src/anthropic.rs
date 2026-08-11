@@ -16,6 +16,7 @@ mod exhausted_subagent;
 mod health;
 mod internal_notification;
 mod message_router;
+mod message_router_dispatch;
 mod model_concurrency;
 mod pasted_text;
 mod request_identity;

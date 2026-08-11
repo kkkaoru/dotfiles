@@ -1822,14 +1822,16 @@ async fn reports_slow_stream_preparation_before_the_provider_is_ready() {
     };
     let (result, mut builder) = super::prepare_with_activity(
         prepare,
-        3,
-        &sender,
-        Some("SubAgent starting: worker-model (effort=high)"),
-        Duration::from_millis(5),
-        Duration::from_millis(50),
-        true,
-        false,
-        false,
+        super::PrepareActivityOptions {
+            input_tokens: 3,
+            sender: &sender,
+            initial_status: Some("SubAgent starting: worker-model (effort=high)"),
+            first_delay: Duration::from_millis(5),
+            interval: Duration::from_millis(50),
+            is_subagent: true,
+            paint_command_code_progress: false,
+            primed_thinking: false,
+        },
     )
     .await;
     assert_eq!(result.expect("prepare result"), Some("ready"));
@@ -1883,14 +1885,16 @@ async fn command_code_prepare_primes_silent_thinking_not_canned_text() {
     ));
     let (result, mut builder) = super::prepare_with_activity(
         std::future::ready(Ok::<_, anyhow::Error>("ready")),
-        1,
-        &sender,
-        None,
-        Duration::from_secs(1),
-        Duration::from_secs(1),
-        true,
-        true,
-        true,
+        super::PrepareActivityOptions {
+            input_tokens: 1,
+            sender: &sender,
+            initial_status: None,
+            first_delay: Duration::from_secs(1),
+            interval: Duration::from_secs(1),
+            is_subagent: true,
+            paint_command_code_progress: true,
+            primed_thinking: true,
+        },
     )
     .await;
     assert_eq!(result.expect("prepare result"), Some("ready"));
@@ -1940,14 +1944,16 @@ async fn finishes_fast_or_disconnected_stream_preparation_without_activity_statu
     let (sender, receiver) = mpsc::channel::<Result<Bytes, Infallible>>(1);
     let (result, builder) = super::prepare_with_activity(
         std::future::ready(Ok::<_, anyhow::Error>("ready")),
-        1,
-        &sender,
-        None,
-        Duration::from_secs(1),
-        Duration::from_secs(1),
-        false,
-        false,
-        false,
+        super::PrepareActivityOptions {
+            input_tokens: 1,
+            sender: &sender,
+            initial_status: None,
+            first_delay: Duration::from_secs(1),
+            interval: Duration::from_secs(1),
+            is_subagent: false,
+            paint_command_code_progress: false,
+            primed_thinking: false,
+        },
     )
     .await;
     assert_eq!(result.expect("fast prepare"), Some("ready"));
@@ -1956,14 +1962,16 @@ async fn finishes_fast_or_disconnected_stream_preparation_without_activity_statu
     drop(receiver);
     let (result, builder) = super::prepare_with_activity(
         std::future::pending::<anyhow::Result<()>>(),
-        1,
-        &sender,
-        None,
-        Duration::from_secs(1),
-        Duration::from_secs(1),
-        false,
-        false,
-        false,
+        super::PrepareActivityOptions {
+            input_tokens: 1,
+            sender: &sender,
+            initial_status: None,
+            first_delay: Duration::from_secs(1),
+            interval: Duration::from_secs(1),
+            is_subagent: false,
+            paint_command_code_progress: false,
+            primed_thinking: false,
+        },
     )
     .await;
     assert!(result.expect("disconnected prepare").is_none());
@@ -1972,14 +1980,16 @@ async fn finishes_fast_or_disconnected_stream_preparation_without_activity_statu
     let (error_sender, _error_receiver) = mpsc::channel::<Result<Bytes, Infallible>>(1);
     let (result, builder) = super::prepare_with_activity(
         std::future::ready(Err::<(), _>(anyhow!("provider setup failed"))),
-        1,
-        &error_sender,
-        None,
-        Duration::from_secs(1),
-        Duration::from_secs(1),
-        false,
-        false,
-        false,
+        super::PrepareActivityOptions {
+            input_tokens: 1,
+            sender: &error_sender,
+            initial_status: None,
+            first_delay: Duration::from_secs(1),
+            interval: Duration::from_secs(1),
+            is_subagent: false,
+            paint_command_code_progress: false,
+            primed_thinking: false,
+        },
     )
     .await;
     assert!(
@@ -2001,14 +2011,16 @@ async fn subagent_prepare_continues_after_client_disconnect() {
     };
     let (result, _builder) = super::prepare_with_activity(
         prepare,
-        1,
-        &sender,
-        None,
-        Duration::from_secs(1),
-        Duration::from_secs(1),
-        true,
-        true,
-        true,
+        super::PrepareActivityOptions {
+            input_tokens: 1,
+            sender: &sender,
+            initial_status: None,
+            first_delay: Duration::from_secs(1),
+            interval: Duration::from_secs(1),
+            is_subagent: true,
+            paint_command_code_progress: true,
+            primed_thinking: true,
+        },
     )
     .await;
     assert_eq!(

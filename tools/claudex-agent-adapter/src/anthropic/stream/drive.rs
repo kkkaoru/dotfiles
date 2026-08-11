@@ -1,24 +1,22 @@
 use std::{sync::Arc, time::Duration};
 
-use anyhow::anyhow;
 
 use super::{SegmentBuilder, StreamSender, StreamTurn, send_stream_error};
 use crate::anthropic::{
     ActiveTurn, Bridge,
     model_concurrency::ModelPermit,
-    segment::EMPTY_ACP_END_TURN,
     subagent_timeout::completes_within,
-    usage_limit_failover::{is_usage_limit_exceeded, streaming_provider_retry},
+    usage_limit_failover::streaming_provider_retry,
 };
 
-struct ContextRetryStream {
-    turn: ActiveTurn,
-    sender: StreamSender,
-    error: anyhow::Error,
-    builder: SegmentBuilder,
-    model_permit: Option<ModelPermit>,
-    is_subagent: bool,
-    run_in_background: bool,
+pub(super) struct ContextRetryStream {
+    pub(super) turn: ActiveTurn,
+    pub(super) sender: StreamSender,
+    pub(super) error: anyhow::Error,
+    pub(super) builder: SegmentBuilder,
+    pub(super) model_permit: Option<ModelPermit>,
+    pub(super) is_subagent: bool,
+    pub(super) run_in_background: bool,
 }
 
 pub(super) struct StreamDriveOptions {
@@ -127,65 +125,19 @@ impl Bridge {
         run_in_background: bool,
     ) {
         match waited {
-            Ok(StreamTurn::Segment {
-                segment,
-                provider_settled,
-            }) if is_subagent && segment.is_empty_end_turn() => {
-                // Cline Credits $0 (and similar) finishes as empty end_turn; route through
-                // usage-limit failover instead of returning a blank assistant message.
-                let input_tokens = turn.input_tokens;
-                let model = turn.session.model.clone();
-                self.retry_usage_limit_stream(ContextRetryStream {
+            Ok(outcome) => {
+                self.finish_stream_turn_ok(
                     turn,
                     sender,
-                    error: anyhow!("{EMPTY_ACP_END_TURN}"),
-                    builder: SegmentBuilder::for_turn(input_tokens, is_subagent, &model),
+                    outcome,
                     model_permit,
                     is_subagent,
                     run_in_background,
-                })
+                )
                 .await;
-                let _ = provider_settled;
             }
-            Ok(StreamTurn::Segment {
-                segment,
-                provider_settled,
-            }) => {
-                let segment = if is_subagent {
-                    super::sanitize::rewrite_premature_status_only_segment(segment)
-                } else {
-                    segment
-                };
-                self.finish_completed_stream(turn, &sender, segment, provider_settled, is_subagent)
-                    .await
-            }
-            Ok(StreamTurn::ContextWindow { error, builder }) => {
-                self.retry_context_stream(ContextRetryStream {
-                    turn,
-                    sender,
-                    error,
-                    builder,
-                    model_permit,
-                    is_subagent,
-                    run_in_background,
-                })
-                .await
-            }
-            Ok(StreamTurn::UsageLimit { error, builder }) => {
-                self.retry_usage_limit_stream(ContextRetryStream {
-                    turn,
-                    sender,
-                    error,
-                    builder,
-                    model_permit,
-                    is_subagent,
-                    run_in_background,
-                })
-                .await
-            }
-            Ok(StreamTurn::ProviderFailure { error }) => {
-                self.note_provider_exhaustion(&error, Some(&turn.session.model));
-                self.retry_provider_stream(
+            Err(error) => {
+                self.finish_stream_turn_err(
                     turn,
                     sender,
                     error,
@@ -195,40 +147,11 @@ impl Bridge {
                 )
                 .await;
             }
-            Ok(StreamTurn::Disconnected) => {}
-            Err(error) if is_usage_limit_exceeded(&error) => {
-                // Qwen token-plan (and similar ACP quota) often fails the wait
-                // before message_stop instead of emitting a usage-limit event.
-                // Treat it like empty-ACP so the current SubAgent retries a
-                // sibling instead of 502-ing every parallel launch onto Qwen.
-                let input_tokens = turn.input_tokens;
-                let model = turn.session.model.clone();
-                self.retry_usage_limit_stream(ContextRetryStream {
-                    turn,
-                    sender,
-                    error,
-                    builder: SegmentBuilder::for_turn(input_tokens, is_subagent, &model),
-                    model_permit,
-                    is_subagent,
-                    run_in_background,
-                })
-                .await;
-            }
-            Err(error) => {
-                tracing::warn!(?error, "streaming turn failed before message_stop");
-                self.note_provider_exhaustion(&error, Some(&turn.session.model));
-                // Cancel the provider leaf before unregistering. Silence judgment
-                // and other mid-wait failures used to remove_session only, which
-                // left orphan ACP children that blocked SubAgent prompt-cache reuse.
-                let _ = self
-                    .disconnect_stream(&turn.session, Arc::clone(&turn.events))
-                    .await;
-                send_stream_error(&sender, error).await;
-            }
         }
     }
 
-    async fn retry_provider_stream(
+
+    pub(super) async fn retry_provider_stream(
         self: Arc<Self>,
         turn: ActiveTurn,
         sender: StreamSender,
@@ -258,7 +181,7 @@ impl Bridge {
         }
     }
 
-    async fn retry_context_stream(self: Arc<Self>, input: ContextRetryStream) {
+    pub(super) async fn retry_context_stream(self: Arc<Self>, input: ContextRetryStream) {
         let ActiveTurn {
             session,
             input_tokens,
@@ -293,7 +216,7 @@ impl Bridge {
         .await;
     }
 
-    async fn retry_usage_limit_stream(self: Arc<Self>, input: ContextRetryStream) {
+    pub(super) async fn retry_usage_limit_stream(self: Arc<Self>, input: ContextRetryStream) {
         let ActiveTurn {
             session,
             input_tokens,

@@ -210,10 +210,10 @@ mod tests {
             "pasted text file: {}. Read this file before continuing.",
             huge.display()
         );
-        let mut request = request(json!(dir_marker.clone()));
+        let mut request = request(dir_marker.as_str().into());
         request
             .messages
-            .push(json!({"role":"user", "content":huge_marker.clone()}));
+            .push(json!({"role":"user", "content":huge_marker.as_str()}));
         expand_markers(&mut request);
         assert_eq!(request.messages[0]["content"], dir_marker);
         assert_eq!(request.messages[1]["content"], huge_marker);

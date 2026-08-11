@@ -179,16 +179,7 @@ where
             StreamIteration::End => break,
             StreamIteration::SenderClosed => return Ok(()),
             StreamIteration::EndEarly => {
-                if stream.blocked_subagent {
-                    anyhow::bail!("test reader emitted a blocked SubAgent");
-                }
-                stream.activity.close(sender).await?;
-                stream
-                    .finish(
-                        sender,
-                        &json!({"type":"result","subtype":"success","is_error":false,"result":""}),
-                    )
-                    .await?;
+                finish_end_early(sender, &mut stream).await?;
                 return Ok(());
             }
         }
@@ -196,6 +187,23 @@ where
     stream.activity.close(sender).await?;
     let result = pending_result.context("test reader ended without a result")?;
     stream.finish(sender, &result).await
+}
+
+#[cfg(test)]
+async fn finish_end_early(
+    sender: &mpsc::Sender<Result<Bytes, Infallible>>,
+    stream: &mut SubscriptionStream,
+) -> Result<()> {
+    if stream.blocked_subagent {
+        anyhow::bail!("test reader emitted a blocked SubAgent");
+    }
+    stream.activity.close(sender).await?;
+    stream
+        .finish(
+            sender,
+            &json!({"type":"result","subtype":"success","is_error":false,"result":""}),
+        )
+        .await
 }
 
 impl SubscriptionStream {

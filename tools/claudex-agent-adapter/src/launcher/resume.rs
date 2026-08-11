@@ -91,26 +91,27 @@ fn has_agent(arguments: &[OsString]) -> bool {
 }
 
 fn has_flag(arguments: &[OsString], flags: &[&str]) -> bool {
-    for (index, argument) in arguments.iter().enumerate() {
-        let Some(argument) = argument.to_str() else {
-            continue;
-        };
-        for flag in flags {
-            if argument == *flag {
-                return arguments
-                    .get(index + 1)
-                    .and_then(|value| value.to_str())
-                    .is_some_and(|value| !value.is_empty() && !value.starts_with('-'));
-            }
-            let prefix = format!("{flag}=");
-            if let Some(value) = argument.strip_prefix(&prefix)
-                && !value.is_empty()
-            {
-                return true;
-            }
-        }
+    arguments.iter().enumerate().any(|(index, argument)| {
+        argument
+            .to_str()
+            .is_some_and(|argument| flag_present(arguments, index, argument, flags))
+    })
+}
+
+fn flag_present(arguments: &[OsString], index: usize, argument: &str, flags: &[&str]) -> bool {
+    flags.iter().any(|flag| matches_flag(arguments, index, argument, flag))
+}
+
+fn matches_flag(arguments: &[OsString], index: usize, argument: &str, flag: &str) -> bool {
+    if argument == flag {
+        return arguments
+            .get(index + 1)
+            .and_then(|value| value.to_str())
+            .is_some_and(|value| !value.is_empty() && !value.starts_with('-'));
     }
-    false
+    argument
+        .strip_prefix(&format!("{flag}="))
+        .is_some_and(|value| !value.is_empty())
 }
 
 fn resume_session_id(arguments: &[OsString]) -> Option<String> {
