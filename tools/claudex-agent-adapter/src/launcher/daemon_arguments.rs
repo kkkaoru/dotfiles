@@ -53,15 +53,15 @@ fn option_arguments(options: &AdapterOptions) -> Vec<OsString> {
     arguments
 }
 
-pub(super) fn route_descriptions(routes: &[BackendRoute]) -> Vec<String> {
+pub(crate) fn route_descriptions(routes: &[BackendRoute]) -> Vec<String> {
     routes.iter().map(BackendRoute::description).collect()
 }
 
-pub(super) fn worker_route_descriptions(catalog: &ModelCatalog) -> Vec<String> {
+pub(crate) fn worker_route_descriptions(catalog: &ModelCatalog) -> Vec<String> {
     catalog.worker_routes().iter().map(worker_json).collect()
 }
 
-pub(super) fn search_worker_route_descriptions(catalog: &ModelCatalog) -> Vec<String> {
+pub(crate) fn search_worker_route_descriptions(catalog: &ModelCatalog) -> Vec<String> {
     catalog
         .search_worker_routes()
         .iter()
