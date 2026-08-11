@@ -22,6 +22,14 @@ use crate::launcher::{
     terminate_retained_serve,
 };
 
+enum ProbeOutcome {
+    Ready(RetainedHealthProbe),
+    /// Connect refused / dead listen: clear sticky ownership.
+    Unreachable,
+    /// Timeout or undecodable body: fall through without killing the generation.
+    Transient,
+}
+
 pub(super) struct RetainedProxy {
     path: PathBuf,
     listen: RwLock<std::net::SocketAddr>,
@@ -166,11 +174,17 @@ impl RetainedProxy {
         let Some((listen, expected_pid)) = self.listen_and_pid() else {
             return false;
         };
-        let Some(health) = self.probe_health(listen).await else {
-            self.clear_all_sessions();
-            return false;
-        };
-        self.decide_sticky_proxy(&health, expected_pid, session_id, agent_id)
+        match self.probe_health(listen).await {
+            ProbeOutcome::Ready(health) => {
+                self.decide_sticky_proxy(&health, expected_pid, session_id, agent_id)
+            }
+            // Slow /health must not terminate warm ACP sessions mid-turn.
+            ProbeOutcome::Transient => false,
+            ProbeOutcome::Unreachable => {
+                self.clear_all_sessions();
+                false
+            }
+        }
     }
 
     fn tracks_session(&self, session_id: &str) -> bool {
@@ -187,15 +201,25 @@ impl RetainedProxy {
         }
     }
 
-    async fn probe_health(&self, listen: std::net::SocketAddr) -> Option<RetainedHealthProbe> {
-        let response = self
+    async fn probe_health(&self, listen: std::net::SocketAddr) -> ProbeOutcome {
+        let response = match self
             .client
             .get(format!("http://{listen}/health"))
             .timeout(Duration::from_millis(400))
             .send()
             .await
-            .ok()?;
-        response.json::<RetainedHealthProbe>().await.ok()
+        {
+            Ok(response) => response,
+            Err(error) if error.is_timeout() => return ProbeOutcome::Transient,
+            Err(error) if error.is_connect() => return ProbeOutcome::Unreachable,
+            // DNS / proxy / protocol noise: keep the generation rather than
+            // SIGKILL warm SubAgents on a single ambiguous sample.
+            Err(_) => return ProbeOutcome::Transient,
+        };
+        match response.json::<RetainedHealthProbe>().await {
+            Ok(health) => ProbeOutcome::Ready(health),
+            Err(_) => ProbeOutcome::Transient,
+        }
     }
 
     fn decide_sticky_proxy(

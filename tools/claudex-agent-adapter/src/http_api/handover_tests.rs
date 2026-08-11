@@ -380,6 +380,78 @@ async fn proxy_middleware_serves_locally_when_retained_is_unreachable() {
 }
 
 #[tokio::test]
+async fn proxy_middleware_keeps_retained_when_health_probe_times_out() {
+    // Accept connections but never answer /health. A single slow sample must
+    // fall through to live without terminating the retained generation.
+    let silent = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("silent retained listener");
+    let silent_addr = silent.local_addr().expect("silent retained address");
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = silent.accept().await {
+            // Hold the socket open until the client times out.
+            tokio::spawn(async move {
+                let _ = stream;
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            });
+        }
+    });
+    let root = tempfile::tempdir().expect("slow retained fixture");
+    let path = root.path().join("retained.json");
+    std::fs::write(
+        &path,
+        format!(
+            r#"{{"listen":"{silent_addr}","pid":1,"build_id":"old","session_ids":["session-a"]}}"#
+        ),
+    )
+    .expect("write retained");
+    let cache = tempfile::tempdir().expect("advertised cache");
+    let (advertised, _rx) = ListenHandover::new(
+        "127.0.0.1:8318".parse().unwrap(),
+        cache.path().to_path_buf(),
+    );
+    let state = Some(HandoverState {
+        retained: Some(Arc::new(retained(
+            &path,
+            &silent_addr.to_string(),
+            &["session-a"],
+        ))),
+        advertised: Some(advertised),
+        client: proxy_http_client(),
+    });
+    let app = Router::new()
+        .route("/v1/messages", post(|| async { "live-after-slow-health" }))
+        .layer(middleware::from_fn_with_state(
+            state,
+            proxy_retained_sessions,
+        ));
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("slow retained proxy listener");
+    let addr = listener.local_addr().expect("slow retained proxy address");
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.ok();
+    });
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let response = reqwest::Client::new()
+        .post(format!("http://{addr}/v1/messages"))
+        .header("x-claude-code-session-id", "session-a")
+        .body("{}")
+        .send()
+        .await
+        .expect("sticky after slow retained health");
+    assert_eq!(
+        response.text().await.expect("live body"),
+        "live-after-slow-health",
+        "timed-out retained health must fall through to live"
+    );
+    assert!(
+        path.exists(),
+        "timed-out /health must not clear the retained snapshot"
+    );
+}
+
+#[tokio::test]
 async fn proxy_middleware_serves_locally_when_retained_session_is_idle() {
     let upstream = serve_idle_retained_generation().await;
     let root = tempfile::tempdir().expect("idle retained fixture");
