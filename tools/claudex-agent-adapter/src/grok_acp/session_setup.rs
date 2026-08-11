@@ -29,16 +29,14 @@ pub(super) async fn new_session_with_mcp(
     await_setup(provider, timeout, connection.new_session(request)).await
 }
 
-pub(super) fn session_setup_timeout(provider: AcpProvider, mcp_empty: bool) -> Duration {
+pub(super) fn session_setup_timeout(_provider: AcpProvider, mcp_empty: bool) -> Duration {
+    // MCP hang must fail fast for every provider. Grok/Copilot used to wait the
+    // full 8s SESSION_SETUP_TIMEOUT before retrying without MCP, stacking onto
+    // Nucleating delays for every parallel SubAgent create_session.
     if mcp_empty {
         SESSION_SETUP_TIMEOUT
-    } else if matches!(
-        provider,
-        AcpProvider::Configured | AcpProvider::ConfiguredLaunchScoped
-    ) {
-        SESSION_SETUP_WITH_MCP_TIMEOUT
     } else {
-        SESSION_SETUP_TIMEOUT
+        SESSION_SETUP_WITH_MCP_TIMEOUT
     }
 }
 

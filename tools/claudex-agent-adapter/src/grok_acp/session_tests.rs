@@ -24,10 +24,16 @@ fn session_setup_timeouts_fail_fast_without_mcp_hang() {
     );
     assert_eq!(
         session_setup_timeout(AcpProvider::Grok, false),
-        SESSION_SETUP_TIMEOUT
+        SESSION_SETUP_WITH_MCP_TIMEOUT,
+        "Grok MCP hang must fail fast like Configured ACP"
     );
     assert_eq!(
         session_setup_timeout(AcpProvider::Copilot, false),
+        SESSION_SETUP_WITH_MCP_TIMEOUT,
+        "Copilot MCP hang must fail fast like Configured ACP"
+    );
+    assert_eq!(
+        session_setup_timeout(AcpProvider::Grok, true),
         SESSION_SETUP_TIMEOUT
     );
 }
