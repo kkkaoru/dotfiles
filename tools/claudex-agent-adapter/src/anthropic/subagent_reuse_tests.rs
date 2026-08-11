@@ -651,6 +651,48 @@ fn inflight_placeholder_occupies_scope_before_tool_result() {
 }
 
 #[test]
+fn parallel_inflight_placeholders_with_empty_recipients_stay_distinct() {
+    let registry = SubagentReuseRegistry::default();
+    let scope_a = json!({
+        "description":"Recover ComfyUI post-reboot state",
+        "prompt":"Inventory :8188 and output MP4s.",
+        "claudex_model":"gpt-5.6-luna"
+    });
+    let scope_b = json!({
+        "description":"Fix SubAgent progress chrome",
+        "prompt":"Paint Thinking tip during raw CoT.",
+        "claudex_model":"gpt-5.6-luna"
+    });
+    registry.note_inflight_launch("session-a", &scope_a, "tool-comfy");
+    registry.note_inflight_launch("session-a", &scope_b, "tool-progress");
+    assert!(
+        registry.scope_is_occupied("session-a", &scope_a),
+        "first parallel scope must stay occupied"
+    );
+    assert!(
+        registry.scope_is_occupied("session-a", &scope_b),
+        "second parallel scope must not collapse into the first empty-recipient placeholder"
+    );
+    let states = registry.states.lock().expect("lock");
+    let launches = &states.get("session-a").expect("session").launches;
+    assert_eq!(
+        launches.len(),
+        2,
+        "empty-recipient inflight notes must not merge across tool_use ids: {launches:?}"
+    );
+    assert!(
+        launches
+            .iter()
+            .any(|launch| launch.key == "tool-comfy" && launch.status == "pending")
+    );
+    assert!(
+        launches
+            .iter()
+            .any(|launch| launch.key == "tool-progress" && launch.status == "pending")
+    );
+}
+
+#[test]
 fn failed_launch_result_releases_inflight_scope() {
     let registry = SubagentReuseRegistry::default();
     let arguments = json!({
@@ -1340,6 +1382,32 @@ fn merge_launches_keeps_status_when_observed_status_is_blank() {
     );
     assert_eq!(launches[0].status, "active");
     assert_eq!(launches[0].model.as_deref(), Some("gpt-test"));
+}
+
+#[test]
+fn merge_launches_does_not_collapse_empty_key_recipient_placeholders() {
+    let mut launches = vec![LaunchRecord {
+        key: String::new(),
+        recipient: String::new(),
+        scope: "Audit rust tests".to_owned(),
+        model: Some("model-a".to_owned()),
+        status: "active".to_owned(),
+    }];
+    super::records::merge_launches(
+        &mut launches,
+        std::iter::once(&LaunchRecord {
+            key: String::new(),
+            recipient: String::new(),
+            scope: "Review CSS styles".to_owned(),
+            model: Some("model-b".to_owned()),
+            status: "active".to_owned(),
+        }),
+    );
+    assert_eq!(
+        launches.len(),
+        2,
+        "parallel inflight placeholders must stay distinct"
+    );
 }
 
 #[test]

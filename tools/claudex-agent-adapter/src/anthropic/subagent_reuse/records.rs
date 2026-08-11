@@ -28,8 +28,13 @@ pub(super) fn merge_launches<'a>(
 ) {
     for launch in observed {
         match launches.iter_mut().find(|current| {
-            current.key == launch.key
-                || current.recipient == launch.recipient
+            // Empty key/recipient are placeholders (inflight note before
+            // tool_result). Matching ""=="" collapsed parallel SubAgents into
+            // one record and broke occupancy / resume / spawn limits.
+            (!current.key.is_empty() && current.key == launch.key)
+                || (!current.recipient.is_empty()
+                    && !launch.recipient.is_empty()
+                    && current.recipient == launch.recipient)
                 || (same_logical_launch(current, launch) && !terminal_status(&current.status))
         }) {
             Some(current) => merge_record(current, launch),
