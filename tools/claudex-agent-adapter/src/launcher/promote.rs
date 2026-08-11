@@ -58,6 +58,23 @@ pub(super) fn retained_session_ids(health: &Health) -> Vec<String> {
     }
 }
 
+pub(super) fn warm_agent_ids(health: &Health) -> Vec<String> {
+    let mut ids: std::collections::BTreeSet<String> = health
+        .active_subagent_agent_ids
+        .iter()
+        .filter(|id| !id.is_empty())
+        .cloned()
+        .collect();
+    ids.extend(
+        health
+            .recent_subagent_agent_ids
+            .keys()
+            .filter(|id| !id.is_empty())
+            .cloned(),
+    );
+    ids.into_iter().collect()
+}
+
 pub(super) async fn try_canonical(
     client: &reqwest::Client,
     config: &ServiceConfig,
@@ -71,7 +88,7 @@ pub(super) async fn try_canonical(
     }
     super::pending_hot_swap::disarm(config);
     let session_ids = retained_session_ids(health);
-    let agent_ids = health.active_subagent_agent_ids.clone();
+    let agent_ids = warm_agent_ids(health);
     let advertised = advertised_listen(config, health);
     let warm_listen = fallback::reserve_loopback_listen(config.options.listen)?;
     let warm = config.with_listen(warm_listen);

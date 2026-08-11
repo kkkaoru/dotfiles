@@ -94,6 +94,11 @@ impl Bridge {
         self.active_subagent_models.active_agent_ids()
     }
 
+    pub(crate) fn recent_subagent_agent_ids(&self) -> BTreeMap<String, u64> {
+        self.active_subagent_models
+            .recent_agent_ages(std::time::Instant::now())
+    }
+
     pub async fn active_claude_session_ids(&self) -> Vec<String> {
         let mut ids = BTreeSet::new();
         collect_session_ids(&self.sessions.lock().await, &mut ids);

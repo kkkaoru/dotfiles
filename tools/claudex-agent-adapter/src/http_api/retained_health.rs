@@ -1,11 +1,11 @@
 use std::{
     collections::{BTreeMap, HashMap},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use serde::Deserialize;
 
-use crate::sticky_grace::{STICKY_IDLE_GRACE, within_sticky_idle_grace_secs};
+use crate::sticky_grace::{STICKY_IDLE_GRACE, STICKY_IDLE_GRACE_SECS, within_sticky_idle_grace_secs};
 
 /// Minimal `/health` view used to decide whether sticky proxying is still safe.
 #[derive(Debug, Deserialize)]
@@ -24,6 +24,9 @@ pub(super) struct RetainedHealthProbe {
     /// retained daemon predates this field and sticky must stay session-scoped.
     #[serde(default)]
     pub(super) active_subagent_agent_ids: Option<Vec<String>>,
+    /// Warm SubAgent agentIds → seconds since last observation. Absent on older builds.
+    #[serde(default)]
+    pub(super) recent_subagent_agent_ids: BTreeMap<String, u64>,
     /// Seconds since this daemon last observed live work. `None` on older builds.
     #[serde(default)]
     pub(super) idle_seconds: Option<u64>,
@@ -95,6 +98,13 @@ pub(super) fn agent_still_on_retained(
     if active_agents.iter().any(|owned| owned == agent_id) {
         return true;
     }
+    if health
+        .recent_subagent_agent_ids
+        .get(agent_id)
+        .is_some_and(|age| *age <= STICKY_IDLE_GRACE_SECS)
+    {
+        return true;
+    }
     // Empty / missing id during a turn gap: keep sticky only for agents we
     // recently saw on this retained generation. Unknown ids still go live.
     recent_agents
@@ -112,12 +122,24 @@ pub(super) fn note_retained_activity(
         *last_work_at = Some(now);
     }
     let Some(active_agents) = health.active_subagent_agent_ids.as_ref() else {
+        // Legacy retained builds omit agent id fields entirely.
         return;
     };
     for agent_id in active_agents {
         if !agent_id.is_empty() {
             recent_agents.insert(agent_id.clone(), now);
         }
+    }
+    // Published ages are absolute last-seen times. Do not refresh existing
+    // local stamps to `now` on every probe or sticky grace never expires.
+    for (agent_id, age) in &health.recent_subagent_agent_ids {
+        if agent_id.is_empty() {
+            continue;
+        }
+        let seen_at = now
+            .checked_sub(Duration::from_secs(*age))
+            .unwrap_or(now);
+        recent_agents.entry(agent_id.clone()).or_insert(seen_at);
     }
     recent_agents.retain(|_, seen| now.saturating_duration_since(*seen) <= STICKY_IDLE_GRACE);
 }
@@ -142,6 +164,16 @@ mod tests {
         agents: Option<&[&str]>,
         idle_seconds: Option<u64>,
     ) -> RetainedHealthProbe {
+        probe_with_recent(requests, busy, agents, BTreeMap::new(), idle_seconds)
+    }
+
+    fn probe_with_recent(
+        requests: usize,
+        busy: &[&str],
+        agents: Option<&[&str]>,
+        recent: BTreeMap<String, u64>,
+        idle_seconds: Option<u64>,
+    ) -> RetainedHealthProbe {
         RetainedHealthProbe {
             status: "ok".to_owned(),
             pid: Some(1),
@@ -150,6 +182,7 @@ mod tests {
             active_subagent_models: BTreeMap::new(),
             active_subagent_agent_ids: agents
                 .map(|ids| ids.iter().map(|id| (*id).to_owned()).collect()),
+            recent_subagent_agent_ids: recent,
             idle_seconds,
             active_claude_session_ids: busy.iter().map(|id| (*id).to_owned()).collect(),
             busy_claude_session_ids: busy.iter().map(|id| (*id).to_owned()).collect(),
@@ -182,6 +215,44 @@ mod tests {
             &recent,
             now
         ));
+    }
+
+    #[test]
+    fn published_recent_ages_keep_sticky_without_local_memory() {
+        let now = Instant::now();
+        let mut ages = BTreeMap::new();
+        ages.insert("agent-warm".to_owned(), 5);
+        let drained = probe_with_recent(0, &["parent"], Some(&[]), ages, Some(5));
+        assert!(agent_still_on_retained(
+            &drained,
+            Some("agent-warm"),
+            &HashMap::new(),
+            now
+        ));
+        assert!(!agent_still_on_retained(
+            &drained,
+            Some("agent-new"),
+            &HashMap::new(),
+            now
+        ));
+    }
+
+    #[test]
+    fn note_retained_activity_does_not_refresh_seeded_stamps_from_ages() {
+        let now = Instant::now();
+        let seeded = now - Duration::from_secs(20);
+        let mut recent = HashMap::new();
+        recent.insert("agent-warm".to_owned(), seeded);
+        let mut ages = BTreeMap::new();
+        ages.insert("agent-warm".to_owned(), 1);
+        let drained = probe_with_recent(0, &["parent"], Some(&[]), ages, Some(1));
+        let mut last_work = None;
+        note_retained_activity(&drained, &mut last_work, &mut recent, now);
+        assert_eq!(
+            recent.get("agent-warm").copied(),
+            Some(seeded),
+            "published ages must not reset an older local sticky stamp to now"
+        );
     }
 
     #[test]

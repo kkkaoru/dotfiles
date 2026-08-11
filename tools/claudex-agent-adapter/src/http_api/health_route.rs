@@ -93,6 +93,7 @@ async fn health_response(state: HealthRouteState) -> (StatusCode, Json<serde_jso
             "model_concurrency":state.bridge.model_concurrency(),
             "active_subagent_models":active_subagent_models,
             "active_subagent_agent_ids":state.bridge.active_subagent_agent_ids(),
+            "recent_subagent_agent_ids":state.bridge.recent_subagent_agent_ids(),
             "model":state.model,
             "session_capacity":state.bridge.session_capacity(),
             "session_slots_used":state.bridge.used_session_slots(),

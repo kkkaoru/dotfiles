@@ -72,6 +72,9 @@ pub(super) struct Health {
     /// In-flight SubAgent agentIds. Older adapters omit this field.
     #[serde(default)]
     pub(super) active_subagent_agent_ids: Vec<String>,
+    /// Warm SubAgent agentIds → seconds since last observation. Older adapters omit.
+    #[serde(default)]
+    pub(super) recent_subagent_agent_ids: BTreeMap<String, u64>,
 }
 
 impl Health {

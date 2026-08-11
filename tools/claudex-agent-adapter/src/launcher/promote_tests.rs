@@ -70,6 +70,7 @@ fn health(listener_handover: bool, pid: Option<u32>) -> Health {
         busy_claude_session_ids: Vec::new(),
         idle_seconds: None,
         active_subagent_agent_ids: Vec::new(),
+        recent_subagent_agent_ids: BTreeMap::new(),
     }
 }
 
@@ -228,6 +229,22 @@ fn retains_recent_sessions_within_sticky_idle_grace() {
     assert!(
         retained_session_ids(&health).is_empty(),
         "legacy health without idle_seconds stays immediate-release"
+    );
+}
+
+#[test]
+fn warm_agent_ids_union_active_and_recent() {
+    let mut health = health(true, Some(12));
+    health.active_subagent_agent_ids = vec!["agent-live".to_owned(), "".to_owned()];
+    health
+        .recent_subagent_agent_ids
+        .insert("agent-warm".to_owned(), 3);
+    health
+        .recent_subagent_agent_ids
+        .insert("agent-live".to_owned(), 0);
+    assert_eq!(
+        warm_agent_ids(&health),
+        vec!["agent-live".to_owned(), "agent-warm".to_owned()]
     );
 }
 

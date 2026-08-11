@@ -313,6 +313,7 @@ fn healthy(config: &ServiceConfig) -> Health {
         busy_claude_session_ids: Vec::new(),
         idle_seconds: None,
         active_subagent_agent_ids: Vec::new(),
+        recent_subagent_agent_ids: BTreeMap::new(),
     }
 }
 
