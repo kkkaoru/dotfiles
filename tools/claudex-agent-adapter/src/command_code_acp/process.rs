@@ -3,7 +3,7 @@ use std::path::Path;
 use std::process::Stdio;
 
 use anyhow::{Context, Result};
-use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
+use tokio::io::{AsyncRead, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::mpsc;
 
@@ -11,7 +11,13 @@ use super::coalesce::ProgressCoalescer;
 use super::events::{ParsedLine, ProgressEvent, TurnResult, parse_stdout_line};
 use super::launch::LaunchSpec;
 
-const MAX_STDOUT_LINE_BYTES: usize = 2 * 1024 * 1024;
+mod decode;
+mod fallback;
+
+use decode::{Utf8LineDecoder, read_stdout_line};
+use fallback::{fallback_after_stdout, read_stderr};
+
+pub(super) const MAX_STDOUT_LINE_BYTES: usize = 2 * 1024 * 1024;
 
 #[derive(Debug)]
 pub struct TurnOutcome {
@@ -181,80 +187,6 @@ fn push_progress(
     progress.push(event);
 }
 
-async fn read_stdout_line(
-    reader: &mut BufReader<impl AsyncRead + Unpin>,
-) -> io::Result<Option<Vec<u8>>> {
-    let mut buf = Vec::new();
-    loop {
-        let available = reader.fill_buf().await?;
-        if available.is_empty() {
-            return Ok(eof_stdout_buf(buf));
-        }
-        if let Some(pos) = available.iter().position(|byte| *byte == b'\n') {
-            buf.extend_from_slice(&available[..=pos]);
-            reader.consume(pos + 1);
-            return Ok(Some(buf));
-        }
-        let take = available
-            .len()
-            .min(MAX_STDOUT_LINE_BYTES.saturating_sub(buf.len()));
-        buf.extend_from_slice(&available[..take]);
-        reader.consume(take);
-        if buf.len() >= MAX_STDOUT_LINE_BYTES {
-            return Ok(Some(buf));
-        }
-    }
-}
-
-fn eof_stdout_buf(buf: Vec<u8>) -> Option<Vec<u8>> {
-    if buf.is_empty() { None } else { Some(buf) }
-}
-
-#[derive(Default)]
-struct Utf8LineDecoder {
-    pending: Vec<u8>,
-}
-
-impl Utf8LineDecoder {
-    fn has_pending(&self) -> bool {
-        !self.pending.is_empty()
-    }
-
-    fn push_line(&mut self, bytes: &[u8]) -> String {
-        let mut line = bytes;
-        if line.last() == Some(&b'\n') {
-            line = &line[..line.len() - 1];
-        }
-        if line.last() == Some(&b'\r') {
-            line = &line[..line.len() - 1];
-        }
-        let mut data = std::mem::take(&mut self.pending);
-        data.extend_from_slice(line);
-        decode_utf8_with_pending(&mut self.pending, data)
-    }
-
-    fn flush(&mut self) -> Option<String> {
-        if self.pending.is_empty() {
-            return None;
-        }
-        let data = std::mem::take(&mut self.pending);
-        let text = String::from_utf8_lossy(&data).into_owned();
-        if text.is_empty() { None } else { Some(text) }
-    }
-}
-
-fn decode_utf8_with_pending(pending: &mut Vec<u8>, data: Vec<u8>) -> String {
-    match std::str::from_utf8(&data) {
-        Ok(text) => text.to_owned(),
-        Err(err) if err.error_len().is_none() => {
-            let valid = err.valid_up_to();
-            pending.extend_from_slice(&data[valid..]);
-            String::from_utf8_lossy(&data[..valid]).into_owned()
-        }
-        Err(_) => String::from_utf8_lossy(&data).into_owned(),
-    }
-}
-
 fn trace_spawn(argv: &[String], cwd: Option<&Path>) {
     let Ok(path) = std::env::var("CLAUDEX_COMMAND_CODE_TRACE") else {
         return;
@@ -287,89 +219,6 @@ fn spawn_cmd(spec: &LaunchSpec, argv: &[String], cwd: Option<&Path>) -> Result<C
             argv.join(" ")
         )
     })
-}
-
-fn fallback_after_stdout(
-    exit_code: Option<i32>,
-    success: bool,
-    stderr: &str,
-    stdout_error: Option<&io::Error>,
-) -> TurnResult {
-    if let Some(error) = stdout_error {
-        let code = exit_code
-            .map(|code| format!("exit {code}"))
-            .unwrap_or_else(|| "terminated".to_owned());
-        let mut message = format!("Command Code stdout closed: {error}");
-        if !stderr.is_empty() {
-            message.push('\n');
-            message.push_str(stderr);
-        }
-        return TurnResult {
-            subtype: "error".to_owned(),
-            session_id: None,
-            stop_reason: Some("error".to_owned()),
-            final_text: String::new(),
-            error: Some(format!("{message} ({code})")),
-        };
-    }
-    fallback_result(exit_code, success, stderr)
-}
-
-fn fallback_result(exit_code: Option<i32>, success: bool, stderr: &str) -> TurnResult {
-    if success {
-        return TurnResult {
-            subtype: "success".to_owned(),
-            session_id: None,
-            stop_reason: Some("end_turn".to_owned()),
-            final_text: String::new(),
-            error: None,
-        };
-    }
-    let code = exit_code
-        .map(|code| format!("exit {code}"))
-        .unwrap_or_else(|| "terminated".to_owned());
-    let message = match exit_code {
-        Some(3) => {
-            "Command Code is not authenticated. Run `cmd login` or set COMMAND_CODE_API_KEY."
-        }
-        Some(8) => "Command Code headless hit --max-turns before a final answer.",
-        Some(10) => "Command Code headless has insufficient credits.",
-        _ if !stderr.is_empty() => stderr,
-        _ => "Command Code headless failed without a JSON result.",
-    };
-    TurnResult {
-        subtype: "error".to_owned(),
-        session_id: None,
-        stop_reason: Some("error".to_owned()),
-        final_text: String::new(),
-        error: Some(format!("{message} ({code})")),
-    }
-}
-
-async fn read_stderr(stderr: impl AsyncRead + Unpin) -> String {
-    let mut reader = BufReader::new(stderr);
-    let mut buf = Vec::new();
-    let mut out = Vec::new();
-    loop {
-        buf.clear();
-        match reader.read_until(b'\n', &mut buf).await {
-            Ok(0) => break,
-            Ok(_) => out.push(trim_stderr_line(&buf)),
-            Err(_) => break,
-        }
-    }
-    out.join("\n")
-}
-
-fn trim_stderr_line(buf: &[u8]) -> String {
-    let mut line = buf;
-    if line.last() == Some(&b'\n') {
-        line = &line[..line.len() - 1];
-    }
-    if line.last() == Some(&b'\r') {
-        line = &line[..line.len() - 1];
-    }
-    String::from_utf8_lossy(line).into_owned()
 }
 
 #[cfg(test)]

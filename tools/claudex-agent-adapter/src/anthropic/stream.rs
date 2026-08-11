@@ -19,6 +19,7 @@ mod control;
 mod disconnect;
 mod drive;
 mod drive_finish;
+mod event_consume;
 mod non_stream;
 mod prepare;
 mod protocol;
@@ -44,6 +45,7 @@ pub(super) use types::{
 
 use builder::SegmentBuilder;
 pub(in crate::anthropic) use control::commit_transcript;
+use event_consume::{finish_stream_event_state, stream_provider_failure};
 #[cfg(test)]
 use prepare::{PrepareActivityOptions, prepare_with_activity};
 use prepare::{PreparedStream, prime_subagent_sse};
@@ -218,156 +220,6 @@ impl Bridge {
                 )
                 .await
             }
-        }
-    }
-
-    pub(super) async fn external_batch_segment(
-        &self,
-        session: &Arc<Session>,
-        events: Arc<crate::app_server::ThreadEvents>,
-        builder: &mut SegmentBuilder,
-        sender: Option<&StreamSender>,
-    ) -> Result<StreamTurn> {
-        let is_subagent = builder.is_subagent;
-        let segment = builder.finish(sender).await?;
-        let sse_open = sender.is_some_and(|sender| !sender.is_closed());
-        if !sse_open && is_subagent {
-            return Ok(StreamTurn::Segment {
-                segment,
-                provider_settled: false,
-            });
-        }
-        if !sse_open {
-            return Ok(self.disconnect_stream(session, events).await);
-        }
-        // ACP-bridged Agent/spawn: cancel provider so Grok does not also native-spawn.
-        let bridge = session
-            .pending_tools
-            .lock()
-            .await
-            .values()
-            .any(acp_tool_bridge::is_acp_bridge_request_id);
-        if segment.stop_reason == "tool_use" && bridge {
-            let _ = self.app.cancel_turn(&session.thread_id).await;
-        }
-        Ok(StreamTurn::Segment {
-            segment,
-            provider_settled: false,
-        })
-    }
-
-    async fn consume_stream_event(
-        &self,
-        session: &Arc<Session>,
-        sender: &StreamSender,
-        current_messages: &[Value],
-        system: &Value,
-        event: &Value,
-        builder: &mut SegmentBuilder,
-    ) -> Result<StreamEventState> {
-        let flow = match builder
-            .handle_event(self, session, current_messages, system, event, Some(sender))
-            .await
-        {
-            Ok(flow) => flow,
-            Err(error)
-                if context_window::is_context_window_event(event)
-                    && !builder.has_committed_output() =>
-            {
-                builder.close_open_blocks(Some(sender)).await?;
-                return Ok(StreamEventState::ContextWindow(error));
-            }
-            Err(error)
-                if (usage_limit::is_usage_limit_event(event)
-                    || super::provider_auth::is_auth_failure_event(event))
-                    && !builder.has_committed_output() =>
-            {
-                builder.close_open_blocks(Some(sender)).await?;
-                return Ok(StreamEventState::UsageLimit(error));
-            }
-            Err(error) => return Err(error),
-        };
-        if flow == ControlFlow::Break(()) {
-            Ok(StreamEventState::Done(Box::new(StreamTurn::Segment {
-                segment: builder.finish(Some(sender)).await?,
-                provider_settled: true,
-            })))
-        } else {
-            Ok(StreamEventState::Continue)
-        }
-    }
-
-    async fn finish_completed_stream(
-        &self,
-        turn: crate::anthropic::ActiveTurn,
-        sender: &StreamSender,
-        segment: Segment,
-        provider_settled: bool,
-        is_subagent: bool,
-    ) {
-        if sender.is_closed() && is_subagent {
-            commit_transcript(&turn.session, turn.extras, &segment).await;
-            // Settled turns stay registered so follow-up `resume` can reuse the
-            // provider thread (prompt-cache). Unsettled closes still tear down.
-            self.finish_closed_stream(
-                &turn.session,
-                &turn.events,
-                provider_settled,
-            )
-            .await;
-            return;
-        }
-        if self
-            .finish_if_stream_closed(sender, &turn.session, &turn.events, provider_settled)
-            .await
-        {
-            return;
-        }
-        commit_transcript(&turn.session, turn.extras, &segment).await;
-        send_stream_completion(sender, &segment).await;
-        self.finish_if_stream_closed(sender, &turn.session, &turn.events, provider_settled)
-            .await;
-    }
-
-    async fn finish_if_stream_closed(
-        &self,
-        sender: &StreamSender,
-        session: &Arc<Session>,
-        events: &Arc<crate::app_server::ThreadEvents>,
-        provider_settled: bool,
-    ) -> bool {
-        if !sender.is_closed() {
-            return false;
-        }
-        self.finish_closed_stream(session, events, provider_settled)
-            .await;
-        true
-    }
-}
-
-fn stream_provider_failure(
-    error: &anyhow::Error,
-    bridge: &Bridge,
-    session: &Session,
-    builder: &SegmentBuilder,
-) -> bool {
-    is_provider_stream_closed(error)
-        && !bridge.app.model_is_alive(&session.model)
-        && !builder.has_committed_output()
-}
-
-fn finish_stream_event_state(
-    state: StreamEventState,
-    builder: SegmentBuilder,
-) -> ControlFlow<StreamTurn, SegmentBuilder> {
-    match state {
-        StreamEventState::Continue => ControlFlow::Continue(builder),
-        StreamEventState::Done(turn) => ControlFlow::Break(*turn),
-        StreamEventState::ContextWindow(error) => {
-            ControlFlow::Break(StreamTurn::ContextWindow { error, builder })
-        }
-        StreamEventState::UsageLimit(error) => {
-            ControlFlow::Break(StreamTurn::UsageLimit { error, builder })
         }
     }
 }
