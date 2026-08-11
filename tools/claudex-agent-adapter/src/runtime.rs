@@ -9,7 +9,6 @@ use crate::{
 };
 use anyhow::{Context, Result, bail};
 
-mod cli_swap;
 mod hard_timeout;
 mod shutdown;
 #[derive(Debug)]
@@ -35,11 +34,11 @@ pub async fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<i32> {
             0
         }
         RuntimeCommand::Ensure(options) => {
-            println!("{}", cli_swap::run_ensure(options).await?);
+            println!("{}", launcher::ensure_running_cli(options).await?);
             0
         }
         RuntimeCommand::HotSwap(options, wait_idle) => {
-            println!("{}", cli_swap::run_hot_swap(options, wait_idle).await?);
+            println!("{}", launcher::hot_swap_cli(options, wait_idle).await?);
             0
         }
         RuntimeCommand::Launch(options, arguments, inherit_claude_model) => {

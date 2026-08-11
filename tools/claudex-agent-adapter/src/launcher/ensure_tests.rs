@@ -96,3 +96,45 @@ fn live_listener_helpers_ignore_invalid_url_and_missing_state() {
     notify_live_listener(&config, "not-a-listen");
     log_live_listener(&config);
 }
+
+#[tokio::test]
+async fn try_defer_live_update_skips_ineligible_health() {
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+        thread,
+    };
+
+    let root = tempfile::tempdir().expect("defer live fixture");
+    let listener = TcpListener::bind("127.0.0.1:0").expect("health listener");
+    let mut config = config(root.path());
+    config.options.listen = listener.local_addr().expect("health address");
+    let body = serde_json::json!({
+        "status": "ok",
+        "pid": 42,
+        "protocol_version": crate::ADAPTER_PROTOCOL_VERSION,
+        "build_id": env!("CLAUDEX_BUILD_ID"),
+        "codex_config_fingerprint": config.codex_config_fingerprint,
+        "service_config_fingerprint": "other-service",
+        "subscription_max_processes": 20,
+        "subscription_timeout_minutes": 120,
+        "listener_handover": true,
+    })
+    .to_string();
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("health accept");
+        let mut request = [0_u8; 1024];
+        let _ = stream.read(&mut request);
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        stream.write_all(response.as_bytes()).expect("health write");
+    });
+
+    let result = try_defer_live_update(&config, &reqwest::Client::new(), Some(42))
+        .await
+        .expect("ineligible health is not an error");
+    assert_eq!(result, None);
+    server.join().expect("health server");
+}

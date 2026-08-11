@@ -1,5 +1,4 @@
-// Coverage excludes test implementation; production behavior remains measured.
-#![cfg_attr(coverage_nightly, coverage(off))]
+// Coverage off is on the parent `#[path]` mod in provider_tool.rs.
 
 use axum::body::Bytes;
 use serde_json::{Value, json};

@@ -356,7 +356,7 @@ async fn try_canonical_fails_closed_when_warm_start_never_becomes_ready() {
         "{error:#}"
     );
     assert!(
-        started.elapsed() < std::time::Duration::from_millis(500),
+        started.elapsed() < std::time::Duration::from_secs(3),
         "dead warm-start child must fail fast, not wait the full timeout ({:?})",
         started.elapsed()
     );

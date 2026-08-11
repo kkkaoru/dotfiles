@@ -1,5 +1,4 @@
-// Coverage gates measure production code; test implementations are excluded.
-#![cfg_attr(coverage_nightly, coverage(off))]
+// Coverage off is on the parent `#[path]` mod in launcher.rs.
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -180,11 +179,19 @@ fn try_acquires_session_lock_without_waiting_and_releases_on_drop() {
             .is_none()
     );
     drop(first);
-    assert!(
-        super::launcher_lock::try_acquire(&path)
+    // flock release can lag briefly under heavy instrumented parallel runs.
+    let mut reacquired = false;
+    for _ in 0..50 {
+        if super::launcher_lock::try_acquire(&path)
             .expect("session lock after owner exit")
             .is_some()
-    );
+        {
+            reacquired = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(reacquired, "session lock should release after owner exit");
 }
 
 #[test]
@@ -726,6 +733,12 @@ async fn ensure_running_and_hot_swap_reuse_a_current_healthy_listener() {
             auth.clone(),
             response.clone(),
             auth.clone(),
+            response.clone(),
+            auth.clone(),
+            response.clone(),
+            auth.clone(),
+            response.clone(),
+            auth.clone(),
             response,
             auth,
         ],
@@ -738,15 +751,33 @@ async fn ensure_running_and_hot_swap_reuse_a_current_healthy_listener() {
         expected
     );
     assert_eq!(
+        ensure_running_cli(options.clone())
+            .await
+            .expect("ensure_running_cli reuses the current listener"),
+        expected
+    );
+    assert_eq!(
         hot_swap(options.clone(), false)
             .await
             .expect("hot_swap reuses without waiting for idle"),
         expected
     );
     assert_eq!(
-        hot_swap(options, true)
+        hot_swap_cli(options.clone(), false)
+            .await
+            .expect("hot_swap_cli reuses without waiting for idle"),
+        expected
+    );
+    assert_eq!(
+        hot_swap(options.clone(), true)
             .await
             .expect("hot_swap wait-idle reuses the current listener"),
+        expected
+    );
+    assert_eq!(
+        hot_swap_cli(options, true)
+            .await
+            .expect("hot_swap_cli wait-idle reuses the current listener"),
         expected
     );
     server.join().expect("public ensure server");

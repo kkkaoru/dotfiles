@@ -941,6 +941,22 @@ fn launch_records_cover_empty_scope_and_background_spawn_text() {
         records.iter().any(|record| record.recipient == "worker-c"),
         "{records:?}"
     );
+
+    let json_id = launch_records(&[json!({
+        "role":"user",
+        "content":[{
+            "type":"tool_result",
+            "tool_use_id":"call-json",
+            "agentId":"worker-json",
+            "content":[{"type":"text","text":"Async agent launched successfully."}]
+        }]
+    })]);
+    assert!(
+        json_id
+            .iter()
+            .any(|record| record.recipient == "worker-json"),
+        "{json_id:?}"
+    );
 }
 
 #[test]
