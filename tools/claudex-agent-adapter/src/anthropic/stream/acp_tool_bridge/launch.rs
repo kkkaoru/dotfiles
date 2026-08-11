@@ -42,11 +42,17 @@ pub(super) fn trace_launch_shaped_event(event: &Value) {
     let status = params.get("status").and_then(Value::as_str).unwrap_or("");
     let raw_args = params.get("arguments").unwrap_or(&Value::Null);
     let interesting = [tool, title].into_iter().any(|candidate| {
-        let lower = candidate.to_ascii_lowercase();
-        lower == "mcp"
-            || lower.contains("agent")
-            || lower.contains("task")
-            || looks_like_launch_tool(candidate)
+        looks_like_launch_tool(candidate) || looks_like_mcp_surface(candidate) || {
+            let lower = candidate.to_ascii_lowercase();
+            // Exact / token matches only — "include-subagents" in a Bash
+            // title must not count as an Agent/Task launch card.
+            lower == "agent"
+                || lower == "task"
+                || lower.starts_with("agent ")
+                || lower.starts_with("task ")
+                || lower.starts_with("agent:")
+                || lower.starts_with("task:")
+        }
     }) || looks_like_launch_arguments(raw_args);
     if !interesting {
         return;

@@ -117,17 +117,20 @@ fn subagent_start_status_skips_main_and_command_code() {
         ),
         None
     );
-    let status = super::prepare::subagent_start_status(true, "gpt-5.6-luna", Some("max"))
-        .expect("luna subagent start");
-    assert!(status.contains("gpt-5.6-luna"));
-    assert!(
-        !status.contains("effort="),
-        "effort= in start prose collapses CC 2.1 to Wandering: {status}"
+    // Visible "SubAgent starting…" collapses CC 2.1 thinking to Wandering and
+    // hides later ▶ Bash chrome for ACP workers. ZWSP prime is enough.
+    assert_eq!(
+        super::prepare::subagent_start_status(true, "gpt-5.6-luna", Some("max")),
+        None
     );
-    let default_effort =
-        super::prepare::subagent_start_status(true, "auto", None).expect("cursor subagent start");
-    assert!(default_effort.contains("auto"));
-    assert!(!default_effort.contains("effort="));
+    assert_eq!(
+        super::prepare::subagent_start_status(true, "auto", None),
+        None
+    );
+    assert_eq!(
+        super::prepare::subagent_start_status(true, "opencode-go/deepseek-v4-pro", None),
+        None
+    );
 }
 
 #[tokio::test]
@@ -1901,7 +1904,9 @@ async fn reports_slow_stream_preparation_before_the_provider_is_ready() {
         super::PrepareActivityOptions {
             input_tokens: 3,
             sender: &sender,
-            initial_status: Some("SubAgent starting: worker-model; preparing provider session…"),
+            // Visible SubAgent starting prose collapses CC 2.1 thinking; keep
+            // None and rely on keepalive / ▶ chrome after ZWSP prime.
+            initial_status: None,
             first_delay: Duration::from_millis(5),
             interval: Duration::from_millis(50),
             is_subagent: true,
@@ -1919,11 +1924,15 @@ async fn reports_slow_stream_preparation_before_the_provider_is_ready() {
     // Keepalive thinking is live-only; committed segment stays clean.
     assert!(segment.blocks.is_empty());
     assert!(
-        frames
+        !frames
             .iter()
-            .any(|frame| frame.contains("SubAgent starting: worker-model"))
+            .any(|frame| frame.contains("SubAgent starting")),
+        "must not paint launch prose that collapses CC thinking: {frames:?}"
     );
-    assert!(frames.iter().any(|frame| frame.contains("thinking_delta")));
+    assert!(
+        frames.iter().any(|frame| frame.contains("thinking_delta")),
+        "slow prepare must still stream keepalive thinking: {frames:?}"
+    );
     assert!(
         frames
             .iter()

@@ -31,14 +31,12 @@ pub(super) fn subagent_start_status(
     if !is_subagent || crate::command_code_acp::is_command_code_model(model) {
         return None;
     }
-    // Do not embed `effort=` here. Claude Code 2.1 treats the first thinking
-    // prose that mentions high effort as collapsed "Wandering… still thinking
-    // with high effort", and later ▶ tool chrome appended to the same block
-    // stays hidden for ACP SubAgents (cursor/auto). Native Subscription workers
-    // still show progress via real tool_use cards.
-    Some(format!(
-        "SubAgent starting: {model}; preparing provider session\u{2026}"
-    ))
+    // Never paint visible launch prose into the first thinking block.
+    // Claude Code 2.1 collapses that tip to "Wandering…", and later ▶ Bash /
+    // keepalive chrome appended to the same (or follow-on) thinking stream
+    // stays hidden for ACP SubAgents even while providerTool events fire.
+    // ZWSP priming in `prime_subagent_sse` is enough to keep the SSE channel.
+    None
 }
 
 pub(super) fn prime_subagent_sse(
