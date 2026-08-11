@@ -15,7 +15,7 @@ use axum::{
 use serde_json::json;
 
 use super::retained_health::{
-    RetainedHealthProbe, agent_still_on_retained, note_retained_activity, within_sticky_grace,
+    RetainedHealthProbe, agent_still_on_retained, note_retained_activity,
 };
 use crate::launcher::{
     RetainedGeneration, clear_retained, forget_retained_session, read_retained,
@@ -79,6 +79,11 @@ impl RetainedProxy {
     }
 
     fn apply_generation(&self, generation: RetainedGeneration) {
+        let pid_changed = self
+            .pid
+            .read()
+            .ok()
+            .is_none_or(|current| *current != generation.pid);
         if let Ok(mut listen) = self.listen.write() {
             *listen = generation.listen;
         }
@@ -88,12 +93,26 @@ impl RetainedProxy {
         if let Ok(mut sessions) = self.sessions.write() {
             *sessions = generation.session_ids.into_iter().collect();
         }
+        // Do not carry sticky grace / agent memory across retained generations.
+        if pid_changed {
+            self.clear_grace_memory();
+        }
+    }
+
+    fn clear_grace_memory(&self) {
+        if let Ok(mut last_work_at) = self.last_work_at.write() {
+            *last_work_at = None;
+        }
+        if let Ok(mut recent_agents) = self.recent_agents.write() {
+            recent_agents.clear();
+        }
     }
 
     fn clear_session_memory(&self) {
         if let Ok(mut sessions) = self.sessions.write() {
             sessions.clear();
         }
+        self.clear_grace_memory();
     }
 
     pub(super) fn owns(&self, session_id: &str) -> bool {
@@ -118,6 +137,7 @@ impl RetainedProxy {
         if let Ok(mut sessions) = self.sessions.write() {
             sessions.clear();
         }
+        self.clear_grace_memory();
         let _ = clear_retained(&self.path);
         // Idle/unreachable sticky must not leave an orphan retained daemon
         // until the next ensure() garbage-collects it.
@@ -191,11 +211,8 @@ impl RetainedProxy {
         }
         let now = Instant::now();
         self.note_probe(health, now);
-        let within_grace = self
-            .last_work_at
-            .read()
-            .ok()
-            .is_some_and(|guard| within_sticky_grace(*guard, now));
+        let local_last_work = self.last_work_at.read().ok().and_then(|guard| *guard);
+        let within_grace = health.within_sticky_grace(local_last_work, now);
         if !health.still_owns(session_id, within_grace) {
             self.release_unowned_session(session_id, health.has_active_work() || within_grace);
             return false;

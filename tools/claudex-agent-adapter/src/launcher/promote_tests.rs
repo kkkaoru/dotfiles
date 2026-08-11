@@ -68,6 +68,7 @@ fn health(listener_handover: bool, pid: Option<u32>) -> Health {
         listen: Some("127.0.0.1:8318".to_owned()),
         active_claude_session_ids: vec!["session-a".to_owned()],
         busy_claude_session_ids: Vec::new(),
+        idle_seconds: None,
     }
 }
 
@@ -294,10 +295,15 @@ fn config_at(listen: SocketAddr, root: &Path, executable: PathBuf) -> ServiceCon
 }
 
 fn health_body(pid: Option<u32>, active: bool) -> String {
+    health_body_with_idle(pid, active, None)
+}
+
+fn health_body_with_idle(pid: Option<u32>, active: bool, idle_seconds: Option<u64>) -> String {
     serde_json::json!({
         "status": "ok", "pid": pid, "protocol_version": ADAPTER_PROTOCOL_VERSION,
         "build_id": "old-build", "subscription_max_processes": 20,
         "subscription_timeout_minutes": 120, "active_http_requests": active as usize,
+        "idle_seconds": idle_seconds,
     }).to_string()
 }
 
@@ -313,6 +319,56 @@ async fn health_server(
         }
     });
     (address, task)
+}
+
+#[tokio::test]
+async fn release_idle_retained_keeps_generation_within_sticky_idle_grace() {
+    let root = tempfile::tempdir().expect("retained grace fixture");
+    let (server, task) = health_server(
+        health_body(Some(999), false),
+        health_body_with_idle(Some(90), false, Some(10)),
+    )
+    .await;
+    let config = config_at(server, root.path(), PathBuf::from("/tmp/adapter"));
+    let path = live::write_retained(
+        &config,
+        server,
+        90,
+        "old",
+        vec!["grace-session".to_owned()],
+    )
+    .unwrap();
+    release_idle_retained(&reqwest::Client::new(), &config).await;
+    assert!(
+        path.exists(),
+        "idle_seconds within sticky grace must keep retained"
+    );
+    task.abort();
+}
+
+#[tokio::test]
+async fn release_idle_retained_releases_when_sticky_idle_grace_expires() {
+    let root = tempfile::tempdir().expect("retained grace expired fixture");
+    let (server, task) = health_server(
+        health_body(Some(999), false),
+        health_body_with_idle(Some(91), false, Some(60)),
+    )
+    .await;
+    let config = config_at(server, root.path(), PathBuf::from("/tmp/adapter"));
+    let path = live::write_retained(
+        &config,
+        server,
+        91,
+        "old",
+        vec!["expired-session".to_owned()],
+    )
+    .unwrap();
+    release_idle_retained(&reqwest::Client::new(), &config).await;
+    assert!(
+        !path.exists(),
+        "idle_seconds past sticky grace must release retained"
+    );
+    task.abort();
 }
 
 #[tokio::test]

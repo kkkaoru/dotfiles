@@ -311,6 +311,7 @@ fn healthy(config: &ServiceConfig) -> Health {
         listen: None,
         active_claude_session_ids: Vec::new(),
         busy_claude_session_ids: Vec::new(),
+        idle_seconds: None,
     }
 }
 

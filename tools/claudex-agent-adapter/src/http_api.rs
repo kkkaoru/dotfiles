@@ -1,10 +1,11 @@
 use std::{
     pin::Pin,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
     },
     task::{Context as TaskContext, Poll},
+    time::Instant,
 };
 
 use crate::{
@@ -45,6 +46,8 @@ pub(crate) fn http_router_with_handover(
     let health_active_http_requests = Arc::clone(&active_http_requests);
     let active_provider_turns = Arc::new(AtomicUsize::new(0));
     let health_active_provider_turns = Arc::clone(&active_provider_turns);
+    let last_work_at = Arc::new(Mutex::new(Instant::now()));
+    let health_last_work_at = Arc::clone(&last_work_at);
     let health_model = model;
     let health_bridge = Arc::clone(&bridge);
     let subscription_max_processes = bridge.subscription_max_processes();
@@ -81,6 +84,23 @@ pub(crate) fn http_router_with_handover(
                 let listen = handover_for_health
                     .as_ref()
                     .map(|handover| handover.advertised_addr().to_string());
+                let active_subagent_models = health_bridge.active_subagent_models();
+                let http = health_active_http_requests.load(Ordering::Relaxed);
+                let turns = health_active_provider_turns.load(Ordering::Relaxed);
+                let busy = http > 0
+                    || turns > 0
+                    || active_subagent_models.values().copied().sum::<usize>() > 0;
+                let idle_seconds = {
+                    let mut last = health_last_work_at
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    if busy {
+                        *last = Instant::now();
+                        0
+                    } else {
+                        last.elapsed().as_secs()
+                    }
+                };
                 (
                     status,
                     Json(json!({
@@ -95,13 +115,14 @@ pub(crate) fn http_router_with_handover(
                         "search_worker_routes":search_worker_routes,
                         "started_models":health_bridge.started_models(),
                         "model_concurrency":health_bridge.model_concurrency(),
-                        "active_subagent_models":health_bridge.active_subagent_models(),
+                        "active_subagent_models":active_subagent_models,
                         "active_subagent_agent_ids":health_bridge.active_subagent_agent_ids(),
                         "model":health_model,
                         "session_capacity":health_bridge.session_capacity(),
                         "session_slots_used":health_bridge.used_session_slots(),
-                        "active_provider_turns":health_active_provider_turns.load(Ordering::Relaxed),
-                        "active_http_requests":health_active_http_requests.load(Ordering::Relaxed),
+                        "active_provider_turns":turns,
+                        "active_http_requests":http,
+                        "idle_seconds":idle_seconds,
                         "subscription_max_processes":subscription_max_processes,
                         "subscription_timeout_minutes":subscription_timeout_minutes,
                         "subagent_hard_timeout_seconds":subagent_hard_timeout_seconds,

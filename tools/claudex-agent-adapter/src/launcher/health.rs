@@ -65,6 +65,10 @@ pub(super) struct Health {
     /// `active_claude_session_ids` only while `has_active_work()` is true.
     #[serde(default)]
     pub(super) busy_claude_session_ids: Vec<String>,
+    /// Seconds since this daemon last observed live work. Older adapters omit
+    /// the field; sticky / release_idle then treat quiet health as immediately idle.
+    #[serde(default)]
+    pub(super) idle_seconds: Option<u64>,
 }
 
 impl Health {
@@ -76,6 +80,10 @@ impl Health {
         self.active_http_requests > 0
             || self.active_provider_turns > 0
             || self.active_subagent_count() > 0
+    }
+
+    pub(super) fn within_sticky_idle_grace(&self) -> bool {
+        crate::sticky_grace::within_sticky_idle_grace_secs(self.idle_seconds)
     }
 }
 

@@ -18,6 +18,7 @@ pub mod parallel_scheduler;
 pub mod path_env;
 pub mod provider_config;
 pub mod runtime;
+pub(crate) mod sticky_grace;
 mod subagent_policy;
 mod web_search;
 mod working_directory;

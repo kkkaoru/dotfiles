@@ -1,13 +1,11 @@
 use std::{
     collections::{BTreeMap, HashMap},
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 use serde::Deserialize;
 
-/// Keep sticky through brief idle gaps between parent / SubAgent turns so warm
-/// ACP sessions are not torn down on the first quiet `/health` sample.
-pub(super) const STICKY_IDLE_GRACE: Duration = Duration::from_secs(45);
+use crate::sticky_grace::{STICKY_IDLE_GRACE, within_sticky_idle_grace_secs};
 
 /// Minimal `/health` view used to decide whether sticky proxying is still safe.
 #[derive(Debug, Deserialize)]
@@ -26,6 +24,9 @@ pub(super) struct RetainedHealthProbe {
     /// retained daemon predates this field and sticky must stay session-scoped.
     #[serde(default)]
     pub(super) active_subagent_agent_ids: Option<Vec<String>>,
+    /// Seconds since this daemon last observed live work. `None` on older builds.
+    #[serde(default)]
+    pub(super) idle_seconds: Option<u64>,
     #[serde(default)]
     pub(super) active_claude_session_ids: Vec<String>,
     #[serde(default)]
@@ -37,6 +38,13 @@ impl RetainedHealthProbe {
         self.active_http_requests > 0
             || self.active_provider_turns > 0
             || self.active_subagent_models.values().copied().sum::<usize>() > 0
+    }
+
+    pub(super) fn within_sticky_grace(&self, local_last_work: Option<Instant>, now: Instant) -> bool {
+        if let Some(secs) = self.idle_seconds {
+            return within_sticky_idle_grace_secs(Some(secs));
+        }
+        local_last_work.is_some_and(|seen| now.saturating_duration_since(seen) <= STICKY_IDLE_GRACE)
     }
 
     pub(super) fn still_owns(&self, session_id: &str, within_grace: bool) -> bool {
@@ -112,10 +120,6 @@ pub(super) fn note_retained_activity(
     recent_agents.retain(|_, seen| now.saturating_duration_since(*seen) <= STICKY_IDLE_GRACE);
 }
 
-pub(super) fn within_sticky_grace(last_work_at: Option<Instant>, now: Instant) -> bool {
-    last_work_at.is_some_and(|seen| now.saturating_duration_since(seen) <= STICKY_IDLE_GRACE)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,6 +128,7 @@ mod tests {
         requests: usize,
         busy: &[&str],
         agents: Option<&[&str]>,
+        idle_seconds: Option<u64>,
     ) -> RetainedHealthProbe {
         RetainedHealthProbe {
             status: "ok".to_owned(),
@@ -131,9 +136,9 @@ mod tests {
             active_http_requests: requests,
             active_provider_turns: requests,
             active_subagent_models: BTreeMap::new(),
-            active_subagent_agent_ids: agents.map(|ids| {
-                ids.iter().map(|id| (*id).to_owned()).collect()
-            }),
+            active_subagent_agent_ids: agents
+                .map(|ids| ids.iter().map(|id| (*id).to_owned()).collect()),
+            idle_seconds,
             active_claude_session_ids: busy.iter().map(|id| (*id).to_owned()).collect(),
             busy_claude_session_ids: busy.iter().map(|id| (*id).to_owned()).collect(),
         }
@@ -141,7 +146,7 @@ mod tests {
 
     #[test]
     fn still_owns_uses_grace_for_quiet_listed_sessions() {
-        let quiet = probe(0, &["session-a"], Some(&[]));
+        let quiet = probe(0, &["session-a"], Some(&[]), Some(10));
         assert!(!quiet.still_owns("session-a", false));
         assert!(quiet.still_owns("session-a", true));
         assert!(!quiet.still_owns("session-b", true));
@@ -152,7 +157,7 @@ mod tests {
         let now = Instant::now();
         let mut recent = HashMap::new();
         recent.insert("agent-old".to_owned(), now);
-        let drained = probe(1, &["parent"], Some(&[]));
+        let drained = probe(1, &["parent"], Some(&[]), Some(0));
         assert!(agent_still_on_retained(
             &drained,
             Some("agent-old"),
@@ -165,5 +170,13 @@ mod tests {
             &recent,
             now
         ));
+    }
+
+    #[test]
+    fn published_idle_seconds_drive_grace_without_local_clock() {
+        let within = probe(0, &["session-a"], Some(&[]), Some(10));
+        assert!(within.within_sticky_grace(None, Instant::now()));
+        let expired = probe(0, &["session-a"], Some(&[]), Some(60));
+        assert!(!expired.within_sticky_grace(None, Instant::now()));
     }
 }
