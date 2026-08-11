@@ -39,7 +39,9 @@ pub fn is_test_source(path: &Path) -> bool {
         || path
             .file_name()
             .and_then(|name| name.to_str())
-            .is_some_and(|name| name == "tests.rs" || name.ends_with("_tests.rs"))
+            .is_some_and(|name| {
+                name == "tests.rs" || name.ends_with("_tests.rs") || name.ends_with("_test.rs")
+            })
 }
 
 pub fn calculate_build_id(files: &[PathBuf]) -> std::io::Result<u64> {

@@ -64,7 +64,8 @@ pub(crate) async fn run(
 // integration test; excluding this transport boundary keeps coverage stable
 // without depending on external credentials or wall-clock scheduling.
 mod mode;
-#[cfg_attr(coverage_nightly, coverage(off))]
+// Keep parse mapped under coverage-branch: coverage(off) makes llvm omit the
+// file while expected_production_files still requires it (≥95% gate).
 mod parse;
 pub use mode::WebSearchMode;
 use parse::{append_answer_delta, collect_item_results, fallback_results, is_web_search};
