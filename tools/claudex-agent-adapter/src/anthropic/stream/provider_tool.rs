@@ -44,18 +44,6 @@ impl SegmentBuilder {
         if !is_new {
             return Ok(());
         }
-        if self
-            .emit_subagent_server_tool(
-                call_id,
-                name,
-                title,
-                params.get("arguments"),
-                stream,
-            )
-            .await?
-        {
-            return Ok(());
-        }
         self.stream_progress_text(&progress_start_line(title, params.get("arguments")), stream)
             .await
     }
@@ -114,12 +102,6 @@ impl SegmentBuilder {
         success: bool,
         stream: Option<&StreamSender>,
     ) -> Result<()> {
-        if self
-            .complete_subagent_server_tool(call_id.unwrap_or(""), success, stream)
-            .await?
-        {
-            return Ok(());
-        }
         if success {
             return self.emit_terminal_success(call_id, short_title, stream).await;
         }
@@ -167,13 +149,6 @@ impl SegmentBuilder {
             return Ok(());
         };
         if !self.remember_provider_tool(call_id, title) {
-            return Ok(());
-        }
-        let name = params.get("tool").and_then(Value::as_str).unwrap_or(title);
-        if self
-            .emit_subagent_server_tool(call_id, name, title, params.get("arguments"), stream)
-            .await?
-        {
             return Ok(());
         }
         self.stream_progress_text(&progress_start_line(title, params.get("arguments")), stream)

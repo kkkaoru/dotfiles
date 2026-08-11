@@ -28,7 +28,6 @@ impl SegmentBuilder {
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
-#[allow(clippy::excessive_nesting)]
 mod tests {
     use std::convert::Infallible;
 
@@ -81,6 +80,6 @@ mod tests {
             .expect("no-action check");
         assert!(no_action.open_text_block.is_none());
         drop(sender);
-        while receiver.recv().await.is_some() {}
+        let _drained = receiver.try_recv();
     }
 }
