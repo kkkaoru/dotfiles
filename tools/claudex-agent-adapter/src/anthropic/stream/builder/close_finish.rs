@@ -103,6 +103,7 @@ impl SegmentBuilder {
         &mut self,
         stream: Option<&StreamSender>,
     ) -> Result<Segment> {
+        self.report_incomplete_launches(stream).await?;
         self.report_no_subagent_action(stream).await?;
         self.close_open_blocks(stream).await?;
         sanitize_committed_blocks(&mut self.blocks);

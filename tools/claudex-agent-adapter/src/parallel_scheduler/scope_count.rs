@@ -24,7 +24,7 @@ pub(crate) fn independent_scope_count(request: &MessagesRequest) -> usize {
     }
 }
 
-pub(super) fn has_classifiable_user_turn(request: &MessagesRequest) -> bool {
+pub(crate) fn has_classifiable_user_turn(request: &MessagesRequest) -> bool {
     last_real_user_text(request).is_some()
 }
 
@@ -101,7 +101,7 @@ fn is_atomic_lookup(content: &str) -> bool {
             && trimmed.split_whitespace().count() <= 3)
 }
 
-pub(super) fn is_substantive_work(request: &MessagesRequest) -> bool {
+pub(crate) fn is_substantive_work(request: &MessagesRequest) -> bool {
     let Some(content) = last_real_user_text(request) else {
         return false;
     };

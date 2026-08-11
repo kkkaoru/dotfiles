@@ -172,6 +172,21 @@ mod tests {
         assert!(bridge_provider_tool_call(&map, &completed).is_some());
         assert!(!is_unbridged_launch_progress(&map, &completed));
 
+        let failed = json!({
+            "params":{
+                "callId":"cursor-task-failed",
+                "tool":"Task",
+                "title":"Task",
+                "status":"failed",
+                "arguments":{"_toolName":"task"}
+            }
+        });
+        assert!(bridge_provider_tool_call(&map, &failed).is_none());
+        assert!(
+            !is_unbridged_launch_progress(&map, &failed),
+            "failed incomplete launches must stay visible"
+        );
+
         let bash = json!({
             "params":{
                 "callId":"bash-1",
@@ -691,5 +706,29 @@ mod tests {
 
         let no_match = HashMap::from([("k".to_owned(), "Other".to_owned())]);
         assert!(requested_original_name(&no_match, "Unknown").is_none());
+    }
+
+    #[test]
+    fn builds_tool_call_from_queued_launch_arguments() {
+        let map = names();
+        let call = tool_call_from_launch_queue_arguments(
+            &map,
+            "queue-drain-1",
+            json!({"prompt":"second worker","_toolName":"Task","subagent_type":"claudex-gpt"}),
+        )
+        .expect("queued args become tool_use");
+        assert_eq!(call.call_id, "queue-drain-1");
+        assert_eq!(call.name, "Task");
+        assert_eq!(call.arguments["prompt"], "second worker");
+        assert!(call.arguments.get("_toolName").is_none());
+        assert!(
+            tool_call_from_launch_queue_arguments(
+                &map,
+                "bad",
+                json!({"_toolName":"Task","run_in_background":true})
+            )
+            .is_none(),
+            "prompt-less queue entries must not bridge"
+        );
     }
 }

@@ -54,6 +54,9 @@ pub(in crate::anthropic) struct SegmentBuilder {
     /// Cursor MCP launch callIds seen with empty args. Later generic
     /// `provider tool` updates for these ids still consult the MCP launch queue.
     mcp_provider_call_ids: Vec<String>,
+    /// Launch-shaped cards that stayed incomplete (`_toolName` only / empty
+    /// prompt). Reported visibly if they never bridge before turn end.
+    incomplete_launch_call_ids: Vec<String>,
     /// One-line hint already painted for a bulky JSON/tool dump this turn.
     bulk_dump_hinted: bool,
     requires_verified_web_evidence: bool,
@@ -106,7 +109,18 @@ impl SegmentBuilder {
             }
             Some("thread/tokenUsage/updated") => self.update_usage(event),
             Some("error") => return error_flow(event),
-            Some("turn/completed") => return turn_flow(event),
+            Some("turn/completed") => {
+                self.report_incomplete_launches(stream).await?;
+                self.drain_remaining_queued_launches(
+                    bridge,
+                    session,
+                    current_messages,
+                    system,
+                    stream,
+                )
+                .await?;
+                return turn_flow(event);
+            }
             _ => {}
         }
         Ok(ControlFlow::Continue(()))

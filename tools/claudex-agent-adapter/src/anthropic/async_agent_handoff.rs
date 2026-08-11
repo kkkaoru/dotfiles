@@ -18,6 +18,56 @@ fn background_handoff_text(launch_count: usize) -> String {
     }
 }
 
+/// Keep the parent provider turn open when Claude Code only acked a partial
+/// fan-out. Returning control after the first background Agent makes the
+/// orchestrator stop before `MIN_PARALLEL` / active floor is met.
+fn should_defer_background_handoff(request: &MessagesRequest, launch_count: usize) -> bool {
+    use crate::parallel_scheduler::{
+        ParallelScheduler, has_classifiable_user_turn, has_parallel_scope, is_substantive_work,
+        needs_single_worker,
+    };
+    // Claude Code may append a text-only steering user message after the async
+    // ack. That path must still hand control back so the main prompt can react.
+    if has_post_ack_steering(request) {
+        return false;
+    }
+    if needs_single_worker(request) || !has_classifiable_user_turn(request) {
+        return false;
+    }
+    if !(has_parallel_scope(request) || is_substantive_work(request)) {
+        return false;
+    }
+    let config = ParallelScheduler::shared().config();
+    let required = config.min_parallel_workers.max(config.active_floor);
+    launch_count < required
+}
+
+fn has_post_ack_steering(request: &MessagesRequest) -> bool {
+    trailing_user_messages(&request.messages)
+        .iter()
+        .any(is_text_only_user_message)
+}
+
+fn is_text_only_user_message(message: &serde_json::Value) -> bool {
+    match message.get("content") {
+        Some(serde_json::Value::String(text)) => !text.trim().is_empty(),
+        Some(serde_json::Value::Array(blocks)) => {
+            let has_text = blocks.iter().any(|block| {
+                block.get("type").and_then(serde_json::Value::as_str) == Some("text")
+                    && block
+                        .get("text")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|text| !text.trim().is_empty())
+            });
+            let has_tool_result = blocks.iter().any(|block| {
+                block.get("type").and_then(serde_json::Value::as_str) == Some("tool_result")
+            });
+            has_text && !has_tool_result
+        }
+        _ => false,
+    }
+}
+
 impl Bridge {
     pub(super) async fn async_agent_launch_handoff(
         &self,
@@ -37,6 +87,14 @@ impl Bridge {
             .agent_efforts
             .background_launches(&tool_use_ids)
             .is_some();
+        if should_defer_background_handoff(request, tool_use_ids.len()) {
+            tracing::info!(
+                launch_count = tool_use_ids.len(),
+                recorded_background,
+                "deferring native background handoff until parallel SubAgent floor is met"
+            );
+            return None;
+        }
         let results = collect_turn_tool_results(&request.messages);
         if !self
             .cancel_handed_off_provider_session(&results, &tool_use_ids)

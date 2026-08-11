@@ -21,6 +21,9 @@ pub(crate) use config::{
     SUBAGENT_REASSESS_INTERVAL_SECONDS_ENV, SUBAGENT_REEVALUATE_ON_COMPLETION_ENV,
     SUBAGENT_REUSE_ENV, SchedulerConfig,
 };
+pub(crate) use scope_count::{
+    has_classifiable_user_turn, has_parallel_scope, is_substantive_work, needs_single_worker,
+};
 
 #[derive(Clone, Debug)]
 pub(crate) struct SchedulerDecision {

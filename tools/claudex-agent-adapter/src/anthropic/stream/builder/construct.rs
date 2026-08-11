@@ -22,6 +22,7 @@ impl SegmentBuilder {
             saw_provider_turn_activity: false,
             bridged_provider_launch_ids: Vec::new(),
             mcp_provider_call_ids: Vec::new(),
+            incomplete_launch_call_ids: Vec::new(),
             bulk_dump_hinted: false,
             requires_verified_web_evidence: false,
             verified_web_evidence_call_ids: Vec::new(),

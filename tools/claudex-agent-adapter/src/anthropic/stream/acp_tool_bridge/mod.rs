@@ -53,6 +53,9 @@ fn bridgeable_status(status: Option<&str>) -> bool {
 /// card that will not become Claude Code tool_use (incomplete args, or missing
 /// Agent mapping). Suppress WIP text for those so Cursor `auto` cannot fake
 /// `▶ Task` / `▶ MCP` / `✓ Task` as if Claudex workers started.
+///
+/// Failed/cancelled cards are not suppressed: the failure must stay visible so
+/// `_toolName`-only launches are not silently dropped.
 pub(super) fn is_unbridged_launch_progress(
     external_tool_names: &HashMap<String, String>,
     event: &Value,
@@ -60,6 +63,10 @@ pub(super) fn is_unbridged_launch_progress(
     let Some(params) = event.get("params") else {
         return false;
     };
+    let status = params.get("status").and_then(Value::as_str);
+    if matches!(status, Some("failed") | Some("cancelled")) {
+        return false;
+    }
     let tool = params.get("tool").and_then(Value::as_str).unwrap_or("");
     let title = params.get("title").and_then(Value::as_str).unwrap_or("");
     let raw_args = params.get("arguments").unwrap_or(&Value::Null);
@@ -74,6 +81,31 @@ pub(super) fn is_unbridged_launch_progress(
         return false;
     }
     bridge_provider_tool_call(external_tool_names, event).is_none()
+}
+
+/// Build a Claude Code Agent/Task tool_use from queued `claudex-launch` args.
+pub(super) fn tool_call_from_launch_queue_arguments(
+    external_tool_names: &HashMap<String, String>,
+    call_id: &str,
+    arguments: Value,
+) -> Option<ToolCall> {
+    let provider_label = arguments
+        .get("_toolName")
+        .and_then(Value::as_str)
+        .filter(|name| !name.is_empty())
+        .unwrap_or("Agent");
+    let name = launch_tool_name_from_arguments(&arguments, external_tool_names)
+        .or_else(|| map_launch_name(provider_label, external_tool_names))?;
+    let normalized = normalize_launch_arguments(provider_label, &arguments);
+    if !launch_arguments_ready(&normalized) {
+        return None;
+    }
+    Some(ToolCall {
+        call_id: call_id.to_owned(),
+        name,
+        arguments: normalized,
+        request_id: acp_bridge_request_id(call_id),
+    })
 }
 
 /// If this providerTool event is a request-supplied Agent/Task launch (or Grok

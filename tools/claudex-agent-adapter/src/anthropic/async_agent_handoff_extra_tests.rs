@@ -518,3 +518,68 @@ async fn keeps_provider_open_when_thread_ensure_fails() {
         "handoff must abort when the owning thread cannot be ensured"
     );
 }
+
+fn parallel_background_agent_request(agent_id: &str) -> MessagesRequest {
+    let mut request = background_agent_request(agent_id);
+    request.messages.insert(
+        0,
+        json!({
+            "role":"user",
+            "content":"並列で3つの独立スコープを実装して調査と実装を分担してください。"
+        }),
+    );
+    request
+}
+
+#[tokio::test]
+async fn defers_handoff_when_parallel_floor_is_unmet() {
+    let bridge = Bridge::new_with_backend(AgentBackend::spawn_routes(&[]), "main-model".to_owned());
+    let response = bridge
+        .async_agent_launch_handoff(&parallel_background_agent_request("background"))
+        .await;
+    assert!(
+        response.is_none(),
+        "partial fan-out must keep the provider turn open for additional launches"
+    );
+}
+
+#[tokio::test]
+async fn hands_control_back_once_parallel_floor_is_met() {
+    let bridge = Bridge::new_with_backend(AgentBackend::spawn_routes(&[]), "main-model".to_owned());
+    let config = crate::parallel_scheduler::ParallelScheduler::shared().config();
+    let required = config.min_parallel_workers.max(config.active_floor);
+    let ids = (0..required)
+        .map(|index| format!("worker-{index}"))
+        .collect::<Vec<_>>();
+    let mut request = request(json!(
+        ids.iter().map(|id| launch_result(id)).collect::<Vec<_>>()
+    ));
+    request.messages.insert(
+        0,
+        json!({
+            "role":"user",
+            "content":"並列で複数の独立スコープを実装してください。"
+        }),
+    );
+    request.messages.insert(
+        1,
+        json!({
+            "role":"assistant",
+            "content": ids.iter().map(|id| json!({
+                "type":"tool_use",
+                "id": id,
+                "name":"Agent",
+                "input":{}
+            })).collect::<Vec<_>>()
+        }),
+    );
+    let response = bridge
+        .async_agent_launch_handoff(&request)
+        .await
+        .expect("met floor should hand control back");
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let body: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(body["stop_reason"], "end_turn");
+}
