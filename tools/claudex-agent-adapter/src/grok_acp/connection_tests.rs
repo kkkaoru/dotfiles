@@ -1,5 +1,8 @@
 use super::*;
-use std::ffi::{OsStr, OsString};
+use std::{
+    ffi::{OsStr, OsString},
+    sync::atomic::Ordering,
+};
 
 #[test]
 fn marks_provider_dead_before_notifying_the_driver() {
