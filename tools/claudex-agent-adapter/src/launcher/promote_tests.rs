@@ -207,6 +207,31 @@ fn retains_no_sessions_for_an_idle_tui() {
 }
 
 #[test]
+fn retains_recent_sessions_within_sticky_idle_grace() {
+    let mut health = health(true, Some(12));
+    health.active_http_requests = 0;
+    health.active_provider_turns = 0;
+    health.busy_claude_session_ids.clear();
+    health.active_claude_session_ids = vec!["session-a".to_owned()];
+    health.idle_seconds = Some(5);
+    assert_eq!(
+        retained_session_ids(&health),
+        ["session-a"],
+        "brief idle between turns must keep sessions for retained cutover"
+    );
+    health.idle_seconds = Some(600);
+    assert!(
+        retained_session_ids(&health).is_empty(),
+        "idle past sticky grace must still release"
+    );
+    health.idle_seconds = None;
+    assert!(
+        retained_session_ids(&health).is_empty(),
+        "legacy health without idle_seconds stays immediate-release"
+    );
+}
+
+#[test]
 fn advertised_listen_prefers_health_and_falls_back_to_config() {
     let config = ServiceConfig {
         options: AdapterOptions {
