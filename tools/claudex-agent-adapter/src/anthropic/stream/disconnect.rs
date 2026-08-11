@@ -1,19 +1,18 @@
-use std::{collections::HashSet, sync::Arc};
+use std::sync::Arc;
 
 use super::{StreamTurn, StreamWaitResult, builder::SegmentBuilder};
-use crate::{
-    agent_backend::TurnCancellation,
-    anthropic::{Bridge, Session},
-};
+use crate::anthropic::{Bridge, Session};
 
 mod helpers;
 #[cfg(test)]
 #[allow(unused_imports)]
 use helpers::reject_disconnected_tool_once;
-use helpers::{
-    drain_disconnected_turn_with_warning, reject_disconnected_tool_with_warning, request_id_keys,
-    take_pending_disconnected_tools,
-};
+#[path = "disconnect_policy.rs"]
+mod policy;
+#[cfg(test)]
+pub(super) use helpers::drain_disconnected_turn;
+#[cfg(test)]
+use helpers::request_id_keys;
 
 impl Bridge {
     pub(super) async fn finish_closed_stream(
@@ -89,129 +88,7 @@ impl Bridge {
         self.disconnect_stream_with_policy(session, events, false)
             .await
     }
-
-    async fn disconnect_stream_with_policy(
-        &self,
-        session: &Arc<Session>,
-        events: Arc<crate::app_server::ThreadEvents>,
-        abort_visible_tool_provider: bool,
-    ) -> StreamTurn {
-        // Cancel before unregistering so a racing outer follow-up can still
-        // discover this session, preempt the gate, and reuse the provider thread.
-        match self.app.cancel_turn(&session.thread_id).await {
-            Ok(TurnCancellation::Settled) => {
-                let _ = self.reject_pending_disconnected_tools(session).await;
-                self.remove_session(session).await;
-            }
-            Ok(TurnCancellation::Unsupported) => {
-                self.handle_unsupported_disconnect(session, events, abort_visible_tool_provider)
-                    .await;
-            }
-            Err(error) => {
-                warn_cancel_failure(&error, &session.thread_id);
-                self.detach_non_cancellable_turn(session, events).await;
-                self.remove_session(session).await;
-            }
-        }
-        StreamTurn::Disconnected
-    }
-
-    async fn handle_unsupported_disconnect(
-        &self,
-        session: &Arc<Session>,
-        events: Arc<crate::app_server::ThreadEvents>,
-        abort_visible_tool_provider: bool,
-    ) {
-        if session.pending_tools.lock().await.is_empty() {
-            // No tool call has reached Claude Code yet. Keep consuming the
-            // non-cancellable turn so a delayed call receives a rejection.
-            self.detach_non_cancellable_turn(session, events).await;
-            self.remove_session(session).await;
-            return;
-        }
-        if !abort_visible_tool_provider {
-            // A native Agent handoff already returned control to Claude Code.
-            // Reject the pending call and drain only this turn so a shared
-            // provider remains available to unrelated sessions.
-            self.detach_non_cancellable_turn(session, events).await;
-            self.remove_session(session).await;
-            return;
-        }
-        // A client-visible tool call can no longer receive a result. Abort and
-        // reap the provider instead of leaving hidden work attached to it.
-        self.remove_session(session).await;
-        self.discard_pending_disconnected_tools(session).await;
-        self.abort_disconnected_provider(&session.thread_id).await;
-    }
-
-    async fn abort_disconnected_provider(&self, thread_id: &str) {
-        if let Err(error) = self.app.abort_turn_provider(thread_id).await {
-            warn_disconnect_failure(
-                &error,
-                thread_id,
-                "failed to abort non-cancellable disconnected provider",
-            );
-        }
-    }
-
-    async fn detach_non_cancellable_turn(
-        &self,
-        session: &Arc<Session>,
-        events: Arc<crate::app_server::ThreadEvents>,
-    ) {
-        let rejected_request_ids = self.reject_pending_disconnected_tools(session).await;
-        self.spawn_disconnected_turn_drain(session.model.clone(), events, rejected_request_ids);
-    }
-
-    fn spawn_disconnected_turn_drain(
-        &self,
-        model: String,
-        events: Arc<crate::app_server::ThreadEvents>,
-        rejected_request_ids: HashSet<String>,
-    ) {
-        let app = Arc::clone(&self.app);
-        tokio::spawn(drain_disconnected_turn_with_warning(
-            app,
-            model,
-            events,
-            rejected_request_ids,
-        ));
-    }
-
-    async fn reject_pending_disconnected_tools(&self, session: &Session) -> HashSet<String> {
-        let pending = take_pending_disconnected_tools(session).await;
-        self.agent_efforts
-            .remove_tool_results(pending.iter().map(|(tool_use_id, _)| tool_use_id.as_str()));
-        let rejected_request_ids = request_id_keys(&pending);
-        for (_, request_id) in pending {
-            reject_disconnected_tool_with_warning(self, session, request_id).await;
-        }
-        rejected_request_ids
-    }
-
-    /// Pure mid-turn follow-ups reclaim a session that still owns Claude tool
-    /// calls from the prior segment. Reject those calls so the provider can
-    /// accept the new user turn instead of waiting forever for tool_result.
-    pub(in crate::anthropic) async fn settle_abandoned_pending_tools(&self, session: &Session) {
-        if session.pending_tools.lock().await.is_empty() {
-            return;
-        }
-        tracing::info!(
-            thread_id = %session.thread_id,
-            "settling abandoned pending tools before pure mid-turn follow-up"
-        );
-        let _ = self.reject_pending_disconnected_tools(session).await;
-    }
-
-    async fn discard_pending_disconnected_tools(&self, session: &Session) {
-        let pending = take_pending_disconnected_tools(session).await;
-        self.agent_efforts
-            .remove_tool_results(pending.iter().map(|(tool_use_id, _)| tool_use_id.as_str()));
-    }
 }
-
-#[cfg(test)]
-pub(super) use helpers::drain_disconnected_turn;
 
 pub(super) fn warn_disconnect_failure(error: &anyhow::Error, thread_id: &str, message: &str) {
     tracing::warn!(%error, thread_id, message);
@@ -225,38 +102,8 @@ pub(super) fn warn_cancel_failure(error: &anyhow::Error, thread_id: &str) {
     );
 }
 
+
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
-mod tests {
-    use super::*;
-    use serde_json::json;
-    use std::collections::HashSet;
-
-    #[test]
-    fn serializes_pending_request_id_keys_without_reordering_tools() {
-        let keys = request_id_keys(&[
-            ("first".to_owned(), json!(41)),
-            ("second".to_owned(), json!({"id":"42"})),
-        ]);
-        assert!(keys.contains("41"));
-        assert!(keys.contains(r#"{"id":"42"}"#));
-    }
-
-    #[tokio::test]
-    async fn rejects_each_request_id_once_and_reports_provider_errors() {
-        let app =
-            crate::agent_backend::AgentBackend::Grok(crate::grok_acp::GrokAcp::stopped_for_test());
-        let mut rejected = HashSet::new();
-        assert!(
-            reject_disconnected_tool_once(&app, "model", &mut rejected, json!(41))
-                .await
-                .is_err()
-        );
-        assert!(
-            reject_disconnected_tool_once(&app, "model", &mut rejected, json!(41))
-                .await
-                .is_ok()
-        );
-        assert_eq!(rejected.len(), 1);
-    }
-}
+#[path = "disconnect_tests.rs"]
+mod tests;

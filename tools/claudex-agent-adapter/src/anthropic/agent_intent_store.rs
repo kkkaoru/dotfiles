@@ -1,20 +1,34 @@
 use std::{
     collections::VecDeque,
-    fs::{self, OpenOptions},
-    io::Write,
-    path::{Path, PathBuf},
+    fs,
+    path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(test)]
+use std::path::Path;
+
 use serde::{Deserialize, Serialize};
 
 use super::agent_effort::{AgentEffortIntent, AgentEffortIntents};
-use super::subscription::valid_effort;
 
-const CACHE_FILE_NAME: &str = "agent-intents-v2.json";
-const CACHE_VERSION: u8 = 2;
-const MAX_AGE_SECONDS: u64 = 2 * 60 * 60;
+#[path = "agent_intent_store_support.rs"]
+mod support;
+use support::{
+    bound_intents, bound_vec, cache_read_failure, create_private_directory, is_fresh,
+    parent_directory, restored_intent, stored_intent, valid_stored_intent, write_private,
+};
+
+pub(super) fn unix_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_secs())
+}
+
+pub(super) const CACHE_FILE_NAME: &str = "agent-intents-v2.json";
+pub(super) const CACHE_VERSION: u8 = 2;
+pub(super) const MAX_AGE_SECONDS: u64 = 2 * 60 * 60;
 static NEXT_TEMPORARY_SUFFIX: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -159,104 +173,6 @@ pub(super) fn remove_expired(pending: &mut VecDeque<AgentEffortIntent>) {
     });
 }
 
-fn bound_intents(mut intents: VecDeque<StoredAgentIntent>) -> VecDeque<StoredAgentIntent> {
-    while intents.len() > super::agent_effort::MAX_PENDING_INTENTS {
-        intents.pop_front();
-    }
-    intents
-}
-
-fn bound_vec(mut intents: Vec<StoredAgentIntent>) -> Vec<StoredAgentIntent> {
-    let excess = intents
-        .len()
-        .saturating_sub(super::agent_effort::MAX_PENDING_INTENTS);
-    if excess > 0 {
-        intents.drain(..excess);
-    }
-    intents
-}
-
-fn valid_stored_intent(intent: &StoredAgentIntent) -> bool {
-    !intent.tool_use_id.is_empty()
-        && intent.effort.as_deref().is_none_or(valid_effort)
-        && intent
-            .model_override
-            .as_deref()
-            .is_none_or(|model| !model.is_empty())
-}
-
-fn is_fresh(intent: &StoredAgentIntent) -> bool {
-    unix_seconds().saturating_sub(intent.created_unix_seconds) <= MAX_AGE_SECONDS
-}
-
-pub(super) fn unix_seconds() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_secs())
-}
-
-fn cache_read_failure(path: &Path, error: std::io::Error) -> VecDeque<StoredAgentIntent> {
-    if error.kind() != std::io::ErrorKind::NotFound {
-        tracing::warn!(%error, path = %path.display(), "could not restore persisted Agent intents");
-    }
-    VecDeque::new()
-}
-
-fn restored_intent(stored: StoredAgentIntent) -> AgentEffortIntent {
-    AgentEffortIntent {
-        client_user_id: stored.client_user_id,
-        prompt: String::new(),
-        correlated: true,
-        effort: stored.effort,
-        model_override: stored.model_override,
-        model_is_inherited: stored.model_is_inherited,
-        run_in_background: stored.run_in_background,
-        tool_use_id: stored.tool_use_id,
-        created_at: std::time::Instant::now(),
-        created_unix_seconds: stored.created_unix_seconds,
-    }
-}
-
-fn stored_intent(intent: &AgentEffortIntent) -> StoredAgentIntent {
-    StoredAgentIntent {
-        client_user_id: intent.client_user_id.clone(),
-        effort: intent.effort.clone(),
-        model_override: intent.model_override.clone(),
-        model_is_inherited: intent.model_is_inherited,
-        run_in_background: intent.run_in_background,
-        tool_use_id: intent.tool_use_id.clone(),
-        created_unix_seconds: intent.created_unix_seconds,
-    }
-}
-
-fn parent_directory(path: &Path) -> &Path {
-    match path.parent() {
-        Some(parent) if !parent.as_os_str().is_empty() => parent,
-        _ => Path::new("."),
-    }
-}
-
-fn create_private_directory(path: &Path) -> std::io::Result<()> {
-    fs::create_dir_all(path)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
-    }
-    Ok(())
-}
-
-fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let mut options = OpenOptions::new();
-    options.create(true).write(true).truncate(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let mut file = options.open(path)?;
-    file.write_all(bytes)
-}
 
 #[cfg(test)]
 include!("agent_intent_store_tests.rs");

@@ -1,20 +1,19 @@
-use std::{
-    pin::Pin,
-    task::{Context as TaskContext, Poll},
-    time::Instant,
-};
+use std::time::Instant;
 
 use axum::{
-    body::{Body, BodyDataStream, Bytes},
+    body::Body,
     extract::Request,
-    http::{HeaderValue, Response, StatusCode},
+    http::{HeaderValue, Response},
     middleware::Next,
 };
-use tokio_stream::Stream;
-use tracing::{Instrument, Span};
+use tracing::Instrument;
 use uuid::Uuid;
 
 use super::request_identity;
+
+#[path = "logging_trace.rs"]
+mod logging_trace;
+use logging_trace::{RequestTrace, TracedBodyStream};
 
 const CLAUDEX_REQUEST_ID_HEADER: &str = "x-claudex-request-id";
 const CCR_SESSION_PATH_PREFIX: &str = "/v1/code/sessions/";
@@ -102,160 +101,7 @@ pub(super) async fn trace_http_request(request: Request, next: Next) -> Response
     })
 }
 
-struct RequestTrace {
-    request_id: String,
-    session_id: String,
-    agent_id: String,
-    parent_agent_id: String,
-    method: String,
-    path: String,
-    status: StatusCode,
-    started: Instant,
-    span: Span,
-}
-
-impl RequestTrace {
-    fn finish(self, outcome: &'static str, body_bytes: usize) {
-        let duration_ms = self.started.elapsed().as_millis();
-        if outcome == "completed" {
-            self.log_completed(duration_ms, body_bytes);
-        } else {
-            self.log_abnormal(outcome, duration_ms, body_bytes);
-        }
-    }
-
-    fn log_completed(self, duration_ms: u128, body_bytes: usize) {
-        let RequestTrace {
-            request_id,
-            session_id,
-            agent_id,
-            parent_agent_id,
-            method,
-            path,
-            status,
-            span,
-            ..
-        } = self;
-        span.in_scope(|| {
-            tracing::info!(
-                target: "claudex.http",
-                log_event = "http_request_end",
-                request_id = %request_id,
-                session_id = %session_id,
-                agent_id = %agent_id,
-                parent_agent_id = %parent_agent_id,
-                method = %method,
-                path = %path,
-                status = status.as_u16(),
-                duration_ms,
-                body_bytes,
-                outcome = "completed",
-                "HTTP request completed"
-            );
-        });
-    }
-
-    fn log_abnormal(self, outcome: &'static str, duration_ms: u128, body_bytes: usize) {
-        let RequestTrace {
-            request_id,
-            session_id,
-            agent_id,
-            parent_agent_id,
-            method,
-            path,
-            status,
-            span,
-            ..
-        } = self;
-        span.in_scope(|| {
-            tracing::warn!(
-                target: "claudex.http",
-                log_event = "http_request_end",
-                request_id = %request_id,
-                session_id = %session_id,
-                agent_id = %agent_id,
-                parent_agent_id = %parent_agent_id,
-                method = %method,
-                path = %path,
-                status = status.as_u16(),
-                duration_ms,
-                body_bytes,
-                outcome,
-                "HTTP request body ended abnormally"
-            );
-        });
-    }
-}
-
-struct TracedBodyStream {
-    inner: BodyDataStream,
-    trace: Option<RequestTrace>,
-    body_bytes: usize,
-}
-
-impl Stream for TracedBodyStream {
-    type Item = Result<Bytes, axum::Error>;
-
-    fn poll_next(mut self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Option<Self::Item>> {
-        let item = Pin::new(&mut self.inner).poll_next(cx);
-        let outcome = match &item {
-            Poll::Ready(Some(Ok(bytes))) => {
-                self.body_bytes += bytes.len();
-                None
-            }
-            Poll::Ready(None) => Some("completed"),
-            Poll::Ready(Some(Err(_))) => Some("body_error"),
-            Poll::Pending => None,
-        };
-        if let Some(outcome) = outcome {
-            self.finish_trace(outcome);
-        }
-        item
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.inner.size_hint()
-    }
-}
-
-impl TracedBodyStream {
-    fn finish_trace(&mut self, outcome: &'static str) {
-        let Some(trace) = self.trace.take() else {
-            return;
-        };
-        trace.finish(outcome, self.body_bytes);
-    }
-}
-
-impl Drop for TracedBodyStream {
-    fn drop(&mut self) {
-        self.finish_trace("client_disconnect");
-    }
-}
-
 #[cfg(test)]
-mod tests {
-    use super::path_session_id;
-
-    #[test]
-    fn extracts_only_the_expected_ccr_session_path_shape() {
-        assert_eq!(
-            path_session_id("/v1/code/sessions/session-123/worker/web-search"),
-            Some("session-123")
-        );
-        assert_eq!(
-            path_session_id("/v1/code/sessions/session-123/worker/web-search/extra"),
-            None
-        );
-        assert_eq!(
-            path_session_id("/v1/code/sessions/a/b/worker/web-search"),
-            None
-        );
-        assert_eq!(path_session_id("/health"), None);
-        assert_eq!(
-            path_session_id("/v1/code/sessions//worker/web-search"),
-            None,
-            "empty session id segment must be rejected"
-        );
-    }
-}
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[path = "logging_tests.rs"]
+mod tests;
