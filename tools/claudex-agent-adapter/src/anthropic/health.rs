@@ -82,6 +82,16 @@ impl Bridge {
         self.app.started_models()
     }
 
+    pub(crate) fn provider_session_scope_count(&self) -> usize {
+        self.app.provider_session_scope_count()
+    }
+
+    pub(crate) fn provider_session_scopes(
+        &self,
+    ) -> Vec<crate::agent_backend::ProviderSessionScopeSnapshot> {
+        self.app.provider_session_scopes()
+    }
+
     pub(crate) fn model_concurrency(&self) -> BTreeMap<String, ModelConcurrencyStatus> {
         self.model_concurrency.snapshot()
     }

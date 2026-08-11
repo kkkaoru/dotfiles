@@ -71,6 +71,17 @@ async fn health_response(state: HealthRouteState) -> (StatusCode, Json<serde_jso
     let turns = state.active_provider_turns.load(Ordering::Relaxed);
     let busy = http > 0 || turns > 0 || active_subagent_models.values().copied().sum::<usize>() > 0;
     let idle_seconds = idle_seconds(&state.last_work_at, busy);
+    let provider_session_scopes = state
+        .bridge
+        .provider_session_scopes()
+        .into_iter()
+        .map(|scope| {
+            json!({
+                "claude_session_id": scope.claude_session_id,
+                "started_models": scope.started_models,
+            })
+        })
+        .collect::<Vec<_>>();
     (
         status,
         Json(json!({
@@ -84,6 +95,8 @@ async fn health_response(state: HealthRouteState) -> (StatusCode, Json<serde_jso
             "worker_routes":state.worker_routes,
             "search_worker_routes":state.search_worker_routes,
             "started_models":state.bridge.started_models(),
+            "provider_session_scope_count":state.bridge.provider_session_scope_count(),
+            "provider_session_scopes":provider_session_scopes,
             "model_concurrency":state.bridge.model_concurrency(),
             "active_subagent_models":active_subagent_models,
             "active_subagent_agent_ids":state.bridge.active_subagent_agent_ids(),

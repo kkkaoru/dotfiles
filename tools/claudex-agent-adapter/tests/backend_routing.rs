@@ -1,7 +1,10 @@
 use std::{fs, os::unix::fs::PermissionsExt, sync::Arc};
 
 use claudex_agent_adapter::{
-    agent_backend::AgentBackend, anthropic::Bridge, app_server::AppServer, grok_acp::GrokAcp,
+    agent_backend::{AgentBackend, BackendKind, BackendRoute},
+    anthropic::Bridge,
+    app_server::AppServer,
+    grok_acp::GrokAcp,
     http_router, provider_config,
 };
 use reqwest::Client;
@@ -409,4 +412,83 @@ async fn parallel_request(url: &str, model: &str, index: usize) -> Value {
         .json()
         .await
         .unwrap()
+}
+
+#[tokio::test]
+async fn health_reports_provider_session_scopes_for_concurrent_tui_sessions() {
+    let root = tempfile::tempdir().expect("session-scope health fixture");
+    fs::create_dir(root.path().join(".codex")).expect("create Codex home");
+    fs::write(root.path().join(".codex/auth.json"), "{}").expect("write Codex auth");
+    unsafe {
+        std::env::set_var("CLAUDEX_CODEX_PROGRAM", env!("CARGO_BIN_EXE_codex-mock"));
+        std::env::set_var("HOME", root.path());
+    }
+    let backend = AgentBackend::spawn_routes(&[BackendRoute::new(
+        "scope-model",
+        BackendKind::CodexAppServer,
+    )]);
+    let bridge = Arc::new(Bridge::new_with_backend(backend, "scope-model".to_owned()));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind session-scope health listener");
+    let address = listener
+        .local_addr()
+        .expect("read session-scope health listener");
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            http_router(bridge, "scope-model".to_owned(), None),
+        )
+        .await
+        .expect("serve session-scope health");
+    });
+
+    let client = Client::new();
+    let url = format!("http://{address}/v1/messages");
+    for session in ["tui-session-a", "tui-session-b", "tui-session-a"] {
+        let response = client
+            .post(&url)
+            .header("x-claude-code-session-id", session)
+            .json(&json!({
+                "model":"scope-model",
+                "max_tokens":64,
+                "messages":[{"role":"user","content":format!("hello {session}")}]
+            }))
+            .send()
+            .await
+            .expect("post scoped message");
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        assert!(
+            status.is_success(),
+            "scoped message for {session} failed: {status} {body}"
+        );
+    }
+
+    let health = client
+        .get(format!("http://{address}/health"))
+        .send()
+        .await
+        .expect("request session-scope health")
+        .json::<Value>()
+        .await
+        .expect("decode session-scope health");
+    assert_eq!(health["provider_session_scope_count"], 2);
+    assert_eq!(
+        health["provider_session_scopes"]
+            .as_array()
+            .expect("provider_session_scopes array")
+            .iter()
+            .map(|scope| scope["claude_session_id"].as_str().unwrap_or_default())
+            .collect::<Vec<_>>(),
+        vec!["tui-session-a", "tui-session-b"]
+    );
+    assert_eq!(
+        health["active_claude_session_ids"]
+            .as_array()
+            .expect("active session ids")
+            .len(),
+        2
+    );
+    server.abort();
 }

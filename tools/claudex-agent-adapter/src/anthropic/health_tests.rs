@@ -156,3 +156,29 @@ fn routed_models_skip_workers_with_blank_model_fields() {
     assert!(models.contains(&"kept-model".to_owned()));
     assert!(!models.iter().any(String::is_empty));
 }
+
+#[test]
+fn provider_session_scopes_report_one_pool_per_claude_tui_session() {
+    let bridge = Bridge::new_with_backend(
+        AgentBackend::spawn_routes(&[BackendRoute::new(
+            "gpt-5.6-luna",
+            BackendKind::CodexAppServer,
+        )]),
+        "gpt-5.6-luna".to_owned(),
+    );
+    assert_eq!(bridge.provider_session_scope_count(), 0);
+    let first = bridge.app_for(Some("tui-a"));
+    let second = bridge.app_for(Some("tui-b"));
+    let reused = bridge.app_for(Some("tui-a"));
+    assert!(!std::sync::Arc::ptr_eq(&first, &second));
+    assert!(std::sync::Arc::ptr_eq(&first, &reused));
+    assert_eq!(bridge.provider_session_scope_count(), 2);
+    assert_eq!(
+        bridge
+            .provider_session_scopes()
+            .into_iter()
+            .map(|scope| scope.claude_session_id)
+            .collect::<Vec<_>>(),
+        vec!["tui-a".to_owned(), "tui-b".to_owned()]
+    );
+}

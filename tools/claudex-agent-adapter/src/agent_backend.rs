@@ -19,7 +19,7 @@ mod session_scope;
 mod spawn;
 use request::{routed_thread, subscribe_routed_thread};
 use routes::{RoutedBackend, RoutedBackends};
-pub(crate) use session_scope::SessionScopedBackends;
+pub(crate) use session_scope::{ProviderSessionScopeSnapshot, SessionScopedBackends};
 #[path = "agent_backend_route.rs"]
 mod route;
 pub use route::{AcpLaunch, BackendRoute};
@@ -109,6 +109,20 @@ impl AgentBackend {
             Self::Routed(routes) => routes.started_models(),
             Self::SessionScoped(scopes) => scopes.started_models(),
             Self::Codex(_) | Self::ConfiguredAcp(_) | Self::Copilot(_) | Self::Grok(_) => vec![],
+        }
+    }
+
+    pub(crate) fn provider_session_scope_count(&self) -> usize {
+        match self {
+            Self::SessionScoped(scopes) => scopes.scope_count(),
+            _ => 0,
+        }
+    }
+
+    pub(crate) fn provider_session_scopes(&self) -> Vec<crate::agent_backend::ProviderSessionScopeSnapshot> {
+        match self {
+            Self::SessionScoped(scopes) => scopes.scope_snapshots(),
+            _ => Vec::new(),
         }
     }
 

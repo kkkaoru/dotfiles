@@ -24,6 +24,12 @@ impl Bridge {
         claude_session_id: Option<&str>,
     ) {
         if self.sessions_reference_scope(claude_session_id).await {
+            tracing::debug!(
+                target: "claudex.provider",
+                log_event = "provider_session_scope_retain",
+                claude_session_id = claude_session_id.unwrap_or("_anonymous"),
+                "keeping Claude-session provider pool while Bridge sessions remain"
+            );
             return;
         }
         self.app.release_session_scope(claude_session_id).await;

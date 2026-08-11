@@ -36,13 +36,56 @@ impl SessionScopedBackends {
     pub(crate) fn scope(&self, claude_session_id: Option<&str>) -> Arc<AgentBackend> {
         let key = Self::scope_key(claude_session_id).to_owned();
         let mut scopes = self.scopes.lock().expect("session scopes poisoned");
-        Arc::clone(scopes.entry(key).or_insert_with(|| {
-            Arc::new(AgentBackend::Routed(RoutedBackends::lazy(&self.templates)))
-        }))
+        use std::collections::hash_map::Entry;
+        match scopes.entry(key.clone()) {
+            Entry::Occupied(entry) => {
+                let backend = Arc::clone(entry.get());
+                drop(entry);
+                tracing::debug!(
+                    target: "claudex.provider",
+                    log_event = "provider_session_scope_reuse",
+                    claude_session_id = %key,
+                    provider_session_scope_count = scopes.len(),
+                    "reusing Claude-session provider pool"
+                );
+                backend
+            }
+            Entry::Vacant(entry) => {
+                let backend =
+                    Arc::new(AgentBackend::Routed(RoutedBackends::lazy(&self.templates)));
+                entry.insert(Arc::clone(&backend));
+                tracing::info!(
+                    target: "claudex.provider",
+                    log_event = "provider_session_scope_create",
+                    claude_session_id = %key,
+                    provider_session_scope_count = scopes.len(),
+                    "created Claude-session provider pool"
+                );
+                backend
+            }
+        }
     }
 
     pub(crate) fn catalog(&self) -> &RoutedBackends {
         &self.catalog
+    }
+
+    pub(crate) fn scope_count(&self) -> usize {
+        self.scopes.lock().expect("session scopes poisoned").len()
+    }
+
+    /// Snapshot of active Claude-session provider pools for /health and TUI.
+    pub(crate) fn scope_snapshots(&self) -> Vec<ProviderSessionScopeSnapshot> {
+        let scopes = self.scopes.lock().expect("session scopes poisoned");
+        let mut snapshots = scopes
+            .iter()
+            .map(|(id, backend)| ProviderSessionScopeSnapshot {
+                claude_session_id: id.clone(),
+                started_models: backend.started_models(),
+            })
+            .collect::<Vec<_>>();
+        snapshots.sort_by(|left, right| left.claude_session_id.cmp(&right.claude_session_id));
+        snapshots
     }
 
     pub(crate) fn started_models(&self) -> Vec<String> {
@@ -72,6 +115,14 @@ impl SessionScopedBackends {
             .expect("session scopes poisoned")
             .remove(&key);
         if let Some(backend) = backend {
+            let remaining = self.scope_count();
+            tracing::info!(
+                target: "claudex.provider",
+                log_event = "provider_session_scope_release",
+                claude_session_id = %key,
+                provider_session_scope_count = remaining,
+                "shutting down Claude-session provider pool"
+            );
             shutdown_scoped_pool(&backend).await;
         }
     }
@@ -79,17 +130,27 @@ impl SessionScopedBackends {
     pub(crate) async fn shutdown_all(&self) {
         let backends = {
             let mut scopes = self.scopes.lock().expect("session scopes poisoned");
-            scopes.drain().map(|(_, backend)| backend).collect::<Vec<_>>()
+            let drained = scopes.drain().collect::<Vec<_>>();
+            if !drained.is_empty() {
+                tracing::info!(
+                    target: "claudex.provider",
+                    log_event = "provider_session_scope_shutdown_all",
+                    provider_session_scope_count = drained.len(),
+                    "shutting down every Claude-session provider pool"
+                );
+            }
+            drained.into_iter().map(|(_, backend)| backend).collect::<Vec<_>>()
         };
         for backend in backends {
             shutdown_scoped_pool(&backend).await;
         }
     }
+}
 
-    #[cfg(test)]
-    pub(crate) fn scope_count(&self) -> usize {
-        self.scopes.lock().expect("session scopes poisoned").len()
-    }
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct ProviderSessionScopeSnapshot {
+    pub(crate) claude_session_id: String,
+    pub(crate) started_models: Vec<String>,
 }
 
 async fn shutdown_scoped_pool(backend: &AgentBackend) {
@@ -167,11 +228,118 @@ mod tests {
     }
 
     #[test]
+    fn scope_snapshots_sort_and_report_started_models() {
+        let scopes = SessionScopedBackends::new(&[BackendRoute::new(
+            "main",
+            BackendKind::CodexAppServer,
+        )]);
+        let _ = scopes.scope(Some("sess-b"));
+        let _ = scopes.scope(Some("sess-a"));
+        let snapshots = scopes.scope_snapshots();
+        assert_eq!(
+            snapshots
+                .iter()
+                .map(|snapshot| snapshot.claude_session_id.as_str())
+                .collect::<Vec<_>>(),
+            ["sess-a", "sess-b"]
+        );
+        assert!(snapshots.iter().all(|snapshot| snapshot.started_models.is_empty()));
+    }
+
+    #[test]
     fn scope_or_self_clones_non_scoped_backends() {
         let leaf = AgentBackend::spawn_routes(&[]);
         let scoped = leaf.scope_or_self(Some("sess"));
         assert!(!Arc::ptr_eq(&leaf, &scoped));
         let codex = AgentBackend::routed(Vec::new());
         assert!(Arc::ptr_eq(&codex, &codex.scope_or_self(Some("sess"))));
+    }
+
+    #[test]
+    fn scope_create_and_reuse_emit_structured_log_events() {
+        use tracing::level_filters::LevelFilter;
+
+        let buffer = Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+        struct BufferWriter(Arc<std::sync::Mutex<Vec<u8>>>);
+        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for BufferWriter {
+            type Writer = BufferWriter;
+
+            fn make_writer(&'a self) -> Self::Writer {
+                BufferWriter(Arc::clone(&self.0))
+            }
+        }
+        impl std::io::Write for BufferWriter {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().expect("log buffer").extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(LevelFilter::DEBUG)
+            .with_writer(BufferWriter(Arc::clone(&buffer)))
+            .with_ansi(false)
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let scopes = SessionScopedBackends::new(&[BackendRoute::new(
+            "main",
+            BackendKind::CodexAppServer,
+        )]);
+        let _ = scopes.scope(Some("log-sess"));
+        let _ = scopes.scope(Some("log-sess"));
+        let text = String::from_utf8(buffer.lock().expect("log buffer").clone()).unwrap();
+        assert!(
+            text.contains("provider_session_scope_create"),
+            "missing create event in logs: {text}"
+        );
+        assert!(
+            text.contains("provider_session_scope_reuse"),
+            "missing reuse event in logs: {text}"
+        );
+        assert!(text.contains("log-sess"), "missing session id in logs: {text}");
+    }
+
+    #[tokio::test]
+    async fn scope_release_emits_structured_log_event() {
+        use tracing::level_filters::LevelFilter;
+
+        let buffer = Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
+        struct BufferWriter(Arc<std::sync::Mutex<Vec<u8>>>);
+        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for BufferWriter {
+            type Writer = BufferWriter;
+
+            fn make_writer(&'a self) -> Self::Writer {
+                BufferWriter(Arc::clone(&self.0))
+            }
+        }
+        impl std::io::Write for BufferWriter {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().expect("log buffer").extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(LevelFilter::INFO)
+            .with_writer(BufferWriter(Arc::clone(&buffer)))
+            .with_ansi(false)
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let scopes = SessionScopedBackends::new(&[BackendRoute::new(
+            "main",
+            BackendKind::CodexAppServer,
+        )]);
+        let _ = scopes.scope(Some("release-sess"));
+        scopes.release_scope(Some("release-sess")).await;
+        let text = String::from_utf8(buffer.lock().expect("log buffer").clone()).unwrap();
+        assert!(
+            text.contains("provider_session_scope_release"),
+            "missing release event in logs: {text}"
+        );
+        assert!(text.contains("release-sess"), "missing session id in logs: {text}");
     }
 }
