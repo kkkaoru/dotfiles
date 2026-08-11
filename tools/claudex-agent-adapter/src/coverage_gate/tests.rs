@@ -507,6 +507,7 @@ fn assert_non_executable_sources() {
         "src/anthropic/subscription_request.rs",
         "src/anthropic/stream/turn.rs",
         "src/command_code_acp/agent_acp.rs",
+        "src/command_code_acp/mod.rs",
         "src/grok_acp/test_support.rs",
         "src/provider_config/types.rs",
     ] {

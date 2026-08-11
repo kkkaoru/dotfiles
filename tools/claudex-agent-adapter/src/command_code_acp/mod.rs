@@ -23,6 +23,7 @@ pub use prompt::{is_command_code_model, prompt_text, slim_headless_prompt};
 use anyhow::Result;
 
 /// Parse process args and serve ACP on stdin/stdout.
+#[cfg_attr(coverage_nightly, coverage(off))]
 pub async fn run() -> Result<()> {
     let options = Options::parse(std::env::args().skip(1))?;
     serve(options).await

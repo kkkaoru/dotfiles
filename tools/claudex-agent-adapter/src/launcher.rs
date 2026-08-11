@@ -88,6 +88,7 @@ pub(crate) fn recovery_generation() -> Option<String> {
     recovery_manifest::generation_from_environment()
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 pub async fn ensure_running(options: AdapterOptions) -> Result<String> {
     let config = ServiceConfig::new(options)?;
     ensure::run(&config, ensure::Mode::Ensure).await
@@ -101,6 +102,7 @@ pub fn run_internal_notify(arguments: Vec<OsString>) -> Result<()> {
 }
 
 /// Opt interactive CLI `ensure` / `hot-swap` into macOS swap banners when unset.
+#[cfg_attr(coverage_nightly, coverage(off))]
 pub fn opt_in_cli_swap_notify() {
     macos_notify_dispatch::opt_in_cli_swap_notify()
 }
@@ -111,6 +113,7 @@ pub fn opt_in_cli_swap_notify() {
 /// stay sticky on the retained generation. Legacy busy daemons still get a
 /// current-build fallback plus an idle waiter, and `live.<port>.json` always
 /// points at the generation new sessions should use.
+#[cfg_attr(coverage_nightly, coverage(off))]
 pub async fn hot_swap(options: AdapterOptions, wait_idle: bool) -> Result<String> {
     let config = ServiceConfig::new(options)?;
     ensure::run(

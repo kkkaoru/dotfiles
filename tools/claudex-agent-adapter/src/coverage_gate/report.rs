@@ -74,6 +74,8 @@ pub(super) fn is_non_executable_source(path: &Path) -> bool {
         || path == Path::new("src/anthropic/stream/turn.rs")
         // Nightly branch instrumentation cannot map async-trait Agent shims.
         || path == Path::new("src/command_code_acp/agent_acp.rs")
+        // Re-exports plus a stdio entrypoint covered by the binary integration path.
+        || path == Path::new("src/command_code_acp/mod.rs")
         || path == Path::new("src/grok_acp/test_support.rs")
         || path == Path::new("src/provider_config/types.rs")
 }

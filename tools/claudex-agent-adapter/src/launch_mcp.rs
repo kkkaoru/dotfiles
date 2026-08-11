@@ -66,6 +66,7 @@ pub(crate) fn launch_owner_from_params(params: &Value) -> Option<String> {
         .map(str::to_owned)
 }
 
+#[cfg_attr(coverage_nightly, coverage(off))]
 pub fn run_stdio() -> Result<()> {
     let stdin = io::stdin();
     let mut stdout = io::stdout();
