@@ -11,6 +11,7 @@ use super::super::{MessagesRequest, content::sse};
 use super::{SegmentBuilder, StreamSender, message_start};
 
 mod drive;
+#[cfg(test)]
 pub(in crate::anthropic::stream) use drive::prepare_first_activity_delay;
 
 pub(in crate::anthropic) struct PreparedStream {
