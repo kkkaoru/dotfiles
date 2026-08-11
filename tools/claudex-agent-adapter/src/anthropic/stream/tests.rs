@@ -33,7 +33,7 @@ fn block_lacks_websearch_chrome(block: &Value) -> bool {
     })
 }
 
-async fn collect_sse_frames(
+async fn drain_sse_frame_list(
     mut receiver: mpsc::Receiver<Result<Bytes, Infallible>>,
 ) -> Vec<String> {
     let mut frames = Vec::new();
@@ -1878,10 +1878,10 @@ async fn retries_context_window_errors_only_before_committed_output() {
 
 #[tokio::test]
 async fn reports_slow_stream_preparation_before_the_provider_is_ready() {
-    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
+    let (sender, receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
     // Drain while prepare/finish emit keepalives. A post-hoc recv loop deadlocks
     // once the bounded SSE channel fills under llvm-cov load.
-    let drain = tokio::spawn(collect_sse_frames(receiver));
+    let drain = tokio::spawn(drain_sse_frame_list(receiver));
     let prepare = async {
         tokio::time::sleep(Duration::from_millis(20)).await;
         Ok::<_, anyhow::Error>("ready")
