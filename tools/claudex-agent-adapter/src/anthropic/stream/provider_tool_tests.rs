@@ -1424,6 +1424,91 @@ async fn subagent_keeps_only_latest_status_line_mid_turn() {
 }
 
 #[tokio::test]
+async fn subagent_keeps_full_pending_answer_when_live_prose_is_compacted() {
+    let long = "あ".repeat(super::super::sanitize::LIVE_PROSE_CHAR_LIMIT + 40);
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
+    let mut builder = SegmentBuilder::new(1)
+        .with_subagent(true)
+        .with_command_code_progress(true);
+    builder
+        .text_delta(
+            &json!({"params":{"delta": long.clone(), "itemId":"command-code:message"}}),
+            Some(&sender),
+        )
+        .await
+        .expect("long prose");
+    assert_eq!(
+        builder.pending_answer, long,
+        "committed pending_answer must keep the full prose, not the compact tip"
+    );
+    let mut live = super::super::subagent_live_view::SubAgentLiveView::default();
+    live.ingest_available(&mut receiver);
+    assert!(
+        live.visible_thinking.chars().count()
+            <= super::super::sanitize::LIVE_PROSE_CHAR_LIMIT + 2,
+        "live tip must stay compacted: {}",
+        live.visible_thinking.chars().count()
+    );
+    let segment = builder.finish(None).await.expect("finish");
+    let answer = segment
+        .blocks
+        .iter()
+        .find_map(|block| block.get("text").and_then(Value::as_str))
+        .unwrap_or_default();
+    assert_eq!(answer, long, "final answer must not be truncated");
+    drop(sender);
+}
+
+#[tokio::test]
+async fn subagent_splits_status_prefix_from_answer_in_same_delta() {
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
+    let mut builder = SegmentBuilder::new(1)
+        .with_subagent(true)
+        .with_command_code_progress(true);
+    builder
+        .text_delta(
+            &json!({
+                "params":{
+                    "delta":"Status: inspecting\nHere is the actual answer.",
+                    "itemId":"command-code:message"
+                }
+            }),
+            Some(&sender),
+        )
+        .await
+        .expect("mixed status+answer");
+    assert_eq!(
+        builder.pending_answer.trim(),
+        "Here is the actual answer.",
+        "answer remainder must land in pending_answer: {:?}",
+        builder.pending_answer
+    );
+    let mut live = super::super::subagent_live_view::SubAgentLiveView::default();
+    live.ingest_available(&mut receiver);
+    assert!(
+        live.visible_thinking.contains("Status: inspecting"),
+        "status tip must stay visible: {:?}",
+        live.visible_thinking
+    );
+    let segment = builder.finish(None).await.expect("finish");
+    let answer = segment
+        .blocks
+        .iter()
+        .find_map(|block| block.get("text").and_then(Value::as_str))
+        .unwrap_or_default();
+    assert_eq!(answer.trim(), "Here is the actual answer.");
+    assert!(
+        segment
+            .blocks
+            .iter()
+            .all(|block| block_text_omits(block, "Status:")),
+        "Status chrome must not remain after finish: {:?}",
+        segment.blocks
+    );
+    drop(sender);
+}
+
+#[tokio::test]
 async fn subagent_omits_wrangler_json_dump_after_thought() {
     let dump = format!(
         "{{\"type\":\"exception\",\"outcome\":\"exception\",\"exceptions\":[{}]}}",

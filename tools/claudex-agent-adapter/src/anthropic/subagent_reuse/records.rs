@@ -183,6 +183,7 @@ fn merge_record(current: &mut LaunchRecord, observed: &LaunchRecord) {
         current.status.clone_from(&observed.status);
     }
 }
+#[cfg(test)]
 pub(super) fn launch_records(messages: &[Value]) -> Vec<LaunchRecord> {
     let mut records = Vec::new();
     let mut contexts = HashMap::new();
@@ -240,7 +241,7 @@ pub(super) fn apply_transcript(launches: &mut Vec<LaunchRecord>, messages: &[Val
 
 fn apply_message_content(
     launches: &mut Vec<LaunchRecord>,
-    contexts: &mut HashMap<String, (String, Option<String>)>,
+    contexts: &mut HashMap<String, (String, Option<String>, Option<String>)>,
     message: &Value,
 ) {
     let Some(content) = message.get("content") else {
@@ -250,13 +251,13 @@ fn apply_message_content(
         remember_launch_context(contexts, block);
         match launch_record(block, contexts) {
             Some(record) => merge_launches(launches, std::iter::once(&record)),
-            None => mark_failed_launch_result(launches, block),
+            None => mark_failed_launch_result(launches, contexts, block),
         }
     }
 }
 
 fn remember_launch_context(
-    contexts: &mut HashMap<String, (String, Option<String>)>,
+    contexts: &mut HashMap<String, (String, Option<String>, Option<String>)>,
     block: &Value,
 ) {
     if block.get("type").and_then(Value::as_str) != Some("tool_use") {
@@ -272,6 +273,11 @@ fn remember_launch_context(
         return;
     };
     let input = block.get("input").unwrap_or(&Value::Null);
+    let resume = input
+        .get("resume")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned);
     contexts.insert(
         id.to_owned(),
         (
@@ -280,13 +286,14 @@ fn remember_launch_context(
                 .get("claudex_model")
                 .and_then(Value::as_str)
                 .map(str::to_owned),
+            resume,
         ),
     );
 }
 
 fn launch_record(
     block: &Value,
-    contexts: &HashMap<String, (String, Option<String>)>,
+    contexts: &HashMap<String, (String, Option<String>, Option<String>)>,
 ) -> Option<LaunchRecord> {
     if block.get("type").and_then(Value::as_str) != Some("tool_result") {
         return None;
@@ -316,7 +323,11 @@ fn launch_record(
         status: active_status(),
     })
 }
-fn mark_failed_launch_result(launches: &mut [LaunchRecord], block: &Value) {
+fn mark_failed_launch_result(
+    launches: &mut [LaunchRecord],
+    contexts: &HashMap<String, (String, Option<String>, Option<String>)>,
+    block: &Value,
+) {
     if block.get("type").and_then(Value::as_str) != Some("tool_result") {
         return;
     }
@@ -328,6 +339,12 @@ fn mark_failed_launch_result(launches: &mut [LaunchRecord], block: &Value) {
         .find(|launch| launch.key == tool_use_id && launch.status == "pending")
     {
         launch.status = "failed".to_owned();
+        return;
+    }
+    // Auto-resume failures must retire the target recipient or rewrite keeps
+    // reinjecting the same dead agentId on every same-scope follow-up.
+    if let Some((_, _, Some(resume))) = contexts.get(tool_use_id) {
+        set_recipient_status(launches, resume, "failed".to_owned());
     }
 }
 

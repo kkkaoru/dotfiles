@@ -270,7 +270,10 @@ fn queued_send_message_status_is_preserved_for_reuse() {
     );
     registry.observe_and_restore(&mut resumed);
     assert!(resumed.system.to_string().contains("worker-a"));
-    assert!(resumed.system.to_string().contains("message_queued"));
+    assert!(
+        !resumed.system.to_string().contains("message_queued"),
+        "reusable status must stay out of system guidance for prompt-cache stability"
+    );
     assert_eq!(registry.state_for("session-a").expect("state").len(), 1);
 }
 
@@ -334,7 +337,76 @@ fn restores_scope_model_and_status_for_dynamic_recipient_assignment() {
     assert!(guidance.contains("worker-a"));
     assert!(guidance.contains("Audit Rust adapter tests"));
     assert!(guidance.contains("worker-model"));
-    assert!(guidance.contains("completed"));
+    assert!(
+        !guidance.contains("completed"),
+        "status churn must not appear in reuse guidance"
+    );
+}
+
+#[test]
+fn restores_reuse_guidance_when_transcript_still_lists_launches() {
+    let registry = SubagentReuseRegistry::default();
+    let mut first = request("session-a", launch_with_context("tool-a", "worker-a"));
+    registry.observe_and_restore(&mut first);
+    // Full transcript still has the launch result (observed non-empty), but
+    // system was rebuilt without the marker.
+    let mut resumed = request("session-a", launch_with_context("tool-a", "worker-a"));
+    registry.observe_and_restore(&mut resumed);
+    assert!(
+        resumed.system.to_string().contains(REUSE_GUIDANCE_MARKER),
+        "guidance must restore even when launch results remain in messages"
+    );
+    assert!(resumed.system.to_string().contains("worker-a"));
+}
+
+#[test]
+fn failed_auto_resume_retires_recipient_so_rewrite_stops() {
+    let registry = SubagentReuseRegistry::default();
+    let mut first = request(
+        "session-a",
+        launch_with_scope(
+            "tool-a",
+            "worker-a",
+            "Audit the Rust adapter tests",
+            "worker-model",
+        ),
+    );
+    registry.observe_and_restore(&mut first);
+    let mut failed_resume = request(
+        "session-a",
+        vec![
+            json!({
+                "role":"assistant",
+                "content":[{
+                    "type":"tool_use",
+                    "id":"tool-resume",
+                    "name":"Agent",
+                    "input":{
+                        "prompt":"Audit the Rust adapter tests",
+                        "claudex_model":"worker-model",
+                        "resume":"worker-a"
+                    }
+                }]
+            }),
+            json!({
+                "role":"user",
+                "content":[{
+                    "type":"tool_result",
+                    "tool_use_id":"tool-resume",
+                    "is_error":true,
+                    "content":"No agent found with ID worker-a"
+                }]
+            }),
+        ],
+    );
+    registry.observe_and_restore(&mut failed_resume);
+    let mut follow = launch_arguments("Audit the Rust adapter tests", "worker-model");
+    assert_eq!(
+        registry.rewrite_launch_input("session-a", &mut follow),
+        None,
+        "failed resume target must not be reinjected forever"
+    );
+    assert!(follow.get("resume").is_none());
 }
 
 #[test]

@@ -20,8 +20,10 @@ use guidance::{append_reuse_guidance, has_send_message_tool, system_contains_mar
 pub(in crate::anthropic) use records::live_agent_task_ids;
 use records::{
     LaunchRecord, already_has_resume, apply_transcript, find_reusable_launch, launch_model,
-    launch_records, reusable_status, scope_is_occupied, summarize_scope,
+    reusable_status, scope_is_occupied, summarize_scope,
 };
+#[cfg(test)]
+pub(super) use records::launch_records;
 
 pub(crate) const MAX_SUBAGENTS_PER_SESSION_ENV: &str = "CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION";
 pub(crate) const DEFAULT_MAX_SUBAGENTS_PER_SESSION: usize = 1_024;
@@ -101,7 +103,6 @@ impl SubagentReuseRegistry {
         let Some(session_id) = session_id(request) else {
             return;
         };
-        let observed = launch_records(&request.messages);
         let mut states = self
             .states
             .lock()
@@ -113,8 +114,9 @@ impl SubagentReuseRegistry {
         apply_transcript(&mut state.launches, &request.messages);
         let limit_reached = state.launches.len() >= max_subagents_per_session();
         set_limit_metadata(request, limit_reached);
+        // Restore even when the transcript still lists launches: system may be
+        // rebuilt without the marker while messages keep prior agentIds.
         let should_restore = reuse
-            && observed.is_empty()
             && !state.launches.is_empty()
             && !system_contains_marker(&request.system);
         let teams = agent_teams_enabled(request) && has_send_message_tool(&request.tools);
@@ -347,7 +349,8 @@ fn reuse_recipients(launches: &[LaunchRecord], _messages: &[Value]) -> Vec<Strin
 fn format_reuse_recipient(launch: &LaunchRecord) -> String {
     let scope = if launch.scope.is_empty() { "scope unknown" } else { launch.scope.as_str() };
     let model = launch.model.as_deref().unwrap_or("model unknown");
-    format!("{} ({}; {}; {})", launch.recipient, scope, model, launch.status)
+    // Omit status so active→queued→completed churn does not bust prompt-cache.
+    format!("{} ({}; {})", launch.recipient, scope, model)
 }
 
 fn prune_persisted_state(state: &mut SessionState) {
