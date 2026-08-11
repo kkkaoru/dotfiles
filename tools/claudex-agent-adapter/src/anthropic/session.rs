@@ -26,7 +26,6 @@ pub(super) mod reservation;
 mod reservation;
 mod session_turn;
 mod tools;
-
 use helpers::{
     candidate_length, is_better_length, is_idempotent_task_lifecycle_error, owns_tool_result,
     should_preempt_for_context_limit, touch_session, validate_tool_result_ownership,
@@ -388,7 +387,6 @@ impl Bridge {
         Ok(backend_submitted)
     }
 }
-
 async fn session_owns_results(session: &Session, results: &[ToolResult]) -> bool {
     let pending = session.pending_tools.lock().await;
     let consumed = session.consumed_tool_ids.lock().await;
