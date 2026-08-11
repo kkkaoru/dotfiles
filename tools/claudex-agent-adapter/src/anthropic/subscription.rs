@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, bail};
 use axum::{body::Body, http::Response};
 use serde_json::{Value, json};
 use std::{
@@ -6,11 +6,7 @@ use std::{
     sync::Arc,
     time::Duration,
 };
-use tokio::{
-    io::AsyncWriteExt,
-    process::{Child, ChildStdin, Command},
-    sync::{OwnedSemaphorePermit, Semaphore},
-};
+use tokio::sync::Semaphore;
 
 mod effort;
 pub(super) mod failure;
@@ -18,6 +14,7 @@ mod lifecycle;
 mod options;
 mod command;
 mod retry;
+mod run;
 #[cfg(test)]
 pub(super) use effort::request_effort;
 pub(super) use effort::valid_effort;
@@ -40,10 +37,6 @@ use super::{
         subscription_streaming_response,
     },
 };
-use failure::{
-    local_failure, local_result, process_failure, spawn_child, subscription_result_for_model,
-    timeout_failure,
-};
 pub(super) use failure::{
     subscription_failure, subscription_result_text, validate_subscription_result_for_model,
 };
@@ -52,7 +45,6 @@ pub(super) use failure::{subscription_result, validate_subscription_result};
 #[cfg(test)]
 pub(in crate::anthropic) use lifecycle::terminate_subscription;
 pub(in crate::anthropic) use lifecycle::terminate_subscription_process_group;
-use lifecycle::{collect_subscription_output, terminate_after_subscription_failure};
 pub(super) use options::{
     DEFAULT_STDERR_DRAIN_GRACE, DEFAULT_TERMINATION_TIMEOUT, SubscriptionOptions,
     SubscriptionToolContext,
@@ -60,6 +52,10 @@ pub(super) use options::{
 pub(super) use retry::with_transient_retries;
 #[cfg(test)]
 pub(super) use retry::{should_retry_subscription, transient_retry_delay};
+pub(super) use run::{
+    acquire_subscription_slot, run_subscription_model, spawn_subscription,
+    take_subscription_stdin, write_subscription_prompt,
+};
 pub(crate) const DEFAULT_MAX_PROCESSES: usize = 20;
 pub(crate) const DEFAULT_TIMEOUT_MINUTES: u64 = 120;
 const MAX_PROCESSES_ENV: &str = "CLAUDEX_SUBSCRIPTION_MAX_PROCESSES";
@@ -238,84 +234,6 @@ pub(super) fn subscription_prompt(tool: &str, arguments: &Value, transcript: &[V
         serde_json::to_string(transcript).unwrap_or_default()
     )
 }
-
-pub(super) async fn run_subscription_model(
-    program: &Path,
-    model: &str,
-    prompt: &str,
-    options: SubscriptionOptions,
-) -> Result<String> {
-    retry::with_transient_retries(model, || {
-        run_subscription_model_attempt(program, model, prompt, &options)
-    })
-    .await
-}
-
-async fn run_subscription_model_attempt(
-    program: &Path,
-    model: &str,
-    prompt: &str,
-    options: &SubscriptionOptions,
-) -> Result<String> {
-    let _permit = acquire_subscription_slot(Arc::clone(&options.slots), options.timeout).await?;
-    let mut command = subscription_command(program, model, options, OutputMode::Json);
-    let (mut child, stdin) = spawn_child(&mut command, model)?;
-    let interaction = collect_subscription_output(&mut child, stdin, prompt);
-    let (prompt_result, output) = match tokio::time::timeout(options.timeout, interaction).await {
-        Ok(Ok(output)) => output,
-        Ok(Err(error)) => {
-            let error = local_failure(model, "failed to collect child output", &error);
-            return terminate_after_subscription_failure(&mut child, error).await;
-        }
-        Err(_) => {
-            let error = timeout_failure(model, options.timeout);
-            return terminate_after_subscription_failure(&mut child, error).await;
-        }
-    };
-    if !output.status.success() {
-        return Err(process_failure(
-            model,
-            &output.status,
-            &output.stdout,
-            &output.stderr,
-        ));
-    }
-    local_result(model, "failed to write prompt", prompt_result)?;
-    subscription_result_for_model(&output.stdout, Some(model))
-}
-
-pub(super) async fn acquire_subscription_slot(
-    slots: Arc<Semaphore>,
-    timeout: Duration,
-) -> Result<OwnedSemaphorePermit> {
-    tokio::time::timeout(timeout, slots.acquire_owned())
-        .await
-        .map_err(|_| anyhow!("Claude subscription capacity wait timed out"))?
-        .map_err(|_| anyhow!("Claude subscription capacity is closed"))
-}
-
-pub(super) fn spawn_subscription(command: &mut Command, model: &str) -> Result<Child> {
-    command
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .with_context(|| format!("failed to start Claude subscription model {model}"))
-}
-
-pub(super) fn take_subscription_stdin(child: &mut Child) -> Result<ChildStdin> {
-    child
-        .stdin
-        .take()
-        .context("Claude subscription stdin is unavailable")
-}
-
-pub(super) async fn write_subscription_prompt(mut stdin: ChildStdin, prompt: &str) -> Result<()> {
-    stdin.write_all(prompt.as_bytes()).await?;
-    stdin.shutdown().await.map_err(Into::into) // explicit EOF for --print
-}
-
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
