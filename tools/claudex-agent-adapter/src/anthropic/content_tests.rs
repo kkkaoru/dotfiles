@@ -362,6 +362,13 @@ mod tests {
                 .and_then(|item| item.get("text")),
             Some(&json!(steering))
         );
+
+        let mut empty = Vec::new();
+        attach_mid_turn_steering(&mut empty, &steering);
+        assert!(
+            empty.is_empty(),
+            "empty tool_results must stay empty when mid-turn steering has nowhere to attach"
+        );
     }
 
     #[test]

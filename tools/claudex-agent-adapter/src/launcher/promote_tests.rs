@@ -259,6 +259,20 @@ fn release_previous_ignores_non_adapter_pids() {
     let _ = publish_promoted(&config, 99, 12, config.options.listen, 2);
 }
 
+#[test]
+fn publish_promoted_clears_empty_retained_snapshot() {
+    let root = tempfile::tempdir().expect("empty retained promote fixture");
+    let listen = "127.0.0.1:8318".parse().unwrap();
+    let config = config_at(listen, root.path(), PathBuf::from("/tmp/adapter"));
+    let path = live::write_retained(&config, listen, 12, "old", Vec::new()).unwrap();
+    assert!(path.exists(), "precondition: empty retained snapshot exists");
+    let _ = publish_promoted(&config, 99, 12, listen, 0);
+    assert!(
+        !path.exists(),
+        "zero-session promote must drop the retained snapshot so sticky cannot probe a released listen"
+    );
+}
+
 fn config_at(listen: SocketAddr, root: &Path, executable: PathBuf) -> ServiceConfig {
     ServiceConfig {
         options: AdapterOptions {
