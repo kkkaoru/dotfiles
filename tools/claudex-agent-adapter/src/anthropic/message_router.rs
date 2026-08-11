@@ -146,11 +146,9 @@ impl Bridge {
 }
 
 #[cfg(test)]
-#[cfg_attr(coverage_nightly, coverage(off))]
 #[path = "message_router_extra_tests.rs"]
 mod extra_tests;
 
 #[cfg(test)]
-#[cfg_attr(coverage_nightly, coverage(off))]
 #[path = "message_router_tests.rs"]
 mod tests;

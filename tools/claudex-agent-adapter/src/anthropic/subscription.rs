@@ -1,10 +1,5 @@
-use anyhow::{Context, Result, bail};
 use serde_json::Value;
-use std::{
-    path::{Path, PathBuf},
-    time::Duration,
-};
-use tokio::sync::Semaphore;
+use std::path::{Path, PathBuf};
 
 mod command;
 mod effort;
@@ -54,56 +49,15 @@ pub(super) use run::{
     acquire_subscription_slot, run_subscription_model, spawn_subscription, take_subscription_stdin,
     write_subscription_prompt,
 };
-pub(crate) const DEFAULT_MAX_PROCESSES: usize = 20;
-pub(crate) const DEFAULT_TIMEOUT_MINUTES: u64 = 120;
-const MAX_PROCESSES_ENV: &str = "CLAUDEX_SUBSCRIPTION_MAX_PROCESSES";
-const TIMEOUT_MINUTES_ENV: &str = "CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES";
-pub(super) struct SubscriptionLimits {
-    pub(super) max_processes: usize,
-    pub(super) timeout: Duration,
-}
 
-impl SubscriptionLimits {
-    pub(crate) fn new(max_processes: usize, timeout_minutes: u64) -> Result<Self> {
-        if max_processes == 0 || max_processes > Semaphore::MAX_PERMITS {
-            bail!("subscription process limit is out of range");
-        }
-        let timeout_seconds = timeout_minutes
-            .checked_mul(60)
-            .filter(|seconds| *seconds > 0)
-            .context("subscription timeout is out of range")?;
-        Ok(Self {
-            max_processes,
-            timeout: Duration::from_secs(timeout_seconds),
-        })
-    }
-}
-
-pub(super) fn subscription_limits() -> SubscriptionLimits {
-    subscription_limits_from(|name| std::env::var(name).ok())
-}
-
-pub(super) fn subscription_limits_from(get: impl Fn(&str) -> Option<String>) -> SubscriptionLimits {
-    let max_processes = positive_usize(get(MAX_PROCESSES_ENV)).unwrap_or(DEFAULT_MAX_PROCESSES);
-    let timeout_seconds = positive_u64(get(TIMEOUT_MINUTES_ENV))
-        .and_then(|minutes| minutes.checked_mul(60))
-        .unwrap_or(DEFAULT_TIMEOUT_MINUTES * 60);
-    SubscriptionLimits {
-        max_processes,
-        timeout: Duration::from_secs(timeout_seconds),
-    }
-}
-
-fn positive_usize(value: Option<String>) -> Option<usize> {
-    value?
-        .parse()
-        .ok()
-        .filter(|value| *value > 0 && *value <= Semaphore::MAX_PERMITS)
-}
-
-fn positive_u64(value: Option<String>) -> Option<u64> {
-    value?.parse().ok().filter(|value| *value > 0)
-}
+#[path = "subscription_limits.rs"]
+mod limits;
+pub(crate) use limits::{DEFAULT_MAX_PROCESSES, DEFAULT_TIMEOUT_MINUTES};
+pub(in crate::anthropic) use limits::{SubscriptionLimits, subscription_limits};
+#[allow(unused_imports)] // settings_tests via super::
+pub(in crate::anthropic) use limits::{positive_u64, positive_usize};
+#[allow(unused_imports)]
+pub(in crate::anthropic) use limits::subscription_limits_from;
 
 impl Bridge {
     pub(super) fn claude_setting(&self, key: &str) -> Option<String> {

@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, ffi::OsString, path::PathBuf, sync::Arc, time::Duration};
+use std::{ffi::OsString, path::PathBuf, sync::Arc, time::Duration};
 
 use crate::{
     agent_backend::AgentBackend,
@@ -12,13 +12,15 @@ mod command_helpers;
 mod hard_timeout;
 mod parse_options;
 mod shutdown;
-use command_helpers::{
-    consume_separator, reject_inherit_model, reject_remaining, take_flag, utf8,
-};
-use parse_options::parse_options;
+#[path = "runtime_parse_command.rs"]
+mod parse_command;
+use parse_command::parse_command;
+#[cfg(test)]
+#[allow(unused_imports)]
+use command_helpers::utf8;
 
 #[derive(Debug)]
-enum RuntimeCommand {
+pub(super) enum RuntimeCommand {
     BuildId,
     Ensure(AdapterOptions),
     HotSwap(AdapterOptions, bool),
@@ -56,52 +58,6 @@ pub async fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<i32> {
     Ok(code)
 }
 
-fn parse_command(mut arguments: VecDeque<OsString>) -> Result<RuntimeCommand> {
-    let command = utf8(arguments.pop_front(), "command")?;
-    match command.as_str() {
-        "build-id" => {
-            reject_remaining(&arguments)?;
-            Ok(RuntimeCommand::BuildId)
-        }
-        "ensure" => {
-            let options = parse_options(&mut arguments)?;
-            reject_inherit_model(&options, "ensure")?;
-            reject_remaining(&arguments)?;
-            Ok(RuntimeCommand::Ensure(options.adapter))
-        }
-        "hot-swap" => {
-            let wait_idle = take_flag(&mut arguments, "--wait-idle");
-            let options = parse_options(&mut arguments)?;
-            reject_inherit_model(&options, "hot-swap")?;
-            reject_remaining(&arguments)?;
-            Ok(RuntimeCommand::HotSwap(options.adapter, wait_idle))
-        }
-        "launch" => {
-            let options = parse_options(&mut arguments)?;
-            consume_separator(&mut arguments)?;
-            let inherit_claude_model =
-                options.inherit_claude_model || options.adapter.model.is_empty();
-            Ok(RuntimeCommand::Launch(
-                options.adapter,
-                arguments.into(),
-                inherit_claude_model,
-            ))
-        }
-        "mcp-claudex-launch" => {
-            reject_remaining(&arguments)?;
-            Ok(RuntimeCommand::McpClaudexLaunch)
-        }
-        "serve" => {
-            let options = parse_options(&mut arguments)?;
-            reject_inherit_model(&options, "serve")?;
-            reject_remaining(&arguments)?;
-            Ok(RuntimeCommand::Serve(options.adapter))
-        }
-        _ => bail!(
-            "unknown command `{command}`; expected build-id, ensure, hot-swap, launch, mcp-claudex-launch, or serve"
-        ),
-    }
-}
 
 
 pub async fn serve(options: AdapterOptions) -> Result<()> {
