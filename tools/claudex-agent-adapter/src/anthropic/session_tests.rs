@@ -1091,9 +1091,14 @@ fn subscription_prompt_keeps_external_provider_models_out_of_the_native_field() 
 }
 
 #[test]
-#[allow(clippy::cognitive_complexity)]
 fn subscription_prompt_requires_atomic_parallel_launches() {
     let prompt = subscription_request_prompt(&request(json!("system"), Vec::new()));
+    assert_subscription_atomic_launch_contract(&prompt);
+    assert_subscription_background_drain_contract(&prompt);
+    assert_subscription_workspace_failover_contract(&prompt);
+}
+
+fn assert_subscription_atomic_launch_contract(prompt: &str) {
     let minimum = crate::anthropic::agent_batch::minimum_batch_size();
     assert!(prompt.contains("same assistant message and tool round"));
     assert!(prompt.contains("exactly that many launch calls"));
@@ -1107,6 +1112,9 @@ fn subscription_prompt_requires_atomic_parallel_launches() {
     assert!(prompt.contains("TaskStop immediately and resume or relaunch"));
     assert!(prompt.contains("agents panel shows queued"));
     assert!(prompt.contains("instead of waiting for cmd -p to finish"));
+}
+
+fn assert_subscription_background_drain_contract(prompt: &str) {
     assert!(prompt.contains("end the turn promptly with concise user-visible status"));
     assert!(prompt.contains(
         "never wait for every background task before accepting another user instruction"
@@ -1122,6 +1130,9 @@ fn subscription_prompt_requires_atomic_parallel_launches() {
     assert!(prompt.contains("do not kill the claudex serve daemon"));
     assert!(prompt.contains("ACP driver dropped its response"));
     assert!(prompt.contains("Avoid serial heavy processing by one worker"));
+}
+
+fn assert_subscription_workspace_failover_contract(prompt: &str) {
     assert!(prompt.contains("Shared-workspace safety is mandatory"));
     assert!(prompt.contains("serialize mutations"));
     assert!(prompt.contains("Never run an auto-fixing formatter"));

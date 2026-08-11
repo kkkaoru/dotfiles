@@ -122,7 +122,6 @@ fn reports_an_absent_process_group_as_not_alive() {
 
 #[cfg(unix)]
 #[test]
-#[allow(clippy::zombie_processes)]
 fn skips_terminate_and_graceful_shutdown_for_launch_process() {
     let root = tempfile::tempdir().expect("launch process fixture");
     let program = root.path().join("claudex-agent-adapter");
@@ -170,7 +169,6 @@ fn skips_terminate_and_graceful_shutdown_for_launch_process() {
 
 #[cfg(unix)]
 #[test]
-#[allow(clippy::zombie_processes)]
 fn graceful_shutdown_leaves_other_process_group_members_running() {
     let root = tempfile::tempdir().expect("graceful shutdown fixture");
     let child_pid_file = root.path().join("child.pid");
