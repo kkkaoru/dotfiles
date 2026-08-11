@@ -693,6 +693,39 @@ fn parallel_inflight_placeholders_with_empty_recipients_stay_distinct() {
 }
 
 #[test]
+fn same_scope_different_models_are_independent_fanout() {
+    let registry = SubagentReuseRegistry::default();
+    let gpt = json!({
+        "description":"Recover post-reboot state",
+        "prompt":"Check ComfyUI and /loop.",
+        "claudex_model":"gpt-5.6-luna"
+    });
+    let cursor = json!({
+        "description":"Recover post-reboot state",
+        "prompt":"Check ComfyUI and /loop.",
+        "claudex_model":"auto"
+    });
+    let muse = json!({
+        "description":"Recover post-reboot state",
+        "prompt":"Check ComfyUI and /loop.",
+        "claudex_model":"meta/muse-spark-1.2-contributor"
+    });
+    registry.note_inflight_launch("session-a", &gpt, "tool-gpt");
+    registry.note_inflight_launch("session-a", &cursor, "tool-cursor");
+    registry.note_inflight_launch("session-a", &muse, "tool-muse");
+    assert!(registry.scope_is_occupied("session-a", &gpt));
+    assert!(registry.scope_is_occupied("session-a", &cursor));
+    assert!(registry.scope_is_occupied("session-a", &muse));
+    let states = registry.states.lock().expect("lock");
+    let launches = &states.get("session-a").expect("session").launches;
+    assert_eq!(
+        launches.len(),
+        3,
+        "same description with distinct claudex_model must stay parallel: {launches:?}"
+    );
+}
+
+#[test]
 fn failed_launch_result_releases_inflight_scope() {
     let registry = SubagentReuseRegistry::default();
     let arguments = json!({
@@ -945,7 +978,7 @@ fn launch_records_cover_empty_scope_and_background_spawn_text() {
     assert!(!already_has_resume(&json!({"resume":""})));
     assert!(already_has_resume(&json!({"resume":"session-1"})));
     assert!(find_reusable_launch(&[], &json!({})).is_none());
-    assert!(!scope_is_occupied(&[], ""));
+    assert!(!scope_is_occupied(&[], "", None));
 
     let records = launch_records(&[
         json!({"role":"assistant"}),
@@ -1275,7 +1308,7 @@ fn scope_is_occupied_empty_scope_key() {
         model: None,
         status: "active".to_owned(),
     }];
-    assert!(!scope_is_occupied(&launches, ""));
+    assert!(!scope_is_occupied(&launches, "", None));
 }
 
 #[test]
@@ -1287,7 +1320,7 @@ fn scope_is_occupied_terminal_status_ignored() {
         model: None,
         status: "completed".to_owned(),
     }];
-    assert!(!scope_is_occupied(&launches, "test scope"));
+    assert!(!scope_is_occupied(&launches, "test scope", None));
 }
 
 #[test]

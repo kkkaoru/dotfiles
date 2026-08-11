@@ -176,7 +176,7 @@ impl SubscriptionStream {
                 session_id,
                 tool = name,
                 tool_use_id = id,
-                "skipped duplicate same-scope SubAgent launch"
+                "skipped duplicate same-scope same-model SubAgent launch"
             );
             return Ok(true);
         }

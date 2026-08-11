@@ -47,19 +47,46 @@ fn same_logical_launch(current: &LaunchRecord, observed: &LaunchRecord) -> bool 
     if current.scope.is_empty() || observed.scope.is_empty() {
         return false;
     }
-    // selected_workers is a capacity pool, not a launch count. Same scope stays
-    // one in-flight worker even when the orchestrator picks another model.
-    normalize_scope(&current.scope) == normalize_scope(&observed.scope)
+    if normalize_scope(&current.scope) != normalize_scope(&observed.scope) {
+        return false;
+    }
+    // Same agents-panel title with different claudex_model is intentional
+    // multi-route fan-out (gpt + cursor + muse + advisor), not a duplicate.
+    match (&current.model, &observed.model) {
+        (Some(left), Some(right)) => left.eq_ignore_ascii_case(right),
+        (None, None) => true,
+        _ => false,
+    }
 }
 
 pub(super) fn launch_scope_key(input: &Value) -> String {
     normalize_scope(&super::records_scope::summarize_scope(input))
 }
 
-pub(super) fn scope_is_occupied(launches: &[LaunchRecord], scope_key: &str) -> bool {
+pub(super) fn launch_model(input: &Value) -> Option<&str> {
+    input
+        .get("claudex_model")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+}
+
+pub(super) fn scope_is_occupied(
+    launches: &[LaunchRecord],
+    scope_key: &str,
+    model: Option<&str>,
+) -> bool {
     !scope_key.is_empty()
         && launches.iter().any(|launch| {
-            !terminal_status(&launch.status) && normalize_scope(&launch.scope) == scope_key
+            if terminal_status(&launch.status) || normalize_scope(&launch.scope) != scope_key {
+                return false;
+            }
+            match (model, launch.model.as_deref()) {
+                (Some(want), Some(have)) => want.eq_ignore_ascii_case(have),
+                (None, None) => true,
+                // Model-less queries still see any same-scope occupant; a
+                // model-less inflight placeholder still blocks until filled.
+                _ => true,
+            }
         })
 }
 

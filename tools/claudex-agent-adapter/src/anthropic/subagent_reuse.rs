@@ -20,7 +20,8 @@ use guidance::{append_reuse_guidance, has_send_message_tool, system_contains_mar
 pub(in crate::anthropic) use records::live_agent_task_ids;
 use records::{
     LaunchRecord, already_has_resume, apply_transcript, find_reusable_launch, latest_user_text,
-    launch_records, reusable_status, scope_is_occupied, scope_similarity, summarize_scope,
+    launch_model, launch_records, reusable_status, scope_is_occupied, scope_similarity,
+    summarize_scope,
 };
 
 pub(crate) const MAX_SUBAGENTS_PER_SESSION_ENV: &str = "CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION";
@@ -172,18 +173,16 @@ impl SubagentReuseRegistry {
         if session_id.is_empty() || scope_key.is_empty() {
             return false;
         }
-        let states = self
-            .states
+        let model = launch_model(arguments);
+        self.states
             .lock()
-            .expect("SubAgent reuse registry poisoned");
-        states
+            .expect("SubAgent reuse registry poisoned")
             .get(session_id)
-            .is_some_and(|state| scope_is_occupied(&state.launches, &scope_key))
+            .is_some_and(|state| scope_is_occupied(&state.launches, &scope_key, model))
     }
 
     /// Remember a just-forwarded launch before its tool_result exists so a
-    /// same-turn or next-turn duplicate cannot spawn another worker.
-    /// In-memory only: empty-recipient placeholders must not survive restart.
+    /// same-turn duplicate cannot spawn another same-model worker.
     pub(super) fn note_inflight_launch(
         &self,
         session_id: &str,
@@ -197,10 +196,7 @@ impl SubagentReuseRegistry {
         if scope.is_empty() {
             return;
         }
-        let model = arguments
-            .get("claudex_model")
-            .and_then(Value::as_str)
-            .map(str::to_owned);
+        let model = launch_model(arguments).map(str::to_owned);
         let mut states = self
             .states
             .lock()

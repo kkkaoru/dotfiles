@@ -1863,8 +1863,105 @@ async fn same_turn_duplicate_scope_forwards_only_one_agent() {
     );
     assert!(registry.scope_is_occupied(
         "session-a",
-        &json!({"description":"Reproduce azookey conversion bug"})
+        &json!({
+            "description":"Reproduce azookey conversion bug",
+            "claudex_model":"gpt-test"
+        })
     ));
+}
+
+#[tokio::test]
+async fn same_turn_same_scope_different_models_all_forward() {
+    let (sender, mut receiver) = channel();
+    let registry = Arc::new(SubagentReuseRegistry::default());
+    let mut model_catalog = ModelCatalog::default();
+    model_catalog
+        .set_worker_routes(vec![
+            crate::provider_config::WorkerRoute::new(
+                "claudex-gpt".to_owned(),
+                "gpt-test".to_owned(),
+                "max".to_owned(),
+            ),
+            crate::provider_config::WorkerRoute::new(
+                "claudex-cursor".to_owned(),
+                "cursor-test".to_owned(),
+                "max".to_owned(),
+            ),
+            crate::provider_config::WorkerRoute::new(
+                "claudex-muse".to_owned(),
+                "muse-test".to_owned(),
+                "max".to_owned(),
+            ),
+        ])
+        .expect("worker routes");
+    let mut context = SubscriptionToolContext::for_tests(
+        Arc::new(AgentEffortIntents::default()),
+        model_catalog,
+        None,
+        "parent-model",
+        vec![json!({"role":"user","content":"Fan out gpt/cursor/muse"})],
+        json!(null),
+    );
+    context.session_id = Some("session-a".to_owned());
+    context.subagent_reuse = Arc::clone(&registry);
+    let mut stream = SubscriptionStream {
+        text_started: false,
+        text_closed: false,
+        saw_tool_use: false,
+        launch_fanout_open: false,
+        seen_tool_ids: HashSet::new(),
+        blocked_subagent: false,
+        saw_result: false,
+        next_index: 0,
+        tools: vec!["Agent".to_owned()],
+        tool_context: Some(context),
+        activity: SubscriptionActivity::default(),
+    };
+    stream
+        .handle_line(
+            &sender,
+            &json!({
+                "type":"assistant", "parent_tool_use_id":null,
+                "message":{"content":[
+                    {
+                        "type":"tool_use", "id":"recover-gpt", "name":"Agent",
+                        "input":{
+                            "description":"Recover post-reboot state",
+                            "prompt":"Check ComfyUI.",
+                            "subagent_type":"claudex-gpt",
+                            "claudex_model":"gpt-test"
+                        }
+                    },
+                    {
+                        "type":"tool_use", "id":"recover-cursor", "name":"Agent",
+                        "input":{
+                            "description":"Recover post-reboot state",
+                            "prompt":"Check ComfyUI.",
+                            "subagent_type":"claudex-cursor",
+                            "claudex_model":"cursor-test"
+                        }
+                    },
+                    {
+                        "type":"tool_use", "id":"recover-muse", "name":"Agent",
+                        "input":{
+                            "description":"Recover post-reboot state",
+                            "prompt":"Check ComfyUI.",
+                            "subagent_type":"claudex-muse",
+                            "claudex_model":"muse-test"
+                        }
+                    }
+                ]}
+            })
+            .to_string(),
+        )
+        .await
+        .expect("forward multi-model fan-out");
+    drop(sender);
+    let out = output(&mut receiver).await;
+    assert!(
+        out.contains("recover-gpt") && out.contains("recover-cursor") && out.contains("recover-muse"),
+        "same description with distinct claudex_model must all forward: {out}"
+    );
 }
 
 #[tokio::test]
