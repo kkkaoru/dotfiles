@@ -33,6 +33,17 @@ fn block_lacks_websearch_chrome(block: &Value) -> bool {
     })
 }
 
+async fn collect_sse_frames(
+    mut receiver: mpsc::Receiver<Result<Bytes, Infallible>>,
+) -> Vec<String> {
+    let mut frames = Vec::new();
+    while let Some(frame) = receiver.recv().await {
+        let bytes = frame.expect("frame");
+        frames.push(String::from_utf8(bytes.to_vec()).expect("UTF-8 SSE"));
+    }
+    frames
+}
+
 fn track_content_block_frame(
     payload: &Value,
     open_index: &mut Option<usize>,
@@ -1868,6 +1879,9 @@ async fn retries_context_window_errors_only_before_committed_output() {
 #[tokio::test]
 async fn reports_slow_stream_preparation_before_the_provider_is_ready() {
     let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
+    // Drain while prepare/finish emit keepalives. A post-hoc recv loop deadlocks
+    // once the bounded SSE channel fills under llvm-cov load.
+    let drain = tokio::spawn(collect_sse_frames(receiver));
     let prepare = async {
         tokio::time::sleep(Duration::from_millis(20)).await;
         Ok::<_, anyhow::Error>("ready")
@@ -1893,10 +1907,7 @@ async fn reports_slow_stream_preparation_before_the_provider_is_ready() {
     assert_eq!(segment.usage.input_tokens, 3);
     // Keepalive thinking is live-only; committed segment stays clean.
     assert!(segment.blocks.is_empty());
-    let mut frames = Vec::new();
-    while let Some(frame) = receiver.recv().await {
-        frames.push(String::from_utf8(frame.expect("frame").to_vec()).expect("UTF-8 SSE"));
-    }
+    let frames = drain.await.expect("drain keepalive frames");
     assert!(
         frames
             .iter()
