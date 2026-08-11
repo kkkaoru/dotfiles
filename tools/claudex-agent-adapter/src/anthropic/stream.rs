@@ -29,6 +29,7 @@ mod subagent_live_view;
 #[cfg(test)]
 mod subagent_progress_models_tests;
 mod thinking;
+mod thinking_support;
 mod tool_call_parser;
 mod turn;
 mod types;

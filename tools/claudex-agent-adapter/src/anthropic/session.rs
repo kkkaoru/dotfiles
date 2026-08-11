@@ -27,8 +27,9 @@ mod reservation;
 mod session_turn;
 mod tools;
 use helpers::{
-    candidate_length, is_better_length, is_idempotent_task_lifecycle_error, owns_tool_result,
-    should_preempt_for_context_limit, touch_session, validate_tool_result_ownership,
+    candidate_length, first_session_owning_results, is_better_length,
+    is_idempotent_task_lifecycle_error, should_preempt_for_context_limit, touch_session,
+    validate_tool_result_ownership,
 };
 pub(in crate::anthropic) use session_turn::is_context_window_exceeded;
 pub(in crate::anthropic) use tools::is_main_session_only_tool;
@@ -374,25 +375,6 @@ impl Bridge {
         }
         Ok(backend_submitted)
     }
-}
-async fn first_session_owning_results(
-    sessions: Vec<Arc<Session>>,
-    results: &[ToolResult],
-) -> Option<Arc<Session>> {
-    for session in sessions {
-        if session_owns_results(&session, results).await {
-            return Some(session);
-        }
-    }
-    None
-}
-
-async fn session_owns_results(session: &Session, results: &[ToolResult]) -> bool {
-    let pending = session.pending_tools.lock().await;
-    let consumed = session.consumed_tool_ids.lock().await;
-    results
-        .iter()
-        .all(|result| owns_tool_result(&pending, &consumed, &result.tool_use_id))
 }
 
 #[cfg(test)]

@@ -26,6 +26,26 @@ pub(super) fn owns_tool_result(
     pending.contains_key(tool_use_id) || consumed.contains(tool_use_id)
 }
 
+pub(super) async fn first_session_owning_results(
+    sessions: Vec<Arc<Session>>,
+    results: &[ToolResult],
+) -> Option<Arc<Session>> {
+    for session in sessions {
+        if session_owns_results(&session, results).await {
+            return Some(session);
+        }
+    }
+    None
+}
+
+async fn session_owns_results(session: &Session, results: &[ToolResult]) -> bool {
+    let pending = session.pending_tools.lock().await;
+    let consumed = session.consumed_tool_ids.lock().await;
+    results
+        .iter()
+        .all(|result| owns_tool_result(&pending, &consumed, &result.tool_use_id))
+}
+
 pub(super) fn is_better_length(best: Option<usize>, candidate: usize) -> bool {
     match best {
         Some(best) => candidate > best,
