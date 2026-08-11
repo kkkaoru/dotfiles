@@ -821,60 +821,11 @@ async fn consume_iteration_hides_lines_after_a_pending_result() {
 }
 
 #[tokio::test]
-#[allow(clippy::too_many_lines)]
 async fn blocked_agent_after_a_forwarded_tool_uses_a_fresh_text_block() {
     let (sender, mut receiver) = channel();
-    let mut stream = SubscriptionStream {
-        text_started: false,
-        text_closed: false,
-        saw_tool_use: false,
-        launch_fanout_open: false,
-        seen_tool_ids: HashSet::new(),
-        blocked_subagent: false,
-        saw_result: false,
-        next_index: 0,
-        tools: vec!["Task".to_owned()],
-        tool_context: Some(routed_subscription_tool_context()),
-        activity: SubscriptionActivity::default(),
-    };
-
+    let mut stream = blocked_agent_subscription_stream();
     stream
-        .handle_line(
-            &sender,
-            &json!({
-                "type":"assistant",
-                "parent_tool_use_id":null,
-                "message":{
-                    "content":[
-                        {
-                            "type":"tool_use", "id":"supported-agent", "name":"Agent",
-                            "input":{
-                                "description":"first worker", "prompt":"do first work",
-                                "subagent_type":"claudex-gpt-spark",
-                                "claudex_model":"gpt-5.3-codex-spark"
-                            }
-                        },
-                        {
-                            "type":"tool_use", "id":"blocked-agent", "name":"Agent",
-                            "input":{
-                                "description":"second worker", "prompt":"do second work",
-                                "subagent_type":"claude-sonnet-5",
-                                "claudex_model":"claude-sonnet-5"
-                            }
-                        },
-                        {
-                            "type":"tool_use", "id":"blocked-agent-2", "name":"Agent",
-                            "input":{
-                                "description":"third worker", "prompt":"do third work",
-                                "subagent_type":"claude-fable",
-                                "claudex_model":"claude-fable"
-                            }
-                        }
-                    ]
-                }
-            })
-            .to_string(),
-        )
+        .handle_line(&sender, &mixed_blocked_agent_payload())
         .await
         .expect("forward mixed tool calls");
     stream
@@ -886,8 +837,64 @@ async fn blocked_agent_after_a_forwarded_tool_uses_a_fresh_text_block() {
         .expect("finish mixed tool calls");
 
     let output = output(&mut receiver).await;
-    assert_valid_stream(&output, Some("tool_use"));
-    let (block_types, stopped_indices) = collect_block_events(&output);
+    assert_blocked_agent_uses_fresh_text_block(&output);
+}
+
+fn blocked_agent_subscription_stream() -> SubscriptionStream {
+    SubscriptionStream {
+        text_started: false,
+        text_closed: false,
+        saw_tool_use: false,
+        launch_fanout_open: false,
+        seen_tool_ids: HashSet::new(),
+        blocked_subagent: false,
+        saw_result: false,
+        next_index: 0,
+        tools: vec!["Task".to_owned()],
+        tool_context: Some(routed_subscription_tool_context()),
+        activity: SubscriptionActivity::default(),
+    }
+}
+
+fn mixed_blocked_agent_payload() -> String {
+    json!({
+        "type":"assistant",
+        "parent_tool_use_id":null,
+        "message":{
+            "content":[
+                {
+                    "type":"tool_use", "id":"supported-agent", "name":"Agent",
+                    "input":{
+                        "description":"first worker", "prompt":"do first work",
+                        "subagent_type":"claudex-gpt-spark",
+                        "claudex_model":"gpt-5.3-codex-spark"
+                    }
+                },
+                {
+                    "type":"tool_use", "id":"blocked-agent", "name":"Agent",
+                    "input":{
+                        "description":"second worker", "prompt":"do second work",
+                        "subagent_type":"claude-sonnet-5",
+                        "claudex_model":"claude-sonnet-5"
+                    }
+                },
+                {
+                    "type":"tool_use", "id":"blocked-agent-2", "name":"Agent",
+                    "input":{
+                        "description":"third worker", "prompt":"do third work",
+                        "subagent_type":"claude-fable",
+                        "claudex_model":"claude-fable"
+                    }
+                }
+            ]
+        }
+    })
+    .to_string()
+}
+
+fn assert_blocked_agent_uses_fresh_text_block(output: &str) {
+    assert_valid_stream(output, Some("tool_use"));
+    let (block_types, stopped_indices) = collect_block_events(output);
     assert_eq!(
         block_types,
         vec![(0, "tool_use".to_owned()), (1, "text".to_owned())]
