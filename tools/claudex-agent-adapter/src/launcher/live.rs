@@ -188,6 +188,34 @@ pub(crate) fn read_retained(path: &Path) -> Result<Option<RetainedGeneration>> {
     Ok(Some(state))
 }
 
+/// Drop one sticky session from a retained snapshot. Empty snapshots are removed
+/// so the live generation stops proxying and can garbage-collect the daemon.
+pub(crate) fn forget_retained_session(path: &Path, session_id: &str) -> Result<()> {
+    let Some(mut generation) = read_retained(path)? else {
+        return Ok(());
+    };
+    let before = generation.session_ids.len();
+    generation
+        .session_ids
+        .retain(|owned| owned != session_id);
+    if generation.session_ids.len() == before {
+        return Ok(());
+    }
+    if generation.session_ids.is_empty() {
+        let _ = fs::remove_file(path);
+        return Ok(());
+    }
+    write_json(path, &generation)
+}
+
+/// Remove the retained snapshot entirely (idle / dead generation recovery).
+pub(crate) fn clear_retained(path: &Path) -> Result<()> {
+    if path.exists() {
+        fs::remove_file(path).context("remove retained generation state")?;
+    }
+    Ok(())
+}
+
 pub(super) fn load_retained(config: &ServiceConfig) -> Option<(PathBuf, RetainedGeneration)> {
     let path = retained_path(config).ok()?;
     let generation = read_retained(&path).ok().flatten()?;

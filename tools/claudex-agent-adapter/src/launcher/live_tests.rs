@@ -119,6 +119,27 @@ fn round_trips_retained_generation_state() {
 }
 
 #[test]
+fn forget_retained_session_rewrites_or_removes_snapshot() {
+    let root = tempfile::tempdir().expect("forget retained fixture");
+    let config = config(root.path());
+    let listen = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 54322);
+    let path = write_retained(
+        &config,
+        listen,
+        77,
+        "old-build",
+        vec!["session-a".to_owned(), "session-b".to_owned()],
+    )
+    .expect("write retained");
+    forget_retained_session(&path, "session-a").expect("forget one");
+    let loaded = read_retained(&path).expect("read").expect("present");
+    assert_eq!(loaded.session_ids, ["session-b"]);
+    forget_retained_session(&path, "session-b").expect("forget last");
+    assert!(!path.exists(), "empty retained snapshot must be removed");
+    clear_retained(&path).expect("clear missing is ok");
+}
+
+#[test]
 fn publishes_canonical_rebind_state_beside_the_adapter_log() {
     let root = tempfile::tempdir().expect("rebind fixture");
     let config = config(root.path());

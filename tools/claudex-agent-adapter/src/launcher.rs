@@ -25,8 +25,8 @@ mod health;
 mod live;
 mod promote;
 pub(crate) use live::{
-    RETAINED_STATE_ENV, RetainedGeneration, SERVICE_LISTEN_ENV, load_retained_from_env,
-    read_retained,
+    RETAINED_STATE_ENV, RetainedGeneration, SERVICE_LISTEN_ENV, clear_retained,
+    forget_retained_session, load_retained_from_env, read_retained,
 };
 mod installed_adapter;
 mod launcher_lock;

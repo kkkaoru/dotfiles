@@ -1,3 +1,6 @@
+use super::super::retained_proxy::{
+    RetainedProxy, is_hop_by_hop_header, proxy_http_client, proxy_request,
+};
 use super::*;
 use crate::launcher::RetainedGeneration;
 use crate::listen_handover::{HandoverListener, ListenHandover};
@@ -64,7 +67,7 @@ fn retained_proxy_reloads_listen_and_sessions_from_disk() {
     assert!(!proxy.owns("session-a"));
     assert!(proxy.owns("session-busy"));
     assert_eq!(
-        *proxy.listen.read().expect("listen"),
+        proxy.listen_for_test(),
         SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 65108)
     );
 }
@@ -80,7 +83,7 @@ fn rebind_request_requires_ephemeral_or_listen() {
 }
 
 #[test]
-fn retained_proxy_refresh_keeps_memory_when_snapshot_vanishes() {
+fn retained_proxy_refresh_drops_sticky_when_snapshot_vanishes() {
     let root = tempfile::tempdir().expect("vanished retained fixture");
     let path = root.path().join("retained.json");
     std::fs::write(
@@ -91,8 +94,29 @@ fn retained_proxy_refresh_keeps_memory_when_snapshot_vanishes() {
     let proxy = retained(&path, "127.0.0.1:9", &["session-a"]);
     std::fs::remove_file(&path).expect("remove retained");
     assert!(
-        proxy.owns("session-a"),
-        "unreadable snapshot must not drop in-memory retained sessions"
+        !proxy.owns("session-a"),
+        "missing retained snapshot must drop sticky ownership so live can serve locally"
+    );
+}
+
+#[test]
+fn retained_proxy_refresh_drops_sticky_when_snapshot_is_invalid() {
+    let root = tempfile::tempdir().expect("invalid retained fixture");
+    let path = root.path().join("retained.json");
+    std::fs::write(
+        &path,
+        br#"{"listen":"127.0.0.1:9","pid":1,"build_id":"old","session_ids":["session-a"]}"#,
+    )
+    .expect("write retained");
+    let proxy = retained(&path, "127.0.0.1:9", &["session-a"]);
+    std::fs::write(
+        &path,
+        br#"{"listen":"127.0.0.1:9","pid":0,"build_id":"cleared","session_ids":[]}"#,
+    )
+    .expect("write invalid retained");
+    assert!(
+        !proxy.owns("session-a"),
+        "invalid retained snapshot (pid 0) must drop sticky ownership"
     );
 }
 
@@ -236,7 +260,7 @@ async fn rebind_listener_times_out_when_advertised_listen_does_not_change() {
 
 #[tokio::test]
 async fn proxy_middleware_forwards_owned_sessions_and_passes_through_others() {
-    let upstream = serve_http_once(b"from-previous").await;
+    let upstream = serve_retained_generation(b"from-previous", &["session-a"]).await;
     let root = tempfile::tempdir().expect("middleware fixture");
     let path = root.path().join("retained.json");
     std::fs::write(
@@ -296,6 +320,118 @@ async fn proxy_middleware_forwards_owned_sessions_and_passes_through_others() {
         .await
         .expect("missing session header");
     assert_eq!(missing.text().await.expect("missing body"), "local");
+}
+
+#[tokio::test]
+async fn proxy_middleware_serves_locally_when_retained_is_unreachable() {
+    // Post-reboot failure: sticky session_ids still pointed at a retained listen
+    // that health-probed as dead, so SubAgent /v1/messages looped on 502.
+    let root = tempfile::tempdir().expect("dead retained fixture");
+    let path = root.path().join("retained.json");
+    std::fs::write(
+        &path,
+        br#"{"listen":"127.0.0.1:1","pid":1,"build_id":"old","session_ids":["session-a"]}"#,
+    )
+    .expect("write retained");
+    let cache = tempfile::tempdir().expect("advertised cache");
+    let (advertised, _rx) = ListenHandover::new(
+        "127.0.0.1:8318".parse().unwrap(),
+        cache.path().to_path_buf(),
+    );
+    let state = Some(HandoverState {
+        retained: Some(Arc::new(retained(
+            &path,
+            "127.0.0.1:1",
+            &["session-a"],
+        ))),
+        advertised: Some(advertised),
+        client: proxy_http_client(),
+    });
+    let app = Router::new()
+        .route("/v1/messages", post(|| async { "live-local" }))
+        .layer(middleware::from_fn_with_state(
+            state,
+            proxy_retained_sessions,
+        ));
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("dead retained listener");
+    let addr = listener.local_addr().expect("dead retained address");
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.ok();
+    });
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let response = reqwest::Client::new()
+        .post(format!("http://{addr}/v1/messages"))
+        .header("x-claude-code-session-id", "session-a")
+        .body("{}")
+        .send()
+        .await
+        .expect("sticky after dead retained");
+    assert_eq!(
+        response.text().await.expect("live body"),
+        "live-local",
+        "unreachable retained must fall through to the live generation"
+    );
+    assert!(
+        !path.exists(),
+        "dead retained snapshot must be cleared after the probe"
+    );
+}
+
+#[tokio::test]
+async fn proxy_middleware_serves_locally_when_retained_session_is_idle() {
+    let upstream = serve_idle_retained_generation().await;
+    let root = tempfile::tempdir().expect("idle retained fixture");
+    let path = root.path().join("retained.json");
+    std::fs::write(
+        &path,
+        format!(
+            r#"{{"listen":"{upstream}","pid":1,"build_id":"old","session_ids":["session-a"]}}"#
+        ),
+    )
+    .expect("write retained");
+    let cache = tempfile::tempdir().expect("advertised cache");
+    let (advertised, _rx) = ListenHandover::new(
+        "127.0.0.1:8318".parse().unwrap(),
+        cache.path().to_path_buf(),
+    );
+    let state = Some(HandoverState {
+        retained: Some(Arc::new(retained(
+            &path,
+            &upstream.to_string(),
+            &["session-a"],
+        ))),
+        advertised: Some(advertised),
+        client: proxy_http_client(),
+    });
+    let app = Router::new()
+        .route("/v1/messages", post(|| async { "live-after-idle" }))
+        .layer(middleware::from_fn_with_state(
+            state,
+            proxy_retained_sessions,
+        ));
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("idle retained listener");
+    let addr = listener.local_addr().expect("idle retained address");
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.ok();
+    });
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let response = reqwest::Client::new()
+        .post(format!("http://{addr}/v1/messages"))
+        .header("x-claude-code-session-id", "session-a")
+        .body("{}")
+        .send()
+        .await
+        .expect("sticky after idle retained");
+    assert_eq!(
+        response.text().await.expect("live body"),
+        "live-after-idle",
+        "idle retained generations must not keep sticky sessions forever"
+    );
+    assert!(!path.exists(), "idle retained snapshot must be cleared");
 }
 
 #[tokio::test]
@@ -560,7 +696,7 @@ async fn rebound_daemon_forwards_when_retained_listen_is_not_self() {
 
 #[tokio::test]
 async fn proxy_middleware_without_advertised_listen_uses_retained_only() {
-    let upstream = serve_http_once(b"from-previous").await;
+    let upstream = serve_retained_generation(b"from-previous", &["session-a"]).await;
     let root = tempfile::tempdir().expect("no advertised fixture");
     let path = root.path().join("retained.json");
     std::fs::write(
@@ -754,6 +890,83 @@ async fn serve_http_once(body: &'static [u8]) -> SocketAddr {
         );
         let _ = stream.write_all(header.as_bytes()).await;
         let _ = stream.write_all(body).await;
+    });
+    listen
+}
+
+async fn serve_retained_generation(
+    body: &'static [u8],
+    busy_sessions: &'static [&'static str],
+) -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("retained upstream listener");
+    let listen = listener.local_addr().expect("retained upstream address");
+    let sessions = serde_json::to_string(busy_sessions).expect("busy sessions json");
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                break;
+            };
+            let mut buf = vec![0; 4096];
+            let n = stream.read(&mut buf).await.unwrap_or(0);
+            let request = String::from_utf8_lossy(&buf[..n]);
+            let (status_line, payload) = if request.starts_with("GET /health") {
+                let payload = format!(
+                    concat!(
+                        r#"{{"status":"ok","pid":1,"protocol_version":1,"build_id":"old","#,
+                        r#""subscription_max_processes":20,"subscription_timeout_minutes":120,"#,
+                        r#""active_http_requests":1,"active_provider_turns":1,"#,
+                        r#""busy_claude_session_ids":{sessions},"active_claude_session_ids":{sessions}}}"#
+                    ),
+                    sessions = sessions
+                );
+                ("HTTP/1.1 200 OK", payload.into_bytes())
+            } else {
+                ("HTTP/1.1 200 OK", body.to_vec())
+            };
+            let header = format!(
+                "{status_line}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                payload.len()
+            );
+            let _ = stream.write_all(header.as_bytes()).await;
+            let _ = stream.write_all(&payload).await;
+        }
+    });
+    listen
+}
+
+async fn serve_idle_retained_generation() -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("idle retained listener");
+    let listen = listener.local_addr().expect("idle retained address");
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut stream, _)) = listener.accept().await else {
+                break;
+            };
+            let mut buf = vec![0; 4096];
+            let n = stream.read(&mut buf).await.unwrap_or(0);
+            let request = String::from_utf8_lossy(&buf[..n]);
+            if !request.starts_with("GET /health") {
+                let header = "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+                let _ = stream.write_all(header.as_bytes()).await;
+                continue;
+            }
+            let payload = concat!(
+                r#"{"status":"ok","pid":1,"protocol_version":1,"build_id":"old","#,
+                r#""subscription_max_processes":20,"subscription_timeout_minutes":120,"#,
+                r#""active_http_requests":0,"active_provider_turns":0,"#,
+                r#""busy_claude_session_ids":[],"active_claude_session_ids":[]}"#
+            );
+            let header = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                payload.len()
+            );
+            let _ = stream.write_all(header.as_bytes()).await;
+            let _ = stream.write_all(payload.as_bytes()).await;
+        }
     });
     listen
 }

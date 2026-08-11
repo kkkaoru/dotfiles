@@ -1,12 +1,7 @@
-use std::{
-    collections::HashSet,
-    path::PathBuf,
-    sync::{Arc, RwLock},
-};
+use std::sync::Arc;
 
 use axum::{
     Json, Router,
-    body::Body,
     extract::{Request, State},
     http::{HeaderMap, StatusCode},
     middleware::Next,
@@ -16,29 +11,16 @@ use axum::{
 use serde::Deserialize;
 use serde_json::json;
 
-use crate::launcher::{RetainedGeneration, load_retained_from_env, read_retained};
+use crate::launcher::load_retained_from_env;
 use crate::listen_handover::ListenHandover;
 
 use super::CLAUDE_CODE_SESSION_ID_HEADER;
+use super::retained_proxy::{RetainedProxy, proxy_http_client, proxy_request};
 
 #[derive(Clone)]
 pub(super) struct HandoverState {
     pub retained: Option<Arc<RetainedProxy>>,
     pub advertised: Option<ListenHandover>,
-    client: reqwest::Client,
-}
-
-fn proxy_http_client() -> reqwest::Client {
-    reqwest::Client::builder()
-        .pool_max_idle_per_host(0)
-        .build()
-        .unwrap_or_else(|_| reqwest::Client::new())
-}
-
-pub(super) struct RetainedProxy {
-    path: PathBuf,
-    listen: RwLock<std::net::SocketAddr>,
-    sessions: RwLock<HashSet<String>>,
     client: reqwest::Client,
 }
 
@@ -48,141 +30,6 @@ struct RebindRequest {
     ephemeral: bool,
     #[serde(default)]
     listen: Option<String>,
-}
-
-impl RetainedProxy {
-    fn from_path(path: PathBuf, generation: RetainedGeneration) -> Self {
-        Self {
-            path,
-            listen: RwLock::new(generation.listen),
-            sessions: RwLock::new(generation.session_ids.into_iter().collect()),
-            client: proxy_http_client(),
-        }
-    }
-
-    fn targets(&self, listen: std::net::SocketAddr) -> bool {
-        self.refresh();
-        self.listen
-            .read()
-            .map(|current| *current == listen)
-            .unwrap_or(false)
-    }
-
-    fn refresh(&self) {
-        let Ok(Some(generation)) = read_retained(&self.path) else {
-            return;
-        };
-        if let Ok(mut listen) = self.listen.write() {
-            *listen = generation.listen;
-        }
-        if let Ok(mut sessions) = self.sessions.write() {
-            *sessions = generation.session_ids.into_iter().collect();
-        }
-    }
-
-    fn owns(&self, session_id: &str) -> bool {
-        self.refresh();
-        self.sessions
-            .read()
-            .map(|sessions| sessions.contains(session_id))
-            .unwrap_or(false)
-    }
-
-    async fn proxy(&self, request: Request) -> Response {
-        self.refresh();
-        let listen = match self.listen.read() {
-            Ok(listen) => *listen,
-            Err(_) => {
-                return (
-                    StatusCode::BAD_GATEWAY,
-                    Json(json!({"error": {"message": "retained listen lock poisoned"}})),
-                )
-                    .into_response();
-            }
-        };
-        proxy_request(&self.client, listen, request).await
-    }
-}
-
-async fn proxy_request(
-    client: &reqwest::Client,
-    listen: std::net::SocketAddr,
-    request: Request,
-) -> Response {
-    let path = request
-        .uri()
-        .path_and_query()
-        .map(|value| value.as_str())
-        .unwrap_or(request.uri().path());
-    let url = format!("http://{listen}{path}");
-    let mut upstream = client.request(request.method().clone(), url);
-    for (name, value) in request.headers() {
-        if is_hop_by_hop_header(name) {
-            continue;
-        }
-        upstream = upstream.header(name, value);
-    }
-    let body = match axum::body::to_bytes(request.into_body(), 32 * 1024 * 1024).await {
-        Ok(body) => body,
-        Err(error) => {
-            return (
-                StatusCode::BAD_GATEWAY,
-                Json(json!({"error": {"message": error.to_string()}})),
-            )
-                .into_response();
-        }
-    };
-    match upstream.body(body).send().await {
-        Ok(response) => map_upstream_response(response).await,
-        Err(error) => (
-            StatusCode::BAD_GATEWAY,
-            Json(json!({"error": {"message": error.to_string()}})),
-        )
-            .into_response(),
-    }
-}
-
-async fn map_upstream_response(response: reqwest::Response) -> Response {
-    let status =
-        StatusCode::from_u16(response.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
-    let headers = response.headers().clone();
-    let (tx, rx) = tokio::sync::mpsc::channel::<Result<axum::body::Bytes, std::io::Error>>(8);
-    spawn_forward_response_chunks(response, tx);
-    let mut mapped = Response::builder().status(status);
-    for (name, value) in headers.iter() {
-        mapped = mapped.header(name, value);
-    }
-    mapped
-        .body(Body::from_stream(
-            tokio_stream::wrappers::ReceiverStream::new(rx),
-        ))
-        .unwrap_or_else(|_| StatusCode::BAD_GATEWAY.into_response())
-}
-
-fn spawn_forward_response_chunks(
-    response: reqwest::Response,
-    tx: tokio::sync::mpsc::Sender<Result<axum::body::Bytes, std::io::Error>>,
-) {
-    tokio::spawn(forward_response_chunks(response, tx));
-}
-
-async fn forward_response_chunks(
-    mut response: reqwest::Response,
-    tx: tokio::sync::mpsc::Sender<Result<axum::body::Bytes, std::io::Error>>,
-) {
-    loop {
-        let chunk = match response.chunk().await {
-            Ok(Some(chunk)) => chunk,
-            Ok(None) => break,
-            Err(error) => {
-                let _ = tx.send(Err(std::io::Error::other(error))).await;
-                break;
-            }
-        };
-        if tx.send(Ok(chunk)).await.is_err() {
-            break;
-        }
-    }
 }
 
 pub(super) fn layer(handover: Option<ListenHandover>) -> (Option<HandoverState>, Router) {
@@ -274,6 +121,9 @@ async fn proxy_or_run_retained(
     if retained_targets_advertised(retained, state.advertised.as_ref()) {
         return next.run(request).await;
     }
+    if !retained.should_proxy_session(session_id).await {
+        return next.run(request).await;
+    }
     retained.proxy(request).await
 }
 
@@ -296,21 +146,6 @@ fn retain_session_locally(
         return false;
     };
     retained.owns(id) && retained.targets(current)
-}
-
-fn is_hop_by_hop_header(name: &axum::http::HeaderName) -> bool {
-    matches!(
-        name.as_str(),
-        "connection"
-            | "keep-alive"
-            | "proxy-authenticate"
-            | "proxy-authorization"
-            | "te"
-            | "trailers"
-            | "transfer-encoding"
-            | "upgrade"
-            | "host"
-    )
 }
 
 async fn rebind_listener(
