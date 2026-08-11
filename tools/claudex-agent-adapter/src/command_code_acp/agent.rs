@@ -5,10 +5,8 @@ use std::{
 };
 
 use agent_client_protocol as acp;
-use anyhow::Result;
 use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio::task::AbortHandle;
-use tokio_util::compat::{TokioAsyncReadCompatExt as _, TokioAsyncWriteCompatExt as _};
 use uuid::Uuid;
 
 use super::{coalesce::message_text_from_progress, options::Options, prompt::prompt_text};
@@ -16,13 +14,13 @@ use super::{coalesce::message_text_from_progress, options::Options, prompt::prom
 mod emit;
 mod progress;
 use emit::{emit_cancelled, emit_result};
-use progress::{emit_progress_events, relay_client_operations};
+use progress::emit_progress_events;
 
 pub(super) enum ClientOperation {
     Notify(acp::SessionNotification, oneshot::Sender<()>),
 }
 
-struct HeadlessAgent {
+pub(super) struct HeadlessAgent {
     options: Options,
     operations: mpsc::UnboundedSender<ClientOperation>,
     next_session: Cell<u64>,
@@ -220,31 +218,9 @@ impl acp::Agent for HeadlessAgent {
     }
 }
 
-pub async fn serve(options: Options) -> Result<()> {
-    serve_io(options, tokio::io::stdin(), tokio::io::stdout()).await
-}
+#[path = "agent_serve.rs"]
+mod serve;
+pub use serve::serve;
+#[cfg(test)]
+pub(super) use serve::serve_io;
 
-pub(super) async fn serve_io<R, W>(options: Options, stdin: R, stdout: W) -> Result<()>
-where
-    R: tokio::io::AsyncRead + Unpin + 'static,
-    W: tokio::io::AsyncWrite + Unpin + 'static,
-{
-    let (operations, requests) = mpsc::unbounded_channel();
-    let agent = HeadlessAgent {
-        options,
-        operations,
-        next_session: Cell::new(0),
-        session_cwds: RefCell::new(HashMap::new()),
-        cancelled: RefCell::new(HashMap::new()),
-        running: RefCell::new(HashMap::new()),
-        prompt_lock: Mutex::new(()),
-    };
-    let (connection, io) =
-        acp::AgentSideConnection::new(agent, stdout.compat_write(), stdin.compat(), spawn_local);
-    tokio::task::spawn_local(relay_client_operations(connection, requests));
-    io.await.map_err(|error| anyhow::anyhow!("{error}"))
-}
-
-fn spawn_local(future: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + 'static>>) {
-    tokio::task::spawn_local(future);
-}

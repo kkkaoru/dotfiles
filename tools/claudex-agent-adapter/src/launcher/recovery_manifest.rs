@@ -1,6 +1,5 @@
 use std::{
-    fs::{self, OpenOptions},
-    io::Write,
+    fs,
     net::SocketAddr,
     path::{Path, PathBuf},
 };
@@ -21,8 +20,8 @@ use prune::cleanup;
 use prune::{manifest_entry, manifests};
 
 const EXECUTABLE_NAME: &str = "claudex-agent-adapter";
-const MANIFEST_PREFIX: &str = "manifest.";
-const MANIFEST_SUFFIX: &str = ".json";
+pub(super) const MANIFEST_PREFIX: &str = "manifest.";
+pub(super) const MANIFEST_SUFFIX: &str = ".json";
 const RETAINED_GENERATIONS_PER_LISTENER: usize = 2;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -182,64 +181,13 @@ pub(super) fn generation_name(
     format!("v1-{listener}-{build_id}-{service_fingerprint}")
 }
 
-fn validate_arguments(manifest: &RecoveryManifest) -> Result<()> {
-    ensure!(
-        manifest.arguments.first().map(String::as_str) == Some("serve"),
-        "recovery manifest is not a daemon command"
-    );
-    let listen = manifest
-        .arguments
-        .windows(2)
-        .find(|pair| pair[0] == "--listen")
-        .map(|pair| pair[1].as_str());
-    let expected_listen = manifest.listen.to_string();
-    ensure!(
-        listen == Some(expected_listen.as_str()),
-        "recovery manifest listener argument mismatch"
-    );
-    Ok(())
-}
+#[path = "recovery_manifest_io.rs"]
+mod io;
+use io::{
+    ensure_recovery_root, manifest_file_name, publish_manifest, read_manifest, recovery_root,
+    validate_arguments,
+};
 
-fn publish_manifest(path: &Path, manifest: &RecoveryManifest) -> Result<()> {
-    let temporary = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4().simple()));
-    let mut output = OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(&temporary)
-        .context("create adapter recovery manifest")?;
-    set_private_permissions(&temporary, 0o600)?;
-    output
-        .write_all(&serde_json::to_vec(manifest).context("encode adapter recovery manifest")?)
-        .context("write adapter recovery manifest")?;
-    output
-        .sync_all()
-        .context("sync adapter recovery manifest")?;
-    fs::rename(&temporary, path).context("publish adapter recovery manifest")?;
-    validate_private_file(path, 0o600, "recovery manifest")
-}
-
-fn manifest_file_name(generation: &str) -> String {
-    format!("{MANIFEST_PREFIX}{generation}{MANIFEST_SUFFIX}")
-}
-
-fn read_manifest(path: &Path) -> Result<RecoveryManifest> {
-    serde_json::from_slice(&fs::read(path).context("read adapter recovery manifest")?)
-        .context("decode adapter recovery manifest")
-}
-
-fn recovery_root(config: &ServiceConfig) -> Result<PathBuf> {
-    Ok(config
-        .log_path
-        .parent()
-        .context("adapter log has no parent")?
-        .join("recovery"))
-}
-
-fn ensure_recovery_root(config: &ServiceConfig) -> Result<PathBuf> {
-    let root = recovery_root(config)?;
-    ensure_private_directory(&root)?;
-    Ok(root)
-}
 
 #[cfg(test)]
 #[path = "recovery_manifest_tests.rs"]
