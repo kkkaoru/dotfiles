@@ -93,16 +93,15 @@ pub(in crate::anthropic::stream) fn latest_worker_status(delta: &str) -> Option<
     if !lower.starts_with("status:") {
         return None;
     }
-    if let Some(line) = trimmed.lines().rev().find(|line| {
+    let line = trimmed.lines().rev().find(|line| {
         line.trim_start()
             .to_ascii_lowercase()
             .starts_with("status:")
-    }) {
-        let status = compact_live_prose(line.trim());
-        return Some(format!("{}\n", status.trim_end()));
-    }
-    let last = lower.rmatch_indices("status:").next()?.0;
-    let status = compact_live_prose(trimmed[last..].trim());
+    })?;
+    let line = line.trim();
+    let line_lower = line.to_ascii_lowercase();
+    let last = line_lower.rmatch_indices("status:").next()?.0;
+    let status = compact_live_prose(line[last..].trim());
     Some(format!("{}\n", status.trim_end()))
 }
 
