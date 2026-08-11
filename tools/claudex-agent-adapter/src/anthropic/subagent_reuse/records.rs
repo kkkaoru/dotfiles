@@ -122,6 +122,9 @@ fn reuse_priority(status: &str) -> u8 {
 }
 
 fn merge_record(current: &mut LaunchRecord, observed: &LaunchRecord) {
+    if current.recipient.is_empty() && !observed.recipient.is_empty() {
+        current.recipient.clone_from(&observed.recipient);
+    }
     if current.scope.is_empty() {
         current.scope.clone_from(&observed.scope);
     }
@@ -132,7 +135,6 @@ fn merge_record(current: &mut LaunchRecord, observed: &LaunchRecord) {
         current.status.clone_from(&observed.status);
     }
 }
-
 pub(super) fn launch_records(messages: &[Value]) -> Vec<LaunchRecord> {
     let mut records = Vec::new();
     let mut contexts = HashMap::new();
@@ -387,14 +389,12 @@ fn is_launch_result(text: &str) -> bool {
         || text.contains("working in the background")
         || text.contains("receives instructions via mailbox")
 }
-
 fn xml_value(text: &str, tag: &str) -> Option<String> {
     let open = format!("<{tag}>");
     let close = format!("</{tag}>");
     let value = text.split_once(&open)?.1.split_once(&close)?.0.trim();
     (!value.is_empty()).then(|| value.to_owned())
 }
-
 fn active_status() -> String {
     "active".to_owned()
 }

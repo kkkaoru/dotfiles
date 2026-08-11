@@ -650,6 +650,51 @@ mod tests {
     }
 
     #[test]
+    fn inflight_placeholder_receives_recipient_so_resume_rewrite_works() {
+        let registry = SubagentReuseRegistry::default();
+        let arguments = json!({
+            "description":"Trace azookey conversion pipeline",
+            "prompt":"Start with Vibrato boundaries.",
+            "claudex_model":"gpt-test"
+        });
+        registry.note_inflight_launch("session-a", &arguments, "tool-pending");
+        let mut request = request(
+            "session-a",
+            vec![
+                json!({
+                    "role":"assistant",
+                    "content":[{
+                        "type":"tool_use",
+                        "id":"tool-pending",
+                        "name":"Agent",
+                        "input":arguments
+                    }]
+                }),
+                json!({
+                    "role":"user",
+                    "content":[{
+                        "type":"tool_result",
+                        "tool_use_id":"tool-pending",
+                        "content":"Async agent launched successfully.\nagentId: worker-inflight"
+                    }]
+                }),
+            ],
+        );
+        registry.observe_and_restore(&mut request);
+        let mut follow_up = json!({
+            "description":"Trace azookey conversion pipeline",
+            "prompt":"Continue with the Vibrato path.",
+            "claudex_model":"gpt-test"
+        });
+        assert_eq!(
+            registry.rewrite_launch_input("session-a", &mut follow_up),
+            Some("worker-inflight".to_owned()),
+            "launch tool_result must fill the inflight empty recipient for resume/prompt-cache"
+        );
+        assert_eq!(follow_up["resume"], "worker-inflight");
+    }
+
+    #[test]
     fn failed_launch_result_releases_inflight_scope() {
         let registry = SubagentReuseRegistry::default();
         let arguments = json!({
