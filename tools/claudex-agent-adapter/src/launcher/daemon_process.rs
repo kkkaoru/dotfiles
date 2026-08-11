@@ -51,6 +51,29 @@ pub(super) fn terminate(pid: u32) {
     terminate_with_escalation(pid);
 }
 
+/// Terminate a retained `serve` daemon by pid without needing the executable
+/// path. Refuses launch TUIs and any non-adapter process (test fixtures use
+/// pid 1, etc.).
+pub(crate) fn terminate_retained_serve(pid: u32) {
+    if !is_signalable_pid(pid) || pid == process::id() || !is_serve_process(pid) {
+        return;
+    }
+    terminate_with_escalation(pid);
+}
+
+fn is_serve_process(pid: u32) -> bool {
+    process_field(pid, "command=").is_some_and(|command| is_serve_command_line(&command))
+}
+
+fn is_serve_command_line(command: &str) -> bool {
+    let mut fields = command.split_whitespace();
+    let Some(executable) = fields.next() else {
+        return false;
+    };
+    executable.rsplit('/').next() == Some("claudex-agent-adapter")
+        && fields.next() == Some("serve")
+}
+
 /// Ask an adapter to stop accepting new requests while its HTTP server drains
 /// the ones it has already accepted. Unlike [`terminate`], a handover must not
 /// signal the adapter's process group or escalate to SIGKILL: either action can

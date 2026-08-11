@@ -26,6 +26,20 @@ fn matches_live_daemon_when_spawn_path_differs() {
 }
 
 #[test]
+fn serve_command_line_detects_retained_daemons_only() {
+    assert!(is_serve_command_line(
+        "/tmp/claudex-agent-adapter serve --listen 127.0.0.1:59607"
+    ));
+    assert!(!is_serve_command_line(
+        "/tmp/claudex-agent-adapter launch --resume session"
+    ));
+    assert!(!is_serve_command_line("/sbin/launchd"));
+    // Fixture pids (1) and unrelated processes must never be terminated.
+    terminate_retained_serve(0);
+    terminate_retained_serve(1);
+}
+
+#[test]
 fn recognizes_current_and_renamed_adapter_daemons() {
     let executable = Path::new("/tmp/claudex-agent-adapter");
     assert!(command_matches(

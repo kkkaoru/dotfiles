@@ -17,6 +17,7 @@ use serde_json::json;
 
 use crate::launcher::{
     RetainedGeneration, clear_retained, forget_retained_session, read_retained,
+    terminate_retained_serve,
 };
 
 pub(super) struct RetainedProxy {
@@ -160,10 +161,16 @@ impl RetainedProxy {
     }
 
     fn clear_all_sessions(&self) {
+        let pid = self.pid.read().ok().map(|guard| *guard).unwrap_or(0);
         if let Ok(mut sessions) = self.sessions.write() {
             sessions.clear();
         }
         let _ = clear_retained(&self.path);
+        // Idle/unreachable sticky must not leave an orphan retained daemon
+        // until the next ensure() garbage-collects it.
+        if pid != 0 {
+            terminate_retained_serve(pid);
+        }
     }
 
     /// Sticky proxy only while the retained generation is reachable and still

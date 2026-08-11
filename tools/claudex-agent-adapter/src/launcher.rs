@@ -28,6 +28,7 @@ pub(crate) use live::{
     RETAINED_STATE_ENV, RetainedGeneration, SERVICE_LISTEN_ENV, clear_retained,
     forget_retained_session, load_retained_from_env, read_retained,
 };
+pub(crate) use daemon_process::terminate_retained_serve;
 mod installed_adapter;
 mod launcher_lock;
 mod launcher_logs;

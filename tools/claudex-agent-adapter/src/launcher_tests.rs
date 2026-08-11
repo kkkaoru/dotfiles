@@ -726,17 +726,9 @@ async fn ensure_running_and_hot_swap_reuse_a_current_healthy_listener() {
     let health = healthy(&cfg);
     let response = health_response(&health);
     let auth = http_response("200 OK", "{}");
-    let server = serve_responses(
-        listener,
-        vec![
-            response.clone(),
-            auth.clone(),
-            response.clone(),
-            auth.clone(),
-            response,
-            auth,
-        ],
-    );
+    let stopped = Arc::new(AtomicBool::new(false));
+    let server =
+        serve_health_and_auth_until_stopped(listener, response, auth, Arc::clone(&stopped));
     let expected = cfg.base_url();
     assert_eq!(
         ensure_running(options.clone())
@@ -756,6 +748,7 @@ async fn ensure_running_and_hot_swap_reuse_a_current_healthy_listener() {
             .expect("hot_swap wait-idle reuses the current listener"),
         expected
     );
+    stopped.store(true, Ordering::SeqCst);
     server.join().expect("public ensure server");
 }
 
