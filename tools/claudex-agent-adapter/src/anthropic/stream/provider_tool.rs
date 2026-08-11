@@ -301,4 +301,6 @@ fn truncate_for_status(text: &str, max_chars: usize) -> String {
 }
 
 #[cfg(test)]
-include!("provider_tool_tests.rs");
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[path = "provider_tool_tests.rs"]
+mod tests;

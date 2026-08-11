@@ -372,4 +372,6 @@ fn exit_code(status: std::process::ExitStatus) -> i32 {
 use health::wait_until_ready_with;
 
 #[cfg(test)]
-include!("launcher_tests.rs");
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[path = "launcher_tests.rs"]
+mod tests;

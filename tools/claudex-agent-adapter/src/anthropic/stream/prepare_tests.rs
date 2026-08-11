@@ -118,12 +118,14 @@ async fn reticket_saturated_subagent_rewrites_model_and_ticket() {
 
 #[tokio::test]
 async fn acquire_prepared_permit_retickets_subagent_after_admission_timeout() {
-    let _env = CONCURRENCY_TIMEOUT_ENV
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
     // SAFETY: serialized by CONCURRENCY_TIMEOUT_ENV for this test process.
-    unsafe {
-        std::env::set_var(CONCURRENCY_WAIT_TIMEOUT_ENV, "1");
+    {
+        let _env = CONCURRENCY_TIMEOUT_ENV
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        unsafe {
+            std::env::set_var(CONCURRENCY_WAIT_TIMEOUT_ENV, "1");
+        }
     }
 
     let bridge = qwen_cursor_bridge();
@@ -142,6 +144,9 @@ async fn acquire_prepared_permit_retickets_subagent_after_admission_timeout() {
     assert!(result.is_some());
     assert_eq!(request.model, CURSOR_AUTO);
 
+    let _env = CONCURRENCY_TIMEOUT_ENV
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     unsafe {
         std::env::remove_var(CONCURRENCY_WAIT_TIMEOUT_ENV);
     }
@@ -149,11 +154,13 @@ async fn acquire_prepared_permit_retickets_subagent_after_admission_timeout() {
 
 #[tokio::test]
 async fn acquire_prepared_permit_errors_when_timeout_has_no_sibling() {
-    let _env = CONCURRENCY_TIMEOUT_ENV
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    unsafe {
-        std::env::set_var(CONCURRENCY_WAIT_TIMEOUT_ENV, "1");
+    {
+        let _env = CONCURRENCY_TIMEOUT_ENV
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        unsafe {
+            std::env::set_var(CONCURRENCY_WAIT_TIMEOUT_ENV, "1");
+        }
     }
 
     let mut qwen = BackendRoute::new(QWEN_CLOUD, BackendKind::ConfiguredAcp);
@@ -186,6 +193,9 @@ async fn acquire_prepared_permit_errors_when_timeout_has_no_sibling() {
     };
     assert!(is_concurrency_admission_timeout(&error));
 
+    let _env = CONCURRENCY_TIMEOUT_ENV
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     unsafe {
         std::env::remove_var(CONCURRENCY_WAIT_TIMEOUT_ENV);
     }

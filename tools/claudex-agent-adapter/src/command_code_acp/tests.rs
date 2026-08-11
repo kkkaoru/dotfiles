@@ -19,6 +19,54 @@ use super::{
     progress_to_updates, prompt_text, remaining_final_message, slim_headless_prompt,
 };
 
+
+fn assert_headless_base_flags(argv: &[String]) {
+    assert_eq!(
+        argv[..8],
+        [
+            "-p",
+            "--output-format",
+            "json",
+            "--model",
+            DEFAULT_MODEL,
+            "--max-turns",
+            "12",
+            "--skip-onboarding"
+        ]
+    );
+    assert!(argv.contains(&"--yolo".to_owned()));
+    assert!(argv.contains(&"--trust".to_owned()));
+    assert!(argv.contains(&"--no-skills".to_owned()));
+    assert!(argv.contains(&"--no-session".to_owned()));
+    assert!(
+        !argv.contains(&"--effort".to_owned()),
+        "Muse Spark rejects --effort; keep it ACP-side only: {argv:?}"
+    );
+}
+
+fn assert_minimal_argv_flags(argv: &[String]) {
+    assert!(!argv.iter().any(|flag| flag == "--yolo"));
+    assert!(!argv.iter().any(|flag| flag == "--trust"));
+    assert!(!argv.iter().any(|flag| flag == "--skip-onboarding"));
+    assert!(!argv.iter().any(|flag| flag == "--effort"));
+    assert!(argv.iter().any(|flag| flag == "--no-skills"));
+    assert!(argv.iter().any(|flag| flag == "--no-session"));
+}
+
+fn assert_resume_argv(resumed: &[String]) {
+    assert!(
+        resumed
+            .windows(2)
+            .any(|window| window == ["--resume", "cc-session-1"])
+    );
+    assert!(resumed.contains(&"--no-skills".to_owned()));
+    assert!(
+        !resumed.contains(&"--no-session".to_owned()),
+        "--no-session is incompatible with --resume: {resumed:?}"
+    );
+    assert_eq!(resumed.last().map(String::as_str), Some("follow up"));
+}
+
 fn spec_with_program(program: PathBuf) -> LaunchSpec {
     LaunchSpec {
         program,
@@ -161,42 +209,12 @@ fn command_code_env_overrides_program() {
 fn argv_includes_headless_flags_and_resume() {
     let spec = spec_with_program(PathBuf::from("cmd"));
     let first = spec.argv("hello world", None);
-    assert_eq!(
-        first[..8],
-        [
-            "-p",
-            "--output-format",
-            "json",
-            "--model",
-            DEFAULT_MODEL,
-            "--max-turns",
-            "12",
-            "--skip-onboarding"
-        ]
-    );
-    assert!(first.contains(&"--yolo".to_owned()));
-    assert!(first.contains(&"--trust".to_owned()));
-    assert!(first.contains(&"--no-skills".to_owned()));
-    assert!(first.contains(&"--no-session".to_owned()));
-    assert!(
-        !first.contains(&"--effort".to_owned()),
-        "Muse Spark rejects --effort; keep it ACP-side only: {first:?}"
-    );
+    assert_headless_base_flags(&first);
     assert_eq!(first.last().map(String::as_str), Some("hello world"));
     assert!(!first.contains(&"--resume".to_owned()));
 
     let resumed = spec.argv("follow up", Some("cc-session-1"));
-    assert!(
-        resumed
-            .windows(2)
-            .any(|window| window == ["--resume", "cc-session-1"])
-    );
-    assert!(resumed.contains(&"--no-skills".to_owned()));
-    assert!(
-        !resumed.contains(&"--no-session".to_owned()),
-        "--no-session is incompatible with --resume: {resumed:?}"
-    );
-    assert_eq!(resumed.last().map(String::as_str), Some("follow up"));
+    assert_resume_argv(&resumed);
     assert!(
         spec.argv("x", Some(""))
             .windows(2)
@@ -212,27 +230,24 @@ fn argv_includes_headless_flags_and_resume() {
         trust: false,
         skip_onboarding: false,
     };
-    let argv = minimal.argv("ping", None);
-    assert!(!argv.iter().any(|flag| flag == "--yolo"));
-    assert!(!argv.iter().any(|flag| flag == "--trust"));
-    assert!(!argv.iter().any(|flag| flag == "--skip-onboarding"));
-    assert!(!argv.iter().any(|flag| flag == "--effort"));
-    assert!(argv.iter().any(|flag| flag == "--no-skills"));
-    assert!(argv.iter().any(|flag| flag == "--no-session"));
+    assert_minimal_argv_flags(&minimal.argv("ping", None));
 }
 
 #[tokio::test]
 async fn run_turn_writes_optional_command_code_trace() {
-    let _guard = ENV_LOCK.lock().expect("env lock");
-    let root = TempDir::new().expect("trace dir");
-    let trace = root.path().join("cc-trace.json");
-    let previous = std::env::var_os("CLAUDEX_COMMAND_CODE_TRACE");
-    unsafe { std::env::set_var("CLAUDEX_COMMAND_CODE_TRACE", &trace) };
-    let program = write_executable(
-        root.path(),
-        "ok",
-        "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"finalText\":\"ok\"}'\n",
-    );
+    let (previous, root, trace, program) = {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        let root = TempDir::new().expect("trace dir");
+        let trace = root.path().join("cc-trace.json");
+        let previous = std::env::var_os("CLAUDEX_COMMAND_CODE_TRACE");
+        unsafe { std::env::set_var("CLAUDEX_COMMAND_CODE_TRACE", &trace) };
+        let program = write_executable(
+            root.path(),
+            "ok",
+            "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"finalText\":\"ok\"}'\n",
+        );
+        (previous, root, trace, program)
+    };
     let outcome = run_turn_emitting(
         &spec_with_program(program.clone()),
         "traced-task",
@@ -248,23 +263,22 @@ async fn run_turn_writes_optional_command_code_trace() {
         recorded.contains("traced-task") || recorded.contains("-p"),
         "{recorded}"
     );
-    unsafe { std::env::set_var("CLAUDEX_COMMAND_CODE_TRACE", "   ") };
+    {
+        let _guard = ENV_LOCK.lock().expect("env lock");
+        unsafe { std::env::set_var("CLAUDEX_COMMAND_CODE_TRACE", "   ") };
+    }
     run_turn(&spec_with_program(program), "blank-trace", None)
         .await
         .expect("blank trace env is ignored");
+    let _guard = ENV_LOCK.lock().expect("env lock");
     match previous {
         Some(value) => unsafe { std::env::set_var("CLAUDEX_COMMAND_CODE_TRACE", value) },
         None => unsafe { std::env::remove_var("CLAUDEX_COMMAND_CODE_TRACE") },
     }
 }
 
-#[test]
-fn parses_json_events_and_plain_progress() {
-    assert_eq!(parse_stdout_line("  "), ParsedLine::Ignored);
-    assert_eq!(
-        parse_stdout_line("not json"),
-        ParsedLine::Progress(ProgressEvent::Note("not json".to_owned()))
-    );
+
+fn assert_tool_running_parse() {
     assert!(matches!(
         parse_stdout_line(r#"{"type":"event","event":{"type":"tool_running","toolCallId":"t1","toolName":"read_file","description":"A"}}"#),
         ParsedLine::Progress(ProgressEvent::ToolStarted { id, name, .. }) if id == "t1" && name == "read_file"
@@ -277,6 +291,9 @@ fn parses_json_events_and_plain_progress() {
         parse_stdout_line(r#"{"type":"event","event":{"type":"tool_running","toolCallId":"w2","toolName":"web_search","arguments":{"query":"AVITA Inc funding"}}}"#),
         ParsedLine::Progress(ProgressEvent::ToolStarted { description, .. }) if description.as_deref() == Some("AVITA Inc funding")
     ));
+}
+
+fn assert_tool_terminal_parse() {
     assert!(matches!(
         parse_stdout_line(r#"{"type":"event","event":{"type":"tool_completed","toolCallId":"t1","toolName":"read_file"}}"#),
         ParsedLine::Progress(ProgressEvent::ToolCompleted { id, name }) if id == "t1" && name == "read_file"
@@ -289,6 +306,17 @@ fn parses_json_events_and_plain_progress() {
         parse_stdout_line(r#"{"type":"event","event":{"type":"retry","message":"again"}}"#),
         ParsedLine::Progress(ProgressEvent::Note(note)) if note == "retry: again"
     ));
+}
+
+#[test]
+fn parses_json_events_and_plain_progress() {
+    assert_eq!(parse_stdout_line("  "), ParsedLine::Ignored);
+    assert_eq!(
+        parse_stdout_line("not json"),
+        ParsedLine::Progress(ProgressEvent::Note("not json".to_owned()))
+    );
+    assert_tool_running_parse();
+    assert_tool_terminal_parse();
 }
 
 #[test]
@@ -338,8 +366,8 @@ fn parses_event_aliases_and_error_shapes() {
     );
 }
 
-#[test]
-fn parses_live_command_code_ndjson_without_flooding_tui() {
+
+fn assert_live_message_and_thinking_deltas() {
     assert_eq!(
         parse_stdout_line(r#"{"type":"event","event":{"type":"run_start","sessionId":"s"}}"#),
         ParsedLine::Ignored
@@ -378,6 +406,9 @@ fn parses_live_command_code_ndjson_without_flooding_tui() {
         parse_stdout_line(r#"{"type":"event","event":{"type":"thinking_end","text":"planning"}}"#),
         ParsedLine::Ignored
     );
+}
+
+fn assert_live_status_chrome_filters() {
     assert!(matches!(
         parse_stdout_line(r#"{"type":"event","event":{"type":"thinking_delta","text":"● 検索中: AVITA"}}"#),
         ParsedLine::Progress(ProgressEvent::Status(note)) if note.contains("検索中")
@@ -386,60 +417,33 @@ fn parses_live_command_code_ndjson_without_flooding_tui() {
         parse_stdout_line(r#"{"type":"event","event":{"type":"thinking_delta"}}"#),
         ParsedLine::Ignored
     );
-    assert!(matches!(
-        parse_stdout_line(
-            r#"{"type":"event","event":{"type":"thinking_delta","text":"起動: Command Code Muse Spark"}}"#
-        ),
-        ParsedLine::Ignored
-    ));
-    assert!(matches!(
-        parse_stdout_line(
-            r#"{"type":"event","event":{"type":"thinking_delta","text":"実行中: web_search。次: ツール結果待ち"}}"#
-        ),
-        ParsedLine::Ignored
-    ));
-    assert!(matches!(
-        parse_stdout_line(
-            r#"{"type":"event","event":{"type":"thinking_delta","text":"完了: web_search。次: 続きの調査または回答"}}"#
-        ),
-        ParsedLine::Ignored
-    ));
-    assert!(matches!(
-        parse_stdout_line(
-            r#"{"type":"event","event":{"type":"thinking_delta","text":"失敗: web_search。次: 別手段"}}"#
-        ),
-        ParsedLine::Ignored
-    ));
-    assert!(matches!(
-        parse_stdout_line(
-            r#"{"type":"event","event":{"type":"thinking_delta","text":"ターン1開始"}}"#
-        ),
-        ParsedLine::Ignored
-    ));
-    assert!(matches!(
-        parse_stdout_line(
-            r#"{"type":"event","event":{"type":"thinking_delta","text":"実行中: still working"}}"#
-        ),
-        ParsedLine::Progress(ProgressEvent::Thought(_))
-    ));
-    assert!(matches!(
-        parse_stdout_line(
-            r#"{"type":"event","event":{"type":"thinking_delta","text":"完了: web_search"}}"#
-        ),
-        ParsedLine::Progress(ProgressEvent::Thought(_))
-    ));
-    assert!(matches!(
-        parse_stdout_line(
-            r#"{"type":"event","event":{"type":"thinking_delta","text":"失敗: web_search"}}"#
-        ),
-        ParsedLine::Progress(ProgressEvent::Thought(_))
-    ));
-    assert!(matches!(
-        parse_stdout_line(
-            r#"{"type":"event","event":{"type":"thinking_delta","text":"ターン1 準備中"}}"#
-        ),
-        ParsedLine::Progress(ProgressEvent::Thought(_))
-    ));
+    for ignored in [
+        "起動: Command Code Muse Spark",
+        "実行中: web_search。次: ツール結果待ち",
+        "完了: web_search。次: 続きの調査または回答",
+        "失敗: web_search。次: 別手段",
+        "ターン1開始",
+    ] {
+        assert!(matches!(
+            parse_stdout_line(&format!(
+                r#"{{"type":"event","event":{{"type":"thinking_delta","text":"{ignored}"}}}}"#
+            )),
+            ParsedLine::Ignored
+        ));
+    }
+    for kept in [
+        "実行中: still working",
+        "完了: web_search",
+        "失敗: web_search",
+        "ターン1 準備中",
+    ] {
+        assert!(matches!(
+            parse_stdout_line(&format!(
+                r#"{{"type":"event","event":{{"type":"thinking_delta","text":"{kept}"}}}}"#
+            )),
+            ParsedLine::Progress(ProgressEvent::Thought(_))
+        ));
+    }
     assert!(matches!(
         parse_stdout_line(r#"{"type":"event","event":{"type":"thinking_delta","text":"▶ searching"}}"#),
         ParsedLine::Progress(ProgressEvent::Status(note)) if note.starts_with('▶')
@@ -452,6 +456,9 @@ fn parses_live_command_code_ndjson_without_flooding_tui() {
         parse_stdout_line(r#"{"type":"event","event":{"type":"thinking_delta","text":"✗ failed"}}"#),
         ParsedLine::Progress(ProgressEvent::Status(note)) if note.starts_with('✗')
     ));
+}
+
+fn assert_live_ignored_lifecycle_events() {
     assert_eq!(
         parse_stdout_line(r#"{"type":"event","event":{"type":"api_retry"}}"#),
         ParsedLine::Ignored
@@ -470,6 +477,13 @@ fn parses_live_command_code_ndjson_without_flooding_tui() {
         ),
         ParsedLine::Ignored
     );
+}
+
+#[test]
+fn parses_live_command_code_ndjson_without_flooding_tui() {
+    assert_live_message_and_thinking_deltas();
+    assert_live_status_chrome_filters();
+    assert_live_ignored_lifecycle_events();
     let ParsedLine::Result(result) = parse_stdout_line(
         r#"{"type":"result","subtype":"success","sessionId":"166f0397-5c8a-4ac0-bb7c-8e7f3287227f","stopReason":"end_turn","finalText":"PONG"}"#,
     ) else {
@@ -620,8 +634,8 @@ fn tool_raw_input_uses_shared_provider_argument_keys() {
     assert_eq!(tool_raw_input("read_file", Some("   ")), json!({}));
 }
 
-#[test]
-fn progress_updates_include_thought_and_tool_chrome() {
+
+fn assert_tool_started_chrome() {
     let started = progress_to_updates(&ProgressEvent::Started {
         model: DEFAULT_MODEL.to_owned(),
         effort: None,
@@ -650,6 +664,9 @@ fn progress_updates_include_thought_and_tool_chrome() {
         first_tool_call(&searching).raw_input.as_ref(),
         Some(&json!({"query": "AVITA株式会社"}))
     );
+}
+
+fn assert_tool_terminal_chrome() {
     let done = progress_to_updates(&ProgressEvent::ToolCompleted {
         id: "t1".to_owned(),
         name: "read_file".to_owned(),
@@ -681,6 +698,9 @@ fn progress_updates_include_thought_and_tool_chrome() {
         error: None,
     });
     assert_eq!(first_tool_update(&failed_bare).fields.raw_output, None);
+}
+
+fn assert_message_thought_status_chrome() {
     let note = progress_to_updates(&ProgressEvent::Note("retry".to_owned()));
     assert!(note.is_empty());
     let message = progress_to_updates(&ProgressEvent::Message("AVITA report".to_owned()));
@@ -727,6 +747,13 @@ fn progress_updates_include_thought_and_tool_chrome() {
             .iter()
             .any(|update| matches!(update, acp::SessionUpdate::ToolCallUpdate(_)))
     );
+}
+
+#[test]
+fn progress_updates_include_thought_and_tool_chrome() {
+    assert_tool_started_chrome();
+    assert_tool_terminal_chrome();
+    assert_message_thought_status_chrome();
 }
 
 #[test]
@@ -998,8 +1025,8 @@ fn coalesces_on_newlines_and_ascii_punctuation() {
     assert_eq!(remaining_final_message("hello ", "hello"), None);
 }
 
-#[test]
-fn events_cover_canned_variants_result_shapes_and_previews() {
+
+fn assert_thought_and_canned_status_coverage() {
     assert!(
         rendered_thoughts(&progress_to_updates(&ProgressEvent::Thought(
             "plain thinking".to_owned()
@@ -1034,6 +1061,9 @@ fn events_cover_canned_variants_result_shapes_and_previews() {
             "{canned}"
         );
     }
+}
+
+fn assert_result_shape_and_preview_coverage() {
     let ok = super::events::TurnResult {
         subtype: "success".to_owned(),
         session_id: None,
@@ -1083,6 +1113,12 @@ fn events_cover_canned_variants_result_shapes_and_previews() {
         panic!("expected numeric error");
     };
     assert_eq!(number_error.error.as_deref(), Some("12"));
+}
+
+#[test]
+fn events_cover_canned_variants_result_shapes_and_previews() {
+    assert_thought_and_canned_status_coverage();
+    assert_result_shape_and_preview_coverage();
 }
 
 #[tokio::test]
@@ -1136,10 +1172,9 @@ async fn run_turn_parses_mock_cmd_success_and_resume_argv() {
     assert!(recorded.contains(DEFAULT_MODEL));
 }
 
-#[tokio::test]
-async fn run_turn_maps_auth_and_max_turn_exit_codes() {
-    let root = TempDir::new().expect("exit mock dir");
-    let auth = write_executable(root.path(), "auth", "#!/bin/sh\nexit 3\n");
+
+async fn assert_exit_and_stderr_mappings(root: &Path) {
+    let auth = write_executable(root, "auth", "#!/bin/sh\nexit 3\n");
     let outcome = run_turn(&spec_with_program(auth), "hi", None)
         .await
         .expect("auth failure still yields outcome");
@@ -1152,7 +1187,7 @@ async fn run_turn_maps_auth_and_max_turn_exit_codes() {
             .is_some_and(|error| error.contains("not authenticated"))
     );
 
-    let max_turns = write_executable(root.path(), "max", "#!/bin/sh\nexit 8\n");
+    let max_turns = write_executable(root, "max", "#!/bin/sh\nexit 8\n");
     let outcome = run_turn(&spec_with_program(max_turns), "hi", None)
         .await
         .expect("max-turns outcome");
@@ -1164,7 +1199,7 @@ async fn run_turn_maps_auth_and_max_turn_exit_codes() {
             .is_some_and(|error| error.contains("max-turns"))
     );
 
-    let credits = write_executable(root.path(), "credits", "#!/bin/sh\nexit 10\n");
+    let credits = write_executable(root, "credits", "#!/bin/sh\nexit 10\n");
     let outcome = run_turn(&spec_with_program(credits), "hi", None)
         .await
         .expect("credits outcome");
@@ -1176,11 +1211,7 @@ async fn run_turn_maps_auth_and_max_turn_exit_codes() {
             .is_some_and(|error| error.contains("insufficient credits"))
     );
 
-    let unsupported_effort = write_executable(
-        root.path(),
-        "effort",
-        "#!/bin/sh\necho 'Muse Spark 1.2 Contributor has no adjustable reasoning effort.' >&2\nexit 1\n",
-    );
+    let unsupported_effort = write_executable(root, "effort", "#!/bin/sh\necho 'Muse Spark 1.2 Contributor has no adjustable reasoning effort.' >&2\nexit 1\n");
     let outcome = run_turn(&spec_with_program(unsupported_effort), "hi", None)
         .await
         .expect("stderr fallback");
@@ -1192,17 +1223,13 @@ async fn run_turn_maps_auth_and_max_turn_exit_codes() {
             .is_some_and(|error| error.contains("no adjustable reasoning effort"))
     );
 
-    let crlf_stderr = write_executable(
-        root.path(),
-        "crlf-stderr",
-        "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"finalText\":\"STDERR_OK\"}'\nprintf 'warn\\r\\nmore\\n' >&2\nexit 0\n",
-    );
+    let crlf_stderr = write_executable(root, "crlf-stderr", "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"finalText\":\"STDERR_OK\"}'\nprintf 'warn\\r\\nmore\\n' >&2\nexit 0\n");
     let outcome = run_turn(&spec_with_program(crlf_stderr), "hi", None)
         .await
         .expect("stderr crlf is drained with stdout");
     assert_eq!(outcome.result.final_text, "STDERR_OK");
 
-    let unknown = write_executable(root.path(), "unknown", "#!/bin/sh\nexit 42\n");
+    let unknown = write_executable(root, "unknown", "#!/bin/sh\nexit 42\n");
     let outcome = run_turn(&spec_with_program(unknown), "hi", None)
         .await
         .expect("unknown exit");
@@ -1211,29 +1238,23 @@ async fn run_turn_maps_auth_and_max_turn_exit_codes() {
             .contains("without a JSON result")
             && error.contains("exit 42"))
     );
+}
 
-    let silent_ok = write_executable(root.path(), "silent", "#!/bin/sh\nexit 0\n");
+async fn assert_stream_edge_case_mappings(root: &Path) {
+    let silent_ok = write_executable(root, "silent", "#!/bin/sh\nexit 0\n");
     let outcome = run_turn(&spec_with_program(silent_ok), "hi", None)
         .await
         .expect("silent success");
     assert_eq!(outcome.result.subtype, "success");
     assert!(outcome.result.final_text.is_empty());
 
-    let ignored = write_executable(
-        root.path(),
-        "ignored",
-        "#!/bin/sh\nprintf '\\n \\n'\nexit 0\n",
-    );
+    let ignored = write_executable(root, "ignored", "#!/bin/sh\nprintf '\\n \\n'\nexit 0\n");
     let outcome = run_turn(&spec_with_program(ignored), "hi", None)
         .await
         .expect("ignored blank lines");
     assert_eq!(outcome.result.subtype, "success");
 
-    let invalid_utf8 = write_executable(
-        root.path(),
-        "invalid-utf8",
-        "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"event\",\"event\":{\"type\":\"tool_running\",\"toolCallId\":\"t1\",\"toolName\":\"web_fetch\"}}'\nprintf '\\377\\n'\nprintf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"sessionId\":\"cc-utf8\",\"stopReason\":\"end_turn\",\"finalText\":\"AFTER_INVALID_UTF8\"}'\n",
-    );
+    let invalid_utf8 = write_executable(root, "invalid-utf8", "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"event\",\"event\":{\"type\":\"tool_running\",\"toolCallId\":\"t1\",\"toolName\":\"web_fetch\"}}'\nprintf '\\377\\n'\nprintf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"sessionId\":\"cc-utf8\",\"stopReason\":\"end_turn\",\"finalText\":\"AFTER_INVALID_UTF8\"}'\n");
     let outcome = run_turn(&spec_with_program(invalid_utf8), "hi", None)
         .await
         .expect("invalid utf8 must not fail the ACP turn");
@@ -1242,21 +1263,13 @@ async fn run_turn_maps_auth_and_max_turn_exit_codes() {
         |event| matches!(event, ProgressEvent::ToolStarted { name, .. } if name == "web_fetch")
     ));
 
-    let partial_eof = write_executable(
-        root.path(),
-        "partial-eof",
-        "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"sessionId\":\"cc-partial\",\"stopReason\":\"end_turn\",\"finalText\":\"RESULT_THEN_PARTIAL\"}'\nprintf '\\343'\nexit 0\n",
-    );
+    let partial_eof = write_executable(root, "partial-eof", "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"result\",\"subtype\":\"success\",\"sessionId\":\"cc-partial\",\"stopReason\":\"end_turn\",\"finalText\":\"RESULT_THEN_PARTIAL\"}'\nprintf '\\343'\nexit 0\n");
     let outcome = run_turn(&spec_with_program(partial_eof), "hi", None)
         .await
         .expect("trailing incomplete utf8 must keep the JSON result");
     assert_eq!(outcome.result.final_text, "RESULT_THEN_PARTIAL");
 
-    let crash_utf8 = write_executable(
-        root.path(),
-        "crash-utf8",
-        "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"event\",\"event\":{\"type\":\"tool_running\",\"toolCallId\":\"t1\",\"toolName\":\"web_search\"}}'\nprintf '\\377'\nexit 1\n",
-    );
+    let crash_utf8 = write_executable(root, "crash-utf8", "#!/bin/sh\nprintf '%s\\n' '{\"type\":\"event\",\"event\":{\"type\":\"tool_running\",\"toolCallId\":\"t1\",\"toolName\":\"web_search\"}}'\nprintf '\\377'\nexit 1\n");
     let outcome = run_turn(&spec_with_program(crash_utf8), "hi", None)
         .await
         .expect("mid-stream invalid utf8 still yields an outcome");
@@ -1268,7 +1281,7 @@ async fn run_turn_maps_auth_and_max_turn_exit_codes() {
         |event| matches!(event, ProgressEvent::ToolStarted { name, .. } if name == "web_search")
     ));
 
-    let missing = spec_with_program(root.path().join("missing-cmd"));
+    let missing = spec_with_program(root.join("missing-cmd"));
     assert!(
         run_turn(&missing, "hi", None)
             .await
@@ -1276,6 +1289,13 @@ async fn run_turn_maps_auth_and_max_turn_exit_codes() {
             .to_string()
             .contains("failed to spawn")
     );
+}
+
+#[tokio::test]
+async fn run_turn_maps_auth_and_max_turn_exit_codes() {
+    let root = TempDir::new().expect("exit mock dir");
+    assert_exit_and_stderr_mappings(root.path()).await;
+    assert_stream_edge_case_mappings(root.path()).await;
 }
 
 #[test]

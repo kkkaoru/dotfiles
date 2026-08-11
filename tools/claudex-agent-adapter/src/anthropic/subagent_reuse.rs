@@ -396,4 +396,5 @@ fn set_limit_metadata(request: &mut MessagesRequest, reached: bool) {
 }
 
 #[cfg(test)]
-include!("subagent_reuse_tests.rs");
+#[path = "subagent_reuse_tests.rs"]
+mod tests;

@@ -11,6 +11,40 @@ use super::super::{AdapterOptions, LOCAL_TOKEN, ServiceConfig};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
+fn http_response(status_line: &str, body: &str) -> String {
+    format!(
+        "{status_line}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    )
+}
+
+fn http_ok(body: &str) -> String {
+    http_response("HTTP/1.1 200 OK", body)
+}
+
+async fn accept_and_write(listener: &TcpListener, response: &str) {
+    let Ok((mut stream, _)) = listener.accept().await else {
+        return;
+    };
+    let mut request = [0; 4096];
+    let _ = stream.read(&mut request).await;
+    let _ = stream.write_all(response.as_bytes()).await;
+}
+
+async fn wait_until_listen_free(listen: SocketAddr) -> bool {
+    loop {
+        if listen_is_free(listen) {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+async fn serve_http_once(listener: TcpListener, response: String) {
+    accept_and_write(&listener, &response).await;
+}
+
+
 fn health(listener_handover: bool, pid: Option<u32>) -> Health {
     Health {
         status: "ok".to_owned(),
@@ -261,14 +295,7 @@ async fn health_server(
     let address = listener.local_addr().expect("health address");
     let task = tokio::spawn(async move {
         for body in [canonical, retained] {
-            let Ok((mut stream, _)) = listener.accept().await else { return };
-            let mut request = [0; 1024];
-            let _ = stream.read(&mut request).await;
-            let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                body.len()
-            );
-            let _ = stream.write_all(response.as_bytes()).await;
+            accept_and_write(&listener, &http_ok(&body)).await;
         }
     });
     (address, task)
@@ -337,17 +364,10 @@ async fn try_canonical_reports_retained_state_write_failure() {
         .await
         .expect("canonical listen");
     let listen = listener.local_addr().expect("canonical address");
-    tokio::spawn(async move {
-        let Ok((mut stream, _)) = listener.accept().await else { return };
-        let mut request = [0; 4096];
-        let _ = stream.read(&mut request).await;
-        let body = r#"{"listen":"127.0.0.1:65100"}"#;
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            body.len()
-        );
-        let _ = stream.write_all(response.as_bytes()).await;
-    });
+    tokio::spawn(serve_http_once(
+        listener,
+        http_ok(r#"{"listen":"127.0.0.1:65100"}"#),
+    ));
     let config = config_at(listen, root.path(), dummy.clone());
     let _fail = live::FailRetainedWriteAfter::arm(1);
     let error = try_canonical(&reqwest::Client::new(), &config, &health(true, Some(12)))
@@ -366,19 +386,10 @@ async fn request_rebind_parses_success_and_skips_unreachable_listeners() {
         .await
         .expect("rebind listener");
     let listen = listener.local_addr().expect("rebind address");
-    tokio::spawn(async move {
-        let Ok((mut stream, _)) = listener.accept().await else {
-            return;
-        };
-        let mut buf = vec![0; 4096];
-        let _ = stream.read(&mut buf).await;
-        let body = r#"{"listen":"127.0.0.1:65100"}"#;
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            body.len()
-        );
-        let _ = stream.write_all(response.as_bytes()).await;
-    });
+    tokio::spawn(serve_http_once(
+        listener,
+        http_ok(r#"{"listen":"127.0.0.1:65100"}"#),
+    ));
     let root = tempfile::tempdir().expect("rebind fixture");
     let config = config_at(listen, root.path(), PathBuf::from("/tmp/adapter"));
     let rebound = request_ephemeral_rebind(&reqwest::Client::new(), &config)
@@ -405,15 +416,10 @@ async fn request_rebind_skips_non_success_responses() {
         .await
         .expect("rebind listener");
     let listen = listener.local_addr().expect("rebind address");
-    tokio::spawn(async move {
-        let Ok((mut stream, _)) = listener.accept().await else {
-            return;
-        };
-        let mut buf = vec![0; 4096];
-        let _ = stream.read(&mut buf).await;
-        let response = "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}";
-        let _ = stream.write_all(response.as_bytes()).await;
-    });
+    tokio::spawn(serve_http_once(
+        listener,
+        "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}".to_owned(),
+    ));
     let root = tempfile::tempdir().expect("rebind fixture");
     let rejected = request_ephemeral_rebind(
         &reqwest::Client::new(),
@@ -431,16 +437,9 @@ async fn listen_is_free_matches_whether_the_port_can_be_bound() {
     assert!(!listen_is_free(listen));
     drop(listener);
     // Parallel llvm-cov suites can briefly keep the port busy after drop.
-    let became_free = tokio::time::timeout(Duration::from_secs(2), async {
-        loop {
-            if listen_is_free(listen) {
-                return true;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .unwrap_or(false);
+    let became_free = tokio::time::timeout(Duration::from_secs(2), wait_until_listen_free(listen))
+        .await
+        .unwrap_or(false);
     assert!(became_free, "port should become free after the listener drops");
 }
 
@@ -547,15 +546,10 @@ async fn try_canonical_keeps_the_old_listener_when_rebind_is_rejected() {
         .await
         .expect("canonical listen");
     let listen = listener.local_addr().expect("canonical address");
-    tokio::spawn(async move {
-        let Ok((mut stream, _)) = listener.accept().await else {
-            return;
-        };
-        let mut buf = vec![0; 4096];
-        let _ = stream.read(&mut buf).await;
-        let response = "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}";
-        let _ = stream.write_all(response.as_bytes()).await;
-    });
+    tokio::spawn(serve_http_once(
+        listener,
+        "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}".to_owned(),
+    ));
     let config = config_at(listen, root.path(), dummy.clone());
     let kept = try_canonical(&reqwest::Client::new(), &config, &health(true, Some(12)))
         .await
@@ -577,19 +571,8 @@ async fn try_canonical_restarts_on_canonical_after_warm_bind_misses() {
         let spare = TcpListener::bind("127.0.0.1:0").await.expect("ephemeral");
         spare.local_addr().expect("ephemeral address")
     };
-    tokio::spawn(async move {
-        let Ok((mut stream, _)) = listener.accept().await else {
-            return;
-        };
-        let mut buf = vec![0; 4096];
-        let _ = stream.read(&mut buf).await;
-        let body = format!(r#"{{"listen":"{ephemeral}"}}"#);
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            body.len()
-        );
-        let _ = stream.write_all(response.as_bytes()).await;
-    });
+    let body = format!(r#"{{"listen":"{ephemeral}"}}"#);
+    tokio::spawn(serve_http_once(listener, http_ok(&body)));
     let config = config_at(listen, root.path(), dummy.clone());
     let promoted = try_canonical(&reqwest::Client::new(), &config, &health(true, Some(12)))
         .await
@@ -630,19 +613,8 @@ async fn try_canonical_bails_when_restart_on_canonical_never_readies() {
         let spare = TcpListener::bind("127.0.0.1:0").await.expect("ephemeral");
         spare.local_addr().expect("ephemeral address")
     };
-    tokio::spawn(async move {
-        let Ok((mut stream, _)) = listener.accept().await else {
-            return;
-        };
-        let mut buf = vec![0; 4096];
-        let _ = stream.read(&mut buf).await;
-        let body = format!(r#"{{"listen":"{ephemeral}"}}"#);
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            body.len()
-        );
-        let _ = stream.write_all(response.as_bytes()).await;
-    });
+    let body = format!(r#"{{"listen":"{ephemeral}"}}"#);
+    tokio::spawn(serve_http_once(listener, http_ok(&body)));
     let config = config_at(listen, root.path(), wrapper);
     let error = try_canonical(&reqwest::Client::new(), &config, &health(true, Some(12)))
         .await

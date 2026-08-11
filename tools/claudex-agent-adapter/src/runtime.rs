@@ -391,10 +391,9 @@ async fn serve_on_listener(
 fn configured_token() -> Option<String> {
     nonempty_token(std::env::var("ANTHROPIC_AUTH_TOKEN").ok())
 }
-
 fn nonempty_token(token: Option<String>) -> Option<String> {
     token.filter(|token| !token.is_empty())
 }
-
 #[cfg(test)]
-include!("runtime_tests.rs");
+#[path = "runtime_tests.rs"]
+mod tests;

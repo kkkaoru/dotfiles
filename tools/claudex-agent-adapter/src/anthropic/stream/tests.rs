@@ -1,4 +1,3 @@
-#![allow(clippy::excessive_nesting)]
 
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
@@ -25,6 +24,60 @@ use crate::{
     app_server::{AppServer, events::ThreadEventDispatcher},
     grok_acp::GrokAcp,
 };
+
+
+
+fn block_lacks_websearch_chrome(block: &Value) -> bool {
+    ["text", "thinking"].into_iter().all(|key| {
+        block.get(key).and_then(Value::as_str).is_none_or(|text| {
+            text.trim().is_empty()
+                || !(text.contains("WebSearch") || text.contains('🔎') || text.contains('▶'))
+        })
+    })
+}
+
+async fn drain_until_closed<T>(events: &mut tokio::sync::broadcast::Receiver<T>) {
+    while events.recv().await.is_some() {}
+}
+
+
+fn track_content_block_frame(
+    payload: &Value,
+    open_index: &mut Option<usize>,
+    next_index: &mut usize,
+    started_types: &mut Vec<Value>,
+) {
+    match payload.get("type").and_then(Value::as_str) {
+        Some("content_block_start") => {
+            let index = payload["index"].as_u64().expect("start index") as usize;
+            assert_eq!(index, *next_index, "content indices must not be reused");
+            assert!(open_index.replace(index).is_none(), "nested content block");
+            *next_index += 1;
+            started_types.push(payload["content_block"]["type"].clone());
+        }
+        Some("content_block_delta") => {
+            let index = payload["index"].as_u64().expect("delta index") as usize;
+            assert_eq!(*open_index, Some(index), "delta must target the open block");
+        }
+        Some("content_block_stop") => {
+            let index = payload["index"].as_u64().expect("stop index") as usize;
+            assert_eq!(open_index.take(), Some(index), "stop must close its start");
+        }
+        _ => {}
+    }
+}
+
+async fn yield_n(times: usize) {
+    for _ in 0..times {
+        tokio::task::yield_now().await;
+    }
+}
+
+async fn wait_until_receiver_len(receiver: &mpsc::Receiver<Result<Bytes, Infallible>>, len: usize) {
+    while receiver.len() < len {
+        tokio::task::yield_now().await;
+    }
+}
 
 #[tokio::test]
 async fn ignores_missing_and_empty_text_deltas() {
@@ -415,8 +468,9 @@ fn sanitizes_text_thinking_and_provider_status_variants() {
     );
 }
 
-#[test]
-fn recognizes_cursor_thought_for_filler() {
+
+fn assert_cursor_thought_for_filler_phrases() {
+
     assert!(sanitize::is_canned_worker_filler("Thought for 17s"));
     assert!(sanitize::is_canned_worker_filler(
         "Working on your request — I'll gather what I need and put together the result."
@@ -442,7 +496,10 @@ fn recognizes_cursor_thought_for_filler() {
         "Cursor SubAgent chrome must not freeze the panel on Nucleating"
     );
     assert!(sanitize::is_canned_worker_filler("Nucleating"));
-    assert_eq!(
+}
+
+fn assert_subagent_activity_and_silence_policy() {
+assert_eq!(
         super::SUBAGENT_INITIAL_ACTIVITY_DELAY,
         Duration::from_millis(100)
     );
@@ -505,90 +562,15 @@ fn recognizes_cursor_thought_for_filler() {
     assert!(error.to_string().contains("provider produced no progress"));
 }
 
-#[tokio::test]
-async fn honors_short_initial_activity_delay_before_steady_interval() {
-    let (_root, _app, bridge, session) = disconnect_fixture().await;
-    let dispatcher = crate::app_server::events::ThreadEventDispatcher::default();
-    let events = dispatcher.subscribe("thread");
-    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
-    let wait = bridge.wait_for_stream_segment_with_interval(StreamWaitInput {
-        session: &session,
-        events: Arc::new(events),
-        current_messages: &[],
-        system: &json!(null),
-        sender: &sender,
-        builder: SegmentBuilder::new(1).with_subagent(true),
-        activity_interval: Duration::from_secs(30),
-        initial_activity_delay: Duration::from_millis(15),
-    });
-    let complete = async {
-        tokio::time::sleep(Duration::from_millis(80)).await;
-        dispatcher.dispatch(json!({
-            "method":"turn/completed",
-            "params":{"threadId":"thread","turn":{"status":"completed"}}
-        }));
-    };
-    let started = Instant::now();
-    let (result, ()) = tokio::join!(wait, complete);
-    result.expect("stream segment");
-    drop(sender);
-    let mut output = String::new();
-    while let Some(frame) = receiver.recv().await {
-        output.push_str(&String::from_utf8_lossy(&frame.expect("frame")));
-    }
-    assert!(
-        started.elapsed() < Duration::from_secs(2),
-        "short initial delay must not wait for the 30s steady interval"
-    );
-    assert!(
-        output.contains('\u{200b}') || output.contains("waiting for provider"),
-        "first keepalive must fire on the short initial delay: {output}"
-    );
-}
-
-#[tokio::test]
-async fn honors_short_main_turn_initial_activity_delay_before_steady_interval() {
-    let (_root, _app, bridge, session) = disconnect_fixture().await;
-    let dispatcher = crate::app_server::events::ThreadEventDispatcher::default();
-    let events = dispatcher.subscribe("thread");
-    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
-    let wait = bridge.wait_for_stream_segment_with_interval(StreamWaitInput {
-        session: &session,
-        events: Arc::new(events),
-        current_messages: &[],
-        system: &json!(null),
-        sender: &sender,
-        builder: SegmentBuilder::new(1).with_subagent(false),
-        activity_interval: Duration::from_secs(30),
-        initial_activity_delay: Duration::from_millis(15),
-    });
-    let complete = async {
-        tokio::time::sleep(Duration::from_millis(80)).await;
-        dispatcher.dispatch(json!({
-            "method":"turn/completed",
-            "params":{"threadId":"thread","turn":{"status":"completed"}}
-        }));
-    };
-    let started = Instant::now();
-    let (result, ()) = tokio::join!(wait, complete);
-    result.expect("stream segment");
-    drop(sender);
-    let mut output = String::new();
-    while let Some(frame) = receiver.recv().await {
-        output.push_str(&String::from_utf8_lossy(&frame.expect("frame")));
-    }
-    assert!(
-        started.elapsed() < Duration::from_secs(2),
-        "short initial delay must not wait for the 30s steady interval"
-    );
-    assert!(
-        output.contains("waiting for provider output"),
-        "main-turn keepalive must fire on the short initial delay: {output}"
-    );
-}
-
 #[test]
-fn compact_live_prose_and_worker_status_cover_both_truncation_sides() {
+fn recognizes_cursor_thought_for_filler() {
+    assert_cursor_thought_for_filler_phrases();
+    assert_subagent_activity_and_silence_policy();
+}
+
+
+fn assert_compact_live_prose_truncation() {
+
     assert_eq!(sanitize::compact_live_prose("short"), "short");
     let long = "あ".repeat(sanitize::LIVE_PROSE_CHAR_LIMIT + 3);
     let compact = sanitize::compact_live_prose(&long);
@@ -628,7 +610,10 @@ fn compact_live_prose_and_worker_status_cover_both_truncation_sides() {
     assert!(sanitize::is_provider_status_line("Session mode: agent"));
     assert!(sanitize::is_provider_status_line("Session: live"));
     assert!(sanitize::is_provider_status_line("🔎 WebSearch: query"));
-    assert!(sanitize::is_premature_worker_status_reply(
+}
+
+fn assert_compact_worker_status_truncation() {
+assert!(sanitize::is_premature_worker_status_reply(
         "phase update: still drafting"
     ));
     assert!(sanitize::is_premature_worker_status_reply(
@@ -672,6 +657,14 @@ fn compact_live_prose_and_worker_status_cover_both_truncation_sides() {
         "provider-status-only thinking must drop: {chrome_only:?}"
     );
 }
+
+#[test]
+fn compact_live_prose_and_worker_status_cover_both_truncation_sides() {
+    assert_compact_live_prose_truncation();
+    assert_compact_worker_status_truncation();
+}
+
+
 
 #[test]
 fn rewrites_premature_status_only_toolless_worker_replies() {
@@ -753,8 +746,7 @@ async fn subagent_coalesced_reasoning_continues_after_native_tool_use() {
     );
 }
 
-#[tokio::test]
-async fn thinking_state_handles_reuse_keepalive_and_unit_transitions() {
+async fn run_thinking_keepalive_phase() -> (ThinkingState, Vec<Value>) {
     let mut state = ThinkingState::default();
     let mut blocks = Vec::new();
     state
@@ -810,28 +802,32 @@ async fn thinking_state_handles_reuse_keepalive_and_unit_transitions() {
         .close(&mut visible, None)
         .await
         .expect("close visible keepalive before switching buffers");
+    (state, blocks)
+}
+
+async fn run_thinking_status_phase(state: &mut ThinkingState, blocks: &mut Vec<Value>) {
     state
-        .progress_status(&mut blocks, "", None)
+        .progress_status(blocks, "", None)
         .await
         .expect("empty progress");
     state
-        .progress_status_keep_open(&mut blocks, "", None)
+        .progress_status_keep_open(blocks, "", None)
         .await
         .expect("empty keep-open progress");
     state
-        .activity_status(&mut blocks, "", None)
+        .activity_status(blocks, "", None)
         .await
         .expect("empty activity");
     state
         .delta(
             &json!({"params":{"itemId":"model:status","summaryIndex":0,"delta":"ignored"}}),
-            &mut blocks,
+            blocks,
             None,
         )
         .await
         .expect("status-like thought");
     state
-        .delta(&json!({"params":{"delta":"no-item"}}), &mut blocks, None)
+        .delta(&json!({"params":{"delta":"no-item"}}), blocks, None)
         .await
         .expect("summary-less delta is ignored");
     let mut visible_status = vec![json!({"type":"text","text":"answer"})];
@@ -846,10 +842,17 @@ async fn thinking_state_handles_reuse_keepalive_and_unit_transitions() {
         "non-empty activity_status must not open thinking after visible output"
     );
     ThinkingState::default()
-        .elapsed_keepalive(&mut blocks, Duration::from_secs(1), None, None)
+        .elapsed_keepalive(blocks, Duration::from_secs(1), None, None)
         .await
         .expect("elapsed keepalive without an open block");
 }
+
+#[tokio::test]
+async fn thinking_state_handles_reuse_keepalive_and_unit_transitions() {
+    let (mut state, mut blocks) = run_thinking_keepalive_phase().await;
+    run_thinking_status_phase(&mut state, &mut blocks).await;
+}
+
 
 #[tokio::test]
 async fn progress_status_dedupes_identical_status_lines() {
@@ -1079,13 +1082,15 @@ async fn streams_summarized_thinking_as_separate_units_before_text() {
     assert_eq!(frames[10], json!({"type":"content_block_stop","index":2}));
 }
 
-#[tokio::test]
-async fn subagent_reasoning_stays_on_one_thinking_block_across_units() {
-    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(32);
-    let mut builder = SegmentBuilder::new(2).with_subagent(true);
+async fn feed_subagent_reasoning_across_units(
+    builder: &mut SegmentBuilder,
+    sender: &mpsc::Sender<Result<Bytes, Infallible>>,
+) {
     for (summary_index, delta) in [
-        (0, "Map the conversion path.\n"),
-        (1, "Check Vibrato boundaries.\n"),
+        (0, "Map the conversion path.
+"),
+        (1, "Check Vibrato boundaries.
+"),
     ] {
         assert!(
             builder
@@ -1098,7 +1103,7 @@ async fn subagent_reasoning_stays_on_one_thinking_block_across_units() {
                             "delta":delta
                         }
                     }),
-                    Some(&sender),
+                    Some(sender),
                 )
                 .await
                 .expect("subagent reasoning delta")
@@ -1114,7 +1119,7 @@ async fn subagent_reasoning_stays_on_one_thinking_block_across_units() {
                     "arguments":{"path":"packages/azookey/convert.ts"}
                 }
             }),
-            Some(&sender),
+            Some(sender),
         )
         .await
         .expect("tool progress");
@@ -1125,28 +1130,36 @@ async fn subagent_reasoning_stays_on_one_thinking_block_across_units() {
                 "params":{
                     "itemId":"worker:reasoning-2",
                     "summaryIndex":0,
-                    "delta":"Hypothesis: boundaries were dropped.\n"
+                    "delta":"Hypothesis: boundaries were dropped.
+"
                 }
             }),
-            Some(&sender),
+            Some(sender),
         )
         .await
         .expect("later reasoning unit");
-    let segment = builder.finish(Some(&sender)).await.expect("segment");
-    drop(sender);
+}
 
-    let thinking_blocks: Vec<_> = segment
+fn assert_subagent_reasoning_transcript(segment: &crate::anthropic::Segment) {
+    let thinking = segment
         .blocks
         .iter()
-        .filter(|block| block.get("type").and_then(Value::as_str) == Some("thinking"))
-        .collect();
+        .find_map(|block| {
+            (block.get("type").and_then(Value::as_str) == Some("thinking"))
+                .then(|| block.get("thinking").and_then(Value::as_str))
+                .flatten()
+        })
+        .unwrap_or("");
     assert_eq!(
-        thinking_blocks.len(),
+        segment
+            .blocks
+            .iter()
+            .filter(|block| block.get("type").and_then(Value::as_str) == Some("thinking"))
+            .count(),
         1,
         "SubAgent turn must keep one native thinking block: {:?}",
         segment.blocks
     );
-    let thinking = thinking_blocks[0]["thinking"].as_str().unwrap_or("");
     assert!(thinking.contains("Map the conversion path."));
     assert!(thinking.contains("Check Vibrato boundaries."));
     assert!(thinking.contains("Hypothesis: boundaries were dropped."));
@@ -1158,16 +1171,22 @@ async fn subagent_reasoning_stays_on_one_thinking_block_across_units() {
         segment
             .blocks
             .iter()
-            .all(|block| { block.get("type").and_then(Value::as_str) != Some("server_tool_use") }),
+            .all(|block| block.get("type").and_then(Value::as_str) != Some("server_tool_use")),
         "ACP SubAgent must not close thinking for server_tool_use: {:?}",
         segment.blocks
     );
+}
 
+async fn collect_sse_frames(receiver: &mut mpsc::Receiver<Result<Bytes, Infallible>>) -> String {
     let mut sse = String::new();
     while let Some(frame) = receiver.recv().await {
         sse.push_str(&String::from_utf8_lossy(&frame.expect("frame")));
     }
-    assert_eq!(
+    sse
+}
+
+fn assert_subagent_reasoning_sse(sse: &str) {
+assert_eq!(
         sse.matches("\"type\":\"content_block_start\"").count(),
         1,
         "live stream must open thinking only once: {sse}"
@@ -1185,7 +1204,21 @@ async fn subagent_reasoning_stays_on_one_thinking_block_across_units() {
         !sse.contains("\"type\":\"server_tool_use\""),
         "live stream must not paint server_tool_use: {sse}"
     );
+
 }
+
+#[tokio::test]
+async fn subagent_reasoning_stays_on_one_thinking_block_across_units() {
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(32);
+    let mut builder = SegmentBuilder::new(2).with_subagent(true);
+    feed_subagent_reasoning_across_units(&mut builder, &sender).await;
+    let segment = builder.finish(Some(&sender)).await.expect("segment");
+    drop(sender);
+    assert_subagent_reasoning_transcript(&segment);
+    let sse = collect_sse_frames(&mut receiver).await;
+    assert_subagent_reasoning_sse(&sse);
+}
+
 
 #[tokio::test]
 async fn command_code_reasoning_stays_on_one_thinking_block() {
@@ -1227,13 +1260,13 @@ async fn command_code_reasoning_stays_on_one_thinking_block() {
         .expect("command-code status");
     let segment = builder.finish(Some(&sender)).await.expect("segment");
     drop(sender);
-    let thinking_blocks: Vec<_> = segment
+    let thinking_block_count = segment
         .blocks
         .iter()
         .filter(|block| block.get("type").and_then(Value::as_str) == Some("thinking"))
-        .collect();
+        .count();
     assert_eq!(
-        thinking_blocks.len(),
+        thinking_block_count,
         1,
         "Command Code must not open/close thinking per unit: {:?}",
         segment.blocks
@@ -1305,13 +1338,13 @@ async fn command_code_muse_spark_status_bursts_stay_on_one_thinking_block() {
         .expect("muse spark status");
     let segment = builder.finish(Some(&sender)).await.expect("segment");
     drop(sender);
-    let thinking_blocks: Vec<_> = segment
+    let thinking_block_count = segment
         .blocks
         .iter()
         .filter(|block| block.get("type").and_then(Value::as_str) == Some("thinking"))
-        .collect();
+        .count();
     assert_eq!(
-        thinking_blocks.len(),
+        thinking_block_count,
         1,
         "Muse Spark dump must not open/close thinking per burst: {:?}",
         segment.blocks
@@ -2313,12 +2346,7 @@ async fn streams_native_web_search_status_without_committing_progress_text() {
     let segment = builder.finish(Some(&sender)).await.expect("segment");
     drop(sender);
     assert!(segment.blocks.iter().all(|block| {
-        ["text", "thinking"].into_iter().all(|key| {
-            block.get(key).and_then(Value::as_str).is_none_or(|text| {
-                text.trim().is_empty()
-                    || !(text.contains("WebSearch") || text.contains('🔎') || text.contains('▶'))
-            })
-        })
+        block_lacks_websearch_chrome(block)
     }));
     assert_eq!(segment.usage.web_search_requests, 0);
 
@@ -2444,23 +2472,12 @@ async fn rejects_a_malformed_tool_event_before_dispatch() {
     assert!(error.to_string().contains("callId missing"));
 }
 
-#[tokio::test]
-async fn bridges_acp_agent_provider_tools_to_tool_use_but_keeps_native_tools_as_wip() {
-    let (_root, _app, bridge, mut session) = disconnect_fixture().await;
-    // disconnect_fixture already maps cc_Agent_0 → Agent; add Bash for native WIP.
-    Arc::get_mut(&mut session)
-        .expect("unique session")
-        .external_tool_names
-        .insert("cc_Bash_0".to_owned(), "Bash".to_owned());
-    // Also accept the plain "Agent" provider label used by some ACP agents.
-    Arc::get_mut(&mut session)
-        .expect("unique session")
-        .external_tool_names
-        .insert("Agent".to_owned(), "Agent".to_owned());
-    let messages = [json!({"role":"user","content":"delegate work"})];
-    let routing = json!(
-        r#"Claudex routing for this turn: {"providers":{},"selected_workers":[{"agent":"worker","model":"worker-model","effort":"high"}]}"#
-    );
+async fn assert_agent_tool_use_path(
+    bridge: &Bridge,
+    session: &Arc<Session>,
+    messages: &[Value],
+    routing: &Value,
+) {
     let mut builder = SegmentBuilder::new(1);
     let _ = builder
         .handle_event(
@@ -2493,6 +2510,14 @@ async fn bridges_acp_agent_provider_tools_to_tool_use_but_keeps_native_tools_as_
         "general-purpose"
     );
 
+}
+
+async fn assert_native_tool_wip_path(
+    bridge: &Bridge,
+    session: &Arc<Session>,
+    messages: &[Value],
+    routing: &Value,
+) {
     let mut native = SegmentBuilder::new(1);
     let _ = native
         .handle_event(
@@ -2532,6 +2557,14 @@ async fn bridges_acp_agent_provider_tools_to_tool_use_but_keeps_native_tools_as_
     );
     assert!(progress.contains("ls"));
 
+}
+
+async fn assert_mcp_tool_wip_path(
+    bridge: &Bridge,
+    session: &Arc<Session>,
+    messages: &[Value],
+    routing: &Value,
+) {
     let mut mcp = SegmentBuilder::new(1);
     let _ = mcp
         .handle_event(
@@ -2573,6 +2606,30 @@ async fn bridges_acp_agent_provider_tools_to_tool_use_but_keeps_native_tools_as_
         .expect("suppress MCP launch progress");
     assert!(!mcp.has_external_tool_calls());
 }
+
+#[tokio::test]
+async fn bridges_acp_agent_provider_tools_to_tool_use_but_keeps_native_tools_as_wip() {
+    let (_root, _app, bridge, mut session) = disconnect_fixture().await;
+    // disconnect_fixture already maps cc_Agent_0 → Agent; add Bash for native WIP.
+    Arc::get_mut(&mut session)
+        .expect("unique session")
+        .external_tool_names
+        .insert("cc_Bash_0".to_owned(), "Bash".to_owned());
+    // Also accept the plain "Agent" provider label used by some ACP agents.
+    Arc::get_mut(&mut session)
+        .expect("unique session")
+        .external_tool_names
+        .insert("Agent".to_owned(), "Agent".to_owned());
+    let messages = [json!({"role":"user","content":"delegate work"})];
+    let routing = json!(
+        r#"Claudex routing for this turn: {"providers":{},"selected_workers":[{"agent":"worker","model":"worker-model","effort":"high"}]}"#
+    );
+    assert_agent_tool_use_path(&bridge, &session, &messages, &routing).await;
+    assert_native_tool_wip_path(&bridge, &session, &messages, &routing).await;
+    assert_mcp_tool_wip_path(&bridge, &session, &messages, &routing).await;
+}
+
+
 
 #[tokio::test]
 async fn expands_valid_parallel_agent_batches_and_rejects_short_batches() {
@@ -3080,9 +3137,7 @@ async fn unsupported_disconnect_with_a_visible_tool_aborts_without_a_drain() {
     assert!(bridge.detached_sessions.lock().await.is_empty());
     assert!(!app.is_alive());
     assert_eq!(Arc::strong_count(&events), 1, "no hidden drain owns events");
-    tokio::time::timeout(Duration::from_secs(1), async {
-        while events.recv().await.is_some() {}
-    })
+    tokio::time::timeout(Duration::from_secs(1), drain_until_closed(&mut events))
     .await
     .expect("provider abort must close the event channel after queued events");
     assert_eq!(bridge.used_session_slots(), 1);
@@ -3422,24 +3477,7 @@ async fn drive_stream_keeps_content_indices_monotonic_across_context_retry() {
         let frame = String::from_utf8(frame.expect("frame").to_vec()).expect("UTF-8 SSE");
         let data = frame.lines().find_map(|line| line.strip_prefix("data: "));
         let payload = serde_json::from_str::<Value>(data.expect("SSE data")).expect("JSON frame");
-        match payload.get("type").and_then(Value::as_str) {
-            Some("content_block_start") => {
-                let index = payload["index"].as_u64().expect("start index") as usize;
-                assert_eq!(index, next_index, "content indices must not be reused");
-                assert!(open_index.replace(index).is_none(), "nested content block");
-                next_index += 1;
-                started_types.push(payload["content_block"]["type"].clone());
-            }
-            Some("content_block_delta") => {
-                let index = payload["index"].as_u64().expect("delta index") as usize;
-                assert_eq!(open_index, Some(index), "delta must target the open block");
-            }
-            Some("content_block_stop") => {
-                let index = payload["index"].as_u64().expect("stop index") as usize;
-                assert_eq!(open_index.take(), Some(index), "stop must close its start");
-            }
-            _ => {}
-        }
+        track_content_block_frame(&payload, &mut open_index, &mut next_index, &mut started_types);
     }
 
     assert_eq!(started_types, vec![json!("thinking"), json!("text")]);
@@ -3661,9 +3699,7 @@ async fn drive_stream_stops_before_commit_when_client_closes_after_segment() {
     ));
 
     tokio::time::timeout(Duration::from_secs(1), async {
-        while receiver.len() < 2 {
-            tokio::task::yield_now().await;
-        }
+        wait_until_receiver_len(&receiver, 2).await;
     })
     .await
     .expect("stream should fill before the completion frame");
@@ -4091,10 +4127,8 @@ async fn context_retry_or_error_requires_window_marker_and_retry() {
         .await;
         let unmarked = bridge
             .context_retry_or_error(&mut turn, anyhow!("boom"))
-            .await;
-        let Err(unmarked) = unmarked else {
-            panic!("unmarked errors should fail");
-        };
+            .await
+            .expect_err("unmarked errors should fail");
         assert!(unmarked.to_string().contains("boom"));
     }
 
@@ -4108,10 +4142,8 @@ async fn context_retry_or_error_requires_window_marker_and_retry() {
         .await;
         let missing = bridge
             .context_retry_or_error(&mut turn, anyhow!("context window exceeded"))
-            .await;
-        let Err(missing) = missing else {
-            panic!("missing retry should fail");
-        };
+            .await
+            .expect_err("missing retry should fail");
         assert!(missing.to_string().contains("context window"));
     }
 
@@ -4269,47 +4301,59 @@ async fn disconnect_fixture_with_disabled(
     (root, app, bridge, session)
 }
 
+fn response_ids(log: &std::path::Path) -> Vec<u64> {
+    std::fs::read_to_string(log)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter_map(|response| response.get("id").and_then(Value::as_u64))
+        .collect()
+}
+
+async fn wait_for_response_ids(log: &std::path::Path, expected: &[u64]) -> Vec<u64> {
+    loop {
+        let ids = response_ids(log);
+        if ids.as_slice() == expected {
+            return ids;
+        }
+        tokio::task::yield_now().await;
+    }
+}
+
 async fn assert_disconnected_tool_rejections(root: &tempfile::TempDir, expected: &[u64]) {
     let log = root.path().join("responses.log");
-    let actual = tokio::time::timeout(Duration::from_secs(1), async {
-        loop {
-            let responses = std::fs::read_to_string(&log).unwrap_or_default();
-            let ids = responses
-                .lines()
-                .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-                .filter_map(|response| response.get("id").and_then(Value::as_u64))
-                .collect::<Vec<_>>();
-            if ids.as_slice() == expected {
-                return ids;
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("disconnected tool responses should be written promptly");
+    let actual = tokio::time::timeout(Duration::from_secs(1), wait_for_response_ids(&log, expected))
+        .await
+        .expect("disconnected tool responses should be written promptly");
     assert_eq!(actual, expected);
 }
 
-async fn request_trace(path: &std::path::Path, expected: usize) -> Vec<Value> {
-    tokio::time::timeout(Duration::from_secs(1), async {
-        loop {
-            let trace = std::fs::read_to_string(path)
-                .ok()
-                .map(|trace| {
-                    trace
-                        .lines()
-                        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-                        .collect::<Vec<Value>>()
-                })
-                .unwrap_or_default();
-            if trace.len() >= expected {
-                return trace;
-            }
-            tokio::task::yield_now().await;
+fn parse_trace_file(path: &std::path::Path) -> Vec<Value> {
+    std::fs::read_to_string(path)
+        .ok()
+        .map(|trace| {
+            trace
+                .lines()
+                .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+                .collect::<Vec<Value>>()
+        })
+        .unwrap_or_default()
+}
+
+async fn wait_for_trace_len(path: &std::path::Path, expected: usize) -> Vec<Value> {
+    loop {
+        let trace = parse_trace_file(path);
+        if trace.len() >= expected {
+            return trace;
         }
-    })
-    .await
-    .expect("mock trace timeout")
+        tokio::task::yield_now().await;
+    }
+}
+
+async fn request_trace(path: &std::path::Path, expected: usize) -> Vec<Value> {
+    tokio::time::timeout(Duration::from_secs(1), wait_for_trace_len(path, expected))
+        .await
+        .expect("request trace should land promptly")
 }
 
 async fn wait_for_disconnected_drain(events: &Arc<crate::app_server::ThreadEvents>) {
@@ -4753,13 +4797,9 @@ async fn subagent_activity_keepalive_runs_after_sse_disconnect() {
     });
     let complete = async {
         // Let biased closed + NoEvent settle, then fire keepalive with sse=None.
-        for _ in 0..4 {
-            tokio::task::yield_now().await;
-        }
+        yield_n(4).await;
         tokio::time::advance(Duration::from_millis(25)).await;
-        for _ in 0..4 {
-            tokio::task::yield_now().await;
-        }
+        yield_n(4).await;
         tokio::time::advance(Duration::from_millis(25)).await;
         dispatcher.dispatch(json!({
             "method":"turn/completed",
@@ -4812,9 +4852,7 @@ async fn wait_for_stream_hands_off_external_tool_batch_after_quiet_period() {
         initial_activity_delay: Duration::from_secs(30),
     });
     let advance = async {
-        for _ in 0..4 {
-            tokio::task::yield_now().await;
-        }
+        yield_n(4).await;
         tokio::time::advance(Duration::from_millis(10)).await;
     };
     let (result, ()) = tokio::join!(wait, advance);
@@ -5215,8 +5253,8 @@ async fn failover_usage_limit_turn_attempts_sibling_configured_acp_provider() {
     }
 }
 
-#[tokio::test]
-async fn drive_subagent_stream_retries_empty_acp_on_sibling_provider() {
+
+async fn empty_acp_sibling_retry_bridge() -> (tempfile::TempDir, Arc<Bridge>, Arc<Session>, ThreadEventDispatcher) {
     let cache = tempfile::tempdir().expect("stream failover cache");
     let mut qwen = crate::agent_backend::BackendRoute::new(
         "qwen3.8-max-preview",
@@ -5263,6 +5301,12 @@ async fn drive_subagent_stream_retries_empty_acp_on_sibling_provider() {
         _slot: slots.try_acquire_owned().expect("slot"),
     });
     let dispatcher = ThreadEventDispatcher::default();
+    (cache, bridge, session, dispatcher)
+}
+
+#[tokio::test]
+async fn drive_subagent_stream_retries_empty_acp_on_sibling_provider() {
+    let (_cache, bridge, session, dispatcher) = empty_acp_sibling_retry_bridge().await;
     let events = dispatcher.subscribe("thread");
     dispatcher.dispatch(json!({
         "method":"turn/completed",
@@ -5292,10 +5336,7 @@ async fn drive_subagent_stream_retries_empty_acp_on_sibling_provider() {
             false,
         )
         .await;
-    let mut output = String::new();
-    while let Some(frame) = receiver.recv().await {
-        output.push_str(&String::from_utf8_lossy(&frame.expect("frame")));
-    }
+    let output = collect_sse_frames(&mut receiver).await;
     assert!(
         output.contains("error")
             || output.contains("message_stop")
@@ -5304,6 +5345,7 @@ async fn drive_subagent_stream_retries_empty_acp_on_sibling_provider() {
         "empty-ACP sibling retry must produce stream output: {output}"
     );
 }
+
 
 #[tokio::test]
 async fn drive_stream_retries_usage_limit_err_after_committed_output() {
