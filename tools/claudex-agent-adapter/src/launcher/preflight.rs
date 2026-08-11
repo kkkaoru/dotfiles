@@ -88,7 +88,6 @@ fn isolated_listen(configured: SocketAddr) -> Result<SocketAddr> {
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
-#[allow(clippy::excessive_nesting)]
 mod tests {
     use super::*;
 
@@ -103,6 +102,36 @@ mod tests {
             model_catalog: crate::provider_config::ModelCatalog::default(),
         })
         .unwrap()
+    }
+
+    fn ready_ok<'a>(
+        _: &'a reqwest::Client,
+        _: &'a ServiceConfig,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + 'a>> {
+        Box::pin(std::future::ready(Ok(())))
+    }
+
+    fn ready_err<'a>(
+        _: &'a reqwest::Client,
+        _: &'a ServiceConfig,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + 'a>> {
+        Box::pin(std::future::ready(Err(anyhow::anyhow!("not ready"))))
+    }
+
+    fn release_ok<'a>(
+        _: &'a reqwest::Client,
+        _: &'a ServiceConfig,
+        _: u32,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + 'a>> {
+        Box::pin(std::future::ready(Ok(())))
+    }
+
+    fn release_err<'a>(
+        _: &'a reqwest::Client,
+        _: &'a ServiceConfig,
+        _: u32,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + 'a>> {
+        Box::pin(std::future::ready(Err(anyhow::anyhow!("release failed"))))
     }
 
     #[test]
@@ -144,8 +173,8 @@ mod tests {
             &reqwest::Client::new(),
             &config,
             |_| Err(anyhow::anyhow!("cannot bind dummy")),
-            |_, _| Box::pin(async { Ok(()) }),
-            |_, _, _| Box::pin(async { Ok(()) }),
+            ready_ok,
+            release_ok,
             |_, _| true,
             |_| panic!("start failure must not terminate"),
         )
@@ -166,8 +195,8 @@ mod tests {
             &reqwest::Client::new(),
             &config,
             |_| Ok(77),
-            |_, _| Box::pin(async { Ok(()) }),
-            |_, _, _| Box::pin(async { Ok(()) }),
+            ready_ok,
+            release_ok,
             |_, _| true,
             |_| panic!("successful preflight does not force terminate"),
         )
@@ -184,8 +213,8 @@ mod tests {
             &reqwest::Client::new(),
             &config,
             |_| Ok(78),
-            |_, _| Box::pin(async { Err(anyhow::anyhow!("not ready")) }),
-            |_, _, _| Box::pin(async { Ok(()) }),
+            ready_err,
+            release_ok,
             |_, _| true,
             move |pid| observed.store(pid, std::sync::atomic::Ordering::Relaxed),
         )
@@ -203,8 +232,8 @@ mod tests {
             &reqwest::Client::new(),
             &config,
             |_| Ok(79),
-            |_, _| Box::pin(async { Err(anyhow::anyhow!("not ready")) }),
-            |_, _, _| Box::pin(async { Ok(()) }),
+            ready_err,
+            release_ok,
             |_, _| false,
             move |pid| observed.store(pid, std::sync::atomic::Ordering::Relaxed),
         )
@@ -222,8 +251,8 @@ mod tests {
             &reqwest::Client::new(),
             &config,
             |_| Ok(80),
-            |_, _| Box::pin(async { Ok(()) }),
-            |_, _, _| Box::pin(async { Err(anyhow::anyhow!("release failed")) }),
+            ready_ok,
+            release_err,
             |_, _| true,
             move |pid| observed.store(pid, std::sync::atomic::Ordering::Relaxed),
         )
