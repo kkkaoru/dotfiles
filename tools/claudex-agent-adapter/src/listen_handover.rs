@@ -4,9 +4,8 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpListener;
 use tokio::sync::watch;
 
 pub(crate) const SERVICE_LISTEN_ENV: &str = "CLAUDEX_SERVICE_LISTEN";
@@ -107,81 +106,14 @@ pub(crate) struct HandoverListener {
     canonical: SocketAddr,
 }
 
-impl HandoverListener {
-    pub(crate) fn new(
-        listener: TcpListener,
-        handover: &ListenHandover,
-        request: watch::Receiver<HandoverCommand>,
-    ) -> Self {
-        Self {
-            listener,
-            advertised: Arc::clone(&handover.advertised),
-            request,
-            cache: handover.cache.clone(),
-            canonical: handover.canonical,
-        }
-    }
-
-    async fn apply(&mut self, command: HandoverCommand) -> Result<()> {
-        let target = match command {
-            HandoverCommand::None => return Ok(()),
-            HandoverCommand::Ephemeral => ephemeral_bind_addr(self.canonical),
-            HandoverCommand::Bind(listen) => listen,
-        };
-        let next = TcpListener::bind(target)
-            .await
-            .context("bind listener during handover")?;
-        let listen = next.local_addr().context("read rebound listener")?;
-        write_rebind_state(&self.cache, self.canonical, listen)?;
-        self.listener = next;
-        *self.advertised.write().expect("listen handover lock") = listen;
-        tracing::info!(%listen, "adapter listener rebound");
-        Ok(())
-    }
-
-    async fn apply_changed_request(
-        &mut self,
-        changed: Result<(), tokio::sync::watch::error::RecvError>,
-    ) {
-        if changed.is_err() {
-            return;
-        }
-        let command = self.request.borrow().clone();
-        if let Err(error) = self.apply(command).await {
-            tracing::error!(%error, "listener handover failed");
-        }
-    }
-}
-
-impl axum::serve::Listener for HandoverListener {
-    type Io = TcpStream;
-    type Addr = SocketAddr;
-
-    async fn accept(&mut self) -> (Self::Io, Self::Addr) {
-        loop {
-            tokio::select! {
-                biased;
-                changed = self.request.changed() => {
-                    self.apply_changed_request(changed).await;
-                }
-                result = self.listener.accept() => {
-                    if let Some(accepted) = accept_or_backoff(result).await {
-                        return accepted;
-                    }
-                }
-            }
-        }
-    }
-
-    fn local_addr(&self) -> std::io::Result<Self::Addr> {
-        Ok(*self.advertised.read().expect("listen handover lock"))
-    }
-}
+#[path = "listen_handover_listener.rs"]
+mod listener;
 
 #[path = "listen_handover_support.rs"]
 mod support;
-use support::{accept_or_backoff, ephemeral_bind_addr, write_rebind_state};
 pub(crate) use support::rebind_state_path;
+#[cfg(test)]
+use support::ephemeral_bind_addr;
 
 
 #[cfg(test)]

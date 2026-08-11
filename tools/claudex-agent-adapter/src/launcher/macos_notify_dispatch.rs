@@ -1,7 +1,5 @@
 use std::{net::SocketAddr, path::Path};
 
-use anyhow::{Context, Result, bail};
-
 use super::macos_notify::{Event, post_in_process};
 
 /// Opt-in gate for user-visible banners.
@@ -143,48 +141,13 @@ pub(super) fn post(cache: &Path, listen: &SocketAddr, event: Event) {
 
 #[path = "macos_notify_dispatch_delegate.rs"]
 mod delegate;
+#[path = "macos_notify_dispatch_run.rs"]
+mod run;
+pub(crate) use run::run_internal;
 use delegate::delegate_post;
 #[cfg(test)]
 use delegate::{delegate_complete_notify, interpret_delegate_status};
 
-
-pub(crate) fn run_internal(arguments: Vec<std::ffi::OsString>) -> Result<()> {
-    let mut args = arguments.into_iter();
-    let _argv0 = args.next();
-    let flag = args
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("missing __internal-notify"))?;
-    if flag.to_string_lossy() != "__internal-notify" {
-        bail!("expected __internal-notify");
-    }
-    let kind = args
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("missing notify kind"))?;
-    if kind.to_string_lossy() != "complete" {
-        bail!("unsupported notify kind {}", kind.to_string_lossy());
-    }
-    let cache = std::path::PathBuf::from(
-        args.next()
-            .ok_or_else(|| anyhow::anyhow!("missing notify cache"))?,
-    );
-    let listen = args
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("missing notify listen"))?
-        .to_string_lossy()
-        .into_owned();
-    let build_id = args
-        .next()
-        .ok_or_else(|| anyhow::anyhow!("missing notify build_id"))?
-        .to_string_lossy()
-        .into_owned();
-    let listen_addr: SocketAddr = listen.parse().context("parse notify listen")?;
-    post_in_process(
-        &cache,
-        &listen_addr,
-        Event::SwapComplete { listen, build_id },
-    );
-    Ok(())
-}
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]

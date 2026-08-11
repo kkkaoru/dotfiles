@@ -1,4 +1,6 @@
 mod transcript;
+mod flags;
+use flags::{auto_fork_enabled, has_agent, has_fork_session, has_session_name};
 use transcript::{read_transcript_identity, transcript_has_spawn_limit};
 #[cfg(test)]
 use transcript::project_dir_name;
@@ -9,7 +11,7 @@ use std::{
 };
 
 const SPAWN_LIMIT_MARKER: &str = "Subagent spawn limit reached (";
-const AUTO_FORK_ENV: &str = "CLAUDEX_AUTO_FORK_SPAWN_LIMIT_RESUME";
+pub(super) const AUTO_FORK_ENV: &str = "CLAUDEX_AUTO_FORK_SPAWN_LIMIT_RESUME";
 /// Historical claudex launches injected `--agent claudex-orchestrator`, which
 /// Claude Code persists as `agent-setting` and reuses as the session display
 /// name on resume. Fresh launches no longer pass that flag; restore a real
@@ -73,51 +75,6 @@ pub(super) fn session_lock_id(arguments: &[OsString]) -> Option<String> {
         .flatten()
 }
 
-fn auto_fork_enabled() -> bool {
-    std::env::var(AUTO_FORK_ENV)
-        .map(|value| !matches!(value.to_ascii_lowercase().as_str(), "0" | "false" | "off"))
-        .unwrap_or(true)
-}
-
-fn has_fork_session(arguments: &[OsString]) -> bool {
-    arguments
-        .iter()
-        .any(|argument| argument == "--fork-session")
-}
-
-fn has_session_name(arguments: &[OsString]) -> bool {
-    has_flag(arguments, &["--name", "-n"])
-}
-
-fn has_agent(arguments: &[OsString]) -> bool {
-    has_flag(arguments, &["--agent"])
-}
-
-fn has_flag(arguments: &[OsString], flags: &[&str]) -> bool {
-    arguments.iter().enumerate().any(|(index, argument)| {
-        argument
-            .to_str()
-            .is_some_and(|argument| flag_present(arguments, index, argument, flags))
-    })
-}
-
-fn flag_present(arguments: &[OsString], index: usize, argument: &str, flags: &[&str]) -> bool {
-    flags
-        .iter()
-        .any(|flag| matches_flag(arguments, index, argument, flag))
-}
-
-fn matches_flag(arguments: &[OsString], index: usize, argument: &str, flag: &str) -> bool {
-    if argument == flag {
-        return arguments
-            .get(index + 1)
-            .and_then(|value| value.to_str())
-            .is_some_and(|value| !value.is_empty() && !value.starts_with('-'));
-    }
-    argument
-        .strip_prefix(&format!("{flag}="))
-        .is_some_and(|value| !value.is_empty())
-}
 
 pub(super) fn resume_session_id(arguments: &[OsString]) -> Option<String> {
     for (index, argument) in arguments.iter().enumerate() {

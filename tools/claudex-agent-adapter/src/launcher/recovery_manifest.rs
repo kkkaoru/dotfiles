@@ -1,7 +1,7 @@
 use std::{
     fs,
     net::SocketAddr,
-    path::{Path, PathBuf},
+    path::PathBuf,
 };
 
 use anyhow::{Context, Result, ensure};
@@ -11,21 +11,27 @@ use super::{ServiceConfig, daemon_arguments::daemon_arguments};
 
 mod fs_guard;
 mod prune;
+#[path = "recovery_manifest_validate.rs"]
+mod validate;
+pub(super) use validate::{generation_from_environment, generation_name, validate};
+#[allow(unused_imports)] // exercised via recovery_manifest_tests / launcher_tests
+pub(super) use validate::generation_from_path;
 use fs_guard::{
-    ensure_private_directory, safe_component, set_private_permissions, validate_private_directory,
-    validate_private_file,
+    ensure_private_directory, set_private_permissions, validate_private_file,
 };
+#[cfg(test)]
+use fs_guard::safe_component;
 use prune::cleanup;
 #[cfg(test)]
 use prune::{manifest_entry, manifests};
 
-const EXECUTABLE_NAME: &str = "claudex-agent-adapter";
+pub(super) const EXECUTABLE_NAME: &str = "claudex-agent-adapter";
 pub(super) const MANIFEST_PREFIX: &str = "manifest.";
 pub(super) const MANIFEST_SUFFIX: &str = ".json";
 const RETAINED_GENERATIONS_PER_LISTENER: usize = 2;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-struct RecoveryManifest {
+pub(super) struct RecoveryManifest {
     generation: String,
     protocol_version: u64,
     build_id: String,
@@ -104,89 +110,11 @@ pub(super) fn prepare(config: &ServiceConfig) -> Result<PathBuf> {
     Ok(path)
 }
 
-pub(super) fn validate(config: &ServiceConfig, generation: &str) -> Result<ValidatedRecovery> {
-    ensure!(safe_component(generation), "invalid recovery generation");
-    let root = recovery_root(config)?;
-    validate_private_directory(&root, "recovery directory")?;
-    let manifest_path = root.join(manifest_file_name(generation));
-    validate_private_file(&manifest_path, 0o600, "recovery manifest")?;
-    let manifest = read_manifest(&manifest_path)?;
-    ensure!(
-        manifest.generation == generation,
-        "recovery generation mismatch"
-    );
-    ensure!(
-        manifest.listen == config.options.listen,
-        "recovery listener mismatch"
-    );
-    ensure!(
-        manifest.protocol_version > 0
-            && manifest.protocol_version <= crate::ADAPTER_PROTOCOL_VERSION,
-        "unsupported recovery protocol"
-    );
-    ensure!(
-        safe_component(&manifest.build_id),
-        "invalid recovery build ID"
-    );
-    ensure!(
-        generation_name(
-            manifest.listen,
-            &manifest.build_id,
-            &manifest.service_config_fingerprint
-        ) == generation,
-        "recovery manifest identity mismatch"
-    );
-    validate_arguments(&manifest)?;
-    let build_directory = root.join(&manifest.build_id);
-    validate_private_directory(&build_directory, "recovery generation directory")?;
-    let executable = build_directory.join(EXECUTABLE_NAME);
-    validate_private_file(&executable, 0o700, "recovery executable")?;
-    Ok(ValidatedRecovery {
-        generation: generation.to_owned(),
-        manifest_path,
-        executable,
-        arguments: manifest.arguments.into_iter().map(Into::into).collect(),
-        protocol_version: manifest.protocol_version,
-        build_id: manifest.build_id,
-        model: manifest.model,
-        codex_config_fingerprint: manifest.codex_config_fingerprint,
-        service_config_fingerprint: manifest.service_config_fingerprint,
-    })
-}
-
-pub(super) fn generation_from_environment() -> Option<String> {
-    let path = PathBuf::from(std::env::var_os(super::RECOVERY_MANIFEST_ENV)?);
-    generation_from_path(&path)
-}
-
-pub(super) fn generation_from_path(path: &Path) -> Option<String> {
-    let name = path.file_name()?.to_str()?;
-    name.strip_prefix(MANIFEST_PREFIX)?
-        .strip_suffix(MANIFEST_SUFFIX)
-        .filter(|generation| safe_component(generation))
-        .map(str::to_owned)
-}
-
-pub(super) fn generation_name(
-    listen: SocketAddr,
-    build_id: &str,
-    service_fingerprint: &str,
-) -> String {
-    let listener = listen
-        .to_string()
-        .as_bytes()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    format!("v1-{listener}-{build_id}-{service_fingerprint}")
-}
-
 #[path = "recovery_manifest_io.rs"]
 mod io;
-use io::{
-    ensure_recovery_root, manifest_file_name, publish_manifest, read_manifest, recovery_root,
-    validate_arguments,
-};
+use io::{ensure_recovery_root, manifest_file_name, publish_manifest, read_manifest};
+#[cfg(test)]
+use io::validate_arguments;
 
 
 #[cfg(test)]
