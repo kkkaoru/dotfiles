@@ -127,4 +127,57 @@ mod tests {
             "duplicate status with trailing newline should be deduplicated"
         );
     }
+
+    #[tokio::test]
+    async fn elapsed_keepalive_is_stream_only_so_tip_stays_last_visible() {
+        use std::{convert::Infallible, time::Duration};
+        use axum::body::Bytes;
+        use tokio::sync::mpsc;
+
+        let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
+        let mut state = ThinkingState::default();
+        let mut blocks = Vec::new();
+        let tip = "▶ Read\n";
+        state
+            .progress_status_keep_open(&mut blocks, tip, Some(&sender))
+            .await
+            .expect("tip");
+        let before = blocks[0]["thinking"].as_str().expect("tip text").to_owned();
+        state
+            .elapsed_keepalive(&mut blocks, Duration::from_secs(4), Some("Read"), Some(&sender))
+            .await
+            .expect("zwsp");
+        assert_eq!(
+            blocks[0]["thinking"].as_str(),
+            Some(before.as_str()),
+            "keepalive must not park ZWSP in the tip buffer"
+        );
+        state
+            .progress_status_keep_open(&mut blocks, tip, Some(&sender))
+            .await
+            .expect("deduped re-tip");
+        assert_eq!(
+            blocks[0]["thinking"]
+                .as_str()
+                .expect("thinking")
+                .matches("▶ Read")
+                .count(),
+            1
+        );
+        drop(sender);
+        let mut tip_deltas = 0usize;
+        let mut zwsp_deltas = 0usize;
+        while let Some(frame) = receiver.recv().await {
+            let frame = String::from_utf8(frame.expect("frame").to_vec()).expect("utf8");
+            let data = frame.lines().find_map(|line| line.strip_prefix("data: "));
+            let value = serde_json::from_str::<Value>(data.expect("data")).expect("json");
+            match value.pointer("/delta/thinking").and_then(Value::as_str) {
+                Some(text) if text.contains("▶ Read") => tip_deltas += 1,
+                Some("\u{200b}") => zwsp_deltas += 1,
+                _ => {}
+            }
+        }
+        assert_eq!(tip_deltas, 1);
+        assert_eq!(zwsp_deltas, 1);
+    }
 }

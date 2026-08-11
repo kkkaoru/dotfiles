@@ -330,23 +330,22 @@ impl ThinkingState {
         .await
     }
 
-    /// Keep an open thought live with ZWSP only; elapsed chrome became Thought-for spam.
+    /// Stream-only ZWSP; leave tip buffer unchanged so ▶ stays last-visible.
     pub(super) async fn elapsed_keepalive(
         &mut self,
-        blocks: &mut [Value],
+        _blocks: &mut [Value],
         _elapsed: std::time::Duration,
         _last_tool: Option<&str>,
         stream: Option<&StreamSender>,
     ) -> Result<()> {
-        let Some(open) = self.open.as_mut() else {
+        let Some(open) = self.open.as_ref() else {
             return Ok(());
         };
-        open.text.push_str(HEARTBEAT);
-        blocks[open.index]["thinking"] = json!(open.text);
+        let index = open.index;
         send_stream_frame(stream, "content_block_delta", || {
             json!({
                 "type":"content_block_delta",
-                "index":open.index,
+                "index":index,
                 "delta":{"type":"thinking_delta","thinking":HEARTBEAT}
             })
         })
