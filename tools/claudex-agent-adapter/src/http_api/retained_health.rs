@@ -41,10 +41,12 @@ impl RetainedHealthProbe {
     }
 
     pub(super) fn within_sticky_grace(&self, local_last_work: Option<Instant>, now: Instant) -> bool {
-        if let Some(secs) = self.idle_seconds {
-            return within_sticky_idle_grace_secs(Some(secs));
-        }
-        local_last_work.is_some_and(|seen| now.saturating_duration_since(seen) <= STICKY_IDLE_GRACE)
+        let from_health = within_sticky_idle_grace_secs(self.idle_seconds);
+        let from_local = local_last_work
+            .is_some_and(|seen| now.saturating_duration_since(seen) <= STICKY_IDLE_GRACE);
+        // Prefer either signal: published idle_seconds can lag if /health was not
+        // probed during work, while local observation can miss remote retained daemons.
+        from_health || from_local
     }
 
     pub(super) fn still_owns(&self, session_id: &str, within_grace: bool) -> bool {
@@ -178,5 +180,9 @@ mod tests {
         assert!(within.within_sticky_grace(None, Instant::now()));
         let expired = probe(0, &["session-a"], Some(&[]), Some(60));
         assert!(!expired.within_sticky_grace(None, Instant::now()));
+        assert!(
+            expired.within_sticky_grace(Some(Instant::now()), Instant::now()),
+            "local observation must still keep grace when published idle is stale"
+        );
     }
 }

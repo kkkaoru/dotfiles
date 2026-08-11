@@ -40,15 +40,22 @@ pub(super) fn mount_health_route(router: Router, state: HealthRouteState) -> Rou
 }
 
 fn idle_seconds(last_work_at: &Mutex<Instant>, busy: bool) -> u64 {
+    if busy {
+        // Defense in depth if a busy sample races ahead of ActiveCounter touch.
+        touch_last_work(last_work_at);
+        return 0;
+    }
+    let last = last_work_at
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    last.elapsed().as_secs()
+}
+
+pub(super) fn touch_last_work(last_work_at: &Mutex<Instant>) {
     let mut last = last_work_at
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if busy {
-        *last = Instant::now();
-        0
-    } else {
-        last.elapsed().as_secs()
-    }
+    *last = Instant::now();
 }
 
 async fn health_response(state: HealthRouteState) -> (StatusCode, Json<serde_json::Value>) {
@@ -103,3 +110,28 @@ async fn health_response(state: HealthRouteState) -> (StatusCode, Json<serde_jso
         })),
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn touch_last_work_resets_idle_seconds_without_busy_health_sample() {
+        let last_work_at = Mutex::new(Instant::now() - Duration::from_secs(120));
+        assert!(idle_seconds(&last_work_at, false) >= 120);
+        touch_last_work(&last_work_at);
+        assert!(
+            idle_seconds(&last_work_at, false) <= 1,
+            "real work touch must start the idle clock near zero"
+        );
+    }
+
+    #[test]
+    fn busy_health_sample_still_reports_zero_idle() {
+        let last_work_at = Mutex::new(Instant::now() - Duration::from_secs(120));
+        assert_eq!(idle_seconds(&last_work_at, true), 0);
+        assert!(idle_seconds(&last_work_at, false) <= 1);
+    }
+}
+

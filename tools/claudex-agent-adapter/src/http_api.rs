@@ -57,6 +57,7 @@ pub(crate) fn http_router_with_handover(
         models,
         Arc::clone(&active_provider_turns),
         Arc::clone(&active_http_requests),
+        Arc::clone(&last_work_at),
         auth_token,
     )
     .layer(middleware::from_fn_with_state(
@@ -90,8 +91,17 @@ fn protected_router(
     models: Vec<String>,
     active_provider_turns: Arc<AtomicUsize>,
     active_http_requests: Arc<AtomicUsize>,
+    last_work_at: Arc<Mutex<Instant>>,
     auth_token: Option<String>,
 ) -> Router<Arc<Bridge>> {
+    let provider_work = ActiveWorkState {
+        counter: active_provider_turns,
+        last_work_at: Arc::clone(&last_work_at),
+    };
+    let http_work = ActiveWorkState {
+        counter: active_http_requests,
+        last_work_at,
+    };
     Router::new()
         .route(
             "/v1/models",
@@ -115,7 +125,7 @@ fn protected_router(
         .route(
             "/v1/messages",
             post(messages).route_layer(middleware::from_fn_with_state(
-                active_provider_turns,
+                provider_work,
                 track_active_provider_turn,
             )),
         )
@@ -125,29 +135,35 @@ fn protected_router(
             post(web_search::ccr_web_search),
         )
         .route_layer(middleware::from_fn_with_state(
-            active_http_requests,
+            http_work,
             track_active_http_request,
         ))
         .route_layer(middleware::from_fn_with_state(auth_token, authorize))
 }
 
+#[derive(Clone)]
+struct ActiveWorkState {
+    counter: Arc<AtomicUsize>,
+    last_work_at: Arc<Mutex<Instant>>,
+}
+
 async fn track_active_http_request(
-    State(active): State<Arc<AtomicUsize>>,
+    State(work): State<ActiveWorkState>,
     request: Request,
     next: Next,
 ) -> Response<Body> {
-    active.fetch_add(1, Ordering::Relaxed);
-    let active = ActiveCounter(active);
+    work.counter.fetch_add(1, Ordering::Relaxed);
+    let active = ActiveCounter::start(work.counter, work.last_work_at);
     hold_active_until_body_complete(next.run(request).await, active)
 }
 
 async fn track_active_provider_turn(
-    State(active): State<Arc<AtomicUsize>>,
+    State(work): State<ActiveWorkState>,
     request: Request,
     next: Next,
 ) -> Response<Body> {
-    active.fetch_add(1, Ordering::Relaxed);
-    let active = ActiveCounter(active);
+    work.counter.fetch_add(1, Ordering::Relaxed);
+    let active = ActiveCounter::start(work.counter, work.last_work_at);
     hold_active_until_body_complete(next.run(request).await, active)
 }
 
@@ -184,11 +200,27 @@ impl Stream for ActiveBodyStream {
     }
 }
 
-struct ActiveCounter(Arc<AtomicUsize>);
+struct ActiveCounter {
+    counter: Arc<AtomicUsize>,
+    last_work_at: Arc<Mutex<Instant>>,
+}
+
+impl ActiveCounter {
+    fn start(counter: Arc<AtomicUsize>, last_work_at: Arc<Mutex<Instant>>) -> Self {
+        health_route::touch_last_work(&last_work_at);
+        Self {
+            counter,
+            last_work_at,
+        }
+    }
+}
 
 impl Drop for ActiveCounter {
     fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::Relaxed);
+        // Mark completion so idle_seconds starts from the end of real work,
+        // not from process start or the last coincidental /health probe.
+        health_route::touch_last_work(&self.last_work_at);
+        self.counter.fetch_sub(1, Ordering::Relaxed);
     }
 }
 
