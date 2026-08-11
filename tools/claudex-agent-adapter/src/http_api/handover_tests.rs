@@ -493,6 +493,70 @@ async fn proxy_middleware_serves_locally_when_busy_list_is_stale_without_work() 
 }
 
 #[tokio::test]
+async fn should_proxy_forgets_one_session_while_retained_is_busy_elsewhere() {
+    let upstream = serve_retained_generation(b"from-other", &["session-other"]).await;
+    let root = tempfile::tempdir().expect("forget one fixture");
+    let path = root.path().join("retained.json");
+    std::fs::write(
+        &path,
+        format!(
+            r#"{{"listen":"{upstream}","pid":1,"build_id":"old","session_ids":["session-a","session-b"]}}"#
+        ),
+    )
+    .expect("write retained");
+    let proxy = retained(&path, &upstream.to_string(), &["session-a", "session-b"]);
+    assert!(
+        !proxy.should_proxy_session("session-a").await,
+        "session absent from live busy list must not stay sticky"
+    );
+    assert!(!proxy.owns("session-a"));
+    assert!(
+        proxy.owns("session-b"),
+        "forgetting one sticky session must keep sibling ownership"
+    );
+}
+
+#[tokio::test]
+async fn should_proxy_clears_retained_when_last_session_is_forgotten() {
+    let upstream = serve_retained_generation(b"from-other", &["session-other"]).await;
+    let root = tempfile::tempdir().expect("forget last fixture");
+    let path = root.path().join("retained.json");
+    std::fs::write(
+        &path,
+        format!(
+            r#"{{"listen":"{upstream}","pid":1,"build_id":"old","session_ids":["session-a"]}}"#
+        ),
+    )
+    .expect("write retained");
+    let proxy = retained(&path, &upstream.to_string(), &["session-a"]);
+    assert!(!proxy.should_proxy_session("session-a").await);
+    assert!(!proxy.owns("session-a"));
+    assert!(
+        !path.exists(),
+        "forgetting the last sticky session must clear the retained snapshot"
+    );
+}
+
+#[tokio::test]
+async fn should_proxy_uses_active_session_list_when_busy_list_is_empty() {
+    let upstream = serve_active_only_retained_generation(&["session-a"]).await;
+    let root = tempfile::tempdir().expect("active-only fixture");
+    let path = root.path().join("retained.json");
+    std::fs::write(
+        &path,
+        format!(
+            r#"{{"listen":"{upstream}","pid":1,"build_id":"old","session_ids":["session-a"]}}"#
+        ),
+    )
+    .expect("write retained");
+    let proxy = retained(&path, &upstream.to_string(), &["session-a"]);
+    assert!(
+        proxy.should_proxy_session("session-a").await,
+        "active_claude_session_ids must keep sticky when busy list is empty"
+    );
+}
+
+#[tokio::test]
 async fn rebound_daemon_forwards_idle_keepalive_to_canonical() {
     // Old failure: after live-update rebind, Claude Code keep-alive stayed on
     // the old binary. Cursor SubAgent /v1/messages then never reached :8318.
@@ -1066,6 +1130,45 @@ async fn run_stale_busy_retained_accept_loop(listener: TcpListener, sessions: St
     while let Some(mut stream) = accept_stream(&listener).await {
         respond_stale_busy_retained_request(&mut stream, &sessions).await;
     }
+}
+
+async fn serve_active_only_retained_generation(
+    active_sessions: &'static [&'static str],
+) -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("active-only retained listener");
+    let listen = listener.local_addr().expect("active-only retained address");
+    let sessions = serde_json::to_string(active_sessions).expect("active sessions json");
+    tokio::spawn(run_active_only_retained_accept_loop(listener, sessions));
+    listen
+}
+
+async fn run_active_only_retained_accept_loop(listener: TcpListener, sessions: String) {
+    while let Some(mut stream) = accept_stream(&listener).await {
+        respond_active_only_retained_request(&mut stream, &sessions).await;
+    }
+}
+
+async fn respond_active_only_retained_request(stream: &mut tokio::net::TcpStream, sessions: &str) {
+    let mut buf = vec![0; 4096];
+    let n = stream.read(&mut buf).await.unwrap_or(0);
+    let request = String::from_utf8_lossy(&buf[..n]);
+    if !request.starts_with("GET /health") {
+        let header = "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        let _ = stream.write_all(header.as_bytes()).await;
+        return;
+    }
+    let payload = format!(
+        concat!(
+            r#"{{"status":"ok","pid":1,"protocol_version":1,"build_id":"old","#,
+            r#""subscription_max_processes":20,"subscription_timeout_minutes":120,"#,
+            r#""active_http_requests":1,"active_provider_turns":0,"#,
+            r#""busy_claude_session_ids":[],"active_claude_session_ids":{sessions}}}"#
+        ),
+        sessions = sessions
+    );
+    write_http_response(stream, "HTTP/1.1 200 OK", payload.as_bytes()).await;
 }
 
 async fn respond_stale_busy_retained_request(stream: &mut tokio::net::TcpStream, sessions: &str) {
