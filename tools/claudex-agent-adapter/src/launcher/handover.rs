@@ -57,12 +57,19 @@ pub(super) async fn inspect_service_with(
             ServiceState::Start
         };
     };
-    if config.matches(&health)
-        && health.build_id == env!("CLAUDEX_BUILD_ID")
-        && authenticates(client, config).await
-    {
-        ServiceState::Reuse
-    } else if health.status == "ok" && health.has_active_work() {
+    if config.matches(&health) && health.build_id == env!("CLAUDEX_BUILD_ID") {
+        // A single auth probe can time out under llvm-cov / busy hosts; retry
+        // briefly before tearing down an otherwise matching generation.
+        for attempt in 0..3u8 {
+            if authenticates(client, config).await {
+                return ServiceState::Reuse;
+            }
+            if attempt + 1 < 3 {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }
+    }
+    if health.status == "ok" && health.has_active_work() {
         // Never tear down a generation that is still serving a request.
         // Idle listeners, including ones with a launch TUI attached, are
         // replaced in place so `claudex` / `ensure` / `hot-swap` pick up a
