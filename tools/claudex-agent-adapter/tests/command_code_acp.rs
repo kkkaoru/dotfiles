@@ -17,6 +17,38 @@ use tokio::task::JoinHandle;
 
 const ACP_TIMEOUT: Duration = Duration::from_secs(10);
 const MODEL: &str = "meta/muse-spark-1.2-contributor";
+const CONCURRENCY_WAIT_TIMEOUT_ENV: &str = "CLAUDEX_MODEL_CONCURRENCY_WAIT_TIMEOUT_MS";
+
+/// Hold a longer model-admission wait for queueing integration coverage.
+/// Default production wait is 1s (fast SubAgent failover); this scenario
+/// intentionally parks a third turn behind two held slots.
+struct ConcurrencyWaitTimeoutGuard {
+    previous: Option<String>,
+}
+
+impl ConcurrencyWaitTimeoutGuard {
+    fn set_ms(ms: u64) -> Self {
+        let previous = std::env::var(CONCURRENCY_WAIT_TIMEOUT_ENV).ok();
+        // SAFETY: integration binary; restored on Drop. Other tests here do not
+        // assert the default 1s admission timeout.
+        unsafe {
+            std::env::set_var(CONCURRENCY_WAIT_TIMEOUT_ENV, ms.to_string());
+        }
+        Self { previous }
+    }
+}
+
+impl Drop for ConcurrencyWaitTimeoutGuard {
+    fn drop(&mut self) {
+        // SAFETY: paired with set_ms; restores prior process env.
+        unsafe {
+            match &self.previous {
+                Some(value) => std::env::set_var(CONCURRENCY_WAIT_TIMEOUT_ENV, value),
+                None => std::env::remove_var(CONCURRENCY_WAIT_TIMEOUT_ENV),
+            }
+        }
+    }
+}
 
 fn command_code_acp_program() -> String {
     std::env::var("COMMAND_CODE_ACP_BIN")
@@ -434,6 +466,8 @@ async fn auth_failure_is_visible_on_the_http_bridge() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[allow(clippy::too_many_lines, clippy::excessive_nesting)]
 async fn max_concurrency_two_queues_the_third_command_code_turn() {
+    let _wait =
+        ConcurrencyWaitTimeoutGuard::set_ms(ACP_TIMEOUT.as_millis().try_into().unwrap_or(10_000));
     let root = tempfile::TempDir::new().expect("concurrency fixture");
     let trace = root.path().join("trace.jsonl");
     let release = root.path().join("release");
