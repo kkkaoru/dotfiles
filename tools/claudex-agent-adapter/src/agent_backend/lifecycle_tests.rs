@@ -2,6 +2,45 @@ use std::sync::Arc;
 
 use super::super::{AgentBackend, routes::RoutedBackends};
 
+#[cfg(unix)]
+#[tokio::test]
+async fn codex_abort_turn_provider_keeps_shared_app_server_alive() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::Arc;
+
+    let root = tempfile::tempdir().expect("codex abort fixture");
+    let source = root.path().join("source");
+    std::fs::create_dir(&source).expect("source home");
+    std::fs::write(source.join("auth.json"), "{}").expect("auth");
+    let program = root.path().join("codex-abort-noop");
+    std::fs::write(
+        &program,
+        "#!/bin/sh\nread initialize\nprintf '%s\\n' '{\"id\":1,\"result\":{}}'\nread initialized\nwhile read line; do :; done\n",
+    )
+    .expect("write fixture");
+    std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755))
+        .expect("chmod fixture");
+    let server = crate::app_server::AppServer::spawn_with_program(
+        "model",
+        &program,
+        &source,
+        &root.path().join("codex-abort-home"),
+    )
+    .await
+    .expect("start codex fixture");
+    assert!(server.is_alive());
+    let backend = AgentBackend::Codex(Arc::clone(&server));
+    backend
+        .abort_turn_provider("thread-1")
+        .await
+        .expect("Codex abort is a no-op");
+    assert!(
+        server.is_alive(),
+        "Codex abort must not kill the shared app-server (prompt-cache / SubAgent reuse)"
+    );
+    server.shutdown().await;
+}
+
 #[tokio::test]
 async fn leaf_shutdown_returns_for_a_routed_backend() {
     let backend = AgentBackend::Routed(RoutedBackends::lazy(&[]));

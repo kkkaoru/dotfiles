@@ -4909,6 +4909,19 @@ async fn finish_closed_stream_retains_settled_session_for_follow_up_reuse() {
     assert_eq!(bridge.used_session_slots(), 1);
 }
 
+#[test]
+fn retain_closed_subagent_session_keeps_tool_use_and_settled_turns() {
+    assert!(super::event_consume::retain_closed_subagent_session(
+        true, "end_turn"
+    ));
+    assert!(super::event_consume::retain_closed_subagent_session(
+        false, "tool_use"
+    ));
+    assert!(!super::event_consume::retain_closed_subagent_session(
+        false, "end_turn"
+    ));
+}
+
 #[tokio::test]
 async fn subagent_activity_keepalive_runs_after_sse_disconnect() {
     let (_root, _app, bridge, session) = disconnect_fixture().await;

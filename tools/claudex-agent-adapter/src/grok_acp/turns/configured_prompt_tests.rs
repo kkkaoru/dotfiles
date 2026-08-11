@@ -1,3 +1,5 @@
+use std::sync::atomic::Ordering;
+
 use super::*;
 
 #[tokio::test]
@@ -32,7 +34,7 @@ async fn bounds_only_session_scoped_configured_prompts() {
 }
 
 #[tokio::test]
-async fn invalidates_session_and_recycles_provider() {
+async fn invalidates_session_without_killing_shared_provider() {
     let events = ThreadEventDispatcher::default();
     let receiver = events.subscribe("session");
     let active = ActiveTurns::default();
@@ -55,7 +57,7 @@ async fn invalidates_session_and_recycles_provider() {
         },
     );
 
-    assert!(!alive.load(Ordering::Acquire));
+    assert!(alive.load(Ordering::Acquire), "driver must stay alive");
     assert!(invalidated.borrow().contains("session"));
     assert!(!active.borrow().contains_key("session"));
     assert!(permit.is_none());

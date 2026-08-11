@@ -1556,9 +1556,15 @@ async fn subagent_omits_wrangler_json_dump_after_thought() {
     run_wrangler_dump_events(&mut builder, &sender, &dump).await;
     live.ingest_available(&mut receiver);
     assert!(
+        live.visible_thinking.contains("▶ Thinking"),
+        "short thought stays tip-only live (full CoT is buffered): {:?}",
         live.visible_thinking
+    );
+    assert!(
+        !live
+            .visible_thinking
             .contains("The wrangler tail JSON output appears to contain critical"),
-        "short thought must remain: {:?}",
+        "full CoT must not dump into live thinking: {:?}",
         live.visible_thinking
     );
     assert!(

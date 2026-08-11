@@ -1,8 +1,4 @@
-use std::{
-    future::Future,
-    sync::atomic::{AtomicBool, Ordering},
-    time::Duration,
-};
+use std::{future::Future, sync::atomic::AtomicBool, time::Duration};
 
 use agent_client_protocol as acp;
 use tokio::sync::OwnedSemaphorePermit;
@@ -60,9 +56,11 @@ pub(super) fn invalidate(provider: AcpProvider, context: Invalidation<'_>) {
     drop(permit.take());
     active_turns.borrow_mut().remove(session_id);
     updates::dispatch_error(events, session_id, message);
-    // RoutedBackend replaces dead providers before the next session/new. Dropping the retired
-    // backend closes its command channel and terminates the old provider process group.
-    alive.store(false, Ordering::Release);
+    // Session-scoped configured ACP: mark this session invalidated so later
+    // prompts on the same id are rejected. Do NOT kill the shared stdio driver
+    // (`alive=false`) — one timed-out SubAgent would respawn Cursor/OpenCode for
+    // every other session on the route.
+    let _ = alive;
 }
 
 pub(super) async fn finish(

@@ -97,9 +97,11 @@ impl Bridge {
     ) {
         if sender.is_closed() && is_subagent {
             commit_transcript(&turn.session, turn.extras, &segment).await;
-            // Settled turns stay registered so follow-up `resume` can reuse the
-            // provider thread (prompt-cache). Unsettled closes still tear down.
-            self.finish_closed_stream(&turn.session, &turn.events, provider_settled)
+            // Settled end_turn and tool_use handoffs keep the idle provider
+            // thread so Task resume / tool_result can reuse prompt-cache.
+            // Other unsettled closes still tear down.
+            let retain = retain_closed_subagent_session(provider_settled, segment.stop_reason);
+            self.finish_closed_stream(&turn.session, &turn.events, retain)
                 .await;
             return;
         }
@@ -129,6 +131,10 @@ impl Bridge {
             .await;
         true
     }
+}
+
+pub(super) fn retain_closed_subagent_session(provider_settled: bool, stop_reason: &str) -> bool {
+    provider_settled || stop_reason == "tool_use"
 }
 
 pub(super) fn stream_provider_failure(

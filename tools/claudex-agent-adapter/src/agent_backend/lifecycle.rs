@@ -10,6 +10,22 @@ async fn cancel_routed_turn(routes: &RoutedBackends, thread_id: &str) -> Result<
     Box::pin(backend.cancel_turn(raw_id)).await
 }
 
+async fn abort_routed_provider(routes: &RoutedBackends, thread_id: &str) -> Result<()> {
+    let (index, _) = routed_thread(thread_id);
+    let route = routes.route(index);
+    let backend = route
+        .ready_backend()
+        .context("thread route backend is unavailable during provider abort")?;
+    // Shared Codex app-server must survive a single disconnect — retiring the
+    // route clears startup for every Codex model and forces a cold respawn.
+    if matches!(backend.as_ref(), AgentBackend::Codex(_)) {
+        return Ok(());
+    }
+    route.retire();
+    backend.shutdown_leaf().await;
+    Ok(())
+}
+
 impl AgentBackend {
     pub(crate) async fn cancel_turn(&self, thread_id: &str) -> Result<TurnCancellation> {
         match self {
@@ -31,19 +47,14 @@ impl AgentBackend {
     }
 
     /// Force-close the provider that owns a turn when it has no per-turn
-    /// cancellation primitive. Routed providers are retired before shutdown so
-    /// a later request starts a fresh leaf instead of reusing the aborted one.
+    /// cancellation primitive. Routed non-Codex providers are retired before
+    /// shutdown so a later request starts a fresh leaf. Codex app-server is
+    /// shared across routes/threads — aborting must not kill it or every
+    /// idle prompt-cache / SubAgent reuse slot dies with the one disconnect.
     pub(crate) async fn abort_turn_provider(&self, thread_id: &str) -> Result<()> {
         match self {
-            Self::Routed(routes) => {
-                let (index, _) = routed_thread(thread_id);
-                let route = routes.route(index);
-                let backend = route
-                    .ready_backend()
-                    .context("thread route backend is unavailable during provider abort")?;
-                route.retire();
-                backend.shutdown_leaf().await;
-            }
+            Self::Codex(_) => {}
+            Self::Routed(routes) => abort_routed_provider(routes, thread_id).await?,
             _ => self.shutdown_leaf().await,
         }
         Ok(())
