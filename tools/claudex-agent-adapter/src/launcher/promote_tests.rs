@@ -163,11 +163,15 @@ async fn try_canonical_skips_legacy_daemons_without_handover() {
 }
 
 #[test]
-fn retains_only_busy_sessions_when_the_new_health_field_is_present() {
+fn retains_busy_and_co_retained_active_sessions_together() {
     let mut health = health(true, Some(12));
     health.busy_claude_session_ids = vec!["busy-a".to_owned()];
     health.active_claude_session_ids = vec!["busy-a".to_owned(), "idle-tui".to_owned()];
-    assert_eq!(retained_session_ids(&health), ["busy-a"]);
+    assert_eq!(
+        retained_session_ids(&health),
+        ["busy-a".to_owned(), "idle-tui".to_owned()],
+        "quiet co-retained sessions must survive cutover with a busy sibling"
+    );
 }
 
 #[test]

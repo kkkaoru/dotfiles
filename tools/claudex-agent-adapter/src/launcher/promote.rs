@@ -50,17 +50,21 @@ pub(super) fn live_update_eligible(health: &Health, config: &ServiceConfig) -> b
 }
 
 pub(super) fn retained_session_ids(health: &Health) -> Vec<String> {
-    if !health.busy_claude_session_ids.is_empty() {
-        return health.busy_claude_session_ids.clone();
+    // Quiet co-retained sessions must survive cutover with a busy sibling so
+    // sticky proxy can keep their warm SubAgents / prompt-cache. Ownership is
+    // re-checked after promote and released once sticky idle grace expires.
+    if !health.has_active_work() && !health.within_sticky_idle_grace() {
+        return Vec::new();
     }
-    // Quiet between turns still needs the previous generation retained so
-    // sticky proxy / prompt-cache can resume warm SubAgents after cutover.
-    // Match release_idle_retained: honor sticky idle grace on active sessions.
-    if health.has_active_work() || health.within_sticky_idle_grace() {
-        health.active_claude_session_ids.clone()
-    } else {
-        Vec::new()
-    }
+    health
+        .busy_claude_session_ids
+        .iter()
+        .chain(health.active_claude_session_ids.iter())
+        .filter(|id| !id.is_empty())
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
 }
 
 pub(super) fn warm_agent_ages(health: &Health) -> std::collections::BTreeMap<String, u64> {
