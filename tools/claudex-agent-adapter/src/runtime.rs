@@ -1,16 +1,18 @@
 use std::{collections::VecDeque, ffi::OsString, path::PathBuf, sync::Arc, time::Duration};
 
 use crate::{
-    agent_backend::{AgentBackend, BackendKind, BackendRoute},
-    anthropic::{Bridge, DEFAULT_MAX_PROCESSES, DEFAULT_TIMEOUT_MINUTES},
+    agent_backend::AgentBackend,
+    anthropic::Bridge,
     http_api::http_router_with_handover,
     launcher::{self, AdapterOptions},
-    provider_config::{self, WorkerRoute},
 };
 use anyhow::{Context, Result, bail};
 
 mod hard_timeout;
+mod parse_options;
 mod shutdown;
+use parse_options::{ParsedOptions, parse_options};
+
 #[derive(Debug)]
 enum RuntimeCommand {
     BuildId,
@@ -21,11 +23,6 @@ enum RuntimeCommand {
     Serve(AdapterOptions),
 }
 
-#[derive(Debug)]
-struct ParsedOptions {
-    adapter: AdapterOptions,
-    inherit_claude_model: bool,
-}
 
 pub async fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<i32> {
     let code = match parse_command(arguments.into_iter().skip(1).collect())? {
@@ -103,201 +100,11 @@ fn parse_command(mut arguments: VecDeque<OsString>) -> Result<RuntimeCommand> {
     }
 }
 
-// Keep CLI flags in one table so each parsing branch stays auditable.
-#[allow(clippy::too_many_lines)]
-fn parse_options(arguments: &mut VecDeque<OsString>) -> Result<ParsedOptions> {
-    let mut routes = Vec::new();
-    let mut worker_routes = Vec::new();
-    let mut search_worker_routes = Vec::new();
-    let mut selectable_models = Vec::new();
-    let mut model = None;
-    let mut provider_config = None;
-    let mut inherit_claude_model = false;
-    let mut listen = "127.0.0.1:8318".parse().expect("default listener");
-    let mut max_processes = DEFAULT_MAX_PROCESSES;
-    let mut timeout_minutes = DEFAULT_TIMEOUT_MINUTES;
-    let mut hard_timeout_cli = None;
-    while let Some(option) = arguments
-        .front()
-        .and_then(|value| value.to_str())
-        .map(str::to_owned)
-    {
-        match option.as_str() {
-            "--backend-route" => {
-                routes.push(option_value(arguments, "--backend-route")?.parse()?);
-            }
-            "--backend-route-json" => {
-                let value = option_value(arguments, "--backend-route-json")?;
-                routes.push(serde_json::from_str(&value).context("invalid backend route JSON")?);
-            }
-            "--worker-route-json" => {
-                let value = option_value(arguments, "--worker-route-json")?;
-                worker_routes.push(
-                    serde_json::from_str::<WorkerRoute>(&value)
-                        .context("invalid worker route JSON")?,
-                );
-            }
-            "--search-worker-route-json" => {
-                let value = option_value(arguments, "--search-worker-route-json")?;
-                search_worker_routes.push(
-                    serde_json::from_str::<WorkerRoute>(&value)
-                        .context("invalid search worker route JSON")?,
-                );
-            }
-            "--selectable-model" => {
-                selectable_models.push(option_value(arguments, "--selectable-model")?)
-            }
-            "--provider-config" => {
-                provider_config =
-                    Some(PathBuf::from(option_value(arguments, "--provider-config")?));
-            }
-            "--model" => model = Some(option_value(arguments, "--model")?),
-            "--inherit-claude-model" => {
-                arguments.pop_front();
-                inherit_claude_model = true;
-            }
-            "--listen" => {
-                listen = option_value(arguments, "--listen")?
-                    .parse()
-                    .context("invalid --listen address")?;
-            }
-            "--subscription-max-processes" => {
-                max_processes = positive_number(arguments, &option)?;
-            }
-            "--subscription-timeout-minutes" => {
-                timeout_minutes = positive_number(arguments, &option)?;
-            }
-            "--subagent-hard-timeout-seconds" => {
-                parse_hard_timeout(arguments, &option, &mut hard_timeout_cli)?;
-            }
-            "--" => break,
-            _ => bail!("unknown adapter option `{option}`"),
-        }
-    }
-    if arguments
-        .front()
-        .is_some_and(|value| value.to_str().is_none())
-    {
-        bail!("adapter options must be valid UTF-8");
-    }
-    validate_limits(max_processes, timeout_minutes)?;
-    let hard_timeout = hard_timeout::resolve(hard_timeout_cli)?;
-    let configured = provider_config
-        .as_deref()
-        .map(provider_config::load)
-        .transpose()?;
-    let has_provider_config = configured.is_some();
-    let mut model_catalog = configured
-        .as_ref()
-        .map(|configured| configured.model_catalog.clone())
-        .unwrap_or_default();
-
-    if let Some(configured) = &configured {
-        routes.splice(0..0, configured.routes.clone());
-    }
-    if model.as_deref().is_some_and(str::is_empty) {
-        bail!("--model must not be empty");
-    }
-    let model = model.unwrap_or_default();
-    if model.is_empty() && !has_provider_config && routes.is_empty() {
-        bail!("--model or --provider-config is required");
-    }
-    if routes.is_empty() {
-        routes.push(BackendRoute::new(&model, BackendKind::CodexAppServer));
-    }
-    if model_catalog == provider_config::ModelCatalog::default() {
-        model_catalog = provider_config::ModelCatalog::from_routes(&routes);
-    }
-    if !worker_routes.is_empty() {
-        model_catalog.set_worker_routes(worker_routes)?;
-    }
-    if !search_worker_routes.is_empty() {
-        model_catalog.set_search_worker_routes(search_worker_routes)?;
-    }
-    if !selectable_models.is_empty() {
-        model_catalog.set_selectable_models(selectable_models);
-    }
-    validate_routes(&routes)?;
-    Ok(ParsedOptions {
-        adapter: AdapterOptions {
-            routes,
-            model,
-            listen,
-            subscription_max_processes: max_processes,
-            subscription_timeout_minutes: timeout_minutes,
-            subagent_hard_timeout_seconds: hard_timeout,
-            model_catalog,
-        },
-        inherit_claude_model,
-    })
-}
-
-fn parse_hard_timeout(
-    arguments: &mut VecDeque<OsString>,
-    option: &str,
-    hard_timeout: &mut Option<std::num::NonZeroU64>,
-) -> Result<()> {
-    if hard_timeout.is_some() {
-        bail!("--subagent-hard-timeout-seconds must not be repeated");
-    }
-    let seconds: u64 = positive_number(arguments, option)?;
-    *hard_timeout = std::num::NonZeroU64::new(seconds);
-    Ok(())
-}
-
 fn reject_inherit_model(options: &ParsedOptions, command: &str) -> Result<()> {
     if options.inherit_claude_model {
         bail!("--inherit-claude-model is valid only for launch, not {command}");
     }
     Ok(())
-}
-
-fn validate_routes(routes: &[BackendRoute]) -> Result<()> {
-    if routes.iter().any(|route| {
-        route
-            .max_concurrency
-            .is_some_and(|limit| limit == 0 || limit > crate::grok_acp::MAX_MODEL_CONCURRENCY)
-    }) {
-        bail!("backend route maxConcurrency is out of range");
-    }
-    let unique = routes
-        .iter()
-        .map(|route| route.model.as_str())
-        .collect::<std::collections::HashSet<_>>();
-    if unique.len() != routes.len() {
-        bail!("--backend-route models must be unique");
-    }
-    Ok(())
-}
-
-fn validate_limits(max_processes: usize, timeout_minutes: u64) -> Result<()> {
-    if max_processes > tokio::sync::Semaphore::MAX_PERMITS {
-        bail!("--subscription-max-processes is out of range");
-    }
-    if timeout_minutes.checked_mul(60).is_none() {
-        bail!("--subscription-timeout-minutes is out of range");
-    }
-    Ok(())
-}
-
-fn option_value(arguments: &mut VecDeque<OsString>, option: &str) -> Result<String> {
-    arguments.pop_front();
-    utf8(
-        arguments.pop_front(),
-        &format!("value for adapter option {option}"),
-    )
-}
-
-fn positive_number<T>(arguments: &mut VecDeque<OsString>, option: &str) -> Result<T>
-where
-    T: std::str::FromStr + PartialOrd + From<u8>,
-{
-    let value = option_value(arguments, option)?;
-    value
-        .parse::<T>()
-        .ok()
-        .filter(|number| *number > T::from(0))
-        .with_context(|| format!("{option} must be a positive integer"))
 }
 
 fn consume_separator(arguments: &mut VecDeque<OsString>) -> Result<()> {

@@ -6,6 +6,7 @@ use std::{ffi::OsString, os::unix::fs::PermissionsExt, path::PathBuf};
 use reqwest::Client;
 
 use super::*;
+use crate::agent_backend::{BackendKind, BackendRoute};
 use crate::app_server::AppServer;
 
 async fn wait_for_health(client: &Client, url: &str) -> reqwest::Response {
