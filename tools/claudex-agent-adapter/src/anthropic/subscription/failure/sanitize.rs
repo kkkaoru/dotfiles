@@ -81,12 +81,11 @@ fn truncate(value: &str, limit: usize) -> String {
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
-#[allow(clippy::excessive_nesting)]
 mod tests {
     use super::*;
 
     #[test]
-    fn covers_sensitive_key_and_value_boundaries() {
+    fn covers_sensitive_key_boundaries() {
         for key in [
             "bearer",
             "authorization",
@@ -99,18 +98,18 @@ mod tests {
             "token",
             "cookie",
         ] {
-            assert!(is_sensitive_key(key));
-            if key != "bearer" {
-                assert!(is_sensitive_key(&format!("[{key}]")));
-            }
+            assert_sensitive_key(key);
         }
         assert!(!is_sensitive_key("ordinary"));
+    }
+
+    #[test]
+    fn covers_sensitive_value_and_redaction_boundaries() {
         assert!(has_sensitive_value("sk-test"));
         assert!(has_sensitive_value("bearer=fixture"));
         assert!(has_sensitive_value("bearer:fixture"));
         assert!(has_sensitive_value("cookie=fixture"));
         assert!(!has_sensitive_value("ordinary"));
-
         for value in [
             "bearer:",
             "bearer=",
@@ -129,5 +128,13 @@ mod tests {
         assert_eq!(truncate("abc", 3), "abc");
         assert_eq!(truncate("abcdef", 3), "abc...");
         assert_eq!(sanitize_diagnostic("line\nnext"), "line next");
+    }
+
+    fn assert_sensitive_key(key: &str) {
+        assert!(is_sensitive_key(key));
+        if key == "bearer" {
+            return;
+        }
+        assert!(is_sensitive_key(&format!("[{key}]")));
     }
 }
