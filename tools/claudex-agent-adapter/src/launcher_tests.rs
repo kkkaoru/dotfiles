@@ -2221,38 +2221,35 @@ fn serve_health_and_auth_until_stopped(
             .set_nonblocking(true)
             .expect("nonblocking health listener");
         while !stopped.load(Ordering::SeqCst) {
-            serve_one_health_or_auth(&listener, &health, &auth, &stopped);
+            let (mut stream, _) = match listener.accept() {
+                Ok(accepted) => accepted,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(1));
+                    continue;
+                }
+                Err(error) => panic!("accept health request: {error}"),
+            };
+            if stopped.load(Ordering::SeqCst) {
+                break;
+            }
+            let health = health.clone();
+            let auth = auth.clone();
+            // Answer probes on worker threads so llvm-cov / parallel ensure
+            // retries cannot stall behind a single slow /health client.
+            thread::spawn(move || {
+                let _ = stream.set_nonblocking(false);
+                let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+                let request = read_http_headers(&mut stream);
+                let body = if request.contains(" /v1/models") {
+                    auth.as_str()
+                } else {
+                    health.as_str()
+                };
+                let _ = stream.write_all(body.as_bytes());
+                let _ = stream.flush();
+            });
         }
     })
-}
-
-fn serve_one_health_or_auth(
-    listener: &TcpListener,
-    health: &str,
-    auth: &str,
-    stopped: &AtomicBool,
-) {
-    let (mut stream, _) = match listener.accept() {
-        Ok(accepted) => accepted,
-        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-            thread::sleep(Duration::from_millis(1));
-            return;
-        }
-        Err(error) => panic!("accept health request: {error}"),
-    };
-    if stopped.load(Ordering::SeqCst) {
-        return;
-    }
-    let _ = stream.set_nonblocking(false);
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
-    let request = read_http_headers(&mut stream);
-    let body = if request.contains(" /v1/models") {
-        auth
-    } else {
-        health
-    };
-    let _ = stream.write_all(body.as_bytes());
-    let _ = stream.flush();
 }
 
 fn read_http_headers(stream: &mut impl Read) -> String {
