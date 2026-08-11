@@ -872,9 +872,9 @@ async fn ensure_running_replaces_a_protocol_stale_foreign_endpoint() {
         r#"{{"status":"ok","pid":{},"protocol_version":0,"build_id":"stale","model":"test-main-model","subscription_max_processes":20,"subscription_timeout_minutes":120}}"#,
         std::process::id()
     );
-    // llvm-cov slows ensure enough that it can probe health more than twice
-    // before the replacement binds; keep the stale peer answering until then.
-    let stale = thread::spawn(move || serve_stale_health(listener, 16, body));
+    // Keep the first protocol-stale /health answer, then release the port so
+    // ensure can bind the replacement (same race window as unavailable health).
+    let stale = thread::spawn(move || serve_stale_health_after_releasing_listener(listener, body));
     let output = ensure_command(&home, port, "20")
         .output()
         .expect("replace protocol-stale endpoint");
@@ -1460,20 +1460,6 @@ fn unused_port() -> u16 {
 
 fn unavailable_health() -> String {
     r#"{"status":"unavailable","pid":null,"protocol_version":0,"build_id":"stale","model":"stale","subscription_max_processes":0,"subscription_timeout_minutes":0}"#.to_owned()
-}
-
-fn serve_stale_health(listener: TcpListener, responses: usize, body: String) {
-    for _ in 0..responses {
-        let (mut stream, _) = listener.accept().expect("accept health request");
-        let mut request = [0_u8; 1024];
-        let _bytes = stream.read(&mut request).expect("read health request");
-        write!(
-            stream,
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            body.len()
-        )
-        .expect("write health response");
-    }
 }
 
 fn serve_stale_health_after_releasing_listener(listener: TcpListener, body: String) {
