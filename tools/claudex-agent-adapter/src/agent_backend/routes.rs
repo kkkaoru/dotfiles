@@ -11,6 +11,7 @@ mod concurrency;
 mod resolve;
 mod shutdown;
 mod startup;
+mod query;
 
 use startup::{provider_startup, start_backend};
 
@@ -189,88 +190,6 @@ impl RoutedBackends {
             dynamic: Mutex::new(Vec::new()),
             codex_startup,
         }
-    }
-
-    pub(super) fn supports(&self, model: &str) -> bool {
-        self.configured.iter().any(|route| {
-            route.model == model
-                || route
-                    .template
-                    .model_prefixes
-                    .iter()
-                    .any(|prefix| model.starts_with(prefix))
-        })
-    }
-
-    pub(super) fn web_search_mode(&self, model: &str) -> WebSearchMode {
-        self.find(model)
-            .map(|route| route.template.web_search_mode)
-            .or_else(|| {
-                self.prefix_template(model)
-                    .map(|route| route.web_search_mode)
-            })
-            .unwrap_or_default()
-    }
-
-    pub(super) fn launch_scoped_effort(&self, model: &str) -> Option<String> {
-        let route = self
-            .find(model)
-            .map(|r| r.template.clone())
-            .or_else(|| self.prefix_template(model).cloned())?;
-        let pins = route.backend == BackendKind::GrokAcp
-            || route
-                .acp
-                .as_ref()
-                .is_some_and(|a| a.arguments.iter().any(|x| x.contains("{effort}")));
-        pins.then_some(route.effort).flatten()
-    }
-
-    pub(super) fn descriptions(&self) -> Vec<String> {
-        self.configured
-            .iter()
-            .map(|route| route.template.description())
-            .collect()
-    }
-
-    pub(super) fn models(&self) -> Vec<String> {
-        let dynamic = self.dynamic.lock().expect("dynamic routes poisoned");
-        self.configured
-            .iter()
-            .chain(dynamic.iter())
-            .map(|route| route.model.clone())
-            .collect()
-    }
-
-    pub(super) fn started_models(&self) -> Vec<String> {
-        let dynamic = self.dynamic.lock().expect("dynamic routes poisoned");
-        self.configured
-            .iter()
-            .chain(dynamic.iter())
-            .filter(|route| route.is_started())
-            .map(|route| route.model.clone())
-            .collect()
-    }
-
-    pub(super) fn is_alive(&self) -> bool {
-        // Routes restart lazily. Marking the whole HTTP daemon unavailable for one failed child
-        // would make the launcher terminate unrelated in-flight model streams.
-        true
-    }
-
-    pub(super) fn model_is_alive(&self, model: &str) -> bool {
-        self.find(model).is_none_or(|route| route.is_alive())
-    }
-
-    pub(super) fn route(&self, index: usize) -> Arc<RoutedBackend> {
-        if let Some(route) = self.configured.get(index) {
-            return Arc::clone(route);
-        }
-        self.dynamic
-            .lock()
-            .expect("dynamic routes poisoned")
-            .get(index - self.configured.len())
-            .cloned()
-            .expect("routed backend index must exist")
     }
 }
 

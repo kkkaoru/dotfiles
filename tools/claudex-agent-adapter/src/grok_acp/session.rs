@@ -1,7 +1,6 @@
 use std::{
     cell::RefCell,
     collections::HashMap,
-    env,
     future::Future,
     path::{Path, PathBuf},
     rc::Rc,
@@ -16,12 +15,18 @@ use tokio::sync::oneshot;
 use super::{connection::AcpProvider, prompt};
 use crate::anthropic::subscription_request::cwd_from_system;
 
+#[path = "session_mcp.rs"]
+mod mcp;
+use mcp::launch_mcp_servers;
+#[cfg(test)]
+use mcp::{launch_mcp_servers_from, params_offer_launch_tools};
+
 const SESSION_SETUP_TIMEOUT: Duration = Duration::from_secs(8);
 /// Cursor/OpenCode often hang on MCP during session/new. Fail the MCP-first attempt
 /// quickly and retry without MCP rather than blocking a full SESSION_SETUP_TIMEOUT every turn.
 const SESSION_SETUP_WITH_MCP_TIMEOUT: Duration = Duration::from_secs(2);
-const LAUNCH_MCP_NAME: &str = "claudex-launch";
-const LAUNCH_MCP_COMMAND: &str = "mcp-claudex-launch";
+pub(super) const LAUNCH_MCP_NAME: &str = "claudex-launch";
+pub(super) const LAUNCH_MCP_COMMAND: &str = "mcp-claudex-launch";
 pub(super) struct Task {
     pub(super) provider: AcpProvider,
     pub(super) connection: Rc<acp::ClientSideConnection>,
@@ -159,65 +164,6 @@ fn session_cwd(params: &Value, fallback: &Path) -> PathBuf {
         .unwrap_or_else(|| fallback.to_owned())
 }
 
-fn launch_mcp_servers(params: &Value) -> Vec<acp::McpServer> {
-    launch_mcp_servers_from(params, env::current_exe())
-}
-
-fn launch_mcp_servers_from(params: &Value, exe: std::io::Result<PathBuf>) -> Vec<acp::McpServer> {
-    if !params_offer_launch_tools(params) {
-        return Vec::new();
-    }
-    let Ok(exe) = exe else {
-        tracing::warn!("adapter executable unavailable; ACP Agent/Task tools not injected");
-        return Vec::new();
-    };
-    let cache = env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".cache/claudex");
-    let log_path = cache.join("claudex-launch-mcp.log");
-    let owner = crate::launch_mcp::launch_owner_from_params(params);
-    let queue_path = crate::launch_mcp::launch_queue_path(&cache, owner.as_deref());
-    let mut env = vec![
-        acp::EnvVariable::new(
-            "CLAUDEX_LAUNCH_MCP_LOG",
-            log_path.to_string_lossy().into_owned(),
-        ),
-        acp::EnvVariable::new(
-            "CLAUDEX_LAUNCH_QUEUE",
-            queue_path.to_string_lossy().into_owned(),
-        ),
-    ];
-    if let Some(owner) = owner {
-        env.push(acp::EnvVariable::new("CLAUDEX_LAUNCH_OWNER", owner));
-    }
-    vec![acp::McpServer::Stdio(
-        acp::McpServerStdio::new(LAUNCH_MCP_NAME, exe)
-            .args(vec![LAUNCH_MCP_COMMAND.to_owned()])
-            .env(env),
-    )]
-}
-
-fn params_offer_launch_tools(params: &Value) -> bool {
-    params
-        .get("dynamicTools")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .any(|tool| {
-            let name = tool.get("name").and_then(Value::as_str).unwrap_or("");
-            let description = tool
-                .get("description")
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            name == "Agent"
-                || name == "Task"
-                || name.contains("Agent")
-                || name.contains("Task")
-                || description.contains("`Agent`")
-                || description.contains("`Task`")
-        })
-}
 
 async fn await_model_setup<T>(
     provider: AcpProvider,
