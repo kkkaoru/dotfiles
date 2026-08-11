@@ -1,14 +1,15 @@
-use std::net::SocketAddr;
-#[cfg(test)]
-use std::process::ExitStatus;
 use serde::{Deserialize, Serialize};
 
 use super::ServiceConfig;
+#[cfg(test)]
+use std::process::ExitStatus;
 #[cfg(test)]
 use super::launcher_logs;
 
 mod script;
 mod delivery;
+mod banners;
+pub(super) use banners::{live_ready, swap_complete, waiting_for_idle};
 pub(super) use delivery::{post, post_in_process};
 #[cfg(test)]
 use delivery::{deliver, read_last};
@@ -100,53 +101,6 @@ impl From<&Event> for LastNotify {
             emitted_unix: 0,
         }
     }
-}
-
-pub(super) fn waiting_for_idle(config: &ServiceConfig, waiter_pid: u32) {
-    let Some(cache) = config.log_path.parent() else {
-        return;
-    };
-    post(
-        cache,
-        &config.options.listen,
-        Event::WaitingForIdle {
-            listen: config.options.listen.to_string(),
-            build_id: env!("CLAUDEX_BUILD_ID").to_owned(),
-            waiter_pid,
-        },
-    );
-}
-
-pub(super) fn live_ready(config: &ServiceConfig, live_listen: SocketAddr) {
-    if live_listen == config.options.listen {
-        return;
-    }
-    let Some(cache) = config.log_path.parent() else {
-        return;
-    };
-    post(
-        cache,
-        &config.options.listen,
-        Event::LiveReady {
-            listen: live_listen.to_string(),
-            build_id: env!("CLAUDEX_BUILD_ID").to_owned(),
-            waiting: config.options.listen.to_string(),
-        },
-    );
-}
-
-pub(super) fn swap_complete(config: &ServiceConfig) {
-    let Some(cache) = config.log_path.parent() else {
-        return;
-    };
-    post(
-        cache,
-        &config.options.listen,
-        Event::SwapComplete {
-            listen: config.options.listen.to_string(),
-            build_id: env!("CLAUDEX_BUILD_ID").to_owned(),
-        },
-    );
 }
 
 
