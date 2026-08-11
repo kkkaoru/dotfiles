@@ -118,61 +118,9 @@ impl AgentIntentStore {
     }
 }
 
-impl Default for AgentEffortIntents {
-    fn default() -> Self {
-        Self {
-            pending: std::sync::Mutex::new(VecDeque::new()),
-            store: None,
-        }
-    }
-}
-
-impl AgentEffortIntents {
-    pub(super) fn persistent() -> Self {
-        let Some(store) = AgentIntentStore::for_current_user() else {
-            return Self::default();
-        };
-        let pending = store.load().into_iter().map(restored_intent).collect();
-        Self {
-            pending: std::sync::Mutex::new(pending),
-            store: Some(store),
-        }
-    }
-
-    #[cfg(test)]
-    pub(super) fn with_store(path: PathBuf) -> Self {
-        let store = AgentIntentStore::at(path);
-        let pending = store.load().into_iter().map(restored_intent).collect();
-        Self {
-            pending: std::sync::Mutex::new(pending),
-            store: Some(store),
-        }
-    }
-
-    pub(super) fn persist(&self, intents: Vec<StoredAgentIntent>) {
-        let Some(store) = &self.store else {
-            return;
-        };
-        store.save(intents);
-    }
-}
-
-pub(super) fn persistence_snapshot(
-    pending: &VecDeque<AgentEffortIntent>,
-) -> Vec<StoredAgentIntent> {
-    pending
-        .iter()
-        .filter(|intent| intent.correlated)
-        .map(stored_intent)
-        .collect()
-}
-
-pub(super) fn remove_expired(pending: &mut VecDeque<AgentEffortIntent>) {
-    pending.retain(|intent| {
-        intent.correlated || intent.created_at.elapsed() < super::agent_effort::INTENT_TTL
-    });
-}
-
+#[path = "agent_intent_intents.rs"]
+mod intents;
+pub(super) use intents::{persistence_snapshot, remove_expired};
 
 #[cfg(test)]
 include!("agent_intent_store_tests.rs");
