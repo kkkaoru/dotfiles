@@ -408,6 +408,33 @@ fn assert_live_message_and_thinking_deltas() {
     );
 }
 
+fn assert_thinking_delta_ignored(text: &str) {
+    assert!(matches!(
+        parse_stdout_line(&format!(
+            r#"{{"type":"event","event":{{"type":"thinking_delta","text":"{text}"}}}}"#
+        )),
+        ParsedLine::Ignored
+    ));
+}
+
+fn assert_thinking_delta_thought(text: &str) {
+    assert!(matches!(
+        parse_stdout_line(&format!(
+            r#"{{"type":"event","event":{{"type":"thinking_delta","text":"{text}"}}}}"#
+        )),
+        ParsedLine::Progress(ProgressEvent::Thought(_))
+    ));
+}
+
+fn assert_status_prefix(text: &str, prefix: char) {
+    assert!(matches!(
+        parse_stdout_line(&format!(
+            r#"{{"type":"event","event":{{"type":"thinking_delta","text":"{text}"}}}}"#
+        )),
+        ParsedLine::Progress(ProgressEvent::Status(note)) if note.starts_with(prefix)
+    ));
+}
+
 fn assert_live_status_chrome_filters() {
     assert!(matches!(
         parse_stdout_line(r#"{"type":"event","event":{"type":"thinking_delta","text":"● 検索中: AVITA"}}"#),
@@ -424,12 +451,7 @@ fn assert_live_status_chrome_filters() {
         "失敗: web_search。次: 別手段",
         "ターン1開始",
     ] {
-        assert!(matches!(
-            parse_stdout_line(&format!(
-                r#"{{"type":"event","event":{{"type":"thinking_delta","text":"{ignored}"}}}}"#
-            )),
-            ParsedLine::Ignored
-        ));
+        assert_thinking_delta_ignored(ignored);
     }
     for kept in [
         "実行中: still working",
@@ -437,25 +459,11 @@ fn assert_live_status_chrome_filters() {
         "失敗: web_search",
         "ターン1 準備中",
     ] {
-        assert!(matches!(
-            parse_stdout_line(&format!(
-                r#"{{"type":"event","event":{{"type":"thinking_delta","text":"{kept}"}}}}"#
-            )),
-            ParsedLine::Progress(ProgressEvent::Thought(_))
-        ));
+        assert_thinking_delta_thought(kept);
     }
-    assert!(matches!(
-        parse_stdout_line(r#"{"type":"event","event":{"type":"thinking_delta","text":"▶ searching"}}"#),
-        ParsedLine::Progress(ProgressEvent::Status(note)) if note.starts_with('▶')
-    ));
-    assert!(matches!(
-        parse_stdout_line(r#"{"type":"event","event":{"type":"thinking_delta","text":"✓ done"}}"#),
-        ParsedLine::Progress(ProgressEvent::Status(note)) if note.starts_with('✓')
-    ));
-    assert!(matches!(
-        parse_stdout_line(r#"{"type":"event","event":{"type":"thinking_delta","text":"✗ failed"}}"#),
-        ParsedLine::Progress(ProgressEvent::Status(note)) if note.starts_with('✗')
-    ));
+    assert_status_prefix("▶ searching", '▶');
+    assert_status_prefix("✓ done", '✓');
+    assert_status_prefix("✗ failed", '✗');
 }
 
 fn assert_live_ignored_lifecycle_events() {
@@ -700,7 +708,7 @@ fn assert_tool_terminal_chrome() {
     assert_eq!(first_tool_update(&failed_bare).fields.raw_output, None);
 }
 
-fn assert_message_thought_status_chrome() {
+fn assert_basic_message_thought_status() {
     let note = progress_to_updates(&ProgressEvent::Note("retry".to_owned()));
     assert!(note.is_empty());
     let message = progress_to_updates(&ProgressEvent::Message("AVITA report".to_owned()));
@@ -718,6 +726,9 @@ fn assert_message_thought_status_chrome() {
     let thought_status = progress_to_updates(&ProgressEvent::Thought("● 検索中".to_owned()));
     assert!(rendered_thoughts(&thought_status).contains("● 検索中"));
     assert!(rendered_messages(&thought_status).is_empty());
+}
+
+fn assert_message_status_chrome_filters() {
     for prefix in ["▶ searching", "✓ done", "✗ failed"] {
         let updates = progress_to_updates(&ProgressEvent::Message(prefix.to_owned()));
         assert!(rendered_thoughts(&updates).contains(prefix), "{prefix}");
@@ -747,6 +758,11 @@ fn assert_message_thought_status_chrome() {
             .iter()
             .any(|update| matches!(update, acp::SessionUpdate::ToolCallUpdate(_)))
     );
+}
+
+fn assert_message_thought_status_chrome() {
+    assert_basic_message_thought_status();
+    assert_message_status_chrome_filters();
 }
 
 #[test]

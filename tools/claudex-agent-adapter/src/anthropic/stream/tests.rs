@@ -565,8 +565,7 @@ fn recognizes_cursor_thought_for_filler() {
 }
 
 
-fn assert_compact_live_prose_truncation() {
-
+fn assert_compact_live_prose_basics() {
     assert_eq!(sanitize::compact_live_prose("short"), "short");
     let long = "あ".repeat(sanitize::LIVE_PROSE_CHAR_LIMIT + 3);
     let compact = sanitize::compact_live_prose(&long);
@@ -582,30 +581,38 @@ fn assert_compact_live_prose_truncation() {
         sanitize::latest_worker_status("Status: one Status: two"),
         Some("Status: two\n".to_owned())
     );
-    assert!(sanitize::is_provider_status_line("Plan next"));
-    assert!(sanitize::is_provider_status_line("Plan: drafted"));
-    assert!(sanitize::is_provider_status_line("● running"));
-    assert!(sanitize::is_provider_status_line("◎ queued"));
-    assert!(sanitize::is_provider_status_line("○ idle"));
-    assert!(sanitize::is_provider_status_line("status: lower"));
-    assert!(sanitize::is_provider_status_line("SubAgent starting: x"));
-    assert!(sanitize::is_provider_status_line("SubAgent started: x"));
-    assert!(sanitize::is_provider_status_line("SubAgent finished"));
-    assert!(sanitize::is_provider_status_line("SubAgent completed"));
-    assert!(sanitize::is_provider_status_line(
-        "Retrying provider request"
-    ));
+}
+
+fn assert_provider_status_line_markers() {
+    for line in [
+        "Plan next",
+        "Plan: drafted",
+        "● running",
+        "◎ queued",
+        "○ idle",
+        "status: lower",
+        "SubAgent starting: x",
+        "SubAgent started: x",
+        "SubAgent finished",
+        "SubAgent completed",
+        "Retrying provider request",
+        "▶ running",
+        "✓ done",
+        "✗ failed",
+        "… still working",
+        "Claudex is still working; waiting",
+        "Session mode: agent",
+        "Session: live",
+        "🔎 WebSearch: query",
+    ] {
+        assert!(sanitize::is_provider_status_line(line), "{line}");
+    }
     assert!(!sanitize::is_provider_status_line("real assistant prose"));
-    assert!(sanitize::is_provider_status_line("▶ running"));
-    assert!(sanitize::is_provider_status_line("✓ done"));
-    assert!(sanitize::is_provider_status_line("✗ failed"));
-    assert!(sanitize::is_provider_status_line("… still working"));
-    assert!(sanitize::is_provider_status_line(
-        "Claudex is still working; waiting"
-    ));
-    assert!(sanitize::is_provider_status_line("Session mode: agent"));
-    assert!(sanitize::is_provider_status_line("Session: live"));
-    assert!(sanitize::is_provider_status_line("🔎 WebSearch: query"));
+}
+
+fn assert_compact_live_prose_truncation() {
+    assert_compact_live_prose_basics();
+    assert_provider_status_line_markers();
 }
 
 fn assert_compact_worker_status_truncation() {

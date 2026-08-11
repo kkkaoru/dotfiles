@@ -446,7 +446,7 @@ async fn inspect_absent_and_silent_states(client: &reqwest::Client) {
     let mut absent = config();
     absent.options.listen = unused_listen();
     assert_eq!(
-        handover::inspect_service_with(&client, &absent).await,
+        handover::inspect_service_with(client, &absent).await,
         handover::ServiceState::Start
     );
 
@@ -454,7 +454,7 @@ async fn inspect_absent_and_silent_states(client: &reqwest::Client) {
     let silent = TcpListener::bind("127.0.0.1:0").expect("silent listener");
     occupied_silent.options.listen = silent.local_addr().expect("silent address");
     assert_eq!(
-        handover::inspect_service_with(&client, &occupied_silent).await,
+        handover::inspect_service_with(client, &occupied_silent).await,
         handover::ServiceState::Defer {
             pid: None,
             active_http_requests: 0,
@@ -476,7 +476,7 @@ async fn inspect_reusable_and_attached_states(client: &reqwest::Client) -> Servi
         vec![health_response(&health), http_response("200 OK", "{}")],
     );
     assert_eq!(
-        handover::inspect_service_with(&client, &reusable).await,
+        handover::inspect_service_with(client, &reusable).await,
         handover::ServiceState::Reuse
     );
     server.join().expect("reuse server");
@@ -487,7 +487,7 @@ async fn inspect_reusable_and_attached_states(client: &reqwest::Client) -> Servi
     reusable.options.listen = listener.local_addr().expect("stale address");
     let server = serve_responses(listener, vec![health_response(&stale)]);
     assert_eq!(
-        handover::inspect_service_with(&client, &reusable).await,
+        handover::inspect_service_with(client, &reusable).await,
         handover::ServiceState::Replace {
             pid: Some(42),
             recovery_generation: None,
@@ -504,7 +504,7 @@ async fn inspect_reusable_and_attached_states(client: &reqwest::Client) -> Servi
     // deferred before the launcher probes auth or sends SIGTERM.
     let server = serve_responses(listener, vec![health_response(&active)]);
     assert_eq!(
-        handover::inspect_service_with(&client, &reusable).await,
+        handover::inspect_service_with(client, &reusable).await,
         handover::ServiceState::Defer {
             pid: Some(42),
             active_http_requests: 0,
@@ -520,7 +520,7 @@ async fn inspect_reusable_and_attached_states(client: &reqwest::Client) -> Servi
     reusable.options.listen = listener.local_addr().expect("attached address");
     let server = serve_responses(listener, vec![health_response(&attached)]);
     assert_eq!(
-        handover::inspect_service_with(&client, &reusable).await,
+        handover::inspect_service_with(client, &reusable).await,
         handover::ServiceState::Replace {
             pid: Some(42),
             recovery_generation: None,
@@ -539,7 +539,7 @@ async fn inspect_hot_busy_state(client: &reqwest::Client, reusable: &mut Service
     reusable.options.listen = listener.local_addr().expect("hot-swap busy address");
     let server = serve_responses(listener, vec![health_response(&hot_busy)]);
     assert_eq!(
-        handover::inspect_service_with(&client, &reusable).await,
+        handover::inspect_service_with(client, reusable).await,
         handover::ServiceState::Defer {
             pid: Some(42),
             active_http_requests: 1,
@@ -558,7 +558,7 @@ async fn inspect_hot_busy_state(client: &reqwest::Client, reusable: &mut Service
     reusable.options.listen = listener.local_addr().expect("subagent busy address");
     let server = serve_responses(listener, vec![health_response(&subagent_busy)]);
     assert_eq!(
-        handover::inspect_service_with(&client, &reusable).await,
+        handover::inspect_service_with(client, reusable).await,
         handover::ServiceState::Defer {
             pid: Some(42),
             active_http_requests: 0,
@@ -581,7 +581,7 @@ async fn inspect_authentication_state(client: &reqwest::Client, reusable: &mut S
         ],
     );
     assert_eq!(
-        handover::inspect_service_with(&client, reusable).await,
+        handover::inspect_service_with(client, reusable).await,
         handover::ServiceState::Replace {
             pid: Some(42),
             recovery_generation: None,
@@ -1739,18 +1739,8 @@ async fn fallback_start_reports_when_the_new_listener_never_becomes_ready() {
     assert!(!error.to_string().is_empty());
 }
 
-#[cfg(unix)]
-#[tokio::test]
-async fn fallback_persists_state_after_a_matching_listener_becomes_ready() {
-    let root = tempfile::tempdir().expect("fallback ready fixture");
-    let mut cfg = config();
-    cfg.options.listen = unused_listen();
-    cfg.log_path = root.path().join("adapter.log");
-    cfg.lock_path = root.path().join("adapter.lock");
-    let dummy = root.path().join("claudex-agent-adapter");
-    // Fingerprints must match the reserved fallback listen config; listen is not
-    // part of the service fingerprint, so the primary cfg values remain valid.
-    let script = format!(
+fn ready_fallback_dummy_script(cfg: &ServiceConfig) -> String {
+    format!(
         r#"#!/usr/bin/python3
 import json, os, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -1811,7 +1801,21 @@ HTTPServer((host, int(port)), Handler).serve_forever()
             .expect("routes json"),
         max_proc = cfg.options.subscription_max_processes,
         timeout = cfg.options.subscription_timeout_minutes,
-    );
+    )
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn fallback_persists_state_after_a_matching_listener_becomes_ready() {
+    let root = tempfile::tempdir().expect("fallback ready fixture");
+    let mut cfg = config();
+    cfg.options.listen = unused_listen();
+    cfg.log_path = root.path().join("adapter.log");
+    cfg.lock_path = root.path().join("adapter.lock");
+    let dummy = root.path().join("claudex-agent-adapter");
+    // Fingerprints must match the reserved fallback listen config; listen is not
+    // part of the service fingerprint, so the primary cfg values remain valid.
+    let script = ready_fallback_dummy_script(&cfg);
     std::fs::write(&dummy, script).expect("ready fallback dummy");
     std::fs::set_permissions(&dummy, std::fs::Permissions::from_mode(0o755))
         .expect("ready fallback executable");
