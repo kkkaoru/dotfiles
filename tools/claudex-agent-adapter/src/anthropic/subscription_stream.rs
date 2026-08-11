@@ -25,6 +25,7 @@ use super::{
 
 mod consume;
 mod consume_fanout;
+mod consume_finish;
 mod finish;
 mod lifecycle;
 mod post_eof;

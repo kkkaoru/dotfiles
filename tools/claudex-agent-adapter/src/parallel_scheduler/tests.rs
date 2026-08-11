@@ -2,7 +2,7 @@ use super::*;
 use std::{
     collections::{HashMap, HashSet},
     sync::{Mutex, OnceLock},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 fn env_test_lock() -> std::sync::MutexGuard<'static, ()> {

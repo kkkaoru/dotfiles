@@ -1,4 +1,4 @@
-use std::{future::Future, sync::Arc, time::Duration};
+use std::{future::Future, time::Duration};
 
 use anyhow::Result;
 use tokio::time::{Instant, sleep};
@@ -6,12 +6,11 @@ use tokio::time::{Instant, sleep};
 use axum::body::Bytes;
 use serde_json::json;
 
-use super::super::model_concurrency::{ModelPermit, Ticket, is_concurrency_admission_timeout};
-use super::super::{Bridge, MessagesRequest, content::sse, request_routing::RouteDecision};
-use super::{
-    ACTIVITY_KEEPALIVE_INTERVAL, INITIAL_ACTIVITY_DELAY, SUBAGENT_INITIAL_ACTIVITY_DELAY,
-    SegmentBuilder, StreamSender, message_start, send_stream_error,
-};
+use super::super::{MessagesRequest, content::sse};
+use super::super::model_concurrency::Ticket;
+use super::{SegmentBuilder, StreamSender, message_start};
+
+mod drive;
 
 pub(in crate::anthropic) struct PreparedStream {
     pub(in crate::anthropic) request: MessagesRequest,
@@ -152,147 +151,6 @@ where
             return (Err(error), builder);
         }
         deadline.as_mut().reset(Instant::now() + interval);
-    }
-}
-
-impl Bridge {
-    pub(in crate::anthropic) async fn drive_prepared_subagent_stream(self: Arc<Self>, prepared: PreparedStream) {
-        let PreparedStream {
-            mut request,
-            input_tokens,
-            mut effort,
-            mut concurrency_ticket,
-            is_subagent,
-            run_in_background,
-            sender,
-            primed_thinking,
-        } = prepared;
-        self.reticket_saturated_subagent(
-            &mut request,
-            &mut effort,
-            &mut concurrency_ticket,
-            is_subagent,
-        );
-        let _active_subagent = self.track_active_subagent(is_subagent, &request);
-        let paint_command_code_progress =
-            is_subagent && crate::command_code_acp::is_command_code_model(&request.model);
-        let start_status = (!primed_thinking)
-            .then(|| subagent_start_status(is_subagent, &request.model, effort.as_deref()))
-            .flatten();
-        let first_delay = if is_subagent {
-            SUBAGENT_INITIAL_ACTIVITY_DELAY
-        } else {
-            INITIAL_ACTIVITY_DELAY
-        };
-        let interval = ACTIVITY_KEEPALIVE_INTERVAL;
-        let prepare = async {
-            let permit = self
-                .acquire_prepared_permit(&mut request, &mut effort, concurrency_ticket, is_subagent)
-                .await?;
-            let turn = self.prepare_turn(&request, input_tokens, effort).await?;
-            Ok((turn, permit))
-        };
-        let (turn, mut builder) = prepare_with_activity(
-            prepare,
-            PrepareActivityOptions {
-                input_tokens,
-                sender: &sender,
-                initial_status: start_status.as_deref(),
-                first_delay,
-                interval,
-                is_subagent,
-                paint_command_code_progress,
-                primed_thinking,
-            },
-        )
-        .await;
-        match turn {
-            Ok(Some((turn, permit))) => {
-                self.drive_subagent_stream(
-                    turn,
-                    sender,
-                    builder,
-                    permit,
-                    is_subagent,
-                    run_in_background,
-                )
-                .await
-            }
-            Ok(None) => {}
-            Err(error) => {
-                self.fail_prepared_stream(&sender, &mut builder, error, &request.model)
-                    .await;
-            }
-        }
-    }
-
-    fn reticket_saturated_subagent(
-        &self,
-        request: &mut MessagesRequest,
-        effort: &mut Option<String>,
-        concurrency_ticket: &mut Option<Ticket>,
-        is_subagent: bool,
-    ) {
-        if !is_subagent {
-            return;
-        }
-        let original_model = request.model.clone();
-        let _ = self.apply_concurrency_preflight(request, RouteDecision::Provider, effort, true);
-        if request.model != original_model {
-            *concurrency_ticket = self.model_concurrency.ticket(
-                &request.model,
-                self.app.max_concurrency_for_model(&request.model),
-            );
-        }
-    }
-
-    async fn acquire_prepared_permit(
-        &self,
-        request: &mut MessagesRequest,
-        effort: &mut Option<String>,
-        concurrency_ticket: Option<Ticket>,
-        is_subagent: bool,
-    ) -> Result<Option<ModelPermit>> {
-        let Some(ticket) = concurrency_ticket else {
-            return Ok(None);
-        };
-        match ticket.acquire_for(!is_subagent).await {
-            Ok(permit) => Ok(Some(permit)),
-            Err(error) if is_subagent && is_concurrency_admission_timeout(&error) => {
-                self.retry_after_concurrency_timeout(request, effort, error)
-                    .await
-            }
-            Err(error) => Err(error),
-        }
-    }
-
-    async fn retry_after_concurrency_timeout(
-        &self,
-        request: &mut MessagesRequest,
-        effort: &mut Option<String>,
-        error: anyhow::Error,
-    ) -> Result<Option<ModelPermit>> {
-        let Some(retry_ticket) = self.reticket_after_concurrency_timeout(request, effort) else {
-            return Err(error);
-        };
-        match retry_ticket {
-            Some(ticket) => Ok(Some(ticket.acquire_for(false).await?)),
-            None => Ok(None),
-        }
-    }
-
-    async fn fail_prepared_stream(
-        &self,
-        sender: &StreamSender,
-        builder: &mut SegmentBuilder,
-        error: anyhow::Error,
-        model: &str,
-    ) {
-        if !is_concurrency_admission_timeout(&error) {
-            self.note_provider_exhaustion(&error, Some(model));
-        }
-        let _ = builder.close_open_blocks(Some(sender)).await;
-        send_stream_error(sender, error).await;
     }
 }
 

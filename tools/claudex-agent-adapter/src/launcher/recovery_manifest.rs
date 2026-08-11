@@ -1,5 +1,4 @@
 use std::{
-    collections::HashSet,
     fs::{self, OpenOptions},
     io::Write,
     net::SocketAddr,
@@ -12,6 +11,10 @@ use serde::{Deserialize, Serialize};
 use super::{ServiceConfig, daemon_arguments::daemon_arguments};
 
 mod fs_guard;
+mod prune;
+use prune::cleanup;
+#[cfg(test)]
+use prune::{manifest_entry, manifests};
 use fs_guard::{
     ensure_private_directory, safe_component, set_private_permissions, validate_private_directory,
     validate_private_file,
@@ -213,65 +216,6 @@ fn publish_manifest(path: &Path, manifest: &RecoveryManifest) -> Result<()> {
         .context("sync adapter recovery manifest")?;
     fs::rename(&temporary, path).context("publish adapter recovery manifest")?;
     validate_private_file(path, 0o600, "recovery manifest")
-}
-
-fn cleanup(root: &Path, listen: SocketAddr, current_generation: &str) -> Result<()> {
-    let mut matching = manifests(root)
-        .into_iter()
-        .filter(|(_, manifest, _)| manifest.listen == listen)
-        .collect::<Vec<_>>();
-    matching.sort_by_key(|(_, _, modified)| std::cmp::Reverse(*modified));
-    let mut retained = HashSet::from([current_generation.to_owned()]);
-    for (_, manifest, _) in &matching {
-        if retained.len() < RETAINED_GENERATIONS_PER_LISTENER {
-            retained.insert(manifest.generation.clone());
-        }
-    }
-    for (path, manifest, _) in matching {
-        if !retained.contains(&manifest.generation) {
-            fs::remove_file(path).context("prune old recovery manifest")?;
-        }
-    }
-    let referenced = manifests(root)
-        .into_iter()
-        .map(|(_, manifest, _)| manifest.build_id)
-        .collect::<HashSet<_>>();
-    for entry in fs::read_dir(root).context("list recovery generations")? {
-        let entry = entry.context("read recovery generation entry")?;
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if !safe_component(&name) || referenced.contains(&name) {
-            continue;
-        }
-        let metadata = fs::symlink_metadata(entry.path())?;
-        if metadata.is_dir() && !metadata.file_type().is_symlink() {
-            fs::remove_dir_all(entry.path()).context("prune unused recovery executable")?;
-        }
-    }
-    Ok(())
-}
-
-fn manifests(root: &Path) -> Vec<(PathBuf, RecoveryManifest, std::time::SystemTime)> {
-    let Ok(entries) = fs::read_dir(root) else {
-        return Vec::new();
-    };
-    entries
-        .filter_map(Result::ok)
-        .filter_map(manifest_entry)
-        .collect()
-}
-
-fn manifest_entry(
-    entry: fs::DirEntry,
-) -> Option<(PathBuf, RecoveryManifest, std::time::SystemTime)> {
-    let path = entry.path();
-    let name = path.file_name()?.to_str()?;
-    if !name.starts_with(MANIFEST_PREFIX) || !name.ends_with(MANIFEST_SUFFIX) {
-        return None;
-    }
-    validate_private_file(&path, 0o600, "recovery manifest").ok()?;
-    let manifest = read_manifest(&path).ok()?;
-    let modified = entry.metadata().ok()?.modified().ok()?;
-    Some((path, manifest, modified))
 }
 
 fn manifest_file_name(generation: &str) -> String {
