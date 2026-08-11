@@ -3,11 +3,11 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use std::{fs, path::Path};
 
+mod catalog;
 mod identities;
 mod types;
 mod validation;
 mod worker_route;
-use identities::{collect_provider_models, collect_route_models};
 use types::{AgentChoice, RequestBudget, WebSearchSettings};
 use validation::{auxiliary_worker_routes, search_workers_from_providers, validate_choice, validate_main_providers, validate_providers, validate_worker_routes};
 const CONFIG_VERSION: u64 = 1;
@@ -28,16 +28,16 @@ struct ProviderConfig {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct Provider {
-    id: String,
-    agent: String,
-    default_model: String,
+    pub(super) id: String,
+    pub(super) agent: String,
+    pub(super) default_model: String,
     #[serde(default)]
-    subagent_model: Option<String>,
-    effort: String,
+    pub(super) subagent_model: Option<String>,
+    pub(super) effort: String,
     #[serde(default = "enabled_by_default")]
     enabled: bool,
     #[serde(default)]
-    usage_provider: Option<String>,
+    pub(super) usage_provider: Option<String>,
     #[serde(default)]
     usage_weekly_window_id: Option<String>,
     #[serde(default)]
@@ -51,9 +51,9 @@ struct Provider {
     #[serde(default)]
     request_budget: Option<RequestBudget>,
     #[serde(default)]
-    model_prefixes: Vec<String>,
+    pub(super) model_prefixes: Vec<String>,
     #[serde(default)]
-    selectable_models: Vec<String>,
+    pub(super) selectable_models: Vec<String>,
     backend: BackendKind,
     #[serde(default)]
     acp: Option<AcpLaunch>,
@@ -70,14 +70,14 @@ pub struct LoadedConfig {
 /// Config-declared model identities used for routing remaps.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct ModelCatalog {
-    exact: Vec<String>,
-    prefixes: Vec<String>,
-    selectable: Vec<String>,
-    workers: Vec<WorkerRoute>,
-    search_workers: Vec<WorkerRoute>,
+    pub(super) exact: Vec<String>,
+    pub(super) prefixes: Vec<String>,
+    pub(super) selectable: Vec<String>,
+    pub(super) workers: Vec<WorkerRoute>,
+    pub(super) search_workers: Vec<WorkerRoute>,
     // Explicit Claude fallback, generic Haiku, and custom-advisor routes are
     // valid routing identities but are not capacity-managed daemon workers.
-    auxiliary_workers: Vec<WorkerRoute>,
+    pub(super) auxiliary_workers: Vec<WorkerRoute>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -90,175 +90,6 @@ pub struct WorkerRoute {
     #[serde(default, skip_serializing)]
     #[allow(dead_code)]
     usage_provider: Option<String>,
-}
-
-impl ModelCatalog {
-    fn from_providers<'a>(providers: impl IntoIterator<Item = &'a Provider>) -> Self {
-        let mut exact = Vec::new();
-        let mut prefixes = Vec::new();
-        let mut selectable = Vec::new();
-        for provider in providers {
-            collect_provider_models(provider, &mut exact, &mut prefixes, &mut selectable);
-        }
-        exact.sort();
-        exact.dedup();
-        prefixes.sort();
-        prefixes.dedup();
-        selectable.sort();
-        selectable.dedup();
-        Self {
-            exact,
-            prefixes,
-            selectable,
-            workers: Vec::new(),
-            search_workers: Vec::new(),
-            auxiliary_workers: Vec::new(),
-        }
-    }
-    pub fn from_routes(routes: &[BackendRoute]) -> Self {
-        let mut exact = Vec::new();
-        let mut prefixes = Vec::new();
-        for route in routes {
-            collect_route_models(route, &mut exact, &mut prefixes);
-        }
-        exact.sort();
-        exact.dedup();
-        prefixes.sort();
-        prefixes.dedup();
-        Self {
-            exact,
-            prefixes,
-            selectable: Vec::new(),
-            workers: Vec::new(),
-            search_workers: Vec::new(),
-            auxiliary_workers: Vec::new(),
-        }
-    }
-    pub fn selectable_models(&self) -> &[String] {
-        &self.selectable
-    }
-
-    pub fn set_selectable_models(&mut self, models: Vec<String>) {
-        let mut models: Vec<String> = models
-            .into_iter()
-            .filter(|model| !model.is_empty())
-            .collect();
-        models.sort();
-        models.dedup();
-        self.selectable = models;
-    }
-    pub fn matches(&self, model: &str) -> bool {
-        self.exact.iter().any(|exact| exact == model)
-            || self
-                .prefixes
-                .iter()
-                .any(|prefix| model.starts_with(prefix.as_str()))
-    }
-
-    pub fn worker_fields(&self, agent: &str) -> Option<(&str, &str)> {
-        self.workers
-            .iter()
-            .chain(self.auxiliary_workers.iter())
-            .find(|worker| worker.agent == agent)
-            .map(|worker| (worker.model.as_str(), worker.effort.as_str()))
-    }
-
-    pub fn worker_effort_for_model(&self, model: &str) -> Option<&str> {
-        self.workers
-            .iter()
-            .chain(self.search_workers.iter())
-            .chain(self.auxiliary_workers.iter())
-            .find(|worker| worker.model == model)
-            .map(|worker| worker.effort.as_str())
-    }
-
-    pub fn worker_agent_for_model(&self, model: &str) -> Option<&str> {
-        self.workers
-            .iter()
-            .chain(self.auxiliary_workers.iter())
-            .find(|worker| worker.model == model)
-            .map(|worker| worker.agent.as_str())
-    }
-
-    pub fn worker_routes(&self) -> &[WorkerRoute] {
-        &self.workers
-    }
-
-    /// Returns the deterministic Claudex-managed route for a generic Agent.
-    /// Generic Agent types must not inherit the outer Claude session model.
-    pub fn default_worker_fields(&self) -> Option<(&str, &str)> {
-        self.workers
-            .first()
-            .map(|route| (route.model.as_str(), route.effort.as_str()))
-            .or_else(|| {
-                self.auxiliary_workers
-                    .first()
-                    .map(|route| (route.model.as_str(), route.effort.as_str()))
-            })
-    }
-
-    /// Configured Claude subscription fallback from `providers.json` (`fallback`).
-    pub fn configured_fallback(&self) -> Option<(&str, &str)> {
-        self.auxiliary_workers
-            .first()
-            .map(|route| (route.model.as_str(), route.effort.as_str()))
-    }
-
-    pub fn search_worker_routes(&self) -> &[WorkerRoute] {
-        &self.search_workers
-    }
-
-    pub fn with_search_worker_routes(mut self, workers: Vec<WorkerRoute>) -> Result<Self> {
-        self.set_search_worker_routes(workers)?;
-        Ok(self)
-    }
-
-    pub fn set_search_worker_routes(&mut self, workers: Vec<WorkerRoute>) -> Result<()> {
-        validate_worker_routes(&workers)?;
-        self.search_workers = workers;
-        Ok(())
-    }
-
-    pub fn set_worker_routes(&mut self, workers: Vec<WorkerRoute>) -> Result<()> {
-        validate_worker_routes(&workers)?;
-        self.workers = workers;
-        Ok(())
-    }
-
-    #[cfg(test)]
-    pub(crate) fn push_worker_unchecked_for_tests(&mut self, worker: WorkerRoute) {
-        self.workers.push(worker);
-    }
-
-    pub(crate) fn set_auxiliary_worker_routes(&mut self, workers: Vec<WorkerRoute>) -> Result<()> {
-        validate_worker_routes(&workers)?;
-        self.auxiliary_workers = workers;
-        Ok(())
-    }
-
-    fn add_workers(
-        &mut self,
-        providers: &[Provider],
-        native_workers: &[WorkerRoute],
-    ) -> Result<()> {
-        let mut workers = providers
-            .iter()
-            .map(|provider| {
-                WorkerRoute::new(
-                    provider.agent.clone(),
-                    provider
-                        .subagent_model
-                        .as_ref()
-                        .unwrap_or(&provider.default_model)
-                        .clone(),
-                    provider.effort.clone(),
-                )
-                .with_usage_provider(provider.usage_provider.clone())
-            })
-            .collect::<Vec<_>>();
-        workers.extend_from_slice(native_workers);
-        self.set_worker_routes(workers)
-    }
 }
 
 const fn enabled_by_default() -> bool {

@@ -63,21 +63,25 @@ pub(super) fn retained_session_ids(health: &Health) -> Vec<String> {
     }
 }
 
+pub(super) fn warm_agent_ages(health: &Health) -> std::collections::BTreeMap<String, u64> {
+    let mut ages = std::collections::BTreeMap::new();
+    for id in &health.active_subagent_agent_ids {
+        if !id.is_empty() {
+            ages.insert(id.clone(), 0);
+        }
+    }
+    for (id, age) in &health.recent_subagent_agent_ids {
+        if id.is_empty() {
+            continue;
+        }
+        // Prefer in-flight age 0 over a stale published age for the same id.
+        ages.entry(id.clone()).or_insert(*age);
+    }
+    ages
+}
+
 pub(super) fn warm_agent_ids(health: &Health) -> Vec<String> {
-    let mut ids: std::collections::BTreeSet<String> = health
-        .active_subagent_agent_ids
-        .iter()
-        .filter(|id| !id.is_empty())
-        .cloned()
-        .collect();
-    ids.extend(
-        health
-            .recent_subagent_agent_ids
-            .keys()
-            .filter(|id| !id.is_empty())
-            .cloned(),
-    );
-    ids.into_iter().collect()
+    warm_agent_ages(health).into_keys().collect()
 }
 
 pub(super) async fn try_canonical(
@@ -93,7 +97,7 @@ pub(super) async fn try_canonical(
     }
     super::pending_hot_swap::disarm(config);
     let session_ids = retained_session_ids(health);
-    let agent_ids = warm_agent_ids(health);
+    let agent_ages = warm_agent_ages(health);
     let advertised = advertised_listen(config, health);
     let warm_listen = fallback::reserve_loopback_listen(config.options.listen)?;
     let warm = config.with_listen(warm_listen);
@@ -103,7 +107,7 @@ pub(super) async fn try_canonical(
         old_pid,
         &health.build_id,
         session_ids.clone(),
-        agent_ids.clone(),
+        agent_ages.clone(),
     )?;
     let started = daemon_start::start_adapter_with_retained(&warm, &retained_path, config)
         .context("warm-start current-build listener before canonical cutover")?;
@@ -125,7 +129,7 @@ pub(super) async fn try_canonical(
         old_pid,
         &health.build_id,
         session_ids.clone(),
-        agent_ids,
+        agent_ages,
     )?;
     wait_until_canonical_released(config).await?;
     let probe = reqwest::Client::builder()

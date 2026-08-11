@@ -36,10 +36,14 @@ pub(crate) struct RetainedGeneration {
     pub build_id: String,
     #[serde(default)]
     pub session_ids: Vec<String>,
-    /// SubAgent agentIds in-flight at promote time. Seeded into sticky
-    /// `recent_agents` so cutover does not send warm workers to the live binary.
+    /// SubAgent agentIds in-flight / warm at promote time. Kept for older
+    /// readers; prefer `agent_ages` when present.
     #[serde(default)]
     pub agent_ids: Vec<String>,
+    /// Warm SubAgent agentIds → seconds since last observation at promote.
+    /// Empty on legacy snapshots; sticky then seeds `agent_ids` at `now`.
+    #[serde(default)]
+    pub agent_ages: std::collections::BTreeMap<String, u64>,
 }
 
 pub(super) fn publish_listen(
@@ -90,7 +94,14 @@ pub(super) fn write_retained(
     build_id: &str,
     session_ids: Vec<String>,
 ) -> Result<PathBuf> {
-    write_retained_with_agents(config, listen, pid, build_id, session_ids, Vec::new())
+    write_retained_with_agents(
+        config,
+        listen,
+        pid,
+        build_id,
+        session_ids,
+        std::collections::BTreeMap::new(),
+    )
 }
 
 pub(super) fn write_retained_with_agents(
@@ -99,7 +110,7 @@ pub(super) fn write_retained_with_agents(
     pid: u32,
     build_id: &str,
     session_ids: Vec<String>,
-    agent_ids: Vec<String>,
+    agent_ages: std::collections::BTreeMap<String, u64>,
 ) -> Result<PathBuf> {
     #[cfg(test)]
     if RETAINED_WRITE_FAILURE_AFTER.with(|cell| match cell.get() {
@@ -116,6 +127,7 @@ pub(super) fn write_retained_with_agents(
         bail!("injected retained state write failure");
     }
     let path = retained_path(config)?;
+    let agent_ids: Vec<String> = agent_ages.keys().cloned().collect();
     write_json(
         &path,
         &RetainedGeneration {
@@ -124,6 +136,7 @@ pub(super) fn write_retained_with_agents(
             build_id: build_id.to_owned(),
             session_ids,
             agent_ids,
+            agent_ages,
         },
     )?;
     Ok(path)
