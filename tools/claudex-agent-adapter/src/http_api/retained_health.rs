@@ -62,9 +62,9 @@ impl RetainedHealthProbe {
 
     pub(super) fn still_owns(&self, session_id: &str, within_grace: bool) -> bool {
         if self.has_active_work() {
-            // busy_claude_session_ids can name only the sessions currently
-            // turning; co-retained quiet sessions still live on active list.
-            return self.session_listed(session_id) || self.session_active_listed(session_id);
+            // HTTP counters can rise before session lists refresh; treat empty
+            // lists as a registration race and keep sticky ownership.
+            return self.session_listed_or_lists_drained(session_id);
         }
         // Quiet sample: only keep sticky inside the grace window after we last
         // observed live work. Never-seen-work retained daemons still fall through
@@ -168,6 +168,15 @@ mod tests {
         );
         assert!(shared.still_owns("other", true));
         assert!(!shared.still_owns("session-unknown", true));
+    }
+
+    #[test]
+    fn still_owns_keeps_session_while_lists_lag_active_work() {
+        let racing = probe_split(1, &[], &[], Some(&[]), BTreeMap::new(), Some(0));
+        assert!(
+            racing.still_owns("session-a", false),
+            "active work with empty session lists must not forget sticky ownership"
+        );
     }
 
     #[test]
