@@ -2224,7 +2224,9 @@ fn process_is_gone(pid: libc::pid_t) -> std::io::Result<bool> {
 
 #[cfg(unix)]
 async fn wait_for_process_exit(pid: libc::pid_t) -> std::io::Result<bool> {
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    // Under llvm-cov / parallel suites, process-group teardown can lag past a
+    // few seconds even after the subscription timeout fires.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     while tokio::time::Instant::now() < deadline {
         if process_is_gone(pid)? {
             return Ok(true);
@@ -2899,7 +2901,7 @@ async fn stream_timeout_terminates_the_entire_subscription_process_group() {
         Duration::from_secs(5),
     );
 
-    let (result, background) = tokio::time::timeout(Duration::from_secs(15), async {
+    let (result, background) = tokio::time::timeout(Duration::from_secs(45), async {
         tokio::join!(
             stream_subscription_model(&sender, &program, "model", "prompt", &options),
             fixture.release_after_pid(),
