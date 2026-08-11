@@ -270,9 +270,8 @@ impl SubscriptionStream {
         if !options.is_subagent {
             return Ok(());
         }
-        let effort = options.effort.as_deref().unwrap_or("configured");
         let status = format!(
-            "SubAgent starting: {model} (effort={effort}); preparing subscription session\u{2026}"
+            "SubAgent starting: {model}; preparing subscription session\u{2026}"
         );
         self.activity
             .start_status(sender, &status, &mut self.next_index)

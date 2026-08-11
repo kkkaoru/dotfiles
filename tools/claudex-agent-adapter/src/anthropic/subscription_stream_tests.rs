@@ -2361,7 +2361,7 @@ async fn hidden_provider_events_do_not_starve_client_visible_activity() {
             .count(),
         1
     );
-    assert!(frames.contains("effort=high"));
+    assert!(!frames.contains("effort="));
     assert!(frames.contains("done"));
     assert_valid_stream(&frames, Some("end_turn"));
     let (block_types, stopped_indices) = collect_block_events(&frames);

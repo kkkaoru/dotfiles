@@ -20,6 +20,7 @@ mod external_tool;
 mod external_tool_reject;
 mod progress;
 mod provider_launch;
+mod server_chrome;
 mod visibility;
 #[path = "web_provenance.rs"]
 mod web_provenance;
@@ -55,6 +56,8 @@ pub(in crate::anthropic) struct SegmentBuilder {
     /// Launch-shaped provider tools already bridged to Claude Code tool_use.
     /// Cursor may emit call → update → completed for the same callId.
     bridged_provider_launch_ids: Vec<String>,
+    /// SubAgent display-only server tool cards: (provider callId, srv id, kind).
+    server_tools: Vec<(String, String, server_chrome::ServerKind)>,
     /// Cursor MCP launch callIds seen with empty args. Later generic
     /// `provider tool` updates for these ids still consult the MCP launch queue.
     mcp_provider_call_ids: Vec<String>,
@@ -87,6 +90,7 @@ impl SegmentBuilder {
             provider_tool_terminal_ids: HashSet::new(),
             saw_provider_turn_activity: false,
             bridged_provider_launch_ids: Vec::new(),
+            server_tools: Vec::new(),
             mcp_provider_call_ids: Vec::new(),
             bulk_dump_hinted: false,
             requires_verified_web_evidence: false,
@@ -143,6 +147,7 @@ impl SegmentBuilder {
     pub(super) fn has_live_provider_work(&self) -> bool {
         self.external_tool_calls > 0
             || !self.provider_tool_calls.is_empty()
+            || !self.server_tools.is_empty()
             || self.saw_provider_turn_activity
     }
 

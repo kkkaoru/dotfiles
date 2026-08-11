@@ -44,6 +44,18 @@ impl SegmentBuilder {
         if !is_new {
             return Ok(());
         }
+        if self
+            .emit_subagent_server_tool(
+                call_id,
+                name,
+                title,
+                params.get("arguments"),
+                stream,
+            )
+            .await?
+        {
+            return Ok(());
+        }
         self.stream_progress_text(&progress_start_line(title, params.get("arguments")), stream)
             .await
     }
@@ -76,13 +88,13 @@ impl SegmentBuilder {
         let short_title = compact_title(&title);
         match status {
             "failed" => {
-                self.emit_terminal_failure(call_id, &short_title, params, stream)
+                self.finish_provider_tool_terminal(call_id, &short_title, params, false, stream)
                     .await?;
             }
             // Success: marker only. Dumping stdout/JSON here flooded the TUI and
             // made long Grok/Cursor turns look frozen on a wall of tool logs.
             "completed" => {
-                self.emit_terminal_success(call_id, &short_title, stream)
+                self.finish_provider_tool_terminal(call_id, &short_title, params, true, stream)
                     .await?;
             }
             "pending" | "in_progress" => {
@@ -92,6 +104,27 @@ impl SegmentBuilder {
             _ => {}
         }
         Ok(())
+    }
+
+    async fn finish_provider_tool_terminal(
+        &mut self,
+        call_id: Option<&str>,
+        short_title: &str,
+        params: &Value,
+        success: bool,
+        stream: Option<&StreamSender>,
+    ) -> Result<()> {
+        if self
+            .complete_subagent_server_tool(call_id.unwrap_or(""), success, stream)
+            .await?
+        {
+            return Ok(());
+        }
+        if success {
+            return self.emit_terminal_success(call_id, short_title, stream).await;
+        }
+        self.emit_terminal_failure(call_id, short_title, params, stream)
+            .await
     }
 
     async fn emit_terminal_failure(
@@ -134,6 +167,13 @@ impl SegmentBuilder {
             return Ok(());
         };
         if !self.remember_provider_tool(call_id, title) {
+            return Ok(());
+        }
+        let name = params.get("tool").and_then(Value::as_str).unwrap_or(title);
+        if self
+            .emit_subagent_server_tool(call_id, name, title, params.get("arguments"), stream)
+            .await?
+        {
             return Ok(());
         }
         self.stream_progress_text(&progress_start_line(title, params.get("arguments")), stream)
