@@ -38,7 +38,6 @@ fn classify_event(event: Option<Value>) -> NextEvent {
 #[cfg(test)]
 // Coverage gates measure production code; test implementations are excluded.
 #[cfg_attr(coverage_nightly, coverage(off))]
-#[allow(clippy::excessive_nesting)]
 mod tests {
     use std::sync::Arc;
 
@@ -58,31 +57,35 @@ mod tests {
         let dispatcher = ThreadEventDispatcher::default();
         let events = Arc::new(dispatcher.subscribe("thread"));
         dispatcher.dispatch(tool_event("first"));
-        assert!(matches!(
-            next_event(&events, false).await,
-            NextEvent::Event(event) if event["params"]["callId"] == "first"
-        ));
+        assert_event_call_id(&events, "first").await;
 
-        let waiting_events = Arc::clone(&events);
-        let boundary = tokio::spawn(async move { next_event(&waiting_events, true).await });
-        tokio::task::yield_now().await;
-        tokio::time::advance(EXTERNAL_TOOL_BATCH_HANDOFF_QUIET_PERIOD).await;
-        assert!(matches!(
-            boundary.await.expect("quiet-boundary task"),
-            NextEvent::ExternalBatchReady
-        ));
+        let boundary = wait_for_external_batch_ready(Arc::clone(&events)).await;
+        assert!(matches!(boundary, NextEvent::ExternalBatchReady));
 
         dispatcher.dispatch(tool_event("queued-before-drop"));
         drop(events);
         dispatcher.dispatch(tool_event("arrived-after-drop"));
 
         let next_turn = dispatcher.subscribe("thread");
-        for call_id in ["queued-before-drop", "arrived-after-drop"] {
-            assert!(matches!(
-                next_event(&next_turn, false).await,
-                NextEvent::Event(event) if event["params"]["callId"] == call_id
-            ));
-        }
+        assert_event_call_id(&next_turn, "queued-before-drop").await;
+        assert_event_call_id(&next_turn, "arrived-after-drop").await;
+    }
+
+    async fn wait_for_external_batch_ready(
+        events: Arc<crate::app_server::ThreadEvents>,
+    ) -> NextEvent {
+        let waiting_events = Arc::clone(&events);
+        let boundary = tokio::spawn(async move { next_event(&waiting_events, true).await });
+        tokio::task::yield_now().await;
+        tokio::time::advance(EXTERNAL_TOOL_BATCH_HANDOFF_QUIET_PERIOD).await;
+        boundary.await.expect("quiet-boundary task")
+    }
+
+    async fn assert_event_call_id(events: &crate::app_server::ThreadEvents, call_id: &str) {
+        let NextEvent::Event(event) = next_event(events, false).await else {
+            panic!("expected NextEvent::Event for {call_id}");
+        };
+        assert_eq!(event["params"]["callId"], call_id);
     }
 
     fn tool_event(call_id: &str) -> serde_json::Value {
