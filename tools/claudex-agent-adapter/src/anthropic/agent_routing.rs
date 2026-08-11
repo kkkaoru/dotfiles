@@ -1,11 +1,12 @@
-use serde::Deserialize;
 use serde_json::Value;
 
 use super::request_routing::official_claude_haiku_model;
 use super::subscription::valid_effort;
 
 mod explicit;
+mod texts;
 use explicit::explicit_model_matches_agent;
+use texts::{message_texts, routing_summary, user_message_texts, value_texts};
 
 const ADAPTER_EFFORT: &str = "claudex_effort";
 const ADAPTER_MODEL: &str = "claudex_model";
@@ -332,35 +333,6 @@ pub(super) fn active_routing_summary(messages: &[Value], system: &Value) -> Opti
         .or_else(|| message_texts(messages).filter_map(routing_summary).last())
 }
 
-fn routing_summary(text: &str) -> Option<Value> {
-    let start = text.find("{\"providers\":")?;
-    Value::deserialize(&mut serde_json::Deserializer::from_str(&text[start..])).ok()
-}
-
-fn user_message_texts(messages: &[Value]) -> impl Iterator<Item = &str> {
-    messages
-        .iter()
-        .filter(|message| message.get("role").and_then(Value::as_str) == Some("user"))
-        .filter_map(|message| message.get("content"))
-        .flat_map(value_texts)
-}
-
-fn message_texts(messages: &[Value]) -> impl Iterator<Item = &str> {
-    messages
-        .iter()
-        .filter_map(|message| message.get("content"))
-        .flat_map(value_texts)
-}
-
-fn value_texts(value: &Value) -> impl Iterator<Item = &str> {
-    value.as_str().into_iter().chain(
-        value
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|block| block.get("text").and_then(Value::as_str)),
-    )
-}
 
 #[cfg(test)]
 mod tests {

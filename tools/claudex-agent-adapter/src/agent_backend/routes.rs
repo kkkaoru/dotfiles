@@ -370,20 +370,7 @@ impl RoutedBackends {
             .map(|(_, template)| template)
     }
 
-    pub(super) fn first_ready(&self, kind: BackendKind) -> Option<Arc<AgentBackend>> {
-        self.configured
-            .iter()
-            .find(|route| route.kind == kind && route.ready_backend().is_some())
-            .and_then(|route| route.ready_backend())
-            .or_else(|| {
-                self.dynamic
-                    .lock()
-                    .expect("dynamic routes poisoned")
-                    .iter()
-                    .find(|route| route.kind == kind && route.ready_backend().is_some())
-                    .and_then(|route| route.ready_backend())
-            })
-    }
+
 }
 
 #[cfg(test)]

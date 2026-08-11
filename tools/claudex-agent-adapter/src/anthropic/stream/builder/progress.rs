@@ -369,22 +369,5 @@ impl SegmentBuilder {
         Ok(())
     }
 
-    pub(in crate::anthropic::stream::builder) async fn flush_pending_answer(
-        &mut self,
-        stream: Option<&StreamSender>,
-    ) -> Result<()> {
-        if self.pending_answer.is_empty() {
-            return Ok(());
-        }
-        let text = std::mem::take(&mut self.pending_answer);
-        let index = self.start_text_block(&text, stream).await?;
-        send_stream_frame(stream, "content_block_delta", || {
-            json!({
-                "type":"content_block_delta", "index":index,
-                "delta":{"type":"text_delta","text":text}
-            })
-        })
-        .await?;
-        self.close_text_block(stream).await
-    }
+
 }

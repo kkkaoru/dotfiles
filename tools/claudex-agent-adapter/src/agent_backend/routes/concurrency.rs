@@ -1,4 +1,4 @@
-use super::{BackendKind, RoutedBackends};
+use super::{AgentBackend, BackendKind, RoutedBackends};
 
 impl RoutedBackends {
     pub(crate) fn max_concurrency_for_model(&self, model: &str) -> Option<usize> {
@@ -36,6 +36,24 @@ impl RoutedBackends {
             .or_else(|| {
                 self.prefix_template(model)
                     .and_then(|template| template.model_provider.clone())
+            })
+    }
+
+    pub(in crate::agent_backend) fn first_ready(
+        &self,
+        kind: BackendKind,
+    ) -> Option<std::sync::Arc<AgentBackend>> {
+        self.configured
+            .iter()
+            .find(|route| route.kind == kind && route.ready_backend().is_some())
+            .and_then(|route| route.ready_backend())
+            .or_else(|| {
+                self.dynamic
+                    .lock()
+                    .expect("dynamic routes poisoned")
+                    .iter()
+                    .find(|route| route.kind == kind && route.ready_backend().is_some())
+                    .and_then(|route| route.ready_backend())
             })
     }
 }

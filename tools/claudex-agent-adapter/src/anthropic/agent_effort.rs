@@ -4,12 +4,14 @@ use serde_json::Value;
 
 mod background_launch;
 mod model;
+mod names;
 mod terminal;
 pub(in crate::anthropic) use super::agent_route_validation::BLOCKED_SUBAGENT_NOTICE;
 #[cfg(test)]
 pub(super) use super::agent_route_validation::validate_routed_agent_arguments;
 pub(super) use super::agent_route_validation::validate_routed_agent_arguments_with_catalog;
 pub(super) use model::{disabled_subagent_model, is_agent_tool, requested_model};
+use names::active_user_supplied_name;
 use terminal::terminal_task_notification_ids;
 
 pub(super) use super::AgentEffortRecord;
@@ -17,7 +19,7 @@ pub(super) use super::agent_effort_matching::is_subagent_request;
 use super::{
     MessagesRequest,
     agent_effort_matching::{
-        has_correlation_marker, request_matches_intent_with_system, value_texts,
+        has_correlation_marker, request_matches_intent_with_system,
     },
     agent_intent_store::{persistence_snapshot, remove_expired, unix_seconds},
     subscription::valid_effort,
@@ -346,36 +348,6 @@ fn sanitize_public_tool_arguments(
     arguments.clone()
 }
 
-fn active_user_supplied_name(messages: &[Value], name: &str) -> bool {
-    let start = messages
-        .iter()
-        .rposition(|message| message.get("role").and_then(Value::as_str) == Some("assistant"))
-        .map_or(0, |index| index + 1);
-    messages[start..]
-        .iter()
-        .rev()
-        .filter(|message| message.get("role").and_then(Value::as_str) == Some("user"))
-        .filter_map(|message| message.get("content"))
-        .flat_map(value_texts)
-        .find(|text| !background_launch::is_hook_or_mailbox_only(text))
-        .is_some_and(|text| explicitly_names_agent(text, name))
-}
-
-fn explicitly_names_agent(text: &str, name: &str) -> bool {
-    [
-        format!("`{name}`"),
-        format!("\"{name}\""),
-        format!("@{name}"),
-        format!("name {name}"),
-        format!("names {name}"),
-        format!("named {name}"),
-        format!("named teammate {name}"),
-        format!("名前を{name}"),
-        format!("{name}という名前"),
-    ]
-    .iter()
-    .any(|pattern| text.contains(pattern))
-}
 
 #[cfg(test)]
 fn tool_schema(_tool_name: &str, schema: Value) -> Value {

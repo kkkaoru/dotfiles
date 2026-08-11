@@ -1,6 +1,7 @@
 use anyhow::Result;
 use serde_json::json;
 
+use super::SegmentBuilder;
 use crate::anthropic::stream::protocol::{StreamSender, send_stream_frame};
 
 pub(super) async fn send_activity_heartbeat(
@@ -50,5 +51,26 @@ fn format_keepalive_clock(elapsed: std::time::Duration) -> String {
         format!("{}m{:02}s", secs / 60, secs % 60)
     } else {
         format!("{secs}s")
+    }
+}
+
+impl SegmentBuilder {
+    pub(in crate::anthropic::stream::builder) async fn flush_pending_answer(
+        &mut self,
+        stream: Option<&StreamSender>,
+    ) -> Result<()> {
+        if self.pending_answer.is_empty() {
+            return Ok(());
+        }
+        let text = std::mem::take(&mut self.pending_answer);
+        let index = self.start_text_block(&text, stream).await?;
+        send_stream_frame(stream, "content_block_delta", || {
+            json!({
+                "type":"content_block_delta", "index":index,
+                "delta":{"type":"text_delta","text":text}
+            })
+        })
+        .await?;
+        self.close_text_block(stream).await
     }
 }
