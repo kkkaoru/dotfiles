@@ -69,8 +69,28 @@ class PathTests(GitFixture):
         new_branch = io.StringIO(
             f"refs/heads/new {head} refs/heads/new {quality.ZERO_OID}\n"
         )
+        # Fixture repos have no origin remote, so new refs still diff vs empty tree.
         self.assertEqual(quality.pre_push_paths(self.root, new_branch), {"all.txt"})
         self.assertEqual(quality.pre_push_paths(self.root, io.StringIO()), {"all.txt"})
+        self.assertEqual(
+            quality.pre_push_base(self.root, quality.ZERO_OID),
+            quality.empty_tree(self.root),
+        )
+
+    def test_new_push_uses_origin_master_when_remote_exists(self) -> None:
+        base = self.write_commit("base.txt", "base\n")
+        subprocess.run(
+            ("git", "remote", "add", "origin", str(self.root)),
+            cwd=self.root,
+            check=True,
+        )
+        subprocess.run(("git", "fetch", "-q", "origin"), cwd=self.root, check=True)
+        head = self.write_commit("feature.txt", "feature\n")
+        new_branch = io.StringIO(
+            f"refs/heads/feature {head} refs/heads/feature {quality.ZERO_OID}\n"
+        )
+        self.assertEqual(quality.pre_push_base(self.root, quality.ZERO_OID), base)
+        self.assertEqual(quality.pre_push_paths(self.root, new_branch), {"feature.txt"})
 
     def test_ignores_deletions_and_malformed_push_lines(self) -> None:
         stream = io.StringIO(

@@ -68,6 +68,33 @@ def is_zero_oid(value: str) -> bool:
     return bool(value) and not value.strip("0")
 
 
+def pre_push_base(root: Path, old: str) -> str:
+    """Prefer origin/master over the empty tree for new refs when origin exists.
+
+    Diffing a brand-new branch against the empty tree runs ``git diff --check``
+    on the entire history, which fails on pre-existing vendored trailing
+    whitespace (e.g. ``.codex/skills``). Only consult remotes configured in
+    *this* repository so isolated fixture repos still use the empty tree.
+    """
+    if not is_zero_oid(old):
+        return old
+    try:
+        remotes = git(root, "remote").splitlines()
+    except subprocess.CalledProcessError:
+        remotes = []
+    if "origin" not in remotes:
+        return empty_tree(root)
+    for ref_name in (
+        "refs/remotes/origin/master",
+        "refs/remotes/origin/main",
+    ):
+        try:
+            return git(root, "rev-parse", "--verify", ref_name)
+        except subprocess.CalledProcessError:
+            continue
+    return empty_tree(root)
+
+
 def pre_push_paths(root: Path, stream: TextIO) -> set[str]:
     """Return paths changed by every ref update in a push."""
     ranges = push_ranges(stream)
@@ -79,7 +106,7 @@ def pre_push_paths(root: Path, stream: TextIO) -> set[str]:
         ranges = [(upstream, git(root, "rev-parse", "HEAD"))]
     paths: set[str] = set()
     for old, new in ranges:
-        base = empty_tree(root) if is_zero_oid(old) else old
+        base = pre_push_base(root, old)
         git(root, "diff", "--check", base, new)
         paths.update(listed_paths(git(root, "diff", "--name-only", base, new)))
     return paths
