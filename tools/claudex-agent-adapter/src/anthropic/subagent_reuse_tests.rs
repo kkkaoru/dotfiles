@@ -578,7 +578,7 @@ fn explicit_resume_is_left_alone() {
 }
 
 #[test]
-fn same_scope_different_model_resumes_existing_worker() {
+fn same_scope_different_model_stays_independent_fanout() {
     let registry = SubagentReuseRegistry::default();
     let mut first = request(
         "session-a",
@@ -593,13 +593,14 @@ fn same_scope_different_model_resumes_existing_worker() {
     let mut arguments = launch_arguments("Audit the Rust adapter tests", "other-model");
     assert_eq!(
         registry.rewrite_launch_input("session-a", &mut arguments),
-        Some("worker-a".to_owned())
+        None,
+        "distinct claudex_model must spawn a peer, not resume the other model"
     );
-    assert_eq!(arguments["resume"], "worker-a");
+    assert!(arguments.get("resume").is_none());
 }
 
 #[test]
-fn description_is_preferred_over_prompt_for_same_scope() {
+fn description_same_scope_same_model_prefers_existing_worker() {
     let registry = SubagentReuseRegistry::default();
     let mut first = request(
         "session-a",
@@ -621,13 +622,23 @@ fn description_is_preferred_over_prompt_for_same_scope() {
         ],
     );
     registry.observe_and_restore(&mut first);
-    let mut arguments = json!({
+    let mut peer = json!({
         "description":"Reproduce azookey conversion bug",
         "prompt":"Use command code to map the conversion pipeline.",
         "claudex_model":"command-code"
     });
     assert_eq!(
-        registry.rewrite_launch_input("session-a", &mut arguments),
+        registry.rewrite_launch_input("session-a", &mut peer),
+        None,
+        "description match alone must not cross claudex_model boundaries"
+    );
+    let mut same_model = json!({
+        "description":"Reproduce azookey conversion bug",
+        "prompt":"Continue mapping the conversion pipeline.",
+        "claudex_model":"gpt-test"
+    });
+    assert_eq!(
+        registry.rewrite_launch_input("session-a", &mut same_model),
         Some("worker-a".to_owned())
     );
 }
@@ -1247,6 +1258,87 @@ fn find_reusable_launch_prioritizes_active_over_completed() {
     let args = json!({"prompt": "Test scope", "claudex_model": "model-1"});
     let result = find_reusable_launch(&launches, &args);
     assert_eq!(result.map(|r| r.recipient.as_str()), Some("worker-active"));
+}
+
+#[test]
+fn find_reusable_launch_prefers_newest_completed_worker() {
+    let launches = vec![
+        LaunchRecord {
+            key: "key-old".to_owned(),
+            recipient: "worker-old".to_owned(),
+            scope: "Audit rust".to_owned(),
+            model: Some("gpt-test".to_owned()),
+            status: "completed".to_owned(),
+        },
+        LaunchRecord {
+            key: "key-new".to_owned(),
+            recipient: "worker-new".to_owned(),
+            scope: "Audit rust".to_owned(),
+            model: Some("gpt-test".to_owned()),
+            status: "completed".to_owned(),
+        },
+    ];
+    let args = json!({"prompt": "Audit rust", "claudex_model": "gpt-test"});
+    let result = find_reusable_launch(&launches, &args);
+    assert_eq!(
+        result.map(|r| r.recipient.as_str()),
+        Some("worker-new"),
+        "same-priority completed workers must resume the newest transcript/cache"
+    );
+}
+
+#[test]
+fn model_less_placeholder_does_not_block_explicit_model_fanout() {
+    let launches = vec![LaunchRecord {
+        key: "pending".to_owned(),
+        recipient: String::new(),
+        scope: "Recover post-reboot state".to_owned(),
+        model: None,
+        status: "active".to_owned(),
+    }];
+    assert!(
+        !scope_is_occupied(&launches, "recover post-reboot state", Some("gpt-test")),
+        "explicit model A must still fan out beside a model-less placeholder"
+    );
+    assert!(
+        !scope_is_occupied(&launches, "recover post-reboot state", Some("cursor-test")),
+        "explicit model B must still fan out beside a model-less placeholder"
+    );
+    assert!(
+        scope_is_occupied(&launches, "recover post-reboot state", None),
+        "model-less queries still collide with any same-scope occupant"
+    );
+}
+
+#[test]
+fn merge_record_refreshes_scope_on_explicit_resume_follow_up() {
+    let mut launches = vec![LaunchRecord {
+        key: "tool-a".to_owned(),
+        recipient: "worker-a".to_owned(),
+        scope: "Audit rust".to_owned(),
+        model: Some("gpt-test".to_owned()),
+        status: "completed".to_owned(),
+    }];
+    super::records::merge_launches(
+        &mut launches,
+        std::iter::once(&LaunchRecord {
+            key: "tool-a".to_owned(),
+            recipient: "worker-a".to_owned(),
+            scope: "Extend the audit to CSS".to_owned(),
+            model: Some("gpt-test".to_owned()),
+            status: "active".to_owned(),
+        }),
+    );
+    assert_eq!(launches[0].scope, "Extend the audit to CSS");
+    assert_eq!(launches[0].status, "active");
+    let follow = json!({
+        "prompt":"Extend the audit to CSS",
+        "claudex_model":"gpt-test"
+    });
+    assert_eq!(
+        find_reusable_launch(&launches, &follow).map(|r| r.recipient.as_str()),
+        Some("worker-a")
+    );
 }
 
 #[test]

@@ -83,9 +83,10 @@ pub(super) fn scope_is_occupied(
             match (model, launch.model.as_deref()) {
                 (Some(want), Some(have)) => want.eq_ignore_ascii_case(have),
                 (None, None) => true,
-                // Model-less queries still see any same-scope occupant; a
-                // model-less inflight placeholder still blocks until filled.
-                _ => true,
+                // Model-less placeholders must not block explicit multi-model
+                // fan-out; model-less queries still collide with any occupant.
+                (None, Some(_)) => true,
+                (Some(_), None) => false,
             }
         })
 }
@@ -137,7 +138,8 @@ pub(super) fn find_reusable_launch<'a>(
     };
     let mut exact = launches
         .iter()
-        .filter(|current| {
+        .enumerate()
+        .filter(|(_, current)| {
             reusable_status(&current.status)
                 && !current.recipient.is_empty()
                 && same_logical_launch(current, &proposed)
@@ -146,8 +148,14 @@ pub(super) fn find_reusable_launch<'a>(
     if exact.is_empty() {
         return None;
     }
-    exact.sort_by_key(|launch| std::cmp::Reverse(reuse_priority(&launch.status)));
-    exact.into_iter().next()
+    // Prefer higher status priority, then the newest record (prompt-cache /
+    // latest transcript) when priorities tie.
+    exact.sort_by(|(left_idx, left), (right_idx, right)| {
+        reuse_priority(&right.status)
+            .cmp(&reuse_priority(&left.status))
+            .then_with(|| right_idx.cmp(left_idx))
+    });
+    exact.into_iter().next().map(|(_, launch)| launch)
 }
 
 fn reuse_priority(status: &str) -> u8 {
@@ -163,7 +171,9 @@ fn merge_record(current: &mut LaunchRecord, observed: &LaunchRecord) {
     if current.recipient.is_empty() && !observed.recipient.is_empty() {
         current.recipient.clone_from(&observed.recipient);
     }
-    if current.scope.is_empty() {
+    // Explicit resume / follow-up launches refresh scope so the next same-scope
+    // rewrite still hits this recipient instead of spawning a peer.
+    if !observed.scope.is_empty() {
         current.scope.clone_from(&observed.scope);
     }
     if current.model.is_none() {
