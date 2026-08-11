@@ -28,6 +28,7 @@ mod consume_fanout;
 mod consume_finish;
 mod finish;
 mod handle;
+mod handle_route;
 mod launch_prep;
 mod lifecycle;
 mod post_eof;

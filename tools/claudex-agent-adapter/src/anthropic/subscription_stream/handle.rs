@@ -1,13 +1,10 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use axum::body::Bytes;
 use serde_json::Value;
 use std::convert::Infallible;
 use tokio::sync::mpsc;
 
 use super::SubscriptionStream;
-use super::launch_prep::{
-    note_reused_subagent_launch, record_prepared_agent_intent, reject_unavailable_subagent_model,
-};
 use crate::anthropic::{
     subscription::SubscriptionOptions,
     subscription_frames::{send_block_stop, send_text_delta, send_text_start},
@@ -63,65 +60,6 @@ impl SubscriptionStream {
         Ok(true)
     }
 
-    #[cfg(test)]
-    pub(super) fn prepare_tool_input(&self, name: &str, id: &str, input: &Value) -> Result<Value> {
-        Ok(self.route_agent_tool_input(name, id, input)?.1)
-    }
-
-    /// Returns `(private_routed, public)` so occupancy / reuse can see hydrated
-    /// `claudex_model` before public schema stripping.
-    pub(super) fn route_agent_tool_input(
-        &self,
-        name: &str,
-        id: &str,
-        input: &Value,
-    ) -> Result<(Value, Value)> {
-        if !crate::anthropic::agent_effort::is_agent_tool(name) {
-            let cloned = input.clone();
-            return Ok((cloned.clone(), cloned));
-        }
-        let context = self
-            .tool_context
-            .as_ref()
-            .context("subscription Agent/Task call has no routing context")?;
-        let mut routed_input = input.clone();
-        crate::anthropic::agent_routing::hydrate_routing_fields_from_context(
-            &mut routed_input,
-            &context.user_messages,
-            &context.system,
-            &context.model_catalog,
-        );
-        crate::anthropic::agent_routing::hydrate_standard_agent_to_parent(
-            &mut routed_input,
-            &context.parent_model,
-        );
-        note_reused_subagent_launch(context, name, &mut routed_input);
-        reject_unavailable_subagent_model(context, &routed_input)?;
-        if routed_input.get("claudex_model").is_none() {
-            tracing::warn!(
-                tool = name,
-                subagent_type = ?routed_input.get("subagent_type"),
-                native_model = ?routed_input.get("model"),
-                "subscription Agent/Task omitted Claudex routing fields"
-            );
-        }
-        crate::anthropic::agent_effort::validate_routed_agent_arguments_with_catalog(
-            name,
-            &routed_input,
-            &context.user_messages,
-            &context.system,
-            &context.model_catalog,
-        )?;
-        let (intent, public) = crate::anthropic::agent_effort::prepare_arguments_for_user(
-            name,
-            id,
-            &routed_input,
-            &context.user_messages,
-            &context.system,
-        );
-        record_prepared_agent_intent(context, name, id, intent.as_ref());
-        Ok((routed_input, public))
-    }
 
     pub(super) async fn close_text(
         &mut self,
