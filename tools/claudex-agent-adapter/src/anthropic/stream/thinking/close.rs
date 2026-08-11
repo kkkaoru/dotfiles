@@ -41,4 +41,28 @@ impl ThinkingState {
             || text.contains("effort=")
             || text.contains("still thinking with high effort")
     }
+
+    /// Replace live ▶ tip chrome with buffered CoT for the committed transcript.
+    /// Does not stream the CoT body — live SSE already showed tip-only progress.
+    pub(in crate::anthropic::stream) async fn commit_buffered_reasoning(
+        &mut self,
+        blocks: &mut Vec<Value>,
+        item_id: &str,
+        text: &str,
+        stream: Option<&StreamSender>,
+    ) -> Result<()> {
+        if text.trim().is_empty() {
+            return Ok(());
+        }
+        if self.open.is_none() {
+            self.start(blocks, item_id, 0, stream).await?;
+        } else {
+            self.promote_keepalive_progress(item_id);
+        }
+        let open = self.open.as_mut().expect("reasoning block just opened");
+        open.text = text.to_owned();
+        blocks[open.index]["thinking"] = json!(open.text);
+        blocks[open.index]["signature"] = json!(open.signature);
+        Ok(())
+    }
 }

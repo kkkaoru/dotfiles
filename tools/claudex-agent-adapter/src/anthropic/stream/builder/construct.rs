@@ -12,6 +12,7 @@ impl SegmentBuilder {
             thinking: ThinkingState::default(),
             open_text_block: None,
             pending_answer: String::new(),
+            pending_reasoning: String::new(),
             is_subagent: false,
             paint_command_code_progress: false,
             turn_started_at: Instant::now(),

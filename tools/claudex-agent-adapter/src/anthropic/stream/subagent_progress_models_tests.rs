@@ -71,7 +71,8 @@ const CASES: &[Case] = &[
             arg_key: "command",
             arg_value: "ls apps/finish-position-predict-container",
         }),
-        expect_visible: &["Plan the per-race", "▶ ls"],
+        // CoT stays tip-only live (▶ Thinking); Bash title must stay visible.
+        expect_visible: &["▶ Thinking", "▶ ls"],
     },
     Case {
         name: "copilot-acp",
@@ -95,7 +96,7 @@ const CASES: &[Case] = &[
         prose_item_id: "cline:message",
         reasoning: Some("Check the cache seed path before editing.\n"),
         tool: None,
-        expect_visible: &["型と配信パスを把握しました", "cache seed path"],
+        expect_visible: &["型と配信パスを把握しました", "▶ Thinking"],
     },
     Case {
         name: "spark-codex",
@@ -103,7 +104,7 @@ const CASES: &[Case] = &[
         prose_item_id: "spark:message",
         reasoning: Some("Trace filter_races_by_scope before editing.\n"),
         tool: None,
-        expect_visible: &["Trace filter_races_by_scope", "Seasoning per-race"],
+        expect_visible: &["▶ Thinking", "Seasoning per-race"],
     },
     Case {
         name: "command-code-acp",
@@ -117,11 +118,7 @@ const CASES: &[Case] = &[
             arg_key: "query",
             arg_value: "AVITA株式会社",
         }),
-        expect_visible: &[
-            "AVITA Inc. is an avatar",
-            "Check AVITA Inc. official site",
-            "▶",
-        ],
+        expect_visible: &["AVITA Inc. is an avatar", "▶ Thinking", "▶"],
     },
 ];
 

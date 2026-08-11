@@ -29,6 +29,10 @@ pub(in crate::anthropic) struct SegmentBuilder {
     /// SubAgent AgentMessage prose held until end_turn. Live viewer sees it as
     /// thinking; streaming `text_delta` now would hide the panel until finish.
     pub(super) pending_answer: String,
+    /// ACP `AgentThoughtChunk` / summary CoT buffered for the transcript only.
+    /// Live SubAgent SSE stays on ▶ tips so Claude Code 2.1 does not collapse
+    /// the panel to Frolicking and hide ▶ Bash for long provider tools.
+    pub(super) pending_reasoning: String,
     pub(super) is_subagent: bool,
     /// Command Code SubAgent: keep native thinking open (no Thought-for flicker).
     /// Do not dump canned ▶/still-working text chrome.

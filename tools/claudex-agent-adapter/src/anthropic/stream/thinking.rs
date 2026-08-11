@@ -72,6 +72,7 @@ impl ThinkingState {
     /// SubAgent turns keep one native thinking block open so Claude Code's
     /// standard thinking chrome stays live. Closing on every ACP itemId /
     /// summaryIndex collapse the viewer to repeating "Thought for Xs".
+    #[cfg(test)]
     pub(super) async fn delta_text_coalesced(
         &mut self,
         item_id: &str,

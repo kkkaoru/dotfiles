@@ -82,6 +82,19 @@ impl SegmentBuilder {
         self.close_text_block(stream).await
     }
 
+    async fn commit_pending_reasoning_for_transcript(
+        &mut self,
+        stream: Option<&StreamSender>,
+    ) -> Result<()> {
+        if self.pending_reasoning.trim().is_empty() {
+            return Ok(());
+        }
+        let text = std::mem::take(&mut self.pending_reasoning);
+        self.thinking
+            .commit_buffered_reasoning(&mut self.blocks, "subagent:reasoning", &text, stream)
+            .await
+    }
+
     pub(in crate::anthropic::stream) fn update_usage(&mut self, event: &Value) {
         self.usage.input_tokens = event
             .pointer("/params/tokenUsage/last/inputTokens")
@@ -105,6 +118,7 @@ impl SegmentBuilder {
     ) -> Result<Segment> {
         self.report_incomplete_launches(stream).await?;
         self.report_no_subagent_action(stream).await?;
+        self.commit_pending_reasoning_for_transcript(stream).await?;
         self.close_open_blocks(stream).await?;
         sanitize_committed_blocks(&mut self.blocks);
         let stop_reason = if self.external_tool_calls > 0 {

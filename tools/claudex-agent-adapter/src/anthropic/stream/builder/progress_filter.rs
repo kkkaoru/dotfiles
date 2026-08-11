@@ -75,6 +75,7 @@ impl SegmentBuilder {
         delta: &str,
         stream: Option<&StreamSender>,
     ) -> Result<()> {
+        let _ = (item_id, summary_index);
         self.note_provider_turn_activity();
         if delta.contains("large tool output omitted") {
             return self
@@ -82,8 +83,14 @@ impl SegmentBuilder {
                 .progress_status_keep_open(&mut self.blocks, delta, stream)
                 .await;
         }
+        // ACP AgentThoughtChunk is mapped to summaryTextDelta. Dumping that CoT
+        // into live thinking collapses Claude Code 2.1 SubAgent chrome to
+        // Frolicking/Wandering and hides later ▶ Bash for long tools (same
+        // failure mode as raw textDelta). Tip-only keeps tool chrome visible;
+        // buffer CoT for the committed transcript at finish.
+        self.pending_reasoning.push_str(delta);
         self.thinking
-            .delta_text_coalesced(item_id, summary_index, delta, &mut self.blocks, stream)
+            .progress_status_keep_open(&mut self.blocks, "▶ Thinking…\n", stream)
             .await
     }
 

@@ -120,12 +120,12 @@ impl SegmentBuilder {
         if self.summarized_reasoning_ids.iter().any(|id| id == item_id) {
             return Ok(());
         }
-        // GPT/Codex SubAgents stream long raw CoT as `textDelta`. Dumping it
-        // into live thinking buried ▶ Read/Bash and left Claude Code 2.1 on
-        // "Thought for Xs" with no mid-turn body. Keep thinking free for tool
-        // chrome, but paint a compact tip so long CoT silence is not blank.
-        // textDelta still counts as watchdog activity. Main sessions still
-        // surface textDelta as native Thinking.
+        // GPT/Codex SubAgents stream long raw CoT as `textDelta`. ACP
+        // AgentThoughtChunk uses summaryTextDelta (see progress_filter). Dumping
+        // either into live thinking buried ▶ Read/Bash and left Claude Code 2.1
+        // on Frolicking/Wandering with no mid-turn body. Keep thinking free for
+        // tool chrome; paint a compact tip. textDelta still counts as watchdog
+        // activity. Main sessions still surface textDelta as native Thinking.
         if self.is_subagent {
             self.note_provider_turn_activity();
             return self

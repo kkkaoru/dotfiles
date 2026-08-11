@@ -1193,6 +1193,7 @@ fn assert_subagent_reasoning_transcript(segment: &crate::anthropic::Segment) {
         "SubAgent turn must keep one native thinking block: {:?}",
         segment.blocks
     );
+    // Live SSE is tip-only; buffered CoT is committed at finish for the transcript.
     assert!(thinking.contains("Map the conversion path."));
     assert!(thinking.contains("Check Vibrato boundaries."));
     assert!(thinking.contains("Hypothesis: boundaries were dropped."));
@@ -1228,6 +1229,14 @@ fn assert_subagent_reasoning_sse(sse: &str) {
         sse.matches("\"type\":\"signature_delta\"").count(),
         1,
         "thinking must stay open until end_turn: {sse}"
+    );
+    assert!(
+        sse.contains("▶ Thinking"),
+        "ACP CoT must stay tip-only live so CC does not Frolicking-collapse: {sse}"
+    );
+    assert!(
+        !sse.contains("Map the conversion path"),
+        "live SSE must not dump CoT body (collapses to Frolicking): {sse}"
     );
     assert!(
         sse.contains("▶ Read") || sse.contains("▶ convert.ts"),
