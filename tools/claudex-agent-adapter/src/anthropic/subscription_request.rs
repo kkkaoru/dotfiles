@@ -96,20 +96,18 @@ const SUBSCRIPTION_PROMPT_PREAMBLE: &str = concat!(
         );
 
 pub(super) fn subscription_request_prompt(request: &MessagesRequest) -> String {
+    // Keep turn-varying scheduler/lane text after the stable preamble + System +
+    // Messages prefix so Anthropic prompt-cache can reuse the long shared head.
     let scheduler_policy = subscription_parallel_scheduler_instructions(request);
     let mut prompt = String::from(SUBSCRIPTION_PROMPT_PREAMBLE);
     prompt.push_str(&format!(
-        "{}\n\nSystem:\n{}\n\nMessages:\n{}",
-        scheduler_policy,
+        "System:\n{}\n\nMessages:\n{}\n\n{}\n\n{}\n\n{}",
         system_text(&request.system),
-        serde_json::to_string(&request.messages).unwrap_or_default()
+        serde_json::to_string(&request.messages).unwrap_or_default(),
+        SHARED_WORKSPACE_INSTRUCTIONS,
+        SUBAGENT_RESULT_PROTOCOL,
+        scheduler_policy,
     ));
-    prompt.push('\n');
-    prompt.push('\n');
-    prompt.push_str(SHARED_WORKSPACE_INSTRUCTIONS);
-    prompt.push('\n');
-    prompt.push('\n');
-    prompt.push_str(SUBAGENT_RESULT_PROTOCOL);
     prompt
 }
 

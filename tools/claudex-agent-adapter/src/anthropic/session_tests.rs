@@ -65,7 +65,7 @@ fn treats_unknown_task_lifecycle_ids_as_idempotent_success() {
 use crate::agent_backend::WebSearchMode;
 use crate::anthropic::{
     Bridge, MessagesRequest, SelectedSession, Session, content::ToolResult,
-    subscription_request::subscription_request_prompt,
+    subscription_request::{SHARED_WORKSPACE_INSTRUCTIONS, subscription_request_prompt},
 };
 use super::session_turn::StartSelectedTurn;
 use crate::{
@@ -1197,6 +1197,24 @@ fn subscription_and_session_instructions_report_the_default_parallel_contract() 
     assert!(prompt.contains("An explicit active user request for an exact worker count"));
     assert!(prompt.contains("Adapter orchestration defaults (runtime metadata)"));
     assert!(!prompt.contains("prompt injection"));
+}
+
+#[test]
+fn subscription_prompt_keeps_turn_varying_scheduler_after_messages() {
+    let prompt = subscription_request_prompt(&request(json!("cache-prefix"), Vec::new()));
+    let messages = prompt
+        .find("\nMessages:\n")
+        .expect("Messages section");
+    let scheduler = prompt
+        .find("Dynamically size SubAgent fan-out")
+        .expect("scheduler policy");
+    let shared = prompt
+        .find(SHARED_WORKSPACE_INSTRUCTIONS)
+        .expect("shared workspace");
+    assert!(
+        messages < shared && shared < scheduler,
+        "stable System/Messages/shared prefix must precede turn-varying scheduler text for prompt-cache"
+    );
 }
 
 fn assert_default_parallel_config(config: &crate::parallel_scheduler::SchedulerConfig) {
