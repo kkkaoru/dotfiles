@@ -695,6 +695,57 @@ mod tests {
     }
 
     #[test]
+    fn reuse_guidance_omits_empty_inflight_and_failed_recipients() {
+        let registry = SubagentReuseRegistry::default();
+        let arguments = json!({
+            "description":"Trace azookey conversion pipeline",
+            "prompt":"Start with Vibrato boundaries.",
+            "claudex_model":"gpt-test"
+        });
+        registry.note_inflight_launch("session-a", &arguments, "tool-pending");
+        {
+            let mut states = registry.states.lock().expect("lock");
+            let state = states.get_mut("session-a").expect("session");
+            state.launches.push(LaunchRecord {
+                key: "tool-failed".to_owned(),
+                recipient: "worker-failed".to_owned(),
+                scope: "Trace azookey conversion pipeline".to_owned(),
+                model: Some("gpt-test".to_owned()),
+                status: "failed".to_owned(),
+            });
+            state.launches.push(LaunchRecord {
+                key: "tool-live".to_owned(),
+                recipient: "worker-live".to_owned(),
+                scope: "Trace azookey conversion pipeline".to_owned(),
+                model: Some("gpt-test".to_owned()),
+                status: "completed".to_owned(),
+            });
+        }
+        let mut follow_up = request(
+            "session-a",
+            vec![json!({"role":"user","content":"Continue the azookey conversion pipeline"})],
+        );
+        registry.observe_and_restore(&mut follow_up);
+        let guidance = follow_up.system.to_string();
+        assert!(
+            guidance.contains(REUSE_GUIDANCE_MARKER),
+            "completed workers must still restore reuse guidance"
+        );
+        assert!(
+            guidance.contains("worker-live"),
+            "reusable completed worker must appear in guidance: {guidance}"
+        );
+        assert!(
+            !guidance.contains("worker-failed"),
+            "failed workers must not be resume targets: {guidance}"
+        );
+        assert!(
+            !guidance.contains("(Trace azookey conversion pipeline; gpt-test; pending)"),
+            "empty-recipient inflight placeholders must not appear as resume targets: {guidance}"
+        );
+    }
+
+    #[test]
     fn failed_launch_result_releases_inflight_scope() {
         let registry = SubagentReuseRegistry::default();
         let arguments = json!({
