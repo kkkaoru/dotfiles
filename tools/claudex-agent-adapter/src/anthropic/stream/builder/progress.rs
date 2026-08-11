@@ -134,10 +134,15 @@ impl SegmentBuilder {
         // GPT/Codex SubAgents stream long raw CoT as `textDelta`. Dumping it
         // into live thinking buried ▶ Read/Bash and left Claude Code 2.1 on
         // "Thought for Xs" with no mid-turn body. Keep thinking free for tool
-        // chrome; textDelta still counts as watchdog activity. Main sessions
-        // still surface textDelta as native Thinking.
+        // chrome, but paint a compact tip so long CoT silence is not blank.
+        // textDelta still counts as watchdog activity. Main sessions still
+        // surface textDelta as native Thinking.
         if self.is_subagent {
-            return Ok(());
+            self.note_provider_turn_activity();
+            return self
+                .thinking
+                .progress_status_keep_open(&mut self.blocks, "▶ Thinking…\n", stream)
+                .await;
         }
         self.reasoning_delta(event, stream).await
     }
@@ -301,15 +306,16 @@ impl SegmentBuilder {
                 stream,
             )
             .await?;
-        // After ZWSP, re-tip the open thought with the active tool so CC 2.1's
-        // collapsed SubAgent view keeps showing ▶ Read/Bash instead of blank
+        // After ZWSP, re-tip the open thought so CC 2.1's collapsed SubAgent
+        // view keeps showing ▶ Read/Bash / Thinking instead of blank
         // "Perambulating…" between provider events.
-        if let Some(title) = last_tool.filter(|title| !title.is_empty()) {
-            let tip = format!("▶ {title}\n");
-            self.thinking
-                .progress_status_keep_open(&mut self.blocks, &tip, stream)
-                .await?;
-        }
+        let tip = match last_tool.filter(|title| !title.is_empty()) {
+            Some(title) => format!("▶ {title}\n"),
+            None => "▶ Thinking…\n".to_owned(),
+        };
+        self.thinking
+            .progress_status_keep_open(&mut self.blocks, &tip, stream)
+            .await?;
         Ok(())
     }
 
@@ -370,5 +376,5 @@ fn keepalive_resume_chrome(last_tool: Option<&str>) -> String {
     last_tool
         .filter(|title| !title.is_empty())
         .map(|title| format!("▶ {title}\n"))
-        .unwrap_or_else(|| "\u{200b}".to_owned())
+        .unwrap_or_else(|| "▶ Thinking…\n".to_owned())
 }

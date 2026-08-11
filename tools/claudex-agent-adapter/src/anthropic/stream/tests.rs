@@ -241,16 +241,18 @@ async fn summarized_reasoning_skips_raw_text_delta_and_subagent_raw_cot() {
     .await
     .expect("missing item id");
     let mut subagent = SegmentBuilder::for_turn(1, true, "gpt-5.6-luna");
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
     subagent
         .model_output_event(
             &json!({
                 "method":"item/reasoning/textDelta",
                 "params":{"itemId":"r-raw","delta":"long subagent chain of thought"}
             }),
-            None,
+            Some(&sender),
         )
         .await
         .expect("subagent raw skip");
+    drop(sender);
     assert!(
         subagent.blocks.iter().all(|block| {
             !block
@@ -260,6 +262,24 @@ async fn summarized_reasoning_skips_raw_text_delta_and_subagent_raw_cot() {
         }),
         "subagent raw CoT must not bury tool chrome: {:?}",
         subagent.blocks
+    );
+    assert!(
+        subagent.blocks.iter().any(|block| {
+            block
+                .get("thinking")
+                .and_then(Value::as_str)
+                .is_some_and(|text| text.contains("▶ Thinking"))
+        }),
+        "raw CoT silence must still paint compact Thinking chrome: {:?}",
+        subagent.blocks
+    );
+    let mut sse = String::new();
+    while let Some(frame) = receiver.recv().await {
+        sse.push_str(&String::from_utf8_lossy(&frame.expect("frame")));
+    }
+    assert!(
+        sse.contains("thinking_delta") && sse.contains("▶ Thinking"),
+        "SubAgent TUI must see Thinking tip during raw CoT: {sse}"
     );
 }
 
@@ -1479,6 +1499,10 @@ async fn gpt_subagent_textdelta_does_not_bury_live_tool_progress() {
     assert!(
         sse.contains("thinking_delta") && sse.contains("▶ Read"),
         "live ▶ must stay visible after GPT textDelta: {sse}"
+    );
+    assert!(
+        sse.contains("▶ Thinking"),
+        "raw CoT before tools must paint Thinking tip: {sse}"
     );
     assert!(
         !sse.contains("Inspect the neon pooler GUCs"),

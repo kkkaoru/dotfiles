@@ -803,6 +803,25 @@ async fn subagent_silence_keepalive_paints_elapsed_progress_not_blank_viewer() {
 }
 
 #[tokio::test]
+async fn subagent_keepalive_without_tools_paints_thinking_tip() {
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
+    let mut builder = SegmentBuilder::new(1).with_subagent(true);
+    let mut live = super::super::subagent_live_view::SubAgentLiveView::default();
+    builder
+        .activity_keepalive(Some(&sender))
+        .await
+        .expect("silent keepalive");
+    live.ingest_available(&mut receiver);
+    assert!(
+        live.visible_thinking.contains("▶ Thinking"),
+        "tool-less silence must reopen with Thinking tip, not blank ZWSP: {:?}",
+        live.visible_thinking
+    );
+    drop(sender);
+    let _ = collect_frames(&mut receiver).await;
+}
+
+#[tokio::test]
 async fn subagent_keepalive_reopens_thinking_after_tool_use_closes_it() {
     let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
     let mut builder = SegmentBuilder::new(1).with_subagent(true);
