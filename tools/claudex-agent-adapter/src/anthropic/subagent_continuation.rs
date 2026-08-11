@@ -1,7 +1,7 @@
 use super::{
     Bridge, MessagesRequest,
     agent_effort::{AgentEffortIntents, AgentIntent, is_subagent_request},
-    content::collect_tool_results,
+    content::collect_turn_tool_results,
 };
 
 impl Bridge {
@@ -17,11 +17,10 @@ impl Bridge {
         if !is_subagent_request(request) {
             return None;
         }
-        let results = request
-            .messages
-            .last()
-            .map(|message| collect_tool_results(std::slice::from_ref(message)))
-            .filter(|results| !results.is_empty())?;
+        let results = {
+            let results = collect_turn_tool_results(&request.messages);
+            (!results.is_empty()).then_some(results)?
+        };
         let session = self.find_result_session(&results).await?;
         let transcript = session.transcript.lock().await.clone();
         correlated_intent(&self.agent_efforts, request, transcript)

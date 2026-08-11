@@ -38,7 +38,7 @@ impl Bridge {
         let existing_len = selected.existing_len;
         let extras = request.messages[existing_len..].to_vec();
         let has_tool_results = !tool_results.is_empty();
-        if let Some(steering) = request.messages.last().and_then(mid_turn_user_steering) {
+        if let Some(steering) = mid_turn_user_steering(&request.messages) {
             attach_mid_turn_steering(&mut tool_results, &steering);
         }
         self.app

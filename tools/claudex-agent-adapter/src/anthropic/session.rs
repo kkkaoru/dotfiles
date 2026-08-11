@@ -11,7 +11,7 @@ use tokio::sync::Mutex;
 use super::{
     ActiveTurn, Bridge, MessagesRequest, SelectedSession, Session,
     content::{
-        ToolResult, collect_tool_results, request_signature, take_pending_results,
+        ToolResult, collect_turn_tool_results, request_signature, take_pending_results,
         transcript_owns_tool_results,
     },
 };
@@ -66,11 +66,7 @@ impl Bridge {
         )?;
         let signature =
             self.intern_signature(format!("{}\0{signature}", self.request_model(request)));
-        let tool_results = request
-            .messages
-            .last()
-            .map(|message| collect_tool_results(std::slice::from_ref(message)))
-            .unwrap_or_default();
+        let tool_results = collect_turn_tool_results(&request.messages);
         let mut selected = self
             .select_session(
                 request,

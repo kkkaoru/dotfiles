@@ -161,22 +161,43 @@ pub(super) fn collect_tool_results(messages: &[Value]) -> Vec<ToolResult> {
         .collect()
 }
 
-/// Claude Code may attach a mid-turn user instruction to the same user message
-/// as `tool_result` blocks. Tool-result submission alone would drop that text
-/// from the live provider turn, so callers must fold it into content items.
-pub(super) fn mid_turn_user_steering(message: &Value) -> Option<String> {
-    if message.get("role").and_then(Value::as_str) != Some("user") {
-        return None;
+/// Contiguous trailing user messages after the last non-user turn.
+pub(super) fn trailing_user_messages(messages: &[Value]) -> &[Value] {
+    let mut start = messages.len();
+    while start > 0
+        && messages[start - 1].get("role").and_then(Value::as_str) == Some("user")
+    {
+        start -= 1;
     }
-    let blocks = message.get("content")?.as_array()?;
-    let has_tool_result = blocks
-        .iter()
-        .any(|block| block.get("type").and_then(Value::as_str) == Some("tool_result"));
+    &messages[start..]
+}
+
+/// Tool results across the trailing user suffix (not only `messages.last()`).
+pub(super) fn collect_turn_tool_results(messages: &[Value]) -> Vec<ToolResult> {
+    collect_tool_results(trailing_user_messages(messages))
+}
+
+/// Claude Code may put mid-turn steering beside `tool_result` blocks, or in a
+/// following text-only user message after those results. Fold either shape.
+pub(super) fn mid_turn_user_steering(messages: &[Value]) -> Option<String> {
+    let suffix = trailing_user_messages(messages);
+    let has_tool_result = suffix.iter().any(|message| {
+        message
+            .get("content")
+            .and_then(Value::as_array)
+            .is_some_and(|blocks| {
+                blocks
+                    .iter()
+                    .any(|block| block.get("type").and_then(Value::as_str) == Some("tool_result"))
+            })
+    });
     if !has_tool_result {
         return None;
     }
-    let text = blocks
+    let text = suffix
         .iter()
+        .filter_map(|message| message.get("content").and_then(Value::as_array))
+        .flatten()
         .filter_map(text_block)
         .map(str::trim)
         .filter(|line| !line.is_empty())
