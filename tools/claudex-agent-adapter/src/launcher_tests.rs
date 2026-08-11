@@ -753,9 +753,84 @@ async fn ensure_running_and_hot_swap_reuse_a_current_healthy_listener() {
 }
 
 #[tokio::test]
-async fn ensure_running_cli_and_hot_swap_cli_reuse_a_current_healthy_listener() {
-    let listener = TcpListener::bind("127.0.0.1:0").expect("cli ensure listener");
-    let listen = listener.local_addr().expect("cli ensure address");
+async fn ensure_running_cli_reuses_a_current_healthy_listener() {
+    let _notify = NotifyEnvGuard::clear();
+    let (options, expected, stopped, server) = cli_reuse_fixture("cli-ensure");
+    assert_eq!(
+        ensure_running_cli(options)
+            .await
+            .expect("ensure_running_cli reuses the current listener"),
+        expected
+    );
+    stopped.store(true, Ordering::SeqCst);
+    server.join().expect("cli ensure server");
+}
+
+#[tokio::test]
+async fn hot_swap_cli_reuses_without_waiting_for_idle() {
+    let _notify = NotifyEnvGuard::clear();
+    let (options, expected, stopped, server) = cli_reuse_fixture("cli-hot-swap");
+    assert_eq!(
+        hot_swap_cli(options, false)
+            .await
+            .expect("hot_swap_cli reuses without waiting for idle"),
+        expected
+    );
+    stopped.store(true, Ordering::SeqCst);
+    server.join().expect("cli hot-swap server");
+}
+
+#[tokio::test]
+async fn hot_swap_cli_wait_idle_reuses_a_current_healthy_listener() {
+    let _notify = NotifyEnvGuard::clear();
+    let (options, expected, stopped, server) = cli_reuse_fixture("cli-wait-idle");
+    assert_eq!(
+        hot_swap_cli(options, true)
+            .await
+            .expect("hot_swap_cli wait-idle reuses the current listener"),
+        expected
+    );
+    stopped.store(true, Ordering::SeqCst);
+    server.join().expect("cli wait-idle server");
+}
+
+struct NotifyEnvGuard {
+    previous: Option<std::ffi::OsString>,
+}
+
+impl NotifyEnvGuard {
+    fn clear() -> Self {
+        let previous = std::env::var_os(super::macos_notify_dispatch::MACOS_NOTIFY_ENV);
+        unsafe {
+            std::env::remove_var(super::macos_notify_dispatch::MACOS_NOTIFY_ENV);
+        }
+        Self { previous }
+    }
+}
+
+impl Drop for NotifyEnvGuard {
+    fn drop(&mut self) {
+        unsafe {
+            match &self.previous {
+                Some(value) => {
+                    std::env::set_var(super::macos_notify_dispatch::MACOS_NOTIFY_ENV, value)
+                }
+                None => std::env::remove_var(super::macos_notify_dispatch::MACOS_NOTIFY_ENV),
+            }
+        }
+    }
+}
+
+fn cli_reuse_fixture(
+    label: &str,
+) -> (
+    AdapterOptions,
+    String,
+    Arc<AtomicBool>,
+    thread::JoinHandle<()>,
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect(label);
+    let listen = listener.local_addr().expect(label);
     let options = AdapterOptions {
         routes: vec![BackendRoute::new("test-model", BackendKind::CodexAppServer)],
         listen,
@@ -765,34 +840,16 @@ async fn ensure_running_cli_and_hot_swap_cli_reuse_a_current_healthy_listener() 
         subagent_hard_timeout_seconds: None,
         model_catalog: crate::provider_config::ModelCatalog::default(),
     };
-    let cfg = ServiceConfig::new(options.clone()).expect("cli ensure config");
+    let cfg = ServiceConfig::new(options.clone()).expect(label);
     let health = healthy(&cfg);
-    let response = health_response(&health);
-    let auth = http_response("200 OK", "{}");
     let stopped = Arc::new(AtomicBool::new(false));
-    let server =
-        serve_health_and_auth_until_stopped(listener, response, auth, Arc::clone(&stopped));
-    let expected = cfg.base_url();
-    assert_eq!(
-        ensure_running_cli(options.clone())
-            .await
-            .expect("ensure_running_cli reuses the current listener"),
-        expected
+    let server = serve_health_and_auth_until_stopped(
+        listener,
+        health_response(&health),
+        http_response("200 OK", "{}"),
+        Arc::clone(&stopped),
     );
-    assert_eq!(
-        hot_swap_cli(options.clone(), false)
-            .await
-            .expect("hot_swap_cli reuses without waiting for idle"),
-        expected
-    );
-    assert_eq!(
-        hot_swap_cli(options, true)
-            .await
-            .expect("hot_swap_cli wait-idle reuses the current listener"),
-        expected
-    );
-    stopped.store(true, Ordering::SeqCst);
-    server.join().expect("cli ensure server");
+    (options, cfg.base_url(), stopped, server)
 }
 
 #[tokio::test]
