@@ -6,12 +6,16 @@ use crate::{
     http_api::http_router_with_handover,
     launcher::{self, AdapterOptions},
 };
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 
+mod command_helpers;
 mod hard_timeout;
 mod parse_options;
 mod shutdown;
-use parse_options::{ParsedOptions, parse_options};
+use command_helpers::{
+    consume_separator, reject_inherit_model, reject_remaining, take_flag, utf8,
+};
+use parse_options::parse_options;
 
 #[derive(Debug)]
 enum RuntimeCommand {
@@ -99,45 +103,6 @@ fn parse_command(mut arguments: VecDeque<OsString>) -> Result<RuntimeCommand> {
     }
 }
 
-fn reject_inherit_model(options: &ParsedOptions, command: &str) -> Result<()> {
-    if options.inherit_claude_model {
-        bail!("--inherit-claude-model is valid only for launch, not {command}");
-    }
-    Ok(())
-}
-
-fn consume_separator(arguments: &mut VecDeque<OsString>) -> Result<()> {
-    if arguments.front().and_then(|value| value.to_str()) == Some("--") {
-        arguments.pop_front();
-        return Ok(());
-    }
-    bail!("launch requires `--` before Claude Code arguments")
-}
-
-fn reject_remaining(arguments: &VecDeque<OsString>) -> Result<()> {
-    if arguments.is_empty() {
-        return Ok(());
-    }
-    bail!("unexpected arguments after adapter options")
-}
-
-fn take_flag(arguments: &mut VecDeque<OsString>, flag: &str) -> bool {
-    arguments
-        .iter()
-        .position(|value| value == flag)
-        .map(|index| {
-            arguments.remove(index);
-            true
-        })
-        .unwrap_or(false)
-}
-
-fn utf8(value: Option<OsString>, name: &str) -> Result<String> {
-    value
-        .with_context(|| format!("{name} is required"))?
-        .into_string()
-        .map_err(|_| anyhow::anyhow!("{name} must be valid UTF-8"))
-}
 
 pub async fn serve(options: AdapterOptions) -> Result<()> {
     crate::logging::init();

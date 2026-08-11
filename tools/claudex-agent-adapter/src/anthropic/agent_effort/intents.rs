@@ -1,4 +1,3 @@
-use std::collections::VecDeque;
 use std::time::Instant;
 
 use serde_json::Value;
@@ -15,6 +14,12 @@ use super::super::{
     agent_effort_matching::{has_correlation_marker, request_matches_intent_with_system},
     agent_intent_store::{persistence_snapshot, remove_expired, unix_seconds},
 };
+
+#[path = "intents_helpers.rs"]
+mod intents_helpers;
+use intents_helpers::{authorized_model, unique_correlated_candidate};
+#[cfg(test)]
+pub(super) use intents_helpers::retain_terminal_intent;
 
 impl AgentEffortIntents {
     pub(in crate::anthropic) fn record_from_user_messages(
@@ -163,49 +168,10 @@ impl AgentEffortIntents {
         let client_user_id = request.metadata.get("user_id").and_then(Value::as_str);
         let mut pending = self.pending.lock().expect("agent effort intents poisoned");
         remove_expired(&mut pending);
-        pending.retain(|intent| retain_terminal_intent(intent, &ids, client_user_id));
+        pending.retain(|intent| intents_helpers::retain_terminal_intent(intent, &ids, client_user_id));
         let snapshot = persistence_snapshot(&pending);
         drop(pending);
         self.persist(snapshot);
     }
 }
 
-pub(super) fn authorized_model(
-    arguments: &Value,
-    user_messages: &[Value],
-    system: &Value,
-    model_catalog: Option<&crate::provider_config::ModelCatalog>,
-    model: &str,
-) -> bool {
-    match model_catalog {
-        Some(catalog) => super::super::agent_routing::model_is_authorized_with_catalog(
-            arguments,
-            user_messages,
-            system,
-            catalog,
-            model,
-        ),
-        None => super::super::agent_routing::model_is_authorized(arguments, user_messages, system, model),
-    }
-}
-
-pub(super) fn unique_correlated_candidate(
-    pending: &VecDeque<AgentEffortIntent>,
-    client_user_id: Option<&str>,
-) -> Option<usize> {
-    let mut candidates = pending.iter().enumerate().filter(|(_, intent)| {
-        intent.correlated && intent.client_user_id.as_deref() == client_user_id
-    });
-    let candidate = candidates.next()?;
-    candidates.next().is_none().then_some(candidate.0)
-}
-
-pub(super) fn retain_terminal_intent(
-    intent: &AgentEffortIntent,
-    terminal_ids: &std::collections::HashSet<String>,
-    client_user_id: Option<&str>,
-) -> bool {
-    !intent.correlated
-        || !terminal_ids.contains(intent.tool_use_id.as_str())
-        || client_user_id.is_some_and(|id| intent.client_user_id.as_deref() != Some(id))
-}
