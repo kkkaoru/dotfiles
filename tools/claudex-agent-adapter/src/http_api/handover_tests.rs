@@ -539,6 +539,24 @@ async fn should_proxy_keeps_empty_retained_when_last_session_is_forgotten() {
 }
 
 #[tokio::test]
+async fn should_proxy_clears_when_retained_health_status_is_not_ok() {
+    let upstream = serve_unhealthy_retained_generation().await;
+    let root = tempfile::tempdir().expect("unhealthy retained fixture");
+    let path = root.path().join("retained.json");
+    std::fs::write(
+        &path,
+        format!(
+            r#"{{"listen":"{upstream}","pid":1,"build_id":"old","session_ids":["session-a"]}}"#
+        ),
+    )
+    .expect("write retained");
+    let proxy = retained(&path, &upstream.to_string(), &["session-a"]);
+    assert!(!proxy.should_proxy_session("session-a").await);
+    assert!(!proxy.owns("session-a"));
+    assert!(!path.exists(), "unhealthy retained snapshot must be cleared");
+}
+
+#[tokio::test]
 async fn should_proxy_uses_active_session_list_when_busy_list_is_empty() {
     let upstream = serve_active_only_retained_generation(&["session-a"]).await;
     let root = tempfile::tempdir().expect("active-only fixture");
@@ -1168,6 +1186,39 @@ async fn respond_active_only_retained_request(stream: &mut tokio::net::TcpStream
             r#""busy_claude_session_ids":[],"active_claude_session_ids":{sessions}}}"#
         ),
         sessions = sessions
+    );
+    write_http_response(stream, "HTTP/1.1 200 OK", payload.as_bytes()).await;
+}
+
+async fn serve_unhealthy_retained_generation() -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("unhealthy retained listener");
+    let listen = listener.local_addr().expect("unhealthy retained address");
+    tokio::spawn(run_unhealthy_retained_accept_loop(listener));
+    listen
+}
+
+async fn run_unhealthy_retained_accept_loop(listener: TcpListener) {
+    while let Some(mut stream) = accept_stream(&listener).await {
+        respond_unhealthy_retained_request(&mut stream).await;
+    }
+}
+
+async fn respond_unhealthy_retained_request(stream: &mut tokio::net::TcpStream) {
+    let mut buf = vec![0; 4096];
+    let n = stream.read(&mut buf).await.unwrap_or(0);
+    let request = String::from_utf8_lossy(&buf[..n]);
+    if !request.starts_with("GET /health") {
+        let header = "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+        let _ = stream.write_all(header.as_bytes()).await;
+        return;
+    }
+    let payload = concat!(
+        r#"{"status":"degraded","pid":1,"protocol_version":1,"build_id":"old","#,
+        r#""subscription_max_processes":20,"subscription_timeout_minutes":120,"#,
+        r#""active_http_requests":1,"active_provider_turns":0,"#,
+        r#""busy_claude_session_ids":["session-a"],"active_claude_session_ids":["session-a"]}"#
     );
     write_http_response(stream, "HTTP/1.1 200 OK", payload.as_bytes()).await;
 }
