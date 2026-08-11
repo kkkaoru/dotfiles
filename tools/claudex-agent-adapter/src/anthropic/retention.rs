@@ -5,11 +5,6 @@ use std::{
 
 use super::Bridge;
 
-#[cfg(test)]
-use super::Session;
-#[cfg(test)]
-use tokio::sync::Mutex;
-
 // An abandoned Claude tool request must not reserve a session slot forever.
 // Thirty minutes allows long interactive tool work while bounding leaked slots.
 pub(super) const PENDING_SESSION_TTL: Duration = Duration::from_secs(30 * 60);
@@ -42,7 +37,12 @@ impl Bridge {
         if !session_sweep_due(&self.next_session_sweep, now) {
             return 0;
         }
-        let removed = sweep_idle_sessions_at(&self.sessions, now).await;
+        let released = sweep_idle_sessions_at(&self.sessions, now).await;
+        let removed = released.len();
+        for claude_session_id in released {
+            self.release_provider_scope_if_unused(claude_session_id.as_deref())
+                .await;
+        }
         if removed > 0 {
             tracing::debug!(removed, "released idle claudex sessions");
         }
@@ -54,8 +54,10 @@ impl Bridge {
             return;
         };
         for (request_id, result) in drain_cancellation_responses(&session).await {
-            respond_to_evicted_request(self, &session.model, request_id, result).await;
+            respond_to_evicted_request(self, &session, request_id, result).await;
         }
+        self.release_provider_scope_if_unused(session.claude_session_id.as_deref())
+            .await;
     }
 }
 

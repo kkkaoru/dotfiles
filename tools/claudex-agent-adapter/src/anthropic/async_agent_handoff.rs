@@ -138,11 +138,17 @@ impl Bridge {
             // keep the provider turn open.
             return false;
         }
-        let ready = self.app.ensure_thread_ready(&session.thread_id).await;
+        let ready = self
+            .app_for_session(&session)
+            .ensure_thread_ready(&session.thread_id)
+            .await;
         if ready.is_err() {
             return false;
         }
-        let events = Arc::new(self.app.subscribe_thread(&session.thread_id));
+        let events = Arc::new(
+            self.app_for_session(&session)
+                .subscribe_thread(&session.thread_id),
+        );
         // Do not abort the shared Codex provider; reject and drain this turn.
         self.disconnect_stream_for_async_handoff(&session, events)
             .await;

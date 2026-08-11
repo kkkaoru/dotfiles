@@ -1,10 +1,20 @@
-use std::{collections::HashMap, os::unix::fs::PermissionsExt, path::Path};
+use std::{
+    collections::HashMap,
+    os::unix::fs::PermissionsExt,
+    path::Path,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use serde_json::json;
-use tokio::sync::Semaphore;
+use tokio::sync::{Mutex, Semaphore};
 
 use super::*;
-use crate::app_server::AppServer;
+use crate::{
+    agent_backend::{AgentBackend, BackendKind, BackendRoute},
+    app_server::AppServer,
+};
+use super::super::Session;
 
 #[test]
 fn retains_idle_provider_context_for_follow_up_window() {
@@ -81,7 +91,43 @@ async fn retains_a_newer_candidate_seen_after_the_oldest() {
     assert_eq!(*evicted.last_activity.lock().unwrap(), oldest_activity);
 }
 
+#[tokio::test]
+async fn bridge_sweep_releases_session_scoped_provider_pool() {
+    let bridge = Bridge::new_with_backend(
+        AgentBackend::spawn_routes(&[BackendRoute::new(
+            "main",
+            BackendKind::CodexAppServer,
+        )]),
+        "main".to_owned(),
+    );
+    let _ = bridge.app_for(Some("ttl-scope"));
+    let AgentBackend::SessionScoped(scopes) = bridge.app.as_ref() else {
+        panic!("spawn_routes must build SessionScoped");
+    };
+    assert_eq!(scopes.scope_count(), 1);
+
+    let sweep_at = *bridge.next_session_sweep.lock().unwrap();
+    let idle = session_with_claude_id(sweep_at - IDLE_SESSION_TTL, "ttl-scope");
+    idle.pending_tools.lock().await.clear();
+    *idle.pending_since.lock().unwrap() = None;
+    bridge.sessions.lock().await.push(idle);
+
+    assert_eq!(bridge.sweep_idle_sessions_if_due_at(sweep_at).await, 1);
+    let AgentBackend::SessionScoped(scopes) = bridge.app.as_ref() else {
+        panic!("spawn_routes must build SessionScoped");
+    };
+    assert_eq!(
+        scopes.scope_count(),
+        0,
+        "idle TTL must shut down the Claude session provider pool"
+    );
+}
+
 fn session(activity: Instant) -> Arc<Session> {
+    session_with_claude_id(activity, "")
+}
+
+fn session_with_claude_id(activity: Instant, claude_session_id: &str) -> Arc<Session> {
     let slots = Arc::new(Semaphore::new(1));
     Arc::new(Session {
         thread_id: "thread".to_owned(),
@@ -93,7 +139,7 @@ fn session(activity: Instant) -> Arc<Session> {
         consumed_tool_ids: Mutex::new(Default::default()),
         external_tool_names: HashMap::new(),
         client_user_id: None,
-        claude_session_id: None,
+        claude_session_id: (!claude_session_id.is_empty()).then(|| claude_session_id.to_owned()),
         gate: Arc::new(Mutex::new(())),
         last_activity: std::sync::Mutex::new(activity),
         pending_since: std::sync::Mutex::new(Some(activity)),

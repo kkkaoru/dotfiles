@@ -2,7 +2,7 @@ use crate::{app_server::AppServer, copilot_acp::CopilotAcp, grok_acp::GrokAcp};
 use anyhow::{Result, bail};
 use std::sync::Arc;
 
-use super::{AgentBackend, BackendKind, BackendRoute, RoutedBackends};
+use super::{AgentBackend, BackendKind, BackendRoute, RoutedBackends, SessionScopedBackends};
 
 impl AgentBackend {
     pub async fn spawn(kind: BackendKind, model: &str) -> Result<Arc<Self>> {
@@ -43,7 +43,7 @@ impl AgentBackend {
     }
 
     pub fn spawn_routes(routes: &[BackendRoute]) -> Arc<Self> {
-        Arc::new(Self::Routed(RoutedBackends::lazy(routes)))
+        Arc::new(Self::SessionScoped(SessionScopedBackends::new(routes)))
     }
 
     pub fn codex(server: Arc<AppServer>) -> Arc<Self> {

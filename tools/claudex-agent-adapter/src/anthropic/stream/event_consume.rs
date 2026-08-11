@@ -38,7 +38,10 @@ impl Bridge {
             .values()
             .any(acp_tool_bridge::is_acp_bridge_request_id);
         if segment.stop_reason == "tool_use" && bridge {
-            let _ = self.app.cancel_turn(&session.thread_id).await;
+            let _ = self
+                .app_for_session(session)
+                .cancel_turn(&session.thread_id)
+                .await;
         }
         Ok(StreamTurn::Segment {
             segment,

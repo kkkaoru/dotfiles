@@ -37,6 +37,9 @@ impl AgentBackend {
                 Ok(response)
             }
             Self::Routed(_) => bail!("routed backend does not support request `{method}`"),
+            Self::SessionScoped(scopes) => {
+                Box::pin(scopes.scope(None).request(method, params)).await
+            }
         }
     }
     pub async fn request_detached(self: &Arc<Self>, method: &str, mut params: Value) -> Result<()> {
@@ -62,6 +65,9 @@ impl AgentBackend {
                 Box::pin(backend.request_detached(method, params)).await
             }
             Self::Routed(_) => bail!("routed backend does not support request `{method}`"),
+            Self::SessionScoped(scopes) => {
+                Box::pin(scopes.scope(None).request_detached(method, params)).await
+            }
         }
     }
     pub async fn respond(&self, id: Value, result: Value) -> Result<()> {
@@ -78,6 +84,7 @@ impl AgentBackend {
                     .context("Codex backend is not initialized for this tool result")?;
                 Box::pin(backend.respond(id, result)).await
             }
+            Self::SessionScoped(scopes) => Box::pin(scopes.scope(None).respond(id, result)).await,
         }
     }
 
@@ -97,6 +104,9 @@ impl AgentBackend {
                     .ready_backend()
                     .with_context(|| format!("backend for model `{model}` is not initialized"))?;
                 Box::pin(backend.respond_for_model(model, id, result)).await
+            }
+            Self::SessionScoped(scopes) => {
+                Box::pin(scopes.scope(None).respond_for_model(model, id, result)).await
             }
         }
     }

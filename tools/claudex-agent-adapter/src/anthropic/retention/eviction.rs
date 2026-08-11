@@ -18,13 +18,13 @@ pub(super) fn session_sweep_due(clock: &std::sync::Mutex<Instant>, now: Instant)
 
 pub(super) async fn respond_to_evicted_request(
     bridge: &Bridge,
-    model: &str,
+    session: &Session,
     request_id: Value,
     result: Value,
 ) {
     if let Err(error) = bridge
-        .app
-        .respond_for_model(model, request_id, result)
+        .app_for_session(session)
+        .respond_for_model(&session.model, request_id, result)
         .await
     {
         tracing::warn!(%error, "failed to cancel an expired Claude tool request");
@@ -34,9 +34,9 @@ pub(super) async fn respond_to_evicted_request(
 pub(crate) async fn sweep_idle_sessions_at(
     sessions: &Mutex<Vec<Arc<Session>>>,
     now: Instant,
-) -> usize {
+) -> Vec<Option<String>> {
     let mut sessions = sessions.lock().await;
-    let before = sessions.len();
+    let mut released = Vec::new();
     let mut index = 0;
     while index < sessions.len() {
         if Arc::strong_count(&sessions[index]) != 1 {
@@ -49,12 +49,13 @@ pub(crate) async fn sweep_idle_sessions_at(
                 >= IDLE_SESSION_TTL;
         drop(pending);
         if idle {
+            released.push(sessions[index].claude_session_id.clone());
             sessions.remove(index);
         } else {
             index += 1;
         }
     }
-    before - sessions.len()
+    released
 }
 
 pub(crate) async fn record_pending_tool(

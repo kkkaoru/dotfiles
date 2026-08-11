@@ -52,7 +52,7 @@ impl Bridge {
         if let Some(steering) = mid_turn_user_steering(&request.messages) {
             attach_mid_turn_steering(&mut tool_results, &steering);
         }
-        self.app
+        self.app_for_session(&selected.session)
             .ensure_thread_ready(&selected.session.thread_id)
             .await?;
         // Idle sessions can still own pending Claude tools from the prior
@@ -61,7 +61,10 @@ impl Bridge {
         if !has_tool_results {
             self.settle_abandoned_pending_tools(&selected.session).await;
         }
-        let events = Arc::new(self.app.subscribe_thread(&selected.session.thread_id));
+        let events = Arc::new(
+            self.app_for_session(&selected.session)
+                .subscribe_thread(&selected.session.thread_id),
+        );
         let turn_start = self
             .kick_off_selected_turn(
                 request,

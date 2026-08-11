@@ -22,7 +22,9 @@ impl Bridge {
     ) -> Result<Arc<Session>> {
         let slot = self.acquire_session_slot().await?;
         let model = self.request_model(request);
-        let web_search_mode = self.app.web_search_mode(&model);
+        let claude_session_id = request_identity::claude_session_id(request);
+        let provider = self.app_for(claude_session_id.as_deref());
+        let web_search_mode = provider.web_search_mode(&model);
         let (dynamic_tools, external_tool_names, _internal_tools) = tool_configuration_for_mode(
             request,
             advisor_model,
@@ -30,7 +32,7 @@ impl Bridge {
             web_search_mode,
         );
         let params = thread_start_params_for_mode(request, &model, dynamic_tools, web_search_mode);
-        let result = self.app.request("thread/start", params).await?;
+        let result = provider.request("thread/start", params).await?;
         let session = Arc::new(Session {
             thread_id: response_thread_id(&result)?,
             model,
@@ -45,7 +47,7 @@ impl Bridge {
                 .get("user_id")
                 .and_then(Value::as_str)
                 .map(str::to_owned),
-            claude_session_id: request_identity::claude_session_id(request),
+            claude_session_id,
             gate: Arc::new(Mutex::new(())),
             last_activity: std::sync::Mutex::new(Instant::now()),
             pending_since: std::sync::Mutex::new(None),

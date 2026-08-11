@@ -43,6 +43,9 @@ impl AgentBackend {
                 Ok(TurnCancellation::Settled)
             }
             Self::Routed(routes) => cancel_routed_turn(routes, thread_id).await,
+            Self::SessionScoped(scopes) => {
+                Box::pin(scopes.scope(None).cancel_turn(thread_id)).await
+            }
         }
     }
 
@@ -55,6 +58,9 @@ impl AgentBackend {
         match self {
             Self::Codex(_) => {}
             Self::Routed(routes) => abort_routed_provider(routes, thread_id).await?,
+            Self::SessionScoped(scopes) => {
+                Box::pin(scopes.scope(None).abort_turn_provider(thread_id)).await?;
+            }
             _ => self.shutdown_leaf().await,
         }
         Ok(())
@@ -66,6 +72,7 @@ impl AgentBackend {
             Self::Copilot(agent) => agent.shutdown().await,
             Self::ConfiguredAcp(agent) | Self::Grok(agent) => agent.shutdown().await,
             Self::Routed(routes) => Box::pin(routes.shutdown()).await,
+            Self::SessionScoped(scopes) => Box::pin(scopes.shutdown_all()).await,
         }
     }
 
@@ -74,6 +81,7 @@ impl AgentBackend {
     pub async fn shutdown(&self) {
         match self {
             Self::Routed(routes) => Box::pin(routes.shutdown()).await,
+            Self::SessionScoped(scopes) => Box::pin(scopes.shutdown_all()).await,
             _ => self.shutdown_leaf().await,
         }
     }

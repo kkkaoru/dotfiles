@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 
 use super::super::tools::{thread_start_params_for_mode, tool_configuration_for_mode};
 use crate::anthropic::{
-    Bridge, MessagesRequest, Session,
+    Bridge, MessagesRequest, Session, request_identity,
     content::serialized_len,
     turn_input::{
         provider_turn_input, provider_turn_input_with_token_budget, provider_user_turn_input,
@@ -36,18 +36,21 @@ impl Bridge {
         if !crate::anthropic::agent_effort::is_subagent_request(request) {
             params["priority"] = json!("user");
         }
-        self.app.request_detached("turn/start", params).await
+        self.app_for_session(session)
+            .request_detached("turn/start", params)
+            .await
     }
 
     fn transcript_input(&self, request: &MessagesRequest) -> Vec<Value> {
         let model = self.request_model(request);
+        let provider = self.app_for(request_identity::claude_session_id(request).as_deref());
         if crate::command_code_acp::is_command_code_model(&model) {
             return provider_user_turn_input(&model, &request.messages);
         }
-        let Some(limit) = self.app.max_context_tokens_for_model(&model) else {
+        let Some(limit) = provider.max_context_tokens_for_model(&model) else {
             return provider_turn_input(&model, &request.messages);
         };
-        let web_search_mode = self.app.web_search_mode(&model);
+        let web_search_mode = provider.web_search_mode(&model);
         let (dynamic_tools, _, _) =
             tool_configuration_for_mode(request, None, None, web_search_mode);
         let start_params =

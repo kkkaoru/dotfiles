@@ -237,7 +237,7 @@ async fn sweeps_only_expired_unowned_sessions_without_pending_tools() {
     let fresh = test_session_at(&semaphore, false, fresh_activity);
     let sessions = tokio::sync::Mutex::new(vec![expired, active, pending, fresh]);
 
-    assert_eq!(sweep_idle_sessions_at(&sessions, now).await, 1);
+    assert_eq!(sweep_idle_sessions_at(&sessions, now).await.len(), 1);
 
     let retained = sessions.lock().await;
     assert_eq!(retained.len(), 3);

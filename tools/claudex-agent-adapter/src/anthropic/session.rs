@@ -1,7 +1,7 @@
 use anyhow::Result;
 
 use super::{
-    ActiveTurn, Bridge, MessagesRequest, SelectedSession, Session,
+    ActiveTurn, Bridge, MessagesRequest, SelectedSession, Session, request_identity,
     content::{ToolResult, collect_turn_tool_results, request_signature},
 };
 
@@ -69,7 +69,9 @@ impl Bridge {
                 &tool_results,
             )
             .await?;
-        let context_limit = self.app.max_context_tokens_for_model(&model);
+        let context_limit = self
+            .app_for(request_identity::claude_session_id(request).as_deref())
+            .max_context_tokens_for_model(&model);
         if should_preempt_for_context_limit(input_tokens, context_limit, !tool_results.is_empty()) {
             let limit = context_limit.expect("preemption requires a context limit");
             tracing::warn!(

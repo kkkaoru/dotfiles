@@ -75,10 +75,13 @@ impl Bridge {
             )
             .await?;
         let extras = context.request.messages.to_vec();
-        self.app
+        self.app_for_session(&selected.session)
             .ensure_thread_ready(&selected.session.thread_id)
             .await?;
-        let events = Arc::new(self.app.subscribe_thread(&selected.session.thread_id));
+        let events = Arc::new(
+            self.app_for_session(&selected.session)
+                .subscribe_thread(&selected.session.thread_id),
+        );
         let start = self
             .start_model_turn(
                 context.request,

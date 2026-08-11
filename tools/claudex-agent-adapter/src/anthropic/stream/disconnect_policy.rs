@@ -21,7 +21,11 @@ impl Bridge {
     ) -> StreamTurn {
         // Cancel before unregistering so a racing outer follow-up can still
         // discover this session, preempt the gate, and reuse the provider thread.
-        match self.app.cancel_turn(&session.thread_id).await {
+        match self
+            .app_for_session(session)
+            .cancel_turn(&session.thread_id)
+            .await
+        {
             Ok(TurnCancellation::Settled) => {
                 let _ = self.reject_pending_disconnected_tools(session).await;
                 self.remove_session(session).await;
@@ -64,14 +68,18 @@ impl Bridge {
         // reap the provider instead of leaving hidden work attached to it.
         self.remove_session(session).await;
         self.discard_pending_disconnected_tools(session).await;
-        self.abort_disconnected_provider(&session.thread_id).await;
+        self.abort_disconnected_provider(session).await;
     }
 
-    pub(super) async fn abort_disconnected_provider(&self, thread_id: &str) {
-        if let Err(error) = self.app.abort_turn_provider(thread_id).await {
+    pub(super) async fn abort_disconnected_provider(&self, session: &Session) {
+        if let Err(error) = self
+            .app_for_session(session)
+            .abort_turn_provider(&session.thread_id)
+            .await
+        {
             warn_disconnect_failure(
                 &error,
-                thread_id,
+                &session.thread_id,
                 "failed to abort non-cancellable disconnected provider",
             );
         }

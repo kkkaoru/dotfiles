@@ -57,12 +57,12 @@ async fn lazy_routes_cover_provider_entry_points_and_failed_startup_state() {
     assert_eq!(
         backend.started_models(),
         [
+            "gpt-5.6-sol",
+            "gpt-copilot",
             "gpt-model",
             "gpt-secondary",
-            "gpt-copilot",
-            "grok-model",
-            "gpt-5.6-sol",
-            "grok-4.5"
+            "grok-4.5",
+            "grok-model"
         ]
     );
     assert_single_codex_spawn(&codex_spawns);
@@ -197,7 +197,7 @@ async fn exercise_initial_provider_routes(backend: &Arc<AgentBackend>, codex_spa
     );
     assert_eq!(
         backend.started_models(),
-        ["gpt-model", "gpt-secondary", "gpt-copilot", "grok-model"]
+        ["gpt-copilot", "gpt-model", "gpt-secondary", "grok-model"]
     );
     assert!(backend.is_alive());
 }

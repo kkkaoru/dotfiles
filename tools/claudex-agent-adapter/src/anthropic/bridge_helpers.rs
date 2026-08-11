@@ -1,8 +1,53 @@
-use super::{MAX_SIGNATURE_BUCKETS, MessagesRequest, SignaturePool};
+use super::{MAX_SIGNATURE_BUCKETS, Bridge, MessagesRequest, Session, SignaturePool};
 use std::{
     hash::{DefaultHasher, Hash, Hasher},
     sync::Arc,
 };
+
+use crate::agent_backend::AgentBackend;
+
+impl Bridge {
+    /// Provider pool for a Claude Code session (isolated Codex/ACP processes).
+    pub(in crate::anthropic) fn app_for(
+        &self,
+        claude_session_id: Option<&str>,
+    ) -> Arc<AgentBackend> {
+        self.app.scope_or_self(claude_session_id)
+    }
+
+    pub(in crate::anthropic) fn app_for_session(&self, session: &Session) -> Arc<AgentBackend> {
+        self.app_for(session.claude_session_id.as_deref())
+    }
+
+    pub(in crate::anthropic) async fn release_provider_scope_if_unused(
+        &self,
+        claude_session_id: Option<&str>,
+    ) {
+        if self.sessions_reference_scope(claude_session_id).await {
+            return;
+        }
+        self.app.release_session_scope(claude_session_id).await;
+    }
+
+    async fn sessions_reference_scope(&self, claude_session_id: Option<&str>) -> bool {
+        use crate::agent_backend::SessionScopedBackends;
+        let key = SessionScopedBackends::scope_key(claude_session_id);
+        let matches = |session: &Session| {
+            SessionScopedBackends::scope_key(session.claude_session_id.as_deref()) == key
+        };
+        self.sessions
+            .lock()
+            .await
+            .iter()
+            .any(|session| matches(session))
+            || self
+                .detached_sessions
+                .lock()
+                .await
+                .iter()
+                .any(|session| matches(session))
+    }
+}
 
 pub(super) fn intern_signature(pool: &SignaturePool, signature: String) -> Arc<str> {
     let mut hasher = DefaultHasher::new();

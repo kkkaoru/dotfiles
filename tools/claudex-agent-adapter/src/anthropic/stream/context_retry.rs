@@ -13,7 +13,10 @@ impl Bridge {
         mut turn: ActiveTurn,
         error: anyhow::Error,
     ) -> Result<ActiveTurn> {
-        if !super::is_provider_stream_closed(&error) || self.app.model_is_alive(&turn.session.model)
+        if !super::is_provider_stream_closed(&error)
+            || self
+                .app_for_session(&turn.session)
+                .model_is_alive(&turn.session.model)
         {
             self.remove_session(&turn.session).await;
             return Err(error);

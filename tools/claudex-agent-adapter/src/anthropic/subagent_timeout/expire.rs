@@ -16,7 +16,8 @@ impl Bridge {
         self.subagent_hard_timeout_cancel_attempts
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let cancellation = provider_cancellation_within(
-            self.app.cancel_turn(&turn.session.thread_id),
+            self.app_for_session(&turn.session)
+                .cancel_turn(&turn.session.thread_id),
             PROVIDER_CANCEL_SETTLEMENT_TIMEOUT,
         )
         .await;
@@ -32,8 +33,10 @@ impl Bridge {
         turn: &ActiveTurn,
         cancellation: Result<TurnCancellation>,
     ) {
+        let provider = self.app_for_session(&turn.session);
+        let thread_id = turn.session.thread_id.clone();
         self.settle_expired_provider_with(turn, cancellation, || {
-            self.app.abort_turn_provider(&turn.session.thread_id)
+            provider.abort_turn_provider(&thread_id)
         })
         .await;
     }
