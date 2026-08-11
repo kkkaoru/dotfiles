@@ -5,7 +5,7 @@ use axum::{
     body::{Body, Bytes},
     http::Response,
 };
-use serde_json::{Value, json};
+use serde_json::json;
 use tokio::sync::mpsc;
 use uuid::Uuid;
 
@@ -102,66 +102,12 @@ pub(super) async fn send_stream_error(sender: &StreamSender, error: anyhow::Erro
     .await;
 }
 
-pub(in crate::anthropic) async fn send_stream_frame(
-    stream: Option<&StreamSender>,
-    event: &str,
-    value: impl FnOnce() -> Value,
-) -> Result<()> {
-    let Some(sender) = stream else {
-        return Ok(());
-    };
-    if sender
-        .send(Ok(Bytes::from(sse(event, value()))))
-        .await
-        .is_err()
-    {
-        tracing::debug!(event, "Claude Code closed the streaming response");
-    }
-    Ok(())
-}
-
-pub(super) async fn send_tool_use(
-    stream: Option<&StreamSender>,
-    index: usize,
-    block: &Value,
-) -> Result<()> {
-    let Some(sender) = stream else {
-        return Ok(());
-    };
-    for (event, frame) in tool_use_frames(index, block) {
-        send_stream_frame(Some(sender), event, || frame).await?;
-    }
-    Ok(())
-}
-
-pub(in crate::anthropic) fn tool_use_frames(
-    index: usize,
-    block: &Value,
-) -> [(&'static str, Value); 3] {
-    [
-        (
-            "content_block_start",
-            json!({
-                "type":"content_block_start", "index":index,
-                "content_block":{"type":"tool_use","id":block["id"],"name":block["name"],"input":{}}
-            }),
-        ),
-        (
-            "content_block_delta",
-            json!({
-                "type":"content_block_delta", "index":index,
-                "delta":{
-                    "type":"input_json_delta",
-                    "partial_json":block["input"].to_string()
-                }
-            }),
-        ),
-        (
-            "content_block_stop",
-            json!({"type":"content_block_stop","index":index}),
-        ),
-    ]
-}
+#[path = "protocol_frames.rs"]
+mod frames;
+pub(in crate::anthropic) use frames::send_stream_frame;
+#[allow(unused_imports)] // re-exported via stream.rs
+pub(in crate::anthropic) use frames::tool_use_frames;
+pub(super) use frames::send_tool_use;
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]

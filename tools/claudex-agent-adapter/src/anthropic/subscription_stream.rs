@@ -143,32 +143,9 @@ struct SubscriptionStream {
     tool_context: Option<super::subscription::SubscriptionToolContext>,
     activity: SubscriptionActivity,
 }
-impl SubscriptionStream {
-    pub(super) fn arm_launch_fanout(&mut self) {
-        self.launch_fanout_open = true;
-        self.launch_fanout_deadline =
-            Some(tokio::time::Instant::now() + consume_fanout::LAUNCH_FANOUT_DRAIN);
-    }
 
-    pub(super) fn clear_launch_fanout(&mut self) {
-        self.launch_fanout_open = false;
-        self.launch_fanout_deadline = None;
-    }
-
-    #[cfg(test)]
-    async fn handle_line(
-        &mut self,
-        sender: &mpsc::Sender<Result<Bytes, Infallible>>,
-        line: &str,
-    ) -> Result<()> {
-        if self.saw_result {
-            return Ok(());
-        }
-        let envelope = super::subscription::failure::parse_stream_envelope(None, line)?;
-        self.handle_envelope(sender, &envelope).await?;
-        Ok(())
-    }
-}
+#[path = "subscription_stream_state.rs"]
+mod state;
 
 #[cfg(test)]
 #[path = "subscription_stream_tests.rs"]
