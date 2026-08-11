@@ -194,7 +194,6 @@ fn pending_expired(session: &Session, now: Instant) -> bool {
 #[cfg(test)]
 // Coverage gates measure production code; test implementations are excluded.
 #[cfg_attr(coverage_nightly, coverage(off))]
-#[allow(clippy::excessive_nesting)]
 mod tests {
     use std::{collections::HashMap, os::unix::fs::PermissionsExt, path::Path};
 
@@ -324,12 +323,14 @@ mod tests {
     }
 
     async fn wait_until_stopped(bridge: &Bridge) {
-        tokio::time::timeout(Duration::from_secs(1), async {
-            while bridge.app.is_alive() {
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("fixture app-server closes");
+        tokio::time::timeout(Duration::from_secs(1), wait_while_alive(bridge))
+            .await
+            .expect("fixture app-server closes");
+    }
+
+    async fn wait_while_alive(bridge: &Bridge) {
+        while bridge.app.is_alive() {
+            tokio::task::yield_now().await;
+        }
     }
 }
