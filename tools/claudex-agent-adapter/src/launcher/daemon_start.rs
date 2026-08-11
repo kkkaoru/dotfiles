@@ -1,10 +1,6 @@
-use std::{
-    fs::{self, OpenOptions},
-    path::Path,
-    process::{Command, Stdio},
-};
+use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 
 use super::{
     RECOVERY_MANIFEST_ENV, SERVICE_CONFIG_FINGERPRINT_ENV, ServiceConfig,
@@ -99,97 +95,11 @@ pub(super) fn terminate_started_recovery(pid: u32) {
     super::daemon_process::terminate(pid);
 }
 
-struct SpawnRequest<'a> {
-    config: &'a ServiceConfig,
-    executable: &'a Path,
-    arguments: Vec<std::ffi::OsString>,
-    codex_config_fingerprint: &'a str,
-    service_config_fingerprint: &'a str,
-    manifest_path: Option<&'a Path>,
-    retained_path: Option<&'a Path>,
-    service_listen: std::net::SocketAddr,
-}
-
-fn spawn_adapter(request: SpawnRequest<'_>) -> Result<u32> {
-    let SpawnRequest {
-        config,
-        executable,
-        arguments,
-        codex_config_fingerprint,
-        service_config_fingerprint,
-        manifest_path,
-        retained_path,
-        service_listen,
-    } = request;
-    let log_dir = config
-        .log_path
-        .parent()
-        .context("adapter log has no parent")?;
-    fs::create_dir_all(log_dir).context("create adapter log directory")?;
-    launcher_logs::archive_previous_log(&config.log_path)?;
-    let mut stdout = OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(&config.log_path)
-        .context("open adapter log")?;
-    launcher_logs::write_adapter_log_header(
-        &mut stdout,
-        &config.options.model,
-        &config.options.listen,
-        config.token.len(),
-    )?;
-    let stderr = stdout.try_clone().context("clone adapter log handle")?;
-    let mut command = Command::new("nohup");
-    configure_process_group(&mut command);
-    let command =
-        crate::path_env::apply_daemon_env(command.arg(executable).args(arguments), &config.token)
-            .env(
-                crate::app_server::CODEX_CONFIG_FINGERPRINT_ENV,
-                codex_config_fingerprint,
-            )
-            .env(SERVICE_CONFIG_FINGERPRINT_ENV, service_config_fingerprint);
-    if let Some(manifest_path) = manifest_path {
-        command.env(RECOVERY_MANIFEST_ENV, manifest_path);
-    } else {
-        command.env_remove(RECOVERY_MANIFEST_ENV);
-    }
-    if let Some(retained_path) = retained_path {
-        command.env(super::RETAINED_STATE_ENV, retained_path);
-    } else {
-        command.env_remove(super::RETAINED_STATE_ENV);
-    }
-    command.env(super::SERVICE_LISTEN_ENV, service_listen.to_string());
-    let child = command
-        .env_remove(crate::anthropic::SUBAGENT_HARD_TIMEOUT_ENV)
-        .env_remove(crate::anthropic::LEGACY_SUBAGENT_RESPONSE_TIMEOUT_ENV)
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(stdout))
-        .stderr(Stdio::from(stderr))
-        .spawn()
-        .context("start adapter daemon")?;
-    Ok(child.id())
-}
-
-#[cfg(unix)]
-fn configure_process_group(command: &mut Command) {
-    use std::os::unix::process::CommandExt;
-
-    // `ensure` may itself be running under `Command::output()`. Close
-    // inherited non-stdio descriptors before `nohup` execs the daemon so
-    // the caller's output pipes reach EOF when the launcher exits.
-    unsafe {
-        // A process-group boundary alone still permits a parent/PTY teardown
-        // to terminate the daemon. Creating a new session makes the daemon
-        // independent of that lifecycle. `setsid` also makes the child its
-        // own process-group leader, preserving targeted group shutdown via
-        // `kill(-pid, ...)`.
-        command.pre_exec(detach_session_and_close_inherited_descriptors);
-    }
-}
-
-#[cfg(not(unix))]
-fn configure_process_group(_command: &mut Command) {}
+#[path = "daemon_start_spawn.rs"]
+mod spawn;
+use spawn::{SpawnRequest, spawn_adapter};
+#[cfg(test)]
+use spawn::configure_process_group;
 
 #[cfg(unix)]
 #[path = "daemon_start_descriptors.rs"]

@@ -1,19 +1,17 @@
 use std::{
     cell::RefCell,
     collections::HashMap,
-    future::Future,
     path::{Path, PathBuf},
     rc::Rc,
     time::Duration,
 };
 
 use agent_client_protocol::{self as acp, Agent as _};
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use serde_json::{Value, json};
 use tokio::sync::oneshot;
 
 use super::{connection::AcpProvider, prompt};
-use crate::anthropic::subscription_request::cwd_from_system;
 
 #[path = "session_mcp.rs"]
 mod mcp;
@@ -21,10 +19,10 @@ use mcp::launch_mcp_servers;
 #[cfg(test)]
 use mcp::{launch_mcp_servers_from, params_offer_launch_tools};
 
-const SESSION_SETUP_TIMEOUT: Duration = Duration::from_secs(8);
+pub(super) const SESSION_SETUP_TIMEOUT: Duration = Duration::from_secs(8);
 /// Cursor/OpenCode often hang on MCP during session/new. Fail the MCP-first attempt
 /// quickly and retry without MCP rather than blocking a full SESSION_SETUP_TIMEOUT every turn.
-const SESSION_SETUP_WITH_MCP_TIMEOUT: Duration = Duration::from_secs(2);
+pub(super) const SESSION_SETUP_WITH_MCP_TIMEOUT: Duration = Duration::from_secs(2);
 pub(super) const LAUNCH_MCP_NAME: &str = "claudex-launch";
 pub(super) const LAUNCH_MCP_COMMAND: &str = "mcp-claudex-launch";
 pub(super) struct Task {
@@ -123,94 +121,13 @@ pub(super) async fn create(
     Ok(json!({"thread":{"id":session_id}}))
 }
 
-fn pins_acp_model_after_create(provider: AcpProvider) -> bool {
-    matches!(provider, AcpProvider::Configured)
-}
-
-async fn new_session_with_mcp(
-    provider: AcpProvider,
-    connection: &acp::ClientSideConnection,
-    model: &str,
-    session_cwd: &Path,
-    mcp: Vec<acp::McpServer>,
-) -> Result<acp::NewSessionResponse> {
-    let timeout = session_setup_timeout(provider, mcp.is_empty());
-    let mut request = acp::NewSessionRequest::new(session_cwd).mcp_servers(mcp);
-    if provider != AcpProvider::Grok {
-        request = request.meta(json!({ "modelId": model }).as_object().cloned());
-    }
-    await_setup(provider, timeout, connection.new_session(request)).await
-}
-
-fn session_setup_timeout(provider: AcpProvider, mcp_empty: bool) -> Duration {
-    if mcp_empty {
-        SESSION_SETUP_TIMEOUT
-    } else if matches!(
-        provider,
-        AcpProvider::Configured | AcpProvider::ConfiguredLaunchScoped
-    ) {
-        SESSION_SETUP_WITH_MCP_TIMEOUT
-    } else {
-        SESSION_SETUP_TIMEOUT
-    }
-}
-
-fn session_cwd(params: &Value, fallback: &Path) -> PathBuf {
-    params
-        .get("baseInstructions")
-        .and_then(Value::as_str)
-        .and_then(cwd_from_system)
-        .or_else(|| request_cwd(params))
-        .unwrap_or_else(|| fallback.to_owned())
-}
-
-
-async fn await_model_setup<T>(
-    provider: AcpProvider,
-    timeout: Duration,
-    request: impl Future<Output = acp::Result<T>>,
-) -> Result<T> {
-    tokio::time::timeout(timeout, request)
-        .await
-        .map_err(|_| {
-            anyhow!(
-                "{} ACP session/set_model timed out after {:?}",
-                provider.label(),
-                timeout
-            )
-        })?
-        .map_err(|error| {
-            anyhow!(
-                "{} ACP session/set_model failed: {error:?}",
-                provider.label()
-            )
-        })
-}
-
-async fn await_setup<T>(
-    provider: AcpProvider,
-    timeout: Duration,
-    request: impl Future<Output = acp::Result<T>>,
-) -> Result<T> {
-    tokio::time::timeout(timeout, request)
-        .await
-        .map_err(|_| {
-            anyhow!(
-                "{} ACP session/new timed out after {:?}",
-                provider.label(),
-                timeout
-            )
-        })?
-        .map_err(|error| anyhow!("{} ACP session/new failed: {error:?}", provider.label()))
-}
-
-fn request_cwd(params: &Value) -> Option<PathBuf> {
-    params
-        .get("cwd")
-        .and_then(Value::as_str)
-        .map(PathBuf::from)
-        .filter(|path| path.is_absolute() && path.is_dir())
-}
+#[path = "session_setup.rs"]
+mod setup;
+use setup::{
+    await_model_setup, new_session_with_mcp, pins_acp_model_after_create, session_cwd,
+};
+#[cfg(test)]
+use setup::{await_setup, request_cwd, session_setup_timeout};
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
