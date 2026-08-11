@@ -36,10 +36,6 @@ fn block_lacks_websearch_chrome(block: &Value) -> bool {
     })
 }
 
-async fn drain_until_closed<T>(events: &mut tokio::sync::broadcast::Receiver<T>) {
-    while events.recv().await.is_some() {}
-}
-
 
 fn track_content_block_frame(
     payload: &Value,
@@ -2481,10 +2477,10 @@ async fn assert_agent_tool_use_path(
     let mut builder = SegmentBuilder::new(1);
     let _ = builder
         .handle_event(
-            &bridge,
-            &session,
-            &messages,
-            &routing,
+            bridge,
+            session,
+            messages,
+            routing,
             &json!({
                 "method":"item/providerTool/call",
                 "params":{
@@ -2521,10 +2517,10 @@ async fn assert_native_tool_wip_path(
     let mut native = SegmentBuilder::new(1);
     let _ = native
         .handle_event(
-            &bridge,
-            &session,
-            &messages,
-            &routing,
+            bridge,
+            session,
+            messages,
+            routing,
             &json!({
                 "method":"item/providerTool/call",
                 "params":{
@@ -2568,10 +2564,10 @@ async fn assert_mcp_tool_wip_path(
     let mut mcp = SegmentBuilder::new(1);
     let _ = mcp
         .handle_event(
-            &bridge,
-            &session,
-            &messages,
-            &routing,
+            bridge,
+            session,
+            messages,
+            routing,
             &json!({
                 "method":"item/providerTool/call",
                 "params":{
@@ -2587,10 +2583,10 @@ async fn assert_mcp_tool_wip_path(
         .expect("remember MCP call id");
     let _ = mcp
         .handle_event(
-            &bridge,
-            &session,
-            &messages,
-            &routing,
+            bridge,
+            session,
+            messages,
+            routing,
             &json!({
                 "method":"item/providerTool/update",
                 "params":{
@@ -3137,7 +3133,7 @@ async fn unsupported_disconnect_with_a_visible_tool_aborts_without_a_drain() {
     assert!(bridge.detached_sessions.lock().await.is_empty());
     assert!(!app.is_alive());
     assert_eq!(Arc::strong_count(&events), 1, "no hidden drain owns events");
-    tokio::time::timeout(Duration::from_secs(1), drain_until_closed(&mut events))
+    tokio::time::timeout(Duration::from_secs(1), wait_for_disconnected_drain(&events))
     .await
     .expect("provider abort must close the event channel after queued events");
     assert_eq!(bridge.used_session_slots(), 1);
@@ -4128,7 +4124,8 @@ async fn context_retry_or_error_requires_window_marker_and_retry() {
         let unmarked = bridge
             .context_retry_or_error(&mut turn, anyhow!("boom"))
             .await
-            .expect_err("unmarked errors should fail");
+            .err()
+            .expect("unmarked errors should fail");
         assert!(unmarked.to_string().contains("boom"));
     }
 
@@ -4143,7 +4140,8 @@ async fn context_retry_or_error_requires_window_marker_and_retry() {
         let missing = bridge
             .context_retry_or_error(&mut turn, anyhow!("context window exceeded"))
             .await
-            .expect_err("missing retry should fail");
+            .err()
+            .expect("missing retry should fail");
         assert!(missing.to_string().contains("context window"));
     }
 
