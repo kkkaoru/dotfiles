@@ -13,6 +13,9 @@ use super::{MessagesRequest, Segment, Session};
 
 #[path = "content_steering.rs"]
 mod content_steering;
+#[path = "content_tool_result.rs"]
+mod content_tool_result;
+use content_tool_result::tool_result;
 pub(in crate::anthropic) use content_steering::mid_turn_user_steering;
 
 // consumed IDs suppress replays of completed results.
@@ -201,44 +204,6 @@ pub(super) fn transcript_owns_tool_results(messages: &[Value], results: &[ToolRe
         && results
             .iter()
             .all(|result| tool_use_ids.contains(result.tool_use_id.as_str()))
-}
-
-fn tool_result(block: &Value) -> Option<ToolResult> {
-    if block.get("type").and_then(Value::as_str) != Some("tool_result") {
-        return None;
-    }
-    let tool_use_id = block.get("tool_use_id")?.as_str()?.to_owned();
-    let mut content_items = tool_result_content(block.get("content"));
-    if content_items.is_empty() {
-        content_items.push(json!({ "type": "inputText", "text": "" }));
-    }
-    Some(ToolResult {
-        tool_use_id,
-        content_items,
-        is_error: block
-            .get("is_error")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-    })
-}
-
-fn tool_result_content(content: Option<&Value>) -> Vec<Value> {
-    match content {
-        Some(Value::String(text)) => vec![input_text(text)],
-        Some(Value::Array(items)) => items.iter().filter_map(tool_result_item).collect(),
-        _ => Vec::new(),
-    }
-}
-
-fn tool_result_item(item: &Value) -> Option<Value> {
-    match item.get("type").and_then(Value::as_str) {
-        Some("text") => Some(input_text(
-            item.get("text").and_then(Value::as_str).unwrap_or(""),
-        )),
-        Some("image") => image_data_url(item)
-            .map(|image_url| json!({ "type": "inputImage", "imageUrl": image_url })),
-        _ => None,
-    }
 }
 
 pub(super) fn input_text(text: &str) -> Value {

@@ -1,7 +1,6 @@
 use std::{cell::Cell, future::Future, rc::Rc, sync::atomic::AtomicBool, time::Duration};
 
 use agent_client_protocol::{self as acp, Agent as _};
-use anyhow::anyhow;
 use tokio::sync::oneshot;
 
 use super::{
@@ -10,8 +9,7 @@ use super::{
     cancellation::finish_setup_cancellation, configured_prompt,
 };
 use crate::{
-    app_server::events::ThreadEventDispatcher,
-    grok_acp::{connection::AcpProvider, updates},
+    app_server::events::ThreadEventDispatcher, grok_acp::connection::AcpProvider,
 };
 
 // Session creation is bounded; effort setup must not hang a turn forever when a
@@ -34,6 +32,8 @@ pub(super) struct TurnCtl<'a> {
 }
 
 mod setup;
+mod effort;
+use effort::finish_effort_setup;
 use setup::apply_effort;
 
 pub(super) struct TurnExecution<'a> {
@@ -114,71 +114,6 @@ pub(super) async fn execute_turn(context: TurnExecution<'_>, turn: PreparedTurn)
     }
     let timeout = configured_prompt::TIMEOUT;
     run_prompt(ctl, connection, id, prompt, timeout, alive).await;
-}
-
-fn finish_effort_setup(ctl: &mut TurnCtl<'_>, setup_result: Result<(), EffortSetupError>) -> bool {
-    match setup_result {
-        Ok(()) => {
-            if let Ok(cancellation) = ctl.cancellation.try_recv() {
-                ctl.finish_pre_prompt_cancel(cancellation);
-                return false;
-            }
-            true
-        }
-        Err(EffortSetupError::TimedOut) if ctl.provider.is_session_scoped_configured() => {
-            fail_model_setup(
-                ctl,
-                format!(
-                    "{} ACP model selection timed out after {:?}",
-                    ctl.provider.label(),
-                    EFFORT_SETUP_TIMEOUT
-                ),
-            )
-        }
-        Err(EffortSetupError::TimedOut) => continue_without_effort(
-            ctl,
-            format!(
-                "{} ACP set effort timed out after {:?}; continuing with provider default",
-                ctl.provider.label(),
-                EFFORT_SETUP_TIMEOUT
-            ),
-        ),
-        Err(EffortSetupError::Failed(error)) if ctl.provider.model_is_launch_scoped() => {
-            continue_without_effort(
-                ctl,
-                format!(
-                    "{} ACP set effort failed ({error:?}); continuing with provider default",
-                    ctl.provider.label()
-                ),
-            )
-        }
-        Err(EffortSetupError::Failed(error)) => fail_model_setup(
-            ctl,
-            format!(
-                "{} ACP model selection failed: {error:?}",
-                ctl.provider.label()
-            ),
-        ),
-    }
-}
-
-fn fail_model_setup(ctl: &mut TurnCtl<'_>, message: String) -> bool {
-    drop(ctl.permit.take());
-    ctl.active_turns.borrow_mut().remove(ctl.session_id);
-    if let Ok(cancellation) = ctl.cancellation.try_recv() {
-        let _ = cancellation.response.send(Err(anyhow!(message.clone())));
-    }
-    updates::dispatch_error(ctl.events, ctl.session_id, message);
-    false
-}
-
-fn continue_without_effort(ctl: &mut TurnCtl<'_>, warning: String) -> bool {
-    tracing::warn!(session_id = ctl.session_id, "{warning}");
-    if let Ok(cancellation) = ctl.cancellation.try_recv() {
-        ctl.finish_pre_prompt_cancel(cancellation);
-        return false;
-    }
-    true
 }
 
 pub(super) async fn handle_setup_cancellation<F, T>(
