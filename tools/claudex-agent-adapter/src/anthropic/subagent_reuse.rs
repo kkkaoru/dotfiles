@@ -8,6 +8,11 @@ mod records;
 mod records_scope;
 mod records_status;
 mod store;
+mod limits;
+pub(super) use limits::{
+    is_launch_tool, max_subagents_per_session, reuse_enabled, session_id,
+    should_expose_launch_tools,
+};
 #[cfg(test)]
 use guidance::REUSE_GUIDANCE_MARKER;
 pub(super) use guidance::{agent_teams_enabled, value_text};
@@ -20,7 +25,7 @@ use records::{
 #[cfg(test)]
 use store::StoredStates;
 use store::{
-    CACHE_FILE_NAME, METADATA_LIMIT_REACHED, SessionState, Store, reuse_recipients,
+    CACHE_FILE_NAME, SessionState, Store, reuse_recipients,
     set_limit_metadata,
 };
 
@@ -240,39 +245,6 @@ impl SubagentReuseRegistry {
     }
 }
 
-pub(super) fn max_subagents_per_session() -> usize {
-    std::env::var(MAX_SUBAGENTS_PER_SESSION_ENV)
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .filter(|value| *value > 0)
-        .unwrap_or(DEFAULT_MAX_SUBAGENTS_PER_SESSION)
-}
-
-pub(super) fn should_expose_launch_tools(request: &MessagesRequest) -> bool {
-    request
-        .metadata
-        .get(METADATA_LIMIT_REACHED)
-        .and_then(Value::as_bool)
-        .is_none_or(|reached| !reached)
-}
-
-pub(super) fn is_launch_tool(name: &str) -> bool {
-    matches!(name, "Agent" | "Task")
-}
-
-pub(super) fn reuse_enabled() -> bool {
-    match std::env::var(crate::parallel_scheduler::SUBAGENT_REUSE_ENV) {
-        Ok(value) => matches!(
-            value.as_str(),
-            "1" | "true" | "TRUE" | "True" | "yes" | "YES" | "on" | "ON"
-        ),
-        Err(_) => true,
-    }
-}
-
-pub(super) fn session_id(request: &MessagesRequest) -> Option<String> {
-    super::request_identity::claude_session_id(request)
-}
 
 #[cfg(test)]
 #[path = "subagent_reuse_tests.rs"]
