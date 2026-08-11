@@ -1,9 +1,12 @@
+#[cfg(test)]
 use std::collections::HashSet;
 
 use serde_json::Value;
 
+#[cfg(test)]
 use super::value_text;
 
+#[cfg(test)]
 pub(super) fn latest_user_text(messages: &[Value]) -> String {
     messages
         .iter()
@@ -13,6 +16,7 @@ pub(super) fn latest_user_text(messages: &[Value]) -> String {
         .unwrap_or_default()
 }
 
+#[cfg(test)]
 pub(super) fn scope_similarity(scope: &str, task: &str) -> usize {
     let task_words = task
         .split(|character: char| !character.is_alphanumeric())
