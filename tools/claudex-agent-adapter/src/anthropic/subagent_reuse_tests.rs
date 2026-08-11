@@ -10,6 +10,7 @@ use std::{
 };
 
 use super::*;
+use super::records_scope::{latest_user_text, scope_similarity};
 
 fn request(session: &str, messages: Vec<Value>) -> MessagesRequest {
     MessagesRequest {
@@ -274,7 +275,7 @@ fn queued_send_message_status_is_preserved_for_reuse() {
 }
 
 #[test]
-fn matching_scope_is_first_in_actual_reuse_guidance() {
+fn reuse_guidance_keeps_stable_recipient_order_across_user_turns() {
     let registry = SubagentReuseRegistry::default();
     let mut initial = request(
         "session-a",
@@ -292,15 +293,26 @@ fn matching_scope_is_first_in_actual_reuse_guidance() {
         .collect(),
     );
     registry.observe_and_restore(&mut initial);
-    let mut resumed = request(
+    let mut rust_turn = request(
         "session-a",
         vec![json!({"role":"user","content":"continue Rust adapter tests"})],
     );
-    registry.observe_and_restore(&mut resumed);
-    let guidance = resumed.system.to_string();
+    registry.observe_and_restore(&mut rust_turn);
+    let mut css_turn = request(
+        "session-a",
+        vec![json!({"role":"user","content":"continue CSS layout review"})],
+    );
+    registry.observe_and_restore(&mut css_turn);
+    let rust_guidance = rust_turn.system.to_string();
+    let css_guidance = css_turn.system.to_string();
+    assert_eq!(
+        rust_guidance, css_guidance,
+        "system reuse guidance must stay byte-stable so prompt-cache signatures do not churn"
+    );
     assert!(
-        guidance.find("worker-rust").expect("matching worker")
-            < guidance.find("worker-css").expect("unrelated worker")
+        rust_guidance.find("worker-css").expect("css worker")
+            < rust_guidance.find("worker-rust").expect("rust worker"),
+        "recipients stay lexicographically stable regardless of the latest user task"
     );
 }
 

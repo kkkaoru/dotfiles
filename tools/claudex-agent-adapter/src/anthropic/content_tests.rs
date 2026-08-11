@@ -429,6 +429,41 @@ mod tests {
         );
     }
 
+    #[test]
+    fn mid_turn_steering_ignores_system_reminder_and_routing_noise() {
+        let messages = [json!({
+            "role":"user",
+            "content":[
+                {"type":"tool_result","tool_use_id":"tool-1","content":"done"},
+                {
+                    "type":"text",
+                    "text":"<system-reminder>\nClaudex routing for this turn: {}\n</system-reminder>"
+                },
+                {
+                    "type":"text",
+                    "text":"The user sent a new message while you were working:\n結果を待ってから続きを\n\nAddress the message above as you continue this turn."
+                }
+            ]
+        })];
+        let steering = mid_turn_user_steering(&messages).expect("user interrupt");
+        assert_eq!(steering, "結果を待ってから続きを");
+        assert!(
+            !steering.contains("system-reminder") && !steering.contains("Claudex routing"),
+            "hook/routing chrome must not become provider steering: {steering}"
+        );
+        assert!(
+            mid_turn_user_steering(&[json!({
+                "role":"user",
+                "content":[
+                    {"type":"tool_result","tool_use_id":"tool-1","content":"done"},
+                    {"type":"text","text":"<system-reminder>\nPostToolUse\n</system-reminder>"}
+                ]
+            })])
+            .is_none(),
+            "reminder-only trailing text must not invent steering"
+        );
+    }
+
     fn result(tool_use_id: &str) -> ToolResult {
         ToolResult {
             tool_use_id: tool_use_id.to_owned(),

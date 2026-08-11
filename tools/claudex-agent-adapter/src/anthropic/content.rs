@@ -11,6 +11,10 @@ use uuid::Uuid;
 pub(super) use super::content_pending::take_pending_results;
 use super::{MessagesRequest, Segment, Session};
 
+#[path = "content_steering.rs"]
+mod content_steering;
+pub(in crate::anthropic) use content_steering::mid_turn_user_steering;
+
 // consumed IDs suppress replays of completed results.
 const MAX_CONSUMED_TOOL_IDS: usize = 4_096;
 
@@ -133,7 +137,7 @@ pub(super) fn content_text(content: &Value) -> String {
     }
 }
 
-fn text_block(block: &Value) -> Option<&str> {
+pub(super) fn text_block(block: &Value) -> Option<&str> {
     (block.get("type").and_then(Value::as_str) == Some("text"))
         .then(|| block.get("text").and_then(Value::as_str))
         .flatten()
@@ -175,35 +179,6 @@ pub(super) fn trailing_user_messages(messages: &[Value]) -> &[Value] {
 /// Tool results across the trailing user suffix (not only `messages.last()`).
 pub(super) fn collect_turn_tool_results(messages: &[Value]) -> Vec<ToolResult> {
     collect_tool_results(trailing_user_messages(messages))
-}
-
-/// Claude Code may put mid-turn steering beside `tool_result` blocks, or in a
-/// following text-only user message after those results. Fold either shape.
-pub(super) fn mid_turn_user_steering(messages: &[Value]) -> Option<String> {
-    let suffix = trailing_user_messages(messages);
-    let has_tool_result = suffix.iter().any(|message| {
-        message
-            .get("content")
-            .and_then(Value::as_array)
-            .is_some_and(|blocks| {
-                blocks
-                    .iter()
-                    .any(|block| block.get("type").and_then(Value::as_str) == Some("tool_result"))
-            })
-    });
-    if !has_tool_result {
-        return None;
-    }
-    let text = suffix
-        .iter()
-        .filter_map(|message| message.get("content").and_then(Value::as_array))
-        .flatten()
-        .filter_map(text_block)
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n");
-    (!text.is_empty()).then_some(text)
 }
 
 pub(super) fn attach_mid_turn_steering(results: &mut [ToolResult], steering: &str) {

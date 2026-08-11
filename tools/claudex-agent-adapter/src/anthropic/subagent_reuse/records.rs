@@ -8,7 +8,7 @@ use super::{
     value_text,
 };
 
-pub(super) use super::records_scope::{latest_user_text, scope_similarity, summarize_scope};
+pub(super) use super::records_scope::summarize_scope;
 
 #[derive(Clone, Debug, Default, serde::Deserialize, Eq, PartialEq, serde::Serialize)]
 pub(super) struct LaunchRecord {

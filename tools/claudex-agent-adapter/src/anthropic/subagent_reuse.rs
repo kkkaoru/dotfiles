@@ -19,9 +19,8 @@ pub(super) use guidance::{agent_teams_enabled, value_text};
 use guidance::{append_reuse_guidance, has_send_message_tool, system_contains_marker};
 pub(in crate::anthropic) use records::live_agent_task_ids;
 use records::{
-    LaunchRecord, already_has_resume, apply_transcript, find_reusable_launch, latest_user_text,
-    launch_model, launch_records, reusable_status, scope_is_occupied, scope_similarity,
-    summarize_scope,
+    LaunchRecord, already_has_resume, apply_transcript, find_reusable_launch, launch_model,
+    launch_records, reusable_status, scope_is_occupied, summarize_scope,
 };
 
 pub(crate) const MAX_SUBAGENTS_PER_SESSION_ENV: &str = "CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION";
@@ -334,22 +333,19 @@ pub(super) fn should_expose_launch_tools(request: &MessagesRequest) -> bool {
         .is_none_or(|reached| !reached)
 }
 
-fn reuse_recipients(launches: &[LaunchRecord], messages: &[Value]) -> Vec<String> {
-    let task = latest_user_text(messages);
-    // Skip inflight placeholders (empty agentId) and terminal failures so
-    // resume / prompt-cache guidance only names workers rewrite can actually use.
+fn reuse_recipients(launches: &[LaunchRecord], _messages: &[Value]) -> Vec<String> {
+    // Omit empty agentId / failures; stable order keeps prompt-cache signatures.
     let mut sorted = launches
         .iter()
         .filter(|launch| reusable_status(&launch.status) && !launch.recipient.is_empty())
         .cloned()
         .collect::<Vec<_>>();
-    sorted.sort_by_key(|launch| std::cmp::Reverse(scope_similarity(&launch.scope, &task)));
+    sorted.sort_by(|left, right| left.recipient.cmp(&right.recipient).then(left.key.cmp(&right.key)));
     sorted.iter().map(format_reuse_recipient).collect()
 }
 
 fn format_reuse_recipient(launch: &LaunchRecord) -> String {
-    let scope = launch.scope.as_str();
-    let scope = if scope.is_empty() { "scope unknown" } else { scope };
+    let scope = if launch.scope.is_empty() { "scope unknown" } else { launch.scope.as_str() };
     let model = launch.model.as_deref().unwrap_or("model unknown");
     format!("{} ({}; {}; {})", launch.recipient, scope, model, launch.status)
 }
