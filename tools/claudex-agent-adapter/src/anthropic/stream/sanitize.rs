@@ -220,7 +220,8 @@ pub(super) fn is_provider_status_line(line: &str) -> bool {
         || trimmed.starts_with("🔎 WebSearch:")
 }
 
-/// Muse Spark often emits `Status: …Status: …` without newlines. Keep only the last.
+/// Muse Spark often emits `Status: …Status: …` without newlines. Keep only the last
+/// status segment — never the answer lines that may follow on later newlines.
 pub(super) fn latest_worker_status(delta: &str) -> Option<String> {
     let trimmed = delta.trim();
     if trimmed.is_empty() {
@@ -229,6 +230,14 @@ pub(super) fn latest_worker_status(delta: &str) -> Option<String> {
     let lower = trimmed.to_ascii_lowercase();
     if !lower.starts_with("status:") {
         return None;
+    }
+    if let Some(line) = trimmed.lines().rev().find(|line| {
+        line.trim_start()
+            .to_ascii_lowercase()
+            .starts_with("status:")
+    }) {
+        let status = compact_live_prose(line.trim());
+        return Some(format!("{}\n", status.trim_end()));
     }
     let last = lower.rmatch_indices("status:").next()?.0;
     let status = compact_live_prose(trimmed[last..].trim());

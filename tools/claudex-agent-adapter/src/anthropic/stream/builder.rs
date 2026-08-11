@@ -19,6 +19,7 @@ mod batch;
 mod external_tool;
 mod external_tool_reject;
 mod progress;
+mod progress_keepalive;
 mod provider_launch;
 mod visibility;
 #[path = "web_provenance.rs"]

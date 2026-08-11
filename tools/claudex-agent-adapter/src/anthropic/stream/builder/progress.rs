@@ -4,6 +4,10 @@ use anyhow::Result;
 use serde_json::{Value, json};
 
 use super::SegmentBuilder;
+use super::progress_keepalive::{
+    compact_keepalive_title, is_adapter_tool_marker, keepalive_elapsed_chrome,
+    send_activity_heartbeat,
+};
 use crate::anthropic::stream::{
     protocol::{StreamSender, send_stream_frame},
     sanitize::{
@@ -68,10 +72,12 @@ impl SegmentBuilder {
         if delta.is_empty() {
             return Ok(());
         }
-        if self.is_subagent
-            && let Some(status) = latest_worker_status(delta) {
-                return self.replace_live_worker_status(&status, stream).await;
-            }
+        if let Some(remainder) = self
+            .take_subagent_status_remainder(delta, stream)
+            .await?
+        {
+            return self.stream_subagent_text_delta(&remainder, stream).await;
+        }
         // ACP status lines (`…:status`) and Qwen/Cursor prose that already
         // contains ▶/✓ must ride thinking chrome. SubAgent TUI hides text_delta.
         // Mixed ▶ + answer chunks (Command Code) must not dump the answer.
@@ -98,23 +104,43 @@ impl SegmentBuilder {
         self.stream_answer_delta(delta, stream).await
     }
 
+    async fn take_subagent_status_remainder(
+        &mut self,
+        raw: &str,
+        stream: Option<&StreamSender>,
+    ) -> Result<Option<String>> {
+        if !self.is_subagent {
+            return Ok(None);
+        }
+        let Some(status) = latest_worker_status(raw) else {
+            return Ok(None);
+        };
+        self.replace_live_worker_status(&status, stream).await?;
+        let remainder = strip_worker_status_lines(raw);
+        if remainder.trim().is_empty() {
+            return Ok(Some(String::new()));
+        }
+        Ok(Some(remainder))
+    }
+
     async fn stream_subagent_text_delta(
         &mut self,
         delta: &str,
         stream: Option<&StreamSender>,
     ) -> Result<()> {
-        let Some(delta) = self.filter_subagent_live_delta(delta) else {
+        let Some((display, committed)) = self.filter_subagent_live_delta(delta) else {
             return Ok(());
         };
-        let dump_hint = delta.contains("large tool output omitted");
+        let dump_hint = display.contains("large tool output omitted");
         // Including Command Code: streaming text_delta closes thinking and
         // collapses CC 2.1 to repeating "Thought for Xs".
         self.note_provider_turn_activity();
         self.thinking
-            .progress_status_keep_open(&mut self.blocks, &delta, stream)
+            .progress_status_keep_open(&mut self.blocks, &display, stream)
             .await?;
         if !dump_hint {
-            self.pending_answer.push_str(&delta);
+            // Keep the full answer for flush; display chrome may be compacted.
+            self.pending_answer.push_str(&committed);
         }
         Ok(())
     }
@@ -166,11 +192,27 @@ impl SegmentBuilder {
         if !self.is_subagent {
             return self.thinking.delta(event, &mut self.blocks, stream).await;
         }
-        if let Some(status) = latest_worker_status(raw) {
-            return self.replace_live_worker_status(&status, stream).await;
+        if let Some(remainder) = self.take_subagent_status_remainder(raw, stream).await? {
+            return self
+                .emit_filtered_subagent_reasoning(item_id, summary_index, &remainder, stream)
+                .await;
         }
-        if let Some(delta) = self.filter_subagent_live_delta(raw) {
-            self.emit_subagent_reasoning_delta(item_id, summary_index, &delta, stream)
+        self.emit_filtered_subagent_reasoning(item_id, summary_index, raw, stream)
+            .await
+    }
+
+    async fn emit_filtered_subagent_reasoning(
+        &mut self,
+        item_id: &str,
+        summary_index: i64,
+        raw: &str,
+        stream: Option<&StreamSender>,
+    ) -> Result<()> {
+        if raw.trim().is_empty() {
+            return Ok(());
+        }
+        if let Some((display, _)) = self.filter_subagent_live_delta(raw) {
+            self.emit_subagent_reasoning_delta(item_id, summary_index, &display, stream)
                 .await?;
         }
         Ok(())
@@ -210,7 +252,7 @@ impl SegmentBuilder {
             .await
     }
 
-    fn filter_subagent_live_delta(&mut self, delta: &str) -> Option<String> {
+    fn filter_subagent_live_delta(&mut self, delta: &str) -> Option<(String, String)> {
         if delta.trim().is_empty() {
             return None;
         }
@@ -223,9 +265,10 @@ impl SegmentBuilder {
             return None;
         }
         if is_bulk_tool_dump(&stripped) {
-            return self.bulk_dump_hint();
+            return self.bulk_dump_hint().map(|hint| (hint.clone(), hint));
         }
-        Some(compact_live_prose(&stripped))
+        // Display chrome is compacted; committed answer keeps the full prose.
+        Some((compact_live_prose(&stripped), stripped))
     }
 
     fn bulk_dump_hint(&mut self) -> Option<String> {
@@ -342,55 +385,5 @@ impl SegmentBuilder {
         })
         .await?;
         self.close_text_block(stream).await
-    }
-}
-
-async fn send_activity_heartbeat(
-    stream: Option<&StreamSender>,
-    index: usize,
-    heartbeat: &str,
-) -> Result<()> {
-    send_stream_frame(stream, "content_block_delta", || {
-        json!({
-            "type":"content_block_delta",
-            "index":index,
-            "delta":{"type":"text_delta","text":heartbeat}
-        })
-    })
-    .await
-}
-
-fn is_adapter_tool_marker(delta: &str) -> bool {
-    delta.lines().any(|line| {
-        let trimmed = line.trim_start();
-        trimmed.starts_with('▶') || trimmed.starts_with('✓') || trimmed.starts_with('✗')
-    }) && !delta.contains("Command Code")
-}
-
-fn compact_keepalive_title(title: &str) -> String {
-    let trimmed = title.trim();
-    let mut chars = trimmed.chars();
-    let head: String = chars.by_ref().take(48).collect();
-    if chars.next().is_some() {
-        format!("{head}…")
-    } else {
-        head
-    }
-}
-
-fn keepalive_elapsed_chrome(last_tool: Option<&str>, elapsed: std::time::Duration) -> String {
-    let clock = format_keepalive_clock(elapsed);
-    match last_tool.filter(|title| !title.is_empty()) {
-        Some(title) => format!("▶ {title} · {clock}\n"),
-        None => format!("▶ Thinking… · {clock}\n"),
-    }
-}
-
-fn format_keepalive_clock(elapsed: std::time::Duration) -> String {
-    let secs = elapsed.as_secs();
-    if secs >= 60 {
-        format!("{}m{:02}s", secs / 60, secs % 60)
-    } else {
-        format!("{secs}s")
     }
 }
