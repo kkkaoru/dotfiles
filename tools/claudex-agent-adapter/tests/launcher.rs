@@ -872,12 +872,18 @@ async fn ensure_running_replaces_a_protocol_stale_foreign_endpoint() {
         r#"{{"status":"ok","pid":{},"protocol_version":0,"build_id":"stale","model":"test-main-model","subscription_max_processes":20,"subscription_timeout_minutes":120}}"#,
         std::process::id()
     );
-    let stale = thread::spawn(move || serve_stale_health(listener, 2, body));
+    // llvm-cov slows ensure enough that it can probe health more than twice
+    // before the replacement binds; keep the stale peer answering until then.
+    let stale = thread::spawn(move || serve_stale_health(listener, 16, body));
     let output = ensure_command(&home, port, "20")
         .output()
         .expect("replace protocol-stale endpoint");
     stale.join().expect("stale endpoint thread");
-    assert!(output.status.success());
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let base_url = format!("http://127.0.0.1:{port}");
     let client = Client::new();
     let pid = health(&client, &base_url).await["pid"]
