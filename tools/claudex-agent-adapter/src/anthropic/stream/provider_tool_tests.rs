@@ -408,13 +408,14 @@ async fn qwen_agent_message_then_tool_progress_stays_in_thinking_chrome() {
         thinking.contains("Phase 1: reading CLAUDE.md"),
         "{thinking}"
     );
+    assert!(
+        thinking.contains("▶ ReadFile") || thinking.contains("▶ Read"),
+        "{thinking}"
+    );
     drop(sender);
     let (_, output) = collect_frames(&mut receiver).await;
-    assert!(
-        output.contains("\"type\":\"server_tool_use\"")
-            || output.contains('▶'),
-        "Read progress must be server card or ▶: {output}"
-    );
+    assert!(output.contains("thinking_delta"));
+    assert!(output.contains('▶'));
     assert!(
         !output.contains("\"type\":\"text_delta\",\"text\":\"\\n▶"),
         "▶ must not ride hidden text_delta: {output}"
@@ -602,11 +603,18 @@ async fn nucleating_cursor_subagent_is_replaced_by_bash_thinking_progress() {
         .await
         .expect("bash progress");
     drop(sender);
-    let (_, output) = collect_frames(&mut receiver).await;
+    let thinking = thinking_text(&builder);
     assert!(
-        output.contains("bash_code_execution") || output.contains('▶'),
-        "Bash must paint server card or ▶: {output}"
+        thinking.contains("▶ Bash") || thinking.contains("▶ `ls"),
+        "{thinking}"
     );
+    assert!(
+        !thinking.to_ascii_lowercase().contains("nucleating"),
+        "Nucleating must not freeze SubAgent thinking chrome: {thinking}"
+    );
+    let (_, output) = collect_frames(&mut receiver).await;
+    assert!(output.contains("thinking_delta"));
+    assert!(output.contains('▶'));
     assert!(!output.to_ascii_lowercase().contains("nucleating"));
 }
 
@@ -754,11 +762,7 @@ async fn subagent_silence_keepalive_paints_elapsed_progress_not_blank_viewer() {
         .await
         .expect("tool start");
     live.ingest_available(&mut receiver);
-    assert!(
-        !live.visible_server_tools.is_empty(),
-        "Bash SubAgent must paint display-only server_tool_use first: {:?}",
-        live.visible_server_tools
-    );
+    assert!(live.visible_thinking.contains("▶"));
 
     builder
         .activity_keepalive(Some(&sender))
@@ -773,7 +777,7 @@ async fn subagent_silence_keepalive_paints_elapsed_progress_not_blank_viewer() {
     assert!(live.turn_still_open());
     assert!(
         live.visible_thinking.contains('▶'),
-        "long tool silence must reopen ▶ thinking after the server card: {:?}",
+        "long tool silence must keep the open ▶ thought live: {:?}",
         live.visible_thinking
     );
     assert!(
@@ -981,14 +985,9 @@ fn assert_qwen_read_live(live: &LiveView) {
     assert!(live.turn_still_open(), "tool start is mid-turn");
     assert!(
         live.visible_thinking.contains("▶ ReadFile")
-            || live.visible_thinking.contains("▶ Read")
-            || live
-                .visible_server_tools
-                .iter()
-                .any(|name| name.contains("text_editor") || name.contains("bash")),
-        "Read must paint server card or ▶ before finish: thinking={:?} server_tools={:?}",
-        live.visible_thinking,
-        live.visible_server_tools
+            || live.visible_thinking.contains("▶ Read"),
+        "▶ must be on the wire before finish: {:?}",
+        live.visible_thinking
     );
     assert!(
         !live.hidden_text.contains('▶'),
@@ -1059,16 +1058,11 @@ async fn run_qwen_mid_turn_events(
         .await
         .expect("qwen read complete");
     live.ingest_available(receiver);
-    assert!(live.turn_still_open(), "completion is still mid-turn");
+    assert!(live.turn_still_open(), "✓ is still mid-turn");
     assert!(
-        live.visible_thinking.contains('✓')
-            || live
-                .visible_server_tools
-                .iter()
-                .any(|name| name.contains("text_editor") || name.contains("bash")),
-        "completion must paint ✓ or keep the server card visible: thinking={:?} server_tools={:?}",
-        live.visible_thinking,
-        live.visible_server_tools
+        live.visible_thinking.contains('✓'),
+        "✓ must paint live: {:?}",
+        live.visible_thinking
     );
 
     model_delta(
@@ -1131,7 +1125,7 @@ async fn run_cc_bash_paint(
     assert!(
         live.visible_server_tools
             .iter()
-            .any(|name| name == "bash_code_execution")
+            .any(|name| name == "web_search")
             || (live.visible_thinking.contains("▶ Bash")
                 && live.visible_thinking.contains("wrangler tail")),
         "CC Bash must paint a display card or ▶ thinking: thinking={:?} server_tools={:?}",
@@ -1603,9 +1597,8 @@ async fn cursor_canned_thought_for_filler_is_dropped_from_subagent_viewer() {
 }
 
 #[tokio::test]
-async fn cline_subagent_read_paints_display_only_server_tool_use() {
-    // High-effort SubAgents collapse ▶ thinking to Wandering; paint a
-    // display-only server card so mid-turn Read is visible like advisor Bash.
+async fn cline_subagent_read_stays_on_native_thinking_not_server_tool_use() {
+    // Closing thinking for server_tool_use collapses CC 2.1 to "Thought for Xs".
     let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
     let mut builder = SegmentBuilder::new(1).with_subagent(true);
     builder
@@ -1625,21 +1618,16 @@ async fn cline_subagent_read_paints_display_only_server_tool_use() {
     drop(sender);
     let sse = drain_sse(&mut receiver).await;
     assert!(
-        sse.contains("\"type\":\"server_tool_use\"")
-            && sse.contains("text_editor_code_execution"),
-        "ACP SubAgent Read must paint display-only server_tool_use: {sse}"
+        sse.contains("thinking_delta") && sse.contains("▶ Read"),
+        "Cline SubAgent Read must stay on native thinking ▶: {sse}"
+    );
+    assert!(
+        !sse.contains("\"type\":\"server_tool_use\""),
+        "ACP SubAgent Read must not close thinking for server_tool_use: {sse}"
     );
     assert!(
         !sse.contains("\"type\":\"tool_use\""),
         "must not emit executable tool_use: {sse}"
-    );
-    let segment = builder.finish(None).await.expect("finish");
-    assert!(
-        segment.blocks.iter().any(|block| {
-            block.get("type").and_then(Value::as_str) == Some("server_tool_use")
-        }),
-        "committed segment keeps server_tool_use chrome: {:?}",
-        segment.blocks
     );
 }
 

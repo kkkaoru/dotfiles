@@ -43,7 +43,7 @@ const CASES: &[Case] = &[
             arg_key: "path",
             arg_value: "apps/finish-position-predict-container/src/predict.py",
         }),
-        expect_visible: &["ContextVar", "text_editor_code_execution"],
+        expect_visible: &["ContextVar", "▶ Read"],
     },
     Case {
         name: "qwen-acp",
@@ -57,7 +57,7 @@ const CASES: &[Case] = &[
             arg_key: "pattern",
             arg_value: "target_race",
         }),
-        expect_visible: &["Phase 1", "text_editor_code_execution"],
+        expect_visible: &["Phase 1", "▶ Grep"],
     },
     Case {
         name: "grok-acp",
@@ -71,7 +71,7 @@ const CASES: &[Case] = &[
             arg_key: "command",
             arg_value: "ls apps/finish-position-predict-container",
         }),
-        expect_visible: &["Plan the per-race", "bash_code_execution"],
+        expect_visible: &["Plan the per-race", "▶ ls"],
     },
     Case {
         name: "copilot-acp",
@@ -85,7 +85,7 @@ const CASES: &[Case] = &[
             arg_key: "path",
             arg_value: "apps/finish-position-predict-container/src/cache_seed.py",
         }),
-        expect_visible: &["Inspecting the prediction", "text_editor_code_execution"],
+        expect_visible: &["Inspecting the prediction", "▶ Read"],
     },
     Case {
         name: "cline-acp",
@@ -324,11 +324,17 @@ fn assert_live_progress(case: &Case, live: &SubAgentLiveView, command_code: bool
     }
     if case.tool.is_some() {
         assert!(
-            !live.visible_server_tools.is_empty() || live.visible_thinking.contains('▶'),
-            "{}: tool progress must show as server_tool_use or ▶ thinking: thinking={:?} server_tools={:?}",
+            live.visible_server_tools.is_empty(),
+            "{}: ACP SubAgent tools stay on native thinking, not server_tool_use: thinking={:?} server_tools={:?}",
             case.name,
             live.visible_thinking,
             live.visible_server_tools
+        );
+        assert!(
+            live.visible_thinking.contains('▶'),
+            "{}: tool progress must stay in the open thinking block: {:?}",
+            case.name,
+            live.visible_thinking
         );
     }
 }
