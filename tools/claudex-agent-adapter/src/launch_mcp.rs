@@ -14,10 +14,16 @@ use std::{
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
 
-const PROTOCOL_VERSION: &str = "2024-11-05";
-const SERVER_NAME: &str = "claudex-launch";
-const SERVER_VERSION: &str = "2.0.0";
+pub(super) const PROTOCOL_VERSION: &str = "2024-11-05";
+pub(super) const SERVER_NAME: &str = "claudex-launch";
+pub(super) const SERVER_VERSION: &str = "2.0.0";
 const LAUNCH_QUEUE_FILE: &str = "launch-queue.jsonl";
+#[path = "launch_mcp_protocol.rs"]
+mod protocol;
+use protocol::handle;
+#[cfg(test)]
+use protocol::tools;
+
 const MAX_OWNER_FILE_CHARS: usize = 128;
 
 pub(crate) fn sanitize_launch_owner(owner: &str) -> String {
@@ -78,94 +84,8 @@ fn run_with_io(reader: &mut impl BufRead, stdout: &mut impl Write) -> Result<()>
     Ok(())
 }
 
-fn handle(message: &Value, ndjson: bool, stdout: &mut impl Write) -> Result<()> {
-    let method = message.get("method").and_then(Value::as_str).unwrap_or("");
-    let id = message.get("id").cloned();
-    match method {
-        "initialize" => write_message(
-            stdout,
-            ndjson,
-            json!({
-                "jsonrpc": "2.0",
-                "id": id,
-                "result": {
-                    "protocolVersion": PROTOCOL_VERSION,
-                    "capabilities": {"tools": {}},
-                    "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION}
-                }
-            }),
-        ),
-        "notifications/initialized" => Ok(()),
-        "tools/list" => write_message(
-            stdout,
-            ndjson,
-            json!({
-                "jsonrpc": "2.0",
-                "id": id,
-                "result": {"tools": tools()}
-            }),
-        ),
-        "tools/call" => {
-            record_tools_call(message);
-            write_message(
-                stdout,
-                ndjson,
-                json!({
-                    "jsonrpc": "2.0",
-                    "id": id,
-                    "result": {
-                        "content": [{
-                            "type": "text",
-                            "text": "Claudex: SubAgent launch handed to Claude Code. End the turn; do not poll TaskOutput."
-                        }],
-                        "isError": false
-                    }
-                }),
-            )
-        }
-        "ping" => write_message(stdout, ndjson, json!({"jsonrpc":"2.0","id":id,"result":{}})),
-        _ if id.is_some() => write_message(
-            stdout,
-            ndjson,
-            json!({
-                "jsonrpc": "2.0",
-                "id": id,
-                "error": {"code": -32601, "message": format!("Method not found: {method}")}
-            }),
-        ),
-        _ => Ok(()),
-    }
-}
 
-fn tools() -> Value {
-    let schema = json!({
-        "type": "object",
-        "additionalProperties": true,
-        "properties": {
-            "description": {"type": "string", "description": "Short 3-5 word description of the task"},
-            "prompt": {"type": "string", "description": "The task for the agent to perform"},
-            "subagent_type": {"type": "string", "description": "Claudex worker type from selected_workers"},
-            "run_in_background": {"type": "boolean", "description": "Prefer true for agents panel tracking"},
-            "claudex_model": {"type": "string", "description": "Exact worker model id from selected_workers"},
-            "claudex_effort": {"type": "string", "description": "Worker effort from selected_workers"}
-        },
-        "required": ["description", "prompt"]
-    });
-    json!([
-        {
-            "name": "Agent",
-            "description": "Launch a Claude Code SubAgent through Claudex. Prefer run_in_background=true and selected_workers subagent_type + claudex_model. After launch, end the turn; do not poll.",
-            "inputSchema": schema
-        },
-        {
-            "name": "Task",
-            "description": "Launch a Claude Code Task SubAgent through Claudex. Prefer run_in_background=true. After launch, end the turn; do not poll.",
-            "inputSchema": schema
-        }
-    ])
-}
-
-fn record_tools_call(message: &Value) {
+pub(super) fn record_tools_call(message: &Value) {
     let paths = ["CLAUDEX_LAUNCH_QUEUE", "CLAUDEX_LAUNCH_MCP_LOG"]
         .into_iter()
         .filter_map(env::var_os)
@@ -215,7 +135,7 @@ fn record_tools_call_to(message: &Value, timestamp: f64, paths: impl IntoIterato
     }
 }
 
-fn write_message(stdout: &mut impl Write, ndjson: bool, message: Value) -> Result<()> {
+pub(super) fn write_message(stdout: &mut impl Write, ndjson: bool, message: Value) -> Result<()> {
     let body = serde_json::to_vec(&message).context("serialize MCP message")?;
     if ndjson {
         stdout.write_all(&body)?;
