@@ -54,7 +54,9 @@ impl RetainedHealthProbe {
 
     pub(super) fn still_owns(&self, session_id: &str, within_grace: bool) -> bool {
         if self.has_active_work() {
-            return self.session_listed(session_id);
+            // busy_claude_session_ids can name only the sessions currently
+            // turning; co-retained quiet sessions still live on active list.
+            return self.session_listed(session_id) || self.session_active_listed(session_id);
         }
         // Quiet sample: only keep sticky inside the grace window after we last
         // observed live work. Never-seen-work retained daemons still fall through
@@ -69,6 +71,10 @@ impl RetainedHealthProbe {
                 .iter()
                 .any(|owned| owned == session_id);
         }
+        self.session_active_listed(session_id)
+    }
+
+    fn session_active_listed(&self, session_id: &str) -> bool {
         self.active_claude_session_ids
             .iter()
             .any(|owned| owned == session_id)
@@ -79,7 +85,7 @@ impl RetainedHealthProbe {
             // Counters drained mid-turn before session lists refresh.
             return true;
         }
-        self.session_listed(session_id)
+        self.session_listed(session_id) || self.session_active_listed(session_id)
     }
 }
 
@@ -174,6 +180,17 @@ mod tests {
         recent: BTreeMap<String, u64>,
         idle_seconds: Option<u64>,
     ) -> RetainedHealthProbe {
+        probe_split(requests, busy, busy, agents, recent, idle_seconds)
+    }
+
+    fn probe_split(
+        requests: usize,
+        busy: &[&str],
+        active: &[&str],
+        agents: Option<&[&str]>,
+        recent: BTreeMap<String, u64>,
+        idle_seconds: Option<u64>,
+    ) -> RetainedHealthProbe {
         RetainedHealthProbe {
             status: "ok".to_owned(),
             pid: Some(1),
@@ -184,7 +201,7 @@ mod tests {
                 .map(|ids| ids.iter().map(|id| (*id).to_owned()).collect()),
             recent_subagent_agent_ids: recent,
             idle_seconds,
-            active_claude_session_ids: busy.iter().map(|id| (*id).to_owned()).collect(),
+            active_claude_session_ids: active.iter().map(|id| (*id).to_owned()).collect(),
             busy_claude_session_ids: busy.iter().map(|id| (*id).to_owned()).collect(),
         }
     }
@@ -195,6 +212,24 @@ mod tests {
         assert!(!quiet.still_owns("session-a", false));
         assert!(quiet.still_owns("session-a", true));
         assert!(!quiet.still_owns("session-b", true));
+    }
+
+    #[test]
+    fn still_owns_keeps_co_retained_session_while_sibling_is_busy() {
+        let shared = probe_split(
+            1,
+            &["other"],
+            &["session-a", "other"],
+            Some(&[]),
+            BTreeMap::new(),
+            Some(0),
+        );
+        assert!(
+            shared.still_owns("session-a", true),
+            "quiet co-retained session must stay sticky while a sibling turns"
+        );
+        assert!(shared.still_owns("other", true));
+        assert!(!shared.still_owns("session-unknown", true));
     }
 
     #[test]
