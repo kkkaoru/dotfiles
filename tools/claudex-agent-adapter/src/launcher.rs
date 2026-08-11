@@ -2,7 +2,6 @@ use std::{
     collections::hash_map::DefaultHasher,
     ffi::OsString,
     hash::{Hash, Hasher},
-    io::Write,
     net::SocketAddr,
     path::PathBuf,
     process::{Command, Stdio},
@@ -14,6 +13,10 @@ use anyhow::{Context, Result, bail};
 use uuid::Uuid;
 
 mod claude_process;
+mod claude_relay;
+use claude_relay::{reject_model_override, relay_stderr, requires_authentication};
+#[cfg(test)]
+use claude_relay::relay_filtered;
 mod cli_swap;
 mod daemon_arguments;
 mod daemon_process;
@@ -23,7 +26,7 @@ mod fallback;
 mod handover;
 mod health;
 mod process_io;
-use process_io::{exit_code, relay_filtered_io};
+use process_io::exit_code;
 mod live;
 mod promote;
 pub(crate) use live::{
@@ -60,7 +63,7 @@ use health::Health;
 use health::{authenticates, fetch_health, wait_until_ready, wait_until_recovery_ready};
 use resume::{prepare_arguments, session_id_for_launch};
 
-const LOCAL_TOKEN: &str = "claudex-local";
+pub(super) const LOCAL_TOKEN: &str = "claudex-local";
 #[cfg(not(test))]
 const START_TIMEOUT: Duration = Duration::from_secs(10);
 #[cfg(all(test, coverage_nightly))]
@@ -311,35 +314,6 @@ pub async fn run_claude(
         .map_err(|_| anyhow::anyhow!("Claude Code stderr relay panicked"))??;
     Ok(exit_code(status))
 }
-
-fn requires_authentication(listen: &SocketAddr, token: &str) -> bool {
-    !listen.ip().is_loopback() && token == LOCAL_TOKEN
-}
-
-fn reject_model_override(arguments: &[OsString]) -> Result<()> {
-    if arguments.iter().any(|argument| {
-        argument
-            .to_str()
-            .is_some_and(|argument| argument == "--model" || argument.starts_with("--model="))
-    }) {
-        bail!("pass the main model to adapter option --model, not to Claude Code arguments");
-    }
-    Ok(())
-}
-
-fn relay_stderr(stderr: impl std::io::Read, model: &str) -> Result<()> {
-    let mut output = std::io::stderr().lock();
-    relay_filtered(stderr, model, &mut output)
-}
-
-fn relay_filtered(
-    mut input: impl std::io::Read,
-    model: &str,
-    output: &mut impl Write,
-) -> Result<()> {
-    relay_filtered_io(&mut input, model, output)
-}
-
 
 #[cfg(test)]
 use health::wait_until_ready_with;
