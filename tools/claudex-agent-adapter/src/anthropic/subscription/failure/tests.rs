@@ -1,6 +1,7 @@
 use super::classification::{classify_failure, extract_diagnostic, status_hint};
 use super::*;
 use anyhow::anyhow;
+use std::time::Duration;
 
 #[test]
 fn prefers_structured_stdout_and_redacts_diagnostics() {

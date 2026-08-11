@@ -31,7 +31,10 @@ mod updates;
 const COMMAND_QUEUE_CAPACITY: usize = 32;
 const SESSION_QUEUE_CAPACITY: usize = 1;
 const TURN_QUEUE_CAPACITY: usize = 8;
-const CONFIGURED_TURN_QUEUE_CAPACITY: usize = 2;
+/// When providers omit maxConcurrency, configured ACP used to fall back to a
+/// single session slot (near-serial). Match the common qwen default of 3 so
+/// cursor/deepseek/opencode routes can overlap without per-route config.
+pub(crate) const DEFAULT_CONFIGURED_MAX_CONCURRENCY: usize = 3;
 /// Reserved so SubAgent bursts cannot starve interactive user turns.
 const OUTER_TURN_RESERVE: usize = 1;
 pub(crate) const MAX_MODEL_CONCURRENCY: usize =
