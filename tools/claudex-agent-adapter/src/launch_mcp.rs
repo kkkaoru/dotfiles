@@ -40,12 +40,19 @@ pub(crate) fn sanitize_launch_owner(owner: &str) -> String {
             sanitized.push('_');
         }
     }
-    sanitized
+    if sanitized.is_empty() {
+        "unknown".to_owned()
+    } else {
+        sanitized
+    }
 }
 
 pub(crate) fn launch_queue_path(cache: &Path, owner: Option<&str>) -> PathBuf {
-    match owner.map(sanitize_launch_owner).filter(|owner| !owner.is_empty()) {
-        Some(owner) => cache.join(format!("launch-queue-{owner}.jsonl")),
+    match owner.map(str::trim).filter(|owner| !owner.is_empty()) {
+        Some(owner) => cache.join(format!(
+            "launch-queue.{}.jsonl",
+            sanitize_launch_owner(owner)
+        )),
         None => cache.join(LAUNCH_QUEUE_FILE),
     }
 }
