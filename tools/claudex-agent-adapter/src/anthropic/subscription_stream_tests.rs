@@ -1784,67 +1784,100 @@ async fn prepare_tool_input_rewrites_same_scope_launch_to_resume() {
     assert_eq!(public["run_in_background"], true);
 }
 
+fn agent_tool_use(id: &str, input: Value) -> Value {
+    json!({"type":"tool_use","id":id,"name":"Agent","input":input})
+}
+
+fn assistant_agent_batch(tools: Vec<Value>) -> String {
+    json!({
+        "type":"assistant",
+        "parent_tool_use_id":null,
+        "message":{"content":tools}
+    })
+    .to_string()
+}
+
+fn reuse_stream(
+    registry: Arc<SubagentReuseRegistry>,
+    catalog: ModelCatalog,
+    user: &str,
+) -> SubscriptionStream {
+    let mut context = SubscriptionToolContext::for_tests(
+        Arc::new(AgentEffortIntents::default()),
+        catalog,
+        None,
+        "parent-model",
+        vec![json!({"role":"user","content":user})],
+        json!(null),
+    );
+    context.session_id = Some("session-a".to_owned());
+    context.subagent_reuse = registry;
+    let mut stream = bare_subscription_stream(vec!["Agent".to_owned()]);
+    stream.tool_context = Some(context);
+    stream
+}
+
+fn fanout_worker_catalog() -> ModelCatalog {
+    let mut catalog = ModelCatalog::default();
+    catalog
+        .set_worker_routes(vec![
+            crate::provider_config::WorkerRoute::new(
+                "claudex-gpt".to_owned(),
+                "gpt-test".to_owned(),
+                "max".to_owned(),
+            ),
+            crate::provider_config::WorkerRoute::new(
+                "claudex-cursor".to_owned(),
+                "cursor-test".to_owned(),
+                "max".to_owned(),
+            ),
+            crate::provider_config::WorkerRoute::new(
+                "claudex-muse".to_owned(),
+                "muse-test".to_owned(),
+                "max".to_owned(),
+            ),
+        ])
+        .expect("worker routes");
+    catalog
+}
+
 #[tokio::test]
 async fn same_turn_duplicate_scope_forwards_only_one_agent() {
     let (sender, mut receiver) = channel();
     let registry = Arc::new(SubagentReuseRegistry::default());
-    let mut context = SubscriptionToolContext::for_tests(
-        Arc::new(AgentEffortIntents::default()),
+    let mut stream = reuse_stream(
+        Arc::clone(&registry),
         ModelCatalog::default(),
-        None,
-        "parent-model",
-        vec![json!({"role":"user","content":"Use gpt-test for this worker"})],
-        json!(null),
+        "Use gpt-test for this worker",
     );
-    context.session_id = Some("session-a".to_owned());
-    context.subagent_reuse = Arc::clone(&registry);
-    let mut stream = SubscriptionStream {
-        text_started: false,
-        text_closed: false,
-        saw_tool_use: false,
-        launch_fanout_open: false,
-        seen_tool_ids: HashSet::new(),
-        blocked_subagent: false,
-        saw_result: false,
-        next_index: 0,
-        tools: vec!["Agent".to_owned()],
-        tool_context: Some(context),
-        activity: SubscriptionActivity::default(),
-    };
+    let line = assistant_agent_batch(vec![
+        agent_tool_use(
+            "reproduce-gpt",
+            json!({
+                "description":"Reproduce azookey conversion bug",
+                "prompt":"Use gpt to reproduce はしのはじから.",
+                "claudex_model":"gpt-test"
+            }),
+        ),
+        agent_tool_use(
+            "reproduce-cc",
+            json!({
+                "description":"Reproduce azookey conversion bug",
+                "prompt":"Use another provider to reproduce はしのはじから.",
+                "claudex_model":"gpt-test"
+            }),
+        ),
+        agent_tool_use(
+            "trace-cursor",
+            json!({
+                "description":"Trace azookey conversion pipeline",
+                "prompt":"Map Vibrato boundaries across three surfaces.",
+                "claudex_model":"gpt-test"
+            }),
+        ),
+    ]);
     stream
-        .handle_line(
-            &sender,
-            &json!({
-                "type":"assistant", "parent_tool_use_id":null,
-                "message":{"content":[
-                    {
-                        "type":"tool_use", "id":"reproduce-gpt", "name":"Agent",
-                        "input":{
-                            "description":"Reproduce azookey conversion bug",
-                            "prompt":"Use gpt to reproduce はしのはじから.",
-                            "claudex_model":"gpt-test"
-                        }
-                    },
-                    {
-                        "type":"tool_use", "id":"reproduce-cc", "name":"Agent",
-                        "input":{
-                            "description":"Reproduce azookey conversion bug",
-                            "prompt":"Use another provider to reproduce はしのはじから.",
-                            "claudex_model":"gpt-test"
-                        }
-                    },
-                    {
-                        "type":"tool_use", "id":"trace-cursor", "name":"Agent",
-                        "input":{
-                            "description":"Trace azookey conversion pipeline",
-                            "prompt":"Map Vibrato boundaries across three surfaces.",
-                            "claudex_model":"gpt-test"
-                        }
-                    }
-                ]}
-            })
-            .to_string(),
-        )
+        .handle_line(&sender, &line)
         .await
         .expect("forward independent scopes only");
     drop(sender);
@@ -1874,92 +1907,50 @@ async fn same_turn_duplicate_scope_forwards_only_one_agent() {
 async fn same_turn_same_scope_different_models_all_forward() {
     let (sender, mut receiver) = channel();
     let registry = Arc::new(SubagentReuseRegistry::default());
-    let mut model_catalog = ModelCatalog::default();
-    model_catalog
-        .set_worker_routes(vec![
-            crate::provider_config::WorkerRoute::new(
-                "claudex-gpt".to_owned(),
-                "gpt-test".to_owned(),
-                "max".to_owned(),
-            ),
-            crate::provider_config::WorkerRoute::new(
-                "claudex-cursor".to_owned(),
-                "cursor-test".to_owned(),
-                "max".to_owned(),
-            ),
-            crate::provider_config::WorkerRoute::new(
-                "claudex-muse".to_owned(),
-                "muse-test".to_owned(),
-                "max".to_owned(),
-            ),
-        ])
-        .expect("worker routes");
-    let mut context = SubscriptionToolContext::for_tests(
-        Arc::new(AgentEffortIntents::default()),
-        model_catalog,
-        None,
-        "parent-model",
-        vec![json!({"role":"user","content":"Fan out gpt/cursor/muse"})],
-        json!(null),
+    let mut stream = reuse_stream(
+        Arc::clone(&registry),
+        fanout_worker_catalog(),
+        "Fan out gpt/cursor/muse",
     );
-    context.session_id = Some("session-a".to_owned());
-    context.subagent_reuse = Arc::clone(&registry);
-    let mut stream = SubscriptionStream {
-        text_started: false,
-        text_closed: false,
-        saw_tool_use: false,
-        launch_fanout_open: false,
-        seen_tool_ids: HashSet::new(),
-        blocked_subagent: false,
-        saw_result: false,
-        next_index: 0,
-        tools: vec!["Agent".to_owned()],
-        tool_context: Some(context),
-        activity: SubscriptionActivity::default(),
-    };
+    let line = assistant_agent_batch(vec![
+        agent_tool_use(
+            "recover-gpt",
+            json!({
+                "description":"Recover post-reboot state",
+                "prompt":"Check ComfyUI.",
+                "subagent_type":"claudex-gpt",
+                "claudex_model":"gpt-test"
+            }),
+        ),
+        agent_tool_use(
+            "recover-cursor",
+            json!({
+                "description":"Recover post-reboot state",
+                "prompt":"Check ComfyUI.",
+                "subagent_type":"claudex-cursor",
+                "claudex_model":"cursor-test"
+            }),
+        ),
+        agent_tool_use(
+            "recover-muse",
+            json!({
+                "description":"Recover post-reboot state",
+                "prompt":"Check ComfyUI.",
+                "subagent_type":"claudex-muse",
+                "claudex_model":"muse-test"
+            }),
+        ),
+    ]);
     stream
-        .handle_line(
-            &sender,
-            &json!({
-                "type":"assistant", "parent_tool_use_id":null,
-                "message":{"content":[
-                    {
-                        "type":"tool_use", "id":"recover-gpt", "name":"Agent",
-                        "input":{
-                            "description":"Recover post-reboot state",
-                            "prompt":"Check ComfyUI.",
-                            "subagent_type":"claudex-gpt",
-                            "claudex_model":"gpt-test"
-                        }
-                    },
-                    {
-                        "type":"tool_use", "id":"recover-cursor", "name":"Agent",
-                        "input":{
-                            "description":"Recover post-reboot state",
-                            "prompt":"Check ComfyUI.",
-                            "subagent_type":"claudex-cursor",
-                            "claudex_model":"cursor-test"
-                        }
-                    },
-                    {
-                        "type":"tool_use", "id":"recover-muse", "name":"Agent",
-                        "input":{
-                            "description":"Recover post-reboot state",
-                            "prompt":"Check ComfyUI.",
-                            "subagent_type":"claudex-muse",
-                            "claudex_model":"muse-test"
-                        }
-                    }
-                ]}
-            })
-            .to_string(),
-        )
+        .handle_line(&sender, &line)
         .await
         .expect("forward multi-model fan-out");
     drop(sender);
     let out = output(&mut receiver).await;
     assert!(
-        out.contains("recover-gpt") && out.contains("recover-cursor") && out.contains("recover-muse"),
+        out.contains("recover-gpt")
+            && out.contains("recover-cursor")
+            && out.contains("recover-muse"),
         "same description with distinct claudex_model must all forward: {out}"
     );
 }

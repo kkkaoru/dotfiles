@@ -202,14 +202,20 @@ mod tests {
             Some("claudex_provider_progress")
         );
         assert!(
-            blocks.last().is_some_and(|block| {
-                block
-                    .get("thinking")
-                    .and_then(Value::as_str)
-                    .is_some_and(|text| text.contains('▶') && !text.contains("effort="))
-            }),
+            marker_outside_wandering_launch(&blocks),
             "▶ must open outside the Wandering launch block: {blocks:?}"
         );
+    }
+
+    fn marker_outside_wandering_launch(blocks: &[Value]) -> bool {
+        let Some(text) = blocks
+            .last()
+            .and_then(|block| block.get("thinking"))
+            .and_then(Value::as_str)
+        else {
+            return false;
+        };
+        text.contains('▶') && !text.contains("effort=")
     }
 
     async fn count_tip_and_zwsp_deltas(

@@ -14,17 +14,9 @@ use crate::anthropic::stream::{
 };
 
 impl SegmentBuilder {
-    /// Stream ACP/Cursor/Qwen/Command Code tool progress without executable `tool_use`.
-    ///
-    /// SubAgent panels paint live thinking chrome and hide assistant text until
-    /// end_turn. Qwen often emits `AgentMessageChunk` before `ToolCall`; the old
-    /// path then appended ▶ to `text_delta`, so the panel stayed on
-    /// "Thought for Xs" + spinner. Always paint ▶/✓/✗ as `thinking_delta`.
-    /// ACP SubAgents, including Command Code, keep one native thinking block
-    /// open for the whole turn. Closing thinking for `server_tool_use` or
-    /// `text_delta` made Muse Spark dump repeating "Thought for Xs". Canned
-    /// ●/still-working worker text is still dropped. `sanitize_committed_blocks`
-    /// strips markers from the transcript.
+    /// Stream ACP tool progress as thinking chrome (not executable `tool_use`).
+    /// SubAgent panels hide assistant text until end_turn; keep one thinking
+    /// block open. Canned ●/still-working worker text is dropped.
     pub(in crate::anthropic::stream) async fn stream_progress_text(
         &mut self,
         delta: &str,
@@ -39,14 +31,9 @@ impl SegmentBuilder {
         self.note_provider_turn_activity();
         self.close_text_block(stream).await?;
         if self.is_subagent {
-            // If the open thought still holds launch prose (legacy prime or
-            // non-primed start status), close it before ▶ so CC 2.1 does not
-            // keep the tool chrome folded inside "Wandering…".
-            if is_adapter_tool_marker(delta)
-                && self.thinking.open_holds_collapsed_subagent_launch()
-            {
-                self.thinking.close(&mut self.blocks, stream).await?;
-            }
+            // Close launch prose before ▶ so tool chrome is not folded into Wandering.
+            self.close_collapsed_launch_before_tool_marker(delta, stream)
+                .await?;
             return self
                 .thinking
                 .progress_status_keep_open(&mut self.blocks, delta, stream)
@@ -55,6 +42,19 @@ impl SegmentBuilder {
         self.thinking
             .progress_status(&mut self.blocks, delta, stream)
             .await
+    }
+
+    async fn close_collapsed_launch_before_tool_marker(
+        &mut self,
+        delta: &str,
+        stream: Option<&StreamSender>,
+    ) -> Result<()> {
+        let should_close = is_adapter_tool_marker(delta)
+            && self.thinking.open_holds_collapsed_subagent_launch();
+        if should_close {
+            self.thinking.close(&mut self.blocks, stream).await?;
+        }
+        Ok(())
     }
 
     pub(in crate::anthropic::stream) async fn text_delta(
