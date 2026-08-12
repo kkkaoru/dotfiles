@@ -141,6 +141,7 @@ pub fn read_routing_cache(path: &Path, now: f64, ttl: i64, expected_key: &str) -
     if cached.get("configuration_key").and_then(Value::as_str) != Some(expected_key) {
         return None;
     }
+    cached.get("generation").and_then(Value::as_u64)?;
     let created_at = number_f64(cached.get("created_at")?)?;
     if now - created_at <= ttl as f64 {
         cached.get("summary").cloned()
@@ -149,9 +150,29 @@ pub fn read_routing_cache(path: &Path, now: f64, ttl: i64, expected_key: &str) -
     }
 }
 
+pub(crate) fn cache_head(path: &Path) -> Option<(u64, String)> {
+    let cached: Value = serde_json::from_slice(&std::fs::read(path).ok()?).ok()?;
+    Some((
+        cached.get("generation")?.as_u64()?,
+        cached.get("configuration_key")?.as_str()?.to_owned(),
+    ))
+}
+
+#[cfg(test)]
+pub(crate) fn cache_generation(path: &Path) -> Option<u64> {
+    cache_head(path).map(|(generation, _)| generation)
+}
+
 /// Atomically cache only the sanitized summary, never raw Codexbar output.
-pub fn write_routing_cache(path: &Path, summary: &Value, now: f64, key: &str) -> Result<()> {
+pub(crate) fn write_routing_cache(
+    path: &Path,
+    summary: &Value,
+    now: f64,
+    key: &str,
+    generation: u64,
+) -> Result<()> {
     let mut object = Map::new();
+    object.insert("generation".into(), Value::from(generation));
     object.insert("created_at".into(), Value::from(now));
     object.insert("configuration_key".into(), Value::from(key));
     object.insert("summary".into(), summary.clone());
@@ -193,13 +214,14 @@ pub fn write_private_json(path: &Path, value: &Value) -> Result<()> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let mut temp = tempfile::Builder::new().tempfile_in(parent)?;
     temp.write_all(payload.as_bytes())?;
-    temp.flush()?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(temp.path(), std::fs::Permissions::from_mode(0o600))?;
     }
+    temp.as_file().sync_all()?;
     temp.persist(path)?;
+    std::fs::File::open(parent)?.sync_all()?;
     Ok(())
 }
 

@@ -9,12 +9,75 @@
 use serde_json::Value;
 use std::collections::BTreeSet;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
+
+use crate::config::Config;
 
 const AUTH_COOLDOWN_FILE: &str = "provider-auth-cooldown.json";
 const USAGE_LIMIT_FILE: &str = "codex-app-server-usage-limit.json";
 const CACHE_VERSION: u64 = 1;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LiveState {
+    pub scopes: BTreeSet<String>,
+    pub codex_backend_cooling: bool,
+}
+
+pub fn live_state(home: impl AsRef<Path>, now: SystemTime) -> LiveState {
+    let home = home.as_ref();
+    LiveState {
+        scopes: active_scopes(home, now),
+        codex_backend_cooling: codex_app_server_cooling_down(home, now),
+    }
+}
+
+/// Union live adapter cooldowns into the terminal model denylist.
+///
+/// The resulting set participates in the routing cache key. A cooldown start
+/// or expiry therefore invalidates an otherwise matching quota snapshot before
+/// it can be served by the hook.
+pub fn effective_disabled_models(
+    config: &Config,
+    configured: &BTreeSet<String>,
+    state: &LiveState,
+) -> BTreeSet<String> {
+    let mut disabled = configured.clone();
+    for provider in &config.providers {
+        if provider_is_exhausted(provider, &state.scopes, state.codex_backend_cooling)
+            && let Some(model) = provider_model(provider)
+        {
+            disabled.insert(model.to_owned());
+        }
+    }
+    for worker in &config.native_workers {
+        let model = worker.get("model").and_then(Value::as_str);
+        let scoped = model.is_some_and(|value| state.scopes.contains(value))
+            || ["usageProvider", "modelProvider"].iter().any(|key| {
+                worker
+                    .get(*key)
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| state.scopes.contains(value))
+            });
+        if scoped && let Some(model) = model {
+            disabled.insert(model.to_owned());
+        }
+    }
+    if let Some(model) = config.fallback.get("model").and_then(Value::as_str)
+        && state.scopes.contains(model)
+    {
+        disabled.insert(model.to_owned());
+    }
+    disabled
+}
+
+fn provider_model(provider: &Value) -> Option<&str> {
+    provider
+        .get("subagentModel")
+        .and_then(Value::as_str)
+        .or_else(|| provider.get("defaultModel").and_then(Value::as_str))
+        .filter(|model| !model.is_empty())
+}
 
 /// Active exhaustion scopes (exact model ids and usage/model providers).
 pub fn active_scopes(home: impl AsRef<Path>, now: SystemTime) -> BTreeSet<String> {
@@ -92,11 +155,6 @@ pub fn provider_is_exhausted(
     false
 }
 
-/// Cache home for the current user, when `$HOME` is set.
-pub fn current_home() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
-}
-
 fn read_json(path: &Path) -> Option<Value> {
     let bytes = fs::read(path).ok()?;
     serde_json::from_slice(&bytes).ok()
@@ -111,8 +169,38 @@ fn unix_seconds(time: SystemTime) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config;
     use serde_json::json;
     use std::time::Duration;
+
+    fn routing_config() -> Config {
+        let provider = json!({
+            "id": "ollama-glm",
+            "agent": "claudex-ollama",
+            "defaultModel": "glm-5.2:cloud",
+            "effort": "high",
+            "backend": "ollama",
+            "usageProvider": "ollama"
+        });
+        let fallback = json!({
+            "agent": "claudex-sonnet",
+            "model": "claude-sonnet-5",
+            "effort": "high"
+        });
+        let raw = json!({
+            "version": 1,
+            "providers": [provider],
+            "fallback": fallback,
+            "nativeWorkers": []
+        });
+        Config {
+            raw,
+            providers: vec![provider],
+            native_workers: Vec::new(),
+            fallback,
+            advisor: config::default_advisor(),
+        }
+    }
 
     #[test]
     fn reads_active_model_and_provider_scopes() {
@@ -180,6 +268,32 @@ mod tests {
             root.path(),
             UNIX_EPOCH + Duration::from_secs(3_000)
         ));
-        let _ = current_home();
+    }
+
+    #[test]
+    fn cooldown_start_and_expiry_change_the_snapshot_policy_key() {
+        let config = routing_config();
+        let configured = BTreeSet::new();
+        let clear = effective_disabled_models(&config, &configured, &LiveState::default());
+        let active = effective_disabled_models(
+            &config,
+            &configured,
+            &LiveState {
+                scopes: BTreeSet::from(["ollama".to_owned()]),
+                codex_backend_cooling: false,
+            },
+        );
+
+        assert!(clear.is_empty());
+        assert_eq!(active, BTreeSet::from(["glm-5.2:cloud".to_owned()]));
+        assert_ne!(
+            config::configuration_key(&config.raw, &clear),
+            config::configuration_key(&config.raw, &active)
+        );
+        assert_eq!(
+            effective_disabled_models(&config, &configured, &LiveState::default()),
+            clear,
+            "an expired cooldown restores the original snapshot generation"
+        );
     }
 }

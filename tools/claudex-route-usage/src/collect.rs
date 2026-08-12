@@ -1,18 +1,17 @@
 //! Provider usage collection, Ollama probes, daemon health, and memory.
 
 use crate::config::{Config, Paths, valid_model_id};
+use crate::process::{Deadline, run_before, run_before_with_input, run_with_timeout};
 use crate::routing::quota::provider_status;
 use crate::routing::workers::worker;
 use crate::routing::{memory_management_enabled, memory_pressure_thresholds, pressure_level};
 use crate::util::python_round;
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
-use std::sync::mpsc;
-use std::thread;
+use std::process::Command;
 use std::time::Duration;
 use url::Url;
 
@@ -28,39 +27,8 @@ pub const DEFAULT_OLLAMA_BASE_URL: &str = "http://127.0.0.1:11434";
 pub const DAEMON_HEALTH_URL_ENV: &str = "CLAUDEX_DAEMON_HEALTH_URL";
 pub const ANTHROPIC_BASE_URL_ENV: &str = "ANTHROPIC_BASE_URL";
 pub const DEFAULT_DAEMON_HEALTH_URL: &str = "http://127.0.0.1:8318/health";
-
-fn run_with_timeout(mut command: Command, timeout: Duration) -> Result<(i32, String, String)> {
-    command.stdout(Stdio::piped()).stderr(Stdio::piped());
-    let mut child = command.spawn().context("failed to spawn subprocess")?;
-    let stdout = child.stdout.take();
-    let stderr = child.stderr.take();
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || {
-        let out = stdout
-            .map(|mut stream| {
-                let mut buf = String::new();
-                let _ = std::io::Read::read_to_string(&mut stream, &mut buf);
-                buf
-            })
-            .unwrap_or_default();
-        let err = stderr
-            .map(|mut stream| {
-                let mut buf = String::new();
-                let _ = std::io::Read::read_to_string(&mut stream, &mut buf);
-                buf
-            })
-            .unwrap_or_default();
-        let status = child.wait();
-        let _ = tx.send((status, out, err));
-    });
-    match rx.recv_timeout(timeout) {
-        Ok((status, out, err)) => {
-            let code = status.map(|s| s.code().unwrap_or(1)).unwrap_or(1);
-            Ok((code, out, err))
-        }
-        Err(_) => bail!("subprocess timed out"),
-    }
-}
+const OAUTH_SCRIPT: &[u8] = include_bytes!("../../../scripts/ensure-claude-oauth.sh");
+const SAFE_HELPER_PATH: &str = "/usr/bin:/bin:/usr/sbin:/sbin";
 
 pub fn unavailable_usage_entry(provider: &str) -> Value {
     serde_json::json!({
@@ -78,40 +46,66 @@ pub fn strict_json_array(output: &str) -> Result<Value> {
     Ok(value)
 }
 
-pub fn run_codexbar(program: &str) -> Result<Value> {
+fn run_codexbar_before(program: &str, deadline: Option<Deadline>) -> Result<Value> {
     let mut command = Command::new(program);
     command.args(["usage", "--json"]);
-    let (_code, stdout, _stderr) =
-        run_with_timeout(command, Duration::from_secs(USAGE_COMMAND_TIMEOUT_SECONDS))?;
+    let (_code, stdout, _stderr) = run_collector(
+        command,
+        deadline,
+        Duration::from_secs(USAGE_COMMAND_TIMEOUT_SECONDS),
+    )?;
     strict_json_array(&stdout)
 }
 
-fn claude_oauth_ensure_script() -> Option<PathBuf> {
-    let candidates = [
-        env::var_os("CLAUDE_OAUTH_ENSURE_SCRIPT").map(PathBuf::from),
-        env::var_os("HOME")
-            .map(|home| PathBuf::from(home).join("dotfiles/scripts/ensure-claude-oauth.sh")),
-        Some(PathBuf::from("scripts/ensure-claude-oauth.sh")),
-    ];
-    candidates.into_iter().flatten().find(|path| path.is_file())
-}
-
-fn ensure_claude_oauth() {
-    let Some(script) = claude_oauth_ensure_script() else {
+fn ensure_claude_oauth(deadline: Option<Deadline>) {
+    let Some(deadline) = deadline else {
         return;
     };
-    let mut command = Command::new(script);
-    command.args(["--refresh-within", "7200"]);
-    let result = run_with_timeout(
-        command,
-        Duration::from_secs(CLAUDE_OAUTH_ENSURE_TIMEOUT_SECONDS),
-    );
+    let Ok(command) = oauth_command() else {
+        return;
+    };
+    let timeout = Duration::from_secs(CLAUDE_OAUTH_ENSURE_TIMEOUT_SECONDS);
+    if deadline.remaining().is_none() {
+        return;
+    }
+    let result = run_before_with_input(command, deadline, timeout, OAUTH_SCRIPT);
     if let Err(error) = result {
         eprintln!("claudex-route-usage: Claude OAuth ensure skipped: {error}");
     }
 }
 
-pub fn ollama_usage_entry(curl_program: &str, provider: &str, model: &str) -> Value {
+fn oauth_command() -> Result<Command> {
+    let bash = crate::trusted::executable("/bin/bash")?;
+    let home = env::var_os("HOME").ok_or_else(|| anyhow::anyhow!("HOME is required"))?;
+    let mut command = Command::new(bash);
+    command
+        .args(["-s", "--", "--refresh-within", "7200"])
+        .env_clear()
+        .env("HOME", home)
+        .env("PATH", SAFE_HELPER_PATH)
+        .current_dir("/");
+    Ok(command)
+}
+
+#[cfg(test)]
+fn oauth_contract() -> (&'static [u8], Vec<String>) {
+    (
+        OAUTH_SCRIPT,
+        vec![
+            "-s".to_owned(),
+            "--".to_owned(),
+            "--refresh-within".to_owned(),
+            "7200".to_owned(),
+        ],
+    )
+}
+
+fn ollama_usage_entry_before(
+    curl_program: &str,
+    provider: &str,
+    model: &str,
+    deadline: Option<Deadline>,
+) -> Value {
     let base_url =
         env::var(OLLAMA_BASE_URL_ENV).unwrap_or_else(|_| DEFAULT_OLLAMA_BASE_URL.to_owned());
     let base_url = base_url.trim_end_matches('/');
@@ -130,10 +124,11 @@ pub fn ollama_usage_entry(curl_program: &str, provider: &str, model: &str) -> Va
         &REQUEST_TIMEOUT_SECONDS.to_string(),
         &format!("{base_url}/api/tags"),
     ]);
-    let Ok((code, stdout, _)) = run_with_timeout(
-        command,
-        Duration::from_secs(REQUEST_TIMEOUT_SECONDS + SUBPROCESS_GRACE_SECONDS),
-    ) else {
+    let timeout = Duration::from_secs(REQUEST_TIMEOUT_SECONDS + SUBPROCESS_GRACE_SECONDS);
+    if deadline.is_some_and(|deadline| deadline.remaining().is_none()) {
+        return unavailable_usage_entry(provider);
+    }
+    let Ok((code, stdout, _)) = run_collector(command, deadline, timeout) else {
         return unavailable_usage_entry(provider);
     };
     if code != 0 {
@@ -162,12 +157,15 @@ pub fn ollama_usage_entry(curl_program: &str, provider: &str, model: &str) -> Va
     })
 }
 
-pub fn collect_codexbar_report(
+fn collect_codexbar_report_before(
     codexbar_program: &str,
     codexbar_names: &BTreeSet<String>,
+    deadline: Option<Deadline>,
 ) -> Vec<Value> {
-    ensure_claude_oauth();
-    match run_codexbar(codexbar_program) {
+    if codexbar_names.contains("claude") {
+        ensure_claude_oauth(deadline);
+    }
+    match run_codexbar_before(codexbar_program, deadline) {
         Ok(Value::Array(entries)) => entries,
         _ => codexbar_names
             .iter()
@@ -176,15 +174,16 @@ pub fn collect_codexbar_report(
     }
 }
 
-pub fn collect_usage(
+pub fn collect_usage_before(
     config: &Config,
     codexbar_program: &str,
     curl_program: &str,
     _paths: &Paths,
     _now: f64,
     disabled_models: &BTreeSet<String>,
+    deadline: Option<Deadline>,
 ) -> Vec<Value> {
-    let providers = routable_providers(config, disabled_models);
+    let providers = providers_for_collection(config, disabled_models);
     if providers.is_empty() {
         return config
             .providers
@@ -193,33 +192,30 @@ pub fn collect_usage(
             .map(unavailable_usage_entry)
             .collect();
     }
-    let mut report =
-        collect_codexbar_report(codexbar_program, &codexbar_usage_names(&providers, config));
+    let mut report = collect_codexbar_report_before(
+        codexbar_program,
+        &codexbar_usage_names(&providers, config),
+        deadline,
+    );
     let fallback_providers = ollama_fallback_providers(&providers, &report);
     if fallback_providers.is_empty() {
         return report;
     }
-    for (usage_provider, entry) in probe_ollama_providers(&fallback_providers, curl_program) {
+    for (usage_provider, entry) in
+        probe_ollama_providers(&fallback_providers, curl_program, deadline)
+    {
         replace_usage_entry(&mut report, &usage_provider, entry);
     }
     report
 }
 
-/// Providers whose subagent model is not denied by terminal model policy.
-fn routable_providers<'a>(
+/// Disabled models remain capacity-observation targets; policy is applied only
+/// when the collected report is converted into routable workers.
+fn providers_for_collection<'a>(
     config: &'a Config,
-    disabled_models: &BTreeSet<String>,
+    _disabled_models: &BTreeSet<String>,
 ) -> Vec<&'a Value> {
-    config
-        .providers
-        .iter()
-        .filter(|provider| {
-            worker(provider)
-                .get("model")
-                .and_then(Value::as_str)
-                .is_some_and(|model| !disabled_models.contains(model))
-        })
-        .collect()
+    config.providers.iter().collect()
 }
 
 fn codexbar_usage_names(providers: &[&Value], config: &Config) -> BTreeSet<String> {
@@ -269,33 +265,39 @@ fn ollama_fallback_providers<'a>(providers: &[&'a Value], report: &[Value]) -> V
         .collect()
 }
 
-fn probe_ollama_providers(providers: &[&Value], curl_program: &str) -> Vec<(String, Value)> {
-    let mut handles = Vec::new();
-    for provider in providers {
-        let usage_provider = provider
-            .get("usageProvider")
-            .and_then(Value::as_str)
-            .unwrap_or(OLLAMA_USAGE_PROVIDER)
-            .to_owned();
-        let model = worker(provider)
-            .get("model")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned();
-        let curl_program = curl_program.to_owned();
-        let (tx, rx) = mpsc::channel();
-        thread::spawn(move || {
-            let _ = tx.send((
-                usage_provider.clone(),
-                ollama_usage_entry(&curl_program, &usage_provider, &model),
-            ));
-        });
-        handles.push(rx);
-    }
-    handles
-        .into_iter()
-        .filter_map(|handle| handle.recv().ok())
+fn probe_ollama_providers(
+    providers: &[&Value],
+    curl_program: &str,
+    deadline: Option<Deadline>,
+) -> Vec<(String, Value)> {
+    providers
+        .iter()
+        .map(|provider| {
+            let usage_provider = provider
+                .get("usageProvider")
+                .and_then(Value::as_str)
+                .unwrap_or(OLLAMA_USAGE_PROVIDER)
+                .to_owned();
+            let worker = worker(provider);
+            let model = worker
+                .get("model")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let entry = ollama_usage_entry_before(curl_program, &usage_provider, model, deadline);
+            (usage_provider, entry)
+        })
         .collect()
+}
+
+fn run_collector(
+    command: Command,
+    deadline: Option<Deadline>,
+    maximum: Duration,
+) -> Result<(i32, String, String)> {
+    match deadline {
+        Some(deadline) => run_before(command, deadline, maximum),
+        None => run_with_timeout(command, maximum),
+    }
 }
 
 fn replace_usage_entry(report: &mut Vec<Value>, usage_provider: &str, entry: Value) {
@@ -397,9 +399,7 @@ pub fn sanitize_active_subagent_models(value: &Value) -> Option<BTreeMap<String,
         if !valid_model_id(&Value::from(model.as_str())) {
             return None;
         }
-        let Some(active) = count.as_i64() else {
-            return None;
-        };
+        let active = count.as_i64()?;
         if active < 0 {
             return None;
         }
@@ -417,7 +417,10 @@ pub struct DaemonHealth {
     pub active_subagent_models: BTreeMap<String, i64>,
 }
 
-pub fn run_daemon_health(curl_program: &str) -> Option<DaemonHealth> {
+pub fn run_daemon_health_before(
+    curl_program: &str,
+    deadline: Option<Deadline>,
+) -> Option<DaemonHealth> {
     let url = daemon_health_url().ok()?;
     let mut command = Command::new(curl_program);
     command.args([
@@ -428,8 +431,9 @@ pub fn run_daemon_health(curl_program: &str) -> Option<DaemonHealth> {
         &DAEMON_HEALTH_TIMEOUT_SECONDS.to_string(),
         &url,
     ]);
-    let (code, stdout, _) = run_with_timeout(
+    let (code, stdout, _) = run_collector(
         command,
+        deadline,
         Duration::from_secs(DAEMON_HEALTH_TIMEOUT_SECONDS + SUBPROCESS_GRACE_SECONDS),
     )
     .ok()?;
@@ -486,14 +490,17 @@ pub fn vm_stat_page_size(output: &str) -> Option<i64> {
     None
 }
 
-pub fn read_memory_status() -> Value {
+pub fn read_memory_status_before(deadline: Option<Deadline>) -> Value {
     if !memory_management_enabled() {
         return serde_json::json!({ "status": "disabled" });
     }
     let vm = (|| {
         let command = Command::new("vm_stat");
-        let (code, stdout, _) =
-            run_with_timeout(command, Duration::from_secs(MEMORY_COMMAND_TIMEOUT_SECONDS))?;
+        let (code, stdout, _) = run_collector(
+            command,
+            deadline,
+            Duration::from_secs(MEMORY_COMMAND_TIMEOUT_SECONDS),
+        )?;
         if code != 0 {
             bail!("vm_stat failed");
         }
@@ -502,8 +509,11 @@ pub fn read_memory_status() -> Value {
     let total = (|| {
         let mut command = Command::new("sysctl");
         command.args(["-n", "hw.memsize"]);
-        let (code, stdout, _) =
-            run_with_timeout(command, Duration::from_secs(MEMORY_COMMAND_TIMEOUT_SECONDS))?;
+        let (code, stdout, _) = run_collector(
+            command,
+            deadline,
+            Duration::from_secs(MEMORY_COMMAND_TIMEOUT_SECONDS),
+        )?;
         if code != 0 {
             bail!("sysctl failed");
         }
@@ -546,6 +556,41 @@ pub fn read_memory_status() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn disabled_provider_models_still_participate_in_capacity_collection() {
+        let config = Config {
+            raw: Value::Null,
+            providers: vec![
+                serde_json::json!({
+                    "id": "codex",
+                    "usageProvider": "codex",
+                    "defaultModel": "gpt-5.6-luna"
+                }),
+                serde_json::json!({
+                    "id": "grok",
+                    "usageProvider": "grok",
+                    "defaultModel": "grok-4.5"
+                }),
+            ],
+            native_workers: Vec::new(),
+            fallback: Value::Null,
+            advisor: Value::Null,
+        };
+        let disabled = BTreeSet::from(["grok-4.5".to_owned()]);
+
+        let providers = providers_for_collection(&config, &disabled);
+        let provider_ids: Vec<_> = providers
+            .iter()
+            .filter_map(|provider| provider.get("id").and_then(Value::as_str))
+            .collect();
+
+        assert_eq!(provider_ids, ["codex", "grok"]);
+        assert_eq!(
+            codexbar_usage_names(&providers, &config),
+            BTreeSet::from(["codex".to_owned(), "grok".to_owned()])
+        );
+    }
 
     #[test]
     fn parses_vm_stat_values_and_page_size() {
@@ -605,5 +650,18 @@ mod tests {
         let bad =
             serde_json::json!({"bad model": {"active":1,"queued":0,"limit":1,"available":true}});
         assert!(sanitize_model_concurrency(&bad).is_none());
+    }
+
+    #[test]
+    fn embedded_oauth_helper_uses_refresh_only_bash_stdin_contract() {
+        const INSTALL_LAUNCH_AGENT: &[u8] = b"--install-launch-agent";
+        let (script, arguments) = oauth_contract();
+        assert!(script.starts_with(b"#!/usr/bin/env bash\n"));
+        assert!(
+            script
+                .windows(INSTALL_LAUNCH_AGENT.len())
+                .any(|window| window == INSTALL_LAUNCH_AGENT)
+        );
+        assert_eq!(arguments, ["-s", "--", "--refresh-within", "7200"]);
     }
 }

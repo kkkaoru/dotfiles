@@ -123,17 +123,28 @@ pub fn disabled_models_path(requested: Option<&Path>, paths: &Paths) -> Result<P
     }
 }
 
+#[cfg(unix)]
 fn short_hostname() -> Option<String> {
-    let output = std::process::Command::new("hostname")
-        .arg("-s")
-        .output()
-        .ok()?;
-    if !output.status.success() {
+    let mut buffer = [0_u8; 256];
+    // SAFETY: `buffer` is writable for its declared length and remains alive
+    // for the duration of this libc call.
+    if unsafe { libc::gethostname(buffer.as_mut_ptr().cast(), buffer.len()) } != 0 {
         return None;
     }
-    let name = String::from_utf8(output.stdout).ok()?;
-    let name = name.trim();
-    (!name.is_empty()).then(|| name.to_owned())
+    let end = buffer
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(buffer.len());
+    let full = std::str::from_utf8(&buffer[..end]).ok()?.trim();
+    let short = full.split('.').next().unwrap_or(full);
+    (!short.is_empty()).then(|| short.to_owned())
+}
+
+#[cfg(not(unix))]
+fn short_hostname() -> Option<String> {
+    let full = std::env::var("HOSTNAME").ok()?;
+    let short = full.trim().split('.').next().unwrap_or_default();
+    (!short.is_empty()).then(|| short.to_owned())
 }
 
 /// The validated, normalized routing configuration.

@@ -41,23 +41,30 @@ fn tool_policy_reminder(event_name: &str) -> &'static str {
 }
 
 pub fn agent_type_from_payload(payload: &Value) -> Option<&str> {
-    for key in ["agent_type", "agentType", "subagent_type"] {
-        if let Some(value) = payload.get(key).and_then(Value::as_str) {
-            let trimmed = value.trim();
-            if !trimmed.is_empty() {
-                return Some(trimmed);
-            }
-        }
-    }
-    payload.get("agent").and_then(|agent| {
-        agent
-            .get("agent_type")
-            .or_else(|| agent.get("type"))
-            .or_else(|| agent.get("name"))
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-    })
+    ["agent_type", "agentType", "subagent_type"]
+        .into_iter()
+        .find_map(|key| {
+            payload
+                .get(key)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
+        .or_else(|| {
+            payload
+                .get("agent")
+                .and_then(agent_type_from_nested_payload)
+        })
+}
+
+fn agent_type_from_nested_payload(agent: &Value) -> Option<&str> {
+    agent
+        .get("agent_type")
+        .or_else(|| agent.get("type"))
+        .or_else(|| agent.get("name"))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
 }
 
 pub fn is_command_code_agent(agent_type: Option<&str>) -> bool {
