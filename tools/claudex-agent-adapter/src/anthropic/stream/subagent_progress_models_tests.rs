@@ -130,6 +130,22 @@ const CASES: &[Case] = &[
         expect_visible: &["▶ Working", "▶ Thinking"],
     },
     Case {
+        // Denylisted for live spawn, but the ACP→thinking tip path must still work.
+        name: "deepseek-acp",
+        prose: Some("DeepSeek is reading the cache seed module next.\n"),
+        prose_item_id: "deepseek:message",
+        reasoning: Some("Trace the DeepSeek flash path before editing.\n"),
+        reasoning_kind: ReasoningKind::Summary,
+        tool: Some(Tool {
+            call_id: "deepseek-read",
+            name: "Read",
+            title: "Read cache_seed.py",
+            arg_key: "path",
+            arg_value: "apps/finish-position-predict-container/src/cache_seed.py",
+        }),
+        expect_visible: &["▶ Thinking", "▶ Working", "▶ Read"],
+    },
+    Case {
         name: "muse-acp",
         prose: Some("Muse Spark is drafting the migration notes next.\n"),
         prose_item_id: "muse:message",
