@@ -83,25 +83,75 @@ fn main_session_bash_allowed_when_delegation_required() {
 }
 
 #[test]
-fn main_session_read_denied_when_delegation_required() {
+fn main_session_delegated_tools_allowed_with_advisory() {
+    let tmp = TempDir::new().unwrap();
+    write_delegation(tmp.path(), true);
+    for tool_name in [
+        "Read",
+        "Write",
+        "Edit",
+        "MultiEdit",
+        "NotebookEdit",
+        "Grep",
+        "Glob",
+        "LS",
+        "WebSearch",
+        "WebFetch",
+    ] {
+        let output = run(
+            json!({
+                "hook_event_name": "PreToolUse",
+                "tool_name": tool_name,
+                "tool_input": {"file_path": "/tmp/x", "content": "hello"},
+                "session_id": "sess-main"
+            }),
+            tmp.path(),
+            &[],
+        );
+        let decision = output
+            .pointer("/hookSpecificOutput/permissionDecision")
+            .and_then(Value::as_str);
+        assert_eq!(
+            decision,
+            Some("allow"),
+            "unexpected decision for {tool_name}"
+        );
+        assert_ne!(decision, Some("deny"), "unexpected denial for {tool_name}");
+        let reason = output
+            .pointer("/hookSpecificOutput/permissionDecisionReason")
+            .and_then(Value::as_str)
+            .unwrap();
+        assert!(reason.contains(tool_name));
+        assert!(reason.contains("Agent/Task"));
+        assert!(reason.contains("fallback-only"));
+    }
+}
+
+#[test]
+fn main_session_write_allowed_with_delegation_advisory() {
     let tmp = TempDir::new().unwrap();
     write_delegation(tmp.path(), true);
     let output = run(
         json!({
             "hook_event_name": "PreToolUse",
-            "tool_name": "Read",
-            "tool_input": {"file_path": "/tmp/x"},
+            "tool_name": "Write",
+            "tool_input": {"file_path": "/tmp/x", "content": "hello"},
             "session_id": "sess-main"
         }),
         tmp.path(),
         &[],
     );
-    let decision = &output["hookSpecificOutput"]["permissionDecision"];
-    assert_eq!(decision, "deny");
-    let reason = output["hookSpecificOutput"]["permissionDecisionReason"]
-        .as_str()
+    let decision = output
+        .pointer("/hookSpecificOutput/permissionDecision")
+        .and_then(Value::as_str);
+    assert_eq!(decision, Some("allow"));
+    assert_ne!(decision, Some("deny"));
+    let reason = output
+        .pointer("/hookSpecificOutput/permissionDecisionReason")
+        .and_then(Value::as_str)
         .unwrap();
     assert!(reason.contains("Agent/Task"));
+    assert!(reason.contains("fallback-only"));
 }
 
 #[test]
@@ -139,10 +189,7 @@ fn subagent_read_explicitly_allowed_despite_main_denylist() {
         tmp.path(),
         &[],
     );
-    assert_eq!(
-        output["hookSpecificOutput"]["permissionDecision"],
-        "allow"
-    );
+    assert_eq!(output["hookSpecificOutput"]["permissionDecision"], "allow");
     let reason = output["hookSpecificOutput"]["permissionDecisionReason"]
         .as_str()
         .unwrap()
@@ -165,10 +212,7 @@ fn subagent_detected_via_transcript_path_without_agent_id() {
         tmp.path(),
         &[],
     );
-    assert_eq!(
-        output["hookSpecificOutput"]["permissionDecision"],
-        "allow"
-    );
+    assert_eq!(output["hookSpecificOutput"]["permissionDecision"], "allow");
 }
 
 #[test]
@@ -211,10 +255,7 @@ fn file_lock_blocks_second_writer() {
         tmp.path(),
         &[],
     );
-    assert_eq!(
-        second["hookSpecificOutput"]["permissionDecision"],
-        "deny"
-    );
+    assert_eq!(second["hookSpecificOutput"]["permissionDecision"], "deny");
     let reason = second["hookSpecificOutput"]["permissionDecisionReason"]
         .as_str()
         .unwrap();

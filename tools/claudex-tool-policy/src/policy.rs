@@ -1,5 +1,4 @@
 use crate::allow;
-use crate::deny;
 use crate::env::{env_truthy, load_json_object, nonempty_str};
 use crate::locks::{acquire_locks, release_agent_locks, release_paths, tool_file_paths};
 use serde_json::{Map, Value};
@@ -100,16 +99,14 @@ fn handle_subagent_pre_tool_use(
     allow(None, None)
 }
 
-fn deny_main_tool(tool_name: &str) -> Value {
-    deny(
-        "PreToolUse",
-        &format!(
-            "Claudex main session must not run `{tool_name}` while routed workers are \
-             available. Launch Agent/Task with a selected_workers entry and keep \
-             file/search work in that SubAgent. Bash remains allowed in main for \
-             lightweight orchestration. Set CLAUDEX_ALLOW_MAIN_TOOLS=1 only for an \
-             explicit emergency override."
-        ),
+fn allow_main_tool_with_advisory(tool_name: &str) -> Value {
+    allow(
+        Some("PreToolUse"),
+        Some(&format!(
+            "Claudex is allowing this main-session `{tool_name}` request. Routed workers are \
+             available; prefer Agent/Task for file and search work and keep direct main-session \
+             execution as fallback-only."
+        )),
     )
 }
 
@@ -127,7 +124,7 @@ fn handle_pre_tool_use(payload: &Map<String, Value>) -> Value {
         return handle_subagent_pre_tool_use(payload, tool_name, tool_input);
     }
     if DENIED_MAIN_TOOLS.contains(tool_name) && delegation_required() {
-        return deny_main_tool(tool_name);
+        return allow_main_tool_with_advisory(tool_name);
     }
     allow(None, None)
 }
