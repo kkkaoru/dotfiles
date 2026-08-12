@@ -21,7 +21,7 @@ fn slim_worker(worker: &Value) -> Option<Value> {
     )))
 }
 
-fn tool_policy_reminder(event_name: &str) -> &'static str {
+fn tool_policy_reminder(event_name: &str, delegation_required: bool) -> &'static str {
     match event_name {
         "SubagentStart" => concat!(
             "Claudex tool policy for this SubAgent: inherit the main session's complete tool set. ",
@@ -31,15 +31,21 @@ fn tool_policy_reminder(event_name: &str) -> &'static str {
             "Do not call Claude Code's built-in advisor() — it is main-session only and is not ",
             "executable here. Do not launch models listed in disabled_subagent_models."
         ),
-        _ => concat!(
+        _ if delegation_required => concat!(
             "Claudex tool policy for the main orchestrator: while selected_workers is non-empty, ",
             "do not use Write/Edit/MultiEdit/NotebookEdit in main — launch Agent/Task and keep ",
             "mutating file work in SubAgents. Atomic Read, Grep, Glob, LS, WebSearch, or WebFetch ",
             "lookups may stay in main. Bash is allowed in main for lightweight orchestration only. ",
-            "Write/Edit denials are also enforced by PreToolUse. ",
+            "Write/Edit/MultiEdit/NotebookEdit denials are also enforced by PreToolUse. ",
             "Match Agent/Task fan-out to independent scopes: one scope uses one ordinary worker. ",
             "Do not force three workers onto a single question. Consult custom-advisor only for ",
             "conflicting worker results or high-risk changes, not for ordinary external research."
+        ),
+        _ => concat!(
+            "Claudex tool policy for the main orchestrator: delegation is not required for this ",
+            "current prompt, so direct main execution is allowed. Atomic Read, Grep, Glob, LS, ",
+            "WebSearch, or WebFetch lookups may stay in main, and PreToolUse does not deny ",
+            "Write/Edit/MultiEdit/NotebookEdit for this prompt."
         ),
     }
 }
@@ -130,6 +136,7 @@ pub fn hook_output_for_agent(
         "orchestration_mode": summary.get("orchestration_mode").cloned().unwrap_or_else(|| Value::from("subagent-first")),
         "delegation_required": summary.get("delegation_required").and_then(Value::as_bool).unwrap_or(false),
         "direct_main_execution": summary.get("direct_main_execution").cloned().unwrap_or_else(|| Value::from("allowed")),
+        "delegation_opt_out": summary.get("delegation_opt_out").and_then(Value::as_bool).unwrap_or(false),
         "background_status_required": true,
         "tool_policy_scope": if event_name == "SubagentStart" { "subagent-full-tools" } else { "main-orchestrator" },
         "worker_capacity": worker_capacity_metadata(summary),
@@ -148,7 +155,13 @@ pub fn hook_output_for_agent(
         "orchestration": orchestration_contract(summary)?,
     });
     let compact = serde_json::to_string(&metadata)?;
-    let policy = tool_policy_reminder(event_name);
+    let policy = tool_policy_reminder(
+        event_name,
+        summary
+            .get("delegation_required")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+    );
     Ok(serde_json::json!({
         "hookSpecificOutput": {
             "hookEventName": event_name,
@@ -164,9 +177,11 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    #[test]
-    fn wraps_user_prompt_and_subagent_events() {
-        let summary = json!({
+    const ATOMIC_LOOKUP_TOOLS: &[&str] = &["Read", "Grep", "Glob", "LS", "WebSearch", "WebFetch"];
+    const MUTATING_FILE_TOOLS: &[&str] = &["Write", "Edit", "MultiEdit", "NotebookEdit"];
+
+    fn sample_summary() -> Value {
+        json!({
             "selected_agents": ["claudex-gpt"],
             "selected_workers": [{"agent":"claudex-gpt","model":"gpt-5.6-luna","effort":"max"}],
             "disabled_subagent_models": [],
@@ -174,7 +189,12 @@ mod tests {
             "orchestration_mode": "subagent-first",
             "delegation_required": true,
             "direct_main_execution": "fallback-only"
-        });
+        })
+    }
+
+    #[test]
+    fn wraps_user_prompt_and_subagent_events() {
+        let summary = sample_summary();
         let output = hook_output_for_agent(&summary, "UserPromptSubmit", None).unwrap();
         assert_eq!(
             output["hookSpecificOutput"]["hookEventName"],
@@ -204,53 +224,52 @@ mod tests {
         assert!(!ctx.contains("advisor() — it is main-session only"));
     }
 
-    const ATOMIC_LOOKUP_TOOLS: &[&str] = &["Read", "Grep", "Glob", "LS", "WebSearch", "WebFetch"];
-
-    fn sample_summary() -> Value {
-        json!({
-            "selected_agents": ["claudex-gpt"],
-            "selected_workers": [{"agent":"claudex-gpt","model":"gpt-5.6-luna","effort":"max"}],
-            "disabled_subagent_models": [],
-            "advisor": {"agent":"custom-advisor","model":"claude-fable-5","effort":"xhigh"},
-            "orchestration_mode": "subagent-first",
-            "delegation_required": true,
-            "direct_main_execution": "fallback-only"
-        })
-    }
-
     #[test]
-    fn main_tool_policy_reminder_allows_atomic_lookups_and_forbids_mutating_files() {
-        let ctx = hook_output_for_agent(&sample_summary(), "UserPromptSubmit", None)
-            .unwrap()["hookSpecificOutput"]["additionalContext"]
+    fn reminders_name_exact_atomic_and_mutating_tool_sets() {
+        let main = hook_output_for_agent(&sample_summary(), "UserPromptSubmit", None).unwrap();
+        let main = main["hookSpecificOutput"]["additionalContext"]
             .as_str()
-            .unwrap()
-            .to_owned();
-        assert!(ctx.contains("do not use Write/Edit/MultiEdit/NotebookEdit in main"));
-        assert!(ctx.contains(
+            .unwrap();
+        assert!(main.contains("do not use Write/Edit/MultiEdit/NotebookEdit in main"));
+        assert!(main.contains(
             "Atomic Read, Grep, Glob, LS, WebSearch, or WebFetch lookups may stay in main"
         ));
         for tool in ATOMIC_LOOKUP_TOOLS {
-            assert!(
-                ctx.contains(tool),
-                "main reminder must name atomic lookup `{tool}`"
-            );
+            assert!(main.contains(tool), "missing atomic lookup `{tool}`");
         }
-        assert!(!ctx.contains("do not use Read/"));
-        assert!(!ctx.contains("do not use Read/Write"));
-        assert!(!ctx.contains("keep file/search work in SubAgents"));
-        assert!(!ctx.contains("denials for Read/Write/Edit/Grep"));
+        for tool in MUTATING_FILE_TOOLS {
+            assert!(main.contains(tool), "missing mutating tool `{tool}`");
+        }
+        assert!(!main.contains("do not use Read/"));
+        assert!(!main.contains("keep file/search work in SubAgents"));
+
+        let sub = hook_output_for_agent(&sample_summary(), "SubagentStart", None).unwrap();
+        let sub = sub["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap();
+        assert!(sub.contains("denials for Write/Edit/MultiEdit/NotebookEdit"));
+        assert!(!sub.contains("denials for Read/Write"));
     }
 
     #[test]
-    fn subagent_tool_policy_reminder_does_not_imply_main_read_denials() {
-        let ctx = hook_output_for_agent(&sample_summary(), "SubagentStart", None)
-            .unwrap()["hookSpecificOutput"]["additionalContext"]
+    fn opted_out_summary_emits_direct_policy_and_metadata() {
+        let mut summary = sample_summary();
+        summary["selected_agents"] = json!([]);
+        summary["selected_workers"] = json!([]);
+        summary["preferred_worker"] = Value::Null;
+        summary["delegation_required"] = Value::Bool(false);
+        summary["direct_main_execution"] = Value::from("allowed");
+        summary["delegation_opt_out"] = Value::Bool(true);
+        let output = hook_output_for_agent(&summary, "UserPromptSubmit", None).unwrap();
+        let context = output["hookSpecificOutput"]["additionalContext"]
             .as_str()
-            .unwrap()
-            .to_owned();
-        assert!(ctx.contains("denials for Write/Edit/MultiEdit/NotebookEdit"));
-        assert!(ctx.contains("do NOT apply"));
-        assert!(!ctx.contains("denials for Read/Write/Edit/Grep"));
+            .unwrap();
+        assert!(context.contains("delegation is not required for this current prompt"));
+        let metadata = routing_metadata(&output);
+        assert_eq!(metadata["selected_workers"], json!([]));
+        assert_eq!(metadata["delegation_required"], false);
+        assert_eq!(metadata["direct_main_execution"], "allowed");
+        assert_eq!(metadata["delegation_opt_out"], true);
     }
 
     fn routing_metadata(output: &Value) -> Value {

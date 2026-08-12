@@ -2,7 +2,8 @@
 
 use crate::process::Deadline;
 use crate::{
-    Arguments, HookEvent, collect, config, exhaustion, hook, refresh, routing, snapshot, util,
+    Arguments, HookEvent, collect, config, delegation, exhaustion, hook, refresh, routing,
+    snapshot, util,
 };
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
@@ -257,7 +258,16 @@ pub fn normal_hook_output(arguments: &Arguments, payload: Option<&Value>) -> Res
         fast_snapshot(arguments, &state)?
     };
     let summary = apply_live_state(arguments, &state, summary, use_processes)?;
-    let _ = util::write_delegation_state(&state.paths.home, &summary, state.now);
+    let prompt_payload = (arguments.event == HookEvent::UserPromptSubmit)
+        .then_some(payload)
+        .flatten();
+    let summary = delegation::effective_summary(summary, prompt_payload);
+    if arguments.event == HookEvent::UserPromptSubmit {
+        // Policy publication is advisory to the routing hook. Any filesystem
+        // failure must leave PreToolUse fail-open instead of blocking a prompt.
+        let id = payload.and_then(delegation::session_id);
+        let _ = delegation::write_delegation_state(&state.paths.home, id, &summary, state.now);
+    }
     hook::hook_output_for_agent(&summary, arguments.event.as_str(), agent_type)
 }
 

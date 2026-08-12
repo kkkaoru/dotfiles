@@ -1,4 +1,5 @@
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
 use std::io::Write as _;
 use std::os::fd::AsRawFd as _;
@@ -83,6 +84,23 @@ impl Fixture {
         )
     }
 
+    fn run_routed_event(&self, stdin: &str, event: &str) -> Output {
+        let codexbar = self.poison.join("codexbar");
+        let curl = self.poison.join("curl");
+        self.run_with(
+            stdin,
+            &[
+                "--event",
+                event,
+                "--codexbar-program",
+                codexbar.to_str().unwrap(),
+                "--curl-program",
+                curl.to_str().unwrap(),
+            ],
+            &[],
+        )
+    }
+
     fn routed_command(&self) -> Command {
         let mut command = Command::new(binary());
         command
@@ -126,6 +144,13 @@ impl Fixture {
 
     fn cache_path(&self) -> PathBuf {
         self.home.join(".cache/claudex/usage-routing.json")
+    }
+
+    fn delegation_state_path(&self, session_id: &str) -> PathBuf {
+        let key = hex::encode(Sha256::digest(session_id.as_bytes()));
+        self.home
+            .join(".cache/claudex/delegation-state-v2")
+            .join(format!("{key}.json"))
     }
 
     fn hold_refresh_lock(&self) -> File {
@@ -377,6 +402,92 @@ fn notification_with_trailing_human_prompt_routes_normally() {
         &[],
     );
     assert!(context(&output).contains("Claudex routing data"));
+    fixture.assert_no_process();
+}
+
+#[test]
+fn user_prompt_writes_distinct_v2_states_and_opt_out_changes_output() {
+    let fixture = Fixture::new(true);
+    let _guard = fixture.hold_refresh_lock();
+    let routed = fixture.run_routed(
+        r#"{"session_id":"session-a","prompt":"Please implement this"}"#,
+        &[],
+    );
+    assert!(
+        !metadata(&routed)["selected_workers"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    let direct = fixture.run_routed(
+        r#"{"sessionId":"session-b","prompt":"Please DO NOT DELEGATE this turn"}"#,
+        &[],
+    );
+    let direct_metadata = metadata(&direct);
+    assert_eq!(direct_metadata["selected_workers"], serde_json::json!([]));
+    assert_eq!(direct_metadata["delegation_required"], false);
+    assert_eq!(direct_metadata["direct_main_execution"], "allowed");
+    assert_eq!(direct_metadata["delegation_opt_out"], true);
+    assert!(context(&direct).contains("delegation is not required for this current prompt"));
+
+    let first: Value =
+        serde_json::from_slice(&fs::read(fixture.delegation_state_path("session-a")).unwrap())
+            .unwrap();
+    let second: Value =
+        serde_json::from_slice(&fs::read(fixture.delegation_state_path("session-b")).unwrap())
+            .unwrap();
+    assert_eq!(first["version"], 2);
+    assert_eq!(first["delegation_required"], true);
+    assert_eq!(second["delegation_required"], false);
+    assert_ne!(first["session_key"], second["session_key"]);
+    let legacy: Value = serde_json::from_slice(
+        &fs::read(fixture.home.join(".cache/claudex/delegation-state.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(legacy["delegation_required"], false);
+    assert_eq!(legacy["migration"], "session-scoped-v2");
+    fixture.assert_no_process();
+}
+
+#[test]
+fn present_invalid_current_session_id_does_not_fall_back_to_legacy_id() {
+    let fixture = Fixture::new(true);
+    let _guard = fixture.hold_refresh_lock();
+    let output = fixture.run_routed(
+        r#"{"session_id":42,"sessionId":"legacy-session","prompt":"Please implement this"}"#,
+        &[],
+    );
+    assert!(context(&output).contains("Claudex routing data"));
+    assert!(!fixture.delegation_state_path("legacy-session").exists());
+    let legacy: Value = serde_json::from_slice(
+        &fs::read(fixture.home.join(".cache/claudex/delegation-state.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(legacy["delegation_required"], false);
+    assert_eq!(legacy["migration"], "session-scoped-v2");
+    fixture.assert_no_process();
+}
+
+#[test]
+fn subagent_start_never_writes_delegation_policy_state() {
+    let fixture = Fixture::new(true);
+    let _guard = fixture.hold_refresh_lock();
+    let output = fixture.run_routed_event(
+        r#"{"session_id":"worker-session","agent_id":"agent-a","agent_type":"claudex-gpt"}"#,
+        "SubagentStart",
+    );
+    assert_eq!(
+        json_stdout(&output)["hookSpecificOutput"]["hookEventName"],
+        "SubagentStart"
+    );
+    assert!(!fixture.delegation_state_path("worker-session").exists());
+    assert!(
+        !fixture
+            .home
+            .join(".cache/claudex/delegation-state.json")
+            .exists()
+    );
     fixture.assert_no_process();
 }
 

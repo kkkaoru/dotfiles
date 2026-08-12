@@ -179,32 +179,6 @@ pub(crate) fn write_routing_cache(
     write_private_json(path, &Value::Object(object))
 }
 
-/// Snapshot delegation policy for PreToolUse hooks (main-session tool deny).
-pub fn write_delegation_state(home: &Path, summary: &Value, now: f64) -> Result<()> {
-    let workers = summary
-        .get("selected_workers")
-        .and_then(Value::as_array)
-        .map(Vec::len)
-        .unwrap_or(0);
-    let required = summary
-        .get("delegation_required")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let direct = summary
-        .get("direct_main_execution")
-        .cloned()
-        .unwrap_or_else(|| Value::from(if required { "fallback-only" } else { "allowed" }));
-    let mut object = Map::new();
-    object.insert("updated_at".into(), Value::from(now));
-    object.insert("delegation_required".into(), Value::Bool(required));
-    object.insert("selected_workers_count".into(), Value::from(workers as u64));
-    object.insert("direct_main_execution".into(), direct);
-    write_private_json(
-        &home.join(".cache/claudex/delegation-state.json"),
-        &Value::Object(object),
-    )
-}
-
 /// Atomically write private JSON with owner-only permissions.
 pub fn write_private_json(path: &Path, value: &Value) -> Result<()> {
     if let Some(parent) = path.parent() {
@@ -250,23 +224,5 @@ mod tests {
         assert!(!boolean_value("off", "X", true).unwrap());
         assert!(boolean_value("", "X", true).unwrap());
         assert!(boolean_value("maybe", "X", false).is_err());
-    }
-
-    #[test]
-    fn delegation_state_snapshot_records_required_flag() {
-        let dir = tempfile::tempdir().unwrap();
-        let summary = serde_json::json!({
-            "delegation_required": true,
-            "direct_main_execution": "fallback-only",
-            "selected_workers": [{"agent":"claudex-gpt","model":"gpt-5.6-luna"}]
-        });
-        write_delegation_state(dir.path(), &summary, 12.0).unwrap();
-        let text = std::fs::read_to_string(dir.path().join(".cache/claudex/delegation-state.json"))
-            .unwrap();
-        let value: Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(value["delegation_required"], true);
-        assert_eq!(value["selected_workers_count"], 1);
-        assert_eq!(value["direct_main_execution"], "fallback-only");
-        assert_eq!(value["updated_at"], 12.0);
     }
 }

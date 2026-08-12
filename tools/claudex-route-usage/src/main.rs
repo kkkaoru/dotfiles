@@ -1,6 +1,7 @@
 mod app;
 mod collect;
 mod config;
+mod delegation;
 mod exhaustion;
 mod hook;
 mod lifecycle;
