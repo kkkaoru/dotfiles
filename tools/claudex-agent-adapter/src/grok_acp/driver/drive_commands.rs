@@ -16,6 +16,7 @@ use super::{
 };
 use crate::app_server::events::ThreadEventDispatcher;
 
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn drive_commands(
     provider: connection::AcpProvider,
     connection: Rc<acp::ClientSideConnection>,
@@ -24,6 +25,7 @@ pub(super) async fn drive_commands(
     commands: &mut mpsc::Receiver<DriverCommand>,
     events: &Arc<ThreadEventDispatcher>,
     alive: &Arc<AtomicBool>,
+    cooldown: &Arc<AtomicBool>,
 ) -> Option<oneshot::Sender<()>> {
     let instructions = Rc::new(RefCell::new(HashMap::<String, String>::new()));
     let active_turns: ActiveTurns = Rc::new(RefCell::new(HashMap::new()));
@@ -37,6 +39,7 @@ pub(super) async fn drive_commands(
         invalidated_sessions: Rc::clone(&invalidated_sessions),
         instructions: Rc::clone(&instructions),
         alive: Arc::clone(alive),
+        cooldown: Arc::clone(cooldown),
     });
     let shutdown = loop {
         let Some(command) = commands.recv().await else {

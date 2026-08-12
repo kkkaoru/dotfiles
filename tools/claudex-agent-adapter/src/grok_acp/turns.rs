@@ -113,6 +113,7 @@ pub(super) struct TurnDriver {
     pub(super) active_turns: ActiveTurns,
     pub(super) invalidated_sessions: InvalidatedSessions,
     pub(super) alive: Arc<AtomicBool>,
+    pub(super) cooldown: Arc<AtomicBool>,
 }
 
 mod drive;

@@ -19,6 +19,41 @@ const TRACE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const PARALLEL_RELEASE_FILE: &str = "grok-acp-parallel-release";
 static CWD_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+struct NoEventTimeoutGuard {
+    previous: Option<String>,
+}
+
+impl NoEventTimeoutGuard {
+    fn set(seconds: u64) -> Self {
+        let previous = std::env::var("CLAUDEX_TEST_CONFIGURED_ACP_NO_EVENT_TIMEOUT_SECONDS").ok();
+        // SAFETY: configured ACP integration tests serialize cwd/env mutation with CWD_LOCK.
+        unsafe {
+            std::env::set_var(
+                "CLAUDEX_TEST_CONFIGURED_ACP_NO_EVENT_TIMEOUT_SECONDS",
+                seconds.to_string(),
+            );
+        }
+        Self { previous }
+    }
+}
+
+impl Drop for NoEventTimeoutGuard {
+    fn drop(&mut self) {
+        // SAFETY: restore the value captured by `set`.
+        unsafe {
+            match &self.previous {
+                Some(value) => std::env::set_var(
+                    "CLAUDEX_TEST_CONFIGURED_ACP_NO_EVENT_TIMEOUT_SECONDS",
+                    value,
+                ),
+                None => {
+                    std::env::remove_var("CLAUDEX_TEST_CONFIGURED_ACP_NO_EVENT_TIMEOUT_SECONDS")
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn opencode_route_uses_valid_acp_argv_and_preserves_web_bridge_mode() {
     let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -644,6 +679,142 @@ async fn configured_acp_selects_model_after_session_and_falls_back_for_effort_op
         assert_eq!(has_effort_model_metadata(&trace), !expects_config_option);
         backend.shutdown().await;
     }
+}
+
+#[tokio::test]
+async fn no_response_quota_stall_emits_one_error_cancels_exact_turn_and_rejects_same_model() {
+    let _cwd_guard = CWD_LOCK.lock().await;
+    let _timeout_guard = NoEventTimeoutGuard::set(1);
+    let root = tempfile::tempdir().expect("no-event configured ACP fixture");
+    std::env::set_current_dir(root.path()).expect("isolate no-event ACP trace");
+    let model = "opencode-go/no-response-first";
+    let backend = AgentBackend::spawn_routes(&[BackendRoute {
+        model: model.to_owned(),
+        backend: BackendKind::ConfiguredAcp,
+        effort: None,
+        model_provider: None,
+        model_catalog_json: None,
+        max_context_tokens: None,
+        model_prefixes: Vec::new(),
+        max_concurrency: Some(2),
+        acp: Some(AcpLaunch {
+            program: env!("CARGO_BIN_EXE_grok-acp-mock").to_owned(),
+            arguments: vec!["--mode".to_owned(), "no-response-first".to_owned()],
+        }),
+        web_search_mode: WebSearchMode::default(),
+    }]);
+    let response = backend
+        .request("thread/start", json!({"model":model,"cwd":root.path()}))
+        .await
+        .expect("start no-event session");
+    let thread_id = response["thread"]["id"].as_str().expect("thread id");
+    let events = backend.subscribe_thread(thread_id);
+    backend
+        .request_detached(
+            "turn/start",
+            json!({"threadId":thread_id,"input":"quota stall"}),
+        )
+        .await
+        .expect("queue no-event turn");
+    wait_for_configured_trace_count(root.path(), "prompt", 1).await;
+    let sibling_response = backend
+        .request("thread/start", json!({"model":model,"cwd":root.path()}))
+        .await
+        .expect("start sibling session");
+    let sibling_id = sibling_response["thread"]["id"]
+        .as_str()
+        .expect("sibling thread id")
+        .to_owned();
+    let sibling_events = backend.subscribe_thread(&sibling_id);
+    backend
+        .request_detached(
+            "turn/start",
+            json!({"threadId":sibling_id,"input":"sibling survives"}),
+        )
+        .await
+        .expect("queue sibling turn");
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        receive_turn_completion(&sibling_events),
+    )
+    .await
+    .expect("running sibling turn did not survive the timeout");
+    let error = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let event = events.recv().await.expect("no-event event stream closed");
+            if event["method"] == "error" {
+                break event;
+            }
+        }
+    })
+    .await
+    .expect("no-event timeout did not settle");
+    assert_eq!(error["method"], "error");
+    assert_eq!(error["params"]["willRetry"], false);
+    assert!(
+        error["params"]["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("no event"))
+    );
+    assert!(
+        backend
+            .request_detached(
+                "turn/start",
+                json!({"threadId":thread_id,"input":"later same model"}),
+            )
+            .await
+            .is_err()
+    );
+    let trace = wait_for_configured_trace_count(root.path(), "cancel", 1).await;
+    assert_eq!(
+        trace
+            .iter()
+            .filter(|event| event.get("cancel").is_some())
+            .count(),
+        1,
+        "timeout must send exactly one ACP cancel for the stalled session"
+    );
+    let prompt_session = trace
+        .iter()
+        .find_map(|event| event.pointer("/prompt/sessionId"))
+        .and_then(Value::as_str);
+    let cancelled_session = trace
+        .iter()
+        .find_map(|event| event.pointer("/cancel/sessionId"))
+        .and_then(Value::as_str);
+    assert_eq!(
+        cancelled_session, prompt_session,
+        "timeout cancellation must target the stalled turn's exact ACP session"
+    );
+    backend.shutdown().await;
+}
+
+async fn wait_for_configured_trace_count(
+    root: &std::path::Path,
+    key: &str,
+    expected: usize,
+) -> Vec<Value> {
+    tokio::time::timeout(ACP_EVENT_TIMEOUT, async {
+        loop {
+            if let Ok(trace) = std::fs::read_to_string(root.join("grok-acp-mock.jsonl")) {
+                let events = trace
+                    .lines()
+                    .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+                    .collect::<Vec<_>>();
+                if events
+                    .iter()
+                    .filter(|event| event.get(key).is_some())
+                    .count()
+                    >= expected
+                {
+                    return events;
+                }
+            }
+            tokio::time::sleep(TRACE_POLL_INTERVAL).await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("timed out waiting for {expected} `{key}` trace events"))
 }
 
 async fn wait_for_turn_completion(events: ThreadEvents) {

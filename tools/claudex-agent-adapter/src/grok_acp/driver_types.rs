@@ -40,6 +40,7 @@ pub(super) struct DriverSetup {
     pub(super) cwd: PathBuf,
     pub(super) events: Arc<ThreadEventDispatcher>,
     pub(super) alive: Arc<AtomicBool>,
+    pub(super) cooldown: Arc<AtomicBool>,
     pub(super) ready: oneshot::Sender<Result<()>>,
 }
 

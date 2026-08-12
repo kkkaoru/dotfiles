@@ -46,6 +46,7 @@ pub(super) struct TurnExecution<'a> {
     pub(super) active_turns: &'a ActiveTurns,
     pub(super) invalidated_sessions: &'a InvalidatedSessions,
     pub(super) alive: &'a AtomicBool,
+    pub(super) cooldown: &'a AtomicBool,
 }
 
 impl TurnCtl<'_> {
@@ -88,6 +89,7 @@ pub(super) async fn execute_turn(context: TurnExecution<'_>, turn: PreparedTurn)
         active_turns,
         invalidated_sessions,
         alive,
+        cooldown,
     } = context;
     let PreparedTurn {
         session_id,
@@ -120,8 +122,8 @@ pub(super) async fn execute_turn(context: TurnExecution<'_>, turn: PreparedTurn)
     if !apply_effort(&mut ctl, &connection, model, effort.as_deref(), &id).await {
         return;
     }
-    let timeout = configured_prompt::TIMEOUT;
-    run_prompt(ctl, connection, id, prompt, timeout, alive).await;
+    let timeout = configured_prompt::timeout();
+    run_prompt(ctl, connection, id, prompt, timeout, alive, cooldown).await;
 }
 
 pub(super) async fn handle_setup_cancellation<F, T>(

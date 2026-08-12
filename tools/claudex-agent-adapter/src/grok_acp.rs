@@ -51,6 +51,7 @@ use turns::{CancelRequest, PreparedTurn};
 
 pub struct GrokAcp {
     provider: AcpProvider,
+    model: String,
     commands: mpsc::Sender<DriverCommand>,
     session_permits: Arc<tokio::sync::Semaphore>,
     turn_permits: Arc<tokio::sync::Semaphore>,
@@ -58,6 +59,10 @@ pub struct GrokAcp {
     turn_capacity: usize,
     events: Arc<ThreadEventDispatcher>,
     alive: Arc<AtomicBool>,
+    /// A no-event timeout trips this circuit for this configured model/provider
+    /// only.  It deliberately does not reuse `alive`: sibling turns already in
+    /// flight must continue and the shared Codex app-server is unrelated.
+    cooldown: Arc<AtomicBool>,
     driver: DriverThread,
 }
 
@@ -68,6 +73,10 @@ impl GrokAcp {
 
     pub fn is_alive(&self) -> bool {
         self.alive.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn is_cooling_down(&self) -> bool {
+        self.cooldown.load(Ordering::Acquire)
     }
 
     pub const fn turn_capacity(&self) -> usize {
@@ -91,6 +100,13 @@ impl GrokAcp {
     }
 
     pub async fn start_turn(&self, params: Value) -> Result<()> {
+        if self.provider.is_session_scoped_configured() && self.is_cooling_down() {
+            return Err(anyhow!(
+                "{} ACP model `{}` is cooling down after a no-event prompt timeout; retry another provider",
+                self.provider.label(),
+                self.model
+            ));
+        }
         let is_user = params.get("priority").and_then(Value::as_str) == Some("user");
         let permit = queue::acquire(
             self.provider,

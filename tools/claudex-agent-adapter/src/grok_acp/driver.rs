@@ -42,6 +42,7 @@ struct DriverWorkerContext {
     invalidated_sessions: InvalidatedSessions,
     instructions: Rc<RefCell<HashMap<String, String>>>,
     alive: Arc<AtomicBool>,
+    cooldown: Arc<AtomicBool>,
 }
 
 struct DriverCommandContext<'a> {
@@ -128,6 +129,7 @@ pub(super) async fn run_driver(setup: DriverSetup, mut commands: mpsc::Receiver<
             &mut commands,
             &setup.events,
             &setup.alive,
+            &setup.cooldown,
         ) => shutdown,
         status = child.child.wait() => {
             match status {

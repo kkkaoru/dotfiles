@@ -22,6 +22,7 @@ pub(in crate::grok_acp) async fn drive_turns(
         active_turns,
         invalidated_sessions,
         alive,
+        cooldown,
     } = driver;
     drive_turn_tasks(turns, move |turn| {
         let connection = Rc::clone(&connection);
@@ -30,6 +31,7 @@ pub(in crate::grok_acp) async fn drive_turns(
         let active_turns = Rc::clone(&active_turns);
         let invalidated_sessions = Rc::clone(&invalidated_sessions);
         let alive = Arc::clone(&alive);
+        let cooldown = Arc::clone(&cooldown);
         async move {
             let session_id = turn.session_id.clone();
             execute_turn(
@@ -41,6 +43,7 @@ pub(in crate::grok_acp) async fn drive_turns(
                     active_turns: &active_turns,
                     invalidated_sessions: &invalidated_sessions,
                     alive: &alive,
+                    cooldown: &cooldown,
                 },
                 turn,
             )

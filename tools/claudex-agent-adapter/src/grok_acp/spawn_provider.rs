@@ -61,10 +61,13 @@ impl GrokAcp {
         let outer_permits = Arc::new(tokio::sync::Semaphore::new(OUTER_TURN_RESERVE));
         let events = Arc::new(ThreadEventDispatcher::default());
         let alive = Arc::new(AtomicBool::new(true));
+        let cooldown = Arc::new(AtomicBool::new(false));
         let (ready_tx, ready_rx) = oneshot::channel();
         let driver_events = Arc::clone(&events);
         let driver_alive = Arc::clone(&alive);
+        let driver_cooldown = Arc::clone(&cooldown);
         let model = model.to_owned();
+        let driver_model = model.clone();
         let effort = effort.map(str::to_owned);
         let program = program.into();
         let driver = std::thread::Builder::new()
@@ -80,11 +83,12 @@ impl GrokAcp {
                         provider,
                         program,
                         arguments,
-                        model,
+                        model: driver_model,
                         effort,
                         cwd,
                         events: driver_events,
                         alive: driver_alive,
+                        cooldown: driver_cooldown,
                         ready: ready_tx,
                     },
                     command_rx,
@@ -102,6 +106,7 @@ impl GrokAcp {
         }
         Ok(Arc::new(Self {
             provider,
+            model,
             commands: command_tx,
             session_permits,
             turn_permits,
@@ -109,6 +114,7 @@ impl GrokAcp {
             turn_capacity,
             events,
             alive,
+            cooldown,
             driver,
         }))
     }

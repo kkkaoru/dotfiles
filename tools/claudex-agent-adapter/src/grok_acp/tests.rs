@@ -315,6 +315,7 @@ async fn cancel_turn_settles_when_the_driver_drops_its_response() {
     let (commands, mut receiver) = tokio::sync::mpsc::channel(1);
     let agent = GrokAcp {
         provider: AcpProvider::Grok,
+        model: "test-model".to_owned(),
         commands,
         session_permits: Arc::new(tokio::sync::Semaphore::new(SESSION_QUEUE_CAPACITY)),
         turn_permits: Arc::new(tokio::sync::Semaphore::new(TURN_QUEUE_CAPACITY)),
@@ -322,6 +323,7 @@ async fn cancel_turn_settles_when_the_driver_drops_its_response() {
         turn_capacity: TURN_QUEUE_CAPACITY,
         events: Arc::new(ThreadEventDispatcher::default()),
         alive: Arc::new(AtomicBool::new(true)),
+        cooldown: Arc::new(AtomicBool::new(false)),
         driver: DriverThread::completed(),
     };
     tokio::spawn(async move {
@@ -348,6 +350,7 @@ async fn shutdown_waits_for_an_available_driver_to_acknowledge() {
     let (commands, receiver) = tokio::sync::mpsc::channel(1);
     let agent = GrokAcp {
         provider: AcpProvider::Grok,
+        model: "test-model".to_owned(),
         commands,
         session_permits: Arc::new(tokio::sync::Semaphore::new(SESSION_QUEUE_CAPACITY)),
         turn_permits: Arc::new(tokio::sync::Semaphore::new(TURN_QUEUE_CAPACITY)),
@@ -355,6 +358,7 @@ async fn shutdown_waits_for_an_available_driver_to_acknowledge() {
         turn_capacity: TURN_QUEUE_CAPACITY,
         events: Arc::new(ThreadEventDispatcher::default()),
         alive: Arc::new(AtomicBool::new(true)),
+        cooldown: Arc::new(AtomicBool::new(false)),
         driver: DriverThread::completed(),
     };
     let driver = tokio::spawn(acknowledge_shutdown(receiver));
@@ -403,6 +407,7 @@ async fn assert_shutdown_cleanup(provider: AcpProvider, failure: &str) {
     });
     let agent = Arc::new(GrokAcp {
         provider,
+        model: "test-model".to_owned(),
         commands,
         session_permits: Arc::new(tokio::sync::Semaphore::new(SESSION_QUEUE_CAPACITY)),
         turn_permits: Arc::new(tokio::sync::Semaphore::new(TURN_QUEUE_CAPACITY)),
@@ -410,6 +415,7 @@ async fn assert_shutdown_cleanup(provider: AcpProvider, failure: &str) {
         turn_capacity: TURN_QUEUE_CAPACITY,
         events: Arc::new(ThreadEventDispatcher::default()),
         alive: Arc::new(AtomicBool::new(false)),
+        cooldown: Arc::new(AtomicBool::new(false)),
         driver: DriverThread::new(handle),
     });
     let shutting_down = Arc::clone(&agent);

@@ -108,6 +108,7 @@ mod tests {
                 active_turns: &active,
                 invalidated_sessions: &invalidated,
                 alive: &AtomicBool::new(true),
+                cooldown: &AtomicBool::new(false),
             },
             turn,
         )
@@ -345,6 +346,7 @@ mod tests {
             invalidated_sessions: &invalidated,
         };
         let alive = AtomicBool::new(true);
+        let cooldown = AtomicBool::new(false);
 
         run_prompt(
             ctl,
@@ -353,6 +355,7 @@ mod tests {
             "prompt".to_owned(),
             configured_prompt::TIMEOUT,
             &alive,
+            &cooldown,
         )
         .await;
 
@@ -386,6 +389,7 @@ mod tests {
             active_turns: &active,
             invalidated_sessions: &invalidated,
         };
+        let cooldown = AtomicBool::new(false);
         run_prompt(
             ctl,
             std::rc::Rc::new(disconnected_connection(std::sync::Arc::clone(&events))),
@@ -393,6 +397,7 @@ mod tests {
             "prompt".to_owned(),
             configured_prompt::TIMEOUT,
             &AtomicBool::new(true),
+            &cooldown,
         )
         .await;
         assert_eq!(receiver.recv().await.unwrap()["method"], "error");
@@ -908,6 +913,7 @@ mod tests {
             invalidated_sessions: &invalidated,
         };
         let alive = AtomicBool::new(true);
+        let cooldown = AtomicBool::new(false);
         run_prompt(
             ctl,
             std::rc::Rc::new(connection),
@@ -915,6 +921,7 @@ mod tests {
             "prompt".to_owned(),
             Duration::from_millis(1),
             &alive,
+            &cooldown,
         )
         .await;
         assert!(
@@ -946,6 +953,7 @@ mod tests {
             active_turns: &active,
             invalidated_sessions: &invalidated,
         };
+        let cooldown = AtomicBool::new(false);
         run_prompt(
             ctl,
             std::rc::Rc::new(connection),
@@ -953,6 +961,7 @@ mod tests {
             "prompt".to_owned(),
             configured_prompt::TIMEOUT,
             &AtomicBool::new(true),
+            &cooldown,
         )
         .await;
         assert_eq!(request.await.unwrap()["method"], "session/prompt");

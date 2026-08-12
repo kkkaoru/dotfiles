@@ -426,6 +426,18 @@ impl acp::Agent for MockAgent {
 
     async fn prompt(&self, request: acp::PromptRequest) -> acp::Result<acp::PromptResponse> {
         self.record("prompt", &request)?;
+        if self.mode == "no-response" {
+            // A real quota stall can keep the ACP process and its stdio alive
+            // while never producing an update or prompt response.
+            return std::future::pending::<acp::Result<acp::PromptResponse>>().await;
+        }
+        if self.mode == "no-response-first" {
+            let marker = self.trace.with_file_name("grok-acp-no-response-first");
+            if !marker.exists() {
+                std::fs::write(marker, b"stalled").map_err(|_| acp::Error::internal_error())?;
+                return std::future::pending::<acp::Result<acp::PromptResponse>>().await;
+            }
+        }
         if matches!(
             self.mode.as_str(),
             "fail-parallel-session" | "dropped-parallel-session"

@@ -12,23 +12,28 @@ pub(super) async fn run_prompt(
     prompt: String,
     timeout: Duration,
     alive: &AtomicBool,
+    cooldown: &AtomicBool,
 ) {
     let request = acp::PromptRequest::new(
         id.clone(),
         vec![acp::ContentBlock::Text(acp::TextContent::new(prompt))],
     );
-    let response = match configured_prompt::wait(
+    let activity = ctl.events.subscribe(ctl.session_id);
+    let response = match configured_prompt::wait_with_activity(
         ctl.provider,
         timeout,
         prompt_once(&mut ctl, &connection, request),
+        Some(activity),
     )
     .await
     {
         configured_prompt::Wait::Completed(Some(response)) => response,
         configured_prompt::Wait::Completed(None) => return,
         configured_prompt::Wait::TimedOut => {
+            configured_prompt::cancel_timed_out_prompt(ctl.provider, &connection, ctl.session_id)
+                .await;
             let message = format!(
-                "{} ACP prompt timed out after {:?}; recycling provider",
+                "{} ACP prompt had no event for {:?}; provider/model cooling down",
                 ctl.provider.label(),
                 timeout
             );
@@ -41,6 +46,8 @@ pub(super) async fn run_prompt(
                     active_turns: ctl.active_turns,
                     invalidated_sessions: ctl.invalidated_sessions,
                     alive,
+                    cooldown,
+                    trip_cooldown: true,
                     message,
                 },
             );
@@ -62,6 +69,8 @@ pub(super) async fn run_prompt(
                 active_turns: ctl.active_turns,
                 invalidated_sessions: ctl.invalidated_sessions,
                 alive,
+                cooldown,
+                trip_cooldown: false,
                 message,
             },
         );

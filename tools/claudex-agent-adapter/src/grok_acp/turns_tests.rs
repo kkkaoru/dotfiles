@@ -173,6 +173,7 @@ async fn driver_executes_queued_cancellation_and_emits_a_terminal_event() {
                     active_turns,
                     invalidated_sessions,
                     alive: Arc::new(AtomicBool::new(true)),
+                    cooldown: Arc::new(AtomicBool::new(false)),
                 },
                 receiver_turns,
             ));

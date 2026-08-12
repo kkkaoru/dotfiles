@@ -43,6 +43,7 @@ impl GrokAcp {
     ) -> Arc<Self> {
         Arc::new(Self {
             provider,
+            model: "test-model".to_owned(),
             commands,
             session_permits: Arc::new(tokio::sync::Semaphore::new(SESSION_QUEUE_CAPACITY)),
             turn_permits: Arc::new(tokio::sync::Semaphore::new(TURN_QUEUE_CAPACITY)),
@@ -50,6 +51,7 @@ impl GrokAcp {
             turn_capacity: TURN_QUEUE_CAPACITY,
             events: Arc::new(ThreadEventDispatcher::default()),
             alive: Arc::new(AtomicBool::new(alive)),
+            cooldown: Arc::new(AtomicBool::new(false)),
             driver: DriverThread::completed(),
         })
     }
