@@ -227,4 +227,29 @@ mod tests {
             "/Users/kkk4oru/ghq/github.com/kkkaoru/dotfiles"
         )));
     }
+
+    #[test]
+    fn pin_process_cwd_moves_off_an_ephemeral_install_directory() {
+        let original = std::env::current_dir().expect("original cwd");
+        let tmp = tempfile::tempdir().expect("ephemeral fixture");
+        let ephemeral = tmp.path().join("claudex-temp-swap-branch");
+        std::fs::create_dir(&ephemeral).expect("create ephemeral cwd");
+        std::env::set_current_dir(&ephemeral).expect("enter ephemeral cwd");
+        let pinned = pin_process_cwd();
+        let restore = std::env::set_current_dir(&original);
+        let pinned = pinned.expect("pin off ephemeral cwd");
+        restore.expect("restore original cwd");
+        assert!(pinned.is_dir(), "{}", pinned.display());
+        assert!(
+            !is_ephemeral_install_cwd(&pinned),
+            "pinned cwd must not remain on a temp-swap path: {}",
+            pinned.display()
+        );
+    }
+
+    #[test]
+    fn decode_rejects_a_truncated_percent_sequence() {
+        assert!(decode("%2").is_none());
+        assert!(decode("%").is_none());
+    }
 }

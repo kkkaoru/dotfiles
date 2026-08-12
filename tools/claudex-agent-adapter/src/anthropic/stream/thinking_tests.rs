@@ -235,6 +235,52 @@ mod tests {
         state.open.as_mut().expect("open").item_id = "claudex_provider_progress".to_owned();
         state.open.as_mut().expect("open").text = "▶ Thinking… · 0s\n".to_owned();
         assert!(state.open_holds_collapsed_subagent_launch());
+        state.open.as_mut().expect("open").text =
+            "Nucleating… (↓ tokens · still thinking with high effort)".to_owned();
+        assert!(state.open_holds_zwsp_or_launch_prose());
+        assert!(state.open_holds_collapsed_subagent_launch());
+    }
+
+    #[tokio::test]
+    async fn close_before_executable_tool_use_promotes_keepalive_progress() {
+        let mut state = ThinkingState {
+            open: Some(OpenThinking {
+                index: 0,
+                item_id: "claudex_provider_progress".to_owned(),
+                summary_index: 0,
+                signature: "sig".to_owned(),
+                text: "▶ Thinking… · 1s\n".to_owned(),
+            }),
+        };
+        let mut blocks = vec![json!({
+            "type":"thinking",
+            "thinking":"▶ Thinking… · 1s\n",
+            "signature":"sig"
+        })];
+        state
+            .close_before_executable_tool_use(&mut blocks, None)
+            .await
+            .expect("close keepalive before tool_use");
+        assert!(state.open.is_none());
+        assert_eq!(blocks[0]["thinking"], json!("▶ Thinking… · 1s\n"));
+        assert_ne!(blocks[0]["signature"], json!("sig"));
+    }
+
+    #[tokio::test]
+    async fn commit_buffered_reasoning_ignores_empty_and_opens_when_closed() {
+        let mut state = ThinkingState::default();
+        let mut blocks = Vec::new();
+        state
+            .commit_buffered_reasoning(&mut blocks, "subagent:reasoning", "   ", None)
+            .await
+            .expect("empty reasoning is a no-op");
+        assert!(blocks.is_empty());
+        state
+            .commit_buffered_reasoning(&mut blocks, "subagent:reasoning", "visible CoT", None)
+            .await
+            .expect("open a thinking block for CoT");
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0]["thinking"], json!("visible CoT"));
     }
 
     fn marker_outside_wandering_launch(blocks: &[Value]) -> bool {

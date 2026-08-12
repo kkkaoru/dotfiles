@@ -793,6 +793,24 @@ fn inflight_placeholder_occupies_scope_before_tool_result() {
 }
 
 #[test]
+fn store_backed_claims_occupy_scope_after_memory_is_forgotten() {
+    let root = tempfile::tempdir().expect("reuse store");
+    let path = root.path().join("subagent-recipients-v1.json");
+    let registry = SubagentReuseRegistry::with_store(path);
+    let arguments = json!({
+        "description":"Trace azookey conversion pipeline",
+        "prompt":"Start with Vibrato boundaries.",
+        "claudex_model":"gpt-test"
+    });
+    assert!(registry.note_inflight_launch("session-a", &arguments, "tool-pending"));
+    registry.forget_memory_for_test();
+    assert!(
+        registry.scope_is_occupied("session-a", &arguments),
+        "persisted claims must occupy the scope without in-memory launches"
+    );
+}
+
+#[test]
 fn parallel_inflight_placeholders_with_empty_recipients_stay_distinct() {
     let registry = SubagentReuseRegistry::default();
     let scope_a = json!({

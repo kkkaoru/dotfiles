@@ -27,6 +27,10 @@ pub(crate) use claims::{current_pid, normalize_scope, unix_seconds};
 use io::{StoreLock, create_private_directory};
 use merge::{bound_document, merge_session_state, prune_persisted_state};
 
+#[cfg(test)]
+#[path = "store/merge_tests.rs"]
+mod merge_tests;
+
 pub(super) const CACHE_FILE_NAME: &str = "subagent-recipients-v1.json";
 pub(super) const CACHE_VERSION: u8 = 2;
 pub(super) const LEGACY_CACHE_VERSION: u8 = 1;

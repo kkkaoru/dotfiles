@@ -40,6 +40,12 @@ fn serve_command_line_detects_retained_daemons_only() {
 }
 
 #[test]
+fn capture_started_daemon_identity_rejects_unusable_pids() {
+    assert!(super::signals::capture_started_daemon_identity(0).is_none());
+    assert!(super::signals::capture_started_daemon_identity(u32::MAX).is_none());
+}
+
+#[test]
 fn recognizes_current_and_renamed_adapter_daemons() {
     let executable = Path::new("/tmp/claudex-agent-adapter");
     assert!(command_matches(

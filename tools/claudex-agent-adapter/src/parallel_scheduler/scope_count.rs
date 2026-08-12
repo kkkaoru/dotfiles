@@ -61,6 +61,9 @@ pub(crate) fn is_substantive_work(request: &MessagesRequest) -> bool {
 #[path = "scope_count/behavior_tests.rs"]
 mod behavior_tests;
 #[cfg(test)]
+#[path = "scope_count/filters_tests.rs"]
+mod filters_tests;
+#[cfg(test)]
 #[path = "scope_count/provenance_tests.rs"]
 mod provenance_tests;
 #[cfg(test)]

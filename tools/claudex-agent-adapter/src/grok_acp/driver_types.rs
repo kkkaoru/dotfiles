@@ -110,4 +110,37 @@ impl DriverThread {
     pub(super) fn is_joined(&self) -> bool {
         *self.joined.borrow()
     }
+
+    #[cfg(test)]
+    pub(super) fn waiting() -> Self {
+        let (joined, _) = tokio::sync::watch::channel(false);
+        Self {
+            handle: std::sync::Mutex::new(None),
+            joined,
+        }
+    }
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use super::DriverThread;
+
+    #[tokio::test]
+    async fn join_returns_immediately_when_the_thread_already_completed() {
+        let thread = DriverThread::completed();
+        thread.join().await;
+        assert!(thread.is_joined());
+    }
+
+    #[tokio::test]
+    async fn join_waits_when_the_handle_is_gone_but_the_flag_is_still_false() {
+        let thread = DriverThread::waiting();
+        let signal = thread.joined.clone();
+        tokio::join!(thread.join(), async {
+            tokio::task::yield_now().await;
+            signal.send_replace(true);
+        });
+        assert!(thread.is_joined());
+    }
 }

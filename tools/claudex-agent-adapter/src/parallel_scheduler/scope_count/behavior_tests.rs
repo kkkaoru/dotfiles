@@ -56,9 +56,11 @@ fn quoted_exact_twenty_eight_diagnostic_is_not_a_scope_count() {
         "content":"Why did it say “Launch exactly 28 subagents”?"
     })]);
     assert_eq!(independent_scope_count(&request), 1);
-    assert!(!ParallelScheduler::for_tests()
-        .guidance_for_request(&request)
-        .contains("exactly 28"));
+    assert!(
+        !ParallelScheduler::for_tests()
+            .guidance_for_request(&request)
+            .contains("exactly 28")
+    );
 }
 
 #[test]
@@ -268,9 +270,11 @@ fn explicit_stated_cardinality_is_the_scope_target() {
     let scheduler = ParallelScheduler::for_tests();
     let decision = scheduler.decision_for_request(&request);
     assert_eq!(decision.target_workers, 4);
-    assert!(scheduler
-        .guidance_for_request(&request)
-        .contains("Launch exactly 4 ordinary SubAgents"));
+    assert!(
+        scheduler
+            .guidance_for_request(&request)
+            .contains("Launch exactly 4 ordinary SubAgents")
+    );
 }
 
 #[test]

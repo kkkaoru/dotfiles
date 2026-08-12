@@ -1,7 +1,7 @@
 use super::{
+    MAX_STATED_SCOPES,
     detect::{contains_parallel_intent, contains_single_scope_request, explicit_scope_cardinality},
     filters::{is_negated_or_diagnostic, remove_negative_or_diagnostic_lines},
-    MAX_STATED_SCOPES,
 };
 
 pub(super) fn declines_delegation_text(content: &str) -> bool {

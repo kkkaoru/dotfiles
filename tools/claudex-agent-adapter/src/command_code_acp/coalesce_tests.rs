@@ -15,9 +15,10 @@ fn remaining_final_message_skips_when_streamed_already_covers_result() {
     );
     assert_eq!(remaining_final_message("hello", "hello   "), None);
     assert_eq!(
-        remaining_final_message("fresh answer", "old"),
-        Some("fresh answer".to_owned())
+        remaining_final_message("hello world", "hello world   "),
+        None
     );
+    assert_eq!(remaining_final_message("hello   ", "hello"), None);
 }
 
 #[test]
@@ -78,6 +79,40 @@ fn thinking_end_emits_unseen_suffix_after_partial_deltas() {
             "then inspect the neon pooler GUCs.".to_owned()
         )],
         "Muse full snapshot after partial deltas must keep the unseen suffix"
+    );
+}
+
+#[test]
+fn thinking_end_ignores_empty_and_contained_snapshots() {
+    let mut coalescer = ProgressCoalescer::default();
+    assert!(
+        coalescer
+            .push(ProgressEvent::ThoughtEnd("   ".to_owned()))
+            .is_empty()
+    );
+    assert_eq!(
+        coalescer.push(ProgressEvent::Thought("planning live.".to_owned())),
+        vec![ProgressEvent::Thought("planning live.".to_owned())]
+    );
+    assert!(
+        coalescer
+            .push(ProgressEvent::ThoughtEnd("planning".to_owned()))
+            .is_empty(),
+        "a snapshot already contained in emitted thought must not replay"
+    );
+}
+
+#[test]
+fn thinking_end_ignores_prefix_that_adds_only_whitespace() {
+    let mut coalescer = ProgressCoalescer::default();
+    assert_eq!(
+        coalescer.push(ProgressEvent::Thought("planning live.".to_owned())),
+        vec![ProgressEvent::Thought("planning live.".to_owned())]
+    );
+    assert!(
+        coalescer
+            .push(ProgressEvent::ThoughtEnd("planning live.   ".to_owned()))
+            .is_empty()
     );
 }
 

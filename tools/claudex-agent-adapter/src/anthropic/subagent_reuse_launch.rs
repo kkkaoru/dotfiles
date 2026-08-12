@@ -178,6 +178,14 @@ impl SubagentReuseRegistry {
     }
 
     #[cfg(test)]
+    pub(super) fn forget_memory_for_test(&self) {
+        self.states
+            .lock()
+            .expect("SubAgent reuse registry poisoned")
+            .clear();
+    }
+
+    #[cfg(test)]
     pub(super) fn status_for(&self, session: &str, recipient: &str) -> Option<String> {
         self.states
             .lock()
