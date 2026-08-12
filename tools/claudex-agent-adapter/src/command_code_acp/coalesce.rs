@@ -1,4 +1,4 @@
-use super::events::ProgressEvent;
+use super::events::{ProgressEvent, is_incomplete_canned_prefix, strip_canned_progress};
 
 /// Buffer char-by-char Muse Spark NDJSON into readable TUI chunks.
 #[derive(Debug, Default)]
@@ -37,6 +37,9 @@ impl ProgressCoalescer {
                 self.thought_emitted.push_str(chunk);
             }
         }
+        let Some(text) = strip_canned_progress(&text) else {
+            return out;
+        };
         let Some(rest) = thought_end_remainder(&self.thought_emitted, &text) else {
             return out;
         };
@@ -87,12 +90,12 @@ impl ProgressCoalescer {
 
     fn take_thought(&mut self) -> Option<ProgressEvent> {
         let text = std::mem::take(&mut self.thought);
-        nonempty(text).map(ProgressEvent::Thought)
+        strip_canned_progress(&text).map(ProgressEvent::Thought)
     }
 
     fn take_message(&mut self) -> Option<ProgressEvent> {
         let text = std::mem::take(&mut self.message);
-        nonempty(text).map(ProgressEvent::Message)
+        strip_canned_progress(&text).map(ProgressEvent::Message)
     }
 }
 
@@ -118,7 +121,7 @@ fn thought_end_remainder(emitted: &str, snapshot: &str) -> Option<String> {
 }
 
 fn should_flush(buf: &str, just_appended_chars: usize) -> bool {
-    if buf.is_empty() {
+    if buf.is_empty() || is_incomplete_canned_prefix(buf) {
         return false;
     }
     just_appended_chars >= IMMEDIATE_CHARS
@@ -163,10 +166,6 @@ pub fn message_text_from_progress(progress: &[ProgressEvent]) -> String {
             _ => None,
         })
         .collect()
-}
-
-fn nonempty(value: String) -> Option<String> {
-    if value.is_empty() { None } else { Some(value) }
 }
 
 #[cfg(test)]

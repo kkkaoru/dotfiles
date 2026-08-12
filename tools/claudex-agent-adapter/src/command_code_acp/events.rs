@@ -4,7 +4,8 @@ use serde_json::Value;
 mod chrome;
 mod progress;
 use chrome::has_status_prefix;
-pub use chrome::is_canned_progress;
+pub(crate) use chrome::is_incomplete_canned_prefix;
+pub use chrome::{is_canned_progress, strip_canned_progress};
 pub use progress::{progress_to_updates, result_is_error, result_message, turn_cancelled_updates};
 
 #[derive(Clone, Debug, Eq, PartialEq)]

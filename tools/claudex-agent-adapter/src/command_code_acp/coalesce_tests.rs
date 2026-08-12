@@ -177,3 +177,44 @@ fn thinking_end_after_tool_can_start_a_new_unit() {
         )]
     );
 }
+
+#[test]
+fn thinking_end_keeps_non_canned_suffix_after_canned_chrome() {
+    let mut coalescer = ProgressCoalescer::default();
+    assert_eq!(
+        coalescer.push(ProgressEvent::ThoughtEnd(
+            "Thought for 15s\nI'll read your .gitignore".to_owned()
+        )),
+        vec![ProgressEvent::Thought(
+            "I'll read your .gitignore".to_owned()
+        )],
+        "Muse thinking_end snapshots must drop Thought-for chrome, not the CoT"
+    );
+}
+
+#[test]
+fn char_by_char_thought_for_chrome_is_held_then_dropped() {
+    let mut coalescer = ProgressCoalescer::default();
+    for ch in "Thought for 15s".chars() {
+        assert!(
+            coalescer
+                .push(ProgressEvent::Thought(ch.to_string()))
+                .is_empty(),
+            "incomplete Thought-for chrome must not flush as CoT ({ch:?})"
+        );
+    }
+    assert!(
+        coalescer
+            .push(ProgressEvent::Thought("\n".to_owned()))
+            .is_empty(),
+        "completed Thought-for chrome must be dropped"
+    );
+    assert_eq!(
+        coalescer.push(ProgressEvent::Thought(
+            "I'll read your .gitignore".to_owned()
+        )),
+        vec![ProgressEvent::Thought(
+            "I'll read your .gitignore".to_owned()
+        )]
+    );
+}

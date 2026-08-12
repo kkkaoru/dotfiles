@@ -1,6 +1,6 @@
 use serde_json::Value;
 
-use super::{ParsedLine, ProgressEvent, WireEvent, has_status_prefix, is_canned_progress};
+use super::{ParsedLine, ProgressEvent, WireEvent, has_status_prefix, strip_canned_progress};
 
 pub(super) fn parse_event(event: WireEvent) -> ParsedLine {
     let description = tool_description(&event);
@@ -31,20 +31,14 @@ pub(super) fn parse_event(event: WireEvent) -> ParsedLine {
             error: nonempty(event.error).or_else(|| nonempty(event.message)),
         }),
         "thinking_delta" => match text {
-            Some(text) if has_status_prefix(text.trim()) => {
-                ParsedLine::Progress(ProgressEvent::Status(text))
-            }
-            Some(text) if is_canned_progress(&text) => ParsedLine::Ignored,
-            Some(text) => ParsedLine::Progress(ProgressEvent::Thought(text)),
+            Some(text) => thinking_delta_line(text),
             None => ParsedLine::Ignored,
         },
         // Muse Spark `thinking_end` is a full snapshot, not a delta. Replaying it
         // after streamed `thinking_delta` caused CC Thought-for flicker
         // (9b9cffc). Still accept it when Muse skipped deltas for the unit.
         "thinking_end" => match text {
-            Some(text) if is_canned_progress(&text) => ParsedLine::Ignored,
-            Some(text) if text.trim().is_empty() => ParsedLine::Ignored,
-            Some(text) => ParsedLine::Progress(ProgressEvent::ThoughtEnd(text)),
+            Some(text) => thinking_end_line(text),
             None => ParsedLine::Ignored,
         },
         "text_delta" | "message_update" => match text {
@@ -70,6 +64,24 @@ pub(super) fn parse_event(event: WireEvent) -> ParsedLine {
             Some(message) => format!("{other}: {message}"),
             None => other.to_owned(),
         })),
+    }
+}
+
+fn thinking_delta_line(text: String) -> ParsedLine {
+    let Some(text) = strip_canned_progress(&text) else {
+        return ParsedLine::Ignored;
+    };
+    if has_status_prefix(text.trim()) {
+        ParsedLine::Progress(ProgressEvent::Status(text))
+    } else {
+        ParsedLine::Progress(ProgressEvent::Thought(text))
+    }
+}
+
+fn thinking_end_line(text: String) -> ParsedLine {
+    match strip_canned_progress(&text) {
+        Some(text) => ParsedLine::Progress(ProgressEvent::ThoughtEnd(text)),
+        None => ParsedLine::Ignored,
     }
 }
 

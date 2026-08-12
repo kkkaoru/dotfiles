@@ -1,7 +1,7 @@
 use agent_client_protocol as acp;
 use serde_json::json;
 
-use super::chrome::{has_status_prefix, is_canned_progress, native_message, thought_chunk};
+use super::chrome::{has_status_prefix, native_message, strip_canned_progress, thought_chunk};
 use super::{ProgressEvent, TurnResult};
 use crate::command_code_acp::tool_chrome::{tool_kind, tool_raw_input};
 
@@ -43,25 +43,31 @@ pub fn progress_to_updates(event: &ProgressEvent) -> Vec<acp::SessionUpdate> {
                 acp::ToolCallUpdate::new(id.clone(), fields),
             )]
         }
-        ProgressEvent::Thought(text) | ProgressEvent::Status(text) if !is_canned_progress(text) => {
-            vec![thought_chunk(text)]
-        }
-        ProgressEvent::ThoughtEnd(text) if !is_canned_progress(text) => {
+        ProgressEvent::Thought(text) | ProgressEvent::Status(text) => thought_updates(text),
+        ProgressEvent::ThoughtEnd(text) => {
             // Coalescer normally collapses ThoughtEnd → Thought; keep a fallback.
-            vec![thought_chunk(text)]
+            thought_updates(text)
         }
-        ProgressEvent::Message(text) if !is_canned_progress(text) => {
-            if has_status_prefix(text.trim()) {
-                vec![thought_chunk(text)]
-            } else {
-                vec![native_message(text)]
-            }
-        }
-        ProgressEvent::Thought(_)
-        | ProgressEvent::ThoughtEnd(_)
-        | ProgressEvent::Status(_)
-        | ProgressEvent::Message(_)
-        | ProgressEvent::Note(_) => Vec::new(),
+        ProgressEvent::Message(text) => message_updates(text),
+        ProgressEvent::Note(_) => Vec::new(),
+    }
+}
+
+fn thought_updates(text: &str) -> Vec<acp::SessionUpdate> {
+    strip_canned_progress(text)
+        .map(|text| thought_chunk(&text))
+        .into_iter()
+        .collect()
+}
+
+fn message_updates(text: &str) -> Vec<acp::SessionUpdate> {
+    let Some(text) = strip_canned_progress(text) else {
+        return Vec::new();
+    };
+    if has_status_prefix(text.trim()) {
+        vec![thought_chunk(&text)]
+    } else {
+        vec![native_message(&text)]
     }
 }
 

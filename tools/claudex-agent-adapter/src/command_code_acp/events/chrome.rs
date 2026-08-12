@@ -15,10 +15,76 @@ pub(super) fn thought_chunk(text: &str) -> acp::SessionUpdate {
 }
 
 fn is_thought_for_chrome(text: &str) -> bool {
-    text.trim().to_ascii_lowercase().starts_with("thought for ")
+    let t = text.trim().to_ascii_lowercase();
+    let Some(rest) = t.strip_prefix("thought for ") else {
+        return false;
+    };
+    is_elapsed_duration(rest)
 }
 
-pub fn is_canned_progress(text: &str) -> bool {
+fn is_elapsed_duration(rest: &str) -> bool {
+    let compact: String = rest
+        .trim()
+        .trim_end_matches(['.', '…'])
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect();
+    if compact.is_empty() {
+        return true;
+    }
+    let (num, unit) = match compact.find(|c: char| c.is_ascii_alphabetic()) {
+        Some(idx) => compact.split_at(idx),
+        None => (compact.as_str(), ""),
+    };
+    if num.is_empty()
+        || num.bytes().filter(|b| *b == b'.').count() > 1
+        || !num.chars().all(|c| c.is_ascii_digit() || c == '.')
+    {
+        return false;
+    }
+    matches!(unit, "s" | "sec" | "secs" | "ms" | "second" | "seconds")
+}
+
+/// Hold char-by-char Muse deltas until `Thought for 15s` / launch chrome is complete.
+pub(crate) fn is_incomplete_canned_prefix(text: &str) -> bool {
+    if text.contains('\n') {
+        return false;
+    }
+    let t = text.trim();
+    if t.is_empty() {
+        return false;
+    }
+    let lower = t.to_ascii_lowercase();
+    if "thought for ".starts_with(&lower) {
+        return true;
+    }
+    if lower.starts_with("thought for ") && !is_thought_for_chrome(t) {
+        let rest = lower["thought for ".len()..].trim();
+        return rest.is_empty()
+            || rest
+                .chars()
+                .all(|c| c.is_ascii_digit() || c == '.' || c.is_whitespace())
+            || is_partial_time_unit(rest);
+    }
+    ["起動: Command Code", "モデル要求中:"]
+        .iter()
+        .any(|prefix| prefix.starts_with(t) && *prefix != t)
+}
+
+fn is_partial_time_unit(rest: &str) -> bool {
+    let Some(idx) = rest.find(|c: char| c.is_ascii_alphabetic()) else {
+        return false;
+    };
+    let (num, unit) = rest.split_at(idx);
+    if num.is_empty() || !num.chars().all(|c| c.is_ascii_digit() || c == '.') {
+        return false;
+    }
+    ["s", "sec", "secs", "ms", "second", "seconds"]
+        .iter()
+        .any(|full| full.starts_with(unit) && *full != unit)
+}
+
+fn is_canned_line(text: &str) -> bool {
     let t = text.trim().trim_start_matches(['●', '▶', '✓', '✗', ' ']);
     is_thought_for_chrome(t)
         || t.contains("ツール結果待ち")
@@ -34,6 +100,33 @@ pub fn is_canned_progress(text: &str) -> bool {
         || (t.starts_with("失敗:") && t.contains("。次:"))
         || (t.starts_with("ターン") && t.contains("開始"))
         || t.starts_with("モデル要求中:")
+}
+
+/// Drop canned Command Code chrome lines and keep any real remainder.
+pub fn strip_canned_progress(text: &str) -> Option<String> {
+    let mut kept = String::new();
+    for line in text.split_inclusive('\n') {
+        let body = line.trim_end_matches(['\n', '\r']);
+        if body.trim().is_empty() || is_canned_line(body) {
+            continue;
+        }
+        if !kept.is_empty() {
+            kept.push('\n');
+        }
+        kept.push_str(body.trim());
+    }
+    if kept.is_empty() {
+        return None;
+    }
+    if text.ends_with('\n') && !kept.ends_with('\n') {
+        kept.push('\n');
+    }
+    Some(kept)
+}
+
+/// True only when every non-empty line is canned chrome — not mixed CoT.
+pub fn is_canned_progress(text: &str) -> bool {
+    !text.trim().is_empty() && strip_canned_progress(text).is_none()
 }
 
 pub(super) fn has_status_prefix(text: &str) -> bool {

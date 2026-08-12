@@ -14,7 +14,7 @@ use tempfile::TempDir;
 use super::events::turn_cancelled_updates;
 use super::{
     DEFAULT_MAX_TURNS, DEFAULT_MODEL, LaunchSpec, Options, ParsedLine, ProgressCoalescer,
-    ProgressEvent, parse_stdout_line,
+    ProgressEvent, is_canned_progress, parse_stdout_line,
     process::{run_turn, run_turn_emitting},
     progress_to_updates, prompt_text, remaining_final_message, run_with, slim_headless_prompt,
 };
@@ -818,6 +818,32 @@ fn drops_canned_command_code_status_phrases() {
             "{canned}"
         );
     }
+}
+
+#[test]
+fn canned_progress_does_not_swallow_real_thoughts() {
+    assert!(is_canned_progress("Thought for 15s"));
+    assert!(is_canned_progress("Thought for 19s\n"));
+    assert!(is_canned_progress("起動: Command Code Muse Spark"));
+    assert!(!is_canned_progress("I'll read your .gitignore"));
+    assert!(
+        !is_canned_progress("Thought for 15s\nI'll read your .gitignore"),
+        "should_drop_command_code_progress must not treat mixed CoT as canned"
+    );
+    assert_eq!(
+        parse_stdout_line(
+            r#"{"type":"event","event":{"type":"thinking_end","text":"Thought for 15s\nI'll read your .gitignore"}}"#
+        ),
+        ParsedLine::Progress(ProgressEvent::ThoughtEnd(
+            "I'll read your .gitignore".to_owned()
+        ))
+    );
+    let mixed = progress_to_updates(&ProgressEvent::Thought(
+        "Thought for 15s\nI'll read your .gitignore".to_owned(),
+    ));
+    let thoughts = rendered_thoughts(&mixed);
+    assert!(thoughts.contains("I'll read your .gitignore"), "{thoughts}");
+    assert!(!thoughts.contains("Thought for"), "{thoughts}");
 }
 
 #[test]
