@@ -3,6 +3,8 @@
 //! Command Code has no native ACP. Claudex reuses `configured-acp` by launching
 //! this shim, which speaks ACP and drives `cmd -p --output-format json`.
 
+use std::future::Future;
+
 mod agent;
 mod coalesce;
 mod events;
@@ -26,10 +28,18 @@ pub use prompt::{is_command_code_model, prompt_text, slim_headless_prompt};
 use anyhow::Result;
 
 /// Parse process args and serve ACP on stdin/stdout.
-#[cfg_attr(coverage_nightly, coverage(off))]
 pub async fn run() -> Result<()> {
-    let options = Options::parse(std::env::args().skip(1))?;
-    serve(options).await
+    run_with(std::env::args().skip(1), serve).await
+}
+
+async fn run_with<I, S, F, Fut>(args: I, serve_agent: F) -> Result<()>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+    F: FnOnce(Options) -> Fut,
+    Fut: Future<Output = Result<()>>,
+{
+    serve_agent(Options::parse(args)?).await
 }
 
 #[cfg(test)]

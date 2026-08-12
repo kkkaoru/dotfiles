@@ -12,8 +12,8 @@ use super::runner::{
     run_commands, run_with,
 };
 use super::{
-    audit_report, coverage_percent, is_non_executable_source, is_test_only_source,
-    source_branch_percent, source_line_percent,
+    INSTRUMENTATION_EXCEPTIONS, audit_report, coverage_percent, is_non_executable_source,
+    is_test_only_source, source_branch_percent, source_line_percent,
 };
 
 #[test]
@@ -491,6 +491,9 @@ fn handles_zero_counts_and_test_source_names() {
     assert!(is_test_only_source(std::path::Path::new(
         "src/stream/tests.rs"
     )));
+    assert!(is_test_only_source(std::path::Path::new(
+        "src/grok_acp/test_support.rs"
+    )));
     assert!(!is_test_only_source(std::path::Path::new("src/module.rs")));
     assert!(!is_test_only_source(std::path::Path::new(
         "src/non-utf8-placeholder"
@@ -500,15 +503,11 @@ fn handles_zero_counts_and_test_source_names() {
 
 fn assert_non_executable_sources() {
     for path in [
-        "src/lib.rs",
         "src/anthropic.rs",
         "src/anthropic/bridge_instructions.rs",
         "src/anthropic/bridge_types.rs",
         "src/anthropic/subscription_request.rs",
         "src/anthropic/stream/turn.rs",
-        "src/command_code_acp/agent_acp.rs",
-        "src/command_code_acp/mod.rs",
-        "src/grok_acp/test_support.rs",
         "src/provider_config/types.rs",
     ] {
         assert!(
@@ -522,6 +521,174 @@ fn assert_non_executable_sources() {
     assert!(!is_non_executable_source(std::path::Path::new(
         "src/web_search/parse.rs"
     )));
+    for executable in [
+        "src/lib.rs",
+        "src/command_code_acp/agent_acp.rs",
+        "src/command_code_acp/mod.rs",
+        "src/grok_acp/test_support.rs",
+    ] {
+        assert!(!is_non_executable_source(std::path::Path::new(executable)));
+    }
+}
+
+#[test]
+fn production_coverage_exceptions_match_the_exact_manifest() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let production_files = production_source_files(root);
+    assert!(!production_files.is_empty());
+    assert_inventory_annotations(root, &production_files);
+    assert_exception_manifest(root, &production_files);
+}
+
+#[test]
+fn production_inventory_includes_build_script_and_rejects_its_hidden_annotation() {
+    let fixture = tempfile::tempdir().expect("production inventory fixture");
+    fs::create_dir(fixture.path().join("src")).expect("source directory");
+    fs::write(fixture.path().join("src/lib.rs"), "pub fn measured() {}\n").expect("source fixture");
+    fs::write(
+        fixture.path().join("build.rs"),
+        format!("{COVERAGE_OFF_ATTRIBUTE}\nfn main() {{}}\n"),
+    )
+    .expect("build script fixture");
+
+    let production_files = production_source_files(fixture.path());
+    assert!(production_files.contains(&std::path::PathBuf::from("build.rs")));
+    let result = std::panic::catch_unwind(|| {
+        assert_inventory_annotations(fixture.path(), &production_files);
+    });
+    assert!(
+        result.is_err(),
+        "unmanifested build.rs annotation must fail"
+    );
+}
+
+const COVERAGE_OFF_ATTRIBUTE: &str = "#[cfg_attr(coverage_nightly, coverage(off))]";
+
+fn exception_counts() -> std::collections::BTreeMap<&'static str, usize> {
+    INSTRUMENTATION_EXCEPTIONS.iter().fold(
+        std::collections::BTreeMap::<&str, usize>::new(),
+        |mut counts, exception| {
+            *counts.entry(exception.path).or_default() += 1;
+            counts
+        },
+    )
+}
+
+fn assert_inventory_annotations(root: &std::path::Path, production_files: &[std::path::PathBuf]) {
+    let expected_counts = exception_counts();
+    let mut actual_total = 0;
+    for relative in production_files {
+        let source = fs::read_to_string(root.join(relative)).expect("read production source");
+        let actual = production_coverage_off_lines(&source, COVERAGE_OFF_ATTRIBUTE);
+        actual_total += actual.len();
+        assert_eq!(
+            actual.len(),
+            expected_counts
+                .get(relative.to_str().expect("UTF-8 production path"))
+                .copied()
+                .unwrap_or_default(),
+            "{} has unmanifested or missing production coverage(off) at lines {actual:?}",
+            relative.display()
+        );
+    }
+    assert_eq!(
+        actual_total,
+        INSTRUMENTATION_EXCEPTIONS.len(),
+        "production coverage(off) count must equal the exact manifest"
+    );
+}
+
+fn assert_exception_manifest(root: &std::path::Path, production_files: &[std::path::PathBuf]) {
+    assert_eq!(INSTRUMENTATION_EXCEPTIONS.len(), 4);
+    assert_eq!(
+        INSTRUMENTATION_EXCEPTIONS
+            .iter()
+            .map(|exception| (exception.path, exception.symbol))
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        INSTRUMENTATION_EXCEPTIONS.len(),
+        "manifest path+symbol entries must be unique"
+    );
+    for path in exception_counts().keys() {
+        assert!(
+            production_files
+                .iter()
+                .any(|candidate| candidate == std::path::Path::new(path)),
+            "manifest path is not in the production inventory: {path}"
+        );
+    }
+
+    let mut rust_files = Vec::new();
+    crate::build_support::collect_rust_files(&root.join("src"), &mut rust_files);
+    for exception in INSTRUMENTATION_EXCEPTIONS {
+        assert_exception_entry(root, &rust_files, exception);
+    }
+}
+
+fn assert_exception_entry(
+    root: &std::path::Path,
+    rust_files: &[std::path::PathBuf],
+    exception: &super::report::InstrumentationException,
+) {
+    assert!(matches!(
+        exception.reason_category,
+        "async-trait-codegen" | "pre-exec-syscall"
+    ));
+    let source = fs::read_to_string(root.join(exception.path)).expect("read exception source");
+    let marker = format!(
+        "// coverage-exception: {}; symbol={}; evidence={}",
+        exception.reason_category, exception.symbol, exception.test_evidence
+    );
+    let marker_start = source
+        .find(&marker)
+        .unwrap_or_else(|| panic!("{} is missing marker `{marker}`", exception.path));
+    let after_marker = &source[marker_start + marker.len()..];
+    let attribute_start = after_marker
+        .find(COVERAGE_OFF_ATTRIBUTE)
+        .unwrap_or_else(|| panic!("{} marker is not followed by coverage(off)", exception.path));
+    assert!(
+        after_marker[attribute_start + COVERAGE_OFF_ATTRIBUTE.len()..].contains(exception.symbol)
+    );
+    let test_name = exception.test_evidence.rsplit("::").next().unwrap();
+    assert!(rust_files.iter().any(|path| {
+        fs::read_to_string(path).is_ok_and(|contents| contents.contains(&format!("fn {test_name}")))
+    }));
+}
+
+fn production_source_files(root: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut files = Vec::new();
+    crate::build_support::collect_rust_files(&root.join("src"), &mut files);
+    let mut production = files
+        .into_iter()
+        .filter_map(|path| path.strip_prefix(root).ok().map(std::path::Path::to_owned))
+        .filter(|path| !is_test_only_source(path))
+        .collect::<Vec<_>>();
+    if root.join("build.rs").is_file() {
+        production.push(std::path::PathBuf::from("build.rs"));
+    }
+    production
+}
+
+fn production_coverage_off_lines(source: &str, attribute: &str) -> Vec<usize> {
+    let lines = source.lines().collect::<Vec<_>>();
+    lines
+        .iter()
+        .enumerate()
+        .filter(|(index, line)| {
+            if line.trim() != attribute {
+                return false;
+            }
+            !lines[..*index]
+                .iter()
+                .rev()
+                .map(|line| line.trim())
+                .take_while(|line| {
+                    line.is_empty() || line.starts_with("//") || line.starts_with("#[")
+                })
+                .any(|line| line == "#[cfg(test)]")
+        })
+        .map(|(index, _)| index + 1)
+        .collect()
 }
 
 #[test]

@@ -2,18 +2,38 @@
 pub(super) type Io<T> = std::io::Result<T>;
 
 #[cfg(unix)]
-// Keep the pre-exec entrypoint as a single delegation; the range logic is tested below.
+// Keep the pre-exec entrypoint as a single delegation; range selection and
+// iteration are exercised through injected descriptor operations.
+// coverage-exception: pre-exec-syscall; symbol=fn close_inherited_descriptors; evidence=launcher::daemon_start::tests::closes_the_inherited_descriptor_range_via_the_injected_operation
 #[rustfmt::skip]
 #[cfg_attr(coverage_nightly, coverage(off))]
-pub(super) fn close_inherited_descriptors() -> Io<()> { close_system(close_file_descriptor) }
+pub(super) fn close_inherited_descriptors() -> Io<()> { close_system(|fd| unsafe { libc::close(fd); }) }
 
 #[cfg(unix)]
+// `Command::pre_exec` runs this after fork, where instrumented runtime state is
+// not safe to exercise in-process. Its sequencing and errors use the helper.
+// coverage-exception: pre-exec-syscall; symbol=fn detach_session_and_close_inherited_descriptors; evidence=launcher::daemon_start::tests::detaches_before_closing_descriptors_with_injected_operations
 #[cfg_attr(coverage_nightly, coverage(off))]
 pub(super) fn detach_session_and_close_inherited_descriptors() -> Io<()> {
-    if unsafe { libc::setsid() } == -1 {
-        return Err(std::io::Error::last_os_error());
-    }
-    close_inherited_descriptors()
+    detach_session_and_close_with(
+        || {
+            if unsafe { libc::setsid() } == -1 {
+                Err(std::io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        },
+        close_inherited_descriptors,
+    )
+}
+
+#[cfg(unix)]
+pub(super) fn detach_session_and_close_with(
+    mut detach: impl FnMut() -> Io<()>,
+    close: impl FnOnce() -> Io<()>,
+) -> Io<()> {
+    detach()?;
+    close()
 }
 
 #[cfg(unix)]
@@ -46,7 +66,7 @@ pub(super) fn close_descriptors_up_to(max_fd: i32, mut close: impl FnMut(i32)) {
     }
 }
 
-#[cfg(unix)]
+#[cfg(all(test, unix))]
 pub(super) fn close_file_descriptor(fd: i32) {
     unsafe {
         libc::close(fd);

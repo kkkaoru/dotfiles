@@ -6,6 +6,8 @@ use serde_json::Value;
 mod report;
 mod runner;
 #[cfg(test)]
+use report::INSTRUMENTATION_EXCEPTIONS;
+#[cfg(test)]
 use report::is_non_executable_source;
 #[cfg(test)]
 use report::is_test_only_source;

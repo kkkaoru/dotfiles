@@ -1,4 +1,5 @@
 use super::*;
+use crate::app_server::events::ThreadEventDispatcher;
 
 #[test]
 fn serializes_each_search_mode_and_keeps_the_default_compact() {
@@ -98,4 +99,101 @@ async fn rejects_empty_queries_and_missing_workers() {
         .await
         .expect_err("unrouted search worker");
     assert!(failed.to_string().contains("all WebSearch workers failed"));
+}
+
+#[tokio::test]
+async fn injected_worker_events_cover_native_results_and_prose_fallback() {
+    let dispatcher = ThreadEventDispatcher::default();
+    let events = dispatcher.subscribe("native-search");
+    dispatcher.dispatch(serde_json::json!({
+        "method":"item/started",
+        "params":{"threadId":"native-search", "item":{
+            "type":"webSearch",
+            "results":[{"title":"Native", "url":"https://example.test/native"}]
+        }}
+    }));
+    dispatcher.dispatch(serde_json::json!({
+        "method":"item/completed",
+        "params":{"threadId":"native-search", "item":{
+            "type":"webSearch",
+            "results":[{"title":"Duplicate", "url":"https://example.test/native"}]
+        }}
+    }));
+    dispatcher.dispatch(serde_json::json!({
+        "method":"item/agentMessage/delta",
+        "params":{"threadId":"native-search", "delta":"ignored prose"}
+    }));
+    dispatcher.dispatch(serde_json::json!({
+        "method":"turn/completed", "params":{"threadId":"native-search"}
+    }));
+    let native = run_worker_with_events("query", std::future::ready(Ok(events)))
+        .await
+        .expect("native search result");
+    assert_eq!(native.query, "query");
+    assert_eq!(native.search_count, 1);
+    assert_eq!(native.results.len(), 1);
+    assert_eq!(native.results[0].title, "Native");
+
+    let dispatcher = ThreadEventDispatcher::default();
+    let events = dispatcher.subscribe("fallback-search");
+    dispatcher.dispatch(serde_json::json!({
+        "method":"item/started",
+        "params":{"threadId":"fallback-search", "item":{"type":"webSearch"}}
+    }));
+    dispatcher.dispatch(serde_json::json!({
+        "method":"item/agentMessage/delta",
+        "params":{"threadId":"fallback-search", "delta":"https://example.test/fallback"}
+    }));
+    dispatcher.dispatch(serde_json::json!({
+        "method":"error", "params":{"threadId":"fallback-search"}
+    }));
+    let fallback = run_worker_with_events("fallback", std::future::ready(Ok(events)))
+        .await
+        .expect("fallback search result");
+    assert_eq!(fallback.search_count, 1);
+    assert_eq!(fallback.results[0].url, "https://example.test/fallback");
+}
+
+#[tokio::test]
+async fn injected_worker_start_and_timeout_failures_are_deterministic() {
+    let start_error = run_worker_with_events(
+        "query",
+        std::future::ready(Err(anyhow::anyhow!("injected start failure"))),
+    )
+    .await
+    .expect_err("injected start failure");
+    assert!(start_error.to_string().contains("injected start failure"));
+
+    let worker = WorkerRoute::new("worker".to_owned(), "model".to_owned(), "high".to_owned());
+    let response = SearchResponse {
+        query: "query".to_owned(),
+        results: Vec::new(),
+        search_count: 0,
+    };
+    assert_eq!(
+        wait_for_worker(
+            &worker,
+            Duration::from_secs(1),
+            std::future::ready(Ok(response.clone())),
+        )
+        .await
+        .expect("ready worker"),
+        response
+    );
+    let propagated = wait_for_worker(
+        &worker,
+        Duration::from_secs(1),
+        std::future::ready(Err(anyhow::anyhow!("worker failed"))),
+    )
+    .await
+    .expect_err("worker failure");
+    assert!(propagated.to_string().contains("worker failed"));
+    let timed_out = wait_for_worker(
+        &worker,
+        Duration::ZERO,
+        std::future::pending::<Result<SearchResponse>>(),
+    )
+    .await
+    .expect_err("pending worker timeout");
+    assert!(timed_out.to_string().contains("model timed out"));
 }

@@ -59,10 +59,6 @@ pub(super) fn prepare(program: &OsStr) -> Result<Option<PathBuf>> {
     )
 }
 
-// File-system provisioning is covered by the dedicated fixture tests below;
-// nightly LLVM maps the closure-heavy error context lines in this function to
-// synthetic regions, so do not let those mappings distort production gates.
-#[cfg_attr(coverage_nightly, coverage(off))]
 fn prepare_with(
     program: &OsStr,
     plugin_dir: Option<PathBuf>,

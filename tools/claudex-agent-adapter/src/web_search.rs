@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{future::Future, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -6,9 +6,7 @@ use serde_json::{Value, json};
 use tokio::process::Command;
 use tokio::time::timeout;
 
-use std::sync::Arc;
-
-use crate::{agent_backend::AgentBackend, provider_config::WorkerRoute};
+use crate::{agent_backend::AgentBackend, app_server::ThreadEvents, provider_config::WorkerRoute};
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct SearchResult {
@@ -60,9 +58,9 @@ pub(crate) async fn run(
     bail!("all WebSearch workers failed: {}", errors.join("; "))
 }
 
-// Live provider I/O and scheduler timeout outcomes are validated by the CCR
-// integration test; excluding this transport boundary keeps coverage stable
-// without depending on external credentials or wall-clock scheduling.
+// Live provider I/O is validated by the CCR integration test. Event decisions
+// and scheduler timeout outcomes use injected futures below for deterministic
+// unit coverage without external credentials or wall-clock waits.
 mod mode;
 // Keep parse mapped under coverage-branch: coverage(off) makes llvm omit the
 // file while expected_production_files still requires it (≥95% gate).
@@ -77,18 +75,36 @@ async fn run_worker_with_timeout(
     worker: &WorkerRoute,
     query: &str,
 ) -> Result<SearchResponse> {
-    match timeout(SEARCH_TIMEOUT, run_worker(backend, worker, query)).await {
+    wait_for_worker(worker, SEARCH_TIMEOUT, run_worker(backend, worker, query)).await
+}
+
+async fn wait_for_worker<F>(
+    worker: &WorkerRoute,
+    duration: Duration,
+    response: F,
+) -> Result<SearchResponse>
+where
+    F: Future<Output = Result<SearchResponse>>,
+{
+    match timeout(duration, response).await {
         Ok(result) => result,
         Err(_) => bail!("{} timed out", worker.model),
     }
 }
 
-#[cfg_attr(coverage_nightly, coverage(off))]
 async fn run_worker(
     backend: &Arc<AgentBackend>,
     worker: &WorkerRoute,
     query: &str,
 ) -> Result<SearchResponse> {
+    run_worker_with_events(query, start_worker(backend, worker, query)).await
+}
+
+async fn start_worker(
+    backend: &Arc<AgentBackend>,
+    worker: &WorkerRoute,
+    query: &str,
+) -> Result<ThreadEvents> {
     let params = json!({
         "model": worker.model,
         "baseInstructions": "Use only the Codex built-in live WebSearch for the exact query. Return the source title, URL, and a short snippet; do not perform filesystem, shell, MCP, Agent, or Task operations.",
@@ -118,6 +134,18 @@ async fn run_worker(
             }),
         )
         .await?;
+    Ok(events)
+}
+
+async fn run_worker_with_events<F>(query: &str, start: F) -> Result<SearchResponse>
+where
+    F: Future<Output = Result<ThreadEvents>>,
+{
+    let events = start.await?;
+    collect_worker_response(query, &events).await
+}
+
+async fn collect_worker_response(query: &str, events: &ThreadEvents) -> Result<SearchResponse> {
     let mut results = Vec::new();
     let mut answer = String::new();
     let mut search_count = 0;

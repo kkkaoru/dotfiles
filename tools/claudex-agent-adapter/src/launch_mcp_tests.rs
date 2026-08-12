@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 
 use super::{
     handle, launch_owner_from_params, launch_queue_path, read_message, record_tools_call_to,
-    run_with_io, sanitize_launch_owner, tools, write_message,
+    run_stdio_with, run_with_io, sanitize_launch_owner, tools, write_message,
 };
 
 static LAUNCH_OWNER_ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -135,6 +135,27 @@ fn run_with_io_switches_to_ndjson_then_stops_on_eof() {
     assert!(text.contains("\"id\":7"));
     assert!(text.contains("\"id\":8"));
     run_with_io(&mut Cursor::new(""), &mut Vec::new()).expect("empty stdin");
+}
+
+#[test]
+fn stdio_wrapper_initializes_both_handles_and_delegates_the_protocol_loop() {
+    let input_opened = std::cell::Cell::new(false);
+    let output_opened = std::cell::Cell::new(false);
+    let mut output = Vec::new();
+    run_stdio_with(
+        || {
+            input_opened.set(true);
+            Cursor::new(b"{\"jsonrpc\":\"2.0\",\"id\":11,\"method\":\"ping\"}\n")
+        },
+        || {
+            output_opened.set(true);
+            &mut output
+        },
+    )
+    .expect("injected stdio loop");
+    assert!(input_opened.get());
+    assert!(output_opened.get());
+    assert_eq!(serde_json::from_slice::<Value>(&output).unwrap()["id"], 11);
 }
 
 #[test]

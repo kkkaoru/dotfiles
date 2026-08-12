@@ -432,10 +432,16 @@ more than once for the same source location across unit and integration binaries
 are merged before the percentage is calculated. Test-only modules, structural
 module-wiring files, and mock process fixtures under `tests/fixtures` are
 excluded so the report measures executable production behavior. The ACP client
-trait shim, Command Code ACP Agent trait shim, and deterministic Grok plugin
-provisioning wrapper are the only production exclusions; each has a documented
-nightly LLVM mapping workaround next to the source while the delegated behavior
-remains covered by fixture tests. Both coverage commands include the Cargo build script, whose reusable
+trait shim (`grok_acp/client.rs::impl acp::Client for AcpClient`), Command Code
+ACP Agent trait shim (`command_code_acp/agent_acp.rs::impl acp::Agent for
+HeadlessAgent`), and the two post-fork/pre-exec syscall wrappers
+(`launcher/daemon_start_descriptors.rs::close_inherited_descriptors` and
+`detach_session_and_close_inherited_descriptors`) are the exact four production
+`coverage(off)` exceptions. Each exception is recorded by path, symbol, reason
+category, and deterministic helper-test evidence. A source-conformance test
+scans the complete production Rust inventory and rejects any added, removed, or
+unmanifested annotation; executable decision logic remains instrumented outside
+the minimal shims. Both coverage commands include the Cargo build script, whose reusable
 logic is measured through `src/build_support.rs`.
 
 Coverage uses an isolated `target/llvm-cov-*` directory. A later coverage run

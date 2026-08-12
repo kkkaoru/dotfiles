@@ -1,5 +1,7 @@
+#![cfg(unix)]
 #![cfg_attr(coverage_nightly, coverage(off))]
 
+use super::descriptors::detach_session_and_close_with;
 use super::{
     StartedDaemon, bounded_descriptor_limit, close_file_descriptor,
     close_inherited_descriptors_with, close_system, configure_process_group,
@@ -87,6 +89,40 @@ fn closes_the_inherited_descriptor_range_via_the_injected_operation() {
     assert_eq!(closed, vec![3, 4, 5]);
     close_system(|_| {}).expect("system descriptor limit is available");
     close_file_descriptor(-1);
+}
+
+#[test]
+fn detaches_before_closing_descriptors_with_injected_operations() {
+    let events = std::cell::RefCell::new(Vec::new());
+    detach_session_and_close_with(
+        || {
+            events.borrow_mut().push("detach");
+            Ok(())
+        },
+        || {
+            events.borrow_mut().push("close");
+            Ok(())
+        },
+    )
+    .expect("detach and close");
+    assert_eq!(events.into_inner(), ["detach", "close"]);
+
+    let close_called = std::cell::Cell::new(false);
+    let error = detach_session_and_close_with(
+        || Err(std::io::Error::other("detach failed")),
+        || {
+            close_called.set(true);
+            Ok(())
+        },
+    )
+    .expect_err("detach error");
+    assert_eq!(error.kind(), std::io::ErrorKind::Other);
+    assert!(!close_called.get());
+
+    let error =
+        detach_session_and_close_with(|| Ok(()), || Err(std::io::Error::other("close failed")))
+            .expect_err("close error");
+    assert_eq!(error.kind(), std::io::ErrorKind::Other);
 }
 
 #[test]

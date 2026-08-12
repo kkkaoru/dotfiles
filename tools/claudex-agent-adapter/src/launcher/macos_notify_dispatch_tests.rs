@@ -7,8 +7,7 @@ use std::{
 use super::{
     DelegateForceGuard, MACOS_NOTIFY_ENV, NotifyForceGuard, cli_wants_swap_banner,
     delegate_complete_notify, emit_cli_swap_complete_banner, interpret_delegate_status,
-    notifications_enabled, opt_in_cli_swap_notify, parse_notify_env, post, run_internal,
-    silence_swap_banners_for_replace,
+    notifications_enabled, parse_notify_env, post, run_internal, silence_swap_banners_for_replace,
 };
 use crate::launcher::{
     installed_adapter, launcher_logs,
@@ -74,7 +73,7 @@ fn opt_in_cli_swap_notify_defaults_on_only_when_unset() {
         cli_wants_swap_banner(),
         "unset CLAUDEX_MACOS_NOTIFY must default CLI banners on"
     );
-    opt_in_cli_swap_notify();
+    crate::launcher::opt_in_cli_swap_notify();
     assert_eq!(
         std::env::var_os(MACOS_NOTIFY_ENV).as_deref(),
         Some(std::ffi::OsStr::new("1")),
@@ -88,7 +87,7 @@ fn opt_in_cli_swap_notify_defaults_on_only_when_unset() {
         !cli_wants_swap_banner(),
         "after-install CLAUDEX_MACOS_NOTIFY=0 must keep banners off"
     );
-    opt_in_cli_swap_notify();
+    crate::launcher::opt_in_cli_swap_notify();
     assert_eq!(
         std::env::var_os(MACOS_NOTIFY_ENV).as_deref(),
         Some(std::ffi::OsStr::new("0")),

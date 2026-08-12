@@ -259,8 +259,10 @@ fn command_code_models_skip_acp_routing_prefix() {
 }
 
 #[tokio::test]
-async fn falls_back_to_the_first_permission_or_cancels() {
-    let client = AcpClient::new(Arc::new(ThreadEventDispatcher::default()));
+async fn client_inherent_handlers_cover_permissions_and_notifications() {
+    let events = Arc::new(ThreadEventDispatcher::default());
+    let receiver = events.subscribe("session");
+    let client = AcpClient::new(events);
     let request = permission_request(vec![acp::PermissionOption::new(
         "reject",
         "Reject",
@@ -279,11 +281,32 @@ async fn falls_back_to_the_first_permission_or_cancels() {
         serde_json::to_value(cancelled).unwrap()["outcome"]["outcome"],
         json!("cancelled")
     );
-}
+    let allow_once = client
+        .request_permission(permission_request(vec![
+            acp::PermissionOption::new(
+                "reject-first",
+                "Reject",
+                acp::PermissionOptionKind::RejectOnce,
+            ),
+            acp::PermissionOption::new("allow", "Allow", acp::PermissionOptionKind::AllowOnce),
+        ]))
+        .await
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(allow_once).unwrap()["outcome"]["optionId"],
+        json!("allow")
+    );
 
-#[tokio::test]
-async fn client_accepts_extension_notifications() {
-    let client = AcpClient::new(Arc::new(ThreadEventDispatcher::default()));
+    client
+        .session_notification(acp::SessionNotification::new(
+            "session",
+            acp::SessionUpdate::AgentMessageChunk(acp::ContentChunk::new(acp::ContentBlock::Text(
+                acp::TextContent::new("visible"),
+            ))),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(receiver.recv().await.unwrap()["params"]["delta"], "visible");
     let raw = RawValue::from_string("{}".to_owned()).unwrap();
     client
         .ext_notification(acp::ExtNotification::new("unrelated", Arc::from(raw)))

@@ -61,7 +61,6 @@ pub(super) fn settle_cancelled_prompt(
     }
 }
 
-#[cfg_attr(coverage_nightly, coverage(off))]
 pub(super) fn log_prompt_settlement_error(
     provider: AcpProvider,
     session_id: &str,

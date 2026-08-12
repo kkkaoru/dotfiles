@@ -14,6 +14,46 @@ const MINIMUM_PERCENT: f64 = 95.0;
 
 type BranchKey = (PathBuf, u64, u64, u64, u64);
 
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct InstrumentationException {
+    pub(super) path: &'static str,
+    pub(super) symbol: &'static str,
+    pub(super) reason_category: &'static str,
+    pub(super) test_evidence: &'static str,
+}
+
+/// Production `coverage(off)` is an instrumentation safety valve, not a way to
+/// pass the gate. Every exception keeps its executable helper instrumented and
+/// names the deterministic test that exercises that helper.
+#[cfg(test)]
+pub(super) const INSTRUMENTATION_EXCEPTIONS: &[InstrumentationException] = &[
+    InstrumentationException {
+        path: "src/command_code_acp/agent_acp.rs",
+        symbol: "impl acp::Agent for HeadlessAgent",
+        reason_category: "async-trait-codegen",
+        test_evidence: "command_code_acp::agent_tests::serve_io_runs_headless_turn_and_emits_tool_progress",
+    },
+    InstrumentationException {
+        path: "src/grok_acp/client.rs",
+        symbol: "impl acp::Client for AcpClient",
+        reason_category: "async-trait-codegen",
+        test_evidence: "grok_acp::tests::client_inherent_handlers_cover_permissions_and_notifications",
+    },
+    InstrumentationException {
+        path: "src/launcher/daemon_start_descriptors.rs",
+        symbol: "fn close_inherited_descriptors",
+        reason_category: "pre-exec-syscall",
+        test_evidence: "launcher::daemon_start::tests::closes_the_inherited_descriptor_range_via_the_injected_operation",
+    },
+    InstrumentationException {
+        path: "src/launcher/daemon_start_descriptors.rs",
+        symbol: "fn detach_session_and_close_inherited_descriptors",
+        reason_category: "pre-exec-syscall",
+        test_evidence: "launcher::daemon_start::tests::detaches_before_closing_descriptors_with_injected_operations",
+    },
+];
+
 pub(super) fn production_line_failures(root: &Path, data: &Value) -> Result<Vec<String>> {
     let reported = data
         .get("files")
@@ -60,23 +100,18 @@ pub(super) fn production_file<'a>(root: &Path, file: &'a Value) -> Option<(PathB
 
 pub(super) fn is_test_only_source(path: &Path) -> bool {
     crate::build_support::is_test_source(path)
+        || path.file_name().and_then(|name| name.to_str()) == Some("test_support.rs")
 }
 
 /// Source files that only wire modules together or declare data types have no
 /// executable behavior for LLVM to measure. Keeping them out of the gate
 /// prevents synthetic declaration mappings from masking real code coverage.
 pub(super) fn is_non_executable_source(path: &Path) -> bool {
-    path == Path::new("src/lib.rs")
-        || path == Path::new("src/anthropic.rs")
+    path == Path::new("src/anthropic.rs")
         || path == Path::new("src/anthropic/bridge_instructions.rs")
         || path == Path::new("src/anthropic/bridge_types.rs")
         || path == Path::new("src/anthropic/subscription_request.rs")
         || path == Path::new("src/anthropic/stream/turn.rs")
-        // Nightly branch instrumentation cannot map async-trait Agent shims.
-        || path == Path::new("src/command_code_acp/agent_acp.rs")
-        // Re-exports plus a stdio entrypoint covered by the binary integration path.
-        || path == Path::new("src/command_code_acp/mod.rs")
-        || path == Path::new("src/grok_acp/test_support.rs")
         || path == Path::new("src/provider_config/types.rs")
 }
 

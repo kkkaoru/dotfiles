@@ -66,11 +66,23 @@ pub(crate) fn launch_owner_from_params(params: &Value) -> Option<String> {
         .map(str::to_owned)
 }
 
-#[cfg_attr(coverage_nightly, coverage(off))]
 pub fn run_stdio() -> Result<()> {
     let stdin = io::stdin();
-    let mut stdout = io::stdout();
-    run_with_io(&mut stdin.lock(), &mut stdout)
+    let stdout = io::stdout();
+    run_stdio_with(|| stdin.lock(), || stdout)
+}
+
+fn run_stdio_with<R, W>(
+    open_reader: impl FnOnce() -> R,
+    open_writer: impl FnOnce() -> W,
+) -> Result<()>
+where
+    R: BufRead,
+    W: Write,
+{
+    let mut reader = open_reader();
+    let mut writer = open_writer();
+    run_with_io(&mut reader, &mut writer)
 }
 
 pub(super) fn run_with_io(reader: &mut impl BufRead, stdout: &mut impl Write) -> Result<()> {

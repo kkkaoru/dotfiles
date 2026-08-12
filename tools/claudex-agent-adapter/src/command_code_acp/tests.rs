@@ -16,7 +16,7 @@ use super::{
     DEFAULT_MAX_TURNS, DEFAULT_MODEL, LaunchSpec, Options, ParsedLine, ProgressCoalescer,
     ProgressEvent, parse_stdout_line,
     process::{run_turn, run_turn_emitting},
-    progress_to_updates, prompt_text, remaining_final_message, slim_headless_prompt,
+    progress_to_updates, prompt_text, remaining_final_message, run_with, slim_headless_prompt,
 };
 
 fn assert_headless_base_flags(argv: &[String]) {
@@ -130,6 +130,36 @@ fn parse_options_defaults_and_overrides() {
         Some(value) => unsafe { std::env::set_var("HOME", value) },
         None => unsafe { std::env::remove_var("HOME") },
     }
+}
+
+#[tokio::test]
+async fn command_entrypoint_parses_before_calling_the_injected_server() {
+    let observed = std::cell::RefCell::new(None);
+    run_with(
+        ["--model", "test-model", "--cmd", "/tmp/test-command-code"],
+        |options| {
+            observed.replace(Some(options));
+            std::future::ready(Ok(()))
+        },
+    )
+    .await
+    .expect("injected command-code server");
+    let options = observed.into_inner().expect("parsed options");
+    assert_eq!(options.spec.model, "test-model");
+    assert_eq!(
+        options.spec.program,
+        PathBuf::from("/tmp/test-command-code")
+    );
+
+    let called = std::cell::Cell::new(false);
+    let error = run_with(["--unsupported"], |_| {
+        called.set(true);
+        std::future::ready(Ok(()))
+    })
+    .await
+    .expect_err("invalid arguments must stop before serving");
+    assert!(error.to_string().contains("unsupported"));
+    assert!(!called.get());
 }
 
 #[test]
