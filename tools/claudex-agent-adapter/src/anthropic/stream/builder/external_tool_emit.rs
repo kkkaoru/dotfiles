@@ -73,9 +73,11 @@ impl SegmentBuilder {
         if !self.is_subagent {
             return self.close_open_blocks(stream).await;
         }
-        // Close ZWSP/CoT so CC 2.1 shows native Read/Bash (or Agent) cards
-        // instead of Slithering on an open thinking block.
+        // Replace live provider chrome with clean buffered CoT before closing.
+        // Waiting until finish can no longer reconcile A + tool chrome + B
+        // with the A+B buffer and would synthesize an unstarted SSE block.
         self.close_text_block(stream).await?;
+        self.commit_pending_reasoning_for_transcript(None).await?;
         self.thinking
             .close_before_executable_tool_use(&mut self.blocks, stream)
             .await

@@ -1621,6 +1621,168 @@ async fn gpt_subagent_textdelta_does_not_bury_live_tool_progress() {
     assert_codex_cot_in_transcript(&mut builder, "Inspect the neon pooler GUCs").await;
 }
 
+async fn feed_mixed_reasoning_and_provider_progress(
+    builder: &mut SegmentBuilder,
+    sender: &mpsc::Sender<Result<Bytes, Infallible>>,
+) {
+    builder
+        .model_output_event(
+            &raw_reasoning_textdelta("reasoning-a", "UNIQUE_REASONING_A\n"),
+            Some(sender),
+        )
+        .await
+        .expect("reasoning A");
+    builder
+        .provider_tool_call(
+            &json!({"params":{
+                "callId":"provider-read",
+                "tool":"Read",
+                "title":"PROVIDER_OWNED_PROGRESS",
+                "arguments":{"path":"provider-only.txt"}
+            }}),
+            Some(sender),
+        )
+        .await
+        .expect("provider-owned progress");
+    builder
+        .model_output_event(
+            &raw_reasoning_textdelta("reasoning-b", "UNIQUE_REASONING_B\n"),
+            Some(sender),
+        )
+        .await
+        .expect("reasoning B");
+}
+
+fn parse_sse_payloads(raw_frames: &[String]) -> Vec<Value> {
+    raw_frames
+        .iter()
+        .map(|frame| {
+            let data = frame
+                .lines()
+                .find_map(|line| line.strip_prefix("data: "))
+                .expect("SSE data");
+            serde_json::from_str::<Value>(data).expect("JSON frame")
+        })
+        .collect()
+}
+
+fn thinking_delta_contains(payload: &Value, index: usize, needle: &str) -> bool {
+    payload["type"] == "content_block_delta"
+        && payload["index"] == index
+        && payload["delta"]["thinking"]
+            .as_str()
+            .is_some_and(|text| text.contains(needle))
+}
+
+fn assert_mixed_handoff_sse(payloads: &[Value]) {
+    let mut open_index = None;
+    let mut next_index = 0;
+    let mut started_types = Vec::new();
+    for payload in payloads {
+        track_content_block_frame(
+            payload,
+            &mut open_index,
+            &mut next_index,
+            &mut started_types,
+        );
+    }
+    assert_eq!(open_index, None, "all streamed blocks must be closed");
+    assert_eq!(
+        started_types,
+        vec![json!("thinking"), json!("thinking"), json!("tool_use")],
+        "finish must not synthesize an unstarted thinking block: {payloads:?}"
+    );
+    let signature_indices = payloads
+        .iter()
+        .filter(|payload| {
+            payload.pointer("/delta/type").and_then(Value::as_str) == Some("signature_delta")
+        })
+        .filter_map(|payload| payload["index"].as_u64())
+        .collect::<Vec<_>>();
+    assert_eq!(signature_indices, vec![0, 1]);
+    let stop_indices = payloads
+        .iter()
+        .filter(|payload| payload["type"] == "content_block_stop")
+        .filter_map(|payload| payload["index"].as_u64())
+        .collect::<Vec<_>>();
+    assert_eq!(stop_indices, vec![0, 1, 2]);
+    for needle in [
+        "UNIQUE_REASONING_A",
+        "PROVIDER_OWNED_PROGRESS",
+        "UNIQUE_REASONING_B",
+    ] {
+        assert!(
+            payloads
+                .iter()
+                .any(|payload| thinking_delta_contains(payload, 1, needle)),
+            "{needle} must stream on the post-prime thinking index: {payloads:?}"
+        );
+    }
+}
+
+fn assert_clean_mixed_handoff_transcript(segment: &crate::anthropic::Segment) {
+    let block_types = segment
+        .blocks
+        .iter()
+        .filter_map(|block| block["type"].as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(block_types, vec!["thinking", "tool_use"]);
+    let thinking = segment
+        .blocks
+        .iter()
+        .filter_map(|block| {
+            (block["type"] == "thinking")
+                .then(|| block["thinking"].as_str())
+                .flatten()
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        thinking,
+        vec!["UNIQUE_REASONING_A\nUNIQUE_REASONING_B"],
+        "transcript must commit CoT exactly once without provider chrome"
+    );
+    assert_eq!(
+        segment
+            .blocks
+            .iter()
+            .filter(|block| block["type"] == "tool_use")
+            .count(),
+        1,
+        "native Read must remain the only executable tool block"
+    );
+    let transcript = serde_json::to_string(&segment.blocks).expect("transcript JSON");
+    for sentinel in ["UNIQUE_REASONING_A", "UNIQUE_REASONING_B"] {
+        assert_eq!(transcript.matches(sentinel).count(), 1);
+    }
+    assert!(!transcript.contains("PROVIDER_OWNED_PROGRESS"));
+}
+
+#[tokio::test]
+async fn subagent_mixed_reasoning_provider_progress_and_read_has_no_ghost_thinking_block() {
+    let (_root, _app, bridge, mut session) = disconnect_fixture().await;
+    Arc::get_mut(&mut session)
+        .expect("unique session")
+        .external_tool_names
+        .insert("cc_Read_0".to_owned(), "Read".to_owned());
+    let (sender, receiver) = mpsc::channel::<Result<Bytes, Infallible>>(32);
+    assert!(super::prime_subagent_sse(
+        &sender,
+        "gpt-5.6-luna",
+        1,
+        true,
+        None
+    ));
+    let mut builder = SegmentBuilder::for_turn(1, true, "gpt-5.6-luna").with_primed_thinking();
+    feed_mixed_reasoning_and_provider_progress(&mut builder, &sender).await;
+    feed_subagent_read(&mut builder, &bridge, &session, "native-read", &sender).await;
+    let segment = builder.finish(Some(&sender)).await.expect("tool handoff");
+    drop(sender);
+
+    let payloads = parse_sse_payloads(&drain_sse_frame_list(receiver).await);
+    assert_mixed_handoff_sse(&payloads);
+    assert_clean_mixed_handoff_transcript(&segment);
+}
+
 #[tokio::test]
 async fn gpt_summary_still_hides_raw_textdelta() {
     let mut builder = SegmentBuilder::for_turn(1, true, "gpt-5.6-luna");
@@ -3015,7 +3177,7 @@ async fn forwards_live_task_output_to_claude_code() {
 }
 
 #[tokio::test]
-async fn subagent_codex_tool_use_keeps_thinking_open_so_viewer_stays_live() {
+async fn subagent_codex_tool_use_closes_thinking_before_native_card() {
     let (_root, _app, bridge, mut session) = disconnect_fixture().await;
     Arc::get_mut(&mut session)
         .expect("unique session")
@@ -3092,7 +3254,7 @@ async fn fugu_codex_closes_thinking_before_native_read() {
 }
 
 #[tokio::test]
-async fn subagent_codex_external_batch_finish_keeps_thinking_open_on_sse() {
+async fn subagent_codex_external_batch_finish_does_not_reopen_thinking() {
     // Inverted: close thinking before native Read/Bash so CC 2.1 does not
     // Slithering-hide the tool card. Keep-open was the bug.
     let (_root, app, bridge, mut session) = disconnect_fixture().await;

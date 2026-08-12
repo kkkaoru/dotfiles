@@ -82,7 +82,7 @@ impl SegmentBuilder {
         self.close_text_block(stream).await
     }
 
-    async fn commit_pending_reasoning_for_transcript(
+    pub(super) async fn commit_pending_reasoning_for_transcript(
         &mut self,
         stream: Option<&StreamSender>,
     ) -> Result<()> {
