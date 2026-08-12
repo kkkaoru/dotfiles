@@ -44,11 +44,7 @@ pub(crate) fn is_child_runtime() -> bool {
 pub(crate) fn load_json_object(path: &std::path::Path) -> Option<Value> {
     let text = fs::read_to_string(path).ok()?;
     let value: Value = serde_json::from_str(&text).ok()?;
-    if value.is_object() {
-        Some(value)
-    } else {
-        None
-    }
+    if value.is_object() { Some(value) } else { None }
 }
 
 pub(crate) fn now_seconds() -> f64 {

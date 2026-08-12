@@ -83,21 +83,37 @@ fn main_session_bash_allowed_when_delegation_required() {
 }
 
 #[test]
-fn main_session_delegated_tools_allowed_with_advisory() {
+fn main_session_atomic_lookup_tools_allowed_when_delegation_required() {
     let tmp = TempDir::new().unwrap();
     write_delegation(tmp.path(), true);
-    for tool_name in [
-        "Read",
-        "Write",
-        "Edit",
-        "MultiEdit",
-        "NotebookEdit",
-        "Grep",
-        "Glob",
-        "LS",
-        "WebSearch",
-        "WebFetch",
-    ] {
+    for tool_name in ["Read", "Grep", "Glob", "LS", "WebSearch", "WebFetch"] {
+        let output = run(
+            json!({
+                "hook_event_name": "PreToolUse",
+                "tool_name": tool_name,
+                "tool_input": {"file_path": "/tmp/x", "pattern": "x", "url": "https://example.com"},
+                "session_id": "sess-main"
+            }),
+            tmp.path(),
+            &[],
+        );
+        assert_eq!(
+            output,
+            json!({}),
+            "atomic lookup `{tool_name}` must stay in main"
+        );
+        let decision = output
+            .pointer("/hookSpecificOutput/permissionDecision")
+            .and_then(Value::as_str);
+        assert_ne!(decision, Some("deny"), "unexpected denial for {tool_name}");
+    }
+}
+
+#[test]
+fn main_session_mutating_tools_denied_when_delegation_required() {
+    let tmp = TempDir::new().unwrap();
+    write_delegation(tmp.path(), true);
+    for tool_name in ["Write", "Edit", "MultiEdit", "NotebookEdit"] {
         let output = run(
             json!({
                 "hook_event_name": "PreToolUse",
@@ -113,45 +129,17 @@ fn main_session_delegated_tools_allowed_with_advisory() {
             .and_then(Value::as_str);
         assert_eq!(
             decision,
-            Some("allow"),
+            Some("deny"),
             "unexpected decision for {tool_name}"
         );
-        assert_ne!(decision, Some("deny"), "unexpected denial for {tool_name}");
         let reason = output
             .pointer("/hookSpecificOutput/permissionDecisionReason")
             .and_then(Value::as_str)
             .unwrap();
         assert!(reason.contains(tool_name));
         assert!(reason.contains("Agent/Task"));
-        assert!(reason.contains("fallback-only"));
+        assert!(reason.contains("may stay in main"));
     }
-}
-
-#[test]
-fn main_session_write_allowed_with_delegation_advisory() {
-    let tmp = TempDir::new().unwrap();
-    write_delegation(tmp.path(), true);
-    let output = run(
-        json!({
-            "hook_event_name": "PreToolUse",
-            "tool_name": "Write",
-            "tool_input": {"file_path": "/tmp/x", "content": "hello"},
-            "session_id": "sess-main"
-        }),
-        tmp.path(),
-        &[],
-    );
-    let decision = output
-        .pointer("/hookSpecificOutput/permissionDecision")
-        .and_then(Value::as_str);
-    assert_eq!(decision, Some("allow"));
-    assert_ne!(decision, Some("deny"));
-    let reason = output
-        .pointer("/hookSpecificOutput/permissionDecisionReason")
-        .and_then(Value::as_str)
-        .unwrap();
-    assert!(reason.contains("Agent/Task"));
-    assert!(reason.contains("fallback-only"));
 }
 
 #[test]
@@ -372,12 +360,86 @@ fn allow_main_tools_override() {
     let output = run(
         json!({
             "hook_event_name": "PreToolUse",
-            "tool_name": "Read",
-            "tool_input": {"file_path": "/tmp/x"},
+            "tool_name": "Write",
+            "tool_input": {"file_path": "/tmp/x", "content": "hello"},
             "session_id": "sess"
         }),
         tmp.path(),
         &[("CLAUDEX_ALLOW_MAIN_TOOLS", Some("1"))],
+    );
+    assert_eq!(output, json!({}));
+}
+
+#[test]
+fn main_session_write_allowed_when_delegation_not_required() {
+    let tmp = TempDir::new().unwrap();
+    write_delegation(tmp.path(), false);
+    let output = run(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": "/tmp/x", "content": "hello"},
+            "session_id": "sess-main"
+        }),
+        tmp.path(),
+        &[],
+    );
+    assert_eq!(output, json!({}));
+}
+
+#[test]
+fn routing_cache_selected_workers_denies_main_write() {
+    let tmp = TempDir::new().unwrap();
+    fs::write(
+        tmp.path().join("usage-routing.json"),
+        json!({
+            "summary": {
+                "selected_workers": [{"agent": "claudex-grok"}]
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let output = run(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": "/tmp/x", "content": "hello"},
+            "session_id": "sess-main"
+        }),
+        tmp.path(),
+        &[],
+    );
+    assert_eq!(
+        output
+            .pointer("/hookSpecificOutput/permissionDecision")
+            .and_then(Value::as_str),
+        Some("deny")
+    );
+}
+
+#[test]
+fn routing_cache_selected_workers_allows_main_read() {
+    let tmp = TempDir::new().unwrap();
+    fs::write(
+        tmp.path().join("usage-routing.json"),
+        json!({
+            "summary": {
+                "selected_workers": [{"agent": "claudex-grok"}]
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let output = run(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Read",
+            "tool_input": {"file_path": "/tmp/x"},
+            "session_id": "sess-main"
+        }),
+        tmp.path(),
+        &[],
     );
     assert_eq!(output, json!({}));
 }

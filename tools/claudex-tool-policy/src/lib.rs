@@ -2,8 +2,9 @@
 //!
 //! Claude Code hooks feed one JSON event on stdin. When `CLAUDEX_ACTIVE=1`:
 //!
-//! * PreToolUse in the **main** session only denies file/search tools while routing
-//!   says delegation is required. SubAgents keep the full tool set.
+//! * PreToolUse in the **main** session denies Write/Edit while routing says
+//!   delegation is required. Atomic Read/Grep/Glob/LS/WebSearch/WebFetch may stay
+//!   in main. SubAgents keep the full tool set.
 //! * SubAgent identity is detected via `agent_id` / `agent_type` / subagent transcript
 //!   path so main-session denials never apply to workers.
 //! * PreToolUse Write/Edit acquires a per-path lock for the calling `agent_id` so
@@ -40,7 +41,11 @@ pub fn run() -> io::Result<i32> {
         return Ok(0);
     };
     let result = handle_event(obj);
-    writeln!(io::stdout(), "{}", serde_json::to_string(&result).unwrap_or_else(|_| "{}".into()))?;
+    writeln!(
+        io::stdout(),
+        "{}",
+        serde_json::to_string(&result).unwrap_or_else(|_| "{}".into())
+    )?;
     Ok(0)
 }
 

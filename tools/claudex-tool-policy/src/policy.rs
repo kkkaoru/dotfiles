@@ -1,27 +1,21 @@
 use crate::allow;
+use crate::deny;
 use crate::env::{env_truthy, load_json_object, nonempty_str};
 use crate::locks::{acquire_locks, release_agent_locks, release_paths, tool_file_paths};
 use serde_json::{Map, Value};
 use std::collections::HashSet;
 use std::sync::LazyLock;
 
-pub(crate) static DENIED_MAIN_TOOLS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
-    HashSet::from([
-        "Read",
-        "Write",
-        "Edit",
-        "MultiEdit",
-        "NotebookEdit",
-        "Grep",
-        "Glob",
-        "LS",
-        "WebSearch",
-        "WebFetch",
-    ])
-});
+/// Atomic lookups may stay in the main session even when delegation is required.
+pub(crate) static ATOMIC_LOOKUP_TOOLS: LazyLock<HashSet<&'static str>> =
+    LazyLock::new(|| HashSet::from(["Read", "Grep", "Glob", "LS", "WebSearch", "WebFetch"]));
 
 pub(crate) static MUTATING_FILE_TOOLS: LazyLock<HashSet<&'static str>> =
     LazyLock::new(|| HashSet::from(["Write", "Edit", "MultiEdit", "NotebookEdit"]));
+
+fn is_main_session_policy_tool(tool_name: &str) -> bool {
+    ATOMIC_LOOKUP_TOOLS.contains(tool_name) || MUTATING_FILE_TOOLS.contains(tool_name)
+}
 
 fn workers_selected_in_routing_cache() -> bool {
     let cached = load_json_object(&crate::env::cache_dir().join("usage-routing.json"));
@@ -87,26 +81,29 @@ fn handle_subagent_pre_tool_use(
     {
         return denied;
     }
-    if DENIED_MAIN_TOOLS.contains(tool_name) {
+    if is_main_session_policy_tool(tool_name) {
         return allow(
             Some("PreToolUse"),
             Some(
                 "Claudex SubAgent keeps the full tool set; main-session \
-                 Read/Write/Edit/search denials do not apply here.",
+                 Write/Edit denials do not apply here.",
             ),
         );
     }
     allow(None, None)
 }
 
-fn allow_main_tool_with_advisory(tool_name: &str) -> Value {
-    allow(
-        Some("PreToolUse"),
-        Some(&format!(
-            "Claudex is allowing this main-session `{tool_name}` request. Routed workers are \
-             available; prefer Agent/Task for file and search work and keep direct main-session \
-             execution as fallback-only."
-        )),
+fn deny_main_tool(tool_name: &str) -> Value {
+    deny(
+        "PreToolUse",
+        &format!(
+            "Claudex main session must not run `{tool_name}` while routed workers are \
+             available. Launch Agent/Task with a selected_workers entry and keep \
+             Write/Edit in that SubAgent. Atomic Read/Grep/Glob/LS/WebSearch/WebFetch \
+             may stay in main. Bash remains allowed in main for lightweight \
+             orchestration. Set CLAUDEX_ALLOW_MAIN_TOOLS=1 only for an explicit \
+             emergency override."
+        ),
     )
 }
 
@@ -123,8 +120,8 @@ fn handle_pre_tool_use(payload: &Map<String, Value>) -> Value {
     if is_subagent_session(payload) {
         return handle_subagent_pre_tool_use(payload, tool_name, tool_input);
     }
-    if DENIED_MAIN_TOOLS.contains(tool_name) && delegation_required() {
-        return allow_main_tool_with_advisory(tool_name);
+    if MUTATING_FILE_TOOLS.contains(tool_name) && delegation_required() {
+        return deny_main_tool(tool_name);
     }
     allow(None, None)
 }
