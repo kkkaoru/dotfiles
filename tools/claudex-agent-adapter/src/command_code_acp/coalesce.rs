@@ -5,9 +5,11 @@ use super::events::ProgressEvent;
 pub struct ProgressCoalescer {
     thought: String,
     message: String,
-    /// True after any Thought was flushed in the current unit. Resets on tools
-    /// / status so a later delta-less `thinking_end` can still land.
-    thought_emitted: bool,
+    /// Thought text already flushed in the current unit. Resets on tools /
+    /// status so a later delta-less `thinking_end` can still land. Used to
+    /// emit only the unseen suffix when Muse sends a full snapshot after
+    /// partial deltas (avoids Thought-for flicker from full replay).
+    thought_emitted: String,
 }
 
 const COALESCE_CHARS: usize = 80;
@@ -21,7 +23,7 @@ impl ProgressCoalescer {
             ProgressEvent::Message(text) => self.push_text(false, text),
             other => {
                 let mut out = self.flush_all();
-                self.thought_emitted = false;
+                self.thought_emitted.clear();
                 out.push(other);
                 out
             }
@@ -30,16 +32,16 @@ impl ProgressCoalescer {
 
     fn push_thought_end(&mut self, text: String) -> Vec<ProgressEvent> {
         let mut out: Vec<ProgressEvent> = self.take_thought().into_iter().collect();
-        if !out.is_empty() {
-            self.thought_emitted = true;
-            // Deltas already cover this unit; ignore the full snapshot replay.
-            return out;
+        for event in &out {
+            if let ProgressEvent::Thought(chunk) = event {
+                self.thought_emitted.push_str(chunk);
+            }
         }
-        if self.thought_emitted || text.trim().is_empty() {
+        let Some(rest) = thought_end_remainder(&self.thought_emitted, &text) else {
             return out;
-        }
-        self.thought_emitted = true;
-        out.push(ProgressEvent::Thought(text));
+        };
+        self.thought_emitted.push_str(&rest);
+        out.push(ProgressEvent::Thought(rest));
         out
     }
 
@@ -56,8 +58,10 @@ impl ProgressCoalescer {
         }
         if thought {
             let flushed = self.take_thought().into_iter().collect::<Vec<_>>();
-            if !flushed.is_empty() {
-                self.thought_emitted = true;
+            for event in &flushed {
+                if let ProgressEvent::Thought(chunk) = event {
+                    self.thought_emitted.push_str(chunk);
+                }
             }
             flushed
         } else {
@@ -72,7 +76,9 @@ impl ProgressCoalescer {
     fn flush_all(&mut self) -> Vec<ProgressEvent> {
         let mut out = Vec::new();
         if let Some(thought) = self.take_thought() {
-            self.thought_emitted = true;
+            if let ProgressEvent::Thought(chunk) = &thought {
+                self.thought_emitted.push_str(chunk);
+            }
             out.push(thought);
         }
         out.extend(self.take_message());
@@ -87,6 +93,27 @@ impl ProgressCoalescer {
     fn take_message(&mut self) -> Option<ProgressEvent> {
         let text = std::mem::take(&mut self.message);
         nonempty(text).map(ProgressEvent::Message)
+    }
+}
+
+/// Unseen suffix of a Muse `thinking_end` snapshot, or `None` to ignore.
+fn thought_end_remainder(emitted: &str, snapshot: &str) -> Option<String> {
+    let snapshot = snapshot.trim();
+    if snapshot.is_empty() {
+        return None;
+    }
+    let emitted = emitted.trim();
+    if emitted.is_empty() {
+        return Some(snapshot.to_owned());
+    }
+    if snapshot == emitted || emitted.contains(snapshot) {
+        return None;
+    }
+    let rest = snapshot.strip_prefix(emitted)?.trim_start();
+    if rest.is_empty() {
+        None
+    } else {
+        Some(rest.to_owned())
     }
 }
 

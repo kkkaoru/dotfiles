@@ -84,16 +84,17 @@ pub(in crate::anthropic::stream) fn is_provider_status_line(line: &str) -> bool 
 }
 
 fn is_muse_plan_status_line(line: &str) -> bool {
-    if line.starts_with("Plan:") {
-        return true;
-    }
-    let Some(rest) = line.strip_prefix("Plan ") else {
+    let rest = if let Some(rest) = line.strip_prefix("Plan:") {
+        rest.trim_start()
+    } else if let Some(rest) = line.strip_prefix("Plan ") {
+        rest
+    } else {
         return false;
     };
-    // Real CoT: "Plan the migration", "Plan to inspect". Muse chrome is a
-    // short imperative like "Plan next" without a sentence object.
+    // Real CoT: "Plan the migration", "Plan: migrate the pooler". Muse chrome
+    // is a short imperative like "Plan next" / "Plan: drafted".
     let first = rest.split_whitespace().next().unwrap_or("");
-    matches!(first, "next" | "drafted" | "ready" | "done") && line.chars().count() <= 32
+    matches!(first, "next" | "drafted" | "ready" | "done" | "") && line.chars().count() <= 32
 }
 
 /// Muse Spark often emits `Status: …Status: …` without newlines. Keep only the last

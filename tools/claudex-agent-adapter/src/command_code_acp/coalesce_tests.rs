@@ -49,7 +49,7 @@ fn thinking_end_snapshot_lands_when_muse_skipped_deltas() {
 }
 
 #[test]
-fn thinking_end_snapshot_is_ignored_after_streamed_deltas() {
+fn thinking_end_snapshot_is_ignored_when_exact_replay_of_deltas() {
     let mut coalescer = ProgressCoalescer::default();
     assert_eq!(
         coalescer.push(ProgressEvent::Thought("planning live.".to_owned())),
@@ -57,11 +57,27 @@ fn thinking_end_snapshot_is_ignored_after_streamed_deltas() {
     );
     assert!(
         coalescer
-            .push(ProgressEvent::ThoughtEnd(
-                "planning live. full snapshot replay".to_owned()
-            ))
+            .push(ProgressEvent::ThoughtEnd("planning live.".to_owned()))
             .is_empty(),
-        "replaying Muse thinking_end after deltas must not reopen Thought-for chrome"
+        "exact Muse thinking_end replay must not reopen Thought-for chrome"
+    );
+}
+
+#[test]
+fn thinking_end_emits_unseen_suffix_after_partial_deltas() {
+    let mut coalescer = ProgressCoalescer::default();
+    assert_eq!(
+        coalescer.push(ProgressEvent::Thought("planning live.".to_owned())),
+        vec![ProgressEvent::Thought("planning live.".to_owned())]
+    );
+    assert_eq!(
+        coalescer.push(ProgressEvent::ThoughtEnd(
+            "planning live. then inspect the neon pooler GUCs.".to_owned()
+        )),
+        vec![ProgressEvent::Thought(
+            "then inspect the neon pooler GUCs.".to_owned()
+        )],
+        "Muse full snapshot after partial deltas must keep the unseen suffix"
     );
 }
 

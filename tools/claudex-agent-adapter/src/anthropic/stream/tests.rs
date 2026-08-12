@@ -656,6 +656,10 @@ fn assert_provider_status_line_markers() {
         !sanitize::is_provider_status_line("Plan to inspect the Neon pooler GUCs."),
         "Plan-to CoT must not be treated as Muse chrome"
     );
+    assert!(
+        !sanitize::is_provider_status_line("Plan: migrate the Neon pooler GUCs next."),
+        "Plan: sentence CoT must stay in the thinking transcript"
+    );
 }
 
 fn assert_compact_live_prose_truncation() {
@@ -1477,6 +1481,36 @@ async fn gpt_textdelta_without_summary_paints_native_thinking() {
     assert!(
         !sse.contains("raw secret"),
         "summary-backed items must still hide raw textDelta: {sse}"
+    );
+}
+
+#[tokio::test]
+async fn gpt_textdelta_without_content_index_still_paints_main_thinking() {
+    let mut builder = SegmentBuilder::for_turn(1, false, "glm-5.2:cloud");
+    builder
+        .model_output_event(
+            &json!({
+                "method":"item/reasoning/textDelta",
+                "params":{
+                    "itemId":"glm:reasoning",
+                    "delta":"Ollama GLM CoT without contentIndex must still stream.\n"
+                }
+            }),
+            None,
+        )
+        .await
+        .expect("glm textdelta");
+    let segment = builder.finish(None).await.expect("segment");
+    assert!(
+        segment.blocks.iter().any(|block| {
+            block.get("type").and_then(Value::as_str) == Some("thinking")
+                && block
+                    .get("thinking")
+                    .and_then(Value::as_str)
+                    .is_some_and(|text| text.contains("without contentIndex"))
+        }),
+        "main Codex textDelta must not require contentIndex: {:?}",
+        segment.blocks
     );
 }
 

@@ -12,7 +12,8 @@ pub(super) fn thinking_signature(item_id: &str) -> String {
 pub(super) fn summary_delta(event: &Value) -> Option<(&str, i64, &str)> {
     let params = event.get("params")?;
     let index = params.get("summaryIndex").and_then(Value::as_i64)
-        .or_else(|| params.get("contentIndex").and_then(Value::as_i64))?;
+        .or_else(|| params.get("contentIndex").and_then(Value::as_i64))
+        .unwrap_or(0);
     Some((params.get("itemId")?.as_str()?, index, params.get("delta")?.as_str()?))
 }
 
