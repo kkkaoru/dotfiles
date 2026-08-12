@@ -1,10 +1,71 @@
 use crate::allow;
 use crate::deny;
-use crate::env::{env_truthy, load_json_object, nonempty_str};
+use crate::env::nonempty_str;
 use crate::locks::{acquire_locks, release_agent_locks, release_paths, tool_file_paths};
 use serde_json::{Map, Value};
 use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
+
+/// All mutable runtime inputs used by policy evaluation. Tests can construct
+/// this directly without changing process-global environment variables.
+#[derive(Clone, Debug)]
+pub struct PolicyContext {
+    cache_dir: PathBuf,
+    home_dir: PathBuf,
+    now_seconds: f64,
+    subagent_first: bool,
+    allow_main_tools: bool,
+}
+
+impl PolicyContext {
+    #[must_use]
+    pub fn new(
+        cache_dir: PathBuf,
+        home_dir: PathBuf,
+        now_seconds: f64,
+        subagent_first: bool,
+        allow_main_tools: bool,
+    ) -> Self {
+        Self {
+            cache_dir,
+            home_dir,
+            now_seconds,
+            subagent_first,
+            allow_main_tools,
+        }
+    }
+
+    pub(crate) fn from_environment() -> Self {
+        Self::new(
+            crate::env::cache_dir(),
+            crate::env::home_dir(),
+            crate::env::now_seconds(),
+            crate::env::env_truthy("CLAUDEX_SUBAGENT_FIRST", true),
+            crate::env::env_truthy("CLAUDEX_ALLOW_MAIN_TOOLS", false),
+        )
+    }
+
+    pub(crate) fn cache_dir(&self) -> &Path {
+        &self.cache_dir
+    }
+
+    pub(crate) fn home_dir(&self) -> &Path {
+        &self.home_dir
+    }
+
+    pub(crate) fn now_seconds(&self) -> f64 {
+        self.now_seconds
+    }
+
+    pub(crate) fn subagent_first(&self) -> bool {
+        self.subagent_first
+    }
+
+    pub(crate) fn allow_main_tools(&self) -> bool {
+        self.allow_main_tools
+    }
+}
 
 /// Atomic lookups may stay in the main session even when delegation is required.
 pub(crate) static ATOMIC_LOOKUP_TOOLS: LazyLock<HashSet<&'static str>> =
@@ -15,36 +76,6 @@ pub(crate) static MUTATING_FILE_TOOLS: LazyLock<HashSet<&'static str>> =
 
 fn is_main_session_policy_tool(tool_name: &str) -> bool {
     ATOMIC_LOOKUP_TOOLS.contains(tool_name) || MUTATING_FILE_TOOLS.contains(tool_name)
-}
-
-fn workers_selected_in_routing_cache() -> bool {
-    let cached = load_json_object(&crate::env::cache_dir().join("usage-routing.json"));
-    let Some(summary) = cached.as_ref().and_then(|c| c.get("summary")) else {
-        return false;
-    };
-    summary
-        .get("selected_workers")
-        .and_then(Value::as_array)
-        .is_some_and(|workers| !workers.is_empty())
-}
-
-fn delegation_required() -> bool {
-    if !env_truthy("CLAUDEX_SUBAGENT_FIRST", true) {
-        return false;
-    }
-    if env_truthy("CLAUDEX_ALLOW_MAIN_TOOLS", false) {
-        return false;
-    }
-    let state_path = crate::env::cache_dir().join("delegation-state.json");
-    if let Some(state) = load_json_object(&state_path)
-        && state.get("delegation_required").is_some()
-    {
-        return state
-            .get("delegation_required")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-    }
-    workers_selected_in_routing_cache()
 }
 
 fn transcript_marks_subagent(payload: &Map<String, Value>) -> bool {
@@ -63,21 +94,23 @@ fn is_subagent_session(payload: &Map<String, Value>) -> bool {
 fn maybe_acquire_file_locks(
     payload: &Map<String, Value>,
     tool_input: &Map<String, Value>,
+    context: &PolicyContext,
 ) -> Option<Value> {
     let paths = tool_file_paths("", tool_input);
     if paths.is_empty() {
         return None;
     }
-    acquire_locks(payload, &paths)
+    acquire_locks(payload, &paths, context)
 }
 
 fn handle_subagent_pre_tool_use(
     payload: &Map<String, Value>,
     tool_name: &str,
     tool_input: &Map<String, Value>,
+    context: &PolicyContext,
 ) -> Value {
     if MUTATING_FILE_TOOLS.contains(tool_name)
-        && let Some(denied) = maybe_acquire_file_locks(payload, tool_input)
+        && let Some(denied) = maybe_acquire_file_locks(payload, tool_input, context)
     {
         return denied;
     }
@@ -86,7 +119,7 @@ fn handle_subagent_pre_tool_use(
             Some("PreToolUse"),
             Some(
                 "Claudex SubAgent keeps the full tool set; main-session \
-                 Write/Edit denials do not apply here.",
+                 Write/Edit/MultiEdit/NotebookEdit denials do not apply here.",
             ),
         );
     }
@@ -99,15 +132,15 @@ fn deny_main_tool(tool_name: &str) -> Value {
         &format!(
             "Claudex main session must not run `{tool_name}` while routed workers are \
              available. Launch Agent/Task with a selected_workers entry and keep \
-             Write/Edit in that SubAgent. Atomic Read/Grep/Glob/LS/WebSearch/WebFetch \
-             may stay in main. Bash remains allowed in main for lightweight \
-             orchestration. Set CLAUDEX_ALLOW_MAIN_TOOLS=1 only for an explicit \
-             emergency override."
+             Write/Edit/MultiEdit/NotebookEdit in that SubAgent. Atomic \
+             Read/Grep/Glob/LS/WebSearch/WebFetch may stay in main. Bash remains \
+             allowed in main for lightweight orchestration. Set \
+             CLAUDEX_ALLOW_MAIN_TOOLS=1 only for an explicit emergency override."
         ),
     )
 }
 
-fn handle_pre_tool_use(payload: &Map<String, Value>) -> Value {
+fn handle_pre_tool_use(payload: &Map<String, Value>, context: &PolicyContext) -> Value {
     let Some(tool_name) = payload.get("tool_name").and_then(Value::as_str) else {
         return allow(None, None);
     };
@@ -118,27 +151,29 @@ fn handle_pre_tool_use(payload: &Map<String, Value>) -> Value {
         .unwrap_or(&empty);
 
     if is_subagent_session(payload) {
-        return handle_subagent_pre_tool_use(payload, tool_name, tool_input);
+        return handle_subagent_pre_tool_use(payload, tool_name, tool_input, context);
     }
-    if MUTATING_FILE_TOOLS.contains(tool_name) && delegation_required() {
+    if MUTATING_FILE_TOOLS.contains(tool_name)
+        && crate::state::delegation_required(payload, context)
+    {
         return deny_main_tool(tool_name);
     }
     allow(None, None)
 }
 
-fn handle_post_tool_use(payload: &Map<String, Value>) -> Value {
+fn handle_post_tool_use(payload: &Map<String, Value>, context: &PolicyContext) -> Value {
     let tool_name = payload.get("tool_name").and_then(Value::as_str);
     let agent_id = payload.get("agent_id").and_then(Value::as_str);
     let tool_input = payload.get("tool_input").and_then(Value::as_object);
     if let (Some(tool_name), Some(agent_id), Some(tool_input)) = (tool_name, agent_id, tool_input)
         && MUTATING_FILE_TOOLS.contains(tool_name)
     {
-        release_paths(agent_id, &tool_file_paths(tool_name, tool_input));
+        release_paths(agent_id, &tool_file_paths(tool_name, tool_input), context);
     }
     allow(None, None)
 }
 
-fn handle_subagent_stop(payload: &Map<String, Value>) -> Value {
+fn handle_subagent_stop(payload: &Map<String, Value>, context: &PolicyContext) -> Value {
     // Claude Code sets this while replaying a Stop/SubagentStop continuation.
     // Never perform stateful hook work on the recursive invocation; returning
     // an unconditional success is the documented recursion fence.
@@ -150,17 +185,22 @@ fn handle_subagent_stop(payload: &Map<String, Value>) -> Value {
         return allow(None, None);
     }
     if let Some(agent_id) = nonempty_str(payload.get("agent_id")) {
-        release_agent_locks(agent_id);
+        release_agent_locks(agent_id, context);
     }
     allow(None, None)
 }
 
 /// Dispatch a Claude Code hook event payload.
 pub fn handle_event(payload: &Map<String, Value>) -> Value {
+    handle_event_with_context(payload, &PolicyContext::from_environment())
+}
+
+/// Dispatch using explicit cache, clock, and override inputs.
+pub fn handle_event_with_context(payload: &Map<String, Value>, context: &PolicyContext) -> Value {
     match payload.get("hook_event_name").and_then(Value::as_str) {
-        Some("PreToolUse") => handle_pre_tool_use(payload),
-        Some("PostToolUse") => handle_post_tool_use(payload),
-        Some("SubagentStop") => handle_subagent_stop(payload),
+        Some("PreToolUse") => handle_pre_tool_use(payload, context),
+        Some("PostToolUse") => handle_post_tool_use(payload, context),
+        Some("SubagentStop") => handle_subagent_stop(payload, context),
         _ => allow(None, None),
     }
 }

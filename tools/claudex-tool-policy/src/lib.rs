@@ -2,9 +2,10 @@
 //!
 //! Claude Code hooks feed one JSON event on stdin. When `CLAUDEX_ACTIVE=1`:
 //!
-//! * PreToolUse in the **main** session denies Write/Edit while routing says
-//!   delegation is required. Atomic Read/Grep/Glob/LS/WebSearch/WebFetch may stay
-//!   in main. SubAgents keep the full tool set.
+//! * PreToolUse in the **main** session denies Write/Edit/MultiEdit/NotebookEdit
+//!   while routing says delegation is required. Atomic
+//!   Read/Grep/Glob/LS/WebSearch/WebFetch may stay in main. SubAgents keep the
+//!   full tool set.
 //! * SubAgent identity is detected via `agent_id` / `agent_type` / subagent transcript
 //!   path so main-session denials never apply to workers.
 //! * PreToolUse Write/Edit acquires a per-path lock for the calling `agent_id` so
@@ -14,8 +15,9 @@
 mod env;
 mod locks;
 mod policy;
+mod state;
 
-pub use policy::handle_event;
+pub use policy::{PolicyContext, handle_event, handle_event_with_context};
 
 use serde_json::{Map, Value};
 use std::io::{self, Read, Write};

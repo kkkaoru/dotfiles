@@ -1,5 +1,6 @@
 use crate::deny;
-use crate::env::{home_dir, load_json_object, nonempty_str, now_seconds};
+use crate::env::{load_json_object, nonempty_str};
+use crate::policy::PolicyContext;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions, Permissions};
@@ -10,8 +11,8 @@ use std::process;
 
 pub(crate) const LOCK_TTL_SECONDS: f64 = 45.0 * 60.0;
 
-pub(crate) fn lock_dir() -> PathBuf {
-    let path = crate::env::cache_dir().join("file-locks");
+pub(crate) fn lock_dir(context: &PolicyContext) -> PathBuf {
+    let path = context.cache_dir().join("file-locks");
     let _ = fs::create_dir_all(&path);
     path
 }
@@ -47,11 +48,11 @@ pub(crate) fn tool_file_paths(_tool_name: &str, tool_input: &Map<String, Value>)
     paths
 }
 
-fn resolve_absolute(path: &str) -> String {
+fn resolve_absolute(path: &str, home: &Path) -> String {
     let expanded = if let Some(rest) = path.strip_prefix("~/") {
-        home_dir().join(rest)
+        home.join(rest)
     } else if path == "~" {
-        home_dir()
+        home.to_path_buf()
     } else {
         PathBuf::from(path)
     };
@@ -61,10 +62,10 @@ fn resolve_absolute(path: &str) -> String {
         .into_owned()
 }
 
-pub(crate) fn lock_file_for(path: &str) -> PathBuf {
-    let absolute = resolve_absolute(path);
+pub(crate) fn lock_file_for(path: &str, context: &PolicyContext) -> PathBuf {
+    let absolute = resolve_absolute(path, context.home_dir());
     let digest = hex::encode(Sha256::digest(absolute.as_bytes()));
-    lock_dir().join(format!("{digest}.lock.json"))
+    lock_dir(context).join(format!("{digest}.lock.json"))
 }
 
 fn lock_is_stale(lock: &Value, now: f64) -> bool {
@@ -80,13 +81,13 @@ fn write_lock(path: &Path, payload: &Value) {
     }
 }
 
-fn lock_record(absolute: &str, agent_id: &str, session_id: Option<&Value>, now: f64) -> Value {
+fn lock_record(absolute: &str, agent_id: &str, session_id: Option<&str>, now: f64) -> Value {
     let mut map = Map::new();
     map.insert("path".into(), Value::String(absolute.into()));
     map.insert("agent_id".into(), Value::String(agent_id.into()));
     map.insert(
         "session_id".into(),
-        session_id.cloned().unwrap_or(Value::Null),
+        session_id.map_or(Value::Null, Value::from),
     );
     map.insert("pid".into(), Value::from(process::id()));
     map.insert("acquired_at".into(), Value::from(now));
@@ -182,7 +183,7 @@ fn create_lock(
     lock_path: &Path,
     absolute: &str,
     agent_id: &str,
-    session_id: Option<&Value>,
+    session_id: Option<&str>,
     now: f64,
     acquired: &mut Vec<PathBuf>,
 ) -> Result<(), Value> {
@@ -215,12 +216,13 @@ fn create_lock(
 fn acquire_one(
     file_path: &str,
     agent_id: &str,
-    session_id: Option<&Value>,
+    session_id: Option<&str>,
     now: f64,
     acquired: &mut Vec<PathBuf>,
+    context: &PolicyContext,
 ) -> Result<(), Value> {
-    let lock_path = lock_file_for(file_path);
-    let absolute = resolve_absolute(file_path);
+    let lock_path = lock_file_for(file_path, context);
+    let absolute = resolve_absolute(file_path, context.home_dir());
     if let Some(existing) = load_json_object(&lock_path) {
         match reconcile_existing(&lock_path, existing, agent_id, &absolute, now, acquired)? {
             true => {}
@@ -231,22 +233,28 @@ fn acquire_one(
 }
 
 /// Acquire locks for `paths`. Returns `Some(deny)` on conflict.
-pub(crate) fn acquire_locks(payload: &Map<String, Value>, paths: &[String]) -> Option<Value> {
+pub(crate) fn acquire_locks(
+    payload: &Map<String, Value>,
+    paths: &[String],
+    context: &PolicyContext,
+) -> Option<Value> {
     let agent_id = nonempty_str(payload.get("agent_id"))?;
-    let session_id = payload.get("session_id");
-    let now = now_seconds();
+    let session_id = crate::state::session_id(payload);
+    let now = context.now_seconds();
     let mut acquired = Vec::new();
     for file_path in paths {
-        if let Err(denied) = acquire_one(file_path, agent_id, session_id, now, &mut acquired) {
+        if let Err(denied) =
+            acquire_one(file_path, agent_id, session_id, now, &mut acquired, context)
+        {
             return Some(denied);
         }
     }
     None
 }
 
-pub(crate) fn release_paths(agent_id: &str, paths: &[String]) {
+pub(crate) fn release_paths(agent_id: &str, paths: &[String], context: &PolicyContext) {
     for file_path in paths {
-        let lock_path = lock_file_for(file_path);
+        let lock_path = lock_file_for(file_path, context);
         let Some(existing) = load_json_object(&lock_path) else {
             continue;
         };
@@ -262,8 +270,8 @@ fn is_lock_file(path: &Path) -> bool {
         .is_some_and(|n| n.ends_with(".lock.json"))
 }
 
-pub(crate) fn release_agent_locks(agent_id: &str) {
-    let Ok(entries) = fs::read_dir(lock_dir()) else {
+pub(crate) fn release_agent_locks(agent_id: &str, context: &PolicyContext) {
+    let Ok(entries) = fs::read_dir(lock_dir(context)) else {
         return;
     };
     for entry in entries.flatten() {

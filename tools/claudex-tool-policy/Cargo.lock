@@ -28,6 +28,7 @@ name = "claudex-tool-policy"
 version = "0.1.0"
 dependencies = [
  "hex",
+ "libc",
  "serde_json",
  "sha2",
  "tempfile",

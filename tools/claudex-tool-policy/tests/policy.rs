@@ -1,8 +1,10 @@
-use claudex_tool_policy::handle_event;
+use claudex_tool_policy::{PolicyContext, handle_event, handle_event_with_context};
 use serde_json::{Map, Value, json};
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::path::Path;
 use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tempfile::TempDir;
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -33,12 +35,28 @@ impl Drop for EnvGuard {
 }
 
 fn write_delegation(cache: &Path, required: bool) {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs_f64();
+    for session_id in ["sess", "sess-main"] {
+        write_session_delegation(cache, session_id, required, now);
+    }
+}
+
+fn write_session_delegation(cache: &Path, session_id: &str, required: bool, now: f64) {
+    let key = hex::encode(Sha256::digest(session_id.as_bytes()));
+    let directory = cache.join("delegation-state-v2");
+    fs::create_dir_all(&directory).unwrap();
     fs::write(
-        cache.join("delegation-state.json"),
+        directory.join(format!("{key}.json")),
         json!({
+            "version": 2,
+            "session_key": key,
+            "updated_at": now,
             "delegation_required": required,
-            "selected_workers_count": 2,
-            "direct_main_execution": "fallback-only"
+            "selected_workers_count": if required { 2 } else { 0 },
+            "direct_main_execution": if required { "fallback-only" } else { "allowed" }
         })
         .to_string(),
     )
@@ -388,7 +406,7 @@ fn main_session_write_allowed_when_delegation_not_required() {
 }
 
 #[test]
-fn routing_cache_selected_workers_denies_main_write() {
+fn routing_cache_selected_workers_is_not_a_cross_session_fallback() {
     let tmp = TempDir::new().unwrap();
     fs::write(
         tmp.path().join("usage-routing.json"),
@@ -410,12 +428,7 @@ fn routing_cache_selected_workers_denies_main_write() {
         tmp.path(),
         &[],
     );
-    assert_eq!(
-        output
-            .pointer("/hookSpecificOutput/permissionDecision")
-            .and_then(Value::as_str),
-        Some("deny")
-    );
+    assert_eq!(output, json!({}));
 }
 
 #[test]
@@ -442,4 +455,170 @@ fn routing_cache_selected_workers_allows_main_read() {
         &[],
     );
     assert_eq!(output, json!({}));
+}
+
+#[test]
+fn explicit_context_keeps_two_sessions_isolated_without_environment_mutation() {
+    let tmp = TempDir::new().unwrap();
+    write_session_delegation(tmp.path(), "session-a", true, 1_000.0);
+    write_session_delegation(tmp.path(), "session-b", false, 1_000.0);
+    let context = PolicyContext::new(
+        tmp.path().to_path_buf(),
+        tmp.path().to_path_buf(),
+        1_001.0,
+        true,
+        false,
+    );
+    let mut payload = json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Write",
+        "tool_input": {"file_path": "/tmp/x", "content": "hello"},
+        "session_id": "session-a"
+    });
+    let denied = handle_event_with_context(payload.as_object().unwrap(), &context);
+    assert_eq!(
+        denied
+            .pointer("/hookSpecificOutput/permissionDecision")
+            .and_then(Value::as_str),
+        Some("deny")
+    );
+
+    payload.as_object_mut().unwrap().remove("session_id");
+    payload["sessionId"] = Value::from("session-b");
+    assert_eq!(
+        handle_event_with_context(payload.as_object().unwrap(), &context),
+        json!({})
+    );
+    payload["sessionId"] = Value::from("session-missing");
+    assert_eq!(
+        handle_event_with_context(payload.as_object().unwrap(), &context),
+        json!({})
+    );
+}
+
+#[test]
+fn explicit_context_rejects_stale_bad_key_and_malformed_schema_fail_open() {
+    let tmp = TempDir::new().unwrap();
+    let context = PolicyContext::new(
+        tmp.path().to_path_buf(),
+        tmp.path().to_path_buf(),
+        30_000.0,
+        true,
+        false,
+    );
+    let payload = json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Write",
+        "tool_input": {"file_path": "/tmp/x", "content": "hello"},
+        "session_id": "session-a"
+    });
+    for (timestamp, key, count) in [
+        (1.0, hex::encode(Sha256::digest(b"session-a")), 1_u64),
+        (30_061.0, hex::encode(Sha256::digest(b"session-a")), 1),
+        (30_000.0, hex::encode(Sha256::digest(b"other")), 1),
+        (30_000.0, hex::encode(Sha256::digest(b"session-a")), 999),
+    ] {
+        let expected_path = {
+            let correct = hex::encode(Sha256::digest(b"session-a"));
+            let directory = tmp.path().join("delegation-state-v2");
+            fs::create_dir_all(&directory).unwrap();
+            directory.join(format!("{correct}.json"))
+        };
+        fs::write(
+            expected_path,
+            json!({
+                "version": 2,
+                "session_key": key,
+                "updated_at": timestamp,
+                "delegation_required": true,
+                "selected_workers_count": count,
+                "direct_main_execution": "fallback-only"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        assert_eq!(
+            handle_event_with_context(payload.as_object().unwrap(), &context),
+            json!({})
+        );
+    }
+}
+
+#[test]
+fn explicit_context_rejects_oversized_state_and_symlinked_state_directory() {
+    use std::os::unix::fs::symlink;
+
+    let tmp = TempDir::new().unwrap();
+    let context = PolicyContext::new(
+        tmp.path().to_path_buf(),
+        tmp.path().to_path_buf(),
+        1_001.0,
+        true,
+        false,
+    );
+    let payload = json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Write",
+        "tool_input": {"file_path": "/tmp/x", "content": "hello"},
+        "session_id": "session-a"
+    });
+    write_session_delegation(tmp.path(), "session-a", true, 1_000.0);
+    fs::write(
+        tmp.path().join("delegation-state-v2").join(format!(
+            "{}.json",
+            hex::encode(Sha256::digest(b"session-a"))
+        )),
+        vec![b' '; 4_097],
+    )
+    .unwrap();
+    assert_eq!(
+        handle_event_with_context(payload.as_object().unwrap(), &context),
+        json!({})
+    );
+
+    fs::remove_dir_all(tmp.path().join("delegation-state-v2")).unwrap();
+    let outside = tmp.path().join("outside");
+    fs::create_dir(&outside).unwrap();
+    write_session_delegation(&outside, "session-a", true, 1_000.0);
+    symlink(
+        outside.join("delegation-state-v2"),
+        tmp.path().join("delegation-state-v2"),
+    )
+    .unwrap();
+    assert_eq!(
+        handle_event_with_context(payload.as_object().unwrap(), &context),
+        json!({})
+    );
+}
+
+#[test]
+fn legacy_global_delegation_state_is_ignored() {
+    let tmp = TempDir::new().unwrap();
+    fs::write(
+        tmp.path().join("delegation-state.json"),
+        json!({
+            "delegation_required": true,
+            "selected_workers_count": 99,
+            "direct_main_execution": "fallback-only"
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let context = PolicyContext::new(
+        tmp.path().to_path_buf(),
+        tmp.path().to_path_buf(),
+        1_001.0,
+        true,
+        false,
+    );
+    let payload = json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Write",
+        "tool_input": {"file_path": "/tmp/x", "content": "hello"},
+        "session_id": "session-a"
+    });
+    assert_eq!(
+        handle_event_with_context(payload.as_object().unwrap(), &context),
+        json!({})
+    );
 }

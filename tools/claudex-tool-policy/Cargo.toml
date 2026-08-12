@@ -9,6 +9,7 @@ description = "Claude Code hook: claudex main-session tool denials and SubAgent 
 serde_json = { version = "1.0", features = ["preserve_order"] }
 sha2 = "0.10"
 hex = "0.4"
+libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3.0"
