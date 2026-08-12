@@ -1,5 +1,3 @@
-#![allow(clippy::excessive_nesting)]
-
 //! Bounded, cancellable JSONL writes for a persistent app-server connection.
 //!
 //! A request must reserve a queue slot before it publishes its pending response
