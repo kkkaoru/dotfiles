@@ -188,3 +188,20 @@ async fn weak_fatal_watcher_does_not_keep_a_dropped_writer_alive() {
         None
     );
 }
+
+#[tokio::test]
+async fn weak_fatal_watcher_exits_when_writer_drains() {
+    let (reader, writer) = duplex(1);
+    let queue = FrameWriter::spawn_with_capacity(writer, 1);
+    let watcher = tokio::spawn(FrameWriter::wait_for_fatal_weak(Arc::downgrade(&queue)));
+    queue.begin_shutdown().await;
+    queue.join().await;
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(1), watcher)
+            .await
+            .expect("drain watcher exits")
+            .expect("drain watcher task"),
+        None
+    );
+    drop(reader);
+}

@@ -232,10 +232,12 @@ impl FrameWriter {
     pub(super) async fn wait_for_fatal_weak(writer: std::sync::Weak<Self>) -> Option<String> {
         while let Some(writer) = writer.upgrade() {
             let reason = writer.state.failure().await;
+            let stopping = writer.state.mode.load(Ordering::Acquire) == DRAINING;
             drop(writer);
-            match reason {
-                Some(reason) => return Some(reason),
-                None => tokio::time::sleep(Duration::from_millis(20)).await,
+            match (reason, stopping) {
+                (Some(reason), _) => return Some(reason),
+                (None, true) => return None,
+                (None, false) => tokio::time::sleep(Duration::from_millis(20)).await,
             }
         }
         None
