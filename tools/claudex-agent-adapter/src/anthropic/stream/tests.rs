@@ -648,6 +648,14 @@ fn assert_provider_status_line_markers() {
         assert!(sanitize::is_provider_status_line(line), "{line}");
     }
     assert!(!sanitize::is_provider_status_line("real assistant prose"));
+    assert!(
+        !sanitize::is_provider_status_line("Plan the per-race cache seed next."),
+        "English CoT that starts with Plan must stay in the thinking transcript"
+    );
+    assert!(
+        !sanitize::is_provider_status_line("Plan to inspect the Neon pooler GUCs."),
+        "Plan-to CoT must not be treated as Muse chrome"
+    );
 }
 
 fn assert_compact_live_prose_truncation() {
@@ -1535,6 +1543,29 @@ async fn gpt_subagent_textdelta_does_not_bury_live_tool_progress() {
     assert!(
         !sse.contains("Inspect the neon pooler GUCs"),
         "raw GPT CoT must not bury SubAgent live chrome: {sse}"
+    );
+
+    let (finish_sender, _finish_rx) = mpsc::channel::<Result<Bytes, Infallible>>(4);
+    let segment = builder
+        .finish(Some(&finish_sender))
+        .await
+        .expect("finish after GPT textdelta");
+    let thinking = segment
+        .blocks
+        .iter()
+        .find_map(|block| {
+            (block.get("type").and_then(Value::as_str) == Some("thinking"))
+                .then(|| block.get("thinking").and_then(Value::as_str))
+                .flatten()
+        })
+        .unwrap_or("");
+    assert!(
+        thinking.contains("Inspect the neon pooler GUCs"),
+        "Codex SubAgent raw textDelta CoT must still land in the transcript: {thinking}"
+    );
+    assert!(
+        !thinking.contains('▶'),
+        "▶ tip chrome must be replaced by buffered CoT: {thinking}"
     );
 }
 

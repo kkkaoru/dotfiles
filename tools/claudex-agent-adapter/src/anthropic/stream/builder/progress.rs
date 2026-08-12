@@ -124,10 +124,16 @@ impl SegmentBuilder {
         // AgentThoughtChunk uses summaryTextDelta (see progress_filter). Dumping
         // either into live thinking buried ▶ Read/Bash and left Claude Code 2.1
         // on Frolicking/Wandering with no mid-turn body. Keep thinking free for
-        // tool chrome; paint a compact tip. textDelta still counts as watchdog
+        // tool chrome; paint a compact tip; buffer CoT for the transcript at
+        // finish (same as summaryTextDelta). textDelta still counts as watchdog
         // activity. Main sessions still surface textDelta as native Thinking.
         if self.is_subagent {
             self.note_provider_turn_activity();
+            if let Some(delta) = event.pointer("/params/delta").and_then(Value::as_str)
+                && !delta.trim().is_empty()
+            {
+                self.pending_reasoning.push_str(delta);
+            }
             return self
                 .thinking
                 .progress_status_keep_open(&mut self.blocks, "▶ Thinking…\n", stream)

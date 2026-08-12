@@ -29,7 +29,8 @@ pub(in crate::anthropic) struct SegmentBuilder {
     /// SubAgent AgentMessage prose held until end_turn. Live viewer sees tip-only
     /// `▶ Working…` so full prose does not collapse Claude Code 2.1 chrome.
     pub(super) pending_answer: String,
-    /// ACP `AgentThoughtChunk` / summary CoT buffered for the transcript only.
+    /// ACP `AgentThoughtChunk` / Codex raw `textDelta` CoT buffered for the
+    /// SubAgent transcript only (live SSE stays tip-only).
     /// Live SubAgent SSE stays on ▶ tips so Claude Code 2.1 does not collapse
     /// the panel to Frolicking and hide ▶ Bash for long provider tools.
     pub(super) pending_reasoning: String,

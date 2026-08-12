@@ -66,8 +66,9 @@ pub(in crate::anthropic::stream) fn is_provider_status_line(line: &str) -> bool 
         || trimmed.starts_with('✗')
         || trimmed.starts_with("… still working")
         || trimmed.starts_with("Claudex is still working")
-        || trimmed.starts_with("Plan ")
-        || trimmed.starts_with("Plan:")
+        // Muse one-liner chrome (`Plan next` / `Plan: drafted`) — not CoT that
+        // happens to start with the English verb "Plan the …".
+        || is_muse_plan_status_line(trimmed)
         || trimmed.starts_with('●')
         || trimmed.starts_with('◎')
         || trimmed.starts_with('○')
@@ -80,6 +81,19 @@ pub(in crate::anthropic::stream) fn is_provider_status_line(line: &str) -> bool 
         || trimmed.starts_with("Session mode:")
         || trimmed.starts_with("Session:")
         || trimmed.starts_with("🔎 WebSearch:")
+}
+
+fn is_muse_plan_status_line(line: &str) -> bool {
+    if line.starts_with("Plan:") {
+        return true;
+    }
+    let Some(rest) = line.strip_prefix("Plan ") else {
+        return false;
+    };
+    // Real CoT: "Plan the migration", "Plan to inspect". Muse chrome is a
+    // short imperative like "Plan next" without a sentence object.
+    let first = rest.split_whitespace().next().unwrap_or("");
+    matches!(first, "next" | "drafted" | "ready" | "done") && line.chars().count() <= 32
 }
 
 /// Muse Spark often emits `Status: …Status: …` without newlines. Keep only the last

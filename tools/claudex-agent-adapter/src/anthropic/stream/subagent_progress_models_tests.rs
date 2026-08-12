@@ -1,9 +1,10 @@
 //! Live SubAgent viewer progress across provider models.
 //!
 //! Cline was the first blank-viewer report, but Cursor (nested under Spark),
-//! Qwen, Grok, Copilot, Command Code, and Spark/Codex all must keep mid-turn
-//! chrome tip-only (`▶ Working` / `▶ Thinking`) so full AgentMessage/CoT does
-//! not collapse Claude Code 2.1 to Frolicking. Bodies flush at end_turn.
+//! Qwen, Grok, Copilot, Command Code, Spark/Codex, GLM, Fugu, Muse, and auto
+//! all must keep mid-turn chrome tip-only (`▶ Working` / `▶ Thinking`) so full
+//! AgentMessage/CoT does not collapse Claude Code 2.1 to Frolicking. Bodies
+//! (including Codex raw `textDelta` CoT) flush at end_turn.
 
 use axum::body::Bytes;
 use serde_json::{Value, json};
@@ -20,11 +21,19 @@ struct Tool {
     arg_value: &'static str,
 }
 
+enum ReasoningKind {
+    /// ACP AgentThoughtChunk → `item/reasoning/summaryTextDelta`.
+    Summary,
+    /// Codex/GPT/GLM/Fugu raw CoT → `item/reasoning/textDelta`.
+    RawTextDelta,
+}
+
 struct Case {
     name: &'static str,
     prose: Option<&'static str>,
     prose_item_id: &'static str,
     reasoning: Option<&'static str>,
+    reasoning_kind: ReasoningKind,
     tool: Option<Tool>,
     expect_visible: &'static [&'static str],
 }
@@ -37,6 +46,7 @@ const CASES: &[Case] = &[
         ),
         prose_item_id: "cursor:message",
         reasoning: None,
+        reasoning_kind: ReasoningKind::Summary,
         tool: Some(Tool {
             call_id: "cursor-read",
             name: "Read",
@@ -48,10 +58,26 @@ const CASES: &[Case] = &[
         expect_visible: &["▶ Working", "▶ Read"],
     },
     Case {
+        name: "auto-acp",
+        prose: Some("Routing through Cursor auto for the nested SubAgent turn.\n"),
+        prose_item_id: "auto:message",
+        reasoning: Some("Prefer the sticky Cursor backend for this auto turn.\n"),
+        reasoning_kind: ReasoningKind::Summary,
+        tool: Some(Tool {
+            call_id: "auto-read",
+            name: "Read",
+            title: "Read CLAUDE.md",
+            arg_key: "path",
+            arg_value: "CLAUDE.md",
+        }),
+        expect_visible: &["▶ Thinking", "▶ Working", "▶ Read"],
+    },
+    Case {
         name: "qwen-acp",
         prose: Some("Phase 1: reading CLAUDE.md.\n"),
         prose_item_id: "qwen:message",
         reasoning: None,
+        reasoning_kind: ReasoningKind::Summary,
         tool: Some(Tool {
             call_id: "qwen-grep",
             name: "Grep",
@@ -66,6 +92,7 @@ const CASES: &[Case] = &[
         prose: None,
         prose_item_id: "grok:message",
         reasoning: Some("Plan the per-race cache seed next.\n"),
+        reasoning_kind: ReasoningKind::Summary,
         tool: Some(Tool {
             call_id: "grok-bash",
             name: "Bash",
@@ -81,6 +108,7 @@ const CASES: &[Case] = &[
         prose: Some("Inspecting the prediction pipeline next.\n"),
         prose_item_id: "copilot:message",
         reasoning: None,
+        reasoning_kind: ReasoningKind::Summary,
         tool: Some(Tool {
             call_id: "copilot-read",
             name: "Read",
@@ -97,22 +125,65 @@ const CASES: &[Case] = &[
         ),
         prose_item_id: "cline:message",
         reasoning: Some("Check the cache seed path before editing.\n"),
+        reasoning_kind: ReasoningKind::Summary,
         tool: None,
         expect_visible: &["▶ Working", "▶ Thinking"],
+    },
+    Case {
+        name: "muse-acp",
+        prose: Some("Muse Spark is drafting the migration notes next.\n"),
+        prose_item_id: "muse:message",
+        reasoning: Some("Outline the Muse Spark migration steps first.\n"),
+        reasoning_kind: ReasoningKind::Summary,
+        tool: None,
+        expect_visible: &["▶ Thinking", "▶ Working"],
     },
     Case {
         name: "spark-codex",
         prose: Some("Seasoning per-race scope safety and cache seed behavior.\n"),
         prose_item_id: "spark:message",
         reasoning: Some("Trace filter_races_by_scope before editing.\n"),
+        reasoning_kind: ReasoningKind::Summary,
         tool: None,
         expect_visible: &["▶ Thinking", "▶ Working"],
+    },
+    Case {
+        name: "glm-codex",
+        prose: Some("GLM is checking the Neon pooler GUCs next.\n"),
+        prose_item_id: "glm:message",
+        reasoning: Some("Inspect glm pooler GUCs before changing idle timeout.\n"),
+        // Codex-family SubAgents often emit raw CoT as textDelta, not summary.
+        reasoning_kind: ReasoningKind::RawTextDelta,
+        tool: Some(Tool {
+            call_id: "glm-read",
+            name: "Read",
+            title: "Read pooler.toml",
+            arg_key: "path",
+            arg_value: "pooler.toml",
+        }),
+        expect_visible: &["▶ Thinking", "▶ Working", "▶ Read"],
+    },
+    Case {
+        name: "fugu-codex",
+        prose: None,
+        prose_item_id: "fugu:message",
+        reasoning: Some("Fugu should map the race filter before seeding cache.\n"),
+        reasoning_kind: ReasoningKind::RawTextDelta,
+        tool: Some(Tool {
+            call_id: "fugu-bash",
+            name: "Bash",
+            title: "rg filter_races_by_scope",
+            arg_key: "command",
+            arg_value: "rg filter_races_by_scope",
+        }),
+        expect_visible: &["▶ Thinking", "▶ rg"],
     },
     Case {
         name: "command-code-acp",
         prose: Some("AVITA Inc. is an avatar company founded by Hiroshi Ishiguro.\n"),
         prose_item_id: "command-code:message",
         reasoning: Some("Check AVITA Inc. official site and filings.\n"),
+        reasoning_kind: ReasoningKind::Summary,
         tool: Some(Tool {
             call_id: "cmd-search",
             name: "web_search",
@@ -254,8 +325,12 @@ async fn feed_case_events(
     sender: &mpsc::Sender<Result<Bytes, Infallible>>,
 ) {
     if let Some(reasoning) = case.reasoning {
+        let event = match case.reasoning_kind {
+            ReasoningKind::Summary => summary_reasoning_delta(case.name, reasoning),
+            ReasoningKind::RawTextDelta => raw_reasoning_delta(case.name, reasoning),
+        };
         builder
-            .model_output_event(&reasoning_delta(case.name, reasoning), Some(sender))
+            .model_output_event(&event, Some(sender))
             .await
             .unwrap_or_else(|error| panic!("{} reasoning: {error}", case.name));
     }
@@ -339,21 +414,49 @@ fn assert_live_progress(case: &Case, live: &SubAgentLiveView, command_code: bool
 }
 
 async fn assert_finished_transcript(case: &Case, builder: &mut SegmentBuilder) {
-    let Some(prose) = case.prose else {
+    if case.prose.is_none() && case.reasoning.is_none() {
         return;
-    };
+    }
     let segment = builder.finish(None).await.expect(case.name);
-    assert!(
-        segment.blocks.iter().any(|block| {
-            block
-                .get("text")
-                .and_then(Value::as_str)
-                .is_some_and(|text| text.contains(prose.trim()))
-        }),
-        "{}: answer prose must flush at end_turn: {:?}",
-        case.name,
-        segment.blocks
-    );
+    if let Some(prose) = case.prose {
+        assert!(
+            segment.blocks.iter().any(|block| {
+                block
+                    .get("text")
+                    .and_then(Value::as_str)
+                    .is_some_and(|text| text.contains(prose.trim()))
+            }),
+            "{}: answer prose must flush at end_turn: {:?}",
+            case.name,
+            segment.blocks
+        );
+    }
+    if let Some(reasoning) = case.reasoning {
+        let thinking = segment
+            .blocks
+            .iter()
+            .find_map(|block| {
+                (block.get("type").and_then(Value::as_str) == Some("thinking"))
+                    .then(|| block.get("thinking").and_then(Value::as_str))
+                    .flatten()
+            })
+            .unwrap_or("");
+        assert!(
+            thinking.contains(reasoning.trim()),
+            "{}: buffered CoT must land in the transcript (kind={:?}): thinking={thinking:?} blocks={:?}",
+            case.name,
+            match case.reasoning_kind {
+                ReasoningKind::Summary => "summary",
+                ReasoningKind::RawTextDelta => "raw-textdelta",
+            },
+            segment.blocks
+        );
+        assert!(
+            !thinking.contains('▶'),
+            "{}: ▶ chrome must be stripped from the transcript: {thinking}",
+            case.name
+        );
+    }
     assert!(
         segment.blocks.iter().all(|block| {
             !block
@@ -378,10 +481,17 @@ fn agent_message(item_id: &str, delta: &str) -> Value {
     })
 }
 
-fn reasoning_delta(case: &str, delta: &str) -> Value {
+fn summary_reasoning_delta(case: &str, delta: &str) -> Value {
     json!({
         "method":"item/reasoning/summaryTextDelta",
         "params":{"itemId":format!("{case}:reasoning"),"summaryIndex":0,"delta":delta}
+    })
+}
+
+fn raw_reasoning_delta(case: &str, delta: &str) -> Value {
+    json!({
+        "method":"item/reasoning/textDelta",
+        "params":{"itemId":format!("{case}:reasoning"),"contentIndex":0,"delta":delta}
     })
 }
 

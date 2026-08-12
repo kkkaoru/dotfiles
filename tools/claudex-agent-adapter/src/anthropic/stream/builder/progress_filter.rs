@@ -78,8 +78,10 @@ impl SegmentBuilder {
         if raw.trim().is_empty() {
             return Ok(());
         }
-        if let Some((display, _)) = self.filter_subagent_live_delta(raw) {
-            self.emit_subagent_reasoning_delta(item_id, summary_index, &display, stream)
+        if let Some((_display, committed)) = self.filter_subagent_live_delta(raw) {
+            // Buffer the full CoT for the transcript; live paint stays tip-only
+            // inside emit_subagent_reasoning_delta (do not store compacted display).
+            self.emit_subagent_reasoning_delta(item_id, summary_index, &committed, stream)
                 .await?;
         }
         Ok(())
