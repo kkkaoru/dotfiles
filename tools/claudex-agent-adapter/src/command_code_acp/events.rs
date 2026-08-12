@@ -26,8 +26,13 @@ pub enum ProgressEvent {
         name: String,
         error: Option<String>,
     },
-    /// Coalesced `thinking_delta` / `thinking_end` text.
+    /// Coalesced `thinking_delta` text (and rare `thinking_end` snapshots when
+    /// Muse skipped deltas for that unit).
     Thought(String),
+    /// Muse Spark full thinking snapshot. Coalescer keeps it only when no
+    /// `thinking_delta` has been emitted for the current unit (avoids the
+    /// Thought-for flicker from replaying the whole buffer after deltas).
+    ThoughtEnd(String),
     /// Coalesced `text_delta` / `message_update` assistant text.
     Message(String),
     /// Explicit phase status (turn/model start).

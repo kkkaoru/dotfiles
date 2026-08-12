@@ -130,8 +130,8 @@ const CASES: &[Case] = &[
         expect_visible: &["▶ Working", "▶ Thinking"],
     },
     Case {
-        // Denylisted for live spawn, but the ACP→thinking tip path must still work.
         name: "deepseek-acp",
+        // Denylisted for live spawn, but the ACP→thinking tip path must still work.
         prose: Some("DeepSeek is reading the cache seed module next.\n"),
         prose_item_id: "deepseek:message",
         reasoning: Some("Trace the DeepSeek flash path before editing.\n"),
@@ -142,6 +142,21 @@ const CASES: &[Case] = &[
             title: "Read cache_seed.py",
             arg_key: "path",
             arg_value: "apps/finish-position-predict-container/src/cache_seed.py",
+        }),
+        expect_visible: &["▶ Thinking", "▶ Working", "▶ Read"],
+    },
+    Case {
+        name: "opencode-go-gpt-acp",
+        prose: Some("OpenCode Go GPT is checking the sticky session pool next.\n"),
+        prose_item_id: "opencode-go-gpt:message",
+        reasoning: Some("Confirm opencode-go/gpt-5.6-luna routes through configured-acp.\n"),
+        reasoning_kind: ReasoningKind::Summary,
+        tool: Some(Tool {
+            call_id: "opencode-gpt-read",
+            name: "Read",
+            title: "Read session_scope.rs",
+            arg_key: "path",
+            arg_value: "src/agent_backend/session_scope.rs",
         }),
         expect_visible: &["▶ Thinking", "▶ Working", "▶ Read"],
     },

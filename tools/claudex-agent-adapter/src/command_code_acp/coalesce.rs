@@ -5,6 +5,9 @@ use super::events::ProgressEvent;
 pub struct ProgressCoalescer {
     thought: String,
     message: String,
+    /// True after any Thought was flushed in the current unit. Resets on tools
+    /// / status so a later delta-less `thinking_end` can still land.
+    thought_emitted: bool,
 }
 
 const COALESCE_CHARS: usize = 80;
@@ -14,13 +17,30 @@ impl ProgressCoalescer {
     pub fn push(&mut self, event: ProgressEvent) -> Vec<ProgressEvent> {
         match event {
             ProgressEvent::Thought(text) => self.push_text(true, text),
+            ProgressEvent::ThoughtEnd(text) => self.push_thought_end(text),
             ProgressEvent::Message(text) => self.push_text(false, text),
             other => {
                 let mut out = self.flush_all();
+                self.thought_emitted = false;
                 out.push(other);
                 out
             }
         }
+    }
+
+    fn push_thought_end(&mut self, text: String) -> Vec<ProgressEvent> {
+        let mut out: Vec<ProgressEvent> = self.take_thought().into_iter().collect();
+        if !out.is_empty() {
+            self.thought_emitted = true;
+            // Deltas already cover this unit; ignore the full snapshot replay.
+            return out;
+        }
+        if self.thought_emitted || text.trim().is_empty() {
+            return out;
+        }
+        self.thought_emitted = true;
+        out.push(ProgressEvent::Thought(text));
+        out
     }
 
     fn push_text(&mut self, thought: bool, text: String) -> Vec<ProgressEvent> {
@@ -35,7 +55,11 @@ impl ProgressCoalescer {
             return Vec::new();
         }
         if thought {
-            self.take_thought().into_iter().collect()
+            let flushed = self.take_thought().into_iter().collect::<Vec<_>>();
+            if !flushed.is_empty() {
+                self.thought_emitted = true;
+            }
+            flushed
         } else {
             self.take_message().into_iter().collect()
         }
@@ -47,7 +71,10 @@ impl ProgressCoalescer {
 
     fn flush_all(&mut self) -> Vec<ProgressEvent> {
         let mut out = Vec::new();
-        out.extend(self.take_thought());
+        if let Some(thought) = self.take_thought() {
+            self.thought_emitted = true;
+            out.push(thought);
+        }
         out.extend(self.take_message());
         out
     }

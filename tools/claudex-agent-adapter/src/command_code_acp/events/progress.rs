@@ -46,6 +46,10 @@ pub fn progress_to_updates(event: &ProgressEvent) -> Vec<acp::SessionUpdate> {
         ProgressEvent::Thought(text) | ProgressEvent::Status(text) if !is_canned_progress(text) => {
             vec![thought_chunk(text)]
         }
+        ProgressEvent::ThoughtEnd(text) if !is_canned_progress(text) => {
+            // Coalescer normally collapses ThoughtEnd → Thought; keep a fallback.
+            vec![thought_chunk(text)]
+        }
         ProgressEvent::Message(text) if !is_canned_progress(text) => {
             if has_status_prefix(text.trim()) {
                 vec![thought_chunk(text)]
@@ -54,6 +58,7 @@ pub fn progress_to_updates(event: &ProgressEvent) -> Vec<acp::SessionUpdate> {
             }
         }
         ProgressEvent::Thought(_)
+        | ProgressEvent::ThoughtEnd(_)
         | ProgressEvent::Status(_)
         | ProgressEvent::Message(_)
         | ProgressEvent::Note(_) => Vec::new(),

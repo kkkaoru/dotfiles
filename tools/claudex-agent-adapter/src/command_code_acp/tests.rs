@@ -399,10 +399,10 @@ fn assert_live_message_and_thinking_deltas() {
         parse_stdout_line(r#"{"type":"event","event":{"type":"thinking_end","text":""}}"#),
         ParsedLine::Ignored
     );
-    assert_eq!(
+    assert!(matches!(
         parse_stdout_line(r#"{"type":"event","event":{"type":"thinking_end","text":"planning"}}"#),
-        ParsedLine::Ignored
-    );
+        ParsedLine::Progress(ProgressEvent::ThoughtEnd(note)) if note == "planning"
+    ));
 }
 
 fn assert_thinking_delta_ignored(text: &str) {

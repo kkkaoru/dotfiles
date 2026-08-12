@@ -38,8 +38,15 @@ pub(super) fn parse_event(event: WireEvent) -> ParsedLine {
             Some(text) => ParsedLine::Progress(ProgressEvent::Thought(text)),
             None => ParsedLine::Ignored,
         },
-        // Muse Spark `thinking_end` is a full snapshot, not a delta.
-        "thinking_end" => ParsedLine::Ignored,
+        // Muse Spark `thinking_end` is a full snapshot, not a delta. Replaying it
+        // after streamed `thinking_delta` caused CC Thought-for flicker
+        // (9b9cffc). Still accept it when Muse skipped deltas for the unit.
+        "thinking_end" => match text {
+            Some(text) if is_canned_progress(&text) => ParsedLine::Ignored,
+            Some(text) if text.trim().is_empty() => ParsedLine::Ignored,
+            Some(text) => ParsedLine::Progress(ProgressEvent::ThoughtEnd(text)),
+            None => ParsedLine::Ignored,
+        },
         "text_delta" | "message_update" => match text {
             Some(text) => ParsedLine::Progress(ProgressEvent::Message(text)),
             None => ParsedLine::Ignored,
