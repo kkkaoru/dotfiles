@@ -19,7 +19,6 @@ impl SchedulerDecision {
     }
 
     pub(super) fn guidance(&self, config: &SchedulerConfig) -> String {
-        let floor = config.active_floor.max(2);
         if self.actions.is_empty() {
             return format!(
                 "Dynamic parallel status: keep {} active lane(s) for the current independent work; re-check after each SubAgent completion or every {} minutes.",
@@ -29,8 +28,7 @@ impl SchedulerDecision {
         }
         let mut lines = Vec::with_capacity(1 + self.actions.len() + 2);
         lines.push(format!(
-            "SubAgent floor policy: maintain at least {} active lanes during long-running work; target concurrency is {}.",
-            floor,
+            "SubAgent floor policy: target concurrency is {} matching independent scopes; a single scope stays at one worker.",
             self.target_workers
         ));
         if self.completed_recently > 0 {
@@ -39,7 +37,7 @@ impl SchedulerDecision {
                 completed = self.completed_recently
             ));
         }
-        if self.active_model_families < config.min_model_families {
+        if self.target_workers >= 2 && self.active_model_families < config.min_model_families {
             lines.push(format!(
                 "Model-policy: ensure at least {} model families remain active.",
                 config.min_model_families

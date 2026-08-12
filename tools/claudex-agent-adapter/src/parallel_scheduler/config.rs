@@ -13,7 +13,7 @@ pub(crate) const SUBAGENT_MIN_MODEL_FAMILIES_ENV: &str = "CLAUDEX_SUBAGENT_MIN_M
 pub(crate) const SUBAGENT_REUSE_ENV: &str = "CLAUDEX_SUBAGENT_REUSE";
 pub(crate) const SUBAGENT_CLEANUP_ON_EXIT_ENV: &str = "CLAUDEX_SUBAGENT_CLEANUP_ON_EXIT";
 
-const DEFAULT_MIN_PARALLEL_WORKERS: usize = 3;
+const DEFAULT_MIN_PARALLEL_WORKERS: usize = 1;
 const DEFAULT_ACTIVE_FLOOR: usize = 2;
 pub(crate) const DEFAULT_MAX_PARALLEL_WORKERS: usize = 40;
 const DEFAULT_MIN_MODEL_FAMILIES: usize = 2;
@@ -54,7 +54,7 @@ impl SchedulerConfig {
         config.max_parallel_workers = max_workers.unwrap_or(DEFAULT_MAX_PARALLEL_WORKERS);
         config.max_parallel_workers = config
             .max_parallel_workers
-            .clamp(DEFAULT_MIN_PARALLEL_WORKERS, DEFAULT_MAX_PARALLEL_WORKERS);
+            .clamp(1, DEFAULT_MAX_PARALLEL_WORKERS);
         if let Some(value) = super::env::parse_usize_env(SUBAGENT_MIN_PARALLEL_ENV) {
             config.min_parallel_workers = value;
         }
@@ -76,16 +76,11 @@ impl SchedulerConfig {
         if let Some(value) = super::env::parse_bool_env(SUBAGENT_CLEANUP_ON_EXIT_ENV) {
             config.cleanup_on_exit = value;
         }
-        let max_floor = config.max_parallel_workers.saturating_sub(1).max(2);
-        config.active_floor = config.active_floor.clamp(2, max_floor);
-        let min_workers = DEFAULT_MIN_PARALLEL_WORKERS.max(config.active_floor.saturating_add(1));
         config.min_parallel_workers = config
             .min_parallel_workers
-            .clamp(min_workers, config.max_parallel_workers);
-        config.active_floor = config
-            .active_floor
-            .clamp(2, config.min_parallel_workers - 1);
-        config.min_model_families = config.min_model_families.max(2);
+            .clamp(1, config.max_parallel_workers);
+        config.active_floor = config.active_floor.clamp(1, config.max_parallel_workers);
+        config.min_model_families = config.min_model_families.max(1);
         config
     }
 }

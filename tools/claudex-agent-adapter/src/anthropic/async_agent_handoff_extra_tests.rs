@@ -560,7 +560,7 @@ fn exact_two_scope_target_hands_off_at_two() {
 }
 
 #[test]
-fn single_scope_substantive_work_keeps_configured_minimum_floor() {
+fn single_scope_substantive_work_hands_off_at_one_worker() {
     let scheduler = ParallelScheduler::new(SchedulerConfig {
         min_parallel_workers: 5,
         max_parallel_workers: 8,
@@ -569,10 +569,10 @@ fn single_scope_substantive_work_keeps_configured_minimum_floor() {
     let request = scheduler_handoff_request("Implement the authentication cache.");
 
     assert!(should_defer_background_handoff_with(
-        &scheduler, &request, 4
+        &scheduler, &request, 0
     ));
     assert!(!should_defer_background_handoff_with(
-        &scheduler, &request, 5
+        &scheduler, &request, 1
     ));
 }
 

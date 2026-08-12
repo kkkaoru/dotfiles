@@ -47,10 +47,8 @@ fn subscription_parallel_scheduler_instructions(request: &MessagesRequest) -> St
     let config = scheduler.config();
     let cadence_minutes = (config.reassess_interval.as_secs() / 60).max(1);
     format!(
-        "Dynamically size SubAgent fan-out for substantive work. {}. Launch at least {} ordinary workers across at least {} model families when the task can be decomposed; match independent scopes when higher; never exceed max_parallel or selected_workers. Do not start with one Explore and do not blindly use the concurrent cap. Only an atomic lookup/command stays at one worker. Recheck lanes after each SubAgent completion and every {cadence_minutes} minutes. If only one lane remains during ongoing work at a completion or cadence tick, interrupt stale work and dispatch replacements immediately. Reuse compatible workers before creating new processes. An explicit active user request for an exact worker count, a single worker, synchronous results, or no delegation overrides these defaults.",
+        "Dynamically size SubAgent fan-out for substantive work. {}. Match independent scopes (one scope → one ordinary worker; never exceed max_parallel or selected_workers). Do not start with one Explore as a substitute for scoped workers and do not blindly use the concurrent cap. Atomic Read, Grep, Glob, LS, WebSearch, or WebFetch lookups may stay in main. Recheck lanes after each SubAgent completion and every {cadence_minutes} minutes. If only one lane remains during ongoing multi-scope work at a completion or cadence tick, interrupt stale work and dispatch replacements for unfinished independent scopes. Reuse compatible workers before creating new processes. An explicit active user request for an exact worker count, a single worker, synchronous results, or no delegation overrides these defaults.",
         scheduler.guidance_for_request(request),
-        config.min_parallel_workers,
-        config.min_model_families
     )
 }
 

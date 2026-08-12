@@ -19,9 +19,8 @@ fn background_handoff_text(launch_count: usize) -> String {
 }
 
 /// Keep the parent provider turn open when Claude Code only acked a partial
-/// fan-out. The scheduler owns both exact multi-scope cardinality and the
-/// minimum floor for ordinary substantive work, so handoff must use its
-/// bounded target instead of deriving a second, contradictory floor.
+/// fan-out. The scheduler owns exact multi-scope cardinality (one scope → one
+/// worker), so handoff must use that bounded target instead of a second floor.
 fn should_defer_background_handoff(request: &MessagesRequest, launch_count: usize) -> bool {
     use crate::parallel_scheduler::ParallelScheduler;
 

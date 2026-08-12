@@ -5,9 +5,7 @@ const MARKER_KEY: &str = "claudexAgentBatch";
 const DEFAULT_MAX_BATCH_SIZE: usize = 40;
 
 pub(super) fn minimum_batch_size() -> usize {
-    crate::parallel_scheduler::ParallelScheduler::shared()
-        .config()
-        .min_parallel_workers
+    effective_batch_range(&crate::parallel_scheduler::ParallelScheduler::shared().config()).0
 }
 
 pub(super) struct PendingBatch<'a> {
@@ -57,6 +55,16 @@ pub(super) fn pending_batch(value: &Value) -> Option<PendingBatch<'_>> {
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn batch_minimum_stays_at_three_when_scheduler_min_is_one() {
+        let config = crate::parallel_scheduler::SchedulerConfig {
+            min_parallel_workers: 1,
+            ..Default::default()
+        };
+        let (minimum, _) = effective_batch_range(&config);
+        assert_eq!(minimum, 3);
+    }
 
     #[test]
     fn caps_batch_max_to_effective_maximum() {

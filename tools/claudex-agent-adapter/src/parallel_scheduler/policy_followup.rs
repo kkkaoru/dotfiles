@@ -51,7 +51,7 @@ pub(crate) fn apply_reuse_actions(
     );
     if config.cleanup_on_exit {
         decision.actions.push(
-            "After completion, reclaim obsolete or idle lanes; maintain two+ active reusable workers to sustain throughput."
+            "After completion, reclaim obsolete or idle lanes; keep reusable workers for unfinished independent scopes."
                 .to_owned(),
         );
     }
@@ -119,14 +119,9 @@ pub(crate) fn estimate_target_workers(
     }
     if scope_count::is_substantive_work(request) {
         let scopes = independent_scope_count(request).max(1);
-        // Known multi-scope → exact count. Substantive one-scope (GPT Explore) →
-        // min_parallel floor. Never blindly use max_parallel.
-        let desired = if scopes >= 2 {
-            scopes
-        } else {
-            config.min_parallel_workers.max(1)
-        };
-        return desired.min(config.max_parallel_workers);
+        // Match independent scopes. A single scope stays at one worker even
+        // when min_parallel_workers is raised by env.
+        return scopes.min(config.max_parallel_workers);
     }
     if active > 0 {
         return 1;
@@ -150,10 +145,7 @@ pub(crate) fn scope_guidance(request: &MessagesRequest, decision: &SchedulerDeci
                 "Task-shape: multiple independent scopes detected. Launch exactly {bounded_count} ordinary SubAgents in the same assistant turn; do not stop after the first worker. Do not blindly launch the concurrent cap."
             );
         }
-        return format!(
-            "Task-shape: substantive work. Launch {} ordinary background Agent/Task workers from distinct selected_workers in the first tool round (minimum parallel floor, not one Explore, not the concurrent cap).",
-            decision.target_workers.max(1)
-        );
+        return "Task-shape: one independent scope. Launch exactly one ordinary background Agent/Task worker; do not apply a minimum-parallel floor.".to_owned();
     }
     if !has_parallel_scope(request) {
         if decision.active_workers > 1 {

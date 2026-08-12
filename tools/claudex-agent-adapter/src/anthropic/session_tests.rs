@@ -824,7 +824,10 @@ fn codex_terra_main_omits_self_implement_parallelization_and_requires_subagent_f
     assert_eq!(params["claudexAcpRole"], "orchestrator");
     assert!(developer.contains("You are the orchestrator, not an implementation worker"));
     assert!(developer.contains("including when the outer model is Codex Terra"));
-    assert!(developer.contains("Agent/Task launch must be the first tool call"));
+    assert!(developer.contains("Agent/Task launch is the default first tool"));
+    assert!(developer.contains("atomic Read, Grep, Glob, LS, WebSearch, or WebFetch"));
+    assert!(!developer.contains("do not start with Read"));
+    assert!(!developer.contains("launch must be the first tool call"));
     assert!(
         !developer.contains("In Code tasks, avoid serializing independent operations"),
         "Terra main must not receive Codex self-implement parallelization"
@@ -923,8 +926,9 @@ fn assert_developer_guidance(developer: &str) {
         "explicitly requires live WebSearch",
         "unless they are explicitly active for the current task",
         "You are the orchestrator, not an implementation worker",
-        "Agent/Task launch must be the first tool call",
-        "do not start with Read, Bash, Edit, Grep, Glob",
+        "Agent/Task launch is the default first tool",
+        "atomic Read, Grep, Glob, LS, WebSearch, or WebFetch lookups may stay in main",
+        "Do not start with Bash, Edit, or Codex built-in parallel fetches",
         "Omit the SubAgent name field for ordinary SubAgents",
         "only when the active user explicitly supplies that teammate name",
         "Use only fields present in the exact Agent or Task schema supplied by Claude Code",
@@ -966,6 +970,18 @@ fn assert_developer_guidance(developer: &str) {
         assert!(
             developer.contains(phrase),
             "missing developer guidance: {phrase}"
+        );
+    }
+    const FORBIDDEN: &[&str] = &[
+        "do not start with Read",
+        "that Agent/Task launch must be the first tool call",
+        "Do not start with Bash, Edit, Glob",
+        "Launch at least 3 ordinary workers",
+    ];
+    for phrase in FORBIDDEN {
+        assert!(
+            !developer.contains(phrase),
+            "stale developer guidance must not forbid atomic main lookups: {phrase}"
         );
     }
 }
@@ -1100,11 +1116,10 @@ fn subscription_prompt_requires_atomic_parallel_launches() {
 }
 
 fn assert_subscription_atomic_launch_contract(prompt: &str) {
-    let minimum = crate::anthropic::agent_batch::minimum_batch_size();
     assert!(prompt.contains("same assistant message and tool round"));
     assert!(prompt.contains("exactly that many launch calls"));
-    assert!(prompt.contains(&format!("at least {minimum}")));
-    assert!(prompt.contains("ordinary workers"));
+    assert!(prompt.contains("one scope → one ordinary worker"));
+    assert!(prompt.contains("ordinary worker"));
     assert!(prompt.contains("run_in_background=true"));
     assert!(prompt.contains("Do not mix foreground and background launches"));
     assert!(prompt.contains("queued to a busy worker does not add parallel capacity"));
@@ -1182,22 +1197,22 @@ fn subscription_and_session_instructions_report_the_default_parallel_contract() 
     assert_parallel_contract_text(developer, &default_config, cadence);
 
     let prompt = subscription_request_prompt(&request(json!("parallel contract"), Vec::new()));
-    assert!(prompt.contains(&format!(
-        "Launch at least {} ordinary workers",
-        default_config.min_parallel_workers
-    )));
-    assert!(prompt.contains(&format!(
-        "across at least {} model families",
-        default_config.min_model_families
-    )));
-    assert!(prompt.contains("Do not start with one Explore"));
+    assert!(prompt.contains("Match independent scopes (one scope → one ordinary worker"));
+    assert!(prompt.contains("never exceed max_parallel or selected_workers"));
+    assert!(prompt.contains("Do not start with one Explore as a substitute for scoped workers"));
     assert!(prompt.contains("do not blindly use the concurrent cap"));
-    assert!(prompt.contains("Only an atomic lookup/command stays at one worker"));
+    assert!(
+        prompt.contains(
+            "Atomic Read, Grep, Glob, LS, WebSearch, or WebFetch lookups may stay in main"
+        )
+    );
     assert!(prompt.contains(&format!("every {} minutes", cadence)));
     assert!(prompt.contains("interrupt stale work"));
     assert!(prompt.contains("An explicit active user request for an exact worker count"));
     assert!(prompt.contains("Adapter orchestration defaults (runtime metadata)"));
     assert!(!prompt.contains("prompt injection"));
+    assert!(!prompt.contains("do not start with Read"));
+    assert!(!prompt.contains("Launch at least 3 ordinary workers"));
 }
 
 #[test]
@@ -1217,7 +1232,7 @@ fn subscription_prompt_keeps_turn_varying_scheduler_after_messages() {
 }
 
 fn assert_default_parallel_config(config: &crate::parallel_scheduler::SchedulerConfig) {
-    assert_eq!(config.min_parallel_workers, 3);
+    assert_eq!(config.min_parallel_workers, 1);
     assert_eq!(config.max_parallel_workers, 40);
     assert_eq!(config.active_floor, 2);
     assert_eq!(config.min_model_families, 2);
@@ -1249,18 +1264,16 @@ fn assert_parallel_contract_text(
     config: &crate::parallel_scheduler::SchedulerConfig,
     cadence: u64,
 ) {
-    assert!(text.contains("Runtime parallel policy: dynamically size substantive work"));
-    assert!(text.contains(&format!(
-        "at least {} ordinary workers",
-        config.min_parallel_workers
-    )));
+    assert!(text.contains("Runtime parallel policy: size SubAgent fan-out to independent scopes"));
+    assert!(text.contains("one scope → one ordinary worker"));
     assert!(text.contains(&format!("never more than {}", config.max_parallel_workers)));
-    assert!(text.contains("Do not start with one Explore"));
+    assert!(text.contains("Do not start with one Explore as a substitute for scoped workers"));
     assert!(text.contains("do not blindly launch the concurrent cap"));
-    assert!(text.contains(&format!(
-        "across at least {} model families",
-        config.min_model_families
-    )));
+    assert!(
+        text.contains(
+            "Atomic Read, Grep, Glob, LS, WebSearch, or WebFetch lookups may stay in main"
+        )
+    );
     assert!(text.contains(&format!("every {cadence} minutes")));
     assert!(text.contains("interrupt stale work"));
     assert_eq!(text.matches("Dynamic parallel status:").count(), 1);
