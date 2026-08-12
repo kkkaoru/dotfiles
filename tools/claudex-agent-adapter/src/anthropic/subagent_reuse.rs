@@ -1,4 +1,11 @@
-use std::{collections::HashMap, path::PathBuf, sync::Mutex};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    sync::{
+        Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 
 use super::MessagesRequest;
 mod guidance;
@@ -20,23 +27,29 @@ use records::{
     LaunchRecord, already_has_resume, apply_transcript, find_reusable_launch, launch_model,
     scope_is_occupied, summarize_scope,
 };
-#[cfg(test)]
-use store::StoredStates;
-use store::{CACHE_FILE_NAME, SessionState, Store, reuse_recipients, set_limit_metadata};
+use store::{
+    CACHE_FILE_NAME, ClaimRecord, SessionState, Store, reuse_recipients, set_limit_metadata,
+};
 
 pub(crate) const MAX_SUBAGENTS_PER_SESSION_ENV: &str = "CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION";
 pub(crate) const DEFAULT_MAX_SUBAGENTS_PER_SESSION: usize = 1_024;
 
 pub(super) struct SubagentReuseRegistry {
     states: Mutex<HashMap<String, SessionState>>,
+    session_revisions: Mutex<HashMap<String, u64>>,
+    claims: Mutex<HashMap<String, ClaimRecord>>,
     store: Option<Store>,
+    owner: String,
 }
 
 impl Default for SubagentReuseRegistry {
     fn default() -> Self {
         Self {
             states: Mutex::new(HashMap::new()),
+            session_revisions: Mutex::new(HashMap::new()),
+            claims: Mutex::new(HashMap::new()),
             store: None,
+            owner: owner_token(),
         }
     }
 }
@@ -51,18 +64,26 @@ impl SubagentReuseRegistry {
                 .join(".cache/claudex")
                 .join(CACHE_FILE_NAME),
         );
+        let loaded = store.load_snapshot();
         Self {
-            states: Mutex::new(store.load()),
+            states: Mutex::new(loaded.sessions),
+            session_revisions: Mutex::new(loaded.session_revisions),
+            claims: Mutex::new(HashMap::new()),
             store: Some(store),
+            owner: owner_token(),
         }
     }
 
     #[cfg(test)]
     pub(super) fn with_store(path: PathBuf) -> Self {
         let store = Store::new(path);
+        let loaded = store.load_snapshot();
         Self {
-            states: Mutex::new(store.load()),
+            states: Mutex::new(loaded.sessions),
+            session_revisions: Mutex::new(loaded.session_revisions),
+            claims: Mutex::new(HashMap::new()),
             store: Some(store),
+            owner: owner_token(),
         }
     }
 }
@@ -76,3 +97,12 @@ mod launch;
 #[cfg(test)]
 #[path = "subagent_reuse_tests.rs"]
 mod tests;
+
+fn owner_token() -> String {
+    static NEXT_OWNER: AtomicU64 = AtomicU64::new(0);
+    format!(
+        "{}-{}",
+        std::process::id(),
+        NEXT_OWNER.fetch_add(1, Ordering::Relaxed)
+    )
+}

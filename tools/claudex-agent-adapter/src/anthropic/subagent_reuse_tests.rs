@@ -5,12 +5,15 @@ use serde_json::{Value, json};
 use std::{
     collections::HashMap,
     fs,
+    process::Command,
     sync::{Arc, Barrier},
     thread,
+    time::{Duration, Instant},
 };
 
 use super::records::launch_records;
 use super::records_scope::{latest_user_text, scope_similarity};
+use super::store::{CACHE_VERSION, ClaimRequest, Store, StoredStates, current_pid, unix_seconds};
 use super::*;
 
 fn request(session: &str, messages: Vec<Value>) -> MessagesRequest {
@@ -1239,6 +1242,305 @@ fn concurrent_persistence_does_not_race_the_atomic_replace() {
     }
     let bytes = std::fs::read(path).expect("persisted registry");
     serde_json::from_slice::<StoredStates>(&bytes).expect("valid registry JSON");
+}
+
+#[test]
+fn literal_v1_cache_migrates_to_v2_without_losing_sessions() {
+    let root = tempfile::tempdir().expect("reuse registry fixture");
+    let path = root.path().join("reuse.json");
+    let legacy = json!({
+        "version": 1,
+        "sessions": {
+            "session-a": {
+                "launches": [{
+                    "key": "tool-a",
+                    "recipient": "worker-a",
+                    "scope": "Audit Rust",
+                    "model": "worker-model",
+                    "status": "active"
+                }]
+            }
+        }
+    });
+    fs::write(&path, serde_json::to_vec(&legacy).expect("legacy JSON"))
+        .expect("write legacy cache");
+
+    let store = Store::new(path.clone());
+    assert_eq!(
+        store.load_snapshot().sessions["session-a"].launches[0].recipient,
+        "worker-a"
+    );
+    store
+        .save(store.load_snapshot().sessions)
+        .expect("rewrite migrated cache");
+    let migrated = serde_json::from_slice::<StoredStates>(&fs::read(path).expect("v2 cache"))
+        .expect("v2 JSON");
+    assert_eq!(migrated.version, CACHE_VERSION);
+    assert_eq!(migrated.sessions["session-a"].launches[0].key, "tool-a");
+}
+
+#[test]
+fn stale_session_delta_cannot_resurrect_a_deleted_session() {
+    let root = tempfile::tempdir().expect("reuse registry fixture");
+    let path = root.path().join("reuse.json");
+    let store = Store::new(path);
+    let mut initial = HashMap::new();
+    initial.insert(
+        "session-a".to_owned(),
+        SessionState {
+            launches: vec![LaunchRecord {
+                key: "tool-a".to_owned(),
+                recipient: "worker-a".to_owned(),
+                scope: "Audit Rust".to_owned(),
+                model: Some("worker-model".to_owned()),
+                status: "active".to_owned(),
+            }],
+        },
+    );
+    store.save(initial.clone()).expect("initial snapshot");
+    let base_revision = store
+        .load_snapshot()
+        .session_revisions
+        .get("session-a")
+        .copied()
+        .expect("session revision");
+    assert!(
+        store
+            .delete_session("session-a", base_revision)
+            .expect("delete session")
+    );
+    assert!(
+        !store
+            .save_session_delta("session-a", initial["session-a"].clone(), base_revision)
+            .expect("stale delta")
+    );
+    let loaded = store.load_snapshot();
+    assert!(!loaded.sessions.contains_key("session-a"));
+    assert!(loaded.tombstones.contains_key("session-a"));
+}
+
+#[test]
+fn claims_reap_dead_and_expired_leases_and_fence_stale_release() {
+    let root = tempfile::tempdir().expect("reuse registry fixture");
+    let path = root.path().join("reuse.json");
+    let store = Store::new(path);
+    let now = unix_seconds();
+    let scope = "Audit Rust";
+    let dead = store
+        .acquire_claim(
+            ClaimRequest {
+                session_id: "session-a".to_owned(),
+                scope: scope.to_owned(),
+                model: Some("worker-model".to_owned()),
+                owner: "dead-owner".to_owned(),
+                pid: 0,
+                tool_use_id: "dead-tool".to_owned(),
+                expires_unix_seconds: now + 60,
+            },
+            now,
+        )
+        .expect("dead claim acquisition")
+        .expect("dead claim");
+    assert!(
+        !store
+            .claims_occupy("session-a", scope, Some("worker-model"), now)
+            .expect("dead claim reap")
+    );
+    assert_eq!(dead.pid, 0);
+
+    let live = store
+        .acquire_claim(
+            ClaimRequest {
+                session_id: "session-a".to_owned(),
+                scope: scope.to_owned(),
+                model: Some("worker-model".to_owned()),
+                owner: "owner-a".to_owned(),
+                pid: current_pid(),
+                tool_use_id: "live-tool".to_owned(),
+                expires_unix_seconds: now + 60,
+            },
+            now,
+        )
+        .expect("live claim acquisition")
+        .expect("live claim");
+    let mut stale = live.clone();
+    stale.created_revision = stale.created_revision.saturating_sub(1);
+    assert!(!store.release_claim(&stale, now).expect("stale release"));
+    let mut foreign = live.clone();
+    foreign.owner = "owner-b".to_owned();
+    assert!(!store.release_claim(&foreign, now).expect("foreign release"));
+    assert!(
+        store
+            .claims_occupy("session-a", scope, Some("worker-model"), now)
+            .expect("live claim occupancy")
+    );
+    assert!(store.release_claim(&live, now).expect("owner release"));
+    assert!(
+        !store
+            .claims_occupy("session-a", scope, Some("worker-model"), now)
+            .expect("released claim occupancy")
+    );
+
+    let expired = store
+        .acquire_claim(
+            ClaimRequest {
+                session_id: "session-a".to_owned(),
+                scope: scope.to_owned(),
+                model: Some("worker-model".to_owned()),
+                owner: "expired-owner".to_owned(),
+                pid: current_pid(),
+                tool_use_id: "expired-tool".to_owned(),
+                expires_unix_seconds: now.saturating_sub(1),
+            },
+            now,
+        )
+        .expect("expired claim acquisition")
+        .expect("expired claim");
+    assert!(
+        !store
+            .claims_occupy("session-a", scope, Some("worker-model"), now)
+            .expect("expired claim reap")
+    );
+    assert_eq!(expired.expires_unix_seconds, now.saturating_sub(1));
+}
+
+#[test]
+fn barrier_admission_allows_only_one_same_scope_claim() {
+    let root = tempfile::tempdir().expect("reuse registry fixture");
+    let path = Arc::new(root.path().join("reuse.json"));
+    let barrier = Arc::new(Barrier::new(12));
+    let threads = (0..12)
+        .map(|index| {
+            let path = Arc::clone(&path);
+            let barrier = Arc::clone(&barrier);
+            thread::spawn(move || {
+                let store = Store::new((*path).clone());
+                barrier.wait();
+                store
+                    .acquire_claim(
+                        ClaimRequest {
+                            session_id: "session-a".to_owned(),
+                            scope: "same scope".to_owned(),
+                            model: Some("worker-model".to_owned()),
+                            owner: format!("owner-{index}"),
+                            pid: current_pid(),
+                            tool_use_id: format!("tool-{index}"),
+                            expires_unix_seconds: unix_seconds() + 60,
+                        },
+                        unix_seconds(),
+                    )
+                    .expect("claim admission")
+                    .is_some()
+            })
+        })
+        .collect::<Vec<_>>();
+    let admitted = threads
+        .into_iter()
+        .map(|thread| thread.join().expect("admission thread"))
+        .filter(|admitted| *admitted)
+        .count();
+    assert_eq!(admitted, 1, "one lease must win same-scope admission");
+}
+
+#[test]
+fn subprocess_barrier_admission_allows_only_one_same_scope_claim() {
+    const WORKERS: usize = 6;
+    let root = tempfile::tempdir().expect("reuse registry fixture");
+    let cache = root.path().join("reuse.json");
+    let child_dir = root.path().join("children");
+    fs::create_dir(&child_dir).expect("child barrier directory");
+    let executable = std::env::current_exe().expect("reuse test executable");
+    let mut children = Vec::new();
+    for index in 0..WORKERS {
+        let child = Command::new(&executable)
+            .args([
+                "--exact",
+                "anthropic::subagent_reuse::tests::subprocess_claim_helper",
+                "--ignored",
+                "--nocapture",
+            ])
+            .env("CLAUDEX_REUSE_HELPER_DIR", &child_dir)
+            .env("CLAUDEX_REUSE_HELPER_INDEX", index.to_string())
+            .env("CLAUDEX_REUSE_HELPER_CACHE", &cache)
+            .spawn()
+            .expect("spawn claim helper");
+        children.push(child);
+    }
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while (0..WORKERS)
+        .filter(|index| child_dir.join(format!("ready-{index}")).exists())
+        .count()
+        != WORKERS
+    {
+        assert!(Instant::now() < deadline, "subprocess barrier timed out");
+        thread::yield_now();
+    }
+    fs::write(child_dir.join("release"), b"go").expect("release claim helpers");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while (0..WORKERS)
+        .filter(|index| child_dir.join(format!("done-{index}")).exists())
+        .count()
+        != WORKERS
+    {
+        assert!(
+            Instant::now() < deadline,
+            "subprocess completion barrier timed out"
+        );
+        thread::yield_now();
+    }
+    let winners = (0..WORKERS)
+        .filter(|index| child_dir.join(format!("winner-{index}")).exists())
+        .count();
+    fs::write(child_dir.join("finish"), b"done").expect("finish claim helpers");
+    for mut child in children {
+        assert!(child.wait().expect("claim helper status").success());
+    }
+    assert_eq!(winners, 1, "one subprocess must win same-scope admission");
+}
+
+#[test]
+#[ignore]
+fn subprocess_claim_helper() {
+    let Some(directory) = std::env::var_os("CLAUDEX_REUSE_HELPER_DIR") else {
+        return;
+    };
+    let index = std::env::var("CLAUDEX_REUSE_HELPER_INDEX").expect("helper index");
+    let directory = std::path::PathBuf::from(directory);
+    let cache = std::env::var_os("CLAUDEX_REUSE_HELPER_CACHE").expect("helper cache");
+    fs::write(directory.join(format!("ready-{index}")), b"ready").expect("ready barrier");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !directory.join("release").exists() {
+        assert!(Instant::now() < deadline, "helper barrier timed out");
+        thread::yield_now();
+    }
+    let now = unix_seconds();
+    let admitted = Store::new(std::path::PathBuf::from(cache))
+        .acquire_claim(
+            ClaimRequest {
+                session_id: "session-a".to_owned(),
+                scope: "same scope".to_owned(),
+                model: Some("worker-model".to_owned()),
+                owner: format!("subprocess-owner-{index}"),
+                pid: current_pid(),
+                tool_use_id: format!("subprocess-tool-{index}"),
+                expires_unix_seconds: now + 60,
+            },
+            now,
+        )
+        .expect("subprocess claim admission")
+        .is_some();
+    if admitted {
+        fs::write(directory.join(format!("winner-{index}")), b"winner").expect("winner marker");
+    }
+    fs::write(directory.join(format!("done-{index}")), b"done").expect("done barrier");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !directory.join("finish").exists() {
+        assert!(
+            Instant::now() < deadline,
+            "helper completion barrier timed out"
+        );
+        thread::yield_now();
+    }
 }
 
 #[test]

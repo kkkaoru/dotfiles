@@ -45,9 +45,18 @@ impl SubscriptionStream {
             );
             return Ok(true);
         }
-        context
+        if !context
             .subagent_reuse
-            .note_inflight_launch(session_id, input, id);
+            .note_inflight_launch(session_id, input, id)
+        {
+            tracing::info!(
+                session_id,
+                tool = name,
+                tool_use_id = id,
+                "skipped SubAgent launch because admission claim was taken"
+            );
+            return Ok(true);
+        }
         Ok(false)
     }
 
