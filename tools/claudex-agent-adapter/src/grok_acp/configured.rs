@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 
 use super::{AcpLaunch, AcpProvider, GrokAcp};
+use crate::working_directory;
 
 impl GrokAcp {
     pub async fn spawn_configured(model: &str, launch: &AcpLaunch) -> Result<Arc<Self>> {
@@ -15,7 +16,8 @@ impl GrokAcp {
         max_concurrency: Option<usize>,
         effort: Option<&str>,
     ) -> Result<Arc<Self>> {
-        let cwd = std::env::current_dir().context("resolve configured ACP working directory")?;
+        let cwd =
+            working_directory::resolve_process_cwd("resolve configured ACP working directory")?;
         let provider = if launch
             .arguments
             .iter()

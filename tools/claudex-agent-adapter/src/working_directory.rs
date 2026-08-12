@@ -1,9 +1,84 @@
 use std::{
     ffi::OsStr,
+    io,
     path::{Path, PathBuf},
 };
 
+use anyhow::{Context, Result};
+
 pub(crate) const HEADER_NAME: &str = "x-claudex-working-directory";
+
+/// Resolve a directory the adapter process can spawn children from.
+///
+/// `std::env::current_dir()` fails with ENOENT when the daemon was started in a
+/// directory that has since been deleted (hot-swap temp worktrees). Fall back
+/// to `~/.cache/claudex` instead of failing the first Grok/ACP turn.
+pub(crate) fn resolve_process_cwd(context: &str) -> Result<PathBuf> {
+    resolve_cwd(std::env::current_dir(), context)
+}
+
+/// Move off a deleted or ephemeral install cwd so later `getcwd` calls succeed.
+pub(crate) fn pin_process_cwd() -> Result<PathBuf> {
+    match std::env::current_dir() {
+        Ok(cwd) if cwd.is_dir() && !is_ephemeral_install_cwd(&cwd) => Ok(cwd),
+        _ => {
+            let cwd = fallback_process_cwd()?;
+            std::env::set_current_dir(&cwd)
+                .with_context(|| format!("pin adapter working directory to {}", cwd.display()))?;
+            Ok(cwd)
+        }
+    }
+}
+
+fn resolve_cwd(current: io::Result<PathBuf>, context: &str) -> Result<PathBuf> {
+    if let Ok(cwd) = &current
+        && cwd.is_dir()
+    {
+        return Ok(cwd.clone());
+    }
+    fallback_process_cwd().with_context(|| match current {
+        Ok(cwd) => format!(
+            "{context}: current directory {} is not a directory",
+            cwd.display()
+        ),
+        Err(error) => format!("{context}: {error}"),
+    })
+}
+
+fn fallback_process_cwd() -> Result<PathBuf> {
+    if let Some(cache) = adapter_cache_dir() {
+        std::fs::create_dir_all(&cache).ok();
+        if let Ok(canonical) = cache.canonicalize()
+            && canonical.is_dir()
+        {
+            return Ok(canonical);
+        }
+    }
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from)
+        && let Ok(canonical) = home.canonicalize()
+        && canonical.is_dir()
+    {
+        return Ok(canonical);
+    }
+    let tmp = std::env::temp_dir();
+    tmp.canonicalize()
+        .ok()
+        .filter(|path| path.is_dir())
+        .with_context(|| format!("no usable fallback working directory ({})", tmp.display()))
+}
+
+fn adapter_cache_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache/claudex"))
+}
+
+fn is_ephemeral_install_cwd(cwd: &Path) -> bool {
+    cwd.components().any(|component| {
+        component
+            .as_os_str()
+            .to_str()
+            .is_some_and(|name| name.starts_with("claudex-temp-swap"))
+    })
+}
 
 pub(crate) fn custom_headers(
     existing: Option<&OsStr>,
@@ -115,5 +190,41 @@ mod tests {
         for invalid in ["/tmp/%", "/tmp/%0", "/tmp/%GG", "/tmp/%FF"] {
             assert!(decode(invalid).is_none());
         }
+    }
+
+    #[test]
+    fn keeps_an_existing_process_cwd() {
+        let root = tempfile::tempdir().expect("cwd fixture");
+        let cwd = resolve_cwd(Ok(root.path().to_path_buf()), "ctx").expect("keep cwd");
+        assert_eq!(cwd, root.path());
+    }
+
+    #[test]
+    fn falls_back_when_process_cwd_is_gone() {
+        let cwd = resolve_cwd(
+            Err(io::Error::from_raw_os_error(2)),
+            "resolve Grok ACP working directory",
+        )
+        .expect("fallback cwd");
+        assert!(cwd.is_dir(), "{}", cwd.display());
+    }
+
+    #[test]
+    fn falls_back_when_process_cwd_is_a_file() {
+        let root = tempfile::tempdir().expect("cwd fixture");
+        let file = root.path().join("not-a-dir");
+        std::fs::write(&file, b"").expect("write file cwd");
+        let cwd = resolve_cwd(Ok(file), "resolve Grok ACP working directory").expect("fallback");
+        assert!(cwd.is_dir(), "{}", cwd.display());
+    }
+
+    #[test]
+    fn treats_temp_swap_paths_as_ephemeral() {
+        assert!(is_ephemeral_install_cwd(Path::new(
+            "/private/tmp/claudex-temp-swap-60b7db9"
+        )));
+        assert!(!is_ephemeral_install_cwd(Path::new(
+            "/Users/kkk4oru/ghq/github.com/kkkaoru/dotfiles"
+        )));
     }
 }

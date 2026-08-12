@@ -70,6 +70,7 @@ pub(super) fn spawn_adapter(request: SpawnRequest<'_>) -> Result<u32> {
     }
     command.env(super::super::SERVICE_LISTEN_ENV, service_listen.to_string());
     let child = command
+        .current_dir(log_dir)
         .env_remove(crate::anthropic::SUBAGENT_HARD_TIMEOUT_ENV)
         .env_remove(crate::anthropic::LEGACY_SUBAGENT_RESPONSE_TIMEOUT_ENV)
         .stdin(Stdio::null())

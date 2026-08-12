@@ -59,6 +59,7 @@ pub async fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<i32> {
 }
 
 pub async fn serve(options: AdapterOptions) -> Result<()> {
+    crate::working_directory::pin_process_cwd()?;
     crate::logging::init();
     let auth_token = configured_token();
     if !options.listen.ip().is_loopback() & auth_token.is_none() {
