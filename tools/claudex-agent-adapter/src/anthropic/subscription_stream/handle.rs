@@ -17,7 +17,7 @@ impl SubscriptionStream {
         envelope: &Value,
     ) -> Result<bool> {
         match envelope.get("type").and_then(Value::as_str) {
-            Some("stream_event") => self.forward_text_delta(sender, envelope).await,
+            Some("stream_event") => self.forward_stream_event(sender, envelope).await,
             Some("assistant") => self.forward_tool_uses(sender, envelope).await,
             Some("result") => {
                 self.finish(sender, envelope).await?;
@@ -25,6 +25,17 @@ impl SubscriptionStream {
             }
             _ => Ok(false),
         }
+    }
+
+    async fn forward_stream_event(
+        &mut self,
+        sender: &mpsc::Sender<Result<Bytes, Infallible>>,
+        envelope: &Value,
+    ) -> Result<bool> {
+        if self.forward_thinking_stream_event(sender, envelope).await? {
+            return Ok(true);
+        }
+        self.forward_text_delta(sender, envelope).await
     }
 
     pub(super) async fn forward_text_delta(
@@ -50,6 +61,7 @@ impl SubscriptionStream {
             return Ok(false);
         }
         self.activity.close(sender).await?;
+        self.close_native_thinking(sender).await?;
         if !self.text_started || self.text_closed {
             send_text_start(sender, self.next_index).await?;
             self.text_started = true;
@@ -94,6 +106,12 @@ impl SubscriptionStream {
     ) -> Result<()> {
         if self.saw_result || self.saw_tool_use || self.blocked_subagent {
             return Ok(());
+        }
+        if let Some((index, _)) = self.thinking_open {
+            return crate::anthropic::subscription_activity::send_thinking_delta(
+                sender, index, "\u{200b}",
+            )
+            .await;
         }
         if self.text_closed {
             send_text_start(sender, self.next_index).await?;

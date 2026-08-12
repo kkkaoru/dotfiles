@@ -92,7 +92,7 @@ impl SubscriptionActivity {
     }
 }
 
-async fn send_thinking_delta(
+pub(in crate::anthropic) async fn send_thinking_delta(
     sender: &mpsc::Sender<Result<Bytes, Infallible>>,
     index: usize,
     thinking: &str,

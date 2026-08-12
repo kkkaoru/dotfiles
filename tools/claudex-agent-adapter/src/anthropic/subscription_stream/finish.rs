@@ -19,6 +19,7 @@ impl SubscriptionStream {
     ) -> Result<()> {
         validate_subscription_result_for_model(result, None)?;
         self.activity.close(sender).await?;
+        self.close_native_thinking(sender).await?;
         if self.saw_tool_use {
             self.close_text(sender).await?;
             send_tool_finish(sender, result_output_tokens(result)).await?;

@@ -131,6 +131,7 @@ impl SubscriptionStream {
         Self {
             text_started: false,
             text_closed: false,
+            thinking_open: None,
             saw_tool_use: false,
             launch_fanout_open: false,
             launch_fanout_deadline: None,

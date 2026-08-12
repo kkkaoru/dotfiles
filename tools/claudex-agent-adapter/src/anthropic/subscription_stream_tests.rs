@@ -242,6 +242,7 @@ async fn handles_ignored_invalid_and_non_text_events() {
     let mut stream = SubscriptionStream {
         text_started: false,
         text_closed: false,
+        thinking_open: None,
         saw_tool_use: false,
         launch_fanout_open: false,
         launch_fanout_deadline: None,
@@ -282,6 +283,7 @@ async fn forwards_empty_and_regular_deltas_then_finishes_once() {
     let mut stream = SubscriptionStream {
         text_started: false,
         text_closed: false,
+        thinking_open: None,
         saw_tool_use: false,
         launch_fanout_open: false,
         launch_fanout_deadline: None,
@@ -328,6 +330,7 @@ async fn keeps_native_web_results_inside_the_subscription() {
     let mut stream = SubscriptionStream {
         text_started: false,
         text_closed: false,
+        thinking_open: None,
         saw_tool_use: false,
         launch_fanout_open: false,
         launch_fanout_deadline: None,
@@ -408,6 +411,7 @@ async fn keeps_structured_output_internal_and_returns_its_json_result_as_text() 
     let mut stream = SubscriptionStream {
         text_started: false,
         text_closed: false,
+        thinking_open: None,
         saw_tool_use: false,
         launch_fanout_open: false,
         launch_fanout_deadline: None,
@@ -464,6 +468,7 @@ async fn empty_partial_delta_is_not_visible_output_and_remains_eligible_for_stat
     let mut stream = SubscriptionStream {
         text_started: false,
         text_closed: false,
+        thinking_open: None,
         saw_tool_use: false,
         launch_fanout_open: false,
         launch_fanout_deadline: None,
@@ -502,6 +507,7 @@ async fn shows_activity_status_before_delayed_subscription_output() {
     let mut stream = SubscriptionStream {
         text_started: false,
         text_closed: false,
+        thinking_open: None,
         saw_tool_use: false,
         launch_fanout_open: false,
         launch_fanout_deadline: None,
@@ -546,6 +552,7 @@ async fn falls_back_to_result_text_and_estimated_tokens() {
     let mut stream = SubscriptionStream {
         text_started: false,
         text_closed: false,
+        thinking_open: None,
         saw_tool_use: false,
         launch_fanout_open: false,
         launch_fanout_deadline: None,
@@ -580,6 +587,7 @@ async fn rejects_unsuccessful_results() {
     let mut stream = SubscriptionStream {
         text_started: false,
         text_closed: false,
+        thinking_open: None,
         saw_tool_use: false,
         launch_fanout_open: false,
         launch_fanout_deadline: None,
@@ -750,6 +758,7 @@ async fn consume_iteration_emits_keepalive_when_activity_deadline_elapses() {
     let mut stream = SubscriptionStream {
         text_started: false,
         text_closed: false,
+        thinking_open: None,
         saw_tool_use: false,
         launch_fanout_open: false,
         launch_fanout_deadline: None,
@@ -788,6 +797,7 @@ async fn consume_iteration_hides_lines_after_a_pending_result() {
     let mut stream = SubscriptionStream {
         text_started: false,
         text_closed: false,
+        thinking_open: None,
         saw_tool_use: false,
         launch_fanout_open: false,
         launch_fanout_deadline: None,
@@ -848,6 +858,7 @@ fn blocked_agent_subscription_stream() -> SubscriptionStream {
     SubscriptionStream {
         text_started: false,
         text_closed: false,
+        thinking_open: None,
         saw_tool_use: false,
         launch_fanout_open: false,
         launch_fanout_deadline: None,
@@ -924,6 +935,7 @@ async fn resumes_text_on_a_fresh_index_after_internal_web_search() {
     let mut stream = SubscriptionStream {
         text_started: false,
         text_closed: false,
+        thinking_open: None,
         saw_tool_use: false,
         launch_fanout_open: false,
         launch_fanout_deadline: None,
@@ -983,6 +995,7 @@ async fn deduplicates_replayed_tool_ids_and_preserves_tool_terminal_state() {
     let mut stream = SubscriptionStream {
         text_started: false,
         text_closed: false,
+        thinking_open: None,
         saw_tool_use: false,
         launch_fanout_open: false,
         launch_fanout_deadline: None,
@@ -1076,6 +1089,7 @@ async fn sanitizes_and_records_contextual_agent_tool_input() {
     let mut stream = SubscriptionStream {
         text_started: true,
         text_closed: false,
+        thinking_open: None,
         saw_tool_use: false,
         launch_fanout_open: false,
         launch_fanout_deadline: None,
@@ -1127,6 +1141,7 @@ async fn rejects_each_malformed_subscription_tool_shape() {
     let mut stream = SubscriptionStream {
         text_started: false,
         text_closed: false,
+        thinking_open: None,
         saw_tool_use: false,
         launch_fanout_open: false,
         launch_fanout_deadline: None,
@@ -1177,6 +1192,7 @@ async fn ignores_non_top_level_tool_events_and_exercises_completed_state() {
     let mut stream = SubscriptionStream {
         text_started: false,
         text_closed: false,
+        thinking_open: None,
         saw_tool_use: false,
         launch_fanout_open: false,
         launch_fanout_deadline: None,
@@ -1259,6 +1275,7 @@ async fn blocks_an_unsupported_subagent_without_failing_the_parent_stream() {
     let mut stream = SubscriptionStream {
         text_started: false,
         text_closed: false,
+        thinking_open: None,
         saw_tool_use: false,
         launch_fanout_open: false,
         launch_fanout_deadline: None,
@@ -1356,6 +1373,7 @@ async fn blocks_exhausted_ollama_glm_launch_without_emitting_tool_use() {
     let mut stream = SubscriptionStream {
         text_started: false,
         text_closed: false,
+        thinking_open: None,
         saw_tool_use: false,
         launch_fanout_open: false,
         launch_fanout_deadline: None,
@@ -1412,6 +1430,7 @@ async fn blocks_routing_disabled_ollama_glm_without_cooldown_file() {
     let mut stream = SubscriptionStream {
         text_started: false,
         text_closed: false,
+        thinking_open: None,
         saw_tool_use: false,
         launch_fanout_open: false,
         launch_fanout_deadline: None,
@@ -1469,6 +1488,7 @@ async fn skips_task_stop_for_background_shell_or_foreign_ids() {
     let mut stream = SubscriptionStream {
         text_started: false,
         text_closed: false,
+        thinking_open: None,
         saw_tool_use: false,
         launch_fanout_open: false,
         launch_fanout_deadline: None,
@@ -1531,6 +1551,7 @@ async fn forwards_task_stop_for_live_claude_code_agent_ids() {
     let mut stream = SubscriptionStream {
         text_started: false,
         text_closed: false,
+        thinking_open: None,
         saw_tool_use: false,
         launch_fanout_open: false,
         launch_fanout_deadline: None,
@@ -1578,6 +1599,7 @@ async fn skips_stale_task_output_when_live_agents_exist() {
     let mut stream = SubscriptionStream {
         text_started: false,
         text_closed: false,
+        thinking_open: None,
         saw_tool_use: false,
         launch_fanout_open: false,
         launch_fanout_deadline: None,
@@ -1640,6 +1662,7 @@ async fn forwards_task_output_for_live_claude_code_agent_ids() {
     let mut stream = SubscriptionStream {
         text_started: false,
         text_closed: false,
+        thinking_open: None,
         saw_tool_use: false,
         launch_fanout_open: false,
         launch_fanout_deadline: None,
@@ -1701,6 +1724,7 @@ async fn accepts_a_valid_agent_model_without_a_prompt() {
     let stream = SubscriptionStream {
         text_started: false,
         text_closed: false,
+        thinking_open: None,
         saw_tool_use: false,
         launch_fanout_open: false,
         launch_fanout_deadline: None,
@@ -1785,6 +1809,7 @@ async fn prepare_tool_input_rewrites_same_scope_launch_to_resume() {
     let stream = SubscriptionStream {
         text_started: false,
         text_closed: false,
+        thinking_open: None,
         saw_tool_use: false,
         launch_fanout_open: false,
         launch_fanout_deadline: None,
@@ -2050,6 +2075,7 @@ async fn routes_a_standard_general_purpose_agent_to_a_claudex_worker() {
     let stream = SubscriptionStream {
         text_started: false,
         text_closed: false,
+        thinking_open: None,
         saw_tool_use: false,
         launch_fanout_open: false,
         launch_fanout_deadline: None,
@@ -2296,6 +2322,7 @@ async fn keepalive_after_forwarded_tool_use_does_not_inject_still_working() {
     let mut stream = SubscriptionStream {
         text_started: false,
         text_closed: false,
+        thinking_open: None,
         saw_tool_use: false,
         launch_fanout_open: false,
         launch_fanout_deadline: None,
@@ -3019,6 +3046,7 @@ async fn hydrates_auxiliary_claude_subagent_routes_without_adapter_fields_in_pub
     let stream = SubscriptionStream {
         text_started: false,
         text_closed: false,
+        thinking_open: None,
         saw_tool_use: false,
         launch_fanout_open: false,
         launch_fanout_deadline: None,
@@ -3056,6 +3084,7 @@ fn bare_subscription_stream(tools: Vec<String>) -> SubscriptionStream {
     SubscriptionStream {
         text_started: false,
         text_closed: false,
+        thinking_open: None,
         saw_tool_use: false,
         launch_fanout_open: false,
         launch_fanout_deadline: None,
@@ -3281,6 +3310,7 @@ fn prepare_tool_input_rejects_disabled_subagent_models() {
     let stream = SubscriptionStream {
         text_started: false,
         text_closed: false,
+        thinking_open: None,
         saw_tool_use: false,
         launch_fanout_open: false,
         launch_fanout_deadline: None,
