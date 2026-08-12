@@ -341,6 +341,48 @@ fn metadata(output: &Output) -> Value {
     serde_json::from_str(encoded).expect("routing metadata JSON")
 }
 
+fn delegation_state(fixture: &Fixture, session_id: &str) -> Value {
+    serde_json::from_slice(&fs::read(fixture.delegation_state_path(session_id)).unwrap()).unwrap()
+}
+
+fn assert_policy_agreement(
+    metadata: &Value,
+    state: &Value,
+    prompt_opt_out: bool,
+    delegation_required: bool,
+    direct_main_execution: &str,
+) {
+    assert_eq!(metadata["base_delegation_required"], true);
+    assert_eq!(metadata["prompt_delegation_opt_out"], prompt_opt_out);
+    assert_eq!(metadata["delegation_required"], delegation_required);
+    assert_eq!(metadata["direct_main_execution"], direct_main_execution);
+
+    assert_eq!(state["base_delegation_required"], true);
+    assert_eq!(state["prompt_opt_out"], prompt_opt_out);
+    assert_eq!(state["delegation_required"], delegation_required);
+    assert_eq!(state["direct_main_execution"], direct_main_execution);
+    assert_eq!(
+        state["selected_workers_count"].as_u64().unwrap() as usize,
+        metadata["selected_workers"].as_array().unwrap().len()
+    );
+}
+
+fn assert_exact_v2_lifetime(state: &Value) {
+    assert_eq!(state.as_object().unwrap().len(), 9);
+    assert_eq!(state["version"], 2);
+    assert_eq!(
+        state["expires_at"].as_f64().unwrap() - state["updated_at"].as_f64().unwrap(),
+        86_400.0
+    );
+}
+
+fn assert_worker_choices_retained(metadata: &Value) {
+    let workers = metadata["selected_workers"].as_array().unwrap();
+    assert!(!workers.is_empty());
+    assert!(!metadata["selected_agents"].as_array().unwrap().is_empty());
+    assert_eq!(metadata["preferred_worker"]["agent"], workers[0]["agent"]);
+}
+
 #[test]
 fn exact_prompt_only_incident_bypasses_all_io_and_processes() {
     let fixture = Fixture::new(false);
@@ -357,6 +399,18 @@ fn exact_prompt_only_incident_bypasses_all_io_and_processes() {
     let output = fixture.run(&serde_json::to_string(&payload).unwrap());
     assert_eq!(json_stdout(&output), serde_json::json!({}));
     assert!(output.stderr.is_empty());
+    fixture.assert_no_process();
+}
+
+#[test]
+fn lifecycle_text_containing_opt_out_never_writes_prompt_policy() {
+    let fixture = Fixture::new(false);
+    let output = fixture.run(
+        r#"{"session_id":"generated","prompt":"<task-notification>do not delegate</task-notification>"}"#,
+    );
+    assert_eq!(json_stdout(&output), serde_json::json!({}));
+    assert!(!fixture.delegation_state_path("generated").exists());
+    assert!(!fixture.home.join(".cache/claudex").exists());
     fixture.assert_no_process();
 }
 
@@ -406,47 +460,44 @@ fn notification_with_trailing_human_prompt_routes_normally() {
 }
 
 #[test]
-fn user_prompt_writes_distinct_v2_states_and_opt_out_changes_output() {
+fn reverse_order_sessions_keep_b_opt_out_separate_from_a_denial_policy() {
     let fixture = Fixture::new(true);
     let _guard = fixture.hold_refresh_lock();
-    let routed = fixture.run_routed(
-        r#"{"session_id":"session-a","prompt":"Please implement this"}"#,
-        &[],
-    );
-    assert!(
-        !metadata(&routed)["selected_workers"]
-            .as_array()
-            .unwrap()
-            .is_empty()
-    );
-
+    // Deliberately publish the opt-out session first: a later routed session
+    // must not inherit it, and the earlier session must keep its own state.
     let direct = fixture.run_routed(
         r#"{"sessionId":"session-b","prompt":"Please DO NOT DELEGATE this turn"}"#,
         &[],
     );
     let direct_metadata = metadata(&direct);
-    assert_eq!(direct_metadata["selected_workers"], serde_json::json!([]));
-    assert_eq!(direct_metadata["delegation_required"], false);
-    assert_eq!(direct_metadata["direct_main_execution"], "allowed");
-    assert_eq!(direct_metadata["delegation_opt_out"], true);
+    assert_worker_choices_retained(&direct_metadata);
     assert!(context(&direct).contains("delegation is not required for this current prompt"));
 
-    let first: Value =
-        serde_json::from_slice(&fs::read(fixture.delegation_state_path("session-a")).unwrap())
-            .unwrap();
-    let second: Value =
-        serde_json::from_slice(&fs::read(fixture.delegation_state_path("session-b")).unwrap())
-            .unwrap();
-    assert_eq!(first["version"], 2);
-    assert_eq!(first["delegation_required"], true);
-    assert_eq!(second["delegation_required"], false);
+    let second = delegation_state(&fixture, "session-b");
+    assert_policy_agreement(&direct_metadata, &second, true, false, "allowed");
+    assert_exact_v2_lifetime(&second);
+
+    let routed = fixture.run_routed(
+        r#"{"session_id":"session-a","prompt":"Please implement this"}"#,
+        &[],
+    );
+    let routed_metadata = metadata(&routed);
+    assert_worker_choices_retained(&routed_metadata);
+    assert!(context(&routed).contains("denials are also enforced by PreToolUse"));
+
+    let first = delegation_state(&fixture, "session-a");
+    assert_policy_agreement(&routed_metadata, &first, false, true, "fallback-only");
+    assert_exact_v2_lifetime(&first);
     assert_ne!(first["session_key"], second["session_key"]);
+    let second_after = delegation_state(&fixture, "session-b");
+    assert_eq!(second_after, second);
+
     let legacy: Value = serde_json::from_slice(
         &fs::read(fixture.home.join(".cache/claudex/delegation-state.json")).unwrap(),
     )
     .unwrap();
     assert_eq!(legacy["delegation_required"], false);
-    assert_eq!(legacy["migration"], "session-scoped-v2");
+    assert_eq!(legacy["version"], 1);
     fixture.assert_no_process();
 }
 
@@ -465,7 +516,7 @@ fn present_invalid_current_session_id_does_not_fall_back_to_legacy_id() {
     )
     .unwrap();
     assert_eq!(legacy["delegation_required"], false);
-    assert_eq!(legacy["migration"], "session-scoped-v2");
+    assert_eq!(legacy["version"], 1);
     fixture.assert_no_process();
 }
 
@@ -488,6 +539,35 @@ fn subagent_start_never_writes_delegation_policy_state() {
             .join(".cache/claudex/delegation-state.json")
             .exists()
     );
+    fixture.assert_no_process();
+}
+
+#[test]
+fn migration_write_failure_is_visible_and_preserves_existing_cache() {
+    use std::os::unix::fs::symlink;
+
+    let fixture = Fixture::new(true);
+    let _guard = fixture.hold_refresh_lock();
+    let cache = fixture.home.join(".cache/claudex");
+    let legacy = cache.join("delegation-state.json");
+    fs::write(&legacy, r#"{"delegation_required":true}"#).unwrap();
+    let outside = fixture.root.path().join("outside-lock");
+    fs::write(&outside, "unchanged").unwrap();
+    symlink(&outside, cache.join("delegation-state.migration.lock")).unwrap();
+
+    let output = fixture.run_routed(
+        r#"{"session_id":"session-a","prompt":"Please implement this"}"#,
+        &[],
+    );
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("publish session-scoped delegation policy")
+    );
+    let legacy: Value = serde_json::from_slice(&fs::read(legacy).unwrap()).unwrap();
+    assert_eq!(legacy["delegation_required"], true);
+    assert_eq!(fs::read_to_string(outside).unwrap(), "unchanged");
+    assert!(!fixture.delegation_state_path("session-a").exists());
     fixture.assert_no_process();
 }
 

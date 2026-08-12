@@ -2,6 +2,7 @@ use claudex_tool_policy::{PolicyContext, handle_event, handle_event_with_context
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use std::fs;
+use std::os::unix::fs::PermissionsExt as _;
 use std::path::Path;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -45,17 +46,25 @@ fn write_delegation(cache: &Path, required: bool) {
 }
 
 fn write_session_delegation(cache: &Path, session_id: &str, required: bool, now: f64) {
+    write_session_state(cache, session_id, required, false, now);
+}
+
+fn write_session_state(cache: &Path, session_id: &str, base: bool, opt_out: bool, now: f64) {
     let key = hex::encode(Sha256::digest(session_id.as_bytes()));
     let directory = cache.join("delegation-state-v2");
     fs::create_dir_all(&directory).unwrap();
+    let required = base && !opt_out;
     fs::write(
         directory.join(format!("{key}.json")),
         json!({
             "version": 2,
             "session_key": key,
             "updated_at": now,
+            "expires_at": now + 86_400.0,
+            "base_delegation_required": base,
+            "prompt_opt_out": opt_out,
             "delegation_required": required,
-            "selected_workers_count": if required { 2 } else { 0 },
+            "selected_workers_count": if base { 2 } else { 0 },
             "direct_main_execution": if required { "fallback-only" } else { "allowed" }
         })
         .to_string(),
@@ -65,6 +74,23 @@ fn write_session_delegation(cache: &Path, session_id: &str, required: bool, now:
 
 fn as_object(value: Value) -> Map<String, Value> {
     value.as_object().cloned().unwrap()
+}
+
+fn explicit_context(cache: &Path, now: f64) -> PolicyContext {
+    PolicyContext::new(cache.to_path_buf(), cache.to_path_buf(), now, true, false)
+}
+
+fn file_lock_path(cache: &Path, target: &Path) -> std::path::PathBuf {
+    let absolute = fs::canonicalize(target).unwrap();
+    let digest = hex::encode(Sha256::digest(absolute.to_string_lossy().as_bytes()));
+    cache.join("file-locks").join(format!("{digest}.lock.json"))
+}
+
+fn session_state_path(cache: &Path, session_id: &str) -> std::path::PathBuf {
+    let digest = hex::encode(Sha256::digest(session_id.as_bytes()));
+    cache
+        .join("delegation-state-v2")
+        .join(format!("{digest}.json"))
 }
 
 fn run(payload: Value, cache: &Path, extra: &[(&'static str, Option<&str>)]) -> Value {
@@ -269,6 +295,83 @@ fn file_lock_blocks_second_writer() {
 }
 
 #[test]
+fn file_lock_symlink_attack_is_denied_without_clobbering_target() {
+    use std::os::unix::fs::symlink;
+
+    let tmp = TempDir::new().unwrap();
+    let target = tmp.path().join("shared.rs");
+    fs::write(&target, "source\n").unwrap();
+    let lock_dir = tmp.path().join("file-locks");
+    fs::create_dir(&lock_dir).unwrap();
+    fs::set_permissions(&lock_dir, fs::Permissions::from_mode(0o700)).unwrap();
+    let victim = tmp.path().join("victim");
+    fs::write(&victim, "do-not-touch\n").unwrap();
+    symlink(&victim, file_lock_path(tmp.path(), &target)).unwrap();
+
+    let payload = json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Write",
+        "tool_input": {"file_path": target, "content": "new"},
+        "session_id": "session-a",
+        "agent_id": "agent-a"
+    });
+    let output = handle_event_with_context(
+        payload.as_object().unwrap(),
+        &explicit_context(tmp.path(), 1_000.0),
+    );
+    assert_eq!(output["hookSpecificOutput"]["permissionDecision"], "deny");
+    assert_eq!(fs::read_to_string(victim).unwrap(), "do-not-touch\n");
+}
+
+#[test]
+fn stale_file_lock_is_reclaimed_under_guard_after_ttl() {
+    let tmp = TempDir::new().unwrap();
+    let target = tmp.path().join("shared.rs");
+    fs::write(&target, "source\n").unwrap();
+    let first = json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Write",
+        "tool_input": {"file_path": target, "content": "first"},
+        "session_id": "session-a",
+        "agent_id": "agent-a"
+    });
+    let first_result = handle_event_with_context(
+        first.as_object().unwrap(),
+        &explicit_context(tmp.path(), 1_000.0),
+    );
+    assert_ne!(
+        first_result
+            .pointer("/hookSpecificOutput/permissionDecision")
+            .and_then(Value::as_str),
+        Some("deny")
+    );
+
+    let second = json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Write",
+        "tool_input": {"file_path": target, "content": "second"},
+        "session_id": "session-b",
+        "agent_id": "agent-b"
+    });
+    let second_result = handle_event_with_context(
+        second.as_object().unwrap(),
+        &explicit_context(tmp.path(), 1_000.0 + 45.0 * 60.0 + 1.0),
+    );
+    assert_ne!(
+        second_result
+            .pointer("/hookSpecificOutput/permissionDecision")
+            .and_then(Value::as_str),
+        Some("deny")
+    );
+    let record: Value = serde_json::from_slice(
+        &fs::read(file_lock_path(tmp.path(), &tmp.path().join("shared.rs"))).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(record["agent_id"], "agent-b");
+    assert_eq!(record["session_id"], "session-b");
+}
+
+#[test]
 fn subagent_stop_releases_locks() {
     let tmp = TempDir::new().unwrap();
     let target = tmp.path().join("owned.rs");
@@ -460,8 +563,8 @@ fn routing_cache_selected_workers_allows_main_read() {
 #[test]
 fn explicit_context_keeps_two_sessions_isolated_without_environment_mutation() {
     let tmp = TempDir::new().unwrap();
+    write_session_state(tmp.path(), "session-b", true, true, 1_000.0);
     write_session_delegation(tmp.path(), "session-a", true, 1_000.0);
-    write_session_delegation(tmp.path(), "session-b", false, 1_000.0);
     let context = PolicyContext::new(
         tmp.path().to_path_buf(),
         tmp.path().to_path_buf(),
@@ -473,8 +576,15 @@ fn explicit_context_keeps_two_sessions_isolated_without_environment_mutation() {
         "hook_event_name": "PreToolUse",
         "tool_name": "Write",
         "tool_input": {"file_path": "/tmp/x", "content": "hello"},
-        "session_id": "session-a"
+        "sessionId": "session-b"
     });
+    assert_eq!(
+        handle_event_with_context(payload.as_object().unwrap(), &context),
+        json!({})
+    );
+
+    payload.as_object_mut().unwrap().remove("sessionId");
+    payload["session_id"] = Value::from("session-a");
     let denied = handle_event_with_context(payload.as_object().unwrap(), &context);
     assert_eq!(
         denied
@@ -502,7 +612,7 @@ fn explicit_context_rejects_stale_bad_key_and_malformed_schema_fail_open() {
     let context = PolicyContext::new(
         tmp.path().to_path_buf(),
         tmp.path().to_path_buf(),
-        30_000.0,
+        100_000.0,
         true,
         false,
     );
@@ -514,9 +624,9 @@ fn explicit_context_rejects_stale_bad_key_and_malformed_schema_fail_open() {
     });
     for (timestamp, key, count) in [
         (1.0, hex::encode(Sha256::digest(b"session-a")), 1_u64),
-        (30_061.0, hex::encode(Sha256::digest(b"session-a")), 1),
-        (30_000.0, hex::encode(Sha256::digest(b"other")), 1),
-        (30_000.0, hex::encode(Sha256::digest(b"session-a")), 999),
+        (100_301.0, hex::encode(Sha256::digest(b"session-a")), 1),
+        (100_000.0, hex::encode(Sha256::digest(b"other")), 1),
+        (100_000.0, hex::encode(Sha256::digest(b"session-a")), 999),
     ] {
         let expected_path = {
             let correct = hex::encode(Sha256::digest(b"session-a"));
@@ -530,6 +640,9 @@ fn explicit_context_rejects_stale_bad_key_and_malformed_schema_fail_open() {
                 "version": 2,
                 "session_key": key,
                 "updated_at": timestamp,
+                "expires_at": timestamp + 86_400.0,
+                "base_delegation_required": true,
+                "prompt_opt_out": false,
                 "delegation_required": true,
                 "selected_workers_count": count,
                 "direct_main_execution": "fallback-only"
@@ -540,6 +653,47 @@ fn explicit_context_rejects_stale_bad_key_and_malformed_schema_fail_open() {
         assert_eq!(
             handle_event_with_context(payload.as_object().unwrap(), &context),
             json!({})
+        );
+    }
+}
+
+#[test]
+fn explicit_context_strictly_rejects_missing_extra_and_inconsistent_state_fields() {
+    let tmp = TempDir::new().unwrap();
+    let context = explicit_context(tmp.path(), 1_001.0);
+    let payload = json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Write",
+        "tool_input": {"file_path": "/tmp/x", "content": "hello"},
+        "session_id": "session-a"
+    });
+    write_session_delegation(tmp.path(), "session-a", true, 1_000.0);
+    let path = session_state_path(tmp.path(), "session-a");
+    let valid: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+
+    let mut variants = Vec::new();
+    let mut missing = valid.clone();
+    missing.as_object_mut().unwrap().remove("expires_at");
+    variants.push(missing);
+    let mut extra = valid.clone();
+    extra["unexpected"] = Value::Bool(true);
+    variants.push(extra);
+    let mut inconsistent = valid.clone();
+    inconsistent["prompt_opt_out"] = Value::Bool(true);
+    variants.push(inconsistent);
+    let mut bad_expiry = valid.clone();
+    bad_expiry["expires_at"] = Value::from(999.0);
+    variants.push(bad_expiry);
+    let mut overlong_ttl = valid;
+    overlong_ttl["expires_at"] = Value::from(87_401.0);
+    variants.push(overlong_ttl);
+
+    for variant in variants {
+        fs::write(&path, serde_json::to_vec(&variant).unwrap()).unwrap();
+        assert_eq!(
+            handle_event_with_context(payload.as_object().unwrap(), &context),
+            json!({}),
+            "invalid state must fail open: {variant}"
         );
     }
 }
@@ -568,7 +722,7 @@ fn explicit_context_rejects_oversized_state_and_symlinked_state_directory() {
             "{}.json",
             hex::encode(Sha256::digest(b"session-a"))
         )),
-        vec![b' '; 4_097],
+        vec![b' '; 16_385],
     )
     .unwrap();
     assert_eq!(
@@ -583,6 +737,63 @@ fn explicit_context_rejects_oversized_state_and_symlinked_state_directory() {
     symlink(
         outside.join("delegation-state-v2"),
         tmp.path().join("delegation-state-v2"),
+    )
+    .unwrap();
+    assert_eq!(
+        handle_event_with_context(payload.as_object().unwrap(), &context),
+        json!({})
+    );
+}
+
+#[test]
+fn explicit_context_rejects_symlinked_cache_chain() {
+    use std::os::unix::fs::symlink;
+
+    let tmp = TempDir::new().unwrap();
+    let home = tmp.path().join("home");
+    let real_dot_cache = tmp.path().join("real-dot-cache");
+    fs::create_dir(&home).unwrap();
+    fs::create_dir(&real_dot_cache).unwrap();
+    symlink(&real_dot_cache, home.join(".cache")).unwrap();
+    let cache = home.join(".cache/claudex");
+    fs::create_dir(&cache).unwrap();
+    write_session_delegation(&cache, "session-a", true, 1_000.0);
+
+    let context = PolicyContext::new(cache, home, 1_001.0, true, false);
+    let payload = json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Write",
+        "tool_input": {"file_path": "/tmp/x", "content": "hello"},
+        "session_id": "session-a"
+    });
+    assert_eq!(
+        handle_event_with_context(payload.as_object().unwrap(), &context),
+        json!({})
+    );
+}
+
+#[test]
+fn explicit_context_rejects_group_writable_state_file_and_directory() {
+    let tmp = TempDir::new().unwrap();
+    let context = explicit_context(tmp.path(), 1_001.0);
+    let payload = json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "Write",
+        "tool_input": {"file_path": "/tmp/x", "content": "hello"},
+        "session_id": "session-a"
+    });
+    write_session_delegation(tmp.path(), "session-a", true, 1_000.0);
+    let state_path = session_state_path(tmp.path(), "session-a");
+    fs::set_permissions(&state_path, fs::Permissions::from_mode(0o620)).unwrap();
+    assert_eq!(
+        handle_event_with_context(payload.as_object().unwrap(), &context),
+        json!({})
+    );
+
+    fs::set_permissions(&state_path, fs::Permissions::from_mode(0o600)).unwrap();
+    fs::set_permissions(
+        tmp.path().join("delegation-state-v2"),
+        fs::Permissions::from_mode(0o720),
     )
     .unwrap();
     assert_eq!(

@@ -263,10 +263,9 @@ pub fn normal_hook_output(arguments: &Arguments, payload: Option<&Value>) -> Res
         .flatten();
     let summary = delegation::effective_summary(summary, prompt_payload);
     if arguments.event == HookEvent::UserPromptSubmit {
-        // Policy publication is advisory to the routing hook. Any filesystem
-        // failure must leave PreToolUse fail-open instead of blocking a prompt.
         let id = payload.and_then(delegation::session_id);
-        let _ = delegation::write_delegation_state(&state.paths.home, id, &summary, state.now);
+        delegation::write_delegation_state(&state.paths.home, id, &summary, state.now)
+            .context("publish session-scoped delegation policy")?;
     }
     hook::hook_output_for_agent(&summary, arguments.event.as_str(), agent_type)
 }

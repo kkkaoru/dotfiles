@@ -1,18 +1,29 @@
 use crate::policy::PolicyContext;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions};
 use std::io::Read as _;
-use std::os::unix::fs::OpenOptionsExt as _;
-use std::path::{Path, PathBuf};
+use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
+use std::path::{Component, Path, PathBuf};
 
 const STATE_VERSION: u64 = 2;
 const STATE_DIRECTORY: &str = "delegation-state-v2";
 const MAX_SESSION_ID_BYTES: usize = 256;
-const MAX_STATE_BYTES: u64 = 4 * 1024;
+const MAX_STATE_BYTES: u64 = 16 * 1024;
 const MAX_SELECTED_WORKERS: u64 = 256;
-const STATE_TTL_SECONDS: f64 = 6.0 * 60.0 * 60.0;
-const MAX_FUTURE_SKEW_SECONDS: f64 = 60.0;
+const STATE_TTL_SECONDS: f64 = 86_400.0;
+const MAX_FUTURE_SKEW_SECONDS: f64 = 300.0;
+const STATE_KEYS: &[&str] = &[
+    "version",
+    "session_key",
+    "updated_at",
+    "expires_at",
+    "base_delegation_required",
+    "prompt_opt_out",
+    "delegation_required",
+    "selected_workers_count",
+    "direct_main_execution",
+];
 
 /// Prefer the current snake-case field. Its presence prevents fallback to the
 /// legacy camel-case field even when its value is malformed.
@@ -36,13 +47,54 @@ pub(crate) fn state_path(cache_dir: &Path, id: &str) -> PathBuf {
         .join(format!("{}.json", session_key(id)))
 }
 
-fn state_directory_is_safe(cache_dir: &Path) -> bool {
-    let real_directory = |path: &Path| {
-        fs::symlink_metadata(path)
-            .ok()
-            .is_some_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
+fn current_uid() -> u32 {
+    unsafe { libc::geteuid() }
+}
+
+fn owner_controlled_directory(path: &Path) -> bool {
+    fs::symlink_metadata(path).ok().is_some_and(|metadata| {
+        metadata.is_dir()
+            && !metadata.file_type().is_symlink()
+            && metadata.uid() == current_uid()
+            && metadata.mode() & 0o022 == 0
+    })
+}
+
+fn owner_controlled_cache_chain(home_dir: &Path, cache_dir: &Path) -> bool {
+    if !owner_controlled_directory(cache_dir) {
+        return false;
+    }
+    let Ok(relative) = cache_dir.strip_prefix(home_dir) else {
+        // An explicit cache override may live outside HOME. Its parent is not
+        // part of the configured trust root, so validate the cache itself.
+        return true;
     };
-    real_directory(cache_dir) && real_directory(&cache_dir.join(STATE_DIRECTORY))
+    if !owner_controlled_directory(home_dir) {
+        return false;
+    }
+    let mut current = home_dir.to_path_buf();
+    relative.components().all(|component| {
+        let Component::Normal(segment) = component else {
+            return false;
+        };
+        current.push(segment);
+        owner_controlled_directory(&current)
+    })
+}
+
+fn state_directory_is_safe(context: &PolicyContext) -> bool {
+    owner_controlled_cache_chain(context.home_dir(), context.cache_dir())
+        && owner_controlled_directory(&context.cache_dir().join(STATE_DIRECTORY))
+}
+
+fn owner_controlled_file(file: &File) -> bool {
+    file.metadata().ok().is_some_and(|metadata| {
+        metadata.is_file()
+            && metadata.nlink() == 1
+            && metadata.uid() == current_uid()
+            && metadata.mode() & 0o022 == 0
+            && metadata.len() <= MAX_STATE_BYTES
+    })
 }
 
 fn read_bounded_object(path: &Path) -> Option<Value> {
@@ -51,10 +103,10 @@ fn read_bounded_object(path: &Path) -> Option<Value> {
         .read(true)
         .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
     let file = options.open(path).ok()?;
-    let metadata = file.metadata().ok()?;
-    if !metadata.is_file() || metadata.len() > MAX_STATE_BYTES {
+    if !owner_controlled_file(&file) {
         return None;
     }
+    let metadata = file.metadata().ok()?;
     let mut payload = Vec::with_capacity(metadata.len() as usize);
     file.take(MAX_STATE_BYTES + 1)
         .read_to_end(&mut payload)
@@ -67,31 +119,40 @@ fn read_bounded_object(path: &Path) -> Option<Value> {
         .filter(Value::is_object)
 }
 
-fn valid_timestamp(state: &Value, now: f64) -> bool {
+fn valid_timestamps(state: &Value, now: f64) -> bool {
     if !now.is_finite() || now < 0.0 {
         return false;
     }
-    state
-        .get("updated_at")
-        .and_then(Value::as_f64)
-        .is_some_and(|updated| {
-            updated.is_finite()
-                && updated >= 0.0
-                && updated <= now + MAX_FUTURE_SKEW_SECONDS
-                && now - updated <= STATE_TTL_SECONDS
-        })
+    let Some(updated) = state.get("updated_at").and_then(Value::as_f64) else {
+        return false;
+    };
+    let Some(expires) = state.get("expires_at").and_then(Value::as_f64) else {
+        return false;
+    };
+    updated.is_finite()
+        && expires.is_finite()
+        && updated >= 0.0
+        && expires >= updated
+        && expires - updated <= STATE_TTL_SECONDS
+        && updated <= now + MAX_FUTURE_SKEW_SECONDS
+        && now <= expires
 }
 
 fn validated_requirement(state: &Value, expected_key: &str, now: f64) -> Option<bool> {
-    if state.get("version").and_then(Value::as_u64) != Some(STATE_VERSION)
+    let object = state.as_object()?;
+    if object.len() != STATE_KEYS.len()
+        || !STATE_KEYS.iter().all(|key| object.contains_key(*key))
+        || state.get("version").and_then(Value::as_u64) != Some(STATE_VERSION)
         || state.get("session_key").and_then(Value::as_str) != Some(expected_key)
-        || !valid_timestamp(state, now)
+        || !valid_timestamps(state, now)
     {
         return None;
     }
+    let base = state.get("base_delegation_required")?.as_bool()?;
+    let opted_out = state.get("prompt_opt_out")?.as_bool()?;
     let required = state.get("delegation_required")?.as_bool()?;
     let count = state.get("selected_workers_count")?.as_u64()?;
-    if count > MAX_SELECTED_WORKERS {
+    if count > MAX_SELECTED_WORKERS || required != (base && !opted_out) {
         return None;
     }
     let direct = state.get("direct_main_execution")?.as_str()?;
@@ -110,7 +171,7 @@ pub(crate) fn delegation_required(payload: &Map<String, Value>, context: &Policy
     let Some(id) = session_id(payload) else {
         return false;
     };
-    if !state_directory_is_safe(context.cache_dir()) {
+    if !state_directory_is_safe(context) {
         return false;
     }
     let expected_key = session_key(id);

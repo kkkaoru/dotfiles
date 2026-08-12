@@ -163,12 +163,12 @@ fn handle_pre_tool_use(payload: &Map<String, Value>, context: &PolicyContext) ->
 
 fn handle_post_tool_use(payload: &Map<String, Value>, context: &PolicyContext) -> Value {
     let tool_name = payload.get("tool_name").and_then(Value::as_str);
-    let agent_id = payload.get("agent_id").and_then(Value::as_str);
     let tool_input = payload.get("tool_input").and_then(Value::as_object);
-    if let (Some(tool_name), Some(agent_id), Some(tool_input)) = (tool_name, agent_id, tool_input)
+    if let (Some(tool_name), Some(tool_input)) = (tool_name, tool_input)
         && MUTATING_FILE_TOOLS.contains(tool_name)
+        && nonempty_str(payload.get("agent_id")).is_some()
     {
-        release_paths(agent_id, &tool_file_paths(tool_name, tool_input), context);
+        release_paths(payload, &tool_file_paths(tool_name, tool_input), context);
     }
     allow(None, None)
 }
@@ -184,8 +184,8 @@ fn handle_subagent_stop(payload: &Map<String, Value>, context: &PolicyContext) -
     {
         return allow(None, None);
     }
-    if let Some(agent_id) = nonempty_str(payload.get("agent_id")) {
-        release_agent_locks(agent_id, context);
+    if nonempty_str(payload.get("agent_id")).is_some() {
+        release_agent_locks(payload, context);
     }
     allow(None, None)
 }

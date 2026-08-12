@@ -1,6 +1,5 @@
 use serde_json::Value;
 use std::env;
-use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -39,12 +38,6 @@ pub(crate) fn env_truthy(name: &str, default: bool) -> bool {
 
 pub(crate) fn is_child_runtime() -> bool {
     CHILD_SKIP_ENVS.iter().any(|name| env_truthy(name, false))
-}
-
-pub(crate) fn load_json_object(path: &std::path::Path) -> Option<Value> {
-    let text = fs::read_to_string(path).ok()?;
-    let value: Value = serde_json::from_str(&text).ok()?;
-    if value.is_object() { Some(value) } else { None }
 }
 
 pub(crate) fn now_seconds() -> f64 {

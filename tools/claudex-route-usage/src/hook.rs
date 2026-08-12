@@ -134,9 +134,10 @@ pub fn hook_output_for_agent(
         "sonnet_subagent_suppressed": summary.get("sonnet_subagent_suppressed").and_then(Value::as_bool).unwrap_or(false),
         "sonnet_subagent_explicit_allowed": summary.get("sonnet_subagent_explicit_allowed").and_then(Value::as_bool).unwrap_or(false),
         "orchestration_mode": summary.get("orchestration_mode").cloned().unwrap_or_else(|| Value::from("subagent-first")),
+        "base_delegation_required": summary.get("base_delegation_required").and_then(Value::as_bool).unwrap_or(false),
+        "prompt_delegation_opt_out": summary.get("prompt_delegation_opt_out").and_then(Value::as_bool).unwrap_or(false),
         "delegation_required": summary.get("delegation_required").and_then(Value::as_bool).unwrap_or(false),
         "direct_main_execution": summary.get("direct_main_execution").cloned().unwrap_or_else(|| Value::from("allowed")),
-        "delegation_opt_out": summary.get("delegation_opt_out").and_then(Value::as_bool).unwrap_or(false),
         "background_status_required": true,
         "tool_policy_scope": if event_name == "SubagentStart" { "subagent-full-tools" } else { "main-orchestrator" },
         "worker_capacity": worker_capacity_metadata(summary),
@@ -187,6 +188,8 @@ mod tests {
             "disabled_subagent_models": [],
             "advisor": {"agent":"custom-advisor","model":"claude-fable-5","effort":"xhigh"},
             "orchestration_mode": "subagent-first",
+            "base_delegation_required": true,
+            "prompt_delegation_opt_out": false,
             "delegation_required": true,
             "direct_main_execution": "fallback-only"
         })
@@ -254,22 +257,20 @@ mod tests {
     #[test]
     fn opted_out_summary_emits_direct_policy_and_metadata() {
         let mut summary = sample_summary();
-        summary["selected_agents"] = json!([]);
-        summary["selected_workers"] = json!([]);
-        summary["preferred_worker"] = Value::Null;
         summary["delegation_required"] = Value::Bool(false);
         summary["direct_main_execution"] = Value::from("allowed");
-        summary["delegation_opt_out"] = Value::Bool(true);
+        summary["prompt_delegation_opt_out"] = Value::Bool(true);
         let output = hook_output_for_agent(&summary, "UserPromptSubmit", None).unwrap();
         let context = output["hookSpecificOutput"]["additionalContext"]
             .as_str()
             .unwrap();
         assert!(context.contains("delegation is not required for this current prompt"));
         let metadata = routing_metadata(&output);
-        assert_eq!(metadata["selected_workers"], json!([]));
+        assert_eq!(metadata["selected_workers"], summary["selected_workers"]);
+        assert_eq!(metadata["base_delegation_required"], true);
         assert_eq!(metadata["delegation_required"], false);
         assert_eq!(metadata["direct_main_execution"], "allowed");
-        assert_eq!(metadata["delegation_opt_out"], true);
+        assert_eq!(metadata["prompt_delegation_opt_out"], true);
     }
 
     fn routing_metadata(output: &Value) -> Value {
