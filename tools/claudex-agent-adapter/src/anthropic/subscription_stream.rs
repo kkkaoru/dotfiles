@@ -29,7 +29,6 @@ mod consume_finish;
 mod finish;
 mod handle;
 mod handle_route;
-mod handle_thinking;
 mod launch_prep;
 mod lifecycle;
 mod post_eof;
@@ -134,8 +133,6 @@ async fn stream_subscription_model(
 struct SubscriptionStream {
     text_started: bool,
     text_closed: bool,
-    /// Remapped index + optional signature for a live Claude thinking block.
-    thinking_open: Option<(usize, Option<String>)>,
     saw_tool_use: bool,
     launch_fanout_open: bool,
     launch_fanout_deadline: Option<tokio::time::Instant>,
@@ -152,8 +149,5 @@ struct SubscriptionStream {
 mod state;
 
 #[cfg(test)]
-#[cfg_attr(coverage_nightly, coverage(off))]
-mod tests {
-    include!("subscription_stream_tests.rs");
-    include!("subscription_stream_thinking_tests.rs");
-}
+#[path = "subscription_stream_tests.rs"]
+mod tests;

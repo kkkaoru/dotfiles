@@ -40,11 +40,8 @@ impl SubscriptionStream {
         if tool_uses.is_empty() {
             return Ok(false);
         }
-        let closed_visible = self.activity.is_open()
-            || self.thinking_open.is_some()
-            || (self.text_started && !self.text_closed);
+        let closed_visible = self.activity.is_open() || (self.text_started && !self.text_closed);
         self.activity.close(sender).await?;
-        self.close_native_thinking(sender).await?;
         self.close_text(sender).await?;
         let mut forwarded = false;
         let mut tool_uses = tool_uses.into_iter();
