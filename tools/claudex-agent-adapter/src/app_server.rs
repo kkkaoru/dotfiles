@@ -89,7 +89,7 @@ impl AppServer {
         tokio::spawn(Self::read_loop(Arc::downgrade(&server), stdout));
         tokio::spawn(Self::watch_writer_failure(
             Arc::downgrade(&server),
-            Arc::clone(&server.writer),
+            Arc::downgrade(&server.writer),
         ));
         let initialize = server
             .request_with_timeout("initialize", initialize_params(), INITIALIZE_TIMEOUT)
@@ -112,8 +112,11 @@ impl AppServer {
         Ok(server)
     }
 
-    async fn watch_writer_failure(server: std::sync::Weak<Self>, writer: Arc<FrameWriter>) {
-        if let Some(reason) = writer.wait_for_fatal().await {
+    async fn watch_writer_failure(
+        server: std::sync::Weak<Self>,
+        writer: std::sync::Weak<FrameWriter>,
+    ) {
+        if let Some(reason) = FrameWriter::wait_for_fatal_weak(writer).await {
             lifecycle::stop_if_alive(&server, &reason).await;
         }
     }

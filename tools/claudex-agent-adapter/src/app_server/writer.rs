@@ -56,21 +56,11 @@ impl WriterState {
         // A failed writer drains queued frames and concurrently drops permits
         // owned by cancelled callers.  Saturating subtraction keeps that race
         // harmless while preserving the no-leak invariant.
-        let mut current = self.reserved.load(Ordering::Acquire);
-        while current != 0 {
-            match self.reserved.compare_exchange_weak(
-                current,
-                current - 1,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            ) {
-                Ok(_) => {
-                    self.changed.notify_waiters();
-                    return;
-                }
-                Err(observed) => current = observed,
-            }
-        }
+        let _ = self
+            .reserved
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+                current.checked_sub(1)
+            });
         self.changed.notify_waiters();
     }
 
@@ -101,13 +91,14 @@ struct Frame {
 
 impl Frame {
     fn complete(&mut self, result: Result<(), String>) {
-        if !self.completed {
-            self.completed = true;
-            if let Some(completion) = self.completion.take() {
-                let _ = completion.send(result);
-            }
-            self.state.release_reserved();
+        if self.completed {
+            return;
         }
+        self.completed = true;
+        if let Some(completion) = self.completion.take() {
+            let _ = completion.send(result);
+        }
+        self.state.release_reserved();
     }
 }
 
@@ -226,18 +217,7 @@ impl FrameWriter {
 
     pub(super) async fn drain(&self, timeout: Duration) {
         self.begin_shutdown().await;
-        let state = Arc::clone(&self.state);
-        let wait = async move {
-            loop {
-                if state.reserved.load(Ordering::Acquire) == 0
-                    || state.mode.load(Ordering::Acquire) == FAILED
-                {
-                    return;
-                }
-                state.changed.notified().await;
-            }
-        };
-        let _ = tokio::time::timeout(timeout, wait).await;
+        let _ = tokio::time::timeout(timeout, wait_until_drained(Arc::clone(&self.state))).await;
     }
 
     pub(super) async fn join(&self) {
@@ -246,16 +226,19 @@ impl FrameWriter {
         }
     }
 
-    pub(super) async fn wait_for_fatal(&self) -> Option<String> {
-        loop {
-            if let Some(reason) = self.state.failure().await {
-                return Some(reason);
-            }
-            self.state.changed.notified().await;
-            if self.state.mode.load(Ordering::Acquire) == DRAINING {
-                return None;
+    /// Watch without keeping the writer alive.  This is used by AppServer's
+    /// fatal-error monitor so dropping an otherwise idle AppServer also drops
+    /// its stdin task instead of leaving the monitor as an owner.
+    pub(super) async fn wait_for_fatal_weak(writer: std::sync::Weak<Self>) -> Option<String> {
+        while let Some(writer) = writer.upgrade() {
+            let reason = writer.state.failure().await;
+            drop(writer);
+            match reason {
+                Some(reason) => return Some(reason),
+                None => tokio::time::sleep(Duration::from_millis(20)).await,
             }
         }
+        None
     }
 
     fn closed_error(&self) -> anyhow::Error {
@@ -274,22 +257,39 @@ where
         };
         if let Err(error) = result {
             let reason = format!("failed to write codex app-server input: {error}");
-            // Fence reservations before draining queued frames.  A caller
-            // racing this failure must never enqueue a frame after the drain
-            // pass, otherwise its completion channel could be orphaned.
-            state.mark_failed();
-            frame.complete(Err(reason.clone()));
-            // Drop queued frames so each one releases its reservation.  A
-            // caller waiting in reserve() observes the fatal state and exits.
-            while let Ok(mut queued) = receiver.try_recv() {
-                queued.complete(Err(reason.clone()));
-            }
-            state.set_fatal(reason).await;
+            fail_writer(frame, &mut receiver, &state, reason).await;
             return;
         }
         frame.complete(Ok(()));
     }
     state.changed.notify_waiters();
+}
+
+async fn wait_until_drained(state: Arc<WriterState>) {
+    while state.reserved.load(Ordering::Acquire) != 0
+        && state.mode.load(Ordering::Acquire) != FAILED
+    {
+        state.changed.notified().await;
+    }
+}
+
+async fn fail_writer(
+    mut frame: Frame,
+    receiver: &mut mpsc::Receiver<Frame>,
+    state: &Arc<WriterState>,
+    reason: String,
+) {
+    // Fence reservations before draining queued frames.  A caller racing
+    // this failure must never enqueue a frame after the drain pass, otherwise
+    // its completion channel could be orphaned.
+    state.mark_failed();
+    frame.complete(Err(reason.clone()));
+    // Drop queued frames so each one releases its reservation.  A caller
+    // waiting in reserve() observes the fatal state and exits.
+    while let Ok(mut queued) = receiver.try_recv() {
+        queued.complete(Err(reason.clone()));
+    }
+    state.set_fatal(reason).await;
 }
 
 #[cfg(test)]

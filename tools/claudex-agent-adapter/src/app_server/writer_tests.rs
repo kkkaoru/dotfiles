@@ -29,12 +29,7 @@ impl AsyncWrite for BlockingWriter {
         cx: &mut std::task::Context<'_>,
         bytes: &[u8],
     ) -> std::task::Poll<io::Result<usize>> {
-        if self.released.load(Ordering::Relaxed) != 0 {
-            self.writes.fetch_add(1, Ordering::Relaxed);
-            return std::task::Poll::Ready(Ok(bytes.len()));
-        }
-        cx.waker().wake_by_ref();
-        std::task::Poll::Pending
+        poll_blocking_write(&self.released, &self.writes, cx, bytes)
     }
 
     fn poll_flush(
@@ -49,6 +44,30 @@ impl AsyncWrite for BlockingWriter {
         _cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<io::Result<()>> {
         std::task::Poll::Ready(Ok(()))
+    }
+}
+
+fn poll_blocking_write(
+    released: &AtomicUsize,
+    writes: &AtomicUsize,
+    cx: &std::task::Context<'_>,
+    bytes: &[u8],
+) -> std::task::Poll<io::Result<usize>> {
+    if released.load(Ordering::Relaxed) == 0 {
+        cx.waker().wake_by_ref();
+        return std::task::Poll::Pending;
+    }
+    writes.fetch_add(1, Ordering::Relaxed);
+    std::task::Poll::Ready(Ok(bytes.len()))
+}
+
+async fn reserve_for_test(queue: Arc<FrameWriter>) -> Result<FrameReservation> {
+    queue.reserve().await
+}
+
+async fn wait_for_write(writes: Arc<AtomicUsize>) {
+    while writes.load(Ordering::Relaxed) == 0 {
+        tokio::task::yield_now().await;
     }
 }
 
@@ -83,27 +102,20 @@ async fn reservation_is_bounded_and_cancellation_returns_capacity() {
     let (writer, released, writes) = BlockingWriter::new();
     let queue = FrameWriter::spawn_with_capacity(writer, 1);
     let first = queue.reserve().await.expect("first reservation");
-    let _ = first.send(b"first\n".to_vec());
-    let blocked = tokio::spawn({
-        let queue = Arc::clone(&queue);
-        async move { queue.reserve().await }
-    });
+    drop(first.send(b"first\n".to_vec()));
+    let blocked = tokio::spawn(reserve_for_test(Arc::clone(&queue)));
     tokio::task::yield_now().await;
     blocked.abort();
     let _ = blocked.await;
     released.store(1, Ordering::Relaxed);
-    tokio::time::timeout(Duration::from_secs(1), async {
-        while writes.load(Ordering::Relaxed) == 0 {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("first frame was written");
+    tokio::time::timeout(Duration::from_secs(1), wait_for_write(Arc::clone(&writes)))
+        .await
+        .expect("first frame was written");
     let second = queue
         .reserve()
         .await
         .expect("cancelled reservation released");
-    let _ = second.send(b"second\n".to_vec());
+    drop(second.send(b"second\n".to_vec()));
     queue.drain(Duration::from_secs(1)).await;
     queue.join().await;
 }
@@ -131,10 +143,13 @@ async fn fatal_writer_fans_out_to_queued_frames_and_future_reservations() {
         .expect_err("queued frame must fail");
     assert!(first_error.contains("failed to write"));
     assert!(second_error.contains("failed to write"));
-    let reason = tokio::time::timeout(Duration::from_secs(1), queue.wait_for_fatal())
-        .await
-        .expect("fatal notification")
-        .expect("writer failure");
+    let reason = tokio::time::timeout(
+        Duration::from_secs(1),
+        FrameWriter::wait_for_fatal_weak(Arc::downgrade(&queue)),
+    )
+    .await
+    .expect("fatal notification")
+    .expect("writer failure");
     assert!(reason.contains("failed to write"));
     let error = match queue.reserve().await {
         Ok(_) => panic!("fatal queue rejected nothing"),
@@ -149,10 +164,27 @@ async fn draining_releases_queued_frames_without_waiting_for_a_reader() {
     let (reader, writer) = duplex(1);
     let queue = FrameWriter::spawn_with_capacity(writer, 1);
     let frame = queue.reserve().await.expect("reserve frame");
-    let _ = frame.send(vec![b'x'; 1024]);
+    drop(frame.send(vec![b'x'; 1024]));
     queue.drain(Duration::from_millis(1)).await;
     // The writer task is intentionally still blocked on the full duplex
     // stream; shutdown's timeout is the bounded contract.
     drop(reader);
     queue.join().await;
+}
+
+#[tokio::test]
+async fn weak_fatal_watcher_does_not_keep_a_dropped_writer_alive() {
+    let (reader, writer) = duplex(1);
+    let queue = FrameWriter::spawn_with_capacity(writer, 1);
+    let weak = Arc::downgrade(&queue);
+    let watcher = tokio::spawn(FrameWriter::wait_for_fatal_weak(weak));
+    drop(queue);
+    drop(reader);
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(1), watcher)
+            .await
+            .expect("weak watcher exits")
+            .expect("weak watcher task"),
+        None
+    );
 }
