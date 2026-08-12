@@ -18,7 +18,7 @@ fn is_thought_for_chrome(text: &str) -> bool {
     text.trim().to_ascii_lowercase().starts_with("thought for ")
 }
 
-pub(super) fn is_canned_progress(text: &str) -> bool {
+pub fn is_canned_progress(text: &str) -> bool {
     let t = text.trim().trim_start_matches(['●', '▶', '✓', '✗', ' ']);
     is_thought_for_chrome(t)
         || t.contains("ツール結果待ち")

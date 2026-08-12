@@ -4,7 +4,6 @@ use anyhow::Result;
 use serde_json::Value;
 
 use super::SegmentBuilder;
-use super::progress_keepalive::is_adapter_tool_marker;
 use crate::anthropic::stream::{
     protocol::StreamSender,
     sanitize::{is_canned_worker_filler, is_provider_status_line},
@@ -25,18 +24,13 @@ impl SegmentBuilder {
         delta: &str,
         stream: Option<&StreamSender>,
     ) -> Result<()> {
-        if delta.is_empty() {
-            return Ok(());
-        }
-        if self.is_command_code_subagent() && !is_adapter_tool_marker(delta) {
+        if delta.is_empty() || self.should_drop_command_code_progress(delta) {
             return Ok(());
         }
         self.note_provider_turn_activity();
         self.close_text_block(stream).await?;
         if self.is_subagent {
-            // Close launch prose before ▶ so tool chrome is not folded into Wandering.
-            self.close_collapsed_launch_before_tool_marker(delta, stream)
-                .await?;
+            self.close_collapsed_prime_before_visible(stream).await?;
             return self
                 .thinking
                 .progress_status_keep_open(&mut self.blocks, delta, stream)
@@ -47,17 +41,18 @@ impl SegmentBuilder {
             .await
     }
 
-    async fn close_collapsed_launch_before_tool_marker(
+    fn should_drop_command_code_progress(&self, delta: &str) -> bool {
+        self.is_command_code_subagent() && crate::command_code_acp::is_canned_progress(delta)
+    }
+
+    pub(super) async fn close_collapsed_prime_before_visible(
         &mut self,
-        delta: &str,
         stream: Option<&StreamSender>,
     ) -> Result<()> {
-        let should_close =
-            is_adapter_tool_marker(delta) && self.thinking.open_holds_collapsed_subagent_launch();
-        if should_close {
-            self.thinking.close(&mut self.blocks, stream).await?;
+        if !self.is_subagent || !self.thinking.open_holds_collapsed_subagent_launch() {
+            return Ok(());
         }
-        Ok(())
+        self.thinking.close(&mut self.blocks, stream).await
     }
 
     pub(in crate::anthropic::stream) async fn text_delta(
@@ -120,26 +115,29 @@ impl SegmentBuilder {
         if self.summarized_reasoning_ids.iter().any(|id| id == item_id) {
             return Ok(());
         }
-        // GPT/Codex SubAgents stream long raw CoT as `textDelta`. ACP
-        // AgentThoughtChunk uses summaryTextDelta (see progress_filter). Dumping
-        // either into live thinking buried ▶ Read/Bash and left Claude Code 2.1
-        // on Frolicking/Wandering with no mid-turn body. Keep thinking free for
-        // tool chrome; paint a compact tip; buffer CoT for the transcript at
-        // finish (same as summaryTextDelta). textDelta still counts as watchdog
-        // activity. Main sessions still surface textDelta as native Thinking.
         if self.is_subagent {
-            self.note_provider_turn_activity();
-            if let Some(delta) = event.pointer("/params/delta").and_then(Value::as_str)
-                && !delta.trim().is_empty()
-            {
-                self.pending_reasoning.push_str(delta);
-            }
-            return self
-                .thinking
-                .progress_status_keep_open(&mut self.blocks, "▶ Thinking…\n", stream)
-                .await;
+            return self.stream_subagent_raw_reasoning(event, stream).await;
         }
         self.reasoning_delta(event, stream).await
+    }
+
+    async fn stream_subagent_raw_reasoning(
+        &mut self,
+        event: &Value,
+        stream: Option<&StreamSender>,
+    ) -> Result<()> {
+        self.note_provider_turn_activity();
+        let Some(delta) = event.pointer("/params/delta").and_then(Value::as_str) else {
+            return Ok(());
+        };
+        if delta.trim().is_empty() {
+            return Ok(());
+        }
+        self.pending_reasoning.push_str(delta);
+        self.close_collapsed_prime_before_visible(stream).await?;
+        self.thinking
+            .progress_status_keep_open(&mut self.blocks, delta, stream)
+            .await
     }
 
     pub(in crate::anthropic::stream) async fn reasoning_delta(

@@ -157,39 +157,48 @@ async fn status_item_and_provider_status_lines_paint_thinking_progress() {
 }
 
 #[tokio::test]
-async fn command_code_progress_skips_non_markers_and_command_code_labeled_arrows() {
+async fn command_code_progress_drops_canned_only() {
     let mut builder = SegmentBuilder::for_turn(1, true, "meta/muse-spark-1.2-contributor");
     builder
-        .stream_progress_text("Working on Command Code task", None)
+        .stream_progress_text("Thought for 12s", None)
         .await
-        .expect("non-marker");
+        .expect("canned thought-for");
     builder
-        .stream_progress_text("▶ Command Code still working", None)
+        .stream_progress_text("起動: Command Code", None)
         .await
-        .expect("labeled arrow is not an adapter marker");
+        .expect("canned launch");
     assert!(
-        builder.blocks.iter().all(|block| {
-            !block
-                .get("thinking")
-                .and_then(Value::as_str)
-                .is_some_and(|text| text.contains("Working on") || text.contains("still working"))
-        }),
-        "Command Code must not dump unlabeled/canned chrome: {:?}",
+        builder
+            .blocks
+            .iter()
+            .all(thinking_omits_canned_command_code),
+        "Command Code must drop canned chrome: {:?}",
         builder.blocks
     );
+    builder
+        .stream_progress_text("Check AVITA filings next.\n", None)
+        .await
+        .expect("real thought");
     builder
         .stream_progress_text("▶ Read CLAUDE.md", None)
         .await
         .expect("adapter marker");
+    let thinking = builder
+        .blocks
+        .iter()
+        .find_map(|block| block.get("thinking").and_then(Value::as_str))
+        .unwrap_or("");
     assert!(
-        builder.thinking.is_open()
-            || builder.blocks.iter().any(|block| block
-                .get("thinking")
-                .and_then(Value::as_str)
-                .is_some_and(|text| text.contains("▶ Read CLAUDE.md"))),
-        "▶ tool markers must still paint: {:?}",
-        builder.blocks
+        thinking.contains("Check AVITA filings") && thinking.contains("▶ Read CLAUDE.md"),
+        "non-canned Command Code progress must paint: {thinking:?}"
     );
+}
+
+fn thinking_omits_canned_command_code(block: &Value) -> bool {
+    let Some(text) = block.get("thinking").and_then(Value::as_str) else {
+        return true;
+    };
+    !text.contains("Thought for") && !text.contains("起動: Command Code")
 }
 
 #[tokio::test]
@@ -268,23 +277,13 @@ async fn summarized_reasoning_skips_raw_text_delta_and_subagent_raw_cot() {
         .expect("subagent raw skip");
     drop(sender);
     assert!(
-        subagent.blocks.iter().all(|block| {
-            !block
-                .get("thinking")
-                .and_then(Value::as_str)
-                .is_some_and(|text| text.contains("long subagent chain of thought"))
-        }),
-        "subagent raw CoT must not bury tool chrome: {:?}",
-        subagent.blocks
-    );
-    assert!(
         subagent.blocks.iter().any(|block| {
             block
                 .get("thinking")
                 .and_then(Value::as_str)
-                .is_some_and(|text| text.contains("▶ Thinking"))
+                .is_some_and(|text| text.contains("long subagent chain of thought"))
         }),
-        "raw CoT silence must still paint compact Thinking chrome: {:?}",
+        "subagent raw CoT must stream after ZWSP close: {:?}",
         subagent.blocks
     );
     let mut sse = String::new();
@@ -292,8 +291,8 @@ async fn summarized_reasoning_skips_raw_text_delta_and_subagent_raw_cot() {
         sse.push_str(&String::from_utf8_lossy(&frame.expect("frame")));
     }
     assert!(
-        sse.contains("thinking_delta") && sse.contains("▶ Thinking"),
-        "SubAgent TUI must see Thinking tip during raw CoT: {sse}"
+        sse.contains("thinking_delta") && sse.contains("long subagent chain of thought"),
+        "SubAgent TUI must see raw CoT live: {sse}"
     );
 }
 
@@ -527,6 +526,11 @@ fn assert_cursor_thought_for_filler_phrases() {
 }
 
 fn assert_subagent_activity_and_silence_policy() {
+    assert_subagent_activity_delays();
+    assert_subagent_silence_judgment();
+}
+
+fn assert_subagent_activity_delays() {
     assert_eq!(
         super::SUBAGENT_INITIAL_ACTIVITY_DELAY,
         Duration::from_millis(100)
@@ -562,6 +566,9 @@ fn assert_subagent_activity_and_silence_policy() {
         super::prepare::prepare_first_activity_delay(false, false),
         super::INITIAL_ACTIVITY_DELAY
     );
+}
+
+fn assert_subagent_silence_judgment() {
     assert_eq!(
         super::types::SUBAGENT_PROVIDER_SILENCE_JUDGMENT,
         Duration::from_secs(20 * 60)
@@ -1218,7 +1225,7 @@ fn assert_subagent_reasoning_transcript(segment: &crate::anthropic::Segment) {
         "SubAgent turn must keep one native thinking block: {:?}",
         segment.blocks
     );
-    // Live SSE is tip-only; buffered CoT is committed at finish for the transcript.
+    // Live SSE streams CoT after the prime; ▶ tool chrome stays on thinking.
     assert!(thinking.contains("Map the conversion path."));
     assert!(thinking.contains("Check Vibrato boundaries."));
     assert!(thinking.contains("Hypothesis: boundaries were dropped."));
@@ -1244,6 +1251,78 @@ async fn collect_sse_frames(receiver: &mut mpsc::Receiver<Result<Bytes, Infallib
     sse
 }
 
+fn raw_reasoning_textdelta(item_id: &str, delta: &str) -> Value {
+    json!({
+        "method":"item/reasoning/textDelta",
+        "params":{"itemId":item_id,"contentIndex":0,"delta":delta}
+    })
+}
+
+fn assert_thinking_stop_before_native_read(output: &str) {
+    let tool_use = output.find(r#""type":"tool_use""#).expect("tool_use");
+    assert!(
+        output.contains("Read"),
+        "native Read card missing: {output}"
+    );
+    assert!(
+        output[..tool_use].contains("content_block_stop"),
+        "thinking stop must precede tool_use: {output}"
+    );
+}
+
+async fn feed_subagent_read(
+    builder: &mut SegmentBuilder,
+    bridge: &Bridge,
+    session: &Session,
+    call_id: &str,
+    sender: &mpsc::Sender<Result<Bytes, Infallible>>,
+) {
+    let _ = builder
+        .handle_event(
+            bridge,
+            session,
+            &[],
+            &Value::Null,
+            &json!({
+                "id":9,
+                "method":"item/tool/call",
+                "params":{
+                    "callId":call_id,
+                    "tool":"cc_Read_0",
+                    "arguments":{"path":"scripts/CLAUDE.md"}
+                }
+            }),
+            Some(sender),
+        )
+        .await
+        .expect("subagent Read");
+}
+
+async fn assert_codex_cot_in_transcript(builder: &mut SegmentBuilder, needle: &str) {
+    let (finish_sender, _finish_rx) = mpsc::channel::<Result<Bytes, Infallible>>(4);
+    let segment = builder
+        .finish(Some(&finish_sender))
+        .await
+        .expect("finish after Codex CoT");
+    let thinking = segment
+        .blocks
+        .iter()
+        .find_map(|block| {
+            (block.get("type").and_then(Value::as_str) == Some("thinking"))
+                .then(|| block.get("thinking").and_then(Value::as_str))
+                .flatten()
+        })
+        .unwrap_or("");
+    assert!(
+        thinking.contains(needle),
+        "Codex CoT must land in the transcript: {thinking}"
+    );
+    assert!(
+        !thinking.contains('▶'),
+        "▶ chrome must be stripped from the transcript: {thinking}"
+    );
+}
+
 fn assert_subagent_reasoning_sse(sse: &str) {
     assert_eq!(
         sse.matches("\"type\":\"content_block_start\"").count(),
@@ -1256,12 +1335,8 @@ fn assert_subagent_reasoning_sse(sse: &str) {
         "thinking must stay open until end_turn: {sse}"
     );
     assert!(
-        sse.contains("▶ Thinking"),
-        "ACP CoT must stay tip-only live so CC does not Frolicking-collapse: {sse}"
-    );
-    assert!(
-        !sse.contains("Map the conversion path"),
-        "live SSE must not dump CoT body (collapses to Frolicking): {sse}"
+        sse.contains("Map the conversion path"),
+        "ACP CoT must stream live after ZWSP close: {sse}"
     );
     assert!(
         sse.contains("▶ Read") || sse.contains("▶ convert.ts"),
@@ -1526,81 +1601,24 @@ async fn gpt_subagent_textdelta_does_not_bury_live_tool_progress() {
     let cot = "Inspect the neon pooler GUCs on a fresh connection.\n".repeat(40);
     builder
         .model_output_event(
-            &json!({
-                "method":"item/reasoning/textDelta",
-                "params":{
-                    "itemId":"gpt:reasoning",
-                    "contentIndex":0,
-                    "delta":cot
-                }
-            }),
+            &raw_reasoning_textdelta("gpt:reasoning", &cot),
             Some(&sender),
         )
         .await
         .expect("gpt textdelta");
-    let _ = builder
-        .handle_event(
-            &bridge,
-            &session,
-            &[],
-            &Value::Null,
-            &json!({
-                "id":9,
-                "method":"item/tool/call",
-                "params":{
-                    "callId":"read-claude-md",
-                    "tool":"cc_Read_0",
-                    "arguments":{"path":"scripts/CLAUDE.md"}
-                }
-            }),
-            Some(&sender),
-        )
-        .await
-        .expect("subagent Read after textdelta");
+    feed_subagent_read(&mut builder, &bridge, &session, "read-claude-md", &sender).await;
     assert!(
-        builder.thinking.is_open(),
-        "Read must keep thinking open after GPT textDelta"
+        !builder.thinking.is_open(),
+        "Read must close thinking so the native card is live"
     );
     drop(sender);
-    let mut sse = String::new();
-    while let Some(frame) = receiver.recv().await {
-        sse.push_str(&String::from_utf8_lossy(&frame.expect("frame")));
-    }
+    let sse = collect_sse_frames(&mut receiver).await;
+    assert_thinking_stop_before_native_read(&sse);
     assert!(
-        sse.contains("thinking_delta") && sse.contains("▶ Read"),
-        "live ▶ must stay visible after GPT textDelta: {sse}"
+        sse.contains("Inspect the neon pooler GUCs"),
+        "raw GPT CoT must stream live after ZWSP close: {sse}"
     );
-    assert!(
-        sse.contains("▶ Thinking"),
-        "raw CoT before tools must paint Thinking tip: {sse}"
-    );
-    assert!(
-        !sse.contains("Inspect the neon pooler GUCs"),
-        "raw GPT CoT must not bury SubAgent live chrome: {sse}"
-    );
-
-    let (finish_sender, _finish_rx) = mpsc::channel::<Result<Bytes, Infallible>>(4);
-    let segment = builder
-        .finish(Some(&finish_sender))
-        .await
-        .expect("finish after GPT textdelta");
-    let thinking = segment
-        .blocks
-        .iter()
-        .find_map(|block| {
-            (block.get("type").and_then(Value::as_str) == Some("thinking"))
-                .then(|| block.get("thinking").and_then(Value::as_str))
-                .flatten()
-        })
-        .unwrap_or("");
-    assert!(
-        thinking.contains("Inspect the neon pooler GUCs"),
-        "Codex SubAgent raw textDelta CoT must still land in the transcript: {thinking}"
-    );
-    assert!(
-        !thinking.contains('▶'),
-        "▶ tip chrome must be replaced by buffered CoT: {thinking}"
-    );
+    assert_codex_cot_in_transcript(&mut builder, "Inspect the neon pooler GUCs").await;
 }
 
 #[tokio::test]
@@ -3004,57 +3022,30 @@ async fn subagent_codex_tool_use_keeps_thinking_open_so_viewer_stays_live() {
         .external_tool_names
         .insert("cc_Read_0".to_owned(), "Read".to_owned());
     let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
-    let mut builder = SegmentBuilder::for_turn(1, true, "gpt-5.6-luna");
-    let _ = builder
-        .handle_event(
-            &bridge,
-            &session,
-            &[],
-            &Value::Null,
-            &json!({
-                "id":9,
-                "method":"item/tool/call",
-                "params":{
-                    "callId":"read-claude-md",
-                    "tool":"cc_Read_0",
-                    "arguments":{"path":"scripts/CLAUDE.md"}
-                }
-            }),
+    let mut builder = SegmentBuilder::for_turn(1, true, "gpt-5.6-luna").with_primed_thinking();
+    builder
+        .model_output_event(
+            &raw_reasoning_textdelta("luna:reasoning", "Inspect CLAUDE.md next.\n"),
             Some(&sender),
         )
         .await
-        .expect("subagent Read is forwarded");
+        .expect("luna cot");
+    feed_subagent_read(&mut builder, &bridge, &session, "read-claude-md", &sender).await;
     assert!(builder.has_external_tool_calls());
     assert!(
-        builder.thinking.is_open(),
-        "Codex/luna Read must keep thinking open so the panel is not frozen"
+        !builder.thinking.is_open(),
+        "Codex/luna Read must close thinking so the native card is live"
     );
     builder
         .activity_keepalive(Some(&sender))
         .await
         .expect("silence after Read");
     drop(sender);
-    let mut output = String::new();
-    while let Some(frame) = receiver.recv().await {
-        output.push_str(&String::from_utf8_lossy(&frame.expect("infallible frame")));
-    }
+    let output = collect_sse_frames(&mut receiver).await;
+    assert_thinking_stop_before_native_read(&output);
     assert!(
-        output.contains(r#""type":"tool_use""#) && output.contains("Read"),
-        "native Read card missing: {output}"
-    );
-    assert!(
-        output.contains("thinking_delta") && output.contains("▶ Read"),
-        "live ▶ progress missing after Read: {output}"
-    );
-    let thinking_start = output.find(r#""type":"thinking""#).expect("thinking start");
-    let tool_use = output.find(r#""type":"tool_use""#).expect("tool_use");
-    assert!(
-        thinking_start < tool_use,
-        "▶ thinking must precede tool_use: {output}"
-    );
-    assert!(
-        !output[..tool_use].contains("content_block_stop"),
-        "SubAgent thinking must stay open across Read: {output}"
+        output.contains("Inspect CLAUDE.md next"),
+        "live CoT missing: {output}"
     );
     assert!(
         !output.contains("still working") && !output.contains("Thought for"),
@@ -3063,10 +3054,47 @@ async fn subagent_codex_tool_use_keeps_thinking_open_so_viewer_stays_live() {
 }
 
 #[tokio::test]
+async fn fugu_codex_closes_thinking_before_native_read() {
+    let (_root, _app, bridge, mut session) = disconnect_fixture().await;
+    Arc::get_mut(&mut session)
+        .expect("unique session")
+        .external_tool_names
+        .insert("cc_Read_0".to_owned(), "Read".to_owned());
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(32);
+    assert!(super::prime_subagent_sse(
+        &sender,
+        "fugu",
+        1,
+        true,
+        Some("high")
+    ));
+    let mut builder = SegmentBuilder::for_turn(1, true, "fugu").with_primed_thinking();
+    builder
+        .model_output_event(
+            &raw_reasoning_textdelta("fugu:reasoning", "Map the race filter before seeding.\n"),
+            Some(&sender),
+        )
+        .await
+        .expect("fugu cot");
+    feed_subagent_read(&mut builder, &bridge, &session, "read-claude-md", &sender).await;
+    assert!(!builder.thinking.is_open());
+    drop(sender);
+    let output = collect_sse_frames(&mut receiver).await;
+    assert!(
+        output.contains("\\u200b") || output.contains('\u{200b}'),
+        "ZWSP prime missing: {output}"
+    );
+    assert_thinking_stop_before_native_read(&output);
+    assert!(
+        output.contains("Map the race filter"),
+        "fugu CoT must stream after ZWSP close: {output}"
+    );
+}
+
+#[tokio::test]
 async fn subagent_codex_external_batch_finish_keeps_thinking_open_on_sse() {
-    // Quiet→batch finish used to call thinking.close() after tool_use, which
-    // collapsed Claude Code 2.1 SubAgent chrome to Thought-for while Read/Bash
-    // ran on the client. ACP native tools never close thinking mid-turn.
+    // Inverted: close thinking before native Read/Bash so CC 2.1 does not
+    // Slithering-hide the tool card. Keep-open was the bug.
     let (_root, app, bridge, mut session) = disconnect_fixture().await;
     Arc::get_mut(&mut session)
         .expect("unique session")
@@ -3074,28 +3102,17 @@ async fn subagent_codex_external_batch_finish_keeps_thinking_open_on_sse() {
         .insert("cc_Read_0".to_owned(), "Read".to_owned());
     let events = Arc::new(app.subscribe_thread("thread"));
     let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(32);
-    let mut builder = SegmentBuilder::for_turn(1, true, "gpt-5.6-luna");
-    let _ = builder
-        .handle_event(
-            &bridge,
-            &session,
-            &[],
-            &Value::Null,
-            &json!({
-                "id":44,
-                "method":"item/tool/call",
-                "params":{
-                    "callId":"read-handoff",
-                    "tool":"cc_Read_0",
-                    "arguments":{"path":"scripts/CLAUDE.md"}
-                }
-            }),
+    let mut builder = SegmentBuilder::for_turn(1, true, "gpt-5.6-luna").with_primed_thinking();
+    builder
+        .model_output_event(
+            &raw_reasoning_textdelta("luna:reasoning", "Read CLAUDE.md for handoff.\n"),
             Some(&sender),
         )
         .await
-        .expect("subagent Read");
+        .expect("cot");
+    feed_subagent_read(&mut builder, &bridge, &session, "read-handoff", &sender).await;
     assert!(builder.has_external_tool_calls());
-    assert!(builder.thinking.is_open());
+    assert!(!builder.thinking.is_open());
 
     let result = bridge
         .external_batch_segment(&session, events, &mut builder, Some(&sender))
@@ -3111,24 +3128,13 @@ async fn subagent_codex_external_batch_finish_keeps_thinking_open_on_sse() {
     assert!(!provider_settled);
     assert_eq!(segment.stop_reason, "tool_use");
     assert!(
-        builder.thinking.is_open(),
-        "finish must leave thinking open across Codex tool handoff"
+        !builder.thinking.is_open(),
+        "finish must close thinking across Codex tool handoff"
     );
 
     drop(sender);
-    let mut output = String::new();
-    while let Some(frame) = receiver.recv().await {
-        output.push_str(&String::from_utf8_lossy(&frame.expect("infallible frame")));
-    }
-    assert!(
-        !output.contains("signature_delta"),
-        "thinking signature close must not fire on tool handoff: {output}"
-    );
-    assert!(
-        !output.contains(r#"{"index":0,"type":"content_block_stop"}"#)
-            && !output.contains(r#"{"type":"content_block_stop","index":0}"#),
-        "thinking (index 0) must not stop on Codex batch finish: {output}"
-    );
+    let output = collect_sse_frames(&mut receiver).await;
+    assert_thinking_stop_before_native_read(&output);
 }
 
 #[tokio::test]

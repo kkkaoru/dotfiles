@@ -90,9 +90,30 @@ impl SegmentBuilder {
             return Ok(());
         }
         let text = std::mem::take(&mut self.pending_reasoning);
+        if !self.thinking.is_open() && thinking_contains_pending(&self.blocks, &text) {
+            return Ok(());
+        }
         self.thinking
             .commit_buffered_reasoning(&mut self.blocks, "subagent:reasoning", &text, stream)
             .await
+    }
+
+    async fn close_blocks_for_finish(
+        &mut self,
+        tool_handoff: bool,
+        stream: Option<&StreamSender>,
+    ) -> Result<()> {
+        if tool_handoff {
+            self.commit_pending_reasoning_for_transcript(None).await?;
+            self.flush_pending_answer(None).await?;
+            self.close_text_block(stream).await?;
+            return self
+                .thinking
+                .close_before_executable_tool_use(&mut self.blocks, stream)
+                .await;
+        }
+        self.commit_pending_reasoning_for_transcript(stream).await?;
+        self.close_open_blocks(stream).await
     }
 
     pub(in crate::anthropic::stream) fn update_usage(&mut self, event: &Value) {
@@ -119,20 +140,7 @@ impl SegmentBuilder {
         self.report_incomplete_launches(stream).await?;
         self.report_no_subagent_action(stream).await?;
         let tool_handoff = self.is_subagent && self.external_tool_calls > 0;
-        if tool_handoff {
-            // Codex SubAgent tool_use handoff: keep thinking open on the live
-            // SSE so Claude Code 2.1 does not collapse to Thought-for while the
-            // client executes Read/Bash (ACP native tools never close thinking
-            // either). Still materialize buffered CoT/answer into the segment
-            // for transcript — answer flush uses stream=None so text_delta does
-            // not ride the open Thought chrome.
-            self.commit_pending_reasoning_for_transcript(stream).await?;
-            self.flush_pending_answer(None).await?;
-            self.close_text_block(stream).await?;
-        } else {
-            self.commit_pending_reasoning_for_transcript(stream).await?;
-            self.close_open_blocks(stream).await?;
-        }
+        self.close_blocks_for_finish(tool_handoff, stream).await?;
         sanitize_committed_blocks(&mut self.blocks);
         let stop_reason = if self.external_tool_calls > 0 {
             "tool_use"
@@ -157,4 +165,18 @@ impl SegmentBuilder {
             self.verified_web_evidence_count(),
         )))
     }
+}
+
+fn thinking_contains_pending(blocks: &[Value], pending: &str) -> bool {
+    let needle = pending.trim();
+    if needle.is_empty() {
+        return false;
+    }
+    blocks.iter().any(|block| {
+        block.get("type").and_then(Value::as_str) == Some("thinking")
+            && block
+                .get("thinking")
+                .and_then(Value::as_str)
+                .is_some_and(|text| text.contains(needle))
+    })
 }

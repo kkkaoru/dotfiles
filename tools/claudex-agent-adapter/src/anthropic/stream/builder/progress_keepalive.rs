@@ -19,13 +19,6 @@ pub(super) async fn send_activity_heartbeat(
     .await
 }
 
-pub(super) fn is_adapter_tool_marker(delta: &str) -> bool {
-    delta.lines().any(|line| {
-        let trimmed = line.trim_start();
-        trimmed.starts_with('▶') || trimmed.starts_with('✓') || trimmed.starts_with('✗')
-    }) && !delta.contains("Command Code")
-}
-
 pub(super) fn compact_keepalive_title(title: &str) -> String {
     let trimmed = title.trim();
     let mut chars = trimmed.chars();

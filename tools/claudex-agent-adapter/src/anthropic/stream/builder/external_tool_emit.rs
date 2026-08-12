@@ -69,21 +69,15 @@ impl SegmentBuilder {
         call_id: &str,
         stream: Option<&StreamSender>,
     ) -> Result<()> {
+        let _ = (original_name, call_id);
         if !self.is_subagent {
             return self.close_open_blocks(stream).await;
         }
-        // CC 2.1 SubAgent viewer paints one live thinking block and hides
-        // tool_use until end_turn. Keep thinking open and paint ▶ before the
-        // tool_use card. Do not flush pending_answer mid-turn — emitting
-        // text_delta while thinking is open makes ▶ Read flash then collapse
-        // to "Perambulating…". Answer text stays buffered until finish.
+        // Close ZWSP/CoT so CC 2.1 shows native Read/Bash (or Agent) cards
+        // instead of Slithering on an open thinking block.
         self.close_text_block(stream).await?;
-        if self.is_command_code_subagent() {
-            return Ok(());
-        }
-        self.provider_tool_calls
-            .push((call_id.to_owned(), original_name.to_owned()));
-        self.stream_progress_text(&format!("\n▶ {original_name}\n"), stream)
+        self.thinking
+            .close_before_executable_tool_use(&mut self.blocks, stream)
             .await
     }
 }

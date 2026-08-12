@@ -208,6 +208,35 @@ mod tests {
         );
     }
 
+    #[test]
+    fn zwsp_and_thinking_elapsed_tip_count_as_collapsed_prime() {
+        let mut state = ThinkingState {
+            open: Some(OpenThinking {
+                index: 0,
+                item_id: "claudex_activity_keepalive".to_owned(),
+                summary_index: 0,
+                signature: "sig".to_owned(),
+                text: HEARTBEAT.to_owned(),
+            }),
+        };
+        assert!(state.open_holds_collapsed_subagent_launch());
+        assert!(state.open_holds_zwsp_or_launch_prose());
+        state.open.as_mut().expect("open").text = format!("{HEARTBEAT}▶ Thinking… · 0s\n");
+        assert!(
+            state.open_holds_collapsed_subagent_launch(),
+            "ZWSP + ▶ Thinking… · 0s must close before live chrome"
+        );
+        assert!(
+            !state.open_holds_zwsp_or_launch_prose(),
+            "keepalive must not close the elapsed Thinking tip every tick"
+        );
+        state.open.as_mut().expect("open").text = "▶ Read CLAUDE.md\n".to_owned();
+        assert!(!state.open_holds_collapsed_subagent_launch());
+        state.open.as_mut().expect("open").item_id = "claudex_provider_progress".to_owned();
+        state.open.as_mut().expect("open").text = "▶ Thinking… · 0s\n".to_owned();
+        assert!(state.open_holds_collapsed_subagent_launch());
+    }
+
     fn marker_outside_wandering_launch(blocks: &[Value]) -> bool {
         let Some(text) = blocks
             .last()

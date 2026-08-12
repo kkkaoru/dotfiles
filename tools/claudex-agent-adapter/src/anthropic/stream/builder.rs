@@ -26,13 +26,11 @@ pub(in crate::anthropic) struct SegmentBuilder {
     pub(super) blocks: Vec<Value>,
     pub(super) thinking: ThinkingState,
     pub(super) open_text_block: Option<(usize, String)>,
-    /// SubAgent AgentMessage prose held until end_turn. Live viewer sees tip-only
-    /// `▶ Working…` so full prose does not collapse Claude Code 2.1 chrome.
+    /// SubAgent AgentMessage prose held until end_turn. Live viewer sees compact
+    /// prose on thinking after the ZWSP prime is closed.
     pub(super) pending_answer: String,
-    /// ACP `AgentThoughtChunk` / Codex raw `textDelta` CoT buffered for the
-    /// SubAgent transcript only (live SSE stays tip-only).
-    /// Live SubAgent SSE stays on ▶ tips so Claude Code 2.1 does not collapse
-    /// the panel to Frolicking and hide ▶ Bash for long provider tools.
+    /// ACP `AgentThoughtChunk` / Codex raw `textDelta` CoT. Live SSE streams the
+    /// body after closing ZWSP; this buffer still replaces ▶ chrome at finish.
     pub(super) pending_reasoning: String,
     pub(super) is_subagent: bool,
     /// Command Code SubAgent: keep native thinking open (no Thought-for flicker).

@@ -88,7 +88,12 @@ impl SegmentBuilder {
         // into stream-only ZWSP. CC 2.1 otherwise freezes on the first ▶ line
         // for the whole Bash/CoT silence window.
         let tip = keepalive_elapsed_chrome(last_tool.as_deref(), self.turn_started_at.elapsed());
-        if self.thinking.open_holds_collapsed_subagent_launch() {
+        if self.external_tool_calls > 0 && !self.thinking.is_open() {
+            // Native tool_use is the live card. Reopening thinking here made
+            // CC 2.1 Slithering and hid Read/Bash.
+            return Ok(());
+        }
+        if self.thinking.open_holds_zwsp_or_launch_prose() {
             self.thinking.close(&mut self.blocks, stream).await?;
         }
         self.thinking

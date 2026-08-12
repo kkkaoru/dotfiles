@@ -405,12 +405,8 @@ async fn qwen_agent_message_then_tool_progress_stays_in_thinking_chrome() {
     );
     let thinking = thinking_text(&builder);
     assert!(
-        thinking.contains("▶ Working"),
-        "AgentMessage prose must stay tip-only live: {thinking}"
-    );
-    assert!(
-        !thinking.contains("Phase 1: reading CLAUDE.md"),
-        "full AgentMessage must not dump into live thinking: {thinking}"
+        thinking.contains("Phase 1: reading CLAUDE.md"),
+        "AgentMessage prose must stream after ZWSP close: {thinking}"
     );
     assert!(
         thinking.contains("▶ ReadFile") || thinking.contains("▶ Read"),
@@ -693,13 +689,8 @@ async fn cline_agent_message_prose_is_visible_before_end_turn() {
     live.ingest_available(&mut receiver);
     assert!(live.turn_still_open());
     assert!(
-        live.visible_thinking.contains("▶ Working"),
-        "Cline narration must show tip-only in the SubAgent viewer: {:?}",
-        live.visible_thinking
-    );
-    assert!(
-        !live.visible_thinking.contains("型と配信パスを把握しました"),
-        "full AgentMessage prose collapses CC 2.1 chrome: {:?}",
+        live.visible_thinking.contains("型と配信パスを把握しました"),
+        "Cline narration must stream after ZWSP close: {:?}",
         live.visible_thinking
     );
     assert!(
@@ -714,7 +705,7 @@ async fn cline_agent_message_prose_is_visible_before_end_turn() {
         .expect("elapsed keepalive");
     live.ingest_available(&mut receiver);
     assert!(
-        live.visible_thinking.contains("▶ Working"),
+        live.visible_thinking.contains("型と配信パスを把握しました"),
         "silence after prose must keep the open thought live: {:?}",
         live.visible_thinking
     );
@@ -974,13 +965,8 @@ fn assert_qwen_status_live(live: &LiveView) {
         "status chunk must not end the SubAgent turn"
     );
     assert!(
-        live.visible_thinking.contains("▶ Working"),
-        "SubAgent prose must paint tip-only thinking chrome live: {:?}",
-        live.visible_thinking
-    );
-    assert!(
-        !live.visible_thinking.contains("Starting inspection"),
-        "full AgentMessage prose collapses CC 2.1 chrome: {:?}",
+        live.visible_thinking.contains("Starting inspection"),
+        "SubAgent prose must stream after ZWSP close: {:?}",
         live.visible_thinking
     );
     assert!(
@@ -1556,15 +1542,9 @@ async fn subagent_omits_wrangler_json_dump_after_thought() {
     run_wrangler_dump_events(&mut builder, &sender, &dump).await;
     live.ingest_available(&mut receiver);
     assert!(
-        live.visible_thinking.contains("▶ Thinking"),
-        "short thought stays tip-only live (full CoT is buffered): {:?}",
         live.visible_thinking
-    );
-    assert!(
-        !live
-            .visible_thinking
             .contains("The wrangler tail JSON output appears to contain critical"),
-        "full CoT must not dump into live thinking: {:?}",
+        "short thought must stream live after ZWSP close: {:?}",
         live.visible_thinking
     );
     assert!(

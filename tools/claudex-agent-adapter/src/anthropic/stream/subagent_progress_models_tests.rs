@@ -1,10 +1,8 @@
 //! Live SubAgent viewer progress across provider models.
 //!
-//! Cline was the first blank-viewer report, but Cursor (nested under Spark),
-//! Qwen, Grok, Copilot, Command Code, Spark/Codex, GLM, Fugu, Muse, and auto
-//! all must keep mid-turn chrome tip-only (`▶ Working` / `▶ Thinking`) so full
-//! AgentMessage/CoT does not collapse Claude Code 2.1 to Frolicking. Bodies
-//! (including Codex raw `textDelta` CoT) flush at end_turn.
+//! After ZWSP prime close, ACP workers stream real CoT / compact prose plus ▶
+//! tool chrome on a new thinking index. Codex cases stream CoT then native
+//! `tool_use` (see `fugu_codex_*` in tests.rs). Canned filler is still dropped.
 
 use axum::body::Bytes;
 use serde_json::{Value, json};
@@ -54,8 +52,8 @@ const CASES: &[Case] = &[
             arg_key: "path",
             arg_value: "apps/finish-position-predict-container/src/predict.py",
         }),
-        // Live tip only — full AgentMessage prose collapses CC 2.1 chrome.
-        expect_visible: &["▶ Working", "▶ Read"],
+        // Close ZWSP, then compact prose + ▶ Read on a new thinking index.
+        expect_visible: &["ContextVar", "▶ Read"],
     },
     Case {
         name: "auto-acp",
@@ -70,7 +68,7 @@ const CASES: &[Case] = &[
             arg_key: "path",
             arg_value: "CLAUDE.md",
         }),
-        expect_visible: &["▶ Thinking", "▶ Working", "▶ Read"],
+        expect_visible: &["Routing through Cursor", "Prefer the sticky", "▶ Read"],
     },
     Case {
         name: "qwen-acp",
@@ -85,7 +83,7 @@ const CASES: &[Case] = &[
             arg_key: "pattern",
             arg_value: "target_race",
         }),
-        expect_visible: &["▶ Working", "▶ Grep"],
+        expect_visible: &["Phase 1: reading", "▶ Grep"],
     },
     Case {
         name: "grok-acp",
@@ -100,8 +98,8 @@ const CASES: &[Case] = &[
             arg_key: "command",
             arg_value: "ls apps/finish-position-predict-container",
         }),
-        // CoT stays tip-only live (▶ Thinking); Bash title must stay visible.
-        expect_visible: &["▶ Thinking", "▶ ls"],
+        // Reasoning body + Bash title after ZWSP close (not tip-only ▶ Thinking).
+        expect_visible: &["Plan the per-race cache seed", "▶ ls"],
     },
     Case {
         name: "copilot-acp",
@@ -116,7 +114,7 @@ const CASES: &[Case] = &[
             arg_key: "path",
             arg_value: "apps/finish-position-predict-container/src/cache_seed.py",
         }),
-        expect_visible: &["▶ Working", "▶ Read"],
+        expect_visible: &["Inspecting the prediction", "▶ Read"],
     },
     Case {
         name: "cline-acp",
@@ -127,7 +125,7 @@ const CASES: &[Case] = &[
         reasoning: Some("Check the cache seed path before editing.\n"),
         reasoning_kind: ReasoningKind::Summary,
         tool: None,
-        expect_visible: &["▶ Working", "▶ Thinking"],
+        expect_visible: &["型と配信パスを把握しました", "Check the cache seed"],
     },
     Case {
         name: "deepseek-acp",
@@ -143,7 +141,7 @@ const CASES: &[Case] = &[
             arg_key: "path",
             arg_value: "apps/finish-position-predict-container/src/cache_seed.py",
         }),
-        expect_visible: &["▶ Thinking", "▶ Working", "▶ Read"],
+        expect_visible: &["DeepSeek is reading", "Trace the DeepSeek flash", "▶ Read"],
     },
     Case {
         name: "opencode-go-gpt-acp",
@@ -158,7 +156,11 @@ const CASES: &[Case] = &[
             arg_key: "path",
             arg_value: "src/agent_backend/session_scope.rs",
         }),
-        expect_visible: &["▶ Thinking", "▶ Working", "▶ Read"],
+        expect_visible: &[
+            "OpenCode Go GPT is checking",
+            "Confirm opencode-go/gpt-5.6-luna",
+            "▶ Read",
+        ],
     },
     Case {
         name: "muse-acp",
@@ -167,7 +169,7 @@ const CASES: &[Case] = &[
         reasoning: Some("Outline the Muse Spark migration steps first.\n"),
         reasoning_kind: ReasoningKind::Summary,
         tool: None,
-        expect_visible: &["▶ Thinking", "▶ Working"],
+        expect_visible: &["Muse Spark is drafting", "Outline the Muse Spark"],
     },
     Case {
         name: "spark-codex",
@@ -176,7 +178,7 @@ const CASES: &[Case] = &[
         reasoning: Some("Trace filter_races_by_scope before editing.\n"),
         reasoning_kind: ReasoningKind::Summary,
         tool: None,
-        expect_visible: &["▶ Thinking", "▶ Working"],
+        expect_visible: &["Seasoning per-race", "Trace filter_races_by_scope"],
     },
     Case {
         name: "glm-codex",
@@ -192,7 +194,7 @@ const CASES: &[Case] = &[
             arg_key: "path",
             arg_value: "pooler.toml",
         }),
-        expect_visible: &["▶ Thinking", "▶ Working", "▶ Read"],
+        expect_visible: &["GLM is checking the Neon", "Inspect glm pooler", "▶ Read"],
     },
     Case {
         name: "fugu-codex",
@@ -207,7 +209,7 @@ const CASES: &[Case] = &[
             arg_key: "command",
             arg_value: "rg filter_races_by_scope",
         }),
-        expect_visible: &["▶ Thinking", "▶ rg"],
+        expect_visible: &["Fugu should map the race filter", "▶ rg"],
     },
     Case {
         name: "command-code-acp",
@@ -222,7 +224,7 @@ const CASES: &[Case] = &[
             arg_key: "query",
             arg_value: "AVITA株式会社",
         }),
-        expect_visible: &["AVITA Inc. is an avatar", "▶ Thinking", "▶"],
+        expect_visible: &["AVITA Inc. is an avatar", "Check AVITA Inc. official", "▶"],
     },
 ];
 
@@ -341,10 +343,22 @@ async fn run_case(case: &Case) {
     let command_code = case.name == "command-code-acp";
     let mut builder = SegmentBuilder::new(1)
         .with_subagent(true)
-        .with_command_code_progress(command_code);
+        .with_command_code_progress(command_code)
+        .with_primed_thinking();
     feed_case_events(&mut builder, case, &sender).await;
+    let mut sse = String::new();
+    while let Ok(frame) = receiver.try_recv() {
+        sse.push_str(&String::from_utf8_lossy(
+            &frame.expect("infallible SSE frame"),
+        ));
+    }
     let mut live = SubAgentLiveView::default();
-    live.ingest_available(&mut receiver);
+    live.ingest_sse(&sse);
+    assert!(
+        sse.contains("content_block_stop"),
+        "{}: ZWSP prime must close before visible chrome: {sse}",
+        case.name
+    );
     assert_live_progress(case, &live, command_code);
     assert_finished_transcript(case, &mut builder).await;
     drop(sender);
