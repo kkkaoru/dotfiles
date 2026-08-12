@@ -9,7 +9,7 @@ use serde_json::json;
 fn main() {
     let arguments = std::env::args().collect::<Vec<_>>();
     exit_forced_failure(&arguments);
-    let backpressure = argument(&arguments, "--model") == "test-backpressure-model";
+    let backpressure = argument(&arguments, "--model") == "claude-backpressure-model";
     emit_backpressure(&backpressure);
     let prompt = read_prompt();
     if handle_stream_prompt(&arguments, &prompt) {
@@ -27,7 +27,7 @@ fn main() {
 fn exit_forced_failure(arguments: &[String]) {
     if arguments.windows(2).any(|pair| {
         pair.first().map(String::as_str) == Some("--model")
-            && pair.get(1).map(String::as_str) == Some("test-failing-model")
+            && pair.get(1).map(String::as_str) == Some("claude-failing-model")
     }) {
         eprintln!("forced subscription failure");
         std::process::exit(7);

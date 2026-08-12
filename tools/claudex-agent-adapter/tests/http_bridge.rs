@@ -943,7 +943,7 @@ async fn routes_non_main_models_to_subscription_with_requested_effort() {
         .canonicalize()
         .expect("canonical workspace");
     let system = format!("<env>\nWorking directory: {}\n</env>", workspace.display());
-    let expected = format!("test-sonnet-model|high|Read|Read|{}", workspace.display());
+    let expected = format!("claude-sonnet-5|high|Read|Read|{}", workspace.display());
     assert_subscription_response(&client, &adapter, &system, &expected).await;
     assert_streaming_subscription(&client, &adapter, &system).await;
     assert_fast_subscription_outcomes(&client, &adapter, &system).await;
@@ -1060,7 +1060,7 @@ async fn routes_omitted_tool_compaction_through_safe_structured_subscription() {
     let response = Client::new()
         .post(format!("{base_url}/v1/messages"))
         .json(&json!({
-            "model":"test-sonnet-model", "max_tokens":256, "stream":false,
+            "model":"claude-sonnet-5", "max_tokens":256, "stream":false,
             "system":"Subscription structured output",
             "output_config":{"format":{"type":"json_schema","schema":schema.clone()}},
             "messages":[{"role":"user","content":concat!(
@@ -1094,7 +1094,7 @@ async fn rejects_model_less_subscription_tools_before_forwarding_them() {
     let response = Client::new()
         .post(messages_url(&adapter))
         .json(&json!({
-            "model":"test-sonnet-model", "stream":true,
+            "model":"claude-sonnet-5", "stream":true,
             "system":"Parallel subscription tool bridge",
             "tools":[{
                 "name":"Agent", "description":"Launch a worker",
@@ -1131,7 +1131,7 @@ async fn subscription_follow_up_stream_distinguishes_launch_from_no_launch() {
     let client = Client::new();
     let request = |marker: &str| {
         json!({
-            "model":"test-sonnet-model", "stream":true,
+            "model":"claude-sonnet-5", "stream":true,
             "system":"Subscription follow-up visibility",
             "tools":[{
                 "name":"Agent", "description":"Launch a worker",
@@ -1190,7 +1190,7 @@ async fn exchanges_large_subscription_input_and_output_without_pipe_deadlock() {
     let large_prompt = format!("SUBSCRIPTION_BACKPRESSURE{}", "x".repeat(128 * 1_024));
     for stream in [false, true] {
         let request = client.post(messages_url(&adapter)).json(&json!({
-            "model":"test-backpressure-model",
+            "model":"claude-backpressure-model",
             "stream":stream,
             "system":"Large subscription pipe test",
             "messages":[{"role":"user","content":large_prompt}]
@@ -1219,7 +1219,7 @@ async fn assert_subscription_response(
         client,
         &messages_url(adapter),
         json!({
-            "model":"test-sonnet-model", "system":system,
+            "model":"claude-sonnet-5", "system":system,
             "output_config":{"effort":"high"},
             "tools":[{"name":"Read","input_schema":{"type":"object"}}],
             "messages":[{"role":"user","content":"SUBSCRIPTION_ROUTE"}]
@@ -1234,7 +1234,7 @@ async fn assert_streaming_subscription(client: &Client, adapter: &Adapter, syste
     let mut response = client
         .post(messages_url(adapter))
         .json(&json!({
-            "model":"test-sonnet-model", "stream":true,
+            "model":"claude-sonnet-5", "stream":true,
             "system":system, "output_config":{"effort":"low"},
             "tools":[{"name":"Read","input_schema":{"type":"object"}}],
             "messages":[{"role":"user","content":"SUBSCRIPTION_STREAM_DELAY"}]
@@ -1266,7 +1266,7 @@ async fn assert_fast_subscription_outcomes(client: &Client, adapter: &Adapter, s
     let empty = client
         .post(messages_url(adapter))
         .json(&json!({
-            "model":"test-sonnet-model", "stream":true,
+            "model":"claude-sonnet-5", "stream":true,
             "system":system,
             "messages":[{"role":"user","content":"SUBSCRIPTION_EMPTY"}]
         }))
@@ -1286,7 +1286,7 @@ async fn assert_fast_subscription_outcomes(client: &Client, adapter: &Adapter, s
     let failure = client
         .post(messages_url(adapter))
         .json(&json!({
-            "model":"test-failing-model", "stream":true,
+            "model":"claude-failing-model", "stream":true,
             "system":"Subscription failure stream",
             "messages":[{"role":"user","content":"SUBSCRIPTION_ROUTE"}]
         }))
