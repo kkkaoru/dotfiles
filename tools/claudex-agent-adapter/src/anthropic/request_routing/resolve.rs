@@ -104,5 +104,11 @@ pub(in crate::anthropic) fn resolve_request_model_with_origin(
             request.model
         );
     }
-    Ok(RouteDecision::Subscription)
+    if normalize_claude_model_to_haiku(&request.model).is_some() {
+        return Ok(RouteDecision::Subscription);
+    }
+    bail!(
+        "model `{}` is not a Claude subscription model and has no active provider route",
+        request.model
+    )
 }

@@ -111,6 +111,26 @@ mod tests {
     }
 
     #[test]
+    fn rejects_undeclared_non_claude_outer_models_instead_of_subscription() {
+        for model in ["auto", "fugu", "gpt-5.6-luna"] {
+            let mut request = request(model, &[]);
+            let error = resolve(
+                &mut request,
+                "main-model",
+                false,
+                |_| false,
+                |_| false,
+            )
+            .expect_err("non-Claude aliases must not spawn claude --model {model}");
+            assert!(
+                error.to_string().contains("not a Claude subscription model"),
+                "{model}: {error}"
+            );
+            assert_eq!(request.model, model);
+        }
+    }
+
+    #[test]
     fn keeps_an_unsupported_discovery_alias_on_subscription() {
         let mut request = request("claude-claudex-unknown", &[]);
         let decision = resolve_request_model(
