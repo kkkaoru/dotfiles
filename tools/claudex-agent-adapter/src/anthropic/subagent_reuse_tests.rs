@@ -6,7 +6,7 @@ use std::{
     collections::HashMap,
     fs,
     process::Command,
-    sync::{Arc, Barrier},
+    sync::{Arc, Barrier, Mutex},
     thread,
     time::{Duration, Instant},
 };
@@ -1872,6 +1872,71 @@ fn note_inflight_launch_empty_scope() {
 }
 
 #[test]
+fn memory_claim_occupancy_checks_expiry_session_scope_and_model() {
+    let registry = SubagentReuseRegistry::default();
+    let now = unix_seconds();
+    {
+        let mut claims = registry.claims.lock().expect("claims lock");
+        claims.insert(
+            "expired".to_owned(),
+            super::store::ClaimRecord {
+                session_id: "session-a".to_owned(),
+                scope: "Audit Rust".to_owned(),
+                model: Some("model-a".to_owned()),
+                owner: "owner".to_owned(),
+                pid: current_pid(),
+                created_revision: 1,
+                expires_unix_seconds: now.saturating_sub(1),
+                tool_use_id: "expired".to_owned(),
+            },
+        );
+        claims.insert(
+            "wrong-session".to_owned(),
+            super::store::ClaimRecord {
+                session_id: "session-b".to_owned(),
+                scope: "Audit Rust".to_owned(),
+                model: Some("model-a".to_owned()),
+                owner: "owner".to_owned(),
+                pid: current_pid(),
+                created_revision: 2,
+                expires_unix_seconds: now.saturating_add(60),
+                tool_use_id: "wrong-session".to_owned(),
+            },
+        );
+        claims.insert(
+            "wrong-scope".to_owned(),
+            super::store::ClaimRecord {
+                session_id: "session-a".to_owned(),
+                scope: "Review CSS".to_owned(),
+                model: Some("model-a".to_owned()),
+                owner: "owner".to_owned(),
+                pid: current_pid(),
+                created_revision: 3,
+                expires_unix_seconds: now.saturating_add(60),
+                tool_use_id: "wrong-scope".to_owned(),
+            },
+        );
+        claims.insert(
+            "wrong-model".to_owned(),
+            super::store::ClaimRecord {
+                session_id: "session-a".to_owned(),
+                scope: "Audit Rust".to_owned(),
+                model: Some("model-b".to_owned()),
+                owner: "owner".to_owned(),
+                pid: current_pid(),
+                created_revision: 4,
+                expires_unix_seconds: now.saturating_add(60),
+                tool_use_id: "wrong-model".to_owned(),
+            },
+        );
+    }
+    let arguments = json!({"prompt": "Audit Rust", "claudex_model": "model-a"});
+    assert!(!registry.scope_is_occupied("session-a", &arguments));
+    let model_less = json!({"prompt": "Audit Rust"});
+    assert!(registry.scope_is_occupied("session-a", &model_less));
+}
+
+#[test]
 fn find_reusable_launch_no_exact_match_returns_none() {
     let launches = vec![LaunchRecord {
         key: "key-1".to_owned(),
@@ -2186,5 +2251,388 @@ fn reuse_guidance_omits_empty_inflight_and_failed_recipients() {
     assert!(
         !guidance.contains("(Trace azookey conversion pipeline; gpt-test; pending)"),
         "empty-recipient inflight placeholders must not appear as resume targets: {guidance}"
+    );
+}
+
+fn reuse_env_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: Mutex<()> = Mutex::new(());
+    LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+#[test]
+fn empty_session_id_is_rejected_by_delta_and_delete() {
+    let root = tempfile::tempdir().expect("reuse registry fixture");
+    let path = root.path().join("reuse.json");
+    let store = Store::new(path);
+    assert!(
+        !store
+            .save_session_delta("", SessionState::default(), 0)
+            .expect("empty session delta")
+    );
+    assert!(!store.delete_session("", 0).expect("empty session delete"));
+}
+
+#[test]
+fn save_skips_a_tombstoned_session() {
+    let root = tempfile::tempdir().expect("reuse registry fixture");
+    let path = root.path().join("reuse.json");
+    let store = Store::new(path);
+    assert!(
+        store
+            .delete_session("session-a", 0)
+            .expect("tombstone a session that never existed")
+    );
+    let mut states = HashMap::new();
+    states.insert(
+        "session-a".to_owned(),
+        SessionState {
+            launches: vec![LaunchRecord {
+                key: "tool-a".to_owned(),
+                recipient: "worker-a".to_owned(),
+                scope: "Audit Rust".to_owned(),
+                model: Some("worker-model".to_owned()),
+                status: "active".to_owned(),
+            }],
+        },
+    );
+    store.save(states).expect("save after tombstone");
+    assert!(
+        !store.load_snapshot().sessions.contains_key("session-a"),
+        "a tombstoned session must not be resurrected by save()"
+    );
+}
+
+#[test]
+fn delete_session_rejects_a_stale_base_revision() {
+    let root = tempfile::tempdir().expect("reuse registry fixture");
+    let path = root.path().join("reuse.json");
+    let store = Store::new(path);
+    let mut initial = HashMap::new();
+    initial.insert(
+        "session-a".to_owned(),
+        SessionState {
+            launches: vec![LaunchRecord {
+                key: "tool-a".to_owned(),
+                recipient: "worker-a".to_owned(),
+                scope: "Audit Rust".to_owned(),
+                model: Some("worker-model".to_owned()),
+                status: "active".to_owned(),
+            }],
+        },
+    );
+    store.save(initial).expect("initial snapshot");
+    let stale_base_revision = store
+        .load_snapshot()
+        .session_revisions
+        .get("session-a")
+        .copied()
+        .expect("session revision");
+    store
+        .save_session_delta(
+            "session-a",
+            SessionState {
+                launches: vec![LaunchRecord {
+                    key: "tool-b".to_owned(),
+                    recipient: "worker-b".to_owned(),
+                    scope: "Audit Rust".to_owned(),
+                    model: Some("worker-model".to_owned()),
+                    status: "active".to_owned(),
+                }],
+            },
+            stale_base_revision,
+        )
+        .expect("advance revision past the captured base");
+
+    let deleted = store
+        .delete_session("session-a", stale_base_revision)
+        .expect("stale delete check");
+    assert!(
+        !deleted,
+        "a stale base revision must not delete a session that moved on"
+    );
+    assert!(store.load_snapshot().sessions.contains_key("session-a"));
+}
+
+#[test]
+fn save_session_delta_merges_into_a_session_with_a_newer_untombstoned_revision() {
+    let root = tempfile::tempdir().expect("reuse registry fixture");
+    let path = root.path().join("reuse.json");
+    let store = Store::new(path);
+    let mut initial = HashMap::new();
+    initial.insert(
+        "session-a".to_owned(),
+        SessionState {
+            launches: vec![LaunchRecord {
+                key: "tool-a".to_owned(),
+                recipient: "worker-a".to_owned(),
+                scope: "Audit Rust".to_owned(),
+                model: Some("worker-model".to_owned()),
+                status: "completed".to_owned(),
+            }],
+        },
+    );
+    store.save(initial).expect("initial snapshot");
+    let captured_base_revision = store
+        .load_snapshot()
+        .session_revisions
+        .get("session-a")
+        .copied()
+        .expect("session revision");
+    // Advance the canonical revision again without tombstoning the session,
+    // so a delta still carrying `captured_base_revision` becomes stale but
+    // must merge instead of being rejected outright.
+    store
+        .save_session_delta(
+            "session-a",
+            SessionState {
+                launches: vec![LaunchRecord {
+                    key: "tool-b".to_owned(),
+                    recipient: "worker-b".to_owned(),
+                    scope: "Audit Rust".to_owned(),
+                    model: Some("worker-model".to_owned()),
+                    status: "active".to_owned(),
+                }],
+            },
+            captured_base_revision,
+        )
+        .expect("advance revision");
+
+    let merged = store
+        .save_session_delta(
+            "session-a",
+            SessionState {
+                launches: vec![LaunchRecord {
+                    key: "tool-c".to_owned(),
+                    recipient: "worker-c".to_owned(),
+                    // A distinct scope keeps this from collapsing into the
+                    // still-active "tool-b" record as the same logical
+                    // worker; the merge must add it as a new launch.
+                    scope: "Review CSS".to_owned(),
+                    model: Some("worker-model".to_owned()),
+                    status: "active".to_owned(),
+                }],
+            },
+            captured_base_revision,
+        )
+        .expect("stale but mergeable delta");
+    assert!(
+        merged,
+        "a stale, non-tombstoned delta must still be accepted via merge"
+    );
+    let launches = store.load_snapshot().sessions["session-a"].launches.clone();
+    assert!(launches.iter().any(|launch| launch.key == "tool-b"));
+    assert!(launches.iter().any(|launch| launch.key == "tool-c"));
+}
+
+#[test]
+fn write_document_reports_an_error_when_the_target_path_is_a_directory() {
+    let root = tempfile::tempdir().expect("reuse registry fixture");
+    let path = root.path().join("reuse.json");
+    fs::create_dir(&path).expect("occupy the store path with a directory");
+    let store = Store::new(path);
+    let result = store.save_session_delta("session-a", SessionState::default(), 0);
+    assert!(
+        result.is_err(),
+        "the atomic rename over an occupied directory must fail"
+    );
+}
+
+#[test]
+fn acquire_claim_rejects_empty_session_scope_or_owner() {
+    let root = tempfile::tempdir().expect("reuse registry fixture");
+    let path = root.path().join("reuse.json");
+    let store = Store::new(path);
+    let now = unix_seconds();
+    let base = ClaimRequest {
+        session_id: "session-a".to_owned(),
+        scope: "Audit Rust".to_owned(),
+        model: None,
+        owner: "owner-a".to_owned(),
+        pid: current_pid(),
+        tool_use_id: "tool-a".to_owned(),
+        expires_unix_seconds: now + 60,
+    };
+    let mut empty_session = base.clone();
+    empty_session.session_id = String::new();
+    assert!(
+        store
+            .acquire_claim(empty_session, now)
+            .expect("empty session_id")
+            .is_none()
+    );
+    let mut empty_scope = base.clone();
+    empty_scope.scope = String::new();
+    assert!(
+        store
+            .acquire_claim(empty_scope, now)
+            .expect("empty scope")
+            .is_none()
+    );
+    let mut empty_owner = base;
+    empty_owner.owner = String::new();
+    assert!(
+        store
+            .acquire_claim(empty_owner, now)
+            .expect("empty owner")
+            .is_none()
+    );
+}
+
+#[test]
+fn claims_occupy_ignores_other_sessions_and_scopes() {
+    let root = tempfile::tempdir().expect("reuse registry fixture");
+    let path = root.path().join("reuse.json");
+    let store = Store::new(path);
+    let now = unix_seconds();
+    store
+        .acquire_claim(
+            ClaimRequest {
+                session_id: "session-a".to_owned(),
+                scope: "Audit Rust".to_owned(),
+                model: Some("worker-model".to_owned()),
+                owner: "owner-a".to_owned(),
+                pid: current_pid(),
+                tool_use_id: "tool-a".to_owned(),
+                expires_unix_seconds: now + 60,
+            },
+            now,
+        )
+        .expect("claim admission")
+        .expect("claim");
+
+    assert!(
+        !store
+            .claims_occupy("session-b", "Audit Rust", Some("worker-model"), now)
+            .expect("other session")
+    );
+    assert!(
+        !store
+            .claims_occupy("session-a", "Review CSS", Some("worker-model"), now)
+            .expect("other scope")
+    );
+    assert!(
+        store
+            .claims_occupy("session-a", "Audit Rust", Some("worker-model"), now)
+            .expect("matching claim")
+    );
+}
+
+#[test]
+fn claims_occupy_reaps_a_definitely_dead_nonzero_pid() {
+    let mut child = Command::new("true")
+        .spawn()
+        .expect("spawn a short-lived helper process");
+    let dead_pid = child.id();
+    child
+        .wait()
+        .expect("reap the helper process so its pid is no longer alive");
+
+    let root = tempfile::tempdir().expect("reuse registry fixture");
+    let path = root.path().join("reuse.json");
+    let store = Store::new(path);
+    let now = unix_seconds();
+    store
+        .acquire_claim(
+            ClaimRequest {
+                session_id: "session-a".to_owned(),
+                scope: "Audit Rust".to_owned(),
+                model: Some("worker-model".to_owned()),
+                owner: "owner-a".to_owned(),
+                pid: dead_pid,
+                tool_use_id: "tool-dead-pid".to_owned(),
+                expires_unix_seconds: now + 60,
+            },
+            now,
+        )
+        .expect("claim admission");
+
+    assert!(
+        !store
+            .claims_occupy("session-a", "Audit Rust", Some("worker-model"), now)
+            .expect("dead pid reap")
+    );
+}
+
+#[test]
+fn note_inflight_launch_rejects_an_in_memory_duplicate_without_a_store() {
+    let registry = SubagentReuseRegistry::default();
+    let arguments = json!({
+        "description": "Guard duplicate admission",
+        "prompt": "Reject a second same-scope launch before any tool_result exists.",
+        "claudex_model": "gpt-test"
+    });
+    assert!(registry.note_inflight_launch("session-a", &arguments, "tool-first"));
+    assert!(
+        !registry.note_inflight_launch("session-a", &arguments, "tool-second"),
+        "a same-scope in-memory claim must block a concurrent duplicate"
+    );
+}
+
+#[test]
+fn note_inflight_launch_returns_false_when_reuse_is_disabled() {
+    let _guard = reuse_env_lock();
+    let previous = std::env::var_os(crate::parallel_scheduler::SUBAGENT_REUSE_ENV);
+    unsafe {
+        std::env::set_var(crate::parallel_scheduler::SUBAGENT_REUSE_ENV, "false");
+    }
+    let registry = SubagentReuseRegistry::default();
+    let arguments = json!({
+        "description": "Trace disabled reuse",
+        "prompt": "Confirm the flag short-circuits before any claim work.",
+        "claudex_model": "gpt-test"
+    });
+    let admitted = registry.note_inflight_launch("session-a", &arguments, "tool-disabled");
+    match previous {
+        Some(value) => unsafe {
+            std::env::set_var(crate::parallel_scheduler::SUBAGENT_REUSE_ENV, value)
+        },
+        None => unsafe { std::env::remove_var(crate::parallel_scheduler::SUBAGENT_REUSE_ENV) },
+    }
+    assert!(!admitted);
+    assert_eq!(registry.state_for("session-a"), None);
+}
+
+#[test]
+fn scope_is_occupied_falls_back_to_in_memory_claims_without_a_store() {
+    let registry = SubagentReuseRegistry::default();
+    let arguments = json!({
+        "description": "Guard duplicate admission",
+        "prompt": "Fall back to the claim-only view once in-memory launch state is forgotten.",
+        "claudex_model": "gpt-test"
+    });
+    assert!(registry.note_inflight_launch("session-a", &arguments, "tool-claim-only"));
+    registry.forget_memory_for_test();
+    assert!(
+        registry.scope_is_occupied("session-a", &arguments),
+        "an in-memory claim must still occupy the scope without a store"
+    );
+    let other = json!({
+        "description": "Unrelated different scope entirely",
+        "prompt": "This scope must not match the claim above.",
+        "claudex_model": "gpt-test"
+    });
+    assert!(!registry.scope_is_occupied("session-a", &other));
+}
+
+#[test]
+fn resolve_claims_removes_the_local_mirror_after_a_store_backed_release() {
+    let root = tempfile::tempdir().expect("reuse store");
+    let path = root.path().join("subagent-recipients-v1.json");
+    let registry = SubagentReuseRegistry::with_store(path);
+    let arguments = json!({
+        "description": "Trace resolve_claims store-backed release",
+        "prompt": "Confirm the local claim mirror is dropped once the store admits the resolution.",
+        "claudex_model": "gpt-test"
+    });
+    assert!(registry.note_inflight_launch("session-a", &arguments, "tool-pending"));
+    assert_eq!(registry.claims.lock().expect("claims lock").len(), 1);
+
+    let mut resolved_request =
+        request("session-a", launch_with_context("tool-pending", "worker-a"));
+    registry.observe_and_restore_for_test(&mut resolved_request, true);
+
+    assert!(
+        registry.claims.lock().expect("claims lock").is_empty(),
+        "a resolved store-backed claim must drop its local mirror"
     );
 }

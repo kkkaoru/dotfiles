@@ -180,3 +180,8 @@ fn thinking_contains_pending(blocks: &[Value], pending: &str) -> bool {
                 .is_some_and(|text| text.contains(needle))
     })
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[path = "close_finish_tests.rs"]
+mod tests;

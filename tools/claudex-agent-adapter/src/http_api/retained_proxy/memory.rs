@@ -63,3 +63,6 @@ impl RetainedProxy {
         }
     }
 }
+
+#[cfg(test)]
+include!("memory_tests.rs");

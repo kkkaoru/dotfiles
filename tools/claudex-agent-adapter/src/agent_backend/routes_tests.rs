@@ -465,4 +465,144 @@ mod tests {
         route.model_prefixes.push(prefix.to_owned());
         route
     }
+
+    /// A route whose startup channel the test drives by hand instead of
+    /// spawning a real provider process.
+    fn manual_channel_route(
+        model: &str,
+    ) -> (
+        Arc<super::RoutedBackend>,
+        Arc<super::BackendStartup>,
+        tokio::sync::watch::Sender<StartupState>,
+    ) {
+        let startup = Arc::new(super::BackendStartup::default());
+        let (sender, receiver) = tokio::sync::watch::channel(StartupState::Starting);
+        *startup.receiver.lock().expect("backend startup poisoned") = Some(receiver);
+        let route = Arc::new(super::RoutedBackend::lazy(
+            route(model, BackendKind::GrokAcp),
+            Arc::clone(&startup),
+        ));
+        (route, startup, sender)
+    }
+
+    /// Runs `route.get()` on a background task so the caller can drive the
+    /// startup channel (publish a result, drop the sender, ...) while it
+    /// waits.
+    fn spawn_get(
+        route: &Arc<super::RoutedBackend>,
+    ) -> tokio::task::JoinHandle<anyhow::Result<Arc<AgentBackend>>> {
+        let route = Arc::clone(route);
+        tokio::spawn(async move { route.get().await })
+    }
+
+    #[tokio::test]
+    async fn closed_pool_rejects_get_ready_backend_and_is_alive() {
+        let routes = RoutedBackends::lazy(&[route("closed-model", BackendKind::GrokAcp)]);
+        routes.shutdown().await;
+        let closed = routes.route(0);
+        assert!(closed.ready_backend().is_none());
+        assert!(!closed.is_alive());
+        assert!(closed.get().await.is_err());
+    }
+
+    #[tokio::test]
+    async fn get_returns_the_alive_backend_once_startup_publishes_ready() {
+        let (route, _startup, sender) = manual_channel_route("alive-model");
+        let waiting = spawn_get(&route);
+        tokio::task::yield_now().await;
+        let alive = Arc::new(AgentBackend::Grok(
+            crate::grok_acp::GrokAcp::alive_for_test(),
+        ));
+        startup::publish_result(sender, Ok(Arc::clone(&alive))).await;
+
+        let backend = tokio::time::timeout(std::time::Duration::from_secs(1), waiting)
+            .await
+            .expect("get must settle")
+            .expect("get task must not panic")
+            .expect("alive backend must be returned");
+        assert!(Arc::ptr_eq(&backend, &alive));
+    }
+
+    #[tokio::test]
+    async fn get_reports_an_error_when_startup_stops_without_a_result() {
+        let (route, _startup, sender) = manual_channel_route("stopped-model");
+        let waiting = spawn_get(&route);
+        tokio::task::yield_now().await;
+        drop(sender);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(1), waiting)
+                .await
+                .expect("get must settle")
+                .expect("get task must not panic")
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn retry_stale_backend_detects_a_generation_that_never_advanced() {
+        let (route, startup, sender) = manual_channel_route("stable-model");
+        let alive = Arc::new(AgentBackend::Grok(
+            crate::grok_acp::GrokAcp::alive_for_test(),
+        ));
+        // Publish once so the still-alive backend becomes the reusable state
+        // that `startup_receiver` will hand back without bumping generation.
+        startup::publish_result(sender, Ok(Arc::clone(&alive))).await;
+        let current_generation = startup
+            .generation
+            .load(std::sync::atomic::Ordering::Acquire);
+        let stale = Arc::new(AgentBackend::Grok(
+            crate::grok_acp::GrokAcp::alive_for_test(),
+        ));
+
+        let result = route.retry_stale_backend(current_generation, stale).await;
+        assert!(
+            result.is_err(),
+            "a generation that never advances past a reusable startup must be reported"
+        );
+    }
+
+    /// Signals `ready` as soon as the reader thread starts, then blocks on
+    /// `startup_receiver`'s internal lock until the caller releases it.
+    fn spawn_startup_receiver_reader(
+        route: &Arc<super::RoutedBackend>,
+        ready: std::sync::mpsc::Sender<()>,
+    ) -> std::thread::JoinHandle<anyhow::Result<(u64, tokio::sync::watch::Receiver<StartupState>)>>
+    {
+        let route = Arc::clone(route);
+        std::thread::spawn(move || {
+            ready.send(()).expect("signal reader started");
+            route.startup_receiver()
+        })
+    }
+
+    #[test]
+    fn startup_receiver_rejects_a_pool_closed_while_it_waited_for_the_lock() {
+        let route = Arc::new(super::RoutedBackend::lazy(
+            route("late-close", BackendKind::GrokAcp),
+            Arc::new(super::BackendStartup::default()),
+        ));
+        let guard = route
+            .startup
+            .receiver
+            .lock()
+            .expect("backend startup poisoned");
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+        let reader = spawn_startup_receiver_reader(&route, ready_tx);
+        ready_rx.recv().expect("reader signal");
+        // Give the reader time to pass the pre-lock `closed` check and block
+        // on the mutex that `guard` still holds.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        route
+            .startup
+            .closed
+            .store(true, std::sync::atomic::Ordering::Release);
+        drop(guard);
+        assert!(
+            reader
+                .join()
+                .expect("startup_receiver reader thread")
+                .is_err(),
+            "a pool closed while a caller waited on the lock must still be rejected"
+        );
+    }
 }

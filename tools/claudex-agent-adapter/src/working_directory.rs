@@ -252,4 +252,77 @@ mod tests {
         assert!(decode("%2").is_none());
         assert!(decode("%").is_none());
     }
+
+    static HOME_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    struct HomeGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        home: Option<std::ffi::OsString>,
+    }
+
+    impl HomeGuard {
+        fn push() -> Self {
+            let lock = HOME_ENV_LOCK
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            Self {
+                _lock: lock,
+                home: std::env::var_os("HOME"),
+            }
+        }
+    }
+
+    impl Drop for HomeGuard {
+        fn drop(&mut self) {
+            match &self.home {
+                Some(home) => unsafe { std::env::set_var("HOME", home) },
+                None => unsafe { std::env::remove_var("HOME") },
+            }
+        }
+    }
+
+    #[test]
+    fn fallback_process_cwd_uses_the_temp_dir_when_home_is_unset() {
+        let _guard = HomeGuard::push();
+        unsafe {
+            std::env::remove_var("HOME");
+        }
+        let cwd = fallback_process_cwd().expect("fallback without HOME");
+        assert!(cwd.is_dir(), "{}", cwd.display());
+    }
+
+    #[test]
+    fn fallback_process_cwd_falls_through_home_when_the_cache_dir_cannot_be_created() {
+        let _guard = HomeGuard::push();
+        let root = tempfile::tempdir().expect("home fixture");
+        // `HOME` points at a file, not a directory, so `create_dir_all` for
+        // `$HOME/.cache/claudex` fails and its `canonicalize()` also fails.
+        let fake_home = root.path().join("not-a-directory");
+        std::fs::write(&fake_home, b"").expect("write fake HOME file");
+        unsafe {
+            std::env::set_var("HOME", &fake_home);
+        }
+        let cwd = fallback_process_cwd().expect("fallback past an uncreatable cache dir");
+        // `HOME` itself canonicalizes but is not a directory either, so this
+        // must fall all the way through to the temp-dir fallback.
+        assert!(cwd.is_dir(), "{}", cwd.display());
+        assert_ne!(cwd, fake_home);
+    }
+
+    #[test]
+    fn fallback_process_cwd_skips_a_cache_dir_that_is_actually_a_file() {
+        let _guard = HomeGuard::push();
+        let root = tempfile::tempdir().expect("home fixture");
+        let home = root.path().join("home");
+        std::fs::create_dir_all(home.join(".cache")).expect("create .cache directory");
+        // The leaf itself exists as a plain file, so `canonicalize()`
+        // succeeds but `is_dir()` is false.
+        std::fs::write(home.join(".cache/claudex"), b"").expect("occupy cache dir with a file");
+        unsafe {
+            std::env::set_var("HOME", &home);
+        }
+        let cwd = fallback_process_cwd().expect("fallback past a file-shaped cache dir");
+        // Falls through to the HOME directory itself, which is a real dir.
+        assert_eq!(cwd, home.canonicalize().expect("canonical home"));
+    }
 }

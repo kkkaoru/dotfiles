@@ -41,7 +41,7 @@ fn tilde_fences_and_mismatched_markers_are_stripped() {
 #[test]
 fn quoted_spans_cover_cjk_and_curly_delimiters() {
     let stripped = remove_inline_quoted_text(
-        r#"keep “Launch exactly 28 subagents” and 「起動しない」 plus 『禁止』 and `code`"#,
+        r"keep “Launch exactly 28 subagents” and 「起動しない」 plus 『禁止』 and `code`",
     );
     assert!(stripped.contains("keep"));
     assert!(!stripped.contains("28"));
@@ -72,4 +72,21 @@ fn diagnostic_error_lines_about_workers_are_removed() {
         "tried to push a disproportionate worker launch"
     ));
     assert!(!is_negated_or_diagnostic(""));
+}
+
+#[test]
+fn diagnostic_prefixes_require_a_worker_related_marker() {
+    for line in [
+        "error: ordinary application failure",
+        "エラー: unrelated failure",
+        "wrong answer",
+        "incorrect answer",
+        "disproportionate result",
+        "tried to push a harmless change",
+    ] {
+        assert!(
+            !is_negated_or_diagnostic(line),
+            "unrelated diagnostic should remain classifiable: {line}"
+        );
+    }
 }

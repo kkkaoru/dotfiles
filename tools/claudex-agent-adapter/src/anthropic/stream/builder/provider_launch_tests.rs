@@ -132,6 +132,43 @@ async fn provider_launch_tracks_unbridged_mcp_cards() {
     );
 }
 
+#[tokio::test]
+async fn provider_launch_forwards_non_mcp_call_and_update_statuses() {
+    let backend = AgentBackend::spawn_routes(&[]);
+    let bridge = Bridge::new_with_backend(backend, "main".to_owned());
+    let session = test_session(Some("scope-c"));
+    let mut builder = SegmentBuilder::new(1);
+
+    for (method, status) in [
+        ("item/providerTool/call", "pending"),
+        ("item/providerTool/update", "in_progress"),
+        ("item/providerTool/update", "completed"),
+        ("item/providerTool/update", "failed"),
+        ("item/providerTool/update", "unknown"),
+    ] {
+        builder
+            .provider_launch_event(
+                &bridge,
+                &session,
+                &[],
+                &json!(null),
+                &json!({
+                    "method": method,
+                    "params": {
+                        "callId": "ordinary-call",
+                        "tool": "shell",
+                        "title": "ordinary tool",
+                        "status": status,
+                        "arguments": {}
+                    }
+                }),
+                None,
+            )
+            .await
+            .expect("ordinary provider event");
+    }
+}
+
 mod temporary_env {
     use std::{
         path::Path,
@@ -156,7 +193,10 @@ mod temporary_env {
     }
 
     pub(super) fn set_var(key: &'static str, value: &Path) -> Guard {
-        let lock = LOCK.get_or_init(|| Mutex::new(())).lock().expect("env lock");
+        let lock = LOCK
+            .get_or_init(|| Mutex::new(()))
+            .lock()
+            .expect("env lock");
         let previous = std::env::var_os(key);
         unsafe { std::env::set_var(key, value) };
         Guard {

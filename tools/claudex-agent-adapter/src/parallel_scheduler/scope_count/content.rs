@@ -177,3 +177,6 @@ fn is_non_user_block_type(block_type: &str) -> bool {
             | "lifecycle"
     )
 }
+
+#[cfg(test)]
+include!("content_tests.rs");

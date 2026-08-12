@@ -12,6 +12,7 @@ use axum::body::Bytes;
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, Semaphore, mpsc};
 
+use super::protocol::send_tool_use;
 use super::{
     SegmentBuilder, StreamWaitInput, builder::parse_tool_call, context_window, error_flow,
     message_start, sanitize, send_stream_completion, send_stream_error, send_stream_frame,
@@ -4980,6 +4981,29 @@ fn creates_start_and_tool_frames() {
             .contains("value")
     );
     assert_eq!(frames[2].0, "content_block_stop");
+}
+
+#[tokio::test]
+async fn sends_tool_frames_with_and_without_a_live_stream() {
+    let block = json!({
+        "id":"toolu_stream", "name":"lookup", "input":{"key":"value"}
+    });
+    send_tool_use(None, 0, &block)
+        .await
+        .expect("missing stream is a no-op");
+
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(4);
+    send_tool_use(Some(&sender), 0, &block)
+        .await
+        .expect("live stream accepts tool frames");
+    assert!(receiver.recv().await.expect("start").is_ok());
+    assert!(receiver.recv().await.expect("delta").is_ok());
+    assert!(receiver.recv().await.expect("stop").is_ok());
+
+    drop(receiver);
+    send_stream_frame(Some(&sender), "closed", || json!({"ok": true}))
+        .await
+        .expect("closed stream is handled");
 }
 
 #[test]

@@ -19,6 +19,10 @@ fn remaining_final_message_skips_when_streamed_already_covers_result() {
         None
     );
     assert_eq!(remaining_final_message("hello   ", "hello"), None);
+    assert_eq!(
+        remaining_final_message("hello world", "unrelated"),
+        Some("hello world".to_owned())
+    );
 }
 
 #[test]
@@ -113,6 +117,38 @@ fn thinking_end_ignores_prefix_that_adds_only_whitespace() {
         coalescer
             .push(ProgressEvent::ThoughtEnd("planning live.   ".to_owned()))
             .is_empty()
+    );
+}
+
+#[test]
+fn thinking_end_snapshot_unrelated_to_the_emitted_prefix_is_dropped() {
+    let mut coalescer = ProgressCoalescer::default();
+    assert!(
+        coalescer
+            .push(ProgressEvent::Thought("hello".to_owned()))
+            .is_empty(),
+        "short thought text stays buffered until a flush trigger"
+    );
+    assert_eq!(
+        coalescer.push(ProgressEvent::ThoughtEnd("goodbye world".to_owned())),
+        vec![ProgressEvent::Thought("hello".to_owned())],
+        "an unrelated snapshot must not append a bogus second Thought chunk"
+    );
+}
+
+#[test]
+fn message_events_coalesce_and_flush_independently_of_thought() {
+    let mut coalescer = ProgressCoalescer::default();
+    assert!(
+        coalescer
+            .push(ProgressEvent::Message("short".to_owned()))
+            .is_empty(),
+        "message text under the flush thresholds stays buffered"
+    );
+    assert_eq!(
+        coalescer.push(ProgressEvent::Message("er.".to_owned())),
+        vec![ProgressEvent::Message("shorter.".to_owned())],
+        "terminal punctuation flushes the coalesced message buffer"
     );
 }
 
