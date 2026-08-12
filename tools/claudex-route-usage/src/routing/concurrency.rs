@@ -154,12 +154,12 @@ pub fn apply_model_concurrency_with_inflight(
     disabled_models: &BTreeSet<String>,
 ) -> Result<Value> {
     let mut combined = summary;
-    let mut candidates: Vec<(CapacityKey, Value)> = Vec::new();
+    let mut automatic_candidates: Vec<(CapacityKey, Value)> = Vec::new();
     let mut model_capacity = Map::new();
     for (index, provider) in config.providers.iter().enumerate() {
         refresh_provider_slot(
             &mut combined,
-            &mut candidates,
+            &mut automatic_candidates,
             &mut model_capacity,
             &ProviderSlot {
                 provider,
@@ -171,24 +171,6 @@ pub fn apply_model_concurrency_with_inflight(
         );
     }
     record_health_only_models(&mut model_capacity, config, health);
-    let participating = collect_native_candidates(
-        &combined,
-        config,
-        disabled_models,
-        active_subagent_models,
-        &mut candidates,
-    );
-    let mut selected = rank_selected_workers(candidates);
-    let fallback = fallback_worker(config);
-    let fallback_model = fallback
-        .get("model")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let fallback_active = selected.is_empty() && !disabled_models.contains(fallback_model);
-    if fallback_active {
-        selected = vec![fallback];
-    }
-    extend_with_native_workers(&mut selected, config, disabled_models, &participating);
     let providers = combined
         .get("providers")
         .and_then(Value::as_object)
@@ -199,7 +181,25 @@ pub fn apply_model_concurrency_with_inflight(
         .and_then(Value::as_object)
         .cloned()
         .unwrap_or_default();
+    let participating = collect_native_candidates(
+        &combined,
+        config,
+        disabled_models,
+        active_subagent_models,
+        &mut automatic_candidates,
+    );
+    let mut selected = rank_selected_workers(automatic_candidates);
     selected = prefer_weekly_headroom(selected, &providers, &native_quota);
+    let fallback = fallback_worker(config);
+    let fallback_model = fallback
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let fallback_active = selected.is_empty() && !disabled_models.contains(fallback_model);
+    if fallback_active {
+        selected = vec![fallback];
+    }
+    extend_with_native_workers(&mut selected, config, disabled_models, &participating);
     write_selection(&mut combined, selected, fallback_active, model_capacity);
     let orchestration = orchestration_contract(&combined)?;
     if let Some(object) = combined.as_object_mut() {
@@ -246,7 +246,10 @@ fn refresh_provider_slot(
             .get("disabled")
             .and_then(Value::as_bool)
             .unwrap_or(false);
-    if disabled || !flag(&quota, "available") {
+    if disabled {
+        return;
+    }
+    if !flag(&quota, "available") {
         return;
     }
     if !flag(&concurrency, "available") {
@@ -255,9 +258,7 @@ fn refresh_provider_slot(
         return;
     }
     let mut selected_worker = current_worker;
-    if limited && let Some(object) = selected_worker.as_object_mut() {
-        object.insert("concurrency".into(), concurrency.clone());
-    }
+    inject_worker_concurrency(&mut selected_worker, &concurrency, limited);
     candidates.push((
         combined_capacity_priority_with_inflight(
             &quota,
@@ -267,6 +268,16 @@ fn refresh_provider_slot(
         ),
         selected_worker,
     ));
+}
+
+fn inject_worker_concurrency(worker: &mut Value, concurrency: &Value, limited: bool) {
+    if !limited {
+        return;
+    }
+    let Some(object) = worker.as_object_mut() else {
+        return;
+    };
+    object.insert("concurrency".into(), concurrency.clone());
 }
 
 fn flag(value: &Value, key: &str) -> bool {

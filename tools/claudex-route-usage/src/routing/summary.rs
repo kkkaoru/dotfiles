@@ -4,7 +4,7 @@ use super::orchestration::orchestration_contract;
 use super::quota::{capacity_priority, quota_with_windows, status};
 use super::workers::{
     extend_with_native_workers, fallback_worker, native_worker_item, prefer_weekly_headroom,
-    ranked_native_quota, selected_agent_values, selected_native_workers, worker,
+    ranked_native_quota, selected_agent_values, worker,
 };
 use super::{CapacityKey, rank_selected_workers};
 use crate::config::Config;
@@ -12,29 +12,20 @@ use crate::exhaustion;
 use anyhow::Result;
 use serde_json::{Map, Value};
 use std::collections::BTreeSet;
-#[cfg(not(test))]
-use std::time::SystemTime;
 
+#[cfg(test)]
 pub fn routing_summary(
     report: &Value,
     config: &Config,
     disabled_models: &BTreeSet<String>,
 ) -> Result<Value> {
-    let (exhaustion_scopes, codex_backend_cooling) = live_exhaustion_state();
-    routing_summary_with_exhaustion(
-        report,
-        config,
-        disabled_models,
-        &exhaustion_scopes,
-        codex_backend_cooling,
-    )
+    routing_summary_with_exhaustion(report, config, disabled_models, &BTreeSet::new(), false)
 }
 
 /// Assemble a routing summary with explicit exhaustion cool-downs.
 ///
-/// Production callers should use [`routing_summary`], which reads adapter cache
-/// files under `$HOME/.cache/claudex`. Tests pass scopes directly so they do not
-/// race on `HOME` or pick up a developer's live cooldown file.
+/// Production callers resolve exhaustion once and pass it explicitly. Tests do
+/// the same so they never pick up a developer's live cooldown file.
 pub(crate) fn routing_summary_with_exhaustion(
     report: &Value,
     config: &Config,
@@ -42,17 +33,20 @@ pub(crate) fn routing_summary_with_exhaustion(
     exhaustion_scopes: &BTreeSet<String>,
     codex_backend_cooling: bool,
 ) -> Result<Value> {
-    let mut candidates: Vec<(CapacityKey, Value)> = Vec::new();
+    let mut automatic_candidates: Vec<(CapacityKey, Value)> = Vec::new();
     let providers = provider_quota_fields(
         report,
         config,
         disabled_models,
         exhaustion_scopes,
         codex_backend_cooling,
-        &mut candidates,
+        &mut automatic_candidates,
     )?;
-    let native_quota = native_quota_fields(report, config, disabled_models, &mut candidates)?;
-    let mut selected = rank_selected_workers(candidates);
+    let native_quota =
+        native_quota_fields(report, config, disabled_models, &mut automatic_candidates)?;
+    let mut selected = rank_selected_workers(automatic_candidates);
+    selected = prefer_weekly_headroom(selected, &providers, &native_quota);
+
     let fallback_active = selected.is_empty()
         && config
             .fallback
@@ -67,7 +61,6 @@ pub(crate) fn routing_summary_with_exhaustion(
         .filter_map(|item| item.get("agent").and_then(Value::as_str).map(str::to_owned))
         .collect();
     extend_with_native_workers(&mut selected, config, disabled_models, &participating);
-    selected = prefer_weekly_headroom(selected, &providers, &native_quota);
     let preferred = selected.first().cloned();
     let mut summary = serde_json::json!({
         "providers": providers,
@@ -81,26 +74,6 @@ pub(crate) fn routing_summary_with_exhaustion(
     });
     summary["orchestration"] = orchestration_contract(&summary)?;
     Ok(summary)
-}
-
-#[cfg(test)]
-fn live_exhaustion_state() -> (BTreeSet<String>, bool) {
-    // Unit tests must not read the developer's live adapter cooldown cache.
-    (BTreeSet::new(), false)
-}
-
-#[cfg(not(test))]
-fn live_exhaustion_state() -> (BTreeSet<String>, bool) {
-    let now = SystemTime::now();
-    let home = exhaustion::current_home();
-    let scopes = home
-        .as_ref()
-        .map(|path| exhaustion::active_scopes(path, now))
-        .unwrap_or_default();
-    let cooling = home
-        .as_ref()
-        .is_some_and(|path| exhaustion::codex_app_server_cooling_down(path, now));
-    (scopes, cooling)
 }
 
 fn disabled_models_with_exhaustion(
@@ -131,7 +104,7 @@ fn provider_quota_fields(
     disabled_models: &BTreeSet<String>,
     exhaustion_scopes: &BTreeSet<String>,
     codex_backend_cooling: bool,
-    candidates: &mut Vec<(CapacityKey, Value)>,
+    automatic_candidates: &mut Vec<(CapacityKey, Value)>,
 ) -> Result<Map<String, Value>> {
     let mut providers = Map::new();
     for (index, provider) in config.providers.iter().enumerate() {
@@ -169,7 +142,7 @@ fn provider_quota_fields(
                 .and_then(Value::as_bool)
                 .unwrap_or(false)
         {
-            candidates.push((capacity_priority(&quota, index as i64), worker_item));
+            automatic_candidates.push((capacity_priority(&quota, index as i64), worker_item));
         }
     }
     Ok(providers)
@@ -259,7 +232,7 @@ pub fn fallback_summary(
         vec![fallback]
     };
     let fallback_active = !selected.is_empty();
-    selected.extend(selected_native_workers(config, disabled_models));
+    extend_with_native_workers(&mut selected, config, disabled_models, &BTreeSet::new());
     let preferred = selected.first().cloned();
     let mut summary = serde_json::json!({
         "providers": providers,

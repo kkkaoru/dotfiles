@@ -1,7 +1,7 @@
 use super::concurrency::apply_model_concurrency_with_inflight;
 use super::orchestration::task_fanout;
 use super::quota::codexbar_window_quota_entry;
-use super::summary::{routing_summary, routing_summary_with_exhaustion};
+use super::summary::{fallback_summary, routing_summary, routing_summary_with_exhaustion};
 use super::workers::{
     default_subagent_route, enforce_worker_model_separation, worker_capacity_metadata,
 };
@@ -207,6 +207,18 @@ fn selected_agents(summary: &Value) -> Vec<&str> {
         .iter()
         .filter_map(Value::as_str)
         .collect()
+}
+
+fn selected_agent_model_count(summary: &Value, agent: &str, model: &str) -> usize {
+    summary["selected_workers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|worker| {
+            worker.get("agent").and_then(Value::as_str) == Some(agent)
+                && worker.get("model").and_then(Value::as_str) == Some(model)
+        })
+        .count()
 }
 
 #[test]
@@ -496,52 +508,38 @@ fn drops_low_five_hour_workers_when_ample_alternatives_exist() {
     );
 }
 
-#[test]
-fn drops_exhausted_cooldown_providers_from_automatic_selection() {
-    let usage = json!([
+const EXHAUSTION_COOLDOWN_USAGE: &str = r#"[
         {
-          "provider":"codex",
-          "available": true,
-          "reason": "available",
-          "maxUsedPercent": 20,
+          "provider":"codex", "available":true, "reason":"available", "maxUsedPercent":20,
           "quotaWindows": [
             {"name":"five-hour","remainingPercent":80},
             {"name":"seven-day","remainingPercent":80}
           ]
         },
         {
-          "provider":"grok",
-          "available": true,
-          "reason": "available",
-          "maxUsedPercent": 10,
+          "provider":"grok", "available":true, "reason":"available", "maxUsedPercent":10,
           "quotaWindows": [
             {"name":"five-hour","remainingPercent":90},
             {"name":"seven-day","remainingPercent":90}
           ]
         },
         {
-          "provider":"qwencloud",
-          "available": true,
-          "reason": "available",
-          "maxUsedPercent": 5,
+          "provider":"qwencloud", "available":true, "reason":"available", "maxUsedPercent":5,
           "quotaWindows": [
             {"name":"five-hour","remainingPercent":95},
             {"name":"seven-day","remainingPercent":95}
           ]
         },
         {
-          "provider":"ollama",
-          "available": true,
-          "reason": "available",
-          "maxUsedPercent": 1,
+          "provider":"ollama", "available":true, "reason":"available", "maxUsedPercent":1,
           "quotaWindows": [
             {"name":"five-hour","remainingPercent":99},
             {"name":"seven-day","remainingPercent":99}
           ]
         }
-    ]);
-    let config = config_from_json(
-        r#"{
+    ]"#;
+
+const EXHAUSTION_COOLDOWN_CONFIG: &str = r#"{
           "version": 1,
           "mainProviders": ["codex", "grok", "ollama-glm"],
           "providers": [
@@ -584,8 +582,12 @@ fn drops_exhausted_cooldown_providers_from_automatic_selection() {
             "model": "claude-fable-5",
             "effort": "xhigh"
           }
-        }"#,
-    );
+        }"#;
+
+#[test]
+fn drops_exhausted_cooldown_providers_from_automatic_selection() {
+    let usage: Value = serde_json::from_str(EXHAUSTION_COOLDOWN_USAGE).unwrap();
+    let config = config_from_json(EXHAUSTION_COOLDOWN_CONFIG);
     let scopes = BTreeSet::from(["ollama".to_owned()]);
     let summary =
         routing_summary_with_exhaustion(&usage, &config, &BTreeSet::new(), &scopes, false).unwrap();
@@ -806,13 +808,88 @@ fn suppresses_sonnet_when_main_is_sonnet() {
 }
 
 #[test]
-fn disabled_models_are_excluded() {
+fn disabled_models_remain_visible_only_in_policy_metadata() {
     let disabled = BTreeSet::from(["gpt-5.3-codex-spark".to_owned()]);
     let summary = routing_summary(&report(), &sample_config(), &disabled).unwrap();
+    assert_ne!(selected_models(&summary)[0], "gpt-5.3-codex-spark");
     assert!(!selected_models(&summary).contains(&"gpt-5.3-codex-spark"));
     assert_eq!(
         summary["providers"]["codex"]["reason"],
         "disabled-by-policy"
+    );
+    assert!(
+        summary["disabled_subagent_models"]
+            .as_array()
+            .expect("disabled models")
+            .iter()
+            .any(|model| model.as_str() == Some("gpt-5.3-codex-spark"))
+    );
+}
+
+#[test]
+fn disabled_models_are_not_visible_in_selected_workers() {
+    let config = config_from_json(
+        r#"{
+          "version": 1,
+          "mainProviders": ["codex", "opencode"],
+          "providers": [
+            {
+              "id": "codex",
+              "agent": "claudex-gpt",
+              "defaultModel": "gpt-5.6-luna",
+              "effort": "max",
+              "enabled": true,
+              "usageProvider": "codex",
+              "modelPrefixes": ["gpt"],
+              "backend": "codex-app-server"
+            },
+            {
+              "id": "opencode",
+              "agent": "claudex-deepseek-flash",
+              "defaultModel": "opencode-go/deepseek-v4-flash",
+              "effort": "high",
+              "enabled": true,
+              "usageProvider": "opencodego",
+              "modelPrefixes": ["opencode-go/"],
+              "backend": "configured-acp"
+            }
+          ],
+          "fallback": {
+            "agent": "claudex-sonnet",
+            "model": "claude-sonnet-5",
+            "effort": "high"
+          },
+          "nativeWorkers": []
+        }"#,
+    );
+    let usage = json!([
+        {
+          "provider":"codex",
+          "usage": {
+            "primary":{"usedPercent":10.0},
+            "secondary":{"usedPercent":20.0}
+          }
+        },
+        {
+          "provider":"opencodego",
+          "usage": {
+            "primary":{"usedPercent":2.0},
+            "secondary":{"usedPercent":90.0}
+          }
+        }
+    ]);
+    let disabled = BTreeSet::from(["opencode-go/deepseek-v4-flash".to_owned()]);
+    let summary = routing_summary(&usage, &config, &disabled).unwrap();
+    let workers = selected_models(&summary);
+    assert_eq!(workers[0], "gpt-5.6-luna");
+    assert!(!workers.contains(&"opencode-go/deepseek-v4-flash"));
+    assert_eq!(summary["providers"]["opencode"]["disabled"], true);
+    assert!(
+        summary["disabled_subagent_models"]
+            .as_array()
+            .expect("disabled models")
+            .iter()
+            .any(|model| model.as_str() == Some("opencode-go/deepseek-v4-flash"))
     );
 }
 
@@ -860,6 +937,68 @@ fn default_subagent_route_names_top_worker() {
     assert_eq!(route["model"], summary["selected_workers"][0]["model"]);
     assert_eq!(route["applies_to_subagent_types"][0], "general-purpose");
     assert_eq!(route["applies_when_claudex_model_omitted"], true);
+}
+
+#[test]
+fn default_route_skips_policy_disabled_models() {
+    let config = config_from_json(
+        r#"{
+          "version": 1,
+          "mainProviders": ["codex", "opencode"],
+          "providers": [
+            {
+              "id": "codex",
+              "agent": "claudex-gpt",
+              "defaultModel": "gpt-5.6-luna",
+              "effort": "max",
+              "enabled": true,
+              "usageProvider": "codex",
+              "modelPrefixes": ["gpt"],
+              "backend": "codex-app-server"
+            },
+            {
+              "id": "opencode",
+              "agent": "claudex-deepseek-flash",
+              "defaultModel": "opencode-go/deepseek-v4-flash",
+              "effort": "high",
+              "enabled": true,
+              "usageProvider": "opencodego",
+              "modelPrefixes": ["opencode-go/"],
+              "backend": "configured-acp"
+            }
+          ],
+          "fallback": {
+            "agent": "claudex-sonnet",
+            "model": "claude-sonnet-5",
+            "effort": "high"
+          },
+          "nativeWorkers": []
+        }"#,
+    );
+    let usage = json!([
+        {
+          "provider":"codex",
+          "usage": {
+            "primary":{"usedPercent":10.0},
+            "secondary":{"usedPercent":20.0}
+          }
+        },
+        {
+          "provider":"opencodego",
+          "usage": {
+            "primary":{"usedPercent":2.0},
+            "secondary":{"usedPercent":90.0}
+          }
+        }
+    ]);
+    let disabled = BTreeSet::from(["opencode-go/deepseek-v4-flash".to_owned()]);
+    let summary = routing_summary(&usage, &config, &disabled).unwrap();
+    let selected = selected_models(&summary);
+    let route = default_subagent_route(&summary).unwrap();
+
+    assert!(!selected.contains(&"opencode-go/deepseek-v4-flash"));
+    assert_eq!(route["model"], summary["selected_workers"][0]["model"]);
+    assert_ne!(route["model"], "opencode-go/deepseek-v4-flash");
 }
 
 #[test]
@@ -980,6 +1119,74 @@ fn sonnet_native_worker_shares_claude_usage_left_with_haiku() {
 }
 
 #[test]
+fn fallback_summary_deduplicates_matching_native_worker() {
+    let summary = fallback_summary(
+        "usage-snapshot-missing",
+        &native_claude_config(),
+        &BTreeSet::new(),
+    )
+    .unwrap();
+    let agents = selected_agents(&summary);
+
+    assert_eq!(
+        selected_agent_model_count(&summary, "claudex-sonnet", "claude-sonnet-5"),
+        1
+    );
+    assert_eq!(
+        summary["selected_workers"][0]["provider"], "fallback",
+        "the explicit fallback must win over its matching native worker"
+    );
+    assert!(agents.contains(&"claudex-haiku-search"));
+    assert_eq!(agents.len(), agents.iter().collect::<BTreeSet<_>>().len());
+    assert_eq!(
+        summary["orchestration"]["max_available_workers"].as_u64(),
+        Some(agents.len() as u64),
+        "fanout capacity must not count a duplicate fallback/native worker"
+    );
+    assert_eq!(summary["fallback_active"], true);
+}
+
+#[test]
+fn concurrency_refresh_does_not_reintroduce_fallback_native_duplicate() {
+    let config = native_claude_config();
+    let summary = fallback_summary("usage-snapshot-missing", &config, &BTreeSet::new()).unwrap();
+    let refreshed = apply_model_concurrency_with_inflight(
+        summary,
+        &config,
+        None,
+        &BTreeMap::new(),
+        &BTreeSet::new(),
+    )
+    .unwrap();
+
+    assert_eq!(
+        selected_agent_model_count(&refreshed, "claudex-sonnet", "claude-sonnet-5"),
+        1
+    );
+    assert_eq!(refreshed["selected_workers"][0]["provider"], "fallback");
+    assert!(selected_agents(&refreshed).contains(&"claudex-haiku-search"));
+}
+
+#[test]
+fn disabled_fallback_is_absent_while_distinct_native_worker_remains() {
+    let config = native_claude_config();
+    let disabled = BTreeSet::from(["claude-sonnet-5".to_owned()]);
+    let summary = fallback_summary("usage-snapshot-missing", &config, &disabled).unwrap();
+    let workers = summary["selected_workers"].as_array().unwrap();
+
+    assert_eq!(summary["fallback_active"], false);
+    assert!(
+        workers
+            .iter()
+            .all(|worker| worker["model"] != "claude-sonnet-5")
+    );
+    assert_eq!(workers.len(), 1);
+    assert_eq!(workers[0]["agent"], "claudex-haiku-search");
+    assert_eq!(summary["preferred_worker"], workers[0]);
+    assert_eq!(summary["selected_agents"], json!(["claudex-haiku-search"]));
+}
+
+#[test]
 fn qwencloud_windows_normalize_like_claude() {
     let entry = json!({
         "provider":"qwencloud",
@@ -1053,4 +1260,73 @@ fn inflight_subagents_demote_busy_models_down_the_weekly_order() {
         "busy top weekly worker must yield to the next weekly-ranked peer: {}",
         refreshed["selected_workers"]
     );
+}
+
+#[test]
+fn concurrency_refresh_keeps_policy_disabled_models_out_of_ranking() {
+    let config = config_from_json(
+        r#"{
+          "version": 1,
+          "mainProviders": ["codex", "opencode"],
+          "providers": [
+            {
+              "id": "codex",
+              "agent": "claudex-gpt",
+              "defaultModel": "gpt-5.6-luna",
+              "effort": "max",
+              "enabled": true,
+              "usageProvider": "codex",
+              "modelPrefixes": ["gpt"],
+              "backend": "codex-app-server"
+            },
+            {
+              "id": "opencode",
+              "agent": "claudex-deepseek-flash",
+              "defaultModel": "opencode-go/deepseek-v4-flash",
+              "effort": "high",
+              "enabled": true,
+              "usageProvider": "opencodego",
+              "modelPrefixes": ["opencode-go/"],
+              "backend": "configured-acp",
+              "maxConcurrency": 8,
+              "acp": {"program": "opencode", "arguments": ["--model", "{model}"]}
+            }
+          ],
+          "fallback": {
+            "agent": "claudex-sonnet",
+            "model": "claude-sonnet-5",
+            "effort": "high"
+          },
+          "nativeWorkers": [],
+          "advisor": {
+            "agent": "custom-advisor",
+            "model": "claude-fable-5",
+            "effort": "xhigh"
+          }
+        }"#,
+    );
+    let usage = json!([
+        {
+          "provider":"codex",
+          "usage": {
+            "primary":{"usedPercent":10.0},
+            "secondary":{"usedPercent":20.0}
+          }
+        },
+        {
+          "provider":"opencodego",
+          "usage": {
+            "primary":{"usedPercent":2.0},
+            "secondary":{"usedPercent":90.0}
+          }
+        }
+    ]);
+    let disabled = BTreeSet::from(["opencode-go/deepseek-v4-flash".to_owned()]);
+    let summary = routing_summary(&usage, &config, &disabled).unwrap();
+    let refreshed =
+        apply_model_concurrency_with_inflight(summary, &config, None, &BTreeMap::new(), &disabled)
+            .unwrap();
+    let workers = selected_models(&refreshed);
+    assert_eq!(workers[0], "gpt-5.6-luna");
+    assert!(!workers.contains(&"opencode-go/deepseek-v4-flash"));
 }

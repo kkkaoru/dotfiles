@@ -75,20 +75,27 @@ pub fn selected_agent_values(selected: &[Value]) -> Value {
     )
 }
 
-/// Append native workers that are not already ranked by capacity.
+/// Append native workers that are neither already selected nor ranked by capacity.
 pub fn extend_with_native_workers(
     selected: &mut Vec<Value>,
     config: &Config,
     disabled_models: &BTreeSet<String>,
     participating: &BTreeSet<String>,
 ) {
+    let mut existing_agents = participating.clone();
+    existing_agents.extend(
+        selected
+            .iter()
+            .filter_map(|item| item.get("agent").and_then(Value::as_str))
+            .map(str::to_owned),
+    );
     selected.extend(
         selected_native_workers(config, disabled_models)
             .into_iter()
             .filter(|item| {
                 item.get("agent")
                     .and_then(Value::as_str)
-                    .is_none_or(|agent| !participating.contains(agent))
+                    .is_none_or(|agent| !existing_agents.contains(agent))
             }),
     );
 }
@@ -97,7 +104,7 @@ pub fn extend_with_native_workers(
 pub const LOW_WEEKLY_REMAINING_PERCENT: f64 = 25.0;
 /// At least one worker at or above this enables depleting low-weekly peers.
 pub const AMPLE_WEEKLY_REMAINING_PERCENT: f64 = 40.0;
-
+type WorkerHeadroom = (Value, Option<f64>, Option<f64>, Option<f64>);
 /// Prefer high quota headroom for automatic SubAgent selection.
 ///
 /// When any selected worker has ample selection remaining, drop peers whose
@@ -114,7 +121,7 @@ pub fn prefer_weekly_headroom(
     providers: &Map<String, Value>,
     native_quota: &Map<String, Value>,
 ) -> Vec<Value> {
-    let annotated: Vec<(Value, Option<f64>, Option<f64>, Option<f64>)> = selected
+    let annotated: Vec<WorkerHeadroom> = selected
         .into_iter()
         .map(|worker_item| {
             let (weekly, five_hour) = worker_item

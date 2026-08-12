@@ -10,7 +10,7 @@ pub const OPENCODE_GO_DEFAULT_MODEL: &str = "opencode-go/deepseek-v4-pro";
 pub const OPENCODE_GO_DEFAULT_USAGE_PROVIDER: &str = "opencodego";
 /// Bump when worker-selection semantics change so a cached context cannot
 /// retain the old ordering or exclusion rules for the routing-cache TTL.
-pub const ROUTING_CACHE_VERSION: i64 = 9;
+pub const ROUTING_CACHE_VERSION: i64 = 10;
 
 pub fn default_advisor() -> Value {
     serde_json::json!({
