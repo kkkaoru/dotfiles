@@ -8,6 +8,7 @@ use serde_json::{Value, json};
 use tokio::sync::{Mutex, Semaphore};
 
 use crate::agent_backend::{AcpLaunch, AgentBackend, BackendKind, BackendRoute, WebSearchMode};
+use crate::parallel_scheduler::{ParallelScheduler, SchedulerConfig};
 
 use super::*;
 
@@ -529,6 +530,78 @@ fn parallel_background_agent_request(agent_id: &str) -> MessagesRequest {
         }),
     );
     request
+}
+
+fn scheduler_handoff_request(user_text: &str) -> MessagesRequest {
+    let mut request = background_agent_request("background");
+    request.messages.insert(
+        0,
+        json!({
+            "role":"user",
+            "content":user_text
+        }),
+    );
+    request
+}
+
+#[test]
+fn exact_two_scope_target_hands_off_at_two() {
+    let scheduler = ParallelScheduler::for_tests();
+    let request = scheduler_handoff_request(
+        "Implement exactly these 2 independent scopes:\n- implement parser\n- verify renderer",
+    );
+
+    assert!(should_defer_background_handoff_with(
+        &scheduler, &request, 1
+    ));
+    assert!(!should_defer_background_handoff_with(
+        &scheduler, &request, 2
+    ));
+}
+
+#[test]
+fn single_scope_substantive_work_keeps_configured_minimum_floor() {
+    let scheduler = ParallelScheduler::new(SchedulerConfig {
+        min_parallel_workers: 5,
+        max_parallel_workers: 8,
+        ..SchedulerConfig::default()
+    });
+    let request = scheduler_handoff_request("Implement the authentication cache.");
+
+    assert!(should_defer_background_handoff_with(
+        &scheduler, &request, 4
+    ));
+    assert!(!should_defer_background_handoff_with(
+        &scheduler, &request, 5
+    ));
+}
+
+#[test]
+fn seven_scopes_respect_max_four_before_handoff() {
+    let scheduler = ParallelScheduler::new(SchedulerConfig {
+        max_parallel_workers: 4,
+        ..SchedulerConfig::default()
+    });
+    let request = scheduler_handoff_request(
+        "Tasks:\n- implement one\n- implement two\n- implement three\n- implement four\n- implement five\n- implement six\n- implement seven",
+    );
+
+    assert!(should_defer_background_handoff_with(
+        &scheduler, &request, 3
+    ));
+    assert!(!should_defer_background_handoff_with(
+        &scheduler, &request, 4
+    ));
+}
+
+#[test]
+fn no_delegation_intent_never_defers_handoff() {
+    let scheduler = ParallelScheduler::for_tests();
+    let request = scheduler_handoff_request("Do not launch another SubAgent.");
+
+    assert!(!should_defer_background_handoff_with(
+        &scheduler, &request, 0
+    ));
 }
 
 #[tokio::test]

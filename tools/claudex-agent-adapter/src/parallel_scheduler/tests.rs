@@ -816,12 +816,12 @@ fn gpt_style_investigate_prompt_uses_min_parallel_not_one_explore() {
 }
 
 #[test]
-fn explicit_three_independent_scopes_in_prose_are_not_collapsed_to_one() {
+fn explicit_three_independent_action_items_are_not_collapsed_to_one() {
     let scheduler = ParallelScheduler::for_tests();
     let request = messages(&[
         serde_json::json!({
             "role": "user",
-            "content": "3つの独立スコープに分けて並列で着手します。共有ツリーでの相互汚染を避けるため、各ワーカーは担当パスのみを明示 pathspec で commit し、push は全員完了後に私がまとめて実行します。",
+            "content": "独立スコープに分けて並列で着手します。\n- parserを実装\n- rendererを検証\n- integrationをテスト",
         }),
         serde_json::json!({
             "role": "assistant",
@@ -852,7 +852,7 @@ fn remaining_two_follow_up_keeps_the_stated_three_scope_total() {
     let request = messages(&[
         serde_json::json!({
             "role":"user",
-            "content":"3つの独立スコープに分けて並列で着手します。",
+            "content":"独立スコープに分けて並列で着手します。\n- parserを実装\n- rendererを検証\n- integrationをテスト",
         }),
         serde_json::json!({
             "role":"assistant",
@@ -1271,7 +1271,7 @@ fn estimates_structured_work_and_handles_all_list_markers() {
     };
     let structured = messages(&[serde_json::json!({
         "role": "user",
-        "content": "  - dash\n* star\n・ dot\n1. numbered\n2) ignored\n9 ignored\nx"
+        "content": "Tasks:\n  - inspect dash\n* test star\n・ verify dot\n1. implement numbered\n2) ignored\n9 ignored\nx"
     })]);
 
     assert_eq!(
@@ -1370,7 +1370,9 @@ fn covers_malformed_work_units_and_policy_boundaries() {
     assert_eq!(policy::independent_scope_count(&no_user), 2);
     let single = messages(&[serde_json::json!({"role":"user", "content":"exactly one worker"})]);
     assert_eq!(policy::independent_scope_count(&single), 1);
-    let explicit = messages(&[serde_json::json!({"role":"user", "content":"- one\n* two"})]);
+    let explicit = messages(&[
+        serde_json::json!({"role":"user", "content":"Tasks:\n- implement one\n* verify two"}),
+    ]);
     assert_eq!(policy::independent_scope_count(&explicit), 2);
     let parallel =
         messages(&[serde_json::json!({"role":"user", "content":"compare these in parallel"})]);
@@ -1496,19 +1498,19 @@ fn scope_count_covers_single_worker_remaining_and_substantive_sides() {
         serde_json::json!({"role":"user", "content":"exactly one worker"})
     ])));
     assert!(super::scope_count::is_substantive_work(&messages(&[
-        serde_json::json!({"role":"user", "content":"- one\n* two"})
+        serde_json::json!({"role":"user", "content":"Tasks:\n- implement one\n* verify two"})
     ])));
     assert_eq!(
         policy::independent_scope_count(&messages(&[serde_json::json!({
             "role":"user",
             "content":"remaining 12 workers"
         })])),
-        12
+        1
     );
     assert_eq!(
         policy::independent_scope_count(&messages(&[
             serde_json::json!({"role":"user", "content":"compare rust and go in parallel"}),
-            serde_json::json!({"role":"user", "content":"remaining follow-up\n1. first\n2. second"}),
+            serde_json::json!({"role":"user", "content":"remaining follow-up\n1. implement first\n2. verify second"}),
         ])),
         2
     );

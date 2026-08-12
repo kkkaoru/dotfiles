@@ -19,27 +19,26 @@ fn background_handoff_text(launch_count: usize) -> String {
 }
 
 /// Keep the parent provider turn open when Claude Code only acked a partial
-/// fan-out. Returning control after the first background Agent makes the
-/// orchestrator stop before `MIN_PARALLEL` / active floor is met.
+/// fan-out. The scheduler owns both exact multi-scope cardinality and the
+/// minimum floor for ordinary substantive work, so handoff must use its
+/// bounded target instead of deriving a second, contradictory floor.
 fn should_defer_background_handoff(request: &MessagesRequest, launch_count: usize) -> bool {
-    use crate::parallel_scheduler::{
-        ParallelScheduler, has_classifiable_user_turn, has_parallel_scope, is_substantive_work,
-        needs_single_worker,
-    };
+    use crate::parallel_scheduler::ParallelScheduler;
+
+    should_defer_background_handoff_with(ParallelScheduler::shared(), request, launch_count)
+}
+
+fn should_defer_background_handoff_with(
+    scheduler: &crate::parallel_scheduler::ParallelScheduler,
+    request: &MessagesRequest,
+    launch_count: usize,
+) -> bool {
     // Claude Code may append a text-only steering user message after the async
     // ack. That path must still hand control back so the main prompt can react.
     if has_post_ack_steering(request) {
         return false;
     }
-    if needs_single_worker(request) || !has_classifiable_user_turn(request) {
-        return false;
-    }
-    if !(has_parallel_scope(request) || is_substantive_work(request)) {
-        return false;
-    }
-    let config = ParallelScheduler::shared().config();
-    let required = config.min_parallel_workers.max(config.active_floor);
-    launch_count < required
+    launch_count < scheduler.decision_for_request(request).target_workers
 }
 
 fn has_post_ack_steering(request: &MessagesRequest) -> bool {
@@ -91,7 +90,7 @@ impl Bridge {
             tracing::info!(
                 launch_count = tool_use_ids.len(),
                 recorded_background,
-                "deferring native background handoff until parallel SubAgent floor is met"
+                "deferring native background handoff until scheduler SubAgent target is met"
             );
             return None;
         }

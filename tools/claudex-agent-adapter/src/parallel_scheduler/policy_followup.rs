@@ -106,6 +106,9 @@ pub(crate) fn estimate_target_workers(
     config: &SchedulerConfig,
 ) -> usize {
     let active = snapshot.active_count();
+    if scope_count::declines_delegation(request) {
+        return 0;
+    }
     // Reconstructed transcripts without a classifiable user turn must not invent
     // fan-out; floor/replenishment owns those assistant-only states.
     if !scope_count::has_classifiable_user_turn(request) {
@@ -132,14 +135,19 @@ pub(crate) fn estimate_target_workers(
 }
 
 pub(crate) fn scope_guidance(request: &MessagesRequest, decision: &SchedulerDecision) -> String {
+    if scope_count::declines_delegation(request) {
+        return "Task-shape: the user requested no new delegation. Do not launch another SubAgent."
+            .to_owned();
+    }
     if scope_count::needs_single_worker(request) {
         return "Task-shape: one bounded or indivisible lookup detected. Launch exactly one ordinary SubAgent; do not fan out.".to_owned();
     }
     if scope_count::is_substantive_work(request) {
-        let count = independent_scope_count(request);
-        if count >= 2 {
+        let inferred_count = independent_scope_count(request);
+        if inferred_count >= 2 {
+            let bounded_count = decision.target_workers.max(1);
             return format!(
-                "Task-shape: multiple independent scopes detected. Launch exactly {count} ordinary SubAgents in the same assistant turn; do not stop after the first worker. Do not blindly launch the concurrent cap."
+                "Task-shape: multiple independent scopes detected. Launch exactly {bounded_count} ordinary SubAgents in the same assistant turn; do not stop after the first worker. Do not blindly launch the concurrent cap."
             );
         }
         return format!(
