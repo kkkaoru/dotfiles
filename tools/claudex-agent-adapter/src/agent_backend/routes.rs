@@ -151,6 +151,9 @@ impl RoutedBackend {
             .receiver
             .lock()
             .expect("backend startup poisoned");
+        if self.startup.closed.load(Ordering::Acquire) {
+            bail!("backend route pool is shut down");
+        }
         let reusable = startup
             .as_ref()
             .is_some_and(|receiver| match receiver.borrow().clone() {
@@ -161,16 +164,19 @@ impl RoutedBackend {
                 StartupState::Ready(Ok(backend)) => backend.is_alive(),
                 StartupState::Ready(Err(_)) => false,
             });
-        if !reusable {
+        let generation = if !reusable {
             let generation = self.startup.generation.fetch_add(1, Ordering::AcqRel) + 1;
             *startup = Some(start_backend(
                 self.template.clone(),
                 Arc::clone(&self.startup),
                 generation,
             ));
-        }
+            generation
+        } else {
+            self.startup_generation()
+        };
         Ok((
-            self.startup_generation(),
+            generation,
             startup.as_ref().expect("backend startup receiver").clone(),
         ))
     }
@@ -194,12 +200,13 @@ impl RoutedBackend {
     }
 
     pub(super) fn retire(&self) {
-        self.startup.generation.fetch_add(1, Ordering::AcqRel);
-        *self
+        let mut receiver = self
             .startup
             .receiver
             .lock()
-            .expect("backend startup poisoned") = None;
+            .expect("backend startup poisoned");
+        self.startup.generation.fetch_add(1, Ordering::AcqRel);
+        *receiver = None;
     }
 
     pub(super) fn thread_start_params(&self, mut params: serde_json::Value) -> serde_json::Value {

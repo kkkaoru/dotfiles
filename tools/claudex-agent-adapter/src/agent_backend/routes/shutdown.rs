@@ -10,15 +10,15 @@ impl RoutedBackend {
         // A caller may still be waiting on a cloned Starting receiver while
         // shutdown removes the canonical receiver. Fence that caller before
         // dropping the route so a late spawn result cannot be republished.
-        self.startup
-            .generation
-            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
-        let receiver = self
+        let mut receiver = self
             .startup
             .receiver
             .lock()
-            .expect("backend startup poisoned")
-            .take()?;
+            .expect("backend startup poisoned");
+        self.startup
+            .generation
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        let receiver = receiver.take()?;
         match receiver.borrow().clone() {
             StartupState::Ready(Ok(backend)) => Some(backend),
             StartupState::Starting | StartupState::Ready(Err(_)) => None,
