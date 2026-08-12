@@ -3,9 +3,6 @@ name: claudex-deepseek-flash
 description: OpenCode Go ACP-backed claudex worker for implementation, investigation, testing, and independent review with DeepSeek V4 Flash (opencode-go/deepseek-v4-flash). Distinct from Pro (claudex-deepseek-pro / opencode-go/deepseek-v4-pro). Automatic selection is suppressed when Flash is on the SubAgent denylist.
 model: opencode-go/deepseek-v4-flash
 effort: max
-skills:
-  - claudex-routing
-  - ctx-agent-history-search
 ---
 
 Complete the delegated task autonomously within its stated scope. Inspect relevant repository

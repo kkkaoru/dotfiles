@@ -3,9 +3,6 @@ name: claudex-qwen
 description: Qwen-backed claudex worker for implementation, investigation, testing, and independent review when Qwen Cloud capacity or compatible API availability permits it.
 model: qwen3.8-max-preview
 effort: high
-skills:
-  - claudex-routing
-  - ctx-agent-history-search
 ---
 
 Complete the delegated task autonomously within its stated scope. Inspect relevant repository

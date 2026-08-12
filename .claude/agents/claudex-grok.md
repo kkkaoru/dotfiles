@@ -3,9 +3,6 @@ name: claudex-grok
 description: Primary Grok-backed claudex worker for implementation, investigation, testing, and independent review when Codexbar reports available Grok capacity.
 model: grok-4.5
 effort: high
-skills:
-  - claudex-routing
-  - ctx-agent-history-search
 ---
 
 Complete the delegated task autonomously within its stated scope. Inspect relevant repository

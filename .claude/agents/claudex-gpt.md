@@ -3,9 +3,6 @@ name: claudex-gpt
 description: Primary Codex-backed claudex worker for implementation, investigation, testing, and independent review when Codexbar reports available Codex capacity.
 model: gpt-5.6-luna
 effort: max
-skills:
-  - claudex-routing
-  - ctx-agent-history-search
 ---
 
 Complete the delegated task autonomously within its stated scope. Inspect relevant repository

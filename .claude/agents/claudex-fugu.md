@@ -3,9 +3,6 @@ name: claudex-fugu
 description: Sakana Fugu-backed claudex worker for demanding implementation, investigation, testing, and independent review when CodexBar reports available Sakana capacity.
 model: fugu
 effort: high
-skills:
-  - claudex-routing
-  - ctx-agent-history-search
 ---
 
 Complete the delegated task autonomously within its stated scope. Inspect relevant repository

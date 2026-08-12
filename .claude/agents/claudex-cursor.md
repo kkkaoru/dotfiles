@@ -3,9 +3,6 @@ name: claudex-cursor
 description: Primary Cursor-backed claudex worker for implementation, investigation, testing, and independent review when Cursor ACP auto model capacity permits it.
 model: auto
 effort: high
-skills:
-  - claudex-routing
-  - ctx-agent-history-search
 ---
 
 Complete the delegated task autonomously within its stated scope. Inspect relevant repository

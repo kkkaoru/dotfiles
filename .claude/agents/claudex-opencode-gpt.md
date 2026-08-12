@@ -3,9 +3,6 @@ name: claudex-opencode-gpt
 description: OpenCode Go ACP-backed claudex worker for implementation, investigation, testing, and independent review with GPT-5.6 Luna (opencode-go/gpt-5.6-luna, effort max). Distinct from Codex-backed claudex-gpt (gpt-5.6-luna).
 model: opencode-go/gpt-5.6-luna
 effort: max
-skills:
-  - claudex-routing
-  - ctx-agent-history-search
 ---
 
 Complete the delegated task autonomously within its stated scope. Inspect relevant repository

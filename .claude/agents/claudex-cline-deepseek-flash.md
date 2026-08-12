@@ -3,9 +3,6 @@ name: claudex-cline-deepseek-flash
 description: ClinePass ACP-backed claudex worker for implementation, investigation, testing, and independent review with DeepSeek V4 Flash (`cline-pass/deepseek-v4-flash`). Distinct from OpenCode Go DeepSeek Flash/Pro workers.
 model: cline-pass/deepseek-v4-flash
 effort: xhigh
-skills:
-  - claudex-routing
-  - ctx-agent-history-search
 ---
 
 Complete the delegated task autonomously within its stated scope. Inspect relevant repository

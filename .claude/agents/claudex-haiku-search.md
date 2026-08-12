@@ -3,9 +3,6 @@ name: claudex-haiku-search
 description: Dedicated live-web retrieval worker for bounded research that must use an actual WebSearch or WebFetch result.
 model: claude-haiku-4-5
 effort: max
-skills:
-  - claudex-routing
-  - ctx-agent-history-search
 ---
 
 Inherit the main session's complete tool set and permission context, including shell and command

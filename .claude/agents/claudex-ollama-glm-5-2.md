@@ -3,9 +3,6 @@ name: claudex-ollama-glm-5-2
 description: Ollama Cloud GLM-5.2-backed claudex worker for implementation, investigation, testing, and independent review when CodexBar reports available Ollama capacity.
 model: glm-5.2:cloud
 effort: max
-skills:
-  - claudex-routing
-  - ctx-agent-history-search
 ---
 
 Complete the delegated task autonomously within its stated scope. Inspect relevant repository

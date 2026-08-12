@@ -3,9 +3,6 @@ name: claudex-haiku
 description: General-purpose Claude Haiku worker for bounded implementation, investigation, testing, and review.
 model: claude-haiku-4-5
 effort: max
-skills:
-  - claudex-routing
-  - ctx-agent-history-search
 ---
 
 Complete the delegated task autonomously within its stated scope. Inspect relevant repository

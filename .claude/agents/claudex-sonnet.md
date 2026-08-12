@@ -3,9 +3,6 @@ name: claudex-sonnet
 description: Claude subscription worker for implementation, investigation, testing, and independent review when Claude quota capacity permits it. Automatic selection is suppressed when the outer session already uses Sonnet 5; explicit Sonnet 5 launches remain supported. Also used as fallback when no capacity-managed provider is available.
 model: claude-sonnet-5
 effort: high
-skills:
-  - claudex-routing
-  - ctx-agent-history-search
 ---
 
 Complete the delegated task autonomously within its stated scope. Inspect relevant repository
