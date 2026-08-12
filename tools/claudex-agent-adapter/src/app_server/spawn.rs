@@ -63,6 +63,7 @@ pub(super) fn spawn_child(
 
 pub(super) fn prepare_isolated_codex_home(source_home: &Path, isolated: &Path) -> Result<PathBuf> {
     std::fs::create_dir_all(isolated)?;
+    let source_home = isolated_config::effective_source_home(source_home, isolated);
 
     let source_auth = source_home.join("auth.json");
     if !source_auth.is_file() {
@@ -98,10 +99,90 @@ web_search = true
 "#,
     );
     isolated_config::prune_runtime_logs(isolated);
-    isolated_config::append_model_providers(source_home, &mut config)?;
-    isolated_config::append_model_catalog(source_home, &mut config)?;
+    isolated_config::append_model_providers(&source_home, &mut config)?;
+    isolated_config::append_model_catalog(&source_home, &mut config)?;
     std::fs::write(isolated.join("config.toml"), config)?;
     Ok(isolated.to_path_buf())
+}
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod prepare_isolated_home_tests {
+    use super::*;
+
+    static HOME_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    struct HomeGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        home: Option<std::ffi::OsString>,
+    }
+
+    impl HomeGuard {
+        fn push() -> Self {
+            let lock = HOME_ENV_LOCK
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            Self {
+                _lock: lock,
+                home: std::env::var_os("HOME"),
+            }
+        }
+    }
+
+    impl Drop for HomeGuard {
+        fn drop(&mut self) {
+            match &self.home {
+                Some(home) => unsafe { std::env::set_var("HOME", home) },
+                None => unsafe { std::env::remove_var("HOME") },
+            }
+        }
+    }
+
+    #[test]
+    fn production_isolated_home_copies_user_codex_providers_instead_of_stub_source() {
+        let _guard = HomeGuard::push();
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let user_codex = home.join(".codex");
+        let isolated = home.join(".cache/claudex/codex-home");
+        std::fs::create_dir_all(&user_codex).unwrap();
+        std::fs::create_dir_all(&isolated).unwrap();
+        std::fs::write(
+            user_codex.join("auth.json"),
+            r#"{"tokens":{"access":"real"}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            user_codex.join("config.toml"),
+            r#"model_catalog_json = "~/.codex/fugu.json"
+
+[model_providers.sakana]
+name = "Sakana"
+base_url = "https://api.sakana.ai/v1"
+env_key = "SAKANA_AI_PRO_API_KEY"
+wire_api = "responses"
+"#,
+        )
+        .unwrap();
+        std::fs::write(isolated.join("logs_2.sqlite"), "stale").unwrap();
+        let stub = root.path().join("stub-codex");
+        std::fs::create_dir(&stub).unwrap();
+        std::fs::write(stub.join("auth.json"), "{}").unwrap();
+        unsafe {
+            std::env::set_var("HOME", &home);
+        }
+
+        let prepared = prepare_isolated_codex_home(&stub, &isolated).unwrap();
+        assert_eq!(prepared, isolated);
+        assert_eq!(
+            std::fs::read_to_string(isolated.join("auth.json")).unwrap(),
+            r#"{"tokens":{"access":"real"}}"#
+        );
+        let config = std::fs::read_to_string(isolated.join("config.toml")).unwrap();
+        assert!(config.contains("[model_providers.sakana]"));
+        assert!(config.contains("model_catalog_json = \"~/.codex/fugu.json\""));
+        assert!(!isolated.join("logs_2.sqlite").exists());
+    }
 }
 
 pub fn response_thread_id(value: &Value) -> Result<String> {

@@ -1,9 +1,28 @@
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
 use super::codex_config::provider_config_files;
+
+/// Prefer the user's real `~/.codex` when preparing the production isolated
+/// home. Cargo tests that set `CODEX_HOME` to a stub (`auth.json` = `{}`)
+/// otherwise copy that stub over `~/.cache/claudex/codex-home` and fugu
+/// loses `[model_providers.sakana]`.
+pub(super) fn effective_source_home(source_home: &Path, isolated: &Path) -> PathBuf {
+    if !is_production_isolated(isolated) {
+        return source_home.to_path_buf();
+    }
+    let Some(user_home) = user_codex_home() else {
+        return source_home.to_path_buf();
+    };
+    if (paths_equal(source_home, isolated) || is_stub_auth(&source_home.join("auth.json")))
+        && !is_stub_auth(&user_home.join("auth.json"))
+    {
+        return user_home;
+    }
+    source_home.to_path_buf()
+}
 
 pub(super) fn append_model_providers(source_home: &Path, config: &mut String) -> Result<()> {
     let sources = provider_config_files(source_home)?;
@@ -35,13 +54,31 @@ pub(super) fn append_model_catalog(source_home: &Path, config: &mut String) -> R
 
 /// Drop Codex sqlite logs in the isolated home. A multi-GB `logs_2.sqlite`
 /// makes `initialize` miss the existing 8s budget without any extra timeout.
+/// Nested `app-server-runtime/*/logs_2.sqlite` copies are pruned too.
 pub(super) fn prune_runtime_logs(isolated: &Path) {
-    let Ok(entries) = std::fs::read_dir(isolated) else {
+    prune_runtime_logs_at(isolated, 0);
+}
+
+const MAX_PRUNE_DEPTH: u32 = 6;
+
+fn prune_runtime_logs_at(dir: &Path, depth: u32) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
     for entry in entries.flatten() {
-        if is_runtime_log_db(&entry.file_name().to_string_lossy()) {
+        let name = entry.file_name();
+        if is_runtime_log_db(&name.to_string_lossy()) {
             let _ = std::fs::remove_file(entry.path());
+            continue;
+        }
+        if depth >= MAX_PRUNE_DEPTH {
+            continue;
+        }
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() && !file_type.is_symlink() {
+            prune_runtime_logs_at(&entry.path(), depth + 1);
         }
     }
 }
@@ -84,6 +121,32 @@ fn next_copying_state(line: &str, current: bool, copied_sections: &mut HashSet<S
     }
     let provider_section = line == "[model_providers]" || line.starts_with("[model_providers.");
     provider_section && copied_sections.insert(line.to_owned())
+}
+
+fn user_codex_home() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".codex"))
+}
+
+fn production_isolated_home() -> Option<PathBuf> {
+    std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache/claudex/codex-home"))
+}
+
+fn is_production_isolated(isolated: &Path) -> bool {
+    production_isolated_home().is_some_and(|prod| paths_equal(isolated, &prod))
+}
+
+fn paths_equal(left: &Path, right: &Path) -> bool {
+    match (left.canonicalize(), right.canonicalize()) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => left == right,
+    }
+}
+
+fn is_stub_auth(path: &Path) -> bool {
+    let Ok(bytes) = std::fs::read(path) else {
+        return true;
+    };
+    matches!(bytes.trim_ascii(), b"" | b"{}")
 }
 
 #[cfg(test)]
@@ -206,5 +269,118 @@ mod tests {
         assert!(!is_runtime_log_db("auth.json"));
         assert!(!is_runtime_log_db("notes.sqlite"));
         assert!(!is_runtime_log_db("logs_2.txt"));
+    }
+
+    #[test]
+    fn prunes_nested_app_server_runtime_logs() {
+        let root = tempfile::tempdir().unwrap();
+        let nested = root
+            .path()
+            .join("app-server-runtime/app-server-deadbeef/sqlite");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("logs_2.sqlite"), "nested").unwrap();
+        std::fs::write(nested.join("logs_2.sqlite-wal"), "wal").unwrap();
+        std::fs::write(root.path().join("auth.json"), "{}").unwrap();
+        prune_runtime_logs(root.path());
+        assert!(!nested.join("logs_2.sqlite").exists());
+        assert!(!nested.join("logs_2.sqlite-wal").exists());
+        assert!(root.path().join("auth.json").exists());
+    }
+
+    static HOME_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    struct HomeGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
+        home: Option<std::ffi::OsString>,
+    }
+
+    impl HomeGuard {
+        fn push() -> Self {
+            let lock = HOME_ENV_LOCK
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            Self {
+                _lock: lock,
+                home: std::env::var_os("HOME"),
+            }
+        }
+    }
+
+    impl Drop for HomeGuard {
+        fn drop(&mut self) {
+            match &self.home {
+                Some(home) => unsafe { std::env::set_var("HOME", home) },
+                None => unsafe { std::env::remove_var("HOME") },
+            }
+        }
+    }
+
+    #[test]
+    fn production_isolated_home_rejects_stub_codex_home() {
+        let _guard = HomeGuard::push();
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let user_codex = home.join(".codex");
+        let isolated = home.join(".cache/claudex/codex-home");
+        std::fs::create_dir_all(&user_codex).unwrap();
+        std::fs::create_dir_all(&isolated).unwrap();
+        std::fs::write(
+            user_codex.join("auth.json"),
+            r#"{"tokens":{"access":"real"}}"#,
+        )
+        .unwrap();
+        let stub = root.path().join("stub-codex");
+        std::fs::create_dir(&stub).unwrap();
+        std::fs::write(stub.join("auth.json"), "{}").unwrap();
+        unsafe {
+            std::env::set_var("HOME", &home);
+        }
+        let resolved = effective_source_home(&stub, &isolated);
+        assert_eq!(resolved, user_codex);
+    }
+
+    #[test]
+    fn temp_isolated_home_keeps_the_given_stub_source() {
+        let _guard = HomeGuard::push();
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        std::fs::create_dir_all(home.join(".codex")).unwrap();
+        std::fs::write(
+            home.join(".codex/auth.json"),
+            r#"{"tokens":{"access":"real"}}"#,
+        )
+        .unwrap();
+        let stub = root.path().join("stub-codex");
+        let isolated = root.path().join("temp-isolated");
+        std::fs::create_dir(&stub).unwrap();
+        std::fs::create_dir(&isolated).unwrap();
+        std::fs::write(stub.join("auth.json"), "{}").unwrap();
+        unsafe {
+            std::env::set_var("HOME", &home);
+        }
+        let resolved = effective_source_home(&stub, &isolated);
+        assert_eq!(resolved, stub);
+    }
+
+    #[test]
+    fn production_isolated_home_redirects_when_source_is_the_isolated_path() {
+        let _guard = HomeGuard::push();
+        let root = tempfile::tempdir().unwrap();
+        let home = root.path().join("home");
+        let user_codex = home.join(".codex");
+        let isolated = home.join(".cache/claudex/codex-home");
+        std::fs::create_dir_all(&user_codex).unwrap();
+        std::fs::create_dir_all(&isolated).unwrap();
+        std::fs::write(
+            user_codex.join("auth.json"),
+            r#"{"tokens":{"access":"real"}}"#,
+        )
+        .unwrap();
+        std::fs::write(isolated.join("auth.json"), "{}").unwrap();
+        unsafe {
+            std::env::set_var("HOME", &home);
+        }
+        let resolved = effective_source_home(&isolated, &isolated);
+        assert_eq!(resolved, user_codex);
     }
 }
