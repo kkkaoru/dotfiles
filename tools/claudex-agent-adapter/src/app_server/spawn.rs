@@ -97,7 +97,9 @@ unified_exec = true
 web_search = true
 "#,
     );
+    isolated_config::prune_runtime_logs(isolated);
     isolated_config::append_model_providers(source_home, &mut config)?;
+    isolated_config::append_model_catalog(source_home, &mut config)?;
     std::fs::write(isolated.join("config.toml"), config)?;
     Ok(isolated.to_path_buf())
 }

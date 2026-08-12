@@ -35,7 +35,9 @@ mod tests {
         std::fs::write(source.join("auth.json"), r#"{"token":"test"}"#).unwrap();
         std::fs::write(
             source.join("config.toml"),
-            r#"[model_providers]
+            r#"model_catalog_json = "~/.codex/fugu.json"
+
+[model_providers]
 root = true
 
 [model_providers.sakana]
@@ -69,17 +71,24 @@ name = "Must not replace the base config"
         )
         .unwrap();
 
+        std::fs::create_dir(&isolated).unwrap();
+        std::fs::write(isolated.join("logs_2.sqlite"), "stale").unwrap();
+        std::fs::write(isolated.join("logs_2.sqlite-wal"), "wal").unwrap();
+
         let prepared = prepare_isolated_codex_home(&source, &isolated).unwrap();
         assert_eq!(prepared, isolated);
         assert_eq!(
             std::fs::read_to_string(prepared.join("auth.json")).unwrap(),
             r#"{"token":"test"}"#
         );
+        assert!(!prepared.join("logs_2.sqlite").exists());
+        assert!(!prepared.join("logs_2.sqlite-wal").exists());
         let config = std::fs::read_to_string(prepared.join("config.toml")).unwrap();
         assert!(config.contains("shell_tool = true"));
         assert!(config.contains("tool_search = true"));
         assert!(config.contains("unified_exec = true"));
         assert!(config.contains("plugins = false"));
+        assert!(config.contains("model_catalog_json = \"~/.codex/fugu.json\""));
         assert!(config.contains("[model_providers.sakana]"));
         assert!(config.contains("[model_providers.ollama-launch-codex-app]"));
         assert_eq!(config.matches("[model_providers.sakana]").count(), 1);
