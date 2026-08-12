@@ -36,6 +36,26 @@ fn setting_at_extracts_string_value() {
 }
 
 #[test]
+fn settings_snapshot_extracts_both_turn_values_from_one_parse() {
+    let temp = TempDir::new().expect("temp dir");
+    let path = temp.path().join("settings.json");
+    let settings = json!({"model":"claude-opus-4", "advisorModel":"claude-opus-4.1"});
+    std::fs::write(&path, serde_json::to_string(&settings).unwrap()).expect("write settings");
+
+    let (snapshot, synchronous_file_reads) =
+        super::count_settings_file_reads(|| super::settings_at(&path).expect("settings snapshot"));
+    assert_eq!(snapshot.get("model"), Some("claude-opus-4".to_owned()));
+    assert_eq!(
+        snapshot.get("advisorModel"),
+        Some("claude-opus-4.1".to_owned())
+    );
+    assert_eq!(
+        synchronous_file_reads, 1,
+        "one parsed settings snapshot must supply both turn-level fallback values"
+    );
+}
+
+#[test]
 fn setting_at_returns_none_for_missing_key() {
     let temp = TempDir::new().expect("temp dir");
     let path = temp.path().join("settings.json");

@@ -1,8 +1,9 @@
 use anyhow::Result;
 
 use super::{
-    ActiveTurn, Bridge, MessagesRequest, SelectedSession, Session, request_identity,
+    ActiveTurn, Bridge, MessagesRequest, SelectedSession, Session,
     content::{ToolResult, collect_turn_tool_results, request_signature},
+    request_identity,
 };
 
 mod continuation;
@@ -43,15 +44,24 @@ impl Bridge {
         self.remove_failed_model_sessions(&self.request_model(request))
             .await;
         let model = self.request_model(request);
-        let advisor_model = self
-            .advisor_model_override
-            .clone()
-            .or_else(|| self.claude_setting("advisorModel"));
+        // Both fallbacks live in one settings file. Keep the synchronous read
+        // to one operation per turn while retaining live settings semantics;
+        // avoid a read altogether when explicit overrides cover both values.
+        let needs_advisor_setting = self.advisor_model_override.is_none();
+        let needs_collaborator_setting = request.claudex_collaborator_model.is_none()
+            && self.collaborator_model_override.is_none();
+        let settings =
+            (needs_advisor_setting || needs_collaborator_setting).then(|| self.claude_settings());
+        let advisor_model = self.advisor_model_override.clone().or_else(|| {
+            settings
+                .as_ref()
+                .and_then(|settings| settings.get("advisorModel"))
+        });
         let collaborator_model = request
             .claudex_collaborator_model
             .clone()
             .or_else(|| self.collaborator_model_override.clone())
-            .or_else(|| self.claude_collaborator_model());
+            .or_else(|| settings.as_ref().and_then(|settings| settings.get("model")));
         let signature = request_signature(
             request,
             advisor_model.as_deref(),

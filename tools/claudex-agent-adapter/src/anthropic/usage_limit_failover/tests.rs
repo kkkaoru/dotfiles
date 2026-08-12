@@ -348,17 +348,24 @@ fn rewrites_exhausted_cline_http_subagent_request_onto_qwen() {
     bridge.note_provider_exhaustion(&anyhow::anyhow!(EMPTY_ACP_END_TURN), Some(CLINE_FLASH));
     let mut request = dummy_request(CLINE_FLASH);
     let mut effort = Some("xhigh".to_owned());
-    let route = bridge
-        .rewrite_exhausted_subagent_request(
-            &mut request,
-            RouteDecision::Provider,
-            &mut effort,
-            true,
-        )
-        .expect("sibling rewrite");
+    let (route, routing_summary_searches) =
+        super::super::agent_routing::count_routing_summary_searches(|| {
+            bridge
+                .rewrite_exhausted_subagent_request(
+                    &mut request,
+                    RouteDecision::Provider,
+                    &mut effort,
+                    true,
+                )
+                .expect("sibling rewrite")
+        });
     assert_eq!(request.model, QWEN_CLOUD);
     assert_eq!(effort.as_deref(), Some("high"));
     assert_eq!(route, RouteDecision::Provider);
+    assert_eq!(
+        routing_summary_searches, 1,
+        "SubAgent cooldown failover must retain exactly one routing-summary lookup"
+    );
 }
 
 #[test]
@@ -454,17 +461,24 @@ fn outer_turn_is_not_rewritten_by_subagent_http_helper() {
     bridge.note_provider_exhaustion(&anyhow::anyhow!(EMPTY_ACP_END_TURN), Some(CLINE_FLASH));
     let mut request = dummy_request(CLINE_FLASH);
     let mut effort = Some("xhigh".to_owned());
-    let route = bridge
-        .rewrite_exhausted_subagent_request(
-            &mut request,
-            RouteDecision::Provider,
-            &mut effort,
-            false,
-        )
-        .expect("outer turns stay on preflight");
+    let (route, routing_summary_searches) =
+        super::super::agent_routing::count_routing_summary_searches(|| {
+            bridge
+                .rewrite_exhausted_subagent_request(
+                    &mut request,
+                    RouteDecision::Provider,
+                    &mut effort,
+                    false,
+                )
+                .expect("outer turns stay on preflight")
+        });
     assert_eq!(request.model, CLINE_FLASH);
     assert_eq!(effort.as_deref(), Some("xhigh"));
     assert_eq!(route, RouteDecision::Provider);
+    assert_eq!(
+        routing_summary_searches, 0,
+        "outer turns must skip the SubAgent-only routing-summary history search"
+    );
 }
 
 #[test]

@@ -13,6 +13,8 @@ pub(in crate::anthropic) use authorize::{
 };
 use explicit::explicit_model_matches_agent;
 pub(in crate::anthropic) use summary::active_routing_summary;
+#[cfg(test)]
+pub(in crate::anthropic) use summary::count_routing_summary_searches;
 use texts::user_message_texts;
 use workers::{
     configured_worker_fields, generic_worker_fields, is_generic_agent_type, selected_worker_fields,

@@ -70,9 +70,15 @@ impl Bridge {
         effort: &mut Option<String>,
         is_subagent: bool,
     ) -> Result<RouteDecision> {
+        // An outer turn never participates in SubAgent cooldown failover.  In
+        // particular, do not walk its potentially long resumed transcript for
+        // a routing summary before making that decision.
+        if !is_subagent {
+            return Ok(route);
+        }
         let quota =
             super::agent_routing::active_routing_summary(&request.messages, &request.system);
-        if !is_subagent || !self.subagent_model_is_exhausted(&request.model, quota.as_ref()) {
+        if !self.subagent_model_is_exhausted(&request.model, quota.as_ref()) {
             return Ok(route);
         }
         let Some(failover) =

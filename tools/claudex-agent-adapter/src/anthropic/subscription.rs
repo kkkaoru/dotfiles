@@ -1,5 +1,10 @@
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::path::{Path, PathBuf};
+
+#[cfg(test)]
+thread_local! {
+    static SETTINGS_FILE_READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
 mod command;
 mod effort;
@@ -60,19 +65,35 @@ pub(in crate::anthropic) use limits::{SubscriptionLimits, subscription_limits};
 pub(in crate::anthropic) use limits::{positive_u64, positive_usize};
 
 impl Bridge {
-    pub(super) fn claude_setting(&self, key: &str) -> Option<String> {
+    pub(super) fn claude_settings(&self) -> ClaudeSettings {
         self.settings_path
             .as_deref()
-            .and_then(|path| setting_at(path, key))
+            .and_then(settings_at)
+            .unwrap_or_default()
     }
 
-    pub(super) fn claude_collaborator_model(&self) -> Option<String> {
-        self.claude_setting("model")
+    pub(super) fn claude_setting(&self, key: &str) -> Option<String> {
+        self.claude_settings().get(key)
     }
 
     pub(super) fn claude_effort(&self) -> Option<String> {
         self.claude_setting("effortLevel")
             .filter(|effort| valid_effort(effort))
+    }
+}
+
+#[derive(Default)]
+pub(super) struct ClaudeSettings {
+    values: Map<String, Value>,
+}
+
+impl ClaudeSettings {
+    pub(super) fn get(&self, key: &str) -> Option<String> {
+        self.values
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
     }
 }
 
@@ -83,14 +104,32 @@ pub(super) fn claude_settings_path() -> Option<PathBuf> {
     std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".claude/settings.json"))
 }
 
+#[cfg(test)]
 pub(super) fn setting_at(path: &Path, key: &str) -> Option<String> {
+    settings_at(path)?.get(key)
+}
+
+/// Read and parse Claude settings once when several values are needed for one
+/// turn.  Settings remain live: each caller still reads the latest file.
+pub(super) fn settings_at(path: &Path) -> Option<ClaudeSettings> {
+    #[cfg(test)]
+    SETTINGS_FILE_READS.with(|count| count.set(count.get() + 1));
     let settings = std::fs::read(path).ok()?;
-    serde_json::from_slice::<Value>(&settings)
-        .ok()?
-        .get(key)?
-        .as_str()
-        .filter(|model| !model.is_empty())
-        .map(str::to_owned)
+    serde_json::from_slice::<Map<String, Value>>(&settings)
+        .ok()
+        .map(|values| ClaudeSettings { values })
+}
+
+/// Run a test operation while counting synchronous settings-file reads on this
+/// thread. Thread-local state keeps the count deterministic under parallel tests.
+#[cfg(test)]
+pub(super) fn count_settings_file_reads<T>(operation: impl FnOnce() -> T) -> (T, usize) {
+    SETTINGS_FILE_READS.with(|count| {
+        let prior = count.replace(0);
+        let result = operation();
+        let reads = count.replace(prior);
+        (result, reads)
+    })
 }
 
 #[cfg(test)]
