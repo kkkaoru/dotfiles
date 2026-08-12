@@ -16,12 +16,10 @@ pub(crate) fn home_dir() -> PathBuf {
 }
 
 pub(crate) fn cache_dir() -> PathBuf {
-    if let Ok(override_dir) = env::var("CLAUDEX_CACHE_DIR")
-        && !override_dir.trim().is_empty()
-    {
-        return PathBuf::from(override_dir);
-    }
-    home_dir().join(".cache").join("claudex")
+    env::var_os("CLAUDEX_CACHE_DIR")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home_dir().join(".cache").join("claudex"))
 }
 
 pub(crate) fn env_truthy(name: &str, default: bool) -> bool {

@@ -53,6 +53,7 @@ fn write_session_state(cache: &Path, session_id: &str, base: bool, opt_out: bool
     let key = hex::encode(Sha256::digest(session_id.as_bytes()));
     let directory = cache.join("delegation-state-v2");
     fs::create_dir_all(&directory).unwrap();
+    fs::set_permissions(&directory, fs::Permissions::from_mode(0o700)).unwrap();
     let required = base && !opt_out;
     fs::write(
         directory.join(format!("{key}.json")),
@@ -68,6 +69,11 @@ fn write_session_state(cache: &Path, session_id: &str, base: bool, opt_out: bool
             "direct_main_execution": if required { "fallback-only" } else { "allowed" }
         })
         .to_string(),
+    )
+    .unwrap();
+    fs::set_permissions(
+        directory.join(format!("{key}.json")),
+        fs::Permissions::from_mode(0o600),
     )
     .unwrap();
 }
@@ -684,6 +690,9 @@ fn explicit_context_strictly_rejects_missing_extra_and_inconsistent_state_fields
     let mut bad_expiry = valid.clone();
     bad_expiry["expires_at"] = Value::from(999.0);
     variants.push(bad_expiry);
+    let mut short_ttl = valid.clone();
+    short_ttl["expires_at"] = (short_ttl["updated_at"].as_f64().unwrap() + 86_399.0).into();
+    variants.push(short_ttl);
     let mut overlong_ttl = valid;
     overlong_ttl["expires_at"] = Value::from(87_401.0);
     variants.push(overlong_ttl);

@@ -1,10 +1,14 @@
 use crate::policy::PolicyContext;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
-use std::fs::{self, File, OpenOptions};
-use std::io::Read as _;
+use std::ffi::CString;
+use std::fs::{File, OpenOptions};
+use std::io::{ErrorKind, Read as _};
+use std::os::fd::{AsRawFd as _, FromRawFd as _};
 use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
-use std::path::{Component, Path, PathBuf};
+#[cfg(test)]
+use std::path::PathBuf;
+use std::path::{Component, Path};
 
 const STATE_VERSION: u64 = 2;
 const STATE_DIRECTORY: &str = "delegation-state-v2";
@@ -41,68 +45,176 @@ fn session_key(id: &str) -> String {
     hex::encode(Sha256::digest(id.as_bytes()))
 }
 
+#[cfg(test)]
 pub(crate) fn state_path(cache_dir: &Path, id: &str) -> PathBuf {
     cache_dir
         .join(STATE_DIRECTORY)
         .join(format!("{}.json", session_key(id)))
 }
 
-fn current_uid() -> u32 {
+pub(crate) fn current_uid() -> u32 {
     unsafe { libc::geteuid() }
 }
 
-fn owner_controlled_directory(path: &Path) -> bool {
-    fs::symlink_metadata(path).ok().is_some_and(|metadata| {
-        metadata.is_dir()
-            && !metadata.file_type().is_symlink()
-            && metadata.uid() == current_uid()
-            && metadata.mode() & 0o022 == 0
-    })
+fn c_name(name: &str) -> std::io::Result<CString> {
+    CString::new(name)
+        .map_err(|_| std::io::Error::new(ErrorKind::InvalidInput, "NUL in directory name"))
 }
 
-fn owner_controlled_cache_chain(home_dir: &Path, cache_dir: &Path) -> bool {
-    if !owner_controlled_directory(cache_dir) {
-        return false;
-    }
-    let Ok(relative) = cache_dir.strip_prefix(home_dir) else {
-        // An explicit cache override may live outside HOME. Its parent is not
-        // part of the configured trust root, so validate the cache itself.
-        return true;
+pub(crate) fn open_at(
+    directory: &File,
+    name: &str,
+    flags: libc::c_int,
+    mode: libc::mode_t,
+) -> std::io::Result<File> {
+    let name = c_name(name)?;
+    let fd = unsafe {
+        libc::openat(
+            directory.as_raw_fd(),
+            name.as_ptr(),
+            flags,
+            mode as libc::c_uint,
+        )
     };
-    if !owner_controlled_directory(home_dir) {
-        return false;
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
     }
-    let mut current = home_dir.to_path_buf();
-    relative.components().all(|component| {
-        let Component::Normal(segment) = component else {
-            return false;
+    // SAFETY: openat returned a new owned descriptor.
+    Ok(unsafe { File::from_raw_fd(fd) })
+}
+
+pub(crate) fn validate_directory(directory: &File, private: bool) -> std::io::Result<()> {
+    let metadata = directory.metadata()?;
+    let owner = metadata.uid() == current_uid() || (!private && metadata.uid() == 0);
+    if !metadata.is_dir()
+        || !owner
+        || metadata.mode() & 0o022 != 0
+        || (private && metadata.mode() & 0o777 != 0o700)
+    {
+        return Err(std::io::Error::new(
+            ErrorKind::PermissionDenied,
+            "directory is not an owner-controlled private directory",
+        ));
+    }
+    Ok(())
+}
+
+fn next_path_segment(component: Component<'_>) -> std::io::Result<Option<&std::ffi::OsStr>> {
+    match component {
+        Component::RootDir => Ok(None),
+        Component::Normal(segment) => Ok(Some(segment)),
+        _ => Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            "cache directory contains unsafe path components",
+        )),
+    }
+}
+
+fn mkdir_private(parent: &File, name: &str) -> std::io::Result<()> {
+    let name_c = c_name(name)?;
+    let result = unsafe { libc::mkdirat(parent.as_raw_fd(), name_c.as_ptr(), 0o700) };
+    if result == 0 {
+        return Ok(());
+    }
+    let create_error = std::io::Error::last_os_error();
+    if create_error.kind() == ErrorKind::AlreadyExists {
+        Ok(())
+    } else {
+        Err(create_error)
+    }
+}
+
+pub(crate) fn open_child_directory(
+    parent: &File,
+    name: &str,
+    private: bool,
+) -> std::io::Result<File> {
+    let flags = libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_DIRECTORY;
+    let child = match open_at(parent, name, flags, 0) {
+        Ok(child) => child,
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            mkdir_private(parent, name)?;
+            open_at(parent, name, flags, 0)?
+        }
+        Err(error) => return Err(error),
+    };
+    validate_directory(&child, private)?;
+    Ok(child)
+}
+
+fn open_directory_path(path: &Path) -> std::io::Result<File> {
+    if !path.is_absolute() {
+        return Err(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            "cache directory must be absolute",
+        ));
+    }
+    // macOS exposes /var as a stable system symlink. Resolve that one system
+    // alias once, then walk the resulting path exclusively through directory
+    // fds with O_NOFOLLOW; user-controlled cache ancestors remain rejected.
+    let path = if path.starts_with("/var") && Path::new("/var").is_symlink() {
+        Path::new("/private").join(path.strip_prefix("/").unwrap_or(path))
+    } else {
+        path.to_path_buf()
+    };
+    let root = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_DIRECTORY)
+        .open("/")?;
+    validate_directory(&root, false)?;
+    let mut current = root;
+    for component in path.components() {
+        let Some(segment) = next_path_segment(component)? else {
+            continue;
         };
-        current.push(segment);
-        owner_controlled_directory(&current)
-    })
+        let name = segment.to_str().ok_or_else(|| {
+            std::io::Error::new(
+                ErrorKind::InvalidInput,
+                "cache directory contains non-UTF-8 path components",
+            )
+        })?;
+        current = open_child_directory(&current, name, false)?;
+    }
+    Ok(current)
 }
 
-fn state_directory_is_safe(context: &PolicyContext) -> bool {
-    owner_controlled_cache_chain(context.home_dir(), context.cache_dir())
-        && owner_controlled_directory(&context.cache_dir().join(STATE_DIRECTORY))
+pub(crate) fn open_cache_directory(context: &PolicyContext) -> std::io::Result<File> {
+    let cache = context.cache_dir();
+    let default = context.home_dir().join(".cache/claudex");
+    if cache == default {
+        let home = open_directory_path(context.home_dir())?;
+        validate_directory(&home, false)?;
+        let dot_cache = open_child_directory(&home, ".cache", false)?;
+        return open_child_directory(&dot_cache, "claudex", true);
+    }
+    let directory = open_directory_path(cache)?;
+    validate_directory(&directory, false)?;
+    Ok(directory)
 }
 
-fn owner_controlled_file(file: &File) -> bool {
+pub(crate) fn open_state_directory(context: &PolicyContext) -> std::io::Result<File> {
+    let cache = open_cache_directory(context)?;
+    open_child_directory(&cache, STATE_DIRECTORY, true)
+}
+
+pub(crate) fn owner_controlled_file(file: &File) -> bool {
     file.metadata().ok().is_some_and(|metadata| {
         metadata.is_file()
             && metadata.nlink() == 1
             && metadata.uid() == current_uid()
-            && metadata.mode() & 0o022 == 0
+            && metadata.mode() & 0o777 == 0o600
             && metadata.len() <= MAX_STATE_BYTES
     })
 }
 
-fn read_bounded_object(path: &Path) -> Option<Value> {
-    let mut options = OpenOptions::new();
-    options
-        .read(true)
-        .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
-    let file = options.open(path).ok()?;
+fn read_bounded_object(directory: &File, name: &str) -> Option<Value> {
+    let file = open_at(
+        directory,
+        name,
+        libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+        0,
+    )
+    .ok()?;
     if !owner_controlled_file(&file) {
         return None;
     }
@@ -133,7 +245,7 @@ fn valid_timestamps(state: &Value, now: f64) -> bool {
         && expires.is_finite()
         && updated >= 0.0
         && expires >= updated
-        && expires - updated <= STATE_TTL_SECONDS
+        && expires - updated == STATE_TTL_SECONDS
         && updated <= now + MAX_FUTURE_SKEW_SECONDS
         && now <= expires
 }
@@ -171,11 +283,12 @@ pub(crate) fn delegation_required(payload: &Map<String, Value>, context: &Policy
     let Some(id) = session_id(payload) else {
         return false;
     };
-    if !state_directory_is_safe(context) {
-        return false;
-    }
     let expected_key = session_key(id);
-    read_bounded_object(&state_path(context.cache_dir(), id))
+    let Ok(directory) = open_state_directory(context) else {
+        return false;
+    };
+    let name = format!("{expected_key}.json");
+    read_bounded_object(&directory, &name)
         .and_then(|state| validated_requirement(&state, &expected_key, context.now_seconds()))
         .unwrap_or(false)
 }
@@ -205,5 +318,21 @@ mod tests {
         let name = path.file_name().unwrap().to_str().unwrap();
         assert_eq!(name.len(), 69);
         assert!(!name.contains(".."));
+    }
+
+    #[test]
+    fn short_ttl_is_rejected_even_before_expiry() {
+        let state = serde_json::json!({
+            "version": 2,
+            "session_key": "key",
+            "updated_at": 1_000.0,
+            "expires_at": 1_000.0 + STATE_TTL_SECONDS - 1.0,
+            "base_delegation_required": true,
+            "prompt_opt_out": false,
+            "delegation_required": true,
+            "selected_workers_count": 1,
+            "direct_main_execution": "fallback-only"
+        });
+        assert!(validated_requirement(&state, "key", 1_001.0).is_none());
     }
 }

@@ -85,7 +85,7 @@ fn resolve(arguments: &Arguments, refresh_deadline: Option<Deadline>) -> Result<
     let live = exhaustion::live_state(&paths.home, system_time(now));
     let disabled = exhaustion::effective_disabled_models(&config, &configured, &live);
     let key = config::configuration_key(&config.raw, &disabled);
-    let cache_path = paths.home.join(".cache/claudex/usage-routing.json");
+    let cache_path = paths.cache_dir.join("usage-routing.json");
     Ok(RuntimeState {
         paths,
         config_path,
@@ -264,8 +264,16 @@ pub fn normal_hook_output(arguments: &Arguments, payload: Option<&Value>) -> Res
     let summary = delegation::effective_summary(summary, prompt_payload);
     if arguments.event == HookEvent::UserPromptSubmit {
         let id = payload.and_then(delegation::session_id);
-        delegation::write_delegation_state(&state.paths.home, id, &summary, state.now)
-            .context("publish session-scoped delegation policy")?;
+        // Policy publication is advisory to the routing hook. A failed,
+        // atomic publication must never turn a UserPromptSubmit into a hook
+        // failure or leave a partially visible policy snapshot.
+        let _ = delegation::write_delegation_state_at(
+            &state.paths.home,
+            &state.paths.cache_dir,
+            id,
+            &summary,
+            state.now,
+        );
     }
     hook::hook_output_for_agent(&summary, arguments.event.as_str(), agent_type)
 }

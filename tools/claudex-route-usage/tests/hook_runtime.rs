@@ -147,9 +147,13 @@ impl Fixture {
     }
 
     fn delegation_state_path(&self, session_id: &str) -> PathBuf {
+        self.delegation_state_path_in(&self.home.join(".cache/claudex"), session_id)
+    }
+
+    fn delegation_state_path_in(&self, cache: &Path, session_id: &str) -> PathBuf {
         let key = hex::encode(Sha256::digest(session_id.as_bytes()));
-        self.home
-            .join(".cache/claudex/delegation-state-v2")
+        cache
+            .join("delegation-state-v2")
             .join(format!("{key}.json"))
     }
 
@@ -502,6 +506,25 @@ fn reverse_order_sessions_keep_b_opt_out_separate_from_a_denial_policy() {
 }
 
 #[test]
+fn explicit_cache_override_is_shared_by_route_state_and_not_split_into_home() {
+    let fixture = Fixture::new(true);
+    let override_cache = fixture.root.path().join("policy-cache");
+    fs::create_dir(&override_cache).unwrap();
+    let _guard = fixture.hold_refresh_lock();
+    let output = fixture.run_routed(
+        r#"{"session_id":"override-session","prompt":"Please implement this"}"#,
+        &[("CLAUDEX_CACHE_DIR", override_cache.to_str().unwrap())],
+    );
+    assert!(context(&output).contains("Claudex routing data"));
+    assert!(
+        fixture
+            .delegation_state_path_in(&override_cache, "override-session")
+            .exists()
+    );
+    assert!(!fixture.delegation_state_path("override-session").exists());
+}
+
+#[test]
 fn present_invalid_current_session_id_does_not_fall_back_to_legacy_id() {
     let fixture = Fixture::new(true);
     let _guard = fixture.hold_refresh_lock();
@@ -543,7 +566,7 @@ fn subagent_start_never_writes_delegation_policy_state() {
 }
 
 #[test]
-fn migration_write_failure_is_visible_and_preserves_existing_cache() {
+fn migration_write_failure_is_fail_open_and_preserves_existing_policy() {
     use std::os::unix::fs::symlink;
 
     let fixture = Fixture::new(true);
@@ -559,11 +582,8 @@ fn migration_write_failure_is_visible_and_preserves_existing_cache() {
         r#"{"session_id":"session-a","prompt":"Please implement this"}"#,
         &[],
     );
-    assert!(!output.status.success());
-    assert!(
-        String::from_utf8_lossy(&output.stderr)
-            .contains("publish session-scoped delegation policy")
-    );
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
     let legacy: Value = serde_json::from_slice(&fs::read(legacy).unwrap()).unwrap();
     assert_eq!(legacy["delegation_required"], true);
     assert_eq!(fs::read_to_string(outside).unwrap(), "unchanged");

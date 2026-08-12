@@ -23,6 +23,7 @@ pub fn default_advisor() -> Value {
 /// Resolved home directory and repository root used for config discovery.
 pub struct Paths {
     pub home: PathBuf,
+    pub cache_dir: PathBuf,
     pub repository_root: PathBuf,
 }
 
@@ -30,10 +31,21 @@ impl Paths {
     pub fn discover(_requested_config: Option<&Path>) -> Result<Self> {
         let home = home_dir()?;
         Ok(Self {
+            cache_dir: cache_dir(&home),
             home,
             repository_root: repository_root(),
         })
     }
+}
+
+/// Resolve the cache root shared with the session policy hook. An explicit
+/// override is authoritative in both binaries; otherwise the root is under
+/// the resolved HOME directory.
+pub fn cache_dir(home: &Path) -> PathBuf {
+    std::env::var_os("CLAUDEX_CACHE_DIR")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".cache/claudex"))
 }
 
 fn home_dir() -> Result<PathBuf> {

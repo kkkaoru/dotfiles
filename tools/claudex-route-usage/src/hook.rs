@@ -21,6 +21,17 @@ fn slim_worker(worker: &Value) -> Option<Value> {
     )))
 }
 
+/// Return exactly the worker entries that this hook can expose to Claude Code.
+/// The delegation snapshot uses the same projection so its count cannot drift
+/// from the effective hook worker set.
+pub(crate) fn effective_workers(summary: &Value) -> Vec<Value> {
+    summary
+        .get("selected_workers")
+        .and_then(Value::as_array)
+        .map(|workers| workers.iter().filter_map(slim_worker).collect())
+        .unwrap_or_default()
+}
+
 fn tool_policy_reminder(event_name: &str, delegation_required: bool) -> &'static str {
     match event_name {
         "SubagentStart" => concat!(
@@ -115,16 +126,13 @@ pub fn hook_output_for_agent(
         return Ok(slim_command_code_hook(event_name));
     }
     let advisor_enabled = custom_advisor_enabled();
-    let selected_workers: Vec<Value> = summary
-        .get("selected_workers")
-        .and_then(Value::as_array)
-        .map(|workers| workers.iter().filter_map(slim_worker).collect())
-        .unwrap_or_default();
+    let selected_workers = effective_workers(summary);
     let metadata = serde_json::json!({
         "providers": {},
         "source": "claudex-routing-local-hook",
         "selected_agents": summary.get("selected_agents").cloned().unwrap_or_else(|| Value::Array(vec![])),
         "selected_workers": selected_workers,
+        "selected_workers_count": selected_workers.len(),
         "preferred_worker": summary.get("preferred_worker").cloned().unwrap_or(Value::Null),
         "disabled_subagent_models": summary.get("disabled_subagent_models").cloned().unwrap_or_else(|| Value::Array(vec![])),
         "current_main_model": summary.get("current_main_model").cloned().unwrap_or(Value::Null),
