@@ -11,9 +11,17 @@ pub(super) fn thinking_signature(item_id: &str) -> String {
 #[rustfmt::skip]
 pub(super) fn summary_delta(event: &Value) -> Option<(&str, i64, &str)> {
     let params = event.get("params")?;
-    let index = params.get("summaryIndex").and_then(Value::as_i64)
-        .or_else(|| params.get("contentIndex").and_then(Value::as_i64))
-        .unwrap_or(0);
+    let summary_index = params.get("summaryIndex");
+    let content_index = params.get("contentIndex");
+    let index = summary_index.and_then(Value::as_i64)
+        .or_else(|| content_index.and_then(Value::as_i64))
+        .or_else(|| {
+            (summary_index.is_none()
+                && content_index.is_none()
+                && event.get("method").and_then(Value::as_str)
+                    == Some("item/reasoning/textDelta"))
+            .then_some(0)
+        })?;
     Some((params.get("itemId")?.as_str()?, index, params.get("delta")?.as_str()?))
 }
 
