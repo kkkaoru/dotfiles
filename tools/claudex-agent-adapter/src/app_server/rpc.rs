@@ -1,8 +1,11 @@
-use std::{sync::atomic::Ordering, time::Duration};
+use std::{
+    sync::atomic::Ordering,
+    time::{Duration, Instant},
+};
 
 use anyhow::{Result, bail};
 use serde_json::{Value, json};
-use tokio::{io::AsyncWriteExt, sync::oneshot};
+use tokio::sync::oneshot;
 
 use super::{
     AppServer, REQUEST_TIMEOUT, ThreadEvents,
@@ -41,8 +44,16 @@ impl AppServer {
         params: Value,
         timeout: Duration,
     ) -> Result<Value> {
-        let request = self.begin_request(method, params).await?;
-        match tokio::time::timeout(timeout, await_response(request.response)).await {
+        let started = Instant::now();
+        let request = match tokio::time::timeout(timeout, self.begin_request(method, params)).await
+        {
+            Ok(request) => request?,
+            Err(_) => {
+                bail!("app-server request `{method}` timed out after {timeout:?}");
+            }
+        };
+        let remaining = timeout.saturating_sub(started.elapsed());
+        match tokio::time::timeout(remaining, await_response(request.response)).await {
             Ok(response) => response,
             Err(_) => {
                 self.pending.lock().await.remove(&request.id);
@@ -56,14 +67,17 @@ impl AppServer {
     pub async fn request_detached(&self, method: &str, params: Value) -> Result<()> {
         let thread_id = params.get("threadId").cloned().unwrap_or(Value::Null);
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let mut line =
+            serde_json::to_vec(&json!({ "id": id, "method": method, "params": params }))?;
+        line.push(b'\n');
+        let reservation = self.writer.reserve().await?;
         self.pending
             .lock()
             .await
             .insert(id, PendingResponse::Detached { thread_id });
-        if let Err(error) = self
-            .write(&json!({ "id": id, "method": method, "params": params }))
-            .await
-        {
+        // `send` is synchronous after reserve, so cancellation cannot occur
+        // between publishing pending state and queueing its frame.
+        if let Err(error) = await_write(reservation.send(line)).await {
             self.pending.lock().await.remove(&id);
             return Err(error);
         }
@@ -76,15 +90,16 @@ impl AppServer {
         params: Value,
     ) -> Result<PendingRequest> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let mut line =
+            serde_json::to_vec(&json!({ "id": id, "method": method, "params": params }))?;
+        line.push(b'\n');
+        let reservation = self.writer.reserve().await?;
         let (tx, rx) = oneshot::channel();
         self.pending
             .lock()
             .await
             .insert(id, PendingResponse::Awaited(tx));
-        if let Err(error) = self
-            .write(&json!({ "id": id, "method": method, "params": params }))
-            .await
-        {
+        if let Err(error) = await_write(reservation.send(line)).await {
             self.pending.lock().await.remove(&id);
             return Err(error);
         }
@@ -103,9 +118,15 @@ impl AppServer {
     pub(super) async fn write(&self, value: &Value) -> Result<()> {
         let mut line = serde_json::to_vec(value)?;
         line.push(b'\n');
-        let mut stdin = self.stdin.lock().await;
-        stdin.write_all(&line).await?;
-        stdin.flush().await?;
-        Ok(())
+        let reservation = self.writer.reserve().await?;
+        await_write(reservation.send(line)).await
+    }
+}
+
+async fn await_write(completion: tokio::sync::oneshot::Receiver<Result<(), String>>) -> Result<()> {
+    match completion.await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(error)) => bail!(error),
+        Err(_) => bail!("app-server writer stopped before flushing its frame"),
     }
 }

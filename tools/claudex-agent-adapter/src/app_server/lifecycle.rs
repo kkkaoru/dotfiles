@@ -25,6 +25,12 @@ impl AppServer {
         }
         self.fail_pending(reason).await;
         self.event_dispatcher.close();
+        // Stop accepting new frames, then give already-reserved protocol
+        // messages a bounded chance to reach stdin.  The writer owns the
+        // actual pipe, so this remains cancellation-safe even when the child
+        // stopped reading; the process-group termination below is the hard
+        // upper bound for a blocked write.
+        self.writer.drain(super::writer::DRAIN_TIMEOUT).await;
 
         let process_group = child.id();
         let status = match child.try_wait() {
@@ -36,6 +42,7 @@ impl AppServer {
         // before process termination. Requests started after this point write
         // to a reaped child and remove their own pending entry on failure.
         self.fail_pending(reason).await;
+        self.writer.join().await;
         tracing::error!(?status, %reason, "codex app-server stopped");
     }
 }

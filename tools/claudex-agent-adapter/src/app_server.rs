@@ -12,7 +12,7 @@ use anyhow::{Context, Result};
 #[cfg(test)]
 use serde_json::Value;
 use serde_json::json;
-use tokio::process::{Child, ChildStdin};
+use tokio::process::Child;
 use tokio::sync::Mutex;
 
 pub(crate) mod events;
@@ -29,9 +29,11 @@ mod protocol;
 mod provider_environment;
 mod rpc;
 mod spawn;
+mod writer;
 use pending::PendingResponse;
 pub use spawn::response_thread_id;
 use spawn::{initialize_params, prepare_isolated_codex_home, spawn_child};
+use writer::FrameWriter;
 
 #[cfg(not(coverage_nightly))]
 const INITIALIZE_TIMEOUT: Duration = Duration::from_secs(8);
@@ -41,7 +43,7 @@ pub(crate) const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// A persistent JSON-RPC connection to `codex app-server` over JSONL stdio.
 pub struct AppServer {
-    stdin: Mutex<ChildStdin>,
+    writer: Arc<FrameWriter>,
     child: Mutex<Child>,
     next_id: AtomicU64,
     pending: Mutex<HashMap<u64, PendingResponse>>,
@@ -75,7 +77,7 @@ impl AppServer {
             .take()
             .context("app-server stdout is unavailable")?;
         let server = Arc::new(Self {
-            stdin: Mutex::new(stdin),
+            writer: FrameWriter::spawn(stdin),
             child: Mutex::new(child),
             next_id: AtomicU64::new(1),
             pending: Mutex::new(HashMap::new()),
@@ -85,6 +87,10 @@ impl AppServer {
 
         // A weak reader handle lets kill_on_drop stop an abandoned app-server process.
         tokio::spawn(Self::read_loop(Arc::downgrade(&server), stdout));
+        tokio::spawn(Self::watch_writer_failure(
+            Arc::downgrade(&server),
+            Arc::clone(&server.writer),
+        ));
         let initialize = server
             .request_with_timeout("initialize", initialize_params(), INITIALIZE_TIMEOUT)
             .await
@@ -104,6 +110,12 @@ impl AppServer {
             return Err(error);
         }
         Ok(server)
+    }
+
+    async fn watch_writer_failure(server: std::sync::Weak<Self>, writer: Arc<FrameWriter>) {
+        if let Some(reason) = writer.wait_for_fatal().await {
+            lifecycle::stop_if_alive(&server, &reason).await;
+        }
     }
 }
 
