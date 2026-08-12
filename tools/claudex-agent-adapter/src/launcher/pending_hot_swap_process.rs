@@ -9,7 +9,72 @@ use anyhow::{Context, Result};
 use super::{ServiceConfig, cache_dir};
 use crate::launcher::{daemon_arguments, launcher_logs};
 
-pub(super) fn spawn_waiter(config: &ServiceConfig) -> Result<u32> {
+/// Owns a detached idle waiter until its PID is durably published in pending
+/// state. Drop covers state-write failures and cancellation after spawning.
+#[must_use = "a spawned waiter must stay guarded until pending state is published"]
+pub(super) struct StartedWaiter<T: FnOnce(u32) = fn(u32)> {
+    pid: u32,
+    terminate: Option<T>,
+}
+
+impl StartedWaiter<fn(u32)> {
+    fn new(pid: u32) -> Self {
+        Self::with_terminate(pid, terminate_started_waiter)
+    }
+}
+
+impl<T: FnOnce(u32)> StartedWaiter<T> {
+    pub(super) fn with_terminate(pid: u32, terminate: T) -> Self {
+        Self {
+            pid,
+            terminate: Some(terminate),
+        }
+    }
+
+    pub(super) fn pid(&self) -> u32 {
+        self.pid
+    }
+
+    pub(super) fn disarm(mut self) -> u32 {
+        self.terminate.take();
+        self.pid
+    }
+}
+
+impl<T: FnOnce(u32)> Drop for StartedWaiter<T> {
+    fn drop(&mut self) {
+        if let Some(terminate) = self.terminate.take() {
+            terminate(self.pid);
+        }
+    }
+}
+
+#[cfg(unix)]
+fn detached_waiter_group(pid: u32) -> Option<i32> {
+    if pid == 0 || pid == std::process::id() || pid > i32::MAX as u32 {
+        return None;
+    }
+    let pid = pid as i32;
+    (unsafe { libc::getsid(pid) } == pid).then_some(pid)
+}
+
+#[cfg(unix)]
+fn terminate_started_waiter(pid: u32) {
+    let Some(process_group) = detached_waiter_group(pid) else {
+        return;
+    };
+    unsafe {
+        libc::kill(-process_group, libc::SIGTERM);
+        libc::kill(-process_group, libc::SIGKILL);
+    }
+}
+
+#[cfg(not(unix))]
+fn terminate_started_waiter(pid: u32) {
+    stop_waiter(pid, |_| true);
+}
+
+pub(super) fn spawn_waiter(config: &ServiceConfig) -> Result<StartedWaiter> {
     let cache = cache_dir(config)?;
     fs::create_dir_all(cache).context("create pending hot-swap log directory")?;
     let log_path = launcher_logs::pending_hot_swap_log_path(cache, &config.options.listen);
@@ -42,7 +107,7 @@ pub(super) fn spawn_waiter(config: &ServiceConfig) -> Result<u32> {
     .stderr(Stdio::from(stderr))
     .spawn()
     .context("start idle hot-swap waiter")?;
-    Ok(child.id())
+    Ok(StartedWaiter::new(child.id()))
 }
 
 #[cfg(unix)]
@@ -62,6 +127,7 @@ pub(super) fn configure_detached_session(command: &mut Command) {
 #[cfg(not(unix))]
 fn configure_detached_session(_command: &mut Command) {}
 
+#[cfg(any(test, not(unix)))]
 pub(super) fn stop_waiter(pid: u32, is_alive: impl Fn(u32) -> bool) {
     if pid == 0 || pid == std::process::id() || !is_alive(pid) {
         return;
@@ -70,6 +136,30 @@ pub(super) fn stop_waiter(pid: u32, is_alive: impl Fn(u32) -> bool) {
     unsafe {
         libc::kill(pid as i32, libc::SIGTERM);
     }
+}
+
+/// Force-clean a stale waiter and every process in its detached group.
+pub(super) fn terminate_waiter_group(pid: u32, is_alive: impl Fn(u32) -> bool) {
+    if !is_alive(pid) {
+        return;
+    }
+    terminate_started_waiter(pid);
+}
+
+/// Ask the current waiter lifecycle to stop. SIGTERM targets the detached
+/// group so a shell/wrapper cannot leave its wait-idle child behind.
+pub(super) fn request_waiter_stop(pid: u32, is_alive: impl Fn(u32) -> bool) {
+    if !is_alive(pid) {
+        return;
+    }
+    #[cfg(unix)]
+    if let Some(process_group) = detached_waiter_group(pid) {
+        unsafe {
+            libc::kill(-process_group, libc::SIGTERM);
+        }
+    }
+    #[cfg(not(unix))]
+    stop_waiter(pid, |_| true);
 }
 
 pub(super) fn waiter_is_alive(pid: u32) -> bool {

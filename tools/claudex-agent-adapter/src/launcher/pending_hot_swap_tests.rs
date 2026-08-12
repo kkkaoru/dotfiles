@@ -5,6 +5,14 @@ use super::super::{LOCAL_TOKEN, ServiceConfig};
 use super::*;
 use crate::agent_backend::{BackendKind, BackendRoute};
 use crate::launcher::AdapterOptions;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU32, Ordering},
+};
+
+fn fake_waiter(pid: u32) -> StartedWaiter {
+    StartedWaiter::with_terminate(pid, |_| {})
+}
 
 fn config(root: &Path, listen: SocketAddr) -> ServiceConfig {
     ServiceConfig {
@@ -53,19 +61,21 @@ fn arms_once_per_live_build_and_respawns_stale_waiters() {
     let root = tempfile::tempdir().expect("pending hot-swap fixture");
     let config = config(root.path(), "127.0.0.1:8318".parse().expect("listen"));
     let events = super::super::macos_notify::TestEvents::capture();
-    let first = arm_with(&config, |_| Ok(4242), |_| false).expect("first arm");
+    let first = arm_with(&config, |_| Ok(fake_waiter(4242)), |_| false).expect("first arm");
     assert_eq!(first, ArmOutcome::Spawned { pid: 4242 });
     assert!(
         events.take().is_empty(),
         "arming a waiter must not macOS-notify; only swap-complete alerts"
     );
-    let again = arm_with(&config, |_| Ok(4343), |pid| pid == 4242).expect("reuse live waiter");
+    let again =
+        arm_with(&config, |_| Ok(fake_waiter(4343)), |pid| pid == 4242).expect("reuse live waiter");
     assert_eq!(again, ArmOutcome::AlreadyArmed { pid: 4242 });
     assert!(
         events.take().is_empty(),
         "already-armed waiter must not notify waiting again"
     );
-    let respawn = arm_with(&config, |_| Ok(4444), |_| false).expect("respawn dead waiter");
+    let respawn =
+        arm_with(&config, |_| Ok(fake_waiter(4444)), |_| false).expect("respawn dead waiter");
     assert_eq!(respawn, ArmOutcome::Spawned { pid: 4444 });
     assert!(
         events.take().is_empty(),
@@ -102,7 +112,7 @@ fn arm_outcome_pid_matches_each_variant() {
 fn respawns_when_fingerprint_changes_and_ignores_foreign_builds() {
     let root = tempfile::tempdir().expect("pending hot-swap fixture");
     let config = config(root.path(), "127.0.0.1:8319".parse().expect("listen"));
-    arm_with(&config, |_| Ok(5151), |_| false).expect("initial arm");
+    arm_with(&config, |_| Ok(fake_waiter(5151)), |_| false).expect("initial arm");
     let path = state_path(&config).expect("state path");
     write_state(
         &path,
@@ -113,7 +123,8 @@ fn respawns_when_fingerprint_changes_and_ignores_foreign_builds() {
         },
     )
     .expect("stale fingerprint");
-    let respawn = arm_with(&config, |_| Ok(5252), |pid| pid == 5151).expect("fingerprint change");
+    let respawn = arm_with(&config, |_| Ok(fake_waiter(5252)), |pid| pid == 5151)
+        .expect("fingerprint change");
     assert_eq!(respawn, ArmOutcome::Spawned { pid: 5252 });
 
     write_state(
@@ -142,10 +153,14 @@ fn respawns_when_fingerprint_changes_and_ignores_foreign_builds() {
 }
 
 #[test]
-fn stop_waiter_ignores_missing_self_and_dead_pids() {
+fn waiter_stop_helpers_ignore_missing_self_and_dead_pids() {
     stop_waiter(0, |_| true);
     stop_waiter(std::process::id(), |_| true);
     stop_waiter(1, |_| false);
+    request_waiter_stop(0, |_| true);
+    request_waiter_stop(std::process::id(), |_| true);
+    request_waiter_stop(1, |_| false);
+    terminate_waiter_group(1, |_| false);
 }
 
 #[test]
@@ -162,8 +177,62 @@ fn arm_respawns_when_existing_waiter_build_differs() {
         },
     )
     .expect("foreign build");
-    let respawn = arm_with(&config, |_| Ok(6262), |pid| pid == 6161).expect("foreign build arm");
+    let respawn =
+        arm_with(&config, |_| Ok(fake_waiter(6262)), |pid| pid == 6161).expect("foreign build arm");
     assert_eq!(respawn, ArmOutcome::Spawned { pid: 6262 });
+}
+
+#[test]
+fn state_write_failure_terminates_the_new_waiter_and_publishes_nothing() {
+    let root = tempfile::tempdir().expect("pending hot-swap failure fixture");
+    let config = config(root.path(), "127.0.0.1:8322".parse().expect("listen"));
+    let terminated = Arc::new(AtomicU32::new(0));
+    let observed = Arc::clone(&terminated);
+    let _failure = FailStateWrite::arm();
+
+    let error = arm_with(
+        &config,
+        move |_| {
+            let terminate = move |pid| observed.store(pid, Ordering::SeqCst);
+            Ok(StartedWaiter::with_terminate(7373, terminate))
+        },
+        |_| false,
+    )
+    .expect_err("injected state publication failure must fail arm");
+
+    assert!(
+        error
+            .to_string()
+            .contains("injected pending hot-swap state")
+    );
+    assert_eq!(terminated.load(Ordering::SeqCst), 7373);
+    assert!(read_state_for_tests(&config).expect("state read").is_none());
+}
+
+#[test]
+fn started_waiter_disarms_only_after_publication() {
+    let terminated = std::cell::Cell::new(0);
+    let started = StartedWaiter::with_terminate(42, |pid| terminated.set(pid));
+    assert_eq!(started.pid(), 42);
+    assert_eq!(started.disarm(), 42);
+    assert_eq!(terminated.get(), 0);
+}
+
+#[tokio::test]
+async fn started_waiter_terminates_when_a_post_spawn_future_is_cancelled() {
+    let terminated = Arc::new(AtomicU32::new(0));
+    let observed = Arc::clone(&terminated);
+    let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(async move {
+        let terminate = move |pid| observed.store(pid, Ordering::SeqCst);
+        let _started = StartedWaiter::with_terminate(77, terminate);
+        let _ = ready_tx.send(());
+        std::future::pending::<()>().await;
+    });
+    ready_rx.await.expect("guarded future started");
+    task.abort();
+    let _ = task.await;
+    assert_eq!(terminated.load(Ordering::SeqCst), 77);
 }
 
 #[test]

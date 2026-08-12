@@ -7,6 +7,14 @@ use std::time::Duration;
 mod signals;
 #[cfg(unix)]
 use signals::process_is_alive;
+pub(super) fn started_daemon_cleanup(pid: u32) -> impl FnOnce(u32) {
+    let identity = signals::capture_started_daemon_identity(pid);
+    move |_| {
+        if let Some(identity) = identity {
+            signals::terminate_started_daemon_identity(&identity);
+        }
+    }
+}
 #[cfg(all(test, unix))]
 use signals::{
     is_process_still_alive, is_process_zombie, kill_process, kill_process_group,
@@ -57,6 +65,21 @@ pub(super) fn terminate(pid: u32) {
         return;
     }
     terminate_with_escalation(pid);
+}
+
+/// Terminate a process returned by the detached daemon spawner.
+///
+/// The detached-session check prevents a recycled or unrelated PID from being
+/// signalled, while still allowing cleanup when the session leader has exited
+/// but provider process groups remain in its session.
+#[cfg(test)]
+pub(super) fn terminate_started_daemon(pid: u32) {
+    if !is_signalable_pid(pid) || pid == process::id() {
+        return;
+    }
+    if let Some(identity) = signals::capture_started_daemon_identity(pid) {
+        signals::terminate_started_daemon_identity(&identity);
+    }
 }
 
 /// Terminate a retained `serve` daemon by pid without needing the executable

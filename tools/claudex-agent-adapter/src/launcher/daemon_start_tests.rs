@@ -1,8 +1,9 @@
 #![cfg_attr(coverage_nightly, coverage(off))]
 
 use super::{
-    bounded_descriptor_limit, close_file_descriptor, close_inherited_descriptors_with,
-    close_system, configure_process_group, terminate_started_recovery,
+    StartedDaemon, bounded_descriptor_limit, close_file_descriptor,
+    close_inherited_descriptors_with, close_system, configure_process_group,
+    terminate_started_recovery,
 };
 
 #[cfg(unix)]
@@ -53,13 +54,14 @@ use std::{
 #[cfg(unix)]
 #[test]
 fn terminate_started_recovery_stops_a_detached_child() {
-    let mut child = Command::new("sleep")
+    let mut command = Command::new("sleep");
+    command
         .arg("30")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn recovery terminate fixture");
+        .stderr(Stdio::null());
+    configure_process_group(&mut command);
+    let mut child = command.spawn().expect("spawn recovery terminate fixture");
     let pid = child.id();
     terminate_started_recovery(pid);
     if wait_until_exited(&mut child, 50) {
@@ -85,6 +87,37 @@ fn closes_the_inherited_descriptor_range_via_the_injected_operation() {
     assert_eq!(closed, vec![3, 4, 5]);
     close_system(|_| {}).expect("system descriptor limit is available");
     close_file_descriptor(-1);
+}
+
+#[test]
+fn started_daemon_disarms_only_when_ownership_is_transferred() {
+    let terminated = std::cell::Cell::new(0);
+    let started = StartedDaemon::with_terminate(42, |pid| terminated.set(pid));
+    assert_eq!(started.pid(), 42);
+    assert_eq!(started.disarm(), 42);
+    assert_eq!(terminated.get(), 0);
+}
+
+#[tokio::test]
+async fn started_daemon_terminates_when_a_post_spawn_future_is_cancelled() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicU32, Ordering},
+    };
+
+    let terminated = Arc::new(AtomicU32::new(0));
+    let observed = Arc::clone(&terminated);
+    let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(async move {
+        let terminate = move |pid| observed.store(pid, Ordering::SeqCst);
+        let _started = StartedDaemon::with_terminate(77, terminate);
+        let _ = ready_tx.send(());
+        std::future::pending::<()>().await;
+    });
+    ready_rx.await.expect("guarded future started");
+    task.abort();
+    let _ = task.await;
+    assert_eq!(terminated.load(Ordering::SeqCst), 77);
 }
 
 #[cfg(unix)]

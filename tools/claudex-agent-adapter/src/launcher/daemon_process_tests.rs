@@ -104,6 +104,9 @@ fn rejects_pids_that_cannot_be_safely_signalled() {
     terminate(0);
     terminate(u32::MAX);
     terminate(std::process::id());
+    terminate_started_daemon(0);
+    terminate_started_daemon(u32::MAX);
+    terminate_started_daemon(std::process::id());
 }
 
 #[test]
@@ -206,6 +209,196 @@ fn graceful_shutdown_leaves_other_process_group_members_running() {
     request_graceful_shutdown(0);
     request_graceful_shutdown(u32::MAX);
     request_graceful_shutdown(std::process::id());
+}
+
+#[cfg(unix)]
+#[test]
+fn started_daemon_cleanup_ignores_a_group_outside_a_detached_session() {
+    let mut child = Command::new("sleep")
+        .arg("30")
+        .process_group(0)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn ordinary process group");
+    let process_group = child.id().try_into().expect("process group fits in i32");
+    let _cleanup = TestProcessGroupCleanup(process_group);
+
+    terminate_started_daemon(child.id());
+    assert!(
+        process_is_alive(child.id()),
+        "an ordinary process group must not be treated as a detached daemon session"
+    );
+    kill_process_group(libc::SIGKILL, process_group);
+    let _ = child.wait();
+}
+
+#[cfg(unix)]
+#[test]
+fn forced_termination_kills_descendant_groups_only_in_the_daemon_session() {
+    let root = tempfile::tempdir().expect("daemon session fixture");
+    let fixture = compile_daemon_session_fixture(root.path());
+    let pid_file = root.path().join("provider.pids");
+    let mut command = Command::new(&fixture);
+    command.arg(&pid_file);
+    unsafe {
+        command.pre_exec(|| {
+            if libc::setsid() == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut daemon = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn detached daemon fixture");
+    let daemon_pid = daemon.id();
+    let _daemon_cleanup = DaemonSessionCleanup {
+        daemon_pid,
+        pid_file: pid_file.clone(),
+    };
+    let (provider_pid, grandchild_pid) = wait_for_pid_pair(&pid_file);
+
+    let mut unrelated = Command::new("sh")
+        .args(["-c", "trap '' TERM; while :; do sleep 1; done"])
+        .process_group(0)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn unrelated process group");
+    let unrelated_group = unrelated.id().try_into().expect("unrelated group fits");
+    let _unrelated_cleanup = TestProcessGroupCleanup(unrelated_group);
+
+    assert_eq!(
+        unsafe { libc::getsid(daemon_pid as i32) },
+        daemon_pid as i32
+    );
+    assert_eq!(
+        unsafe { libc::getsid(provider_pid as i32) },
+        daemon_pid as i32
+    );
+    assert_eq!(
+        unsafe { libc::getpgid(provider_pid as i32) },
+        provider_pid as i32
+    );
+    assert_eq!(
+        unsafe { libc::getpgid(grandchild_pid as i32) },
+        provider_pid as i32
+    );
+    assert_ne!(
+        unsafe { libc::getsid(unrelated.id() as i32) },
+        daemon_pid as i32
+    );
+
+    terminate_started_daemon(daemon_pid);
+    wait_until_process_stops(provider_pid);
+    wait_until_process_stops(grandchild_pid);
+    assert!(!process_is_alive(provider_pid));
+    assert!(!process_is_alive(grandchild_pid));
+    assert!(
+        process_is_alive(unrelated.id()),
+        "cleanup must not signal an unrelated session"
+    );
+
+    let _ = daemon.wait();
+    kill_process_group(libc::SIGKILL, unrelated_group);
+    let _ = unrelated.wait();
+}
+
+#[cfg(unix)]
+fn compile_daemon_session_fixture(root: &Path) -> std::path::PathBuf {
+    let executable = root.join("daemon-session-fixture");
+    let source = br#"
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+
+static void wait_forever(void) { for (;;) pause(); }
+
+int main(int argc, char **argv) {
+    if (argc != 2) return 2;
+    signal(SIGTERM, SIG_IGN);
+    pid_t provider = fork();
+    if (provider < 0) return 3;
+    if (provider == 0) {
+        if (setpgid(0, 0) != 0) _exit(4);
+        signal(SIGTERM, SIG_IGN);
+        pid_t grandchild = fork();
+        if (grandchild < 0) _exit(5);
+        if (grandchild == 0) {
+            signal(SIGTERM, SIG_IGN);
+            wait_forever();
+        }
+        FILE *pids = fopen(argv[1], "w");
+        if (pids == NULL) _exit(6);
+        fprintf(pids, "%d %d\n", getpid(), grandchild);
+        fclose(pids);
+        wait_forever();
+    }
+    wait_forever();
+}
+"#;
+    let mut compiler = Command::new("cc")
+        .args(["-x", "c", "-o"])
+        .arg(&executable)
+        .arg("-")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("start C compiler");
+    std::io::Write::write_all(compiler.stdin.as_mut().expect("compiler stdin"), source)
+        .expect("write fixture source");
+    let output = compiler
+        .wait_with_output()
+        .expect("compile session fixture");
+    assert!(
+        output.status.success(),
+        "fixture compile failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    executable
+}
+
+#[cfg(unix)]
+fn wait_for_pid_pair(path: &Path) -> (u32, u32) {
+    for _ in 0..500 {
+        if let Some(pair) = std::fs::read_to_string(path).ok().and_then(|contents| {
+            let mut fields = contents.split_whitespace();
+            Some((fields.next()?.parse().ok()?, fields.next()?.parse().ok()?))
+        }) {
+            return pair;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    panic!("provider fixture did not publish its pids")
+}
+
+#[cfg(unix)]
+struct DaemonSessionCleanup {
+    daemon_pid: u32,
+    pid_file: std::path::PathBuf,
+}
+
+#[cfg(unix)]
+impl Drop for DaemonSessionCleanup {
+    fn drop(&mut self) {
+        kill_process_group(libc::SIGKILL, self.daemon_pid as i32);
+        if let Ok(contents) = std::fs::read_to_string(&self.pid_file)
+            && let Some(provider) = contents
+                .split_whitespace()
+                .next()
+                .and_then(|pid| pid.parse::<i32>().ok())
+        {
+            kill_process_group(libc::SIGKILL, provider);
+        }
+    }
 }
 
 #[cfg(unix)]

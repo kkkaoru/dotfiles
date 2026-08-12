@@ -2,14 +2,6 @@ use std::net::{IpAddr, SocketAddr, TcpListener};
 
 use anyhow::{Context, Result};
 
-use crate::launcher::daemon_process;
-
-pub(super) fn terminate_failed_fallback(pid: u32, executable: &std::path::Path) {
-    if daemon_process::matches(pid, executable) {
-        daemon_process::terminate(pid);
-    }
-}
-
 pub(in crate::launcher) fn reserve_loopback_listen(configured: SocketAddr) -> Result<SocketAddr> {
     reserve_listener(configured)
 }

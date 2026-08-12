@@ -1,10 +1,131 @@
 use std::process::Command;
 
 #[cfg(unix)]
-use std::{thread, time::Instant};
+use std::{collections::BTreeSet, thread, time::Instant};
 
 #[cfg(unix)]
 use super::{STALE_TERMINATE_POLL, STALE_TERMINATE_TIMEOUT};
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct StartedDaemonIdentity {
+    pid: u32,
+    start_token: String,
+}
+
+pub(super) fn capture_started_daemon_identity(pid: u32) -> Option<StartedDaemonIdentity> {
+    if pid == 0 || pid > i32::MAX as u32 {
+        return None;
+    }
+    #[cfg(unix)]
+    if owned_daemon_session(pid).is_none() {
+        return None;
+    }
+    Some(StartedDaemonIdentity {
+        pid,
+        start_token: process_start_token(pid)?,
+    })
+}
+
+pub(super) fn terminate_started_daemon_identity(identity: &StartedDaemonIdentity) {
+    #[cfg(unix)]
+    {
+        match identity_action(identity, process_start_token(identity.pid).as_deref()) {
+            IdentityAction::TerminateLeader => {
+                terminate_with_escalation(identity.pid);
+            }
+            IdentityAction::RefuseReusedPid => {
+                // The PID now names a different process. Never signal it or a
+                // session inferred only from the recycled numeric identifier.
+            }
+            IdentityAction::TerminateOrphanedSession => {
+                // The captured leader exited. Clean only groups whose current
+                // members are still proven to belong to its old session; do
+                // not signal the numeric leader PID or `-pid` directly.
+                terminate_orphaned_session(identity.pid as i32);
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = identity;
+    }
+}
+
+fn identity_action(identity: &StartedDaemonIdentity, current: Option<&str>) -> IdentityAction {
+    match current {
+        Some(current) if current == identity.start_token => IdentityAction::TerminateLeader,
+        Some(_) => IdentityAction::RefuseReusedPid,
+        None => IdentityAction::TerminateOrphanedSession,
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+enum IdentityAction {
+    TerminateLeader,
+    RefuseReusedPid,
+    TerminateOrphanedSession,
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
+
+    #[test]
+    fn start_token_fails_closed_when_a_pid_is_reused() {
+        let identity = StartedDaemonIdentity {
+            pid: 42,
+            start_token: "original".to_owned(),
+        };
+        assert_eq!(
+            identity_action(&identity, Some("replacement")),
+            IdentityAction::RefuseReusedPid
+        );
+        assert_eq!(
+            identity_action(&identity, Some("original")),
+            IdentityAction::TerminateLeader
+        );
+        assert_eq!(
+            identity_action(&identity, None),
+            IdentityAction::TerminateOrphanedSession
+        );
+    }
+}
+
+#[cfg(target_vendor = "apple")]
+fn process_start_token(pid: u32) -> Option<String> {
+    let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::zeroed();
+    let size = std::mem::size_of::<libc::proc_bsdinfo>();
+    let read = unsafe {
+        libc::proc_pidinfo(
+            pid as i32,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            info.as_mut_ptr().cast(),
+            size as i32,
+        )
+    };
+    if read != size as i32 {
+        return None;
+    }
+    let info = unsafe { info.assume_init() };
+    Some(format!(
+        "{}:{}",
+        info.pbi_start_tvsec, info.pbi_start_tvusec
+    ))
+}
+
+#[cfg(target_os = "linux")]
+fn process_start_token(pid: u32) -> Option<String> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let after_name = stat.get(stat.rfind(')')? + 2..)?;
+    // `/proc/<pid>/stat` field 22 is starttime; `after_name` starts at field 3.
+    after_name.split_whitespace().nth(19).map(ToOwned::to_owned)
+}
+
+#[cfg(not(any(target_vendor = "apple", target_os = "linux")))]
+fn process_start_token(_pid: u32) -> Option<String> {
+    None
+}
 
 #[cfg(unix)]
 pub(super) fn request_graceful_shutdown_with_signal(pid: u32) {
@@ -25,19 +146,135 @@ pub(super) fn request_graceful_shutdown_with_signal(pid: u32) {
 #[cfg(unix)]
 pub(super) fn terminate_with_escalation(pid: u32) {
     let process_group = pid as i32;
-    kill_process(libc::SIGTERM, pid);
-    kill_process_group(libc::SIGTERM, process_group);
+    let owned_session = owned_daemon_session(pid);
+    signal_termination_scope(libc::SIGTERM, pid, process_group, owned_session);
     let deadline = Instant::now() + STALE_TERMINATE_TIMEOUT;
-    while process_is_alive(pid) || process_group_is_alive(process_group) {
+    while termination_scope_is_alive(pid, process_group, owned_session) {
         if Instant::now() >= deadline {
             break;
         }
+        // Provider children can move into their own process groups after the
+        // first snapshot. Only re-signal groups proven to remain in this
+        // daemon's detached session.
+        signal_owned_session_groups(libc::SIGTERM, owned_session);
         thread::sleep(STALE_TERMINATE_POLL);
     }
-    if process_is_alive(pid) || process_group_is_alive(process_group) {
-        kill_process(libc::SIGKILL, pid);
-        kill_process_group(libc::SIGKILL, process_group);
+    if !termination_scope_is_alive(pid, process_group, owned_session) {
+        return;
     }
+
+    signal_termination_scope(libc::SIGKILL, pid, process_group, owned_session);
+    let deadline = Instant::now() + STALE_TERMINATE_TIMEOUT;
+    while termination_scope_is_alive(pid, process_group, owned_session) && Instant::now() < deadline
+    {
+        signal_owned_session_groups(libc::SIGKILL, owned_session);
+        thread::sleep(STALE_TERMINATE_POLL);
+    }
+}
+
+#[cfg(unix)]
+fn signal_termination_scope(signal: i32, pid: u32, process_group: i32, session: Option<i32>) {
+    kill_process(signal, pid);
+    kill_process_group(signal, process_group);
+    signal_owned_session_groups(signal, session);
+}
+
+#[cfg(unix)]
+fn signal_owned_session_groups(signal: i32, session: Option<i32>) {
+    let Some(session) = session else {
+        return;
+    };
+    for process_group in live_process_groups_in_session(session) {
+        kill_process_group(signal, process_group);
+    }
+}
+
+#[cfg(unix)]
+fn termination_scope_is_alive(pid: u32, process_group: i32, session: Option<i32>) -> bool {
+    process_is_alive(pid)
+        || process_group_is_alive(process_group)
+        || session.is_some_and(session_has_live_members)
+}
+
+#[cfg(unix)]
+fn owned_daemon_session(pid: u32) -> Option<i32> {
+    let pid = i32::try_from(pid).ok()?;
+    (session_id(pid) == Some(pid) || session_has_live_members(pid)).then_some(pid)
+}
+
+#[cfg(unix)]
+fn session_has_live_members(session: i32) -> bool {
+    !live_process_groups_in_session(session).is_empty()
+}
+
+#[cfg(unix)]
+fn terminate_orphaned_session(session: i32) {
+    let groups = live_process_groups_in_session(session);
+    if groups.is_empty() {
+        return;
+    }
+    for group in &groups {
+        kill_process_group(libc::SIGTERM, *group);
+    }
+    let deadline = Instant::now() + STALE_TERMINATE_TIMEOUT;
+    while session_has_live_members(session) && Instant::now() < deadline {
+        thread::sleep(STALE_TERMINATE_POLL);
+    }
+    for group in live_process_groups_in_session(session) {
+        kill_process_group(libc::SIGKILL, group);
+    }
+}
+
+#[cfg(unix)]
+fn live_process_groups_in_session(session: i32) -> BTreeSet<i32> {
+    process_listing()
+        .into_iter()
+        .flatten()
+        .filter(|process| !process.zombie && session_id(process.pid) == Some(session))
+        .map(|process| process.process_group)
+        .filter(|&process_group| process_group > 1)
+        .collect()
+}
+
+#[cfg(unix)]
+fn session_id(pid: i32) -> Option<i32> {
+    let session = unsafe { libc::getsid(pid) };
+    (session >= 0).then_some(session)
+}
+
+#[cfg(unix)]
+#[derive(Clone, Copy)]
+struct ProcessListing {
+    pid: i32,
+    process_group: i32,
+    zombie: bool,
+}
+
+#[cfg(unix)]
+fn process_listing() -> Option<Vec<ProcessListing>> {
+    let output = Command::new("ps")
+        .args(["-axo", "pid=,pgid=,stat="])
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| parse_process_listing(&output.stdout))
+}
+
+#[cfg(unix)]
+fn parse_process_listing(output: &[u8]) -> Vec<ProcessListing> {
+    String::from_utf8_lossy(output)
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            Some(ProcessListing {
+                pid: fields.next()?.parse().ok()?,
+                process_group: fields.next()?.parse().ok()?,
+                zombie: fields.next()?.starts_with('Z'),
+            })
+        })
+        .collect()
 }
 
 #[cfg(not(unix))]
@@ -118,7 +355,7 @@ pub(super) fn process_group_is_alive(process_group_id: i32) -> bool {
         }
     };
 
-    String::from_utf8_lossy(&output.stdout)
+    let has_live_member = String::from_utf8_lossy(&output.stdout)
         .lines()
         .filter_map(|line| {
             let mut fields = line.split_whitespace();
@@ -132,13 +369,6 @@ pub(super) fn process_group_is_alive(process_group_id: i32) -> bool {
                 return false;
             };
             group == process_group_id && state.chars().next().is_none_or(|state| state != 'Z')
-        })
-        || {
-            let result = unsafe { libc::kill(-process_group_id, 0) };
-            result == 0
-                || matches!(
-                    std::io::Error::last_os_error().raw_os_error(),
-                    Some(libc::EPERM)
-                )
-        }
+        });
+    has_live_member
 }

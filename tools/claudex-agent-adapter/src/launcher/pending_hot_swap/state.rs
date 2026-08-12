@@ -9,6 +9,29 @@ use anyhow::{Context, Result};
 use super::super::{ServiceConfig, launcher_logs};
 use super::PendingHotSwap;
 
+#[cfg(test)]
+std::thread_local! {
+    static FAIL_NEXT_STATE_WRITE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+pub(in crate::launcher) struct FailStateWrite;
+
+#[cfg(test)]
+impl FailStateWrite {
+    pub(in crate::launcher) fn arm() -> Self {
+        FAIL_NEXT_STATE_WRITE.with(|fail| fail.set(true));
+        Self
+    }
+}
+
+#[cfg(test)]
+impl Drop for FailStateWrite {
+    fn drop(&mut self) {
+        FAIL_NEXT_STATE_WRITE.with(|fail| fail.set(false));
+    }
+}
+
 pub(super) fn cache_dir(config: &ServiceConfig) -> Result<&Path> {
     config
         .log_path
@@ -37,6 +60,10 @@ pub(super) fn read_state(path: &Path) -> Result<Option<PendingHotSwap>> {
 }
 
 pub(super) fn write_state(path: &Path, state: &PendingHotSwap) -> Result<()> {
+    #[cfg(test)]
+    if FAIL_NEXT_STATE_WRITE.with(|fail| fail.replace(false)) {
+        anyhow::bail!("injected pending hot-swap state write failure");
+    }
     let temporary = path.with_extension(format!("{}.tmp", uuid::Uuid::new_v4().simple()));
     let mut output = OpenOptions::new()
         .create_new(true)

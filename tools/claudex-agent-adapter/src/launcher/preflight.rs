@@ -1,33 +1,33 @@
-use std::{
-    future::Future,
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener},
-    path::Path,
-    pin::Pin,
-};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener};
+#[cfg(test)]
+use std::{future::Future, path::Path, pin::Pin};
 
 use anyhow::{Context, Result};
 
-use super::{ServiceConfig, daemon_process, daemon_start::start_ephemeral_adapter, handover};
+use super::{
+    ServiceConfig,
+    daemon_start::{StartedDaemon, start_ephemeral_adapter},
+    handover,
+};
 
 pub(super) async fn verify(client: &reqwest::Client, config: &ServiceConfig) -> Result<()> {
-    verify_with_hooks(
-        client,
-        config,
-        start_ephemeral_adapter,
-        |client, config| Box::pin(super::wait_until_ready(client, config)),
-        |client, config, pid| {
-            Box::pin(async move {
-                handover::release_stale_listener(client, config, Some(pid))
-                    .await
-                    .context("stop isolated adapter preflight")
-            })
-        },
-        daemon_process::matches,
-        daemon_process::terminate,
-    )
-    .await
+    super::program_identity::validate(&config.options.routes)?;
+    let listen = isolated_listen(config.options.listen)?;
+    let preflight = config.with_listen(listen);
+    let started = StartedDaemon::new(
+        start_ephemeral_adapter(&preflight).context("start isolated adapter preflight")?,
+    );
+    super::wait_until_ready(client, &preflight)
+        .await
+        .context("isolated adapter preflight failed")?;
+    handover::release_stale_listener(client, &preflight, Some(started.pid()))
+        .await
+        .context("stop isolated adapter preflight")?;
+    started.disarm();
+    Ok(())
 }
 
+#[cfg(test)]
 pub(super) async fn verify_with_hooks<Start, Wait, Release, Matches, Terminate>(
     client: &reqwest::Client,
     config: &ServiceConfig,
@@ -55,15 +55,19 @@ where
     let listen = isolated_listen(config.options.listen)?;
     let preflight = config.with_listen(listen);
     let pid = start(&preflight).context("start isolated adapter preflight")?;
+    let started = StartedDaemon::with_terminate(pid, terminate);
     if let Err(error) = wait(client, &preflight).await {
-        if matches(pid, &preflight.executable) {
-            terminate(pid);
+        if !matches(pid, &preflight.executable) {
+            started.disarm();
         }
         return Err(error.context("isolated adapter preflight failed"));
     }
-    finish_preflight_shutdown(pid, release(client, &preflight, pid).await, terminate)
+    release(client, &preflight, pid).await?;
+    started.disarm();
+    Ok(())
 }
 
+#[cfg(test)]
 pub(super) fn finish_preflight_shutdown(
     pid: u32,
     result: Result<()>,

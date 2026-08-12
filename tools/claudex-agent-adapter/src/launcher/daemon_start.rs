@@ -18,6 +18,48 @@ pub(super) struct RecoveryProcess {
     pub(super) service_config_fingerprint: String,
 }
 
+/// Owns a detached daemon until its PID has been durably handed to another
+/// lifecycle owner. Keeping this guard armed across `await` points makes early
+/// returns and task cancellation clean up a successful spawn automatically.
+#[must_use = "a newly spawned daemon must stay guarded until ownership is published"]
+pub(super) struct StartedDaemon<T: FnOnce(u32) = fn(u32)> {
+    pid: u32,
+    terminate: Option<T>,
+}
+
+impl StartedDaemon<fn(u32)> {
+    pub(super) fn new(pid: u32) -> StartedDaemon<impl FnOnce(u32)> {
+        StartedDaemon::with_terminate(pid, super::daemon_process::started_daemon_cleanup(pid))
+    }
+}
+
+impl<T: FnOnce(u32)> StartedDaemon<T> {
+    pub(super) fn with_terminate(pid: u32, terminate: T) -> Self {
+        Self {
+            pid,
+            terminate: Some(terminate),
+        }
+    }
+
+    pub(super) fn pid(&self) -> u32 {
+        self.pid
+    }
+
+    /// Transfer ownership of the process to published launcher state.
+    pub(super) fn disarm(mut self) -> u32 {
+        self.terminate.take();
+        self.pid
+    }
+}
+
+impl<T: FnOnce(u32)> Drop for StartedDaemon<T> {
+    fn drop(&mut self) {
+        if let Some(terminate) = self.terminate.take() {
+            terminate(self.pid);
+        }
+    }
+}
+
 pub(super) fn start_adapter(config: &ServiceConfig) -> Result<u32> {
     start_with_retained(config, None, config)
 }
@@ -91,8 +133,9 @@ pub(super) fn start_recovery(config: &ServiceConfig, generation: &str) -> Result
     })
 }
 
+#[cfg(test)]
 pub(super) fn terminate_started_recovery(pid: u32) {
-    super::daemon_process::terminate(pid);
+    super::daemon_process::terminate_started_daemon(pid);
 }
 
 #[path = "daemon_start_spawn.rs"]

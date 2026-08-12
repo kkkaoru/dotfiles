@@ -1,9 +1,7 @@
 use anyhow::{Context, Result};
 
 use super::super::health::wait_until_ready;
-use super::super::{
-    daemon_process, daemon_start, fallback, handover, pending_hot_swap, preflight, recovery,
-};
+use super::super::{daemon_start, fallback, handover, pending_hot_swap, preflight, recovery};
 use super::{
     Mode, ServiceConfig, log_live_listener, notify_live_listener, notify_swap_if_replaced,
     usable_recovery_generation,
@@ -76,8 +74,8 @@ pub(super) async fn start_and_wait_for_adapter(
     recovery_manifest: Option<String>,
     replaced: bool,
 ) -> Result<String> {
-    let started_pid = match daemon_start::start_adapter(config) {
-        Ok(pid) => pid,
+    let started = match daemon_start::start_adapter(config) {
+        Ok(pid) => daemon_start::StartedDaemon::new(pid),
         Err(error) => {
             return recovery::after_update_failure(
                 client,
@@ -89,15 +87,25 @@ pub(super) async fn start_and_wait_for_adapter(
         }
     };
     if let Err(error) = wait_until_ready(client, config).await {
-        if daemon_process::matches(started_pid, &config.executable) {
-            daemon_process::terminate(started_pid);
-        }
+        drop(started);
         return recovery::after_update_failure(client, config, recovery_manifest.as_deref(), error)
             .await;
     }
+    if let Err(error) =
+        super::super::live::publish_listen(config, config.options.listen, Some(started.pid()))
+    {
+        drop(started);
+        return recovery::after_update_failure(
+            client,
+            config,
+            recovery_manifest.as_deref(),
+            error.context("publish new adapter generation"),
+        )
+        .await;
+    }
+    started.disarm();
     pending_hot_swap::clear_if_current(config);
     notify_swap_if_replaced(replaced, config);
-    let _ = super::super::live::publish_listen(config, config.options.listen, Some(started_pid));
     Ok(config.base_url())
 }
 

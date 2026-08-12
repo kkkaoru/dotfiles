@@ -53,7 +53,9 @@ pub(super) async fn ensure_current_generation(
     for _ in 0..5 {
         let listen = reserve_loopback_listen(config.options.listen)?;
         let fallback = config.with_listen(listen);
-        let pid = daemon_start::start_adapter(&fallback).context("start current-build fallback")?;
+        let started = daemon_start::StartedDaemon::new(
+            daemon_start::start_adapter(&fallback).context("start current-build fallback")?,
+        );
         match wait_until_ready(client, &fallback).await {
             Ok(()) => {
                 write_state(
@@ -62,13 +64,14 @@ pub(super) async fn ensure_current_generation(
                         listen,
                         build_id: env!("CLAUDEX_BUILD_ID").to_owned(),
                         service_config_fingerprint: fallback.service_config_fingerprint.clone(),
-                        pid,
+                        pid: started.pid(),
                     },
                 )?;
+                started.disarm();
                 return Ok(fallback.base_url());
             }
             Err(error) => {
-                terminate_failed_fallback(pid, &fallback.executable);
+                drop(started);
                 last_error = Some(error);
             }
         }
@@ -83,7 +86,6 @@ mod listen;
 #[cfg(test)]
 use listen::reserve_listener;
 pub(super) use listen::reserve_loopback_listen;
-use listen::terminate_failed_fallback;
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]

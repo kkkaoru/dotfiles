@@ -146,6 +146,7 @@ pub(super) fn advertised_listen(config: &ServiceConfig, health: &Health) -> Sock
         .unwrap_or(config.options.listen)
 }
 
+#[cfg(test)]
 pub(super) fn terminate_started(pid: u32, config: &ServiceConfig) {
     if daemon_process::matches(pid, &config.executable) {
         daemon_process::terminate(pid);

@@ -290,26 +290,15 @@ fn advertised_listen_prefers_health_and_falls_back_to_config() {
 
 #[test]
 fn release_previous_ignores_non_adapter_pids() {
-    let config = ServiceConfig {
-        options: AdapterOptions {
-            routes: vec![BackendRoute::new("test-model", BackendKind::CodexAppServer)],
-            listen: "127.0.0.1:8318".parse().unwrap(),
-            model: "test-model".to_owned(),
-            subscription_max_processes: 20,
-            subscription_timeout_minutes: 120,
-            subagent_hard_timeout_seconds: None,
-            model_catalog: crate::provider_config::ModelCatalog::default(),
-        },
-        token: LOCAL_TOKEN.to_owned(),
-        codex_config_fingerprint: "codex".to_owned(),
-        service_config_fingerprint: "service".to_owned(),
-        executable: PathBuf::from("/tmp/claudex-agent-adapter"),
-        log_path: PathBuf::from("/tmp/claudex/adapter.log"),
-        lock_path: PathBuf::from("/tmp/claudex/adapter.lock"),
-    };
+    let root = tempfile::tempdir().expect("publish fixture");
+    let config = config_at(
+        "127.0.0.1:8318".parse().unwrap(),
+        root.path(),
+        PathBuf::from("/tmp/claudex-agent-adapter"),
+    );
     release_previous(&config, std::process::id());
-    let _ = publish_promoted(&config, 99, 12, config.options.listen, 0);
-    let _ = publish_promoted(&config, 99, 12, config.options.listen, 2);
+    publish_promoted(&config, 99, 12, config.options.listen, 0).expect("publish empty promote");
+    publish_promoted(&config, 99, 12, config.options.listen, 2).expect("publish retained promote");
 }
 
 #[test]
@@ -322,7 +311,7 @@ fn publish_promoted_clears_empty_retained_snapshot() {
         path.exists(),
         "precondition: empty retained snapshot exists"
     );
-    let _ = publish_promoted(&config, 99, 12, listen, 0);
+    publish_promoted(&config, 99, 12, listen, 0).expect("publish promoted state");
     assert!(
         !path.exists(),
         "zero-session promote must drop the retained snapshot so sticky cannot probe a released listen"
