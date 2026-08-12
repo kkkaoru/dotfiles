@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use super::{AgentBackend, BackendRoute, StartupState};
+use super::{AgentBackend, BackendRoute, BackendStartup, StartupState};
 
 pub(super) fn start_backend(
     route: BackendRoute,
