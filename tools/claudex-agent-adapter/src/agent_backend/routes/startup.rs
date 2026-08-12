@@ -42,10 +42,11 @@ async fn publish_result_for_generation(
     sender: tokio::sync::watch::Sender<StartupState>,
     result: Result<Arc<AgentBackend>, Arc<str>>,
 ) {
-    if startup
-        .generation
-        .load(std::sync::atomic::Ordering::Acquire)
-        != generation
+    if startup.closed.load(std::sync::atomic::Ordering::Acquire)
+        || startup
+            .generation
+            .load(std::sync::atomic::Ordering::Acquire)
+            != generation
         || sender.is_closed()
     {
         if let Ok(backend) = result {
