@@ -52,3 +52,95 @@ impl Bridge {
         Ok(backend_submitted)
     }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+mod tests {
+    use std::{collections::HashMap, sync::Arc, time::Instant};
+
+    use serde_json::json;
+    use tokio::sync::{Mutex, Semaphore};
+
+    use super::*;
+    use crate::{
+        agent_backend::{AgentBackend, BackendKind, BackendRoute},
+        anthropic::content::ToolResult,
+    };
+
+    #[tokio::test]
+    async fn submit_tool_results_targets_the_owning_claude_session_for_provider_models() {
+        for model in [
+            "glm-5.2:cloud",
+            "gpt-5.4",
+            "grok-4-latest",
+            "auto",
+            "fugu",
+            "cursor-agent",
+        ] {
+            let backend = AgentBackend::spawn_routes(&[BackendRoute::new(
+                model,
+                BackendKind::CodexAppServer,
+            )]);
+            let AgentBackend::SessionScoped(scopes) = backend.as_ref() else {
+                panic!("expected SessionScoped backends");
+            };
+            for id in ["tui-a", "tui-b"] {
+                let leaf = Arc::new(AgentBackend::Grok(
+                    crate::grok_acp::GrokAcp::alive_for_test(),
+                ));
+                scopes.insert_scope_for_test(
+                    id,
+                    AgentBackend::routed(vec![(model.to_owned(), leaf)]),
+                );
+            }
+            let _ = scopes.scope(None);
+            let bridge = Bridge::new_with_backend(Arc::clone(&backend), model.to_owned());
+            let session = session_for(model, "tui-a");
+            session
+                .pending_tools
+                .lock()
+                .await
+                .insert("tool-1".to_owned(), json!(42));
+            let error = bridge
+                .submit_tool_results(
+                    &session,
+                    vec![ToolResult {
+                        tool_use_id: "tool-1".to_owned(),
+                        content_items: vec![json!({"type":"inputText","text":"ok"})],
+                        is_error: false,
+                    }],
+                )
+                .await
+                .expect_err("Grok leaf rejects Claude tool results");
+            let message = error.to_string();
+            assert!(
+                !message.contains("not initialized"),
+                "{model}: Bridge must not send tool results to `_anonymous`: {message}"
+            );
+            assert!(
+                message.contains("Grok ACP"),
+                "{model}: expected the owning Claude-session pool: {message}"
+            );
+        }
+    }
+
+    fn session_for(model: &str, claude_session_id: &str) -> Session {
+        let slots = Arc::new(Semaphore::new(1));
+        Session {
+            thread_id: "0:thread".to_owned(),
+            model: model.to_owned(),
+            disabled_subagent_models: Default::default(),
+            signature: Arc::from("signature"),
+            transcript: Mutex::new(Vec::new()),
+            pending_tools: Mutex::new(HashMap::new()),
+            consumed_tool_ids: Mutex::new(Default::default()),
+            external_tool_names: HashMap::new(),
+            client_user_id: None,
+            claude_session_id: Some(claude_session_id.to_owned()),
+            gate: Arc::new(Mutex::new(())),
+            last_activity: std::sync::Mutex::new(Instant::now()),
+            pending_since: std::sync::Mutex::new(None),
+            _slot: slots.try_acquire_owned().expect("session slot"),
+        }
+    }
+}

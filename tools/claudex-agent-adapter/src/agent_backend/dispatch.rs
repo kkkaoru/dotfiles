@@ -38,7 +38,7 @@ impl AgentBackend {
             }
             Self::Routed(_) => bail!("routed backend does not support request `{method}`"),
             Self::SessionScoped(scopes) => {
-                Box::pin(scopes.scope(None).request(method, params)).await
+                Box::pin(scopes.unguarded_scope().request(method, params)).await
             }
         }
     }
@@ -66,7 +66,7 @@ impl AgentBackend {
             }
             Self::Routed(_) => bail!("routed backend does not support request `{method}`"),
             Self::SessionScoped(scopes) => {
-                Box::pin(scopes.scope(None).request_detached(method, params)).await
+                Box::pin(scopes.unguarded_scope().request_detached(method, params)).await
             }
         }
     }
@@ -84,7 +84,9 @@ impl AgentBackend {
                     .context("Codex backend is not initialized for this tool result")?;
                 Box::pin(backend.respond(id, result)).await
             }
-            Self::SessionScoped(scopes) => Box::pin(scopes.scope(None).respond(id, result)).await,
+            Self::SessionScoped(scopes) => {
+                Box::pin(scopes.unguarded_scope().respond(id, result)).await
+            }
         }
     }
 
@@ -108,7 +110,7 @@ impl AgentBackend {
             Self::SessionScoped(scopes) => {
                 let backend = scopes
                     .unique_started_pool_for_model(model)
-                    .unwrap_or_else(|| scopes.scope(None));
+                    .unwrap_or_else(|| scopes.unguarded_scope());
                 Box::pin(backend.respond_for_model(model, id, result)).await
             }
         }

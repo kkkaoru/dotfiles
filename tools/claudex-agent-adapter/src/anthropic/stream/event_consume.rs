@@ -147,7 +147,9 @@ pub(super) fn stream_provider_failure(
     builder: &SegmentBuilder,
 ) -> bool {
     is_provider_stream_closed(error)
-        && !bridge.app.model_is_alive(&session.model)
+        && !bridge
+            .app_for_session(session)
+            .model_is_alive(&session.model)
         && !builder.has_committed_output()
 }
 

@@ -6,6 +6,7 @@ use serde_json::Value;
 use super::super::{
     Bridge, MessagesRequest, SelectedSession,
     content::{ToolResult, transcript_owns_tool_results},
+    request_identity,
 };
 use super::{
     continuation,
@@ -123,7 +124,11 @@ impl Bridge {
         messages: &[Value],
     ) -> Option<SelectedSession> {
         let sessions = self.sessions.lock().await.clone();
-        preempt::select_matching_session(sessions, request, signature, messages, &self.app).await
+        // Cancel must hit the same Claude-session provider pool that owns the
+        // busy thread — top-level SessionScoped defaults to `_anonymous`.
+        let provider = self.app_for(request_identity::claude_session_id(request).as_deref());
+        preempt::select_matching_session(sessions, request, signature, messages, provider.as_ref())
+            .await
     }
 }
 

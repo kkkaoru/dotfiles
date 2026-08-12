@@ -4,13 +4,9 @@ use super::{Bridge, Session, ToolResult, first_session_owning_results};
 
 impl Bridge {
     pub(super) async fn remove_failed_model_sessions(&self, model: &str) {
-        if self.app.model_is_alive(model) {
-            return;
-        }
-        self.sessions
-            .lock()
-            .await
-            .retain(|session| session.model != model);
+        self.sessions.lock().await.retain(|session| {
+            session.model != model || self.app_for_session(session).model_is_alive(model)
+        });
     }
 
     pub(in crate::anthropic) async fn remove_session(&self, removed: &Arc<Session>) {

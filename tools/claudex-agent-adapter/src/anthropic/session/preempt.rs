@@ -121,4 +121,5 @@ fn report_cancellation(cancellation: anyhow::Result<TurnCancellation>, thread_id
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     include!("preempt_tests.rs");
+    include!("preempt_scope_tests.rs");
 }

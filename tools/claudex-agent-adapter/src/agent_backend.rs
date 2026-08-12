@@ -138,7 +138,7 @@ impl AgentBackend {
                 let (index, raw_id) = routed_thread(thread_id);
                 subscribe_routed_thread(routes.route(index).as_ref(), thread_id, raw_id)
             }
-            Self::SessionScoped(scopes) => scopes.scope(None).subscribe_thread(thread_id),
+            Self::SessionScoped(scopes) => scopes.unguarded_scope().subscribe_thread(thread_id),
         }
     }
 
@@ -154,7 +154,7 @@ impl AgentBackend {
                 routes.route(index).get().await.map(|_| ())
             }
             Self::SessionScoped(scopes) => {
-                Box::pin(scopes.scope(None).ensure_thread_ready(thread_id)).await
+                Box::pin(scopes.unguarded_scope().ensure_thread_ready(thread_id)).await
             }
             Self::Codex(_) | Self::Copilot(_) | Self::ConfiguredAcp(_) | Self::Grok(_) => Ok(()),
         }
