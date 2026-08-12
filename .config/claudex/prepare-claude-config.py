@@ -20,6 +20,7 @@ from typing import Any
 SHARED_SETTINGS_NAMES = frozenset({"settings.json", "settings.local.json"})
 DISCOVERY_PREFIX = "claude-claudex-"
 PLAIN_CLAUDE_FALLBACK_MODEL = "sonnet[1m]"
+DEFAULT_STOP_HOOK_BLOCK_CAP = "64"
 TOOL_POLICY_HOOK = (
     'test "${CLAUDEX_ACTIVE:-}" != 1 || '
     'exec "$HOME/.cargo/bin/claudex-tool-policy"'
@@ -135,6 +136,17 @@ def apply_context_token_env(settings: dict[str, Any], context_tokens: str) -> No
         env.pop("CLAUDE_CODE_MAX_CONTEXT_TOKENS", None)
 
 
+def apply_claudex_hook_env(settings: dict[str, Any]) -> None:
+    env = settings.get("env")
+    if not isinstance(env, dict):
+        env = {}
+        settings["env"] = env
+    # A caller can still choose a different finite guard in its environment or
+    # shared Claude settings.  The isolated claudex default raises only the
+    # built-in repeated Stop-hook safety threshold used by long `/goal` runs.
+    env.setdefault("CLAUDE_CODE_STOP_HOOK_BLOCK_CAP", DEFAULT_STOP_HOOK_BLOCK_CAP)
+
+
 def write_isolated_settings(
     user_settings_path: Path,
     isolated_settings_path: Path,
@@ -146,6 +158,7 @@ def write_isolated_settings(
     settings["model"] = model
     settings["effortLevel"] = effort
     apply_context_token_env(settings, context_tokens)
+    apply_claudex_hook_env(settings)
     merge_claudex_tool_policy_hooks(settings)
     isolated_settings_path.write_text(
         json.dumps(settings, indent=2, ensure_ascii=False) + "\n",

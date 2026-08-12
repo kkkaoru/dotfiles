@@ -17,6 +17,11 @@ set -q CLAUDEX_SUBAGENT_MAX_PARALLEL; and set -gx CLAUDE_CODE_MAX_CONCURRENT_SUB
 set -q CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS; or set -gx CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS 40
 set -q CLAUDEX_SUBAGENT_MAX_PARALLEL; or set -gx CLAUDEX_SUBAGENT_MAX_PARALLEL "$CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS"
 set -q CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION; or set -gx CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION 1024
+# Long-running `/goal` sessions may legitimately require more than Claude
+# Code's default consecutive Stop-hook continuations.  Keep a finite cap so a
+# genuinely recursive hook still terminates, while avoiding the observed
+# nine-turn false stop during multi-hour claudex work.
+set -q CLAUDE_CODE_STOP_HOOK_BLOCK_CAP; or set -gx CLAUDE_CODE_STOP_HOOK_BLOCK_CAP 64
 # Multi-scope phase guidance (aligned with adapter parallel_scheduler defaults).
 # Fan-out remains content-driven: single indivisible scope still launches 1 worker.
 set -q CLAUDEX_SUBAGENT_MIN_PARALLEL; or set -gx CLAUDEX_SUBAGENT_MIN_PARALLEL 3

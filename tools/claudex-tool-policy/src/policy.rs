@@ -67,7 +67,10 @@ fn is_subagent_session(payload: &Map<String, Value>) -> bool {
         || transcript_marks_subagent(payload)
 }
 
-fn maybe_acquire_file_locks(payload: &Map<String, Value>, tool_input: &Map<String, Value>) -> Option<Value> {
+fn maybe_acquire_file_locks(
+    payload: &Map<String, Value>,
+    tool_input: &Map<String, Value>,
+) -> Option<Value> {
     let paths = tool_file_paths("", tool_input);
     if paths.is_empty() {
         return None;
@@ -142,6 +145,16 @@ fn handle_post_tool_use(payload: &Map<String, Value>) -> Value {
 }
 
 fn handle_subagent_stop(payload: &Map<String, Value>) -> Value {
+    // Claude Code sets this while replaying a Stop/SubagentStop continuation.
+    // Never perform stateful hook work on the recursive invocation; returning
+    // an unconditional success is the documented recursion fence.
+    if payload
+        .get("stop_hook_active")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+    {
+        return allow(None, None);
+    }
     if let Some(agent_id) = nonempty_str(payload.get("agent_id")) {
         release_agent_locks(agent_id);
     }

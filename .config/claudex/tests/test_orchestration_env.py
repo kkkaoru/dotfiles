@@ -91,11 +91,18 @@ class ClaudexOrchestrationEnvironmentTests(unittest.TestCase):
         output = dict(
             line.split("=", 1)
             for line in result.stdout.splitlines()
-            if line.startswith(("CLAUDE_CODE_MAX_", "CLAUDEX_SUBAGENT_"))
+            if line.startswith(
+                (
+                    "CLAUDE_CODE_MAX_",
+                    "CLAUDE_CODE_STOP_HOOK_",
+                    "CLAUDEX_SUBAGENT_",
+                )
+            )
         )
         self.assertEqual(output["CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS"], "40")
         self.assertEqual(output["CLAUDEX_SUBAGENT_MAX_PARALLEL"], "40")
         self.assertEqual(output["CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION"], "1024")
+        self.assertEqual(output["CLAUDE_CODE_STOP_HOOK_BLOCK_CAP"], "64")
         self.assertEqual(output["CLAUDEX_SUBAGENT_MIN_PARALLEL"], "3")
         self.assertEqual(output["CLAUDEX_SUBAGENT_ACTIVE_FLOOR"], "2")
         self.assertEqual(output["CLAUDEX_SUBAGENT_MIN_MODEL_FAMILIES"], "2")
@@ -107,6 +114,7 @@ class ClaudexOrchestrationEnvironmentTests(unittest.TestCase):
 
         self.assertEqual(output["CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS"], "40")
         self.assertEqual(output["CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION"], "1024")
+        self.assertEqual(output["CLAUDE_CODE_STOP_HOOK_BLOCK_CAP"], "64")
         self.assertEqual(output["CLAUDEX_SUBAGENT_MAX_PARALLEL"], "40")
         self.assertEqual(output["CLAUDEX_SUBAGENT_MIN_PARALLEL"], "3")
         self.assertEqual(output["CLAUDEX_SUBAGENT_ACTIVE_FLOOR"], "2")
@@ -195,6 +203,7 @@ class ClaudexOrchestrationEnvironmentTests(unittest.TestCase):
             "CLAUDEX_SUBAGENT_CLEANUP_ON_EXIT": "0",
             "CLAUDEX_SUBAGENT_FIRST": "0",
             "CLAUDEX_SUBAGENT_STATUS_POLL_SECONDS": "7",
+            "CLAUDE_CODE_STOP_HOOK_BLOCK_CAP": "23",
             "CLAUDEX_SUBSCRIPTION_MAX_PROCESSES": "8",
             "CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES": "60",
         }
@@ -262,6 +271,8 @@ class ClaudexOrchestrationEnvironmentTests(unittest.TestCase):
                 "\"${CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS:-}\"\n"
                 "printf 'CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION=%s\\n' "
                 "\"${CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION:-}\"\n"
+                "printf 'CLAUDE_CODE_STOP_HOOK_BLOCK_CAP=%s\\n' "
+                "\"${CLAUDE_CODE_STOP_HOOK_BLOCK_CAP:-}\"\n"
                 "printf 'CLAUDEX_SUBAGENT_MAX_PARALLEL=%s\\n' "
                 "\"${CLAUDEX_SUBAGENT_MAX_PARALLEL:-}\"\n"
                 "printf 'CLAUDEX_SUBAGENT_MIN_PARALLEL=%s\\n' "

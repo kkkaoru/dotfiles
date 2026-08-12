@@ -29,6 +29,8 @@ function claudex --description 'Run Claude Code with config-driven agent backend
     set -q CLAUDEX_SUBAGENT_MIN_MODEL_FAMILIES; and set min_model_families "$CLAUDEX_SUBAGENT_MIN_MODEL_FAMILIES"
     set -l max_subagents_per_session 1024
     set -q CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION; and set max_subagents_per_session "$CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION"
+    set -l stop_hook_block_cap 64
+    set -q CLAUDE_CODE_STOP_HOOK_BLOCK_CAP; and set stop_hook_block_cap "$CLAUDE_CODE_STOP_HOOK_BLOCK_CAP"
     set -l reassess_seconds 600
     set -q CLAUDEX_SUBAGENT_REASSESS_INTERVAL_SECONDS; and set reassess_seconds "$CLAUDEX_SUBAGENT_REASSESS_INTERVAL_SECONDS"
     set -l reevaluate_on_completion 1
@@ -46,6 +48,7 @@ function claudex --description 'Run Claude Code with config-driven agent backend
     set -lx CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY 1
     set -lx CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS "$max_parallel"
     set -lx CLAUDE_CODE_MAX_SUBAGENTS_PER_SESSION "$max_subagents_per_session"
+    set -lx CLAUDE_CODE_STOP_HOOK_BLOCK_CAP "$stop_hook_block_cap"
     set -lx CLAUDEX_SUBAGENT_MAX_PARALLEL "$max_parallel"
     set -lx CLAUDEX_SUBAGENT_MIN_PARALLEL "$min_parallel"
     set -lx CLAUDEX_SUBAGENT_ACTIVE_FLOOR "$active_floor"

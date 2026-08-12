@@ -272,6 +272,59 @@ fn subagent_stop_releases_locks() {
 }
 
 #[test]
+fn recursive_subagent_stop_returns_success_without_mutating_locks() {
+    let tmp = TempDir::new().unwrap();
+    let target = tmp.path().join("owned.rs");
+    fs::write(&target, "ok\n").unwrap();
+    let _ = run(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": target, "content": "ok"},
+            "session_id": "sess",
+            "agent_id": "agent-a"
+        }),
+        tmp.path(),
+        &[],
+    );
+
+    let recursive = run(
+        json!({
+            "hook_event_name": "SubagentStop",
+            "stop_hook_active": true,
+            "agent_id": "agent-a",
+            "session_id": "sess"
+        }),
+        tmp.path(),
+        &[],
+    );
+    assert_ne!(
+        recursive
+            .pointer("/hookSpecificOutput/permissionDecision")
+            .and_then(Value::as_str),
+        Some("deny")
+    );
+
+    let blocked = run(
+        json!({
+            "hook_event_name": "PreToolUse",
+            "tool_name": "Write",
+            "tool_input": {"file_path": target, "content": "next"},
+            "session_id": "sess",
+            "agent_id": "agent-b"
+        }),
+        tmp.path(),
+        &[],
+    );
+    assert_eq!(
+        blocked
+            .pointer("/hookSpecificOutput/permissionDecision")
+            .and_then(Value::as_str),
+        Some("deny")
+    );
+}
+
+#[test]
 fn allow_main_tools_override() {
     let tmp = TempDir::new().unwrap();
     write_delegation(tmp.path(), true);

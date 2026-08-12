@@ -62,6 +62,9 @@ class PrepareClaudeConfigTests(unittest.TestCase):
             )
             self.assertEqual(isolated_settings["model"], "grok-4.5")
             self.assertEqual(isolated_settings["effortLevel"], "high")
+            self.assertEqual(
+                isolated_settings["env"]["CLAUDE_CODE_STOP_HOOK_BLOCK_CAP"], "64"
+            )
             self.assertEqual(isolated_settings["advisorModel"], "opus")
             isolated_hooks = isolated_settings["hooks"]
             self.assertIn("PreToolUse", isolated_hooks)
@@ -112,6 +115,9 @@ class PrepareClaudeConfigTests(unittest.TestCase):
                 "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
                 isolated_settings.get("env", {}),
             )
+            self.assertEqual(
+                isolated_settings["env"]["CLAUDE_CODE_STOP_HOOK_BLOCK_CAP"], "64"
+            )
 
     def test_writes_and_clears_unknown_model_context_window(self) -> None:
         with tempfile.TemporaryDirectory(prefix="claudex-prepare-window-") as temporary:
@@ -152,6 +158,9 @@ class PrepareClaudeConfigTests(unittest.TestCase):
                 isolated_settings["env"]["CLAUDE_CODE_MAX_CONTEXT_TOKENS"], "110000"
             )
             self.assertEqual(isolated_settings["env"]["KEEP"], "1")
+            self.assertEqual(
+                isolated_settings["env"]["CLAUDE_CODE_STOP_HOOK_BLOCK_CAP"], "64"
+            )
 
             cleared = subprocess.run(
                 [
@@ -174,6 +183,9 @@ class PrepareClaudeConfigTests(unittest.TestCase):
                 "CLAUDE_CODE_MAX_CONTEXT_TOKENS", isolated_settings.get("env", {})
             )
             self.assertEqual(isolated_settings["env"]["KEEP"], "1")
+            self.assertEqual(
+                isolated_settings["env"]["CLAUDE_CODE_STOP_HOOK_BLOCK_CAP"], "64"
+            )
 
 
 if __name__ == "__main__":
