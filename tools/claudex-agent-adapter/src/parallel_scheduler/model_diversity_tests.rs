@@ -67,21 +67,20 @@ fn treats_gpt_variants_as_one_family_and_requires_grok_for_diversity() {
 }
 
 #[test]
-fn keeps_a_two_worker_target_and_recovers_the_two_worker_floor() {
+fn does_not_inflate_a_lone_reconstructed_worker_to_the_active_floor() {
     let scheduler = ParallelScheduler::new(config());
     let decision =
         scheduler.decision_for_request(&request(vec![agent("only-worker", "gpt-5.6-luna")]));
 
-    assert_eq!(decision.target_workers, 2);
+    assert_eq!(decision.target_workers, 1);
     assert_eq!(decision.active_workers, 1);
-    assert_eq!(decision.needs_more_workers, 1);
-    assert!(decision.active_floor_breached);
-    assert!(
-        decision
-            .actions
-            .iter()
-            .any(|action| action.contains("Only one active lane remains"))
-    );
+    assert_eq!(decision.needs_more_workers, 0);
+    assert!(!decision.active_floor_breached);
+    assert!(!decision.needs_model_diversity);
+    assert!(decision
+        .actions
+        .iter()
+        .all(|action| !action.contains("Only one active lane remains")));
 }
 
 #[test]
@@ -114,11 +113,9 @@ fn keeps_the_ten_minute_default_and_reassesses_after_a_completion() {
 
     let completed = scheduler.decision_for_request(&after_completion);
     assert_eq!(completed.completed_recently, 1);
-    assert!(
-        completed
-            .guidance(&scheduler.config())
-            .contains("Re-evaluate")
-    );
+    assert!(completed
+        .guidance(&scheduler.config())
+        .contains("Re-evaluate"));
 }
 
 #[test]
@@ -129,11 +126,9 @@ fn reuses_an_active_compatible_worker_instead_of_churning_sessions() {
         agent("grok", "grok-4.5"),
     ]));
 
-    assert!(
-        decision.guidance(&scheduler.config()).contains(
-            "Prefer reusing compatible completed workers via Agent/Task resume=<agentId>"
-        )
-    );
+    assert!(decision
+        .guidance(&scheduler.config())
+        .contains("Prefer reusing compatible completed workers via Agent/Task resume=<agentId>"));
 }
 
 #[test]
@@ -151,4 +146,40 @@ fn custom_advisor_does_not_consume_ordinary_worker_floor_or_diversity() {
     assert!(!decision.active_floor_breached);
     assert!(!decision.needs_model_diversity);
     assert!(decision.actions.is_empty());
+}
+
+#[test]
+fn diversity_does_not_demand_more_families_than_the_target() {
+    let scheduler = ParallelScheduler::new(SchedulerConfig {
+        min_model_families: 3,
+        ..config()
+    });
+    let decision = scheduler.decision_for_request(&MessagesRequest {
+        messages: vec![
+            serde_json::json!({
+                "role": "user",
+                "content": "Tasks:\n- implement parser\n- verify renderer",
+            }),
+            serde_json::json!({
+                "role": "assistant",
+                "content": [
+                    agent("parser", "gpt-5.6-luna"),
+                    agent("renderer", "gpt-5.6-luna"),
+                ],
+            }),
+        ],
+        ..request(Vec::new())
+    });
+
+    assert_eq!(decision.target_workers, 2);
+    assert_eq!(decision.active_model_families, 1);
+    assert!(decision.needs_model_diversity);
+    assert!(decision
+        .actions
+        .iter()
+        .any(|action| action.contains("at least 2 families")));
+    assert!(decision
+        .actions
+        .iter()
+        .all(|action| !action.contains("at least 3 families")));
 }

@@ -3,24 +3,33 @@ use std::time::{Duration, Instant};
 
 use crate::anthropic::MessagesRequest;
 
-use super::super::{Inner, SchedulerConfig, SchedulerDecision, core, scope_count};
+use super::super::{core, scope_count, Inner, SchedulerConfig, SchedulerDecision};
 use scope_count::{has_parallel_scope, independent_scope_count};
+
+fn diversity_family_cap(decision: &SchedulerDecision, config: &SchedulerConfig) -> usize {
+    let worker_cap = if decision.target_workers > 0 {
+        decision.target_workers
+    } else {
+        decision.active_workers
+    };
+    config.min_model_families.min(worker_cap)
+}
 
 pub(crate) fn apply_diversity_action(
     decision: &mut SchedulerDecision,
     request: &MessagesRequest,
     config: &SchedulerConfig,
 ) {
-    if !has_parallel_scope(request)
-        || decision.active_workers == 0
-        || decision.active_model_families >= config.min_model_families
-    {
+    if !has_parallel_scope(request) || decision.active_workers == 0 {
+        return;
+    }
+    let required_families = diversity_family_cap(decision, config);
+    if required_families < 2 || decision.active_model_families >= required_families {
         return;
     }
     decision.needs_model_diversity = true;
     decision.actions.push(format!(
-        "Diversify providers: active models should cover at least {} families.",
-        config.min_model_families
+        "Diversify providers: active models should cover at least {required_families} families."
     ));
 }
 

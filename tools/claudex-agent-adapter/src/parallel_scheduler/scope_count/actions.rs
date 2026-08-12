@@ -1,7 +1,7 @@
 use super::{
-    MAX_STATED_SCOPES,
-    detect::{contains_parallel_intent, contains_single_scope_request},
+    detect::{contains_parallel_intent, contains_single_scope_request, explicit_scope_cardinality},
     filters::{is_negated_or_diagnostic, remove_negative_or_diagnostic_lines},
+    MAX_STATED_SCOPES,
 };
 
 pub(super) fn declines_delegation_text(content: &str) -> bool {
@@ -33,6 +33,9 @@ pub(super) fn count_for_content(content: &str) -> usize {
     let semantic = remove_negative_or_diagnostic_lines(content);
     if contains_single_scope_request(&semantic) {
         return 1;
+    }
+    if let Some(count) = explicit_scope_cardinality(&semantic) {
+        return count;
     }
     if let Some(action_count) = clear_action_list_count(&semantic) {
         return action_count;

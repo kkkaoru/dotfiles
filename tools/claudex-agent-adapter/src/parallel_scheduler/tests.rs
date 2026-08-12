@@ -60,8 +60,9 @@ fn evaluates_subagent_floor_and_reuse_signals() {
     })]);
     let first = scheduler.decision_for_request(&state);
     assert_eq!(first.active_workers, 1);
-    assert!(first.active_floor_breached);
-    assert_eq!(first.needs_more_workers, 1);
+    assert_eq!(first.target_workers, 1);
+    assert!(!first.active_floor_breached);
+    assert_eq!(first.needs_more_workers, 0);
     assert!(first.guidance(&scheduler.config()).contains("Re-evaluate"));
 }
 
@@ -77,8 +78,8 @@ fn parses_batch_launches() {
                 "name":"cc_Agent_batch_0",
                 "input":{"tasks":[
                     {"prompt":"a","claudex_model":"gpt-5.6-sol"},
-                    {"prompt":"b","claudex_model":"grok-4.6"},
-                    {"prompt":"c","claudex_model":"grok-4.6"},
+                    {"prompt":"b","claudex_model":"grok-4.5"},
+                    {"prompt":"c","claudex_model":"grok-4.5"},
                 ]}
             }
         ]
@@ -101,7 +102,7 @@ fn deduplicates_same_prompt_across_fresh_tool_use_ids() {
             "role":"assistant",
             "content":[
                 {"type":"tool_use","id":"retry-a","name":"cc_Agent_0","input":{"prompt":"Handle this one bounded task.","claudex_model":"gpt-5.6-sol"}},
-                {"type":"tool_use","id":"retry-b","name":"cc_Agent_0","input":{"prompt":" handle   this one bounded task. ","claudex_model":"grok-4.6"}},
+                {"type":"tool_use","id":"retry-b","name":"cc_Agent_0","input":{"prompt":" handle   this one bounded task. ","claudex_model":"grok-4.5"}},
             ]
         }),
     ]);
@@ -138,12 +139,10 @@ fn existing_workers_above_scope_count_do_not_inflate_the_target() {
     assert_eq!(decision.active_workers, 5);
     assert_eq!(decision.target_workers, 2);
     assert_eq!(decision.needs_more_workers, 0);
-    assert!(
-        decision
-            .actions
-            .iter()
-            .all(|action| !action.contains("Launch at least"))
-    );
+    assert!(decision
+        .actions
+        .iter()
+        .all(|action| !action.contains("Launch at least")));
 }
 
 #[test]
@@ -153,7 +152,7 @@ fn async_launch_acknowledgement_keeps_native_workers_active_until_notification()
         "role":"assistant",
         "content":[
             {"type":"tool_use","id":"scope-a","name":"cc_Agent_0","input":{"prompt":"scope a","claudex_model":"gpt-5.6-sol"}},
-            {"type":"tool_use","id":"scope-b","name":"cc_Agent_0","input":{"prompt":"scope b","claudex_model":"grok-4.6"}}
+            {"type":"tool_use","id":"scope-b","name":"cc_Agent_0","input":{"prompt":"scope b","claudex_model":"grok-4.5"}}
         ]
     });
     let acknowledgement = serde_json::json!({
@@ -200,7 +199,7 @@ fn partial_and_duplicate_async_acknowledgements_complete_only_the_reported_scope
         "role":"assistant",
         "content":[
             {"type":"tool_use","id":"scope-a","name":"cc_Agent_0","input":{"prompt":"scope a","claudex_model":"gpt-5.6-sol"}},
-            {"type":"tool_use","id":"scope-b","name":"cc_Agent_0","input":{"prompt":"scope b","claudex_model":"grok-4.6"}}
+            {"type":"tool_use","id":"scope-b","name":"cc_Agent_0","input":{"prompt":"scope b","claudex_model":"grok-4.5"}}
         ]
     });
     let result = serde_json::json!({
@@ -233,7 +232,7 @@ fn legacy_batch_activity_does_not_inflate_a_single_scope_target() {
                 "name":"cc_Agent_batch_0",
                 "input":{"tasks":[
                     {"prompt":"same scope","claudex_model":"gpt-5.6-sol"},
-                    {"prompt":"same scope","claudex_model":"grok-4.6"},
+                    {"prompt":"same scope","claudex_model":"grok-4.5"},
                     {"prompt":"same scope","claudex_model":"gpt-5.6-sol"}
                 ]}
             }]
@@ -303,12 +302,10 @@ fn unknown_task_result_does_not_restart_other_running_scopes() {
     assert_eq!(decision.active_workers, 2);
     assert_eq!(decision.completed_recently, 0);
     assert_eq!(decision.needs_more_workers, 0);
-    assert!(
-        !decision
-            .actions
-            .iter()
-            .any(|action| action.contains("Launch at least"))
-    );
+    assert!(!decision
+        .actions
+        .iter()
+        .any(|action| action.contains("Launch at least")));
 }
 
 #[test]
@@ -318,7 +315,7 @@ fn healthy_active_floor_is_not_marked_as_breached() {
         "role":"assistant",
         "content":[
             tool_use("t1","cc_Agent_0","gpt-5.6-sol"),
-            tool_use("t2","cc_Agent_0","grok-4.6"),
+            tool_use("t2","cc_Agent_0","grok-4.5"),
         ]
     })]);
 
@@ -363,7 +360,7 @@ fn ignores_custom_advisor_tasks_for_concurrency_tracking() {
                 "input":{
                     "tasks":[
                         {"prompt":"adv","subagent_type":"custom-advisor","claudex_model":"claude-fable-5"},
-                        {"prompt":"work","subagent_type":"cc-agent","claudex_model":"grok-4.6"},
+                        {"prompt":"work","subagent_type":"cc-agent","claudex_model":"grok-4.5"},
                         {"prompt":"work2","claudex_model":"gpt-5.6-sol"}
                     ]
                 }
@@ -385,7 +382,7 @@ fn preserves_reassessment_baseline() {
         "role":"assistant",
         "content":[
             tool_use("t1","cc_Agent_0","gpt-5.6-sol"),
-            tool_use("t2","cc_Agent_0","grok-4.6"),
+            tool_use("t2","cc_Agent_0","grok-4.5"),
             tool_use("t3","cc_Agent_0","gpt-5.6-sol"),
         ]
     })]);
@@ -420,7 +417,7 @@ fn guidance_includes_completion_followup_when_workers_finish() {
         "role":"assistant",
         "content":[
             tool_use("t1","cc_Agent_0","gpt-5.6-sol"),
-            tool_use("t2","cc_Agent_0","grok-4.6"),
+            tool_use("t2","cc_Agent_0","grok-4.5"),
             tool_use("t3","cc_Agent_0","gpt-5.6-sol"),
         ]
     })]);
@@ -432,23 +429,19 @@ fn guidance_includes_completion_followup_when_workers_finish() {
                 "tool_use_id":"t3",
                 "content":"done",
             },
-            tool_use("t2","cc_Agent_0","grok-4.6"),
+            tool_use("t2","cc_Agent_0","grok-4.5"),
             tool_use("t1","cc_Agent_0","gpt-5.6-sol"),
         ]
     })]);
     let _ = scheduler.decision_for_request(&first);
     let decision = scheduler.decision_for_request(&second);
     assert_eq!(decision.completed_recently, 1);
-    assert!(
-        decision
-            .guidance(&scheduler.config())
-            .contains("Worker-cycle")
-    );
-    assert!(
-        decision
-            .guidance(&scheduler.config())
-            .contains("re-issue same-scope tasks")
-    );
+    assert!(decision
+        .guidance(&scheduler.config())
+        .contains("Worker-cycle"));
+    assert!(decision
+        .guidance(&scheduler.config())
+        .contains("re-issue same-scope tasks"));
 }
 
 #[test]
@@ -467,7 +460,7 @@ fn one_active_worker_triggers_interruption_and_replacement_protocol() {
         "role":"assistant",
         "content":[
             tool_use("t1","cc_Agent_0","gpt-5.6-sol"),
-            tool_use("t2","cc_Agent_0","grok-4.6"),
+            tool_use("t2","cc_Agent_0","grok-4.5"),
         ]
     })]);
     let second = messages(&[serde_json::json!({
@@ -492,7 +485,7 @@ fn one_active_worker_triggers_interruption_and_replacement_protocol() {
 }
 
 #[test]
-fn stale_single_worker_is_replaced_on_reassessment_tick() {
+fn stale_single_worker_is_not_inflated_on_reassessment_tick() {
     let scheduler = ParallelScheduler::new(SchedulerConfig {
         min_parallel_workers: 3,
         max_parallel_workers: DEFAULT_MAX_PARALLEL_WORKERS,
@@ -513,12 +506,12 @@ fn stale_single_worker_is_replaced_on_reassessment_tick() {
     std::thread::sleep(std::time::Duration::from_millis(220));
     let decision = scheduler.decision_for_request(&steady);
     assert_eq!(decision.active_workers, 1);
-    assert!(decision.active_floor_breached);
-    assert!(decision.needs_more_workers >= 1);
+    assert_eq!(decision.target_workers, 1);
+    assert!(!decision.active_floor_breached);
+    assert_eq!(decision.needs_more_workers, 0);
     let guidance = decision.guidance(&scheduler.config());
     assert!(guidance.contains("Re-evaluate"));
-    assert!(guidance.contains("interrupt stale work"));
-    assert!(guidance.contains("then continue"));
+    assert!(!guidance.contains("interrupt stale work"));
 }
 
 #[test]
@@ -629,9 +622,9 @@ fn when_one_active_worker_remains_prompt_interrupts_and_replaces() {
         "role":"assistant",
         "content":[
             tool_use("t1","cc_Agent_0","gpt-5.6-sol"),
-            tool_use("t2","cc_Agent_0","grok-4.6"),
+            tool_use("t2","cc_Agent_0","grok-4.5"),
             tool_use("t3","cc_Agent_0","gpt-5.6-sol"),
-            tool_use("t4","cc_Agent_0","grok-4.6"),
+            tool_use("t4","cc_Agent_0","grok-4.5"),
         ]
     })]);
     let second = messages(&[serde_json::json!({
@@ -661,12 +654,10 @@ fn when_one_active_worker_remains_prompt_interrupts_and_replaces() {
     assert_eq!(decision.completed_recently, 3);
     assert!(decision.active_floor_breached);
     assert!(decision.needs_more_workers >= 1);
-    assert!(
-        decision
-            .actions
-            .iter()
-            .any(|action| action.contains("interrupt stale work"))
-    );
+    assert!(decision
+        .actions
+        .iter()
+        .any(|action| action.contains("interrupt stale work")));
 }
 
 #[test]
@@ -694,11 +685,9 @@ fn increases_floor_with_explicit_request_structure() {
         decision.needs_more_workers,
         decision.target_workers - decision.active_workers
     );
-    assert!(
-        decision
-            .guidance(&scheduler.config())
-            .contains("target concurrency is")
-    );
+    assert!(decision
+        .guidance(&scheduler.config())
+        .contains("target concurrency is"));
 }
 
 #[test]
@@ -725,12 +714,10 @@ fn leaves_a_single_indivisible_lane_steady_between_rebalance_events() {
     assert_eq!(steady.target_workers, 1);
     assert_eq!(steady.needs_more_workers, 0);
     assert!(!steady.active_floor_breached);
-    assert!(
-        !steady
-            .actions
-            .iter()
-            .any(|action| action.contains("Only one active lane remains"))
-    );
+    assert!(!steady
+        .actions
+        .iter()
+        .any(|action| action.contains("Only one active lane remains")));
 }
 
 #[test]
@@ -752,11 +739,9 @@ fn single_gh_pr_lookup_schedules_exactly_one_worker_on_its_initial_cycle() {
             .any(|action| action.contains("Launch at least 1")),
         "an indivisible `gh pr view` request must launch one worker"
     );
-    assert!(
-        scheduler
-            .guidance_for_request(&request)
-            .contains("Task-shape: one bounded or indivisible lookup detected. Launch exactly one")
-    );
+    assert!(scheduler
+        .guidance_for_request(&request)
+        .contains("Task-shape: one bounded or indivisible lookup detected. Launch exactly one"));
 }
 
 #[test]
@@ -786,11 +771,9 @@ fn single_gh_pr_lookup_does_not_expand_after_its_worker_starts() {
             .any(|action| action.contains("Launch at least")),
         "an indivisible `gh pr view` request must not be expanded into duplicate workers"
     );
-    assert!(
-        scheduler
-            .guidance_for_request(&request)
-            .contains("Launch exactly one ordinary SubAgent; do not fan out")
-    );
+    assert!(scheduler
+        .guidance_for_request(&request)
+        .contains("Launch exactly one ordinary SubAgent; do not fan out"));
 }
 
 #[test]
@@ -841,6 +824,35 @@ fn raised_min_parallel_does_not_inflate_one_scope_target() {
     assert!(guidance.contains("Task-shape: one independent scope"));
     assert!(guidance.contains("do not apply a minimum-parallel floor"));
     assert!(!guidance.contains("Launch exactly 5 ordinary"));
+}
+
+#[test]
+fn active_floor_does_not_inflate_a_two_scope_target() {
+    let scheduler = ParallelScheduler::new(SchedulerConfig {
+        min_parallel_workers: 1,
+        max_parallel_workers: 8,
+        active_floor: 5,
+        reevaluate_on_completion: true,
+        reassess_interval: Duration::from_secs(600),
+        min_model_families: 2,
+        allow_reuse: true,
+        cleanup_on_exit: true,
+    });
+    let request = messages(&[
+        serde_json::json!({
+            "role": "user",
+            "content": "Tasks:\n- implement parser\n- verify renderer",
+        }),
+        serde_json::json!({
+            "role": "assistant",
+            "content": [tool_use("parser", "cc_Agent_0", "gpt-5.6-sol")],
+        }),
+    ]);
+    let decision = scheduler.decision_for_request(&request);
+    assert_eq!(decision.target_workers, 2);
+    assert_eq!(decision.active_workers, 1);
+    assert_eq!(decision.needs_more_workers, 1);
+    assert!(!decision.guidance(&scheduler.config()).contains("exactly 5"));
 }
 
 #[test]
@@ -918,11 +930,9 @@ fn explicit_parallel_request_uses_inferred_scope_count_without_list_markers() {
 
     assert_eq!(decision.target_workers, 2);
     assert_eq!(decision.needs_more_workers, 1);
-    assert!(
-        scheduler
-            .guidance_for_request(&request)
-            .contains("Task-shape: multiple independent scopes detected")
-    );
+    assert!(scheduler
+        .guidance_for_request(&request)
+        .contains("Task-shape: multiple independent scopes detected"));
 }
 
 #[test]
@@ -965,7 +975,7 @@ fn multi_scope_completion_reassesses_only_the_unfinished_lanes() {
             "role": "assistant",
             "content": [
                 tool_use("company", "cc_Agent_0", "gpt-5.6-sol"),
-                tool_use("funding", "cc_Agent_0", "grok-4.6"),
+                tool_use("funding", "cc_Agent_0", "grok-4.5"),
                 tool_use("market", "cc_Agent_0", "gpt-5.6-sol"),
             ],
         }),
@@ -980,7 +990,7 @@ fn multi_scope_completion_reassesses_only_the_unfinished_lanes() {
             "content": [
                 {"type":"tool_result", "tool_use_id":"market", "content":"done"},
                 tool_use("company", "cc_Agent_0", "gpt-5.6-sol"),
-                tool_use("funding", "cc_Agent_0", "grok-4.6"),
+                tool_use("funding", "cc_Agent_0", "grok-4.5"),
             ],
         }),
     ]);
@@ -1008,7 +1018,7 @@ fn replenishes_only_to_the_active_floor_after_completion() {
         "role":"assistant",
         "content":[
             tool_use("t1","cc_Agent_0","gpt-5.6-sol"),
-            tool_use("t2","cc_Agent_0","grok-4.6"),
+            tool_use("t2","cc_Agent_0","grok-4.5"),
             tool_use("t3","cc_Agent_0","gpt-5.6-sol"),
         ]
     })]);
@@ -1082,7 +1092,7 @@ fn ignores_malformed_or_completed_subagent_tool_payloads() {
                 {"type": "tool_use", "name": "cc_Agent_0", "id": "missing-model", "input": {}},
                 {"type": "tool_use", "name": "cc_Agent_batch_0", "id": "missing-tasks", "input": {}},
                 {"type": "tool_use", "name": "cc_Agent_batch_0", "id": "batch", "input": {
-                    "tasks": [null, {"subagent_type": "custom-advisor"}, {"prompt": "no model"}, {"claudex_model": "grok-4.6"}]
+                    "tasks": [null, {"subagent_type": "custom-advisor"}, {"prompt": "no model"}, {"claudex_model": "grok-4.5"}]
                 }},
                 {"type": "tool_result", "tool_use_id": "batch"},
                 {"type": "tool_use", "name": "cc_Agent_0", "id": "finished", "input": {"claudex_model": "gpt-5.6-sol"}},
@@ -1161,18 +1171,14 @@ fn policy_helpers_cover_early_returns_and_cleanup_choices() {
         },
     );
     assert!(decision.needs_model_diversity);
-    assert!(
-        decision
-            .actions
-            .iter()
-            .any(|action| action.contains("immediately"))
-    );
-    assert!(
-        !decision
-            .actions
-            .iter()
-            .any(|action| action.contains("reclaim"))
-    );
+    assert!(decision
+        .actions
+        .iter()
+        .any(|action| action.contains("immediately")));
+    assert!(!decision
+        .actions
+        .iter()
+        .any(|action| action.contains("reclaim")));
 
     policy::apply_floor_action(&mut decision, &parallel_request, &config);
     decision.active_model_families = 2;
@@ -1196,22 +1202,18 @@ fn policy_helpers_cover_live_reuse_and_single_scope_guidance_boundaries() {
     let mut active = SchedulerDecision::no_action();
     active.active_workers = 1;
     policy::apply_reuse_actions(&mut active, &parallel_request, &config);
-    assert!(
-        active
-            .actions
-            .iter()
-            .any(|action| action.contains("reusing"))
-    );
+    assert!(active
+        .actions
+        .iter()
+        .any(|action| action.contains("reusing")));
 
     let mut completed = active.clone();
     completed.completed_recently = 1;
     policy::apply_reuse_actions(&mut completed, &parallel_request, &config);
-    assert!(
-        completed
-            .actions
-            .iter()
-            .any(|action| action.contains("completion-aware"))
-    );
+    assert!(completed
+        .actions
+        .iter()
+        .any(|action| action.contains("completion-aware")));
 
     let mut completed_without_work = SchedulerDecision::no_action();
     completed_without_work.completed_recently = 1;
@@ -1431,18 +1433,14 @@ fn covers_malformed_work_units_and_policy_boundaries() {
     policy::apply_diversity_action(&mut decision, &parallel, &config);
     policy::apply_reuse_actions(&mut decision, &parallel, &config);
     assert!(decision.needs_model_diversity);
-    assert!(
-        decision
-            .actions
-            .iter()
-            .all(|action| !action.contains("Prefer reusing"))
-    );
-    assert!(
-        decision
-            .actions
-            .iter()
-            .any(|action| action.contains("After each completion"))
-    );
+    assert!(decision
+        .actions
+        .iter()
+        .all(|action| !action.contains("Prefer reusing")));
+    assert!(decision
+        .actions
+        .iter()
+        .any(|action| action.contains("After each completion")));
     policy::apply_reuse_actions(&mut decision, &plain, &config);
 
     let mut empty = SchedulerDecision::no_action();
@@ -1512,12 +1510,10 @@ fn normalizes_scheduler_scopes_and_task_notifications_without_false_duplicates()
     })];
     let snapshot = core::analyze_subagent_work(&unclosed);
     assert_eq!(snapshot.active_count(), 1);
-    assert!(
-        snapshot
-            .active_unit_ids
-            .iter()
-            .any(|unit| unit.starts_with("scope:scope "))
-    );
+    assert!(snapshot
+        .active_unit_ids
+        .iter()
+        .any(|unit| unit.starts_with("scope:scope ")));
 }
 
 #[test]

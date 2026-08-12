@@ -56,11 +56,9 @@ fn quoted_exact_twenty_eight_diagnostic_is_not_a_scope_count() {
         "content":"Why did it say “Launch exactly 28 subagents”?"
     })]);
     assert_eq!(independent_scope_count(&request), 1);
-    assert!(
-        !ParallelScheduler::for_tests()
-            .guidance_for_request(&request)
-            .contains("exactly 28")
-    );
+    assert!(!ParallelScheduler::for_tests()
+        .guidance_for_request(&request)
+        .contains("exactly 28"));
 }
 
 #[test]
@@ -258,4 +256,28 @@ fn new_plain_follow_up_replaces_an_older_parallel_request() {
     ]);
     assert_eq!(independent_scope_count(&request), 1);
     assert!(!is_substantive_work(&request));
+}
+
+#[test]
+fn explicit_stated_cardinality_is_the_scope_target() {
+    let request = messages_request(vec![serde_json::json!({
+        "role":"user",
+        "content":"Launch 4 independent scopes for this investigation."
+    })]);
+    assert_eq!(independent_scope_count(&request), 4);
+    let scheduler = ParallelScheduler::for_tests();
+    let decision = scheduler.decision_for_request(&request);
+    assert_eq!(decision.target_workers, 4);
+    assert!(scheduler
+        .guidance_for_request(&request)
+        .contains("Launch exactly 4 ordinary SubAgents"));
+}
+
+#[test]
+fn explicit_cardinality_wins_over_a_shorter_action_list() {
+    let request = messages_request(vec![serde_json::json!({
+        "role":"user",
+        "content":"Use 4 workers.\n- implement parser\n- verify renderer"
+    })]);
+    assert_eq!(independent_scope_count(&request), 4);
 }

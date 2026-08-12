@@ -37,10 +37,10 @@ impl SchedulerDecision {
                 completed = self.completed_recently
             ));
         }
-        if self.target_workers >= 2 && self.active_model_families < config.min_model_families {
+        let required_families = config.min_model_families.min(self.target_workers);
+        if self.target_workers >= 2 && self.active_model_families < required_families {
             lines.push(format!(
-                "Model-policy: ensure at least {} model families remain active.",
-                config.min_model_families
+                "Model-policy: ensure at least {required_families} model families remain active."
             ));
         }
         lines.extend(

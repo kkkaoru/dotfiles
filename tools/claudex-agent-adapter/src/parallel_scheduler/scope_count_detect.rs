@@ -117,15 +117,7 @@ pub(super) fn is_remaining_only_follow_up(content: &str) -> bool {
 }
 
 pub(super) fn is_remaining_count_prefix(before: &str) -> bool {
-    let tail: String = before
-        .chars()
-        .rev()
-        .take(8)
-        .collect::<String>()
-        .chars()
-        .rev()
-        .collect();
-    let trimmed = tail.trim_end();
+    let trimmed = before.trim_end();
     trimmed.ends_with("残り") || trimmed.to_ascii_lowercase().ends_with("remaining")
 }
 

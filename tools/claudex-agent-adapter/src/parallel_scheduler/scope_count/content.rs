@@ -28,7 +28,8 @@ pub(super) fn last_real_user_text(request: &MessagesRequest) -> Option<String> {
             .iter()
             .rev()
             .find(|content| !is_remaining_only_follow_up(content))
-            .cloned();
+            .cloned()
+            .or_else(|| Some(latest.clone()));
     }
     Some(latest.clone())
 }

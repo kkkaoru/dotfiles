@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use crate::anthropic::MessagesRequest;
 
-use super::{SchedulerConfig, SchedulerDecision, core};
+use super::{core, SchedulerConfig, SchedulerDecision};
 
 pub(crate) fn reassessment_due(
     inner: &super::Inner,
@@ -42,6 +42,18 @@ pub(crate) fn apply_reassessment_actions(
     }
 }
 
+/// Stated independent scopes, or observed lanes when the user turn is gone.
+fn scope_target_cap(decision: &SchedulerDecision, request: &MessagesRequest) -> usize {
+    if has_classifiable_user_turn(request) {
+        independent_scope_count(request).max(1)
+    } else {
+        decision
+            .active_workers
+            .saturating_add(decision.completed_recently)
+            .max(1)
+    }
+}
+
 /// A completion or cadence tick is the only point at which a surviving lane is
 /// replenished automatically.  Stable single-worker work is left alone so an
 /// indivisible request does not turn the default floor into an over-spawn.
@@ -58,10 +70,15 @@ pub(crate) fn apply_replenishment_target(
     {
         return;
     }
+    let cap = scope_target_cap(decision, request).min(config.max_parallel_workers);
+    if cap < 2 {
+        decision.target_workers = cap;
+        return;
+    }
     decision.target_workers = decision
         .target_workers
-        .max(config.active_floor)
-        .min(config.max_parallel_workers);
+        .max(config.active_floor.min(cap))
+        .min(cap);
 }
 
 pub(crate) fn apply_capacity_actions(
@@ -105,6 +122,7 @@ pub(crate) fn apply_floor_action(
         || !decision.has_work()
         || decision.active_workers >= config.active_floor
         || !rebalance_due
+        || scope_target_cap(decision, request) < 2
     {
         return;
     }
@@ -120,9 +138,8 @@ pub(crate) fn apply_floor_action(
     decision.actions.push(action.to_owned());
 }
 
-use super::scope_count::has_parallel_scope;
-#[cfg(test)]
 pub(crate) use super::scope_count::independent_scope_count;
+use super::scope_count::{has_classifiable_user_turn, has_parallel_scope};
 
 #[path = "policy_followup.rs"]
 mod followup;
