@@ -218,7 +218,7 @@ pub fn orchestration_contract(summary: &Value) -> Result<Value> {
     let settings = effective_orchestration_settings(summary)?;
     let mut contract = Value::Object(settings.clone());
     let object = contract.as_object_mut().expect("object");
-    insert_fanout_contract(object, summary, &settings, available)?;
+    insert_fanout_contract(object, summary, available)?;
     insert_diversity_contract(object, &settings, model_kinds.len() as i64);
     insert_policy_contract(object, summary, &settings, available)?;
     Ok(contract)
@@ -227,10 +227,13 @@ pub fn orchestration_contract(summary: &Value) -> Result<Value> {
 fn insert_fanout_contract(
     object: &mut Map<String, Value>,
     summary: &Value,
-    settings: &Map<String, Value>,
     available: i64,
 ) -> Result<()> {
     object.insert("dynamic_fanout".into(), Value::Bool(true));
+    object.insert(
+        "fanout_matches_independent_scopes".into(),
+        Value::Bool(true),
+    );
     object.insert("max_available_workers".into(), Value::from(available));
     object.insert(
         "fanout_rule".into(),
@@ -255,11 +258,9 @@ fn insert_fanout_contract(
         }));
     }
     object.insert("task_fanout_examples".into(), Value::Array(examples));
-    let multi_scope_target = settings["minimum_subagents_per_phase"]
-        .as_i64()
-        .unwrap_or(DEFAULT_MIN_SUBAGENTS_PER_PHASE)
-        .max(2)
-        .min(available.max(1));
+    // Example only — not a launch floor. Three independent scopes, capped by
+    // available workers.
+    let multi_scope_target = 3_i64.min(available.max(1));
     object.insert(
         "multi_scope_example_fanout".into(),
         Value::from(task_fanout(multi_scope_target, available, Some(summary))?),

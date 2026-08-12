@@ -399,6 +399,37 @@ fn normal_cold_hook_is_useful_policy_safe_and_starts_no_external_process() {
 }
 
 #[test]
+fn cold_hook_does_not_floor_single_scope_to_three_workers() {
+    let fixture = Fixture::new(true);
+    let _guard = fixture.hold_refresh_lock();
+    let output = fixture.run_routed(r#"{"prompt":"Please continue the real task"}"#, &[]);
+    let metadata = metadata(&output);
+    let orch = &metadata["orchestration"];
+    assert_eq!(orch["single_scope_fanout"], 1);
+    assert_eq!(orch["task_fanout_default"], 1);
+    assert_eq!(orch["fanout_matches_independent_scopes"], true);
+    assert_eq!(orch["minimum_subagents_per_phase"], 1);
+    assert_eq!(orch["minimum_active_subagents"], 1);
+    assert_eq!(orch["minimum_model_kinds"], 1);
+    let consult = metadata["custom_advisor_policy"]["consult_when"]
+        .as_array()
+        .unwrap();
+    assert!(
+        !consult
+            .iter()
+            .any(|item| item.as_str() == Some("external_research_or_multiple_sources"))
+    );
+    assert_eq!(
+        metadata["custom_advisor_policy"]["not_for_external_research_alone"],
+        true
+    );
+    let ctx = context(&output);
+    assert!(ctx.contains("one scope uses one ordinary worker"));
+    assert!(ctx.contains("not for ordinary external research"));
+    fixture.assert_no_process();
+}
+
+#[test]
 fn cold_fallback_never_reintroduces_a_disabled_native_fallback_model() {
     let fixture = Fixture::new(true);
     let _guard = fixture.hold_refresh_lock();

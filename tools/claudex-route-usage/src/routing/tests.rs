@@ -5,7 +5,10 @@ use super::summary::{fallback_summary, routing_summary, routing_summary_with_exh
 use super::workers::{
     default_subagent_route, enforce_worker_model_separation, worker_capacity_metadata,
 };
-use super::{memory_parallel_cap, pressure_level};
+use super::{
+    CUSTOM_ADVISOR_CONSULT_WHEN, DEFAULT_ACTIVE_SUBAGENT_FLOOR, DEFAULT_MIN_MODEL_KINDS,
+    DEFAULT_MIN_SUBAGENTS_PER_PHASE, memory_parallel_cap, pressure_level,
+};
 use crate::config::{Config, load_config};
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -38,7 +41,7 @@ fn sample_config() -> Config {
             {
               "id": "grok",
               "agent": "claudex-grok",
-              "defaultModel": "grok-4.5",
+              "defaultModel": "grok-4.6",
               "effort": "high",
               "enabled": true,
               "usageProvider": "grok",
@@ -356,6 +359,10 @@ fn selects_available_workers_and_exposes_orchestration() {
     assert_eq!(summary["orchestration"]["dynamic_fanout"], true);
     assert_eq!(summary["orchestration"]["hook_launches_agents"], false);
     assert_eq!(summary["orchestration"]["task_fanout_default"], 1);
+    assert_eq!(
+        summary["orchestration"]["fanout_matches_independent_scopes"],
+        true
+    );
 }
 
 #[test]
@@ -555,7 +562,7 @@ const EXHAUSTION_COOLDOWN_CONFIG: &str = r#"{
             {
               "id": "grok",
               "agent": "claudex-grok",
-              "defaultModel": "grok-4.5",
+              "defaultModel": "grok-4.6",
               "effort": "high",
               "enabled": true,
               "usageProvider": "grok",
@@ -701,7 +708,7 @@ fn ollama_api_only_availability_ranks_behind_known_weekly() {
             {
               "id": "grok",
               "agent": "claudex-grok",
-              "defaultModel": "grok-4.5",
+              "defaultModel": "grok-4.6",
               "effort": "high",
               "enabled": true,
               "usageProvider": "grok",
@@ -901,33 +908,64 @@ fn task_fanout_is_bounded() {
 }
 
 #[test]
+fn default_floors_do_not_force_three_workers_on_one_scope() {
+    assert_eq!(DEFAULT_MIN_SUBAGENTS_PER_PHASE, 1);
+    assert_eq!(DEFAULT_ACTIVE_SUBAGENT_FLOOR, 1);
+    assert_eq!(DEFAULT_MIN_MODEL_KINDS, 1);
+    assert_eq!(task_fanout(1, 40, None).unwrap(), 1);
+}
+
+#[test]
+fn custom_advisor_consult_when_is_conflict_and_high_risk_only() {
+    assert!(!CUSTOM_ADVISOR_CONSULT_WHEN.contains(&"external_research_or_multiple_sources"));
+    assert!(!CUSTOM_ADVISOR_CONSULT_WHEN.contains(&"complex_or_ambiguous_decision"));
+    assert!(!CUSTOM_ADVISOR_CONSULT_WHEN.contains(&"long_running_phase_over_ten_minutes"));
+    assert!(CUSTOM_ADVISOR_CONSULT_WHEN.contains(&"conflicting_worker_results"));
+    assert!(CUSTOM_ADVISOR_CONSULT_WHEN.contains(&"high_risk_implementation_or_config_change"));
+    assert!(CUSTOM_ADVISOR_CONSULT_WHEN.contains(&"worker_failure_timeout_or_stall"));
+}
+
+#[test]
 fn multi_scope_fanout_exceeds_one_when_capacity_allows() {
     let summary = routing_summary(&report(), &sample_config(), &BTreeSet::new()).unwrap();
     let workers = summary["selected_workers"].as_array().unwrap().len() as i64;
     assert!(workers >= 2, "fixture must expose multiple workers");
     assert_eq!(task_fanout(1, workers, Some(&summary)).unwrap(), 1);
-    assert!(task_fanout(3, workers, Some(&summary)).unwrap() >= 2);
-    assert!(task_fanout(5, workers, Some(&summary)).unwrap() >= 2);
+    assert_eq!(
+        task_fanout(3, workers, Some(&summary)).unwrap(),
+        3.min(workers)
+    );
+    assert_eq!(
+        task_fanout(5, workers, Some(&summary)).unwrap(),
+        5.min(workers)
+    );
     let orch = summary["orchestration"].as_object().unwrap();
     assert_eq!(orch["task_fanout_default"], 1);
     assert_eq!(orch["single_scope_fanout"], 1);
+    assert_eq!(orch["fanout_matches_independent_scopes"], true);
     let multi = orch["multi_scope_example_fanout"].as_i64().unwrap();
     assert!(
         multi >= 2,
         "multi_scope_example_fanout must be >1 when workers exist, got {multi}"
     );
     let examples = orch["task_fanout_examples"].as_array().unwrap();
+    let one = examples
+        .iter()
+        .find(|entry| entry["independent_scopes"] == 1)
+        .unwrap();
+    assert_eq!(one["fanout"].as_i64().unwrap(), 1);
     let three = examples
         .iter()
         .find(|entry| entry["independent_scopes"] == 3)
         .unwrap();
-    assert!(three["fanout"].as_i64().unwrap() >= 2);
+    assert_eq!(three["fanout"].as_i64().unwrap(), 3.min(workers));
     assert!(
-        orch["minimum_subagents_per_phase"].as_i64().unwrap() >= 2,
-        "phase minimum must not stay hard-coded at 1"
+        !orch["custom_advisor_consult_when"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|item| item.as_str() == Some("external_research_or_multiple_sources"))
     );
-    assert!(orch["minimum_active_subagents"].as_i64().unwrap() >= 2);
-    assert!(orch["minimum_model_kinds"].as_i64().unwrap() >= 2);
 }
 
 #[test]

@@ -35,7 +35,10 @@ fn tool_policy_reminder(event_name: &str) -> &'static str {
             "Claudex tool policy for the main orchestrator: while selected_workers is non-empty, ",
             "do not use Read/Write/Edit/MultiEdit/NotebookEdit/Grep/Glob/LS/WebSearch/WebFetch ",
             "in main — launch Agent/Task and keep file/search work in SubAgents. Bash is allowed ",
-            "in main for lightweight orchestration only. This is also enforced by PreToolUse."
+            "in main for lightweight orchestration only. This is also enforced by PreToolUse. ",
+            "Match Agent/Task fan-out to independent scopes: one scope uses one ordinary worker. ",
+            "Do not force three workers onto a single question. Consult custom-advisor only for ",
+            "conflicting worker results or high-risk changes, not for ordinary external research."
         ),
     }
 }
@@ -139,6 +142,7 @@ pub fn hook_output_for_agent(
             "consult_when": CUSTOM_ADVISOR_CONSULT_WHEN,
             "reuse_logical_session": true,
             "not_for_trivial_tasks": true,
+            "not_for_external_research_alone": true,
         },
         "orchestration": orchestration_contract(summary)?,
     });
@@ -182,6 +186,9 @@ mod tests {
         assert!(ctx.contains("claudex-routing-local-hook"));
         assert!(ctx.contains("main orchestrator"));
         assert!(ctx.contains("main-orchestrator"));
+        assert!(ctx.contains("one scope uses one ordinary worker"));
+        assert!(ctx.contains("not for ordinary external research"));
+        assert!(!ctx.contains("external_research_or_multiple_sources"));
         let sub = hook_output_for_agent(&summary, "SubagentStart", None).unwrap();
         assert_eq!(sub["hookSpecificOutput"]["hookEventName"], "SubagentStart");
         let sub_ctx = sub["hookSpecificOutput"]["additionalContext"]
@@ -194,6 +201,55 @@ mod tests {
         assert!(sub_ctx.contains("main-session only"));
         assert!(sub_ctx.contains("disabled_subagent_models"));
         assert!(!ctx.contains("advisor() — it is main-session only"));
+    }
+
+    fn routing_metadata(output: &Value) -> Value {
+        let ctx = output["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap();
+        let encoded = ctx
+            .split_once("Claudex routing data (runtime metadata; values only):\\n")
+            .unwrap()
+            .1
+            .split_once("\\nClaudex tool policy")
+            .unwrap()
+            .0;
+        serde_json::from_str(encoded).unwrap()
+    }
+
+    #[test]
+    fn main_hook_metadata_matches_scope_fanout_and_advisor_policy() {
+        let summary = json!({
+            "selected_agents": ["claudex-gpt"],
+            "selected_workers": [{"agent":"claudex-gpt","model":"gpt-5.6-luna","effort":"max"}],
+            "disabled_subagent_models": [],
+            "advisor": {"agent":"custom-advisor","model":"claude-fable-5","effort":"xhigh"},
+            "orchestration_mode": "subagent-first",
+            "delegation_required": true,
+            "direct_main_execution": "fallback-only"
+        });
+        let metadata =
+            routing_metadata(&hook_output_for_agent(&summary, "UserPromptSubmit", None).unwrap());
+        let orch = &metadata["orchestration"];
+        assert_eq!(orch["single_scope_fanout"], 1);
+        assert_eq!(orch["fanout_matches_independent_scopes"], true);
+        let consult = metadata["custom_advisor_policy"]["consult_when"]
+            .as_array()
+            .unwrap();
+        assert!(
+            !consult
+                .iter()
+                .any(|item| item.as_str() == Some("external_research_or_multiple_sources"))
+        );
+        assert!(
+            consult
+                .iter()
+                .any(|item| item.as_str() == Some("conflicting_worker_results"))
+        );
+        assert_eq!(
+            metadata["custom_advisor_policy"]["not_for_external_research_alone"],
+            true
+        );
     }
 
     #[test]

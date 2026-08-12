@@ -16,13 +16,12 @@ use std::env;
 pub const FIVE_HOUR_WINDOW: &str = "five-hour";
 pub const SEVEN_DAY_WINDOW: &str = "seven-day";
 pub const DEFAULT_MAX_SUBAGENTS: i64 = 40;
-/// Preferred multi-scope phase size when work can be decomposed (aligned with
-/// `claudex-agent-adapter` parallel_scheduler). `task_fanout` follows independent
-/// scopes; the adapter applies `min_parallel` as a floor for substantive one-scope
-/// work so GPT does not collapse to a single Explore.
-pub const DEFAULT_MIN_SUBAGENTS_PER_PHASE: i64 = 3;
-pub const DEFAULT_ACTIVE_SUBAGENT_FLOOR: i64 = 2;
-pub const DEFAULT_MIN_MODEL_KINDS: i64 = 2;
+/// No launch floor: `task_fanout` matches independent scopes (one scope → one
+/// worker). Env `CLAUDEX_SUBAGENT_MIN_PARALLEL` can raise this; do not default
+/// to 3 ordinary workers on a single question.
+pub const DEFAULT_MIN_SUBAGENTS_PER_PHASE: i64 = 1;
+pub const DEFAULT_ACTIVE_SUBAGENT_FLOOR: i64 = 1;
+pub const DEFAULT_MIN_MODEL_KINDS: i64 = 1;
 pub const ORCHESTRATION_REBALANCE_INTERVAL_SECONDS: i64 = 10 * 60;
 pub const DEFAULT_SUBAGENT_STATUS_POLL_SECONDS: i64 = 15;
 pub const SUBAGENT_MAX_PARALLEL_ENV: &str = "CLAUDEX_SUBAGENT_MAX_PARALLEL";
@@ -47,10 +46,7 @@ pub const DEFAULT_MEMORY_AVAILABLE_PCT_MEDIUM: f64 = 30.0;
 pub const DEFAULT_MEMORY_AVAILABLE_PCT_MODERATE: f64 = 40.0;
 
 pub const CUSTOM_ADVISOR_CONSULT_WHEN: &[&str] = &[
-    "complex_or_ambiguous_decision",
-    "external_research_or_multiple_sources",
     "high_risk_implementation_or_config_change",
-    "long_running_phase_over_ten_minutes",
     "worker_failure_timeout_or_stall",
     "conflicting_worker_results",
 ];
