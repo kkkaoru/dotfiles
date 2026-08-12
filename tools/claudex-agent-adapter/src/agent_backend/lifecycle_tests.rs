@@ -95,13 +95,44 @@ async fn cancellation_and_abort_cover_each_leaf_and_routed_route() {
 }
 
 #[tokio::test]
-async fn session_scoped_cancel_abort_and_shutdown_reach_inner_routes() {
+async fn session_scoped_respond_for_model_uses_the_pool_that_started_the_model() {
     use crate::agent_backend::{BackendKind, BackendRoute};
 
     let scoped = AgentBackend::spawn_routes(&[BackendRoute::new(
-        "worker",
-        BackendKind::ConfiguredAcp,
+        "glm-5.2:cloud",
+        BackendKind::CodexAppServer,
     )]);
+    let AgentBackend::SessionScoped(scopes) = scoped.as_ref() else {
+        panic!("expected SessionScoped backends");
+    };
+    let leaf = Arc::new(AgentBackend::Grok(
+        crate::grok_acp::GrokAcp::alive_for_test(),
+    ));
+    scopes.insert_scope_for_test(
+        "tui-session",
+        AgentBackend::routed(vec![("glm-5.2:cloud".to_owned(), leaf)]),
+    );
+    let error = scoped
+        .respond_for_model("glm-5.2:cloud", serde_json::json!(1), serde_json::json!({}))
+        .await
+        .expect_err("Grok leaf rejects Claude tool results");
+    let message = error.to_string();
+    assert!(
+        !message.contains("not initialized"),
+        "tool result must not hit the uninitialized anonymous pool: {message}"
+    );
+    assert!(
+        message.contains("Grok ACP"),
+        "expected the started Claude-session pool: {message}"
+    );
+}
+
+#[tokio::test]
+async fn session_scoped_cancel_abort_and_shutdown_reach_inner_routes() {
+    use crate::agent_backend::{BackendKind, BackendRoute};
+
+    let scoped =
+        AgentBackend::spawn_routes(&[BackendRoute::new("worker", BackendKind::ConfiguredAcp)]);
     assert_eq!(
         scoped.cancel_turn("0:session").await.unwrap(),
         super::super::TurnCancellation::Settled

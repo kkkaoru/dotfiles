@@ -40,7 +40,7 @@ impl Bridge {
         for (id, result) in responses {
             let success =
                 !result.is_error || is_idempotent_task_lifecycle_error(&result.content_items);
-            self.app
+            self.app_for_session(session)
                 .respond_for_model(
                     &session.model,
                     id,

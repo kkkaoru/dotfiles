@@ -106,7 +106,10 @@ impl AgentBackend {
                 Box::pin(backend.respond_for_model(model, id, result)).await
             }
             Self::SessionScoped(scopes) => {
-                Box::pin(scopes.scope(None).respond_for_model(model, id, result)).await
+                let backend = scopes
+                    .unique_started_pool_for_model(model)
+                    .unwrap_or_else(|| scopes.scope(None));
+                Box::pin(backend.respond_for_model(model, id, result)).await
             }
         }
     }

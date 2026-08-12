@@ -29,7 +29,7 @@ impl SegmentBuilder {
             format!("SubAgent model `{model}` is disabled by policy and was not launched.");
         context
             .bridge
-            .app
+            .app_for_session(context.session)
             .respond_for_model(
                 &context.session.model,
                 request_id,
@@ -76,7 +76,7 @@ impl SegmentBuilder {
         );
         context
             .bridge
-            .app
+            .app_for_session(context.session)
             .respond_for_model(
                 &context.session.model,
                 request_id,

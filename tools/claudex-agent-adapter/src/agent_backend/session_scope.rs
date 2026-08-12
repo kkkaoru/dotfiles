@@ -87,6 +87,30 @@ impl SessionScopedBackends {
         snapshots
     }
 
+    /// Pool that already started `model`. `None` if none or more than one match.
+    pub(crate) fn unique_started_pool_for_model(&self, model: &str) -> Option<Arc<AgentBackend>> {
+        let scopes = self.scopes.lock().expect("session scopes poisoned");
+        let mut matches = scopes.values().filter(|backend| {
+            backend
+                .started_models()
+                .iter()
+                .any(|started| started == model)
+        });
+        let first = matches.next().cloned();
+        if matches.next().is_some() {
+            return None;
+        }
+        first
+    }
+
+    #[cfg(test)]
+    pub(crate) fn insert_scope_for_test(&self, id: &str, backend: Arc<AgentBackend>) {
+        self.scopes
+            .lock()
+            .expect("session scopes poisoned")
+            .insert(id.to_owned(), backend);
+    }
+
     pub(crate) fn started_models(&self) -> Vec<String> {
         let scopes = self.scopes.lock().expect("session scopes poisoned");
         let mut models = BTreeSet::new();
@@ -242,6 +266,20 @@ mod tests {
             snapshots
                 .iter()
                 .all(|snapshot| snapshot.started_models.is_empty())
+        );
+    }
+
+    #[test]
+    fn unique_started_pool_is_none_for_lazy_scopes() {
+        let scopes = SessionScopedBackends::new(&[BackendRoute::new(
+            "glm-5.2:cloud",
+            BackendKind::CodexAppServer,
+        )]);
+        let _ = scopes.scope(Some("tui-session"));
+        assert!(
+            scopes
+                .unique_started_pool_for_model("glm-5.2:cloud")
+                .is_none()
         );
     }
 

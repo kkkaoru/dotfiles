@@ -39,7 +39,7 @@ pub(super) async fn reject_unrequested_tool(
     );
     let (text, success) = unrequested_tool_reply(&call.name);
     bridge
-        .app
+        .app_for_session(session)
         .respond_for_model(
             &session.model,
             call.request_id,

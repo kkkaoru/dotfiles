@@ -91,19 +91,19 @@ impl Bridge {
         events: Arc<crate::app_server::ThreadEvents>,
     ) {
         let rejected_request_ids = self.reject_pending_disconnected_tools(session).await;
-        self.spawn_disconnected_turn_drain(session.model.clone(), events, rejected_request_ids);
+        self.spawn_disconnected_turn_drain(session, events, rejected_request_ids);
     }
 
     pub(super) fn spawn_disconnected_turn_drain(
         &self,
-        model: String,
+        session: &Session,
         events: Arc<crate::app_server::ThreadEvents>,
         rejected_request_ids: HashSet<String>,
     ) {
-        let app = Arc::clone(&self.app);
+        let app = self.app_for_session(session);
         tokio::spawn(drain_disconnected_turn_with_warning(
             app,
-            model,
+            session.model.clone(),
             events,
             rejected_request_ids,
         ));
