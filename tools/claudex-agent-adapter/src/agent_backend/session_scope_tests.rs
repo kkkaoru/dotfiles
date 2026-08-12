@@ -26,6 +26,36 @@
         assert!(Arc::ptr_eq(&a, &scopes.scope(Some("session-a"))));
     }
 
+    #[test]
+    fn concurrent_scope_lookup_reuses_one_pool_per_session_without_crossing_sessions() {
+        let scopes = Arc::new(SessionScopedBackends::new(&[
+            BackendRoute::new("main", BackendKind::CodexAppServer),
+        ]));
+        let mut workers = Vec::new();
+        for index in 0..32 {
+            let scopes = Arc::clone(&scopes);
+            workers.push(std::thread::spawn(move || {
+                let id = if index % 2 == 0 {
+                    "parallel-a"
+                } else {
+                    "parallel-b"
+                };
+                Arc::as_ptr(&scopes.scope(Some(id))) as usize
+            }));
+        }
+        let addresses = workers
+            .into_iter()
+            .map(|worker| worker.join().expect("scope worker"))
+            .collect::<Vec<_>>();
+        let a = scopes.scope(Some("parallel-a"));
+        let b = scopes.scope(Some("parallel-b"));
+        assert_eq!(scopes.scope_count(), 2);
+        assert!(addresses.iter().enumerate().all(|(index, address)| {
+            *address == Arc::as_ptr(if index % 2 == 0 { &a } else { &b }) as usize
+        }));
+        assert!(!Arc::ptr_eq(&a, &b));
+    }
+
     #[tokio::test]
     async fn release_scope_drops_the_pool() {
         let scopes =
@@ -33,6 +63,26 @@
         let _ = scopes.scope(Some("session-a"));
         assert_eq!(scopes.scope_count(), 1);
         scopes.release_scope(Some("session-a")).await;
+        assert_eq!(scopes.scope_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn release_scope_waits_for_leaf_shutdown_before_scope_is_gone() {
+        let scopes = SessionScopedBackends::new(&[BackendRoute::new(
+            "main",
+            BackendKind::GrokAcp,
+        )]);
+        let leaf = Arc::new(AgentBackend::Grok(
+            crate::grok_acp::GrokAcp::alive_for_test(),
+        ));
+        scopes.insert_scope_for_test(
+            "shutdown-order",
+            AgentBackend::routed(vec![("main".to_owned(), Arc::clone(&leaf))]),
+        );
+
+        scopes.release_scope(Some("shutdown-order")).await;
+
+        assert!(!leaf.is_alive(), "scope release must await leaf cleanup");
         assert_eq!(scopes.scope_count(), 0);
     }
 

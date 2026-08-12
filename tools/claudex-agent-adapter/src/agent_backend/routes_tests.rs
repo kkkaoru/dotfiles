@@ -243,6 +243,82 @@ mod tests {
         assert_get_avoids_dead_ready_backend(route).await;
     }
 
+    #[tokio::test]
+    async fn retired_startup_cannot_republish_a_stale_backend_to_waiting_get() {
+        let mut template = route("stale-acp", BackendKind::ConfiguredAcp);
+        template.acp = Some(AcpLaunch {
+            program: "/definitely/missing/stale-acp".to_owned(),
+            arguments: vec!["--stdio".to_owned()],
+        });
+        let startup = Arc::new(super::BackendStartup::default());
+        let route = Arc::new(super::RoutedBackend::lazy(template, Arc::clone(&startup)));
+        let (sender, receiver) = tokio::sync::watch::channel(StartupState::Starting);
+        *startup.receiver.lock().expect("backend startup poisoned") = Some(receiver);
+
+        let waiting = {
+            let route = Arc::clone(&route);
+            tokio::spawn(async move { route.get().await })
+        };
+        // Let `get` clone the Starting receiver before invalidating it. This
+        // makes the stale-result race deterministic rather than timing based.
+        tokio::task::yield_now().await;
+        route.retire();
+
+        let stale = Arc::new(AgentBackend::Grok(
+            crate::grok_acp::GrokAcp::alive_for_test(),
+        ));
+        startup::publish_result(sender, Ok(Arc::clone(&stale))).await;
+
+        let result = tokio::time::timeout(std::time::Duration::from_secs(1), waiting)
+            .await
+            .expect("retired startup waiter must settle")
+            .expect("retired startup waiter task must not panic");
+        assert!(result.is_err(), "stale backend must never be returned");
+        assert!(
+            !stale.is_alive(),
+            "stale provider must be shut down after the route generation is retired"
+        );
+    }
+
+    #[tokio::test]
+    async fn pool_shutdown_fences_a_waiting_startup_from_a_late_spawn_result() {
+        let mut template = route("shutdown-stale-acp", BackendKind::ConfiguredAcp);
+        template.acp = Some(AcpLaunch {
+            program: "/definitely/missing/shutdown-stale-acp".to_owned(),
+            arguments: vec!["--stdio".to_owned()],
+        });
+        let routes = RoutedBackends::lazy(&[template]);
+        let route = routes.route(0);
+        let (sender, receiver) = tokio::sync::watch::channel(StartupState::Starting);
+        *route
+            .startup
+            .receiver
+            .lock()
+            .expect("backend startup poisoned") = Some(receiver);
+
+        let waiting = {
+            let route = Arc::clone(&route);
+            tokio::spawn(async move { route.get().await })
+        };
+        tokio::task::yield_now().await;
+        routes.shutdown().await;
+
+        let stale = Arc::new(AgentBackend::Grok(
+            crate::grok_acp::GrokAcp::alive_for_test(),
+        ));
+        startup::publish_result(sender, Ok(Arc::clone(&stale))).await;
+
+        let result = tokio::time::timeout(std::time::Duration::from_secs(1), waiting)
+            .await
+            .expect("shutdown waiter must settle")
+            .expect("shutdown waiter task must not panic");
+        assert!(result.is_err(), "shutdown must not return a stale backend");
+        assert!(
+            !stale.is_alive(),
+            "late spawn must be cleaned up after shutdown"
+        );
+    }
+
     async fn assert_get_avoids_dead_ready_backend(route: super::RoutedBackend) {
         let result = tokio::time::timeout(std::time::Duration::from_millis(80), route.get()).await;
         let Ok(Ok(backend)) = result else {

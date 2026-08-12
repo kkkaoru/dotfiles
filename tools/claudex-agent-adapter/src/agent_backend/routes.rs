@@ -1,9 +1,9 @@
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 
 use super::{AgentBackend, BackendKind, BackendRoute, WebSearchMode};
 
@@ -30,6 +30,14 @@ pub(super) struct RoutedBackend {
 #[derive(Default)]
 pub(super) struct BackendStartup {
     receiver: Mutex<Option<tokio::sync::watch::Receiver<StartupState>>>,
+    /// Monotonically increasing startup generation. Retiring a route fences
+    /// every in-flight spawn that still owns an old watch sender, including a
+    /// caller that is waiting on a cloned receiver.
+    generation: AtomicU64,
+    /// Permanent pool teardown fence. A retired route may restart, while a
+    /// session pool that was shut down must never resurrect a provider for a
+    /// late caller holding an old receiver.
+    closed: AtomicBool,
 }
 
 #[derive(Clone)]
@@ -66,25 +74,78 @@ impl RoutedBackend {
 
     pub(super) async fn get(&self) -> Result<Arc<AgentBackend>> {
         self.activated.store(true, Ordering::Relaxed);
+        if self.startup.closed.load(Ordering::Acquire) {
+            bail!("backend route pool is shut down");
+        }
         if let Some(backend) = self.ready_backend() {
             return Ok(backend);
         }
-        let mut startup = self.startup_receiver();
+        let (mut generation, mut startup) = self.startup_receiver()?;
         loop {
             let state = startup.borrow_and_update().clone();
             match state {
-                StartupState::Starting => startup
-                    .changed()
-                    .await
-                    .context("backend startup task stopped without a result")?,
-                StartupState::Ready(Ok(backend)) if backend.is_alive() => return Ok(backend),
-                StartupState::Ready(Ok(_)) => startup = self.startup_receiver(),
+                StartupState::Starting => {
+                    if let Some((next_generation, next_startup)) =
+                        self.retry_closed_startup(generation, &mut startup).await?
+                    {
+                        generation = next_generation;
+                        startup = next_startup;
+                    }
+                }
+                StartupState::Ready(Ok(backend))
+                    if self.startup_generation() == generation && backend.is_alive() =>
+                {
+                    return Ok(backend);
+                }
+                StartupState::Ready(Ok(backend)) => {
+                    (generation, startup) = self.retry_stale_backend(generation, backend).await?;
+                }
                 StartupState::Ready(Err(error)) => bail!(error.to_string()),
             }
         }
     }
 
-    fn startup_receiver(&self) -> tokio::sync::watch::Receiver<StartupState> {
+    async fn retry_closed_startup(
+        &self,
+        generation: u64,
+        startup: &mut tokio::sync::watch::Receiver<StartupState>,
+    ) -> Result<Option<(u64, tokio::sync::watch::Receiver<StartupState>)>> {
+        if startup.changed().await.is_ok() {
+            return Ok(None);
+        }
+        // `retire` deliberately closes the receiver while a caller may still
+        // be waiting on it. Retry against a fresh generation; a genuinely
+        // crashed startup is still reported instead of spinning forever.
+        if self.startup_generation() == generation {
+            bail!("backend startup task stopped without a result");
+        }
+        Ok(Some(self.startup_receiver()?))
+    }
+
+    async fn retry_stale_backend(
+        &self,
+        generation: u64,
+        backend: Arc<AgentBackend>,
+    ) -> Result<(u64, tokio::sync::watch::Receiver<StartupState>)> {
+        // A route can be retired while its provider process is being created.
+        // Never hand that stale process to the caller; it belongs to the
+        // retired generation.
+        backend.shutdown().await;
+        let next = self.startup_receiver()?;
+        if next.0 == generation {
+            bail!("backend startup generation became stale without a new generation");
+        }
+        Ok(next)
+    }
+
+    fn startup_generation(&self) -> u64 {
+        self.startup.generation.load(Ordering::Acquire)
+    }
+
+    fn startup_receiver(&self) -> Result<(u64, tokio::sync::watch::Receiver<StartupState>)> {
+        if self.startup.closed.load(Ordering::Acquire) {
+            bail!("backend route pool is shut down");
+        }
         let mut startup = self
             .startup
             .receiver
@@ -93,17 +154,31 @@ impl RoutedBackend {
         let reusable = startup
             .as_ref()
             .is_some_and(|receiver| match receiver.borrow().clone() {
-                StartupState::Starting => true,
+                StartupState::Starting => {
+                    let receiver = receiver.clone();
+                    !receiver.has_changed().is_err()
+                }
                 StartupState::Ready(Ok(backend)) => backend.is_alive(),
                 StartupState::Ready(Err(_)) => false,
             });
         if !reusable {
-            *startup = Some(start_backend(self.template.clone()));
+            let generation = self.startup.generation.fetch_add(1, Ordering::AcqRel) + 1;
+            *startup = Some(start_backend(
+                self.template.clone(),
+                Arc::clone(&self.startup),
+                generation,
+            ));
         }
-        startup.as_ref().expect("backend startup receiver").clone()
+        Ok((
+            self.startup_generation(),
+            startup.as_ref().expect("backend startup receiver").clone(),
+        ))
     }
 
     pub(super) fn ready_backend(&self) -> Option<Arc<AgentBackend>> {
+        if self.startup.closed.load(Ordering::Acquire) {
+            return None;
+        }
         let receiver = self
             .startup
             .receiver
@@ -119,6 +194,7 @@ impl RoutedBackend {
     }
 
     pub(super) fn retire(&self) {
+        self.startup.generation.fetch_add(1, Ordering::AcqRel);
         *self
             .startup
             .receiver
@@ -136,6 +212,9 @@ impl RoutedBackend {
     }
 
     pub(super) fn is_alive(&self) -> bool {
+        if self.startup.closed.load(Ordering::Acquire) {
+            return false;
+        }
         let Some(startup) = self
             .startup
             .receiver

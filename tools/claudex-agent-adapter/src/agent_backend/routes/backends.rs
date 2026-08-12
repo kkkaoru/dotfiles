@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, atomic::AtomicBool};
 
 use super::{
     AgentBackend, BackendKind, BackendRoute, BackendStartup, RoutedBackend, provider_startup,
@@ -8,6 +8,7 @@ pub struct RoutedBackends {
     pub(super) configured: Vec<Arc<RoutedBackend>>,
     pub(super) dynamic: Mutex<Vec<Arc<RoutedBackend>>>,
     pub(super) codex_startup: Arc<BackendStartup>,
+    pub(super) closed: AtomicBool,
 }
 
 impl RoutedBackends {
@@ -25,6 +26,7 @@ impl RoutedBackends {
                 .collect(),
             dynamic: Mutex::new(Vec::new()),
             codex_startup,
+            closed: AtomicBool::new(false),
         }
     }
 
@@ -42,6 +44,7 @@ impl RoutedBackends {
             configured,
             dynamic: Mutex::new(Vec::new()),
             codex_startup,
+            closed: AtomicBool::new(false),
         }
     }
 }

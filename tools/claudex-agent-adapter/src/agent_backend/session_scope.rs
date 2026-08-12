@@ -40,7 +40,6 @@ impl SessionScopedBackends {
         match scopes.entry(key.clone()) {
             Entry::Occupied(entry) => {
                 let backend = Arc::clone(entry.get());
-                drop(entry);
                 tracing::debug!(
                     target: "claudex.provider",
                     log_event = "provider_session_scope_reuse",

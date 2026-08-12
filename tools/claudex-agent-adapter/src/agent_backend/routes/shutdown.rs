@@ -4,6 +4,15 @@ use super::{AgentBackend, RoutedBackend, RoutedBackends, StartupState};
 
 impl RoutedBackend {
     fn take_ready_backend_for_shutdown(&self) -> Option<Arc<AgentBackend>> {
+        self.startup
+            .closed
+            .store(true, std::sync::atomic::Ordering::Release);
+        // A caller may still be waiting on a cloned Starting receiver while
+        // shutdown removes the canonical receiver. Fence that caller before
+        // dropping the route so a late spawn result cannot be republished.
+        self.startup
+            .generation
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         let receiver = self
             .startup
             .receiver
@@ -19,6 +28,8 @@ impl RoutedBackend {
 
 impl RoutedBackends {
     pub(crate) async fn shutdown(&self) {
+        self.closed
+            .store(true, std::sync::atomic::Ordering::Release);
         let dynamic = self
             .dynamic
             .lock()

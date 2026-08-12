@@ -66,7 +66,7 @@ impl RoutedBackends {
     pub(in crate::agent_backend) fn is_alive(&self) -> bool {
         // Routes restart lazily. Marking the whole HTTP daemon unavailable for one failed child
         // would make the launcher terminate unrelated in-flight model streams.
-        true
+        !self.closed.load(std::sync::atomic::Ordering::Acquire)
     }
 
     pub(in crate::agent_backend) fn model_is_alive(&self, model: &str) -> bool {
