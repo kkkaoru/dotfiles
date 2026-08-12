@@ -25,7 +25,7 @@ fn tool_policy_reminder(event_name: &str) -> &'static str {
     match event_name {
         "SubagentStart" => concat!(
             "Claudex tool policy for this SubAgent: inherit the main session's complete tool set. ",
-            "Main-session PreToolUse denials for Read/Write/Edit/Grep/Glob/LS/WebSearch/WebFetch ",
+            "Main-session PreToolUse denials for Write/Edit/MultiEdit/NotebookEdit ",
             "do NOT apply here. Use those tools freely within the delegated scope. Parallel ",
             "Write/Edit of the same path remains file-locked across SubAgents. ",
             "Do not call Claude Code's built-in advisor() — it is main-session only and is not ",
@@ -33,9 +33,10 @@ fn tool_policy_reminder(event_name: &str) -> &'static str {
         ),
         _ => concat!(
             "Claudex tool policy for the main orchestrator: while selected_workers is non-empty, ",
-            "do not use Read/Write/Edit/MultiEdit/NotebookEdit/Grep/Glob/LS/WebSearch/WebFetch ",
-            "in main — launch Agent/Task and keep file/search work in SubAgents. Bash is allowed ",
-            "in main for lightweight orchestration only. This is also enforced by PreToolUse. ",
+            "do not use Write/Edit/MultiEdit/NotebookEdit in main — launch Agent/Task and keep ",
+            "mutating file work in SubAgents. Atomic Read, Grep, Glob, LS, WebSearch, or WebFetch ",
+            "lookups may stay in main. Bash is allowed in main for lightweight orchestration only. ",
+            "Write/Edit denials are also enforced by PreToolUse. ",
             "Match Agent/Task fan-out to independent scopes: one scope uses one ordinary worker. ",
             "Do not force three workers onto a single question. Consult custom-advisor only for ",
             "conflicting worker results or high-risk changes, not for ordinary external research."
@@ -201,6 +202,55 @@ mod tests {
         assert!(sub_ctx.contains("main-session only"));
         assert!(sub_ctx.contains("disabled_subagent_models"));
         assert!(!ctx.contains("advisor() — it is main-session only"));
+    }
+
+    const ATOMIC_LOOKUP_TOOLS: &[&str] = &["Read", "Grep", "Glob", "LS", "WebSearch", "WebFetch"];
+
+    fn sample_summary() -> Value {
+        json!({
+            "selected_agents": ["claudex-gpt"],
+            "selected_workers": [{"agent":"claudex-gpt","model":"gpt-5.6-luna","effort":"max"}],
+            "disabled_subagent_models": [],
+            "advisor": {"agent":"custom-advisor","model":"claude-fable-5","effort":"xhigh"},
+            "orchestration_mode": "subagent-first",
+            "delegation_required": true,
+            "direct_main_execution": "fallback-only"
+        })
+    }
+
+    #[test]
+    fn main_tool_policy_reminder_allows_atomic_lookups_and_forbids_mutating_files() {
+        let ctx = hook_output_for_agent(&sample_summary(), "UserPromptSubmit", None)
+            .unwrap()["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(ctx.contains("do not use Write/Edit/MultiEdit/NotebookEdit in main"));
+        assert!(ctx.contains(
+            "Atomic Read, Grep, Glob, LS, WebSearch, or WebFetch lookups may stay in main"
+        ));
+        for tool in ATOMIC_LOOKUP_TOOLS {
+            assert!(
+                ctx.contains(tool),
+                "main reminder must name atomic lookup `{tool}`"
+            );
+        }
+        assert!(!ctx.contains("do not use Read/"));
+        assert!(!ctx.contains("do not use Read/Write"));
+        assert!(!ctx.contains("keep file/search work in SubAgents"));
+        assert!(!ctx.contains("denials for Read/Write/Edit/Grep"));
+    }
+
+    #[test]
+    fn subagent_tool_policy_reminder_does_not_imply_main_read_denials() {
+        let ctx = hook_output_for_agent(&sample_summary(), "SubagentStart", None)
+            .unwrap()["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(ctx.contains("denials for Write/Edit/MultiEdit/NotebookEdit"));
+        assert!(ctx.contains("do NOT apply"));
+        assert!(!ctx.contains("denials for Read/Write/Edit/Grep"));
     }
 
     fn routing_metadata(output: &Value) -> Value {
