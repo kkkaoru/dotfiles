@@ -58,7 +58,7 @@ impl WriterState {
         // harmless while preserving the no-leak invariant.
         let _ = self
             .reserved
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                 current.checked_sub(1)
             });
         self.changed.notify_waiters();
