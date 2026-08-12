@@ -91,11 +91,17 @@ pub(super) async fn execute_turn(context: TurnExecution<'_>, turn: PreparedTurn)
     } = context;
     let PreparedTurn {
         session_id,
+        model: turn_model,
         prompt,
         effort,
         mut cancellation,
         _permit: permit,
     } = turn;
+    let model = if turn_model.is_empty() {
+        model
+    } else {
+        &turn_model
+    };
     let mut permit = Some(permit);
     let mut ctl = TurnCtl {
         provider,

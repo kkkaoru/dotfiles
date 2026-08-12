@@ -139,6 +139,11 @@ pub(super) fn spawn_cmd(spec: &LaunchSpec, argv: &[String], cwd: Option<&Path>) 
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+        command.as_std_mut().process_group(0);
+    }
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
     }
@@ -149,4 +154,16 @@ pub(super) fn spawn_cmd(spec: &LaunchSpec, argv: &[String], cwd: Option<&Path>) 
             argv.join(" ")
         )
     })
+}
+
+pub(super) fn terminate_process_group(process_group: u32) {
+    #[cfg(unix)]
+    {
+        let Ok(process_group) = i32::try_from(process_group) else {
+            return;
+        };
+        let _ = unsafe { libc::kill(-process_group, libc::SIGKILL) };
+    }
+    #[cfg(not(unix))]
+    let _ = process_group;
 }

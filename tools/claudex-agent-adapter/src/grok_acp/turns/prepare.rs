@@ -33,6 +33,11 @@ pub(super) fn prepare_turn(
         .and_then(Value::as_str)
         .with_context(|| format!("{} ACP turn is missing threadId", provider.label()))?
         .to_owned();
+    let model = params
+        .get("model")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned();
     let prompt = prompt::input_text(params.get("input").unwrap_or(&Value::Null));
     let prefix = instructions.borrow_mut().remove(&session_id);
     let prompt = match prefix {
@@ -51,6 +56,7 @@ pub(super) fn prepare_turn(
         .map(str::to_owned);
     Ok(PreparedTurn {
         session_id,
+        model,
         prompt,
         effort,
         cancellation,

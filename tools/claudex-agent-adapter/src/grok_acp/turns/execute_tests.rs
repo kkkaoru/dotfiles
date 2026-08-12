@@ -91,6 +91,7 @@ mod tests {
         assert!(cancel_sender.send(CancelRequest { response }).is_ok());
         let turn = PreparedTurn {
             session_id: "session".to_owned(),
+            model: "model".to_owned(),
             prompt: "unused".to_owned(),
             effort: None,
             cancellation: cancel_receiver,

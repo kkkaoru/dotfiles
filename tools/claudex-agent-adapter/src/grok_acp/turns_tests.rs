@@ -58,12 +58,13 @@ fn prepares_prefixed_prompts_and_provider_specific_effort() {
     let permits = Arc::new(tokio::sync::Semaphore::new(3));
     let turn = prepare_turn(
         AcpProvider::Grok,
-        json!({"threadId":"session", "input":"prompt", "effort":"mid"}),
+        json!({"threadId":"session", "model":"model-a", "input":"prompt", "effort":"mid"}),
         Arc::clone(&permits).try_acquire_owned().unwrap(),
         oneshot::channel().1,
         &instructions,
     )
     .unwrap();
+    assert_eq!(turn.model, "model-a");
     assert_eq!(turn.prompt, "prefix\n\nprompt");
     assert_eq!(turn.effort, None);
     assert!(instructions.borrow().is_empty());
@@ -178,6 +179,7 @@ async fn driver_executes_queued_cancellation_and_emits_a_terminal_event() {
             turns
                 .send(PreparedTurn {
                     session_id: "session".to_owned(),
+                    model: "model".to_owned(),
                     prompt: "unused".to_owned(),
                     effort: None,
                     cancellation: cancellation_receiver,

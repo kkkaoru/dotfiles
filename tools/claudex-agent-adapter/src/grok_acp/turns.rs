@@ -26,6 +26,10 @@ pub(super) const REPLACE_SETTLE_TIMEOUT: Duration = Duration::from_millis(200);
 
 pub(super) struct PreparedTurn {
     pub(super) session_id: String,
+    /// The model selected by this routed request. A session-scoped configured
+    /// ACP child may serve several model routes, so this must not be borrowed
+    /// from the first route that happened to start the process.
+    pub(super) model: String,
     pub(super) prompt: String,
     pub(super) effort: Option<String>,
     pub(super) cancellation: oneshot::Receiver<CancelRequest>,

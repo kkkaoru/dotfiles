@@ -35,6 +35,49 @@ mod tests {
     }
 
     #[test]
+    fn shares_a_session_scoped_configured_child_only_for_identical_launches() {
+        let mut first = route("vendor-one", BackendKind::ConfiguredAcp);
+        first.model_prefixes.push("vendor-session-".to_owned());
+        first.acp = Some(AcpLaunch {
+            program: "provider".to_owned(),
+            arguments: vec!["acp".to_owned()],
+        });
+        let mut second = first.clone();
+        second.model = "vendor-two".to_owned();
+        let mut launch_scoped = first.clone();
+        launch_scoped.model = "vendor-launch".to_owned();
+        launch_scoped.model_prefixes.clear();
+        launch_scoped.acp = Some(AcpLaunch {
+            program: "provider".to_owned(),
+            arguments: vec!["--model".to_owned(), "{model}".to_owned()],
+        });
+        let mut different = first.clone();
+        different.model = "vendor-different".to_owned();
+        different.model_prefixes.clear();
+        different.acp = Some(AcpLaunch {
+            program: "other-provider".to_owned(),
+            arguments: vec!["acp".to_owned()],
+        });
+        let routes = RoutedBackends::lazy(&[first, second, launch_scoped, different]);
+
+        assert!(Arc::ptr_eq(
+            &routes.route(0).startup,
+            &routes.route(1).startup
+        ));
+        assert!(!Arc::ptr_eq(
+            &routes.route(0).startup,
+            &routes.route(2).startup
+        ));
+        assert!(!Arc::ptr_eq(
+            &routes.route(0).startup,
+            &routes.route(3).startup
+        ));
+
+        let (_, dynamic) = routes.resolve("vendor-session-dynamic").unwrap();
+        assert!(Arc::ptr_eq(&routes.route(0).startup, &dynamic.startup));
+    }
+
+    #[test]
     fn bounds_dynamic_routes_but_reuses_existing_models() {
         let routes = RoutedBackends::lazy(&[route_with_prefix(
             "dynamic-base",

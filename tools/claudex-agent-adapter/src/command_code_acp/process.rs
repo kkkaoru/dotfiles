@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use tokio::sync::mpsc;
+use tokio::{process::Child, sync::mpsc};
 
 use super::events::{ProgressEvent, TurnResult};
 use super::launch::LaunchSpec;
@@ -11,6 +11,7 @@ mod fallback;
 #[cfg(test)]
 use decode::Utf8LineDecoder;
 use fallback::{fallback_after_stdout, read_stderr};
+use helpers::{drain_stdout, spawn_cmd, terminate_process_group, trace_spawn};
 
 pub(super) const MAX_STDOUT_LINE_BYTES: usize = 2 * 1024 * 1024;
 
@@ -38,12 +39,16 @@ pub async fn run_turn_emitting(
 ) -> Result<TurnOutcome> {
     let argv = spec.argv(prompt, resume);
     trace_spawn(&argv, cwd);
-    let mut child = spawn_cmd(spec, &argv, cwd)?;
+    let child = spawn_cmd(spec, &argv, cwd)?;
+    let process_group = child.id();
+    let mut child = ProcessChild::new(child, process_group);
     let stdout = child
+        .child
         .stdout
         .take()
         .context("command-code headless stdout is unavailable")?;
     let stderr = child
+        .child
         .stderr
         .take()
         .context("command-code headless stderr is unavailable")?;
@@ -54,7 +59,7 @@ pub async fn run_turn_emitting(
     let stdout_drain = drain_stdout(spec, sink, stdout);
     let ((progress, result, stdout_error), stderr_text) =
         tokio::join!(stdout_drain, read_stderr(stderr));
-    let status = child.wait().await.context("wait for cmd -p")?;
+    let status = child.child.wait().await.context("wait for cmd -p")?;
     let exit_code = status.code();
     let result = result.unwrap_or_else(|| {
         fallback_after_stdout(
@@ -72,7 +77,29 @@ pub async fn run_turn_emitting(
 }
 
 mod helpers;
-use helpers::{drain_stdout, spawn_cmd, trace_spawn};
+
+struct ProcessChild {
+    child: Child,
+    process_group: Option<u32>,
+}
+
+impl ProcessChild {
+    fn new(child: Child, process_group: Option<u32>) -> Self {
+        Self {
+            child,
+            process_group,
+        }
+    }
+}
+
+impl Drop for ProcessChild {
+    fn drop(&mut self) {
+        if let Some(process_group) = self.process_group {
+            terminate_process_group(process_group);
+        }
+        let _ = self.child.start_kill();
+    }
+}
 
 #[cfg(test)]
 #[path = "process_tests.rs"]

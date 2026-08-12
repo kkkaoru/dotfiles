@@ -61,7 +61,13 @@ impl AgentBackend {
                     .to_owned();
                 let (index, raw_id) = routed_thread(&thread_id);
                 params["threadId"] = json!(raw_id);
-                let backend = routes.route(index).get().await?;
+                let route = routes.route(index);
+                // A session-scoped configured ACP child can serve several
+                // routed models. Preserve the route target on turn/start;
+                // otherwise a request that omits `model` would fall back to
+                // whichever model first booted the shared child.
+                params["model"] = json!(route.model.clone());
+                let backend = route.get().await?;
                 Box::pin(backend.request_detached(method, params)).await
             }
             Self::Routed(_) => bail!("routed backend does not support request `{method}`"),

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use super::{AgentBackend, BackendKind, BackendRoute, BackendStartup, StartupState};
+use super::{AgentBackend, BackendRoute, StartupState};
 
 pub(super) fn start_backend(
     route: BackendRoute,
@@ -10,18 +10,6 @@ pub(super) fn start_backend(
     let (sender, receiver) = tokio::sync::watch::channel(StartupState::Starting);
     tokio::spawn(publish_spawn_result(route, startup, generation, sender));
     receiver
-}
-
-pub(super) fn provider_startup(
-    kind: BackendKind,
-    codex_startup: &Arc<BackendStartup>,
-) -> Arc<BackendStartup> {
-    match kind {
-        BackendKind::CodexAppServer => Arc::clone(codex_startup),
-        BackendKind::ConfiguredAcp | BackendKind::CopilotAcp | BackendKind::GrokAcp => {
-            Arc::new(BackendStartup::default())
-        }
-    }
 }
 
 async fn publish_spawn_result(

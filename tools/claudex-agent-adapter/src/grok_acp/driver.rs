@@ -111,12 +111,13 @@ pub(super) async fn run_driver(setup: DriverSetup, mut commands: mpsc::Receiver<
         alive: Arc::clone(&setup.alive),
     })
     .await;
-    let Ok((connection, mut child, io_stopped, process_group)) = started else {
+    let Ok((connection, child, io_stopped, process_group)) = started else {
         let _ = setup.ready.send(started.map(|_| ()));
         setup.alive.store(false, Ordering::Relaxed);
         setup.events.close();
         return;
     };
+    let mut child = connection::ProviderChild::new(child, process_group);
     let _ = setup.ready.send(Ok(()));
     let shutdown = tokio::select! {
         shutdown = drive_commands(
@@ -128,7 +129,7 @@ pub(super) async fn run_driver(setup: DriverSetup, mut commands: mpsc::Receiver<
             &setup.events,
             &setup.alive,
         ) => shutdown,
-        status = child.wait() => {
+        status = child.child.wait() => {
             match status {
                 Ok(status) => tracing::warn!(provider = setup.provider.label(), %status, "ACP provider exited"),
                 Err(error) => tracing::error!(provider = setup.provider.label(), ?error, "failed to wait for ACP provider"),
@@ -140,8 +141,7 @@ pub(super) async fn run_driver(setup: DriverSetup, mut commands: mpsc::Receiver<
             None
         },
     };
-    connection::terminate_process_group(process_group);
-    if let Err(error) = child.wait().await {
+    if let Err(error) = child.terminate_and_wait().await {
         tracing::error!(
             provider = setup.provider.label(),
             ?error,

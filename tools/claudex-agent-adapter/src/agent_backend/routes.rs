@@ -15,7 +15,7 @@ mod shutdown;
 mod startup;
 
 pub use backends::RoutedBackends;
-use startup::{provider_startup, start_backend};
+use startup::start_backend;
 
 pub(super) const MAX_DYNAMIC_ROUTES: usize = 32;
 

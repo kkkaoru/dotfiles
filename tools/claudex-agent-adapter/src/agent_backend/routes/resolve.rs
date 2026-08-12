@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result, bail};
 
-use super::{BackendRoute, MAX_DYNAMIC_ROUTES, RoutedBackend, RoutedBackends, provider_startup};
+use super::{
+    BackendRoute, MAX_DYNAMIC_ROUTES, RoutedBackend, RoutedBackends, backends::startup_for_route,
+};
 
 impl RoutedBackends {
     pub(in crate::agent_backend) fn max_context_tokens_for_model(
@@ -80,14 +82,14 @@ impl RoutedBackends {
             .prefix_template(model)
             .cloned()
             .with_context(|| format!("no backend route is configured for model `{model}`"))?;
-        let kind = template.backend;
-        let route = Arc::new(RoutedBackend::lazy(
-            BackendRoute {
-                model: model.to_owned(),
-                ..template
-            },
-            provider_startup(kind, &self.codex_startup),
-        ));
+        let route = BackendRoute {
+            model: model.to_owned(),
+            ..template
+        };
+        // Keep dynamic models on the same configured ACP child when the launch
+        // contract is session-scoped and identical.
+        let startup = startup_for_route(&route, &self.codex_startup, &self.configured_acp_startups);
+        let route = Arc::new(RoutedBackend::lazy(route, startup));
         dynamic.push(Arc::clone(&route));
         Ok((self.configured.len() + dynamic.len() - 1, route))
     }

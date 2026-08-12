@@ -16,9 +16,25 @@ async fn abort_routed_provider(routes: &RoutedBackends, thread_id: &str) -> Resu
     let backend = route
         .ready_backend()
         .context("thread route backend is unavailable during provider abort")?;
-    // Shared Codex app-server must survive a single disconnect — retiring the
-    // route clears startup for every Codex model and forces a cold respawn.
-    if matches!(backend.as_ref(), AgentBackend::Codex(_)) {
+    // Shared provider children must survive a single target's failed
+    // cancellation. ACP cancellation is session-targeted; killing this leaf
+    // would also terminate clean sibling sessions sharing the persistent
+    // configured/Grok/Copilot child. Codex has the same invariant because its
+    // app-server owns the shared prompt cache. The target turn is already
+    // invalidated by the ACP cancellation path, so leave the child alive for
+    // unrelated turns and future reuse.
+    if matches!(
+        backend.as_ref(),
+        AgentBackend::Codex(_)
+            | AgentBackend::ConfiguredAcp(_)
+            | AgentBackend::Copilot(_)
+            | AgentBackend::Grok(_)
+    ) {
+        tracing::debug!(
+            thread_id,
+            model = %route.model,
+            "retaining shared provider after target-specific abort"
+        );
         return Ok(());
     }
     route.retire();
@@ -49,19 +65,21 @@ impl AgentBackend {
         }
     }
 
-    /// Force-close the provider that owns a turn when it has no per-turn
-    /// cancellation primitive. Routed non-Codex providers are retired before
-    /// shutdown so a later request starts a fresh leaf. Codex app-server is
-    /// shared across routes/threads — aborting must not kill it or every
-    /// idle prompt-cache / SubAgent reuse slot dies with the one disconnect.
+    /// Recover a turn whose provider has no settled per-turn cancellation
+    /// primitive. Routed ACP/Codex pools retain their child because the abort
+    /// identifies one target session, not every clean sibling using that
+    /// persistent child. Standalone leaves still shut down below.
     pub(crate) async fn abort_turn_provider(&self, thread_id: &str) -> Result<()> {
         match self {
+            // A routed ACP pool can retain the provider above so a failed
+            // target cancellation cannot take down a clean sibling. A leaf
+            // provider has no sibling ownership context, so shut it down.
             Self::Codex(_) => {}
+            Self::ConfiguredAcp(_) | Self::Copilot(_) | Self::Grok(_) => self.shutdown_leaf().await,
             Self::Routed(routes) => abort_routed_provider(routes, thread_id).await?,
             Self::SessionScoped(scopes) => {
                 Box::pin(scopes.unguarded_scope().abort_turn_provider(thread_id)).await?;
             }
-            _ => self.shutdown_leaf().await,
         }
         Ok(())
     }

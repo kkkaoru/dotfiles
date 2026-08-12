@@ -46,6 +46,41 @@ async fn terminates_the_entire_provider_process_group() {
     assert!(!group_exists);
 }
 
+#[tokio::test]
+#[allow(clippy::excessive_nesting)]
+async fn provider_child_drop_reaps_a_term_resistant_descendant_group() {
+    use std::{os::unix::process::CommandExt as _, process::Stdio, time::Duration};
+
+    let mut command = tokio::process::Command::new("sh");
+    command
+        .args(["-c", "trap '' TERM; sleep 60 & wait"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    command.as_std_mut().process_group(0);
+    let child = command.spawn().unwrap();
+    let process_group = child.id().unwrap();
+    let provider = super::connection::ProviderChild::new(child, process_group);
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    drop(provider);
+
+    for _ in 0..100 {
+        let group_exists = std::process::Command::new("kill")
+            .args(["-0", &format!("-{process_group}")])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .unwrap()
+            .success();
+        if !group_exists {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    panic!("provider child descendant group {process_group} survived Drop");
+}
+
 #[test]
 fn detects_opencode_programs_and_injects_anti_nesting_runtime_config() {
     use std::ffi::OsString;
@@ -449,6 +484,7 @@ async fn bounded_queues_apply_backpressure_at_fixed_capacities() {
         turns
             .send(PreparedTurn {
                 session_id: format!("session-{index}"),
+                model: "model".to_owned(),
                 prompt: "prompt".to_owned(),
                 effort: None,
                 cancellation: pending_cancellation(),
@@ -753,6 +789,7 @@ async fn check_panicking_turn_worker() {
     turns
         .send(PreparedTurn {
             session_id: "panic".to_owned(),
+            model: "model".to_owned(),
             prompt: String::new(),
             effort: None,
             cancellation: pending_cancellation(),
@@ -793,6 +830,7 @@ async fn check_concurrent_turn_worker() {
         turns
             .send(PreparedTurn {
                 session_id: session_id.to_owned(),
+                model: "model".to_owned(),
                 prompt: String::new(),
                 effort: None,
                 cancellation: pending_cancellation(),

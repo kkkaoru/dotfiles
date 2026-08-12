@@ -1406,3 +1406,68 @@ async fn run_turn_abort_kills_sleeping_cmd_quickly() {
         started.elapsed()
     );
 }
+
+#[tokio::test]
+#[allow(clippy::excessive_nesting)]
+async fn run_turn_abort_kills_term_resistant_descendants_with_the_cmd_group() {
+    let root = TempDir::new().expect("descendant cmd dir");
+    let group_file = root.path().join("process-group");
+    let program = write_executable(
+        root.path(),
+        "cmd",
+        &format!(
+            "#!/bin/sh\nsleep 30 &\nchild=$!\nprintf '%s %s\\n' \"$$\" \"$child\" > '{}'\nwait\n",
+            group_file.display()
+        ),
+    );
+    let spec = spec_with_program(program);
+    let run = tokio::spawn(async move { run_turn(&spec, "hello", None).await });
+    let group = match tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            if let Ok(contents) = fs::read_to_string(&group_file)
+                && let Some(group) = contents.split_whitespace().next()
+                && let Ok(group) = group.parse::<i32>()
+            {
+                break group;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    {
+        Ok(group) => group,
+        Err(error) => {
+            let finished = run.is_finished();
+            run.abort();
+            let result = run.await;
+            panic!(
+                "cmd descendant fixture did not start: {error:?}; finished={finished}; result={result:?}; file={:?}",
+                fs::read_to_string(&group_file)
+            );
+        }
+    };
+    run.abort();
+    let joined = tokio::time::timeout(std::time::Duration::from_secs(2), run)
+        .await
+        .expect("aborted descendant cmd should drop within 2s");
+    assert!(
+        joined
+            .expect_err("join after descendant abort")
+            .is_cancelled()
+    );
+
+    let group_arg = format!("-{group}");
+    for _ in 0..100 {
+        let alive = std::process::Command::new("kill")
+            .args(["-0", &group_arg])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|status| status.success());
+        if !alive {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("command descendant process group {group} survived task abort");
+}

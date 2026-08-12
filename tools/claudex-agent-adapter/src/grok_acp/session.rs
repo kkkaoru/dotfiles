@@ -62,6 +62,11 @@ pub(super) async fn create(
     params: Value,
     instructions: &Rc<RefCell<HashMap<String, String>>>,
 ) -> Result<Value> {
+    // A session-scoped configured ACP child can serve multiple routed model
+    // targets. Prefer the request's model over the child startup model so the
+    // ACP `session/new` metadata and subsequent `set_session_model` target the
+    // session that actually owns this Claude request.
+    let model = params.get("model").and_then(Value::as_str).unwrap_or(model);
     // Claude Code embeds the active child cwd in its base instructions. Keep ACP sessions scoped
     // to that request instead of leaking the adapter daemon's launch directory.
     let session_cwd = session_cwd(&params, cwd);

@@ -83,15 +83,19 @@ async fn cancellation_and_abort_cover_each_leaf_and_routed_route() {
         super::super::TurnCancellation::Settled
     );
     routed.abort_turn_provider("0:session").await.unwrap();
-    // A concurrent event subscriber must observe a closed stream, not panic,
-    // after the routed leaf has been retired by the abort path.
+    // A target-specific abort must retain the shared ACP child for clean
+    // sibling sessions instead of retiring the whole route.
     let events = routed.subscribe_thread("0:session");
-    assert!(events.recv().await.is_none());
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(10), events.recv())
+            .await
+            .is_err()
+    );
     assert_eq!(
         routed.cancel_turn("0:session").await.unwrap(),
         super::super::TurnCancellation::Settled
     );
-    assert!(routed.abort_turn_provider("0:session").await.is_err());
+    routed.abort_turn_provider("0:session").await.unwrap();
 }
 
 #[tokio::test]

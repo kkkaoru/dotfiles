@@ -17,6 +17,7 @@ use handshake::{initialize, wire_provider_connection};
 
 #[path = "connection_command.rs"]
 mod command;
+pub(super) use command::ProviderChild;
 #[cfg(test)]
 pub(super) use command::is_opencode_program;
 pub(super) use command::terminate_process_group;
@@ -95,12 +96,35 @@ pub(super) async fn start(
     } = args;
     let command = build_provider_command(program, provider, arguments, model, effort)?;
     let (mut child, process_group) = spawn_provider_process(command, provider, cwd)?;
+    // Keep ownership local until the handshake has completed. In particular,
+    // a missing stdio pipe must still kill and reap the just-started provider.
     let (connection, io_stopped_rx) =
-        wire_provider_connection(provider, events, &mut child, alive.clone())?;
-    if let Err(error) = initialize(provider, &connection).await {
-        terminate_process_group(process_group);
-        let _ = child.wait().await;
-        return Err(error);
+        match wire_provider_connection(provider, events, &mut child, alive.clone()) {
+            Ok(connection) => connection,
+            Err(error) => {
+                terminate_process_group(process_group);
+                let _ = child.wait().await;
+                return Err(error);
+            }
+        };
+    match tokio::time::timeout(
+        std::time::Duration::from_secs(8),
+        initialize(provider, &connection),
+    )
+    .await
+    {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            terminate_process_group(process_group);
+            let _ = child.wait().await;
+            return Err(error);
+        }
+        Err(_) => {
+            let error = anyhow::anyhow!("{} ACP initialize timed out after 8s", provider.label());
+            terminate_process_group(process_group);
+            let _ = child.wait().await;
+            return Err(error);
+        }
     }
     Ok((connection, child, io_stopped_rx, process_group))
 }

@@ -1,9 +1,4 @@
-use std::{
-    env,
-    ffi::OsString,
-    path::Path,
-    process::{Command as StdCommand, Stdio},
-};
+use std::{env, ffi::OsString, path::Path, process::Stdio};
 
 use anyhow::{Context as _, Result, bail};
 use tokio::process::Command;
@@ -135,14 +130,53 @@ pub(in crate::grok_acp) fn spawn_provider_process(
         .with_context(|| format!("start {} ACP server", provider.label()))?;
     let process_group = child
         .id()
-        .with_context(|| format!("{} ACP process id is unavailable", provider.label()))?;
+        .ok_or_else(|| anyhow::anyhow!("{} ACP process id is unavailable", provider.label()))?;
     Ok((child, process_group))
 }
 
 pub(in crate::grok_acp) fn terminate_process_group(process_group: u32) {
-    let _status = StdCommand::new("kill")
-        .args(["-KILL", &format!("-{process_group}")])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
+    #[cfg(unix)]
+    {
+        let Ok(process_group) = i32::try_from(process_group) else {
+            return;
+        };
+        // Signal the process group directly. Spawning a `kill` helper here can
+        // itself be stranded when the adapter is shutting down, and a direct
+        // SIGKILL also handles descendants that ignore TERM.
+        let _ = unsafe { libc::kill(-process_group, libc::SIGKILL) };
+    }
+    #[cfg(not(unix))]
+    let _ = process_group;
+}
+
+/// Owns a provider child for the complete driver lifetime. The async driver
+/// normally performs an explicit reap, but this Drop guard is the last line of
+/// defence when a LocalSet task or driver thread is aborted unexpectedly.
+pub(in crate::grok_acp) struct ProviderChild {
+    pub(in crate::grok_acp) child: tokio::process::Child,
+    process_group: u32,
+}
+
+impl ProviderChild {
+    pub(in crate::grok_acp) fn new(child: tokio::process::Child, process_group: u32) -> Self {
+        Self {
+            child,
+            process_group,
+        }
+    }
+
+    pub(in crate::grok_acp) async fn terminate_and_wait(
+        &mut self,
+    ) -> std::io::Result<std::process::ExitStatus> {
+        terminate_process_group(self.process_group);
+        let _ = self.child.start_kill();
+        self.child.wait().await
+    }
+}
+
+impl Drop for ProviderChild {
+    fn drop(&mut self) {
+        terminate_process_group(self.process_group);
+        let _ = self.child.start_kill();
+    }
 }
