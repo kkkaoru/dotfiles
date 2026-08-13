@@ -205,3 +205,66 @@ async fn weak_fatal_watcher_exits_when_writer_drains() {
     );
     drop(reader);
 }
+
+#[tokio::test]
+async fn fatal_reason_keeps_the_first_error() {
+    let state = WriterState::new();
+    state.set_fatal("first".to_owned()).await;
+    state.set_fatal("second".to_owned()).await;
+    assert_eq!(state.failure().await.as_deref(), Some("first"));
+}
+
+#[test]
+fn frame_without_completion_channel_is_safe_to_complete() {
+    let state = Arc::new(WriterState::new());
+    let mut frame = Frame {
+        bytes: Vec::new(),
+        state,
+        completion: None,
+        completed: false,
+    };
+    frame.complete(Ok(()));
+    assert!(frame.completed);
+}
+
+#[test]
+fn reservation_without_permit_returns_a_closed_completion() {
+    let reservation = FrameReservation {
+        permit: None,
+        state: Arc::new(WriterState::new()),
+        committed: false,
+    };
+    let mut receiver = reservation.send(Vec::new());
+    assert!(receiver.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn shutdown_is_idempotent_and_empty_drain_completes() {
+    let (reader, writer) = duplex(16);
+    let queue = FrameWriter::spawn_with_capacity(writer, 1);
+    queue.begin_shutdown().await;
+    queue.begin_shutdown().await;
+    assert!(queue.reserve().await.is_err());
+    queue.drain(Duration::from_secs(1)).await;
+    drop(reader);
+    queue.join().await;
+    queue.join().await;
+}
+
+#[tokio::test]
+async fn shutdown_racing_with_reservation_rejects_the_acquired_permit() {
+    let (reader, writer) = duplex(1);
+    let queue = FrameWriter::spawn_with_capacity(writer, 1);
+    let first = queue.reserve().await.expect("reserve first slot");
+    let blocked = tokio::spawn(reserve_for_test(Arc::clone(&queue)));
+    tokio::task::yield_now().await;
+    queue.begin_shutdown().await;
+    drop(first);
+    let result = blocked.await.expect("reservation task");
+    match result {
+        Ok(_) => panic!("shutdown must reject reservation"),
+        Err(error) => assert!(error.to_string().contains("closed")),
+    }
+    drop(reader);
+    queue.join().await;
+}
