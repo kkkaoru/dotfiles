@@ -14,6 +14,7 @@ mod launch_mcp;
 pub mod launcher;
 pub(crate) mod listen_handover;
 pub(crate) mod logging;
+mod model_id;
 pub mod parallel_scheduler;
 pub mod path_env;
 pub mod provider_config;

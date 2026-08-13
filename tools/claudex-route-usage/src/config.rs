@@ -10,7 +10,7 @@ pub const OPENCODE_GO_DEFAULT_MODEL: &str = "opencode-go/deepseek-v4-pro";
 pub const OPENCODE_GO_DEFAULT_USAGE_PROVIDER: &str = "opencodego";
 /// Bump when worker-selection semantics change so a cached context cannot
 /// retain the old ordering or exclusion rules for the routing-cache TTL.
-pub const ROUTING_CACHE_VERSION: i64 = 10;
+pub const ROUTING_CACHE_VERSION: i64 = 11;
 
 pub fn default_advisor() -> Value {
     serde_json::json!({
@@ -371,33 +371,14 @@ fn validate_native_workers(config: &Value, enabled: &[Value]) -> Result<Vec<Valu
 }
 
 pub fn load_disabled_models(path: &Path) -> Result<BTreeSet<String>> {
-    let text = std::fs::read_to_string(path)?;
-    let policy: Value = serde_json::from_str(&text)?;
-    let Some(object) = policy.as_object() else {
-        bail!("disabled SubAgent model config must use version 1 schema");
-    };
-    let keys: BTreeSet<&str> = object.keys().map(String::as_str).collect();
-    if keys != BTreeSet::from(["version", "disabledModels"])
-        || object.get("version").and_then(Value::as_i64) != Some(1)
-    {
-        bail!("disabled SubAgent model config must use version 1 schema");
-    }
-    let Some(models) = object.get("disabledModels").and_then(Value::as_array) else {
-        bail!("disabledModels must contain valid exact model IDs");
-    };
-    if !models.iter().all(valid_model_id) {
-        bail!("disabledModels must contain valid exact model IDs");
-    }
-    let set: BTreeSet<String> = models
-        .iter()
-        .filter_map(|value| value.as_str())
-        .map(str::to_owned)
-        .collect();
-    if set.len() != models.len() {
-        bail!("disabledModels must not contain duplicates");
-    }
-    Ok(set)
+    Ok(load_disabled_models_policy(path).models())
 }
+
+#[path = "config_denylist.rs"]
+mod denylist_policy;
+#[cfg(test)]
+pub use denylist_policy::enabled_denylist_conflicts;
+pub use denylist_policy::load_disabled_models_policy;
 
 pub fn parse_environment_models(raw: &str) -> Result<BTreeSet<String>> {
     let mut models = BTreeSet::new();

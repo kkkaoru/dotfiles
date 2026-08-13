@@ -10,6 +10,10 @@ fn session_setup_timeouts_fail_fast_without_mcp_hang() {
         SESSION_SETUP_WITH_MCP_TIMEOUT <= Duration::from_secs(3),
         "MCP-first session/new must fail fast so Nucleating is not stuck for seconds on hung MCP"
     );
+    assert!(
+        SESSION_SETUP_WITH_MCP_TIMEOUT <= Duration::from_secs(2),
+        "post-create MCP attach must not extend second caps"
+    );
     assert_eq!(
         session_setup_timeout(AcpProvider::Configured, true),
         SESSION_SETUP_TIMEOUT

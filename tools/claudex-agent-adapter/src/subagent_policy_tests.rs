@@ -164,7 +164,31 @@ mod tests {
     }
 
     #[test]
-    fn rejects_invalid_dedicated_policy_files() {
+    fn uninitialized_denylist_read_failure_is_fail_open() {
+        clear_last_good();
+        let path = Path::new("/tmp/disabled-subagent-models.uninitialized.json");
+        let models = load_config_from_reader(|| Ok("not-json".to_owned()), path)
+            .expect("uninitialized denylist must fail open");
+        assert!(models.is_empty());
+    }
+
+    #[test]
+    fn unset_denylist_survives_later_read_failure() {
+        clear_last_good();
+        let path = Path::new("/tmp/disabled-subagent-models.unset.json");
+        let unset = load_config_from_reader(
+            || Ok(r#"{"version":1,"disabledModels":[]}"#.to_owned()),
+            path,
+        )
+        .expect("explicit empty denylist is unset, not uninitialized");
+        assert!(unset.is_empty());
+        let cached = load_config_from_reader(|| Ok("not-json".to_owned()), path)
+            .expect("unset last-good must survive a later parse failure");
+        assert!(cached.is_empty());
+    }
+
+    #[test]
+    fn rejects_invalid_dedicated_policy_files_until_retries_exhaust() {
         clear_last_good();
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("policy.json");
@@ -175,28 +199,14 @@ mod tests {
             r#"{"version":1,"disabledModels":[],"extra":true}"#,
             "not-json",
         ] {
-            assert_rejects_invalid_policy(&path, contents);
+            std::fs::write(&path, contents).unwrap();
+            let models =
+                load_config(Some(&path)).expect("invalid policy fail-opens when uninitialized");
+            assert!(
+                models.is_empty(),
+                "uninitialized invalid denylist must fail open: {contents}"
+            );
         }
-    }
-
-    fn assert_rejects_invalid_policy(path: &Path, contents: &str) {
-        std::fs::write(path, contents).unwrap();
-        let error = load_config(Some(path)).expect_err("invalid policy must fail");
-        if contents != "not-json" {
-            return;
-        }
-        let message = error.to_string();
-        assert!(
-            message.contains("parse disabled SubAgent model config"),
-            "{message}"
-        );
-        assert!(
-            message.contains("expected")
-                || message.contains("EOF")
-                || message.contains("key")
-                || message.contains("value"),
-            "{message}"
-        );
     }
 
     #[test]

@@ -129,7 +129,12 @@ pub(super) fn fallback_last_good(path: &Path, error: anyhow::Error) -> Result<BT
         );
         return Ok(models);
     }
-    Err(error)
+    // Uninitialized (never loaded a valid policy): fail open so routing continues.
+    eprintln!(
+        "claudex: {error}; denylist uninitialized, fail-open with empty policy for {}",
+        path.display()
+    );
+    Ok(BTreeSet::new())
 }
 
 pub(super) fn with_last_good<R>(update: impl FnOnce(&mut Option<BTreeSet<String>>) -> R) -> R {

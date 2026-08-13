@@ -26,7 +26,44 @@ pub(super) async fn new_session_with_mcp(
     if provider != AcpProvider::Grok {
         request = request.meta(json!({ "modelId": model }).as_object().cloned());
     }
-    await_setup(provider, timeout, connection.new_session(request)).await
+    await_acp_rpc(
+        provider,
+        timeout,
+        "session/new",
+        connection.new_session(request),
+    )
+    .await
+}
+
+pub(super) async fn attach_launch_mcp(
+    provider: AcpProvider,
+    connection: &acp::ClientSideConnection,
+    session_id: &acp::SessionId,
+    session_cwd: &Path,
+    mcp: Vec<acp::McpServer>,
+) {
+    if mcp.is_empty() {
+        return;
+    }
+    let request = acp::LoadSessionRequest::new(session_id.clone(), session_cwd).mcp_servers(mcp);
+    match await_acp_rpc(
+        provider,
+        SESSION_SETUP_WITH_MCP_TIMEOUT,
+        "session/load",
+        connection.load_session(request),
+    )
+    .await
+    {
+        Ok(_) => tracing::info!(
+            provider = provider.label(),
+            "ACP launch MCP attached after session/new"
+        ),
+        Err(error) => tracing::warn!(
+            %error,
+            provider = provider.label(),
+            "ACP launch MCP attach after session/new failed; session remains usable"
+        ),
+    }
 }
 
 pub(super) fn session_setup_timeout(_provider: AcpProvider, mcp_empty: bool) -> Duration {
@@ -54,38 +91,34 @@ pub(super) async fn await_model_setup<T>(
     timeout: Duration,
     request: impl Future<Output = acp::Result<T>>,
 ) -> Result<T> {
-    tokio::time::timeout(timeout, request)
-        .await
-        .map_err(|_| {
-            anyhow!(
-                "{} ACP session/set_model timed out after {:?}",
-                provider.label(),
-                timeout
-            )
-        })?
-        .map_err(|error| {
-            anyhow!(
-                "{} ACP session/set_model failed: {error:?}",
-                provider.label()
-            )
-        })
+    await_acp_rpc(provider, timeout, "session/set_model", request).await
 }
 
+#[cfg(test)]
 pub(super) async fn await_setup<T>(
     provider: AcpProvider,
     timeout: Duration,
+    request: impl Future<Output = acp::Result<T>>,
+) -> Result<T> {
+    await_acp_rpc(provider, timeout, "session/new", request).await
+}
+
+async fn await_acp_rpc<T>(
+    provider: AcpProvider,
+    timeout: Duration,
+    method: &str,
     request: impl Future<Output = acp::Result<T>>,
 ) -> Result<T> {
     tokio::time::timeout(timeout, request)
         .await
         .map_err(|_| {
             anyhow!(
-                "{} ACP session/new timed out after {:?}",
+                "{} ACP {method} timed out after {:?}",
                 provider.label(),
                 timeout
             )
         })?
-        .map_err(|error| anyhow!("{} ACP session/new failed: {error:?}", provider.label()))
+        .map_err(|error| anyhow!("{} ACP {method} failed: {error:?}", provider.label()))
 }
 
 pub(super) fn request_cwd(params: &Value) -> Option<PathBuf> {

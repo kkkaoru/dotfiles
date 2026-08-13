@@ -27,7 +27,8 @@ async fn replace_shares_one_settle_budget_when_worker_never_exits() {
     });
 
     let started = tokio::time::Instant::now();
-    let replace = replace_active_turn(AcpProvider::Grok, &active_turns, "session");
+    let invalidated = InvalidatedSessions::default();
+    let replace = replace_active_turn(AcpProvider::Grok, &active_turns, &invalidated, "session");
     let advance = async {
         tokio::time::sleep(REPLACE_SETTLE_TIMEOUT + Duration::from_millis(25)).await;
     };
@@ -35,10 +36,13 @@ async fn replace_shares_one_settle_budget_when_worker_never_exits() {
     let elapsed = started.elapsed();
     hold.abort();
 
+    let error = result.expect_err("stuck replace must fail closed");
     assert!(
-        result.is_err(),
-        "stuck replace must fail closed: {result:?}"
+        error.to_string().contains("was invalidated"),
+        "unsettled replace must invalidate only that session: {error}"
     );
+    assert!(invalidated.borrow().contains("session"));
+    assert!(!active_turns.borrow().contains_key("session"));
     assert!(
         elapsed < REPLACE_SETTLE_TIMEOUT.saturating_mul(2),
         "stacked cancel+clear budgets would approach 2x; elapsed={elapsed:?}"
@@ -101,9 +105,12 @@ async fn replacement_settles_successful_failed_and_dropped_cancellations() {
             .borrow_mut()
             .insert("session".to_owned(), Some(cancel));
         let settle = settle_replacement(cancel_receiver, Rc::clone(&active_turns), Some(result));
-        let replace = replace_active_turn(AcpProvider::Grok, &active_turns, "session");
+        let invalidated = InvalidatedSessions::default();
+        let replace =
+            replace_active_turn(AcpProvider::Grok, &active_turns, &invalidated, "session");
         let (replace, ()) = tokio::join!(replace, settle);
         assert!(replace.is_ok());
+        assert!(invalidated.borrow().is_empty());
     }
 
     let active_turns = ActiveTurns::default();
@@ -112,7 +119,8 @@ async fn replacement_settles_successful_failed_and_dropped_cancellations() {
         .borrow_mut()
         .insert("session".to_owned(), Some(cancel));
     let settle = settle_replacement(cancel_receiver, Rc::clone(&active_turns), None);
-    let replace = replace_active_turn(AcpProvider::Grok, &active_turns, "session");
+    let invalidated = InvalidatedSessions::default();
+    let replace = replace_active_turn(AcpProvider::Grok, &active_turns, &invalidated, "session");
     let (replace, ()) = tokio::join!(replace, settle);
     assert!(replace.is_ok());
 }

@@ -64,7 +64,13 @@ pub(super) async fn queue_turn(
     // Same-session follow-ups must replace the in-flight turn instead of failing
     // with "already has an active turn" (that error deferred live user messages).
     if active_turns.borrow().contains_key(&turn.session_id) {
-        replace_active_turn(provider, active_turns, &turn.session_id).await?;
+        replace_active_turn(
+            provider,
+            active_turns,
+            invalidated_sessions,
+            &turn.session_id,
+        )
+        .await?;
     }
     let session_id = turn.session_id.clone();
     active_turns

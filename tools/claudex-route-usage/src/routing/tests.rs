@@ -901,6 +901,61 @@ fn disabled_models_are_not_visible_in_selected_workers() {
 }
 
 #[test]
+fn hostname_denylist_overrides_providers_json_enabled_in_selected_workers() {
+    let config = config_from_json(
+        r#"{
+          "version": 1,
+          "mainProviders": ["codex", "opencode"],
+          "providers": [
+            {
+              "id": "codex",
+              "agent": "claudex-gpt",
+              "defaultModel": "gpt-5.6-luna",
+              "effort": "max",
+              "enabled": true,
+              "usageProvider": "codex",
+              "modelPrefixes": ["gpt"],
+              "backend": "codex-app-server"
+            },
+            {
+              "id": "opencode",
+              "agent": "claudex-deepseek-flash",
+              "defaultModel": "opencode-go/deepseek-v4-flash",
+              "effort": "high",
+              "enabled": true,
+              "usageProvider": "opencodego",
+              "modelPrefixes": ["opencode-go/"],
+              "backend": "configured-acp"
+            }
+          ],
+          "fallback": {
+            "agent": "claudex-sonnet",
+            "model": "claude-sonnet-5",
+            "effort": "high"
+          },
+          "nativeWorkers": []
+        }"#,
+    );
+    let denylist = BTreeSet::from(["opencode-go/deepseek-v4-flash".to_owned()]);
+    let raw_providers = json!([
+        {"id":"codex","defaultModel":"gpt-5.6-luna","enabled":true},
+        {"id":"opencode","defaultModel":"opencode-go/deepseek-v4-flash","enabled":true}
+    ]);
+    assert_eq!(
+        crate::config::enabled_denylist_conflicts(raw_providers.as_array().unwrap(), &denylist),
+        ["opencode".to_owned()]
+    );
+    let usage = json!([
+        {"provider":"codex","usage":{"primary":{"usedPercent":10.0},"secondary":{"usedPercent":20.0}}},
+        {"provider":"opencodego","usage":{"primary":{"usedPercent":2.0},"secondary":{"usedPercent":5.0}}}
+    ]);
+    let summary = routing_summary(&usage, &config, &denylist).unwrap();
+    let workers = selected_models(&summary);
+    assert!(!workers.contains(&"opencode-go/deepseek-v4-flash"));
+    assert_eq!(summary["providers"]["opencode"]["disabled"], true);
+}
+
+#[test]
 fn task_fanout_is_bounded() {
     assert_eq!(task_fanout(0, 5, None).unwrap(), 0);
     assert_eq!(task_fanout(1, 5, None).unwrap(), 1);

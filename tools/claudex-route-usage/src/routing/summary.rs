@@ -3,8 +3,9 @@
 use super::orchestration::orchestration_contract;
 use super::quota::{capacity_priority, quota_with_windows, status};
 use super::workers::{
-    extend_with_native_workers, fallback_worker, native_worker_item, prefer_weekly_headroom,
-    ranked_native_quota, selected_agent_values, worker,
+    exclude_denylisted_candidates, exclude_denylisted_workers, extend_with_native_workers,
+    fallback_worker, native_worker_item, prefer_weekly_headroom, ranked_native_quota,
+    selected_agent_values, worker,
 };
 use super::{CapacityKey, rank_selected_workers};
 use crate::config::Config;
@@ -44,8 +45,10 @@ pub(crate) fn routing_summary_with_exhaustion(
     )?;
     let native_quota =
         native_quota_fields(report, config, disabled_models, &mut automatic_candidates)?;
+    automatic_candidates = exclude_denylisted_candidates(automatic_candidates, disabled_models);
     let mut selected = rank_selected_workers(automatic_candidates);
     selected = prefer_weekly_headroom(selected, &providers, &native_quota);
+    selected = exclude_denylisted_workers(selected, disabled_models);
 
     let fallback_active = selected.is_empty()
         && config
@@ -61,6 +64,7 @@ pub(crate) fn routing_summary_with_exhaustion(
         .filter_map(|item| item.get("agent").and_then(Value::as_str).map(str::to_owned))
         .collect();
     extend_with_native_workers(&mut selected, config, disabled_models, &participating);
+    selected = exclude_denylisted_workers(selected, disabled_models);
     let preferred = selected.first().cloned();
     let mut summary = serde_json::json!({
         "providers": providers,
@@ -232,7 +236,9 @@ pub fn fallback_summary(
         vec![fallback]
     };
     let fallback_active = !selected.is_empty();
+    selected = exclude_denylisted_workers(selected, disabled_models);
     extend_with_native_workers(&mut selected, config, disabled_models, &BTreeSet::new());
+    selected = exclude_denylisted_workers(selected, disabled_models);
     let preferred = selected.first().cloned();
     let mut summary = serde_json::json!({
         "providers": providers,

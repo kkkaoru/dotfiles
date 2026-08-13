@@ -147,6 +147,29 @@ fn enabled_providers_catalog(providers: Vec<Provider>) -> Result<(Vec<Provider>,
     Ok((providers, model_catalog))
 }
 
+#[cfg(test)]
+impl Provider {
+    fn listed_models(&self) -> impl Iterator<Item = &str> {
+        std::iter::once(self.default_model.as_str()).chain(self.subagent_model.as_deref())
+    }
+
+    fn conflicts_hostname_denylist(&self, denylist: &std::collections::BTreeSet<String>) -> bool {
+        self.enabled && self.listed_models().any(|model| denylist.contains(model))
+    }
+}
+
+#[cfg(test)]
+fn enabled_denylist_conflicts(
+    providers: &[Provider],
+    denylist: &std::collections::BTreeSet<String>,
+) -> Vec<String> {
+    providers
+        .iter()
+        .filter(|provider| provider.conflicts_hostname_denylist(denylist))
+        .map(|provider| provider.id.clone())
+        .collect()
+}
+
 mod provider_route;
 
 #[cfg(test)]

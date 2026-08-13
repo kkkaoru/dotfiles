@@ -48,7 +48,12 @@ pub(super) fn has_correlation_marker(prompt: &str) -> bool {
 }
 
 pub(super) fn correlated_prompt(prompt: &str, tool_use_id: &str, model: Option<&str>) -> String {
-    let model_header = model.map_or_else(String::new, |model| format!("\nclaudex_model: {model}"));
+    let model_header = model.map_or_else(String::new, |model| {
+        format!(
+            "\nclaudex_model: {}",
+            crate::model_id::sanitize_claudex_model(model)
+        )
+    });
     format!(
         "{prompt}\n\nclaudex_launch_id: {tool_use_id}{model_header}\n\n<{CORRELATION_TAG}>{tool_use_id}</{CORRELATION_TAG}>"
     )

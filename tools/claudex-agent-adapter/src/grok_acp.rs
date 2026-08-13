@@ -30,6 +30,7 @@ mod turns;
 mod updates;
 
 const COMMAND_QUEUE_CAPACITY: usize = 32;
+#[cfg(test)]
 const SESSION_QUEUE_CAPACITY: usize = 1;
 const TURN_QUEUE_CAPACITY: usize = 8;
 /// When providers omit maxConcurrency, configured ACP used to fall back to a

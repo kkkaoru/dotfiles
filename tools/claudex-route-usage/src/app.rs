@@ -202,15 +202,8 @@ fn apply_live_state(
             .unwrap_or(&BTreeMap::new()),
         &state.disabled,
     )?;
-    let main_model = env::var("CLAUDEX_MAIN_MODEL")
-        .ok()
-        .filter(|value| !value.is_empty())
-        .or_else(|| {
-            env::var("CLAUDEX_OUTER_MODEL")
-                .ok()
-                .filter(|value| !value.is_empty())
-        });
-    let main_known = util::boolean_env("CLAUDEX_MAIN_MODEL_KNOWN", main_model.is_some())?;
+    let (main_model, default_known, main_state) = util::main_model_state();
+    let main_known = util::boolean_env("CLAUDEX_MAIN_MODEL_KNOWN", default_known)?;
     let allow_sonnet = util::boolean_env("CLAUDEX_ALLOW_SONNET_SUBAGENT", false)?;
     summary = routing::workers::enforce_worker_model_separation(
         summary,
@@ -221,6 +214,7 @@ fn apply_live_state(
     let Some(object) = summary.as_object_mut() else {
         bail!("routing summary must be an object");
     };
+    object.insert("current_main_model_state".into(), Value::from(main_state));
     object.insert(
         "memory_status".into(),
         if use_processes {

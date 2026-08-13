@@ -159,7 +159,7 @@ fn identifies_each_acp_provider_and_its_model_scope() {
 fn configured_acp_defaults_to_parallel_session_slots_when_max_concurrency_omitted() {
     assert_eq!(
         SESSION_QUEUE_CAPACITY, 1,
-        "native Grok/Copilot stay serial by default"
+        "legacy serial constant remains for in-process test doubles"
     );
     assert_eq!(
         super::DEFAULT_CONFIGURED_MAX_CONCURRENCY,
@@ -168,7 +168,13 @@ fn configured_acp_defaults_to_parallel_session_slots_when_max_concurrency_omitte
     );
     assert_eq!(
         super::spawn::session_create_capacity(AcpProvider::Grok, None),
-        1
+        TURN_QUEUE_CAPACITY,
+        "Grok session/new permits must match default turn concurrency"
+    );
+    assert_eq!(
+        super::spawn::session_create_capacity(AcpProvider::Copilot, None),
+        TURN_QUEUE_CAPACITY,
+        "Copilot session/new permits must match default turn concurrency"
     );
     assert_eq!(
         super::spawn::session_create_capacity(AcpProvider::Grok, Some(3)),

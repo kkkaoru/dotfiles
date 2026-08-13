@@ -3,8 +3,9 @@
 use super::orchestration::orchestration_contract;
 use super::quota::combined_capacity_priority_with_inflight;
 use super::workers::{
-    extend_with_native_workers, fallback_worker, native_worker_item, prefer_weekly_headroom,
-    ranked_native_quota, selected_agent_values, worker,
+    exclude_denylisted_candidates, exclude_denylisted_workers, extend_with_native_workers,
+    fallback_worker, native_worker_item, prefer_weekly_headroom, ranked_native_quota,
+    selected_agent_values, worker,
 };
 use super::{CapacityKey, rank_selected_workers};
 use crate::config::Config;
@@ -188,8 +189,10 @@ pub fn apply_model_concurrency_with_inflight(
         active_subagent_models,
         &mut automatic_candidates,
     );
+    automatic_candidates = exclude_denylisted_candidates(automatic_candidates, disabled_models);
     let mut selected = rank_selected_workers(automatic_candidates);
     selected = prefer_weekly_headroom(selected, &providers, &native_quota);
+    selected = exclude_denylisted_workers(selected, disabled_models);
     let fallback = fallback_worker(config);
     let fallback_model = fallback
         .get("model")
@@ -200,6 +203,7 @@ pub fn apply_model_concurrency_with_inflight(
         selected = vec![fallback];
     }
     extend_with_native_workers(&mut selected, config, disabled_models, &participating);
+    selected = exclude_denylisted_workers(selected, disabled_models);
     write_selection(&mut combined, selected, fallback_active, model_capacity);
     let orchestration = orchestration_contract(&combined)?;
     if let Some(object) = combined.as_object_mut() {

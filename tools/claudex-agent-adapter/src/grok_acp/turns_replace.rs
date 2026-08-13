@@ -4,11 +4,12 @@ use anyhow::{Result, anyhow};
 use tokio::sync::oneshot;
 use tokio::time::{Instant, sleep, timeout_at};
 
-use super::{AcpProvider, ActiveTurns, REPLACE_SETTLE_TIMEOUT, cancel_turn};
+use super::{AcpProvider, ActiveTurns, InvalidatedSessions, REPLACE_SETTLE_TIMEOUT, cancel_turn};
 
 pub(super) async fn replace_active_turn(
     provider: AcpProvider,
     active_turns: &ActiveTurns,
+    invalidated_sessions: &InvalidatedSessions,
     session_id: &str,
 ) -> Result<()> {
     tracing::info!(
@@ -44,17 +45,52 @@ pub(super) async fn replace_active_turn(
             );
         }
     }
+    wait_for_replace_clear(
+        provider,
+        active_turns,
+        invalidated_sessions,
+        session_id,
+        deadline,
+    )
+    .await
+}
+
+async fn wait_for_replace_clear(
+    provider: AcpProvider,
+    active_turns: &ActiveTurns,
+    invalidated_sessions: &InvalidatedSessions,
+    session_id: &str,
+    deadline: Instant,
+) -> Result<()> {
     while active_turns.borrow().contains_key(session_id) {
         if Instant::now() >= deadline {
-            return Err(anyhow!(
-                "{} ACP session `{}` still has an active turn after replace cancel",
-                provider.label(),
-                session_id
-            ));
+            return invalidate_unsettled_replace(
+                provider,
+                active_turns,
+                invalidated_sessions,
+                session_id,
+            );
         }
         // Yield so the turn worker on this LocalSet can finish execute_turn.
         tokio::task::yield_now().await;
         sleep(Duration::from_millis(1)).await;
     }
     Ok(())
+}
+
+fn invalidate_unsettled_replace(
+    provider: AcpProvider,
+    active_turns: &ActiveTurns,
+    invalidated_sessions: &InvalidatedSessions,
+    session_id: &str,
+) -> Result<()> {
+    invalidated_sessions
+        .borrow_mut()
+        .insert(session_id.to_owned());
+    active_turns.borrow_mut().remove(session_id);
+    Err(anyhow!(
+        "{} ACP session `{}` was invalidated after replace cancel did not settle",
+        provider.label(),
+        session_id
+    ))
 }

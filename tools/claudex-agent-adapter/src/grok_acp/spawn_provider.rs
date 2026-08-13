@@ -14,7 +14,7 @@ use super::super::driver::run_driver;
 use super::super::driver_types::{DriverSetup, DriverThread};
 use super::super::{
     COMMAND_QUEUE_CAPACITY, DEFAULT_CONFIGURED_MAX_CONCURRENCY, GrokAcp, OUTER_TURN_RESERVE,
-    SESSION_QUEUE_CAPACITY, TURN_QUEUE_CAPACITY,
+    TURN_QUEUE_CAPACITY,
 };
 
 /// How many concurrent `session/new` calls this ACP provider permits.
@@ -26,10 +26,10 @@ pub(in crate::grok_acp) fn session_create_capacity(
         AcpProvider::Configured | AcpProvider::ConfiguredLaunchScoped => {
             max_concurrency.unwrap_or(DEFAULT_CONFIGURED_MAX_CONCURRENCY)
         }
-        // Honor route maxConcurrency for session/new too. Leaving this at 1
-        // while turn permits scale serialized parallel SubAgent create_session.
+        // Match turn concurrency so parallel SubAgent session/new is not
+        // serialized behind a single permit while turns already overlap.
         AcpProvider::Grok | AcpProvider::Copilot => {
-            max_concurrency.unwrap_or(SESSION_QUEUE_CAPACITY).max(1)
+            max_concurrency.unwrap_or(TURN_QUEUE_CAPACITY).max(1)
         }
     }
 }

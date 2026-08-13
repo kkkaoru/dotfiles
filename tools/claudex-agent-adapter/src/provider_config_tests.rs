@@ -5,6 +5,7 @@ mod tests {
     use crate::agent_backend::{BackendKind, BackendRoute};
 
     use super::*;
+    use std::collections::BTreeSet;
 
     fn config(provider: &str) -> String {
         format!(
@@ -109,6 +110,22 @@ mod tests {
             Some(("model-spark", "high"))
         );
         assert_eq!(loaded.model_catalog.worker_fields("off"), None);
+    }
+
+    #[test]
+    fn hostname_denylist_conflicts_with_enabled_providers() {
+        let parsed: ProviderConfig = serde_json::from_str(&config(
+            r#"{"id":"p","agent":"worker","defaultModel":"opencode-go/deepseek-v4-flash","effort":"high","enabled":true,"backend":"configured-acp"},{"id":"off","agent":"off","defaultModel":"denied-other","effort":"low","enabled":false,"backend":"grok-acp"}"#,
+        ))
+        .unwrap();
+        let denylist = BTreeSet::from([
+            "opencode-go/deepseek-v4-flash".to_owned(),
+            "denied-other".to_owned(),
+        ]);
+        assert_eq!(
+            enabled_denylist_conflicts(&parsed.providers, &denylist),
+            ["p".to_owned()]
+        );
     }
 
     #[test]

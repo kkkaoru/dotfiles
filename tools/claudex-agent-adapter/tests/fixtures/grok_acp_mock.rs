@@ -424,6 +424,14 @@ impl acp::Agent for MockAgent {
         Ok(acp::NewSessionResponse::new(format!("grok-session-{next}")))
     }
 
+    async fn load_session(
+        &self,
+        request: acp::LoadSessionRequest,
+    ) -> acp::Result<acp::LoadSessionResponse> {
+        self.record("load_session", request)?;
+        Ok(acp::LoadSessionResponse::new())
+    }
+
     async fn prompt(&self, request: acp::PromptRequest) -> acp::Result<acp::PromptResponse> {
         self.record("prompt", &request)?;
         if self.mode == "no-response" {

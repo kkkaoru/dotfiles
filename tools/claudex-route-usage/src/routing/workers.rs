@@ -1,5 +1,6 @@
 //! Worker items, capacity metadata, and main/worker model separation.
 
+use super::CapacityKey;
 use super::orchestration::orchestration_contract;
 use super::quota::{effective_window_remaining, selection_remaining};
 use crate::config::Config;
@@ -7,6 +8,28 @@ use crate::util::{copied_fields, is_sonnet_model, number_f64, python_round};
 use anyhow::Result;
 use serde_json::{Map, Value};
 use std::collections::BTreeSet;
+
+fn worker_model(worker: &Value) -> Option<&str> {
+    worker.get("model").and_then(Value::as_str)
+}
+
+/// Drop denylisted models before ranking so they never enter `selected_workers`.
+pub fn exclude_denylisted_candidates(
+    candidates: Vec<(CapacityKey, Value)>,
+    denylist: &BTreeSet<String>,
+) -> Vec<(CapacityKey, Value)> {
+    candidates
+        .into_iter()
+        .filter(|(_, worker)| worker_model(worker).is_none_or(|model| !denylist.contains(model)))
+        .collect()
+}
+
+pub fn exclude_denylisted_workers(workers: Vec<Value>, denylist: &BTreeSet<String>) -> Vec<Value> {
+    workers
+        .into_iter()
+        .filter(|worker| worker_model(worker).is_none_or(|model| !denylist.contains(model)))
+        .collect()
+}
 
 pub fn worker(provider: &Value) -> Value {
     let default_model = provider

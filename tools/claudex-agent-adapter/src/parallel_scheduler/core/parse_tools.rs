@@ -40,6 +40,10 @@ pub(in crate::parallel_scheduler::core) fn parse_subagent_tool_use(
     let Some(model) = input.get("claudex_model").and_then(Value::as_str) else {
         return;
     };
+    let model = crate::model_id::sanitize_claudex_model(model);
+    if model.is_empty() {
+        return;
+    }
     // A retry or a second model can receive a fresh tool_use id while still
     // representing the same scope.  Count that scope once; explicit batches
     // above intentionally retain one lane per task because their array length
@@ -55,7 +59,7 @@ pub(in crate::parallel_scheduler::core) fn parse_subagent_tool_use(
     launched.push(Workunit {
         unit_id,
         group_id: id.to_owned(),
-        model: Some(model.to_owned()),
+        model: Some(model),
     });
 }
 
@@ -69,10 +73,14 @@ pub(super) fn batch_workunit(id: &str, index: usize, task: &Value) -> Option<Wor
         return None;
     }
     let model = task.get("claudex_model").and_then(Value::as_str)?;
+    let model = crate::model_id::sanitize_claudex_model(model);
+    if model.is_empty() {
+        return None;
+    }
     Some(Workunit {
         unit_id: format!("{id}:{index}"),
         group_id: id.to_owned(),
-        model: Some(model.to_owned()),
+        model: Some(model),
     })
 }
 

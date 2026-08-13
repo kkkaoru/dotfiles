@@ -20,8 +20,8 @@ use mcp::launch_mcp_servers;
 use mcp::{launch_mcp_servers_from, params_offer_launch_tools};
 
 pub(super) const SESSION_SETUP_TIMEOUT: Duration = Duration::from_secs(8);
-/// Cursor/OpenCode often hang on MCP during session/new. Fail the MCP-first attempt
-/// quickly and retry without MCP rather than blocking a full SESSION_SETUP_TIMEOUT every turn.
+/// Post-create `session/load` MCP attach budget. Do not raise this; session/new
+/// itself no longer waits on MCP.
 pub(super) const SESSION_SETUP_WITH_MCP_TIMEOUT: Duration = Duration::from_secs(2);
 pub(super) const LAUNCH_MCP_NAME: &str = "claudex-launch";
 pub(super) const LAUNCH_MCP_COMMAND: &str = "mcp-claudex-launch";
@@ -70,34 +70,20 @@ pub(super) async fn create(
     // Claude Code embeds the active child cwd in its base instructions. Keep ACP sessions scoped
     // to that request instead of leaking the adapter daemon's launch directory.
     let session_cwd = session_cwd(&params, cwd);
-    // Attach a tiny MCP server that exposes Agent/Task when Claude Code supplied them.
-    // ACP providers otherwise only see native tools (and Grok's spawn_subagent), so SubAgent
-    // launches never become Claude Code tool_use and stay invisible in the agents panel.
-    // Cursor/OpenCode have historically hung on session/new while waiting for MCP; if that
-    // happens, retry once without launch MCP so the turn still starts.
+    // Attach launch MCP only after session/new succeeds. Cursor/OpenCode have
+    // historically hung when MCP is bundled into session/new; a post-create
+    // session/load keeps Nucleating off the MCP handshake.
     let mcp = launch_mcp_servers(&params);
-    let injected_launch_mcp = !mcp.is_empty();
-    let response = match new_session_with_mcp(provider, connection, model, &session_cwd, mcp).await
-    {
-        Ok(response) => {
-            if injected_launch_mcp {
-                tracing::info!(
-                    provider = provider.label(),
-                    "ACP session/new with launch MCP succeeded"
-                );
-            }
-            response
-        }
-        Err(error) if !injected_launch_mcp => return Err(error),
-        Err(error) => {
-            tracing::warn!(
-                %error,
-                provider = provider.label(),
-                "ACP session/new with launch MCP failed; retrying without MCP"
-            );
-            new_session_with_mcp(provider, connection, model, &session_cwd, Vec::new()).await?
-        }
-    };
+    let response =
+        new_session_with_mcp(provider, connection, model, &session_cwd, Vec::new()).await?;
+    attach_launch_mcp(
+        provider,
+        connection,
+        &response.session_id,
+        &session_cwd,
+        mcp,
+    )
+    .await;
     // OpenCode ignores modelId meta on session/new. Cursor accepts CLI `--model auto` but ACP
     // only accepts ids like `default[]`. Pin session-scoped configured ACP after create so the
     // first prompt cannot run against a mismatched default. Launch-scoped CLIs already pass
@@ -128,7 +114,10 @@ pub(super) async fn create(
 
 #[path = "session_setup.rs"]
 mod setup;
-use setup::{await_model_setup, new_session_with_mcp, pins_acp_model_after_create, session_cwd};
+use setup::{
+    attach_launch_mcp, await_model_setup, new_session_with_mcp, pins_acp_model_after_create,
+    session_cwd,
+};
 #[cfg(test)]
 use setup::{await_setup, request_cwd, session_setup_timeout};
 

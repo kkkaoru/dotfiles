@@ -26,6 +26,39 @@ pub fn boolean_env(name: &str, default: bool) -> Result<bool> {
     }
 }
 
+/// Distinguishes a missing env var from an explicitly empty override.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EnvText {
+    Uninitialized,
+    Unset,
+    Set(String),
+}
+
+pub fn env_text(name: &str) -> EnvText {
+    match std::env::var(name) {
+        Err(_) => EnvText::Uninitialized,
+        Ok(value) if value.is_empty() => EnvText::Unset,
+        Ok(value) => EnvText::Set(value),
+    }
+}
+
+/// Main-model routing state: uninitialized vs unset vs set.
+pub fn main_model_state() -> (Option<String>, bool, &'static str) {
+    match env_text("CLAUDEX_MAIN_MODEL") {
+        EnvText::Set(model) => (Some(model), true, "set"),
+        EnvText::Unset => (None, true, "unset"),
+        EnvText::Uninitialized => outer_model_state(),
+    }
+}
+
+fn outer_model_state() -> (Option<String>, bool, &'static str) {
+    match env_text("CLAUDEX_OUTER_MODEL") {
+        EnvText::Set(model) => (Some(model), true, "set"),
+        EnvText::Unset => (None, true, "unset"),
+        EnvText::Uninitialized => (None, false, "uninitialized"),
+    }
+}
+
 pub fn boolean_value(raw: &str, name: &str, default: bool) -> Result<bool> {
     if raw.trim().is_empty() {
         return Ok(default);
@@ -224,5 +257,19 @@ mod tests {
         assert!(!boolean_value("off", "X", true).unwrap());
         assert!(boolean_value("", "X", true).unwrap());
         assert!(boolean_value("maybe", "X", false).is_err());
+    }
+
+    #[test]
+    fn env_text_separates_uninitialized_from_unset() {
+        assert_eq!(
+            match std::env::var("PATH") {
+                Err(_) => EnvText::Uninitialized,
+                Ok(value) if value.is_empty() => EnvText::Unset,
+                Ok(value) => EnvText::Set(value),
+            },
+            env_text("PATH")
+        );
+        let missing = format!("CLAUDEX_MISSING_ENV_{}", std::process::id());
+        assert_eq!(env_text(&missing), EnvText::Uninitialized);
     }
 }

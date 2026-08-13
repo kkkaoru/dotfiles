@@ -139,10 +139,12 @@ fn existing_workers_above_scope_count_do_not_inflate_the_target() {
     assert_eq!(decision.active_workers, 5);
     assert_eq!(decision.target_workers, 2);
     assert_eq!(decision.needs_more_workers, 0);
-    assert!(decision
-        .actions
-        .iter()
-        .all(|action| !action.contains("Launch at least")));
+    assert!(
+        decision
+            .actions
+            .iter()
+            .all(|action| !action.contains("Launch at least"))
+    );
 }
 
 #[test]
@@ -302,10 +304,12 @@ fn unknown_task_result_does_not_restart_other_running_scopes() {
     assert_eq!(decision.active_workers, 2);
     assert_eq!(decision.completed_recently, 0);
     assert_eq!(decision.needs_more_workers, 0);
-    assert!(!decision
-        .actions
-        .iter()
-        .any(|action| action.contains("Launch at least")));
+    assert!(
+        !decision
+            .actions
+            .iter()
+            .any(|action| action.contains("Launch at least"))
+    );
 }
 
 #[test]
@@ -436,12 +440,16 @@ fn guidance_includes_completion_followup_when_workers_finish() {
     let _ = scheduler.decision_for_request(&first);
     let decision = scheduler.decision_for_request(&second);
     assert_eq!(decision.completed_recently, 1);
-    assert!(decision
-        .guidance(&scheduler.config())
-        .contains("Worker-cycle"));
-    assert!(decision
-        .guidance(&scheduler.config())
-        .contains("re-issue same-scope tasks"));
+    assert!(
+        decision
+            .guidance(&scheduler.config())
+            .contains("Worker-cycle")
+    );
+    assert!(
+        decision
+            .guidance(&scheduler.config())
+            .contains("re-issue same-scope tasks")
+    );
 }
 
 #[test]
@@ -654,10 +662,12 @@ fn when_one_active_worker_remains_prompt_interrupts_and_replaces() {
     assert_eq!(decision.completed_recently, 3);
     assert!(decision.active_floor_breached);
     assert!(decision.needs_more_workers >= 1);
-    assert!(decision
-        .actions
-        .iter()
-        .any(|action| action.contains("interrupt stale work")));
+    assert!(
+        decision
+            .actions
+            .iter()
+            .any(|action| action.contains("interrupt stale work"))
+    );
 }
 
 #[test]
@@ -685,9 +695,11 @@ fn increases_floor_with_explicit_request_structure() {
         decision.needs_more_workers,
         decision.target_workers - decision.active_workers
     );
-    assert!(decision
-        .guidance(&scheduler.config())
-        .contains("target concurrency is"));
+    assert!(
+        decision
+            .guidance(&scheduler.config())
+            .contains("target concurrency is")
+    );
 }
 
 #[test]
@@ -714,10 +726,12 @@ fn leaves_a_single_indivisible_lane_steady_between_rebalance_events() {
     assert_eq!(steady.target_workers, 1);
     assert_eq!(steady.needs_more_workers, 0);
     assert!(!steady.active_floor_breached);
-    assert!(!steady
-        .actions
-        .iter()
-        .any(|action| action.contains("Only one active lane remains")));
+    assert!(
+        !steady
+            .actions
+            .iter()
+            .any(|action| action.contains("Only one active lane remains"))
+    );
 }
 
 #[test]
@@ -739,9 +753,11 @@ fn single_gh_pr_lookup_schedules_exactly_one_worker_on_its_initial_cycle() {
             .any(|action| action.contains("Launch at least 1")),
         "an indivisible `gh pr view` request must launch one worker"
     );
-    assert!(scheduler
-        .guidance_for_request(&request)
-        .contains("Task-shape: one bounded or indivisible lookup detected. Launch exactly one"));
+    assert!(
+        scheduler
+            .guidance_for_request(&request)
+            .contains("Task-shape: one bounded or indivisible lookup detected. Launch exactly one")
+    );
 }
 
 #[test]
@@ -771,9 +787,11 @@ fn single_gh_pr_lookup_does_not_expand_after_its_worker_starts() {
             .any(|action| action.contains("Launch at least")),
         "an indivisible `gh pr view` request must not be expanded into duplicate workers"
     );
-    assert!(scheduler
-        .guidance_for_request(&request)
-        .contains("Launch exactly one ordinary SubAgent; do not fan out"));
+    assert!(
+        scheduler
+            .guidance_for_request(&request)
+            .contains("Launch exactly one ordinary SubAgent; do not fan out")
+    );
 }
 
 #[test]
@@ -930,9 +948,11 @@ fn explicit_parallel_request_uses_inferred_scope_count_without_list_markers() {
 
     assert_eq!(decision.target_workers, 2);
     assert_eq!(decision.needs_more_workers, 1);
-    assert!(scheduler
-        .guidance_for_request(&request)
-        .contains("Task-shape: multiple independent scopes detected"));
+    assert!(
+        scheduler
+            .guidance_for_request(&request)
+            .contains("Task-shape: multiple independent scopes detected")
+    );
 }
 
 #[test]
@@ -1171,14 +1191,18 @@ fn policy_helpers_cover_early_returns_and_cleanup_choices() {
         },
     );
     assert!(decision.needs_model_diversity);
-    assert!(decision
-        .actions
-        .iter()
-        .any(|action| action.contains("immediately")));
-    assert!(!decision
-        .actions
-        .iter()
-        .any(|action| action.contains("reclaim")));
+    assert!(
+        decision
+            .actions
+            .iter()
+            .any(|action| action.contains("immediately"))
+    );
+    assert!(
+        !decision
+            .actions
+            .iter()
+            .any(|action| action.contains("reclaim"))
+    );
 
     policy::apply_floor_action(&mut decision, &parallel_request, &config);
     decision.active_model_families = 2;
@@ -1202,18 +1226,22 @@ fn policy_helpers_cover_live_reuse_and_single_scope_guidance_boundaries() {
     let mut active = SchedulerDecision::no_action();
     active.active_workers = 1;
     policy::apply_reuse_actions(&mut active, &parallel_request, &config);
-    assert!(active
-        .actions
-        .iter()
-        .any(|action| action.contains("reusing")));
+    assert!(
+        active
+            .actions
+            .iter()
+            .any(|action| action.contains("reusing"))
+    );
 
     let mut completed = active.clone();
     completed.completed_recently = 1;
     policy::apply_reuse_actions(&mut completed, &parallel_request, &config);
-    assert!(completed
-        .actions
-        .iter()
-        .any(|action| action.contains("completion-aware")));
+    assert!(
+        completed
+            .actions
+            .iter()
+            .any(|action| action.contains("completion-aware"))
+    );
 
     let mut completed_without_work = SchedulerDecision::no_action();
     completed_without_work.completed_recently = 1;
@@ -1433,14 +1461,18 @@ fn covers_malformed_work_units_and_policy_boundaries() {
     policy::apply_diversity_action(&mut decision, &parallel, &config);
     policy::apply_reuse_actions(&mut decision, &parallel, &config);
     assert!(decision.needs_model_diversity);
-    assert!(decision
-        .actions
-        .iter()
-        .all(|action| !action.contains("Prefer reusing")));
-    assert!(decision
-        .actions
-        .iter()
-        .any(|action| action.contains("After each completion")));
+    assert!(
+        decision
+            .actions
+            .iter()
+            .all(|action| !action.contains("Prefer reusing"))
+    );
+    assert!(
+        decision
+            .actions
+            .iter()
+            .any(|action| action.contains("After each completion"))
+    );
     policy::apply_reuse_actions(&mut decision, &plain, &config);
 
     let mut empty = SchedulerDecision::no_action();
@@ -1479,8 +1511,8 @@ fn normalizes_scheduler_scopes_and_task_notifications_without_false_duplicates()
     let messages = vec![
         serde_json::json!({
             "role":"assistant",
-            "content":[{"type":"tool_use", "id":"scope-one", "name":"Agent", "input":{
-                "claudex_model":"worker-a",
+            "content":[{"type":"tool_use", "id":"scope-one", "name":"Agent",             "input":{
+                "claudex_model":"worker-a <claudex-agent-id>correlation</claudex-agent-id>",
                 "prompt":"Research this\nclaudex_launch_id: hidden\nclaudex_model: worker-a <claudex-agent-id>correlation</claudex-agent-id>"
             }}]
         }),
@@ -1500,6 +1532,13 @@ fn normalizes_scheduler_scopes_and_task_notifications_without_false_duplicates()
     assert_eq!(snapshot.active_count(), 1);
     assert!(snapshot.active_unit_ids.contains("scope:research this"));
     assert_eq!(snapshot.active_model_families(), 1);
+    assert!(
+        snapshot
+            .active_models
+            .values()
+            .all(|family| !family.contains('<') && !family.contains("claudex-agent-id")),
+        "claudex_model XML must not leak into scheduler families"
+    );
 
     let unclosed = vec![serde_json::json!({
         "role":"assistant",
@@ -1510,10 +1549,12 @@ fn normalizes_scheduler_scopes_and_task_notifications_without_false_duplicates()
     })];
     let snapshot = core::analyze_subagent_work(&unclosed);
     assert_eq!(snapshot.active_count(), 1);
-    assert!(snapshot
-        .active_unit_ids
-        .iter()
-        .any(|unit| unit.starts_with("scope:scope ")));
+    assert!(
+        snapshot
+            .active_unit_ids
+            .iter()
+            .any(|unit| unit.starts_with("scope:scope "))
+    );
 }
 
 #[test]
