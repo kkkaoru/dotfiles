@@ -8,7 +8,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
-use super::combine_object_reports;
+use super::{combine_object_reports, report::production_file};
 
 const COVERAGE_TARGET_PREFIX: &str = "llvm-cov-";
 const COVERAGE_TOOLCHAIN: &str = "+nightly";
@@ -35,11 +35,36 @@ pub fn report(root: &Path) -> Result<()> {
         Err(error) => return Err(error),
     };
     let report = target.join("branch-coverage.json");
-    let document = per_object_report(&target)?;
+    let mut document = per_object_report(&target)?;
+    recompute_production_totals(root, &mut document);
     std::fs::write(&report, serde_json::to_vec(&document)?)?;
     std::fs::copy(&report, &retained)
         .with_context(|| format!("failed to retain {}", report.display()))?;
     super::audit_report(root, &report)
+}
+
+fn recompute_production_totals(root: &Path, document: &mut Value) {
+    let Some(files) = document.pointer("/data/0/files").and_then(Value::as_array) else {
+        return;
+    };
+    let mut totals = serde_json::Map::new();
+    for metric in ["lines", "functions", "regions", "branches"] {
+        let (covered, count) = files
+            .iter()
+            .filter_map(|file| production_file(root, file).map(|(_, value)| value))
+            .filter_map(|file| file.pointer(&format!("/summary/{metric}")))
+            .fold((0_u64, 0_u64), |(covered, count), summary| {
+                (
+                    covered + summary["covered"].as_u64().unwrap_or(0),
+                    count + summary["count"].as_u64().unwrap_or(0),
+                )
+            });
+        totals.insert(
+            metric.to_owned(),
+            serde_json::json!({"covered": covered, "count": count}),
+        );
+    }
+    document["data"][0]["totals"] = Value::Object(totals);
 }
 
 fn per_object_report(target: &Path) -> Result<Value> {
