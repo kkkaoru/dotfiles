@@ -59,3 +59,8 @@ pub(super) async fn publish_result(
     }
     sender.send_replace(StartupState::Ready(result));
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[path = "startup_tests.rs"]
+mod startup_tests;

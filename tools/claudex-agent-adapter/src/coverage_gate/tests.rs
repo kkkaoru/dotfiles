@@ -65,6 +65,75 @@ fn object_combiner_sums_duplicate_branch_counts_without_new_denominators() {
 }
 
 #[test]
+fn combiner_skips_reports_without_file_arrays_or_filenames() {
+    let combined = combine_object_reports(&[
+        json!({}),
+        json!({"data": [{}]}),
+        json!({"data": [{"files": "nope"}]}),
+        json!({"data": [{"files": [{}, {"filename": 1}]}]}),
+    ]);
+    assert_eq!(
+        combined["data"][0]["files"].as_array().map(Vec::len),
+        Some(0)
+    );
+}
+
+fn summary_metric(count: u64, covered: u64) -> Value {
+    json!({"count": count, "covered": covered})
+}
+
+#[test]
+fn combiner_takes_higher_summary_counts_and_skips_invalid_branch_records() {
+    let first = json!({"data": [{"files": [{
+        "filename": "src/a.rs",
+        "summary": {
+            "lines": summary_metric(1, 1),
+            "functions": summary_metric(10, 8),
+            "regions": summary_metric(4, 4)
+        },
+        "branches": [[1, 1, 1, 1, 1, 0, 0, 0, 4], "skip", []]
+    }]}]});
+    let second = json!({"data": [{"files": [{
+        "filename": "src/a.rs",
+        "summary": {
+            "lines": summary_metric(5, 5),
+            "functions": summary_metric(3, 2),
+            "regions": summary_metric(4, 1)
+        },
+        "branches": [[1, 1, 1, 1, 0, 1, 0, 0, 4]]
+    }]}]});
+    let file = &combine_object_reports(&[first, second])["data"][0]["files"][0];
+    assert_eq!(file["summary"]["lines"]["count"], 5);
+    assert_eq!(file["summary"]["lines"]["covered"], 5);
+    assert_eq!(file["summary"]["functions"]["count"], 10);
+    assert_eq!(file["summary"]["functions"]["covered"], 8);
+    assert_eq!(file["summary"]["regions"]["covered"], 4);
+    assert_eq!(file["branches"].as_array().expect("branches").len(), 1);
+    assert_eq!(file["branches"][0][4], 1);
+    assert_eq!(file["branches"][0][5], 1);
+}
+
+#[test]
+fn combiner_keeps_existing_branches_when_the_other_side_has_none() {
+    let with_branches = json!({"data": [{"files": [{
+        "filename": "src/a.rs",
+        "branches": [[1, 1, 1, 1, 1, 1, 0, 0, 4]]
+    }]}]});
+    let without = json!({"data": [{"files": [{
+        "filename": "src/a.rs",
+        "summary": {"lines": {"count": 1, "covered": 1}}
+    }]}]});
+    let missing_existing = combine_object_reports(&[without.clone(), with_branches.clone()]);
+    assert!(
+        missing_existing["data"][0]["files"][0]
+            .get("branches")
+            .is_none()
+    );
+    let missing_incoming = combine_object_reports(&[with_branches, without]);
+    assert_eq!(missing_incoming["data"][0]["files"][0]["branches"][0][4], 1);
+}
+
+#[test]
 fn report_command_reuses_profiles_without_running_tests() {
     let arguments = report_arguments(std::path::Path::new("report.json"));
     assert_eq!(

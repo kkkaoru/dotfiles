@@ -105,4 +105,6 @@ mod tests {
         proxy.clear_all_sessions();
         assert!(!proxy.owns_cached("session-a"));
     }
+
+    include!("apply_lock_tests.rs");
 }

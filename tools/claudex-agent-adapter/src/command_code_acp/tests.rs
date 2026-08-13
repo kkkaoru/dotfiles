@@ -891,6 +891,22 @@ fn chrome_detection_covers_partial_and_mixed_progress() {
 }
 
 #[test]
+fn chrome_branch_sides_cover_malformed_durations_and_kept_lines() {
+    assert!(is_incomplete_canned_prefix("Thought for 1 2"));
+    assert!(!is_incomplete_canned_prefix("Thought for 1-2s"));
+    assert!(!is_incomplete_canned_prefix("Thought for 1!"));
+    assert!(!is_incomplete_canned_prefix("Thought for se"));
+    assert!(!is_incomplete_canned_prefix("Thought for 1-s"));
+    assert_eq!(
+        strip_canned_progress("hello\nworld"),
+        Some("hello\nworld".to_owned())
+    );
+    assert!(!is_canned_progress(""));
+    assert!(!is_canned_progress("   \n  "));
+    assert!(!is_canned_progress("Thought for 1-2s"));
+}
+
+#[test]
 fn cancel_updates_emit_visible_text_without_turn_chrome() {
     let updates = turn_cancelled_updates();
     assert!(rendered_messages(&updates).contains("Command Code cancelled"));
