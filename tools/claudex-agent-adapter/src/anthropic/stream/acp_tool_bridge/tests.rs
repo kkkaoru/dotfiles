@@ -625,7 +625,12 @@ mod tests {
         let map = names();
         // Titles that miss looks_like_launch_tool exact match still trip the
         // agent/task prefix / colon branches inside trace_launch_shaped_event.
-        for title in ["agent follow-up", "task follow-up", "agent:spawn", "task:spawn"] {
+        for title in [
+            "agent follow-up",
+            "task follow-up",
+            "agent:spawn",
+            "task:spawn",
+        ] {
             let _ = bridge_provider_tool_call(
                 &map,
                 &json!({
@@ -682,10 +687,10 @@ mod tests {
                 "callId": "m",
                 "tool": "MCP",
                 "status": "pending",
-                "arguments": {}
+                "arguments": {"prompt": "pending", "run_in_background": true}
             }
         });
-        assert!(is_unbridged_launch_progress(&map, &mcp_incomplete));
+        assert!(!is_unbridged_launch_progress(&map, &mcp_incomplete));
     }
 
     #[test]
