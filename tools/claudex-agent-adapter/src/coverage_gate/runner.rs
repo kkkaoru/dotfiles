@@ -8,7 +8,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 
 const COVERAGE_TARGET_PREFIX: &str = "llvm-cov-";
-const COVERAGE_TOOLCHAIN: &str = "+1.97.1";
+const COVERAGE_TOOLCHAIN: &str = "+nightly";
 const LLVM_COV_REPORT_THREADS: &str = "--threads=1 --num-threads=1";
 // Failed reports remain available briefly for diagnosis, then a later coverage
 // run reclaims their multi-gigabyte instrumented target directories.

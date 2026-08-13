@@ -37,7 +37,7 @@ fn report_command_reuses_profiles_without_running_tests() {
         arguments.get(0..4),
         Some(
             [
-                "+1.97.1".to_owned(),
+                "+nightly".to_owned(),
                 "llvm-cov".to_owned(),
                 "report".to_owned(),
                 "--json".to_owned()
@@ -110,12 +110,12 @@ fn retries_llvm_cov_json_export_on_segfault_or_corrupt_profraw() {
     use super::runner::should_retry_llvm_cov_export;
 
     let json = [
-        "+1.97.1".to_owned(),
+        "+nightly".to_owned(),
         "llvm-cov".to_owned(),
         "--json".to_owned(),
     ];
     let clean = [
-        "+1.97.1".to_owned(),
+        "+nightly".to_owned(),
         "llvm-cov".to_owned(),
         "clean".to_owned(),
     ];
@@ -473,7 +473,7 @@ fn command_status_rejects_corrupt_profile_merge_without_dropping_profiles() {
             root.path(),
             &target,
             &[
-                "+1.97.1".to_owned(),
+                "+nightly".to_owned(),
                 "llvm-cov".to_owned(),
                 "--json".to_owned(),
             ],
