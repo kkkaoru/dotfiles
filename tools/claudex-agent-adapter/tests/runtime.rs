@@ -161,7 +161,7 @@ async fn read_health(client: &Client, base_url: &str) -> Value {
     // Parallel integration tests and coverage-instrumented binaries can make
     // the first runtime spawn exceed a short probe window.
     #[cfg(coverage_nightly)]
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(45);
     #[cfg(not(coverage_nightly))]
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
     loop {

@@ -419,6 +419,7 @@ env -u RUSTUP_TOOLCHAIN cargo +1.97.1 fmt-check
 env -u RUSTUP_TOOLCHAIN cargo +1.97.1 lint
 env -u RUSTUP_TOOLCHAIN cargo +1.97.1 test-all
 env -u RUSTUP_TOOLCHAIN cargo +1.97.1 coverage
+env -u RUSTUP_TOOLCHAIN cargo +1.97.1 coverage-report
 env -u RUSTUP_TOOLCHAIN cargo +1.97.1 coverage-branch
 ```
 
@@ -443,6 +444,11 @@ scans the complete production Rust inventory and rejects any added, removed, or
 unmanifested annotation; executable decision logic remains instrumented outside
 the minimal shims. Both coverage commands include the Cargo build script, whose reusable
 logic is measured through `src/build_support.rs`.
+
+`cargo coverage-report` regenerates the same four-metric JSON and audit from
+existing `profraw`/`profdata` files under `target/llvm-cov-*`. It never cleans
+those artifacts or runs tests; it fails before invoking Cargo when no profile
+data exists, and a failed profile merge is reported directly.
 
 Coverage uses an isolated `target/llvm-cov-*` directory. A later coverage run
 automatically removes artifacts older than ten minutes, while preserving its

@@ -23,9 +23,75 @@ pub fn run(root: &Path) -> Result<()> {
     discard_successful_artifacts(&target, run_with(root, &target, command_status))
 }
 
+pub fn report(root: &Path) -> Result<()> {
+    let target = existing_coverage_target(root)?;
+    let report = target.join("branch-coverage.json");
+    let status = coverage_command(root, &target, &report_arguments(&report))
+        .status()
+        .context("failed to run cargo llvm-cov report")?;
+    require_success(status, "coverage report")?;
+    super::audit_report(root, &report)
+}
+
 pub(super) fn coverage_target_directory(root: &Path) -> PathBuf {
     root.join("target")
         .join(format!("{COVERAGE_TARGET_PREFIX}{}", std::process::id()))
+}
+
+fn existing_coverage_target(root: &Path) -> Result<PathBuf> {
+    let target_root = root.join("target");
+    let mut candidates = std::fs::read_dir(&target_root)
+        .with_context(|| format!("failed to read {}", target_root.display()))?
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| {
+            let path = entry.path();
+            let is_target = entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with(COVERAGE_TARGET_PREFIX);
+            (is_target && path.is_dir()).then_some(path)
+        })
+        .filter(|path| has_profile_data(path))
+        .collect::<Vec<_>>();
+    candidates.sort_by_key(|path| {
+        std::fs::metadata(path)
+            .and_then(|metadata| metadata.modified())
+            .unwrap_or(SystemTime::UNIX_EPOCH)
+    });
+    candidates
+        .pop()
+        .with_context(|| format!("no profraw/profdata found under {}", target_root.display()))
+}
+
+fn has_profile_data(root: &Path) -> bool {
+    let mut pending = vec![root.to_owned()];
+    while let Some(path) = pending.pop() {
+        let Ok(entries) = std::fs::read_dir(path) else {
+            continue;
+        };
+        if profile_entries(entries, &mut pending) {
+            return true;
+        }
+    }
+    false
+}
+
+fn profile_entries(entries: std::fs::ReadDir, pending: &mut Vec<PathBuf>) -> bool {
+    for entry in entries.flatten() {
+        if profile_entry(entry.path(), pending) {
+            return true;
+        }
+    }
+    false
+}
+
+fn profile_entry(path: PathBuf, pending: &mut Vec<PathBuf>) -> bool {
+    if path.is_dir() {
+        pending.push(path);
+        return false;
+    }
+    path.extension()
+        .is_some_and(|extension| extension == "profraw" || extension == "profdata")
 }
 
 /// Bound disk use from retained failed coverage reports without removing an
@@ -113,6 +179,23 @@ pub(super) fn coverage_arguments(report: &Path) -> Vec<String> {
         "--ignore-filename-regex",
         "/tests/fixtures/",
         "--json",
+        "--output-path",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .chain([report.display().to_string()])
+    .collect()
+}
+
+pub(super) fn report_arguments(report: &Path) -> Vec<String> {
+    [
+        "+nightly",
+        "llvm-cov",
+        "report",
+        "--json",
+        "--include-build-script",
+        "--ignore-filename-regex",
+        "/tests/fixtures/",
         "--output-path",
     ]
     .into_iter()

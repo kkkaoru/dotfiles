@@ -2238,7 +2238,7 @@ async fn wait_for_process_exit(pid: libc::pid_t) -> std::io::Result<bool> {
 
 #[cfg(unix)]
 async fn wait_for_background_process(pid_file: &Path) -> Option<BackgroundProcessGuard> {
-    let wait = if cfg!(coverage_nightly) { 30 } else { 8 };
+    let wait = if cfg!(coverage_nightly) { 15 } else { 8 };
     let deadline = tokio::time::Instant::now() + Duration::from_secs(wait);
     while tokio::time::Instant::now() < deadline {
         if let Ok(raw_pid) = fs::read_to_string(pid_file)

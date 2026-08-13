@@ -374,7 +374,7 @@ int main(int argc, char **argv) {
 
 #[cfg(unix)]
 fn wait_for_pid_pair(path: &Path) -> (u32, u32) {
-    let attempts = if cfg!(coverage_nightly) { 2_000 } else { 500 };
+    let attempts = if cfg!(coverage_nightly) { 1_000 } else { 500 };
     for _ in 0..attempts {
         if let Some(pair) = std::fs::read_to_string(path).ok().and_then(|contents| {
             let mut fields = contents.split_whitespace();

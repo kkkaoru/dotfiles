@@ -14,6 +14,7 @@ use report::is_test_only_source;
 #[cfg(test)]
 use report::source_line_percent;
 use report::{coverage_percent, production_line_failures, source_branch_percent};
+pub use runner::report;
 pub use runner::run;
 
 const MINIMUM_PERCENT: f64 = 95.0;

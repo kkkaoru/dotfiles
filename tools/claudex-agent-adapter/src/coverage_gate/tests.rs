@@ -9,11 +9,11 @@ use serde_json::{Value, json};
 use super::runner::{
     COVERAGE_ARTIFACT_RETENTION, command_status, coverage_arguments, coverage_command,
     coverage_target_directory, discard_successful_artifacts, prune_stale_coverage_artifacts,
-    run_commands, run_with,
+    report_arguments, run_commands, run_with,
 };
 use super::{
     INSTRUMENTATION_EXCEPTIONS, audit_report, coverage_percent, is_non_executable_source,
-    is_test_only_source, source_branch_percent, source_line_percent,
+    is_test_only_source, report, source_branch_percent, source_line_percent,
 };
 
 #[test]
@@ -28,6 +28,38 @@ fn coverage_command_includes_branch_and_build_script_measurement() {
     assert!(arguments.contains(&"/tests/fixtures/".to_owned()));
     assert!(!arguments.contains(&"--summary-only".to_owned()));
     assert_eq!(arguments.last().map(String::as_str), Some("report.json"));
+}
+
+#[test]
+fn report_command_reuses_profiles_without_running_tests() {
+    let arguments = report_arguments(std::path::Path::new("report.json"));
+    assert_eq!(
+        arguments.get(0..4),
+        Some(
+            [
+                "+nightly".to_owned(),
+                "llvm-cov".to_owned(),
+                "report".to_owned(),
+                "--json".to_owned()
+            ]
+            .as_slice()
+        )
+    );
+    assert!(arguments.contains(&"--include-build-script".to_owned()));
+    assert!(arguments.contains(&"/tests/fixtures/".to_owned()));
+    assert!(!arguments.contains(&"test".to_owned()));
+}
+
+#[test]
+fn report_only_rejects_missing_profile_data_before_invoking_cargo() {
+    let fixture = tempfile::tempdir().expect("coverage fixture");
+    fs::create_dir_all(fixture.path().join("target/llvm-cov-stale"))
+        .expect("create empty coverage target");
+    let error = report(fixture.path()).expect_err("missing profiles must fail");
+    assert!(
+        error.to_string().contains("no profraw/profdata"),
+        "{error:#}"
+    );
 }
 
 #[test]
