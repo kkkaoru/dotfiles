@@ -293,3 +293,18 @@ fn models_overlap(left: Option<&str>, right: Option<&str>) -> bool {
         (Some(_), None) => false,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn models_overlap_handles_all_cases() {
+        assert!(models_overlap(None, None));
+        assert!(models_overlap(None, Some("grok")));
+        assert!(!models_overlap(Some("claude"), None));
+        assert!(models_overlap(Some("grok"), Some("grok")));
+        assert!(models_overlap(Some("Grok"), Some("grok")));
+        assert!(!models_overlap(Some("grok"), Some("claude")));
+    }
+}
