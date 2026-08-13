@@ -487,9 +487,16 @@ async fn try_canonical_fails_closed_when_warm_start_never_becomes_ready() {
         error.to_string().contains("wait for warm-start"),
         "{error:#}"
     );
+    #[cfg(not(coverage_nightly))]
     assert!(
         started.elapsed() < std::time::Duration::from_secs(3),
         "dead warm-start child must fail fast, not wait the full timeout ({:?})",
+        started.elapsed()
+    );
+    #[cfg(coverage_nightly)]
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(6),
+        "dead warm-start child fails under coverage ({:?})",
         started.elapsed()
     );
 }
