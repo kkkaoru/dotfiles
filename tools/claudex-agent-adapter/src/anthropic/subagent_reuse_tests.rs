@@ -2636,3 +2636,137 @@ fn resolve_claims_removes_the_local_mirror_after_a_store_backed_release() {
         "a resolved store-backed claim must drop its local mirror"
     );
 }
+
+#[test]
+fn note_inflight_launch_returns_false_when_the_store_cannot_acquire_a_claim() {
+    let root = tempfile::tempdir().expect("reuse store fixture");
+    let not_a_dir = root.path().join("not-a-dir");
+    fs::write(&not_a_dir, "x").expect("file where directory should be");
+    let failing = SubagentReuseRegistry::with_store(not_a_dir.join("cache.json"));
+    let arguments = json!({
+        "description": "Trace a broken store path",
+        "prompt": "acquire_claim must fail when the store directory cannot be created.",
+        "claudex_model": "gpt-test"
+    });
+    assert!(
+        !failing.note_inflight_launch("session-a", &arguments, "tool-broken-store"),
+        "a store that cannot acquire a claim must not admit the launch"
+    );
+    assert!(
+        failing.claims.lock().expect("claims lock").is_empty(),
+        "a failed store acquisition must not leave a local claim behind"
+    );
+    assert_eq!(failing.state_for("session-a"), None);
+}
+
+#[test]
+fn scope_is_occupied_ignores_a_model_less_claim_for_an_explicit_model_query() {
+    let registry = SubagentReuseRegistry::default();
+    let now = unix_seconds();
+    registry.claims.lock().expect("claims lock").insert(
+        "model-less".to_owned(),
+        super::store::ClaimRecord {
+            session_id: "session-a".to_owned(),
+            scope: "Audit Rust".to_owned(),
+            model: None,
+            owner: "owner".to_owned(),
+            pid: current_pid(),
+            created_revision: 1,
+            expires_unix_seconds: now.saturating_add(60),
+            tool_use_id: "model-less".to_owned(),
+        },
+    );
+    let arguments = json!({"prompt": "Audit Rust", "claudex_model": "gpt-test"});
+    assert!(
+        !registry.scope_is_occupied("session-a", &arguments),
+        "an explicit model query must not collide with a model-less stored claim"
+    );
+}
+
+#[test]
+fn note_inflight_launch_dedup_ignores_a_different_session() {
+    let registry = SubagentReuseRegistry::default();
+    let arguments = json!({
+        "description": "Trace cross-session claim isolation",
+        "prompt": "Two sessions launching the same scope must both be admitted.",
+        "claudex_model": "gpt-test"
+    });
+    assert!(registry.note_inflight_launch("session-a", &arguments, "tool-a"));
+    assert!(
+        registry.note_inflight_launch("session-b", &arguments, "tool-b"),
+        "an identical scope in a different session must not be treated as a duplicate"
+    );
+    assert_eq!(registry.claims.lock().expect("claims lock").len(), 2);
+}
+
+#[test]
+fn resolve_claims_keeps_a_still_pending_claim_in_the_local_mirror() {
+    let root = tempfile::tempdir().expect("reuse store");
+    let path = root.path().join("subagent-recipients-v1.json");
+    let registry = SubagentReuseRegistry::with_store(path);
+    let arguments = json!({
+        "description": "Trace resolve_claims pending retention",
+        "prompt": "A claim without a matching resolved launch must stay in the mirror.",
+        "claudex_model": "gpt-test"
+    });
+    assert!(registry.note_inflight_launch("session-a", &arguments, "tool-pending"));
+    assert_eq!(registry.claims.lock().expect("claims lock").len(), 1);
+
+    // Still in flight: no tool_result yet, so the launch keeps an empty
+    // recipient and a non-terminal status.
+    let mut pending_request = request(
+        "session-a",
+        vec![json!({
+            "role":"assistant",
+            "content":[{
+                "type":"tool_use",
+                "id":"tool-pending",
+                "name":"Agent",
+                "input":arguments
+            }]
+        })],
+    );
+    registry.observe_and_restore_for_test(&mut pending_request, true);
+
+    assert_eq!(
+        registry.claims.lock().expect("claims lock").len(),
+        1,
+        "an unresolved claim must remain until its launch reports a recipient or terminal status"
+    );
+}
+
+#[test]
+fn resolve_claims_keeps_the_local_mirror_when_the_store_release_fails() {
+    let root = tempfile::tempdir().expect("reuse store fixture");
+    let not_a_dir = root.path().join("not-a-dir");
+    fs::write(&not_a_dir, "x").expect("file where directory should be");
+    let failing = SubagentReuseRegistry::with_store(not_a_dir.join("cache.json"));
+    let claim = super::store::ClaimRecord {
+        session_id: "session-a".to_owned(),
+        scope: "Audit Rust".to_owned(),
+        model: Some("gpt-test".to_owned()),
+        owner: "someone-else".to_owned(),
+        pid: current_pid(),
+        created_revision: 1,
+        expires_unix_seconds: unix_seconds().saturating_add(60),
+        tool_use_id: "tool-a".to_owned(),
+    };
+    failing
+        .claims
+        .lock()
+        .expect("claims lock")
+        .insert("tool-a".to_owned(), claim);
+    let launches = vec![LaunchRecord {
+        key: "tool-a".to_owned(),
+        recipient: "worker-a".to_owned(),
+        scope: "Audit Rust".to_owned(),
+        model: Some("gpt-test".to_owned()),
+        status: "completed".to_owned(),
+    }];
+    failing.resolve_claims("session-a", &launches);
+    assert_eq!(
+        failing.claims.lock().expect("claims lock").len(),
+        1,
+        "a store release failure must not drop the local claim mirror"
+    );
+}
