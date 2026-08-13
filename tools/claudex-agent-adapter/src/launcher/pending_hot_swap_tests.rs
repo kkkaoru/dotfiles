@@ -57,6 +57,20 @@ fn recognizes_wait_idle_command_lines_including_nohup() {
     assert!(!is_wait_idle_command_line("nohup"));
 }
 
+#[test]
+fn waiter_parser_rejects_missing_executable_and_disarm_skips_cleanup() {
+    assert!(!is_wait_idle_command_line("nohup "));
+    assert!(!is_wait_idle_command_line("other hot-swap --wait-idle"));
+    assert!(!is_wait_idle_command_line("claudex-agent-adapter hot-swap"));
+    let called = Arc::new(AtomicU32::new(0));
+    let marker = Arc::clone(&called);
+    let waiter = StartedWaiter::with_terminate(42, move |_| {
+        marker.fetch_add(1, Ordering::Relaxed);
+    });
+    assert_eq!(waiter.disarm(), 42);
+    assert_eq!(called.load(Ordering::Relaxed), 0);
+}
+
 #[cfg(unix)]
 #[test]
 fn detached_waiter_group_rejects_invalid_and_non_detached_pids() {
