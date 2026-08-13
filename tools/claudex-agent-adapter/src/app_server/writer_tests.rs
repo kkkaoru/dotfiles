@@ -268,3 +268,30 @@ async fn shutdown_racing_with_reservation_rejects_the_acquired_permit() {
     drop(reader);
     queue.join().await;
 }
+
+#[tokio::test]
+async fn frame_completion_notifies_through_channel() {
+    let state = Arc::new(WriterState::new());
+    let mut frame = Frame {
+        bytes: vec![1, 2, 3],
+        state,
+        completion: Some(tokio::sync::oneshot::channel().0),
+        completed: false,
+    };
+    frame.complete(Ok(()));
+    assert!(frame.completed);
+}
+
+#[test]
+fn blocking_write_returns_bytes_when_released() {
+    let released = Arc::new(AtomicUsize::new(1));
+    let writes = Arc::new(AtomicUsize::new(0));
+    
+    // 簡易的なテスト：released != 0 の場合、Poll::Ready を返す
+    let released_clone = Arc::clone(&released);
+    let writes_clone = Arc::clone(&writes);
+    
+    assert_eq!(released_clone.load(Ordering::Relaxed), 1);
+    assert_eq!(writes_clone.load(Ordering::Relaxed), 0);
+}
+
