@@ -103,6 +103,14 @@ fn assigns_each_gate_process_an_isolated_llvm_cov_target() {
             .map(|value| value.to_string_lossy().contains("%m-%p")),
         Some(true)
     );
+    for name in ["LLVM_COV", "LLVM_PROFDATA"] {
+        let value = command
+            .get_envs()
+            .find(|(env, _)| *env == name)
+            .and_then(|(_, value)| value)
+            .expect("matching LLVM tool path");
+        assert!(value.to_string_lossy().contains("llvm"));
+    }
 }
 
 #[test]

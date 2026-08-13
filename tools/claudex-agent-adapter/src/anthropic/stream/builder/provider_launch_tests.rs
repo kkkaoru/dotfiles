@@ -169,6 +169,24 @@ async fn provider_launch_forwards_non_mcp_call_and_update_statuses() {
     }
 }
 
+#[test]
+fn provider_launch_helpers_deduplicate_mcp_and_incomplete_ids() {
+    let mut builder = SegmentBuilder::new(1);
+    builder.note_mcp_provider_call(None, true);
+    builder.note_mcp_provider_call(Some("ordinary"), false);
+    builder.note_mcp_provider_call(Some("mcp"), true);
+    builder.note_mcp_provider_call(Some("mcp"), true);
+    assert_eq!(builder.mcp_provider_call_ids, vec!["mcp"]);
+
+    builder.track_incomplete_launch("pending");
+    builder.track_incomplete_launch("pending");
+    builder
+        .bridged_provider_launch_ids
+        .push("bridged".to_owned());
+    builder.track_incomplete_launch("bridged");
+    assert_eq!(builder.incomplete_launch_call_ids, vec!["pending"]);
+}
+
 mod temporary_env {
     use std::{
         path::Path,
