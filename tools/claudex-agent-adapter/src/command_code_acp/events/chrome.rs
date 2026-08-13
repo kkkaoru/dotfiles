@@ -138,3 +138,43 @@ fn message(text: impl Into<String>) -> acp::SessionUpdate {
         acp::TextContent::new(text.into()),
     )))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn chrome_predicates_cover_all_status_and_duration_forms() {
+        for text in [
+            "Thought for .",
+            "Thought for 1s",
+            "Thought for 1sec",
+            "Thought for 1secs",
+            "Thought for 1ms",
+            "Thought for 1second",
+            "Thought for 1seconds",
+        ] {
+            assert!(is_thought_for_chrome(text));
+        }
+        for text in ["Thought for 1.2.3s", "Thought for xs", "Thought for 1x"] {
+            assert!(!is_thought_for_chrome(text));
+        }
+        for text in [
+            "ツール結果待ち",
+            "続きの調査または回答",
+            "次: タスク実行",
+            "次: ツールまたは回答",
+            "次: トークン待ち",
+            "次: 別手段または報告",
+            "次: 中断",
+            "起動: Command Code",
+            "実行中: x。次: y",
+            "完了: x。次: y",
+            "失敗: x。次: y",
+            "ターン1開始",
+            "モデル要求中: x",
+        ] {
+            assert!(is_canned_line(text), "{text}");
+        }
+    }
+}
