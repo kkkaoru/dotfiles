@@ -308,6 +308,46 @@ fn assert_parses_valid_cli_options_part2() {
         .expect("hot-swap wait-idle after options"),
         RuntimeCommand::HotSwap(_, true)
     ));
+    let prune = parse_command(
+        ["prune-cache", "/tmp/claudex-cache"]
+            .into_iter()
+            .map(OsString::from)
+            .collect(),
+    )
+    .expect("valid prune-cache command");
+    assert!(matches!(
+        prune,
+        RuntimeCommand::PruneCache(Some(path)) if path == PathBuf::from("/tmp/claudex-cache")
+    ));
+    assert!(matches!(
+        parse_command(["prune-cache"].into_iter().map(OsString::from).collect())
+            .expect("default prune-cache"),
+        RuntimeCommand::PruneCache(None)
+    ));
+}
+
+#[test]
+fn prune_cache_tree_removes_tagged_dirs_and_archived_logs() {
+    let root = tempfile::tempdir().expect("prune-cache tree");
+    let tagged = root.path().join("old-target");
+    crate::cache_hygiene::write_cachedir_tag(&tagged).expect("tag");
+    std::fs::File::open(&tagged)
+        .expect("open tagged")
+        .set_times(std::fs::FileTimes::new().set_modified(
+            std::time::SystemTime::now() - std::time::Duration::from_secs(25 * 60 * 60),
+        ))
+        .expect("age tagged");
+    let archive = root.path().join("adapter.127_0_0_1_8318.1.2.pid3.log");
+    std::fs::write(&archive, vec![0_u8; 33 * 1024 * 1024]).expect("huge archive");
+    let nested = root.path().join("claudex");
+    std::fs::create_dir(&nested).expect("nested claudex");
+    let nested_archive = nested.join("adapter.127_0_0_1_8318.4.5.pid6.log");
+    std::fs::write(&nested_archive, vec![0_u8; 33 * 1024 * 1024]).expect("nested archive");
+    let summary = super::prune_cache_tree(Some(root.path().to_path_buf())).expect("prune tree");
+    assert!(summary.contains("tagged cache dirs"));
+    assert!(!tagged.exists());
+    assert!(!archive.exists());
+    assert!(!nested_archive.exists());
 }
 
 #[test]

@@ -7,9 +7,9 @@ use std::{
 use serde_json::{Value, json};
 
 use super::runner::{
-    COVERAGE_ARTIFACT_RETENTION, command_status, coverage_arguments, coverage_command,
-    coverage_target_directory, discard_successful_artifacts, prune_stale_coverage_artifacts,
-    report_arguments, run_commands, run_with, should_retry_llvm_cov_export,
+    command_status, coverage_arguments, coverage_command, coverage_target_directory,
+    discard_successful_artifacts, prune_stale_coverage_artifacts, report_arguments, run_commands,
+    run_with, should_retry_llvm_cov_export, shrink_failed_coverage_target,
 };
 use super::{
     INSTRUMENTATION_EXCEPTIONS, audit_report, combine_object_reports, coverage_percent,
@@ -289,7 +289,7 @@ fn prunes_stale_coverage_artifacts_but_keeps_current_and_live_runs() {
             .expect("open coverage artifact")
             .set_times(fs::FileTimes::new().set_modified(
                 std::time::SystemTime::now()
-                    - COVERAGE_ARTIFACT_RETENTION
+                    - crate::cache_hygiene::COVERAGE_TARGET_RETENTION
                     - std::time::Duration::from_secs(1),
             ))
             .expect("age coverage artifact");
@@ -300,7 +300,7 @@ fn prunes_stale_coverage_artifacts_but_keeps_current_and_live_runs() {
         .expect("open non-target directory")
         .set_times(fs::FileTimes::new().set_modified(
             std::time::SystemTime::now()
-                - COVERAGE_ARTIFACT_RETENTION
+                - crate::cache_hygiene::COVERAGE_TARGET_RETENTION
                 - std::time::Duration::from_secs(1),
         ))
         .expect("age non-target directory");
@@ -336,6 +336,54 @@ fn pruning_a_missing_target_root_is_a_no_op() {
         std::time::SystemTime::now(),
     )
     .expect("missing target root must not fail the gate");
+}
+
+#[test]
+fn prunes_excess_young_failed_coverage_targets_and_shrinks_kept_ones() {
+    let fixture = tempfile::tempdir().expect("coverage keep fixture");
+    let target = fixture.path().join("target");
+    fs::create_dir(&target).expect("target");
+    let current = target.join("llvm-cov-current");
+    fs::create_dir(&current).expect("current");
+    let mut failed = Vec::new();
+    for name in ["llvm-cov-21", "llvm-cov-22", "llvm-cov-23"] {
+        let path = target.join(name);
+        fs::create_dir(&path).expect("failed target");
+        fs::create_dir(path.join("debug")).expect("instrumented debug");
+        fs::write(path.join("branch-coverage.json"), "{}").expect("report");
+        failed.push(path);
+    }
+    fs::File::open(&failed[0])
+        .expect("open oldest")
+        .set_times(
+            fs::FileTimes::new()
+                .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(30)),
+        )
+        .expect("age oldest");
+    prune_stale_coverage_artifacts(fixture.path(), &current, std::time::SystemTime::now())
+        .expect("prune excess failed targets");
+    assert!(!failed[0].exists());
+    assert!(failed[1].join("branch-coverage.json").is_file());
+    assert!(!failed[1].join("debug").exists());
+    assert!(failed[2].join("branch-coverage.json").is_file());
+    assert!(!failed[2].join("debug").exists());
+}
+
+#[test]
+fn shrink_keeps_diagnosis_files_and_drops_instrumented_trees() {
+    let fixture = tempfile::tempdir().expect("shrink fixture");
+    let target = fixture.path().join("llvm-cov-9");
+    fs::create_dir(&target).expect("target");
+    fs::create_dir(target.join("debug")).expect("debug");
+    fs::write(target.join("branch-coverage.json"), "{}").expect("json");
+    fs::write(target.join("claudex.profdata"), "p").expect("profdata");
+    fs::write(target.join("noise.bin"), "x").expect("noise");
+    shrink_failed_coverage_target(&target).expect("shrink");
+    assert!(target.join("branch-coverage.json").is_file());
+    assert!(target.join("claudex.profdata").is_file());
+    assert!(target.join("CACHEDIR.TAG").is_file());
+    assert!(!target.join("debug").exists());
+    assert!(!target.join("noise.bin").exists());
 }
 
 #[test]

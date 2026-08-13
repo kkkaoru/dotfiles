@@ -26,6 +26,7 @@ pub(super) enum RuntimeCommand {
     HotSwap(AdapterOptions, bool),
     Launch(AdapterOptions, Vec<OsString>, bool),
     McpClaudexLaunch,
+    PruneCache(Option<PathBuf>),
     Serve(AdapterOptions),
 }
 
@@ -50,12 +51,32 @@ pub async fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<i32> {
             crate::launch_mcp::run_stdio()?;
             0
         }
+        RuntimeCommand::PruneCache(root) => {
+            println!("{}", prune_cache_tree(root)?);
+            0
+        }
         RuntimeCommand::Serve(options) => {
             serve(options).await?;
             0
         }
     };
     Ok(code)
+}
+
+fn prune_cache_tree(root: Option<PathBuf>) -> Result<String> {
+    let root = crate::cache_hygiene::ensure_prune_root(root)?;
+    let tagged_dirs = crate::cache_hygiene::prune_tagged_dirs(&root, std::time::SystemTime::now())?;
+    let mut adapter_logs = crate::launcher::prune_adapter_logs(&root)?;
+    let nested = root.join("claudex");
+    if nested != root && nested.is_dir() {
+        adapter_logs += crate::launcher::prune_adapter_logs(&nested)?;
+    }
+    Ok(crate::cache_hygiene::format_prune_summary(
+        &crate::cache_hygiene::PruneSummary {
+            tagged_dirs,
+            adapter_logs,
+        },
+    ))
 }
 
 pub async fn serve(options: AdapterOptions) -> Result<()> {

@@ -25,6 +25,11 @@ prune_checkout_target() {
 }
 
 prune_checkout_target
+avail_kb=$(df -k -P "$tmp_root" | awk 'NR==2 { print $4 }')
+if [ -n "$avail_kb" ] && [ "$avail_kb" -lt 2097152 ]; then
+    echo "cargo-ephemeral: need at least 2GiB free on $tmp_root (have ${avail_kb}KiB)" >&2
+    exit 1
+fi
 target_dir=$(mktemp -d "${tmp_root%/}/claudex-agent-adapter-target.XXXXXX")
 
 # shellcheck disable=SC2329
@@ -41,6 +46,12 @@ cleanup() {
 trap cleanup EXIT HUP INT TERM
 
 export CARGO_TARGET_DIR="$target_dir"
+cat >"$target_dir/CACHEDIR.TAG" <<'EOF'
+Signature: 8a477f597d28d172789f06886806bc55
+# This file is a cache directory tag created by claudex-agent-adapter.
+# For information about cache directory tags, see:
+#	https://bford.info/cachedir/
+EOF
 
 cargo_subcommand() {
     for arg in "$@"; do

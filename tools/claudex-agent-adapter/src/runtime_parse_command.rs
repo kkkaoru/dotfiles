@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, ffi::OsString};
+use std::{collections::VecDeque, ffi::OsString, path::PathBuf};
 
 use anyhow::{Result, bail};
 
@@ -43,6 +43,14 @@ pub(super) fn parse_command(mut arguments: VecDeque<OsString>) -> Result<Runtime
             reject_remaining(&arguments)?;
             Ok(RuntimeCommand::McpClaudexLaunch)
         }
+        "prune-cache" => {
+            let root = arguments
+                .pop_front()
+                .map(|value| utf8(Some(value), "prune-cache root").map(PathBuf::from))
+                .transpose()?;
+            reject_remaining(&arguments)?;
+            Ok(RuntimeCommand::PruneCache(root))
+        }
         "serve" => {
             let options = parse_options(&mut arguments)?;
             reject_inherit_model(&options, "serve")?;
@@ -50,7 +58,7 @@ pub(super) fn parse_command(mut arguments: VecDeque<OsString>) -> Result<Runtime
             Ok(RuntimeCommand::Serve(options.adapter))
         }
         _ => bail!(
-            "unknown command `{command}`; expected build-id, ensure, hot-swap, launch, mcp-claudex-launch, or serve"
+            "unknown command `{command}`; expected build-id, ensure, hot-swap, launch, mcp-claudex-launch, prune-cache, or serve"
         ),
     }
 }

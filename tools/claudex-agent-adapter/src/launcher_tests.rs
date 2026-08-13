@@ -130,6 +130,62 @@ fn archives_existing_logs_and_writes_a_header() {
 }
 
 #[test]
+fn prune_adapter_logs_never_deletes_the_canonical_live_log() {
+    let root = tempfile::tempdir().expect("log prune fixture");
+    let listen: std::net::SocketAddr = "127.0.0.1:8318".parse().expect("listen");
+    let live = super::launcher_logs::adapter_log_path(root.path(), &listen);
+    std::fs::write(&live, "running").expect("live log");
+    let oversized = root
+        .path()
+        .join(format!("adapter.127_0_0_1_8318.100.1.pid9.log"));
+    std::fs::write(&oversized, vec![0_u8; 33 * 1024 * 1024]).expect("oversized archive");
+    let old = root.path().join("adapter.127_0_0_1_8318.101.2.pid8.log");
+    std::fs::write(&old, "old").expect("old archive");
+    std::fs::File::open(&old)
+        .expect("open old")
+        .set_times(std::fs::FileTimes::new().set_modified(
+            std::time::SystemTime::now() - std::time::Duration::from_secs(25 * 60 * 60),
+        ))
+        .expect("age old archive");
+    let removed = super::prune_adapter_logs(root.path()).expect("prune logs");
+    assert!(removed >= 2);
+    assert_eq!(
+        std::fs::read_to_string(&live).expect("live remains"),
+        "running"
+    );
+    assert!(!oversized.exists());
+    assert!(!old.exists());
+}
+
+#[test]
+fn prune_adapter_logs_protects_a_live_daemon_log() {
+    let root = tempfile::tempdir().expect("live log fixture");
+    let listen: std::net::SocketAddr = "127.0.0.1:8318".parse().expect("listen");
+    let live = super::launcher_logs::adapter_log_path(root.path(), &listen);
+    std::fs::write(&live, "running").expect("live log");
+    std::fs::write(
+        root.path().join("live.8318.json"),
+        format!(
+            r#"{{"listen":"127.0.0.1:8318","build_id":"test","pid":{}}}"#,
+            std::process::id()
+        ),
+    )
+    .expect("live state");
+    assert_eq!(super::prune_adapter_logs(root.path()).expect("prune"), 0);
+    assert_eq!(std::fs::read_to_string(&live).expect("kept"), "running");
+}
+
+#[test]
+fn prune_adapter_logs_on_a_missing_cache_is_a_no_op() {
+    let root = tempfile::tempdir().expect("missing cache");
+    let missing = root.path().join("absent");
+    assert_eq!(
+        super::prune_adapter_logs(&missing).expect("missing cache"),
+        0
+    );
+}
+
+#[test]
 fn serializes_launchers_that_can_compete_for_the_same_port() {
     let base = std::path::PathBuf::from("/tmp/claudex-lock-cache");
     let loopback = "127.0.0.1:8318".parse().expect("loopback listener");

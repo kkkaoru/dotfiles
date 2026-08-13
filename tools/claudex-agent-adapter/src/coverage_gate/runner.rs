@@ -2,7 +2,7 @@ use std::{
     os::unix::process::ExitStatusExt,
     path::{Path, PathBuf},
     process::{Command, ExitStatus},
-    time::{Duration, SystemTime},
+    time::SystemTime,
 };
 
 use anyhow::{Context, Result, bail};
@@ -13,16 +13,14 @@ use super::{combine_object_reports, report::production_file};
 const COVERAGE_TARGET_PREFIX: &str = "llvm-cov-";
 const COVERAGE_TOOLCHAIN: &str = "+nightly";
 const LLVM_COV_REPORT_THREADS: &str = "--threads=1 --num-threads=1";
-// Failed reports remain available briefly for diagnosis, then a later coverage
-// run reclaims their multi-gigabyte instrumented target directories.
-pub(super) const COVERAGE_ARTIFACT_RETENTION: Duration = Duration::from_secs(10 * 60);
 
 #[path = "runner_prune.rs"]
 mod prune;
-pub(super) use prune::prune_stale_coverage_artifacts;
+pub(super) use prune::{prune_stale_coverage_artifacts, shrink_failed_coverage_target};
 
 pub fn run(root: &Path) -> Result<()> {
     let target = coverage_target_directory(root);
+    crate::cache_hygiene::prepare_coverage_target(&target)?;
     prune_stale_coverage_artifacts(root, &target, SystemTime::now())?;
     discard_successful_artifacts(&target, run_with(root, &target, command_status))
 }
@@ -182,8 +180,10 @@ pub(super) fn discard_successful_artifacts(target: &Path, outcome: Result<()>) -
     match outcome {
         Ok(()) => std::fs::remove_dir_all(target)
             .with_context(|| format!("failed to remove {}", target.display())),
-        // Keep failed reports and instrumented artifacts available for coverage diagnosis.
-        Err(error) => Err(error),
+        Err(error) => {
+            let _ = shrink_failed_coverage_target(target);
+            Err(error)
+        }
     }
 }
 

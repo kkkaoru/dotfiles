@@ -73,6 +73,10 @@ pub(crate) fn write_adapter_log_header(
     Ok(())
 }
 
+#[path = "launcher_logs_prune.rs"]
+mod prune;
+pub(crate) use prune::prune_adapter_logs;
+
 pub(crate) fn adapter_log_path(cache: &Path, listen: &SocketAddr) -> PathBuf {
     cache.join(format!("adapter.{}.log", listen_token(listen)))
 }
