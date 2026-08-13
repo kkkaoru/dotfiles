@@ -11,7 +11,7 @@ use agent_client_protocol as acp;
 use serde_json::json;
 use tempfile::TempDir;
 
-use super::events::turn_cancelled_updates;
+use super::events::{is_incomplete_canned_prefix, strip_canned_progress, turn_cancelled_updates};
 use super::{
     DEFAULT_MAX_TURNS, DEFAULT_MODEL, LaunchSpec, Options, ParsedLine, ProgressCoalescer,
     ProgressEvent, is_canned_progress, parse_stdout_line,
@@ -844,6 +844,36 @@ fn canned_progress_does_not_swallow_real_thoughts() {
     let thoughts = rendered_thoughts(&mixed);
     assert!(thoughts.contains("I'll read your .gitignore"), "{thoughts}");
     assert!(!thoughts.contains("Thought for"), "{thoughts}");
+}
+
+#[test]
+fn chrome_detection_covers_partial_and_mixed_progress() {
+    for prefix in [
+        "Thought",
+        "Thought for ",
+        "Thought for 1",
+        "Thought for 1se",
+        "起動: Command",
+        "モデル要求中",
+    ] {
+        assert!(is_incomplete_canned_prefix(prefix), "{prefix}");
+    }
+    for complete in ["Thought for 1s", "起動: Command Code", "モデル要求中:"] {
+        assert!(!is_incomplete_canned_prefix(complete), "{complete}");
+    }
+    assert!(!is_incomplete_canned_prefix(""));
+    assert!(!is_incomplete_canned_prefix("Thought for 1x"));
+    assert!(!is_incomplete_canned_prefix("real text\n"));
+
+    assert_eq!(strip_canned_progress(""), None);
+    assert_eq!(
+        strip_canned_progress("Thought for 1s\nreal text\n"),
+        Some("real text\n".to_owned())
+    );
+    assert_eq!(
+        strip_canned_progress("real text\n"),
+        Some("real text\n".to_owned())
+    );
 }
 
 #[test]
