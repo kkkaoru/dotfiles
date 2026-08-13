@@ -312,10 +312,4 @@ mod tests {
         let reg = SubagentReuseRegistry::persistent();
         assert!(!reg.scope_is_occupied("", &serde_json::json!({})));
     }
-
-    #[test]
-    fn scope_occupied_empty_session() {
-        let reg = SubagentReuseRegistry::persistent();
-        assert!(!reg.scope_is_occupied("", &serde_json::json!({})));
-    }
 }

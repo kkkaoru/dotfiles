@@ -222,6 +222,30 @@ fn writes_both_transport_encodings() {
 }
 
 #[test]
+fn message_io_reports_writer_and_header_eof_failures() {
+    struct FailingWriter;
+
+    impl std::io::Write for FailingWriter {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("injected write failure"))
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Err(std::io::Error::other("injected flush failure"))
+        }
+    }
+
+    assert!(write_message(&mut FailingWriter, true, json!({"id": 1})).is_err());
+    assert!(write_message(&mut FailingWriter, false, json!({"id": 1})).is_err());
+    assert!(
+        read_message(&mut Cursor::new("X-Ignored: yes\r\n"))
+            .expect("header EOF")
+            .is_none()
+    );
+    assert!(read_message(&mut Cursor::new("Content-Length: 3\r\n\r\nx")).is_err());
+}
+
+#[test]
 fn records_calls_to_each_configured_queue_with_defaults() {
     let _guard = LAUNCH_OWNER_ENV_LOCK.lock().expect("launch owner env lock");
     let previous = std::env::var_os("CLAUDEX_LAUNCH_OWNER");
