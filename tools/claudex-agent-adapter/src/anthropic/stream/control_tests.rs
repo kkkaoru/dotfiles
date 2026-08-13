@@ -53,3 +53,23 @@ fn error_flow_missing_will_retry_fails() {
     let result = super::error_flow(&event);
     assert!(result.is_err());
 }
+
+#[test]
+fn error_flow_labels_cline_credits_without_codex_wrap() {
+    let event = json!({
+        "params": {
+            "willRetry": false,
+            "error": {
+                "message": "ConfiguredLaunch ACP prompt failed: Internal error: Insufficient balance. Add credits at https://app.cline.bot/credits"
+            }
+        }
+    });
+    let error = super::error_flow(&event).expect_err("cline credits is terminal");
+    let message = error.to_string();
+    assert!(message.contains("Cline Credits"), "{message}");
+    assert!(message.contains("Do not retry"), "{message}");
+    assert!(
+        !message.contains("codex app-server turn failed"),
+        "{message}"
+    );
+}

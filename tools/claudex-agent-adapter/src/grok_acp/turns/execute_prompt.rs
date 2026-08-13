@@ -99,8 +99,8 @@ async fn finish_prompt_result(
     let is_session_configured = ctl.provider.is_session_scoped_configured();
     if let (true, Err(error)) = (is_session_configured, response.as_ref()) {
         let message = format!(
-            "{} ACP prompt failed: {error:?}; recycling provider",
-            ctl.provider.label()
+            "{}; recycling provider",
+            configured_prompt::prompt_failure_message(ctl.provider, error)
         );
         configured_prompt::invalidate(
             ctl.provider,

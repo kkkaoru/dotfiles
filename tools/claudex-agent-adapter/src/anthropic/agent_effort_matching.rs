@@ -19,6 +19,66 @@ pub(super) fn request_matches_intent_with_system(
     value_matches_intent(system, intent) || request_matches_intent(messages, intent)
 }
 
+pub(super) fn request_own_launch_ids(request: &MessagesRequest) -> Vec<String> {
+    let mut ids = Vec::new();
+    collect_launch_ids(&request.system, &mut ids);
+    if !ids.is_empty() {
+        return ids;
+    }
+    for message in current_turn_user_messages(&request.messages) {
+        collect_launch_ids(message, &mut ids);
+    }
+    if !ids.is_empty() {
+        return ids;
+    }
+    if let Some(first_user) = request
+        .messages
+        .iter()
+        .find(|message| message.get("role").and_then(Value::as_str) == Some("user"))
+    {
+        collect_launch_ids(first_user, &mut ids);
+    }
+    ids
+}
+
+fn collect_launch_ids(value: &Value, ids: &mut Vec<String>) {
+    match value {
+        Value::String(text) => collect_launch_ids_from_text(text, ids),
+        Value::Array(values) => values
+            .iter()
+            .for_each(|value| collect_launch_ids(value, ids)),
+        Value::Object(values) => values
+            .values()
+            .for_each(|value| collect_launch_ids(value, ids)),
+        _ => {}
+    }
+}
+
+fn collect_launch_ids_from_text(text: &str, ids: &mut Vec<String>) {
+    for line in text.lines() {
+        if let Some(id) = line.trim().strip_prefix("claudex_launch_id:") {
+            push_launch_id(ids, id.trim());
+        }
+    }
+    let open = format!("<{CORRELATION_TAG}>");
+    let close = format!("</{CORRELATION_TAG}>");
+    let mut rest = text;
+    while let Some(start) = rest.find(&open) {
+        rest = &rest[start + open.len()..];
+        let Some(end) = rest.find(&close) else {
+            break;
+        };
+        push_launch_id(ids, rest[..end].trim());
+        rest = &rest[end + close.len()..];
+    }
+}
+
+fn push_launch_id(ids: &mut Vec<String>, id: &str) {
+    if !id.is_empty() && !ids.iter().any(|existing| existing == id) {
+        ids.push(id.to_owned());
+    }
+}
+
 fn value_matches_intent(value: &Value, intent: &AgentEffortIntent) -> bool {
     match value {
         Value::String(text) => text_matches_intent(text, intent),

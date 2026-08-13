@@ -4,7 +4,9 @@ use serde_json::Value;
 
 use super::super::{
     AgentEffortRecord, MessagesRequest,
-    agent_effort_matching::{has_correlation_marker, request_matches_intent_with_system},
+    agent_effort_matching::{
+        has_correlation_marker, request_matches_intent_with_system, request_own_launch_ids,
+    },
     agent_intent_store::{persistence_snapshot, remove_expired, unix_seconds},
 };
 use super::background_launch;
@@ -19,7 +21,7 @@ use super::{
 mod intents_helpers;
 #[cfg(test)]
 pub(super) use intents_helpers::retain_terminal_intent;
-use intents_helpers::{authorized_model, unique_correlated_candidate};
+use intents_helpers::{authorized_model, preferred_match_index};
 
 impl AgentEffortIntents {
     pub(in crate::anthropic) fn record_from_user_messages(
@@ -100,6 +102,7 @@ impl AgentEffortIntents {
             return AgentIntent::unmatched(false);
         }
         let client_user_id = request.metadata.get("user_id").and_then(Value::as_str);
+        let own_ids = request_own_launch_ids(request);
         let mut pending = self.pending.lock().expect("agent effort intents poisoned");
         remove_expired(&mut pending);
         let matches = pending
@@ -111,16 +114,7 @@ impl AgentEffortIntents {
             })
             .map(|(index, intent)| (index, intent.correlated))
             .collect::<Vec<_>>();
-        // Correlated markers can coexist after compaction; prefer the newest.
-        // Uncorrelated identical prompts stay FIFO so parallel launches dequeue
-        // in launch order.
-        let index = matches
-            .iter()
-            .rev()
-            .find(|(_, correlated)| *correlated)
-            .map(|(index, _)| *index)
-            .or_else(|| matches.first().map(|(index, _)| *index))
-            .or_else(|| unique_correlated_candidate(&pending, client_user_id));
+        let index = preferred_match_index(&matches, &own_ids, &pending, client_user_id);
         let Some(index) = index else {
             return AgentIntent::unmatched(true);
         };

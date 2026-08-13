@@ -185,6 +185,30 @@ async fn maps_prompt_completion_cancellation_and_failure() {
     assert_prompt_finish(Err(acp::Error::internal_error()), "error", "").await;
 }
 
+#[test]
+fn prompt_failure_uses_display_not_debug_dump() {
+    let error = acp::Error::internal_error();
+    let message = prompt_failure_message(AcpProvider::ConfiguredLaunchScoped, &error);
+    assert!(message.contains("ConfiguredLaunch ACP prompt failed:"));
+    assert!(!message.contains("Error {"));
+    assert!(!message.contains("code:"));
+}
+
+#[test]
+fn prompt_failure_labels_cline_credits_insufficient_balance() {
+    let error = acp::Error::new(
+        -32603,
+        "Internal error: Insufficient balance. Add credits at https://app.cline.bot/credits",
+    );
+    let message = prompt_failure_message(AcpProvider::ConfiguredLaunchScoped, &error);
+    assert!(message.contains("Cline ACP prompt failed"), "{message}");
+    assert!(message.contains("Cline Credits"), "{message}");
+    assert!(message.contains("Do not retry"), "{message}");
+    assert!(!message.contains("ConfiguredLaunch"), "{message}");
+    assert!(!message.contains("codex app-server"), "{message}");
+    assert!(!message.contains("Error {"), "{message}");
+}
+
 async fn assert_prompt_finish(
     response: acp::Result<acp::PromptResponse>,
     expected_method: &str,

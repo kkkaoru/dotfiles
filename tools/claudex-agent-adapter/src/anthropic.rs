@@ -42,6 +42,7 @@ pub(crate) use subagent_timeout::{
 };
 mod provider_auth;
 mod provider_auth_cooldown;
+pub(crate) mod provider_kind;
 mod subscription;
 mod subscription_activity;
 mod subscription_frames;
@@ -57,6 +58,7 @@ mod usage_limit_failover;
 pub use content::{error_response, token_count};
 pub use request_identity::RequestIdentity;
 use segment::{Segment, Usage, WebEvidenceSummary};
+pub(crate) use segment::{cline_credits_failure_message, contains_cline_credits_balance_marker};
 pub(crate) use subscription::{DEFAULT_MAX_PROCESSES, DEFAULT_TIMEOUT_MINUTES};
 
 mod bridge_helpers;

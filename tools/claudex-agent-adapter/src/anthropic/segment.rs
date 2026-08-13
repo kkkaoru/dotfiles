@@ -85,6 +85,27 @@ pub(crate) fn contains_empty_acp_billing_marker(value: &str) -> bool {
     value.contains("configured acp completed with no assistant content")
         || (value.contains("cline credits") && value.contains("empty end_turn"))
 }
+
+/// ACP `-32603` from a real Cline launch with Credits $0. Terminal and labeled
+/// Cline; do not wrap as a Codex app-server 502 or hang on retries.
+pub(crate) const CLINE_CREDITS_FAILURE: &str = "Cline ACP prompt failed: Cline Credits \
+insufficient balance. This is a Cline billing failure, not a Codex error. Top up Credits \
+or launch a non-Cline worker. Do not retry.";
+
+pub(crate) fn contains_cline_credits_balance_marker(value: &str) -> bool {
+    let value = value.to_ascii_lowercase();
+    value.contains("insufficient balance")
+        || value.contains("app.cline.bot/credits")
+        || (value.contains("cline credits") && (value.contains("$0") || value.contains("0.00")))
+}
+
+pub(crate) fn cline_credits_failure_message(detail: &str) -> String {
+    let detail = detail.trim();
+    if detail.is_empty() {
+        return CLINE_CREDITS_FAILURE.to_owned();
+    }
+    format!("{CLINE_CREDITS_FAILURE} ({detail})")
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -116,6 +137,21 @@ mod tests {
         assert!(contains_empty_acp_billing_marker(
             "Cline Credits models return empty end_turn when balance is $0"
         ));
+    }
+
+    #[test]
+    fn detects_cline_credits_insufficient_balance() {
+        assert!(contains_cline_credits_balance_marker(
+            "Internal error: Insufficient balance. Add credits at https://app.cline.bot/credits"
+        ));
+        assert!(contains_cline_credits_balance_marker("Cline Credits $0.00"));
+        assert!(!contains_cline_credits_balance_marker(
+            "codex app-server turn failed: connection reset"
+        ));
+        assert!(cline_credits_failure_message("Insufficient balance").contains("Cline Credits"));
+        assert!(
+            !cline_credits_failure_message("Insufficient balance").contains("codex app-server")
+        );
     }
 
     #[test]

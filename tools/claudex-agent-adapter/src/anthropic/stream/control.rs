@@ -36,10 +36,21 @@ pub(in crate::anthropic) fn error_flow(event: &Value) -> Result<ControlFlow<()>>
     if super::super::provider_auth::is_auth_failure_event(event) {
         tracing::warn!(error = %event.get("params").unwrap_or(event), "codex app-server hit provider auth failure");
     }
-    bail!(
-        "codex app-server turn failed: {}",
-        event.get("params").unwrap_or(event)
-    )
+    bail!("{}", turn_error_message(event))
+}
+
+fn turn_error_message(event: &Value) -> String {
+    let params = event.get("params").unwrap_or(event);
+    let message = params
+        .pointer("/error/message")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    if super::super::segment::contains_cline_credits_balance_marker(message)
+        || super::super::segment::contains_cline_credits_balance_marker(&params.to_string())
+    {
+        return super::super::segment::cline_credits_failure_message(message);
+    }
+    format!("codex app-server turn failed: {params}")
 }
 
 pub(super) async fn refresh_activity_keepalive(

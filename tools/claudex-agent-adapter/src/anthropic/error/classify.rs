@@ -46,5 +46,6 @@ pub(super) fn is_terminal_provider_configuration_error(error: &Error) -> bool {
             || message.contains(UNAVAILABLE_PROVIDER_MODEL_MARKER)
             || (message.contains(MISSING_MODEL_PROVIDER_MARKER) && message.contains("not found"))
             || message.contains(OVERSIZED_PROMPT_MARKER)
+            || super::super::segment::contains_cline_credits_balance_marker(&message)
     })
 }

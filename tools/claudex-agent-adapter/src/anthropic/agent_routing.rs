@@ -113,26 +113,55 @@ pub(super) fn expected_worker_fields(
 /// Generic Agent types are hydrated by `hydrate_routing_fields_from_context` from a selected or
 /// configured Claudex worker. This function intentionally does not inherit the outer Claude
 /// session model: if no Claudex route exists, validation must report the missing route.
+/// GPT luna parents are the exception: a generic nested Agent must not land on Cline Credits.
 pub(super) fn hydrate_standard_agent_to_parent(arguments: &mut Value, parent_model: &str) {
-    let _ = parent_model;
-    let subagent_type = arguments
-        .get("subagent_type")
-        .and_then(Value::as_str)
-        .map(str::to_owned);
-    if subagent_type.as_deref() == Some("claude") && arguments.get(ADAPTER_MODEL).is_none() {
-        let Some(object) = arguments.as_object_mut() else {
-            return;
-        };
-        object.insert(
-            ADAPTER_MODEL.to_owned(),
-            Value::String(official_claude_haiku_model().to_owned()),
-        );
-        object.insert(
-            IMPLICIT_MODEL.to_owned(),
-            Value::String(official_claude_haiku_model().to_owned()),
-        );
-        object.insert(ADAPTER_EFFORT.to_owned(), Value::String("max".to_owned()));
+    if hydrate_claude_child_to_haiku(arguments) {
+        return;
     }
+    rewrite_generic_cline_child_to_gpt_parent(arguments, parent_model);
+}
+
+fn hydrate_claude_child_to_haiku(arguments: &mut Value) -> bool {
+    let subagent_type = arguments.get("subagent_type").and_then(Value::as_str);
+    if subagent_type != Some("claude") || arguments.get(ADAPTER_MODEL).is_some() {
+        return false;
+    }
+    let Some(object) = arguments.as_object_mut() else {
+        return false;
+    };
+    object.insert(
+        ADAPTER_MODEL.to_owned(),
+        Value::String(official_claude_haiku_model().to_owned()),
+    );
+    object.insert(
+        IMPLICIT_MODEL.to_owned(),
+        Value::String(official_claude_haiku_model().to_owned()),
+    );
+    object.insert(ADAPTER_EFFORT.to_owned(), Value::String("max".to_owned()));
+    true
+}
+
+fn rewrite_generic_cline_child_to_gpt_parent(arguments: &mut Value, parent_model: &str) {
+    let subagent_type = arguments.get("subagent_type").and_then(Value::as_str);
+    if !is_generic_agent_type(subagent_type)
+        || !super::provider_kind::is_gpt_luna_model(parent_model)
+    {
+        return;
+    }
+    let Some(current) = arguments.get(ADAPTER_MODEL).and_then(Value::as_str) else {
+        return;
+    };
+    if !super::provider_kind::is_cline_model(current) {
+        return;
+    }
+    let Some(object) = arguments.as_object_mut() else {
+        return;
+    };
+    object.insert(
+        ADAPTER_MODEL.to_owned(),
+        Value::String(parent_model.to_owned()),
+    );
+    object.remove(IMPLICIT_MODEL);
 }
 
 fn prompt_routing_value(arguments: &Value, key: &str) -> Option<String> {

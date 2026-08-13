@@ -39,6 +39,43 @@ pub(super) fn unique_correlated_candidate(
     candidates.next().is_none().then_some(candidate.0)
 }
 
+pub(super) fn preferred_match_index(
+    matches: &[(usize, bool)],
+    own_ids: &[String],
+    pending: &VecDeque<AgentEffortIntent>,
+    client_user_id: Option<&str>,
+) -> Option<usize> {
+    let own = own_matches(matches, own_ids, pending);
+    newest_correlated(&own)
+        .or_else(|| own.first().map(|(index, _)| *index))
+        .or_else(|| newest_correlated(matches))
+        .or_else(|| matches.first().map(|(index, _)| *index))
+        .or_else(|| unique_correlated_candidate(pending, client_user_id))
+}
+
+fn own_matches(
+    matches: &[(usize, bool)],
+    own_ids: &[String],
+    pending: &VecDeque<AgentEffortIntent>,
+) -> Vec<(usize, bool)> {
+    if own_ids.is_empty() {
+        return Vec::new();
+    }
+    matches
+        .iter()
+        .copied()
+        .filter(|(index, _)| own_ids.iter().any(|id| pending[*index].tool_use_id == *id))
+        .collect()
+}
+
+fn newest_correlated(matches: &[(usize, bool)]) -> Option<usize> {
+    matches
+        .iter()
+        .rev()
+        .find(|(_, correlated)| *correlated)
+        .map(|(index, _)| *index)
+}
+
 pub(in crate::anthropic) fn retain_terminal_intent(
     intent: &AgentEffortIntent,
     terminal_ids: &std::collections::HashSet<String>,

@@ -194,6 +194,20 @@ fn marks_empty_acp_billing_as_non_retryable_instead_of_502() {
 }
 
 #[test]
+fn marks_cline_credits_insufficient_balance_as_non_retryable_instead_of_502() {
+    let error = anyhow::Error::msg(
+        "codex app-server turn failed: ConfiguredLaunch ACP prompt failed: \
+Error { code: -32603: Internal error, message: \"Internal error: Insufficient balance. \
+Add credits at https://app.cline.bot/credits or retry with a different model.\" }",
+    );
+    assert_eq!(error_type(&error), NON_RETRYABLE_ERROR_TYPE);
+    assert_eq!(
+        http_status(StatusCode::BAD_GATEWAY, &error),
+        StatusCode::BAD_REQUEST
+    );
+}
+
+#[test]
 fn marks_cooling_down_provider_as_non_retryable_exhaustion() {
     let error = anyhow!("provider is cooling down after usage limit");
     assert_eq!(error_type(&error), NON_RETRYABLE_ERROR_TYPE);

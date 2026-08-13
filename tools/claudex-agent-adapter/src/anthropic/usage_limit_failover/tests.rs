@@ -144,6 +144,14 @@ fn treats_empty_acp_billing_as_failover_trigger() {
 }
 
 #[test]
+fn cline_credits_insufficient_balance_does_not_failover() {
+    assert!(!should_failover_provider_error(&anyhow::anyhow!(
+        "ConfiguredLaunch ACP prompt failed: Internal error: Insufficient balance. \
+Add credits at https://app.cline.bot/credits or retry with a different model."
+    )));
+}
+
+#[test]
 fn prefers_qwen_cloud_sibling_for_cline_empty_acp() {
     let failover = cline_and_qwen_bridge()
         .subagent_provider_failover_for(CLINE_FLASH)
@@ -151,6 +159,46 @@ fn prefers_qwen_cloud_sibling_for_cline_empty_acp() {
     assert_eq!(failover.model, QWEN_CLOUD);
     assert_eq!(failover.route, RouteDecision::Provider);
     assert_eq!(failover.effort.as_deref(), Some("high"));
+}
+
+#[test]
+fn gpt_luna_failover_prefers_opencode_go_and_skips_cline() {
+    const OPENCODE_LUNA: &str = "opencode-go/gpt-5.6-luna";
+    let cache_home = Box::leak(Box::new(
+        tempfile::tempdir().expect("isolated luna failover cache"),
+    ));
+    let backend = AgentBackend::spawn_routes(&[
+        BackendRoute::new(LUNA, BackendKind::CodexAppServer),
+        BackendRoute::new(OPENCODE_LUNA, BackendKind::ConfiguredAcp),
+        BackendRoute::new(CLINE_FLASH, BackendKind::ConfiguredAcp),
+        BackendRoute::new(QWEN_CLOUD, BackendKind::ConfiguredAcp),
+    ]);
+    let mut catalog = ModelCatalog::default();
+    catalog
+        .set_worker_routes(vec![
+            crate::provider_config::WorkerRoute::new("claudex-gpt", LUNA, "max"),
+            crate::provider_config::WorkerRoute::new("claudex-opencode-gpt", OPENCODE_LUNA, "max"),
+            crate::provider_config::WorkerRoute::new(
+                "claudex-cline-deepseek-flash",
+                CLINE_FLASH,
+                "xhigh",
+            ),
+            crate::provider_config::WorkerRoute::new("claudex-qwen", QWEN_CLOUD, "high"),
+        ])
+        .expect("install workers");
+    let bridge = Bridge::new_with_backend(backend, LUNA.to_owned())
+        .with_model_catalog(catalog)
+        .with_usage_limit_cache_home(cache_home.path());
+    let failover = bridge
+        .subagent_provider_failover_for(LUNA)
+        .expect("opencode go luna sibling");
+    assert_eq!(failover.model, OPENCODE_LUNA);
+    assert_ne!(failover.model, CLINE_FLASH);
+    let opencode_failover = bridge
+        .subagent_provider_failover_for(OPENCODE_LUNA)
+        .expect("non-cline sibling");
+    assert_ne!(opencode_failover.model, CLINE_FLASH);
+    assert_ne!(opencode_failover.model, LUNA);
 }
 
 #[test]

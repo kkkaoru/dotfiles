@@ -114,6 +114,37 @@ fn keeps_a_correlation_marker_for_a_tool_result_continuation() {
 }
 
 #[test]
+fn own_launch_ids_come_from_system_not_nested_assistant_tool_use() {
+    let request = MessagesRequest {
+        model: "gpt-5.6-luna".to_owned(),
+        system: json!(
+            "cc_is_subagent=true\nclaudex_launch_id: tool-luna\n<claudex-agent-id>tool-luna</claudex-agent-id>"
+        ),
+        messages: vec![
+            json!({"role":"user","content":"parent\nclaudex_launch_id: tool-luna"}),
+            json!({
+                "role":"assistant",
+                "content":[{
+                    "type":"tool_use",
+                    "input":{"prompt":"nested\nclaudex_launch_id: tool-nested\n<claudex-agent-id>tool-nested</claudex-agent-id>"}
+                }]
+            }),
+        ],
+        tools: Vec::new(),
+        stream: false,
+        output_config: Value::Null,
+        metadata: Value::Null,
+        working_directory: None,
+        disabled_subagent_models: Default::default(),
+        claudex_collaborator_model: None,
+    };
+    assert_eq!(
+        request_own_launch_ids(&request),
+        vec!["tool-luna".to_owned()]
+    );
+}
+
+#[test]
 fn ignores_historical_agent_markers_when_a_main_resume_continues() {
     let request = MessagesRequest {
         model: "claude-opus-5".to_owned(),

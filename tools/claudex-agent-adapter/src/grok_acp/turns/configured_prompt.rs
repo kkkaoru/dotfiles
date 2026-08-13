@@ -170,12 +170,18 @@ pub(super) async fn finish(
             };
             dispatch_turn_terminal(events, session_id, status);
         }
-        Err(error) => updates::dispatch_error(
-            events,
-            session_id,
-            format!("{} ACP prompt failed: {error:?}", provider.label()),
-        ),
+        Err(error) => {
+            updates::dispatch_error(events, session_id, prompt_failure_message(provider, &error))
+        }
     }
+}
+
+pub(super) fn prompt_failure_message(provider: AcpProvider, error: &acp::Error) -> String {
+    let detail = error.to_string();
+    if crate::anthropic::contains_cline_credits_balance_marker(&detail) {
+        return crate::anthropic::cline_credits_failure_message(&detail);
+    }
+    format!("{} ACP prompt failed: {detail}", provider.label())
 }
 
 #[cfg(test)]

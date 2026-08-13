@@ -22,3 +22,45 @@ fn configured_worker_type_without_model_is_not_guessed() {
     assert!(arguments.get(ADAPTER_MODEL).is_none());
     assert!(arguments.get(IMPLICIT_MODEL).is_none());
 }
+
+#[test]
+fn generic_nested_from_gpt_luna_does_not_keep_cline() {
+    let mut arguments = serde_json::json!({
+        "subagent_type": "general-purpose",
+        "claudex_model": "cline-pass/deepseek-v4-flash",
+        "claudex_effort": "xhigh",
+        "prompt": "research the catalog"
+    });
+
+    hydrate_standard_agent_to_parent(&mut arguments, "gpt-5.6-luna");
+
+    assert_eq!(arguments[ADAPTER_MODEL], "gpt-5.6-luna");
+    assert!(arguments.get(IMPLICIT_MODEL).is_none());
+}
+
+#[test]
+fn generic_nested_from_opencode_luna_does_not_keep_cline() {
+    let mut arguments = serde_json::json!({
+        "subagent_type": "Explore",
+        "claudex_model": "cline-pass/deepseek-v4-flash",
+        "prompt": "explore"
+    });
+
+    hydrate_standard_agent_to_parent(&mut arguments, "opencode-go/gpt-5.6-luna");
+
+    assert_eq!(arguments[ADAPTER_MODEL], "opencode-go/gpt-5.6-luna");
+}
+
+#[test]
+fn explicit_cline_worker_from_gpt_luna_parent_stays_cline() {
+    let mut arguments = serde_json::json!({
+        "subagent_type": "claudex-cline-deepseek-flash",
+        "claudex_model": "cline-pass/deepseek-v4-flash",
+        "claudex_effort": "xhigh",
+        "prompt": "explicit cline launch"
+    });
+
+    hydrate_standard_agent_to_parent(&mut arguments, "gpt-5.6-luna");
+
+    assert_eq!(arguments[ADAPTER_MODEL], "cline-pass/deepseek-v4-flash");
+}

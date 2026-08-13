@@ -55,6 +55,30 @@ pub(super) fn ordered_subagent_failover_candidates(bridge: &Bridge) -> Vec<Strin
     ordered
 }
 
+pub(super) fn ordered_subagent_failover_candidates_for(
+    bridge: &Bridge,
+    exhausted_model: &str,
+) -> Vec<String> {
+    let mut ordered = ordered_subagent_failover_candidates(bridge);
+    if !crate::anthropic::provider_kind::is_gpt_luna_model(exhausted_model) {
+        return ordered;
+    }
+    ordered.retain(|model| !crate::anthropic::provider_kind::is_cline_model(model));
+    prefer_front(
+        &mut ordered,
+        crate::anthropic::provider_kind::OPENCODE_GPT_LUNA,
+    );
+    ordered
+}
+
+fn prefer_front(ordered: &mut Vec<String>, model: &str) {
+    let Some(index) = ordered.iter().position(|candidate| candidate == model) else {
+        return;
+    };
+    let preferred = ordered.remove(index);
+    ordered.insert(0, preferred);
+}
+
 pub(super) fn is_scoped_provider_exhaustion(message: &str) -> bool {
     contains_rate_limit_marker(message)
         || provider_auth::contains_auth_failure_marker(message)
