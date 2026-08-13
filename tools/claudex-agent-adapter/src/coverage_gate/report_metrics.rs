@@ -147,6 +147,19 @@ pub(in crate::coverage_gate) fn combine_object_reports(reports: &[Value]) -> Val
 }
 
 fn merge_file(existing: &mut Value, incoming: &Value) {
+    for metric in ["lines", "functions", "regions"] {
+        let left = existing.pointer(&format!("/summary/{metric}")).cloned();
+        let right = incoming.pointer(&format!("/summary/{metric}")).cloned();
+        if let (Some(mut left), Some(right)) = (left, right) {
+            if right["count"].as_u64().unwrap_or(0) > left["count"].as_u64().unwrap_or(0) {
+                left["count"] = right["count"].clone();
+            }
+            if right["covered"].as_u64().unwrap_or(0) > left["covered"].as_u64().unwrap_or(0) {
+                left["covered"] = right["covered"].clone();
+            }
+            existing["summary"][metric] = left;
+        }
+    }
     let Some(left) = existing.get_mut("branches").and_then(Value::as_array_mut) else {
         return;
     };
