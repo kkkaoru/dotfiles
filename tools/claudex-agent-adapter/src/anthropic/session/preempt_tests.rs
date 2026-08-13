@@ -214,7 +214,9 @@ async fn stale_busy_gate_holds_do_not_block_preemption_forever() {
 
     let selection = tokio::spawn(wait_for_preemption(Arc::clone(&session), messages.clone()));
 
-    tokio::time::sleep(std::time::Duration::from_secs(4)).await;
+    // PREEMPT_GATE_TIMEOUT (500ms) fires inside take_gate_after_preempt; wait
+    // just past it rather than an arbitrary multi-second margin.
+    tokio::time::sleep(std::time::Duration::from_millis(600)).await;
     let selection = selection
         .await
         .expect("take_gate_after_preempt must complete");
