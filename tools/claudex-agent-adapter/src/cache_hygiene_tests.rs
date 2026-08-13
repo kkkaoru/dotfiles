@@ -128,6 +128,30 @@ fn prune_keeps_a_parent_that_contains_live_coverage() {
     assert!(parent.is_dir());
 }
 
+#[test]
+fn tagged_prune_root_stays_inside_fixtures_and_walks_home_cache() {
+    let fixture = tempfile::tempdir().expect("fixture");
+    assert_eq!(tagged_prune_root(fixture.path()), fixture.path());
+    let home_cache = default_prune_root().expect("home cache");
+    assert_eq!(tagged_prune_root(&home_cache.join("claudex")), home_cache);
+}
+
+#[test]
+fn prune_tagged_cache_drops_stale_trees_and_keeps_fresh_mtime() {
+    let root = tempfile::tempdir().expect("spawn prune fixture");
+    let stale = root.path().join("old-target");
+    let fresh = root.path().join("fresh-target");
+    write_cachedir_tag(&stale).expect("tag stale");
+    write_cachedir_tag(&fresh).expect("tag fresh");
+    age_path(
+        &stale,
+        TAGGED_TARGET_RETENTION + std::time::Duration::from_secs(1),
+    );
+    prune_tagged_cache(root.path());
+    assert!(!stale.exists());
+    assert!(fresh.is_dir());
+}
+
 fn age_path(path: &std::path::Path, age: std::time::Duration) {
     fs::File::open(path)
         .expect("open")

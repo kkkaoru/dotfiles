@@ -81,6 +81,27 @@ pub(crate) fn ensure_prune_root(root: Option<PathBuf>) -> Result<PathBuf> {
     }
 }
 
+/// Walk `$HOME/.cache` when the adapter log lives there so spawn/coverage
+/// prune the same tagged cargo trees as `prune-cache`. Test fixtures that
+/// are not under the home cache stay scoped to themselves.
+pub(crate) fn tagged_prune_root(log_dir: &Path) -> PathBuf {
+    default_prune_root()
+        .ok()
+        .filter(|home_cache| log_dir.starts_with(home_cache))
+        .unwrap_or_else(|| log_dir.to_path_buf())
+}
+
+pub(crate) fn prune_tagged_cache(root: &Path) {
+    let _ = prune_tagged_dirs(root, std::time::SystemTime::now());
+}
+
+pub(crate) fn prune_default_tagged_cache() {
+    let Ok(root) = default_prune_root() else {
+        return;
+    };
+    prune_tagged_cache(&root);
+}
+
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[path = "cache_hygiene_tests.rs"]

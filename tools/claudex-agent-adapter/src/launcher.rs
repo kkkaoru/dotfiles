@@ -37,7 +37,10 @@ pub(crate) use live::{
 mod installed_adapter;
 mod launcher_lock;
 mod launcher_logs;
-pub(crate) use launcher_logs::prune_adapter_logs;
+pub(crate) use launcher_logs::{
+    LOG_ROTATION_INTERVAL, adapter_log_path, prune_adapter_logs, rotate_live_daemon_log,
+    watch_canonical_log_size,
+};
 mod macos_notify;
 mod macos_notify_dispatch;
 mod pending_hot_swap;

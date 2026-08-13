@@ -13,17 +13,17 @@ use anyhow::{Context, Result};
 
 const EPOCH_FLOOR: &str = "system clock before UNIX_EPOCH";
 
-pub(crate) fn archive_previous_log(log_path: &Path) -> Result<()> {
+pub(crate) fn archive_previous_log(log_path: &Path) -> Result<Option<PathBuf>> {
     if !log_path.exists() {
-        return Ok(());
+        return Ok(None);
     }
     let metadata = fs::metadata(log_path).context("read previous adapter log metadata")?;
     if !metadata.is_file() {
-        return Ok(());
+        return Ok(None);
     }
     let archived = archived_log_path(log_path)?;
-    fs::rename(log_path, archived).context("archive previous adapter log")?;
-    Ok(())
+    fs::rename(log_path, &archived).context("archive previous adapter log")?;
+    Ok(Some(archived))
 }
 
 fn archived_log_path(log_path: &Path) -> Result<std::path::PathBuf> {
@@ -75,7 +75,18 @@ pub(crate) fn write_adapter_log_header(
 
 #[path = "launcher_logs_prune.rs"]
 mod prune;
-pub(crate) use prune::prune_adapter_logs;
+pub(crate) use prune::{ARCHIVE_MAX_BYTES, prune_adapter_logs};
+
+#[path = "launcher_logs_rotate.rs"]
+mod rotate;
+#[cfg(test)]
+pub(crate) use rotate::rotate_canonical_log;
+pub(crate) use rotate::{LOG_ROTATION_INTERVAL, rotate_live_daemon_log, watch_canonical_log_size};
+
+pub(crate) fn prune_spawn_caches(log_dir: &Path) {
+    crate::cache_hygiene::prune_tagged_cache(&crate::cache_hygiene::tagged_prune_root(log_dir));
+    let _ = prune_adapter_logs(log_dir);
+}
 
 pub(crate) fn adapter_log_path(cache: &Path, listen: &SocketAddr) -> PathBuf {
     cache.join(format!("adapter.{}.log", listen_token(listen)))

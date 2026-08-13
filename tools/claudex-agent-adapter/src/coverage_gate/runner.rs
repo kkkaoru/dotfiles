@@ -22,6 +22,7 @@ pub fn run(root: &Path) -> Result<()> {
     let target = coverage_target_directory(root);
     crate::cache_hygiene::prepare_coverage_target(&target)?;
     prune_stale_coverage_artifacts(root, &target, SystemTime::now())?;
+    crate::cache_hygiene::prune_default_tagged_cache();
     discard_successful_artifacts(&target, run_with(root, &target, command_status))
 }
 

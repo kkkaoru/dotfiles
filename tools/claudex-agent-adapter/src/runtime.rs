@@ -117,6 +117,7 @@ async fn serve_on_listener(
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".cache/claudex");
+    spawn_canonical_log_watch(&cache, options.listen);
     let (handover, rx) =
         crate::listen_handover::ListenHandover::from_runtime_bind(options.listen, cache);
     let handover_listener = crate::listen_handover::HandoverListener::new(listener, &handover, rx);
@@ -132,6 +133,14 @@ async fn serve_on_listener(
     .await;
     backend.shutdown().await;
     result
+}
+
+fn spawn_canonical_log_watch(cache: &std::path::Path, listen: std::net::SocketAddr) {
+    tokio::spawn(crate::launcher::watch_canonical_log_size(
+        crate::launcher::adapter_log_path(cache, &listen),
+        crate::launcher::LOG_ROTATION_INTERVAL,
+        crate::launcher::rotate_live_daemon_log,
+    ));
 }
 
 fn configured_token() -> Option<String> {

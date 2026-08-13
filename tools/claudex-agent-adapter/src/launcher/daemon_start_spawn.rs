@@ -36,7 +36,7 @@ pub(super) fn spawn_adapter(request: SpawnRequest<'_>) -> Result<u32> {
         .context("adapter log has no parent")?;
     fs::create_dir_all(log_dir).context("create adapter log directory")?;
     launcher_logs::archive_previous_log(&config.log_path)?;
-    let _ = launcher_logs::prune_adapter_logs(log_dir);
+    launcher_logs::prune_spawn_caches(log_dir);
     let mut stdout = OpenOptions::new()
         .create(true)
         .write(true)

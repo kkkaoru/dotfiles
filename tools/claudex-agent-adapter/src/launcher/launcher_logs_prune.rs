@@ -13,7 +13,7 @@ use super::adapter_log_path;
 
 const ARCHIVE_KEEP: usize = 5;
 const ARCHIVE_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
-const ARCHIVE_MAX_BYTES: u64 = 32 * 1024 * 1024;
+pub(crate) const ARCHIVE_MAX_BYTES: u64 = 32 * 1024 * 1024;
 
 #[derive(Deserialize)]
 struct LiveHint {

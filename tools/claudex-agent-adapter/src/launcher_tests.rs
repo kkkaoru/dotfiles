@@ -186,6 +186,92 @@ fn prune_adapter_logs_on_a_missing_cache_is_a_no_op() {
 }
 
 #[test]
+fn prune_spawn_caches_removes_stale_tagged_trees_not_the_canonical_log() {
+    let root = tempfile::tempdir().expect("spawn cache fixture");
+    let listen: std::net::SocketAddr = "127.0.0.1:8318".parse().expect("listen");
+    let live = super::launcher_logs::adapter_log_path(root.path(), &listen);
+    std::fs::write(&live, "running").expect("live log");
+    let stale = root.path().join("old-cargo-target");
+    crate::cache_hygiene::write_cachedir_tag(&stale).expect("tag");
+    std::fs::File::open(&stale)
+        .expect("open stale")
+        .set_times(std::fs::FileTimes::new().set_modified(
+            std::time::SystemTime::now()
+                - crate::cache_hygiene::TAGGED_TARGET_RETENTION
+                - std::time::Duration::from_secs(1),
+        ))
+        .expect("age stale");
+    super::launcher_logs::prune_spawn_caches(root.path());
+    assert!(!stale.exists());
+    assert_eq!(
+        std::fs::read_to_string(&live).expect("live remains"),
+        "running"
+    );
+}
+
+#[test]
+fn rotate_canonical_log_archives_when_over_the_cap_and_leaves_a_new_file() {
+    let root = tempfile::tempdir().expect("rotate fixture");
+    let listen: std::net::SocketAddr = "127.0.0.1:8318".parse().expect("listen");
+    let live = super::launcher_logs::adapter_log_path(root.path(), &listen);
+    std::fs::write(
+        &live,
+        vec![0_u8; (super::launcher_logs::ARCHIVE_MAX_BYTES + 1) as usize],
+    )
+    .expect("oversized canonical");
+    let rotated = super::launcher_logs::rotate_canonical_log(&live).expect("rotate");
+    assert!(rotated.is_some());
+    assert!(live.is_file());
+    assert!(live.metadata().expect("new log").len() < super::launcher_logs::ARCHIVE_MAX_BYTES);
+    let archives = std::fs::read_dir(root.path())
+        .expect("dir")
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.contains(".pid") && name.starts_with("adapter."))
+        })
+        .count();
+    assert_eq!(archives, 1);
+}
+
+#[test]
+fn rotate_canonical_log_skips_small_and_missing_files() {
+    let root = tempfile::tempdir().expect("small rotate fixture");
+    let live = root.path().join("adapter.127_0_0_1_8318.log");
+    std::fs::write(&live, "small").expect("small log");
+    assert!(
+        super::launcher_logs::rotate_canonical_log(&live)
+            .expect("small")
+            .is_none()
+    );
+    assert_eq!(std::fs::read_to_string(&live).expect("kept"), "small");
+    let missing = root.path().join("missing.log");
+    assert!(
+        super::launcher_logs::rotate_canonical_log(&missing)
+            .expect("missing")
+            .is_none()
+    );
+}
+
+#[test]
+fn rotate_live_daemon_log_does_not_touch_a_file_stderr_does_not_own() {
+    let root = tempfile::tempdir().expect("unowned rotate fixture");
+    let live = root.path().join("adapter.127_0_0_1_8318.log");
+    std::fs::write(
+        &live,
+        vec![0_u8; (super::launcher_logs::ARCHIVE_MAX_BYTES + 1) as usize],
+    )
+    .expect("oversized");
+    assert!(!super::launcher_logs::rotate_live_daemon_log(&live).expect("skip unowned"));
+    assert_eq!(
+        live.metadata().expect("unchanged").len(),
+        super::launcher_logs::ARCHIVE_MAX_BYTES + 1
+    );
+}
+
+#[test]
 fn serializes_launchers_that_can_compete_for_the_same_port() {
     let base = std::path::PathBuf::from("/tmp/claudex-lock-cache");
     let loopback = "127.0.0.1:8318".parse().expect("loopback listener");
