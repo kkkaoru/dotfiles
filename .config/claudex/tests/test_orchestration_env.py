@@ -160,6 +160,29 @@ class ClaudexOrchestrationEnvironmentTests(unittest.TestCase):
         self.assertEqual(output["CLAUDEX_OUTER_MODEL"], "gpt-5.6-terra")
         self.assertEqual(output["CLAUDE_CODE_MAX_CONTEXT_TOKENS"], "110000")
 
+    def test_grok_outer_model_exports_five_hundred_thousand_window(self) -> None:
+        output = self.run_launcher(
+            {"CLAUDEX_MODEL": "grok-4.6"},
+            providers={
+                "version": 1,
+                "mainProviders": ["grok"],
+                "providers": [
+                    {
+                        "id": "grok",
+                        "agent": "claudex-grok",
+                        "defaultModel": "grok-4.6",
+                        "effort": "high",
+                        "maxContextTokens": 500000,
+                        "modelPrefixes": ["grok"],
+                        "backend": "grok-acp",
+                    }
+                ],
+                "fallback": {"agent": "fallback", "model": "sonnet", "effort": "high"},
+            },
+        )
+        self.assertEqual(output["CLAUDEX_OUTER_MODEL"], "grok-4.6")
+        self.assertEqual(output["CLAUDE_CODE_MAX_CONTEXT_TOKENS"], "500000")
+
     def test_explicit_sonnet_outer_model_is_forwarded_without_changing_worker_definition(
         self,
     ) -> None:

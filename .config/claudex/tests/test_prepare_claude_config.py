@@ -62,6 +62,8 @@ class PrepareClaudeConfigTests(unittest.TestCase):
             )
             self.assertEqual(isolated_settings["model"], "grok-4.6")
             self.assertEqual(isolated_settings["effortLevel"], "high")
+            self.assertEqual(isolated_settings["modelOverrides"]["grok-4.6"], "grok-4.6")
+            self.assertEqual(isolated_settings["modelOverrides"]["grok-4.5"], "grok-4.5")
             self.assertEqual(
                 isolated_settings["env"]["CLAUDE_CODE_STOP_HOOK_BLOCK_CAP"], "64"
             )
@@ -186,6 +188,52 @@ class PrepareClaudeConfigTests(unittest.TestCase):
             self.assertEqual(
                 isolated_settings["env"]["CLAUDE_CODE_STOP_HOOK_BLOCK_CAP"], "64"
             )
+
+    def test_maps_grok_ids_in_isolated_model_overrides(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="claudex-prepare-overrides-") as temporary:
+            home = Path(temporary)
+            user_claude = home / ".claude"
+            isolated = home / "isolated"
+            user_claude.mkdir()
+            (user_claude / "settings.json").write_text(
+                json.dumps(
+                    {
+                        "model": "opus",
+                        "effortLevel": "high",
+                        "modelOverrides": {
+                            "claude-opus-4-6": "arn:aws:bedrock:example"
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(PREPARE),
+                    str(user_claude),
+                    str(isolated),
+                    "grok-4.6",
+                    "high",
+                    "500000",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            isolated_settings = json.loads(
+                (isolated / "settings.json").read_text(encoding="utf-8")
+            )
+            overrides = isolated_settings["modelOverrides"]
+            self.assertEqual(overrides["grok-4.6"], "grok-4.6")
+            self.assertEqual(overrides["grok-4.5"], "grok-4.5")
+            self.assertEqual(overrides["claude-opus-4-6"], "arn:aws:bedrock:example")
+            self.assertEqual(
+                isolated_settings["env"]["CLAUDE_CODE_MAX_CONTEXT_TOKENS"], "500000"
+            )
+            shared = json.loads((user_claude / "settings.json").read_text(encoding="utf-8"))
+            self.assertNotIn("grok-4.6", shared.get("modelOverrides", {}))
 
 
 if __name__ == "__main__":

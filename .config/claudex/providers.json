@@ -73,6 +73,7 @@
       "agent": "claudex-grok",
       "defaultModel": "grok-4.6",
       "effort": "high",
+      "maxContextTokens": 500000,
       "enabled": true,
       "usageProvider": "grok",
       "modelPrefixes": [

@@ -639,9 +639,11 @@ CLAUDEX_MODEL=qwen3.8-max-preview claudex
 自動 SubAgent は従来どおり `gpt-5.6-luna` / `claudex-gpt` です。Terra を outer にしても
 main は実装せず、実質作業は Agent/Task で worker へ委譲します。Terra を outer にする場合は
 `/model` で `claude-claudex-gpt-5.6-terra` を選ぶか、上記の `CLAUDEX_MODEL` を使います。
-Claude Code は `gpt-5.6-terra` や `auto` を未知モデルとして 200k compact 前提にするため、launcher は
-provider の `maxContextTokens`（Codex は `110000`、Cursor `auto` は `200000`）を
-`CLAUDE_CODE_MAX_CONTEXT_TOKENS` へ渡します。
+Claude Code は `gpt-5.6-terra` や `auto`、`grok-4.6` を未知モデルとして 200k compact 前提にするため、launcher は
+provider の `maxContextTokens`（Codex は `110000`、Cursor `auto` は `200000`、Grok は xAI 公表の `500000`）を
+`CLAUDE_CODE_MAX_CONTEXT_TOKENS` へ渡します。加えて `prepare-claude-config.py` は隔離
+`settings.json` の `modelOverrides` に `grok-4.6` / `grok-4.5` の identity map を書き、
+Claude Code の unrecognized-model 警告が求めるマッピングを isolated 側だけに残します。
 
 `CLAUDEX_MODEL` を明示した場合だけClaude Code設定の継承を無効化し、指定モデルをouter
 sessionにも使います。指定値は `modelPrefixes` と照合され、設定にないprefixのモデルは
@@ -858,7 +860,8 @@ threadを先に開始し、`contextWindowExceeded` を事前回避します。�
 `fugu` はCodex catalogの1M context windowに合わせて
 `1000000` を指定しています。Cursor `auto` は Claude Code が未知モデルに仮定する
 200k と同じ `200000` を指定し、起動時の unrecognized-model 警告を env で明示します。
-いずれもproviderが実際の上限を先に返した場合は、
+Grok `grok-4.6` / `grok-4.5` は xAI が公表する 500k context window に合わせて
+`500000` を指定します。いずれもproviderが実際の上限を先に返した場合は、
 非streaming turnを新規threadで1回だけ自動再試行します。
 
 `maxConcurrency` はpositive integerのmodel別並列上限です。`subagentModel`（省略時は

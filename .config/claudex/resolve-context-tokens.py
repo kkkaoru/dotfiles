@@ -4,8 +4,9 @@
 
 Unrecognized Claude Code model ids default to 200k auto-compact. Provider
 ``maxContextTokens`` is the real window for Codex/selectable models such as
-``gpt-5.6-terra`` and Cursor ``auto``. Print that integer, or nothing when the
-model is native Claude / has no configured window.
+``gpt-5.6-terra``, Cursor ``auto``, and Grok ``grok-4.6`` (xAI 500k). Print
+that integer, or nothing when the model is native Claude / has no configured
+window.
 """
 
 from __future__ import annotations
