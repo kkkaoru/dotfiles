@@ -56,6 +56,16 @@ fn recognizes_wait_idle_command_lines_including_nohup() {
     assert!(!is_wait_idle_command_line("nohup"));
 }
 
+#[cfg(unix)]
+#[test]
+fn detached_waiter_group_rejects_invalid_and_non_detached_pids() {
+    request_waiter_stop(0, |_| true);
+    request_waiter_stop(std::process::id(), |_| true);
+    request_waiter_stop(i32::MAX as u32 + 1, |_| true);
+    request_waiter_stop(99_999_999, |_| true);
+    terminate_waiter_group(99_999_999, |_| true);
+}
+
 #[test]
 fn arms_once_per_live_build_and_respawns_stale_waiters() {
     let root = tempfile::tempdir().expect("pending hot-swap fixture");
