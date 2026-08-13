@@ -874,6 +874,20 @@ fn chrome_detection_covers_partial_and_mixed_progress() {
         strip_canned_progress("real text\n"),
         Some("real text\n".to_owned())
     );
+    for canned in [
+        "ツール結果待ち",
+        "続きの調査または回答",
+        "次: ツールまたは回答",
+        "次: トークン待ち",
+        "次: 別手段または報告",
+        "次: 中断",
+        "実行中: task。次: 回答",
+        "完了: task。次: 回答",
+        "失敗: task。次: 回答",
+        "ターン1開始",
+    ] {
+        assert!(is_canned_progress(canned), "{canned}");
+    }
 }
 
 #[test]
