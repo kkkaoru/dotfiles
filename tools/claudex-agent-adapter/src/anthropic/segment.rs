@@ -152,6 +152,13 @@ mod tests {
         assert!(
             !cline_credits_failure_message("Insufficient balance").contains("codex app-server")
         );
+        assert!(contains_cline_credits_balance_marker(
+            "Top up at https://app.cline.bot/credits before retrying"
+        ));
+        assert!(!contains_cline_credits_balance_marker(
+            "Cline Credits depleted without a listed amount"
+        ));
+        assert_eq!(cline_credits_failure_message("   "), CLINE_CREDITS_FAILURE);
     }
 
     #[test]

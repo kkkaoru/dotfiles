@@ -390,4 +390,66 @@ mod tests {
             _ => {}
         }
     }
+
+    #[test]
+    fn promote_keepalive_progress_covers_missing_open_and_foreign_item_ids() {
+        let mut empty = ThinkingState::default();
+        empty.promote_keepalive_progress("reasoning");
+        assert!(empty.open.is_none());
+
+        let mut foreign = ThinkingState {
+            open: Some(OpenThinking {
+                index: 0,
+                item_id: "reasoning".to_owned(),
+                summary_index: 0,
+                signature: "sig".to_owned(),
+                text: "kept".to_owned(),
+            }),
+        };
+        foreign.promote_keepalive_progress("subagent:reasoning");
+        assert_eq!(
+            foreign.open.as_ref().map(|open| open.item_id.as_str()),
+            Some("reasoning")
+        );
+    }
+
+    #[tokio::test]
+    async fn ensure_open_is_a_no_op_when_thinking_is_already_open() {
+        let mut state = ThinkingState::default();
+        let mut blocks = Vec::new();
+        state
+            .ensure_open(&mut blocks, None)
+            .await
+            .expect("first ensure_open");
+        let first_id = state.open.as_ref().map(|open| open.item_id.clone());
+        state
+            .ensure_open(&mut blocks, None)
+            .await
+            .expect("second ensure_open");
+        assert_eq!(
+            state.open.as_ref().map(|open| open.item_id.as_str()),
+            first_id.as_deref()
+        );
+        assert_eq!(blocks.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn progress_status_trims_whitespace_and_skips_zwsp_only_status() {
+        let mut state = ThinkingState::default();
+        let mut blocks = Vec::new();
+        state
+            .progress_status_keep_open(&mut blocks, "hello ", None)
+            .await
+            .expect("trailing space status");
+        state
+            .progress_status_keep_open(&mut blocks, "world", None)
+            .await
+            .expect("buffer had trailing space");
+        state
+            .progress_status_keep_open(&mut blocks, "\u{200b}", None)
+            .await
+            .expect("zwsp-only status");
+        let text = state.open.as_ref().map(|open| open.text.as_str());
+        assert_eq!(text, Some("hello world\u{200b}"));
+    }
 }

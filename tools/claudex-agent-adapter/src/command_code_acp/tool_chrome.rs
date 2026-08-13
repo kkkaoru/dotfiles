@@ -69,6 +69,8 @@ mod tests {
         assert_eq!(tool_kind("Exec"), acp::ToolKind::Execute);
         assert_eq!(tool_kind("WebSearch"), acp::ToolKind::Search);
         assert_eq!(tool_kind("SearchWeb"), acp::ToolKind::Search);
+        assert_eq!(tool_kind("WebFetch"), acp::ToolKind::Search);
+        assert_eq!(tool_kind("OpenWeb"), acp::ToolKind::Search);
         assert_eq!(tool_kind("Notify"), acp::ToolKind::Other);
     }
 
@@ -78,6 +80,8 @@ mod tests {
         assert_eq!(argument_key("WebFetch"), "url");
         assert_eq!(argument_key("WebSearch"), "query");
         assert_eq!(argument_key("SearchDocs"), "query");
+        assert_eq!(argument_key("OpenWeb"), "query");
+        assert_eq!(argument_key("BrowserWeb"), "query");
         assert_eq!(argument_key("Bash"), "command");
         assert_eq!(argument_key("Shell"), "command");
         assert_eq!(argument_key("Exec"), "command");

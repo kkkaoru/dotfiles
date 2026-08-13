@@ -83,3 +83,36 @@ impl SegmentBuilder {
         self.close_text_block(stream).await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{format_keepalive_clock, keepalive_elapsed_chrome};
+    use std::time::Duration;
+
+    #[test]
+    fn nested_think_titles_are_not_elapsed_chrome() {
+        assert_eq!(
+            keepalive_elapsed_chrome(Some("think"), Duration::from_secs(5)),
+            None
+        );
+        assert_eq!(
+            keepalive_elapsed_chrome(Some("Thinking…"), Duration::from_secs(5)),
+            None
+        );
+        assert_eq!(
+            keepalive_elapsed_chrome(Some("THINK"), Duration::from_secs(12)),
+            None
+        );
+    }
+
+    #[test]
+    fn formats_elapsed_clock_past_one_minute() {
+        assert_eq!(format_keepalive_clock(Duration::from_secs(59)), "59s");
+        assert_eq!(format_keepalive_clock(Duration::from_secs(60)), "1m00s");
+        assert_eq!(format_keepalive_clock(Duration::from_secs(61)), "1m01s");
+        let chrome = keepalive_elapsed_chrome(Some("Read"), Duration::from_secs(61))
+            .expect("non-thinking tool titles paint elapsed chrome");
+        assert!(chrome.contains("1m01s"), "{chrome}");
+        assert!(chrome.contains("Read"), "{chrome}");
+    }
+}

@@ -258,3 +258,39 @@ fn native_parent_header_identifies_nested_child() {
 
     assert!(is_subagent_request(&request));
 }
+
+fn matching_request(
+    system: serde_json::Value,
+    messages: Vec<serde_json::Value>,
+) -> MessagesRequest {
+    serde_json::from_value(json!({
+        "model": "main-model",
+        "system": system,
+        "messages": messages
+    }))
+    .expect("messages request")
+}
+
+#[test]
+fn own_launch_ids_cover_missing_user_unclosed_tag_and_empty_id() {
+    assert!(
+        request_own_launch_ids(&matching_request(json!("no ids"), Vec::new())).is_empty(),
+        "no user message means first_user is None"
+    );
+    assert_eq!(
+        request_own_launch_ids(&matching_request(
+            json!(""),
+            vec![json!({"role":"user","content":"<claudex-agent-id>orphan"})]
+        )),
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        request_own_launch_ids(&matching_request(
+            json!(""),
+            vec![
+                json!({"role":"user","content":"claudex_launch_id: \nclaudex_launch_id: same\nclaudex_launch_id: same"})
+            ]
+        )),
+        vec!["same".to_owned()]
+    );
+}

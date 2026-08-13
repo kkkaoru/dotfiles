@@ -132,5 +132,19 @@ mod tests {
             ),
             None
         );
+        assert_eq!(
+            process_line_matches_resume_launcher(
+                "42 /Users/test/.local/bin/claudex-agent-adapter launch -r session-a",
+                "session-a"
+            ),
+            Some(42)
+        );
+        assert_eq!(
+            process_line_matches_resume_launcher(
+                "42 /Users/test/.local/bin/claudex-agent-adapter launch -r=session-a",
+                "session-a"
+            ),
+            Some(42)
+        );
     }
 }

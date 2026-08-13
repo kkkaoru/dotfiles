@@ -74,4 +74,28 @@ mod tests {
         assert_eq!(sanitize_claudex_model("worker-a <unclosed"), "worker-a");
         assert_eq!(sanitize_claudex_model("plain-model"), "plain-model");
     }
+
+    #[test]
+    fn sanitizes_unclosed_correlation_and_non_opening_markup() {
+        assert_eq!(
+            sanitize_claudex_model("grok-4.5 <claudex-agent-id>orphan"),
+            "grok-4.5"
+        );
+        assert_eq!(
+            sanitize_claudex_model("worker-a </status>keep"),
+            "worker-akeep"
+        );
+        assert_eq!(
+            sanitize_claudex_model("worker-a <!-- note -->keep"),
+            "worker-akeep"
+        );
+        assert_eq!(
+            sanitize_claudex_model("worker-a <?pi value?>keep"),
+            "worker-akeep"
+        );
+        assert_eq!(
+            sanitize_claudex_model("worker-a <status>leak"),
+            "worker-aleak"
+        );
+    }
 }

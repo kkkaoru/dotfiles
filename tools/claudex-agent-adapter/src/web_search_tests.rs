@@ -219,3 +219,32 @@ async fn injected_worker_start_and_timeout_failures_are_deterministic() {
     .expect_err("pending worker timeout");
     assert!(timed_out.to_string().contains("model timed out"));
 }
+
+#[tokio::test]
+async fn collect_worker_response_covers_closed_channel_and_non_search_items() {
+    let closed = crate::app_server::events::ThreadEvents::closed("closed-search");
+    let empty = run_worker_with_events("closed", std::future::ready(Ok(closed)))
+        .await
+        .expect("closed channel");
+    assert_eq!(empty.search_count, 0);
+    assert!(empty.results.is_empty());
+
+    let dispatcher = ThreadEventDispatcher::default();
+    let events = dispatcher.subscribe("non-search");
+    dispatcher.dispatch(serde_json::json!({
+        "method":"item/started",
+        "params":{"threadId":"non-search", "item":{"type":"agentMessage"}}
+    }));
+    dispatcher.dispatch(serde_json::json!({
+        "method":"item/completed",
+        "params":{"threadId":"non-search", "item":{"type":"agentMessage"}}
+    }));
+    dispatcher.dispatch(serde_json::json!({
+        "method":"turn/completed",
+        "params":{"threadId":"non-search"}
+    }));
+    let skipped = run_worker_with_events("non-search", std::future::ready(Ok(events)))
+        .await
+        .expect("non-search items");
+    assert_eq!(skipped.search_count, 0);
+}

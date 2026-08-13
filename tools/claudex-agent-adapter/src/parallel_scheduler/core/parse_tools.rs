@@ -120,3 +120,39 @@ pub(super) fn remove_correlation_tag(text: &str) -> String {
     cleaned.push_str(remaining);
     cleaned
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{batch_workunit, normalize_scope, parse_subagent_tool_use};
+    use serde_json::json;
+
+    #[test]
+    fn drops_models_that_sanitize_to_empty_and_joins_scope_lines() {
+        let mut launched = Vec::new();
+        parse_subagent_tool_use(
+            &json!({
+                "name": "Agent",
+                "id": "empty-model",
+                "input": {
+                    "claudex_model": "<status>leak</status>",
+                    "prompt": "keep this scope"
+                }
+            }),
+            &mut launched,
+        );
+        assert!(launched.is_empty());
+
+        assert!(
+            batch_workunit(
+                "batch",
+                0,
+                &json!({"claudex_model": "<claudex-agent-id>toolu</claudex-agent-id>"})
+            )
+            .is_none()
+        );
+        assert_eq!(
+            normalize_scope("First scope line\nclaudex_model: ignored\nSecond scope line"),
+            "first scope line second scope line"
+        );
+    }
+}

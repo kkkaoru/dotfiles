@@ -299,3 +299,18 @@ fn explicit_cardinality_wins_over_a_shorter_action_list() {
     })]);
     assert_eq!(independent_scope_count(&request), 4);
 }
+
+#[test]
+fn single_worker_and_substantive_gates_cover_decline_and_parallel_counts() {
+    let declined = messages_request(vec![serde_json::json!({
+        "role":"user",
+        "content":"do not delegate this lookup"
+    })]);
+    assert!(declines_delegation(&declined));
+    assert!(!needs_single_worker(&declined));
+    assert!(!is_substantive_work(&declined));
+
+    let parallel = messages_request(vec![real_three_scope_message()]);
+    assert!(!needs_single_worker(&parallel));
+    assert!(is_substantive_work(&parallel));
+}

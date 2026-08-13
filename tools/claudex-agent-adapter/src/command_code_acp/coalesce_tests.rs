@@ -23,6 +23,24 @@ fn remaining_final_message_skips_when_streamed_already_covers_result() {
         remaining_final_message("hello world", "unrelated"),
         Some("hello world".to_owned())
     );
+    assert_eq!(remaining_final_message("keep", "keep"), None);
+}
+
+#[test]
+fn record_emitted_thought_ignores_non_thought_events() {
+    let mut coalescer = ProgressCoalescer::default();
+    coalescer.record_emitted_thought(&ProgressEvent::Message("not thought".to_owned()));
+    assert!(
+        coalescer.thought_emitted.is_empty(),
+        "non-Thought events must not append to thought_emitted"
+    );
+}
+
+#[test]
+fn thought_end_remainder_drops_empty_snapshots_and_empty_rest() {
+    assert_eq!(thought_end_remainder("emitted", "   "), None);
+    assert_eq!(thought_end_remainder("keep", "keep   "), None);
+    assert_eq!(thought_end_remainder("keep", "keep"), None);
 }
 
 #[test]

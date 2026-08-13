@@ -494,3 +494,28 @@ async fn queue_poll_covers_pending_event_and_closed_states() {
         assert!(matches!(queue.poll(), QueuePoll::Pending));
     }
 }
+
+#[test]
+fn coalesces_an_empty_delta_then_a_suffix_without_hitting_the_char_cap() {
+    let mut state = QueueState::default();
+    state.push_or_overflow(delta("empty-delta", ""), true);
+    state.push_or_overflow(delta("empty-delta", "x"), true);
+    assert_eq!(state.events.len(), 1);
+    assert_eq!(state.events[0].value["params"]["delta"], "x");
+}
+
+#[test]
+fn append_delta_byte_cap_overflows_mixed_requeueable_events() {
+    let mut state = QueueState::default();
+    state.push_or_overflow(delta("mix-bytes", "hi"), false);
+    assert_eq!(state.events.len(), 1);
+    state.queued_bytes = MAX_QUEUED_BYTES;
+    state.push_or_overflow(delta("mix-bytes", "x"), true);
+    assert!(state.overflowed);
+    assert_eq!(state.events.len(), 1);
+    assert_eq!(state.events[0].value["method"], "error");
+    assert!(
+        !state.events[0].requeueable,
+        "a non-requeueable tail must keep overflow non-requeueable"
+    );
+}

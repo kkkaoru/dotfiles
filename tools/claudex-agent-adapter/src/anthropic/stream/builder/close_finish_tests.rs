@@ -79,3 +79,32 @@ async fn commit_pending_reasoning_skips_a_transcript_already_holding_the_same_te
         "no duplicate thinking block is appended for text already on the transcript"
     );
 }
+
+#[tokio::test]
+async fn commit_pending_reasoning_writes_when_transcript_does_not_already_hold_it() {
+    let mut builder = SegmentBuilder::new(1);
+    builder
+        .blocks
+        .push(json!({"type":"text","text":"unrelated"}));
+    builder.pending_reasoning = "fresh reasoning text".to_owned();
+    builder
+        .commit_pending_reasoning_for_transcript(None)
+        .await
+        .expect("commit fresh reasoning");
+    assert!(builder.pending_reasoning.is_empty());
+    assert!(
+        builder
+            .blocks
+            .iter()
+            .any(|block| block.get("type").and_then(serde_json::Value::as_str) == Some("thinking"))
+    );
+}
+
+#[test]
+fn thinking_contains_pending_rejects_blank_needles_and_non_thinking_blocks() {
+    assert!(!thinking_contains_pending(&[], "   "));
+    assert!(!thinking_contains_pending(
+        &[json!({"type":"text","thinking":"needle"})],
+        "needle"
+    ));
+}

@@ -83,3 +83,66 @@ async fn toolless_keepalive_does_not_stack_thinking_elapsed_tips() {
     );
     drop(sender);
 }
+
+#[tokio::test]
+async fn elapsed_tip_returns_when_external_tools_ran_without_open_thinking() {
+    let mut builder = SegmentBuilder::new(1).with_subagent(true);
+    builder.external_tool_calls = 1;
+    builder
+        .provider_tool_calls
+        .push(("call-1".to_owned(), "Read".to_owned()));
+    builder.age_turn_for_test(Duration::from_secs(5));
+    builder
+        .activity_keepalive(None)
+        .await
+        .expect("keepalive with external tools and closed thinking");
+    assert!(
+        !builder.thinking.is_open(),
+        "closed thinking plus external tools must not open a tip block"
+    );
+}
+
+#[tokio::test]
+async fn elapsed_tip_closes_zwsp_prime_when_external_tools_left_thinking_open() {
+    let mut builder = SegmentBuilder::new(1)
+        .with_subagent(true)
+        .with_primed_thinking();
+    builder.external_tool_calls = 1;
+    builder
+        .provider_tool_calls
+        .push(("call-1".to_owned(), "Read".to_owned()));
+    builder.age_turn_for_test(Duration::from_secs(5));
+    assert!(builder.thinking.is_open());
+    builder
+        .activity_keepalive(None)
+        .await
+        .expect("keepalive with external tools and zwsp prime");
+}
+
+#[tokio::test]
+async fn collapsed_launch_prime_closes_before_visible_subagent_progress() {
+    let mut builder = SegmentBuilder::new(1).with_subagent(true);
+    builder
+        .thinking
+        .progress_status_keep_open(&mut builder.blocks, "SubAgent starting\n", None)
+        .await
+        .expect("collapsed launch prime");
+    builder
+        .stream_progress_text("visible status\n", None)
+        .await
+        .expect("visible progress after prime");
+}
+
+#[tokio::test]
+async fn subagent_raw_reasoning_skips_missing_and_whitespace_deltas() {
+    let mut builder = SegmentBuilder::new(1).with_subagent(true);
+    builder
+        .raw_reasoning_delta(&json!({"params":{"itemId":"r1"}}), None)
+        .await
+        .expect("missing delta");
+    builder
+        .raw_reasoning_delta(&json!({"params":{"itemId":"r1","delta":"  \n  "}}), None)
+        .await
+        .expect("whitespace delta");
+    assert!(builder.pending_reasoning.is_empty());
+}

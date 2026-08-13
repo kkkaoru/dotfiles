@@ -1717,3 +1717,82 @@ async fn serve_http_then_reset() -> SocketAddr {
     });
     listen
 }
+
+#[tokio::test]
+async fn open_circuit_short_circuits_diverted_proxy_without_another_upstream_call() {
+    let cache = tempfile::tempdir().expect("open circuit cache");
+    let (advertised, _rx) =
+        ListenHandover::new("127.0.0.1:1".parse().unwrap(), cache.path().to_path_buf());
+    advertised.set_advertised_for_test("127.0.0.1:61915".parse().unwrap());
+    let state = HandoverState {
+        retained: None,
+        advertised: Some(advertised),
+        client: proxy_http_client(),
+        circuit: Default::default(),
+    };
+    for _ in 0..3 {
+        state.circuit.note_failure("session-open");
+    }
+    assert!(super::open_circuit_response(&state, Some("session-open")).is_some());
+    let request = Request::builder()
+        .uri("/v1/messages")
+        .body(Body::empty())
+        .expect("request");
+    match super::diverted_service_action(&state, Some("session-open"), request).await {
+        super::DivertedService::Proxy(response) => {
+            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        }
+        _ => panic!("open circuit must divert to a terminal proxy response"),
+    }
+    let retry = super::observe_proxy(
+        &state,
+        None,
+        super::handover_circuit::retry_response("retry".to_owned()),
+    );
+    assert_eq!(retry.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[tokio::test]
+async fn open_circuit_short_circuits_retained_proxy_when_listen_matches() {
+    let cache = tempfile::tempdir().expect("retained circuit cache");
+    let listen = "127.0.0.1:8318".parse().unwrap();
+    let (handover, _rx) = ListenHandover::new(listen, cache.path().to_path_buf());
+    let path = cache.path().join("retained.json");
+    std::fs::write(
+        &path,
+        br#"{"listen":"127.0.0.1:8318","pid":1,"build_id":"old","session_ids":["session-a"]}"#,
+    )
+    .expect("write retained");
+    let circuit = std::sync::Arc::new(super::HandoverCircuit::default());
+    for _ in 0..3 {
+        circuit.note_failure("session-a");
+    }
+    let state = Some(HandoverState {
+        retained: Some(Arc::new(retained(&path, "127.0.0.1:8318", &["session-a"]))),
+        advertised: Some(handover),
+        client: proxy_http_client(),
+        circuit,
+    });
+    let app = Router::new()
+        .route("/v1/messages", post(|| async { "must-not-run" }))
+        .layer(middleware::from_fn_with_state(
+            state,
+            proxy_retained_sessions,
+        ));
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("retained circuit listener");
+    let addr = listener.local_addr().expect("retained circuit address");
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.ok();
+    });
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let response = reqwest::Client::new()
+        .post(format!("http://{addr}/v1/messages"))
+        .header("x-claude-code-session-id", "session-a")
+        .body("{}")
+        .send()
+        .await
+        .expect("open circuit retained");
+    assert_eq!(response.status(), reqwest::StatusCode::BAD_REQUEST);
+}
