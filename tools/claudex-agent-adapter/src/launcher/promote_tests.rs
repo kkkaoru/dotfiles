@@ -82,6 +82,17 @@ fn handover_requires_a_capable_daemon_pid() {
 }
 
 #[test]
+fn current_build_readiness_checks_expected_pid() {
+    let mut ready = health(true, Some(12));
+    ready.build_id = env!("CLAUDEX_BUILD_ID").to_owned();
+    assert!(current_build_ready(&ready, None));
+    assert!(current_build_ready(&ready, Some(12)));
+    assert!(!current_build_ready(&ready, Some(13)));
+    ready.pid = None;
+    assert!(current_build_ready(&ready, Some(13)));
+}
+
+#[test]
 fn live_update_requires_the_same_service_fingerprints() {
     let config = ServiceConfig {
         options: AdapterOptions {
