@@ -87,6 +87,12 @@ mod identity_tests {
             IdentityAction::TerminateOrphanedSession
         );
     }
+
+    #[test]
+    fn capture_daemon_identity_rejects_invalid_pids() {
+        assert_eq!(capture_started_daemon_identity(0), None);
+        assert_eq!(capture_started_daemon_identity(i32::MAX as u32 + 1), None);
+    }
 }
 
 #[cfg(target_vendor = "apple")]

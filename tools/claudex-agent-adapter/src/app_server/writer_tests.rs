@@ -301,11 +301,22 @@ fn blocking_write_returns_bytes_when_released() {
     let released = Arc::new(AtomicUsize::new(1));
     let writes = Arc::new(AtomicUsize::new(0));
     
-    // 簡易的なテスト：released != 0 の場合、Poll::Ready を返す
     let released_clone = Arc::clone(&released);
     let writes_clone = Arc::clone(&writes);
     
     assert_eq!(released_clone.load(Ordering::Relaxed), 1);
     assert_eq!(writes_clone.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+fn frame_drop_without_completion_is_safe() {
+    let state = Arc::new(WriterState::new());
+    let frame = Frame {
+        bytes: vec![1, 2, 3],
+        state,
+        completion: None,
+        completed: false,
+    };
+    drop(frame);
 }
 
