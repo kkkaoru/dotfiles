@@ -138,6 +138,17 @@ fn retries_llvm_cov_json_export_on_segfault_or_corrupt_profraw() {
 }
 
 #[test]
+fn corrupt_profile_cleanup_removes_invalid_nested_profiles() {
+    let fixture = tempfile::tempdir().expect("coverage fixture");
+    let nested = fixture.path().join("nested");
+    fs::create_dir(&nested).expect("nested profile directory");
+    let invalid = nested.join("invalid.profraw");
+    fs::write(&invalid, b"not an llvm profile").expect("invalid profile");
+    super::runner::remove_corrupt_profiles(fixture.path());
+    assert!(!invalid.exists());
+}
+
+#[test]
 fn removes_only_successful_isolated_coverage_artifacts() {
     let fixture = tempfile::tempdir().expect("coverage fixture");
     let succeeded = fixture.path().join("succeeded");

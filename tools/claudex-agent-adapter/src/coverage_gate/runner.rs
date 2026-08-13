@@ -146,7 +146,7 @@ pub(super) fn coverage_command(root: &Path, target: &Path, arguments: &[String])
     command
 }
 
-fn remove_corrupt_profiles(target: &Path) {
+pub(super) fn remove_corrupt_profiles(target: &Path) {
     let mut pending = vec![target.to_owned()];
     let mut profiles = Vec::new();
     while let Some(path) = pending.pop() {

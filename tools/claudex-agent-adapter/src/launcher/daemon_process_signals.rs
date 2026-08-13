@@ -93,6 +93,26 @@ mod identity_tests {
         assert_eq!(capture_started_daemon_identity(0), None);
         assert_eq!(capture_started_daemon_identity(i32::MAX as u32 + 1), None);
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_listing_skips_malformed_rows_and_zombies() {
+        let listing = parse_process_listing(b"101 101 S\ninvalid\n102 101 Z\n103 0 R\n104 104 R\n");
+        assert_eq!(listing.len(), 4);
+        assert!(listing[1].zombie);
+        assert_eq!(listing[2].process_group, 0);
+        assert!(live_process_groups_in_session(-1).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_checks_fail_closed_for_missing_processes() {
+        assert!(!process_is_alive(u32::MAX));
+        assert!(!is_process_zombie(u32::MAX));
+        assert!(!process_group_is_alive(i32::MAX));
+        assert_eq!(session_id(-1), None);
+        assert_eq!(owned_daemon_session(u32::MAX), None);
+    }
 }
 
 #[cfg(target_vendor = "apple")]
