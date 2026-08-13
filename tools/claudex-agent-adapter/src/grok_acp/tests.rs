@@ -636,21 +636,24 @@ async fn rejects_invalid_duplicate_and_unavailable_turn_queues() {
         .contains("invalidated")
     );
     active.borrow_mut().insert("duplicate".to_owned(), None);
+    let duplicate = queue_turn(
+        AcpProvider::Copilot,
+        params("duplicate"),
+        Arc::clone(&permits).acquire_owned().await.unwrap(),
+        &instructions,
+        &turns,
+        &active,
+        &invalidated,
+    )
+    .await
+    .unwrap_err()
+    .to_string();
     assert!(
-        queue_turn(
-            AcpProvider::Copilot,
-            params("duplicate"),
-            Arc::clone(&permits).acquire_owned().await.unwrap(),
-            &instructions,
-            &turns,
-            &active,
-            &invalidated,
-        )
-        .await
-        .unwrap_err()
-        .to_string()
-        .contains("active turn")
+        duplicate.contains("was invalidated"),
+        "unsettled same-session replace must invalidate that session: {duplicate}"
     );
+    assert!(invalidated.borrow().contains("duplicate"));
+    assert!(!active.borrow().contains_key("duplicate"));
     drop(receiver);
     assert!(
         queue_turn(
