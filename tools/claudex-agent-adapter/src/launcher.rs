@@ -131,9 +131,7 @@ pub use claude_launch::run_claude;
 #[cfg(test)]
 use health::wait_until_ready_with;
 
-#[cfg(test)]
-#[cfg(unix)]
-#[cfg_attr(coverage_nightly, coverage(off))]
+#[cfg(all(test, unix))]
 #[path = "../tests/support/wait_published.rs"]
 pub(crate) mod wait_published;
 
