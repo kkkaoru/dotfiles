@@ -6,6 +6,9 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
+use serde_json::Value;
+
+use super::combine_object_reports;
 
 const COVERAGE_TARGET_PREFIX: &str = "llvm-cov-";
 const COVERAGE_TOOLCHAIN: &str = "+nightly";
@@ -26,14 +29,50 @@ pub fn run(root: &Path) -> Result<()> {
 
 pub fn report(root: &Path) -> Result<()> {
     let retained = root.join("target/coverage-last/branch-coverage.json");
-    if retained.is_file() {
-        return super::audit_report(root, &retained);
-    }
-    let target = existing_coverage_target(root)?;
+    let target = match existing_coverage_target(root) {
+        Ok(target) => target,
+        Err(_error) if retained.is_file() => return super::audit_report(root, &retained),
+        Err(error) => return Err(error),
+    };
     let report = target.join("branch-coverage.json");
-    let status = command_status(root, &target, &report_arguments(&report))?;
-    require_success(status, "coverage report")?;
+    let document = per_object_report(&target)?;
+    std::fs::write(&report, serde_json::to_vec(&document)?)?;
+    std::fs::copy(&report, &retained)
+        .with_context(|| format!("failed to retain {}", report.display()))?;
     super::audit_report(root, &report)
+}
+
+fn per_object_report(target: &Path) -> Result<Value> {
+    let deps = target.join("debug/deps");
+    let mut reports = Vec::new();
+    for entry in std::fs::read_dir(deps).context("read coverage test binaries")? {
+        let path = entry?.path();
+        if !path.is_file() || path.extension().is_some() {
+            continue;
+        }
+        let output = Command::new(matching_llvm_tool("llvm-cov").context("llvm-cov")?)
+            .args(["export", "-format=text", "-instr-profile"])
+            .arg(find_profile(target)?)
+            .arg(&path)
+            .output()
+            .with_context(|| format!("export {}", path.display()))?;
+        if output.status.success() {
+            if let Ok(document) = serde_json::from_slice::<Value>(&output.stdout) {
+                reports.push(document);
+            }
+        }
+    }
+    if reports.is_empty() {
+        bail!("no per-object llvm-cov exports succeeded")
+    }
+    Ok(combine_object_reports(&reports))
+}
+
+fn find_profile(target: &Path) -> Result<PathBuf> {
+    std::fs::read_dir(target)?
+        .filter_map(|entry| entry.ok().map(|item| item.path()))
+        .find(|path| path.extension().is_some_and(|ext| ext == "profdata"))
+        .context("no merged profdata found")
 }
 
 pub(super) fn coverage_target_directory(root: &Path) -> PathBuf {

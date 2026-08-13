@@ -10,14 +10,14 @@ use metrics::{CoverageMetrics, enforce_baseline, persist};
 #[cfg(test)]
 use report::INSTRUMENTATION_EXCEPTIONS;
 #[cfg(test)]
-use report::combine_object_reports;
-#[cfg(test)]
 use report::is_non_executable_source;
 #[cfg(test)]
 use report::is_test_only_source;
 #[cfg(test)]
 use report::source_line_percent;
-use report::{coverage_percent, production_line_failures, source_branch_percent};
+use report::{
+    combine_object_reports, coverage_percent, production_line_failures, source_branch_percent,
+};
 pub use runner::report;
 pub use runner::run;
 
