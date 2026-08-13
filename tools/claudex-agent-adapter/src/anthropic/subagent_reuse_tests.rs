@@ -2736,6 +2736,77 @@ fn resolve_claims_keeps_a_still_pending_claim_in_the_local_mirror() {
 }
 
 #[test]
+fn scope_is_occupied_true_via_store_backed_session_state_without_local_memory_or_claims() {
+    let root = tempfile::tempdir().expect("reuse registry fixture");
+    let path = root.path().join("reuse.json");
+    let store = Store::new(path.clone());
+    store
+        .save_session_delta(
+            "session-a",
+            SessionState {
+                launches: vec![LaunchRecord {
+                    key: "tool-a".to_owned(),
+                    recipient: "worker-a".to_owned(),
+                    scope: "Audit Rust".to_owned(),
+                    model: Some("worker-model".to_owned()),
+                    status: "active".to_owned(),
+                }],
+            },
+            0,
+        )
+        .expect("seed store-backed session state");
+
+    let registry = SubagentReuseRegistry::with_store(path);
+    let arguments = json!({"prompt": "Audit Rust", "claudex_model": "worker-model"});
+    assert!(
+        registry.scope_is_occupied("session-a", &arguments),
+        "store-backed session state alone (no local memory, no claims) must occupy the scope"
+    );
+}
+
+#[test]
+fn persist_without_a_store_is_a_no_op() {
+    let registry = SubagentReuseRegistry::default();
+    registry.persist(HashMap::new());
+}
+
+#[test]
+fn persist_with_a_store_writes_the_snapshot() {
+    let root = tempfile::tempdir().expect("reuse registry fixture");
+    let path = root.path().join("reuse.json");
+    let registry = SubagentReuseRegistry::with_store(path.clone());
+    let mut states = HashMap::new();
+    states.insert(
+        "session-a".to_owned(),
+        SessionState {
+            launches: vec![LaunchRecord {
+                key: "tool-a".to_owned(),
+                recipient: "worker-a".to_owned(),
+                scope: "Audit Rust".to_owned(),
+                model: Some("worker-model".to_owned()),
+                status: "active".to_owned(),
+            }],
+        },
+    );
+    registry.persist(states);
+    let stored =
+        serde_json::from_slice::<StoredStates>(&fs::read(path).expect("persisted registry"))
+            .expect("valid registry JSON");
+    assert!(stored.sessions.contains_key("session-a"));
+}
+
+#[test]
+fn persist_with_a_store_that_cannot_save_does_not_panic() {
+    let root = tempfile::tempdir().expect("reuse registry fixture");
+    let path = root.path().join("reuse.json");
+    fs::create_dir(&path).expect("occupy the store path with a directory");
+    let registry = SubagentReuseRegistry::with_store(path);
+    // The atomic rename onto an occupied directory fails; persist() must log
+    // and swallow the error rather than panicking.
+    registry.persist(HashMap::new());
+}
+
+#[test]
 fn resolve_claims_keeps_the_local_mirror_when_the_store_release_fails() {
     let root = tempfile::tempdir().expect("reuse store fixture");
     let not_a_dir = root.path().join("not-a-dir");

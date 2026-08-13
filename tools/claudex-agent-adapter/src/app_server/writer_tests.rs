@@ -252,6 +252,20 @@ async fn shutdown_is_idempotent_and_empty_drain_completes() {
 }
 
 #[tokio::test]
+async fn drain_returns_once_the_writer_fails_even_with_reservations_still_pending() {
+    let state = Arc::new(WriterState::new());
+    state.reserved.fetch_add(1, Ordering::AcqRel);
+    state.mark_failed();
+    state.changed.notify_waiters();
+    tokio::time::timeout(
+        Duration::from_millis(200),
+        wait_until_drained(Arc::clone(&state)),
+    )
+    .await
+    .expect("drain must not wait once the writer has failed, even with a pending reservation");
+}
+
+#[tokio::test]
 async fn shutdown_racing_with_reservation_rejects_the_acquired_permit() {
     let (reader, writer) = duplex(1);
     let queue = FrameWriter::spawn_with_capacity(writer, 1);
