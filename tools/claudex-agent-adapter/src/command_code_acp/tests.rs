@@ -1522,17 +1522,20 @@ async fn run_turn_abort_kills_term_resistant_descendants_with_the_cmd_group() {
     );
     let spec = spec_with_program(program);
     let run = tokio::spawn(async move { run_turn(&spec, "hello", None).await });
-    let group = match tokio::time::timeout(std::time::Duration::from_secs(5), async {
-        loop {
-            if let Ok(contents) = fs::read_to_string(&group_file)
-                && let Some(group) = contents.split_whitespace().next()
-                && let Ok(group) = group.parse::<i32>()
-            {
-                break group;
+    let group = match tokio::time::timeout(
+        std::time::Duration::from_secs(if cfg!(coverage_nightly) { 15 } else { 5 }),
+        async {
+            loop {
+                if let Ok(contents) = fs::read_to_string(&group_file)
+                    && let Some(group) = contents.split_whitespace().next()
+                    && let Ok(group) = group.parse::<i32>()
+                {
+                    break group;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-    })
+        },
+    )
     .await
     {
         Ok(group) => group,
