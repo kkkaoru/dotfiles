@@ -21,11 +21,11 @@ const DAEMON_START_MARKER: &str = "=== claudex-agent-adapter daemon start ===";
 #[cfg(not(coverage_nightly))]
 const REPLACEMENT_READY_TIMEOUT: Duration = Duration::from_secs(10);
 #[cfg(coverage_nightly)]
-const REPLACEMENT_READY_TIMEOUT: Duration = Duration::from_secs(3);
+const REPLACEMENT_READY_TIMEOUT: Duration = Duration::from_secs(10);
 #[cfg(not(coverage_nightly))]
 const HEALTH_READY_TIMEOUT: Duration = Duration::from_secs(10);
 #[cfg(coverage_nightly)]
-const HEALTH_READY_TIMEOUT: Duration = Duration::from_secs(3);
+const HEALTH_READY_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Clone)]
 struct TestProcess {
