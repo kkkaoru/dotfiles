@@ -49,6 +49,7 @@ async fn true_no_response_expires_after_the_logical_budget() {
         std::future::pending::<()>(),
         Some(activity),
         None,
+        None,
     ));
     tokio::task::yield_now().await;
     tokio::time::advance(TIMEOUT - Duration::from_secs(1)).await;
@@ -66,6 +67,7 @@ async fn provider_activity_resets_the_no_event_budget() {
         TIMEOUT,
         std::future::pending::<()>(),
         Some(activity),
+        None,
         None,
     ));
     tokio::task::yield_now().await;
@@ -96,6 +98,7 @@ async fn quota_watch_completes_immediately_without_the_no_event_budget() {
         std::future::pending::<()>(),
         Some(activity),
         Some(&mut rx),
+        None,
     )
     .await;
     assert!(matches!(

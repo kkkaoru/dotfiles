@@ -52,23 +52,18 @@ pub(crate) fn human_web_search_error(error: &anyhow::Error) -> String {
 
 pub(crate) fn human_web_search_error_text(detail: &str) -> String {
     let lower = detail.to_ascii_lowercase();
-    if lower.contains("timed out") || lower.contains("timeout") {
-        return "WebSearch timed out".to_owned();
+    if lower.contains("must not be empty") {
+        return "WebSearch query must not be empty".to_owned();
     }
     if lower.contains("no websearch worker") {
         return "No WebSearch worker is configured".to_owned();
     }
-    if lower.contains("must not be empty") {
-        return "WebSearch query must not be empty".to_owned();
+    if is_timeout_failure(&lower) {
+        return "WebSearch timed out".to_owned();
     }
-    let cleaned = detail
-        .replace("PROXY_TRANSPORT", "")
-        .replace("ECONNABORTED", "")
-        .replace("  ", " ");
-    let trimmed = cleaned.trim();
-    if trimmed.is_empty() {
-        "WebSearch failed".to_owned()
-    } else {
-        format!("WebSearch failed: {trimmed}")
-    }
+    "WebSearch failed".to_owned()
+}
+
+fn is_timeout_failure(lower: &str) -> bool {
+    lower.contains("timed out") || lower.contains("timeout") || lower.contains("etimedout")
 }

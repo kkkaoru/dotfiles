@@ -254,11 +254,26 @@ fn t4_failed_search_errors_are_human_and_hide_transport_codes() {
     let timeout = human_web_search_error(&anyhow::anyhow!("worker model timed out"));
     assert_eq!(timeout, "WebSearch timed out");
     let transport = human_web_search_error(&anyhow::anyhow!(
-        "proxy PROXY_TRANSPORT failed with ECONNABORTED"
+        "proxy PROXY_TRANSPORT failed with ECONNABORTED ETIMEDOUT ECONNRESET EAI_AGAIN socket hang up"
     ));
-    assert!(!transport.contains("PROXY_TRANSPORT"), "{transport}");
-    assert!(!transport.contains("ECONNABORTED"), "{transport}");
-    assert!(transport.contains("WebSearch failed"), "{transport}");
+    assert_eq!(transport, "WebSearch timed out");
+    for detail in [
+        "ECONNRESET from upstream",
+        "getaddrinfo EAI_AGAIN search.example",
+        "socket hang up",
+        "PROXY_TRANSPORT ECONNABORTED",
+    ] {
+        let unknown = human_web_search_error(&anyhow::anyhow!("{detail}"));
+        assert_eq!(unknown, "WebSearch failed", "{detail}");
+    }
+    let unknown = human_web_search_error(&anyhow::anyhow!(
+        "proxy PROXY_TRANSPORT failed with ECONNABORTED ECONNRESET EAI_AGAIN socket hang up"
+    ));
+    assert_eq!(unknown, "WebSearch failed");
+    assert!(!unknown.contains("PROXY_TRANSPORT"), "{unknown}");
+    assert!(!unknown.contains("ECONNABORTED"), "{unknown}");
+    assert!(!unknown.contains("ECONNRESET"), "{unknown}");
+    assert!(!unknown.contains("EAI_AGAIN"), "{unknown}");
 }
 
 #[tokio::test]

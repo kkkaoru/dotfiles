@@ -8,15 +8,20 @@ pub(super) fn is_unknown_session_acp_error(error: &acp::Error) -> bool {
 
 pub(super) async fn retry_unknown_session_once<F>(
     first: acp::Result<acp::PromptResponse>,
+    saw_activity: bool,
     retry: F,
 ) -> (acp::Result<acp::PromptResponse>, bool)
 where
     F: Future<Output = acp::Result<acp::PromptResponse>>,
 {
     match first {
-        Err(error) if is_unknown_session_acp_error(&error) => (retry.await, true),
+        Err(error) if should_retry_unknown_session(&error, saw_activity) => (retry.await, true),
         other => (other, false),
     }
+}
+
+pub(super) fn should_retry_unknown_session(error: &acp::Error, saw_activity: bool) -> bool {
+    is_unknown_session_acp_error(error) && !saw_activity
 }
 
 #[cfg(test)]
@@ -62,12 +67,13 @@ mod tests {
         let first = Err(acp::Error::internal_error().data(
             r#"{"details":"unknown session: 1786642532386_lDiqV_cli"}"#,
         ));
-        let (retried, used) = super::retry_unknown_session_once(first, ok_prompt()).await;
+        let (retried, used) = super::retry_unknown_session_once(first, false, ok_prompt()).await;
         assert!(used);
         assert!(retried.is_ok());
 
         let again = Err(acp::Error::internal_error().data("unknown session: still-missing"));
-        let (fatal, used) = super::retry_unknown_session_once(again, still_unknown()).await;
+        let (fatal, used) =
+            super::retry_unknown_session_once(again, false, still_unknown()).await;
         assert!(used);
         assert!(fatal.is_err());
         assert!(super::is_unknown_session_acp_error(
@@ -75,8 +81,19 @@ mod tests {
         ));
 
         let quota = Err(acp::Error::internal_error().data("ACP quota exhausted"));
-        let (kept, used) = super::retry_unknown_session_once(quota, quota_must_not_retry()).await;
+        let (kept, used) =
+            super::retry_unknown_session_once(quota, false, quota_must_not_retry()).await;
         assert!(!used);
         assert!(kept.is_err());
+
+        let mid_turn = Err(acp::Error::internal_error().data("unknown session: after-tools"));
+        let (kept, used) =
+            super::retry_unknown_session_once(mid_turn, true, quota_must_not_retry()).await;
+        assert!(!used);
+        assert!(kept.is_err());
+        assert!(!super::should_retry_unknown_session(
+            kept.as_ref().err().unwrap(),
+            true
+        ));
     }
 }

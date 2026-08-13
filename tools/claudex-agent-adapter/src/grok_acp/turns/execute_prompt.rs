@@ -1,4 +1,10 @@
-use std::{cell::Cell, future::Future, rc::Rc, sync::atomic::AtomicBool, time::Duration};
+use std::{
+    cell::Cell,
+    future::Future,
+    rc::Rc,
+    sync::atomic::AtomicBool,
+    time::Duration,
+};
 
 use agent_client_protocol::{self as acp, Agent as _};
 use tokio::sync::watch;
@@ -25,12 +31,14 @@ pub(super) async fn run_prompt(
         vec![acp::ContentBlock::Text(acp::TextContent::new(prompt.clone()))],
     );
     let activity = ctl.events.subscribe(ctl.session_id);
+    let saw_activity = AtomicBool::new(false);
     let response = match configured_prompt::wait_with_activity(
         ctl.provider,
         guard.timeout,
         prompt_once(&mut ctl, &connection, request),
         Some(activity),
         guard.quota.as_mut(),
+        Some(&saw_activity),
     )
     .await
     {
@@ -47,7 +55,14 @@ pub(super) async fn run_prompt(
             return;
         }
     };
-    let response = retry_unknown_session_prompt(&mut ctl, &connection, &prompt, response).await;
+    let response = retry_unknown_session_prompt(
+        &mut ctl,
+        &connection,
+        &prompt,
+        response,
+        saw_activity.load(std::sync::atomic::Ordering::Acquire),
+    )
+    .await;
     finish_prompt_result(ctl, response, &guard).await;
 }
 
@@ -56,8 +71,9 @@ async fn retry_unknown_session_prompt(
     connection: &Rc<acp::ClientSideConnection>,
     prompt: &str,
     first: acp::Result<acp::PromptResponse>,
+    saw_activity: bool,
 ) -> acp::Result<acp::PromptResponse> {
-    super::unknown_session::retry_unknown_session_once(first, async {
+    super::unknown_session::retry_unknown_session_once(first, saw_activity, async {
         recreate_session_and_prompt(ctl, connection, prompt).await
     })
     .await
