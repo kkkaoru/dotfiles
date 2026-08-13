@@ -18,33 +18,51 @@ use std::{
 fn compile_orphaned_session_fixture(root: &Path) -> std::path::PathBuf {
     let executable = root.join("orphaned-session-fixture");
     let source = br#"
+#include <errno.h>
 #include <signal.h>
 #include <stdio.h>
 #include <unistd.h>
 int main(int argc, char **argv) {
+    char tmp[4096];
+    FILE *pids = NULL;
+    pid_t child = -1;
+    int i;
     if (argc != 2) return 2;
-    pid_t child = fork();
+    for (i = 0; i < 50 && child < 0; i++) {
+        child = fork();
+        if (child >= 0) break;
+        if (errno != EAGAIN) break;
+        usleep(10000);
+    }
     if (child < 0) return 3;
     if (child == 0) {
         if (setpgid(0, 0) != 0) _exit(4);
         for (;;) pause();
     }
-    FILE *pids = fopen(argv[1], "w");
+    if (setpgid(child, child) != 0 && errno != EACCES) return 9;
+    if (snprintf(tmp, sizeof tmp, "%s.tmp", argv[1]) >= (int)sizeof tmp) return 6;
+    pids = fopen(tmp, "w");
     if (pids == NULL) return 5;
-    fprintf(pids, "%d\n", child);
+    if (fprintf(pids, "%d\n", child) < 0) return 7;
+    fflush(pids);
+    fsync(fileno(pids));
     fclose(pids);
+    if (rename(tmp, argv[1]) != 0) return 8;
     for (;;) pause();
 }
 "#;
-    let mut compiler = Command::new("cc")
+    let mut compiler = Command::new("cc");
+    compiler
         .args(["-x", "c", "-o"])
         .arg(&executable)
         .arg("-")
+        .env_remove("CFLAGS")
+        .env_remove("CPPFLAGS")
+        .env_remove("LDFLAGS")
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("start C compiler");
+        .stderr(Stdio::piped());
+    let mut compiler = compiler.spawn().expect("start C compiler");
     std::io::Write::write_all(compiler.stdin.as_mut().expect("compiler stdin"), source)
         .expect("write fixture source");
     let output = compiler.wait_with_output().expect("compile orphan fixture");
@@ -53,17 +71,28 @@ int main(int argc, char **argv) {
         "fixture compile failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755))
+        .expect("fixture executable");
     executable
 }
 
 #[cfg(unix)]
-fn wait_for_child_pid(path: &Path) -> u32 {
-    for _ in 0..200 {
-        if let Some(pid) = std::fs::read_to_string(path)
-            .ok()
-            .and_then(|contents| contents.trim().parse().ok())
-        {
+fn published_child_pid(path: &Path) -> Option<u32> {
+    let pid = std::fs::read_to_string(path)
+        .ok()
+        .and_then(|contents| contents.trim().parse().ok())?;
+    process_is_alive(pid).then_some(pid)
+}
+
+#[cfg(unix)]
+fn wait_for_child_pid(path: &Path, leader: &mut std::process::Child) -> u32 {
+    let attempts = if cfg!(coverage_nightly) { 1_000 } else { 500 };
+    for _ in 0..attempts {
+        if let Some(pid) = published_child_pid(path) {
             return pid;
+        }
+        if let Ok(Some(status)) = leader.try_wait() {
+            panic!("orphaned session fixture exited before publishing a child pid: {status}");
         }
         thread::sleep(Duration::from_millis(10));
     }
@@ -71,13 +100,9 @@ fn wait_for_child_pid(path: &Path) -> u32 {
 }
 
 #[cfg(unix)]
-#[test]
-fn orphaned_session_cleanup_signals_remaining_process_groups() {
-    let root = tempfile::tempdir().expect("orphaned session fixture");
-    let fixture = compile_orphaned_session_fixture(root.path());
-    let pid_file = root.path().join("child.pid");
-    let mut command = Command::new(&fixture);
-    command.arg(&pid_file);
+fn spawn_orphaned_session_leader(fixture: &Path, pid_file: &Path) -> std::process::Child {
+    let mut command = Command::new(fixture);
+    command.arg(pid_file);
     unsafe {
         command.pre_exec(|| {
             if libc::setsid() == -1 {
@@ -86,14 +111,23 @@ fn orphaned_session_cleanup_signals_remaining_process_groups() {
             Ok(())
         });
     }
-    let mut leader = command
+    command
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .expect("spawn session leader");
+        .expect("spawn session leader")
+}
+
+#[cfg(unix)]
+#[test]
+fn orphaned_session_cleanup_signals_remaining_process_groups() {
+    let root = tempfile::tempdir().expect("orphaned session fixture");
+    let fixture = compile_orphaned_session_fixture(root.path());
+    let pid_file = root.path().join("child.pid");
+    let mut leader = spawn_orphaned_session_leader(&fixture, &pid_file);
     let leader_pid = leader.id();
-    let child_pid = wait_for_child_pid(&pid_file);
+    let child_pid = wait_for_child_pid(&pid_file, &mut leader);
     let identity =
         capture_started_daemon_identity(leader_pid).expect("capture live session leader");
     kill_process(libc::SIGKILL, leader_pid);
