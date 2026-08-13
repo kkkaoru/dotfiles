@@ -28,7 +28,7 @@ app-server request. The Copilot backend launches
 a separate model family, so an explicit route such as
 `--backend-route MODEL=copilot-acp` sends that model through the authenticated
 GitHub Copilot CLI. The configured Grok route launches
-`grok --model grok-4.5 --reasoning-effort high agent --always-approve stdio`,
+`grok --model grok-4.6 --reasoning-effort high agent --always-approve stdio`,
 so its `high` effort is launch-scoped rather than prompt metadata. It
 creates ACP sessions, streams agent message chunks, and selects `AllowOnce` when
 either ACP agent requests permission for a tool. The selected ACP provider owns
@@ -252,7 +252,7 @@ the private field is removed before Claude Code executes the Agent. An
 unspecified Agent effort uses the current Claude Code setting instead. The same
 resolution applies to subscription subprocesses and same-model Codex
 app-server child turns, independently of the parent turn. Grok ACP effort is
-launch-scoped: the configured `grok-4.5` / `high` route starts with
+launch-scoped: the configured `grok-4.6` / `high` route starts with
 `--reasoning-effort high`; it is not deferred to `session/set_model` metadata or
 the prompt. Every routed native-Grok request therefore resolves and logs its
 observable effective effort as the configured launch value `high`, rather than

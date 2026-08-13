@@ -50,7 +50,7 @@ async fn lazy_routes_cover_provider_entry_points_and_failed_startup_state() {
 
     // Dynamic models match configured prefixes only (no vendor-name inference).
     assert!(backend.supports_model("gpt-5.6-sol"));
-    assert!(backend.supports_model("grok-4.5"));
+    assert!(backend.supports_model("grok-4.6"));
     assert!(!backend.supports_model("claude-opus-5"));
     assert!(!backend.supports_model("qwen-unconfigured"));
     exercise_explicit_subagent_routes(Arc::clone(&backend)).await;
@@ -61,7 +61,7 @@ async fn lazy_routes_cover_provider_entry_points_and_failed_startup_state() {
             "gpt-copilot",
             "gpt-model",
             "gpt-secondary",
-            "grok-4.5",
+            "grok-4.6",
             "grok-model"
         ]
     );
@@ -294,7 +294,7 @@ async fn exercise_explicit_subagent_routes(backend: Arc<AgentBackend>) {
     });
     for (suffix, selected, expected) in [
         ("GPT", "gpt-5.6-sol", "medium"),
-        ("GROK", "grok-4.5", "GROK_ACP_STREAM_OK"),
+        ("GROK", "grok-4.6", "GROK_ACP_STREAM_OK"),
     ] {
         let user_id = format!("explicit-{suffix}");
         let prompt = launch_agent(&url, &user_id, suffix, selected).await;

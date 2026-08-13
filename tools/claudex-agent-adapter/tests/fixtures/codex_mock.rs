@@ -905,7 +905,7 @@ fn requested_agent_model(input: &str) -> Option<&'static str> {
     if input.contains("USE_AGENT_MODEL_GPT") {
         Some("gpt-5.6-sol")
     } else if input.contains("USE_AGENT_MODEL_GROK") {
-        Some("grok-4.5")
+        Some("grok-4.6")
     } else if input.contains("USE_AGENT_MODEL") {
         Some("claude-opus-4-8")
     } else {

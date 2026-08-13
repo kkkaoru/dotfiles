@@ -533,13 +533,13 @@ mod tests {
             "Agent",
             "tool-handover",
             &json!({
-                "prompt":"resume this worker", "claudex_model":"grok-4.5",
+                "prompt":"resume this worker", "claudex_model":"grok-4.6",
                 "claudex_effort":"xhigh"
             }),
         );
         let arguments = arguments.expect("correlated Agent intent");
         let user_messages = [json!({
-            "role":"user", "content":"Use grok-4.5 for this SubAgent"
+            "role":"user", "content":"Use grok-4.6 for this SubAgent"
         })];
         AgentEffortIntents::with_store(path.clone()).record_from_user_messages(
             AgentEffortRecord {
@@ -559,7 +559,7 @@ mod tests {
             arguments["prompt"].as_str().expect("correlated prompt"),
         ));
         assert!(intent.matched);
-        assert_eq!(intent.model_override.as_deref(), Some("grok-4.5"));
+        assert_eq!(intent.model_override.as_deref(), Some("grok-4.6"));
         assert_eq!(explicit(intent.effort), "xhigh");
     }
 
@@ -752,7 +752,7 @@ mod tests {
         let path = root.path().join("providers.json");
         std::fs::write(
             &path,
-            r#"{"version":1,"mainProviders":["grok"],"providers":[{"id":"grok","agent":"claudex-grok","defaultModel":"grok-4.5","effort":"high","backend":"grok-acp"}],"fallback":{"agent":"claudex-sonnet","model":"claude-sonnet-5","effort":"high"}}"#,
+            r#"{"version":1,"mainProviders":["grok"],"providers":[{"id":"grok","agent":"claudex-grok","defaultModel":"grok-4.6","effort":"high","backend":"grok-acp"}],"fallback":{"agent":"claudex-sonnet","model":"claude-sonnet-5","effort":"high"}}"#,
         )
         .expect("write provider config");
         let catalog = crate::provider_config::load(&path)
@@ -767,7 +767,7 @@ mod tests {
             &catalog,
         );
 
-        assert_eq!(arguments["claudex_model"], "grok-4.5");
+        assert_eq!(arguments["claudex_model"], "grok-4.6");
         assert_eq!(arguments["claudex_effort"], "high");
         super::validate_routed_agent_arguments_with_catalog(
             "Agent",
@@ -801,7 +801,7 @@ mod tests {
                 ))
                 .model_override
                 .as_deref(),
-            Some("grok-4.5")
+            Some("grok-4.6")
         );
     }
 
@@ -1349,7 +1349,7 @@ mod tests {
         ));
         assert!(intent.model_override.is_none());
 
-        for model in ["gpt-5.6-sol", "grok-4.5", "claude-opus-4-8"] {
+        for model in ["gpt-5.6-sol", "grok-4.6", "claude-opus-4-8"] {
             let tool_id = format!("tool-{model}");
             let (explicit, public) = prepare_arguments(
                 "Agent",
@@ -1534,13 +1534,13 @@ mod tests {
             &json!({
                 "subagent_type":"general-purpose",
                 "prompt":"resume research",
-                "claudex_model":"grok-4.5",
+                "claudex_model":"grok-4.6",
                 "claudex_effort":"high"
             }),
         );
         let arguments = arguments.expect("resumed Task intent");
         let user_messages = [
-            json!({"role":"user","content":"Use grok-4.5 for this worker."}),
+            json!({"role":"user","content":"Use grok-4.6 for this worker."}),
             json!({"role":"assistant","content":"The worker is continuing."}),
             json!({"role":"user","content":"continue"}),
         ];
@@ -1751,7 +1751,7 @@ mod tests {
 
     #[test]
     fn accepts_a_worker_snapshot_retained_in_the_transcript_after_compaction() {
-        let routing = r#"Claudex routing for this turn: {"providers":{},"selected_workers":[{"agent":"claudex-grok","model":"grok-4.5","effort":"medium"}]} mandatory policy"#;
+        let routing = r#"Claudex routing for this turn: {"providers":{},"selected_workers":[{"agent":"claudex-grok","model":"grok-4.6","effort":"medium"}]} mandatory policy"#;
         let messages = [
             json!({"role":"assistant","content":routing}),
             json!({"role":"user","content":"Continue the research"}),
@@ -1759,7 +1759,7 @@ mod tests {
         assert!(
             validate_routed_agent_arguments(
                 "Agent",
-                &json!({"subagent_type":"general-purpose","claudex_model":"grok-4.5"}),
+                &json!({"subagent_type":"general-purpose","claudex_model":"grok-4.6"}),
                 &messages,
                 &json!(null),
             )
@@ -1770,14 +1770,14 @@ mod tests {
     #[test]
     fn rejects_a_model_authorized_only_by_an_older_human_turn() {
         let messages = [
-            json!({"role":"user","content":"Use grok-4.5 for the research SubAgent"}),
+            json!({"role":"user","content":"Use grok-4.6 for the research SubAgent"}),
             json!({"role":"assistant","content":"I will continue"}),
             json!({"role":"user","content":"continue"}),
         ];
         assert!(
             validate_routed_agent_arguments(
                 "Task",
-                &json!({"subagent_type":"general-purpose","claudex_model":"grok-4.5"}),
+                &json!({"subagent_type":"general-purpose","claudex_model":"grok-4.6"}),
                 &messages,
                 &json!(null),
             )
@@ -1916,7 +1916,7 @@ mod tests {
         let existing = json!({
             "properties":{
                 "claudex_effort":{"type":"string","const":"high"},
-                "claudex_model":{"type":"string","const":"grok-4.5"}
+                "claudex_model":{"type":"string","const":"grok-4.6"}
             }
         });
         assert_eq!(tool_schema("Agent", existing.clone()), existing);

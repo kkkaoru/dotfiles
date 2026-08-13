@@ -227,7 +227,7 @@ fn removes_codex_only_bridge_instructions() {
 fn command_code_models_skip_acp_routing_prefix() {
     assert!(prompt::should_include_acp_routing(
         AcpProvider::Grok,
-        "grok-4.5"
+        "grok-4.6"
     ));
     assert!(prompt::should_include_acp_routing(
         AcpProvider::Configured,
@@ -239,7 +239,7 @@ fn command_code_models_skip_acp_routing_prefix() {
     ));
     assert!(!prompt::should_include_acp_routing(
         AcpProvider::Copilot,
-        "grok-4.5"
+        "grok-4.6"
     ));
     assert!(prompt::is_acp_worker_session(&json!({
         "claudexAcpRole": "worker",
@@ -938,7 +938,7 @@ async fn public_spawn_entry_points_report_a_missing_program() {
 async fn native_grok_rejects_non_api_reasoning_efforts_before_launch() {
     for effort in ["mid", "xhigh", "max"] {
         let error = match GrokAcp::spawn_with_program_and_effort(
-            "grok-4.5",
+            "grok-4.6",
             effort,
             "/definitely/missing/grok",
             std::env::current_dir().unwrap(),

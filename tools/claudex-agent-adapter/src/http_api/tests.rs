@@ -50,14 +50,14 @@ fn parses_terminal_subagent_policy_headers() {
     let mut headers = HeaderMap::new();
     headers.insert(
         subagent_policy::HEADER_NAME,
-        "gpt-5.6-sol,grok-4.5".parse().unwrap(),
+        "gpt-5.6-sol,grok-4.6".parse().unwrap(),
     );
     assert_eq!(
         subagent_policy::request_models(&headers)
             .unwrap()
             .into_iter()
             .collect::<Vec<_>>(),
-        ["gpt-5.6-sol", "grok-4.5"]
+        ["gpt-5.6-sol", "grok-4.6"]
     );
 }
 

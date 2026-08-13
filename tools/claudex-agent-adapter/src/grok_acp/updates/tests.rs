@@ -288,7 +288,7 @@ async fn forwards_xai_subagent_lifecycle_as_visible_message() {
     let receiver = events.subscribe("session");
     for update in [
         json!({"sessionUpdate":"subagent_spawned","description":"Research AVITA",
-            "model":"grok-4.5","reasoning_effort":"medium"}),
+            "model":"grok-4.6","reasoning_effort":"medium"}),
         json!({"sessionUpdate":"subagent_finished","status":"completed","duration_ms":1250}),
         json!({"sessionUpdate":"turn_completed","usage":{
             "inputTokens":10,"outputTokens":20,"reasoningTokens":3
@@ -308,7 +308,7 @@ async fn forwards_xai_subagent_lifecycle_as_visible_message() {
         .filter(|e| e["method"] == "item/agentMessage/delta")
         .filter_map(|e| e["params"]["delta"].as_str())
         .collect();
-    assert!(text.contains("grok-4.5"), "text={text}");
+    assert!(text.contains("grok-4.6"), "text={text}");
     assert!(text.contains("1.2s"), "text={text}");
     assert!(
         drained

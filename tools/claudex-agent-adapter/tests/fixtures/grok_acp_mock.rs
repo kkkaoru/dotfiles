@@ -312,7 +312,7 @@ fn coverage_extensions(session_id: &str) -> Vec<(&'static str, serde_json::Value
         (
             "_x.ai/session/update",
             serde_json::json!({"sessionId":session_id,"update":{
-            "sessionUpdate":"subagent_spawned","description":"Research","model":"grok-4.5",
+            "sessionUpdate":"subagent_spawned","description":"Research","model":"grok-4.6",
             "reasoning_effort":"medium"}}),
         ),
         (

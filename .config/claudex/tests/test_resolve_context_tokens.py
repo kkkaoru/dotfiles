@@ -27,7 +27,7 @@ class ResolveContextTokensTests(unittest.TestCase):
             self.assertEqual(self.resolve(str(PROVIDERS), model), "200000", model)
 
     def test_native_claude_and_grok_have_no_override(self) -> None:
-        for model in ["opus", "sonnet[1m]", "claude-sonnet-5", "grok-4.5"]:
+        for model in ["opus", "sonnet[1m]", "claude-sonnet-5", "grok-4.6"]:
             self.assertEqual(self.resolve(str(PROVIDERS), model), "", model)
 
     def test_longest_prefix_wins_when_windows_differ(self) -> None:

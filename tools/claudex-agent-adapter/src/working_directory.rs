@@ -173,11 +173,11 @@ mod tests {
                 "x-user-header: keep\nX-CLAUDEX-WORKING-DIRECTORY: forged\nX-CLAUDEX-DISABLED-SUBAGENT-MODELS: forged",
             )),
             Path::new("/tmp/project with space"),
-            Some("gpt-5.6-sol,grok-4.5"),
+            Some("gpt-5.6-sol,grok-4.6"),
         );
         assert_eq!(
             headers,
-            "x-user-header: keep\nx-claudex-working-directory: /tmp/project%20with%20space\nx-claudex-disabled-subagent-models: gpt-5.6-sol,grok-4.5"
+            "x-user-header: keep\nx-claudex-working-directory: /tmp/project%20with%20space\nx-claudex-disabled-subagent-models: gpt-5.6-sol,grok-4.6"
         );
         assert_eq!(
             custom_headers(None, Path::new("/tmp/plain"), None),

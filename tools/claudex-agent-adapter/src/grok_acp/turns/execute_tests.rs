@@ -886,7 +886,7 @@ mod tests {
             apply_effort(
                 &mut ctl,
                 &std::rc::Rc::new(connection),
-                "grok-4.5",
+                "grok-4.6",
                 Some("high"),
                 &acp::SessionId::new("session".to_owned()),
             )

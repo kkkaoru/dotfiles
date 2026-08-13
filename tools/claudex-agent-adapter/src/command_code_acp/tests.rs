@@ -1025,7 +1025,7 @@ fn recognizes_command_code_model_aliases() {
             "{model} should route as Command Code"
         );
     }
-    for model in ["grok-4.5", "gpt-5.6-luna", "claude-sonnet-5", ""] {
+    for model in ["grok-4.6", "gpt-5.6-luna", "claude-sonnet-5", ""] {
         assert!(
             !super::is_command_code_model(model),
             "{model} must not look like Command Code"
@@ -1038,7 +1038,7 @@ fn slims_bloated_claude_dumps_before_cmd() {
     assert!(super::is_command_code_model(
         "meta/muse-spark-1.2-contributor"
     ));
-    assert!(!super::is_command_code_model("grok-4.5"));
+    assert!(!super::is_command_code_model("grok-4.6"));
     let slim = slim_headless_prompt(
         "<system-reminder>\nClaudex routing data (runtime metadata; values only):\n{\"source\":\"claudex-routing-local-hook\",\"selected_workers\":[]}\n</system-reminder>\nclaudex_effort: high\nclaudex_model: meta/muse-spark-1.2-contributor\n<claudex-agent-id>toolu_cc</claudex-agent-id>\nYou are the model inside Claudex on a provider-native ACP backend.\nShared-workspace safety is mandatory: serialize mutations.\nYou are a provider-native ACP worker. Complete the delegated task.\nRead CLAUDE.md and return the first heading.",
     );

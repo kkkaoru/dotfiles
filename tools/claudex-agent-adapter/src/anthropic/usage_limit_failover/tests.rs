@@ -61,7 +61,7 @@ fn cline_and_qwen_bridge() -> Bridge {
 fn prefers_configured_subscription_fallback_before_other_providers() {
     let backend = AgentBackend::spawn_routes(&[
         BackendRoute::new("fugu", BackendKind::CodexAppServer),
-        BackendRoute::new("grok-4.5", BackendKind::GrokAcp),
+        BackendRoute::new("grok-4.6", BackendKind::GrokAcp),
     ]);
     let mut catalog = ModelCatalog::default();
     catalog

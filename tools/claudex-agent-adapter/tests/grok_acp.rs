@@ -25,7 +25,7 @@ const EXPECTED_PROVIDER_PROMPT_COUNT: usize = 1;
 async fn streams_grok_acp_with_launch_scoped_model_effort_and_instructions() {
     let root = tempfile::tempdir().expect("Grok ACP fixture");
     let agent = GrokAcp::spawn_with_program(
-        "grok-4.5",
+        "grok-4.6",
         env!("CARGO_BIN_EXE_grok-acp-mock"),
         root.path().to_owned(),
     )
@@ -100,7 +100,7 @@ async fn provider_config_high_reaches_the_exact_native_grok_argv() {
             "providers":[{
                 "id":"grok",
                 "agent":"claudex-grok",
-                "defaultModel":"grok-4.5",
+                "defaultModel":"grok-4.6",
                 "effort":"high",
                 "backend":"grok-acp"
             }],
@@ -128,7 +128,7 @@ async fn provider_config_high_reaches_the_exact_native_grok_argv() {
     unsafe { std::env::set_var("CLAUDEX_GROK_PROGRAM", &wrapper) };
     let backend = AgentBackend::spawn_routes(&loaded.routes);
     let bridge = Arc::new(
-        Bridge::new_with_backend(backend, "grok-4.5".to_owned())
+        Bridge::new_with_backend(backend, "grok-4.6".to_owned())
             .with_model_catalog(loaded.model_catalog.clone()),
     );
     let listener = tokio::net::TcpListener::bind(LOOPBACK_EPHEMERAL_ADDRESS)
@@ -136,7 +136,7 @@ async fn provider_config_high_reaches_the_exact_native_grok_argv() {
         .expect("bind configured Grok adapter");
     let url = format!("http://{}/v1/messages", listener.local_addr().unwrap());
     let server = tokio::spawn(async move {
-        axum::serve(listener, http_router(bridge, "grok-4.5".to_owned(), None))
+        axum::serve(listener, http_router(bridge, "grok-4.6".to_owned(), None))
             .await
             .expect("serve configured Grok adapter");
     });
@@ -148,7 +148,7 @@ async fn provider_config_high_reaches_the_exact_native_grok_argv() {
             client
                 .post(&url)
                 .json(&json!({
-                    "model":"grok-4.5",
+                    "model":"grok-4.6",
                     "output_config":{"effort":effort},
                     "messages":[{"role":"user","content":format!("request {effort}")}]
                 }))
@@ -176,7 +176,7 @@ async fn provider_config_high_reaches_the_exact_native_grok_argv() {
     assert!(trace.iter().any(|event| event["arguments"]
         == json!([
             "--model",
-            "grok-4.5",
+            "grok-4.6",
             "--reasoning-effort",
             "high",
             "agent",
@@ -304,7 +304,7 @@ fn assert_trace(trace: &[Value]) {
     assert!(trace.iter().any(|event| event["arguments"]
         == json!([
             "--model",
-            "grok-4.5",
+            "grok-4.6",
             "--reasoning-effort",
             "high",
             "agent",

@@ -8,7 +8,7 @@ mod tests {
         StoredAgentIntent {
             client_user_id: Some("session".to_owned()),
             effort: Some("high".to_owned()),
-            model_override: Some("grok-4.5".to_owned()),
+            model_override: Some("grok-4.6".to_owned()),
             model_is_inherited: false,
             run_in_background: false,
             tool_use_id: id.to_owned(),

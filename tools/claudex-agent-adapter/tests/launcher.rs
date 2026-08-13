@@ -1215,7 +1215,7 @@ fn run_mocked_claude(home: &TempDir, port: u16, path: &str) -> std::process::Out
         )
         .env(
             "CLAUDEX_DISABLED_SUBAGENT_MODELS",
-            "grok-4.5,gpt-5.6-sol,grok-4.5",
+            "grok-4.6,gpt-5.6-sol,grok-4.6",
         )
         .env("CLAUDEX_RESOLVED_DISABLED_SUBAGENT_MODELS", "forged")
         .output()
@@ -1234,7 +1234,7 @@ fn assert_claude_wrapper_output(output: std::process::Output) {
         )
     );
     assert_terminal_policy_headers(&stdout);
-    assert!(stdout.contains("resolved_models=configured-model,gpt-5.6-sol,grok-4.5"));
+    assert!(stdout.contains("resolved_models=configured-model,gpt-5.6-sol,grok-4.6"));
     let stderr = String::from_utf8(output.stderr).expect("Claude stderr");
     assert_eq!(stderr, "kept stderr\n");
 }
@@ -1270,7 +1270,7 @@ fn assert_terminal_policy_headers(output: &str) {
     assert!(output.contains("x-claudex-working-directory:"));
     assert!(
         output
-            .contains("x-claudex-disabled-subagent-models: configured-model,gpt-5.6-sol,grok-4.5")
+            .contains("x-claudex-disabled-subagent-models: configured-model,gpt-5.6-sol,grok-4.6")
     );
     assert!(!output.contains("forged"));
 }

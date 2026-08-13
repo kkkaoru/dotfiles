@@ -403,14 +403,14 @@ mod tests {
     fn accepts_only_native_grok_reasoning_efforts() {
         for effort in ["low", "medium", "high"] {
             let parsed: ProviderConfig = serde_json::from_str(&config(&format!(
-                r#"{{"id":"p","agent":"w","defaultModel":"grok-4.5","effort":"{effort}","enabled":true,"backend":"grok-acp"}}"#
+                r#"{{"id":"p","agent":"w","defaultModel":"grok-4.6","effort":"{effort}","enabled":true,"backend":"grok-acp"}}"#
             )))
             .unwrap();
             assert!(validate(parsed).is_ok(), "rejected Grok effort {effort}");
         }
         for effort in ["mid", "xhigh", "max"] {
             let parsed: ProviderConfig = serde_json::from_str(&config(&format!(
-                r#"{{"id":"p","agent":"w","defaultModel":"grok-4.5","effort":"{effort}","enabled":true,"backend":"grok-acp"}}"#
+                r#"{{"id":"p","agent":"w","defaultModel":"grok-4.6","effort":"{effort}","enabled":true,"backend":"grok-acp"}}"#
             )))
             .unwrap();
             assert!(validate(parsed).is_err(), "accepted Grok effort {effort}");

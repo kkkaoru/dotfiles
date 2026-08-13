@@ -337,14 +337,14 @@ mod tests {
         let live = BTreeSet::from(["qwen3.8-max-preview".to_owned()]);
         let merged = merge_disabled_models(
             live,
-            Some("grok-4.5,opencode-go/deepseek-v4-flash".to_owned()),
+            Some("grok-4.6,opencode-go/deepseek-v4-flash".to_owned()),
             Some("opencode-go/gpt-5.6-luna".to_owned()),
         )
         .expect("merge disabled model sources");
         assert_eq!(
             merged,
             BTreeSet::from([
-                "grok-4.5".to_owned(),
+                "grok-4.6".to_owned(),
                 "opencode-go/deepseek-v4-flash".to_owned(),
                 "opencode-go/gpt-5.6-luna".to_owned(),
                 "qwen3.8-max-preview".to_owned(),

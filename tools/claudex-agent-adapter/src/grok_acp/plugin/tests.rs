@@ -28,11 +28,11 @@ fn profile_is_provider_local_model_inheriting_high() {
 #[test]
 fn project_grok_worker_enforces_the_same_nested_contract() {
     let worker = include_str!("../../../../../.claude/agents/claudex-grok.md");
-    assert!(worker.contains("model: grok-4.5"));
+    assert!(worker.contains("model: grok-4.6"));
     assert!(worker.contains("effort: high"));
     assert!(worker.contains("never Grok `spawn_subagent`"));
     assert!(worker.contains("subagent_type: claudex-grok"));
-    assert!(worker.contains("claudex_model: grok-4.5"));
+    assert!(worker.contains("claudex_model: grok-4.6"));
     assert!(worker.contains("run_in_background: true"));
     assert!(!worker.contains("grok-native-high-plugin-v3:claudex-high"));
     for invalid in ["claudex-xhigh", "claudex-max"] {

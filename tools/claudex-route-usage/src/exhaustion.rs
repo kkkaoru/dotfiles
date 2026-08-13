@@ -237,7 +237,7 @@ mod tests {
         });
         let grok = json!({
             "id": "grok",
-            "defaultModel": "grok-4.5",
+            "defaultModel": "grok-4.6",
             "usageProvider": "grok",
             "backend": "grok-acp"
         });

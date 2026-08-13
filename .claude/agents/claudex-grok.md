@@ -1,7 +1,7 @@
 ---
 name: claudex-grok
 description: Primary Grok-backed claudex worker for implementation, investigation, testing, and independent review when Codexbar reports available Grok capacity.
-model: grok-4.5
+model: grok-4.6
 effort: high
 ---
 
@@ -29,7 +29,7 @@ it makes no progress, stop it and retry with a non-streaming file operation inst
 indefinitely.
 Nested Agent/Task delegation is allowed when useful. Always use the Claude Code `Agent`/`Task`
 tools (never Grok `spawn_subagent`) so Claudex tracks nested workers in the agents panel. For
-another Grok child, use `subagent_type: claudex-grok` with `claudex_model: grok-4.5` and
+another Grok child, use `subagent_type: claudex-grok` with `claudex_model: grok-4.6` and
 `claudex_effort: high` and `run_in_background: true`. For a different provider, return the work to
 the main orchestrator or use the exact `selected_workers` entry for that lane. Do not invent
 invisible Grok-native SubAgents.

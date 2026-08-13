@@ -570,14 +570,14 @@ mod tests {
                 serde_json::json!({
                     "id": "grok",
                     "usageProvider": "grok",
-                    "defaultModel": "grok-4.5"
+                    "defaultModel": "grok-4.6"
                 }),
             ],
             native_workers: Vec::new(),
             fallback: Value::Null,
             advisor: Value::Null,
         };
-        let disabled = BTreeSet::from(["grok-4.5".to_owned()]);
+        let disabled = BTreeSet::from(["grok-4.6".to_owned()]);
 
         let providers = providers_for_collection(&config, &disabled);
         let provider_ids: Vec<_> = providers

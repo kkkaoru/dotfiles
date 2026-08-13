@@ -17,10 +17,10 @@ mod tests {
         assert_eq!(
             merged_header(
                 &configured,
-                Some(OsStr::new(" grok-4.5,gpt-5.6-sol,grok-4.5 "))
+                Some(OsStr::new(" grok-4.6,gpt-5.6-sol,grok-4.6 "))
             )
             .expect("valid model policy"),
-            Some("gpt-5.6-sol,grok-4.5".to_owned())
+            Some("gpt-5.6-sol,grok-4.6".to_owned())
         );
         assert_eq!(
             merged_header(&configured, None).unwrap(),
@@ -41,7 +41,7 @@ mod tests {
         std::fs::create_dir_all(default.parent().unwrap()).unwrap();
         std::fs::write(
             &default,
-            r#"{"version":1,"disabledModels":["grok-4.5","gpt-5.6-sol"]}"#,
+            r#"{"version":1,"disabledModels":["grok-4.6","gpt-5.6-sol"]}"#,
         )
         .unwrap();
         assert_eq!(
@@ -53,7 +53,7 @@ mod tests {
                 .unwrap()
                 .into_iter()
                 .collect::<Vec<_>>(),
-            ["gpt-5.6-sol", "grok-4.5"]
+            ["gpt-5.6-sol", "grok-4.6"]
         );
 
         let shared_local = root
@@ -116,7 +116,7 @@ mod tests {
   "disabledModels": [
     "opencode-go/deepseek-v4-flash",
     "opencode-go/deepseek-v4-pro",
-    "grok-4.5",
+    "grok-4.6",
     "fugu"
   ]
 }
@@ -130,7 +130,7 @@ mod tests {
                 .collect::<Vec<_>>(),
             [
                 "fugu",
-                "grok-4.5",
+                "grok-4.6",
                 "opencode-go/deepseek-v4-flash",
                 "opencode-go/deepseek-v4-pro"
             ]
@@ -144,7 +144,7 @@ mod tests {
         let reads = Cell::new(0);
         let responses = [
             "{".to_owned(),
-            r#"{"version":1,"disabledModels":["grok-4.5","fugu"]}"#.to_owned(),
+            r#"{"version":1,"disabledModels":["grok-4.6","fugu"]}"#.to_owned(),
         ];
         let models = load_config_from_reader(
             || {
@@ -156,11 +156,11 @@ mod tests {
         )
         .expect("torn read should retry");
         assert_eq!(reads.get(), 2);
-        assert_eq!(models.into_iter().collect::<Vec<_>>(), ["fugu", "grok-4.5"]);
+        assert_eq!(models.into_iter().collect::<Vec<_>>(), ["fugu", "grok-4.6"]);
 
         let cached = load_config_from_reader(|| Ok("not-json".to_owned()), path)
             .expect("last good policy should survive a later parse failure");
-        assert_eq!(cached.into_iter().collect::<Vec<_>>(), ["fugu", "grok-4.5"]);
+        assert_eq!(cached.into_iter().collect::<Vec<_>>(), ["fugu", "grok-4.6"]);
         let warning = denylist_load_warning().expect("stale denylist must be user-visible");
         assert!(
             warning.contains("last-known-good"),
@@ -246,13 +246,13 @@ mod tests {
 
     #[test]
     fn active_models_preserves_the_machine_policy_shape() {
-        let configured = BTreeSet::from(["grok-4.5".to_owned()]);
+        let configured = BTreeSet::from(["grok-4.6".to_owned()]);
         let request = BTreeSet::from(["qwen3.8-max-preview".to_owned()]);
         let mut merged = configured;
         merged.extend(request);
         assert_eq!(
             merged.into_iter().collect::<Vec<_>>(),
-            ["grok-4.5", "qwen3.8-max-preview"]
+            ["grok-4.6", "qwen3.8-max-preview"]
         );
     }
 }

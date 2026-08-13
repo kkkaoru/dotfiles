@@ -195,11 +195,11 @@ fn assert_parses_valid_cli_options_part1() {
         [
             "serve",
             "--model",
-            "grok-4.5",
+            "grok-4.6",
             "--backend-route",
-            "grok-4.5=grok-acp",
+            "grok-4.6=grok-acp",
             "--worker-route-json",
-            r#"{"agent":"claudex-grok","model":"grok-4.5","effort":"high"}"#,
+            r#"{"agent":"claudex-grok","model":"grok-4.6","effort":"high"}"#,
             "--search-worker-route-json",
             r#"{"agent":"claudex-search","model":"gpt-search","effort":"xhigh"}"#,
             "--listen",
@@ -230,7 +230,7 @@ fn assert_parses_valid_cli_options_part1() {
     );
     assert_eq!(
         options.model_catalog.worker_fields("claudex-grok"),
-        Some(("grok-4.5", "high"))
+        Some(("grok-4.6", "high"))
     );
     assert_eq!(
         options.model_catalog.search_worker_routes(),

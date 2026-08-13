@@ -219,7 +219,7 @@ fn daemon_arguments_preserve_configured_worker_routes() {
         .model_catalog
         .set_worker_routes(vec![crate::provider_config::WorkerRoute::new(
             "claudex-grok".to_owned(),
-            "grok-4.5".to_owned(),
+            "grok-4.6".to_owned(),
             "high".to_owned(),
         )])
         .expect("worker route");

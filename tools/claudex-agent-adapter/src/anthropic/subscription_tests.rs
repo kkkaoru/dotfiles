@@ -857,11 +857,11 @@ fn configured_worker_effort_replaces_an_unsupported_explicit_effort() {
 
 #[test]
 fn native_grok_route_effort_overrides_explicit_and_unmatched_request_effort() {
-    let mut route = BackendRoute::new("grok-4.5", BackendKind::GrokAcp);
+    let mut route = BackendRoute::new("grok-4.6", BackendKind::GrokAcp);
     route.effort = Some("high".to_owned());
     let bridge = Bridge::new_with_backend(AgentBackend::spawn_routes(&[route]), "main".to_owned());
     let mut request = MessagesRequest {
-        model: "grok-4.5".to_owned(),
+        model: "grok-4.6".to_owned(),
         system: json!(null),
         messages: vec![],
         tools: vec![],

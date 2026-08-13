@@ -57,7 +57,7 @@ fn treats_gpt_variants_as_one_family_and_requires_grok_for_diversity() {
     let decision = scheduler.decision_for_request(&request(vec![
         agent("luna", "gpt-5.6-luna"),
         agent("spark", "gpt-5.3-codex-spark"),
-        agent("grok", "grok-4.5"),
+        agent("grok", "grok-4.6"),
     ]));
 
     assert_eq!(decision.active_workers, 3);
@@ -93,7 +93,7 @@ fn keeps_the_ten_minute_default_and_reassesses_after_a_completion() {
     let scheduler = ParallelScheduler::new(config());
     let initial = request(vec![
         agent("luna", "gpt-5.6-luna"),
-        agent("grok", "grok-4.5"),
+        agent("grok", "grok-4.6"),
         agent("spark", "gpt-5.3-codex-spark"),
     ]);
     let after_completion = MessagesRequest {
@@ -102,7 +102,7 @@ fn keeps_the_ten_minute_default_and_reassesses_after_a_completion() {
             "content": [
                 {"type": "tool_result", "tool_use_id": "spark", "content": "done"},
                 agent("luna", "gpt-5.6-luna"),
-                agent("grok", "grok-4.5"),
+                agent("grok", "grok-4.6"),
             ],
         })],
         ..initial.clone()
@@ -123,7 +123,7 @@ fn reuses_an_active_compatible_worker_instead_of_churning_sessions() {
     let scheduler = ParallelScheduler::new(config());
     let decision = scheduler.decision_for_request(&request(vec![
         agent("luna", "gpt-5.6-luna"),
-        agent("grok", "grok-4.5"),
+        agent("grok", "grok-4.6"),
     ]));
 
     assert!(decision

@@ -44,7 +44,7 @@ flowchart LR
 | Codex Spark worker | `claudex-gpt-spark` | `gpt-5.3-codex-spark` | `xhigh` | CodexBar `codex` の `extraRateWindows` `codex-spark-weekly` 残量（通常の Codex weekly とは別）。枯渇時は選択されない |
 | Fugu worker | `claudex-fugu` | `fugu` | `high` | CodexBarのSakana枠に空きがある場合 |
 | Ollama GLM worker | `claudex-ollama-glm-5-2` | `glm-5.2:cloud` | `max` | CodexBarのOllama枠に空きがある場合 |
-| Grok worker | `claudex-grok` | `grok-4.5` | `high` | Grokに空きがある場合 |
+| Grok worker | `claudex-grok` | `grok-4.6` | `high` | Grokに空きがある場合 |
 | Qwen worker | `claudex-qwen` | `qwen3.8-max-preview` | `high` | CodexBarの `qwencloud` 枠に空きがあり、モデル同時実行数の上限内の場合 |
 | DeepSeek Pro worker | `claudex-deepseek-pro` | `opencode-go/deepseek-v4-pro` | `max` | CodexBarのOpenCode Go枠に空きがある場合。Flashとは別agent/model |
 | DeepSeek Flash worker | `claudex-deepseek-flash` | `opencode-go/deepseek-v4-flash` | `max` | CodexBarのOpenCode Go枠に空きがあり、denylistに無い場合（このマシンでは無効化維持） |
@@ -83,8 +83,8 @@ permission contextを継承します。調査・reviewという役割だけを�
 background SubAgentはClaude Codeの仕様上、main sessionで対話確認できる未承認操作を自動拒否
 するため、その可能性がある作業はforegroundで委譲します。main sessionを
 `--dangerously-skip-permissions` で起動した場合、そのmodeはSubAgentにも優先して継承されます。
-Grok ACPの `grok-4.5` / `high` routeは
-`grok --model grok-4.5 --reasoning-effort high agent --always-approve stdio` として起動します。
+Grok ACPの `grok-4.6` / `high` routeは
+`grok --model grok-4.6 --reasoning-effort high agent --always-approve stdio` として起動します。
 このnative Grok routeでは、adapterが解決してlogへ出すobservable effortも常に設定済みlaunch
 effortの `high` です。適用されないrequest-level effortをturn固有値として表示しません。
 `configured-acp` のOpenCodeはこの正規化の対象外で、従来どおりACP session configでeffortを
@@ -284,8 +284,8 @@ brew install --cask claude-code codex codexbar
   `codexbar` コマンドが見つからない場合は、同READMEのCLI tarballまたはCLI install手順も
   実行してください。
 - Grok Build CLIは利用可能な配布元からインストールし、`grok login` を実行します。
-  このadapterの `grok-4.5` / `high` routeは
-  `grok --model grok-4.5 --reasoning-effort high agent --always-approve stdio` のACP接続を使用します。
+  このadapterの `grok-4.6` / `high` routeは
+  `grok --model grok-4.6 --reasoning-effort high agent --always-approve stdio` のACP接続を使用します。
   GrokはClaude互換hookのstdinを閉じないため、adapterはchildに `CLAUDEX_GROK_ACP=1` を渡し、
   `SessionStart` のClaude専用Herdr通知を入力読取前にskipします。これにより各sessionの10秒timeoutと
   timeout後に残るhook processを防ぎます。
@@ -629,7 +629,7 @@ headerです。直後の各identity行または `↓ to manage` から個別work
 ### Orchestratorのモデルを指定
 
 ```fish
-CLAUDEX_MODEL=grok-4.5 claudex
+CLAUDEX_MODEL=grok-4.6 claudex
 CLAUDEX_MODEL=gpt-5.3-codex-spark claudex
 CLAUDEX_MODEL=gpt-5.6-terra claudex
 CLAUDEX_MODEL=qwen3.8-max-preview claudex
@@ -697,7 +697,7 @@ set -gx CLAUDEX_DISABLED_SUBAGENT_MODELS_CONFIG /path/to/terminal-policy.json
 claudex
 
 # 専用ファイルに加えて、この端末だけ複数モデルを追加で禁止
-set -gx CLAUDEX_DISABLED_SUBAGENT_MODELS gpt-5.6,grok-4.5
+set -gx CLAUDEX_DISABLED_SUBAGENT_MODELS gpt-5.6,grok-4.6
 claudex
 
 # 端末固有の上書きと追加を解除
@@ -791,7 +791,7 @@ CLAUDEX_USAGE_CACHE_SECONDS=0 claudex
 CLAUDEX_SUBSCRIPTION_MAX_PROCESSES=20 claudex
 CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES=120 claudex
 CLAUDEX_ADAPTER_LISTEN=127.0.0.1:9418 claudex
-CLAUDEX_DISABLED_SUBAGENT_MODELS=gpt-5.6,grok-4.5 claudex
+CLAUDEX_DISABLED_SUBAGENT_MODELS=gpt-5.6,grok-4.6 claudex
 CLAUDEX_CUSTOM_ADVISOR=0 claudex
 CLAUDEX_DEFAULTS_SOURCE=settings claudex
 CLAUDEX_EFFORT=high claudex

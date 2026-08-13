@@ -185,10 +185,10 @@ class ClaudexOrchestrationEnvironmentTests(unittest.TestCase):
 
     def test_explicit_model_remains_known_when_resuming(self) -> None:
         output = self.run_launcher(
-            {"CLAUDEX_MODEL": "grok-4.5"},
+            {"CLAUDEX_MODEL": "grok-4.6"},
             ["--resume", "saved-session", "continue"],
         )
-        self.assertEqual(output["CLAUDEX_MAIN_MODEL"], "grok-4.5")
+        self.assertEqual(output["CLAUDEX_MAIN_MODEL"], "grok-4.6")
         self.assertEqual(output["CLAUDEX_MAIN_MODEL_KNOWN"], "1")
 
     def test_external_values_override_defaults_without_shell_evaluation(self) -> None:

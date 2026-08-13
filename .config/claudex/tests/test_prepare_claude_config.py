@@ -42,7 +42,7 @@ class PrepareClaudeConfigTests(unittest.TestCase):
                     str(PREPARE),
                     str(user_claude),
                     str(isolated),
-                    "grok-4.5",
+                    "grok-4.6",
                     "high",
                 ],
                 check=False,
@@ -60,7 +60,7 @@ class PrepareClaudeConfigTests(unittest.TestCase):
             isolated_settings = json.loads(
                 (isolated / "settings.json").read_text(encoding="utf-8")
             )
-            self.assertEqual(isolated_settings["model"], "grok-4.5")
+            self.assertEqual(isolated_settings["model"], "grok-4.6")
             self.assertEqual(isolated_settings["effortLevel"], "high")
             self.assertEqual(
                 isolated_settings["env"]["CLAUDE_CODE_STOP_HOOK_BLOCK_CAP"], "64"
