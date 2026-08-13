@@ -260,6 +260,7 @@ pub(super) fn coverage_arguments(report: &Path) -> Vec<String> {
     .collect()
 }
 
+#[cfg(test)]
 pub(super) fn report_arguments(report: &Path) -> Vec<String> {
     [
         COVERAGE_TOOLCHAIN,
