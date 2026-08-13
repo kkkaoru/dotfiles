@@ -27,7 +27,7 @@ class ResolveContextTokensTests(unittest.TestCase):
             self.assertEqual(self.resolve(str(PROVIDERS), model), "200000", model)
 
     def test_grok_uses_five_hundred_thousand_window(self) -> None:
-        for model in ["grok-4.6", "grok-4.5", "claude-claudex-grok-4.6"]:
+        for model in ["grok-4.6", "claude-claudex-grok-4.6"]:
             self.assertEqual(self.resolve(str(PROVIDERS), model), "500000", model)
 
     def test_native_claude_has_no_override(self) -> None:

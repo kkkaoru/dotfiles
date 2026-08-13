@@ -63,7 +63,7 @@ class PrepareClaudeConfigTests(unittest.TestCase):
             self.assertEqual(isolated_settings["model"], "grok-4.6")
             self.assertEqual(isolated_settings["effortLevel"], "high")
             self.assertEqual(isolated_settings["modelOverrides"]["grok-4.6"], "grok-4.6")
-            self.assertEqual(isolated_settings["modelOverrides"]["grok-4.5"], "grok-4.5")
+            self.assertNotIn("grok-4.5", isolated_settings["modelOverrides"])
             self.assertEqual(
                 isolated_settings["env"]["CLAUDE_CODE_STOP_HOOK_BLOCK_CAP"], "64"
             )
@@ -201,7 +201,8 @@ class PrepareClaudeConfigTests(unittest.TestCase):
                         "model": "opus",
                         "effortLevel": "high",
                         "modelOverrides": {
-                            "claude-opus-4-6": "arn:aws:bedrock:example"
+                            "claude-opus-4-6": "arn:aws:bedrock:example",
+                            "grok-4.5": "grok-4.5",
                         },
                     }
                 ),
@@ -227,7 +228,7 @@ class PrepareClaudeConfigTests(unittest.TestCase):
             )
             overrides = isolated_settings["modelOverrides"]
             self.assertEqual(overrides["grok-4.6"], "grok-4.6")
-            self.assertEqual(overrides["grok-4.5"], "grok-4.5")
+            self.assertNotIn("grok-4.5", overrides)
             self.assertEqual(overrides["claude-opus-4-6"], "arn:aws:bedrock:example")
             self.assertEqual(
                 isolated_settings["env"]["CLAUDE_CODE_MAX_CONTEXT_TOKENS"], "500000"

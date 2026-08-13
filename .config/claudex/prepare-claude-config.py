@@ -21,10 +21,10 @@ SHARED_SETTINGS_NAMES = frozenset({"settings.json", "settings.local.json"})
 DISCOVERY_PREFIX = "claude-claudex-"
 PLAIN_CLAUDE_FALLBACK_MODEL = "sonnet[1m]"
 DEFAULT_STOP_HOOK_BLOCK_CAP = "64"
-# Identity maps for Grok ids Claude Code does not ship. Keep grok-4.5 so older
-# sessions still match. xAI publishes a 500k window for grok-4.6; the launcher
-# still sends that via CLAUDE_CODE_MAX_CONTEXT_TOKENS from providers.json.
-GROK_ISOLATED_MODEL_IDS = ("grok-4.6", "grok-4.5")
+# Identity map for the live Grok id Claude Code does not ship. xAI publishes a
+# 500k window for grok-4.6; the launcher still sends that via
+# CLAUDE_CODE_MAX_CONTEXT_TOKENS from providers.json.
+GROK_LIVE_MODEL = "grok-4.6"
 TOOL_POLICY_HOOK = (
     'test "${CLAUDEX_ACTIVE:-}" != 1 || '
     'exec "$HOME/.cargo/bin/claudex-tool-policy"'
@@ -156,8 +156,9 @@ def apply_grok_model_overrides(settings: dict[str, Any]) -> None:
     if not isinstance(overrides, dict):
         overrides = {}
         settings["modelOverrides"] = overrides
-    for model_id in GROK_ISOLATED_MODEL_IDS:
-        overrides.setdefault(model_id, model_id)
+    overrides.setdefault(GROK_LIVE_MODEL, GROK_LIVE_MODEL)
+    # Drop leftover grok-4.5 identity keys copied from older user settings.
+    overrides.pop("grok-4.5", None)
 
 
 def write_isolated_settings(
