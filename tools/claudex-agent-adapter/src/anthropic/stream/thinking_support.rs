@@ -39,3 +39,26 @@ pub(super) fn has_answer_text(blocks: &[Value]) -> bool {
         .iter()
         .any(|block| block.get("type").and_then(Value::as_str) == Some("text"))
 }
+
+pub(super) fn is_thinking_elapsed_tip(line: &str) -> bool {
+    let Some(rest) = line.strip_prefix('▶').map(str::trim) else {
+        return false;
+    };
+    rest.starts_with("Thinking") && rest.contains('·')
+}
+
+pub(super) fn is_thinking_elapsed_chrome(status: &str) -> bool {
+    let visible = status.replace('\u{200b}', "");
+    let mut saw = false;
+    for line in visible
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        if !is_thinking_elapsed_tip(line) {
+            return false;
+        }
+        saw = true;
+    }
+    saw
+}

@@ -266,6 +266,73 @@ mod tests {
         assert_ne!(blocks[0]["signature"], json!("sig"));
     }
 
+    #[test]
+    fn thinking_elapsed_chrome_detects_only_thinking_tips() {
+        use super::super::thinking_support::is_thinking_elapsed_chrome;
+        assert!(is_thinking_elapsed_chrome("▶ Thinking… · 0s\n"));
+        assert!(is_thinking_elapsed_chrome(
+            "▶ Thinking… · 0s\n▶ Thinking… · 1s\n"
+        ));
+        assert!(!is_thinking_elapsed_chrome(
+            "Anchor the Avita research next.\n▶ Thinking… · 0s\n"
+        ));
+        assert!(!is_thinking_elapsed_chrome("▶ Read · 4s\n"));
+    }
+
+    #[tokio::test]
+    async fn keep_open_does_not_nest_thinking_elapsed_chrome_inside_cot() {
+        let mut state = ThinkingState::default();
+        let mut blocks = Vec::new();
+        state
+            .progress_status_keep_open(&mut blocks, "Anchor the Avita research next.\n", None)
+            .await
+            .expect("cot");
+        state
+            .progress_status_keep_open(&mut blocks, "▶ Thinking… · 0s\n", None)
+            .await
+            .expect("nested 0s");
+        state
+            .progress_status_keep_open(&mut blocks, "▶ Thinking… · 1s\n", None)
+            .await
+            .expect("nested 1s");
+        let text = &state.open.as_ref().expect("open").text;
+        assert!(
+            text.contains("Anchor the Avita"),
+            "CoT must stay visible: {text:?}"
+        );
+        assert!(
+            !text.contains("▶ Thinking"),
+            "thinking nested inside thinking: {text:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn keep_open_does_not_stack_thinking_elapsed_clocks() {
+        let mut state = ThinkingState::default();
+        let mut blocks = Vec::new();
+        state
+            .progress_status_keep_open(&mut blocks, "▶ Thinking… · 0s\n", None)
+            .await
+            .expect("0s");
+        state
+            .progress_status_keep_open(&mut blocks, "▶ Thinking… · 1s\n", None)
+            .await
+            .expect("1s");
+        let text = state
+            .open
+            .as_ref()
+            .map(|open| open.text.as_str())
+            .unwrap_or("");
+        assert!(
+            !text.contains("▶ Thinking"),
+            "thinking elapsed chrome must not land in thinking: {text:?}"
+        );
+        assert!(
+            !(text.contains("· 0s") && text.contains("· 1s")),
+            "stacked thinking clocks: {text:?}"
+        );
+    }
+
     #[tokio::test]
     async fn commit_buffered_reasoning_ignores_empty_and_opens_when_closed() {
         let mut state = ThinkingState::default();

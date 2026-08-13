@@ -72,33 +72,42 @@ impl SegmentBuilder {
             .provider_tool_calls
             .last()
             .map(|(_, title)| compact_keepalive_title(title));
-        // Stream-only ZWSP keeps the decoded-event watchdog fed even when the
-        // tip text would otherwise be unchanged for a fraction of a second.
+        let elapsed = self.turn_started_at.elapsed();
+        let tip = keepalive_elapsed_chrome(last_tool.as_deref(), elapsed);
+        if tip.is_none() {
+            self.open_toolless_thinking(stream).await?;
+        }
         if self.thinking.is_open() {
             self.thinking
-                .elapsed_keepalive(
-                    &self.blocks,
-                    self.turn_started_at.elapsed(),
-                    last_tool.as_deref(),
-                    stream,
-                )
+                .elapsed_keepalive(&self.blocks, elapsed, last_tool.as_deref(), stream)
                 .await?;
         }
-        // Advancing clock keeps progress_status_keep_open from deduping the tip
-        // into stream-only ZWSP. CC 2.1 otherwise freezes on the first ▶ line
-        // for the whole Bash/CoT silence window.
-        let tip = keepalive_elapsed_chrome(last_tool.as_deref(), self.turn_started_at.elapsed());
+        let Some(tip) = tip else {
+            return Ok(());
+        };
+        self.paint_tool_elapsed_tip(&tip, stream).await
+    }
+
+    async fn open_toolless_thinking(&mut self, stream: Option<&StreamSender>) -> Result<()> {
+        if self.external_tool_calls > 0 || self.thinking.is_open() {
+            return Ok(());
+        }
+        self.thinking.ensure_open(&mut self.blocks, stream).await
+    }
+
+    async fn paint_tool_elapsed_tip(
+        &mut self,
+        tip: &str,
+        stream: Option<&StreamSender>,
+    ) -> Result<()> {
         if self.external_tool_calls > 0 && !self.thinking.is_open() {
-            // Native tool_use is the live card. Reopening thinking here made
-            // CC 2.1 Slithering and hid Read/Bash.
             return Ok(());
         }
         if self.thinking.open_holds_zwsp_or_launch_prose() {
             self.thinking.close(&mut self.blocks, stream).await?;
         }
         self.thinking
-            .progress_status_keep_open(&mut self.blocks, &tip, stream)
-            .await?;
-        Ok(())
+            .progress_status_keep_open(&mut self.blocks, tip, stream)
+            .await
     }
 }

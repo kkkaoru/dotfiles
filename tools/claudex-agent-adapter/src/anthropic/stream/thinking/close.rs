@@ -1,3 +1,4 @@
+use super::super::thinking_support::is_thinking_elapsed_tip;
 use super::{StreamSender, ThinkingState, send_stream_frame};
 use anyhow::Result;
 use serde_json::{Value, json};
@@ -108,11 +109,4 @@ fn is_zwsp_or_thinking_elapsed_only(text: &str) -> bool {
         .filter(|line| !line.is_empty())
         .collect();
     lines.is_empty() || lines.iter().copied().all(is_thinking_elapsed_tip)
-}
-
-fn is_thinking_elapsed_tip(line: &str) -> bool {
-    let Some(rest) = line.strip_prefix('▶').map(str::trim) else {
-        return false;
-    };
-    rest.starts_with("Thinking") && rest.contains('·')
 }

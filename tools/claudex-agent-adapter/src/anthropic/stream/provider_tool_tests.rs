@@ -814,7 +814,7 @@ async fn subagent_silence_keepalive_paints_elapsed_progress_not_blank_viewer() {
 }
 
 #[tokio::test]
-async fn subagent_keepalive_without_tools_paints_thinking_tip() {
+async fn subagent_keepalive_without_tools_opens_thinking_without_nested_tip() {
     let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
     let mut builder = SegmentBuilder::new(1).with_subagent(true);
     let mut live = super::super::subagent_live_view::SubAgentLiveView::default();
@@ -824,8 +824,12 @@ async fn subagent_keepalive_without_tools_paints_thinking_tip() {
         .expect("silent keepalive");
     live.ingest_available(&mut receiver);
     assert!(
-        live.visible_thinking.contains("▶ Thinking") && live.visible_thinking.contains('·'),
-        "tool-less silence must reopen with Thinking tip + clock, not blank ZWSP: {:?}",
+        builder.thinking.is_open(),
+        "tool-less silence must keep native thinking chrome open"
+    );
+    assert!(
+        !live.visible_thinking.contains("▶ Thinking"),
+        "tool-less silence must not nest ▶ Thinking inside thinking: {:?}",
         live.visible_thinking
     );
     drop(sender);

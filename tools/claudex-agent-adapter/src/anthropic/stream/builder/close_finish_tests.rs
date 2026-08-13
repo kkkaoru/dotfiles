@@ -7,7 +7,7 @@ async fn tool_handoff_closes_keepalive_thinking_before_executable_tool_use() {
     let mut builder = SegmentBuilder::new(1).with_subagent(true);
     builder
         .thinking
-        .progress_status_keep_open(&mut builder.blocks, "▶ Thinking… · 1s\n", None)
+        .progress_status_keep_open(&mut builder.blocks, "▶ Read\n", None)
         .await
         .expect("open keepalive thinking");
     assert!(
@@ -33,7 +33,7 @@ async fn subagent_finish_with_tool_use_closes_thinking_and_reports_tool_use() {
     let mut builder = SegmentBuilder::new(1).with_subagent(true);
     builder
         .thinking
-        .progress_status_keep_open(&mut builder.blocks, "▶ Thinking… · 0s\n", None)
+        .progress_status_keep_open(&mut builder.blocks, "▶ Read\n", None)
         .await
         .expect("open keepalive thinking");
     builder.external_tool_calls = 1;

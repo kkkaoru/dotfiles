@@ -1,6 +1,7 @@
 use anyhow::Result;
 use serde_json::{Value, json};
 
+use super::super::thinking_support::is_thinking_elapsed_chrome;
 use super::super::{StreamSender, send_stream_frame};
 use super::ThinkingState;
 
@@ -35,6 +36,11 @@ impl ThinkingState {
         keep_open: bool,
         stream: Option<&StreamSender>,
     ) -> Result<()> {
+        // Native CC already shows "Thinking for Ns". Do not paint ▶ Thinking…
+        // into that block (thinking nested inside thinking).
+        if is_thinking_elapsed_chrome(status) {
+            return Ok(());
+        }
         // Closing blank CoT chrome left SubAgent TUI on "Thought for Xs".
         if !keep_open
             && self

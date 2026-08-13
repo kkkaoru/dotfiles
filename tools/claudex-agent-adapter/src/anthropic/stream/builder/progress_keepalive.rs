@@ -33,12 +33,25 @@ pub(super) fn compact_keepalive_title(title: &str) -> String {
 pub(super) fn keepalive_elapsed_chrome(
     last_tool: Option<&str>,
     elapsed: std::time::Duration,
-) -> String {
-    let clock = format_keepalive_clock(elapsed);
-    match last_tool.filter(|title| !title.is_empty()) {
-        Some(title) => format!("▶ {title} · {clock}\n"),
-        None => format!("▶ Thinking… · {clock}\n"),
+) -> Option<String> {
+    let title = last_tool.filter(|title| !title.is_empty())?;
+    if is_nested_thinking_title(title) {
+        return None;
     }
+    Some(format!(
+        "▶ {title} · {clock}\n",
+        clock = format_keepalive_clock(elapsed)
+    ))
+}
+
+fn is_nested_thinking_title(title: &str) -> bool {
+    let trimmed = title
+        .trim()
+        .trim_end_matches('…')
+        .trim_end_matches('.')
+        .trim();
+    let lower = trimmed.to_ascii_lowercase();
+    lower == "think" || lower.starts_with("thinking")
 }
 
 fn format_keepalive_clock(elapsed: std::time::Duration) -> String {

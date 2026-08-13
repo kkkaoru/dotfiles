@@ -160,3 +160,8 @@ impl SegmentBuilder {
             .await
     }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[path = "progress_activity_tests.rs"]
+mod progress_activity_tests;

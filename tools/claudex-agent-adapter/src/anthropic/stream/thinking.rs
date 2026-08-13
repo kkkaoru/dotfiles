@@ -127,6 +127,17 @@ impl ThinkingState {
         })
         .await
     }
+    pub(in crate::anthropic::stream) async fn ensure_open(
+        &mut self,
+        blocks: &mut Vec<Value>,
+        stream: Option<&StreamSender>,
+    ) -> Result<()> {
+        if self.open.is_none() {
+            self.start(blocks, "claudex_activity_keepalive", 0, stream)
+                .await?;
+        }
+        Ok(())
+    }
     async fn start(
         &mut self,
         blocks: &mut Vec<Value>,
