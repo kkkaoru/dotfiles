@@ -81,6 +81,19 @@ fn generic_nested_without_catalog_does_not_infer_luna_from_model_string() {
 }
 
 #[test]
+fn generic_nested_from_gpt_luna_keeps_non_cline_child() {
+    let mut arguments = serde_json::json!({
+        "subagent_type": "general-purpose",
+        "claudex_model": "qwen3.8-max-preview",
+        "prompt": "research"
+    });
+
+    hydrate_standard_agent_to_parent(&mut arguments, "gpt-5.6-luna", &gpt_luna_catalog());
+
+    assert_eq!(arguments[ADAPTER_MODEL], "qwen3.8-max-preview");
+}
+
+#[test]
 fn explicit_cline_worker_from_gpt_luna_parent_stays_cline() {
     let mut arguments = serde_json::json!({
         "subagent_type": "claudex-cline-deepseek-flash",
