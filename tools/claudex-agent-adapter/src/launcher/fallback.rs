@@ -7,6 +7,10 @@ use super::{ServiceConfig, daemon_start, handover, health::wait_until_ready};
 
 const STATE_PREFIX: &str = "fallback.";
 const STATE_SUFFIX: &str = ".json";
+#[cfg(not(test))]
+const START_ATTEMPTS: usize = 5;
+#[cfg(test)]
+const START_ATTEMPTS: usize = 1;
 
 mod state;
 use state::{read_state, state_path, write_state};
@@ -50,7 +54,7 @@ pub(super) async fn ensure_current_generation(
     // Reserving port 0 then releasing it before spawn races with parallel
     // listeners under the coverage suite. Retry a few times before failing.
     let mut last_error = None;
-    for _ in 0..5 {
+    for _ in 0..START_ATTEMPTS {
         let listen = reserve_loopback_listen(config.options.listen)?;
         let fallback = config.with_listen(listen);
         let started = daemon_start::StartedDaemon::new(

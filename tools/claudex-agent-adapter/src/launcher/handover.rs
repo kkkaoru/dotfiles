@@ -60,16 +60,8 @@ pub(super) async fn inspect_service_with(
     if config.matches(&health) && health.build_id == env!("CLAUDEX_BUILD_ID") {
         // A single auth probe can time out under llvm-cov / busy hosts; retry
         // briefly before tearing down an otherwise matching generation.
-        let retries = if cfg!(all(test, coverage_nightly)) {
-            16u8
-        } else {
-            3u8
-        };
-        let delay = if cfg!(all(test, coverage_nightly)) {
-            Duration::from_millis(75)
-        } else {
-            Duration::from_millis(20)
-        };
+        let retries = 3u8;
+        let delay = Duration::from_millis(20);
         for attempt in 0..retries {
             if authenticates(client, config).await {
                 return ServiceState::Reuse;
