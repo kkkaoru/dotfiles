@@ -23,6 +23,7 @@ mod prompt;
 mod queue;
 mod session;
 mod spawn;
+mod stderr_quota;
 #[cfg(test)]
 mod test_support;
 mod turns;

@@ -43,6 +43,7 @@ struct DriverWorkerContext {
     instructions: Rc<RefCell<HashMap<String, String>>>,
     alive: Arc<AtomicBool>,
     cooldown: Arc<AtomicBool>,
+    quota: tokio::sync::watch::Receiver<Option<String>>,
 }
 
 struct DriverCommandContext<'a> {
@@ -112,7 +113,7 @@ pub(super) async fn run_driver(setup: DriverSetup, mut commands: mpsc::Receiver<
         alive: Arc::clone(&setup.alive),
     })
     .await;
-    let Ok((connection, child, io_stopped, process_group)) = started else {
+    let Ok((connection, child, io_stopped, process_group, quota_rx)) = started else {
         let _ = setup.ready.send(started.map(|_| ()));
         setup.alive.store(false, Ordering::Relaxed);
         setup.events.close();
@@ -130,6 +131,7 @@ pub(super) async fn run_driver(setup: DriverSetup, mut commands: mpsc::Receiver<
             &setup.events,
             &setup.alive,
             &setup.cooldown,
+            quota_rx,
         ) => shutdown,
         status = child.child.wait() => {
             match status {

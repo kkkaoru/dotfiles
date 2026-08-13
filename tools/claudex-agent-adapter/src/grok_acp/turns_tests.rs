@@ -174,6 +174,7 @@ async fn driver_executes_queued_cancellation_and_emits_a_terminal_event() {
                     invalidated_sessions,
                     alive: Arc::new(AtomicBool::new(true)),
                     cooldown: Arc::new(AtomicBool::new(false)),
+                    quota: crate::grok_acp::stderr_quota::watch_channel().1,
                 },
                 receiver_turns,
             ));

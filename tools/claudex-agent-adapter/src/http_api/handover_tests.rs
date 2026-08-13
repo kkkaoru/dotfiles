@@ -200,7 +200,19 @@ async fn retained_proxy_reports_upstream_connect_failure() {
         .body(Body::empty())
         .expect("proxy request");
     let response = proxy.proxy(request).await;
-    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        response
+            .headers()
+            .get(axum::http::header::RETRY_AFTER)
+            .map(|value| value.as_bytes()),
+        Some(b"1".as_slice())
+    );
+    let body = axum::body::to_bytes(response.into_body(), 1024)
+        .await
+        .expect("connect-failure body");
+    let json: serde_json::Value = serde_json::from_slice(&body).expect("json");
+    assert_eq!(json["error"]["type"], "invalid_request_error");
 }
 
 #[tokio::test]
@@ -268,7 +280,7 @@ async fn rebind_listener_times_out_when_advertised_listen_does_not_change() {
         }),
     )
     .await;
-    assert_eq!(response.status(), StatusCode::GATEWAY_TIMEOUT);
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     assert!(
         started.elapsed() >= super::helpers::REBIND_POLL_DEADLINE * 4 / 5,
         "timeout path must wait for the rebind deadline"
@@ -305,6 +317,7 @@ async fn proxy_middleware_forwards_owned_sessions_and_passes_through_others() {
         ))),
         advertised: Some(advertised),
         client: proxy_http_client(),
+        circuit: Default::default(),
     });
     let app = Router::new()
         .route("/v1/messages", post(|| async { "local" }))
@@ -364,6 +377,7 @@ async fn proxy_middleware_serves_locally_when_retained_is_unreachable() {
         retained: Some(Arc::new(retained(&path, "127.0.0.1:1", &["session-a"]))),
         advertised: Some(advertised),
         client: proxy_http_client(),
+        circuit: Default::default(),
     });
     let app = Router::new()
         .route("/v1/messages", post(|| async { "live-local" }))
@@ -428,6 +442,7 @@ async fn proxy_middleware_keeps_retained_when_health_probe_times_out() {
         ))),
         advertised: Some(advertised),
         client: proxy_http_client(),
+        circuit: Default::default(),
     });
     let app = Router::new()
         .route("/v1/messages", post(|| async { "live-after-slow-health" }))
@@ -486,6 +501,7 @@ async fn proxy_middleware_serves_locally_when_retained_session_is_idle() {
         ))),
         advertised: Some(advertised),
         client: proxy_http_client(),
+        circuit: Default::default(),
     });
     let app = Router::new()
         .route("/v1/messages", post(|| async { "live-after-idle" }))
@@ -544,6 +560,7 @@ async fn proxy_middleware_serves_locally_when_busy_list_is_stale_without_work() 
         ))),
         advertised: Some(advertised),
         client: proxy_http_client(),
+        circuit: Default::default(),
     });
     let app = Router::new()
         .route("/v1/messages", post(|| async { "live-after-stale-busy" }))
@@ -937,6 +954,7 @@ async fn rebound_daemon_forwards_idle_keepalive_to_canonical() {
         retained: None,
         advertised: Some(advertised),
         client: proxy_http_client(),
+        circuit: Default::default(),
     });
     let app = Router::new()
         .route("/v1/messages", post(|| async { "old-binary" }))
@@ -982,6 +1000,7 @@ async fn promoted_warm_start_does_not_proxy_to_dead_ephemeral() {
         retained: None,
         advertised: Some(advertised),
         client: proxy_http_client(),
+        circuit: Default::default(),
     });
     let app = Router::new()
         .route("/v1/messages", post(|| async { "promoted-primary" }))
@@ -1012,6 +1031,55 @@ async fn promoted_warm_start_does_not_proxy_to_dead_ephemeral() {
 }
 
 #[tokio::test]
+async fn diverted_proxy_connect_failure_is_503_with_retry_after() {
+    let addr = serve_dead_canonical_divert().await;
+    let response = post_session(addr, "session-a").await;
+    assert_eq!(response.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(
+        response
+            .headers()
+            .get("retry-after")
+            .map(|value| value.as_bytes()),
+        Some(b"1".as_slice())
+    );
+    let json: serde_json::Value = response.json().await.expect("json");
+    assert_eq!(json["error"]["type"], "invalid_request_error");
+}
+
+#[tokio::test]
+async fn same_session_handover_burst_opens_a_non_retryable_circuit() {
+    let addr = serve_dead_canonical_divert().await;
+    for _ in 0..2 {
+        let response = post_session(addr, "session-storm").await;
+        assert_eq!(response.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
+    }
+    let opened = post_session(addr, "session-storm").await;
+    assert_eq!(opened.status(), reqwest::StatusCode::BAD_REQUEST);
+    let json: serde_json::Value = opened.json().await.expect("json");
+    assert_eq!(json["error"]["type"], "invalid_request_error");
+    let sibling = post_session(addr, "session-other").await;
+    assert_eq!(sibling.status(), reqwest::StatusCode::SERVICE_UNAVAILABLE);
+}
+
+async fn serve_dead_canonical_divert() -> SocketAddr {
+    let cache = Box::leak(Box::new(tempfile::tempdir().expect("dead canonical cache")));
+    let (advertised, _rx) =
+        ListenHandover::new("127.0.0.1:1".parse().unwrap(), cache.path().to_path_buf());
+    advertised.set_advertised_for_test("127.0.0.1:61915".parse().unwrap());
+    serve_rebound_proxy(None, advertised, "must-not-run-local").await
+}
+
+async fn post_session(addr: SocketAddr, session: &str) -> reqwest::Response {
+    reqwest::Client::new()
+        .post(format!("http://{addr}/v1/messages"))
+        .header("x-claude-code-session-id", session)
+        .body("{}")
+        .send()
+        .await
+        .expect("session post")
+}
+
+#[tokio::test]
 async fn rebound_daemon_keeps_in_flight_retained_sessions_local() {
     let canonical_upstream = serve_http_once(b"from-canonical").await;
     let cache = tempfile::tempdir().expect("rebound busy cache");
@@ -1031,6 +1099,7 @@ async fn rebound_daemon_keeps_in_flight_retained_sessions_local() {
         ))),
         advertised: Some(advertised),
         client: proxy_http_client(),
+        circuit: Default::default(),
     });
     let app = Router::new()
         .route("/v1/messages", post(|| async { "old-inflight" }))
@@ -1075,6 +1144,7 @@ async fn proxy_middleware_serves_locally_when_retained_listen_is_self() {
         retained: Some(Arc::new(retained(&path, "127.0.0.1:8318", &["session-a"]))),
         advertised: Some(handover),
         client: proxy_http_client(),
+        circuit: Default::default(),
     });
     let app = Router::new()
         .route("/v1/messages", post(|| async { "local" }))
@@ -1205,6 +1275,7 @@ async fn proxy_middleware_without_advertised_listen_uses_retained_only() {
         ))),
         advertised: None,
         client: proxy_http_client(),
+        circuit: Default::default(),
     });
     let app = Router::new()
         .route("/v1/messages", post(|| async { "local" }))
@@ -1340,6 +1411,7 @@ async fn serve_rebound_proxy(
         retained: retained.map(Arc::new),
         advertised: Some(advertised),
         client: proxy_http_client(),
+        circuit: Default::default(),
     });
     let app = Router::new()
         .route(

@@ -109,6 +109,7 @@ mod tests {
                 invalidated_sessions: &invalidated,
                 alive: &AtomicBool::new(true),
                 cooldown: &AtomicBool::new(false),
+                quota: crate::grok_acp::stderr_quota::watch_channel().1,
             },
             turn,
         )
@@ -353,9 +354,12 @@ mod tests {
             std::rc::Rc::new(disconnected_connection(std::sync::Arc::clone(&events))),
             acp::SessionId::new("session".to_owned()),
             "prompt".to_owned(),
-            configured_prompt::TIMEOUT,
-            &alive,
-            &cooldown,
+            super::prompt::PromptGuard {
+                timeout: configured_prompt::TIMEOUT,
+                alive: &alive,
+                cooldown: &cooldown,
+                quota: None,
+            },
         )
         .await;
 
@@ -395,9 +399,12 @@ mod tests {
             std::rc::Rc::new(disconnected_connection(std::sync::Arc::clone(&events))),
             acp::SessionId::new("session".to_owned()),
             "prompt".to_owned(),
-            configured_prompt::TIMEOUT,
-            &AtomicBool::new(true),
-            &cooldown,
+            super::prompt::PromptGuard {
+                timeout: configured_prompt::TIMEOUT,
+                alive: &AtomicBool::new(true),
+                cooldown: &cooldown,
+                quota: None,
+            },
         )
         .await;
         assert_eq!(receiver.recv().await.unwrap()["method"], "error");
@@ -919,9 +926,12 @@ mod tests {
             std::rc::Rc::new(connection),
             acp::SessionId::new("session".to_owned()),
             "prompt".to_owned(),
-            Duration::from_millis(1),
-            &alive,
-            &cooldown,
+            super::prompt::PromptGuard {
+                timeout: Duration::from_millis(1),
+                alive: &alive,
+                cooldown: &cooldown,
+                quota: None,
+            },
         )
         .await;
         assert!(
@@ -959,9 +969,12 @@ mod tests {
             std::rc::Rc::new(connection),
             acp::SessionId::new("session".to_owned()),
             "prompt".to_owned(),
-            configured_prompt::TIMEOUT,
-            &AtomicBool::new(true),
-            &cooldown,
+            super::prompt::PromptGuard {
+                timeout: configured_prompt::TIMEOUT,
+                alive: &AtomicBool::new(true),
+                cooldown: &cooldown,
+                quota: None,
+            },
         )
         .await;
         assert_eq!(request.await.unwrap()["method"], "session/prompt");

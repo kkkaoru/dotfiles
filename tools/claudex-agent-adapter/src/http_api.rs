@@ -20,6 +20,7 @@ use axum::{
 
 mod active;
 mod handover;
+mod handover_circuit;
 mod health_route;
 mod logging;
 mod messages_handlers;

@@ -26,6 +26,7 @@ pub(super) async fn drive_commands(
     events: &Arc<ThreadEventDispatcher>,
     alive: &Arc<AtomicBool>,
     cooldown: &Arc<AtomicBool>,
+    quota: tokio::sync::watch::Receiver<Option<String>>,
 ) -> Option<oneshot::Sender<()>> {
     let instructions = Rc::new(RefCell::new(HashMap::<String, String>::new()));
     let active_turns: ActiveTurns = Rc::new(RefCell::new(HashMap::new()));
@@ -40,6 +41,7 @@ pub(super) async fn drive_commands(
         instructions: Rc::clone(&instructions),
         alive: Arc::clone(alive),
         cooldown: Arc::clone(cooldown),
+        quota,
     });
     let shutdown = loop {
         let Some(command) = commands.recv().await else {

@@ -22,13 +22,18 @@ impl Bridge {
         // Classic ChatGPT/Codex usage limits apply to the whole app-server backend.
         // Provider 429s are model/provider scoped so a glm Ollama limit does not
         // cool down unrelated Codex GPT routes that share the same backend.
-        self.note_classic_usage_limit(&message);
+        self.note_classic_usage_limit(exhausted_model, &message);
         self.note_subscription_auth_cooldown(error, &message);
         self.note_scoped_provider_exhaustion(exhausted_model, &message);
     }
 
-    pub(super) fn note_classic_usage_limit(&self, message: &str) {
+    pub(super) fn note_classic_usage_limit(&self, exhausted_model: Option<&str>, message: &str) {
         if !contains_classic_usage_limit_marker(message) {
+            return;
+        }
+        // Classic ChatGPT/Codex usage limits apply to the whole app-server
+        // backend. OpenCode weekly/monthly caps must not cool Codex.
+        if !exhausted_model.is_some_and(|model| self.model_uses_codex_app_server(model)) {
             return;
         }
         let cache_path = self.usage_limit_cache_path();

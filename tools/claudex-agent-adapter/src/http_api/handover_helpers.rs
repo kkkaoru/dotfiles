@@ -70,9 +70,5 @@ pub(super) async fn rebind_listener(
         }
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     }
-    (
-        StatusCode::GATEWAY_TIMEOUT,
-        Json(json!({"error": {"message": "listener did not rebind in time"}})),
-    )
-        .into_response()
+    super::super::handover_circuit::retry_response("listener did not rebind in time".to_owned())
 }

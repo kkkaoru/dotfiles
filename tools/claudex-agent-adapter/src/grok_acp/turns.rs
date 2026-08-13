@@ -114,6 +114,7 @@ pub(super) struct TurnDriver {
     pub(super) invalidated_sessions: InvalidatedSessions,
     pub(super) alive: Arc<AtomicBool>,
     pub(super) cooldown: Arc<AtomicBool>,
+    pub(super) quota: tokio::sync::watch::Receiver<Option<String>>,
 }
 
 mod drive;

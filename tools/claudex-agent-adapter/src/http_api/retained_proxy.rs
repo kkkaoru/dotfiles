@@ -5,13 +5,7 @@ use std::{
     time::Instant,
 };
 
-use axum::{
-    Json,
-    extract::Request,
-    http::StatusCode,
-    response::{IntoResponse, Response},
-};
-use serde_json::json;
+use axum::{extract::Request, response::Response};
 
 use super::retained_health::seed_recent_from_snapshot;
 use crate::launcher::{RetainedGeneration, read_retained};
@@ -134,11 +128,9 @@ impl RetainedProxy {
         let listen = match self.listen.read() {
             Ok(listen) => *listen,
             Err(_) => {
-                return (
-                    StatusCode::BAD_GATEWAY,
-                    Json(json!({"error": {"message": "retained listen lock poisoned"}})),
-                )
-                    .into_response();
+                return crate::http_api::handover_circuit::retry_response(
+                    "retained listen lock poisoned".to_owned(),
+                );
             }
         };
         proxy_request(&self.client, listen, request).await

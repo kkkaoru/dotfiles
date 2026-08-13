@@ -47,6 +47,7 @@ pub(super) struct TurnExecution<'a> {
     pub(super) invalidated_sessions: &'a InvalidatedSessions,
     pub(super) alive: &'a AtomicBool,
     pub(super) cooldown: &'a AtomicBool,
+    pub(super) quota: tokio::sync::watch::Receiver<Option<String>>,
 }
 
 impl TurnCtl<'_> {
@@ -90,6 +91,7 @@ pub(super) async fn execute_turn(context: TurnExecution<'_>, turn: PreparedTurn)
         invalidated_sessions,
         alive,
         cooldown,
+        quota,
     } = context;
     let PreparedTurn {
         session_id,
@@ -123,7 +125,19 @@ pub(super) async fn execute_turn(context: TurnExecution<'_>, turn: PreparedTurn)
         return;
     }
     let timeout = configured_prompt::timeout();
-    run_prompt(ctl, connection, id, prompt, timeout, alive, cooldown).await;
+    run_prompt(
+        ctl,
+        connection,
+        id,
+        prompt,
+        prompt::PromptGuard {
+            timeout,
+            alive,
+            cooldown,
+            quota: Some(quota),
+        },
+    )
+    .await;
 }
 
 pub(super) async fn handle_setup_cancellation<F, T>(

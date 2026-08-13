@@ -27,6 +27,7 @@ mod routing_quota;
 mod segment;
 mod session;
 mod stream;
+pub(crate) use stream::usage_limit::contains_opencode_quota_marker;
 mod stream_batch;
 mod subagent_continuation;
 mod subagent_reuse;

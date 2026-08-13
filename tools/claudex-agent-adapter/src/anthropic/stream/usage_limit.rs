@@ -48,18 +48,30 @@ pub(crate) fn contains_provider_quota_exhausted_marker(value: &str) -> bool {
     QUOTA_MARKERS
         .into_iter()
         .any(|marker| value.contains(marker))
+        || contains_opencode_quota_marker(&value)
+}
+
+/// OpenCode prints weekly/monthly caps on stderr and never completes prompt.
+/// Must not be folded into classic Codex usage-limit (that cools the whole
+/// app-server backend).
+pub(crate) fn contains_opencode_quota_marker(value: &str) -> bool {
+    let value = value.to_lowercase();
+    const OPENCODE_QUOTA_MARKERS: [&str; 3] = [
+        "weekly usage limit",
+        "monthly usage limit",
+        "usage limit reached",
+    ];
+    OPENCODE_QUOTA_MARKERS
+        .into_iter()
+        .any(|marker| value.contains(marker))
 }
 
 pub(crate) fn contains_classic_usage_limit_marker(value: &str) -> bool {
     let value = value.to_lowercase();
-    // Include OpenCode Go weekly-cap wording ("Weekly usage limit reached…") so
-    // configured-ACP failures cool down routing instead of silent 502/retry storms.
-    const USAGE_LIMIT_MARKERS: [&str; 7] = [
+    const USAGE_LIMIT_MARKERS: [&str; 5] = [
         "usagelimitexceeded",
         "usage_limit_exceeded",
         "usage limit exceeded",
-        "usage limit reached",
-        "weekly usage limit",
         "hit your usage limit",
         "you've hit your usage limit",
     ];

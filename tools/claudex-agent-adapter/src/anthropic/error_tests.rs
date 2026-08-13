@@ -224,6 +224,16 @@ fn marks_classic_usage_limit_wording_as_bad_request() {
 }
 
 #[test]
+fn marks_opencode_weekly_usage_limit_as_429() {
+    let error = anyhow!("AI_APICallError: Weekly usage limit reached. Resets in 4 days.");
+    assert_eq!(error_type(&error), NON_RETRYABLE_ERROR_TYPE);
+    assert_eq!(
+        http_status(StatusCode::BAD_GATEWAY, &error),
+        StatusCode::TOO_MANY_REQUESTS
+    );
+}
+
+#[test]
 fn marks_unexpected_status_401_marker_as_auth_failure() {
     let error = anyhow!("provider request failed: unexpected status 401 from gateway");
     assert_eq!(error_type(&error), NON_RETRYABLE_ERROR_TYPE);

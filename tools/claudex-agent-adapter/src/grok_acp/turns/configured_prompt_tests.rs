@@ -48,6 +48,7 @@ async fn true_no_response_expires_after_the_logical_budget() {
         TIMEOUT,
         std::future::pending::<()>(),
         Some(activity),
+        None,
     ));
     tokio::task::yield_now().await;
     tokio::time::advance(TIMEOUT - Duration::from_secs(1)).await;
@@ -65,6 +66,7 @@ async fn provider_activity_resets_the_no_event_budget() {
         TIMEOUT,
         std::future::pending::<()>(),
         Some(activity),
+        None,
     ));
     tokio::task::yield_now().await;
     tokio::time::advance(TIMEOUT - Duration::from_secs(1)).await;
@@ -79,6 +81,27 @@ async fn provider_activity_resets_the_no_event_budget() {
     );
     tokio::time::advance(Duration::from_secs(1)).await;
     assert!(matches!(task.await.unwrap(), Wait::TimedOut));
+}
+
+#[tokio::test]
+async fn quota_watch_completes_immediately_without_the_no_event_budget() {
+    let events = ThreadEventDispatcher::default();
+    let activity = events.subscribe("session");
+    let (tx, mut rx) = crate::grok_acp::stderr_quota::watch_channel();
+    tx.send(Some("Weekly usage limit reached".to_owned()))
+        .expect("quota");
+    let result = wait_with_activity(
+        AcpProvider::Configured,
+        TIMEOUT,
+        std::future::pending::<()>(),
+        Some(activity),
+        Some(&mut rx),
+    )
+    .await;
+    assert!(matches!(
+        result,
+        Wait::Quota(message) if message.contains("Weekly usage limit")
+    ));
 }
 
 #[tokio::test]

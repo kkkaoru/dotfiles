@@ -22,6 +22,7 @@ pub(super) fn spawn_driver_workers(context: DriverWorkerContext) -> DriverWorker
         instructions,
         alive,
         cooldown,
+        quota,
     } = context;
     let (turns, turn_receiver) = mpsc::channel(super::super::TURN_QUEUE_CAPACITY);
     let active_turns_for_drive = Rc::clone(&active_turns);
@@ -38,6 +39,7 @@ pub(super) fn spawn_driver_workers(context: DriverWorkerContext) -> DriverWorker
             invalidated_sessions: invalidated_sessions_for_drive,
             alive,
             cooldown,
+            quota,
         },
         turn_receiver,
     ));

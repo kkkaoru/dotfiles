@@ -662,6 +662,50 @@ fn records_qwen_token_plan_cooldown_without_codex_usage_limit() {
     ));
 }
 
+const TUI_OPENCODE_WEEKLY: &str = "AI_APICallError: Weekly usage limit reached. Resets in 4 days.";
+const OPENCODE_FLASH: &str = "opencode-go/deepseek-v4-flash";
+
+fn opencode_and_codex_bridge() -> Bridge {
+    let cache_home = Box::leak(Box::new(
+        tempfile::tempdir().expect("isolated opencode cache"),
+    ));
+    let backend = AgentBackend::spawn_routes(&[
+        BackendRoute::new(OPENCODE_FLASH, BackendKind::ConfiguredAcp),
+        BackendRoute::new(SPARK, BackendKind::CodexAppServer),
+    ]);
+    Bridge::new_with_backend(backend, OPENCODE_FLASH.to_owned())
+        .with_usage_limit_cache_home(cache_home.path())
+}
+
+#[test]
+fn records_opencode_weekly_quota_without_codex_usage_limit() {
+    use std::time::SystemTime;
+
+    use crate::anthropic::{provider_auth_cooldown, usage_limit_cooldown};
+
+    let root = tempfile::tempdir().expect("opencode quota fixture");
+    let bridge = opencode_and_codex_bridge().with_usage_limit_cache_home(root.path());
+    assert!(!bridge.subagent_provider_is_exhausted(OPENCODE_FLASH));
+    bridge.note_provider_exhaustion(&anyhow::anyhow!(TUI_OPENCODE_WEEKLY), Some(OPENCODE_FLASH));
+    assert!(
+        bridge.subagent_provider_is_exhausted(OPENCODE_FLASH),
+        "OpenCode weekly cap must cool down that provider"
+    );
+    assert!(provider_auth_cooldown::scope_is_cooling_down_at(
+        bridge.provider_auth_cache_path().as_deref(),
+        OPENCODE_FLASH,
+        SystemTime::now(),
+    ));
+    assert!(
+        !bridge.subagent_provider_is_exhausted(SPARK),
+        "OpenCode weekly cap must not cool Codex"
+    );
+    assert!(!usage_limit_cooldown::codex_app_server_is_cooling_down_at(
+        bridge.usage_limit_cache_path().as_deref(),
+        SystemTime::now(),
+    ));
+}
+
 #[test]
 fn multi_subagent_rewrite_skips_qwen_after_token_plan_quota() {
     // Historical bug: Cline empty-ACP failovers always preferred Qwen, even after

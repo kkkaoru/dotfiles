@@ -118,13 +118,19 @@ pub(in crate::grok_acp) fn apply_opencode_acp_runtime_config(
 pub(in crate::grok_acp) fn spawn_provider_process(
     mut command: Command,
     provider: AcpProvider,
+    program: &OsString,
     cwd: &Path,
 ) -> Result<(tokio::process::Child, u32)> {
+    let stderr = if is_opencode_program(program) {
+        Stdio::piped()
+    } else {
+        Stdio::inherit()
+    };
     let child = command
         .current_dir(cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit())
+        .stderr(stderr)
         .kill_on_drop(true)
         .spawn()
         .with_context(|| format!("start {} ACP server", provider.label()))?;

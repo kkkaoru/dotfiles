@@ -83,6 +83,7 @@ pub(super) async fn start(
     tokio::process::Child,
     oneshot::Receiver<()>,
     u32,
+    tokio::sync::watch::Receiver<Option<String>>,
 )> {
     let StartConnection {
         provider,
@@ -95,7 +96,11 @@ pub(super) async fn start(
         alive,
     } = args;
     let command = build_provider_command(program, provider, arguments, model, effort)?;
-    let (mut child, process_group) = spawn_provider_process(command, provider, cwd)?;
+    let (quota_tx, quota_rx) = super::stderr_quota::watch_channel();
+    let (mut child, process_group) = spawn_provider_process(command, provider, program, cwd)?;
+    if let Some(stderr) = child.stderr.take() {
+        super::stderr_quota::spawn_watch(stderr, quota_tx);
+    }
     // Keep ownership local until the handshake has completed. In particular,
     // a missing stdio pipe must still kill and reap the just-started provider.
     let (connection, io_stopped_rx) =
@@ -126,7 +131,7 @@ pub(super) async fn start(
             return Err(error);
         }
     }
-    Ok((connection, child, io_stopped_rx, process_group))
+    Ok((connection, child, io_stopped_rx, process_group, quota_rx))
 }
 
 #[cfg(test)]

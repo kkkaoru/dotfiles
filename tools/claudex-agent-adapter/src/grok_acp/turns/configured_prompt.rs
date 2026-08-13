@@ -29,6 +29,7 @@ pub(super) fn timeout() -> Duration {
 pub(super) enum Wait<T> {
     Completed(T),
     TimedOut,
+    Quota(String),
 }
 
 pub(super) struct Invalidation<'a> {
@@ -48,7 +49,7 @@ pub(super) async fn wait<T, F>(provider: AcpProvider, timeout: Duration, future:
 where
     F: Future<Output = T>,
 {
-    wait_with_activity(provider, timeout, future, None).await
+    wait_with_activity(provider, timeout, future, None, None).await
 }
 
 pub(super) async fn wait_with_activity<T, F>(
@@ -56,6 +57,7 @@ pub(super) async fn wait_with_activity<T, F>(
     timeout: Duration,
     future: F,
     activity: Option<ThreadEvents>,
+    mut quota: Option<&mut tokio::sync::watch::Receiver<Option<String>>>,
 ) -> Wait<T>
 where
     F: Future<Output = T>,
@@ -82,6 +84,12 @@ where
                     return Wait::TimedOut;
                 }
                 timer.as_mut().reset(tokio::time::Instant::now() + timeout);
+            }
+            message = crate::grok_acp::stderr_quota::wait_quota_message(quota.as_deref_mut()) => {
+                match message {
+                    Some(message) => return Wait::Quota(message),
+                    None => quota = None,
+                }
             }
             () = &mut timer => return Wait::TimedOut,
         }

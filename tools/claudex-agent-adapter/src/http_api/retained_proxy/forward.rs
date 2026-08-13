@@ -37,11 +37,7 @@ pub(in crate::http_api) async fn proxy_request(
     };
     match upstream.body(body).send().await {
         Ok(response) => map_upstream_response(response).await,
-        Err(error) => (
-            StatusCode::BAD_GATEWAY,
-            Json(json!({"error": {"message": error.to_string()}})),
-        )
-            .into_response(),
+        Err(error) => crate::http_api::handover_circuit::retry_response(error.to_string()),
     }
 }
 

@@ -1,18 +1,24 @@
 use std::{cell::Cell, future::Future, rc::Rc, sync::atomic::AtomicBool, time::Duration};
 
 use agent_client_protocol::{self as acp, Agent as _};
+use tokio::sync::watch;
 
 use super::super::{CancelRequest, cancellation::cancel_prompt, configured_prompt};
 use super::TurnCtl;
+
+pub(super) struct PromptGuard<'a> {
+    pub(super) timeout: Duration,
+    pub(super) alive: &'a AtomicBool,
+    pub(super) cooldown: &'a AtomicBool,
+    pub(super) quota: Option<watch::Receiver<Option<String>>>,
+}
 
 pub(super) async fn run_prompt(
     mut ctl: TurnCtl<'_>,
     connection: Rc<acp::ClientSideConnection>,
     id: acp::SessionId,
     prompt: String,
-    timeout: Duration,
-    alive: &AtomicBool,
-    cooldown: &AtomicBool,
+    mut guard: PromptGuard<'_>,
 ) {
     let request = acp::PromptRequest::new(
         id.clone(),
@@ -21,39 +27,75 @@ pub(super) async fn run_prompt(
     let activity = ctl.events.subscribe(ctl.session_id);
     let response = match configured_prompt::wait_with_activity(
         ctl.provider,
-        timeout,
+        guard.timeout,
         prompt_once(&mut ctl, &connection, request),
         Some(activity),
+        guard.quota.as_mut(),
     )
     .await
     {
         configured_prompt::Wait::Completed(Some(response)) => response,
         configured_prompt::Wait::Completed(None) => return,
         configured_prompt::Wait::TimedOut => {
-            configured_prompt::cancel_timed_out_prompt(ctl.provider, &connection, ctl.session_id)
-                .await;
-            let message = format!(
-                "{} ACP prompt had no event for {:?}; provider/model cooling down",
-                ctl.provider.label(),
-                timeout
-            );
-            configured_prompt::invalidate(
-                ctl.provider,
-                configured_prompt::Invalidation {
-                    session_id: ctl.session_id,
-                    permit: &mut *ctl.permit,
-                    events: ctl.events,
-                    active_turns: ctl.active_turns,
-                    invalidated_sessions: ctl.invalidated_sessions,
-                    alive,
-                    cooldown,
-                    trip_cooldown: true,
-                    message,
-                },
-            );
+            let message = timeout_message(&ctl, &guard);
+            fail_prompt(&mut ctl, &connection, &guard, message, true).await;
+            return;
+        }
+        configured_prompt::Wait::Quota(message) => {
+            let message = quota_message(&ctl, &message);
+            fail_prompt(&mut ctl, &connection, &guard, message, true).await;
             return;
         }
     };
+    finish_prompt_result(ctl, response, &guard).await;
+}
+
+fn timeout_message(ctl: &TurnCtl<'_>, guard: &PromptGuard<'_>) -> String {
+    format!(
+        "{} ACP prompt had no event for {:?}; provider/model cooling down",
+        ctl.provider.label(),
+        guard.timeout
+    )
+}
+
+fn quota_message(ctl: &TurnCtl<'_>, message: &str) -> String {
+    format!(
+        "{} ACP quota exhausted: {message}; provider/model cooling down",
+        ctl.provider.label()
+    )
+}
+
+async fn fail_prompt(
+    ctl: &mut TurnCtl<'_>,
+    connection: &acp::ClientSideConnection,
+    guard: &PromptGuard<'_>,
+    message: String,
+    cancel: bool,
+) {
+    if cancel {
+        configured_prompt::cancel_timed_out_prompt(ctl.provider, connection, ctl.session_id).await;
+    }
+    configured_prompt::invalidate(
+        ctl.provider,
+        configured_prompt::Invalidation {
+            session_id: ctl.session_id,
+            permit: &mut *ctl.permit,
+            events: ctl.events,
+            active_turns: ctl.active_turns,
+            invalidated_sessions: ctl.invalidated_sessions,
+            alive: guard.alive,
+            cooldown: guard.cooldown,
+            trip_cooldown: true,
+            message,
+        },
+    );
+}
+
+async fn finish_prompt_result(
+    ctl: TurnCtl<'_>,
+    response: acp::Result<acp::PromptResponse>,
+    guard: &PromptGuard<'_>,
+) {
     let is_session_configured = ctl.provider.is_session_scoped_configured();
     if let (true, Err(error)) = (is_session_configured, response.as_ref()) {
         let message = format!(
@@ -68,8 +110,8 @@ pub(super) async fn run_prompt(
                 events: ctl.events,
                 active_turns: ctl.active_turns,
                 invalidated_sessions: ctl.invalidated_sessions,
-                alive,
-                cooldown,
+                alive: guard.alive,
+                cooldown: guard.cooldown,
                 trip_cooldown: false,
                 message,
             },

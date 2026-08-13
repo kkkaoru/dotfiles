@@ -30,6 +30,17 @@ fn detects_codex_usage_limit_events() {
 }
 
 #[test]
+fn detects_opencode_weekly_quota_without_classic_codex_usage_limit() {
+    const OPENCODE_WEEKLY: &str = "AI_APICallError: Weekly usage limit reached. Resets in 4 days.";
+    assert!(contains_provider_quota_exhausted_marker(OPENCODE_WEEKLY));
+    assert!(contains_usage_limit_marker(OPENCODE_WEEKLY));
+    assert!(
+        !contains_classic_usage_limit_marker(OPENCODE_WEEKLY),
+        "OpenCode weekly cap must not cool down the Codex app-server backend"
+    );
+}
+
+#[test]
 fn detects_object_shaped_429_codex_errors() {
     let event = json!({
         "params":{
