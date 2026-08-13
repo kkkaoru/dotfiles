@@ -147,9 +147,12 @@ class SelectionTests(unittest.TestCase):
             "tools/lid-display-watcher/Sources/main.swift",
             "package.json",
         }
-        selected = quality.checks("pre-commit", paths)
+        selected = quality.checks(Path("/repo"), "pre-commit", paths)
         commands = [check.command for check in selected]
-        self.assertIn(("cargo", "fmt-check"), commands)
+        self.assertIn(
+            ("rustfmt", "--edition", "2024", "--check", "--files-with-diff", "src/lib.rs"),
+            commands,
+        )
         self.assertIn(("cargo", "lint"), commands)
         self.assertNotIn(("cargo", "test-all"), commands)
         self.assertEqual(sum(command == ("make", "lint") for command in commands), 2)
@@ -159,21 +162,169 @@ class SelectionTests(unittest.TestCase):
 
     def test_push_adds_tests_and_coverage(self) -> None:
         selected = quality.checks(
-            "pre-push", {"tools/claudex-agent-adapter/src/lib.rs"}
+            Path("/repo"), "pre-push", {"tools/claudex-agent-adapter/src/lib.rs"}
         )
-        aliases = [check.command[1] for check in selected]
+        commands = [check.command for check in selected]
         self.assertEqual(
-            aliases,
-            ["fmt-check", "lint", "test-all", "coverage", "coverage-branch"],
+            commands,
+            [
+                ("rustfmt", "--edition", "2024", "--check", "--files-with-diff", "src/lib.rs"),
+                ("cargo", "lint"),
+                ("cargo", "test-all"),
+                ("cargo", "coverage"),
+                ("cargo", "coverage-branch"),
+            ],
         )
-        swift = quality.checks("pre-push", {"tools/sleep-control/Package.swift"})
+        swift = quality.checks(Path("/repo"), "pre-push", {"tools/sleep-control/Package.swift"})
         self.assertEqual(swift[0].command, ("make", "verify"))
         self.assertFalse(quality.touches({"README.md"}, "tools/"))
+
+    def test_skips_the_fmt_gate_but_still_lints_when_only_docs_change(self) -> None:
+        selected = quality.checks(
+            Path("/repo"), "pre-commit", {"tools/claudex-agent-adapter/README.md"}
+        )
+        commands = [check.command for check in selected]
+        self.assertFalse(any(command[0] in ("rustfmt", "rustup") for command in commands))
+        self.assertIn(("cargo", "lint"), commands)
+
+    def test_adapter_checks_always_run_from_the_crate_root(self) -> None:
+        selected = quality.checks(
+            Path("/repo"),
+            "pre-commit",
+            {"tools/claudex-agent-adapter/src/anthropic/stream/builder/mod.rs"},
+        )
+        self.assertTrue(selected)
+        self.assertTrue(
+            all(check.directory == "tools/claudex-agent-adapter" for check in selected)
+        )
+
+    def test_pins_the_toolchain_this_repository_actually_declares_for_the_adapter(self) -> None:
+        repository = ROOT.parents[1]
+        self.assertEqual(
+            quality.cargo_toolchain(repository, "tools/claudex-agent-adapter"), "1.97.1"
+        )
+        selected = quality.checks(
+            repository, "pre-commit", {"tools/claudex-agent-adapter/src/lib.rs"}
+        )
+        commands = [check.command for check in selected]
+        self.assertIn(("cargo", "+1.97.1", "lint"), commands)
+        self.assertIn(
+            (
+                "rustup",
+                "run",
+                "1.97.1",
+                "rustfmt",
+                "--edition",
+                "2024",
+                "--check",
+                "--files-with-diff",
+                "src/lib.rs",
+            ),
+            commands,
+        )
 
     @mock.patch.object(quality.subprocess, "run")
     def test_runs_commands_in_their_directories(self, run: mock.Mock) -> None:
         quality.run_checks(Path("/repo"), [quality.Check("sub", ("tool", "check"))])
         run.assert_called_once_with(("tool", "check"), cwd=Path("/repo/sub"), check=True)
+
+
+class ToolchainTests(unittest.TestCase):
+    def test_reads_the_pinned_channel_and_falls_back_to_none(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            crate = root / "tools/example"
+            crate.mkdir(parents=True)
+            (crate / "rust-toolchain.toml").write_text(
+                '[toolchain]\nchannel = "1.97.1"\n', encoding="utf-8"
+            )
+            self.assertEqual(quality.cargo_toolchain(root, "tools/example"), "1.97.1")
+            self.assertIsNone(quality.cargo_toolchain(root, "tools/missing"))
+
+    def test_pins_cargo_only_when_a_toolchain_is_known(self) -> None:
+        self.assertEqual(quality.pinned_cargo("1.97.1", "lint"), ("cargo", "+1.97.1", "lint"))
+        self.assertEqual(quality.pinned_cargo(None, "lint"), ("cargo", "lint"))
+
+
+class TouchedRustFilesTests(unittest.TestCase):
+    def test_keeps_only_touched_rust_paths_relative_to_the_crate(self) -> None:
+        paths = {
+            "tools/claudex-agent-adapter/src/lib.rs",
+            "tools/claudex-agent-adapter/README.md",
+            "tools/other/src/lib.rs",
+        }
+        self.assertEqual(
+            quality.touched_rust_files(paths, "tools/claudex-agent-adapter"), ["src/lib.rs"]
+        )
+
+
+class RustfmtGateTests(unittest.TestCase):
+    def test_skips_when_nothing_rust_changed(self) -> None:
+        self.assertIsNone(quality.rustfmt_gate(Path("/repo"), "crate", "1.97.1", []))
+
+    def test_builds_a_toolchain_pinned_files_with_diff_command(self) -> None:
+        check = quality.rustfmt_gate(Path("/repo"), "crate", "1.97.1", ["src/lib.rs"])
+        assert check is not None
+        self.assertEqual(
+            check.command,
+            (
+                "rustup",
+                "run",
+                "1.97.1",
+                "rustfmt",
+                "--edition",
+                "2024",
+                "--check",
+                "--files-with-diff",
+                "src/lib.rs",
+            ),
+        )
+        self.assertEqual(check.allow_paths, {Path("/repo/crate/src/lib.rs").resolve()})
+
+    def test_omits_the_toolchain_wrapper_when_none_is_pinned(self) -> None:
+        check = quality.rustfmt_gate(Path("/repo"), "crate", None, ["src/lib.rs"])
+        assert check is not None
+        self.assertEqual(
+            check.command,
+            ("rustfmt", "--edition", "2024", "--check", "--files-with-diff", "src/lib.rs"),
+        )
+
+
+class RunChecksFilteringTests(unittest.TestCase):
+    def make_check(self) -> quality.Check:
+        return quality.Check(
+            "crate",
+            ("rustfmt", "x"),
+            frozenset({Path("/repo/crate/touched.rs").resolve()}),
+        )
+
+    def test_ignores_diffs_reported_for_files_nobody_touched(self) -> None:
+        completed = subprocess.CompletedProcess(
+            ("rustfmt", "x"), 1, stdout="/repo/crate/other.rs\n", stderr=""
+        )
+        with mock.patch.object(quality.subprocess, "run", return_value=completed):
+            quality.run_checks(Path("/repo"), [self.make_check()])
+
+    def test_fails_when_a_touched_file_has_a_diff(self) -> None:
+        completed = subprocess.CompletedProcess(
+            ("rustfmt", "x"), 1, stdout="/repo/crate/touched.rs\n", stderr=""
+        )
+        with mock.patch.object(quality.subprocess, "run", return_value=completed):
+            with self.assertRaises(subprocess.CalledProcessError):
+                quality.run_checks(Path("/repo"), [self.make_check()])
+
+    def test_fails_on_a_genuine_parse_error_even_without_a_files_with_diff_match(self) -> None:
+        completed = subprocess.CompletedProcess(
+            ("rustfmt", "x"), 1, stdout="", stderr="error: unclosed delimiter\n"
+        )
+        with mock.patch.object(quality.subprocess, "run", return_value=completed):
+            with self.assertRaises(subprocess.CalledProcessError):
+                quality.run_checks(Path("/repo"), [self.make_check()])
+
+    def test_passes_cleanly_when_nothing_needs_reformatting(self) -> None:
+        completed = subprocess.CompletedProcess(("rustfmt", "x"), 0, stdout="", stderr="")
+        with mock.patch.object(quality.subprocess, "run", return_value=completed):
+            quality.run_checks(Path("/repo"), [self.make_check()])
 
 
 class MainTests(unittest.TestCase):
