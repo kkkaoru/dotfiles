@@ -1022,12 +1022,14 @@ async fn duplicate_resume_launch_is_rejected_without_terminating_the_first_proce
     let port = unused_port();
     let _process_cleanup = LauncherProcessCleanup::new(&home, port);
     let marker = home.path().join("claude-started");
+    let release = home.path().join("claude-release");
     let claude = home.path().join("claude-blocking");
     fs::write(
         &claude,
         format!(
-            "#!/bin/sh\nprintf started > '{}'\nsleep 2\n",
-            marker.display()
+            "#!/bin/sh\nprintf started > '{marker}.tmp'\nmv '{marker}.tmp' '{marker}'\nwhile [ ! -f '{release}' ]; do sleep 0.05; done\n",
+            marker = marker.display(),
+            release = release.display()
         ),
     )
     .expect("write blocking Claude fixture");
@@ -1047,7 +1049,7 @@ async fn duplicate_resume_launch_is_rejected_without_terminating_the_first_proce
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut first = first.spawn().expect("start first resume launcher");
-    wait_for_file(&marker).await;
+    wait_for_published_resume_marker(&marker, &mut first).await;
 
     let mut second = common_command(&home, port, "20");
     let second = second
@@ -1062,6 +1064,7 @@ async fn duplicate_resume_launch_is_rejected_without_terminating_the_first_proce
     assert!(!second.status.success());
     assert!(String::from_utf8_lossy(&second.stderr).contains("already active"));
     assert!(first.try_wait().expect("inspect first launcher").is_none());
+    fs::write(&release, "release").expect("release first resume launcher");
     let first_output = first.wait_with_output().expect("reap first launcher");
     assert_eq!(first_output.status.code(), Some(0));
 }
@@ -1451,6 +1454,33 @@ async fn wait_for_file(path: &std::path::Path) {
     })
     .await
     .expect("active request marker");
+}
+
+fn published_resume_marker(path: &std::path::Path) -> bool {
+    fs::read_to_string(path).is_ok_and(|contents| contents.contains("started"))
+}
+
+async fn wait_for_published_resume_marker(path: &std::path::Path, first: &mut std::process::Child) {
+    let deadline = Instant::now()
+        + if cfg!(coverage_nightly) {
+            Duration::from_secs(45)
+        } else {
+            Duration::from_secs(5)
+        };
+    loop {
+        if published_resume_marker(path) {
+            return;
+        }
+        if let Some(status) = first.try_wait().expect("inspect first resume launcher") {
+            panic!(
+                "first resume launcher exited before publishing the active request marker: {status}"
+            );
+        }
+        if Instant::now() >= deadline {
+            panic!("active request marker");
+        }
+        tokio::time::sleep(FILE_POLL_INTERVAL).await;
+    }
 }
 
 fn daemon_start_count(home: &TempDir) -> usize {
