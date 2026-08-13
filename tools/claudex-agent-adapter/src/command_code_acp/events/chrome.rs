@@ -144,7 +144,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn chrome_predicates_cover_all_status_and_duration_forms() {
+    fn thought_for_chrome_recognizes_valid_elapsed_durations() {
         for text in [
             "Thought for .",
             "Thought for 1s",
@@ -156,15 +156,31 @@ mod tests {
         ] {
             assert!(is_thought_for_chrome(text));
         }
+    }
+
+    #[test]
+    fn thought_for_chrome_rejects_malformed_elapsed_durations() {
         for text in ["Thought for 1.2.3s", "Thought for xs", "Thought for 1x"] {
             assert!(!is_thought_for_chrome(text));
         }
+    }
+
+    #[test]
+    fn elapsed_duration_accepts_known_units_and_a_blank_remainder() {
         for rest in ["", "1.2s", "1ms", "1second"] {
             assert!(is_elapsed_duration(rest));
         }
+    }
+
+    #[test]
+    fn elapsed_duration_rejects_malformed_numbers_and_units() {
         for rest in ["1.2.3s", "xs", "1x"] {
             assert!(!is_elapsed_duration(rest));
         }
+    }
+
+    #[test]
+    fn canned_line_matches_every_known_chrome_phrase() {
         for text in [
             "ツール結果待ち",
             "続きの調査または回答",
@@ -183,9 +199,17 @@ mod tests {
             assert!(is_canned_line(text), "{text}");
         }
         assert!(!is_canned_line("ordinary text"));
+    }
+
+    #[test]
+    fn canned_line_ignores_leading_status_markers() {
         for marker in ['●', '▶', '✓', '✗'] {
             assert!(is_canned_line(&format!("{marker} 次: 中断")));
         }
+    }
+
+    #[test]
+    fn canned_line_rejects_lookalikes_missing_their_suffix() {
         for text in [
             "次: 別のタスク",
             "実行中: x",
@@ -195,8 +219,16 @@ mod tests {
         ] {
             assert!(!is_canned_line(text), "{text}");
         }
+    }
+
+    #[test]
+    fn partial_time_unit_only_matches_true_unit_prefixes() {
         assert!(!is_partial_time_unit("1seconds"));
         assert!(is_partial_time_unit("1se"));
+    }
+
+    #[test]
+    fn status_prefix_detects_each_known_marker() {
         for marker in ['●', '▶', '✓', '✗'] {
             assert!(has_status_prefix(&format!("{marker} status")));
         }
