@@ -75,7 +75,13 @@ async fn ccr_search_returns_results_from_a_configured_worker_and_filters_domains
         .send()
         .await
         .expect("request empty search");
-    assert_eq!(empty.status(), reqwest::StatusCode::BAD_GATEWAY);
+    assert_eq!(empty.status(), reqwest::StatusCode::OK);
+    let empty_body: serde_json::Value = empty.json().await.expect("decode empty search");
+    assert!(empty_body["results"].as_array().unwrap().is_empty());
+    assert!(
+        empty_body["error"].as_str().is_some_and(|error| !error.is_empty()),
+        "{empty_body}"
+    );
 
     let blocked = client
         .post(format!(

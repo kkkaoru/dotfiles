@@ -13,7 +13,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use crate::anthropic::{Bridge, error_response};
 use crate::web_search::human_web_search_error;
 
-pub(super) const CCR_KEEPALIVE: &str = "{\"keepalive\":true}\n";
+pub(super) const CCR_KEEPALIVE: &str = " ";
 
 #[derive(Debug, Default, Deserialize)]
 pub(super) struct CcrWebSearchRequest {

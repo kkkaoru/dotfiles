@@ -157,9 +157,8 @@ fn applies_domain_filters_to_search_urls() {
 #[test]
 fn t3_ccr_keepalive_is_the_first_json_byte() {
     use super::web_search::CCR_KEEPALIVE;
-    assert!(CCR_KEEPALIVE.starts_with('{') || CCR_KEEPALIVE.starts_with(' '));
-    assert!(CCR_KEEPALIVE.len() < 64);
-    assert!(CCR_KEEPALIVE.contains("keepalive"));
+    assert!(CCR_KEEPALIVE.starts_with(' '));
+    assert_eq!(CCR_KEEPALIVE.len(), 1);
 }
 
 #[test]
