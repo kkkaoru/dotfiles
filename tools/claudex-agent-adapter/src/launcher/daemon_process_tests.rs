@@ -40,6 +40,33 @@ fn serve_command_line_detects_retained_daemons_only() {
 }
 
 #[test]
+fn command_matching_rejects_wrong_subcommands_and_accepts_legacy_names() {
+    let executable = Path::new("/tmp/claudex-agent-adapter");
+    assert!(!command_matches(
+        "claudex-agent-adapter",
+        "/tmp/claudex-agent-adapter launch",
+        executable
+    ));
+    assert!(command_matches(
+        "claudex-app-server-adapter",
+        "/tmp/claudex-app-server-adapter serve",
+        executable
+    ));
+    assert!(!command_matches("other", "/tmp/other serve", executable));
+}
+
+#[test]
+fn process_termination_guards_reject_invalid_and_current_pids() {
+    terminate(0);
+    terminate(i32::MAX as u32 + 1);
+    terminate(process::id());
+    terminate_started_daemon(0);
+    terminate_started_daemon(process::id());
+    request_graceful_shutdown(0);
+    request_graceful_shutdown(process::id());
+}
+
+#[test]
 fn capture_started_daemon_identity_rejects_unusable_pids() {
     assert!(super::signals::capture_started_daemon_identity(0).is_none());
     assert!(super::signals::capture_started_daemon_identity(u32::MAX).is_none());
