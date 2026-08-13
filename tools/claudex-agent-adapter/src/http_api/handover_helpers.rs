@@ -10,6 +10,14 @@ use crate::listen_handover::ListenHandover;
 
 use super::{HandoverState, RebindRequest, RetainedProxy};
 
+// Production waits for a real listener rebind to land before giving up.
+// Tests that intentionally never rebind (asserting the timeout path) would
+// otherwise burn the full production deadline for no additional coverage.
+#[cfg(not(test))]
+pub(super) const REBIND_POLL_DEADLINE: std::time::Duration = std::time::Duration::from_secs(5);
+#[cfg(test)]
+pub(super) const REBIND_POLL_DEADLINE: std::time::Duration = std::time::Duration::from_millis(200);
+
 pub(super) fn retained_targets_advertised(
     retained: &RetainedProxy,
     advertised: Option<&ListenHandover>,
@@ -54,7 +62,7 @@ pub(super) async fn rebind_listener(
         )
             .into_response();
     }
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    let deadline = tokio::time::Instant::now() + REBIND_POLL_DEADLINE;
     while tokio::time::Instant::now() < deadline {
         let current = handover.advertised_addr();
         if current != previous {

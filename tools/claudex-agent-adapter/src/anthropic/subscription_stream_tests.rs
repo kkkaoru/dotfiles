@@ -2377,16 +2377,18 @@ async fn forwarded_tool_use_releases_the_client_before_subscription_result() {
 async fn delayed_subscription_result_stays_quiet_under_activity_threshold() {
     // Keep the quiet window above the silent wait regardless of the
     // production INITIAL_ACTIVITY_DELAY (currently snappier than Claude-native).
+    // Both durations are test-supplied options (not production constants), so
+    // they can stay small as long as the window comfortably outlasts the wait.
     let (sender, mut receiver) = channel();
     let mut options = SubscriptionOptions::internal(
         Arc::new(tokio::sync::Semaphore::new(1)),
         Duration::from_secs(8),
     );
-    options.initial_activity_delay = Duration::from_secs(30);
-    options.activity_keepalive_interval = Duration::from_secs(30);
+    options.initial_activity_delay = Duration::from_millis(1_000);
+    options.activity_keepalive_interval = Duration::from_millis(1_000);
     consume_subscription_stream_with_options(
         &mut child(
-            r#"sleep 2.1; printf '%s\n' '{"type":"result","subtype":"success","result":"done"}'"#,
+            r#"sleep 0.3; printf '%s\n' '{"type":"result","subtype":"success","result":"done"}'"#,
         ),
         &sender,
         &options,
@@ -2401,10 +2403,12 @@ async fn delayed_subscription_result_stays_quiet_under_activity_threshold() {
 
 #[tokio::test]
 async fn early_text_is_not_split_by_the_initial_activity_deadline() {
+    // The wait only needs to clear the production INITIAL_ACTIVITY_DELAY
+    // (250ms); 0.6s keeps a comfortable margin without paying for 2.1s.
     let (sender, mut receiver) = channel();
     let script = concat!(
         r#"printf '%s\n' '{"type":"stream_event","event":{"delta":{"type":"text_delta","text":"ST"}}}'; "#,
-        "sleep 2.1; ",
+        "sleep 0.6; ",
         r#"printf '%s\n' '{"type":"stream_event","event":{"delta":{"type":"text_delta","text":"REAM_OK"}}}' "#,
         r#"'{"type":"result","subtype":"success","result":"STREAM_OK"}'"#,
     );
@@ -2896,12 +2900,15 @@ async fn stream_timeout_terminates_the_entire_subscription_process_group() {
     let (sender, _receiver) = channel();
     // Keep this below the fixture's `sleep 30` background so the child is
     // killed by the subscription timeout rather than exiting empty-handed.
+    // Under full-suite parallel contention, shortening this below ~5s made the
+    // fixture's own background-process bootstrap race the turn timeout and
+    // flake, so it stays at the value that measured reliable in that mode.
     let options = SubscriptionOptions::internal(
         Arc::new(tokio::sync::Semaphore::new(1)),
         Duration::from_secs(5),
     );
 
-    let (result, background) = tokio::time::timeout(Duration::from_secs(45), async {
+    let (result, background) = tokio::time::timeout(SUBSCRIPTION_FIXTURE_TIMEOUT, async {
         tokio::join!(
             stream_subscription_model(&sender, &program, "model", "prompt", &options),
             fixture.release_after_pid(),

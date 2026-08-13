@@ -269,7 +269,7 @@ async fn rebind_listener_times_out_when_advertised_listen_does_not_change() {
     .await;
     assert_eq!(response.status(), StatusCode::GATEWAY_TIMEOUT);
     assert!(
-        started.elapsed() >= Duration::from_secs(4),
+        started.elapsed() >= super::helpers::REBIND_POLL_DEADLINE * 4 / 5,
         "timeout path must wait for the rebind deadline"
     );
     assert_eq!(

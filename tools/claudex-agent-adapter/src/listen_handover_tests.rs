@@ -3,6 +3,13 @@ use axum::serve::Listener;
 use std::{net::SocketAddr, time::Duration};
 use tokio::net::{TcpListener, TcpStream};
 
+/// `HandoverListener::accept()` applies a pending rebind on its first select
+/// iteration, then blocks forever on the (never-connected) listener. These
+/// fixtures only need one poll cycle to observe the rebind side effect, not
+/// the full accept; a loopback `TcpListener::bind` finishes in well under this
+/// window, so keeping it short avoids paying for an accept that never arrives.
+const REBIND_POLL_WINDOW: Duration = Duration::from_millis(300);
+
 #[test]
 fn ephemeral_bind_addr_stays_on_loopback() {
     let v4 = ephemeral_bind_addr("127.0.0.1:8318".parse().unwrap());
@@ -96,7 +103,7 @@ async fn ephemeral_rebind_releases_the_canonical_port() {
     let (handover, rx) = ListenHandover::new(canonical, cache.path().to_path_buf());
     let mut handover_listener = HandoverListener::new(listener, &handover, rx);
     handover.request_ephemeral();
-    tokio::time::timeout(Duration::from_secs(2), handover_listener.accept())
+    tokio::time::timeout(REBIND_POLL_WINDOW, handover_listener.accept())
         .await
         .ok();
     assert_ne!(handover.advertised_addr(), canonical);
@@ -146,7 +153,7 @@ async fn bind_rebind_moves_to_the_requested_listen() {
     let (handover, rx) = ListenHandover::new(canonical, cache.path().to_path_buf());
     let mut handover_listener = HandoverListener::new(listener, &handover, rx);
     handover.request_bind(target);
-    tokio::time::timeout(Duration::from_secs(2), handover_listener.accept())
+    tokio::time::timeout(REBIND_POLL_WINDOW, handover_listener.accept())
         .await
         .ok();
     assert_eq!(handover.advertised_addr(), target);
