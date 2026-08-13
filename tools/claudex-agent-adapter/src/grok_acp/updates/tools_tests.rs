@@ -54,6 +54,43 @@ mod tests {
     }
 
     #[test]
+    fn t6_titleless_inprogress_and_statusless_kind_open_wip() {
+        let titleless = update_to_tool_call(
+            "read-1",
+            acp::ToolCallUpdateFields::new()
+                .status(acp::ToolCallStatus::InProgress)
+                .kind(acp::ToolKind::Read),
+        )
+        .expect("title-less InProgress");
+        assert_eq!(titleless.title, "Read");
+        let statusless = update_to_tool_call(
+            "read-2",
+            acp::ToolCallUpdateFields::new().kind(acp::ToolKind::Read),
+        )
+        .expect("status-less kind");
+        assert_eq!(statusless.title, "Read");
+        assert!(
+            update_to_tool_call(
+                "loc-only",
+                acp::ToolCallUpdateFields::new()
+                    .locations(vec![acp::ToolCallLocation::new("only")]),
+            )
+            .is_none(),
+            "content-only patches without status/kind stay dropped"
+        );
+        assert!(
+            update_to_tool_call(
+                "done",
+                acp::ToolCallUpdateFields::new()
+                    .title("Read")
+                    .status(acp::ToolCallStatus::Completed),
+            )
+            .is_none(),
+            "Completed must stay on providerTool/update"
+        );
+    }
+
+    #[test]
     fn labels_every_tool_kind_status_and_title_shape() {
         let kinds = [
             (acp::ToolKind::Read, "Read"),

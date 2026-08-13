@@ -1,9 +1,28 @@
 use agent_client_protocol as acp;
 use serde_json::{Value, json};
 
+use super::super::tools_labels::tool_kind_label;
 use super::super::web_evidence::{ProviderWebEvidence, WebOperation, web_operation};
 use super::args::{combine_output, enrich_arguments};
 use super::tool_status_label;
+
+fn fallback_tool_title(call_id: &str, fields: &acp::ToolCallUpdateFields) -> Option<String> {
+    if let Some(title) = fields
+        .title
+        .as_deref()
+        .map(str::trim)
+        .filter(|title| !title.is_empty())
+    {
+        return Some(title.to_owned());
+    }
+    if let Some(kind) = fields.kind {
+        return Some(tool_kind_label(kind).to_owned());
+    }
+    if !call_id.is_empty() {
+        return Some(call_id.to_owned());
+    }
+    Some("provider tool".to_owned())
+}
 
 pub(super) fn completed_web_operation(
     evidence: &ProviderWebEvidence,
@@ -23,14 +42,18 @@ pub(super) fn update_to_tool_call(
     call_id: &str,
     fields: acp::ToolCallUpdateFields,
 ) -> Option<acp::ToolCall> {
-    let title = fields.title?;
-    let status = fields.status?;
+    let status = match fields.status {
+        Some(status) => status,
+        None if fields.kind.is_some() => acp::ToolCallStatus::InProgress,
+        None => return None,
+    };
     if !matches!(
         status,
         acp::ToolCallStatus::Pending | acp::ToolCallStatus::InProgress
     ) {
         return None;
     }
+    let title = fallback_tool_title(call_id, &fields)?;
     // Cursor and other ACP agents often start tools with only title/status and no rawInput.
     // Still open a WIP card so Claude Code shows progress instead of a silent spinner.
     let raw_input = fields.raw_input.clone().unwrap_or_else(|| json!({}));
