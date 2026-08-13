@@ -32,7 +32,7 @@ const WARM_START_TIMEOUT: Duration = Duration::from_secs(10);
 #[cfg(all(test, not(coverage_nightly)))]
 const WARM_START_TIMEOUT: Duration = Duration::from_secs(10);
 #[cfg(all(test, coverage_nightly))]
-const WARM_START_TIMEOUT: Duration = Duration::from_secs(2);
+const WARM_START_TIMEOUT: Duration = Duration::from_secs(5);
 pub(super) const HANDOVER_POLL: Duration = Duration::from_millis(10);
 
 #[derive(Debug, Deserialize)]
