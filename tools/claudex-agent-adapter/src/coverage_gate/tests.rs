@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use super::runner::{
     COVERAGE_ARTIFACT_RETENTION, command_status, coverage_arguments, coverage_command,
     coverage_target_directory, discard_successful_artifacts, prune_stale_coverage_artifacts,
-    report_arguments, run_commands, run_with,
+    report_arguments, run_commands, run_with, should_retry_llvm_cov_export,
 };
 use super::{
     INSTRUMENTATION_EXCEPTIONS, audit_report, combine_object_reports, coverage_percent,
@@ -29,6 +29,22 @@ fn coverage_command_includes_branch_and_build_script_measurement() {
     assert!(arguments.contains(&"/tests/fixtures/".to_owned()));
     assert!(!arguments.contains(&"--summary-only".to_owned()));
     assert_eq!(arguments.last().map(String::as_str), Some("report.json"));
+}
+
+#[test]
+fn retry_policy_only_retries_json_segfaults() {
+    assert!(!should_retry_llvm_cov_export(
+        &[],
+        std::process::ExitStatus::from_raw(0)
+    ));
+    assert!(!should_retry_llvm_cov_export(
+        &["--json".to_owned()],
+        std::process::ExitStatus::from_raw(1)
+    ));
+    assert!(should_retry_llvm_cov_export(
+        &["--json".to_owned()],
+        std::process::ExitStatus::from_raw(libc::SIGSEGV)
+    ));
 }
 
 #[test]
