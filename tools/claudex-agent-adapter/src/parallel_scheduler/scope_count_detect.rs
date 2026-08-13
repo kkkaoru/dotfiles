@@ -148,3 +148,24 @@ pub(super) fn is_numbered_block(trimmed: &str) -> bool {
         .nth(1)
         .is_some_and(|(index, _)| trimmed[index..].starts_with(". "))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detects_cardinality_and_follow_up_edges() {
+        assert!(contains_substantive_verb("実装 and debug"));
+        assert!(contains_parallel_intent("independent workers"));
+        assert!(contains_single_scope_request("exactly one worker"));
+        assert_eq!(
+            explicit_scope_cardinality("remaining 3 workers; 5 workers"),
+            Some(5)
+        );
+        assert_eq!(explicit_scope_cardinality("1 worker"), None);
+        assert!(is_remaining_only_follow_up("remaining work"));
+        assert!(is_remaining_only_follow_up("remaining 2 workers"));
+        assert_eq!(count_explicit_blocks("- one\n* two\n・three\n4. four"), 4);
+        assert!(!is_explicit_block("plain text"));
+    }
+}
