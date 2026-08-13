@@ -1115,6 +1115,7 @@ mod tests {
         super::super::agent_routing::hydrate_standard_agent_to_parent(
             &mut routed,
             "claude-sonnet-5",
+            &crate::provider_config::ModelCatalog::default(),
         );
         assert!(routed.get("claudex_model").is_none());
 
@@ -1122,6 +1123,7 @@ mod tests {
         super::super::agent_routing::hydrate_standard_agent_to_parent(
             &mut native_claude,
             "gpt-5.6-luna",
+            &crate::provider_config::ModelCatalog::default(),
         );
         assert_eq!(native_claude["claudex_model"], "claude-haiku-4-5");
         assert!(
@@ -1317,10 +1319,18 @@ mod tests {
             json!({"subagent_type":"general-purpose", "claudex_model":"explicit"}),
             json!({"prompt":"no subagent type"}),
         ] {
-            super::super::agent_routing::hydrate_standard_agent_to_parent(&mut arguments, "");
+            super::super::agent_routing::hydrate_standard_agent_to_parent(
+                &mut arguments,
+                "",
+                &crate::provider_config::ModelCatalog::default(),
+            );
         }
         let mut native = json!({"subagent_type":"claude"});
-        super::super::agent_routing::hydrate_standard_agent_to_parent(&mut native, "parent-model");
+        super::super::agent_routing::hydrate_standard_agent_to_parent(
+            &mut native,
+            "parent-model",
+            &crate::provider_config::ModelCatalog::default(),
+        );
         assert_eq!(native["claudex_model"], "claude-haiku-4-5");
 
         let malformed_summary = [json!({
@@ -2035,6 +2045,7 @@ mod tests {
         super::super::agent_routing::hydrate_standard_agent_to_parent(
             &mut scalar_standard,
             "parent-model",
+            &crate::provider_config::ModelCatalog::default(),
         );
         assert_eq!(scalar_standard, json!("not an object"));
 
@@ -2199,7 +2210,11 @@ mod tests {
     #[test]
     fn standard_agent_hydration_skips_claudex_workers_and_wrong_advisors() {
         let mut routed = json!({"subagent_type":"claudex-worker"});
-        super::super::agent_routing::hydrate_standard_agent_to_parent(&mut routed, "parent-model");
+        super::super::agent_routing::hydrate_standard_agent_to_parent(
+            &mut routed,
+            "parent-model",
+            &crate::provider_config::ModelCatalog::default(),
+        );
         assert!(routed.get("claudex_model").is_none());
 
         let arguments = json!({"subagent_type":"custom-advisor"});

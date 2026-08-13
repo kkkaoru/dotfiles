@@ -60,14 +60,14 @@ pub(super) fn ordered_subagent_failover_candidates_for(
     exhausted_model: &str,
 ) -> Vec<String> {
     let mut ordered = ordered_subagent_failover_candidates(bridge);
-    if !crate::anthropic::provider_kind::is_gpt_luna_model(exhausted_model) {
+    let catalog = &bridge.model_catalog;
+    if !crate::anthropic::provider_kind::is_gpt_luna_model(exhausted_model, catalog) {
         return ordered;
     }
     ordered.retain(|model| !crate::anthropic::provider_kind::is_cline_model(model));
-    prefer_front(
-        &mut ordered,
-        crate::anthropic::provider_kind::OPENCODE_GPT_LUNA,
-    );
+    if let Some(preferred) = crate::anthropic::provider_kind::opencode_go_luna_model(catalog) {
+        prefer_front(&mut ordered, preferred);
+    }
     ordered
 }
 

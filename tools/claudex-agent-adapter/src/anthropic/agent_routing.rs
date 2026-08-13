@@ -114,11 +114,15 @@ pub(super) fn expected_worker_fields(
 /// configured Claudex worker. This function intentionally does not inherit the outer Claude
 /// session model: if no Claudex route exists, validation must report the missing route.
 /// GPT luna parents are the exception: a generic nested Agent must not land on Cline Credits.
-pub(super) fn hydrate_standard_agent_to_parent(arguments: &mut Value, parent_model: &str) {
+pub(super) fn hydrate_standard_agent_to_parent(
+    arguments: &mut Value,
+    parent_model: &str,
+    model_catalog: &crate::provider_config::ModelCatalog,
+) {
     if hydrate_claude_child_to_haiku(arguments) {
         return;
     }
-    rewrite_generic_cline_child_to_gpt_parent(arguments, parent_model);
+    rewrite_generic_cline_child_to_gpt_parent(arguments, parent_model, model_catalog);
 }
 
 fn hydrate_claude_child_to_haiku(arguments: &mut Value) -> bool {
@@ -141,10 +145,14 @@ fn hydrate_claude_child_to_haiku(arguments: &mut Value) -> bool {
     true
 }
 
-fn rewrite_generic_cline_child_to_gpt_parent(arguments: &mut Value, parent_model: &str) {
+fn rewrite_generic_cline_child_to_gpt_parent(
+    arguments: &mut Value,
+    parent_model: &str,
+    model_catalog: &crate::provider_config::ModelCatalog,
+) {
     let subagent_type = arguments.get("subagent_type").and_then(Value::as_str);
     if !is_generic_agent_type(subagent_type)
-        || !super::provider_kind::is_gpt_luna_model(parent_model)
+        || !super::provider_kind::is_gpt_luna_model(parent_model, model_catalog)
     {
         return;
     }

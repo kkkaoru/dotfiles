@@ -43,6 +43,7 @@ impl SubscriptionStream {
         crate::anthropic::agent_routing::hydrate_standard_agent_to_parent(
             &mut routed_input,
             &context.parent_model,
+            &context.model_catalog,
         );
         note_reused_subagent_launch(context, name, &mut routed_input);
         reject_unavailable_subagent_model(context, &routed_input)?;

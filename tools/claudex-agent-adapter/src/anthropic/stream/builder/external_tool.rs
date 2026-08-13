@@ -82,6 +82,7 @@ fn hydrate_external_tool_arguments(
     crate::anthropic::agent_routing::hydrate_standard_agent_to_parent(
         &mut arguments,
         &context.session.model,
+        context.bridge.model_catalog(),
     );
     context.bridge.rewrite_exhausted_agent_launch_with_quota(
         &mut arguments,

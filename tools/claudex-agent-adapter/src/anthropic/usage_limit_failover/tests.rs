@@ -202,6 +202,42 @@ fn gpt_luna_failover_prefers_opencode_go_and_skips_cline() {
 }
 
 #[test]
+fn gpt_luna_failover_prefers_catalog_opencode_worker_not_pinned_id() {
+    const CODEX_LUNA: &str = "codex-luna-from-catalog";
+    const OPENCODE_LUNA: &str = "opencode-go/catalog-luna";
+    let cache_home = Box::leak(Box::new(
+        tempfile::tempdir().expect("isolated catalog luna failover cache"),
+    ));
+    let backend = AgentBackend::spawn_routes(&[
+        BackendRoute::new(CODEX_LUNA, BackendKind::CodexAppServer),
+        BackendRoute::new(OPENCODE_LUNA, BackendKind::ConfiguredAcp),
+        BackendRoute::new(CLINE_FLASH, BackendKind::ConfiguredAcp),
+        BackendRoute::new(QWEN_CLOUD, BackendKind::ConfiguredAcp),
+    ]);
+    let mut catalog = ModelCatalog::default();
+    catalog
+        .set_worker_routes(vec![
+            crate::provider_config::WorkerRoute::new("claudex-gpt", CODEX_LUNA, "max"),
+            crate::provider_config::WorkerRoute::new("claudex-opencode-gpt", OPENCODE_LUNA, "max"),
+            crate::provider_config::WorkerRoute::new(
+                "claudex-cline-deepseek-flash",
+                CLINE_FLASH,
+                "xhigh",
+            ),
+            crate::provider_config::WorkerRoute::new("claudex-qwen", QWEN_CLOUD, "high"),
+        ])
+        .expect("install workers");
+    let bridge = Bridge::new_with_backend(backend, CODEX_LUNA.to_owned())
+        .with_model_catalog(catalog)
+        .with_usage_limit_cache_home(cache_home.path());
+    let failover = bridge
+        .subagent_provider_failover_for(CODEX_LUNA)
+        .expect("catalog opencode go luna sibling");
+    assert_eq!(failover.model, OPENCODE_LUNA);
+    assert_ne!(failover.model, CLINE_FLASH);
+}
+
+#[test]
 fn regression_subagent_empty_acp_no_longer_dies_on_subscription_stream() {
     // Historical bug (fa522331 horse-racing TUI):
     // empty Cline ACP was classified as usage-limit and failover_for() returned
