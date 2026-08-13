@@ -122,7 +122,28 @@ pub(in crate::coverage_gate) fn combine_object_reports(reports: &[Value]) -> Val
         }
     }
     let files = files.into_values().collect::<Vec<_>>();
-    serde_json::json!({"data": [{"files": files}]})
+    let mut totals = serde_json::Map::new();
+    for metric in ["lines", "functions", "regions", "branches"] {
+        let count = files
+            .iter()
+            .filter_map(|f| {
+                f.pointer(&format!("/summary/{metric}/count"))
+                    .and_then(Value::as_u64)
+            })
+            .sum::<u64>();
+        let covered = files
+            .iter()
+            .filter_map(|f| {
+                f.pointer(&format!("/summary/{metric}/covered"))
+                    .and_then(Value::as_u64)
+            })
+            .sum::<u64>();
+        totals.insert(
+            metric.to_owned(),
+            serde_json::json!({"count": count, "covered": covered}),
+        );
+    }
+    serde_json::json!({"data": [{"files": files, "totals": totals}]})
 }
 
 fn merge_file(existing: &mut Value, incoming: &Value) {
