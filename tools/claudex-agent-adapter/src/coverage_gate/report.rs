@@ -8,7 +8,9 @@ use serde_json::Value;
 
 #[path = "report_metrics.rs"]
 mod metrics;
-pub(super) use metrics::{coverage_percent, source_branch_percent, source_line_percent};
+pub(super) use metrics::{
+    combine_object_reports, coverage_percent, source_branch_percent, source_line_percent,
+};
 
 const MINIMUM_PERCENT: f64 = 95.0;
 

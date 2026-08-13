@@ -12,8 +12,9 @@ use super::runner::{
     report_arguments, run_commands, run_with,
 };
 use super::{
-    INSTRUMENTATION_EXCEPTIONS, audit_report, coverage_percent, is_non_executable_source,
-    is_test_only_source, report, source_branch_percent, source_line_percent,
+    INSTRUMENTATION_EXCEPTIONS, audit_report, combine_object_reports, coverage_percent,
+    is_non_executable_source, is_test_only_source, report, source_branch_percent,
+    source_line_percent,
 };
 
 #[test]
@@ -28,6 +29,23 @@ fn coverage_command_includes_branch_and_build_script_measurement() {
     assert!(arguments.contains(&"/tests/fixtures/".to_owned()));
     assert!(!arguments.contains(&"--summary-only".to_owned()));
     assert_eq!(arguments.last().map(String::as_str), Some("report.json"));
+}
+
+#[test]
+fn object_combiner_sums_duplicate_branch_counts_without_new_denominators() {
+    let first = json!({"data": [{"files": [{
+        "filename": "src/example.rs",
+        "branches": [[1, 1, 1, 2, 2, 0, 0, 0, 4]]
+    }]}]});
+    let second = json!({"data": [{"files": [{
+        "filename": "src/example.rs",
+        "branches": [[1, 1, 1, 2, 0, 3, 0, 0, 4]]
+    }]}]});
+    let combined = combine_object_reports(&[first, second]);
+    let branches = &combined["data"][0]["files"][0]["branches"];
+    assert_eq!(branches.as_array().expect("branches").len(), 1);
+    assert_eq!(branches[0][4], 2);
+    assert_eq!(branches[0][5], 3);
 }
 
 #[test]

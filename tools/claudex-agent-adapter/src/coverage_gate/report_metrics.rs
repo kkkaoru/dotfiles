@@ -104,6 +104,69 @@ pub(in crate::coverage_gate) fn source_branch_percent(root: &Path, data: &Value)
     Ok(covered as f64 * 100.0 / (branches.len() * 2) as f64)
 }
 
+pub(in crate::coverage_gate) fn combine_object_reports(reports: &[Value]) -> Value {
+    let mut files = BTreeMap::<String, Value>::new();
+    for report in reports {
+        let Some(items) = report.pointer("/data/0/files").and_then(Value::as_array) else {
+            continue;
+        };
+        for item in items {
+            let Some(name) = item.get("filename").and_then(Value::as_str) else {
+                continue;
+            };
+            if let Some(existing) = files.get_mut(name) {
+                merge_file(existing, item);
+            } else {
+                files.insert(name.to_owned(), item.clone());
+            }
+        }
+    }
+    let files = files.into_values().collect::<Vec<_>>();
+    serde_json::json!({"data": [{"files": files}]})
+}
+
+fn merge_file(existing: &mut Value, incoming: &Value) {
+    let Some(left) = existing.get_mut("branches").and_then(Value::as_array_mut) else {
+        return;
+    };
+    let Some(right) = incoming.get("branches").and_then(Value::as_array) else {
+        return;
+    };
+    let mut by_key = BTreeMap::<[u64; 4], [u64; 2]>::new();
+    for record in left.iter().chain(right) {
+        let Some(values) = record.as_array() else {
+            continue;
+        };
+        let Some(key) = branch_key(values) else {
+            continue;
+        };
+        let entry = by_key.entry(key).or_default();
+        entry[0] = entry[0].saturating_add(values[4].as_u64().unwrap_or(0));
+        entry[1] = entry[1].saturating_add(values[5].as_u64().unwrap_or(0));
+    }
+    *left = by_key
+        .into_iter()
+        .map(|(key, counts)| {
+            Value::Array(
+                key.into_iter()
+                    .chain(counts)
+                    .chain([0, 0, 4])
+                    .map(Value::from)
+                    .collect(),
+            )
+        })
+        .collect();
+}
+
+fn branch_key(values: &[Value]) -> Option<[u64; 4]> {
+    Some([
+        values.first()?.as_u64()?,
+        values.get(1)?.as_u64()?,
+        values.get(2)?.as_u64()?,
+        values.get(3)?.as_u64()?,
+    ])
+}
+
 fn branch_record_number(values: &[Value], index: usize) -> Result<u64> {
     values
         .get(index)
