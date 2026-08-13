@@ -104,7 +104,6 @@ pub(super) fn warn_preflight_oauth_failover(exhausted_model: &str, failover_mode
         );
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
