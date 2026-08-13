@@ -8,6 +8,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 
 const COVERAGE_TARGET_PREFIX: &str = "llvm-cov-";
+const COVERAGE_TOOLCHAIN: &str = "+1.97.1";
 const LLVM_COV_REPORT_THREADS: &str = "--threads=1 --num-threads=1";
 // Failed reports remain available briefly for diagnosis, then a later coverage
 // run reclaims their multi-gigabyte instrumented target directories.
@@ -150,7 +151,32 @@ pub(super) fn coverage_command(root: &Path, target: &Path, arguments: &[String])
         .env("LLVM_COV_FLAGS", LLVM_COV_REPORT_THREADS)
         .env("LLVM_COV_NUM_THREADS", "1")
         .env("LLVM_PROFILE_FILE", target.join("claudex-%m-%p.profraw"));
+    if let Some(tool) = matching_llvm_tool("llvm-cov") {
+        command.env("LLVM_COV", tool);
+    }
+    if let Some(tool) = matching_llvm_tool("llvm-profdata") {
+        command.env("LLVM_PROFDATA", tool);
+    }
     command
+}
+
+fn matching_llvm_tool(name: &str) -> Option<PathBuf> {
+    let sysroot = Command::new("rustc")
+        .args([COVERAGE_TOOLCHAIN, "--print", "sysroot"])
+        .output()
+        .ok()?;
+    if !sysroot.status.success() {
+        return None;
+    }
+    let target = format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS);
+    let target = target.replace("macos", "apple-darwin");
+    let path = PathBuf::from(String::from_utf8_lossy(&sysroot.stdout).trim())
+        .join("lib")
+        .join("rustlib")
+        .join(target)
+        .join("bin")
+        .join(name);
+    path.is_file().then_some(path)
 }
 
 pub(super) fn should_retry_llvm_cov_export(arguments: &[String], status: ExitStatus) -> bool {
@@ -166,7 +192,7 @@ pub(super) fn run_commands(
     report: &Path,
     mut execute: impl FnMut(&[String]) -> Result<ExitStatus>,
 ) -> Result<()> {
-    let clean = ["+nightly", "llvm-cov", "clean", "--workspace"].map(str::to_owned);
+    let clean = [COVERAGE_TOOLCHAIN, "llvm-cov", "clean", "--workspace"].map(str::to_owned);
     require_success(
         execute(&clean).context("failed to clean previous coverage data")?,
         "coverage clean",
@@ -179,7 +205,7 @@ pub(super) fn run_commands(
 
 pub(super) fn coverage_arguments(report: &Path) -> Vec<String> {
     [
-        "+nightly",
+        COVERAGE_TOOLCHAIN,
         "llvm-cov",
         "--branch",
         "--all-targets",
@@ -197,7 +223,7 @@ pub(super) fn coverage_arguments(report: &Path) -> Vec<String> {
 
 pub(super) fn report_arguments(report: &Path) -> Vec<String> {
     [
-        "+nightly",
+        COVERAGE_TOOLCHAIN,
         "llvm-cov",
         "report",
         "--json",
