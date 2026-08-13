@@ -159,6 +159,12 @@ mod tests {
         for text in ["Thought for 1.2.3s", "Thought for xs", "Thought for 1x"] {
             assert!(!is_thought_for_chrome(text));
         }
+        for rest in ["", "1.2s", "1ms", "1second"] {
+            assert!(is_elapsed_duration(rest));
+        }
+        for rest in ["1.2.3s", "xs", "1x"] {
+            assert!(!is_elapsed_duration(rest));
+        }
         for text in [
             "ツール結果待ち",
             "続きの調査または回答",
@@ -176,5 +182,12 @@ mod tests {
         ] {
             assert!(is_canned_line(text), "{text}");
         }
+        assert!(!is_canned_line("ordinary text"));
+        assert!(!is_partial_time_unit("1seconds"));
+        assert!(is_partial_time_unit("1se"));
+        for marker in ['●', '▶', '✓', '✗'] {
+            assert!(has_status_prefix(&format!("{marker} status")));
+        }
+        assert!(!has_status_prefix("status"));
     }
 }
