@@ -145,5 +145,9 @@ pub(super) fn read_state_for_tests(config: &ServiceConfig) -> Result<Option<Pend
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
+#[path = "pending_hot_swap_process_live_tests.rs"]
+mod process_live_tests;
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 #[path = "pending_hot_swap_tests.rs"]
 mod tests;

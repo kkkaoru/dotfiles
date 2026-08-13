@@ -281,5 +281,9 @@ impl SegmentBuilder {
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
+#[path = "provider_launch_edge_tests.rs"]
+mod edge_tests;
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 #[path = "provider_launch_tests.rs"]
 mod tests;

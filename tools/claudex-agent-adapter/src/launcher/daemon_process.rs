@@ -168,5 +168,9 @@ fn command_matches(program: &str, command: &str, executable: &Path) -> bool {
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
+#[path = "daemon_process_signal_edges_tests.rs"]
+mod signal_edges_tests;
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
 #[path = "daemon_process_tests.rs"]
 mod tests;

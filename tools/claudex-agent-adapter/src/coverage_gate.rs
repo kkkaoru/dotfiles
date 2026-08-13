@@ -65,6 +65,10 @@ pub fn audit_report(root: &Path, report: &Path) -> Result<()> {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[path = "coverage_gate/runner_export_tests.rs"]
+mod runner_export_tests;
+#[cfg(test)]
 // Coverage gates measure production code; test implementations are excluded.
 #[cfg_attr(coverage_nightly, coverage(off))]
 #[path = "coverage_gate/tests.rs"]

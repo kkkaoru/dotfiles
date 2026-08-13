@@ -140,7 +140,7 @@ fn strip_checkbox(body: &str) -> &str {
         .unwrap_or(body)
 }
 
-fn is_indented_continuation(line: &str) -> bool {
+pub(super) fn is_indented_continuation(line: &str) -> bool {
     !line.trim().is_empty() && line.len() > line.trim_start().len()
 }
 
@@ -210,7 +210,7 @@ fn is_non_action_list_header(header: &str) -> bool {
     .any(|marker| lower.contains(marker))
 }
 
-fn is_action_item(item: &str) -> bool {
+pub(super) fn is_action_item(item: &str) -> bool {
     if is_negated_or_diagnostic(item) {
         return false;
     }

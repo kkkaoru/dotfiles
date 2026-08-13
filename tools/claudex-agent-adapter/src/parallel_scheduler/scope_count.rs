@@ -58,8 +58,16 @@ pub(crate) fn is_substantive_work(request: &MessagesRequest) -> bool {
 }
 
 #[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[path = "scope_count/action_edge_tests.rs"]
+mod action_edge_tests;
+#[cfg(test)]
 #[path = "scope_count/behavior_tests.rs"]
 mod behavior_tests;
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[path = "scope_count/detect_edge_tests.rs"]
+mod detect_edge_tests;
 #[cfg(test)]
 #[path = "scope_count/filters_tests.rs"]
 mod filters_tests;

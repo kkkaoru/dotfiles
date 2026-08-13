@@ -43,7 +43,7 @@ pub fn report(root: &Path) -> Result<()> {
     super::audit_report(root, &report)
 }
 
-fn recompute_production_totals(root: &Path, document: &mut Value) {
+pub(super) fn recompute_production_totals(root: &Path, document: &mut Value) {
     let Some(files) = document.pointer("/data/0/files").and_then(Value::as_array) else {
         return;
     };
@@ -67,7 +67,7 @@ fn recompute_production_totals(root: &Path, document: &mut Value) {
     document["data"][0]["totals"] = Value::Object(totals);
 }
 
-fn per_object_report(target: &Path) -> Result<Value> {
+pub(super) fn per_object_report(target: &Path) -> Result<Value> {
     let deps = target.join("debug/deps");
     let mut reports = Vec::new();
     for entry in std::fs::read_dir(deps).context("read coverage test binaries")? {
@@ -93,7 +93,7 @@ fn per_object_report(target: &Path) -> Result<Value> {
     Ok(combine_object_reports(&reports))
 }
 
-fn find_profile(target: &Path) -> Result<PathBuf> {
+pub(super) fn find_profile(target: &Path) -> Result<PathBuf> {
     std::fs::read_dir(target)?
         .filter_map(|entry| entry.ok().map(|item| item.path()))
         .find(|path| path.extension().is_some_and(|ext| ext == "profdata"))
@@ -105,7 +105,7 @@ pub(super) fn coverage_target_directory(root: &Path) -> PathBuf {
         .join(format!("{COVERAGE_TARGET_PREFIX}{}", std::process::id()))
 }
 
-fn existing_coverage_target(root: &Path) -> Result<PathBuf> {
+pub(super) fn existing_coverage_target(root: &Path) -> Result<PathBuf> {
     let target_root = root.join("target");
     let mut candidates = std::fs::read_dir(&target_root)
         .with_context(|| format!("failed to read {}", target_root.display()))?
@@ -135,7 +135,7 @@ fn existing_coverage_target(root: &Path) -> Result<PathBuf> {
         })
 }
 
-fn has_profile_data(root: &Path) -> bool {
+pub(super) fn has_profile_data(root: &Path) -> bool {
     let mut pending = vec![root.to_owned()];
     while let Some(path) = pending.pop() {
         let Ok(entries) = std::fs::read_dir(path) else {
@@ -224,7 +224,7 @@ pub(super) fn coverage_command(root: &Path, target: &Path, arguments: &[String])
     command
 }
 
-fn matching_llvm_tool(name: &str) -> Option<PathBuf> {
+pub(super) fn matching_llvm_tool(name: &str) -> Option<PathBuf> {
     let sysroot = Command::new("rustc")
         .args([COVERAGE_TOOLCHAIN, "--print", "sysroot"])
         .output()
