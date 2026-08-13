@@ -95,6 +95,14 @@ fn assigns_each_gate_process_an_isolated_llvm_cov_target() {
             .and_then(|(_, value)| value),
         Some(std::ffi::OsStr::new("1"))
     );
+    assert_eq!(
+        command
+            .get_envs()
+            .find(|(name, _)| *name == "LLVM_PROFILE_FILE")
+            .and_then(|(_, value)| value)
+            .map(|value| value.to_string_lossy().contains("%m-%p")),
+        Some(true)
+    );
 }
 
 #[test]

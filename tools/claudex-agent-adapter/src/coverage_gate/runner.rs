@@ -1,4 +1,5 @@
 use std::{
+    fs,
     os::unix::process::ExitStatusExt,
     path::{Path, PathBuf},
     process::{Command, ExitStatus},
@@ -26,9 +27,7 @@ pub fn run(root: &Path) -> Result<()> {
 pub fn report(root: &Path) -> Result<()> {
     let target = existing_coverage_target(root)?;
     let report = target.join("branch-coverage.json");
-    let status = coverage_command(root, &target, &report_arguments(&report))
-        .status()
-        .context("failed to run cargo llvm-cov report")?;
+    let status = command_status(root, &target, &report_arguments(&report))?;
     require_success(status, "coverage report")?;
     super::audit_report(root, &report)
 }
@@ -124,6 +123,7 @@ pub(super) fn command_status(
         .status()
         .context("failed to run cargo")?;
     if should_retry_llvm_cov_export(arguments, status) {
+        remove_corrupt_profiles(target);
         status = coverage_command(root, target, arguments)
             .status()
             .context("failed to retry cargo llvm-cov export")?;
@@ -141,8 +141,40 @@ pub(super) fn coverage_command(root: &Path, target: &Path, arguments: &[String])
         // CoverageMapping::getInstantiationGroups when it fans out. Keep the
         // report single-threaded so the gate does not flake on Apple Silicon.
         .env("LLVM_COV_FLAGS", LLVM_COV_REPORT_THREADS)
-        .env("LLVM_COV_NUM_THREADS", "1");
+        .env("LLVM_COV_NUM_THREADS", "1")
+        .env("LLVM_PROFILE_FILE", target.join("claudex-%m-%p.profraw"));
     command
+}
+
+fn remove_corrupt_profiles(target: &Path) {
+    let mut pending = vec![target.to_owned()];
+    let mut profiles = Vec::new();
+    while let Some(path) = pending.pop() {
+        let Ok(entries) = fs::read_dir(path) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                pending.push(path);
+            } else if path.extension().is_some_and(|ext| ext == "profraw") {
+                profiles.push(path);
+            }
+        }
+    }
+    for profile in profiles {
+        let probe = target.join("coverage-probe.profdata");
+        let valid = Command::new("llvm-profdata")
+            .args(["merge", "-sparse", "-o"])
+            .arg(&probe)
+            .arg(&profile)
+            .status()
+            .is_ok_and(|status| status.success());
+        let _ = fs::remove_file(&probe);
+        if !valid {
+            let _ = fs::remove_file(profile);
+        }
+    }
 }
 
 pub(super) fn should_retry_llvm_cov_export(arguments: &[String], status: ExitStatus) -> bool {
