@@ -57,19 +57,11 @@ pub(super) async fn inspect_service_with(
             ServiceState::Start
         };
     };
-    if config.matches(&health) && health.build_id == env!("CLAUDEX_BUILD_ID") {
-        // A single auth probe can time out under llvm-cov / busy hosts; retry
-        // briefly before tearing down an otherwise matching generation.
-        let retries = 3u8;
-        let delay = Duration::from_millis(20);
-        for attempt in 0..retries {
-            if authenticates(client, config).await {
-                return ServiceState::Reuse;
-            }
-            if attempt + 1 < retries {
-                tokio::time::sleep(delay).await;
-            }
-        }
+    if config.matches(&health)
+        && health.build_id == env!("CLAUDEX_BUILD_ID")
+        && authenticates_with_retries(client, config).await
+    {
+        return ServiceState::Reuse;
     }
     if health.status == "ok" && health.has_active_work() {
         // Never tear down a generation that is still serving a request.
@@ -88,6 +80,28 @@ pub(super) async fn inspect_service_with(
             recovery_generation: health.recovery_generation,
         }
     }
+}
+
+async fn authenticates_with_retries(client: &reqwest::Client, config: &ServiceConfig) -> bool {
+    let retries = if cfg!(all(test, coverage_nightly)) {
+        16u8
+    } else {
+        3u8
+    };
+    let delay = if cfg!(all(test, coverage_nightly)) {
+        Duration::from_millis(75)
+    } else {
+        Duration::from_millis(20)
+    };
+    for attempt in 0..retries {
+        if authenticates(client, config).await {
+            return true;
+        }
+        if attempt + 1 < retries {
+            tokio::time::sleep(delay).await;
+        }
+    }
+    false
 }
 
 fn listener_is_bound(config: &ServiceConfig) -> bool {

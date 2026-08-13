@@ -2216,40 +2216,55 @@ fn serve_health_and_auth_until_stopped(
     auth: String,
     stopped: Arc<AtomicBool>,
 ) -> thread::JoinHandle<()> {
-    thread::spawn(move || {
-        listener
-            .set_nonblocking(true)
-            .expect("nonblocking health listener");
-        while !stopped.load(Ordering::SeqCst) {
-            let (mut stream, _) = match listener.accept() {
-                Ok(accepted) => accepted,
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    thread::sleep(Duration::from_millis(1));
-                    continue;
-                }
-                Err(error) => panic!("accept health request: {error}"),
-            };
-            if stopped.load(Ordering::SeqCst) {
-                break;
-            }
-            let health = health.clone();
-            let auth = auth.clone();
-            // Answer probes on worker threads so llvm-cov / parallel ensure
-            // retries cannot stall behind a single slow /health client.
-            thread::spawn(move || {
-                let _ = stream.set_nonblocking(false);
-                let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
-                let request = read_http_headers(&mut stream);
-                let body = if request.contains(" /v1/models") {
-                    auth.as_str()
-                } else {
-                    health.as_str()
-                };
-                let _ = stream.write_all(body.as_bytes());
-                let _ = stream.flush();
-            });
+    thread::spawn(move || run_health_server(listener, health, auth, stopped))
+}
+
+fn run_health_server(
+    listener: TcpListener,
+    health: String,
+    auth: String,
+    stopped: Arc<AtomicBool>,
+) {
+    listener
+        .set_nonblocking(true)
+        .expect("nonblocking health listener");
+    while !stopped.load(Ordering::SeqCst) {
+        let Some(stream) = accept_health_connection(&listener) else {
+            continue;
+        };
+        if stopped.load(Ordering::SeqCst) {
+            break;
         }
-    })
+        // Answer probes on worker threads so llvm-cov / parallel ensure
+        // retries cannot stall behind a single slow /health client.
+        spawn_health_response(stream, health.clone(), auth.clone());
+    }
+}
+
+fn accept_health_connection(listener: &TcpListener) -> Option<std::net::TcpStream> {
+    match listener.accept() {
+        Ok((stream, _)) => Some(stream),
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+            thread::sleep(Duration::from_millis(1));
+            None
+        }
+        Err(error) => panic!("accept health request: {error}"),
+    }
+}
+
+fn spawn_health_response(mut stream: std::net::TcpStream, health: String, auth: String) {
+    thread::spawn(move || {
+        let _ = stream.set_nonblocking(false);
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+        let request = read_http_headers(&mut stream);
+        let body = if request.contains(" /v1/models") {
+            auth.as_str()
+        } else {
+            health.as_str()
+        };
+        let _ = stream.write_all(body.as_bytes());
+        let _ = stream.flush();
+    });
 }
 
 fn read_http_headers(stream: &mut impl Read) -> String {

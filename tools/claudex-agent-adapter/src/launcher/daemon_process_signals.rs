@@ -17,9 +17,7 @@ pub(super) fn capture_started_daemon_identity(pid: u32) -> Option<StartedDaemonI
         return None;
     }
     #[cfg(unix)]
-    if owned_daemon_session(pid).is_none() {
-        return None;
-    }
+    owned_daemon_session(pid)?;
     Some(StartedDaemonIdentity {
         pid,
         start_token: process_start_token(pid)?,
@@ -355,7 +353,7 @@ pub(super) fn process_group_is_alive(process_group_id: i32) -> bool {
         }
     };
 
-    let has_live_member = String::from_utf8_lossy(&output.stdout)
+    String::from_utf8_lossy(&output.stdout)
         .lines()
         .filter_map(|line| {
             let mut fields = line.split_whitespace();
@@ -369,6 +367,5 @@ pub(super) fn process_group_is_alive(process_group_id: i32) -> bool {
                 return false;
             };
             group == process_group_id && state.chars().next().is_none_or(|state| state != 'Z')
-        });
-    has_live_member
+        })
 }

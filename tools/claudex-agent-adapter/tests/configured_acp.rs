@@ -717,8 +717,20 @@ async fn no_response_quota_stall_emits_one_error_cancels_exact_turn_and_rejects_
         .await
         .expect("queue no-event turn");
     wait_for_configured_trace_count(root.path(), "prompt", 1).await;
+    finish_no_response_stall(&backend, root.path(), thread_id, events).await;
+}
+
+async fn finish_no_response_stall(
+    backend: &Arc<AgentBackend>,
+    root: &std::path::Path,
+    thread_id: &str,
+    events: ThreadEvents,
+) {
     let sibling_response = backend
-        .request("thread/start", json!({"model":model,"cwd":root.path()}))
+        .request(
+            "thread/start",
+            json!({"model":"opencode-go/no-response-first","cwd":root}),
+        )
         .await
         .expect("start sibling session");
     let sibling_id = sibling_response["thread"]["id"]
@@ -739,16 +751,9 @@ async fn no_response_quota_stall_emits_one_error_cancels_exact_turn_and_rejects_
     )
     .await
     .expect("running sibling turn did not survive the timeout");
-    let error = tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            let event = events.recv().await.expect("no-event event stream closed");
-            if event["method"] == "error" {
-                break event;
-            }
-        }
-    })
-    .await
-    .expect("no-event timeout did not settle");
+    let error = tokio::time::timeout(Duration::from_secs(5), receive_error_event(&events))
+        .await
+        .expect("no-event timeout did not settle");
     assert_eq!(error["method"], "error");
     assert_eq!(error["params"]["willRetry"], false);
     assert!(
@@ -765,7 +770,7 @@ async fn no_response_quota_stall_emits_one_error_cancels_exact_turn_and_rejects_
             .await
             .is_err()
     );
-    let trace = wait_for_configured_trace_count(root.path(), "cancel", 1).await;
+    let trace = wait_for_configured_trace_count(root, "cancel", 1).await;
     assert_eq!(
         trace
             .iter()
@@ -786,7 +791,15 @@ async fn no_response_quota_stall_emits_one_error_cancels_exact_turn_and_rejects_
         cancelled_session, prompt_session,
         "timeout cancellation must target the stalled turn's exact ACP session"
     );
-    backend.shutdown().await;
+}
+
+async fn receive_error_event(events: &ThreadEvents) -> Value {
+    loop {
+        let event = events.recv().await.expect("no-event event stream closed");
+        if event["method"] == "error" {
+            return event;
+        }
+    }
 }
 
 async fn wait_for_configured_trace_count(
@@ -794,27 +807,35 @@ async fn wait_for_configured_trace_count(
     key: &str,
     expected: usize,
 ) -> Vec<Value> {
-    tokio::time::timeout(ACP_EVENT_TIMEOUT, async {
-        loop {
-            if let Ok(trace) = std::fs::read_to_string(root.join("grok-acp-mock.jsonl")) {
-                let events = trace
-                    .lines()
-                    .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-                    .collect::<Vec<_>>();
-                if events
-                    .iter()
-                    .filter(|event| event.get(key).is_some())
-                    .count()
-                    >= expected
-                {
-                    return events;
-                }
-            }
-            tokio::time::sleep(TRACE_POLL_INTERVAL).await;
+    tokio::time::timeout(ACP_EVENT_TIMEOUT, wait_for_trace_inner(root, key, expected))
+        .await
+        .unwrap_or_else(|_| panic!("timed out waiting for {expected} `{key}` trace events"))
+}
+
+async fn wait_for_trace_inner(root: &std::path::Path, key: &str, expected: usize) -> Vec<Value> {
+    loop {
+        if let Some(events) = ready_trace(root, key, expected) {
+            return events;
         }
-    })
-    .await
-    .unwrap_or_else(|_| panic!("timed out waiting for {expected} `{key}` trace events"))
+        tokio::time::sleep(TRACE_POLL_INTERVAL).await;
+    }
+}
+
+fn ready_trace(root: &std::path::Path, key: &str, expected: usize) -> Option<Vec<Value>> {
+    let trace = std::fs::read_to_string(root.join("grok-acp-mock.jsonl")).ok()?;
+    let events = trace
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .collect::<Vec<_>>();
+    trace_ready(&events, key, expected).then_some(events)
+}
+
+fn trace_ready(events: &[Value], key: &str, expected: usize) -> bool {
+    events
+        .iter()
+        .filter(|event| event.get(key).is_some())
+        .count()
+        >= expected
 }
 
 async fn wait_for_turn_completion(events: ThreadEvents) {

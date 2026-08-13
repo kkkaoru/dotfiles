@@ -113,11 +113,7 @@ async fn all_canonical_provider_surfaces_obey_one_http_stream_contract() {
         // recover the provider session instead of creating a fresh conversation.
         let first_text = streamed_text(&first);
         let follow_up = follow_up_request(surface, first_text);
-        let second = send_stream(&endpoint.url, follow_up, Some(SESSION_ID))
-            .await
-            .unwrap_or_else(|error| {
-                panic!("{} follow-up request failed: {error}", surface.label())
-            });
+        let second = expect_follow_up(&endpoint.url, follow_up, surface).await;
         assert_eq!(
             second.status(),
             StatusCode::OK,
@@ -180,14 +176,7 @@ async fn provider_failures_have_one_terminal_error_shape_after_conversion() {
             .find(|event| event["type"] == "message_delta")
             .and_then(|event| event.pointer("/delta/stop_reason"))
             .and_then(Value::as_str);
-        if let Some(stop_reason) = stop_reason {
-            assert_eq!(
-                stop_reason,
-                "error",
-                "{} error stop reason (HTTP status {status})",
-                surface.label()
-            );
-        }
+        assert_optional_error_stop_reason(stop_reason, status, surface);
     }
 }
 
@@ -667,20 +656,44 @@ fn streamed_text(events: &[Value]) -> String {
         .collect()
 }
 
+async fn expect_follow_up(
+    url: &str,
+    request: Value,
+    surface: Surface,
+) -> reqwest::Response {
+    send_stream(url, request, Some(SESSION_ID))
+        .await
+        .unwrap_or_else(|error| panic!("{} follow-up request failed: {error}", surface.label()))
+}
+
+fn assert_optional_error_stop_reason(
+    stop_reason: Option<&str>,
+    status: StatusCode,
+    surface: Surface,
+) {
+    if let Some(stop_reason) = stop_reason {
+        assert_eq!(
+            stop_reason,
+            "error",
+            "{} error stop reason (HTTP status {status})",
+            surface.label()
+        );
+    }
+}
+
 async fn wait_for_trace_event(path: &Path, key: &str) {
-    tokio::time::timeout(Duration::from_secs(3), async {
-        loop {
-            if read_trace(path)
-                .iter()
-                .any(|event| event.get(key).is_some())
-            {
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
+    tokio::time::timeout(Duration::from_secs(3), wait_for_trace_event_inner(path, key))
     .await
     .unwrap_or_else(|_| panic!("trace {} did not contain {key}", path.display()));
+}
+
+async fn wait_for_trace_event_inner(path: &Path, key: &str) {
+    loop {
+        if read_trace(path).iter().any(|event| event.get(key).is_some()) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
 }
 
 fn read_trace(path: &Path) -> Vec<Value> {

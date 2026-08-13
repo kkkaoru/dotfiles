@@ -14,6 +14,13 @@ use super::{
     wait_until_current_build, warm_agent_ages,
 };
 
+struct PromotionContext {
+    old_pid: u32,
+    session_ids: Vec<String>,
+    agent_ages: std::collections::BTreeMap<String, u64>,
+    build_id: String,
+}
+
 pub(crate) async fn try_canonical(
     client: &reqwest::Client,
     config: &ServiceConfig,
@@ -49,6 +56,28 @@ pub(crate) async fn try_canonical(
             warm.log_path.display()
         );
     }
+    complete_canonical_promotion(
+        client,
+        config,
+        PromotionContext {
+            old_pid,
+            session_ids,
+            agent_ages,
+            build_id: health.build_id.clone(),
+        },
+        started,
+        warm,
+    )
+    .await
+}
+
+async fn complete_canonical_promotion<T: FnOnce(u32)>(
+    client: &reqwest::Client,
+    config: &ServiceConfig,
+    context: PromotionContext,
+    started: daemon_start::StartedDaemon<T>,
+    warm: ServiceConfig,
+) -> Result<Option<String>> {
     let Some(rebind) = request_ephemeral_rebind(client, config).await? else {
         return Ok(None);
     };
@@ -56,10 +85,10 @@ pub(crate) async fn try_canonical(
     live::write_retained_with_agents(
         config,
         retained_listen,
-        old_pid,
-        &health.build_id,
-        session_ids.clone(),
-        agent_ages,
+        context.old_pid,
+        &context.build_id,
+        context.session_ids.clone(),
+        context.agent_ages,
     )?;
     wait_until_canonical_released(config).await?;
     let probe = reqwest::Client::builder()
@@ -74,9 +103,9 @@ pub(crate) async fn try_canonical(
         return finish_started_promotion(
             started,
             config,
-            old_pid,
+            context.old_pid,
             retained_listen,
-            session_ids.len(),
+            context.session_ids.len(),
         );
     }
     drop(started);
@@ -89,9 +118,9 @@ pub(crate) async fn try_canonical(
             return finish_started_promotion(
                 restarted,
                 config,
-                old_pid,
+                context.old_pid,
                 retained_listen,
-                session_ids.len(),
+                context.session_ids.len(),
             );
         }
     }
