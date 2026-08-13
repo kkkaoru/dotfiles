@@ -68,3 +68,51 @@ pub(super) fn fallback_results(search_count: u64, answer: &str) -> Vec<SearchRes
         Vec::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parsing_helpers_cover_missing_and_invalid_values() {
+        let mut answer = String::new();
+        append_answer_delta(&serde_json::json!({}), &mut answer);
+        append_answer_delta(
+            &serde_json::json!({"params": {"delta": "answer"}}),
+            &mut answer,
+        );
+        assert_eq!(answer, "answer");
+
+        let mut results = Vec::new();
+        collect_item_results(&serde_json::json!({}), &mut results);
+        collect_item_results(
+            &serde_json::json!({"params": {"item": {"results": [
+                {"title": " ", "url": "https://empty.test"},
+                {"title": "valid", "url": " "}
+            ]}}}),
+            &mut results,
+        );
+        assert!(results.is_empty());
+        assert!(!is_web_search(&serde_json::json!({})));
+        assert!(is_web_search(
+            &serde_json::json!({"params": {"item": {"type": "webSearch"}}})
+        ));
+    }
+
+    #[test]
+    fn url_and_fallback_parsing_cover_both_protocols() {
+        let results = extract_urls("https://one.test, (http://two.test). ordinary");
+        assert_eq!(results.len(), 2);
+        assert!(fallback_results(0, "https://ignored.test").is_empty());
+        assert_eq!(fallback_results(1, "source https://one.test").len(), 1);
+        assert!(parse_result(&serde_json::json!({"title": "x"})).is_none());
+        assert_eq!(
+            parse_result(&serde_json::json!({
+                "title": " title ", "url": " https://source.test ", "snippet": "text"
+            }))
+            .expect("valid result")
+            .url,
+            "https://source.test"
+        );
+    }
+}
