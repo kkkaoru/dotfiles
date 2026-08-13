@@ -32,6 +32,8 @@ mod effort;
 #[path = "execute_prompt.rs"]
 mod prompt;
 mod setup;
+#[path = "unknown_session.rs"]
+pub(crate) mod unknown_session;
 use effort::finish_effort_setup;
 #[cfg(test)]
 use prompt::handle_prompt_cancellation;

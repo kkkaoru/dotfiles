@@ -4,7 +4,7 @@ use anyhow::Result;
 use serde_json::Value;
 
 use super::super::super::{Bridge, SelectedSession};
-use super::{StartContextRetry, is_context_window_exceeded};
+use super::{StartContextRetry, is_context_window_exceeded, is_unknown_session_exceeded};
 
 impl Bridge {
     pub(in crate::anthropic) async fn recover_turn_start(
@@ -21,7 +21,9 @@ impl Bridge {
     )> {
         let (selected, extras, events, start) = match start {
             Ok(()) => (selected, extras, events, Ok(())),
-            Err(error) if !is_context_window_exceeded(&error) => {
+            Err(error)
+                if !is_context_window_exceeded(&error) && !is_unknown_session_exceeded(&error) =>
+            {
                 self.remove_session(&selected.session).await;
                 return Err(error);
             }

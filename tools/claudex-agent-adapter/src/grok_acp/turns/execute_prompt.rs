@@ -22,7 +22,7 @@ pub(super) async fn run_prompt(
 ) {
     let request = acp::PromptRequest::new(
         id.clone(),
-        vec![acp::ContentBlock::Text(acp::TextContent::new(prompt))],
+        vec![acp::ContentBlock::Text(acp::TextContent::new(prompt.clone()))],
     );
     let activity = ctl.events.subscribe(ctl.session_id);
     let response = match configured_prompt::wait_with_activity(
@@ -47,7 +47,39 @@ pub(super) async fn run_prompt(
             return;
         }
     };
+    let response = retry_unknown_session_prompt(&mut ctl, &connection, &prompt, response).await;
     finish_prompt_result(ctl, response, &guard).await;
+}
+
+async fn retry_unknown_session_prompt(
+    ctl: &mut TurnCtl<'_>,
+    connection: &Rc<acp::ClientSideConnection>,
+    prompt: &str,
+    first: acp::Result<acp::PromptResponse>,
+) -> acp::Result<acp::PromptResponse> {
+    super::unknown_session::retry_unknown_session_once(first, async {
+        recreate_session_and_prompt(ctl, connection, prompt).await
+    })
+    .await
+    .0
+}
+
+async fn recreate_session_and_prompt(
+    _ctl: &mut TurnCtl<'_>,
+    connection: &Rc<acp::ClientSideConnection>,
+    prompt: &str,
+) -> acp::Result<acp::PromptResponse> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let created = connection
+        .new_session(acp::NewSessionRequest::new(cwd))
+        .await?;
+    let request = acp::PromptRequest::new(
+        created.session_id,
+        vec![acp::ContentBlock::Text(acp::TextContent::new(
+            prompt.to_owned(),
+        ))],
+    );
+    connection.prompt(request).await
 }
 
 fn timeout_message(ctl: &TurnCtl<'_>, guard: &PromptGuard<'_>) -> String {

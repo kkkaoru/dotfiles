@@ -67,6 +67,24 @@ pub(in crate::anthropic) fn is_context_window_exceeded(error: &anyhow::Error) ->
     contains_context_window_marker(&error.to_string())
 }
 
+pub(in crate::anthropic) fn is_unknown_session_exceeded(error: &anyhow::Error) -> bool {
+    is_unknown_session_text(&error.to_string())
+}
+
+pub(crate) fn is_unknown_session_text(detail: &str) -> bool {
+    let lower = detail.to_ascii_lowercase();
+    if lower.contains("quota")
+        || lower.contains("usage limit")
+        || lower.contains("401")
+        || lower.contains("unauthorized")
+        || lower.contains("timed out")
+        || lower.contains("timeout")
+    {
+        return false;
+    }
+    lower.contains("unknown session:") || lower.contains("unknown session")
+}
+
 pub(in crate::anthropic) fn contains_context_window_marker(message: &str) -> bool {
     let message = message.to_lowercase();
     const CONTEXT_WINDOW_MARKERS: [&str; 5] = [
