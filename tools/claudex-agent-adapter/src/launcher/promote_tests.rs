@@ -92,6 +92,18 @@ fn current_build_readiness_checks_expected_pid() {
     assert!(current_build_ready(&ready, Some(13)));
 }
 
+#[cfg(unix)]
+#[test]
+fn terminate_started_ignores_an_unrelated_pid() {
+    let root = tempfile::tempdir().expect("terminate fixture");
+    let config = config_at(
+        "127.0.0.1:8318".parse().unwrap(),
+        root.path(),
+        PathBuf::from("/tmp/adapter"),
+    );
+    terminate_started(u32::MAX, &config);
+}
+
 #[test]
 fn live_update_requires_the_same_service_fingerprints() {
     let config = ServiceConfig {
