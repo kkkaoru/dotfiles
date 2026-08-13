@@ -2,10 +2,24 @@ use std::time::Duration;
 
 use super::{
     super::{ParallelScheduler, SchedulerConfig},
+    actions::count_for_content,
     declines_delegation, has_classifiable_user_turn, independent_scope_count, is_substantive_work,
     needs_single_worker,
     test_support::{messages_request, real_three_scope_message},
 };
+
+#[test]
+fn action_list_contexts_cover_acceptance_and_nested_items() {
+    assert_eq!(
+        count_for_content("Tasks:\n- Implement one\n  continuation\n- Fix two"),
+        2
+    );
+    assert_eq!(
+        count_for_content("Acceptance criteria:\n- Implement one\n- Fix two"),
+        1
+    );
+    assert_eq!(count_for_content("- note\n- example"), 1);
+}
 
 #[test]
 fn incident_skill_meta_and_task_reminders_do_not_inject_twenty_eight_scopes() {
