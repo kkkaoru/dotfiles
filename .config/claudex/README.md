@@ -699,7 +699,7 @@ set -gx CLAUDEX_DISABLED_SUBAGENT_MODELS_CONFIG /path/to/terminal-policy.json
 claudex
 
 # 専用ファイルに加えて、この端末だけ複数モデルを追加で禁止
-set -gx CLAUDEX_DISABLED_SUBAGENT_MODELS gpt-5.6,grok-4.6
+set -gx CLAUDEX_DISABLED_SUBAGENT_MODELS example-disabled-model,example-disabled-model-2
 claudex
 
 # 端末固有の上書きと追加を解除
@@ -793,7 +793,7 @@ CLAUDEX_USAGE_CACHE_SECONDS=0 claudex
 CLAUDEX_SUBSCRIPTION_MAX_PROCESSES=20 claudex
 CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES=120 claudex
 CLAUDEX_ADAPTER_LISTEN=127.0.0.1:9418 claudex
-CLAUDEX_DISABLED_SUBAGENT_MODELS=gpt-5.6,grok-4.6 claudex
+CLAUDEX_DISABLED_SUBAGENT_MODELS=example-disabled-model,example-disabled-model-2 claudex
 CLAUDEX_CUSTOM_ADVISOR=0 claudex
 CLAUDEX_DEFAULTS_SOURCE=settings claudex
 CLAUDEX_EFFORT=high claudex
