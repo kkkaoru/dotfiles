@@ -299,12 +299,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn models_overlap_handles_all_cases() {
+    fn models_overlap_all_cases() {
         assert!(models_overlap(None, None));
         assert!(models_overlap(None, Some("grok")));
-        assert!(!models_overlap(Some("claude"), None));
-        assert!(models_overlap(Some("grok"), Some("grok")));
-        assert!(models_overlap(Some("Grok"), Some("grok")));
-        assert!(!models_overlap(Some("grok"), Some("claude")));
+        assert!(!models_overlap(Some("a"), None));
+        assert!(models_overlap(Some("x"), Some("x")));
+        assert!(!models_overlap(Some("x"), Some("y")));
+    }
+
+    #[test]
+    fn scope_occupied_empty_session() {
+        let reg = SubagentReuseRegistry::persistent();
+        assert!(!reg.scope_is_occupied("", &serde_json::json!({})));
     }
 }

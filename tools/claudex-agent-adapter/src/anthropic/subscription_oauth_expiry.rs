@@ -104,3 +104,21 @@ pub(super) fn warn_preflight_oauth_failover(exhausted_model: &str, failover_mode
         );
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn expiry_ms_rejects_invalid() {
+        use serde_json::json;
+        let v = json!({"bad": "str"});
+        assert_eq!(oauth_expiry_ms(&v, "/bad"), None);
+    }
+
+    #[test]
+    fn expiry_boundary() {
+        let now = UNIX_EPOCH + Duration::from_millis(1000);
+        assert!(expiry_ms_is_past(1000.0, now));
+    }
+}
