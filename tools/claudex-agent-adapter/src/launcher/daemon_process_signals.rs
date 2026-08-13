@@ -107,8 +107,9 @@ mod identity_tests {
     #[cfg(unix)]
     #[test]
     fn process_checks_fail_closed_for_missing_processes() {
-        assert!(!process_is_alive(u32::MAX));
-        assert!(!is_process_zombie(u32::MAX));
+        let missing_pid = 99_999_999;
+        assert!(!process_is_alive(missing_pid));
+        assert!(!is_process_zombie(missing_pid));
         assert!(!process_group_is_alive(i32::MAX));
         assert_eq!(session_id(-1), None);
         assert_eq!(owned_daemon_session(u32::MAX), None);
