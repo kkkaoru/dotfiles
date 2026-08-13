@@ -62,10 +62,25 @@ pub(super) async fn messages(
         Err(error) => return error_response(StatusCode::BAD_REQUEST, error),
     }
     request.disabled_subagent_models = disabled_subagent_models;
+    attach_denylist_warning(&mut request);
     bridge
         .messages_with_identity(request, identity, tools_were_provided)
         .await
         .unwrap_or_else(|error| error_response(StatusCode::BAD_GATEWAY, error))
+}
+
+fn attach_denylist_warning(request: &mut MessagesRequest) {
+    let Some(warning) = subagent_policy::denylist_load_warning() else {
+        return;
+    };
+    match request.metadata {
+        Value::Object(ref mut object) => {
+            object.insert("_claudex_denylist_load_error".into(), json!(warning));
+        }
+        _ => {
+            request.metadata = json!({ "_claudex_denylist_load_error": warning });
+        }
+    }
 }
 
 pub(crate) fn decode_messages_request(body: Value) -> anyhow::Result<(MessagesRequest, bool)> {

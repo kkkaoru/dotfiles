@@ -19,9 +19,10 @@ pub(super) const LOAD_RETRY: Duration = Duration::ZERO;
 
 #[path = "subagent_policy_load.rs"]
 mod load;
-use load::{config_path, load_config};
+pub(crate) use load::denylist_load_warning;
 #[cfg(test)]
-use load::{load_config_from_reader, short_hostname, with_last_good};
+use load::{clear_denylist_cache, load_config_from_reader, short_hostname};
+use load::{config_path, load_config};
 
 pub(crate) fn active_header() -> Result<Option<String>> {
     let path = config_path(

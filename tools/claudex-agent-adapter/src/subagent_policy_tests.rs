@@ -8,7 +8,7 @@ mod tests {
     use super::*;
 
     fn clear_last_good() {
-        with_last_good(|slot| *slot = None);
+        clear_denylist_cache();
     }
 
     #[test]
@@ -161,15 +161,26 @@ mod tests {
         let cached = load_config_from_reader(|| Ok("not-json".to_owned()), path)
             .expect("last good policy should survive a later parse failure");
         assert_eq!(cached.into_iter().collect::<Vec<_>>(), ["fugu", "grok-4.5"]);
+        let warning = denylist_load_warning().expect("stale denylist must be user-visible");
+        assert!(
+            warning.contains("last-known-good"),
+            "stale warning should name last-known-good: {warning}"
+        );
     }
 
     #[test]
-    fn uninitialized_denylist_read_failure_is_fail_open() {
+    fn uninitialized_denylist_read_failure_is_fail_closed() {
         clear_last_good();
         let path = Path::new("/tmp/disabled-subagent-models.uninitialized.json");
-        let models = load_config_from_reader(|| Ok("not-json".to_owned()), path)
-            .expect("uninitialized denylist must fail open");
-        assert!(models.is_empty());
+        let error = load_config_from_reader(|| Ok("not-json".to_owned()), path)
+            .expect_err("uninitialized denylist must fail closed");
+        assert!(
+            error
+                .to_string()
+                .contains("denylist unavailable at cold start"),
+            "{error}"
+        );
+        assert!(error.to_string().contains("refusing allow-all"), "{error}");
     }
 
     #[test]
@@ -185,6 +196,8 @@ mod tests {
         let cached = load_config_from_reader(|| Ok("not-json".to_owned()), path)
             .expect("unset last-good must survive a later parse failure");
         assert!(cached.is_empty());
+        let warning = denylist_load_warning().expect("stale empty last-good must still surface");
+        assert!(warning.contains("last-known-good"), "{warning}");
     }
 
     #[test]
@@ -200,11 +213,13 @@ mod tests {
             "not-json",
         ] {
             std::fs::write(&path, contents).unwrap();
-            let models =
-                load_config(Some(&path)).expect("invalid policy fail-opens when uninitialized");
+            let error = load_config(Some(&path))
+                .expect_err("invalid policy is fail-closed when uninitialized");
             assert!(
-                models.is_empty(),
-                "uninitialized invalid denylist must fail open: {contents}"
+                error
+                    .to_string()
+                    .contains("denylist unavailable at cold start"),
+                "cold start must not allow-all: {contents}: {error}"
             );
         }
     }

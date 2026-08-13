@@ -135,6 +135,8 @@ pub fn hook_output_for_agent(
         "selected_workers_count": selected_workers.len(),
         "preferred_worker": summary.get("preferred_worker").cloned().unwrap_or(Value::Null),
         "disabled_subagent_models": summary.get("disabled_subagent_models").cloned().unwrap_or_else(|| Value::Array(vec![])),
+        "denylist_source": summary.get("denylist_source").cloned().unwrap_or_else(|| Value::from("unset")),
+        "denylist_load_error": summary.get("denylist_load_error").cloned().unwrap_or(Value::Null),
         "current_main_model": summary.get("current_main_model").cloned().unwrap_or(Value::Null),
         "current_main_model_known": summary.get("current_main_model_known").and_then(Value::as_bool).unwrap_or(false),
         "main_session_model": summary.get("current_main_model").cloned().unwrap_or(Value::Null),
@@ -233,6 +235,19 @@ mod tests {
         assert!(sub_ctx.contains("main-session only"));
         assert!(sub_ctx.contains("disabled_subagent_models"));
         assert!(!ctx.contains("advisor() — it is main-session only"));
+    }
+
+    #[test]
+    fn surfaces_denylist_load_error_in_additional_context() {
+        let mut summary = sample_summary();
+        summary["denylist_source"] = json!("last-known-good");
+        summary["denylist_load_error"] = json!("using last-known-good denylist");
+        let output = hook_output_for_agent(&summary, "UserPromptSubmit", None).unwrap();
+        let ctx = output["hookSpecificOutput"]["additionalContext"]
+            .as_str()
+            .unwrap();
+        assert!(ctx.contains("\"denylist_source\":\"last-known-good\""));
+        assert!(ctx.contains("using last-known-good denylist"));
     }
 
     #[test]

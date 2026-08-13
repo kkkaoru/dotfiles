@@ -19,6 +19,8 @@ struct RuntimeState {
     config: config::Config,
     live: exhaustion::LiveState,
     disabled: BTreeSet<String>,
+    denylist_load_error: Option<String>,
+    denylist_source: &'static str,
     cache_path: PathBuf,
     key: String,
     now: f64,
@@ -62,6 +64,15 @@ fn merge_disabled_models(
     Ok(models)
 }
 
+fn configured_denylist(path: &Path) -> Result<(BTreeSet<String>, Option<String>, &'static str)> {
+    let policy = config::load_disabled_models_policy(path);
+    Ok((
+        config::load_disabled_models(path)?,
+        policy.load_error().map(str::to_owned),
+        policy.source(),
+    ))
+}
+
 fn resolve(arguments: &Arguments, refresh_deadline: Option<Deadline>) -> Result<RuntimeState> {
     let paths = config::Paths::discover(arguments.config.as_deref())?;
     let config_path = config::provider_config_path(arguments.config.as_deref(), &paths);
@@ -73,8 +84,9 @@ fn resolve(arguments: &Arguments, refresh_deadline: Option<Deadline>) -> Result<
     })?;
     let disabled_path =
         config::disabled_models_path(arguments.disabled_models_config.as_deref(), &paths)?;
+    let (models, denylist_load_error, denylist_source) = configured_denylist(&disabled_path)?;
     let configured = merge_disabled_models(
-        config::load_disabled_models(&disabled_path)?,
+        models,
         env::var("CLAUDEX_RESOLVED_DISABLED_SUBAGENT_MODELS").ok(),
         env::var("CLAUDEX_DISABLED_SUBAGENT_MODELS").ok(),
     )
@@ -93,6 +105,8 @@ fn resolve(arguments: &Arguments, refresh_deadline: Option<Deadline>) -> Result<
         config,
         live,
         disabled,
+        denylist_load_error,
+        denylist_source,
         cache_path,
         key,
         now,
@@ -215,6 +229,14 @@ fn apply_live_state(
         bail!("routing summary must be an object");
     };
     object.insert("current_main_model_state".into(), Value::from(main_state));
+    object.insert("denylist_source".into(), Value::from(state.denylist_source));
+    object.insert(
+        "denylist_load_error".into(),
+        match &state.denylist_load_error {
+            Some(error) => Value::from(error.as_str()),
+            None => Value::Null,
+        },
+    );
     object.insert(
         "memory_status".into(),
         if use_processes {

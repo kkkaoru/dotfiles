@@ -371,14 +371,19 @@ fn validate_native_workers(config: &Value, enabled: &[Value]) -> Result<Vec<Valu
 }
 
 pub fn load_disabled_models(path: &Path) -> Result<BTreeSet<String>> {
-    Ok(load_disabled_models_policy(path).models())
+    match load_disabled_models_policy(path) {
+        DisabledModelsPolicy::Unavailable { message } => {
+            bail!("denylist unavailable at cold start: {message}")
+        }
+        policy => Ok(policy.models()),
+    }
 }
 
 #[path = "config_denylist.rs"]
 mod denylist_policy;
 #[cfg(test)]
 pub use denylist_policy::enabled_denylist_conflicts;
-pub use denylist_policy::load_disabled_models_policy;
+pub use denylist_policy::{DisabledModelsPolicy, load_disabled_models_policy};
 
 pub fn parse_environment_models(raw: &str) -> Result<BTreeSet<String>> {
     let mut models = BTreeSet::new();

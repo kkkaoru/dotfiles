@@ -64,9 +64,12 @@ pub(super) fn config_path(
 }
 
 pub(super) fn load_config(path: Option<&Path>) -> Result<BTreeSet<String>> {
-    let Some(path) = path.filter(|path| path.is_file()) else {
+    let Some(path) = path else {
         return Ok(BTreeSet::new());
     };
+    if !path.is_file() {
+        return missing_optional_denylist(path);
+    }
     load_config_from_reader(
         || {
             fs::read_to_string(path)
@@ -74,6 +77,19 @@ pub(super) fn load_config(path: Option<&Path>) -> Result<BTreeSet<String>> {
         },
         path,
     )
+}
+
+fn missing_optional_denylist(path: &Path) -> Result<BTreeSet<String>> {
+    match with_last_good(|slot| slot.clone()) {
+        Some(models) => {
+            remember_warning(format!(
+                "denylist file missing; using last-known-good for {}",
+                path.display()
+            ));
+            Ok(models)
+        }
+        None => Ok(BTreeSet::new()),
+    }
 }
 
 pub(super) fn load_config_from_reader(
@@ -116,40 +132,74 @@ pub(super) fn parse_policy_text(contents: &str, path: &Path) -> Result<BTreeSet<
 }
 
 pub(super) fn remember_last_good(models: BTreeSet<String>) -> Result<BTreeSet<String>> {
-    with_last_good(|slot| *slot = Some(models.clone()));
+    with_cache(|cache| {
+        cache.last_good = Some(models.clone());
+        cache.warning = None;
+    });
     Ok(models)
 }
 
 pub(super) fn fallback_last_good(path: &Path, error: anyhow::Error) -> Result<BTreeSet<String>> {
-    let cached = with_last_good(|slot| slot.clone());
+    let cached = with_cache(|cache| cache.last_good.clone());
     if let Some(models) = cached {
-        eprintln!(
-            "claudex: {error}; using last valid disabled SubAgent model config for {}",
+        remember_warning(format!(
+            "{error}; using last-known-good denylist for {}",
             path.display()
-        );
+        ));
         return Ok(models);
     }
-    // Uninitialized (never loaded a valid policy): fail open so routing continues.
-    eprintln!(
-        "claudex: {error}; denylist uninitialized, fail-open with empty policy for {}",
+    Err(error.context(format!(
+        "denylist unavailable at cold start for {}; refusing allow-all",
         path.display()
-    );
-    Ok(BTreeSet::new())
+    )))
+}
+
+struct DenylistCache {
+    last_good: Option<BTreeSet<String>>,
+    warning: Option<String>,
+}
+
+impl DenylistCache {
+    const fn empty() -> Self {
+        Self {
+            last_good: None,
+            warning: None,
+        }
+    }
+}
+
+fn remember_warning(message: String) {
+    eprintln!("claudex: {message}");
+    with_cache(|cache| cache.warning = Some(message));
+}
+
+pub(crate) fn denylist_load_warning() -> Option<String> {
+    with_cache(|cache| cache.warning.clone())
 }
 
 pub(super) fn with_last_good<R>(update: impl FnOnce(&mut Option<BTreeSet<String>>) -> R) -> R {
+    with_cache(|cache| update(&mut cache.last_good))
+}
+
+#[cfg(test)]
+pub(super) fn clear_denylist_cache() {
+    with_cache(|cache| *cache = DenylistCache::empty());
+}
+
+fn with_cache<R>(update: impl FnOnce(&mut DenylistCache) -> R) -> R {
     #[cfg(test)]
     {
         thread_local! {
-            static LAST_GOOD: std::cell::RefCell<Option<BTreeSet<String>>> =
-                const { std::cell::RefCell::new(None) };
+            static CACHE: std::cell::RefCell<DenylistCache> =
+                const { std::cell::RefCell::new(DenylistCache::empty()) };
         }
-        LAST_GOOD.with(|slot| update(&mut slot.borrow_mut()))
+        CACHE.with(|slot| update(&mut slot.borrow_mut()))
     }
     #[cfg(not(test))]
     {
-        static LAST_GOOD: std::sync::Mutex<Option<BTreeSet<String>>> = std::sync::Mutex::new(None);
-        let mut slot = LAST_GOOD
+        static CACHE: std::sync::Mutex<DenylistCache> =
+            std::sync::Mutex::new(DenylistCache::empty());
+        let mut slot = CACHE
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         update(&mut slot)
