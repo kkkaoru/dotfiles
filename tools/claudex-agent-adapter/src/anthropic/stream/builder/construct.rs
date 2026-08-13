@@ -33,6 +33,7 @@ impl SegmentBuilder {
                 input_tokens,
                 ..Usage::default()
             },
+            last_turn_progress: Vec::new(),
         }
     }
 
@@ -119,6 +120,43 @@ impl SegmentBuilder {
                 .elapsed()
                 .checked_sub(judgment)
                 .is_some()
+    }
+
+    pub(in crate::anthropic::stream) fn snapshot_turn_progress(
+        &self,
+    ) -> Vec<crate::anthropic::TurnProgressEvent> {
+        let elapsed_ms = u64::try_from(self.turn_started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
+        self.provider_tool_calls
+            .iter()
+            .map(|(id, title)| self.progress_event(id, title, elapsed_ms))
+            .collect()
+    }
+
+    fn progress_event(
+        &self,
+        id: &str,
+        title: &str,
+        elapsed_ms: u64,
+    ) -> crate::anthropic::TurnProgressEvent {
+        let completed = self.provider_tool_terminal_ids.contains(id);
+        crate::anthropic::TurnProgressEvent {
+            id: id.to_owned(),
+            title: title.to_owned(),
+            status: if completed {
+                "completed"
+            } else {
+                "in_progress"
+            }
+            .to_owned(),
+            elapsed_ms,
+        }
+    }
+
+    pub(in crate::anthropic::stream) fn publish_turn_progress(
+        &self,
+        session: &crate::anthropic::Session,
+    ) {
+        session.record_turn_progress(self.last_turn_progress.clone());
     }
 
     pub(in crate::anthropic::stream) fn has_committed_output(&self) -> bool {

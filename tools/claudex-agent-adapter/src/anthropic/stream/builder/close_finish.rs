@@ -154,6 +154,7 @@ impl SegmentBuilder {
             let output_tokens = self.usage.output_tokens;
             self.usage.output_tokens = output_tokens.saturating_add(self.injected_output_tokens);
         }
+        self.last_turn_progress = self.snapshot_turn_progress();
         let blocks = std::mem::take(&mut self.blocks);
         Ok(Segment {
             blocks,

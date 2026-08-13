@@ -131,6 +131,8 @@ fn session_with_claude_id(model: &str, claude_session_id: &str) -> Arc<Session> 
         gate: Arc::new(Mutex::new(())),
         last_activity: std::sync::Mutex::new(Instant::now()),
         pending_since: std::sync::Mutex::new(None),
+        turn_progress: Default::default(),
+        adopted_thread_id: Default::default(),
         _slot: slots.try_acquire_owned().expect("session slot"),
     })
 }

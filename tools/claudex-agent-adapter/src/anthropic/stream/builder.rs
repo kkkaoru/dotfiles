@@ -71,6 +71,7 @@ pub(in crate::anthropic) struct SegmentBuilder {
     summarized_reasoning_ids: Vec<String>,
     injected_output_tokens: u64,
     usage: Usage,
+    pub(super) last_turn_progress: Vec<crate::anthropic::TurnProgressEvent>,
 }
 
 impl SegmentBuilder {

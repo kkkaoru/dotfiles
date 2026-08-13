@@ -824,8 +824,8 @@ async fn subagent_keepalive_without_tools_opens_thinking_without_nested_tip() {
         .expect("silent keepalive");
     live.ingest_available(&mut receiver);
     assert!(
-        builder.thinking.is_open(),
-        "tool-less silence must keep native thinking chrome open"
+        !builder.thinking.is_open(),
+        "tool-less silence must not open empty thinking"
     );
     assert!(
         !live.visible_thinking.contains("▶ Thinking"),

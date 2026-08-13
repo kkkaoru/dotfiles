@@ -59,36 +59,21 @@ pub(super) fn prime_subagent_sse(
     // "SubAgent starting… (effort=high)" tip made CC 2.1 collapse the whole
     // thinking block to Wandering, so Cursor ACP ▶ Bash never appeared live
     // even though providerTool events kept firing.
-    let first_delta = if is_subagent {
-        "\u{200b}".to_owned()
-    } else {
-        "Preparing provider session\u{2026}".to_owned()
-    };
-    for frame in subagent_thinking_prime_sse(&first_delta) {
-        let _ = sender.try_send(Ok(Bytes::from(frame)));
-    }
+    // First-flush thinking start only. ZWSP / Preparing… must not open a body.
+    let _ = is_subagent;
+    let _ = sender.try_send(Ok(Bytes::from(subagent_thinking_prime_start())));
     true
 }
 
-fn subagent_thinking_prime_sse(first_delta: &str) -> [String; 2] {
-    [
-        sse(
-            "content_block_start",
-            json!({
-                "type":"content_block_start",
-                "index":0,
-                "content_block":{"type":"thinking","thinking":"","signature":""}
-            }),
-        ),
-        sse(
-            "content_block_delta",
-            json!({
-                "type":"content_block_delta",
-                "index":0,
-                "delta":{"type":"thinking_delta","thinking":first_delta}
-            }),
-        ),
-    ]
+fn subagent_thinking_prime_start() -> String {
+    sse(
+        "content_block_start",
+        json!({
+            "type":"content_block_start",
+            "index":0,
+            "content_block":{"type":"thinking","thinking":"","signature":""}
+        }),
+    )
 }
 
 pub(super) struct PrepareActivityOptions<'a> {

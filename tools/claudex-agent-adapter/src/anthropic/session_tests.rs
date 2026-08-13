@@ -93,6 +93,29 @@ fn session(signature: &str, transcript: Vec<Value>) -> Arc<Session> {
     session_for_model("main-model", signature, transcript)
 }
 
+#[test]
+fn t14_turn_progress_and_adopted_thread_id_stay_off_transcript() {
+    let session = session("sig", vec![json!({"role":"user","content":"hi"})]);
+    session.adopt_thread_id("new-thread".to_owned());
+    assert_eq!(session.effective_thread_id(), "new-thread");
+    session.record_turn_progress(vec![crate::anthropic::TurnProgressEvent {
+        id: "read-1".to_owned(),
+        title: "Read".to_owned(),
+        status: "completed".to_owned(),
+        elapsed_ms: 12,
+    }]);
+    let progress = session.turn_progress.lock().expect("progress");
+    assert_eq!(progress.len(), 1);
+    assert_eq!(progress[0].title, "Read");
+    let transcript = session.transcript.try_lock().expect("transcript");
+    assert!(
+        transcript
+            .iter()
+            .all(|message| message.get("role").and_then(Value::as_str) != Some("claudex.progress"))
+    );
+    assert_eq!(transcript[0]["role"], "user");
+}
+
 fn session_for_model(model: &str, signature: &str, transcript: Vec<Value>) -> Arc<Session> {
     let slots = Arc::new(Semaphore::new(1));
     session_with_slot(model, signature, transcript, slots)
@@ -118,6 +141,8 @@ fn session_with_slot(
         gate: Arc::new(Mutex::new(())),
         last_activity: std::sync::Mutex::new(Instant::now()),
         pending_since: std::sync::Mutex::new(None),
+        turn_progress: Default::default(),
+        adopted_thread_id: Default::default(),
         _slot: slots.try_acquire_owned().expect("session slot"),
     })
 }
@@ -2307,6 +2332,8 @@ async fn finish_detached_session_retains_for_follow_up_reuse() {
         gate: Arc::new(Mutex::new(())),
         last_activity: std::sync::Mutex::new(Instant::now()),
         pending_since: std::sync::Mutex::new(None),
+        turn_progress: Default::default(),
+        adopted_thread_id: Default::default(),
         _slot: slot,
     });
 
@@ -2354,6 +2381,8 @@ async fn detach_and_finish_are_idempotent_when_lists_already_hold_the_session() 
         gate: Arc::new(Mutex::new(())),
         last_activity: std::sync::Mutex::new(Instant::now()),
         pending_since: std::sync::Mutex::new(None),
+        turn_progress: Default::default(),
+        adopted_thread_id: Default::default(),
         _slot: slot,
     });
 
@@ -2389,6 +2418,8 @@ async fn finish_detached_session_keeps_session_detached_if_pending_tools_exist()
         gate: Arc::new(Mutex::new(())),
         last_activity: std::sync::Mutex::new(Instant::now()),
         pending_since: std::sync::Mutex::new(None),
+        turn_progress: Default::default(),
+        adopted_thread_id: Default::default(),
         _slot: slot,
     });
 

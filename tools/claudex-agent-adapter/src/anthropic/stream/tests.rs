@@ -856,8 +856,8 @@ async fn run_thinking_keepalive_phase() -> (ThinkingState, Vec<Value>) {
     assert!(
         visible
             .iter()
-            .any(|block| block.get("type").and_then(Value::as_str) == Some("thinking")),
-        "keepalive must continue after visible text so the 600s watchdog stays alive"
+            .all(|block| block.get("type").and_then(Value::as_str) != Some("thinking")),
+        "silence after visible text must not open STATUS thinking: {visible:?}"
     );
     state
         .close(&mut visible, None)
@@ -1844,9 +1844,11 @@ async fn whitespace_reasoning_delta_does_not_open_blank_thought_chrome() {
         frames.push(serde_json::from_str::<Value>(data.expect("SSE data")).expect("JSON frame"));
     }
     assert!(
-        frames.iter().any(|frame| frame["delta"]["thinking"]
-            == "Claudex is still working; waiting for provider output\u{2026}"),
-        "blank Cline thought must not block the visible keepalive: {frames:?}"
+        frames.iter().all(|frame| {
+            frame["delta"]["thinking"]
+                != "Claudex is still working; waiting for provider output\u{2026}"
+        }),
+        "blank Cline thought must not open STATUS thinking: {frames:?}"
     );
 }
 
@@ -1874,17 +1876,9 @@ async fn activity_keepalive_emits_visible_status_then_zero_width_heartbeat() {
         let data = frame.lines().find_map(|line| line.strip_prefix("data: "));
         frames.push(serde_json::from_str::<Value>(data.expect("SSE data")).expect("JSON frame"));
     }
-    assert_eq!(frames[0]["content_block"]["type"], "thinking");
-    assert_eq!(
-        frames[1]["delta"],
-        json!({
-            "type":"thinking_delta",
-            "thinking":"Claudex is still working; waiting for provider output\u{2026}"
-        })
-    );
-    assert_eq!(
-        frames[2]["delta"],
-        json!({"type":"thinking_delta","thinking":"\u{200b}"})
+    assert!(
+        frames.is_empty(),
+        "silence must not open STATUS thinking: {frames:?}"
     );
 }
 
@@ -1922,10 +1916,9 @@ async fn activity_keepalive_continues_after_bridged_tool_use_so_watchdog_does_no
             .all(|block| block.get("type").and_then(Value::as_str) != Some("thinking")),
         "keepalive thinking must stay out of the committed transcript"
     );
-    let saw_zwsp = stream_contains_zwsp(&mut receiver).await;
     assert!(
-        saw_zwsp,
-        "bridged tool_use must still emit a decoded keepalive for the 600s watchdog"
+        !stream_contains_status(&mut receiver).await,
+        "bridged tool_use must not reopen STATUS thinking"
     );
 }
 
@@ -2015,7 +2008,19 @@ async fn hidden_provider_events_do_not_postpone_visible_activity() {
     while let Some(frame) = receiver.recv().await {
         output.push_str(&String::from_utf8_lossy(&frame.expect("frame")));
     }
-    assert!(output.contains("waiting for provider output"));
+    assert!(
+        !output.contains("waiting for provider output"),
+        "hidden events must not invent STATUS thinking: {output}"
+    );
+}
+
+async fn stream_contains_status(receiver: &mut mpsc::Receiver<Result<Bytes, Infallible>>) -> bool {
+    let mut saw = false;
+    while let Some(frame) = receiver.recv().await {
+        let frame = String::from_utf8(frame.expect("frame").to_vec()).expect("UTF-8 SSE");
+        saw |= frame.contains("Claudex is still working");
+    }
+    saw
 }
 
 async fn stream_contains_zwsp(receiver: &mut mpsc::Receiver<Result<Bytes, Infallible>>) -> bool {
@@ -2188,13 +2193,10 @@ async fn reports_slow_stream_preparation_before_the_provider_is_ready() {
         "must not paint launch prose that collapses CC thinking: {frames:?}"
     );
     assert!(
-        frames.iter().any(|frame| frame.contains("thinking_delta")),
-        "slow prepare must still stream keepalive thinking: {frames:?}"
-    );
-    assert!(
         frames
             .iter()
-            .any(|frame| frame.contains("content_block_stop"))
+            .all(|frame| !frame.contains("Claudex is still working")),
+        "slow prepare must not invent STATUS thinking: {frames:?}"
     );
 }
 
@@ -2210,11 +2212,14 @@ async fn command_code_prepare_primes_silent_thinking_not_canned_text() {
         None
     ));
     let _ = main_receiver.recv().await.expect("message_start");
-    let _ = main_receiver.recv().await.expect("thinking start");
-    let main_delta = main_receiver.recv().await.expect("preparing delta");
+    let start = main_receiver.recv().await.expect("thinking start");
     assert!(
-        String::from_utf8_lossy(&main_delta.expect("frame")).contains("Preparing provider session"),
-        "main turns must prime preparing chrome immediately"
+        String::from_utf8_lossy(&start.expect("frame")).contains("content_block_start"),
+        "main turns must first-flush an empty thinking start"
+    );
+    assert!(
+        main_receiver.try_recv().is_err(),
+        "main must not park Preparing…/ZWSP in the first thinking body"
     );
     assert!(super::prime_subagent_sse(
         &sender,
@@ -2240,8 +2245,12 @@ async fn command_code_prepare_primes_silent_thinking_not_canned_text() {
     assert_eq!(result.expect("prepare result"), Some("ready"));
     let segment = builder.finish(Some(&sender)).await.expect("segment");
     drop(sender);
+    assert_command_code_prime_is_silent(&segment.blocks, &drain_sse(&mut receiver).await);
+}
+
+fn assert_command_code_prime_is_silent(blocks: &[Value], frames: &[String]) {
     assert!(
-        segment.blocks.iter().all(|block| {
+        blocks.iter().all(|block| {
             !block
                 .get("text")
                 .and_then(Value::as_str)
@@ -2251,15 +2260,12 @@ async fn command_code_prepare_primes_silent_thinking_not_canned_text() {
                     .and_then(Value::as_str)
                     .is_some_and(|text| text.contains("still working") || text.contains("▶"))
         }),
-        "canned chrome must not remain in transcript: {:?}",
-        segment.blocks
+        "canned chrome must not remain in transcript: {blocks:?}"
     );
-    let mut frames = Vec::new();
-    while let Some(frame) = receiver.recv().await {
-        frames.push(String::from_utf8(frame.expect("frame").to_vec()).expect("UTF-8 SSE"));
-    }
     assert!(
-        frames.iter().any(|frame| frame.contains("thinking_delta")),
+        frames
+            .iter()
+            .any(|frame| frame.contains("content_block_start") && frame.contains("thinking")),
         "Command Code start must open native thinking: {frames:?}"
     );
     assert!(
@@ -2277,6 +2283,14 @@ async fn command_code_prepare_primes_silent_thinking_not_canned_text() {
         }),
         "Command Code must not invent canned start chrome: {frames:?}"
     );
+}
+
+async fn drain_sse(receiver: &mut mpsc::Receiver<Result<Bytes, Infallible>>) -> Vec<String> {
+    let mut frames = Vec::new();
+    while let Some(frame) = receiver.recv().await {
+        frames.push(String::from_utf8(frame.expect("frame").to_vec()).expect("UTF-8 SSE"));
+    }
+    frames
 }
 
 #[tokio::test]
@@ -2392,8 +2406,14 @@ async fn primes_command_code_thinking_before_the_client_can_disconnect() {
     assert!(
         frames
             .iter()
-            .any(|frame| frame.contains("thinking_delta") && frame.contains('\u{200b}')),
+            .any(|frame| frame.contains("content_block_start") && frame.contains("thinking")),
         "primed Command Code must open native thinking, not text chrome: {frames:?}"
+    );
+    assert!(
+        frames
+            .iter()
+            .all(|frame| !frame.contains("thinking_delta")),
+        "first-flush must not park ZWSP/Preparing in the thinking body: {frames:?}"
     );
     assert!(
         !frames
@@ -2423,8 +2443,14 @@ async fn cursor_subagent_primes_thinking_in_the_same_flush_as_message_start() {
     assert!(
         frames
             .iter()
-            .any(|frame| frame.contains("thinking_delta") && frame.contains('\u{200b}')),
-        "Cursor SubAgent must ZWSP-prime like Command Code so CC does not collapse to Wandering: {frames:?}"
+            .any(|frame| frame.contains("content_block_start") && frame.contains("thinking")),
+        "Cursor SubAgent must first-flush thinking start: {frames:?}"
+    );
+    assert!(
+        frames
+            .iter()
+            .all(|frame| !frame.contains("thinking_delta")),
+        "first-flush must not park ZWSP in the thinking body: {frames:?}"
     );
     assert!(
         !frames.iter().any(|frame| {
@@ -2772,6 +2798,8 @@ async fn rejects_a_malformed_tool_event_before_dispatch() {
         gate: Arc::new(Mutex::new(())),
         last_activity: std::sync::Mutex::new(Instant::now()),
         pending_since: std::sync::Mutex::new(None),
+        turn_progress: Default::default(),
+        adopted_thread_id: Default::default(),
         _slot: slots.try_acquire_owned().expect("session slot"),
     };
     let error = SegmentBuilder::new(1)
@@ -3244,8 +3272,8 @@ async fn fugu_codex_closes_thinking_before_native_read() {
     drop(sender);
     let output = collect_sse_frames(&mut receiver).await;
     assert!(
-        output.contains("\\u200b") || output.contains('\u{200b}'),
-        "ZWSP prime missing: {output}"
+        output.contains("content_block_start") && output.contains("thinking"),
+        "thinking start missing: {output}"
     );
     assert_thinking_stop_before_native_read(&output);
     assert!(
@@ -3855,8 +3883,8 @@ async fn drive_stream_keeps_content_indices_monotonic_across_context_retry() {
         );
     }
 
-    assert_eq!(started_types, vec![json!("thinking"), json!("text")]);
-    assert_eq!(next_index, 2);
+    assert_eq!(started_types, vec![json!("text")]);
+    assert_eq!(next_index, 1);
     assert!(open_index.is_none());
 }
 
@@ -4361,6 +4389,8 @@ async fn drive_stream_retries_provider_failure_onto_a_live_sibling_route() {
         gate: Arc::new(Mutex::new(())),
         last_activity: std::sync::Mutex::new(Instant::now()),
         pending_since: std::sync::Mutex::new(None),
+        turn_progress: Default::default(),
+        adopted_thread_id: Default::default(),
         _slot: slots.try_acquire_owned().expect("session slot"),
     });
     bridge.sessions.lock().await.push(Arc::clone(&session));
@@ -4603,6 +4633,8 @@ fn grok_disconnect_fixture() -> (Bridge, Arc<Session>, Arc<ThreadEventDispatcher
         gate: Arc::new(Mutex::new(())),
         last_activity: std::sync::Mutex::new(Instant::now()),
         pending_since: std::sync::Mutex::new(None),
+        turn_progress: Default::default(),
+        adopted_thread_id: Default::default(),
         _slot: slot,
     });
     (bridge, session, dispatcher)
@@ -4670,6 +4702,8 @@ async fn disconnect_fixture_with_disabled(
         gate: Arc::new(Mutex::new(())),
         last_activity: std::sync::Mutex::new(Instant::now()),
         pending_since: std::sync::Mutex::new(None),
+        turn_progress: Default::default(),
+        adopted_thread_id: Default::default(),
         _slot: Arc::clone(&bridge.session_slots)
             .try_acquire_owned()
             .expect("session slot"),
@@ -4808,6 +4842,8 @@ while read line; do :; done
         gate: Arc::new(Mutex::new(())),
         last_activity: std::sync::Mutex::new(Instant::now()),
         pending_since: std::sync::Mutex::new(None),
+        turn_progress: Default::default(),
+        adopted_thread_id: Default::default(),
         _slot: slots.try_acquire_owned().expect("session slot"),
     });
     (root, app, bridge, session)
@@ -4848,6 +4884,8 @@ async fn retry_failure_drive_fixture()
         gate: Arc::new(Mutex::new(())),
         last_activity: std::sync::Mutex::new(Instant::now()),
         pending_since: std::sync::Mutex::new(None),
+        turn_progress: Default::default(),
+        adopted_thread_id: Default::default(),
         _slot: slots.try_acquire_owned().expect("session slot"),
     });
     (root, app, bridge, session)
@@ -5626,6 +5664,8 @@ async fn failover_usage_limit_turn_attempts_sibling_configured_acp_provider() {
         gate: Arc::new(Mutex::new(())),
         last_activity: std::sync::Mutex::new(Instant::now()),
         pending_since: std::sync::Mutex::new(None),
+        turn_progress: Default::default(),
+        adopted_thread_id: Default::default(),
         _slot: slots.try_acquire_owned().expect("slot"),
     });
     let dispatcher = ThreadEventDispatcher::default();
@@ -5711,6 +5751,8 @@ async fn empty_acp_sibling_retry_bridge() -> (
         gate: Arc::new(Mutex::new(())),
         last_activity: std::sync::Mutex::new(Instant::now()),
         pending_since: std::sync::Mutex::new(None),
+        turn_progress: Default::default(),
+        adopted_thread_id: Default::default(),
         _slot: slots.try_acquire_owned().expect("slot"),
     });
     let dispatcher = ThreadEventDispatcher::default();

@@ -432,6 +432,8 @@ async fn active_turn_with_slots(
         gate: Arc::new(Mutex::new(())),
         last_activity: std::sync::Mutex::new(Instant::now()),
         pending_since: std::sync::Mutex::new(None),
+        turn_progress: Default::default(),
+        adopted_thread_id: Default::default(),
         _slot: Arc::clone(&slots)
             .try_acquire_owned()
             .expect("session slot"),

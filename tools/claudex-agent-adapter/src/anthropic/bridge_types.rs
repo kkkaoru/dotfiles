@@ -97,7 +97,54 @@ pub(crate) struct Session {
     pub(crate) gate: Arc<Mutex<()>>,
     pub(crate) last_activity: std::sync::Mutex<Instant>,
     pub(crate) pending_since: std::sync::Mutex<Option<Instant>>,
+    /// ACP/tool elapsed chrome. Never copied into `transcript` messages.
+    pub(crate) turn_progress: StdMutex<Vec<TurnProgressEvent>>,
+    pub(crate) adopted_thread_id: StdMutex<Option<String>>,
     pub(crate) _slot: OwnedSemaphorePermit,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct TurnProgressEvent {
+    pub(crate) id: String,
+    pub(crate) title: String,
+    pub(crate) status: String,
+    pub(crate) elapsed_ms: u64,
+}
+
+impl Session {
+    pub(crate) fn effective_thread_id(&self) -> String {
+        self.adopted_thread_id
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone())
+            .unwrap_or_else(|| self.thread_id.clone())
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn adopt_thread_id(&self, new_id: String) {
+        if let Ok(mut guard) = self.adopted_thread_id.lock() {
+            *guard = Some(new_id);
+        }
+    }
+
+    pub(crate) fn record_turn_progress(&self, events: Vec<TurnProgressEvent>) {
+        if events.is_empty() {
+            return;
+        }
+        for event in &events {
+            tracing::info!(
+                thread_id = %self.effective_thread_id(),
+                tool_id = %event.id,
+                title = %event.title,
+                status = %event.status,
+                elapsed_ms = event.elapsed_ms,
+                "claudex turn progress"
+            );
+        }
+        if let Ok(mut progress) = self.turn_progress.lock() {
+            progress.extend(events);
+        }
+    }
 }
 
 pub(crate) struct SelectedSession {

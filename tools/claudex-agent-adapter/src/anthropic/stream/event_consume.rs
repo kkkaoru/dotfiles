@@ -11,6 +11,20 @@ use super::{
 use crate::anthropic::ActiveTurn;
 
 impl Bridge {
+    async fn finished_stream_event(
+        &self,
+        session: &Arc<Session>,
+        builder: &mut SegmentBuilder,
+        sender: &StreamSender,
+    ) -> Result<StreamEventState> {
+        let segment = builder.finish(Some(sender)).await?;
+        builder.publish_turn_progress(session);
+        Ok(StreamEventState::Done(Box::new(StreamTurn::Segment {
+            segment,
+            provider_settled: true,
+        })))
+    }
+
     pub(super) async fn external_batch_segment(
         &self,
         session: &Arc<Session>,
@@ -20,6 +34,7 @@ impl Bridge {
     ) -> Result<StreamTurn> {
         let is_subagent = builder.is_subagent;
         let segment = builder.finish(sender).await?;
+        builder.publish_turn_progress(session);
         let sse_open = sender.is_some_and(|sender| !sender.is_closed());
         if !sse_open && is_subagent {
             return Ok(StreamTurn::Segment {
@@ -81,10 +96,7 @@ impl Bridge {
             Err(error) => return Err(error),
         };
         if flow == ControlFlow::Break(()) {
-            Ok(StreamEventState::Done(Box::new(StreamTurn::Segment {
-                segment: builder.finish(Some(sender)).await?,
-                provider_settled: true,
-            })))
+            Ok(self.finished_stream_event(session, builder, sender).await?)
         } else {
             Ok(StreamEventState::Continue)
         }

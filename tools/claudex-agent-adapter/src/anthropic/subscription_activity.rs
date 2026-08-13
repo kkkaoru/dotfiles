@@ -30,7 +30,7 @@ impl SubscriptionActivity {
     }
 
     pub(super) async fn keepalive(
-        &mut self,
+        &self,
         sender: &mpsc::Sender<Result<Bytes, Infallible>>,
         text_index: Option<usize>,
         next_index: &mut usize,
@@ -45,7 +45,8 @@ impl SubscriptionActivity {
         if let Some(activity) = &self.open {
             return send_thinking_delta(sender, activity.index, HEARTBEAT).await;
         }
-        self.start_status(sender, STATUS, next_index).await
+        let _ = (STATUS, next_index);
+        Ok(())
     }
 
     pub(super) async fn start_status(

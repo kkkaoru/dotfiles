@@ -62,6 +62,20 @@ impl SegmentBuilder {
             // Stream-only: do not mutate the committed text buffer.
             return send_activity_heartbeat(stream, index, HEARTBEAT).await;
         }
+        if self.external_tool_calls > 0 && !self.thinking.is_open() {
+            return Ok(());
+        }
+        if self.thinking.holds_live_cot_or_tip() {
+            return self
+                .thinking
+                .elapsed_keepalive(
+                    &self.blocks,
+                    self.turn_started_at.elapsed(),
+                    None,
+                    stream,
+                )
+                .await;
+        }
         self.thinking
             .activity_keepalive(&mut self.blocks, stream)
             .await
@@ -73,26 +87,23 @@ impl SegmentBuilder {
             .last()
             .map(|(_, title)| compact_keepalive_title(title));
         let elapsed = self.turn_started_at.elapsed();
-        let tip = keepalive_elapsed_chrome(last_tool.as_deref(), elapsed);
-        if tip.is_none() {
-            self.open_toolless_thinking(stream).await?;
-        }
-        if self.thinking.is_open() {
-            self.thinking
+        if self.thinking.holds_live_cot_or_tip() && last_tool.is_none() {
+            return self
+                .thinking
                 .elapsed_keepalive(&self.blocks, elapsed, last_tool.as_deref(), stream)
-                .await?;
+                .await;
+        }
+        let tip = keepalive_elapsed_chrome(last_tool.as_deref(), elapsed);
+        if self.thinking.is_open() && tip.is_none() {
+            return self
+                .thinking
+                .elapsed_keepalive(&self.blocks, elapsed, last_tool.as_deref(), stream)
+                .await;
         }
         let Some(tip) = tip else {
             return Ok(());
         };
         self.paint_tool_elapsed_tip(&tip, stream).await
-    }
-
-    async fn open_toolless_thinking(&mut self, stream: Option<&StreamSender>) -> Result<()> {
-        if self.external_tool_calls > 0 || self.thinking.is_open() {
-            return Ok(());
-        }
-        self.thinking.ensure_open(&mut self.blocks, stream).await
     }
 
     async fn paint_tool_elapsed_tip(

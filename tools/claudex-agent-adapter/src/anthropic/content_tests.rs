@@ -519,6 +519,8 @@ mod tests {
             gate: Arc::new(Mutex::new(())),
             last_activity: std::sync::Mutex::new(Instant::now()),
             pending_since: std::sync::Mutex::new(Some(Instant::now())),
+            turn_progress: Default::default(),
+        adopted_thread_id: Default::default(),
             _slot: semaphore.acquire_owned().await.expect("session slot"),
         }
     }

@@ -22,18 +22,11 @@ mod tests {
         state
             .activity_keepalive(&mut blocks, None)
             .await
-            .expect("close empty reasoning then open keepalive");
-        assert_eq!(blocks.len(), 2);
-        assert_eq!(
-            state.open.as_ref().map(|open| open.item_id.as_str()),
-            Some("claudex_activity_keepalive")
-        );
+            .expect("close empty reasoning without opening status thinking");
+        assert_eq!(blocks.len(), 1);
         assert!(
-            state
-                .open
-                .as_ref()
-                .is_some_and(|open| open.text.contains("still working")),
-            "first keepalive should be the visible status"
+            state.open.is_none(),
+            "empty CoT must close; silence must not open STATUS thinking"
         );
     }
 
@@ -62,12 +55,10 @@ mod tests {
             state.open.as_ref().map(|open| open.item_id.as_str()),
             Some("reasoning")
         );
-        assert!(
-            state
-                .open
-                .as_ref()
-                .is_some_and(|open| open.text.ends_with(HEARTBEAT)),
-            "non-empty reasoning should receive ZWSP heartbeat"
+        assert_eq!(
+            state.open.as_ref().map(|open| open.text.as_str()),
+            Some("already thinking"),
+            "CoT buffer stays clean; keepalive ZWSP is stream-only"
         );
     }
 
@@ -451,5 +442,55 @@ mod tests {
             .expect("zwsp-only status");
         let text = state.open.as_ref().map(|open| open.text.as_str());
         assert_eq!(text, Some("hello world\u{200b}"));
+    }
+
+    fn drain_live_frames(receiver: &mut tokio::sync::mpsc::Receiver<Result<Bytes, Infallible>>) -> String {
+        let mut live = String::new();
+        while let Ok(frame) = receiver.try_recv() {
+            live.push_str(&String::from_utf8_lossy(&frame.expect("frame")));
+        }
+        live
+    }
+
+    fn committed_thinking(blocks: &[serde_json::Value]) -> Vec<String> {
+        blocks
+            .iter()
+            .filter(|block| block.get("type").and_then(Value::as_str) == Some("thinking"))
+            .map(|block| {
+                block
+                    .get("thinking")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_owned()
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn t2_live_tip_then_cot_commits_reasoning_only() {
+        use tokio::sync::mpsc;
+        let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
+        let mut state = ThinkingState::default();
+        let mut blocks = Vec::new();
+        state
+            .progress_status_keep_open(&mut blocks, "▶ Read src/lib.rs\n", Some(&sender))
+            .await
+            .expect("live tip");
+        state
+            .delta_text_coalesced("reasoning", 0, "Need to inspect the module graph.", &mut blocks, None)
+            .await
+            .expect("real CoT");
+        drop(sender);
+        let live = drain_live_frames(&mut receiver);
+        assert!(live.contains('▶'), "live SSE must show ▶: {live}");
+        crate::anthropic::stream::sanitize::sanitize_committed_blocks(&mut blocks);
+        let thinking = committed_thinking(&blocks);
+        assert_eq!(thinking.len(), 1, "{thinking:?}");
+        assert!(
+            thinking[0].contains("Need to inspect the module graph"),
+            "{thinking:?}"
+        );
+        assert!(!thinking[0].contains('▶'), "{thinking:?}");
+        assert!(!thinking[0].contains("Claudex is still working"), "{thinking:?}");
     }
 }

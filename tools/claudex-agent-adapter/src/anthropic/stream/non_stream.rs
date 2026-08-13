@@ -47,7 +47,9 @@ impl Bridge {
         let event = match next_event(events, builder.has_external_tool_calls()).await {
             NextEvent::Event(event) => event,
             NextEvent::ExternalBatchReady => {
-                return Ok(ControlFlow::Break(builder.finish(stream).await?));
+                let segment = builder.finish(stream).await?;
+                builder.publish_turn_progress(session);
+                return Ok(ControlFlow::Break(segment));
             }
             NextEvent::Closed => bail!("app-server event stream closed"),
         };
@@ -56,7 +58,11 @@ impl Bridge {
             .await?
         {
             ControlFlow::Continue(()) => Ok(ControlFlow::Continue(())),
-            ControlFlow::Break(()) => Ok(ControlFlow::Break(builder.finish(stream).await?)),
+            ControlFlow::Break(()) => {
+                let segment = builder.finish(stream).await?;
+                builder.publish_turn_progress(session);
+                Ok(ControlFlow::Break(segment))
+            }
         }
     }
 }

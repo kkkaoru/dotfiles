@@ -28,6 +28,7 @@ mod segment;
 mod session;
 mod stream;
 pub(crate) use stream::usage_limit::contains_opencode_quota_marker;
+pub(crate) use session::is_unknown_session_text;
 mod stream_batch;
 mod subagent_continuation;
 mod subagent_reuse;
@@ -71,7 +72,7 @@ use bridge_instructions::{
 mod bridge_types;
 pub(crate) use bridge_types::{
     ActiveTurn, AgentEffortRecord, ContextRetry, MAX_SESSIONS, MAX_SIGNATURE_BUCKETS,
-    SelectedSession, Session, SignaturePool,
+    SelectedSession, Session, SignaturePool, TurnProgressEvent,
 };
 pub use bridge_types::{Bridge, MessagesRequest};
 

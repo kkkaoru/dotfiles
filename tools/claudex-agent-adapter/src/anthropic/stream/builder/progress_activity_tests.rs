@@ -146,3 +146,86 @@ async fn subagent_raw_reasoning_skips_missing_and_whitespace_deltas() {
         .expect("whitespace delta");
     assert!(builder.pending_reasoning.is_empty());
 }
+
+fn committed_thinking(blocks: &[serde_json::Value]) -> Vec<String> {
+    blocks
+        .iter()
+        .filter(|block| block.get("type").and_then(serde_json::Value::as_str) == Some("thinking"))
+        .map(|block| {
+            block
+                .get("thinking")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
+                .to_owned()
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn t1_prime_and_keepalive_only_does_not_commit_empty_thinking() {
+    let mut builder = SegmentBuilder::new(1).with_primed_thinking();
+    builder
+        .activity_keepalive(None)
+        .await
+        .expect("silence keepalive");
+    let segment = builder.finish(None).await.expect("finish");
+    assert!(
+        committed_thinking(&segment.blocks).is_empty(),
+        "prime+keepalive must not leave empty/STATUS thinking: {:?}",
+        segment.blocks
+    );
+    let dumped = serde_json::to_string(&segment.blocks).expect("json");
+    assert!(!dumped.contains('\u{200b}'), "{dumped}");
+    assert!(!dumped.contains("Claudex is still working"), "{dumped}");
+    assert!(!dumped.contains("Thought for"), "{dumped}");
+}
+
+#[tokio::test]
+async fn t1_main_does_not_reopen_thinking_after_parent_agent_tool_use() {
+    let mut builder = SegmentBuilder::new(1).with_primed_thinking();
+    builder.external_tool_calls = 1;
+    builder.thinking.close(&mut builder.blocks, None).await.ok();
+    builder
+        .activity_keepalive(None)
+        .await
+        .expect("keepalive after parent Agent");
+    assert!(
+        !builder.thinking.is_open(),
+        "main must not reopen thinking keepalive after Agent/Task tool_use"
+    );
+    let segment = builder.finish(None).await.expect("finish");
+    assert!(committed_thinking(&segment.blocks).is_empty());
+}
+
+#[tokio::test]
+async fn t1_stop_without_cot_or_tip_drops_thinking_block() {
+    let mut builder = SegmentBuilder::new(1).with_primed_thinking();
+    let segment = builder.finish(None).await.expect("finish");
+    assert!(committed_thinking(&segment.blocks).is_empty());
+    let dumped = serde_json::to_string(&segment.blocks).expect("json");
+    assert!(!dumped.contains('\u{200b}'), "{dumped}");
+    assert!(!dumped.contains("Claudex is still working"), "{dumped}");
+}
+
+#[tokio::test]
+async fn t14_turn_progress_stays_off_the_transcript() {
+    let mut builder = SegmentBuilder::new(1).with_subagent(true);
+    builder
+        .provider_tool_calls
+        .push(("read-1".to_owned(), "Read".to_owned()));
+    builder
+        .provider_tool_calls
+        .push(("bash-1".to_owned(), "Bash".to_owned()));
+    builder.provider_tool_terminal_ids.insert("read-1".to_owned());
+    builder.provider_tool_terminal_ids.insert("bash-1".to_owned());
+    let _ = builder.finish(None).await.expect("finish");
+    let progress = builder.last_turn_progress.clone();
+    assert_eq!(progress.len(), 2, "{progress:?}");
+    assert_eq!(progress[0].title, "Read");
+    assert_eq!(progress[1].title, "Bash");
+    assert_eq!(progress[0].status, "completed");
+    assert!(
+        progress.iter().all(|event| event.elapsed_ms < u64::MAX),
+        "{progress:?}"
+    );
+}

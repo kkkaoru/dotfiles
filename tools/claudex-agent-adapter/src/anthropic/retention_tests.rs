@@ -210,6 +210,8 @@ fn session_with_claude_id(activity: Instant, claude_session_id: &str) -> Arc<Ses
         gate: Arc::new(Mutex::new(())),
         last_activity: std::sync::Mutex::new(activity),
         pending_since: std::sync::Mutex::new(Some(activity)),
+        turn_progress: Default::default(),
+        adopted_thread_id: Default::default(),
         _slot: slots.try_acquire_owned().unwrap(),
     })
 }

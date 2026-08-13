@@ -109,8 +109,11 @@ impl ThinkingState {
             self.close(blocks, stream).await?;
         }
         if self.open.is_none() {
-            self.start(blocks, item_id, summary_index, stream).await?;
-        } else if coalesce {
+            return self
+                .start_with_visible(blocks, item_id, summary_index, delta, stream)
+                .await;
+        }
+        if coalesce {
             // Tool/prose may open progress chrome first. Promote it to native
             // thought so sanitize keeps the reasoning in the transcript.
             self.promote_keepalive_progress(item_id);
@@ -127,6 +130,7 @@ impl ThinkingState {
         })
         .await
     }
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(in crate::anthropic::stream) async fn ensure_open(
         &mut self,
         blocks: &mut Vec<Value>,
@@ -145,8 +149,20 @@ impl ThinkingState {
         summary_index: i64,
         stream: Option<&StreamSender>,
     ) -> Result<()> {
+        self.start_with_visible(blocks, item_id, summary_index, "", stream)
+            .await
+    }
+
+    async fn start_with_visible(
+        &mut self,
+        blocks: &mut Vec<Value>,
+        item_id: &str,
+        summary_index: i64,
+        first_delta: &str,
+        stream: Option<&StreamSender>,
+    ) -> Result<()> {
         let index = blocks.len();
-        blocks.push(json!({"type":"thinking","thinking":"","signature":""}));
+        blocks.push(json!({"type":"thinking","thinking":first_delta,"signature":""}));
         send_stream_frame(stream, "content_block_start", || {
             json!({
                 "type":"content_block_start", "index":index,
@@ -154,15 +170,32 @@ impl ThinkingState {
             })
         })
         .await?;
+        if !first_delta.is_empty() {
+            send_first_thinking_delta(stream, index, first_delta).await?;
+        }
         self.open = Some(OpenThinking {
             index,
             item_id: item_id.to_owned(),
             summary_index,
             signature: thinking_signature(item_id),
-            text: String::new(),
+            text: first_delta.to_owned(),
         });
         Ok(())
     }
+}
+
+async fn send_first_thinking_delta(
+    stream: Option<&StreamSender>,
+    index: usize,
+    first_delta: &str,
+) -> Result<()> {
+    send_stream_frame(stream, "content_block_delta", || {
+        json!({
+            "type":"content_block_delta", "index":index,
+            "delta":{"type":"thinking_delta","thinking":first_delta}
+        })
+    })
+    .await
 }
 
 #[path = "thinking_progress.rs"]

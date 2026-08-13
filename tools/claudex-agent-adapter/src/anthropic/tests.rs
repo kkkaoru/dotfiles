@@ -166,6 +166,8 @@ fn test_session_at(
         gate: Arc::new(tokio::sync::Mutex::new(())),
         last_activity: std::sync::Mutex::new(last_activity),
         pending_since: std::sync::Mutex::new(has_pending_tool.then_some(last_activity)),
+        turn_progress: Default::default(),
+        adopted_thread_id: Default::default(),
         _slot: Arc::clone(semaphore).try_acquire_owned().unwrap(),
     })
 }
