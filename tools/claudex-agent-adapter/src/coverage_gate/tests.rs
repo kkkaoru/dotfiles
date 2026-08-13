@@ -124,8 +124,8 @@ fn retries_llvm_cov_json_export_on_segfault_or_corrupt_profraw() {
         std::process::ExitStatus::from_raw(libc::SIGSEGV)
     ));
     assert!(
-        should_retry_llvm_cov_export(&json, std::process::ExitStatus::from_raw(1 << 8)),
-        "corrupt profraw merge (exit 1) must retry the json export"
+        !should_retry_llvm_cov_export(&json, std::process::ExitStatus::from_raw(1 << 8)),
+        "corrupt profraw merge (exit 1) must fail without dropping profiles"
     );
     assert!(!should_retry_llvm_cov_export(
         &clean,
@@ -135,17 +135,6 @@ fn retries_llvm_cov_json_export_on_segfault_or_corrupt_profraw() {
         !should_retry_llvm_cov_export(&json, std::process::ExitStatus::from_raw(101 << 8)),
         "failing tests (exit 101) must not look like a merge flake"
     );
-}
-
-#[test]
-fn corrupt_profile_cleanup_removes_invalid_nested_profiles() {
-    let fixture = tempfile::tempdir().expect("coverage fixture");
-    let nested = fixture.path().join("nested");
-    fs::create_dir(&nested).expect("nested profile directory");
-    let invalid = nested.join("invalid.profraw");
-    fs::write(&invalid, b"not an llvm profile").expect("invalid profile");
-    super::runner::remove_corrupt_profiles(fixture.path());
-    assert!(!invalid.exists());
 }
 
 #[test]
@@ -280,6 +269,44 @@ fn production_entrypoint_preserves_failed_isolated_artifacts() {
 fn accepts_a_passing_report_and_ignores_nonproduction_files() {
     let fixture = report_fixture(95.0, 95.0);
     audit_report(fixture.path(), &fixture.path().join("report.json")).expect("passing coverage");
+    assert!(
+        fixture
+            .path()
+            .join("target/coverage-last/metrics.json")
+            .is_file()
+    );
+    assert!(
+        fixture
+            .path()
+            .join("target/coverage-last/branch-coverage.json")
+            .is_file()
+    );
+}
+
+#[test]
+fn rejects_a_report_below_the_committed_baseline() {
+    let fixture = report_fixture(95.0, 100.0);
+    fs::write(
+        fixture.path().join("coverage-baseline.json"),
+        br#"{"lines":95.0,"functions":95.0,"regions":95.0,"branches":96.0}"#,
+    )
+    .expect("baseline");
+    let error = audit_report(fixture.path(), &fixture.path().join("report.json"))
+        .expect_err("baseline drop");
+    assert!(error.to_string().contains("below baseline"), "{error:#}");
+}
+
+#[test]
+fn report_only_reuses_the_retained_successful_report() {
+    let fixture = report_fixture(100.0, 100.0);
+    let retained = fixture.path().join("target/coverage-last");
+    fs::create_dir_all(&retained).expect("retained coverage directory");
+    fs::copy(
+        fixture.path().join("report.json"),
+        retained.join("branch-coverage.json"),
+    )
+    .expect("retained report");
+    super::report(fixture.path()).expect("retained report");
 }
 
 #[test]
@@ -437,7 +464,7 @@ fn executes_clean_before_coverage_and_reports_command_failures() {
 }
 
 #[test]
-fn command_status_retries_llvm_cov_json_export_after_a_merge_flake() {
+fn command_status_rejects_corrupt_profile_merge_without_dropping_profiles() {
     if env::var_os("CLAUDEX_COVERAGE_GATE_RETRY_CHILD").is_some() {
         let root = tempfile::tempdir().expect("retry fixture");
         let target = root.path().join("target/llvm-cov-retry");
@@ -452,10 +479,10 @@ fn command_status_retries_llvm_cov_json_export_after_a_merge_flake() {
             ],
         )
         .expect("retryable json export");
-        assert!(status.success(), "retried export must succeed");
+        assert!(!status.success(), "corrupt merge must fail the gate");
         assert!(
-            target.join(".retried").is_file(),
-            "fake cargo must observe the retry"
+            target.join("bad.profraw").is_file(),
+            "corrupt profiles must remain available for diagnosis"
         );
         return;
     }
@@ -464,7 +491,7 @@ fn command_status_retries_llvm_cov_json_export_after_a_merge_flake() {
     let cargo = fixture.path().join("cargo");
     fs::write(
         &cargo,
-        "#!/bin/sh\nmkdir -p \"$CARGO_LLVM_COV_TARGET_DIR\"\nif printf '%s' \"$*\" | grep -q -- '--json'; then\n  if [ ! -f \"$CARGO_LLVM_COV_TARGET_DIR/.retried\" ]; then\n    touch \"$CARGO_LLVM_COV_TARGET_DIR/.retried\"\n    exit 1\n  fi\nfi\nexit 0\n",
+        "#!/bin/sh\nmkdir -p \"$CARGO_LLVM_COV_TARGET_DIR\"\ntouch \"$CARGO_LLVM_COV_TARGET_DIR/bad.profraw\"\nexit 1\n",
     )
     .expect("fake cargo");
     fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755)).expect("executable cargo");
@@ -477,7 +504,7 @@ fn command_status_retries_llvm_cov_json_export_after_a_merge_flake() {
     let status = Command::new(env::current_exe().expect("test executable"))
         .args([
             "--exact",
-            "coverage_gate::tests::command_status_retries_llvm_cov_json_export_after_a_merge_flake",
+            "coverage_gate::tests::command_status_rejects_corrupt_profile_merge_without_dropping_profiles",
         ])
         .env("CLAUDEX_COVERAGE_GATE_RETRY_CHILD", "1")
         .env("PATH", path)

@@ -450,11 +450,24 @@ existing `profraw`/`profdata` files under `target/llvm-cov-*`. It never cleans
 those artifacts or runs tests; it fails before invoking Cargo when no profile
 data exists, and a failed profile merge is reported directly.
 
-Coverage uses an isolated `target/llvm-cov-*` directory. A later coverage run
-automatically removes artifacts older than ten minutes, while preserving its
-own directory and a directory owned by a live sibling coverage process. This
-keeps retained failure diagnostics briefly without allowing old instrumented
-build outputs to accumulate indefinitely.
+Coverage uses an isolated `target/llvm-cov-$PID` directory and the unique
+`LLVM_PROFILE_FILE=%m-%p` pattern. Run the full suite once per meaningful test
+batch with `cargo coverage`; use `cargo coverage-report` as the default second
+step. The report step reuses `target/coverage-last/branch-coverage.json` and
+`metrics.json` when available, so it fails fast without rerunning tests.
+A later coverage run automatically removes artifacts older than ten minutes,
+while preserving its own directory and a directory owned by a live sibling
+coverage process. Successful metrics and the report remain in
+`target/coverage-last/` for diagnosis and report reuse.
+
+`coverage-baseline.json` records the committed Line/Function/Region/Branch
+floor. A successful report below any baseline metric fails the gate rather than
+publishing a drop. Set `CLAUDEX_COVERAGE_ALLOW_DROP=1` or create the explicit
+`coverage-baseline.allow` file only when a baseline change is intentional.
+Corrupt profile merges also fail without deleting profiles, preventing a
+partial merge from silently lowering coverage. If retained artifacts are
+missing, `cargo coverage-report` instructs you to regenerate them with
+`cargo coverage`.
 
 The build also rejects production Rust files over 400 physical lines; dedicated
 `tests.rs`, `*_tests.rs`, and `tests/**` files are exempt. Clippy rejects

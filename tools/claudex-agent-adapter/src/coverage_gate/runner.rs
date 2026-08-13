@@ -1,5 +1,4 @@
 use std::{
-    fs,
     os::unix::process::ExitStatusExt,
     path::{Path, PathBuf},
     process::{Command, ExitStatus},
@@ -25,6 +24,10 @@ pub fn run(root: &Path) -> Result<()> {
 }
 
 pub fn report(root: &Path) -> Result<()> {
+    let retained = root.join("target/coverage-last/branch-coverage.json");
+    if retained.is_file() {
+        return super::audit_report(root, &retained);
+    }
     let target = existing_coverage_target(root)?;
     let report = target.join("branch-coverage.json");
     let status = command_status(root, &target, &report_arguments(&report))?;
@@ -59,7 +62,12 @@ fn existing_coverage_target(root: &Path) -> Result<PathBuf> {
     });
     candidates
         .pop()
-        .with_context(|| format!("no profraw/profdata found under {}", target_root.display()))
+        .with_context(|| {
+            format!(
+                "no profraw/profdata found under {}; run `cargo coverage` to regenerate coverage artifacts",
+                target_root.display()
+            )
+        })
 }
 
 fn has_profile_data(root: &Path) -> bool {
@@ -123,7 +131,6 @@ pub(super) fn command_status(
         .status()
         .context("failed to run cargo")?;
     if should_retry_llvm_cov_export(arguments, status) {
-        remove_corrupt_profiles(target);
         status = coverage_command(root, target, arguments)
             .status()
             .context("failed to retry cargo llvm-cov export")?;
@@ -146,44 +153,13 @@ pub(super) fn coverage_command(root: &Path, target: &Path, arguments: &[String])
     command
 }
 
-pub(super) fn remove_corrupt_profiles(target: &Path) {
-    let mut pending = vec![target.to_owned()];
-    let mut profiles = Vec::new();
-    while let Some(path) = pending.pop() {
-        let Ok(entries) = fs::read_dir(path) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                pending.push(path);
-            } else if path.extension().is_some_and(|ext| ext == "profraw") {
-                profiles.push(path);
-            }
-        }
-    }
-    for profile in profiles {
-        let probe = target.join("coverage-probe.profdata");
-        let valid = Command::new("llvm-profdata")
-            .args(["merge", "-sparse", "-o"])
-            .arg(&probe)
-            .arg(&profile)
-            .status()
-            .is_ok_and(|status| status.success());
-        let _ = fs::remove_file(&probe);
-        if !valid {
-            let _ = fs::remove_file(profile);
-        }
-    }
-}
-
 pub(super) fn should_retry_llvm_cov_export(arguments: &[String], status: ExitStatus) -> bool {
     if !arguments.iter().any(|argument| argument == "--json") {
         return false;
     }
-    // SIGSEGV is the known Apple Silicon export flake. Exit 1 is llvm-profdata
-    // refusing a corrupt .profraw header after an otherwise green test run.
-    status.signal() == Some(libc::SIGSEGV) || status.code() == Some(1)
+    // SIGSEGV is the known Apple Silicon export flake. A status 1 is a
+    // corrupt-profile merge and must fail rather than publish lower coverage.
+    status.signal() == Some(libc::SIGSEGV)
 }
 
 pub(super) fn run_commands(

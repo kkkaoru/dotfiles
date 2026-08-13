@@ -3,8 +3,10 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
+mod metrics;
 mod report;
 mod runner;
+use metrics::{CoverageMetrics, enforce_baseline, persist};
 #[cfg(test)]
 use report::INSTRUMENTATION_EXCEPTIONS;
 #[cfg(test)]
@@ -28,6 +30,8 @@ pub fn audit_report(root: &Path, report: &Path) -> Result<()> {
     let data = document
         .pointer("/data/0")
         .context("llvm-cov report has no data")?;
+    let metrics = CoverageMetrics::from_report(root, data)?;
+    enforce_baseline(root, &metrics)?;
     let total_failures = TOTAL_METRICS
         .iter()
         .map(|metric| {
@@ -50,7 +54,7 @@ pub fn audit_report(root: &Path, report: &Path) -> Result<()> {
     }
     let failures = production_line_failures(root, data)?;
     if failures.is_empty() {
-        return Ok(());
+        return persist(root, report, &metrics);
     }
     bail!(
         "production files below {MINIMUM_PERCENT:.0}% line coverage:\n{}",
