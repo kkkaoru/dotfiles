@@ -84,25 +84,32 @@ impl RoutedBackend {
         loop {
             let state = startup.borrow_and_update().clone();
             match state {
-                StartupState::Starting => {
-                    if let Some((next_generation, next_startup)) =
-                        self.retry_closed_startup(generation, &mut startup).await?
-                    {
-                        generation = next_generation;
-                        startup = next_startup;
-                    }
-                }
+                StartupState::Starting =>
+                    self.advance_closed_startup(&mut generation, &mut startup).await?,
                 StartupState::Ready(Ok(backend))
                     if self.startup_generation() == generation && backend.is_alive() =>
-                {
-                    return Ok(backend);
-                }
-                StartupState::Ready(Ok(backend)) => {
-                    (generation, startup) = self.retry_stale_backend(generation, backend).await?;
-                }
+                    return Ok(backend),
+                StartupState::Ready(Ok(backend)) =>
+                    (generation, startup) = self.retry_stale_backend(generation, backend).await?,
                 StartupState::Ready(Err(error)) => bail!(error.to_string()),
             }
         }
+    }
+
+    /// Advance past a `Starting` observation, adopting a fresh startup
+    /// generation if the current one closed without ever becoming ready.
+    async fn advance_closed_startup(
+        &self,
+        generation: &mut u64,
+        startup: &mut tokio::sync::watch::Receiver<StartupState>,
+    ) -> Result<()> {
+        if let Some((next_generation, next_startup)) =
+            self.retry_closed_startup(*generation, startup).await?
+        {
+            *generation = next_generation;
+            *startup = next_startup;
+        }
+        Ok(())
     }
 
     async fn retry_closed_startup(

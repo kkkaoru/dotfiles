@@ -856,6 +856,18 @@ async fn should_proxy_clears_when_retained_pid_mismatches() {
     );
 }
 
+/// Accept connections and stall each one past reqwest's probe timeout, so a
+/// health check observes `is_timeout` rather than a connect refusal.
+async fn accept_and_stall_connections(listener: TcpListener) {
+    while let Ok((mut stream, _)) = listener.accept().await {
+        tokio::spawn(async move {
+            let mut buf = [0; 1024];
+            let _ = stream.read(&mut buf).await;
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        });
+    }
+}
+
 #[tokio::test]
 async fn should_proxy_times_out_health_without_clearing_retained() {
     let silent = TcpListener::bind("127.0.0.1:0")
@@ -864,15 +876,7 @@ async fn should_proxy_times_out_health_without_clearing_retained() {
     let silent_addr = silent.local_addr().expect("silent retained address");
     // Read the request then stall so reqwest's 400ms probe timeout fires
     // (is_timeout), rather than a connect refusal.
-    tokio::spawn(async move {
-        while let Ok((mut stream, _)) = silent.accept().await {
-            tokio::spawn(async move {
-                let mut buf = [0; 1024];
-                let _ = stream.read(&mut buf).await;
-                tokio::time::sleep(Duration::from_secs(2)).await;
-            });
-        }
-    });
+    tokio::spawn(accept_and_stall_connections(silent));
     let root = tempfile::tempdir().expect("direct slow health fixture");
     let path = root.path().join("retained.json");
     std::fs::write(

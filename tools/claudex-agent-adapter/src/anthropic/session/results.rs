@@ -69,6 +69,10 @@ mod tests {
 
     #[tokio::test]
     async fn submit_tool_results_targets_the_owning_claude_session_for_provider_models() {
+        assert_all_provider_models_target_owning_session().await;
+    }
+
+    async fn assert_all_provider_models_target_owning_session() {
         for model in [
             "glm-5.2:cloud",
             "gpt-5.4",
@@ -77,51 +81,52 @@ mod tests {
             "fugu",
             "cursor-agent",
         ] {
-            let backend = AgentBackend::spawn_routes(&[BackendRoute::new(
-                model,
-                BackendKind::CodexAppServer,
-            )]);
-            let AgentBackend::SessionScoped(scopes) = backend.as_ref() else {
-                panic!("expected SessionScoped backends");
-            };
-            for id in ["tui-a", "tui-b"] {
-                let leaf = Arc::new(AgentBackend::Grok(
-                    crate::grok_acp::GrokAcp::alive_for_test(),
-                ));
-                scopes.insert_scope_for_test(
-                    id,
-                    AgentBackend::routed(vec![(model.to_owned(), leaf)]),
-                );
-            }
-            let _ = scopes.scope(None);
-            let bridge = Bridge::new_with_backend(Arc::clone(&backend), model.to_owned());
-            let session = session_for(model, "tui-a");
-            session
-                .pending_tools
-                .lock()
-                .await
-                .insert("tool-1".to_owned(), json!(42));
-            let error = bridge
-                .submit_tool_results(
-                    &session,
-                    vec![ToolResult {
-                        tool_use_id: "tool-1".to_owned(),
-                        content_items: vec![json!({"type":"inputText","text":"ok"})],
-                        is_error: false,
-                    }],
-                )
-                .await
-                .expect_err("Grok leaf rejects Claude tool results");
-            let message = error.to_string();
-            assert!(
-                !message.contains("not initialized"),
-                "{model}: Bridge must not send tool results to `_anonymous`: {message}"
-            );
-            assert!(
-                message.contains("Grok ACP"),
-                "{model}: expected the owning Claude-session pool: {message}"
-            );
+            assert_submit_targets_owning_session(model).await;
         }
+    }
+
+    /// A `SessionScoped` backend with two Claude-session pools must route tool
+    /// results to the pool that owns the session, never to the anonymous one.
+    async fn assert_submit_targets_owning_session(model: &str) {
+        let backend = AgentBackend::spawn_routes(&[BackendRoute::new(
+            model,
+            BackendKind::CodexAppServer,
+        )]);
+        let AgentBackend::SessionScoped(scopes) = backend.as_ref() else {
+            panic!("expected SessionScoped backends");
+        };
+        for id in ["tui-a", "tui-b"] {
+            let leaf = Arc::new(AgentBackend::Grok(crate::grok_acp::GrokAcp::alive_for_test()));
+            scopes.insert_scope_for_test(id, AgentBackend::routed(vec![(model.to_owned(), leaf)]));
+        }
+        let _ = scopes.scope(None);
+        let bridge = Bridge::new_with_backend(Arc::clone(&backend), model.to_owned());
+        let session = session_for(model, "tui-a");
+        session
+            .pending_tools
+            .lock()
+            .await
+            .insert("tool-1".to_owned(), json!(42));
+        let error = bridge
+            .submit_tool_results(
+                &session,
+                vec![ToolResult {
+                    tool_use_id: "tool-1".to_owned(),
+                    content_items: vec![json!({"type":"inputText","text":"ok"})],
+                    is_error: false,
+                }],
+            )
+            .await
+            .expect_err("Grok leaf rejects Claude tool results");
+        let message = error.to_string();
+        assert!(
+            !message.contains("not initialized"),
+            "{model}: Bridge must not send tool results to `_anonymous`: {message}"
+        );
+        assert!(
+            message.contains("Grok ACP"),
+            "{model}: expected the owning Claude-session pool: {message}"
+        );
     }
 
     fn session_for(model: &str, claude_session_id: &str) -> Session {

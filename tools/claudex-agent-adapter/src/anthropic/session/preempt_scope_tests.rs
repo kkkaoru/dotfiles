@@ -24,9 +24,7 @@ async fn multi_tui_preempt_requires_the_owning_claude_session_pool() {
         "main-model",
         BackendKind::CodexAppServer,
     )]);
-    let AgentBackend::SessionScoped(scopes) = top.as_ref() else {
-        panic!("expected SessionScoped backends");
-    };
+    let scopes = as_session_scoped(&top);
     scopes.insert_scope_for_test(
         "tui-a",
         AgentBackend::routed(vec![(
@@ -85,6 +83,13 @@ async fn multi_tui_preempt_requires_the_owning_claude_session_pool() {
     );
     drop(gate);
     top.shutdown().await;
+}
+
+fn as_session_scoped(backend: &AgentBackend) -> &crate::agent_backend::SessionScopedBackends {
+    let AgentBackend::SessionScoped(scopes) = backend else {
+        panic!("expected SessionScoped backends");
+    };
+    scopes
 }
 
 fn request_with_session(model: &str, claude_session_id: &str) -> MessagesRequest {

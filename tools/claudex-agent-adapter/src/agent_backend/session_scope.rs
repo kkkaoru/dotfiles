@@ -126,13 +126,12 @@ impl SessionScopedBackends {
 
     pub(crate) fn started_models(&self) -> Vec<String> {
         let scopes = self.scopes.lock().expect("session scopes poisoned");
-        let mut models = BTreeSet::new();
-        for backend in scopes.values() {
-            for model in backend.started_models() {
-                models.insert(model);
-            }
-        }
-        models.into_iter().collect()
+        scopes
+            .values()
+            .flat_map(|backend| backend.started_models())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
     }
 
     pub(crate) fn model_is_alive(&self, model: &str) -> bool {
@@ -164,25 +163,24 @@ impl SessionScopedBackends {
     }
 
     pub(crate) async fn shutdown_all(&self) {
-        let backends = {
-            let mut scopes = self.scopes.lock().expect("session scopes poisoned");
-            let drained = scopes.drain().collect::<Vec<_>>();
-            if !drained.is_empty() {
-                tracing::info!(
-                    target: "claudex.provider",
-                    log_event = "provider_session_scope_shutdown_all",
-                    provider_session_scope_count = drained.len(),
-                    "shutting down every Claude-session provider pool"
-                );
-            }
-            drained
-                .into_iter()
-                .map(|(_, backend)| backend)
-                .collect::<Vec<_>>()
-        };
-        for backend in backends {
+        for backend in self.drain_scopes_for_shutdown() {
             shutdown_scoped_pool(&backend).await;
         }
+    }
+
+    /// Remove and return every scoped backend, logging once if any were drained.
+    fn drain_scopes_for_shutdown(&self) -> Vec<Arc<AgentBackend>> {
+        let mut scopes = self.scopes.lock().expect("session scopes poisoned");
+        let drained = scopes.drain().collect::<Vec<_>>();
+        if !drained.is_empty() {
+            tracing::info!(
+                target: "claudex.provider",
+                log_event = "provider_session_scope_shutdown_all",
+                provider_session_scope_count = drained.len(),
+                "shutting down every Claude-session provider pool"
+            );
+        }
+        drained.into_iter().map(|(_, backend)| backend).collect()
     }
 }
 

@@ -32,33 +32,37 @@ async fn top_level_respond_finds_unique_started_pool_for_provider_models() {
         "fugu",
         "muse-spark",
     ] {
-        let scoped =
-            AgentBackend::spawn_routes(&[BackendRoute::new(model, BackendKind::CodexAppServer)]);
-        let AgentBackend::SessionScoped(scopes) = scoped.as_ref() else {
-            panic!("expected SessionScoped backends");
-        };
-        let leaf = Arc::new(AgentBackend::Grok(
-            crate::grok_acp::GrokAcp::alive_for_test(),
-        ));
-        scopes.insert_scope_for_test(
-            "tui-session",
-            AgentBackend::routed(vec![(model.to_owned(), Arc::clone(&leaf))]),
-        );
-        let _ = scopes.scope(None);
-        let error = scoped
-            .respond_for_model(model, serde_json::json!(1), serde_json::json!({}))
-            .await
-            .expect_err("Grok leaf rejects Claude tool results");
-        let message = error.to_string();
-        assert!(
-            !message.contains("not initialized"),
-            "{model}: tool result must not hit the uninitialized anonymous pool: {message}"
-        );
-        assert!(
-            message.contains("Grok ACP"),
-            "{model}: expected the started Claude-session pool: {message}"
-        );
+        assert_respond_finds_unique_started_pool(model).await;
     }
+}
+
+/// A single Claude-session pool that started `model` must be the one the
+/// top-level `respond_for_model` targets, even with an unguarded anonymous scope.
+async fn assert_respond_finds_unique_started_pool(model: &str) {
+    let scoped =
+        AgentBackend::spawn_routes(&[BackendRoute::new(model, BackendKind::CodexAppServer)]);
+    let AgentBackend::SessionScoped(scopes) = scoped.as_ref() else {
+        panic!("expected SessionScoped backends");
+    };
+    let leaf = Arc::new(AgentBackend::Grok(crate::grok_acp::GrokAcp::alive_for_test()));
+    scopes.insert_scope_for_test(
+        "tui-session",
+        AgentBackend::routed(vec![(model.to_owned(), Arc::clone(&leaf))]),
+    );
+    let _ = scopes.scope(None);
+    let error = scoped
+        .respond_for_model(model, serde_json::json!(1), serde_json::json!({}))
+        .await
+        .expect_err("Grok leaf rejects Claude tool results");
+    let message = error.to_string();
+    assert!(
+        !message.contains("not initialized"),
+        "{model}: tool result must not hit the uninitialized anonymous pool: {message}"
+    );
+    assert!(
+        message.contains("Grok ACP"),
+        "{model}: expected the started Claude-session pool: {message}"
+    );
 }
 
 #[tokio::test]

@@ -6,6 +6,34 @@ use super::{
     models::{CLAUDE_LONG_CONTEXT_MODEL, normalize_claude_model_to_haiku},
 };
 
+/// Route a SubAgent whose model normalizes to Claude's small/fast tier, escalating
+/// to the long-context subscription model when the conversation is too large for
+/// the haiku-class model. Returns `None` when the model isn't a Claude subscription
+/// model, so the caller can fall through to provider routing.
+fn route_subagent_claude_model(request: &mut MessagesRequest) -> Option<RouteDecision> {
+    if request.model == CLAUDE_LONG_CONTEXT_MODEL {
+        return Some(RouteDecision::Subscription);
+    }
+    let model = normalize_claude_model_to_haiku(&request.model)?;
+    if conversation_exceeds_haiku_budget(request) {
+        tracing::warn!(
+            request_model = %request.model,
+            normalized_model = CLAUDE_LONG_CONTEXT_MODEL,
+            conversation_tokens = conversation_token_count(request),
+            "routing an oversized Claude SubAgent through the long-context subscription model"
+        );
+        request.model = CLAUDE_LONG_CONTEXT_MODEL.to_owned();
+        return Some(RouteDecision::Subscription);
+    }
+    tracing::warn!(
+        request_model = %request.model,
+        normalized_model = model,
+        "routing a Claude SubAgent tool request through the small fast model"
+    );
+    request.model = model.to_owned();
+    Some(RouteDecision::Subscription)
+}
+
 /// Resolve a request while retaining whether a SubAgent model came from its parent.
 /// Explicit child model selections are never rewritten.
 pub(in crate::anthropic) fn resolve_request_model_with_origin(
@@ -56,31 +84,9 @@ pub(in crate::anthropic) fn resolve_request_model_with_origin(
     }
     if is_subagent
         && (!has_model_override || origin.model_is_inherited)
-        && request.model == CLAUDE_LONG_CONTEXT_MODEL
+        && let Some(decision) = route_subagent_claude_model(request)
     {
-        return Ok(RouteDecision::Subscription);
-    }
-    if is_subagent
-        && (!has_model_override || origin.model_is_inherited)
-        && let Some(model) = normalize_claude_model_to_haiku(&request.model)
-    {
-        if conversation_exceeds_haiku_budget(request) {
-            tracing::warn!(
-                request_model = %request.model,
-                normalized_model = CLAUDE_LONG_CONTEXT_MODEL,
-                conversation_tokens = conversation_token_count(request),
-                "routing an oversized Claude SubAgent through the long-context subscription model"
-            );
-            request.model = CLAUDE_LONG_CONTEXT_MODEL.to_owned();
-            return Ok(RouteDecision::Subscription);
-        }
-        tracing::warn!(
-            request_model = %request.model,
-            normalized_model = model,
-            "routing a Claude SubAgent tool request through the small fast model"
-        );
-        request.model = model.to_owned();
-        return Ok(RouteDecision::Subscription);
+        return Ok(decision);
     }
 
     apply_disabled_model_policy(request, is_subagent)?;

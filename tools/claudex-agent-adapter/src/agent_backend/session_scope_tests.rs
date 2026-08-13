@@ -34,14 +34,7 @@
         let mut workers = Vec::new();
         for index in 0..32 {
             let scopes = Arc::clone(&scopes);
-            workers.push(std::thread::spawn(move || {
-                let id = if index % 2 == 0 {
-                    "parallel-a"
-                } else {
-                    "parallel-b"
-                };
-                Arc::as_ptr(&scopes.scope(Some(id))) as usize
-            }));
+            workers.push(std::thread::spawn(move || parallel_scope_address(&scopes, index)));
         }
         let addresses = workers
             .into_iter()
@@ -50,10 +43,28 @@
         let a = scopes.scope(Some("parallel-a"));
         let b = scopes.scope(Some("parallel-b"));
         assert_eq!(scopes.scope_count(), 2);
-        assert!(addresses.iter().enumerate().all(|(index, address)| {
-            *address == Arc::as_ptr(if index % 2 == 0 { &a } else { &b }) as usize
-        }));
+        assert!(
+            addresses
+                .iter()
+                .enumerate()
+                .all(|(index, address)| *address == expected_scope_ptr(index, &a, &b))
+        );
         assert!(!Arc::ptr_eq(&a, &b));
+    }
+
+    /// The `parallel-a`/`parallel-b` pool address a concurrent lookup should observe.
+    fn parallel_scope_address(scopes: &SessionScopedBackends, index: usize) -> usize {
+        let id = if index.is_multiple_of(2) {
+            "parallel-a"
+        } else {
+            "parallel-b"
+        };
+        Arc::as_ptr(&scopes.scope(Some(id))) as usize
+    }
+
+    fn expected_scope_ptr(index: usize, a: &Arc<AgentBackend>, b: &Arc<AgentBackend>) -> usize {
+        let target = if index.is_multiple_of(2) { a } else { b };
+        Arc::as_ptr(target) as usize
     }
 
     #[tokio::test]
@@ -155,29 +166,7 @@
         use tracing::level_filters::LevelFilter;
 
         let buffer = Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
-        struct BufferWriter(Arc<std::sync::Mutex<Vec<u8>>>);
-        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for BufferWriter {
-            type Writer = BufferWriter;
-
-            fn make_writer(&'a self) -> Self::Writer {
-                BufferWriter(Arc::clone(&self.0))
-            }
-        }
-        impl std::io::Write for BufferWriter {
-            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-                self.0.lock().expect("log buffer").extend_from_slice(buf);
-                Ok(buf.len())
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
-        }
-        let subscriber = tracing_subscriber::fmt()
-            .with_max_level(LevelFilter::DEBUG)
-            .with_writer(BufferWriter(Arc::clone(&buffer)))
-            .with_ansi(false)
-            .finish();
-        let _guard = tracing::subscriber::set_default(subscriber);
+        let _guard = capture_tracing_logs(&buffer, LevelFilter::DEBUG);
         let scopes =
             SessionScopedBackends::new(&[BackendRoute::new("main", BackendKind::CodexAppServer)]);
         let _ = scopes.scope(Some("log-sess"));
@@ -202,29 +191,7 @@
         use tracing::level_filters::LevelFilter;
 
         let buffer = Arc::new(std::sync::Mutex::new(Vec::<u8>::new()));
-        struct BufferWriter(Arc<std::sync::Mutex<Vec<u8>>>);
-        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for BufferWriter {
-            type Writer = BufferWriter;
-
-            fn make_writer(&'a self) -> Self::Writer {
-                BufferWriter(Arc::clone(&self.0))
-            }
-        }
-        impl std::io::Write for BufferWriter {
-            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-                self.0.lock().expect("log buffer").extend_from_slice(buf);
-                Ok(buf.len())
-            }
-            fn flush(&mut self) -> std::io::Result<()> {
-                Ok(())
-            }
-        }
-        let subscriber = tracing_subscriber::fmt()
-            .with_max_level(LevelFilter::INFO)
-            .with_writer(BufferWriter(Arc::clone(&buffer)))
-            .with_ansi(false)
-            .finish();
-        let _guard = tracing::subscriber::set_default(subscriber);
+        let _guard = capture_tracing_logs(&buffer, LevelFilter::INFO);
         let scopes =
             SessionScopedBackends::new(&[BackendRoute::new("main", BackendKind::CodexAppServer)]);
         let _ = scopes.scope(Some("release-sess"));
@@ -238,4 +205,39 @@
             text.contains("release-sess"),
             "missing session id in logs: {text}"
         );
+    }
+
+    struct BufferWriter(Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for BufferWriter {
+        type Writer = BufferWriter;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            BufferWriter(Arc::clone(&self.0))
+        }
+    }
+
+    impl std::io::Write for BufferWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().expect("log buffer").extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Install a tracing subscriber that appends formatted log lines into `buffer`,
+    /// returning the drop guard that must stay alive for the duration of the test.
+    fn capture_tracing_logs(
+        buffer: &Arc<std::sync::Mutex<Vec<u8>>>,
+        max_level: tracing::level_filters::LevelFilter,
+    ) -> tracing::subscriber::DefaultGuard {
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(max_level)
+            .with_writer(BufferWriter(Arc::clone(buffer)))
+            .with_ansi(false)
+            .finish();
+        tracing::subscriber::set_default(subscriber)
     }
