@@ -123,4 +123,18 @@ mod tests {
         };
         assert!(assemble_options(draft).is_err());
     }
+
+    #[test]
+    fn rejects_overflowing_subscription_limits() {
+        let mut draft = OptionsDraft {
+            max_processes: tokio::sync::Semaphore::MAX_PERMITS + 1,
+            ..Default::default()
+        };
+        assert!(assemble_options(draft).is_err());
+        draft = OptionsDraft {
+            timeout_minutes: u64::MAX,
+            ..Default::default()
+        };
+        assert!(assemble_options(draft).is_err());
+    }
 }

@@ -155,6 +155,28 @@ async fn injected_worker_events_cover_native_results_and_prose_fallback() {
 }
 
 #[tokio::test]
+async fn empty_and_unknown_worker_events_finish_without_results() {
+    let dispatcher = ThreadEventDispatcher::default();
+    let events = dispatcher.subscribe("empty-search");
+    dispatcher.dispatch(serde_json::json!({
+        "method": "item/started",
+        "params": {"threadId": "empty-search", "item": {"type": "text"}}
+    }));
+    dispatcher.dispatch(serde_json::json!({
+        "method": "unknown",
+        "params": {"threadId": "empty-search"}
+    }));
+    dispatcher.dispatch(serde_json::json!({
+        "method": "turn/completed", "params": {"threadId": "empty-search"}
+    }));
+    let response = run_worker_with_events("empty", std::future::ready(Ok(events)))
+        .await
+        .expect("empty worker response");
+    assert!(response.results.is_empty());
+    assert_eq!(response.search_count, 0);
+}
+
+#[tokio::test]
 async fn injected_worker_start_and_timeout_failures_are_deterministic() {
     let start_error = run_worker_with_events(
         "query",
