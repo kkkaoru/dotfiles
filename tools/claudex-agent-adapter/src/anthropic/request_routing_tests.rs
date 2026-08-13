@@ -114,16 +114,12 @@ mod tests {
     fn rejects_undeclared_non_claude_outer_models_instead_of_subscription() {
         for model in ["auto", "fugu", "gpt-5.6-luna"] {
             let mut request = request(model, &[]);
-            let error = resolve(
-                &mut request,
-                "main-model",
-                false,
-                |_| false,
-                |_| false,
-            )
-            .expect_err("non-Claude aliases must not spawn claude --model {model}");
+            let error = resolve(&mut request, "main-model", false, |_| false, |_| false)
+                .expect_err("non-Claude aliases must not spawn claude --model {model}");
             assert!(
-                error.to_string().contains("not a Claude subscription model"),
+                error
+                    .to_string()
+                    .contains("not a Claude subscription model"),
                 "{model}: {error}"
             );
             assert_eq!(request.model, model);
@@ -536,5 +532,20 @@ mod tests {
         .expect("direct SubAgent with valid model");
         assert_eq!(decision, RouteDecision::Provider);
         assert_eq!(req.model, "gpt-5.6-luna");
+    }
+
+    #[test]
+    fn rejects_declared_provider_without_an_active_route() {
+        let mut req = request("configured-provider", &[]);
+        let error = resolve_request_model_with_origin(
+            &mut req,
+            "main-model",
+            None,
+            RouteOrigin::new(false, false, false),
+            |_| false,
+            |model| model == "configured-provider",
+        )
+        .expect_err("declared but disabled provider must be rejected");
+        assert!(error.to_string().contains("does not have an active route"));
     }
 }

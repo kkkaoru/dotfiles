@@ -183,6 +183,18 @@ mod tests {
             assert!(is_canned_line(text), "{text}");
         }
         assert!(!is_canned_line("ordinary text"));
+        for marker in ['●', '▶', '✓', '✗'] {
+            assert!(is_canned_line(&format!("{marker} 次: 中断")));
+        }
+        for text in [
+            "次: 別のタスク",
+            "実行中: x",
+            "完了: x",
+            "失敗: x",
+            "ターン1終了",
+        ] {
+            assert!(!is_canned_line(text), "{text}");
+        }
         assert!(!is_partial_time_unit("1seconds"));
         assert!(is_partial_time_unit("1se"));
         for marker in ['●', '▶', '✓', '✗'] {
