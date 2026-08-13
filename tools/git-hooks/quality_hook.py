@@ -17,10 +17,17 @@ ZERO_OID = "0" * 40
 
 @dataclass(frozen=True)
 class Check:
-    """One command and its repository-relative working directory."""
+    """One command, its repository-relative working directory, and an optional filter.
+
+    ``allow_paths`` narrows a check that reports on more files than were
+    actually touched (see ``rustfmt_gate``): only lines in stdout that name
+    one of these resolved paths can fail the check. ``None`` means every
+    non-zero exit fails it, as before.
+    """
 
     directory: str
     command: tuple[str, ...]
+    allow_paths: frozenset[Path] | None = None
 
 
 def git(root: Path, *arguments: str, input_text: str | None = None) -> str:
@@ -155,7 +162,66 @@ def touches(paths: set[str], *prefixes: str) -> bool:
     return any(path.startswith(prefixes) for path in paths)
 
 
-def checks(event: str, paths: set[str]) -> list[Check]:
+def cargo_toolchain(root: Path, directory: str) -> str | None:
+    """Read a crate's pinned rustup channel from its own ``rust-toolchain.toml``.
+
+    Hook-invoked Cargo commands force this channel explicitly (``+channel``)
+    so a ``RUSTUP_TOOLCHAIN`` left over from another shell or worktree can't
+    silently swap in a different compiler and misreport lint or format
+    results. Returns ``None`` when the crate has no pinned toolchain file.
+    """
+    toolchain_file = root / directory / "rust-toolchain.toml"
+    if not toolchain_file.is_file():
+        return None
+    channel = tomllib.loads(toolchain_file.read_text(encoding="utf-8")).get(
+        "toolchain", {}
+    ).get("channel")
+    return channel if isinstance(channel, str) else None
+
+
+def pinned_cargo(toolchain: str | None, *arguments: str) -> tuple[str, ...]:
+    """Prefix a Cargo invocation with an explicit toolchain override, if known."""
+    return ("cargo", f"+{toolchain}", *arguments) if toolchain else ("cargo", *arguments)
+
+
+def touched_rust_files(paths: set[str], directory: str) -> list[str]:
+    """Return touched ``.rs`` paths within a crate, relative to its directory."""
+    prefix = f"{directory}/"
+    return sorted(
+        path[len(prefix) :] for path in paths if path.startswith(prefix) and path.endswith(".rs")
+    )
+
+
+def rustfmt_gate(
+    root: Path, directory: str, toolchain: str | None, touched: list[str]
+) -> Check | None:
+    """Format-check only the Rust files a change actually touched.
+
+    ``rustfmt`` follows ``mod`` declarations starting from any file it is
+    given, so checking a module root (``lib.rs``, ``main.rs``) also reports
+    every file reachable from it. A crate-wide ``cargo fmt --check`` has the
+    same problem one level up: it blocks a push over pre-existing drift in
+    files nobody touched. Comparing ``--files-with-diff`` output against the
+    touched set fixes both: unrelated diffs are ignored, while a genuine
+    parse error (rustfmt reports it on stderr, never through
+    ``--files-with-diff``) still fails unconditionally in ``run_checks``.
+    """
+    if not touched:
+        return None
+    command = (
+        *(("rustup", "run", toolchain) if toolchain else ()),
+        "rustfmt",
+        "--edition",
+        "2024",
+        "--check",
+        "--files-with-diff",
+        *touched,
+    )
+    allowed = frozenset((root / directory / relative).resolve() for relative in touched)
+    return Check(directory, command, allowed)
+
+
+def checks(root: Path, event: str, paths: set[str]) -> list[Check]:
     """Select fast commit checks or comprehensive push checks by changed domain."""
     selected: list[Check] = []
     hook_changed = touches(paths, "tools/git-hooks/") or bool(
@@ -203,13 +269,15 @@ def checks(event: str, paths: set[str]) -> list[Check]:
             )
         )
     if adapter_changed:
-        selected.extend(
-            Check("tools/claudex-agent-adapter", ("cargo", alias))
-            for alias in ("fmt-check", "lint")
-        )
+        adapter = "tools/claudex-agent-adapter"
+        toolchain = cargo_toolchain(root, adapter)
+        fmt_gate = rustfmt_gate(root, adapter, toolchain, touched_rust_files(paths, adapter))
+        if fmt_gate is not None:
+            selected.append(fmt_gate)
+        selected.append(Check(adapter, pinned_cargo(toolchain, "lint")))
         if event == "pre-push":
             selected.extend(
-                Check("tools/claudex-agent-adapter", ("cargo", alias))
+                Check(adapter, pinned_cargo(toolchain, alias))
                 for alias in ("test-all", "coverage", "coverage-branch")
             )
     for project in ("sleep-control", "lid-display-watcher"):
@@ -236,7 +304,20 @@ def run_checks(root: Path, selected: Iterable[Check]) -> None:
     """Run checks in deterministic order and stop at the first failure."""
     for check in selected:
         print(f"quality: {' '.join(check.command)} ({check.directory})", flush=True)
-        subprocess.run(check.command, cwd=root / check.directory, check=True)
+        directory = root / check.directory
+        if check.allow_paths is None:
+            subprocess.run(check.command, cwd=directory, check=True)
+            continue
+        result = subprocess.run(check.command, cwd=directory, capture_output=True, text=True)
+        offending = [
+            line for line in result.stdout.splitlines() if Path(line).resolve() in check.allow_paths
+        ]
+        if result.stderr or offending:
+            sys.stderr.write(result.stdout)
+            sys.stderr.write(result.stderr)
+            raise subprocess.CalledProcessError(
+                result.returncode, check.command, result.stdout, result.stderr
+            )
 
 
 def parse_arguments(arguments: list[str] | None = None) -> argparse.Namespace:
@@ -256,7 +337,7 @@ def main(arguments: list[str] | None = None, stream: TextIO = sys.stdin) -> int:
             else pre_push_paths(root, stream)
         )
         validate_changed_files(root, paths)
-        run_checks(root, checks(options.event, paths))
+        run_checks(root, checks(root, options.event, paths))
     except (
         json.JSONDecodeError,
         OSError,
