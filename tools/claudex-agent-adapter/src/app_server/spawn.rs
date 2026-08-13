@@ -105,6 +105,14 @@ web_search = true
     Ok(isolated.to_path_buf())
 }
 
+pub fn response_thread_id(value: &Value) -> Result<String> {
+    value
+        .pointer("/thread/id")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+        .ok_or_else(|| anyhow!("thread/start response did not contain thread.id: {value}"))
+}
+
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]
 mod prepare_isolated_home_tests {
@@ -183,12 +191,4 @@ wire_api = "responses"
         assert!(config.contains("model_catalog_json = \"~/.codex/fugu.json\""));
         assert!(!isolated.join("logs_2.sqlite").exists());
     }
-}
-
-pub fn response_thread_id(value: &Value) -> Result<String> {
-    value
-        .pointer("/thread/id")
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .ok_or_else(|| anyhow!("thread/start response did not contain thread.id: {value}"))
 }

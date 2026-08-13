@@ -298,10 +298,7 @@ mod tests {
         let (sender, receiver) = tokio::sync::watch::channel(StartupState::Starting);
         *startup.receiver.lock().expect("backend startup poisoned") = Some(receiver);
 
-        let waiting = {
-            let route = Arc::clone(&route);
-            tokio::spawn(async move { route.get().await })
-        };
+        let waiting = spawn_route_get(Arc::clone(&route));
         // Let `get` clone the Starting receiver before invalidating it. This
         // makes the stale-result race deterministic rather than timing based.
         tokio::task::yield_now().await;
@@ -339,10 +336,7 @@ mod tests {
             .lock()
             .expect("backend startup poisoned") = Some(receiver);
 
-        let waiting = {
-            let route = Arc::clone(&route);
-            tokio::spawn(async move { route.get().await })
-        };
+        let waiting = spawn_route_get(Arc::clone(&route));
         tokio::task::yield_now().await;
         routes.shutdown().await;
 
@@ -360,6 +354,12 @@ mod tests {
             !stale.is_alive(),
             "late spawn must be cleaned up after shutdown"
         );
+    }
+
+    fn spawn_route_get(
+        route: Arc<super::RoutedBackend>,
+    ) -> tokio::task::JoinHandle<anyhow::Result<Arc<AgentBackend>>> {
+        tokio::spawn(async move { route.get().await })
     }
 
     async fn assert_get_avoids_dead_ready_backend(route: super::RoutedBackend) {

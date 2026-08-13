@@ -32,11 +32,7 @@ impl ProgressCoalescer {
 
     fn push_thought_end(&mut self, text: String) -> Vec<ProgressEvent> {
         let mut out: Vec<ProgressEvent> = self.take_thought().into_iter().collect();
-        for event in &out {
-            if let ProgressEvent::Thought(chunk) = event {
-                self.thought_emitted.push_str(chunk);
-            }
-        }
+        self.record_emitted_thoughts(&out);
         let Some(text) = strip_canned_progress(&text) else {
             return out;
         };
@@ -59,17 +55,12 @@ impl ProgressCoalescer {
         if !should_flush(buf, appended) {
             return Vec::new();
         }
-        if thought {
-            let flushed = self.take_thought().into_iter().collect::<Vec<_>>();
-            for event in &flushed {
-                if let ProgressEvent::Thought(chunk) = event {
-                    self.thought_emitted.push_str(chunk);
-                }
-            }
-            flushed
-        } else {
-            self.take_message().into_iter().collect()
+        if !thought {
+            return self.take_message().into_iter().collect();
         }
+        let flushed = self.take_thought().into_iter().collect::<Vec<_>>();
+        self.record_emitted_thoughts(&flushed);
+        flushed
     }
 
     pub fn finish(&mut self) -> Vec<ProgressEvent> {
@@ -79,13 +70,24 @@ impl ProgressCoalescer {
     fn flush_all(&mut self) -> Vec<ProgressEvent> {
         let mut out = Vec::new();
         if let Some(thought) = self.take_thought() {
-            if let ProgressEvent::Thought(chunk) = &thought {
-                self.thought_emitted.push_str(chunk);
-            }
+            self.record_emitted_thought(&thought);
             out.push(thought);
         }
         out.extend(self.take_message());
         out
+    }
+
+    fn record_emitted_thoughts(&mut self, events: &[ProgressEvent]) {
+        for event in events {
+            self.record_emitted_thought(event);
+        }
+    }
+
+    fn record_emitted_thought(&mut self, event: &ProgressEvent) {
+        let ProgressEvent::Thought(chunk) = event else {
+            return;
+        };
+        self.thought_emitted.push_str(chunk);
     }
 
     fn take_thought(&mut self) -> Option<ProgressEvent> {

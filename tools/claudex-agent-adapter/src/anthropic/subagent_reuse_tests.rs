@@ -1427,31 +1427,31 @@ fn barrier_admission_allows_only_one_same_scope_claim() {
     let root = tempfile::tempdir().expect("reuse registry fixture");
     let path = Arc::new(root.path().join("reuse.json"));
     let barrier = Arc::new(Barrier::new(12));
-    let threads = (0..12)
-        .map(|index| {
-            let path = Arc::clone(&path);
-            let barrier = Arc::clone(&barrier);
-            thread::spawn(move || {
-                let store = Store::new((*path).clone());
-                barrier.wait();
-                store
-                    .acquire_claim(
-                        ClaimRequest {
-                            session_id: "session-a".to_owned(),
-                            scope: "same scope".to_owned(),
-                            model: Some("worker-model".to_owned()),
-                            owner: format!("owner-{index}"),
-                            pid: current_pid(),
-                            tool_use_id: format!("tool-{index}"),
-                            expires_unix_seconds: unix_seconds() + 60,
-                        },
-                        unix_seconds(),
-                    )
-                    .expect("claim admission")
-                    .is_some()
-            })
-        })
-        .collect::<Vec<_>>();
+    // Spawn every contender before joining so the barrier can release together.
+    let mut threads = Vec::with_capacity(12);
+    for index in 0..12 {
+        let path = Arc::clone(&path);
+        let barrier = Arc::clone(&barrier);
+        threads.push(thread::spawn(move || {
+            let store = Store::new((*path).clone());
+            barrier.wait();
+            store
+                .acquire_claim(
+                    ClaimRequest {
+                        session_id: "session-a".to_owned(),
+                        scope: "same scope".to_owned(),
+                        model: Some("worker-model".to_owned()),
+                        owner: format!("owner-{index}"),
+                        pid: current_pid(),
+                        tool_use_id: format!("tool-{index}"),
+                        expires_unix_seconds: unix_seconds() + 60,
+                    },
+                    unix_seconds(),
+                )
+                .expect("claim admission")
+                .is_some()
+        }));
+    }
     let admitted = threads
         .into_iter()
         .map(|thread| thread.join().expect("admission thread"))
