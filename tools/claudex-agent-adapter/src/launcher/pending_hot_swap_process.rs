@@ -50,7 +50,7 @@ impl<T: FnOnce(u32)> Drop for StartedWaiter<T> {
 }
 
 #[cfg(unix)]
-fn detached_waiter_group(pid: u32) -> Option<i32> {
+pub(super) fn detached_waiter_group(pid: u32) -> Option<i32> {
     if pid == 0 || pid == std::process::id() || pid > i32::MAX as u32 {
         return None;
     }

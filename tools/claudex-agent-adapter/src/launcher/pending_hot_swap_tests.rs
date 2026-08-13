@@ -2,6 +2,7 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use super::super::{LOCAL_TOKEN, ServiceConfig};
+use super::process::detached_waiter_group;
 use super::*;
 use crate::agent_backend::{BackendKind, BackendRoute};
 use crate::launcher::AdapterOptions;
@@ -59,6 +60,9 @@ fn recognizes_wait_idle_command_lines_including_nohup() {
 #[cfg(unix)]
 #[test]
 fn detached_waiter_group_rejects_invalid_and_non_detached_pids() {
+    assert_eq!(detached_waiter_group(0), None);
+    assert_eq!(detached_waiter_group(std::process::id()), None);
+    assert_eq!(detached_waiter_group(i32::MAX as u32 + 1), None);
     request_waiter_stop(0, |_| true);
     request_waiter_stop(std::process::id(), |_| true);
     request_waiter_stop(i32::MAX as u32 + 1, |_| true);
