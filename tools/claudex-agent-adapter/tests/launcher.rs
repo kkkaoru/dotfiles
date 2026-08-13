@@ -4,7 +4,7 @@ use std::{
     net::TcpListener,
     os::unix::fs::{PermissionsExt, symlink},
     os::unix::process::CommandExt,
-    process::{Command, Stdio},
+    process::{Child, Command, Stdio},
     sync::{Arc, Barrier},
     thread,
     time::{Duration, Instant},
@@ -14,8 +14,10 @@ use reqwest::Client;
 use serde_json::Value;
 use tempfile::TempDir;
 
+#[path = "support/wait_published.rs"]
+mod wait_published;
+
 const ACTIVE_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
-const FILE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const CONCURRENT_LAUNCHERS: usize = 4;
 const DAEMON_START_MARKER: &str = "=== claudex-agent-adapter daemon start ===";
 #[cfg(not(coverage_nightly))]
@@ -250,7 +252,7 @@ async fn protocol_compatible_build_replacement_preserves_an_active_response() {
         .as_u64()
         .expect("stale adapter pid");
     let slow = tokio::spawn(active_slow_response(client.clone(), base_url.clone()));
-    wait_for_file(&entered).await;
+    wait_for_file(&entered, &mut stale).await;
 
     let mut ensure = ensure_command(&home, port, "20");
     let output = tokio::time::timeout(
@@ -1049,7 +1051,7 @@ async fn duplicate_resume_launch_is_rejected_without_terminating_the_first_proce
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut first = first.spawn().expect("start first resume launcher");
-    wait_for_published_resume_marker(&marker, &mut first).await;
+    wait_for_published_resume_marker(&marker, &mut first);
 
     let mut second = common_command(&home, port, "20");
     let second = second
@@ -1446,41 +1448,34 @@ fn process_is_alive(pid: u64) -> bool {
         .is_ok_and(|status| status.success())
 }
 
-async fn wait_for_file(path: &std::path::Path) {
-    tokio::time::timeout(ACTIVE_REQUEST_TIMEOUT, async {
-        while !path.exists() {
-            tokio::time::sleep(FILE_POLL_INTERVAL).await;
-        }
-    })
-    .await
-    .expect("active request marker");
-}
-
-fn published_resume_marker(path: &std::path::Path) -> bool {
-    fs::read_to_string(path).is_ok_and(|contents| contents.contains("started"))
-}
-
-async fn wait_for_published_resume_marker(path: &std::path::Path, first: &mut std::process::Child) {
-    let deadline = Instant::now()
-        + if cfg!(coverage_nightly) {
-            Duration::from_secs(45)
-        } else {
-            Duration::from_secs(5)
-        };
+async fn wait_until_published<T>(
+    path: &std::path::Path,
+    mut peer: Option<&mut Child>,
+    what: &str,
+    parse: impl Fn(&std::path::Path) -> Option<T>,
+) -> T {
+    let deadline = Instant::now() + wait_published::publish_budget();
     loop {
-        if published_resume_marker(path) {
-            return;
+        if let Some(value) =
+            wait_published::poll_published(path, peer.as_deref_mut(), what, deadline, &parse)
+        {
+            return value;
         }
-        if let Some(status) = first.try_wait().expect("inspect first resume launcher") {
-            panic!(
-                "first resume launcher exited before publishing the active request marker: {status}"
-            );
-        }
-        if Instant::now() >= deadline {
-            panic!("active request marker");
-        }
-        tokio::time::sleep(FILE_POLL_INTERVAL).await;
+        tokio::time::sleep(wait_published::POLL).await;
     }
+}
+
+async fn wait_for_file(path: &std::path::Path, peer: &mut Child) {
+    wait_until_published(path, Some(peer), "active request marker", |path| {
+        wait_published::readable(path).map(|_| ())
+    })
+    .await;
+}
+
+fn wait_for_published_resume_marker(path: &std::path::Path, first: &mut Child) {
+    wait_published::wait_until_published(path, Some(first), "active request marker", |path| {
+        wait_published::readable(path).filter(|contents| contents.contains("started"))
+    });
 }
 
 fn daemon_start_count(home: &TempDir) -> usize {

@@ -6,6 +6,9 @@ use super::signals::{
 use super::*;
 
 #[cfg(unix)]
+use crate::launcher::wait_published;
+
+#[cfg(unix)]
 use std::{
     os::unix::process::CommandExt as _,
     path::Path,
@@ -78,25 +81,18 @@ int main(int argc, char **argv) {
 
 #[cfg(unix)]
 fn published_child_pid(path: &Path) -> Option<u32> {
-    let pid = std::fs::read_to_string(path)
-        .ok()
-        .and_then(|contents| contents.trim().parse().ok())?;
+    let pid = wait_published::readable(path)?.trim().parse().ok()?;
     process_is_alive(pid).then_some(pid)
 }
 
 #[cfg(unix)]
 fn wait_for_child_pid(path: &Path, leader: &mut std::process::Child) -> u32 {
-    let attempts = if cfg!(coverage_nightly) { 1_000 } else { 500 };
-    for _ in 0..attempts {
-        if let Some(pid) = published_child_pid(path) {
-            return pid;
-        }
-        if let Ok(Some(status)) = leader.try_wait() {
-            panic!("orphaned session fixture exited before publishing a child pid: {status}");
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
-    panic!("orphaned session fixture did not publish a child pid")
+    wait_published::wait_until_published(
+        path,
+        Some(leader),
+        "orphaned session fixture did not publish a child pid",
+        published_child_pid,
+    )
 }
 
 #[cfg(unix)]

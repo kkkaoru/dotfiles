@@ -1,6 +1,9 @@
 // Coverage off is on the parent `#[path]` mod in launcher.rs.
 
 #[cfg(unix)]
+use super::wait_published;
+
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt as _;
@@ -10,7 +13,7 @@ use std::{
     io::{Read, Write},
     net::{SocketAddr, TcpListener},
     path::Path,
-    process::{Command, Stdio},
+    process::{Child, Command, Stdio},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -2047,8 +2050,11 @@ fn daemon_terminate_uses_term_then_kill_for_resistant_process_groups() {
             "#!/bin/sh\n\
              trap '' TERM\n\
              sleep 100 &\n\
-             echo $! > '{}'\n\
+             echo $! > '{}.tmp'\n\
+             mv '{}.tmp' '{}'\n\
              while true; do sleep 1; done\n",
+            child_pid_file.to_string_lossy(),
+            child_pid_file.to_string_lossy(),
             child_pid_file.to_string_lossy()
         ),
     )
@@ -2065,7 +2071,7 @@ fn daemon_terminate_uses_term_then_kill_for_resistant_process_groups() {
         .expect("launch resistant daemon");
     let child_id = child.id();
     let _cleanup = ProcessGroupCleanup::for_leader(child_id);
-    let child_pid = wait_for_child_pid(&child_pid_file);
+    let child_pid = wait_for_child_pid(&child_pid_file, &mut child);
 
     daemon_process::terminate(child_id);
     let stop_deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
@@ -2076,21 +2082,14 @@ fn daemon_terminate_uses_term_then_kill_for_resistant_process_groups() {
 }
 
 #[cfg(unix)]
-fn wait_for_child_pid(path: &Path) -> u32 {
-    for _ in 0..100 {
-        match read_pid(path) {
-            Some(pid) => return pid,
-            None => std::thread::sleep(std::time::Duration::from_millis(10)),
-        }
-    }
-    panic!("child pid written")
+fn wait_for_child_pid(path: &Path, peer: &mut Child) -> u32 {
+    wait_published::wait_until_published(path, Some(peer), "child pid written", published_pid)
 }
 
 #[cfg(unix)]
-fn read_pid(path: &Path) -> Option<u32> {
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|raw_pid| raw_pid.trim().parse::<u32>().ok())
+fn published_pid(path: &Path) -> Option<u32> {
+    let pid = wait_published::readable(path)?.trim().parse().ok()?;
+    process_alive(pid).then_some(pid)
 }
 
 #[cfg(unix)]
@@ -2336,9 +2335,11 @@ fn starts_a_detached_daemon_with_the_configured_arguments() {
     config.log_path = root.path().join("adapter.log");
     let _pid = start_adapter(&config).expect("start detached daemon");
 
-    assert!(
-        wait_for_path(&arguments, 500, Duration::from_millis(10)),
-        "detached daemon did not write arguments"
+    wait_published::wait_until_published(
+        &arguments,
+        None,
+        "detached daemon did not write arguments",
+        wait_published::readable,
     );
     let arguments = std::fs::read_to_string(arguments).expect("daemon arguments");
     assert!(arguments.contains("serve\n"));
@@ -2622,7 +2623,7 @@ fn graceful_shutdown_signals_a_live_daemon_but_not_unsafe_pids() {
     command
         .args([
             "-c",
-            "trap 'exit 0' TERM; : > \"$1\"; while :; do :; done",
+            "trap 'exit 0' TERM; : > \"$1.tmp\"; mv \"$1.tmp\" \"$1\"; while :; do :; done",
             "sh",
             ready.to_str().expect("ready path"),
         ])
@@ -2634,9 +2635,11 @@ fn graceful_shutdown_signals_a_live_daemon_but_not_unsafe_pids() {
         .spawn()
         .expect("start graceful shutdown fixture");
     let _cleanup = ProcessGroupCleanup::for_leader(child.id());
-    assert!(
-        wait_for_path(&ready, 100, Duration::from_millis(1)),
-        "fixture installed its TERM handler"
+    wait_published::wait_until_published(
+        &ready,
+        Some(&mut child),
+        "fixture installed its TERM handler",
+        wait_published::readable,
     );
 
     daemon_process::request_graceful_shutdown(child.id());
@@ -2658,8 +2661,11 @@ fn daemon_terminate_kills_an_orphaned_term_ignoring_process_group() {
             "#!/bin/sh\n\
              trap '' TERM\n\
              sleep 100 &\n\
-             echo $! > '{}'\n\
+             echo $! > '{}.tmp'\n\
+             mv '{}.tmp' '{}'\n\
              exit 0\n",
+            child_pid_file.to_string_lossy(),
+            child_pid_file.to_string_lossy(),
             child_pid_file.to_string_lossy()
         ),
     )
@@ -2676,22 +2682,12 @@ fn daemon_terminate_kills_an_orphaned_term_ignoring_process_group() {
         .expect("launch orphaned daemon");
     let parent_pid = parent.id();
     let _cleanup = ProcessGroupCleanup::for_leader(parent_pid);
-    let child_pid = wait_for_child_pid(&child_pid_file);
+    let child_pid = wait_for_child_pid(&child_pid_file, &mut parent);
     assert!(parent.wait().expect("reap exited daemon").success());
 
     daemon_process::terminate(parent_pid);
     assert!(wait_for_process_stop(child_pid));
     daemon_process::terminate(std::process::id());
-}
-
-fn wait_for_path(path: &Path, attempts: usize, delay: Duration) -> bool {
-    for _ in 0..attempts {
-        match path.exists() {
-            true => return true,
-            false => thread::sleep(delay),
-        }
-    }
-    false
 }
 
 #[cfg(unix)]

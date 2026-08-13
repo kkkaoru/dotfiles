@@ -1,6 +1,8 @@
 #![cfg(unix)]
 #![cfg_attr(coverage_nightly, coverage(off))]
 
+use crate::launcher::wait_published;
+
 use super::descriptors::detach_session_and_close_with;
 use super::{
     StartedDaemon, bounded_descriptor_limit, close_file_descriptor,
@@ -20,26 +22,17 @@ fn wait_until_exited(child: &mut std::process::Child, attempts: usize) -> bool {
 }
 
 #[cfg(unix)]
-fn wait_for_ready_file(
-    path: &std::path::Path,
-    attempts: usize,
-) -> Result<(), Box<dyn std::error::Error>> {
-    for _ in 0..attempts {
-        if std::fs::read_to_string(path).is_ok() {
-            return Ok(());
-        }
-        std::thread::sleep(std::time::Duration::from_millis(25));
-    }
-    Err("session fixture was not ready".into())
-}
-
-#[cfg(unix)]
 fn validate_detached_session(
     path: &std::path::Path,
-    child_pid: u32,
+    child: &mut std::process::Child,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    wait_for_ready_file(path, 40)?;
-    let pid = child_pid as libc::pid_t;
+    wait_published::wait_until_published(
+        path,
+        Some(child),
+        "session fixture was not ready",
+        wait_published::readable,
+    );
+    let pid = child.id() as libc::pid_t;
     let session_id = unsafe { libc::getsid(pid) };
     let process_group_id = unsafe { libc::getpgid(pid) };
     assert_eq!(session_id, pid, "session id must be daemon pid");
@@ -164,7 +157,8 @@ fn daemon_starts_in_its_own_session_and_process_group() {
     let _ = fs::remove_file(&path);
 
     let script = r#"
-        printf 'ready\n' > "$1"
+        printf 'ready\n' > "$1.tmp"
+        mv "$1.tmp" "$1"
         sleep 30
     "#;
     let mut command = Command::new("sh");
@@ -176,7 +170,7 @@ fn daemon_starts_in_its_own_session_and_process_group() {
     configure_process_group(&mut command);
     let mut child = command.spawn().expect("spawn detached session fixture");
 
-    let validation = validate_detached_session(&path, child.id());
+    let validation = validate_detached_session(&path, &mut child);
 
     let _ = child.kill();
     let _ = child.wait();

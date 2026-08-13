@@ -1,8 +1,12 @@
 use super::*;
 
 #[cfg(unix)]
+use crate::launcher::wait_published;
+
+#[cfg(unix)]
 use std::{
     os::unix::process::CommandExt as _,
+    path::Path,
     process::{Command, Stdio},
     thread,
     time::Duration,
@@ -209,8 +213,7 @@ fn graceful_shutdown_leaves_other_process_group_members_running() {
     let root = tempfile::tempdir().expect("graceful shutdown fixture");
     let child_pid_file = root.path().join("child.pid");
     let ready = root.path().join("ready");
-    let script =
-        "trap 'exit 0' TERM\nsleep 100 &\necho $! > \"$1\"\n: > \"$2\"\nwhile :; do sleep 1; done";
+    let script = "trap 'exit 0' TERM\nsleep 100 &\necho $! > \"$1.tmp\"\nmv \"$1.tmp\" \"$1\"\n: > \"$2.tmp\"\nmv \"$2.tmp\" \"$2\"\nwhile :; do sleep 1; done";
     let mut command = Command::new("sh");
     command
         .args([
@@ -229,7 +232,7 @@ fn graceful_shutdown_leaves_other_process_group_members_running() {
         .expect("start graceful shutdown fixture");
     let process_group = leader.id().try_into().expect("process group fits in i32");
     let _cleanup = TestProcessGroupCleanup(process_group);
-    let child_pid = wait_for_file_pid(&child_pid_file, &ready);
+    let child_pid = wait_for_file_pid(&child_pid_file, &ready, &mut leader);
 
     request_graceful_shutdown(leader.id());
     assert!(leader.wait().expect("reap graceful leader").success());
@@ -294,7 +297,7 @@ fn forced_termination_kills_descendant_groups_only_in_the_daemon_session() {
         daemon_pid,
         pid_file: pid_file.clone(),
     };
-    let (provider_pid, grandchild_pid) = wait_for_pid_pair(&pid_file);
+    let (provider_pid, grandchild_pid) = wait_for_pid_pair(&pid_file, &mut daemon);
 
     let mut unrelated = Command::new("sh")
         .args(["-c", "trap '' TERM; while :; do sleep 1; done"])
@@ -368,10 +371,16 @@ int main(int argc, char **argv) {
             signal(SIGTERM, SIG_IGN);
             wait_forever();
         }
-        FILE *pids = fopen(argv[1], "w");
+        FILE *pids = NULL;
+        char tmp[4096];
+        if (snprintf(tmp, sizeof tmp, "%s.tmp", argv[1]) >= (int)sizeof tmp) _exit(7);
+        pids = fopen(tmp, "w");
         if (pids == NULL) _exit(6);
-        fprintf(pids, "%d %d\n", getpid(), grandchild);
+        if (fprintf(pids, "%d %d\n", getpid(), grandchild) < 0) _exit(8);
+        fflush(pids);
+        fsync(fileno(pids));
         fclose(pids);
+        if (rename(tmp, argv[1]) != 0) _exit(9);
         wait_forever();
     }
     wait_forever();
@@ -400,18 +409,22 @@ int main(int argc, char **argv) {
 }
 
 #[cfg(unix)]
-fn wait_for_pid_pair(path: &Path) -> (u32, u32) {
-    let attempts = if cfg!(coverage_nightly) { 1_000 } else { 500 };
-    for _ in 0..attempts {
-        if let Some(pair) = std::fs::read_to_string(path).ok().and_then(|contents| {
-            let mut fields = contents.split_whitespace();
-            Some((fields.next()?.parse().ok()?, fields.next()?.parse().ok()?))
-        }) {
-            return pair;
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
-    panic!("provider fixture did not publish its pids")
+fn wait_for_pid_pair(path: &Path, daemon: &mut std::process::Child) -> (u32, u32) {
+    wait_published::wait_until_published(
+        path,
+        Some(daemon),
+        "provider fixture did not publish its pids",
+        published_pid_pair,
+    )
+}
+
+#[cfg(unix)]
+fn published_pid_pair(path: &Path) -> Option<(u32, u32)> {
+    let contents = wait_published::readable(path)?;
+    let mut fields = contents.split_whitespace();
+    let provider = fields.next()?.parse().ok()?;
+    let grandchild = fields.next()?.parse().ok()?;
+    (process_is_alive(provider) && process_is_alive(grandchild)).then_some((provider, grandchild))
 }
 
 #[cfg(unix)]
@@ -436,23 +449,23 @@ impl Drop for DaemonSessionCleanup {
 }
 
 #[cfg(unix)]
-fn wait_for_file_pid(child_pid_file: &Path, ready: &Path) -> u32 {
-    for _ in 0..100 {
-        match read_ready_pid(child_pid_file, ready) {
-            Some(pid) => return pid,
-            None => thread::sleep(Duration::from_millis(5)),
-        }
-    }
-    panic!("graceful shutdown fixture did not become ready")
+fn wait_for_file_pid(child_pid_file: &Path, ready: &Path, leader: &mut std::process::Child) -> u32 {
+    wait_published::wait_until_published(
+        child_pid_file,
+        Some(leader),
+        "graceful shutdown fixture did not become ready",
+        |pid_file| read_ready_pid(pid_file, ready),
+    )
 }
 
 #[cfg(unix)]
 fn read_ready_pid(child_pid_file: &Path, ready: &Path) -> Option<u32> {
-    ready
-        .exists()
-        .then(|| std::fs::read_to_string(child_pid_file).ok())
-        .flatten()
-        .and_then(|pid| pid.trim().parse().ok())
+    wait_published::readable(ready)?;
+    let pid = wait_published::readable(child_pid_file)?
+        .trim()
+        .parse()
+        .ok()?;
+    process_is_alive(pid).then_some(pid)
 }
 
 #[cfg(unix)]

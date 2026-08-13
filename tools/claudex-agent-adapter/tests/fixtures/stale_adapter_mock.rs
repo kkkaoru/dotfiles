@@ -1,4 +1,11 @@
-use std::{net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    fs::File,
+    io::Write,
+    net::SocketAddr,
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 
 use anyhow::{Context, Result};
 use axum::{Json, Router, extract::State, routing::get};
@@ -71,11 +78,22 @@ async fn models() -> Json<serde_json::Value> {
 }
 
 async fn slow(State(state): State<SlowState>) -> &'static str {
-    std::fs::write(state.entered.as_ref(), b"entered").expect("mark active request");
+    publish_file(state.entered.as_ref(), b"entered");
     while !state.release.exists() {
         tokio::time::sleep(RELEASE_POLL_INTERVAL).await;
     }
     "complete"
+}
+
+fn publish_file(path: &Path, contents: &[u8]) {
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
+    let mut file = File::create(&tmp).expect("entered tmp");
+    file.write_all(contents).expect("entered bytes");
+    file.sync_all().expect("entered fsync");
+    drop(file);
+    std::fs::rename(tmp, path).expect("publish entered");
 }
 
 #[cfg(unix)]
