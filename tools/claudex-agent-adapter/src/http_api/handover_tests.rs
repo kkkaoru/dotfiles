@@ -237,6 +237,7 @@ async fn rebind_listener_returns_the_ephemeral_listen() {
     let cache = tempfile::tempdir().expect("rebind cache");
     let (handover, rx) = ListenHandover::new(canonical, cache.path().to_path_buf());
     let mut handover_listener = HandoverListener::new(listener, &handover, rx);
+    handover.request_ephemeral();
     let driver = tokio::spawn(async move {
         let _ = tokio::time::timeout(Duration::from_secs(2), handover_listener.accept()).await;
     });
