@@ -18,8 +18,14 @@ const ACTIVE_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 const FILE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const CONCURRENT_LAUNCHERS: usize = 4;
 const DAEMON_START_MARKER: &str = "=== claudex-agent-adapter daemon start ===";
+#[cfg(not(coverage_nightly))]
 const REPLACEMENT_READY_TIMEOUT: Duration = Duration::from_secs(10);
+#[cfg(coverage_nightly)]
+const REPLACEMENT_READY_TIMEOUT: Duration = Duration::from_secs(3);
+#[cfg(not(coverage_nightly))]
 const HEALTH_READY_TIMEOUT: Duration = Duration::from_secs(10);
+#[cfg(coverage_nightly)]
+const HEALTH_READY_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Clone)]
 struct TestProcess {
