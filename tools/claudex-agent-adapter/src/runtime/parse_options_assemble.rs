@@ -89,3 +89,38 @@ fn validate_limits(max_processes: usize, timeout_minutes: u64) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn route(model: &str) -> BackendRoute {
+        BackendRoute::new(model, BackendKind::CodexAppServer)
+    }
+
+    #[test]
+    fn validates_duplicate_and_out_of_range_routes() {
+        let duplicate = vec![route("model"), route("model")];
+        assert!(validate_routes(&duplicate).is_err());
+        let mut zero = route("zero");
+        zero.max_concurrency = Some(0);
+        assert!(validate_routes(&[zero]).is_err());
+        let mut large = route("large");
+        large.max_concurrency = Some(crate::grok_acp::MAX_MODEL_CONCURRENCY + 1);
+        assert!(validate_routes(&[large]).is_err());
+    }
+
+    #[test]
+    fn assembles_model_and_rejects_empty_model() {
+        let mut draft = OptionsDraft {
+            model: Some("model".to_owned()),
+            ..Default::default()
+        };
+        assert_eq!(assemble_options(draft).unwrap().adapter.model, "model");
+        draft = OptionsDraft {
+            model: Some(String::new()),
+            ..Default::default()
+        };
+        assert!(assemble_options(draft).is_err());
+    }
+}
