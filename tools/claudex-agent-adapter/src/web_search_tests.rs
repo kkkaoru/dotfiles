@@ -248,3 +248,51 @@ async fn collect_worker_response_covers_closed_channel_and_non_search_items() {
         .expect("non-search items");
     assert_eq!(skipped.search_count, 0);
 }
+
+#[test]
+fn t4_failed_search_errors_are_human_and_hide_transport_codes() {
+    let timeout = human_web_search_error(&anyhow::anyhow!("worker model timed out"));
+    assert_eq!(timeout, "WebSearch timed out");
+    let transport = human_web_search_error(&anyhow::anyhow!(
+        "proxy PROXY_TRANSPORT failed with ECONNABORTED"
+    ));
+    assert!(!transport.contains("PROXY_TRANSPORT"), "{transport}");
+    assert!(!transport.contains("ECONNABORTED"), "{transport}");
+    assert!(transport.contains("WebSearch failed"), "{transport}");
+}
+
+#[tokio::test]
+async fn t13_parallel_workers_let_the_first_nonempty_win() {
+    let slow_empty = async {
+        tokio::time::sleep(Duration::from_secs(30)).await;
+        Ok(SearchResponse {
+            query: "q".to_owned(),
+            results: Vec::new(),
+            search_count: 0,
+        })
+    };
+    let fast = async {
+        Ok(SearchResponse {
+            query: "q".to_owned(),
+            results: vec![SearchResult {
+                title: "hit".to_owned(),
+                url: "https://example.test/fast".to_owned(),
+                snippet: None,
+            }],
+            search_count: 1,
+        })
+    };
+    let started = std::time::Instant::now();
+    let jobs = [
+        Box::pin(slow_empty) as std::pin::Pin<Box<dyn std::future::Future<Output = Result<SearchResponse>> + Send>>,
+        Box::pin(fast),
+    ];
+    let won = first_nonempty_response("q", jobs)
+        .await
+        .expect("fast worker");
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "serial search would wait on the empty worker"
+    );
+    assert_eq!(won.results[0].title, "hit");
+}

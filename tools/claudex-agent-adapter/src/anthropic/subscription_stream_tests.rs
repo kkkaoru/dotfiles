@@ -374,6 +374,10 @@ async fn keeps_native_web_results_inside_the_subscription() {
     assert!(output.contains("https://example.invalid"));
     assert!(output.contains("end_turn"));
     assert!(!stream.saw_tool_use);
+    assert!(
+        output.contains("🔎 WebSearch: Example Robotics"),
+        "T5 live tip missing: {output}"
+    );
     stream
         .handle_line(
             &sender,
@@ -459,6 +463,47 @@ async fn keeps_structured_output_internal_and_returns_its_json_result_as_text() 
 }
 
 #[tokio::test]
+async fn t15_webfetch_stays_internal_and_paints_a_live_tip() {
+    let (sender, mut receiver) = channel();
+    let mut stream = SubscriptionStream {
+        text_started: false,
+        text_closed: false,
+        saw_tool_use: false,
+        launch_fanout_open: false,
+        launch_fanout_deadline: None,
+        seen_tool_ids: HashSet::new(),
+        blocked_subagent: false,
+        saw_result: false,
+        next_index: 0,
+        tools: vec!["WebFetch".to_owned()],
+        tool_context: None,
+        activity: SubscriptionActivity::default(),
+    };
+    stream
+        .handle_line(
+            &sender,
+            &json!({
+                "type":"assistant",
+                "parent_tool_use_id":null,
+                "message":{"content":[{
+                    "type":"tool_use", "id":"web-fetch", "name":"WebFetch",
+                    "input":{"url":"https://example.invalid/doc"}
+                }]}
+            })
+            .to_string(),
+        )
+        .await
+        .expect("consume WebFetch");
+    let output = output(&mut receiver).await;
+    assert!(!output.contains("tool_use"), "{output}");
+    assert!(
+        output.contains("🔎 WebFetch: https://example.invalid/doc"),
+        "{output}"
+    );
+    assert!(!stream.saw_tool_use);
+}
+
+#[tokio::test]
 async fn empty_partial_delta_is_not_visible_output_and_remains_eligible_for_status() {
     let (sender, mut receiver) = channel();
     let mut stream = SubscriptionStream {
@@ -488,11 +533,11 @@ async fn empty_partial_delta_is_not_visible_output_and_remains_eligible_for_stat
     stream
         .activity_keepalive(&sender)
         .await
-        .expect("status after continued silence");
+        .expect("silence after empty delta must not open STATUS thinking");
+    let silent = output(&mut receiver).await;
     assert!(
-        output(&mut receiver)
-            .await
-            .contains("Claudex is still working")
+        !silent.contains("Claudex is still working"),
+        "STATUS must not open thinking: {silent}"
     );
 }
 
@@ -530,14 +575,16 @@ async fn shows_activity_status_before_delayed_subscription_output() {
         .expect("delayed text delta");
 
     let output = output(&mut receiver).await;
-    assert!(output.contains("Claudex is still working; waiting for provider output"));
-    assert!(output.contains("signature_delta"));
-    assert_eq!(output.matches("event: content_block_start").count(), 2);
+    assert!(
+        !output.contains("Claudex is still working; waiting for provider output"),
+        "silence must wait for a real delta: {output}"
+    );
+    assert!(output.contains(r#""text":"hello""#));
     let text_frame = output
         .split("\n\n")
         .find(|frame| frame.contains(r#""text":"hello""#))
         .expect("forwarded text frame");
-    assert!(text_frame.contains(r#""index":1"#));
+    assert!(text_frame.contains(r#""index":0"#));
 }
 
 #[tokio::test]
@@ -2554,8 +2601,8 @@ async fn stdout_eof_keeps_activity_visible_until_the_leader_exits() {
 
     let frames = output(&mut receiver).await;
     assert!(
-        frames.matches(r#""type":"thinking_delta""#).count() >= 2,
-        "post-EOF wait must remain visibly alive: {frames}"
+        !frames.contains("Claudex is still working"),
+        "post-EOF silence must not open STATUS thinking: {frames}"
     );
     assert!(frames.contains("done"));
     assert_valid_stream(&frames, Some("end_turn"));

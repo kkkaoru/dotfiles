@@ -44,18 +44,14 @@ pub(crate) async fn run(
     if query.trim().is_empty() {
         bail!("WebSearch query must not be empty");
     }
-    let mut errors = Vec::new();
-    for worker in workers {
-        match run_worker_with_timeout(backend, worker, query).await {
-            Ok(response) if !response.results.is_empty() => return Ok(response),
-            Ok(_) => errors.push(format!("{} returned no results", worker.model)),
-            Err(error) => errors.push(format!("{}: {error:#}", worker.model)),
-        }
-    }
-    if errors.is_empty() {
-        bail!("no WebSearch worker is configured")
-    }
-    bail!("all WebSearch workers failed: {}", errors.join("; "))
+    let backend = backend.clone();
+    let query_owned = query.to_owned();
+    let jobs = workers.iter().cloned().map(move |worker| {
+        let backend = backend.clone();
+        let query = query_owned.clone();
+        async move { run_worker_with_timeout(&backend, &worker, &query).await }
+    });
+    first_nonempty_response(query, jobs).await
 }
 
 // Live provider I/O is validated by the CCR integration test. Event decisions
@@ -65,8 +61,11 @@ mod mode;
 // Keep parse mapped under coverage-branch: coverage(off) makes llvm omit the
 // file while expected_production_files still requires it (≥95% gate).
 mod parse;
+mod race;
 pub use mode::WebSearchMode;
 use parse::{append_answer_delta, collect_item_results, fallback_results, is_web_search};
+pub(crate) use race::human_web_search_error;
+use race::first_nonempty_response;
 #[cfg(test)]
 use parse::{extract_urls, parse_result};
 

@@ -71,7 +71,10 @@ impl SubscriptionStream {
         if !self.seen_tool_ids.insert(id.to_owned()) {
             return Ok(false);
         }
-        if matches!(name.as_str(), "WebSearch" | "WebFetch" | "StructuredOutput") {
+        if self
+            .skip_internal_search_or_output(sender, &name, block)
+            .await?
+        {
             return Ok(false);
         }
         let input = block
@@ -152,4 +155,54 @@ impl SubscriptionStream {
         // a tool result and eventually stalling the response stream.
         Ok(())
     }
+
+    async fn skip_internal_search_or_output(
+        &mut self,
+        sender: &mpsc::Sender<Result<Bytes, Infallible>>,
+        name: &str,
+        block: &Value,
+    ) -> Result<bool> {
+        match name {
+            "StructuredOutput" => Ok(true),
+            "WebSearch" => {
+                self.emit_web_live_tip(sender, "🔎 WebSearch: ", web_query(block))
+                    .await?;
+                Ok(true)
+            }
+            "WebFetch" => {
+                self.emit_web_live_tip(sender, "🔎 WebFetch: ", web_url(block))
+                    .await?;
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    async fn emit_web_live_tip(
+        &mut self,
+        sender: &mpsc::Sender<Result<Bytes, Infallible>>,
+        prefix: &str,
+        detail: String,
+    ) -> Result<()> {
+        let tip = format!("{prefix}{detail}");
+        self.activity
+            .start_status(sender, &tip, &mut self.next_index)
+            .await
+    }
+}
+
+fn web_query(block: &Value) -> String {
+    block
+        .pointer("/input/query")
+        .and_then(Value::as_str)
+        .unwrap_or("query")
+        .to_owned()
+}
+
+fn web_url(block: &Value) -> String {
+    block
+        .pointer("/input/url")
+        .and_then(Value::as_str)
+        .unwrap_or("url")
+        .to_owned()
 }
