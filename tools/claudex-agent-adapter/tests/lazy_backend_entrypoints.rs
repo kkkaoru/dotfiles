@@ -6,7 +6,7 @@ use std::{
 };
 
 use claudex_agent_adapter::{
-    agent_backend::{AgentBackend, BackendKind, BackendRoute},
+    agent_backend::{AcpLaunch, AgentBackend, BackendKind, BackendRoute},
     anthropic::Bridge,
     http_router,
 };
@@ -72,6 +72,7 @@ async fn lazy_routes_cover_provider_entry_points_and_failed_startup_state() {
 
     exercise_dynamic_route().await;
     exercise_provider_restart(home.path()).await;
+    exercise_provider_restart_startup_failure(home.path()).await;
     exercise_nonfatal_session_failure(home.path()).await;
     exercise_failed_route_health().await;
     backend.shutdown().await;
@@ -116,6 +117,49 @@ async fn exercise_provider_restart(root: &Path) {
             .count(),
         2
     );
+}
+
+async fn exercise_provider_restart_startup_failure(root: &Path) {
+    fs::remove_file(root.join("grok-acp-exited-once"))
+        .expect("reset one-shot provider exit marker");
+    let one_shot_wrapper = root.join("one-shot-grok-wrapper");
+    fs::write(
+        &one_shot_wrapper,
+        format!(
+            "#!/bin/sh\nrm -- \"$0\"\nexec \"{}\" \"$@\"\n",
+            coverage_profile::wrapped_program(
+                root,
+                fixture_binary_path(env!("CARGO_BIN_EXE_grok-acp-mock")),
+            )
+            .display()
+        ),
+    )
+    .expect("write one-shot Grok wrapper");
+    fs::set_permissions(&one_shot_wrapper, fs::Permissions::from_mode(0o755))
+        .expect("make one-shot Grok wrapper executable");
+
+    let mut provider = route("exit-once-session", BackendKind::GrokAcp);
+    provider.acp = Some(AcpLaunch {
+        program: one_shot_wrapper.display().to_string(),
+        arguments: vec![
+            "--model".to_owned(),
+            "{model}".to_owned(),
+            "--mode".to_owned(),
+            "{model}".to_owned(),
+        ],
+    });
+    let backend = AgentBackend::spawn_routes(&[provider]);
+    let error = backend
+        .request("thread/start", json!({"model":"exit-once-session"}))
+        .await
+        .expect_err("report provider restart startup failure");
+
+    assert_eq!(
+        error.to_string(),
+        "ACP session creation failed after provider restart"
+    );
+    assert!(!one_shot_wrapper.exists());
+    backend.shutdown().await;
 }
 
 fn provider_home() -> (tempfile::TempDir, PathBuf) {

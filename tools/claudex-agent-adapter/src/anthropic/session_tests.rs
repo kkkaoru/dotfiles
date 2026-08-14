@@ -10,6 +10,7 @@ use std::{
 use serde_json::{Value, json};
 use tokio::sync::{Mutex, Semaphore};
 
+use super::tools::launch_capability_summary;
 use super::{
     candidate_length, codex_tool_name, dynamic_tool, helpers::owns_tool_result, is_better_length,
     is_idempotent_task_lifecycle_error, reservation::reserve_matching_session,
@@ -229,6 +230,7 @@ fn session_with_slot(
         pending_tools: Mutex::new(HashMap::new()),
         consumed_tool_ids: Mutex::new(std::collections::HashSet::new()),
         external_tool_names: HashMap::new(),
+        launch_availability: Default::default(),
         client_user_id: None,
         claude_session_id: None,
         gate: Arc::new(Mutex::new(())),
@@ -763,6 +765,108 @@ fn main_session_does_not_synthesize_agent_tools() {
         names.values().collect::<Vec<_>>(),
         vec![&"WebFetch".to_owned()]
     );
+}
+
+#[test]
+fn launch_capability_summary_requires_nonempty_tools_without_an_exact_or_launch_like_name() {
+    struct Case {
+        name: &'static str,
+        dynamic_tools: Vec<Value>,
+        external_names: HashMap<String, String>,
+        unavailable: bool,
+    }
+
+    let cases = [
+        Case {
+            name: "no tools is unknown rather than unavailable",
+            dynamic_tools: Vec::new(),
+            external_names: HashMap::new(),
+            unavailable: false,
+        },
+        Case {
+            name: "irrelevant tools prove launch is unavailable",
+            dynamic_tools: vec![json!({"name":"Bash"})],
+            external_names: HashMap::from([("dynamic-bash".to_owned(), "Bash".to_owned())]),
+            unavailable: true,
+        },
+        Case {
+            name: "exact Agent is available",
+            dynamic_tools: vec![json!({"name":"dynamic-agent"})],
+            external_names: HashMap::from([("dynamic-agent".to_owned(), "Agent".to_owned())]),
+            unavailable: false,
+        },
+        Case {
+            name: "exact Task is available",
+            dynamic_tools: vec![json!({"name":"dynamic-task"})],
+            external_names: HashMap::from([("dynamic-task".to_owned(), "Task".to_owned())]),
+            unavailable: false,
+        },
+        Case {
+            name: "case drift cannot provide the exact native launch surface",
+            dynamic_tools: vec![json!({"name":"dynamic-lower-agent"})],
+            external_names: HashMap::from([("dynamic-lower-agent".to_owned(), "agent".to_owned())]),
+            unavailable: true,
+        },
+        Case {
+            name: "launch-like name drift remains inconclusive",
+            dynamic_tools: vec![json!({"name":"dynamic-agent-qualified"})],
+            external_names: HashMap::from([(
+                "dynamic-agent-qualified".to_owned(),
+                "provider_Agent_v2".to_owned(),
+            )]),
+            unavailable: false,
+        },
+        Case {
+            name: "description-only launch mention is not an exact surface",
+            dynamic_tools: vec![json!({
+                "name":"dynamic-helper",
+                "description":"Use `Agent`"
+            })],
+            external_names: HashMap::from([("dynamic-helper".to_owned(), "helper".to_owned())]),
+            unavailable: true,
+        },
+    ];
+
+    for case in cases {
+        let summary = launch_capability_summary(&case.dynamic_tools, &case.external_names);
+        assert!(
+            !format!("{summary:?}").contains("dynamic"),
+            "{}: immutable summary must not retain projected tool data",
+            case.name
+        );
+        let slots = Arc::new(Semaphore::new(1));
+        let session = Session {
+            thread_id: "capability-thread".to_owned(),
+            model: "main".to_owned(),
+            disabled_subagent_models: Default::default(),
+            signature: Arc::from("capability-signature"),
+            transcript: Mutex::new(Vec::new()),
+            pending_tools: Mutex::new(HashMap::new()),
+            consumed_tool_ids: Mutex::new(Default::default()),
+            external_tool_names: case.external_names,
+            launch_availability:
+                crate::anthropic::bridge_types::LaunchAvailabilityState::from_summary(summary),
+            client_user_id: None,
+            claude_session_id: None,
+            gate: Arc::new(Mutex::new(())),
+            last_activity: std::sync::Mutex::new(Instant::now()),
+            pending_since: std::sync::Mutex::new(None),
+            turn_progress: Default::default(),
+            adopted_thread_id: Default::default(),
+            _slot: slots.try_acquire_owned().expect("session slot"),
+        };
+        assert_eq!(
+            session.take_launch_unavailable_notice(),
+            case.unavailable,
+            "{}",
+            case.name
+        );
+        assert!(
+            !session.take_launch_unavailable_notice(),
+            "{}: capability notice must be one-shot",
+            case.name
+        );
+    }
 }
 
 #[test]
@@ -2420,6 +2524,7 @@ async fn finish_detached_session_retains_for_follow_up_reuse() {
         pending_tools: Mutex::new(HashMap::new()),
         consumed_tool_ids: Mutex::new(Default::default()),
         external_tool_names: HashMap::new(),
+        launch_availability: Default::default(),
         client_user_id: None,
         claude_session_id: None,
         gate: Arc::new(Mutex::new(())),
@@ -2469,6 +2574,7 @@ async fn detach_and_finish_are_idempotent_when_lists_already_hold_the_session() 
         pending_tools: Mutex::new(HashMap::new()),
         consumed_tool_ids: Mutex::new(Default::default()),
         external_tool_names: HashMap::new(),
+        launch_availability: Default::default(),
         client_user_id: None,
         claude_session_id: None,
         gate: Arc::new(Mutex::new(())),
@@ -2506,6 +2612,7 @@ async fn finish_detached_session_keeps_session_detached_if_pending_tools_exist()
         pending_tools: Mutex::new(HashMap::new()),
         consumed_tool_ids: Mutex::new(Default::default()),
         external_tool_names: HashMap::new(),
+        launch_availability: Default::default(),
         client_user_id: None,
         claude_session_id: None,
         gate: Arc::new(Mutex::new(())),

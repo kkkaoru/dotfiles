@@ -246,6 +246,48 @@ fn message_io_reports_writer_and_header_eof_failures() {
 }
 
 #[test]
+fn protocol_classifies_tool_call_shapes_and_records_write_failures() {
+    for message in [
+        json!({"jsonrpc":"2.0","id":1,"method":"tools/call"}),
+        json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{}}),
+        json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"Agent"}}),
+        json!({"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"mcp-secret-other"}}),
+        json!({"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":42}}),
+        json!({"jsonrpc":"2.0","id":6,"method":"tools/call","params":[]}),
+    ] {
+        let mut output = Vec::new();
+        handle(&message, true, &mut output).expect("handle tool call shape");
+        assert_eq!(
+            serde_json::from_slice::<Value>(&output).unwrap()["result"]["isError"],
+            false
+        );
+    }
+
+    struct FailingWriter;
+
+    impl std::io::Write for FailingWriter {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("injected write failure"))
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Err(std::io::Error::other("injected flush failure"))
+        }
+    }
+
+    for message in [
+        json!({"jsonrpc":"2.0","id":7,"method":"initialize"}),
+        json!({"jsonrpc":"2.0","id":8,"method":"tools/list"}),
+        json!({"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"Task"}}),
+    ] {
+        assert!(
+            handle(&message, true, &mut FailingWriter).is_err(),
+            "write failure must reach the protocol result logger"
+        );
+    }
+}
+
+#[test]
 fn records_calls_to_each_configured_queue_with_defaults() {
     let _guard = LAUNCH_OWNER_ENV_LOCK.lock().expect("launch owner env lock");
     let previous = std::env::var_os("CLAUDEX_LAUNCH_OWNER");

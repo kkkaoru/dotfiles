@@ -11,9 +11,20 @@ use tokio::sync::{Mutex, Semaphore, mpsc};
 
 use super::*;
 use crate::agent_backend::AgentBackend;
-use crate::anthropic::{Bridge, Session};
+use crate::anthropic::{
+    Bridge, Session,
+    bridge_types::{LaunchAvailabilityState, LaunchCapabilitySummary},
+};
 
 fn test_session(claude_session_id: Option<&str>) -> Session {
+    test_session_with_tools(claude_session_id, [("Agent", "Agent")], false)
+}
+
+fn test_session_with_tools<const N: usize>(
+    claude_session_id: Option<&str>,
+    external_tools: [(&str, &str); N],
+    launch_unavailable: bool,
+) -> Session {
     let slots = Arc::new(Semaphore::new(1));
     Session {
         thread_id: "thread".to_owned(),
@@ -23,7 +34,13 @@ fn test_session(claude_session_id: Option<&str>) -> Session {
         transcript: Mutex::new(Vec::new()),
         pending_tools: Mutex::new(HashMap::new()),
         consumed_tool_ids: Mutex::new(HashSet::new()),
-        external_tool_names: HashMap::from([("Agent".to_owned(), "Agent".to_owned())]),
+        external_tool_names: external_tools
+            .into_iter()
+            .map(|(dynamic, native)| (dynamic.to_owned(), native.to_owned()))
+            .collect(),
+        launch_availability: LaunchAvailabilityState::from_summary(LaunchCapabilitySummary::new(
+            launch_unavailable,
+        )),
         client_user_id: None,
         claude_session_id: claude_session_id.map(str::to_owned),
         gate: Arc::new(Mutex::new(())),
@@ -33,6 +50,313 @@ fn test_session(claude_session_id: Option<&str>) -> Session {
         adopted_thread_id: Default::default(),
         _slot: slots.try_acquire_owned().expect("session slot"),
     }
+}
+
+const LAUNCH_UNAVAILABLE_NOTICE: &str =
+    "Agent/Task is unavailable in this session, so this SubAgent was not started";
+
+fn native_launch_event(method: &str, call_id: &str, tool: &str, arguments: Value) -> Value {
+    json!({
+        "method": method,
+        "params": {
+            "callId": call_id,
+            "tool": tool,
+            "title": tool,
+            "status": "pending",
+            "arguments": arguments
+        }
+    })
+}
+
+fn drain_stream(receiver: &mut mpsc::Receiver<Result<Bytes, Infallible>>) -> String {
+    std::iter::from_fn(|| receiver.try_recv().ok())
+        .map(|frame| String::from_utf8_lossy(&frame.expect("stream frame")).into_owned())
+        .collect()
+}
+
+fn assert_notice_uses_text_delta(frames: &str, notice: &str) {
+    let notice_frame = frames
+        .split("\n\n")
+        .find(|frame| frame.contains(notice))
+        .expect("notice SSE frame");
+    assert!(
+        notice_frame.contains(r#""type":"text_delta""#),
+        "{notice_frame}"
+    );
+    assert!(!notice_frame.contains("thinking_delta"), "{notice_frame}");
+    assert!(
+        !notice_frame.contains("claudex_provider_progress"),
+        "{notice_frame}"
+    );
+}
+
+async fn settled_bridge() -> Bridge {
+    let leaf = Arc::new(AgentBackend::Copilot(
+        crate::copilot_acp::CopilotAcp::settled_for_test().await,
+    ));
+    let backend = AgentBackend::routed(vec![("main".to_owned(), leaf)]);
+    let mut catalog = crate::provider_config::ModelCatalog::default();
+    catalog
+        .set_worker_routes(vec![crate::provider_config::WorkerRoute::new(
+            "worker", "main", "high",
+        )])
+        .expect("worker catalog");
+    Bridge::new_with_backend(backend, "main".to_owned()).with_model_catalog(catalog)
+}
+
+#[tokio::test]
+async fn unavailable_notice_is_committed_text_and_one_shot_across_call_and_update() {
+    let backend = AgentBackend::spawn_routes(&[]);
+    let bridge = Bridge::new_with_backend(backend, "main".to_owned());
+    let session = test_session_with_tools(Some("scope-unavailable"), [("Bash", "Bash")], true);
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(32);
+    let mut builder = SegmentBuilder::new(1);
+
+    for (method, call_id) in [
+        ("item/providerTool/call", "native-agent-call"),
+        ("item/providerTool/update", "native-agent-update"),
+        ("item/providerTool/call", "native-task-call"),
+    ] {
+        builder
+            .provider_launch_event(
+                &bridge,
+                &session,
+                &[],
+                &json!(null),
+                &native_launch_event(method, call_id, "Agent", json!({})),
+                Some(&sender),
+            )
+            .await
+            .expect("native launch attempt");
+    }
+
+    let live = drain_stream(&mut receiver);
+    assert_eq!(live.matches(LAUNCH_UNAVAILABLE_NOTICE).count(), 1, "{live}");
+    assert!(live.contains("Try another model or session that offers Agent/Task"));
+    assert_notice_uses_text_delta(&live, LAUNCH_UNAVAILABLE_NOTICE);
+    let segment = builder.finish(Some(&sender)).await.expect("finish");
+    let finish = drain_stream(&mut receiver);
+    assert!(!finish.contains(LAUNCH_UNAVAILABLE_NOTICE), "{finish}");
+    assert_incomplete_launch_committed_text(&segment.blocks, &[LAUNCH_UNAVAILABLE_NOTICE]);
+    assert!(
+        !serde_json::to_string(&segment.blocks)
+            .expect("serialize segment")
+            .contains("awaiting its prompt")
+    );
+    assert!(
+        !serde_json::to_string(&segment.blocks)
+            .expect("serialize segment")
+            .contains("never received a prompt")
+    );
+}
+
+#[tokio::test]
+async fn unavailable_notice_uses_the_same_committed_path_without_streaming() {
+    let backend = AgentBackend::spawn_routes(&[]);
+    let bridge = Bridge::new_with_backend(backend, "main".to_owned());
+    let session = test_session_with_tools(Some("scope-nonstream"), [("Bash", "Bash")], true);
+    let mut builder = SegmentBuilder::new(1);
+    builder
+        .provider_launch_event(
+            &bridge,
+            &session,
+            &[],
+            &json!(null),
+            &native_launch_event(
+                "item/providerTool/call",
+                "nonstream-agent",
+                "Agent",
+                json!({}),
+            ),
+            None,
+        )
+        .await
+        .expect("nonstream native launch attempt");
+    let segment = builder.finish(None).await.expect("finish");
+    assert_incomplete_launch_committed_text(&segment.blocks, &[LAUNCH_UNAVAILABLE_NOTICE]);
+}
+
+#[tokio::test]
+async fn unavailable_notice_requires_an_exact_native_launch_attempt() {
+    let backend = AgentBackend::spawn_routes(&[]);
+    let bridge = Bridge::new_with_backend(backend, "main".to_owned());
+    let session = test_session_with_tools(Some("scope-nonlaunch"), [("Bash", "Bash")], true);
+    let mut builder = SegmentBuilder::new(1);
+
+    for event in [
+        native_launch_event("item/providerTool/call", "shell", "shell", json!({})),
+        native_launch_event("item/providerTool/call", "lower-agent", "agent", json!({})),
+        json!({
+            "method":"item/providerTool/call",
+            "params": {
+                "callId":"agent-in-description",
+                "tool":"shell",
+                "title":"run Agent helper",
+                "arguments": {"_toolName":"helper"}
+            }
+        }),
+    ] {
+        builder
+            .provider_launch_event(&bridge, &session, &[], &json!(null), &event, None)
+            .await
+            .expect("nonlaunch provider event");
+    }
+
+    let segment = builder.finish(None).await.expect("finish");
+    assert!(
+        !serde_json::to_string(&segment.blocks)
+            .expect("serialize segment")
+            .contains(LAUNCH_UNAVAILABLE_NOTICE),
+        "nonlaunch activity must not consume or emit the unavailable notice"
+    );
+    assert!(
+        session.take_launch_unavailable_notice(),
+        "nonlaunch activity must leave the one-shot notice available"
+    );
+}
+
+#[tokio::test]
+async fn supplied_agent_with_prompt_bridges_without_unavailable_notice() {
+    let bridge = settled_bridge().await;
+    let session =
+        test_session_with_tools(Some("scope-supplied-agent"), [("Agent", "Agent")], false);
+    let mut builder = SegmentBuilder::new(1);
+    builder
+        .provider_launch_event(
+            &bridge,
+            &session,
+            &[],
+            &json!(null),
+            &native_launch_event(
+                "item/providerTool/call",
+                "supplied-agent",
+                "Agent",
+                json!({
+                    "prompt":"perform the bounded check",
+                    "subagent_type":"worker",
+                    "claudex_model":"main",
+                    "claudex_effort":"high"
+                }),
+            ),
+            None,
+        )
+        .await
+        .expect("bridge supplied Agent");
+    assert_eq!(builder.bridged_provider_launch_ids, ["supplied-agent"]);
+    let segment = builder.finish(None).await.expect("finish");
+    assert!(
+        !serde_json::to_string(&segment.blocks)
+            .expect("serialize segment")
+            .contains(LAUNCH_UNAVAILABLE_NOTICE)
+    );
+}
+
+#[tokio::test]
+async fn supplied_task_keeps_existing_incomplete_notice_without_unavailable_notice() {
+    let backend = AgentBackend::spawn_routes(&[]);
+    let bridge = Bridge::new_with_backend(backend, "main".to_owned());
+    let mut session =
+        test_session_with_tools(Some("scope-supplied-task"), [("Task", "Task")], false);
+    session
+        .external_tool_names
+        .insert("Task".to_owned(), "Task".to_owned());
+    let mut builder = SegmentBuilder::new(1);
+    builder
+        .provider_launch_event(
+            &bridge,
+            &session,
+            &[],
+            &json!(null),
+            &native_launch_event(
+                "item/providerTool/call",
+                "supplied-task",
+                "Task",
+                json!({"_toolName":"Task"}),
+            ),
+            None,
+        )
+        .await
+        .expect("unconfirmed supplied Task");
+    let segment = builder.finish(None).await.expect("finish");
+    let committed = serde_json::to_string(&segment.blocks).expect("serialize segment");
+    assert!(committed.contains("awaiting its prompt"), "{committed}");
+    assert!(committed.contains("never received a prompt"), "{committed}");
+    assert!(
+        !committed.contains(LAUNCH_UNAVAILABLE_NOTICE),
+        "{committed}"
+    );
+}
+
+#[tokio::test]
+async fn inconclusive_mcp_task_without_mapping_keeps_existing_incomplete_notice() {
+    let backend = AgentBackend::spawn_routes(&[]);
+    let bridge = Bridge::new_with_backend(backend, "main".to_owned());
+    let session =
+        test_session_with_tools(Some("scope-inconclusive-task"), [("Bash", "Bash")], false);
+    let mut builder = SegmentBuilder::new(1);
+    let event = json!({
+        "method":"item/providerTool/call",
+        "params": {
+            "callId":"inconclusive-mcp-task",
+            "tool":"mcp",
+            "title":"Task",
+            "status":"pending",
+            "arguments":{"_toolName":"Task"}
+        }
+    });
+    builder
+        .provider_launch_event(&bridge, &session, &[], &json!(null), &event, None)
+        .await
+        .expect("inconclusive MCP Task");
+    let segment = builder.finish(None).await.expect("finish");
+    let committed = serde_json::to_string(&segment.blocks).expect("serialize segment");
+
+    assert!(committed.contains("awaiting its prompt"), "{committed}");
+    assert!(committed.contains("never received a prompt"), "{committed}");
+    assert!(committed.contains("inconclusive-mcp-task"), "{committed}");
+    assert!(
+        !committed.contains(LAUNCH_UNAVAILABLE_NOTICE),
+        "{committed}"
+    );
+}
+
+#[tokio::test]
+async fn unavailable_native_task_has_no_misleading_incomplete_notice_or_secret_echo() {
+    let backend = AgentBackend::spawn_routes(&[]);
+    let bridge = Bridge::new_with_backend(backend, "main".to_owned());
+    let session = test_session_with_tools(Some("scope-task-unavailable"), [("Bash", "Bash")], true);
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
+    let mut builder = SegmentBuilder::new(1);
+    builder
+        .provider_launch_event(
+            &bridge,
+            &session,
+            &[],
+            &json!(null),
+            &native_launch_event(
+                "item/providerTool/call",
+                "mcp-secret-call-id",
+                "Task",
+                json!({"_toolName":"Task", "prompt":"mcp-secret-prompt"}),
+            ),
+            Some(&sender),
+        )
+        .await
+        .expect("unavailable Task attempt");
+    let live = drain_stream(&mut receiver);
+    let segment = builder.finish(Some(&sender)).await.expect("finish");
+    let finish = drain_stream(&mut receiver);
+    let committed = serde_json::to_string(&segment.blocks).expect("serialize segment");
+
+    assert_eq!(live.matches(LAUNCH_UNAVAILABLE_NOTICE).count(), 1, "{live}");
+    assert!(!finish.contains("never received a prompt"), "{finish}");
+    assert!(!committed.contains("awaiting its prompt"), "{committed}");
+    assert!(
+        !committed.contains("never received a prompt"),
+        "{committed}"
+    );
+    assert!(!committed.contains("mcp-secret"), "{committed}");
+    assert_incomplete_launch_committed_text(&segment.blocks, &[LAUNCH_UNAVAILABLE_NOTICE]);
 }
 
 #[tokio::test]
@@ -397,6 +721,59 @@ fn unconfirmed_task_launch_recognizes_each_provider_tool_location() {
             expected,
             "{name}"
         );
+    }
+}
+
+#[test]
+fn exact_native_launch_attempt_recognizes_only_exact_agent_or_task_locations() {
+    let cases = [
+        (
+            "params absent",
+            json!({"method":"item/providerTool/call"}),
+            false,
+        ),
+        ("exact tool", json!({"params":{"tool":"Agent"}}), true),
+        (
+            "exact title",
+            json!({"params":{"tool":"shell", "title":"Task"}}),
+            true,
+        ),
+        (
+            "exact argument tool name",
+            json!({"params":{"arguments":{"_toolName":"Agent"}}}),
+            true,
+        ),
+        (
+            "case drift is not exact",
+            json!({
+                "params": {
+                    "tool":"agent",
+                    "title":"task",
+                    "arguments":{"_toolName":"TASK"}
+                }
+            }),
+            false,
+        ),
+        (
+            "launch words embedded in other names are not exact",
+            json!({
+                "params": {
+                    "tool":"ProviderAgent",
+                    "title":"Task helper",
+                    "arguments":{"_toolName":"mcp_Task_0"}
+                }
+            }),
+            false,
+        ),
+        (
+            "non-string fields are ignored",
+            json!({"params":{"tool":7, "title":null, "arguments":{"_toolName":false}}}),
+            false,
+        ),
+    ];
+
+    for (name, event, expected) in cases {
+        assert_eq!(is_exact_native_launch_attempt(&event), expected, "{name}");
     }
 }
 

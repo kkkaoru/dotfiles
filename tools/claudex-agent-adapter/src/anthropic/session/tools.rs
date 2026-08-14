@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use serde_json::{Value, json};
 
-use super::super::MessagesRequest;
+use super::super::{MessagesRequest, bridge_types::LaunchCapabilitySummary};
 use crate::agent_backend::WebSearchMode;
 mod instructions;
 pub(super) use instructions::*;
@@ -54,6 +54,22 @@ pub(in crate::anthropic) fn is_main_session_only_tool(name: &str) -> bool {
         .next()
         .unwrap_or(name);
     stem.eq_ignore_ascii_case("advisor")
+}
+
+pub(in crate::anthropic) fn launch_capability_summary(
+    dynamic_tools: &[Value],
+    external_names: &HashMap<String, String>,
+) -> LaunchCapabilitySummary {
+    let has_exact_launch = external_names
+        .values()
+        .any(|name| matches!(name.as_str(), "Agent" | "Task"));
+    let launch_like_count = external_names
+        .values()
+        .filter(|name| name.contains("Agent") || name.contains("Task"))
+        .count();
+    LaunchCapabilitySummary::new(
+        !dynamic_tools.is_empty() && !has_exact_launch && launch_like_count == 0,
+    )
 }
 
 fn external_tools(

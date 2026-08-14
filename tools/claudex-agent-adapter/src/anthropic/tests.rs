@@ -161,6 +161,7 @@ fn test_session_at(
         pending_tools: tokio::sync::Mutex::new(pending_tools),
         consumed_tool_ids: tokio::sync::Mutex::new(std::collections::HashSet::new()),
         external_tool_names: HashMap::new(),
+        launch_availability: Default::default(),
         client_user_id: None,
         claude_session_id: None,
         gate: Arc::new(tokio::sync::Mutex::new(())),

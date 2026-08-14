@@ -196,6 +196,7 @@ fn session_with_claude_id(activity: Instant, claude_session_id: &str) -> Arc<Ses
         pending_tools: Mutex::new(HashMap::from([("tool".to_owned(), json!(9))])),
         consumed_tool_ids: Mutex::new(Default::default()),
         external_tool_names: HashMap::new(),
+        launch_availability: Default::default(),
         client_user_id: None,
         claude_session_id: (!claude_session_id.is_empty()).then(|| claude_session_id.to_owned()),
         gate: Arc::new(Mutex::new(())),

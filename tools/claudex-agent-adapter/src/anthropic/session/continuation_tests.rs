@@ -40,6 +40,7 @@ fn session(model: &str, user_id: Option<&str>, transcript: Vec<Value>) -> Arc<Se
         // Stale/no-tool resume behavior is covered separately in the
         // session tests with an explicitly empty map.
         external_tool_names: HashMap::from([("cc_Bash_0".to_owned(), "Bash".to_owned())]),
+        launch_availability: Default::default(),
         client_user_id: user_id.map(str::to_owned),
         claude_session_id: None,
         gate: Arc::new(Mutex::new(())),

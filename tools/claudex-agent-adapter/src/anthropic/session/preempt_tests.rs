@@ -402,6 +402,7 @@ fn session_named(model: &str, user_id: Option<&str>, signature: &str) -> Arc<Ses
         pending_tools: Mutex::new(HashMap::new()),
         consumed_tool_ids: Mutex::new(Default::default()),
         external_tool_names: HashMap::new(),
+        launch_availability: Default::default(),
         client_user_id: user_id.map(str::to_owned),
         claude_session_id: None,
         gate: Arc::new(Mutex::new(())),

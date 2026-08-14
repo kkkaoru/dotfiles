@@ -102,6 +102,38 @@ mod tests {
         assert!(load_config(None).unwrap().is_empty());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn config_path_falls_back_when_hostname_command_fails() {
+        use std::os::unix::fs::PermissionsExt;
+
+        const CHILD: &str = "CLAUDEX_SUBAGENT_POLICY_HOSTNAME_FAILURE_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            let root = tempfile::tempdir().expect("isolated policy home");
+            assert_eq!(
+                config_path(None, Some(root.path().as_os_str())).unwrap(),
+                Some(root.path().join(CONFIG_RELATIVE_PATH))
+            );
+            return;
+        }
+
+        let fixture = tempfile::tempdir().expect("hostname failure fixture");
+        let hostname = fixture.path().join("hostname");
+        std::fs::write(&hostname, "#!/bin/sh\nexit 1\n").expect("fake hostname");
+        std::fs::set_permissions(&hostname, std::fs::Permissions::from_mode(0o755))
+            .expect("executable fake hostname");
+        let status = Command::new(std::env::current_exe().expect("test executable"))
+            .args([
+                "--exact",
+                "subagent_policy::tests::config_path_falls_back_when_hostname_command_fails",
+            ])
+            .env(CHILD, "1")
+            .env("PATH", fixture.path())
+            .status()
+            .expect("run hostname failure child");
+        assert!(status.success(), "hostname failure child failed: {status}");
+    }
+
     #[test]
     fn loads_hostname_local_denylist_with_provider_model_ids() {
         clear_last_good();

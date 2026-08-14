@@ -140,6 +140,7 @@ mod tests {
             pending_tools: Mutex::new(HashMap::new()),
             consumed_tool_ids: Mutex::new(Default::default()),
             external_tool_names: HashMap::new(),
+            launch_availability: Default::default(),
             client_user_id: None,
             claude_session_id: Some(claude_session_id.to_owned()),
             gate: Arc::new(Mutex::new(())),

@@ -126,6 +126,7 @@ fn session_with_claude_id(model: &str, claude_session_id: &str) -> Arc<Session> 
         pending_tools: Mutex::new(HashMap::new()),
         consumed_tool_ids: Mutex::new(Default::default()),
         external_tool_names: HashMap::new(),
+        launch_availability: Default::default(),
         client_user_id: Some("client".to_owned()),
         claude_session_id: Some(claude_session_id.to_owned()),
         gate: Arc::new(Mutex::new(())),

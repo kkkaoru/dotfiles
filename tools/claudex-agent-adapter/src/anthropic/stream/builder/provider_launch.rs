@@ -57,6 +57,13 @@ impl SegmentBuilder {
         {
             return Ok(());
         }
+        if is_exact_native_launch_attempt(event) && session.take_launch_unavailable_notice() {
+            self.emit_incomplete_launch_notice(
+                "Claudex: Agent/Task is unavailable in this session, so this SubAgent was not started. Try another model or session that offers Agent/Task.",
+                stream,
+            )
+            .await?;
+        }
         self.note_mcp_provider_call(call_id, mcp_shaped);
         if self
             .should_suppress_unbridged_launch(session, event, mcp_hint, call_id, stream)
@@ -124,16 +131,18 @@ impl SegmentBuilder {
             return Ok(false);
         }
         if let Some(call_id) = call_id
-            && self.track_incomplete_launch(call_id)
-            && is_unconfirmed_task_launch(session, event)
+            && !session.launch_unavailable()
         {
-            // This is an assistant-text outcome, not provider progress: the
-            // card cannot start a worker until its prompt arrives.
-            self.emit_incomplete_launch_notice(
-                "Claudex: This SubAgent launch is awaiting its prompt. Send Agent/Task again with a non-empty prompt in this turn.",
-                stream,
-            )
-            .await?;
+            let newly_tracked = self.track_incomplete_launch(call_id);
+            if newly_tracked && is_unconfirmed_task_launch(session, event) {
+                // This is an assistant-text outcome, not provider progress: the
+                // card cannot start a worker until its prompt arrives.
+                self.emit_incomplete_launch_notice(
+                    "Claudex: This SubAgent launch is awaiting its prompt. Send Agent/Task again with a non-empty prompt in this turn.",
+                    stream,
+                )
+                .await?;
+            }
         }
         Ok(true)
     }
@@ -333,6 +342,21 @@ fn is_unconfirmed_task_launch(session: &Session, event: &Value) -> bool {
         .pointer("/arguments/_toolName")
         .and_then(Value::as_str)
         .is_some_and(|name| name.eq_ignore_ascii_case("Task"))
+}
+
+fn is_exact_native_launch_attempt(event: &Value) -> bool {
+    let Some(params) = event.get("params") else {
+        return false;
+    };
+    ["tool", "title"].into_iter().any(|field| {
+        params
+            .get(field)
+            .and_then(Value::as_str)
+            .is_some_and(|name| matches!(name, "Agent" | "Task"))
+    }) || params
+        .pointer("/arguments/_toolName")
+        .and_then(Value::as_str)
+        .is_some_and(|name| matches!(name, "Agent" | "Task"))
 }
 
 #[cfg(test)]

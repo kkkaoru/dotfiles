@@ -8,8 +8,12 @@ use anyhow::Result;
 use serde_json::Value;
 use tokio::sync::Mutex;
 
-use super::super::super::{Bridge, MessagesRequest, Session, request_identity};
-use super::super::tools::{thread_start_params_for_mode, tool_configuration_for_mode};
+use super::super::super::{
+    Bridge, MessagesRequest, Session, bridge_types::LaunchAvailabilityState, request_identity,
+};
+use super::super::tools::{
+    launch_capability_summary, thread_start_params_for_mode, tool_configuration_for_mode,
+};
 use crate::app_server::response_thread_id;
 
 impl Bridge {
@@ -31,6 +35,7 @@ impl Bridge {
             collaborator_model,
             web_search_mode,
         );
+        let launch_capability = launch_capability_summary(&dynamic_tools, &external_tool_names);
         let params = thread_start_params_for_mode(request, &model, dynamic_tools, web_search_mode);
         let result = provider.request("thread/start", params).await?;
         let session = Arc::new(Session {
@@ -42,6 +47,7 @@ impl Bridge {
             pending_tools: Mutex::new(HashMap::new()),
             consumed_tool_ids: Mutex::new(HashSet::new()),
             external_tool_names,
+            launch_availability: LaunchAvailabilityState::from_summary(launch_capability),
             client_user_id: request
                 .metadata
                 .get("user_id")

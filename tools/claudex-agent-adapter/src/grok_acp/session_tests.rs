@@ -67,6 +67,40 @@ fn rpc_connection(
     (connection, request_rx, server_task, io_task)
 }
 
+fn pending_rpc_connection() -> (
+    acp::ClientSideConnection,
+    tokio::sync::oneshot::Receiver<Value>,
+    tokio::task::JoinHandle<()>,
+    tokio::task::JoinHandle<()>,
+) {
+    let events = Arc::new(ThreadEventDispatcher::default());
+    let (client_write, server_read) = tokio::io::duplex(4096);
+    let (server_write, client_read) = tokio::io::duplex(4096);
+    let (connection, io) = acp::ClientSideConnection::new(
+        AcpClient::new(events),
+        client_write.compat_write(),
+        client_read.compat(),
+        |future| {
+            tokio::task::spawn_local(future);
+        },
+    );
+    let io_task = tokio::task::spawn_local(async move {
+        let _ = io.await;
+    });
+    let (request_tx, request_rx) = tokio::sync::oneshot::channel();
+    let server_task = tokio::task::spawn_local(async move {
+        let _server_write = server_write;
+        let mut reader = BufReader::new(server_read);
+        let mut line = String::new();
+        reader.read_line(&mut line).await.unwrap();
+        request_tx
+            .send(serde_json::from_str(&line).unwrap())
+            .unwrap();
+        std::future::pending::<()>().await;
+    });
+    (connection, request_rx, server_task, io_task)
+}
+
 struct BufferWriter(Arc<Mutex<Vec<u8>>>);
 
 impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for BufferWriter {
@@ -318,6 +352,42 @@ async fn new_session_sends_non_grok_model_metadata_and_surfaces_rpc_errors() {
             assert!(error.to_string().contains("session/new failed"));
             drop(connection);
             server.await.unwrap();
+            io.await.unwrap();
+        })
+        .await;
+}
+
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn session_setup_classifies_rpc_timeout_and_skips_empty_attach() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let cwd = tempfile::tempdir().unwrap();
+            let (connection, request, server, io) = pending_rpc_connection();
+            let error = new_session_with_mcp(
+                AcpProvider::Grok,
+                &connection,
+                "grok-model",
+                cwd.path(),
+                Vec::new(),
+            )
+            .await
+            .unwrap_err();
+            assert!(error.to_string().contains("session/new timed out"));
+            assert_eq!(request.await.unwrap()["method"], "session/new");
+
+            attach_launch_mcp(
+                AcpProvider::Grok,
+                &connection,
+                &acp::SessionId::new("unused-session"),
+                cwd.path(),
+                Vec::new(),
+            )
+            .await
+            .unwrap();
+
+            drop(connection);
+            server.abort();
+            let _ = server.await;
             io.await.unwrap();
         })
         .await;

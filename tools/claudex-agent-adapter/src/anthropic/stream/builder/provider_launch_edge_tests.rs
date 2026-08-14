@@ -22,6 +22,7 @@ fn test_session(claude_session_id: Option<&str>) -> Session {
         pending_tools: Mutex::new(HashMap::new()),
         consumed_tool_ids: Mutex::new(HashSet::new()),
         external_tool_names: HashMap::from([("Agent".to_owned(), "Agent".to_owned())]),
+        launch_availability: Default::default(),
         client_user_id: None,
         claude_session_id: claude_session_id.map(str::to_owned),
         gate: Arc::new(Mutex::new(())),

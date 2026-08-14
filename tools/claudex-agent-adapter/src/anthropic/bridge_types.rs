@@ -3,7 +3,10 @@ use serde_json::Value;
 use std::{
     collections::{BTreeSet, HashMap, HashSet},
     path::PathBuf,
-    sync::{Arc, Mutex as StdMutex, Weak},
+    sync::{
+        Arc, Mutex as StdMutex, Weak,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Instant,
 };
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
@@ -92,6 +95,7 @@ pub(crate) struct Session {
     pub(crate) pending_tools: Mutex<HashMap<String, Value>>,
     pub(crate) consumed_tool_ids: Mutex<HashSet<String>>,
     pub(crate) external_tool_names: HashMap<String, String>,
+    pub(crate) launch_availability: LaunchAvailabilityState,
     pub(crate) client_user_id: Option<String>,
     pub(crate) claude_session_id: Option<String>,
     pub(crate) gate: Arc<Mutex<()>>,
@@ -103,6 +107,44 @@ pub(crate) struct Session {
     pub(crate) _slot: OwnedSemaphorePermit,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct LaunchCapabilitySummary {
+    launch_unavailable: bool,
+}
+
+impl LaunchCapabilitySummary {
+    pub(crate) const fn new(launch_unavailable: bool) -> Self {
+        Self { launch_unavailable }
+    }
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct LaunchAvailabilityState {
+    summary: LaunchCapabilitySummary,
+    notice_emitted: AtomicBool,
+}
+
+impl LaunchAvailabilityState {
+    pub(crate) const fn from_summary(summary: LaunchCapabilitySummary) -> Self {
+        Self {
+            summary,
+            notice_emitted: AtomicBool::new(false),
+        }
+    }
+
+    fn launch_unavailable(&self) -> bool {
+        self.summary.launch_unavailable
+    }
+
+    fn take_notice(&self) -> bool {
+        self.launch_unavailable()
+            && self
+                .notice_emitted
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TurnProgressEvent {
     pub(crate) id: String,
@@ -112,6 +154,14 @@ pub(crate) struct TurnProgressEvent {
 }
 
 impl Session {
+    pub(crate) fn launch_unavailable(&self) -> bool {
+        self.launch_availability.launch_unavailable()
+    }
+
+    pub(crate) fn take_launch_unavailable_notice(&self) -> bool {
+        self.launch_availability.take_notice()
+    }
+
     pub(crate) fn effective_thread_id(&self) -> String {
         self.adopted_thread_id
             .lock()

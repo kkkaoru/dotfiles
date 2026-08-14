@@ -416,6 +416,7 @@ fn handoff_session_with(
         pending_tools: Mutex::new(pending),
         consumed_tool_ids: Mutex::new(consumed),
         external_tool_names: HashMap::new(),
+        launch_availability: Default::default(),
         client_user_id: None,
         claude_session_id: None,
         gate: Arc::new(Mutex::new(())),
