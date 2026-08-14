@@ -1,0 +1,34 @@
+# pi agmsg extension
+
+A global [pi extension](https://pi.dev/docs/latest/extensions) for
+[agmsg](https://github.com/fujibee/agmsg). It provides:
+
+- `/agmsg` for interactive setup, inbox, send, history, team, and identity operations.
+- Setup lets you select an existing team or create a new one; new-team and agent editors are pre-filled with a collision-free project directory name and random `pi-<id>` name.
+- `/agmsg leave [team]` removes the active identity from a team after confirmation.
+- `/agmsg reconnect` refreshes the active identity, restarts background delivery, and checks the inbox after resuming a session.
+- The status includes both identity and team, for example `agmsg: oversea-horse-race (horse-racing-data)`.
+- An LLM-callable `agmsg` tool using only agmsg's supported scripts.
+- Background polling plus end-of-turn safety checks, equivalent to agmsg `both` delivery for pi. Incoming messages use pi's `steer` queue without starting an unsolicited model turn, so the user editor remains available.
+- A trusted external agmsg `types/pi` manifest, installed by the dotfiles symlink script.
+
+## Install
+
+Install agmsg first, then run from the dotfiles root:
+
+```bash
+./create-symlinks.sh
+```
+
+This links this directory to `~/.pi/agent/extensions/agmsg` and links/trusts the
+`types/pi` plugin through agmsg's `plugin.sh`. Restart pi or run `/reload`.
+
+## Quality checks
+
+```bash
+bun install
+bun run check
+```
+
+Vitest enforces 95% minimum branch, function, line, and statement coverage.
+Oxlint enables every rule category and limits nesting depth to three.

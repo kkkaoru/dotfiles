@@ -111,6 +111,29 @@ for harness in cursor grok; do
   fi
 done
 
+# pi keeps sessions and credentials beside global extensions. Keep ~/.pi as a
+# real directory and link only this repository's agmsg extension implementation.
+pi_agmsg_extension="${DOTPATH}/tools/pi-agmsg-extension"
+if [ -d "$pi_agmsg_extension" ]; then
+  mkdir -p "${HOME}/.pi/agent/extensions"
+  link_path "$pi_agmsg_extension" "${HOME}/.pi/agent/extensions/agmsg"
+fi
+
+# Register pi as an external agmsg agent type through agmsg's supported plugin
+# surface. Trust is path-pinned and must be managed by plugin.sh, never by
+# editing agmsg's trust/config files directly.
+agmsg_skill="${HOME}/.agents/skills/agmsg"
+agmsg_pi_plugin="${pi_agmsg_extension}/agmsg-plugin/pi"
+agmsg_pi_dest="${agmsg_skill}/plugins/types/pi"
+if [ -x "${agmsg_skill}/scripts/plugin.sh" ] && [ -d "$agmsg_pi_plugin" ]; then
+  link_path "$agmsg_pi_plugin" "$agmsg_pi_dest"
+  if [ -L "$agmsg_pi_dest" ] && [ "$(readlink "$agmsg_pi_dest")" = "$agmsg_pi_plugin" ]; then
+    "${agmsg_skill}/scripts/plugin.sh" trust types/pi
+  else
+    echo "skip: cannot trust types/pi because ${agmsg_pi_dest} is not the managed symlink" >&2
+  fi
+fi
+
 # Git 2.54+ config-based hooks invoke this stable per-user path from every repository.
 mkdir -p "${HOME}/.local/bin"
 link_path "${DOTPATH}/tools/git-hooks/dotfiles-git-quality" \
