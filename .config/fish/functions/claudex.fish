@@ -1,4 +1,33 @@
 function claudex --description 'Run Claude Code with config-driven agent backends'
+    # agmsg is installed outside this repository and can be updated without a
+    # dotfiles refresh. Re-apply the claudex lifecycle guard on every launch so
+    # an updated hook cannot silently lose the child/parent boundary. A stale
+    # or unavailable installer is visible, but must not prevent claudex from
+    # starting.
+    set -l agmsg_guard_installer "$HOME/.local/bin/ensure-agmsg-claudex-guard"
+    if not test -x "$agmsg_guard_installer"
+        set -l function_file (status --current-filename)
+        set -l resolved_function_file (realpath "$function_file" 2>/dev/null)
+        if test -n "$resolved_function_file"
+            set -l function_dir (dirname "$resolved_function_file")
+            set -l config_root (dirname (dirname "$function_dir"))
+            set -l repository_root (dirname "$config_root")
+            set -l source_guard_installer "$repository_root/scripts/ensure-agmsg-claudex-guard.sh"
+            if test -x "$source_guard_installer"
+                set agmsg_guard_installer "$source_guard_installer"
+            end
+        end
+    end
+    if test -x "$agmsg_guard_installer"
+        command "$agmsg_guard_installer"
+        set -l agmsg_guard_status $status
+        if test $agmsg_guard_status -ne 0
+            echo "claudex: warning: agmsg guard refresh failed (exit $agmsg_guard_status)" >&2
+        end
+    else
+        echo "claudex: warning: agmsg guard installer is not executable: $agmsg_guard_installer" >&2
+    end
+
     if test (count $argv) -ge 1; and test "$argv[1]" = hot-swap
         set -e argv[1]
         claudex-hot-swap $argv

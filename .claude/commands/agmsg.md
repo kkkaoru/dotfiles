@@ -102,11 +102,18 @@ inbox commands below for an on-demand result; this keeps cross-session
 `<agent-message>` values out of the main user-input queue while preserving
 native Claude Code Agent/Task cards.
 
+An intentional manual Monitor started by `/agmsg` must prefix only its
+`watch.sh` command with `CLAUDEX_AGMSG_EXPLICIT=1`. This is a per-command
+exception for the watcher; do not export it from the shell and do not add it
+to SessionStart/SessionEnd/Stop hook commands. The lifecycle hooks continue to
+use the automatic opt-in guard, while provider/noninteractive children still
+exit even if an explicit marker is inherited.
+
 **Only use scripts in `~/.agents/skills/agmsg/scripts/` — do not read or modify files under `teams/` or `db/` directly.** Treat the storage layout as internal: never construct a database path or invoke `sqlite3` directly. The scripts resolve the active store, including `AGMSG_STORAGE_PATH` overrides.
 
 **Ensure monitor is running first.** Before processing any subcommand below, check whether this session already has an `agmsg inbox stream` Monitor task in its TaskList. If not, and the project's delivery mode is `monitor` or `both` (check via `~/.agents/skills/agmsg/scripts/delivery.sh status claude-code "$(pwd)"`), invoke the Monitor tool now:
 
-- command: `~/.agents/skills/agmsg/scripts/watch.sh $CLAUDE_CODE_SESSION_ID "$(pwd)" claude-code`
+- command: `CLAUDEX_AGMSG_EXPLICIT=1 ~/.agents/skills/agmsg/scripts/watch.sh $CLAUDE_CODE_SESSION_ID "$(pwd)" claude-code`
 - description: `agmsg inbox stream`
 - persistent: true
 
@@ -160,7 +167,7 @@ If argument starts with "actas" followed by an agent name (e.g. "actas alice"):
    b. **If a matching task is found**: TaskStop it.
    c. **If no matching task is found** (typical when /agmsg actas runs as the first command of a fresh session — SessionStart hasn't fired the Monitor directive yet, or you're invoking actas before the agent acted on it): skip TaskStop entirely. There is no Monitor to stop. Do NOT attempt TaskStop with a guessed or empty task_id — it will fail with "Invalid tool parameters" and confuse the flow.
    d. **Only if the project's delivery mode is `monitor` or `both`** (check via `~/.agents/skills/agmsg/scripts/delivery.sh status claude-code "$(pwd)"`), invoke a fresh Monitor, regardless of whether step b or c applied:
-      - command: `~/.agents/skills/agmsg/scripts/watch.sh $CLAUDE_CODE_SESSION_ID "$(pwd)" claude-code <name>`
+      - command: `CLAUDEX_AGMSG_EXPLICIT=1 ~/.agents/skills/agmsg/scripts/watch.sh $CLAUDE_CODE_SESSION_ID "$(pwd)" claude-code <name>`
       - description: `agmsg inbox stream (acting as <name>)`
       - persistent: true
       Otherwise (mode `turn` or `off`), leave it stopped — `actas` must not start automatic delivery a project wasn't configured for.
@@ -177,7 +184,7 @@ If argument starts with "drop" followed by an agent name (e.g. "drop alice"):
    b. **If a matching task is found**: TaskStop it.
    c. **If no matching task is found**: skip TaskStop. Do NOT attempt TaskStop with a guessed or empty task_id.
    d. **Only if the project's delivery mode is `monitor` or `both`** (check via `~/.agents/skills/agmsg/scripts/delivery.sh status claude-code "$(pwd)"`), invoke a fresh Monitor with the default subscription (no `actas` name filter — receives every (team, agent) pair currently registered for this project that isn't held by another session):
-      - command: `~/.agents/skills/agmsg/scripts/watch.sh $CLAUDE_CODE_SESSION_ID "$(pwd)" claude-code`
+      - command: `CLAUDEX_AGMSG_EXPLICIT=1 ~/.agents/skills/agmsg/scripts/watch.sh $CLAUDE_CODE_SESSION_ID "$(pwd)" claude-code`
       - description: `agmsg inbox stream`
       - persistent: true
       Otherwise (mode `turn` or `off`), leave it stopped.
