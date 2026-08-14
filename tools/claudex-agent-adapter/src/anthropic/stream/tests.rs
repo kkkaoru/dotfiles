@@ -3,6 +3,7 @@ use std::{
     convert::Infallible,
     ops::ControlFlow,
     os::unix::fs::PermissionsExt,
+    path::PathBuf,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -2410,9 +2411,7 @@ async fn primes_command_code_thinking_before_the_client_can_disconnect() {
         "primed Command Code must open native thinking, not text chrome: {frames:?}"
     );
     assert!(
-        frames
-            .iter()
-            .all(|frame| !frame.contains("thinking_delta")),
+        frames.iter().all(|frame| !frame.contains("thinking_delta")),
         "first-flush must not park ZWSP/Preparing in the thinking body: {frames:?}"
     );
     assert!(
@@ -2447,9 +2446,7 @@ async fn cursor_subagent_primes_thinking_in_the_same_flush_as_message_start() {
         "Cursor SubAgent must first-flush thinking start: {frames:?}"
     );
     assert!(
-        frames
-            .iter()
-            .all(|frame| !frame.contains("thinking_delta")),
+        frames.iter().all(|frame| !frame.contains("thinking_delta")),
         "first-flush must not park ZWSP in the thinking body: {frames:?}"
     );
     assert!(
@@ -3106,17 +3103,25 @@ async fn forwards_generic_tools_and_blocks_disabled_subagent_models() {
         .await
         .expect("disabled subagent is a visible local response");
     assert!(!blocked.has_external_tool_calls());
-    assert!(
-        blocked.blocks[0]["text"]
-            .as_str()
-            .is_some_and(|text| text.contains("blocked-model"))
-    );
+    assert_eq!(blocked.blocks.len(), 1);
+    assert_eq!(blocked.blocks[0]["type"], "text");
+    assert!(blocked.blocks[0]["text"].as_str().is_some_and(|text| {
+        text.contains("blocked-model") && text.contains("disabled by policy")
+    }));
     drop(sender);
     let mut output = String::new();
     while let Some(frame) = receiver.recv().await {
         output.push_str(&String::from_utf8_lossy(&frame.expect("infallible frame")));
     }
     assert!(output.contains("blocked-model"));
+    assert!(output.contains("disabled by policy"));
+    assert!(!output.contains("not configured"));
+    assert!(output.contains(r#""content_block""#));
+    assert!(output.contains(r#""type":"text""#));
+    assert!(output.contains(r#""type":"text_delta""#));
+    assert!(!output.contains(r#""type":"thinking_delta""#));
+    assert!(!output.contains(r#""type":"tool_use""#));
+    assert!(!output.contains("▶ Agent"));
 }
 
 #[tokio::test]
@@ -3354,6 +3359,8 @@ async fn keeps_parent_stream_after_unroutable_subagent_launch() {
         .expect("unroutable SubAgent must not fail the parent stream");
     assert_eq!(flow, ControlFlow::Continue(()));
     assert!(!builder.has_external_tool_calls());
+    assert_eq!(builder.blocks.len(), 1);
+    assert_eq!(builder.blocks[0]["type"], "text");
     assert!(builder.blocks.iter().any(|block| {
         block["text"]
             .as_str()
@@ -3365,6 +3372,12 @@ async fn keeps_parent_stream_after_unroutable_subagent_launch() {
         output.push_str(&String::from_utf8_lossy(&frame.expect("infallible frame")));
     }
     assert!(output.contains("was not started. Continue without it."));
+    assert!(output.contains(r#""content_block""#));
+    assert!(output.contains(r#""type":"text""#));
+    assert!(output.contains(r#""type":"text_delta""#));
+    assert!(!output.contains(r#""type":"thinking_delta""#));
+    assert!(!output.contains(r#""type":"tool_use""#));
+    assert!(!output.contains("▶ Agent"));
 }
 
 fn worker_task(prompt: &str, run_in_background: Option<bool>) -> Value {
@@ -4431,6 +4444,112 @@ async fn drive_stream_retries_provider_failure_onto_a_live_sibling_route() {
 }
 
 #[tokio::test]
+async fn retry_usage_limit_stream_restarts_on_a_sibling_with_its_configured_effort() {
+    let root = tempfile::tempdir().expect("configured sibling fixture");
+    let sibling =
+        GrokAcp::spawn_with_program("auto", grok_acp_mock_program(), root.path().to_path_buf())
+            .await
+            .expect("start configured sibling ACP fixture");
+    let backend = AgentBackend::routed(vec![
+        (
+            "qwen3.8-max-preview".to_owned(),
+            AgentBackend::grok(GrokAcp::stopped_for_test()),
+        ),
+        ("auto".to_owned(), AgentBackend::configured_acp(sibling)),
+    ]);
+    let mut catalog = crate::provider_config::ModelCatalog::default();
+    catalog
+        .set_worker_routes(vec![
+            crate::provider_config::WorkerRoute::new("claudex-qwen", "qwen3.8-max-preview", "low"),
+            crate::provider_config::WorkerRoute::new("claudex-cursor", "auto", "max"),
+        ])
+        .expect("worker routes");
+    let bridge = Arc::new(
+        Bridge::new_with_backend(backend, "qwen3.8-max-preview".to_owned())
+            .with_model_catalog(catalog),
+    );
+    let failover = bridge
+        .failover_for_stream_turn("qwen3.8-max-preview", true)
+        .expect("configured sibling route");
+    assert_eq!(failover.model, "auto");
+    assert_eq!(failover.effort.as_deref(), Some("max"));
+    let slots = Arc::new(Semaphore::new(2));
+    let session = Arc::new(Session {
+        thread_id: "0:exhausted".to_owned(),
+        model: "qwen3.8-max-preview".to_owned(),
+        disabled_subagent_models: Default::default(),
+        signature: Arc::from("signature"),
+        transcript: Mutex::new(Vec::new()),
+        pending_tools: Mutex::new(HashMap::new()),
+        consumed_tool_ids: Mutex::new(HashSet::new()),
+        external_tool_names: HashMap::new(),
+        client_user_id: None,
+        claude_session_id: None,
+        gate: Arc::new(Mutex::new(())),
+        last_activity: std::sync::Mutex::new(Instant::now()),
+        pending_since: std::sync::Mutex::new(None),
+        turn_progress: Default::default(),
+        adopted_thread_id: Default::default(),
+        _slot: slots.try_acquire_owned().expect("session slot"),
+    });
+    let dispatcher = ThreadEventDispatcher::default();
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
+    let mut request = drive_request();
+    request.model = "qwen3.8-max-preview".to_owned();
+
+    Arc::clone(&bridge)
+        .retry_usage_limit_stream(super::drive::ContextRetryStream {
+            turn: drive_turn(
+                session,
+                dispatcher.subscribe("0:exhausted"),
+                Vec::new(),
+                Some(ContextRetry {
+                    request,
+                    effort: Some("low".to_owned()),
+                    advisor_model: None,
+                    collaborator_model: None,
+                }),
+            )
+            .await,
+            sender,
+            error: anyhow!(crate::anthropic::segment::EMPTY_ACP_END_TURN),
+            builder: SegmentBuilder::for_turn(1, true, "qwen3.8-max-preview"),
+            model_permit: None,
+            is_subagent: true,
+            run_in_background: false,
+        })
+        .await;
+
+    let output = collect_sse_frames(&mut receiver).await;
+    assert!(
+        output.contains("GROK_ACP_STREAM_OK"),
+        "retry output: {output}"
+    );
+}
+
+#[tokio::test]
+async fn retry_context_stream_without_a_retry_removes_the_session_and_reports_the_error() {
+    let (_root, app, bridge, session) = disconnect_fixture().await;
+    bridge.sessions.lock().await.push(Arc::clone(&session));
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
+
+    Arc::new(bridge)
+        .retry_context_stream(super::drive::ContextRetryStream {
+            turn: drive_turn(session, app.subscribe_thread("thread"), Vec::new(), None).await,
+            sender,
+            error: anyhow!("context retry payload was unavailable"),
+            builder: SegmentBuilder::new(1),
+            model_permit: None,
+            is_subagent: false,
+            run_in_background: false,
+        })
+        .await;
+
+    let output = collect_sse_frames(&mut receiver).await;
+    assert!(output.contains("context retry payload was unavailable"));
+}
+
+#[tokio::test]
 async fn drive_stream_reports_usage_limit_without_a_sibling_provider() {
     let (root, _app, bridge, session) = disconnect_fixture().await;
     let bridge = Arc::new(bridge.with_usage_limit_cache_home(root.path()));
@@ -4767,6 +4886,37 @@ async fn request_trace(path: &std::path::Path, expected: usize) -> Vec<Value> {
     tokio::time::timeout(Duration::from_secs(1), wait_for_trace_len(path, expected))
         .await
         .expect("request trace should land promptly")
+}
+
+fn grok_acp_mock_program() -> PathBuf {
+    let test_binary = std::env::current_exe().expect("locate stream test binary");
+    let target_debug = test_binary
+        .parent()
+        .and_then(std::path::Path::parent)
+        .expect("locate Cargo target debug directory");
+    let mock = target_debug.join("grok-acp-mock");
+    if mock.is_file() {
+        return mock;
+    }
+    let mock = std::fs::read_dir(target_debug.join("deps"))
+        .expect("read Cargo test fixture directory")
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.is_file()
+                && path.extension().is_none()
+                && path
+                    .file_name()
+                    .and_then(std::ffi::OsStr::to_str)
+                    .is_some_and(|name| name.starts_with("grok_acp_mock-"))
+        })
+        .expect("locate Grok ACP fixture binary");
+    assert!(
+        mock.is_file(),
+        "grok ACP fixture binary: {}",
+        mock.display()
+    );
+    mock
 }
 
 async fn wait_for_disconnected_drain(events: &Arc<crate::app_server::ThreadEvents>) {

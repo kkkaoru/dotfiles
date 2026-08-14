@@ -24,6 +24,7 @@ impl SegmentBuilder {
             bridged_provider_launch_ids: Vec::new(),
             mcp_provider_call_ids: Vec::new(),
             incomplete_launch_call_ids: Vec::new(),
+            dropped_launch_call_ids: Vec::new(),
             bulk_dump_hinted: false,
             requires_verified_web_evidence: false,
             verified_web_evidence_call_ids: Vec::new(),
@@ -125,10 +126,19 @@ impl SegmentBuilder {
     pub(in crate::anthropic::stream) fn snapshot_turn_progress(
         &self,
     ) -> Vec<crate::anthropic::TurnProgressEvent> {
-        let elapsed_ms = u64::try_from(self.turn_started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let elapsed_ms =
+            u64::try_from(self.turn_started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
         self.provider_tool_calls
             .iter()
             .map(|(id, title)| self.progress_event(id, title, elapsed_ms))
+            .chain(self.dropped_launch_call_ids.iter().map(|id| {
+                crate::anthropic::TurnProgressEvent {
+                    id: id.to_owned(),
+                    title: "SubAgent launch awaiting prompt".to_owned(),
+                    status: "dropped".to_owned(),
+                    elapsed_ms,
+                }
+            }))
             .collect()
     }
 

@@ -49,4 +49,23 @@ mod tests {
             None
         );
     }
+
+    #[test]
+    fn matches_a_qualified_opencode_luna_denylist_entry_exactly() {
+        const QUALIFIED_OPENCODE_LUNA: &str = "opencode-test/codex-luna";
+        const BARE_CODEX_LUNA: &str = "codex-luna";
+
+        let disabled = BTreeSet::from([QUALIFIED_OPENCODE_LUNA.to_owned()]);
+        let qualified_launch = json!({"claudex_model": QUALIFIED_OPENCODE_LUNA});
+        let bare_launch = json!({"claudex_model": BARE_CODEX_LUNA});
+
+        assert_eq!(
+            disabled_subagent_model("Agent", &qualified_launch, &disabled),
+            Some(QUALIFIED_OPENCODE_LUNA)
+        );
+        assert_eq!(
+            disabled_subagent_model("Task", &bare_launch, &disabled),
+            None
+        );
+    }
 }

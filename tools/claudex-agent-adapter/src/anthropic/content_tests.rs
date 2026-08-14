@@ -257,6 +257,10 @@ mod tests {
         );
         assert!(matching_transcript_len(&active, &[]).await.is_none());
 
+        assert_cached_and_empty_assistant_transcripts_match().await;
+    }
+
+    async fn assert_cached_and_empty_assistant_transcripts_match() {
         let cached = session(
             HashMap::new(),
             HashSet::new(),
@@ -281,6 +285,35 @@ mod tests {
             )
             .await
             .is_none()
+        );
+
+        let empty_assistant = session(
+            HashMap::new(),
+            HashSet::new(),
+            vec![
+                json!({"role":"user","content":"inspect config"}),
+                json!({"role":"assistant","content":[]}),
+            ],
+        )
+        .await;
+        assert_eq!(
+            matching_transcript_len(
+                &empty_assistant,
+                &[
+                    json!({"role":"user","content":"inspect config"}),
+                    json!({"role":"assistant","content":[]}),
+                ],
+            )
+            .await,
+            Some(2)
+        );
+        assert_eq!(
+            matching_transcript_len(
+                &empty_assistant,
+                &[json!({"role":"user","content":"inspect config"})],
+            )
+            .await,
+            None
         );
     }
 
@@ -520,7 +553,7 @@ mod tests {
             last_activity: std::sync::Mutex::new(Instant::now()),
             pending_since: std::sync::Mutex::new(Some(Instant::now())),
             turn_progress: Default::default(),
-        adopted_thread_id: Default::default(),
+            adopted_thread_id: Default::default(),
             _slot: semaphore.acquire_owned().await.expect("session slot"),
         }
     }

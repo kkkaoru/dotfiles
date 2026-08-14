@@ -64,6 +64,40 @@ mod tests {
         }
     }
 
+    fn nested_cline_transcript_request() -> MessagesRequest {
+        MessagesRequest {
+            model: "resolved-model".to_owned(),
+            system: json!([{
+                "type":"text",
+                "text":"cc_is_subagent=true\nclaudex_launch_id: tool-luna\n<claudex-agent-id>tool-luna</claudex-agent-id>"
+            }]),
+            messages: vec![
+                json!({
+                    "role":"user",
+                    "content":"parent luna work\nclaudex_launch_id: tool-luna\n<claudex-agent-id>tool-luna</claudex-agent-id>"
+                }),
+                json!({
+                    "role":"assistant",
+                    "content":[{
+                        "type":"tool_use",
+                        "name":"Agent",
+                        "id":"tool-nested",
+                        "input":{
+                            "prompt":"nested cline work\nclaudex_launch_id: tool-nested\n<claudex-agent-id>tool-nested</claudex-agent-id>"
+                        }
+                    }]
+                }),
+            ],
+            tools: Vec::new(),
+            stream: false,
+            output_config: json!({"effort":"low"}),
+            metadata: json!({"user_id":"session"}),
+            working_directory: None,
+            disabled_subagent_models: Default::default(),
+            claudex_collaborator_model: None,
+        }
+    }
+
     #[test]
     fn correlates_explicit_effort_by_client_session_and_prompt() {
         let intents = AgentEffortIntents::default();
@@ -578,37 +612,7 @@ mod tests {
             None,
         );
 
-        let request = MessagesRequest {
-            model: "resolved-model".to_owned(),
-            system: json!([{
-                "type":"text",
-                "text":"cc_is_subagent=true\nclaudex_launch_id: tool-luna\n<claudex-agent-id>tool-luna</claudex-agent-id>"
-            }]),
-            messages: vec![
-                json!({
-                    "role":"user",
-                    "content":"parent luna work\nclaudex_launch_id: tool-luna\n<claudex-agent-id>tool-luna</claudex-agent-id>"
-                }),
-                json!({
-                    "role":"assistant",
-                    "content":[{
-                        "type":"tool_use",
-                        "name":"Agent",
-                        "id":"tool-nested",
-                        "input":{
-                            "prompt":"nested cline work\nclaudex_launch_id: tool-nested\n<claudex-agent-id>tool-nested</claudex-agent-id>"
-                        }
-                    }]
-                }),
-            ],
-            tools: Vec::new(),
-            stream: false,
-            output_config: json!({"effort":"low"}),
-            metadata: json!({"user_id":"session"}),
-            working_directory: None,
-            disabled_subagent_models: Default::default(),
-            claudex_collaborator_model: None,
-        };
+        let request = nested_cline_transcript_request();
         let intent = intents.take(&request);
         assert!(intent.matched);
         assert_eq!(intent.model_override.as_deref(), Some("gpt-5.6-luna"));

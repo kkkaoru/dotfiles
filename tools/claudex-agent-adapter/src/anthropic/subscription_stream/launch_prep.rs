@@ -1,5 +1,6 @@
-use anyhow::Result;
 use serde_json::Value;
+
+use crate::anthropic::agent_route_validation::BlockedSubagentError;
 
 pub(super) fn note_reused_subagent_launch(
     context: &crate::anthropic::subscription::SubscriptionToolContext,
@@ -26,12 +27,12 @@ pub(super) fn note_reused_subagent_launch(
 pub(super) fn reject_unavailable_subagent_model(
     context: &crate::anthropic::subscription::SubscriptionToolContext,
     routed_input: &Value,
-) -> Result<()> {
+) -> std::result::Result<(), BlockedSubagentError> {
     let Some(model) = crate::anthropic::agent_effort::requested_model(routed_input) else {
         return Ok(());
     };
     if context.disabled_subagent_models.contains(model) {
-        anyhow::bail!(crate::anthropic::agent_route_validation::BLOCKED_SUBAGENT_NOTICE);
+        return Err(BlockedSubagentError::policy_disabled(model));
     }
     let exhausted = crate::anthropic::agent_routing::routing_disables_subagent_model(
         &context.user_messages,
@@ -39,7 +40,7 @@ pub(super) fn reject_unavailable_subagent_model(
         model,
     ) || context.launch_model_is_exhausted(model);
     if exhausted {
-        anyhow::bail!(crate::anthropic::agent_route_validation::exhausted_subagent_notice(model));
+        return Err(BlockedSubagentError::cooldown(model));
     }
     Ok(())
 }

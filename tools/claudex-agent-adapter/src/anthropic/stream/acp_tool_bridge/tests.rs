@@ -770,4 +770,30 @@ mod tests {
             "prompt-less queue entries must not bridge"
         );
     }
+
+    #[test]
+    fn falls_back_to_launch_arguments_when_provider_label_is_unmapped() {
+        let map = names();
+        let event = json!({
+            "params": {
+                "callId": "fallback-1",
+                "tool": "provider-card",
+                "title": "",
+                "status": "pending",
+                "arguments": {
+                    "prompt": "bridge from the argument shape",
+                    "description": "fallback launch"
+                }
+            }
+        });
+
+        let bridged = bridge_provider_tool_call(&map, &event)
+            .expect("launch-shaped arguments should select the supplied Agent tool");
+        assert_eq!(bridged.call_id, "fallback-1");
+        assert_eq!(bridged.name, "Agent");
+        assert_eq!(
+            bridged.arguments["prompt"],
+            "bridge from the argument shape"
+        );
+    }
 }

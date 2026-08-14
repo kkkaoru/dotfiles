@@ -217,6 +217,42 @@ async fn signature_only_busy_match_accepts_empty_transcript() {
 }
 
 #[tokio::test]
+async fn signature_only_busy_match_tracks_an_empty_assistant_prefix() {
+    let user = json!({"role":"user","content":"inspect config"});
+    let assistant = json!({"role":"assistant","content":[]});
+    let full = session_with(
+        "main",
+        Some("client"),
+        "signature",
+        vec![user.clone(), assistant.clone()],
+    );
+    let _full_gate = Arc::clone(&full.gate).lock_owned().await;
+    let found = find_busy_signature_matching_session(
+        vec![Arc::clone(&full)],
+        &Arc::from("signature"),
+        &[user.clone(), assistant],
+    )
+    .await
+    .expect("empty assistant included in request");
+    assert!(Arc::ptr_eq(&found.0, &full));
+    assert_eq!(found.1, 2);
+
+    let omitted = session_with(
+        "main",
+        Some("client"),
+        "signature",
+        vec![user.clone(), json!({"role":"assistant","content":[]})],
+    );
+    let _omitted_gate = Arc::clone(&omitted.gate).lock_owned().await;
+    assert!(
+        find_busy_signature_matching_session(vec![omitted], &Arc::from("signature"), &[user],)
+            .await
+            .is_none(),
+        "an exact busy-session match must reject a request that omits the empty assistant"
+    );
+}
+
+#[tokio::test]
 async fn signature_only_busy_match_finds_session_with_pending_tools() {
     let messages = messages();
     let session = session_with("main", Some("client"), "signature", messages.clone());

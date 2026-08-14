@@ -30,6 +30,11 @@ async fn codex_abort_turn_provider_keeps_shared_app_server_alive() {
     .expect("start codex fixture");
     assert!(server.is_alive());
     let backend = AgentBackend::Codex(Arc::clone(&server));
+    assert_eq!(
+        backend.backend_kind_for_model("model"),
+        Some(super::super::BackendKind::CodexAppServer)
+    );
+    assert_eq!(backend.model_provider_for_model("model"), None);
     backend
         .abort_turn_provider("thread-1")
         .await
@@ -38,7 +43,20 @@ async fn codex_abort_turn_provider_keeps_shared_app_server_alive() {
         server.is_alive(),
         "Codex abort must not kill the shared app-server (prompt-cache / SubAgent reuse)"
     );
-    server.shutdown().await;
+    let routed = AgentBackend::routed(vec![(
+        "model".to_owned(),
+        Arc::new(AgentBackend::Codex(Arc::clone(&server))),
+    )]);
+    routed
+        .abort_turn_provider("0:thread-2")
+        .await
+        .expect("routed Codex abort is a no-op");
+    assert!(
+        server.is_alive(),
+        "routed Codex abort must retain the child"
+    );
+    routed.shutdown().await;
+    assert!(!server.is_alive());
 }
 
 #[tokio::test]
@@ -96,6 +114,47 @@ async fn cancellation_and_abort_cover_each_leaf_and_routed_route() {
         super::super::TurnCancellation::Settled
     );
     routed.abort_turn_provider("0:session").await.unwrap();
+}
+
+#[tokio::test]
+async fn routed_abort_retains_shared_children() {
+    let shared_leaf = Arc::new(AgentBackend::ConfiguredAcp(
+        crate::grok_acp::GrokAcp::alive_for_test(),
+    ));
+    let shared = AgentBackend::routed(vec![("shared".to_owned(), Arc::clone(&shared_leaf))]);
+    shared.abort_turn_provider("0:target").await.unwrap();
+    assert!(
+        shared.is_alive(),
+        "routed pool must remain available after abort"
+    );
+    assert!(
+        shared_leaf.is_alive(),
+        "shared ACP child must survive a target abort"
+    );
+}
+
+#[tokio::test]
+async fn routed_abort_retains_copilot_child() {
+    let shared_leaf = Arc::new(AgentBackend::Copilot(
+        crate::copilot_acp::CopilotAcp::settled_for_test().await,
+    ));
+    let shared = AgentBackend::routed(vec![("copilot".to_owned(), Arc::clone(&shared_leaf))]);
+    shared.abort_turn_provider("0:target").await.unwrap();
+    assert!(
+        shared.is_alive(),
+        "routed pool must remain available after abort"
+    );
+    assert!(
+        shared_leaf.is_alive(),
+        "shared Copilot child must survive a target abort"
+    );
+    shared.shutdown().await;
+}
+
+#[tokio::test]
+async fn shutdown_covers_the_standalone_leaf_fallback() {
+    let leaf = AgentBackend::Grok(crate::grok_acp::GrokAcp::stopped_for_test());
+    leaf.shutdown().await;
 }
 
 #[tokio::test]

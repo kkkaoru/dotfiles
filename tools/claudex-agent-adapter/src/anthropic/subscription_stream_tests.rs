@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use axum::body::Bytes;
 use serde_json::{Value, json};
 use tokio::{
-    io::{AsyncBufReadExt as _, AsyncWriteExt, BufReader},
+    io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt, BufReader},
     process::Command,
     sync::mpsc,
 };
@@ -320,6 +320,113 @@ async fn forwards_empty_and_regular_deltas_then_finishes_once() {
     assert!(output.contains("hello"));
     assert!(!output.contains("fallback"));
     assert!(output.contains("\"output_tokens\":5"));
+}
+
+#[tokio::test]
+async fn handle_result_envelope_closes_activity_before_finishing() {
+    let (sender, mut receiver) = channel();
+    let mut stream = bare_subscription_stream(Vec::new());
+    let mut options = SubscriptionOptions::internal(
+        Arc::new(tokio::sync::Semaphore::new(1)),
+        Duration::from_secs(1),
+    );
+    options.is_subagent = true;
+    stream
+        .start_subagent_activity(&sender, &options, "subscription-test")
+        .await
+        .expect("start subscription activity");
+    assert!(stream.activity.is_open());
+
+    assert!(
+        stream
+            .handle_envelope(
+                &sender,
+                &json!({"type":"result","subtype":"success","result":"done"}),
+            )
+            .await
+            .expect("handle result envelope")
+    );
+    assert!(stream.saw_result);
+    assert!(!stream.activity.is_open());
+
+    let frames = output(&mut receiver).await;
+    assert!(frames.contains("signature_delta"));
+    assert!(frames.contains("done"));
+    assert_valid_stream(&frames, Some("end_turn"));
+}
+
+#[tokio::test]
+async fn text_closes_activity_and_keepalive_reopens_closed_text() {
+    let (sender, mut receiver) = channel();
+    let mut stream = bare_subscription_stream(Vec::new());
+    let mut options = SubscriptionOptions::internal(
+        Arc::new(tokio::sync::Semaphore::new(1)),
+        Duration::from_secs(1),
+    );
+    options.is_subagent = true;
+    stream
+        .start_subagent_activity(&sender, &options, "subscription-test")
+        .await
+        .expect("start subscription activity");
+    stream
+        .handle_envelope(
+            &sender,
+            &json!({
+                "type":"stream_event",
+                "event":{"delta":{"type":"text_delta","text":"hello"}}
+            }),
+        )
+        .await
+        .expect("forward text after activity");
+    assert!(!stream.activity.is_open());
+    assert!(stream.text_started);
+
+    stream.close_text(&sender).await.expect("close text block");
+    assert!(stream.text_closed);
+    stream
+        .activity_keepalive(&sender)
+        .await
+        .expect("reopen text for keepalive");
+    assert!(!stream.text_closed);
+    assert_eq!(stream.next_index, 3);
+
+    let frames = output(&mut receiver).await;
+    assert_eq!(frames.matches("event: content_block_start").count(), 3);
+    assert!(frames.contains(r#""text":"hello""#));
+    assert!(frames.contains('\u{200b}') || frames.contains("\\u200b"));
+    assert_eq!(frames.matches("signature_delta").count(), 1);
+}
+
+#[tokio::test]
+async fn duplicate_result_after_finish_is_ignored_before_validation() {
+    let (sender, mut receiver) = channel();
+    let mut stream = bare_subscription_stream(Vec::new());
+    stream
+        .handle_line(
+            &sender,
+            r#"{"type":"stream_event","event":{"delta":{"type":"text_delta","text":"first"}}}"#,
+        )
+        .await
+        .expect("first text");
+    stream
+        .handle_line(
+            &sender,
+            r#"{"type":"result","subtype":"success","result":"done"}"#,
+        )
+        .await
+        .expect("first result");
+    let first_output = output(&mut receiver).await;
+    assert!(stream.saw_result);
+    assert_eq!(first_output.matches("event: message_stop").count(), 1);
+
+    stream
+        .handle_line(
+            &sender,
+            r#"{"type":"result","subtype":"error","error":"ignored duplicate"}"#,
+        )
+        .await
+        .expect("duplicate result is ignored before validation");
+    assert!(output(&mut receiver).await.is_empty());
 }
 
 #[tokio::test]
@@ -879,6 +986,10 @@ async fn blocked_agent_after_a_forwarded_tool_uses_a_fresh_text_block() {
         .handle_line(&sender, &mixed_blocked_agent_payload())
         .await
         .expect("forward mixed tool calls");
+    let live_output = output(&mut receiver).await;
+    assert!(live_output.contains(r#""type":"thinking_delta""#));
+    assert!(!live_output.contains(r#""type":"text_delta""#));
+    assert!(!live_output.contains("▶ Agent"));
     stream
         .finish(
             &sender,
@@ -887,8 +998,9 @@ async fn blocked_agent_after_a_forwarded_tool_uses_a_fresh_text_block() {
         .await
         .expect("finish mixed tool calls");
 
-    let output = output(&mut receiver).await;
-    assert_blocked_agent_uses_fresh_text_block(&output);
+    let mut stream_output = live_output;
+    stream_output.push_str(&output(&mut receiver).await);
+    assert_blocked_agent_uses_fresh_text_block(&stream_output);
 }
 
 fn blocked_agent_subscription_stream() -> SubscriptionStream {
@@ -949,9 +1061,13 @@ fn assert_blocked_agent_uses_fresh_text_block(output: &str) {
     let (block_types, stopped_indices) = collect_block_events(output);
     assert_eq!(
         block_types,
-        vec![(0, "tool_use".to_owned()), (1, "text".to_owned())]
+        vec![
+            (0, "tool_use".to_owned()),
+            (1, "thinking".to_owned()),
+            (2, "text".to_owned())
+        ]
     );
-    for index in [0, 1] {
+    for index in [0, 1, 2] {
         assert_eq!(
             stopped_indices
                 .iter()
@@ -961,7 +1077,9 @@ fn assert_blocked_agent_uses_fresh_text_block(output: &str) {
             "block {index} must be closed exactly once"
         );
     }
-    assert!(output.contains("The requested SubAgent model is not configured"));
+    assert!(output.contains("active model catalog"));
+    assert_eq!(output.matches("active model catalog").count(), 2);
+    assert!(!output.contains("The requested SubAgent model is not configured"));
     assert_eq!(output.matches(r#""stop_reason":"tool_use""#).count(), 1);
 }
 
@@ -1339,6 +1457,10 @@ async fn blocks_an_unsupported_subagent_without_failing_the_parent_stream() {
         .await
         .expect("unsupported SubAgent must not fail the parent stream");
     assert!(!stream.saw_tool_use);
+    let live_output = output(&mut receiver).await;
+    assert!(live_output.contains(r#""type":"thinking_delta""#));
+    assert!(!live_output.contains(r#""type":"text_delta""#));
+    assert!(!live_output.contains("▶ Agent"));
     stream
         .finish(
             &sender,
@@ -1346,13 +1468,15 @@ async fn blocks_an_unsupported_subagent_without_failing_the_parent_stream() {
         )
         .await
         .expect("finish parent stream");
-    let output = output(&mut receiver).await;
+    let tail_output = output(&mut receiver).await;
+    let mut output = live_output;
+    output.push_str(&tail_output);
     assert!(output.contains("was not started. Continue without it."));
     assert_eq!(
         output
             .matches("was not started. Continue without it.")
             .count(),
-        1
+        2
     );
     assert!(!output.contains("PRIVATE_PROVIDER_TAIL"));
     assert!(!output.contains("second-unsupported"));
@@ -2151,6 +2275,15 @@ fn child(script: &str) -> tokio::process::Child {
         .expect("spawn stream fixture")
 }
 
+fn stderr_task(process: &mut tokio::process::Child) -> post_eof::StderrTask {
+    let mut stderr = process.stderr.take().expect("piped stderr");
+    tokio::spawn(async move {
+        let mut output = Vec::new();
+        stderr.read_to_end(&mut output).await?;
+        Ok(output)
+    })
+}
+
 #[cfg(unix)]
 struct BackgroundSleepFixture {
     _directory: tempfile::TempDir,
@@ -2585,6 +2718,97 @@ async fn post_eof_stderr_helpers_cover_empty_success_error_and_timeout() {
         post_eof::take_stderr(&mut task, taken).expect("take stderr output"),
         b"taken"
     );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn post_eof_sender_close_cleans_up_before_waiting_for_status() {
+    let (sender, receiver) = channel();
+    drop(receiver);
+    let options = short_post_eof_options();
+    let mut process = child("sleep 30");
+    let process_group = process.id();
+    let stderr_task = stderr_task(&mut process);
+    let mut stream = bare_subscription_stream(Vec::new());
+    let mut activity_deadline = Box::pin(tokio::time::sleep(Duration::from_secs(60)));
+
+    let output = post_eof::await_post_eof(
+        &mut process,
+        process_group,
+        stderr_task,
+        &sender,
+        &options,
+        &mut stream,
+        &mut activity_deadline,
+    )
+    .await
+    .expect("sender-close cleanup");
+    assert!(output.is_none());
+    assert!(
+        process
+            .try_wait()
+            .expect("query cleaned-up child")
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn post_eof_observes_stderr_before_the_leader_status() {
+    let (sender, _receiver) = channel();
+    let options = short_post_eof_options();
+    let mut process = child("exec 2>&-; sleep 0.04");
+    let process_group = process.id();
+    let stderr_task = stderr_task(&mut process);
+    let mut stream = bare_subscription_stream(Vec::new());
+    let mut activity_deadline = Box::pin(tokio::time::sleep(Duration::from_secs(60)));
+
+    let output = post_eof::await_post_eof(
+        &mut process,
+        process_group,
+        stderr_task,
+        &sender,
+        &options,
+        &mut stream,
+        &mut activity_deadline,
+    )
+    .await
+    .expect("stderr-first post-EOF handling")
+    .expect("leader status");
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn post_eof_grace_expiry_terminates_a_stderr_holding_descendant() {
+    let fixture = BackgroundSleepFixture::new();
+    let mut process = child(&fixture.stderr_holder_script("exit 0"));
+    let process_group = process.id();
+    let stderr_task = stderr_task(&mut process);
+    let mut background = fixture
+        .release_after_pid()
+        .await
+        .expect("stderr holder started");
+    let (sender, _receiver) = channel();
+    let options = short_post_eof_options();
+    let mut stream = bare_subscription_stream(Vec::new());
+    let mut activity_deadline = Box::pin(tokio::time::sleep(Duration::from_secs(60)));
+
+    let output = post_eof::await_post_eof(
+        &mut process,
+        process_group,
+        stderr_task,
+        &sender,
+        &options,
+        &mut stream,
+        &mut activity_deadline,
+    )
+    .await
+    .expect("stderr grace cleanup")
+    .expect("leader status after grace cleanup");
+    assert!(output.status.success());
+    assert!(output.stderr.is_empty());
+    background.assert_exited().await;
 }
 
 #[tokio::test]
@@ -3354,13 +3578,37 @@ fn prepare_tool_input_rejects_disabled_subagent_models() {
             &json!({"prompt":"do work","claudex_model":"gpt-test"}),
         )
         .expect_err("disabled model must be rejected");
+    let blocked = error
+        .downcast_ref::<super::super::agent_route_validation::BlockedSubagentError>()
+        .expect("disabled model must preserve its typed blocked reason");
+    assert_eq!(
+        blocked.reason(),
+        super::super::agent_route_validation::BlockedSubagentReason::PolicyDisabled
+    );
     assert!(
         error
             .to_string()
-            .contains(super::super::agent_route_validation::BLOCKED_SUBAGENT_NOTICE)
-            || error.to_string().to_lowercase().contains("disabled")
-            || error.to_string().contains("BLOCKED")
-            || error.to_string().contains("blocked"),
+            .contains("disabled by the active Claudex policy"),
         "{error:#}"
     );
+}
+
+#[test]
+fn prepare_tool_input_without_routing_context_reports_missing_config() {
+    let stream = bare_subscription_stream(vec!["Agent".to_owned()]);
+    let error = stream
+        .prepare_tool_input(
+            "Agent",
+            "agent-without-context",
+            &json!({"prompt":"do work","claudex_model":"gpt-test"}),
+        )
+        .expect_err("Agent input without a routing context must be blocked");
+    let blocked = error
+        .downcast_ref::<super::super::agent_route_validation::BlockedSubagentError>()
+        .expect("missing routing context must preserve its typed blocked reason");
+    assert_eq!(
+        blocked.reason(),
+        super::super::agent_route_validation::BlockedSubagentReason::MissingConfig
+    );
+    assert!(error.to_string().contains("has no routing context"));
 }

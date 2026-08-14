@@ -121,4 +121,49 @@ mod tests {
         AgentBackend::spawn_routes(&[BackendRoute::new("model", BackendKind::CodexAppServer)])
             .kind();
     }
+
+    #[test]
+    fn session_scoped_catalog_delegates_concurrency_and_model_metadata() {
+        let mut route = BackendRoute::new("vendor", BackendKind::ConfiguredAcp);
+        route.max_concurrency = Some(4);
+        route.max_context_tokens = Some(32_000);
+        route.model_provider = Some("vendor-provider".to_owned());
+        route.model_prefixes.push("vendor-".to_owned());
+        let backend = AgentBackend::spawn_routes(&[route]);
+
+        assert_eq!(
+            backend.max_context_tokens_for_model("vendor-preview"),
+            Some(32_000)
+        );
+        assert_eq!(backend.max_concurrency_for_model("vendor"), Some(4));
+        assert_eq!(
+            backend.configured_concurrency_limits(),
+            [("vendor".to_owned(), 4)]
+        );
+        assert_eq!(
+            backend.backend_kind_for_model("vendor-preview"),
+            Some(BackendKind::ConfiguredAcp)
+        );
+        assert_eq!(
+            backend
+                .model_provider_for_model("vendor-preview")
+                .as_deref(),
+            Some("vendor-provider")
+        );
+    }
+
+    #[test]
+    fn routed_and_leaf_backends_delegate_or_omit_concurrency_metadata() {
+        let leaf = std::sync::Arc::new(AgentBackend::Grok(
+            crate::grok_acp::GrokAcp::stopped_for_test(),
+        ));
+        let routed = AgentBackend::routed(vec![("model".to_owned(), leaf)]);
+
+        assert_eq!(routed.max_context_tokens_for_model("model"), None);
+        assert_eq!(routed.max_concurrency_for_model("model"), None);
+        assert!(routed.configured_concurrency_limits().is_empty());
+
+        assert_eq!(routed.max_context_tokens_for_model("unknown"), None);
+        assert_eq!(routed.max_concurrency_for_model("unknown"), None);
+    }
 }

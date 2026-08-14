@@ -472,6 +472,44 @@ fn launch_tools_are_hidden_only_after_the_session_budget_is_reached() {
 }
 
 #[test]
+fn invalid_or_zero_subagent_limit_env_uses_the_default() {
+    let _guard = reuse_env_lock();
+    let previous = std::env::var_os(MAX_SUBAGENTS_PER_SESSION_ENV);
+    for value in ["not-a-number", "0"] {
+        unsafe { std::env::set_var(MAX_SUBAGENTS_PER_SESSION_ENV, value) };
+        assert_eq!(
+            max_subagents_per_session(),
+            DEFAULT_MAX_SUBAGENTS_PER_SESSION,
+            "invalid or zero limits must use the safe default: {value}"
+        );
+    }
+    unsafe { std::env::set_var(MAX_SUBAGENTS_PER_SESSION_ENV, "7") };
+    assert_eq!(max_subagents_per_session(), 7);
+    unsafe {
+        match previous {
+            Some(value) => std::env::set_var(MAX_SUBAGENTS_PER_SESSION_ENV, value),
+            None => std::env::remove_var(MAX_SUBAGENTS_PER_SESSION_ENV),
+        }
+    }
+}
+
+#[test]
+fn false_subagent_reuse_env_disables_reuse() {
+    let _guard = reuse_env_lock();
+    let previous = std::env::var_os(crate::parallel_scheduler::SUBAGENT_REUSE_ENV);
+    unsafe { std::env::set_var(crate::parallel_scheduler::SUBAGENT_REUSE_ENV, "false") };
+    assert!(!reuse_enabled());
+    unsafe { std::env::set_var(crate::parallel_scheduler::SUBAGENT_REUSE_ENV, "on") };
+    assert!(reuse_enabled());
+    unsafe {
+        match previous {
+            Some(value) => std::env::set_var(crate::parallel_scheduler::SUBAGENT_REUSE_ENV, value),
+            None => std::env::remove_var(crate::parallel_scheduler::SUBAGENT_REUSE_ENV),
+        }
+    }
+}
+
+#[test]
 fn empty_ids_and_corrupt_store_do_not_rewrite_or_occupy_scope() {
     let registry = SubagentReuseRegistry::default();
     let mut arguments = launch_arguments("Audit the Rust adapter tests", "worker-model");

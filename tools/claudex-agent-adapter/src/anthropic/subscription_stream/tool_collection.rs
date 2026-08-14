@@ -6,7 +6,7 @@ use serde_json::Value;
 use tokio::sync::mpsc;
 
 use super::SubscriptionStream;
-use crate::anthropic::agent_effort::BLOCKED_SUBAGENT_NOTICE;
+use crate::anthropic::agent_route_validation::{BlockedSubagentError, BlockedSubagentReason};
 use crate::anthropic::subscription_frames::{mapped_tool_name, send_tool_block};
 
 #[path = "tool_collection_skip.rs"]
@@ -142,14 +142,13 @@ impl SubscriptionStream {
     ) -> Result<()> {
         tracing::warn!(%error, tool = name, "blocked unsupported SubAgent launch");
         self.blocked_subagent = true;
-        let notice = error.to_string();
-        let notice = if notice.contains("cooling down") {
-            notice
-        } else {
-            BLOCKED_SUBAGENT_NOTICE.to_owned()
-        };
-        self.report_blocked_subagent(sender, &notice).await?;
-        // The notice is ordinary assistant text, not a tool_use block.
+        let notice = error
+            .downcast_ref::<BlockedSubagentError>()
+            .map(BlockedSubagentError::notice)
+            .unwrap_or_else(|| fallback_blocked_notice(&error));
+        self.report_blocked_agent_notice(sender, &notice).await?;
+        // The notice is live thinking chrome, not a tool_use block. Its
+        // committed text block is emitted when the parent stream finishes.
         // Marking it as forwarded would emit stop_reason=tool_use with
         // no corresponding tool block, leaving Claude Code waiting for
         // a tool result and eventually stalling the response stream.
@@ -188,6 +187,15 @@ impl SubscriptionStream {
         self.activity
             .start_status(sender, &tip, &mut self.next_index)
             .await
+    }
+}
+
+fn fallback_blocked_notice(error: &anyhow::Error) -> String {
+    let detail = error.to_string();
+    if detail.contains("cooling down") {
+        detail
+    } else {
+        BlockedSubagentReason::MissingConfig.notice(None)
     }
 }
 

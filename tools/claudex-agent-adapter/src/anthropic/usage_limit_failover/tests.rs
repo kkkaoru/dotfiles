@@ -162,13 +162,14 @@ fn prefers_qwen_cloud_sibling_for_cline_empty_acp() {
 }
 
 #[test]
-fn gpt_luna_failover_prefers_opencode_go_and_skips_cline() {
-    const OPENCODE_LUNA: &str = "opencode-go/gpt-5.6-luna";
+fn codex_luna_failover_prefers_catalog_opencode_and_skips_cline() {
+    const CODEX_LUNA: &str = "codex-luna-from-catalog";
+    const OPENCODE_LUNA: &str = "opencode-go/catalog-luna";
     let cache_home = Box::leak(Box::new(
         tempfile::tempdir().expect("isolated luna failover cache"),
     ));
     let backend = AgentBackend::spawn_routes(&[
-        BackendRoute::new(LUNA, BackendKind::CodexAppServer),
+        BackendRoute::new(CODEX_LUNA, BackendKind::CodexAppServer),
         BackendRoute::new(OPENCODE_LUNA, BackendKind::ConfiguredAcp),
         BackendRoute::new(CLINE_FLASH, BackendKind::ConfiguredAcp),
         BackendRoute::new(QWEN_CLOUD, BackendKind::ConfiguredAcp),
@@ -176,7 +177,7 @@ fn gpt_luna_failover_prefers_opencode_go_and_skips_cline() {
     let mut catalog = ModelCatalog::default();
     catalog
         .set_worker_routes(vec![
-            crate::provider_config::WorkerRoute::new("claudex-gpt", LUNA, "max"),
+            crate::provider_config::WorkerRoute::new("claudex-gpt", CODEX_LUNA, "max"),
             crate::provider_config::WorkerRoute::new("claudex-opencode-gpt", OPENCODE_LUNA, "max"),
             crate::provider_config::WorkerRoute::new(
                 "claudex-cline-deepseek-flash",
@@ -186,11 +187,11 @@ fn gpt_luna_failover_prefers_opencode_go_and_skips_cline() {
             crate::provider_config::WorkerRoute::new("claudex-qwen", QWEN_CLOUD, "high"),
         ])
         .expect("install workers");
-    let bridge = Bridge::new_with_backend(backend, LUNA.to_owned())
+    let bridge = Bridge::new_with_backend(backend, CODEX_LUNA.to_owned())
         .with_model_catalog(catalog)
         .with_usage_limit_cache_home(cache_home.path());
     let failover = bridge
-        .subagent_provider_failover_for(LUNA)
+        .subagent_provider_failover_for(CODEX_LUNA)
         .expect("opencode go luna sibling");
     assert_eq!(failover.model, OPENCODE_LUNA);
     assert_ne!(failover.model, CLINE_FLASH);
@@ -198,7 +199,37 @@ fn gpt_luna_failover_prefers_opencode_go_and_skips_cline() {
         .subagent_provider_failover_for(OPENCODE_LUNA)
         .expect("non-cline sibling");
     assert_ne!(opencode_failover.model, CLINE_FLASH);
-    assert_ne!(opencode_failover.model, LUNA);
+    assert_ne!(opencode_failover.model, CODEX_LUNA);
+}
+
+#[test]
+fn opencode_luna_failover_keeps_generic_candidate_order() {
+    const OPENCODE_LUNA: &str = "opencode-go/catalog-luna";
+    let cache_home = Box::leak(Box::new(
+        tempfile::tempdir().expect("isolated opencode luna failover cache"),
+    ));
+    let backend = AgentBackend::spawn_routes(&[
+        BackendRoute::new(OPENCODE_LUNA, BackendKind::ConfiguredAcp),
+        BackendRoute::new(CLINE_FLASH, BackendKind::ConfiguredAcp),
+    ]);
+    let mut catalog = ModelCatalog::default();
+    catalog
+        .set_worker_routes(vec![
+            crate::provider_config::WorkerRoute::new("claudex-opencode-gpt", OPENCODE_LUNA, "max"),
+            crate::provider_config::WorkerRoute::new(
+                "claudex-cline-deepseek-flash",
+                CLINE_FLASH,
+                "xhigh",
+            ),
+        ])
+        .expect("install opencode and cline workers");
+    let bridge = Bridge::new_with_backend(backend, OPENCODE_LUNA.to_owned())
+        .with_model_catalog(catalog)
+        .with_usage_limit_cache_home(cache_home.path());
+    let failover = bridge
+        .subagent_provider_failover_for(OPENCODE_LUNA)
+        .expect("generic sibling provider");
+    assert_eq!(failover.model, CLINE_FLASH);
 }
 
 #[test]
@@ -570,7 +601,7 @@ fn exhausted_ollama_glm_subagent_http_is_rejected() {
     assert!(
         error
             .to_string()
-            .contains("cooling down after rate/usage/billing limit"),
+            .contains("cooling down after a rate/usage/billing limit"),
         "{error}"
     );
     assert_eq!(request.model, "glm-5.2:cloud");
@@ -606,7 +637,7 @@ fn exhausted_subagent_without_sibling_still_rejects() {
     assert!(
         error
             .to_string()
-            .contains("cooling down after rate/usage/billing limit"),
+            .contains("cooling down after a rate/usage/billing limit"),
         "{error}"
     );
     assert_eq!(request.model, CLINE_FLASH);

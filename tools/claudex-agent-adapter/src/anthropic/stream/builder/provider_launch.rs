@@ -1,11 +1,11 @@
 use anyhow::Result;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use super::SegmentBuilder;
 use crate::anthropic::stream::acp_tool_bridge;
 use crate::anthropic::{Bridge, Session};
 
-use super::super::protocol::StreamSender;
+use super::super::protocol::{StreamSender, send_stream_frame};
 
 struct LaunchBridge<'a> {
     bridge: &'a Bridge,
@@ -58,7 +58,10 @@ impl SegmentBuilder {
             return Ok(());
         }
         self.note_mcp_provider_call(call_id, mcp_shaped);
-        if self.should_suppress_unbridged_launch(session, event, mcp_hint, call_id) {
+        if self
+            .should_suppress_unbridged_launch(session, event, mcp_hint, call_id, stream)
+            .await?
+        {
             return Ok(());
         }
         if method == Some("item/providerTool/call") {
@@ -107,25 +110,35 @@ impl SegmentBuilder {
         }
     }
 
-    fn should_suppress_unbridged_launch(
+    async fn should_suppress_unbridged_launch(
         &mut self,
         session: &Session,
         event: &Value,
         mcp_hint: bool,
         call_id: Option<&str>,
-    ) -> bool {
+        stream: Option<&StreamSender>,
+    ) -> Result<bool> {
         let suppress = mcp_hint
             || acp_tool_bridge::is_unbridged_launch_progress(&session.external_tool_names, event);
         if !suppress {
-            return false;
+            return Ok(false);
         }
-        if let Some(call_id) = call_id {
-            self.track_incomplete_launch(call_id);
+        if let Some(call_id) = call_id
+            && self.track_incomplete_launch(call_id)
+            && is_unconfirmed_task_launch(session, event)
+        {
+            // This is an assistant-text outcome, not provider progress: the
+            // card cannot start a worker until its prompt arrives.
+            self.emit_incomplete_launch_notice(
+                "Claudex: This SubAgent launch is awaiting its prompt. Send Agent/Task again with a non-empty prompt in this turn.",
+                stream,
+            )
+            .await?;
         }
-        true
+        Ok(true)
     }
 
-    fn track_incomplete_launch(&mut self, call_id: &str) {
+    fn track_incomplete_launch(&mut self, call_id: &str) -> bool {
         let already_known = self
             .incomplete_launch_call_ids
             .iter()
@@ -137,6 +150,7 @@ impl SegmentBuilder {
         if !already_known {
             self.incomplete_launch_call_ids.push(call_id.to_owned());
         }
+        !already_known
     }
 
     pub(super) async fn drain_remaining_queued_launches(
@@ -244,9 +258,32 @@ impl SegmentBuilder {
             call_ids = %pending.join(","),
             "incomplete ACP launch cards dropped without a prompt"
         );
-        self.stream_progress_text(&message, stream).await?;
+        self.emit_incomplete_launch_notice(&message, stream).await?;
+        self.dropped_launch_call_ids.extend(pending);
         self.incomplete_launch_call_ids.clear();
         Ok(())
+    }
+
+    /// Write a launch outcome through the assistant-text channel.  Provider
+    /// progress uses thinking chrome and is intentionally deleted by commit
+    /// sanitization; incomplete launches instead need an actionable record in
+    /// both the live SSE and the committed transcript.
+    async fn emit_incomplete_launch_notice(
+        &mut self,
+        notice: &str,
+        stream: Option<&StreamSender>,
+    ) -> Result<()> {
+        self.close_open_blocks(stream).await?;
+        self.note_provider_turn_activity();
+        let index = self.start_text_block(notice, stream).await?;
+        send_stream_frame(stream, "content_block_delta", || {
+            json!({
+                "type":"content_block_delta", "index":index,
+                "delta":{"type":"text_delta","text":notice}
+            })
+        })
+        .await?;
+        self.close_text_block(stream).await
     }
 
     async fn record_bridged_provider_launch(
@@ -277,6 +314,35 @@ impl SegmentBuilder {
         )
         .await
     }
+}
+
+fn is_unconfirmed_task_launch(session: &Session, event: &Value) -> bool {
+    let Some(params) = event.get("params") else {
+        return false;
+    };
+    ["tool", "title"].into_iter().any(|field| {
+        let Some(candidate) = params.get(field).and_then(Value::as_str) else {
+            return false;
+        };
+        candidate.eq_ignore_ascii_case("Task")
+            || session
+                .external_tool_names
+                .get(candidate)
+                .is_some_and(|name| name == "Task")
+    }) || params
+        .pointer("/arguments/_toolName")
+        .and_then(Value::as_str)
+        .is_some_and(|name| name.eq_ignore_ascii_case("Task"))
+}
+
+#[cfg(test)]
+pub(super) fn launch_queue_env_lock() -> std::sync::MutexGuard<'static, ()> {
+    use std::sync::{Mutex, OnceLock};
+
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("launch queue environment lock")
 }
 
 #[cfg(test)]

@@ -1,10 +1,12 @@
-use anyhow::{Context, Result};
+use anyhow::{Result, anyhow};
 use serde_json::Value;
 use std::sync::Arc;
 
 use crate::app_server::ThreadEvents;
 
 use super::{BackendKind, RoutedBackend};
+
+const ACP_SESSION_RESTART_ERROR: &str = "ACP session creation failed after provider restart";
 
 pub(super) async fn request_session(
     route: &Arc<RoutedBackend>,
@@ -36,10 +38,28 @@ async fn request_acp_session(
         "restarting ACP provider after session creation failed"
     );
     route.retire();
-    let restarted = route.get().await?;
-    Box::pin(restarted.request(method, params))
-        .await
-        .with_context(|| format!("ACP session retry failed after initial error: {error:#}"))
+    let restarted = match route.get().await {
+        Ok(restarted) => restarted,
+        Err(restart_error) => {
+            return Err(acp_session_restart_error(&error, &restart_error));
+        }
+    };
+    match Box::pin(restarted.request(method, params)).await {
+        Ok(response) => Ok(response),
+        Err(retry_error) => Err(acp_session_restart_error(&error, &retry_error)),
+    }
+}
+
+fn acp_session_restart_error(
+    initial_error: &anyhow::Error,
+    restart_error: &anyhow::Error,
+) -> anyhow::Error {
+    tracing::error!(
+        ?initial_error,
+        ?restart_error,
+        "ACP provider restart failed while creating a session"
+    );
+    anyhow!(ACP_SESSION_RESTART_ERROR)
 }
 
 pub(super) fn routed_thread(thread_id: &str) -> (usize, &str) {
@@ -66,3 +86,7 @@ pub(super) fn subscribe_routed_thread(
         }
     }
 }
+
+#[cfg(test)]
+#[path = "request_tests.rs"]
+mod request_tests;

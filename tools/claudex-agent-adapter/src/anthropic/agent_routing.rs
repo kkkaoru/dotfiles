@@ -152,7 +152,7 @@ fn rewrite_generic_cline_child_to_gpt_parent(
 ) {
     let subagent_type = arguments.get("subagent_type").and_then(Value::as_str);
     if !is_generic_agent_type(subagent_type)
-        || !super::provider_kind::is_gpt_luna_model(parent_model, model_catalog)
+        || !super::provider_kind::is_codex_gpt_luna_model(parent_model, model_catalog)
     {
         return;
     }

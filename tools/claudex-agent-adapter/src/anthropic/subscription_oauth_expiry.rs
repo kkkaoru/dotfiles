@@ -107,6 +107,7 @@ pub(super) fn warn_preflight_oauth_failover(exhausted_model: &str, failover_mode
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn expiry_ms_rejects_invalid() {
@@ -119,5 +120,37 @@ mod tests {
     fn expiry_boundary() {
         let now = UNIX_EPOCH + Duration::from_millis(1000);
         assert!(expiry_ms_is_past(1000.0, now));
+    }
+
+    #[test]
+    fn oauth_expiry_accepts_unsigned_values_above_i64_range() {
+        let value = json!({"expiresAt": (i64::MAX as u64) + 1});
+        let expiry = oauth_expiry_ms(&value, "/expiresAt");
+        assert_eq!(expiry, Some(((i64::MAX as u64) + 1) as f64));
+    }
+
+    #[test]
+    fn expired_access_without_refresh_lifetime_is_unknown() {
+        let root = tempfile::tempdir().expect("oauth credentials fixture");
+        let path = root.path().join("credentials.json");
+        std::fs::write(&path, r#"{"claudeAiOauth":{"expiresAt":1}}"#).expect("write credentials");
+
+        assert_eq!(
+            credentials_oauth_unusable_at(&path, UNIX_EPOCH + Duration::from_secs(2)),
+            None,
+            "an expired access token without a refresh lifetime must remain retryable"
+        );
+    }
+
+    #[test]
+    fn push_unique_deduplicates_existing_fallback_before_appending() {
+        let mut candidates = vec!["fallback".to_owned()];
+        push_unique(&mut candidates, "fallback".to_owned());
+        push_unique(&mut candidates, "other-fallback".to_owned());
+
+        assert_eq!(
+            candidates,
+            vec!["fallback".to_owned(), "other-fallback".to_owned()]
+        );
     }
 }

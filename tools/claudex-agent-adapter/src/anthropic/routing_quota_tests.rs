@@ -92,6 +92,37 @@ fn ignores_missing_codexbar_quota_as_not_exhausted() {
 }
 
 #[test]
+fn integer_remaining_and_five_hour_only_quota_are_supported() {
+    let integer_remaining = json!({"remaining_percent": 17});
+    assert_eq!(provider_selection_remaining(&integer_remaining), Some(17.0));
+
+    let five_hour_only = json!({
+        "quota_windows": {"five-hour": 10}
+    });
+    assert_eq!(provider_selection_remaining(&five_hour_only), Some(10.0));
+}
+
+#[test]
+fn low_remaining_without_provider_object_is_not_exhausted() {
+    let summary = json!({
+        "native_worker_quota": {
+            "sonnet": {"remaining_percent": 80}
+        }
+    });
+    assert!(!summary_marks_model_low_remaining(&summary, SPARK));
+}
+
+#[test]
+fn live_cache_without_path_or_file_is_not_exhausted() {
+    let root = tempfile::tempdir().expect("missing routing cache fixture");
+    let missing = root.path().join("missing.json");
+    let now = UNIX_EPOCH + Duration::from_secs(1_000);
+
+    assert!(!live_cache_marks_model_exhausted(None, QWEN, now));
+    assert!(!live_cache_marks_model_exhausted(Some(&missing), QWEN, now));
+}
+
+#[test]
 fn live_cache_honors_fresh_exhausted_snapshot() {
     let root = tempfile::tempdir().expect("routing cache fixture");
     let path = cache_path_for_home(root.path());

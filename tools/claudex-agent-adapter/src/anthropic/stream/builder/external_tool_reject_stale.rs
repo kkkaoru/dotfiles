@@ -53,24 +53,24 @@ impl SegmentBuilder {
         if !crate::anthropic::agent_effort::is_agent_tool(original_name) {
             return Ok(false);
         }
-        if crate::anthropic::agent_effort::validate_routed_agent_arguments_with_catalog(
-            original_name,
-            arguments,
-            context.current_messages,
-            context.system,
-            context.bridge.model_catalog(),
-        )
-        .is_ok()
-        {
+        let Err(error) =
+            crate::anthropic::agent_effort::validate_routed_agent_arguments_with_reason(
+                original_name,
+                arguments,
+                context.current_messages,
+                context.system,
+                context.bridge.model_catalog(),
+            )
+        else {
             return Ok(false);
-        }
+        };
         tracing::warn!(
             tool_name = original_name,
             subagent_type = ?arguments.get("subagent_type"),
             "blocked unsupported SubAgent launch"
         );
         self.close_open_blocks(context.stream).await?;
-        let notice = crate::anthropic::agent_effort::BLOCKED_SUBAGENT_NOTICE;
+        let notice = error.notice();
         context
             .bridge
             .app_for_session(context.session)
@@ -84,11 +84,7 @@ impl SegmentBuilder {
             )
             .await
             .context("failed to reject an unroutable SubAgent provider tool")?;
-        self.text_delta(
-            &serde_json::json!({"params":{"delta":notice}}),
-            context.stream,
-        )
-        .await?;
+        self.emit_blocked_notice(&notice, context.stream).await?;
         self.close_open_blocks(context.stream).await?;
         Ok(true)
     }

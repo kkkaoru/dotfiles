@@ -3,8 +3,9 @@ use serde_json::{Value, json};
 
 use super::super::tools::{thread_start_params_for_mode, tool_configuration_for_mode};
 use crate::anthropic::{
-    Bridge, MessagesRequest, Session, request_identity,
+    Bridge, MessagesRequest, Session,
     content::serialized_len,
+    request_identity,
     turn_input::{
         provider_turn_input, provider_turn_input_with_token_budget, provider_user_turn_input,
     },

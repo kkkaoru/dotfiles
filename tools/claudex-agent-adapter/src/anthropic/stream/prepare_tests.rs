@@ -222,3 +222,32 @@ async fn fail_prepared_stream_skips_exhaustion_for_concurrency_timeout() {
     );
     assert!(receiver.recv().await.is_some(), "error frame still streams");
 }
+
+#[tokio::test]
+async fn prepare_with_activity_paints_an_explicit_initial_status() {
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, std::convert::Infallible>>(8);
+    let (result, _builder) = prepare_with_activity(
+        std::future::ready(Ok::<_, anyhow::Error>("ready")),
+        PrepareActivityOptions {
+            input_tokens: 1,
+            sender: &sender,
+            initial_status: Some("provider session ready"),
+            first_delay: Duration::from_secs(1),
+            interval: Duration::from_secs(1),
+            is_subagent: false,
+            paint_command_code_progress: false,
+            primed_thinking: false,
+        },
+    )
+    .await;
+
+    assert_eq!(result.expect("prepare result"), Some("ready"));
+    assert!(
+        receiver.recv().await.is_some(),
+        "status should open thinking"
+    );
+    assert!(
+        receiver.recv().await.is_some(),
+        "status should emit a delta"
+    );
+}

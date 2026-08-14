@@ -6,6 +6,7 @@ use std::{convert::Infallible, time::Duration};
 use tokio::sync::mpsc;
 
 use super::*;
+use crate::app_server::events::{ThreadEventDispatcher, ThreadEvents};
 
 #[tokio::test]
 async fn builds_provider_progress_without_executable_tool_use_blocks() {
@@ -452,28 +453,38 @@ async fn cline_whitespace_thought_then_read_shows_progress_not_blank_thought() {
     // `Thought for 8s` + blank lines + `Spinning…` with no ▶ Read.
     let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(32);
     let mut builder = SegmentBuilder::new(1);
-    builder
-        .model_output_event(
-            &json!({
-                "method":"item/reasoning/summaryTextDelta",
-                "params":{"itemId":"cline:reasoning","summaryIndex":0,"delta":"\n\n\n"}
-            }),
-            Some(&sender),
-        )
-        .await
-        .expect("ignore blank thought");
-    builder
-        .provider_tool_call(
-            &json!({"params":{
-                "callId":"read-queue",
-                "tool":"Read",
-                "title":"Read queue-consumer.ts",
-                "arguments":{"path":"/Users/kkk4oru/ghq/github.com/kkkaoru/horse-racing-data/apps/finish-position-cron/src/queue-consumer.ts"}
-            }}),
-            Some(&sender),
-        )
-        .await
-        .expect("read progress");
+    let dispatcher = ThreadEventDispatcher::default();
+    let events = dispatcher.subscribe("session");
+    dispatch_into_builder(
+        &dispatcher,
+        &events,
+        &mut builder,
+        &sender,
+        json!({
+            "method":"item/reasoning/summaryTextDelta",
+            "params":{
+                "threadId":"session",
+                "itemId":"cline:reasoning",
+                "summaryIndex":0,
+                "delta":"\n\n\n"
+            }
+        }),
+    )
+    .await;
+    dispatch_into_builder(
+        &dispatcher,
+        &events,
+        &mut builder,
+        &sender,
+        json!({"method":"item/providerTool/call","params":{
+            "threadId":"session",
+            "callId":"read-queue",
+            "tool":"Read",
+            "title":"Read queue-consumer.ts",
+            "arguments":{"path":"/Users/kkk4oru/ghq/github.com/kkkaoru/horse-racing-data/apps/finish-position-cron/src/queue-consumer.ts"}
+        }}),
+    )
+    .await;
     drop(sender);
     let thinking = thinking_text(&builder);
     assert!(thinking.contains("▶ Read"), "{thinking}");
@@ -909,6 +920,34 @@ async fn counts_only_validated_provider_web_evidence_once() {
 type LiveView = super::super::subagent_live_view::SubAgentLiveView;
 type FrameTx = mpsc::Sender<Result<Bytes, Infallible>>;
 type FrameRx = mpsc::Receiver<Result<Bytes, Infallible>>;
+
+async fn dispatch_into_builder(
+    dispatcher: &ThreadEventDispatcher,
+    receiver: &ThreadEvents,
+    builder: &mut SegmentBuilder,
+    sender: &FrameTx,
+    event: Value,
+) {
+    dispatcher.dispatch(event);
+    let event = receiver.recv().await.expect("dispatched bridge event");
+    match event["method"].as_str() {
+        Some("item/agentMessage/delta") | Some("item/reasoning/summaryTextDelta") => {
+            builder
+                .model_output_event(&event, Some(sender))
+                .await
+                .expect("model event");
+        }
+        Some("item/providerTool/call") => builder
+            .provider_tool_call(&event, Some(sender))
+            .await
+            .expect("provider tool call"),
+        Some("item/providerTool/update") => builder
+            .provider_tool_update(&event, Some(sender))
+            .await
+            .expect("provider tool update"),
+        method => panic!("unexpected dispatched bridge event: {method:?}"),
+    }
+}
 
 async fn model_delta(builder: &mut SegmentBuilder, sender: &FrameTx, item_id: &str, delta: &str) {
     builder

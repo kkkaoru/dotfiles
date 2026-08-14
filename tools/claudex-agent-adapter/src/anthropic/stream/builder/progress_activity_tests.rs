@@ -120,6 +120,93 @@ async fn elapsed_tip_closes_zwsp_prime_when_external_tools_left_thinking_open() 
 }
 
 #[tokio::test]
+async fn main_live_cot_keepalive_continues_after_external_tool() {
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
+    let mut builder = SegmentBuilder::new(1);
+    builder
+        .model_output_event(
+            &grok_reasoning_delta("Check the provider response before continuing.\n"),
+            Some(&sender),
+        )
+        .await
+        .expect("main live CoT");
+    let before = builder.blocks[0]["thinking"].clone();
+    builder.external_tool_calls = 1;
+    builder
+        .activity_keepalive(Some(&sender))
+        .await
+        .expect("keepalive after external tool with live CoT");
+
+    assert_eq!(
+        builder.blocks[0]["thinking"], before,
+        "heartbeat is stream-only"
+    );
+    drop(sender);
+    let mut sse = String::new();
+    while let Some(frame) = receiver.recv().await {
+        sse.push_str(&String::from_utf8_lossy(&frame.expect("infallible frame")));
+    }
+    assert!(
+        sse.contains("thinking_delta") && sse.contains('\u{200b}'),
+        "live CoT must keep the stream watchdog active: {sse}"
+    );
+}
+
+#[tokio::test]
+async fn subagent_visible_progress_without_last_tool_keeps_elapsed_heartbeat() {
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
+    let mut builder = SegmentBuilder::new(1).with_subagent(true);
+    builder
+        .stream_progress_text("▶ Inspecting the provider response\n", Some(&sender))
+        .await
+        .expect("visible subagent progress");
+    let before = builder.blocks[0]["thinking"].clone();
+    builder
+        .activity_keepalive(Some(&sender))
+        .await
+        .expect("elapsed heartbeat without a last tool");
+
+    assert_eq!(
+        builder.blocks[0]["thinking"], before,
+        "elapsed keepalive must not overwrite visible progress"
+    );
+    drop(sender);
+    let mut sse = String::new();
+    while let Some(frame) = receiver.recv().await {
+        sse.push_str(&String::from_utf8_lossy(&frame.expect("infallible frame")));
+    }
+    assert!(
+        sse.contains("thinking_delta") && sse.contains('\u{200b}'),
+        "visible progress without a tool must retain the stream heartbeat: {sse}"
+    );
+}
+
+#[tokio::test]
+async fn subagent_visible_progress_with_last_tool_paints_elapsed_tip() {
+    let mut builder = SegmentBuilder::new(1).with_subagent(true);
+    builder
+        .stream_progress_text("▶ Inspecting the provider response\n", None)
+        .await
+        .expect("visible subagent progress");
+    builder
+        .provider_tool_calls
+        .push(("read-1".to_owned(), "Read".to_owned()));
+    builder.age_turn_for_test(Duration::from_secs(5));
+    builder
+        .activity_keepalive(None)
+        .await
+        .expect("elapsed tip after visible progress");
+
+    assert!(
+        builder.blocks[0]["thinking"]
+            .as_str()
+            .is_some_and(|text| text.contains("▶ Read · 5s")),
+        "a named last tool must replace the progress-only keepalive path: {:?}",
+        builder.blocks
+    );
+}
+
+#[tokio::test]
 async fn collapsed_launch_prime_closes_before_visible_subagent_progress() {
     let mut builder = SegmentBuilder::new(1).with_subagent(true);
     builder
@@ -216,8 +303,12 @@ async fn t14_turn_progress_stays_off_the_transcript() {
     builder
         .provider_tool_calls
         .push(("bash-1".to_owned(), "Bash".to_owned()));
-    builder.provider_tool_terminal_ids.insert("read-1".to_owned());
-    builder.provider_tool_terminal_ids.insert("bash-1".to_owned());
+    builder
+        .provider_tool_terminal_ids
+        .insert("read-1".to_owned());
+    builder
+        .provider_tool_terminal_ids
+        .insert("bash-1".to_owned());
     let _ = builder.finish(None).await.expect("finish");
     let progress = builder.last_turn_progress.clone();
     assert_eq!(progress.len(), 2, "{progress:?}");

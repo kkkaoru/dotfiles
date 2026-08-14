@@ -2,20 +2,21 @@ use crate::provider_config::ModelCatalog;
 
 const OPENCODE_GO_LUNA_AGENT: &str = "claudex-opencode-gpt";
 const CODEX_GPT_AGENT: &str = "claudex-gpt";
-const GPT_LUNA_AGENTS: &[&str] = &[OPENCODE_GO_LUNA_AGENT, CODEX_GPT_AGENT];
 
 pub(crate) fn is_cline_model(model: &str) -> bool {
     let model = model.trim().to_ascii_lowercase();
     model.starts_with("cline/") || model.starts_with("cline-pass/")
 }
 
-pub(crate) fn is_gpt_luna_model(model: &str, catalog: &ModelCatalog) -> bool {
+fn is_catalog_worker_model(model: &str, agent: &str, catalog: &ModelCatalog) -> bool {
     let model = model.trim();
-    GPT_LUNA_AGENTS.iter().any(|agent| {
-        catalog
-            .worker_fields(agent)
-            .is_some_and(|(configured, _)| configured == model)
-    })
+    catalog
+        .worker_fields(agent)
+        .is_some_and(|(configured, _)| configured == model)
+}
+
+pub(crate) fn is_codex_gpt_luna_model(model: &str, catalog: &ModelCatalog) -> bool {
+    is_catalog_worker_model(model, CODEX_GPT_AGENT, catalog)
 }
 
 pub(crate) fn opencode_go_luna_model(catalog: &ModelCatalog) -> Option<&str> {
@@ -61,10 +62,12 @@ mod tests {
     #[test]
     fn detects_codex_and_opencode_gpt_luna_from_catalog() {
         let catalog = luna_catalog();
-        assert!(is_gpt_luna_model("gpt-5.6-luna", &catalog));
-        assert!(is_gpt_luna_model("opencode-go/gpt-5.6-luna", &catalog));
-        assert!(!is_gpt_luna_model("gpt-5.3-codex-spark", &catalog));
-        assert!(!is_gpt_luna_model("cline-pass/deepseek-v4-flash", &catalog));
+        assert!(is_codex_gpt_luna_model("gpt-5.6-luna", &catalog));
+        assert!(!is_codex_gpt_luna_model(
+            "opencode-go/gpt-5.6-luna",
+            &catalog
+        ));
+        assert!(!is_codex_gpt_luna_model("gpt-5.3-codex-spark", &catalog));
         assert_eq!(
             opencode_go_luna_model(&catalog),
             Some("opencode-go/gpt-5.6-luna")
@@ -77,11 +80,16 @@ mod tests {
             (CODEX_GPT_AGENT, "codex-luna-from-catalog"),
             (OPENCODE_GO_LUNA_AGENT, "opencode-go/catalog-luna"),
         ]);
-        assert!(is_gpt_luna_model("codex-luna-from-catalog", &catalog));
-        assert!(is_gpt_luna_model("opencode-go/catalog-luna", &catalog));
-        assert!(!is_gpt_luna_model("gpt-5.6-luna", &catalog));
-        assert!(!is_gpt_luna_model("opencode-go/gpt-5.6-luna", &catalog));
-        assert!(!is_gpt_luna_model("gpt-5.6-luna", &ModelCatalog::default()));
+        assert!(is_codex_gpt_luna_model("codex-luna-from-catalog", &catalog));
+        assert!(!is_codex_gpt_luna_model(
+            "opencode-go/catalog-luna",
+            &catalog
+        ));
+        assert!(!is_codex_gpt_luna_model("gpt-5.6-luna", &catalog));
+        assert!(!is_codex_gpt_luna_model(
+            "gpt-5.6-luna",
+            &ModelCatalog::default()
+        ));
         assert_eq!(opencode_go_luna_model(&ModelCatalog::default()), None);
         assert_eq!(
             opencode_go_luna_model(&catalog),

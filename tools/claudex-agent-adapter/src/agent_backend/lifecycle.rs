@@ -23,22 +23,22 @@ async fn abort_routed_provider(routes: &RoutedBackends, thread_id: &str) -> Resu
     // app-server owns the shared prompt cache. The target turn is already
     // invalidated by the ACP cancellation path, so leave the child alive for
     // unrelated turns and future reuse.
-    if matches!(
+    // Every backend reachable through `RoutedBackends` is a provider leaf:
+    // `RoutedBackend::ready` requires `backend.kind()`, and `spawn_route`
+    // constructs only Codex/ACP/Copilot/Grok leaves. A routed/session-scoped
+    // backend cannot be installed as a route without violating that contract.
+    debug_assert!(matches!(
         backend.as_ref(),
         AgentBackend::Codex(_)
             | AgentBackend::ConfiguredAcp(_)
             | AgentBackend::Copilot(_)
             | AgentBackend::Grok(_)
-    ) {
-        tracing::debug!(
-            thread_id,
-            model = %route.model,
-            "retaining shared provider after target-specific abort"
-        );
-        return Ok(());
-    }
-    route.retire();
-    backend.shutdown_leaf().await;
+    ));
+    tracing::debug!(
+        thread_id,
+        model = %route.model,
+        "retaining shared provider after target-specific abort"
+    );
     Ok(())
 }
 

@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde_json::Value;
 
 use super::SubscriptionStream;
@@ -29,10 +29,13 @@ impl SubscriptionStream {
             let cloned = input.clone();
             return Ok((cloned.clone(), cloned));
         }
-        let context = self
-            .tool_context
-            .as_ref()
-            .context("subscription Agent/Task call has no routing context")?;
+        let context = self.tool_context.as_ref().ok_or_else(|| {
+            anyhow::Error::new(
+                crate::anthropic::agent_route_validation::BlockedSubagentError::missing_config(
+                    "subscription Agent/Task call has no routing context",
+                ),
+            )
+        })?;
         let mut routed_input = input.clone();
         crate::anthropic::agent_routing::hydrate_routing_fields_from_context(
             &mut routed_input,
@@ -55,13 +58,14 @@ impl SubscriptionStream {
                 "subscription Agent/Task omitted Claudex routing fields"
             );
         }
-        crate::anthropic::agent_effort::validate_routed_agent_arguments_with_catalog(
+        crate::anthropic::agent_effort::validate_routed_agent_arguments_with_reason(
             name,
             &routed_input,
             &context.user_messages,
             &context.system,
             &context.model_catalog,
-        )?;
+        )
+        .map_err(anyhow::Error::new)?;
         let (intent, public) = crate::anthropic::agent_effort::prepare_arguments_for_user(
             name,
             id,

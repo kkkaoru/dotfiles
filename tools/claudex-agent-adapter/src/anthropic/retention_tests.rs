@@ -9,12 +9,12 @@ use std::{
 use serde_json::json;
 use tokio::sync::{Mutex, Semaphore};
 
+use super::super::Session;
 use super::*;
 use crate::{
     agent_backend::{AgentBackend, BackendKind, BackendRoute},
     app_server::AppServer,
 };
-use super::super::Session;
 
 #[test]
 fn retains_idle_provider_context_for_follow_up_window() {
@@ -94,10 +94,7 @@ async fn retains_a_newer_candidate_seen_after_the_oldest() {
 #[tokio::test]
 async fn bridge_sweep_releases_session_scoped_provider_pool() {
     let bridge = Bridge::new_with_backend(
-        AgentBackend::spawn_routes(&[BackendRoute::new(
-            "main",
-            BackendKind::CodexAppServer,
-        )]),
+        AgentBackend::spawn_routes(&[BackendRoute::new("main", BackendKind::CodexAppServer)]),
         "main".to_owned(),
     );
     let _ = bridge.app_for(Some("ttl-scope"));
@@ -126,10 +123,7 @@ async fn bridge_sweep_releases_session_scoped_provider_pool() {
 #[tokio::test]
 async fn release_provider_scope_shuts_down_when_no_sessions_reference_it() {
     let bridge = Bridge::new_with_backend(
-        AgentBackend::spawn_routes(&[BackendRoute::new(
-            "main",
-            BackendKind::CodexAppServer,
-        )]),
+        AgentBackend::spawn_routes(&[BackendRoute::new("main", BackendKind::CodexAppServer)]),
         "main".to_owned(),
     );
     let _ = bridge.app_for(Some("orphan-scope"));
@@ -154,10 +148,7 @@ async fn release_provider_scope_shuts_down_when_no_sessions_reference_it() {
 #[tokio::test]
 async fn release_keeps_scope_while_a_detached_session_still_references_it() {
     let bridge = Bridge::new_with_backend(
-        AgentBackend::spawn_routes(&[BackendRoute::new(
-            "main",
-            BackendKind::CodexAppServer,
-        )]),
+        AgentBackend::spawn_routes(&[BackendRoute::new("main", BackendKind::CodexAppServer)]),
         "main".to_owned(),
     );
     let _ = bridge.app_for(Some("kept-scope"));

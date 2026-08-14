@@ -17,6 +17,7 @@ const STATUS: &str = "Claudex is still working; waiting for provider output\u{20
 #[derive(Default)]
 pub(super) struct SubscriptionActivity {
     open: Option<OpenActivity>,
+    pending_text: Option<String>,
 }
 
 struct OpenActivity {
@@ -25,6 +26,14 @@ struct OpenActivity {
 }
 
 impl SubscriptionActivity {
+    pub(super) fn defer_text(&mut self, text: &str) {
+        self.pending_text = Some(text.to_owned());
+    }
+
+    pub(super) fn take_deferred_text(&mut self) -> Option<String> {
+        self.pending_text.take()
+    }
+
     pub(super) fn is_open(&self) -> bool {
         self.open.is_some()
     }

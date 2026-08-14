@@ -44,7 +44,9 @@ async fn assert_respond_finds_unique_started_pool(model: &str) {
     let AgentBackend::SessionScoped(scopes) = scoped.as_ref() else {
         panic!("expected SessionScoped backends");
     };
-    let leaf = Arc::new(AgentBackend::Grok(crate::grok_acp::GrokAcp::alive_for_test()));
+    let leaf = Arc::new(AgentBackend::Grok(
+        crate::grok_acp::GrokAcp::alive_for_test(),
+    ));
     scopes.insert_scope_for_test(
         "tui-session",
         AgentBackend::routed(vec![(model.to_owned(), Arc::clone(&leaf))]),

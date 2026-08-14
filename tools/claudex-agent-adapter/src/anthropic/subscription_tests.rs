@@ -200,6 +200,111 @@ fn streaming_subscription_bridges_native_web_tools_to_the_outer_session() {
     assert!(allowed_tools.split(',').any(|tool| tool == "Bash"));
 }
 
+#[tokio::test]
+async fn closed_subscription_capacity_is_reported() {
+    let slots = Arc::new(tokio::sync::Semaphore::new(1));
+    slots.close();
+
+    let error = super::subscription::acquire_subscription_slot(slots, Duration::from_secs(1))
+        .await
+        .expect_err("closed subscription capacity must reject a new permit");
+
+    assert_eq!(error.to_string(), "Claude subscription capacity is closed");
+}
+
+#[tokio::test(start_paused = true)]
+async fn subscription_capacity_wait_times_out_when_every_slot_is_held() {
+    let slots = Arc::new(tokio::sync::Semaphore::new(1));
+    let _held_slot = Arc::clone(&slots)
+        .try_acquire_owned()
+        .expect("hold the only subscription slot");
+
+    let error = super::subscription::acquire_subscription_slot(slots, Duration::from_secs(1))
+        .await
+        .expect_err("waiting for a held subscription slot must time out");
+
+    assert_eq!(
+        error.to_string(),
+        "Claude subscription capacity wait timed out"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn subscription_spawn_error_names_the_model() {
+    let options = SubscriptionOptions::internal(
+        Arc::new(tokio::sync::Semaphore::new(1)),
+        Duration::from_secs(1),
+    );
+    let mut command = subscription_command(
+        Path::new("/definitely-missing-claude-subscription-fixture"),
+        "claude-test",
+        &options,
+        OutputMode::Json,
+    );
+
+    let error = super::subscription::spawn_subscription(&mut command, "claude-test")
+        .expect_err("a missing subscription program must fail to spawn");
+
+    assert!(
+        error
+            .to_string()
+            .contains("failed to start Claude subscription model claude-test")
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn subscription_stdin_cannot_be_taken_twice() {
+    let options = SubscriptionOptions::internal(
+        Arc::new(tokio::sync::Semaphore::new(1)),
+        Duration::from_secs(1),
+    );
+    let mut command = subscription_command(Path::new("true"), "model", &options, OutputMode::Json);
+    let mut child = super::subscription::spawn_subscription(&mut command, "model")
+        .expect("spawn existing subscription process fixture");
+    let stdin = super::subscription::take_subscription_stdin(&mut child)
+        .expect("take the subscription stdin once");
+
+    let error = super::subscription::take_subscription_stdin(&mut child)
+        .expect_err("subscription stdin cannot be taken twice");
+    assert!(error.to_string().contains("stdin is unavailable"));
+
+    drop(stdin);
+    assert!(child.wait().await.expect("reap process fixture").success());
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn closed_subscription_stdin_rejects_a_prompt_write() {
+    let options = SubscriptionOptions::internal(
+        Arc::new(tokio::sync::Semaphore::new(1)),
+        Duration::from_secs(1),
+    );
+    let mut command = subscription_command(Path::new("true"), "model", &options, OutputMode::Json);
+    let mut child = super::subscription::spawn_subscription(&mut command, "model")
+        .expect("spawn existing subscription process fixture");
+    let stdin = super::subscription::take_subscription_stdin(&mut child)
+        .expect("take the subscription stdin");
+    assert!(
+        child
+            .wait()
+            .await
+            .expect("wait for process fixture")
+            .success()
+    );
+
+    let error = super::subscription::write_subscription_prompt(stdin, "prompt")
+        .await
+        .expect_err("a reaped subscription child must reject prompt writes");
+    assert!(
+        error
+            .to_string()
+            .to_ascii_lowercase()
+            .contains("broken pipe")
+    );
+}
+
 #[cfg(unix)]
 #[tokio::test]
 async fn subscription_fallback_child_executes_the_bash_git_and_gh_probe() {

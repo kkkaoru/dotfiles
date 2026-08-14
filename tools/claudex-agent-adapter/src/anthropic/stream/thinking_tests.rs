@@ -7,6 +7,116 @@ mod tests {
 
     use super::*;
 
+    fn thinking_state(item_id: &str, text: &str) -> ThinkingState {
+        ThinkingState {
+            open: Some(OpenThinking {
+                index: 0,
+                item_id: item_id.to_owned(),
+                summary_index: 0,
+                signature: "sig".to_owned(),
+                text: text.to_owned(),
+            }),
+        }
+    }
+
+    async fn assert_silent_status_does_not_open_thinking(status: &str) {
+        let mut state = ThinkingState::default();
+        let mut blocks = Vec::new();
+        state
+            .activity_status(&mut blocks, status, None)
+            .await
+            .expect("silent status");
+        assert!(state.open.is_none(), "{status:?}");
+        assert!(blocks.is_empty(), "{status:?}: {blocks:?}");
+    }
+
+    async fn send_silent_status(
+        state: &mut ThinkingState,
+        blocks: &mut Vec<Value>,
+        status: &str,
+        sender: &StreamSender,
+    ) {
+        state
+            .activity_status(blocks, status, Some(sender))
+            .await
+            .expect("silent status");
+    }
+
+    async fn assert_keepalive_does_not_reopen_main_thinking_after_tool_use() {
+        let mut main = ThinkingState::default();
+        let mut main_blocks = Vec::new();
+        main.delta_text(
+            "reasoning",
+            0,
+            "Inspecting the request.",
+            &mut main_blocks,
+            None,
+        )
+        .await
+        .expect("main Agent thinking");
+        main.close_before_executable_tool_use(&mut main_blocks, None)
+            .await
+            .expect("main Agent tool_use");
+        main.activity_keepalive(&mut main_blocks, None)
+            .await
+            .expect("post-tool keepalive");
+        assert!(
+            main.open.is_none(),
+            "keepalive must not reopen main thinking after tool_use"
+        );
+        assert_eq!(
+            main_blocks.len(),
+            1,
+            "keepalive must not create a new thinking block"
+        );
+    }
+
+    #[tokio::test]
+    async fn silent_status_variants_do_not_open_thinking() {
+        assert_silent_status_does_not_open_thinking("   ").await;
+        assert_silent_status_does_not_open_thinking(" \u{200b} ").await;
+        assert_silent_status_does_not_open_thinking("Claudex is still working · 1s").await;
+        assert_silent_status_does_not_open_thinking("Preparing provider session…").await;
+        assert_silent_status_does_not_open_thinking("Nucleating response").await;
+        assert_silent_status_does_not_open_thinking("▶ Thinking…").await;
+
+        let mut state = ThinkingState::default();
+        let mut blocks = Vec::new();
+        let status = "\u{200b}visible";
+        state
+            .activity_status(&mut blocks, status, None)
+            .await
+            .expect("visible status containing ZWSP");
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(
+            state.open.as_ref().map(|open| open.text.as_str()),
+            Some(status)
+        );
+
+        let mut state = ThinkingState::default();
+        let mut blocks = Vec::new();
+        state
+            .activity_status(&mut blocks, "▶ Read", None)
+            .await
+            .expect("non-thinking tool tip");
+        assert!(state.open.is_some());
+    }
+
+    #[test]
+    fn live_cot_or_tip_recognizes_each_visible_marker() {
+        assert!(!ThinkingState::default().holds_live_cot_or_tip());
+        assert!(!thinking_state("claudex_activity_keepalive", "\u{200b}").holds_live_cot_or_tip());
+        assert!(!thinking_state("claudex_activity_keepalive", "waiting").holds_live_cot_or_tip());
+        assert!(thinking_state("reasoning", "plain CoT").holds_live_cot_or_tip());
+        for marker in ['▶', '✓', '✗', '🔎'] {
+            assert!(
+                thinking_state("claudex_provider_progress", &format!("{marker} tool"))
+                    .holds_live_cot_or_tip(),
+                "{marker}"
+            );
+        }
+    }
+
     #[tokio::test]
     async fn heartbeat_closes_empty_non_keepalive_open_before_emitting() {
         let mut state = ThinkingState {
@@ -444,7 +554,9 @@ mod tests {
         assert_eq!(text, Some("hello world\u{200b}"));
     }
 
-    fn drain_live_frames(receiver: &mut tokio::sync::mpsc::Receiver<Result<Bytes, Infallible>>) -> String {
+    fn drain_live_frames(
+        receiver: &mut tokio::sync::mpsc::Receiver<Result<Bytes, Infallible>>,
+    ) -> String {
         let mut live = String::new();
         while let Ok(frame) = receiver.try_recv() {
             live.push_str(&String::from_utf8_lossy(&frame.expect("frame")));
@@ -467,6 +579,69 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn t1_subagent_prime_keepalive_and_silence_leave_no_thinking_chrome() {
+        use tokio::sync::mpsc;
+
+        let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
+        let mut subagent = ThinkingState::default();
+        let mut blocks = Vec::new();
+        subagent
+            .ensure_open(&mut blocks, Some(&sender))
+            .await
+            .expect("prime SubAgent SSE");
+        subagent
+            .activity_keepalive(&mut blocks, Some(&sender))
+            .await
+            .expect("keepalive");
+        send_silent_status(&mut subagent, &mut blocks, "   ", &sender).await;
+        send_silent_status(&mut subagent, &mut blocks, "\u{200b}", &sender).await;
+        send_silent_status(
+            &mut subagent,
+            &mut blocks,
+            "Claudex is still working · 1s",
+            &sender,
+        )
+        .await;
+        send_silent_status(
+            &mut subagent,
+            &mut blocks,
+            "Preparing provider session…",
+            &sender,
+        )
+        .await;
+        send_silent_status(&mut subagent, &mut blocks, "▶ Thinking… · 1s", &sender).await;
+        subagent
+            .close(&mut blocks, Some(&sender))
+            .await
+            .expect("finish SubAgent stream");
+        assert!(subagent.open.is_none());
+        drop(sender);
+
+        let live = drain_live_frames(&mut receiver);
+        assert_eq!(
+            live.matches("content_block_start").count(),
+            live.matches("content_block_stop").count(),
+            "SSE must close its primed thinking block instead of leaving empty chrome: {live}"
+        );
+        assert!(
+            live.contains(HEARTBEAT),
+            "keepalive must remain stream-only: {live}"
+        );
+        assert!(
+            !live.contains("Claudex is still working")
+                && !live.contains("Preparing provider session"),
+            "silent status must not become thinking chrome: {live}"
+        );
+
+        crate::anthropic::stream::sanitize::sanitize_committed_blocks(&mut blocks);
+        assert!(
+            committed_thinking(&blocks).is_empty(),
+            "committed output must omit empty thinking/status/ZWSP: {blocks:?}"
+        );
+        assert_keepalive_does_not_reopen_main_thinking_after_tool_use().await;
+    }
+
+    #[tokio::test]
     async fn t2_live_tip_then_cot_commits_reasoning_only() {
         use tokio::sync::mpsc;
         let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
@@ -477,7 +652,13 @@ mod tests {
             .await
             .expect("live tip");
         state
-            .delta_text_coalesced("reasoning", 0, "Need to inspect the module graph.", &mut blocks, None)
+            .delta_text_coalesced(
+                "reasoning",
+                0,
+                "Need to inspect the module graph.",
+                &mut blocks,
+                None,
+            )
             .await
             .expect("real CoT");
         drop(sender);
@@ -491,6 +672,9 @@ mod tests {
             "{thinking:?}"
         );
         assert!(!thinking[0].contains('▶'), "{thinking:?}");
-        assert!(!thinking[0].contains("Claudex is still working"), "{thinking:?}");
+        assert!(
+            !thinking[0].contains("Claudex is still working"),
+            "{thinking:?}"
+        );
     }
 }

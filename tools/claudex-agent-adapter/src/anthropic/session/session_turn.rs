@@ -112,5 +112,7 @@ impl Bridge {
 
 #[cfg(test)]
 pub(in crate::anthropic) use turn_model::contains_context_window_marker;
-pub(in crate::anthropic) use turn_model::{is_context_window_exceeded, is_unknown_session_exceeded};
 pub(crate) use turn_model::is_unknown_session_text;
+pub(in crate::anthropic) use turn_model::{
+    is_context_window_exceeded, is_unknown_session_exceeded,
+};

@@ -3,8 +3,31 @@ use serde_json::{Value, json};
 
 use super::SegmentBuilder;
 use super::external_tool::ExternalToolContext;
+use crate::anthropic::agent_route_validation::BlockedSubagentError;
+use crate::anthropic::stream::protocol::{StreamSender, send_stream_frame};
 
 impl SegmentBuilder {
+    /// Keep a blocked Agent notice identically visible in the live stream and
+    /// committed transcript.  This is an assistant-text outcome, never a
+    /// synthetic executable tool call.
+    pub(super) async fn emit_blocked_notice(
+        &mut self,
+        notice: &str,
+        stream: Option<&StreamSender>,
+    ) -> Result<()> {
+        self.close_open_blocks(stream).await?;
+        self.note_provider_turn_activity();
+        let index = self.start_text_block(notice, stream).await?;
+        send_stream_frame(stream, "content_block_delta", || {
+            json!({
+                "type":"content_block_delta", "index":index,
+                "delta":{"type":"text_delta","text":notice}
+            })
+        })
+        .await?;
+        self.close_text_block(stream).await
+    }
+
     pub(super) async fn reject_disabled_subagent(
         &mut self,
         context: ExternalToolContext<'_>,
@@ -25,8 +48,7 @@ impl SegmentBuilder {
             "blocked a disabled SubAgent before emitting its launch tool call"
         );
         self.close_open_blocks(context.stream).await?;
-        let notice =
-            format!("SubAgent model `{model}` is disabled by policy and was not launched.");
+        let notice = BlockedSubagentError::policy_disabled(model).notice();
         context
             .bridge
             .app_for_session(context.session)
@@ -40,11 +62,7 @@ impl SegmentBuilder {
             )
             .await
             .context("failed to reject a disabled SubAgent provider tool")?;
-        self.text_delta(
-            &serde_json::json!({"params":{"delta":notice}}),
-            context.stream,
-        )
-        .await?;
+        self.emit_blocked_notice(&notice, context.stream).await?;
         self.close_open_blocks(context.stream).await?;
         Ok(true)
     }
@@ -71,9 +89,7 @@ impl SegmentBuilder {
             "blocked an exhausted SubAgent before emitting its launch tool call"
         );
         self.close_open_blocks(context.stream).await?;
-        let notice = format!(
-            "SubAgent model `{model}` is cooling down after a rate/usage/billing limit; pick another selected_workers entry."
-        );
+        let notice = BlockedSubagentError::cooldown(model).notice();
         context
             .bridge
             .app_for_session(context.session)
@@ -87,11 +103,7 @@ impl SegmentBuilder {
             )
             .await
             .context("failed to reject an exhausted SubAgent provider tool")?;
-        self.text_delta(
-            &serde_json::json!({"params":{"delta":notice}}),
-            context.stream,
-        )
-        .await?;
+        self.emit_blocked_notice(&notice, context.stream).await?;
         self.close_open_blocks(context.stream).await?;
         Ok(true)
     }
@@ -99,3 +111,55 @@ impl SegmentBuilder {
 
 #[path = "external_tool_reject_stale.rs"]
 mod stale;
+
+#[cfg(test)]
+mod tests {
+    use std::convert::Infallible;
+
+    use axum::body::Bytes;
+    use tokio::sync::mpsc;
+
+    use super::SegmentBuilder;
+
+    #[tokio::test]
+    async fn blocked_notice_streams_as_committed_text_without_tool_use() {
+        let notice = "The requested SubAgent model is disabled by policy, so it was not started. Continue without it.";
+        let mut builder = SegmentBuilder::new(0);
+        let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(4);
+
+        builder
+            .emit_blocked_notice(notice, Some(&sender))
+            .await
+            .expect("blocked notice streams");
+        assert_eq!(
+            builder.blocks,
+            vec![serde_json::json!({"type":"text","text":notice})]
+        );
+
+        drop(sender);
+        let output = [
+            receiver
+                .recv()
+                .await
+                .expect("content start")
+                .expect("infallible frame"),
+            receiver
+                .recv()
+                .await
+                .expect("text delta")
+                .expect("infallible frame"),
+            receiver
+                .recv()
+                .await
+                .expect("content stop")
+                .expect("infallible frame"),
+        ]
+        .map(|frame| String::from_utf8_lossy(&frame).into_owned())
+        .concat();
+        assert!(output.contains(r#""content_block""#));
+        assert!(output.contains(r#""type":"text""#));
+        assert!(output.contains(r#""type":"text_delta""#));
+        assert!(!output.contains(r#""type":"thinking_delta""#));
+        assert!(!output.contains(r#""type":"tool_use""#));
+    }
+}

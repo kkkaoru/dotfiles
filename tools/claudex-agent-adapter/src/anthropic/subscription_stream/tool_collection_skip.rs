@@ -146,4 +146,21 @@ impl SubscriptionStream {
         self.next_index += 1;
         send_text_delta(sender, self.next_index.saturating_sub(1), notice).await
     }
+
+    pub(super) async fn report_blocked_agent_notice(
+        &mut self,
+        sender: &mpsc::Sender<Result<Bytes, Infallible>>,
+        notice: &str,
+    ) -> Result<()> {
+        self.activity
+            .start_status(sender, notice, &mut self.next_index)
+            .await?;
+        self.activity.close(sender).await?;
+        self.activity.defer_text(notice);
+        // The live notice is thinking chrome. The committed text block is
+        // opened at finish, after all provider blocks have been closed.
+        self.text_started = false;
+        self.text_closed = false;
+        Ok(())
+    }
 }

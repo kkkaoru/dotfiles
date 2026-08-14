@@ -8,10 +8,11 @@ mod model;
 mod names;
 mod prepare;
 mod terminal;
-pub(in crate::anthropic) use super::agent_route_validation::BLOCKED_SUBAGENT_NOTICE;
+pub(super) use super::agent_route_validation::validate_routed_agent_arguments_with_reason;
 #[cfg(test)]
-pub(super) use super::agent_route_validation::validate_routed_agent_arguments;
-pub(super) use super::agent_route_validation::validate_routed_agent_arguments_with_catalog;
+pub(super) use super::agent_route_validation::{
+    validate_routed_agent_arguments, validate_routed_agent_arguments_with_catalog,
+};
 #[cfg(test)]
 use intents::retain_terminal_intent;
 pub(super) use model::{disabled_subagent_model, is_agent_tool, requested_model};

@@ -1,5 +1,7 @@
 use serde_json::json;
+use std::path::Path;
 
+use super::persist::{StoreLock, create_private_directory, parent_directory, write_private};
 use super::*;
 
 fn request(tools: Vec<Value>) -> MessagesRequest {
@@ -303,4 +305,26 @@ fn falls_back_when_the_schema_store_parent_cannot_be_created() {
     let mut resumed = omitted_request();
     cache.restore_or_remember(&owner, &mut resumed, false);
     assert_eq!(resumed.tools, tools);
+}
+
+#[test]
+fn persistence_io_helpers_cover_relative_paths_private_writes_and_locks() {
+    let root = tempfile::tempdir().expect("schema cache fixture");
+    let nested = root.path().join("nested");
+    let cache_path = nested.join("schemas.json");
+
+    assert_eq!(parent_directory(Path::new("schemas.json")), Path::new("."));
+    assert_eq!(parent_directory(&cache_path), nested.as_path());
+    create_private_directory(&nested).expect("create private schema directory");
+
+    let payload_path = nested.join("payload");
+    write_private(&payload_path, b"private payload").expect("write private payload");
+    assert_eq!(
+        std::fs::read(&payload_path).expect("read private payload"),
+        b"private payload"
+    );
+
+    let lock = StoreLock::acquire(&cache_path).expect("acquire schema cache lock");
+    assert!(cache_path.with_extension("lock").exists());
+    drop(lock);
 }

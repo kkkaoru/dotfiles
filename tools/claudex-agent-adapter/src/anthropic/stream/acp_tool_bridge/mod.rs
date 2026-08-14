@@ -130,7 +130,7 @@ pub(super) fn bridge_provider_tool_call_with_mcp_hint(
 fn bridge_provider_tool_call_inner(
     external_tool_names: &HashMap<String, String>,
     event: &Value,
-    force_mcp_queue: bool,
+    use_mcp_queue: bool,
     launch_owner: Option<&str>,
 ) -> Option<ToolCall> {
     trace_launch_shaped_event(event);
@@ -142,9 +142,14 @@ fn bridge_provider_tool_call_inner(
     let tool = params.get("tool").and_then(Value::as_str).unwrap_or("");
     let title = params.get("title").and_then(Value::as_str).unwrap_or("");
     let raw_args = params.get("arguments").unwrap_or(&Value::Null);
-    let mcp_shaped = force_mcp_queue || [tool, title].into_iter().any(looks_like_mcp_surface);
+    let mcp_shaped = use_mcp_queue || [tool, title].into_iter().any(looks_like_mcp_surface);
     let normalized_raw = normalize_launch_arguments("Agent", raw_args);
-    let queued = if mcp_shaped && !launch_arguments_ready(&normalized_raw) {
+    // Only the explicit MCP-hint path has enough session context to consult a
+    // launch queue.  The ordinary bridge path is also used by
+    // `is_unbridged_launch_progress`; consulting the process-global queue there
+    // could let an unrelated queued launch make an empty provider card look
+    // bridgeable (and suppress the honest "awaiting prompt" progress).
+    let queued = if use_mcp_queue && mcp_shaped && !launch_arguments_ready(&normalized_raw) {
         super::acp_launch_queue::peek_pending_launch_arguments_for(launch_owner)
     } else {
         None

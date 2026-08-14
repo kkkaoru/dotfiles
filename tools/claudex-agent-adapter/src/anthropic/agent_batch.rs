@@ -1,4 +1,4 @@
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 const MAPPED_NAME_PREFIX: &str = "__claudex_agent_batch__:";
 const MARKER_KEY: &str = "claudexAgentBatch";

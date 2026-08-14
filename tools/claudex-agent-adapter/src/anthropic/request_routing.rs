@@ -1,5 +1,5 @@
+use super::agent_route_validation::BlockedSubagentError;
 use super::{MessagesRequest, content::serialized_len};
-use anyhow::{Result, bail};
 
 mod models;
 pub(crate) use models::official_claude_haiku_model;
@@ -26,7 +26,7 @@ pub(super) fn resolve_request_model(
     supports_model: impl Fn(&str) -> bool,
     // True when the model matches any provider identity declared in config (enabled or not).
     is_declared_provider_model: impl Fn(&str) -> bool,
-) -> Result<RouteDecision> {
+) -> anyhow::Result<RouteDecision> {
     resolve_request_model_with_origin(
         request,
         main_model,
@@ -75,17 +75,17 @@ impl RouteOrigin {
     }
 }
 
-fn apply_disabled_model_policy(request: &MessagesRequest, is_subagent: bool) -> Result<()> {
+fn apply_disabled_model_policy(
+    request: &MessagesRequest,
+    is_subagent: bool,
+) -> std::result::Result<(), BlockedSubagentError> {
     if !request.disabled_subagent_models.contains(&request.model) {
         return Ok(());
     }
     if !is_subagent {
         return Ok(());
     }
-    bail!(
-        "SubAgent model `{}` is disabled by the active Claudex policy and must not be launched",
-        request.model
-    )
+    Err(BlockedSubagentError::policy_disabled(&request.model))
 }
 
 #[cfg(test)]

@@ -52,7 +52,7 @@ impl Bridge {
             last_activity: std::sync::Mutex::new(Instant::now()),
             pending_since: std::sync::Mutex::new(None),
             turn_progress: Default::default(),
-        adopted_thread_id: Default::default(),
+            adopted_thread_id: Default::default(),
             _slot: slot,
         });
         self.sessions.lock().await.push(Arc::clone(&session));

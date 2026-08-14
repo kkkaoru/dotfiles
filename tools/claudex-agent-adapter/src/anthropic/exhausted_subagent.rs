@@ -1,6 +1,7 @@
 use anyhow::Result;
 
 use crate::agent_backend::BackendKind;
+use crate::anthropic::agent_route_validation::BlockedSubagentError;
 
 use super::{Bridge, MessagesRequest, model_concurrency::Ticket, request_routing::RouteDecision};
 
@@ -84,10 +85,9 @@ impl Bridge {
         let Some(failover) =
             self.subagent_provider_failover_excluding(&request.model, quota.as_ref())
         else {
-            return Err(anyhow::anyhow!(
-                "provider for model `{}` is cooling down after rate/usage/billing limit; orchestrator should re-route",
-                request.model
-            ));
+            return Err(anyhow::Error::new(BlockedSubagentError::cooldown(
+                &request.model,
+            )));
         };
         tracing::info!(
             exhausted_model = %request.model,

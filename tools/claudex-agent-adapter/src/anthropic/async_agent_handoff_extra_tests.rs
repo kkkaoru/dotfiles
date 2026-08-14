@@ -361,6 +361,20 @@ fn background_handoff_text_matches_the_native_launch_count() {
 }
 
 #[test]
+fn steering_shape_predicate_rejects_empty_and_non_text_content() {
+    assert!(is_text_only_user_message(
+        &json!({"role":"user", "content":"continue the audit"})
+    ));
+    assert!(!is_text_only_user_message(
+        &json!({"role":"user", "content":"   "})
+    ));
+    assert!(!is_text_only_user_message(&json!({"role":"user"})));
+    assert!(!is_text_only_user_message(
+        &json!({"role":"user", "content":null})
+    ));
+}
+
+#[test]
 fn async_launch_results_ignore_empty_array_content() {
     assert!(
         async_launch_tool_results(&json!({
@@ -485,6 +499,38 @@ async fn hands_control_back_when_steering_user_message_follows_async_ack() {
         .unwrap();
     let body: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(body["stop_reason"], "end_turn");
+}
+
+#[tokio::test]
+async fn keeps_provider_open_for_a_partial_async_launch_ack() {
+    let bridge = Bridge::new_with_backend(AgentBackend::spawn_routes(&[]), "main-model".to_owned());
+    let mut request = request(json!([launch_result("one")]));
+    request.messages.insert(
+        0,
+        json!({
+            "role":"assistant",
+            "content":[
+                {"type":"tool_use", "id":"one", "name":"Agent", "input":{}},
+                {"type":"tool_use", "id":"two", "name":"Agent", "input":{}}
+            ]
+        }),
+    );
+
+    assert!(
+        bridge.async_agent_launch_handoff(&request).await.is_none(),
+        "a partial acknowledgement must not hand control back"
+    );
+}
+
+#[tokio::test]
+async fn keeps_provider_open_for_an_empty_async_launch_round() {
+    let bridge = Bridge::new_with_backend(AgentBackend::spawn_routes(&[]), "main-model".to_owned());
+    let request = request(json!([]));
+
+    assert!(
+        bridge.async_agent_launch_handoff(&request).await.is_none(),
+        "an empty launch round must not hand control back"
+    );
 }
 
 #[tokio::test]

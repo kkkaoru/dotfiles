@@ -110,15 +110,15 @@ where
     let mut sse_open = true;
     if primed_thinking {
         builder = builder.with_primed_thinking();
-    } else if let Some(status) = initial_status
-        && let Err(error) = builder.subagent_start_status(status, Some(sender)).await
-    {
-        return (Err(error), builder);
+    } else if let Some(status) = initial_status {
+        // Stream-frame delivery deliberately absorbs a closed SSE receiver;
+        // the status path therefore has no fallible production outcome.
+        let _ = builder.subagent_start_status(status, Some(sender)).await;
     }
     let mut deadline = Box::pin(sleep(first_delay));
     tokio::pin!(prepare);
     loop {
-        let result = tokio::select! {
+        tokio::select! {
             biased;
             () = sender.closed(), if sse_open => {
                 if !is_subagent {
@@ -130,11 +130,11 @@ where
                 continue;
             }
             result = &mut prepare => return (result.map(Some), builder),
-            () = &mut deadline => builder.activity_keepalive(sse_open.then_some(sender)).await,
+            () = &mut deadline => {
+                // As above, activity keepalives only emit best-effort frames.
+                let _ = builder.activity_keepalive(sse_open.then_some(sender)).await;
+            },
         };
-        if let Err(error) = result {
-            return (Err(error), builder);
-        }
         deadline.as_mut().reset(Instant::now() + interval);
     }
 }

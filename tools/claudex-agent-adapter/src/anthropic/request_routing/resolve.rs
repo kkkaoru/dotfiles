@@ -5,6 +5,7 @@ use super::{
     conversation_exceeds_haiku_budget, conversation_token_count,
     models::{CLAUDE_LONG_CONTEXT_MODEL, normalize_claude_model_to_haiku},
 };
+use crate::anthropic::agent_route_validation::BlockedSubagentError;
 
 /// Route a SubAgent whose model normalizes to Claude's small/fast tier, escalating
 /// to the long-context subscription model when the conversation is too large for
@@ -50,6 +51,68 @@ pub(in crate::anthropic) fn resolve_request_model_with_origin(
     // transport header means the outer main asked for this model.
     let is_subagent = super::super::request_identity::authoritative_is_subagent(request)
         .unwrap_or(origin.is_subagent);
+    let has_model_override = select_request_model(
+        request,
+        main_model,
+        model_override,
+        origin,
+        is_subagent,
+        &supports_model,
+    )?;
+    if is_subagent
+        && (!has_model_override || origin.model_is_inherited)
+        && let Some(decision) = route_subagent_claude_model(request)
+    {
+        // Native child models may normalize before their subscription route is
+        // selected. Enforce the exact denylist against that final model before
+        // returning on the subscription fast path.
+        apply_disabled_model_policy(request, is_subagent)?;
+        return Ok(decision);
+    }
+
+    apply_disabled_model_policy(request, is_subagent)?;
+
+    let explicit_native_claude = has_model_override
+        && !origin.model_is_inherited
+        && normalize_claude_model_to_haiku(&request.model).is_some();
+    if is_subagent && !explicit_native_claude && !supports_model(&request.model) {
+        return Err(BlockedSubagentError::missing_config(format!(
+            "SubAgent model `{}` does not have a recoverable configured route and must not be launched",
+            request.model
+        ))
+        .into());
+    }
+
+    if supports_model(&request.model) {
+        return Ok(RouteDecision::Provider);
+    }
+    if is_declared_provider_model(&request.model) {
+        return Err(BlockedSubagentError::catalog_resolution(
+            &request.model,
+            format!(
+                "configured provider model `{}` does not have an active route",
+                request.model
+            ),
+        )
+        .into());
+    }
+    if normalize_claude_model_to_haiku(&request.model).is_some() {
+        return Ok(RouteDecision::Subscription);
+    }
+    bail!(
+        "model `{}` is not a Claude subscription model and has no active provider route",
+        request.model
+    )
+}
+
+fn select_request_model(
+    request: &mut MessagesRequest,
+    main_model: &str,
+    model_override: Option<String>,
+    origin: RouteOrigin,
+    is_subagent: bool,
+    supports_model: impl Fn(&str) -> bool,
+) -> Result<bool> {
     if is_subagent && (!origin.intent_matched || model_override.is_none()) {
         // Warn only if the request model is missing entirely; if a model is provided,
         // direct routing from Claude Code to a SubAgent is normal (e.g., nested SubAgent
@@ -72,6 +135,12 @@ pub(in crate::anthropic) fn resolve_request_model_with_origin(
         request.model = model;
     }
     if request.model.is_empty() {
+        if is_subagent {
+            return Err(BlockedSubagentError::missing_config(
+                "request model is required; the adapter does not select a provider main model",
+            )
+            .into());
+        }
         bail!("request model is required; the adapter does not select a provider main model");
     }
     if let Some(model) = request
@@ -82,39 +151,5 @@ pub(in crate::anthropic) fn resolve_request_model_with_origin(
     {
         request.model = model;
     }
-    if is_subagent
-        && (!has_model_override || origin.model_is_inherited)
-        && let Some(decision) = route_subagent_claude_model(request)
-    {
-        return Ok(decision);
-    }
-
-    apply_disabled_model_policy(request, is_subagent)?;
-
-    let explicit_native_claude = has_model_override
-        && !origin.model_is_inherited
-        && normalize_claude_model_to_haiku(&request.model).is_some();
-    if is_subagent && !explicit_native_claude && !supports_model(&request.model) {
-        bail!(
-            "SubAgent model `{}` does not have a recoverable configured route and must not be launched",
-            request.model
-        );
-    }
-
-    if supports_model(&request.model) {
-        return Ok(RouteDecision::Provider);
-    }
-    if is_declared_provider_model(&request.model) {
-        bail!(
-            "configured provider model `{}` does not have an active route",
-            request.model
-        );
-    }
-    if normalize_claude_model_to_haiku(&request.model).is_some() {
-        return Ok(RouteDecision::Subscription);
-    }
-    bail!(
-        "model `{}` is not a Claude subscription model and has no active provider route",
-        request.model
-    )
+    Ok(has_model_override)
 }

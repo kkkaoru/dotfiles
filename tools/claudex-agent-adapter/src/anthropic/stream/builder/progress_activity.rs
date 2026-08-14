@@ -68,12 +68,7 @@ impl SegmentBuilder {
         if self.thinking.holds_live_cot_or_tip() {
             return self
                 .thinking
-                .elapsed_keepalive(
-                    &self.blocks,
-                    self.turn_started_at.elapsed(),
-                    None,
-                    stream,
-                )
+                .elapsed_keepalive(&self.blocks, self.turn_started_at.elapsed(), None, stream)
                 .await;
         }
         self.thinking

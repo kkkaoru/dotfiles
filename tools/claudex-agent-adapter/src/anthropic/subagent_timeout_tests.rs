@@ -237,6 +237,59 @@ async fn failed_cancel_settlement_aborts_the_provider_before_returning() {
     );
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn settled_expiration_retires_the_session_without_aborting_the_provider() {
+    let (_root, bridge) = mock_bridge(STALLED_APP_SERVER).await;
+    let dispatcher = crate::app_server::events::ThreadEventDispatcher::default();
+    let turn = active_turn(dispatcher.subscribe("thread"), None).await;
+    bridge.sessions.lock().await.push(Arc::clone(&turn.session));
+    let abort_called = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let abort_called_by_provider = Arc::clone(&abort_called);
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .with_writer(std::io::sink)
+        .finish();
+    let _subscriber_guard = tracing::subscriber::set_default(subscriber);
+
+    bridge
+        .settle_expired_provider_with(
+            &turn,
+            Ok(crate::agent_backend::TurnCancellation::Settled),
+            || async move {
+                abort_called_by_provider.store(true, std::sync::atomic::Ordering::Relaxed);
+                Ok(())
+            },
+        )
+        .await;
+
+    assert!(bridge.sessions.lock().await.is_empty());
+    assert!(!abort_called.load(std::sync::atomic::Ordering::Relaxed));
+    assert!(bridge.app.is_alive());
+}
+
+#[tokio::test]
+async fn failed_provider_abort_shuts_down_the_shared_backend() {
+    let (_root, bridge) = mock_bridge(STALLED_APP_SERVER).await;
+    let dispatcher = crate::app_server::events::ThreadEventDispatcher::default();
+    let turn = active_turn(dispatcher.subscribe("thread"), None).await;
+    bridge.sessions.lock().await.push(Arc::clone(&turn.session));
+
+    bridge
+        .settle_expired_provider_with(
+            &turn,
+            Ok(crate::agent_backend::TurnCancellation::Unsupported),
+            || async { Err(anyhow!("targeted provider abort failed")) },
+        )
+        .await;
+
+    assert!(bridge.sessions.lock().await.is_empty());
+    assert!(bridge.detached_sessions.lock().await.is_empty());
+    assert!(
+        !bridge.app.is_alive(),
+        "failed targeted abort must shut down the shared app-server"
+    );
+}
+
 #[tokio::test]
 async fn provider_abort_completion_precedes_model_and_session_permit_release() {
     let (_root, bridge) = mock_bridge(STALLED_APP_SERVER).await;

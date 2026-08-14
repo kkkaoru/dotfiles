@@ -5,6 +5,7 @@ mod tests {
     use std::sync::Once;
 
     use super::*;
+    use crate::anthropic::agent_route_validation::{BlockedSubagentError, BlockedSubagentReason};
     use serde_json::json;
 
     fn enable_warning_logs() {
@@ -15,6 +16,13 @@ mod tests {
                 .with_test_writer()
                 .try_init();
         });
+    }
+
+    fn blocked_reason(error: &anyhow::Error) -> BlockedSubagentReason {
+        error
+            .downcast_ref::<BlockedSubagentError>()
+            .expect("typed blocked SubAgent error")
+            .reason()
     }
 
     fn request(model: &str, disabled: &[&str]) -> MessagesRequest {
@@ -33,7 +41,7 @@ mod tests {
         is_subagent: bool,
         supports: impl Fn(&str) -> bool,
         declared: impl Fn(&str) -> bool,
-    ) -> Result<RouteDecision> {
+    ) -> anyhow::Result<RouteDecision> {
         let model_override = is_subagent.then(|| request.model.clone());
         resolve_request_model(
             request,
@@ -226,6 +234,27 @@ mod tests {
                 .to_string()
                 .contains("does not have a recoverable configured route")
         );
+        assert_eq!(
+            blocked_reason(&decision),
+            BlockedSubagentReason::MissingConfig
+        );
+    }
+
+    #[test]
+    fn production_resolver_blocks_an_unrouted_direct_child_as_missing_configuration() {
+        let mut child = request("unrouted-child", &[]);
+        let error = resolve_request_model_with_origin(
+            &mut child,
+            "main-model",
+            Some("unrouted-child".to_owned()),
+            RouteOrigin::new(true, true, false),
+            |_| false,
+            |_| false,
+        )
+        .expect_err("a direct child without a provider route must not launch");
+
+        assert_eq!(blocked_reason(&error), BlockedSubagentReason::MissingConfig);
+        assert!(error.to_string().contains("recoverable configured route"));
     }
 
     #[test]
@@ -245,6 +274,62 @@ mod tests {
                 .to_string()
                 .contains("disabled by the active Claudex policy")
         );
+        assert_eq!(
+            blocked_reason(&decision),
+            BlockedSubagentReason::PolicyDisabled
+        );
+    }
+
+    #[test]
+    fn renders_distinct_notice_for_each_blocked_subagent_reason() {
+        let missing = BlockedSubagentReason::MissingConfig.notice(None);
+        assert!(missing.contains("not configured"));
+
+        let disabled = BlockedSubagentReason::PolicyDisabled.notice(Some("policy-model"));
+        assert!(disabled.contains("policy-model"));
+        assert!(disabled.contains("disabled by policy"));
+
+        let cooldown = BlockedSubagentReason::Cooldown.notice(Some("cooldown-model"));
+        assert!(cooldown.contains("cooldown-model"));
+        assert!(cooldown.contains("cooling down"));
+
+        let catalog = BlockedSubagentReason::CatalogResolution.notice(Some("catalog-model"));
+        assert!(catalog.contains("catalog-model"));
+        assert!(catalog.contains("active model catalog"));
+        assert!(!catalog.contains("not configured"));
+    }
+
+    #[test]
+    fn denies_only_the_exact_qualified_opencode_luna_subagent_model() {
+        const QUALIFIED_OPENCODE_LUNA: &str = "opencode-test/codex-luna";
+        const BARE_CODEX_LUNA: &str = "codex-luna";
+
+        let mut denied = request(QUALIFIED_OPENCODE_LUNA, &[QUALIFIED_OPENCODE_LUNA]);
+        let error = resolve(
+            &mut denied,
+            "main-model",
+            true,
+            |model| matches!(model, QUALIFIED_OPENCODE_LUNA | BARE_CODEX_LUNA),
+            |model| matches!(model, QUALIFIED_OPENCODE_LUNA | BARE_CODEX_LUNA),
+        )
+        .expect_err("the qualified OpenCode Luna model must be denied");
+        assert!(
+            error
+                .to_string()
+                .contains("disabled by the active Claudex policy")
+        );
+
+        let mut allowed = request(BARE_CODEX_LUNA, &[QUALIFIED_OPENCODE_LUNA]);
+        let decision = resolve(
+            &mut allowed,
+            "main-model",
+            true,
+            |model| matches!(model, QUALIFIED_OPENCODE_LUNA | BARE_CODEX_LUNA),
+            |model| matches!(model, QUALIFIED_OPENCODE_LUNA | BARE_CODEX_LUNA),
+        )
+        .expect("the bare Codex Luna model remains routable");
+        assert_eq!(decision, RouteDecision::Provider);
+        assert_eq!(allowed.model, BARE_CODEX_LUNA);
     }
 
     #[test]
@@ -364,6 +449,77 @@ mod tests {
         .expect("an explicitly selected Claude child model must be preserved");
         assert_eq!(decision, RouteDecision::Subscription);
         assert_eq!(explicit_native.model, "claude-opus-5");
+    }
+
+    #[test]
+    fn checks_the_final_native_child_model_against_the_exact_denylist() {
+        const REQUESTED_NATIVE_MODEL: &str = "claude-sonnet-5";
+        let resolved_native_model = super::models::CLAUDE_HAIKU_MODEL;
+
+        for (origin_name, model_override, origin) in [
+            ("implicit", None, RouteOrigin::new(true, true, false)),
+            (
+                "inherited",
+                Some(REQUESTED_NATIVE_MODEL.to_owned()),
+                RouteOrigin::new(true, true, true),
+            ),
+        ] {
+            let mut denied = request(REQUESTED_NATIVE_MODEL, &[resolved_native_model]);
+            let error = resolve_request_model_with_origin(
+                &mut denied,
+                "main-model",
+                model_override.clone(),
+                origin,
+                |_| false,
+                |_| false,
+            )
+            .expect_err("{origin_name} child must honor the normalized-model denylist");
+            assert!(
+                error
+                    .to_string()
+                    .contains("disabled by the active Claudex policy"),
+                "{origin_name}: {error}"
+            );
+            assert_eq!(denied.model, resolved_native_model, "{origin_name}");
+
+            let mut allowed = request(REQUESTED_NATIVE_MODEL, &[REQUESTED_NATIVE_MODEL]);
+            let decision = resolve_request_model_with_origin(
+                &mut allowed,
+                "main-model",
+                model_override,
+                origin,
+                |_| false,
+                |_| false,
+            )
+            .expect(
+                "{origin_name} child remains allowed when only its pre-normalized ID is denied",
+            );
+            assert_eq!(decision, RouteDecision::Subscription, "{origin_name}");
+            assert_eq!(allowed.model, resolved_native_model, "{origin_name}");
+        }
+    }
+
+    #[test]
+    fn checks_an_explicit_native_child_model_against_the_exact_denylist() {
+        const EXPLICIT_NATIVE_MODEL: &str = "claude-opus-5";
+        let mut request = request(EXPLICIT_NATIVE_MODEL, &[EXPLICIT_NATIVE_MODEL]);
+
+        let error = resolve_request_model_with_origin(
+            &mut request,
+            "main-model",
+            Some(EXPLICIT_NATIVE_MODEL.to_owned()),
+            RouteOrigin::new(true, true, false),
+            |_| false,
+            |_| false,
+        )
+        .expect_err("an explicit native child must honor its exact denylist entry");
+
+        assert!(
+            error
+                .to_string()
+                .contains("disabled by the active Claudex policy")
+        );
+        assert_eq!(request.model, EXPLICIT_NATIVE_MODEL);
     }
 
     #[test]
@@ -516,6 +672,23 @@ mod tests {
     }
 
     #[test]
+    fn rejects_a_direct_child_without_a_model_as_missing_configuration() {
+        let mut empty = request("", &[]);
+        let error = resolve_request_model_with_origin(
+            &mut empty,
+            "main-model",
+            None,
+            RouteOrigin::new(true, false, false),
+            |_| true,
+            |_| true,
+        )
+        .expect_err("a direct child without a selected model must be blocked");
+
+        assert_eq!(blocked_reason(&error), BlockedSubagentReason::MissingConfig);
+        assert!(error.to_string().contains("request model is required"));
+    }
+
+    #[test]
     fn direct_subagent_with_explicit_model_debugs_instead_of_warns() {
         enable_warning_logs();
         let mut req = request("gpt-5.6-luna", &[]);
@@ -547,5 +720,9 @@ mod tests {
         )
         .expect_err("declared but disabled provider must be rejected");
         assert!(error.to_string().contains("does not have an active route"));
+        assert_eq!(
+            blocked_reason(&error),
+            BlockedSubagentReason::CatalogResolution
+        );
     }
 }

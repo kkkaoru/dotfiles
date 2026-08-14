@@ -80,7 +80,9 @@ mod tests {
     #[test]
     fn steering_noise_covers_empty_markers_and_unclosed_reminders() {
         assert!(steering_noise("   \t"));
-        assert!(steering_noise("<agent-message id=\"1\">ping</agent-message>"));
+        assert!(steering_noise(
+            "<agent-message id=\"1\">ping</agent-message>"
+        ));
         assert!(steering_noise(
             "<teammate-message from=\"x\">ping</teammate-message>"
         ));

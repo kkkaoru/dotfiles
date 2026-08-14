@@ -90,3 +90,64 @@ impl Bridge {
             .await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::agent_backend::AgentBackend;
+
+    #[tokio::test]
+    async fn retry_without_a_preserved_outer_request_returns_the_original_error() {
+        let cache_home = tempfile::tempdir().expect("failover cache home");
+        let bridge = Arc::new(
+            Bridge::new_with_backend(AgentBackend::spawn_routes(&[]), "main".to_owned())
+                .with_usage_limit_cache_home(cache_home.path()),
+        );
+        let error = bridge
+            .retry_after_provider_exhaustion(
+                anyhow::anyhow!("provider exhausted"),
+                None,
+                "main",
+                None,
+                false,
+            )
+            .await
+            .expect_err("missing preserved request must not attempt a failover");
+
+        assert_eq!(error.to_string(), "provider exhausted");
+    }
+
+    #[tokio::test]
+    async fn dispatches_a_provider_failover_with_recomputed_input_tokens() {
+        let cache_home = tempfile::tempdir().expect("failover cache home");
+        let bridge = Arc::new(
+            Bridge::new_with_backend(AgentBackend::spawn_routes(&[]), "main".to_owned())
+                .with_usage_limit_cache_home(cache_home.path()),
+        );
+        let request = MessagesRequest {
+            model: "main".to_owned(),
+            system: serde_json::Value::Null,
+            messages: vec![serde_json::json!({
+                "role": "user",
+                "content": "provider dispatch coverage"
+            })],
+            tools: Vec::new(),
+            stream: false,
+            output_config: serde_json::Value::Null,
+            metadata: serde_json::Value::Null,
+            working_directory: None,
+            disabled_subagent_models: Default::default(),
+            claudex_collaborator_model: None,
+        };
+
+        let result = bridge
+            .dispatch_failover_messages(request, RouteDecision::Provider, None, false)
+            .await;
+        assert!(
+            result.is_err(),
+            "an empty backend must reject provider dispatch"
+        );
+    }
+}

@@ -143,3 +143,62 @@ impl Bridge {
             .remove_tool_results(pending.iter().map(|(tool_use_id, _)| tool_use_id.as_str()));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        collections::{BTreeSet, HashMap, HashSet},
+        sync::Arc,
+        time::Instant,
+    };
+
+    use serde_json::json;
+    use tokio::sync::Mutex;
+
+    use super::*;
+    use crate::{
+        agent_backend::{AgentBackend, BackendKind, BackendRoute},
+        anthropic::Session,
+        app_server::events::ThreadEventDispatcher,
+    };
+
+    #[tokio::test]
+    async fn unsupported_visible_disconnect_discards_pending_tools_when_abort_is_unavailable() {
+        let routes = [BackendRoute::new("worker", BackendKind::ConfiguredAcp)];
+        let bridge =
+            Bridge::new_with_backend(AgentBackend::spawn_routes(&routes), "worker".to_owned());
+        let session = Arc::new(Session {
+            thread_id: "0:thread".to_owned(),
+            model: "worker".to_owned(),
+            disabled_subagent_models: BTreeSet::new(),
+            signature: Arc::from("signature"),
+            transcript: Mutex::new(Vec::new()),
+            pending_tools: Mutex::new(HashMap::from([("pending".to_owned(), json!(17))])),
+            consumed_tool_ids: Mutex::new(HashSet::new()),
+            external_tool_names: HashMap::new(),
+            client_user_id: None,
+            claude_session_id: None,
+            gate: Arc::new(Mutex::new(())),
+            last_activity: std::sync::Mutex::new(Instant::now()),
+            pending_since: std::sync::Mutex::new(None),
+            turn_progress: Default::default(),
+            adopted_thread_id: Default::default(),
+            _slot: Arc::clone(&bridge.session_slots)
+                .try_acquire_owned()
+                .expect("session slot"),
+        });
+
+        bridge
+            .handle_unsupported_disconnect(
+                &session,
+                Arc::new(ThreadEventDispatcher::default().subscribe("thread")),
+                true,
+            )
+            .await;
+
+        assert!(
+            session.pending_tools.lock().await.is_empty(),
+            "visible disconnect must discard tool results before attempting provider abort"
+        );
+    }
+}

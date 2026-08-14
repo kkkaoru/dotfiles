@@ -506,6 +506,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn retired_route_subscription_is_closed_instead_of_panicking() {
+        let routes = RoutedBackends::lazy(&[route("retired-model", BackendKind::GrokAcp)]);
+        routes.route(0).retire();
+        let backend = AgentBackend::Routed(routes);
+        let events = backend.subscribe_thread("0:target");
+
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), events.recv())
+                .await
+                .expect("retired route subscription must settle")
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
     async fn get_returns_the_alive_backend_once_startup_publishes_ready() {
         let (route, _startup, sender) = manual_channel_route("alive-model");
         let waiting = spawn_get(&route);

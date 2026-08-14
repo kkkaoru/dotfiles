@@ -61,7 +61,7 @@ pub(super) fn ordered_subagent_failover_candidates_for(
 ) -> Vec<String> {
     let mut ordered = ordered_subagent_failover_candidates(bridge);
     let catalog = &bridge.model_catalog;
-    if !crate::anthropic::provider_kind::is_gpt_luna_model(exhausted_model, catalog) {
+    if !crate::anthropic::provider_kind::is_codex_gpt_luna_model(exhausted_model, catalog) {
         return ordered;
     }
     ordered.retain(|model| !crate::anthropic::provider_kind::is_cline_model(model));

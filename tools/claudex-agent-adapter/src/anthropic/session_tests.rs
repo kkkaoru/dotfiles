@@ -93,9 +93,10 @@ fn session(signature: &str, transcript: Vec<Value>) -> Arc<Session> {
     session_for_model("main-model", signature, transcript)
 }
 
-#[test]
-fn t14_turn_progress_and_adopted_thread_id_stay_off_transcript() {
-    let session = session("sig", vec![json!({"role":"user","content":"hi"})]);
+#[tokio::test]
+async fn t14_turn_progress_and_adopted_thread_id_stay_off_transcript() {
+    let user = json!({"role":"user","content":"hi"});
+    let session = session("sig", vec![user.clone()]);
     session.adopt_thread_id("new-thread".to_owned());
     assert_eq!(session.effective_thread_id(), "new-thread");
     session.record_turn_progress(vec![crate::anthropic::TurnProgressEvent {
@@ -104,16 +105,108 @@ fn t14_turn_progress_and_adopted_thread_id_stay_off_transcript() {
         status: "completed".to_owned(),
         elapsed_ms: 12,
     }]);
-    let progress = session.turn_progress.lock().expect("progress");
-    assert_eq!(progress.len(), 1);
-    assert_eq!(progress[0].title, "Read");
-    let transcript = session.transcript.try_lock().expect("transcript");
+    session.record_turn_progress(vec![crate::anthropic::TurnProgressEvent {
+        id: "bash-1".to_owned(),
+        title: "Bash".to_owned(),
+        status: "completed".to_owned(),
+        elapsed_ms: 34,
+    }]);
+    {
+        let progress = session.turn_progress.lock().expect("progress");
+        assert_eq!(
+            progress
+                .iter()
+                .map(|event| event.title.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Read", "Bash"]
+        );
+    }
+
+    let segment = super::super::Segment {
+        blocks: Vec::new(),
+        stop_reason: "end_turn",
+        usage: Default::default(),
+        web_evidence: Default::default(),
+    };
+    super::super::stream::commit_transcript(&session, Vec::new(), &segment).await;
+
+    let transcript = session.transcript.lock().await.clone();
+    assert_eq!(
+        transcript,
+        vec![user.clone(), json!({"role":"assistant","content":[]})]
+    );
+    assert!(transcript.iter().all(|message| matches!(
+        message.get("role").and_then(Value::as_str),
+        Some("user" | "assistant")
+    )));
     assert!(
         transcript
             .iter()
             .all(|message| message.get("role").and_then(Value::as_str) != Some("claudex.progress"))
     );
-    assert_eq!(transcript[0]["role"], "user");
+    drop(transcript);
+
+    assert_eq!(
+        super::super::content::matching_transcript_len(
+            &session,
+            &[user.clone(), json!({"role":"assistant","content":[]})],
+        )
+        .await,
+        Some(2)
+    );
+    assert_eq!(
+        super::super::content::matching_transcript_len(&session, &[user]).await,
+        None
+    );
+}
+
+#[tokio::test]
+async fn t11_read_only_main_turn_commits_empty_assistant_after_progress() {
+    let user = json!({"role":"user","content":"inspect config"});
+    let session = session("t11", vec![user.clone()]);
+    session.record_turn_progress(vec![crate::anthropic::TurnProgressEvent {
+        id: "read-empty".to_owned(),
+        title: "Read config".to_owned(),
+        status: "completed".to_owned(),
+        elapsed_ms: 1,
+    }]);
+
+    let segment = super::super::Segment {
+        blocks: Vec::new(),
+        stop_reason: "end_turn",
+        usage: Default::default(),
+        web_evidence: Default::default(),
+    };
+    super::super::stream::commit_transcript(&session, Vec::new(), &segment).await;
+
+    let transcript = session.transcript.lock().await.clone();
+    assert_eq!(
+        transcript,
+        vec![user.clone(), json!({"role":"assistant","content":[]})]
+    );
+    assert!(
+        transcript
+            .iter()
+            .all(|message| message.get("role").and_then(Value::as_str) != Some("claudex.progress"))
+    );
+    {
+        let progress = session.turn_progress.lock().expect("progress");
+        assert_eq!(progress.len(), 1);
+        assert_eq!(progress[0].id, "read-empty");
+    }
+
+    assert_eq!(
+        super::super::content::matching_transcript_len(
+            &session,
+            &[user.clone(), json!({"role":"assistant","content":[]})],
+        )
+        .await,
+        Some(2)
+    );
+    assert_eq!(
+        super::super::content::matching_transcript_len(&session, &[user]).await,
+        None
+    );
 }
 
 fn session_for_model(model: &str, signature: &str, transcript: Vec<Value>) -> Arc<Session> {

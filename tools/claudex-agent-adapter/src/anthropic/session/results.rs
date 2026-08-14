@@ -88,15 +88,15 @@ mod tests {
     /// A `SessionScoped` backend with two Claude-session pools must route tool
     /// results to the pool that owns the session, never to the anonymous one.
     async fn assert_submit_targets_owning_session(model: &str) {
-        let backend = AgentBackend::spawn_routes(&[BackendRoute::new(
-            model,
-            BackendKind::CodexAppServer,
-        )]);
+        let backend =
+            AgentBackend::spawn_routes(&[BackendRoute::new(model, BackendKind::CodexAppServer)]);
         let AgentBackend::SessionScoped(scopes) = backend.as_ref() else {
             panic!("expected SessionScoped backends");
         };
         for id in ["tui-a", "tui-b"] {
-            let leaf = Arc::new(AgentBackend::Grok(crate::grok_acp::GrokAcp::alive_for_test()));
+            let leaf = Arc::new(AgentBackend::Grok(
+                crate::grok_acp::GrokAcp::alive_for_test(),
+            ));
             scopes.insert_scope_for_test(id, AgentBackend::routed(vec![(model.to_owned(), leaf)]));
         }
         let _ = scopes.scope(None);
@@ -146,7 +146,7 @@ mod tests {
             last_activity: std::sync::Mutex::new(Instant::now()),
             pending_since: std::sync::Mutex::new(None),
             turn_progress: Default::default(),
-        adopted_thread_id: Default::default(),
+            adopted_thread_id: Default::default(),
             _slot: slots.try_acquire_owned().expect("session slot"),
         }
     }

@@ -84,11 +84,6 @@ fn hydrate_external_tool_arguments(
         &context.session.model,
         context.bridge.model_catalog(),
     );
-    context.bridge.rewrite_exhausted_agent_launch_with_quota(
-        &mut arguments,
-        context.current_messages,
-        context.system,
-    );
     arguments
 }
 
@@ -106,7 +101,32 @@ impl SegmentBuilder {
             ..
         } = call;
         let reject_request_id = request_id.clone();
-        let arguments = hydrate_external_tool_arguments(&context, original_name, arguments);
+        let mut arguments = hydrate_external_tool_arguments(&context, original_name, arguments);
+        // Apply the exact denylist before failover as well as after it.  The
+        // first check prevents a stale exhausted launch from being rewritten
+        // at all when the caller explicitly disabled that source model.  The
+        // second check below is mandatory because quota failover can replace
+        // `claudex_model` with a sibling that is independently disabled.
+        if self
+            .reject_disabled_subagent(
+                context,
+                original_name,
+                &arguments,
+                reject_request_id.clone(),
+            )
+            .await?
+        {
+            return Ok(());
+        }
+        if crate::anthropic::agent_effort::is_agent_tool(original_name) {
+            context.bridge.rewrite_exhausted_agent_launch_with_quota(
+                &mut arguments,
+                context.current_messages,
+                context.system,
+            );
+        }
+        // Re-check after quota rewrite: exact membership, never a prefix or
+        // provider-family match, remains authoritative for the final route.
         if self
             .reject_disabled_subagent(
                 context,

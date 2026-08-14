@@ -60,6 +60,9 @@ pub(in crate::anthropic) struct SegmentBuilder {
     /// Launch-shaped cards that stayed incomplete (`_toolName` only / empty
     /// prompt). Reported visibly if they never bridge before turn end.
     incomplete_launch_call_ids: Vec<String>,
+    /// Incomplete launch cards reported at turn end. Keep this separately from
+    /// the pending IDs so `turn_progress` can truthfully say they were dropped.
+    dropped_launch_call_ids: Vec<String>,
     /// One-line hint already painted for a bulky JSON/tool dump this turn.
     bulk_dump_hinted: bool,
     requires_verified_web_evidence: bool,

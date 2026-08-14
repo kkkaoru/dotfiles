@@ -80,19 +80,31 @@ impl RoutedBackend {
         if let Some(backend) = self.ready_backend() {
             return Ok(backend);
         }
-        let (mut generation, mut startup) = self.startup_receiver()?;
-        loop {
-            let state = startup.borrow_and_update().clone();
-            match state {
-                StartupState::Starting =>
-                    self.advance_closed_startup(&mut generation, &mut startup).await?,
-                StartupState::Ready(Ok(backend))
-                    if self.startup_generation() == generation && backend.is_alive() =>
-                    return Ok(backend),
-                StartupState::Ready(Ok(backend)) =>
-                    (generation, startup) = self.retry_stale_backend(generation, backend).await?,
-                StartupState::Ready(Err(error)) => bail!(error.to_string()),
+        let (generation, startup) = self.startup_receiver()?;
+        wait_for_started_backend(self, generation, startup).await
+    }
+
+    async fn advance_startup_state(
+        &self,
+        generation: &mut u64,
+        startup: &mut tokio::sync::watch::Receiver<StartupState>,
+        state: StartupState,
+    ) -> Result<Option<Arc<AgentBackend>>> {
+        match state {
+            StartupState::Starting => {
+                self.advance_closed_startup(generation, startup).await?;
+                Ok(None)
             }
+            StartupState::Ready(Ok(backend))
+                if self.startup_generation() == *generation && backend.is_alive() =>
+            {
+                Ok(Some(backend))
+            }
+            StartupState::Ready(Ok(backend)) => {
+                (*generation, *startup) = self.retry_stale_backend(*generation, backend).await?;
+                Ok(None)
+            }
+            StartupState::Ready(Err(error)) => bail!(error.to_string()),
         }
     }
 
@@ -244,6 +256,26 @@ impl RoutedBackend {
             StartupState::Ready(Err(_)) => false,
         }
     }
+}
+
+async fn wait_for_started_backend(
+    route: &RoutedBackend,
+    mut generation: u64,
+    mut startup: tokio::sync::watch::Receiver<StartupState>,
+) -> Result<Arc<AgentBackend>> {
+    loop {
+        let state = startup_state(&mut startup);
+        if let Some(backend) = route
+            .advance_startup_state(&mut generation, &mut startup, state)
+            .await?
+        {
+            return Ok(backend);
+        }
+    }
+}
+
+fn startup_state(startup: &mut tokio::sync::watch::Receiver<StartupState>) -> StartupState {
+    startup.borrow_and_update().clone()
 }
 
 #[cfg(test)]

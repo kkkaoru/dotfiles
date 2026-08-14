@@ -143,12 +143,7 @@ async fn drain_skips_queued_entries_without_a_prompt() {
 }
 
 mod temporary_env {
-    use std::{
-        path::Path,
-        sync::{Mutex, OnceLock},
-    };
-
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    use std::path::Path;
 
     pub(super) struct Guard {
         key: &'static str,
@@ -166,10 +161,7 @@ mod temporary_env {
     }
 
     pub(super) fn set_var(key: &'static str, value: &Path) -> Guard {
-        let lock = LOCK
-            .get_or_init(|| Mutex::new(()))
-            .lock()
-            .expect("env lock");
+        let lock = super::super::launch_queue_env_lock();
         let previous = std::env::var_os(key);
         unsafe { std::env::set_var(key, value) };
         Guard {
