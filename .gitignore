@@ -157,6 +157,10 @@ coverage_out/
 backups/
 sessions/
 
+# Claude plugin marketplace checkout/runtime artifacts created beside config.
+/fallback
+/plugins/
+
 tmp
 
 # Local runtime binaries and state; never commit credentials or machine-local data.
