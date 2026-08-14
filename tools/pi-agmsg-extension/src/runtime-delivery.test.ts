@@ -95,7 +95,7 @@ function createDeliveryHarness(lookup: IdentityLookup): DeliveryHarness {
 }
 
 describe("automatic delivery", () => {
-  it("polls after joining without starting an unsolicited agent turn", async () => {
+  it("polls after joining and triggers a turn only for a real message", async () => {
     const harness = createDeliveryHarness({ availableTeams: [], kind: "not-joined" });
     await harness.runtime.start(harness.context);
     expect(harness.schedulerState.intervalMs).toBe(5000);
@@ -111,7 +111,7 @@ describe("automatic delivery", () => {
           customType: "agmsg-inbox",
           display: true,
         },
-        { deliverAs: "steer", triggerTurn: false },
+        { deliverAs: "steer", triggerTurn: true },
       );
     });
     expect(harness.clientMock.inbox).toHaveBeenCalledWith({
@@ -133,7 +133,7 @@ describe("automatic delivery", () => {
         customType: "agmsg-inbox",
         display: true,
       },
-      { deliverAs: "steer", triggerTurn: false },
+      { deliverAs: "steer", triggerTurn: true },
     );
   });
 
@@ -207,7 +207,7 @@ describe("reconnect command", () => {
         customType: "agmsg-inbox",
         display: true,
       },
-      { deliverAs: "steer", triggerTurn: false },
+      { deliverAs: "steer", triggerTurn: true },
     );
     expect(harness.messages.sendMessage).toHaveBeenNthCalledWith(2, {
       content: "Reconnected agmsg as alice in one.",

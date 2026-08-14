@@ -34,7 +34,11 @@ interface OutgoingMessage {
   readonly to: string;
 }
 
-const PASSIVE_DELIVERY_OPTIONS: DeliveryOptions = {
+const INCOMING_DELIVERY_OPTIONS: DeliveryOptions = {
+  deliverAs: "steer",
+  triggerTurn: true,
+};
+const SENT_DELIVERY_OPTIONS: DeliveryOptions = {
   deliverAs: "steer",
   triggerTurn: false,
 };
@@ -42,7 +46,7 @@ const PASSIVE_DELIVERY_OPTIONS: DeliveryOptions = {
 export function deliverIncoming(messages: MessageSink, output: string): void {
   messages.sendMessage(
     { content: `Incoming agmsg message:\n${output}`, customType: "agmsg-inbox", display: true },
-    PASSIVE_DELIVERY_OPTIONS,
+    INCOMING_DELIVERY_OPTIONS,
   );
 }
 
@@ -53,7 +57,7 @@ export function displayOutgoing(messages: MessageSink, outgoing: OutgoingMessage
       customType: "agmsg-sent",
       display: true,
     },
-    PASSIVE_DELIVERY_OPTIONS,
+    SENT_DELIVERY_OPTIONS,
   );
 }
 

@@ -10,7 +10,7 @@ A global [pi extension](https://pi.dev/docs/latest/extensions) for
 - The status includes both identity and team, for example `agmsg: oversea-horse-race (horse-racing-data)`.
 - An LLM-callable `agmsg` tool using only agmsg's supported scripts.
 - Successful sends display an `[agmsg-sent]` message with sender, recipient, team, and message body.
-- Invisible background polling plus end-of-turn safety checks, equivalent to agmsg `both` delivery for pi. The LLM is instructed not to run visible `sleep`/`inbox` heartbeat tools. Incoming messages use pi's `steer` queue without starting an unsolicited model turn, so the user editor remains available.
+- Invisible background polling plus end-of-turn safety checks, equivalent to agmsg `both` delivery for pi. The LLM is instructed not to run visible `sleep`/`inbox` heartbeat tools. Incoming messages use pi's `steer` queue and start a model turn only when a real unread message arrives; empty heartbeat polls remain invisible.
 - A trusted external agmsg `types/pi` manifest, installed by the dotfiles symlink script.
 
 ## Install
