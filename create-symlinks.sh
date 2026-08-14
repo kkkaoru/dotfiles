@@ -112,12 +112,15 @@ for harness in cursor grok; do
 done
 
 # pi keeps sessions and credentials beside global extensions. Keep ~/.pi as a
-# real directory and link only this repository's agmsg extension implementation.
+# real directory and link only this repository's extension implementations.
+mkdir -p "${HOME}/.pi/agent/extensions"
+for extension in agmsg loop; do
+  extension_path="${DOTPATH}/tools/pi-${extension}-extension"
+  if [ -d "$extension_path" ]; then
+    link_path "$extension_path" "${HOME}/.pi/agent/extensions/${extension}"
+  fi
+done
 pi_agmsg_extension="${DOTPATH}/tools/pi-agmsg-extension"
-if [ -d "$pi_agmsg_extension" ]; then
-  mkdir -p "${HOME}/.pi/agent/extensions"
-  link_path "$pi_agmsg_extension" "${HOME}/.pi/agent/extensions/agmsg"
-fi
 
 # Register pi as an external agmsg agent type through agmsg's supported plugin
 # surface. Trust is path-pinned and must be managed by plugin.sh, never by
