@@ -1,0 +1,84 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "env": { "node": true },
+  "categories": {
+    "correctness": "error",
+    "nursery": "error",
+    "pedantic": "error",
+    "perf": "error",
+    "restriction": "error",
+    "style": "error",
+    "suspicious": "error"
+  },
+  "rules": {
+    "class-methods-use-this": "off",
+    "complexity": ["error", 10],
+    "consistent-return": "off",
+    "curly": ["error", "all"],
+    "default-case": "off",
+    "explicit-member-accessibility": "off",
+    "func-style": "off",
+    "max-depth": ["error", 3],
+    "max-lines": ["error", 340],
+    "max-lines-per-function": [
+      "error",
+      { "max": 80, "skipBlankLines": true, "skipComments": true }
+    ],
+    "max-params": ["error", 5],
+    "max-statements": ["error", 20],
+    "new-cap": "off",
+    "no-async-await": "off",
+    "no-confusing-void-expression": "off",
+    "no-magic-numbers": "off",
+    "no-null": "off",
+    "no-optional-chaining": "off",
+    "no-rest-spread-properties": "off",
+    "no-ternary": "off",
+    "no-undefined": "off",
+    "no-unsafe-type-assertion": "off",
+    "no-unnecessary-condition": "off",
+    "no-warning-comments": "error",
+    "one-var": "off",
+    "prefer-named-capture-group": "off",
+    "prefer-readonly-parameter-types": "off",
+    "require-await": "off",
+    "sort-imports": "off",
+    "sort-keys": "off",
+    "typescript/require-await": "off"
+  },
+  "overrides": [
+    {
+      "files": ["src/models.ts"],
+      "rules": {
+        "max-lines": ["error", 520]
+      }
+    },
+    {
+      "files": ["tests/**"],
+      "rules": {
+        "consistent-function-scoping": "off",
+        "consistent-type-imports": "off",
+        "explicit-function-return-type": "off",
+        "init-declarations": "off",
+        "max-lines": ["error", 500],
+        "max-lines-per-function": "off",
+        "no-await-expression-member": "off",
+        "no-await-in-loop": "off",
+        "no-continue": "off",
+        "no-empty-function": "off",
+        "no-inline-comments": "off",
+        "no-misused-promises": "off",
+        "no-unsafe-assignment": "off",
+        "no-unsafe-member-access": "off",
+        "no-useless-undefined": "off",
+        "prefer-code-point": "off",
+        "prefer-destructuring": "off",
+        "prefer-response-static-json": "off",
+        "require-unicode-regexp": "off",
+        "strict-void-return": "off",
+        "unbound-method": "off"
+      }
+    }
+  ],
+  "ignorePatterns": ["coverage/**", "node_modules/**"]
+}
