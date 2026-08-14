@@ -21,16 +21,12 @@
       "args": ["@playwright/mcp@latest"]
     },
     "serena": {
-      "command": "uv",
+      "command": "serena",
       "args": [
-        "run",
-        "--directory",
-        "${SERENA_PATH}",
-        "serena",
-        "start-mcp-server"
-      ],
-      "env": {
-        "SERENA_PATH": "${SERENA_PATH}"
-      }
+        "start-mcp-server",
+        "--project-from-cwd",
+        "--context=claude-code"
+      ]
     }
+  }
 }
