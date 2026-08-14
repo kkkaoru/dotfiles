@@ -764,6 +764,41 @@ fn wait_for_rebind_request(
 }
 
 #[cfg(unix)]
+fn read_complete_rebind_request(stream: &mut std::net::TcpStream) {
+    const MAX_REQUEST_BYTES: usize = 64 * 1024;
+
+    let mut request = Vec::new();
+    let mut chunk = [0_u8; 1024];
+    loop {
+        let read = std::io::Read::read(stream, &mut chunk).expect("read rebind request");
+        assert!(
+            read > 0,
+            "rebind request ended before its body was complete"
+        );
+        request.extend_from_slice(&chunk[..read]);
+        assert!(
+            request.len() <= MAX_REQUEST_BYTES,
+            "rebind request exceeded fixture limit"
+        );
+        let Some(header_end) = request.windows(4).position(|window| window == b"\r\n\r\n") else {
+            continue;
+        };
+        let headers = std::str::from_utf8(&request[..header_end]).expect("HTTP request headers");
+        let content_length = headers
+            .lines()
+            .filter_map(|line| line.split_once(':'))
+            .find_map(|(name, value)| {
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().expect("HTTP content length"))
+            })
+            .expect("rebind request content length");
+        if request.len() >= header_end + 4 + content_length {
+            return;
+        }
+    }
+}
+
+#[cfg(unix)]
 fn spawn_reoccupying_canonical(
     listener: TcpListener,
     response: String,
@@ -780,8 +815,17 @@ fn spawn_reoccupying_canonical(
         let Some(mut stream) = wait_for_rebind_request(&listener, &stop_server) else {
             return;
         };
-        let mut request = [0_u8; 4096];
-        let _ = std::io::Read::read(&mut stream, &mut request);
+        // The accepted socket inherits the listener's nonblocking mode on this
+        // platform. Read the complete fixture request in blocking mode rather
+        // than treating an initial WouldBlock as an empty request.
+        stream
+            .set_nonblocking(false)
+            .expect("blocking rebind request stream");
+        // A single read can stop between HTTP packets under llvm-cov. Closing
+        // with unread request-body bytes may reset the socket, making reqwest
+        // report the initial rebind as `None` before this test reaches the
+        // canonical-port reoccupation it is intended to exercise.
+        read_complete_rebind_request(&mut stream);
         std::io::Write::write_all(&mut stream, response.as_bytes()).expect("rebind response");
         drop(stream);
         drop(listener);
