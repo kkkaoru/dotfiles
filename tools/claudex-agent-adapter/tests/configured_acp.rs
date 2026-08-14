@@ -9,6 +9,9 @@ use claudex_agent_adapter::{
 use reqwest::Client;
 use serde_json::{Value, json};
 
+#[path = "support/coverage_profile.rs"]
+mod coverage_profile;
+
 // Ceiling only: the poll loops return as soon as saturation/completion is
 // visible. Coverage-instrumented 7-wide ACP mocks regularly exceed 5s.
 const ACP_EVENT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -18,6 +21,13 @@ const EXPECTED_QUEUED_REQUESTS: usize = 1;
 const TRACE_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const PARALLEL_RELEASE_FILE: &str = "grok-acp-parallel-release";
 static CWD_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+fn grok_mock_program() -> String {
+    coverage_profile::wrapped_program_string(
+        &std::env::current_dir().expect("read configured ACP fixture cwd"),
+        env!("CARGO_BIN_EXE_grok-acp-mock"),
+    )
+}
 
 struct NoEventTimeoutGuard {
     previous: Option<String>,
@@ -98,7 +108,7 @@ async fn allows_session_creations_up_to_the_configured_concurrency_limit() {
         max_concurrency: Some(CONFIGURED_PARALLEL_LIMIT),
         model_prefixes: vec!["opencode-go/".to_owned()],
         acp: Some(AcpLaunch {
-            program: env!("CARGO_BIN_EXE_grok-acp-mock").to_owned(),
+            program: grok_mock_program(),
             arguments: vec![
                 "--mode".to_owned(),
                 "concurrent-sessions-at-limit".to_owned(),
@@ -211,7 +221,7 @@ async fn spawn_configured_session_adapter(
         max_concurrency: Some(max_concurrency),
         model_prefixes: vec!["opencode-go/".to_owned()],
         acp: Some(AcpLaunch {
-            program: env!("CARGO_BIN_EXE_grok-acp-mock").to_owned(),
+            program: grok_mock_program(),
             arguments: vec![
                 "--mode".to_owned(),
                 "concurrent-sessions-at-limit".to_owned(),
@@ -370,7 +380,7 @@ async fn enforces_seven_exact_model_turns_and_queues_the_eighth() {
         max_concurrency: Some(CONFIGURED_PARALLEL_LIMIT),
         model_prefixes: vec!["opencode-go/".to_owned()],
         acp: Some(AcpLaunch {
-            program: env!("CARGO_BIN_EXE_grok-acp-mock").to_owned(),
+            program: grok_mock_program(),
             arguments: vec!["--mode".to_owned(), "concurrent-turns-seven".to_owned()],
         }),
         web_search_mode: WebSearchMode::default(),
@@ -529,7 +539,7 @@ async fn configured_acp_routes_dynamic_models_and_expands_arguments() {
         model_prefixes: vec!["vendor-".to_owned()],
         max_concurrency: None,
         acp: Some(AcpLaunch {
-            program: env!("CARGO_BIN_EXE_grok-acp-mock").to_owned(),
+            program: grok_mock_program(),
             arguments: vec!["--model".to_owned(), "{model}".to_owned()],
         }),
         web_search_mode: WebSearchMode::default(),
@@ -578,7 +588,7 @@ async fn configured_acp_routes_dynamic_models_and_expands_arguments() {
     let agent = claudex_agent_adapter::grok_acp::GrokAcp::spawn_configured(
         "vendor-leaf",
         &AcpLaunch {
-            program: env!("CARGO_BIN_EXE_grok-acp-mock").to_owned(),
+            program: grok_mock_program(),
             arguments: vec!["--model".to_owned(), "{model}".to_owned()],
         },
     )
@@ -619,7 +629,7 @@ async fn configured_acp_selects_model_after_session_and_falls_back_for_effort_op
             model_prefixes: Vec::new(),
             max_concurrency: None,
             acp: Some(AcpLaunch {
-                program: env!("CARGO_BIN_EXE_grok-acp-mock").to_owned(),
+                program: grok_mock_program(),
                 arguments: vec!["--mode".to_owned(), mode.to_owned()],
             }),
             web_search_mode: WebSearchMode::default(),
@@ -698,7 +708,7 @@ async fn no_response_quota_stall_emits_one_error_cancels_exact_turn_and_rejects_
         model_prefixes: Vec::new(),
         max_concurrency: Some(2),
         acp: Some(AcpLaunch {
-            program: env!("CARGO_BIN_EXE_grok-acp-mock").to_owned(),
+            program: grok_mock_program(),
             arguments: vec!["--mode".to_owned(), "no-response-first".to_owned()],
         }),
         web_search_mode: WebSearchMode::default(),
@@ -882,7 +892,7 @@ async fn session_scoped_configured_acp_recycles_after_one_failed_stream() {
         model_prefixes: Vec::new(),
         max_concurrency: None,
         acp: Some(AcpLaunch {
-            program: env!("CARGO_BIN_EXE_grok-acp-mock").to_owned(),
+            program: grok_mock_program(),
             arguments: vec!["--mode".to_owned(), "fail-prompt-once".to_owned()],
         }),
         web_search_mode: WebSearchMode::default(),

@@ -3,6 +3,9 @@ use std::fs;
 use claudex_agent_adapter::app_server::AppServer;
 use serde_json::json;
 
+#[path = "support/coverage_profile.rs"]
+mod coverage_profile;
+
 #[tokio::test]
 async fn reports_app_server_exit_to_pending_request() {
     let home = tempfile::tempdir().expect("create temporary home");
@@ -10,7 +13,7 @@ async fn reports_app_server_exit_to_pending_request() {
     fs::write(home.path().join("source/auth.json"), "{}").unwrap();
     let app = AppServer::spawn_with_program(
         "test-main-model",
-        env!("CARGO_BIN_EXE_codex-mock"),
+        coverage_profile::wrapped_program(home.path(), env!("CARGO_BIN_EXE_codex-mock")),
         &home.path().join("source"),
         &home.path().join("isolated"),
     )

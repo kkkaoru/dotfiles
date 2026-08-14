@@ -6,6 +6,9 @@ use claudex_agent_adapter::{
 use reqwest::Client;
 use serde_json::{Value, json};
 
+#[path = "support/coverage_profile.rs"]
+mod coverage_profile;
+
 #[tokio::test]
 async fn unmatched_provider_child_uses_its_main_copilot_acp_route() {
     const MAIN_MODEL: &str = "gpt-5.6-sol";
@@ -13,7 +16,7 @@ async fn unmatched_provider_child_uses_its_main_copilot_acp_route() {
     let root = tempfile::tempdir().expect("Copilot ACP child fixture");
     let agent = CopilotAcp::spawn_with_program(
         MAIN_MODEL,
-        env!("CARGO_BIN_EXE_grok-acp-mock"),
+        coverage_profile::wrapped_program(root.path(), env!("CARGO_BIN_EXE_grok-acp-mock")),
         root.path().to_owned(),
     )
     .await
@@ -59,7 +62,7 @@ async fn routes_a_selected_model_through_copilot_cli_acp() {
     let root = tempfile::tempdir().expect("Copilot ACP fixture");
     let agent = CopilotAcp::spawn_with_program(
         "gpt-copilot-test",
-        env!("CARGO_BIN_EXE_grok-acp-mock"),
+        coverage_profile::wrapped_program(root.path(), env!("CARGO_BIN_EXE_grok-acp-mock")),
         root.path().to_owned(),
     )
     .await

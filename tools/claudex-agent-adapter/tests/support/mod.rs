@@ -1,3 +1,4 @@
+pub(crate) mod coverage_profile;
 mod project_fixture;
 
 use std::{
@@ -65,7 +66,7 @@ impl Adapter {
         );
         let app_server = AppServer::spawn_with_program(
             "test-main-model",
-            env!("CARGO_BIN_EXE_codex-mock"),
+            coverage_profile::wrapped_program(home.path(), env!("CARGO_BIN_EXE_codex-mock")),
             &home.path().join(".codex"),
             &home.path().join("isolated-codex-home"),
         )
@@ -170,7 +171,7 @@ fn bridge(
         Bridge::new_with_subscription_program_and_models(
             app_server,
             "test-main-model".to_owned(),
-            env!("CARGO_BIN_EXE_claude-mock"),
+            coverage_profile::wrapped_program(home.path(), env!("CARGO_BIN_EXE_claude-mock")),
             advisor_model.map(str::to_owned),
             collaborator_model.map(str::to_owned),
         )
@@ -178,7 +179,7 @@ fn bridge(
         Bridge::new_with_subscription_program(
             app_server,
             "test-main-model".to_owned(),
-            env!("CARGO_BIN_EXE_claude-mock"),
+            coverage_profile::wrapped_program(home.path(), env!("CARGO_BIN_EXE_claude-mock")),
         )
     };
     bridge.with_settings_path(home.path().join(".claude/settings.json"))

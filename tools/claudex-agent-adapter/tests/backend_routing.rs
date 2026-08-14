@@ -10,6 +10,9 @@ use claudex_agent_adapter::{
 use reqwest::Client;
 use serde_json::{Value, json};
 
+#[path = "support/coverage_profile.rs"]
+mod coverage_profile;
+
 #[tokio::test]
 async fn routes_main_and_subagent_models_to_coexisting_backends() {
     let root = tempfile::tempdir().expect("routing fixture");
@@ -18,7 +21,7 @@ async fn routes_main_and_subagent_models_to_coexisting_backends() {
     std::fs::write(source.join("auth.json"), "{}").unwrap();
     let codex = AppServer::spawn_with_program(
         "gpt-model",
-        env!("CARGO_BIN_EXE_codex-mock"),
+        coverage_profile::wrapped_program(root.path(), env!("CARGO_BIN_EXE_codex-mock")),
         &source,
         &root.path().join("codex-home"),
     )
@@ -26,7 +29,7 @@ async fn routes_main_and_subagent_models_to_coexisting_backends() {
     .expect("start Codex backend");
     let grok = GrokAcp::spawn_with_program(
         "grok-model",
-        env!("CARGO_BIN_EXE_grok-acp-mock"),
+        coverage_profile::wrapped_program(root.path(), env!("CARGO_BIN_EXE_grok-acp-mock")),
         root.path().to_owned(),
     )
     .await
@@ -101,7 +104,7 @@ async fn health_reports_unavailable_after_a_leaf_backend_stops() {
     std::fs::write(source.join("auth.json"), "{}").expect("write Codex auth");
     let app_server = AppServer::spawn_with_program(
         "health-model",
-        env!("CARGO_BIN_EXE_codex-mock"),
+        coverage_profile::wrapped_program(root.path(), env!("CARGO_BIN_EXE_codex-mock")),
         &source,
         &root.path().join("codex-home"),
     )
@@ -145,7 +148,7 @@ async fn context_window_recovery_is_model_agnostic_for_fugu_routes() {
     std::fs::write(source.join("auth.json"), "{}").unwrap();
     let codex = AppServer::spawn_with_program(
         "bootstrap-model",
-        env!("CARGO_BIN_EXE_codex-mock"),
+        coverage_profile::wrapped_program(root.path(), env!("CARGO_BIN_EXE_codex-mock")),
         &source,
         &root.path().join("codex-home"),
     )
@@ -196,7 +199,7 @@ async fn isolates_parallel_sessions_across_worker_threads_and_backends() {
     std::fs::write(source.join("auth.json"), "{}").unwrap();
     let codex = AppServer::spawn_with_program(
         "gpt-model",
-        env!("CARGO_BIN_EXE_routing-codex-mock"),
+        coverage_profile::wrapped_program(root.path(), env!("CARGO_BIN_EXE_routing-codex-mock")),
         &source,
         &root.path().join("parallel-codex-home"),
     )
@@ -204,7 +207,7 @@ async fn isolates_parallel_sessions_across_worker_threads_and_backends() {
     .unwrap();
     let grok = GrokAcp::spawn_with_program(
         "grok-model",
-        env!("CARGO_BIN_EXE_grok-acp-mock"),
+        coverage_profile::wrapped_program(root.path(), env!("CARGO_BIN_EXE_grok-acp-mock")),
         root.path().to_owned(),
     )
     .await
@@ -300,7 +303,7 @@ async fn spawn_subscription_failover_bridge(
     fs::set_permissions(&subscription_program, permissions).unwrap();
     let codex = AppServer::spawn_with_program(
         "fugu",
-        env!("CARGO_BIN_EXE_codex-mock"),
+        coverage_profile::wrapped_program(root, env!("CARGO_BIN_EXE_codex-mock")),
         &source,
         &root.join("codex-home"),
     )
@@ -420,7 +423,10 @@ async fn health_reports_provider_session_scopes_for_concurrent_tui_sessions() {
     fs::create_dir(root.path().join(".codex")).expect("create Codex home");
     fs::write(root.path().join(".codex/auth.json"), "{}").expect("write Codex auth");
     unsafe {
-        std::env::set_var("CLAUDEX_CODEX_PROGRAM", env!("CARGO_BIN_EXE_codex-mock"));
+        std::env::set_var(
+            "CLAUDEX_CODEX_PROGRAM",
+            coverage_profile::wrapped_program(root.path(), env!("CARGO_BIN_EXE_codex-mock")),
+        );
         std::env::set_var("HOME", root.path());
     }
     let backend = AgentBackend::spawn_routes(&[BackendRoute::new(

@@ -4,6 +4,9 @@ use claudex_agent_adapter::{anthropic::Bridge, app_server::AppServer, http_route
 use reqwest::{Client, StatusCode};
 use serde_json::{Value, json};
 
+#[path = "support/coverage_profile.rs"]
+mod coverage_profile;
+
 const MAIN_PROVIDER_MODEL: &str = "gpt-5.6-luna";
 const SESSION_USER_ID: &str = r#"{"session_id":"outer-model-authority"}"#;
 const OUTER_MODELS: [&str; 3] = ["claude-opus-5[1m]", "claude-fable-5", "claude-sonnet-5"];
@@ -23,7 +26,7 @@ async fn outer_models_keep_authority_across_a_long_continue() {
     fs::write(source.join("auth.json"), "{}").expect("write provider auth fixture");
     fs::write(&settings, r#"{"effortLevel":"high"}"#).expect("write Claude settings");
     write_provider_mock(&provider_program, &trace);
-    write_subscription_mock(&subscription_program, &subscription_trace);
+    write_subscription_mock(&subscription_program, &subscription_trace, fixture.path());
 
     let app = AppServer::spawn_with_program(
         MAIN_PROVIDER_MODEL,
@@ -348,7 +351,11 @@ done
     write_executable(program, &script);
 }
 
-fn write_subscription_mock(program: &std::path::Path, trace: &std::path::Path) {
+fn write_subscription_mock(
+    program: &std::path::Path,
+    trace: &std::path::Path,
+    fixture_root: &std::path::Path,
+) {
     let script = r#"#!/bin/sh
 trace='__TRACE__'
 model=missing
@@ -364,7 +371,10 @@ printf '%s\n' "$model" >> "$trace"
 exec '__SUBSCRIPTION_MOCK__' "$@"
 "#
     .replace("__TRACE__", &trace.display().to_string())
-    .replace("__SUBSCRIPTION_MOCK__", env!("CARGO_BIN_EXE_claude-mock"));
+    .replace(
+        "__SUBSCRIPTION_MOCK__",
+        &coverage_profile::wrapped_program_string(fixture_root, env!("CARGO_BIN_EXE_claude-mock")),
+    );
     write_executable(program, &script);
 }
 

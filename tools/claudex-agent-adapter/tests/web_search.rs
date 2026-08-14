@@ -10,16 +10,23 @@ use claudex_agent_adapter::{
 use reqwest::Client;
 use serde_json::json;
 
+#[path = "support/coverage_profile.rs"]
+mod coverage_profile;
+
 async fn start_web_search_adapter(
     model: &str,
     worker: &str,
     source: &Path,
     codex_home: &Path,
 ) -> (SocketAddr, tokio::task::JoinHandle<()>) {
-    let app =
-        AppServer::spawn_with_program(model, env!("CARGO_BIN_EXE_codex-mock"), source, codex_home)
-            .await
-            .expect("start search worker");
+    let app = AppServer::spawn_with_program(
+        model,
+        coverage_profile::wrapped_program(codex_home, env!("CARGO_BIN_EXE_codex-mock")),
+        source,
+        codex_home,
+    )
+    .await
+    .expect("start search worker");
     let backend = AgentBackend::codex(app);
     let catalog = ModelCatalog::default()
         .with_search_worker_routes(vec![WorkerRoute::new(

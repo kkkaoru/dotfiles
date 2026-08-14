@@ -11,6 +11,9 @@ use claudex_agent_adapter::{
 use reqwest::{Client, Response};
 use serde_json::{Value, json};
 
+#[path = "support/coverage_profile.rs"]
+mod coverage_profile;
+
 const DEFAULT_MODEL: &str = "opencode-go/deepseek-v4-flash";
 const DYNAMIC_MODEL: &str = "opencode-go/deepseek-v4-runtime-test";
 const MODEL_LIMIT: usize = 2;
@@ -35,7 +38,10 @@ async fn resolves_dynamic_opencode_model_and_reports_exact_model_capacity() {
         max_concurrency: Some(MODEL_LIMIT),
         model_prefixes: vec!["opencode-go/".to_owned()],
         acp: Some(AcpLaunch {
-            program: env!("CARGO_BIN_EXE_grok-acp-mock").to_owned(),
+            program: coverage_profile::wrapped_program_string(
+                root.path(),
+                env!("CARGO_BIN_EXE_grok-acp-mock"),
+            ),
             arguments: vec!["--mode".to_owned(), "cancellable-turns".to_owned()],
         }),
         web_search_mode: WebSearchMode::default(),

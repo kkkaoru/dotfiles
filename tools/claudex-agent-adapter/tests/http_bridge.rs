@@ -1116,7 +1116,10 @@ async fn routes_omitted_tool_compaction_through_safe_structured_subscription() {
     );
     let app_server = claudex_agent_adapter::app_server::AppServer::spawn_with_program(
         "test-main-model",
-        env!("CARGO_BIN_EXE_codex-mock"),
+        support::coverage_profile::wrapped_program(
+            fixture.path(),
+            env!("CARGO_BIN_EXE_codex-mock"),
+        ),
         &codex_home,
         &fixture.path().join("isolated-codex-home"),
     )

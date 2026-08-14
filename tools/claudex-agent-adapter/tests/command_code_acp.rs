@@ -15,6 +15,9 @@ use reqwest::{Client, Response};
 use serde_json::{Value, json};
 use tokio::task::JoinHandle;
 
+#[path = "support/coverage_profile.rs"]
+mod coverage_profile;
+
 const ACP_TIMEOUT: Duration = Duration::from_secs(10);
 const MODEL: &str = "meta/muse-spark-1.2-contributor";
 const CONCURRENCY_WAIT_TIMEOUT_ENV: &str = "CLAUDEX_MODEL_CONCURRENCY_WAIT_TIMEOUT_MS";
@@ -77,7 +80,10 @@ fn wrap_mock(root: &Path, trace: &Path, extra_env: &[(&str, &str)]) -> PathBuf {
     for (key, value) in extra_env {
         script.push_str(&format!("export {key}='{value}'\n"));
     }
-    script.push_str(&format!("exec '{}' \"$@\"\n", mock_cmd_program()));
+    script.push_str(&format!(
+        "exec '{}' \"$@\"\n",
+        coverage_profile::wrapped_program_string(root, env!("CARGO_BIN_EXE_command-code-cmd-mock"))
+    ));
     fs::write(&wrapper, script).expect("write command-code mock wrapper");
     let mut permissions = fs::metadata(&wrapper)
         .expect("wrapper metadata")

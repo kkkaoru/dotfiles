@@ -11,6 +11,9 @@ use std::{
 use reqwest::Client;
 use serde_json::{Value, json};
 
+#[path = "support/coverage_profile.rs"]
+mod coverage_profile;
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn starts_each_provider_once_only_after_its_first_parallel_request() {
     let home = tempfile::tempdir().expect("create runtime home");
@@ -25,13 +28,16 @@ async fn starts_each_provider_once_only_after_its_first_parallel_request() {
     let codex = provider_wrapper(
         home.path(),
         "codex-wrapper",
-        env!("CARGO_BIN_EXE_routing-codex-mock"),
+        &coverage_profile::wrapped_program_string(
+            home.path(),
+            env!("CARGO_BIN_EXE_routing-codex-mock"),
+        ),
         &codex_count,
     );
     let grok = provider_wrapper(
         home.path(),
         "grok-wrapper",
-        env!("CARGO_BIN_EXE_grok-acp-mock"),
+        &coverage_profile::wrapped_program_string(home.path(), env!("CARGO_BIN_EXE_grok-acp-mock")),
         &grok_count,
     );
     let port = unused_port();
@@ -90,7 +96,10 @@ async fn cancelled_first_request_does_not_restart_the_provider() {
     let codex = write_provider_wrapper(
         home.path(),
         "slow-codex-wrapper",
-        env!("CARGO_BIN_EXE_routing-codex-mock"),
+        &coverage_profile::wrapped_program_string(
+            home.path(),
+            env!("CARGO_BIN_EXE_routing-codex-mock"),
+        ),
         &starts,
         "sleep 0.5\n",
     );

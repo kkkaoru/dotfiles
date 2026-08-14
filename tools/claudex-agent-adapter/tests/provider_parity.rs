@@ -26,6 +26,9 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 use tokio::{sync::Mutex, task::JoinHandle};
 
+#[path = "support/coverage_profile.rs"]
+mod coverage_profile;
+
 const CLAUDE_MODEL: &str = "claude-haiku-4-5";
 const GROK_MODEL: &str = "grok-parity-4.5";
 const COMMAND_CODE_MODEL: &str = "meta/muse-spark-1.2-contributor";
@@ -243,7 +246,7 @@ async fn spawn_claude_failure() -> Endpoint {
     let (source, isolated) = codex_homes(&root);
     let app = AppServer::spawn_with_program(
         CODEX_MODEL,
-        env!("CARGO_BIN_EXE_codex-mock"),
+        coverage_profile::wrapped_program(root.path(), env!("CARGO_BIN_EXE_codex-mock")),
         &source,
         &isolated,
     )
@@ -269,7 +272,7 @@ async fn spawn_claude_subscription() -> Endpoint {
     let (source, isolated) = codex_homes(&root);
     let app = AppServer::spawn_with_program(
         CODEX_MODEL,
-        env!("CARGO_BIN_EXE_codex-mock"),
+        coverage_profile::wrapped_program(root.path(), env!("CARGO_BIN_EXE_codex-mock")),
         &source,
         &isolated,
     )
@@ -278,7 +281,7 @@ async fn spawn_claude_subscription() -> Endpoint {
     let bridge = Bridge::new_with_subscription_program(
         app,
         CLAUDE_MODEL.to_owned(),
-        env!("CARGO_BIN_EXE_claude-mock"),
+        coverage_profile::wrapped_program(root.path(), env!("CARGO_BIN_EXE_claude-mock")),
     );
     endpoint(root, bridge, CLAUDE_MODEL).await
 }
@@ -286,7 +289,10 @@ async fn spawn_claude_subscription() -> Endpoint {
 async fn spawn_grok_mode(mode: &str) -> Endpoint {
     let root = tempfile::tempdir().expect("configured Grok fixture root");
     let launch = AcpLaunch {
-        program: env!("CARGO_BIN_EXE_grok-acp-mock").to_owned(),
+        program: coverage_profile::wrapped_program_string(
+            root.path(),
+            env!("CARGO_BIN_EXE_grok-acp-mock"),
+        ),
         arguments: vec!["--mode".to_owned(), mode.to_owned()],
     };
     let agent = spawn_configured(&root, GROK_MODEL, &launch).await;
@@ -332,7 +338,7 @@ async fn spawn_codex() -> Endpoint {
     let (source, isolated) = codex_homes(&root);
     let app = AppServer::spawn_with_program(
         CODEX_MODEL,
-        env!("CARGO_BIN_EXE_codex-mock"),
+        coverage_profile::wrapped_program(root.path(), env!("CARGO_BIN_EXE_codex-mock")),
         &source,
         &isolated,
     )
@@ -385,7 +391,8 @@ fn command_wrapper(root: &TempDir, mode: &str) -> PathBuf {
     }
     script.push_str(&format!(
         "exec '{}' \"$@\"\n",
-        env!("CARGO_BIN_EXE_command-code-cmd-mock")
+        coverage_profile::wrapped_program(root.path(), env!("CARGO_BIN_EXE_command-code-cmd-mock"))
+            .display()
     ));
     fs::write(&wrapper, script).expect("write command-code wrapper");
     let mut permissions = fs::metadata(&wrapper)

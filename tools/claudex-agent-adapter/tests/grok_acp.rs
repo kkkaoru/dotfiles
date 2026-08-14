@@ -1,3 +1,5 @@
+#[path = "support/coverage_profile.rs"]
+mod coverage_profile;
 #[path = "support/project_fixture.rs"]
 mod project_fixture;
 
@@ -28,6 +30,14 @@ const EXPECTED_PROVIDER_PROMPT_COUNT: usize = 1;
 const ACP_THINKING_MARKER: &str = "ACP_THINKING_MARKER";
 
 static PROCESS_ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn grok_mock_program(root: &Path) -> std::path::PathBuf {
+    coverage_profile::wrapped_program(root, env!("CARGO_BIN_EXE_grok-acp-mock"))
+}
+
+fn grok_mock_program_string(root: &Path) -> String {
+    coverage_profile::wrapped_program_string(root, env!("CARGO_BIN_EXE_grok-acp-mock"))
+}
 
 async fn process_env_lock() -> MutexGuard<'static, ()> {
     PROCESS_ENV_LOCK.get_or_init(|| Mutex::new(())).lock().await
@@ -108,7 +118,7 @@ async fn streams_grok_acp_with_launch_scoped_model_effort_and_instructions() {
     let root = tempfile::tempdir().expect("Grok ACP fixture");
     let agent = GrokAcp::spawn_with_program(
         "grok-4.6",
-        env!("CARGO_BIN_EXE_grok-acp-mock"),
+        grok_mock_program(root.path()),
         root.path().to_owned(),
     )
     .await
@@ -291,20 +301,17 @@ async fn spawn_thinking_backend(
     match route {
         AcpThoughtRoute::NativeGrok => {
             let model = "grok-thinking-stream";
-            let agent = GrokAcp::spawn_with_program(
-                model,
-                env!("CARGO_BIN_EXE_grok-acp-mock"),
-                root.to_owned(),
-            )
-            .await
-            .expect("start native Grok thinking mock");
+            let agent =
+                GrokAcp::spawn_with_program(model, grok_mock_program(root), root.to_owned())
+                    .await
+                    .expect("start native Grok thinking mock");
             (model, AgentBackend::grok(agent))
         }
         AcpThoughtRoute::ConfiguredCline => {
             let _process_env_lock = process_env_lock().await;
             let model = "cline-pass/deepseek-v4-flash";
             let launch = AcpLaunch {
-                program: env!("CARGO_BIN_EXE_grok-acp-mock").to_owned(),
+                program: grok_mock_program_string(root),
                 arguments: vec!["--mode".to_owned(), "cline-thinking-stream".to_owned()],
             };
             let _current_dir = ScopedCurrentDir::enter(root);
@@ -357,7 +364,7 @@ async fn provider_config_high_reaches_the_exact_native_grok_argv() {
         format!(
             "#!/bin/sh\ncd '{}' || exit 1\nexec '{}' \"$@\"\n",
             root.path().display(),
-            env!("CARGO_BIN_EXE_grok-acp-mock")
+            grok_mock_program(root.path()).display()
         ),
     )
     .expect("write Grok wrapper");
@@ -431,7 +438,7 @@ async fn generated_plugin_and_parent_child_marker_form_a_grok_boundary_contract(
     let home = root.path().join("home");
     std::fs::create_dir(&home).expect("create isolated Grok home");
     let grok = root.path().join("grok");
-    symlink(env!("CARGO_BIN_EXE_grok-acp-mock"), &grok).expect("symlink mock as grok");
+    symlink(grok_mock_program(root.path()), &grok).expect("symlink mock as grok");
 
     let _home_env = ScopedEnv::set("HOME", &home);
     let _plugin_env = ScopedEnv::remove("CLAUDEX_GROK_PLUGIN_DIR");
@@ -496,7 +503,7 @@ async fn creates_grok_acp_session_in_the_request_working_directory() {
     let active_cwd = std::fs::canonicalize(active_cwd).expect("canonicalize active child cwd");
     let agent = GrokAcp::spawn_with_program(
         "request-cwd",
-        env!("CARGO_BIN_EXE_grok-acp-mock"),
+        grok_mock_program(root.path()),
         root.path().to_owned(),
     )
     .await
@@ -575,7 +582,7 @@ async fn launch_mcp_session_new_failure_reaches_session_creation_error() {
     let agent = GrokAcp::spawn_configured(
         "mcp-failure",
         &AcpLaunch {
-            program: env!("CARGO_BIN_EXE_grok-acp-mock").to_owned(),
+            program: grok_mock_program_string(root.path()),
             arguments: vec!["--mode".to_owned(), "fail-mcp-new".to_owned()],
         },
     )
@@ -651,7 +658,7 @@ async fn reports_acp_startup_effort_and_prompt_failures() {
     let root = tempfile::tempdir().expect("protocol fixture");
     let incompatible = GrokAcp::spawn_with_program(
         "bad-version",
-        env!("CARGO_BIN_EXE_grok-acp-mock"),
+        grok_mock_program(root.path()),
         root.path().to_owned(),
     )
     .await;
@@ -661,7 +668,7 @@ async fn reports_acp_startup_effort_and_prompt_failures() {
         let root = tempfile::tempdir().expect("startup error fixture");
         let failed = GrokAcp::spawn_with_program(
             model,
-            env!("CARGO_BIN_EXE_grok-acp-mock"),
+            grok_mock_program(root.path()),
             root.path().to_owned(),
         )
         .await;
@@ -705,7 +712,7 @@ async fn configured_opencode_route_uses_the_stderr_watcher_path() {
     let _process_env_lock = process_env_lock().await;
     let root = tempfile::tempdir().expect("opencode fixture");
     let opencode = root.path().join("opencode");
-    std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_grok-acp-mock"), &opencode)
+    std::os::unix::fs::symlink(grok_mock_program(root.path()), &opencode)
         .expect("opencode fixture symlink");
     let _current_dir = ScopedCurrentDir::enter(root.path());
     let result = GrokAcp::spawn_configured(
@@ -735,7 +742,7 @@ async fn startup_timeout_terminates_a_provider_that_ignores_initialize() {
         Duration::from_secs(60),
         GrokAcp::spawn_with_program(
             "ignored-initialize",
-            env!("CARGO_BIN_EXE_grok-acp-mock"),
+            grok_mock_program(root.path()),
             root.path().to_owned(),
         ),
     )
@@ -764,7 +771,7 @@ async fn grok_plugin_reports_a_stale_alias_directory_that_cannot_be_removed() {
     let bin = home.path().join("bin");
     std::fs::create_dir(&bin).expect("plugin bin directory");
     let grok = bin.join("grok");
-    std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_grok-acp-mock"), &grok)
+    std::os::unix::fs::symlink(grok_mock_program(home.path()), &grok)
         .expect("grok fixture symlink");
 
     let _home_env = ScopedEnv::set("HOME", home.path());
@@ -1367,7 +1374,7 @@ async fn ignored_cancellation_invalidates_only_that_session_and_recovers_capacit
 }
 
 async fn spawn_mock(model: &str, cwd: &Path) -> std::sync::Arc<GrokAcp> {
-    GrokAcp::spawn_with_program(model, env!("CARGO_BIN_EXE_grok-acp-mock"), cwd.to_owned())
+    GrokAcp::spawn_with_program(model, grok_mock_program(cwd), cwd.to_owned())
         .await
         .expect("start Grok ACP mock")
 }

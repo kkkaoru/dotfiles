@@ -12,6 +12,9 @@ use claudex_agent_adapter::{
 };
 use serde_json::json;
 
+#[path = "support/coverage_profile.rs"]
+mod coverage_profile;
+
 #[test]
 #[should_panic(expected = "a routed backend has no single kind")]
 fn routed_backend_has_no_leaf_kind() {
@@ -125,7 +128,11 @@ fn provider_home() -> (tempfile::TempDir, PathBuf) {
         &codex_wrapper,
         format!(
             "#!/bin/sh\nprintf 'spawn\\n' >> \"$HOME/codex-spawns\"\nexec \"{}\" \"$@\"\n",
-            fixture_binary_path(env!("CARGO_BIN_EXE_codex-mock")).display()
+            coverage_profile::wrapped_program(
+                home.path(),
+                fixture_binary_path(env!("CARGO_BIN_EXE_codex-mock")),
+            )
+            .display()
         ),
     )
     .expect("write Codex spawn-counting wrapper");
@@ -137,11 +144,17 @@ fn provider_home() -> (tempfile::TempDir, PathBuf) {
         std::env::set_var("CLAUDEX_CODEX_PROGRAM", &codex_wrapper);
         std::env::set_var(
             "CLAUDEX_COPILOT_PROGRAM",
-            fixture_binary_path(env!("CARGO_BIN_EXE_grok-acp-mock")),
+            coverage_profile::wrapped_program(
+                home.path(),
+                fixture_binary_path(env!("CARGO_BIN_EXE_grok-acp-mock")),
+            ),
         );
         std::env::set_var(
             "CLAUDEX_GROK_PROGRAM",
-            fixture_binary_path(env!("CARGO_BIN_EXE_grok-acp-mock")),
+            coverage_profile::wrapped_program(
+                home.path(),
+                fixture_binary_path(env!("CARGO_BIN_EXE_grok-acp-mock")),
+            ),
         );
     }
     std::env::set_current_dir(home.path()).expect("isolate Grok ACP trace output");

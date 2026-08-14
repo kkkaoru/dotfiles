@@ -261,6 +261,7 @@ async fn codex_subagent_child_exposes_bash_and_accepts_a_harmless_git_gh_result(
 
 #[tokio::test]
 async fn configured_acp_subagent_approves_and_executes_the_git_gh_probe() {
+    let fixture = tempfile::tempdir().expect("configured ACP command probe fixture");
     let model = "command-probe-model";
     let backend = AgentBackend::spawn_routes(&[BackendRoute {
         model: model.to_owned(),
@@ -272,7 +273,10 @@ async fn configured_acp_subagent_approves_and_executes_the_git_gh_probe() {
         max_concurrency: None,
         model_prefixes: Vec::new(),
         acp: Some(AcpLaunch {
-            program: env!("CARGO_BIN_EXE_grok-acp-mock").to_owned(),
+            program: support::coverage_profile::wrapped_program_string(
+                fixture.path(),
+                env!("CARGO_BIN_EXE_grok-acp-mock"),
+            ),
             arguments: vec!["--mode".to_owned(), "command-probe".to_owned()],
         }),
         web_search_mode: WebSearchMode::default(),

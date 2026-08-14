@@ -14,6 +14,8 @@ use reqwest::Client;
 use serde_json::Value;
 use tempfile::TempDir;
 
+#[path = "support/coverage_profile.rs"]
+mod coverage_profile;
 #[path = "support/wait_published.rs"]
 mod wait_published;
 
@@ -560,7 +562,10 @@ async fn effective_provider_program_change_replaces_instead_of_reusing_the_daemo
     fs::set_permissions(&alternate_program, fs::Permissions::from_mode(0o755))
         .expect("make alternate provider program executable");
     let replacement = ensure_command(&home, port, "20")
-        .env("CLAUDEX_CODEX_PROGRAM", &alternate_program)
+        .env(
+            "CLAUDEX_CODEX_PROGRAM",
+            coverage_profile::stable_wrapped_program(home.path(), &alternate_program),
+        )
         .output()
         .expect("replace daemon after changing the provider program");
     assert!(
@@ -797,16 +802,19 @@ async fn ensure_running_replaces_the_renamed_legacy_daemon() {
             .expect("make copied adapter executable");
     }
 
-    let mut legacy = Command::new(&legacy_binary)
+    let mut legacy_command = Command::new(&legacy_binary);
+    legacy_command
         .args(["serve", "--model", "legacy-model"])
         .args(["--listen", &format!("127.0.0.1:{port}")])
         .env("HOME", home.path())
         .env_remove("CARGO_HOME")
         .env("CLAUDEX_ADAPTER_EXECUTABLE", &legacy_binary)
         .env("ANTHROPIC_AUTH_TOKEN", "claudex-local")
-        .env("CLAUDEX_CODEX_PROGRAM", env!("CARGO_BIN_EXE_codex-mock"))
-        .spawn()
-        .expect("start renamed legacy daemon");
+        .env(
+            "CLAUDEX_CODEX_PROGRAM",
+            coverage_profile::stable_wrapped_program(home.path(), env!("CARGO_BIN_EXE_codex-mock")),
+        );
+    let mut legacy = legacy_command.spawn().expect("start renamed legacy daemon");
     let client = Client::new();
     let base_url = format!("http://127.0.0.1:{port}");
     let legacy_pid = health_with_deadline(
@@ -821,7 +829,8 @@ async fn ensure_running_replaces_the_renamed_legacy_daemon() {
     // handover. The replacement readiness probe below uses a fresh client.
     drop(client);
 
-    let output = Command::new(&current_binary)
+    let mut replacement_command = Command::new(&current_binary);
+    replacement_command
         .args(["ensure", "--model", "test-main-model"])
         .args(["--listen", &format!("127.0.0.1:{port}")])
         .args(["--subscription-max-processes", "20"])
@@ -831,7 +840,11 @@ async fn ensure_running_replaces_the_renamed_legacy_daemon() {
         .env("CLAUDEX_ADAPTER_EXECUTABLE", &current_binary)
         .env("CLAUDEX_MACOS_NOTIFY", "0")
         .env("ANTHROPIC_AUTH_TOKEN", "claudex-local")
-        .env("CLAUDEX_CODEX_PROGRAM", env!("CARGO_BIN_EXE_codex-mock"))
+        .env(
+            "CLAUDEX_CODEX_PROGRAM",
+            coverage_profile::stable_wrapped_program(home.path(), env!("CARGO_BIN_EXE_codex-mock")),
+        );
+    let output = replacement_command
         .output()
         .expect("replace renamed legacy daemon");
     if !output.status.success() {
@@ -948,7 +961,10 @@ async fn ensure_running_connects_through_loopback_for_an_exposed_listener() {
         )
         .env("CLAUDEX_MACOS_NOTIFY", "0")
         .env("ANTHROPIC_AUTH_TOKEN", "real-token")
-        .env("CLAUDEX_CODEX_PROGRAM", env!("CARGO_BIN_EXE_codex-mock"))
+        .env(
+            "CLAUDEX_CODEX_PROGRAM",
+            coverage_profile::stable_wrapped_program(home.path(), env!("CARGO_BIN_EXE_codex-mock")),
+        )
         .output()
         .expect("run exposed adapter");
     assert!(output.status.success());
@@ -1344,7 +1360,10 @@ fn common_command(home: &TempDir, _port: u16, _max_processes: &str) -> Command {
         // CLI opt-in posts real macOS "差し替え完了" banners during coverage.
         .env("CLAUDEX_MACOS_NOTIFY", "0")
         .env("ANTHROPIC_AUTH_TOKEN", "claudex-local")
-        .env("CLAUDEX_CODEX_PROGRAM", env!("CARGO_BIN_EXE_codex-mock"));
+        .env(
+            "CLAUDEX_CODEX_PROGRAM",
+            coverage_profile::stable_wrapped_program(home.path(), env!("CARGO_BIN_EXE_codex-mock")),
+        );
     command
 }
 
