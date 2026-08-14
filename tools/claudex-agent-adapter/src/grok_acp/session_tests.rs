@@ -13,6 +13,8 @@ use crate::app_server::events::ThreadEventDispatcher;
 
 const MCP_TRACE_CAPTURE_CHILD: &str = "CLAUDEX_MCP_TRACE_CAPTURE_CHILD";
 const MCP_OFFER_TRACE_TEST: &str = "grok_acp::session::tests::launch_mcp_offer_trace_is_redacted";
+const MCP_OFFER_METRICS_TRACE_TEST: &str =
+    "grok_acp::session::tests::launch_mcp_offer_metrics_preserve_gate_and_redact_inputs";
 const MCP_SESSION_TRACE_TEST: &str =
     "grok_acp::session::tests::launch_mcp_session_new_trace_is_redacted";
 const NON_LAUNCH_MCP_SESSION_TRACE_TEST: &str =
@@ -134,6 +136,35 @@ fn assert_redacted(trace: &str, secrets: &[&str]) {
     for secret in secrets {
         assert!(!trace.contains(secret), "trace leaked {secret:?}");
     }
+}
+
+fn legacy_params_offer_launch_tools(params: &Value) -> bool {
+    params
+        .get("dynamicTools")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .any(|tool| {
+            let name = tool.get("name").and_then(Value::as_str).unwrap_or("");
+            let description = tool
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            name == "Agent"
+                || name == "Task"
+                || name.contains("Agent")
+                || name.contains("Task")
+                || description.contains("`Agent`")
+                || description.contains("`Task`")
+        })
+}
+
+fn capture_launch_mcp_offer(params: &Value) -> (bool, String) {
+    let (buffer, guard) = start_info_trace_capture();
+    let injected =
+        !launch_mcp_servers_from(params, Ok(std::path::PathBuf::from("/mcp-secret-program")))
+            .is_empty();
+    (injected, finish_trace_capture(buffer, guard))
 }
 
 #[test]
@@ -325,6 +356,249 @@ fn launch_mcp_offer_trace_is_redacted() {
             "/mcp-secret-program",
         ],
     );
+}
+
+#[test]
+fn launch_mcp_offer_metrics_preserve_gate_and_redact_inputs() {
+    if !trace_capture_child("offer-metrics") {
+        run_isolated_trace_capture(MCP_OFFER_METRICS_TRACE_TEST, "offer-metrics");
+        return;
+    }
+
+    struct Case {
+        label: &'static str,
+        params: Value,
+        gate: bool,
+        state: &'static str,
+        shape: &'static str,
+        is_array: bool,
+        count: usize,
+        exact_agent: bool,
+        exact_task: bool,
+        case_agent: bool,
+        case_task: bool,
+        launch_like: usize,
+    }
+
+    let schema = json!({"mcp-secret-schema-key":"mcp-secret-schema-value"});
+    let cases = vec![
+        Case {
+            label: "absent",
+            params: json!({"mcp-secret-top-level":"mcp-secret-value"}),
+            gate: false,
+            state: "absent",
+            shape: "absent",
+            is_array: false,
+            count: 0,
+            exact_agent: false,
+            exact_task: false,
+            case_agent: false,
+            case_task: false,
+            launch_like: 0,
+        },
+        Case {
+            label: "malformed",
+            params: json!({"dynamicTools":"mcp-secret-malformed"}),
+            gate: false,
+            state: "nonmatching",
+            shape: "malformed",
+            is_array: false,
+            count: 0,
+            exact_agent: false,
+            exact_task: false,
+            case_agent: false,
+            case_task: false,
+            launch_like: 0,
+        },
+        Case {
+            label: "empty array",
+            params: json!({"dynamicTools":[]}),
+            gate: false,
+            state: "nonmatching",
+            shape: "array",
+            is_array: true,
+            count: 0,
+            exact_agent: false,
+            exact_task: false,
+            case_agent: false,
+            case_task: false,
+            launch_like: 0,
+        },
+        Case {
+            label: "exact Agent",
+            params: json!({"dynamicTools":[{"name":"Agent","description":"mcp-secret-description","inputSchema":schema}]}),
+            gate: true,
+            state: "matching",
+            shape: "array",
+            is_array: true,
+            count: 1,
+            exact_agent: true,
+            exact_task: false,
+            case_agent: true,
+            case_task: false,
+            launch_like: 1,
+        },
+        Case {
+            label: "exact Task",
+            params: json!({"dynamicTools":[{"name":"Task","description":"mcp-secret-description","inputSchema":schema}]}),
+            gate: true,
+            state: "matching",
+            shape: "array",
+            is_array: true,
+            count: 1,
+            exact_agent: false,
+            exact_task: true,
+            case_agent: false,
+            case_task: true,
+            launch_like: 1,
+        },
+        Case {
+            label: "case-only agent",
+            params: json!({"dynamicTools":[{"name":"agent","description":"mcp-secret-description","inputSchema":schema}]}),
+            gate: false,
+            state: "nonmatching",
+            shape: "array",
+            is_array: true,
+            count: 1,
+            exact_agent: false,
+            exact_task: false,
+            case_agent: true,
+            case_task: false,
+            launch_like: 0,
+        },
+        Case {
+            label: "case-only task",
+            params: json!({"dynamicTools":[{"name":"task","description":"mcp-secret-description","inputSchema":schema}]}),
+            gate: false,
+            state: "nonmatching",
+            shape: "array",
+            is_array: true,
+            count: 1,
+            exact_agent: false,
+            exact_task: false,
+            case_agent: false,
+            case_task: true,
+            launch_like: 0,
+        },
+        Case {
+            label: "qualified Agent",
+            params: json!({"dynamicTools":[{"name":"mcp-secret-cc_Agent_0","description":"mcp-secret-description","inputSchema":schema}]}),
+            gate: true,
+            state: "matching",
+            shape: "array",
+            is_array: true,
+            count: 1,
+            exact_agent: false,
+            exact_task: false,
+            case_agent: false,
+            case_task: false,
+            launch_like: 1,
+        },
+        Case {
+            label: "qualified Task",
+            params: json!({"dynamicTools":[{"name":"mcp-secret-cc_Task_0","description":"mcp-secret-description","inputSchema":schema}]}),
+            gate: true,
+            state: "matching",
+            shape: "array",
+            is_array: true,
+            count: 1,
+            exact_agent: false,
+            exact_task: false,
+            case_agent: false,
+            case_task: false,
+            launch_like: 1,
+        },
+        Case {
+            label: "description Agent",
+            params: json!({"dynamicTools":[{"name":"mcp-secret-helper","description":"mcp-secret-use `Agent`","inputSchema":schema}]}),
+            gate: true,
+            state: "matching",
+            shape: "array",
+            is_array: true,
+            count: 1,
+            exact_agent: false,
+            exact_task: false,
+            case_agent: false,
+            case_task: false,
+            launch_like: 0,
+        },
+        Case {
+            label: "description Task",
+            params: json!({"dynamicTools":[{"name":"mcp-secret-helper","description":"mcp-secret-use `Task`","inputSchema":schema}]}),
+            gate: true,
+            state: "matching",
+            shape: "array",
+            is_array: true,
+            count: 1,
+            exact_agent: false,
+            exact_task: false,
+            case_agent: false,
+            case_task: false,
+            launch_like: 0,
+        },
+        Case {
+            label: "irrelevant",
+            params: json!({"dynamicTools":[{"name":"mcp-secret-Bash","description":"mcp-secret-description","inputSchema":schema}]}),
+            gate: false,
+            state: "nonmatching",
+            shape: "array",
+            is_array: true,
+            count: 1,
+            exact_agent: false,
+            exact_task: false,
+            case_agent: false,
+            case_task: false,
+            launch_like: 0,
+        },
+    ];
+
+    for case in cases {
+        let legacy_gate = legacy_params_offer_launch_tools(&case.params);
+        let current_gate = params_offer_launch_tools(&case.params);
+        let (injected, trace) = capture_launch_mcp_offer(&case.params);
+        assert_eq!(legacy_gate, case.gate, "legacy gate: {}", case.label);
+        assert_eq!(current_gate, legacy_gate, "gate changed: {}", case.label);
+        assert_eq!(injected, legacy_gate, "injection changed: {}", case.label);
+        for (key, value) in [
+            ("dynamic_tools", format!("\"{}\"", case.state)),
+            ("dynamic_tools_shape", format!("\"{}\"", case.shape)),
+            ("dynamic_tools_is_array", case.is_array.to_string()),
+            ("dynamic_tools_count", case.count.to_string()),
+            (
+                "dynamic_tools_has_exact_agent",
+                case.exact_agent.to_string(),
+            ),
+            ("dynamic_tools_has_exact_task", case.exact_task.to_string()),
+            (
+                "dynamic_tools_has_case_insensitive_agent",
+                case.case_agent.to_string(),
+            ),
+            (
+                "dynamic_tools_has_case_insensitive_task",
+                case.case_task.to_string(),
+            ),
+            (
+                "dynamic_tools_launch_like_count",
+                case.launch_like.to_string(),
+            ),
+        ] {
+            assert!(
+                trace.contains(&format!("{key}={value}")),
+                "missing {key}={value} for {}: {trace}",
+                case.label
+            );
+        }
+        assert_redacted(
+            &trace,
+            &[
+                "mcp-secret",
+                "inputSchema",
+                "description",
+                "name=",
+                "/mcp-secret-program",
+            ],
+        );
+    }
 }
 
 #[tokio::test(flavor = "current_thread")]
