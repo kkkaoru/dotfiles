@@ -234,7 +234,7 @@ describe("slash command", () => {
         harness.runtime.command(command, harness.commandContext),
       ),
     );
-    expect(harness.piMock.sendMessage).toHaveBeenCalledTimes(7);
+    expect(harness.piMock.sendMessage).toHaveBeenCalledTimes(8);
     expect(harness.clientMock.history).toHaveBeenCalledWith({
       agent: "alice",
       limit: 3,

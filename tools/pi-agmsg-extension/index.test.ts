@@ -104,6 +104,11 @@ describe("pi extension registration", () => {
       "session_shutdown",
     ]);
     expect(harness.tool().name).toBe("agmsg");
+    expect(harness.tool().promptGuidelines).toStrictEqual([
+      "Use agmsg for cross-agent messages; never access agmsg SQLite, team, or configuration files directly.",
+      "Use agmsg action=whoami before sending when the active identity is unclear.",
+      "Do not use agmsg action=inbox or shell sleep for periodic polling; the pi agmsg extension polls invisibly every five seconds. Use inbox only for an explicit one-time request.",
+    ]);
   });
 
   it("executes tool actions and truncates oversized output", async () => {

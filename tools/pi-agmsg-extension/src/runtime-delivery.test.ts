@@ -23,6 +23,7 @@ interface DeliveryHarness {
   readonly client: AgmsgService;
   readonly clientMock: {
     readonly inbox: ReturnType<typeof vi.fn<AgmsgService["inbox"]>>;
+    readonly send: ReturnType<typeof vi.fn<AgmsgService["send"]>>;
     readonly whoami: ReturnType<typeof vi.fn<AgmsgService["whoami"]>>;
   };
   readonly context: RuntimeContext;
@@ -43,6 +44,7 @@ function createDeliveryHarness(lookup: IdentityLookup): DeliveryHarness {
   const inbox = vi.fn<AgmsgService["inbox"]>(
     async (request: InboxRequest) => `inbox:${request.team}`,
   );
+  const send = vi.fn<AgmsgService["send"]>(async (request: SendRequest) => `sent:${request.team}`);
   const whoami = vi.fn<AgmsgService["whoami"]>(async () => lookup);
   const client: AgmsgService = {
     history: vi.fn(async (request: HistoryRequest) => `history:${request.team}`),
@@ -52,7 +54,7 @@ function createDeliveryHarness(lookup: IdentityLookup): DeliveryHarness {
     leave: vi.fn(async (request: LeaveRequest) => `left:${request.team}`),
     listTeams: vi.fn(async () => []),
     members: vi.fn(async () => [{ name: "bob", types: ["codex"] }]),
-    send: vi.fn(async (request: SendRequest) => `sent:${request.team}`),
+    send,
     team: vi.fn(async (team: string) => `team:${team}`),
     version: vi.fn(async () => "v1"),
     whoami,
@@ -83,7 +85,7 @@ function createDeliveryHarness(lookup: IdentityLookup): DeliveryHarness {
   };
   return {
     client,
-    clientMock: { inbox, whoami },
+    clientMock: { inbox, send, whoami },
     context,
     messages,
     runtime: new AgmsgRuntime(messages, client, scheduler),
@@ -149,6 +151,22 @@ describe("automatic delivery", () => {
     empty.runtime.stop(empty.context);
     await empty.runtime.checkAutomatically(empty.context);
     expect(empty.clientMock.inbox).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("sent message display", () => {
+  it("shows successfully sent messages without starting an unsolicited turn", async () => {
+    const harness: DeliveryHarness = createDeliveryHarness(SINGLE_IDENTITY);
+    await harness.runtime.start(harness.context);
+    await harness.runtime.execute({ action: "send", message: "hello", to: "bob" }, harness.context);
+    expect(harness.messages.sendMessage).toHaveBeenCalledWith(
+      {
+        content: "Outgoing agmsg message:\nFrom: alice\nTo: bob\nTeam: one\n\nhello",
+        customType: "agmsg-sent",
+        display: true,
+      },
+      { deliverAs: "steer", triggerTurn: false },
+    );
   });
 });
 

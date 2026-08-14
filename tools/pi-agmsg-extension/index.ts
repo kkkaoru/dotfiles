@@ -118,6 +118,7 @@ export default function agmsgExtension(host: AgmsgExtensionHost): void {
     promptGuidelines: [
       "Use agmsg for cross-agent messages; never access agmsg SQLite, team, or configuration files directly.",
       "Use agmsg action=whoami before sending when the active identity is unclear.",
+      "Do not use agmsg action=inbox or shell sleep for periodic polling; the pi agmsg extension polls invisibly every five seconds. Use inbox only for an explicit one-time request.",
     ],
     promptSnippet: "Check, send, and inspect cross-agent agmsg messages",
     async execute(_toolCallId, params, signal, _onUpdate, context) {

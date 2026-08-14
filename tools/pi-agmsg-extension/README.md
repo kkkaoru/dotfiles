@@ -9,7 +9,8 @@ A global [pi extension](https://pi.dev/docs/latest/extensions) for
 - `/agmsg reconnect` refreshes the active identity, restarts background delivery, and checks the inbox after resuming a session.
 - The status includes both identity and team, for example `agmsg: oversea-horse-race (horse-racing-data)`.
 - An LLM-callable `agmsg` tool using only agmsg's supported scripts.
-- Background polling plus end-of-turn safety checks, equivalent to agmsg `both` delivery for pi. Incoming messages use pi's `steer` queue without starting an unsolicited model turn, so the user editor remains available.
+- Successful sends display an `[agmsg-sent]` message with sender, recipient, team, and message body.
+- Invisible background polling plus end-of-turn safety checks, equivalent to agmsg `both` delivery for pi. The LLM is instructed not to run visible `sleep`/`inbox` heartbeat tools. Incoming messages use pi's `steer` queue without starting an unsolicited model turn, so the user editor remains available.
 - A trusted external agmsg `types/pi` manifest, installed by the dotfiles symlink script.
 
 ## Install

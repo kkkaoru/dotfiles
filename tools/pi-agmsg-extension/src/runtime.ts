@@ -45,7 +45,7 @@ export class AgmsgRuntime {
   constructor(messages: MessageSink, client: AgmsgService, scheduler: RepeatScheduler) {
     this.#messages = messages;
     this.#client = client;
-    this.#operations = new AgmsgOperations(client);
+    this.#operations = new AgmsgOperations(client, messages);
     this.#scheduler = scheduler;
   }
 

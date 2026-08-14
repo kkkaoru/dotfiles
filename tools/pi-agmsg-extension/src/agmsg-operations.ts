@@ -2,6 +2,7 @@ import type {
   ActiveIdentity,
   AgmsgActionInput,
   AgmsgService,
+  DeliveryOptions,
   HistoryRequest,
   MessageSink,
 } from "./contracts.ts";
@@ -26,10 +27,33 @@ interface Membership {
   readonly team: string;
 }
 
+interface OutgoingMessage {
+  readonly from: string;
+  readonly message: string;
+  readonly team: string;
+  readonly to: string;
+}
+
+const PASSIVE_DELIVERY_OPTIONS: DeliveryOptions = {
+  deliverAs: "steer",
+  triggerTurn: false,
+};
+
 export function deliverIncoming(messages: MessageSink, output: string): void {
   messages.sendMessage(
     { content: `Incoming agmsg message:\n${output}`, customType: "agmsg-inbox", display: true },
-    { deliverAs: "steer", triggerTurn: false },
+    PASSIVE_DELIVERY_OPTIONS,
+  );
+}
+
+export function displayOutgoing(messages: MessageSink, outgoing: OutgoingMessage): void {
+  messages.sendMessage(
+    {
+      content: `Outgoing agmsg message:\nFrom: ${outgoing.from}\nTo: ${outgoing.to}\nTeam: ${outgoing.team}\n\n${outgoing.message}`,
+      customType: "agmsg-sent",
+      display: true,
+    },
+    PASSIVE_DELIVERY_OPTIONS,
   );
 }
 
@@ -43,9 +67,11 @@ export function renderMessageText(output: string): string {
 
 export class AgmsgOperations {
   readonly #client: AgmsgService;
+  readonly #messages: MessageSink;
 
-  constructor(client: AgmsgService) {
+  constructor(client: AgmsgService, messages: MessageSink) {
     this.#client = client;
+    this.#messages = messages;
   }
 
   async send(
@@ -62,13 +88,20 @@ export class AgmsgOperations {
       signal,
       target: input.to,
     });
-    return this.#client.send({
+    const output: string = await this.#client.send({
       from: identity.agent,
       message: input.message,
       signal,
       team,
       to: input.to,
     });
+    displayOutgoing(this.#messages, {
+      from: identity.agent,
+      message: input.message,
+      team,
+      to: input.to,
+    });
+    return output;
   }
 
   async inbox(
