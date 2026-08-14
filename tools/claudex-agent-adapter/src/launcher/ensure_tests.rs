@@ -157,16 +157,53 @@ fn serve_ineligible_health(
     }
 }
 
+fn read_complete_health_request(stream: &mut std::net::TcpStream) {
+    use std::io::Read;
+
+    const MAX_REQUEST_BYTES: usize = 64 * 1024;
+    let mut request = Vec::new();
+    let mut chunk = [0_u8; 1024];
+    loop {
+        let read = stream.read(&mut chunk).expect("read health request");
+        assert!(read > 0, "health request ended before completion");
+        request.extend_from_slice(&chunk[..read]);
+        assert!(
+            request.len() <= MAX_REQUEST_BYTES,
+            "health request exceeded fixture limit"
+        );
+        let Some(header_end) = request.windows(4).position(|window| window == b"\r\n\r\n") else {
+            continue;
+        };
+        let headers = std::str::from_utf8(&request[..header_end]).expect("health request headers");
+        let content_length = headers
+            .lines()
+            .filter_map(|line| line.split_once(':'))
+            .find_map(|(name, value)| {
+                name.eq_ignore_ascii_case("content-length").then(|| {
+                    value
+                        .trim()
+                        .parse::<usize>()
+                        .expect("health content length")
+                })
+            })
+            .unwrap_or(0);
+        if request.len() >= header_end + 4 + content_length {
+            return;
+        }
+    }
+}
+
 fn accept_ineligible_health(listener: &std::net::TcpListener, response: &str) -> bool {
-    use std::io::{Read, Write};
+    use std::io::Write;
     let (mut stream, _) = match listener.accept() {
         Ok(accepted) => accepted,
         Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => return false,
         Err(error) => panic!("health accept: {error}"),
     };
-    let _ = stream.set_nonblocking(false);
-    let mut request = [0_u8; 1024];
-    let _ = stream.read(&mut request);
+    stream
+        .set_nonblocking(false)
+        .expect("blocking health request stream");
+    read_complete_health_request(&mut stream);
     let _ = stream.write_all(response.as_bytes());
     true
 }

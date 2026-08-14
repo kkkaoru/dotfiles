@@ -1528,10 +1528,31 @@ fn unavailable_health() -> String {
     r#"{"status":"unavailable","pid":null,"protocol_version":0,"build_id":"stale","model":"stale","subscription_max_processes":0,"subscription_timeout_minutes":0}"#.to_owned()
 }
 
+fn read_complete_stale_health_request(stream: &mut std::net::TcpStream) {
+    const MAX_REQUEST_BYTES: usize = 64 * 1024;
+
+    stream
+        .set_nonblocking(false)
+        .expect("blocking stale health request");
+    let mut request = Vec::new();
+    let mut chunk = [0_u8; 1024];
+    loop {
+        let read = stream.read(&mut chunk).expect("read stale health request");
+        assert!(read > 0, "stale health request ended before its headers");
+        request.extend_from_slice(&chunk[..read]);
+        assert!(
+            request.len() <= MAX_REQUEST_BYTES,
+            "stale health request exceeded fixture limit"
+        );
+        if request.windows(4).any(|window| window == b"\r\n\r\n") {
+            return;
+        }
+    }
+}
+
 fn serve_stale_health_after_releasing_listener(listener: TcpListener, body: String) {
     let (mut stream, _) = listener.accept().expect("accept health request");
-    let mut request = [0_u8; 1024];
-    let _bytes = stream.read(&mut request).expect("read health request");
+    read_complete_stale_health_request(&mut stream);
     // `ensure` starts the replacement as soon as it receives this unavailable
     // health response. Release the port first so fixture scheduling cannot make
     // the replacement race a still-bound stale listener.

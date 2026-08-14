@@ -1,7 +1,7 @@
 use super::*;
 use crate::launcher::RetainedGeneration;
 use std::{net::SocketAddr, path::PathBuf, sync::RwLock};
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
 fn proxy(listen: SocketAddr, pid: u32) -> RetainedProxy {
@@ -52,6 +52,25 @@ async fn should_proxy_returns_false_when_listen_state_is_poisoned() {
     assert!(!proxy.should_proxy_session("session-a", None).await);
 }
 
+async fn read_complete_health_request(stream: &mut tokio::net::TcpStream) {
+    const MAX_REQUEST_BYTES: usize = 64 * 1024;
+
+    let mut request = Vec::new();
+    let mut chunk = [0_u8; 1024];
+    loop {
+        let read = stream.read(&mut chunk).await.expect("health request");
+        assert!(read > 0, "health request ended before its headers");
+        request.extend_from_slice(&chunk[..read]);
+        assert!(
+            request.len() <= MAX_REQUEST_BYTES,
+            "health request exceeded fixture limit"
+        );
+        if request.windows(4).any(|window| window == b"\r\n\r\n") {
+            return;
+        }
+    }
+}
+
 #[tokio::test]
 async fn invalid_health_body_is_transient() {
     let listener = TcpListener::bind("127.0.0.1:0")
@@ -60,6 +79,7 @@ async fn invalid_health_body_is_transient() {
     let listen = listener.local_addr().expect("health address");
     let task = tokio::spawn(async move {
         let (mut stream, _) = listener.accept().await.expect("health request");
+        read_complete_health_request(&mut stream).await;
         let response = b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\nConnection: close\r\n\r\n?";
         stream.write_all(response).await.expect("health response");
     });

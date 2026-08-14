@@ -575,18 +575,52 @@ async fn dispatches_a_successful_hot_swap_through_the_runtime_command() {
     server.await.expect("hot-swap fixture server");
 }
 
+async fn read_complete_hot_swap_request(stream: &mut tokio::net::TcpStream) -> Vec<u8> {
+    const MAX_REQUEST_BYTES: usize = 64 * 1024;
+
+    let mut request = Vec::new();
+    let mut chunk = [0_u8; 1024];
+    loop {
+        let read = stream
+            .read(&mut chunk)
+            .await
+            .expect("hot-swap fixture request");
+        assert!(read > 0, "hot-swap request ended before completion");
+        request.extend_from_slice(&chunk[..read]);
+        assert!(
+            request.len() <= MAX_REQUEST_BYTES,
+            "hot-swap request exceeded fixture limit"
+        );
+        let Some(header_end) = request.windows(4).position(|window| window == b"\r\n\r\n") else {
+            continue;
+        };
+        let headers = std::str::from_utf8(&request[..header_end]).expect("hot-swap headers");
+        let content_length = headers
+            .lines()
+            .filter_map(|line| line.split_once(':'))
+            .find_map(|(name, value)| {
+                name.eq_ignore_ascii_case("content-length").then(|| {
+                    value
+                        .trim()
+                        .parse::<usize>()
+                        .expect("hot-swap content length")
+                })
+            })
+            .unwrap_or(0);
+        if request.len() >= header_end + 4 + content_length {
+            return request;
+        }
+    }
+}
+
 async fn serve_hot_swap_fixture(listener: tokio::net::TcpListener, health: String) {
     for _ in 0..2 {
         let (mut stream, _) = listener
             .accept()
             .await
             .expect("hot-swap fixture connection");
-        let mut request = [0_u8; 4096];
-        let size = stream
-            .read(&mut request)
-            .await
-            .expect("hot-swap fixture request");
-        let body = if request[..size].starts_with(b"GET /health") {
+        let request = read_complete_hot_swap_request(&mut stream).await;
+        let body = if request.starts_with(b"GET /health") {
             health.as_str()
         } else {
             "{}"

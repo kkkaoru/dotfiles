@@ -22,12 +22,45 @@ fn http_ok(body: &str) -> String {
     http_response("HTTP/1.1 200 OK", body)
 }
 
+async fn read_complete_async_request(stream: &mut tokio::net::TcpStream) {
+    const MAX_REQUEST_BYTES: usize = 64 * 1024;
+
+    let mut request = Vec::new();
+    let mut chunk = [0_u8; 1024];
+    loop {
+        let read = stream.read(&mut chunk).await.expect("read fixture request");
+        assert!(
+            read > 0,
+            "fixture request ended before its body was complete"
+        );
+        request.extend_from_slice(&chunk[..read]);
+        assert!(
+            request.len() <= MAX_REQUEST_BYTES,
+            "fixture request exceeded limit"
+        );
+        let Some(header_end) = request.windows(4).position(|window| window == b"\r\n\r\n") else {
+            continue;
+        };
+        let headers = std::str::from_utf8(&request[..header_end]).expect("HTTP request headers");
+        let content_length = headers
+            .lines()
+            .filter_map(|line| line.split_once(':'))
+            .find_map(|(name, value)| {
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().expect("HTTP content length"))
+            })
+            .unwrap_or(0);
+        if request.len() >= header_end + 4 + content_length {
+            return;
+        }
+    }
+}
+
 async fn accept_and_write(listener: &TcpListener, response: &str) {
     let Ok((mut stream, _)) = listener.accept().await else {
         return;
     };
-    let mut request = [0; 4096];
-    let _ = stream.read(&mut request).await;
+    read_complete_async_request(&mut stream).await;
     let _ = stream.write_all(response.as_bytes()).await;
 }
 

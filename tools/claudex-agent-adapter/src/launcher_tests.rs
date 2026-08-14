@@ -2640,6 +2640,10 @@ fn serve_response_until_stopped(listener: TcpListener, response: String, stopped
 fn serve_response_attempt(listener: &TcpListener, response: &str) {
     match listener.accept() {
         Ok((mut stream, _)) => {
+            stream
+                .set_nonblocking(false)
+                .expect("blocking health response stream");
+            let _request = read_complete_http_request(&mut stream);
             let _result = stream.write_all(response.as_bytes());
         }
         Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
@@ -2760,9 +2764,11 @@ fn accept_health_connection(listener: &TcpListener) -> Option<std::net::TcpStrea
 
 fn spawn_health_response(mut stream: std::net::TcpStream, health: String, auth: String) {
     thread::spawn(move || {
-        let _ = stream.set_nonblocking(false);
+        stream
+            .set_nonblocking(false)
+            .expect("blocking health request stream");
         let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
-        let request = read_http_headers(&mut stream);
+        let request = read_complete_http_request(&mut stream);
         let body = if request.contains(" /v1/models") {
             auth.as_str()
         } else {
@@ -2773,26 +2779,49 @@ fn spawn_health_response(mut stream: std::net::TcpStream, health: String, auth: 
     });
 }
 
-fn read_http_headers(stream: &mut impl Read) -> String {
+fn read_complete_http_request(stream: &mut impl Read) -> String {
+    const MAX_REQUEST_BYTES: usize = 64 * 1024;
+
     let mut request = Vec::new();
     let mut buffer = [0; 1_024];
-    while let Ok(bytes_read) = stream.read(&mut buffer) {
-        if bytes_read == 0 {
-            break;
-        }
+    loop {
+        let bytes_read = stream.read(&mut buffer).expect("read fixture request");
+        assert!(bytes_read > 0, "fixture request ended before completion");
         request.extend_from_slice(&buffer[..bytes_read]);
-        if request.windows(4).any(|window| window == b"\r\n\r\n") {
-            break;
+        assert!(
+            request.len() <= MAX_REQUEST_BYTES,
+            "fixture request exceeded limit"
+        );
+        let Some(header_end) = request.windows(4).position(|window| window == b"\r\n\r\n") else {
+            continue;
+        };
+        let headers = std::str::from_utf8(&request[..header_end]).expect("fixture request headers");
+        let content_length = headers
+            .lines()
+            .filter_map(|line| line.split_once(':'))
+            .find_map(|(name, value)| {
+                name.eq_ignore_ascii_case("content-length").then(|| {
+                    value
+                        .trim()
+                        .parse::<usize>()
+                        .expect("fixture content length")
+                })
+            })
+            .unwrap_or(0);
+        if request.len() >= header_end + 4 + content_length {
+            return String::from_utf8_lossy(&request).into_owned();
         }
     }
-    String::from_utf8_lossy(&request).into_owned()
 }
 
 fn serve_all_responses(listener: &TcpListener, responses: Vec<String>) {
     for response in responses {
         let (mut stream, _) = listener.accept().expect("accept request");
-        let mut request = [0; 1_024];
-        let bytes_read = stream.read(&mut request).expect("read request");
+        stream
+            .set_nonblocking(false)
+            .expect("blocking fixture request stream");
+        let request = read_complete_http_request(&mut stream);
+        let bytes_read = request.len();
         assert!(bytes_read > 0, "request must contain bytes");
         stream
             .write_all(response.as_bytes())
