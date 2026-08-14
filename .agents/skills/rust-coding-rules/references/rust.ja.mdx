@@ -1,0 +1,56 @@
+---
+paths:
+  - "**/*.rs"
+---
+
+# Rustコーディングルール
+
+これは正規英語版の日本語訳です。各要件は1個のRule IDだけを持ち、1箇所だけに記載します。
+
+## リポジトリと検証
+
+- **RS01 リポジトリ設定:** リポジトリに設定されたRust toolchain、Cargo workspace、feature構成、scriptを使用してください。別のbuild systemや不要なcrateを追加しないでください。
+- **RS02 検証toolchain:** 論理的な変更単位ごとに対象を絞ったcheckを実行し、その後、設定済みのformat、compile、Clippy、testコマンドを実行してください。品質toolとして設定されている場合はrustfmtとClippyを両方使用し、期待動作を再現して完了前に全failureを解消してください。
+- **RS03 品質の維持:** 明示的な承認なしに`allow` attribute、ignore指定、skip test、または弱い品質gateを追加しないでください。
+
+## 安全性、型、API
+
+- **RS04 unsafe code:** `unsafe`を避けてください。不可避な場合はscopeを最小化し、全safety invariantを文書化し、安全なAPIを公開して境界条件をtestしてください。
+- **RS05 error伝播:** production pathでは構造化された`Result` errorを返し、`unwrap`、`expect`、panicによる制御フローではなく`?`または明示的なhandlingを使用してください。
+- **RS06 domain型:** 関連の薄いprimitiveを渡す代わりに、struct、enum、newtypeで有効状態と単位を表現してください。
+- **RS07 抽象化:** concrete typeと小さなtraitを優先し、generic、trait object、macroは実証済みの重複除去または必要な境界を提供する場合だけ導入してください。
+- **RS08 可視性:** itemはdefaultでprivateにし、callerが必要とする最小の安定public APIだけを公開してください。
+
+## 関数と制御フロー
+
+- **RS09 関数の凝集性:** 関数の責務を絞り、production logicを再利用し、`main`またはruntime entry pointを薄いorchestration層にしてください。
+- **RS10 分岐:** early return、`match`、`if let`、`let else`でネストを減らし、全状態を最も明示できる構文を選んでください。
+- **RS11 iteration:** 明瞭になる場合はiterator adapterを優先しますが、mutation、short-circuit、statefulな制御フローが明瞭な場合はloopを使用してください。深いloopのネストは避けてください。
+- **RS12 引数:** invariantまたはcall siteが明瞭になる場合、関連する引数を型付けしたstructへまとめてください。単なる個数基準のためだけにparameter structを作らないでください。
+- **RS13 async境界:** 非同期処理がない関数を`async`にせず、blocking I/Oを実行したりblocking lockを保持したまま`.await`したりしないでください。
+
+## ownership、mutation、concurrency
+
+- **RS14 ownership:** ownership移動が不要ならborrowし、borrow checker errorを黙らせるためだけのcloneを避け、意図的なownership境界を明示してください。
+- **RS15 mutation:** mutationをlocalかつ最小にし、mutable global stateを避けてください。
+- **RS16 concurrency:** 正しさを保てる最小の同期primitiveを使い、lock scopeを最小化して必要以上にlockを保持しないでください。
+
+## 値、module、診断
+
+- **RS17 定数:** 固定値とmagic numberを型付けした名前付き定数へ置き換え、共有定数はmodule scope、本当にlocalな定数はlocalに配置してください。
+- **RS18 必須値:** 不足する設定または入力を検証して明示的なerrorを返し、契約が定義する場合だけfallbackを使用してください。
+- **RS19 moduleとimport:** moduleの凝集性を保ち、明示的なimportを優先し、意図的なpreludeまたは狭いtest module以外では広いglob re-exportを避けてください。
+- **RS20 dead code:** warningを抑制せず、未使用item、import、feature branch、廃止済みcompatibility pathを削除してください。
+- **RS21 文書と診断:** comment、public API document、log、error messageは英語で記述し、構文の言い換えではなく理由とinvariantを文書化してください。
+
+## resourceとデータ
+
+- **RS22 resource処理:** file、lock、一時状態、cleanupにはRAIIとscoped guardを使い、不要な操作を減らせる場合はI/Oをbuffer化またはbatch化してください。
+- **RS23 データ境界:** domain型を構築する前に外部データを検証し、文字encoding、parse、serialization errorを明示的に処理してください。
+
+## テストとcoverage
+
+- **RS24 testの所有:** Rustの動作またはpublic typeを変更したら、既存のtest配置に従ってunit testまたはintegration testを追加・更新してください。
+- **RS25 coverage:** 設定済みのfile単位coverage閾値を下げずに満たし、閾値がなくcoverage toolを利用できる場合は変更した全source fileで90%以上を達成してください。
+- **RS26 testの分離:** 一時resourceまたはtest doubleでfilesystem、clock、process、network依存を分離し、testを決定的かつ高速にしてください。
+- **RS27 testの明瞭性:** 既存のtest frameworkを使い、inputと期待値を明示し、有用なdiffを表示するassertion macroを選び、対象動作を隠すhelper抽象化を避けてください。

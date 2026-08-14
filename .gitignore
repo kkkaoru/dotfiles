@@ -62,10 +62,17 @@ coverage_out/
 !.claude/commands/*
 !.claude/hooks/
 !.claude/hooks/**
+!.claude/rules/
+!.claude/rules/python.md
+!.claude/rules/rust.md
+!.claude/rules/typescript.md
 !.claude/skills/
 !.claude/skills/ctx-agent-history-search/
 !.claude/skills/ctx-agent-history-search/SKILL.md
 !.claude/skills/git-commit-by-feature
+!.claude/skills/python-coding-rules
+!.claude/skills/rust-coding-rules
+!.claude/skills/typescript-coding-rules
 
 
 # Codex runtime state/cache
@@ -116,6 +123,9 @@ coverage_out/
 !/.cursor/mcp.json
 !/.cursor/skills/
 !/.cursor/skills/git-commit-by-feature
+!/.cursor/skills/python-coding-rules
+!/.cursor/skills/rust-coding-rules
+!/.cursor/skills/typescript-coding-rules
 .cursor/projects
 .cursor/extensions
 .cursor/worktrees
@@ -132,6 +142,9 @@ coverage_out/
 .config/opencode/*
 !.config/opencode/opencode.jsonc
 !.config/opencode/skills/
+!.config/opencode/skills/python-coding-rules
+!.config/opencode/skills/rust-coding-rules
+!.config/opencode/skills/typescript-coding-rules
 
 .cursor/ai-tracking
 .cursor/plans

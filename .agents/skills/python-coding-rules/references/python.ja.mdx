@@ -1,0 +1,56 @@
+---
+paths:
+  - "**/*.py"
+  - "**/*.pyi"
+---
+
+# Pythonコーディングルール
+
+これは正規英語版の日本語訳です。各要件は1個のRule IDだけを持ち、1箇所だけに記載します。
+
+## リポジトリと検証
+
+- **PY01 リポジトリ設定:** リポジトリに設定されたPython version、environment manager、dependency file、package構成、scriptを使用してください。別のenvironmentまたはpackage managerを導入しないでください。
+- **PY02 検証toolchain:** 論理的な変更単位ごとに対象を絞ったcheckを実行し、その後、設定済みtype-check、lint、format-check、testを実行してください。Ruff checkとRuff formatの両方など、設定済みlint/format workflowを完全に実行し、期待動作を再現して完了前に全failureを解消してください。
+- **PY03 品質の維持:** 明示的な承認なしに`noqa`、`type: ignore`、skip test、warning filter、または弱い品質gateを追加しないでください。
+
+## 型とdata model
+
+- **PY04 安全でない型:** `Any`と未検証の`cast`を避け、runtime check、`TypeGuard`、protocol、generic、または入力元annotationの修正でnarrowingしてください。
+- **PY05 関数contract:** public function、method、return value、外部公開attributeを型付けし、有用なgeneric情報を維持してください。
+- **PY06 構造化data:** 境界に合う表現を使ってください。所有するrecordにはdataclassまたはvalidated model、dictionary形状には`TypedDict`、behavior interfaceには`Protocol`を使用してください。
+- **PY07 optional値:** absenceを`None` unionで明示し、有効なfalse-like値が存在する場合はtruthinessに依存せず使用前にnarrowingしてください。
+- **PY08 default:** mutable objectをfunctionまたはdataclassのdefaultにせず、契約に応じて`None`、`default_factory`、またはimmutable値を使用してください。
+
+## 関数と制御フロー
+
+- **PY09 関数の凝集性:** 関数の責務を絞り、production logicを再利用し、CLIまたはapplication entry pointを薄いorchestration層にしてください。
+- **PY10 分岐:** early returnとguard clauseでネストを減らし、conditional expressionは明瞭で単純な値だけに使い、ネストしないでください。
+- **PY11 expression:** comprehensionは可読性を保てる場合だけ使用し、複雑またはネストしたcomprehensionは名前付きstepへ分割してください。
+- **PY12 iteration:** streamingまたは大きなdataにはiteratorとgeneratorを使い、不要なcollection materializationを避けてください。
+- **PY13 引数:** 関連optionが複数あるcallにはkeyword-only parameterまたは型付けしたconfiguration objectを使い、必須inputをambient global stateへ隠さないでください。
+- **PY14 async境界:** 非同期処理がない関数を`async`にせず、event loopからblocking I/Oを直接呼び出さないでください。
+
+## 値、error、resource
+
+- **PY15 定数とglobal:** 定数はmodule scopeでuppercase名にし、mutable global stateを避けてください。
+- **PY16 必須値:** 不足する設定または入力を検証し、明示的なdomain errorをraiseまたはreturnしてください。契約が定義する場合だけfallbackを使用してください。
+- **PY17 exception:** 最も狭いexception typeをcatchし、`raise ... from ...`でcauseを維持し、bare `except`またはfailureの黙殺を禁止します。
+- **PY18 runtime検証:** production input validationまたは回復可能なruntime errorに`assert`を使用しないでください。
+- **PY19 resource処理:** file、lock、一時resource、transaction、cleanupにはcontext managerを使用してください。
+- **PY20 file I/O:** `pathlib`を使い、text encodingを明示し、不要なmemoryまたは操作を避けられる場合はI/Oをbatch化またはstream化してください。
+
+## moduleと診断
+
+- **PY21 import:** 明示的なimportを使い、`from module import *`を避け、遅延が必要でない限りimportをmodule scopeに置き、module境界を改善してcircular dependencyを防いでください。
+- **PY22 module scope:** moduleの凝集性を保ち、無関係な責務または過度な大きさでtestとnavigationが難しい場合は分割してください。
+- **PY23 未使用code:** toolingを抑制せず、未使用function、variable、import、compatibility branch、obsolete codeを削除してください。
+- **PY24 文書と診断:** comment、docstring、log、error messageは英語で記述し、構文の言い換えではなくcontractと理由を文書化してください。
+
+## テストとcoverage
+
+- **PY25 testの所有:** Pythonの動作、public type、data modelを変更したら、既存のtest配置と命名に従ってtestを追加または更新してください。
+- **PY26 coverage:** 設定済みのfile単位coverage閾値を下げずに満たし、閾値がなくcoverage toolを利用できる場合は変更した全source fileで90%以上を達成してください。
+- **PY27 testの分離:** fixture、一時path、monkeypatch、test doubleでfilesystem、clock、environment、process、network依存を分離し、testを決定的かつ高速にしてください。
+- **PY28 test framework:** 別のrunnerまたはassertion libraryを導入せず、既存のtest frameworkとfixtureを使用してください。
+- **PY29 testの明瞭性:** 明示的なparameterizationと期待literalを優先し、実装詳細ではなく完全な結果をassertし、対象動作を隠すhelper抽象化を避けてください。

@@ -92,7 +92,7 @@ for file in CLAUDE.md settings.json; do
     link_path "${DOTPATH}/.claude/${file}" "${HOME}/.claude/${file}"
   fi
 done
-for name in agents commands hooks skills; do
+for name in agents commands hooks rules skills; do
   if [ -d "${DOTPATH}/.claude/${name}" ]; then
     link_tree "${DOTPATH}/.claude/${name}" "${HOME}/.claude/${name}"
   fi

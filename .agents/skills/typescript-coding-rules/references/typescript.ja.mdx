@@ -1,0 +1,61 @@
+---
+paths:
+  - "**/*.ts"
+  - "**/*.tsx"
+  - "**/*.mts"
+  - "**/*.cts"
+---
+
+# TypeScriptコーディングルール
+
+これは正規英語版の日本語訳です。各要件は1個のRule IDだけを持ち、1箇所だけに記載します。
+
+## リポジトリと検証
+
+- **R01 リポジトリ設定:** リポジトリに設定されたruntime、package manager、workspace構成、scriptを使用してください。別のpackage managerや不要な`package.json`を追加しないでください。
+- **R02 検証toolchain:** 論理的な変更単位ごとに対象を絞ったcheckを実行し、その後、設定済みtype-check、test、および **OxlintとOxfmtの両方** または **Biome** の完全なlint/format toolchainを1つ実行してください。期待動作を再現し、完了前に全failureを解消してください。Oxlintだけ、またはOxfmtだけの実行は不完全です。
+- **R03 品質の維持:** 明示的な承認なしに診断を抑制したり、ignore指定を追加したり、checkを弱めたりしないでください。
+
+## 型system
+
+- **R04 安全でない型:** `any`または`as`による安全でないnarrowingを使用せず、check、predicate、generic、または入力元の型修正でnarrowingしてください。
+- **R05 object形状:** 3個以上のpropertyを持つobject形状には`interface`を使い、ネストしたobject形状は適切なscopeのinterfaceへ分離してください。
+- **R06 閉じた値集合:** union typeを優先し、新しい`enum`を導入しないでください。
+- **R07 literal適合:** `as const`を`satisfies`または明示的な型へ置き換えてください。
+- **R08 型の配置:** typeとinterfaceの宣言をfunction実装より前へ配置してください。
+
+## 関数と制御フロー
+
+- **R09 関数の凝集性:** 関数の責務を絞り、production logicを再利用し、`main`または`run`を薄いorchestration層にしてください。
+- **R10 returnの簡素化:** 明瞭な単一expressionにはexpression bodyを使い、`async`関数が1個のpromiseをawaitするだけで後続処理がない場合はpromiseを直接returnしてください。
+- **R11 ネストとternary:** guard clauseでネストを減らし、ternaryは単純な値選択だけに使用してください。ternaryのネストや連鎖は禁止です。
+- **R12 dispatch:** 反復的な`if`/`else if`または`switch` dispatchは、より明瞭な場合にtype-safeなlookup objectまたは`Map`へ置き換えてください。
+- **R13 production iteration:** production codeでは命令的なloopより明瞭なarray methodを優先し、loopのネストを避けてください。
+- **R14 引数:** 引数が3個以上なら型付けした1個のobjectを受け取り、実用的であればparameter listでdestructureしてください。
+- **R15 comparator:** 再利用するsort comparatorは`sort`呼び出しとは別に定義してください。
+
+## 値、I/O、module
+
+- **R16 定数:** 定数に意味のある型情報を持たせ、固定値とmagic numberを名前付き定数へ置き換え、共有定数はmodule scope、本当にlocalな定数はlocal scopeへ配置してください。
+- **R17 必須値:** 必須の設定やデータがなければ検証して明示的に失敗させ、契約が定義する場合だけfallback defaultを使用してください。
+- **R18 file I/O:** ファイルの読み書き回数を最小化し、順序が不要な独立writeはbatch化または並列実行してください。
+- **R19 未使用宣言:** 未使用のfunction、variable、import、constantを削除し、必須だが未使用のfunction parameterに限ってunderscore prefixを許可してください。
+- **R20 module境界:** namespace importよりnamed importまたはdefault importを優先し、`index.ts` barrel fileを作成しないでください。
+- **R21 診断の言語:** comment、log、error messageは英語で記述してください。
+- **R22 escape:** fileまたは文字列形式のliteral `\n`を正しくescapeしてください。
+
+## 外部データとDOM
+
+- **R23 HTML取得:** 既存の抽象化がより適切でない限り`fetch`を優先し、markupを推測せず確認済みの代表的HTMLからparsingを設計してください。
+- **R24 文字encoding:** UTF-8以外の入力は、`iconv-lite`などリポジトリ設定済みのencoding libraryで明示的にdecodeしてください。
+- **R25 DOM環境:** `jsdom`を追加せず、既存のDOM test environmentを使うか、互換性のあるemulationを導入する場合は`happy-dom`を優先してください。
+
+## テスト
+
+- **R26 testの所有:** TypeScriptの動作または型を変更したら、`*.test.ts`や`*.test.tsx`など既存のco-locationと命名規則に従ってtestを追加または更新してください。
+- **R27 coverage:** 設定済みのfile単位coverage閾値を下げずに満たし、閾値がなければ変更した全source fileで90%以上を達成してください。
+- **R28 testの分離:** filesystem accessとnetwork requestをmockし、unit testを決定的かつ高速にしてください。
+- **R29 test framework:** 既存のtest runnerとimportを使い、リポジトリが標準化していない限り`bun:test`を含む別runnerを導入しないでください。
+- **R30 test caseの明瞭性:** input、assertion path、期待結果を隠す抽象化やloopより、明示的なtest caseを優先してください。
+- **R31 suite構造:** `describe`のネストと不要なsuite wrapperを減らしてください。
+- **R32 assertion:** `toEqual`より`toStrictEqual`を優先し、`toContain`と`expect(value.includes(item)).toBe(true)`を使用せず、期待する文字列、配列、objectを実装から独立した明示的literalで記述してください。
