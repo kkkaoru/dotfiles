@@ -87,37 +87,34 @@ Four possible outputs:
 
 ## Execute
 
-Non-interactive child guard: when CLAUDEX_NONINTERACTIVE_CHILD=1,
-CLAUDEX_PROVIDER_ACP=1, or CLAUDEX_GROK_ACP=1 is present, this is a
-provider-backed child rather than a user-facing session. Do not start an
-agmsg Monitor, inbox check, or persistent watcher in that child. The installed
-SessionStart, SessionEnd, and Stop scripts enforce the same guard before
-reading stdin, so a child cannot keep a parent session busy with an agmsg
-response loop.
-
-Claudex parent sessions also keep automatic Monitor delivery disabled by
-default. When `CLAUDEX_ACTIVE=1` is present, do not start a persistent Monitor
-unless `CLAUDEX_AGMSG_AUTO_MONITOR=1` was explicitly set. Use the turn-mode
-inbox commands below for an on-demand result; this keeps cross-session
-`<agent-message>` values out of the main user-input queue while preserving
-native Claude Code Agent/Task cards.
-
-An intentional manual Monitor started by `/agmsg` must prefix only its
-`watch.sh` command with `CLAUDEX_AGMSG_EXPLICIT=1`. This is a per-command
-exception for the watcher; do not export it from the shell and do not add it
-to SessionStart/SessionEnd/Stop hook commands. The lifecycle hooks continue to
-use the automatic opt-in guard, while provider/noninteractive children still
-exit even if an explicit marker is inherited.
-
 **Only use scripts in `~/.agents/skills/agmsg/scripts/` — do not read or modify files under `teams/` or `db/` directly.** Treat the storage layout as internal: never construct a database path or invoke `sqlite3` directly. The scripts resolve the active store, including `AGMSG_STORAGE_PATH` overrides.
 
 **Ensure monitor is running first.** Before processing any subcommand below, check whether this session already has an `agmsg inbox stream` Monitor task in its TaskList. If not, and the project's delivery mode is `monitor` or `both` (check via `~/.agents/skills/agmsg/scripts/delivery.sh status claude-code "$(pwd)"`), invoke the Monitor tool now:
 
-- command: `CLAUDEX_AGMSG_EXPLICIT=1 ~/.agents/skills/agmsg/scripts/watch.sh $CLAUDE_CODE_SESSION_ID "$(pwd)" claude-code`
+- command: `~/.agents/skills/agmsg/scripts/watch.sh $CLAUDE_CODE_SESSION_ID "$(pwd)" claude-code`
 - description: `agmsg inbox stream`
 - persistent: true
 
 Then continue with the user's subcommand. This catches the case where the user invokes `/agmsg` as the first prompt before the SessionStart-hook directive has been acted on.
+
+**Permission prompts.** Every command here runs through the Bash tool, so each call is gated by the permission system until the script directory is allowlisted. Without this the user is asked to confirm essentially every `agmsg` call. Add to `~/.claude/settings.json` (or project-level `.claude/settings.local.json`):
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "Bash(~/.agents/skills/agmsg/scripts/*)",
+      "Bash(/Users/<you>/.agents/skills/agmsg/scripts/*)",
+      "Bash(bash ~/.agents/skills/agmsg/scripts/*)",
+      "Bash(bash /Users/<you>/.agents/skills/agmsg/scripts/*)"
+    ]
+  }
+}
+```
+
+Four entries because a rule matches the command string as written, and these scripts are invoked both as `~/...` and as an absolute path, with or without an explicit `bash` prefix. Replace `/Users/<you>` with the user's home directory.
+
+**Every subcommand needs its own match.** Per [Claude Code's permission docs](https://code.claude.com/docs/en/permissions), a rule must match each subcommand independently, and the recognized separators are `&&`, `||`, `;`, `|`, `|&`, `&`, and newlines. Chaining two `agmsg` scripts is fine — both match the entries above. The prompt returns when a subcommand those entries do not cover rides along: `delivery.sh status … ; printenv AGMSG_SPAWNED` prompts because of the `printenv`, not because of the `;`. Splitting it into its own call does not remove that prompt — it only keeps it from gating the `agmsg` call. Allowlist the command as well if it needs to be prompt-free.
 
 **Sandbox compatibility.** When Claude Code's sandbox is enabled, `watch.sh` (monitor mode) runs inside the sandbox and needs to write pidfiles and SQLite WAL files under `~/.agents/skills/agmsg/`. If monitor mode fails with write/permission errors there, add an allowlist entry to `~/.claude/settings.json` (or project-level `.claude/settings.local.json`):
 
@@ -167,7 +164,7 @@ If argument starts with "actas" followed by an agent name (e.g. "actas alice"):
    b. **If a matching task is found**: TaskStop it.
    c. **If no matching task is found** (typical when /agmsg actas runs as the first command of a fresh session — SessionStart hasn't fired the Monitor directive yet, or you're invoking actas before the agent acted on it): skip TaskStop entirely. There is no Monitor to stop. Do NOT attempt TaskStop with a guessed or empty task_id — it will fail with "Invalid tool parameters" and confuse the flow.
    d. **Only if the project's delivery mode is `monitor` or `both`** (check via `~/.agents/skills/agmsg/scripts/delivery.sh status claude-code "$(pwd)"`), invoke a fresh Monitor, regardless of whether step b or c applied:
-      - command: `CLAUDEX_AGMSG_EXPLICIT=1 ~/.agents/skills/agmsg/scripts/watch.sh $CLAUDE_CODE_SESSION_ID "$(pwd)" claude-code <name>`
+      - command: `~/.agents/skills/agmsg/scripts/watch.sh $CLAUDE_CODE_SESSION_ID "$(pwd)" claude-code <name>`
       - description: `agmsg inbox stream (acting as <name>)`
       - persistent: true
       Otherwise (mode `turn` or `off`), leave it stopped — `actas` must not start automatic delivery a project wasn't configured for.
@@ -184,7 +181,7 @@ If argument starts with "drop" followed by an agent name (e.g. "drop alice"):
    b. **If a matching task is found**: TaskStop it.
    c. **If no matching task is found**: skip TaskStop. Do NOT attempt TaskStop with a guessed or empty task_id.
    d. **Only if the project's delivery mode is `monitor` or `both`** (check via `~/.agents/skills/agmsg/scripts/delivery.sh status claude-code "$(pwd)"`), invoke a fresh Monitor with the default subscription (no `actas` name filter — receives every (team, agent) pair currently registered for this project that isn't held by another session):
-      - command: `CLAUDEX_AGMSG_EXPLICIT=1 ~/.agents/skills/agmsg/scripts/watch.sh $CLAUDE_CODE_SESSION_ID "$(pwd)" claude-code`
+      - command: `~/.agents/skills/agmsg/scripts/watch.sh $CLAUDE_CODE_SESSION_ID "$(pwd)" claude-code`
       - description: `agmsg inbox stream`
       - persistent: true
       Otherwise (mode `turn` or `off`), leave it stopped.
