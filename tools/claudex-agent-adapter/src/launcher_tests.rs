@@ -16,7 +16,7 @@ use std::{
     process::{Child, Command, Stdio},
     sync::{
         Arc,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     thread,
     time::{Duration, Instant},
@@ -25,6 +25,7 @@ use std::{
 use super::*;
 use crate::agent_backend::BackendKind;
 use serde_json::json;
+use tokio::sync::Notify;
 
 fn config() -> ServiceConfig {
     ServiceConfig {
@@ -135,9 +136,7 @@ fn prune_adapter_logs_never_deletes_the_canonical_live_log() {
     let listen: std::net::SocketAddr = "127.0.0.1:8318".parse().expect("listen");
     let live = super::launcher_logs::adapter_log_path(root.path(), &listen);
     std::fs::write(&live, "running").expect("live log");
-    let oversized = root
-        .path()
-        .join(format!("adapter.127_0_0_1_8318.100.1.pid9.log"));
+    let oversized = root.path().join("adapter.127_0_0_1_8318.100.1.pid9.log");
     std::fs::write(&oversized, vec![0_u8; 33 * 1024 * 1024]).expect("oversized archive");
     let old = root.path().join("adapter.127_0_0_1_8318.101.2.pid8.log");
     std::fs::write(&old, "old").expect("old archive");
@@ -183,6 +182,76 @@ fn prune_adapter_logs_on_a_missing_cache_is_a_no_op() {
         super::prune_adapter_logs(&missing).expect("missing cache"),
         0
     );
+}
+
+#[test]
+fn prune_adapter_logs_reports_non_not_found_cache_errors() {
+    let root = tempfile::tempdir().expect("cache read fixture");
+    let cache_file = root.path().join("cache-file");
+    std::fs::write(&cache_file, b"not a directory").expect("cache file");
+    let error = super::prune_adapter_logs(&cache_file).expect_err("file cache must fail");
+    assert!(error.to_string().contains("read"), "{error:#}");
+}
+
+#[cfg(unix)]
+#[test]
+fn prune_adapter_logs_ignores_non_utf8_names_and_non_file_archives() {
+    use std::os::unix::ffi::OsStringExt;
+
+    let root = tempfile::tempdir().expect("non-utf8 archive fixture");
+    let non_utf8 = root
+        .path()
+        .join(std::ffi::OsString::from_vec(vec![b'a', 0xff, b'.', b'l']));
+    let non_utf8_supported = match std::fs::write(&non_utf8, b"archive") {
+        Ok(()) => true,
+        Err(error) if error.raw_os_error() == Some(libc::EILSEQ) => false,
+        Err(error) => panic!("non-utf8 archive: {error}"),
+    };
+    let directory = root.path().join("adapter.127_0_0_1_8318.1.1.pid1.log");
+    std::fs::create_dir(&directory).expect("archive directory");
+    assert_eq!(super::prune_adapter_logs(root.path()).expect("prune"), 0);
+    if non_utf8_supported {
+        assert!(non_utf8.exists());
+    }
+    assert!(directory.is_dir());
+}
+
+#[test]
+fn prune_adapter_logs_keeps_five_archives_per_generation() {
+    let root = tempfile::tempdir().expect("archive retention fixture");
+    for index in 0..6 {
+        let archive = root
+            .path()
+            .join(format!("adapter.127_0_0_1_8318.100.{index}.pid{index}.log"));
+        std::fs::write(archive, format!("archive-{index}")).expect("archive");
+    }
+    // Exercise the live-state filters as well as the retention cap. Invalid
+    // names and invalid/dead pids must never protect an archive.
+    std::fs::write(root.path().join("not-live.json"), b"{}").expect("ignored state");
+    std::fs::write(root.path().join("live.invalid.json"), b"not-json").expect("invalid live state");
+    std::fs::write(
+        root.path().join("live.8318.json"),
+        br#"{"listen":"127.0.0.1:8318","pid":0}"#,
+    )
+    .expect("zero-pid state");
+    std::fs::write(
+        root.path().join("live.8319.json"),
+        format!(r#"{{"listen":"127.0.0.1:8319","pid":{}}}"#, u32::MAX),
+    )
+    .expect("dead-pid state");
+
+    assert_eq!(super::prune_adapter_logs(root.path()).expect("prune"), 1);
+    let remaining = std::fs::read_dir(root.path())
+        .expect("cache directory")
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .starts_with("adapter.127_0_0_1_8318.")
+        })
+        .count();
+    assert_eq!(remaining, 5);
 }
 
 #[test]
@@ -269,6 +338,111 @@ fn rotate_live_daemon_log_does_not_touch_a_file_stderr_does_not_own() {
         live.metadata().expect("unchanged").len(),
         super::launcher_logs::ARCHIVE_MAX_BYTES + 1
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn rotate_live_daemon_log_redirects_owned_stderr_in_a_child() {
+    let root = tempfile::tempdir().expect("owned rotate fixture");
+    let live = root.path().join("adapter.127_0_0_1_8318.log");
+    std::fs::write(
+        &live,
+        vec![0_u8; (super::launcher_logs::ARCHIVE_MAX_BYTES + 1) as usize],
+    )
+    .expect("oversized owned log");
+
+    if std::env::var_os("CLAUDEX_ROTATE_OWNED_CHILD").is_some() {
+        use std::{
+            os::unix::io::{AsRawFd, IntoRawFd},
+            path::PathBuf,
+        };
+
+        let root = PathBuf::from(
+            std::env::var_os("CLAUDEX_ROTATE_OWNED_ROOT").expect("owned rotate root"),
+        );
+        let live = root.join("adapter.127_0_0_1_8318.log");
+        let stderr = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&live)
+            .expect("open owned stderr");
+        // SAFETY: stderr remains open for the child process and is restored by
+        // process exit; this test intentionally gives the rotate helper an
+        // inode-matching fd 2.
+        assert_eq!(unsafe { libc::dup2(stderr.as_raw_fd(), 2) }, 2);
+        let _ = stderr.into_raw_fd();
+        assert!(
+            super::launcher_logs::rotate_live_daemon_log(&live).expect("owned rotate"),
+            "stderr-owned oversized logs must rotate"
+        );
+        return;
+    }
+
+    let status = Command::new(std::env::current_exe().expect("test executable"))
+        .arg("rotate_live_daemon_log_redirects_owned_stderr_in_a_child")
+        .env("CLAUDEX_ROTATE_OWNED_CHILD", "1")
+        .env("CLAUDEX_ROTATE_OWNED_ROOT", root.path())
+        .status()
+        .expect("run owned rotate child");
+    assert!(status.success(), "owned rotate child failed: {status}");
+    assert!(live.is_file(), "rotation must leave a fresh canonical log");
+    assert!(
+        live.metadata().expect("fresh canonical log").len()
+            < super::launcher_logs::ARCHIVE_MAX_BYTES,
+        "fresh canonical log must not retain the oversized payload"
+    );
+}
+
+#[tokio::test]
+async fn watch_canonical_log_size_invokes_the_rotation_callback() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let observed = Arc::clone(&calls);
+    let ticked = Arc::new(Notify::new());
+    let notify = Arc::clone(&ticked);
+    let task = tokio::spawn(super::watch_canonical_log_size(
+        PathBuf::from("/tmp/launcher-watch-test.log"),
+        Duration::from_millis(1),
+        move |_| {
+            observed.fetch_add(1, Ordering::SeqCst);
+            notify.notify_one();
+            Ok(false)
+        },
+    ));
+    tokio::time::timeout(Duration::from_secs(1), ticked.notified())
+        .await
+        .expect("rotation watcher should tick");
+    assert_ne!(calls.load(Ordering::SeqCst), 0);
+    task.abort();
+    let _ = task.await;
+}
+
+#[test]
+fn rotate_canonical_log_rejects_non_files_and_metadata_errors() {
+    let root = tempfile::tempdir().expect("rotate metadata fixture");
+    let directory = root.path().join("directory");
+    std::fs::create_dir(&directory).expect("rotate directory");
+    assert!(
+        super::launcher_logs::rotate_canonical_log(&directory)
+            .expect("directories do not rotate")
+            .is_none()
+    );
+
+    let parent_file = root.path().join("not-a-directory");
+    std::fs::write(&parent_file, b"file").expect("parent file");
+    let nested = parent_file.join("adapter.log");
+    assert!(
+        super::launcher_logs::rotate_canonical_log(&nested)
+            .expect_err("metadata through a file must fail")
+            .to_string()
+            .contains("stat")
+    );
+}
+
+#[test]
+fn rotate_live_daemon_log_skips_missing_paths_before_stdio_probe() {
+    let root = tempfile::tempdir().expect("missing rotate fixture");
+    let missing = root.path().join("missing.log");
+    assert!(!super::launcher_logs::rotate_live_daemon_log(&missing).expect("missing log"));
 }
 
 #[test]
@@ -1265,7 +1439,7 @@ fn matching_build_dummy_script(config: &ServiceConfig) -> String {
         .subagent_hard_timeout_seconds
         .map(|value| value.get().to_string())
         .unwrap_or_else(|| "None".to_owned());
-    format!(
+    retry_python_listener(format!(
         include_str!("launcher/matching_build_dummy.py.template"),
         build = env!("CLAUDEX_BUILD_ID"),
         model = config.options.model,
@@ -1279,7 +1453,31 @@ fn matching_build_dummy_script(config: &ServiceConfig) -> String {
         timeout_minutes = config.options.subscription_timeout_minutes,
         hard_timeout = hard_timeout,
         protocol = ADAPTER_PROTOCOL_VERSION,
-    )
+    ))
+}
+
+fn retry_python_listener(script: String) -> String {
+    let script = script
+        .replace("#!/usr/bin/python3", "#!/usr/bin/python3 -S")
+        .replace("import json, os, sys", "import errno, json, os, sys, time");
+    let retried = script.replace(
+        "HTTPServer((host, int(port)), Handler).serve_forever()",
+        r#"for _ in range(100):
+    try:
+        HTTPServer((host, int(port)), Handler).serve_forever()
+        break
+    except OSError as error:
+        if error.errno != errno.EADDRINUSE:
+            raise
+        time.sleep(0.01)
+else:
+    raise SystemExit("listener remained occupied")"#,
+    );
+    assert_ne!(
+        retried, script,
+        "Python listener fixture must retain its bind retry"
+    );
+    retried
 }
 
 fn write_matching_build_dummy(root: &Path, config: &ServiceConfig) -> PathBuf {
@@ -1719,6 +1917,42 @@ async fn wait_idle_start_promotes_when_dummy_becomes_ready() {
 
 #[cfg(unix)]
 #[tokio::test]
+async fn start_reports_recovery_when_publishing_live_state_fails() {
+    let root = tempfile::tempdir().expect("publish failure fixture");
+    let mut cfg = config();
+    cfg.options.listen = unused_listen();
+    cfg.log_path = root.path().join("adapter.log");
+    cfg.lock_path = root.path().join("adapter.lock");
+    let dummy = write_matching_build_dummy(root.path(), &cfg);
+    cfg.executable = dummy.clone();
+
+    // publish_listen writes a temporary file and renames it over the live
+    // state. A directory at the destination makes that final rename fail
+    // after the new adapter has already passed readiness.
+    let live_path = super::launcher_logs::live_state_path(root.path(), &cfg.options.listen);
+    std::fs::create_dir(&live_path).expect("live state collision");
+    let error = ensure::apply_inspected_state(
+        &cfg,
+        &reqwest::Client::new(),
+        ensure::Mode::Ensure,
+        handover::ServiceState::Start,
+    )
+    .await
+    .expect_err("live-state publication must fail as an update error");
+    kill_dummy(&dummy);
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("publish new adapter generation"),
+        "{message}"
+    );
+    assert!(
+        message.contains("publish live adapter state") && message.contains("Is a directory"),
+        "{message}"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
 async fn wait_idle_replace_promotes_stale_listener_when_dummy_is_ready() {
     let root = tempfile::tempdir().expect("wait-idle replace ready fixture");
     let mut cfg = config();
@@ -1977,7 +2211,7 @@ async fn fallback_start_reports_when_the_new_listener_never_becomes_ready() {
 }
 
 fn ready_fallback_dummy_script(cfg: &ServiceConfig) -> String {
-    format!(
+    retry_python_listener(format!(
         r#"#!/usr/bin/python3
 import json, os, sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -2038,7 +2272,7 @@ HTTPServer((host, int(port)), Handler).serve_forever()
             serde_json::to_string(&route_descriptions(&cfg.options.routes)).expect("routes json"),
         max_proc = cfg.options.subscription_max_processes,
         timeout = cfg.options.subscription_timeout_minutes,
-    )
+    ))
 }
 
 #[cfg(unix)]
@@ -2075,6 +2309,67 @@ async fn fallback_persists_state_after_a_matching_listener_becomes_ready() {
     kill_dummy(&dummy);
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn fallback_discards_matching_build_state_with_a_different_fingerprint() {
+    let root = tempfile::tempdir().expect("fallback fingerprint fixture");
+    let mut cfg = config();
+    cfg.options.listen = unused_listen();
+    cfg.log_path = root.path().join("adapter.log");
+    cfg.lock_path = root.path().join("adapter.lock");
+    let dummy = root.path().join("claudex-agent-adapter");
+    std::fs::write(&dummy, ready_fallback_dummy_script(&cfg)).expect("ready fallback dummy");
+    std::fs::set_permissions(&dummy, std::fs::Permissions::from_mode(0o755))
+        .expect("ready fallback executable");
+    cfg.executable = dummy.clone();
+    let state_path = root
+        .path()
+        .join(format!("fallback.{}.json", cfg.options.listen.port()));
+    std::fs::write(
+        &state_path,
+        serde_json::json!({
+            "listen": "127.0.0.1:1",
+            "build_id": env!("CLAUDEX_BUILD_ID"),
+            "service_config_fingerprint": "different-service",
+            "pid": 42,
+        })
+        .to_string(),
+    )
+    .expect("stale fingerprint state");
+
+    let url = fallback::ensure_current_generation(&reqwest::Client::new(), &cfg)
+        .await
+        .expect("fallback should start after fingerprint mismatch");
+    assert!(url.starts_with("http://"));
+    assert!(state_path.is_file());
+    kill_dummy(&dummy);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn fallback_reports_state_write_failure_after_a_ready_listener() {
+    let root = tempfile::tempdir().expect("fallback write failure fixture");
+    let mut cfg = config();
+    cfg.options.listen = unused_listen();
+    cfg.log_path = root.path().join("adapter.log");
+    cfg.lock_path = root.path().join("adapter.lock");
+    let dummy = root.path().join("claudex-agent-adapter");
+    std::fs::write(&dummy, ready_fallback_dummy_script(&cfg)).expect("ready fallback dummy");
+    std::fs::set_permissions(&dummy, std::fs::Permissions::from_mode(0o755))
+        .expect("ready fallback executable");
+    cfg.executable = dummy.clone();
+    let state_path = root
+        .path()
+        .join(format!("fallback.{}.json", cfg.options.listen.port()));
+    std::fs::create_dir(&state_path).expect("fallback state directory collision");
+
+    let error = fallback::ensure_current_generation(&reqwest::Client::new(), &cfg)
+        .await
+        .expect_err("fallback state rename must fail");
+    assert!(!error.to_string().is_empty());
+    kill_dummy(&dummy);
+}
+
 #[tokio::test]
 async fn after_update_failure_without_generation_keeps_the_original_error() {
     let error = recovery::after_update_failure(
@@ -2101,6 +2396,43 @@ async fn after_update_failure_with_a_missing_snapshot_keeps_the_update_error() {
     let message = format!("{error:#}");
     assert!(message.contains("start failed"));
     assert!(message.contains("recovery failed"));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn after_update_failure_reports_when_a_valid_recovery_stays_unready() {
+    let root = tempfile::tempdir().expect("recovery readiness fixture");
+    let executable = root.path().join("claudex-agent-adapter");
+    std::fs::write(&executable, "#!/bin/sh\nexit 0\n").expect("recovery dummy");
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755))
+        .expect("recovery dummy executable");
+
+    let mut cfg = config();
+    cfg.options.listen = unused_listen();
+    cfg.executable = executable;
+    cfg.log_path = root.path().join("adapter.log");
+    cfg.lock_path = root.path().join("adapter.lock");
+    let generation = super::recovery_manifest::generation_name(
+        cfg.options.listen,
+        env!("CLAUDEX_BUILD_ID"),
+        &cfg.service_config_fingerprint,
+    );
+    super::recovery_manifest::prepare(&cfg).expect("prepare recovery snapshot");
+
+    let error = recovery::after_update_failure(
+        &reqwest::Client::new(),
+        &cfg,
+        Some(&generation),
+        anyhow::anyhow!("new generation failed"),
+    )
+    .await
+    .expect_err("unready previous generation must fail closed");
+    let message = format!("{error:#}");
+    assert!(message.contains("new generation failed"), "{message}");
+    assert!(
+        message.contains("new adapter failed readiness and previous generation recovery failed"),
+        "{message}"
+    );
 }
 
 #[test]
@@ -2168,6 +2500,39 @@ async fn releases_a_matched_stale_listener_and_reports_a_deadline() {
     stopped.store(true, Ordering::SeqCst);
     server.join().expect("occupied listener server");
     drop(listener);
+}
+
+#[tokio::test]
+async fn releases_a_stale_listener_after_force_termination_succeeds() {
+    let client = reqwest::Client::new();
+    let listener = TcpListener::bind("127.0.0.1:0").expect("force-release listener");
+    let mut occupied = config();
+    occupied.options.listen = listener.local_addr().expect("force-release address");
+    let stopped = Arc::new(AtomicBool::new(false));
+    let server = spawn_response_server(
+        listener,
+        health_response(&healthy(&occupied)),
+        Arc::clone(&stopped),
+    );
+    let forced = Arc::new(AtomicBool::new(false));
+    let forced_callback = Arc::clone(&forced);
+    let stopped_callback = Arc::clone(&stopped);
+    handover::release_stale_listener_with(
+        &client,
+        &occupied,
+        Some(42),
+        |pid, executable| pid == 42 && executable == Path::new("/tmp/adapter"),
+        |_pid| {},
+        move |pid| {
+            mark_terminated(pid, &forced_callback);
+            stopped_callback.store(true, Ordering::SeqCst);
+        },
+        Instant::now() + Duration::from_millis(40),
+    )
+    .await
+    .expect("listener should release after force termination");
+    assert!(forced.load(Ordering::SeqCst));
+    server.join().expect("force-release server");
 }
 
 fn unused_listen() -> SocketAddr {

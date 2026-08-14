@@ -5,6 +5,7 @@ use std::{
     os::unix::fs::PermissionsExt,
     path::PathBuf,
     pin::Pin,
+    process::Command,
     rc::Rc,
     time::{Duration, Instant},
 };
@@ -455,7 +456,7 @@ async fn run_streams_text_delta_before_cmd_exits() {
         .prompt(text_prompt(created.session_id, "live"));
     tokio::pin!(prompt_fut);
     let updates = Rc::clone(&session.updates);
-    wait_while_prompt_pending(&mut prompt_fut, Duration::from_secs(8), || {
+    wait_while_prompt_pending(&mut prompt_fut, CMD_START_TIMEOUT, || {
         updates
             .borrow()
             .iter()
@@ -470,6 +471,62 @@ async fn run_streams_text_delta_before_cmd_exits() {
         "live text must be assistant message not only thought: {rendered}"
     );
     assert!(rendered.contains("DONE"), "{rendered}");
+}
+
+#[cfg(unix)]
+fn run_public_stdio_entrypoints_in_child() {
+    use std::{
+        fs::{File, OpenOptions},
+        os::fd::AsRawFd,
+    };
+
+    let stdin = File::open("/dev/null").expect("open child stdin");
+    let stdout = OpenOptions::new()
+        .write(true)
+        .open("/dev/null")
+        .expect("open child stdout");
+    // SAFETY: this runs only in the isolated test child. Both files stay open
+    // until process exit, and no parent test process has its descriptors changed.
+    assert_eq!(
+        unsafe { libc::dup2(stdin.as_raw_fd(), libc::STDIN_FILENO) },
+        0
+    );
+    // SAFETY: see the stdin redirection above.
+    assert_eq!(
+        unsafe { libc::dup2(stdout.as_raw_fd(), libc::STDOUT_FILENO) },
+        1
+    );
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("stdio runtime");
+    let local = tokio::task::LocalSet::new();
+    runtime.block_on(local.run_until(async {
+        assert!(super::run().await.is_err(), "test arguments must not parse");
+        let (_root, program) = mock_cmd("#!/bin/sh\nexit 0\n");
+        let _ = super::agent::serve(options_for(program)).await;
+    }));
+}
+
+#[cfg(unix)]
+#[test]
+fn public_stdio_entrypoints_execute_in_an_isolated_child() {
+    const CHILD: &str = "CLAUDEX_COMMAND_CODE_ACP_STDIO_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        run_public_stdio_entrypoints_in_child();
+        return;
+    }
+    let status = Command::new(std::env::current_exe().expect("test executable"))
+        .args([
+            "--exact",
+            "command_code_acp::agent_tests::public_stdio_entrypoints_execute_in_an_isolated_child",
+            "--nocapture",
+        ])
+        .env(CHILD, "1")
+        .status()
+        .expect("run stdio child");
+    assert!(status.success(), "stdio child failed: {status}");
 }
 
 #[tokio::test]

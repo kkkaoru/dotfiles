@@ -60,7 +60,10 @@ async fn stream_ccr_web_search(
         .into_response()
 }
 
-async fn search_payload(bridge: Arc<Bridge>, request: CcrWebSearchRequest) -> anyhow::Result<Value> {
+async fn search_payload(
+    bridge: Arc<Bridge>,
+    request: CcrWebSearchRequest,
+) -> anyhow::Result<Value> {
     let mut response = bridge.run_web_search(&request.query).await?;
     response.results.retain(|result| {
         domain_allowed(

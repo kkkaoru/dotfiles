@@ -13,6 +13,27 @@ fn writes_and_detects_a_cachedir_tag() {
 }
 
 #[test]
+fn writing_a_cachedir_tag_reports_io_errors() {
+    let root = tempfile::tempdir().expect("tag error fixture");
+    let file = root.path().join("not-a-directory");
+    fs::write(&file, b"file").expect("tag error file");
+    let create_error = write_cachedir_tag(&file).expect_err("file parent must fail");
+    assert!(
+        create_error.to_string().contains("create"),
+        "{create_error}"
+    );
+
+    let target = root.path().join("target");
+    fs::create_dir(&target).expect("tag target");
+    fs::create_dir(target.join(CACHEDIR_TAG_NAME)).expect("tag path directory");
+    let write_error = write_cachedir_tag(&target).expect_err("tag path directory must fail");
+    assert!(
+        write_error.to_string().contains("write CACHEDIR.TAG"),
+        "{write_error}"
+    );
+}
+
+#[test]
 fn prune_cache_deletes_only_tagged_descendants() {
     let root = tempfile::tempdir().expect("prune fixture");
     let tagged = root.path().join("tagged");
@@ -66,6 +87,96 @@ fn prune_cache_keeps_the_newest_failed_coverage_targets() {
     assert!(dirs[2].is_dir());
 }
 
+#[cfg(unix)]
+#[test]
+fn prune_cache_exercises_expired_coverage_and_sibling_filters() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempfile::tempdir().expect("coverage filter fixture");
+    let stale = root.path().join("llvm-cov-expired");
+    let live = root.path().join(format!("llvm-cov-{}", std::process::id()));
+    let notes = root.path().join("notes");
+    let dangling = root.path().join("dangling-sibling");
+
+    write_cachedir_tag(&stale).expect("tag stale coverage");
+    fs::create_dir(&live).expect("live untagged sibling");
+    fs::write(&notes, b"not a coverage target").expect("non-coverage sibling");
+    symlink(root.path().join("missing-target"), &dangling).expect("dangling sibling");
+    age_path(
+        &stale,
+        COVERAGE_TARGET_RETENTION + std::time::Duration::from_secs(1),
+    );
+
+    let removed = prune_tagged_dirs(root.path(), SystemTime::now()).expect("prune");
+    assert_eq!(removed, 1);
+    assert!(!stale.exists());
+    assert!(live.is_dir());
+    assert!(notes.is_file());
+    assert!(dangling.is_symlink());
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+#[test]
+fn prune_cache_skips_non_utf8_and_directory_symlink_entries() {
+    use std::{
+        ffi::OsString,
+        os::unix::{ffi::OsStringExt, fs::symlink},
+    };
+
+    let root = tempfile::tempdir().expect("prune guard fixture");
+    let outside = tempfile::tempdir().expect("symlink target fixture");
+    let non_utf8 = root
+        .path()
+        .join(OsString::from_vec(b"llvm-cov-\xff".to_vec()));
+    let failed = root.path().join("llvm-cov-failed");
+    let external_stale = outside.path().join("external-stale");
+    let real_dir = root.path().join("real-dir");
+    let directory_link = root.path().join("directory-link");
+
+    write_cachedir_tag(&non_utf8).expect("tag non-UTF-8 target");
+    write_cachedir_tag(&failed).expect("tag failed target");
+    write_cachedir_tag(&external_stale).expect("tag external target");
+    fs::create_dir(&real_dir).expect("real directory");
+    symlink(outside.path(), &directory_link).expect("directory symlink");
+    age_path(
+        &non_utf8,
+        TAGGED_TARGET_RETENTION + std::time::Duration::from_secs(1),
+    );
+    age_path(
+        &external_stale,
+        TAGGED_TARGET_RETENTION + std::time::Duration::from_secs(1),
+    );
+
+    let removed = prune_tagged_dirs(root.path(), SystemTime::now()).expect("prune");
+    assert_eq!(removed, 1);
+    assert!(!non_utf8.exists());
+    assert!(failed.is_dir());
+    assert!(external_stale.is_dir());
+    assert!(directory_link.is_symlink());
+}
+
+#[test]
+fn prune_cache_reports_walk_errors_for_a_non_directory_root() {
+    let root = tempfile::tempdir().expect("walk error fixture");
+    let file = root.path().join("not-a-directory");
+    fs::write(&file, b"not a directory").expect("walk error file");
+
+    let error = prune_tagged_dirs(&file, SystemTime::now()).expect_err("file root must fail");
+    assert!(error.to_string().contains("walk"), "{error}");
+}
+
+#[test]
+fn prune_cache_does_not_remove_a_tagged_walk_root() {
+    let root = tempfile::tempdir().expect("tagged walk root");
+    write_cachedir_tag(root.path()).expect("tag walk root");
+
+    assert_eq!(
+        prune_tagged_dirs(root.path(), SystemTime::now()).expect("prune"),
+        0
+    );
+    assert!(root.path().is_dir());
+}
+
 #[test]
 fn disk_probe_reports_space_and_rejects_impossible_minimums() {
     let root = tempfile::tempdir().expect("disk fixture");
@@ -74,6 +185,70 @@ fn disk_probe_reports_space_and_rejects_impossible_minimums() {
     require_disk_free(root.path(), 0).expect("zero minimum");
     let error = require_disk_free(root.path(), u64::MAX).expect_err("impossible minimum");
     assert!(error.to_string().contains("bytes free"), "{error}");
+}
+
+#[cfg(unix)]
+#[test]
+fn disk_probe_reports_statvfs_and_ancestor_errors() {
+    use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+
+    let empty_path_error = disk::available_bytes(std::path::Path::new(""))
+        .expect_err("statvfs must reject an empty path");
+    assert!(
+        empty_path_error.to_string().contains("statvfs"),
+        "{empty_path_error}"
+    );
+
+    let nul_path = PathBuf::from(OsString::from_vec(b"invalid\0path".to_vec()));
+    let nul_path_error = disk::available_bytes(&nul_path).expect_err("NUL path must fail");
+    assert!(
+        nul_path_error.to_string().contains("statvfs"),
+        "{nul_path_error}"
+    );
+
+    let free_error = require_disk_free(std::path::Path::new(""), 0)
+        .expect_err("disk requirement must report statvfs errors");
+    assert!(free_error.to_string().contains("statvfs"), "{free_error}");
+    let coverage_error = require_coverage_disk(std::path::Path::new(""))
+        .expect_err("coverage requirement must report statvfs errors");
+    assert!(
+        coverage_error.to_string().contains("need at least"),
+        "{coverage_error}"
+    );
+
+    let root = tempfile::tempdir().expect("coverage error fixture");
+    let file = root.path().join("not-a-directory");
+    fs::write(&file, b"file").expect("coverage error file");
+    let prepare_error = prepare_coverage_target(&file)
+        .expect_err("coverage target creation must reject a file path");
+    assert!(
+        prepare_error.to_string().contains("create coverage target"),
+        "{prepare_error}"
+    );
+}
+
+#[test]
+fn default_prune_cache_handles_a_missing_home() {
+    const CHILD_MARKER: &str = "CLAUDEX_CACHE_HYGIENE_NO_HOME";
+    if std::env::var_os(CHILD_MARKER).is_some() {
+        let error = default_prune_root().expect_err("HOME must be required");
+        assert!(error.to_string().contains("HOME is required"), "{error}");
+        prune_default_tagged_cache();
+        return;
+    }
+
+    let status =
+        std::process::Command::new(std::env::current_exe().expect("cache hygiene test executable"))
+            .args([
+                "--exact",
+                "cache_hygiene::tests::default_prune_cache_handles_a_missing_home",
+                "--nocapture",
+            ])
+            .env(CHILD_MARKER, "1")
+            .env_remove("HOME")
+            .status()
+            .expect("spawn HOME-free cache hygiene test");
+    assert!(status.success(), "HOME-free child exited with {status}");
 }
 
 #[test]
@@ -88,6 +263,11 @@ fn process_liveness_and_prune_root_helpers() {
     assert_eq!(
         ensure_prune_root(Some(PathBuf::from("/tmp/cache"))).expect("explicit"),
         PathBuf::from("/tmp/cache")
+    );
+    assert!(
+        ensure_prune_root(None)
+            .expect("default")
+            .ends_with(".cache")
     );
     assert!(default_prune_root().expect("home").ends_with(".cache"));
     assert_eq!(

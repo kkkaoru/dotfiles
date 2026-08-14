@@ -1,5 +1,8 @@
 use std::fs;
 
+#[cfg(unix)]
+use std::{env, os::unix::fs::PermissionsExt, process::Command};
+
 use serde_json::json;
 
 use super::runner::{
@@ -63,6 +66,106 @@ fn per_object_export_skips_directories_and_extension_files() {
                 .contains("no per-object llvm-cov exports succeeded"),
         "{error:#}"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn per_object_export_collects_successful_and_invalid_exports() {
+    const CHILD: &str = "CLAUDEX_COVERAGE_GATE_EXPORT_CHILD";
+    if env::var_os(CHILD).is_some() {
+        let fixture = tempfile::tempdir().expect("export fixture");
+        let target = fixture.path().join("llvm-cov-export");
+        let deps = target.join("debug/deps");
+        fs::create_dir_all(&deps).expect("deps directory");
+        fs::write(target.join("merged.profdata"), b"prof").expect("profdata");
+        fs::write(deps.join("valid-object"), b"object").expect("valid object");
+        fs::write(deps.join("invalid-object"), b"object").expect("invalid object");
+
+        let report = per_object_report(&target).expect("one valid export is enough");
+        assert_eq!(
+            report
+                .pointer("/data/0/files")
+                .and_then(|files| files.as_array())
+                .map(Vec::len),
+            Some(0)
+        );
+        return;
+    }
+
+    let fixture = tempfile::tempdir().expect("fake tool fixture");
+    let sysroot = fixture.path().join("sysroot");
+    let host = nightly_host_triple();
+    let lookup_target =
+        format!("{}-{}", env::consts::ARCH, env::consts::OS).replace("macos", "apple-darwin");
+    // The real nightly sysroot uses `rustc -vV`'s host triple. Keep the
+    // compact lookup alias too because runner::matching_llvm_tool currently
+    // derives that alias directly from ARCH/OS on Linux.
+    let host_bin = sysroot.join("lib/rustlib").join(&host).join("bin");
+    let lookup_bin = sysroot.join("lib/rustlib").join(lookup_target).join("bin");
+    for llvm_bin in [&host_bin, &lookup_bin] {
+        fs::create_dir_all(llvm_bin).expect("fake LLVM directory");
+    }
+    let fake_state = fixture.path().join("llvm-cov-state");
+
+    let rustc = fixture.path().join("rustc");
+    fs::write(
+        &rustc,
+        "#!/bin/sh\nif [ \"$2\" = \"-vV\" ]; then\n  printf 'host: %s\\n' \"$CLAUDEX_FAKE_RUSTC_HOST\"\nelse\n  printf '%s\\n' \"$CLAUDEX_FAKE_RUSTC_SYSROOT\"\nfi\n",
+    )
+    .expect("fake rustc");
+    fs::set_permissions(&rustc, fs::Permissions::from_mode(0o755)).expect("fake rustc executable");
+
+    for llvm_bin in [&host_bin, &lookup_bin] {
+        let llvm_cov = llvm_bin.join("llvm-cov");
+        fs::write(
+            &llvm_cov,
+            "#!/bin/sh\nif [ ! -f \"$CLAUDEX_FAKE_LLVM_COV_STATE\" ]; then\n  : > \"$CLAUDEX_FAKE_LLVM_COV_STATE\"\n  printf '%s' '{\"data\":[{\"files\":[]}]}'\nelse\n  printf '%s' 'not-json'\nfi\nexit 0\n",
+        )
+        .expect("fake llvm-cov");
+        fs::set_permissions(&llvm_cov, fs::Permissions::from_mode(0o755))
+            .expect("fake llvm-cov executable");
+    }
+
+    let original_path = env::var_os("PATH").unwrap_or_default();
+    let path = env::join_paths(
+        std::iter::once(fixture.path().to_path_buf())
+            .chain(env::split_paths(&original_path).filter(|path| !path.as_os_str().is_empty())),
+    )
+    .expect("test PATH");
+    let fake_host = Command::new("rustc")
+        .args(["+nightly", "-vV"])
+        .env("PATH", &path)
+        .env("CLAUDEX_FAKE_RUSTC_HOST", &host)
+        .output()
+        .expect("fake rustc host");
+    assert!(fake_host.status.success());
+    assert!(String::from_utf8_lossy(&fake_host.stdout).contains(&format!("host: {host}")));
+    let status = Command::new(env::current_exe().expect("test executable"))
+        .args([
+            "--exact",
+            "coverage_gate::runner_export_tests::per_object_export_collects_successful_and_invalid_exports",
+        ])
+        .env(CHILD, "1")
+        .env("PATH", path)
+        .env("CLAUDEX_FAKE_RUSTC_SYSROOT", &sysroot)
+        .env("CLAUDEX_FAKE_RUSTC_HOST", &host)
+        .env("CLAUDEX_FAKE_LLVM_COV_STATE", &fake_state)
+        .status()
+        .expect("run export child");
+    assert!(status.success());
+}
+
+#[cfg(unix)]
+fn nightly_host_triple() -> String {
+    let output = Command::new("rustc")
+        .args(["+nightly", "-vV"])
+        .output()
+        .expect("nightly rustc host");
+    assert!(output.status.success(), "nightly rustc -vV failed");
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .find_map(|line| line.strip_prefix("host: ").map(str::to_owned))
+        .expect("nightly rustc host triple")
 }
 
 #[test]

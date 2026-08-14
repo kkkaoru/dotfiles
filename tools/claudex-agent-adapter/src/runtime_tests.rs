@@ -1,9 +1,14 @@
 // Coverage gates measure production code; test implementations are excluded.
 #![cfg_attr(coverage_nightly, coverage(off))]
 
-use std::{ffi::OsString, os::unix::fs::PermissionsExt, path::PathBuf};
+use std::{
+    ffi::OsString,
+    os::unix::fs::PermissionsExt,
+    path::{Path, PathBuf},
+};
 
 use reqwest::Client;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::*;
 use crate::agent_backend::{BackendKind, BackendRoute};
@@ -317,7 +322,7 @@ fn assert_parses_valid_cli_options_part2() {
     .expect("valid prune-cache command");
     assert!(matches!(
         prune,
-        RuntimeCommand::PruneCache(Some(path)) if path == PathBuf::from("/tmp/claudex-cache")
+        RuntimeCommand::PruneCache(Some(path)) if path.as_path() == Path::new("/tmp/claudex-cache")
     ));
     assert!(matches!(
         parse_command(["prune-cache"].into_iter().map(OsString::from).collect())
@@ -483,6 +488,173 @@ async fn runs_the_build_id_command() {
         run(["adapter".into(), "build-id".into()])
             .await
             .expect("build ID command"),
+        0
+    );
+}
+
+#[tokio::test]
+async fn dispatches_cache_pruning_through_the_runtime_command() {
+    let root = tempfile::tempdir().expect("runtime prune fixture");
+    let nested = root.path().join("claudex");
+    std::fs::create_dir(&nested).expect("nested cache directory");
+    let code = run([
+        OsString::from("adapter"),
+        OsString::from("prune-cache"),
+        nested
+            .parent()
+            .expect("cache parent")
+            .as_os_str()
+            .to_owned(),
+    ]
+    .into_iter())
+    .await
+    .expect("prune-cache command");
+    assert_eq!(code, 0);
+
+    let empty_root = tempfile::tempdir().expect("empty runtime prune fixture");
+    let code = run([
+        OsString::from("adapter"),
+        OsString::from("prune-cache"),
+        empty_root.path().as_os_str().to_owned(),
+    ]
+    .into_iter())
+    .await
+    .expect("prune-cache command without nested cache");
+    assert_eq!(code, 0);
+}
+
+#[tokio::test]
+async fn dispatches_a_successful_hot_swap_through_the_runtime_command() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("hot-swap fixture listener");
+    let listen = listener.local_addr().expect("hot-swap fixture address");
+    let options = AdapterOptions {
+        routes: vec![BackendRoute::new("model", BackendKind::CodexAppServer)],
+        model: "model".to_owned(),
+        listen,
+        subscription_max_processes: crate::anthropic::DEFAULT_MAX_PROCESSES,
+        subscription_timeout_minutes: crate::anthropic::DEFAULT_TIMEOUT_MINUTES,
+        subagent_hard_timeout_seconds: None,
+        model_catalog: crate::provider_config::ModelCatalog::default(),
+    };
+    let config = crate::launcher::ServiceConfig::new(options).expect("hot-swap service config");
+    let health = serde_json::json!({
+        "status": "ok",
+        "pid": null,
+        "protocol_version": crate::ADAPTER_PROTOCOL_VERSION,
+        "build_id": env!("CLAUDEX_BUILD_ID"),
+        "model": "model",
+        "codex_config_fingerprint": config.codex_config_fingerprint,
+        "service_config_fingerprint": config.service_config_fingerprint,
+        "backend_routes": ["model=codex-app-server"],
+        "worker_routes": [],
+        "search_worker_routes": [],
+        "subscription_max_processes": crate::anthropic::DEFAULT_MAX_PROCESSES,
+        "subscription_timeout_minutes": crate::anthropic::DEFAULT_TIMEOUT_MINUTES,
+        "subagent_hard_timeout_seconds": null,
+        "active_http_requests": 0,
+        "active_provider_turns": 0,
+        "active_subagent_models": {},
+    })
+    .to_string();
+    let server = tokio::spawn(serve_hot_swap_fixture(listener, health));
+
+    let url = run([
+        OsString::from("adapter"),
+        OsString::from("hot-swap"),
+        OsString::from("--model"),
+        OsString::from("model"),
+        OsString::from("--listen"),
+        OsString::from(listen.to_string()),
+    ]
+    .into_iter())
+    .await
+    .expect("successful hot-swap command");
+    assert_eq!(url, 0);
+    server.await.expect("hot-swap fixture server");
+}
+
+async fn serve_hot_swap_fixture(listener: tokio::net::TcpListener, health: String) {
+    for _ in 0..2 {
+        let (mut stream, _) = listener
+            .accept()
+            .await
+            .expect("hot-swap fixture connection");
+        let mut request = [0_u8; 4096];
+        let size = stream
+            .read(&mut request)
+            .await
+            .expect("hot-swap fixture request");
+        let body = if request[..size].starts_with(b"GET /health") {
+            health.as_str()
+        } else {
+            "{}"
+        };
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        stream
+            .write_all(response.as_bytes())
+            .await
+            .expect("hot-swap fixture response");
+    }
+}
+
+#[tokio::test]
+async fn dispatches_external_runtime_commands_before_starting_a_service() {
+    let inaccessible = "192.0.2.1:0";
+    for command in ["ensure", "hot-swap"] {
+        let error = run([
+            OsString::from("adapter"),
+            OsString::from(command),
+            OsString::from("--model"),
+            OsString::from("model"),
+            OsString::from("--listen"),
+            OsString::from(inaccessible),
+        ]
+        .into_iter())
+        .await
+        .expect_err("non-loopback command without auth must fail closed");
+        assert!(error.to_string().contains("ANTHROPIC_AUTH_TOKEN"));
+    }
+
+    let error = run([
+        OsString::from("adapter"),
+        OsString::from("launch"),
+        OsString::from("--model"),
+        OsString::from("model"),
+        OsString::from("--listen"),
+        OsString::from(inaccessible),
+        OsString::from("--"),
+        OsString::from("--version"),
+    ]
+    .into_iter())
+    .await
+    .expect_err("launch must fail closed before spawning Claude Code");
+    assert!(error.to_string().contains("ANTHROPIC_AUTH_TOKEN"));
+
+    let error = run([
+        OsString::from("adapter"),
+        OsString::from("serve"),
+        OsString::from("--model"),
+        OsString::from("model"),
+        OsString::from("--listen"),
+        OsString::from(inaccessible),
+    ]
+    .into_iter())
+    .await
+    .expect_err("serve must fail closed before binding a public listener");
+    assert!(error.to_string().contains("ANTHROPIC_AUTH_TOKEN"));
+}
+
+#[tokio::test]
+async fn dispatches_the_mcp_command_when_stdin_is_at_eof() {
+    assert_eq!(
+        run(["adapter".into(), "mcp-claudex-launch".into()])
+            .await
+            .expect("MCP stdio command at EOF"),
         0
     );
 }

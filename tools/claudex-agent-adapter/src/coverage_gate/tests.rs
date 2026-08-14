@@ -216,6 +216,43 @@ fn assigns_each_gate_process_an_isolated_llvm_cov_target() {
     }
 }
 
+#[cfg(unix)]
+#[test]
+fn omits_llvm_tool_overrides_when_rustc_sysroot_lookup_fails() {
+    const CHILD: &str = "CLAUDEX_COVERAGE_GATE_TOOL_LOOKUP_CHILD";
+    if env::var_os(CHILD).is_some() {
+        let fixture = tempfile::tempdir().expect("tool lookup fixture");
+        let target = fixture.path().join("target/llvm-cov-tools");
+        let command = coverage_command(fixture.path(), &target, &["--version".to_owned()]);
+        assert!(command.get_envs().all(|(name, _)| {
+            name != std::ffi::OsStr::new("LLVM_COV")
+                && name != std::ffi::OsStr::new("LLVM_PROFDATA")
+        }));
+        return;
+    }
+
+    let fixture = tempfile::tempdir().expect("fake rustc fixture");
+    let rustc = fixture.path().join("rustc");
+    fs::write(&rustc, "#!/bin/sh\nexit 1\n").expect("fake rustc");
+    fs::set_permissions(&rustc, fs::Permissions::from_mode(0o755)).expect("fake rustc executable");
+    let original_path = env::var_os("PATH").unwrap_or_default();
+    let path = env::join_paths(
+        std::iter::once(fixture.path().to_path_buf())
+            .chain(env::split_paths(&original_path).filter(|path| !path.as_os_str().is_empty())),
+    )
+    .expect("test PATH");
+    let status = Command::new(env::current_exe().expect("test executable"))
+        .args([
+            "--exact",
+            "coverage_gate::tests::omits_llvm_tool_overrides_when_rustc_sysroot_lookup_fails",
+        ])
+        .env(CHILD, "1")
+        .env("PATH", path)
+        .status()
+        .expect("run tool lookup child");
+    assert!(status.success());
+}
+
 #[test]
 fn retries_llvm_cov_json_export_on_segfault_or_corrupt_profraw() {
     use super::runner::should_retry_llvm_cov_export;
@@ -339,6 +376,28 @@ fn pruning_a_missing_target_root_is_a_no_op() {
 }
 
 #[test]
+fn pruning_ignores_non_directories_and_unrecognized_file_entries() {
+    let fixture = tempfile::tempdir().expect("coverage fixture");
+    let target_root = fixture.path().join("target");
+    fs::create_dir(&target_root).expect("target directory");
+    let coverage_named_file = target_root.join("llvm-cov-not-a-directory");
+    let unrecognized_file = target_root.join("coverage-notes.txt");
+    fs::write(&coverage_named_file, "not a target").expect("coverage-named file");
+    fs::write(&unrecognized_file, "not a target").expect("unrecognized file");
+
+    shrink_failed_coverage_target(&coverage_named_file).expect("non-directory shrink is a no-op");
+    prune_stale_coverage_artifacts(
+        fixture.path(),
+        &target_root.join("llvm-cov-current"),
+        std::time::SystemTime::now(),
+    )
+    .expect("file entries must not prevent pruning");
+
+    assert!(coverage_named_file.is_file());
+    assert!(unrecognized_file.is_file());
+}
+
+#[test]
 fn prunes_excess_young_failed_coverage_targets_and_shrinks_kept_ones() {
     let fixture = tempfile::tempdir().expect("coverage keep fixture");
     let target = fixture.path().join("target");
@@ -453,6 +512,47 @@ fn rejects_a_report_below_the_committed_baseline() {
     let error = audit_report(fixture.path(), &fixture.path().join("report.json"))
         .expect_err("baseline drop");
     assert!(error.to_string().contains("below baseline"), "{error:#}");
+}
+
+#[test]
+fn baseline_allow_file_permits_a_coverage_drop() {
+    let fixture = report_fixture(95.0, 100.0);
+    fs::write(
+        fixture.path().join("coverage-baseline.json"),
+        br#"{"lines":95.0,"functions":95.0,"regions":95.0,"branches":96.0}"#,
+    )
+    .expect("baseline");
+    fs::write(fixture.path().join("coverage-baseline.allow"), "approved\n").expect("allow file");
+
+    audit_report(fixture.path(), &fixture.path().join("report.json"))
+        .expect("allow file permits baseline drop");
+}
+
+#[test]
+fn baseline_allow_env_permits_a_coverage_drop() {
+    const CHILD: &str = "CLAUDEX_COVERAGE_BASELINE_ALLOW_CHILD";
+    if env::var_os(CHILD).is_some() {
+        let fixture = report_fixture(95.0, 100.0);
+        fs::write(
+            fixture.path().join("coverage-baseline.json"),
+            br#"{"lines":95.0,"functions":95.0,"regions":95.0,"branches":96.0}"#,
+        )
+        .expect("baseline");
+        audit_report(fixture.path(), &fixture.path().join("report.json"))
+            .expect("allow environment permits baseline drop");
+        return;
+    }
+
+    let status = Command::new(env::current_exe().expect("test executable"))
+        .args([
+            "--exact",
+            "coverage_gate::tests::baseline_allow_env_permits_a_coverage_drop",
+        ])
+        .env(CHILD, "1")
+        .env("CLAUDEX_COVERAGE_ALLOW_DROP", "1")
+        .status()
+        .expect("run isolated baseline-allow child");
+    assert!(status.success());
 }
 
 #[test]
@@ -669,6 +769,62 @@ fn command_status_rejects_corrupt_profile_merge_without_dropping_profiles() {
         .env("PATH", path)
         .status()
         .expect("run retry child");
+    assert!(status.success());
+}
+
+#[cfg(unix)]
+#[test]
+fn command_status_retries_json_export_after_sigsegv() {
+    const CHILD: &str = "CLAUDEX_COVERAGE_GATE_SIGSEGV_CHILD";
+    if env::var_os(CHILD).is_some() {
+        let root = tempfile::tempdir().expect("retry fixture");
+        let target = root.path().join("target/llvm-cov-retry");
+        fs::create_dir_all(&target).expect("retry target");
+        let status = command_status(
+            root.path(),
+            &target,
+            &[
+                "+nightly".to_owned(),
+                "llvm-cov".to_owned(),
+                "--json".to_owned(),
+            ],
+        )
+        .expect("retryable json export");
+        assert!(status.success(), "SIGSEGV export should succeed on retry");
+        assert!(
+            target.join("sigsegv-seen").is_file(),
+            "fake cargo should have executed the failing first attempt"
+        );
+        assert!(
+            target.join("retry-seen").is_file(),
+            "fake cargo should have executed exactly one retry"
+        );
+        return;
+    }
+
+    let fixture = tempfile::tempdir().expect("retry PATH fixture");
+    let cargo = fixture.path().join("cargo");
+    fs::write(
+        &cargo,
+        "#!/bin/sh\nif [ ! -f \"$CARGO_LLVM_COV_TARGET_DIR/sigsegv-seen\" ]; then\n  : > \"$CARGO_LLVM_COV_TARGET_DIR/sigsegv-seen\"\n  kill -SEGV $$\nfi\nif [ -f \"$CARGO_LLVM_COV_TARGET_DIR/retry-seen\" ]; then\n  exit 17\nfi\n: > \"$CARGO_LLVM_COV_TARGET_DIR/retry-seen\"\nexit 0\n",
+    )
+    .expect("fake cargo");
+    fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755)).expect("fake cargo executable");
+    let original_path = env::var_os("PATH").unwrap_or_default();
+    let path = env::join_paths(
+        std::iter::once(fixture.path().to_path_buf())
+            .chain(env::split_paths(&original_path).filter(|path| !path.as_os_str().is_empty())),
+    )
+    .expect("test PATH");
+    let status = Command::new(env::current_exe().expect("test executable"))
+        .args([
+            "--exact",
+            "coverage_gate::tests::command_status_retries_json_export_after_sigsegv",
+        ])
+        .env(CHILD, "1")
+        .env("PATH", path)
+        .status()
+        .expect("run SIGSEGV retry child");
     assert!(status.success());
 }
 

@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use crate::anthropic::MessagesRequest;
 
-use super::super::{core, scope_count, Inner, SchedulerConfig, SchedulerDecision};
+use super::super::{Inner, SchedulerConfig, SchedulerDecision, core, scope_count};
 use scope_count::{has_parallel_scope, independent_scope_count};
 
 fn diversity_family_cap(decision: &SchedulerDecision, config: &SchedulerConfig) -> usize {

@@ -258,6 +258,7 @@ mod tests {
     struct HomeGuard {
         _lock: std::sync::MutexGuard<'static, ()>,
         home: Option<std::ffi::OsString>,
+        tmpdir: Option<std::ffi::OsString>,
     }
 
     impl HomeGuard {
@@ -268,6 +269,7 @@ mod tests {
             Self {
                 _lock: lock,
                 home: std::env::var_os("HOME"),
+                tmpdir: std::env::var_os("TMPDIR"),
             }
         }
     }
@@ -277,6 +279,10 @@ mod tests {
             match &self.home {
                 Some(home) => unsafe { std::env::set_var("HOME", home) },
                 None => unsafe { std::env::remove_var("HOME") },
+            }
+            match &self.tmpdir {
+                Some(tmpdir) => unsafe { std::env::set_var("TMPDIR", tmpdir) },
+                None => unsafe { std::env::remove_var("TMPDIR") },
             }
         }
     }
@@ -324,5 +330,48 @@ mod tests {
         let cwd = fallback_process_cwd().expect("fallback past a file-shaped cache dir");
         // Falls through to the HOME directory itself, which is a real dir.
         assert_eq!(cwd, home.canonicalize().expect("canonical home"));
+    }
+
+    #[test]
+    fn resolves_and_pins_a_normal_process_cwd_without_changing_it() {
+        let expected = std::env::current_dir().expect("current cwd");
+        assert_eq!(
+            resolve_process_cwd("resolve cwd").expect("resolve cwd"),
+            expected
+        );
+        assert_eq!(pin_process_cwd().expect("pin cwd"), expected);
+    }
+
+    #[test]
+    fn reports_context_when_every_fallback_directory_is_unusable() {
+        let _guard = HomeGuard::push();
+        let root = tempfile::tempdir().expect("fallback fixture");
+        let fake_home = root.path().join("home-file");
+        let missing_tmp = root.path().join("missing-tmp");
+        std::fs::write(&fake_home, b"").expect("fake HOME file");
+        unsafe {
+            std::env::set_var("HOME", &fake_home);
+            std::env::set_var("TMPDIR", &missing_tmp);
+        }
+        let error = resolve_cwd(
+            Err(io::Error::from_raw_os_error(2)),
+            "resolve test working directory",
+        )
+        .expect_err("unusable fallback directories must fail");
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("resolve test working directory"),
+            "{message}"
+        );
+        assert!(
+            message.contains("no usable fallback working directory"),
+            "{message}"
+        );
+    }
+
+    #[test]
+    fn handles_lowercase_hex_and_invalid_low_hex_digits() {
+        assert_eq!(decode("/tmp/%6a"), Some(PathBuf::from("/tmp/j")));
+        assert!(decode("/tmp/%A?").is_none());
     }
 }

@@ -200,3 +200,65 @@ sleep 1
             .contains("acknowledge app-server initialization")
     );
 }
+
+#[tokio::test]
+async fn detached_request_cleans_up_when_the_writer_rejects_a_frame() {
+    let fixture = Fixture::new(&format!(
+        r#"{INITIALIZE}
+sleep 0.05
+exec 0<&-
+printf '%s\n' '{{"method":"item/reasoning/textDelta","params":{{"threadId":"stdin-closed","turnId":"stdin-closed-turn","itemId":"stdin-closed-item","contentIndex":0,"delta":"stdin closed"}}}}'
+while read line; do :; done
+"#
+    ));
+    let server = fixture.spawn().await;
+    let events = server.subscribe_thread("stdin-closed");
+    let marker = tokio::time::timeout(EVENT_WAIT, events.recv())
+        .await
+        .expect("stdin close marker")
+        .expect("stdin close event");
+    assert_eq!(marker["method"], "item/reasoning/textDelta");
+
+    let error = server
+        .request_detached("turn/start", json!({"threadId":"after-close"}))
+        .await
+        .expect_err("a detached frame after stdin closes must fail");
+    assert!(
+        error.to_string().contains("failed to write"),
+        "unexpected error: {error}"
+    );
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn awaited_request_cleans_up_when_the_writer_rejects_a_frame() {
+    let fixture = Fixture::new(&format!(
+        r#"{INITIALIZE}
+read line
+exec 0<&-
+printf '%s\n' '{{"method":"item/reasoning/textDelta","params":{{"threadId":"stdin-closed-awaited","turnId":"stdin-closed-awaited-turn","itemId":"stdin-closed-awaited-item","contentIndex":0,"delta":"stdin closed"}}}}'
+while read line; do :; done
+"#
+    ));
+    let server = fixture.spawn().await;
+    let events = server.subscribe_thread("stdin-closed-awaited");
+    server
+        .request_detached("turn/start", json!({"threadId":"close-trigger"}))
+        .await
+        .expect("flush close-trigger frame");
+    let marker = tokio::time::timeout(EVENT_WAIT, events.recv())
+        .await
+        .expect("stdin close marker")
+        .expect("stdin close event");
+    assert_eq!(marker["method"], "item/reasoning/textDelta");
+
+    let error = server
+        .request("after-close", json!({}))
+        .await
+        .expect_err("an awaited frame after stdin closes must fail");
+    assert!(
+        error.to_string().contains("failed to write"),
+        "unexpected error: {error}"
+    );
+    server.shutdown().await;
+}

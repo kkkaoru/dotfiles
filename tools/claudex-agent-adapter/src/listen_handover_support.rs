@@ -77,3 +77,8 @@ pub(crate) fn rebind_state_path(cache: &Path, canonical: &SocketAddr) -> PathBuf
         .collect();
     cache.join(format!("rebind.{token}.json"))
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[path = "listen_handover_support_tests.rs"]
+mod tests;

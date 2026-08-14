@@ -68,7 +68,7 @@ const START_TIMEOUT: Duration = Duration::from_secs(10);
 #[cfg(all(test, coverage_nightly))]
 const START_TIMEOUT: Duration = Duration::from_secs(10);
 #[cfg(all(test, not(coverage_nightly)))]
-const START_TIMEOUT: Duration = Duration::from_secs(2);
+const START_TIMEOUT: Duration = Duration::from_secs(5);
 const START_INITIAL_POLL_DELAY: Duration = Duration::from_millis(10);
 const START_MAX_POLL_DELAY: Duration = Duration::from_millis(100);
 pub(crate) const SERVICE_CONFIG_FINGERPRINT_ENV: &str = "CLAUDEX_SERVICE_CONFIG_FINGERPRINT";

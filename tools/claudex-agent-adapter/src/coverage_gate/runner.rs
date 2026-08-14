@@ -80,10 +80,10 @@ pub(super) fn per_object_report(target: &Path) -> Result<Value> {
             .arg(&path)
             .output()
             .with_context(|| format!("export {}", path.display()))?;
-        if output.status.success() {
-            if let Ok(document) = serde_json::from_slice::<Value>(&output.stdout) {
-                reports.push(document);
-            }
+        if output.status.success()
+            && let Ok(document) = serde_json::from_slice::<Value>(&output.stdout)
+        {
+            reports.push(document);
         }
     }
     if reports.is_empty() {

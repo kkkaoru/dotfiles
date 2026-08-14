@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use crate::anthropic::MessagesRequest;
 
-use super::{core, SchedulerConfig, SchedulerDecision};
+use super::{SchedulerConfig, SchedulerDecision, core};
 
 pub(crate) fn reassessment_due(
     inner: &super::Inner,

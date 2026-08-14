@@ -314,8 +314,8 @@ async fn concurrent_ensure_commands_start_exactly_one_daemon() {
 #[tokio::test]
 async fn ensure_running_starts_reuses_and_replaces_the_daemon() {
     let home = launcher_home();
-    let port = unused_port();
-    let _process_cleanup = LauncherProcessCleanup::new(&home, port);
+    let mut port = unused_port();
+    let mut process_cleanup = LauncherProcessCleanup::new(&home, port);
     let first = ensure_command(&home, port, "20")
         .output()
         .expect("run ensure command");
@@ -328,7 +328,17 @@ async fn ensure_running_starts_reuses_and_replaces_the_daemon() {
         .expect("base URL output")
         .trim()
         .to_owned();
-    assert_eq!(base_url, format!("http://127.0.0.1:{port}"));
+    let returned_url = reqwest::Url::parse(&base_url).expect("parse base URL output");
+    assert_eq!(returned_url.scheme(), "http");
+    assert_eq!(returned_url.host_str(), Some("127.0.0.1"));
+    let returned_port = returned_url.port().expect("base URL port");
+    // Another launcher may occupy the requested port between unused_port()
+    // and ensure startup. In that valid fallback case, assert against the
+    // listener URL returned by ensure and clean up its actual port as well.
+    if returned_port != port {
+        process_cleanup.ports.push(returned_port);
+        port = returned_port;
+    }
 
     let client = Client::new();
     let initial = health(&client, &base_url).await;

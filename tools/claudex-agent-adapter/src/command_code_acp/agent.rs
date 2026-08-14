@@ -131,3 +131,7 @@ mod serve;
 pub use serve::serve;
 #[cfg(test)]
 pub(super) use serve::serve_io;
+
+#[cfg(test)]
+#[path = "agent/local_tests.rs"]
+mod local_tests;

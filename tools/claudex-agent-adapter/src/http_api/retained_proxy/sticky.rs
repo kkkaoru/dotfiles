@@ -123,3 +123,8 @@ impl RetainedProxy {
         }
     }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[path = "sticky_tests.rs"]
+mod tests;

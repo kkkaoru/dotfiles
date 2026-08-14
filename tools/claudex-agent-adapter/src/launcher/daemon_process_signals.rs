@@ -1,10 +1,9 @@
 use std::process::Command;
 
 #[cfg(unix)]
-use std::{collections::BTreeSet, thread, time::Instant};
-
-#[cfg(unix)]
 use super::{STALE_TERMINATE_POLL, STALE_TERMINATE_TIMEOUT};
+#[cfg(unix)]
+use std::{collections::BTreeSet, thread, time::Instant};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct StartedDaemonIdentity {
@@ -17,11 +16,11 @@ pub(super) fn capture_started_daemon_identity(pid: u32) -> Option<StartedDaemonI
         return None;
     }
     #[cfg(unix)]
-    owned_daemon_session(pid)?;
-    Some(StartedDaemonIdentity {
-        pid,
-        start_token: process_start_token(pid)?,
-    })
+    return owned_daemon_session(pid)
+        .and_then(|_| process_start_token(pid))
+        .map(|start_token| StartedDaemonIdentity { pid, start_token });
+    #[cfg(not(unix))]
+    process_start_token(pid).map(|start_token| StartedDaemonIdentity { pid, start_token })
 }
 
 pub(super) fn terminate_started_daemon_identity(identity: &StartedDaemonIdentity) {
@@ -56,7 +55,6 @@ fn identity_action(identity: &StartedDaemonIdentity, current: Option<&str>) -> I
         None => IdentityAction::TerminateOrphanedSession,
     }
 }
-
 #[derive(Debug, Eq, PartialEq)]
 enum IdentityAction {
     TerminateLeader,
@@ -71,21 +69,25 @@ mod identity_tests {
     #[test]
     fn start_token_fails_closed_when_a_pid_is_reused() {
         let identity = StartedDaemonIdentity {
-            pid: 42,
-            start_token: "original".to_owned(),
+            pid: std::process::id(),
+            start_token: "never-current-start-token".to_owned(),
         };
         assert_eq!(
             identity_action(&identity, Some("replacement")),
             IdentityAction::RefuseReusedPid
         );
         assert_eq!(
-            identity_action(&identity, Some("original")),
+            identity_action(&identity, Some("never-current-start-token")),
             IdentityAction::TerminateLeader
         );
         assert_eq!(
             identity_action(&identity, None),
             IdentityAction::TerminateOrphanedSession
         );
+        #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+        terminate_started_daemon_identity(&identity);
+        #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+        assert!(process_is_alive(identity.pid));
     }
 
     #[test]

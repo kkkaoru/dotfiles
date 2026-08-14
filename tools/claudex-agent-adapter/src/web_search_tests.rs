@@ -251,8 +251,22 @@ async fn collect_worker_response_covers_closed_channel_and_non_search_items() {
 
 #[test]
 fn t4_failed_search_errors_are_human_and_hide_transport_codes() {
+    assert_eq!(
+        human_web_search_error(&anyhow::anyhow!("query must not be empty")),
+        "WebSearch query must not be empty"
+    );
+    assert_eq!(
+        human_web_search_error(&anyhow::anyhow!("no WebSearch worker is configured")),
+        "No WebSearch worker is configured"
+    );
     let timeout = human_web_search_error(&anyhow::anyhow!("worker model timed out"));
     assert_eq!(timeout, "WebSearch timed out");
+    for detail in ["worker timeout", "worker ETIMEDOUT"] {
+        assert_eq!(
+            human_web_search_error(&anyhow::anyhow!(detail)),
+            "WebSearch timed out"
+        );
+    }
     let transport = human_web_search_error(&anyhow::anyhow!(
         "proxy PROXY_TRANSPORT failed with ECONNABORTED ETIMEDOUT ECONNRESET EAI_AGAIN socket hang up"
     ));
@@ -274,6 +288,33 @@ fn t4_failed_search_errors_are_human_and_hide_transport_codes() {
     assert!(!unknown.contains("ECONNABORTED"), "{unknown}");
     assert!(!unknown.contains("ECONNRESET"), "{unknown}");
     assert!(!unknown.contains("EAI_AGAIN"), "{unknown}");
+}
+
+#[tokio::test]
+async fn parallel_search_covers_empty_failed_and_panicking_workers() {
+    let none = Vec::<std::future::Ready<Result<SearchResponse>>>::new();
+    let missing = first_nonempty_response("q", none)
+        .await
+        .expect_err("no workers");
+    assert!(missing.to_string().contains("no WebSearch worker"));
+
+    type Job = std::pin::Pin<Box<dyn std::future::Future<Output = Result<SearchResponse>> + Send>>;
+    let jobs: Vec<Job> = vec![
+        Box::pin(std::future::ready(Ok(SearchResponse {
+            query: "q".to_owned(),
+            results: Vec::new(),
+            search_count: 0,
+        }))),
+        Box::pin(std::future::ready(Err(anyhow::anyhow!("worker failed")))),
+        Box::pin(async { panic!("worker panicked") }),
+    ];
+    let failed = first_nonempty_response("q", jobs)
+        .await
+        .expect_err("all workers fail");
+    let message = failed.to_string();
+    assert!(message.contains("returned no results"), "{message}");
+    assert!(message.contains("worker failed"), "{message}");
+    assert!(message.contains("join failed"), "{message}");
 }
 
 #[tokio::test]
@@ -299,7 +340,8 @@ async fn t13_parallel_workers_let_the_first_nonempty_win() {
     };
     let started = std::time::Instant::now();
     let jobs = [
-        Box::pin(slow_empty) as std::pin::Pin<Box<dyn std::future::Future<Output = Result<SearchResponse>> + Send>>,
+        Box::pin(slow_empty)
+            as std::pin::Pin<Box<dyn std::future::Future<Output = Result<SearchResponse>> + Send>>,
         Box::pin(fast),
     ];
     let won = first_nonempty_response("q", jobs)

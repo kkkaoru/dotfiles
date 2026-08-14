@@ -1,5 +1,8 @@
 use super::*;
 
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::Arc;
+
 #[test]
 fn first_failures_stay_closed_until_the_burst_limit() {
     let circuit = HandoverCircuit::default();
@@ -25,6 +28,22 @@ fn sibling_sessions_do_not_share_a_circuit() {
     assert!(circuit.note_failure("session-a"));
     assert!(!circuit.is_open("session-b"));
     assert!(!circuit.note_failure("session-b"));
+}
+
+#[test]
+fn poisoned_session_state_fails_closed() {
+    let circuit = Arc::new(HandoverCircuit::default());
+    let poisoned = Arc::clone(&circuit);
+    let panic = catch_unwind(AssertUnwindSafe(|| {
+        let _guard = poisoned.sessions.lock().expect("unpoisoned sessions");
+        panic!("poison handover circuit state");
+    }));
+    assert!(panic.is_err());
+
+    assert!(
+        circuit.note_failure("session-poisoned"),
+        "a poisoned circuit must reject the failure conservatively"
+    );
 }
 
 #[tokio::test]

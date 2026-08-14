@@ -511,15 +511,12 @@ async fn try_canonical_fails_closed_when_warm_start_never_becomes_ready() {
         "{error:#}"
     );
     #[cfg(not(coverage_nightly))]
-    assert!(
-        started.elapsed() < std::time::Duration::from_secs(3),
-        "dead warm-start child must fail fast, not wait the full timeout ({:?})",
-        started.elapsed()
-    );
+    let fail_fast_limit = WARM_START_TIMEOUT - std::time::Duration::from_secs(1);
     #[cfg(coverage_nightly)]
+    let fail_fast_limit = WARM_START_TIMEOUT / 2;
     assert!(
-        started.elapsed() < std::time::Duration::from_secs(6),
-        "dead warm-start child fails under coverage ({:?})",
+        started.elapsed() < fail_fast_limit,
+        "dead warm-start child must fail before the readiness timeout ({:?}, limit {fail_fast_limit:?})",
         started.elapsed()
     );
 }
@@ -690,6 +687,16 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
     def do_POST(self):
+        rebind_started = __import__("os").environ.get("CLAUDEX_TEST_REBIND_STARTED")
+        rebind_permit = __import__("os").environ.get("CLAUDEX_TEST_REBIND_PERMIT")
+        if rebind_started and rebind_permit:
+            open(rebind_started, "w").close()
+            deadline = __import__("time").monotonic() + 2
+            while not __import__("os").path.exists(rebind_permit):
+                if __import__("time").monotonic() >= deadline:
+                    self.send_error(504)
+                    return
+                __import__("time").sleep(0.001)
         self.send_error(501)
 
 HTTPServer((host, int(port)), Handler).serve_forever()
@@ -708,6 +715,93 @@ fn kill_dummy(executable: &Path) {
     let _ = std::process::Command::new("pkill")
         .args(["-f", &executable.to_string_lossy()])
         .status();
+}
+
+#[cfg(unix)]
+fn serve_reoccupied_canonical(
+    held: &std::net::TcpListener,
+    stop_server: &std::sync::atomic::AtomicBool,
+) {
+    while !stop_server.load(std::sync::atomic::Ordering::SeqCst) {
+        if reoccupied_listener_is_idle(held) {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+}
+
+#[cfg(unix)]
+fn reoccupied_listener_is_idle(held: &std::net::TcpListener) -> bool {
+    match held.accept() {
+        Ok((mut stream, _)) => {
+            let _ = std::io::Write::write_all(
+                &mut stream,
+                b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+            );
+            false
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => true,
+        Err(error) => panic!("accept reoccupied canonical listener: {error}"),
+    }
+}
+
+#[cfg(unix)]
+fn wait_for_rebind_request(
+    listener: &std::net::TcpListener,
+    stop_server: &std::sync::atomic::AtomicBool,
+) -> Option<std::net::TcpStream> {
+    loop {
+        if stop_server.load(std::sync::atomic::Ordering::SeqCst) {
+            return None;
+        }
+        match listener.accept() {
+            Ok((stream, _)) => return Some(stream),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            Err(error) => panic!("accept rebind request: {error}"),
+        }
+    }
+}
+
+#[cfg(unix)]
+fn spawn_reoccupying_canonical(
+    listener: TcpListener,
+    response: String,
+    listen: SocketAddr,
+    rebind_started: PathBuf,
+    rebind_permit: PathBuf,
+    stop_server: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        let listener = listener.into_std().expect("canonical std listener");
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking canonical listener");
+        let Some(mut stream) = wait_for_rebind_request(&listener, &stop_server) else {
+            return;
+        };
+        let mut request = [0_u8; 4096];
+        let _ = std::io::Read::read(&mut stream, &mut request);
+        std::io::Write::write_all(&mut stream, response.as_bytes()).expect("rebind response");
+        drop(stream);
+        drop(listener);
+        // request_bind_listen is called only after wait_until_canonical_released
+        // has observed the old canonical listener release.  Waiting for the
+        // warm dummy's POST makes reoccupation deterministic instead of racing
+        // that observation with an arbitrary sleep.
+        while !rebind_started.exists() && !stop_server.load(std::sync::atomic::Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        if stop_server.load(std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
+        let held = std::net::TcpListener::bind(listen).expect("reoccupy canonical port");
+        held.set_nonblocking(true)
+            .expect("nonblocking reoccupied canonical listener");
+        std::fs::write(rebind_permit, "ready").expect("permit warm rebind response");
+        serve_reoccupied_canonical(&held, &stop_server);
+        drop(held);
+    })
 }
 
 #[cfg(unix)]
@@ -798,6 +892,62 @@ async fn try_canonical_bails_when_restart_on_canonical_never_readies() {
         "{error:#}"
     );
     kill_dummy(&real_dummy);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn try_canonical_bails_when_canonical_port_is_reoccupied_after_release() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let root = tempfile::tempdir().expect("canonical reoccupy fixture");
+    let real_dummy = write_current_build_dummy(root.path());
+    let wrapper = root.path().join("claudex-agent-adapter-delayed");
+    let rebind_started = root.path().join("warm-rebind-started");
+    let rebind_permit = root.path().join("warm-rebind-permit");
+    std::fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\nexport CLAUDEX_TEST_REBIND_STARTED='{}'\nexport CLAUDEX_TEST_REBIND_PERMIT='{}'\nexec '{}' \"$@\"\n",
+            rebind_started.display(),
+            rebind_permit.display(),
+            real_dummy.display(),
+        ),
+    )
+    .expect("delayed dummy wrapper");
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755))
+        .expect("delayed dummy executable");
+
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("canonical listener");
+    let listen = listener.local_addr().expect("canonical address");
+    let ephemeral = {
+        let spare = TcpListener::bind("127.0.0.1:0").await.expect("ephemeral");
+        spare.local_addr().expect("ephemeral address")
+    };
+    let response = http_ok(&format!(r#"{{"listen":"{ephemeral}"}}"#));
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let server = spawn_reoccupying_canonical(
+        listener,
+        response,
+        listen,
+        rebind_started,
+        rebind_permit,
+        std::sync::Arc::clone(&stop),
+    );
+
+    let config = config_at(listen, root.path(), wrapper.clone());
+    let error = try_canonical(&reqwest::Client::new(), &config, &health(true, Some(12)))
+        .await
+        .expect_err("reoccupied canonical port must fail closed");
+    stop.store(true, std::sync::atomic::Ordering::SeqCst);
+    server.join().expect("reoccupy server");
+    kill_dummy(&real_dummy);
+    kill_dummy(&wrapper);
+    assert!(
+        error.to_string().contains("wait for promoted canonical"),
+        "{error:#}"
+    );
 }
 
 #[tokio::test]

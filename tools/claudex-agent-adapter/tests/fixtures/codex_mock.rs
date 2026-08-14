@@ -164,6 +164,10 @@ impl<W: Write> Fixture<W> {
                 "method":"turn/completed",
                 "params":{"threadId":self.thread_id(), "turnId":"turn-test"}
             }));
+        } else if input.contains("WEBSEARCH_SILENT_35") {
+            // Keep the provider process alive without emitting a search event.
+            // The CCR adapter must still flush its keepalive before this stall.
+            thread::sleep(Duration::from_secs(35));
         } else if input.contains("WEBSEARCH_QUERY") {
             self.send_web_search();
         } else if input.contains("USE_NAMED_TEAM_MAILBOX") {

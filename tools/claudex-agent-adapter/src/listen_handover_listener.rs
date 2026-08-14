@@ -79,3 +79,8 @@ impl axum::serve::Listener for HandoverListener {
         Ok(*self.advertised.read().expect("listen handover lock"))
     }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[path = "listen_handover_listener_tests.rs"]
+mod tests;

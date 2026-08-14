@@ -20,7 +20,7 @@ pub(crate) fn available_bytes(path: &Path) -> Result<u64> {
     }
     // SAFETY: `statvfs` succeeded and initialized `vfs`.
     let vfs = unsafe { vfs.assume_init() };
-    Ok((vfs.f_frsize as u64).saturating_mul(vfs.f_bavail as u64))
+    Ok(vfs.f_frsize.saturating_mul(u64::from(vfs.f_bavail)))
 }
 
 pub(crate) fn require_disk_free(path: &Path, minimum: u64) -> Result<()> {

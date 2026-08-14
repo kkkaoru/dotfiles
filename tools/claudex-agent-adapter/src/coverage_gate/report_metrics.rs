@@ -111,14 +111,7 @@ pub(in crate::coverage_gate) fn combine_object_reports(reports: &[Value]) -> Val
             continue;
         };
         for item in items {
-            let Some(name) = item.get("filename").and_then(Value::as_str) else {
-                continue;
-            };
-            if let Some(existing) = files.get_mut(name) {
-                merge_file(existing, item);
-            } else {
-                files.insert(name.to_owned(), item.clone());
-            }
+            merge_report_file(&mut files, item);
         }
     }
     let files = files.into_values().collect::<Vec<_>>();
@@ -146,19 +139,20 @@ pub(in crate::coverage_gate) fn combine_object_reports(reports: &[Value]) -> Val
     serde_json::json!({"data": [{"files": files, "totals": totals}]})
 }
 
+fn merge_report_file(files: &mut BTreeMap<String, Value>, item: &Value) {
+    let Some(name) = item.get("filename").and_then(Value::as_str) else {
+        return;
+    };
+    let Some(existing) = files.get_mut(name) else {
+        files.insert(name.to_owned(), item.clone());
+        return;
+    };
+    merge_file(existing, item);
+}
+
 fn merge_file(existing: &mut Value, incoming: &Value) {
     for metric in ["lines", "functions", "regions"] {
-        let left = existing.pointer(&format!("/summary/{metric}")).cloned();
-        let right = incoming.pointer(&format!("/summary/{metric}")).cloned();
-        if let (Some(mut left), Some(right)) = (left, right) {
-            if right["count"].as_u64().unwrap_or(0) > left["count"].as_u64().unwrap_or(0) {
-                left["count"] = right["count"].clone();
-            }
-            if right["covered"].as_u64().unwrap_or(0) > left["covered"].as_u64().unwrap_or(0) {
-                left["covered"] = right["covered"].clone();
-            }
-            existing["summary"][metric] = left;
-        }
+        merge_summary_metric(existing, incoming, metric);
     }
     let Some(left) = existing.get_mut("branches").and_then(Value::as_array_mut) else {
         return;
@@ -190,6 +184,22 @@ fn merge_file(existing: &mut Value, incoming: &Value) {
             )
         })
         .collect();
+}
+
+fn merge_summary_metric(existing: &mut Value, incoming: &Value, metric: &str) {
+    let Some(mut left) = existing.pointer(&format!("/summary/{metric}")).cloned() else {
+        return;
+    };
+    let Some(right) = incoming.pointer(&format!("/summary/{metric}")).cloned() else {
+        return;
+    };
+    if right["count"].as_u64().unwrap_or(0) > left["count"].as_u64().unwrap_or(0) {
+        left["count"] = right["count"].clone();
+    }
+    if right["covered"].as_u64().unwrap_or(0) > left["covered"].as_u64().unwrap_or(0) {
+        left["covered"] = right["covered"].clone();
+    }
+    existing["summary"][metric] = left;
 }
 
 fn branch_key(values: &[Value]) -> Option<[u64; 4]> {

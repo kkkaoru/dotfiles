@@ -42,12 +42,7 @@ pub(crate) fn rotate_canonical_log(log_path: &Path) -> Result<Option<File>> {
         return Ok(None);
     }
     let archived = super::archive_previous_log(log_path)?;
-    match OpenOptions::new()
-        .create(true)
-        .write(true)
-        .append(true)
-        .open(log_path)
-    {
+    match OpenOptions::new().create(true).append(true).open(log_path) {
         Ok(file) => Ok(Some(file)),
         Err(error) => {
             restore_canonical_log(log_path, archived);
@@ -126,4 +121,64 @@ fn same_inode(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
 #[cfg(not(unix))]
 fn redirect_stdio(_file: &File) -> Result<()> {
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rotation_helpers_cover_non_rotating_paths_and_restoration() {
+        let root = tempfile::tempdir().expect("rotation helper fixture");
+        let missing = root.path().join("missing.log");
+        assert!(!needs_rotation(&missing).expect("missing log does not rotate"));
+        assert!(!stdio_owns_path(&missing));
+
+        let directory = root.path().join("directory");
+        fs::create_dir(&directory).expect("create directory");
+        assert!(!needs_rotation(&directory).expect("directories do not rotate"));
+
+        let live = root.path().join("adapter.log");
+        let archived = root.path().join("adapter.previous.log");
+        fs::write(&archived, b"previous log").expect("write archive");
+        restore_canonical_log(&live, Some(archived));
+        assert_eq!(fs::read(&live).expect("restored log"), b"previous log");
+        restore_canonical_log(&live, None);
+    }
+
+    #[test]
+    fn canonical_rotation_opens_a_replacement_for_an_oversized_file() {
+        let root = tempfile::tempdir().expect("canonical rotation fixture");
+        let live = root.path().join("adapter.127_0_0_1_8318.log");
+        fs::write(&live, vec![0_u8; (ARCHIVE_MAX_BYTES + 1) as usize])
+            .expect("write oversized log");
+
+        let replacement = rotate_canonical_log(&live)
+            .expect("rotate oversized log")
+            .expect("oversized log is replaced");
+        assert_eq!(
+            replacement.metadata().expect("replacement metadata").len(),
+            0
+        );
+        assert!(live.is_file());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn inode_helpers_identify_same_and_distinct_files() {
+        let root = tempfile::tempdir().expect("inode helper fixture");
+        let first = root.path().join("first.log");
+        let second = root.path().join("second.log");
+        fs::write(&first, b"first").expect("first file");
+        fs::write(&second, b"second").expect("second file");
+        let first_meta = fs::metadata(&first).expect("first metadata");
+        assert!(same_inode(
+            &first_meta,
+            &fs::metadata(&first).expect("same metadata")
+        ));
+        assert!(!same_inode(
+            &first_meta,
+            &fs::metadata(&second).expect("second metadata")
+        ));
+    }
 }

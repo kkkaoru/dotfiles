@@ -192,6 +192,96 @@ async fn rejects_an_invalid_disabled_subagent_model_header() {
 }
 
 #[tokio::test]
+async fn rejects_malformed_message_payloads_and_identities() {
+    let adapter = Adapter::start().await;
+    let client = Client::new();
+    let invalid_body = json!({"model": 42});
+
+    let messages = client
+        .post(messages_url(&adapter))
+        .json(&invalid_body)
+        .send()
+        .await
+        .expect("send malformed messages payload");
+    assert_eq!(messages.status(), reqwest::StatusCode::BAD_REQUEST);
+
+    let count_tokens = client
+        .post(format!("{}/v1/messages/count_tokens", adapter.base_url))
+        .json(&invalid_body)
+        .send()
+        .await
+        .expect("send malformed count-tokens payload");
+    assert_eq!(count_tokens.status(), reqwest::StatusCode::BAD_REQUEST);
+
+    let valid = base_request();
+    let messages_identity = client
+        .post(messages_url(&adapter))
+        .header("x-claude-code-session-id", "   ")
+        .json(&valid)
+        .send()
+        .await
+        .expect("send invalid messages identity");
+    assert_eq!(messages_identity.status(), reqwest::StatusCode::BAD_REQUEST);
+
+    let count_identity = client
+        .post(format!("{}/v1/messages/count_tokens", adapter.base_url))
+        .header("x-claude-code-session-id", "   ")
+        .json(&valid)
+        .send()
+        .await
+        .expect("send invalid count-tokens identity");
+    assert_eq!(count_identity.status(), reqwest::StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn reports_denylist_errors_and_attaches_load_warnings_to_metadata() {
+    let adapter = Adapter::start().await;
+    let client = Client::new();
+
+    // Keep the malformed-policy probe request-local. Mutating the process-wide
+    // environment here races every other HTTP test because the bridge resolves
+    // the active policy at each request boundary.
+    let unavailable = client
+        .post(messages_url(&adapter))
+        .header("x-claudex-disabled-subagent-models", "model with spaces")
+        .json(&base_request())
+        .send()
+        .await
+        .expect("send invalid active policy");
+    assert_eq!(unavailable.status(), reqwest::StatusCode::BAD_REQUEST);
+
+    let root = tempfile::tempdir().expect("denylist warning fixture");
+    let config = root.path().join("disabled-subagent-models.json");
+    std::fs::write(
+        &config,
+        r#"{"version":1,"disabledModels":["cached-model"]}"#,
+    )
+    .expect("write denylist fixture");
+    let previous_config = std::env::var_os("CLAUDEX_DISABLED_SUBAGENT_MODELS_CONFIG");
+    unsafe {
+        std::env::set_var("CLAUDEX_DISABLED_SUBAGENT_MODELS_CONFIG", &config);
+    }
+
+    post_json(&client, &messages_url(&adapter), base_request()).await;
+    std::fs::write(&config, "not-json").expect("corrupt denylist fixture");
+
+    let mut object_metadata = base_request();
+    object_metadata["metadata"] = json!({"origin":"warning-object"});
+    post_json(&client, &messages_url(&adapter), object_metadata).await;
+
+    let mut scalar_metadata = base_request();
+    scalar_metadata["metadata"] = json!("warning-scalar");
+    post_json(&client, &messages_url(&adapter), scalar_metadata).await;
+
+    match previous_config {
+        Some(value) => unsafe {
+            std::env::set_var("CLAUDEX_DISABLED_SUBAGENT_MODELS_CONFIG", value)
+        },
+        None => unsafe { std::env::remove_var("CLAUDEX_DISABLED_SUBAGENT_MODELS_CONFIG") },
+    }
+}
+
+#[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn serves_models_counts_plain_messages_and_continuations() {
     let adapter = Adapter::start().await;

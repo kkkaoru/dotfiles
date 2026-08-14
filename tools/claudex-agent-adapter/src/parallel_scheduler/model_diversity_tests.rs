@@ -77,10 +77,12 @@ fn does_not_inflate_a_lone_reconstructed_worker_to_the_active_floor() {
     assert_eq!(decision.needs_more_workers, 0);
     assert!(!decision.active_floor_breached);
     assert!(!decision.needs_model_diversity);
-    assert!(decision
-        .actions
-        .iter()
-        .all(|action| !action.contains("Only one active lane remains")));
+    assert!(
+        decision
+            .actions
+            .iter()
+            .all(|action| !action.contains("Only one active lane remains"))
+    );
 }
 
 #[test]
@@ -113,9 +115,11 @@ fn keeps_the_ten_minute_default_and_reassesses_after_a_completion() {
 
     let completed = scheduler.decision_for_request(&after_completion);
     assert_eq!(completed.completed_recently, 1);
-    assert!(completed
-        .guidance(&scheduler.config())
-        .contains("Re-evaluate"));
+    assert!(
+        completed
+            .guidance(&scheduler.config())
+            .contains("Re-evaluate")
+    );
 }
 
 #[test]
@@ -126,9 +130,11 @@ fn reuses_an_active_compatible_worker_instead_of_churning_sessions() {
         agent("grok", "grok-4.6"),
     ]));
 
-    assert!(decision
-        .guidance(&scheduler.config())
-        .contains("Prefer reusing compatible completed workers via Agent/Task resume=<agentId>"));
+    assert!(
+        decision.guidance(&scheduler.config()).contains(
+            "Prefer reusing compatible completed workers via Agent/Task resume=<agentId>"
+        )
+    );
 }
 
 #[test]
@@ -174,12 +180,16 @@ fn diversity_does_not_demand_more_families_than_the_target() {
     assert_eq!(decision.target_workers, 2);
     assert_eq!(decision.active_model_families, 1);
     assert!(decision.needs_model_diversity);
-    assert!(decision
-        .actions
-        .iter()
-        .any(|action| action.contains("at least 2 families")));
-    assert!(decision
-        .actions
-        .iter()
-        .all(|action| !action.contains("at least 3 families")));
+    assert!(
+        decision
+            .actions
+            .iter()
+            .any(|action| action.contains("at least 2 families"))
+    );
+    assert!(
+        decision
+            .actions
+            .iter()
+            .all(|action| !action.contains("at least 3 families"))
+    );
 }

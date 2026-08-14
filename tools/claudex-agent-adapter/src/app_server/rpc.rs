@@ -15,6 +15,11 @@ use super::{
 #[path = "rpc_dispatch.rs"]
 mod dispatch;
 
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[path = "rpc_tests.rs"]
+mod tests;
+
 impl AppServer {
     pub fn subscribe_thread(&self, thread_id: &str) -> ThreadEvents {
         self.event_dispatcher.subscribe(thread_id)

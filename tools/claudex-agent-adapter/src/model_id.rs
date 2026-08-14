@@ -34,12 +34,14 @@ fn strip_xml_markup(text: &str) -> String {
         };
         let tag = after[..end].trim();
         remaining = &after[end + 1..];
-        if let Some(name) = opening_tag_name(tag) {
-            let close = format!("</{name}>");
-            if let Some(close_at) = remaining.find(&close) {
-                remaining = &remaining[close_at + close.len()..];
-            }
-        }
+        let Some(name) = opening_tag_name(tag) else {
+            continue;
+        };
+        let close = format!("</{name}>");
+        let Some(close_at) = remaining.find(&close) else {
+            continue;
+        };
+        remaining = &remaining[close_at + close.len()..];
     }
     cleaned.push_str(remaining);
     cleaned

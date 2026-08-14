@@ -112,15 +112,12 @@ pub(super) fn spawn_waiter(config: &ServiceConfig) -> Result<StartedWaiter> {
 
 #[cfg(unix)]
 pub(super) fn configure_detached_session(command: &mut Command) {
+    use std::io::Error;
     use std::os::unix::process::CommandExt;
 
     unsafe {
-        command.pre_exec(|| {
-            if libc::setsid() == -1 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
+        #[rustfmt::skip]
+        command.pre_exec(|| (libc::setsid() != -1).then_some(()).ok_or_else(Error::last_os_error));
     }
 }
 

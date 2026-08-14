@@ -137,7 +137,10 @@ name = "Must not replace the base config"
         assert!(error.to_string().contains("failed to start"));
     }
 
-    #[tokio::test]
+    // This fixture drives a child process and the app-server reader/writer
+    // tasks concurrently. Keep them schedulable independently when the full
+    // unit suite is running many current-thread test runtimes at once.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn reports_initialize_failure_and_request_timeout() {
         let root = tempfile::tempdir().expect("create app-server fixture");
         let source = root.path().join("source");
@@ -174,6 +177,83 @@ name = "Must not replace the base config"
             .await
             .expect_err("request must time out");
         assert!(error.to_string().contains("timed out"));
+        server.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn times_out_while_waiting_for_a_writer_reservation() {
+        let root = tempfile::tempdir().expect("writer reservation fixture");
+        let source = source_home(root.path());
+        let stalled = script(
+            root.path(),
+            "reservation-stalled-program",
+            "read line\nprintf '%s\\n' '{\"id\":1,\"result\":{}}'\nread line\nsleep 30\n",
+        );
+        let server = AppServer::spawn_with_program(
+            "model",
+            &stalled,
+            &source,
+            &root.path().join("reservation-stalled-home"),
+        )
+        .await
+        .expect("start reservation-stalled server");
+
+        let blocked = spawn_blocked_detached_requests(&server, "x".repeat(128 * 1024));
+        // The fixture never reads stdin. Give the first oversized frame time
+        // to fill the pipe and the remaining reservations time to fill the
+        // bounded writer queue before probing the next reservation.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let error = server
+            .request_with_timeout(
+                "writer-reservation-timeout",
+                json!({}),
+                Duration::from_millis(5),
+            )
+            .await
+            .expect_err("writer reservation must time out under backpressure");
+        assert!(
+            error.to_string().contains("timed out"),
+            "unexpected error: {error}"
+        );
+
+        abort_tasks(blocked).await;
+        server.stop("writer reservation test complete").await;
+    }
+
+    fn spawn_blocked_detached_requests(
+        server: &std::sync::Arc<AppServer>,
+        payload: String,
+    ) -> Vec<tokio::task::JoinHandle<()>> {
+        (0..=64)
+            .map(|index| {
+                let server = std::sync::Arc::clone(server);
+                let payload = payload.clone();
+                tokio::spawn(request_blocked_detached(server, payload, index))
+            })
+            .collect()
+    }
+
+    async fn request_blocked_detached(
+        server: std::sync::Arc<AppServer>,
+        payload: String,
+        index: usize,
+    ) {
+        let _ = server
+            .request_detached(
+                "turn/start",
+                json!({
+                    "threadId": format!("blocked-{index}"),
+                    "payload": payload,
+                }),
+            )
+            .await;
+    }
+
+    async fn abort_tasks(tasks: Vec<tokio::task::JoinHandle<()>>) {
+        for task in tasks {
+            task.abort();
+            let _ = task.await;
+        }
     }
 
     #[tokio::test]

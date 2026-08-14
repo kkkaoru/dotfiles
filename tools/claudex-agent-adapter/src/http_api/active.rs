@@ -101,3 +101,8 @@ impl Drop for ActiveCounter {
         self.counter.fetch_sub(1, Ordering::Relaxed);
     }
 }
+
+#[cfg(test)]
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[path = "active_tests.rs"]
+mod tests;

@@ -200,6 +200,11 @@ pub(crate) fn release_previous(config: &ServiceConfig, old_pid: u32) {
 mod ownership_tests {
     use std::cell::Cell;
 
+    use crate::{
+        agent_backend::{BackendKind, BackendRoute},
+        launcher::{AdapterOptions, LOCAL_TOKEN},
+    };
+
     use super::*;
 
     #[test]
@@ -216,8 +221,7 @@ mod ownership_tests {
 
     #[test]
     fn successful_publication_transfers_daemon_ownership() {
-        let terminated = Cell::new(0);
-        let started = daemon_start::StartedDaemon::with_terminate(92, |pid| terminated.set(pid));
+        let started = daemon_start::StartedDaemon::new(92);
 
         let url = publish_started(started, |pid| {
             assert_eq!(pid, 92);
@@ -226,6 +230,34 @@ mod ownership_tests {
         .expect("publication succeeds");
 
         assert_eq!(url, "http://127.0.0.1:8318");
-        assert_eq!(terminated.get(), 0);
+    }
+
+    #[test]
+    fn finishing_a_promotion_publishes_and_disarms_the_started_daemon() {
+        let root = tempfile::tempdir().expect("promotion publication fixture");
+        let config = ServiceConfig {
+            options: AdapterOptions {
+                routes: vec![BackendRoute::new("test-model", BackendKind::CodexAppServer)],
+                listen: "127.0.0.1:8318".parse().expect("listen"),
+                model: "test-model".to_owned(),
+                subscription_max_processes: 20,
+                subscription_timeout_minutes: 120,
+                subagent_hard_timeout_seconds: None,
+                model_catalog: crate::provider_config::ModelCatalog::default(),
+            },
+            token: LOCAL_TOKEN.to_owned(),
+            codex_config_fingerprint: "codex".to_owned(),
+            service_config_fingerprint: "service".to_owned(),
+            executable: root.path().join("missing-adapter"),
+            log_path: root.path().join("adapter.log"),
+            lock_path: root.path().join("adapter.lock"),
+        };
+        let started = daemon_start::StartedDaemon::new(73);
+
+        let url = finish_started_promotion(started, &config, u32::MAX, config.options.listen, 1)
+            .expect("publish promotion")
+            .expect("promotion url");
+
+        assert_eq!(url, config.base_url());
     }
 }

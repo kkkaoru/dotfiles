@@ -166,3 +166,33 @@ fn push_walk_dir(entry: fs::DirEntry, pending: &mut Vec<PathBuf>) {
         pending.push(entry.path());
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn private_helpers_report_missing_metadata_and_file_walk_errors() {
+        let root = tempfile::tempdir().expect("private helper fixture");
+        let missing = root.path().join("missing-target");
+        let metadata_error = keep_tagged(&missing, SystemTime::now())
+            .expect_err("missing tagged cache metadata must fail");
+        assert!(metadata_error.to_string().contains("inspect tagged cache"));
+
+        let file = root.path().join("not-a-directory");
+        fs::write(&file, b"file").expect("helper walk file");
+        assert!(failed_coverage_siblings(&file).is_err());
+        assert!(!contains_live_coverage(&file));
+    }
+
+    #[test]
+    fn rank_reports_an_unlisted_coverage_target_as_unranked() {
+        let root = tempfile::tempdir().expect("rank fixture");
+        let candidate = root.path().join("llvm-cov-not-listed");
+        assert_eq!(
+            rank_among_failed_coverage(root.path(), &candidate, SystemTime::now())
+                .expect("empty sibling rank"),
+            usize::MAX
+        );
+    }
+}

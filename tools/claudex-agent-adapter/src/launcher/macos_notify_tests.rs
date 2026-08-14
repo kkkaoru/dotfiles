@@ -56,6 +56,13 @@ fn live_ready_notification_describes_live_listen_build_and_waiting_port() {
 }
 
 #[test]
+fn live_ready_event_accessors_cover_the_shared_match_arms() {
+    let event = live("accessor-build");
+    assert_eq!(event.listen(), "127.0.0.1:62789");
+    assert_eq!(event.build_id(), "accessor-build");
+}
+
+#[test]
 fn swap_complete_notification_describes_build_and_listen() {
     let notification = notification(&complete("abc123"));
     assert_eq!(notification.title, "claudex · 127.0.0.1:8318");
@@ -396,4 +403,35 @@ fn post_respects_macos_notify_opt_out_even_in_tests() {
         !root.path().join("hot-swap-notify.json").exists(),
         "opted-out posts must not write dedupe state"
     );
+}
+
+#[test]
+fn post_in_process_respects_macos_notify_opt_out() {
+    let _guard = super::super::macos_notify_dispatch::NotifyForceGuard::push(false);
+    let root = tempfile::tempdir().expect("in-process notify cache");
+    let events = TestEvents::capture();
+    post_in_process(root.path(), &listen(), complete("gated-in-process"));
+    assert!(events.take().is_empty());
+    assert!(!root.path().join("hot-swap-notify.json").exists());
+}
+
+#[test]
+fn post_in_process_logs_dedup_state_write_failures_after_recording() {
+    let root = tempfile::tempdir().expect("dedup write failure cache");
+    std::fs::create_dir(root.path().join("hot-swap-notify.json"))
+        .expect("dedup state directory collision");
+    let events = TestEvents::capture();
+    post_in_process(root.path(), &listen(), complete("write-failure"));
+    assert_eq!(events.take(), vec![complete("write-failure")]);
+    assert!(root.path().join("hot-swap-notify.json").is_dir());
+}
+
+#[test]
+fn post_in_process_returns_when_the_notification_lock_cannot_be_created() {
+    let root = tempfile::tempdir().expect("dedup lock failure cache");
+    let cache_file = root.path().join("cache-file");
+    std::fs::write(&cache_file, b"not a directory").expect("cache file");
+    let events = TestEvents::capture();
+    post_in_process(&cache_file, &listen(), complete("lock-failure"));
+    assert!(events.take().is_empty());
 }

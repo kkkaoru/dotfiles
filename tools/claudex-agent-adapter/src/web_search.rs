@@ -64,10 +64,10 @@ mod parse;
 mod race;
 pub use mode::WebSearchMode;
 use parse::{append_answer_delta, collect_item_results, fallback_results, is_web_search};
-pub(crate) use race::human_web_search_error;
-use race::first_nonempty_response;
 #[cfg(test)]
 use parse::{extract_urls, parse_result};
+use race::first_nonempty_response;
+pub(crate) use race::human_web_search_error;
 
 async fn run_worker_with_timeout(
     backend: &Arc<AgentBackend>,
