@@ -199,7 +199,7 @@ fn builds_evidence_from_content_and_covers_output_shapes() {
 #[test]
 fn summarizes_and_extracts_only_http_sources() {
     let output = format!(
-        "{} https://example.com/path). http://second.example/x,",
+        "{} https://example.com/path).é http://second.example/x,",
         "x ".repeat(321)
     );
     let summary = summary(&output);

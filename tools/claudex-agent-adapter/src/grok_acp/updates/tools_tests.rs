@@ -6,6 +6,7 @@ mod tests {
 
     use super::*;
     use crate::app_server::ThreadEvents;
+    use serde_json::json;
 
     async fn collect_messages(receiver: ThreadEvents) -> Vec<Value> {
         let mut messages = Vec::new();
@@ -88,6 +89,96 @@ mod tests {
             .is_none(),
             "Completed must stay on providerTool/update"
         );
+
+        let titled = update_to_tool_call(
+            "custom-id",
+            acp::ToolCallUpdateFields::new()
+                .title(" Custom ")
+                .status(acp::ToolCallStatus::Pending),
+        )
+        .expect("explicit title");
+        assert_eq!(titled.title, "Custom");
+
+        let call_id = update_to_tool_call(
+            "fallback-id",
+            acp::ToolCallUpdateFields::new().status(acp::ToolCallStatus::Pending),
+        )
+        .expect("call id fallback");
+        assert_eq!(call_id.title, "fallback-id");
+
+        let generic = update_to_tool_call(
+            "",
+            acp::ToolCallUpdateFields::new().status(acp::ToolCallStatus::Pending),
+        )
+        .expect("generic fallback");
+        assert_eq!(generic.title, "provider tool");
+
+        let status_only = acp::ToolCallUpdateFields::new().status(acp::ToolCallStatus::InProgress);
+        assert!(status_only_params("session", "call", &status_only).is_some());
+        let with_output = acp::ToolCallUpdateFields::new()
+            .status(acp::ToolCallStatus::InProgress)
+            .raw_output(json!("output"));
+        assert!(status_only_params("session", "call", &with_output).is_none());
+        let with_content = acp::ToolCallUpdateFields::new()
+            .status(acp::ToolCallStatus::InProgress)
+            .content(vec![text("content")]);
+        assert!(status_only_params("session", "call", &with_content).is_none());
+        let completed = acp::ToolCallUpdateFields::new().status(acp::ToolCallStatus::Completed);
+        assert!(status_only_params("session", "call", &completed).is_none());
+    }
+
+    #[tokio::test]
+    async fn t6_dispatches_fallback_updates_as_provider_calls() {
+        let events = ThreadEventDispatcher::default();
+        let receiver = events.subscribe("session");
+        dispatch_fallback_updates(&events);
+
+        let first = tokio::time::timeout(std::time::Duration::from_millis(100), receiver.recv())
+            .await
+            .expect("first fallback update")
+            .expect("first dispatched provider call");
+        let second = tokio::time::timeout(std::time::Duration::from_millis(100), receiver.recv())
+            .await
+            .expect("second fallback update")
+            .expect("second dispatched provider call");
+        assert_fallback_update(&first, "titleless-in-progress");
+        assert_fallback_update(&second, "statusless-kind");
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(10), receiver.recv())
+                .await
+                .is_err(),
+            "fallback dispatcher emitted more than the two expected calls"
+        );
+    }
+
+    fn dispatch_fallback_updates(events: &ThreadEventDispatcher) {
+        let updates = [
+            (
+                "titleless-in-progress",
+                acp::ToolCallUpdateFields::new()
+                    .kind(acp::ToolKind::Read)
+                    .status(acp::ToolCallStatus::InProgress),
+            ),
+            (
+                "statusless-kind",
+                acp::ToolCallUpdateFields::new().kind(acp::ToolKind::Read),
+            ),
+        ];
+        for (call_id, fields) in updates {
+            dispatch_provider_tool_update(
+                events,
+                "session",
+                acp::ToolCallUpdate::new(call_id, fields),
+            );
+        }
+    }
+
+    fn assert_fallback_update(message: &Value, call_id: &str) {
+        assert_eq!(message["method"], "item/providerTool/call");
+        assert_eq!(message["params"]["callId"], call_id);
+        assert_eq!(message["params"]["title"], "Read");
+        assert_eq!(message["params"]["tool"], "Read");
+        assert_eq!(message["params"]["status"], "in_progress");
     }
 
     #[test]
@@ -131,6 +222,12 @@ mod tests {
                 expected
             );
         }
+        assert_eq!(
+            tool_display_name(
+                &acp::ToolCall::new("mcp-call", "MCP").raw_input(json!({"_toolName":"Task"}))
+            ),
+            "Task"
+        );
     }
 
     #[test]

@@ -158,3 +158,28 @@ fn writes_profiles_only_when_needed_and_reports_write_failures() {
     let error = write_if_changed(root.path().join("missing/profile.md"), "content").unwrap_err();
     assert!(error.to_string().contains("write"));
 }
+
+#[test]
+fn reports_stale_shadow_removal_failures_with_the_alias_path() {
+    let home = tempfile::tempdir().unwrap();
+    let agents = home
+        .path()
+        .join(".cache/claudex/grok-native-high-plugin-v3/agents");
+    std::fs::create_dir_all(&agents).unwrap();
+    std::fs::create_dir(agents.join("claudex-gpt.md")).unwrap();
+
+    let error = prepare_with(OsStr::new("grok"), None, Some(home.path().to_owned())).unwrap_err();
+    let message = error.to_string();
+    assert!(message.contains("remove stale Grok shadow"));
+    assert!(message.contains("claudex-gpt.md"));
+}
+
+#[test]
+fn reports_user_hook_write_failures_after_preparing_the_cache() {
+    let home = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(home.path().join(".grok/hooks")).unwrap();
+    std::fs::create_dir(home.path().join(".grok/hooks/claudex-agent-adapter.json")).unwrap();
+
+    let error = prepare_with(OsStr::new("grok"), None, Some(home.path().to_owned())).unwrap_err();
+    assert!(error.to_string().contains("claudex-agent-adapter.json"));
+}

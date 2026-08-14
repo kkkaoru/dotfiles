@@ -101,17 +101,13 @@ pub(super) async fn start(
     if let Some(stderr) = child.stderr.take() {
         super::stderr_quota::spawn_watch(stderr, quota_tx);
     }
-    // Keep ownership local until the handshake has completed. In particular,
-    // a missing stdio pipe must still kill and reap the just-started provider.
+    // spawn_provider_process always requests piped stdin/stdout. A successful
+    // spawn therefore guarantees both handles until this first take; a missing
+    // handle would be an internal invariant violation rather than a provider
+    // failure that can occur during normal startup.
     let (connection, io_stopped_rx) =
-        match wire_provider_connection(provider, events, &mut child, alive.clone()) {
-            Ok(connection) => connection,
-            Err(error) => {
-                terminate_process_group(process_group);
-                let _ = child.wait().await;
-                return Err(error);
-            }
-        };
+        wire_provider_connection(provider, events, &mut child, alive.clone())
+            .expect("provider stdio pipes must be present after a piped spawn");
     match tokio::time::timeout(
         std::time::Duration::from_secs(8),
         initialize(provider, &connection),

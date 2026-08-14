@@ -1,4 +1,7 @@
-use std::sync::{Arc, atomic::AtomicBool};
+use std::{
+    ffi::OsString,
+    sync::{Arc, atomic::AtomicBool},
+};
 
 use agent_client_protocol::{self as acp, Client as _};
 use serde_json::{json, value::RawValue};
@@ -8,7 +11,8 @@ use super::{
     SESSION_QUEUE_CAPACITY, TURN_QUEUE_CAPACITY,
     client::AcpClient,
     connection::AcpProvider,
-    driver::{StartTurnRequest, drive_start_turns, schedule_start_turn},
+    driver::{StartTurnRequest, drive_start_turns, run_driver, schedule_start_turn},
+    driver_types::DriverSetup,
     prompt, queue,
     turns::{ActiveTurns, InvalidatedSessions, cancel_turn, drive_turn_tasks, queue_turn},
     updates,
@@ -330,6 +334,38 @@ async fn reports_a_closed_driver_for_each_command_response_type() {
         agent.cancel_turn("session").await.is_ok(),
         "dead-driver cancel must be idempotent so leftover SubAgent cards can settle"
     );
+}
+
+#[tokio::test]
+async fn driver_reports_startup_failure_and_closes_its_events() {
+    let events = Arc::new(ThreadEventDispatcher::default());
+    let subscriber = events.subscribe("startup-failure");
+    let alive = Arc::new(AtomicBool::new(true));
+    let cooldown = Arc::new(AtomicBool::new(false));
+    let (ready, ready_result) = tokio::sync::oneshot::channel();
+    let (_commands, command_receiver) = tokio::sync::mpsc::channel(1);
+    let cwd = tempfile::tempdir().unwrap();
+
+    run_driver(
+        DriverSetup {
+            provider: AcpProvider::Configured,
+            program: OsString::from("/definitely/missing/claudex-acp"),
+            arguments: Some(Vec::new()),
+            model: "test-model".to_owned(),
+            effort: None,
+            cwd: cwd.path().to_owned(),
+            events: Arc::clone(&events),
+            alive: Arc::clone(&alive),
+            cooldown,
+            ready,
+        },
+        command_receiver,
+    )
+    .await;
+
+    assert!(ready_result.await.unwrap().is_err());
+    assert!(!alive.load(std::sync::atomic::Ordering::Relaxed));
+    assert!(subscriber.recv().await.is_none());
 }
 
 async fn drop_cancel_turn_response(receiver: &mut tokio::sync::mpsc::Receiver<DriverCommand>) {

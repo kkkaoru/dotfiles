@@ -68,3 +68,34 @@ fn injects_opencode_runtime_config_unless_already_set() {
             .is_none()
     );
 }
+
+#[cfg(unix)]
+#[tokio::test(flavor = "current_thread")]
+async fn start_cleans_up_when_the_provider_exits_during_initialize() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let root = tempfile::tempdir().unwrap();
+            let opencode = root.path().join("opencode");
+            std::os::unix::fs::symlink("/bin/true", &opencode).unwrap();
+            let program = OsString::from(opencode);
+            let arguments: Vec<String> = Vec::new();
+            let alive = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+
+            let result = start(StartConnection {
+                provider: AcpProvider::Configured,
+                program: &program,
+                arguments: Some(&arguments),
+                model: "test-model",
+                effort: None,
+                cwd: root.path(),
+                events: std::sync::Arc::new(
+                    crate::app_server::events::ThreadEventDispatcher::default(),
+                ),
+                alive,
+            })
+            .await;
+
+            assert!(result.is_err(), "an exited provider cannot initialize");
+        })
+        .await;
+}

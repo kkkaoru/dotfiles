@@ -1,5 +1,58 @@
 use super::*;
 use serde_json::{Value, json};
+use std::sync::Arc;
+use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
+use tokio_util::compat::{TokioAsyncReadCompatExt as _, TokioAsyncWriteCompatExt as _};
+
+use super::super::client::AcpClient;
+use crate::app_server::events::ThreadEventDispatcher;
+
+fn rpc_connection(
+    reply: Result<Value, &'static str>,
+) -> (
+    acp::ClientSideConnection,
+    tokio::sync::oneshot::Receiver<Value>,
+    tokio::task::JoinHandle<()>,
+    tokio::task::JoinHandle<()>,
+) {
+    let events = Arc::new(ThreadEventDispatcher::default());
+    let (client_write, server_read) = tokio::io::duplex(4096);
+    let (server_write, client_read) = tokio::io::duplex(4096);
+    let (connection, io) = acp::ClientSideConnection::new(
+        AcpClient::new(events),
+        client_write.compat_write(),
+        client_read.compat(),
+        |future| {
+            tokio::task::spawn_local(future);
+        },
+    );
+    let io_task = tokio::task::spawn_local(async move {
+        let _ = io.await;
+    });
+    let (request_tx, request_rx) = tokio::sync::oneshot::channel();
+    let server_task = tokio::task::spawn_local(async move {
+        let mut server_write = server_write;
+        let mut reader = BufReader::new(server_read);
+        let mut line = String::new();
+        reader.read_line(&mut line).await.unwrap();
+        let request: Value = serde_json::from_str(&line).unwrap();
+        let id = request["id"].clone();
+        request_tx.send(request).unwrap();
+        let response = match reply {
+            Ok(result) => json!({"jsonrpc":"2.0","id":id,"result":result}),
+            Err(message) => json!({
+                "jsonrpc":"2.0",
+                "id":id,
+                "error":{"code":-32603,"message":message}
+            }),
+        };
+        server_write
+            .write_all(format!("{response}\n").as_bytes())
+            .await
+            .unwrap();
+    });
+    (connection, request_rx, server_task, io_task)
+}
 
 #[test]
 fn session_setup_timeouts_fail_fast_without_mcp_hang() {
@@ -107,6 +160,107 @@ async fn bounds_model_setup_and_reports_provider_failures() {
     .await
     .unwrap_err();
     assert!(failed.to_string().contains("session/set_model failed"));
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn new_session_sends_non_grok_model_metadata_and_surfaces_rpc_errors() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let cwd = tempfile::tempdir().unwrap();
+            let mcp = vec![acp::McpServer::Stdio(acp::McpServerStdio::new(
+                "test-mcp",
+                "/bin/echo",
+            ))];
+            let (connection, request, server, io) = rpc_connection(Ok(json!({
+                "sessionId": "session-1"
+            })));
+            let response = new_session_with_mcp(
+                AcpProvider::Copilot,
+                &connection,
+                "copilot-model",
+                cwd.path(),
+                mcp,
+            )
+            .await
+            .unwrap();
+            assert_eq!(response.session_id.0.as_ref(), "session-1");
+            let request = request.await.unwrap();
+            assert_eq!(request["method"], "session/new");
+            assert_eq!(request["params"]["_meta"]["modelId"], "copilot-model");
+            assert_eq!(request["params"]["mcpServers"].as_array().unwrap().len(), 1);
+            drop(connection);
+            server.await.unwrap();
+            io.await.unwrap();
+
+            let (connection, _request, server, io) = rpc_connection(Err("session unavailable"));
+            let error = new_session_with_mcp(
+                AcpProvider::Grok,
+                &connection,
+                "grok-model",
+                cwd.path(),
+                Vec::new(),
+            )
+            .await
+            .unwrap_err();
+            assert!(error.to_string().contains("session/new failed"));
+            drop(connection);
+            server.await.unwrap();
+            io.await.unwrap();
+        })
+        .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn launch_mcp_attach_handles_success_and_provider_errors() {
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let cwd = tempfile::tempdir().unwrap();
+            let mcp = vec![acp::McpServer::Stdio(acp::McpServerStdio::new(
+                "test-mcp",
+                "/bin/echo",
+            ))];
+            let (connection, request, server, io) = rpc_connection(Ok(json!({})));
+            attach_launch_mcp(
+                AcpProvider::Configured,
+                &connection,
+                &acp::SessionId::new("session-1"),
+                cwd.path(),
+                mcp.clone(),
+            )
+            .await
+            .unwrap();
+            let request = request.await.unwrap();
+            assert_eq!(request["method"], "session/load");
+            assert_eq!(request["params"]["sessionId"], "session-1");
+            assert_eq!(request["params"]["mcpServers"].as_array().unwrap().len(), 1);
+            drop(connection);
+            server.await.unwrap();
+            io.await.unwrap();
+
+            let (connection, _request, server, io) = rpc_connection(Err("MCP unavailable"));
+            let error = attach_launch_mcp(
+                AcpProvider::Configured,
+                &connection,
+                &acp::SessionId::new("session-2"),
+                cwd.path(),
+                mcp,
+            )
+            .await
+            .unwrap_err();
+            let message = error.to_string();
+            assert!(
+                message.contains("launch MCP attach via session/load failed"),
+                "contextual MCP attachment error was lost: {message}"
+            );
+            assert!(
+                message.contains("session/load failed"),
+                "underlying ACP method was lost: {message}"
+            );
+            drop(connection);
+            server.await.unwrap();
+            io.await.unwrap();
+        })
+        .await;
 }
 
 #[test]

@@ -3,7 +3,6 @@ use std::{cell::Cell, rc::Rc};
 use agent_client_protocol as acp;
 
 use super::{TurnCtl, finish_effort_setup, handle_setup_cancellation};
-use crate::grok_acp::connection::AcpProvider;
 
 #[path = "setup_effort.rs"]
 mod effort;
@@ -21,7 +20,7 @@ pub(super) async fn apply_effort(
     // Grok and other CLI-model ACP launches pin model (and often effort) at process start.
     // Session create also pins the ACP model id once. Re-running set_session_model every
     // turn reselects Cursor's auto router and adds multi-second RPC latency before prompts.
-    if ctl.provider == AcpProvider::Grok || ctl.provider.model_is_launch_scoped() {
+    if ctl.provider.model_is_launch_scoped() {
         tracing::info!(
             session_id = ctl.session_id,
             effort,
@@ -33,17 +32,15 @@ pub(super) async fn apply_effort(
     if ctl.invalidated_sessions.borrow().contains(ctl.session_id) {
         forget_applied_effort(ctl.session_id);
     }
-    if effort.is_none() {
+    let Some(effort) = effort else {
         tracing::info!(
             session_id = ctl.session_id,
             provider = ctl.provider.label(),
             "skipping ACP set_session_model; session/new already pinned the model"
         );
         return true;
-    }
-    if let Some(effort) = effort
-        && effort_already_applied(ctl.session_id, effort)
-    {
+    };
+    if effort_already_applied(ctl.session_id, effort) {
         tracing::info!(
             session_id = ctl.session_id,
             effort,
@@ -57,7 +54,7 @@ pub(super) async fn apply_effort(
         Rc::clone(connection),
         ctl.provider,
         model,
-        effort,
+        Some(effort),
         id.clone(),
         Rc::clone(&setup_started),
     );
@@ -75,9 +72,7 @@ pub(super) async fn apply_effort(
         result = &mut setup => result,
     };
     if setup_result.is_ok() {
-        if let Some(effort) = effort {
-            remember_applied_effort(ctl.session_id, effort);
-        }
+        remember_applied_effort(ctl.session_id, effort);
         tokio::task::yield_now().await;
     }
     finish_effort_setup(ctl, setup_result)

@@ -43,7 +43,9 @@ mod tests {
         assert!(!crate::anthropic::is_unknown_session_text(
             "ACP quota exhausted: weekly"
         ));
-        assert!(!crate::anthropic::is_unknown_session_text("401 unauthorized"));
+        assert!(!crate::anthropic::is_unknown_session_text(
+            "401 unauthorized"
+        ));
         assert!(!crate::anthropic::is_unknown_session_text(
             "ACP prompt timed out"
         ));
@@ -64,16 +66,14 @@ mod tests {
 
     #[tokio::test]
     async fn t16_retries_unknown_session_once_and_stays_fatal_on_second() {
-        let first = Err(acp::Error::internal_error().data(
-            r#"{"details":"unknown session: 1786642532386_lDiqV_cli"}"#,
-        ));
+        let first = Err(acp::Error::internal_error()
+            .data(r#"{"details":"unknown session: 1786642532386_lDiqV_cli"}"#));
         let (retried, used) = super::retry_unknown_session_once(first, false, ok_prompt()).await;
         assert!(used);
         assert!(retried.is_ok());
 
         let again = Err(acp::Error::internal_error().data("unknown session: still-missing"));
-        let (fatal, used) =
-            super::retry_unknown_session_once(again, false, still_unknown()).await;
+        let (fatal, used) = super::retry_unknown_session_once(again, false, still_unknown()).await;
         assert!(used);
         assert!(fatal.is_err());
         assert!(super::is_unknown_session_acp_error(

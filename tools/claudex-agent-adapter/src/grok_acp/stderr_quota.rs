@@ -46,8 +46,7 @@ pub(super) async fn wait_quota_message(
     quota: Option<&mut watch::Receiver<Option<String>>>,
 ) -> Option<String> {
     let Some(rx) = quota else {
-        std::future::pending::<()>().await;
-        return None;
+        return std::future::pending().await;
     };
     if let Some(message) = rx.borrow().clone() {
         return Some(message);

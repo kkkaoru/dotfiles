@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use agent_client_protocol::{self as acp, Agent as _};
-use anyhow::{Result, anyhow};
+use anyhow::{Context as _, Result, anyhow};
 use serde_json::{Value, json};
 
 use super::super::connection::AcpProvider;
@@ -21,49 +21,64 @@ pub(super) async fn new_session_with_mcp(
     session_cwd: &Path,
     mcp: Vec<acp::McpServer>,
 ) -> Result<acp::NewSessionResponse> {
-    let timeout = session_setup_timeout(provider, mcp.is_empty());
+    let has_mcp = !mcp.is_empty();
+    let timeout = session_setup_timeout(provider, !has_mcp);
     let mut request = acp::NewSessionRequest::new(session_cwd).mcp_servers(mcp);
     if provider != AcpProvider::Grok {
         request = request.meta(json!({ "modelId": model }).as_object().cloned());
     }
-    await_acp_rpc(
+    let response = await_acp_rpc(
         provider,
         timeout,
         "session/new",
         connection.new_session(request),
     )
-    .await
+    .await;
+    if has_mcp {
+        response.with_context(|| {
+            format!(
+                "{} ACP launch MCP attachment during session/new failed; session creation aborted",
+                provider.label()
+            )
+        })
+    } else {
+        response
+    }
 }
 
+/// Attach launch MCP only while resuming a persisted session. Fresh sessions
+/// must pass their MCP servers to `session/new`; calling `session/load` with a
+/// just-created ID races provider persistence and can silently lose the tools.
+#[cfg(test)]
 pub(super) async fn attach_launch_mcp(
     provider: AcpProvider,
     connection: &acp::ClientSideConnection,
     session_id: &acp::SessionId,
     session_cwd: &Path,
     mcp: Vec<acp::McpServer>,
-) {
+) -> Result<()> {
     if mcp.is_empty() {
-        return;
+        return Ok(());
     }
     let request = acp::LoadSessionRequest::new(session_id.clone(), session_cwd).mcp_servers(mcp);
-    match await_acp_rpc(
+    await_acp_rpc(
         provider,
         SESSION_SETUP_WITH_MCP_TIMEOUT,
         "session/load",
         connection.load_session(request),
     )
     .await
-    {
-        Ok(_) => tracing::info!(
-            provider = provider.label(),
-            "ACP launch MCP attached after session/new"
-        ),
-        Err(error) => tracing::warn!(
-            %error,
-            provider = provider.label(),
-            "ACP launch MCP attach after session/new failed; session remains usable"
-        ),
-    }
+    .with_context(|| {
+        format!(
+            "{} ACP launch MCP attach via session/load failed; session creation aborted",
+            provider.label()
+        )
+    })?;
+    tracing::info!(
+        provider = provider.label(),
+        "ACP launch MCP attached after session/new"
+    );
+    Ok(())
 }
 
 pub(super) fn session_setup_timeout(_provider: AcpProvider, mcp_empty: bool) -> Duration {

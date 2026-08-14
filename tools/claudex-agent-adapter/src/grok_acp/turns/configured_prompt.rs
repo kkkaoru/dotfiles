@@ -173,22 +173,18 @@ pub(super) async fn cancel_timed_out_prompt(
         return;
     }
     // The prompt future is dropped by the timeout, but ACP still owns the
-    // server-side turn. Send one exact-session cancel and bound its response;
-    // the timeout path itself remains the sole terminal error emitter.
-    let cancel = connection.cancel(acp::CancelNotification::new(session_id.to_owned()));
-    match tokio::time::timeout(Duration::from_secs(2), cancel).await {
-        Ok(Ok(())) => {}
-        Ok(Err(error)) => tracing::warn!(
+    // server-side turn. ACP cancellation is a notification, so record only a
+    // transport-enqueue failure; the timeout path remains the terminal emitter.
+    if let Err(error) = connection
+        .cancel(acp::CancelNotification::new(session_id.to_owned()))
+        .await
+    {
+        tracing::warn!(
             provider = provider.label(),
             session_id,
             ?error,
             "configured ACP timeout cancellation failed"
-        ),
-        Err(_) => tracing::warn!(
-            provider = provider.label(),
-            session_id,
-            "configured ACP timeout cancellation did not settle"
-        ),
+        );
     }
 }
 
@@ -224,7 +220,5 @@ pub(super) fn prompt_failure_message(provider: AcpProvider, error: &acp::Error) 
 }
 
 #[cfg(test)]
-// Coverage excludes test implementation; production behavior remains measured.
-#[cfg_attr(coverage_nightly, coverage(off))]
 #[path = "configured_prompt_tests.rs"]
 mod tests;

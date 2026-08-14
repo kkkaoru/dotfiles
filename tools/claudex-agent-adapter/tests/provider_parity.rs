@@ -656,11 +656,7 @@ fn streamed_text(events: &[Value]) -> String {
         .collect()
 }
 
-async fn expect_follow_up(
-    url: &str,
-    request: Value,
-    surface: Surface,
-) -> reqwest::Response {
+async fn expect_follow_up(url: &str, request: Value, surface: Surface) -> reqwest::Response {
     send_stream(url, request, Some(SESSION_ID))
         .await
         .unwrap_or_else(|error| panic!("{} follow-up request failed: {error}", surface.label()))
@@ -682,14 +678,20 @@ fn assert_optional_error_stop_reason(
 }
 
 async fn wait_for_trace_event(path: &Path, key: &str) {
-    tokio::time::timeout(Duration::from_secs(3), wait_for_trace_event_inner(path, key))
+    tokio::time::timeout(
+        Duration::from_secs(3),
+        wait_for_trace_event_inner(path, key),
+    )
     .await
     .unwrap_or_else(|_| panic!("trace {} did not contain {key}", path.display()));
 }
 
 async fn wait_for_trace_event_inner(path: &Path, key: &str) {
     loop {
-        if read_trace(path).iter().any(|event| event.get(key).is_some()) {
+        if read_trace(path)
+            .iter()
+            .any(|event| event.get(key).is_some())
+        {
             return;
         }
         tokio::time::sleep(Duration::from_millis(10)).await;

@@ -1,10 +1,4 @@
-use std::{
-    cell::Cell,
-    future::Future,
-    rc::Rc,
-    sync::atomic::AtomicBool,
-    time::Duration,
-};
+use std::{cell::Cell, future::Future, rc::Rc, sync::atomic::AtomicBool, time::Duration};
 
 use agent_client_protocol::{self as acp, Agent as _};
 use tokio::sync::watch;
@@ -28,7 +22,9 @@ pub(super) async fn run_prompt(
 ) {
     let request = acp::PromptRequest::new(
         id.clone(),
-        vec![acp::ContentBlock::Text(acp::TextContent::new(prompt.clone()))],
+        vec![acp::ContentBlock::Text(acp::TextContent::new(
+            prompt.clone(),
+        ))],
     );
     let activity = ctl.events.subscribe(ctl.session_id);
     let saw_activity = AtomicBool::new(false);
@@ -233,3 +229,9 @@ pub(super) async fn handle_prompt_cancellation<F>(
     }
     ctl.finish_pre_prompt_cancel(cancellation);
 }
+
+#[cfg(test)]
+// Coverage excludes test implementation; production behavior remains measured.
+#[cfg_attr(coverage_nightly, coverage(off))]
+#[path = "execute_prompt_tests.rs"]
+mod tests;

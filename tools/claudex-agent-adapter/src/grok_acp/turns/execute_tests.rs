@@ -1,6 +1,4 @@
 #[cfg(test)]
-// Coverage excludes test implementation; production behavior remains measured.
-#[cfg_attr(coverage_nightly, coverage(off))]
 mod tests {
     use super::*;
     use crate::grok_acp::client::AcpClient;
@@ -419,8 +417,7 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn configured_without_effort_skips_per_turn_model_reselect() {
-        LocalSet::new()
-            .run_until(check_configured_model_without_effort())
+        with_info_subscriber(LocalSet::new().run_until(check_configured_model_without_effort()))
             .await;
     }
 
@@ -433,9 +430,10 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn launch_scoped_effort_skips_per_turn_model_reselect() {
-        LocalSet::new()
-            .run_until(check_launch_scoped_effort_skips_model_reselect())
-            .await;
+        with_info_subscriber(
+            LocalSet::new().run_until(check_launch_scoped_effort_skips_model_reselect()),
+        )
+        .await;
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -447,8 +445,16 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn follow_up_skips_unchanged_configured_effort_rpc() {
+        with_info_subscriber(
+            LocalSet::new().run_until(check_follow_up_skips_unchanged_configured_effort()),
+        )
+        .await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn successful_configured_effort_is_remembered_for_the_same_session() {
         LocalSet::new()
-            .run_until(check_follow_up_skips_unchanged_configured_effort())
+            .run_until(check_successful_configured_effort_is_remembered())
             .await;
     }
 
@@ -533,6 +539,13 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn completes_a_prompt_without_a_queued_cancellation() {
         LocalSet::new().run_until(check_prompt_completion()).await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn prompt_completion_wins_against_a_queued_cancellation() {
+        LocalSet::new()
+            .run_until(check_prompt_completion_race())
+            .await;
     }
 
     async fn assert_setup_cancellation(setup_started: bool) {
@@ -762,6 +775,64 @@ mod tests {
         assert!(follow_up_permit.is_some());
     }
 
+    async fn check_successful_configured_effort_is_remembered() {
+        let events = std::sync::Arc::new(ThreadEventDispatcher::default());
+        let active = ActiveTurns::default();
+        let invalidated = InvalidatedSessions::default();
+        let permits = std::sync::Arc::new(tokio::sync::Semaphore::new(2));
+        let (_sender, mut cancellation) = oneshot::channel();
+        let mut permit = Some(
+            std::sync::Arc::clone(&permits)
+                .acquire_owned()
+                .await
+                .unwrap(),
+        );
+        let mut ctl = TurnCtl {
+            provider: AcpProvider::Configured,
+            session_id: "remembered-effort-session",
+            cancellation: &mut cancellation,
+            permit: &mut permit,
+            events: &events,
+            active_turns: &active,
+            invalidated_sessions: &invalidated,
+        };
+        let (connection, requests) = rejecting_effort_connection(std::sync::Arc::clone(&events));
+        assert!(
+            apply_effort(
+                &mut ctl,
+                &std::rc::Rc::new(connection),
+                "model",
+                Some("medium"),
+                &acp::SessionId::new("remembered-effort-session".to_owned()),
+            )
+            .await
+        );
+        assert_eq!(requests.await.unwrap().len(), 2);
+
+        let (_follow_up_sender, mut follow_up_cancellation) = oneshot::channel();
+        let mut follow_up_permit = Some(permits.acquire_owned().await.unwrap());
+        let mut follow_up = TurnCtl {
+            provider: AcpProvider::Configured,
+            session_id: "remembered-effort-session",
+            cancellation: &mut follow_up_cancellation,
+            permit: &mut follow_up_permit,
+            events: &events,
+            active_turns: &active,
+            invalidated_sessions: &invalidated,
+        };
+        assert!(
+            apply_effort(
+                &mut follow_up,
+                &std::rc::Rc::new(disconnected_connection(std::sync::Arc::clone(&events))),
+                "model",
+                Some("medium"),
+                &acp::SessionId::new("remembered-effort-session".to_owned()),
+            )
+            .await
+        );
+        assert!(follow_up_permit.is_some());
+    }
+
     async fn check_invalidated_session_forgets_applied_effort() {
         let events = std::sync::Arc::new(ThreadEventDispatcher::default());
         let active = ActiveTurns::default();
@@ -985,7 +1056,67 @@ mod tests {
         assert!(permit.is_none());
     }
 
+    async fn check_prompt_completion_race() {
+        let events = std::sync::Arc::new(ThreadEventDispatcher::default());
+        let receiver = events.subscribe("session");
+        let active = ActiveTurns::default();
+        active.borrow_mut().insert("session".to_owned(), None);
+        let invalidated = InvalidatedSessions::default();
+        let permits = std::sync::Arc::new(tokio::sync::Semaphore::new(1));
+        let (cancel_sender, mut cancellation) = oneshot::channel();
+        let (cancel_response, cancel_result) = oneshot::channel();
+        let mut permit = Some(permits.acquire_owned().await.unwrap());
+        let (connection, request) = responding_connection_with_queued_cancel(
+            std::sync::Arc::clone(&events),
+            cancel_sender,
+            cancel_response,
+        );
+        let ctl = TurnCtl {
+            provider: AcpProvider::Grok,
+            session_id: "session",
+            cancellation: &mut cancellation,
+            permit: &mut permit,
+            events: &events,
+            active_turns: &active,
+            invalidated_sessions: &invalidated,
+        };
+        let alive = AtomicBool::new(true);
+        let cooldown = AtomicBool::new(false);
+        run_prompt(
+            ctl,
+            std::rc::Rc::new(connection),
+            acp::SessionId::new("session".to_owned()),
+            "prompt".to_owned(),
+            super::prompt::PromptGuard {
+                timeout: configured_prompt::TIMEOUT,
+                alive: &alive,
+                cooldown: &cooldown,
+                quota: None,
+            },
+        )
+        .await;
+        assert_eq!(request.await.unwrap()["method"], "session/prompt");
+        assert!(
+            cancel_result.await.unwrap().is_ok(),
+            "completion must acknowledge a cancellation queued during response delivery"
+        );
+        assert_eq!(
+            receiver.recv().await.unwrap()["params"]["turn"]["status"],
+            "completed"
+        );
+        assert!(permit.is_none());
+    }
+
     async fn settled_setup() {}
+
+    async fn with_info_subscriber(future: impl std::future::Future<Output = ()>) {
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::INFO)
+            .with_test_writer()
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+        future.await;
+    }
 
     async fn pending_prompt() -> acp::Result<acp::PromptResponse> {
         std::future::pending().await
@@ -1033,6 +1164,62 @@ mod tests {
                 .write_all(b"\n")
                 .await
                 .expect("response newline");
+        }));
+        (connection, request)
+    }
+
+    fn responding_connection_with_queued_cancel(
+        events: std::sync::Arc<ThreadEventDispatcher>,
+        cancel_sender: oneshot::Sender<CancelRequest>,
+        cancel_response: oneshot::Sender<anyhow::Result<()>>,
+    ) -> (acp::ClientSideConnection, oneshot::Receiver<Value>) {
+        let (outgoing, outgoing_peer) = tokio::io::duplex(1024);
+        let (incoming, mut incoming_peer) = tokio::io::duplex(1024);
+        let (connection, io_task) = acp::ClientSideConnection::new(
+            AcpClient::new(events),
+            outgoing.compat_write(),
+            incoming.compat(),
+            |task| {
+                drop(tokio::task::spawn_local(task));
+            },
+        );
+        drop(tokio::task::spawn_local(async move {
+            let _ = io_task.await;
+        }));
+        let (request_sender, request) = oneshot::channel();
+        drop(tokio::task::spawn_local(async move {
+            let mut line = String::new();
+            BufReader::new(outgoing_peer)
+                .read_line(&mut line)
+                .await
+                .expect("ACP request");
+            let request: Value = serde_json::from_str(&line).expect("valid ACP request");
+            let id = request["id"].clone();
+            request_sender
+                .send(request.clone())
+                .expect("request receiver");
+            let response = json!({
+                "jsonrpc":"2.0",
+                "id":id,
+                "result":{"stopReason":"end_turn"}
+            })
+            .to_string();
+            incoming_peer
+                .write_all(response.as_bytes())
+                .await
+                .expect("ACP response");
+            incoming_peer
+                .write_all(b"\n")
+                .await
+                .expect("response newline");
+            assert!(
+                cancel_sender
+                    .send(CancelRequest {
+                        response: cancel_response,
+                    })
+                    .is_ok(),
+                "cancellation receiver"
+            );
         }));
         (connection, request)
     }

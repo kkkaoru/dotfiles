@@ -2,17 +2,22 @@
 mod project_fixture;
 
 use std::{
+    ffi::{OsStr, OsString},
     os::unix::fs::{PermissionsExt as _, symlink},
     path::Path,
-    sync::Arc,
+    sync::{Arc, OnceLock},
     time::{Duration, Instant},
 };
 
 use claudex_agent_adapter::{
-    agent_backend::AgentBackend, anthropic::Bridge, grok_acp::GrokAcp, http_router, provider_config,
+    agent_backend::{AcpLaunch, AgentBackend},
+    anthropic::Bridge,
+    grok_acp::GrokAcp,
+    http_router, provider_config,
 };
 use reqwest::Client;
 use serde_json::{Value, json};
+use tokio::sync::{Mutex, MutexGuard};
 
 use project_fixture::ProjectFixture;
 
@@ -20,6 +25,83 @@ const LOOPBACK_EPHEMERAL_ADDRESS: &str = "127.0.0.1:0";
 const PARALLEL_SESSION_CREATION_TIMEOUT: Duration = Duration::from_secs(1);
 const PARALLEL_SESSION_COUNT: usize = 2;
 const EXPECTED_PROVIDER_PROMPT_COUNT: usize = 1;
+const ACP_THINKING_MARKER: &str = "ACP_THINKING_MARKER";
+
+static PROCESS_ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+async fn process_env_lock() -> MutexGuard<'static, ()> {
+    PROCESS_ENV_LOCK.get_or_init(|| Mutex::new(())).lock().await
+}
+
+struct ScopedEnv {
+    key: &'static str,
+    previous: Option<OsString>,
+}
+
+impl ScopedEnv {
+    fn set(key: &'static str, value: impl AsRef<OsStr>) -> Self {
+        let previous = std::env::var_os(key);
+        // SAFETY: integration tests serialize process-wide environment changes with
+        // PROCESS_ENV_LOCK and restore the previous value on drop.
+        unsafe { std::env::set_var(key, value) };
+        Self { key, previous }
+    }
+
+    fn remove(key: &'static str) -> Self {
+        let previous = std::env::var_os(key);
+        // SAFETY: integration tests serialize process-wide environment changes with
+        // PROCESS_ENV_LOCK and restore the previous value on drop.
+        unsafe { std::env::remove_var(key) };
+        Self { key, previous }
+    }
+}
+
+impl Drop for ScopedEnv {
+    fn drop(&mut self) {
+        // SAFETY: the guard restores a value captured from this process and is only
+        // used while PROCESS_ENV_LOCK is held by the owning test.
+        unsafe {
+            match &self.previous {
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+}
+
+struct ScopedCurrentDir {
+    previous: std::path::PathBuf,
+}
+
+impl ScopedCurrentDir {
+    fn enter(path: &Path) -> Self {
+        let previous = std::env::current_dir().expect("read current directory");
+        std::env::set_current_dir(path).expect("set test current directory");
+        Self { previous }
+    }
+}
+
+impl Drop for ScopedCurrentDir {
+    fn drop(&mut self) {
+        let _ = std::env::set_current_dir(&self.previous);
+    }
+}
+
+fn is_acp_thinking_delta(event: &Value) -> bool {
+    event.pointer("/delta/type").and_then(Value::as_str) == Some("thinking_delta")
+        && event
+            .pointer("/delta/thinking")
+            .and_then(Value::as_str)
+            .is_some_and(|thinking| thinking.contains(ACP_THINKING_MARKER))
+}
+
+fn is_xai_subagent_thinking_delta(event: &Value) -> bool {
+    event.pointer("/delta/type").and_then(Value::as_str) == Some("thinking_delta")
+        && event
+            .pointer("/delta/thinking")
+            .and_then(Value::as_str)
+            .is_some_and(|thinking| thinking.contains("Research") && thinking.contains("grok-4.6"))
+}
 
 #[tokio::test]
 async fn streams_grok_acp_with_launch_scoped_model_effort_and_instructions() {
@@ -88,8 +170,166 @@ async fn streams_grok_acp_with_launch_scoped_model_effort_and_instructions() {
 }
 
 #[tokio::test]
+async fn native_grok_and_configured_cline_thoughts_stream_as_anthropic_thinking_deltas() {
+    for route in [
+        AcpThoughtRoute::NativeGrok,
+        AcpThoughtRoute::ConfiguredCline,
+    ] {
+        let root = tempfile::tempdir().expect("ACP thinking fixture");
+        let (model, backend) = spawn_thinking_backend(route, root.path()).await;
+        let bridge = Arc::new(Bridge::new_with_backend(backend, model.to_owned()));
+        let listener = tokio::net::TcpListener::bind(LOOPBACK_EPHEMERAL_ADDRESS)
+            .await
+            .expect("bind ACP thinking adapter");
+        let url = format!("http://{}/v1/messages", listener.local_addr().unwrap());
+        let app = http_router(bridge, model.to_owned(), None);
+        let server = tokio::spawn(axum::serve(listener, app).into_future());
+
+        let response = tokio::time::timeout(
+            Duration::from_secs(3),
+            Client::new()
+                .post(&url)
+                .json(&json!({
+                    "model":model,
+                    "max_tokens":64,
+                    "stream":true,
+                    "system":"cc_is_subagent=true",
+                    "messages":[{"role":"user","content":"stream one thought"}]
+                }))
+                .send(),
+        )
+        .await
+        .unwrap_or_else(|_| panic!("{} request timed out", route.label()))
+        .unwrap_or_else(|error| panic!("{} request failed: {error}", route.label()));
+        let body = tokio::time::timeout(Duration::from_secs(3), response.text())
+            .await
+            .unwrap_or_else(|_| panic!("{} stream timed out", route.label()))
+            .unwrap_or_else(|error| panic!("{} stream body failed: {error}", route.label()));
+        let events = parse_sse(&body);
+        assert!(
+            events.iter().any(is_acp_thinking_delta),
+            "{} did not expose its ACP thought as Anthropic thinking_delta: {body}",
+            route.label()
+        );
+        assert!(
+            events.iter().any(|event| event["type"] == "message_stop"),
+            "{} stream did not terminate: {body}",
+            route.label()
+        );
+        server.abort();
+        let _ = server.await;
+    }
+}
+
+#[tokio::test]
+async fn native_grok_xai_subagent_spawn_streams_as_anthropic_thinking() {
+    let root = tempfile::tempdir().expect("xAI spawn fixture");
+    let agent = spawn_mock("xai-spawn", root.path()).await;
+    let backend = AgentBackend::grok(agent);
+    let bridge = Arc::new(Bridge::new_with_backend(backend, "xai-spawn".to_owned()));
+    let listener = tokio::net::TcpListener::bind(LOOPBACK_EPHEMERAL_ADDRESS)
+        .await
+        .expect("bind xAI spawn adapter");
+    let url = format!("http://{}/v1/messages", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        axum::serve(listener, http_router(bridge, "xai-spawn".to_owned(), None))
+            .await
+            .expect("serve xAI spawn adapter");
+    });
+
+    let response = Client::new()
+        .post(&url)
+        .json(&json!({
+            "model":"xai-spawn",
+            "max_tokens":64,
+            "stream":true,
+            "messages":[{"role":"user","content":"delegate research"}]
+        }))
+        .send()
+        .await
+        .expect("send xAI spawn request");
+    let body = response.text().await.expect("read xAI spawn stream");
+    let events = parse_sse(&body);
+    assert!(
+        events.iter().any(is_xai_subagent_thinking_delta),
+        "xAI spawn was not exposed as an Anthropic thinking_delta: {body}"
+    );
+    assert!(
+        events.iter().any(|event| event["type"] == "message_stop"),
+        "xAI spawn stream did not terminate: {body}"
+    );
+    assert!(
+        !events.iter().any(|event| {
+            event["type"] == "content_block_start"
+                && event.pointer("/content_block/type").and_then(Value::as_str) == Some("tool_use")
+        }),
+        "xAI spawn incorrectly became a tool_use block: {body}"
+    );
+    server.abort();
+    let _ = server.await;
+}
+
+#[derive(Clone, Copy)]
+enum AcpThoughtRoute {
+    NativeGrok,
+    ConfiguredCline,
+}
+
+impl AcpThoughtRoute {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::NativeGrok => "native Grok",
+            Self::ConfiguredCline => "configured Cline",
+        }
+    }
+}
+
+async fn spawn_thinking_backend(
+    route: AcpThoughtRoute,
+    root: &Path,
+) -> (&'static str, Arc<AgentBackend>) {
+    match route {
+        AcpThoughtRoute::NativeGrok => {
+            let model = "grok-thinking-stream";
+            let agent = GrokAcp::spawn_with_program(
+                model,
+                env!("CARGO_BIN_EXE_grok-acp-mock"),
+                root.to_owned(),
+            )
+            .await
+            .expect("start native Grok thinking mock");
+            (model, AgentBackend::grok(agent))
+        }
+        AcpThoughtRoute::ConfiguredCline => {
+            let _process_env_lock = process_env_lock().await;
+            let model = "cline-pass/deepseek-v4-flash";
+            let launch = AcpLaunch {
+                program: env!("CARGO_BIN_EXE_grok-acp-mock").to_owned(),
+                arguments: vec!["--mode".to_owned(), "cline-thinking-stream".to_owned()],
+            };
+            let _current_dir = ScopedCurrentDir::enter(root);
+            let agent = GrokAcp::spawn_configured(model, &launch).await;
+            let agent = agent.expect("start configured Cline thinking mock");
+            (model, AgentBackend::configured_acp(agent))
+        }
+    }
+}
+
+fn parse_sse(body: &str) -> Vec<Value> {
+    body.split("\n\n")
+        .filter_map(|frame| {
+            frame
+                .lines()
+                .find_map(|line| line.strip_prefix("data: "))
+                .and_then(|data| serde_json::from_str(data).ok())
+        })
+        .collect()
+}
+
+#[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn provider_config_high_reaches_the_exact_native_grok_argv() {
+    let _process_env_lock = process_env_lock().await;
     let root = tempfile::tempdir().expect("provider route fixture");
     let config = root.path().join("providers.json");
     std::fs::write(
@@ -124,8 +364,7 @@ async fn provider_config_high_reaches_the_exact_native_grok_argv() {
     std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755))
         .expect("make Grok wrapper executable");
 
-    let previous = std::env::var_os("CLAUDEX_GROK_PROGRAM");
-    unsafe { std::env::set_var("CLAUDEX_GROK_PROGRAM", &wrapper) };
+    let _program_env = ScopedEnv::set("CLAUDEX_GROK_PROGRAM", &wrapper);
     let backend = AgentBackend::spawn_routes(&loaded.routes);
     let bridge = Arc::new(
         Bridge::new_with_backend(backend, "grok-4.6".to_owned())
@@ -156,11 +395,6 @@ async fn provider_config_high_reaches_the_exact_native_grok_argv() {
                 .await,
         ));
     }
-    if let Some(previous) = previous {
-        unsafe { std::env::set_var("CLAUDEX_GROK_PROGRAM", previous) };
-    } else {
-        unsafe { std::env::remove_var("CLAUDEX_GROK_PROGRAM") };
-    }
     for (effort, response) in responses {
         let response = response
             .unwrap_or_else(|error| panic!("send {effort} Grok request: {error}"))
@@ -187,34 +421,22 @@ async fn provider_config_high_reaches_the_exact_native_grok_argv() {
     assert!(trace.iter().all(|event| event.get("set_model").is_none()));
     assert!(trace.iter().all(|event| event.get("set_effort").is_none()));
     server.abort();
+    let _ = server.await;
 }
 
 #[tokio::test]
 async fn generated_plugin_and_parent_child_marker_form_a_grok_boundary_contract() {
+    let _process_env_lock = process_env_lock().await;
     let root = tempfile::tempdir().expect("Grok plugin boundary fixture");
     let home = root.path().join("home");
     std::fs::create_dir(&home).expect("create isolated Grok home");
     let grok = root.path().join("grok");
     symlink(env!("CARGO_BIN_EXE_grok-acp-mock"), &grok).expect("symlink mock as grok");
 
-    let previous_home = std::env::var_os("HOME");
-    let previous_plugin = std::env::var_os("CLAUDEX_GROK_PLUGIN_DIR");
-    unsafe {
-        std::env::set_var("HOME", &home);
-        std::env::remove_var("CLAUDEX_GROK_PLUGIN_DIR");
-    }
+    let _home_env = ScopedEnv::set("HOME", &home);
+    let _plugin_env = ScopedEnv::remove("CLAUDEX_GROK_PLUGIN_DIR");
     let spawned =
         GrokAcp::spawn_with_program("nested-boundary", &grok, root.path().to_owned()).await;
-    if let Some(previous) = previous_home {
-        unsafe { std::env::set_var("HOME", previous) };
-    } else {
-        unsafe { std::env::remove_var("HOME") };
-    }
-    if let Some(previous) = previous_plugin {
-        unsafe { std::env::set_var("CLAUDEX_GROK_PLUGIN_DIR", previous) };
-    } else {
-        unsafe { std::env::remove_var("CLAUDEX_GROK_PLUGIN_DIR") };
-    }
     let agent = spawned.expect("start mock through real grok program-name branch");
 
     let plugin = home.join(".cache/claudex/grok-native-high-plugin-v3");
@@ -298,6 +520,83 @@ async fn creates_grok_acp_session_in_the_request_working_directory() {
         }),
         "trace={trace:?}"
     );
+}
+
+#[tokio::test]
+async fn grok_attaches_launch_mcp_in_session_new_without_session_load() {
+    let root = tempfile::tempdir().expect("launch MCP wire fixture");
+    let trace_path = root.path().join("grok-acp-mock.jsonl");
+    let agent = spawn_mock("mcp-wire", root.path()).await;
+    let response = agent
+        .create_session(json!({
+            "dynamicTools":[{"name":"Agent","description":"Launch a SubAgent"}]
+        }))
+        .await
+        .expect("create Grok session with launch MCP");
+    let session_id = response["thread"]["id"]
+        .as_str()
+        .expect("launch MCP session ID")
+        .to_owned();
+    let events = agent.subscribe_thread(&session_id);
+    agent
+        .start_turn(json!({
+            "threadId":session_id,
+            "input":"prompt with launch MCP"
+        }))
+        .await
+        .expect("prompt with launch MCP");
+    assert_eq!(recv(&events).await["params"]["delta"], "GROK_ACP_STREAM_OK");
+    assert_eq!(recv(&events).await["params"]["turn"]["status"], "completed");
+
+    let trace = read_trace(&trace_path);
+    let new_session = trace
+        .iter()
+        .find(|event| event.get("new_session").is_some())
+        .expect("session/new trace");
+    let mcp_servers = new_session
+        .pointer("/new_session/mcpServers")
+        .and_then(Value::as_array)
+        .expect("launch MCP in session/new");
+    assert_eq!(mcp_servers.len(), 1);
+    assert_eq!(mcp_servers[0]["name"], "claudex-launch");
+    assert!(
+        trace
+            .iter()
+            .all(|event| event.get("load_session").is_none()),
+        "Grok launch MCP must not use session/load: {trace:?}"
+    );
+}
+
+#[tokio::test]
+async fn launch_mcp_session_new_failure_reaches_session_creation_error() {
+    let _process_env_lock = process_env_lock().await;
+    let root = tempfile::tempdir().expect("launch MCP failure fixture");
+    let _current_dir = ScopedCurrentDir::enter(root.path());
+    let agent = GrokAcp::spawn_configured(
+        "mcp-failure",
+        &AcpLaunch {
+            program: env!("CARGO_BIN_EXE_grok-acp-mock").to_owned(),
+            arguments: vec!["--mode".to_owned(), "fail-mcp-new".to_owned()],
+        },
+    )
+    .await
+    .expect("start configured ACP MCP failure fixture");
+    let error = agent
+        .create_session(json!({
+            "dynamicTools":[{"name":"Agent","description":"Launch a SubAgent"}]
+        }))
+        .await
+        .expect_err("failed launch MCP session/new must fail session creation");
+    let message = error.to_string();
+    assert!(
+        message.contains("launch MCP attachment during session/new failed"),
+        "session creation hid launch MCP failure: {message}"
+    );
+    assert!(
+        message.contains("session/new failed"),
+        "session creation hid underlying ACP method: {message}"
+    );
+    agent.shutdown().await;
 }
 
 fn assert_trace(trace: &[Value]) {
@@ -400,6 +699,130 @@ async fn reports_acp_startup_effort_and_prompt_failures() {
     assert!(agent.is_alive());
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn configured_opencode_route_uses_the_stderr_watcher_path() {
+    let _process_env_lock = process_env_lock().await;
+    let root = tempfile::tempdir().expect("opencode fixture");
+    let opencode = root.path().join("opencode");
+    std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_grok-acp-mock"), &opencode)
+        .expect("opencode fixture symlink");
+    let _current_dir = ScopedCurrentDir::enter(root.path());
+    let result = GrokAcp::spawn_configured(
+        "opencode-go/test-model",
+        &AcpLaunch {
+            program: opencode.to_string_lossy().into_owned(),
+            arguments: Vec::new(),
+        },
+    )
+    .await;
+    let agent = match result {
+        Ok(agent) => agent,
+        Err(error) => {
+            let trace = std::fs::read_to_string(root.path().join("grok-acp-mock.jsonl"))
+                .unwrap_or_else(|read_error| format!("trace unavailable: {read_error}"));
+            panic!("start configured opencode fixture: {error}; trace: {trace}");
+        }
+    };
+    assert!(agent.is_alive());
+    agent.shutdown().await;
+}
+
+#[tokio::test]
+async fn startup_timeout_terminates_a_provider_that_ignores_initialize() {
+    let root = tempfile::tempdir().expect("initialize timeout fixture");
+    let result = tokio::time::timeout(
+        Duration::from_secs(60),
+        GrokAcp::spawn_with_program(
+            "ignored-initialize",
+            env!("CARGO_BIN_EXE_grok-acp-mock"),
+            root.path().to_owned(),
+        ),
+    )
+    .await
+    .expect("initialize timeout fixture hung");
+    let error = match result {
+        Ok(_) => panic!("ignored initialize must fail startup"),
+        Err(error) => error,
+    };
+    assert!(
+        error.to_string().contains("timed out"),
+        "unexpected error: {error}"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn grok_plugin_reports_a_stale_alias_directory_that_cannot_be_removed() {
+    let _process_env_lock = process_env_lock().await;
+    let home = tempfile::tempdir().expect("plugin home");
+    let agents = home
+        .path()
+        .join(".cache/claudex/grok-native-high-plugin-v3/agents");
+    std::fs::create_dir_all(&agents).expect("plugin agents directory");
+    std::fs::create_dir(agents.join("claudex-gpt.md")).expect("stale alias directory");
+    let bin = home.path().join("bin");
+    std::fs::create_dir(&bin).expect("plugin bin directory");
+    let grok = bin.join("grok");
+    std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_grok-acp-mock"), &grok)
+        .expect("grok fixture symlink");
+
+    let _home_env = ScopedEnv::set("HOME", home.path());
+    let cwd = tempfile::tempdir().expect("plugin cwd");
+    let result = GrokAcp::spawn_with_program("grok-model", grok, cwd.path().to_owned()).await;
+
+    let error = match result {
+        Ok(_) => panic!("stale alias directory must fail plugin preparation"),
+        Err(error) => error,
+    };
+    assert!(error.to_string().contains("remove stale Grok shadow"));
+}
+
+#[tokio::test]
+async fn driver_reaps_a_provider_that_exits_during_session_creation() {
+    let root = tempfile::tempdir().expect("provider exit fixture");
+    let agent = spawn_mock("exit-once-session", root.path()).await;
+    assert!(agent.create_session(json!({})).await.is_err());
+    assert!(!agent.is_alive());
+    agent.shutdown().await;
+}
+
+#[tokio::test]
+async fn driver_stops_when_provider_io_closes_before_the_process_exits() {
+    let root = tempfile::tempdir().expect("provider I/O fixture");
+    let agent = spawn_mock("close-io", root.path()).await;
+    std::fs::write(root.path().join("grok-acp-close-io"), b"close")
+        .expect("request provider I/O close");
+
+    let observed = tokio::time::timeout(Duration::from_secs(5), wait_for_driver_stop(&agent))
+        .await
+        .is_ok();
+    if !observed {
+        agent.shutdown().await;
+        panic!("driver did not observe provider I/O closure");
+    }
+    agent.shutdown().await;
+}
+
+async fn wait_for_driver_stop(agent: &GrokAcp) {
+    while agent.is_alive() {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+#[tokio::test]
+async fn scheduler_rejects_a_turn_without_a_thread_id() {
+    let root = tempfile::tempdir().expect("missing thread id fixture");
+    let agent = spawn_mock("", root.path()).await;
+    assert!(
+        agent
+            .start_turn(json!({"input":"missing thread id"}))
+            .await
+            .is_err()
+    );
+    agent.shutdown().await;
+}
+
 #[tokio::test]
 async fn forwards_grok_tool_subagent_retry_and_usage_updates() {
     let root = tempfile::tempdir().expect("coverage update fixture");
@@ -492,6 +915,77 @@ async fn bridge_renders_provider_tools_as_progress_without_a_follow_up_tool_turn
         "provider display must not cause a follow-up ACP prompt"
     );
     server.abort();
+    let _ = server.await;
+}
+
+#[tokio::test]
+async fn grok_read_only_end_turn_streams_an_empty_main_segment() {
+    let root = tempfile::tempdir().expect("read-empty fixture");
+    let trace_path = root.path().join("grok-acp-mock.jsonl");
+    let agent = spawn_mock("read-empty", root.path()).await;
+    let backend = AgentBackend::routed(vec![("read-empty".to_owned(), AgentBackend::grok(agent))]);
+    let bridge = Arc::new(Bridge::new_with_backend(backend, "read-empty".to_owned()));
+    let listener = tokio::net::TcpListener::bind(LOOPBACK_EPHEMERAL_ADDRESS)
+        .await
+        .expect("bind read-empty server");
+    let url = format!("http://{}/v1/messages", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        axum::serve(listener, http_router(bridge, "read-empty".to_owned(), None))
+            .await
+            .expect("serve read-empty bridge");
+    });
+
+    let response = tokio::time::timeout(
+        Duration::from_secs(3),
+        Client::new()
+            .post(url)
+            .json(&json!({
+                "model":"read-empty",
+                "max_tokens":64,
+                "stream":true,
+                "messages":[{"role":"user","content":"inspect config"}]
+            }))
+            .send(),
+    )
+    .await
+    .expect("read-empty request timeout")
+    .expect("read-empty request")
+    .error_for_status()
+    .expect("read-empty response status");
+    let body = tokio::time::timeout(Duration::from_secs(3), response.text())
+        .await
+        .expect("read-empty stream timeout")
+        .expect("read-empty stream body");
+    let events = parse_sse(&body);
+    let completion = events
+        .iter()
+        .find(|event| event["type"] == "message_delta")
+        .expect("empty main stream completion");
+    assert_eq!(completion["delta"]["stop_reason"], "end_turn");
+    assert!(events.iter().any(|event| event["type"] == "message_stop"));
+    assert!(events.iter().all(|event| {
+        event.pointer("/delta/type").and_then(Value::as_str) != Some("text_delta")
+    }));
+    assert!(events.iter().any(|event| {
+        event.pointer("/delta/type").and_then(Value::as_str) == Some("thinking_delta")
+            && event
+                .pointer("/delta/thinking")
+                .and_then(Value::as_str)
+                .map(|thinking| thinking.contains("▶ Read"))
+                == Some(true)
+    }));
+
+    let trace = read_trace(&trace_path);
+    assert_eq!(
+        trace
+            .iter()
+            .filter(|event| event.get("prompt").is_some())
+            .count(),
+        1,
+        "a provider Read must finish without an assistant follow-up prompt"
+    );
+    server.abort();
+    let _ = server.await;
 }
 
 #[tokio::test]

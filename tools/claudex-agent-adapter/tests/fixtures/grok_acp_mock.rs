@@ -18,10 +18,13 @@ use tokio::{
 use tokio_util::compat::{TokioAsyncReadCompatExt as _, TokioAsyncWriteCompatExt as _};
 
 const TRACE_FILE: &str = "grok-acp-mock.jsonl";
+const CLOSE_IO_FILE: &str = "grok-acp-close-io";
 const SETUP_RELEASE_SOCKET: &str = "grok-acp-setup-release.sock";
 const PARALLEL_RELEASE_FILE: &str = "grok-acp-parallel-release";
 const CONFIGURED_PARALLEL_SESSIONS: usize = 7;
 const PARALLEL_RELEASE_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
+const THINKING_STREAM_MODE_SUFFIX: &str = "thinking-stream";
+const THINKING_STREAM_MARKER: &str = "ACP_THINKING_MARKER";
 
 struct MockAgent {
     operations: mpsc::UnboundedSender<ClientOperation>,
@@ -144,6 +147,30 @@ impl MockAgent {
             self.notify_extension(method, params).await?;
         }
         Ok(())
+    }
+
+    async fn send_read_empty(&self, session_id: acp::SessionId) -> acp::Result<()> {
+        const CALL_ID: &str = "read-empty";
+        self.notify(
+            session_id.clone(),
+            acp::SessionUpdate::ToolCall(
+                acp::ToolCall::new(CALL_ID, "Read config")
+                    .kind(acp::ToolKind::Read)
+                    .status(acp::ToolCallStatus::InProgress)
+                    .raw_input(serde_json::json!({"path":"config.toml"})),
+            ),
+        )
+        .await?;
+        self.notify(
+            session_id,
+            acp::SessionUpdate::ToolCallUpdate(acp::ToolCallUpdate::new(
+                CALL_ID,
+                acp::ToolCallUpdateFields::new()
+                    .status(acp::ToolCallStatus::Completed)
+                    .title("Read config"),
+            )),
+        )
+        .await
     }
 
     async fn wait_for_concurrent_prompt(&self, expected: usize) {
@@ -355,6 +382,9 @@ impl acp::Agent for MockAgent {
         request: acp::InitializeRequest,
     ) -> acp::Result<acp::InitializeResponse> {
         self.record("initialize", request)?;
+        if self.mode == "ignored-initialize" {
+            return std::future::pending::<acp::Result<acp::InitializeResponse>>().await;
+        }
         if self.mode == "fail-initialize" {
             return Err(acp::Error::internal_error());
         }
@@ -391,7 +421,7 @@ impl acp::Agent for MockAgent {
         &self,
         request: acp::NewSessionRequest,
     ) -> acp::Result<acp::NewSessionResponse> {
-        self.record("new_session", request)?;
+        self.record("new_session", &request)?;
         if let Some(barrier) = &self.session_barrier {
             let count = self.concurrent_sessions.get() + 1;
             self.concurrent_sessions.set(count);
@@ -411,6 +441,9 @@ impl acp::Agent for MockAgent {
             }
         }
         if self.mode == "fail-session" {
+            return Err(acp::Error::internal_error());
+        }
+        if self.mode == "fail-mcp-new" && !request.mcp_servers.is_empty() {
             return Err(acp::Error::internal_error());
         }
         if self.mode == "fail-parallel-session" && self.next_session.get() > 0 {
@@ -466,6 +499,26 @@ impl acp::Agent for MockAgent {
             self.send_coverage_updates(request.session_id.clone())
                 .await?;
         }
+        if self.mode == "read-empty" {
+            self.send_read_empty(request.session_id.clone()).await?;
+            return Ok(acp::PromptResponse::new(acp::StopReason::EndTurn));
+        }
+        if self.mode == "xai-spawn" {
+            self.notify_extension(
+                "_x.ai/session/update",
+                serde_json::json!({
+                    "sessionId": request.session_id.0,
+                    "update": {
+                        "sessionUpdate": "subagent_spawned",
+                        "description": "Research",
+                        "model": "grok-4.6",
+                        "reasoning_effort": "medium"
+                    }
+                }),
+            )
+            .await?;
+            return Ok(acp::PromptResponse::new(acp::StopReason::EndTurn));
+        }
         if self.mode == "concurrent-turns" {
             self.wait_for_concurrent_prompt(2).await;
         }
@@ -474,6 +527,15 @@ impl acp::Agent for MockAgent {
         }
         if let Some(response) = self.maybe_cancellable_prompt(&request).await? {
             return Ok(response);
+        }
+        if self.mode.ends_with(THINKING_STREAM_MODE_SUFFIX) {
+            self.notify(
+                request.session_id.clone(),
+                acp::SessionUpdate::AgentThoughtChunk(acp::ContentChunk::new(
+                    THINKING_STREAM_MARKER.into(),
+                )),
+            )
+            .await?;
         }
         self.complete_prompt_with_permission(request).await
     }
@@ -545,6 +607,8 @@ async fn run_agent(
     agent: MockAgent,
     requests: mpsc::UnboundedReceiver<ClientOperation>,
 ) -> acp::Result<()> {
+    let close_io_marker =
+        (agent.mode == "close-io").then(|| agent.trace.with_file_name(CLOSE_IO_FILE));
     let (connection, io) = acp::AgentSideConnection::new(
         agent,
         tokio::io::stdout().compat_write(),
@@ -554,6 +618,25 @@ async fn run_agent(
         },
     );
     tokio::task::spawn_local(relay_client_operations(connection, requests));
+    if let Some(marker) = close_io_marker {
+        let io = tokio::task::spawn_local(io);
+        while !marker.exists() {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        io.abort();
+        let _ = io.await;
+        // Tokio's stdio wrappers borrow the process descriptors, so dropping
+        // their I/O future alone does not close the provider pipe endpoints.
+        // Close them explicitly while keeping this fixture process alive so
+        // the adapter observes I/O closure before it reaps the child.
+        #[cfg(unix)]
+        // SAFETY: this fixture is intentionally terminating its own ACP stdio.
+        unsafe {
+            libc::close(libc::STDIN_FILENO);
+            libc::close(libc::STDOUT_FILENO);
+        }
+        return std::future::pending::<acp::Result<()>>().await;
+    }
     io.await
 }
 

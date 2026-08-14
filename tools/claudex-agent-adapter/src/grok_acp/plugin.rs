@@ -101,12 +101,7 @@ fn prepare_with(
     }
     let stale_plugin_hook = root.join("hooks/hooks.json");
     if stale_plugin_hook.exists() {
-        fs::remove_file(&stale_plugin_hook).with_context(|| {
-            format!(
-                "remove ineffective process-plugin hook {}",
-                stale_plugin_hook.display()
-            )
-        })?;
+        fs::remove_file(&stale_plugin_hook).context("remove ineffective process-plugin hook")?;
     }
     write_if_changed(
         user_hooks.join("claudex-agent-adapter.json"),

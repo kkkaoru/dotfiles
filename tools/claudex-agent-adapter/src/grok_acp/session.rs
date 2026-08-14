@@ -20,8 +20,9 @@ use mcp::launch_mcp_servers;
 use mcp::{launch_mcp_servers_from, params_offer_launch_tools};
 
 pub(super) const SESSION_SETUP_TIMEOUT: Duration = Duration::from_secs(8);
-/// Post-create `session/load` MCP attach budget. Do not raise this; session/new
-/// itself no longer waits on MCP.
+/// Bounded timeout for setup requests that carry MCP, including the
+/// compatibility path used when resuming a persisted session. Do not raise
+/// this; MCP setup must not hold session creation indefinitely.
 pub(super) const SESSION_SETUP_WITH_MCP_TIMEOUT: Duration = Duration::from_secs(2);
 pub(super) const LAUNCH_MCP_NAME: &str = "claudex-launch";
 pub(super) const LAUNCH_MCP_COMMAND: &str = "mcp-claudex-launch";
@@ -70,20 +71,13 @@ pub(super) async fn create(
     // Claude Code embeds the active child cwd in its base instructions. Keep ACP sessions scoped
     // to that request instead of leaking the adapter daemon's launch directory.
     let session_cwd = session_cwd(&params, cwd);
-    // Attach launch MCP only after session/new succeeds. Cursor/OpenCode have
-    // historically hung when MCP is bundled into session/new; a post-create
-    // session/load keeps Nucleating off the MCP handshake.
+    // ACP agents receive MCP servers as part of session/new. A fresh session
+    // has no persisted state to load, and session/load is a resume operation;
+    // in particular, Grok and Cursor can race their persistence stores when a
+    // newly returned ID is immediately loaded. Do not fall back to an MCP-less
+    // session or to session/load when session/new carries launch MCP.
     let mcp = launch_mcp_servers(&params);
-    let response =
-        new_session_with_mcp(provider, connection, model, &session_cwd, Vec::new()).await?;
-    attach_launch_mcp(
-        provider,
-        connection,
-        &response.session_id,
-        &session_cwd,
-        mcp,
-    )
-    .await;
+    let response = new_session_with_mcp(provider, connection, model, &session_cwd, mcp).await?;
     // OpenCode ignores modelId meta on session/new. Cursor accepts CLI `--model auto` but ACP
     // only accepts ids like `default[]`. Pin session-scoped configured ACP after create so the
     // first prompt cannot run against a mismatched default. Launch-scoped CLIs already pass
@@ -114,12 +108,9 @@ pub(super) async fn create(
 
 #[path = "session_setup.rs"]
 mod setup;
-use setup::{
-    attach_launch_mcp, await_model_setup, new_session_with_mcp, pins_acp_model_after_create,
-    session_cwd,
-};
 #[cfg(test)]
-use setup::{await_setup, request_cwd, session_setup_timeout};
+use setup::{attach_launch_mcp, await_setup, request_cwd, session_setup_timeout};
+use setup::{await_model_setup, new_session_with_mcp, pins_acp_model_after_create, session_cwd};
 
 #[cfg(test)]
 #[cfg_attr(coverage_nightly, coverage(off))]

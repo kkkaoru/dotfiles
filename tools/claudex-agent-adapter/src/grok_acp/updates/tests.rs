@@ -63,6 +63,16 @@ async fn forwards_thought_as_reasoning_and_tools_as_provider_cards() {
             ),
         ),
     );
+    dispatch_notification(
+        &events,
+        &thoughts(),
+        acp::SessionNotification::new(
+            "session",
+            acp::SessionUpdate::AgentThoughtChunk(acp::ContentChunk::new(
+                acp::ContentBlock::Image(acp::ImageContent::new("data", "image/png")),
+            )),
+        ),
+    );
     let thought = receiver.recv().await.unwrap();
     let tool = receiver.recv().await.unwrap();
     assert_eq!(thought["method"], "item/reasoning/summaryTextDelta");
@@ -72,6 +82,12 @@ async fn forwards_thought_as_reasoning_and_tools_as_provider_cards() {
     assert_eq!(tool["method"], "item/providerTool/call");
     assert_eq!(tool["params"]["tool"], "Read");
     assert_eq!(tool["params"]["arguments"]["path"], "/tmp/a");
+    assert!(
+        tokio::time::timeout(Duration::from_millis(10), receiver.recv())
+            .await
+            .is_err(),
+        "non-text thought chunks must not produce a reasoning event"
+    );
 }
 
 #[tokio::test]
