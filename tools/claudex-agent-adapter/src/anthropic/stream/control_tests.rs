@@ -48,6 +48,20 @@ fn error_flow_no_retry_fails() {
 }
 
 #[test]
+fn error_flow_grok_balance_402_with_no_retry_is_terminal() {
+    let event = json!({
+        "params": {
+            "willRetry": false,
+            "error": {
+                "message": "Configured ACP prompt failed: http_status:402 Payment Required: usage balance exhausted"
+            }
+        }
+    });
+    let error = super::error_flow(&event).expect_err("willRetry:false must not loop on Grok 402");
+    assert!(error.to_string().contains("usage balance exhausted"));
+}
+
+#[test]
 fn error_flow_missing_will_retry_fails() {
     let event = json!({"params":{}});
     let result = super::error_flow(&event);

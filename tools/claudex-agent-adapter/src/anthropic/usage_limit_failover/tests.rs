@@ -9,6 +9,7 @@ use super::super::segment::EMPTY_ACP_END_TURN;
 use super::{UsageLimitFailover, should_failover_provider_error, streaming_provider_retry};
 
 const CLINE_FLASH: &str = "cline-pass/deepseek-v4-flash";
+const GROK_46: &str = "grok-4.6";
 const QWEN_CLOUD: &str = "qwen3.8-max-preview";
 const CURSOR_AUTO: &str = "auto";
 const SPARK: &str = "gpt-5.3-codex-spark";
@@ -25,6 +26,8 @@ Configured ACP completed with no assistant content (provider likely unavailable 
 Cline Credits models return empty end_turn when balance is $0 — use Qwen Cloud `qwen3.8-max-preview` / \
 `claudex-qwen`, or top up Credits). This is a server-side issue, usually temporary — try again in a moment. \
 If it persists, check your inference gateway (127.0.0.1:54304).";
+const GROK_402_BALANCE_EXHAUSTED: &str = "Configured ACP prompt failed: \
+http_status:402 Payment Required: usage balance exhausted";
 
 fn cline_and_qwen_bridge() -> Bridge {
     let cache_home = Box::leak(Box::new(
@@ -53,6 +56,26 @@ fn cline_and_qwen_bridge() -> Bridge {
         )])
         .expect("install subscription fallback");
     Bridge::new_with_backend(backend, CLINE_FLASH.to_owned())
+        .with_model_catalog(catalog)
+        .with_usage_limit_cache_home(cache_home.path())
+}
+
+fn grok_and_qwen_bridge() -> Bridge {
+    let cache_home = Box::leak(Box::new(
+        tempfile::tempdir().expect("isolated Grok failover cache"),
+    ));
+    let backend = AgentBackend::spawn_routes(&[
+        BackendRoute::new(GROK_46, BackendKind::GrokAcp),
+        BackendRoute::new(QWEN_CLOUD, BackendKind::ConfiguredAcp),
+    ]);
+    let mut catalog = ModelCatalog::default();
+    catalog
+        .set_worker_routes(vec![
+            crate::provider_config::WorkerRoute::new("claudex-grok", GROK_46, "high"),
+            crate::provider_config::WorkerRoute::new("claudex-qwen", QWEN_CLOUD, "high"),
+        ])
+        .expect("install Grok and Qwen workers");
+    Bridge::new_with_backend(backend, GROK_46.to_owned())
         .with_model_catalog(catalog)
         .with_usage_limit_cache_home(cache_home.path())
 }
@@ -128,6 +151,56 @@ fn treats_429_rate_limit_as_failover_trigger() {
     assert!(super::should_failover_provider_error(&anyhow::Error::msg(
         r#"codex app-server turn failed: {"error":{"codexErrorInfo":{"responseTooManyFailedAttempts":{"httpStatusCode":429}},"message":"exceeded retry limit"}}"#
     )));
+}
+
+#[test]
+fn grok_payment_required_balance_exhaustion_cools_only_grok_and_rewrites_to_qwen() {
+    use std::time::SystemTime;
+
+    use crate::anthropic::{provider_auth_cooldown, usage_limit_cooldown};
+
+    let root = tempfile::tempdir().expect("Grok 402 cooldown fixture");
+    let bridge = grok_and_qwen_bridge().with_usage_limit_cache_home(root.path());
+    let error = anyhow::anyhow!(GROK_402_BALANCE_EXHAUSTED);
+
+    assert!(should_failover_provider_error(&error));
+    assert!(!bridge.subagent_provider_is_exhausted(GROK_46));
+    bridge.note_provider_exhaustion(&error, Some(GROK_46));
+
+    assert!(
+        bridge.subagent_provider_is_exhausted(GROK_46),
+        "the exhausted Grok worker must be unavailable to subsequent SubAgents"
+    );
+    assert!(provider_auth_cooldown::scope_is_cooling_down_at(
+        bridge.provider_auth_cache_path().as_deref(),
+        GROK_46,
+        SystemTime::now(),
+    ));
+    assert!(
+        !bridge.subagent_provider_is_exhausted(QWEN_CLOUD),
+        "Grok 402 must not cool down a healthy sibling"
+    );
+    assert!(
+        !usage_limit_cooldown::codex_app_server_is_cooling_down_at(
+            bridge.usage_limit_cache_path().as_deref(),
+            SystemTime::now(),
+        ),
+        "Grok provider balance must not set the global Codex cooldown"
+    );
+
+    let mut request = dummy_request(GROK_46);
+    let mut effort = Some("high".to_owned());
+    let route = bridge
+        .rewrite_exhausted_subagent_request(
+            &mut request,
+            RouteDecision::Provider,
+            &mut effort,
+            true,
+        )
+        .expect("Grok cooldown must choose a sibling provider");
+    assert_eq!(request.model, QWEN_CLOUD, "must not reuse exhausted Grok");
+    assert_eq!(effort.as_deref(), Some("high"));
+    assert_eq!(route, RouteDecision::Provider);
 }
 
 #[test]

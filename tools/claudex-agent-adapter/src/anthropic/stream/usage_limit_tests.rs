@@ -96,6 +96,81 @@ The quota will reset at 08-15 01:53:00 UTC.";
 }
 
 #[test]
+fn detects_grok_payment_required_balance_exhaustion_in_text_and_json() {
+    // Observed from Grok ACP: a prepaid balance failure is reported as a
+    // provider-scoped 402 rather than a Codex app-server-wide usage limit.
+    const GROK_402_BALANCE_EXHAUSTED: &str = "Configured ACP prompt failed: \
+http_status:402 Payment Required: usage balance exhausted";
+
+    assert!(contains_provider_quota_exhausted_marker(
+        GROK_402_BALANCE_EXHAUSTED
+    ));
+    assert!(contains_usage_limit_marker(GROK_402_BALANCE_EXHAUSTED));
+    assert!(contains_provider_quota_exhausted_marker(
+        "USAGE BALANCE EXHAUSTED"
+    ));
+    for status_json in [
+        r#"{"http_status":402,"message":"Payment Required"}"#,
+        r#"{"message":"Payment Required","http_status": 402}"#,
+        "{\n  \"message\": \"Payment Required\",\n  \"http_status\": 402\n}",
+        r#"{"outer":{"httpStatusCode":402}}"#,
+        r#"{"outer":{"provider":{"http_status":402}}}"#,
+    ] {
+        assert!(
+            contains_provider_quota_exhausted_marker(status_json),
+            "allowlisted numeric HTTP 402 must be recognized: {status_json}"
+        );
+    }
+    let escaped_status_json =
+        serde_json::to_string(r#"{"error":{"httpStatusCode":402}}"#).expect("escaped JSON fixture");
+    assert!(contains_provider_quota_exhausted_marker(
+        &escaped_status_json
+    ));
+    assert!(is_usage_limit_event(&json!({
+        "params": {
+            "willRetry": false,
+            "error": {
+                "message": GROK_402_BALANCE_EXHAUSTED,
+                "data": {"provider": {"http_status": 402}}
+            }
+        }
+    })));
+    assert!(contains_provider_quota_exhausted_marker(
+        "Quota exhausted: Your token-plan 1-week quota has been exhausted."
+    ));
+    assert!(contains_provider_quota_exhausted_marker(
+        "AI_APICallError: Weekly usage limit reached. Resets in 4 days."
+    ));
+    assert!(
+        !contains_classic_usage_limit_marker(GROK_402_BALANCE_EXHAUSTED),
+        "Grok prepaid balance must not cool down the Codex app-server backend"
+    );
+}
+
+#[test]
+fn grok_payment_required_rejects_other_statuses_and_ordinary_balances() {
+    for near_miss in [
+        "http_status:402",
+        "grok upstream emitted http_status:402",
+        "http_status:403 Forbidden",
+        "http_status:4020 malformed status",
+        "Current usage balance: $12.34",
+        r#"{"http_status":"402","message":"Payment Required"}"#,
+        r#"{"status":402,"message":"Payment Required"}"#,
+        r#"{"http_status":403,"message":"Payment Required"}"#,
+    ] {
+        assert!(
+            !contains_provider_quota_exhausted_marker(near_miss),
+            "near miss must not trigger a provider cooldown: {near_miss}"
+        );
+        assert!(
+            !contains_usage_limit_marker(near_miss),
+            "near miss must not trigger usage-limit failover: {near_miss}"
+        );
+    }
+}
+
+#[test]
 fn detects_usage_limit_markers_on_each_error_field() {
     assert!(is_usage_limit_event(&json!({
         "params": {"message": "You've hit your usage limit"}
