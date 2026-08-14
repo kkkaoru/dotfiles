@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import type {
+  ActiveIdentity,
   AgmsgService,
   HistoryRequest,
   IdentityLookup,
   InboxRequest,
+  IdentityStore,
   JoinRequest,
   LeaveRequest,
   MessageSink,
@@ -28,6 +30,9 @@ interface DeliveryHarness {
     readonly whoami: ReturnType<typeof vi.fn<AgmsgService["whoami"]>>;
   };
   readonly context: RuntimeContext;
+  readonly identityStore: IdentityStore & {
+    readonly save: ReturnType<typeof vi.fn<IdentityStore["save"]>>;
+  };
   readonly messages: MessageSink & { readonly sendMessage: ReturnType<typeof vi.fn> };
   readonly runtime: AgmsgRuntime;
   readonly schedulerState: SchedulerState;
@@ -41,7 +46,10 @@ interface DeliveryHarness {
 
 const SINGLE_IDENTITY: IdentityLookup = { agent: "alice", kind: "single", teams: ["one"] };
 
-function createDeliveryHarness(lookup: IdentityLookup): DeliveryHarness {
+function createDeliveryHarness(
+  lookup: IdentityLookup,
+  storedIdentity?: ActiveIdentity,
+): DeliveryHarness {
   const inbox = vi.fn<AgmsgService["inbox"]>(
     async (request: InboxRequest) => `inbox:${request.team}`,
   );
@@ -68,13 +76,23 @@ function createDeliveryHarness(lookup: IdentityLookup): DeliveryHarness {
     select: vi.fn(async (_title: string, options: string[]) => options.at(-1)),
     setStatus: vi.fn(),
   };
-  const context: RuntimeContext = { cwd: "/project", hasUI: true, signal: undefined, ui };
+  const context: RuntimeContext = {
+    cwd: "/project",
+    hasUI: true,
+    sessionManager: { getBranch: (): readonly unknown[] => [] },
+    signal: undefined,
+    ui,
+  };
   const messages = { sendMessage: vi.fn() } satisfies MessageSink;
   const schedulerState: SchedulerState = {
     canceled: false,
     intervalMs: undefined,
     task: undefined,
   };
+  const identityStore = {
+    load: vi.fn(() => storedIdentity),
+    save: vi.fn<IdentityStore["save"]>(),
+  } satisfies IdentityStore;
   const scheduler: RepeatScheduler = {
     repeat(task: () => void, intervalMs: number): () => void {
       schedulerState.canceled = false;
@@ -89,14 +107,50 @@ function createDeliveryHarness(lookup: IdentityLookup): DeliveryHarness {
     client,
     clientMock: { inbox, join, send, whoami },
     context,
+    identityStore,
     messages,
-    runtime: new AgmsgRuntime(messages, client, scheduler),
+    runtime: new AgmsgRuntime(messages, client, scheduler, identityStore),
     schedulerState,
     ui,
   };
 }
 
 describe("automatic delivery", () => {
+  it("restores a selected identity after reload without requiring reconnect", async () => {
+    const harness = createDeliveryHarness(
+      { agents: ["alice", "bob"], kind: "multiple", teams: ["one"] },
+      { agent: "alice", teams: ["one"] },
+    );
+    await harness.runtime.start(harness.context);
+    await harness.runtime.checkAutomatically(harness.context);
+    expect(harness.clientMock.inbox).toHaveBeenCalledWith({
+      agent: "alice",
+      quiet: true,
+      signal: undefined,
+      team: "one",
+    });
+    expect(harness.ui.setStatus).toHaveBeenCalledWith("agmsg", "agmsg: alice (one)");
+  });
+
+  it("keeps the persisted identity when startup lookup fails transiently", async () => {
+    const harness = createDeliveryHarness(
+      { agents: ["alice", "bob"], kind: "multiple", teams: ["one"] },
+      { agent: "alice", teams: ["one"] },
+    );
+    harness.clientMock.whoami.mockRejectedValueOnce(new Error("database busy"));
+    await harness.runtime.start(harness.context);
+    await harness.runtime.checkAutomatically(harness.context);
+    expect(harness.clientMock.inbox).toHaveBeenCalledWith({
+      agent: "alice",
+      quiet: true,
+      signal: undefined,
+      team: "one",
+    });
+    expect(harness.ui.setStatus).toHaveBeenCalledWith("agmsg", "agmsg: alice (one)");
+  });
+});
+
+describe("automatic message checks", () => {
   it("polls after joining and triggers a turn only for a real message", async () => {
     const harness = createDeliveryHarness({ availableTeams: [], kind: "not-joined" });
     await harness.runtime.start(harness.context);
@@ -266,16 +320,27 @@ describe("reconnect command", () => {
 });
 
 describe("automatic delivery resilience", () => {
-  it("prevents overlapping background and turn checks", async () => {
+  it("coalesces overlapping checks so burst messages are not delayed or missed", async () => {
     const harness = createDeliveryHarness(SINGLE_IDENTITY);
     const deferred = Promise.withResolvers<string>();
-    harness.clientMock.inbox.mockImplementation(async () => deferred.promise);
+    harness.clientMock.inbox
+      .mockImplementationOnce(async () => deferred.promise)
+      .mockResolvedValueOnce("second burst message");
     await harness.runtime.start(harness.context);
     const first = harness.runtime.checkAutomatically(harness.context);
     await harness.runtime.checkAutomatically(harness.context);
-    deferred.resolve("");
+    deferred.resolve("first burst message");
     await first;
-    expect(harness.clientMock.inbox).toHaveBeenCalledTimes(1);
+    expect(harness.clientMock.inbox).toHaveBeenCalledTimes(2);
+    expect(harness.messages.sendMessage).toHaveBeenNthCalledWith(
+      2,
+      {
+        content: "Incoming agmsg message:\nsecond burst message",
+        customType: "agmsg-inbox",
+        display: true,
+      },
+      { deliverAs: "steer", triggerTurn: true },
+    );
   });
 
   it("surfaces script failures as status without throwing", async () => {
@@ -295,6 +360,7 @@ describe("automatic delivery resilience", () => {
     const failed = createDeliveryHarness(SINGLE_IDENTITY);
     failed.clientMock.whoami.mockRejectedValue(new Error("missing agmsg"));
     await expect(failed.runtime.start(failed.context)).resolves.toBeUndefined();
+    expect(failed.identityStore.save).not.toHaveBeenCalled();
     expect(failed.ui.setStatus).toHaveBeenCalledWith("agmsg", undefined);
   });
 });

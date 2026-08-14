@@ -8,6 +8,7 @@ import {
 import { type Static, Type, type TSchema } from "typebox";
 import { AgmsgClient } from "./src/agmsg-client.ts";
 import type { AgmsgActionInput, ExecHost, MessageSink, RuntimeContext } from "./src/contracts.ts";
+import { SessionIdentityStore } from "./src/identity-store.ts";
 import { AgmsgRuntime } from "./src/runtime.ts";
 import { SYSTEM_SCHEDULER } from "./src/scheduler.ts";
 
@@ -75,6 +76,7 @@ interface AgmsgCommandDefinition {
 }
 
 export interface AgmsgExtensionHost extends ExecHost, MessageSink {
+  readonly appendEntry: (customType: string, data: unknown) => void;
   readonly on: (
     event: LifecycleEvent,
     handler: (event: unknown, context: RuntimeContext) => Promise<void> | void,
@@ -106,6 +108,7 @@ export default function agmsgExtension(host: AgmsgExtensionHost): void {
     host,
     AgmsgClient.fromHost(host),
     SYSTEM_SCHEDULER,
+    new SessionIdentityStore(host),
   );
 
   host.registerTool({

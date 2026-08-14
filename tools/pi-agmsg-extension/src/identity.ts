@@ -16,6 +16,7 @@ export interface LookupIdentityRequest {
   readonly client: AgmsgService;
   readonly project: string;
   readonly signal: AbortSignal | undefined;
+  readonly stored: ActiveIdentity | undefined;
 }
 
 export async function chooseIdentity(request: IdentityRequest): Promise<ActiveIdentity> {
@@ -66,13 +67,37 @@ export async function chooseSetupIdentity(
   };
 }
 
-export async function lookupSingleIdentity(
+export function identityStatus(
+  identity: ActiveIdentity | undefined,
+  automaticDelivery: boolean,
+): string | undefined {
+  if (identity === undefined) {
+    return undefined;
+  }
+  const suffix: string = automaticDelivery ? "" : " (manual)";
+  return `agmsg: ${identity.agent} (${identity.teams.join(",")})${suffix}`;
+}
+
+export async function resolveActiveIdentity(
   request: LookupIdentityRequest,
 ): Promise<ActiveIdentity | undefined> {
   try {
     const lookup: IdentityLookup = await request.client.whoami(request.project, request.signal);
-    return lookup.kind === "single" ? lookup : undefined;
+    if (lookup.kind === "single") {
+      return lookup;
+    }
+    if (lookup.kind !== "multiple" || request.stored === undefined) {
+      return undefined;
+    }
+    const pairs: Awaited<ReturnType<AgmsgService["identities"]>> = await request.client.identities(
+      request.project,
+      request.signal,
+    );
+    const teams: string[] = pairs
+      .filter((pair): boolean => pair.agent === request.stored?.agent)
+      .map((pair): string => pair.team);
+    return teams.length === 0 ? undefined : { agent: request.stored.agent, teams };
   } catch {
-    return undefined;
+    return request.stored;
   }
 }

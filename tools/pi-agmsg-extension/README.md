@@ -6,7 +6,7 @@ A global [pi extension](https://pi.dev/docs/latest/extensions) for
 - `/agmsg` for interactive setup, inbox, send, history, team, and identity operations.
 - Setup lets you select an existing identity or create a new identity even when other agents are already registered. Team creation and agent editors are pre-filled with a collision-free project directory name and random `pi-<id>` name.
 - `/agmsg leave [team]` removes the active identity from a team after confirmation.
-- `/agmsg reconnect` refreshes the active identity, restarts background delivery, and checks the inbox after resuming a session.
+- The selected identity is persisted in the pi session and restored across reload/resume. A transient startup lookup failure keeps the persisted identity instead of clearing it, so automatic delivery continues without requiring reconnect. `/agmsg reconnect` remains available to refresh registration manually.
 - The status includes both identity and team, for example `agmsg: oversea-horse-race (horse-racing-data)`.
 - An LLM-callable `agmsg` tool using only agmsg's supported scripts.
 - Successful sends display an `[agmsg-sent]` message with sender, recipient, team, and message body.

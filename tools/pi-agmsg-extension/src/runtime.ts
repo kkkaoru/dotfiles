@@ -5,6 +5,7 @@ import type {
   IdentityCommandRequest,
   IdentityLookup,
   IdentityResolution,
+  IdentityStore,
   MessageSink,
   RepeatScheduler,
   RuntimeContext,
@@ -13,7 +14,8 @@ import { AgmsgOperations, deliverIncoming, displayOutput } from "./agmsg-operati
 import {
   chooseIdentity,
   chooseSetupIdentity,
-  lookupSingleIdentity,
+  identityStatus,
+  resolveActiveIdentity,
   NO_TEAM_LEAVE_ERROR,
   NO_TEAM_RECONNECT_ERROR,
 } from "./identity.ts";
@@ -21,41 +23,43 @@ import { leaveTeam } from "./membership.ts";
 import { setupIdentity } from "./onboarding.ts";
 import {
   combine,
-  DEFAULT_HISTORY_LIMIT,
   errorMessage,
   HELP,
   parseCommand,
   parseLimit,
   parseSend,
-  selectTeam,
 } from "./runtime-helpers.ts";
 import { MONITOR_INTERVAL_MS } from "./scheduler.ts";
 
 export class AgmsgRuntime {
   readonly #client: AgmsgService;
+  readonly #identityStore: IdentityStore;
   readonly #messages: MessageSink;
   readonly #operations: AgmsgOperations;
   readonly #scheduler: RepeatScheduler;
   #active: ActiveIdentity | undefined;
   #autoDelivery = true satisfies boolean;
+  #checkAgain = false satisfies boolean;
   #checking = false satisfies boolean;
   #stopMonitor: (() => void) | undefined;
   #stopped = false satisfies boolean;
 
-  constructor(messages: MessageSink, client: AgmsgService, scheduler: RepeatScheduler) {
+  constructor(
+    messages: MessageSink,
+    client: AgmsgService,
+    scheduler: RepeatScheduler,
+    identityStore: IdentityStore,
+  ) {
     this.#messages = messages;
     this.#client = client;
+    this.#identityStore = identityStore;
     this.#operations = new AgmsgOperations(client, messages);
     this.#scheduler = scheduler;
   }
 
   async start(ctx: RuntimeContext): Promise<void> {
     this.#stopped = false;
-    const identity: ActiveIdentity | undefined = await lookupSingleIdentity({
-      client: this.#client,
-      project: ctx.cwd,
-      signal: ctx.signal,
-    });
+    const identity: ActiveIdentity | undefined = await this.#resolveIdentity(ctx);
     this.#setActive(identity, ctx);
     this.#startMonitor(ctx);
   }
@@ -69,18 +73,17 @@ export class AgmsgRuntime {
   }
 
   async checkAutomatically(ctx: RuntimeContext): Promise<void> {
-    if (!this.#autoDelivery || this.#checking || this.#stopped) {
+    if (!this.#autoDelivery || this.#stopped) {
+      return;
+    }
+    if (this.#checking) {
+      this.#checkAgain = true;
       return;
     }
     this.#checking = true;
     try {
       const identity: ActiveIdentity | undefined =
-        this.#active ??
-        (await lookupSingleIdentity({
-          client: this.#client,
-          project: ctx.cwd,
-          signal: ctx.signal,
-        }));
+        this.#active ?? (await this.#resolveIdentity(ctx));
       if (identity === undefined) {
         return;
       }
@@ -94,33 +97,20 @@ export class AgmsgRuntime {
       ctx.ui.setStatus("agmsg", `agmsg: ${errorMessage(error)}`);
     } finally {
       this.#checking = false;
+      if (this.#checkAgain) {
+        this.#checkAgain = false;
+        await this.checkAutomatically(ctx);
+      }
     }
   }
 
   async execute(input: AgmsgActionInput, ctx: RuntimeContext): Promise<string> {
-    const identity: ActiveIdentity = await this.#requireIdentity(ctx);
-    switch (input.action) {
-      case "history": {
-        return this.#operations.history({
-          identity,
-          limit: input.limit ?? DEFAULT_HISTORY_LIMIT,
-          signal: ctx.signal,
-          team: input.team,
-        });
-      }
-      case "inbox": {
-        return this.#operations.inbox(selectTeam(identity, input.team), false, ctx.signal);
-      }
-      case "send": {
-        return this.#operations.send(identity, input, ctx.signal);
-      }
-      case "team": {
-        return this.#operations.teams(selectTeam(identity, input.team), ctx.signal);
-      }
-      case "whoami": {
-        return `agent=${identity.agent} teams=${identity.teams.join(",")} type=pi project=${ctx.cwd}`;
-      }
-    }
+    return this.#operations.execute({
+      identity: await this.#requireIdentity(ctx),
+      input,
+      project: ctx.cwd,
+      signal: ctx.signal,
+    });
   }
 
   async command(args: string, ctx: RuntimeContext): Promise<void> {
@@ -207,6 +197,7 @@ export class AgmsgRuntime {
         identity: request.identity,
         requested: request.rest,
       });
+      this.#identityStore.save(result.identity);
       this.#setActive(result.identity, request.context);
       return result.output;
     }
@@ -263,14 +254,21 @@ export class AgmsgRuntime {
   }
 
   async #requireIdentity(ctx: RuntimeContext): Promise<ActiveIdentity> {
-    const identity: ActiveIdentity | undefined =
-      this.#active ??
-      (await lookupSingleIdentity({ client: this.#client, project: ctx.cwd, signal: ctx.signal }));
+    const identity: ActiveIdentity | undefined = this.#active ?? (await this.#resolveIdentity(ctx));
     if (identity === undefined) {
       throw new Error("No unambiguous pi identity. Run /agmsg setup first.");
     }
     this.#active = identity;
     return identity;
+  }
+
+  async #resolveIdentity(ctx: RuntimeContext): Promise<ActiveIdentity | undefined> {
+    return resolveActiveIdentity({
+      client: this.#client,
+      project: ctx.cwd,
+      signal: ctx.signal,
+      stored: this.#identityStore.load(ctx),
+    });
   }
 
   async #chooseIdentity(ctx: RuntimeContext): Promise<ActiveIdentity> {
@@ -330,11 +328,9 @@ export class AgmsgRuntime {
 
   #setActive(identity: ActiveIdentity | undefined, ctx: RuntimeContext): void {
     this.#active = identity;
-    const suffix: string = this.#autoDelivery ? "" : " (manual)";
-    const status: string | undefined =
-      identity === undefined
-        ? undefined
-        : `agmsg: ${identity.agent} (${identity.teams.join(",")})${suffix}`;
-    ctx.ui.setStatus("agmsg", status);
+    if (identity !== undefined) {
+      this.#identityStore.save(identity);
+    }
+    ctx.ui.setStatus("agmsg", identityStatus(identity, this.#autoDelivery));
   }
 }

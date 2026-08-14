@@ -6,7 +6,14 @@ import type {
   HistoryRequest,
   MessageSink,
 } from "./contracts.ts";
-import { combine, firstTeam, selectTeam } from "./runtime-helpers.ts";
+import { combine, DEFAULT_HISTORY_LIMIT, firstTeam, selectTeam } from "./runtime-helpers.ts";
+
+interface ExecuteActionRequest {
+  readonly identity: ActiveIdentity;
+  readonly input: AgmsgActionInput;
+  readonly project: string;
+  readonly signal: AbortSignal | undefined;
+}
 
 interface ResolveTargetRequest {
   readonly identity: ActiveIdentity;
@@ -76,6 +83,31 @@ export class AgmsgOperations {
   constructor(client: AgmsgService, messages: MessageSink) {
     this.#client = client;
     this.#messages = messages;
+  }
+
+  async execute(request: ExecuteActionRequest): Promise<string> {
+    switch (request.input.action) {
+      case "history": {
+        return this.history({
+          identity: request.identity,
+          limit: request.input.limit ?? DEFAULT_HISTORY_LIMIT,
+          signal: request.signal,
+          team: request.input.team,
+        });
+      }
+      case "inbox": {
+        return this.inbox(selectTeam(request.identity, request.input.team), false, request.signal);
+      }
+      case "send": {
+        return this.send(request.identity, request.input, request.signal);
+      }
+      case "team": {
+        return this.teams(selectTeam(request.identity, request.input.team), request.signal);
+      }
+      case "whoami": {
+        return `agent=${request.identity.agent} teams=${request.identity.teams.join(",")} type=pi project=${request.project}`;
+      }
+    }
   }
 
   async send(

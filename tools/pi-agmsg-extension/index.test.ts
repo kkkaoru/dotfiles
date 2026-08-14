@@ -60,6 +60,7 @@ function createExtensionHarness(): ExtensionHarness {
   });
   const sendMessage = vi.fn<AgmsgExtensionHost["sendMessage"]>();
   const host: AgmsgExtensionHost = {
+    appendEntry: vi.fn(),
     exec,
     on(event, handler): void {
       events[event] = handler;
@@ -71,6 +72,7 @@ function createExtensionHarness(): ExtensionHarness {
   const context: RuntimeContext = {
     cwd: "/project",
     hasUI: true,
+    sessionManager: { getBranch: (): readonly unknown[] => [] },
     signal: undefined,
     ui: {
       confirm: vi.fn(async () => true),

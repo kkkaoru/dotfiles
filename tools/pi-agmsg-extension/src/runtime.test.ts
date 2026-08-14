@@ -4,6 +4,7 @@ import type {
   HistoryRequest,
   IdentityLookup,
   InboxRequest,
+  IdentityStore,
   LeaveRequest,
   MessageSink,
   RepeatScheduler,
@@ -32,7 +33,6 @@ interface SchedulerState {
 }
 
 interface Harness {
-  readonly client: AgmsgService;
   readonly clientMock: ClientMock;
   readonly commandContext: RuntimeContext;
   readonly context: RuntimeContext;
@@ -78,12 +78,17 @@ function createHarness(lookup?: IdentityLookup): Harness {
   const context: RuntimeContext = {
     cwd: "/project",
     hasUI: true,
+    sessionManager: { getBranch: (): readonly unknown[] => [] },
     signal: undefined,
     ui,
   };
   const commandContext: RuntimeContext = context;
   const piMock = { sendMessage: vi.fn() } satisfies MessageSink;
   const schedulerState: SchedulerState = { canceled: false, task: undefined };
+  const identityStore: IdentityStore = {
+    load: vi.fn(() => undefined),
+    save: vi.fn(),
+  };
   const scheduler: RepeatScheduler = {
     repeat(task: () => void): () => void {
       schedulerState.canceled = false;
@@ -94,12 +99,11 @@ function createHarness(lookup?: IdentityLookup): Harness {
     },
   };
   return {
-    client,
     clientMock,
     commandContext,
     context,
     piMock,
-    runtime: new AgmsgRuntime(piMock, client, scheduler),
+    runtime: new AgmsgRuntime(piMock, client, scheduler, identityStore),
     schedulerState,
     ui,
   };

@@ -47,9 +47,14 @@ export interface DialogUi {
   readonly setStatus: (key: string, text: string | undefined) => void;
 }
 
+export interface SessionReader {
+  readonly getBranch: () => readonly unknown[];
+}
+
 export interface RuntimeContext {
   readonly cwd: string;
   readonly hasUI: boolean;
+  readonly sessionManager: SessionReader;
   readonly signal: AbortSignal | undefined;
   readonly ui: DialogUi;
 }
@@ -67,6 +72,11 @@ export interface DeliveryOptions {
 
 export interface MessageSink {
   readonly sendMessage: (message: DisplayMessage, options?: DeliveryOptions) => void;
+}
+
+export interface IdentityStore {
+  readonly load: (context: RuntimeContext) => ActiveIdentity | undefined;
+  readonly save: (identity: ActiveIdentity | undefined) => void;
 }
 
 export interface RepeatScheduler {
