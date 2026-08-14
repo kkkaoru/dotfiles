@@ -1,5 +1,5 @@
 import type { ActiveIdentity, AgmsgService, RuntimeContext } from "./contracts.ts";
-import { defaultTeamName, uniqueAgentName, uniqueTeamName } from "./runtime-helpers.ts";
+import { defaultTeamName, firstTeam, uniqueAgentName, uniqueTeamName } from "./runtime-helpers.ts";
 
 const CREATE_TEAM = "Create a new team…" satisfies string;
 
@@ -7,6 +7,11 @@ export interface PromptIdentityRequest {
   readonly client: AgmsgService;
   readonly context: RuntimeContext;
   readonly suggestedTeams: readonly string[];
+}
+
+export interface SetupIdentityResult {
+  readonly identity: ActiveIdentity;
+  readonly output: string;
 }
 
 async function chooseTeam(request: PromptIdentityRequest): Promise<string> {
@@ -54,4 +59,15 @@ export async function promptIdentity(request: PromptIdentityRequest): Promise<Ac
     throw new Error("Agent selection cancelled");
   }
   return { agent: agentInput.trim() || defaultAgent, teams: [team] };
+}
+
+export async function setupIdentity(request: PromptIdentityRequest): Promise<SetupIdentityResult> {
+  const identity: ActiveIdentity = await promptIdentity(request);
+  const output: string = await request.client.join({
+    agent: identity.agent,
+    project: request.context.cwd,
+    signal: request.context.signal,
+    team: firstTeam(identity),
+  });
+  return { identity, output };
 }

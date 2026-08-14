@@ -1,5 +1,7 @@
 import type { ActiveIdentity, AgmsgService, IdentityLookup, RuntimeContext } from "./contracts.ts";
 
+const CREATE_IDENTITY = "Create a new identity…" satisfies string;
+
 export const NO_TEAM_LEAVE_ERROR =
   "Cannot leave an agmsg team because this pi agent is not registered in any team." satisfies string;
 export const NO_TEAM_RECONNECT_ERROR =
@@ -35,6 +37,32 @@ export async function chooseIdentity(request: IdentityRequest): Promise<ActiveId
   return {
     agent,
     teams: pairs.filter((pair): boolean => pair.agent === agent).map((pair): string => pair.team),
+  };
+}
+
+export async function chooseSetupIdentity(
+  request: IdentityRequest,
+): Promise<ActiveIdentity | undefined> {
+  const pairs: Awaited<ReturnType<AgmsgService["identities"]>> = await request.client.identities(
+    request.context.cwd,
+    request.context.signal,
+  );
+  const agents: string[] = [...new Set(pairs.map((pair): string => pair.agent))];
+  const selected: string | undefined = await request.context.ui.select(
+    "Choose an existing pi identity or create a new one",
+    [...agents, CREATE_IDENTITY],
+  );
+  if (selected === undefined) {
+    throw new Error("Identity selection cancelled");
+  }
+  if (selected === CREATE_IDENTITY) {
+    return undefined;
+  }
+  return {
+    agent: selected,
+    teams: pairs
+      .filter((pair): boolean => pair.agent === selected)
+      .map((pair): string => pair.team),
   };
 }
 

@@ -12,17 +12,17 @@ import type {
 import { AgmsgOperations, deliverIncoming, displayOutput } from "./agmsg-operations.ts";
 import {
   chooseIdentity,
+  chooseSetupIdentity,
   lookupSingleIdentity,
   NO_TEAM_LEAVE_ERROR,
   NO_TEAM_RECONNECT_ERROR,
 } from "./identity.ts";
 import { leaveTeam } from "./membership.ts";
-import { promptIdentity } from "./onboarding.ts";
+import { setupIdentity } from "./onboarding.ts";
 import {
   combine,
   DEFAULT_HISTORY_LIMIT,
   errorMessage,
-  firstTeam,
   HELP,
   parseCommand,
   parseLimit,
@@ -285,25 +285,29 @@ export class AgmsgRuntime {
     }
     const lookup: IdentityLookup = known ?? (await this.#client.whoami(ctx.cwd, ctx.signal));
     if (lookup.kind === "multiple") {
-      await this.#chooseIdentity(ctx);
-      return "Selected agmsg identity for this session.";
+      const selected: ActiveIdentity | undefined = await chooseSetupIdentity({
+        client: this.#client,
+        context: ctx,
+      });
+      if (selected !== undefined) {
+        this.#setActive(selected, ctx);
+        return "Selected agmsg identity for this session.";
+      }
+      return this.#joinNewIdentity(ctx, lookup.teams);
     }
     const available: readonly string[] =
       lookup.kind === "single" ? lookup.teams : lookup.availableTeams;
-    const identity: ActiveIdentity = await promptIdentity({
+    return this.#joinNewIdentity(ctx, available);
+  }
+
+  async #joinNewIdentity(ctx: RuntimeContext, suggestedTeams: readonly string[]): Promise<string> {
+    const result: Awaited<ReturnType<typeof setupIdentity>> = await setupIdentity({
       client: this.#client,
       context: ctx,
-      suggestedTeams: available,
+      suggestedTeams,
     });
-    const team: string = firstTeam(identity);
-    const output: string = await this.#client.join({
-      agent: identity.agent,
-      project: ctx.cwd,
-      signal: ctx.signal,
-      team,
-    });
-    this.#setActive(identity, ctx);
-    return `${output}\nAutomatic background and end-of-turn delivery is enabled for this pi session.`;
+    this.#setActive(result.identity, ctx);
+    return `${result.output}\nAutomatic background and end-of-turn delivery is enabled for this pi session.`;
   }
 
   #startMonitor(ctx: RuntimeContext): void {
@@ -327,11 +331,10 @@ export class AgmsgRuntime {
   #setActive(identity: ActiveIdentity | undefined, ctx: RuntimeContext): void {
     this.#active = identity;
     const suffix: string = this.#autoDelivery ? "" : " (manual)";
-    ctx.ui.setStatus(
-      "agmsg",
+    const status: string | undefined =
       identity === undefined
         ? undefined
-        : `agmsg: ${identity.agent} (${identity.teams.join(",")})${suffix}`,
-    );
+        : `agmsg: ${identity.agent} (${identity.teams.join(",")})${suffix}`;
+    ctx.ui.setStatus("agmsg", status);
   }
 }

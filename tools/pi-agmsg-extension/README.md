@@ -4,7 +4,7 @@ A global [pi extension](https://pi.dev/docs/latest/extensions) for
 [agmsg](https://github.com/fujibee/agmsg). It provides:
 
 - `/agmsg` for interactive setup, inbox, send, history, team, and identity operations.
-- Setup lets you select an existing team or create a new one; new-team and agent editors are pre-filled with a collision-free project directory name and random `pi-<id>` name.
+- Setup lets you select an existing identity or create a new identity even when other agents are already registered. Team creation and agent editors are pre-filled with a collision-free project directory name and random `pi-<id>` name.
 - `/agmsg leave [team]` removes the active identity from a team after confirmation.
 - `/agmsg reconnect` refreshes the active identity, restarts background delivery, and checks the inbox after resuming a session.
 - The status includes both identity and team, for example `agmsg: oversea-horse-race (horse-racing-data)`.

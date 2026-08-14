@@ -23,6 +23,7 @@ interface DeliveryHarness {
   readonly client: AgmsgService;
   readonly clientMock: {
     readonly inbox: ReturnType<typeof vi.fn<AgmsgService["inbox"]>>;
+    readonly join: ReturnType<typeof vi.fn<AgmsgService["join"]>>;
     readonly send: ReturnType<typeof vi.fn<AgmsgService["send"]>>;
     readonly whoami: ReturnType<typeof vi.fn<AgmsgService["whoami"]>>;
   };
@@ -44,13 +45,14 @@ function createDeliveryHarness(lookup: IdentityLookup): DeliveryHarness {
   const inbox = vi.fn<AgmsgService["inbox"]>(
     async (request: InboxRequest) => `inbox:${request.team}`,
   );
+  const join = vi.fn<AgmsgService["join"]>(async (_request: JoinRequest) => "joined");
   const send = vi.fn<AgmsgService["send"]>(async (request: SendRequest) => `sent:${request.team}`);
   const whoami = vi.fn<AgmsgService["whoami"]>(async () => lookup);
   const client: AgmsgService = {
     history: vi.fn(async (request: HistoryRequest) => `history:${request.team}`),
     identities: vi.fn(async () => [{ agent: "alice", team: "one" }]),
     inbox,
-    join: vi.fn(async (_request: JoinRequest) => "joined"),
+    join,
     leave: vi.fn(async (request: LeaveRequest) => `left:${request.team}`),
     listTeams: vi.fn(async () => []),
     members: vi.fn(async () => [{ name: "bob", types: ["codex"] }]),
@@ -85,7 +87,7 @@ function createDeliveryHarness(lookup: IdentityLookup): DeliveryHarness {
   };
   return {
     client,
-    clientMock: { inbox, send, whoami },
+    clientMock: { inbox, join, send, whoami },
     context,
     messages,
     runtime: new AgmsgRuntime(messages, client, scheduler),
@@ -151,6 +153,39 @@ describe("automatic delivery", () => {
     empty.runtime.stop(empty.context);
     await empty.runtime.checkAutomatically(empty.context);
     expect(empty.clientMock.inbox).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("identity setup", () => {
+  it("creates a new identity when other identities already exist", async () => {
+    const harness: DeliveryHarness = createDeliveryHarness({
+      agents: ["pi-developer-1", "pi-developer-2"],
+      kind: "multiple",
+      teams: ["dotfiles-claudex"],
+    });
+    harness.ui.select
+      .mockResolvedValueOnce("Create a new identity…")
+      .mockResolvedValueOnce("dotfiles-claudex");
+    harness.ui.editor.mockResolvedValue("pi-new");
+    await harness.runtime.command("setup", harness.context);
+    expect(harness.clientMock.join).toHaveBeenCalledWith({
+      agent: "pi-new",
+      project: "/project",
+      signal: undefined,
+      team: "dotfiles-claudex",
+    });
+  });
+
+  it("keeps existing identity selection available", async () => {
+    const harness: DeliveryHarness = createDeliveryHarness({
+      agents: ["alice"],
+      kind: "multiple",
+      teams: ["one"],
+    });
+    harness.ui.select.mockResolvedValue("alice");
+    await harness.runtime.command("setup", harness.context);
+    expect(harness.clientMock.join).not.toHaveBeenCalled();
+    expect(harness.ui.setStatus).toHaveBeenCalledWith("agmsg", "agmsg: alice (one)");
   });
 });
 
