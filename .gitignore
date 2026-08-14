@@ -103,13 +103,13 @@ coverage_out/
 .codex/version.json
 !.config/zellij
 
-/.cursor/
+/.cursor/*
+!/.cursor/mcp.json
 .cursor/projects
 .cursor/extensions
 .cursor/worktrees
 .cursor/chats
 .cursor/browser-logs
-.cursor/mcp.json
 .cursor/argv.json
 .cursor/ide_state.json
 .windsurf/extensions/*
@@ -119,6 +119,7 @@ coverage_out/
 
 !.config/opencode/
 .config/opencode/*
+!.config/opencode/opencode.jsonc
 !.config/opencode/skills/
 
 .cursor/ai-tracking
@@ -137,3 +138,5 @@ tmp
 # Local runtime binaries and state; never commit credentials or machine-local data.
 .local/
 tools/claudex-agent-adapter/grok-acp-mock.jsonl
+.codex/thread-writer-locks/
+.codex/queue_*
