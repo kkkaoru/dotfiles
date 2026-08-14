@@ -1,4 +1,4 @@
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::{
     contains_classic_usage_limit_marker, contains_provider_quota_exhausted_marker,
@@ -106,7 +106,7 @@ http_status:402 Payment Required: usage balance exhausted";
         GROK_402_BALANCE_EXHAUSTED
     ));
     assert!(contains_usage_limit_marker(GROK_402_BALANCE_EXHAUSTED));
-    assert!(contains_provider_quota_exhausted_marker(
+    assert!(!contains_provider_quota_exhausted_marker(
         "USAGE BALANCE EXHAUSTED"
     ));
     for status_json in [
@@ -145,6 +145,62 @@ http_status:402 Payment Required: usage balance exhausted";
         !contains_classic_usage_limit_marker(GROK_402_BALANCE_EXHAUSTED),
         "Grok prepaid balance must not cool down the Codex app-server backend"
     );
+}
+
+#[test]
+fn grok_payment_required_covers_text_boundaries_and_structured_value_shapes() {
+    for text in [
+        "usage balance exhausted http_status:402",
+        "usage balance exhausted [http_status:402]",
+        "usage balance exhausted http_status: 402!",
+        "usage balance exhausted 日本http_status:402終",
+    ] {
+        assert!(
+            contains_provider_quota_exhausted_marker(text),
+            "bounded Grok 402 status must be recognized: {text}"
+        );
+    }
+    for text in [
+        "usage balance exhausted xhttp_status:402",
+        "usage balance exhausted _http_status:402",
+        "usage balance exhausted http_status:402x",
+        "usage balance exhausted http_status:402_",
+    ] {
+        assert!(
+            !contains_provider_quota_exhausted_marker(text),
+            "identifier-adjacent Grok 402 must be rejected: {text}"
+        );
+    }
+
+    assert!(contains_provider_quota_exhausted_marker(
+        r#"[{"provider":{"http_status":402}}]"#
+    ));
+    for value in ["null", "true", "402", r#"[{"http_status":403}]"#] {
+        assert!(
+            !contains_provider_quota_exhausted_marker(value),
+            "unqualified structured value must be rejected: {value}"
+        );
+    }
+    let twice_escaped = serde_json::to_string(
+        &serde_json::to_string(r#"{"http_status":402}"#).expect("inner escaped JSON fixture"),
+    )
+    .expect("outer escaped JSON fixture");
+    assert!(
+        !contains_provider_quota_exhausted_marker(&twice_escaped),
+        "only one escaped JSON layer may contribute an HTTP status"
+    );
+}
+
+#[test]
+fn usage_limit_event_recurses_arrays_and_rejects_scalar_defaults() {
+    assert!(is_usage_limit_event(&json!({
+        "params": {"error": {"codexErrorInfo": [null, {"nested": 429}]}}
+    })));
+    for value in [Value::Null, Value::Bool(false)] {
+        assert!(!is_usage_limit_event(&json!({
+            "params": {"error": {"codexErrorInfo": value}}
+        })));
+    }
 }
 
 #[test]

@@ -41,12 +41,11 @@ pub(crate) fn contains_usage_limit_marker(value: &str) -> bool {
 pub(crate) fn contains_provider_quota_exhausted_marker(value: &str) -> bool {
     let structured_payment_required = contains_structured_payment_required_status(value);
     let value = value.to_lowercase();
-    const QUOTA_MARKERS: [&str; 5] = [
+    const QUOTA_MARKERS: [&str; 4] = [
         "quota exhausted",
         "token-plan",
         "token plan",
         "1-week quota",
-        "usage balance exhausted",
     ];
     let legacy_quota_marker = QUOTA_MARKERS
         .into_iter()

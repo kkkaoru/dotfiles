@@ -107,6 +107,33 @@ pub(super) fn reusable_status(status: &str) -> bool {
     matches!(status, "active" | "message_queued" | "completed")
 }
 
+pub(super) enum ShadowCandidate<'a> {
+    Selected(&'a LaunchRecord),
+    ScopeUnknown,
+    NoReusableRecord,
+    ScopeMismatch,
+}
+
+pub(super) fn shadow_candidate<'a>(
+    launches: &'a [LaunchRecord],
+    arguments: &Value,
+) -> ShadowCandidate<'a> {
+    if let Some(selected) = find_reusable_launch(launches, arguments) {
+        return ShadowCandidate::Selected(selected);
+    }
+    if summarize_scope(arguments).is_empty() {
+        return ShadowCandidate::ScopeUnknown;
+    }
+    if launches
+        .iter()
+        .any(|launch| reusable_status(&launch.status) && !launch.recipient.is_empty())
+    {
+        ShadowCandidate::ScopeMismatch
+    } else {
+        ShadowCandidate::NoReusableRecord
+    }
+}
+
 pub(super) fn already_has_resume(arguments: &Value) -> bool {
     arguments
         .get("resume")

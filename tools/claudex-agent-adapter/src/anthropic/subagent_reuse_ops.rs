@@ -45,6 +45,8 @@ impl SubagentReuseRegistry {
             self.persist_session(&session_id, current_state.clone());
         }
         self.resolve_claims(&session_id, &current_state.launches);
+        self.shadow
+            .observe_request(&session_id, request, &current_state.launches);
         if let Some(recipients) = recipients {
             append_reuse_guidance(&mut request.system, &recipients, teams);
         }
@@ -64,6 +66,7 @@ impl SubagentReuseRegistry {
         arguments: &mut Value,
         reuse: bool,
     ) -> Option<String> {
+        self.observe_shadow_decision(session_id, arguments);
         if !reuse || session_id.is_empty() || already_has_resume(arguments) {
             return None;
         }
@@ -86,5 +89,23 @@ impl SubagentReuseRegistry {
             "rewrote SubAgent launch into resume of a compatible worker"
         );
         Some(recipient)
+    }
+
+    fn observe_shadow_decision(&self, session_id: &str, arguments: &Value) {
+        if session_id.is_empty() {
+            return;
+        }
+        let Ok(states) = self.states.lock() else {
+            tracing::warn!(
+                target: "claudex_subagent_reuse_shadow",
+                "idle Phase 0 could not read the reuse registry"
+            );
+            return;
+        };
+        let Some(state) = states.get(session_id) else {
+            return;
+        };
+        self.shadow
+            .observe_decision(session_id, &state.launches, arguments);
     }
 }

@@ -5,6 +5,7 @@ use serde_json::{Value, json};
 use std::{
     collections::HashMap,
     fs,
+    io::{self, Write},
     process::Command,
     sync::{Arc, Barrier, Mutex},
     thread,
@@ -86,6 +87,35 @@ fn launch_with_scope(tool_use_id: &str, recipient: &str, scope: &str, model: &st
         }),
         launch(tool_use_id, recipient),
     ]
+}
+
+#[derive(Clone)]
+struct ShadowLogWriter(Arc<Mutex<Vec<u8>>>);
+
+impl Write for ShadowLogWriter {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.0.lock().expect("shadow log buffer").extend(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn capture_shadow_log(action: impl FnOnce()) -> String {
+    let bytes = Arc::new(Mutex::new(Vec::new()));
+    let writer = ShadowLogWriter(Arc::clone(&bytes));
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .without_time()
+        .with_target(false)
+        .with_max_level(tracing::Level::INFO)
+        .with_writer(move || writer.clone())
+        .finish();
+    tracing::subscriber::with_default(subscriber, action);
+    let captured = bytes.lock().expect("shadow log buffer").clone();
+    String::from_utf8(captured).expect("UTF-8 shadow log")
 }
 
 #[test]
@@ -2878,4 +2908,258 @@ fn resolve_claims_keeps_the_local_mirror_when_the_store_release_fails() {
         1,
         "a store release failure must not drop the local claim mirror"
     );
+}
+
+#[test]
+fn idle_shadow_state_does_not_change_rewrite_results() {
+    let instrumented = SubagentReuseRegistry::default();
+    let mut observed = request(
+        "shadow-session",
+        launch_with_scope(
+            "shadow-tool",
+            "shadow-worker",
+            "Audit shadow mode",
+            "worker-model",
+        ),
+    );
+    instrumented.observe_and_restore_for_test(&mut observed, false);
+
+    let baseline = SubagentReuseRegistry::default();
+    let state = instrumented
+        .states
+        .lock()
+        .expect("instrumented states")
+        .get("shadow-session")
+        .expect("observed session")
+        .clone();
+    baseline
+        .states
+        .lock()
+        .expect("baseline states")
+        .insert("shadow-session".to_owned(), state);
+
+    let mut instrumented_input =
+        json!({"prompt":"Audit shadow mode", "claudex_model":"worker-model"});
+    let mut baseline_input = instrumented_input.clone();
+    let instrumented_result =
+        instrumented.rewrite_launch_input_for_test("shadow-session", &mut instrumented_input, true);
+    let baseline_result =
+        baseline.rewrite_launch_input_for_test("shadow-session", &mut baseline_input, true);
+
+    assert_eq!(instrumented_result, baseline_result);
+    assert_eq!(instrumented_input, baseline_input);
+    assert_eq!(instrumented_result.as_deref(), Some("shadow-worker"));
+}
+
+#[test]
+fn idle_shadow_scope_mismatch_has_no_selected_record_fields() {
+    let registry = SubagentReuseRegistry::default();
+    let mut observed = request(
+        "scope-session",
+        launch_with_scope("scope-tool", "scope-worker", "Audit Rust", "worker-model"),
+    );
+    registry.observe_and_restore_for_test(&mut observed, false);
+    let mut unrelated = json!({"prompt":"Review CSS", "claudex_model":"worker-model"});
+
+    let log = capture_shadow_log(|| {
+        assert_eq!(
+            registry.rewrite_launch_input_for_test("scope-session", &mut unrelated, false),
+            None
+        );
+    });
+
+    assert!(log.contains("scope_mismatch"), "{log}");
+    assert!(!log.contains("selected_status"), "{log}");
+    assert!(!log.contains("key_hash"), "{log}");
+    assert!(!log.contains("scope-worker"), "{log}");
+}
+
+#[test]
+fn idle_shadow_selected_miss_reports_unknowns_and_redacts_inputs() {
+    let root = tempfile::tempdir().expect("shadow cwd");
+    let session_secret = "raw-session-secret-79d1";
+    let recipient_secret = "raw-agent-secret-2468";
+    let prompt_secret = "raw-prompt-secret-1357";
+    let schema_secret = "raw-schema-secret-8642";
+    let auth_secret = "raw-auth-secret-9753";
+    let registry = SubagentReuseRegistry::default();
+    let mut observed = request(
+        session_secret,
+        launch_with_scope(
+            "secret-tool",
+            recipient_secret,
+            prompt_secret,
+            "worker-model",
+        ),
+    );
+    observed.system = Value::String(auth_secret.to_owned());
+    observed.tools = vec![json!({
+        "name":"Agent",
+        "input_schema":{"description":schema_secret}
+    })];
+    observed.working_directory = Some(root.path().to_path_buf());
+    registry.observe_and_restore_for_test(&mut observed, false);
+    let mut follow_up = json!({"prompt":prompt_secret, "claudex_model":"worker-model"});
+
+    let log = capture_shadow_log(|| {
+        assert_eq!(
+            registry.rewrite_launch_input_for_test(session_secret, &mut follow_up, false),
+            None
+        );
+    });
+
+    for reason in [
+        "provider_unknown",
+        "backend_unknown",
+        "launcher_fingerprint_unknown",
+        "effort_unknown",
+        "agent_kind_unknown",
+        "protocol_unknown",
+        "git_context_fingerprint_unknown",
+        "sandbox_fingerprint_unknown",
+        "auth_generation_unknown",
+    ] {
+        assert!(log.contains(reason), "missing {reason}: {log}");
+    }
+    assert!(log.contains("outcome=\"miss\""), "{log}");
+    assert!(log.contains("selected_status=\"active\""), "{log}");
+    assert!(log.contains("key_hash="), "{log}");
+    for secret in [
+        session_secret,
+        recipient_secret,
+        prompt_secret,
+        schema_secret,
+        auth_secret,
+        root.path().to_string_lossy().as_ref(),
+    ] {
+        assert!(!log.contains(secret), "leaked {secret}: {log}");
+    }
+}
+
+#[test]
+fn idle_shadow_correlates_known_context_mismatches() {
+    let first_root = tempfile::tempdir().expect("first shadow cwd");
+    let second_root = tempfile::tempdir().expect("second shadow cwd");
+    let registry = SubagentReuseRegistry::default();
+    let messages = launch_with_scope(
+        "context-tool",
+        "context-worker",
+        "Audit context",
+        "worker-model",
+    );
+    let mut first = request("context-session", messages.clone());
+    first.system = Value::String("system generation one".to_owned());
+    first.tools = vec![json!({"name":"Agent", "input_schema":{"type":"object"}})];
+    first.working_directory = Some(first_root.path().to_path_buf());
+    registry.observe_and_restore_for_test(&mut first, false);
+
+    let mut changed = request("context-session", messages);
+    changed.system = Value::String("system generation two".to_owned());
+    changed.tools = vec![json!({"name":"Agent", "input_schema":{"type":"string"}})];
+    changed.working_directory = Some(second_root.path().to_path_buf());
+    registry.observe_and_restore_for_test(&mut changed, false);
+    let mut follow_up = json!({"prompt":"Audit context", "claudex_model":"worker-model"});
+
+    let log = capture_shadow_log(|| {
+        registry.rewrite_launch_input_for_test("context-session", &mut follow_up, false);
+    });
+    for reason in [
+        "cwd_mismatch",
+        "mcp_tool_fingerprint_mismatch",
+        "system_fingerprint_mismatch",
+    ] {
+        assert!(log.contains(reason), "missing {reason}: {log}");
+    }
+}
+
+#[test]
+fn idle_shadow_classifies_unmatched_decisions_without_record_metadata() {
+    let registry = SubagentReuseRegistry::default();
+    let mut empty = request("empty-shadow-session", Vec::new());
+    registry.observe_and_restore_for_test(&mut empty, false);
+
+    let no_record = capture_shadow_log(|| {
+        let mut input = json!({"prompt":"Independent work"});
+        registry.rewrite_launch_input_for_test("empty-shadow-session", &mut input, false);
+    });
+    assert!(no_record.contains("no_reusable_record"), "{no_record}");
+
+    let unknown_scope = capture_shadow_log(|| {
+        let mut input = json!({});
+        registry.rewrite_launch_input_for_test("empty-shadow-session", &mut input, false);
+    });
+    assert!(unknown_scope.contains("scope_unknown"), "{unknown_scope}");
+
+    let missing_context = capture_shadow_log(|| {
+        let state = SessionState {
+            launches: vec![LaunchRecord {
+                key: "manual-tool".to_owned(),
+                recipient: "manual-worker".to_owned(),
+                scope: "Manual work".to_owned(),
+                model: None,
+                status: "active".to_owned(),
+            }],
+        };
+        registry
+            .states
+            .lock()
+            .expect("manual states")
+            .insert("manual-session".to_owned(), state);
+        let mut input = json!({"prompt":"Manual work"});
+        registry.rewrite_launch_input_for_test("manual-session", &mut input, false);
+    });
+    assert!(
+        missing_context.contains("request_context_unknown"),
+        "{missing_context}"
+    );
+
+    registry.states.lock().expect("record-key states").insert(
+        "empty-shadow-session".to_owned(),
+        SessionState {
+            launches: vec![LaunchRecord {
+                key: "late-tool".to_owned(),
+                recipient: "late-worker".to_owned(),
+                scope: "Late work".to_owned(),
+                model: None,
+                status: "active".to_owned(),
+            }],
+        },
+    );
+    let missing_record = capture_shadow_log(|| {
+        let mut input = json!({"prompt":"Late work"});
+        registry.rewrite_launch_input_for_test("empty-shadow-session", &mut input, false);
+    });
+    assert!(
+        missing_record.contains("record_key_unknown"),
+        "{missing_record}"
+    );
+
+    let identity_registry = SubagentReuseRegistry::default();
+    identity_registry
+        .states
+        .lock()
+        .expect("identity states")
+        .insert(
+            "identity-session".to_owned(),
+            SessionState {
+                launches: vec![
+                    LaunchRecord {
+                        key: String::new(),
+                        recipient: "recipient-only".to_owned(),
+                        scope: "Recipient identity".to_owned(),
+                        model: None,
+                        status: "active".to_owned(),
+                    },
+                    LaunchRecord {
+                        key: String::new(),
+                        recipient: String::new(),
+                        scope: "Placeholder identity".to_owned(),
+                        model: Some(String::new()),
+                        status: "active".to_owned(),
+                    },
+                ],
+            },
+        );
+    let mut identity_request = request("identity-session", Vec::new());
+    identity_registry.observe_and_restore_for_test(&mut identity_request, false);
 }

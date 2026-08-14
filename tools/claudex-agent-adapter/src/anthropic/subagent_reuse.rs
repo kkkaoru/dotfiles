@@ -13,6 +13,7 @@ mod limits;
 mod records;
 mod records_scope;
 mod records_status;
+mod shadow;
 mod store;
 #[cfg(test)]
 use guidance::REUSE_GUIDANCE_MARKER;
@@ -27,6 +28,7 @@ use records::{
     LaunchRecord, already_has_resume, apply_transcript, find_reusable_launch, launch_model,
     scope_is_occupied, summarize_scope,
 };
+use shadow::ShadowLedger;
 use store::{
     CACHE_FILE_NAME, ClaimRecord, SessionState, Store, reuse_recipients, set_limit_metadata,
 };
@@ -38,6 +40,7 @@ pub(super) struct SubagentReuseRegistry {
     states: Mutex<HashMap<String, SessionState>>,
     session_revisions: Mutex<HashMap<String, u64>>,
     claims: Mutex<HashMap<String, ClaimRecord>>,
+    shadow: ShadowLedger,
     store: Option<Store>,
     owner: String,
 }
@@ -48,6 +51,7 @@ impl Default for SubagentReuseRegistry {
             states: Mutex::new(HashMap::new()),
             session_revisions: Mutex::new(HashMap::new()),
             claims: Mutex::new(HashMap::new()),
+            shadow: ShadowLedger::default(),
             store: None,
             owner: owner_token(),
         }
@@ -69,6 +73,7 @@ impl SubagentReuseRegistry {
             states: Mutex::new(loaded.sessions),
             session_revisions: Mutex::new(loaded.session_revisions),
             claims: Mutex::new(HashMap::new()),
+            shadow: ShadowLedger::default(),
             store: Some(store),
             owner: owner_token(),
         }
@@ -82,6 +87,7 @@ impl SubagentReuseRegistry {
             states: Mutex::new(loaded.sessions),
             session_revisions: Mutex::new(loaded.session_revisions),
             claims: Mutex::new(HashMap::new()),
+            shadow: ShadowLedger::default(),
             store: Some(store),
             owner: owner_token(),
         }
