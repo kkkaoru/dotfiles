@@ -21,10 +21,8 @@
       "args": ["@playwright/mcp@latest"]
     },
     "serena": {
-      "command": "serena",
+      "command": "serena-dotfiles-mcp",
       "args": [
-        "start-mcp-server",
-        "--project-from-cwd",
         "--context=claude-code"
       ]
     }

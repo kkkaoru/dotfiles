@@ -55,14 +55,31 @@ link_tree() {
   done
 }
 
-# Top-level dotfiles (.config and .claude are merged below to preserve runtime state)
+# Top-level dotfiles (stateful agent/config directories are merged below)
 for f in .??*; do
   [ "$f" = ".git" ] && continue
   [ "$f" = ".tool-versions" ] && continue
   [ "$f" = ".config" ] && continue
   [ "$f" = ".claude" ] && continue
+  # Serena stores runtime state under ~/.serena; link only its config file below.
+  [ "$f" = ".serena" ] && continue
   link_path "${DOTPATH}/${f}" "${HOME}/${f}"
 done
+
+# Serena keeps logs, caches, downloaded language servers, and project metadata
+# beside its global configuration. Keep ~/.serena as a real directory so a
+# repository's .serena/project.yml can never appear as ~/.serena/project.yml.
+if [ -L "${HOME}/.serena" ]; then
+  rm -f "${HOME}/.serena"
+fi
+mkdir -p "${HOME}/.serena"
+# Serena mutates the managed `projects` list, so install a regular copy rather
+# than linking its writable global config back into this repository.
+if [ -L "${HOME}/.serena/serena_config.yml" ]; then
+  rm -f "${HOME}/.serena/serena_config.yml"
+fi
+cp "${DOTPATH}/.config/serena/serena_config.yml" \
+  "${HOME}/.serena/serena_config.yml"
 
 # Claude Code keeps history, sessions, plugins, and caches under ~/.claude.
 # Link only repository-managed definitions so those runtime paths remain local.
@@ -112,6 +129,7 @@ link_path "${DOTPATH}/scripts/claudex-hot-swap" "${HOME}/.local/bin/claudex-hot-
 link_path "${DOTPATH}/scripts/ensure-agmsg-claudex-guard.sh" \
   "${HOME}/.local/bin/ensure-agmsg-claudex-guard"
 link_path "${DOTPATH}/scripts/claudex-install-adapter" "${HOME}/.local/bin/claudex-install-adapter"
+link_path "${DOTPATH}/scripts/serena-dotfiles-mcp" "${HOME}/.local/bin/serena-dotfiles-mcp"
 
 # .config apps
 mkdir -p "${HOME}/.config"
@@ -123,6 +141,9 @@ if [ -d "${DOTPATH}/.config" ]; then
 
     # Tools that keep runtime state under ~/.config/<app> — link config only
     case "$name" in
+      serena)
+        # Serena reads ~/.serena/serena_config.yml, linked above.
+        ;;
       fish)
         if [ -d "$dest" ] && [ ! -L "$dest" ]; then
           link_tree "$app_path" "$dest"

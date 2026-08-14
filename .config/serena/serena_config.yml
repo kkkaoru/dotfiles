@@ -15,7 +15,7 @@ gui_log_window: false
 # window being updated. Since we can't control how agno or Claude Desktop start Serena,
 # we have to live with this limitation for now.
 
-web_dashboard: true
+web_dashboard: false
 # whether to open the Serena web dashboard (which will be accessible through your web browser) that
 # shows Serena's current session logs - as an alternative to the GUI log window which
 # is supported on all platforms.

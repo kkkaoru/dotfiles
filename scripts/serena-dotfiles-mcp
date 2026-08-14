@@ -1,0 +1,19 @@
+#!/bin/bash
+
+set -euo pipefail
+
+SOURCE=${BASH_SOURCE[0]}
+while [ -L "$SOURCE" ]; do
+  SOURCE_DIR=$(cd -P "$(dirname "$SOURCE")" || exit 1; pwd)
+  SOURCE=$(readlink "$SOURCE")
+  [[ "$SOURCE" != /* ]] && SOURCE="${SOURCE_DIR}/${SOURCE}"
+done
+SCRIPT_DIR=$(cd -P "$(dirname "$SOURCE")" || exit 1; pwd)
+PROJECT_ROOT=$(cd "${SCRIPT_DIR}/.." || exit 1; pwd)
+
+# Do not depend on the MCP client's working directory. Some ACP adapters launch
+# providers from ~/.cache, which can otherwise make Serena select $HOME.
+exec serena start-mcp-server \
+  --project "${PROJECT_ROOT}" \
+  --enable-web-dashboard false \
+  "$@"

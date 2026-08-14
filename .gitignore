@@ -6,6 +6,8 @@
 !.config/claudex
 !.config/omf
 !.config/mise
+!.config/serena
+!.config/serena/serena_config.yml
 !.config/ghostty
 !.config/gh
 !.config/herdr
@@ -21,6 +23,12 @@ node_modules
 __pycache__/
 *.py[cod]
 !.gitkeep
+
+# Keep only Serena's repository configuration in git. Runtime caches and local
+# overrides remain local to each checkout.
+.serena/*
+!.serena/project.yml
+
 # Rust target directories can be nested when a verification lane supplies a
 # relative CARGO_TARGET_DIR; keep all generated build artifacts out of git.
 **/target/
