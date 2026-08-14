@@ -1,4 +1,4 @@
-import { clearTimeout, setTimeout } from "node:timers";
+import { clearInterval, setInterval } from "node:timers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   LoopRuntime,
@@ -8,18 +8,19 @@ import {
   type WakeupInput,
 } from "./runtime.ts";
 
-interface ScheduledCallback {
+interface PollerCallback {
   readonly callback: () => void;
-  readonly delayMs: number;
-  readonly timer: ReturnType<typeof setTimeout>;
+  readonly intervalMs: number;
+  readonly poller: ReturnType<typeof setInterval>;
 }
 
-const timers: ReturnType<typeof setTimeout>[] = [];
-let callbacks: ScheduledCallback[] = [];
+const pollers: ReturnType<typeof setInterval>[] = [];
+let callbacks: PollerCallback[] = [];
 let currentTime = 1000;
 const sendUserMessage = vi.fn<LoopHost["sendUserMessage"]>();
 const notify = vi.fn<LoopContext["ui"]["notify"]>();
 const setStatus = vi.fn<LoopContext["ui"]["setStatus"]>();
+const cleared = vi.fn();
 let idle = true;
 
 const host: LoopHost = { sendUserMessage };
@@ -28,13 +29,16 @@ const context: LoopContext = {
   ui: { notify, setStatus },
 };
 const scheduler: Scheduler = {
-  clearTimeout: (timer): void => clearTimeout(timer),
+  clearInterval: (poller): void => {
+    cleared();
+    clearInterval(poller);
+  },
   now: (): number => currentTime,
-  setTimeout: (callback, delayMs) => {
-    const timer = setTimeout((): void => undefined, 1_000_000);
-    timers.push(timer);
-    callbacks.push({ callback, delayMs, timer });
-    return timer;
+  setInterval: (callback, intervalMs) => {
+    const poller = setInterval((): void => undefined, 1_000_000);
+    pollers.push(poller);
+    callbacks.push({ callback, intervalMs, poller });
+    return poller;
   },
 };
 
@@ -45,8 +49,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  timers.map((timer): void => clearTimeout(timer));
-  timers.length = 0;
+  pollers.map((poller): void => clearInterval(poller));
+  pollers.length = 0;
 });
 
 describe("LoopRuntime commands", () => {
@@ -70,11 +74,11 @@ describe("LoopRuntime commands", () => {
     );
   });
 
-  it("starts, fires, rearms, lists, and clears a recurring loop", () => {
+  it("polls, fires, rearms, lists, and clears a recurring loop", () => {
     const runtime = new LoopRuntime(host, scheduler);
     runtime.command("5m check CI", context);
 
-    expect(callbacks[0]?.delayMs).toBe(300_000);
+    expect(callbacks[0]?.intervalMs).toBe(5000);
     expect(sendUserMessage).toHaveBeenCalledWith("check CI", {});
     expect(notify).toHaveBeenCalledWith("Started loop #1 every 5m (session-scoped).", "info");
     expect(setStatus).toHaveBeenLastCalledWith("loop", "loop: 1");
@@ -83,27 +87,61 @@ describe("LoopRuntime commands", () => {
     runtime.command("list", context);
     expect(notify).toHaveBeenLastCalledWith("#1 in 4m: Recurring every 5m", "info");
 
+    currentTime = 301_000;
     callbacks[0]?.callback();
     expect(sendUserMessage).toHaveBeenLastCalledWith("check CI", {});
-    expect(callbacks[1]?.delayMs).toBe(300_000);
+    runtime.command("list", context);
+    expect(notify).toHaveBeenLastCalledWith("#1 in 5m: Recurring every 5m", "info");
 
     runtime.command("clear", context);
     expect(notify).toHaveBeenLastCalledWith("Cleared 1 loop job(s).", "info");
     expect(setStatus).toHaveBeenLastCalledWith("loop", undefined);
-    callbacks[1]?.callback();
-    expect(sendUserMessage).toHaveBeenCalledTimes(2);
+    expect(cleared).toHaveBeenCalledOnce();
   });
 
-  it("reports an empty job list", () => {
+  it("pauses and resumes jobs while preserving their remaining delays", () => {
+    const runtime = new LoopRuntime(host, scheduler);
+    runtime.command("5m check CI", context);
+    currentTime = 61_000;
+    runtime.command("pause", context);
+
+    expect(notify).toHaveBeenLastCalledWith("Paused 1 loop job(s).", "info");
+    expect(setStatus).toHaveBeenLastCalledWith("loop", "loop: 1 (paused)");
+    runtime.command("list", context);
+    expect(notify).toHaveBeenLastCalledWith("#1 paused, in 4m: Recurring every 5m", "info");
+
+    currentTime = 601_000;
+    callbacks[0]?.callback();
+    expect(sendUserMessage).toHaveBeenCalledTimes(1);
+    runtime.command("pause", context);
+    expect(notify).toHaveBeenLastCalledWith("Loop jobs are already paused.", "info");
+
+    runtime.command("resume", context);
+    expect(notify).toHaveBeenLastCalledWith("Resumed 1 loop job(s).", "info");
+    runtime.command("resume", context);
+    expect(notify).toHaveBeenLastCalledWith("Loop jobs are not paused.", "info");
+
+    currentTime = 841_000;
+    callbacks[1]?.callback();
+    runtime.clear();
+  });
+
+  it("reports an empty job list and supports pausing before a new job", () => {
     const runtime = new LoopRuntime(host, scheduler);
     runtime.command("list", context);
     expect(notify).toHaveBeenCalledWith("No loop jobs are scheduled.", "info");
+    runtime.command("pause", context);
+    runtime.command("1m later", context);
+    expect(callbacks).toStrictEqual([]);
+    runtime.command("resume", context);
+    expect(callbacks[0]?.intervalMs).toBe(5000);
+    expect(runtime.clear()).toBe(1);
     expect(runtime.clear()).toBe(0);
   });
 });
 
 describe("LoopRuntime wakeups", () => {
-  it("schedules a one-shot wakeup and queues it while busy", () => {
+  it("fires an overdue one-shot after polling resumes from sleep", () => {
     const runtime = new LoopRuntime(host, scheduler);
     const input: WakeupInput = {
       delaySeconds: 90,
@@ -112,9 +150,11 @@ describe("LoopRuntime wakeups", () => {
     };
     expect(runtime.wakeup(input, context)).toStrictEqual({ id: 1, scheduledInSeconds: 90 });
 
+    currentTime = 500_000;
     idle = false;
     callbacks[0]?.callback();
     expect(sendUserMessage).toHaveBeenCalledWith("check again", { deliverAs: "followUp" });
+    expect(cleared).toHaveBeenCalledOnce();
     runtime.command("list", context);
     expect(notify).toHaveBeenLastCalledWith("No loop jobs are scheduled.", "info");
   });

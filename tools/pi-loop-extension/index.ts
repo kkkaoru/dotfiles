@@ -52,7 +52,7 @@ export interface LoopExtensionHost extends LoopHost {
   readonly registerTool: (definition: LoopToolDefinition) => void;
 }
 
-const COMPLETIONS = ["list", "clear", "5m ", "30m ", "1h "] satisfies string[];
+const COMPLETIONS = ["list", "clear", "pause", "resume", "5m ", "30m ", "1h "] satisfies string[];
 
 export default function loopExtension(host: LoopExtensionHost): void {
   const runtime: LoopRuntime = new LoopRuntime(host);

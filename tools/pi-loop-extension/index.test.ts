@@ -40,7 +40,15 @@ it("registers the loop command, tool, and lifecycle handlers", async () => {
   expect(command?.description).toBe(
     "Run a prompt now and continue on a self-paced or fixed schedule",
   );
-  expect(command?.getArgumentCompletions("l")).toStrictEqual([{ label: "list", value: "list" }]);
+  expect(command?.getArgumentCompletions("")).toStrictEqual([
+    { label: "list", value: "list" },
+    { label: "clear", value: "clear" },
+    { label: "pause", value: "pause" },
+    { label: "resume", value: "resume" },
+    { label: "5m ", value: "5m " },
+    { label: "30m ", value: "30m " },
+    { label: "1h ", value: "1h " },
+  ]);
   expect(command?.getArgumentCompletions("unknown")).toBeNull();
   expect(tool?.name).toBe("loop_wakeup");
   command?.handler("list", context);

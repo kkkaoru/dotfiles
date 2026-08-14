@@ -5,6 +5,8 @@ describe("parseLoopCommand", () => {
   it("parses subcommands and a prompt-only loop", () => {
     expect(parseLoopCommand(" list ")).toStrictEqual({ kind: "list" });
     expect(parseLoopCommand("clear")).toStrictEqual({ kind: "clear" });
+    expect(parseLoopCommand("pause")).toStrictEqual({ kind: "pause" });
+    expect(parseLoopCommand("resume")).toStrictEqual({ kind: "resume" });
     expect(parseLoopCommand("check the build")).toStrictEqual({
       kind: "start",
       prompt: "check the build",

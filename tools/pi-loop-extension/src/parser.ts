@@ -11,6 +11,8 @@ const MAX_INTERVAL_MS = 30 * DAY_MS;
 export type LoopCommand =
   | { readonly kind: "clear" }
   | { readonly kind: "list" }
+  | { readonly kind: "pause" }
+  | { readonly kind: "resume" }
   | { readonly intervalMs?: number; readonly kind: "start"; readonly prompt: string };
 
 interface IntervalMatch {
@@ -77,6 +79,12 @@ export function parseLoopCommand(args: string): LoopCommand {
   }
   if (input === "clear") {
     return { kind: "clear" };
+  }
+  if (input === "pause") {
+    return { kind: "pause" };
+  }
+  if (input === "resume") {
+    return { kind: "resume" };
   }
 
   const leading: RegExpExecArray | null = LEADING_INTERVAL.exec(input);
