@@ -1,7 +1,7 @@
 //! Live SubAgent viewer progress across provider models.
 //!
-//! After ZWSP prime close, ACP workers stream real CoT / compact prose plus ▶
-//! tool chrome on a new thinking index. Codex cases stream CoT then native
+//! ACP workers stream real CoT / compact prose plus ▶ tool chrome in native
+//! thinking blocks. Codex cases stream CoT then native
 //! `tool_use` (see `fugu_codex_*` in tests.rs). Canned filler is still dropped.
 
 use axum::body::Bytes;
@@ -52,7 +52,7 @@ const CASES: &[Case] = &[
             arg_key: "path",
             arg_value: "apps/finish-position-predict-container/src/predict.py",
         }),
-        // Close ZWSP, then compact prose + ▶ Read on a new thinking index.
+        // Compact prose + ▶ Read must remain visible in the native block.
         expect_visible: &["ContextVar", "▶ Read"],
     },
     Case {
@@ -98,7 +98,7 @@ const CASES: &[Case] = &[
             arg_key: "command",
             arg_value: "ls apps/finish-position-predict-container",
         }),
-        // Reasoning body + Bash title after ZWSP close (not tip-only ▶ Thinking).
+        // Reasoning body + Bash title (not tip-only ▶ Thinking).
         expect_visible: &["Plan the per-race cache seed", "▶ ls"],
     },
     Case {
@@ -355,8 +355,13 @@ async fn run_case(case: &Case) {
     let mut live = SubAgentLiveView::default();
     live.ingest_sse(&sse);
     assert!(
-        sse.contains("content_block_stop"),
-        "{}: ZWSP prime must close before visible chrome: {sse}",
+        sse.contains("content_block_delta"),
+        "{}: real provider output must stream on the wire: {sse}",
+        case.name
+    );
+    assert!(
+        !sse.contains('\u{200b}') && !sse.contains("claudex_activity_keepalive"),
+        "{}: silent prime/keepalive must not add synthetic wire chrome: {sse}",
         case.name
     );
     assert_live_progress(case, &live, command_code);

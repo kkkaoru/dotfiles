@@ -756,7 +756,7 @@ async fn cline_agent_message_prose_is_visible_before_end_turn() {
 }
 
 #[tokio::test]
-async fn subagent_silence_keepalive_paints_elapsed_progress_not_blank_viewer() {
+async fn subagent_silence_keepalive_preserves_provider_progress_without_wire_chrome() {
     let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
     let mut builder = SegmentBuilder::new(1).with_subagent(true);
     let mut live = super::super::subagent_live_view::SubAgentLiveView::default();
@@ -774,51 +774,45 @@ async fn subagent_silence_keepalive_paints_elapsed_progress_not_blank_viewer() {
         .expect("tool start");
     live.ingest_available(&mut receiver);
     assert!(live.visible_thinking.contains("▶"));
+    let initial_visible = live.visible_thinking.clone();
 
     builder
         .activity_keepalive(Some(&sender))
         .await
-        .expect("first elapsed");
+        .expect("first keepalive");
     builder.age_turn_for_test(Duration::from_secs(8));
     builder
         .activity_keepalive(Some(&sender))
         .await
-        .expect("second elapsed");
+        .expect("second keepalive");
     live.ingest_available(&mut receiver);
     assert!(live.turn_still_open());
     assert!(
-        live.visible_thinking.contains('▶'),
-        "long tool silence must keep the open ▶ thought live: {:?}",
+        live.visible_thinking == initial_visible,
+        "silent keepalive must preserve real provider progress without rewriting it: {:?}",
         live.visible_thinking
     );
     assert!(
-        live.visible_thinking.contains('·') && live.visible_thinking.contains('s'),
-        "keepalive must advance a visible elapsed clock: {:?}",
+        live.visible_thinking.contains('▶') && !live.visible_thinking.contains('\u{200b}'),
+        "real provider progress must remain visible without synthetic ZWSP: {:?}",
         live.visible_thinking
-    );
-    let tip = live
-        .visible_thinking
-        .chars()
-        .filter(|ch| *ch != '\u{200b}')
-        .collect::<String>();
-    assert!(
-        tip.trim_end()
-            .lines()
-            .rev()
-            .find(|line| !line.trim().is_empty())
-            .is_some_and(|line| line.contains('▶') && line.contains('·')),
-        "keepalive must re-tip ▶ with elapsed clock so CC does not flash blank Perambulating: {tip:?}"
     );
     assert!(
         !live.visible_thinking.contains("still working")
             && !live.visible_thinking.contains("last:"),
-        "elapsed ticks must not paint Thought-for chrome: {:?}",
+        "silent keepalives must not paint Thought-for chrome: {:?}",
         live.visible_thinking
     );
     assert!(
         live.hidden_text.is_empty(),
-        "elapsed ticks must not use hidden text_delta: {:?}",
+        "silent keepalives must not use hidden text_delta: {:?}",
         live.hidden_text
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), receiver.recv())
+            .await
+            .is_err(),
+        "silent keepalive must not emit synthetic elapsed wire frames"
     );
     drop(sender);
     let _ = collect_frames(&mut receiver).await;
@@ -827,7 +821,7 @@ async fn subagent_silence_keepalive_paints_elapsed_progress_not_blank_viewer() {
 #[tokio::test]
 async fn subagent_keepalive_without_tools_opens_thinking_without_nested_tip() {
     let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
-    let mut builder = SegmentBuilder::new(1).with_subagent(true);
+    let builder = SegmentBuilder::new(1).with_subagent(true);
     let mut live = super::super::subagent_live_view::SubAgentLiveView::default();
     builder
         .activity_keepalive(Some(&sender))
@@ -848,7 +842,7 @@ async fn subagent_keepalive_without_tools_opens_thinking_without_nested_tip() {
 }
 
 #[tokio::test]
-async fn subagent_keepalive_reopens_thinking_after_tool_use_closes_it() {
+async fn subagent_keepalive_does_not_reopen_thinking_after_tool_use_closes_it() {
     let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
     let mut builder = SegmentBuilder::new(1).with_subagent(true);
     let mut live = super::super::subagent_live_view::SubAgentLiveView::default();
@@ -865,6 +859,11 @@ async fn subagent_keepalive_reopens_thinking_after_tool_use_closes_it() {
         .await
         .expect("tool start");
     live.ingest_available(&mut receiver);
+    assert!(
+        live.visible_thinking.contains("▶ Read scripts/CLAUDE.md"),
+        "real provider progress must reach the viewer before close: {:?}",
+        live.visible_thinking
+    );
     builder
         .thinking
         .close(&mut builder.blocks, Some(&sender))
@@ -880,20 +879,25 @@ async fn subagent_keepalive_reopens_thinking_after_tool_use_closes_it() {
     builder
         .activity_keepalive(Some(&sender))
         .await
-        .expect("reopen after silence");
+        .expect("silent keepalive after close");
     live.ingest_available(&mut receiver);
     assert!(live.turn_still_open());
     assert!(
-        live.visible_thinking.contains('▶')
-            && live.visible_thinking.contains("Read scripts/CLAUDE.md"),
-        "closed thought after Read must reopen with last ▶ progress: {:?}",
+        live.visible_thinking.is_empty(),
+        "closed thought must stay closed without synthetic keepalive progress: {:?}",
         live.visible_thinking
     );
     assert!(
         !live.visible_thinking.contains("still working")
             && !live.visible_thinking.contains("Thought for"),
-        "reopen must not restore Thought-for chrome: {:?}",
+        "silent keepalive must not restore Thought-for chrome: {:?}",
         live.visible_thinking
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(100), receiver.recv())
+            .await
+            .is_err(),
+        "keepalive after tool close must not emit synthetic wire chrome"
     );
     drop(sender);
     let _ = collect_frames(&mut receiver).await;

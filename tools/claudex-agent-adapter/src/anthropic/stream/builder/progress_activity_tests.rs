@@ -1,7 +1,7 @@
 use std::{convert::Infallible, time::Duration};
 
 use axum::body::Bytes;
-use serde_json::json;
+use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
 use super::super::SegmentBuilder;
@@ -103,7 +103,7 @@ async fn elapsed_tip_returns_when_external_tools_ran_without_open_thinking() {
 }
 
 #[tokio::test]
-async fn elapsed_tip_closes_zwsp_prime_when_external_tools_left_thinking_open() {
+async fn elapsed_tip_does_not_reopen_synthetic_prime_with_external_tools() {
     let mut builder = SegmentBuilder::new(1)
         .with_subagent(true)
         .with_primed_thinking();
@@ -112,11 +112,15 @@ async fn elapsed_tip_closes_zwsp_prime_when_external_tools_left_thinking_open() 
         .provider_tool_calls
         .push(("call-1".to_owned(), "Read".to_owned()));
     builder.age_turn_for_test(Duration::from_secs(5));
-    assert!(builder.thinking.is_open());
     builder
         .activity_keepalive(None)
         .await
-        .expect("keepalive with external tools and zwsp prime");
+        .expect("keepalive with external tools and silent prime");
+    assert!(
+        !builder.thinking.is_open() && builder.blocks.is_empty(),
+        "silent prime and elapsed keepalive must stay out of the transcript: {:?}",
+        builder.blocks
+    );
 }
 
 #[tokio::test]
@@ -147,8 +151,12 @@ async fn main_live_cot_keepalive_continues_after_external_tool() {
         sse.push_str(&String::from_utf8_lossy(&frame.expect("infallible frame")));
     }
     assert!(
-        sse.contains("thinking_delta") && sse.contains('\u{200b}'),
-        "live CoT must keep the stream watchdog active: {sse}"
+        sse.contains("thinking_delta"),
+        "live CoT must keep streaming provider reasoning: {sse}"
+    );
+    assert!(
+        !sse.contains('\u{200b}'),
+        "activity keepalive must not add synthetic zero-width reasoning: {sse}"
     );
 }
 
@@ -176,13 +184,17 @@ async fn subagent_visible_progress_without_last_tool_keeps_elapsed_heartbeat() {
         sse.push_str(&String::from_utf8_lossy(&frame.expect("infallible frame")));
     }
     assert!(
-        sse.contains("thinking_delta") && sse.contains('\u{200b}'),
-        "visible progress without a tool must retain the stream heartbeat: {sse}"
+        sse.contains("thinking_delta"),
+        "visible progress must keep streaming provider progress: {sse}"
+    );
+    assert!(
+        !sse.contains('\u{200b}'),
+        "activity keepalive must not add synthetic zero-width progress: {sse}"
     );
 }
 
 #[tokio::test]
-async fn subagent_visible_progress_with_last_tool_paints_elapsed_tip() {
+async fn subagent_visible_progress_with_last_tool_stays_unchanged_on_keepalive() {
     let mut builder = SegmentBuilder::new(1).with_subagent(true);
     builder
         .stream_progress_text("▶ Inspecting the provider response\n", None)
@@ -200,8 +212,8 @@ async fn subagent_visible_progress_with_last_tool_paints_elapsed_tip() {
     assert!(
         builder.blocks[0]["thinking"]
             .as_str()
-            .is_some_and(|text| text.contains("▶ Read · 5s")),
-        "a named last tool must replace the progress-only keepalive path: {:?}",
+            .is_some_and(|text| text == "▶ Inspecting the provider response\n"),
+        "elapsed keepalive must not rewrite visible ACP progress: {:?}",
         builder.blocks
     );
 }
@@ -318,5 +330,200 @@ async fn t14_turn_progress_stays_off_the_transcript() {
     assert!(
         progress.iter().all(|event| event.elapsed_ms < u64::MAX),
         "{progress:?}"
+    );
+}
+
+#[derive(Default)]
+struct ClineSseClient {
+    events: Vec<Value>,
+    blocks: Vec<(usize, Value)>,
+    open_block: Option<usize>,
+    message_start_count: usize,
+    message_delta_count: usize,
+    message_stop_count: usize,
+}
+
+impl ClineSseClient {
+    fn ingest(&mut self, frame: &Bytes) {
+        let frame = String::from_utf8(frame.to_vec()).expect("UTF-8 SSE");
+        let data = frame
+            .lines()
+            .find_map(|line| line.strip_prefix("data: "))
+            .expect("SSE data");
+        let event: Value = serde_json::from_str(data).expect("SSE JSON");
+        self.events.push(event.clone());
+
+        match event["type"].as_str().expect("SSE event type") {
+            "message_start" => {
+                assert_eq!(self.open_block, None, "message must start without a block");
+                self.message_start_count += 1;
+            }
+            "content_block_start" => {
+                let index = event["index"].as_u64().expect("content start index") as usize;
+                assert!(
+                    self.open_block.replace(index).is_none(),
+                    "nested content block"
+                );
+                self.blocks.push((index, event["content_block"].clone()));
+            }
+            "content_block_delta" => self.ingest_content_block_delta(&event),
+            "content_block_stop" => {
+                let index = event["index"].as_u64().expect("content stop index") as usize;
+                assert_eq!(
+                    self.open_block.take(),
+                    Some(index),
+                    "stop without its start"
+                );
+            }
+            "message_delta" => {
+                assert!(self.open_block.is_none(), "message delta before block stop");
+                assert_eq!(
+                    event["delta"]["stop_reason"].as_str(),
+                    Some("end_turn"),
+                    "blank Cline turn must finish with end_turn"
+                );
+                self.message_delta_count += 1;
+            }
+            "message_stop" => {
+                assert!(self.open_block.is_none(), "message stop with open block");
+                self.message_stop_count += 1;
+            }
+            other => panic!("unexpected SSE event type: {other}"),
+        }
+    }
+
+    fn ingest_content_block_delta(&mut self, event: &Value) {
+        let index = event["index"].as_u64().expect("content delta index") as usize;
+        assert_eq!(self.open_block, Some(index), "delta without its open block");
+        let block = self
+            .blocks
+            .iter_mut()
+            .find(|(block_index, _)| *block_index == index)
+            .map(|(_, block)| block)
+            .expect("delta block");
+        let delta = &event["delta"];
+        match delta["type"].as_str().expect("content delta type") {
+            "thinking_delta" => append_string(block, "thinking", delta["thinking"].as_str()),
+            "signature_delta" => append_string(block, "signature", delta["signature"].as_str()),
+            "text_delta" => append_string(block, "text", delta["text"].as_str()),
+            "input_json_delta" => {}
+            other => panic!("unexpected content delta type: {other}"),
+        }
+    }
+
+    fn assert_clean_blank_turn(&self) {
+        assert_eq!(self.message_start_count, 1, "exactly one message_start");
+        assert_eq!(self.message_delta_count, 1, "exactly one message_delta");
+        assert_eq!(self.message_stop_count, 1, "exactly one message_stop");
+        assert_eq!(self.open_block, None, "all content blocks must be closed");
+        assert!(
+            self.blocks.is_empty(),
+            "blank Cline turn must not commit client blocks: {:?}",
+            self.blocks
+        );
+        assert!(
+            self.events.iter().all(|event| {
+                event["type"] != "content_block_start"
+                    || event["content_block"]["type"] != "thinking"
+            }),
+            "blank Cline turn must not start a thinking block: {:?}",
+            self.events
+        );
+        assert!(
+            self.events.iter().all(|event| {
+                event["type"] != "content_block_delta" || event["delta"]["type"] != "thinking_delta"
+            }),
+            "blank Cline turn must not emit thinking deltas: {:?}",
+            self.events
+        );
+        let wire = serde_json::to_string(&self.events).expect("event JSON");
+        assert!(
+            !wire.contains('\u{200b}'),
+            "ZWSP leaked to the client: {wire}"
+        );
+        assert!(
+            !wire.contains("claudex_activity_keepalive"),
+            "keepalive signature leaked to the client: {wire}"
+        );
+        assert_eq!(
+            self.events.last().and_then(|event| event["type"].as_str()),
+            Some("message_stop"),
+            "message_stop must be the terminal event"
+        );
+    }
+}
+
+fn append_string(block: &mut Value, key: &str, value: Option<&str>) {
+    let Some(value) = value else {
+        panic!("missing {key} content delta");
+    };
+    let current = block[key].as_str().unwrap_or_default().to_owned();
+    block[key] = Value::String(format!("{current}{value}"));
+}
+
+#[tokio::test]
+async fn cline_blank_thought_does_not_emit_ghost_thinking_on_wire_or_client() {
+    use crate::anthropic::stream::{prepare::prime_subagent_sse, protocol::send_stream_completion};
+
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
+    assert!(
+        prime_subagent_sse(
+            &sender,
+            "cline-pass/deepseek-v4-flash",
+            1,
+            true,
+            Some("xhigh"),
+        ),
+        "Cline prime must emit message_start"
+    );
+
+    let mut builder =
+        SegmentBuilder::for_turn(1, true, "cline-pass/deepseek-v4-flash").with_primed_thinking();
+    builder.age_turn_for_test(Duration::from_secs(2));
+    builder
+        .activity_keepalive(Some(&sender))
+        .await
+        .expect("first elapsed keepalive");
+    builder.age_turn_for_test(Duration::from_secs(2));
+    builder
+        .activity_keepalive(Some(&sender))
+        .await
+        .expect("second elapsed keepalive");
+    builder
+        .model_output_event(
+            &json!({
+                "method":"item/reasoning/summaryTextDelta",
+                "params":{
+                    "itemId":"cline:reasoning",
+                    "summaryIndex":0,
+                    "delta":"\n\n  \n"
+                }
+            }),
+            Some(&sender),
+        )
+        .await
+        .expect("discard whitespace-only Cline thought");
+
+    let segment = builder
+        .finish(Some(&sender))
+        .await
+        .expect("terminal Cline finish");
+    send_stream_completion(&sender, &segment).await;
+    drop(sender);
+
+    let mut client = ClineSseClient::default();
+    while let Some(frame) = receiver.recv().await {
+        client.ingest(&frame.expect("SSE frame"));
+    }
+    client.assert_clean_blank_turn();
+
+    assert!(
+        segment.blocks.iter().all(|block| {
+            block.get("type").and_then(Value::as_str) != Some("thinking")
+                && !block.to_string().contains('\u{200b}')
+                && !block.to_string().contains("claudex_activity_keepalive")
+        }),
+        "local committed blocks must stay clean: {:?}",
+        segment.blocks
     );
 }

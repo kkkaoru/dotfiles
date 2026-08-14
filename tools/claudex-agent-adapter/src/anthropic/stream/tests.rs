@@ -119,8 +119,7 @@ fn subagent_start_status_skips_main_and_command_code() {
         ),
         None
     );
-    // Visible "SubAgent starting…" collapses CC 2.1 thinking to Wandering and
-    // hides later ▶ Bash chrome for ACP workers. ZWSP prime is enough.
+    // Suppress launch prose so ACP workers can show their own visible progress.
     assert_eq!(
         super::prepare::subagent_start_status(true, "gpt-5.6-luna", Some("max")),
         None
@@ -230,7 +229,7 @@ async fn flushes_pending_subagent_answer_and_keeps_main_keepalive_on_open_text()
     main.activity_keepalive(None)
         .await
         .expect("keepalive on open text");
-    let mut idle = SegmentBuilder::new(1);
+    let idle = SegmentBuilder::new(1);
     idle.activity_keepalive(None)
         .await
         .expect("keepalive without open text");
@@ -285,7 +284,7 @@ async fn summarized_reasoning_skips_raw_text_delta_and_subagent_raw_cot() {
                 .and_then(Value::as_str)
                 .is_some_and(|text| text.contains("long subagent chain of thought"))
         }),
-        "subagent raw CoT must stream after ZWSP close: {:?}",
+        "subagent raw CoT must stream live: {:?}",
         subagent.blocks
     );
     let mut sse = String::new();
@@ -558,7 +557,7 @@ fn assert_subagent_activity_delays() {
     assert_eq!(
         super::prepare::prepare_first_activity_delay(true, true),
         Duration::ZERO,
-        "ZWSP-primed SubAgent must paint the first keepalive tip immediately"
+        "primed SubAgent must receive its first activity opportunity immediately"
     );
     assert_eq!(
         super::prepare::prepare_first_activity_delay(true, false),
@@ -944,7 +943,7 @@ async fn progress_status_dedupes_identical_status_lines() {
 }
 
 #[tokio::test]
-async fn progress_status_dedupes_tool_tip_after_zwsp_keepalive_tail() {
+async fn progress_status_dedupes_tool_tip_after_elapsed_keepalive() {
     let mut state = ThinkingState::default();
     let mut blocks = Vec::new();
     let tip = "▶ Read\n";
@@ -955,24 +954,24 @@ async fn progress_status_dedupes_tool_tip_after_zwsp_keepalive_tail() {
     state
         .elapsed_keepalive(&blocks, Duration::from_secs(4), Some("Read"), None)
         .await
-        .expect("zwsp keepalive");
+        .expect("elapsed keepalive");
     state
         .progress_status_keep_open(&mut blocks, tip, None)
         .await
-        .expect("re-tip after zwsp");
+        .expect("re-tip after elapsed keepalive");
     state
         .elapsed_keepalive(&blocks, Duration::from_secs(8), Some("Read"), None)
         .await
-        .expect("second zwsp");
+        .expect("second elapsed keepalive");
     state
         .progress_status_keep_open(&mut blocks, tip, None)
         .await
-        .expect("second re-tip after zwsp");
+        .expect("second re-tip after elapsed keepalive");
     let thinking = blocks[0]["thinking"].as_str().expect("thinking text");
     assert_eq!(
         thinking.matches("▶ Read").count(),
         1,
-        "ZWSP keepalive must not defeat ▶ tip dedupe: {thinking:?}"
+        "elapsed keepalive must not defeat ▶ tip dedupe: {thinking:?}"
     );
 }
 
@@ -996,7 +995,8 @@ async fn thinking_state_covers_answer_text_prime_and_heartbeat_guards() {
         )
         .await
         .expect("open thought");
-    primed.prime_silent_heartbeat(&mut blocks);
+    // A silent prime no longer reserves a synthetic thinking block. The real
+    // CoT block above remains the only committed block.
     assert_eq!(
         blocks
             .iter()
@@ -1009,7 +1009,7 @@ async fn thinking_state_covers_answer_text_prime_and_heartbeat_guards() {
         .await
         .expect("heartbeat on open thought");
 
-    let mut activity = ThinkingState::default();
+    let activity = ThinkingState::default();
     let mut keepalive = Vec::new();
     activity
         .activity_status(&mut keepalive, "still working", None)
@@ -1024,7 +1024,8 @@ async fn thinking_state_covers_answer_text_prime_and_heartbeat_guards() {
             .iter()
             .filter(|block| block.get("type").and_then(Value::as_str) == Some("thinking"))
             .count(),
-        1
+        0,
+        "synthetic activity status must not open thinking"
     );
 }
 
@@ -1227,7 +1228,7 @@ fn assert_subagent_reasoning_transcript(segment: &crate::anthropic::Segment) {
         "SubAgent turn must keep one native thinking block: {:?}",
         segment.blocks
     );
-    // Live SSE streams CoT after the prime; ▶ tool chrome stays on thinking.
+    // Live SSE streams real CoT; ▶ tool chrome stays on thinking.
     assert!(thinking.contains("Map the conversion path."));
     assert!(thinking.contains("Check Vibrato boundaries."));
     assert!(thinking.contains("Hypothesis: boundaries were dropped."));
@@ -1338,7 +1339,7 @@ fn assert_subagent_reasoning_sse(sse: &str) {
     );
     assert!(
         sse.contains("Map the conversion path"),
-        "ACP CoT must stream live after ZWSP close: {sse}"
+        "ACP CoT must stream live: {sse}"
     );
     assert!(
         sse.contains("▶ Read") || sse.contains("▶ convert.ts"),
@@ -1618,7 +1619,7 @@ async fn gpt_subagent_textdelta_does_not_bury_live_tool_progress() {
     assert_thinking_stop_before_native_read(&sse);
     assert!(
         sse.contains("Inspect the neon pooler GUCs"),
-        "raw GPT CoT must stream live after ZWSP close: {sse}"
+        "raw GPT CoT must stream live: {sse}"
     );
     assert_codex_cot_in_transcript(&mut builder, "Inspect the neon pooler GUCs").await;
 }
@@ -1691,7 +1692,7 @@ fn assert_mixed_handoff_sse(payloads: &[Value]) {
     assert_eq!(open_index, None, "all streamed blocks must be closed");
     assert_eq!(
         started_types,
-        vec![json!("thinking"), json!("thinking"), json!("tool_use")],
+        vec![json!("thinking"), json!("tool_use")],
         "finish must not synthesize an unstarted thinking block: {payloads:?}"
     );
     let signature_indices = payloads
@@ -1701,13 +1702,13 @@ fn assert_mixed_handoff_sse(payloads: &[Value]) {
         })
         .filter_map(|payload| payload["index"].as_u64())
         .collect::<Vec<_>>();
-    assert_eq!(signature_indices, vec![0, 1]);
+    assert_eq!(signature_indices, vec![0]);
     let stop_indices = payloads
         .iter()
         .filter(|payload| payload["type"] == "content_block_stop")
         .filter_map(|payload| payload["index"].as_u64())
         .collect::<Vec<_>>();
-    assert_eq!(stop_indices, vec![0, 1, 2]);
+    assert_eq!(stop_indices, vec![0, 1]);
     for needle in [
         "UNIQUE_REASONING_A",
         "PROVIDER_OWNED_PROGRESS",
@@ -1716,8 +1717,8 @@ fn assert_mixed_handoff_sse(payloads: &[Value]) {
         assert!(
             payloads
                 .iter()
-                .any(|payload| thinking_delta_contains(payload, 1, needle)),
-            "{needle} must stream on the post-prime thinking index: {payloads:?}"
+                .any(|payload| thinking_delta_contains(payload, 0, needle)),
+            "{needle} must stream on the live thinking index: {payloads:?}"
         );
     }
 }
@@ -1854,17 +1855,17 @@ async fn whitespace_reasoning_delta_does_not_open_blank_thought_chrome() {
 }
 
 #[tokio::test]
-async fn activity_keepalive_emits_visible_status_then_zero_width_heartbeat() {
+async fn activity_keepalive_stays_content_free() {
     let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
     let mut builder = SegmentBuilder::new(1);
     builder
         .activity_keepalive(Some(&sender))
         .await
-        .expect("open keepalive thinking");
+        .expect("first keepalive");
     builder
         .activity_keepalive(Some(&sender))
         .await
-        .expect("second heartbeat");
+        .expect("second keepalive");
     let segment = builder.finish(Some(&sender)).await.expect("segment");
     drop(sender);
 
@@ -1924,7 +1925,7 @@ async fn activity_keepalive_continues_after_bridged_tool_use_so_watchdog_does_no
 }
 
 #[tokio::test]
-async fn activity_keepalive_uses_open_text_when_visible_output_started() {
+async fn activity_keepalive_leaves_visible_output_unchanged() {
     let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
     let mut builder = SegmentBuilder::new(1);
     builder
@@ -1940,17 +1941,19 @@ async fn activity_keepalive_uses_open_text_when_visible_output_started() {
 
     // Stream-only heartbeat: final answer text stays clean.
     assert_eq!(segment.blocks[0], json!({"type":"text","text":"hi"}));
-    let saw_zwsp = stream_contains_zwsp(&mut receiver).await;
-    assert!(saw_zwsp, "expected a zero-width text_delta keepalive frame");
+    assert!(
+        !stream_contains_zwsp(&mut receiver).await,
+        "activity keepalive must not emit synthetic zero-width text_delta"
+    );
 }
 
 #[tokio::test]
 async fn refreshes_activity_deadlines_and_detects_closed_streams() {
     let (sender, receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
-    let mut builder = SegmentBuilder::new(1);
+    let builder = SegmentBuilder::new(1);
     let mut deadline = Box::pin(tokio::time::sleep(std::time::Duration::from_secs(1)));
     super::control::refresh_activity_keepalive(
-        &mut builder,
+        &builder,
         Some(&sender),
         deadline.as_mut(),
         Duration::from_secs(1),
@@ -2168,8 +2171,7 @@ async fn reports_slow_stream_preparation_before_the_provider_is_ready() {
         super::PrepareActivityOptions {
             input_tokens: 3,
             sender: &sender,
-            // Visible SubAgent starting prose collapses CC 2.1 thinking; keep
-            // None and rely on keepalive / ▶ chrome after ZWSP prime.
+            // Omit launch prose; real provider output owns any visible ▶ chrome.
             initial_status: None,
             first_delay: Duration::from_millis(5),
             interval: Duration::from_millis(50),
@@ -2205,30 +2207,23 @@ async fn reports_slow_stream_preparation_before_the_provider_is_ready() {
 async fn command_code_prepare_primes_silent_thinking_not_canned_text() {
     let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
     let (main_sender, mut main_receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
-    assert!(super::prime_subagent_sse(
-        &main_sender,
-        "gpt-5.6-luna",
-        1,
-        false,
-        None
-    ));
-    let _ = main_receiver.recv().await.expect("message_start");
-    let start = main_receiver.recv().await.expect("thinking start");
+    let _ = super::prime_subagent_sse(&main_sender, "gpt-5.6-luna", 1, false, None);
+    let start = main_receiver.recv().await.expect("message_start");
     assert!(
-        String::from_utf8_lossy(&start.expect("frame")).contains("content_block_start"),
-        "main turns must first-flush an empty thinking start"
+        String::from_utf8_lossy(&start.expect("frame")).contains("message_start"),
+        "main turns must first-flush message_start"
     );
     assert!(
         main_receiver.try_recv().is_err(),
-        "main must not park Preparing…/ZWSP in the first thinking body"
+        "main prime must not park a synthetic thinking block"
     );
-    assert!(super::prime_subagent_sse(
+    let _ = super::prime_subagent_sse(
         &sender,
         "meta/muse-spark-1.2-contributor",
         1,
         true,
         Some("high"),
-    ));
+    );
     let (result, mut builder) = super::prepare_with_activity(
         std::future::ready(Ok::<_, anyhow::Error>("ready")),
         super::PrepareActivityOptions {
@@ -2264,16 +2259,10 @@ fn assert_command_code_prime_is_silent(blocks: &[Value], frames: &[String]) {
         "canned chrome must not remain in transcript: {blocks:?}"
     );
     assert!(
-        frames
-            .iter()
-            .any(|frame| frame.contains("content_block_start") && frame.contains("thinking")),
-        "Command Code start must open native thinking: {frames:?}"
-    );
-    assert!(
-        !frames
-            .iter()
-            .any(|frame| { frame.contains("text_delta") && frame.contains("Command Code") }),
-        "Command Code must not dump start chrome as text: {frames:?}"
+        frames.iter().all(
+            |frame| !frame.contains("content_block_start") && !frame.contains("thinking_delta")
+        ),
+        "silent Command Code prime must not synthesize thinking: {frames:?}"
     );
     assert!(
         !frames.iter().any(|frame| {
@@ -2395,7 +2384,7 @@ async fn primes_command_code_thinking_before_the_client_can_disconnect() {
         Some("high"),
     );
     drop(sender);
-    assert!(primed, "Command Code must prime thinking heartbeat");
+    assert!(primed, "Command Code must prime message_start");
     let mut frames = Vec::new();
     while let Some(frame) = receiver.recv().await {
         frames.push(String::from_utf8(frame.expect("frame").to_vec()).expect("UTF-8 SSE"));
@@ -2405,14 +2394,10 @@ async fn primes_command_code_thinking_before_the_client_can_disconnect() {
         "missing message_start: {frames:?}"
     );
     assert!(
-        frames
-            .iter()
-            .any(|frame| frame.contains("content_block_start") && frame.contains("thinking")),
-        "primed Command Code must open native thinking, not text chrome: {frames:?}"
-    );
-    assert!(
-        frames.iter().all(|frame| !frame.contains("thinking_delta")),
-        "first-flush must not park ZWSP/Preparing in the thinking body: {frames:?}"
+        frames.iter().all(
+            |frame| !frame.contains("content_block_start") && !frame.contains("thinking_delta")
+        ),
+        "first-flush must not synthesize a thinking body: {frames:?}"
     );
     assert!(
         !frames
@@ -2423,13 +2408,13 @@ async fn primes_command_code_thinking_before_the_client_can_disconnect() {
 }
 
 #[tokio::test]
-async fn cursor_subagent_primes_thinking_in_the_same_flush_as_message_start() {
+async fn cursor_subagent_primes_message_start_without_thinking() {
     let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
     let primed = super::prime_subagent_sse(&sender, "auto", 3, true, Some("high"));
     drop(sender);
     assert!(
         primed,
-        "Cursor SubAgent must prime thinking in the first SSE flush"
+        "Cursor SubAgent must prime message_start in the first SSE flush"
     );
     let mut frames = Vec::new();
     while let Some(frame) = receiver.recv().await {
@@ -2440,14 +2425,10 @@ async fn cursor_subagent_primes_thinking_in_the_same_flush_as_message_start() {
         "missing message_start: {frames:?}"
     );
     assert!(
-        frames
-            .iter()
-            .any(|frame| frame.contains("content_block_start") && frame.contains("thinking")),
-        "Cursor SubAgent must first-flush thinking start: {frames:?}"
-    );
-    assert!(
-        frames.iter().all(|frame| !frame.contains("thinking_delta")),
-        "first-flush must not park ZWSP in the thinking body: {frames:?}"
+        frames.iter().all(
+            |frame| !frame.contains("content_block_start") && !frame.contains("thinking_delta")
+        ),
+        "first-flush must not synthesize a thinking body: {frames:?}"
     );
     assert!(
         !frames.iter().any(|frame| {
@@ -3283,7 +3264,7 @@ async fn fugu_codex_closes_thinking_before_native_read() {
     assert_thinking_stop_before_native_read(&output);
     assert!(
         output.contains("Map the race filter"),
-        "fugu CoT must stream after ZWSP close: {output}"
+        "fugu CoT must stream live: {output}"
     );
 }
 
@@ -3855,7 +3836,7 @@ async fn drive_stream_keeps_content_indices_monotonic_across_context_retry() {
         "params":{"threadId":"thread","error":{"message":"context window exceeded"}}
     }));
     let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
-    let mut builder = SegmentBuilder::new(1);
+    let builder = SegmentBuilder::new(1);
     builder
         .activity_keepalive(Some(&sender))
         .await

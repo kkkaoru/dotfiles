@@ -3,12 +3,10 @@ use std::{future::Future, time::Duration};
 use anyhow::Result;
 use tokio::time::{Instant, sleep};
 
-use axum::body::Bytes;
-use serde_json::json;
-
+use super::super::MessagesRequest;
 use super::super::model_concurrency::Ticket;
-use super::super::{MessagesRequest, content::sse};
 use super::{SegmentBuilder, StreamSender, message_start};
+use axum::body::Bytes;
 
 mod drive;
 #[cfg(test)]
@@ -37,7 +35,7 @@ pub(super) fn subagent_start_status(
     // Claude Code 2.1 collapses that tip to "Wandering…", and later ▶ Bash /
     // keepalive chrome appended to the same (or follow-on) thinking stream
     // stays hidden for ACP SubAgents even while providerTool events fire.
-    // ZWSP priming in `prime_subagent_sse` is enough to keep the SSE channel.
+    // `KeepaliveStream` comments keep the SSE channel alive during preparation.
     None
 }
 
@@ -51,29 +49,11 @@ pub(super) fn prime_subagent_sse(
     sender
         .try_send(Ok(Bytes::from(message_start(model, input_tokens))))
         .expect("new streaming response channel has capacity");
-    // Claude Code drops SSE after message_start unless a thinking block lands in
-    // the same first flush. Main turns also sit blank during ACP session/new +
-    // permit acquire; paint immediately for every provider hop through claudex.
-    //
-    // SubAgents must prime with ZWSP only (same as Command Code). A visible
-    // "SubAgent starting… (effort=high)" tip made CC 2.1 collapse the whole
-    // thinking block to Wandering, so Cursor ACP ▶ Bash never appeared live
-    // even though providerTool events kept firing.
-    // First-flush thinking start only. ZWSP / Preparing… must not open a body.
+    // The response body itself supplies SSE comment keepalives while preparation
+    // is quiet. Do not synthesize a thinking block here: a silent Cline turn
+    // must stay block-free until real CoT or ACP progress arrives.
     let _ = is_subagent;
-    let _ = sender.try_send(Ok(Bytes::from(subagent_thinking_prime_start())));
     true
-}
-
-fn subagent_thinking_prime_start() -> String {
-    sse(
-        "content_block_start",
-        json!({
-            "type":"content_block_start",
-            "index":0,
-            "content_block":{"type":"thinking","thinking":"","signature":""}
-        }),
-    )
 }
 
 pub(super) struct PrepareActivityOptions<'a> {
@@ -131,7 +111,8 @@ where
             }
             result = &mut prepare => return (result.map(Some), builder),
             () = &mut deadline => {
-                // As above, activity keepalives only emit best-effort frames.
+                // The response body emits comment keepalives; this does not
+                // create synthetic content blocks.
                 let _ = builder.activity_keepalive(sse_open.then_some(sender)).await;
             },
         };

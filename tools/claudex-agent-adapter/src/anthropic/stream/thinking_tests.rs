@@ -20,7 +20,7 @@ mod tests {
     }
 
     async fn assert_silent_status_does_not_open_thinking(status: &str) {
-        let mut state = ThinkingState::default();
+        let state = ThinkingState::default();
         let mut blocks = Vec::new();
         state
             .activity_status(&mut blocks, status, None)
@@ -31,7 +31,7 @@ mod tests {
     }
 
     async fn send_silent_status(
-        state: &mut ThinkingState,
+        state: &ThinkingState,
         blocks: &mut Vec<Value>,
         status: &str,
         sender: &StreamSender,
@@ -80,26 +80,28 @@ mod tests {
         assert_silent_status_does_not_open_thinking("Nucleating response").await;
         assert_silent_status_does_not_open_thinking("▶ Thinking…").await;
 
-        let mut state = ThinkingState::default();
+        let state = ThinkingState::default();
         let mut blocks = Vec::new();
         let status = "\u{200b}visible";
         state
             .activity_status(&mut blocks, status, None)
             .await
-            .expect("visible status containing ZWSP");
-        assert_eq!(blocks.len(), 1);
-        assert_eq!(
-            state.open.as_ref().map(|open| open.text.as_str()),
-            Some(status)
+            .expect("status containing ZWSP");
+        assert!(
+            state.open.is_none() && blocks.is_empty(),
+            "activity status must stay content-free, including visible text: {blocks:?}"
         );
 
-        let mut state = ThinkingState::default();
+        let state = ThinkingState::default();
         let mut blocks = Vec::new();
         state
             .activity_status(&mut blocks, "▶ Read", None)
             .await
             .expect("non-thinking tool tip");
-        assert!(state.open.is_some());
+        assert!(
+            state.open.is_none() && blocks.is_empty(),
+            "ACP progress must use progress_status_keep_open, not activity_status: {blocks:?}"
+        );
     }
 
     #[test]
@@ -141,7 +143,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn heartbeat_keeps_non_empty_reasoning_open_and_appends_zwsp() {
+    async fn heartbeat_keeps_non_empty_reasoning_open_without_mutating_buffer() {
         let mut state = ThinkingState {
             open: Some(OpenThinking {
                 index: 0,
@@ -168,7 +170,7 @@ mod tests {
         assert_eq!(
             state.open.as_ref().map(|open| open.text.as_str()),
             Some("already thinking"),
-            "CoT buffer stays clean; keepalive ZWSP is stream-only"
+            "CoT buffer stays clean; keepalive must not mutate it"
         );
     }
 
@@ -251,11 +253,11 @@ mod tests {
         state
             .elapsed_keepalive(&blocks, Duration::from_secs(4), Some("Read"), Some(&sender))
             .await
-            .expect("zwsp");
+            .expect("stream-only keepalive");
         assert_eq!(
             blocks[0]["thinking"].as_str(),
             Some(before.as_str()),
-            "keepalive must not park ZWSP in the tip buffer"
+            "keepalive must not mutate the tip buffer"
         );
         state
             .progress_status_keep_open(&mut blocks, tip, Some(&sender))
@@ -272,7 +274,10 @@ mod tests {
         drop(sender);
         let (tip_deltas, zwsp_deltas) = count_tip_and_zwsp_deltas(&mut receiver).await;
         assert_eq!(tip_deltas, 1);
-        assert_eq!(zwsp_deltas, 1);
+        assert_eq!(
+            zwsp_deltas, 0,
+            "elapsed keepalive must not emit synthetic zero-width deltas"
+        );
     }
 
     #[tokio::test]
@@ -586,30 +591,26 @@ mod tests {
         let mut subagent = ThinkingState::default();
         let mut blocks = Vec::new();
         subagent
-            .ensure_open(&mut blocks, Some(&sender))
-            .await
-            .expect("prime SubAgent SSE");
-        subagent
             .activity_keepalive(&mut blocks, Some(&sender))
             .await
             .expect("keepalive");
-        send_silent_status(&mut subagent, &mut blocks, "   ", &sender).await;
-        send_silent_status(&mut subagent, &mut blocks, "\u{200b}", &sender).await;
+        send_silent_status(&subagent, &mut blocks, "   ", &sender).await;
+        send_silent_status(&subagent, &mut blocks, "\u{200b}", &sender).await;
         send_silent_status(
-            &mut subagent,
+            &subagent,
             &mut blocks,
             "Claudex is still working · 1s",
             &sender,
         )
         .await;
         send_silent_status(
-            &mut subagent,
+            &subagent,
             &mut blocks,
             "Preparing provider session…",
             &sender,
         )
         .await;
-        send_silent_status(&mut subagent, &mut blocks, "▶ Thinking… · 1s", &sender).await;
+        send_silent_status(&subagent, &mut blocks, "▶ Thinking… · 1s", &sender).await;
         subagent
             .close(&mut blocks, Some(&sender))
             .await
@@ -620,12 +621,15 @@ mod tests {
         let live = drain_live_frames(&mut receiver);
         assert_eq!(
             live.matches("content_block_start").count(),
-            live.matches("content_block_stop").count(),
-            "SSE must close its primed thinking block instead of leaving empty chrome: {live}"
+            0,
+            "synthetic prime must not open a thinking block: {live}"
         );
         assert!(
-            live.contains(HEARTBEAT),
-            "keepalive must remain stream-only: {live}"
+            !live.contains("content_block_stop")
+                && !live.contains("thinking_delta")
+                && !live.contains('\u{200b}')
+                && !live.contains("claudex_activity_keepalive"),
+            "silence must leave the SSE stream content-free: {live}"
         );
         assert!(
             !live.contains("Claudex is still working")

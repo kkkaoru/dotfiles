@@ -54,7 +54,7 @@ fn turn_error_message(event: &Value) -> String {
 }
 
 pub(super) async fn refresh_activity_keepalive(
-    builder: &mut SegmentBuilder,
+    builder: &SegmentBuilder,
     sender: Option<&StreamSender>,
     mut deadline: Pin<&mut Sleep>,
     interval: Duration,

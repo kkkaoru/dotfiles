@@ -73,6 +73,8 @@ impl SegmentBuilder {
     }
 
     pub(in crate::anthropic::stream) fn with_primed_thinking(mut self) -> Self {
+        // Kept as a compatibility builder hook for callers/tests. A prime must
+        // not reserve an empty thinking block before real provider output.
         self.thinking.prime_silent_heartbeat(&mut self.blocks);
         self
     }

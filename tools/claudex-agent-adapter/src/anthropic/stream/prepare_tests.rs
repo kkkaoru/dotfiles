@@ -224,7 +224,7 @@ async fn fail_prepared_stream_skips_exhaustion_for_concurrency_timeout() {
 }
 
 #[tokio::test]
-async fn prepare_with_activity_paints_an_explicit_initial_status() {
+async fn prepare_with_activity_keeps_initial_wire_silent() {
     let (sender, mut receiver) = mpsc::channel::<Result<Bytes, std::convert::Infallible>>(8);
     let (result, _builder) = prepare_with_activity(
         std::future::ready(Ok::<_, anyhow::Error>("ready")),
@@ -243,11 +243,9 @@ async fn prepare_with_activity_paints_an_explicit_initial_status() {
 
     assert_eq!(result.expect("prepare result"), Some("ready"));
     assert!(
-        receiver.recv().await.is_some(),
-        "status should open thinking"
-    );
-    assert!(
-        receiver.recv().await.is_some(),
-        "status should emit a delta"
+        tokio::time::timeout(Duration::from_millis(100), receiver.recv())
+            .await
+            .is_err(),
+        "prepare must not wait forever for synthetic initial-status frames"
     );
 }

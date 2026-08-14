@@ -7,6 +7,7 @@ use anyhow::Result;
 use serde_json::{Value, json};
 mod activity;
 mod close;
+#[cfg(test)]
 pub(super) const HEARTBEAT: &str = "\u{200b}";
 #[derive(Default)]
 pub(super) struct ThinkingState {

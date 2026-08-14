@@ -22,8 +22,8 @@ pub(in crate::anthropic::stream) fn prepare_first_activity_delay(
     primed_thinking: bool,
 ) -> Duration {
     if primed_thinking {
-        // ZWSP already opened thinking; waiting 100–250ms before the first
-        // visible tip leaves SubAgent TUI on Nucleating/Frolicking.
+        // `message_start` is already queued. Keep the first preparation tick
+        // prompt, but it must remain content-free until real provider output.
         Duration::ZERO
     } else if is_subagent {
         SUBAGENT_INITIAL_ACTIVITY_DELAY

@@ -38,6 +38,7 @@ impl ThinkingState {
             .is_some_and(|open| is_collapsed_subagent_prime(&open.text))
     }
 
+    #[cfg(test)]
     /// ZWSP-only or launch prose. Keepalive may close this, but must not close
     /// an elapsed `▶ Thinking… · Ns` tip (that would spawn a new block every tick).
     pub(in crate::anthropic::stream) fn open_holds_zwsp_or_launch_prose(&self) -> bool {
@@ -91,6 +92,7 @@ fn is_collapsed_subagent_prime(text: &str) -> bool {
     is_launch_prose(text) || is_zwsp_or_thinking_elapsed_only(text)
 }
 
+#[cfg(test)]
 fn is_zwsp_or_launch_prose(text: &str) -> bool {
     is_launch_prose(text) || text.replace('\u{200b}', "").trim().is_empty()
 }

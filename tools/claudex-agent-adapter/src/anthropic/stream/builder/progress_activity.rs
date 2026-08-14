@@ -1,9 +1,6 @@
 use anyhow::Result;
 use serde_json::json;
 
-use super::super::progress_keepalive::{
-    compact_keepalive_title, keepalive_elapsed_chrome, send_activity_heartbeat,
-};
 use super::SegmentBuilder;
 use crate::anthropic::stream::{
     protocol::{StreamSender, send_stream_frame},
@@ -51,69 +48,11 @@ impl SegmentBuilder {
     }
 
     pub(in crate::anthropic::stream) async fn activity_keepalive(
-        &mut self,
-        stream: Option<&StreamSender>,
+        &self,
+        _stream: Option<&StreamSender>,
     ) -> Result<()> {
-        if self.is_subagent {
-            return self.subagent_activity_keepalive(stream).await;
-        }
-        const HEARTBEAT: &str = "\u{200b}";
-        if let Some((index, _)) = self.open_text_block {
-            // Stream-only: do not mutate the committed text buffer.
-            return send_activity_heartbeat(stream, index, HEARTBEAT).await;
-        }
-        if self.external_tool_calls > 0 && !self.thinking.is_open() {
-            return Ok(());
-        }
-        if self.thinking.holds_live_cot_or_tip() {
-            return self
-                .thinking
-                .elapsed_keepalive(&self.blocks, self.turn_started_at.elapsed(), None, stream)
-                .await;
-        }
-        self.thinking
-            .activity_keepalive(&mut self.blocks, stream)
-            .await
-    }
-
-    async fn subagent_activity_keepalive(&mut self, stream: Option<&StreamSender>) -> Result<()> {
-        let last_tool = self
-            .provider_tool_calls
-            .last()
-            .map(|(_, title)| compact_keepalive_title(title));
-        let elapsed = self.turn_started_at.elapsed();
-        if self.thinking.holds_live_cot_or_tip() && last_tool.is_none() {
-            return self
-                .thinking
-                .elapsed_keepalive(&self.blocks, elapsed, last_tool.as_deref(), stream)
-                .await;
-        }
-        let tip = keepalive_elapsed_chrome(last_tool.as_deref(), elapsed);
-        if self.thinking.is_open() && tip.is_none() {
-            return self
-                .thinking
-                .elapsed_keepalive(&self.blocks, elapsed, last_tool.as_deref(), stream)
-                .await;
-        }
-        let Some(tip) = tip else {
-            return Ok(());
-        };
-        self.paint_tool_elapsed_tip(&tip, stream).await
-    }
-
-    async fn paint_tool_elapsed_tip(
-        &mut self,
-        tip: &str,
-        stream: Option<&StreamSender>,
-    ) -> Result<()> {
-        if self.external_tool_calls > 0 && !self.thinking.is_open() {
-            return Ok(());
-        }
-        if self.thinking.open_holds_zwsp_or_launch_prose() {
-            self.thinking.close(&mut self.blocks, stream).await?;
-        }
-        self.thinking
-            .progress_status_keep_open(&mut self.blocks, tip, stream)
-            .await
+        // `KeepaliveStream` sends SSE comments while the provider is quiet.
+        // Never create/delta a text or thinking block for elapsed/status chrome.
+        Ok(())
     }
 }
