@@ -65,6 +65,7 @@ coverage_out/
 !.claude/skills/
 !.claude/skills/ctx-agent-history-search/
 !.claude/skills/ctx-agent-history-search/SKILL.md
+!.claude/skills/git-commit-by-feature
 
 
 # Codex runtime state/cache
@@ -113,6 +114,8 @@ coverage_out/
 
 /.cursor/*
 !/.cursor/mcp.json
+!/.cursor/skills/
+!/.cursor/skills/git-commit-by-feature
 .cursor/projects
 .cursor/extensions
 .cursor/worktrees

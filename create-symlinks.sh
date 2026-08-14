@@ -60,7 +60,10 @@ for f in .??*; do
   [ "$f" = ".git" ] && continue
   [ "$f" = ".tool-versions" ] && continue
   [ "$f" = ".config" ] && continue
+  [ "$f" = ".agents" ] && continue
   [ "$f" = ".claude" ] && continue
+  [ "$f" = ".cursor" ] && continue
+  [ "$f" = ".grok" ] && continue
   # Serena stores runtime state under ~/.serena; link only its config file below.
   [ "$f" = ".serena" ] && continue
   link_path "${DOTPATH}/${f}" "${HOME}/${f}"
@@ -92,6 +95,19 @@ done
 for name in agents commands hooks skills; do
   if [ -d "${DOTPATH}/.claude/${name}" ]; then
     link_tree "${DOTPATH}/.claude/${name}" "${HOME}/.claude/${name}"
+  fi
+done
+
+# Shared Agent Skills are the canonical definitions used by pi and mirrored
+# into harness-specific skill directories where required.
+if [ -d "${DOTPATH}/.agents/skills" ]; then
+  link_tree "${DOTPATH}/.agents/skills" "${HOME}/.agents/skills"
+fi
+
+# Cursor and Grok keep runtime state beside user skills, so merge only skills.
+for harness in cursor grok; do
+  if [ -d "${DOTPATH}/.${harness}/skills" ]; then
+    link_tree "${DOTPATH}/.${harness}/skills" "${HOME}/.${harness}/skills"
   fi
 done
 
