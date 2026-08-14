@@ -48,6 +48,7 @@ pub async fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<i32> {
             launcher::run_claude(options, arguments, inherit_claude_model).await?
         }
         RuntimeCommand::McpClaudexLaunch => {
+            crate::logging::init();
             crate::launch_mcp::run_stdio()?;
             0
         }

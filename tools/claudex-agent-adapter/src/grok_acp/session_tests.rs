@@ -1,11 +1,22 @@
 use super::*;
 use serde_json::{Value, json};
-use std::sync::Arc;
+use std::{
+    io,
+    process::Command,
+    sync::{Arc, Mutex},
+};
 use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
 use tokio_util::compat::{TokioAsyncReadCompatExt as _, TokioAsyncWriteCompatExt as _};
 
 use super::super::client::AcpClient;
 use crate::app_server::events::ThreadEventDispatcher;
+
+const MCP_TRACE_CAPTURE_CHILD: &str = "CLAUDEX_MCP_TRACE_CAPTURE_CHILD";
+const MCP_OFFER_TRACE_TEST: &str = "grok_acp::session::tests::launch_mcp_offer_trace_is_redacted";
+const MCP_SESSION_TRACE_TEST: &str =
+    "grok_acp::session::tests::launch_mcp_session_new_trace_is_redacted";
+const NON_LAUNCH_MCP_SESSION_TRACE_TEST: &str =
+    "grok_acp::session::tests::non_launch_mcp_session_new_trace_counts_without_naming";
 
 fn rpc_connection(
     reply: Result<Value, &'static str>,
@@ -52,6 +63,77 @@ fn rpc_connection(
             .unwrap();
     });
     (connection, request_rx, server_task, io_task)
+}
+
+struct BufferWriter(Arc<Mutex<Vec<u8>>>);
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for BufferWriter {
+    type Writer = BufferWriter;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        Self(Arc::clone(&self.0))
+    }
+}
+
+impl io::Write for BufferWriter {
+    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        self.0
+            .lock()
+            .expect("trace buffer")
+            .extend_from_slice(buffer);
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn start_info_trace_capture() -> (Arc<Mutex<Vec<u8>>>, tracing::subscriber::DefaultGuard) {
+    let buffer = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::fmt()
+        .with_max_level(tracing::level_filters::LevelFilter::INFO)
+        .with_writer(BufferWriter(Arc::clone(&buffer)))
+        .with_ansi(false)
+        .finish();
+    let guard = tracing::subscriber::set_default(subscriber);
+    tracing::callsite::rebuild_interest_cache();
+    (buffer, guard)
+}
+
+fn finish_trace_capture(
+    buffer: Arc<Mutex<Vec<u8>>>,
+    guard: tracing::subscriber::DefaultGuard,
+) -> String {
+    drop(guard);
+    tracing::callsite::rebuild_interest_cache();
+    String::from_utf8(buffer.lock().expect("trace buffer").clone()).expect("UTF-8 trace")
+}
+
+fn trace_capture_child(kind: &str) -> bool {
+    std::env::var(MCP_TRACE_CAPTURE_CHILD).is_ok_and(|value| value == kind)
+}
+
+fn run_isolated_trace_capture(test_name: &str, kind: &str) {
+    let output = Command::new(std::env::current_exe().expect("test executable"))
+        .arg(test_name)
+        .arg("--exact")
+        .arg("--test-threads=1")
+        .env(MCP_TRACE_CAPTURE_CHILD, kind)
+        .output()
+        .expect("run isolated trace assertion");
+    assert!(
+        output.status.success(),
+        "isolated trace assertion failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn assert_redacted(trace: &str, secrets: &[&str]) {
+    for secret in secrets {
+        assert!(!trace.contains(secret), "trace leaked {secret:?}");
+    }
 }
 
 #[test]
@@ -208,6 +290,176 @@ async fn new_session_sends_non_grok_model_metadata_and_surfaces_rpc_errors() {
             io.await.unwrap();
         })
         .await;
+}
+
+#[test]
+fn launch_mcp_offer_trace_is_redacted() {
+    if !trace_capture_child("offer") {
+        run_isolated_trace_capture(MCP_OFFER_TRACE_TEST, "offer");
+        return;
+    }
+
+    let (buffer, guard) = start_info_trace_capture();
+    let servers = launch_mcp_servers_from(
+        &json!({
+            "dynamicTools":[{"name":"mcp-secret-Agent","description":"mcp-secret-description"}],
+            "claudexLaunchOwner":"mcp-secret-owner",
+            "cwd":"/mcp-secret-path",
+            "model":"mcp-secret-model"
+        }),
+        Ok(std::path::PathBuf::from("/mcp-secret-program")),
+    );
+    let trace = finish_trace_capture(buffer, guard);
+
+    assert_eq!(servers.len(), 1);
+    assert!(trace.contains("ACP launch MCP eligibility evaluated"));
+    assert!(trace.contains("matching"));
+    assert_redacted(
+        &trace,
+        &[
+            "mcp-secret-Agent",
+            "mcp-secret-description",
+            "mcp-secret-owner",
+            "/mcp-secret-path",
+            "mcp-secret-model",
+            "/mcp-secret-program",
+        ],
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn launch_mcp_session_new_trace_is_redacted() {
+    if !trace_capture_child("session") {
+        run_isolated_trace_capture(MCP_SESSION_TRACE_TEST, "session");
+        return;
+    }
+
+    let (buffer, guard) = start_info_trace_capture();
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let cwd = tempfile::Builder::new()
+                .prefix("mcp-secret-path")
+                .tempdir()
+                .expect("session cwd");
+            let mcp = vec![acp::McpServer::Stdio(acp::McpServerStdio::new(
+                LAUNCH_MCP_NAME,
+                "/mcp-secret-program",
+            ))];
+            let (connection, _request, server, io) = rpc_connection(Ok(json!({
+                "sessionId":"mcp-secret-session"
+            })));
+            new_session_with_mcp(
+                AcpProvider::Copilot,
+                &connection,
+                "mcp-secret-model",
+                cwd.path(),
+                mcp.clone(),
+            )
+            .await
+            .expect("successful session/new");
+            drop(connection);
+            server.await.expect("success RPC server");
+            io.await.expect("success ACP I/O");
+
+            let (connection, _request, server, io) =
+                rpc_connection(Err("mcp-secret-session-new-error"));
+            assert!(
+                new_session_with_mcp(
+                    AcpProvider::Copilot,
+                    &connection,
+                    "mcp-secret-model",
+                    cwd.path(),
+                    mcp,
+                )
+                .await
+                .is_err()
+            );
+            drop(connection);
+            server.await.expect("error RPC server");
+            io.await.expect("error ACP I/O");
+        })
+        .await;
+    let trace = finish_trace_capture(buffer, guard);
+
+    for label in [
+        "ACP session/new started",
+        "ACP session/new completed",
+        "ACP session/new failed",
+    ] {
+        assert!(
+            trace.contains(label),
+            "missing {label:?} from session trace"
+        );
+    }
+    assert!(trace.contains("mcp_server_count=1"));
+    assert!(trace.contains("claudex-launch"));
+    assert!(trace.contains(r#"status="ok""#));
+    assert!(trace.contains(r#"status="error""#));
+    assert!(trace.contains(r#"error_kind="rpc""#));
+    assert_redacted(
+        &trace,
+        &[
+            "mcp-secret-path",
+            "mcp-secret-program",
+            "mcp-secret-session",
+            "mcp-secret-model",
+            "mcp-secret-session-new-error",
+        ],
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn non_launch_mcp_session_new_trace_counts_without_naming() {
+    if !trace_capture_child("non-launch-session") {
+        run_isolated_trace_capture(NON_LAUNCH_MCP_SESSION_TRACE_TEST, "non-launch-session");
+        return;
+    }
+
+    let (buffer, guard) = start_info_trace_capture();
+    tokio::task::LocalSet::new()
+        .run_until(async {
+            let cwd = tempfile::Builder::new()
+                .prefix("mcp-secret-path")
+                .tempdir()
+                .expect("session cwd");
+            let mcp = vec![acp::McpServer::Stdio(acp::McpServerStdio::new(
+                "mcp-secret-non-launch-name",
+                "/mcp-secret-program",
+            ))];
+            let (connection, _request, server, io) = rpc_connection(Ok(json!({
+                "sessionId":"mcp-secret-session"
+            })));
+            new_session_with_mcp(
+                AcpProvider::Copilot,
+                &connection,
+                "mcp-secret-model",
+                cwd.path(),
+                mcp,
+            )
+            .await
+            .expect("successful non-launch session/new");
+            drop(connection);
+            server.await.expect("RPC server");
+            io.await.expect("ACP I/O");
+        })
+        .await;
+    let trace = finish_trace_capture(buffer, guard);
+
+    assert!(trace.contains("ACP session/new started"));
+    assert!(trace.contains("ACP session/new completed"));
+    assert!(trace.contains("has_mcp=true"));
+    assert!(trace.contains("mcp_server_count=1"));
+    assert!(trace.contains("mcp_server_names=[]"));
+    assert_redacted(
+        &trace,
+        &[
+            "mcp-secret-non-launch-name",
+            "mcp-secret-path",
+            "mcp-secret-program",
+            "mcp-secret-session",
+            "mcp-secret-model",
+        ],
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]

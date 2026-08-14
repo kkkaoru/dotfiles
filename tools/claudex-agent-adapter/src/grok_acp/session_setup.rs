@@ -1,13 +1,14 @@
+use std::fmt;
 use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use agent_client_protocol::{self as acp, Agent as _};
 use anyhow::{Context as _, Result, anyhow};
 use serde_json::{Value, json};
 
 use super::super::connection::AcpProvider;
-use super::{SESSION_SETUP_TIMEOUT, SESSION_SETUP_WITH_MCP_TIMEOUT};
+use super::{LAUNCH_MCP_NAME, SESSION_SETUP_TIMEOUT, SESSION_SETUP_WITH_MCP_TIMEOUT};
 use crate::anthropic::subscription_request::cwd_from_system;
 
 pub(super) fn pins_acp_model_after_create(provider: AcpProvider) -> bool {
@@ -22,11 +23,21 @@ pub(super) async fn new_session_with_mcp(
     mcp: Vec<acp::McpServer>,
 ) -> Result<acp::NewSessionResponse> {
     let has_mcp = !mcp.is_empty();
+    let mcp_server_count = mcp.len();
+    let mcp_server_names = launch_mcp_server_names(&mcp);
     let timeout = session_setup_timeout(provider, !has_mcp);
     let mut request = acp::NewSessionRequest::new(session_cwd).mcp_servers(mcp);
     if provider != AcpProvider::Grok {
         request = request.meta(json!({ "modelId": model }).as_object().cloned());
     }
+    tracing::info!(
+        provider = provider.label(),
+        has_mcp,
+        mcp_server_count,
+        mcp_server_names = ?mcp_server_names,
+        "ACP session/new started"
+    );
+    let started = Instant::now();
     let response = await_acp_rpc(
         provider,
         timeout,
@@ -34,6 +45,28 @@ pub(super) async fn new_session_with_mcp(
         connection.new_session(request),
     )
     .await;
+    let elapsed_ms = started.elapsed().as_millis() as u64;
+    match &response {
+        Ok(_) => tracing::info!(
+            provider = provider.label(),
+            has_mcp,
+            mcp_server_count,
+            mcp_server_names = ?mcp_server_names,
+            elapsed_ms,
+            status = "ok",
+            "ACP session/new completed"
+        ),
+        Err(error) => tracing::warn!(
+            provider = provider.label(),
+            has_mcp,
+            mcp_server_count,
+            mcp_server_names = ?mcp_server_names,
+            elapsed_ms,
+            status = "error",
+            error_kind = acp_rpc_error_kind(error),
+            "ACP session/new failed"
+        ),
+    }
     if has_mcp {
         response.with_context(|| {
             format!(
@@ -45,6 +78,53 @@ pub(super) async fn new_session_with_mcp(
         response
     }
 }
+
+fn launch_mcp_server_names(mcp: &[acp::McpServer]) -> Vec<&'static str> {
+    mcp.iter()
+        .filter_map(|server| match server {
+            acp::McpServer::Http(server) => {
+                (server.name == LAUNCH_MCP_NAME).then_some(LAUNCH_MCP_NAME)
+            }
+            acp::McpServer::Sse(server) => {
+                (server.name == LAUNCH_MCP_NAME).then_some(LAUNCH_MCP_NAME)
+            }
+            acp::McpServer::Stdio(server) => {
+                (server.name == LAUNCH_MCP_NAME).then_some(LAUNCH_MCP_NAME)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+fn acp_rpc_error_kind(error: &anyhow::Error) -> &'static str {
+    if error
+        .chain()
+        .any(|cause| cause.downcast_ref::<AcpRpcTimeout>().is_some())
+    {
+        "timeout"
+    } else {
+        "rpc"
+    }
+}
+
+#[derive(Debug)]
+struct AcpRpcTimeout {
+    provider: &'static str,
+    method: String,
+    timeout: Duration,
+}
+
+impl fmt::Display for AcpRpcTimeout {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "{} ACP {} timed out after {:?}",
+            self.provider, self.method, self.timeout
+        )
+    }
+}
+
+impl std::error::Error for AcpRpcTimeout {}
 
 /// Attach launch MCP only while resuming a persisted session. Fresh sessions
 /// must pass their MCP servers to `session/new`; calling `session/load` with a
@@ -127,11 +207,11 @@ async fn await_acp_rpc<T>(
     tokio::time::timeout(timeout, request)
         .await
         .map_err(|_| {
-            anyhow!(
-                "{} ACP {method} timed out after {:?}",
-                provider.label(),
-                timeout
-            )
+            anyhow!(AcpRpcTimeout {
+                provider: provider.label(),
+                method: method.to_owned(),
+                timeout,
+            })
         })?
         .map_err(|error| anyhow!("{} ACP {method} failed: {error:?}", provider.label()))
 }

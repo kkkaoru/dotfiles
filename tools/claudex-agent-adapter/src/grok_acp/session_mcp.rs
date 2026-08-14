@@ -13,11 +13,19 @@ pub(super) fn launch_mcp_servers_from(
     params: &Value,
     exe: std::io::Result<PathBuf>,
 ) -> Vec<acp::McpServer> {
-    if !params_offer_launch_tools(params) {
+    let dynamic_tools = dynamic_tools_state(params);
+    tracing::info!(
+        dynamic_tools = dynamic_tools.as_str(),
+        "ACP launch MCP eligibility evaluated"
+    );
+    if dynamic_tools != DynamicToolsState::Matching {
         return Vec::new();
     }
     let Ok(exe) = exe else {
-        tracing::warn!("adapter executable unavailable; ACP Agent/Task tools not injected");
+        tracing::warn!(
+            dynamic_tools = dynamic_tools.as_str(),
+            "adapter executable unavailable; ACP Agent/Task tools not injected"
+        );
         return Vec::new();
     };
     let cache = env::var_os("HOME")
@@ -47,23 +55,50 @@ pub(super) fn launch_mcp_servers_from(
     )]
 }
 
+#[cfg(test)]
 pub(super) fn params_offer_launch_tools(params: &Value) -> bool {
-    params
-        .get("dynamicTools")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .any(|tool| {
-            let name = tool.get("name").and_then(Value::as_str).unwrap_or("");
-            let description = tool
-                .get("description")
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            name == "Agent"
-                || name == "Task"
-                || name.contains("Agent")
-                || name.contains("Task")
-                || description.contains("`Agent`")
-                || description.contains("`Task`")
-        })
+    dynamic_tools_state(params) == DynamicToolsState::Matching
+}
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum DynamicToolsState {
+    Absent,
+    Nonmatching,
+    Matching,
+}
+
+impl DynamicToolsState {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Absent => "absent",
+            Self::Nonmatching => "nonmatching",
+            Self::Matching => "matching",
+        }
+    }
+}
+
+fn dynamic_tools_state(params: &Value) -> DynamicToolsState {
+    let Some(tools) = params.get("dynamicTools") else {
+        return DynamicToolsState::Absent;
+    };
+    let Some(tools) = tools.as_array() else {
+        return DynamicToolsState::Nonmatching;
+    };
+    if tools.iter().any(|tool| {
+        let name = tool.get("name").and_then(Value::as_str).unwrap_or("");
+        let description = tool
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        name == "Agent"
+            || name == "Task"
+            || name.contains("Agent")
+            || name.contains("Task")
+            || description.contains("`Agent`")
+            || description.contains("`Task`")
+    }) {
+        DynamicToolsState::Matching
+    } else {
+        DynamicToolsState::Nonmatching
+    }
 }

@@ -2,11 +2,14 @@ use std::{
     env, fs,
     io::{self, BufRead, Write},
     path::PathBuf,
+    sync::Once,
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result};
 use serde_json::{Value, json};
+
+static LAUNCH_MCP_CHILD_STARTED: Once = Once::new();
 
 pub(super) fn record_tools_call(message: &Value) {
     let paths = ["CLAUDEX_LAUNCH_QUEUE", "CLAUDEX_LAUNCH_MCP_LOG"]
@@ -76,6 +79,9 @@ pub(super) fn write_message(stdout: &mut impl Write, ndjson: bool, message: Valu
 }
 
 pub(super) fn read_message(reader: &mut impl BufRead) -> Result<Option<(Value, bool)>> {
+    LAUNCH_MCP_CHILD_STARTED.call_once(|| {
+        tracing::info!(mcp_server = super::SERVER_NAME, "launch MCP child started");
+    });
     let mut first = String::new();
     if reader.read_line(&mut first)? == 0 {
         return Ok(None);
