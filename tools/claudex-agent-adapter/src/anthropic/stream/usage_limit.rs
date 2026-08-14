@@ -56,25 +56,40 @@ pub(crate) fn contains_provider_quota_exhausted_marker(value: &str) -> bool {
         || (structured_payment_required.is_none() && contains_grok_payment_required_marker(&value))
 }
 
-/// Grok's human-readable ACP failure is not JSON. Keep this fallback narrow:
-/// it requires the observed HTTP 402 token *and* its provider-specific balance
-/// phrase. The token must end at a boundary so `http_status:4020` cannot cool
-/// down a healthy provider. Unknown spellings deliberately retain the existing
-/// behavior; a false positive cooldown is worse than a missed variant.
+/// Grok's ACP failure is wrapped in a non-JSON app-server error, with the
+/// nested JSON quotes still escaped. Keep this fallback narrow: require both
+/// the provider-specific balance phrase and a bounded `http_status` key whose
+/// numeric value is exactly 402. This covers direct, quoted, and escaped-quoted
+/// keys without restoring phrase-only cooldowns for unrelated provider prose.
 fn contains_grok_payment_required_marker(value: &str) -> bool {
     value.contains("usage balance exhausted") && contains_http_status_402_token(value)
 }
 
 fn contains_http_status_402_token(value: &str) -> bool {
-    ["http_status:402", "http_status: 402"]
-        .into_iter()
-        .any(|marker| {
-            value.match_indices(marker).any(|(offset, _)| {
-                let before = value[..offset].chars().next_back();
-                let after = value[offset + marker.len()..].chars().next();
-                is_status_token_boundary(before) && is_status_token_boundary(after)
-            })
-        })
+    value.match_indices("http_status").any(|(offset, key)| {
+        let before = value[..offset].chars().next_back();
+        is_status_token_boundary(before) && status_key_suffix_is_402(&value[offset + key.len()..])
+    })
+}
+
+fn status_key_suffix_is_402(suffix: &str) -> bool {
+    let mut suffix = suffix;
+    let escaped_quote_count = suffix.bytes().take_while(|byte| *byte == b'\\').count();
+    suffix = &suffix[escaped_quote_count..];
+    if escaped_quote_count > 0 || suffix.starts_with('"') {
+        let Some(quoted) = suffix.strip_prefix('"') else {
+            return false;
+        };
+        suffix = quoted;
+    }
+    let Some(value) = suffix.strip_prefix(':') else {
+        return false;
+    };
+    let value = value.trim_start_matches(char::is_whitespace);
+    let Some(after) = value.strip_prefix("402") else {
+        return false;
+    };
+    is_status_token_boundary(after.chars().next())
 }
 
 fn is_status_token_boundary(character: Option<char>) -> bool {

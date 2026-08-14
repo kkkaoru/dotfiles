@@ -148,6 +148,15 @@ http_status:402 Payment Required: usage balance exhausted";
 }
 
 #[test]
+fn detects_the_wrapped_grok_402_error_observed_in_production() {
+    const WRAPPED_GROK_402: &str = r#"codex app-server turn failed: {"error":{"message":"Grok ACP prompt failed: Internal error: {\n  \"http_status\": 402,\n  \"message\": \"API error (status 402 Payment Required): Grok Build usage balance exhausted\"\n}"},"threadId":"01a00142-078e-7352-ad26-d91441a9ae59","willRetry":false}"#;
+
+    assert!(contains_provider_quota_exhausted_marker(WRAPPED_GROK_402));
+    assert!(contains_usage_limit_marker(WRAPPED_GROK_402));
+    assert!(!contains_classic_usage_limit_marker(WRAPPED_GROK_402));
+}
+
+#[test]
 fn grok_payment_required_covers_text_boundaries_and_structured_value_shapes() {
     for text in [
         "usage balance exhausted http_status:402",
@@ -165,6 +174,9 @@ fn grok_payment_required_covers_text_boundaries_and_structured_value_shapes() {
         "usage balance exhausted _http_status:402",
         "usage balance exhausted http_status:402x",
         "usage balance exhausted http_status:402_",
+        r#"usage balance exhausted {\"not_http_status\": 402}"#,
+        r#"usage balance exhausted {\"http_status_code\": 402}"#,
+        r#"usage balance exhausted {\"http_status\": 4020}"#,
     ] {
         assert!(
             !contains_provider_quota_exhausted_marker(text),
