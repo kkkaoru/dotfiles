@@ -160,17 +160,26 @@ export class GatewayConnection {
     model: { provider: string; id: string },
   ): Promise<void> {
     try {
-      const result = await this.registry.complete(model as never, {
-        systemPrompt: "You are a helpful assistant with live web search capability.",
-        messages: [
-          {
-            role: "user" as const,
-            content: `Search the web for "${request.query}". Return ONLY raw search results as Title:/URL:/Snippet: triplets. Include exactly 5 results. Do NOT add any interpretation, summary, or commentary.`,
-            timestamp: Date.now(),
-          },
-        ],
-        tools: [],
-      });
+      const timeoutMs = 30_000;
+      const result = await Promise.race([
+        this.registry.complete(model as never, {
+          systemPrompt: "You are a helpful assistant with live web search capability.",
+          messages: [
+            {
+              role: "user" as const,
+              content: `Search the web for "${request.query}". Return ONLY raw search results as Title:/URL:/Snippet: triplets. Include exactly 5 results. Do NOT add any interpretation, summary, or commentary.`,
+              timestamp: Date.now(),
+            },
+          ],
+          tools: [],
+        }),
+        new Promise<never>((_resolve, reject) => {
+          setTimeout(
+            () => reject(new Error(`Cursor search timed out after ${timeoutMs}ms`)),
+            timeoutMs,
+          );
+        }),
+      ]);
       const fullText = result.content
         .filter((block) => block.type === "text" && "text" in block)
         .map((block) => (block as { text: string }).text)
@@ -213,6 +222,7 @@ export class GatewayConnection {
           numResults: 5,
           contents: { text: true },
         }),
+        signal: AbortSignal.timeout(30_000),
       });
       if (!response.ok) {
         const body = await response.text();
