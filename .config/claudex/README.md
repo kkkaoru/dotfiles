@@ -413,7 +413,9 @@ set -eU CLAUDEX_PROVIDER_INTERFACE
 ```
 
 CLIは環境変数より優先します。許可値は正確に `pi` / `direct` だけで、不正値は起動時に
-明示errorになります。Pi経由では `providers.json` の `piProvider` / `piModel` に従って
+明示errorになります。`claudex` / `claudex-hot-swap` / `scripts/claudex-hot-swap` は同じ既定
+(`pi`、環境変数、CLI)に従います。`claudex-agent-adapter` を直接呼ぶ場合だけ、省略時は
+後方互換の `direct` です。Pi経由では `providers.json` の `piProvider` / `piModel` に従って
 次のように解決します。
 
 | Claudex model | Pi provider | Pi model |
