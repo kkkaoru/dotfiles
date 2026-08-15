@@ -105,6 +105,35 @@ async fn ignores_missing_and_empty_text_deltas() {
     assert_eq!(segment.usage.output_tokens, 0);
 }
 
+#[tokio::test]
+async fn pi_summarized_reasoning_streams_anthropic_thinking_frames() {
+    let mut builder = SegmentBuilder::new(1);
+    let (sender, receiver) = mpsc::channel::<Result<Bytes, Infallible>>(8);
+    assert!(
+        builder
+            .model_output_event(
+                &json!({
+                    "method":"item/reasoning/summaryTextDelta",
+                    "params":{
+                        "threadId":"thread",
+                        "turnId":"thread",
+                        "itemId":"pi-0",
+                        "summaryIndex":0,
+                        "delta":"Check the request path."
+                    }
+                }),
+                Some(&sender),
+            )
+            .await
+            .expect("Pi reasoning delta")
+    );
+    drop(sender);
+    let output = drain_sse_frame_list(receiver).await.join("");
+    assert!(output.contains(r#""type":"thinking""#));
+    assert!(output.contains(r#""type":"thinking_delta""#));
+    assert!(output.contains("Check the request path."));
+}
+
 #[test]
 fn subagent_start_status_skips_main_and_command_code() {
     assert_eq!(

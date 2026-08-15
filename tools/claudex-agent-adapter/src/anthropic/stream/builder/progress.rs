@@ -146,6 +146,21 @@ impl SegmentBuilder {
         stream: Option<&StreamSender>,
     ) -> Result<()> {
         let Some((item_id, summary_index, raw)) = summary_delta(event) else {
+            tracing::debug!(
+                has_item_id = event
+                    .pointer("/params/itemId")
+                    .and_then(|value| value.as_str())
+                    .is_some(),
+                has_summary_index = event
+                    .pointer("/params/summaryIndex")
+                    .and_then(|value| value.as_u64())
+                    .is_some(),
+                has_delta = event
+                    .pointer("/params/delta")
+                    .and_then(|value| value.as_str())
+                    .is_some(),
+                "ignored malformed summarized reasoning delta"
+            );
             return Ok(());
         };
         if !self.is_subagent {

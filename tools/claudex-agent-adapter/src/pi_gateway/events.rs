@@ -68,15 +68,17 @@ impl PiGateway {
         } else {
             "item/agentMessage/delta"
         };
-        self.events.dispatch_to(request_id, json!({
-            "method":method,
-            "params":{
-                "threadId":thread_id,
-                "turnId":thread_id,
-                "itemId":format!("pi-{}", event.get("index").and_then(Value::as_u64).unwrap_or(0)),
-                "delta":delta
-            }
-        }));
+        let mut params = json!({
+            "threadId":thread_id,
+            "turnId":thread_id,
+            "itemId":format!("pi-{}", event.get("index").and_then(Value::as_u64).unwrap_or(0)),
+            "delta":delta
+        });
+        if thinking {
+            params["summaryIndex"] = json!(0);
+        }
+        self.events
+            .dispatch_to(request_id, json!({"method":method,"params":params}));
         Ok(())
     }
 

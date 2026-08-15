@@ -118,6 +118,7 @@ async fn translates_text_thinking_tool_usage_and_terminal_events() {
     let done = receiver.recv().await.expect("done event");
     assert_eq!(text["method"], "item/agentMessage/delta");
     assert_eq!(thinking["method"], "item/reasoning/summaryTextDelta");
+    assert_eq!(thinking["params"]["summaryIndex"], 0);
     assert_eq!(tool["params"]["arguments"], json!({"path":"a"}));
     assert_eq!(usage["params"]["tokenUsage"]["last"]["outputTokens"], 5);
     assert_eq!(done["params"]["turn"]["status"], "completed");
