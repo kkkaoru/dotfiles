@@ -186,6 +186,53 @@ fn live_cache_ignores_low_remaining_cursor_auto() {
 }
 
 #[test]
+fn provider_exhaustion_cooldown_reason_is_hard_exhausted() {
+    let summary = json!({
+        "providers": {
+            "qwen": {
+                "available": false,
+                "reason": "provider-exhaustion-cooldown",
+                "model": QWEN
+            },
+            "cursor": {
+                "available": true,
+                "reason": "available-cursor-quota",
+                "model": "auto",
+                "remaining_percent": 9.1965
+            }
+        },
+        "disabled_subagent_models": []
+    });
+    assert!(summary_marks_model_exhausted(&summary, QWEN));
+    assert!(!summary_marks_model_exhausted(&summary, "auto"));
+}
+
+#[test]
+fn live_cache_honors_fresh_provider_exhaustion_cooldown() {
+    let root = tempfile::tempdir().expect("provider-exhaustion-cooldown cache");
+    let path = cache_path_for_home(root.path());
+    std::fs::create_dir_all(path.parent().expect("cache dir")).expect("cache dir");
+    let now = UNIX_EPOCH + Duration::from_secs(1_000);
+    let body = json!({
+        "created_at": 1_000.0,
+        "configuration_key": "test",
+        "summary": {
+            "providers": {
+                "qwen": {
+                    "available": false,
+                    "reason": "provider-exhaustion-cooldown",
+                    "model": QWEN
+                }
+            },
+            "disabled_subagent_models": []
+        }
+    });
+    std::fs::write(&path, serde_json::to_vec(&body).expect("json")).expect("write");
+    assert!(live_cache_marks_model_exhausted(Some(&path), QWEN, now));
+    assert!(!live_cache_marks_model_exhausted(Some(&path), "auto", now));
+}
+
+#[test]
 fn live_cache_ignores_stale_snapshot() {
     let root = tempfile::tempdir().expect("stale cache fixture");
     let path = cache_path_for_home(root.path());

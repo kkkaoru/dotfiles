@@ -17,6 +17,42 @@ fn records_and_expires_provider_scoped_auth_cooldown() {
 }
 
 #[test]
+fn cooldown_boundary_blocks_until_and_releases_at_expiry() {
+    let root = tempfile::tempdir().expect("auth cooldown boundary fixture");
+    let path = cache_path_for_home(root.path());
+    std::fs::create_dir_all(path.parent().expect("cache parent")).expect("cache dir");
+    let until = 2_000_u64;
+    write_cache(
+        &path,
+        &AuthCooldownCache {
+            version: CACHE_VERSION,
+            entries: BTreeMap::from([(
+                "grok-4.6".to_owned(),
+                AuthCooldownEntry {
+                    until_unix_seconds: until,
+                    message: "401 Unauthorized".to_owned(),
+                    recorded_unix_seconds: until - 60,
+                },
+            )]),
+        },
+    );
+    let instant = |seconds| UNIX_EPOCH + Duration::from_secs(seconds);
+    assert!(
+        scope_is_cooling_down_at(Some(&path), "grok-4.6", instant(until - 1)),
+        "one second before expiry must still block"
+    );
+    assert!(
+        !scope_is_cooling_down_at(Some(&path), "grok-4.6", instant(until)),
+        "exactly at untilUnixSeconds must already be expired"
+    );
+    assert!(!scope_is_cooling_down_at(
+        Some(&path),
+        "grok-4.6",
+        instant(until + 1)
+    ));
+}
+
+#[test]
 fn rate_limit_cooldown_outlives_default_auth_window() {
     let root = tempfile::tempdir().expect("rate limit cooldown fixture");
     let path = cache_path_for_home(root.path());

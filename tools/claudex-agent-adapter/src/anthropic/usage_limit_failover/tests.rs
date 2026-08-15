@@ -1603,6 +1603,264 @@ fn low_remaining_cursor_auto_stays_launchable() {
 }
 
 #[test]
+fn disabled_subagent_model_without_sibling_hard_blocks() {
+    let root = tempfile::tempdir().expect("disabled list fixture");
+    let dir = root.path().join(".cache/claudex");
+    std::fs::create_dir_all(&dir).expect("usage-routing dir");
+    let created = SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock")
+        .as_secs_f64();
+    let body = serde_json::json!({
+        "created_at": created,
+        "configuration_key": "test",
+        "summary": {
+            "providers": {
+                "cursor": {
+                    "available": true,
+                    "reason": "available-cursor-quota",
+                    "model": CURSOR_AUTO,
+                    "remaining_percent": 9.1965
+                }
+            },
+            "disabled_subagent_models": [CURSOR_AUTO]
+        }
+    });
+    std::fs::write(
+        dir.join("usage-routing.json"),
+        serde_json::to_vec(&body).expect("usage-routing json"),
+    )
+    .expect("write usage-routing");
+    let backend =
+        AgentBackend::spawn_routes(&[BackendRoute::new(CURSOR_AUTO, BackendKind::ConfiguredAcp)]);
+    let mut catalog = ModelCatalog::default();
+    catalog
+        .set_worker_routes(vec![crate::provider_config::WorkerRoute::new(
+            "claudex-cursor",
+            CURSOR_AUTO,
+            "high",
+        )])
+        .expect("install cursor only");
+    let bridge = Bridge::new_with_backend(backend, CURSOR_AUTO.to_owned())
+        .with_model_catalog(catalog)
+        .with_usage_limit_cache_home(root.path());
+    assert!(bridge.subagent_provider_is_exhausted(CURSOR_AUTO));
+    let mut request = dummy_request(CURSOR_AUTO);
+    let mut effort = Some("high".to_owned());
+    let error = bridge
+        .rewrite_exhausted_subagent_request(
+            &mut request,
+            RouteDecision::Provider,
+            &mut effort,
+            true,
+        )
+        .expect_err("disabled auto without sibling must hard-block");
+    assert!(
+        error
+            .to_string()
+            .contains("cooling down after a rate/usage/billing limit"),
+        "unexpected reject: {error}"
+    );
+    assert_eq!(request.model, CURSOR_AUTO);
+}
+
+#[test]
+fn provider_exhaustion_cooldown_reason_hard_blocks_without_sibling() {
+    let root = tempfile::tempdir().expect("provider-exhaustion-cooldown fixture");
+    let dir = root.path().join(".cache/claudex");
+    std::fs::create_dir_all(&dir).expect("usage-routing dir");
+    let created = SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock")
+        .as_secs_f64();
+    let body = serde_json::json!({
+        "created_at": created,
+        "configuration_key": "test",
+        "summary": {
+            "providers": {
+                "qwen": {
+                    "available": false,
+                    "reason": "provider-exhaustion-cooldown",
+                    "model": QWEN_CLOUD
+                }
+            },
+            "disabled_subagent_models": []
+        }
+    });
+    std::fs::write(
+        dir.join("usage-routing.json"),
+        serde_json::to_vec(&body).expect("usage-routing json"),
+    )
+    .expect("write usage-routing");
+    let backend =
+        AgentBackend::spawn_routes(&[BackendRoute::new(QWEN_CLOUD, BackendKind::ConfiguredAcp)]);
+    let mut catalog = ModelCatalog::default();
+    catalog
+        .set_worker_routes(vec![crate::provider_config::WorkerRoute::new(
+            "claudex-qwen",
+            QWEN_CLOUD,
+            "high",
+        )])
+        .expect("install qwen only");
+    let bridge = Bridge::new_with_backend(backend, QWEN_CLOUD.to_owned())
+        .with_model_catalog(catalog)
+        .with_usage_limit_cache_home(root.path());
+    assert!(bridge.subagent_provider_is_exhausted(QWEN_CLOUD));
+    let mut request = dummy_request(QWEN_CLOUD);
+    let mut effort = Some("high".to_owned());
+    let error = bridge
+        .rewrite_exhausted_subagent_request(
+            &mut request,
+            RouteDecision::Provider,
+            &mut effort,
+            true,
+        )
+        .expect_err("provider-exhaustion-cooldown without sibling must hard-block");
+    assert!(
+        error
+            .to_string()
+            .contains("cooling down after a rate/usage/billing limit")
+    );
+}
+
+#[test]
+fn active_auth_cooldown_hard_blocks_without_sibling() {
+    let root = tempfile::tempdir().expect("active auth cooldown fixture");
+    let path = provider_auth_cooldown::cache_path_for_home(root.path());
+    let now = SystemTime::now();
+    provider_auth_cooldown::record_at(Some(&path), CURSOR_AUTO, "401 Unauthorized", now)
+        .expect("record active auth cooldown");
+    let backend =
+        AgentBackend::spawn_routes(&[BackendRoute::new(CURSOR_AUTO, BackendKind::ConfiguredAcp)]);
+    let mut catalog = ModelCatalog::default();
+    catalog
+        .set_worker_routes(vec![crate::provider_config::WorkerRoute::new(
+            "claudex-cursor",
+            CURSOR_AUTO,
+            "high",
+        )])
+        .expect("install cursor only");
+    let bridge = Bridge::new_with_backend(backend, CURSOR_AUTO.to_owned())
+        .with_model_catalog(catalog)
+        .with_usage_limit_cache_home(root.path());
+    assert!(bridge.provider_auth_is_cooling_down(CURSOR_AUTO));
+    assert!(bridge.subagent_provider_is_exhausted(CURSOR_AUTO));
+    let mut request = dummy_request(CURSOR_AUTO);
+    let mut effort = Some("high".to_owned());
+    let error = bridge
+        .rewrite_exhausted_subagent_request(
+            &mut request,
+            RouteDecision::Provider,
+            &mut effort,
+            true,
+        )
+        .expect_err("active auth cooldown without sibling must hard-block");
+    assert!(
+        error
+            .to_string()
+            .contains("cooling down after a rate/usage/billing limit")
+    );
+}
+
+#[test]
+fn active_quota_cooldown_hard_blocks_without_sibling() {
+    let root = tempfile::tempdir().expect("active quota cooldown fixture");
+    let path = provider_auth_cooldown::cache_path_for_home(root.path());
+    let now = SystemTime::now();
+    provider_auth_cooldown::record_rate_limit_at(
+        Some(&path),
+        QWEN_CLOUD,
+        "402 Payment Required: quota exhausted",
+        now,
+    )
+    .expect("record active quota cooldown");
+    let backend =
+        AgentBackend::spawn_routes(&[BackendRoute::new(QWEN_CLOUD, BackendKind::ConfiguredAcp)]);
+    let mut catalog = ModelCatalog::default();
+    catalog
+        .set_worker_routes(vec![crate::provider_config::WorkerRoute::new(
+            "claudex-qwen",
+            QWEN_CLOUD,
+            "high",
+        )])
+        .expect("install qwen only");
+    let bridge = Bridge::new_with_backend(backend, QWEN_CLOUD.to_owned())
+        .with_model_catalog(catalog)
+        .with_usage_limit_cache_home(root.path());
+    assert!(bridge.provider_auth_is_cooling_down(QWEN_CLOUD));
+    assert!(bridge.subagent_provider_is_exhausted(QWEN_CLOUD));
+    let mut request = dummy_request(QWEN_CLOUD);
+    let mut effort = Some("high".to_owned());
+    let error = bridge
+        .rewrite_exhausted_subagent_request(
+            &mut request,
+            RouteDecision::Provider,
+            &mut effort,
+            true,
+        )
+        .expect_err("active quota cooldown without sibling must hard-block");
+    assert!(
+        error
+            .to_string()
+            .contains("cooling down after a rate/usage/billing limit")
+    );
+}
+
+#[test]
+fn auth_cooldown_boundary_blocks_until_and_releases_at_expiry() {
+    let root = tempfile::tempdir().expect("auth cooldown expiry fixture");
+    let path = provider_auth_cooldown::cache_path_for_home(root.path());
+    let now = SystemTime::now();
+    let until = now
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("epoch")
+        .as_secs()
+        + 30;
+    std::fs::create_dir_all(path.parent().expect("cache parent")).expect("cache dir");
+    let cache = serde_json::json!({
+        "version": 1,
+        "entries": {
+            "auto": {
+                "untilUnixSeconds": until,
+                "message": "401 Unauthorized",
+                "recordedUnixSeconds": until - 30
+            }
+        }
+    });
+    std::fs::write(&path, serde_json::to_vec(&cache).expect("json")).expect("write");
+    let backend =
+        AgentBackend::spawn_routes(&[BackendRoute::new(CURSOR_AUTO, BackendKind::ConfiguredAcp)]);
+    let mut catalog = ModelCatalog::default();
+    catalog
+        .set_worker_routes(vec![crate::provider_config::WorkerRoute::new(
+            "claudex-cursor",
+            CURSOR_AUTO,
+            "high",
+        )])
+        .expect("install cursor only");
+    let bridge = Bridge::new_with_backend(backend, CURSOR_AUTO.to_owned())
+        .with_model_catalog(catalog)
+        .with_usage_limit_cache_home(root.path());
+    assert!(
+        provider_auth_cooldown::scope_is_cooling_down_at(
+            Some(&path),
+            CURSOR_AUTO,
+            std::time::UNIX_EPOCH + Duration::from_secs(until - 1),
+        ),
+        "one second before expiry must still block"
+    );
+    assert!(
+        !provider_auth_cooldown::scope_is_cooling_down_at(
+            Some(&path),
+            CURSOR_AUTO,
+            std::time::UNIX_EPOCH + Duration::from_secs(until),
+        ),
+        "exactly at untilUnixSeconds must already be expired"
+    );
+    assert!(bridge.subagent_provider_is_exhausted(CURSOR_AUTO));
+}
+
+#[test]
 fn expired_provider_auth_cooldown_is_ignored() {
     let root = tempfile::tempdir().expect("expired cooldown fixture");
     let path = provider_auth_cooldown::cache_path_for_home(root.path());

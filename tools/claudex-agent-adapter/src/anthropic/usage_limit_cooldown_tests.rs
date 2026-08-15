@@ -17,6 +17,14 @@ mod tests {
         };
         write_cooldown(&path, &cooldown);
         assert_eq!(load_active(&path, now).as_ref(), Some(&cooldown));
+        assert!(
+            load_active(&path, UNIX_EPOCH + Duration::from_secs(1_000 + 59)).is_some(),
+            "one second before expiry must still block"
+        );
+        assert!(
+            load_active(&path, UNIX_EPOCH + Duration::from_secs(1_000 + 60)).is_none(),
+            "exactly at untilUnixSeconds must already be expired"
+        );
         assert!(load_active(&path, now + Duration::from_secs(120)).is_none());
     }
 
