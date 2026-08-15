@@ -76,8 +76,7 @@ coverage_out/
 
 
 # Pi runtime state, credentials, caches, and install trees. Keep managed
-# configuration such as models.json tracked. Do not commit live settings
-# or themes that Pi rewrites in the user home.
+# configuration such as models.json, settings.json, and themes tracked.
 .pi/agent/auth.json
 .pi/agent/bin/
 .pi/agent/commandcode-models.json
@@ -87,8 +86,6 @@ coverage_out/
 .pi/agent/npm/
 .pi/agent/pi-debug.log
 .pi/agent/sessions/
-.pi/agent/settings.json
-.pi/agent/themes/
 .pi/agent/trust/
 .pi/agent/trust.json
 
