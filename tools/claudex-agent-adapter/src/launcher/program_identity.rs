@@ -17,7 +17,6 @@ const GROK_PLUGIN_DIR_ENV: &str = "CLAUDEX_GROK_PLUGIN_DIR";
 #[derive(Debug, Hash)]
 pub(super) struct DaemonProgramIdentity {
     programs: Vec<(String, PathBuf)>,
-    search_path: OsString,
     grok_plugin_directory: Option<PathBuf>,
 }
 
@@ -41,7 +40,6 @@ pub(super) fn identity(routes: &[BackendRoute]) -> DaemonProgramIdentity {
         .map(|path| path.canonicalize().unwrap_or(path));
     DaemonProgramIdentity {
         programs,
-        search_path,
         grok_plugin_directory,
     }
 }

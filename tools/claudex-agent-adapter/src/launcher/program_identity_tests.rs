@@ -69,4 +69,40 @@ mod tests {
             None => unsafe { std::env::remove_var(GROK_PLUGIN_DIR_ENV) },
         }
     }
+
+    #[test]
+    fn program_identity_hash_ignores_ambient_path() {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let routes = [BackendRoute::new("gpt", BackendKind::PiGateway)];
+        let previous_path = std::env::var_os("PATH");
+        unsafe {
+            std::env::set_var(
+                "PATH",
+                "/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin",
+            )
+        };
+        let first = {
+            let mut hasher = DefaultHasher::new();
+            identity(&routes).hash(&mut hasher);
+            hasher.finish()
+        };
+        unsafe {
+            std::env::set_var(
+                "PATH",
+                "/tmp/claudex-unused-path:/usr/bin:/bin:/opt/homebrew/bin:/usr/local/bin",
+            )
+        };
+        let second = {
+            let mut hasher = DefaultHasher::new();
+            identity(&routes).hash(&mut hasher);
+            hasher.finish()
+        };
+        match previous_path {
+            Some(value) => unsafe { std::env::set_var("PATH", value) },
+            None => unsafe { std::env::remove_var("PATH") },
+        }
+        assert_eq!(first, second);
+    }
 }
