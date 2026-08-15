@@ -7,7 +7,7 @@ import {
   toSdkJsonValue,
 } from "../src/context.ts";
 
-test("serializes the complete transcript and latest user images", () => {
+test("serializes the complete transcript and image positions", () => {
   const context: Context = {
     systemPrompt: "Follow rules",
     messages: [
@@ -53,12 +53,57 @@ test("serializes the complete transcript and latest user images", () => {
   expect(buildCursorMessage(context)).toStrictEqual({
     text: [
       "SYSTEM INSTRUCTIONS:\nFollow rules",
-      "USER:\ninspect\n[image attached]",
+      "USER:\ninspect\n[image 1 attached: image/png]",
       'ASSISTANT:\n[thinking]\nreason\n[tool call call-1: read]\n{"path":"a"}',
       "TOOL RESULT (read, call-1, error):\ncontents",
       "Continue from the transcript above. Follow the latest user request.",
     ].join("\n\n"),
     images: [{ data: "aGVsbG8=", mimeType: "image/png" }],
+  });
+});
+
+test("preserves every historical image in transcript order without deduplication", () => {
+  const message = buildCursorMessage({
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "image", data: "first", mimeType: "image/png" },
+          { type: "text", text: "first image" },
+        ],
+        timestamp: 1,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "vision-1",
+        toolName: "vision",
+        content: [{ type: "image", data: "second", mimeType: "image/jpeg" }],
+        isError: false,
+        timestamp: 2,
+      },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "compare all images" },
+          { type: "image", data: "first", mimeType: "image/png" },
+        ],
+        timestamp: 3,
+      },
+    ],
+  });
+
+  expect(message).toStrictEqual({
+    text: [
+      "USER:\n[image 1 attached: image/png]\nfirst image",
+      "TOOL RESULT (vision, vision-1, success):\n[image 2 attached: image/jpeg]",
+      "USER:\ncompare all images\n[image 3 attached: image/png]",
+      "Continue from the transcript above. Follow the latest user request.",
+    ].join("\n\n"),
+    images: [
+      { data: "first", mimeType: "image/png" },
+      { data: "second", mimeType: "image/jpeg" },
+      { data: "first", mimeType: "image/png" },
+    ],
   });
 });
 

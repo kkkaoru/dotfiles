@@ -28,6 +28,22 @@ pi --model cursor/gemini-3.1-pro
 
 The fallback catalog also includes Opus, GPT-5.4, Grok, Kimi, and GLM models. Pi model refresh uses `Cursor.models.list()` with the configured Cursor credential to replace it with the account's current catalog.
 
+## Request fidelity
+
+Behavior with `@cursor/sdk` 1.0.28:
+
+| Input                                             | Behavior                                                                                                                                                                                                                                       |
+| ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Model ID, Cursor credential, abort signal         | Passed to the Cursor agent.                                                                                                                                                                                                                    |
+| Pi tools                                          | Converted to Cursor custom tools with names, descriptions, and JSON schemas; results return to the same live run.                                                                                                                              |
+| System prompt and message history                 | Transformed into one role-labelled transcript because each independent request uses a fresh Cursor agent.                                                                                                                                      |
+| Images                                            | Every user and tool-result image in the history is attached again in transcript order. Numbered placeholders such as `[image 2 attached: image/jpeg]` associate transcript positions with the SDK image array. Duplicate images are preserved. |
+| Reasoning level                                   | Deferred: Pi receives the requested level, but this provider does not yet map it to model-specific Cursor SDK parameters. Cursor Auto exposes no documented effort parameter.                                                                  |
+| Maximum output tokens and temperature             | Not configurable through the Cursor Agent SDK. Pi model values are descriptive metadata only.                                                                                                                                                  |
+| Session ID, cache retention, and request metadata | Not configurable through the Cursor Agent SDK. Independent requests intentionally create fresh agents.                                                                                                                                         |
+
+The SDK publishes no image count or byte limit, so the provider never silently truncates image history. An upstream limit is returned as an explicit request error. Reattaching all earlier images on every independent turn preserves correctness but increases payload size and latency in image-heavy conversations.
+
 ## Development
 
 ```bash

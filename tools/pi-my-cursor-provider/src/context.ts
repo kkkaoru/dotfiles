@@ -3,11 +3,20 @@ import type { Context, ImageContent, Message, ToolResultMessage } from "@earendi
 
 const SECTION_SEPARATOR = "\n\n";
 
+interface TranscriptState {
+  readonly images: SDKImage[];
+}
+
 function imageToSdk(image: ImageContent): SDKImage {
   return { data: image.data, mimeType: image.mimeType };
 }
 
-function contentText(content: Message["content"]): string {
+function attachImage(image: ImageContent, state: TranscriptState): string {
+  state.images.push(imageToSdk(image));
+  return `[image ${state.images.length} attached: ${image.mimeType}]`;
+}
+
+function contentText(content: Message["content"], state: TranscriptState): string {
   if (typeof content === "string") return content;
   return content
     .map((part) => {
@@ -16,33 +25,27 @@ function contentText(content: Message["content"]): string {
       if (part.type === "toolCall") {
         return `[tool call ${part.id}: ${part.name}]\n${JSON.stringify(part.arguments)}`;
       }
-      return "[image attached]";
+      return attachImage(part, state);
     })
     .join("\n");
 }
 
-function formatMessage(message: Message): string {
-  if (message.role === "user") return `USER:\n${contentText(message.content)}`;
-  if (message.role === "assistant") return `ASSISTANT:\n${contentText(message.content)}`;
+function formatMessage(message: Message, state: TranscriptState): string {
+  if (message.role === "user") return `USER:\n${contentText(message.content, state)}`;
+  if (message.role === "assistant") return `ASSISTANT:\n${contentText(message.content, state)}`;
   const status = message.isError ? "error" : "success";
-  return `TOOL RESULT (${message.toolName}, ${message.toolCallId}, ${status}):\n${contentText(message.content)}`;
+  return `TOOL RESULT (${message.toolName}, ${message.toolCallId}, ${status}):\n${contentText(message.content, state)}`;
 }
 
 export function buildCursorMessage(context: Context): SDKUserMessage {
-  const sections = context.messages.map(formatMessage);
+  const state: TranscriptState = { images: [] };
+  const sections = context.messages.map((message) => formatMessage(message, state));
   if (context.systemPrompt) sections.unshift(`SYSTEM INSTRUCTIONS:\n${context.systemPrompt}`);
   sections.push("Continue from the transcript above. Follow the latest user request.");
 
-  const latestUser = context.messages.findLast((message) => message.role === "user");
-  const images =
-    latestUser && typeof latestUser.content !== "string"
-      ? latestUser.content
-          .filter((part): part is ImageContent => part.type === "image")
-          .map(imageToSdk)
-      : [];
   return {
     text: sections.join(SECTION_SEPARATOR),
-    ...(images.length > 0 ? { images } : {}),
+    ...(state.images.length > 0 ? { images: state.images } : {}),
   };
 }
 
