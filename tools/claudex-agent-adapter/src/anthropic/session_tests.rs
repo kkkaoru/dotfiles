@@ -13,7 +13,7 @@ use tokio::sync::{Mutex, Semaphore};
 use super::tools::launch_capability_summary;
 use super::{
     candidate_length, codex_tool_name, dynamic_tool, helpers::owns_tool_result, is_better_length,
-    is_idempotent_task_lifecycle_error, reservation::reserve_matching_session,
+    is_idempotent_task_lifecycle_error, pi_claude_request, reservation::reserve_matching_session,
     session_turn::contains_context_window_marker, thread_start_params,
     thread_start_params_for_mode, tool_configuration, tool_configuration_for_mode,
     transcript_owns_tool_results, validate_tool_result_ownership,
@@ -1022,6 +1022,26 @@ fn assert_empty_thread_configuration() {
         .expect("developer instructions");
     assert_developer_guidance(developer);
     assert!(empty["claudexLaunchOwner"].is_null());
+}
+
+#[test]
+fn pi_request_uses_the_same_combined_system_as_direct() {
+    let request = request(json!([{"type":"text","text":"outer system"}]), Vec::new());
+    let direct = thread_start_params(&request, "main", Vec::new());
+    let pi = pi_claude_request(&request, false, false).expect("Pi request");
+    assert_eq!(pi["system"], direct["baseInstructions"]);
+    assert!(
+        pi["system"]
+            .as_str()
+            .is_some_and(|system| system.starts_with("outer system\n\n"))
+    );
+    assert_eq!(pi["messages"], json!(request.messages));
+    assert_eq!(pi["tools"], json!(request.tools));
+
+    let direct_acp =
+        thread_start_params_for_mode(&request, "auto", Vec::new(), WebSearchMode::AcpNative);
+    let pi_acp = pi_claude_request(&request, false, true).expect("Pi ACP request");
+    assert_eq!(pi_acp["system"], direct_acp["baseInstructions"]);
 }
 
 #[test]

@@ -9,7 +9,9 @@ pub(super) use instructions::*;
 mod thread;
 #[cfg(test)]
 pub(in crate::anthropic) use thread::thread_start_params;
-pub(in crate::anthropic) use thread::thread_start_params_for_mode;
+pub(in crate::anthropic) use thread::{
+    build_developer_instructions, system_with_developer_instructions, thread_start_params_for_mode,
+};
 
 #[cfg(test)]
 pub(in crate::anthropic) fn tool_configuration(

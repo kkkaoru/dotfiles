@@ -6,7 +6,8 @@ use crate::anthropic::subscription_request::cwd_from_system;
 
 #[path = "thread_instructions.rs"]
 mod instructions;
-use instructions::{build_developer_instructions, isolated_runtime_cwd};
+pub(in crate::anthropic) use instructions::build_developer_instructions;
+use instructions::isolated_runtime_cwd;
 
 #[cfg(test)]
 pub(in crate::anthropic) fn thread_start_params(
@@ -52,11 +53,7 @@ pub(in crate::anthropic) fn thread_start_params_for_mode(
     }
     let acp_native = web_search_mode.uses_provider_native_agent_loop();
     let developer_instructions = build_developer_instructions(request, is_subagent, acp_native);
-    let base_instructions = if system.is_empty() {
-        developer_instructions.clone()
-    } else {
-        format!("{system}\n\n{developer_instructions}")
-    };
+    let base_instructions = system_with_developer_instructions(&system, &developer_instructions);
     let web_search_enabled = web_search_mode == WebSearchMode::CodexNative
         && request
             .tools
@@ -91,6 +88,17 @@ pub(in crate::anthropic) fn thread_start_params_for_mode(
             }
         }
     })
+}
+
+pub(in crate::anthropic) fn system_with_developer_instructions(
+    system: &str,
+    developer_instructions: &str,
+) -> String {
+    if system.is_empty() {
+        developer_instructions.to_owned()
+    } else {
+        format!("{system}\n\n{developer_instructions}")
+    }
 }
 
 fn command_code_thread_start_params(

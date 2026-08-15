@@ -412,6 +412,11 @@ claudex --provider-interface pi
 オプションを省略した通常の `claudex` は従来どおり各modelのdirect backendを使います。
 Pi 経由から元へ戻す場合も `--provider-interface pi` を外すだけで、設定変更は不要です。
 
+direct / Pi は同じ orchestration developer instructions をsystem末尾へ追加します。その85%以上は
+固定ですが、team protocol とparallel schedulerのguidance（通常15%未満）はrequestやworker状態で
+変わります。Piのsystem promptは単一文字列なので、可変部分以降のprompt-cache prefixはturnごとに
+無効化され得ます。これは両経路共通の将来のcache最適化対象であり、現在は挙動の一致を優先します。
+
 通常起動では `--agent` を追加せず、`CLAUDEX_ACTIVE` が設定されたプロセスでのみglobal
 `UserPromptSubmit` hookがrouting contextを注入します。このため新規・resumeのどちらでも
 sessionの表示名をagent名へ変更しません。加えて `prepare-claude-config.py` が

@@ -1,10 +1,13 @@
 use anyhow::Result;
 use serde_json::{Value, json};
 
-use super::super::tools::{thread_start_params_for_mode, tool_configuration_for_mode};
+use super::super::tools::{
+    build_developer_instructions, system_with_developer_instructions, thread_start_params_for_mode,
+    tool_configuration_for_mode,
+};
 use crate::anthropic::{
     Bridge, MessagesRequest, Session,
-    content::serialized_len,
+    content::{serialized_len, system_text},
     request_identity,
     turn_input::{
         provider_turn_input, provider_turn_input_with_token_budget, provider_user_turn_input,
@@ -33,12 +36,15 @@ impl Bridge {
         if let Some(effort) = effort {
             params["effort"] = json!(effort);
         }
-        if self
-            .app_for_session(session)
-            .backend_kind_for_model(&session.model)
+        let provider = self.app_for_session(session);
+        if provider.backend_kind_for_model(&session.model)
             == Some(crate::agent_backend::BackendKind::PiGateway)
         {
-            params["claudexRequest"] = serde_json::to_value(request)?;
+            let is_subagent = crate::anthropic::agent_effort::is_subagent_request(request);
+            let acp_native = provider
+                .web_search_mode(&session.model)
+                .uses_provider_native_agent_loop();
+            params["claudexRequest"] = pi_claude_request(request, is_subagent, acp_native)?;
         }
         // Mark interactive user turns so ACP keeps a reserved slot free of SubAgent load.
         if !crate::anthropic::agent_effort::is_subagent_request(request) {
@@ -69,6 +75,19 @@ impl Bridge {
             .saturating_sub(setup_tokens);
         provider_turn_input_with_token_budget(&model, &request.messages, token_budget)
     }
+}
+
+pub(in crate::anthropic) fn pi_claude_request(
+    request: &MessagesRequest,
+    is_subagent: bool,
+    acp_native: bool,
+) -> Result<Value> {
+    let developer_instructions = build_developer_instructions(request, is_subagent, acp_native);
+    let combined_system =
+        system_with_developer_instructions(&system_text(&request.system), &developer_instructions);
+    let mut claude_request = serde_json::to_value(request)?;
+    claude_request["system"] = json!(combined_system);
+    Ok(claude_request)
 }
 
 pub(in crate::anthropic) fn is_context_window_exceeded(error: &anyhow::Error) -> bool {

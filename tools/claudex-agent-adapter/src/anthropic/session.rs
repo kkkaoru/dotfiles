@@ -28,6 +28,8 @@ use helpers::{
 };
 pub(in crate::anthropic) use session_turn::is_context_window_exceeded;
 pub(crate) use session_turn::is_unknown_session_text;
+#[cfg(test)]
+pub(super) use session_turn::pi_claude_request;
 pub(in crate::anthropic) use tools::is_main_session_only_tool;
 #[cfg(test)]
 pub(super) use tools::{

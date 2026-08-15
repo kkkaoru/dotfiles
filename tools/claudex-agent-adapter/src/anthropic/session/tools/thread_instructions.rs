@@ -1,6 +1,6 @@
 use super::super::super::MessagesRequest;
 
-pub(super) fn build_developer_instructions(
+pub(in crate::anthropic) fn build_developer_instructions(
     request: &MessagesRequest,
     is_subagent: bool,
     acp_native: bool,
