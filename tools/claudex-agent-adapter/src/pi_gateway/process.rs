@@ -46,6 +46,7 @@ impl GatewayProcess {
             .env("CLAUDEX_PI_GATEWAY_SOCKET", &socket)
             .env("CLAUDEX_PI_GATEWAY_TOKEN", &token)
             .env("CLAUDEX_PI_GATEWAY_ORIGIN", "claudex")
+            .env("PI_CODING_AGENT_DIR", isolate_agent_directory(&directory)?)
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::inherit())
@@ -186,6 +187,49 @@ mod tests {
             validate_isolated_extensions(&[root.path().to_string_lossy().into_owned()]).is_err()
         );
     }
+
+    #[test]
+    fn isolated_agent_directory_writes_empty_local_settings() {
+        let runtime = tempfile::tempdir().expect("runtime fixture");
+        let isolated = isolate_agent_directory(runtime.path()).expect("isolate");
+        let isolated_settings = std::fs::read_to_string(isolated.join("settings.json"))
+            .expect("read isolated settings");
+        assert_eq!(isolated_settings, "{\n  \"packages\": []\n}\n");
+        assert_eq!(isolated, runtime.path().join("agent"));
+    }
+}
+
+fn isolate_agent_directory(runtime_directory: &Path) -> Result<PathBuf> {
+    let agent_directory = runtime_directory.join("agent");
+    fs::create_dir(&agent_directory).with_context(|| {
+        format!(
+            "create isolated Pi agent directory {}",
+            agent_directory.display()
+        )
+    })?;
+    set_private_permissions(&agent_directory)?;
+    fs::write(
+        agent_directory.join("settings.json"),
+        "{\n  \"packages\": []\n}\n",
+    )
+    .with_context(|| {
+        format!(
+            "write isolated Pi settings {}",
+            agent_directory.join("settings.json").display()
+        )
+    })?;
+    if let Some(home) = std::env::var_os("HOME") {
+        let source = PathBuf::from(home).join(".pi/agent");
+        for name in ["auth.json", "models.json", "models-store.json"] {
+            let from = source.join(name);
+            if from.exists() {
+                std::os::unix::fs::symlink(&from, agent_directory.join(name)).with_context(
+                    || format!("share Pi {} with isolated agent directory", from.display()),
+                )?;
+            }
+        }
+    }
+    Ok(agent_directory)
 }
 
 fn runtime_directory() -> Result<PathBuf> {
