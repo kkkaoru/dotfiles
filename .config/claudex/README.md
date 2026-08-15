@@ -419,9 +419,16 @@ CLIは環境変数より優先します。許可値は正確に `pi` / `direct` 
 | Claudex model | Pi provider | Pi model |
 | --- | --- | --- |
 | `gpt-5.6-luna` | `openai-codex` | `gpt-5.6-luna` |
+| `gpt-5.3-codex-spark` | `openai-codex` | `gpt-5.3-codex-spark` |
+| `grok-4.6` | `xai` | `grok-4.6` |
 | `glm-5.2:cloud` | `ollama-cloud` | `glm-5.2` |
 | `auto` | `cursor` | `auto` |
 | `cline-pass/deepseek-v4-flash` | `clinepass` | `cline-pass/deepseek-v4-flash` |
+| `qwen3.8-max-preview` | `qwen-token-plan-individual` | `qwen3.8-max` |
+| `opencode-go/deepseek-v4-pro` | `opencode-go` | `deepseek-v4-pro` |
+| `opencode-go/deepseek-v4-flash` | `opencode-go` | `deepseek-v4-flash` |
+| `opencode-go/gpt-5.6-luna` | `opencode-go` | `gpt-5.6-luna` |
+| `meta/muse-spark-1.2-contributor` | `commandcode` | `meta/muse-spark-1.2-contributor` |
 
 `direct` を指定するとPi mappingを破棄し、GPT/OllamaはCodex app-server、Cursor/ClinePassは
 configured ACP、GrokはGrok ACPという標準化前と同じbackendへ戻ります。通常のPi設定や認証を
