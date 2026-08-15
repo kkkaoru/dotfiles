@@ -1026,7 +1026,11 @@ fn assert_empty_thread_configuration() {
 
 #[test]
 fn pi_request_uses_the_same_combined_system_as_direct() {
-    let request = request(json!([{"type":"text","text":"outer system"}]), Vec::new());
+    let mut request = request(json!([{"type":"text","text":"outer system"}]), Vec::new());
+    request.messages.push(json!({
+        "role":"system",
+        "content":[{"type":"text","text":"later system reminder"}]
+    }));
     let direct = thread_start_params(&request, "main", Vec::new());
     let pi = pi_claude_request(&request, false, false).expect("Pi request");
     assert_eq!(pi["system"], direct["baseInstructions"]);
@@ -1036,6 +1040,10 @@ fn pi_request_uses_the_same_combined_system_as_direct() {
             .is_some_and(|system| system.starts_with("outer system\n\n"))
     );
     assert_eq!(pi["messages"], json!(request.messages));
+    assert_eq!(
+        pi["messages"][1]["content"][0]["text"],
+        "later system reminder"
+    );
     assert_eq!(pi["tools"], json!(request.tools));
 
     let direct_acp =

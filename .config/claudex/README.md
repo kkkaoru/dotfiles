@@ -416,6 +416,8 @@ direct / Pi は同じ orchestration developer instructions をsystem末尾へ追
 固定ですが、team protocol とparallel schedulerのguidance（通常15%未満）はrequestやworker状態で
 変わります。Piのsystem promptは単一文字列なので、可変部分以降のprompt-cache prefixはturnごとに
 無効化され得ます。これは両経路共通の将来のcache最適化対象であり、現在は挙動の一致を優先します。
+また実TUIのmessages内には後置system reminderがあり、direct / Piともdeveloper instructionsより後で
+providerへ渡します。後続systemがorchestrationを弱める可能性も、両経路共通の既知課題です。
 
 通常起動では `--agent` を追加せず、`CLAUDEX_ACTIVE` が設定されたプロセスでのみglobal
 `UserPromptSubmit` hookがrouting contextを注入します。このため新規・resumeのどちらでも
