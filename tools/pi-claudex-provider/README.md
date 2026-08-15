@@ -34,3 +34,13 @@ bun install --cwd tools/pi-claudex-provider
 bun run --cwd tools/pi-claudex-provider check
 pi install "$PWD/tools/pi-claudex-provider"
 ```
+
+## Isolated verification
+
+Pi records local packages relative to its normal `~/.pi/agent` directory. Copying
+`settings.json` into a temporary `PI_CODING_AGENT_DIR` therefore changes what
+those paths resolve to and can silently prevent the gateway extension from
+loading. Before an isolated run, rewrite the local Claudex, Cursor, and Cline
+Pass package entries in the copied settings to absolute repository paths. Keep
+npm package entries unchanged. Hash `~/.pi/agent/settings.json` before and after
+the run to verify that the isolated test did not modify the user's settings.
