@@ -254,6 +254,28 @@ mod tests {
     }
 
     #[test]
+    fn pins_ccr_search_workers_to_codex_when_the_public_route_is_pi() {
+        let mut public = route("gpt-5.6-luna", BackendKind::PiGateway);
+        public.pi_provider = Some("openai-codex".to_owned());
+        public.pi_model = Some("gpt-5.6-luna".to_owned());
+        public.web_search_mode = WebSearchMode::CodexNative;
+        let routes = RoutedBackends::lazy(&[public]);
+        let search = routes.search_route("gpt-5.6-luna");
+        assert_eq!(search.kind, BackendKind::CodexAppServer);
+        assert_eq!(search.model, "gpt-5.6-luna");
+        assert_eq!(search.template.web_search_mode, WebSearchMode::CodexNative);
+        assert!(search.template.pi_provider.is_none());
+        assert!(std::ptr::eq(
+            Arc::as_ptr(&search),
+            Arc::as_ptr(&routes.search_route("gpt-5.6-luna"))
+        ));
+        assert_eq!(
+            routes.find("gpt-5.6-luna").unwrap().kind,
+            BackendKind::PiGateway
+        );
+    }
+
+    #[test]
     fn selects_exact_dynamic_and_prefix_context_limits() {
         let mut exact = route("exact", BackendKind::CodexAppServer);
         exact.max_context_tokens = Some(100);
@@ -383,7 +405,7 @@ mod tests {
             model_catalog_json: None,
             pi_provider: None,
             pi_model: None,
-        pi_extensions: Vec::new(),
+            pi_extensions: Vec::new(),
             max_context_tokens: None,
             model_prefixes: Vec::new(),
             max_concurrency: None,

@@ -104,6 +104,7 @@ async fn start_worker(
     worker: &WorkerRoute,
     query: &str,
 ) -> Result<ThreadEvents> {
+    let search = backend.search_backend(&worker.model).await?;
     let params = json!({
         "model": worker.model,
         "baseInstructions": "Use only the Codex built-in live WebSearch for the exact query. Return the source title, URL, and a short snippet; do not perform filesystem, shell, MCP, Agent, or Task operations.",
@@ -114,15 +115,15 @@ async fn start_worker(
         "sandbox": "read-only",
         "config": {"web_search":"live", "features":{"web_search":true}}
     });
-    let started = backend.request("thread/start", params).await?;
+    let started = search.request("thread/start", params).await?;
     let thread_id = started
         .pointer("/thread/id")
         .and_then(Value::as_str)
         .context("search worker omitted thread id")?
         .to_owned();
-    backend.ensure_thread_ready(&thread_id).await?;
-    let events = backend.subscribe_thread(&thread_id);
-    backend
+    search.ensure_thread_ready(&thread_id).await?;
+    let events = search.subscribe_thread(&thread_id);
+    search
         .request_detached(
             "turn/start",
             json!({

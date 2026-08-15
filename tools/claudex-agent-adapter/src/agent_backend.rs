@@ -209,6 +209,21 @@ impl AgentBackend {
             | Self::Pi(_) => self.is_alive(),
         }
     }
+
+    /// CCR WebSearch workers must use Codex live search even when the public
+    /// model route has been remapped onto PiGateway.
+    pub async fn search_backend(self: &Arc<Self>, model: &str) -> Result<Arc<Self>> {
+        match self.as_ref() {
+            Self::Routed(routes) => routes.search_backend(model).await,
+            Self::SessionScoped(scopes) => {
+                Box::pin(scopes.unguarded_scope().search_backend(model)).await
+            }
+            Self::Codex(_) => Ok(Arc::clone(self)),
+            Self::ConfiguredAcp(_) | Self::Copilot(_) | Self::Grok(_) | Self::Pi(_) => {
+                Self::spawn(BackendKind::CodexAppServer, model).await
+            }
+        }
+    }
 }
 
 #[cfg(test)]
