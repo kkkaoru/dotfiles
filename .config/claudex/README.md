@@ -188,8 +188,11 @@ model IDやeffortはここへハードコードせず、各providerの `defaultM
 | `codex-native` | Codex app-serverのnative live WebSearch | 選択されたCodex route |
 | `acp-native` | ACP providerが提供するnative検索 | 選択されたACP route |
 | `delegate-ccr` | adapterのCCR互換 `worker/web-search` が `webSearch.fallbackProviders` の順に検索workerを起動 | 元のmodel（検索結果だけを返却） |
+| `delegate-pi` | adapterが同じ `worker/web-search` を Pi gateway へ渡し、session の provider/model で検索する | Cursor は Pi native search、それ以外は Exa |
 | `delegate-mcp` | 設定済みACP/MCP providerの検索機能 | 選択されたprovider |
 | `disabled` | 検索を公開しない | 元のmodel（検索なし） |
+
+`delegate-pi` の transport は実装済みです。Claude が本当に `WebSearch` tool を出したときだけ通ります。日常 TUI では orchestrator が `claudex-haiku-search`（Claude subscription の `claude-haiku-4-5`）へ委譲するため、この経路は使われません。公開 route の既定は CCR / provider native のままです。session 付き `POST /v1/code/sessions/{id}/worker/web-search` では端から端まで実証済みです。
 
 `delegate-ccr` は、検索を要求したmodelがnative検索を持たない場合の既定経路です。
 `fallbackProviders` はprovider IDの順序で、各workerの実model/effortを使って検索します。
