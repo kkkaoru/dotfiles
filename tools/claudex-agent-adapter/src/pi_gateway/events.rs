@@ -136,15 +136,34 @@ impl PiGateway {
 
     fn dispatch_usage(&self, thread_id: &str, request_id: &str, event: &Value) {
         let usage = event.pointer("/message/usage").unwrap_or(&Value::Null);
+        let output = usage.get("output").and_then(Value::as_u64).unwrap_or(0);
+        let reasoning = usage
+            .get("reasoning")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            .min(output);
+        let cache_creation = usage.get("cacheWrite").and_then(Value::as_u64).unwrap_or(0);
+        let mut last = json!({
+            "inputTokens":usage.get("input").and_then(Value::as_u64).unwrap_or(0),
+            "outputTokens":output - reasoning,
+            "reasoningOutputTokens":reasoning,
+            "cacheReadInputTokens":usage.get("cacheRead").and_then(Value::as_u64).unwrap_or(0),
+            "cacheCreationInputTokens":cache_creation
+        });
+        if let Some(one_hour) = usage.get("cacheWrite1h").and_then(Value::as_u64) {
+            last["cacheCreation1hInputTokens"] = json!(one_hour.min(cache_creation));
+        }
+        if let Some(total) = usage.get("totalTokens").and_then(Value::as_u64) {
+            last["totalTokens"] = json!(total);
+        }
+        if let Some(cost) = usage.get("cost").filter(|cost| cost.is_object()) {
+            last["cost"] = cost.clone();
+        }
         self.events.dispatch_to(
             request_id,
             json!({
                 "method":"thread/tokenUsage/updated",
-                "params":{"threadId":thread_id,"tokenUsage":{"last":{
-                    "inputTokens":usage.get("input").and_then(Value::as_u64).unwrap_or(0),
-                    "outputTokens":usage.get("output").and_then(Value::as_u64).unwrap_or(0),
-                    "reasoningOutputTokens":0
-                }}}
+                "params":{"threadId":thread_id,"tokenUsage":{"last":last}}
             }),
         );
     }

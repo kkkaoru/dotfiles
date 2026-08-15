@@ -53,13 +53,16 @@ use keepalive::streaming_sse_response_with_interval;
 
 pub(in crate::anthropic) async fn send_stream_completion(sender: &StreamSender, segment: &Segment) {
     let _ = send_stream_frame(Some(sender), "message_delta", || {
+        let mut usage = json!({
+            "input_tokens":segment.usage.input_tokens,
+            "output_tokens":segment.usage.output_tokens,
+            "server_tool_use":{"web_search_requests":segment.usage.web_search_requests}
+        });
+        segment.usage.apply_anthropic_details(&mut usage);
         let mut frame = json!({
             "type":"message_delta",
             "delta":{"stop_reason":segment.stop_reason,"stop_sequence":null},
-            "usage":{
-                "output_tokens":segment.usage.output_tokens,
-                "server_tool_use":{"web_search_requests":segment.usage.web_search_requests}
-            }
+            "usage":usage
         });
         if let Some(metadata) = segment.web_evidence.metadata() {
             frame["metadata"] = metadata;

@@ -42,7 +42,7 @@ impl Bridge {
             usage: Usage {
                 input_tokens,
                 output_tokens: estimated_tokens(&text),
-                web_search_requests: 0,
+                ..Usage::default()
             },
             web_evidence: WebEvidenceSummary::default(),
         };

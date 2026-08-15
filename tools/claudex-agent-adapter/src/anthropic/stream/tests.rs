@@ -1186,7 +1186,9 @@ async fn streams_summarized_thinking_as_separate_units_before_text() {
         .expect("text delta");
     builder.update_usage(&json!({
         "params":{"tokenUsage":{"last":{
-            "inputTokens":9,"outputTokens":5,"reasoningOutputTokens":7
+            "inputTokens":9,"outputTokens":5,"reasoningOutputTokens":7,
+            "cacheReadInputTokens":13,"cacheCreationInputTokens":17,
+            "cacheCreation1hInputTokens":11
         }}}
     }));
     let segment = builder.finish(Some(&sender)).await.expect("segment");
@@ -1204,6 +1206,10 @@ async fn streams_summarized_thinking_as_separate_units_before_text() {
     assert_eq!(segment.blocks[2], json!({"type":"text","text":"Answer"}));
     assert_eq!(segment.usage.input_tokens, 9);
     assert_eq!(segment.usage.output_tokens, 12);
+    assert_eq!(segment.usage.reasoning_output_tokens, 7);
+    assert_eq!(segment.usage.cache_read_input_tokens, 13);
+    assert_eq!(segment.usage.cache_creation_input_tokens, 17);
+    assert_eq!(segment.usage.cache_creation_1h_input_tokens, Some(11));
 
     let mut frames = Vec::new();
     while let Some(frame) = receiver.recv().await {
@@ -5151,8 +5157,12 @@ async fn emits_completion_error_and_optional_frames() {
         blocks: Vec::new(),
         stop_reason: "end_turn",
         usage: super::super::Usage {
-            input_tokens: 1,
-            output_tokens: 4,
+            input_tokens: 11,
+            output_tokens: 7,
+            reasoning_output_tokens: 4,
+            cache_read_input_tokens: 5,
+            cache_creation_input_tokens: 3,
+            cache_creation_1h_input_tokens: Some(2),
             web_search_requests: 0,
         },
         web_evidence: super::super::WebEvidenceSummary::default(),
@@ -5168,7 +5178,15 @@ async fn emits_completion_error_and_optional_frames() {
         output.push_str(&String::from_utf8_lossy(&frame.expect("frame")));
     }
     assert!(output.contains("event: message_delta"));
-    assert!(output.contains("\"output_tokens\":4"));
+    assert!(output.contains("\"input_tokens\":11"));
+    assert!(output.contains("\"output_tokens\":7"));
+    assert!(output.contains("\"thinking_tokens\":4"));
+    assert!(output.contains("\"cache_read_input_tokens\":5"));
+    assert!(output.contains("\"cache_creation_input_tokens\":3"));
+    assert!(output.contains("\"ephemeral_1h_input_tokens\":2"));
+    assert!(output.contains("\"ephemeral_5m_input_tokens\":1"));
+    assert!(!output.contains("\"totalTokens\""));
+    assert!(!output.contains("\"cost\""));
     assert!(output.contains("event: message_stop"));
     assert!(output.contains("event: error"));
     assert!(output.contains("boom"));
@@ -5204,6 +5222,7 @@ async fn completion_frame_exposes_verified_web_evidence_metadata() {
             input_tokens: 1,
             output_tokens: 4,
             web_search_requests: 2,
+            ..super::super::Usage::default()
         },
         web_evidence: super::super::WebEvidenceSummary::from_verified_count(2),
     };
@@ -5224,6 +5243,7 @@ async fn completion_frame_exposes_verified_web_evidence_metadata() {
         payload["usage"]["server_tool_use"]["web_search_requests"],
         2
     );
+    assert!(payload["usage"].get("cache_creation").is_none());
     assert_eq!(
         payload["metadata"]["claudex"]["web_evidence"]["verified_count"],
         2
@@ -5654,7 +5674,7 @@ async fn finish_completed_stream_commits_closed_subagent_without_sse_frames() {
         usage: super::super::Usage {
             input_tokens: 1,
             output_tokens: 1,
-            web_search_requests: 0,
+            ..super::super::Usage::default()
         },
         web_evidence: super::super::WebEvidenceSummary::default(),
     };

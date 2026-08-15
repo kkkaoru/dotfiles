@@ -10,6 +10,14 @@ use uuid::Uuid;
 use super::super::{MessagesRequest, Segment};
 
 pub(in crate::anthropic) fn anthropic_response(segment: Segment, model: &str) -> Response<Body> {
+    let mut usage = json!({
+        "input_tokens": segment.usage.input_tokens,
+        "output_tokens": segment.usage.output_tokens,
+        "server_tool_use": {
+            "web_search_requests": segment.usage.web_search_requests
+        }
+    });
+    segment.usage.apply_anthropic_details(&mut usage);
     let mut response = json!({
         "id": format!("msg_{}", Uuid::new_v4().simple()),
         "type": "message",
@@ -18,13 +26,7 @@ pub(in crate::anthropic) fn anthropic_response(segment: Segment, model: &str) ->
         "content": segment.blocks,
         "stop_reason": segment.stop_reason,
         "stop_sequence": null,
-        "usage": {
-            "input_tokens": segment.usage.input_tokens,
-            "output_tokens": segment.usage.output_tokens,
-            "server_tool_use": {
-                "web_search_requests": segment.usage.web_search_requests
-            }
-        }
+        "usage": usage
     });
     if let Some(metadata) = segment.web_evidence.metadata() {
         response["metadata"] = metadata;

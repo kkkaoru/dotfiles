@@ -149,7 +149,22 @@ impl SegmentBuilder {
                 .pointer("/params/tokenUsage/last/reasoningOutputTokens")
                 .and_then(Value::as_u64)
                 .unwrap_or(0);
+            self.usage.reasoning_output_tokens = reasoning_tokens;
             self.usage.output_tokens = output_tokens.saturating_add(reasoning_tokens);
+        }
+        self.usage.cache_read_input_tokens = event
+            .pointer("/params/tokenUsage/last/cacheReadInputTokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(self.usage.cache_read_input_tokens);
+        self.usage.cache_creation_input_tokens = event
+            .pointer("/params/tokenUsage/last/cacheCreationInputTokens")
+            .and_then(Value::as_u64)
+            .unwrap_or(self.usage.cache_creation_input_tokens);
+        if let Some(one_hour) = event
+            .pointer("/params/tokenUsage/last/cacheCreation1hInputTokens")
+            .and_then(Value::as_u64)
+        {
+            self.usage.cache_creation_1h_input_tokens = Some(one_hour);
         }
     }
 

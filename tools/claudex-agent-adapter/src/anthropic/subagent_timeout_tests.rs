@@ -370,7 +370,7 @@ fn completed_segment() -> Segment {
         usage: Usage {
             input_tokens: 1,
             output_tokens: 1,
-            web_search_requests: 0,
+            ..Usage::default()
         },
         web_evidence: WebEvidenceSummary::default(),
     }

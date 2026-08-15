@@ -373,7 +373,11 @@ async fn builds_anthropic_json_and_error_responses() {
             stop_reason: "end_turn",
             usage: Usage {
                 input_tokens: 10,
-                output_tokens: 2,
+                output_tokens: 9,
+                reasoning_output_tokens: 3,
+                cache_read_input_tokens: 7,
+                cache_creation_input_tokens: 5,
+                cache_creation_1h_input_tokens: Some(2),
                 web_search_requests: 0,
             },
             web_evidence: WebEvidenceSummary::default(),
@@ -384,7 +388,17 @@ async fn builds_anthropic_json_and_error_responses() {
     let response: Value = serde_json::from_slice(&body).unwrap();
     assert_eq!(response["content"][0]["text"], "OK");
     assert_eq!(response["usage"]["input_tokens"], 10);
-    assert_eq!(response["usage"]["output_tokens"], 2);
+    assert_eq!(response["usage"]["output_tokens"], 9);
+    assert_eq!(
+        response["usage"]["output_tokens_details"]["thinking_tokens"],
+        3
+    );
+    assert_eq!(response["usage"]["cache_read_input_tokens"], 7);
+    assert_eq!(response["usage"]["cache_creation_input_tokens"], 5);
+    assert_eq!(
+        response["usage"]["cache_creation"],
+        json!({"ephemeral_1h_input_tokens":2,"ephemeral_5m_input_tokens":3})
+    );
     assert!(response.get("metadata").is_none());
 
     let error = error_response(
@@ -415,6 +429,7 @@ async fn exposes_verified_web_evidence_metadata_in_non_stream_response() {
                 input_tokens: 1,
                 output_tokens: 2,
                 web_search_requests: 3,
+                ..Usage::default()
             },
             web_evidence: WebEvidenceSummary::from_verified_count(3),
         },

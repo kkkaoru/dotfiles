@@ -104,7 +104,13 @@ async fn translates_text_thinking_tool_usage_and_terminal_events() {
                 "thread",
                 "request",
                 &event(json!({
-                    "type":"done","reason":"toolUse","message":{"usage":{"input":3,"output":5}}
+                    "type":"done","reason":"toolUse","message":{"usage":{
+                        "input":11,"output":7,"reasoning":4,
+                        "cacheRead":5,"cacheWrite":3,"cacheWrite1h":2,
+                        "totalTokens":26,
+                        "cost":{"input":1.0,"output":2.0,"cacheRead":0.1,
+                            "cacheWrite":0.2,"total":3.3}
+                    }}
                 })),
                 &mut tools
             )
@@ -120,9 +126,70 @@ async fn translates_text_thinking_tool_usage_and_terminal_events() {
     assert_eq!(thinking["method"], "item/reasoning/summaryTextDelta");
     assert_eq!(thinking["params"]["summaryIndex"], 0);
     assert_eq!(tool["params"]["arguments"], json!({"path":"a"}));
-    assert_eq!(usage["params"]["tokenUsage"]["last"]["outputTokens"], 5);
+    let usage = &usage["params"]["tokenUsage"]["last"];
+    assert_eq!(usage["inputTokens"], 11);
+    assert_eq!(usage["outputTokens"], 3);
+    assert_eq!(usage["reasoningOutputTokens"], 4);
+    assert_eq!(
+        usage["outputTokens"].as_u64().expect("output")
+            + usage["reasoningOutputTokens"].as_u64().expect("reasoning"),
+        7
+    );
+    assert_eq!(usage["cacheReadInputTokens"], 5);
+    assert_eq!(usage["cacheCreationInputTokens"], 3);
+    assert_eq!(usage["cacheCreation1hInputTokens"], 2);
+    assert_eq!(usage["totalTokens"], 26);
+    assert_eq!(usage["cost"]["total"], 3.3);
     assert_eq!(done["params"]["turn"]["status"], "completed");
     assert_eq!(done["params"]["turn"]["providerStopReason"], "tool_use");
+}
+
+#[tokio::test]
+async fn omits_unreported_one_hour_cache_usage() {
+    let gateway = gateway();
+    let receiver = gateway.events.subscribe("request");
+    gateway
+        .handle_event(
+            "thread",
+            "request",
+            &event(json!({
+                "type":"done","reason":"stop",
+                "message":{"usage":{"input":1,"output":2,"cacheWrite":3}}
+            })),
+            &mut HashMap::new(),
+        )
+        .expect("done");
+
+    let usage = receiver.recv().await.expect("usage event");
+    let usage = &usage["params"]["tokenUsage"]["last"];
+    assert_eq!(usage["cacheCreationInputTokens"], 3);
+    assert!(usage.get("cacheCreation1hInputTokens").is_none());
+}
+
+#[tokio::test]
+async fn clamps_invalid_usage_subsets_without_underflow() {
+    let gateway = gateway();
+    let receiver = gateway.events.subscribe("request");
+    gateway
+        .handle_event(
+            "thread",
+            "request",
+            &event(json!({
+                "type":"done","reason":"stop",
+                "message":{"usage":{
+                    "output":3,"reasoning":5,"cacheWrite":2,"cacheWrite1h":4
+                }}
+            })),
+            &mut HashMap::new(),
+        )
+        .expect("done");
+
+    let usage = receiver.recv().await.expect("usage event");
+    let usage = &usage["params"]["tokenUsage"]["last"];
+    assert_eq!(usage["outputTokens"], 0);
+    assert_eq!(usage["reasoningOutputTokens"], 3);
+    assert_eq!(usage["cacheCreationInputTokens"], 2);
+    assert_eq!(usage["cacheCreation1hInputTokens"], 2);
 }
 
 #[test]

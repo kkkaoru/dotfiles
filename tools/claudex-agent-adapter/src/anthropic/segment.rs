@@ -11,7 +11,26 @@ pub(super) struct Segment {
 pub(super) struct Usage {
     pub(super) input_tokens: u64,
     pub(super) output_tokens: u64,
+    pub(super) reasoning_output_tokens: u64,
+    pub(super) cache_read_input_tokens: u64,
+    pub(super) cache_creation_input_tokens: u64,
+    pub(super) cache_creation_1h_input_tokens: Option<u64>,
     pub(super) web_search_requests: u64,
+}
+
+impl Usage {
+    pub(super) fn apply_anthropic_details(self, usage: &mut Value) {
+        usage["cache_read_input_tokens"] = json!(self.cache_read_input_tokens);
+        usage["cache_creation_input_tokens"] = json!(self.cache_creation_input_tokens);
+        usage["output_tokens_details"] = json!({"thinking_tokens":self.reasoning_output_tokens});
+        if let Some(one_hour) = self.cache_creation_1h_input_tokens {
+            let one_hour = one_hour.min(self.cache_creation_input_tokens);
+            usage["cache_creation"] = json!({
+                "ephemeral_1h_input_tokens":one_hour,
+                "ephemeral_5m_input_tokens":self.cache_creation_input_tokens - one_hour
+            });
+        }
+    }
 }
 
 /// Immutable, aggregate-only evidence record carried from the stream builder
