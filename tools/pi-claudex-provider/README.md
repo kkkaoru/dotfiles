@@ -43,6 +43,8 @@ The compact lifecycle events are incremental transport, not a replacement for th
 
 Terminal reconciliation must account for fields required by the selected provider that incremental events cannot fully represent: `thinkingSignature`, `redacted`, `textSignature`, tool-call `thoughtSignature` and `namespace`, `responseId`, `responseModel`, `deferred`, detailed stop reasons, and usage including cache and reasoning tokens. A provider-validated session or signature translation may satisfy continuation without adding opaque signatures to incremental events. If terminal content extends an already streamed prefix, emit only the missing suffix. If it conflicts with streamed content, fail visibly rather than replaying or dropping content silently.
 
+The current Claudex adapter intentionally does not reconcile terminal-only content. Every supported Pi route emits complete deltas, and end-to-end tests have not observed content loss. Add prefix-aware terminal reconciliation before supporting a provider that can omit deltas; unconditional replay can duplicate text or tool calls.
+
 Install after verification:
 
 ```bash
