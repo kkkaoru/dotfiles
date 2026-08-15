@@ -91,6 +91,37 @@ impl AgentBackend {
         }
     }
 
+    pub fn pi_gateway(&self) -> Option<Arc<PiGateway>> {
+        match self {
+            Self::Pi(gateway) => Some(Arc::clone(gateway)),
+            Self::Routed(_) | Self::SessionScoped(_) => None,
+            Self::Codex(_) | Self::ConfiguredAcp(_) | Self::Copilot(_) | Self::Grok(_) => None,
+        }
+    }
+
+    pub async fn pi_gateway_for_model(&self, model: &str) -> Result<Option<Arc<PiGateway>>> {
+        match self {
+            Self::Pi(gateway) => Ok(Some(Arc::clone(gateway))),
+            Self::Routed(routes) => match routes.resolve(model) {
+                Ok((_, route)) => Ok(route.get().await?.pi_gateway()),
+                Err(_) => Ok(None),
+            },
+            Self::SessionScoped(scopes) => {
+                Box::pin(scopes.unguarded_scope().pi_gateway_for_model(model)).await
+            }
+            Self::Codex(_) | Self::ConfiguredAcp(_) | Self::Copilot(_) | Self::Grok(_) => Ok(None),
+        }
+    }
+
+    pub fn pi_identity(&self, model: &str) -> Option<(String, String)> {
+        match self {
+            Self::Routed(routes) => routes.pi_identity(model),
+            Self::SessionScoped(scopes) => scopes.catalog().pi_identity(model),
+            Self::Pi(gateway) => Some(gateway.identity()),
+            Self::Codex(_) | Self::ConfiguredAcp(_) | Self::Copilot(_) | Self::Grok(_) => None,
+        }
+    }
+
     pub(crate) fn launch_scoped_effort(&self, model: &str) -> Option<String> {
         match self {
             Self::Routed(routes) => routes.launch_scoped_effort(model),

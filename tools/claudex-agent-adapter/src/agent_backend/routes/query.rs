@@ -24,6 +24,14 @@ impl RoutedBackends {
             .unwrap_or_default()
     }
 
+    pub(in crate::agent_backend) fn pi_identity(&self, model: &str) -> Option<(String, String)> {
+        let route = self
+            .find(model)
+            .map(|route| route.template.clone())
+            .or_else(|| self.prefix_template(model).cloned())?;
+        Some((route.pi_provider?, route.pi_model?))
+    }
+
     pub(in crate::agent_backend) fn launch_scoped_effort(&self, model: &str) -> Option<String> {
         let route = self
             .find(model)

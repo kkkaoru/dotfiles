@@ -30,7 +30,7 @@ mod tests {
             model_catalog_json: None,
             pi_provider: None,
             pi_model: None,
-        pi_extensions: Vec::new(),
+            pi_extensions: Vec::new(),
             max_context_tokens: None,
             model_prefixes: Vec::new(),
             max_concurrency: None,
@@ -100,6 +100,7 @@ mod tests {
     #[test]
     fn describes_nondefault_web_search_routes_as_json() {
         for mode in [
+            WebSearchMode::DelegatePi,
             WebSearchMode::CodexNative,
             WebSearchMode::AcpNative,
             WebSearchMode::DelegateMcp,

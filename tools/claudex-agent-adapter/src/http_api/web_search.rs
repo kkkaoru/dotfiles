@@ -35,17 +35,18 @@ pub(super) async fn ccr_web_search(
             anyhow::anyhow!("session_id is empty"),
         );
     }
-    stream_ccr_web_search(bridge, request).await
+    stream_ccr_web_search(bridge, session_id, request).await
 }
 
 async fn stream_ccr_web_search(
     bridge: Arc<Bridge>,
+    session_id: String,
     request: CcrWebSearchRequest,
 ) -> axum::response::Response<Body> {
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<String, std::io::Error>>(4);
     let _ = tx.send(Ok(CCR_KEEPALIVE.to_owned())).await;
     tokio::spawn(async move {
-        let payload = match search_payload(bridge, request).await {
+        let payload = match search_payload(bridge, session_id, request).await {
             Ok(value) => value,
             Err(error) => failed_search_payload(&error),
         };
@@ -62,9 +63,12 @@ async fn stream_ccr_web_search(
 
 async fn search_payload(
     bridge: Arc<Bridge>,
+    session_id: String,
     request: CcrWebSearchRequest,
 ) -> anyhow::Result<Value> {
-    let mut response = bridge.run_web_search(&request.query).await?;
+    let mut response = bridge
+        .run_web_search_for_session(&request.query, Some(session_id.as_str()))
+        .await?;
     response.results.retain(|result| {
         domain_allowed(
             &result.url,

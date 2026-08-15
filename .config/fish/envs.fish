@@ -13,22 +13,27 @@ set -g fish_user_paths /usr/local/opt/gnu-getopt/bin $fish_user_paths
 # set -x ASDF_GOLANG_MOD_VERSION_ENABLED true
 set -gx ASDF_GOLANG_MOD_VERSION_ENABLED true
 
-# Fugu (SAKANA) API key for Codex Fugu models.
+# Home-scoped secrets for cwd-independent launches.
 # Priority: explicit env > ~/.codex/.env > ~/.env
-if not set -q SAKANA_AI_PRO_API_KEY
-  for sakana_env_file in ~/.codex/.env ~/.env
-    if not test -r $sakana_env_file
+function __claudex_export_home_env --argument-names env_name
+  if set -q $env_name
+    return
+  end
+  for env_file in ~/.codex/.env ~/.env
+    if not test -r $env_file
       continue
     end
-    set -l sakana_env_line (string match -r '^SAKANA_AI_PRO_API_KEY=.*' < $sakana_env_file)
-    if test -z "$sakana_env_line"
+    set -l env_line (string match -r "^$env_name=.*" < $env_file)
+    if test -z "$env_line"
       continue
     end
-    set -l sakana_api_key (string replace -r '^SAKANA_AI_PRO_API_KEY=' '' -- $sakana_env_line)
-    set sakana_api_key (string trim -c "'" -- (string trim -c '"' -- $sakana_api_key))
-    if test -n "$sakana_api_key"
-      set -gx SAKANA_AI_PRO_API_KEY $sakana_api_key
-      break
+    set -l env_value (string replace -r "^$env_name=" '' -- $env_line)
+    set env_value (string trim -c "'" -- (string trim -c '"' -- $env_value))
+    if test -n "$env_value"
+      set -gx $env_name $env_value
+      return
     end
   end
 end
+__claudex_export_home_env SAKANA_AI_PRO_API_KEY
+__claudex_export_home_env EXA_API_KEY

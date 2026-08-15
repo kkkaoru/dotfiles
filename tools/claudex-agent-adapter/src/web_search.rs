@@ -54,6 +54,61 @@ pub(crate) async fn run(
     first_nonempty_response(query, jobs).await
 }
 
+pub(crate) async fn run_pi(
+    backend: &Arc<AgentBackend>,
+    provider: &str,
+    model: &str,
+    query: &str,
+) -> Result<Option<SearchResponse>> {
+    if query.trim().is_empty() {
+        bail!("WebSearch query must not be empty");
+    }
+    let Some(gateway) = backend.pi_gateway_for_model(model).await? else {
+        return Ok(None);
+    };
+    let event = gateway.web_search(query).await?;
+    match event.get("type").and_then(Value::as_str) {
+        Some("web_search_result") => {
+            let results = event
+                .get("results")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|result| {
+                    Some(SearchResult {
+                        title: result.get("title")?.as_str()?.to_owned(),
+                        url: result.get("url")?.as_str()?.to_owned(),
+                        snippet: result
+                            .get("snippet")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned),
+                    })
+                })
+                .collect::<Vec<_>>();
+            if results.is_empty() {
+                bail!("provider `{provider}` model `{model}` returned no web search results");
+            }
+            let search_count = u64::try_from(results.len()).unwrap_or(u64::MAX);
+            Ok(Some(SearchResponse {
+                query: query.to_owned(),
+                results,
+                search_count,
+            }))
+        }
+        Some("web_search_error") => {
+            let message = event
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("Pi web_search failed");
+            bail!("{message}");
+        }
+        _ => bail!(
+            "provider `{provider}` model `{model}` returned an unsupported web_search response"
+        ),
+    }
+}
+
 // Live provider I/O is validated by the CCR integration test. Event decisions
 // and scheduler timeout outcomes use injected futures below for deterministic
 // unit coverage without external credentials or wall-clock waits.

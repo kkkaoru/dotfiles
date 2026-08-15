@@ -228,6 +228,51 @@ impl PiGateway {
         self.alive.load(Ordering::Acquire)
     }
 
+    pub(crate) fn identity(&self) -> (String, String) {
+        (self.provider.clone(), self.model_id.clone())
+    }
+
+    pub(crate) async fn web_search(&self, query: &str) -> Result<Value> {
+        let request_id = Uuid::new_v4().simple().to_string();
+        let request = protocol::web_search(
+            &request_id,
+            &self.token,
+            &self.provider,
+            &self.model_id,
+            query,
+        )?;
+        let stream = UnixStream::connect(&self.socket)
+            .await
+            .with_context(|| format!("connect Pi gateway {}", self.socket.display()))?;
+        let (reader, mut writer) = stream.into_split();
+        write_line(&mut writer, &protocol::hello(&self.token)).await?;
+        let mut lines = BufReader::new(reader).lines();
+        let ready = read_json_line(&mut lines).await?;
+        protocol::validate_ready(&ready)?;
+        write_line(&mut writer, &request).await?;
+        loop {
+            let line = lines
+                .next_line()
+                .await
+                .context("read Pi web_search event")?
+                .context("Pi gateway closed before a web_search result")?;
+            let event: Value =
+                serde_json::from_str(&line).context("decode Pi web_search event JSON")?;
+            let event_type = protocol::validate_event(&event, &request_id)?;
+            match event_type {
+                "web_search_result" | "web_search_error" => return Ok(event),
+                "protocol_error" => {
+                    let message = event
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .unwrap_or("Pi web_search protocol error");
+                    bail!("{message}");
+                }
+                other => bail!("unsupported Pi web_search event type `{other}`"),
+            }
+        }
+    }
+
     fn cancel_active_turns(&self) {
         let Ok(active) = self.active.lock() else {
             return;

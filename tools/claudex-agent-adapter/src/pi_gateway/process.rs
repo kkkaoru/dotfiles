@@ -47,6 +47,7 @@ impl GatewayProcess {
             .env("CLAUDEX_PI_GATEWAY_TOKEN", &token)
             .env("CLAUDEX_PI_GATEWAY_ORIGIN", "claudex")
             .env("PI_CODING_AGENT_DIR", isolate_agent_directory(&directory)?)
+            .envs(exa_api_key().map(|key| ("EXA_API_KEY", key)))
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::inherit())
@@ -195,8 +196,44 @@ mod tests {
         let isolated_settings = std::fs::read_to_string(isolated.join("settings.json"))
             .expect("read isolated settings");
         assert_eq!(isolated_settings, "{\n  \"packages\": []\n}\n");
+        let isolated_search = std::fs::read_to_string(isolated.join("web-search.json"))
+            .expect("read isolated web-search");
+        assert_eq!(
+            isolated_search,
+            "{\n  \"exaApiKey\": \"$EXA_API_KEY\",\n  \"provider\": \"exa\",\n  \"workflow\": \"none\"\n}\n"
+        );
+        assert!(!isolated_search.contains("exa-"));
         assert_eq!(isolated, runtime.path().join("agent"));
     }
+}
+
+fn exa_api_key() -> Option<String> {
+    if let Ok(key) = std::env::var("EXA_API_KEY") {
+        let key = key.trim().to_owned();
+        if !key.is_empty() {
+            return Some(key);
+        }
+    }
+    let home = std::env::var_os("HOME")?;
+    for relative in [".codex/.env", ".env"] {
+        let path = PathBuf::from(&home).join(relative);
+        let Ok(contents) = fs::read_to_string(&path) else {
+            continue;
+        };
+        for line in contents.lines() {
+            let Some(value) = line.strip_prefix("EXA_API_KEY=") else {
+                continue;
+            };
+            let value = value
+                .trim()
+                .trim_matches(|mark| mark == '"' || mark == '\'')
+                .to_owned();
+            if !value.is_empty() {
+                return Some(value);
+            }
+        }
+    }
+    None
 }
 
 fn isolate_agent_directory(runtime_directory: &Path) -> Result<PathBuf> {
@@ -216,6 +253,16 @@ fn isolate_agent_directory(runtime_directory: &Path) -> Result<PathBuf> {
         format!(
             "write isolated Pi settings {}",
             agent_directory.join("settings.json").display()
+        )
+    })?;
+    fs::write(
+        agent_directory.join("web-search.json"),
+        "{\n  \"exaApiKey\": \"$EXA_API_KEY\",\n  \"provider\": \"exa\",\n  \"workflow\": \"none\"\n}\n",
+    )
+    .with_context(|| {
+        format!(
+            "write isolated Pi web-search config {}",
+            agent_directory.join("web-search.json").display()
         )
     })?;
     if let Some(home) = std::env::var_os("HOME") {

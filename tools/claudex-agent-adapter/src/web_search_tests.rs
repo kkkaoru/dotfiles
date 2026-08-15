@@ -6,6 +6,7 @@ fn serializes_each_search_mode_and_keeps_the_default_compact() {
     assert_eq!(WebSearchMode::default().as_str(), "delegate-ccr");
     assert!(WebSearchMode::default().is_default());
     for (mode, name) in [
+        (WebSearchMode::DelegatePi, "delegate-pi"),
         (WebSearchMode::CodexNative, "codex-native"),
         (WebSearchMode::AcpNative, "acp-native"),
         (WebSearchMode::DelegateMcp, "delegate-mcp"),
@@ -258,6 +259,16 @@ fn t4_failed_search_errors_are_human_and_hide_transport_codes() {
     assert_eq!(
         human_web_search_error(&anyhow::anyhow!("no WebSearch worker is configured")),
         "No WebSearch worker is configured"
+    );
+    assert_eq!(
+        human_web_search_error(&anyhow::anyhow!("EXA_API_KEY is missing")),
+        "EXA_API_KEY is not set; web search cannot run"
+    );
+    assert_eq!(
+        human_web_search_error(&anyhow::anyhow!(
+            "Provider \"xai\" does not support web search. Switch to a Cursor model to use web search."
+        )),
+        "Provider \"xai\" does not support web search. Switch to a Cursor model to use web search."
     );
     let timeout = human_web_search_error(&anyhow::anyhow!("worker model timed out"));
     assert_eq!(timeout, "WebSearch timed out");

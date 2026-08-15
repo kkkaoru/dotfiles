@@ -58,6 +58,12 @@ pub(crate) fn human_web_search_error_text(detail: &str) -> String {
     if lower.contains("no websearch worker") {
         return "No WebSearch worker is configured".to_owned();
     }
+    if lower.contains("exa_api_key") {
+        return "EXA_API_KEY is not set; web search cannot run".to_owned();
+    }
+    if detail.contains("does not support web search") || detail.contains("web_search") {
+        return detail.to_owned();
+    }
     if is_timeout_failure(&lower) {
         return "WebSearch timed out".to_owned();
     }

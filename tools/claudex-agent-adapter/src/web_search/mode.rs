@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 pub enum WebSearchMode {
     #[default]
     DelegateCcr,
+    DelegatePi,
     CodexNative,
     AcpNative,
     DelegateMcp,
@@ -25,6 +26,7 @@ impl WebSearchMode {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::DelegateCcr => "delegate-ccr",
+            Self::DelegatePi => "delegate-pi",
             Self::CodexNative => "codex-native",
             Self::AcpNative => "acp-native",
             Self::DelegateMcp => "delegate-mcp",

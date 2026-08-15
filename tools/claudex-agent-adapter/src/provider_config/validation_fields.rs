@@ -104,7 +104,7 @@ pub(super) fn validate_web_search_mode(provider: &Provider) -> Result<()> {
         WebSearchMode::AcpNative | WebSearchMode::DelegateMcp => {
             provider.backend != BackendKind::CodexAppServer
         }
-        WebSearchMode::DelegateCcr | WebSearchMode::Disabled => true,
+        WebSearchMode::DelegateCcr | WebSearchMode::DelegatePi | WebSearchMode::Disabled => true,
     };
     if !valid {
         bail!(

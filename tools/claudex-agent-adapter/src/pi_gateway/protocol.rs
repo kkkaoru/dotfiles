@@ -59,6 +59,33 @@ pub(super) fn cancel(id: &str, token: &str) -> Value {
     json!({"version": VERSION, "type": "cancel", "id": id, "token": token})
 }
 
+pub(super) fn web_search(
+    id: &str,
+    token: &str,
+    provider: &str,
+    model_id: &str,
+    query: &str,
+) -> Result<Value> {
+    if provider == "claudex" {
+        bail!("Pi gateway recursion rejected provider `claudex`");
+    }
+    if provider.is_empty() || model_id.is_empty() {
+        bail!("Pi web_search requires provider and modelId");
+    }
+    if query.trim().is_empty() {
+        bail!("WebSearch query must not be empty");
+    }
+    Ok(json!({
+        "version": VERSION,
+        "type": "web_search",
+        "id": id,
+        "token": token,
+        "provider": provider,
+        "modelId": model_id,
+        "query": query,
+    }))
+}
+
 pub(super) fn validate_ready(value: &Value) -> Result<()> {
     validate_version(value)?;
     if value.get("type").and_then(Value::as_str) != Some("ready") {
@@ -143,5 +170,16 @@ mod tests {
             "done"
         );
         assert!(validate_event(&json!({"version":1,"id":"other","type":"done"}), "r").is_err());
+    }
+
+    #[test]
+    fn web_search_keeps_session_provider_and_rejects_empty_query() {
+        let value = web_search("r", "t", "cursor", "auto", "avita").expect("search");
+        assert_eq!(value["type"], "web_search");
+        assert_eq!(value["provider"], "cursor");
+        assert_eq!(value["modelId"], "auto");
+        assert_eq!(value["query"], "avita");
+        assert!(web_search("r", "t", "cursor", "auto", "   ").is_err());
+        assert!(web_search("r", "t", "claudex", "auto", "avita").is_err());
     }
 }
