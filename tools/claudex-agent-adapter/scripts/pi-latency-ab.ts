@@ -15,11 +15,13 @@ const MODE = requiredArgument("--mode", "tool");
 const DEBUG_PI_EVENTS = process.argv.includes("--debug-pi-events");
 const SAMPLE_COUNT = Number(requiredArgument("--sample-count", "5"));
 const FOLLOW_UP_DELAY_MS = Number(requiredArgument("--follow-up-delay-ms", "200"));
-const DIRECT_PORT = 18431;
-const PI_PORT = 18432;
+const HISTORY_TOKENS = Number(requiredArgument("--history-tokens", "8000"));
+const DIRECT_PORT = Number(requiredArgument("--direct-port", "18431"));
+const PI_PORT = Number(requiredArgument("--pi-port", "18432"));
 const SESSION_HEADER = "x-claude-code-session-id";
 const STARTUP_TIMEOUT_MS = 10_000;
 const REQUEST_TIMEOUT_MS = 180_000;
+const RUN_ID = crypto.randomUUID();
 
 interface RouteConfig {
   label: "direct" | "pi";
@@ -42,7 +44,11 @@ interface StreamTiming {
   firstDeltaByTypeAtMs: Record<string, number>;
   toolUseStartAtMs: number | null;
   responseText: string;
+  responseThinking: string;
+  thinkingSignature: string;
   toolUseCount: number;
+  requestBodyBytes: number;
+  messageCount: number;
 }
 
 interface StreamResult {
@@ -56,7 +62,7 @@ interface MetricRow extends StreamTiming {
   sample: number;
   coldSpawn: boolean;
   firstPair: boolean;
-  phase: "text" | "tool_request" | "tool_result";
+  phase: "text" | "tool_request" | "tool_result" | "long_seed" | "long_follow_up";
   valid: boolean;
   validationError?: string;
   firstFrameMs: number;
@@ -70,7 +76,7 @@ interface MetricRow extends StreamTiming {
 interface SummaryRow {
   route: RouteConfig["label"];
   phase: MetricRow["phase"];
-  temperature: "cold_spawn" | "first_pair_follow_up" | "warm";
+  temperature: "cold_spawn" | "first_pair_follow_up" | "warm" | "seed" | "measured_follow_up";
   count: number;
   firstFrameMedianMs: number;
   firstDeltaMedianMs: number | null;
@@ -94,14 +100,36 @@ const ROUTES = ALL_ROUTES.filter(
 if (ROUTES.length === 0) {
   throw new Error(`--route must be direct, pi, or both; received ${ROUTE_FILTER}`);
 }
-if (MODE !== "text" && MODE !== "tool") {
-  throw new Error(`--mode must be text or tool; received ${MODE}`);
+if (MODE !== "text" && MODE !== "tool" && MODE !== "long") {
+  throw new Error(`--mode must be text, tool, or long; received ${MODE}`);
 }
 if (!Number.isInteger(SAMPLE_COUNT) || SAMPLE_COUNT < 1) {
   throw new Error(`--sample-count must be a positive integer; received ${SAMPLE_COUNT}`);
 }
+for (const [name, port] of [
+  ["--direct-port", DIRECT_PORT],
+  ["--pi-port", PI_PORT],
+] as const) {
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new Error(`${name} must be a valid TCP port; received ${port}`);
+  }
+}
 if (!Number.isFinite(FOLLOW_UP_DELAY_MS) || FOLLOW_UP_DELAY_MS < 0) {
   throw new Error(`--follow-up-delay-ms must be non-negative; received ${FOLLOW_UP_DELAY_MS}`);
+}
+if (!Number.isInteger(HISTORY_TOKENS) || HISTORY_TOKENS < 1) {
+  throw new Error(`--history-tokens must be a positive integer; received ${HISTORY_TOKENS}`);
+}
+
+function longHistoryBody(): Record<string, unknown> {
+  const history = `${" history".repeat(HISTORY_TOKENS)}\nIgnore the history above. Reply with exactly LONG_HISTORY_SEED_OK.`;
+  return {
+    model: MODEL,
+    max_tokens: 32,
+    stream: true,
+    messages: [{ role: "user", content: history }],
+    tools: [],
+  };
 }
 
 const INITIAL_BODY: Record<string, unknown> =
@@ -111,31 +139,34 @@ const INITIAL_BODY: Record<string, unknown> =
         max_tokens: 64,
         stream: true,
         messages: [{ role: "user", content: "Reply with exactly LATENCY_TEXT_OK." }],
+        tools: [],
       }
-    : {
-        model: MODEL,
-        max_tokens: 256,
-        stream: true,
-        messages: [
-          {
-            role: "user",
-            content:
-              'Call latency_probe exactly once with {"nonce":"LATENCY_NONCE"}. Do not answer in text before the tool call. After its result, answer only LATENCY_TOOL_LOOP_OK.',
-          },
-        ],
-        tools: [
-          {
-            name: "latency_probe",
-            description: "A deterministic no-op latency measurement tool.",
-            input_schema: {
-              type: "object",
-              properties: { nonce: { type: "string" } },
-              required: ["nonce"],
-              additionalProperties: false,
+    : MODE === "long"
+      ? longHistoryBody()
+      : {
+          model: MODEL,
+          max_tokens: 256,
+          stream: true,
+          messages: [
+            {
+              role: "user",
+              content:
+                'Call latency_probe exactly once with {"nonce":"LATENCY_NONCE"}. Do not answer in text before the tool call. After its result, answer only LATENCY_TOOL_LOOP_OK.',
             },
-          },
-        ],
-      };
+          ],
+          tools: [
+            {
+              name: "latency_probe",
+              description: "A deterministic no-op latency measurement tool.",
+              input_schema: {
+                type: "object",
+                properties: { nonce: { type: "string" } },
+                required: ["nonce"],
+                additionalProperties: false,
+              },
+            },
+          ],
+        };
 
 function requiredArgument(name: string, fallback?: string): string {
   const prefix = `${name}=`;
@@ -265,7 +296,7 @@ function adapterEnvironment(): Record<string, string | undefined> {
   const environment = { ...process.env };
   delete environment.ANTHROPIC_AUTH_TOKEN;
   if (DEBUG_PI_EVENTS) {
-    environment.RUST_LOG = "claudex_agent_adapter::pi_gateway=debug";
+    environment.RUST_LOG = "claudex_agent_adapter=info,claudex_agent_adapter::pi_gateway=debug";
   }
   return environment;
 }
@@ -330,11 +361,14 @@ async function streamRequest(
   sessionId: string,
   body: Record<string, unknown>,
 ): Promise<StreamResult> {
+  const requestBody = JSON.stringify(body);
+  const messages = body.messages;
+  const messageCount = Array.isArray(messages) ? messages.length : 0;
   const sentAtMs = epochMilliseconds();
   const response = await fetch(url, {
     method: "POST",
     headers: { "content-type": "application/json", [SESSION_HEADER]: sessionId },
-    body: JSON.stringify(body),
+    body: requestBody,
     signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
   });
   if (!response.ok || response.body === null) {
@@ -356,6 +390,8 @@ async function streamRequest(
   let sseChunkCount = 0;
   let sseFrameCount = 0;
   let responseText = "";
+  let responseThinking = "";
+  let thinkingSignature = "";
   let toolInputJson = "";
   let toolStartInput: Record<string, unknown> | undefined;
   const contentDeltaAtMs: number[] = [];
@@ -393,6 +429,20 @@ async function streamRequest(
         }
         if (isRecord(delta) && delta.type === "text_delta" && typeof delta.text === "string") {
           responseText += delta.text;
+        }
+        if (
+          isRecord(delta) &&
+          delta.type === "thinking_delta" &&
+          typeof delta.thinking === "string"
+        ) {
+          responseThinking += delta.thinking;
+        }
+        if (
+          isRecord(delta) &&
+          delta.type === "signature_delta" &&
+          typeof delta.signature === "string"
+        ) {
+          thinkingSignature += delta.signature;
         }
         if (
           isRecord(delta) &&
@@ -443,7 +493,11 @@ async function streamRequest(
       firstDeltaByTypeAtMs,
       toolUseStartAtMs,
       responseText,
+      responseThinking,
+      thinkingSignature,
       toolUseCount,
+      requestBodyBytes: new TextEncoder().encode(requestBody).byteLength,
+      messageCount,
     },
     toolUseId,
     ...(isRecord(parsedToolInput) ? { toolInput: parsedToolInput } : {}),
@@ -462,7 +516,7 @@ function metric(
   return {
     route: config.label,
     sample,
-    coldSpawn: sample === 1 && phase === "tool_request",
+    coldSpawn: sample === 1 && phase !== "tool_result" && phase !== "long_follow_up",
     firstPair: sample === 1,
     phase,
     valid: true,
@@ -479,17 +533,44 @@ function metric(
   };
 }
 
+function longFollowUpBody(seedResponse: string): Record<string, unknown> {
+  return {
+    ...INITIAL_BODY,
+    messages: [
+      INITIAL_BODY.messages,
+      { role: "assistant", content: seedResponse },
+      { role: "user", content: "Reply with exactly LONG_HISTORY_MEASURED_OK." },
+    ].flat(),
+  };
+}
+
 function followUpBody(
   toolUseId: string,
   toolInput: Record<string, unknown>,
+  thinking: string,
+  thinkingSignature: string,
+  text: string,
 ): Record<string, unknown> {
+  const assistantContent: Record<string, unknown>[] = [];
+  if (thinking.length > 0 && thinkingSignature.length > 0) {
+    assistantContent.push({ type: "thinking", thinking, signature: thinkingSignature });
+  }
+  if (text.length > 0) {
+    assistantContent.push({ type: "text", text });
+  }
+  assistantContent.push({
+    type: "tool_use",
+    id: toolUseId,
+    name: "latency_probe",
+    input: toolInput,
+  });
   return {
     ...INITIAL_BODY,
     messages: [
       INITIAL_BODY.messages,
       {
         role: "assistant",
-        content: [{ type: "tool_use", id: toolUseId, name: "latency_probe", input: toolInput }],
+        content: assistantContent,
       },
       {
         role: "user",
@@ -503,7 +584,10 @@ function followUpBody(
 
 async function measureSample(config: RouteConfig, sample: number): Promise<MetricRow[]> {
   const url = `http://127.0.0.1:${config.port}/v1/messages`;
-  const sessionId = `pi-latency-ab-${config.label}`;
+  const sessionId =
+    MODE === "long"
+      ? `pi-latency-${RUN_ID}-long-${sample}`
+      : `pi-latency-${RUN_ID}-${config.label}`;
   const initial = await streamRequest(url, sessionId, INITIAL_BODY);
   if (MODE === "text") {
     if (initial.timing.responseText.trim() !== "LATENCY_TEXT_OK") {
@@ -513,11 +597,31 @@ async function measureSample(config: RouteConfig, sample: number): Promise<Metri
     }
     return [metric(config, sample, "text", initial.timing)];
   }
+  if (MODE === "long") {
+    if (initial.timing.responseText.trim() !== "LONG_HISTORY_SEED_OK") {
+      throw new Error(
+        `${config.label} sample ${sample} invalid long-history seed: ${JSON.stringify(initial)}`,
+      );
+    }
+    const followUp = await streamRequest(
+      url,
+      sessionId,
+      longFollowUpBody(initial.timing.responseText.trim()),
+    );
+    if (followUp.timing.responseText.trim() !== "LONG_HISTORY_MEASURED_OK") {
+      throw new Error(
+        `${config.label} sample ${sample} invalid long-history follow-up: ${JSON.stringify(followUp)}`,
+      );
+    }
+    return [
+      metric(config, sample, "long_seed", initial.timing),
+      metric(config, sample, "long_follow_up", followUp.timing),
+    ];
+  }
   if (
     initial.toolUseId === undefined ||
     initial.toolInput?.nonce !== "LATENCY_NONCE" ||
-    initial.timing.toolUseCount !== 1 ||
-    initial.timing.responseText.length !== 0
+    initial.timing.toolUseCount !== 1
   ) {
     throw new Error(
       `${config.label} sample ${sample} invalid tool call: ${JSON.stringify(initial)}`,
@@ -529,7 +633,13 @@ async function measureSample(config: RouteConfig, sample: number): Promise<Metri
   const followUp = await streamRequest(
     url,
     sessionId,
-    followUpBody(initial.toolUseId, initial.toolInput),
+    followUpBody(
+      initial.toolUseId,
+      initial.toolInput,
+      initial.timing.responseThinking,
+      initial.timing.thinkingSignature,
+      initial.timing.responseText,
+    ),
   );
   if (followUp.timing.responseText.trim() !== "LATENCY_TOOL_LOOP_OK") {
     throw new Error(
@@ -568,14 +678,27 @@ function summarize(rows: MetricRow[]): SummaryRow[] {
   const summaries: SummaryRow[] = [];
   for (const route of ROUTES) {
     const phases: MetricRow["phase"][] =
-      MODE === "text" ? ["text"] : ["tool_request", "tool_result"];
+      MODE === "text"
+        ? ["text"]
+        : MODE === "long"
+          ? ["long_seed", "long_follow_up"]
+          : ["tool_request", "tool_result"];
     for (const phase of phases) {
       const temperatures: SummaryRow["temperature"][] =
-        phase === "tool_result" ? ["first_pair_follow_up", "warm"] : ["cold_spawn", "warm"];
+        phase === "long_seed"
+          ? ["seed"]
+          : phase === "long_follow_up"
+            ? ["measured_follow_up"]
+            : phase === "tool_result"
+              ? ["first_pair_follow_up", "warm"]
+              : ["cold_spawn", "warm"];
       for (const temperature of temperatures) {
         const selected = rows.filter((row) => {
           if (row.route !== route.label || row.phase !== phase) {
             return false;
+          }
+          if (temperature === "seed" || temperature === "measured_follow_up") {
+            return true;
           }
           if (temperature === "cold_spawn") {
             return row.coldSpawn;
@@ -642,7 +765,8 @@ async function main(): Promise<void> {
     }
     if (!startupOnly) {
       for (let sample = 1; sample <= SAMPLE_COUNT; sample += 1) {
-        for (const config of ROUTES) {
+        const sampleRoutes = sample % 2 === 1 ? ROUTES : ROUTES.toReversed();
+        for (const config of sampleRoutes) {
           const sampleRows = await measureSample(config, sample);
           rows.push(...sampleRows);
           for (const row of sampleRows) {
