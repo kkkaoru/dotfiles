@@ -353,6 +353,13 @@ cd dotfiles
 Agent、Skill、Command、Hook、settingsだけを `~/.claude` へリンクします。また、
 次のClaudex関連ファイルもリンクします。
 
+`~/.pi` はrepositoryの `.pi` へのsymlinkです。Piはpackage相対パスを `~/.pi/agent` から
+解決し、そのsymlinkを辿りません。そのためスクリプトは `.pi/agent/packages/` に
+`pi-my-clinepass-provider` / `pi-my-cursor-provider` / `pi-claudex-provider` への
+local symlinkを生成します。これらのリンクはgit追跡せず、clone直後は必ず
+`./create-symlinks.sh` を実行してください。実行しないと `settings.json` の
+`./packages/...` が解決できません。
+
 - `~/.config/claudex` → `.config/claudex`
 - `~/.config/fish/functions/claudex.fish` → repositoryのfish function
 - `~/.claude/agents/` 配下の全定義

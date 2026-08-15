@@ -11,6 +11,9 @@ Claude CodeからCodex、Grok、Claude fallback、advisorを動的に使い分�
 ./create-symlinks.sh
 ```
 
+This also creates untracked `.pi/agent/packages/` links so Pi can resolve the
+`./packages/...` entries in `.pi/agent/settings.json` after a fresh clone.
+
 ## Node.js
 
 Use nodenv from anyenv
