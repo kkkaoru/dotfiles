@@ -149,10 +149,13 @@ fn open_directory_path(path: &Path) -> std::io::Result<File> {
             "cache directory must be absolute",
         ));
     }
-    // macOS exposes /var as a stable system symlink. Resolve that one system
-    // alias once, then walk the resulting path exclusively through directory
-    // fds with O_NOFOLLOW; user-controlled cache ancestors remain rejected.
-    let path = if path.starts_with("/var") && Path::new("/var").is_symlink() {
+    // macOS exposes /var and /tmp as stable system symlinks to /private/var
+    // and /private/tmp respectively. Resolve those aliases once, then walk the
+    // resulting path exclusively through directory fds with O_NOFOLLOW;
+    // user-controlled cache ancestors remain rejected.
+    let path = if (path.starts_with("/var") && Path::new("/var").is_symlink())
+        || (path.starts_with("/tmp") && Path::new("/tmp").is_symlink())
+    {
         Path::new("/private").join(path.strip_prefix("/").unwrap_or(path))
     } else {
         path.to_path_buf()
