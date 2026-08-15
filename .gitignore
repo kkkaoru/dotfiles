@@ -75,19 +75,14 @@ coverage_out/
 !.claude/skills/typescript-coding-rules
 
 
-# Pi runtime state, credentials, caches, and install trees. Keep managed
-# configuration such as models.json, settings.json, and themes tracked.
-.pi/agent/auth.json
-.pi/agent/bin/
-.pi/agent/commandcode-models.json
-.pi/agent/extensions/
-.pi/agent/git/
-.pi/agent/models-store.json
-.pi/agent/npm/
-.pi/agent/pi-debug.log
-.pi/agent/sessions/
-.pi/agent/trust/
-.pi/agent/trust.json
+# Pi is repository-managed, but only a small allowlist is tracked. Ignore
+# everything else so new credential or state files cannot leak into git.
+.pi/**
+!.pi/agent/
+!.pi/agent/models.json
+!.pi/agent/settings.json
+!.pi/agent/themes/
+!.pi/agent/themes/**
 
 # Codex runtime state/cache
 .codex/attachments/
