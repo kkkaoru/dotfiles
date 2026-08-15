@@ -36,6 +36,20 @@ bun run check
 pi --approve -e . --model cursor/auto
 ```
 
+### Manual TUI tool roundtrip
+
+`tests/tui-probe-extension.ts` is a manual fixture for verifying that a Cursor custom-tool callback crosses the provider bridge, is executed by pi, and returns its result to the same Cursor run. Start both extensions:
+
+```bash
+pi --approve \
+  -e . \
+  -e ./tests/tui-probe-extension.ts \
+  --model cursor/auto \
+  --no-session
+```
+
+Ask Cursor to call `cursor_bridge_probe`. A successful roundtrip displays the tool result `CURSOR_BRIDGE_TOOL_OK` before Cursor completes its response.
+
 ## Replace `pi-cursor-sdk`
 
 The current installation is an npm package recorded as `npm:pi-cursor-sdk` in `~/.pi/agent/settings.json` and installed under `~/.pi/agent/npm/node_modules/pi-cursor-sdk`.
