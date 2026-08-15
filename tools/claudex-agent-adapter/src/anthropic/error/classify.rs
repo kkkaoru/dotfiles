@@ -10,6 +10,7 @@ const UNKNOWN_SUBAGENT_MODEL_MARKER: &str = "does not have a recoverable configu
 const MISSING_REQUEST_MODEL_MARKER: &str = "request model is required";
 const UNAVAILABLE_PROVIDER_MODEL_MARKER: &str = "does not have an active route";
 const MISSING_MODEL_PROVIDER_MARKER: &str = "model provider";
+const MISSING_PI_ROUTE_EXTENSION_MARKER: &str = "pi route extension is missing or not a file";
 // Keep generic context-window errors on the session layer: it owns the
 // one-time fresh-thread retry. Only the provider's explicit oversized-prompt
 // diagnostic is terminal here, preventing Claude Code's retry storm without
@@ -45,6 +46,7 @@ pub(super) fn is_terminal_provider_configuration_error(error: &Error) -> bool {
             || message.contains(MISSING_REQUEST_MODEL_MARKER)
             || message.contains(UNAVAILABLE_PROVIDER_MODEL_MARKER)
             || (message.contains(MISSING_MODEL_PROVIDER_MARKER) && message.contains("not found"))
+            || message.contains(MISSING_PI_ROUTE_EXTENSION_MARKER)
             || message.contains(OVERSIZED_PROMPT_MARKER)
             || super::super::segment::contains_cline_credits_balance_marker(&message)
     })

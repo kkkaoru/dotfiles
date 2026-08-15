@@ -96,6 +96,19 @@ fn marks_missing_codex_model_provider_as_non_retryable() {
 }
 
 #[test]
+fn marks_missing_pi_route_extensions_as_non_retryable() {
+    let error = anyhow!(
+        "start Pi route provider `cursor` model `auto`: Pi route extension is missing or not a file: /missing/cursor.ts"
+    );
+
+    assert_eq!(error_type(&error), NON_RETRYABLE_ERROR_TYPE);
+    assert_eq!(
+        http_status(StatusCode::BAD_GATEWAY, &error),
+        StatusCode::BAD_REQUEST
+    );
+}
+
+#[test]
 fn marks_context_limit_failures_as_non_retryable() {
     let error = anyhow!(
         "Claude subscription failed: Prompt is too long; the request exceeds the context limit"

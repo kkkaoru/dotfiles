@@ -18,6 +18,19 @@ fn gateway() -> PiGateway {
 }
 
 #[tokio::test]
+async fn missing_extensions_identify_the_selected_pi_route() {
+    let root = tempfile::tempdir().expect("extension fixture");
+    let missing = root.path().join("missing.ts");
+    let error = PiGateway::spawn("cursor", "auto", &[missing.display().to_string()])
+        .await
+        .err()
+        .expect("missing extension");
+    let message = format!("{error:#}");
+    assert!(message.contains("provider `cursor` model `auto`"));
+    assert!(message.contains(&missing.display().to_string()));
+}
+
+#[tokio::test]
 async fn correlates_consecutive_turn_subscribers_by_unique_request_id() {
     let gateway = gateway();
     let first_events = gateway.subscribe_thread("session-thread");

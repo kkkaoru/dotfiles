@@ -49,7 +49,9 @@ impl PiGateway {
         if provider == "claudex" {
             bail!("Pi gateway recursion rejected provider `claudex`");
         }
-        let process = GatewayProcess::spawn(extensions).await?;
+        let process = GatewayProcess::spawn(extensions)
+            .await
+            .with_context(|| format!("start Pi route provider `{provider}` model `{model_id}`"))?;
         Ok(Arc::new(Self {
             provider: provider.to_owned(),
             model_id: model_id.to_owned(),

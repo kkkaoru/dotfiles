@@ -15,6 +15,36 @@ RESOLVER = ROOT / "resolve-provider-local-config.py"
 
 
 class ResolveProviderLocalConfigTests(unittest.TestCase):
+    def test_returns_base_config_when_override_changes_nothing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            base = root / "providers.json"
+            override = root / "providers.local.json"
+            output = root / "cache" / "providers.json"
+            base.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "piGatewayExtension": "../gateway.ts",
+                        "mainProviders": ["gpt"],
+                        "providers": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            override.write_text(json.dumps({"version": 1}), encoding="utf-8")
+
+            result = subprocess.run(
+                [sys.executable, str(RESOLVER), str(base), str(override), str(output)],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(Path(result.stdout.strip()), base)
+            self.assertFalse(output.exists())
+
     def test_resolves_extension_paths_from_their_source_configs(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
