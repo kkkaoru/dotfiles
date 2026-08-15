@@ -290,13 +290,33 @@ function claudex --description 'Run Claude Code with config-driven agent backend
     set -q CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES; and set subscription_timeout_minutes "$CLAUDEX_SUBSCRIPTION_TIMEOUT_MINUTES"
     set -a adapter_args --subscription-timeout-minutes "$subscription_timeout_minutes"
 
+    # --provider-interface configures the adapter itself. Keep every other
+    # argument on the Claude Code side of `--`, preserving the default path.
+    set -l claude_args
+    set -l expects_provider_interface 0
+    for argument in $argv
+        if test $expects_provider_interface -eq 1
+            set -a adapter_args --provider-interface "$argument"
+            set expects_provider_interface 0
+            continue
+        end
+        if test "$argument" = --provider-interface
+            set expects_provider_interface 1
+            continue
+        end
+        set -a claude_args "$argument"
+    end
+    if test $expects_provider_interface -eq 1
+        echo "claudex: --provider-interface requires a value" >&2
+        return 2
+    end
+
     # Routing is injected by the CLAUDEX_ACTIVE-gated global hook. Avoid a
     # default --agent here: Claude Code persists it as the resumed session's
     # agent setting and replaces the session display name with the agent name.
-    set -l claude_args $argv
     set -l has_cli_effort 0
     set -l restores_session 0
-    for argument in $argv
+    for argument in $claude_args
         switch $argument
             case --effort '--effort=*'
                 set has_cli_effort 1

@@ -18,6 +18,45 @@ fn fish_launcher_uses_the_shared_provider_config() {
 }
 
 #[test]
+fn fish_launcher_routes_only_provider_interface_to_the_adapter() {
+    let home = shared_provider_fixture();
+    let function = launcher_function();
+    let arguments = run_fish_launcher(
+        &function,
+        &home,
+        "claudex --provider-interface pi --resume session-1 prompt-text",
+    );
+    let (adapter, claude) = arguments
+        .split_once("\n--\n")
+        .expect("adapter and Claude arguments");
+    assert!(
+        adapter.ends_with("--provider-interface\npi"),
+        "adapter arguments: {arguments}"
+    );
+    assert!(!claude.contains("--provider-interface"));
+    assert_eq!(claude, "--resume\nsession-1\nprompt-text\n");
+
+    let missing = Command::new("fish")
+        .args([
+            "-c",
+            &format!(
+                "source '{}'; claudex --provider-interface",
+                function.display()
+            ),
+        ])
+        .env("HOME", home.path())
+        .env_remove("CLAUDEX_PROVIDER_CONFIG")
+        .output()
+        .expect("run missing provider interface value");
+    assert_eq!(missing.status.code(), Some(2));
+    assert!(
+        String::from_utf8(missing.stderr)
+            .expect("UTF-8 missing value error")
+            .ends_with("claudex: --provider-interface requires a value\n")
+    );
+}
+
+#[test]
 fn fish_launcher_keeps_command_tools_available_for_new_and_resumed_sessions() {
     let home = shared_provider_fixture();
     let function = launcher_function();
@@ -201,6 +240,7 @@ fn assert_shared_provider_args(arguments: &str) {
     assert!(arguments.contains("CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS=40\n"));
     assert!(arguments.contains(".config/claudex/providers.json\n"));
     assert!(!arguments.contains("--model\n"));
+    assert!(!arguments.contains("--provider-interface\n"));
     assert!(arguments.contains("--inherit-claude-model\n"));
     assert!(arguments.contains("--subscription-max-processes\n20\n"));
     assert!(!arguments.contains("--allowedTools\nWebSearch,WebFetch\n"));
