@@ -56,6 +56,8 @@ bun run check
 pi --approve -e . --model cursor/auto
 ```
 
+Run unit tests with `bun --cwd tools/pi-my-cursor-provider test` (vitest). A bare `bun test` in this directory uses bun's runner and fails on `importOriginal`.
+
 ### Manual TUI tool roundtrip
 
 `tests/tui-probe-extension.ts` is a manual fixture for verifying that a Cursor custom-tool callback crosses the provider bridge, is executed by pi, and returns its result to the same Cursor run. Start both extensions:
