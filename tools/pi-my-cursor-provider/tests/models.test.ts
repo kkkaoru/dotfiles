@@ -3,7 +3,9 @@ import type { RefreshModelsContext } from "@earendil-works/pi-ai";
 import { expect, test, vi } from "vitest";
 import {
   cursorCatalogToModels,
+  cursorModelSelection,
   FALLBACK_CURSOR_MODELS,
+  recordCursorCatalog,
   refreshCursorModels,
 } from "../src/models.ts";
 
@@ -16,9 +18,22 @@ const CATALOG: SDKModel[] = [
   {
     id: "gpt-5.6-sol",
     displayName: "GPT-5.6 Sol",
+    parameters: [
+      {
+        id: "reasoning",
+        displayName: "Reasoning",
+        values: ["none", "low", "medium", "high", "xhigh", "max"].map((value) => ({
+          value,
+        })),
+      },
+    ],
     variants: [
       {
-        params: [{ id: "context", value: "272k" }],
+        params: [
+          { id: "context", value: "272k" },
+          { id: "reasoning", value: "medium" },
+          { id: "fast", value: "false" },
+        ],
         displayName: "GPT-5.6 Sol",
         isDefault: true,
       },
@@ -57,7 +72,12 @@ test("provides multiple useful fallback models", () => {
 test("converts the live Cursor catalog and context variants", () => {
   expect(cursorCatalogToModels(CATALOG)).toMatchObject([
     { id: "auto", name: "Auto", contextWindow: 256_000 },
-    { id: "gpt-5.6-sol", name: "GPT-5.6 Sol", contextWindow: 1_000_000 },
+    {
+      id: "gpt-5.6-sol",
+      name: "GPT-5.6 Sol",
+      contextWindow: 1_000_000,
+      reasoning: true,
+    },
   ]);
 });
 
@@ -66,6 +86,44 @@ test("adds auto when a live catalog omits it", () => {
     "auto",
     "gpt-5.6-sol",
   ]);
+});
+
+test("loads live effort capability on the first explicit-model request", async () => {
+  const cursor = await import("@cursor/sdk");
+  const list = vi.spyOn(cursor.Cursor.models, "list").mockResolvedValue(CATALOG);
+
+  await expect(cursorModelSelection("gpt-5.6-sol", "high", "key")).resolves.toMatchObject({
+    id: "gpt-5.6-sol",
+    params: expect.arrayContaining([{ id: "reasoning", value: "high" }]),
+  });
+  expect(list).toHaveBeenCalledWith({ apiKey: "key" });
+});
+
+test("maps requested effort while preserving live default parameters", async () => {
+  recordCursorCatalog(CATALOG);
+
+  await expect(cursorModelSelection("gpt-5.6-sol", "max", "key")).resolves.toStrictEqual({
+    id: "gpt-5.6-sol",
+    params: [
+      { id: "context", value: "272k" },
+      { id: "reasoning", value: "max" },
+      { id: "fast", value: "false" },
+    ],
+  });
+});
+
+test("warns instead of silently dropping unsupported auto effort", async () => {
+  recordCursorCatalog(CATALOG);
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+  await expect(cursorModelSelection("auto", "xhigh", "key")).resolves.toStrictEqual({
+    id: "auto",
+  });
+  await cursorModelSelection("auto", "xhigh", "key");
+  expect(warn).toHaveBeenCalledTimes(1);
+  expect(warn).toHaveBeenCalledWith(
+    "Cursor model auto does not expose a compatible effort parameter; requested xhigh was not forwarded.",
+  );
 });
 
 test("uses fallbacks without network or credentials", async () => {

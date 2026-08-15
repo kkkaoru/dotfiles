@@ -159,6 +159,51 @@ test("streams Cursor text with usage through a fresh agent", async () => {
   });
 });
 
+test("forwards explicit-model effort with the live default variant", async () => {
+  installScenario({
+    async onSend() {
+      return result("hello");
+    },
+  });
+  const { recordCursorCatalog } = await import("../src/models.ts");
+  recordCursorCatalog([
+    {
+      id: "claude-sonnet-4-6",
+      displayName: "Sonnet 4.6",
+      parameters: [
+        {
+          id: "effort",
+          values: ["low", "medium", "high", "max"].map((value) => ({ value })),
+        },
+      ],
+      variants: [
+        {
+          displayName: "Default",
+          isDefault: true,
+          params: [
+            { id: "thinking", value: "true" },
+            { id: "context", value: "1m" },
+            { id: "effort", value: "medium" },
+          ],
+        },
+      ],
+    },
+  ]);
+  const { streamCursor } = await import("../src/provider.ts");
+  const explicitModel = { ...MODEL, id: "claude-sonnet-4-6", name: "Sonnet 4.6" };
+
+  await collect(streamCursor(explicitModel, baseContext(), { apiKey: "key", reasoning: "max" }));
+
+  expect(createAgentMock.mock.calls[0]?.[0].model).toStrictEqual({
+    id: "claude-sonnet-4-6",
+    params: [
+      { id: "thinking", value: "true" },
+      { id: "context", value: "1m" },
+      { id: "effort", value: "max" },
+    ],
+  });
+});
+
 test("bridges custom tools and continues the same live run with its result", async () => {
   let toolResult: unknown;
   installScenario({

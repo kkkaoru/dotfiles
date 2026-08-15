@@ -18,6 +18,7 @@ import type {
   ToolResultMessage,
 } from "@earendil-works/pi-ai";
 import { buildCursorMessage, findToolResults, toolResultToSdk, toSdkJsonValue } from "./context.ts";
+import { cursorModelSelection } from "./models.ts";
 import { createCursorOutput, type CursorOutput } from "./stream-output.ts";
 
 interface PendingInvocation {
@@ -90,9 +91,14 @@ class CursorSession {
     const customTools = Object.fromEntries(
       (this.context.tools ?? []).map((tool) => [tool.name, this.createCustomTool(tool)]),
     );
+    const model = await cursorModelSelection(
+      this.model.id,
+      this.options?.reasoning,
+      this.options?.apiKey,
+    );
     this.agent = await Agent.create({
       ...(this.options?.apiKey ? { apiKey: this.options.apiKey } : {}),
-      model: { id: this.model.id },
+      model,
       local: {
         cwd: process.cwd(),
         settingSources: [],
