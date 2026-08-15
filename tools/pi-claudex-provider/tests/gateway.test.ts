@@ -248,3 +248,142 @@ describe("gateway request coordination", () => {
     ]);
   });
 });
+
+describe("web_search handler", () => {
+  it("falls back to Exa API for non-cursor providers", async () => {
+    const originalKey = process.env["EXA_API_KEY"];
+    delete process.env["EXA_API_KEY"];
+    try {
+      const messages: ServerMessage[] = [];
+      const reg = {
+        getAvailable: () => [MODEL],
+        find: (provider: string, modelId: string) =>
+          provider === MODEL.provider && modelId === MODEL.id ? MODEL : undefined,
+      } as unknown as ExtensionContext["modelRegistry"];
+      const gateway = new GatewayConnection(reg, {
+        write: async (message) => {
+          messages.push(message);
+        },
+      });
+      gateway.handle({
+        version: 1,
+        type: "web_search",
+        id: "ws1",
+        token: TOKEN,
+        provider: MODEL.provider,
+        modelId: MODEL.id,
+        query: "test query",
+      });
+      await settle();
+      expect(messages).toHaveLength(1);
+      expect(messages[0]?.type).toBe("web_search_error");
+      expect((messages[0] as Record<string, unknown>)["message"]).toContain("EXA_API_KEY");
+    } finally {
+      if (originalKey !== undefined) {
+        process.env["EXA_API_KEY"] = originalKey;
+      }
+    }
+  });
+
+  it("returns error when model is not found", async () => {
+    const messages: ServerMessage[] = [];
+    const reg = {
+      getAvailable: () => [],
+      find: () => undefined,
+    } as unknown as ExtensionContext["modelRegistry"];
+    const gateway = new GatewayConnection(reg, {
+      write: async (message) => {
+        messages.push(message);
+      },
+    });
+    gateway.handle({
+      version: 1,
+      type: "web_search",
+      id: "ws2",
+      token: TOKEN,
+      provider: "nonexistent",
+      modelId: "missing",
+      query: "test",
+    });
+    await settle();
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.type).toBe("web_search_error");
+    expect((messages[0] as Record<string, unknown>)["message"]).toContain("Model not found");
+  });
+
+  it("calls complete() and parses results for cursor provider", async () => {
+    const cursorModel = { ...MODEL, provider: "cursor", id: "auto" };
+    const completeMock = vi.fn().mockResolvedValue({
+      content: [
+        {
+          type: "text",
+          text: ["Title: Test Result", "URL: https://example.com", "Snippet: A test snippet"].join(
+            "\n",
+          ),
+        },
+      ],
+    });
+    const reg = {
+      getAvailable: () => [cursorModel],
+      find: (provider: string, modelId: string) =>
+        provider === "cursor" && modelId === "auto" ? cursorModel : undefined,
+      complete: completeMock,
+    } as unknown as ExtensionContext["modelRegistry"];
+    const messages: ServerMessage[] = [];
+    const gateway = new GatewayConnection(reg, {
+      write: async (message) => {
+        messages.push(message);
+      },
+    });
+    gateway.handle({
+      version: 1,
+      type: "web_search",
+      id: "ws3",
+      token: TOKEN,
+      provider: "cursor",
+      modelId: "auto",
+      query: "bitcoin price",
+    });
+    await settle();
+    expect(completeMock).toHaveBeenCalledTimes(1);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.type).toBe("web_search_result");
+    const result = messages[0] as Record<string, unknown>;
+    expect(result["provider"]).toBe("cursor");
+    expect(result["modelId"]).toBe("auto");
+    const results = result["results"] as { title: string; url: string; snippet: string }[];
+    expect(results).toHaveLength(1);
+    expect(results[0]?.title).toBe("Test Result");
+    expect(results[0]?.url).toBe("https://example.com");
+  });
+});
+
+it("returns error when cursor complete() throws", async () => {
+  const cursorModel = { ...MODEL, provider: "cursor", id: "auto" };
+  const completeMock = vi.fn().mockRejectedValue(new Error("cursor api down"));
+  const reg = {
+    getAvailable: () => [cursorModel],
+    find: (prov: string, mid: string) =>
+      prov === "cursor" && mid === "auto" ? cursorModel : undefined,
+    complete: completeMock,
+  } as unknown as ExtensionContext["modelRegistry"];
+  const messages: ServerMessage[] = [];
+  const gw = new GatewayConnection(reg, {
+    write: async (msg) => {
+      messages.push(msg);
+    },
+  });
+  gw.handle({
+    version: 1,
+    type: "web_search",
+    id: "ws-cursor-err",
+    token: TOKEN,
+    provider: "cursor",
+    modelId: "auto",
+    query: "test",
+  });
+  await settle();
+  expect(messages).toHaveLength(1);
+  expect(messages[0]?.type).toBe("web_search_error");
+  expect((messages[0] as Record<string, unknown>)["message"]).toContain("cursor api down");
+});

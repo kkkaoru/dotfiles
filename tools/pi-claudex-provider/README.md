@@ -53,6 +53,34 @@ bun run --cwd tools/pi-claudex-provider check
 pi install "$PWD/tools/pi-claudex-provider"
 ```
 
+## Thinking display characteristics (measured)
+
+Gateway protocol v1 forwards `thinking_start` / `thinking_delta` / `thinking_end`
+the moment Pi emits them; there is no buffering on the socket path (verified with
+live socket captures). Whether a TUI can show live reasoning therefore depends
+entirely on what the upstream provider streams. Measured behavior by model
+family (2026-08-15, pi-ai 0.84.2):
+
+| Family                             | Pi provider(s)                               | Live incremental thinking | Notes                                                                                                                                                                                                                                                                                                                                                |
+| ---------------------------------- | -------------------------------------------- | ------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Qwen (thinkingFormat `qwen`)       | `qwen-token-plan-individual`                 | Yes                       | 123 deltas / 7.6 s, median gap 51 ms on a small prompt.                                                                                                                                                                                                                                                                                              |
+| xAI Grok                           | `xai`                                        | Yes                       | 34 deltas / 18 s; pauses only when the model pauses.                                                                                                                                                                                                                                                                                                 |
+| OpenAI responses (GPT)             | `openai-codex`, `github-copilot`, `opencode` | No — end burst only       | Reasoning summaries are generated after reasoning completes; `reasoning_text` (raw CoT) is never streamed to API consumers. Example: `gpt-5.6-luna` streams ~2 summary deltas only after the whole reasoning phase.                                                                                                                                  |
+| `gpt-5.3-codex-spark` specifically | `openai-codex` (ChatGPT backend only)        | No — none at all          | The ChatGPT backend rejects `reasoning.summary` for this model (HTTP 400 `unsupported_parameter`); with `summary` omitted the stream carries zero `reasoning_summary_*` events even though `reasoning_tokens` are consumed (957 on a small prompt). `done.message` also contains an empty thinking block. No other Pi provider offers this model id. |
+
+Consequences for consumers:
+
+- A "thought for N seconds with no visible deltas" experience is the expected
+  upstream behavior for all OpenAI responses models, not a gateway defect.
+- For `gpt-5.3-codex-spark` the consumer sees no thinking block at all. This
+  cannot be fixed on the client side: the backend simply does not expose the
+  data. Alternatives with live thinking are Qwen and xAI routes; OpenAI routes
+  via `github-copilot` (`gpt-5.3-codex`, non-spark) at least surface a short
+  summary at the end of the reasoning phase.
+- Do not synthesize fake `thinking_delta` pacing to smooth the end burst: it
+  misrepresents timing, pollutes replayed thinking blocks, and destroys latency
+  forensics on the wire.
+
 ## Isolated verification
 
 Pi records local packages relative to its normal `~/.pi/agent` directory. Copying

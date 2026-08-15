@@ -8,7 +8,9 @@ import {
   type ListModelsMessage,
   type ServerMessage,
   type StreamRequestMessage,
+  type WebSearchRequest,
 } from "./protocol.ts";
+import { parseSearchTriplets } from "./search-parser.ts";
 
 type ModelRegistry = ExtensionContext["modelRegistry"];
 
@@ -41,6 +43,10 @@ export class GatewayConnection {
     }
     if (message.type === "list_models") {
       observe(this.listModels(message));
+      return;
+    }
+    if (message.type === "web_search") {
+      observe(this.webSearch(message));
       return;
     }
     this.startRequest(message);
@@ -116,6 +122,125 @@ export class GatewayConnection {
         maxTokens: model.maxTokens,
       }));
     await this.writer.write(serverMessage("models", { id: message.id, models }));
+  }
+
+  private async webSearch(request: WebSearchRequest): Promise<void> {
+    // eslint-disable-next-line unicorn/no-array-method-this-argument -- ModelRegistry.find
+    const model = this.registry.find(request.provider, request.modelId);
+    if (model === undefined) {
+      await this.sendWebSearchError(
+        request,
+        `Model not found: ${request.provider}/${request.modelId}`,
+      );
+      return;
+    }
+    if (model.provider === "cursor") {
+      await this.cursorWebSearch(request, model);
+      return;
+    }
+    await this.exaWebSearch(request, model);
+  }
+
+  private async sendWebSearchError(request: WebSearchRequest, message: string): Promise<void> {
+    // eslint-disable-next-line unicorn/no-array-method-this-argument -- ModelRegistry.find
+    const model = this.registry.find(request.provider, request.modelId);
+    await this.writer.write(
+      serverMessage("web_search_error", {
+        id: request.id,
+        provider: request.provider,
+        modelId: request.modelId,
+        message,
+        modelProvider: model?.provider,
+      }),
+    );
+  }
+
+  private async cursorWebSearch(
+    request: WebSearchRequest,
+    model: { provider: string; id: string },
+  ): Promise<void> {
+    try {
+      const result = await this.registry.complete(model as never, {
+        systemPrompt: "You are a helpful assistant with live web search capability.",
+        messages: [
+          {
+            role: "user" as const,
+            content: `Search the web for "${request.query}". Return ONLY raw search results as Title:/URL:/Snippet: triplets. Include exactly 5 results. Do NOT add any interpretation, summary, or commentary.`,
+            timestamp: Date.now(),
+          },
+        ],
+        tools: [],
+      });
+      const fullText = result.content
+        .filter((block) => block.type === "text" && "text" in block)
+        .map((block) => (block as { text: string }).text)
+        .join("\n");
+      const parsed = parseSearchTriplets(fullText);
+      await this.writer.write(
+        serverMessage("web_search_result", {
+          id: request.id,
+          provider: model.provider,
+          modelId: model.id,
+          results: parsed,
+        }),
+      );
+    } catch (error: unknown) {
+      await this.sendWebSearchError(request, errorMessage(error));
+    }
+  }
+
+  private async exaWebSearch(
+    request: WebSearchRequest,
+    model: { provider: string; id: string },
+  ): Promise<void> {
+    const apiKey = process.env["EXA_API_KEY"];
+    if (apiKey === undefined || apiKey === "") {
+      await this.sendWebSearchError(
+        request,
+        "EXA_API_KEY environment variable is not set. Configure it to enable web search for non-Cursor providers.",
+      );
+      return;
+    }
+    try {
+      const response = await fetch("https://api.exa.ai/search", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          query: request.query,
+          numResults: 5,
+          contents: { text: true },
+        }),
+      });
+      if (!response.ok) {
+        const body = await response.text();
+        await this.sendWebSearchError(
+          request,
+          `Exa API error (${response.status}): ${body.slice(0, 200)}`,
+        );
+        return;
+      }
+      const data = (await response.json()) as {
+        results?: { title?: string; url?: string; text?: string }[];
+      };
+      const results = (data.results ?? []).map((entry) => ({
+        title: entry.title ?? "",
+        url: entry.url ?? "",
+        snippet: (entry.text ?? "").slice(0, 300),
+      }));
+      await this.writer.write(
+        serverMessage("web_search_result", {
+          id: request.id,
+          provider: model.provider,
+          modelId: model.id,
+          results,
+        }),
+      );
+    } catch (error: unknown) {
+      await this.sendWebSearchError(request, `Exa search failed: ${errorMessage(error)}`);
+    }
   }
 
   private async writeProtocolError(id: string, message: string): Promise<void> {

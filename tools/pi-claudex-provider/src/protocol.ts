@@ -48,8 +48,43 @@ export interface CancelMessage extends ClientBase {
   id: string;
 }
 
-export type ClientMessage = HelloMessage | ListModelsMessage | StreamRequestMessage | CancelMessage;
+export interface WebSearchRequest extends ClientBase {
+  type: "web_search";
+  id: string;
+  provider: string;
+  modelId: string;
+  query: string;
+}
+
+export type ClientMessage =
+  | HelloMessage
+  | ListModelsMessage
+  | StreamRequestMessage
+  | CancelMessage
+  | WebSearchRequest;
 export type ServerMessage = JsonRecord & { version: 1; type: string; id?: string };
+
+export interface WebSearchResult {
+  title: string;
+  url: string;
+  snippet: string;
+}
+
+export interface WebSearchResultMessage extends ServerMessage {
+  type: "web_search_result";
+  id: string;
+  provider: string;
+  modelId: string;
+  results: WebSearchResult[];
+}
+
+export interface WebSearchErrorMessage extends ServerMessage {
+  type: "web_search_error";
+  id: string;
+  provider: string;
+  modelId: string;
+  message: string;
+}
 
 export function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -268,6 +303,17 @@ export function parseClientMessage(line: string): ClientMessage {
   const id = requiredIdentifier(value, "id");
   if (type === "list_models" || type === "cancel") {
     return { version: PROTOCOL_VERSION, type, id, token: requiredString(value, "token") };
+  }
+  if (type === "web_search") {
+    return {
+      version: PROTOCOL_VERSION,
+      type,
+      id,
+      token: requiredString(value, "token"),
+      provider: requiredIdentifier(value, "provider", id),
+      modelId: requiredIdentifier(value, "modelId", id),
+      query: requiredString(value, "query"),
+    };
   }
   if (type !== "request") {
     throw new GatewayError(`Unsupported gateway message type: ${type}`, id);
