@@ -34,6 +34,37 @@ function claudex-hot-swap --description 'Replace an idle claudex adapter on the 
         return 2
     end
 
+    set -l provider_interface pi
+    set -q CLAUDEX_PROVIDER_INTERFACE; and set provider_interface "$CLAUDEX_PROVIDER_INTERFACE"
+    set -l expects_provider_interface 0
+    set -l has_provider_interface 0
+    for argument in $argv
+        if test $expects_provider_interface -eq 1
+            if test $has_provider_interface -eq 1
+                echo "claudex-hot-swap: --provider-interface must not be repeated" >&2
+                return 2
+            end
+            set provider_interface "$argument"
+            set has_provider_interface 1
+            set expects_provider_interface 0
+            continue
+        end
+        if test "$argument" = --provider-interface
+            set expects_provider_interface 1
+            continue
+        end
+        echo "claudex-hot-swap: unexpected argument: $argument" >&2
+        return 2
+    end
+    if test $expects_provider_interface -eq 1
+        echo "claudex-hot-swap: --provider-interface requires a value" >&2
+        return 2
+    end
+    if not contains -- "$provider_interface" pi direct
+        echo "claudex-hot-swap: provider interface must be `pi` or `direct`" >&2
+        return 2
+    end
+
     set -l build (command "$adapter" build-id)
     echo "claudex-hot-swap: replacing $listen with $build ($provider_config)" >&2
     # Interactive hot-swap defaults to one banner. after-install forces 0 then
@@ -45,7 +76,7 @@ function claudex-hot-swap --description 'Replace an idle claudex adapter on the 
                 set notify_env 0
         end
     end
-    set -l url (env CLAUDEX_MACOS_NOTIFY=$notify_env command "$adapter" hot-swap --provider-config "$provider_config" --listen "$listen")
+    set -l url (env CLAUDEX_MACOS_NOTIFY=$notify_env command "$adapter" hot-swap --provider-config "$provider_config" --listen "$listen" --provider-interface "$provider_interface")
     or return $status
     echo "claudex-hot-swap: active listener $url" >&2
 

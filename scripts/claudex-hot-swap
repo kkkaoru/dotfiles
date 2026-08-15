@@ -38,6 +38,42 @@ if [ ! -r "$PROVIDER_CONFIG" ]; then
   exit 2
 fi
 
+PROVIDER_INTERFACE=pi
+if [ -n "${CLAUDEX_PROVIDER_INTERFACE:-}" ]; then
+  PROVIDER_INTERFACE="$CLAUDEX_PROVIDER_INTERFACE"
+fi
+EXPECTS_PROVIDER_INTERFACE=0
+HAS_PROVIDER_INTERFACE=0
+for argument in "$@"; do
+  if [ "$EXPECTS_PROVIDER_INTERFACE" -eq 1 ]; then
+    if [ "$HAS_PROVIDER_INTERFACE" -eq 1 ]; then
+      echo "claudex-hot-swap: --provider-interface must not be repeated" >&2
+      exit 2
+    fi
+    PROVIDER_INTERFACE="$argument"
+    HAS_PROVIDER_INTERFACE=1
+    EXPECTS_PROVIDER_INTERFACE=0
+    continue
+  fi
+  if [ "$argument" = --provider-interface ]; then
+    EXPECTS_PROVIDER_INTERFACE=1
+    continue
+  fi
+  echo "claudex-hot-swap: unexpected argument: $argument" >&2
+  exit 2
+done
+if [ "$EXPECTS_PROVIDER_INTERFACE" -eq 1 ]; then
+  echo "claudex-hot-swap: --provider-interface requires a value" >&2
+  exit 2
+fi
+case "$PROVIDER_INTERFACE" in
+  pi|direct) ;;
+  *)
+    echo "claudex-hot-swap: provider interface must be \`pi\` or \`direct\`" >&2
+    exit 2
+    ;;
+esac
+
 BUILD=$("$ADAPTER" build-id)
 echo "claudex-hot-swap: replacing $LISTEN with $BUILD ($PROVIDER_CONFIG)" >&2
 # Interactive hot-swap defaults to one banner. after-install forces
@@ -46,7 +82,7 @@ case "${CLAUDEX_MACOS_NOTIFY-}" in
   0|false|FALSE|no|NO) notify_env=0 ;;
   *) notify_env=1 ;;
 esac
-URL=$(CLAUDEX_MACOS_NOTIFY="$notify_env" "$ADAPTER" hot-swap --provider-config "$PROVIDER_CONFIG" --listen "$LISTEN")
+URL=$(CLAUDEX_MACOS_NOTIFY="$notify_env" "$ADAPTER" hot-swap --provider-config "$PROVIDER_CONFIG" --listen "$LISTEN" --provider-interface "$PROVIDER_INTERFACE")
 echo "claudex-hot-swap: active listener $URL" >&2
 
 if command -v curl >/dev/null 2>&1; then

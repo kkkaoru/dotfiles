@@ -94,11 +94,9 @@ fn fish_launcher_defaults_to_pi_and_preserves_interface_overrides() {
             .output()
             .expect("run invalid provider interface");
         assert_eq!(output.status.code(), Some(2));
-        assert!(
-            String::from_utf8(output.stderr)
-                .expect("UTF-8 provider interface error")
-                .ends_with(expected)
-        );
+        assert!(String::from_utf8(output.stderr)
+            .expect("UTF-8 provider interface error")
+            .ends_with(expected));
     }
 
     let invalid_environment = Command::new("fish")
@@ -112,11 +110,167 @@ fn fish_launcher_defaults_to_pi_and_preserves_interface_overrides() {
         .output()
         .expect("run invalid environment provider interface");
     assert_eq!(invalid_environment.status.code(), Some(2));
-    assert!(
-        String::from_utf8(invalid_environment.stderr)
-            .expect("UTF-8 provider interface error")
-            .ends_with("claudex: provider interface must be `pi` or `direct`\n")
+    assert!(String::from_utf8(invalid_environment.stderr)
+        .expect("UTF-8 provider interface error")
+        .ends_with("claudex: provider interface must be `pi` or `direct`\n"));
+}
+
+#[test]
+fn hot_swap_wrappers_default_to_pi_and_preserve_overrides() {
+    let home = shared_provider_fixture();
+    let fish = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../.config/fish/functions/claudex-hot-swap.fish");
+    let posix =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/claudex-hot-swap");
+    write_fake_curl(home.path());
+
+    let default = run_hot_swap(&fish, &posix, home.path(), None, &[]);
+    assert_hot_swap_interface(&default, "pi");
+
+    let environment = run_hot_swap(&fish, &posix, home.path(), Some("direct"), &[]);
+    assert_hot_swap_interface(&environment, "direct");
+
+    let cli = run_hot_swap(
+        &fish,
+        &posix,
+        home.path(),
+        Some("direct"),
+        &["--provider-interface", "pi"],
     );
+    assert_hot_swap_interface(&cli, "pi");
+
+    for (arguments, expected) in [
+        (
+            &["--provider-interface"] as &[&str],
+            "claudex-hot-swap: --provider-interface requires a value\n",
+        ),
+        (
+            &["--provider-interface", "invalid"],
+            "claudex-hot-swap: provider interface must be `pi` or `direct`\n",
+        ),
+        (
+            &[
+                "--provider-interface",
+                "pi",
+                "--provider-interface",
+                "direct",
+            ],
+            "claudex-hot-swap: --provider-interface must not be repeated\n",
+        ),
+    ] {
+        assert_hot_swap_error(&fish, home.path(), arguments, expected);
+        assert_hot_swap_error(&posix, home.path(), arguments, expected);
+    }
+}
+
+fn write_fake_curl(home: &std::path::Path) {
+    let curl = home.join(".local/bin/curl");
+    fs::write(
+        &curl,
+        "#!/bin/sh\nprintf '%s\\n' '{\"build_id\":\"test\",\"pid\":1}'\n",
+    )
+    .expect("fake curl");
+    let mut permissions = fs::metadata(&curl)
+        .expect("fake curl metadata")
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&curl, permissions).expect("executable fake curl");
+}
+
+fn assert_hot_swap_interface(output: &str, expected: &str) {
+    let flattened = output.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        flattened.contains(&format!("--provider-interface {expected}")),
+        "hot-swap arguments: {output}"
+    );
+}
+
+fn hot_swap_fish_command(function: &std::path::Path, arguments: &[&str]) -> String {
+    let quoted = arguments.join(" ");
+    format!("source '{}'; claudex-hot-swap {quoted}", function.display())
+}
+
+fn assert_hot_swap_error(
+    program: &std::path::Path,
+    home: &std::path::Path,
+    arguments: &[&str],
+    expected: &str,
+) {
+    let is_posix = program
+        .file_name()
+        .is_some_and(|name| name == "claudex-hot-swap");
+    let output = if is_posix {
+        let mut args = vec![program.to_string_lossy().into_owned()];
+        args.extend(arguments.iter().map(|value| (*value).to_owned()));
+        Command::new("sh")
+            .args(args)
+            .env("HOME", home)
+            .env_remove("CLAUDEX_PROVIDER_INTERFACE")
+            .output()
+            .expect("run posix hot-swap error")
+    } else {
+        Command::new("fish")
+            .args(["-c", &hot_swap_fish_command(program, arguments)])
+            .env("HOME", home)
+            .env_remove("CLAUDEX_PROVIDER_INTERFACE")
+            .output()
+            .expect("run fish hot-swap error")
+    };
+    assert_eq!(output.status.code(), Some(2));
+    assert!(String::from_utf8(output.stderr)
+        .expect("UTF-8 hot-swap error")
+        .ends_with(expected));
+}
+
+fn run_hot_swap(
+    fish: &std::path::Path,
+    posix: &std::path::Path,
+    home: &std::path::Path,
+    environment: Option<&str>,
+    arguments: &[&str],
+) -> String {
+    let mut combined = String::new();
+    for (program, args) in [
+        (
+            "fish",
+            vec!["-c".to_owned(), hot_swap_fish_command(fish, arguments)],
+        ),
+        ("sh", {
+            let mut args = vec![posix.to_string_lossy().into_owned()];
+            args.extend(arguments.iter().map(|value| (*value).to_owned()));
+            args
+        }),
+    ] {
+        let mut command = Command::new(program);
+        command
+            .args(args)
+            .env("HOME", home)
+            .env(
+                "PATH",
+                format!(
+                    "{}:{}",
+                    home.join(".local/bin").display(),
+                    std::env::var("PATH").unwrap_or_default()
+                ),
+            )
+            .env_remove("CLAUDEX_PROVIDER_CONFIG");
+        match environment {
+            Some(value) => {
+                command.env("CLAUDEX_PROVIDER_INTERFACE", value);
+            }
+            None => {
+                command.env_remove("CLAUDEX_PROVIDER_INTERFACE");
+            }
+        }
+        let output = command.output().expect("run hot-swap wrapper");
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        combined.push_str(&String::from_utf8(output.stdout).expect("UTF-8 hot-swap arguments"));
+    }
+    combined
 }
 
 #[test]
@@ -141,16 +295,12 @@ fn fish_launcher_keeps_command_tools_available_for_new_and_resumed_sessions() {
     let (adapter_arguments, _) = resumed
         .split_once("\n--\n")
         .expect("adapter and Claude arguments");
-    assert!(
-        !adapter_arguments
-            .lines()
-            .any(|argument| argument == "--model")
-    );
-    assert!(
-        adapter_arguments
-            .lines()
-            .any(|argument| argument == "--inherit-claude-model")
-    );
+    assert!(!adapter_arguments
+        .lines()
+        .any(|argument| argument == "--model"));
+    assert!(adapter_arguments
+        .lines()
+        .any(|argument| argument == "--inherit-claude-model"));
 
     let explicit = run_fish_launcher(
         &function,
@@ -294,12 +444,10 @@ fn assert_shared_provider_args(arguments: &str) {
     assert!(arguments.contains("CLAUDEX_ACTIVE=1\n"));
     assert!(arguments.contains("CLAUDEX_MAIN_MODEL=sonnet[1m]\n"));
     assert!(arguments.contains("CLAUDEX_MAIN_MODEL_KNOWN=1\n"));
-    assert!(
-        arguments
-            .lines()
-            .any(|line| line.starts_with("CLAUDE_CONFIG_DIR=")
-                && line.contains(".config/claudex/claude-config"))
-    );
+    assert!(arguments
+        .lines()
+        .any(|line| line.starts_with("CLAUDE_CONFIG_DIR=")
+            && line.contains(".config/claudex/claude-config")));
     assert!(arguments.contains("CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY=1\n"));
     assert!(arguments.contains("CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS=40\n"));
     assert!(arguments.contains(".config/claudex/providers.json\n"));
@@ -323,10 +471,8 @@ fn assert_shared_provider_settings(home: &tempfile::TempDir, stderr: &[u8]) {
     )
     .expect("isolated settings after launch");
     assert!(isolated_settings.contains("\"model\": \"sonnet[1m]\""));
-    assert!(
-        String::from_utf8_lossy(stderr)
-            .contains("current sonnet[1m], high; request model authoritative")
-    );
+    assert!(String::from_utf8_lossy(stderr)
+        .contains("current sonnet[1m], high; request model authoritative"));
 }
 
 fn assert_settings_restore_modes(function: &std::path::Path, home: &tempfile::TempDir) {
@@ -660,10 +806,8 @@ fn fish_launcher_uses_claude_settings_model_and_effort_when_available() {
     )));
     assert!(arguments.ends_with("--\nsettings-smoke\n"));
     assert_no_implicit_agent(&arguments);
-    assert!(
-        String::from_utf8_lossy(&output.stderr)
-            .contains("current sonnet[1m], high; request model authoritative")
-    );
+    assert!(String::from_utf8_lossy(&output.stderr)
+        .contains("current sonnet[1m], high; request model authoritative"));
 }
 
 #[test]
@@ -671,16 +815,12 @@ fn fish_config_sets_the_plain_claude_subagent_limit() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
     let config =
         fs::read_to_string(root.join(".config/fish/config.fish")).expect("fish configuration");
-    assert!(
-        config
-            .lines()
-            .any(|line| line.contains("CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS"))
-    );
-    assert!(
-        config
-            .lines()
-            .any(|line| line.contains("or set -gx CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS 40"))
-    );
+    assert!(config
+        .lines()
+        .any(|line| line.contains("CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS")));
+    assert!(config
+        .lines()
+        .any(|line| line.contains("or set -gx CLAUDE_CODE_MAX_CONCURRENT_SUBAGENTS 40")));
     assert!(
         config.lines().any(|line| {
             line.contains(
