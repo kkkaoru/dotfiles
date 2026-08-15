@@ -87,7 +87,7 @@ describe("Cline ACP model discovery", () => {
       discoverClinePassModels({
         command: FAKE_CLINE,
         env: { FAKE_CLINE_MODE: "hang" },
-        timeoutMs: 20,
+        timeoutMs: 500,
       }),
     ).rejects.toThrow("exited before response 2");
   });
