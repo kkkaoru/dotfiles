@@ -5,6 +5,7 @@ Minimal Cursor agent bridge for pi and Claudex. It preserves the existing `curso
 ## Guarantees
 
 - Creates a fresh local Cursor agent for each independent request; it never calls `Agent.resume()`.
+- Serializes independent Cursor requests so a new `send()` waits until the previous local agent has been cancelled and disposed. This avoids Cursor's `AgentBusyError` after abort or a follow-up prompt.
 - Keeps a live Cursor run only across the tool-result continuation belonging to that same request.
 - Converts pi `Context.tools` schemas into Cursor SDK `customTools`.
 - Returns Cursor custom-tool callbacks as normal pi tool calls and resolves them from the next `ToolResultMessage` context.
