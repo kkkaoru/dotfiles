@@ -14,6 +14,10 @@ adapterの内部実装や開発上の詳細は
 [`tools/claudex-agent-adapter/README.md`](../../tools/claudex-agent-adapter/README.md)
 を参照してください。
 
+## Claude モデルは Pi を経由しない
+
+外部 provider（Codex / Cursor / Grok / Qwen / Ollama / Cline / Command Code / OpenCode Go / Fugu）だけを Pi 経由にします。Claude 自身のモデル（`claude-*`、`opus`、`sonnet`、`haiku`、`fable` およびそれらの `[1m]` 別名）は Subscription 直です。`providers.json` に `piProvider` を付けて Claude モデルを書くと adapter が設定エラーにします。`claudex-haiku-search` もこの制約の対象で、`claude-haiku-4-5` のまま Subscription 固定です。
+
 ## 現在の構成
 
 ```mermaid
@@ -177,6 +181,23 @@ daemonのPATHでは `~/.local/bin` をHomebrewより先に置き、壊れたHome
    `selected_workers` スロットとは別管理で、実装を行わず戦略レビューとpeer `SendMessage`
    に使います。両者は置換関係ではなく併用可能です。
 
+### Claude models stay off the Pi gateway
+
+「全モデルを pi 経由に」の対象は外部 provider だけです。Claude 自身のモデル
+(`claude-haiku-*` / `claude-sonnet-*` / `claude-opus-*` / `claude-fable*` 等) を Pi
+gateway へ流すことは禁止です。これは一時見送りではなく、設計上の制約です。
+
+- `nativeWorkers` の `claudex-haiku-search` (`claude-haiku-4-5`) と `claudex-sonnet`
+  (`claude-sonnet-5`) は Claude subscription 框のままです。`piProvider` は持ちません。
+- SubAgent の `route_subagent_claude_model` は、model 名が Claude に正規化できる場合に
+  `RouteDecision::Subscription` を返します。親から継承した Claude model も同様です。
+- outer request でも、設定済み provider route に一致しない Claude model は Subscription に
+  落ちます。
+- 現行 `providers.json` に Claude model を `piProvider` 付きで書くガードはありません。
+  誤って書くと config load は通り、`--provider-interface pi` で `PiGateway` 化します。
+  ただし Claude SubAgent はその後も `route_subagent_claude_model` が Subscription へ戻します。
+  禁止を設定ミスで破れないように、Claude model を `providers[]` へ追加しないでください。
+
 ### WebSearchの経路
 
 WebSearchは、選択されたmodelのprovider routeにある `webSearchMode` で経路を決めます。
@@ -197,6 +218,7 @@ model IDやeffortはここへハードコードせず、各providerの `defaultM
 - Claude が本当に `WebSearch` tool を出したときだけ adapter の `POST /v1/code/sessions/{id}/worker/web-search` へ入る。
 - 日常 TUI では orchestrator が `claudex-haiku-search` へ委譲する。この worker は `claude-haiku-4-5` で、`route_subagent_claude_model` により Subscription 固定であり Pi ではない。
 - Cursor の main turn は tool を出さずモデル内部で検索することがある。その場合も `/worker/web-search` は 0 のまま。
+- Claude モデルは Pi 禁止なので、日常検索の `claudex-haiku-search` を Pi 化して delegate-pi を通す案は採らない。
 - したがって公開 route の既定は CCR / provider native のままにする。session 付き HTTP では端から端まで実証済みだが、それは日常 TUI の証明ではない。
 
 `delegate-ccr` は、検索を要求したmodelがnative検索を持たない場合の既定経路です。
