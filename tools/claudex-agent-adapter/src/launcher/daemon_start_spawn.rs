@@ -70,7 +70,7 @@ pub(super) fn spawn_adapter(request: SpawnRequest<'_>) -> Result<u32> {
         command.env_remove(super::super::RETAINED_STATE_ENV);
     }
     command.env(super::super::SERVICE_LISTEN_ENV, service_listen.to_string());
-    let child = command
+    let mut child = command
         .current_dir(log_dir)
         .env_remove(crate::anthropic::SUBAGENT_HARD_TIMEOUT_ENV)
         .env_remove(crate::anthropic::LEGACY_SUBAGENT_RESPONSE_TIMEOUT_ENV)
@@ -79,7 +79,14 @@ pub(super) fn spawn_adapter(request: SpawnRequest<'_>) -> Result<u32> {
         .stderr(Stdio::from(stderr))
         .spawn()
         .context("start adapter daemon")?;
-    Ok(child.id())
+    let pid = child.id();
+    // `nohup` execs into the daemon, so this Child is the serve process. Dropping
+    // it without wait leaves a zombie under long-lived launchers (attached TUI)
+    // after replace/SIGTERM. Reap asynchronously so drain does not see stale Z.
+    std::thread::spawn(move || {
+        let _ = child.wait();
+    });
+    Ok(pid)
 }
 
 #[cfg(unix)]
