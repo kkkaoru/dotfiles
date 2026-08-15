@@ -146,6 +146,63 @@ describe("Pi assistant event mapping", () => {
     });
   });
 
+  it("preserves rich authoritative terminal messages without modification", () => {
+    const richMessage: AssistantMessage = {
+      ...MESSAGE,
+      content: [
+        { type: "text", text: "answer", textSignature: "text-signature" },
+        {
+          type: "thinking",
+          thinking: "[Reasoning redacted]",
+          thinkingSignature: "thinking-signature",
+          redacted: true,
+        },
+        {
+          type: "toolCall",
+          id: "call-rich",
+          name: "lookup",
+          arguments: { query: "value" },
+          thoughtSignature: "tool-signature",
+          namespace: "dynamic-tools",
+        },
+      ],
+      responseModel: "resolved-model",
+      responseId: "response-1",
+      usage: {
+        input: 11,
+        output: 7,
+        cacheRead: 5,
+        cacheWrite: 3,
+        cacheWrite1h: 2,
+        reasoning: 4,
+        totalTokens: 26,
+        cost: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, total: 10 },
+      },
+      stopReason: "deferred",
+      deferred: {
+        provider: "provider",
+        modelId: "model",
+        api: "openai-responses",
+        id: "deferred-1",
+        expiresAt: 123,
+        pollAfterMs: 456,
+        data: { cursor: "next" },
+      },
+      rawStopReason: "queued",
+      endTurn: false,
+    };
+
+    const mapped = map({ type: "done", reason: "deferred", message: richMessage });
+    expect(mapped).toStrictEqual({
+      version: 1,
+      type: "done",
+      id: "request",
+      reason: "deferred",
+      message: richMessage,
+    });
+    expect(mapped["message"]).toBe(richMessage);
+  });
+
   it("rejects a malformed tool-call start", () => {
     expect(() => map({ type: "toolcall_start", contentIndex: 0, partial: MESSAGE })).toThrow(
       "has no tool call",
