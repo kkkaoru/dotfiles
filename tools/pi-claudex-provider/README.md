@@ -26,6 +26,25 @@ The socket uses strict LF-delimited JSON, version `1`. Every client message incl
 3. `request` carries `provider`, `modelId`, raw Anthropic `system` / `messages` / `tools`, safe sampling options, and `origin: "claudex"`.
 4. Server emits compact `text_*`, `thinking_*`, and `toolcall_*` events. `done` or `error` includes the full authoritative Pi assistant message and is terminal.
 5. `cancel` aborts the matching request. Multiple authenticated connections and multiplexed request IDs are supported.
+6. `web_search` carries `provider`, `modelId`, and `query`. The server replies with `web_search_result` (`results: [{title,url,snippet}]`, possibly empty) or `web_search_error` (`provider`, `modelId`, `message`).
+
+### Web search (`delegate-pi`)
+
+Adapter `webSearchMode=delegate-pi` reaches this socket via `/worker/web-search`.
+
+| Session provider | Search path | Notes |
+| --- | --- | --- |
+| `cursor` | `modelRegistry.complete()` prompt-only native search | Same-session model only; no silent Exa fallback |
+| any other non-`claudex` provider | Exa `POST https://api.exa.ai/search` | Requires `EXA_API_KEY`; missing key → explicit `web_search_error` |
+| `claudex` | rejected | Avoids recursive gateway search |
+
+Empty Exa/Cursor result sets are success (`results: []`), not errors. Cross-provider fallback is forbidden.
+
+**Daily TUI usage does not exercise this path.** The orchestrator delegates search to `claudex-haiku-search` (`claude-haiku-4-5`), which is forced onto the Claude Subscription route and never enters Pi. Cursor main turns may also search inside the model without emitting `WebSearch`. Keep public routes on CCR / provider-native search; treat HTTP/socket GREEN as transport proof, not daily-path proof. See [`.config/claudex/README.md`](../../.config/claudex/README.md) (“Claude models stay off the Pi gateway” / “WebSearchの経路”).
+
+### Claude models are not Pi routes
+
+Native Claude models (`claude-*`, `opus` / `sonnet` / `haiku` / `fable`, and `[1m]` aliases) must stay on Claude Subscription. They must not appear as Pi gateway targets. Discovery ids under `claude-claudex-*` are excluded from that Claude-native check. Policy and adapter guards live in Claudex config docs, not in this package.
 
 ### Consumer conformance
 
