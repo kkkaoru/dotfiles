@@ -192,7 +192,12 @@ model IDやeffortはここへハードコードせず、各providerの `defaultM
 | `delegate-mcp` | 設定済みACP/MCP providerの検索機能 | 選択されたprovider |
 | `disabled` | 検索を公開しない | 元のmodel（検索なし） |
 
-`delegate-pi` の transport は実装済みです。Claude が本当に `WebSearch` tool を出したときだけ通ります。日常 TUI では orchestrator が `claudex-haiku-search`（Claude subscription の `claude-haiku-4-5`）へ委譲するため、この経路は使われません。公開 route の既定は CCR / provider native のままです。session 付き `POST /v1/code/sessions/{id}/worker/web-search` では端から端まで実証済みです。
+`delegate-pi` の transport は実装済みです。通る条件は狭いです。
+
+- Claude が本当に `WebSearch` tool を出したときだけ adapter の `POST /v1/code/sessions/{id}/worker/web-search` へ入る。
+- 日常 TUI では orchestrator が `claudex-haiku-search` へ委譲する。この worker は `claude-haiku-4-5` で、`route_subagent_claude_model` により Subscription 固定であり Pi ではない。
+- Cursor の main turn は tool を出さずモデル内部で検索することがある。その場合も `/worker/web-search` は 0 のまま。
+- したがって公開 route の既定は CCR / provider native のままにする。session 付き HTTP では端から端まで実証済みだが、それは日常 TUI の証明ではない。
 
 `delegate-ccr` は、検索を要求したmodelがnative検索を持たない場合の既定経路です。
 `fallbackProviders` はprovider IDの順序で、各workerの実model/effortを使って検索します。
