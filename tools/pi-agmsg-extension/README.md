@@ -7,10 +7,10 @@ A global [pi extension](https://pi.dev/docs/latest/extensions) for
 - Setup lets you select an existing identity or create a new identity even when other agents are already registered. Team creation and agent editors are pre-filled with a collision-free project directory name and random `pi-<id>` name.
 - `/agmsg leave [team]` removes the active identity from a team after confirmation.
 - The selected identity is persisted in the pi session and restored across reload/resume. A transient startup lookup failure keeps the persisted identity instead of clearing it, so automatic delivery continues without requiring reconnect. `/agmsg reconnect` remains available to refresh registration manually.
-- The status includes both identity and team, for example `agmsg: oversea-horse-race (horse-racing-data)`.
+- The status includes both identity and team, for example `agmsg: oversea-horse-race (horse-racing-data)`. A second pi process using the same team/identity displays `(standby)` and does not consume that mailbox.
 - An LLM-callable `agmsg` tool using only agmsg's supported scripts.
 - Successful sends display an `[agmsg-sent]` message with sender, recipient, team, and message body.
-- Invisible background polling plus end-of-turn safety checks, equivalent to agmsg `both` delivery for pi. The LLM is instructed not to run visible `sleep`/`inbox` heartbeat tools. Incoming messages use pi's `steer` queue and start a model turn only when a real unread message arrives; empty heartbeat polls remain invisible.
+- Invisible background polling plus end-of-turn safety checks, equivalent to agmsg `both` delivery for pi. A cross-process lease permits only one automatic receiver per team/identity mailbox; `/agmsg reconnect` explicitly transfers ownership, shutdown releases it, and an expired owner is reclaimed automatically. The LLM is instructed not to run visible `sleep`/`inbox` heartbeat tools. Fetched inbox output is journaled in the pi session before injection and retried after delivery or reload failures. Incoming messages use pi's `steer` queue and start a model turn only when a real unread message arrives; empty heartbeat polls remain invisible.
 - A trusted external agmsg `types/pi` manifest, installed by the dotfiles symlink script.
 
 ## Install
