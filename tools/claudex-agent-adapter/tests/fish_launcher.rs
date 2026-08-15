@@ -484,7 +484,7 @@ fn assert_shared_provider_settings(home: &tempfile::TempDir, stderr: &[u8]) {
     .expect("isolated settings after launch");
     assert!(isolated_settings.contains("\"model\": \"sonnet[1m]\""));
     assert!(
-        String::from_utf8_lossy(stderr)
+        !String::from_utf8_lossy(stderr)
             .contains("current sonnet[1m], high; request model authoritative")
     );
 }
@@ -547,13 +547,7 @@ fn assert_settings_restore_modes(function: &std::path::Path, home: &tempfile::Te
         assert!(arguments.ends_with(expected_tail), "{label}: {arguments}");
         let diagnostic = String::from_utf8_lossy(&output.stderr);
         assert!(
-            diagnostic.contains("resumed orchestration"),
-            "{label}: {diagnostic}"
-        );
-        assert!(
-            diagnostic.contains(
-                "current model restored by Claude Code and unknown to launcher; request model authoritative"
-            ),
+            !diagnostic.contains("resumed orchestration"),
             "{label}: {diagnostic}"
         );
     }
@@ -821,7 +815,24 @@ fn fish_launcher_uses_claude_settings_model_and_effort_when_available() {
     assert!(arguments.ends_with("--\nsettings-smoke\n"));
     assert_no_implicit_agent(&arguments);
     assert!(
-        String::from_utf8_lossy(&output.stderr)
+        !String::from_utf8_lossy(&output.stderr)
+            .contains("current sonnet[1m], high; request model authoritative")
+    );
+
+    let verbose_output = Command::new("fish")
+        .args([
+            "-c",
+            &format!("source '{}'; claudex settings-smoke", function.display()),
+        ])
+        .env("HOME", home.path())
+        .env("CLAUDEX_VERBOSE", "1")
+        .env_remove("CLAUDEX_MODEL")
+        .env_remove("CLAUDEX_PROVIDER_CONFIG")
+        .output()
+        .expect("run fish launcher with settings and verbose");
+    assert!(verbose_output.status.success());
+    assert!(
+        String::from_utf8_lossy(&verbose_output.stderr)
             .contains("current sonnet[1m], high; request model authoritative")
     );
 }

@@ -362,14 +362,16 @@ function claudex --description 'Run Claude Code with config-driven agent backend
         set CLAUDEX_MAIN_MODEL ""
         set CLAUDEX_MAIN_MODEL_KNOWN 0
     end
-    if test "$defaults_source" = settings
-        if test $CLAUDEX_MAIN_MODEL_KNOWN -eq 1
-            echo "claudex: settings-routed orchestration ($provider_config; current $settings_model, $settings_effort; request model authoritative)" >&2
+    if set -q CLAUDEX_VERBOSE; and test "$CLAUDEX_VERBOSE" != 0
+        if test "$defaults_source" = settings
+            if test $CLAUDEX_MAIN_MODEL_KNOWN -eq 1
+                echo "claudex: settings-routed orchestration ($provider_config; current $settings_model, $settings_effort; request model authoritative)" >&2
+            else
+                echo "claudex: resumed orchestration ($provider_config; current model restored by Claude Code and unknown to launcher; request model authoritative)" >&2
+            end
         else
-            echo "claudex: resumed orchestration ($provider_config; current model restored by Claude Code and unknown to launcher; request model authoritative)" >&2
+            echo "claudex: explicit-routed orchestration ($provider_config, $outer_model, $outer_effort)" >&2
         end
-    else
-        echo "claudex: explicit-routed orchestration ($provider_config, $outer_model, $outer_effort)" >&2
     end
     # cargo install uses the user-local prefix selected by this repository's
     # install command, so the launcher and installed binary stay in sync.
