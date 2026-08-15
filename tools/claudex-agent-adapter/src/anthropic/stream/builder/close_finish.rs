@@ -178,7 +178,10 @@ impl SegmentBuilder {
         self.close_blocks_for_finish(tool_handoff, stream).await?;
         sanitize_committed_blocks(&mut self.blocks);
         let has_tool_calls = self.external_tool_calls > 0;
-        if self.provider_stop_reason == Some("tool_use") && !has_tool_calls {
+        if self.provider_stop_reason == Some("tool_use")
+            && !has_tool_calls
+            && !self.suppressed_tool_use
+        {
             bail!("provider stopped for tool use without emitting a tool call");
         }
         if has_tool_calls
@@ -190,6 +193,9 @@ impl SegmentBuilder {
         }
         let stop_reason = if has_tool_calls {
             "tool_use"
+        } else if self.suppressed_tool_use {
+            // Blocked SubAgent notices are assistant text; keep the turn alive.
+            "end_turn"
         } else {
             self.provider_stop_reason.unwrap_or("end_turn")
         };

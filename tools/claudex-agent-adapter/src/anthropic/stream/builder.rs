@@ -74,6 +74,11 @@ pub(in crate::anthropic) struct SegmentBuilder {
     summarized_reasoning_ids: Vec<String>,
     injected_output_tokens: u64,
     provider_stop_reason: Option<&'static str>,
+    /// True when a SubAgent launch was intentionally converted into assistant
+    /// text (disabled / cooldown / unroutable) instead of Claude tool_use.
+    /// finish() must then end_turn rather than treat missing tool calls as a
+    /// provider protocol error.
+    suppressed_tool_use: bool,
     usage: Usage,
     pub(super) last_turn_progress: Vec<crate::anthropic::TurnProgressEvent>,
 }

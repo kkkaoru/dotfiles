@@ -3201,6 +3201,22 @@ async fn forwards_generic_tools_and_blocks_disabled_subagent_models() {
     assert!(!output.contains(r#""type":"thinking_delta""#));
     assert!(!output.contains(r#""type":"tool_use""#));
     assert!(!output.contains("▶ Agent"));
+
+    blocked
+        .update_provider_stop_reason(&json!({
+            "params":{"turn":{"providerStopReason":"tool_use"}}
+        }))
+        .expect("provider stopped for the blocked Agent tool");
+    let segment = blocked
+        .finish(None)
+        .await
+        .expect("disabled SubAgent block must end_turn, not 500");
+    assert_eq!(segment.stop_reason, "end_turn");
+    assert!(segment.blocks.iter().any(|block| {
+        block["text"].as_str().is_some_and(|text| {
+            text.contains("blocked-model") && text.contains("disabled by policy")
+        })
+    }));
 }
 
 #[tokio::test]
@@ -6141,6 +6157,21 @@ async fn blocks_exhausted_subagent_launch_with_cooling_down_notice() {
     assert_eq!(flow, ControlFlow::Continue(()));
     assert!(!builder.has_external_tool_calls());
     assert!(builder.blocks.iter().any(|block| {
+        block["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("cooling down"))
+    }));
+    builder
+        .update_provider_stop_reason(&json!({
+            "params":{"turn":{"providerStopReason":"tool_use"}}
+        }))
+        .expect("provider stopped for the blocked Agent tool");
+    let segment = builder
+        .finish(None)
+        .await
+        .expect("exhausted SubAgent block must end_turn, not 500");
+    assert_eq!(segment.stop_reason, "end_turn");
+    assert!(segment.blocks.iter().any(|block| {
         block["text"]
             .as_str()
             .is_some_and(|text| text.contains("cooling down"))

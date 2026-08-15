@@ -31,6 +31,7 @@ impl SegmentBuilder {
             summarized_reasoning_ids: Vec::new(),
             injected_output_tokens: 0,
             provider_stop_reason: None,
+            suppressed_tool_use: false,
             usage: Usage {
                 input_tokens,
                 ..Usage::default()

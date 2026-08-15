@@ -108,3 +108,72 @@ fn thinking_contains_pending_rejects_blank_needles_and_non_thinking_blocks() {
         "needle"
     ));
 }
+
+#[tokio::test]
+async fn blocked_subagent_notice_finishes_end_turn_despite_provider_tool_use() {
+    let notice = "SubAgent model `qwen3.8-max-preview` is disabled by policy and was not launched.";
+    let mut builder = SegmentBuilder::new(1);
+    builder
+        .emit_blocked_notice(notice, None)
+        .await
+        .expect("blocked notice");
+    builder
+        .update_provider_stop_reason(&json!({
+            "params":{"turn":{"providerStopReason":"tool_use"}}
+        }))
+        .expect("provider stopped for the blocked Agent tool");
+
+    let segment = builder
+        .finish(None)
+        .await
+        .expect("blocked SubAgent must complete without a protocol error");
+
+    assert_eq!(segment.stop_reason, "end_turn");
+    assert_eq!(segment.blocks.len(), 1);
+    assert_eq!(segment.blocks[0]["type"], "text");
+    assert_eq!(segment.blocks[0]["text"], notice);
+    assert!(
+        segment.blocks[0]["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("was not launched") || text.contains("Continue without it.") || text.contains("disabled by policy")),
+        "notice must stay visible: {}",
+        segment.blocks[0]["text"]
+    );
+}
+
+#[tokio::test]
+async fn blocked_subagent_notice_streams_message_stop_after_finish() {
+    use std::convert::Infallible;
+
+    use axum::body::Bytes;
+    use tokio::sync::mpsc;
+
+    use crate::anthropic::stream::protocol::send_stream_completion;
+
+    let notice =
+        "The requested SubAgent model is disabled by policy, so it was not started. Continue without it.";
+    let mut builder = SegmentBuilder::new(1);
+    let (sender, mut receiver) = mpsc::channel::<Result<Bytes, Infallible>>(16);
+    builder
+        .emit_blocked_notice(notice, Some(&sender))
+        .await
+        .expect("stream notice");
+    builder
+        .update_provider_stop_reason(&json!({
+            "params":{"turn":{"providerStopReason":"tool_use"}}
+        }))
+        .expect("tool_use stop");
+    let segment = builder.finish(Some(&sender)).await.expect("finish ok");
+    send_stream_completion(&sender, &segment).await;
+    drop(sender);
+
+    let mut output = String::new();
+    while let Some(frame) = receiver.recv().await {
+        output.push_str(&String::from_utf8_lossy(&frame.expect("infallible")));
+    }
+    assert!(output.contains("Continue without it."));
+    assert!(output.contains(r#""stop_reason":"end_turn""#));
+    assert!(output.contains("event: message_stop"));
+    assert!(!output.contains("Server error"));
+    assert!(!output.contains("without emitting a tool call"));
+}

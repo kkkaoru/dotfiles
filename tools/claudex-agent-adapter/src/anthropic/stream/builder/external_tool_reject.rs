@@ -15,6 +15,9 @@ impl SegmentBuilder {
         notice: &str,
         stream: Option<&StreamSender>,
     ) -> Result<()> {
+        // Provider already stopped for tool_use; we answer with text instead of
+        // emitting Claude tool_use. Mark suppression so finish() ends cleanly.
+        self.suppressed_tool_use = true;
         self.close_open_blocks(stream).await?;
         self.note_provider_turn_activity();
         let index = self.start_text_block(notice, stream).await?;
