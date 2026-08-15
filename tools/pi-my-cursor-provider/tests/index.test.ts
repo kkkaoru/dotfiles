@@ -1,11 +1,12 @@
 import type { ProviderModelConfig } from "@earendil-works/pi-coding-agent";
 import { expect, test, vi } from "vitest";
-import registerCursorProvider from "../index.ts";
+import cursorExtension from "../index.ts";
 
 test("registers the compatible cursor/auto provider", () => {
   const registerProvider = vi.fn();
+  const on = vi.fn();
 
-  registerCursorProvider({ registerProvider });
+  cursorExtension({ registerProvider, on } as never);
 
   expect(registerProvider).toHaveBeenCalledTimes(1);
   const call = registerProvider.mock.calls[0];
@@ -29,4 +30,14 @@ test("registers the compatible cursor/auto provider", () => {
   ]);
   expect(typeof call?.[1]?.refreshModels).toBe("function");
   expect(typeof call?.[1]?.streamSimple).toBe("function");
+});
+
+test("registers the compaction hook and provider together from the default export", () => {
+  const registerProvider = vi.fn();
+  const on = vi.fn();
+
+  cursorExtension({ registerProvider, on } as never);
+
+  expect(registerProvider).toHaveBeenCalledTimes(1);
+  expect(on).toHaveBeenCalledWith("session_before_compact", expect.any(Function));
 });

@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ProviderConfig } from "@earendil-works/pi-coding-agent";
+import { registerCursorCompaction } from "./src/compaction.ts";
 import { FALLBACK_CURSOR_MODELS, refreshCursorModels } from "./src/models.ts";
 import { streamCursor } from "./src/provider.ts";
 
@@ -12,6 +13,11 @@ const provider: ProviderConfig = {
   streamSimple: streamCursor,
 };
 
-export default function registerCursorProvider(pi: Pick<ExtensionAPI, "registerProvider">): void {
+export default function (pi: ExtensionAPI): void {
+  registerCursorProvider(pi);
+  registerCursorCompaction(pi);
+}
+
+export function registerCursorProvider(pi: Pick<ExtensionAPI, "registerProvider">): void {
   pi.registerProvider("cursor", provider);
 }
