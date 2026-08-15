@@ -1,0 +1,15 @@
+{
+  "lastChangelogVersion": "0.84.2",
+  "theme": "dracula",
+  "defaultProvider": "qwen-token-plan-individual",
+  "defaultModel": "qwen3.8-max",
+  "defaultThinkingLevel": "off",
+  "packages": [
+    "npm:pi-effort",
+    "../../tools/pi-my-clinepass-provider",
+    "npm:pi-ollama-cloud",
+    "../../tools/pi-my-cursor-provider",
+    "../../tools/pi-claudex-provider",
+    "npm:pi-commandcode-provider"
+  ]
+}
