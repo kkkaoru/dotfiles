@@ -13,6 +13,33 @@ def load_json(path: Path) -> dict:
     return value
 
 
+def resolve_extension_path(value: object, directory: Path) -> object:
+    if not isinstance(value, str) or not value:
+        return value
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = directory / path
+    return str(path.resolve(strict=False))
+
+
+def resolve_pi_extensions(config: dict, directory: Path) -> None:
+    if "piGatewayExtension" in config:
+        config["piGatewayExtension"] = resolve_extension_path(
+            config["piGatewayExtension"], directory
+        )
+    providers = config.get("providers")
+    if not isinstance(providers, list):
+        return
+    for provider in providers:
+        if not isinstance(provider, dict):
+            continue
+        extensions = provider.get("piExtensions")
+        if isinstance(extensions, list):
+            provider["piExtensions"] = [
+                resolve_extension_path(extension, directory) for extension in extensions
+            ]
+
+
 def merge_providers(merged: dict, override: list[dict]) -> bool:
     changed = False
     providers = list(merged.get("providers", []))
@@ -65,10 +92,13 @@ def main() -> int:
         raise ValueError("local provider override must set version to 1")
 
     merged = deepcopy(base)
+    resolve_pi_extensions(merged, base_path.parent)
+    resolved_override = deepcopy(override)
+    resolve_pi_extensions(resolved_override, override_path.parent)
     changed = False
 
-    if "mainProviders" in override:
-        main_providers = override["mainProviders"]
+    if "mainProviders" in resolved_override:
+        main_providers = resolved_override["mainProviders"]
         if not isinstance(main_providers, list) or any(
             not isinstance(provider, str) or not provider for provider in main_providers
         ):
@@ -77,15 +107,15 @@ def main() -> int:
             merged["mainProviders"] = list(main_providers)
             changed = True
 
-    if "providers" in override:
-        override_providers = override["providers"]
+    if "providers" in resolved_override:
+        override_providers = resolved_override["providers"]
         if not isinstance(override_providers, list):
             raise ValueError("override providers must be an array")
         if merge_providers(merged, override_providers):
             changed = True
 
-    if "fallback" in override:
-        merged["fallback"] = override["fallback"]
+    if "fallback" in resolved_override:
+        merged["fallback"] = resolved_override["fallback"]
         if merged.get("fallback") != base.get("fallback"):
             changed = True
 
