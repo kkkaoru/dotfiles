@@ -22,17 +22,6 @@ fn exhausted_reason_without_disabled_list_still_marks_the_model() {
 }
 
 #[test]
-fn low_remaining_without_providers_object_is_not_exhausted() {
-    let summary = json!({
-        "native_worker_quota": {
-            "cursor": {"remaining_percent": 80.0, "model": "auto"}
-        },
-        "providers": "not-an-object"
-    });
-    assert!(!summary_marks_model_exhausted(&summary, SPARK));
-}
-
-#[test]
 fn live_cache_rejects_invalid_json_and_missing_created_at() {
     let root = tempfile::tempdir().expect("invalid routing cache");
     let path = cache_path_for_home(root.path());
@@ -92,27 +81,6 @@ fn ignores_missing_codexbar_quota_as_not_exhausted() {
 }
 
 #[test]
-fn integer_remaining_and_five_hour_only_quota_are_supported() {
-    let integer_remaining = json!({"remaining_percent": 17});
-    assert_eq!(provider_selection_remaining(&integer_remaining), Some(17.0));
-
-    let five_hour_only = json!({
-        "quota_windows": {"five-hour": 10}
-    });
-    assert_eq!(provider_selection_remaining(&five_hour_only), Some(10.0));
-}
-
-#[test]
-fn low_remaining_without_provider_object_is_not_exhausted() {
-    let summary = json!({
-        "native_worker_quota": {
-            "sonnet": {"remaining_percent": 80}
-        }
-    });
-    assert!(!summary_marks_model_low_remaining(&summary, SPARK));
-}
-
-#[test]
 fn live_cache_without_path_or_file_is_not_exhausted() {
     let root = tempfile::tempdir().expect("missing routing cache fixture");
     let missing = root.path().join("missing.json");
@@ -148,70 +116,29 @@ fn live_cache_honors_fresh_exhausted_snapshot() {
 }
 
 #[test]
-fn low_remaining_spark_is_exhausted_when_ample_peers_exist() {
-    // Historical bug: CodexBar still marked spark `available-codex-quota`
-    // at 17% weekly remaining, so explicit `claudex-gpt-spark` launches
-    // kept starting after automatic selected_workers already dropped it.
+fn low_remaining_is_not_hard_exhausted_even_with_ample_peers() {
+    // Production bug: cursor auto at ~9% remaining was hard-blocked as
+    // "cooling down" because peers like grok were ample. Low remaining is a
+    // selection heuristic, not launch exhaustion.
     let summary = json!({
         "providers": {
-            "codex-spark": {
+            "cursor": {
                 "available": true,
-                "reason": "available-codex-quota",
-                "model": SPARK,
-                "remaining_percent": 17.0,
-                "quota_windows": {"five-hour": null, "seven-day": 17.0}
+                "reason": "available-cursor-quota",
+                "model": "auto",
+                "remaining_percent": 9.1965
             },
-            "codex": {
+            "grok": {
                 "available": true,
-                "reason": "available-codex-quota",
-                "model": LUNA,
-                "remaining_percent": 98.0,
-                "quota_windows": {"five-hour": null, "seven-day": 98.0}
-            }
-        },
-        "disabled_subagent_models": []
-    });
-    assert!(
-        summary_marks_model_exhausted(&summary, SPARK),
-        "spark below 25% must not keep launching beside ample luna"
-    );
-    assert!(!summary_marks_model_exhausted(&summary, LUNA));
-}
-
-#[test]
-fn low_remaining_spark_stays_eligible_when_no_ample_peer_exists() {
-    let summary = json!({
-        "providers": {
+                "reason": "available-grok-quota",
+                "model": "grok-4.6",
+                "remaining_percent": 66.0
+            },
             "codex-spark": {
                 "available": true,
                 "reason": "available-codex-quota",
                 "model": SPARK,
                 "remaining_percent": 17.0
-            },
-            "cursor": {
-                "available": true,
-                "reason": "available-cursor-quota",
-                "model": "auto",
-                "remaining_percent": 30.0
-            }
-        },
-        "disabled_subagent_models": []
-    });
-    assert!(
-        !summary_marks_model_exhausted(&summary, SPARK),
-        "without a >=40% peer, keep_all still allows the low spark worker"
-    );
-}
-
-#[test]
-fn ample_spark_is_not_exhausted() {
-    let summary = json!({
-        "providers": {
-            "codex-spark": {
-                "available": true,
-                "reason": "available-codex-quota",
-                "model": SPARK,
-                "remaining_percent": 50.0
             },
             "codex": {
                 "available": true,
@@ -222,37 +149,14 @@ fn ample_spark_is_not_exhausted() {
         },
         "disabled_subagent_models": []
     });
+    assert!(!summary_marks_model_exhausted(&summary, "auto"));
     assert!(!summary_marks_model_exhausted(&summary, SPARK));
+    assert!(!summary_marks_model_exhausted(&summary, LUNA));
 }
 
 #[test]
-fn five_hour_window_can_deplete_spark_beside_native_headroom() {
-    let summary = json!({
-        "providers": {
-            "codex-spark": {
-                "available": true,
-                "reason": "available-codex-quota",
-                "model": SPARK,
-                "quota_windows": {"five-hour": 10.0, "seven-day": 80.0}
-            }
-        },
-        "native_worker_quota": {
-            "claudex-sonnet": {
-                "available": true,
-                "remaining_percent": 94.0
-            }
-        },
-        "disabled_subagent_models": []
-    });
-    assert!(
-        summary_marks_model_exhausted(&summary, SPARK),
-        "min(weekly, five-hour) below 25% must skip spark when sonnet is ample"
-    );
-}
-
-#[test]
-fn live_cache_marks_low_remaining_spark() {
-    let root = tempfile::tempdir().expect("spark cache fixture");
+fn live_cache_ignores_low_remaining_cursor_auto() {
+    let root = tempfile::tempdir().expect("cursor low remaining fixture");
     let path = cache_path_for_home(root.path());
     std::fs::create_dir_all(path.parent().expect("cache dir")).expect("cache dir");
     let now = UNIX_EPOCH + Duration::from_secs(1_000);
@@ -261,25 +165,24 @@ fn live_cache_marks_low_remaining_spark() {
         "configuration_key": "test",
         "summary": {
             "providers": {
-                "codex-spark": {
+                "cursor": {
                     "available": true,
-                    "reason": "available-codex-quota",
-                    "model": SPARK,
-                    "remaining_percent": 17.0
+                    "reason": "available-cursor-quota",
+                    "model": "auto",
+                    "remaining_percent": 9.1965
                 },
-                "codex": {
+                "grok": {
                     "available": true,
-                    "reason": "available-codex-quota",
-                    "model": LUNA,
-                    "remaining_percent": 98.0
+                    "reason": "available-grok-quota",
+                    "model": "grok-4.6",
+                    "remaining_percent": 66.0
                 }
             },
             "disabled_subagent_models": []
         }
     });
     std::fs::write(&path, serde_json::to_vec(&body).expect("json")).expect("write");
-    assert!(live_cache_marks_model_exhausted(Some(&path), SPARK, now));
-    assert!(!live_cache_marks_model_exhausted(Some(&path), LUNA, now));
+    assert!(!live_cache_marks_model_exhausted(Some(&path), "auto", now));
 }
 
 #[test]

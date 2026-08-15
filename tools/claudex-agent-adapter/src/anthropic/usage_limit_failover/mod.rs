@@ -25,6 +25,9 @@ impl Bridge {
         self.subagent_model_is_exhausted(model, None)
     }
 
+    /// Hard exhaustion only: auth/rate/quota cooldown, classic usage-limit, or an
+    /// explicit exhausted/disabled routing snapshot. Low remaining is a selection
+    /// heuristic and must not block or rewrite an explicit SubAgent launch.
     pub(super) fn subagent_model_is_exhausted(
         &self,
         model: &str,

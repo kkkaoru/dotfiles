@@ -1,6 +1,8 @@
 use serde_json::Value;
+use std::time::{Duration, SystemTime};
 
 use crate::agent_backend::{AgentBackend, BackendKind, BackendRoute};
+use crate::anthropic::provider_auth_cooldown;
 use crate::anthropic::request_routing::RouteDecision;
 use crate::anthropic::{Bridge, MessagesRequest};
 use crate::provider_config::ModelCatalog;
@@ -1474,6 +1476,46 @@ fn write_usage_routing_spark_low_remaining(home: &std::path::Path) {
     .expect("write usage-routing");
 }
 
+fn write_usage_routing_cursor_auto_low_remaining(home: &std::path::Path) {
+    let dir = home.join(".cache/claudex");
+    std::fs::create_dir_all(&dir).expect("usage-routing dir");
+    let created = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock")
+        .as_secs_f64();
+    let body = serde_json::json!({
+        "created_at": created,
+        "configuration_key": "test",
+        "summary": {
+            "providers": {
+                "cursor": {
+                    "available": true,
+                    "reason": "available-cursor-quota",
+                    "model": CURSOR_AUTO,
+                    "remaining_percent": 9.1965
+                },
+                "grok": {
+                    "available": true,
+                    "reason": "available-grok-quota",
+                    "model": "grok-4.6",
+                    "remaining_percent": 66.0
+                }
+            },
+            "selected_workers": [{
+                "agent": "claudex-grok",
+                "model": "grok-4.6",
+                "effort": "high"
+            }],
+            "disabled_subagent_models": []
+        }
+    });
+    std::fs::write(
+        dir.join("usage-routing.json"),
+        serde_json::to_vec(&body).expect("usage-routing json"),
+    )
+    .expect("write usage-routing");
+}
+
 #[test]
 fn low_remaining_spark_is_not_exhausted_without_usage_snapshot() {
     let root = tempfile::tempdir().expect("spark no snapshot fixture");
@@ -1485,16 +1527,13 @@ fn low_remaining_spark_is_not_exhausted_without_usage_snapshot() {
 }
 
 #[test]
-fn low_remaining_spark_launch_rewrites_onto_cursor() {
-    // Historical TUI bug: automatic selected_workers already dropped spark at
-    // 17% weekly remaining, but explicit `claudex-gpt-spark` kept starting.
+fn low_remaining_spark_launch_stays_on_spark() {
+    // Low remaining is a selection heuristic. Explicit spark launches must not
+    // be rewritten or hard-blocked when CodexBar still says available.
     let root = tempfile::tempdir().expect("spark low remaining fixture");
     write_usage_routing_spark_low_remaining(root.path());
     let bridge = spark_luna_cursor_bridge().with_usage_limit_cache_home(root.path());
-    assert!(
-        bridge.subagent_provider_is_exhausted(SPARK),
-        "live usage-routing low remaining must cool down spark before another launch"
-    );
+    assert!(!bridge.subagent_provider_is_exhausted(SPARK));
     assert!(!bridge.subagent_provider_is_exhausted(LUNA));
     assert!(!bridge.subagent_provider_is_exhausted(CURSOR_AUTO));
 
@@ -1505,13 +1544,13 @@ fn low_remaining_spark_launch_rewrites_onto_cursor() {
         "prompt": "continue after low spark quota"
     });
     bridge.rewrite_exhausted_agent_launch_with_quota(&mut arguments, &[], &Value::Null);
-    assert_eq!(arguments["subagent_type"], "claudex-cursor");
-    assert_eq!(arguments["claudex_model"], CURSOR_AUTO);
-    assert_eq!(arguments["claudex_effort"], "high");
+    assert_eq!(arguments["subagent_type"], "claudex-gpt-spark");
+    assert_eq!(arguments["claudex_model"], SPARK);
+    assert_eq!(arguments["claudex_effort"], "xhigh");
 }
 
 #[test]
-fn low_remaining_spark_http_subagent_rewrites_onto_cursor() {
+fn low_remaining_spark_http_subagent_stays_on_spark() {
     let root = tempfile::tempdir().expect("spark http rewrite fixture");
     write_usage_routing_spark_low_remaining(root.path());
     let bridge = spark_luna_cursor_bridge().with_usage_limit_cache_home(root.path());
@@ -1524,10 +1563,98 @@ fn low_remaining_spark_http_subagent_rewrites_onto_cursor() {
             &mut effort,
             true,
         )
-        .expect("spark must leave onto an ACP sibling");
-    assert_eq!(request.model, CURSOR_AUTO);
-    assert_eq!(effort.as_deref(), Some("high"));
+        .expect("low remaining must not reject spark");
+    assert_eq!(request.model, SPARK);
+    assert_eq!(effort.as_deref(), Some("xhigh"));
     assert_eq!(route, RouteDecision::Provider);
+}
+
+#[test]
+fn low_remaining_cursor_auto_stays_launchable() {
+    let root = tempfile::tempdir().expect("cursor auto low remaining fixture");
+    write_usage_routing_cursor_auto_low_remaining(root.path());
+    let bridge = spark_luna_cursor_bridge().with_usage_limit_cache_home(root.path());
+    assert!(
+        !bridge.subagent_provider_is_exhausted(CURSOR_AUTO),
+        "cursor auto with remaining quota must not cool down"
+    );
+
+    let mut arguments = serde_json::json!({
+        "subagent_type": "claudex-cursor",
+        "claudex_model": CURSOR_AUTO,
+        "claudex_effort": "high",
+        "prompt": "research with cursor auto"
+    });
+    bridge.rewrite_exhausted_agent_launch_with_quota(&mut arguments, &[], &Value::Null);
+    assert_eq!(arguments["claudex_model"], CURSOR_AUTO);
+
+    let mut request = dummy_request(CURSOR_AUTO);
+    let mut effort = Some("high".to_owned());
+    let route = bridge
+        .rewrite_exhausted_subagent_request(
+            &mut request,
+            RouteDecision::Provider,
+            &mut effort,
+            true,
+        )
+        .expect("cursor auto must stay launchable");
+    assert_eq!(request.model, CURSOR_AUTO);
+    assert_eq!(route, RouteDecision::Provider);
+}
+
+#[test]
+fn expired_provider_auth_cooldown_is_ignored() {
+    let root = tempfile::tempdir().expect("expired cooldown fixture");
+    let path = provider_auth_cooldown::cache_path_for_home(root.path());
+    let now = SystemTime::now();
+    let expired = now
+        .checked_sub(Duration::from_secs(60))
+        .expect("expired timestamp");
+    provider_auth_cooldown::record_rate_limit_at(
+        Some(&path),
+        "grok-4.6",
+        "402 Payment Required: usage balance exhausted",
+        expired
+            .checked_sub(Duration::from_secs(4 * 60 * 60))
+            .expect("recorded in the past"),
+    )
+    .expect("record expired cooldown");
+    // Force the entry to an already-elapsed until by rewriting the cache.
+    let mut cache: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).expect("read cooldown"))
+            .expect("parse cooldown");
+    cache["entries"]["grok-4.6"]["untilUnixSeconds"] = serde_json::json!(
+        expired
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("epoch")
+            .as_secs()
+    );
+    std::fs::write(&path, serde_json::to_vec(&cache).expect("json")).expect("write");
+    assert!(!provider_auth_cooldown::scope_is_cooling_down_at(
+        Some(&path),
+        "grok-4.6",
+        now
+    ));
+    let bridge = spark_luna_cursor_bridge().with_usage_limit_cache_home(root.path());
+    assert!(!bridge.subagent_provider_is_exhausted("grok-4.6"));
+    assert!(!bridge.subagent_provider_is_exhausted(CURSOR_AUTO));
+}
+
+#[test]
+fn note_provider_exhaustion_skips_superseded_cursor_request() {
+    let root = tempfile::tempdir().expect("superseded cursor fixture");
+    let bridge = spark_luna_cursor_bridge().with_usage_limit_cache_home(root.path());
+    assert!(!bridge.subagent_provider_is_exhausted(CURSOR_AUTO));
+    bridge.note_provider_exhaustion(
+        &anyhow::anyhow!(
+            "codex app-server turn failed: {{\"error\":{{\"message\":\"Superseded by a new Cursor request\"}}}}"
+        ),
+        Some(CURSOR_AUTO),
+    );
+    assert!(
+        !bridge.subagent_provider_is_exhausted(CURSOR_AUTO),
+        "Superseded is abort/replace, not rate/usage/billing exhaustion"
+    );
 }
 
 #[test]

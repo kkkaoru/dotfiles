@@ -1,9 +1,9 @@
 //! Live CodexBar / `claudex-route-usage` quota snapshot for SubAgent preflight.
 //!
-//! Automatic selection already drops exhausted or low-remaining providers, but
-//! explicit SubAgent launches still hydrate a stale `selected_workers` list
-//! (Qwen after Cline empty-ACP, Spark after weekly remaining < 25%). Consult
-//! the same snapshot before the provider call.
+//! Hard-block only true exhaustion: `disabled_subagent_models` and provider
+//! reasons `exhausted` / `provider-exhaustion-cooldown`. Low remaining is a
+//! selection heuristic for automatic `selected_workers` and must not mark an
+//! explicit SubAgent launch as cooling down.
 
 use serde_json::Value;
 use std::{
@@ -14,10 +14,6 @@ use std::{
 const CACHE_FILE: &str = "usage-routing.json";
 const DEFAULT_TTL_SECS: f64 = 300.0;
 const EXHAUSTED_REASONS: &[&str] = &["exhausted", "provider-exhaustion-cooldown"];
-/// Match `claudex-route-usage` automatic selection: below this is depleted.
-const LOW_REMAINING_PERCENT: f64 = 25.0;
-/// At least one peer at or above this lets low-remaining models be skipped.
-const AMPLE_REMAINING_PERCENT: f64 = 40.0;
 
 pub(crate) fn cache_path_for_home(home: impl AsRef<Path>) -> PathBuf {
     home.as_ref().join(".cache/claudex").join(CACHE_FILE)
@@ -39,67 +35,10 @@ pub(crate) fn summary_marks_model_exhausted(summary: &Value, model: &str) -> boo
     let Some(providers) = summary.get("providers").and_then(Value::as_object) else {
         return false;
     };
-    if providers.values().any(|fields| {
+    providers.values().any(|fields| {
         let reason = fields.get("reason").and_then(Value::as_str).unwrap_or("");
         EXHAUSTED_REASONS.contains(&reason)
             && fields.get("model").and_then(Value::as_str) == Some(model)
-    }) {
-        return true;
-    }
-    summary_marks_model_low_remaining(summary, model)
-}
-
-fn number_f64(value: &Value) -> Option<f64> {
-    value.as_f64().or_else(|| value.as_i64().map(|n| n as f64))
-}
-
-pub(crate) fn provider_selection_remaining(fields: &Value) -> Option<f64> {
-    if let Some(remaining) = fields.get("remaining_percent").and_then(number_f64) {
-        return Some(remaining);
-    }
-    let windows = fields.get("quota_windows")?;
-    let weekly = windows.get("seven-day").and_then(number_f64);
-    let five_hour = windows.get("five-hour").and_then(number_f64);
-    match (weekly, five_hour) {
-        (Some(weekly), Some(five_hour)) => Some(weekly.min(five_hour)),
-        (Some(weekly), None) => Some(weekly),
-        (None, Some(five_hour)) => Some(five_hour),
-        (None, None) => None,
-    }
-}
-
-fn quota_field_values(summary: &Value) -> impl Iterator<Item = &Value> {
-    let providers = summary
-        .get("providers")
-        .and_then(Value::as_object)
-        .into_iter()
-        .flat_map(|fields| fields.values());
-    let native = summary
-        .get("native_worker_quota")
-        .and_then(Value::as_object)
-        .into_iter()
-        .flat_map(|fields| fields.values());
-    providers.chain(native)
-}
-
-fn summary_has_ample_remaining(summary: &Value) -> bool {
-    quota_field_values(summary).any(|fields| {
-        provider_selection_remaining(fields)
-            .is_some_and(|remaining| remaining >= AMPLE_REMAINING_PERCENT)
-    })
-}
-
-fn summary_marks_model_low_remaining(summary: &Value, model: &str) -> bool {
-    if !summary_has_ample_remaining(summary) {
-        return false;
-    }
-    let Some(providers) = summary.get("providers").and_then(Value::as_object) else {
-        return false;
-    };
-    providers.values().any(|fields| {
-        fields.get("model").and_then(Value::as_str) == Some(model)
-            && provider_selection_remaining(fields)
-                .is_some_and(|remaining| remaining < LOW_REMAINING_PERCENT)
     })
 }
 
