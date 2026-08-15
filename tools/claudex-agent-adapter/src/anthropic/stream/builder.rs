@@ -73,6 +73,7 @@ pub(in crate::anthropic) struct SegmentBuilder {
     /// for those items stays hidden so summaries are not duplicated.
     summarized_reasoning_ids: Vec<String>,
     injected_output_tokens: u64,
+    provider_stop_reason: Option<&'static str>,
     usage: Usage,
     pub(super) last_turn_progress: Vec<crate::anthropic::TurnProgressEvent>,
 }
@@ -117,6 +118,7 @@ impl SegmentBuilder {
             Some("thread/tokenUsage/updated") => self.update_usage(event),
             Some("error") => return error_flow(event),
             Some("turn/completed") => {
+                self.update_provider_stop_reason(event)?;
                 self.report_incomplete_launches(stream).await?;
                 self.drain_remaining_queued_launches(
                     bridge,

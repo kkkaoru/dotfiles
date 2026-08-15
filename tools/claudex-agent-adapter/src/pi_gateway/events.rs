@@ -30,11 +30,19 @@ impl PiGateway {
             "toolcall_delta" => append_tool_call(event, tools)?,
             "toolcall_end" => self.finish_tool_call(thread_id, request_id, event, tools)?,
             "done" => {
+                let stop_reason = anthropic_stop_reason(event)?;
                 self.dispatch_usage(thread_id, request_id, event);
-                self.events.dispatch_to(request_id, json!({
-                    "method":"turn/completed",
-                    "params":{"threadId":thread_id,"turn":{"threadId":thread_id,"status":"completed"}}
-                }));
+                self.events.dispatch_to(
+                    request_id,
+                    json!({
+                        "method":"turn/completed",
+                        "params":{"threadId":thread_id,"turn":{
+                            "threadId":thread_id,
+                            "status":"completed",
+                            "providerStopReason":stop_reason
+                        }}
+                    }),
+                );
                 return Ok(true);
             }
             "error" | "protocol_error" => {
@@ -149,6 +157,17 @@ impl PiGateway {
                 "params":{"threadId":thread_id,"willRetry":false,"error":{"message":message}}
             }),
         );
+    }
+}
+
+fn anthropic_stop_reason(event: &Value) -> Result<&'static str> {
+    match event.get("reason").and_then(Value::as_str) {
+        Some("stop") => Ok("end_turn"),
+        Some("length") => Ok("max_tokens"),
+        Some("toolUse") => Ok("tool_use"),
+        Some("deferred") => Ok("pause_turn"),
+        Some(reason) => bail!("unsupported Pi gateway stop reason `{reason}`"),
+        None => bail!("Pi gateway done event omitted reason"),
     }
 }
 

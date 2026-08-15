@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, bail};
 use serde_json::{Value, json};
 
 use super::batch::estimated_output_tokens;
@@ -116,6 +116,26 @@ impl SegmentBuilder {
         self.close_open_blocks(stream).await
     }
 
+    pub(in crate::anthropic::stream) fn update_provider_stop_reason(
+        &mut self,
+        event: &Value,
+    ) -> Result<()> {
+        let Some(reason) = event
+            .pointer("/params/turn/providerStopReason")
+            .and_then(Value::as_str)
+        else {
+            return Ok(());
+        };
+        self.provider_stop_reason = Some(match reason {
+            "end_turn" => "end_turn",
+            "max_tokens" => "max_tokens",
+            "tool_use" => "tool_use",
+            "pause_turn" => "pause_turn",
+            other => bail!("unsupported provider stop reason `{other}`"),
+        });
+        Ok(())
+    }
+
     pub(in crate::anthropic::stream) fn update_usage(&mut self, event: &Value) {
         self.usage.input_tokens = event
             .pointer("/params/tokenUsage/last/inputTokens")
@@ -142,10 +162,21 @@ impl SegmentBuilder {
         let tool_handoff = self.is_subagent && self.external_tool_calls > 0;
         self.close_blocks_for_finish(tool_handoff, stream).await?;
         sanitize_committed_blocks(&mut self.blocks);
-        let stop_reason = if self.external_tool_calls > 0 {
+        let has_tool_calls = self.external_tool_calls > 0;
+        if self.provider_stop_reason == Some("tool_use") && !has_tool_calls {
+            bail!("provider stopped for tool use without emitting a tool call");
+        }
+        if has_tool_calls
+            && self
+                .provider_stop_reason
+                .is_some_and(|reason| reason != "tool_use")
+        {
+            bail!("provider emitted a tool call with a non-tool stop reason");
+        }
+        let stop_reason = if has_tool_calls {
             "tool_use"
         } else {
-            "end_turn"
+            self.provider_stop_reason.unwrap_or("end_turn")
         };
         let web_answer_replaced = self.gate_unverified_web_response(stop_reason);
         if web_answer_replaced || self.usage.output_tokens == 0 {

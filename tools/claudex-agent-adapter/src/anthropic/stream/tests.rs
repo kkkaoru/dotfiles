@@ -134,6 +134,68 @@ async fn pi_summarized_reasoning_streams_anthropic_thinking_frames() {
     assert!(output.contains("Check the request path."));
 }
 
+#[tokio::test]
+async fn provider_terminal_reason_controls_anthropic_stop_reason() {
+    for (provider_reason, expected) in [
+        ("end_turn", "end_turn"),
+        ("max_tokens", "max_tokens"),
+        ("pause_turn", "pause_turn"),
+    ] {
+        let mut builder = SegmentBuilder::new(1);
+        builder
+            .update_provider_stop_reason(&json!({
+                "params":{"turn":{"providerStopReason":provider_reason}}
+            }))
+            .expect("provider stop reason");
+        builder
+            .text_delta(&json!({"params":{"delta":"partial response"}}), None)
+            .await
+            .expect("response text");
+        assert_eq!(
+            builder
+                .finish(None)
+                .await
+                .expect("finished segment")
+                .stop_reason,
+            expected
+        );
+    }
+
+    let mut length_limited = SegmentBuilder::new(1);
+    length_limited
+        .update_provider_stop_reason(&json!({
+            "params":{"turn":{"providerStopReason":"max_tokens"}}
+        }))
+        .expect("length stop reason");
+    length_limited
+        .text_delta(&json!({"params":{"delta":"truncated"}}), None)
+        .await
+        .expect("truncated text");
+    let segment = length_limited.finish(None).await.expect("length segment");
+    let (sender, receiver) = mpsc::channel::<Result<Bytes, Infallible>>(4);
+    send_stream_completion(&sender, &segment).await;
+    drop(sender);
+    let output = drain_sse_frame_list(receiver).await.join("");
+    assert!(output.contains(r#""stop_reason":"max_tokens""#));
+
+    let mut missing_tool = SegmentBuilder::new(1);
+    missing_tool
+        .update_provider_stop_reason(&json!({
+            "params":{"turn":{"providerStopReason":"tool_use"}}
+        }))
+        .expect("tool stop reason");
+    assert!(missing_tool.finish(None).await.is_err());
+
+    let mut unsupported = SegmentBuilder::new(1);
+    assert!(
+        unsupported
+            .update_provider_stop_reason(&json!({
+                "params":{"turn":{"providerStopReason":"unknown"}}
+            }))
+            .is_err()
+    );
+}
+
 #[test]
 fn subagent_start_status_skips_main_and_command_code() {
     assert_eq!(

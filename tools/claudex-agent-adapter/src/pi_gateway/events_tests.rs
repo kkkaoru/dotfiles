@@ -122,4 +122,22 @@ async fn translates_text_thinking_tool_usage_and_terminal_events() {
     assert_eq!(tool["params"]["arguments"], json!({"path":"a"}));
     assert_eq!(usage["params"]["tokenUsage"]["last"]["outputTokens"], 5);
     assert_eq!(done["params"]["turn"]["status"], "completed");
+    assert_eq!(done["params"]["turn"]["providerStopReason"], "tool_use");
+}
+
+#[test]
+fn maps_only_supported_pi_stop_reasons() {
+    for (reason, expected) in [
+        ("stop", "end_turn"),
+        ("length", "max_tokens"),
+        ("toolUse", "tool_use"),
+        ("deferred", "pause_turn"),
+    ] {
+        assert_eq!(
+            super::anthropic_stop_reason(&json!({"reason":reason})).expect("supported reason"),
+            expected
+        );
+    }
+    assert!(super::anthropic_stop_reason(&json!({"reason":"pending"})).is_err());
+    assert!(super::anthropic_stop_reason(&json!({})).is_err());
 }

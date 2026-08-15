@@ -30,6 +30,7 @@ impl SegmentBuilder {
             verified_web_evidence_call_ids: Vec::new(),
             summarized_reasoning_ids: Vec::new(),
             injected_output_tokens: 0,
+            provider_stop_reason: None,
             usage: Usage {
                 input_tokens,
                 ..Usage::default()
