@@ -157,6 +157,7 @@ describe("Anthropic to Pi context conversion", () => {
       },
     }));
     const toolInput = { request: { values: [1, 2, 3] } };
+    const developerInstructions = "D".repeat(14_700);
     const context = toPiContext(
       gatewayRequest({
         system: [
@@ -187,15 +188,26 @@ describe("Anthropic to Pi context conversion", () => {
               },
             ],
           },
+          {
+            role: "system",
+            content: [{ type: "text", text: developerInstructions }],
+          },
         ],
         tools,
       }),
       MODEL,
     );
 
-    expect(context.systemPrompt).toBe(
-      "top-level first\n\ntop-level second\n\nmessage-level first\n\nmessage-level second",
-    );
+    const expectedSystemPrompt = [
+      "top-level first",
+      "top-level second",
+      "message-level first",
+      "message-level second",
+      developerInstructions,
+    ].join("\n\n");
+    expect(Buffer.byteLength(developerInstructions)).toBe(14_700);
+    expect(context.systemPrompt).toBe(expectedSystemPrompt);
+    expect(context.systemPrompt?.split(developerInstructions)).toHaveLength(2);
     expect(context.tools).toHaveLength(61);
     expect(context.tools).toStrictEqual(
       tools.map((tool) => ({
