@@ -393,6 +393,25 @@ cd /path/to/project
 claudex
 ```
 
+Pi 経由へ切り替える場合だけ、次のadapter用オプションを付けます。
+
+```fish
+claudex --provider-interface pi
+```
+
+許可値は正確に `pi` だけです。このオプションを付けたとき、`providers.json` の
+`piProvider` / `piModel` に従って次のように解決します。
+
+| Claudex model | Pi provider | Pi model |
+| --- | --- | --- |
+| `gpt-5.6-luna` | `openai-codex` | `gpt-5.6-luna` |
+| `glm-5.2:cloud` | `ollama-cloud` | `glm-5.2` |
+| `auto` | `cursor` | `auto` |
+| `cline-pass/deepseek-v4-flash` | `clinepass` | `cline-pass/deepseek-v4-flash` |
+
+オプションを省略した通常の `claudex` は従来どおり各modelのdirect backendを使います。
+Pi 経由から元へ戻す場合も `--provider-interface pi` を外すだけで、設定変更は不要です。
+
 通常起動では `--agent` を追加せず、`CLAUDEX_ACTIVE` が設定されたプロセスでのみglobal
 `UserPromptSubmit` hookがrouting contextを注入します。このため新規・resumeのどちらでも
 sessionの表示名をagent名へ変更しません。加えて `prepare-claude-config.py` が
