@@ -42,6 +42,8 @@
       "id": "fugu",
       "agent": "claudex-fugu",
       "defaultModel": "fugu",
+      "piProvider": "sakana",
+      "piModel": "fugu",
       "effort": "high",
       "maxContextTokens": 1000000,
       "enabled": true,
