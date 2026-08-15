@@ -224,6 +224,103 @@ describe("Anthropic to Pi context conversion", () => {
     });
   });
 
+  it("preserves parallel tool calls and ordered mixed tool results", () => {
+    vi.spyOn(Date, "now").mockReturnValue(1750);
+    const calls = [
+      { id: "call-a", name: "alpha", input: { value: 1 } },
+      { id: "call-b", name: "beta", input: { value: 2 } },
+      { id: "call-c", name: "gamma", input: { value: 3 } },
+    ];
+    const context = toPiContext(
+      gatewayRequest({
+        messages: [
+          {
+            role: "assistant",
+            content: calls.map((call) => ({
+              type: "tool_use",
+              id: call.id,
+              name: call.name,
+              input: call.input,
+            })),
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "tool_result",
+                tool_use_id: "call-b",
+                content: "beta failed",
+                is_error: true,
+              },
+              {
+                type: "tool_result",
+                tool_use_id: "call-a",
+                content: [
+                  { type: "text", text: "alpha complete" },
+                  {
+                    type: "image",
+                    source: { type: "base64", media_type: "image/png", data: "AA==" },
+                  },
+                ],
+                is_error: false,
+              },
+              {
+                type: "tool_result",
+                tool_use_id: "call-c",
+                content: [{ type: "text", text: "gamma complete" }],
+              },
+              { type: "text", text: "continue" },
+            ],
+          },
+        ],
+      }),
+      MODEL,
+    );
+
+    expect(context.messages[0]?.content).toStrictEqual(
+      calls.map((call) => ({
+        type: "toolCall",
+        id: call.id,
+        name: call.name,
+        arguments: call.input,
+      })),
+    );
+    expect(context.messages.slice(1, 4)).toStrictEqual([
+      {
+        role: "toolResult",
+        toolCallId: "call-b",
+        toolName: "beta",
+        content: [{ type: "text", text: "beta failed" }],
+        isError: true,
+        timestamp: 1750,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call-a",
+        toolName: "alpha",
+        content: [
+          { type: "text", text: "alpha complete" },
+          { type: "image", mimeType: "image/png", data: "AA==" },
+        ],
+        isError: false,
+        timestamp: 1750,
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call-c",
+        toolName: "gamma",
+        content: [{ type: "text", text: "gamma complete" }],
+        isError: false,
+        timestamp: 1750,
+      },
+    ]);
+    expect(context.messages[4]).toStrictEqual({
+      role: "user",
+      content: [{ type: "text", text: "continue" }],
+      timestamp: 1751,
+    });
+  });
+
   it("supports string content, redacted thinking, image tool results, and empty descriptions", () => {
     vi.spyOn(Date, "now").mockReturnValue(2000);
     const context = toPiContext(
