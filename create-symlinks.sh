@@ -120,11 +120,20 @@ done
 
 # ~/.pi is a top-level symlink to this repository. Keep repository-owned
 # extensions inside the managed tree so a fresh clone still installs them.
-mkdir -p "${DOTPATH}/.pi/agent/extensions"
+mkdir -p "${DOTPATH}/.pi/agent/extensions" "${DOTPATH}/.pi/agent/packages"
 for extension in agmsg loop; do
   extension_path="${DOTPATH}/tools/pi-${extension}-extension"
   if [ -d "$extension_path" ]; then
     link_path "$extension_path" "${DOTPATH}/.pi/agent/extensions/${extension}"
+  fi
+done
+# Pi resolves package-relative paths against ~/.pi/agent without following the
+# ~/.pi symlink. Point settings at these local package links so other machines
+# can reuse the same relative paths after create-symlinks.sh.
+for package in pi-my-clinepass-provider pi-my-cursor-provider pi-claudex-provider; do
+  package_path="${DOTPATH}/tools/${package}"
+  if [ -d "$package_path" ]; then
+    link_path "$package_path" "${DOTPATH}/.pi/agent/packages/${package}"
   fi
 done
 pi_agmsg_extension="${DOTPATH}/tools/pi-agmsg-extension"
