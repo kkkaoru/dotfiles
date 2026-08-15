@@ -64,6 +64,7 @@ for f in .??*; do
   [ "$f" = ".claude" ] && continue
   [ "$f" = ".cursor" ] && continue
   [ "$f" = ".grok" ] && continue
+  [ "$f" = ".pi" ] && continue
   # Serena stores runtime state under ~/.serena; link only its config file below.
   [ "$f" = ".serena" ] && continue
   link_path "${DOTPATH}/${f}" "${HOME}/${f}"
@@ -112,8 +113,23 @@ for harness in cursor grok; do
 done
 
 # pi keeps sessions and credentials beside global extensions. Keep ~/.pi as a
-# real directory and link only this repository's extension implementations.
+# real directory and link only managed configuration and extensions.
+if [ -L "${HOME}/.pi" ]; then
+  rm -f "${HOME}/.pi"
+fi
 mkdir -p "${HOME}/.pi/agent/extensions"
+pi_models_source="${DOTPATH}/.pi/agent/models.json"
+pi_models_dest="${HOME}/.pi/agent/models.json"
+if [ -f "$pi_models_source" ]; then
+  if [ -e "$pi_models_dest" ] && [ ! -L "$pi_models_dest" ]; then
+    if ! cmp -s "$pi_models_source" "$pi_models_dest"; then
+      echo "refuse: ${pi_models_dest} differs from ${pi_models_source}" >&2
+      exit 1
+    fi
+    rm -f "$pi_models_dest"
+  fi
+  link_path "$pi_models_source" "$pi_models_dest"
+fi
 for extension in agmsg loop; do
   extension_path="${DOTPATH}/tools/pi-${extension}-extension"
   if [ -d "$extension_path" ]; then
