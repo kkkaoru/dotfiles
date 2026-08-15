@@ -55,6 +55,13 @@ link_tree() {
   done
 }
 
+# ~/.pi must be a symlink to this repository. An existing real directory
+# would hide the managed tree, so refuse instead of silently skipping it.
+if [ -e "${HOME}/.pi" ] && [ ! -L "${HOME}/.pi" ]; then
+  echo "refuse: ${HOME}/.pi exists and is not a symlink; move it into ${DOTPATH}/.pi first" >&2
+  exit 1
+fi
+
 # Top-level dotfiles (stateful agent/config directories are merged below)
 for f in .??*; do
   [ "$f" = ".git" ] && continue
@@ -64,7 +71,6 @@ for f in .??*; do
   [ "$f" = ".claude" ] && continue
   [ "$f" = ".cursor" ] && continue
   [ "$f" = ".grok" ] && continue
-  [ "$f" = ".pi" ] && continue
   # Serena stores runtime state under ~/.serena; link only its config file below.
   [ "$f" = ".serena" ] && continue
   link_path "${DOTPATH}/${f}" "${HOME}/${f}"
@@ -112,28 +118,13 @@ for harness in cursor grok; do
   fi
 done
 
-# pi keeps sessions and credentials beside global extensions. Keep ~/.pi as a
-# real directory and link only managed configuration and extensions.
-if [ -L "${HOME}/.pi" ]; then
-  rm -f "${HOME}/.pi"
-fi
-mkdir -p "${HOME}/.pi/agent/extensions"
-pi_models_source="${DOTPATH}/.pi/agent/models.json"
-pi_models_dest="${HOME}/.pi/agent/models.json"
-if [ -f "$pi_models_source" ]; then
-  if [ -e "$pi_models_dest" ] && [ ! -L "$pi_models_dest" ]; then
-    if ! cmp -s "$pi_models_source" "$pi_models_dest"; then
-      echo "refuse: ${pi_models_dest} differs from ${pi_models_source}" >&2
-      exit 1
-    fi
-    rm -f "$pi_models_dest"
-  fi
-  link_path "$pi_models_source" "$pi_models_dest"
-fi
+# ~/.pi is a top-level symlink to this repository. Keep repository-owned
+# extensions inside the managed tree so a fresh clone still installs them.
+mkdir -p "${DOTPATH}/.pi/agent/extensions"
 for extension in agmsg loop; do
   extension_path="${DOTPATH}/tools/pi-${extension}-extension"
   if [ -d "$extension_path" ]; then
-    link_path "$extension_path" "${HOME}/.pi/agent/extensions/${extension}"
+    link_path "$extension_path" "${DOTPATH}/.pi/agent/extensions/${extension}"
   fi
 done
 pi_agmsg_extension="${DOTPATH}/tools/pi-agmsg-extension"
