@@ -104,17 +104,44 @@ pub(super) fn validate_claude_models_are_not_pi_routes(provider: &Provider) -> R
     }
     let mut models = std::iter::once(provider.default_model.as_str())
         .chain(provider.subagent_model.as_deref())
-        .chain(provider.selectable_models.iter().map(String::as_str))
-        .chain(provider.model_prefixes.iter().map(String::as_str));
-    if let Some(model) = models.find(|model| {
-        crate::anthropic::normalize_claude_model_to_haiku(model).is_some()
-    }) {
+        .chain(provider.selectable_models.iter().map(String::as_str));
+    if let Some(model) =
+        models.find(|model| crate::anthropic::normalize_claude_model_to_haiku(model).is_some())
+    {
         bail!(
             "provider {} maps Claude model `{model}` through Pi; Claude models must not be routed through pi",
             provider.id
         );
     }
+    if let Some(prefix) = provider
+        .model_prefixes
+        .iter()
+        .find(|prefix| prefix_captures_claude_model(prefix))
+    {
+        bail!(
+            "provider {} maps Claude model prefix `{prefix}` through Pi; Claude models must not be routed through pi",
+            provider.id
+        );
+    }
     Ok(())
+}
+
+fn prefix_captures_claude_model(prefix: &str) -> bool {
+    if prefix.is_empty() || prefix.starts_with(crate::DISCOVERY_MODEL_PREFIX) {
+        return false;
+    }
+    const SAMPLES: [&str; 8] = [
+        "claude-haiku-4-5",
+        "claude-sonnet-5",
+        "claude-opus-5",
+        "haiku",
+        "sonnet",
+        "opus",
+        "fable",
+        "sonnet[1m]",
+    ];
+    crate::anthropic::normalize_claude_model_to_haiku(prefix).is_some()
+        || SAMPLES.iter().any(|sample| sample.starts_with(prefix))
 }
 
 pub(super) fn validate_web_search_mode(provider: &Provider) -> Result<()> {

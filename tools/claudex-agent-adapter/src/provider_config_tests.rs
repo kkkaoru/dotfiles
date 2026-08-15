@@ -107,6 +107,29 @@ mod tests {
     }
 
     #[test]
+    fn rejects_claude_model_prefixes_mapped_through_pi() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("providers.json");
+        std::fs::write(
+            &path,
+            config(
+                r#"{"id":"p","agent":"worker","defaultModel":"glm-5.2:cloud","effort":"high","piProvider":"ollama-cloud","piModel":"glm-5.2","modelPrefixes":["claude"],"backend":"pi-gateway"}"#,
+            ),
+        )
+        .unwrap();
+        let result = load(&path);
+        let Err(error) = result else {
+            panic!("Claude prefixes must not become Pi routes");
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("Claude models must not be routed through pi"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
     fn loads_enabled_routes_and_ignores_disabled_routes() {
         let root = tempfile::tempdir().unwrap();
         let path = root.path().join("providers.json");
