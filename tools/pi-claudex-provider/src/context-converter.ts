@@ -51,6 +51,19 @@ function optionalText(value: JsonRecord, key: string, requestId: string): string
   return result;
 }
 
+const ADAPTER_THINKING_SIGNATURE_PREFIX = "claudex_";
+
+function isAdapterThinkingSignature(signature: string): boolean {
+  return signature.startsWith(ADAPTER_THINKING_SIGNATURE_PREFIX) && !signature.startsWith("{");
+}
+
+function providerThinkingSignature(signature: string | undefined): string | undefined {
+  if (signature === undefined || isAdapterThinkingSignature(signature)) {
+    return undefined;
+  }
+  return signature;
+}
+
 function emptyUsage(): Usage {
   return {
     input: 0,
@@ -126,7 +139,7 @@ function parseAssistantBlock(
     return { type: "text", text: requiredText(block, "text", state.requestId) };
   }
   if (block["type"] === "thinking") {
-    const signature = optionalText(block, "signature", state.requestId);
+    const signature = providerThinkingSignature(optionalText(block, "signature", state.requestId));
     return {
       type: "thinking",
       thinking: requiredText(block, "thinking", state.requestId),
