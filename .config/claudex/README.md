@@ -56,6 +56,7 @@ flowchart LR
 | Cursor worker | `claudex-cursor` | `auto` | `high` | CodexBarのCursor枠に空きがある場合。`cursor-agent --model auto --yolo acp`。modelはCLI+session/newで固定し、毎turnの `set_session_model` 再選択はしない |
 | Cline DeepSeek Flash worker | `claudex-cline-deepseek-flash` | `cline-pass/deepseek-v4-flash` | `xhigh` | ClinePass枠（CodexBar `clinepass` weekly left）。`--thinking xhigh`。OpenCode Go DeepSeekとは別 |
 | Command Code Muse Spark Contributor worker | `claudex-command-code-muse-spark-1-2-contributor` | `meta/muse-spark-1.2-contributor` | `high` | 自動 `selected_workers` 候補。CodexBar `commandcode` の weekly / 5h left で順位付け。agent slug に Muse Spark 1.2 と contributor を含める（将来の Command Code 他モデルと区別）。公式 `cmd -p` を `command-code-acp` が ACP 化し、既存 `configured-acp` で起動。Provider API / Meta 直接APIは使わない |
+| Antigravity Gemini Flash worker | `claudex-antigravity-gemini-3-7-flash` | `gemini-3.7-flash` | `high` | Pi provider `antigravity`。`webSearchMode` は実測まで `disabled`。CodexBar usage 枠は未接続 |
 | Sonnet worker | `claudex-sonnet` | `claude-sonnet-5` | `high` | CodexBarのClaude枠（`usageProvider: claude`）残量。`claudex-haiku-search` と同じClaude usage leftを参照。outerがSonnet 5のときは同一modelの自動選択を抑制（明示起動と `CLAUDEX_ALLOW_SONNET_SUBAGENT=1` は可） |
 | Fallback | `claudex-sonnet` | `claude-sonnet-5` | `high` | 自動worker選択で利用可能なcapacity-managed providerがない場合 |
 | Built-in advisor | Claude Code標準 `advisor()` | `opus` | Claude Code標準 | 標準advisor policyに従う。provider capacity非依存 |

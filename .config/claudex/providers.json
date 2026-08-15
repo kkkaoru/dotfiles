@@ -295,6 +295,24 @@
           "{effort}"
         ]
       }
+    },
+    {
+      "id": "antigravity",
+      "agent": "claudex-antigravity-gemini-3-7-flash",
+      "defaultModel": "gemini-3.7-flash",
+      "subagentModel": "gemini-3.7-flash",
+      "piProvider": "antigravity",
+      "piModel": "gemini-3.7-flash",
+      "piExtensions": [
+        "~/.pi/agent/npm/node_modules/pi-antigravity/src/index.ts"
+      ],
+      "effort": "high",
+      "enabled": true,
+      "modelPrefixes": [
+        "gemini-3.7-flash"
+      ],
+      "backend": "pi-gateway",
+      "webSearchMode": "disabled"
     }
   ],
   "fallback": {
