@@ -193,10 +193,12 @@ gateway へ流すことは禁止です。これは一時見送りではなく、
   `RouteDecision::Subscription` を返します。親から継承した Claude model も同様です。
 - outer request でも、設定済み provider route に一致しない Claude model は Subscription に
   落ちます。
-- 現行 `providers.json` に Claude model を `piProvider` 付きで書くガードはありません。
-  誤って書くと config load は通り、`--provider-interface pi` で `PiGateway` 化します。
-  ただし Claude SubAgent はその後も `route_subagent_claude_model` が Subscription へ戻します。
-  禁止を設定ミスで破れないように、Claude model を `providers[]` へ追加しないでください。
+- 設定ミス防止として `validate_claude_models_are_not_pi_routes` が `piProvider` 付き
+  provider の `defaultModel` / `subagentModel` / `selectableModels` / `modelPrefixes` を検査し、
+  Claude model を検出したら config load を失敗させます。判定は実行時と同じ
+  `normalize_claude_model_to_haiku`（`claude-claudex-*` discovery 名は除外）です。
+- 実行時も `route_subagent_claude_model` と outer resolve が Claude model を
+  `RouteDecision::Subscription` へ固定します。設定ガードと runtime の二重保証です。
 
 ### WebSearchの経路
 
