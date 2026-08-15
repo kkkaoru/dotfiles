@@ -383,6 +383,7 @@ mod tests {
             model_catalog_json: None,
             pi_provider: None,
             pi_model: None,
+        pi_extensions: Vec::new(),
             max_context_tokens: None,
             model_prefixes: Vec::new(),
             max_concurrency: None,

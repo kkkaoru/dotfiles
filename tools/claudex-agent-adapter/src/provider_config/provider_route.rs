@@ -25,6 +25,7 @@ impl Provider {
             model_catalog_json: self.model_catalog_json,
             pi_provider: self.pi_provider,
             pi_model: self.pi_model,
+            pi_extensions: self.pi_extensions,
             max_context_tokens: self.max_context_tokens,
             max_concurrency: self.max_concurrency,
             model_prefixes: self.model_prefixes,

@@ -419,6 +419,12 @@ direct / Pi は同じ orchestration developer instructions をsystem末尾へ追
 また実TUIのmessages内には後置system reminderがあり、direct / Piともdeveloper instructionsより後で
 providerへ渡します。後続systemがorchestrationを弱める可能性も、両経路共通の既知課題です。
 
+Pi childは `piGatewayExtension` とrouteの `piExtensions` だけを明示ロードし、ambientなextensions /
+skills / prompt templates / themesを無効化します。GPT/Fuguはbuilt-in providerなのでgatewayだけ、Cursor /
+ClinePass / Ollamaは対応provider extensionもロードします。必要なextensionがmissingの場合は選択したrouteだけが
+明示errorになり、daemonと他routeは生存します。この分離はclaudex childだけに適用され、通常のPiが使う
+`~/.pi/agent/settings.json`、認証、model catalogは変更しません。
+
 通常起動では `--agent` を追加せず、`CLAUDEX_ACTIVE` が設定されたプロセスでのみglobal
 `UserPromptSubmit` hookがrouting contextを注入します。このため新規・resumeのどちらでも
 sessionの表示名をagent名へ変更しません。加えて `prepare-claude-config.py` が

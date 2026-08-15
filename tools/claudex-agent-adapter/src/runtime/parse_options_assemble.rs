@@ -88,6 +88,7 @@ fn discard_unused_pi_mappings(routes: &mut [BackendRoute]) {
         .for_each(|route| {
             route.pi_provider = None;
             route.pi_model = None;
+            route.pi_extensions.clear();
         });
 }
 

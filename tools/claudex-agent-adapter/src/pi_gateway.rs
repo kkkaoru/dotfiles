@@ -38,14 +38,18 @@ pub struct PiGateway {
 }
 
 impl PiGateway {
-    pub(crate) async fn spawn(provider: &str, model_id: &str) -> Result<Arc<Self>> {
+    pub(crate) async fn spawn(
+        provider: &str,
+        model_id: &str,
+        extensions: &[String],
+    ) -> Result<Arc<Self>> {
         if provider.is_empty() || model_id.is_empty() {
             bail!("Pi gateway provider and modelId must not be empty");
         }
         if provider == "claudex" {
             bail!("Pi gateway recursion rejected provider `claudex`");
         }
-        let process = GatewayProcess::spawn().await?;
+        let process = GatewayProcess::spawn(extensions).await?;
         Ok(Arc::new(Self {
             provider: provider.to_owned(),
             model_id: model_id.to_owned(),

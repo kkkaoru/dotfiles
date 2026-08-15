@@ -25,7 +25,8 @@ pub(super) struct GatewayProcess {
 }
 
 impl GatewayProcess {
-    pub(super) async fn spawn() -> Result<Self> {
+    pub(super) async fn spawn(extensions: &[String]) -> Result<Self> {
+        validate_isolated_extensions(extensions)?;
         let directory = runtime_directory()?;
         let socket = directory.join("gateway.sock");
         let token = Uuid::new_v4().simple().to_string();
@@ -49,7 +50,11 @@ impl GatewayProcess {
             .stdout(Stdio::null())
             .stderr(Stdio::inherit())
             .kill_on_drop(true);
-        append_extensions(&mut command, std::env::var_os(PI_EXTENSION_ENV));
+        if extensions.is_empty() {
+            append_ambient_extensions(&mut command, std::env::var_os(PI_EXTENSION_ENV));
+        } else {
+            append_isolated_extensions(&mut command, extensions);
+        }
         let child = command.spawn().context("failed to start Pi gateway")?;
         let process = Self {
             child,
@@ -88,7 +93,32 @@ impl GatewayProcess {
     }
 }
 
-fn append_extensions(command: &mut Command, extensions: Option<std::ffi::OsString>) {
+fn validate_isolated_extensions(extensions: &[String]) -> Result<()> {
+    for extension in extensions {
+        let path = Path::new(extension);
+        if !path.is_file() {
+            anyhow::bail!(
+                "Pi route extension is missing or not a file: {}",
+                path.display()
+            );
+        }
+    }
+    Ok(())
+}
+
+fn append_isolated_extensions(command: &mut Command, extensions: &[String]) {
+    command.args([
+        "--no-extensions",
+        "--no-skills",
+        "--no-prompt-templates",
+        "--no-themes",
+    ]);
+    for extension in extensions {
+        command.arg("--extension").arg(extension);
+    }
+}
+
+fn append_ambient_extensions(command: &mut Command, extensions: Option<std::ffi::OsString>) {
     let Some(extensions) = extensions else {
         return;
     };
@@ -105,6 +135,57 @@ async fn wait_for_socket(socket: &Path) {
 
 async fn socket_is_connectable(socket: &Path) -> bool {
     UnixStream::connect(socket).await.is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn isolated_extensions_disable_ambient_pi_resources() {
+        let mut command = Command::new("pi");
+        append_isolated_extensions(
+            &mut command,
+            &["/gateway.ts".to_owned(), "/provider.ts".to_owned()],
+        );
+        let arguments = command
+            .as_std()
+            .get_args()
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            arguments,
+            [
+                "--no-extensions",
+                "--no-skills",
+                "--no-prompt-templates",
+                "--no-themes",
+                "--extension",
+                "/gateway.ts",
+                "--extension",
+                "/provider.ts",
+            ]
+        );
+    }
+
+    #[test]
+    fn isolated_extension_validation_is_route_local() {
+        let root = tempfile::tempdir().expect("extension fixture");
+        let extension = root.path().join("gateway.ts");
+        std::fs::write(&extension, "export default {};").expect("extension file");
+        assert!(validate_isolated_extensions(&[extension.to_string_lossy().into_owned()]).is_ok());
+        assert!(
+            validate_isolated_extensions(&[root
+                .path()
+                .join("missing.ts")
+                .to_string_lossy()
+                .into_owned()])
+            .is_err()
+        );
+        assert!(
+            validate_isolated_extensions(&[root.path().to_string_lossy().into_owned()]).is_err()
+        );
+    }
 }
 
 fn runtime_directory() -> Result<PathBuf> {

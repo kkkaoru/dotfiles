@@ -117,6 +117,7 @@ async fn spawn_command_code_adapter(
         model_catalog_json: None,
         pi_provider: None,
         pi_model: None,
+        pi_extensions: Vec::new(),
         max_context_tokens: None,
         max_concurrency,
         model_prefixes: vec!["meta/muse-spark".to_owned()],

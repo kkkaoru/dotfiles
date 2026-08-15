@@ -501,6 +501,32 @@ mod tests {
     }
 
     #[test]
+    fn resolves_relative_pi_extension_files_without_eager_route_failure() {
+        let root = tempfile::tempdir().expect("extension fixture");
+        let config_directory = root.path().join("config");
+        std::fs::create_dir(&config_directory).expect("config directory");
+        let extension = root.path().join("gateway.ts");
+        std::fs::write(&extension, "export default {};").expect("extension file");
+        assert_eq!(
+            resolve_pi_extension("../gateway.ts", &config_directory).expect("resolved extension"),
+            extension
+                .canonicalize()
+                .expect("canonical extension")
+                .to_string_lossy()
+        );
+        assert!(
+            resolve_pi_extension(".", &config_directory)
+                .expect("directory stays route-local")
+                .ends_with("config")
+        );
+        assert!(
+            resolve_pi_extension("missing.ts", &config_directory)
+                .expect("missing path stays route-local")
+                .ends_with("missing.ts")
+        );
+    }
+
+    #[test]
     fn reaches_model_and_prefix_uniqueness_checks_after_distinct_identity_checks() {
         let duplicate_model: ProviderConfig = serde_json::from_str(
             r#"{"version":1,"mainProviders":["p"],"providers":[

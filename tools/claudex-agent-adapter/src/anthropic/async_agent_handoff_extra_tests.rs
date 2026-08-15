@@ -544,6 +544,7 @@ async fn keeps_provider_open_when_thread_ensure_fails() {
         model_catalog_json: None,
         pi_provider: None,
         pi_model: None,
+        pi_extensions: Vec::new(),
         max_context_tokens: None,
         max_concurrency: None,
         model_prefixes: Vec::new(),

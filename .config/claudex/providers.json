@@ -1,5 +1,6 @@
 {
   "version": 1,
+  "piGatewayExtension": "../../tools/pi-claudex-provider/index.ts",
   "mainProviders": ["codex", "codex-spark", "grok", "fugu", "ollama-glm-5-2", "opencode-go", "command-code"],
   "providers": [
     {
@@ -63,6 +64,9 @@
       "subagentModel": "glm-5.2:cloud",
       "piProvider": "ollama-cloud",
       "piModel": "glm-5.2",
+      "piExtensions": [
+        "~/.pi/agent/npm/node_modules/pi-ollama-cloud/index.ts"
+      ],
       "effort": "max",
       "enabled": true,
       "usageProvider": "ollama",
@@ -196,6 +200,9 @@
       "subagentModel": "auto",
       "piProvider": "cursor",
       "piModel": "auto",
+      "piExtensions": [
+        "../../tools/pi-my-cursor-provider/index.ts"
+      ],
       "effort": "high",
       "maxContextTokens": 200000,
       "enabled": true,
@@ -222,6 +229,9 @@
       "subagentModel": "cline-pass/deepseek-v4-flash",
       "piProvider": "clinepass",
       "piModel": "cline-pass/deepseek-v4-flash",
+      "piExtensions": [
+        "../../tools/pi-my-clinepass-provider/index.ts"
+      ],
       "effort": "xhigh",
       "enabled": true,
       "usageProvider": "clinepass",

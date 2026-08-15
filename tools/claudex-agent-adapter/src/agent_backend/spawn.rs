@@ -31,7 +31,9 @@ impl AgentBackend {
                 .pi_model
                 .as_deref()
                 .ok_or_else(|| anyhow::anyhow!("Pi route omitted piModel"))?;
-            return Ok(Arc::new(Self::Pi(PiGateway::spawn(provider, model).await?)));
+            return Ok(Arc::new(Self::Pi(
+                PiGateway::spawn(provider, model, &route.pi_extensions).await?,
+            )));
         }
         if let Some(acp) = &route.acp {
             let agent = GrokAcp::spawn_configured_with_max_concurrency(

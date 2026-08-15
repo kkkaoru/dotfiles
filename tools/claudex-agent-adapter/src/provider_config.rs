@@ -1,7 +1,11 @@
 use crate::agent_backend::{AcpLaunch, BackendKind, BackendRoute, WebSearchMode};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
-use std::{fs, path::Path};
+use std::{
+    collections::HashSet,
+    fs,
+    path::{Path, PathBuf},
+};
 
 mod catalog;
 mod identities;
@@ -20,6 +24,8 @@ struct ProviderConfig {
     version: u64,
     main_providers: Vec<String>,
     providers: Vec<Provider>,
+    #[serde(default)]
+    pi_gateway_extension: Option<String>,
     fallback: AgentChoice,
     #[serde(default)]
     native_workers: Vec<WorkerRoute>,
@@ -51,6 +57,8 @@ struct Provider {
     pi_provider: Option<String>,
     #[serde(default)]
     pi_model: Option<String>,
+    #[serde(default)]
+    pi_extensions: Vec<String>,
     #[serde(default)]
     max_context_tokens: Option<u64>,
     #[serde(default)]
@@ -107,9 +115,13 @@ pub fn load(path: &Path) -> Result<LoadedConfig> {
         .with_context(|| format!("read provider config {}", path.display()))?;
     let config: ProviderConfig = serde_json::from_str(&contents)
         .with_context(|| format!("parse provider config {}", path.display()))?;
-    validate(config)
+    validate_at(config, path.parent().unwrap_or_else(|| Path::new(".")))
 }
+#[cfg(test)]
 fn validate(config: ProviderConfig) -> Result<LoadedConfig> {
+    validate_at(config, Path::new("."))
+}
+fn validate_at(mut config: ProviderConfig, config_directory: &Path) -> Result<LoadedConfig> {
     if config.version != CONFIG_VERSION {
         bail!("provider config version must be {CONFIG_VERSION}");
     }
@@ -119,6 +131,11 @@ fn validate(config: ProviderConfig) -> Result<LoadedConfig> {
         validate_choice(advisor, "advisor")?;
     }
     let search_provider_ids = config.web_search.fallback_providers.clone();
+    resolve_pi_extensions(
+        &mut config.providers,
+        config.pi_gateway_extension.as_deref(),
+        config_directory,
+    )?;
     let (providers, mut model_catalog) = enabled_providers_catalog(config.providers)?;
     model_catalog.add_workers(&providers, &config.native_workers)?;
     model_catalog.set_auxiliary_worker_routes(auxiliary_worker_routes(
@@ -136,6 +153,65 @@ fn validate(config: ProviderConfig) -> Result<LoadedConfig> {
         model_catalog,
     })
 }
+fn resolve_pi_extensions(
+    providers: &mut [Provider],
+    gateway: Option<&str>,
+    config_directory: &Path,
+) -> Result<()> {
+    let gateway = gateway
+        .map(|path| resolve_pi_extension(path, config_directory))
+        .transpose()?;
+    for provider in providers {
+        if provider.pi_provider.is_none() && !provider.pi_extensions.is_empty() {
+            bail!(
+                "provider {} has piExtensions without a Pi route",
+                provider.id
+            );
+        }
+        if provider.pi_provider.is_none() {
+            continue;
+        }
+        let configured = std::mem::take(&mut provider.pi_extensions);
+        let mut resolved = gateway.iter().cloned().collect::<Vec<_>>();
+        for extension in configured {
+            resolved.push(resolve_pi_extension(&extension, config_directory)?);
+        }
+        let mut seen = HashSet::new();
+        resolved.retain(|path| seen.insert(path.clone()));
+        provider.pi_extensions = resolved;
+    }
+    Ok(())
+}
+
+fn resolve_pi_extension(path: &str, config_directory: &Path) -> Result<String> {
+    if path.is_empty() {
+        bail!("Pi extension path must not be empty");
+    }
+    let expanded = if let Some(relative) = path.strip_prefix("~/") {
+        let home = std::env::var_os("HOME").context("resolve ~/ Pi extension without HOME")?;
+        PathBuf::from(home).join(relative)
+    } else {
+        let path = PathBuf::from(path);
+        if path.is_absolute() {
+            path
+        } else {
+            config_directory.join(path)
+        }
+    };
+    let resolved = expanded.canonicalize().unwrap_or_else(|_| {
+        let Some(parent) = expanded.parent() else {
+            return expanded.clone();
+        };
+        let Some(name) = expanded.file_name() else {
+            return expanded.clone();
+        };
+        parent
+            .canonicalize()
+            .map_or_else(|_| expanded.clone(), |parent| parent.join(name))
+    });
+    Ok(resolved.to_string_lossy().into_owned())
+}
+
 fn enabled_providers_catalog(providers: Vec<Provider>) -> Result<(Vec<Provider>, ModelCatalog)> {
     // Keep identities for disabled providers so exhausted/denied backends can still be
     // recognized and remapped instead of falling through to Claude subscription.

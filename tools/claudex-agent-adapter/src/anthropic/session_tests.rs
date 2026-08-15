@@ -2021,6 +2021,7 @@ async fn removes_sessions_for_a_failed_model_backend() {
         model_catalog_json: None,
         pi_provider: None,
         pi_model: None,
+        pi_extensions: Vec::new(),
         max_context_tokens: None,
         max_concurrency: None,
         model_prefixes: Vec::new(),
