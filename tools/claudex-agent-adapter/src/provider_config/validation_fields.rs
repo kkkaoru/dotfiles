@@ -106,22 +106,15 @@ pub(super) fn validate_claude_models_are_not_pi_routes(provider: &Provider) -> R
         .chain(provider.subagent_model.as_deref())
         .chain(provider.selectable_models.iter().map(String::as_str))
         .chain(provider.model_prefixes.iter().map(String::as_str));
-    if let Some(model) = models.find(|model| is_native_claude_model(model)) {
+    if let Some(model) = models.find(|model| {
+        crate::anthropic::normalize_claude_model_to_haiku(model).is_some()
+    }) {
         bail!(
-            "provider {} maps Claude model `{model}` through Pi; Claude models must stay on the subscription route",
+            "provider {} maps Claude model `{model}` through Pi; Claude models must not be routed through pi",
             provider.id
         );
     }
     Ok(())
-}
-
-fn is_native_claude_model(model: &str) -> bool {
-    matches!(model, "fable" | "opus" | "sonnet" | "haiku")
-        || model.starts_with("claude-") && !model.starts_with("claude-claudex-")
-        || model.starts_with("fable[")
-        || model.starts_with("opus[")
-        || model.starts_with("sonnet[")
-        || model.starts_with("haiku[")
 }
 
 pub(super) fn validate_web_search_mode(provider: &Provider) -> Result<()> {

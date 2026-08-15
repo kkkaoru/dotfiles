@@ -8,11 +8,14 @@ pub(crate) fn official_claude_haiku_model() -> &'static str {
     CLAUDE_HAIKU_MODEL
 }
 
-pub(super) fn normalize_claude_model_to_haiku(model: &str) -> Option<&'static str> {
+pub(crate) fn normalize_claude_model_to_haiku(model: &str) -> Option<&'static str> {
     is_native_claude_model(model).then_some(CLAUDE_HAIKU_MODEL)
 }
 
 fn is_native_claude_model(model: &str) -> bool {
+    if model.starts_with(crate::DISCOVERY_MODEL_PREFIX) {
+        return false;
+    }
     matches!(model, "fable" | "opus" | "sonnet" | "haiku")
         || model.starts_with("claude-")
         || model.starts_with("fable[")

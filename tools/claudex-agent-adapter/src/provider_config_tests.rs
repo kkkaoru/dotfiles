@@ -98,7 +98,12 @@ mod tests {
         let Err(error) = result else {
             panic!("Claude models must not become Pi routes");
         };
-        assert!(error.to_string().contains("Claude model"), "{error:#}");
+        assert!(
+            error
+                .to_string()
+                .contains("Claude models must not be routed through pi"),
+            "{error:#}"
+        );
     }
 
     #[test]

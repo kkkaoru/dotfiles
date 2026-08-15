@@ -2,7 +2,7 @@ use super::agent_route_validation::BlockedSubagentError;
 use super::{MessagesRequest, content::serialized_len};
 
 mod models;
-pub(crate) use models::official_claude_haiku_model;
+pub(crate) use models::{normalize_claude_model_to_haiku, official_claude_haiku_model};
 
 mod resolve;
 pub(super) use resolve::resolve_request_model_with_origin;
